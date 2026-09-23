@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KASTR</title>
+<link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<link rel="stylesheet" href="/assets/asi-brand.css">
+<script src="/assets/prefs.js"></script>
+<script type="module" src="/assets/asi-brand.js"></script>
+<style>
+  /* The masthead nav IS the tab bar. Each entry maps to a persistent iframe:
+     created once on first visit, then only hidden. Switching never tears the
+     old page down, so a camera keeps publishing while you look at the
+     switcher. Closing a tab is the only thing that stops it. */
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body.asi { display:flex; flex-direction:column; overflow:hidden; }
+
+  /* The masthead is injected by asi-brand.js; keep it from scrolling away. */
+  .asi-header { flex:none; }
+
+  /* Tab affordances layered onto the existing nav buttons. */
+  .asi-nav a { position:relative; display:flex; align-items:center; gap:7px; }
+  .asi-nav a .dot {
+    width:7px; height:7px; border-radius:50%; background:transparent;
+    border:1px solid var(--line); flex:none; transition:background .2s, border-color .2s;
+  }
+  /* Green = truth (0.6.7): relay-connected where the page can say so
+     (__relayHealth), merely open for pages that cannot. */
+  .asi-nav a.connected .dot { background:var(--asi-green); border-color:var(--asi-green); }
+  .asi-nav a.onair .dot {
+    background:var(--asi-red); border-color:var(--asi-red);
+    box-shadow:0 0 0 3px rgba(217,83,79,.25);
+  }
+  .asi-nav a .x {
+    font-size:12px; color:var(--text-mute); line-height:1;
+    padding:1px 3px; border-radius:3px; margin-left:1px;
+  }
+  .asi-nav a .x:hover { color:#fff; background:var(--asi-red); }
+  /* Only offer a close affordance on tabs that are actually open.
+     0.8.2: Go Live carries no close/plug at all -- leaving a room lives in
+     the page itself; the tab button only fronts/opens. */
+  .asi-nav a:not(.loaded) .x { display:none; }
+
+  #frames { flex:1; position:relative; min-height:0; background:var(--bg); }
+  #frames iframe {
+    position:absolute; inset:0; width:100%; height:100%; border:0; background:var(--bg);
+  }
+  /* An inactive tab is NOT display:none. A page publishing an RTSP or file
+     source captures a <video> element, and captureStream() only produces
+     frames while that element is painted -- 30 fps in front, 0.24 fps
+     hidden. So park it behind the active tab instead of taking it out of
+     the layer tree: still composited, effectively invisible. The active
+     tab paints an opaque background over it. */
+  #frames iframe.bg {
+    z-index:0; opacity:0.004; pointer-events:none;
+  }
+  #frames iframe.fg { z-index:1; opacity:1; }
+
+  #hint {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--text-mute); font-size:13px; text-align:center; padding:24px;
+  }
+</style>
+</head>
+<body class="asi">
+
+<div id="frames"><div id="hint">Loading…</div></div>
+
+<script type="module">
+  // allow= is required even same-origin: permission-gated APIs are denied in a
+  // cross-document iframe unless the embedder delegates them. Without
+  // display-capture the screen-share picker never appears.
+  const PERMS = "camera; microphone; display-capture; autoplay; fullscreen";
+
+  // href -> tab id. The masthead nav (asi-brand.js NAV) renders Go Live; the
+  // Relay tab has no static link since 0.13.0 -- show() creates one while the
+  // tab is open (label below) and closeTab() removes it again.
+  const TABS = [
+    { id: "switcher", href: "/moq-watch-lite.html", src: "/moq-watch-lite.html", label: "Go Live" },
+    { id: "relay",    href: "/relay.html",          src: "/relay.html",          label: "Relay server" },
+  ];
+
+  const framesEl = document.getElementById("frames");
+  const hintEl = document.getElementById("hint");
+  const open = new Map();          // id -> { frame, def }
+  let active = null;
+  // 0.12.0: tabs the operating mode removes. A viewer or publisher box has no
+  // Relay tab -- the relay is not this machine's business (viewer) or is armed
+  // once from the masthead badge (publisher). show() refuses them.
+  const hiddenTabs = new Set();
+
+  // Relay health for the shell's masthead badge: this document has no MoQ
+  // connection of its own, so asi-brand.js reads this proxy, which mirrors
+  // the switcher frame's tri-state (the 15s red timer runs in the frame,
+  // next to the truth). No Go Live tab open = nothing is using the relay
+  // = neutral badge, honestly.
+  window.__relayHealthProxy = () =>
+    open.get("switcher")?.frame?.contentWindow?.__relayHealthTri?.() ?? null;
+
+  const KEY = "kastr.app.tabs";
+  const DEFAULT_TAB = "switcher";   // Go Live fronts on every launch
+  const linkFor = (id) => document.querySelector('.asi-nav a[data-tab="' + id + '"]');
+  // Stamped with the build so an upgrade cannot keep showing tab pages the
+  // browser cached from the previous version. The shell itself is always fresh
+  // (no-store), so it is the right place to decide what the children fetch.
+  const BUILD = "__KASTR_VERSION__".replace(/[^0-9a-zA-Z.\-]/g, "") || "dev";
+  const embedSrc = (src) =>
+    src + (src.includes("?") ? "&" : "?") + "embed=1&v=" + encodeURIComponent(BUILD);
+
+  function show(id) {
+    const def = TABS.find((t) => t.id === id);
+    if (!def) return;
+    if (hiddenTabs.has(id)) return;   // 0.12.0: not in this mode
+
+    // 0.13.0: a tab without a static nav link (Relay server) gets one while
+    // it is open -- same markup and click wiring as the links asi-brand.js
+    // rendered, so it has a light and a ✕ like any other tab.
+    if (!linkFor(id)) {
+      const nav = document.querySelector(".asi-nav");
+      if (nav) {
+        const a = document.createElement("a");
+        a.href = def.href;
+        a.textContent = def.label;
+        a.dataset.dynamic = "1";   // closeTab removes it; static links only lose their classes
+        wireLink(a, def);
+        nav.appendChild(a);
+      }
+    }
+
+    if (!open.has(id)) {
+      // First visit builds the iframe. Every later visit reuses it -- that is
+      // what keeps the page alive across switches.
+      const frame = document.createElement("iframe");
+      frame.src = embedSrc(def.src);
+      frame.setAttribute("allow", PERMS);
+      frame.dataset.id = id;
+      framesEl.appendChild(frame);
+      open.set(id, { frame, def });
+      frame.addEventListener("load", () => linkFor(id)?.classList.add("loaded"), { once: true });
+    }
+
+    for (const [otherId, rec] of open) {
+      const front = otherId === id;
+      rec.frame.classList.toggle("fg", front);
+      rec.frame.classList.toggle("bg", !front);
+      // Kept painting, but out of the tab order and unclickable so a
+      // background page cannot steal focus or take a stray click.
+      rec.frame.inert = !front;
+      rec.frame.setAttribute("aria-hidden", front ? "false" : "true");
+    }
+    for (const a of document.querySelectorAll(".asi-nav a")) {
+      a.classList.toggle("on", a.dataset.tab === id);
+    }
+    active = id;
+    hintEl.hidden = true;
+    save();
+  }
+
+  function closeTab(id) {
+    const rec = open.get(id);
+    if (!rec) return;
+    // Closing is the only teardown: this is how you release a camera or stop a
+    // publisher from the shell.
+    rec.frame.remove();
+    open.delete(id);
+    const link = linkFor(id);
+    if (link?.dataset.dynamic) link.remove();   // 0.13.0: created by show(), gone with the tab
+    else link?.classList.remove("loaded", "connected", "onair", "on");
+    if (active === id) {
+      const next = [...open.keys()][0];
+      if (next) { show(next); return; }
+      active = null;
+      hintEl.hidden = false;
+      hintEl.textContent = "No tabs open — pick one above.";
+    }
+    save();
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ open: [...open.keys()], active }));
+    } catch {}
+  }
+
+  /** Make one nav link a tab button: dot, ✕ (not on Go Live), click wiring.
+   *  Shared by wireNav (the static links) and show() (links it creates). */
+  function wireLink(a, def) {
+    a.dataset.tab = def.id;
+    a.classList.remove("on");           // asi-brand.js marks the current page
+    a.insertAdjacentHTML("afterbegin", '<span class="dot"></span>');
+    // 0.8.2: Go Live gets no ✕/plug -- mis-clicks on the shared button
+    // were costing people their room; leave/disconnect lives in the page.
+    if (def.id !== "switcher") {
+      a.insertAdjacentHTML("beforeend", '<span class="x" title="Close tab">✕</span>');
+    }
+    a.addEventListener("click", (e) => {
+      e.preventDefault();               // stay in the shell, never navigate
+      if (e.target.closest(".x") && open.has(def.id)) closeTab(def.id);
+      else show(def.id);
+    });
+  }
+
+  /** Turn the masthead nav into the tab bar. */
+  function wireNav() {
+    const nav = document.querySelector(".asi-nav");
+    if (!nav) return false;
+    for (const a of nav.querySelectorAll("a")) {
+      const href = a.getAttribute("href");
+      const def = TABS.find((t) => t.href === href);
+      if (!def) continue;                 // e.g. the "App" link back to this shell
+      wireLink(a, def);
+    }
+    // The shell's own entry would reload everything; drop it.
+    for (const a of nav.querySelectorAll('a[href="/app.html"]')) a.remove();
+
+    // 0.7.0: the logo is identity, not a link -- the old home page moved
+    // to the Options menu's About section on Go Live.
+    return true;
+  }
+
+  // A tab that is publishing, or hosting a relay, gets a red dot -- so you can
+  // see something is on air from any other tab.
+  // The relay is a server-side process that outlives its tab, so its light
+  // comes from the server, not the frame (0.7.5: with the tab closed -- or
+  // never opened -- there was no frame to ask, and no light).
+  let relayRunning = false;
+  const pollRelay = async () => {
+    try { relayRunning = !!(await (await fetch("/api/relay/status")).json()).running; }
+    catch { relayRunning = false; }
+  };
+  pollRelay();
+  setInterval(pollRelay, 2000);
+  setInterval(() => {
+    for (const t of TABS) {
+      const a = linkFor(t.id);
+      if (!a) continue;
+      const rec = open.get(t.id);
+      let live = false, health = null;
+      try {
+        const w = rec?.frame.contentWindow;
+        live = !!w?.__publisher?.state?.()?.live;
+        if (typeof w?.__relayHealth === "function") health = w.__relayHealth();
+      } catch {}
+      // Server only -- a throttled background frame holds a stale status
+      // and would keep the light lit after a stop.
+      if (t.id === "relay") live = relayRunning;
+      a.classList.toggle("onair", live);
+      // Green = truth: relay-connected where the page can say so; merely
+      // open (the old .loaded meaning) for pages that cannot.
+      a.classList.toggle("connected", health ? health === "connected" : !!rec);
+    }
+  }, 2000);
+
+  // A framed page can ask the shell to bring another tab forward, so an
+  // in-app link does not have to leave the shell to reach another page.
+  window.addEventListener("message", (e) => {
+    // Same-origin only: the shell must not take orders from a remote page.
+    if (e.origin !== location.origin) return;
+    const id = e.data && e.data.kastrShowTab;
+    if (typeof id === "string" && TABS.some((t) => t.id === id)) show(id);
+  });
+
+  // 0.12.0: the mode from /api/instance (the launcher sets it). Runs in
+  // parallel with the first show(): the shell paints as before, then a viewer
+  // or publisher box loses its Relay tab (closed if it was reopened, link gone).
+  // "full" changes nothing.
+  async function applyMode() {
+    let mode = "full";
+    try {
+      const inst = await (await fetch("/api/instance", { cache: "no-store" })).json();
+      mode = inst.mode || "full";
+    } catch {}
+    if (mode !== "viewer" && mode !== "publisher") return;
+    hiddenTabs.add("relay");
+    if (open.has("relay")) closeTab("relay");   // 0.13.0: also removes the link it created
+    const a = linkFor("relay");
+    if (a) a.remove();                           // belt and braces: no link of any kind
+  }
+
+  function start() {
+    if (!wireNav()) { setTimeout(start, 50); return; }   // masthead not injected yet
+    // Reopen whatever was running last time -- a publisher left on air resumes
+    // in the background -- but always come to the front on Go Live. Through
+    // show(), so a restored Relay tab gets its nav link back (0.13.0).
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || "null");
+      for (const id of saved?.open ?? []) if (id !== DEFAULT_TAB) show(id);
+    } catch {}
+    show(DEFAULT_TAB);
+    applyMode();   // 0.12.0: in parallel -- never delays the first paint
+  }
+  start();
+
+  window.__app = {
+    tabs: () => [...open.keys()],
+    active: () => active,
+    show, closeTab,
+    frame: (id) => open.get(id)?.frame ?? null,
+  };
+</script>
+</body>
+</html>

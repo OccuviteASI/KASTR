@@ -1,0 +1,17 @@
+# KASTR image context (0.13.1): the built Linux binary, its version marker,
+# the other platforms' feed binaries and the entrypoint -- nothing else. The
+# repo holds ~1 GB of browser zips and archives that must never reach the
+# daemon. Later rules win; a `!` re-includes below the `*`.
+*
+!dist/linux/KASTR
+!dist/linux/BUILT_VERSION
+!dist/updates
+!docker
+
+# The container serves its own Linux binary from sys.executable, so the
+# linux feed copy is redundant; the Chrome for Testing zips (~200 MB each,
+# /api/update/browser) are left out to keep the image small -- delete the
+# next line to ship them when the container is the hub for desktop clients
+# that need a browser update.
+dist/updates/browser
+dist/updates/linux

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KASTR — ASI</title>
+<link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<link rel="stylesheet" href="/assets/asi-brand.css">
+<script type="module" src="/assets/asi-brand.js"></script>
+
+<script>
+  // Inside the app shell these cards must bring a tab forward, not load the
+  // page into the Home tab -- that nests a second masthead and runs the page
+  // twice. Opened directly, they stay ordinary links.
+  (() => {
+    if (window.parent === window) return;
+    const TAB_FOR = {
+      "/moq-watch-lite.html": "switcher",
+      "/relay.html": "relay",
+      "/": "home",
+    };
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest("a[href]");
+      if (!a) return;
+      const tab = TAB_FOR[a.getAttribute("href")];
+      if (!tab) return;               // an external or unknown link: leave it
+      e.preventDefault();
+      window.parent.postMessage({ kastrShowTab: tab }, location.origin);
+    });
+  })();
+</script>
+<style>
+  .hero {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--asi-blue);
+    border-radius: var(--radius);
+    background: linear-gradient(100deg, rgba(0,159,218,.07) 0%, var(--surface) 60%);
+    padding: 18px 20px;
+    margin-bottom: 20px;
+    max-width: 900px;
+  }
+  .hero h1 { font-size: 21px; margin: 0 0 7px; color: #fff; font-weight: 700; }
+  .hero p { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.65; max-width: 700px; }
+
+  .grid { display: grid; gap: 11px; max-width: 900px; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
+  @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+
+  a.card {
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 15px 16px;
+    text-decoration: none;
+    background: var(--surface);
+    transition: border-color .12s, background .12s;
+  }
+  a.card:hover { border-color: var(--asi-blue-dim); background: var(--surface-2); }
+  a.card .t { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+  a.card b { color: #fff; font-size: 14px; font-weight: 600; }
+  a.card span.d { display: block; color: var(--text-dim); font-size: 12px; line-height: 1.6; }
+  h2.sec {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .11em;
+    color: var(--text-mute); margin: 22px 0 10px; font-weight: 600;
+  }
+  h2.sec:first-of-type { margin-top: 0; }
+</style>
+</head>
+<body class="asi">
+<main class="asi-page">
+
+  <div class="hero">
+    <h1>KASTR <span style="font-size:13px;font-weight:400;color:var(--text-mute);letter-spacing:.02em">Kenton&rsquo;s ASI Streaming Tool with Relay</span></h1>
+    <p>
+      Low-latency video over <b style="color:var(--asi-blue)">Media over QUIC</b>, served with the
+      COOP/COEP isolation the WebCodecs audio path requires. Publish cameras, a screen or window, or
+      an RTSP feed &mdash; each as its own broadcast &mdash; and switch between them from a single view.
+    </p>
+  </div>
+
+  <h2 class="sec">Go Live</h2>
+  <div class="grid">
+    <a class="card" href="/moq-watch-lite.html">
+      <span class="t"><b>Go Live</b></span>
+      <span class="d">Watching and publishing on one page. Stream list plus grid or program view; per-stream volume and mute. <b>Share</b> opens the native publish panel — cameras, screen, RTSP, files — with a full-framerate self-view under My&nbsp;streams.</span>
+    </a>
+  </div>
+
+
+  <h2 class="sec">Relay server</h2>
+  <div class="grid">
+    <a class="card" href="/relay.html">
+      <span class="t"><b>Relay server</b><span class="asi-badge blue">host it here</span></span>
+      <span class="d">Run a MoQ relay on this machine with the bundled moq-relay — for an isolated network, or when the shared relay is unreachable.</span>
+    </a>
+  </div>
+
+  <div class="asi-note" style="margin-top:20px; max-width:900px">
+    Pages point at the relay shown in the header. If a page sits at
+    “Searching for live broadcasts…”, the relay has no live broadcasts or is unreachable —
+    that is the relay, not the page. Change the Relay URL field on any page to override,
+    or the <code>--relay</code> flag (or <code>kastr.ini</code>) to change it everywhere.
+  </div>
+</main>
+
+<footer class="asi-footer">
+  <span>Autonomous Solutions, Inc. — internal tool</span>
+  <span>Media over QUIC · <span class="asi-mono">moq-lite-05</span></span>
+</footer>
+</body>
+</html>

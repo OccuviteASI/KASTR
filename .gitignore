@@ -1,0 +1,16 @@
+# build outputs and fetched helper binaries (python fetch-helpers.py restores bin/)
+dist/
+build/
+bin/*
+!bin/README.md
+browser/
+*.spec
+# runtime / dev state
+__pycache__/
+*.pyc
+.kast/
+*.log
+.venv/
+.DS_Store
+KASTR.old-*
+browser.old-*

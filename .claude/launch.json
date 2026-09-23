@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kastr",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["kastr-serve.py", "8971"],
+      "port": 8971
+    }
+  ]
+}

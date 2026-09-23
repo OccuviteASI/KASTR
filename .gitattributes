@@ -1,0 +1,2 @@
+# KASTR keeps its files byte-exact (the page and most Python modules are CRLF, the shell scripts LF); no line-ending conversion on either side.
+* -text

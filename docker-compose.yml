@@ -1,0 +1,33 @@
+# KASTR headless box (0.13.1): a relay (default) or publisher that follows
+# its hub's version.                                         (see DOCKER.md)
+#
+#   docker compose up -d                 run the locally built kastr:local
+#   KASTR_IMAGE=ghcr.io/<you>/kastr:0.13.1 docker compose up -d
+#   docker compose pull && docker compose up -d      registry-side update
+#
+# network_mode: host is deliberate and Linux-only: QUIC on UDP 4443 must
+# reach the relay unmangled, moq-relay advertises the box's real LAN IPs,
+# and 4444 (minter) / 4445 (wss) / 8000 / 8443 come along for free. Docker
+# Desktop on Windows/macOS puts "host" inside its VM -- use a Linux host.
+services:
+  kastr:
+    image: ${KASTR_IMAGE:-kastr:local}
+    container_name: kastr
+    # a stable hostname = a stable host_slug in the relay's presence/rooms
+    hostname: kastr-relay
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    volumes:
+      - kastr-data:/data
+    environment:
+      # first-run defaults for /data/app/kastr.ini (the Relay page edits it
+      # afterwards; delete the file in the volume to re-seed from these)
+      KASTR_MODE: ${KASTR_MODE:-relay}
+      KASTR_RELAY: ${KASTR_RELAY:-http://127.0.0.1:4443}
+      KASTR_PORT: ${KASTR_PORT:-8000}
+      KASTR_UPDATE: ${KASTR_UPDATE:-on}
+      TZ: ${TZ:-UTC}
+
+volumes:
+  kastr-data:

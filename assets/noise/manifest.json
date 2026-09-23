@@ -1,0 +1,15 @@
+{
+ "fetched": "2026-09-21T21:19:50Z",
+ "files": {
+  "LICENSE.txt": "93f620b9685af9ebfb3714a4a3fb86bf6224018669e39364f7562997ee59b4a8",
+  "rnnoise.wasm": "8b60a2ab88fdae2d1a9f940249d0eb072f28ba8e796f7304347b4e07839c8853",
+  "rnnoiseWorklet.js": "1e06facbb3d7459b89769aa4247cd4b71263e6662e4da0c54763f3bf06f5893b",
+  "rnnoise_simd.wasm": "378fd17c294db15ee4e818ba5ef072242a21c8ad7445b483f7f46d7dc4f2c253",
+  "web-noise-suppressor.mjs": "e2386fac75bf8556a70381d09f5066c4436f2c410c1eee4b2adb7144d6cc4b3a"
+ },
+ "integrity": "sha512-hy2GnF079+zi4n9BZUf+GGIQ1IofApAk6rgGMyMQ3soHfz/GKu1pcCsmePyIHVvUuv1LrFudw9BmmBqoOKay5w==",
+ "license": "MIT",
+ "package": "@sapphi-red/web-noise-suppressor",
+ "source": "https://registry.npmjs.org/",
+ "version": "0.4.1"
+}

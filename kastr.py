@@ -1537,10 +1537,17 @@ def port_memory_text():
 
 
 def port_explicit(ini, argv=None):
-    """Did the operator pin the port (kastr.ini `port =` or --port on the
-    command line)? A pinned port is never traded for a remembered one."""
+    """Did the operator pin the port (kastr.ini `port =` other than the default
+    8000, or --port on the command line)? A pinned port is never traded for a
+    remembered one."""
+    # kastr.ini ships with `port = 8000` in its template on every box, so 8000 there is
+    # the default, not a pin (0.14.0): only another value pins the port.
     if isinstance(ini, dict) and "port" in ini:
-        return True
+        try:
+            if int(str(ini.get("port")).strip()) != 8000:
+                return True
+        except (TypeError, ValueError):
+            return True
     for a in (sys.argv[1:] if argv is None else argv):
         if a == "--port" or a.startswith("--port="):
             return True

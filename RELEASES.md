@@ -10,8 +10,8 @@ browser's localStorage, which is scoped to `http://127.0.0.1:<port>`. When 8000 
 every upgrade (and every restart) started with an empty page: no last room, no RTSP history or kept feeds,
 no grid seats, no profile. The cameras themselves kept publishing (`rtsp-feeds.json`), only the page forgot.
 Now the launcher scans 8001..8040 deterministically and remembers the port it bound in `port.json` in the
-state dir, so a box moves once and stays there (kastr.ini `port` or `--port` still win; delete `port.json`
-to go back to 8000). Belt and braces: the page mirrors its settings to the server (`prefs.json`, loopback
+state dir, so a box moves once and stays there (`--port`, or a kastr.ini `port` other than the default 8000,
+still wins; delete `port.json` to go back to 8000). Belt and braces: the page mirrors its settings to the server (`prefs.json`, loopback
 only, `GET/POST /api/prefs`) and seeds an empty origin from that file, so a profile wipe or another port
 change no longer costs the operator their setup. Access codes are stripped before mirroring -- the standing
 rule that codes never leave the loopback-guarded state files and are never echoed by a GET holds -- so after
@@ -40,8 +40,8 @@ browser plays natively (H.264/VP8/VP9/AV1 with AAC/MP3/Opus/Vorbis/FLAC/PCM) kee
 
 **Choose the web port on a hub or relay, and let everyone find it.** The Relay page gains a "KASTR web port"
 field: Set pins the port in `port.json` (applies at the next launch; Apply & relaunch moves at once and the tab
-follows to the new port), Clear forgets it. Precedence: `--port` > the pinned port > kastr.ini `port` > the
-remembered port > 8000. The hub's token service (relay port + 1) now advertises the web port on `GET /api/auth`,
+follows to the new port), Clear forgets it. Precedence: `--port` > the pinned port > a kastr.ini `port` other than 8000 > the
+remembered port > 8000 (the shipped kastr.ini template says `port = 8000`, which is the default, not a pin). The hub's token service (relay port + 1) now advertises the web port on `GET /api/auth`,
 so spokes store it in `relay-cluster.json` (chat forwarding, peer lookups, version follow) and pages use it for
 peer lookups instead of assuming 8000.
 

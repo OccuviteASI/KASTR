@@ -1985,7 +1985,8 @@ def main():
     # 0.8.10: shared-file storage and LAN naming no longer need a hosted relay
     kastr_serve.STATE_DIR = state_dir()
     kastr_serve.HTTP_PORT = port
-    kastr_relay.WEB_PORT = port          # 0.14.0 F: the token service advertises it on /api/auth
+    import kastr_relay as _kr_web      # main() imports kastr_relay locally further down, so bind the name here too
+    _kr_web.WEB_PORT = port              # 0.14.0 F: the token service advertises it on /api/auth
     kastr_serve.LAN_OK = args.host not in ("127.0.0.1", "localhost", "::1")
     kastr_serve.start_media_sweeper(state_dir())   # 0.8.13: converted media has a shelf life
     note("serving %s (host %s, relay %s, version %s)" % (url, args.host, args.relay, kastr_serve.read_version()))

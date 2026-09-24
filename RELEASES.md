@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.15.1 — hotfix: shared files publish in H.264 with the hardware encoder
+
+**A shared file was still choppy from a laptop.** Two encoders sit behind a shared file and both were software: the
+server-side transcode ran libx264, and the page published the composite with the library's default VP9, which has no
+hardware encoder on most laptops. Now the transcode uses the same validated hardware H.264 encoder the RTSP path uses
+(NVENC / QSV / AMF / MediaFoundation / VA-API, libx264 superfast otherwise) and drops to a 960-wide / 24 fps ladder after
+two rebuffers; the page publishes a shared file as H.264 (`avc1`, hardware preferred) unless the operator picked a codec.
+Every viewer decodes H.264 in hardware too. The response carries `X-KASTR-Encoder`; `__mediaDebug()` shows `encoder`,
+`lowQ` and the audio path (`actx`, `atrack`, `pubMuted`). The "no audio" report turned out to be the share's own mute
+button; the rig confirms audio leaves the owner and arrives at viewers.
+
 ## v0.15.0 — the hub's web port everywhere, groups and grids, quieter alerts, backgrounds that stay
 
 **Chat, rooms, files and updates follow the hub's web port now.** 0.14.0 let a hub pin its web port, but every page still

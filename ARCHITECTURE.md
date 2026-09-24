@@ -802,3 +802,9 @@ speculative was later removed (see Decisions).
   status line, not a notification.
 - **What the camera menu shows must be what the pipeline runs.** The effect is pushed from one place whenever a camera
   appears, and the menu reads the source, not a singleton.
+
+### 0.15.1
+
+- **Count the encoders.** A shared file passed through two: ffmpeg on the server and WebCodecs in the page. Fixing the
+  cushion made the first one invisible and left the second -- software VP9 -- as the stutter. Prefer the codec every
+  machine encodes and decodes in hardware, and let the debug hook name the encoder actually in use.

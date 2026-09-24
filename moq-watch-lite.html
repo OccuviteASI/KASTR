@@ -11081,6 +11081,11 @@
     // -- a backwards jump at the loop point could freeze video for a whole
     // loop. Let the encoder read the rate off the track instead.
     if (slot.entry.kind === FILE) delete vcfg.frameRate;
+    // 0.15.1: a shared FILE defaults to H.264 unless the operator picked a codec. The library's
+    // Auto choice was VP9, which has no hardware encoder on most laptops -- a software VP9 encode
+    // of a 720p30 composite dropped frames and every viewer saw a choppy share. H.264 encodes in
+    // hardware nearly everywhere and decodes in hardware on every viewer.
+    if (slot.entry.kind === FILE && !vcfg.codec) vcfg.codec = "avc1";
 
     try { slot.publish.video.config.set(vcfg); } catch {}
     try { slot.publish.audio.codec.set(audioConfig()); } catch {}
@@ -12700,7 +12705,7 @@
     if (up && up.failed && !up.done) { log("Media stream: the upload failed, nothing to play"); window.__toast?.("The upload failed \u2014 remove the file and add it again.", 8000, { level: "error" }); return; }
     m.ctl = new AbortController();
     m.lastByteAt = performance.now();
-    const url = entry.mediaUrl + "/stream?t=" + t.toFixed(3) + "&v=" + m.plan.v + "&a=" + m.plan.a;
+    const url = entry.mediaUrl + "/stream?t=" + t.toFixed(3) + "&v=" + m.plan.v + "&a=" + m.plan.a + (m.lowQ ? "&q=low" : "");   // 0.15.1: lowered quality after repeated rebuffers
     let res;
     try { res = await fetch(url, { signal: m.ctl.signal, cache: "no-store" }); }
     catch (e) {
@@ -12740,6 +12745,7 @@
       m.mime = mime;
     } catch (e) { try { m.ctl.abort(); } catch {} escalateMedia(slot, "cannot open a buffer for " + mime + ": " + (e?.message || e)); return; }
     m.copy = res.headers.get("X-KASTR-Copy") === "1";
+    m.encoder = res.headers.get("X-KASTR-Encoder") || null;   // 0.15.1
     const reader = res.body.getReader();
     try {
       while (true) {
@@ -12875,6 +12881,14 @@
       m.rebuffering = true; m.rebuffers = (m.rebuffers || 0) + 1;
       try { v.pause(); } catch {}
       paintOwnerMediaBar(slot);
+      // 0.15.1: two rebuffers on a transcode = this machine's encoder cannot outrun playback -> ask
+      // the server for the light ladder (960 wide, 24 fps) once, from the current position.
+      if (m.rebuffers >= 2 && !m.lowQ && m.plan?.v === "transcode") {
+        m.lowQ = true;
+        log("Media stream: the transcode cannot keep up on this machine — lowering to 960 wide / 24 fps");
+        window.__toast?.("This machine cannot convert the file fast enough — lowered the quality so it plays smoothly", 6000, { level: "event" });
+        reopenMediaStream(slot, v.currentTime);
+      }
     }
   }
   // once a second while a stream is attached
@@ -15390,14 +15404,24 @@
   window.addEventListener("pagehide", () => {
     for (const a of added) if (a.kind === FILE && a.mediaId && a.mediaUrl) { try { navigator.sendBeacon?.(a.mediaUrl + "?_method=DELETE", ""); } catch {} }
   });
+  window.__mediaAudioRms = async (idx = 0) => {   // 0.15.1 rig: is the published file audio carrying signal?
+    const s2 = [...slots.values()].filter((x) => x.media)[idx]; const tr = s2?.media?.atrack; if (!tr) return null;
+    const ac = new AudioContext(); const src = ac.createMediaStreamSource(new MediaStream([tr])); const an = ac.createAnalyser(); an.fftSize = 2048; src.connect(an);
+    try { await ac.resume(); } catch {}
+    const buf = new Float32Array(an.fftSize); let peak = 0, sum = 0, n = 0;
+    for (let i = 0; i < 12; i++) { await new Promise((r) => setTimeout(r, 50)); an.getFloatTimeDomainData(buf); let acc = 0; for (const x of buf) { acc += x * x; if (Math.abs(x) > peak) peak = Math.abs(x); } sum += Math.sqrt(acc / buf.length); n++; }
+    try { ac.close(); } catch {}
+    return { rms: +(sum / n).toFixed(4), peak: +peak.toFixed(4), actx: s2.media.actx?.state };
+  };
   window.__mediaDebug = () => [...slots.values()].filter((s) => s.media).map((s) => {   // rig hook
     const m = s.media, v = m.video, b = [];
     try { for (let i = 0; i < v.buffered.length; i++) b.push([+v.buffered.start(i).toFixed(2), +v.buffered.end(i).toFixed(2)]); } catch {}
     const up = s.entry.upload;
-    const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused };   // 0.15.0
+    const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused, lowQ: !!m.lowQ, encoder: m.encoder || null };   // 0.15.0/0.15.1
+    const audInfo = { actx: m.actx?.state || null, atrack: m.atrack ? { readyState: m.atrack.readyState, enabled: m.atrack.enabled, muted: m.atrack.muted } : null, elMuted: v.muted, elVolume: v.volume, audioDecoded: v.webkitAudioDecodedByteCount ?? null, pubMuted: !!s.publish?.muted };   // 0.15.1 rig
     return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, buffered: b,
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,
-      upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo };
+      upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo, ...audInfo };
   });
   window.__publisher = {
     peer: PEER,   // lets the watch half of this page recognise its own rows

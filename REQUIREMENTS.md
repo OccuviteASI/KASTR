@@ -414,6 +414,13 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.15.1
+
+| Area | Requirement | Since |
+|---|---|---|
+| S | Media transcode: `bridge.usable_encoder()` (validated hardware H.264 or libx264) with `encoder_pre_args`/`encoder_vf`; libx264 `superfast`/crf 23; hardware `-b:v 4M`; `q=low` -> 960 wide, 24 fps, ultrafast/2M; header `X-KASTR-Encoder`. | 0.15.1 |
+| PUB | A FILE share's publish codec defaults to `avc1` when the operator left the codec on Auto; after two rebuffers on a transcode the page reopens with `q=low` once (event toast); `__mediaDebug()` adds `lowQ`, `encoder`, `actx`, `atrack`, `elMuted`, `audioDecoded`, `pubMuted`; rig hook `__mediaAudioRms(idx)`. | 0.15.1 |
+
 ### Added in 0.15.0
 
 | Area | Requirement | Since |

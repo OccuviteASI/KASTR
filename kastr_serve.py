@@ -2072,11 +2072,28 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 os.utime(src, None)      # a share still playing after 12 h keeps its file (sweep_media)
             except OSError:
                 pass
-            argv = [ff, "-hide_banner", "-loglevel", "error", "-nostdin",
+            # 0.15.1: the transcode uses the machine's hardware H.264 encoder when the bridge has
+            # validated one (NVENC / QSV / AMF / MediaFoundation / VA-API -- the RTSP path's list),
+            # libx264 superfast otherwise; `q=low` (the page asks for it after two rebuffers) drops
+            # to 960 wide / 24 fps so a weak laptop still outruns playback.
+            low = (qs.get("q", [""])[0] or "").lower() == "low"
+            enc = "libx264"
+            try:
+                enc = (bridge.usable_encoder() if (bridge and hasattr(bridge, "usable_encoder")) else None) or "libx264"
+            except Exception:
+                enc = "libx264"
+            pre = list(kastr_rtsp.encoder_pre_args(enc)) if enc != "libx264" else []
+            vf = "scale='min(%d,iw)':-2,format=yuv420p" % (960 if low else 1280)
+            vcodec = ["-vf", kastr_rtsp.encoder_vf(enc, vf), *(["-r", "24"] if low else []), "-c:v", enc]
+            if enc == "libx264":
+                vcodec += ["-preset", "ultrafast" if low else "superfast", "-tune", "fastdecode", "-crf", "26" if low else "23", "-threads", "0"]
+            else:
+                vcodec += ["-b:v", "2M" if low else "4M"]
+            vcodec += ["-g", "48" if low else "60"]
+            argv = [ff, "-hide_banner", "-loglevel", "error", "-nostdin", *pre,
                     *(["-ss", "%.3f" % t] if t > 0 else []),
                     "-i", src, "-map", "0:v:0?", "-map", "0:a:0?", "-copyts",
-                    *(["-c:v", "copy"] if v == "copy" else
-                      ["-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264", "-preset", "superfast", "-tune", "fastdecode", "-crf", "23", "-pix_fmt", "yuv420p", "-g", "60", "-threads", "0"]),   # 0.15.0: cap 720p-wide + faster preset so the transcode outruns playback on a laptop (choppy shares); the reader pre-buffers on top
+                    *(["-c:v", "copy"] if v == "copy" else vcodec),
                     *(["-c:a", "copy"] if a == "copy" else ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]),
                     "-f", "mp4", "-movflags", "empty_moov+default_base_moof", "-frag_duration", "500000", "pipe:1"]
             spawn = getattr(bridge, "spawn_media", None) if bridge else None
@@ -2127,6 +2144,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-KASTR-Mime", 'video/mp4; codecs="%s"' % codecs)
             self.send_header("X-KASTR-Copy", "1" if v == "copy" else "0")
+            self.send_header("X-KASTR-Encoder", "copy" if v == "copy" else enc + ("/low" if low else ""))   # 0.15.1
             self.send_header("X-KASTR-Start", self._num(t))
             self.send_header("X-KASTR-Duration", self._num(rec["duration"]))
             self.end_headers()

@@ -8,7 +8,8 @@ What changed in each build, newest first.
 longer checks tokens itself: for every session it asks an HTTP auth server (`connect`, `revalidate`, `end`) and gets back
 what that session may publish and subscribe to. KASTR's token service on the relay host (relay port + 1) is that server,
 and it still verifies the very same tokens the gate has minted since 0.13 -- so a 0.15.1 client, a 0.15.1 native
-publisher and a 0.15.1 spoke keep working against a 0.16.0 relay (rig-proven before this shipped). Roll out hub first:
+publisher and a 0.15.1 spoke keep working against a 0.16.0 relay, and the reverse holds too: a 0.16.0 client publishes
+and watches through a 0.14.18 relay (both directions rig-proven before this shipped). Roll out hub first:
 the Agg hub, then Mendon/Southridge follow within the hour, clients on their next launch. The relay's config is the new
 shape (`[listen]`, `[auth] url`, `[connect]`, `[internal]`; the old spellings are gone and a `renamed` line from the relay
 now surfaces on the Relay page), the native publisher speaks `--connect` / `--max-age 5s`, and the vendored web library

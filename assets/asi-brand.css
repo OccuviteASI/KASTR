@@ -383,3 +383,7 @@ body.asi-upstream a { color: var(--asi-blue); }
 .asi-relaypop .rdot { width:8px; height:8px; border-radius:50%; background:#666; flex:none; }
 .asi-relaypop .rdot.ok { background:#3ab54a; box-shadow:0 0 6px #3ab54a; }
 .asi-relaypop .rdot.bad { background:#d9463f; }
+/* 0.15.1: release notes show the running build; older versions fold behind a button */
+.asi-notespop .prevbtn { display:block; margin:14px 0 6px; padding:6px 12px; font:inherit; font-size:12px; color:var(--asi-blue, #3b82f6); background:transparent; border:1px solid currentColor; border-radius:6px; cursor:pointer; }
+.asi-notespop .prevbtn:hover { background:rgba(59,130,246,.10); }
+.asi-notespop .prev { border-top:1px solid rgba(255,255,255,.08); margin-top:8px; padding-top:4px; }

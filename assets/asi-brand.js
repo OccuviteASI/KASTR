@@ -355,6 +355,12 @@ function build() {
     + '<div class="body">Loading…</div>';
 
   const closeNotes = () => { notesPop.hidden = true; };
+  notesPop.addEventListener("click", (e) => {   // 0.15.1: previous versions fold
+    const b = e.target.closest(".prevbtn"); if (!b) return;
+    const prev = notesPop.querySelector(".prev"); if (!prev) return;
+    prev.hidden = !prev.hidden;
+    b.textContent = prev.hidden ? "Show previous versions (" + b.dataset.n + ")" : "Hide previous versions";
+  });
   let notesLoaded = false;
 
   async function openNotes() {
@@ -376,7 +382,35 @@ function build() {
     return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // 0.15.1: only the running build's notes are shown; everything older sits behind
+  // "Show previous versions". A heading is "## vX.Y.Z — title", so the match is on
+  // the version token, not the whole line (a dev build with no exact match shows
+  // the newest section as current).
   function renderNotes(md, current) {
+    const sections = [];   // [{ title, lines[] }] in file order (newest first)
+    let cur = null;
+    for (const raw of md.split(/\r?\n/)) {
+      const h2 = raw.trim().match(/^##\s+(.*)$/);
+      if (h2) { cur = { title: h2[1].trim(), lines: [] }; sections.push(cur); continue; }
+      if (cur) cur.lines.push(raw);
+    }
+    if (!sections.length) return renderBlock(md.split(/\r?\n/));
+    const want = "v" + String(current || "").replace(/-dev$/, "");
+    let idx = sections.findIndex((sec) => sec.title.split(/[\s—-]/)[0] === want);   // "v0.15.1 -- title" -> first token
+    if (idx < 0) idx = 0;
+    const one = (sec, isCur) =>
+      '<h3' + (isCur ? ' class="cur"' : '') + '>' + esc(sec.title)
+      + (isCur ? ' <span class="tag">this build</span>' : '') + '</h3>' + renderBlock(sec.lines);
+    const rest = sections.filter((_, i) => i !== idx);
+    let html = one(sections[idx], true);
+    if (rest.length) {
+      html += '<button type="button" class="prevbtn" data-n="' + rest.length + '">Show previous versions (' + rest.length + ')</button>'
+        + '<div class="prev" hidden>' + rest.map((sec) => one(sec, false)).join("") + '</div>';
+    }
+    return html;
+  }
+
+  function renderBlock(lines) {
     const out = [];
     let open = null;   // 'li' or 'p' -- what a wrapped line continues
     let inList = false;
@@ -385,7 +419,7 @@ function build() {
       if (inList) { out.push("</ul>"); inList = false; }
     };
 
-    for (const raw of md.split(/\r?\n/)) {
+    for (const raw of lines) {
       const line = raw.trim();
 
       if (!line) { open = null; closeList(); continue; }
@@ -395,17 +429,6 @@ function build() {
         if (!inList) { out.push("<ul>"); inList = true; }
         out.push("<li>" + inline(bullet[1]) + "</li>");
         open = "li";
-        continue;
-      }
-
-      const h2 = line.match(/^##\s+(.*)$/);
-      if (h2) {
-        closeList();
-        open = null;
-        const cur = h2[1].trim() === "v" + current;
-        out.push(
-          '<h3' + (cur ? ' class="cur"' : '') + '>' + esc(h2[1])
-          + (cur ? ' <span class="tag">this build</span>' : '') + '</h3>');
         continue;
       }
 

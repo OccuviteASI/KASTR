@@ -13,6 +13,10 @@ Every viewer decodes H.264 in hardware too. The response carries `X-KASTR-Encode
 `lowQ` and the audio path (`actx`, `atrack`, `pubMuted`). The "no audio" report turned out to be the share's own mute
 button; the rig confirms audio leaves the owner and arrives at viewers.
 
+**Release notes show the running build.** The version pill's notes open on this build's section only, with
+"Show previous versions (N)" folding the history underneath (the "this build" tag now matches headings that carry a
+title after the version).
+
 ## v0.15.0 — the hub's web port everywhere, groups and grids, quieter alerts, backgrounds that stay
 
 **Chat, rooms, files and updates follow the hub's web port now.** 0.14.0 let a hub pin its web port, but every page still

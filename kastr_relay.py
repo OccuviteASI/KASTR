@@ -36,11 +36,12 @@ Endpoints (wired up by kastr_serve):
     POST /api/relay/codes   {"viewer":"..."|""|null, "publisher":..., "federation":...}  ("" clears, null keeps)
     GET  /api/relay/cluster -> {"connect","master","hasCode"};  POST {connect?, code?, master?}  (0.11.0)
     POST /api/relay/rotate  -> new signing key (every token dies), relay restarted
-    GET  /api/relay/rooms   -> {"rooms":[{slug,locked,persistent,creator,created,at}], "closed":{slug:ts_ms}}  (0.12.0)
+    GET  /api/relay/rooms   -> {"rooms":[{slug,locked,persistent,creator,created,at}], "closed":{slug:ts_ms}, "groups":{gid:{name,order,rooms}}}  (0.12.0; 0.15.0 groups)
     POST /api/relay/rooms/close {"slug"}  -> operator close: record, chat and attachments gone (0.12.0)
+    POST /api/relay/rooms/group {"op":"create|rename|delete|assign","gid"?,"name"?,"order"?,"slug"?} -> {"ok":true,"groups"}  (0.15.0, operator)
 Token service (its own listener, relay-port+1):
-    GET  /api/auth          -> {"app":"KASTR","secured":true,"codes":bool,"legacy":bool,"federation":bool,"kid":...,"state":true}
-    GET  /api/rooms         -> {"rooms":[{"slug","locked","persistent","creator","created","at"}]}   (0.11.0 names; 0.12.0 rows)
+    GET  /api/auth          -> {"app":"KASTR","secured":true,"codes":bool,"legacy":bool,"federation":bool,"kid":...,"state":true,"web":int|null,"https":int|null}
+    GET  /api/rooms         -> {"rooms":[{"slug","locked","persistent","creator","created","at"}],"groups":{gid:{name,order,rooms}}}   (0.11.0 names; 0.12.0 rows; 0.15.0 groups)
     POST /api/room          {"slug","salt"?,"hash"?,"roomKey"?,"code"?,"access"?,"persistent"?,"creator"?,"rekey"?}  (0.12.0: kept rooms)
     POST /api/token         {"federation":"<code>"} -> {"ok":true,"role":"relay","token",...}  (0.11.0)
     POST /api/room          {"slug","salt","hash","roomKey"?,"code"?,"access"?}
@@ -91,6 +92,8 @@ SLUG_RE = re.compile(r"[a-z0-9-]{1,32}$")
 # heartbeat window -- are capped, and a closed room leaves an hour-long
 # tombstone so pages learn WHY the chat answers 410.
 KEPT_MAX = 64
+GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
+GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
 # 0.12.0: root-prefixed announce kinds every member may put beside .presence:
 # .talking/<room> (who is speaking) and .chat/<room> (a new-message nudge).
@@ -307,6 +310,7 @@ class AuthStore:
         self.codes = {"viewer": None, "publisher": None, "federation": None}   # 0.11.0: + federation
         self.rooms = {}
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
+        self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
         self._load()
 
     def _path(self):
@@ -337,6 +341,23 @@ class AuthStore:
                 except (TypeError, ValueError):
                     pass
             self._prune_closed()
+        groups = d.get("groups")            # 0.15.0
+        if isinstance(groups, dict):
+            seen = set()
+            for gid, g in groups.items():
+                gid = str(gid)
+                if not (isinstance(g, dict) and SLUG_RE.match(gid)) or len(self.groups) >= GROUPS_MAX:
+                    continue
+                rooms = []
+                for s in (g.get("rooms") or []):
+                    if isinstance(s, str) and SLUG_RE.match(s) and s not in seen and len(rooms) < GROUP_ROOMS_MAX:
+                        rooms.append(s)
+                        seen.add(s)
+                try:
+                    order = int(g.get("order") or 0)
+                except (TypeError, ValueError):
+                    order = 0
+                self.groups[gid] = {"name": str(g.get("name") or gid)[:48], "order": order, "rooms": rooms}
 
     def _save(self):
         os.makedirs(self.state_dir, exist_ok=True)
@@ -344,7 +365,8 @@ class AuthStore:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"viewer": self.codes["viewer"], "publisher": self.codes["publisher"],
                        "federation": self.codes["federation"], "rooms": self.rooms,
-                       "closed": self.closed}, f)     # 0.12.0: + closed tombstones
+                       "closed": self.closed,          # 0.12.0: + closed tombstones
+                       "groups": self.groups}, f)     # 0.15.0: + room groups
         for i in range(6):
             # 0.12.0: Windows -- a scanner holding the just-written file fails the
             # replace with "access denied" for a moment; registers now save often.
@@ -472,6 +494,7 @@ class AuthStore:
             rec = self.rooms.pop(slug, None)
             self.closed[slug] = int(time.time() * 1000)
             self._prune_closed()
+            self._group_forget(slug)         # 0.15.0: a closed room leaves its group
             self._save()
             return rec
 
@@ -479,9 +502,108 @@ class AuthStore:
         """Forget a record WITHOUT a tombstone (a room un-kept and unlocked)."""
         with self.lock:
             rec = self.rooms.pop(slug, None)
-            if rec is not None:
+            changed = self._group_forget(slug)   # 0.15.0
+            if rec is not None or changed:
                 self._save()
             return rec
+
+    # ---- room groups (0.15.0) ------------------------------------------------
+    # Relay-defined, shared by every page dialled in: {gid: {name, order, rooms}}.
+    # A slug sits in at most one group; the operator creates/renames/deletes,
+    # a room's creator (roomKey) or the operator assigns.
+
+    @staticmethod
+    def group_slug(name):
+        s = re.sub(r"[^a-z0-9-]+", "-", str(name or "").lower()).strip("-")[:32]
+        return s or "group"
+
+    def groups_public(self):
+        """The whole table, safe to publish (names and slugs only)."""
+        with self.lock:
+            return {gid: {"name": g["name"], "order": g["order"], "rooms": list(g["rooms"])}
+                    for gid, g in self.groups.items()}
+
+    def group_set(self, gid=None, name=None, order=None):
+        """Create (gid None -> a unique slug of the name) or rename/reorder -> gid.
+        ValueError on a bad name or the cap, KeyError on an unknown gid."""
+        with self.lock:
+            if gid is None:
+                name = str(name or "").strip()[:48]
+                if not name:
+                    raise ValueError("group name required")
+                if len(self.groups) >= GROUPS_MAX:
+                    raise ValueError("at most %d groups" % GROUPS_MAX)
+                base = self.group_slug(name)
+                gid, n = base, 2
+                while gid in self.groups:
+                    suffix = "-%d" % n
+                    gid = base[:32 - len(suffix)] + suffix
+                    n += 1
+                self.groups[gid] = {"name": name, "order": len(self.groups), "rooms": []}
+            else:
+                gid = str(gid)
+                g = self.groups.get(gid)
+                if g is None:
+                    raise KeyError(gid)
+                if name is not None:
+                    name = str(name).strip()[:48]
+                    if not name:
+                        raise ValueError("group name required")
+                    g["name"] = name
+            if order is not None:
+                try:
+                    self.groups[gid]["order"] = int(order)
+                except (TypeError, ValueError):
+                    raise ValueError("order must be a number")
+            self._save()
+            return gid
+
+    def group_delete(self, gid):
+        """-> the removed group. KeyError when unknown."""
+        with self.lock:
+            g = self.groups.pop(str(gid), None)
+            if g is None:
+                raise KeyError(gid)
+            self._save()
+            return g
+
+    def group_assign(self, slug, gid):
+        """Put a room in ONE group (gid None = in no group) -> gid.
+        ValueError on a bad slug or a full group, KeyError on an unknown gid."""
+        slug = str(slug or "")
+        if not SLUG_RE.match(slug):
+            raise ValueError("bad room name")
+        with self.lock:
+            if gid is not None:
+                gid = str(gid)
+                g = self.groups.get(gid)
+                if g is None:
+                    raise KeyError(gid)
+                if slug not in g["rooms"] and len(g["rooms"]) >= GROUP_ROOMS_MAX:
+                    raise ValueError("at most %d rooms in a group" % GROUP_ROOMS_MAX)
+            changed = self._group_forget(slug, keep=gid)
+            if gid is not None and slug not in self.groups[gid]["rooms"]:
+                self.groups[gid]["rooms"].append(slug)
+                changed = True
+            if changed:
+                self._save()
+            return gid
+
+    def group_of(self, slug):
+        with self.lock:
+            for gid, g in self.groups.items():
+                if slug in g["rooms"]:
+                    return gid
+            return None
+
+    def _group_forget(self, slug, keep=None):
+        """Lock held: drop `slug` from every group but `keep` -> changed?"""
+        changed = False
+        for gid, g in self.groups.items():
+            if gid != keep and slug in g["rooms"]:
+                g["rooms"] = [s for s in g["rooms"] if s != slug]
+                changed = True
+        return changed
 
 
 def register_room(store, p, peer="", log=None, lockout=None):
@@ -623,6 +745,59 @@ def close_room(store, slug, roomKey=None, operator=False, hook=None, log=None):
     return {"ok": True, "slug": slug}, 200
 
 
+def group_op(store, p, operator=False, log=None):
+    """0.15.0: room groups -> (reply, http code), modelled on close_room.
+    p["op"]: create {name, order?} / rename {gid, name?, order?} / delete {gid}
+    (operator only: the Relay page on the relay host, or the token service's
+    operator) / assign {slug, gid|null, roomKey?} (the room's creator proves
+    itself with the roomKey exactly as for close; the operator needs none and
+    may group a room that has no record). Replies {ok, op, gid, groups} or
+    {error} with 400 (bad input) / 403 (not allowed) / 404 (unknown room or group)."""
+    log = log or (lambda m: None)
+    p = p if isinstance(p, dict) else {}
+    op = str(p.get("op") or "")
+    gid = p.get("gid") if p.get("gid") is not None else p.get("group")   # the page says `group`, the CLI recipe `gid`
+    gid = str(gid) if gid not in (None, "") else None
+    try:
+        if op in ("create", "rename", "delete"):
+            if not operator:
+                return {"error": "only the relay's operator manages groups"}, 403
+            if op == "create":
+                same = next((g for g, rec in store.groups_public().items() if str(rec.get("name") or "").strip().lower() == str(p.get("name") or "").strip().lower()), None)
+                gid = same or store.group_set(None, p.get("name"), p.get("order"))   # same name -> same group
+                log("relay: room group %s created" % gid)
+            elif op == "rename":
+                if gid is None:
+                    return {"error": "gid required"}, 400
+                store.group_set(gid, p.get("name"), p.get("order"))
+            else:
+                if gid is None:
+                    return {"error": "gid required"}, 400
+                store.group_delete(gid)
+                log("relay: room group %s deleted" % gid)
+        elif op == "assign":
+            slug = str(p.get("slug") or "")
+            if not SLUG_RE.match(slug):
+                return {"error": "bad room name"}, 400
+            if not operator:
+                cur = store.room(slug)
+                if cur is None:
+                    return {"error": "no such room on this relay"}, 404
+                rk = p.get("roomKey")
+                if not (rk and rk == cur.get("roomKey")):
+                    return {"error": "not the room's creator"}, 403
+            store.group_assign(slug, gid)
+            log("relay: room %s %s by %s" % (slug, ("grouped under %s" % gid) if gid else "ungrouped",
+                                             "the operator" if operator else "its creator"))
+        else:
+            return {"error": "unknown op (create|rename|delete|assign)"}, 400
+    except KeyError:
+        return {"error": "no such group"}, 404
+    except ValueError as e:
+        return {"error": str(e)}, 400
+    return {"ok": True, "op": op, "gid": gid, "groups": store.groups_public()}, 200
+
+
 class AuthService:
     """Token minting for a secured relay, on TCP relay-port+1.
 
@@ -689,12 +864,15 @@ class AuthService:
                                  "state": True,
                                  # 0.14.0 F: the hub KASTR's web port -- spokes (chat proxy, peer
                                  # lookups, version follow) and pages stop assuming 8000
-                                 "web": WEB_PORT or _FIREWALL_WEB_PORT or None})
+                                 "web": WEB_PORT or _FIREWALL_WEB_PORT or None,
+                                 # 0.15.0: its https listener (None = loopback-only web host)
+                                 "https": HTTPS_PORT})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
                     # gate can list them and take their codes -- names only.
                     # 0.12.0: rows {slug, locked, persistent, creator, created, at} -- old pages read .slug
-                    self._reply({"rooms": svc.store.rooms_public()})
+                    # 0.15.0: + the relay-defined room groups
+                    self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public()})
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
 
@@ -894,6 +1072,134 @@ def _hub_parts(hub):
     return host, port, "http://%s:%d" % (h, port + 1)
 
 
+# ---- the hub KASTR's web port (0.15.0) -----------------------------------------
+# Every consumer of "the KASTR on the relay host" (update feed, chat proxy, peer
+# lookups) assumed 8000 until 0.14.0 pinned the port; a hub that moved to 8001
+# was simply unreachable. The port is now LEARNED -- from the minter's /api/auth
+# when the hub is secured, else by probing /api/instance on a short candidate
+# list -- and remembered per host in state_dir/hub-web.json.
+
+HUB_WEB_CANDIDATES = tuple(range(8000, 8011))
+HUB_WEB_PROBE_TIMEOUT = 0.75
+
+
+def _hub_auth_get(hub, timeout=3.0):
+    """GET <hub minter>/api/auth -> dict, {} when it is not a KASTR minter, None
+    when unreachable (an open hub has no minter). Module-level twin of
+    Relay.hub_auth for callers without a Relay (the launcher)."""
+    host, port, minter = _hub_parts(hub)
+    try:
+        with urllib.request.urlopen(minter + "/api/auth", timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        return d if isinstance(d, dict) and d.get("app") == "KASTR" else {}
+    except Exception:
+        return None
+
+
+def _port_or_none(v):
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return None
+    return v if 1 <= v <= 65535 else None
+
+
+def probe_hub_web(relay_url, candidates=(), budget=3.0):
+    """0.15.0: -> {"web": int, "https": int|None, "via": "minter"|"instance"} or None.
+    The minter (relay port+1) answers first when the hub is secured; otherwise
+    the candidates (callers pass the stored/ini ports first) then 8000..8010
+    are asked for /api/instance, HUB_WEB_PROBE_TIMEOUT each, until `budget`
+    seconds are spent. An old hub whose /api/instance lacks `web` still counts:
+    the port that answered is the port. Pure: no file IO."""
+    hub = _normalize_hub(relay_url)
+    if not hub:
+        return None
+    host, _port, _minter = _hub_parts(hub)
+    if not host:
+        return None
+    start = time.monotonic()
+    auth = _hub_auth_get(hub, timeout=max(0.2, min(1.5, budget / 2.0)))
+    if isinstance(auth, dict):
+        web = _port_or_none(auth.get("web"))
+        if web:
+            return {"web": web, "https": _port_or_none(auth.get("https")), "via": "minter"}
+    order, seen = [], set()
+    for c in list(candidates or ()) + list(HUB_WEB_CANDIDATES):
+        c = _port_or_none(c)
+        if c and c not in seen:
+            seen.add(c)
+            order.append(c)
+    h = ("[" + host + "]") if ":" in host else host
+    for c in order:
+        left = budget - (time.monotonic() - start)
+        if left <= 0:
+            break
+        try:
+            with urllib.request.urlopen("http://%s:%d/api/instance" % (h, c),
+                                        timeout=min(HUB_WEB_PROBE_TIMEOUT, left)) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            continue
+        if not (isinstance(d, dict) and d.get("app") == "KASTR"):
+            continue
+        return {"web": _port_or_none(d.get("web")) or c, "https": _port_or_none(d.get("https")),
+                "via": "instance"}
+    return None
+
+
+HUB_WEB_SINK = None        # 0.15.0: kastr_serve.HUB_WEB once loaded -- hub_web_note mirrors into it
+
+
+def _hub_web_file(state_dir):
+    return os.path.join(state_dir, "hub-web.json")
+
+
+def hub_web_load(state_dir):
+    """state_dir/hub-web.json -> {host: {"web", "https", "at"}} (validated; {} when absent)."""
+    try:
+        with open(_hub_web_file(state_dir), encoding="utf-8-sig") as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    out = {}
+    if isinstance(d, dict):
+        for host, rec in d.items():
+            if not isinstance(rec, dict):
+                continue
+            web = _port_or_none(rec.get("web"))
+            if not web:
+                continue
+            try:
+                at = float(rec.get("at") or 0)
+            except (TypeError, ValueError):
+                at = 0.0
+            out[str(host).strip().lower()] = {"web": web, "https": _port_or_none(rec.get("https")), "at": at}
+    return out
+
+
+def hub_web_note(state_dir, host, web, https=None):
+    """Remember `host`'s KASTR web (+https) port in hub-web.json (tmp + os.replace)
+    and in HUB_WEB_SINK -> True when something changed. ValueError on a bad port."""
+    host = str(host or "").strip().lower()
+    web = _port_or_none(web)
+    https = _port_or_none(https)
+    if not host or not web:
+        raise ValueError("bad host/port")
+    cur = hub_web_load(state_dir)
+    prev = cur.get(host)
+    changed = not (prev and prev["web"] == web and prev.get("https") == https)
+    if changed:
+        cur[host] = {"web": web, "https": https, "at": time.time()}
+        os.makedirs(state_dir, exist_ok=True)
+        tmp = _hub_web_file(state_dir) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cur, f)
+        os.replace(tmp, _hub_web_file(state_dir))
+    if HUB_WEB_SINK is not None:
+        HUB_WEB_SINK[host] = {"web": web, "https": https}
+    return changed
+
+
 class Relay:
     def __init__(self, state_dir, log=None):
         self.binary = find_relay()
@@ -1056,9 +1362,12 @@ class Relay:
             return {"connect": str(d.get("connect") or ""),
                     "code": str(d.get("code") or ""),
                     "master": bool(d.get("master", True)),
-                    "web": web}
+                    "web": web,
+                    # 0.15.0: the port as STORED (None = never learned; `web` above is the
+                    # 8000 fallback) so kastr_serve can prefer a learned hub-web.json entry
+                    "webStored": web if d.get("web") else None}
         except Exception:
-            return {"connect": "", "code": "", "master": True, "web": 8000}
+            return {"connect": "", "code": "", "master": True, "web": 8000, "webStored": None}
 
     def cluster_config(self):
         """The public shape (status(), GET /api/relay/cluster): never the code."""
@@ -1123,7 +1432,7 @@ class Relay:
             return None, why, info
         info = {"hubCodes": bool(auth.get("codes")), "hubFederation": bool(auth.get("federation")),
                 "kid": auth.get("kid")}
-        self._cluster_note_web(auth.get("web"))     # 0.14.0 F: the hub told us its web port
+        self._cluster_note_web(auth.get("web"), hub=hub, https=auth.get("https"))   # 0.14.0 F / 0.15.0: the hub told us its web (+https) port
         if not auth.get("codes"):
             why = "hub is open (no access codes) -- connecting without a token"
             self._fed_say(why)
@@ -1235,9 +1544,12 @@ class Relay:
         restarted = self._restart()
         return {"ok": True, "name": name, "restarted": restarted}
 
-    def _cluster_note_web(self, web):
+    def _cluster_note_web(self, web, hub=None, https=None):
         """0.14.0 F: remember the hub's advertised web port (from its /api/auth)
-        in relay-cluster.json when it differs from what is stored."""
+        in relay-cluster.json when it differs from what is stored.
+        0.15.0: ALSO in hub-web.json (hub_web_note, per host, with the https
+        port) whether or not a cluster link is stored -- the update feed and the
+        chat proxy read it through kastr_serve.HUB_WEB."""
         try:
             web = int(web)
         except (TypeError, ValueError):
@@ -1245,6 +1557,18 @@ class Relay:
         if not (1 <= web <= 65535):
             return
         cur = self._cluster_raw()
+        host = ""
+        try:
+            host = (urlparse(hub or cur["connect"]).hostname or "").lower()
+        except Exception:
+            host = ""
+        if host:
+            try:
+                if hub_web_note(self.state_dir, host, web, https):
+                    self.log("relay federation: hub %s KASTR web port %d%s noted in hub-web.json"
+                             % (host, web, (" (https %s)" % https) if https else ""))
+            except Exception as e:
+                self.log("relay federation: could not note the hub web port: %s" % e)
         if cur["web"] == web or not cur["connect"]:
             return
         cur["web"] = web
@@ -1553,6 +1877,7 @@ FIREWALL_RULES = ("KASTR MoQ Relay", "KASTR MoQ Relay (cert)",
                   "KASTR room codes", "KASTR web",
                   "KASTR MoQ Relay (wss)", "KASTR web (https)")   # 0.8.9: phone paths
 _FIREWALL_HTTPS_PORT = None   # set by the launcher when the https listener is up
+HTTPS_PORT = None             # 0.15.0: this KASTR's https listener port (launcher); /api/auth advertises it (None = none)
 
 
 def firewall_status():
@@ -1662,7 +1987,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/cluster", "/api/relay/name", "/api/relay/autostart",
                  "/api/relay/firewall", "/api/relay/codes", "/api/relay/rotate",
                  "/api/relay/rooms/close",     # 0.12.0
-                 "/api/relay/webport")         # 0.14.0 F
+                 "/api/relay/webport",         # 0.14.0 F
+                 "/api/relay/rooms/group")     # 0.15.0
 
 
 def _host_of(value):
@@ -1779,7 +2105,9 @@ def handle_api(handler, relay, path, set_relay_url=None):
 
     if path == "/api/relay/rooms":
         # 0.12.0: every room this relay remembers + the recently closed (readable like status)
-        reply({"rooms": relay.store.rooms_public(), "closed": relay.store.closed_public()})
+        # 0.15.0: + the room groups
+        reply({"rooms": relay.store.rooms_public(), "closed": relay.store.closed_public(),
+               "groups": relay.store.groups_public()})
         return True
 
     if path == "/api/relay/rooms/close":
@@ -1789,6 +2117,16 @@ def handle_api(handler, relay, path, set_relay_url=None):
             return True
         payload = _payload_of(handler)
         obj, code = relay.close_room(str(payload.get("slug") or ""), operator=True)
+        reply(obj, code)
+        return True
+
+    if path == "/api/relay/rooms/group":
+        # 0.15.0: the operator manages room groups (GUARDED: the machine itself)
+        if handler.command != "POST":
+            reply({"error": "POST only"}, 405)
+            return True
+        payload = _payload_of(handler)
+        obj, code = group_op(relay.store, payload, operator=True, log=relay.log)
         reply(obj, code)
         return True
 

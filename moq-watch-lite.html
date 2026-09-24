@@ -351,6 +351,11 @@
     color:var(--text); font-size:10px; display:flex; align-items:flex-end; justify-content:center; padding:4px; cursor:pointer; position:relative; }
   .bgrow button.on { border-color:var(--asi-blue); }
   .bgrow button.on::after { content:"\2713"; position:absolute; top:3px; right:5px; color:#fff; font-size:11px; }
+  .bgrow button .del { position:absolute; top:1px; left:4px; color:#fff; opacity:.75; font-size:11px; line-height:1; text-shadow:0 1px 2px #000; }   /* 0.15.0 */
+  .bgrow button .del:hover { opacity:1; color:#ff6b6b; }
+  .bgrow button .anim { position:absolute; bottom:3px; left:4px; font-size:9px; color:#fff; opacity:.8; text-shadow:0 1px 2px #000; }
+  #fxQualityLbl { color:var(--text-mute); margin-left:6px; font-size:11px; }
+  #fxBgHolder { position:fixed; left:0; bottom:0; width:2px; height:2px; overflow:hidden; opacity:.02; pointer-events:none; }   /* GIF backgrounds animate only while painted */
   #camPop, #audioPop.teams { width:min(380px, 92vw); }
   #viewPop { width:240px; }
   #optPop.teams { width:260px; }
@@ -513,6 +518,9 @@
     body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
     body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
     body.sb-collapsed .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
+    body.sb-collapsed .sbgroup { height:28px; padding:0 4px; margin-top:4px; gap:5px; justify-content:flex-start; border-top:0; border-radius:6px; }   /* 0.15.0 (B4) */
+    body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:revert; }
+    body.sb-collapsed .sbgroup .gchip { display:none; }
     .popcard, #sharePop, #peoplePanel { top:auto !important; bottom:0; left:0 !important; right:0;
       width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
     #sharePop { height:min(760px, 80dvh); }
@@ -618,6 +626,11 @@
   #stage .pubpane .gridback { position:absolute; z-index:8; top:8px; left:8px; font-size:11px; background:rgba(10,14,18,.8); color:#fff;
     border:1px solid var(--line); border-radius:999px; padding:4px 10px; cursor:pointer; display:none; }
   #stage .pubpane.gridfeed.mainstage .gridback { display:block; }
+  /* 0.15.0: per-cell close on my own grid (owner only) -- follows the hovered cell on the stage */
+  #stage .pubpane .gcellx { position:absolute; z-index:8; width:24px; height:24px; padding:0; display:none; align-items:center; justify-content:center;
+    font-size:12px; line-height:1; background:rgba(10,14,18,.8); color:#fff; border:1px solid var(--line); border-radius:999px; cursor:pointer; }
+  #stage .pubpane .gcellx.show { display:flex; }
+  #stage .pubpane .gcellx:hover { background:var(--asi-red); border-color:var(--asi-red); }
   #stopShareBtn { color:var(--asi-red); border-color:var(--asi-red); }
   #stopShareBtn:hover { color:#fff; background:var(--asi-red); }
   /* 0.7.8: transient notice chip (RTSP failures etc.) */
@@ -626,6 +639,10 @@
     background:var(--asi-red); color:#fff; box-shadow:0 8px 26px rgba(0,0,0,.45);
     opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease; }
   #kToast.show { opacity:1; transform:translate(-50%, 0); }
+  /* 0.15.0: an optional action inside the chip (grid "Undo"); the chip itself stays click-through */
+  #kToast .tact { display:inline-block; margin-left:10px; padding:2px 8px; font-size:11px; font-weight:600; line-height:1.3;
+    border:1px solid rgba(255,255,255,.55); border-radius:4px; background:rgba(255,255,255,.94); color:var(--asi-blue); cursor:pointer; pointer-events:auto; }
+  #kToast .tact:hover { background:#fff; }
   /* 0.7.7: the gate is dismissible -- relay-only machines never join */
   #joinGate .card { position:relative; }
   #joinGateClose { position:absolute; top:10px; right:10px; width:26px; height:26px;
@@ -854,6 +871,7 @@
   .pubui .camrow .top { display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:7px; }
   .pubui .camrow .top .lbl { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pubui .camrow input[type=text] { font-size:11px; padding:5px 7px; }
+  .pubui .camrow .gsel { width:auto; flex:none; font-size:11px; padding:2px 4px; max-width:130px; font-family:inherit; }   /* 0.15.0: which grid a feed joins */
   .pubui .camrow input[type=checkbox] { accent-color:var(--asi-blue); width:auto; }
   .pubui .camrow.remote { border-left:2px solid var(--asi-blue-dim); opacity:.9; }
   .pubui .camrow.remote .lbl { color:var(--text-dim); }
@@ -964,6 +982,26 @@
   body.sb-collapsed .sbcard.on { box-shadow:none; }
   body.sb-collapsed .sbcard.cur { border-color:transparent; border-left:3px solid #fff; background:transparent; padding-left:0; }
   body.sb-collapsed .sbbtn { padding:4px 0; }
+  /* 0.15.0 (B4): room GROUPS -- one header row per group (chevron, name, count) above its
+     cards; the collapsed rail shows a 2 px divider and a 1-letter chip instead. */
+  .sbgroup { display:flex; align-items:center; gap:5px; height:28px; flex:none; padding:0 4px; margin-top:4px; cursor:pointer; user-select:none;
+    font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-mute); font-weight:600; border-radius:6px; }
+  .sbgroup:hover { background:var(--surface); color:var(--text-dim); }
+  .sbgroup .gchev { display:inline-flex; width:14px; justify-content:center; flex:none; transition:transform .15s ease; }
+  .sbgroup.collapsed .gchev { transform:rotate(-90deg); }
+  .sbgroup .gname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sbgroup .gcnt { flex:none; font:10px var(--font-mono); font-variant-numeric:tabular-nums; }
+  .sbgroup .gchip { display:none; }
+  .sbgroup .gmenu { flex:none; background:transparent; border:0; color:var(--text-mute); font-size:12px; line-height:1; padding:2px 4px; height:auto; cursor:pointer; border-radius:4px; }
+  .sbgroup .gmenu:hover { color:#fff; background:var(--surface-2); }
+  .sbgroup.drop-into, .sbhead.drop-into { box-shadow:0 0 0 1px var(--asi-blue); background:var(--surface-2); color:var(--text); border-radius:6px; }
+  .sbcard[hidden] { display:none !important; }
+  body.sb-collapsed .sbgroup { height:auto; padding:5px 0 1px; margin-top:3px; gap:0; justify-content:center; border-top:2px solid var(--line); border-radius:0; }
+  body.sb-collapsed .sbgroup:hover { background:transparent; }
+  body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:none; }
+  body.sb-collapsed .sbgroup .gchip { display:inline-flex; width:18px; height:18px; border-radius:4px; align-items:center; justify-content:center;
+    background:var(--surface-2); border:1px solid var(--line); font:600 10px var(--font-mono); color:var(--text-dim); }
+  body.sb-collapsed .sbgroup.collapsed .gchip { color:var(--text-mute); border-style:dashed; }
   #sbScrim { display:none; }
   /* 0.12.0: the current room's banner */
   #roomBanner { display:inline-flex; align-items:center; gap:7px; background:var(--surface-2);
@@ -1464,6 +1502,7 @@
     <input type="file" id="avatarFile" accept="image/*" hidden>
     <input type="file" id="shareFile" hidden>
     <input type="file" id="bgFile" accept="image/*" hidden>
+    <input type="file" id="bgAnimFile" accept="image/gif,video/webm,video/mp4" hidden>
   </div>
 </div>
 
@@ -1537,6 +1576,8 @@
     <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFull" type="button"><span class="oi">&#9974;</span>Full screen</button>
+    <div class="sep"></div>
+    <button class="opt" id="viewVerbose" type="button" title="Also show the quiet confirmations (setting echoes, saved notes); off = events and problems only"><span class="oi">&#128276;</span>Verbose alerts<span class="chk">&#10003;</span></button>
     <div id="viewFeeds" hidden>
       <div class="sep"></div>
       <h3 class="sect">RTSP feeds</h3>
@@ -1544,6 +1585,7 @@
       <button class="opt" data-gf="grid" type="button" title="One mosaic stream only"><span class="oi">&#9638;</span>Grid only<span class="chk">&#10003;</span></button>
       <button class="opt" data-gf="separate" type="button" title="Every feed as its own stream, no mosaic"><span class="oi">&#9639;</span>Separate feeds<span class="chk">&#10003;</span></button>
       <button class="opt" id="viewGridLock" type="button" title="A dropped feed keeps its cell until it comes back"><span class="oi">&#128274;</span>Lock cells<span class="chk">&#10003;</span></button>
+      <button class="opt" id="viewGridNames" type="button" title="Draw each feed's display name in the corner of its grid cell (everyone in the room sees it)"><span class="oi">&#127991;</span>Show names on grid cells<span class="chk">&#10003;</span></button>
     </div>
   </div>
 </div>
@@ -1560,6 +1602,7 @@
     <div id="bgRow" class="bgrow"></div>
     <div class="sw"><span>Adjust brightness</span><label class="switch"><input type="checkbox" id="fxBright"><i></i></label></div>
     <div class="sw"><span>Soft focus</span><label class="switch"><input type="checkbox" id="fxSoft"><i></i></label></div>
+    <div class="sw"><span>Background quality<small id="fxQualityLbl">Balanced</small></span><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label></div>
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
 </div>
@@ -2292,7 +2335,7 @@
     try {
       if (!pub.devices().permission) { await pub.requestPermission(); try { gatePaintDevices(); } catch {} }
       const d = pub.devices();
-      if (!d.permission || !d.cameras.length) { window.__toast?.("No camera detected on this machine.", 4000); return null; }
+      if (!d.permission || !d.cameras.length) { window.__toast?.("No camera detected on this machine.", 4000, { level: "warn" }); return null; }
       const camSel = document.getElementById("joinCam");
       const camId = (camSel && camSel.value) || d.cameras[0].deviceId;
       const camLabel = d.cameras.find((c) => c.deviceId === camId)?.label;
@@ -2305,7 +2348,7 @@
       if (!pub.state().live) document.getElementById("liveBtn").click();
       return entry;
     } catch (e) {
-      window.__toast?.("Could not start the camera: " + (e?.message || e), 5000);
+      window.__toast?.("Could not start the camera: " + (e?.message || e), 5000, { level: "error" });
       return null;
     }
   }
@@ -2510,6 +2553,7 @@
                             // no menus for the old peer.
                             cameras: m.cameras, mics: m.mics,
                             micDevice: m.micDevice });
+    try { syncCamFxToOwnCamera(m); } catch {}   // 0.15.0: saved background rides onto a fresh camera source
     if (mineSignature() !== before) { recomputeMine(); renderMine(); }
   }
   window.__mineAccept = acceptAnnounce;
@@ -2696,15 +2740,21 @@
   // full (the 0.11 client) | viewer | publisher | relay | publisher-relay.
   const PAGE_MODES = ["full", "viewer", "publisher", "relay", "publisher-relay"];
   let PAGE_MODE = "full";
+  let ownRelayHere = false;   // 0.15.0 (B4): /api/instance.relayName is non-empty only while a relay runs on THIS machine
   const pageModeReady = Promise.race([
     fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
       const m = String(d?.mode || "full");
       PAGE_MODE = PAGE_MODES.includes(m) ? m : "full";
+      ownRelayHere = !!(d && d.relayName);
     }),
     new Promise((res) => setTimeout(res, 1500)),
   ]).catch(() => {});
   const isViewerMode = () => PAGE_MODE === "viewer";
   const isPublisherMode = () => PAGE_MODE === "publisher" || PAGE_MODE === "publisher-relay";
+  window.__pageMode = () => PAGE_MODE;   // 0.15.0 (D1): module 2's presence payload carries it
+  // 0.15.0 (B4): the relay OPERATOR is a page on the relay host's own KASTR (the group
+  // endpoints under /api/relay/* are loopback-guarded there; anyone else is a creator).
+  const isRelayOperator = () => ownRelayHere && relayHostBase() === location.origin;
   let chimeMuted = false;
   const STAGE_EMPTY_PUBONLY = "Publish only \u2014 other people\u2019s streams are not shown on this device (View \u25b8 Publish only to turn off)";
   function setPublishOnly(on) {
@@ -3056,6 +3106,34 @@
       });
     } catch {}
   }
+  // 0.15.0 (D3): the room-SWITCH tone -- two notes, a rising perfect fifth (G4 -> D5),
+  // 0.12 s apart at a modest level, the chimeTone envelope. Gated by the master mute
+  // like the person chimes but NOT by the connect window (a switch always reconnects).
+  function chimeRoom() {
+    if (manualMute || chimeMuted) return;
+    try {
+      chimeCtx = chimeCtx || new AudioContext();
+      const ctx = chimeCtx;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const t0 = ctx.currentTime + 0.01;
+      [392.00, 587.33].forEach((f, i) => {
+        const at = t0 + i * 0.12;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.linearRampToValueAtTime(0.08, at + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.5);
+        g.connect(ctx.destination);
+        const o = ctx.createOscillator();
+        o.type = "sine";
+        o.frequency.setValueAtTime(f, at);
+        o.connect(g);
+        o.start(at);
+        o.stop(at + 0.53);
+        o.onended = () => { try { o.disconnect(); g.disconnect(); } catch {} };
+      });
+    } catch {}
+  }
+  window.__chimeRoom = chimeRoom;   // rig
   function personChime(path, joined) {
     if (manualMute || chimeMuted) return;            // master mute covers chimes (0.9.10: publish-only sweeps too)
     if (!connection) return;                         // leave/teardown sweeps are not departures
@@ -3093,6 +3171,10 @@
     if (active && who && who.peer) members.set(String(path), { ...who, ts }); else members.delete(String(path));
     try { paintChannelChip(); paintPersonGroups(); queueRelayout(); } catch {}   // the header count lives in applyState
   }
+  // 0.15.0 (D1): presence carries the page's MODE; unattended boxes (publisher,
+  // publisher-relay, relay) are not people -- they stay out of member lists and counts.
+  const PRESENCE_HIDDEN_MODES = new Set(["publisher", "publisher-relay", "relay"]);
+  const presenceHidden = (w) => !!w && PRESENCE_HIDDEN_MODES.has(String(w.mode || ""));
   // members who publish nothing (no camera, no share yet): listed as watching
   function viewerOps() {
     const me = window.__publisher?.peer;
@@ -3100,6 +3182,7 @@
     const out = new Map();
     for (const m of members.values()) {
       if (!m.op || m.peer === me) continue;
+      if (presenceHidden(m)) continue;   // 0.15.0 (D1)
       const key = String(m.op).toLowerCase();
       if (streaming.has(key) || out.has(key)) continue;
       out.set(key, m);
@@ -3146,7 +3229,7 @@
   // same rect math as the composite (keep gridRectsW in sync with module 2's
   // gridRects) maps a click on the main tile to a cell, which a CSS
   // transform on the tile's canvas then fills the stage with.
-  const gridMeta = new Map();   // target path -> {n, layout, cells, feeds, out, down, mode, ts, key, known, gone, tileGone}   (0.14.0: out = evicted members, still hidden)
+  const gridMeta = new Map();   // target path -> {n, layout, cells, feeds, out, down, mode, ts, key, known, gone, tileGone, id, label}   (0.14.0: out = evicted members, still hidden; 0.15.0: id + label -- an owner may run several grids)
   let gridZoom = null;          // {name, idx}
   // 0.8.12: full-quality feeds published BEHIND a grid (mode "both"): the owner
   // lists their paths per cell; here they stay hidden until a cell is clicked.
@@ -3377,6 +3460,7 @@
         const known = new Set([...feeds.filter(Boolean).map(String), ...out]);   // 0.9.4 sticky union -> 0.14.0: exactly what the owner lists now (feeds + out); a path that leaves both is a normal tile again
         gridMeta.set(meta.path, { n: Number(meta.n) || 1, layout: meta.layout || "auto", cells: meta.cells || [],
           feeds, out, down: Array.isArray(meta.down) ? meta.down : [], mode: meta.mode || "grid", ts, key: String(path),
+          id: meta.id != null ? String(meta.id) : "1", label: String(meta.label || "").slice(0, 40),   // 0.15.0: which of the owner's grids, and its display name
           known, gone: 0, tileGone: tiles.has(meta.path) ? 0 : (cur?.tileGone || 0) });   // 0.8.12 / 0.9.4 / 0.14.0
       }
     } else {
@@ -3670,6 +3754,14 @@
     return parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice;
   }
   window.__pretty = prettyOperator;   // one casing rule for both page halves
+  // 0.15.0: a grid tile wears its owner's display name ("Kenton \u2014 Vehicle 2") once the
+  // announce carries one; null = no such label, use shortLabel as ever.
+  function gridLabel(name) {
+    const gl = gridMeta.get(name)?.label;
+    if (!gl) return null;
+    const op = operatorOf(name);
+    return (op ? prettyOperator(op) + " \u2014 " : "") + gl;
+  }
 
   /**
    * Single place that reconciles all per-stream state against the current
@@ -4151,6 +4243,14 @@
         t.av.style.setProperty("--ring", personColor(personKeyOf(name)));
       }
       t.pane.classList.toggle("camera", !isContentPath(name));   // 0.8.8: camera faces show no equalizer
+      { // 0.15.0: the grid's display name arrives with its geometry, usually after the tile -- repaint the labels when it changes
+        const gl = gridLabel(name);
+        if (gl !== (t.gridLabel ?? null)) {
+          t.gridLabel = gl;
+          const lb = t.pane.querySelector(".label .l"); if (lb) lb.textContent = gl || shortLabel(name, true);
+          const rn = t.row?.querySelector(".name"); if (rn) rn.textContent = gl || shortLabel(name);
+        }
+      }
       // 0.8.12: the stage canvas of a share can be zoomed; a feed behind a grid says so
       t.pane.classList.toggle("zoomable", shown && isSelected && !gridMode && isContentPath(name) && !selfSpotEl);
       const feedview = shown && isSelected && !gridMode && isGridChild(name) && !selfSpotEl;
@@ -4310,7 +4410,7 @@
       // #status every second and the message would disappear unread.
       console.warn("KASTR: full screen refused:", why);
       window.__toast?.("Full screen blocked \u2014 " + why + (window.top !== window
-        ? " (the embedding page must delegate fullscreen)" : ""));
+        ? " (the embedding page must delegate fullscreen)" : ""), 6000, { level: "warn" });
     });
   }
 
@@ -4745,7 +4845,7 @@
           items.push({ value: "pmute", label: (allMuted ? "Unmute " : "Mute ")
             + prettyOperator(person === "?" ? "Unnamed" : person) + " everywhere" });
         }
-        if (isContentPath(name) && contentTally() > 1) {
+        if (isContentPath(name) && (contentTally() > 1 || gridMeta.has(name))) {   // 0.15.0: a grid can always be spotlit
           items.push({ value: "me", label: "Spotlight for me" });
           items.push({ value: "all", label: "Spotlight for everyone" });
         }
@@ -5083,7 +5183,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "" } });
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || "") } });
           roomsChanged();
         }));
       });
@@ -5167,6 +5267,7 @@
   // minter's /api/rooms -- every 30 s, keeping the last good answer so a kept
   // but empty room never blinks.
   let roomsMinterTimer = null;
+  let roomsGroups = {}, roomsGroupsAt = 0;   // 0.15.0 (B4): gid -> {name, order, rooms:[slug]} from the room store
   async function roomsMinterPoll() {
     roomsMinterAt = Date.now();
     const ctl = new AbortController();
@@ -5196,6 +5297,8 @@
                               persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0 });
     }
     roomsClosed = got.closed && typeof got.closed === "object" ? got.closed : {};
+    roomsGroups = got.groups && typeof got.groups === "object" ? got.groups : {};   // 0.15.0 (B4)
+    roomsGroupsAt = Date.now();
     roomsChanged();
   }
   function roomsMinterStart() {
@@ -5227,10 +5330,25 @@
     });
   }
   window.__roomOrder = { key: roomOrderKey, load: roomOrderLoad, save: roomOrderSave };   // rig
+  // 0.15.0 (B4): the store's groups as a sorted list (relay order, then name), and the
+  // one group a slug belongs to (null = ungrouped).
+  function sbGroupList() {
+    const out = [];
+    for (const [gid, g] of Object.entries(roomsGroups || {})) {
+      if (!g || typeof g !== "object") continue;
+      out.push({ gid: String(gid), name: String(g.name || gid), order: Number(g.order) || 0, rooms: Array.isArray(g.rooms) ? g.rooms.map(String) : [] });
+    }
+    return out.sort((a, b) => (a.order - b.order) || a.name.localeCompare(b.name));
+  }
+  function roomGroupOf(slug) {
+    for (const [gid, g] of Object.entries(roomsGroups || {})) if (Array.isArray(g?.rooms) && g.rooms.includes(slug)) return String(gid);
+    return null;
+  }
   function deriveRooms() {
     const now = Date.now();
     const alive = (r) => roomsFrozen || !r.goneAt || now - r.goneAt <= ROOMS_GRACE_MS;
     const rooms = new Map();
+    const hiddenOps = new Set();   // 0.15.0 (D1): "<slug>/<op>" of unattended boxes (their streams are not members either)
     const get = (slug, source) => {
       let r = rooms.get(slug);
       if (!r) rooms.set(slug, r = { slug, locked: false, salt: null, hash: null, source, members: new Map(), since: 0, talking: false, persistent: false, creator: "", created: 0, publishers: new Set() });
@@ -5240,6 +5358,11 @@
       if (!alive(p)) continue;
       const r = get(p.slug, "presence");
       const op = String(p.who.op || "").toLowerCase() || ("peer:" + p.who.peer);
+      if (presenceHidden(p.who)) {   // 0.15.0 (D1)
+        hiddenOps.add(p.slug + "/" + op);
+        if (p.ts && (!r.since || p.ts < r.since)) r.since = p.ts;
+        continue;
+      }
       let m = r.members.get(op);
       if (!m) r.members.set(op, m = { op, name: p.who.name || p.who.op || "", publisher: false, talking: false, since: 0, peers: new Set(), via: p.who.relayName || p.who.relay || "" });
       if (p.ts && (!m.since || p.ts < m.since)) m.since = p.ts;
@@ -5259,6 +5382,7 @@
     for (const x of roomsRoot.values()) {
       if (!alive(x)) continue;
       const r = get(x.slug, "streams");
+      if (hiddenOps.has(x.slug + "/" + String(x.op || "").toLowerCase())) continue;   // 0.15.0 (D1)
       r.publishers.add(x.op);
       const m = r.members.get(x.op);
       if (m) m.publisher = true;
@@ -5282,6 +5406,7 @@
     return [rooms.get("main"), ...list].map((r) => ({
       slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking,
       persistent: r.persistent, creator: r.creator, created: r.created,
+      group: roomGroupOf(r.slug),   // 0.15.0 (B4): gid | null
       members: [...r.members.values()].map((m) => ({ op: m.op, name: m.name, publisher: m.publisher, talking: m.talking, since: m.since, via: m.via })),
       count: r.members.size ? r.members.size : undefined,
     }));
@@ -5526,7 +5651,7 @@
       items.push({ value: "gf-separate", label: (gf === "separate" ? "\u25c9 " : "\u25cb ") + "Separate feeds (no grid)" });
       items.push({ value: "lock", label: (window.__gridFeeds?.lock?.() ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
     }
-    if (ref.kind === "rtsp" && ref.id !== -100) {
+    if (ref.kind === "rtsp" && ref.id > -100) {   // 0.15.0: grid composites are ids -100, -101, ...
       items.push({ value: "ghost", label: window.__ghost?.get?.(ref.id)
         ? "Show preview" : "Hide preview (keeps broadcasting)" });
       items.push({ value: "keep", label: window.__rtspPersist?.get?.(ref.id)   // 0.8.8
@@ -5535,8 +5660,8 @@
       items.push({ value: "audio", label: (au === false ? "Send audio: off" : "Send audio: on")
         + (ac === "" ? " (camera has no audio track)" : ac ? " (" + ac + ")" : "") });
     }
-    items.push({ value: "stop", label: "Stop sharing" });
-    if (contentTally() > 1) items.push({ value: "all", label: "Spotlight for everyone" });
+    if (ref.id > -100) items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds
+    if (contentTally() > 1 || ref.id <= -100) items.push({ value: "all", label: "Spotlight for everyone" });   // 0.15.0: a grid may always be spotlit
     openMineMenu(anchor, items, "", (v) => {
       if (v === "stop") {
         try { starveBus.postMessage({ kind: "stop", from: "watch", target: ref.peer, id: ref.id }); } catch {}
@@ -5554,10 +5679,10 @@
         window.__ghost?.toggle?.(ref.id);
       } else if (v === "keep") {
         window.__rtspPersist?.toggle?.(ref.id);
-        window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500);
+        window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
       } else if (v === "audio") {   // 0.9.5
         window.__rtspAudio?.toggle?.(ref.id);
-        window.__toast?.(window.__rtspAudio?.get?.(ref.id) === false ? "Publishing this feed without audio" : "Publishing this feed with the camera's audio", 3500);
+        window.__toast?.(window.__rtspAudio?.get?.(ref.id) === false ? "Publishing this feed without audio" : "Publishing this feed with the camera's audio", 3500, { level: "info" });
       } else {
         window.__spot?.set?.(CHANNEL + "/" + hangName(ref.name));
       }
@@ -5645,7 +5770,23 @@
   // A transient notice chip for things that deserve more than a log line
   // (RTSP failures). Both module halves use it via window.__toast.
   let toastT = null;
-  window.__toast = (msg, ms = 6000) => {
+  // 0.15.0: levels + an optional action. opts = { level: "info"|"event"|"warn"|"error", action: { label, fn } }.
+  // `info` shows only when the operator asked for verbose toasts (kastr.toasts.verbose = "on");
+  // the other levels always show. An action appends a small button that runs fn and hides the chip.
+  const TOAST_VERBOSE_KEY = "kastr.toasts.verbose";
+  window.__toastPolicy = {
+    verbose: () => { try { return localStorage.getItem(TOAST_VERBOSE_KEY) === "on"; } catch { return false; } },
+    setVerbose: (on) => { try { localStorage.setItem(TOAST_VERBOSE_KEY, on ? "on" : "off"); } catch {} },
+  };
+  // 0.15.0: one chip, but a toast that carries an ACTION (Undo) owns the chip for its
+  // lifetime -- anything else that arrives meanwhile waits in a short queue instead of
+  // replacing it (a dead camera's error used to erase the Undo before it could be clicked).
+  const toastQueue = [];
+  let toastHold = 0;
+  window.__toast = (msg, ms = 6000, opts) => {
+    const level = opts?.level || "event";
+    if (level === "info" && !window.__toastPolicy.verbose()) return;
+    if (toastHold > Date.now() && !opts?.action) { if (toastQueue.length < 4) toastQueue.push([msg, ms, opts]); return; }
     let t = document.getElementById("kToast");
     if (!t) {
       t = document.createElement("div");
@@ -5653,9 +5794,24 @@
       document.body.appendChild(t);
     }
     t.textContent = msg;
+    t.dataset.level = level;
+    if (opts?.action?.label) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tact";
+      b.textContent = opts.action.label;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        clearTimeout(toastT);
+        t.classList.remove("show");
+        try { opts.action.fn?.(); } catch (err) { console.warn("toast action failed", err); }
+      });
+      t.appendChild(b);
+    }
     t.classList.add("show");
     clearTimeout(toastT);
-    toastT = setTimeout(() => t.classList.remove("show"), ms);
+    toastHold = opts?.action?.label ? Date.now() + ms : 0;
+    toastT = setTimeout(() => { t.classList.remove("show"); toastHold = 0; const next = toastQueue.shift(); if (next) setTimeout(() => window.__toast(...next), 250); }, ms);
   };
 
   document.getElementById("connect").addEventListener("click", connect);
@@ -5916,6 +6072,18 @@
       d.appendChild(btn);
       body.append(b, d);
     }
+    // 0.15.0 (B4): the room's GROUP -- the creator (roomKey) or the relay operator moves it
+    if (joined && c !== "main" && (mine?.roomKey || isRelayOperator())) {
+      const g = sbGroupList().find((x) => x.gid === rec?.group);
+      const b = document.createElement("b"); b.textContent = "Group";
+      const d = document.createElement("span");
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "toggle"; btn.textContent = (g ? g.name : "No group") + " \u25be";
+      btn.title = "Move this room to a group";
+      btn.addEventListener("click", (e) => { e.stopPropagation(); openGroupPickMenu(btn, c, mine?.roomKey || null); });
+      d.appendChild(btn);
+      body.append(b, d);
+    }
   }
 
   // ---- 0.8.8: View menu ------------------------------------------------------
@@ -5926,6 +6094,7 @@
     on("viewFocus", focusMode && !gridMode);
     on("viewHideMe", hideMe);
     on("viewPublishOnly", publishOnly);   // 0.9.10
+    on("viewVerbose", toastPolicy().verbose());   // 0.15.0 (D2)
     gridBtn.classList.toggle("on", focusMode && !gridMode);
     { let pb = gridBtn.querySelector(".bdg"); if (!pb) { pb = document.createElement("span"); pb.className = "bdg"; pb.textContent = "pub"; gridBtn.appendChild(pb); } pb.hidden = !publishOnly; }   // 0.9.10: badge
     // 0.9.2: feeds mode lives here too -- the composite's menu vanishes with
@@ -5937,25 +6106,47 @@
       const mode = gf?.get?.() || "both";
       for (const b of box.querySelectorAll("[data-gf]")) b.classList.toggle("on", b.dataset.gf === mode);
       on("viewGridLock", gf?.lock?.());
+      on("viewGridNames", gf?.names?.());   // 0.15.0
     }
   }
   for (const b of document.querySelectorAll("#viewFeeds [data-gf]")) {
     b.addEventListener("click", () => { window.__gridFeeds?.set?.(b.dataset.gf); paintViewPop(); });
   }
   document.getElementById("viewGridLock")?.addEventListener("click", () => { window.__gridFeeds?.setLock?.(!window.__gridFeeds?.lock?.()); paintViewPop(); });
+  document.getElementById("viewGridNames")?.addEventListener("click", () => { window.__gridFeeds?.setNames?.(!window.__gridFeeds?.names?.()); paintViewPop(); });   // 0.15.0
   document.getElementById("viewGallery").addEventListener("click", () => { focusMode = false; gridMode = true; closeAllPops(); applyState(); });
   document.getElementById("viewSpeaker").addEventListener("click", () => { focusMode = false; closeAllPops(); enterSpotlight(); });
   document.getElementById("viewFocus").addEventListener("click", () => {
     focusMode = !focusMode;
     closeAllPops();
-    if (focusMode) { if (gridMode) enterSpotlight(); else applyState(); window.__toast?.("Focus on content \u2014 only the main stage downloads. View \u25b8 Gallery to return.", 4000); }
+    if (focusMode) { if (gridMode) enterSpotlight(); else applyState(); window.__toast?.("Focus on content \u2014 only the main stage downloads. View \u25b8 Gallery to return.", 4000, { level: hintOnce("kastr.hint.focus") ? "event" : "info" }); }
     else applyState();
   });
   document.getElementById("viewPublishOnly")?.addEventListener("click", () => {   // 0.9.10
     closeAllPops();
     setPublishOnly(!publishOnly);
     paintViewPop();
-    window.__toast?.(publishOnly ? "Publish only \u2014 this device keeps publishing but shows nobody else. View \u25b8 Publish only to turn off." : "Watching other people\u2019s streams again.", 4500);
+    window.__toast?.(publishOnly ? "Publish only \u2014 this device keeps publishing but shows nobody else. View \u25b8 Publish only to turn off." : "Watching other people\u2019s streams again.", 4500, { level: publishOnly && hintOnce("kastr.hint.publishonly") ? "event" : "info" });
+  });
+  // 0.15.0 (D2): toast levels. The primitive (window.__toast(msg, ms, {level})) shows
+  // "info" only while kastr.toasts.verbose === "on"; window.__toastPolicy is its switch.
+  // The fallback below reads the same key so this menu works before the primitive lands.
+  function toastPolicy() {
+    return window.__toastPolicy || {
+      verbose: () => { try { return localStorage.getItem("kastr.toasts.verbose") === "on"; } catch { return false; } },
+      setVerbose: (on) => { try { localStorage.setItem("kastr.toasts.verbose", on ? "on" : "off"); } catch {} },
+    };
+  }
+  // a mode explainer is an EVENT the first time (per profile flag) and a quiet "info" after
+  function hintOnce(key) {
+    try { if (localStorage.getItem(key) === "1") return false; localStorage.setItem(key, "1"); } catch {}
+    return true;
+  }
+  document.getElementById("viewVerbose")?.addEventListener("click", () => {
+    const on = !toastPolicy().verbose();
+    try { toastPolicy().setVerbose(on); } catch {}
+    paintViewPop();
+    window.__toast?.(on ? "Verbose alerts on" : "Verbose alerts off", 3000, { level: "event" });
   });
   document.getElementById("viewHideMe").addEventListener("click", () => {
     hideMe = !hideMe;
@@ -5977,7 +6168,136 @@
   const CAMFX_KEY = "kastr.camfx";
   let camFx = null;
   try { camFx = JSON.parse(localStorage.getItem(CAMFX_KEY) || "null"); } catch {}
-  camFx = camFx && typeof camFx === "object" ? camFx : { bg: { mode: "none", url: "" }, bright: false, soft: false };
+  // 0.15.0: bg modes none | blur | image | gif | video. url is a short MARKER -- "preset:navy",
+  // "bg:<key>" (IndexedDB), "/assets/bg/<file>" (built-in scene) -- never a data: URL: the bag
+  // rides every announce. quality picks the segmentation model on the publish side.
+  const FX_MODES = ["none", "blur", "image", "gif", "video"];
+  function normalizeCamFx(o) {
+    const s = o && typeof o === "object" ? o : {};
+    const bg = s.bg && typeof s.bg === "object" ? s.bg : {};
+    const mode = FX_MODES.includes(bg.mode) ? bg.mode : "none";
+    let url = typeof bg.url === "string" ? bg.url : "";
+    if (/^(data|blob):/i.test(url)) {   // a pre-0.15 bag: the custom still or a canvas preset
+      let custom = ""; try { custom = localStorage.getItem("kastr.bg.custom") || ""; } catch {}
+      url = custom && url === custom ? "bg:custom" : "preset:navy";
+    }
+    return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
+             bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced" };
+  }
+  camFx = normalizeCamFx(camFx);
+  const camFxActive = (fx) => !!fx && ((fx.bg?.mode || "none") !== "none" || !!fx.bright || !!fx.soft);
+  // ---- 0.15.0: built-in animated scenes (assets/bg/manifest.json, fetched once) -------------
+  let bgScenes = null, bgScenesReq = null;
+  function loadBgScenes() {
+    if (bgScenes || bgScenesReq) return;
+    bgScenesReq = fetch("/assets/bg/manifest.json").then((r) => (r.ok ? r.json() : []))
+      .then((list) => { bgScenes = Array.isArray(list) ? list.filter((s) => s && s.id && s.file) : []; })
+      .catch(() => { bgScenes = []; })
+      .then(() => { if (bgScenes.length && !camPop.hidden) paintCamPop(); });
+  }
+  // ---- 0.15.0: the operator's own backgrounds (still / GIF / clip) in IndexedDB --------------
+  // DB kastr-bg: store "bg" holds the Blob under key Date.now().toString(36) (the publish half
+  // reads it for "bg:<key>"), store "meta" holds {type, name, at, poster} under the same key so
+  // listing the menu never loads the blobs. At most 6; the oldest goes.
+  const BG_DB = "kastr-bg", BG_STORE = "bg", BG_META = "meta", BG_MAX = 6;
+  function bgDb() {
+    return new Promise((resolve, reject) => {
+      const open = (ver) => {
+        let req;
+        try { req = ver ? indexedDB.open(BG_DB, ver) : indexedDB.open(BG_DB); } catch (e) { reject(e); return; }
+        req.onupgradeneeded = () => { const db = req.result; for (const s of [BG_STORE, BG_META]) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s); };
+        req.onerror = () => reject(req.error || new Error("IndexedDB unavailable"));
+        req.onblocked = () => reject(new Error("IndexedDB blocked"));
+        req.onsuccess = () => {
+          const db = req.result;
+          if (db.objectStoreNames.contains(BG_STORE) && db.objectStoreNames.contains(BG_META)) { resolve(db); return; }
+          const next = db.version + 1; db.close(); open(next);   // the publish half made v1 with "bg" only
+        };
+      };
+      open(0);
+    });
+  }
+  function bgTx(mode, stores, fn) {
+    return bgDb().then((db) => new Promise((resolve, reject) => {
+      let tx, out = null;
+      try { tx = db.transaction(stores, mode); out = fn(...stores.map((s) => tx.objectStore(s))); }
+      catch (e) { db.close(); reject(e); return; }
+      tx.oncomplete = () => { db.close(); resolve(out); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.onabort = () => { db.close(); reject(tx.error || new Error("aborted")); };
+    }));
+  }
+  let bgUser = [];   // menu cache: [{key, type, name, at, poster}] newest first (metadata only)
+  async function bgRefresh() {
+    try {
+      const r = await bgTx("readonly", [BG_META], (meta) => ({ k: meta.getAllKeys(), v: meta.getAll() }));
+      const keys = r.k.result || [], vals = r.v.result || [];
+      const list = keys.map((key, i) => ({ key: String(key), type: vals[i]?.type || "", name: vals[i]?.name || "Background",
+                                           at: vals[i]?.at || 0, poster: vals[i]?.poster || "" }));
+      list.sort((a, b) => b.at - a.at);
+      const changed = list.map((x) => x.key + ":" + x.poster.length).join() !== bgUser.map((x) => x.key + ":" + x.poster.length).join();
+      bgUser = list;
+      return changed;
+    } catch { return false; }
+  }
+  async function bgPut(blob, type, name, poster) {
+    const key = Date.now().toString(36);
+    await bgTx("readwrite", [BG_STORE, BG_META], (bg, meta) => { bg.put(blob, key); meta.put({ type, name, at: Date.now(), poster }, key); });
+    await bgRefresh();
+    const extra = bgUser.slice(BG_MAX);
+    if (extra.length) {
+      await bgTx("readwrite", [BG_STORE, BG_META], (bg, meta) => { for (const x of extra) { bg.delete(x.key); meta.delete(x.key); } });
+      await bgRefresh();
+    }
+    return key;
+  }
+  async function bgDel(key) {
+    await bgTx("readwrite", [BG_STORE, BG_META], (bg, meta) => { bg.delete(key); meta.delete(key); });
+    await bgRefresh();
+  }
+  function bgPoster(blob, type) {   // 192x108 JPEG data URL (a few KB) for the menu swatch
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      let settled = false;
+      const finish = (v) => { if (settled) return; settled = true; try { URL.revokeObjectURL(url); } catch {} resolve(v || ""); };
+      const draw = (src, sw, sh) => {
+        try {
+          const cv = document.createElement("canvas"); cv.width = 192; cv.height = 108;
+          const g = cv.getContext("2d");
+          const sc = Math.max(192 / sw, 108 / sh), dw = sw * sc, dh = sh * sc;
+          g.drawImage(src, (192 - dw) / 2, (108 - dh) / 2, dw, dh);
+          finish(cv.toDataURL("image/jpeg", 0.7));
+        } catch { finish(""); }
+      };
+      if (type.startsWith("video/")) {
+        const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.preload = "auto";
+        const t = setTimeout(() => finish(""), 8000);
+        v.onloadeddata = () => { clearTimeout(t); v.videoWidth ? draw(v, v.videoWidth, v.videoHeight) : finish(""); };
+        v.onerror = () => { clearTimeout(t); finish(""); };
+        v.src = url; v.load();
+      } else {
+        const im = new Image();
+        im.onload = () => draw(im, im.naturalWidth, im.naturalHeight);
+        im.onerror = () => finish("");
+        im.src = url;
+      }
+    });
+  }
+  let bgMigrated = false;
+  async function bgMigrateLegacy() {   // 0.15.0: the pre-0.15 kastr.bg.custom data URL moves into IndexedDB, once
+    if (bgMigrated) return; bgMigrated = true;
+    let custom = ""; try { custom = localStorage.getItem("kastr.bg.custom") || ""; } catch {}
+    if (!custom.startsWith("data:")) return;
+    try {
+      const blob = await (await fetch(custom)).blob();
+      const type = blob.type || "image/jpeg";
+      const poster = await bgPoster(blob, type);
+      const key = await bgPut(blob, type, "My picture", poster);
+      if (camFx.bg.mode === "image" && camFx.bg.url === "bg:custom") { camFx.bg.url = "bg:" + key; saveCamFx(); }
+      try { localStorage.removeItem("kastr.bg.custom"); } catch {}
+      if (!camPop.hidden) paintCamPop();
+    } catch {}   // IndexedDB refused: the legacy key stays and the menu keeps offering it as "bg:custom"
+  }
   let camPrevStream = null;
   const bgPresetUrls = {};
   function bgPreset(id) {
@@ -5999,13 +6319,44 @@
     return bgPresetUrls[id];
   }
   function saveCamFx() { try { localStorage.setItem(CAMFX_KEY, JSON.stringify(camFx)); } catch {} }
+  // The bag that rides sendControl / the announce: markers only (see normalizeCamFx).
+  const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "bg:custom" : (camFx.bg.url || "") },
+                             bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced" });
+  const camFxPushed = new Set();   // 0.15.0: source ids that already carry the saved bag
+  // 0.15.0: a no-op without a camera; syncCamFxToOwnCamera (called from acceptAnnounce) pushes
+  // the saved bag once when the local camera source first appears -- a join used to create the
+  // camera bare and the background silently reset.
   function pushCamFx() {
     saveCamFx();
+    const pub = window.__publisher;
     const { src } = localCamSrc();
-    if (src) { src.fx = camFx; src.blur = camFx.bg?.mode === "blur"; sendControl(window.__publisher.peer, src.id, { fx: camFx }); }
+    if (!pub || !src) return;
+    const wire = camFxWire();
+    src.fx = wire; src.blur = wire.bg.mode === "blur";
+    camFxPushed.add(src.id);
+    sendControl(pub.peer, src.id, { fx: wire });
+  }
+  function syncCamFxToOwnCamera(m) {
+    const pub = window.__publisher;
+    if (!pub || m.peer !== pub.peer) return;
+    for (const s of m.sources) {
+      if (s.kind !== "camera" || camFxPushed.has(s.id)) continue;
+      camFxPushed.add(s.id);
+      if (s.fx && typeof s.fx === "object" && camFxActive(s.fx)) continue;   // born with a bag (toolbar / join path)
+      if (!camFxActive(camFx)) continue;
+      const wire = camFxWire();
+      s.fx = wire; s.blur = wire.bg.mode === "blur";
+      sendControl(pub.peer, s.id, { fx: wire });
+    }
   }
   function paintCamPop() {
     const { rec, src } = localCamSrc();
+    // 0.15.0: ticks follow the truth -- the live source's bag when we have a camera, else the saved
+    // prefs (re-read: the prefs shim may have reseeded localStorage after this module booted).
+    if (!src) { try { const saved = JSON.parse(localStorage.getItem(CAMFX_KEY) || "null"); if (saved && typeof saved === "object") camFx = normalizeCamFx(saved); } catch {} }
+    else if (src.fx && typeof src.fx === "object") camFx = normalizeCamFx({ ...camFx, ...src.fx, bg: src.fx.bg || camFx.bg });
+    loadBgScenes(); bgMigrateLegacy();
+    bgRefresh().then((changed) => { if (changed && !camPop.hidden) paintCamPop(); });
     // preview: the processed camera track when publishing, else the gate stream
     const v = document.getElementById("camPrev");
     let tr = null;
@@ -6028,31 +6379,58 @@
       const t = document.createElement("span"); t.textContent = c.label || ("Camera " + (i + 1));
       l.append(r, t); return l;
     }));
-    // backgrounds
+    // backgrounds: none / blur / two canvas presets / built-in animated scenes / the operator's
+    // own stills, GIFs and clips (IndexedDB, with a delete badge) / the two "add" tiles.
     const row = document.getElementById("bgRow");
     const opts = [{ id: "none", label: "None" }, { id: "blur", label: "Standard blur" },
-      { id: "navy", label: "ASI navy", url: bgPreset("navy") }, { id: "mist", label: "Soft mist", url: bgPreset("mist") }];
+      { id: "navy", label: "ASI navy", mode: "image", url: "preset:navy", thumb: bgPreset("navy") },
+      { id: "mist", label: "Soft mist", mode: "image", url: "preset:mist", thumb: bgPreset("mist") }];
+    for (const s of bgScenes || []) opts.push({ id: "scene:" + s.id, label: s.label || s.id, mode: "video", url: "/assets/bg/" + s.file,
+                                                thumb: s.poster ? "/assets/bg/" + s.poster : "", anim: true });
+    for (const u of bgUser) opts.push({ id: "bg:" + u.key, label: u.name, url: "bg:" + u.key, thumb: u.poster, del: u.key,
+                                        mode: u.type.startsWith("video/") ? "video" : u.type === "image/gif" ? "gif" : "image",
+                                        anim: u.type.startsWith("video/") || u.type === "image/gif" });
     let custom = ""; try { custom = localStorage.getItem("kastr.bg.custom") || ""; } catch {}
-    if (custom) opts.push({ id: "custom", label: "My picture", url: custom });
-    opts.push({ id: "add", label: "+ Add background" });
+    if (custom) opts.push({ id: "custom", label: "My picture", mode: "image", url: "bg:custom", thumb: custom });   // not yet migrated
+    opts.push({ id: "add", label: "+ Add picture" }, { id: "addAnim", label: "+ Add GIF / video" });
+    const mode = camFx.bg?.mode || "none", curUrl = camFx.bg?.url || "";
     row.replaceChildren(...opts.map((o) => {
-      const b = document.createElement("button"); b.type = "button"; b.textContent = o.label;
-      if (o.url) { b.style.backgroundImage = "url(" + o.url + ")"; b.style.color = "#fff"; b.style.textShadow = "0 1px 2px #000"; }
+      const b = document.createElement("button"); b.type = "button"; b.textContent = o.label; b.title = o.label;
+      if (o.thumb) { b.style.backgroundImage = "url(" + o.thumb + ")"; b.style.color = "#fff"; b.style.textShadow = "0 1px 2px #000"; }
       if (o.id === "blur") b.style.backgroundImage = "linear-gradient(135deg, #3a4656, #1a2230)";
-      const mode = camFx.bg?.mode || "none";
-      b.classList.toggle("on", o.id === mode || (o.id !== "add" && o.id !== "none" && o.id !== "blur" && mode === "image" && camFx.bg?.url === o.url));
+      const on = o.id === "none" || o.id === "blur" ? o.id === mode : !!o.mode && o.mode === mode && o.url === curUrl;
+      b.classList.toggle("on", on);
+      if (o.anim) { const a = document.createElement("span"); a.className = "anim"; a.textContent = "\u25B6"; b.appendChild(a); }
+      if (o.del) {
+        const x = document.createElement("span"); x.className = "del"; x.textContent = "\u2715"; x.title = "Remove this background";
+        x.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          try { await bgDel(o.del); } catch {}
+          if (camFx.bg?.url === o.url) { camFx.bg = { mode: "none", url: "" }; pushCamFx(); }
+          paintCamPop();
+        });
+        b.appendChild(x);
+      }
       b.addEventListener("click", () => {
         if (o.id === "add") { window.__pickFile(document.getElementById("bgFile")); return; }
-        camFx.bg = o.id === "none" ? { mode: "none", url: "" } : o.id === "blur" ? { mode: "blur", url: "" } : { mode: "image", url: o.url };
+        if (o.id === "addAnim") { window.__pickFile(document.getElementById("bgAnimFile")); return; }
+        camFx.bg = o.id === "none" ? { mode: "none", url: "" } : o.id === "blur" ? { mode: "blur", url: "" } : { mode: o.mode, url: o.url };
         pushCamFx(); paintCamPop();
       });
       return b;
     }));
     document.getElementById("fxBright").checked = !!camFx.bright;
     document.getElementById("fxSoft").checked = !!camFx.soft;
+    document.getElementById("fxQuality").checked = camFx.quality === "best";
+    document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
   }
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
   document.getElementById("fxSoft").addEventListener("change", (e) => { camFx.soft = e.target.checked; pushCamFx(); });
+  document.getElementById("fxQuality").addEventListener("change", (e) => {
+    camFx.quality = e.target.checked ? "best" : "balanced";
+    document.getElementById("fxQualityLbl").textContent = e.target.checked ? "Best" : "Balanced";
+    pushCamFx();
+  });
   document.getElementById("bgFile").addEventListener("change", async (e) => {
     const f = e.target.files?.[0]; e.target.value = "";
     if (!f) return;
@@ -6062,13 +6440,31 @@
       const g = cv.getContext("2d");
       const sc = Math.max(1280 / bmp.width, 720 / bmp.height), dw = bmp.width * sc, dh = bmp.height * sc;
       g.drawImage(bmp, (1280 - dw) / 2, (720 - dh) / 2, dw, dh);
-      const url = cv.toDataURL("image/jpeg", 0.8);
-      try { localStorage.setItem("kastr.bg.custom", url); } catch {}
-      camFx.bg = { mode: "image", url }; pushCamFx(); paintCamPop();
-    } catch (err) { window.__toast?.("Could not read that image: " + (err?.message || err), 5000); }
+      const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.8));
+      if (!blob) throw new Error("could not encode the picture");
+      // 0.15.0: into IndexedDB (kastr-bg), not a data URL in localStorage; the bag carries "bg:<key>"
+      const poster = await bgPoster(blob, "image/jpeg");
+      const key = await bgPut(blob, "image/jpeg", f.name.replace(/\.[^.]+$/, "") || "My picture", poster);
+      camFx.bg = { mode: "image", url: "bg:" + key }; pushCamFx(); paintCamPop();
+    } catch (err) { window.__toast?.("Could not read that image: " + (err?.message || err), 5000, { level: "warn" }); }
+  });
+  // 0.15.0: animated backgrounds -- a GIF or a short clip, stored as picked (Blob) in IndexedDB.
+  const BG_ANIM_MAX = 40 * 1024 * 1024;
+  document.getElementById("bgAnimFile").addEventListener("change", async (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f) return;
+    const type = f.type || (/\.gif$/i.test(f.name) ? "image/gif" : /\.webm$/i.test(f.name) ? "video/webm" : /\.(mp4|m4v)$/i.test(f.name) ? "video/mp4" : "");
+    if (!/^(image\/gif|video\/(webm|mp4))$/.test(type)) { window.__toast?.("Backgrounds can be a GIF, WebM or MP4 file.", 5000, { level: "warn" }); return; }
+    if (f.size > BG_ANIM_MAX) { window.__toast?.("That file is over 40 MB \u2014 pick a shorter clip.", 5000, { level: "warn" }); return; }
+    try {
+      const poster = await bgPoster(f, type);
+      const key = await bgPut(f, type, f.name.replace(/\.[^.]+$/, "") || "My clip", poster);
+      camFx.bg = { mode: type === "image/gif" ? "gif" : "video", url: "bg:" + key }; pushCamFx(); paintCamPop();
+    } catch (err) { window.__toast?.("Could not store that background: " + (err?.message || err), 5000, { level: "warn" }); }
   });
   document.getElementById("camMore").addEventListener("click", () => { closeAllPops(); encPop.hidden = false; placePop(encPop, topCamChev); });
-  window.__camFx = () => camFx;   // the join flow passes it to the camera source
+  window.__camFx = () => camFxWire();   // the join flow (publish half) passes it to the camera source
+  window.__bgPreset = bgPreset;          // the publish half resolves "preset:<id>" through it
 
   // ---- 0.8.8: Audio popover -------------------------------------------------
   function paintMicPop() {
@@ -6134,7 +6530,7 @@
   }
   document.getElementById("visoToggle").addEventListener("change", (e) => {
     window.__micMode?.viso?.set?.(e.target.checked);
-    window.__toast?.(e.target.checked ? "Voice isolation (system) on" : "Voice isolation (system) off", 2500);
+    window.__toast?.(e.target.checked ? "Voice isolation (system) on" : "Voice isolation (system) off", 2500, { level: "info" });
   });
   let micLvlT = 0, micTest = null;   // { stream, ctx, an, buf, dev, dn }
   const micNote = (t) => { const n = document.getElementById("micTestNote"); if (n) n.textContent = t || ""; };
@@ -6209,7 +6605,7 @@
     micLvlT = setInterval(tick, 50);
   }
   const nsPick = () => document.getElementById("nsRnnoise").checked ? "rnnoise" : "browser";
-  const nsToast = (mode) => window.__toast?.(mode === "off" ? "Noise suppression off" : mode === "rnnoise" ? "Background noise removal on" : "Noise suppression on", 2500);
+  const nsToast = (mode) => window.__toast?.(mode === "off" ? "Noise suppression off" : mode === "rnnoise" ? "Background noise removal on" : "Noise suppression on", 2500, { level: "info" });
   document.getElementById("nsToggle").addEventListener("change", (e) => {
     const on = e.target.checked;
     const mode = on ? nsPick() : "off";
@@ -6297,7 +6693,7 @@
     const f = e.target.files?.[0]; e.target.value = "";
     if (!f) return;
     try { pe.bmp = await createImageBitmap(f); pe.z = 1; pe.ox = 0; pe.oy = 0; document.getElementById("profZoom").value = "1"; profRender(); }
-    catch (err) { window.__toast?.("Could not read that image: " + (err?.message || err), 5000); }
+    catch (err) { window.__toast?.("Could not read that image: " + (err?.message || err), 5000, { level: "warn" }); }
   });
   document.getElementById("profZoom").addEventListener("input", (e) => { pe.z = Number(e.target.value) || 1; profRender(); });
   document.getElementById("profClear").addEventListener("click", () => { pe.bmp = null; profRender(); });
@@ -6321,7 +6717,7 @@
     fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => {});
     try { window.__avatarPublish?.(); } catch {}
     applyState();
-    window.__toast?.("Profile saved \u2014 " + name, 3000);
+    window.__toast?.("Profile saved \u2014 " + name, 3000, { level: "info" });
     closeProfile();
   });
 
@@ -6749,7 +7145,8 @@
   let authTalking = false;  // 0.12.0: the relay's public prefixes include .talking (0.12 relays)
   let authChat = false;     // 0.12.0: ... and .chat
   let authState = false;
-  let authWeb = 8000;                 // 0.14.0 F: hub web port from /api/auth (8000 until told otherwise)    // 0.13.0: the relay serves ".state" publicly (state tracks); open relays always
+  let authWeb = 8000;                 // 0.14.0 F: hub web port from /api/auth (8000 until told otherwise)
+  let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves ".state" publicly (state tracks); open relays always
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
   const VIEWER_KINDS = [".since", ".stalled", ".spotlight", ".recording", ".mediactl", ".avatar", ".presence", ".talking", ".chat"];   // 0.11.0: + public presence; 0.12.0: + speaking, chat pulse
   function authBase() {
@@ -6778,6 +7175,7 @@
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 8000;                  // 0.14.0 F: the hub KASTR's web port (peer lookups)
+      authHttps = Number(d.https) || 0;                 // 0.15.0
     } catch {}
     if (!authSecured) { authTokens = null; authExp = 0; authRole = ""; authCodes = false; authLegacy = false; authTalking = true; authChat = true; authState = true; return; }
     // A token for this relay origin survives reloads within the tab.
@@ -6836,6 +7234,7 @@
     get chat() { return authChat; },         // 0.12.0
     get state() { return authState; },       // 0.13.0
     get web() { return authWeb; },           // 0.14.0 F
+    get https() { return authHttps || 8443; }, // 0.15.0
     withToken,
     base: authBase,
     mint: authMint,
@@ -6939,8 +7338,8 @@
     };
   }
   // the two models (schema v1) and their producers
-  const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "" };
-  const roomModel = { v: 1, peer: "", spotlight: null, recording: null, stalled: [], ctl: null, grid: null, media: {}, files: [] };
+  const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
+  const roomModel = { v: 1, peer: "", spotlight: null, recording: null, stalled: [], ctl: null, grid: null, grids: {}, media: {}, files: [] };   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
   const pubState = stateProducer(() => ".state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/.member/" + statePeer(), ["room.json", "chat.json"]);
   let pubJson = "", roomJson = "", ctlClearT = null;
@@ -6965,6 +7364,7 @@
           const p = value || {};
           pubModel.op = String(p.op || ""); pubModel.name = String(p.name || ""); pubModel.relay = String(p.relay || "");
           pubModel.via = String(p.relayName || ""); pubModel.joinedAt = Number(p.joinedAt) || 0;
+          pubModel.mode = PAGE_MODE;   // 0.15.0 (D1)
           break;
         }
         case "speaking": pubModel.speaking = !!value; break;
@@ -6973,7 +7373,16 @@
         case "avatar": pubModel.avatar = String(value || ""); break;
         case "spotlight": roomModel.spotlight = value ? { target: String(value), ts: now } : null; break;
         case "recording": roomModel.recording = value ? { who: String(value), ts: now } : null; break;
-        case "grid": roomModel.grid = value && value.path ? { ...value, ts: now } : null; break;
+        case "grid": {   // 0.15.0: {id, meta|null} -- one entry per grid, keyed by path; `grid` mirrors the lowest id for pre-0.15 viewers
+          const gid = String(value?.id ?? "1");
+          const meta = value && typeof value === "object" && "meta" in value ? value.meta : (value && value.path ? value : null);
+          const gs = { ...roomModel.grids };
+          for (const [p, m] of Object.entries(gs)) if (String(m?.id ?? "1") === gid) delete gs[p];
+          if (meta && meta.path) gs[String(meta.path)] = { ...meta, id: gid, ts: now };
+          roomModel.grids = gs;
+          roomModel.grid = Object.values(gs).sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }))[0] || null;
+          break;
+        }
         case "media": {   // {id, meta|null}
           const m = { ...roomModel.media };
           if (value?.meta && value.meta.path) m[String(value.id)] = { ...value.meta, ts: now }; else delete m[String(value?.id)];
@@ -7071,7 +7480,7 @@
       live.add(key);
       const w = p.who;
       const rec = { peer: w.peer, op: w.op, name: w.name, relay: w.relay, relayName: w.relayName, ts: p.ts, host: w.host,
-                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true };
+                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || "") };
       const cur = members.get(key);
       if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) { members.set(key, rec); changed = true; }
       if (p.ts) sinceTs.set(key, p.ts);
@@ -7092,7 +7501,7 @@
     if (!active) { if (cur) { try { cur.room.close(); cur.chat.close(); } catch {} memberSubs.delete(path); memberClear(path, cur); } return; }
     if (cur || !connection) return;
     const conn = connection;
-    const h = { prev: { gridPath: "", mediaIds: new Set(), fileIds: new Set(), stalled: new Map() } };
+    const h = { prev: { gridPaths: new Set(), mediaIds: new Set(), fileIds: new Set(), stalled: new Map() } };   // 0.15.0: several grids per member
     h.room = stateSubscribe(conn, path, "room.json", "snapshot", (v) => { if (connection === conn && memberSubs.get(path) === h) memberApply(path, v, h); });
     h.chat = stateSubscribe(conn, path, "chat.json", "window", (op) => { if (connection === conn && memberSubs.get(path) === h) chatWindowOp(path, op); });
     memberSubs.set(path, h);
@@ -7106,9 +7515,16 @@
     const recHad = recVotes.has(path);
     if (v.recording?.who) { if (!recHad) recApply(path, String(v.recording.who), Number(v.recording.ts) || 0, true); }
     else if (recHad) recApply(path, recVotes.get(path)?.who || "", 0, false);
-    // grid geometry
-    if (v.grid && v.grid.path) { gridApply(path, v.grid, Number(v.grid.ts) || Date.now(), true); prev.gridPath = String(v.grid.path); }
-    else if (prev.gridPath) { gridApply(path, { path: prev.gridPath }, 0, false); prev.gridPath = ""; }
+    // grid geometry -- 0.15.0: `grids` (by path) carries every grid the member runs; `grid` alone = a pre-0.15 owner
+    const grids = v.grids && typeof v.grids === "object" ? v.grids : (v.grid && v.grid.path ? { [String(v.grid.path)]: v.grid } : {});
+    const seenGrids = new Set();
+    for (const gm of Object.values(grids)) {
+      if (!gm || !gm.path) continue;
+      seenGrids.add(String(gm.path));
+      gridApply(path, gm, Number(gm.ts) || Date.now(), true);
+    }
+    for (const gp of [...prev.gridPaths]) if (!seenGrids.has(gp)) gridApply(path, { path: gp }, 0, false);
+    prev.gridPaths = seenGrids;
     // shared media state, keyed <member path>#<slot id>
     const media = v.media && typeof v.media === "object" ? v.media : {};
     for (const [id, meta] of Object.entries(media)) if (meta && meta.path) { mediaApply(path + "#" + id, meta, Number(meta.ts) || 0, true); prev.mediaIds.add(id); }
@@ -7134,7 +7550,7 @@
     if (spotVotes.delete(path)) spotApplyWinner();
     if (recVotes.has(path)) recApply(path, recVotes.get(path)?.who || "", 0, false);
     const prev = h?.prev;
-    if (prev?.gridPath) gridApply(path, { path: prev.gridPath }, 0, false);
+    for (const gp of prev?.gridPaths || []) gridApply(path, { path: gp }, 0, false);   // 0.15.0
     for (const id of prev?.mediaIds || []) { const k = [...mediaMeta.keys()].find((kk) => mediaMeta.get(kk)?.key === path + "#" + id); if (k) mediaApply(path + "#" + id, { path: k }, 0, false); }
     for (const id of prev?.fileIds || []) filesApply(path + "#" + id, { url: "x", id }, false);
   }
@@ -7367,7 +7783,7 @@
       recSaveEl.hidden = true;
     } catch (e) {
       if (e && e.name === "AbortError") return;   // user cancelled the picker: keep the dialog
-      window.__toast?.("Save failed (" + (e?.message || e) + ") \u2014 falling back to Download", 6000);
+      window.__toast?.("Save failed (" + (e?.message || e) + ") \u2014 falling back to Download", 6000, { level: "warn" });
       recDownloadNow();
     }
   });
@@ -7442,6 +7858,7 @@
                                            members: r.members.map((m) => ({ op: m.op, name: m.name, publisher: m.publisher, talking: m.talking })) })),
       roomsFrozen,
       mode: PAGE_MODE,   // 0.12.0
+      groups: roomsGroups,   // 0.15.0 (B4)
       streams: [...tiles.keys()],
       viewing: [...tiles.values()].filter((t) => t.watch.hasAttribute("url")).length,   // 0.13.0 (F2): tiles with a live subscription -- rides the diag POST to /api/instance
       shapes: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.shape).map(([n, t]) => [n, t.shape])),   // 0.9.8: bitmap vs decoded frame
@@ -7608,6 +8025,7 @@
   }
   function sbFormOpen(card, mode, rec) {
     if (!sbFormEl) return;
+    if (sbCollapsed() && !isPhone()) sbToggle();   // 0.15.0 (B1): the rail's "+" used to append the form into a display:none host
     sbFormClose();
     sbFormEl.dataset.slug = rec?.slug || "";
     sbFormEl.dataset.mode = mode;
@@ -7694,32 +8112,173 @@
     }
     for (const li of [...ul.children]) if (!seen.has(li.dataset.op)) li.remove();
   }
+  // ---- 0.15.0 (B4): room groups in the sidebar ----------------------------------
+  // Headers are .sbgroup rows reconciled by data-gid like the cards by data-slug.
+  // Collapsed groups are per user per relay host (kastr.rooms.groups.collapsed.<host>).
+  const cssq = (s) => (window.CSS && CSS.escape ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, "\\$&"));
+  function sbRelayHost() {
+    let host = "";
+    try { host = new URL(urlInput.value.trim()).host; } catch { host = (sbHostEl?.textContent || "").trim(); }
+    return host || "relay";
+  }
+  const sbGroupsKey = () => "kastr.rooms.groups.collapsed." + sbRelayHost();
+  function sbGroupsCollapsed() {
+    try { const a = JSON.parse(localStorage.getItem(sbGroupsKey()) || "[]"); return new Set(Array.isArray(a) ? a.map(String) : []); } catch { return new Set(); }
+  }
+  function sbGroupToggle(gid) {
+    const s = sbGroupsCollapsed();
+    if (s.has(gid)) s.delete(gid); else s.add(gid);
+    try { localStorage.setItem(sbGroupsKey(), JSON.stringify([...s].slice(0, 64))); } catch {}
+    paintSidebar();
+  }
+  function sbGroupNew(g) {
+    const h = document.createElement("div");
+    h.className = "sbgroup";
+    h.dataset.gid = g.gid;
+    const chev = document.createElement("span"); chev.className = "gchev"; chev.textContent = "\u25be";
+    const nm = document.createElement("span"); nm.className = "gname";
+    const cnt = document.createElement("span"); cnt.className = "gcnt";
+    const chip = document.createElement("span"); chip.className = "gchip";
+    const mb = document.createElement("button"); mb.type = "button"; mb.className = "gmenu"; mb.textContent = "\u22ee"; mb.title = "Group options";
+    h.append(chev, nm, cnt, chip, mb);
+    h.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (h.__skipClick && Date.now() - h.__skipClick < 600) return;
+      if (e.target.closest(".gmenu")) { openGroupMenu(mb, h.__g); return; }
+      sbGroupToggle(h.dataset.gid);
+    });
+    return h;
+  }
+  function sbGroupPaint(h, g, n, collapsed) {
+    h.__g = g;
+    h.classList.toggle("collapsed", collapsed);
+    h.querySelector(".gname").textContent = g.name;
+    h.querySelector(".gcnt").textContent = String(n);
+    h.querySelector(".gchip").textContent = (g.name.trim()[0] || "?").toUpperCase();
+    h.querySelector(".gmenu").hidden = !isRelayOperator();   // non-operators: a read-only header (click = collapse/expand)
+    h.title = g.name + " \u2014 " + n + (n === 1 ? " room" : " rooms") + (collapsed ? " (collapsed; click to expand)" : "");
+  }
+  // POST to the room store: the operator's loopback endpoint on the relay host's own
+  // KASTR, else the creator's (roomKey). The answer's groups repaint at once.
+  async function roomGroupPost(body) {
+    const hb = relayHostBase();
+    if (!hb) { window.__toast?.("No relay host to talk to.", 4000, { level: "warn" }); return null; }
+    const asOp = isRelayOperator();
+    const post = (url) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      let r = await post(hb + (asOp ? "/api/relay/rooms/group" : "/api/rooms/group"));
+      if (asOp && (r.status === 403 || r.status === 404) && body.op === "assign" && body.roomKey) r = await post(hb + "/api/rooms/group");   // not loopback after all: the creator path
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        window.__toast?.("Room groups: " + (d.error || (r.status === 403 ? "only the relay operator can do that" : "HTTP " + r.status)), 6000, { level: "warn" });
+        return null;
+      }
+      if (d.groups && typeof d.groups === "object") { roomsGroups = d.groups; roomsGroupsAt = Date.now(); roomsChanged(); }
+      roomsMinterPoll().catch(() => {});
+      try { if (!roomInfoPop.hidden) paintRoomInfo(); } catch {}
+      return d;
+    } catch (e) { window.__toast?.("Room groups: " + (e?.message || e), 6000, { level: "warn" }); return null; }
+  }
+  function roomGroupAssign(slug, gid) {
+    if (!slug || slug === "main") return null;
+    const roomKey = myChannels().find((r) => r.slug === slug)?.roomKey || null;
+    if (!isRelayOperator() && !roomKey) { window.__toast?.("Only " + slug + "'s creator or the relay operator can move it to a group.", 5000, { level: "warn" }); return null; }
+    return roomGroupPost({ op: "assign", slug, group: gid || null, roomKey });
+  }
+  async function roomGroupCreate(name) {
+    const before = new Set(Object.keys(roomsGroups || {}));
+    const d = await roomGroupPost({ op: "create", name });
+    if (!d?.groups) return null;
+    return Object.keys(d.groups).find((gid) => !before.has(gid) && String(d.groups[gid]?.name || "") === name)
+        || Object.keys(d.groups).find((gid) => String(d.groups[gid]?.name || "") === name) || null;
+  }
+  // the Room info "Group" button: pick a group, none, or (operator) a new one
+  function openGroupPickMenu(anchor, slug, roomKey) {
+    const cur = roomGroupOf(slug) || "__none";
+    const items = sbGroupList().map((g) => ({ value: g.gid, label: g.name }));
+    items.push({ value: "__none", label: "No group" });
+    if (isRelayOperator()) items.push({ value: "__new", label: "New group\u2026" });
+    openMineMenu(anchor, items, cur, async (v) => {
+      if (v === "__none") { await roomGroupAssign(slug, null); return; }
+      if (v === "__new") {
+        const name = String(prompt("Name the new group:", "") || "").trim().slice(0, 40);
+        if (!name) return;
+        const gid = await roomGroupCreate(name);
+        if (gid) await roomGroupAssign(slug, gid);
+        return;
+      }
+      await roomGroupAssign(slug, v);
+    });
+  }
+  // the header's menu (operator): Rename / Ungroup all / Delete (+ collapse/expand)
+  function openGroupMenu(anchor, g) {
+    if (!g) return;
+    const collapsed = sbGroupsCollapsed().has(g.gid);
+    const items = [{ value: "toggle", label: collapsed ? "Expand" : "Collapse" }];
+    if (isRelayOperator()) items.push({ value: "rename", label: "Rename\u2026" }, { value: "ungroup", label: "Ungroup all" }, { value: "delete", label: "Delete group\u2026" });
+    openMineMenu(anchor, items, null, async (v) => {
+      if (v === "toggle") { sbGroupToggle(g.gid); return; }
+      if (v === "rename") {
+        const name = String(prompt("Rename group:", g.name) || "").trim().slice(0, 40);
+        if (name && name !== g.name) await roomGroupPost({ op: "rename", group: g.gid, name });
+        return;
+      }
+      if (v === "ungroup") { for (const slug of g.rooms) await roomGroupPost({ op: "assign", slug, group: null, roomKey: null }); return; }
+      if (v === "delete") {
+        if (!confirm("Delete the group \u201c" + g.name + "\u201d?\n\nIts rooms stay; they are just ungrouped.")) return;
+        await roomGroupPost({ op: "delete", group: g.gid });
+      }
+    });
+  }
   function paintSidebar() {
     if (!sbRoomsEl) return;
     let host = urlInput.value.trim();
     try { host = new URL(host).host; } catch {}
     if (sbHostEl) sbHostEl.textContent = host;
     const list = lastChannelList;   // 0.13.1: the joined room is listed too (marked .cur)
-    const seen = new Set();
-    list.forEach((rec, i) => {
-      seen.add(rec.slug);
-      let card = sbRoomsEl.querySelector('.sbcard[data-slug="' + rec.slug + '"]');
-      if (!card) { card = sbCardNew(rec); sbRoomsEl.appendChild(card); }
-      sbCardPaint(card, rec);
-      const cards = [...sbRoomsEl.querySelectorAll(":scope > .sbcard")];
-      if (cards[i] !== card) sbRoomsEl.insertBefore(card, cards[i] || null);
+    const seen = new Set(), seenG = new Set();
+    // 0.15.0 (B4): ungrouped cards first (main, then the operator's order), then every
+    // group (relay order, then name) as a .sbgroup header followed by its cards; a
+    // collapsed group's cards are hidden (the open form keeps its card visible).
+    const groups = sbGroupList();
+    const gidOf = (rec) => (rec.group && groups.some((g) => g.gid === rec.group)) ? rec.group : null;
+    const collapsed = sbGroupsCollapsed();
+    const ordered = [];
+    for (const rec of list) if (!gidOf(rec)) ordered.push({ rec, hidden: false });
+    for (const g of groups) {
+      const mine = list.filter((rec) => gidOf(rec) === g.gid);
+      ordered.push({ g, n: mine.length });
+      for (const rec of mine) ordered.push({ rec, hidden: collapsed.has(g.gid) });
+    }
+    ordered.forEach((it, i) => {
+      let el;
+      if (it.rec) {
+        seen.add(it.rec.slug);
+        el = sbRoomsEl.querySelector('.sbcard[data-slug="' + it.rec.slug + '"]');
+        if (!el) { el = sbCardNew(it.rec); sbRoomsEl.appendChild(el); }
+        sbCardPaint(el, it.rec);
+        el.hidden = it.hidden && !(sbFormEl && !sbFormEl.hidden && sbFormEl.dataset.slug === it.rec.slug);
+      } else {
+        seenG.add(it.g.gid);
+        el = sbRoomsEl.querySelector('.sbgroup[data-gid="' + cssq(it.g.gid) + '"]');
+        if (!el) { el = sbGroupNew(it.g); sbRoomsEl.appendChild(el); }
+        sbGroupPaint(el, it.g, it.n, collapsed.has(it.g.gid));
+      }
+      const kids = [...sbRoomsEl.children];
+      if (kids[i] !== el) sbRoomsEl.insertBefore(el, kids[i] || null);
     });
     for (const card of [...sbRoomsEl.querySelectorAll(":scope > .sbcard")]) {
       if (seen.has(card.dataset.slug)) continue;
       if (sbFormEl && sbFormEl.dataset.slug === card.dataset.slug && sbFormEl.dataset.mode !== "create") sbFormClose();
       card.remove();
     }
+    for (const h of [...sbRoomsEl.querySelectorAll(":scope > .sbgroup")]) if (!seenG.has(h.dataset.gid)) h.remove();
     if (sbEl) sbEl.classList.toggle("stale", roomsFrozen);
   }
   // 0.13.1: drag a room card to reorder the rail (per operator; main stays on top). Pointer
   // events with a 6 px threshold like the stage tiles; mouse/pen only -- the phone drawer scrolls.
   let sbDrag = null;
-  const sbDragClear = () => { if (!sbDrag) return; sbDrag.card.classList.remove("dragging"); sbDrag.over?.classList.remove("drop-before", "drop-after"); sbDrag = null; };
+  const sbDragClear = () => { if (!sbDrag) return; sbDrag.card.classList.remove("dragging"); sbDrag.over?.classList.remove("drop-before", "drop-after", "drop-into"); sbDrag = null; };
   sbRoomsEl?.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.pointerType === "touch" || isPhone()) return;
     const card = e.target.closest(".sbcard");
@@ -7733,9 +8292,10 @@
       sbDrag.moved = true; sbDrag.card.classList.add("dragging");
       try { sbRoomsEl.setPointerCapture(e.pointerId); } catch {}
     }
-    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".sbcard");
-    sbDrag.over?.classList.remove("drop-before", "drop-after");
+    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".sbcard, .sbgroup, .sbhead");   // 0.15.0 (B4): a group header / the Rooms title = move the room
+    sbDrag.over?.classList.remove("drop-before", "drop-after", "drop-into");
     if (!over || over === sbDrag.card || over.dataset.slug === "main") { sbDrag.over = null; return; }
+    if (!over.classList.contains("sbcard")) { sbDrag.over = over; sbDrag.after = false; over.classList.add("drop-into"); return; }
     const r = over.getBoundingClientRect();
     sbDrag.after = e.clientY > r.top + r.height / 2; sbDrag.over = over;
     over.classList.add(sbDrag.after ? "drop-after" : "drop-before");
@@ -7746,6 +8306,13 @@
     if (!d.moved) return;
     d.card.__skipClick = Date.now();
     if (!d.over) return;
+    // 0.15.0 (B4): a header takes the room into that group, the Rooms title out of any,
+    // a card of another group along with it; the order below still applies within a group.
+    const fromG = d.card.__rec?.group || null;
+    if (d.over.classList.contains("sbgroup")) { if (fromG !== d.over.dataset.gid) roomGroupAssign(d.card.dataset.slug, d.over.dataset.gid); return; }
+    if (d.over.classList.contains("sbhead")) { if (fromG) roomGroupAssign(d.card.dataset.slug, null); return; }
+    const toG = d.over.__rec?.group || null;
+    if (toG !== fromG) roomGroupAssign(d.card.dataset.slug, toG);
     const slugs = [...sbRoomsEl.querySelectorAll(":scope > .sbcard")].map((c) => c.dataset.slug).filter((x) => x !== "main" && x !== d.card.dataset.slug);
     let i = slugs.indexOf(d.over.dataset.slug);
     if (i < 0) return;
@@ -7805,7 +8372,7 @@
 
   // ---- room forms (create / code) -- render into the sidebar form host or the shared #mineMenu
   function placeRoomMenu(menu, anchor) {
-    if (!menu || menu.id !== "mineMenu") return;   // 0.12.0: the sidebar form sits in the flow
+    if (!menu || menu.id === "sbForm") return;   // 0.12.0: the sidebar form sits in the flow (0.15.0 B1: every OTHER menu is positioned)
     const r = (anchor || document.getElementById("roomsBtn")).getBoundingClientRect();
     const w = menu.offsetWidth || 200;
     menu.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
@@ -8151,7 +8718,7 @@
     const was = chatHostDown;
     chatHostDown = !ok;
     chatHostLine(chatHostDown);
-    if (chatHostDown) chatHint(chatUnreachableText(), true);
+    if (chatHostDown) { chatHint(chatUnreachableText(), true); try { authDetect?.(); } catch {} }   // 0.15.0: re-learn the hub's web port so a move heals within one probe
     else if (was) { chatHint(""); chatFetch(); }   // back: the next fetch repaints the normal hint
   }
   function chatProbeArm() {
@@ -8219,14 +8786,14 @@
     try {
       const r = await fetch(base + "/api/rooms/close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug, roomKey }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { window.__toast?.("Could not close the room: " + (d.error || r.status), 6000); return; }
+      if (!r.ok) { window.__toast?.("Could not close the room: " + (d.error || r.status), 6000, { level: "error" }); return; }
       try { window.__channels?.closedHint?.(slug); } catch {}
-      window.__toast?.("Room " + slug + " closed.", 4000);
+      window.__toast?.("Room " + slug + " closed.", 4000, { level: "info" });
       try { const list = myChannels().filter((x) => x.slug !== slug); localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list)); } catch {}
       roomsMinterPoll().catch(() => {});
       if (joinState === "joined" && CHANNEL === slug) { try { leaveMeeting(); } catch {} }
       try { window.__channels?.emberCancel?.(slug); } catch {}   // no ember for a room that no longer exists
-    } catch (e) { window.__toast?.("Could not close the room \u2014 " + (e?.message || e), 6000); }
+    } catch (e) { window.__toast?.("Could not close the room \u2014 " + (e?.message || e), 6000, { level: "error" }); }
   };
   // ---- composer
   function chatGrow() { chatInput.style.height = "auto"; chatInput.style.height = Math.min(120, chatInput.scrollHeight) + "px"; }
@@ -8281,7 +8848,7 @@
       const h = new URL(urlInput.value.trim()).hostname;
       const same = h === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(h) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
       // 0.8.9: an https page (phone) must not mix content -- other hosts on their https port
-      return same ? location.origin : (location.protocol === "https:" ? "https://" + h + ":8443" : "http://" + h + ":8000");
+      return same ? location.origin : (location.protocol === "https:" ? "https://" + h + ":" + (window.__auth?.https || 8443) : "http://" + h + ":" + (window.__auth?.web || 8000));   // 0.15.0: the ports the hub advertises on /api/auth (0.14.0 pin), not literals
     } catch { return null; }
   }
   window.__relayHostBase = relayHostBase;
@@ -8421,7 +8988,7 @@
   }
   async function uploadFile(f) {
     if (!f) return;
-    if (f.size > 500 * 1048576) { window.__toast?.("That file is over the 500 MB limit.", 5000); return; }
+    if (f.size > 500 * 1048576) { window.__toast?.("That file is over the 500 MB limit.", 5000, { level: "warn" }); return; }
     const key = f.name + ":" + f.size + ":" + Date.now();
     const u = { key, file: f, name: f.name, size: f.size, loaded: 0, err: null, done: false };
     uploading.set(key, u);
@@ -8436,7 +9003,7 @@
     xhr.setRequestHeader("X-Kastr-Owner", encodeURIComponent(who));
     xhr.setRequestHeader("X-Kastr-Kind", "file");
     xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) { u.loaded = ev.loaded; u.size = ev.total; paintFiles(); } };
-    const fail = (msg) => { u.err = msg; storeCache = null; paintFiles(); window.__toast?.("Upload failed \u2014 " + msg, 6000); };
+    const fail = (msg) => { u.err = msg; storeCache = null; paintFiles(); window.__toast?.("Upload failed \u2014 " + msg, 6000, { level: "error" }); };
     xhr.onerror = () => fail(store.mode === "relay" ? "the relay host's KASTR did not answer at " + store.base : "this KASTR did not accept the file");
     xhr.onload = () => {
       if (xhr.status !== 200) { fail("refused (" + xhr.status + "): " + xhr.responseText.slice(0, 120)); return; }
@@ -8450,7 +9017,7 @@
       uploading.delete(key);
       paintFiles();
       window.__toast?.("Shared " + f.name + " with the room" + (store.mode === "local" ? " (stored on this machine)" : ""), 4000);
-      if (store.note) window.__toast?.(store.note, 9000);
+      if (store.note) window.__toast?.(store.note, 9000, { level: "info" });
     };
     xhr.send(f);
   }
@@ -8549,6 +9116,7 @@
       try { await authMint(rec.slug, authAccessCode, code ?? ""); }
       catch (e) { log("Room switch refused: " + (e?.message || e)); return; }
     }
+    chimeRoom();   // 0.15.0 (D3): the switch tone (the sidebar card path goes through here too)
     const pub = window.__publisher;
     const wasLive = !!pub?.state?.().live;
     // Moving rooms republishes under the new prefix: stop the announce,
@@ -8725,8 +9293,8 @@
         await window.__kastrSetRelay(u);
         try {
           const r = await fetch("/api/relay/use", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: u }) });
-          if (!r.ok) window.__toast?.("The relay address was not saved on this machine (" + r.status + ")", 6000);
-        } catch (e) { window.__toast?.("The relay address was not saved on this machine \u2014 " + (e?.message || e), 6000); }
+          if (!r.ok) window.__toast?.("The relay address was not saved on this machine (" + r.status + ")", 6000, { level: "warn" });
+        } catch (e) { window.__toast?.("The relay address was not saved on this machine \u2014 " + (e?.message || e), 6000, { level: "warn" }); }
       }
       gateMsg("");
     } catch (e) {
@@ -9046,8 +9614,13 @@
         const camId = joinEls.joinCam.value || d.cameras[0].deviceId;
         const camLabel = d.cameras.find((c) => c.deviceId === camId)?.label;
         if (joinEls.joinMic.value !== d.micDevice) pub.setMicDevice(joinEls.joinMic.value);
+        // 0.15.0: the saved effects bag rides the join the way the toolbar path already did --
+        // a camera created bare here was the "background resets on join" bug.
+        let joinFx = null;
+        try { joinFx = window.__camFx?.() || JSON.parse(localStorage.getItem("kastr.camfx") || "null"); } catch {}
+        if (joinFx && typeof joinFx === "object" && (!joinFx.bg || joinFx.bg.mode === "none") && !joinFx.bright && !joinFx.soft) joinFx = null;
         const entry = pub.addSource("camera", camId, camLabel,
-          { micMuted: !joinMicOn, videoPaused: !joinVidOn });
+          { micMuted: !joinMicOn, videoPaused: !joinVidOn, ...(joinFx && typeof joinFx === "object" ? { fx: joinFx, blur: joinFx.bg?.mode === "blur" } : {}) });
         joinAdded.push(entry.id);
         document.getElementById("startBtn").click();
         if (!pub.state().running) return joinFail("Could not start the camera \u2014 see the Share panel's status.");
@@ -9241,11 +9814,13 @@
       return Array.isArray(r) ? r.filter((x) => x && typeof x.url === "string") : [];
     } catch { return []; }
   }
-  function rtspPersistSet(url, label, on) {
+  function rtspPersistSet(url, label, on, gridId) {   // 0.15.0: + the grid the feed joins (gridId, default "1")
     const u = String(url || "").trim();
     if (!u) return;
-    const next = rtspPersist().filter((x) => x.url !== u);
-    if (on) next.push({ url: u, label: label || rtspLabel(u) });
+    const cur = rtspPersist();
+    const prev = cur.find((x) => x.url === u);
+    const next = cur.filter((x) => x.url !== u);
+    if (on) next.push({ url: u, label: label || rtspLabel(u), gridId: String(gridId || prev?.gridId || gridOfSaved(u) || "1") });
     try { localStorage.setItem(RTSP_PERSIST_KEY, JSON.stringify(next)); } catch {}
   }
   const rtspPersistHas = (url) => rtspPersist().some((x) => x.url === url);
@@ -9466,12 +10041,13 @@
     // 0.8.3: the RTSP grid composite is OURS -- without an entry here the
     // watch half cannot suppress its announce (it came back as a phantom
     // tile) and the discovery echo never proves it reached the relay.
-    if (rtspGrid) {
-      list.push({ id: -100, kind: "rtsp", label: "RTSP Grid",
-                  name: rtspGrid.entry.name, enabled: true, live,
+    // 0.15.0: one pseudo-source per grid, ids -100, -101, ... in grid-id order
+    gridsSorted().forEach((g, i) => {
+      list.push({ id: -100 - i, kind: "rtsp", label: g.name || "RTSP Grid",
+                  name: g.entry.name, enabled: true, live,
                   videoPaused: false, micMuted: true, deviceId: null,
                   carriesAudio: false, pausable: false });
-    }
+    });
     return list;
   };
   const mySource = (a) => ({
@@ -9492,7 +10068,7 @@
     // tick the current pick. null for kinds with no enumerable device.
     deviceId: a.deviceId ?? null,
     blur: !!a.blur,   // background blur engaged (0.8.2)
-    fx: a.fx ?? null,   // 0.8.8: effects bag {bg, bright, soft}
+    fx: fxWire(a.fx),   // 0.8.8: effects bag {bg:{mode,url}, bright, soft, quality}; 0.15.0: url is a short marker, never pixels
     carriesAudio: a.kind !== RTSP && !!audioFor(a),
     pausable: a.kind !== RTSP,
   });
@@ -9590,6 +10166,8 @@
         if (!a) return;
         if ("videoPaused" in m.set) {
           a.videoPaused = !!m.set.videoPaused;
+          // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back
+          if (!a.videoPaused && (a.fx || a.blur)) { const sl = slots.get(a.id); if (sl) setTimeout(() => { try { applyFx(sl); } catch {} }, 400); }
           const slot = slots.get(a.id);
           if (slot && !slot.rtsp) {
             slot.publish.invisible = a.videoPaused;
@@ -10126,7 +10704,7 @@
     if (live || !window.__joinedChannel?.()) return;
     setTimeout(() => {
       if (live || !slots.size || !window.__joinedChannel?.()) return;
-      if (!operatorValid()) { window.__toast?.("Set your name (Profile) to go on air.", 5000); return; }
+      if (!operatorValid()) { window.__toast?.("Set your name (Profile) to go on air.", 5000, { level: "warn" }); return; }
       liveBtn.click();
     }, 400);
   }
@@ -10223,11 +10801,34 @@
         aud.classList.add("shown");
         ab.checked = a.audio !== false;
         ab.addEventListener("change", () => window.__rtspAudio?.set?.(a.id, ab.checked));
+        // 0.15.0: which grid this feed joins (two feeds with the same grid make a composite)
+        const gsel = document.createElement("select");
+        gsel.className = "gsel";
+        gsel.title = "Which grid this feed joins (a grid needs two feeds to appear)";
+        const paintGsel = () => {
+          gsel.replaceChildren();
+          for (const gr of gridRegistry()) { const o = document.createElement("option"); o.value = gr.id; o.textContent = gr.name; gsel.appendChild(o); }
+          const o = document.createElement("option"); o.value = "__new"; o.textContent = "New grid\u2026"; gsel.appendChild(o);
+          gsel.value = gridIdOf(a);
+        };
+        paintGsel();
+        gsel.addEventListener("change", () => {
+          if (gsel.value === "__new") {
+            const nm = window.prompt("Name for the new grid", "Vehicle " + (gridRegistry().length + 1));
+            if (nm == null || !nm.trim()) { paintGsel(); return; }
+            gridMove(a, gridCreate(nm.trim()));
+            return;
+          }
+          gridMove(a, gsel.value);
+        });
+        aud.before(gsel);
       } else {
         row.querySelector(".aud")?.remove();
         paintVid(vid, a);
         vid.addEventListener("click", () => {
           a.videoPaused = !a.videoPaused;
+          // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back
+          if (!a.videoPaused && (a.fx || a.blur)) { const sl = slots.get(a.id); if (sl) setTimeout(() => { try { applyFx(sl); } catch {} }, 400); }
           // The library's own lever. invisible=true disables the video
           // ENCODER for every source kind, and for a camera also releases
           // the device outright (its enable gate is !invisible, so a
@@ -10250,17 +10851,34 @@
       }
 
       const ni = row.querySelector("input[type=text]");
-      ni.value = a.name;
-      ni.addEventListener("input", () => { a.name = ni.value; refreshUi(); });
-      ni.addEventListener("change", () => {
-        a.name = ensureHang(ni.value);
+      if (a.kind === RTSP) {
+        // 0.15.0: an RTSP row's text box edits the DISPLAY name only (share row, grid cell pill,
+        // the announce's cells); the broadcast path stays put, so viewers' tiles are never re-keyed.
+        ni.value = a.label;
+        ni.placeholder = "Display name";
+        ni.title = "Display name for this feed (its grid cell and the room see it). The stream path stays " + a.name;
+        ni.addEventListener("input", () => { lbl.textContent = ni.value || rtspLabel(a.url || ""); lbl.title = lbl.textContent; });
+        ni.addEventListener("change", () => {
+          a.label = ni.value.trim() || rtspLabel(a.url || "");
+          ni.value = a.label;
+          lbl.textContent = a.label; lbl.title = a.label;
+          if (a.url) rtspPersistSet(a.url, a.label, rtspPersistHas(a.url), gridIdOf(a));
+          updateRtspGrid(); renderPickers(); refreshUi(); announce();
+          announceGrid();   // a feed outside any grid changes nothing here; a member's cell name travels at once
+        });
+      } else {
         ni.value = a.name;
-        const slot = slots.get(a.id);
-        if (slot && slot.rtsp) renameRtsp(slot, a.name);
-        else if (slot) slot.publish.setAttribute("name", chanPath(a.name));
-        renderPickers();
-        refreshUi();
-      });
+        ni.addEventListener("input", () => { a.name = ni.value; refreshUi(); });
+        ni.addEventListener("change", () => {
+          a.name = ensureHang(ni.value);
+          ni.value = a.name;
+          const slot = slots.get(a.id);
+          if (slot && slot.rtsp) renameRtsp(slot, a.name);
+          else if (slot) slot.publish.setAttribute("name", chanPath(a.name));
+          renderPickers();
+          refreshUi();
+        });
+      }
 
       row.querySelector(".rm").addEventListener("click", () => removeSource(a.id));
       row.classList.toggle("off", !a.enabled);
@@ -10501,11 +11119,11 @@
     for (const slot of slots.values()) {
       if (!slot.rtsp) applySettings(slot);   // 0.9.3: RTSP feeds publish natively -- no browser encoder to configure
     }
-    if (rtspGrid) {
+    for (const g of rtspGrids.values()) {   // 0.15.0: every grid
       const vcfg = videoConfig();
       delete vcfg.frameRate;
-      try { rtspGrid.moq.encoder.config.set(vcfg); } catch {}
-      try { rtspGrid.moq.encoderLow?.config.set({ ...vcfg, ...LOW_RENDITION }); } catch {}
+      try { g.moq.encoder.config.set(vcfg); } catch {}
+      try { g.moq.encoderLow?.config.set({ ...vcfg, ...LOW_RENDITION }); } catch {}
     }
     renderResolved();
     guardResolved();
@@ -10641,6 +11259,10 @@
   const MEDIA_AHEAD_S = 45;             // stop reading when this much is buffered ahead of the playhead (the blocked write idles ffmpeg)
   const MEDIA_START_BYTES = 32 << 20;   // a still-uploading file starts streaming once this much has landed
   const MEDIA_STALL_MS = 10000;         // playing, buffer empty, no bytes for this long -> reopen the stream once
+  // 0.15.0: a transcode is not a file -- play from a cushion, never from the encoder's live edge
+  const MEDIA_START_AHEAD_S = 4;        // first play (and after a seek) waits for this much buffered ahead, or EOF
+  const MEDIA_LOW_AHEAD_S = 0.8;        // playing with less than this ahead -> pause + "Buffering..." (not a user pause)
+  const MEDIA_RESUME_AHEAD_S = 3;       // ...and resume once this much is back (or EOF)
 
   // 0.9.1: native publishing. When the bridge ships moq-cli, an RTSP feed is
   // published by the server (ffmpeg copy/encode -> moq import ts -> relay)
@@ -10678,7 +11300,7 @@
         try { localStorage.setItem(PT_KEY, cb.checked ? "1" : "0"); } catch {}
         syncNative(true);   // re-publish with the new decision
         for (const sl of slots.values()) if (sl.rtsp && sl.native) { sl.monitorTranscode = false; restartMonitor(sl); }   // the monitor copies or encodes accordingly
-        window.__toast?.(cb.checked ? "Cameras are passed through untouched whenever viewers can decode them \u2014 no re-encode on this machine." : "Cameras are converted to H.264 again (H.264 up to 1080p still passes through).", 5000);
+        window.__toast?.(cb.checked ? "Cameras are passed through untouched whenever viewers can decode them \u2014 no re-encode on this machine." : "Cameras are converted to H.264 again (H.264 up to 1080p still passes through).", 5000, { level: "info" });
       });
     }
   }
@@ -10961,7 +11583,10 @@
       if (e.target.closest("button")) return;
       if (window.__viewDragged?.()) return;
       if (pane.classList.contains("mainstage") && window.__viewZoomed?.(video)) { window.__viewReset?.(video); return; }
-      if (pane.classList.contains("mainstage") && pane.classList.contains("gridfeed") && rtspGrid) { closeGridMember(rtspGrid, true); return; }   // 0.9.5: back to the grid
+      if (pane.classList.contains("mainstage") && pane.classList.contains("gridfeed")) {   // 0.9.5: back to the grid (0.15.0: the grid that opened this member)
+        const og = [...rtspGrids.values()].find((g) => g.openMember?.pane === pane) || gridById(gridIdOf(entry));
+        if (og) { closeGridMember(og, true); return; }
+      }
       window.__selfSpot?.(pane);
     });
     window.__viewArm?.(pane, () => video, () => pane.classList.contains("mainstage"));   // 0.9.2: wheel zoom + pan
@@ -11143,29 +11768,58 @@
   // LAN cannot depend on a CDN). The processed canvas track rides the same
   // seam the screen path uses: publish.capture.in.source. OFF restores the
   // raw camera track; a device switch re-aims the loop at the new track.
-  let blurVision = null;
-  let blurFailed = false;
-  async function ensureSegmenter() {
-    if (blurVision) return blurVision;
-    if (blurFailed) return null;
-    try {
-      const mod = await import("/assets/mediapipe/vision_bundle.mjs");
-      const files = await mod.FilesetResolver.forVisionTasks("/assets/mediapipe/wasm");
-      blurVision = await mod.ImageSegmenter.createFromOptions(files, {
-        baseOptions: { modelAssetPath: "/assets/mediapipe/selfie_segmenter.tflite" },
-        runningMode: "VIDEO",
-        outputCategoryMask: false,
-        outputConfidenceMasks: true,
-      });
-      return blurVision;
-    } catch (e) {
-      blurFailed = true;
-      window.__toast?.("Background blur unavailable \u2014 " + (e?.message ?? e));
-      return null;
-    }
+  // 0.15.0: one segmenter per quality, GPU delegate first and CPU when WebGL refuses (told once).
+  //   balanced -> selfie_segmenter.tflite           (256x256 general model, the 0.8.2 default)
+  //   best     -> selfie_segmenter_landscape.tflite (144x256, trained on webcam framing: cleaner edges)
+  // "best" falls back to "balanced" when its model is not vendored (see applyFx / retuneFx).
+  let visionMod = null, visionFiles = null;
+  const segCache = {};     // quality -> ImageSegmenter, or the pending promise while it loads
+  const segFailed = {};    // quality -> true once both delegates refused
+  const segInfo = {};      // quality -> { delegate, model } for __fxDebug
+  const SEG_MODELS = { balanced: "/assets/mediapipe/selfie_segmenter.tflite", best: "/assets/mediapipe/selfie_segmenter_landscape.tflite" };
+  let segCpuTold = false;
+  async function ensureSegmenter(quality) {
+    const q = quality === "best" ? "best" : "balanced";
+    if (segCache[q]) return segCache[q];
+    if (segFailed[q]) return null;
+    const p = (async () => {
+      try {
+        if (!visionMod) visionMod = await import("/assets/mediapipe/vision_bundle.mjs");
+        if (!visionFiles) visionFiles = await visionMod.FilesetResolver.forVisionTasks("/assets/mediapipe/wasm");
+        const model = SEG_MODELS[q];
+        let seg = null, delegate = "GPU", err = null;
+        for (const d of ["GPU", "CPU"]) {
+          try {
+            seg = await visionMod.ImageSegmenter.createFromOptions(visionFiles, {
+              baseOptions: { modelAssetPath: model, delegate: d },
+              runningMode: "VIDEO",
+              outputCategoryMask: false,
+              outputConfidenceMasks: true,
+            });
+            delegate = d;
+            break;
+          } catch (e) {
+            err = e;
+            if (d === "GPU" && !segCpuTold) { segCpuTold = true; console.warn("[fx] GPU segmentation unavailable, trying CPU:", e?.message ?? e); }
+          }
+        }
+        if (!seg) throw err ?? new Error("segmenter refused");
+        segInfo[q] = { delegate, model: model.split("/").pop() };
+        segCache[q] = seg;
+        return seg;
+      } catch (e) {
+        segFailed[q] = true;
+        delete segCache[q];
+        console.warn("[fx] segmenter (" + q + ") unavailable:", e?.message ?? e);
+        if (q === "balanced") window.__toast?.("Background effects unavailable \u2014 " + (e?.message ?? e), 6000, { level: "warn" });
+        return null;
+      }
+    })();
+    segCache[q] = p;
+    return p;
   }
   // 0.8.6: largest connected component of the thresholded person mask.
-  let msLabel = null, msQueue = null;
+  let msLabel = null, msQueue = null, msKeep = null;   // 0.15.0: keep is reused too (consumed before the next call)
   function mainSubjectMask(conf, w, h) {
     const n = w * h;
     if (!msLabel || msLabel.length !== n) { msLabel = new Int32Array(n); msQueue = new Int32Array(n); }
@@ -11190,7 +11844,8 @@
       const score = area - Math.sqrt(dx * dx + dy * dy) * 4;   // area dominates; center breaks ties
       if (score > bestScore) { bestScore = score; bestId = id; }
     }
-    const keep = new Uint8Array(n);
+    if (!msKeep || msKeep.length !== n) msKeep = new Uint8Array(n); else msKeep.fill(0);
+    const keep = msKeep;
     if (!bestId) return keep;
     for (let i = 0; i < n; i++) keep[i] = label[i] === bestId ? 1 : 0;
     // soft edges: sub-threshold pixels touching the kept blob keep their confidence
@@ -11207,46 +11862,201 @@
     return v.track ?? null;                              // {track, kind} wrapper
   }
   function stopBlur(slot) {
+    try { slot.fxArm?.(); } catch {}   // 0.15.0: a pending "start when the track lands" is void now
+    slot.fxArm = null; clearTimeout(slot.fxArmT); slot.fxArmT = 0;
     const b = slot.blur;
     if (!b) return;
     slot.blur = null;
     b.alive = false;
+    clearInterval(b.tickT);   // 0.15.0
     try { b.processed?.stop?.(); } catch {}
     try { b.video.srcObject = null; } catch {}
+    try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}   // 0.15.0: video / GIF background
+    try { b.img?.remove?.(); } catch {}
+    b.vid = null; b.img = null;
     if (b.raw && slot.publish.capture?.in?.source) {
       try { slot.publish.capture.in.source.set(b.raw); } catch {}
     }
   }
-  // 0.8.8: one effects bag per camera -- background (none/blur/image),
-  // brightness, soft focus. The loop runs while any effect is on; only the
-  // background modes need the person mask.
+  // 0.8.8: one effects bag per camera -- background (none/blur/image; 0.15.0: gif/video too),
+  // brightness, soft focus, 0.15.0: segmentation quality. The loop runs while any effect
+  // is on; only the background modes need the person mask.
   const fxActive = (fx) => !!fx && ((fx.bg && fx.bg.mode !== "none") || fx.bright || fx.soft);
   const fxNeedsMask = (fx) => !!fx && !!fx.bg && fx.bg.mode !== "none";
+  const FX_BG_MODES = new Set(["none", "blur", "image", "gif", "video"]);
+  // 0.15.0: the bag that rides the announce carries markers only ("bg:<key>", "preset:<id>",
+  // "/assets/bg/<file>") -- a data: URL here used to bloat every announce. Hoisted (function
+  // declaration): mySource runs before this line is reached.
+  function fxWire(fx) {
+    if (!fx || typeof fx !== "object") return null;
+    const bg = fx.bg && typeof fx.bg === "object" ? fx.bg : { mode: "none", url: "" };
+    const mode = FX_BG_MODES.has(bg.mode) ? bg.mode : "none";
+    let url = typeof bg.url === "string" ? bg.url : "";
+    if (/^(data|blob):/i.test(url)) url = "bg:custom";
+    return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
+             quality: fx.quality === "best" ? "best" : "balanced" };
+  }
+  // 0.15.0: background markers -> something drawImage can take.
+  //   bg:<key>        Blob in IndexedDB kastr-bg/bg (written by the Watch half) -> object URL, cached per key
+  //   bg:custom       the pre-0.15 data URL still in localStorage
+  //   preset:<id>     the Watch half's canvas presets (window.__bgPreset)
+  //   anything else   as is (/assets/bg/<file>, or a legacy data: URL from an older peer)
+  const bgUrlCache = new Map();
+  function bgDbGet(key) {
+    return new Promise((resolve) => {
+      let req;
+      try { req = indexedDB.open("kastr-bg"); } catch { resolve(null); return; }
+      req.onupgradeneeded = () => { const db = req.result; for (const s of ["bg", "meta"]) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s); };
+      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        try {
+          if (!db.objectStoreNames.contains("bg")) { db.close(); resolve(null); return; }
+          const q = db.transaction("bg", "readonly").objectStore("bg").get(key);
+          q.onsuccess = () => { db.close(); resolve(q.result ?? null); };
+          q.onerror = () => { db.close(); resolve(null); };
+        } catch { db.close(); resolve(null); }
+      };
+    });
+  }
+  async function resolveBgUrl(url) {
+    if (!url) return "";
+    if (url === "bg:custom") { try { return localStorage.getItem("kastr.bg.custom") || ""; } catch { return ""; } }
+    if (url.startsWith("bg:")) {
+      const key = url.slice(3);
+      if (bgUrlCache.has(key)) return bgUrlCache.get(key);
+      const rec = await bgDbGet(key);
+      const blob = rec instanceof Blob ? rec : rec?.blob instanceof Blob ? rec.blob : null;
+      if (!blob) return "";
+      const u = URL.createObjectURL(blob);
+      bgUrlCache.set(key, u);
+      return u;
+    }
+    if (url.startsWith("preset:")) { try { return window.__bgPreset?.(url.slice(7)) || ""; } catch { return ""; } }
+    return url;
+  }
+  function fxFailOnce(slot, why) {   // 0.15.0: one status line + one warn toast per slot per cause
+    if (slot.fxFailed === why) return;
+    slot.fxFailed = why;
+    console.warn("[fx] " + why + " (source " + (slot.entry?.name || slot.entry?.id) + ")");
+    window.__toast?.("Video effects unavailable \u2014 " + why, 6000, { level: "warn" });
+  }
   async function applyFx(slot) {
-    const fx = slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null);
+    const want = () => slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null);
+    const fx = want();
     if (!fxActive(fx)) { stopBlur(slot); return; }
-    if (slot.blur) { slot.blur.fx = fx; loadFxImage(slot.blur, fx); return; }   // live retune
-    const seg = fxNeedsMask(fx) ? await ensureSegmenter() : null;
-    if (fxNeedsMask(fx) && !seg) return;
-    if (!slots.has(slot.entry.id) || !fxActive(slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur" } } : null))) return;
+    if (slot.blur) { retuneFx(slot, fx); return; }   // live retune
+    let seg = null;
+    if (fxNeedsMask(fx)) {
+      // 0.15.0: ensureSegmenter is the wait itself (one shared promise per quality); "best"
+      // without its model falls back to the general one; a hard failure is reported once.
+      seg = await ensureSegmenter(fx.quality);
+      if (!seg && fx.quality === "best") seg = await ensureSegmenter("balanced");
+      if (!seg) { fxFailOnce(slot, "the person segmenter could not start"); return; }
+    }
+    if (!slots.has(slot.entry.id) || !fxActive(want())) return;   // removed or switched off while we waited
+    if (slot.blur) { retuneFx(slot, want()); return; }              // a parallel call already started the loop
     const raw = unwrapTrack(slot.publish.capture?.in?.source?.peek?.());
-    if (!raw) { window.__toast?.("Video effects need a running camera first."); return; }
-    startBlurLoop(slot, raw, seg, fx);
+    if (!raw) { armFxOnTrack(slot); return; }                        // 0.15.0: was a toast + give-up
+    slot.fxFailed = null;
+    startBlurLoop(slot, raw, seg, want());
+  }
+  // 0.15.0: no raw track yet (a saved effect on a camera that has not landed) -- run applyFx once
+  // the capture source publishes its first track (same subscribe seam blurWatch uses), with a
+  // slow poll as the belt to that brace. fxRetryAt keeps a chatty source from re-entering.
+  function armFxOnTrack(slot) {
+    if (slot.fxArm) return;
+    const src = slot.publish.capture?.in?.source;
+    const fire = () => {
+      if (!slot.fxArm) return;
+      if (slot.fxRetryAt && performance.now() - slot.fxRetryAt < 1000) return;
+      slot.fxRetryAt = performance.now();
+      try { slot.fxArm(); } catch {}
+      slot.fxArm = null; clearTimeout(slot.fxArmT); slot.fxArmT = 0;
+      if (slots.has(slot.entry.id)) applyFx(slot).catch(() => {});
+    };
+    let un = null;
+    try { un = src?.subscribe?.(() => { if (unwrapTrack(src.peek?.())) fire(); }) ?? null; } catch { un = null; }
+    slot.fxArm = typeof un === "function" ? un : () => {};
+    const t0 = performance.now();
+    const poll = () => {
+      if (!slot.fxArm) return;
+      if (unwrapTrack(src?.peek?.())) { fire(); return; }
+      if (performance.now() - t0 > 30000) {
+        try { slot.fxArm(); } catch {}
+        slot.fxArm = null; slot.fxArmT = 0;
+        fxFailOnce(slot, "the camera produced no video track");
+        return;
+      }
+      slot.fxArmT = setTimeout(poll, 1500);
+    };
+    slot.fxArmT = setTimeout(poll, 1500);
+  }
+  // Live retune: a new bag on a running loop -- background media, and the segmenter when the
+  // mode now needs a mask or the quality changed (the EMA restarts for the new mask size).
+  function retuneFx(slot, fx) {
+    const b = slot.blur;
+    if (!b) return;
+    b.fx = fx;
+    loadFxBg(b, fx);
+    const q = fx.quality === "best" ? "best" : "balanced";
+    if (fxNeedsMask(fx) && (!b.seg || b.quality !== q)) {
+      const gen = ++b.segGen;
+      (async () => {
+        let s = await ensureSegmenter(q);
+        if (!s && q === "best") s = await ensureSegmenter("balanced");
+        if (!s) { fxFailOnce(slot, "the person segmenter could not start"); return; }
+        if (slot.blur !== b || gen !== b.segGen) return;
+        b.seg = s; b.quality = q; b.conf = null; b.haveMask = false;
+      })().catch(() => {});
+    }
   }
   async function applyBlur(slot, on) {   // legacy entry point (0.8.2 callers)
     slot.entry.fx = { ...(slot.entry.fx || {}), bg: on ? { mode: "blur", url: "" } : { mode: "none", url: "" } };
     slot.entry.blur = !!on;
     return applyFx(slot);
   }
-  function loadFxImage(b, fx) {
-    const url = fx?.bg?.mode === "image" ? fx.bg.url : "";
-    if (!url) { b.img = null; b.imgUrl = ""; return; }
-    if (b.imgUrl === url && b.img) return;
-    const im = new Image();
-    im.onload = () => { b.img = im; };
-    im.src = url;
-    b.imgUrl = url;
+  function fxBgHolder() {   // GIFs only animate while painted: a 2x2 px near-invisible corner
+    let h = document.getElementById("fxBgHolder");
+    if (!h) { h = document.createElement("div"); h.id = "fxBgHolder"; document.body.appendChild(h); }
+    return h;
   }
+  // Background media for the loop: image / gif -> <img> (Chromium draws the CURRENT GIF frame
+  // on each drawImage, so it animates), video -> hidden muted looping <video>. Async: the
+  // marker may need IndexedDB; a stale result (the bag moved on) is dropped. While nothing is
+  // loaded the loop falls back to blur(14px), so a missing file never shows the raw room.
+  function loadFxBg(b, fx) {
+    const mode = fx?.bg?.mode || "none";
+    const url = mode === "image" || mode === "gif" || mode === "video" ? (fx.bg.url || "") : "";
+    const key = url ? mode + "|" + url : "";
+    if (b.bgKey === key) return;
+    b.bgKey = key;
+    try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}
+    try { b.img?.remove?.(); } catch {}
+    b.img = null; b.vid = null;
+    if (!key) return;
+    const missing = () => { if (b.bgKey !== key || b.missTold === key) return; b.missTold = key;
+      window.__toast?.("That background is missing \u2014 blurring instead", 5000, { level: "warn" }); };
+    resolveBgUrl(url).then((real) => {
+      if (b.bgKey !== key || !b.alive) return;
+      if (!real) { missing(); return; }
+      if (mode === "video") {
+        const v = document.createElement("video");
+        v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true; v.preload = "auto";
+        v.onerror = () => missing();
+        v.src = real;
+        v.play().catch(() => {});
+        b.vid = v;
+      } else {
+        const im = new Image();
+        im.onload = () => { if (b.bgKey === key && b.alive) { b.img = im; if (mode === "gif") fxBgHolder().appendChild(im); } };
+        im.onerror = () => missing();
+        im.src = real;
+      }
+    }).catch(() => missing());
+  }
+  const loadFxImage = loadFxBg;   // 0.8.8 name
+  const SEG_MIN_MS = 66;   // <= 15 segmentations a second; frames in between reuse the last matte
   function startBlurLoop(slot, raw, seg, fx) {
     const video = document.createElement("video");
     video.muted = true;
@@ -11261,54 +12071,90 @@
     const mx = maskCv.getContext("2d");
     const out = cv.captureStream(30);
     const processed = out.getVideoTracks()[0];
-    const b = { alive: true, raw, video, processed, fx: fx || slot.entry.fx || { bg: { mode: "blur" } }, img: null, imgUrl: "" };
-    loadFxImage(b, b.fx);
+    const fx0 = fx || slot.entry.fx || { bg: { mode: "blur", url: "" } };
+    const b = { alive: true, raw, video, processed, fx: fx0, img: null, vid: null, bgKey: "", missTold: "",
+                seg, quality: fx0.quality === "best" ? "best" : "balanced", segGen: 0,
+                // 0.15.0 loop state: EMA'd confidence (Float32Array), its quarter-scale copy, the
+                // reusable ImageData for the matte, the throttle clock and two fps counters
+                conf: null, confQ: null, mw: 0, mh: 0, imgData: null, haveMask: false, lastSegAt: 0,
+                segN: 0, drawN: 0, segFps: 0, drawFps: 0, fpsAt: performance.now() };
+    loadFxBg(b, b.fx);
     slot.blur = b;
-    const step = () => {
+    const drawCover = (ctx, el, ew, eh, w, h) => {
+      const sc = Math.max(w / ew, h / eh), dw = ew * sc, dh = eh * sc;
+      ctx.drawImage(el, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    };
+    // A fresh confidence mask: EMA it into b.conf (prev*0.6 + cur*0.4), keep only the MAIN
+    // subject (0.8.6 -- the model segments every human, so people behind you stayed sharp;
+    // connected components on a quarter-scale copy once the mask is bigger than 320x180,
+    // upsampled nearest), soft-threshold after the smoothing, and paint the matte canvas.
+    const updateMask = (mask) => {
+      const mw = mask.width, mh = mask.height, n = mw * mh;
+      const cur = mask.getAsFloat32Array();
+      if (!b.conf || b.mw !== mw || b.mh !== mh) {
+        b.conf = new Float32Array(cur); b.mw = mw; b.mh = mh; b.confQ = null;
+        maskCv.width = mw; maskCv.height = mh;
+        b.imgData = mx.createImageData(mw, mh);
+      } else {
+        const p = b.conf;
+        for (let i = 0; i < n; i++) p[i] = p[i] * 0.6 + cur[i] * 0.4;
+      }
+      const conf = b.conf, data = b.imgData.data;
+      const alpha = (c) => (c <= 0.15 ? 0 : c >= 0.85 ? 255 : (c - 0.15) * 364);
+      if (mw > 320 || mh > 180) {
+        const qw = mw >> 2, qh = mh >> 2;
+        if (!b.confQ || b.confQ.length !== qw * qh) b.confQ = new Float32Array(qw * qh);
+        const q = b.confQ;
+        for (let y = 0; y < qh; y++) { const row = (y << 2) * mw, qrow = y * qw; for (let x = 0; x < qw; x++) q[qrow + x] = conf[row + (x << 2)]; }
+        const keep = mainSubjectMask(q, qw, qh);
+        for (let y = 0; y < mh; y++) {
+          const krow = Math.min(qh - 1, y >> 2) * qw, row = y * mw;
+          for (let x = 0; x < mw; x++) { const i = row + x; data[i * 4 + 3] = keep[krow + Math.min(qw - 1, x >> 2)] ? alpha(conf[i]) : 0; }
+        }
+      } else {
+        const keep = mainSubjectMask(conf, mw, mh);
+        for (let i = 0; i < n; i++) data[i * 4 + 3] = keep[i] ? alpha(conf[i]) : 0;
+      }
+      mx.putImageData(b.imgData, 0, 0);
+      b.haveMask = true;
+    };
+    const step = (fromTimer) => {
       if (!b.alive) return;
       const w = video.videoWidth, h = video.videoHeight;
       if (w && h) {
-        if (cv.width !== w) { cv.width = w; cv.height = h; person.width = w; person.height = h; }
+        if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; person.width = w; person.height = h; }
         const fxNow = b.fx || {};
-        const needMask = seg && fxNow.bg && fxNow.bg.mode !== "none";
+        const mode = fxNow.bg?.mode || "none";
+        const needMask = !!b.seg && mode !== "none";
         const baseFilter = (fxNow.bright ? "brightness(1.15) contrast(1.05) " : "") + (fxNow.soft ? "blur(0.8px)" : "");
-        let res = null, mask = null;
-        if (needMask) {
+        const now = performance.now();
+        if (needMask && now - b.lastSegAt >= SEG_MIN_MS) {
+          b.lastSegAt = now;
+          let res = null;
           try {
-            res = seg.segmentForVideo(video, performance.now());
+            res = b.seg.segmentForVideo(video, now);
             const masks = res?.confidenceMasks ?? [];
-            mask = masks[masks.length - 1] ?? null;   // person confidence
+            const mask = masks[masks.length - 1] ?? null;   // person confidence
+            if (mask) { updateMask(mask); b.segN++; }
           } catch {}
+          try { for (const m of res?.confidenceMasks ?? []) m.close?.(); } catch {}
         }
         cx.save();
-        if (fxNow.bg?.mode === "image" && b.img) {
-          // cover-fit the background picture under the person
-          const sc = Math.max(w / b.img.width, h / b.img.height), dw = b.img.width * sc, dh = b.img.height * sc;
-          cx.drawImage(b.img, (w - dw) / 2, (h - dh) / 2, dw, dh);
-        } else if (fxNow.bg?.mode === "blur" || fxNow.bg?.mode === "image") {
-          cx.filter = "blur(14px)";
-          cx.drawImage(video, 0, 0, w, h);
-        } else {
-          cx.filter = baseFilter || "none";
-          cx.drawImage(video, 0, 0, w, h);
-        }
+        const vidReady = b.vid && b.vid.readyState >= 2 && b.vid.videoWidth;
+        const imgReady = b.img && b.img.complete && b.img.naturalWidth;
+        if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, w, h);
+        else if ((mode === "image" || mode === "gif") && imgReady) drawCover(cx, b.img, b.img.naturalWidth, b.img.naturalHeight, w, h);
+        else if (mode !== "none") { cx.filter = "blur(14px)"; cx.drawImage(video, 0, 0, w, h); }   // blur, or a background still loading
+        else { cx.filter = baseFilter || "none"; cx.drawImage(video, 0, 0, w, h); }
         cx.restore();
-        if (mask) {
+        if (needMask && b.haveMask) {
           try {
-            const mw = mask.width, mh = mask.height;
-            if (maskCv.width !== mw) { maskCv.width = mw; maskCv.height = mh; }
-            const conf = mask.getAsFloat32Array();
-            // 0.8.6: keep only the MAIN subject -- the model segments every
-            // human, so people behind you stayed sharp. Connected components
-            // on the mask; the biggest blob wins (ties -> nearest the center).
-            const keep = mainSubjectMask(conf, mw, mh);
-            const img = mx.createImageData(mw, mh);
-            for (let i = 0; i < conf.length; i++) img.data[i * 4 + 3] = keep[i] ? conf[i] * 255 : 0;
-            mx.putImageData(img, 0, 0);
             px.clearRect(0, 0, w, h);
             px.drawImage(video, 0, 0, w, h);
             px.globalCompositeOperation = "destination-in";
+            px.filter = "blur(1.5px)";   // feathered matte edge
             px.drawImage(maskCv, 0, 0, w, h);
+            px.filter = "none";
             px.globalCompositeOperation = "source-over";
             cx.save();
             cx.filter = baseFilter || "none";   // brightness / soft focus ride on the person layer
@@ -11316,12 +12162,21 @@
             cx.restore();
           } catch {}
         }
-        try { for (const m of res?.confidenceMasks ?? []) m.close?.(); } catch {}
+        b.drawN++;
+        if (now - b.fpsAt >= 1000) {
+          const dt = (now - b.fpsAt) / 1000;
+          b.segFps = Math.round(b.segN / dt); b.drawFps = Math.round(b.drawN / dt);
+          b.segN = 0; b.drawN = 0; b.fpsAt = now;
+        }
       }
-      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(step);
-      else requestAnimationFrame(step);
+      b.lastStep = performance.now();   // (`now` above is block-scoped to the drawing branch)
+      if (!fromTimer) { if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => step(false)); else requestAnimationFrame(() => step(false)); }
     };
-    step();
+    step(false);
+    // 0.15.0: rVFC/rAF stop when the app window is minimised or occluded (the
+    // pane is hidden), which froze the effected camera for everyone; a 15 Hz
+    // timer keeps the composite moving whenever the frame clocks fall silent.
+    b.tickT = setInterval(() => { if (b.alive && performance.now() - (b.lastStep || 0) > 120) { try { step(true); } catch {} } }, 66);
     try { slot.publish.capture.in.source.set(processed); } catch {}
     // Device switch while blurred: the camera source writes a fresh raw
     // track into capture.in.source -- re-aim the loop at it (our own set
@@ -11342,6 +12197,11 @@
       });
     }
   }
+  // 0.15.0: per-loop telemetry for the console.
+  window.__fxDebug = () => [...slots.values()].filter((s) => s.blur).map((s) => ({
+    id: s.entry.id, mode: s.blur.fx?.bg?.mode || "none", quality: s.blur.quality, running: !!s.blur.alive,
+    segFps: s.blur.segFps, drawFps: s.blur.drawFps, lastStepAgoMs: s.blur.lastStep ? Math.round(performance.now() - s.blur.lastStep) : null, tick: !!s.blur.tickT, vw: s.blur.video?.videoWidth, readyState: s.blur.video?.readyState, paused: s.blur.video?.paused,
+    delegate: segInfo[s.blur.quality]?.delegate ?? null, model: segInfo[s.blur.quality]?.model ?? null }));
 
   // ---- 0.13.1: background-noise removal (RNNoise) --------------------------------
   // mic -> RnnoiseWorkletNode (vendored @sapphi-red/web-noise-suppressor, assets/noise/)
@@ -11378,7 +12238,7 @@
     for (const s2 of slots.values()) { try { stopDenoise(s2); } catch {} }
     const msg = "Background noise removal unavailable \u2014 " + denoiseBroken + ". Using the browser's suppression.";
     log(msg);
-    window.__toast?.(msg, 7000);
+    window.__toast?.(msg, 7000, { level: "warn" });
     if (micMode === "rnnoise") setMicMode("browser");
   }
   // the Audio card's test tap in rnnoise mode: stream -> RNNoise -> (caller's analyser), in the shared context
@@ -11721,7 +12581,7 @@
       v.addEventListener("loadeddata", () => {
         m.ttff = performance.now() - m.ttff0;
         log("Media stream first frame after " + Math.round(m.ttff) + " ms (" + (m.plan.v === "copy" ? "video copied" : "video re-encoded") + ", audio " + m.plan.a + ")");
-        window.__toast?.("Streaming \u2014 converting " + mediaWhat(m) + " as it plays", 5000);
+        window.__toast?.("Streaming \u2014 converting " + mediaWhat(m) + " as it plays", 5000, { level: "info" });
       }, { once: true });
       v.addEventListener("ended", () => { if (m.alive && m.stream && m.loop && !m.failed) reopenMediaStream(slot, 0); });
       attachMediaStream(slot, 0);
@@ -11759,7 +12619,8 @@
       try { slot.publish.capture.in.source.set(vtrack); } catch {}
       // a still frame before play so viewers get a picture immediately
       try { if (v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); vtrack.requestFrame?.(); } } catch {}
-      v.play().catch((e) => log("File play: " + (e?.message || e)));
+      if (m.stream) { m.rebuffering = true; m.wantPlay = true; paintOwnerMediaBar(slot); }   // 0.15.0: mediaBufferTick starts it from a cushion
+      else v.play().catch((e) => log("File play: " + (e?.message || e)));
       draw();
       announceMedia(slot, true);
     };
@@ -11769,7 +12630,7 @@
     v.addEventListener("error", () => {
       if (m.stream) { escalateMedia(slot, "decode error " + (v.error?.message || v.error?.code || "?")); return; }   // 0.14.0: ask for H.264 instead of a re-add
       log("Media file failed to decode: " + (v.error?.message || v.error?.code || "?"));
-      window.__toast?.("The browser cannot decode this file's video. Re-add it through Share \u2192 Media file so KASTR converts it.", 8000);
+      window.__toast?.("The browser cannot decode this file's video. Re-add it through Share \u2192 Media file so KASTR converts it.", 8000, { level: "error" });
     });
     buildOwnerMediaBar(slot);
   }
@@ -11823,6 +12684,7 @@
     v.src = m.url;
     if (m.actx) v.play().catch(() => {});   // a re-attach (loop / decode error): wire() already ran once
     if (!m.stallT) m.stallT = setInterval(() => mediaStallTick(slot), 1000);
+    if (!m.bufT) m.bufT = setInterval(() => mediaBufferTick(slot), 250);   // 0.15.0
   }
   async function startMediaFetch(slot, t) {
     const m = slot.media; if (!m || !m.alive) return;
@@ -11835,14 +12697,14 @@
       await mediaSleep(200);
       if (!m.alive || m.gen !== gen) return;
     }
-    if (up && up.failed && !up.done) { log("Media stream: the upload failed, nothing to play"); window.__toast?.("The upload failed \u2014 remove the file and add it again.", 8000); return; }
+    if (up && up.failed && !up.done) { log("Media stream: the upload failed, nothing to play"); window.__toast?.("The upload failed \u2014 remove the file and add it again.", 8000, { level: "error" }); return; }
     m.ctl = new AbortController();
     m.lastByteAt = performance.now();
     const url = entry.mediaUrl + "/stream?t=" + t.toFixed(3) + "&v=" + m.plan.v + "&a=" + m.plan.a;
     let res;
     try { res = await fetch(url, { signal: m.ctl.signal, cache: "no-store" }); }
     catch (e) {
-      if (m.alive && m.gen === gen && !m.ctl.signal.aborted) { log("Media stream request failed: " + (e?.message || e)); window.__toast?.("KASTR's local server did not answer for this file.", 6000); }
+      if (m.alive && m.gen === gen && !m.ctl.signal.aborted) { log("Media stream request failed: " + (e?.message || e)); window.__toast?.("KASTR's local server did not answer for this file.", 6000, { level: "error" }); }
       return;
     }
     if (!m.alive || m.gen !== gen) return;
@@ -11850,7 +12712,7 @@
     if (res.status === 409) {   // beyond the uploaded part: park here, the watchdog retries as the upload advances
       const j = await body();
       m.wait409 = t;
-      window.__toast?.("That part hasn't uploaded yet (" + Math.round((Number(j?.uploaded) || 0) * 100) + "%)", 4000);
+      window.__toast?.("That part hasn't uploaded yet (" + Math.round((Number(j?.uploaded) || 0) * 100) + "%)", 4000, { level: "warn" });
       try { v.pause(); } catch {}
       return;
     }
@@ -11858,7 +12720,7 @@
     if (!res.ok || !res.body) {
       const j = await body();
       log("Media stream request " + res.status + (j?.error ? ": " + j.error : ""));
-      window.__toast?.("KASTR cannot stream this file (HTTP " + res.status + ")", 6000);
+      window.__toast?.("KASTR cannot stream this file (HTTP " + res.status + ")", 6000, { level: "error" });
       return;
     }
     const mime = res.headers.get("X-KASTR-Mime") || "";
@@ -11940,6 +12802,7 @@
     t = Math.max(0, Number(t) || 0);
     m.reopens = (m.reopens || 0) + 1;
     m.gen = (m.gen || 0) + 1;
+    if (!m.userPaused) { m.rebuffering = true; m.wantPlay = true; try { v.pause(); } catch {} }   // 0.15.0: refill before playing on
     try { m.ctl?.abort(); } catch {}
     m.queue = []; m.queued = 0; m.eof = false; m.wait409 = null; m.lastByteAt = performance.now();
     clearTimeout(m.catchupT); m.catchupT = null;
@@ -11981,7 +12844,7 @@
       m.failed = true;
       try { m.ctl?.abort(); } catch {}
       log("Media stream failed: " + why);
-      window.__toast?.("KASTR cannot play this file: " + why, 8000);
+      window.__toast?.("KASTR cannot play this file: " + why, 8000, { level: "error" });
     }
   }
   function mediaSeek(slot, t) {
@@ -11989,6 +12852,30 @@
     const v = m.video; let b = null; try { b = v.buffered; } catch {}
     if (b) for (let i = 0; i < b.length; i++) if (t >= b.start(i) - 0.05 && t <= b.end(i) + 0.05) { try { v.currentTime = t; } catch {} return; }
     reopenMediaStream(slot, t);
+  }
+  // 0.15.0: every 250 ms while a stream is attached -- the cushion keeper. Playing
+  // from the transcoder's live edge stutters (a laptop's x264 barely outruns real
+  // time); so play only from MEDIA_START_AHEAD_S of buffer, and when the cushion
+  // drains below MEDIA_LOW_AHEAD_S pause quietly ("Buffering...") until it refills.
+  function mediaBufferTick(slot) {
+    const m = slot.media, v = m?.video;
+    if (!m || !m.alive || !m.stream || m.failed) return;
+    const ahead = bufferedAheadS(m);
+    m.ahead = ahead;
+    if (m.rebuffering) {
+      const need = m.primed ? MEDIA_RESUME_AHEAD_S : MEDIA_START_AHEAD_S;
+      if (ahead >= need || m.eof) {
+        m.rebuffering = false; m.primed = true;
+        if (m.wantPlay && !m.userPaused) v.play().catch(() => {});
+        paintOwnerMediaBar(slot); announceMedia(slot, true);
+      }
+      return;
+    }
+    if (!v.paused && !v.ended && !m.eof && ahead < MEDIA_LOW_AHEAD_S && bufferedEndS(m) < (m.dur || Infinity) - 0.5) {
+      m.rebuffering = true; m.rebuffers = (m.rebuffers || 0) + 1;
+      try { v.pause(); } catch {}
+      paintOwnerMediaBar(slot);
+    }
   }
   // once a second while a stream is attached
   function mediaStallTick(slot) {
@@ -12000,11 +12887,11 @@
       if (have > t + 2) { m.wait409 = null; reopenMediaStream(slot, t); v.play().catch(() => {}); }
       return;
     }
-    if (v.paused || m.eof || m.queue.length) return;
+    if ((v.paused && !m.rebuffering) || m.eof || m.queue.length) return;   // 0.15.0: a rebuffer pause still counts as "playing" here
     if (performance.now() - m.lastByteAt > MEDIA_STALL_MS && bufferedAheadS(m) < 1) {
       m.lastByteAt = performance.now();
       if (!m.stallReopened) { m.stallReopened = true; log("Media stream stalled \u2014 reopening at " + v.currentTime.toFixed(1) + " s"); reopenMediaStream(slot, v.currentTime); }
-      else { m.failed = true; try { m.ctl?.abort(); } catch {} log("Media stream stalled again \u2014 giving up"); window.__toast?.("KASTR cannot keep this file playing.", 8000); }
+      else { m.failed = true; try { m.ctl?.abort(); } catch {} log("Media stream stalled again \u2014 giving up"); window.__toast?.("KASTR cannot keep this file playing.", 8000, { level: "error" }); }
     }
   }
   function stopFileMedia(slot) {
@@ -12015,6 +12902,7 @@
     if (m.stream) detachMediaStream(m);   // 0.14.0: abort the reader, close the MediaSource
     clearTimeout(m.annT);
     clearInterval(m.timer);
+    clearInterval(m.bufT);   // 0.15.0
     try { mediaAnn.clear(String(slot.entry.id)); } catch {}
     try { m.video.pause(); m.video.removeAttribute("src"); m.video.load(); m.video.remove(); } catch {}
     try { if (m.url && m.url.startsWith("blob:")) URL.revokeObjectURL(m.url); } catch {}   // 0.8.13: server copies are freed by removeSource
@@ -12031,7 +12919,7 @@
       if (!m.alive) return;
       const v = m.video;
       m.lastAnn = Date.now();
-      const payload = { path: chanPath(ensureHang(slot.entry.name)), playing: !v.paused && !v.ended, t: Math.round(v.currentTime * 10) / 10,
+      const payload = { path: chanPath(ensureHang(slot.entry.name)), playing: (!v.paused || !!m.rebuffering) && !v.ended, t: Math.round(v.currentTime * 10) / 10,
         dur: Math.round(mediaDur(slot) * 10) / 10, loop: mediaLoopOn(slot), at: Date.now() };   // 0.14.0: a stream's duration/loop live on slot.media
       try { mediaAnn.set(String(slot.entry.id), JSON.stringify(payload)); } catch {}
       paintOwnerMediaBar(slot);
@@ -12043,8 +12931,8 @@
       if (!slot.media || chanPath(ensureHang(slot.entry.name)) !== meta.path) continue;
       const v = slot.media.video;
       try {
-        if (meta.op === "play") v.play().catch(() => {});
-        else if (meta.op === "pause") v.pause();
+        if (meta.op === "play") { if (slot.media.stream) { slot.media.userPaused = false; slot.media.wantPlay = true; if (bufferedAheadS(slot.media) < MEDIA_LOW_AHEAD_S && !slot.media.eof) { slot.media.rebuffering = true; paintOwnerMediaBar(slot); } else { slot.media.rebuffering = false; v.play().catch(() => {}); } } else v.play().catch(() => {}); }   // 0.15.0
+        else if (meta.op === "pause") { if (slot.media.stream) { slot.media.userPaused = true; slot.media.wantPlay = false; slot.media.rebuffering = false; } v.pause(); }
         else if (meta.op === "seek") { const t = Math.max(0, Math.min(mediaDur(slot) || 1e9, Number(meta.value) || 0)); if (slot.media.stream) mediaSeek(slot, t); else v.currentTime = t; }   // 0.14.0: a stream seeks by reopening when outside its buffer
         else if (meta.op === "loop") { if (slot.media.stream) slot.media.loop = !!meta.value; else v.loop = !!meta.value; slot.entry.loop = mediaLoopOn(slot); announceMedia(slot, true); }
         else if (meta.op === "volume") { v.volume = Math.max(0, Math.min(1, Number(meta.value))); slot.entry.gain = v.volume; paintOwnerMediaBar(slot); }
@@ -12081,16 +12969,34 @@
     slot.pane.appendChild(bar);
     paintOwnerMediaBar(slot);
   }
+  // 0.15.0 (D2): an in-flight upload shows as " \u00b7 \u2191 N%" after the time on the
+  // media bar; before the slot has a bar the Share row's label carries " \u2014 uploading N%".
+  const uploadSuffix = (entry) => {
+    const u = entry?.upload;
+    return u && !u.done && !u.failed && u.total ? " \u00b7 \u2191 " + Math.round(u.loaded / u.total * 100) + "%" : "";
+  };
+  function mediaUploadPaint(upload) {
+    const e = added.find((a) => a.upload === upload);
+    if (!e) return;
+    const s = slots.get(e.id);
+    const onBar = !!(s?.mediabar && s.media?.video);
+    if (onBar) paintOwnerMediaBar(s);
+    const lbl = camrowsEl?.querySelector?.('.camrow[data-id="' + e.id + '"] .lbl');
+    if (lbl) {
+      const pct = Math.round(upload.loaded / (upload.total || 1) * 100);
+      lbl.textContent = e.label + (!onBar && !upload.done && !upload.failed ? " \u2014 uploading " + pct + "%" : "");
+    }
+  }
   function paintOwnerMediaBar(slot) {
     const bar = slot.mediabar, v = slot.media?.video;
     if (!bar || !v) return;
     const q = (c) => bar.querySelector(c);
-    q(".mplay").textContent = (v.paused || v.ended) ? "\u25b6" : "\u23f8";
+    q(".mplay").textContent = ((v.paused && !slot.media?.rebuffering) || v.ended) ? "\u25b6" : "\u23f8";   // 0.15.0: a rebuffer is not a pause
     q(".mloop").classList.toggle("on", mediaLoopOn(slot));
     const dur = mediaDur(slot);
     if (!bar.dataset.scrub) q(".mseek").value = dur ? String(Math.round(v.currentTime / dur * 1000)) : "0";
     const f2 = (sec) => { sec = Math.max(0, Math.floor(sec || 0)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); };
-    q(".mtime").textContent = f2(v.currentTime) + " / " + f2(dur);
+    q(".mtime").textContent = (slot.media?.rebuffering ? "Buffering\u2026 " : "") + f2(v.currentTime) + " / " + f2(dur) + uploadSuffix(slot.entry);   // 0.15.0
     q(".mmute").textContent = slot.entry.micMuted ? "\u{1F507}" : "\u{1F50A}";
   }
   setInterval(() => { for (const s2 of slots.values()) if (s2.media) paintOwnerMediaBar(s2); }, 500);
@@ -12226,7 +13132,87 @@
   // keep their ffmpeg feed, <video>, retry ladder and faults; only their
   // moq graphs close (capture track kept, so leaving the grid is just
   // rebuildRtspMoq on the survivor).
-  let rtspGrid = null;
+  // 0.15.0: SEVERAL grids. Every RTSP entry carries a gridId (default "1" = the original
+  // "RTSP Grid"); each id with two or more ready feeds gets its own composite: canvas, pane,
+  // moq graph, broadcast (grid "1" keeps the legacy `rtsp-grid` path and `kastr.grid.*` keys;
+  // grid N publishes `rtsp-grid-N` and remembers `kastr.grid.N.layout|order`). The registry
+  // `kastr.grids` = [{id, name}] (grid "1" implied), `kastr.grid.of` = {url: gridId}.
+  const rtspGrids = new Map();   // id -> g
+  function gridById(id) { return rtspGrids.get(String(id ?? "1")) || null; }
+  function gridIdOf(a) { return String(a?.gridId || "1"); }
+  function gridOfSlot(slot) { return slot?.entry ? gridById(gridIdOf(slot.entry)) : null; }
+  function gridIdCmp(a, b) { return String(a).localeCompare(String(b), undefined, { numeric: true }); }
+  function gridsSorted() { return [...rtspGrids.values()].sort((a, b) => gridIdCmp(a.id, b.id)); }
+  const GRIDS_KEY = "kastr.grids", GRID_OF_KEY = "kastr.grid.of";
+  function gridRegistry() {   // [{id, name}] sorted, grid "1" always present
+    let v = [];
+    try { v = JSON.parse(localStorage.getItem(GRIDS_KEY) || "[]"); } catch {}
+    if (!Array.isArray(v)) v = [];
+    v = v.filter((x) => x && x.id != null).map((x) => ({ id: String(x.id), name: String(x.name || "").trim() }));
+    if (!v.some((x) => x.id === "1")) v.unshift({ id: "1", name: "RTSP Grid" });
+    for (const x of v) if (!x.name) x.name = x.id === "1" ? "RTSP Grid" : "Grid " + x.id;
+    return v.sort((a, b) => gridIdCmp(a.id, b.id));
+  }
+  function gridOfSavedMap() { try { const m = JSON.parse(localStorage.getItem(GRID_OF_KEY) || "{}"); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; } catch { return {}; } }
+  function gridOfSaved(url) { const v = url ? gridOfSavedMap()[url] : null; return v ? String(v) : ""; }
+  function gridOfSet(url, id) {   // grid "1" is the default, so it is stored as absence
+    if (!url) return;
+    const m = gridOfSavedMap();
+    if (String(id || "1") === "1") delete m[url]; else m[url] = String(id);
+    try { localStorage.setItem(GRID_OF_KEY, JSON.stringify(m)); } catch {}
+  }
+  function gridRegistrySave(list, keep) {   // prunes grids (other than "1") that no url and no live feed references
+    const refs = new Set([...Object.values(gridOfSavedMap()).map(String), ...added.filter((a) => a.kind === RTSP).map(gridIdOf)]);
+    if (keep != null) refs.add(String(keep));
+    const out = list.filter((x) => x.id === "1" || refs.has(x.id));
+    try { localStorage.setItem(GRIDS_KEY, JSON.stringify(out)); } catch {}
+    return out;
+  }
+  function gridCreate(name) {   // -> the new id (lowest free integer from 2)
+    const list = gridRegistry();
+    let n = 2;
+    while (list.some((x) => x.id === String(n))) n++;
+    const id = String(n);
+    list.push({ id, name: String(name || "").trim() || "Grid " + id });
+    gridRegistrySave(list, id);
+    return id;
+  }
+  function gridRename(id, name) {
+    const list = gridRegistry();
+    const x = list.find((r) => r.id === String(id));
+    if (!x) return;
+    x.name = String(name || "").trim() || x.name;
+    gridRegistrySave(list, id);
+    const g = gridById(id); if (g) g.name = x.name;
+  }
+  function gridNameOf(id) { return gridRegistry().find((r) => r.id === String(id ?? "1"))?.name || (String(id ?? "1") === "1" ? "RTSP Grid" : "Grid " + id); }
+  function gridKey(id, leaf) { return "kastr.grid." + String(id) + "." + leaf; }
+  function gridPref(id, leaf, dflt) {   // per-grid pref; grid "1" falls back to the legacy kastr.grid.<leaf>
+    try {
+      const v = localStorage.getItem(gridKey(id, leaf));
+      if (v != null) return v;
+      if (String(id) === "1") { const l = localStorage.getItem("kastr.grid." + leaf); if (l != null) return l; }
+    } catch {}
+    return dflt;
+  }
+  function gridPrefSet(id, leaf, v) {   // grid "1" also writes the legacy key (a downgrade keeps its layout and order)
+    try { localStorage.setItem(gridKey(id, leaf), v); if (String(id) === "1") localStorage.setItem("kastr.grid." + leaf, v); } catch {}
+  }
+  function gridBroadcastName(g) { return ensureHang(withOperator(String(g.id) === "1" ? "rtsp-grid" : "rtsp-grid-" + g.id)); }
+  function gridMove(a, id) {   // a feed changes grid (share-row picker)
+    const gid = String(id || "1");
+    if (!a || a.kind !== RTSP || gridIdOf(a) === gid) return;
+    a.gridId = gid;
+    gridOfSet(a.url, gid);
+    if (a.url && rtspPersistHas(a.url)) rtspPersistSet(a.url, a.label, true, gid);
+    gridRegistrySave(gridRegistry());
+    log("Feed " + a.label + " moved to grid " + gridNameOf(gid) + ".");
+    updateRtspGrid(); renderSources();
+  }
+  // 0.15.0: display names drawn on the cells (off by default -- they cover part of the picture)
+  let gridNames = false;
+  try { gridNames = localStorage.getItem("kastr.grid.names") === "on"; } catch {}
+  function setGridNames(on) { gridNames = !!on; try { localStorage.setItem("kastr.grid.names", gridNames ? "on" : "off"); } catch {} }
   // 0.8.12: how the feeds reach the room, and whether a dropped feed keeps its cell.
   //   both     -- the composite AND every feed at full quality on its own path (default)
   //   grid     -- the composite only (0.8.3 behaviour, one stream)
@@ -12261,7 +13247,7 @@
       const present = (g.order || []).map((id) => byId.get(id)?.url).filter(Boolean);
       if (!present.length) return;
       let saved = [];
-      try { saved = JSON.parse(localStorage.getItem("kastr.grid.order") || "[]"); } catch {}
+      try { saved = JSON.parse(gridPref(g.id, "order", "[]") || "[]"); } catch {}   // 0.15.0: per grid
       if (!Array.isArray(saved)) saved = [];
       const isPresent = new Set(present);
       const merged = [];
@@ -12270,7 +13256,7 @@
       while (next < present.length) merged.push(present[next++]);
       const seen = new Set();
       const out = merged.filter((u) => u && !seen.has(u) && seen.add(u));
-      localStorage.setItem("kastr.grid.order", JSON.stringify(out));
+      gridPrefSet(g.id, "order", JSON.stringify(out));   // 0.15.0: per grid
     } catch {}
   }
   // 0.9.10: a seat is a promise about the roster, not about the moment -- it
@@ -12284,9 +13270,11 @@
     if (on) v.push(url);
     try { localStorage.setItem(SEATS_KEY, JSON.stringify(v)); } catch {}
   }
-  window.__gridSeats = { saved: seatsSaved, order: () => { try { return JSON.parse(localStorage.getItem("kastr.grid.order") || "[]"); } catch { return []; } },
+  window.__gridSeats = { saved: seatsSaved, order: (id = "1") => { try { return JSON.parse(gridPref(id, "order", "[]") || "[]"); } catch { return []; } },   // 0.15.0: per grid
+                         of: () => Object.fromEntries(added.filter((a) => a.kind === RTSP).map((a) => [a.url, gridIdOf(a)])),   // 0.15.0: url -> grid id
                          evicted: () => added.filter((a) => a.evicted).map((a) => a.url) };   // rig (0.14.0: evicted urls)
   window.__gridFeeds = { get: () => gridFeeds, set: setGridFeeds, lock: () => gridLock, setLock: setGridLock,
+    names: () => gridNames, setNames: setGridNames, grids: gridRegistry,   // 0.15.0
     count: () => added.filter((a) => a.kind === RTSP && a.enabled).length };   // 0.9.2: feeds mode (View menu shows it when feeds exist)
   // 0.8.7: layout presets + drag-and-drop order for the composite.
   const GRID_LAYOUTS = [["auto", "Auto grid"], ["2x2", "2 \u00d7 2"], ["focus", "One big + strip"], ["row", "Side by side"], ["column", "Stacked"]];
@@ -12369,9 +13357,9 @@
     const missing = g.members.filter((m) => !order.includes(m.entry.id));
     if (missing.length) {
       // 0.8.12: a remembered feed returns to its remembered place among its
-      // remembered neighbours (kastr.grid.order, by url); unknown feeds go last.
+      // remembered neighbours (kastr.grid.<id>.order, by url); unknown feeds go last.
       let saved = [];
-      try { saved = JSON.parse(localStorage.getItem("kastr.grid.order") || "[]"); } catch {}
+      try { saved = JSON.parse(gridPref(g.id, "order", "[]") || "[]"); } catch {}   // 0.15.0: per grid
       if (!Array.isArray(saved)) saved = [];
       const rank = (m) => { const i = m?.entry?.url ? saved.indexOf(m.entry.url) : -1; return i < 0 ? 1e9 : i; };
       missing.sort((a, b) => rank(a) - rank(b));
@@ -12385,9 +13373,23 @@
     g.order = order;
     return order.map((id) => byId.get(id));
   }
-  function drawRtspGrid() {
-    const g = rtspGrid;
-    if (!g) return;
+  function drawCellName(cx, label, px, py) {   // 0.15.0: translucent rounded pill, 22 px tall, 14 px 600 text
+    cx.font = "600 14px sans-serif";
+    cx.textAlign = "left"; cx.textBaseline = "middle";
+    const w = Math.ceil(cx.measureText(label).width) + 16, h = 22, r = 6;
+    cx.fillStyle = "rgba(10,14,18,.62)";
+    cx.beginPath();
+    cx.moveTo(px + r, py); cx.lineTo(px + w - r, py); cx.quadraticCurveTo(px + w, py, px + w, py + r);
+    cx.lineTo(px + w, py + h - r); cx.quadraticCurveTo(px + w, py + h, px + w - r, py + h);
+    cx.lineTo(px + r, py + h); cx.quadraticCurveTo(px, py + h, px, py + h - r);
+    cx.lineTo(px, py + r); cx.quadraticCurveTo(px, py, px + r, py);
+    cx.closePath(); cx.fill();
+    cx.fillStyle = "#fff";
+    cx.fillText(label, px + 8, py + h / 2 + 1);
+    cx.textBaseline = "alphabetic";
+  }
+  function drawRtspGrid(g) {   // 0.15.0: per grid (one 15 fps timer each)
+    if (!g || !rtspGrids.has(g.id)) return;
     const ms = gridOrdered(g);
     const n = Math.max(1, ms.length);
     const size = gridCanvasSize(n, g.layout || "auto");
@@ -12430,8 +13432,11 @@
         g.cx.textAlign = "left";
       }
       if (g.dragFrom === i) { g.cx.strokeStyle = "#009fda"; g.cx.lineWidth = 4; g.cx.strokeRect(x + 2, y + 2, cw - 4, ch - 4); }
-      // 0.9.7: no name strip -- it covered the cameras' own on-screen info bar
-      // (the names travel in the .grid announce and in the feed menus)
+      // 0.9.7: no name strip by default -- it covered the cameras' own on-screen info bar
+      // (the names travel in the .grid announce and in the feed menus). 0.15.0: an opt-in
+      // pill (View > RTSP feeds > Show names on grid cells) at the cell's bottom-left, inside
+      // the cell and clear of the OSD lines cameras draw along the top.
+      if (gridNames && ch >= 90 && s.entry?.label) drawCellName(g.cx, String(s.entry.label).slice(0, 24), x + 8, y + ch - 30);
     });
   }
   function gridCellAt(g, ev) {
@@ -12445,6 +13450,39 @@
     const n = Math.max(1, g.members.length);
     const rects = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height);
     return rects.findIndex((r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
+  }
+  function gridCellBox(g, idx) {   // 0.15.0: a cell's rect in PANE space (the same object-fit mapping as gridCellAt)
+    const b = g.canvas.getBoundingClientRect(), pb = g.pane.getBoundingClientRect();
+    if (!b.width || !b.height) return null;
+    const fit = g.pane.classList.contains("mainstage") ? Math.min : Math.max;
+    const sc = fit(b.width / g.canvas.width, b.height / g.canvas.height);
+    const dw = g.canvas.width * sc, dh = g.canvas.height * sc;
+    const n = Math.max(1, g.members.length);
+    const r = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height)[idx];
+    if (!r) return null;
+    const ox = b.left - pb.left + (b.width - dw) / 2, oy = b.top - pb.top + (b.height - dh) / 2;
+    return { x: ox + r.x * sc, y: oy + r.y * sc, w: r.w * sc, h: r.h * sc };
+  }
+  // 0.15.0: the owner takes one feed out of a grid from its cell. The share goes away like
+  // the row's x would; the toast's Undo re-adds it with the same display name, grid, keep and audio.
+  function gridCellClose(g, m) {
+    const a = m?.entry;
+    if (!a) return;
+    const snap = { url: a.url, label: a.label, gridId: gridIdOf(a), keep: !!a.url && rtspPersistHas(a.url), audio: a.audio !== false };
+    const gname = g.name || gridNameOf(g.id);
+    removeSource(a.id);
+    if (!snap.url) return;
+    window.__toast?.("Removed " + snap.label + " from " + gname, 6000, { level: "event", action: { label: "Undo", fn: () => {
+      if (snap.url !== TEST_URL && added.some((x) => x.kind === RTSP && x.url === snap.url)) return;   // already back
+      audioSet(snap.url, snap.audio);
+      addRtsp(snap.url, { label: snap.label, gridId: snap.gridId }).then((e) => {
+        if (!e) return;
+        if (snap.keep) {
+          rtspPersistSet(snap.url, snap.label, true, snap.gridId);
+          if (e.feedId != null) nativePost("/api/rtsp/keep", { id: e.feedId, keep: true });
+        }
+      });
+    } } });
   }
   function armGridControls(g) {
     // layout menu
@@ -12467,7 +13505,7 @@
         b.addEventListener("click", (ev) => {
           ev.stopPropagation();
           g.layout = id;
-          try { localStorage.setItem("kastr.grid.layout", id); } catch {}
+          gridPrefSet(g.id, "layout", id);   // 0.15.0: per grid
           announceGrid();   // 0.8.8
           menu?.remove(); menu = null;
         });
@@ -12491,6 +13529,40 @@
       lk.textContent = (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)";
       lk.addEventListener("click", (ev) => { ev.stopPropagation(); setGridLock(!gridLock); menu?.remove(); menu = null; });
       menu.appendChild(lk);
+      // 0.15.0: names on the cells, rename, spotlight
+      const nb = document.createElement("button");
+      nb.type = "button";
+      nb.textContent = (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells";
+      nb.addEventListener("click", (ev) => { ev.stopPropagation(); setGridNames(!gridNames); menu?.remove(); menu = null; });
+      menu.appendChild(nb);
+      sep();
+      const rn = document.createElement("button");
+      rn.type = "button";
+      rn.textContent = "Rename grid\u2026";
+      rn.addEventListener("click", (ev) => {
+        ev.stopPropagation(); menu?.remove(); menu = null;
+        const nm = window.prompt("Name for this grid", g.name || gridNameOf(g.id));
+        if (nm == null || !nm.trim()) return;
+        gridRename(g.id, nm.trim());
+        g.name = gridNameOf(g.id);
+        renderSources(); refreshUi(); announceGrid(true); announce();
+      });
+      menu.appendChild(rn);
+      sep(); cap("Spotlight");
+      const sm = document.createElement("button");
+      sm.type = "button";
+      sm.textContent = "Spotlight for me";
+      sm.addEventListener("click", (ev) => { ev.stopPropagation(); menu?.remove(); menu = null; if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); });
+      menu.appendChild(sm);
+      const sa = document.createElement("button");
+      sa.type = "button";
+      sa.textContent = "Spotlight for everyone";
+      sa.addEventListener("click", (ev) => {
+        ev.stopPropagation(); menu?.remove(); menu = null;
+        if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane);
+        window.__spot?.set?.(chanPath(ensureHang(g.entry.name)));
+      });
+      menu.appendChild(sa);
       const hint = document.createElement("div");
       hint.style.cssText = "font-size:10px;color:var(--text-mute);padding:4px 8px";
       hint.textContent = "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid";   // 0.9.5
@@ -12529,6 +13601,35 @@
       announceGrid();   // 0.8.8
     });
     g.pane.addEventListener("pointercancel", () => { g.dragFrom = -1; });
+    // 0.15.0: per-cell close (owner only). A small x sits in the top-left of the hovered cell
+    // while the grid holds the stage (not while dragging or zoomed); the pane's click and
+    // pointerdown handlers already ignore buttons, so it never spotlights or swaps.
+    const cx = document.createElement("button");
+    cx.type = "button";
+    cx.className = "gcellx";
+    cx.textContent = "\u2715";
+    cx.title = "Remove this feed from the grid (Undo in the notice)";
+    cx.tabIndex = -1;
+    g.pane.appendChild(cx);
+    g.hoverCell = -1;
+    const hideX = () => { g.hoverCell = -1; cx.classList.remove("show"); };
+    g.pane.addEventListener("pointermove", (e) => {
+      if (!g.pane.classList.contains("mainstage") || g.dragFrom >= 0 || g.members.length < 2 || window.__viewZoomed?.(g.canvas)) { hideX(); return; }
+      const idx = e.target === cx ? g.hoverCell : gridCellAt(g, e);
+      const box = idx >= 0 ? gridCellBox(g, idx) : null;
+      if (!box) { hideX(); return; }
+      g.hoverCell = idx;
+      cx.style.left = Math.round(box.x + 6) + "px";
+      cx.style.top = Math.round(box.y + 6) + "px";
+      cx.classList.add("show");
+    });
+    g.pane.addEventListener("pointerleave", hideX);
+    cx.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const m = gridOrdered(g)[g.hoverCell];
+      hideX();
+      if (m) gridCellClose(g, m);
+    });
   }
   // 0.9.5: open one member of my grid on the stage -- the real feed (its
   // full-resolution monitor), not a zoomed mosaic. The member stays a grid
@@ -12543,13 +13644,13 @@
     if (!slot.gridBack) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "gridback"; b.textContent = "\u25a6 Grid"; b.title = "Back to the grid";
-      b.addEventListener("click", (e) => { e.stopPropagation(); closeGridMember(rtspGrid || g, true); });
+      b.addEventListener("click", (e) => { e.stopPropagation(); closeGridMember(gridById(g.id) || g, true); });   // 0.15.0: this member's grid
       slot.pane.appendChild(b); slot.gridBack = b;
     }
     if (!slot.gridWatch) {
       slot.gridWatch = new MutationObserver(() => {
         if (slot.pane.classList.contains("gridfeed") && !slot.pane.classList.contains("mainstage")
-            && slot.gridOpenedAt && performance.now() - slot.gridOpenedAt > 300) closeGridMember(rtspGrid || g, false);
+            && slot.gridOpenedAt && performance.now() - slot.gridOpenedAt > 300) closeGridMember(gridById(g.id) || g, false);   // 0.15.0
       });
       slot.gridWatch.observe(slot.pane, { attributes: true, attributeFilter: ["class"] });
     }
@@ -12564,7 +13665,8 @@
     if (backToGrid && g.pane?.isConnected) window.__selfSpot?.(g.pane);
     else window.__relayout?.();
   }
-  function buildRtspGrid() {
+  function buildRtspGrid(id) {   // 0.15.0: one composite per grid id
+    const gid = String(id || "1");
     const cv = document.createElement("canvas");
     cv.width = 1280;
     cv.height = 720;   // signal-first: 720 rows @15; drawRtspGrid reshapes the width per layout (0.9.3)
@@ -12582,16 +13684,17 @@
     pane.appendChild(cv);
     stageEl.appendChild(pane);
     const track = cv.captureStream(15).getVideoTracks()[0];
-    let layout = "auto";
-    try { layout = localStorage.getItem("kastr.grid.layout") || "auto"; } catch {}
+    const layout = gridPref(gid, "layout", "auto") || "auto";   // 0.15.0: per grid (grid "1" reads the legacy key)
     const g = {
-      entry: { name: ensureHang(withOperator("rtsp-grid")) },
+      id: gid, name: gridNameOf(gid),   // 0.15.0
+      entry: { name: "" },
       moq: { track },
       liveSince: null, fault: null, lastHeal: 0,
       canvas: cv, cx: cx2, pane, nameEl: nm, badge, members: [], timer: null,
       layout, order: [], dragFrom: -1, dragMoved: false, dragged: false,   // 0.8.7
     };
-    pane.dataset.grid = "1";   // 0.8.12: the Gallery pill and the zoom controls key on this
+    g.entry.name = gridBroadcastName(g);   // 0.15.0: grid "1" = .../rtsp-grid as ever, grid N = .../rtsp-grid-N
+    pane.dataset.grid = gid;   // 0.8.12: the Gallery pill and the zoom controls key on this (0.15.0: the grid id)
     pane.addEventListener("click", (e) => {
       if (e.target.closest("button")) return;
       if (g.dragged) { g.dragged = false; return; }   // a swap, not a spotlight click
@@ -12613,14 +13716,14 @@
     armGridControls(g);
     window.__viewArm?.(pane, () => cv, () => pane.classList.contains("mainstage"));   // 0.8.12: wheel zoom + pan
     rebuildRtspMoq(g);   // one graph over the canvas track (0.8.2 machinery)
-    g.timer = setInterval(drawRtspGrid, 1000 / 15);
-    rtspGrid = g;
+    g.timer = setInterval(() => drawRtspGrid(g), 1000 / 15);
+    rtspGrids.set(gid, g);   // 0.15.0
+    return g;
   }
-  function teardownRtspGrid() {
-    const g = rtspGrid;
+  function teardownRtspGrid(g) {   // 0.15.0: takes the grid
     if (!g) return;
     closeGridMember(g, false);   // 0.9.5
-    rtspGrid = null;
+    rtspGrids.delete(g.id);
     clearInterval(g.timer);
     try { announceGrid(); } catch {}   // 0.8.8: geometry gone
     for (const k of ["encoderLow", "encoder", "capture", "broadcast", "connection"]) {
@@ -12643,48 +13746,68 @@
     // full quality on its own path (default), or the feeds alone.
     const liveSlots = [...slots.values()].filter((s) => s.rtsp && (s.inGrid || s.native));   // 0.9.1/0.9.3: members are native slots
     const ready = new Map(liveSlots.map((s) => [s.entry.id, s]));
-    const entries = added.filter((a) => a.kind === RTSP && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
+    const allEntries = added.filter((a) => a.kind === RTSP && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
     // 0.14.0: members gridEvictionTick took out after GRID_EVICT_AFTER failed attempts. They keep
     // their seat, their hidden pane and their remembered order; the announce lists them as `out`
     // so viewers keep their tiles hidden. One surviving member keeps the grid alive meanwhile,
     // so a two-camera room does not flip layouts every time one camera drops.
-    const evicted = added.filter((a) => a.kind === RTSP && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
-    const hadGrid = !!rtspGrid;
-    if (gridFeeds !== "separate" && (entries.length >= 2 || (rtspGrid && evicted.length && entries.length >= 1))) {
-      if (!rtspGrid) buildRtspGrid();
-      const wantOwn = gridFeeds === "both";   // members publish their own path too
-      const members = entries.map((a) => ready.get(a.id) || { entry: a, video: null, placeholder: true });
-      for (const s of members) {
-        if (!s.entry.gridSeat) { s.entry.gridSeat = true; seatSet(s.entry.url, true); }   // 0.9.10: remembered
-        if (s.placeholder) continue;
-        if (s.inGrid && s.ownPath === wantOwn) continue;
-        s.inGrid = true;
-        s.ownPath = wantOwn;
-        // 0.8.4: HIDE the member -- the composite IS the window (.ghost only
-        // dimmed it and the pane still claimed a collage cell). 0.9.3: every
-        // member is a native slot; its publish state is synced below.
-        s.pane.classList.add("ingrid");
+    const allEvicted = added.filter((a) => a.kind === RTSP && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
+    // 0.15.0: the same rules, once per gridId -- a grid exists while its own feeds earn it
+    const ids = new Set([...allEntries, ...allEvicted].map(gridIdOf));
+    for (const id of rtspGrids.keys()) ids.add(id);
+    const hadGrid = rtspGrids.size > 0;
+    const wantOwn = gridFeeds === "both";   // members publish their own path too
+    let anyGrid = false;
+    for (const id of [...ids].sort(gridIdCmp)) {
+      const entries = allEntries.filter((a) => gridIdOf(a) === id);
+      const evicted = allEvicted.filter((a) => gridIdOf(a) === id);
+      let g = gridById(id);
+      if (gridFeeds !== "separate" && (entries.length >= 2 || (g && evicted.length && entries.length >= 1))) {
+        if (!g) g = buildRtspGrid(id);
+        anyGrid = true;
+        const members = entries.map((a) => ready.get(a.id) || { entry: a, video: null, placeholder: true });
+        for (const s of members) {
+          if (!s.entry.gridSeat) { s.entry.gridSeat = true; seatSet(s.entry.url, true); }   // 0.9.10: remembered
+          if (s.placeholder) continue;
+          if (s.inGrid && s.ownPath === wantOwn) continue;
+          s.inGrid = true;
+          s.ownPath = wantOwn;
+          // 0.8.4: HIDE the member -- the composite IS the window (.ghost only
+          // dimmed it and the pane still claimed a collage cell). 0.9.3: every
+          // member is a native slot; its publish state is synced below.
+          s.pane.classList.add("ingrid");
+        }
+        g.members = members;
+        g.evicted = evicted;   // 0.14.0: announced as `out`
+        gridOrdered(g);
+        gridOrderSave(g);
+      } else if (g) {
+        teardownRtspGrid(g);
       }
-      rtspGrid.members = members;
-      rtspGrid.evicted = evicted;   // 0.14.0: announced as `out`
-      gridOrdered(rtspGrid);
-      gridOrderSave(rtspGrid);
+    }
+    // a slot no surviving grid lists (its grid fell below two feeds, it moved, or Separate)
+    // becomes its own pane again; an evicted member of a living grid keeps its hidden pane
+    const held = new Set();
+    for (const g of rtspGrids.values()) {
+      for (const m of g.members) if (!m.placeholder) held.add(m.entry.id);
+      for (const a of g.evicted || []) held.add(a.id);
+    }
+    let changed = false;
+    for (const s of [...slots.values()]) {
+      if (s.rtsp && s.inGrid && !held.has(s.entry.id)) {
+        s.inGrid = false;
+        s.ownPath = false;
+        changed = true;
+        s.pane.classList.remove("ingrid", "ghost", "gridfeed");   // 0.9.5: leaving the grid closes an opened member too
+      }
+    }
+    if (anyGrid) {
       announceGrid(true);   // 0.8.8: viewers learn the cell geometry -- 0.9.4: before the members publish
       syncNative();   // 0.9.1
-      announce();   // the grid is one of OUR sources now -- suppression follows
+      announce();   // the grids are OUR sources now -- suppression follows
       refreshUi();
       window.__relayout?.();   // members hidden -> recompute the collage now
     } else {
-      if (rtspGrid) teardownRtspGrid();
-      let changed = false;
-      for (const s of [...slots.values()]) {
-        if (s.rtsp && s.inGrid) {
-          s.inGrid = false;
-          s.ownPath = false;
-          changed = true;
-          s.pane.classList.remove("ingrid", "ghost", "gridfeed");   // 0.9.5: leaving the grid closes an opened member too
-        }
-      }
       syncNative();   // 0.9.1
       // 0.9.10: only an explicit Separate gives the seats up -- fewer than two
       // feeds is a moment (the first second of every restore), not a decision
@@ -12899,7 +14022,7 @@
   }
   function paintPullers() {
     for (const slot of slots.values()) paintPull(slot.pane?.querySelector(".bar"), chanPath(ensureHang(slot.entry.name)));
-    if (rtspGrid) paintPull(rtspGrid.pane?.querySelector(".bar"), chanPath(ensureHang(rtspGrid.entry.name)));
+    for (const g of rtspGrids.values()) paintPull(g.pane?.querySelector(".bar"), chanPath(ensureHang(g.entry.name)));   // 0.15.0: every grid
     for (const row of camrowsEl.querySelectorAll(".camrow[data-id]")) {
       const slot = slots.get(Number(row.dataset.id));
       paintPull(row.querySelector(".top"), slot ? chanPath(ensureHang(slot.entry.name)) : "");
@@ -12980,11 +14103,10 @@
       try { window.__avatarPaint?.(slot.pane.querySelector(".pface .avatar"), window.__avatarLocal || ""); } catch {}
     }
     // 0.8.3: the RTSP grid composite's bar + relay-truth badge.
-    if (rtspGrid) {
-      const g = rtspGrid;
+    for (const g of rtspGrids.values()) {   // 0.15.0: every grid
       const pretty = (t) => window.__pretty?.(t) ?? t;
       g.nameEl.textContent = (operator ? pretty(operator) + " \u2014 " : "")
-        + "RTSP Grid (" + g.members.length + ")";
+        + (g.name || "RTSP Grid") + " (" + g.members.length + ")";
       g.nameEl.title = chanPath(ensureHang(g.entry.name));
       let gon = false;
       try { gon = g.moq?.broadcast?.in?.enabled?.peek?.() === true; } catch {}
@@ -13165,7 +14287,7 @@
     log(n ? `Added ${n} camera(s).` : "All cameras are already in the list.");
   });
 
-  async function addRtsp(url) {
+  async function addRtsp(url, opts) {   // 0.15.0: opts = {label, gridId} (restore, undo, a moved feed)
     try {
       const res = await fetch("/api/rtsp/add", {
         method: "POST",
@@ -13173,19 +14295,23 @@
         body: JSON.stringify({ url }),
       });
       const data = await res.json();
-      if (!res.ok) { log(`RTSP: ${data.error ?? res.status}`); window.__toast?.("RTSP: " + (data.error ?? res.status), 6000); return null; }
+      if (!res.ok) { log(`RTSP: ${data.error ?? res.status}`); window.__toast?.("RTSP: " + (data.error ?? res.status), 6000, { level: "error" }); return null; }
       // feedId has to travel WITH the entry: addSource starts the slot before
       // it returns whenever the rig is already running, and the slot's <video>
       // src is built from feedId. Assigning it afterwards asks the server for
       // /rtsp/undefined, which 404s -- the second feed never starts.
-      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: audioWanted(url) });   // 0.9.5
+      // 0.15.0: the display label and the grid ride in `extra` (last, so they win); the
+      // broadcast NAME still derives from rtspLabel(url), so a renamed feed keeps its path.
+      const gridId = String(opts?.gridId || gridOfSaved(url) || "1");
+      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: audioWanted(url), label: opts?.label || rtspLabel(url), gridId });   // 0.9.5
+      gridOfSet(url, gridId);
       if (seatSaved(url)) updateRtspGrid();   // 0.9.10: a remembered seat holds its cell from now on, not from the first frame
       log(`Added RTSP feed ${data.id} (${url}).` +
           (running ? "" : " Click Start to preview it."));
       return entry;
     } catch (e) {
       log(`RTSP add failed: ${e?.message ?? e}`);
-      window.__toast?.("RTSP add failed: " + (e?.message ?? e), 6000);
+      window.__toast?.("RTSP add failed: " + (e?.message ?? e), 6000, { level: "error" });
       return null;
     }
   }
@@ -13210,21 +14336,21 @@
   }
   addRtspBtn.addEventListener("click", () => {
     const u = rtspUrl.value.trim();
-    if (!u) { log("Enter an RTSP or HTTP url first."); window.__toast?.("Enter an RTSP or HTTP url first.", 3000); return; }
+    if (!u) { log("Enter an RTSP or HTTP url first."); window.__toast?.("Enter an RTSP or HTTP url first.", 3000, { level: "warn" }); return; }
     // 0.9.6: the same camera twice = two publishers and two monitors for one
     // picture (and a second broadcast name). Say so; replace on request.
     const dup = u !== TEST_URL ? added.find((a) => a.kind === RTSP && a.url === u) : null;
     if (dup) {
       const ok = window.confirm("This camera is already being shared as \"" + (dup.label || rtspLabel(u)) + "\".\n\nOK replaces that feed with a fresh one; Cancel keeps things as they are.");
-      if (!ok) { window.__toast?.("Already shared as " + (dup.label || rtspLabel(u)) + " \u2014 nothing added.", 4000); return; }
+      if (!ok) { window.__toast?.("Already shared as " + (dup.label || rtspLabel(u)) + " \u2014 nothing added.", 4000, { level: "warn" }); return; }
       removeSource(dup.id);
-      window.__toast?.("Replaced the existing feed.", 3000);
+      window.__toast?.("Replaced the existing feed.", 3000, { level: "info" });
     }
     audioSet(u, document.getElementById("rtspAudio")?.checked !== false);   // 0.9.5: before addRtsp reads the map
     addRtsp(u).then((e) => {
       if (!e) return;                     // failed: leave it there to fix
       rememberRtsp(u);
-      if (document.getElementById("rtspKeep")?.checked) rtspPersistSet(u, e.label, true);   // 0.8.8
+      if (document.getElementById("rtspKeep")?.checked) rtspPersistSet(u, e.label, true, gridIdOf(e));   // 0.8.8 (0.15.0: + grid)
       rtspUrl.value = "";
     });
   });
@@ -13267,16 +14393,17 @@
         upload.loaded = ev.loaded;
         if (ev.lengthComputable && ev.total) upload.total = ev.total;
         const pct = Math.round(upload.loaded / (upload.total || 1) * 100);
-        if (pct !== lastPct && pct < 100) { lastPct = pct; window.__toast?.("Uploading " + f.name + " \u2014 " + pct + "% (plays while it uploads)", 2000); }
+        if (pct !== lastPct) { lastPct = pct; mediaUploadPaint(upload); }   // 0.15.0 (D2): the percentage rides the media bar / Share row, not a toast
       };
-      const fail = (why) => { upload.failed = true; log("Media upload failed: " + why); window.__toast?.("Upload of " + f.name + " failed \u2014 " + why, 8000); resolve(null); };
+      const fail = (why) => { upload.failed = true; log("Media upload failed: " + why); mediaUploadPaint(upload); window.__toast?.("Upload of " + f.name + " failed \u2014 " + why, 8000, { level: "error" }); resolve(null); };
       xhr.onerror = () => fail("KASTR's local server is unreachable");
       xhr.onabort = () => { upload.failed = true; resolve(null); };
       xhr.onload = () => {
         let r = null; try { r = JSON.parse(xhr.responseText); } catch {}
         if (xhr.status !== 200) return fail(r?.error || ("HTTP " + xhr.status));
         upload.loaded = upload.total; upload.done = true;
-        window.__toast?.("Uploaded " + f.name, 3000);
+        mediaUploadPaint(upload);
+        window.__toast?.("Uploaded " + f.name, 3000, { level: "info" });
         resolve(r);
       };
       xhr.send(f);
@@ -13296,7 +14423,7 @@
       }
       else f = r;
     }
-    catch (e) { window.__toast?.("Could not prepare the file (" + (e?.message || e) + ") \u2014 sharing it as is.", 7000); }
+    catch (e) { window.__toast?.("Could not prepare the file (" + (e?.message || e) + ") \u2014 sharing it as is.", 7000, { level: "warn" }); }
     // Stash the File itself on the entry; startSlot assigns it to publish.source
     // directly, which avoids the library popping a second native picker.
     const entry = addSource(FILE, null, f.name.replace(/\.[^.]+$/, ""), { file: f, mediaUrl: null, ...extra });
@@ -13407,9 +14534,9 @@
       if (slot.rtsp) { if (!slot.inGrid || slot.moq?.broadcast) renameRtsp(slot, nm); }   // 0.8.12: full feeds rename too
       else slot.publish.setAttribute("name", chanPath(nm));
     }
-    if (rtspGrid) {
-      rtspGrid.entry.name = ensureHang(`${HOSTNAME}/${op}/rtsp-grid`);
-      rebuildRtspMoq(rtspGrid);
+    for (const g of rtspGrids.values()) {   // 0.15.0: every grid (withOperator stamps the new op)
+      g.entry.name = gridBroadcastName(g);
+      rebuildRtspMoq(g);
       changed++;
     }
     if (changed) {
@@ -13444,7 +14571,7 @@
       }
     }
     try { chanReg?.relayUrl?.set?.(new URL(authUrl(u, "registry"))); } catch {}
-    try { rtspGrid?.moq?.relayUrl?.set?.(new URL(authUrl(u))); } catch {}   // 0.8.6: the grid follows too
+    for (const g of rtspGrids.values()) { try { g.moq?.relayUrl?.set?.(new URL(authUrl(u))); } catch {} }   // 0.8.6: the grids follow too (0.15.0: all of them)
     syncNative(true);   // 0.9.1: native feeds re-publish to the new relay
     announceGrid();     // 0.9.4: and the .grid announce follows the relay too (it used to stay behind)
     talkClear();        // 0.12.0: the speaking announce re-dials on the next loud tick
@@ -13508,9 +14635,8 @@
         }
       }
       // 0.8.3: the RTSP grid composite goes on air with the slots.
-      if (rtspGrid) {
-        const g = rtspGrid;
-        g.entry.name = ensureHang(withOperator("rtsp-grid"));
+      for (const g of rtspGrids.values()) {   // 0.15.0: every grid
+        g.entry.name = gridBroadcastName(g);
         g.moq?.broadcast?.in?.name?.set?.(Net.Path.from(chanPath(g.entry.name)));
         g.moq?.broadcast?.in?.enabled?.set?.(true);
         g.liveSince = performance.now();
@@ -13527,7 +14653,7 @@
         if (slot.rtsp) { slot.moq?.broadcast?.in?.enabled?.set?.(false); slot.liveSince = null; }
         else slot.publish.setAttribute("announce", "never");
       }
-      if (rtspGrid) { rtspGrid.moq?.broadcast?.in?.enabled?.set?.(false); rtspGrid.liveSince = null; }   // 0.8.3
+      for (const g of rtspGrids.values()) { g.moq?.broadcast?.in?.enabled?.set?.(false); g.liveSince = null; }   // 0.8.3 (0.15.0: every grid)
       live = false;
       talkClear();    // 0.12.0
       syncNative();   // 0.9.1: off air = unpublish
@@ -13767,7 +14893,7 @@
     toggle: (id) => {
       const a = added.find((x) => x.id === id);
       if (!a?.url || a.url === TEST_URL) return;
-      rtspPersistSet(a.url, a.label, !rtspPersistHas(a.url));
+      rtspPersistSet(a.url, a.label, !rtspPersistHas(a.url), gridIdOf(a));   // 0.15.0: + grid
       if (a.feedId != null) nativePost("/api/rtsp/keep", { id: a.feedId, keep: rtspPersistHas(a.url) });   // 0.12.0: the server's memory too
     },
   };
@@ -13813,6 +14939,9 @@
         const extra = { feedId: f.id, url: f.url, audio: f.publish ? f.publish.audio !== false : audioWanted(f.url) };
         if (name.endsWith(".hang")) extra.name = name;
         if (f.publish) audioSet(f.url, f.publish.audio !== false);   // 0.9.10: the server's actual state, both ways
+        { const kept = rtspPersist().find((x) => x.url === f.url);   // 0.15.0: an adopted feed keeps its display name and grid
+          extra.gridId = String(kept?.gridId || gridOfSaved(f.url) || "1");
+          if (kept?.label) extra.label = kept.label; }
         addSource(RTSP, null, rtspLabel(f.url), extra);
         if (seatSaved(f.url)) updateRtspGrid();   // 0.9.10
         n++;
@@ -13828,18 +14957,18 @@
     try {
       const adopted = await window.__rtspAdopt();   // 0.9.8: feeds the server already runs come first
       let n = 0;
-      for (const { url } of rtspPersist()) {
+      for (const { url, label, gridId } of rtspPersist()) {
         if (added.some((a) => a.kind === RTSP && a.url === url)) continue;
-        if (await addRtsp(url)) n++;
+        if (await addRtsp(url, { label, gridId })) n++;   // 0.15.0: the stored display name and grid come back too
       }
       if (n || adopted) {
         if (!running) startBtn.click();
         if (!live && operatorValid()) liveBtn.click();
         if (n) {
           log("Restored " + n + " RTSP feed(s) from the last session.");
-          window.__toast?.("Restored " + n + " RTSP feed" + (n === 1 ? "" : "s") + " from the last session", 4000);
+          window.__toast?.("Restored " + n + " RTSP feed" + (n === 1 ? "" : "s") + " from the last session", 4000, { level: "info" });
         }
-        if (adopted) window.__toast?.("Reconnected " + adopted + " camera feed" + (adopted === 1 ? "" : "s") + " already running on this machine", 4000);
+        if (adopted) window.__toast?.("Reconnected " + adopted + " camera feed" + (adopted === 1 ? "" : "s") + " already running on this machine", 4000, { level: "info" });
       }
       return n + adopted;
     } finally { rtspRestoring = false; }
@@ -13927,8 +15056,9 @@
   const avatarAnn = keyedAnnouncer(".avatar", { state: (k, p) => window.__state.set("avatar", p ? (JSON.parse(p).url || "") : "") });
   // 0.8.8: composite geometry for viewers (expand one cell) and presence
   // time for the room up-time.
-  const gridAnn = keyedAnnouncer(".grid", { dedupe: true, state: (k, p) => window.__state.set("grid", p ? JSON.parse(p) : null) });   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/.grid, so an announce would be dropped)
+  const gridAnn = keyedAnnouncer(".grid", { dedupe: true, state: (k, p) => window.__state.set("grid", { id: String(k).replace(/^grid:/, ""), meta: p ? JSON.parse(p) : null }) });   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/.grid, so an announce would be dropped); 0.15.0: keyed "grid:<id>" -> room.json grids
   let gridAnnT = null;
+  const gridAnnounced = new Set();   // 0.15.0: ids with a standing announce, so a grid that vanished is cleared
   function announceGrid(now) {
     clearTimeout(gridAnnT);
     // 0.9.4: membership changes announce at once (the announce must reach
@@ -13936,21 +15066,26 @@
     // their own for a beat); everything else coalesces over 500 ms. The
     // announcer dedupes, so an early flush never costs a re-dial.
     gridAnnT = setTimeout(() => {
-      const g = rtspGrid;
-      if (!g || !live) { gridAnn.clear("grid"); return; }
-      const ms = gridOrdered(g);
-      gridAnn.set("grid", JSON.stringify({ path: chanPath(ensureHang(g.entry.name)), n: ms.length, layout: g.layout || "auto",
-        cells: ms.map((m) => String(m.entry.label || "").slice(0, 24)),
-        // 0.8.12: the full-quality path behind each cell (mode "both"), which cells are down, the mode
-        // 0.9.4: derived from the ENTRY and the mode, placeholders included -- a
-        // member that is reconnecting keeps its path, so viewers keep its tile
-        // hidden behind the grid instead of showing the dying tile on its own.
-        feeds: ms.map((m) => gridFeeds === "both" ? chanPath(ensureHang(m.entry.name)) : null),
-        down: ms.map((m, i) => (m.placeholder ? i : -1)).filter((i) => i >= 0),
-        // 0.14.0: members evicted after GRID_EVICT_AFTER failed attempts -- not a cell, but still
-        // hidden behind the grid at every viewer (their seat is kept, they rejoin when back)
-        out: gridFeeds === "both" ? (g.evicted || []).map((a) => chanPath(ensureHang(a.name))) : [],
-        mode: gridFeeds }));
+      const seen = new Set();
+      for (const g of (live ? gridsSorted() : [])) {   // 0.15.0: one announce per grid
+        const ms = gridOrdered(g);
+        seen.add(g.id);
+        gridAnn.set("grid:" + g.id, JSON.stringify({ path: chanPath(ensureHang(g.entry.name)), id: g.id, label: g.name || gridNameOf(g.id), n: ms.length, layout: g.layout || "auto",
+          cells: ms.map((m) => String(m.entry.label || "").slice(0, 24)),
+          // 0.8.12: the full-quality path behind each cell (mode "both"), which cells are down, the mode
+          // 0.9.4: derived from the ENTRY and the mode, placeholders included -- a
+          // member that is reconnecting keeps its path, so viewers keep its tile
+          // hidden behind the grid instead of showing the dying tile on its own.
+          feeds: ms.map((m) => gridFeeds === "both" ? chanPath(ensureHang(m.entry.name)) : null),
+          down: ms.map((m, i) => (m.placeholder ? i : -1)).filter((i) => i >= 0),
+          // 0.14.0: members evicted after GRID_EVICT_AFTER failed attempts -- not a cell, but still
+          // hidden behind the grid at every viewer (their seat is kept, they rejoin when back)
+          out: gridFeeds === "both" ? (g.evicted || []).map((a) => chanPath(ensureHang(a.name))) : [],
+          mode: gridFeeds }));
+      }
+      for (const id of [...gridAnnounced]) if (!seen.has(id)) gridAnn.clear("grid:" + id);
+      gridAnnounced.clear();
+      for (const id of seen) gridAnnounced.add(id);
     }, now ? 0 : 500);
   }
   const sinceAnn = keyedAnnouncer(".since");
@@ -13983,7 +15118,7 @@
   function presencePayload() {
     let relay = "";
     try { relay = new URL(urlInput.value.trim()).host; } catch {}
-    return { peer: PEER, op: operatorSlug(), name: operator || "", relay, relayName: window.__relayNameOf?.(relay) || "" };
+    return { peer: PEER, op: operatorSlug(), name: operator || "", relay, relayName: window.__relayNameOf?.(relay) || "", mode: window.__pageMode?.() || "full" };   // 0.15.0 (D1)
   }
   // 0.12.0: presence keeps the ORIGINAL join time per room -- every re-dial
   // (relay name learned, connect(), a heal) used to stamp Date.now(), so a solo
@@ -14073,7 +15208,7 @@
       avatarRemote = { url: base + "/api/files/" + j.id, token: j.token };
       avatarAnn.set("me", JSON.stringify({ op: operatorSlug(), url: base + "/api/files/" + j.id }));
     } catch (e) {
-      if (!window.__avatarWarned) { window.__avatarWarned = true; window.__toast?.("Profile picture stays local \u2014 the relay host has no reachable KASTR to share it through.", 6000); }
+      if (!window.__avatarWarned) { window.__avatarWarned = true; window.__toast?.("Profile picture stays local \u2014 the relay host has no reachable KASTR to share it through.", 6000, { level: "info" }); }
     }
   };
   // Viewer stall reports (0.8.7): a viewer starving on MY path asked for
@@ -14101,12 +15236,13 @@
   }
   function nudgeFromViewer(fullPath) {
     const now = Date.now();
-    if (rtspGrid && chanPath(ensureHang(rtspGrid.entry.name)) === fullPath) {
-      if (rtspGrid.lastNudge && now - rtspGrid.lastNudge < 45000) return;
-      rtspGrid.lastNudge = now;
-      log("Viewer reported the RTSP grid frozen \u2014 rebuilding its connection");
-      rebuildRtspMoq(rtspGrid); refreshUi();
-      window.__toast?.("A viewer reported your RTSP grid frozen \u2014 rebuilt it", 4000);
+    const ng = gridsSorted().find((g) => chanPath(ensureHang(g.entry.name)) === fullPath);   // 0.15.0: the grid by path
+    if (ng) {
+      if (ng.lastNudge && now - ng.lastNudge < 45000) return;
+      ng.lastNudge = now;
+      log("Viewer reported the grid " + (ng.name || ng.id) + " frozen \u2014 rebuilding its connection");
+      rebuildRtspMoq(ng); refreshUi();
+      window.__toast?.("A viewer reported your grid " + (ng.name || "") + " frozen \u2014 rebuilt it", 4000);
       return;
     }
     for (const slot of [...slots.values()]) {
@@ -14218,15 +15354,14 @@
     }
     // 0.8.3: the grid composite heals like any slot -- live for 20s under a
     // healthy relay with no echo of its path means rebuild its moq graph.
-    if (rtspGrid) {
-      const g = rtspGrid;
+    for (const g of rtspGrids.values()) {   // 0.15.0: every grid
       let on = false;
       try { on = g.moq?.broadcast?.in?.enabled?.peek?.() === true; } catch {}
       if (on && g.liveSince && performance.now() - g.liveSince > 20000
           && !window.__echoed?.has?.(chanPath(ensureHang(g.entry.name)))
           && !(g.lastHeal && Date.now() - g.lastHeal < 30000)) {
         g.lastHeal = Date.now();
-        log("RTSP grid not reaching the relay \u2014 rebuilding its connection");
+        log("Grid " + (g.name || g.id) + " not reaching the relay \u2014 rebuilding its connection");
         rebuildRtspMoq(g);
         refreshUi();
       }
@@ -14241,14 +15376,16 @@
       const failed = slotFailed(slot);
       if (failed && !slot.toasted) {
         slot.toasted = true;
-        window.__toast?.("RTSP source failed \u2014 " + faultText(slot));
+        window.__toast?.("RTSP source failed \u2014 " + faultText(slot), 6000, { level: "error" });
       } else if (!failed) {
         slot.toasted = false;
       }
     }
   }, 2000);
 
-  window.__gridState = () => rtspGrid ? { layout: rtspGrid.layout, order: [...rtspGrid.order], members: rtspGrid.members.map((m) => m.entry.id), evicted: (rtspGrid.evicted || []).map((a) => a.id) } : null;   // rig hook (0.14.0: evicted)
+  const gridStateOf = (g) => ({ name: g.name, layout: g.layout, order: [...g.order], members: g.members.map((m) => m.entry.id), evicted: (g.evicted || []).map((a) => a.id) });   // 0.15.0
+  window.__gridState = () => { const g = gridById("1"); return g ? gridStateOf(g) : null; };   // rig hook (0.14.0: evicted; 0.15.0: grid "1" -- see __gridStates)
+  window.__gridStates = () => Object.fromEntries(gridsSorted().map((g) => [g.id, gridStateOf(g)]));   // 0.15.0: every grid by id
   // 0.14.0: streamed media files die with the page (the Files beacon pattern)
   window.addEventListener("pagehide", () => {
     for (const a of added) if (a.kind === FILE && a.mediaId && a.mediaUrl) { try { navigator.sendBeacon?.(a.mediaUrl + "?_method=DELETE", ""); } catch {} }
@@ -14257,9 +15394,10 @@
     const m = s.media, v = m.video, b = [];
     try { for (let i = 0; i < v.buffered.length; i++) b.push([+v.buffered.start(i).toFixed(2), +v.buffered.end(i).toFixed(2)]); } catch {}
     const up = s.entry.upload;
+    const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused };   // 0.15.0
     return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, buffered: b,
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,
-      upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null };
+      upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo };
   });
   window.__publisher = {
     peer: PEER,   // lets the watch half of this page recognise its own rows

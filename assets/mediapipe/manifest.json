@@ -1,0 +1,32 @@
+{
+  "source": "https://storage.googleapis.com/mediapipe-models/ (Google MediaPipe, Apache-2.0)",
+  "license": "LICENSE.txt",
+  "models": {
+    "selfie_segmenter.tflite": {
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite",
+      "sha256": "191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b",
+      "bytes": 249537,
+      "quality": "balanced"
+    },
+    "selfie_segmenter_landscape.tflite": {
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite",
+      "sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "bytes": 250177,
+      "quality": "best"
+    }
+  },
+  "runtime": {
+    "vision_bundle.mjs": {
+      "sha256": "e77f281f9619150d937023c355bae170e9120e3b9e43f1e23a2a7bee07197669",
+      "bytes": 136870
+    },
+    "wasm/vision_wasm_internal.js": {
+      "sha256": "9440cf0cc0cea21800e31581ec32aeedcc5fbf9df4509796bbc7d3f99e52ab9c",
+      "bytes": 209826
+    },
+    "wasm/vision_wasm_internal.wasm": {
+      "sha256": "f82a8e6c05e08a44cc9f9e7ec5f845935bcbb1b1500ebe8c2f4812fb4e2917dc",
+      "bytes": 9423986
+    }
+  }
+}

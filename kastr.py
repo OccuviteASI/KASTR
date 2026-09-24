@@ -18,7 +18,9 @@ Config, in precedence order:
 """
 import argparse
 import configparser
+import hashlib
 import json
+import re
 import signal
 import os
 import shutil
@@ -412,6 +414,7 @@ def print(*args, **kwargs):   # noqa: A001 -- deliberate: every launcher print i
 def update_note(status, detail=""):
     note("update-check: %s -- %s" % (status, detail))
     _update_note(status, detail)
+    return status        # 0.15.0: check_update returns it (main decides whether to mirror)
 
 
 def _update_note(status, detail=""):
@@ -829,20 +832,294 @@ def update_authority(relay_url, ini, sd=None):
         return None, "relay host"
 
 
-def start_update_sweeper(check, every=3600):
+def update_port_for(host, ini):
+    """0.15.0: the web port of the KASTR at `host` (the update feed lives there):
+    an explicit `update_port` in kastr.ini wins, then the port LEARNED for that
+    host (hub-web.json / the learner -> kastr_serve.HUB_WEB), then 8000."""
+    try:
+        if ini is not None and "update_port" in ini and str(ini.get("update_port")).strip():
+            return int(ini.get("update_port"))
+    except (TypeError, ValueError):
+        pass
+    return kastr_serve.hub_web_for(host, 8000)
+
+
+def load_hub_web(sd=None):
+    """0.15.0: hub-web.json -> kastr_serve.HUB_WEB (what earlier launches learned)."""
+    import kastr_relay
+    n = 0
+    for host, rec in kastr_relay.hub_web_load(sd or state_dir()).items():
+        kastr_serve.HUB_WEB[host] = {"web": rec["web"], "https": rec.get("https")}
+        n += 1
+    return n
+
+
+def _authority_relay_url(host, relay_url, sd=None):
+    """The relay URL whose host is `host`: the stored hub link when it names that
+    host (federation master), else the relay URL this KASTR uses."""
+    try:
+        from urllib.parse import urlparse
+        with open(os.path.join(sd or state_dir(), "relay-cluster.json"), encoding="utf-8-sig") as f:
+            hub = str(json.load(f).get("connect") or "").strip()
+        if hub and not hub.lower().startswith(("http://", "https://")):
+            hub = "https://" + hub
+        if hub and (urlparse(hub).hostname or "").lower() == str(host).lower():
+            return hub
+    except Exception:
+        pass
+    return relay_url
+
+
+_HUB_WEB_SAID = {}         # host -> web port last announced in launch.log
+
+
+def learn_hub_web(relay_url, ini, once=False, budget=3.0):
+    """0.15.0: learn the web port of the KASTR this box follows (the update
+    authority: federation master or relay host) BEFORE anything dials it ->
+    the learned {web, https, via} or None. Loopback / unparsable: nothing to
+    learn. Remembered in hub-web.json + kastr_serve.HUB_WEB; one launch.log
+    line per change. `once` = the launch-time call (logged as such)."""
+    import kastr_relay
+    host, _why = update_authority(relay_url, ini)
+    if not host or host in ("127.0.0.1", "localhost", "::1"):
+        return None
+    host = str(host).lower()
+    cands = [kastr_serve.HUB_WEB.get(host, {}).get("web")]
+    try:
+        if ini is not None and "update_port" in ini:
+            cands.append(int(ini.get("update_port")))
+    except (TypeError, ValueError):
+        pass
+    found = kastr_relay.probe_hub_web(_authority_relay_url(host, relay_url),
+                                      candidates=[c for c in cands if c], budget=budget)
+    if not found:
+        if once and host not in _HUB_WEB_SAID:
+            note("hub web port: %s did not answer within %.0f s -- using %d for now"
+                 % (host, budget, update_port_for(host, ini)))
+        return None
+    try:
+        changed = kastr_relay.hub_web_note(state_dir(), host, found["web"], found.get("https"))
+    except Exception as e:
+        changed = False
+        note("hub web port: could not write hub-web.json: %s" % e)
+    kastr_serve.HUB_WEB[host] = {"web": found["web"], "https": found.get("https")}
+    if changed or _HUB_WEB_SAID.get(host) != found["web"]:
+        _HUB_WEB_SAID[host] = found["web"]
+        note("hub web port %d learned for %s (%s%s)" % (found["web"], host, found["via"],
+                                                        " at launch" if once else ""))
+    return found
+
+
+def start_update_sweeper(check, every=3600, label="federation master: hourly check"):
     """0.11.0: hourly version match against the federation master (kastr_serve.
     start_media_sweeper idiom). The first tick waits a full period -- the
-    launch-time check just ran."""
+    launch-time check just ran. 0.15.0: `every`/`label` make it the generic
+    repeating timer (the 5-minute hub web learner rides it too)."""
     def tick():
         try:
             check()
         except Exception as e:
-            note("federation master: hourly check failed: %s" % e)
+            note("%s failed: %s" % (label, e))
         t = threading.Timer(every, tick)
         t.daemon = True
         t.start()
     t = threading.Timer(every, tick)
     t.daemon = True
+    t.start()
+    return t
+
+
+# ---- update feed mirror (0.15.0) ---------------------------------------------
+# Kenton's decision: a box that hosts a relay ALWAYS mirrors the update feed --
+# the other platforms' binaries and both browser zips -- from its own authority
+# (the hub, or the relay host it follows), so every relay box is a complete
+# turnkey feed for the clients dialled into it (kastr_serve._update_platforms /
+# _browser_feed serve <exe dir>/updates/...). Off with `update_mirror = off`.
+
+MIRROR_PLATFORMS = {"win32": ("windows", "KASTR.exe"), "linux": ("linux", "KASTR"),
+                    "darwin": ("macos", "KASTR")}        # = kastr_serve._update_platforms
+MIRROR_BROWSER_KEYS = {"win32": "win64", "linux": "linux64"}   # = kastr_serve._browser_feed
+_MIRROR_HASHES = {}        # path -> (mtime, size, sha256): hash lazily, once per file version
+_MIRROR_SAID = [False]     # the "mirroring N files" line, once per process
+_MIRROR_BUSY = threading.Lock()
+
+
+def own_platform():
+    return "win32" if WINDOWS else "darwin" if MACOS else "linux"
+
+
+def hosts_relay(relay=None, sd=None):
+    """Does THIS box host a relay? Running now, a relay mode, or autostart on."""
+    try:
+        if relay is not None and relay.running():
+            return True
+    except Exception:
+        pass
+    if kastr_serve.MODE in ("relay", "publisher-relay"):
+        return True
+    try:
+        with open(os.path.join(sd or state_dir(), "relay-autostart.json"), encoding="utf-8-sig") as f:
+            return bool(json.load(f).get("enabled"))
+    except Exception:
+        return False
+
+
+def file_sha256(path):
+    """sha256 of `path` (None when missing), cached by mtime+size."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    c = _MIRROR_HASHES.get(path)
+    if c and c[0] == st.st_mtime and c[1] == st.st_size:
+        return c[2]
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    _MIRROR_HASHES[path] = (st.st_mtime, st.st_size, h.hexdigest())
+    return h.hexdigest()
+
+
+def _mirror_one(url, target, sha, size):
+    """Download url -> target.part, verify sha256 + size, os.replace into place.
+    Raises on any failure (the .part is removed)."""
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    part = target + ".part"
+    h = hashlib.sha256()
+    got = 0
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r, open(part, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                h.update(chunk)
+                f.write(chunk)
+                got += len(chunk)
+        if h.hexdigest() != sha:
+            raise RuntimeError("checksum mismatch")
+        if size and got != int(size):
+            raise RuntimeError("size mismatch (%d of %d bytes)" % (got, int(size)))
+        os.replace(part, target)
+    except Exception:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
+    if not target.endswith((".exe", ".zip")):
+        try:
+            os.chmod(target, 0o755)
+        except OSError:
+            pass
+    _MIRROR_HASHES.pop(target, None)
+
+
+def mirror_feeds(base, ini, relay=None, app_root=None, sd=None):
+    """Mirror the update feed at `base` (http://host:port) into <app dir>/updates/
+    -> {"mirrored": [paths], "skipped": n, "failed": [(label, why)]}, or None when
+    it does not apply (source checkout without KASTR_MIRROR_DEV=1, update_mirror
+    off, or this box hosts no relay). Own-platform binary excluded (served from
+    sys.executable); browser zips for every platform the feed offers; a file
+    whose sha256 already matches is left alone; failures logged, never fatal."""
+    if not FROZEN and os.environ.get("KASTR_MIRROR_DEV") != "1":
+        return None
+    if str((ini or {}).get("update_mirror", "true")).strip().lower() in ("off", "false", "0", "no"):
+        return None
+    if not hosts_relay(relay, sd):
+        return None
+    if not _MIRROR_BUSY.acquire(blocking=False):
+        return None           # a previous run is still downloading
+    try:
+        try:
+            with urllib.request.urlopen(base + "/api/update/manifest", timeout=5) as r:
+                man = json.load(r)
+        except Exception as e:
+            note("update mirror: manifest fetch failed from %s (%s)" % (base, e))
+            return {"mirrored": [], "skipped": 0, "failed": [("manifest", str(e))]}
+        if not isinstance(man, dict) or man.get("app") != "KASTR":
+            return {"mirrored": [], "skipped": 0, "failed": [("manifest", "no KASTR feed at " + base)]}
+        root = app_root or app_dir()
+        plan = []
+        for plat, info in (man.get("platforms") or {}).items():
+            if plat == own_platform() or plat not in MIRROR_PLATFORMS or not isinstance(info, dict):
+                continue
+            sub, fn = MIRROR_PLATFORMS[plat]
+            plan.append(("%s binary" % plat, base + "/api/update/binary?platform=" + plat,
+                         os.path.join(root, "updates", sub, fn), info))
+        br = man.get("browser") if isinstance(man.get("browser"), dict) else {}
+        for plat, info in (br.get("platforms") or {}).items():
+            if not isinstance(info, dict):
+                continue
+            rootname = str(info.get("root") or "")
+            key = rootname[len("chrome-"):] if rootname.startswith("chrome-") else MIRROR_BROWSER_KEYS.get(plat)
+            if not key or not re.match(r"^[a-z0-9]{1,16}$", key):
+                continue
+            plan.append(("%s browser" % plat, base + "/api/update/browser?platform=" + plat,
+                         os.path.join(root, "updates", "browser", "chrome-%s.zip" % key), info))
+        todo, skipped = [], 0
+        for label, url, target, info in plan:
+            sha = str(info.get("sha256") or "")
+            if not sha:
+                continue
+            if file_sha256(target) == sha:
+                skipped += 1
+            else:
+                todo.append((label, url, target, info))
+        out = {"mirrored": [], "skipped": skipped, "failed": []}
+        if todo and not _MIRROR_SAID[0]:
+            _MIRROR_SAID[0] = True
+            mb = sum(int(i.get("size") or 0) for _l, _u, _t, i in todo) // (1 << 20)
+            note("update mirror: mirroring %d files (~%d MB) from %s" % (len(todo), mb, base))
+        for label, url, target, info in todo:
+            try:
+                _mirror_one(url, target, str(info.get("sha256") or ""), info.get("size"))
+                out["mirrored"].append(target)
+                note("update mirror: %s -> %s" % (label, target))
+            except Exception as e:
+                out["failed"].append((label, str(e)))
+                note("update mirror: %s NOT mirrored (%s)" % (label, e))
+        # the browser feed's VERSION beside the zips (kastr_serve._browser_feed reads it)
+        bver = str(br.get("version") or "").strip()
+        if bver and br.get("platforms") and not out["failed"]:
+            vf = os.path.join(root, "updates", "browser", "VERSION")
+            try:
+                with open(vf, encoding="utf-8") as f:
+                    cur = f.read().strip()
+            except OSError:
+                cur = None
+            if cur != bver:
+                try:
+                    os.makedirs(os.path.dirname(vf), exist_ok=True)
+                    with open(vf + ".tmp", "w", encoding="utf-8", newline=chr(10)) as f:
+                        f.write(bver + chr(10))
+                    os.replace(vf + ".tmp", vf)
+                    out["mirrored"].append(vf)
+                except OSError as e:
+                    out["failed"].append(("browser VERSION", str(e)))
+        return out
+    finally:
+        _MIRROR_BUSY.release()
+
+
+def mirror_after_update(relay_url, ini, status, relay=None):
+    """Kick mirror_feeds off-thread once the version match settled (current /
+    updated -- or dev, which mirror_feeds itself gates). Authority = the same
+    host check_update used, on the port learned for it."""
+    if status not in ("current", "updated", "dev"):
+        return None
+    host, _why = update_authority(relay_url, ini)
+    if not host or host in ("127.0.0.1", "localhost", "::1"):
+        return None
+    base = "http://%s:%d" % (("[" + host + "]") if ":" in host else host, update_port_for(host, ini))
+
+    def go():
+        try:
+            mirror_feeds(base, ini, relay=relay)
+        except Exception as e:
+            note("update mirror: failed (%s)" % e)
+    t = threading.Thread(target=go, daemon=True, name="kastr-mirror")
     t.start()
     return t
 
@@ -861,7 +1138,7 @@ def browser_update(relay_url, ini):
         return
     try:
         import kastr_browser
-        base = f"http://{host}:{int(ini.get('update_port', 8000))}"
+        base = f"http://{host}:{update_port_for(host, ini)}"   # 0.15.0: the learned hub web port
         kastr_browser.sweep_old(app_dir())
         kastr_browser.fetch_update(base, app_dir(), kastr_browser.platform_name(), note)
     except Exception as e:
@@ -876,38 +1153,33 @@ def check_update(relay_url, ini):
     AND downgrades -- "match client to server"), pull our platform's binary
     from it, verify the checksum, swap via the rename-aside trick, and
     relaunch. Any failure means launching the current version normally."""
+    # 0.15.0: returns the outcome (update_note's status) so main can mirror the feed
     if not getattr(sys, "frozen", False):
-        update_note("dev", "source checkouts never self-update")
-        return
+        return update_note("dev", "source checkouts never self-update")
     if os.environ.get("KASTR_UPDATED") == "1":
-        update_note("updated", "updated and relaunched as v"
-                    + kastr_serve.read_version())
-        return                          # the relaunch itself; never loop
+        return update_note("updated", "updated and relaunched as v"
+                           + kastr_serve.read_version())   # the relaunch itself; never loop
     if str(ini.get("update", "")).lower() in ("off", "false", "0", "no"):
-        update_note("off", "update = off in kastr.ini")
-        return
+        return update_note("off", "update = off in kastr.ini")
     host, why = update_authority(relay_url, ini)   # 0.11.0: a spoke follows its hub's KASTR
     if not host:
-        update_note("skipped", "relay URL unparsable: " + str(relay_url))
-        return
+        return update_note("skipped", "relay URL unparsable: " + str(relay_url))
     if host in ("127.0.0.1", "localhost", "::1"):
-        update_note("authority", "the relay is on this machine -- "
-                    "it IS the fleet's version authority")
-        return
+        return update_note("authority", "the relay is on this machine -- "
+                           "it IS the fleet's version authority")
     if why == "federation master":
         note("update-check: following the federation master " + host)
-    port = int(ini.get("update_port", 8000))
+    port = update_port_for(host, ini)     # 0.15.0: ini update_port > learned hub web port > 8000
     base = f"http://{host}:{port}"
     inst = _probe_authority(base)
     if inst is None:
-        return
+        return "unreachable"
     theirs = str(inst.get("version") or "")
     mine = kastr_serve.read_version()
     if not theirs or theirs == mine or "-dev" in theirs:
-        update_note("current", f"relay host runs v{theirs or '?'}; "
-                    f"staying on v{mine}")
-        return
-    update_from(base, theirs, mine)
+        return update_note("current", f"relay host runs v{theirs or '?'}; "
+                           f"staying on v{mine}")
+    return update_from(base, theirs, mine)
 
 
 def runtime_update(host, port, before_exit):
@@ -1881,11 +2153,24 @@ def main():
         alert(f"Web files are missing.\n\nExpected index.html in:\n{root}")
         return 1
 
+    # 0.15.0: learn the hub's web port BEFORE the version match dials it -- what
+    # earlier launches learned (hub-web.json) first, then a bounded probe (the
+    # minter's /api/auth, else /api/instance on the stored/ini/8000.. ports).
+    # Unconditional (not gated by --no-update: chat and peer lookups need it
+    # too) and never longer than the probe budget.
+    try:
+        load_hub_web()
+        learn_hub_web(args.relay, ini, once=True)
+    except Exception as e:
+        note("hub web port: learner skipped (%s)" % e)
+
     # Fleet version match (0.8.1): before anything binds or launches, adopt
     # the relay host's KASTR version if it differs. May not return (swaps
     # the binary and relaunches).
     if not args.no_update:
-        check_update(args.relay, ini)
+        upd = check_update(args.relay, ini)
+        # 0.15.0: a relay box mirrors the authority's feed once the match settled
+        mirror_after_update(args.relay, ini, upd)
     else:
         update_note("off", "--no-update flag")
     sweep_old_binaries()   # 0.8.7
@@ -2025,7 +2310,7 @@ def main():
                                               ca=tls["ca_crt"], names=tls["names"])
                 _EXTRA_SERVERS.append(tls_server)
                 _kr._FIREWALL_HTTPS_PORT = tls_server.server_address[1]
-                _kr._FIREWALL_HTTPS_PORT = tls_server.server_address[1]
+                _kr.HTTPS_PORT = tls_server.server_address[1]     # 0.15.0: /api/auth advertises it
                 print(f"{APP_NAME}: https on {args.host}:{tls_server.server_address[1]} "
                       f"(CA {tls['fingerprint'][:12]}...)", flush=True)
         except Exception as e:
@@ -2035,7 +2320,8 @@ def main():
     # hook tears the live server down before the relaunch so the ports are
     # free for the new version; the browser window closes with it.
     proc_ref = [None]
-    uport = int(ini.get("update_port", 8000))
+    # 0.15.0: the feed port is resolved per host when needed (update_port_for:
+    # ini update_port > learned hub web port > 8000), no longer fixed at launch
     # 0.8.8: close the window FIRST (cooperatively, then by force), then the
     # server -- the relaunch must find no window holding the profile.
     # 0.13.1: `grace` = the cooperative window-close budget (a mode switch
@@ -2046,7 +2332,7 @@ def main():
         except Exception:
             pass
         teardown(server, proc_ref[0], code)
-    kastr_serve.UPDATE_HOOK = lambda host: runtime_update(host, uport, before_exit=_before_exit)
+    kastr_serve.UPDATE_HOOK = lambda host: runtime_update(host, update_port_for(host, ini), before_exit=_before_exit)
     # 0.8.9: the Relay page's "Apply & relaunch" (relay-only mode switch).
     # 0.13.1: reason "mode" -- direct spawn, no KASTR_UPDATED, the child waits for us.
     kastr_serve.RELAUNCH_HOOK = lambda: relaunch_self(500, lambda code=0: _before_exit(1.5, code),
@@ -2059,13 +2345,20 @@ def main():
     # 0.11.0: a spoke relay's KASTR keeps matching the federation master hourly
     # (relay-host boxes never relaunch otherwise); clients still match their
     # relay host at launch.
+    # 0.15.0: the same tick keeps a relay box's mirrored feed current (hourly,
+    # a manifest GET + hash compare when nothing changed).
     def _federation_update():
         hub, master = federation_master()
+        st = "current"
         if hub and master and hub not in ("127.0.0.1", "localhost", "::1"):
             note("federation master: hourly version match against %s" % hub)
-            runtime_update(hub, uport, before_exit=_before_exit)
+            st = (runtime_update(hub, update_port_for(hub, ini), before_exit=_before_exit) or {}).get("status")
+        mirror_after_update(args.relay, ini, st, relay=getattr(server, "relay", None))
     if not args.no_update:
         start_update_sweeper(_federation_update)
+    # 0.15.0: re-learn the hub's web port every 5 minutes (a hub relaunched on
+    # another port is followed without a restart here)
+    start_update_sweeper(lambda: learn_hub_web(args.relay, ini), every=300, label="hub web port: learner")
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

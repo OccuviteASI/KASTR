@@ -26,7 +26,7 @@
   var ls;
   try { ls = window.localStorage; if (!ls) return; } catch (e) { return; }
 
-  var WL = /^kastr\.(lastjoin|rtsp\.|grid\.|profile$|sidebar|mic\.|volume$|relay\.history$|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.)/;
+  var WL = /^kastr\.(lastjoin|rtsp\.|grid\.|profile$|sidebar|mic\.|volume$|relay\.history$|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.|camfx$|toasts\.|rooms\.groups\.)/;
   var ENDPOINT = "/api/prefs";
 
   // ---- seed (synchronous: the boot script reads localStorage a few lines later)

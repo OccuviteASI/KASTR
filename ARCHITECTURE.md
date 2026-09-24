@@ -786,3 +786,19 @@ speculative was later removed (see Decisions).
   timestamps from any `-ss`, so playback controls stay honest without offset arithmetic; the reader's
   buffer is the throttle (a paused player stops reading and ffmpeg idles), and every child is owned
   (killed on stop, page close, DELETE, and reaped after a crash).
+
+### 0.15.0
+
+- **A port is a fact the network learns, before anything uses it.** 0.14.0 made the web port a setting; 0.15.0 makes
+  every consumer ask for it first -- the launcher before its update check, the page before its first chat URL, the
+  spoke before it proxies -- and remembers the answer per host. Literals are for the first probe only.
+- **A relay box is a distribution point, so it carries the whole distribution.** Updating only your own binary while
+  serving others' from install time is a silent version split; mirror what you serve.
+- **A room's grouping belongs to the relay; its order belongs to you.** Groups are shared truth managed by the operator
+  or creator; collapse state and order stay per user.
+- **A grid is a set of feeds, not a singleton.** The viewer never assumed one grid per owner; the publisher did. Grid 1
+  keeps its name so nothing in the field changes; new grids get stable ids, never their labels, as paths.
+- **A toast is an interruption -- earn it.** Levels at the call sites, one policy in the primitive, and progress is a
+  status line, not a notification.
+- **What the camera menu shows must be what the pipeline runs.** The effect is pushed from one place whenever a camera
+  appears, and the menu reads the source, not a singleton.

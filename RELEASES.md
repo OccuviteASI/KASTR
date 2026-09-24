@@ -2,6 +2,50 @@
 
 What changed in each build, newest first.
 
+## v0.15.0 — the hub's web port everywhere, groups and grids, quieter alerts, backgrounds that stay
+
+**Chat, rooms, files and updates follow the hub's web port now.** 0.14.0 let a hub pin its web port, but every page still
+built its hub URLs from the literal `:8000` (chat poll/send, room list/register, files, avatar), spokes learned the port
+only from a secured hub and only inside the federation refresh, plain clients never did, the hub itself could decide it
+was a spoke of itself once its own port moved, and the version follow used `kastr.ini update_port` (8000) no matter what.
+Now every machine that knows a relay learns that relay host's web (and https) port at launch -- from the token service
+(`/api/auth`) or, on an open relay, by asking `/api/instance` on the likely ports -- BEFORE the first update check, then
+every five minutes; the result lives in `hub-web.json`, feeds `/api/instance.hubWeb`, the chat proxy, the update follow
+(`update_port_for`: an explicit `update_port` still wins) and the page (`window.__auth.web/https`), and a failed chat probe
+re-detects the port so a move heals within 30 s. Relay boxes now also **mirror the hub's other-platform binaries and browser
+zips** into their `updates/` folder after each update check (about 300 MB once per version; `update_mirror = false` in
+kastr.ini opts out), so the machines behind a spoke update to the same version instead of the version the spoke was
+installed with.
+
+**Rooms can be grouped.** Groups are defined on the relay (relay-auth.json), managed by the relay operator or the room's
+creator, and shown to everyone as collapsible headers in the sidebar (collapsed state is yours). Drag a room onto a group,
+or use the room menu's "Move to group…"; operators rename, ungroup or delete from the header. The collapsed sidebar's "+"
+now opens the sidebar instead of a hidden form.
+
+**Many RTSP grids, and the grid grew controls.** Each RTSP feed row has a Grid picker; grids are nameable ("Vehicle 7"), keep
+their own seats, order and layout, and each is its own tile in the room (grid 1 keeps its old broadcast name, so nothing
+existing changes). Hover a cell on the stage to remove that feed (Undo in the toast), spotlight a grid for yourself or for
+everyone from its menu, rename a feed's display name without republishing it, and turn on "Show names on grid cells".
+
+**Quieter alerts, a room tone, honest People.** Toasts have levels; the default shows room events and anything that needs a
+hand, and hides the informational echoes (View ▸ Verbose alerts brings them back). Switching rooms plays a short two-note
+tone. Publisher and relay boxes announce their mode and no longer appear as people in the room.
+
+**Backgrounds that stay, move, and cut out better.** The saved background effect survives a rejoin or a room switch (the
+join path never passed it to the camera). Four built-in looping scenes (Drift, Grid, Rain, Aurora), your own GIF or video
+as a background (stored locally, never sent to anyone), and a tuned segmenter: GPU delegate with CPU fallback, 15 fps
+masks drawn at 30 fps, temporal smoothing and a feathered edge, plus a "Best" quality option using MediaPipe's landscape
+model. Everything stays offline.
+
+**Smooth media shares.** A shared file that needs conversion no longer plays from the transcoder's live edge: playback
+starts from a four-second cushion, pauses quietly ("Buffering…") when the cushion runs dry and resumes at three seconds,
+the transcode is capped at 1280 wide with a faster preset, and viewers keep seeing "playing" through a rebuffer.
+Effected cameras (blur, backgrounds) keep moving when the app window is minimised: a timer takes over from the frame
+clock the browser stops.
+
+**MoQ landscape.** `docs/moq-landscape.md` records what MediaMTX, MainStreaming/OpenMOQ, moq-dev 0.15, the IETF drafts,
+Cloudflare and Meta are doing, with a ranked backlog of twelve realistic improvements. Nothing from it is implemented yet.
+
 ## v0.14.0 — the same port every launch, a camera that stays dead leaves the grid, media files stream as they convert, source on GitHub
 
 **A box whose port 8000 is taken forgot everything on every launch.** The app page keeps its memory in the

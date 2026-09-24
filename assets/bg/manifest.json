@@ -1,0 +1,6 @@
+[
+  { "id": "drift",  "label": "Blue drift",  "file": "drift.webm",  "poster": "drift.png" },
+  { "id": "grid",   "label": "Grid",        "file": "grid.webm",   "poster": "grid.png" },
+  { "id": "rain",   "label": "Rain",        "file": "rain.webm",   "poster": "rain.png" },
+  { "id": "aurora", "label": "Aurora",      "file": "aurora.webm", "poster": "aurora.png" }
+]

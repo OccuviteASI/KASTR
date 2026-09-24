@@ -445,7 +445,7 @@ def media_shutdown():
 # and the session secrets (access/code inside kastr.lastjoin, kastr.auth*)
 # never stored -- the page strips them as well; this is belt and braces.
 PREFS_ALLOW = re.compile(r"^kastr\.(lastjoin|rtsp\.|grid\.|profile$|sidebar|mic\.|volume$|relay\.history$"
-                         r"|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.)")
+                         r"|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.|camfx$|toasts\.|rooms\.groups\.)")
 PREFS_DENY = re.compile(r"^kastr\.auth")
 PREFS_SECRET_FIELDS = ("access", "code")
 PREFS_VALUE_MAX = 64 * 1024
@@ -611,6 +611,22 @@ CHAT_INLINE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 CHAT_TIMEOUT = 10                  # a forwarded chat call
 CHAT_FILE_TIMEOUT = 60             # a forwarded attachment
 HUB_WEB_PORT = 8000                # relay-cluster.json "web" default
+# 0.15.0: host -> {"web", "https"}: the web ports of other KASTRs (the hub's) as
+# learned -- hub-web.json (the launcher loads it at start), the 5-minute learner,
+# and the relay's federation path (kastr_relay.hub_web_note writes into the sink).
+HUB_WEB = {}
+kastr_relay.HUB_WEB_SINK = HUB_WEB
+_CHAT_HUB_SAID = set()             # hosts whose "hub is this KASTR on another port" line was logged
+
+
+def hub_web_for(host, default=8000):
+    """0.15.0: the KASTR web port learned for `host`, else `default`."""
+    try:
+        rec = HUB_WEB.get(str(host or "").strip().lower()) or {}
+        web = int(rec.get("web") or 0)
+        return web if 1 <= web <= 65535 else int(default)
+    except (TypeError, ValueError, AttributeError):
+        return int(default)
 
 
 def _chat_log(m):
@@ -1112,6 +1128,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # the fleet's shared store (see _viewing / _chat_hub_here).
                 "viewing": self._viewing(),
                 "chatHub": self._chat_hub_here(),
+                # 0.15.0: this KASTR's own web + https ports (a probing spoke reads
+                # `web` -- kastr_relay.probe_hub_web) and the hub web ports it has
+                # learned itself (host -> {web, https}).
+                "web": int(HTTP_PORT or self.server.server_address[1]),
+                "https": HTTPS_INFO.get("port"),
+                "hubWeb": {h: {"web": r.get("web"), "https": r.get("https")} for h, r in HUB_WEB.items()},
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1369,7 +1391,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _chat_hub(self):
             """{host, web, hub, code} when this KASTR is a spoke whose hub is
             another machine; None when it answers chat itself (no hub, or the
-            hub is this very KASTR: own host AND own web port)."""
+            hub is this very KASTR -- 0.15.0: own host, WHATEVER port the cluster
+            file names for it; the stored web port used to have to match too, so
+            a hub whose KASTR had moved ports proxied chat to itself).
+            The hub's web port: the one stored in relay-cluster.json (learned
+            from its minter), else hub-web.json / the learner (HUB_WEB), else
+            the file's 8000 fallback."""
             if relay_srv is None:
                 return None
             try:
@@ -1381,7 +1408,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return None
             hhost = (urlparse(hub).hostname or "").lower()
             try:
-                web = int(fed.get("web") or HUB_WEB_PORT)
+                web = int(fed.get("webStored") or hub_web_for(hhost, 0) or fed.get("web") or HUB_WEB_PORT)
             except (TypeError, ValueError):
                 web = HUB_WEB_PORT
             try:
@@ -1395,7 +1422,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     own.add(rh)             # the address our own relay is dialled by
             except Exception:
                 pass
-            if hhost in own and web == own_port:
+            if hhost in own:
+                if web != own_port and hhost not in _CHAT_HUB_SAID:
+                    _CHAT_HUB_SAID.add(hhost)
+                    _chat_log("chat: the hub %s is this KASTR (cluster file says web port %d, this "
+                              "server is on %d) -- answering chat locally" % (hhost, web, own_port))
                 return None
             return {"host": hhost, "web": web, "hub": hub, "code": fed.get("code") or ""}
 
@@ -1729,7 +1760,19 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/rooms/list":
                 if method != "GET":
                     return self._chat_reply(405, {"error": "GET only"})
-                return self._json_cors(200, {"rooms": store.rooms_public(), "closed": store.closed_public()})
+                # 0.15.0: + the relay-defined room groups {gid: {name, order, rooms}}
+                return self._json_cors(200, {"rooms": store.rooms_public(), "closed": store.closed_public(),
+                                             "groups": store.groups_public()})
+            if path == "/api/rooms/group":
+                # 0.15.0: a room's creator (roomKey) files its room under a group; the
+                # operator's create/rename/delete live on /api/relay/rooms/group.
+                if method != "POST":
+                    return self._chat_reply(405, {"error": "POST only"})
+                p = self._chat_body_json()
+                if p is None:
+                    return self._chat_reply(413, {"error": "body too large"})
+                obj, code = kastr_relay.group_op(store, p, operator=False, log=log)
+                return self._chat_reply(code, obj)
             if path == "/api/rooms/register":
                 if method != "POST":
                     return self._chat_reply(405, {"error": "POST only"})
@@ -2033,7 +2076,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     *(["-ss", "%.3f" % t] if t > 0 else []),
                     "-i", src, "-map", "0:v:0?", "-map", "0:a:0?", "-copyts",
                     *(["-c:v", "copy"] if v == "copy" else
-                      ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", "-g", "60"]),
+                      ["-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264", "-preset", "superfast", "-tune", "fastdecode", "-crf", "23", "-pix_fmt", "yuv420p", "-g", "60", "-threads", "0"]),   # 0.15.0: cap 720p-wide + faster preset so the transcode outruns playback on a laptop (choppy shares); the reader pre-buffers on top
                     *(["-c:a", "copy"] if a == "copy" else ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]),
                     "-f", "mp4", "-movflags", "empty_moov+default_base_moof", "-frag_duration", "500000", "pipe:1"]
             spawn = getattr(bridge, "spawn_media", None) if bridge else None

@@ -40,4 +40,4 @@ Since 0.13.3 the launch.log also carries one line per pair generation: `rtsp pai
 | Share row says `offline — removed from grid (attempt N); retrying` | 0.14.0: `restarts` passed 5 with the pair down; the camera left the grid (seat kept) and returns ~5 s after the pair publishes again | eviction |
 | nothing climbs, viewers still lose it | look at the viewer: a tab hidden > 60 s drops non-selected tiles until shown; a publisher-mode box never creates viewer tiles | viewer-side |
 
-`restarts` resets to 0 after a pair has lived 60 s; `sessionFails` / `sessionKills` / `nudges` never reset.
+0.15.0: a feed belongs to one grid (`gridId`, Share-row picker); eviction and re-admission are per grid, and `__gridStates()` lists every grid's members/evicted. `restarts` resets to 0 after a pair has lived 60 s; `sessionFails` / `sessionKills` / `nudges` never reset.

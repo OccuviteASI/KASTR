@@ -2,6 +2,71 @@
 
 What changed in each build, newest first.
 
+## v0.16.0 — relay stack 0.15, an admin code, a relaunch that comes back, shares that end
+
+**The relay stack moved to moq-relay 0.15.1 / moq 0.12.1, and KASTR now answers the relay's questions.** A 0.15 relay no
+longer checks tokens itself: for every session it asks an HTTP auth server (`connect`, `revalidate`, `end`) and gets back
+what that session may publish and subscribe to. KASTR's token service on the relay host (relay port + 1) is that server,
+and it still verifies the very same tokens the gate has minted since 0.13 -- so a 0.15.1 client, a 0.15.1 native
+publisher and a 0.15.1 spoke keep working against a 0.16.0 relay (rig-proven before this shipped). Roll out hub first:
+the Agg hub, then Mendon/Southridge follow within the hour, clients on their next launch. The relay's config is the new
+shape (`[listen]`, `[auth] url`, `[connect]`, `[internal]`; the old spellings are gone and a `renamed` line from the relay
+now surfaces on the Relay page), the native publisher speaks `--connect` / `--max-age 5s`, and the vendored web library
+is `@moq/watch` 0.6 / `@moq/publish` 0.5 / `@moq/net` 0.4 (everything goes through the connection's origin; the state
+tracks ride at priority 200 so presence and room state win under congestion). Tiles are tuned per class: the spotlit
+tile buffers 400 ms, rail thumbnails 200 ms, grid composites and audio-less grid members run at the live edge.
+
+**One admin code, honoured across the hub's relays.** Beside the viewer and publisher codes the relay operator can set an
+admin code (Relay page ▸ Access codes). A client that enters it joins as an admin: every remote tile's menu gains "Stop
+sharing", "Mute" and "Remove from room", and the target's page obeys within a second (toast on the target, the removed
+page lands on the gate and does not silently rejoin). A spoke with no admin code of its own asks the hub whether the
+code is the hub's -- so one code set on the hub works on every federated relay. The Relay page itself can push "Stop" to
+any stream on the relay (a relay operator's stop reads "Relay operator stopped your share"). Admin commands travel as
+announces under `<room>/.admin/...`, a path only an admin token may publish; a forged command from a publisher or viewer
+is dropped by the relay and counted as a refusal on the relay's health panel. Removal is cooperative in 0.16.0 (the page
+leaves); server-side session revocation is on the 0.17.0 list.
+
+**Federated relays pin each other's certificates.** A spoke learns the hub's certificate fingerprint from the hub's token
+service (or `/certificate.sha256`), writes it into `[connect] tls.fingerprint`, and re-learns it within 30 s when the hub
+restarts with a new certificate (the relay's log wording for the mismatch is matched). `tls.insecure` remains only as the
+fallback when the hub's web port is unreachable, and the Relay page says which of the two is in force. Same-site relays
+can also find each other over mDNS (Relay page ▸ Same-site relays: enable + a shared secret generated on the page; the
+firewall gains a UDP 5353 rule -- expect one more firewall prompt on Windows boxes that host a relay).
+
+**Health and metrics.** `GET /api/relay/health` reports the relay (sessions, cluster nodes, internal API), the auth server
+(sessions, publishers, grants, refusals, the last refusal), federation (hub, token, pinned/insecure), LAN peers, every
+publisher pair (`gen`, `restartsTotal`, `sessionFails`, `sessionKills`) and the helper versions; `GET /api/relay/metrics`
+(loopback) is Prometheus text: the relay's own counters plus `kastr_*` gauges. The Relay page shows both in a Health
+panel.
+
+**Windows self-update now comes back.** The updater swapped the exe and then fired one blind `Start-Process` at a file
+Defender was still scanning; when that failed, the old KASTR kept running with the new exe on disk. The relaunch is now
+spawn, verify, retry, escalate: it retries the direct spawn while the file is locked, respawns a child that died at once
+("bootloader with no child"), escalates to the shell's own launch path after 10 s, and only exits once the successor is
+confirmed. If nothing comes up within 30 s it says so (`relaunch-failed` in `update-check.json`, a dialog) instead of
+vanishing. Switching relays checks for updates on the new host's real web port (learned first), never on `:8000`.
+
+**Field fixes.** The grid chevron menu is a body-level popover that clamps to the window and scrolls (it was clipped inside
+the pane). Your own camera can be spotlit again: the pane keeps its id through the rebuilds that used to drop the
+spotlight, and its menu offers "Spotlight for me" / "for everyone". A GIF background animates (decoded with WebCodecs,
+frame by frame; a still first frame only on a browser without `ImageDecoder`). A grid member opened on its own wears its
+label ("Kenton — Gate cam"), on the owner's pane and on viewers' tiles.
+
+**Shared files: health readout, a nicer transcode, loop off by default, and paused means paused.** Mikey's file share
+hitched while his camera from the same machine was fine: two encoders on one CPU. The server transcode now runs below
+normal priority on half the cores, the composite follows the file's own frame rate (a 24 fps film is no longer drawn at
+30), the owner's media bar shows a health pill (`24 fps · 1248 kb/s · hw · h264_qsv · 44 s`, amber when the page's encoder
+sags, red while buffering), and a sagging encoder asks for the lighter transcode ladder after three seconds instead of
+waiting for two rebuffers. Loop is OFF by default; with loop off a share ends at the end of the file (`playing:false`,
+then the source is removed, with a "Play again" toast). A paused share stays paused: every path that could restart it
+(reopen, buffer tick, retry, control replay) now honours the user's pause, reopens keep the position instead of
+restarting at 0, and `__mediaDebug()` lists the last restart causes.
+
+**Not in this release.** Per-subscription priority on viewer tiles (the element does not expose it yet); the native
+publisher's hard/soft exit strings were not re-measured against moq 0.12.1 (the 0.11.2 strings are still matched -- if a
+dead token ladders instead of parking, that is the place to look); the auth server's `revalidate` cadence has not been
+observed on the rig; media items 3, 5, 6, 7, 8, 12 from `docs/moq-landscape.md` are the 0.17.0 plan.
+
 ## v0.15.1 — hotfix: shared files publish in H.264 with the hardware encoder
 
 **A shared file was still choppy from a laptop.** Two encoders sit behind a shared file and both were software: the

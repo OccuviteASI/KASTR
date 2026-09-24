@@ -98,6 +98,22 @@ CLOSED_TTL = 3600
 # 0.12.0: root-prefixed announce kinds every member may put beside .presence:
 # .talking/<room> (who is speaking) and .chat/<room> (a new-message nudge).
 MEMBER_KINDS = (".presence", ".talking", ".chat")
+# 0.16.0: the ADMIN role. A third relay-wide code; its token also puts under
+# <room>/.admin, where stop / mute / kick commands ride as track-less announces
+# (viewer and publisher grants have no .admin pattern, so the relay drops a
+# forged command at the door). A spoke without an admin code of its own asks
+# its hub's minter to verify the code (POST /api/token {admin, verify:true}).
+ADMIN_KIND = ".admin"
+# 0.16.0: a spoke pins the hub's QUIC certificate; when the relay reports a
+# certificate problem on the cluster link the pin is re-learned (the hub's
+# generated cert changes on every hub start).
+# 0.16.0 (measured on the rig, moq-relay 0.15.1, hub restarted with a new cert): the QUIC dial fails silently,
+# the WebSocket fallback logs 'WebSocket connection failed err=... received corrupt message of type
+# InvalidContentType' and the cluster loop logs 'cluster peer error; will retry'. Both are matched: a re-learn
+# is cheap (debounced 30 s, restarts the relay only when the pin actually changed), and a hub that is merely
+# down answers with its cached pin, so an outage never churns the spoke.
+TLS_FAIL_RE = re.compile(r"invalid peer certificate|fingerprint[^\n]*(mismatch|not match|unknown)|UnknownIssuer|CertificateUnknown|BadSignature|InvalidContentType|cluster peer error", re.I)
+LAN_SECRET_RE = re.compile(r"^[0-9a-f]{64}$")
 # 0.13.0: state tracks. Each member publishes its facts as JSON tracks under
 # `.state/<room>/<host>` (public, subscribe-only, so the lobby reads them);
 # a token scoped to a host may write only that host's paths. The claim
@@ -105,6 +121,17 @@ MEMBER_KINDS = (".presence", ".talking", ".chat")
 # "r1/host" covers r1/host/..., not r1/hostx.
 STATE_PREFIX = ".state"
 HOST_RE = re.compile(r"^[a-z0-9-]{1,32}-[0-9a-f]{4}$")
+# 0.16.0: moq-relay 0.15 no longer verifies JWTs itself -- it POSTs one JSON
+# Request per session event (connect | revalidate | end) to [auth] url and
+# applies the Grant we answer: {publish: [patterns], subscribe: [patterns],
+# root?, expires?, revalidate?}. The token service on relay port+1 answers
+# that (POST /api/session, loopback only) by verifying OUR tokens -- the exact
+# 0.13-shaped {root, put, get, exp} claims the minter still issues, so 0.15.1
+# pages and native publishers keep working -- and translating the prefix
+# lists into patterns ("main" -> "main", "main/**").
+PUBLIC_KINDS = (".channels", ".stats", ".presence", ".talking", ".chat", ".state")   # subscribe-only for anyone (the pre-join screen, bubbles, stats)
+SESSION_REVALIDATE = 600     # s: the relay re-asks; a rotated key ends every session within this
+SESSIONS_MAX = 4096
 
 # moq-relay colourises its output even when piped, which would render as
 # literal escape sequences in the log panel.
@@ -250,6 +277,104 @@ def claims_cover(claims, room):
     return False
 
 
+# ---- 0.16.0: the relay's per-session auth contract -------------------------
+
+def _patterns(v):
+    """A KASTR claim prefix (str or list) -> relay 0.15 patterns. "" -> ["**"];
+    "main" -> ["main", "main/**"]; ".state/main/h-1a2b" -> [itself, itself/**].
+    Per-segment semantics are preserved ("r1/host/**" never covers r1/hostx)."""
+    items = v if isinstance(v, (list, tuple)) else [v]
+    out = []
+    for it in items:
+        if it is None:
+            continue
+        p = str(it).strip().strip("/")
+        if p == "":
+            return ["**"]
+        for q in (p, p + "/**"):
+            if q not in out:
+                out.append(q)
+    return out
+
+
+def public_patterns():
+    out = []
+    for k in PUBLIC_KINDS:
+        out += [k, k + "/**"]
+    return out
+
+
+def public_grant():
+    """What a tokenless session gets: the public kinds, subscribe only (today's
+    `public = { subscribe = [...] }`). Publishing always needed a token."""
+    return {"publish": [], "subscribe": public_patterns()}
+
+
+def claims_to_grant(claims, now=None):
+    """Verified claims -> the relay's Grant. Accepts the 0.13 shape {root, put,
+    get, exp} (str or list values), the federation shape (root/put/get all "")
+    and a future {publish: [...], subscribe: [...]} shape. The public kinds are
+    always added to `subscribe` (public stays public)."""
+    now = time.time() if now is None else now
+    if is_relay_claims(claims):
+        pub, sub = ["**"], ["**"]
+    elif "publish" in claims or "subscribe" in claims:
+        pub = [str(x) for x in (claims.get("publish") or []) if x is not None]
+        sub = [str(x) for x in (claims.get("subscribe") or []) if x is not None]
+    else:
+        pub = _patterns(claims.get("put")) if claims.get("put") is not None else []
+        sub = _patterns(claims.get("get")) if claims.get("get") is not None else []
+    if "**" not in sub:
+        for q in public_patterns():
+            if q not in sub:
+                sub.append(q)
+    grant = {"publish": pub, "subscribe": sub}
+    root = str(claims.get("root") or "")
+    if root:
+        grant["root"] = root
+    try:
+        exp = int(float(claims.get("exp")))
+        grant["expires"] = exp
+        grant["revalidate"] = max(30, min(SESSION_REVALIDATE, exp - int(now)))
+    except (TypeError, ValueError):
+        pass
+    return grant
+
+
+def session_jwt(req):
+    """The `?jwt=` a session dialled with: the Request's raw `query`, or a query
+    left in `path`."""
+    from urllib.parse import parse_qs
+    q = str(req.get("query") or "")
+    path = str(req.get("path") or "")
+    if not q and "?" in path:
+        q = path.split("?", 1)[1]
+    q = q.lstrip("?")
+    return (parse_qs(q).get("jwt") or [""])[0]
+
+
+def claims_role(claims):
+    if is_relay_claims(claims):
+        return "relay"
+    puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
+    for p in puts:
+        if p == "**" or (not p.startswith(".") and "/.member" not in p and "/.since" not in p):
+            return "publisher"
+    return "viewer"
+
+
+def session_grant(req, key, now=None):
+    """The relay's Request -> (status, grant | None, why). status is "grant",
+    "public" (no token) or "refuse" (a token that does not verify)."""
+    tok = session_jwt(req)
+    if not tok:
+        return "public", public_grant(), "tokenless"
+    claims = verify_token(tok, key, now)
+    if claims is None:
+        return "refuse", None, "bad or expired token"
+    return "grant", claims_to_grant(claims, now), claims_role(claims)
+
+
 class Lockout:
     """0.10.0's brute-force counter, its own class in 0.12.0 so the minter and
     kastr_serve's room endpoints count the same way: five wrong codes within a
@@ -307,7 +432,8 @@ class AuthStore:
         self.state_dir = state_dir
         self.log = log or (lambda m: None)
         self.lock = threading.Lock()
-        self.codes = {"viewer": None, "publisher": None, "federation": None}   # 0.11.0: + federation
+        self.codes = {"viewer": None, "publisher": None, "federation": None, "admin": None}   # 0.11.0: + federation; 0.16.0: + admin
+        self.lan = {"enabled": False, "secret": None, "at": 0}   # 0.16.0: mDNS LAN mesh (secret = 64 hex, plaintext, loopback-written, never echoed)
         self.rooms = {}
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
@@ -322,9 +448,14 @@ class AuthStore:
                 d = json.load(f)
         except Exception:
             return
-        for k in ("viewer", "publisher", "federation"):
+        for k in ("viewer", "publisher", "federation", "admin"):
             v = d.get(k)
             self.codes[k] = v if isinstance(v, dict) and v.get("salt") and v.get("hash") else None
+        lan = d.get("lan")                   # 0.16.0
+        if isinstance(lan, dict):
+            sec = str(lan.get("secret") or "").lower()
+            self.lan = {"enabled": bool(lan.get("enabled")), "secret": sec if LAN_SECRET_RE.match(sec) else None,
+                        "at": int(lan.get("at") or 0)}
         rooms = d.get("rooms")
         if isinstance(rooms, dict):
             now = time.time()
@@ -365,6 +496,8 @@ class AuthStore:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"viewer": self.codes["viewer"], "publisher": self.codes["publisher"],
                        "federation": self.codes["federation"], "rooms": self.rooms,
+                       "admin": self.codes["admin"],   # 0.16.0
+                       "lan": self.lan,                # 0.16.0
                        "closed": self.closed,          # 0.12.0: + closed tombstones
                        "groups": self.groups}, f)     # 0.15.0: + room groups
         for i in range(6):
@@ -392,12 +525,12 @@ class AuthStore:
     def codes_status(self):
         with self.lock:
             return {"viewer": bool(self.codes["viewer"]), "publisher": bool(self.codes["publisher"]),
-                    "federation": bool(self.codes["federation"])}
+                    "federation": bool(self.codes["federation"]), "admin": bool(self.codes["admin"])}   # 0.16.0: + admin
 
-    def set_codes(self, viewer=None, publisher=None, federation=None):
+    def set_codes(self, viewer=None, publisher=None, federation=None, admin=None):
         """None = unchanged, "" = clear, anything else = the new code."""
         with self.lock:
-            for k, v in (("viewer", viewer), ("publisher", publisher), ("federation", federation)):
+            for k, v in (("viewer", viewer), ("publisher", publisher), ("federation", federation), ("admin", admin)):
                 if v is None:
                     continue
                 v = str(v)
@@ -409,6 +542,33 @@ class AuthStore:
                                      "iter": PBKDF2_ITER}
             self._save()
         return self.codes_status()
+
+    # ---- 0.16.0: mDNS LAN mesh
+
+    def lan_status(self):
+        with self.lock:
+            return {"enabled": bool(self.lan.get("enabled")), "hasSecret": bool(self.lan.get("secret"))}
+
+    def set_lan(self, enabled=None, secret=None):
+        """None = unchanged, secret "" = clear; a secret must be 64 hex characters."""
+        with self.lock:
+            if secret is not None:
+                sec = str(secret).strip().lower()
+                if sec == "":
+                    self.lan["secret"] = None
+                elif LAN_SECRET_RE.match(sec):
+                    self.lan["secret"] = sec
+                else:
+                    raise ValueError("the LAN secret must be 64 hexadecimal characters")
+            if enabled is not None:
+                self.lan["enabled"] = bool(enabled)
+            self.lan["at"] = int(time.time())
+            self._save()
+        return self.lan_status()
+
+    def lan_secret(self):
+        with self.lock:
+            return self.lan.get("secret")
 
     def check(self, kind, code):
         with self.lock:
@@ -810,13 +970,21 @@ class AuthService:
     doubles from 30 s to 10 min.
     """
 
-    def __init__(self, host, port, key, relay_port, store=None, log=None):
+    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None):
         self.store = store or AuthStore(os.getcwd(), log)
+        self.hub = hub                       # 0.16.0: callable -> the hub minter's base URL (a spoke forwards admin codes there), or None
         self.log = log or (lambda m: None)
         self.lock = threading.Lock()
         self.lockout = Lockout(self.log)     # 0.12.0: the brute-force counter, one class with kastr_serve
         self._fails = self.lockout._fails
         self._wide_logged = set()            # 0.13.0: peers that took a wide (no-host) token, logged once each
+        # 0.16.0: the relay's per-session auth (see session()); the relay asks us
+        self._sessions = {}                  # relay session id -> {at, remote, role, publisher, expires, grant}
+        self._refused = []                   # the last 20 refusals {at, remote, path, why}
+        self._refuse_said = {}               # remote -> last log time (one line per remote per minute)
+        self._events = []                    # the last 20 session events, shape only
+        self.grants = self.refusals = self.ended = 0
+        self.fingerprint = None              # the relay's QUIC certificate sha256 (Relay sets it once the relay is up)
         svc = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -866,7 +1034,12 @@ class AuthService:
                                  # lookups, version follow) and pages stop assuming 8000
                                  "web": WEB_PORT or _FIREWALL_WEB_PORT or None,
                                  # 0.15.0: its https listener (None = loopback-only web host)
-                                 "https": HTTPS_PORT})
+                                 "https": HTTPS_PORT,
+                                 # 0.16.0: this minter also answers the relay's per-session auth, and the
+                                 # relay's certificate fingerprint (spokes pin it instead of disable_verify)
+                                 "session": True, "fingerprint": svc.fingerprint,
+                                 # 0.16.0: an admin code exists here (the gate can say so)
+                                 "adminCode": svc.store.codes_status()["admin"]})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
                     # gate can list them and take their codes -- names only.
@@ -903,6 +1076,12 @@ class AuthService:
                     obj, code = svc.token(p, self._peer())
                     hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                     self._reply(obj, code, hdrs)
+                elif path in ("/api/session", "/"):
+                    # 0.16.0: the relay's session events. The PEER must be loopback itself
+                    # (never X-Forwarded-For -- the relay runs beside us).
+                    ip = (self.client_address[0] if self.client_address else "") or ""
+                    obj, code = svc.session(p, ip)
+                    self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
 
@@ -957,6 +1136,8 @@ class AuthService:
     def token(self, p, peer=""):
         if p.get("federation") is not None and not p.get("room"):   # 0.11.0: a relay, not a person
             return self._federation_token(str(p.get("federation") or ""), peer)
+        if p.get("verify") and p.get("admin") is not None:          # 0.16.0: a spoke asks "is this OUR admin code?"
+            return self._admin_verify(str(p.get("admin") or ""), peer)
         slug = str(p.get("room") or "")
         access = str(p.get("code") or "")
         room_code = p.get("roomCode")
@@ -982,6 +1163,8 @@ class AuthService:
                 role = "publisher"
             elif self.store.check("viewer", access):
                 role = "viewer"
+            elif self.store.check("admin", access) or self._hub_admin_ok(access):   # 0.16.0: here, or the hub's
+                role = "admin"
             elif rec is not None and _room_code_ok(rec, access):
                 role, rc = "publisher", access     # the room's creator (a publisher) delegated its code
             else:
@@ -996,7 +1179,7 @@ class AuthService:
                 return self._fail(peer, "wrong room code", slug)
         self._ok(peer)
         now = int(time.time())
-        ttl = TOKEN_TTL if role == "publisher" else VIEWER_TTL
+        ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with .admin
         exp = now + ttl
         if host:
             # 0.13.0: identity-scoped puts. A token writes only under the host
@@ -1005,18 +1188,21 @@ class AuthService:
             # `.presence/<room>`, gone in 0.14). The viewer's `<room>/<host>/.member`
             # is narrower than the publisher's `<room>/<host>`: that is what keeps
             # a viewer token off media.
-            if role == "publisher":
+            if role in ("publisher", "admin"):
                 puts = [slug + "/" + host, STATE_PREFIX + "/" + slug + "/" + host,
                         slug + "/.since", ".presence/" + slug]
+                if role == "admin":
+                    puts.append(slug + "/" + ADMIN_KIND)   # 0.16.0: stop / mute / kick commands
             else:
                 puts = [STATE_PREFIX + "/" + slug + "/" + host, slug + "/" + host + "/.member",
                         slug + "/.since", ".presence/" + slug]
             member = _mint(self.key, {"root": "", "get": slug, "put": puts, "iat": now, "exp": exp})
-        elif role == "publisher":
+        elif role in ("publisher", "admin"):
             # 0.11.0: `.presence/<slug>` is the public room-occupancy announce (arrays are fine)
             # 0.12.0: + .talking/<slug> and .chat/<slug> (speaking + chat nudges)
             self._wide_once(peer)
-            member = _mint(self.key, {"root": "", "put": [slug] + [k + "/" + slug for k in MEMBER_KINDS],
+            member = _mint(self.key, {"root": "", "put": [slug] + [k + "/" + slug for k in MEMBER_KINDS]
+                                                        + ([slug + "/" + ADMIN_KIND] if role == "admin" else []),   # 0.16.0
                                       "get": slug, "iat": now, "exp": exp})
         else:
             # Measured against the bundled relay (2026-09-18): `put` may be a
@@ -1031,6 +1217,113 @@ class AuthService:
         registry = _mint(self.key, {"root": "", "put": ".channels/" + slug, "iat": now, "exp": exp})
         return {"ok": True, "exp": exp, "role": role,
                 "tokens": {"member": member, "registry": registry}}, 200
+
+    # ---- 0.16.0: the relay's per-session auth ------------------------------------
+
+    def session(self, req, peer=""):
+        """POST /api/session from the relay beside us: one Request per session event.
+        connect/revalidate -> a Grant (200) or a refusal (403); end -> bookkeeping.
+        Reply first, log after -- the relay waits on this answer."""
+        if peer not in LOOPBACK_PEERS:
+            return {"error": "session auth answers the relay on this machine only"}, 403
+        if not isinstance(req, dict):
+            return {"error": "bad request"}, 400
+        ev = str(req.get("event") or "connect")
+        sid = str(req.get("id") or "")
+        remote = str(req.get("remote") or "?")
+        now = time.time()
+        with self.lock:   # the last 20 events, shape only (field diagnostics: what the relay sends)
+            self._events.append({"at": int(now), "event": ev, "remote": remote, "keys": sorted(str(k) for k in req),
+                                 "jwt": bool(session_jwt(req)), "role": str(req.get("role") or ""), "transport": str(req.get("transport") or "")})
+            del self._events[:-20]
+        if ev == "end":
+            with self.lock:
+                rec = self._sessions.pop(sid, None)
+                self.ended += 1
+            reason = str(req.get("reason") or "")
+            if rec and (rec.get("publisher") or reason):
+                self.log("relay session: end %s remote=%s role=%s %ss %s bytes%s"
+                         % (sid[:8] or "?", rec.get("remote"), rec.get("role"), req.get("duration", "?"),
+                            req.get("bytes", "?"), (" reason=" + reason) if reason else ""))
+            return {}, 200
+        if ev == "revalidate" and not session_jwt(req):
+            # a revalidate that carries no query: hand back the grant we gave at connect while it
+            # lasts (never a downgrade to the public grant -- that would end a publisher's session)
+            with self.lock:
+                rec = self._sessions.get(sid)
+            if rec and float(rec.get("expires") or 0) > now:
+                return rec["grant"], 200
+        status, grant, why = session_grant(req, self.key, now)
+        if status == "refuse":
+            with self.lock:
+                self.refusals += 1
+                self._refused.append({"at": int(now), "remote": remote, "path": str(req.get("path") or ""), "why": why})
+                del self._refused[:-20]
+                last = self._refuse_said.get(remote)
+                say = not last or now - last > 60
+                if say:
+                    self._refuse_said[remote] = now
+            if say:
+                self.log("relay session: refused %s from %s (%s)" % (ev, remote, why))
+            return {"error": why}, 403
+        with self.lock:
+            self.grants += 1
+            if sid:
+                if len(self._sessions) >= SESSIONS_MAX:
+                    for k in sorted(self._sessions, key=lambda k: self._sessions[k]["at"])[:len(self._sessions) - SESSIONS_MAX + 1]:
+                        self._sessions.pop(k, None)
+                self._sessions[sid] = {"at": now, "remote": remote, "role": why,
+                                       "publisher": bool(grant.get("publish")),
+                                       "expires": grant.get("expires") or (now + 86400), "grant": grant}
+        return grant, 200
+
+    def stats(self):
+        with self.lock:
+            pubs = sum(1 for r in self._sessions.values() if r.get("publisher"))
+            return {"up": True, "sessions": len(self._sessions), "publishers": pubs,
+                    "grants": self.grants, "refusals": self.refusals, "ended": self.ended,
+                    "lastRefusal": (dict(self._refused[-1]) if self._refused else None),
+                    "recent": [dict(e) for e in self._events[-8:]]}
+
+    # ---- 0.16.0: the admin code, here or at the hub ---------------------------------
+
+    def _admin_verify(self, code, peer=""):
+        """POST /api/token {admin, verify:true} from a SPOKE's minter: yes/no, no token."""
+        wait = self.locked_for(peer)
+        if wait:
+            return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if not self.store.codes_status()["admin"]:
+            return {"ok": False, "error": "no admin code on this relay"}, 403
+        if not self.store.check("admin", code):
+            return self._fail(peer, "wrong admin code", "(admin)", what="admin")
+        self._ok(peer)
+        return {"ok": True, "role": "admin"}, 200
+
+    def _hub_admin_ok(self, code):
+        """A spoke with no admin code of its own asks the hub: is this the fleet's
+        admin code? The code travels only to the minter the client already trusts
+        with it. False on any doubt (no hub, hub dark, refused, throttled)."""
+        if not code or self.store.codes_status()["admin"]:
+            return False
+        try:
+            minter = self.hub() if callable(self.hub) else None
+        except Exception:
+            minter = None
+        if not minter:
+            return False
+        try:
+            req = urllib.request.Request(minter + "/api/token",
+                                         data=json.dumps({"admin": code, "verify": True}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=4) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+            ok = bool(d.get("ok")) and d.get("role") == "admin"
+            if ok:
+                self.log("relay auth: admin code verified by the hub %s" % minter)
+            return ok
+        except Exception as e:
+            self.log("relay auth: hub admin verify failed (%s)" % e)
+            return False
 
     def _wide_once(self, peer):
         """0.13.0: a member without a `host` took the 0.12-shaped (room-wide put)
@@ -1241,27 +1534,20 @@ class Relay:
             _ensure_jwk(self.state_dir)
             auth = [
                 "[auth]",
-                # The signing key the token service (port+1) mints against.
-                # RELATIVE on purpose (the relay runs with cwd = state_dir):
-                # an absolute Windows path ("C:/...") goes through the relay's
-                # file layer as a URL, where the drive letter parses as a
-                # scheme -- every key load then fails and every well-formed
-                # token dies with 502. Proven live, 2026-09-01.
-                'key = "auth.jwk"',
-                # Room listing, lock badges and the stats page stay public
-                # (subscribe-only) so the pre-join screen needs no token.
-                # 0.11.0: `.presence/<room>` too -- room occupancy for the bubbles.
-                # 0.12.0: `.talking/<room>` (who speaks) and `.chat/<room>` (new-message nudge).
-                # 0.13.0: `.state/<room>/<host>` -- every member's JSON state tracks (the
-                # lobby and 0.13 pages read them without a token).
-                'public = { subscribe = [".channels", ".stats", ".presence", ".talking", ".chat", ".state"] }',
+                # 0.16.0 (moq-relay 0.15): the relay verifies nothing itself. It POSTs one
+                # Request per session event to this URL and applies the Grant. The token
+                # service on port+1 (AuthService.session) verifies OUR tokens with auth.jwk
+                # and answers patterns; the public kinds ride every grant, subscribe-only
+                # (.channels/.stats/.presence/.talking/.chat/.state -- the pre-join screen).
+                # http:// is accepted for a loopback host only; the minter always binds
+                # loopback too (or everything, which includes it).
+                'url = "http://127.0.0.1:%d/api/session"' % (port + 1),
             ]
         else:
             auth = [
                 "[auth]",
-                # Empty prefix = the whole namespace is public. The KASTR pages
-                # connect without a token, so anything else would refuse them.
-                'public = ""',
+                # Everything public, both ways: the KASTR pages connect without a token.
+                'public = "**"',
             ]
 
         # Federation (0.8.1): a saved hub URL clusters this relay to it.
@@ -1281,14 +1567,21 @@ class Relay:
             self._fed_active = tok
             self.federation = {"hub": hub, "token": bool(tok), "reason": why,
                                "exp": self._fed_cache().get("exp") if tok else None, **info}
+            # 0.16.0: pin the hub's certificate (I1) -- advertised by its /api/auth, else fetched, else remembered
+            self._hub_pin, tls_state = self._hub_pin_for(hub, info.get("fingerprint"))
+            self.federation["tls"] = tls_state
+            self.federation["fingerprint"] = self._hub_pin
+            if tls_state == "insecure":
+                self._fed_say("hub certificate fingerprint unavailable -- connecting without verification")
             cluster = [
                 "[cluster]",
                 "connect = [%s]" % json.dumps(url),    # TOML basic strings share JSON's escapes
-                # 0.12.0: a restarted publisher resumes at a group boundary instead of re-announcing
-                'linger = "20s"',
+                # 0.16.0: `linger` is gone (moq-relay 0.15 keeps a resumed broadcast's
+                # subscribers on its own); [client] became [connect]. The hub's certificate
+                # is pinned when its fingerprint is known (I1), else trusted blind as before.
                 "",
-                "[client.tls]",
-                "disable_verify = true",
+                "[connect]",
+                *self._connect_tls_lines(hub),
                 "",
             ]
 
@@ -1306,16 +1599,19 @@ class Relay:
             except Exception:
                 node = socket.gethostname() or "node"
 
+        # 0.16.0: the internal ops listener (/metrics, /health, /nodes, /sessions) --
+        # plain HTTP on loopback only, never a firewall rule.
+        self.internal_port = self._pick_internal_port(port)
         cfg = [
-            "[server]",
+            "[listen]",                                   # 0.16.0: was [server] / [server.tls]
             f'bind = "{host}:{port}"',
-            "",
-            "[server.tls]",
-            "generate = [" + ", ".join(f'"{h}"' for h in hosts) + "]",
+            "tls.generate = [" + ", ".join(f'"{h}"' for h in hosts) + "]",
             "",
             *auth,
             "",
             *cluster,
+            *(["[internal]", f'listen = "127.0.0.1:{self.internal_port}"', ""] if self.internal_port else []),
+            *self._lan_lines(bind_all, secured),   # 0.16.0: [cluster.lan] when enabled
             "[web]",
             "ws = true",           # WebSocket fallback for clients without WebTransport
             "",
@@ -1349,6 +1645,168 @@ class Relay:
     def _cluster_file(self):
         return os.path.join(self.state_dir, "relay-cluster.json")
 
+    def _connect_tls_lines(self, hub):
+        """0.16.0: how this spoke trusts the hub's QUIC certificate -- pinned by
+        sha256 when known (I1 fills `self._hub_pin`), else `insecure` as before."""
+        pin = getattr(self, "_hub_pin", None)
+        if pin:
+            return ['tls.fingerprint = ["%s"]' % pin]
+        return ["tls.insecure = true"]
+
+    def _pick_internal_port(self, port):
+        """0.16.0: a free loopback port for the relay's internal ops listener --
+        port+3, else the next free up to port+9, else none (the relay runs without)."""
+        for cand in range(int(port) + 3, int(port) + 10):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                    sk.bind(("127.0.0.1", cand))
+                return cand
+            except OSError:
+                continue
+        return None
+
+    def internal_get(self, path, timeout=1.0):
+        """GET <internal listener>/<path> -> text, or None."""
+        port = getattr(self, "internal_port", None)
+        if not port or not self.running():
+            return None
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:%d%s" % (port, path), timeout=timeout) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception:
+            return None
+
+    def _hub_minter_url(self):
+        """0.16.0: the hub minter's base URL (relay port + 1) when a hub is saved, else None."""
+        try:
+            hub = _normalize_hub(self._cluster_raw()["connect"])
+            return _hub_parts(hub)[2] if hub else None
+        except Exception:
+            return None
+
+    def _hub_pin_for(self, hub, hint=None):
+        """0.16.0: -> (sha256 hex | None, "pinned" | "pinned-cached" | "insecure").
+        `hint` = the fingerprint the hub's /api/auth advertised; else the hub's
+        /certificate.sha256 is fetched (3 s); else what relay-cluster.json remembers."""
+        pin = None
+        h = str(hint or "").strip().lower()
+        if re.match(r"^[0-9a-f]{64}$", h):
+            pin = h
+        if not pin:
+            try:
+                host, port, _m = _hub_parts(hub)
+                with urllib.request.urlopen("http://%s:%d/certificate.sha256" % (host, port), timeout=3) as r:
+                    h = r.read().decode("ascii", "replace").strip().lower()
+                if re.match(r"^[0-9a-f]{64}$", h):
+                    pin = h
+            except Exception:
+                pin = None
+        stored = (self._cluster_raw().get("fingerprint") or {}).get("sha256")
+        if pin:
+            if pin != stored:
+                self._cluster_note_fp(pin)
+            return pin, "pinned"
+        if stored:
+            return stored, "pinned-cached"
+        return None, "insecure"
+
+    def _cluster_note_fp(self, pin):
+        try:
+            with open(self._cluster_file(), encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            d = {}
+        d["fingerprint"] = {"sha256": pin, "at": int(time.time())}
+        try:
+            os.makedirs(self.state_dir, exist_ok=True)
+            tmp = self._cluster_file() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(d, f)
+            os.replace(tmp, self._cluster_file())
+            self.log("relay federation: hub certificate pinned (%s...)" % pin[:12])
+        except OSError as e:
+            self.log("relay federation: could not note the hub fingerprint: %s" % e)
+
+    def _fingerprint_check(self, reason):
+        """0.16.0: the relay logged a certificate problem on the cluster link --
+        re-learn the hub's fingerprint (debounced 30 s) off the log thread."""
+        now = time.time()
+        if now - getattr(self, "_fp_check_at", 0) < 30:
+            return
+        self._fp_check_at = now
+        self.log("relay federation: %s -- re-learning the hub certificate" % reason)
+        threading.Thread(target=lambda: self._federation_tick(), daemon=True).start()
+
+    def _lan_lines(self, bind_all, secured):
+        """0.16.0: the [cluster.lan] block when the operator enabled the LAN mesh.
+        A loopback-only relay has no LAN to mesh on; a secured relay needs a secret."""
+        st = self.store.lan_status()
+        if not st["enabled"]:
+            return []
+        if not bind_all:
+            self.log("relay: LAN mesh enabled but the relay is loopback-only -- tick 'Allow other machines'")
+            return []
+        secret = self.store.lan_secret()
+        if secured and not secret:
+            self.log("relay: LAN mesh needs a secret on a secured relay -- not enabled")
+            return []
+        lines = ["[cluster.lan]", "enabled = true", 'app = "kastr"']
+        if secret:
+            p = os.path.join(self.state_dir, "lan.secret")
+            try:
+                tmp = p + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(secret)
+                try:
+                    os.chmod(tmp, 0o600)
+                except OSError:
+                    pass
+                os.replace(tmp, p)
+                lines.append('secret = "lan.secret"')   # RELATIVE: the relay runs with cwd = state_dir (the auth.jwk lesson)
+            except OSError as e:
+                self.log("relay: could not write lan.secret (%s) -- LAN mesh not enabled" % e)
+                return []
+        else:
+            self.log("relay: LAN mesh is OPEN (no secret) -- anyone on this network may join it")
+        lines.append("")
+        return lines
+
+    def lan_status(self):
+        st = self.store.lan_status()
+        st["active"] = bool(self.running() and st["enabled"] and self.bind_all)
+        return st
+
+    def set_lan(self, payload):
+        """POST /api/relay/lan {enabled?, secret?} (loopback-guarded)."""
+        st = self.store.set_lan(payload.get("enabled"), payload.get("secret"))
+        self.log("relay: LAN mesh %s%s" % ("enabled" if st["enabled"] else "disabled", " with a secret" if st["hasSecret"] else ""))
+        restarted = self._restart()
+        out = self.lan_status()
+        out["ok"] = True
+        out["restarted"] = restarted
+        return out
+
+    def admin_token(self, room):
+        """0.16.0: the operator's own admin token for `room` (loopback-guarded: the
+        Relay page pushes stop / kick commands with it). No code needed -- the
+        machine that owns the relay is its operator."""
+        if not (self.auth and self.running() and self.secured):
+            return {"error": "the relay is not running secured on this machine"}, 400
+        slug = str(room or "")
+        now = int(time.time())
+        exp = now + 3600
+        if not slug:
+            # the whole relay (the Relay page's stream probe + push): the machine that owns
+            # the relay is its operator -- the same shape a federated relay holds
+            tok = _mint(self.auth.key, dict(FEDERATION_CLAIMS, iat=now, exp=exp))
+            return {"ok": True, "role": "operator", "exp": exp, "token": tok}, 200
+        if not SLUG_RE.match(slug):
+            return {"error": "bad room name"}, 400
+        tok = _mint(self.auth.key, {"root": "", "get": slug,
+                                    "put": [slug] + [k + "/" + slug for k in MEMBER_KINDS] + [slug + "/" + ADMIN_KIND],
+                                    "iat": now, "exp": exp})
+        return {"ok": True, "role": "admin", "exp": exp, "token": tok}, 200
+
     def _cluster_raw(self):
         """{connect, code, master} as stored -- `code` is the hub's federation
         code in PLAIN TEXT (this relay must present it); private to this class."""
@@ -1365,15 +1823,18 @@ class Relay:
                     "web": web,
                     # 0.15.0: the port as STORED (None = never learned; `web` above is the
                     # 8000 fallback) so kastr_serve can prefer a learned hub-web.json entry
-                    "webStored": web if d.get("web") else None}
+                    "webStored": web if d.get("web") else None,
+                    # 0.16.0: the hub's pinned QUIC certificate {sha256, at}
+                    "fingerprint": d.get("fingerprint") if isinstance(d.get("fingerprint"), dict) else None}
         except Exception:
-            return {"connect": "", "code": "", "master": True, "web": 8000, "webStored": None}
+            return {"connect": "", "code": "", "master": True, "web": 8000, "webStored": None, "fingerprint": None}
 
     def cluster_config(self):
         """The public shape (status(), GET /api/relay/cluster): never the code."""
         raw = self._cluster_raw()
         return {"connect": raw["connect"], "master": raw["master"], "hasCode": bool(raw["code"]),
-                "web": raw["web"]}     # 0.12.0
+                "web": raw["web"],     # 0.12.0
+                "fingerprint": (raw.get("fingerprint") or {}).get("sha256")}   # 0.16.0: public (it is the hub's cert hash)
 
     # ---- federation token (spoke side, 0.11.0) --------------------------------
 
@@ -1431,7 +1892,7 @@ class Relay:
             self._fed_say(why)
             return None, why, info
         info = {"hubCodes": bool(auth.get("codes")), "hubFederation": bool(auth.get("federation")),
-                "kid": auth.get("kid")}
+                "kid": auth.get("kid"), "fingerprint": auth.get("fingerprint")}   # 0.16.0: the hub's QUIC cert hash
         self._cluster_note_web(auth.get("web"), hub=hub, https=auth.get("https"))   # 0.14.0 F / 0.15.0: the hub told us its web (+https) port
         if not auth.get("codes"):
             why = "hub is open (no access codes) -- connecting without a token"
@@ -1516,6 +1977,11 @@ class Relay:
         tok, why, info = self.federation_token(hub, fed["code"])
         if tok and tok != self._fed_active:
             self.log("relay federation: %s -- restarting the relay with the fresh hub token" % why)
+            self._restart()
+            return True
+        pin, _st = self._hub_pin_for(hub, info.get("fingerprint"))   # 0.16.0: the hub's cert changes on every hub start
+        if pin and pin != getattr(self, "_hub_pin", None):
+            self.log("relay federation: hub certificate changed -- restarting the relay pinned to %s..." % pin[:12])
             self._restart()
             return True
         return False
@@ -1611,6 +2077,8 @@ class Relay:
                 os.remove(self._fed_cache_file())
             except OSError:
                 pass
+        if cur["connect"] != prev["connect"]:
+            cur["fingerprint"] = None    # 0.16.0: a new hub is pinned afresh
         os.makedirs(self.state_dir, exist_ok=True)
         tmp = self._cluster_file() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -1650,6 +2118,19 @@ class Relay:
         with self._lock:
             self._log = []
         self.error = None
+        if secured:
+            # 0.16.0: the relay admits NO session until [auth] url answers, so the token
+            # service (which also answers the relay's session events) comes up FIRST.
+            _, key = _ensure_jwk(self.state_dir)
+            try:
+                self.auth = AuthService("" if bind_all else "127.0.0.1",
+                                        port + 1, key, port, self.store, self.log,
+                                        hub=self._hub_minter_url)   # 0.16.0: admin codes are verified at the hub when none is set here
+            except OSError as e:
+                # A secured relay without its minter would lock everyone out
+                # silently -- refuse to half-start.
+                raise RuntimeError(
+                    f"token service could not bind port {port + 1}: {e}")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.proc = subprocess.Popen(
             [self.binary, cfg, "--log-level", "info"],
@@ -1668,24 +2149,22 @@ class Relay:
         # than "starting" and a failure the user never sees.
         for _ in range(30):
             if self.proc.poll() is not None:
-                self.error = self._last_log() or f"exited with code {self.proc.returncode}"
+                # 0.16.0: a renamed/unknown config key makes moq-relay 0.15 refuse to boot
+                # with a "these settings were renamed" line -- surface THAT, not the last line
+                with self._lock:
+                    said = [l for l in self._log if "renamed" in l or "error" in l.lower()]
+                self.error = (said[0] if said else self._last_log()) or f"exited with code {self.proc.returncode}"
                 self.proc = None
                 break
             if self.fingerprint():
                 break
             time.sleep(0.2)
 
+        if secured and not self.running() and self.auth:
+            self.auth.close()
+            self.auth = None
         if secured and self.running():
-            _, key = _ensure_jwk(self.state_dir)
-            try:
-                self.auth = AuthService("" if bind_all else "127.0.0.1",
-                                        port + 1, key, port, self.store, self.log)
-            except OSError as e:
-                # A secured relay without its minter would lock everyone out
-                # silently -- refuse to half-start.
-                self.stop()
-                raise RuntimeError(
-                    f"token service could not bind port {port + 1}: {e}")
+            self.auth.fingerprint = self.fingerprint()   # 0.16.0: /api/auth advertises it (spokes pin it)
             if not self.store.configured():
                 self.log("relay: secured WITHOUT access codes -- any room code mints a token; "
                          "set the viewer and publisher codes on the Relay page")
@@ -1719,10 +2198,11 @@ class Relay:
         return st
 
     def set_codes(self, payload):
-        st = self.store.set_codes(payload.get("viewer"), payload.get("publisher"), payload.get("federation"))
-        self.log("relay: access codes updated -- viewer %s, publisher %s, federation %s" % (
+        st = self.store.set_codes(payload.get("viewer"), payload.get("publisher"), payload.get("federation"),
+                                  payload.get("admin"))   # 0.16.0
+        self.log("relay: access codes updated -- viewer %s, publisher %s, federation %s, admin %s" % (
             "set" if st["viewer"] else "not set", "set" if st["publisher"] else "not set",
-            "set" if st["federation"] else "not set"))
+            "set" if st["federation"] else "not set", "set" if st["admin"] else "not set"))
         return {"ok": True, "codes": st, "configured": bool(st["viewer"] or st["publisher"])}
 
     def rotate(self):
@@ -1773,6 +2253,8 @@ class Relay:
                 with self._lock:
                     self._log.append(line)
                     del self._log[:-LOG_LINES]
+                if getattr(self, "_hub_pin", None) and TLS_FAIL_RE.search(line):   # 0.16.0
+                    self._fingerprint_check("relay reported a certificate problem")
         except Exception:
             pass
 
@@ -1833,6 +2315,11 @@ class Relay:
             "legacy": bool(self.secured and self.running() and not self.store.configured()),
             # 0.11.0: spoke side -- hub, whether a token rides the link, and why not
             "federation": self.federation,
+            # 0.16.0: the per-session auth server the relay depends on, and the internal ops port
+            "authUp": bool(self.auth is not None and getattr(self.auth, "httpd", None) is not None),
+            "auth": (self.auth.stats() if self.auth else None),
+            "internal": (getattr(self, "internal_port", None) if self.running() else None),
+            "lan": self.lan_status(),   # 0.16.0
         }
 
     # ---- autostart (0.8.0) -------------------------------------------------
@@ -1875,7 +2362,8 @@ WEB_PORT = None            # 0.14.0 F: this KASTR's web port (set by the launche
 # The rules the button creates -- checked by name before ever prompting.
 FIREWALL_RULES = ("KASTR MoQ Relay", "KASTR MoQ Relay (cert)",
                   "KASTR room codes", "KASTR web",
-                  "KASTR MoQ Relay (wss)", "KASTR web (https)")   # 0.8.9: phone paths
+                  "KASTR MoQ Relay (wss)", "KASTR web (https)",   # 0.8.9: phone paths
+                  "KASTR MoQ Relay (mDNS)")                        # 0.16.0: LAN mesh discovery
 _FIREWALL_HTTPS_PORT = None   # set by the launcher when the https listener is up
 HTTPS_PORT = None             # 0.15.0: this KASTR's https listener port (launcher); /api/auth advertises it (None = none)
 
@@ -1947,6 +2435,8 @@ def add_firewall_rules(port):
             "-Protocol TCP -LocalPort %d -Action Allow" % (port + 2),
             'New-NetFirewallRule -DisplayName "KASTR web (https)" -Direction Inbound '
             "-Protocol TCP -LocalPort %d -Action Allow" % (_FIREWALL_HTTPS_PORT or 8443),
+            'New-NetFirewallRule -DisplayName "KASTR MoQ Relay (mDNS)" -Direction Inbound '
+            "-Protocol UDP -LocalPort 5353 -Action Allow",   # 0.16.0
             'exit 0',
         ])
         with open(script, "w", encoding="utf-8") as f:
@@ -1964,8 +2454,8 @@ def add_firewall_rules(port):
                          "the rules failed) -- run the printed commands in an "
                          "admin PowerShell instead"}
     cmds = ("ufw allow %d/udp && ufw allow %d/tcp && ufw allow %d/tcp && ufw allow %d/tcp"
-            " && ufw allow %d/tcp && ufw allow %d/tcp"
-            % (port, port, port + 1, _FIREWALL_WEB_PORT or 8000, port + 2, _FIREWALL_HTTPS_PORT or 8443))
+            " && ufw allow %d/tcp && ufw allow %d/tcp && ufw allow 5353/udp"
+            % (port, port, port + 1, _FIREWALL_WEB_PORT or 8000, port + 2, _FIREWALL_HTTPS_PORT or 8443))   # 0.16.0: + mDNS
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         code = subprocess.call(["pkexec", "sh", "-c", cmds])
         if code == 0:
@@ -1988,7 +2478,9 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/firewall", "/api/relay/codes", "/api/relay/rotate",
                  "/api/relay/rooms/close",     # 0.12.0
                  "/api/relay/webport",         # 0.14.0 F
-                 "/api/relay/rooms/group")     # 0.15.0
+                 "/api/relay/rooms/group",     # 0.15.0
+                 "/api/relay/lan",             # 0.16.0
+                 "/api/relay/admin/token")     # 0.16.0
 
 
 def _host_of(value):
@@ -2128,6 +2620,116 @@ def handle_api(handler, relay, path, set_relay_url=None):
         payload = _payload_of(handler)
         obj, code = group_op(relay.store, payload, operator=True, log=relay.log)
         reply(obj, code)
+        return True
+
+    if path == "/api/relay/lan":
+        # 0.16.0: the mDNS LAN mesh -- GET {enabled, hasSecret, active}; POST {enabled?, secret?} (GUARDED)
+        if handler.command == "POST":
+            try:
+                reply(relay.set_lan(_payload_of(handler)))
+            except ValueError as e:
+                reply({"error": str(e)}, 400)
+            except Exception as e:
+                reply({"error": str(e)}, 400)
+        else:
+            reply(relay.lan_status())
+        return True
+
+    if path == "/api/relay/admin/token":
+        # 0.16.0: the operator's admin token for a room (GUARDED: the machine itself)
+        if handler.command != "POST":
+            reply({"error": "POST only"}, 405)
+            return True
+        payload = _payload_of(handler)
+        obj, code = relay.admin_token(str(payload.get("room") or ""))
+        reply(obj, code)
+        return True
+
+    if path == "/api/relay/health":
+        # 0.16.0: counts only (no paths) -- readable like status
+        st = relay.status()
+        auth = st.get("auth") or {}
+        sessions = nodes = None
+        try:
+            js = relay.internal_get("/sessions")
+            if js:
+                sessions = len((json.loads(js) or {}).get("sessions") or [])
+        except Exception:
+            sessions = None
+        try:
+            jn = relay.internal_get("/nodes")
+            if jn:
+                d = json.loads(jn)
+                nodes = len(d.get("nodes") if isinstance(d, dict) and isinstance(d.get("nodes"), list) else (d if isinstance(d, list) else []))
+        except Exception:
+            nodes = None
+        pairs = []
+        try:
+            bridge = getattr(handler.server, "rtsp", None)
+            for f in (bridge.list() if bridge else []):
+                pub = f.get("publish") or {}
+                pairs.append({"broadcast": pub.get("broadcast") or f.get("broadcast") or "", "running": bool(pub.get("running")),
+                              "parked": bool(pub.get("parked")), "gen": pub.get("gen"), "restartsTotal": pub.get("restartsTotal"),
+                              "sessionFails": pub.get("sessionFails"), "sessionKills": pub.get("sessionKills"),
+                              "lastSessionAt": pub.get("lastSessionAt")})
+        except Exception:
+            pairs = []
+        try:
+            helpers = kastr_rtsp.helper_versions()
+        except Exception:
+            helpers = {}
+        reply({"relay": {"running": st.get("running"), "port": st.get("port"), "internal": bool(st.get("internal")),
+                         "sessions": sessions if sessions is not None else auth.get("sessions"), "nodes": nodes},
+               "auth": ({"up": bool(st.get("authUp")), **{k: auth.get(k) for k in ("sessions", "publishers", "grants", "refusals", "ended", "lastRefusal")}}
+                        if st.get("secured") else {"up": None}),
+               "federation": ({"hub": (st.get("federation") or {}).get("hub"), "token": (st.get("federation") or {}).get("token"),
+                               "tls": (st.get("federation") or {}).get("tls"), "fingerprint": (st.get("federation") or {}).get("fingerprint")}
+                              if st.get("federation") else None),
+               "lan": st.get("lan"), "pairs": pairs, "helpers": helpers})
+        return True
+
+    if path == "/api/relay/metrics":
+        # 0.16.0: Prometheus text -- the relay's own /metrics plus KASTR's pair gauges.
+        # Loopback only: the text names broadcast paths (rooms, hosts, operators).
+        if not _local_only(handler):
+            handler.send_response(403)
+            handler.send_header("Content-Type", "text/plain")
+            handler.end_headers()
+            handler.wfile.write(b"metrics answer the machine itself only\n")
+            return True
+        st = relay.status()
+        out = []
+        rm = relay.internal_get("/metrics", timeout=2.0)
+        out.append(rm.rstrip("\n") if rm else "# relay internal API unreachable (relay stopped or no [internal] listener)")
+        auth = st.get("auth") or {}
+        out.append("# KASTR")
+        out.append("kastr_relay_up %d" % (1 if st.get("running") else 0))
+        out.append("kastr_auth_up %d" % (1 if st.get("authUp") else 0))
+        for k, name in (("sessions", "kastr_auth_sessions"), ("publishers", "kastr_auth_publishers"),
+                        ("grants", "kastr_auth_grants_total"), ("refusals", "kastr_auth_refusals_total"), ("ended", "kastr_auth_ended_total")):
+            if auth.get(k) is not None:
+                out.append("%s %d" % (name, int(auth.get(k) or 0)))
+        def esc(v):
+            return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        try:
+            bridge = getattr(handler.server, "rtsp", None)
+            for f in (bridge.list() if bridge else []):
+                pub = f.get("publish") or {}
+                b = esc(pub.get("broadcast") or f.get("broadcast") or "")
+                for k, name in (("running", "kastr_rtsp_pair_running"), ("parked", "kastr_rtsp_pair_parked"), ("gen", "kastr_rtsp_pair_gen"),
+                                ("restartsTotal", "kastr_rtsp_pair_restarts_total"), ("sessionFails", "kastr_rtsp_pair_session_fails_total"),
+                                ("sessionKills", "kastr_rtsp_pair_session_kills_total")):
+                    v = pub.get(k)
+                    out.append('%s{broadcast="%s"} %d' % (name, b, int(bool(v)) if isinstance(v, bool) else int(v or 0)))
+        except Exception:
+            pass
+        body = ("\n".join(out) + "\n").encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(body)
         return True
 
     if path == "/api/relay/codes":

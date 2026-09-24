@@ -7,6 +7,10 @@ Linux binary, macOS app) that bundles a local web UI, a Chrome for Testing brows
 `moq-relay` / `moq` CLI. A box can be a viewer, a publisher, a relay, or all three, and relays federate
 into a hub-and-spoke cluster.
 
+Fleet updates flow hub-first: update the hub relay box, its spokes follow the hub's version within the hour, and
+clients pick the new build up on their next launch. Relay operators set viewer, publisher and (since 0.16.0) admin
+access codes on the Relay page; an admin code set on the hub is honoured by every federated spoke.
+
 ## Layout
 
 | Path | What |

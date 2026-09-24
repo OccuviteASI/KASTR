@@ -28,6 +28,7 @@ import sys
 import time
 import urllib.request
 from urllib.parse import urlsplit
+import posixpath
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "assets", "vendor", "esm")
@@ -35,20 +36,27 @@ MANIFEST = os.path.join(OUT, "manifest.json")
 BASE = "https://esm.sh"
 TARGET = "es2022"
 
-# The entries the page imports (specifier -> pinned esm.sh path). These are
-# the versions KASTR ran on 4-8 Sept 2026 and was verified against.
+# The entries the page imports (specifier -> pinned esm.sh path).
+# 0.16.0: the 2026-09-23 train -- @moq/watch 0.6.0 / @moq/publish 0.5.0 /
+# @moq/hang 0.5.0 / @moq/net 0.4.0 / @moq/json 0.4.0 (moq-relay 0.15). Breaking:
+# Connection.Reload hides `established` (publish/consume through `origin`),
+# publish Broadcast takes {origin} not {connection}, <moq-watch> `latency` is
+# gone (`delay` + `buffer`), hang catalog `timeline` -> root `archive`/`clock`.
+# Pre-0.16 the page ran the 4-8 Sept 2026 versions (watch 0.5.3, publish 0.4.6).
 PINS = {
-    "https://esm.sh/@moq/watch":            "/@moq/watch@0.5.3",
-    "https://esm.sh/@moq/watch/element":    "/@moq/watch@0.5.3/element",
-    "https://esm.sh/@moq/publish":          "/@moq/publish@0.4.6",
-    "https://esm.sh/@moq/publish/element":  "/@moq/publish@0.4.6/element",
+    "https://esm.sh/@moq/watch":            "/@moq/watch@0.6.0",
+    "https://esm.sh/@moq/watch/element":    "/@moq/watch@0.6.0/element",
+    "https://esm.sh/@moq/publish":          "/@moq/publish@0.5.0",
+    "https://esm.sh/@moq/publish/element":  "/@moq/publish@0.5.0/element",
     "https://esm.sh/qrcode-generator@1.4.4": "/qrcode-generator@1.4.4",
-    # 0.13.0: the page reads/writes JSON state tracks (Snapshot/Window). The
-    # unversioned path is exactly what @moq/hang already pulls in (resolved to
-    # @moq/json@0.3.3 in the manifest), so the page shares that vendored file.
-    "https://esm.sh/@moq/json":             "/@moq/json",
+    # 0.13.0: the page reads/writes JSON state tracks (Snapshot/Window). 0.16.0:
+    # the same range hang/watch request (^0.4.0), so the page shares the one
+    # vendored @moq/json module instance with the library.
+    "https://esm.sh/@moq/json":             "/@moq/json@^0.4.0",
 }
 
+# 0.16.0: relative sibling chunks ("./name-hash.mjs") inside a vendored bundle
+REL_RE = re.compile(r"(?<=[\"'])(\./[A-Za-z0-9_.-]+\.mjs)(?=[\"'])")
 IMPORT_RE = re.compile(
     r'(?P<pre>\b(?:import|export)\s*(?:[^;"\'`]*?\bfrom\s*)?|\bimport\s*\(\s*)'
     r'(?P<q>["\'])(?P<path>/[^"\']+)(?P=q)')
@@ -123,6 +131,17 @@ def mirror(force=False):
                 queue.append(tgt)
             return m.group("pre") + m.group("q") + rel(name, local_name(tgt)) + m.group("q")
         text2 = IMPORT_RE.sub(sub, text)
+        # 0.16.0: the 0.5/0.6 bundles reference their sibling chunks RELATIVELY
+        # ("./video-<hash>.mjs" -- a static import, a dynamic import() or a worker
+        # URL). They resolve against the vendored file's own folder, so they need
+        # no rewrite -- but they must be fetched, from the same esm.sh folder.
+        base_dir = posixpath.dirname(urlsplit(esm_path or path).path)
+        for relref in set(REL_RE.findall(text2)):
+            tgt = posixpath.normpath(posixpath.join(base_dir, relref))
+            if not tgt.startswith("/"):
+                tgt = "/" + tgt
+            if tgt not in seen and tgt not in queue:
+                queue.append(tgt)
         if re.search(r'["\'`]https?://esm\.sh', text2):
             # a stray absolute URL in code would defeat the purpose: refuse
             # (the leading `/* esm.sh - ... */` banner comment is fine)
@@ -147,7 +166,24 @@ def mirror(force=False):
     }
     with open(MANIFEST, "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, indent=1, sort_keys=True)
-    print("vendor-moq: %d files -> %s" % (len(files), os.path.relpath(OUT, HERE)))
+    # 0.16.0: prune what the new manifest no longer lists (a bump used to leave the
+    # old @moq/*@x.y.z trees behind, shipped in every build).
+    keep = {str(k).replace(os.sep, "/") for k in files} | {"manifest.json"}
+    pruned = 0
+    for root, dirs, fns in os.walk(OUT, topdown=False):
+        for fn in fns:
+            full = os.path.join(root, fn)
+            relp = os.path.relpath(full, OUT).replace(os.sep, "/")   # (not `rel`: that is the module-level helper `sub` closes over)
+            if relp not in keep:
+                os.remove(full)
+                pruned += 1
+                print("  pruned %s" % relp)
+        if root != OUT and not os.listdir(root):
+            try:
+                os.rmdir(root)
+            except OSError:
+                pass   # an empty folder Windows still holds open is harmless
+    print("vendor-moq: %d files -> %s (%d pruned)" % (len(files), os.path.relpath(OUT, HERE), pruned))
     return 0
 
 

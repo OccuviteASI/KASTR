@@ -105,7 +105,11 @@
     position:fixed; z-index:80; min-width:180px; max-width:320px;
     background:var(--surface); border:1px solid var(--line); border-radius:6px;
     box-shadow:0 12px 32px rgba(0,0,0,.5); padding:4px;
+    max-height:calc(100vh - 16px); overflow-y:auto; overscroll-behavior:contain;   /* 0.16.0: a small window scrolls the menu instead of clipping it */
   }
+  #mineMenu .msep { border-top:1px solid var(--line); margin:3px 0; }
+  #mineMenu .mcap { font-size:10px; color:var(--text-mute); padding:3px 8px 1px; text-transform:uppercase; letter-spacing:.04em; }
+  #mineMenu .mhint { font-size:10px; color:var(--text-mute); padding:4px 8px; }
   #mineMenu[hidden] { display:none; }
   #mineMenu .mi {
     display:block; width:100%; text-align:left; background:transparent; border:0;
@@ -297,6 +301,10 @@
   .mediabar .mseek { flex:1; min-width:60px; }
   .mediabar .mvol { width:64px; flex:none; }
   .mediabar .mtime { flex:none; min-width:74px; text-align:center; color:var(--text-dim); }
+  .mediabar .mhealth { flex:none; font-size:10px; padding:1px 6px; border-radius:8px; background:rgba(255,255,255,.08); color:var(--text-dim); white-space:nowrap; }   /* 0.16.0 */
+  .mediabar .mhealth:empty { display:none; }
+  .mediabar .mhealth[data-level="amber"] { color:#f5b942; }
+  .mediabar .mhealth[data-level="red"] { color:var(--asi-red, #e5484d); }
   #stage .pubpane .mediabar { bottom:36px; }   /* 0.13.3: same row as a remote pane's bar */
   .pubpane video.mediasrc { position:absolute; left:0; top:0; width:2px; height:2px; opacity:.01; pointer-events:none; }
   #micTestNote { font-size:11px; color:var(--text-mute); padding:0 8px 6px; }
@@ -1825,7 +1833,7 @@
       <input type="text" id="joinChanNew" placeholder="e.g. yard-ops" maxlength="32"></label>
     <label class="f" id="joinAccessRow" hidden><span id="joinAccessLabel">Access code for this relay</span>
       <input type="text" id="joinAccess" class="masked" autocomplete="off" spellcheck="false"
-             placeholder="viewer or publisher code"></label>
+             placeholder="viewer, publisher or admin code"></label>
     <label class="f" id="joinPwdRow" hidden><span id="joinPwdLabel">Room code</span>
       <input type="text" id="joinPwd" class="masked" autocomplete="off" spellcheck="false"></label>
     <!-- 0.12.0: persistent rooms -- kept on the relay (with their chat) until closed -->
@@ -1848,18 +1856,16 @@
      from esm.sh by vendor-moq.py at a pinned version). The module sources below
      keep their https://esm.sh specifiers; this map points them at the vendored
      files, so a checkout without the vendor folder still runs against esm.sh. -->
-<script type="importmap">
-{
+<script type="importmap">{
  "imports": {
-  "https://esm.sh/@moq/publish": "/assets/vendor/esm/@moq/publish@0.4.6.target-es2022.mjs",
-  "https://esm.sh/@moq/publish/element": "/assets/vendor/esm/@moq/publish@0.4.6/element.target-es2022.mjs",
-  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.5.3.target-es2022.mjs",
-  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.5.3/element.target-es2022.mjs",
-  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json.target-es2022.mjs",
+  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.0.target-es2022.mjs",
+  "https://esm.sh/@moq/publish": "/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs",
+  "https://esm.sh/@moq/publish/element": "/assets/vendor/esm/@moq/publish@0.5.0/element.target-es2022.mjs",
+  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs",
+  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.0/element.target-es2022.mjs",
   "https://esm.sh/qrcode-generator@1.4.4": "/assets/vendor/esm/qrcode-generator@1.4.4.target-es2022.mjs"
  }
-}
-</script>
+}</script>
 <script src="/assets/prefs.js"></script>
 <script>
   // 0.13.0 (F3): the rooms sidebar starts COLLAPSED unless the toggle saved
@@ -1896,6 +1902,43 @@
 <script type="module">
   import "https://esm.sh/@moq/watch/element";
   import { Net, Signals } from "https://esm.sh/@moq/watch";
+
+  // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
+  // announced() takes a PATTERN now (nothing = everything) and yields route entries
+  // {prefix: Path, kind: "announced" | "retracted" | "updated"}; consuming a broadcast is
+  // origin.request(path) -> {active: Signal<Broadcast.Consumer | undefined>, unroutable, close()}.
+  // The page thinks in {path, active} announces RELATIVE to a prefix and in "a consumer for
+  // this path", so these two adapters carry every call site; measured on moq-relay 0.15.1.
+  function announcedUnder(conn, prefix) {
+    const base = String(prefix ?? "").split("/").filter(Boolean).join("/");
+    const it = conn.announced();
+    return {
+      async next() {
+        for (;;) {
+          const e = await it.next();
+          if (!e) return undefined;
+          if (e.kind === "updated") continue;   // a reroute, not a membership change
+          const full = String(e.prefix ?? e.path ?? "").split("/").filter(Boolean).join("/");
+          if (base && full !== base && !full.startsWith(base + "/")) continue;
+          const rel = base ? full.slice(base.length).replace(/^\//, "") : full;
+          return { path: Net.Path.from(rel), full: Net.Path.from(full), active: e.kind !== "retracted" };
+        }
+      },
+      close() { try { it.close(); } catch {} },
+    };
+  }
+  async function requestBroadcast(org, path, waitMs = 4000) {
+    const h = org.request(Net.Path.from(String(path)));
+    const t0 = performance.now();
+    while (performance.now() - t0 < waitMs) {
+      const bc = h.active?.peek?.();
+      if (bc) return { bc, close: () => { try { h.close(); } catch {} } };
+      if (h.unroutable?.peek?.()) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    try { h.close(); } catch {}
+    return null;
+  }
   import { Snapshot, Window } from "https://esm.sh/@moq/json";   // 0.13.0: JSON state tracks
 
   const urlInput = document.getElementById("url");
@@ -1915,7 +1958,15 @@
     try { return channelSlug(localStorage.getItem(CHANNEL_KEY)); } catch { return "main"; }
   }
   let CHANNEL = "main";
-  const LATENCY_MS = "500";
+  // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
+  // player's target is jitter(delay) + buffer. Per tile class (applyState re-tunes): the
+  // spotlit main keeps the old 500 ms feel, rail thumbnails a little less, grid composites
+  // and audio-less feeds behind a grid run at the live edge.
+  const WATCH_TUNING = {
+    main: { delay: "auto", buffer: "400ms" },
+    rail: { delay: "auto", buffer: "200ms" },
+    cell: { delay: "instant", buffer: "0ms" },
+  };
   const volumeInput = document.getElementById("volume");
   const muteBtn = document.getElementById("muteBtn");
   const gridBtn = document.getElementById("gridBtn");
@@ -2243,6 +2294,10 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeMineMenu();
     });
+    // 0.16.0: a scroll or resize moves the anchor away from the menu; a drag on the stage closes it too
+    window.addEventListener("resize", closeMineMenu);
+    document.addEventListener("scroll", (e) => { if (mineMenu && !mineMenu.hidden && !mineMenu.contains(e.target)) closeMineMenu(); }, true);
+    document.addEventListener("pointerdown", (e) => { if (mineMenu && !mineMenu.hidden && !mineMenu.contains(e.target) && !mineMenuAnchor?.contains?.(e.target)) closeMineMenu(); }, true);
     return mineMenu;
   }
   function closeMineMenu() {
@@ -2264,11 +2319,15 @@
     mineMenuAnchor = anchor;
     menu.replaceChildren();
     for (const it of items) {
+      if (it.sep) { const d = document.createElement("div"); d.className = "msep"; menu.appendChild(d); continue; }        // 0.16.0
+      if (it.cap) { const d = document.createElement("div"); d.className = "mcap"; d.textContent = it.cap; menu.appendChild(d); continue; }
+      if (it.hint) { const d = document.createElement("div"); d.className = "mhint"; d.textContent = it.hint; menu.appendChild(d); continue; }
+      const on = it.value === current || it.on === true;
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "mi" + (it.value === current ? " on" : "");
+      b.className = "mi" + (on ? " on" : "");
       const txt = document.createElement("span");
-      txt.textContent = (it.value === current ? "\u2713 " : "\u2007 ") + it.label;
+      txt.textContent = (on ? "\u2713 " : "\u2007 ") + it.label;
       b.appendChild(txt);
       if (it.locked) {
         const lk = document.createElement("span");
@@ -2284,8 +2343,11 @@
     const r = anchor.getBoundingClientRect();
     const w = menu.offsetWidth || 200;
     menu.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
-    menu.style.top = Math.round(menuTopFor(menu, r)) + "px";
+    let top = menuTopFor(menu, r);
+    top = Math.max(8, Math.min(top, innerHeight - menu.offsetHeight - 8));   // 0.16.0: never below the viewport; the CSS max-height makes it scroll instead
+    menu.style.top = Math.round(top) + "px";
   }
+  window.__openMenu = openMineMenu;   // 0.16.0: the publish half's grid chevron uses the same popover
 
   // ---- top-bar camera controls (0.7.6) ------------------------------------
   // The main camera's mic/video toggles live by the Leave button, Teams-
@@ -3005,12 +3067,12 @@
     if (joinState !== "joined") return;
     let conn = null;
     try {
-      conn = new Net.Connection.Reload({ url: new Signals.Signal(new URL(urlInput.value.trim())), enabled: true });
+      conn = new Net.Connection({ url: new Signals.Signal(new URL(urlInput.value.trim())), enabled: true });
     } catch { return; }
     try {
       const deadline = new Promise((res) => setTimeout(res, 1500, null));
       // announced(".stats") yields paths RELATIVE to the prefix: "node/<name>"
-      const ann = conn.announced(Net.Path.from(".stats"));
+      const ann = announcedUnder(conn, ".stats");   // 0.16.0 adapter
       const nodes = [];
       for (;;) {
         const e = await Promise.race([ann.next(), deadline]);
@@ -3018,18 +3080,18 @@
         const rel = String(e.path).split("/").filter(Boolean).join("/");
         if (e.active && rel && !nodes.includes(rel)) nodes.push(rel);
       }
-      // consume() lives on the ESTABLISHED connection, not the Reload wrapper
-      let est = null;
-      for (let i = 0; i < 10 && !est; i++) { est = conn.established?.peek?.() ?? null; if (!est) await new Promise((res) => setTimeout(res, 150)); }
-      if (!nodes.length || typeof est?.consume !== "function") return;
+      // 0.16.0: consume() lives on the connection's Origin (net 0.4.0), reached via `origin`
+      let org = null;
+      for (let i = 0; i < 10 && !org; i++) { org = conn.origin?.peek?.() ?? null; if (!org) await new Promise((res) => setTimeout(res, 150)); }
+      if (!nodes.length || !org) return;
       const next = new Map();
       const nextPull = new Map();   // 0.13.0
       for (const rel of nodes) {
         const node = rel.split("/").pop();
         let bc = null;
         try {
-          bc = est.consume(Net.Path.from(".stats/" + rel));
-          const tr = bc?.subscribe?.("subscriber.json");
+          bc = await requestBroadcast(org, ".stats/" + rel, 1500);   // 0.16.0: request(path) -> a consumer once routable
+          const tr = bc?.bc?.track?.("subscriber.json")?.subscribe?.({ maxAge: 0 });
           if (!tr || typeof tr.readJson !== "function") continue;
           const j = await Promise.race([tr.readJson(), new Promise((res) => setTimeout(res, 1200, undefined))]);
           try { tr.close?.(); } catch {}
@@ -3381,7 +3443,56 @@
     }
     paintMediaBars();
   }
-  const seenCtl = new Set();
+  const seenCtl = new Set(), seenCtlQ = [];   // 0.16.0: FIFO -- a wholesale clear let a recent op replay
+  // ---- 0.16.0: admin commands -----------------------------------------------------
+  // <room>/.admin/<ts>/<b64 {op, target, by, nonce, at}> -- only an admin token may put
+  // there (viewer/publisher grants have no .admin pattern), so a command's presence IS
+  // its authority. ops: stop (target = a broadcast path of mine), mute (same), kick
+  // (target = "<host>/<operator>": this page leaves the room). Cooperative in 0.16.0.
+  const seenAdmin = new Set(), seenAdminQ = [];
+  function adminAccept(path, active) {
+    if (!active) return;
+    const parts = String(path).split("/").filter(Boolean);
+    const i = parts.indexOf(".admin");
+    if (i < 0 || parts.length < i + 3) return;
+    adminApply(b64json(parts[i + 2]));
+  }
+  function adminApply(cmd) {
+    if (!cmd || !cmd.op || !cmd.nonce || seenAdmin.has(cmd.nonce)) return;
+    if (window.__adminSent?.has?.(cmd.nonce)) return;   // my own command echoes from my own origin whether or not the relay admitted it
+    if (Date.now() - (Number(cmd.at) || 0) > 60000) return;   // an old command replayed by a resumed announce is history
+    seenAdmin.add(cmd.nonce); seenAdminQ.push(cmd.nonce);
+    if (seenAdminQ.length > 400) seenAdmin.delete(seenAdminQ.shift());
+    const by = String(cmd.by || "an admin");
+    const target = String(cmd.target || "");
+    if (cmd.op === "kick") {
+      // target = "<host>/<operator>" (every page of that operator on that machine) or
+      // "<host>/<operator>/<peer>" (one page)
+      const myKey = HOSTNAME1 + "/" + String(window.__publisher?.opSlug?.() || "").toLowerCase();
+      if (target !== myKey && target !== myKey + "/" + statePeer()) return;
+      log("Removed from the room by " + by + ".");
+      window.__toast?.("Removed from this room by " + prettyOperator(by), 8000, { level: "warn" });
+      try { leaveMeeting(); } catch {}
+      return;
+    }
+    if (!mineNames.has(target)) return;
+    for (const [peer, rec] of minePeers) {
+      for (const src of rec.sources) {
+        if (CHANNEL + "/" + hangName(src.name) !== target) continue;
+        if (cmd.op === "stop") {
+          log(by + " stopped " + (src.name || "a share") + " (admin).");
+          window.__toast?.(prettyOperator(by) + " stopped your share " + EM_DASH + " " + (src.name || ""), 7000, { level: "warn" });
+          try { starveBus.postMessage({ kind: "stop", from: "watch", target: peer, id: src.id }); } catch {}
+        } else if (cmd.op === "mute") {
+          log(by + " muted " + (src.name || "a share") + " (admin).");
+          window.__toast?.(prettyOperator(by) + " muted your microphone", 6000, { level: "warn" });
+          sendControl(peer, src.id, { micMuted: true });
+        }
+        return;
+      }
+    }
+  }
+  const EM_DASH = "\u2014";
   function mediaCtlAccept(path, active) {
     if (!active) return;
     const parts = String(path).split("/").filter(Boolean);
@@ -3392,8 +3503,8 @@
   }
   function mediaCtlApply(meta) {   // 0.13.0: also fed by room.json.ctl
     if (!meta || !meta.path || !meta.op || seenCtl.has(meta.nonce)) return;
-    seenCtl.add(meta.nonce);
-    if (seenCtl.size > 200) seenCtl.clear();
+    seenCtl.add(meta.nonce); seenCtlQ.push(meta.nonce);
+    if (seenCtlQ.length > 400) seenCtl.delete(seenCtlQ.shift());
     if (mineNames.has(meta.path)) { try { window.__publisher?.mediaCtl?.(meta); } catch {} }
   }
   const fmtT = (sec) => { sec = Math.max(0, Math.floor(sec || 0)); const m = Math.floor(sec / 60), s2 = sec % 60; return (m >= 60 ? Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0") : m) + ":" + String(s2).padStart(2, "0"); };
@@ -3758,7 +3869,17 @@
   // announce carries one; null = no such label, use shortLabel as ever.
   function gridLabel(name) {
     const gl = gridMeta.get(name)?.label;
-    if (!gl) return null;
+    if (!gl) {
+      // 0.16.0: a member opened on its own (a cell click, or `separate` feeds behind a grid) wears the
+      // label its grid announced -- cells[i] is index-aligned with feeds[i]; the path never re-keys.
+      if (isGridChild(name)) {
+        const gp = gridChildOf.get(name), m = gridMeta.get(gp);
+        const i = (m?.feeds || []).indexOf(name);
+        const cl = i >= 0 ? String(m.cells?.[i] || "").trim() : "";
+        if (cl) { const op2 = operatorOf(gp) || operatorOf(name); return (op2 ? prettyOperator(op2) + " \u2014 " : "") + cl; }
+      }
+      return null;
+    }
     const op = operatorOf(name);
     return (op ? prettyOperator(op) + " \u2014 " : "") + gl;
   }
@@ -3788,6 +3909,7 @@
   }
   let autoContent = null;   // the content tile the layout auto-followed
   let selfSpotEl = null;    // one of MY pubpanes, spotlit (0.7.8)
+  window.__selfSpotDbg = () => ({ el: selfSpotEl?.dataset?.sid ?? null, connected: !!selfSpotEl?.isConnected, gridMode, selectedName, manualPick });   // 0.16.0 rig
   window.__selfSpot = (pane) => {
     manualPick = true;   // 0.13.3
     // Clicking my own tile: spotlight it for me; clicking it again in
@@ -4031,6 +4153,13 @@
     // Hidden screen panes are not cells (the 0.8.1 railRows overcount).
     const pubEls = mineEl.hidden ? [] : [...document.getElementById("pubPanes").children]
       .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme"));   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
+    // 0.16.0: a self-heal / republish REPLACES the pane element (stopSlot + startSlot) -- the
+    // spotlight used to point at the detached node and fall back to the gallery a second later
+    // (Kenton: "I can't spotlight my own camera"). Re-find it by its slot id first.
+    if (selfSpotEl && !selfSpotEl.isConnected && selfSpotEl.dataset?.sid) {
+      const again = document.querySelector('#pubPanes .pubpane[data-sid="' + selfSpotEl.dataset.sid + '"]');
+      if (again) selfSpotEl = again;
+    }
     if (selfSpotEl && !pubEls.includes(selfSpotEl)) selfSpotEl = null;   // its slot stopped
     // 0.8.8: focus on content = no rail at all (every non-main tile goes
     // visible="never" through railHiddenNames; own panes park off-stage).
@@ -4300,13 +4429,19 @@
         // 0.8.6: an app nobody can see (minimized/occluded) or a tile hidden
         // behind another tile's full screen downloads nothing -- audio is
         // volume-driven and unaffected.
-        : document.hidden ? "never"
+        : (document.hidden && !window.__rigVisible) ? "never"   // 0.16.0: __rigVisible = the rig's hidden browser pane still decodes
         : (document.fullscreenElement && document.fullscreenElement !== t.pane) ? "never"
         : isSelected ? "always"
         : GRID_PREFETCH;   // ladder tiles are on-screen; the margin resolves them
 
       if (t.watch.getAttribute("visible") !== wantVisible) {
         t.watch.setAttribute("visible", wantVisible);
+      }
+      { // 0.16.0: per-class delay/buffer (WATCH_TUNING): the spotlit main, rail thumbnails, and
+        // live-edge cells (grid composites, audio-less feeds behind a grid -- `instant` resets audio)
+        const cls = (isSelected && !gridMode && !selfSpotEl) ? "main"
+                  : (gridMeta.has(name) || (isGridChild(name) && t.hasAudio === false)) ? "cell" : "rail";
+        if (t.tune !== cls) { t.tune = cls; t.watch.setAttribute("delay", WATCH_TUNING[cls].delay); t.watch.setAttribute("buffer", WATCH_TUNING[cls].buffer); }
       }
       if (shown) matchRendition(t);
 
@@ -4450,6 +4585,7 @@
 
       let best = null;
       for (const [name, cfg] of Object.entries(avail)) {
+        if (cfg?.broadcast) continue;   // 0.16.0: a rendition served by ANOTHER broadcast has no size here
         const w = cfg.codedWidth ?? 0;
         // Prefer the smallest rendition that still covers the pane; if none
         // does, take the largest available.
@@ -4791,7 +4927,7 @@
     // watchStream() arms the attribute. Remembered streams come back armed.
     if (isWatched(name)) watch.setAttribute("url", withToken(urlInput.value.trim()));
     watch.setAttribute("name", name);
-    watch.setAttribute("latency", LATENCY_MS);
+    watch.setAttribute("delay", WATCH_TUNING.rail.delay); watch.setAttribute("buffer", WATCH_TUNING.rail.buffer);   // 0.16.0
     watch.setAttribute("visible", "never"); // applyState promotes the selected one
     // NEVER write watch.muted (see WARM_FLOOR) -- applyState sets volume
     // before the first audio packet arrives, so nothing plays early.
@@ -4849,8 +4985,25 @@
           items.push({ value: "me", label: "Spotlight for me" });
           items.push({ value: "all", label: "Spotlight for everyone" });
         }
+        if (authRole === "admin" && !mineNames.has(name)) {   // 0.16.0: the admin code
+          items.push({ value: "astop", label: "Stop this share (admin)" });
+          if (!isContentPath(name)) items.push({ value: "amute", label: "Mute their microphone (admin)" });
+          items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
+        }
         openMineMenu(pchev, items, "", (v) => {
-          if (v === "fs") toggleFullscreen(name);
+          if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
+          else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
+          else if (v === "akick") {
+            const pp = String(name).split("/").filter(Boolean);   // <room>/<host>/<operator>/<leaf>
+            if (pp.length >= 3 && confirm("Remove " + prettyOperator(person) + " from the room?")) {
+              // one kick per PAGE of that operator on that machine (their .state records name the peers);
+              // without any, the host/operator pair (every page of theirs there)
+              const peers = [...roomsPres.values()].filter((x) => x.state && !x.goneAt && x.who?.host === pp[1] && String(x.who?.op || "").toLowerCase() === String(pp[2]).toLowerCase() && x.who.peer !== statePeer()).map((x) => x.who.peer);   // never yourself
+              if (peers.length) for (const pr of peers) window.__adminSend?.({ op: "kick", target: pp[1] + "/" + pp[2] + "/" + pr });
+              else window.__adminSend?.({ op: "kick", target: pp[1] + "/" + pp[2] });
+            }
+          }
+          else if (v === "fs") toggleFullscreen(name);
           else if (v === "mute") toggleMute(name);
           else if (v === "pmute") {
             const kin2 = [...tiles.keys()].filter((n) => personKeyOf(n) === person);
@@ -5148,12 +5301,12 @@
     roomsDownAt = 0;
     let url;
     try { url = new URL(urlInput.value.trim()); } catch { roomsChanged(); return; }
-    try { roomsConn = new Net.Connection.Reload({ url: new Signals.Signal(url), enabled: true }); }
+    try { roomsConn = new Net.Connection({ url: new Signals.Signal(url), enabled: true }); }
     catch { roomsConn = null; roomsChanged(); return; }
     const conn = roomsConn;
     const sub = (prefix, handle) => {
       try {
-        const a = conn.announced(Net.Path.from(prefix));
+        const a = announcedUnder(conn, prefix);   // 0.16.0 adapter
         roomsAnns.push(a);
         roomsConsume(a, gen, handle);
       } catch {}
@@ -5523,11 +5676,11 @@
     log(`Connecting to ${urlStr} ...`);
 
     const urlSignal = new Signals.Signal(url);
-    connection = new Net.Connection.Reload({ url: urlSignal, enabled: true });
+    connection = new Net.Connection({ url: urlSignal, enabled: true });
     stateSync();   // 0.13.0: my state broadcasts follow the room + token
 
     const prefix = Net.Path.from(prefixStr);
-    const announced = connection.announced(prefix);
+    const announced = announcedUnder(connection, prefixStr);   // 0.16.0 adapter: {path (relative), active}
 
     log(`Connected. Discovering broadcasts under prefix "${prefixStr || "(everything)"}" ...`);
 
@@ -5555,6 +5708,7 @@
         if (kind === ".grid") { gridAccept(String(path), entry.active); continue; }     // 0.8.8
         if (kind === ".media") { mediaAccept(String(path), entry.active); continue; }      // 0.8.10
         if (kind === ".mediactl") { mediaCtlAccept(String(path), entry.active); continue; }
+        if (kind === ".admin") { adminAccept(String(path), entry.active); continue; }   // 0.16.0
       }
       if (String(path).split("/").filter(Boolean)[2] === ".member") { memberAccept(String(path), entry.active); continue; }   // 0.13.0: <room>/<HOST>/.member/<PEER>
       if (!path.endsWith(".hang")) continue; // skip internal .stats etc.
@@ -5660,10 +5814,16 @@
       items.push({ value: "audio", label: (au === false ? "Send audio: off" : "Send audio: on")
         + (ac === "" ? " (camera has no audio track)" : ac ? " (" + ac + ")" : "") });
     }
-    if (ref.id > -100) items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds
-    if (contentTally() > 1 || ref.id <= -100) items.push({ value: "all", label: "Spotlight for everyone" });   // 0.15.0: a grid may always be spotlit
+    if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
+    if (ref.kind === "camera") {   // 0.16.0: my own camera can be spotlit like any tile
+      items.push({ value: "me", label: "Spotlight for me" });
+      items.push({ value: "all", label: "Spotlight for everyone" });
+    } else if (contentTally() > 1 || ref.id <= -100) items.push({ value: "all", label: "Spotlight for everyone" });   // 0.15.0: a grid may always be spotlit
     openMineMenu(anchor, items, "", (v) => {
-      if (v === "stop") {
+      if (v === "me") {   // 0.16.0: my own tile takes the stage for me
+        const pane = anchor.closest?.(".pubpane");
+        if (pane && !pane.classList.contains("mainstage")) window.__selfSpot?.(pane);
+      } else if (v === "stop") {
         try { starveBus.postMessage({ kind: "stop", from: "watch", target: ref.peer, id: ref.id }); } catch {}
       } else if (v === "mute") {
         const c = cur();
@@ -5685,6 +5845,7 @@
         window.__toast?.(window.__rtspAudio?.get?.(ref.id) === false ? "Publishing this feed without audio" : "Publishing this feed with the camera's audio", 3500, { level: "info" });
       } else {
         window.__spot?.set?.(CHANNEL + "/" + hangName(ref.name));
+        if (ref.kind === "camera") { const pane = anchor.closest?.(".pubpane"); if (pane && !pane.classList.contains("mainstage")) window.__selfSpot?.(pane); }   // 0.16.0
       }
     });
   };
@@ -6920,7 +7081,7 @@
       ["broadcast", live ? "live" : "offline", !live],
       ["relay", urlInput.value.replace(/^https?:\/\//, "")],
       ["room", CHANNEL],
-      ["latency target", LATENCY_MS + " ms"],
+      ["watch tuning", (w?.getAttribute?.("delay") || "auto") + " + " + (w?.getAttribute?.("buffer") || "0ms")],   // 0.16.0
       ["video + audio", bytes((vstats?.bytesReceived ?? 0) + (astats?.bytesReceived ?? 0))],
       ["streams", tiles.size],
       ["audio warm", warmAudio ? "on (all subscribed)" : "off"],
@@ -7022,7 +7183,7 @@
       // 0.9.2: a rendition this machine cannot decode (H.265 pass-through on a
       // box without hardware HEVC) -- say so on the tile instead of showing black.
       if (cat && hasV) {
-        const codecs = Object.values(cat.video.renditions).map((r) => r?.codec).filter(Boolean);
+        const codecs = Object.values(cat.video.renditions).filter((r) => r && !r.broadcast).map((r) => r?.codec).filter(Boolean);
         const key = codecs.join(",");
         if (key && key !== t.codecKey) {
           t.codecKey = key;
@@ -7091,8 +7252,9 @@
       vStalled = String(w.video?.out?.stalled?.peek?.());
 
       const rawCatalog = w.broadcast?.out?.catalog?.peek?.();
-      if (rawCatalog?.video?.length) {
-        for (const r of rawCatalog.video) {
+      const rawRends = Object.values(rawCatalog?.video?.renditions ?? {});   // 0.16.0: hang 0.5.0 -- a record, never the legacy array
+      if (rawRends.length) {
+        for (const r of rawRends) {
           if (r.codec && !window.__loggedCodecs?.has(r.codec)) {
             (window.__loggedCodecs ??= new Set()).add(r.codec);
             VideoDecoder.isConfigSupported({ codec: r.codec })
@@ -7262,6 +7424,11 @@
   // older than latencyMax (5 s by default), so a late subscriber would read nothing:
   // state tracks keep 60 s and a 20 s heartbeat rewrites them (Step-0 ledger, 0.13.0).
   const STATE_HB_MS = 20000, STATE_LAT_MS = 60000, STATE_CHAT_MAX = 50;
+  // 0.16.0: net 0.4.0 -- a track's retention is `maxAge` (ms; `latencyMax` is not read at
+  // all -> 5 s default, and a late joiner would read nothing), `priority` is 0..255 with
+  // HIGHER winning under congestion (hang: catalog 100 / text 90 / audio 80 / video 60).
+  // State must win: 200.
+  const STATE_PRIORITY = 200;
   const HOST_RE = /^[a-z0-9-]{1,32}-[0-9a-f]{4}$/;
   const RAW_HOST1 = "__ASI_HOSTNAME__";
   const HOSTNAME1 = /^[a-z0-9-]+$/.test(RAW_HOST1) ? RAW_HOST1 : "local";
@@ -7292,17 +7459,19 @@
       relay = want.relay; path = want.path;
       if (pathChanged) chatRecs = [];
       let url; try { url = new URL(relay); } catch { path = ""; relay = ""; return; }
-      conn = new Net.Connection.Reload({ url: new Signals.Signal(url), enabled: true, delay: { initial: 1000, multiplier: 2, max: 5000, timeout: 0 } });
+      conn = new Net.Connection({ url: new Signals.Signal(url), enabled: true });   // 0.16.0: shared per URL (net 0.4.0 refuses a custom `delay` on a shared connection; its own backoff applies)
       effects = new Signals.Effect();
       const myPath = path;
       effects.run((e) => {
-        const c = e.get(conn.established);
-        if (!c) { events.push([Date.now(), "down"]); return; }
+        // 0.16.0: net 0.4.0 hides `established`; publishing goes through the connection's
+        // Origin.Producer (createBroadcast announces the path on the shared session).
+        const org = e.get(conn.origin);
+        if (!org) { events.push([Date.now(), "down"]); return; }
         gens++; events.push([Date.now(), "up#" + gens]); if (events.length > 40) events.shift();
-        const bp = new Net.Broadcast.Producer();
+        let bp;
+        try { bp = org.createBroadcast(Net.Path.from(myPath)); } catch { return; }
         e.cleanup(() => { try { bp.close(); } catch {} tracks = {}; chatWin = null; });
-        try { c.publish(Net.Path.from(myPath), bp); } catch { return; }
-        for (const name of trackNames) { try { tracks[name] = bp.createTrack(name, { priority: 1, latencyMax: STATE_LAT_MS }); } catch {} }
+        for (const name of trackNames) { try { tracks[name] = bp.createTrack(name, { priority: STATE_PRIORITY, maxAge: STATE_LAT_MS }); } catch {} }
         // Group sequences must never go backwards on a resumed broadcast: a fresh Track.Producer
         // starts at 0, and a relay that resumed the same path (linger) keeps existing subscribers
         // who then drop every group below the old high-water mark -- values vanish until the
@@ -7312,7 +7481,8 @@
         const seqBase = Date.now() - 1790000000000;
         for (const t of Object.values(tracks)) { try { const g = new Net.Group.Producer(seqBase); t.writeGroup(g); g.close(); } catch {} }
         writeAll();
-        if (tracks["chat.json"]) { try { chatWin = new Window.Producer(tracks["chat.json"], {}); for (const r of chatRecs) chatWin.push(r); } catch { chatWin = null; } }
+        if (tracks["chat.json"]) { try { chatWin = new Window.Producer({ track: tracks["chat.json"] }); /* 0.16.0: json 0.4.0 takes {track} */ for (const r of chatRecs) chatWin.push(r); } catch { chatWin = null; } }
+        try { bp.announce?.(); } catch {}   // 0.16.0: explicit, in case the origin did not announce on create
       });
       hbT = setInterval(writeAll, STATE_HB_MS);
     };
@@ -7339,10 +7509,10 @@
   }
   // the two models (schema v1) and their producers
   const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
-  const roomModel = { v: 1, peer: "", spotlight: null, recording: null, stalled: [], ctl: null, grid: null, grids: {}, media: {}, files: [] };   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
+  const roomModel = { v: 1, peer: "", spotlight: null, recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
   const pubState = stateProducer(() => ".state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/.member/" + statePeer(), ["room.json", "chat.json"]);
-  let pubJson = "", roomJson = "", ctlClearT = null;
+  let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
   function stateCommit() {
     pubModel.peer = statePeer(); roomModel.peer = pubModel.peer;
     const pj = JSON.stringify(pubModel); if (pj !== pubJson) { pubJson = pj; pubState.set("state.json", pubModel); }
@@ -7394,6 +7564,12 @@
           if (value) ctlClearT = setTimeout(() => { roomModel.ctl = null; stateCommit(); }, 3000);
           break;
         }
+        case "admin": {    // 0.16.0: one admin command; cleared after 3 s
+          roomModel.admin = value ? { ...value, at: now } : null;
+          clearTimeout(adminClearT);
+          if (value) adminClearT = setTimeout(() => { roomModel.admin = null; stateCommit(); }, 3000);
+          break;
+        }
         case "files": {    // {id, meta|null}
           const list = roomModel.files.filter((f) => f.id !== value?.id);
           if (value?.meta && value.meta.url) list.push({ ...value.meta, id: value.id, ts: value.meta.ts || now });
@@ -7433,12 +7609,16 @@
     (async () => {
       let backoff = 1000, why = "start";
       while (!h.closed) {
-        let got = false, sub = null, watchT = null;
+        let got = false, sub = null, watchT = null, req = null;
         if (why !== "start") { stateSubStats.resubs++; stateSubStats.last = path + " " + track + ": " + why; }
         try {
-          const c = connRef.established?.peek?.();
-          if (!c) throw new Error("not connected");
-          sub = c.consume(Net.Path.from(path)).subscribe(track, { priority: 1 });
+          const org = connRef.origin?.peek?.();   // 0.16.0: consume through the origin
+          if (!org) throw new Error("not connected");
+          // a Snapshot wants only the newest group (maxAge 0 = skip a group once a newer exists);
+          // the chat Window must not skip groups, so it keeps the producer's retention
+          req = await requestBroadcast(org, path, 8000);   // 0.16.0: request(path) -> a consumer once the relay routes it
+          if (!req) throw new Error("broadcast not routable");
+          sub = req.bc.track(track).subscribe({ priority: STATE_PRIORITY, maxAge: mode === "window" ? STATE_LAT_MS : 0 });
           h.sub = sub;
           let lastAt = Date.now();
           // a Window (chat) is legitimately empty until someone posts: no first-value or staleness
@@ -7452,15 +7632,16 @@
           };
           armWatch();
           if (mode === "window") {
-            const w = new Window.Consumer(sub);
+            const w = new Window.Consumer({ track: sub });
             for (;;) { const op = await w.next(); if (op === undefined || h.closed) { why = "ended"; break; } got = true; backoff = 1000; lastAt = Date.now(); h.at = lastAt; h.n++; armWatch(); try { onValue(op); } catch {} }
           } else {
-            const sn = new Snapshot.Consumer(sub);
+            const sn = new Snapshot.Consumer({ track: sub });
             for (;;) { const v = await sn.next(); if (v === undefined || h.closed) { why = "ended"; break; } got = true; backoff = 1000; lastAt = Date.now(); h.at = lastAt; h.n++; armWatch(); try { onValue(v); } catch {} }
           }
         } catch (e) { why = "error " + (e?.message || e); }
         clearTimeout(watchT);
         try { sub?.close(); } catch {}
+        try { req?.close(); } catch {}   // 0.16.0
         if (h.closed) break;
         await sleepMs(backoff);
         backoff = Math.min(5000, backoff * 2);
@@ -7531,6 +7712,7 @@
     for (const id of [...prev.mediaIds]) if (!media[id]) { const m = mediaMeta.get([...mediaMeta.keys()].find((k) => mediaMeta.get(k)?.key === path + "#" + id)); mediaApply(path + "#" + id, { path: m?.path || "" }, 0, false); prev.mediaIds.delete(id); }
     // control pulses (10 s window, nonce dedupe in mediaCtlApply)
     if (v.ctl && v.ctl.nonce && Date.now() - (Number(v.ctl.at) || 0) < 10000) mediaCtlApply(v.ctl);
+    // (0.16.0: admin commands are NOT read from room.json -- see adminApply; only the relay-gated .admin announce counts)
     // shared files
     const fl = Array.isArray(v.files) ? v.files : [];
     const ids = new Set();
@@ -9631,6 +9813,7 @@
     }
 
     joinState = "joined";
+    if (authRole === "admin") { log("Joined with the admin code " + EM_DASH + " each tile's menu offers Stop share / Mute / Remove from room."); window.__toast?.("Admin: each tile's menu can stop a share, mute, or remove a member", 5000, { level: "event" }); }   // 0.16.0
     joinChannel(slug, rec);      // writes the slug (again), connects scoped, holds the registry entry
     paintChannelChip();
     gateHide();
@@ -9792,6 +9975,13 @@
   // bridge, so it is published through the lower-level API the element itself
   // is built on -- Broadcast + Video.Capture + Video.Encoder.
   import { Net, Signals, Broadcast, Video } from "https://esm.sh/@moq/publish";
+  // ---- 0.16.0: @moq/publish 0.5.0 adapters ------------------------------------------
+  // <moq-publish> keeps its video capture behind `video.in.capture` (a signal holding a
+  // Video.Capture; its `in.source` IS the element's source signal) and its audio capture behind
+  // `audio.in.capture` (in.source = {track, kind}). 0.4.6 exposed them as `capture.in.source` and
+  // `audio.in.source`; every page seam (files, RTSP, screens, effects, denoise) goes through these.
+  const pubCap = (pub) => (pub?.capture ?? pub?.video?.in?.capture?.peek?.() ?? null);
+  const pubAud = (pub) => (pub?.audio?.in?.source ? pub.audio.in : (pub?.audio?.in?.capture?.peek?.()?.in ?? null));
 
   const $ = (id) => document.getElementById(id);
   const urlInput = $("url");
@@ -10717,7 +10907,7 @@
     if (going.retryTimer) { clearTimeout(going.retryTimer); going.retryTimer = null; }
     if (going.kind === RTSP && going.url) rtspPersistSet(going.url, null, false);   // 0.8.8: stopped = not kept
     if (going.kind === FILE) { try { going.upload?.xhr?.abort(); } catch {} }   // 0.14.0: a still-running upload dies with the share
-    if (going.kind === FILE && going.mediaUrl) fetch(going.mediaUrl, { method: "DELETE" }).catch(() => {});   // 0.8.13: free the converted copy
+    if (going.kind === FILE && going.mediaUrl && !going.keepMedia) fetch(going.mediaUrl, { method: "DELETE" }).catch(() => {});   // 0.8.13: free the converted copy (0.16.0: unless "Play again" may want it)
     // Read the mic target BEFORE renderPickers: its rebuild keeps the
     // previous value only while the option survives, so by the time it
     // returns, a removed target has already been silently dropped to "" --
@@ -11003,8 +11193,8 @@
 
     // These ARE the element's own track signals, so the encoder, catalog,
     // preview and announce logic all behave exactly as for a camera.
-    slot.publish.capture.in.source.set(video);
-    if (audio) slot.publish.audio.in.source.set(audio);
+    pubCap(slot.publish)?.in?.source.set(video);
+    if (audio) pubAud(slot.publish)?.source.set(audio);
     slot.publish.muted = !!slot.entry.micMuted || !audio;   // unmute only if audio was shared AND the row is not muted
 
     // 0.8.2 best-effort self-share detection: a captured KASTR tab
@@ -11200,7 +11390,7 @@
         try {
           const r = slot.publish.video.out.resolved.peek();
           // 0.8.13: a resolved config with framerate 0 or no size is not output either
-          return !!slot.publish.capture.in.source.peek()
+          return !!pubCap(slot.publish)?.in?.source.peek()
               && (!r || !(r.framerate > 0) || !(r.width > 0 && r.height > 0));
         } catch { return false; }
       });
@@ -11560,6 +11750,7 @@
   function startRtspSlot(entry) {
     const pane = document.createElement("div");
     pane.className = "pubpane";
+    pane.dataset.sid = String(entry.id);   // 0.16.0
     const bar = document.createElement("div");
     bar.className = "bar";
     const nm = document.createElement("span");
@@ -11699,7 +11890,7 @@
   // standby face) and resume with a fresh keyframe when frames return.
   function armTrackHealth(slot) {
     const hook = () => {
-      const tr = slot.blur?.raw ?? unwrapTrack(slot.publish.capture?.in?.source?.peek?.());
+      const tr = slot.blur?.raw ?? unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
       if (!tr || tr === slot.healthTrack) return;
       slot.healthTrack = tr;
       tr.addEventListener("mute", () => {
@@ -11721,7 +11912,7 @@
       });
     };
     hook();
-    try { slot.healthUnsub = slot.publish.capture?.in?.source?.subscribe?.(hook) ?? null; } catch {}
+    try { slot.healthUnsub = pubCap(slot.publish)?.in?.source?.subscribe?.(hook) ?? null; } catch {}
   }
   // Encoder stall WITH A VIEWER WAITING. Not idleness: a pull-based encoder
   // with no viewers is healthy, and that class of watchdog was removed for
@@ -11744,7 +11935,7 @@
       let active = false;
       try { active = slot.publish.video?.out?.active?.peek?.() === true; } catch {}
       const frames = stallFrames(slot);
-      const tr = slot.blur?.raw ?? unwrapTrack(slot.publish.capture?.in?.source?.peek?.());
+      const tr = slot.blur?.raw ?? unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
       const trackOk = !!tr && tr.readyState === "live" && !tr.muted;
       if (!active || frames === null || !trackOk) { slot.stallSince = null; slot.stallFrames = frames; slot.stallNudged = false; continue; }
       if (slot.stallFrames !== frames) { slot.stallFrames = frames; slot.stallSince = null; slot.stallNudged = false; continue; }
@@ -11878,9 +12069,10 @@
     try { b.video.srcObject = null; } catch {}
     try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}   // 0.15.0: video / GIF background
     try { b.img?.remove?.(); } catch {}
+    closeFxGif(b);   // 0.16.0
     b.vid = null; b.img = null;
-    if (b.raw && slot.publish.capture?.in?.source) {
-      try { slot.publish.capture.in.source.set(b.raw); } catch {}
+    if (b.raw && pubCap(slot.publish)?.in?.source) {
+      try { pubCap(slot.publish)?.in?.source.set(b.raw); } catch {}
     }
   }
   // 0.8.8: one effects bag per camera -- background (none/blur/image; 0.15.0: gif/video too),
@@ -11961,7 +12153,7 @@
     }
     if (!slots.has(slot.entry.id) || !fxActive(want())) return;   // removed or switched off while we waited
     if (slot.blur) { retuneFx(slot, want()); return; }              // a parallel call already started the loop
-    const raw = unwrapTrack(slot.publish.capture?.in?.source?.peek?.());
+    const raw = unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
     if (!raw) { armFxOnTrack(slot); return; }                        // 0.15.0: was a toast + give-up
     slot.fxFailed = null;
     startBlurLoop(slot, raw, seg, want());
@@ -11971,7 +12163,7 @@
   // slow poll as the belt to that brace. fxRetryAt keeps a chatty source from re-entering.
   function armFxOnTrack(slot) {
     if (slot.fxArm) return;
-    const src = slot.publish.capture?.in?.source;
+    const src = pubCap(slot.publish)?.in?.source;
     const fire = () => {
       if (!slot.fxArm) return;
       if (slot.fxRetryAt && performance.now() - slot.fxRetryAt < 1000) return;
@@ -12038,6 +12230,7 @@
     b.bgKey = key;
     try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}
     try { b.img?.remove?.(); } catch {}
+    closeFxGif(b);   // 0.16.0
     b.img = null; b.vid = null;
     if (!key) return;
     const missing = () => { if (b.bgKey !== key || b.missTold === key) return; b.missTold = key;
@@ -12057,8 +12250,71 @@
         im.onload = () => { if (b.bgKey === key && b.alive) { b.img = im; if (mode === "gif") fxBgHolder().appendChild(im); } };
         im.onerror = () => missing();
         im.src = real;
+        if (mode === "gif") openFxGif(b, key, real);   // 0.16.0: the frames themselves; the <img> is only the fallback still
       }
     }).catch(() => missing());
+  }
+  // 0.16.0: animated GIF backgrounds. drawImage(<img>) paints an animated image's FIRST frame by
+  // spec, so the 0.15.0 GIF background was a still. WebCodecs ImageDecoder hands out every frame
+  // with its duration; the loop draws the current one and pre-decodes the next so a slow decode
+  // never stalls the 30 fps step. Absent ImageDecoder (an old browser) the still stays, with one toast.
+  const GIF_MAX_FRAMES = 2000, GIF_MAX_BYTES = 30 * 1024 * 1024;
+  function closeFxGif(b) {
+    const g = b.gif; if (!g) return;
+    b.gif = null;
+    const dec = g.dec; g.dec = null;   // a decode still in flight closes its own frame (see fxGifDecodeNext)
+    try { g.frame?.close?.(); } catch {}
+    try { g.next?.image?.close?.(); } catch {}
+    try { dec?.close?.(); } catch {}
+  }
+  function fxGifDecodeNext(g, idx) {
+    const p = { done: false, image: null };
+    try {
+      g.dec.decode({ frameIndex: idx }).then((r) => { if (g.dec) { p.image = r.image; } else { try { r.image.close(); } catch {} } p.done = true; },
+                                             () => { p.done = true; });
+    } catch { p.done = true; }
+    return p;
+  }
+  async function openFxGif(b, key, url) {
+    if (typeof ImageDecoder !== "function") {
+      if (!b.gifTold) { b.gifTold = true; window.__toast?.("Animated GIF backgrounds need a newer browser \u2014 showing its first frame", 5000, { level: "info" }); }
+      return;
+    }
+    try {
+      const blob = await (await fetch(url)).blob();
+      if (b.bgKey !== key || !b.alive) return;
+      if (blob.size > GIF_MAX_BYTES) { window.__toast?.("That GIF is too large to animate (over 30 MB) \u2014 showing its first frame", 5000, { level: "warn" }); return; }
+      if (typeof ImageDecoder.isTypeSupported === "function" && !(await ImageDecoder.isTypeSupported("image/gif"))) return;
+      const dec = new ImageDecoder({ data: await blob.arrayBuffer(), type: "image/gif" });   // data must be a BufferSource or stream, never a Blob
+      await dec.tracks.ready;
+      const n = Math.max(1, Number(dec.tracks.selectedTrack?.frameCount) || 1);
+      if (n > GIF_MAX_FRAMES) { dec.close(); window.__toast?.("That GIF has too many frames to animate \u2014 showing its first frame", 5000, { level: "warn" }); return; }
+      if (b.bgKey !== key || !b.alive) { dec.close(); return; }
+      closeFxGif(b);
+      const g = b.gif = { dec, n, i: 0, frame: null, next: null, nextAt: 0, shown: 0, t0: performance.now() };
+      const first = await dec.decode({ frameIndex: 0 });
+      if (b.gif !== g) { try { first.image.close(); } catch {} return; }
+      g.frame = first.image; g.shown = 1;
+      g.nextAt = performance.now() + Math.max(20, (first.image.duration || 100000) / 1000);   // duration is in microseconds
+      if (n > 1) g.next = fxGifDecodeNext(g, 1);
+    } catch (e) {
+      log("GIF background: " + (e?.message || e) + " \u2014 showing its first frame");
+    }
+  }
+  // Called from the draw loop: advance when the current frame's time is up. Returns the
+  // frame to draw (a VideoFrame) or null while nothing is decoded yet.
+  function fxGifFrame(b, now) {
+    const g = b.gif; if (!g || !g.frame) return null;
+    if (g.n > 1 && now >= g.nextAt && g.next && g.next.done) {
+      if (g.next.image) {
+        try { g.frame.close(); } catch {}
+        g.frame = g.next.image; g.shown++;
+        g.i = (g.i + 1) % g.n;
+        g.nextAt = now + Math.max(20, (g.frame.duration || 100000) / 1000);
+      }
+      g.next = fxGifDecodeNext(g, (g.i + 1) % g.n);   // a failed decode simply tries that frame again
+    }
+    return g.frame;
   }
   const loadFxImage = loadFxBg;   // 0.8.8 name
   const SEG_MIN_MS = 66;   // <= 15 segmentations a second; frames in between reuse the last matte
@@ -12147,7 +12403,9 @@
         cx.save();
         const vidReady = b.vid && b.vid.readyState >= 2 && b.vid.videoWidth;
         const imgReady = b.img && b.img.complete && b.img.naturalWidth;
+        const gifFrame = mode === "gif" ? fxGifFrame(b, performance.now()) : null;   // 0.16.0: animated
         if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, w, h);
+        else if (gifFrame) drawCover(cx, gifFrame, gifFrame.displayWidth || gifFrame.codedWidth, gifFrame.displayHeight || gifFrame.codedHeight, w, h);
         else if ((mode === "image" || mode === "gif") && imgReady) drawCover(cx, b.img, b.img.naturalWidth, b.img.naturalHeight, w, h);
         else if (mode !== "none") { cx.filter = "blur(14px)"; cx.drawImage(video, 0, 0, w, h); }   // blur, or a background still loading
         else { cx.filter = baseFilter || "none"; cx.drawImage(video, 0, 0, w, h); }
@@ -12182,13 +12440,13 @@
     // pane is hidden), which froze the effected camera for everyone; a 15 Hz
     // timer keeps the composite moving whenever the frame clocks fall silent.
     b.tickT = setInterval(() => { if (b.alive && performance.now() - (b.lastStep || 0) > 120) { try { step(true); } catch {} } }, 66);
-    try { slot.publish.capture.in.source.set(processed); } catch {}
+    try { pubCap(slot.publish)?.in?.source.set(processed); } catch {}
     // Device switch while blurred: the camera source writes a fresh raw
     // track into capture.in.source -- re-aim the loop at it (our own set
     // above echoes back too; the identity checks ignore it).
-    if (!slot.blurWatch && slot.publish.capture?.in?.source?.subscribe) {
-      slot.blurWatch = slot.publish.capture.in.source.subscribe(() => {
-        const cur = unwrapTrack(slot.publish.capture.in.source.peek?.());
+    if (!slot.blurWatch && pubCap(slot.publish)?.in?.source?.subscribe) {
+      slot.blurWatch = pubCap(slot.publish)?.in?.source.subscribe(() => {
+        const cur = unwrapTrack(pubCap(slot.publish)?.in?.source.peek?.());
         const bb = slot.blur;
         if (!bb || !cur || cur === bb.processed) return;
         // 0.8.6: a relay switch re-asserts the RAW track (same object) -- we
@@ -12198,7 +12456,7 @@
           bb.raw = cur;
           try { bb.video.srcObject = new MediaStream([cur]); bb.video.play().catch(() => {}); } catch {}
         }
-        try { slot.publish.capture.in.source.set(bb.processed); } catch {}
+        try { pubCap(slot.publish)?.in?.source.set(bb.processed); } catch {}
       });
     }
   }
@@ -12206,7 +12464,8 @@
   window.__fxDebug = () => [...slots.values()].filter((s) => s.blur).map((s) => ({
     id: s.entry.id, mode: s.blur.fx?.bg?.mode || "none", quality: s.blur.quality, running: !!s.blur.alive,
     segFps: s.blur.segFps, drawFps: s.blur.drawFps, lastStepAgoMs: s.blur.lastStep ? Math.round(performance.now() - s.blur.lastStep) : null, tick: !!s.blur.tickT, vw: s.blur.video?.videoWidth, readyState: s.blur.video?.readyState, paused: s.blur.video?.paused,
-    delegate: segInfo[s.blur.quality]?.delegate ?? null, model: segInfo[s.blur.quality]?.model ?? null }));
+    delegate: segInfo[s.blur.quality]?.delegate ?? null, model: segInfo[s.blur.quality]?.model ?? null,
+    gif: s.blur.gif ? { n: s.blur.gif.n, i: s.blur.gif.i, shown: s.blur.gif.shown, fps: Math.round(s.blur.gif.shown / Math.max(0.001, (performance.now() - s.blur.gif.t0) / 1000) * 10) / 10 } : null }));   // 0.16.0
 
   // ---- 0.13.1: background-noise removal (RNNoise) --------------------------------
   // mic -> RnnoiseWorkletNode (vendored @sapphi-red/web-noise-suppressor, assets/noise/)
@@ -12289,7 +12548,7 @@
       node.addEventListener("processorerror", (e) => denoiseFail("the noise worklet crashed" + (e?.message ? " (" + e.message + ")" : "")));
       const processed = dest.stream.getAudioTracks()[0];
       slot.dn = { raw, src, head: node, node, dest, processed };
-      try { slot.publish.audio.in.source.set({ track: processed, kind: "voice" }); } catch {}
+      try { pubAud(slot.publish)?.source.set({ track: processed, kind: "voice" }); } catch {}
       rearmSlotAudio(slot);
       log("Background noise removal on (RNNoise).");
     } catch (e) { denoiseFail(e); }
@@ -12309,14 +12568,14 @@
     let live = null;
     try { live = unwrapAudio(slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()); } catch {}
     if (!live && v.raw.readyState === "live") live = v.raw;
-    if (live) { try { slot.publish.audio.in.source.set({ track: live, kind: "voice" }); } catch {} }
+    if (live) { try { pubAud(slot.publish)?.source.set({ track: live, kind: "voice" }); } catch {} }
     rearmSlotAudio(slot);
   }
   function armDenoiseWatch(slot) {
     if (slot.dnWatch || !slot.publish.audio?.in?.source?.subscribe) return;
-    slot.dnWatch = slot.publish.audio.in.source.subscribe(() => {
+    slot.dnWatch = pubAud(slot.publish)?.source.subscribe(() => {
       if (micMode !== "rnnoise" || !slots.has(slot.entry.id)) return;
-      const cur = unwrapAudio(slot.publish.audio.in.source.peek?.());
+      const cur = unwrapAudio(pubAud(slot.publish)?.source.peek?.());
       if (!cur) return;                          // re-open in progress
       const v = slot.dn;
       if (!v) { applyDenoise(slot); return; }    // the mic just landed
@@ -12327,7 +12586,7 @@
         try { v.src.disconnect(); } catch {}
         try { v.src = denoiseCtx.createMediaStreamSource(new MediaStream([cur])); v.src.connect(v.head); } catch {}
       }
-      try { slot.publish.audio.in.source.set({ track: v.processed, kind: "voice" }); } catch {}
+      try { pubAud(slot.publish)?.source.set({ track: v.processed, kind: "voice" }); } catch {}
     });
   }
 
@@ -12337,6 +12596,7 @@
 
     const pane = document.createElement("div");
     pane.className = "pubpane";
+    pane.dataset.sid = String(entry.id);   // 0.16.0: the watch half re-finds a spotlit pane after a rebuild
     const bar = document.createElement("div");
     bar.className = "bar";
     const nm = document.createElement("span");
@@ -12557,7 +12817,9 @@
     const entry = slot.entry;
     const v = document.createElement("video");
     v.className = "mediasrc"; v.playsInline = true; v.preload = "auto";
-    v.loop = entry.loop !== false; v.volume = entry.gain ?? 1; v.muted = false;
+    v.loop = entry.loop === true; v.volume = entry.gain ?? 1; v.muted = false;   // 0.16.0: loop is opt-in (the bar's loop button)
+    const rs = entry.resume || { t: 0, paused: false };   // 0.16.0: a slot rebuild resumes where the player was -- and paused if it was paused
+    delete entry.resume;
     // 0.8.13: a converted file streams straight from the local server by Range
     // (instant start, no whole-file download into a Blob first); an unconverted
     // pick still plays from an object URL.
@@ -12566,6 +12828,7 @@
     // player); its <video> gets the MediaSource URL there, not here.
     const url = entry.mediaId ? null : (entry.mediaUrl || URL.createObjectURL(entry.file));
     if (url) v.src = url;
+    if (url && rs.t) v.addEventListener("loadedmetadata", () => { try { v.currentTime = rs.t; } catch {} }, { once: true });   // 0.16.0
     slot.pane.appendChild(v);
     const cv = document.createElement("canvas"); const cx = cv.getContext("2d");
     // 0.8.13: captureStream(30), not (0). The library resolves the encoder's
@@ -12574,12 +12837,16 @@
     // -- hardware encoders rejected it, the catalog still advertised video, and
     // viewers got sound with a black picture while the owner's preview (raw
     // capture frames) looked fine. Frames are still pushed with requestFrame().
-    const stream = cv.captureStream(30); const vtrack = stream.getVideoTracks()[0];
-    const m = { video: v, canvas: cv, cx, vtrack, url, actx: null, atrack: null, alive: true, lastAnn: 0, annT: null };
+    // 0.16.0: the composite follows the FILE's frame rate (capped at 30): a 24 fps movie drawn at
+    // 30 asked the encoder for six duplicate frames a second -- pure CPU for nothing
+    const capFps = Math.min(30, Math.max(5, Math.round(Number(entry.fps) || 30)));
+    const stream = cv.captureStream(capFps); const vtrack = stream.getVideoTracks()[0];
+    const m = { video: v, canvas: cv, cx, vtrack, url, actx: null, atrack: null, alive: true, lastAnn: 0, annT: null, capFps };
     slot.media = m;
+    v.addEventListener("ended", () => { if (slot.media === m && m.alive && !m.stream && !v.loop) mediaFinished(slot); });   // 0.16.0
     if (entry.mediaId) {   // 0.14.0: streamed + converted as it plays
       v.loop = false;      // a MediaSource has no native loop: "ended" reopens the stream at 0 instead
-      m.stream = true; m.loop = entry.loop !== false; m.dur = entry.duration || 0;
+      m.stream = true; m.loop = entry.loop === true; m.dur = entry.duration || 0;   // 0.16.0: opt-in
       m.plan = { ...(entry.plan || { v: "copy", a: "aac" }) };
       m.escalated = false; m.failed = false; m.reopens = 0; m.bytes = 0; m.queue = []; m.queued = 0; m.eof = false;
       m.lastByteAt = performance.now(); m.ttff0 = performance.now();
@@ -12588,8 +12855,8 @@
         log("Media stream first frame after " + Math.round(m.ttff) + " ms (" + (m.plan.v === "copy" ? "video copied" : "video re-encoded") + ", audio " + m.plan.a + ")");
         window.__toast?.("Streaming \u2014 converting " + mediaWhat(m) + " as it plays", 5000, { level: "info" });
       }, { once: true });
-      v.addEventListener("ended", () => { if (m.alive && m.stream && m.loop && !m.failed) reopenMediaStream(slot, 0); });
-      attachMediaStream(slot, 0);
+      v.addEventListener("ended", () => { if (!m.alive || !m.stream || m.failed) return; if (m.loop) reopenMediaStream(slot, 0, false, "loop"); else mediaFinished(slot); });   // 0.16.0
+      attachMediaStream(slot, rs.t || 0);
     }
     // Frames are pushed from two clocks: requestVideoFrameCallback while the
     // window is visible, and a 30 Hz timer that keeps the composite alive when
@@ -12610,7 +12877,7 @@
       drawOnce();
       if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(draw); else requestAnimationFrame(draw);
     };
-    m.timer = setInterval(drawOnce, 33);
+    m.timer = setInterval(drawOnce, Math.round(1000 / capFps));   // 0.16.0: the file's cadence
     const wire = () => {
       try {
         m.actx = new AudioContext();
@@ -12618,13 +12885,18 @@
         const dest = m.actx.createMediaStreamDestination();
         src.connect(dest);
         m.atrack = dest.stream.getAudioTracks()[0];
-        slot.publish.audio.in.source.set({ track: m.atrack, kind: "music" });
+        pubAud(slot.publish)?.source.set({ track: m.atrack, kind: "music" });
         m.actx.resume().catch(() => {});
       } catch (e) { log("File audio: " + (e?.message || e)); }
-      try { slot.publish.capture.in.source.set(vtrack); } catch {}
+      try { pubCap(slot.publish)?.in?.source.set(vtrack); } catch {}
       // a still frame before play so viewers get a picture immediately
       try { if (v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); vtrack.requestFrame?.(); } } catch {}
-      if (m.stream) { m.rebuffering = true; m.wantPlay = true; paintOwnerMediaBar(slot); }   // 0.15.0: mediaBufferTick starts it from a cushion
+      if (rs.paused) {   // 0.16.0: rebuilt while paused -> stay paused, right where it was (a heal used to restart from 0, playing)
+        m.userPaused = true; m.wantPlay = false; if (m.stream) m.rebuffering = true;
+        log("Media share restored paused at " + (Math.round((rs.t || 0) * 10) / 10) + " s");
+        paintOwnerMediaBar(slot);
+      }
+      else if (m.stream) { m.rebuffering = true; m.wantPlay = true; paintOwnerMediaBar(slot); }   // 0.15.0: mediaBufferTick starts it from a cushion
       else v.play().catch((e) => log("File play: " + (e?.message || e)));
       draw();
       announceMedia(slot, true);
@@ -12746,6 +13018,7 @@
     } catch (e) { try { m.ctl.abort(); } catch {} escalateMedia(slot, "cannot open a buffer for " + mime + ": " + (e?.message || e)); return; }
     m.copy = res.headers.get("X-KASTR-Copy") === "1";
     m.encoder = res.headers.get("X-KASTR-Encoder") || null;   // 0.15.1
+    m.srcFps = Number(res.headers.get("X-KASTR-Fps")) || 0;    // 0.16.0
     const reader = res.body.getReader();
     try {
       while (true) {
@@ -12793,7 +13066,7 @@
         m.catchupT = null;
         if (!m.alive || !m.eof) return;
         log("Media stream caught up with the upload at " + end.toFixed(1) + " s \u2014 resuming");
-        reopenMediaStream(slot, Math.max(0, bufferedEndS(m) - 0.5), true);
+        reopenMediaStream(slot, Math.max(0, bufferedEndS(m) - 0.5), true, "catchup");
       }, 1500);
       return;
     }
@@ -12802,11 +13075,13 @@
   // Abort the reader, empty the buffer and fetch again from t. A source the
   // element gave up on (decode error, or an ended MediaSource after the last
   // fragment) gets a fresh MediaSource; otherwise the SourceBuffer is reused.
-  function reopenMediaStream(slot, t, keepHead) {
+  function reopenMediaStream(slot, t, keepHead, why) {
     const m = slot.media; if (!m || !m.alive || !m.stream) return;
     const v = m.video;
     t = Math.max(0, Number(t) || 0);
     m.reopens = (m.reopens || 0) + 1;
+    (m.log ||= []).push({ why: why || "?", t: Math.round(t * 10) / 10, at: Date.now(), paused: !!m.userPaused });   // 0.16.0: __mediaDebug().restarts
+    if (m.log.length > 8) m.log.shift();
     m.gen = (m.gen || 0) + 1;
     if (!m.userPaused) { m.rebuffering = true; m.wantPlay = true; try { v.pause(); } catch {} }   // 0.15.0: refill before playing on
     try { m.ctl?.abort(); } catch {}
@@ -12845,7 +13120,7 @@
       m.escalated = true; m.escalatedAt = performance.now(); m.plan.v = "transcode";
       log("Media stream: " + why + " \u2014 re-encoding video to H.264 as it plays");
       window.__toast?.("This window cannot play the file's video as-is \u2014 re-encoding it to H.264 as it plays.", 6000);
-      reopenMediaStream(slot, m.video.currentTime || 0);
+      reopenMediaStream(slot, m.video.currentTime, false, "escalate");   // 0.16.0: never "|| 0" -- that was a restart from the beginning
     } else {
       m.failed = true;
       try { m.ctl?.abort(); } catch {}
@@ -12857,7 +13132,7 @@
     const m = slot.media; if (!m) return;
     const v = m.video; let b = null; try { b = v.buffered; } catch {}
     if (b) for (let i = 0; i < b.length; i++) if (t >= b.start(i) - 0.05 && t <= b.end(i) + 0.05) { try { v.currentTime = t; } catch {} return; }
-    reopenMediaStream(slot, t);
+    reopenMediaStream(slot, t, false, "seek");
   }
   // 0.15.0: every 250 ms while a stream is attached -- the cushion keeper. Playing
   // from the transcoder's live edge stutters (a laptop's x264 barely outruns real
@@ -12883,13 +13158,40 @@
       paintOwnerMediaBar(slot);
       // 0.15.1: two rebuffers on a transcode = this machine's encoder cannot outrun playback -> ask
       // the server for the light ladder (960 wide, 24 fps) once, from the current position.
-      if (m.rebuffers >= 2 && !m.lowQ && m.plan?.v === "transcode") {
-        m.lowQ = true;
-        log("Media stream: the transcode cannot keep up on this machine — lowering to 960 wide / 24 fps");
-        window.__toast?.("This machine cannot convert the file fast enough — lowered the quality so it plays smoothly", 6000, { level: "event" });
-        reopenMediaStream(slot, v.currentTime);
-      }
+      if (m.rebuffers >= 2 && !m.lowQ && m.plan?.v === "transcode") mediaLowerQuality(slot, "two rebuffers");
     }
+    mediaHealthSample(slot);   // 0.16.0
+  }
+  // 0.15.1/0.16.0: the light ladder (960 wide / 24 fps), asked once, from the current position
+  function mediaLowerQuality(slot, why) {
+    const m = slot.media; if (!m || m.lowQ || m.plan?.v !== "transcode") return;
+    m.lowQ = true;
+    log("Media stream: the transcode cannot keep up on this machine (" + why + ") — lowering to 960 wide / 24 fps");
+    window.__toast?.("This machine cannot convert the file fast enough — lowered the quality so it plays smoothly", 6000, { level: "event" });
+    reopenMediaStream(slot, m.video.currentTime, false, "lowQ");
+  }
+  // 0.16.0: share health -- once a second, the composite encoder's output rate (frames and
+  // bytes from the publish library's encoder stats). A browser encoder that produces fewer
+  // frames than the composite draws is starved (the transcode, or another app, owns the CPU):
+  // three seconds of that asks for the light ladder before the viewers see the hitch.
+  function mediaHealthSample(slot) {
+    const m = slot.media; if (!m) return;
+    const now = performance.now();
+    if (m.hsAt && now - m.hsAt < 1000) return;
+    let st = null;
+    try { st = slot.publish?.video?.out?.stats?.peek?.() ?? null; } catch {}
+    if (st && m.hsAt) {
+      const dt = (now - m.hsAt) / 1000;
+      m.encFps = Math.max(0, (Number(st.frames || 0) - (m.hsFrames || 0)) / dt);
+      m.encKbps = Math.max(0, (Number(st.bytes || 0) - (m.hsBytes || 0)) * 8 / dt / 1000);
+    }
+    if (st) { m.hsFrames = Number(st.frames || 0); m.hsBytes = Number(st.bytes || 0); }
+    m.hsAt = now;
+    const v = m.video, playing = !v.paused && !v.ended && !m.rebuffering && !m.userPaused;
+    if (playing && m.encFps != null && m.hsFrames > 30 && m.encFps < 0.8 * (m.capFps || 30)) {
+      m.sagSince = m.sagSince || now;
+      if (now - m.sagSince > 3000 && m.plan?.v === "transcode" && !m.lowQ) mediaLowerQuality(slot, "encoder sagging at " + m.encFps.toFixed(0) + " fps");
+    } else m.sagSince = 0;
   }
   // once a second while a stream is attached
   function mediaStallTick(slot) {
@@ -12898,13 +13200,13 @@
     mediaSettleSeek(m);
     if (m.wait409 != null) {   // a seek beyond the uploaded part: retry once the upload has passed it
       const t = m.wait409, have = up ? (up.done ? Infinity : (up.total ? up.loaded / up.total * (m.dur || 0) : 0)) : Infinity;
-      if (have > t + 2) { m.wait409 = null; reopenMediaStream(slot, t); v.play().catch(() => {}); }
+      if (have > t + 2) { m.wait409 = null; reopenMediaStream(slot, t, false, "wait409"); if (!m.userPaused) v.play().catch(() => {}); }   // 0.16.0: a pause stays a pause
       return;
     }
     if ((v.paused && !m.rebuffering) || m.eof || m.queue.length) return;   // 0.15.0: a rebuffer pause still counts as "playing" here
     if (performance.now() - m.lastByteAt > MEDIA_STALL_MS && bufferedAheadS(m) < 1) {
       m.lastByteAt = performance.now();
-      if (!m.stallReopened) { m.stallReopened = true; log("Media stream stalled \u2014 reopening at " + v.currentTime.toFixed(1) + " s"); reopenMediaStream(slot, v.currentTime); }
+      if (!m.stallReopened) { m.stallReopened = true; log("Media stream stalled \u2014 reopening at " + v.currentTime.toFixed(1) + " s"); reopenMediaStream(slot, v.currentTime, false, "stall"); }
       else { m.failed = true; try { m.ctl?.abort(); } catch {} log("Media stream stalled again \u2014 giving up"); window.__toast?.("KASTR cannot keep this file playing.", 8000, { level: "error" }); }
     }
   }
@@ -12912,6 +13214,10 @@
     const m = slot.media;
     if (!m) return;
     slot.media = null;
+    try {   // 0.16.0: a rebuild (self-heal, republish) resumes here instead of restarting from 0, playing
+      const v0 = m.video;
+      slot.entry.resume = { t: Number(v0.currentTime) || 0, paused: !!(m.userPaused || (v0.paused && !m.rebuffering && !v0.ended)) };
+    } catch {}
     m.alive = false;
     if (m.stream) detachMediaStream(m);   // 0.14.0: abort the reader, close the MediaSource
     clearTimeout(m.annT);
@@ -12923,6 +13229,27 @@
     try { m.vtrack.stop(); m.atrack?.stop?.(); } catch {}
     try { m.actx?.close?.(); } catch {}
   }
+  // 0.16.0: loop off -> the end of the file ends the share (a finished movie is not a black tile).
+  // The room hears playing:false first (viewers show the last frame for a beat), then the share
+  // leaves; "Play again" re-adds the same file (the server copy is kept for that long).
+  function mediaFinished(slot) {
+    const m = slot.media; if (!m || !m.alive || m.finished) return;
+    m.finished = true;
+    announceMedia(slot, true);
+    const entry = slot.entry, label = String(entry.label || entry.name || "file");
+    const again = { file: entry.file, mediaUrl: entry.mediaUrl, mediaId: entry.mediaId, duration: entry.duration, plan: entry.plan,
+                    hasVideo: entry.hasVideo, gain: entry.gain, loop: false };
+    log(label + " finished \u2014 share ended (loop is off)");
+    setTimeout(() => {
+      if (!slots.has(entry.id)) return;
+      entry.keepMedia = true;   // removeSource must not delete the server copy yet
+      removeSource(entry.id);
+      let replayed = false;
+      window.__toast?.(label + " finished \u2014 share ended", 8000, { level: "event",
+        action: { label: "Play again", fn: () => { replayed = true; try { addSource(FILE, null, label, again); } catch (e) { log("Play again: " + (e?.message || e)); } } } });
+      setTimeout(() => { if (!replayed && again.mediaUrl) fetch(again.mediaUrl, { method: "DELETE" }).catch(() => {}); }, 9000);
+    }, 1500);
+  }
   function announceMedia(slot, force) {
     const m = slot.media;
     if (!m || !m.alive) return;
@@ -12933,7 +13260,7 @@
       if (!m.alive) return;
       const v = m.video;
       m.lastAnn = Date.now();
-      const payload = { path: chanPath(ensureHang(slot.entry.name)), playing: (!v.paused || !!m.rebuffering) && !v.ended, t: Math.round(v.currentTime * 10) / 10,
+      const payload = { path: chanPath(ensureHang(slot.entry.name)), playing: (!v.paused || (!!m.rebuffering && !m.userPaused)) && !v.ended && !m.finished, t: Math.round(v.currentTime * 10) / 10,   // 0.16.0: a paused share that refills is still paused
         dur: Math.round(mediaDur(slot) * 10) / 10, loop: mediaLoopOn(slot), at: Date.now() };   // 0.14.0: a stream's duration/loop live on slot.media
       try { mediaAnn.set(String(slot.entry.id), JSON.stringify(payload)); } catch {}
       paintOwnerMediaBar(slot);
@@ -12961,6 +13288,7 @@
     bar.innerHTML = '<button type="button" class="mplay" title="Play / pause for everyone">\u25b6</button>'
       + '<input type="range" class="mseek" min="0" max="1000" value="0" title="Position (everyone)">'
       + '<span class="mtime">0:00 / 0:00</span>'
+      + '<span class="mhealth" title="Share health: encoded fps \u00b7 kb/s \u00b7 hardware/software encoder \u00b7 buffer ahead \u00b7 rebuffers"></span>'
       + '<button type="button" class="mloop" title="Loop">\u27f2</button>'
       + '<button type="button" class="mmute" title="Mute the file for everyone">\u{1F50A}</button>'
       + '<input type="range" class="mvol" min="0" max="1" step="0.05" value="1" title="File volume (everyone)">';
@@ -13012,6 +13340,24 @@
     const f2 = (sec) => { sec = Math.max(0, Math.floor(sec || 0)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); };
     q(".mtime").textContent = (slot.media?.rebuffering ? "Buffering\u2026 " : "") + f2(v.currentTime) + " / " + f2(dur) + uploadSuffix(slot.entry);   // 0.15.0
     q(".mmute").textContent = slot.entry.micMuted ? "\u{1F507}" : "\u{1F50A}";
+    { // 0.16.0: share health -- fps, kb/s, hw|sw, the transcoder, buffer ahead, rebuffers
+      const m = slot.media, h = q(".mhealth");
+      if (h && m) {
+        let hw = "?";
+        try { const r = slot.publish?.video?.out?.resolved?.peek?.(); hw = r ? (String(r.hardwareAcceleration || "").includes("hardware") ? "hw" : "sw") : "?"; } catch {}
+        const fps = m.encFps == null ? null : Math.round(m.encFps), kbps = m.encKbps == null ? null : Math.round(m.encKbps);
+        const parts = [];
+        if (fps != null) parts.push(fps + " fps");
+        if (kbps != null) parts.push(kbps + " kb/s");
+        parts.push(hw + (m.stream && m.encoder && m.encoder !== "copy" ? " \u00b7 " + m.encoder : ""));
+        if (m.stream) parts.push((m.ahead || 0).toFixed(1) + " s");
+        if (m.rebuffers) parts.push(m.rebuffers + "\u00d7");
+        h.textContent = parts.join(" \u00b7 ");
+        const playing = !v.paused && !v.ended && !m.userPaused;
+        const level = m.rebuffering ? "red" : (playing && fps != null && m.hsFrames > 30 && fps < 0.8 * (m.capFps || 30)) ? "amber" : "ok";
+        if (h.dataset.level !== level) h.dataset.level = level;
+      }
+    }
   }
   setInterval(() => { for (const s2 of slots.values()) if (s2.media) paintOwnerMediaBar(s2); }, 500);
   // 0.8.4: find this slot's live outgoing audio track. Screen/file slots
@@ -13117,10 +13463,10 @@
     }
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim())));
-      const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
+      const connection = new Net.Connection({ url: relayUrl, enabled: true });
       const capture = new Video.Capture({ source: old.track });
       const broadcast = new Broadcast({
-        connection: connection.established,
+        origin: connection.origin,
         enabled: live,
         name: Net.Path.from(chanPath(ensureHang(slot.entry.name))),
         display: capture.out.display,
@@ -13505,86 +13851,39 @@
     chev.className = "pchev";
     chev.textContent = "\u25be";
     chev.title = "Grid layout";
-    let menu = null;
     chev.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (menu) { menu.remove(); menu = null; return; }
-      menu = document.createElement("div");
-      menu.className = "gmenu";
-      for (const [id, label] of GRID_LAYOUTS) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = label;
-        b.classList.toggle("on", (g.layout || "auto") === id);
-        b.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          g.layout = id;
-          gridPrefSet(g.id, "layout", id);   // 0.15.0: per grid
-          announceGrid();   // 0.8.8
-          menu?.remove(); menu = null;
-        });
-        menu.appendChild(b);
-      }
-      // 0.8.12: what the room receives, and the cell lock
-      const sep = () => { const d = document.createElement("div"); d.style.cssText = "border-top:1px solid var(--line);margin:3px 0"; menu.appendChild(d); };
-      const cap = (t) => { const d = document.createElement("div"); d.style.cssText = "font-size:10px;color:var(--text-mute);padding:3px 8px 1px;text-transform:uppercase;letter-spacing:.04em"; d.textContent = t; menu.appendChild(d); };
-      sep(); cap("Publish feeds as");
-      for (const [id, label] of GRID_FEEDS) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = label;
-        b.classList.toggle("on", gridFeeds === id);
-        b.addEventListener("click", (ev) => { ev.stopPropagation(); setGridFeeds(id); menu?.remove(); menu = null; });
-        menu.appendChild(b);
-      }
-      sep();
-      const lk = document.createElement("button");
-      lk.type = "button";
-      lk.textContent = (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)";
-      lk.addEventListener("click", (ev) => { ev.stopPropagation(); setGridLock(!gridLock); menu?.remove(); menu = null; });
-      menu.appendChild(lk);
-      // 0.15.0: names on the cells, rename, spotlight
-      const nb = document.createElement("button");
-      nb.type = "button";
-      nb.textContent = (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells";
-      nb.addEventListener("click", (ev) => { ev.stopPropagation(); setGridNames(!gridNames); menu?.remove(); menu = null; });
-      menu.appendChild(nb);
-      sep();
-      const rn = document.createElement("button");
-      rn.type = "button";
-      rn.textContent = "Rename grid\u2026";
-      rn.addEventListener("click", (ev) => {
-        ev.stopPropagation(); menu?.remove(); menu = null;
-        const nm = window.prompt("Name for this grid", g.name || gridNameOf(g.id));
-        if (nm == null || !nm.trim()) return;
-        gridRename(g.id, nm.trim());
-        g.name = gridNameOf(g.id);
-        renderSources(); refreshUi(); announceGrid(true); announce();
+      // 0.16.0: the shared body-level popover (viewport-clamped, scrollable) -- the in-pane
+      // .gmenu was clipped by the pane's overflow in a small window and could not scroll
+      const items = [];
+      for (const [id, label] of GRID_LAYOUTS) items.push({ value: "layout:" + id, label, on: (g.layout || "auto") === id });
+      items.push({ sep: true }, { cap: "Publish feeds as" });
+      for (const [id, label] of GRID_FEEDS) items.push({ value: "feeds:" + id, label, on: gridFeeds === id });
+      items.push({ sep: true });
+      items.push({ value: "lock", label: (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
+      items.push({ value: "names", label: (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells" });
+      items.push({ sep: true }, { value: "rename", label: "Rename grid\u2026" });
+      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Spotlight for me" }, { value: "all", label: "Spotlight for everyone" });
+      items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid" });
+      const open = window.__openMenu;
+      if (!open) return;
+      open(chev, items, "", (v) => {
+        if (v.startsWith("layout:")) { g.layout = v.slice(7); gridPrefSet(g.id, "layout", g.layout); announceGrid(); }
+        else if (v.startsWith("feeds:")) setGridFeeds(v.slice(6));
+        else if (v === "lock") setGridLock(!gridLock);
+        else if (v === "names") setGridNames(!gridNames);
+        else if (v === "rename") {
+          const nm = window.prompt("Name for this grid", g.name || gridNameOf(g.id));
+          if (nm == null || !nm.trim()) return;
+          gridRename(g.id, nm.trim());
+          g.name = gridNameOf(g.id);
+          renderSources(); refreshUi(); announceGrid(true); announce();
+        }
+        else if (v === "me") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); }
+        else if (v === "all") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); window.__spot?.set?.(chanPath(ensureHang(g.entry.name))); }
       });
-      menu.appendChild(rn);
-      sep(); cap("Spotlight");
-      const sm = document.createElement("button");
-      sm.type = "button";
-      sm.textContent = "Spotlight for me";
-      sm.addEventListener("click", (ev) => { ev.stopPropagation(); menu?.remove(); menu = null; if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); });
-      menu.appendChild(sm);
-      const sa = document.createElement("button");
-      sa.type = "button";
-      sa.textContent = "Spotlight for everyone";
-      sa.addEventListener("click", (ev) => {
-        ev.stopPropagation(); menu?.remove(); menu = null;
-        if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane);
-        window.__spot?.set?.(chanPath(ensureHang(g.entry.name)));
-      });
-      menu.appendChild(sa);
-      const hint = document.createElement("div");
-      hint.style.cssText = "font-size:10px;color:var(--text-mute);padding:4px 8px";
-      hint.textContent = "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid";   // 0.9.5
-      menu.appendChild(hint);
-      g.pane.appendChild(menu);
     });
     g.pane.appendChild(chev);
-    document.addEventListener("click", () => { if (menu) { menu.remove(); menu = null; } });
     // drag-and-drop reorder
     g.pane.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || e.target.closest("button")) return;
@@ -14100,7 +14399,7 @@
       // 0.8.2: cameras wear just the person's name, like remote tiles do.
       slot.nameEl.textContent = /^camera(-\d+)?$/.test(leafRaw) && operator
         ? cap(operator)
-        : (operator ? cap(operator) + " \u2014 " : "") + cap(leafRaw);
+        : (operator ? cap(operator) + " \u2014 " : "") + (slot.rtsp && slot.entry.label ? String(slot.entry.label) : cap(leafRaw));   // 0.16.0: an RTSP feed wears its LABEL (0.15.0 renames never re-key the path)
       slot.nameEl.title = chanPath(nm);   // the real relay path
       slot.badge.textContent = st.text;
       slot.badge.className = "badge " + st.cls;
@@ -14395,7 +14694,7 @@
              : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");   // http on a LAN address has no randomUUID
     const xhr = new XMLHttpRequest();
     const upload = { xhr, loaded: 0, total: f.size, done: false, failed: false, promise: null };   // promise resolves with the server record (or null)
-    const out = { mediaUrl: "/api/media/" + id, mediaId: id, name: f.name, size: f.size, duration: probe.duration || 0, hasVideo: !!probe.video,
+    const out = { mediaUrl: "/api/media/" + id, mediaId: id, name: f.name, size: f.size, duration: probe.duration || 0, hasVideo: !!probe.video, fps: Number(probe.fps) || 0,   // 0.16.0
       plan: { v: probe.convertVideo ? "transcode" : "copy",
               a: (probe.convertAudio || String(probe.audio || "").toLowerCase() !== "aac") ? "aac" : "copy" },
       upload };
@@ -14433,7 +14732,7 @@
       const r = await prepareMediaFile(picked);
       if (r && r.mediaUrl) {   // 0.14.0: streamed from the local server, converted as it plays
         f = new File([], r.name, { type: "video/mp4" });   // an empty stand-in: the player streams by URL (0.8.13 trick, kept)
-        extra = { mediaUrl: r.mediaUrl, mediaId: r.mediaId, duration: r.duration || 0, plan: r.plan, hasVideo: r.hasVideo, upload: r.upload };
+        extra = { mediaUrl: r.mediaUrl, mediaId: r.mediaId, duration: r.duration || 0, plan: r.plan, hasVideo: r.hasVideo, upload: r.upload, fps: r.fps || 0 };   // 0.16.0: + fps
       }
       else f = r;
     }
@@ -14786,9 +15085,9 @@
     if (holder || (secured && rec.hash && !rec.roomKey)) registerRoom(rec);
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim(), "registry")));
-      const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
+      const connection = new Net.Connection({ url: relayUrl, enabled: true });
       const broadcast = new Broadcast({
-        connection: connection.established,
+        origin: connection.origin,
         enabled: true,
         name: Net.Path.from(path),
       });
@@ -14817,9 +15116,9 @@
                    : ".channels/" + rec.slug + "/locked/" + rec.salt + "/" + rec.hash)
         : ".channels/" + rec.slug;
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim(), "registry")));
-      const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
+      const connection = new Net.Connection({ url: relayUrl, enabled: true });
       const broadcast = new Broadcast({
-        connection: connection.established,
+        origin: connection.origin,
         enabled: true,
         name: Net.Path.from(path),
       });
@@ -14832,8 +15131,8 @@
   function chanClosedHint(slug) {
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim(), "registry")));
-      const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
-      const broadcast = new Broadcast({ connection: connection.established, enabled: true,
+      const connection = new Net.Connection({ url: relayUrl, enabled: true });
+      const broadcast = new Broadcast({ origin: connection.origin, enabled: true,
                                         name: Net.Path.from(".channels/" + slug + "/closed/" + Date.now()) });
       setTimeout(() => { try { broadcast.close(); } catch {} try { connection.close(); } catch {} }, 6000);
     } catch {}
@@ -14847,7 +15146,7 @@
   // itself lives in the watch half (window.__shareMenu) next to the
   // stop/spotlight plumbing.
   function addShareChev(pane, entry) {
-    if (entry.kind === "camera") return;
+    // 0.16.0: cameras too -- "Spotlight for me / everyone" lived only on remote tiles and content
     const b = document.createElement("button");
     b.type = "button";
     b.className = "pchev";
@@ -14880,9 +15179,9 @@
     const path = currentChannel() + "/.spotlight/" + Date.now() + "/" + b64;
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim())));
-      const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
+      const connection = new Net.Connection({ url: relayUrl, enabled: true });
       const broadcast = new Broadcast({
-        connection: connection.established,
+        origin: connection.origin,
         enabled: true,
         name: Net.Path.from(path),
       });
@@ -15015,8 +15314,8 @@
     const path = currentChannel() + "/.recording/" + Date.now() + "/" + b64;
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim())));
-      const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
-      const broadcast = new Broadcast({ connection: connection.established, enabled: true, name: Net.Path.from(path) });
+      const connection = new Net.Connection({ url: relayUrl, enabled: true });
+      const broadcast = new Broadcast({ origin: connection.origin, enabled: true, name: Net.Path.from(path) });
       recReg = { relayUrl, connection, broadcast };
     } catch {}
   }
@@ -15054,8 +15353,8 @@
       const path = (opts.root ? kind + "/" + channel : channel + "/" + kind) + "/" + (ts || Date.now()) + "/" + b64;
       try {
         const relayUrl = new Signals.Signal(new URL(relay));
-        const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
-        const broadcast = new Broadcast({ connection: connection.established, enabled: true, name: Net.Path.from(path) });
+        const connection = new Net.Connection({ url: relayUrl, enabled: true });
+        const broadcast = new Broadcast({ origin: connection.origin, enabled: true, name: Net.Path.from(path) });
         regs.set(key, { relayUrl, connection, broadcast, payload: text, relay, channel });
       } catch {}
     };
@@ -15114,6 +15413,19 @@
   // 0.8.10: shared-file playback state (owner -> room) and control pulses (anyone -> owner)
   const mediaAnn = keyedAnnouncer(".media", { state: (id, p) => window.__state.set("media", { id, meta: p ? JSON.parse(p) : null }) });
   const mediaCtlAnn = keyedAnnouncer(".mediactl", { state: (nonce, p) => { if (p) window.__state.set("ctl", JSON.parse(p)); } });
+  // 0.16.0: admin commands -- the same keyed track-less announce; the relay admits it only
+  // from an admin token (its grant carries <room>/.admin). Mirrored on room.json `admin`.
+  // NEVER mirrored on room.json: a member's own state track carries no proof of the admin role;
+  // only the relay-refused-or-admitted .admin announce does.
+  const adminAnn = keyedAnnouncer(".admin", {});
+  window.__adminSent = new Set();   // nonces this page sent (the local origin echoes them; never apply them here)
+  window.__adminSend = (cmd) => {
+    const nonce = PEER + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 7);
+    window.__adminSent.add(nonce); if (window.__adminSent.size > 200) window.__adminSent.delete(window.__adminSent.values().next().value);
+    const by = (() => { try { return operatorSlug() || "admin"; } catch { return "admin"; } })();
+    try { adminAnn.set(nonce, JSON.stringify({ ...cmd, by, nonce, at: Date.now() })); } catch {}
+    setTimeout(() => { try { adminAnn.clear(nonce); } catch {} }, 4000);
+  };
   window.__mediaCtl = {
     send: (path, op, value) => {
       const nonce = PEER + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 7);
@@ -15178,8 +15490,8 @@
         const ts = window.__sinceAnnounce?.joinedAt?.() || Date.now();
         const b64 = btoa(JSON.stringify({ peer: PEER })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
         const relayUrl = new Signals.Signal(new URL(relay));
-        const connection = new Net.Connection.Reload({ url: relayUrl, enabled: true });
-        const broadcast = new Broadcast({ connection: connection.established, enabled: false,
+        const connection = new Net.Connection({ url: relayUrl, enabled: true });
+        const broadcast = new Broadcast({ origin: connection.origin, enabled: false,
                                           name: Net.Path.from(".talking/" + ch + "/" + ts + "/" + b64) });
         talkReg = { relayUrl, connection, broadcast, channel: ch, relay };
       } catch { return; }
@@ -15243,7 +15555,7 @@
       const listed = (await r.text()).split(/\r?\n/).map(norm).filter(Boolean);
       const rel = want.startsWith(currentChannel() + "/") ? want.slice(currentChannel().length + 1) : want;
       if (!announcedSampled) { announcedSampled = true; log("Relay /announced/" + currentChannel() + " lists " + listed.length + (listed.length ? " e.g. " + listed.slice(0, 3).join(" | ") : "") + " -- looking for " + rel); }
-      if (!listed.length && (window.__echoed?.size || 0) > 0) return null;   // the page sees echoes the relay 'does not list': wrong endpoint shape, no evidence
+      if (!listed.length) return null;   // 0.16.0: an empty list is NO evidence -- moq-relay 0.15's /announced lists nothing behind an auth server (it answers as an anonymous session)
       const wants = new Set([rel, want, rel.replace(/\.hang$/, ""), want.replace(/\.hang$/, "")].map(norm));
       return listed.some((x) => wants.has(x));
     } catch { return null; }
@@ -15413,13 +15725,15 @@
     try { ac.close(); } catch {}
     return { rms: +(sum / n).toFixed(4), peak: +peak.toFixed(4), actx: s2.media.actx?.state };
   };
+  window.__pubSlots = () => [...slots.values()];   // 0.16.0 rig hook: the raw slot objects (publish graph, media, pane)
   window.__mediaDebug = () => [...slots.values()].filter((s) => s.media).map((s) => {   // rig hook
     const m = s.media, v = m.video, b = [];
     try { for (let i = 0; i < v.buffered.length; i++) b.push([+v.buffered.start(i).toFixed(2), +v.buffered.end(i).toFixed(2)]); } catch {}
     const up = s.entry.upload;
-    const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused, lowQ: !!m.lowQ, encoder: m.encoder || null };   // 0.15.0/0.15.1
+    const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused, lowQ: !!m.lowQ, encoder: m.encoder || null,
+      capFps: m.capFps || null, srcFps: m.srcFps || null, encFps: m.encFps == null ? null : +m.encFps.toFixed(1), encKbps: m.encKbps == null ? null : Math.round(m.encKbps), cpuHint: (m.encFps == null || !m.capFps) ? null : +(m.encFps / m.capFps).toFixed(2) };   // 0.15.0/0.15.1/0.16.0
     const audInfo = { actx: m.actx?.state || null, atrack: m.atrack ? { readyState: m.atrack.readyState, enabled: m.atrack.enabled, muted: m.atrack.muted } : null, elMuted: v.muted, elVolume: v.volume, audioDecoded: v.webkitAudioDecodedByteCount ?? null, pubMuted: !!s.publish?.muted };   // 0.15.1 rig
-    return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, buffered: b,
+    return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, restarts: m.log || [], finished: !!m.finished, buffered: b,
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,
       upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo, ...audInfo };
   });
@@ -15433,7 +15747,7 @@
     // 0.8.8: Camera / Audio popovers
     selfTrack: () => {
       const cam = [...slots.values()].find((s2) => s2.entry.kind === "camera" && !s2.rtsp);
-      try { return cam ? unwrapTrack(cam.publish.capture?.in?.source?.peek?.()) : null; } catch { return null; }
+      try { return cam ? unwrapTrack(pubCap(cam.publish)?.in?.source?.peek?.()) : null; } catch { return null; }
     },
     mediaCtl,   // 0.8.10: the watch half hands .mediactl pulses for my files here
     denoiseTaps: () => {   // 0.13.1 rig: raw + processed tracks of the denoised camera slot
@@ -15495,7 +15809,7 @@
           } catch { return null; }
         })(),
         connected: (() => {
-          try { return !!s.moq.connection.established.peek(); } catch { return null; }
+          try { return s.moq.connection.status.peek() === "connected"; } catch { return null; }   // 0.16.0
         })(),
         broadcastStatus: (() => {
           try { return s.moq.broadcast.out.status.peek(); } catch { return null; }
@@ -15516,7 +15830,7 @@
         // 0.8.13: the encoder's own facts for camera/screen/file slots too
         resolved: (() => { try { const r = s.publish.video.out.resolved.peek(); return r ? { codec: r.codec, hw: r.hardwareAcceleration, w: r.width, h: r.height, fps: r.framerate, bitrate: r.bitrate } : null; } catch { return null; } })(),
         encoded: (() => { try { return s.publish.video.out.stats?.peek?.() ?? null; } catch { return null; } })(),
-        trackFps: (() => { try { return s.publish.capture.in.source.peek()?.getSettings?.().frameRate ?? null; } catch { return null; } })(),
+        trackFps: (() => { try { return pubCap(s.publish)?.in?.source.peek()?.getSettings?.().frameRate ?? null; } catch { return null; } })(),
       }),
     }),
     addSource, removeSource, applySettingsAll,

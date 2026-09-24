@@ -7,7 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
 <link rel="stylesheet" href="/assets/asi-brand.css">
 <!-- 0.12.0: the streams probe below imports @moq/watch; vendored like the main page (no esm.sh at run time) -->
-<script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.5.3.target-es2022.mjs"}}</script>
+<script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs","https://esm.sh/@moq/publish":"/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs"}}</script>
 <script type="module" src="/assets/asi-brand.js"></script>
 <style>
   * { box-sizing:border-box; }
@@ -138,6 +138,9 @@
         <label class="f"><span>Federation code (other relays joining this one)</span>
           <input type="text" id="codeFederation" class="masked" autocomplete="off" spellcheck="false"
                  placeholder="leave empty to keep the current one"></label>
+        <label class="f"><span>Admin access code (stop streams, remove participants — honoured on every relay federated with this hub)</span>
+          <input type="text" id="codeAdmin" class="masked" autocomplete="off" spellcheck="false"
+                 placeholder="leave empty to keep the current one"></label>
         <div class="btnrow">
           <button id="codesSave" type="button">Save codes</button>
           <button id="codesClear" type="button" class="ghost" title="Remove all three codes &mdash; the relay falls back to room codes only">Clear all</button>
@@ -232,8 +235,9 @@
         page, Access codes block); this relay presents it and the hub mints the
         relay-to-relay token. By default this KASTR also pulls its updates from
         the hub's KASTR — the <b>federation master</b> — every hour, so one machine
-        is the fleet's single update point. Certificates are trusted without
-        verification (KASTR relays use throwaway self-signed certs).
+        is the fleet's single update point. The hub's certificate is pinned by its
+        fingerprint once learned (0.16.0) and re-learned when the hub restarts; until
+        then the link is trusted without verification.
       </p>
       <label class="f">
         <span>Relay name (how this relay is labeled in stats and stream origins)</span>
@@ -257,6 +261,39 @@
       </div>
       <span id="fedMsg" class="hint" style="display:block;margin-top:5px"></span>
       <span id="fedState" class="hint" style="display:block;margin-top:2px"></span>
+      <!-- 0.16.0: same-site relays find each other over mDNS (moq-relay [cluster.lan]) -->
+      <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
+        <label class="f" style="display:flex;align-items:center;gap:7px">
+          <input type="checkbox" id="lanOn">
+          <span style="margin:0">Join same-site relays automatically (LAN, mDNS)</span>
+        </label>
+        <label class="f">
+          <span>LAN secret (64 hex characters \u2014 the same on every relay of this site; required when access codes are set)</span>
+          <input type="text" id="lanSecret" class="masked" autocomplete="off" spellcheck="false" placeholder="leave empty to keep the current one">
+        </label>
+        <div class="btnrow">
+          <button id="lanGen" type="button">Generate a secret</button>
+          <button id="lanSave">Save LAN</button>
+          <button id="lanClear" class="stop">Clear</button>
+        </div>
+        <span id="lanMsg" class="hint" style="display:block;margin-top:5px"></span>
+      </div>
+    </section>
+
+    <!-- 0.16.0: what the relay and its auth server are doing (GET /api/relay/health) -->
+    <section class="panel" id="healthPanel" hidden>
+      <h2>Health</h2>
+      <dl>
+        <dt>Relay sessions</dt><dd id="hSessions">\u2014</dd>
+        <dt>Cluster nodes</dt><dd id="hNodes">\u2014</dd>
+        <dt>Auth server</dt><dd id="hAuth">\u2014</dd>
+        <dt>Hub link</dt><dd id="hHub">\u2014</dd>
+        <dt>LAN mesh</dt><dd id="hLan">\u2014</dd>
+        <dt>Publisher pairs</dt><dd id="hPairs">\u2014</dd>
+        <dt>Helpers</dt><dd id="hHelpers">\u2014</dd>
+      </dl>
+      <div id="hPairList" style="font-family:var(--font-mono,monospace);font-size:11px;line-height:1.7;margin-top:6px"></div>
+      <p class="hint" id="hMetrics" hidden style="margin-top:6px"><a href="/api/relay/metrics" target="_blank" rel="noopener">Prometheus metrics</a> (this machine only)</p>
     </section>
 
     <section class="panel" id="streamsPanel">
@@ -410,6 +447,7 @@
     cs.style.color = both ? "var(--asi-green)" : (codes.viewer || codes.publisher) ? "var(--asi-amber)"
       : ($("secured").checked ? "var(--asi-red)" : "");
     cs.textContent += codes.federation ? " Federation code set \u2713." : " No federation code \u2014 other relays cannot join this one.";
+    cs.textContent += codes.admin ? " Admin code set \u2713." : (s.cluster && s.cluster.connect ? " No admin code here \u2014 the hub's is honoured." : " No admin code.");   // 0.16.0
     $("codesWarn").hidden = !s.legacy;
     $("remoteNote").hidden = LOCAL;
     for (const id of ["codesSave", "codesClear", "codesRotate", "fedSave", "fedClear"]) $(id).disabled = !LOCAL;
@@ -421,8 +459,9 @@
       if (!s.cluster.connect) { fs.textContent = ""; fs.style.color = ""; }
       else if (!running) { fs.textContent = "Hub " + s.cluster.connect + (s.cluster.hasCode ? " \u2014 federation code saved." : " \u2014 no federation code saved."); fs.style.color = ""; }
       else if (f && f.token) {
-        fs.textContent = "Hub token OK" + (f.exp ? " \u2014 renews before " + new Date((f.exp - 7 * 86400) * 1000).toLocaleDateString() : "") + ".";
-        fs.style.color = "var(--asi-green)";
+        fs.textContent = "Hub token OK" + (f.exp ? " \u2014 renews before " + new Date((f.exp - 7 * 86400) * 1000).toLocaleDateString() : "") + "."
+          + (f.tls === "pinned" ? " Certificate pinned." : f.tls === "pinned-cached" ? " Certificate pinned (cached)." : f.tls === "insecure" ? " Certificate NOT verified." : "");   // 0.16.0
+        fs.style.color = f.tls === "insecure" ? "var(--asi-amber)" : "var(--asi-green)";
       } else if (f) {
         fs.textContent = "No hub token: " + (f.reason || "?") + (f.hubCodes && !s.cluster.hasCode ? " Paste the federation code from the hub's Relay page." : "");
         fs.style.color = f.hubCodes ? "var(--asi-red)" : "var(--asi-amber)";
@@ -494,6 +533,8 @@
     try {
       const s = await api("/api/relay/status");
       render(s);
+      api("/api/relay/health").then(paintHealth).catch(() => { $("healthPanel").hidden = true; });   // 0.16.0 (an older server 404s -> hidden)
+      if (s.lan) paintLan(s.lan);   // 0.16.0
       // The server owns this answer now: scraping the badge was circular (the
       // badge lives in this same document) and blind inside the app shell,
       // where embedded pages carry no masthead at all.
@@ -821,12 +862,12 @@
     for (const id of ["codesSave", "codesClear", "codesRotate"]) $(id).disabled = !LOCAL;
   }
   $("codesSave").addEventListener("click", () => {
-    const v = $("codeViewer").value, p = $("codePublisher").value, f = $("codeFederation").value;
-    if (!v && !p && !f) { $("codesState").textContent = "Type a viewer code, a publisher code, a federation code \u2014 or several."; return; }
-    codesPost({ viewer: v || null, publisher: p || null, federation: f || null }, "Saved.");
+    const v = $("codeViewer").value, p = $("codePublisher").value, f = $("codeFederation").value, a = $("codeAdmin").value;   // 0.16.0: + admin
+    if (!v && !p && !f && !a) { $("codesState").textContent = "Type a viewer code, a publisher code, a federation code, an admin code \u2014 or several."; return; }
+    codesPost({ viewer: v || null, publisher: p || null, federation: f || null, admin: a || null }, "Saved.");
   });
   $("codesClear").addEventListener("click", () => {
-    if (confirm("Remove all three codes (viewer, publisher, federation)? The relay then admits any room code again and other relays join without a code.")) codesPost({ viewer: "", publisher: "", federation: "" }, "Cleared.");
+    if (confirm("Remove all four codes (viewer, publisher, federation, admin)? The relay then admits any room code again and other relays join without a code.")) codesPost({ viewer: "", publisher: "", federation: "", admin: "" }, "Cleared.");
   });
   $("codesRotate").addEventListener("click", async () => {
     if (!confirm("Rotate the signing key? Every token dies at once; pages re-mint with their codes within a minute and publishers reconnect.")) return;
@@ -837,6 +878,52 @@
       $("codesState").textContent = r.error || ("Keys rotated" + (r.restarted ? " \u2014 relay restarted." : "."));
     } catch (e) { $("codesState").textContent = "Failed: " + (e?.message || e); }
     $("codesRotate").disabled = !LOCAL;
+  });
+
+  // ---- 0.16.0: health panel + LAN mesh controls ----------------------------------
+  function paintHealth(h) {
+    if (!h || !h.relay) { $("healthPanel").hidden = true; return; }
+    $("healthPanel").hidden = false;
+    const r = h.relay, a = h.auth || {}, f = h.federation, l = h.lan || {};
+    $("hSessions").textContent = r.sessions == null ? "\u2014" : String(r.sessions);
+    $("hNodes").textContent = r.nodes == null ? "\u2014" : String(r.nodes);
+    const ha = $("hAuth");
+    if (a.up === null || a.up === undefined) { ha.textContent = "not needed (open relay)"; ha.style.color = ""; }
+    else if (!a.up) { ha.textContent = "DOWN \u2014 the relay admits no session until it answers"; ha.style.color = "var(--asi-red)"; }
+    else { ha.textContent = "up \u2014 " + (a.sessions ?? 0) + " sessions (" + (a.publishers ?? 0) + " publishing), " + (a.grants ?? 0) + " grants, " + (a.refusals ?? 0) + " refusals"
+      + (a.lastRefusal ? " \u2014 last: " + a.lastRefusal.remote + " (" + a.lastRefusal.why + ")" : ""); ha.style.color = a.refusals ? "var(--asi-amber)" : "var(--asi-green)"; }
+    $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : "NOT verified")) : "standalone";
+    $("hLan").textContent = l.enabled ? ("enabled" + (l.hasSecret ? " with a secret" : " (OPEN \u2014 no secret)") + (l.active ? "" : " \u2014 not active (loopback relay, or a secured relay without a secret)")) : "off";
+    const pairs = h.pairs || [];
+    $("hPairs").textContent = pairs.length ? (pairs.filter((p) => p.running).length + " running, " + pairs.filter((p) => p.parked).length + " parked of " + pairs.length) : "none on this machine";
+    $("hPairList").replaceChildren(...pairs.map((p) => { const d = document.createElement("div");
+      d.textContent = (p.broadcast || "?") + "  gen=" + (p.gen ?? "?") + " restarts=" + (p.restartsTotal ?? 0) + " fails=" + (p.sessionFails ?? 0) + " kills=" + (p.sessionKills ?? 0) + (p.parked ? "  [parked]" : p.running ? "" : "  [stopped]"); return d; }));
+    const hv = h.helpers || {};
+    $("hHelpers").textContent = Object.keys(hv).length ? Object.entries(hv).map(([k, v]) => k + " " + v).join(" \u00b7 ") : "\u2014";
+    $("hMetrics").hidden = !LOCAL;
+  }
+  function paintLan(l) {
+    if (document.activeElement !== $("lanOn")) $("lanOn").checked = !!l.enabled;
+    $("lanSecret").placeholder = l.hasSecret ? "saved \u2014 leave empty to keep it" : "leave empty to keep the current one";
+    for (const id of ["lanOn", "lanGen", "lanSave", "lanClear"]) $(id).disabled = !LOCAL;
+  }
+  $("lanGen").addEventListener("click", () => {
+    const b = new Uint8Array(32); crypto.getRandomValues(b);
+    $("lanSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    $("lanMsg").textContent = "Copy this secret to the other relays of this site, then Save LAN.";
+  });
+  $("lanSave").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/relay/lan", { enabled: $("lanOn").checked, secret: $("lanSecret").value || null });
+      $("lanMsg").textContent = r.error || ("LAN mesh " + (r.enabled ? "enabled" : "disabled") + (r.restarted ? " \u2014 relay restarted." : "."));
+      if (!r.error) $("lanSecret").value = "";
+      await refresh();
+    } catch (e) { $("lanMsg").textContent = "Failed: " + (e?.message || e); }
+  });
+  $("lanClear").addEventListener("click", async () => {
+    if (!confirm("Turn the LAN mesh off and forget its secret?")) return;
+    try { const r = await api("/api/relay/lan", { enabled: false, secret: "" }); $("lanMsg").textContent = r.error || "LAN mesh off."; await refresh(); }
+    catch (e) { $("lanMsg").textContent = "Failed: " + (e?.message || e); }
   });
 
   window.__relay = { state: () => last, refresh, api };
@@ -964,6 +1051,46 @@
   // relays anonymous subscribe covers only .channels/.stats, so the list
   // degrades to room markers plus a note.
   import { Net, Signals } from "https://esm.sh/@moq/watch";
+  import { Broadcast } from "https://esm.sh/@moq/publish";   // 0.16.0: the operator pushes admin commands
+  const LOCAL = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(location.hostname);   // 0.16.0: this module has its own copy (the control module's is not shared)
+  const postJson = async (path, body) => (await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) })).json();   // 0.16.0: ditto for api()
+
+  // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
+  // announced() takes a PATTERN now (nothing = everything) and yields route entries
+  // {prefix: Path, kind: "announced" | "retracted" | "updated"}; consuming a broadcast is
+  // origin.request(path) -> {active: Signal<Broadcast.Consumer | undefined>, unroutable, close()}.
+  // The page thinks in {path, active} announces RELATIVE to a prefix and in "a consumer for
+  // this path", so these two adapters carry every call site; measured on moq-relay 0.15.1.
+  function announcedUnder(conn, prefix) {
+    const base = String(prefix ?? "").split("/").filter(Boolean).join("/");
+    const it = conn.announced();
+    return {
+      async next() {
+        for (;;) {
+          const e = await it.next();
+          if (!e) return undefined;
+          if (e.kind === "updated") continue;   // a reroute, not a membership change
+          const full = String(e.prefix ?? e.path ?? "").split("/").filter(Boolean).join("/");
+          if (base && full !== base && !full.startsWith(base + "/")) continue;
+          const rel = base ? full.slice(base.length).replace(/^\//, "") : full;
+          return { path: Net.Path.from(rel), full: Net.Path.from(full), active: e.kind !== "retracted" };
+        }
+      },
+      close() { try { it.close(); } catch {} },
+    };
+  }
+  async function requestBroadcast(org, path, waitMs = 4000) {
+    const h = org.request(Net.Path.from(String(path)));
+    const t0 = performance.now();
+    while (performance.now() - t0 < waitMs) {
+      const bc = h.active?.peek?.();
+      if (bc) return { bc, close: () => { try { h.close(); } catch {} } };
+      if (h.unroutable?.peek?.()) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    try { h.close(); } catch {}
+    return null;
+  }
   const note = document.getElementById("bcastNote");
   const listEl = document.getElementById("bcastList");
   let scanning = false;
@@ -993,10 +1120,14 @@
     scanning = true;
     let conn = null;
     try {
-      conn = new Net.Connection.Reload({ url: new Signals.Signal(new URL(target)), enabled: true });
+      // 0.16.0: on a secured relay the anonymous probe sees only the public kinds; the
+      // machine that owns the relay probes with its own operator token instead (LOCAL only)
+      let dial = new URL(target);
+      if (LOCAL && secured) { try { const t = await postJson("/api/relay/admin/token", {}); if (t?.token) { dial = new URL(target); dial.search = "?jwt=" + t.token; } } catch {} }
+      conn = new Net.Connection({ url: new Signals.Signal(dial), enabled: true, share: false });
       const paths = [];
       const deadline = new Promise((res) => setTimeout(res, 1500, null));
-      const ann = conn.announced(Net.Path.from(""));
+      const ann = announcedUnder(conn, "");   // 0.16.0 adapter
       for (;;) {
         const e = await Promise.race([ann.next(), deadline]);
         if (!e) break;
@@ -1013,13 +1144,15 @@
       // 0.8.7: consume() lives on the ESTABLISHED connection (the Reload
       // wrapper never had it -- this branch was dead), and a single relay is
       // worth attributing too.
-      const est = conn.established?.peek?.() ?? conn;
-      if (nodes.length >= 1 && typeof est.consume === "function") {
+      // 0.16.0: net 0.4.0 -- consume through the connection's Origin
+      let org = null;
+      for (let i = 0; i < 10 && !org; i++) { org = conn.origin?.peek?.() ?? null; if (!org) await new Promise((res) => setTimeout(res, 150)); }
+      if (nodes.length >= 1 && org) {
         for (const node of nodes) {
           let bc = null;
           try {
-            bc = est.consume(Net.Path.from(".stats/" + node));
-            const tr = bc?.subscribe?.("subscriber.json");
+            bc = await requestBroadcast(org, ".stats/" + node, 1500);   // 0.16.0
+            const tr = bc?.bc?.track?.("subscriber.json")?.subscribe?.({ maxAge: 0 });
             if (!tr || typeof tr.readJson !== "function") continue;
             const j = await Promise.race([
               tr.readJson(),
@@ -1065,6 +1198,14 @@
       const via = origin?.get(p);
       if (via) row.textContent += " · announced into " + via;
       row.title = p + (via ? " (announced into relay “" + via + "”)" : "");
+      if (LOCAL && secured && parts.length >= 4) {   // 0.16.0: the operator can end a share from here
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = "Stop"; b.className = "stop";
+        b.style.cssText = "margin-left:8px;padding:1px 8px;font-size:11px";
+        b.title = "Push a stop to this publisher (admin command)";
+        b.addEventListener("click", () => { if (confirm("Stop " + parts[2] + "\u2019s " + parts.slice(3).join("/") + "?")) adminPush(parts[0], { op: "stop", target: p }, b); });
+        row.appendChild(b);
+      }
       listEl.appendChild(row);
     }
     const host = probedUrl.replace(/^https?:\/\//, "");
@@ -1076,6 +1217,26 @@
             + " — room codes hide stream paths from this anonymous probe."
           : "No rooms announced on " + host + " — room codes hide stream paths from this anonymous probe.")
       : "No streams flowing through " + host + " right now.";
+  }
+  // 0.16.0: publish one <room>/.admin/<ts>/<b64 cmd> announce with the operator's admin token
+  async function adminPush(room, cmd, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "Sending\u2026"; }
+    try {
+      const t = await postJson("/api/relay/admin/token", { room });
+      if (!t?.token) throw new Error(t?.error || "no admin token");
+      const nonce = "relay:" + Date.now() + ":" + Math.random().toString(36).slice(2, 7);
+      const payload = JSON.stringify({ ...cmd, by: "relay operator", nonce, at: Date.now() });
+      const b64 = btoa(unescape(encodeURIComponent(payload))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const url = new URL(probedUrl); url.search = "?jwt=" + t.token;
+      const conn = new Net.Connection({ url: new Signals.Signal(url), enabled: true, share: false });
+      const bc = new Broadcast({ origin: conn.origin, enabled: true, name: Net.Path.from(room + "/.admin/" + Date.now() + "/" + b64) });
+      setTimeout(() => { try { bc.close(); } catch {} try { conn.close(); } catch {} }, 6000);
+      if (btn) btn.textContent = "Sent";
+    } catch (e) {
+      if (btn) btn.textContent = "Failed";
+      note.textContent = "Admin push failed: " + (e?.message || e);
+    }
+    setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = "Stop"; } }, 4000);
   }
   scan();
   setInterval(scan, 5000);

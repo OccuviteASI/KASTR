@@ -344,11 +344,19 @@ def _media_find(media_dir, mid):
     return None
 
 
-def _spawn_media_plain(argv, tag=""):
+def _spawn_media_plain(argv, tag="", nice=False):
     """Fallback when the bridge has no spawn_media yet: a Popen with a stderr
-    drain into .kastr_errors (last 20 lines). No job object, no registry."""
+    drain into .kastr_errors (last 20 lines). No job object, no registry.
+    0.16.0: `nice` = below-normal priority (see Bridge.spawn_media)."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    kw = {}
+    if nice:
+        if sys.platform == "win32":
+            flags |= getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+        else:
+            kw["preexec_fn"] = lambda: os.nice(10)
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                            creationflags=flags, **kw)
     proc.kastr_errors = []
     proc.kastr_tag = tag
 
@@ -1898,7 +1906,15 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     dur = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
                 except ValueError:
                     dur = 0.0
-            return (v.group(1).lower() if v else None), (a.group(1).lower() if a else None), dur
+            # 0.16.0: the video's frame rate ("..., 29.97 fps, ...") -- the owner's composite follows it
+            fps = 0.0
+            fm = re.search(r"Video:[^\n]*?, ([0-9]+(?:\.[0-9]+)?) fps", err)
+            if fm:
+                try:
+                    fps = float(fm.group(1))
+                except ValueError:
+                    fps = 0.0
+            return (v.group(1).lower() if v else None), (a.group(1).lower() if a else None), dur, fps
 
         def _media_probe(self):
             """0.8.10: what does the browser need converted? (first MBs of the file)"""
@@ -1926,7 +1942,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     f.write(chunk)
                     got += len(chunk)
             try:
-                v, a, dur = self._probe_codecs(tmp)
+                v, a, dur, fps = self._probe_codecs(tmp)
             finally:
                 try:
                     os.remove(tmp)
@@ -1934,7 +1950,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     pass
             cv = bool(v) and not any(v.startswith(x) for x in WEB_VIDEO)
             ca = bool(a) and not any(a.startswith(x) for x in WEB_AUDIO)
-            return self._json_cors(200, {"video": v, "audio": a, "duration": dur, "convertVideo": cv, "convertAudio": ca})
+            return self._json_cors(200, {"video": v, "audio": a, "duration": dur, "fps": fps, "convertVideo": cv, "convertAudio": ca})   # 0.16.0: + fps
 
         # ---- 0.14.0: stream-while-converting media (replaces the 0.8.9 convert endpoint) ----
         def _media_local(self):
@@ -2001,7 +2017,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             rec["done"] = True
-            v, a, dur = self._probe_codecs(src)
+            v, a, dur, _fps = self._probe_codecs(src)
             rec["video"], rec["audio"], rec["duration"], rec["probedAt"] = v, a, dur, got
             return self._json_cors(200, {"id": mid, "url": "/api/media/" + mid, "size": n,
                                          "duration": dur, "video": v, "audio": a})
@@ -2015,7 +2031,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 size = os.path.getsize(src)
             except OSError:
                 return None
-            v, a, dur = self._probe_codecs(src)
+            v, a, dur, _fps = self._probe_codecs(src)
             rec = {"path": src, "size": size, "got": size, "done": True, "aborted": False, "procs": set(),
                    "errors": [], "video": v, "audio": a, "duration": dur, "probedAt": size, "at": time.time()}
             with MEDIA_LOCK:
@@ -2056,7 +2072,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # has it; look again once the upload grew 4 MB if the first look
                 # came up empty.
                 if rec.get("probedAt", -1) < 0 or (not rec["duration"] and rec["got"] - rec["probedAt"] >= 4 << 20):
-                    pv, pa, pdur = self._probe_codecs(src)
+                    pv, pa, pdur, pfps = self._probe_codecs(src)
+                    if pfps:
+                        rec["fps"] = pfps   # 0.16.0
                     rec["probedAt"] = rec["got"]
                     if pv:
                         rec["video"] = pv
@@ -2086,7 +2104,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             vf = "scale='min(%d,iw)':-2,format=yuv420p" % (960 if low else 1280)
             vcodec = ["-vf", kastr_rtsp.encoder_vf(enc, vf), *(["-r", "24"] if low else []), "-c:v", enc]
             if enc == "libx264":
-                vcodec += ["-preset", "ultrafast" if low else "superfast", "-tune", "fastdecode", "-crf", "26" if low else "23", "-threads", "0"]
+                # 0.16.0: half the cores (at least 2) -- a software transcode used every core and
+                # starved the browser's own encoder, so viewers saw the composite hitch (Mikey's share)
+                thr = max(2, (os.cpu_count() or 4) // 2)
+                vcodec += ["-preset", "ultrafast" if low else "superfast", "-tune", "fastdecode", "-crf", "26" if low else "23", "-threads", str(thr)]
             else:
                 vcodec += ["-b:v", "2M" if low else "4M"]
             vcodec += ["-g", "48" if low else "60"]
@@ -2098,7 +2119,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     "-f", "mp4", "-movflags", "empty_moov+default_base_moof", "-frag_duration", "500000", "pipe:1"]
             spawn = getattr(bridge, "spawn_media", None) if bridge else None
             try:
-                proc = (spawn or _spawn_media_plain)(argv, tag="media:" + mid[:8])
+                try:
+                    proc = (spawn or _spawn_media_plain)(argv, tag="media:" + mid[:8], nice=True)   # 0.16.0: below normal priority
+                except TypeError:
+                    proc = (spawn or _spawn_media_plain)(argv, tag="media:" + mid[:8])              # an older bridge without `nice`
             except Exception as e:
                 return self._json_cors(500, {"error": "ffmpeg failed to start: %s" % e})
             with MEDIA_LOCK:
@@ -2145,6 +2169,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             self.send_header("X-KASTR-Mime", 'video/mp4; codecs="%s"' % codecs)
             self.send_header("X-KASTR-Copy", "1" if v == "copy" else "0")
             self.send_header("X-KASTR-Encoder", "copy" if v == "copy" else enc + ("/low" if low else ""))   # 0.15.1
+            self.send_header("X-KASTR-Fps", self._num(rec.get("fps") or 0))   # 0.16.0
             self.send_header("X-KASTR-Start", self._num(t))
             self.send_header("X-KASTR-Duration", self._num(rec["duration"]))
             self.end_headers()

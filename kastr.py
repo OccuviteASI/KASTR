@@ -539,7 +539,6 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
                 except Exception as e:
                     note("update: codesign unavailable: %s" % e)
         print(f"{APP_NAME}: relaunching as v{theirs}", flush=True)
-        relaunch_self(relaunch_delay_ms, before_exit, reason="update")
     except Exception as e:
         # 0.8.7: whatever failed, KASTR.exe must exist afterwards.
         try:
@@ -554,9 +553,119 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
         print(f"{APP_NAME}: update failed ({e}); launching v{mine} as-is", flush=True)
         update_note("failed", f"{e} -- launched v{mine} as-is")
         return "failed"
+    # 0.16.0: the swap succeeded -- the new binary is in place. The relaunch is
+    # judged on its own: a spawn failure used to fall into the except above and
+    # read "update failed ... launched as-is" while the new exe sat on disk.
+    try:
+        ok = relaunch_self(relaunch_delay_ms, before_exit, reason="update")
+    except Exception as e:
+        ok = False
+        note("relaunch: spawn failed -- %s" % e)
+    if ok is False:
+        update_note("relaunch-failed", f"v{theirs} is installed but KASTR could not restart "
+                    f"itself -- start KASTR again to run it; this window still runs v{mine}")
+        try:
+            alert_async(f"KASTR downloaded v{theirs} but could not restart itself.\n\n"
+                        f"Close KASTR and start it again to run v{theirs}.\n"
+                        f"Until then this window keeps running v{mine}.")
+        except Exception:
+            pass
+        return "relaunch-failed"
+    return "updating"
 
 
 _EXIT_OVERRIDE = [None]    # 0.13.1: teardown's exit code when a relaunch must end with 75 (container)
+RELAUNCH_PORT_HINT = [0]   # 0.16.0: the port a launch-time relaunch will bind (HTTP_PORT is not set yet then)
+
+
+def _shell_execute_alive(target, args, wait_s):
+    """0.16.0: launch `target args` through the Windows shell (ShellExecuteExW, the
+    path every double-click uses -- no PowerShell, outside any ambient job) and
+    report whether the process is still alive after `wait_s`. None = could not
+    even be started."""
+    import ctypes
+    from ctypes import wintypes
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SEE_MASK_NO_CONSOLE = 0x00008000
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong), ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR),
+                    ("lpParameters", wintypes.LPCWSTR), ("lpDirectory", wintypes.LPCWSTR),
+                    ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE), ("lpIDList", ctypes.c_void_p),
+                    ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY), ("dwHotKey", wintypes.DWORD),
+                    ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE
+    info.lpVerb = "open"
+    info.lpFile = target
+    info.lpParameters = subprocess.list2cmdline(args) if args else None
+    info.lpDirectory = os.path.dirname(target) or None
+    info.nShow = 1
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        note("relaunch: shell launch refused (error %d)" % ctypes.get_last_error())
+        return None
+    h = info.hProcess
+    if not h:
+        return True     # started, but the shell gave us no handle to watch -- assume alive
+    WAIT_TIMEOUT = 0x102
+    alive = k32.WaitForSingleObject(h, int(wait_s * 1000)) == WAIT_TIMEOUT
+    k32.CloseHandle(h)
+    return alive
+
+
+def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_after_s=10.0, settle_s=4.0):
+    """0.16.0: start the just-swapped executable and make sure it STAYS up.
+
+    Field record (launch.log.1, 2026-09-16): the swap fought Defender/OneDrive's
+    scan lock for 11 s, then one hidden PowerShell Start-Process fired against
+    the still-locked file, failed silently (stderr was DEVNULL) and KASTR was
+    simply gone. Earlier, a direct Popen twice left "a bootloader with no
+    child" (the same scan). So: wait the AV beat, spawn, watch the child for
+    `settle_s` (a bootloader that lost its child exits within a second or two),
+    respawn while the budget lasts, after `escalate_after_s` switch to the
+    shell's own launch path, and tell the caller honestly whether a successor
+    is running. Never a blind exit."""
+    time.sleep(max(0.3, delay_s))
+    t0 = time.monotonic()
+    attempt = 0
+    said = set()
+    while time.monotonic() - t0 < budget_s:
+        attempt += 1
+        if time.monotonic() - t0 >= escalate_after_s:
+            alive = _shell_execute_alive(target, args, settle_s)
+            if alive:
+                note("relaunch: successor started through the shell (attempt %d)" % attempt)
+                return True
+            if alive is False:
+                note("relaunch: shell-started successor exited at once (attempt %d) -- retrying" % attempt)
+            time.sleep(1.0)
+            continue
+        try:
+            p = subprocess.Popen([target] + args, env=env, close_fds=True, creationflags=flags,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        except OSError as e:
+            key = type(e).__name__
+            if key not in said:
+                said.add(key)
+                note("relaunch: spawn refused (%s: %s) -- retrying while the file settles" % (key, e))
+            time.sleep(0.5)
+            continue
+        t1 = time.monotonic()
+        while time.monotonic() - t1 < settle_s:
+            if p.poll() is not None:
+                break
+            time.sleep(0.25)
+        if p.poll() is None:
+            note("relaunch: successor pid %d up for %.0f s (attempt %d)" % (p.pid, settle_s, attempt))
+            return True
+        note("relaunch: successor pid %d exited at once (code %s, attempt %d) -- respawning" % (p.pid, p.returncode, attempt))
+        time.sleep(1.0)
+    return False
 
 
 def _call_before_exit(fn, code):
@@ -595,7 +704,10 @@ def relaunch_self(delay_ms=800, before_exit=None, argv=None, reason="update"):
     --relay-only so kastr.ini decides). `reason` is "update" or "mode".
 
     KASTR_CONTAINER=1 (Docker): nothing is spawned -- the entrypoint loop
-    restarts the binary when we exit 75."""
+    restarts the binary when we exit 75.
+
+    0.16.0: returns False (and keeps this process running) when an "update"
+    relaunch could not get a successor up; otherwise never returns."""
     target = sys.executable
     args = list(sys.argv[1:] if argv is None else argv)
     note("relaunching (%s) %s %s" % (reason, target, " ".join(args)))
@@ -619,42 +731,36 @@ def relaunch_self(delay_ms=800, before_exit=None, argv=None, reason="update"):
         env["KASTR_UPDATED"] = "1"
     env["KASTR_RELAUNCH"] = "1"
     env["KASTR_RELAUNCH_PID"] = str(os.getpid())
-    env["KASTR_RELAUNCH_PORT"] = str(kastr_serve.HTTP_PORT or "")
+    env["KASTR_RELAUNCH_PORT"] = str(kastr_serve.HTTP_PORT or RELAUNCH_PORT_HINT[0] or "")   # 0.16.0: launch-time hint
     delay_s = max(0.3, delay_ms / 1000.0)
     if WINDOWS:
         flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
                  | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                  | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0))
         if reason == "update":
-            # Direct Popen of the just-swapped exe left a bootloader with no
-            # child, twice, in testing (fresh-file scanning most likely).
-            # Start-Process after a beat, from a shell that outlives us, is
-            # the same launch path every manual start uses -- and works.
-            ps = ("Start-Sleep -Milliseconds %d; "
-                  "Start-Process -FilePath '%s'%s" % (
-                      int(delay_s * 1000), target.replace("'", "''"),
-                      (" -ArgumentList %s" % ",".join(
-                          "'%s'" % a.replace("'", "''") for a in args))
-                      if args else ""))
-            # 0.8.8: the sleeping shell must outlive us. CREATE_NO_WINDOW alone
-            # left it inside our console/job: os._exit took it down before
-            # Start-Process fired, and nothing relaunched (field report).
-            cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps]
+            # 0.16.0: the hidden PowerShell Start-Process hop (0.8.8) fired once,
+            # against a file Defender/OneDrive still held, with its error sent to
+            # DEVNULL -- "it updates but doesn't restart" (launch.log.1, 2026-09-16).
+            # Now: spawn, verify the child stays up, retry, escalate to the shell's
+            # own launch path, and REPORT failure instead of exiting blind.
+            if not spawn_successor(target, args, env, flags, delay_s):
+                note("relaunch: successor never came up -- staying on this version")
+                return False
         else:
             # 0.13.1: a mode switch runs the SAME, long-present exe -- no AV
             # beat needed; the child itself waits for us (await_predecessor).
             cmd = [target] + args
-        try:
-            subprocess.Popen(cmd, env=env, close_fds=True, creationflags=flags,
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-        except OSError:
-            # a job that forbids breakaway raises ERROR_ACCESS_DENIED
-            note("relaunch: breakaway refused (ambient job) -- child may die with us")
-            subprocess.Popen(cmd, env=env, close_fds=True,
-                             creationflags=flags & ~getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0),
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
+            try:
+                subprocess.Popen(cmd, env=env, close_fds=True, creationflags=flags,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except OSError:
+                # a job that forbids breakaway raises ERROR_ACCESS_DENIED
+                note("relaunch: breakaway refused (ambient job) -- child may die with us")
+                subprocess.Popen(cmd, env=env, close_fds=True,
+                                 creationflags=flags & ~getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0),
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
     else:
         subprocess.Popen(["sh", "-c", 'trap "" HUP; sleep %s; exec "$0" "$@"' % delay_s,
                           target] + args, env=env, close_fds=True,
@@ -879,8 +985,17 @@ def learn_hub_web(relay_url, ini, once=False, budget=3.0):
     the learned {web, https, via} or None. Loopback / unparsable: nothing to
     learn. Remembered in hub-web.json + kastr_serve.HUB_WEB; one launch.log
     line per change. `once` = the launch-time call (logged as such)."""
-    import kastr_relay
     host, _why = update_authority(relay_url, ini)
+    if not host or host in ("127.0.0.1", "localhost", "::1"):
+        return None
+    return learn_hub_web_host(host, relay_url, ini, once=once, budget=budget)
+
+
+def learn_hub_web_host(host, relay_url, ini, once=False, budget=3.0):
+    """0.16.0: the host-directed half of learn_hub_web -- a relay SWITCH names a
+    host the launch-time learner never saw, and its update check dialled 8000
+    (the Agg hub pins 8001). `relay_url` is the hint for the minter's /api/auth."""
+    import kastr_relay
     if not host or host in ("127.0.0.1", "localhost", "::1"):
         return None
     host = str(host).lower()
@@ -2167,6 +2282,10 @@ def main():
     # Fleet version match (0.8.1): before anything binds or launches, adopt
     # the relay host's KASTR version if it differs. May not return (swaps
     # the binary and relaunches).
+    try:   # 0.16.0: a launch-time relaunch tells its child which port to watch
+        RELAUNCH_PORT_HINT[0] = int(args.port or 0) or int(_port_memory_read().get("port") or 0)
+    except Exception:
+        RELAUNCH_PORT_HINT[0] = 0
     if not args.no_update:
         upd = check_update(args.relay, ini)
         # 0.15.0: a relay box mirrors the authority's feed once the match settled
@@ -2332,7 +2451,20 @@ def main():
         except Exception:
             pass
         teardown(server, proc_ref[0], code)
-    kastr_serve.UPDATE_HOOK = lambda host: runtime_update(host, update_port_for(host, ini), before_exit=_before_exit)
+    def _current_relay():
+        try:
+            return (getattr(server, "relay_ref", None) or [None])[0] or args.relay
+        except Exception:
+            return args.relay
+
+    def _update_hook(host):
+        # 0.16.0: a switched-to relay's web port is learned BEFORE the check dials it
+        try:
+            learn_hub_web_host(host, _current_relay(), ini)
+        except Exception as e:
+            note("hub web port: learner skipped for %s (%s)" % (host, e))
+        return runtime_update(host, update_port_for(host, ini), before_exit=_before_exit)
+    kastr_serve.UPDATE_HOOK = _update_hook
     # 0.8.9: the Relay page's "Apply & relaunch" (relay-only mode switch).
     # 0.13.1: reason "mode" -- direct spawn, no KASTR_UPDATED, the child waits for us.
     kastr_serve.RELAUNCH_HOOK = lambda: relaunch_self(500, lambda code=0: _before_exit(1.5, code),
@@ -2358,7 +2490,7 @@ def main():
         start_update_sweeper(_federation_update)
     # 0.15.0: re-learn the hub's web port every 5 minutes (a hub relaunched on
     # another port is followed without a restart here)
-    start_update_sweeper(lambda: learn_hub_web(args.relay, ini), every=300, label="hub web port: learner")
+    start_update_sweeper(lambda: learn_hub_web(_current_relay(), ini), every=300, label="hub web port: learner")   # 0.16.0: the CURRENT relay
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

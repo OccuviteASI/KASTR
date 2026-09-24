@@ -4,8 +4,8 @@
 `dist/macos/KASTR.app`, Macs join the fleet update feed as `updates/macos/
 KASTR` (`latest.json` key `darwin`), and the feed is assembled on the Windows
 box with `python build.py --publish-only`. **Intel Macs are unsupported**: the
-MoQ project publishes `aarch64-apple-darwin` builds of `moq-relay` 0.14.18 and
-`moq-cli` 0.11.2 and no `x86_64` ones, so an Intel build would have no relay
+MoQ project publishes `aarch64-apple-darwin` builds of `moq-relay` 0.15.1 and
+`moq-cli` 0.12.1 (0.16.0 pins) and no `x86_64` ones, so an Intel build would have no relay
 and no RTSP publisher; `build-mac.sh` refuses on anything but `arm64`.
 
 ## 1. Prerequisites

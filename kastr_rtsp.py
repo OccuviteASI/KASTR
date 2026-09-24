@@ -142,6 +142,7 @@ def sar_nonsquare(sar):
 #     -- matched by executable (and start time on Windows, argv on Linux), so
 #     a reused PID is never someone else's process.
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800        # 0.16.0: a child may CREATE_BREAKAWAY_FROM_JOB (a relaunched KASTR must not die with the job)
 JobObjectExtendedLimitInformation = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_TERMINATE = 0x0001
@@ -188,7 +189,7 @@ def _make_job(log=None):
         if not job:
             raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
         info = EXTENDED()
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
         if not k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation,
                                            ctypes.byref(info), ctypes.sizeof(info)):
             raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
@@ -407,6 +408,18 @@ HELPER_STEMS = ("ffmpeg", "moq", "moq-relay")
 
 def helper_names():
     return tuple(n + (".exe" if sys.platform == "win32" else "") for n in HELPER_STEMS)
+
+
+def helper_versions():
+    """0.16.0: bin/.versions.json (fetch-helpers.py stamps what it fetched) -> dict."""
+    for root in helper_roots():
+        try:
+            with open(os.path.join(root, ".versions.json"), encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            continue
+    return {}
 
 
 def helper_roots():
@@ -1014,9 +1027,13 @@ class Publisher:
         # measured default made explicit (it exits 1 after that -> _watch);
         # a 15 s QUIC idle timeout (5 s keep-alives) notices a dead relay in
         # 15 s instead of 30. Root options go before the `import` subcommand.
+        # 0.16.0 (moq-cli 0.12): --client-connect -> --connect, --client-quic-idle-timeout ->
+        # --quic-idle-timeout, and `import --latency-max` -> `import --max-age` (a retention
+        # budget: how long relays keep a non-latest group fetchable). Spellings read from
+        # `moq --help` / `moq import --help` on 0.12.1, 2026-09-24.
         moq = [self.bridge.moq, "--log-level", "warn", "--backoff-timeout", "10s",
-               "--client-quic-idle-timeout", "15s", "--client-connect", self.relay,
-               "--broadcast", self.broadcast, "import", "--latency-max", "5s", PUBLISH_MUX]
+               "--quic-idle-timeout", "15s", "--connect", self.relay,
+               "--broadcast", self.broadcast, "import", "--max-age", "5s", PUBLISH_MUX]
         return args, moq
 
     def start(self):
@@ -2178,16 +2195,24 @@ class Bridge:
         return proc
 
     # ---- 0.14.0: media child processes (the player's ffmpeg/ffprobe) ------
-    def spawn_media(self, argv, tag="media"):
+    def spawn_media(self, argv, tag="media", nice=False):
         """A plain argv child -- no Feed. Registered like every other child
         (job object + rtsp-children-<pid>.json, so sweep_orphans reaps it
         after a crash). stdout is the caller's to read; stderr is drained so
         a chatty ffmpeg never blocks on a full pipe, its last 4 non-empty
-        lines kept on proc.kastr_errors."""
+        lines kept on proc.kastr_errors.
+        0.16.0: `nice` runs the child below normal priority -- a media transcode
+        must never starve the browser's own encoder (the viewers' picture)."""
         argv = [str(a) for a in argv]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        kw = {}
+        if nice:
+            if sys.platform == "win32":
+                flags |= getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+            else:
+                kw["preexec_fn"] = lambda: os.nice(10)
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                bufsize=0, creationflags=flags)
+                                bufsize=0, creationflags=flags, **kw)
         proc.kastr_errors = []
         self._child_started(proc, argv, [argv[-1]] if len(argv) > 1 else [], tag)   # job + registry
         with self._children_lock:

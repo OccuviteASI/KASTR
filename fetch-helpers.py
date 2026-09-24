@@ -25,6 +25,7 @@ helper and build-mac.sh refuses to build there.
 """
 import hashlib
 import io
+import json
 import os
 import platform
 import stat
@@ -35,12 +36,45 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BIN = os.path.join(HERE, "bin")
+STAMP = os.path.join(BIN, ".versions.json")   # 0.16.0: {"moq-relay": "0.15.1", "moq": "0.12.1"} per stem
+FORCE = "--force" in sys.argv
 
-# 0.11.0: 0.14.18 (2026-09-17) -- credentials are no longer logged in relay
-# URLs (the federation `?jwt=` rides the cluster connect URL), WebSocket
-# sessions end with their credential, moqt-20/21, rustls patch. The project
-# moved to moq-dev (kixelated redirects) and the assets carry a `v` now.
-MOQ_VERSION = "0.14.18"
+
+def _stamp_read():
+    try:
+        with open(STAMP, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _stamp_write(name, version):
+    d = _stamp_read()
+    d[name] = version
+    tmp = STAMP + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=1, sort_keys=True)
+    os.replace(tmp, STAMP)
+
+
+def _current(dest, name, want):
+    """0.16.0: present AND stamped with the wanted version. A bump used to be a
+    silent no-op ("already present, skipping") until bin/ was cleared by hand."""
+    if FORCE or not os.path.exists(dest):
+        return False
+    have = _stamp_read().get(name)
+    if have == want:
+        return True
+    print("%s: %s present, fetching %s" % (name, have or "unstamped build", want))
+    return False
+
+# 0.16.0: 0.15.1 (2026-09-24) -- the relay no longer verifies JWTs itself: an
+# auth server ([auth] url, KASTR's token service) answers once per session;
+# [server]->[listen], [client]->[connect], [cluster] linger gone, [cluster.lan]
+# mDNS, [internal] /metrics. SHA256SUMS of both releases read 2026-09-24.
+# 0.11.0: 0.14.18 (2026-09-17) -- credentials no longer logged in relay URLs.
+MOQ_VERSION = "0.15.1"
 MOQ_BASE = ("https://github.com/moq-dev/moq/releases/download/"
             "moq-relay-v%s/" % MOQ_VERSION)
 
@@ -55,23 +89,24 @@ MOQ_ASSETS = {
     ("linux", "aarch64"): "moq-relay-v%s-aarch64-unknown-linux-gnu.tar.gz" % MOQ_VERSION,
 }
 MOQ_SHA = {
-    ("win32", "x86_64"): "a842e4e3a58534d69f118bdca06c3d5531f37bbc536aefeb2028fa3254cd931f",
-    ("darwin", "arm64"): "4ac8e7e5304bc95e4a7aee953cc5dd9002a98f5870f8b91c534ea4e331c7fd18",
-    ("linux", "x86_64"): "640e88f83fa167d8e2be8ea001efb7180b4b8ed34b1744e7c92df227e72da2be",
+    ("win32", "x86_64"): "e1868718afda70292e5577cb61f22d2846dd9a1d7a9243d2b8354b4183bad4d3",
+    ("darwin", "arm64"): "65de25197ab38a0ffdcb3b9864bfbcc1db1f94762cb08f5c7cdcd687195ce535",
+    ("linux", "x86_64"): "d99db66dc987b77f2f5a304f2c07176cd1c50ad76e562378c9028274bdc565c7",
+    ("linux", "aarch64"): "a2f32526ee9288e10aa711ea9d5a29c5798b17b46714ddd8aa90c5d1d5a3105d",   # 0.16.0: pinned too
 }
 
 # 0.9.1: moq-cli -- the native MoQ publisher (ffmpeg | moq import ts). Same
 # project and release train as the relay; pinned with its sha256.
 # 0.13.1: darwin/arm64 added (SHA256SUMS of moq-cli-v0.11.2, read 2026-09-21).
-MOQ_CLI_VERSION = "0.11.2"
+MOQ_CLI_VERSION = "0.12.1"   # 0.16.0: --connect / --max-age / import verb (see kastr_rtsp.Publisher._args)
 MOQ_CLI_BASE = "https://github.com/moq-dev/moq/releases/download/moq-cli-v%s/" % MOQ_CLI_VERSION
 MOQ_CLI = {
     ("win32", "x86_64"): ("moq-cli-v%s-x86_64-pc-windows-msvc.zip" % MOQ_CLI_VERSION,
-                          "30d2944d6636a80062d94cf75ec99b2214bebd8d20758fb5e54fc76a2082da9e"),
+                          "07c818b50c42876ee4bfa1be1a94cc75e5928c0b359d7f35a76f8055606b16f6"),
     ("darwin", "arm64"): ("moq-cli-v%s-aarch64-apple-darwin.tar.gz" % MOQ_CLI_VERSION,
-                          "486e9e99007c71f64fb49b15cdb0ae2c7dda31360e99df8d764f898b73324465"),
+                          "392a26e1ab19d58aaca457fad1e8df9676a572c73a460eed3e8beaa449384966"),
     ("linux", "x86_64"): ("moq-cli-v%s-x86_64-unknown-linux-gnu.tar.gz" % MOQ_CLI_VERSION,
-                          "21f334b31c2aae38f89f78db11d5d954500b3ccd074dfb024718ee2c552d9bc3"),
+                          "56c016de43847ef1990c82001cbf4174f09450994154813c73bb9cd02cb6302b"),
 }
 
 FFMPEG_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -197,14 +232,15 @@ def main():
     if not asset:
         print("moq-relay: no published build for %s/%s -- skipping "
               "(relay hosting will be unavailable)." % (p, a))
-    elif os.path.exists(dest):
-        print("moq-relay: already present, skipping")
+    elif _current(dest, "moq-relay", MOQ_VERSION):
+        print("moq-relay: %s present, skipping" % MOQ_VERSION)
     else:
         try:
             blob = download(MOQ_BASE + asset)
             if (p, a) in MOQ_SHA:
                 verify(blob, MOQ_SHA[(p, a)])
             if extract(blob, "moq-relay" + exe, dest):
+                _stamp_write("moq-relay", MOQ_VERSION)
                 print("moq-relay: %.0f MB -> %s" % (os.path.getsize(dest) / 1e6, dest))
             else:
                 print("moq-relay: binary not found inside the archive")
@@ -216,13 +252,14 @@ def main():
     pin = MOQ_CLI.get((p, a))
     if not pin:
         print("moq-cli: no published build for %s/%s -- RTSP feeds cannot be published without it." % (p, a))
-    elif os.path.exists(dest):
-        print("moq-cli: already present, skipping")
+    elif _current(dest, "moq", MOQ_CLI_VERSION):
+        print("moq-cli: %s present, skipping" % MOQ_CLI_VERSION)
     else:
         try:
             blob = download(MOQ_CLI_BASE + pin[0])
             verify(blob, pin[1])
             if extract(blob, "moq" + exe, dest):
+                _stamp_write("moq", MOQ_CLI_VERSION)
                 print("moq-cli: %.0f MB -> %s" % (os.path.getsize(dest) / 1e6, dest))
             else:
                 print("moq-cli: binary not found inside the archive")

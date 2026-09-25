@@ -2,6 +2,62 @@
 
 What changed in each build, newest first.
 
+## v0.18.0 — cameras that wake for viewers, cheaper thumbnails, recordings on the relay host
+
+**RTSP cameras can sleep until someone looks.** Each RTSP row has an **On demand** switch (off by default). With it on,
+the camera is registered with the relay host but not pulled: viewers see it in an "On demand" row above the stage, a
+click wakes it (1.4 s in Firefox and 4.5 s in Edge on the rig from click to tile), and 60 s after the last viewer stops
+watching it goes back to sleep. Every watcher keeps it awake: a tile on screen, the relay host's fMP4 or HLS player,
+and a recording. The relay's own metrics count no subscribers per broadcast, so demand is KASTR's own signal: the
+camera's machine asks the relay host every 5 s which of its cameras are wanted. A grid composite keeps its members on.
+Limitation: demand goes to the viewer's relay host, so a camera publishing to a different federated relay does not see
+it.
+
+**Thumbnails can pull a small copy.** A second switch, **Low for thumbnails**, publishes a 640-wide, 15 fps, 400 kb/s
+copy beside the camera (`<name>-low.hang`, always an encode). Viewers show it on rail and grid tiles and switch to the
+full stream when a tile is spotlit; the stats panel says which rendition a tile is on. The low copy sleeps and wakes
+with its camera.
+
+**The relay host can record.** The Relay page has a **Record** button per live stream. The host writes one-minute MP4
+segments under the state folder's `archive/<stream>/`, keeps them 24 hours (`archive_hours` in kastr.ini) and lists
+them on the Relay page with "last 10 min / last hour / all" downloads. Members of a room find that room's recordings
+in the Files panel; a download is one MP4 cut from the segments, checked against the member's token like live video.
+Recording keeps an on-demand camera awake. Pick a stream while it is live; the pick survives relay restarts.
+
+**Hooks.** `hook_ready`, `hook_notready` and `hook_read` in kastr.ini (or `KASTR_HOOK_*` in the environment) run a
+command when a camera has been up 5 s, when it stops, and when a viewer asks for it. The command gets `KASTR_EVENT`,
+`KASTR_BROADCAST`, `KASTR_FEED_ID`, `KASTR_RELAY` (without its token), `KASTR_REASON` and `KASTR_VIEWER`, runs
+detached, and is killed after `hook_timeout` (30 s). The launch log names the hooks that are set.
+
+**Older iPhones get HLS.** A browser without MediaSource that plays HLS (iPhone before iOS 17) asks the relay host for
+`/api/watch/<stream>.m3u8`. The host checks the token, hands out a private playlist address and runs one HLS exporter
+per stream, shared by its viewers and stopped 45 s after the last request. A playlist address dies with its token, a
+kick, or two minutes unused. Verified with ffmpeg through the proxy (720p H.264); no iPhone was on the rig.
+
+**Glass-to-glass latency on screen.** More ▸ **Latency stamp on my shares** draws a small strip into shared files, RTSP
+grids and effected cameras; every viewer decodes it and shows the latency in the stats panel. Measured on the rig:
+about 0.5 s in Edge and 1.5 s in Firefox for a shared file. A plain camera without an effect carries no stamp.
+
+**A kick reaches every spoke.** Spokes tell the hub where they answer; a kick on the hub, or one forwarded to it by a
+spoke, now nudges every spoke, which pulls the hub's bans with its federation token and applies them. Verified with
+two instances: the spoke refused the removed device within five seconds. A removed member is also refused by the
+relay host's side doors (on-demand, recordings, HLS).
+
+**Fixed on the way.** Two quick option toggles on an RTSP row could race and lose one (publishes are now serialised per
+feed and the page waits 400 ms). `watch.html` retries a transient server error instead of printing the exporter's log,
+and keeps the lower-latency MediaSource path on desktop Safari.
+
+**The failed-relaunch path, tested.** The owed negative case ran on the rig: a 0.17.0 client updated from a 0.18.0
+authority while the swapped exe was held locked. The swap landed, every restart attempt was refused, the update note
+said `relaunch-failed`, the dialog asked for a manual restart, and the old window kept serving 0.17.0. The test also
+showed the retry window ending at 10 s instead of 30 s, because the shell launch step raised; and without the "no UI"
+flag Windows could put up its own error box. Both are fixed for updates from 0.18.0 on: any launch error is retried
+inside the window, and the shell reports a locked file at once (verified from source against a locked exe: started
+through the shell 19 s in, once the lock lifted).
+
+**Not in this release.** Per-subscription priority on tiles (the vendored player has none), Let's Encrypt, a service
+worker, the Docker and Mac smokes (no Docker or Mac on the build box), and an iPhone test of the HLS path.
+
 ## v0.17.0 — open KASTR in any browser: the relay host serves the client
 
 **No executable needed any more.** Point a phone, tablet or laptop browser at the relay host's web address and you get

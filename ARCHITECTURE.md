@@ -873,3 +873,24 @@ speculative was later removed (see Decisions).
   codec boxes exist, so the codec sniff must wait for the first fragment.
 - **The rig's browser pane is not a browser.** Its per-site sandbox blocks WebSocket from a LAN-address page; real
   engines under Playwright (Edge, Firefox, WebKit) are the verification, and the pane stays the loopback tool.
+
+### 0.18.0
+
+- **Demand is a signal we send, because the relay will not tell.** moq-relay 0.15.1 exposes no per-broadcast
+  subscriber count to Python (aggregate `/metrics`, no tracks in `/sessions`), so an on-demand camera learns it is
+  wanted from its relay host: the camera's machine syncs every 5 s, viewers and the host's own players mark wants.
+  The idle stop is the user's switch, not a watchdog, and it rides the demand thread that already exists.
+- **Everything that consumes a stream must count as a viewer.** Tiles, the fMP4 and HLS players and the recorder all
+  touch the want; a recording that let its camera fall asleep would record nothing.
+- **A ladder the page can own.** The vendored player resolves `broadcast`-referencing renditions, but moq-cli writes the
+  native pairs' catalogs, so the low copy is a sibling broadcast (`-low.hang`) and the page picks the name per tile.
+- **A private address is still an identity.** An HLS key used to outlive a kick for six hours; it now carries the
+  caller's claims and dies with the token, the ban or two idle minutes. The same ban check guards every side door the
+  relay host opens (on-demand, archive, HLS).
+- **Two quick clicks are two requests.** The owner's option toggles raced to the bridge and the older one could land
+  last; publishes are serialised per feed and the page coalesces toggles.
+- **A retry loop is only as long as its first unguarded call.** The relaunch's 30 s window ended at 10 s because the
+  shell escalation raised instead of returning; and a shell launch without `SEE_MASK_FLAG_NO_UI` answers a locked file
+  with a dialog (error 1223, the user "cancelled"), not an error code. Every call inside the loop is now guarded.
+- **Push the nudge, pull the data.** The hub never sends bans to a URL it was told about; it says "changed" and each
+  spoke pulls with its own federation token, so a forged registration learns nothing.

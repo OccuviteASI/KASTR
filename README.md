@@ -12,6 +12,13 @@ certificate once from `/ca.crt`, or give the host a real certificate with `tls_c
 kastr.ini) for the full client, or `http://<relay-host>:8000/` for the lobby (rooms, People, chat, one stream played
 through the host). Turn it on from the Relay page's "Web clients" switch. Browser clients follow the relay host's version.
 
+Since 0.18.0 an RTSP camera can sleep until a viewer asks for it (the row's "On demand" switch), publish a small copy
+for thumbnails ("Low for thumbnails"), and be recorded on the relay host (Relay page "Record"; segments kept
+`archive_hours`, default 24, downloadable from the Relay page and the room's Files panel). kastr.ini also takes
+`hook_ready` / `hook_notready` / `hook_read` (commands run on camera up, down and viewer demand, with `KASTR_EVENT`,
+`KASTR_BROADCAST`, `KASTR_FEED_ID`, `KASTR_RELAY`, `KASTR_REASON`, `KASTR_VIEWER` in the environment) and
+`hook_timeout` (seconds, default 30).
+
 Fleet updates flow hub-first: update the hub relay box, its spokes follow the hub's version within the hour, and
 clients pick the new build up on their next launch; browser clients reload on their own. Relay operators set viewer, publisher and (since 0.16.0) admin
 access codes on the Relay page; an admin code set on the hub is honoured by every federated spoke.
@@ -24,6 +31,7 @@ access codes on the Relay page; an admin code set on the hub is honoured by ever
 | `kastr_serve.py` | local HTTP API + static site (`/api/*`, media store, prefs) |
 | `kastr_rtsp.py` | RTSP bridge: ffmpeg + moq publisher pairs, restart ladder, monitors |
 | `kastr_relay.py` | hosted `moq-relay`: access codes, tokens, federation |
+| `kastr_archive.py` | host recording: per-stream segment recorder, retention sweep |
 | `kastr_chat.py`, `kastr_tls.py`, `kastr_browser.py` | room chat on the hub, phone HTTPS, bundled browser |
 | `moq-watch-lite.html` | the app page (watch module + publish module) |
 | `assets/` | vendored MoQ library, RNNoise worklet, MediaPipe, brand |

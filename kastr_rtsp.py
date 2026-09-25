@@ -924,6 +924,99 @@ def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=No
     return args
 
 
+# 0.18.0 (landscape item 5): the thumbnail rendition. A sibling broadcast
+# `<leaf>-low.hang` carries the same camera at 640 wide / 15 fps / 400 kb/s (always an
+# encode) so rail tiles and grid cells stop pulling the full stream. moq-cli builds the
+# catalog, so the pairing is a naming convention the viewer page understands.
+LOW_WIDTH = 640
+LOW_FPS = 15
+LOW_BITRATE = "400k"
+
+
+def low_broadcast(name):
+    """room/host/op/leaf.hang -> room/host/op/leaf-low.hang (idempotent)."""
+    n = str(name or "")
+    if n.endswith("-low.hang"):
+        return n
+    return (n[:-5] if n.endswith(".hang") else n) + "-low.hang"
+
+
+def low_output_args(encoder=None):
+    """ffmpeg output for the low rendition: video only, small, cheap, MPEG-TS on stdout."""
+    enc = encoder or "libx264"
+    scale = "scale=w='min(iw,%d)':h=-2:in_range=pc:out_range=tv" % LOW_WIDTH
+    args = ["-map", "0:v:0", "-vf", encoder_vf(enc, SQUARE_PIXELS + "," + scale + ",format=yuv420p"),
+            "-color_range", "tv", "-colorspace", "bt709", "-r", str(LOW_FPS), "-c:v", enc]
+    if enc == "libx264":
+        args += ["-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
+                 "-b:v", LOW_BITRATE, "-maxrate", LOW_BITRATE, "-bufsize", "800k", "-threads", "2"]
+    else:
+        args += ["-b:v", LOW_BITRATE]
+    args += ["-g", str(LOW_FPS * 2), "-an", "-f", "mpegts", "-pes_payload_size", "0", "-"]
+    return args
+
+
+# 0.18.0 (landscape item 8): hooks -- operator commands run on feed events.
+# kastr.ini hook_ready / hook_notready / hook_read (or KASTR_HOOK_READY/... in the
+# environment for a dev checkout), each a shell command. They run detached with
+# KASTR_EVENT, KASTR_BROADCAST, KASTR_FEED_ID, KASTR_RELAY (token-free), KASTR_REASON and
+# KASTR_VIEWER set, stdout/stderr discarded, killed after hook_timeout seconds.
+HOOK_EVENTS = ("ready", "notready", "read")
+HOOK_READY_AFTER_S = 5          # a pair alive this long is "ready"
+
+
+class Hooks:
+    def __init__(self, cmds=None, log=None, timeout=30):
+        cmds = cmds or {}
+        self.cmds = {e: (str(cmds.get(e) or "").strip() or None) for e in HOOK_EVENTS}
+        self.log = log or (lambda m: None)
+        try:
+            self.timeout = max(1, min(600, int(timeout)))
+        except (TypeError, ValueError):
+            self.timeout = 30
+        self.fired = []          # the last 20 firings {at, event, broadcast, pid|error}
+
+    @classmethod
+    def from_env(cls, log=None):
+        return cls({e: os.environ.get("KASTR_HOOK_" + e.upper()) for e in HOOK_EVENTS}, log,
+                   os.environ.get("KASTR_HOOK_TIMEOUT") or 30)
+
+    def configured(self):
+        return {e: bool(c) for e, c in self.cmds.items()}
+
+    def fire(self, event, broadcast="", feed_id="", relay="", reason="", viewer=""):
+        cmd = self.cmds.get(event)
+        if not cmd:
+            return None
+        env = dict(os.environ)
+        env.update({"KASTR_EVENT": event, "KASTR_BROADCAST": str(broadcast or ""), "KASTR_FEED_ID": str(feed_id or ""),
+                    "KASTR_RELAY": re.sub(r"\?jwt=[^&]*", "", str(relay or "")), "KASTR_REASON": str(reason or "")[:200],
+                    "KASTR_VIEWER": str(viewer or "")[:120]})
+        rec = {"at": time.time(), "event": event, "broadcast": broadcast}
+        try:
+            proc = subprocess.Popen(cmd, shell=True, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            rec["pid"] = proc.pid
+            self.log("hook: %s %s -> pid %d" % (event, broadcast or "-", proc.pid))
+
+            def reap(p=proc):
+                try:
+                    p.wait(timeout=self.timeout)
+                except Exception:
+                    try:
+                        p.kill()
+                        self.log("hook: %s %s pid %d killed after %d s" % (event, broadcast or "-", p.pid, self.timeout))
+                    except Exception:
+                        pass
+            threading.Thread(target=reap, daemon=True).start()
+        except Exception as e:
+            rec["error"] = str(e)[:160]
+            self.log("hook: %s %s failed to start: %s" % (event, broadcast or "-", e))
+        self.fired.append(rec)
+        del self.fired[:-20]
+        return rec
+
+
 PUBLISH_RETRY_S = [1, 2, 5, 10, 20, 30]
 
 
@@ -948,11 +1041,24 @@ class Publisher:
     exiting restarts the pair on the RTSP retry ladder until stop()."""
 
     def __init__(self, bridge, feed, broadcast, relay, hevc=False, audio=True, passthrough=None,
-                 minter=None, keep=True):   # 0.12.0
+                 minter=None, keep=True, ondemand=False, low=False, role="main", label=""):   # 0.12.0 / 0.18.0
         self.bridge = bridge
         self.feed = feed
         self.broadcast = broadcast
         self.relay = relay
+        # 0.18.0: role "main" (the camera) or "low" (the thumbnail sibling it owns);
+        # an on-demand main pair waits in STANDBY until a viewer asks (Bridge demand loop)
+        self.role = role
+        self.label = str(label or "")[:80]
+        self.ondemand = bool(ondemand) and role == "main"
+        self.standby = self.ondemand
+        self.wantedAt = None        # last time the relay host said a viewer wants it
+        self.wokeAt = None
+        self.lowPub = None
+        if low and role == "main":
+            self.lowPub = Publisher(bridge, feed, low_broadcast(broadcast), relay, audio=False, minter=minter,
+                                    keep=False, role="low")
+        self._readyGen = None       # generation that fired the ready hook
         # 0.12.0: publishers that heal. `minter()` -> a fresh relay URL (with
         # ?jwt= on a secured relay, bare on an open one) or None; `keep` marks
         # the feed for republishing after a relaunch (rtsp-feeds.json).
@@ -1014,6 +1120,13 @@ class Publisher:
                 "lastNudgeAt": self.lastNudgeAt, "lastExit": self.lastExit,       # 0.13.1
                 "gen": self._gen, "restartsTotal": self.restartsTotal,            # 0.13.3
                 "lastSessionAt": self.lastSessionAt,                               # 0.13.3
+                "ondemand": self.ondemand, "standby": self.standby,                # 0.18.0
+                "wantedAt": self.wantedAt, "role": self.role,
+                "low": (self.lowPub.low_info() if self.lowPub else None),
+                "error": self.error, "since": self.since}
+
+    def low_info(self):
+        return {"broadcast": self.broadcast, "running": self.running, "restarts": self.restarts,
                 "error": self.error, "since": self.since}
 
     def _args(self):
@@ -1026,9 +1139,15 @@ class Publisher:
         # old limits copies regardless; everything else -> one H.264 encode.
         self.copy = passthrough_ok(vcodec, self.feed.width, self.feed.fullrange, self.passthrough, self.feed.sar)
         self.codec = vcodec if self.copy else "h264"
+        if self.role == "low":      # 0.18.0: the thumbnail sibling is always a small encode
+            self.copy = False
+            self.codec = "h264"
         enc = None if self.copy else self.bridge.usable_encoder()
         args = [ff, "-hide_banner", "-loglevel", "error"] + encoder_pre_args(enc) + input_args(self.feed.url)
-        args += publish_output_args(self.copy, encoder=enc, width=MAX_WIDTH if wide else None, audio=self.audio)
+        if self.role == "low":
+            args += low_output_args(encoder=enc)
+        else:
+            args += publish_output_args(self.copy, encoder=enc, width=MAX_WIDTH if wide else None, audio=self.audio)
         # 0.12.0: `warn` is where moq's reconnect/refusal lines live (the
         # classifier in _drain reads them); --backoff-timeout 10s is moq's
         # measured default made explicit (it exits 1 after that -> _watch);
@@ -1045,7 +1164,7 @@ class Publisher:
 
     def start(self):
         with self._lock:
-            if self.stopping:
+            if self.stopping or self.standby:   # 0.18.0: a standby pair starts only through wake()
                 return
             # 0.13.3: whatever timer led here has fired (or was cancelled by the
             # caller); a spent timer left in place would block the next ladder
@@ -1105,6 +1224,96 @@ class Publisher:
             t.start()
         threading.Thread(target=self._watch, args=(gen, ff, mq, drains), daemon=True).start()
         self._arm_renew()                                                # 0.12.0
+        if self.role == "main":                                          # 0.18.0: the ready hook after 5 s alive
+            rt = threading.Timer(HOOK_READY_AFTER_S, self._ready_check, args=(gen,))
+            rt.daemon = True
+            rt.start()
+        low = self.lowPub
+        if low is not None and not low.running and not low.stopping:   # 0.18.0: the thumbnail sibling rides along
+            low.relay = self.relay
+            low.standby = False
+            low.start()
+
+    def _hooks(self):
+        return getattr(self.bridge, "hooks", None)
+
+    def _ready_check(self, gen):
+        if gen != self._gen or not self.running or self.stopping:
+            return
+        self._readyGen = gen
+        h = self._hooks()
+        if h:
+            h.fire("ready", self.broadcast, self.feed.id, self.relay, reason="gen %d" % gen)
+
+    def _notready(self, reason):
+        if self._readyGen is None:
+            return
+        self._readyGen = None
+        h = self._hooks()
+        if h:
+            h.fire("notready", self.broadcast, self.feed.id, self.relay, reason=reason)
+
+    # ---- 0.18.0: on-demand standby -------------------------------------------------
+    def wake(self, reason="demand", viewer=""):
+        """A viewer wants an on-demand pair: leave standby and start it (and its low sibling)."""
+        with self._lock:
+            if self.stopping or not self.standby:
+                return False
+            self.standby = False
+            self.wokeAt = time.time()
+        self.bridge.log("rtsp: on-demand %s woken (%s)" % (self.broadcast, reason))
+        h = self._hooks()
+        if h:
+            h.fire("read", self.broadcast, self.feed.id, self.relay, reason=reason, viewer=viewer)
+        self.start()
+        return True
+
+    def sleep(self, reason="idle"):
+        """Back to standby: stop the processes but keep the publisher (and its settings)."""
+        with self._lock:
+            if self.stopping or self.standby or not self.ondemand:
+                return False
+            self.standby = True
+            self._gen += 1
+            t, self._timer = self._timer, None
+            r, self._renew = self._renew, None
+            procs = self.procs
+        for x in (t, r):
+            if x:
+                x.cancel()
+        self.parked = False
+        for p in procs:
+            if p.poll() is None:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+            self.bridge._child_ended(p.pid)
+        self.running = False
+        self.bridge.log("rtsp: on-demand %s back to standby (%s)" % (self.broadcast, reason))
+        self._notready("standby: " + reason)
+        if self.lowPub is not None:
+            self.lowPub._halt()
+        return True
+
+    def _halt(self):
+        """Stop the processes of a sibling without marking it stopping for good."""
+        with self._lock:
+            self._gen += 1
+            t, self._timer = self._timer, None
+            r, self._renew = self._renew, None
+            procs = self.procs
+        for x in (t, r):
+            if x:
+                x.cancel()
+        for p in procs:
+            if p.poll() is None:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+            self.bridge._child_ended(p.pid)
+        self.running = False
 
     def _drain(self, proc, tag, gen=0):
         try:
@@ -1191,6 +1400,7 @@ class Publisher:
                     decision = "ladder"
                     self._schedule_restart_locked()
         self.bridge.log(exit_line)
+        self._notready("exit %s code %s" % (who, code))                  # 0.18.0
         if decision == "park":
             self._park()                # logs and may mint: never under the lock
 
@@ -1211,6 +1421,8 @@ class Publisher:
     def nudge(self, why="api"):
         """A viewer says the stream is frozen: restart the pair now.
         0.13.1: `why` (viewer / stall* / no-echo / api) is counted and kept."""
+        if self.standby:            # 0.18.0: nothing runs; a viewer's demand wakes it instead
+            return
         self.nudges[nudge_bucket(why)] += 1
         self.lastNudgeWhy = str(why or "api")[:32]
         self.lastNudgeAt = time.time()
@@ -1279,6 +1491,13 @@ class Publisher:
         """A fresh relay URL (new token): move the pair onto it now."""
         relay = (relay or "").strip()
         if not relay or self.stopping:
+            return
+        if self.lowPub is not None:                                      # 0.18.0
+            self.lowPub.relay = relay
+        if self.standby:                                                 # 0.18.0: remember it for the next wake
+            self.relay = relay
+            self.needsToken = False
+            self.parked = False
             return
         with self._lock:
             t, self._timer = self._timer, None
@@ -1362,6 +1581,9 @@ class Publisher:
                     pass
             self.bridge._child_ended(p.pid)   # 0.9.8
         self.running = False
+        self._notready("stopped")                                        # 0.18.0
+        if self.lowPub is not None:
+            self.lowPub.stop()
 
 
 def _ensure_exec(path):
@@ -1424,6 +1646,14 @@ class Bridge:
         self.ffmpeg = find_ffmpeg()
         self.moq = find_moq()            # 0.9.1: native publishing when present
         self._pubs = {}                  # feed id -> Publisher
+        # 0.18.0: operator hooks (the launcher replaces these with kastr.ini's) and the
+        # on-demand loop. `web_base_for(relay_url)` -> the relay host's KASTR base URL
+        # (kastr_serve.make_bridge injects it); the demand loop asks it who is wanted.
+        self.hooks = Hooks.from_env(log)
+        self.web_base_for = None
+        self._feed_locks = {}
+        self._od_thread = None
+        self._od_said = {}
         self._encoder = None    # cached hardware-encoder choice
         self._probed = {}       # url -> (h264, width, height)
         self.encoder_note = None  # which one, for the feed list
@@ -1643,14 +1873,23 @@ class Bridge:
         return bool(feed)
 
     # ---- native publishing (0.9.1) --------------------------------------
-    def publish(self, feed_id, broadcast, relay, hevc=False, audio=True, passthrough=None, force=False, keep=None):   # 0.12.0: keep
+    def publish(self, feed_id, broadcast, relay, hevc=False, audio=True, passthrough=None, force=False, keep=None,
+                ondemand=False, low=False, label=""):   # 0.12.0: keep; 0.18.0: ondemand, low, label
+        # 0.18.0: one publish at a time per feed -- two quick option toggles on the page sent two
+        # requests that raced, and the older one could land last
+        with self._lock:
+            fl = self._feed_locks.setdefault(int(feed_id), threading.Lock())
+        with fl:
+            return self._publish(feed_id, broadcast, relay, hevc, audio, passthrough, force, keep, ondemand, low, label)
+
+    def _publish(self, feed_id, broadcast, relay, hevc, audio, passthrough, force, keep, ondemand, low, label):
         feed = self.get(feed_id)
         if not feed:
             raise ValueError("no such feed")
         if not self.moq:
             raise RuntimeError("moq-cli not available")
-        low = (relay or "").strip().lower()
-        if not low.startswith(("http://", "https://", "ws://", "wss://")):
+        rl = (relay or "").strip().lower()   # 0.18.0: was `low`, which shadowed the low-rendition flag
+        if not rl.startswith(("http://", "https://", "ws://", "wss://")):
             raise ValueError("relay must be an http(s) or ws(s) url")
         if not re.match(r"^[A-Za-z0-9._~:@+\-]+(/[A-Za-z0-9._~:@+\-]+)*$", broadcast or ""):
             raise ValueError("bad broadcast name")
@@ -1663,7 +1902,8 @@ class Bridge:
         if (cur is not None and not force and not cur.stopping
                 and cur.broadcast == broadcast
                 and _relay_key(cur.relay) == _relay_key(relay)
-                and cur.passthrough == want_pt and cur.audio == bool(audio)):
+                and cur.passthrough == want_pt and cur.audio == bool(audio)
+                and cur.ondemand == bool(ondemand) and (cur.lowPub is not None) == bool(low)):   # 0.18.0
             # 0.12.0: evidence-gated re-token. A reload/rejoin mints a new token
             # but must NOT restart a healthy pair (the 0.9.8 promise). A pair the
             # relay refused, one that is down, one that failed within the last
@@ -1679,18 +1919,99 @@ class Bridge:
             if keep is not None and bool(keep) != cur.keep:
                 cur.keep = bool(keep)
                 self.persist_feeds()
+            if label and label != cur.label:                             # 0.18.0: a renamed feed
+                cur.label = str(label)[:80]
             cur.reused += 1
             return cur
         self.unpublish(feed_id, persist=False)   # 0.12.0: the new pair is persisted below
         pub = Publisher(self, feed, broadcast, relay.strip(), hevc=bool(hevc), audio=bool(audio),
                         passthrough=passthrough,
                         minter=self._minter_for(feed, broadcast, relay),        # 0.12.0
-                        keep=(True if keep is None else bool(keep)))
+                        keep=(True if keep is None else bool(keep)),
+                        ondemand=bool(ondemand), low=bool(low), label=label)    # 0.18.0
         with self._lock:
             self._pubs[int(feed_id)] = pub
-        pub.start()
+        if pub.ondemand:
+            self.log("rtsp: %s published on demand -- standby until a viewer asks" % broadcast)
+            self._od_ensure()
+        else:
+            pub.start()
         self.persist_feeds()                     # 0.12.0
         return pub
+
+    # ---- 0.18.0: the on-demand loop -------------------------------------------------
+    OD_POLL_S = 5
+    OD_IDLE_S = 60
+
+    def _od_ensure(self):
+        with self._lock:
+            if self._od_thread is not None and self._od_thread.is_alive():
+                return
+            t = threading.Thread(target=self._od_loop, daemon=True, name="kastr-ondemand")
+            self._od_thread = t
+        t.start()
+
+    def _od_loop(self):
+        while True:
+            pubs = [p for p in list(self._pubs.values()) if p.ondemand and not p.stopping]
+            if not pubs:
+                with self._lock:
+                    self._od_thread = None
+                return
+            try:
+                self.od_tick(pubs)
+            except Exception as e:
+                self.log("rtsp: on-demand tick failed: %s" % e)
+            time.sleep(self.OD_POLL_S)
+
+    def od_tick(self, pubs, now=None, post=None):
+        """One demand round: tell each relay host which on-demand feeds exist, learn which are
+        wanted, wake/sleep accordingly. `post(url, body) -> dict|None` is injectable (tests)."""
+        now = now or time.time()
+        post = post or self._od_post
+        groups = {}
+        for p in pubs:
+            groups.setdefault(_relay_key(p.relay), []).append(p)
+        for key, ps in groups.items():
+            base = None
+            try:
+                base = self.web_base_for(key) if callable(self.web_base_for) else None
+            except Exception:
+                base = None
+            wanted = None
+            if base:
+                body = {"token": _relay_token(ps[0].relay) or "",
+                        "feeds": [{"broadcast": p.broadcast, "label": p.label or p.broadcast.rsplit("/", 1)[-1][:-5],
+                                   "live": bool(p.running), "low": (p.lowPub.broadcast if p.lowPub else None)} for p in ps]}
+                d = post(base.rstrip("/") + "/api/ondemand/sync", body)
+                if isinstance(d, dict) and isinstance(d.get("wanted"), dict):
+                    wanted = d["wanted"]
+            for p in ps:
+                if wanted is not None and p.broadcast in wanted:
+                    try:
+                        age = max(0.0, float(wanted[p.broadcast]))
+                    except (TypeError, ValueError):
+                        age = None
+                    if age is not None:
+                        p.wantedAt = max(p.wantedAt or 0, now - age)
+                recent = p.wantedAt is not None and now - p.wantedAt < self.OD_IDLE_S
+                if p.standby and recent:
+                    p.wake("viewer demand")
+                elif not p.standby and not recent and now - (p.wokeAt or 0) >= self.OD_IDLE_S:
+                    p.sleep("no viewer for %d s" % self.OD_IDLE_S)
+
+    def _od_post(self, url, body):
+        try:
+            req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=4) as r:
+                return json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception as e:
+            last = self._od_said.get(url, 0)
+            if time.time() - last > 600:
+                self._od_said[url] = time.time()
+                self.log("rtsp: on-demand sync with %s failed: %s" % (re.sub(r"\?.*", "", url), str(e)[:120]))
+            return None
 
     def unpublish(self, feed_id, persist=True):   # 0.12.0: persist
         with self._lock:
@@ -1730,7 +2051,8 @@ class Bridge:
             if pub.stopping:
                 continue
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
-                        "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep)})
+                        "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
+                        "ondemand": bool(pub.ondemand), "low": pub.lowPub is not None, "label": pub.label})   # 0.18.0
         return out
 
     def persist_feeds(self):
@@ -1915,7 +2237,8 @@ class Bridge:
             try:
                 feed = self._feed_by_source(rec["url"]) or self.add(rec["url"])
                 self.publish(feed.id, rec.get("broadcast") or ("cam%d" % feed.id), url,
-                             audio=(rec.get("audio") is not False), passthrough=bool(rec.get("passthrough")), keep=True)
+                             audio=(rec.get("audio") is not False), passthrough=bool(rec.get("passthrough")), keep=True,
+                             ondemand=bool(rec.get("ondemand")), low=bool(rec.get("low")), label=str(rec.get("label") or ""))   # 0.18.0
                 with lock:
                     done[0] += 1
             except Exception as e:
@@ -2295,10 +2618,13 @@ def handle_api(handler, bridge, path):
             # 0.17.0: a web client has no bridge here -- the page hides its RTSP paths
             reply({"feeds": [], "ffmpeg": False, "ffmpegPath": "", "moq": False, "remote": True})
             return True
+        hk = getattr(bridge, "hooks", None)
         reply({"feeds": bridge.list(redact=False),
                "ffmpeg": bool(bridge.ffmpeg),
                "ffmpegPath": bridge.ffmpeg or "",
-               "moq": bool(bridge.moq)})                      # 0.9.1: native publishing available
+               "moq": bool(bridge.moq),                       # 0.9.1: native publishing available
+               "hooks": (hk.configured() if hk else {}),       # 0.18.0: which hooks are set (never the commands)
+               "hookLog": (list(hk.fired) if hk else [])})
         return True
 
     if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge",
@@ -2323,7 +2649,9 @@ def handle_api(handler, bridge, path):
                                      audio=(payload.get("audio") is not False),   # 0.9.5: default on
                                      passthrough=bool(payload.get("passthrough", payload.get("hevc"))),   # 0.9.6
                                      force=bool(payload.get("force")),   # 0.9.8: otherwise the same request keeps the running pair
-                                     keep=payload.get("keep"))           # 0.12.0: None = leave as is (new pair: on)
+                                     keep=payload.get("keep"),           # 0.12.0: None = leave as is (new pair: on)
+                                     ondemand=bool(payload.get("ondemand")), low=bool(payload.get("low")),   # 0.18.0
+                                     label=str(payload.get("label") or ""))
                 reply(pub.info())
             elif path == "/api/rtsp/unpublish":
                 reply({"ok": bridge.unpublish(payload.get("id"))})

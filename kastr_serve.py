@@ -27,7 +27,7 @@ import time
 import uuid
 import subprocess
 import threading      # 0.12.0
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import quote, parse_qs, urlparse
 import urllib.request
 import urllib.error
 from functools import partial
@@ -450,6 +450,10 @@ def media_shutdown():
             _media_kill(rec)
         except Exception:
             pass
+    try:
+        hls_shutdown()      # 0.18.0
+    except Exception:
+        pass
 
 
 # ---- 0.14.0: /api/prefs -- the page's localStorage mirrored server-side ----
@@ -681,7 +685,112 @@ _REMOTE_SEEN = {}
 WATCH_MAX = 6
 _WATCH_LIVE = [0]
 _WATCH_LOCK = threading.Lock()
-WATCH_SEG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+WATCH_SEG_RE = re.compile(r"^(?!\.\.?$)[A-Za-z0-9._-]+$")   # 0.18.0: never "." or ".."
+
+
+# 0.18.0: on-demand cameras (docs/moq-landscape item 3). A camera box's bridge syncs its
+# standby feeds here every 5 s ({broadcast: {room, label, low, at, wantedAt, live}}); viewer
+# pages list them and send demand; the bridge wakes a feed wanted within the last minute.
+ONDEMAND = {}
+ONDEMAND_LOCK = threading.Lock()
+ONDEMAND_TTL = 30          # a registration the bridge stopped refreshing is gone
+ONDEMAND_WANT = 120        # demand older than this is not reported back
+
+# 0.18.0: HLS for browsers without MSE (iPhones before iOS 17): one `moq export hls` per
+# broadcast on a loopback port, shared by its viewers, reached through /api/hls/<key>/...
+HLS = {}                   # broadcast -> {proc, port, last, started}
+HLS_KEYS = {}              # key -> {b, at}
+HLS_LOCK = threading.Lock()
+HLS_IDLE_S = 45
+ARCHIVE_WANTS = lambda broadcast: False   # 0.18.0: make_server points this at the archiver's picks
+HLS_KEY_IDLE_S = 120   # a keyed playlist unused this long is gone (players poll every few seconds)
+HLS_WINDOW = "12s"
+ARCHIVE_HOURS = 24         # kastr.ini archive_hours (the launcher sets it)
+
+
+def ondemand_touch(broadcast, now=None):
+    """A viewer is watching `broadcast` (a demand pulse or an /api/watch / HLS pump)."""
+    now = now or time.time()
+    with ONDEMAND_LOCK:
+        rec = ONDEMAND.get(broadcast)
+        if rec is not None:
+            rec["wantedAt"] = now
+            return True
+    return False
+
+
+def ondemand_sync(room, host, feeds, now=None):
+    """The bridge's registration round -> {broadcast: seconds since the last want}. Feeds whose
+    path is not under room/host (when a host is known) are ignored."""
+    now = now or time.time()
+    out = {}
+    with ONDEMAND_LOCK:
+        for f in feeds or []:
+            if not isinstance(f, dict):
+                continue
+            b = str(f.get("broadcast") or "")
+            segs = b.split("/")
+            if len(segs) < 3 or any(not WATCH_SEG_RE.match(x) for x in segs) or segs[0] != room:
+                continue
+            if host and segs[1] != host:
+                continue
+            rec = ONDEMAND.get(b) or {"wantedAt": None}
+            rec.update(room=room, label=str(f.get("label") or segs[-1])[:80], live=bool(f.get("live")),
+                       low=(str(f.get("low")) if f.get("low") else None), at=now)
+            ONDEMAND[b] = rec
+            try:
+                if ARCHIVE_WANTS(b):   # the operator records it -> keep it awake
+                    rec["wantedAt"] = now
+            except Exception:
+                pass
+            if rec.get("wantedAt") and now - rec["wantedAt"] < ONDEMAND_WANT:
+                out[b] = round(now - rec["wantedAt"], 1)
+        for b in [k for k, r in ONDEMAND.items() if now - r.get("at", 0) > ONDEMAND_TTL * 4]:
+            ONDEMAND.pop(b, None)
+    return out
+
+
+def ondemand_list(room, now=None):
+    now = now or time.time()
+    with ONDEMAND_LOCK:
+        return [{"broadcast": b, "label": r.get("label"), "live": bool(r.get("live")), "low": r.get("low"),
+                 "wantedAgo": (round(now - r["wantedAt"]) if r.get("wantedAt") else None)}
+                for b, r in sorted(ONDEMAND.items())
+                if r.get("room") == room and now - r.get("at", 0) <= ONDEMAND_TTL]
+
+
+def _od_web_base(relay_key):
+    """0.18.0: the KASTR that hosts `relay_key` -- where a bridge syncs its on-demand feeds."""
+    try:
+        h = (urlparse(relay_key).hostname or "").lower()
+    except Exception:
+        return None
+    if not h:
+        return None
+    if h in _own_hosts():
+        return "http://127.0.0.1:%d" % int(HTTP_PORT or 8000)
+    return "http://%s:%d" % (("[%s]" % h) if ":" in h else h, hub_web_for(h, 8000))
+
+
+def _free_port():
+    import socket as _s
+    sk = _s.socket()
+    try:
+        sk.bind(("127.0.0.1", 0))
+        return sk.getsockname()[1]
+    finally:
+        sk.close()
+
+
+def hls_shutdown():
+    with HLS_LOCK:
+        recs = list(HLS.values())
+        HLS.clear()
+    for r in recs:
+        try:
+            r["proc"].kill()
+        except Exception:
+            pass
 
 
 def _fmp4_codecs(head):
@@ -2453,6 +2562,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._prefs_post()
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
+            if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
+                return self._ondemand_api("POST", path0)
+            if path0 == "/api/archive":             # 0.18.0: the operator picks what the host records
+                return self._archive_api("POST", path0)
             if path0 == "/api/relaunch":
                 return self._relaunch()
             if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick"):   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
@@ -2630,6 +2743,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "ca": "/ca.crt" if HTTPS_INFO.get("ca") else None,
                 "hostname": HTTPS_INFO.get("hostname"),
                 "closing": bool(CLOSING[0]),
+                "now": int(time.time() * 1000),   # 0.18.0: the relay host's clock (latency stamps are corrected to it)
                 "features": feats,
             })
 
@@ -2666,19 +2780,353 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     seen.add(u); uniq.append(u)
             return uniq
 
+        def _room_claims(self, room, jwt):
+            """0.18.0: None when the caller may act for `room` here (open relay, or a member token
+            covering it), else the (code, error) to answer."""
+            self._claims = None   # keep-alive: never a previous request's identity
+            secured = bool(relay_srv is not None and getattr(relay_srv, "secured", False))
+            if not secured:
+                return None
+            state = self._state_dir()
+            key = kastr_relay.read_jwk(state) if state else None
+            claims = kastr_relay.verify_token(jwt, key) if (key and jwt) else None
+            if claims is None:
+                return (401, "token required")
+            if room and not kastr_relay.claims_cover(claims, room):
+                return (403, "token does not cover this room")
+            self._claims = claims
+            if self._banned(room, claims):
+                return (403, "removed from this room by an admin")
+            return None
+
+        def _banned(self, room, claims):
+            """0.18.0: a relay-side kick also closes this host's side doors (HLS, archive, on-demand)."""
+            auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
+            bans = getattr(auth, "bans", None) if auth is not None else None
+            if not bans or not room:
+                return None
+            _r, host = kastr_relay.claims_identity(claims or {})
+            peer = (self.client_address[0] if self.client_address else "") or None
+            return bans.hit(room, host, peer)
+
+        def _body_json(self):
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                return d if isinstance(d, dict) else {}
+            except Exception:
+                return {}
+
+        # ---- 0.18.0: on-demand cameras --------------------------------------------------
+        def _ondemand_api(self, method, path):
+            qs = parse_qs(urlparse(self.path).query)
+            if method == "GET" and path == "/api/ondemand":
+                room = (qs.get("room") or [""])[0].strip().lower()
+                if not re.match(r"^[a-z0-9-]{1,32}$", room):
+                    return self._json_cors(400, {"error": "bad room"})
+                bad = self._room_claims(room, (qs.get("jwt") or [""])[0] or (self.headers.get("X-Kastr-Jwt") or ""))
+                if bad:
+                    return self._json_cors(bad[0], {"error": bad[1]})
+                return self._json_cors(200, {"feeds": ondemand_list(room)})
+            p = self._body_json()
+            if path == "/api/ondemand/sync":
+                feeds = p.get("feeds") if isinstance(p.get("feeds"), list) else []
+                secured = bool(relay_srv is not None and getattr(relay_srv, "secured", False))
+                room = host = None
+                if secured:
+                    state = self._state_dir()
+                    key = kastr_relay.read_jwk(state) if state else None
+                    claims = kastr_relay.verify_token(str(p.get("token") or ""), key) if key else None
+                    if not claims:
+                        return self._json_cors(401, {"error": "token required"})
+                    room, host = kastr_relay.claims_identity(claims)
+                    if not room:
+                        return self._json_cors(403, {"error": "a member token is required"})
+                else:
+                    first = next((str(f.get("broadcast") or "") for f in feeds if isinstance(f, dict)), "")
+                    room = first.split("/", 1)[0]
+                wanted = ondemand_sync(room, host, feeds)
+                return self._json_cors(200, {"wanted": wanted})
+            if path == "/api/ondemand/demand":
+                room = str(p.get("room") or "").strip().lower()
+                b = str(p.get("broadcast") or "")
+                if not re.match(r"^[a-z0-9-]{1,32}$", room) or not b.startswith(room + "/"):
+                    return self._json_cors(400, {"error": "bad room or broadcast"})
+                bad = self._room_claims(room, str(p.get("jwt") or ""))
+                if bad:
+                    return self._json_cors(bad[0], {"error": bad[1]})
+                return self._json_cors(200, {"ok": True, "known": ondemand_touch(b)})
+            return self._json_cors(404, {"error": "unknown endpoint"})
+
+        # ---- 0.18.0: host recording ---------------------------------------------------
+        def _archive_api(self, method, path):
+            arch = getattr(relay_srv, "archiver", None) if relay_srv is not None else None
+            if arch is None:
+                return self._json_cors(503, {"error": "recording is not available on this KASTR"})
+            qs = parse_qs(urlparse(self.path).query)
+            jwt = (qs.get("jwt") or [""])[0] or (self.headers.get("X-Kastr-Jwt") or "")
+            if method == "POST":
+                if not self._local():
+                    return self._deny("recording changes")
+                p = self._body_json()
+                try:
+                    return self._json_plain(200, arch.set(str(p.get("broadcast") or ""), bool(p.get("on"))))
+                except ValueError as e:
+                    return self._json_plain(400, {"error": str(e)})
+            if path == "/api/archive":
+                if self._local():
+                    return self._json_cors(200, arch.status())
+                room = (qs.get("room") or [""])[0].strip().lower()
+                if not re.match(r"^[a-z0-9-]{1,32}$", room):
+                    return self._json_cors(400, {"error": "room required"})
+                bad = self._room_claims(room, jwt)
+                if bad:
+                    return self._json_cors(bad[0], {"error": bad[1]})
+                return self._json_cors(200, arch.status(room))
+            b = (qs.get("b") or [""])[0].strip()
+            segs = b.split("/")
+            if len(segs) < 2 or any(not WATCH_SEG_RE.match(x) for x in segs) or segs[0].startswith("."):
+                return self._json_cors(400, {"error": "bad broadcast path"})
+            if not self._local():
+                bad = self._room_claims(segs[0], jwt)
+                if bad:
+                    return self._json_cors(bad[0], {"error": bad[1]})
+            leaf = segs[-1][:-5] if segs[-1].endswith(".hang") else segs[-1]
+            if path == "/api/archive/seg":
+                fp = arch.seg_path(b, (qs.get("f") or [""])[0])
+                if not fp:
+                    return self._json_cors(404, {"error": "no such segment"})
+                size = os.path.getsize(fp)
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", 'attachment; filename="%s-%s"' % (leaf, os.path.basename(fp)))
+                self.send_header("Cache-Control", "no-store")
+                self._cors(); self._corp_cross = True
+                self.end_headers()
+                try:
+                    with open(fp, "rb") as f:
+                        while True:
+                            chunk = f.read(1 << 20)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                return
+            if path == "/api/archive/get":
+                def num(k):
+                    try:
+                        v = (qs.get(k) or [""])[0]
+                        return float(v) if v else None
+                    except ValueError:
+                        return None
+                files = arch.range_files(b, num("t0"), num("t1"))
+                if not files:
+                    return self._json_cors(404, {"error": "nothing recorded in that range"})
+                ff = getattr(bridge, "ffmpeg", None) if bridge else None
+                if not ff:
+                    return self._json_cors(503, {"error": "ffmpeg not available here"})
+                import tempfile
+                lst = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+                for fp in files:
+                    lst.write("file '%s'\n" % fp.replace("\\", "/").replace("'", "'\\''"))
+                lst.close()
+                argv = [ff, "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst.name,
+                        "-c", "copy", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"]
+                proc = None
+                try:
+                    proc = (bridge.spawn_media if bridge is not None else _spawn_media_plain)(argv, tag="archive-get")
+                    stamp = time.strftime("%Y%m%d-%H%M", time.localtime(num("t0") or time.time()))
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Disposition", 'attachment; filename="%s-%s.mp4"' % (leaf, stamp))
+                    self.send_header("Cache-Control", "no-store")
+                    self._cors(); self._corp_cross = True
+                    self.end_headers()
+                    try:
+                        while True:
+                            chunk = proc.stdout.read(1 << 16)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        pass
+                finally:
+                    if proc is not None:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        try:
+                            bridge.release_media(proc)
+                        except Exception:
+                            pass
+                    try:
+                        os.remove(lst.name)
+                    except OSError:
+                        pass
+                return
+            return self._json_cors(404, {"error": "unknown endpoint"})
+
+        # ---- 0.18.0: HLS -----------------------------------------------------------------
+        def _hls_exporter(self, bcast):
+            """The shared exporter for `bcast` (started on first use) -> its port, or None."""
+            now = time.time()
+            with HLS_LOCK:
+                rec = HLS.get(bcast)
+                if rec and rec["proc"].poll() is None:
+                    rec["last"] = now
+                    return rec["port"]
+            url = relay_srv.operator_url() if relay_srv is not None and hasattr(relay_srv, "operator_url") else None
+            moq = getattr(bridge, "moq", None) if bridge else None
+            if not url or not moq:
+                return None
+            port = _free_port()
+            argv = [moq, "--log-level", "warn", "--quic-idle-timeout", "15s", "--connect", url, "--broadcast", bcast,
+                    "export", "hls", "--listen", "127.0.0.1:%d" % port, "--window", HLS_WINDOW]
+            try:
+                try:
+                    proc = bridge.spawn_media(argv, tag="hls:" + bcast.rsplit("/", 1)[-1][:24], nice=True)
+                except TypeError:
+                    proc = bridge.spawn_media(argv, tag="hls:" + bcast.rsplit("/", 1)[-1][:24])
+            except Exception as e:
+                _note("hls: %s failed to start: %s" % (bcast, e))
+                return None
+            rec = {"proc": proc, "port": port, "last": now, "started": now}
+            with HLS_LOCK:
+                HLS[bcast] = rec
+            blog = getattr(bridge, "log", None) or _note
+            blog("hls: exporter for %s on 127.0.0.1:%d (pid %d)" % (bcast, port, proc.pid))
+
+            def reaper(b=bcast, r=rec):
+                while r["proc"].poll() is None:
+                    time.sleep(5)
+                    if time.time() - r["last"] > HLS_IDLE_S:
+                        try:
+                            r["proc"].kill()
+                        except Exception:
+                            pass
+                        break
+                with HLS_LOCK:
+                    if HLS.get(b) is r:
+                        HLS.pop(b, None)
+                try:
+                    bridge.release_media(r["proc"])
+                except Exception:
+                    pass
+                blog("hls: exporter for %s stopped after %ds" % (b, time.time() - r["started"]))
+            threading.Thread(target=reaper, daemon=True).start()
+            # wait until it answers the master playlist (the first segment needs a keyframe) --
+            # at most 10 s: a broadcast that is not live yet (an on-demand camera waking) makes
+            # the player retry instead of holding this request
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                time.sleep(0.25)
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:%d/%s/master.m3u8" % (port, bcast),
+                                                timeout=max(0.3, min(1.5, deadline - time.time()))) as r:
+                        if r.status == 200:
+                            break
+                except Exception:
+                    pass
+            return port
+
+        def _hls_start(self, bcast):
+            """GET /api/watch/<b>.m3u8?jwt= -> 302 to the keyed playlist path."""
+            if not (relay_srv is not None and relay_srv.running()):
+                return self._json_cors(503, {"error": "no relay on this machine -- open the relay host's KASTR"})
+            qs = parse_qs(urlparse(self.path).query)
+            bad = self._room_claims(bcast.split("/", 1)[0], (qs.get("jwt") or [""])[0] or (self.headers.get("X-Kastr-Jwt") or ""))
+            if bad:
+                return self._json_cors(bad[0], {"error": bad[1]})
+            ondemand_touch(bcast)   # first: an on-demand camera wakes while the exporter starts
+            if self._hls_exporter(bcast) is None:
+                return self._json_cors(503, {"error": "HLS exporter unavailable"})
+            key = uuid.uuid4().hex[:16]
+            now = time.time()
+            cl = getattr(self, "_claims", None) or {}
+            with HLS_LOCK:
+                # 0.18.0: the key carries the caller's identity + token expiry (checked on every fetch)
+                HLS_KEYS[key] = {"b": bcast, "at": now, "claims": cl, "exp": cl.get("exp")}
+                for k in [k for k, v in HLS_KEYS.items() if now - v["at"] > HLS_KEY_IDLE_S]:
+                    HLS_KEYS.pop(k, None)
+            ondemand_touch(bcast)
+            hk = getattr(bridge, "hooks", None)   # 0.18.0: an HLS viewer is a read
+            if hk:
+                hk.fire("read", bcast, "", "", reason="hls viewer", viewer=(self.client_address[0] if self.client_address else ""))
+            self.send_response(302)
+            self.send_header("Location", "/api/hls/%s/%s/master.m3u8" % (key, "/".join(quote(x) for x in bcast.split("/"))))
+            self.send_header("Cache-Control", "no-store")
+            self._cors(); self._corp_cross = True
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _hls_proxy(self, path):
+            """GET /api/hls/<key>/<broadcast>/<rest> -> the exporter's /<broadcast>/<rest>."""
+            m = re.match(r"^/api/hls/([0-9a-f]{16})/(.+)$", path)
+            if not m:
+                return self._json_cors(404, {"error": "no such playlist"})
+            with HLS_LOCK:
+                k = HLS_KEYS.get(m.group(1))
+            now = time.time()
+            if k and (now - k["at"] > HLS_KEY_IDLE_S or (k.get("exp") and now > float(k["exp"]))):
+                with HLS_LOCK:
+                    HLS_KEYS.pop(m.group(1), None)
+                k = None
+            if not k:
+                return self._json_cors(403, {"error": "unknown or expired key"})
+            if k.get("claims") and self._banned(k["b"].split("/", 1)[0], k["claims"]):
+                with HLS_LOCK:
+                    HLS_KEYS.pop(m.group(1), None)
+                return self._json_cors(403, {"error": "removed from this room by an admin"})
+            from urllib.parse import unquote
+            rest = unquote(m.group(2))
+            if not rest.startswith(k["b"] + "/") or ".." in rest:
+                return self._json_cors(403, {"error": "key does not cover this path"})
+            k["at"] = time.time()
+            port = self._hls_exporter(k["b"])
+            if port is None:
+                return self._json_cors(503, {"error": "HLS exporter unavailable"})
+            ondemand_touch(k["b"])
+            q = urlparse(self.path).query
+            target = "http://127.0.0.1:%d/%s%s" % (port, "/".join(quote(x) for x in rest.split("/")), ("?" + q) if q else "")
+            try:
+                with urllib.request.urlopen(target, timeout=15) as r:
+                    data = r.read()
+                    ctype = r.headers.get("Content-Type") or "application/octet-stream"
+                    code = r.status
+            except urllib.error.HTTPError as e:
+                data, ctype, code = e.read(), e.headers.get("Content-Type") or "text/plain", e.code
+            except Exception as e:
+                return self._json_cors(502, {"error": "exporter: %s" % str(e)[:120]})
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self._cors(); self._corp_cross = True
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
         def _watch_stream(self, path):
             """0.17.0: GET /api/watch/<broadcast path>.mp4[?jwt=] -> endless fragmented MP4 of one
             broadcast, consumed from the relay on this machine by the bundled moq CLI. The
             caller's member token governs the subscription (bans apply); an open relay trusts
             the LAN like /api/files. Lifetime = this request; no timers."""
             rel = path[len("/api/watch/"):]
-            if not rel.lower().endswith(".mp4"):
-                return self._json_cors(404, {"error": "use /api/watch/<broadcast>.mp4"})
+            low = rel.lower()
+            if not (low.endswith(".mp4") or low.endswith(".m3u8")):
+                return self._json_cors(404, {"error": "use /api/watch/<broadcast>.mp4 (or .m3u8 for HLS)"})
             from urllib.parse import unquote
-            bcast = unquote(rel[:-4]).strip("/")
+            bcast = unquote(rel[:-(4 if low.endswith(".mp4") else 5)]).strip("/")
             segs = bcast.split("/")
             if len(segs) < 2 or segs[0].startswith(".") or any(not WATCH_SEG_RE.match(x) for x in segs):
                 return self._json_cors(400, {"error": "bad broadcast path"})
+            if low.endswith(".m3u8"):
+                return self._hls_start(bcast)   # 0.18.0
             if not (relay_srv is not None and relay_srv.running()):
                 return self._json_cors(503, {"error": "no relay on this machine -- open the relay host's KASTR"})
             moq = getattr(bridge, "moq", None) if bridge else None
@@ -2752,9 +3200,13 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 self._corp_cross = True
                 self.end_headers()
                 blog("watch: start %s for %s (%s)" % (bcast, peer, codecs or "unknown codecs"))
+                hk = getattr(bridge, "hooks", None)          # 0.18.0: a fallback viewer is a read
+                if hk:
+                    hk.fire("read", bcast, "", "", reason="fallback viewer", viewer=peer)
                 self.connection.settimeout(15)
                 t0 = time.time()
                 sent = 0
+                touched = 0
                 try:
                     self.wfile.write(head); sent += len(head)
                     while True:
@@ -2762,6 +3214,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         if not chunk:
                             break
                         self.wfile.write(chunk); sent += len(chunk)
+                        if time.time() - touched > 10:       # 0.18.0: keeps an on-demand camera awake
+                            touched = time.time()
+                            ondemand_touch(bcast)
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass   # the viewer left
                 blog("watch: end %s for %s after %ds, %d KB" % (bcast, peer, time.time() - t0, sent // 1024))
@@ -2892,6 +3347,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._chat_api("GET")
             if path.startswith("/api/watch/"):                                # 0.17.0: the fMP4 fallback
                 return self._watch_stream(path)
+            if path.startswith("/api/hls/"):                                  # 0.18.0: HLS behind a key
+                return self._hls_proxy(path)
+            if path == "/api/ondemand":                                       # 0.18.0
+                return self._ondemand_api("GET", path)
+            if path in ("/api/archive", "/api/archive/seg", "/api/archive/get"):   # 0.18.0
+                return self._archive_api("GET", path)
             if path == "/ca.crt":
                 return self._ca_cert()
             if path == "/api/media":                                        # 0.14.0: the registry
@@ -3110,6 +3571,15 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
                      relay_ref, alive_ref, window_file))
     srv.rtsp = bridge
     srv.relay = relay_srv
+    if relay_srv is not None and bridge is not None and getattr(relay_srv, "archiver", None) is None:
+        try:   # 0.18.0: host recording (kastr_archive) -- resumes whenever the relay starts
+            import kastr_archive
+            relay_srv.archiver = kastr_archive.Archiver(relay_srv.state_dir, relay_srv, bridge,
+                                                        getattr(relay_srv, "log", None), hours=ARCHIVE_HOURS)
+            global ARCHIVE_WANTS
+            ARCHIVE_WANTS = lambda b, a=relay_srv.archiver: b in a.enabled
+        except Exception as e:
+            _note("archive: not available: %s" % e)
     if bridge is not None:
         _MEDIA_BRIDGE[0] = bridge          # 0.14.0: spawn_media / release_media owner
     for src_ in (bridge, relay_srv):
@@ -3169,7 +3639,9 @@ def make_bridge(state_dir=None, log=None, hostname=None):
     0.13.0: `hostname` must be the SAME value the launcher gives make_server /
     make_handler (both None today): the bridge's publishers mint tokens scoped
     to host_slug(hostname), and the page's HOSTNAME comes from the same slug."""
-    return kastr_rtsp.Bridge(state_dir=state_dir, log=log, host_slug=host_slug(hostname))
+    b = kastr_rtsp.Bridge(state_dir=state_dir, log=log, host_slug=host_slug(hostname))
+    b.web_base_for = _od_web_base      # 0.18.0: where the on-demand loop syncs
+    return b
 
 
 def make_relay(state_dir, log=None):

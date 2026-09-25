@@ -703,6 +703,7 @@ def main():
         sys.executable, "-m", "PyInstaller",
         "--hidden-import", "cryptography",
         "--hidden-import", "kastr_tls",
+        "--hidden-import", "kastr_archive",   # 0.18.0: imported lazily by kastr_serve.make_server
         "--noconfirm", "--clean", "--onefile", "--noconsole",
         "--name", NAME,
         "--distpath", DIST,

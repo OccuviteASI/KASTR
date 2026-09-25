@@ -196,6 +196,13 @@ localhost:8000/api/relay/start -d '{"port":4443,"lan":true,"secured":true}'`, `c
 (`session: true`), `curl -s localhost:8000/api/relay/health` (relay + auth up), `curl -s localhost:8000/api/web`
 (`live: true`), and the exit-75 relaunch loop via `/api/mode`.
 
+## Recording and hooks (0.18.0)
+
+Host recordings live in the state volume (`/data/state/archive/`), one folder per stream, kept `archive_hours`
+(kastr.ini, default 24) -- size the volume for it (the rig's 720p test pattern wrote about 30 MB a minute). Hooks
+(`hook_ready` / `hook_notready` / `hook_read`) run inside the container, so the command must exist in the image or the
+volume.
+
 ## Not done / deferred
 
 - A `builder` stage compiling inside Docker (needs a `build.py --bare` that

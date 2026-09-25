@@ -306,6 +306,13 @@
       <p class="hint" id="hMetrics" hidden style="margin-top:6px"><a href="/api/relay/metrics" target="_blank" rel="noopener">Prometheus metrics</a> (this machine only)</p>
     </section>
 
+    <!-- 0.18.0: what this relay host records (operator-picked, archive_hours rolling) -->
+    <section class="panel" id="archivePanel" hidden>
+      <h2>Recordings</h2>
+      <div id="archNote" class="hint" style="margin-bottom:6px"></div>
+      <div id="archList" style="font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8"></div>
+    </section>
+
     <section class="panel" id="streamsPanel">
       <h2>Streams on this relay</h2>
       <div id="bcastNote" style="font-size:11px;color:var(--text-mute,#8b98a5);margin-bottom:6px;">Relay not running.</div>
@@ -1240,6 +1247,39 @@
       scanning = false;
     }
   }
+  // 0.18.0: the recordings this host keeps
+  let archRecording = new Set(), archHours = 24;
+  async function paintArchive() {
+    if (!LOCAL) return;
+    let d = null;
+    try { const r = await fetch("/api/archive", { cache: "no-store" }); if (r.ok) d = await r.json(); } catch {}
+    const panel = document.getElementById("archivePanel");
+    if (!d) { panel.hidden = true; return; }
+    archHours = d.hours || 24;
+    archRecording = new Set((d.broadcasts || []).filter((b) => b.recording).map((b) => b.broadcast));
+    const list = document.getElementById("archList");
+    list.replaceChildren();
+    const hm = (t) => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    for (const b of d.broadcasts || []) {
+      const row = document.createElement("div");
+      const mb = (b.bytes / 1048576).toFixed(0);
+      row.textContent = b.broadcast.replace(/\.hang$/, "") + " \u2014 " + (b.segments.length ? b.segments.length + " min, " + mb + " MB, " + hm(b.t0) + " \u2192 " + hm(b.t1) : "nothing yet")
+        + (b.recording ? (b.running ? "  \u25cf recording" : "  (waiting: " + (b.error || "not live") + ")") : "") + " ";
+      if (b.segments.length) {
+        for (const [lab, secs] of [["last 10 min", 600], ["last hour", 3600], ["all", 0]]) {
+          const a = document.createElement("a"); a.textContent = lab; a.style.marginLeft = "6px"; a.target = "_blank"; a.rel = "noopener";
+          a.href = "/api/archive/get?b=" + encodeURIComponent(b.broadcast) + "&t0=" + (secs ? Math.max(b.t0, b.t1 - secs) : b.t0) + "&t1=" + b.t1;
+          row.appendChild(a);
+        }
+      }
+      list.appendChild(row);
+    }
+    document.getElementById("archNote").textContent = (d.broadcasts || []).length
+      ? "Kept " + archHours + " h (kastr.ini archive_hours). Record / stop from the stream list below; files live under the state folder's archive/."
+      : "Nothing recorded. Use Record on a stream below (1-minute MP4 files, kept " + archHours + " h).";
+    panel.hidden = false;
+  }
+  paintArchive(); setInterval(paintArchive, 20000);
   function render(paths, secured, origin) {
     const streams = paths.filter((p) => p.endsWith(".hang"));
     const rooms = new Set(paths.filter((p) => p.startsWith(".channels/"))
@@ -1261,6 +1301,19 @@
       const via = origin?.get(p);
       if (via) row.textContent += " · announced into " + via;
       row.title = p + (via ? " (announced into relay “" + via + "”)" : "");
+      if (LOCAL && parts.length >= 4 && !/-low\.hang$/.test(p)) {   // 0.18.0: the operator records a share on this host
+        const on = archRecording.has(p);
+        const rb = document.createElement("button");
+        rb.type = "button"; rb.textContent = on ? "\u25cf Recording" : "Record"; rb.className = "ghost";
+        rb.style.cssText = "margin-left:8px;padding:1px 8px;font-size:11px" + (on ? ";color:var(--asi-red)" : "");
+        rb.title = on ? "Stop recording this stream on this machine" : "Record this stream on this machine (1-minute files, kept " + archHours + " h)";
+        rb.addEventListener("click", async () => {
+          rb.disabled = true;
+          try { await fetch("/api/archive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ broadcast: p, on: !on }) }); } catch {}
+          await paintArchive(); render(paths, secured, origin);
+        });
+        row.appendChild(rb);
+      }
       if (LOCAL && secured && parts.length >= 4) {   // 0.16.0: the operator can end a share from here
         const b = document.createElement("button");
         b.type = "button"; b.textContent = "Stop"; b.className = "stop";

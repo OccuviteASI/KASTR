@@ -84,7 +84,13 @@
     const url = "/api/watch/" + b.split("/").map(encodeURIComponent).join("/") + ".mp4" + (tok ? "?jwt=" + encodeURIComponent(tok) : "");
     history.replaceState(null, "", "?" + new URLSearchParams({ b, relay: f.relay.value.trim(), code: code || "" }));
     $("#who").textContent = b;
-    if (!("MediaSource" in window)) {   // progressive playback (Safari)
+    if (!("MediaSource" in window) && v.canPlayType("application/vnd.apple.mpegurl")) {   // 0.18.0: no MediaSource (iPhone) -> HLS from the relay host; desktop Safari keeps the lower-latency MSE path
+      v.src = url.replace(/\.mp4(\?|$)/, ".m3u8$1"); v.play().catch(() => {});
+      say("Playing (HLS)");
+      v.onerror = () => { say("Stream ended \u2014 retrying in 3 s", true); retryT = setTimeout(() => play(b, code), 3000); };
+      return;
+    }
+    if (!("MediaSource" in window)) {   // progressive playback
       v.src = url; v.play().catch(() => {});
       say("Playing (progressive)");
       v.onended = v.onerror = () => { say("Stream ended — retrying in 3 s", true); retryT = setTimeout(() => play(b, code), 3000); };
@@ -93,7 +99,12 @@
     ctl = new AbortController();
     let res;
     try { res = await fetch(url, { signal: ctl.signal, cache: "no-store" }); } catch (e) { say("Relay host unreachable: " + (e.message || e), true); return; }
-    if (!res.ok) { const d = await res.json().catch(() => ({})); say(d.error || ("HTTP " + res.status), true); return; }
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      const why = String(d.error || ("HTTP " + res.status)).replace(/\x1b\[[0-9;]*m/g, "").slice(0, 160);
+      if (res.status >= 500) { say(why + " — retrying in 3 s", true); retryT = setTimeout(() => play(b, code), 3000); return; }   // 0.18.0: a transient exporter start
+      say(why, true); return;
+    }
     const mime = res.headers.get("X-KASTR-Mime") || 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
     if (!MediaSource.isTypeSupported(mime)) { say("This browser cannot play " + mime + " — trying progressive", true); try { ctl.abort(); } catch {} v.src = url; v.play().catch(() => {}); return; }
     const ms = new MediaSource();

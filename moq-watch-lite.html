@@ -557,6 +557,12 @@
     #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
     #stageBack { top:auto; bottom:8px; }
   }
+  /* 0.18.0: on-demand cameras (chips above the stage) + the latency-stamp badge */
+  #odRow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 10px 0; font-size:12px; color:var(--text-dim); }
+  #odRow[hidden] { display:none; }
+  #odRow button { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:3px 10px; font-size:12px; cursor:pointer; }
+  #odRow button.wait { opacity:.7; cursor:progress; }
+  #stage .pane .latb { position:absolute; right:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
   @media (hover: none) {
@@ -1235,6 +1241,7 @@
 </div>
 
 <div id="stagewrap">
+  <div id="odRow" hidden title="Cameras that start only when someone watches (0.18.0)"></div>
   <div id="stage">
     <!-- My preview lives INSIDE the stage since 0.7.0: the top-left cell
          of the collage, or the top of the ladder in the spotlight. The
@@ -1597,6 +1604,7 @@
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFull" type="button"><span class="oi">&#9974;</span>Full screen</button>
     <div class="sep"></div>
+    <button class="opt" id="viewLatency" type="button" title="Draw a small time code into my canvas shares (file, RTSP grid, effected camera) so viewers can read glass-to-glass latency"><span class="oi">&#9201;</span>Latency stamp on my shares<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewVerbose" type="button" title="Also show the quiet confirmations (setting echoes, saved notes); off = events and problems only"><span class="oi">&#128276;</span>Verbose alerts<span class="chk">&#10003;</span></button>
     <div id="viewFeeds" hidden>
       <div class="sep"></div>
@@ -1636,6 +1644,10 @@
       <p class="hint" id="filesEmpty">Nothing shared yet. Share &rarr; Upload File puts a file on the relay host for everyone in the room; it is removed when you leave.</p>
     </section>
     <div class="btnrow" style="margin-top:8px"><button type="button" id="filesUpload" class="toggle">Upload File&hellip;</button></div>
+    <section id="recSec" hidden style="margin-top:12px">
+      <h3 style="font-size:12px;margin:0 0 6px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em">Recordings on the relay host</h3>
+      <div id="rec-rows" style="font-size:12px;line-height:1.7"></div>
+    </section>
   </div>
 </div>
 
@@ -1920,6 +1932,12 @@
   // opened this relay host's web port. `secure`/`webcodecs` say what the browser can do.
   const CLIENT = window.__kastrClient ?? { class: "app", secure: true, media: true, webcodecs: true, displayCapture: true, host: null, browser: "chromium", mobile: false };
   const IS_WEB = CLIENT.class === "web";
+  // 0.18.0: renditions + on-demand cameras + latency stamps (module-scoped, used by applyState)
+  const lowAvail = new Set();        // full broadcast names whose -low.hang sibling is announced
+  const LOW_RE = /-low\.hang$/;
+  const lowOf = (name) => String(name).replace(/\.hang$/, "-low.hang");
+  let odFeeds = [];                  // [{broadcast, label, live, low}] from the relay host
+  const odWanted = new Map();        // broadcast -> ms this page asked for it (chip click)
 
   // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
   // announced() takes a PATTERN now (nothing = everything) and yields route entries
@@ -4540,6 +4558,9 @@
         const cls = (isSelected && !gridMode && !selfSpotEl) ? "main"
                   : (gridMeta.has(name) || (isGridChild(name) && t.hasAudio === false)) ? "cell" : "rail";
         if (t.tune !== cls) { t.tune = cls; t.watch.setAttribute("delay", WATCH_TUNING[cls].delay); t.watch.setAttribute("buffer", WATCH_TUNING[cls].buffer); }
+        // 0.18.0: thumbnails pull the -low.hang sibling when the publisher offers one; the spotlit tile the full stream
+        const wantName = (cls !== "main" && lowAvail.has(name)) ? lowOf(name) : name;
+        if (t.watch.getAttribute("name") !== wantName) { t.watch.setAttribute("name", wantName); t.rendition = wantName === name ? "full" : "low"; }
       }
       if (shown) matchRendition(t);
 
@@ -4984,7 +5005,9 @@
   function watchFallbackUrl(name) {
     const base = relayHostBase() || location.origin;
     const tok = (authSecured && authTokens?.member) ? "?jwt=" + encodeURIComponent(authTokens.member) : "";
-    return base + "/api/watch/" + String(name).split("/").map(encodeURIComponent).join("/") + ".mp4" + tok;
+    // 0.18.0: Safari/iOS play HLS natively and cannot play an endless progressive fMP4
+    const hls = !!document.createElement("video").canPlayType?.("application/vnd.apple.mpegurl");
+    return base + "/api/watch/" + String(name).split("/").map(encodeURIComponent).join("/") + (hls ? ".m3u8" : ".mp4") + tok;
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
@@ -5862,6 +5885,12 @@
       }
       if (String(path).split("/").filter(Boolean)[2] === ".member") { memberAccept(String(path), entry.active); continue; }   // 0.13.0: <room>/<HOST>/.member/<PEER>
       if (!path.endsWith(".hang")) continue; // skip internal .stats etc.
+      if (LOW_RE.test(path)) {   // 0.18.0: a thumbnail rendition of <leaf>.hang -- not a tile of its own
+        const full = path.replace(LOW_RE, ".hang");
+        if (entry.active) lowAvail.add(full); else lowAvail.delete(full);
+        try { applyState(); } catch {}
+        continue;
+      }
       // Our own broadcasts live in the self-view, never the grid. Active:
       // remember the path so a later bye can resurrect it (announced.next()
       // never says "active" twice for a live entry). Inactive: it left the
@@ -7038,6 +7067,7 @@
   let filesSeen = 0;
   function paintFilesPop() {
     paintFiles();
+    try { window.__paintRecordings?.(); } catch {}   // 0.18.0
     filesSeen = files.size + listedFiles.size;
     paintFilesBadge();
     const base = relayHostBase();
@@ -7233,6 +7263,8 @@
       ["relay", urlInput.value.replace(/^https?:\/\//, "")],
       ["room", CHANNEL],
       ["watch tuning", (w?.getAttribute?.("delay") || "auto") + " + " + (w?.getAttribute?.("buffer") || "0ms")],   // 0.16.0
+      ["rendition", (w?.getAttribute?.("name") || "").endsWith("-low.hang") ? "low (thumbnail)" : "full"],   // 0.18.0
+      ["latency (stamp)", (() => { const t = tiles.get(selectedName); return t && t.latency != null ? Math.round(t.latency) + " ms" : "\u2014 (no stamp)"; })()],   // 0.18.0
       ["video + audio", bytes((vstats?.bytesReceived ?? 0) + (astats?.bytesReceived ?? 0))],
       ["streams", tiles.size],
       ["audio warm", warmAudio ? "on (all subscribed)" : "off"],
@@ -7540,6 +7572,151 @@
   }
   // 0.17.0: the relay-side half of an admin kick -- the auth service bans the target's
   // (room, host) identity, revokes its live sessions and refuses its re-mints for a while.
+  // ---- 0.18.0: on-demand cameras ------------------------------------------------------
+  // A camera box can publish a feed "on demand": its pair waits in standby and the relay host
+  // lists it. This page shows those feeds as chips above the stage; a click (or a live tile of
+  // one that is being watched) sends demand pulses to the relay host every 15 s, and the camera
+  // box starts the pair within ~5 s and stops it a minute after the last pulse.
+  const odRow = document.getElementById("odRow");
+  async function odPoll() {
+    if (!window.__joinedChannel?.() || publishOnly) { odFeeds = []; odPaint(); return; }
+    const base = relayHostBase(); if (!base) return;
+    try {
+      const tok = (authSecured && authTokens?.member) ? "&jwt=" + encodeURIComponent(authTokens.member) : "";
+      const r = await fetch(base + "/api/ondemand?room=" + encodeURIComponent(CHANNEL) + tok, { cache: "no-store" });
+      odFeeds = r.ok ? ((await r.json()).feeds || []) : [];
+    } catch { odFeeds = []; }
+    odPaint();
+  }
+  function odPaint() {
+    if (!odRow) return;
+    const idle = odFeeds.filter((f) => !tiles.has(f.broadcast));
+    odRow.hidden = !idle.length;
+    odRow.replaceChildren();
+    if (!idle.length) return;
+    const lab = document.createElement("span"); lab.textContent = "On demand:"; odRow.appendChild(lab);
+    for (const f of idle) {
+      const b = document.createElement("button");
+      const waiting = odWanted.has(f.broadcast) && Date.now() - odWanted.get(f.broadcast) < 90000;
+      b.type = "button"; b.className = waiting ? "wait" : "";
+      b.textContent = (waiting ? "\u23f3 " : "\u25b6 ") + (f.label || f.broadcast.split("/").pop()) + (waiting ? " \u2014 starting\u2026" : "");
+      b.title = "Start " + f.broadcast + " (it stops a minute after nobody watches)";
+      b.addEventListener("click", () => { odWanted.set(f.broadcast, Date.now()); odDemand(f.broadcast); odPaint(); });
+      odRow.appendChild(b);
+    }
+  }
+  function odDemand(broadcast) {
+    const base = relayHostBase(); if (!base) return;
+    fetch(base + "/api/ondemand/demand", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ room: CHANNEL, broadcast, jwt: authTokens?.member || "" }) }).catch(() => {});
+  }
+  function odPulse() {
+    if (!window.__joinedChannel?.()) return;
+    const known = new Set(odFeeds.map((f) => f.broadcast));
+    for (const [b, at] of [...odWanted]) {
+      if (tiles.has(b)) { odWanted.delete(b); continue; }          // it came up: the tile keeps it alive now
+      if (Date.now() - at > 90000) { odWanted.delete(b); continue; }
+      odDemand(b);
+    }
+    for (const [name, t] of tiles) {
+      if (!known.has(name) || parkedStreams.has(name)) continue;
+      if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
+      odDemand(name);
+    }
+  }
+  setInterval(odPoll, 10000);
+  setInterval(odPulse, 15000);
+  window.__ondemand = () => ({ feeds: odFeeds, wanted: [...odWanted.keys()] });   // rig
+
+  // ---- 0.18.0: latency stamps -------------------------------------------------------------
+  // Publishers with "Latency stamp on my shares" draw a 44-cell strip at the top-left of their
+  // canvas shares: 4 sync cells (1,0,1,0) + 40 bits of the relay-host-corrected clock in ms.
+  // Every page reads it back from its tile canvases. The offset to the relay host's clock comes
+  // from /api/client round trips (the best of five, refreshed every minute).
+  window.__clockOffset = 0;
+  async function clockSync() {
+    const base = relayHostBase() || location.origin;
+    let best = null;
+    for (let i = 0; i < 5; i++) {
+      try {
+        const t0 = Date.now();
+        const r = await fetch(base + "/api/client", { cache: "no-store" });
+        const t1 = Date.now();
+        const d = await r.json();
+        if (typeof d.now !== "number") return;
+        const rtt = t1 - t0, off = d.now - (t0 + t1) / 2;
+        if (!best || rtt < best.rtt) best = { rtt, off };
+      } catch { return; }
+    }
+    if (best) { window.__clockOffset = best.off; window.__clockRtt = best.rtt; }
+  }
+  clockSync(); setInterval(clockSync, 60000);
+  const STAMP_CELLS = 44, STAMP_DIV = 80;
+  function stampRead(t) {
+    const c = t.canvas;
+    if (!c || !c.width || !c.height || !c.isConnected) return null;
+    let cx; try { cx = c.getContext("2d"); } catch { return null; }
+    if (!cx) return null;
+    const cs = c.width / STAMP_DIV;
+    if (cs * STAMP_CELLS > c.width || cs < 2) return null;
+    let img; try { img = cx.getImageData(0, 0, Math.ceil(cs * STAMP_CELLS), Math.max(1, Math.ceil(cs))).data; } catch { return null; }
+    const W = Math.ceil(cs * STAMP_CELLS);
+    const bit = (i) => { const x = Math.floor((i + 0.5) * cs), y = Math.floor(cs / 2); const o = (y * W + x) * 4; return (img[o] + img[o + 1] + img[o + 2]) / 3 > 128 ? 1 : 0; };
+    if (bit(0) !== 1 || bit(1) !== 0 || bit(2) !== 1 || bit(3) !== 0) return null;
+    let v = 0;
+    for (let i = 0; i < 40; i++) v = v * 2 + bit(4 + i);
+    return v;
+  }
+  setInterval(() => {
+    const now = (Date.now() + (window.__clockOffset || 0)) % 2 ** 40;
+    for (const [, t] of tiles) {
+      if ((t.watch.getAttribute("visible") || "never") === "never") { t.latency = null; continue; }
+      const v = stampRead(t);
+      let badge = t.pane.querySelector(".latb");
+      if (v == null) { t.latency = null; if (badge) badge.remove(); continue; }
+      let d = now - v; if (d < -(2 ** 39)) d += 2 ** 40;
+      if (d < -2000 || d > 60000) continue;               // a bad read, not a latency
+      t.latency = t.latency == null ? d : t.latency * 0.7 + d * 0.3;
+      if (!badge) { badge = document.createElement("span"); badge.className = "latb"; t.pane.appendChild(badge); }
+      badge.textContent = Math.round(t.latency) + " ms";
+      badge.title = "Glass-to-glass latency from the publisher's time code (clock offset to the relay host " + Math.round(window.__clockOffset || 0) + " ms, rtt " + (window.__clockRtt ?? "?") + " ms)";
+    }
+  }, 1000);
+  window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));
+  window.__latencyStamp = (() => { try { return localStorage.getItem("kastr.latencyStamp") === "1"; } catch { return false; } })();
+  document.getElementById("viewLatency")?.addEventListener("click", () => {
+    window.__latencyStamp = !window.__latencyStamp;
+    try { localStorage.setItem("kastr.latencyStamp", window.__latencyStamp ? "1" : "0"); } catch {}
+    document.getElementById("viewLatency")?.classList.toggle("on", window.__latencyStamp);
+    window.__toast?.(window.__latencyStamp ? "Latency stamp on \u2014 file, RTSP-grid and effected-camera shares carry a time code" : "Latency stamp off", 4000, { level: "event" });
+  });
+  document.getElementById("viewLatency")?.classList.toggle("on", window.__latencyStamp);
+
+  // ---- 0.18.0: recordings on the relay host (Files panel) -------------------------------
+  async function paintRecordings() {
+    const sec = document.getElementById("recSec"), rows = document.getElementById("rec-rows");
+    const base = relayHostBase();
+    if (!sec || !rows || !base || !window.__joinedChannel?.()) { if (sec) sec.hidden = true; return; }
+    const tok = (authSecured && authTokens?.member) ? "&jwt=" + encodeURIComponent(authTokens.member) : "";
+    let d = null;
+    try { const r = await fetch(base + "/api/archive?room=" + encodeURIComponent(CHANNEL) + tok, { cache: "no-store" }); if (r.ok) d = await r.json(); } catch {}
+    const list = (d?.broadcasts || []).filter((b) => b.segments && b.segments.length);
+    sec.hidden = !list.length;
+    rows.replaceChildren();
+    const hm = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    for (const b of list) {
+      const row = document.createElement("div");
+      const leaf = b.broadcast.split("/").slice(2).join(" \u2014 ").replace(/\.hang$/, "");
+      const span = Math.round((b.t1 - b.t0) / 60);
+      row.textContent = leaf + " \u00b7 " + hm(b.t0) + "\u2013" + hm(b.t1) + " (" + span + " min" + (b.recording ? ", recording" : "") + ") ";
+      const link = (label, t0) => { const a = document.createElement("a"); a.textContent = label; a.style.marginLeft = "6px";
+        a.href = base + "/api/archive/get?b=" + encodeURIComponent(b.broadcast) + "&t0=" + t0 + "&t1=" + b.t1 + tok; a.target = "_blank"; a.rel = "noopener"; return a; };
+      row.append(link("last 10 min", Math.max(b.t0, b.t1 - 600)), link("last hour", Math.max(b.t0, b.t1 - 3600)), link("all", b.t0));
+      rows.appendChild(row);
+    }
+  }
+  window.__paintRecordings = paintRecordings;
+
   window.__adminKick = async (target, until = 3600) => {
     if (!authSecured || !authTokens?.member) return { ok: false, error: "open relay \u2014 no relay-side removal" };
     const base = authBase();
@@ -10309,6 +10486,20 @@
   // watch half owns detection/minting and exposes the decorator.
   const authUrl = (u, role) => (window.__auth?.withToken ?? ((x) => x))(u, role);
 
+  // 0.18.0: the latency stamp (View > Latency stamp on my shares): 4 sync cells + 40 bits of ms
+  function drawStamp(cx, w, h) {
+    if (!window.__latencyStamp || !cx || !w) return;
+    const cs = w / 80;
+    if (cs < 2) return;
+    const v = (Date.now() + (window.__clockOffset || 0)) % 2 ** 40;
+    const bits = [1, 0, 1, 0];
+    for (let i = 39; i >= 0; i--) bits.push(Math.floor(v / 2 ** i) % 2);
+    try {
+      cx.save(); cx.filter = "none"; cx.globalAlpha = 1; cx.globalCompositeOperation = "source-over";
+      for (let i = 0; i < bits.length; i++) { cx.fillStyle = bits[i] ? "#fff" : "#000"; cx.fillRect(Math.floor(i * cs), 0, Math.ceil(cs), Math.ceil(cs)); }
+      cx.restore();
+    } catch {}
+  }
   const RAW_HOST = "__ASI_HOSTNAME__";
   const HOSTNAME = (window.__kastrClient?.host) || (/^[a-z0-9-]+$/.test(RAW_HOST) ? RAW_HOST : "local");   // 0.17.0: a web device is its own host
 
@@ -11218,6 +11409,18 @@
           gridMove(a, gsel.value);
         });
         aud.before(gsel);
+        // 0.18.0: On demand (standby until a viewer asks) + Low for thumbnails (a -low.hang sibling)
+        for (const [cls, k, txt, tip] of [["od", OD_KEY, "On demand", "Start this camera's relay stream only when someone watches it; it stops a minute after the last viewer leaves."],
+                                          ["lowr", LOWR_KEY, "Low for thumbnails", "Also publish a small 640-wide, 15 fps copy that rail tiles and grid cells use (one extra encode)."]]) {
+          const lb = document.createElement("label");
+          lb.className = "aud shown " + cls; lb.title = tip;
+          lb.innerHTML = '<input type="checkbox" style="width:auto"> <span></span>';
+          lb.querySelector("span").textContent = txt;
+          const cbx = lb.querySelector("input");
+          cbx.checked = urlFlag(k, a.url);
+          cbx.addEventListener("change", () => { urlFlagSet(k, a.url, cbx.checked); clearTimeout(window.__rtspOptT); window.__rtspOptT = setTimeout(() => { syncNative(true); refreshUi(); }, 400); });   // debounced: two quick toggles = one re-publish
+          aud.after(lb);
+        }
       } else {
         row.querySelector(".aud")?.remove();
         paintVid(vid, a);
@@ -11727,6 +11930,11 @@
     m[u] = !!on;
     try { localStorage.setItem(AUDIO_KEY, JSON.stringify(m)); } catch {}
   }
+  // 0.18.0: per-feed "On demand" and "Low for thumbnails", kept by url like the audio choice
+  const OD_KEY = "kastr.rtsp.ondemand", LOWR_KEY = "kastr.rtsp.low";
+  function urlMap(k) { try { const m = JSON.parse(localStorage.getItem(k) || "{}"); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; } catch { return {}; } }
+  const urlFlag = (k, url) => urlMap(k)[String(url || "")] === true;
+  function urlFlagSet(k, url, on) { const m = urlMap(k); m[String(url || "")] = !!on; try { localStorage.setItem(k, JSON.stringify(m)); } catch {} }
   function nativePublish(slot) {
     if (!(window.__auth?.canPublish?.() ?? true)) {   // 0.10.0: the relay would drop the announce -- say so instead
       slot.fault = "view-only access code \u2014 this relay does not accept publishing from it";
@@ -11737,12 +11945,14 @@
     const relay = authUrl(urlInput.value.trim());
     const passthrough = passthroughOn();   // 0.9.6 (was the H.265-only `hevc`)
     const audio = slot.entry.audio !== false;   // 0.9.5
-    const key = broadcast + "|" + relay + "|" + passthrough + "|" + audio;
+    const ondemand = urlFlag(OD_KEY, slot.entry.url), low = urlFlag(LOWR_KEY, slot.entry.url);   // 0.18.0
+    const key = broadcast + "|" + relay + "|" + passthrough + "|" + audio + "|" + ondemand + "|" + low;
     if (slot.pubWanted && slot.pubKey === key) return;
     slot.pubWanted = true; slot.pubKey = key;
     slot.liveSince = performance.now();
     const keep = slot.entry.url !== TEST_URL && rtspPersistHas(slot.entry.url);   // 0.12.0: the server's feed memory follows the Keep box
-    nativePost("/api/rtsp/publish", { id: slot.entry.feedId, broadcast, relay, passthrough, audio, keep }).then((r) => {
+    nativePost("/api/rtsp/publish", { id: slot.entry.feedId, broadcast, relay, passthrough, audio, keep, ondemand, low,
+                                      label: slot.entry.label || "" }).then((r) => {
       if (r?.error) { slot.fault = "publish: " + r.error; slot.pubWanted = false; refreshUi(); }
       else { slot.pub = r; refreshUi(); }
     });
@@ -12641,6 +12851,7 @@
             cx.restore();
           } catch {}
         }
+        drawStamp(cx, w, h);   // 0.18.0
         b.drawN++;
         if (now - b.fpsAt >= 1000) {
           const dt = (now - b.fpsAt) / 1000;
@@ -13086,7 +13297,7 @@
       if (key === m.lastKey && (!v.paused || performance.now() - (m.lastDraw || 0) < 1000)) return;   // paused: 1 Hz keeps the picture alive (0.8.13)
       m.lastKey = key; m.lastDraw = performance.now();
       if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-      try { cx.drawImage(v, 0, 0, w, h); vtrack.requestFrame?.(); } catch {}
+      try { cx.drawImage(v, 0, 0, w, h); drawStamp(cx, w, h); vtrack.requestFrame?.(); } catch {}   // 0.18.0: + stamp
     };
     const draw = () => {
       if (!m.alive) return;
@@ -14014,6 +14225,7 @@
       // the cell and clear of the OSD lines cameras draw along the top.
       if (gridNames && ch >= 90 && s.entry?.label) drawCellName(g.cx, String(s.entry.label).slice(0, 24), x + 8, y + ch - 30);
     });
+    drawStamp(g.cx, g.canvas.width, g.canvas.height);   // 0.18.0
   }
   function gridCellAt(g, ev) {
     const b = g.canvas.getBoundingClientRect();
@@ -14760,6 +14972,8 @@
             `${pub.restarts ? "  restarts=" + pub.restarts : ""}` +
             `${pub.running === false && pub.error ? "  \u2014 " + String(pub.error).slice(0, 90) : ""}` +
             `${slot.entry.audio === false ? "  \u00b7 no audio" : ""}` +   // 0.9.5
+            `${pub.ondemand ? (pub.standby ? "  \u00b7 on demand (idle)" : "  \u00b7 on demand (live)") : ""}` +   // 0.18.0
+            `${pub.low ? "  \u00b7 low copy " + (pub.low.running ? "live" : pub.standby ? "idle" : "starting") : ""}` +
             `${(slot.monitorBehind || 0) > MONITOR_LAG_S ? "  \u00b7 monitor " + Math.round(slot.monitorBehind) + "s behind" : ""}` +   // 0.9.5/0.9.7
             `${slot.monitorDown ? "  \u00b7 monitor reconnecting" : ""}`   // 0.9.4: why the relay side is down
           : `buffering… readyState=${v.readyState}`;

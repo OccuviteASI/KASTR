@@ -1089,6 +1089,18 @@ class AuthService:
         self.revalidate = revalidate         # 0.17.0: callable -> asks the relay to re-validate its sessions now ("post"|"get"|"unavailable")
         self.log = log or (lambda m: None)
         self.bans = BanList(getattr(self.store, "state_dir", os.getcwd()), log)   # 0.17.0: relay-side kicks
+        # 0.18.0: the spokes that federate here (hub side) -- their minter URLs, so a ban on
+        # the hub reaches every spoke (each pulls the hub's bans with its federation token)
+        self.spokes = {}
+        self._spokes_path = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-spokes.json")
+        try:
+            with open(self._spokes_path, encoding="utf-8-sig") as f:
+                d = json.load(f)
+            if isinstance(d, dict) and isinstance(d.get("spokes"), dict):
+                self.spokes = {str(k): v for k, v in d["spokes"].items() if isinstance(v, dict)}
+        except Exception:
+            self.spokes = {}
+        self._pull_at = 0
         self.lock = threading.Lock()
         self.lockout = Lockout(self.log)     # 0.12.0: the brute-force counter, one class with kastr_serve
         self._fails = self.lockout._fails
@@ -1161,6 +1173,9 @@ class AuthService:
                     # 0.12.0: rows {slug, locked, persistent, creator, created, at} -- old pages read .slug
                     # 0.15.0: + the relay-defined room groups
                     self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public()})
+                elif path == "/api/bans":              # 0.18.0: the hub's active bans, for its spokes only
+                    obj, code = svc.bans_for_spoke(self.headers.get("Authorization"))
+                    self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
 
@@ -1199,6 +1214,12 @@ class AuthService:
                     self._reply(obj, code)
                 elif path == "/api/kick":   # 0.17.0: an admin removes a member relay-side
                     obj, code = svc.kick(p, self._peer(), self.headers.get("Authorization"))
+                    self._reply(obj, code)
+                elif path == "/api/spokes/register":   # 0.18.0: a spoke tells its hub where its minter is
+                    obj, code = svc.register_spoke(p, self._peer(), self.headers.get("Authorization"))
+                    self._reply(obj, code)
+                elif path == "/api/bans/notify":       # 0.18.0: the hub says "bans changed" -- no data, we pull
+                    obj, code = svc.bans_notified(self._peer())
                     self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
@@ -1468,6 +1489,7 @@ class AuthService:
             ids, _ = self.revoke_sessions(ban["room"], ban["host"])
             self.bans.add(ban)
             how = self.trigger_revalidate()
+            threading.Thread(target=self.fanout_bans, daemon=True).start()   # 0.18.0: every other spoke too
             self.log("relay auth: kick %s in %s forwarded by a spoke (%s) -- %d sessions revoked, until %s"
                      % (ban["target"] or ban["host"], ban["room"], peer, len(ids), time.strftime("%H:%M:%S", time.localtime(ban["until"]))))
             return {"ok": True, "ban": ban, "revoked": [i[:8] for i in ids], "revalidate": how}, 200
@@ -1503,7 +1525,112 @@ class AuthService:
         self.log("relay auth: kick %s in %s by %s -- %d sessions revoked, until %s (revalidate %s)"
                  % (target, slug, by, len(ids), time.strftime("%H:%M:%S", time.localtime(ban["until"])), how))
         threading.Thread(target=self._forward_ban, args=(ban,), daemon=True).start()
+        threading.Thread(target=self.fanout_bans, daemon=True).start()   # 0.18.0: a hub tells its spokes
         return {"ok": True, "ban": ban, "revoked": [i[:8] for i in ids], "revalidate": how}, 200
+
+    # ---- 0.18.0: ban fan-out (hub -> every spoke) ----------------------------------------
+    def _bearer_relay(self, bearer):
+        if not bearer or not str(bearer).lower().startswith("bearer "):
+            return None
+        claims = verify_token(str(bearer)[7:].strip(), self.key)
+        return claims if (claims and is_relay_claims(claims)) else None
+
+    def register_spoke(self, p, peer="", bearer=None):
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        url = str((p or {}).get("minter") or "").strip().rstrip("/")
+        if not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]{1,260}$", url):
+            return {"ok": False, "error": "bad minter url"}, 400
+        with self.lock:
+            fresh = url not in self.spokes
+            self.spokes[url] = {"at": int(time.time()), "peer": peer}
+            if len(self.spokes) > 64:
+                for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
+                    self.spokes.pop(k, None)
+            snap = dict(self.spokes)
+        try:
+            tmp = self._spokes_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"spokes": snap}, f)
+            os.replace(tmp, self._spokes_path)
+        except Exception:
+            pass
+        if fresh:
+            self.log("relay auth: spoke %s registered for ban fan-out (from %s)" % (url, peer or "?"))
+        return {"ok": True, "bans": len(self.bans.active())}, 200
+
+    def bans_for_spoke(self, bearer):
+        if not self._bearer_relay(bearer):
+            return {"error": "federation token required"}, 403
+        rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in self.bans.active()]
+        return {"bans": rows}, 200
+
+    def fanout_bans(self):
+        """Hub side: nudge every registered spoke (no data -- each pulls with its own token)."""
+        with self.lock:
+            urls = list(self.spokes)
+        n = 0
+        for url in urls:
+            try:
+                req = urllib.request.Request(url + "/api/bans/notify", data=b"{}", method="POST",
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=3):
+                    n += 1
+            except Exception:
+                pass
+        if urls:
+            self.log("relay auth: ban fan-out -- %d of %d spoke(s) notified" % (n, len(urls)))
+        return n
+
+    def bans_notified(self, peer=""):
+        """Spoke side: the hub said bans changed. Rate-limited; the pull happens off-thread."""
+        now = time.time()
+        if now - self._pull_at < 3:
+            return {"ok": True, "throttled": True}, 200
+        self._pull_at = now
+        threading.Thread(target=self.pull_hub_bans, daemon=True).start()
+        return {"ok": True}, 200
+
+    def pull_hub_bans(self):
+        """Spoke side: copy the hub's active bans (federation token as Bearer), revoke the
+        matching live sessions here and ask the relay to re-validate. -> bans applied."""
+        try:
+            minter = self.hub() if callable(self.hub) else None
+            tok = self.fed_token() if callable(self.fed_token) else None
+        except Exception:
+            minter = tok = None
+        if not minter or not tok:
+            return 0
+        try:
+            req = urllib.request.Request(minter + "/api/bans", headers={"Authorization": "Bearer " + tok})
+            with urllib.request.urlopen(req, timeout=4) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception as e:
+            self.log("relay auth: pulling the hub's bans failed: %s" % str(e)[:120])
+            return 0
+        now = time.time()
+        have = {(b.get("room"), b.get("host") or b.get("target")) for b in self.bans.active()}
+        added = 0
+        for b in d.get("bans") or []:
+            if not isinstance(b, dict) or not SLUG_RE.match(str(b.get("room") or "")):
+                continue
+            try:
+                until = int(b.get("until") or 0)
+            except (TypeError, ValueError):
+                continue
+            key = (b.get("room"), b.get("host") or b.get("target"))
+            if until <= now or key in have:
+                continue
+            ban = {"room": str(b["room"]), "host": (str(b["host"]) if b.get("host") else None), "remotes": [],
+                   "target": str(b.get("target") or "")[:120], "by": str(b.get("by") or "")[:40],
+                   "at": int(b.get("at") or now), "until": until, "via": "hub"}
+            self.revoke_sessions(ban["room"], ban["host"])
+            self.bans.add(ban)
+            added += 1
+        if added:
+            how = self.trigger_revalidate()
+            self.log("relay auth: %d ban(s) copied from the hub (revalidate %s)" % (added, how))
+        return added
 
     def _forward_ban(self, ban):
         """A spoke tells its hub (the hub applies the ban to its own sessions; other spokes
@@ -1752,6 +1879,8 @@ class Relay:
         # the token in use, and the watchdog that renews it.
         self.federation = None
         self.on_room_close = None                       # 0.12.0: kastr_serve hooks the chat store's delete_room
+        self.on_start = []                              # 0.18.0: callables(relay) after a successful start (the archiver)
+        self.on_stop = []                               # 0.18.0: callables(relay) before a stop
         self._ctl = threading.RLock()                   # start/stop/restart never interleave
         self._fed_stop = None
         self._fed_active = None
@@ -2244,6 +2373,30 @@ class Relay:
             except Exception as e:
                 self.log("relay federation: watchdog error: %s" % e)
 
+    def _spoke_sync(self):
+        """0.18.0: tell the hub where this relay's minter answers (so its bans reach us) and
+        copy its active bans. Needs a federation token and a LAN-reachable minter."""
+        auth = self.auth
+        tok = self._fed_active
+        minter = self._hub_minter_url()
+        if not (auth and tok and minter and self.bind_all):
+            return
+        ips = [ip for ip in local_ips() if not ip.startswith("172.")] or local_ips()
+        if not ips:
+            return
+        body = json.dumps({"minter": "http://%s:%d" % (ips[0], self.port + 1)}).encode()
+        try:
+            req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
+                                         headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
+            with urllib.request.urlopen(req, timeout=4):
+                pass
+        except Exception as e:
+            self.log("relay federation: spoke registration with the hub failed: %s" % str(e)[:120])
+        try:
+            auth.pull_hub_bans()
+        except Exception:
+            pass
+
     def _federation_tick(self):
         """-> True when the relay was restarted with a fresh hub token (a rotated
         hub key, fewer than 7 days left, or a hub that was dark at start)."""
@@ -2251,6 +2404,7 @@ class Relay:
         hub = _normalize_hub(fed["connect"])
         if not hub:
             return False
+        threading.Thread(target=self._spoke_sync, daemon=True).start()   # 0.18.0
         tok, why, info = self.federation_token(hub, fed["code"])
         if tok and tok != self._fed_active:
             self.log("relay federation: %s -- restarting the relay with the fresh hub token" % why)
@@ -2453,7 +2607,24 @@ class Relay:
             self._persist_shape(port, bind_all, secured)
             if self._cluster_raw()["connect"]:
                 self._federation_watch_start()   # 0.11.0: renew the hub token in time
+                threading.Thread(target=self._spoke_sync, daemon=True).start()   # 0.18.0: ban fan-out registration
+            for cb in list(getattr(self, "on_start", [])):   # 0.18.0: the archiver resumes its recordings
+                try:
+                    cb(self)
+                except Exception as e:
+                    self.log("relay: start callback failed: %s" % e)
         return self.status()
+
+    def operator_url(self):
+        """0.18.0: this relay's loopback URL with an operator-wide token (secured) -- what
+        KASTR's own consumers (the recorder, the HLS exporter) dial. None when not running."""
+        if not self.running():
+            return None
+        base = "http://127.0.0.1:%d/" % self.port
+        if not self.secured:
+            return base
+        obj, code = self.admin_token("")
+        return base + "?jwt=" + obj["token"] if code == 200 and obj.get("token") else None
 
     def _persist_shape(self, port, bind_all, secured):
         try:
@@ -2501,6 +2672,11 @@ class Relay:
             return self._stop_locked()
 
     def _stop_locked(self):
+        for cb in list(getattr(self, "on_stop", [])):   # 0.18.0: the archiver stops its pipelines first
+            try:
+                cb(self)
+            except Exception:
+                pass
         if self._fed_stop:
             self._fed_stop.set()
             self._fed_stop = None

@@ -32,6 +32,7 @@ import time
 import urllib.request
 
 import kastr_serve
+import kastr_rtsp   # 0.18.0: hooks
 
 APP_NAME = "KASTR"  # Kenton's ASI Streaming Tool with Relay
 FROZEN = getattr(sys, "frozen", False)
@@ -587,6 +588,7 @@ def _shell_execute_alive(target, args, wait_s):
     from ctypes import wintypes
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
     SEE_MASK_NO_CONSOLE = 0x00008000
+    SEE_MASK_FLAG_NO_UI = 0x00000400   # 0.18.0: never the shell's own error box (it blocked the retry loop)
 
     class SHELLEXECUTEINFOW(ctypes.Structure):
         _fields_ = [("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong), ("hwnd", wintypes.HWND),
@@ -597,7 +599,7 @@ def _shell_execute_alive(target, args, wait_s):
                     ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
     info = SHELLEXECUTEINFOW()
     info.cbSize = ctypes.sizeof(info)
-    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE | SEE_MASK_FLAG_NO_UI
     info.lpVerb = "open"
     info.lpFile = target
     info.lpParameters = subprocess.list2cmdline(args) if args else None
@@ -636,7 +638,14 @@ def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_a
     while time.monotonic() - t0 < budget_s:
         attempt += 1
         if time.monotonic() - t0 >= escalate_after_s:
-            alive = _shell_execute_alive(target, args, settle_s)
+            try:
+                alive = _shell_execute_alive(target, args, settle_s)
+            except Exception as e:   # 0.18.0: an exception here ended the whole window at 10 s
+                key = "shell:" + type(e).__name__
+                if key not in said:
+                    said.add(key)
+                    note("relaunch: shell launch raised (%s: %s) -- retrying while the file settles" % (type(e).__name__, e))
+                alive = None
             if alive:
                 note("relaunch: successor started through the shell (attempt %d)" % attempt)
                 return True
@@ -648,7 +657,7 @@ def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_a
             p = subprocess.Popen([target] + args, env=env, close_fds=True, creationflags=flags,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
-        except OSError as e:
+        except Exception as e:   # 0.18.0: OSError and anything else -- keep retrying inside the budget
             key = type(e).__name__
             if key not in said:
                 said.add(key)
@@ -2362,11 +2371,23 @@ def main():
     # 0.14.0: the port is chosen here (probe + memory), not by bind_free's
     # bind-then-fall-to-0 -- that fall-back is what cost the browser storage.
     bind_port = choose_bind_port(args.port, args.host, squatter)
+    try:   # 0.18.0: host recording retention (kastr.ini archive_hours, default 24)
+        kastr_serve.ARCHIVE_HOURS = float(ini.get("archive_hours") or 24)
+    except (TypeError, ValueError):
+        kastr_serve.ARCHIVE_HOURS = 24
     server_kw = dict(coep=args.coep, relay=args.relay, quiet=True,
                      bridge=kastr_serve.make_bridge(state_dir=state_dir(), log=note,   # 0.9.8
                                                     hostname=None),   # 0.13.0: = make_server's hostname
                      relay_srv=kastr_serve.make_relay(state_dir(), note),   # 0.10.0: relay events reach launch.log
                      window_file=window_file())
+    # 0.18.0: operator hooks from kastr.ini (hook_ready / hook_notready / hook_read / hook_timeout)
+    if any(ini.get(k) for k in ("hook_ready", "hook_notready", "hook_read")):
+        try:
+            server_kw["bridge"].hooks = kastr_rtsp.Hooks({e: ini.get("hook_" + e) for e in kastr_rtsp.HOOK_EVENTS},
+                                                         note, ini.get("hook_timeout") or 30)
+            note("hooks: %s set" % ", ".join(e for e in kastr_rtsp.HOOK_EVENTS if ini.get("hook_" + e)))
+        except Exception as e:
+            note("hooks: not set (%s)" % e)
     try:
         try:
             server = kastr_serve.make_server(root, args.host, bind_port, **server_kw)

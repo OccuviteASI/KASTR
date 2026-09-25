@@ -414,6 +414,19 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.19.0
+
+| Area | Requirement | Since |
+|---|---|---|
+| RT | Web relays: `kastr_relay.WEB_RELAY_PATH = "/relay"`, `is_web_relay(url)` (path `/relay`, any query, ws/wss/http/https), `web_origin(url)` (ws→http, wss→https, port only when explicit), `web_origin_port`. `_normalize_hub` keeps `/relay` and accepts ws/wss spellings; `_hub_parts` of a web relay = (host, web port, origin); `probe_hub_web` answers the origin (`via: origin`, `base`); `hub-web.json` and `HUB_WEB` carry an optional `base`; a web relay's hub web note records its origin, never the minter's `web`; no fingerprint pinning (`tls: public`, no `[connect] tls` lines); the cluster URL is `https://name/relay?jwt=`. | 0.19.0 |
+| S | `/relay` WebSocket pipe on both web listeners: `GET /relay[/...]` with `Upgrade: websocket` → `127.0.0.1:<relay port>`, path rewritten to `/` (query kept), `X-Forwarded-For` = the visitor, one select loop per pipe (no SSL socket used from two threads), 503 without a local relay; `_RELAY_WS` counts live pipes. | 0.19.0 |
+| S/RT | Proxy awareness: `FORWARD_HEADERS` (`Cf-Connecting-IP, Cf-Ray, X-Forwarded-For, X-Real-IP, X-Forwarded-Host, X-Forwarded-Proto, Forwarded`); any of them makes a request REMOTE (`_local_only`), whatever Host says. `client_ip(handler)` = `Cf-Connecting-IP` / `X-Real-IP` / first `X-Forwarded-For` from a loopback peer, else the peer; used by the minter, the auth proxy, chat lockouts, bans, watch/HLS logs and hooks. `/api/quit` uses the shared check. Loopback addresses never enter or match a ban's `remotes` (`is_loopback_addr`). | 0.19.0 |
+| S | Pages behind a proxy: `_web_base()` (scheme from `X-Forwarded-Proto`/`Cf-Visitor`, host from `X-Forwarded-Host`/Host, default ports dropped); `_web_relay_for()` = `<base>/relay` for a forwarded visitor (or any remote visitor with kastr.ini `single_port = true`) when this machine runs the relay; used by the page substitution, `/api/instance.relay` and `/api/client.relay` (+ `webRelay`). `TUNNEL_SEEN` + `/api/web.tunnel {origin, path, pipes, singlePort, seen, seenAgo}`. | 0.19.0 |
+| S/PUB/U | Web relays wherever a relay URL is used: the auth proxy forwards to the web relay's origin with `X-Kastr-Hop` (a hop request goes to this machine's minter, 508 without a relay) and passes `Authorization`; proxied routes gain `GET /api/bans`, `POST /api/spokes/register`, `POST /api/bans/notify`; `hub_web_base()` feeds the chat proxy, the on-demand sync base and `/api/peer/instance` (`relay=` parameter); `kastr_rtsp._relay_base` mints through the origin and returns `https://name/relay?jwt=`; `kastr.authority_base()` is the update authority for check, runtime, mirror and browser feed. | 0.19.0 |
+| W/B | Page: `isWebRelay()`; `authBase()` / `relayHostBase()` = the web relay's origin; a loopback web relay handed out behind a Host-rewriting tunnel becomes `location.origin + "/relay"` (page and masthead); the masthead probes a web relay at `<origin>/api/instance` instead of `/certificate.sha256`; `watch.html` defaults to `<origin>/relay`. | 0.19.0 |
+| R | Relay page "One port (Cloudflare Tunnel)" card (`#tunnelCard`, `#tunnelMsg`) from `/api/web.tunnel`. | 0.19.0 |
+| T | Rig: `v0190/fake_tunnel.py` (cloudflared stand-in: TLS or `--plain`, cloudflared headers, `--rewrite-host`), `test_v0190.py`, `pw_tunnel.py` (Edge + Firefox through the tunnel), `tunnel_cli.sh` (moq CLI publish/subscribe), `spoke_serve.py` + `fed_tunnel.sh` (federation through the tunnel). | 0.19.0 |
+
 ### Added in 0.18.0
 
 | Area | Requirement | Since |

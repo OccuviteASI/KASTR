@@ -640,10 +640,19 @@ SOFT_RE = re.compile(r"session severed|session closed", re.I)
 
 
 def _relay_base(relay_url):
-    """-> (base 'scheme://host:port', minter 'http://host:port+1') or (None, why)."""
+    """-> (base 'scheme://host:port', minter 'http://host:port+1') or (None, why).
+    0.19.0: a web relay -> ('https://name/relay', 'https://name') -- its web port
+    carries the minter (proxied) and the media (WebSocket)."""
     u = (relay_url or "").strip()
     if not u:
         return None, "no relay url"
+    try:
+        import kastr_relay as _kr
+        if _kr.is_web_relay(u):
+            o = _kr.web_origin(u)
+            return ((o + _kr.WEB_RELAY_PATH, o), None) if o else (None, "bad relay url")
+    except ImportError:
+        pass
     try:
         p = urlsplit(u if "://" in u else "http://" + u)
     except Exception as e:
@@ -678,13 +687,14 @@ def mint_member(relay_url, room, access, room_code, timeout=5, host=None):
     except Exception as e:
         # no token service: an open relay has none at all -- is the relay itself up?
         try:
-            with urllib.request.urlopen(base + "/certificate.sha256", timeout=2) as r:
+            probe = (minter + "/api/instance") if base.endswith("/relay") else (base + "/certificate.sha256")   # 0.19.0: a web relay
+            with urllib.request.urlopen(probe, timeout=2) as r:
                 r.read(128)
-            return "open", base + "/", "no minter"
+            return "open", base + ("" if base.endswith("/relay") else "/"), "no minter"
         except Exception as e2:
             return "down", None, "minter: %s; relay: %s" % (e, e2)
     if not isinstance(auth, dict) or not auth.get("secured"):
-        return "open", base + "/", "relay is not secured"
+        return "open", base + ("" if base.endswith("/relay") else "/"), "relay is not secured"
     body = {"room": str(room or ""), "code": str(access or "")}
     if room_code:
         body["roomCode"] = str(room_code)
@@ -711,7 +721,7 @@ def mint_member(relay_url, room, access, room_code, timeout=5, host=None):
     tok = (d.get("tokens") or {}).get("member") if isinstance(d, dict) else None
     if not isinstance(d, dict) or not d.get("ok") or not tok:
         return "down", None, "minter answered without a token: %s" % ((d.get("error") if isinstance(d, dict) else None) or "?")
-    return "token", base + "/?jwt=" + str(tok), str(d.get("role") or "member")
+    return "token", base + ("" if base.endswith("/relay") else "/") + "?jwt=" + str(tok), str(d.get("role") or "member")   # 0.19.0: https://name/relay?jwt=
 
 
 # URL paths that ARE the media -- handed to ffmpeg as-is. A page on a known

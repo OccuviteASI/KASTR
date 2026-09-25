@@ -205,6 +205,11 @@
       </label>
       <span id="webClientsMsg" class="hint" style="display:block;margin-top:2px">Loading&hellip;</span>
       <div id="webUrls" style="margin:4px 0 6px"></div>
+      <!-- 0.19.0: everything on one web port (Cloudflare Tunnel and other single-port proxies) -->
+      <div id="tunnelCard" style="margin:8px 0 8px;padding:8px 10px;border:1px solid var(--line, #233047);border-radius:6px">
+        <b style="font-size:13px">One port (Cloudflare Tunnel)</b>
+        <span id="tunnelMsg" class="hint" style="display:block;margin-top:3px">Loading&hellip;</span>
+      </div>
       <p class="hint" id="fwOk" hidden style="color:var(--asi-green)">Firewall rules are in place.</p>
       <p class="hint" id="fwHint" hidden>
         <span id="fwIntro"></span><br>
@@ -779,6 +784,22 @@
     $("webClientsMsg").textContent = parts.join(" ");
     const box = $("webUrls"); box.innerHTML = "";
     if (w.live) for (const u of (w.urls || [])) box.append(urlRow(u, u === (w.urls || [])[0]));
+    const t = w.tunnel;
+    if (t) {
+      const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      const pub = t.seen && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(t.seen) ? t.seen : null;   // a Host-rewriting tunnel shows localhost
+      const base = pub ? esc(pub) : "https://&lt;your name&gt;";
+      $("tunnelMsg").innerHTML =
+        "Point <code>cloudflared</code> (or any reverse proxy) at <code>" + esc(t.origin) + "</code>. Browsers open "
+        + "<code>" + base + "/</code>; KASTR apps, RTSP publishers and federated relays use "
+        + "<code>" + base + t.path + "</code> as the relay address. Through a tunnel media rides WebSocket (no QUIC), "
+        + "so expect a little more delay than on the LAN, where the direct ports stay in use. The relay can stay bound to "
+        + "this machine only \u2014 the tunnel reaches it through the web port."
+        + (w.relayRunning ? "" : " <b>The relay is not running here</b> \u2014 start it, or visitors get no media.")
+        + (t.singlePort ? " kastr.ini <code>single_port</code> is on: every remote page uses this path." : "")
+        + "<br>" + (t.seen ? "Last proxied visitor: <code>" + esc(t.seen) + "</code>, " + t.seenAgo + " s ago" : "No proxied visitor yet")
+        + " \u00b7 live relay pipes: " + (t.pipes || 0) + ".";
+    }
   }
   paintWeb();
   $("webClients").addEventListener("change", async () => {

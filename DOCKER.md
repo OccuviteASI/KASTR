@@ -203,6 +203,11 @@ Host recordings live in the state volume (`/data/state/archive/`), one folder pe
 (`hook_ready` / `hook_notready` / `hook_read`) run inside the container, so the command must exist in the image or the
 volume.
 
+## One port (0.19.0)
+
+Behind Cloudflare Tunnel (or any reverse proxy) only the web port needs publishing: point the tunnel at the
+container's web port and hand out `https://<name>/` and `https://<name>/relay`. See `docs/cloudflare-tunnel.md`.
+
 ## Not done / deferred
 
 - A `builder` stage compiling inside Docker (needs a `build.py --bare` that

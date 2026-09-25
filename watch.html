@@ -49,10 +49,7 @@
   const v = $("#v"), st = $("#status"), f = $("#f");
   const q = new URLSearchParams(location.search);
   const say = (m, err) => { st.textContent = m; st.className = err ? "err" : ""; };
-  const relayDefault = () => {
-    const isHttps = location.protocol === "https:";
-    return (isHttps ? "https" : "http") + "://" + location.hostname + ":" + (isHttps ? 4445 : 4443);
-  };
+  const relayDefault = () => location.origin + "/relay";   // 0.19.0: this KASTR's web port carries the relay too
   f.relay.value = q.get("relay") || relayDefault();
   f.b.value = q.get("b") || "";
   f.code.value = q.get("code") || "";

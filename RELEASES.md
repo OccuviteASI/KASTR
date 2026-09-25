@@ -2,6 +2,36 @@
 
 What changed in each build, newest first.
 
+## v0.19.0 — everything on one web port (Cloudflare Tunnel)
+
+**One name, one port.** The relay host's web port now carries the video too: `/relay` on it is a WebSocket pipe to
+the relay. So a single Cloudflare Tunnel hostname pointed at `http://localhost:8000` serves the page, the API,
+chat, files, recordings, updates and the media. Browsers open `https://<your name>/` and get the full client.
+KASTR apps, RTSP cameras on other machines and federated spokes use `https://<your name>/relay` as their relay
+address. A relay address ending in `/relay` means "that KASTR's web port carries everything", everywhere KASTR
+takes a relay address. On the LAN nothing changes: direct QUIC stays the fast path, and the direct ports keep
+working. `docs/cloudflare-tunnel.md` has the recipe. The Relay page has a "One port (Cloudflare Tunnel)" card
+with the origin to give cloudflared, the addresses to hand out, the last proxied visitor and the live pipe count.
+
+**Behind a proxy, a visitor is a visitor.** cloudflared connects from 127.0.0.1, and it can rewrite Host to
+`localhost`. KASTR used to trust exactly that combination as "the machine itself". Now any request carrying a
+proxy's headers (`Cf-Connecting-IP`, `X-Forwarded-For`, ...) is another device. The quit route had its own older
+check, and a tunnel with Host rewritten could stop KASTR; it now uses the shared check. Wrong-code lockouts, bans,
+chat lockouts and logs count the visitor's address, not the tunnel's. A kick never bans 127.0.0.1, which would
+have removed every tunnel visitor.
+
+**Verified on the rig through a local stand-in for cloudflared.** It had one TLS port, cloudflared's headers, and
+Host rewritten to localhost. Edge and Firefox joined, published a camera, watched it and chatted. An admin stop and
+kick worked, and the other visitor stayed connected. The moq CLI published and subscribed through the tunnel over
+WebSocket (valid H.264 back). A spoke federated to the hub through it: token minted, relay linked over WebSocket
+after QUIC failed, media crossed the link, and a kick on the hub reached the spoke. Every host control answered
+403 through the tunnel. No real Cloudflare tunnel was used, because it would publish the build machine.
+
+**Limits.** A tunnel has no UDP, so media rides WebSocket: a little more delay than QUIC, and head-of-line blocking
+on a lossy link. A spoke behind a tunnel cannot be nudged about bans; it pulls them on its federation tick (about
+10 minutes). Cloudflare Access in front of the name blocks the native clients unless KASTR's paths bypass it.
+Other reverse proxies that send no forwarded headers need `single_port = true` in kastr.ini.
+
 ## v0.18.0 — cameras that wake for viewers, cheaper thumbnails, recordings on the relay host
 
 **RTSP cameras can sleep until someone looks.** Each RTSP row has an **On demand** switch (off by default). With it on,

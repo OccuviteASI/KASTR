@@ -894,3 +894,20 @@ speculative was later removed (see Decisions).
   with a dialog (error 1223, the user "cancelled"), not an error code. Every call inside the loop is now guarded.
 - **Push the nudge, pull the data.** The hub never sends bans to a URL it was told about; it says "changed" and each
   spoke pulls with its own federation token, so a forged registration learns nothing.
+
+### 0.19.0
+
+- **The relay already spoke WebSocket; the port was the problem.** moq-relay, the moq CLI and the browser library
+  all race WebTransport against WebSocket on the same URL, so one path on the web port (`/relay`) was enough to
+  carry media through anything that carries HTTP. The work was naming it: a relay address ending in `/relay` is a
+  web relay, and every place that derived `port + 1` or `:8000` from a relay host now asks for the origin.
+- **A proxy makes every visitor look like the machine.** cloudflared dials from loopback and may rewrite Host, and
+  the 0.17 request class trusted exactly Host + peer + Origin. Forwarded headers now mean "another device". The one
+  route with its own hand-rolled check (`/api/quit`) was the one the tunnel test could reach.
+- **Identity by address breaks behind a tunnel.** Lockouts, chat lockouts and hostless bans keyed on the peer would
+  have treated every tunnel visitor as one; the visitor's address comes from the proxy's headers, and loopback is
+  never a ban address.
+- **One thread per pipe, even for TLS.** Two threads reading and writing one SSL socket is not safe in Python's ssl
+  module; the pipe uses one select loop and honours `pending()`.
+- **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
+  cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.

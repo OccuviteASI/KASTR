@@ -104,7 +104,7 @@ function build() {
   // Painted from a variable, not the constant: the constant is whatever the
   // server substituted when THIS document was served, and the app shell's
   // top document is served once per launch. The poll below moves it.
-  let currentRelay = RELAY;
+  let currentRelay = webRelayFix(RELAY);   // 0.19.0: a tunnel that rewrote Host handed out localhost
   let popHeadEl = null;   // 0.12.0: the popover's title, set once the popover exists
   const relayHostText = () => currentRelay.replace(/^https?:\/\//, "");
   const paintRelay = () => {
@@ -154,7 +154,7 @@ function build() {
     try { host = new URL(currentRelay).hostname; } catch {}
     if (!host) { el.textContent = "Relay host: \u2014"; return; }
     try {
-      const i = await fetch("/api/peer/instance?host=" + encodeURIComponent(host), { cache: "no-store" }).then((r) => r.json());
+      const i = await fetch("/api/peer/instance?host=" + encodeURIComponent(host) + "&relay=" + encodeURIComponent(currentRelay || ""), { cache: "no-store" }).then((r) => r.json());   // 0.19.0: a web relay is asked at its origin
       el.textContent = i.version ? "Relay host: KASTR v" + i.version + (i.version !== VERSION ? "  (this machine: v" + VERSION + ")" : "")
         : "Relay host: no KASTR web at " + host + ":8000 \u2014 not an update source";
     } catch { el.textContent = "Relay host: unknown"; }
@@ -184,7 +184,7 @@ function build() {
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 2500);
-      const r = await fetch(u.replace(/\/+$/, "") + "/certificate.sha256", { cache: "no-store", signal: ctl.signal });
+      const r = await fetch(relayProbeUrl(u), { cache: "no-store", signal: ctl.signal });   // 0.19.0
       clearTimeout(t);
       histStatus.set(u, !!r.ok);
     } catch { histStatus.set(u, false); }
@@ -343,8 +343,8 @@ function build() {
         return;
       }
       if (inst.mode) applyMode(inst.mode);   // 0.12.0: same poll carries the mode
-      if (!inst.relay || inst.relay === currentRelay) return;
-      currentRelay = inst.relay;
+      if (!inst.relay || webRelayFix(inst.relay) === currentRelay) return;
+      currentRelay = webRelayFix(inst.relay);   // 0.19.0
       paintRelay();
       // The stats popover's iframe was substituted against the OLD relay
       // when it was first opened; re-navigating it fetches fresh bytes
@@ -590,19 +590,33 @@ function paintHealthDot() {
 // relay serves CORS on /certificate.sha256 -- the WebTransport library
 // fetches it from these same pages.
 let reach = { relay: null, lastOk: 0, started: 0 };
+// 0.19.0: a WEB RELAY (https://name/relay) is reached through its KASTR's web port: probe the
+// origin's /api/instance, and a loopback spelling handed out behind a tunnel means "this origin".
+function isLoopHost(h) { return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(h); }   // hoisted: used above this line
+function webRelayFix(u) {
+  try {
+    const x = new URL(u);
+    if (/^\/relay\/?$/.test(x.pathname) && isLoopHost(x.hostname) && !isLoopHost(location.hostname)) return location.origin + "/relay";
+  } catch {}
+  return u;
+}
+function relayProbeUrl(u) {
+  try { const x = new URL(u); if (/^\/relay\/?$/.test(x.pathname)) return x.origin + "/api/instance"; } catch {}
+  return String(u || "").replace(/\/+$/, "") + "/certificate.sha256";
+}
 async function probeRelayReachable() {
   if (typeof window.__relayHealth === "function") return;   // real signal exists
   let relay = null;
   try {
     const inst = await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json());
-    relay = inst.relay || null;
+    relay = inst.relay ? webRelayFix(inst.relay) : null;   // 0.19.0
   } catch {}
   if (!relay) return;
   if (reach.relay !== relay) reach = { relay, lastOk: 0, started: Date.now() };
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 2000);
-    const r = await fetch(relay.replace(/\/+$/, "") + "/certificate.sha256",
+    const r = await fetch(relayProbeUrl(relay),   // 0.19.0: a web relay answers at its origin
       { cache: "no-store", signal: ctl.signal });
     clearTimeout(t);
     if (r.ok) reach.lastOk = Date.now();

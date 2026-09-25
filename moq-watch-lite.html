@@ -1978,10 +1978,16 @@
   import { Snapshot, Window } from "https://esm.sh/@moq/json";   // 0.13.0: JSON state tracks
 
   const urlInput = document.getElementById("url");
+  // 0.19.0: a WEB RELAY is a relay address whose path is /relay (https://name/relay): that
+  // KASTR's web port carries everything -- its API at the origin, media over WebSocket.
+  const isWebRelay = (s) => { try { return /^\/relay\/?$/.test(new URL(String(s || "").trim()).pathname); } catch { return false; } };
+  window.__isWebRelay = isWebRelay;
   if (IS_WEB) {   // 0.17.0: "the relay is the host that served me" -- a loopback default would dial the phone itself
     try {
       const u = new URL(urlInput.value.trim());
-      if (/^(localhost|127\.0\.0\.1|\[::1\]|::1)$/.test(u.hostname)) { u.hostname = location.hostname; urlInput.value = u.href.replace(/\/$/, ""); }
+      const loop = /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/.test(u.hostname);
+      if (loop && isWebRelay(u.href)) urlInput.value = location.origin + "/relay";   // 0.19.0: a tunnel that rewrote Host
+      else if (loop) { u.hostname = location.hostname; urlInput.value = u.href.replace(/\/$/, ""); }
     } catch {}
   }
   // The prefix and latency controls are gone from the UI: everything under the
@@ -7498,6 +7504,7 @@
     if (location.protocol === "https:" || IS_WEB) return location.origin;   // 0.8.9: same-origin proxy to the room-code service; 0.17.0: every web client
     try {
       const u = new URL(urlInput.value.trim());
+      if (isWebRelay(u.href)) return u.origin;   // 0.19.0: that KASTR's web port proxies its minter
       return "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);
     } catch { return null; }
   }
@@ -9399,7 +9406,9 @@
   // origin (any port); otherwise KASTR's default web port on that host.
   function relayHostBase() {
     try {
-      const h = new URL(urlInput.value.trim()).hostname;
+      const wu = new URL(urlInput.value.trim());
+      if (isWebRelay(wu.href)) return wu.origin === location.origin ? location.origin : wu.origin;   // 0.19.0
+      const h = wu.hostname;
       const same = h === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(h) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
       // 0.8.9: an https page (phone) must not mix content -- other hosts on their https port
       return same ? location.origin : (location.protocol === "https:" ? "https://" + h + ":" + (window.__auth?.https || 8443) : "http://" + h + ":" + (window.__auth?.web || 8000));   // 0.15.0: the ports the hub advertises on /api/auth (0.14.0 pin), not literals
@@ -9418,7 +9427,8 @@
     relayNames.set(key, "");
     try {
       const same = host === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(host) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
-      const url = same ? "/api/instance" : "/api/peer/instance?host=" + encodeURIComponent(host) + "&port=" + (window.__auth?.web || 8000);   // 0.14.0 F
+      const url = same ? "/api/instance" : "/api/peer/instance?host=" + encodeURIComponent(host) + "&port=" + (window.__auth?.web || 8000)   // 0.14.0 F
+        + (isWebRelay(urlInput.value) ? "&relay=" + encodeURIComponent(urlInput.value.trim()) : "");   // 0.19.0: asked at its origin
       const d = await fetch(url, { cache: "no-store" }).then((r) => r.json());
       const nm = String(d?.relayName || "");
       if (nm) { relayNames.set(key, nm); try { window.__sinceAnnounce?.set?.(); } catch {} }
@@ -15470,7 +15480,7 @@
       let base = window.__auth?.base?.();
       if (!base) {
         const u = new URL(urlInput.value.trim());
-        base = "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);
+        base = window.__isWebRelay?.(u.href) ? u.origin : "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);   // 0.19.0
       }
       const body = JSON.stringify({ slug: rec.slug, salt: rec.salt, hash: rec.hash,
                                     roomKey: rec.roomKey ?? null, persistent: !!rec.persistent,   // 0.12.0: kept rooms

@@ -637,6 +637,30 @@ kastr_relay.HUB_WEB_SINK = HUB_WEB
 _CHAT_HUB_SAID = set()             # hosts whose "hub is this KASTR on another port" line was logged
 
 
+_RELAY_WS = [0]       # 0.19.0: live /relay WebSocket pipes
+TUNNEL_SEEN = {}      # 0.19.0: the last proxied visitor {"base", "at"} (the Relay page's one-port card)
+SINGLE_PORT = False   # 0.19.0: kastr.ini single_port -- every remote page gets the /relay web relay
+
+
+def hub_web_base(host_or_url, default=8000):
+    """0.19.0: the KASTR web base for a host or relay URL: a web relay's origin
+    (https://name/relay -> https://name), a learned base (hub-web.json `base`),
+    else http://host:<learned web port | default>."""
+    v = str(host_or_url or "").strip()
+    if not v:
+        return None
+    if "/" in v and kastr_relay.is_web_relay(v):
+        return kastr_relay.web_origin(v)
+    host = (urlparse(kastr_relay._as_url(v)).hostname or "") if "/" in v or "://" in v else v.strip("[]")
+    host = host.lower()
+    if not host:
+        return None
+    rec = HUB_WEB.get(host) or {}
+    if rec.get("base"):
+        return rec["base"]
+    return "http://%s:%d" % (("[%s]" % host) if ":" in host else host, hub_web_for(host, default))
+
+
 def hub_web_for(host, default=8000):
     """0.15.0: the KASTR web port learned for `host`, else `default`."""
     try:
@@ -760,7 +784,10 @@ def ondemand_list(room, now=None):
 
 
 def _od_web_base(relay_key):
-    """0.18.0: the KASTR that hosts `relay_key` -- where a bridge syncs its on-demand feeds."""
+    """0.18.0: the KASTR that hosts `relay_key` -- where a bridge syncs its on-demand feeds.
+    0.19.0: a web relay's KASTR is its origin."""
+    if kastr_relay.is_web_relay(relay_key):
+        return kastr_relay.web_origin(relay_key)
     try:
         h = (urlparse(relay_key).hostname or "").lower()
     except Exception:
@@ -817,7 +844,7 @@ def _remote_seen(handler, what):
     """0.17.0: log a remote client once an hour per address (never per request --
     a web page polls every few seconds)."""
     try:
-        peer = (handler.client_address[0] if handler.client_address else "") or "?"
+        peer = kastr_relay.client_ip(handler) or "?"   # 0.19.0: the visitor behind a tunnel
         now = time.time()
         if now - _REMOTE_SEEN.get(peer, 0) < 3600:
             return
@@ -941,7 +968,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
     if alive_ref is None:
         alive_ref = [0.0]
 
-    def subs(tls=False, req_host=None, remote=False):
+    def subs(tls=False, req_host=None, remote=False, override=None):
         current = relay_ref[0] or BUILTIN_RELAY
         # 0.8.9: a page served over https cannot use an http:// relay (mixed
         # content; no fingerprint pinning either) -- it gets the relay's wss
@@ -951,7 +978,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         # gets the same treatment on plain http -- never a loopback relay --
         # and its own identity: `web` for the host token (the page derives a
         # per-device slug from it) and "web" as its client class.
-        if tls or remote:
+        if override:
+            current = override          # 0.19.0: this origin's /relay (a proxied or single-port visitor)
+        elif tls or remote:
             current = page_relay(current, tls=tls, req_host=req_host, remote=remote)
         page_host = "web" if remote else host
         out = [
@@ -1069,6 +1098,88 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _local(self):
             return kastr_relay.is_local(self)
 
+        # ---- 0.19.0: one web port -------------------------------------------------------
+        def _web_base(self):
+            """The origin this visitor used: scheme from X-Forwarded-Proto / Cf-Visitor
+            (a tunnel terminates TLS), host from X-Forwarded-Host or Host."""
+            tls = bool(getattr(self.server, "is_tls", False))
+            proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+            if proto not in ("http", "https"):
+                m = re.search(r'"scheme"\s*:\s*"(https?)"', self.headers.get("Cf-Visitor") or "")
+                proto = m.group(1) if m else ("https" if tls else "http")
+            host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip().lower()
+            if not re.match(r"^[a-z0-9.\-\[\]:]{1,260}$", host):
+                host = "localhost"
+            if (proto == "https" and host.endswith(":443")) or (proto == "http" and host.endswith(":80")):
+                host = host.rsplit(":", 1)[0]
+            return "%s://%s" % (proto, host)
+
+        def _web_relay_for(self):
+            """The /relay address for a visitor who came through a proxy (or any remote
+            visitor with kastr.ini single_port) -- only when THIS machine runs the relay."""
+            if not (SINGLE_PORT or kastr_relay.is_forwarded(self)):
+                return None
+            if not (relay_srv is not None and relay_srv.running()):
+                return None
+            base = self._web_base()
+            if kastr_relay.is_forwarded(self):
+                TUNNEL_SEEN.update(base=base, at=time.time())
+            return base + kastr_relay.WEB_RELAY_PATH
+
+        def _relay_ws(self):
+            """GET /relay (Upgrade: websocket) -> the relay's own WebSocket listener on
+            loopback, path rewritten to / (query kept), bytes piped both ways on ONE
+            thread (select; an SSL socket is never used from two threads)."""
+            import select
+            if not (relay_srv is not None and relay_srv.running()):
+                return self._json_cors(503, {"error": "no relay on this machine"})
+            port = int(getattr(relay_srv, "port", 0) or 4443)
+            u = urlparse(self.path)
+            rest = u.path[len(kastr_relay.WEB_RELAY_PATH):] or "/"
+            if not rest.startswith("/"):
+                return self._json_cors(404, {"error": "not found"})
+            try:
+                up = socket.create_connection(("127.0.0.1", port), timeout=5)
+            except OSError as e:
+                return self._json_cors(502, {"error": "relay unreachable: %s" % e})
+            lines = ["GET %s%s HTTP/1.1" % (rest, ("?" + u.query) if u.query else ""), "Host: 127.0.0.1:%d" % port]
+            for k, v in self.headers.items():
+                if k.lower() in ("host", "x-forwarded-for"):
+                    continue
+                lines.append("%s: %s" % (k, v))
+            lines.append("X-Forwarded-For: %s" % kastr_relay.client_ip(self))
+            self.close_connection = True
+            if kastr_relay.is_forwarded(self):
+                TUNNEL_SEEN.update(base=self._web_base(), at=time.time())
+            cs = self.connection
+            try:
+                up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1", "replace"))
+                cs.settimeout(None); up.settimeout(None)
+                _RELAY_WS[0] += 1
+                pend = getattr(cs, "pending", None)
+                while True:
+                    ready = [cs] if (pend and pend()) else []
+                    if not ready:
+                        ready, _w, _x = select.select([cs, up], [], [], 60)
+                    done = False
+                    for sk in ready:
+                        data = sk.recv(65536)
+                        if not data:
+                            done = True
+                            break
+                        (up if sk is cs else cs).sendall(data)
+                    if done:
+                        break
+            except (OSError, ValueError):
+                pass
+            finally:
+                _RELAY_WS[0] = max(0, _RELAY_WS[0] - 1)
+                for sk in (up,):
+                    try:
+                        sk.close()
+                    except OSError:
+                        pass
+
         def _deny(self, what):
             return kastr_relay.deny_remote(self, what)
 
@@ -1112,7 +1223,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             tls = bool(getattr(self.server, "is_tls", False))
             req_host = kastr_relay._host_of(self.headers.get("Host")) or None
             remote = not self._local()   # 0.17.0: another device -> web identity + a dialable relay
-            for needle, value in subs(tls, req_host, remote):
+            for needle, value in subs(tls, req_host, remote, self._web_relay_for() if remote else None):
                 body = body.replace(needle, value)
             if tls and BUILTIN_RELAY.encode() in body:
                 # relay_ref still IS the builtin (localhost): the plain
@@ -1367,7 +1478,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 d["hostMode"] = MODE
                 d["mode"] = "full"
                 d["client"] = "web"
-                d["relay"] = page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=True)
+                d["relay"] = self._web_relay_for() or page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=True)
                 _remote_seen(self, "/api/instance")
             body = json.dumps(d).encode()
             self.send_response(200)
@@ -1601,7 +1712,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return {}
 
         def _chat_peer(self):
-            return (self.client_address[0] if self.client_address else "") or ""
+            return kastr_relay.client_ip(self) or ""   # 0.19.0: lockouts per visitor, not per tunnel
 
         def _chat_via(self):
             """What this relay is called -- the poster's `via` on the hub."""
@@ -1663,7 +1774,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     _chat_log("chat: the hub %s is this KASTR (cluster file says web port %d, this "
                               "server is on %d) -- answering chat locally" % (hhost, web, own_port))
                 return None
-            return {"host": hhost, "web": web, "hub": hub, "code": fed.get("code") or ""}
+            return {"host": hhost, "web": web, "hub": hub, "code": fed.get("code") or "",
+                    "base": (kastr_relay.web_origin(hub) if kastr_relay.is_web_relay(hub) else None)}   # 0.19.0
 
         def _chat_auth(self, room, qs):
             """The member check every chat call passes -> {"mode": "local"|"proxy",
@@ -1909,7 +2021,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 n = 0
             self._chat_body_read = True
             hosttxt = ("[" + hub["host"] + "]") if ":" in hub["host"] else hub["host"]
-            target = "http://%s:%d%s" % (hosttxt, hub["web"], self.path)
+            target = (hub.get("base") or "http://%s:%d" % (hosttxt, hub["web"])) + self.path   # 0.19.0: a web relay's origin
             headers = {"X-Kastr-Via": self._chat_via()}
             if tok:
                 headers["Authorization"] = "Bearer " + tok
@@ -1972,7 +2084,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             tok, _info = self._hub_token(hub)
             hosttxt = ("[" + hub["host"] + "]") if ":" in hub["host"] else hub["host"]
-            url = "http://%s:%d/api/chat/%s?limit=1" % (hosttxt, hub["web"], slug)
+            url = (hub.get("base") or "http://%s:%d" % (hosttxt, hub["web"])) + "/api/chat/%s?limit=1" % slug   # 0.19.0
             headers = {"X-Kastr-Via": self._chat_via(), "X-Kastr-Persistent": "0"}
             if tok:
                 headers["Authorization"] = "Bearer " + tok
@@ -2066,9 +2178,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _quit(self):
             """0.9.8: end KASTR cleanly -- publishers, monitors, relay, window --
             from a local page or a local tool (close-kastr.ps1). Loopback only."""
-            h = (self.headers.get("Host") or "").split(":")[0].lower()
-            peer = (self.client_address[0] if self.client_address else "") or ""
-            if h not in ("127.0.0.1", "localhost") or peer not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            if not self._local():   # 0.19.0: the shared check -- a proxied request (tunnel) is never the machine
                 return self._json_cors(403, {"error": "quit only from the machine itself"})
             if QUIT_HOOK is None:
                 return self._json_cors(200, {"status": "dev", "note": "source checkouts stop with Ctrl+C"})
@@ -2082,7 +2192,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             client rides X-Forwarded-For so the minter's lockout counts per
             phone, not per proxy (the minter trusts it from a loopback peer only)."""
             try:
-                u = urlparse(relay_ref[0] or BUILTIN_RELAY)
+                cur = relay_ref[0] or BUILTIN_RELAY
+                u = urlparse(cur)
                 rh = u.hostname or "127.0.0.1"
                 # 0.17.0: the minter honours X-Forwarded-For from a LOOPBACK peer only.
                 # When the relay is this very machine (named by its LAN IP), dial it on
@@ -2090,13 +2201,23 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if rh.lower() in _own_hosts():
                     rh = "127.0.0.1"
                 base = "http://%s:%d" % (rh, (u.port or 4443) + 1)
+                hop = bool(self.headers.get("X-Kastr-Hop"))
+                if kastr_relay.is_web_relay(cur) and not hop:
+                    base = kastr_relay.web_origin(cur)      # 0.19.0: that KASTR's web port proxies its minter
+                elif hop and relay_srv is not None and relay_srv.running():
+                    base = "http://127.0.0.1:%d" % (int(relay_srv.port) + 1)   # 0.19.0: we ARE the web relay
+                elif hop:
+                    return self._json_cors(508, {"error": "web relay loop (this machine runs no relay)"})
                 target = base + self.path
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else None
-                peer = (self.client_address[0] if self.client_address else "") or ""
-                req = urllib.request.Request(target, data=body, method=method,
-                                             headers={"Content-Type": self.headers.get("Content-Type") or "application/json",
-                                                      "X-Forwarded-For": peer})
+                peer = kastr_relay.client_ip(self)          # 0.19.0: the visitor behind a tunnel
+                hdrs = {"Content-Type": self.headers.get("Content-Type") or "application/json", "X-Forwarded-For": peer}
+                if self.headers.get("Authorization"):
+                    hdrs["Authorization"] = self.headers.get("Authorization")   # 0.19.0: federation Bearer (bans, spokes)
+                if kastr_relay.is_web_relay(cur) and not hop:
+                    hdrs["X-Kastr-Hop"] = "1"
+                req = urllib.request.Request(target, data=body, method=method, headers=hdrs)
                 retry_after = None
                 with urllib.request.urlopen(req, timeout=5) as r:
                     data = r.read()
@@ -2568,7 +2689,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._archive_api("POST", path0)
             if path0 == "/api/relaunch":
                 return self._relaunch()
-            if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick"):   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
+            if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick",   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
+                         "/api/spokes/register", "/api/bans/notify"):         # 0.19.0: federation through a web relay
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
                 return self._file_post()
@@ -2735,7 +2857,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             return self._json_cors(200, {
                 "app": "KASTR", "version": read_version(),
                 "client": "web" if web else "app",
-                "relay": page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=web),
+                "relay": (self._web_relay_for() if web else None) or page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=web),
+                "webRelay": bool(web and self._web_relay_for()),   # 0.19.0
                 "hostMode": MODE,
                 "web": int(HTTP_PORT or self.server.server_address[1]),
                 "https": HTTPS_INFO.get("port"),
@@ -2806,7 +2929,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if not bans or not room:
                 return None
             _r, host = kastr_relay.claims_identity(claims or {})
-            peer = (self.client_address[0] if self.client_address else "") or None
+            peer = kastr_relay.client_ip(self) or None   # 0.19.0
             return bans.hit(room, host, peer)
 
         def _body_json(self):
@@ -3054,7 +3177,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ondemand_touch(bcast)
             hk = getattr(bridge, "hooks", None)   # 0.18.0: an HLS viewer is a read
             if hk:
-                hk.fire("read", bcast, "", "", reason="hls viewer", viewer=(self.client_address[0] if self.client_address else ""))
+                hk.fire("read", bcast, "", "", reason="hls viewer", viewer=kastr_relay.client_ip(self))
             self.send_response(302)
             self.send_header("Location", "/api/hls/%s/%s/master.m3u8" % (key, "/".join(quote(x) for x in bcast.split("/"))))
             self.send_header("Cache-Control", "no-store")
@@ -3147,7 +3270,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if _WATCH_LIVE[0] >= WATCH_MAX:
                     return self._json_cors(503, {"error": "too many fallback viewers on this relay host (%d)" % WATCH_MAX})
                 _WATCH_LIVE[0] += 1
-            peer = (self.client_address[0] if self.client_address else "") or "?"
+            peer = kastr_relay.client_ip(self) or "?"   # 0.19.0
             leaf = segs[-1]
             blog = getattr(bridge, "log", None) or _note
             url = relay_srv.url().rstrip("/") + "/" + (("?jwt=" + jwt) if (secured and jwt) else "")
@@ -3319,6 +3442,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "hostIni": host,
                 "path": _ini_file(),
                 "note": None if live else "applies at the next launch -- Apply & relaunch",
+                # 0.19.0: one port -- what to give cloudflared, and whether anything came through it
+                "tunnel": {"origin": "http://localhost:%d" % int(HTTP_PORT or self.server.server_address[1]),
+                           "path": kastr_relay.WEB_RELAY_PATH, "pipes": _RELAY_WS[0], "singlePort": SINGLE_PORT,
+                           "seen": TUNNEL_SEEN.get("base"),
+                           "seenAgo": (int(time.time() - TUNNEL_SEEN["at"]) if TUNNEL_SEEN.get("at") else None)},
             })
 
         def _ca_cert(self):
@@ -3343,6 +3471,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            if re.match(r"^/relay(/|$)", path) and (self.headers.get("Upgrade") or "").lower() == "websocket":
+                return self._relay_ws()                                       # 0.19.0: media through the web port
             if path.startswith("/api/chat/") or path.startswith("/api/rooms/"):   # 0.12.0 (NOT /api/rooms itself: the minter proxy)
                 return self._chat_api("GET")
             if path.startswith("/api/watch/"):                                # 0.17.0: the fMP4 fallback
@@ -3366,7 +3496,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._prefs_get()
             if path == "/api/mobile":
                 return self._mobile()
-            if path in ("/api/auth", "/api/token", "/api/rooms"):   # 0.11.0: + remembered rooms
+            if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans"):   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans
                 return self._auth_proxy("GET")
             if path == "/api/files":
                 return self._file_list(parse_qs(urlparse(self.path).query))
@@ -3420,10 +3550,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     if host.strip("[]").lower() in _own_hosts() or (relay_host and host.lower() == relay_host):
                         return self._instance()
                     return self._deny("peer probes")
-                if re.match(r"^[A-Za-z0-9.\-\[\]:]{1,253}$", host) and re.match(r"^\d{1,5}$", port):
+                relay_q = (qs.get("relay") or [""])[0].strip()
+                wbase = None
+                if relay_q and kastr_relay.is_web_relay(relay_q):
+                    wbase = kastr_relay.web_origin(relay_q)          # 0.19.0: https://name/relay -> https://name
+                elif host and (HUB_WEB.get(host.strip("[]").lower()) or {}).get("base"):
+                    wbase = HUB_WEB[host.strip("[]").lower()]["base"]
+                if wbase or (re.match(r"^[A-Za-z0-9.\-\[\]:]{1,253}$", host) and re.match(r"^\d{1,5}$", port)):
                     try:
                         import urllib.request
-                        with urllib.request.urlopen("http://%s:%s/api/instance" % (host, port), timeout=2) as r:
+                        with urllib.request.urlopen((wbase or "http://%s:%s" % (host, port)) + "/api/instance", timeout=3) as r:
                             data = json.load(r)
                     except Exception as e:
                         data = {"error": "unreachable", "detail": str(e)[:120]}

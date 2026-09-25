@@ -508,7 +508,7 @@ class BanList:
                     continue
                 if host and b.get("host") and b.get("host") == host:
                     return dict(b)
-                if remote and not b.get("host") and remote in (b.get("remotes") or []):
+                if remote and not b.get("host") and remote in (b.get("remotes") or []) and not is_loopback_addr(remote):
                     return dict(b)
             return None
 
@@ -1189,12 +1189,7 @@ class AuthService:
             def _peer(self):
                 # The KASTR https proxy forwards the real client; trusted
                 # only when the proxy itself is the loopback peer.
-                ip = (self.client_address[0] if self.client_address else "") or ""
-                if ip in LOOPBACK_PEERS:
-                    xff = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-                    if xff:
-                        return xff
-                return ip
+                return client_ip(self)   # 0.19.0: + Cf-Connecting-IP / X-Real-IP (loopback proxies only)
 
             def do_POST(self):
                 path = self.path.split("?")[0]
@@ -1460,7 +1455,7 @@ class AuthService:
                 if rec.get("room") == room and host and rec.get("host") == host:
                     rec["revoked"] = True
                     ids.append(sid)
-                    if rec.get("remote") and rec["remote"] not in remotes:
+                    if rec.get("remote") and rec["remote"] not in remotes and not is_loopback_addr(rec["remote"]):   # 0.19.0
                         remotes.append(rec["remote"])
         return ids, remotes
 
@@ -1712,14 +1707,102 @@ class AuthService:
         self.log("relay auth: wide token (no host) for %s" % key)
 
 
+# ---- 0.19.0: web relays ---------------------------------------------------------------
+# A relay address whose path is /relay (https://kastr.example.com/relay) names a KASTR
+# whose WEB PORT carries everything: its API is the URL's origin, its media rides
+# WebSocket through that port (kastr_serve's /relay proxy). Made for Cloudflare Tunnel
+# and other single-port proxies, which carry HTTP + WebSocket but no QUIC.
+WEB_RELAY_PATH = "/relay"
+FORWARD_HEADERS = ("Cf-Connecting-IP", "Cf-Ray", "X-Forwarded-For", "X-Real-IP", "X-Forwarded-Host",
+                   "X-Forwarded-Proto", "Forwarded")
+
+
+def _as_url(url):
+    u = str(url or "").strip()
+    if u and "://" not in u:
+        u = "https://" + u
+    return u
+
+
+def is_web_relay(url):
+    """True for a relay URL whose path is /relay (any query; ws/wss/http/https)."""
+    try:
+        u = _as_url(url)
+        return bool(u) and (urlparse(u).path or "").rstrip("/") == WEB_RELAY_PATH
+    except Exception:
+        return False
+
+
+def web_origin(url):
+    """'wss://Name:8443/relay?jwt=x' -> 'https://name:8443' (ws->http, wss->https;
+    the port only when explicit). '' when unparsable."""
+    try:
+        p = urlparse(_as_url(url))
+        host = (p.hostname or "").lower()
+        if not host:
+            return ""
+        scheme = {"ws": "http", "wss": "https"}.get((p.scheme or "https").lower(), (p.scheme or "https").lower())
+        h = ("[" + host + "]") if ":" in host else host
+        return "%s://%s%s" % (scheme, h, (":%d" % p.port) if p.port else "")
+    except Exception:
+        return ""
+
+
+def web_origin_port(url):
+    try:
+        p = urlparse(web_origin(url))
+        return p.port or (443 if p.scheme == "https" else 80)
+    except Exception:
+        return None
+
+
+def is_loopback_addr(addr):
+    """'127.0.0.1', '127.0.0.1:5000', '[::1]:5000', '::1', '[::ffff:127.0.0.1]:1' -> True."""
+    a = str(addr or "").strip()
+    if a in LOOPBACK_PEERS:
+        return True
+    m = re.match(r"^\[([^\]]+)\](?::\d+)?$", a) or re.match(r"^([0-9.]+)(?::\d+)?$", a)
+    return bool(m) and m.group(1).lower() in LOOPBACK_PEERS
+
+
+def is_forwarded(handler):
+    """0.19.0: the request came through a proxy (cloudflared, nginx, ...)."""
+    try:
+        return any(handler.headers.get(h) for h in FORWARD_HEADERS)
+    except Exception:
+        return False
+
+
+def client_ip(handler):
+    """0.19.0: the visitor's address -- Cf-Connecting-IP / X-Real-IP / the first
+    X-Forwarded-For when the peer is a loopback proxy (cloudflared dials from
+    127.0.0.1), else the peer itself."""
+    ip = (handler.client_address[0] if getattr(handler, "client_address", None) else "") or ""
+    if ip in LOOPBACK_PEERS:
+        for h in ("Cf-Connecting-IP", "X-Real-IP"):
+            v = (handler.headers.get(h) or "").strip()
+            if v and re.match(r"^[0-9A-Fa-f:.]{2,45}$", v):
+                return v
+        xff = (handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if xff and re.match(r"^[0-9A-Fa-f:.]{2,45}$", xff):
+            return xff
+    return ip
+
+
 def _normalize_hub(url):
     """'host', 'host:4443', 'https://host:4443/?jwt=x' -> 'https://host:4443'
-    (scheme kept, path/query dropped: the token comes from the code, never a paste)."""
+    (scheme kept, path/query dropped: the token comes from the code, never a paste).
+    0.19.0: a web relay keeps its path: 'https://name/relay?jwt=x' -> 'https://name/relay'."""
     u = str(url or "").strip()
     if not u:
         return ""
+    if u.lower().startswith(("ws://", "wss://")):   # 0.19.0: a WebSocket spelling of the same relay
+        u = "http" + u[2:]
     if not u.lower().startswith(("http://", "https://")):
         u = "https://" + u
+    if is_web_relay(u):
+        o = web_origin(u)
+        return (o + WEB_RELAY_PATH) if o else ""
     try:
         p = urlparse(u)
         host = p.hostname or ""
@@ -1733,7 +1816,10 @@ def _normalize_hub(url):
 
 
 def _hub_parts(hub):
-    """-> (host, relay port, minter base 'http://host:port+1')."""
+    """-> (host, relay port, minter base 'http://host:port+1').
+    0.19.0: a web relay -> (host, its web port, its origin) -- the web port proxies the minter."""
+    if is_web_relay(hub):
+        return (urlparse(web_origin(hub)).hostname or ""), web_origin_port(hub), web_origin(hub)
     p = urlparse(hub)
     host = p.hostname or ""
     port = p.port or 4443
@@ -1783,6 +1869,16 @@ def probe_hub_web(relay_url, candidates=(), budget=3.0):
     hub = _normalize_hub(relay_url)
     if not hub:
         return None
+    if is_web_relay(hub):   # 0.19.0: the origin IS the web base -- confirm it is a KASTR
+        base = web_origin(hub)
+        try:
+            with urllib.request.urlopen(base + "/api/instance", timeout=max(0.5, min(3.0, budget))) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            return None
+        if not (isinstance(d, dict) and d.get("app") == "KASTR"):
+            return None
+        return {"web": web_origin_port(hub), "https": None, "via": "origin", "base": base}
     host, _port, _minter = _hub_parts(hub)
     if not host:
         return None
@@ -1842,30 +1938,34 @@ def hub_web_load(state_dir):
                 at = float(rec.get("at") or 0)
             except (TypeError, ValueError):
                 at = 0.0
-            out[str(host).strip().lower()] = {"web": web, "https": _port_or_none(rec.get("https")), "at": at}
+            base = rec.get("base")
+            base = base if isinstance(base, str) and re.match(r"^https?://[A-Za-z0-9.\-\[\]:]{1,260}$", base) else None
+            out[str(host).strip().lower()] = {"web": web, "https": _port_or_none(rec.get("https")), "at": at, "base": base}
     return out
 
 
-def hub_web_note(state_dir, host, web, https=None):
+def hub_web_note(state_dir, host, web, https=None, base=None):
     """Remember `host`'s KASTR web (+https) port in hub-web.json (tmp + os.replace)
-    and in HUB_WEB_SINK -> True when something changed. ValueError on a bad port."""
+    and in HUB_WEB_SINK -> True when something changed. ValueError on a bad port.
+    0.19.0: `base` = the full web origin of a web relay (https://name)."""
     host = str(host or "").strip().lower()
     web = _port_or_none(web)
     https = _port_or_none(https)
+    base = base if isinstance(base, str) and base else None
     if not host or not web:
         raise ValueError("bad host/port")
     cur = hub_web_load(state_dir)
     prev = cur.get(host)
-    changed = not (prev and prev["web"] == web and prev.get("https") == https)
+    changed = not (prev and prev["web"] == web and prev.get("https") == https and prev.get("base") == base)
     if changed:
-        cur[host] = {"web": web, "https": https, "at": time.time()}
+        cur[host] = {"web": web, "https": https, "at": time.time(), "base": base}
         os.makedirs(state_dir, exist_ok=True)
         tmp = _hub_web_file(state_dir) + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cur, f)
         os.replace(tmp, _hub_web_file(state_dir))
     if HUB_WEB_SINK is not None:
-        HUB_WEB_SINK[host] = {"web": web, "https": https}
+        HUB_WEB_SINK[host] = {"web": web, "https": https, "base": base}
     return changed
 
 
@@ -1941,7 +2041,7 @@ class Relay:
             # code; it rides the connect URL (`?jwt=` -- the relay's documented
             # form). An open hub (no minter) is dialled bare, as before.
             tok, why, info = self.federation_token(hub, fed["code"])
-            url = hub + "/" + (("?jwt=" + tok) if tok else "")
+            url = (hub if is_web_relay(hub) else hub + "/") + (("?jwt=" + tok) if tok else "")   # 0.19.0: https://name/relay?jwt=
             self._fed_active = tok
             self.federation = {"hub": hub, "token": bool(tok), "reason": why,
                                "exp": self._fed_cache().get("exp") if tok else None, **info}
@@ -2026,6 +2126,8 @@ class Relay:
     def _connect_tls_lines(self, hub):
         """0.16.0: how this spoke trusts the hub's QUIC certificate -- pinned by
         sha256 when known (I1 fills `self._hub_pin`), else `insecure` as before."""
+        if is_web_relay(hub):   # 0.19.0: system roots (the tunnel's public certificate)
+            return []
         pin = getattr(self, "_hub_pin", None)
         if pin:
             return ['tls.fingerprint = ["%s"]' % pin]
@@ -2094,6 +2196,8 @@ class Relay:
         """0.16.0: -> (sha256 hex | None, "pinned" | "pinned-cached" | "insecure").
         `hint` = the fingerprint the hub's /api/auth advertised; else the hub's
         /certificate.sha256 is fetched (3 s); else what relay-cluster.json remembers."""
+        if is_web_relay(hub):   # 0.19.0: a tunnel's certificate is public -- the system roots verify it
+            return None, "public"
         pin = None
         h = str(hint or "").strip().lower()
         if re.match(r"^[0-9a-f]{64}$", h):
@@ -2447,6 +2551,17 @@ class Relay:
         0.15.0: ALSO in hub-web.json (hub_web_note, per host, with the https
         port) whether or not a cluster link is stored -- the update feed and the
         chat proxy read it through kastr_serve.HUB_WEB."""
+        cur0 = self._cluster_raw()
+        if is_web_relay(hub or cur0.get("connect")):
+            # 0.19.0: the minter's `web` names the hub's own port behind the proxy -- useless
+            # from here; a web relay's web base is its origin.
+            wr = hub or cur0.get("connect")
+            try:
+                if hub_web_note(self.state_dir, urlparse(web_origin(wr)).hostname, web_origin_port(wr), None, web_origin(wr)):
+                    self.log("relay federation: hub %s is a web relay (%s) -- noted in hub-web.json" % (web_origin(wr), WEB_RELAY_PATH))
+            except Exception as e:
+                self.log("relay federation: could not note the hub web base: %s" % e)
+            return
         try:
             web = int(web)
         except (TypeError, ValueError):
@@ -2970,6 +3085,10 @@ def _local_only(handler):
     host = _host_of(handler.headers.get("Host"))
     peer = (handler.client_address[0] if handler.client_address else "") or ""
     if host not in LOOPBACK_HOSTS or peer not in LOOPBACK_PEERS:
+        return False
+    if is_forwarded(handler):
+        # 0.19.0: cloudflared and other proxies dial from loopback and may rewrite Host
+        # to localhost (httpHostHeader); a forwarded request is never the machine itself.
         return False
     origin = handler.headers.get("Origin")
     if origin and _host_of(origin) not in LOOPBACK_HOSTS:

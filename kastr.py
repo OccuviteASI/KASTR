@@ -959,12 +959,32 @@ def update_port_for(host, ini):
     return kastr_serve.hub_web_for(host, 8000)
 
 
+def authority_base(host, ini, relay_url=None, sd=None):
+    """0.19.0: the update authority's web base URL: an explicit kastr.ini update_port
+    wins, then a web relay's origin (https://name/relay -> https://name), then the
+    learned base / port (kastr_serve.hub_web_base), then :8000."""
+    import kastr_relay
+    h = ("[" + host + "]") if ":" in str(host) else str(host)
+    try:
+        if ini is not None and "update_port" in ini and str(ini.get("update_port")).strip():
+            return "http://%s:%d" % (h, int(ini.get("update_port")))
+    except (TypeError, ValueError):
+        pass
+    try:
+        ru = _authority_relay_url(host, relay_url, sd) if relay_url else None
+        if ru and kastr_relay.is_web_relay(ru):
+            return kastr_relay.web_origin(ru)
+    except Exception:
+        pass
+    return kastr_serve.hub_web_base(host, 8000) or "http://%s:8000" % h
+
+
 def load_hub_web(sd=None):
     """0.15.0: hub-web.json -> kastr_serve.HUB_WEB (what earlier launches learned)."""
     import kastr_relay
     n = 0
     for host, rec in kastr_relay.hub_web_load(sd or state_dir()).items():
-        kastr_serve.HUB_WEB[host] = {"web": rec["web"], "https": rec.get("https")}
+        kastr_serve.HUB_WEB[host] = {"web": rec["web"], "https": rec.get("https"), "base": rec.get("base")}   # 0.19.0: + base
         n += 1
     return n
 
@@ -1022,11 +1042,11 @@ def learn_hub_web_host(host, relay_url, ini, once=False, budget=3.0):
                  % (host, budget, update_port_for(host, ini)))
         return None
     try:
-        changed = kastr_relay.hub_web_note(state_dir(), host, found["web"], found.get("https"))
+        changed = kastr_relay.hub_web_note(state_dir(), host, found["web"], found.get("https"), found.get("base"))
     except Exception as e:
         changed = False
         note("hub web port: could not write hub-web.json: %s" % e)
-    kastr_serve.HUB_WEB[host] = {"web": found["web"], "https": found.get("https")}
+    kastr_serve.HUB_WEB[host] = {"web": found["web"], "https": found.get("https"), "base": found.get("base")}   # 0.19.0
     if changed or _HUB_WEB_SAID.get(host) != found["web"]:
         _HUB_WEB_SAID[host] = found["web"]
         note("hub web port %d learned for %s (%s%s)" % (found["web"], host, found["via"],
@@ -1236,7 +1256,7 @@ def mirror_after_update(relay_url, ini, status, relay=None):
     host, _why = update_authority(relay_url, ini)
     if not host or host in ("127.0.0.1", "localhost", "::1"):
         return None
-    base = "http://%s:%d" % (("[" + host + "]") if ":" in host else host, update_port_for(host, ini))
+    base = authority_base(host, ini, relay_url)   # 0.19.0: a web relay's origin too
 
     def go():
         try:
@@ -1262,7 +1282,7 @@ def browser_update(relay_url, ini):
         return
     try:
         import kastr_browser
-        base = f"http://{host}:{update_port_for(host, ini)}"   # 0.15.0: the learned hub web port
+        base = authority_base(host, ini, relay_url)   # 0.15.0: the learned hub web port; 0.19.0: or a web relay's origin
         kastr_browser.sweep_old(app_dir())
         kastr_browser.fetch_update(base, app_dir(), kastr_browser.platform_name(), note)
     except Exception as e:
@@ -1293,8 +1313,7 @@ def check_update(relay_url, ini):
                            "it IS the fleet's version authority")
     if why == "federation master":
         note("update-check: following the federation master " + host)
-    port = update_port_for(host, ini)     # 0.15.0: ini update_port > learned hub web port > 8000
-    base = f"http://{host}:{port}"
+    base = authority_base(host, ini, relay_url)   # 0.15.0: ini update_port > learned hub web port > 8000; 0.19.0: web relay origin
     inst = _probe_authority(base)
     if inst is None:
         return "unreachable"
@@ -1323,7 +1342,7 @@ def runtime_update(host, port, before_exit):
         update_note("authority", "the relay is on this machine -- "
                     "it IS the fleet's version authority")
         return {"status": "authority"}
-    base = f"http://{host}:{port}"
+    base = port if (isinstance(port, str) and "://" in port) else f"http://{host}:{port}"   # 0.19.0: callers pass a base
     update_note("checking", base)
     inst = _probe_authority(base)
     if inst is None:
@@ -2371,6 +2390,10 @@ def main():
     # 0.14.0: the port is chosen here (probe + memory), not by bind_free's
     # bind-then-fall-to-0 -- that fall-back is what cost the browser storage.
     bind_port = choose_bind_port(args.port, args.host, squatter)
+    # 0.19.0: kastr.ini single_port = true -> every remote page dials this machine's /relay
+    kastr_serve.SINGLE_PORT = str(ini.get("single_port") or "").strip().lower() in ("1", "true", "yes", "on")
+    if kastr_serve.SINGLE_PORT:
+        note("single_port: remote pages use this web port for media (/relay, WebSocket)")
     try:   # 0.18.0: host recording retention (kastr.ini archive_hours, default 24)
         kastr_serve.ARCHIVE_HOURS = float(ini.get("archive_hours") or 24)
     except (TypeError, ValueError):
@@ -2523,7 +2546,7 @@ def main():
             learn_hub_web_host(host, _current_relay(), ini)
         except Exception as e:
             note("hub web port: learner skipped for %s (%s)" % (host, e))
-        return runtime_update(host, update_port_for(host, ini), before_exit=_before_exit)
+        return runtime_update(host, authority_base(host, ini, _current_relay()), before_exit=_before_exit)   # 0.19.0
     kastr_serve.UPDATE_HOOK = _update_hook
     # 0.8.9: the Relay page's "Apply & relaunch" (relay-only mode switch).
     # 0.13.1: reason "mode" -- direct spawn, no KASTR_UPDATED, the child waits for us.
@@ -2544,7 +2567,7 @@ def main():
         st = "current"
         if hub and master and hub not in ("127.0.0.1", "localhost", "::1"):
             note("federation master: hourly version match against %s" % hub)
-            st = (runtime_update(hub, update_port_for(hub, ini), before_exit=_before_exit) or {}).get("status")
+            st = (runtime_update(hub, authority_base(hub, ini, args.relay), before_exit=_before_exit) or {}).get("status")   # 0.19.0
         mirror_after_update(args.relay, ini, st, relay=getattr(server, "relay", None))
     if not args.no_update:
         start_update_sweeper(_federation_update)

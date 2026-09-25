@@ -63,6 +63,9 @@ backlog. Primary sources are linked; two items could not be verified and are mar
 
 ## Ranked backlog for KASTR
 
+**Status (2026-09-25, v0.17.0):** item 7 shipped in v0.17.0 as `GET /api/watch/<broadcast>.mp4` (the relay host runs
+`moq export fmp4` per viewer; browsers without WebCodecs play it, `watch.html` is the standalone player; HLS for old
+iPhones waits for 0.18), item 10 gained relay-side revocation (`POST /api/kick`, bans, `/sessions/revalidate`).
 **Status (2026-09-24, v0.16.0):** items 1, 2 (the delay/buffer half), 4, 9, 10 and 11 shipped in v0.16.0; items 3, 5,
 6, 7, 8 and 12 are the v0.17.0 backlog. Measured while shipping: moq-relay 0.15.x no longer verifies JWTs itself -- it
 POSTs one JSON event per session (`connect` / `revalidate` / `end`, keys `alpn, event, id, node, path, query (only with
@@ -83,7 +86,7 @@ attributes, and per-subscription priority is NOT exposed by the element (item 2'
 | 4 | mDNS LAN mesh for same-site spokes | replaces hand-pasted federation codes on one site; keep hub/spoke JWT for the WAN | M | Relay page, federation | shipped 0.16.0 (`[cluster.lan]`, Relay page block, UDP 5353 rule) |
 | 5 | Simulcast ladder via `broadcast`-referencing renditions | publish the cheap 15 fps monitor encode as a rendition; grid cells pick low, spotlight picks full | M | publisher, grid | v0.17.0 |
 | 6 | Recording via hang `archive` + a `/list`/`/get` time-range API | replaces stage-only recording with a host-side segment store the Files panel can fetch by time | L | media, files | v0.17.0 |
-| 7 | WebSocket fMP4 fallback (WINK pattern) | phones/kiosks without WebTransport; KASTR already has `/stream?t=` fMP4 + MSE to reuse | M | phones, HTTPS | v0.17.0 |
+| 7 | WebSocket fMP4 fallback (WINK pattern) | phones/kiosks without WebTransport; KASTR already has `/stream?t=` fMP4 + MSE to reuse | M | phones, HTTPS | shipped 0.17.0 (`/api/watch/<b>.mp4` via `moq export fmp4`, `watch.html`, tile fallback; HLS/iPhone < 17 -> 0.18) |
 | 8 | Hooks (`runOnReady/NotReady/Read`) | fire a command on feed up/down and viewer join for external alerting | S | RTSP bridge, `--diagnose` | v0.17.0 |
 | 9 | Prometheus `/metrics` passthrough + health dashboard | relay 0.15 counters plus per-pair `gen/restartsTotal` on the Relay page | S | Relay page | shipped 0.16.0 (`/api/relay/health`, `/api/relay/metrics`, Health panel) |
 | 10 | `--auth-api-mode proxy` | the relay asks KASTR's `/api/auth` per session instead of pre-minted tokens; central revocation and role-shaped grants | M | auth | shipped 0.16.0 (KASTR's auth server answers the relay per session) |

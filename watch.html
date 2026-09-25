@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Watch — KASTR</title>
+<link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<script src="/assets/client.js"></script>
+<style>
+  /* 0.17.0: the plain player for one broadcast -- no MoQ library, no WebCodecs. The relay
+     host consumes the broadcast (GET /api/watch/<broadcast>.mp4) and this page plays the
+     fragmented MP4 through MediaSource when it can, else straight into <video>. */
+  :root { color-scheme: dark; --bg:#06070d; --panel:#0f1420; --line:#233047; --text:#e6edf3; --dim:#8b98a5; --blue:#4aa3ff; --amber:#f5b942; --red:#e5484d; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display:flex; flex-direction:column; min-height:100dvh; }
+  header { display:flex; align-items:center; gap:10px; padding:8px 12px; background:#002B45; }
+  header b { font-size:15px; letter-spacing:.02em; }
+  header span { color:#b7c9d6; font-size:12px; }
+  main { flex:1; display:flex; align-items:center; justify-content:center; background:#000; position:relative; }
+  video { width:100%; height:100%; max-height:calc(100dvh - 96px); object-fit:contain; background:#000; }
+  #status { position:absolute; left:12px; bottom:12px; padding:4px 8px; border-radius:6px; background:rgba(0,0,0,.6); color:var(--dim); font-size:12px; }
+  #status.err { color:var(--amber); }
+  form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 12px; background:var(--panel); border-top:1px solid var(--line); }
+  input { background:#0b1018; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:16px; min-width:0; }
+  input[name=b] { flex:1 1 260px; }
+  button { background:var(--blue); color:#06070d; border:0; border-radius:6px; padding:8px 14px; font-weight:600; cursor:pointer; }
+  .hint { flex-basis:100%; color:var(--dim); font-size:12px; margin:0; }
+  a { color:var(--blue); }
+</style>
+</head>
+<body>
+<header><b>KASTR</b><span id="who">watch one broadcast</span></header>
+<main>
+  <video id="v" autoplay playsinline controls></video>
+  <div id="status">Idle</div>
+</main>
+<form id="f">
+  <input name="relay" placeholder="relay (http://host:4443)" spellcheck="false" autocomplete="off">
+  <input name="b" placeholder="broadcast path, e.g. main/host-1a2b/kenton/camera.hang" spellcheck="false" autocomplete="off">
+  <input name="code" placeholder="viewer code" autocomplete="off">
+  <button type="submit">Watch</button>
+  <p class="hint">The relay host plays the broadcast for this browser (fragmented MP4). The full KASTR page with rooms,
+    chat and camera is <a href="/moq-watch-lite.html">here</a>; on http it needs the relay host's https address for video.</p>
+</form>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const v = $("#v"), st = $("#status"), f = $("#f");
+  const q = new URLSearchParams(location.search);
+  const say = (m, err) => { st.textContent = m; st.className = err ? "err" : ""; };
+  const relayDefault = () => {
+    const isHttps = location.protocol === "https:";
+    return (isHttps ? "https" : "http") + "://" + location.hostname + ":" + (isHttps ? 4445 : 4443);
+  };
+  f.relay.value = q.get("relay") || relayDefault();
+  f.b.value = q.get("b") || "";
+  f.code.value = q.get("code") || "";
+  let ctl = null, retryT = 0;
+
+  async function token(relay, room, code) {
+    // the room-code service: same-origin proxy (/api/token) -- the relay host serves this page
+    let r;
+    try { r = await fetch("/api/auth", { cache: "no-store" }); } catch { return null; }
+    if (!r.ok) return null;
+    const a = await r.json().catch(() => ({}));
+    if (!a.secured) return "";
+    const host = (window.__kastrClient && window.__kastrClient.host) || undefined;
+    const t = await fetch("/api/token", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ room, code: code || "", roomCode: "", host }) });
+    const d = await t.json().catch(() => ({}));
+    if (!t.ok || !d.ok) throw new Error(d.error || ("token refused (" + t.status + ")"));
+    return d.tokens && d.tokens.member;
+  }
+
+  async function play(b, code) {
+    if (ctl) { try { ctl.abort(); } catch {} ctl = null; }
+    clearTimeout(retryT);
+    const room = b.split("/")[0];
+    say("Asking the relay host…");
+    let tok;
+    try { tok = await token(f.relay.value.trim(), room, code); } catch (e) { say(String(e.message || e), true); return; }
+    if (tok === null) { say("This page must be served by the relay host's KASTR (no /api/auth here).", true); return; }
+    const url = "/api/watch/" + b.split("/").map(encodeURIComponent).join("/") + ".mp4" + (tok ? "?jwt=" + encodeURIComponent(tok) : "");
+    history.replaceState(null, "", "?" + new URLSearchParams({ b, relay: f.relay.value.trim(), code: code || "" }));
+    $("#who").textContent = b;
+    if (!("MediaSource" in window)) {   // progressive playback (Safari)
+      v.src = url; v.play().catch(() => {});
+      say("Playing (progressive)");
+      v.onended = v.onerror = () => { say("Stream ended — retrying in 3 s", true); retryT = setTimeout(() => play(b, code), 3000); };
+      return;
+    }
+    ctl = new AbortController();
+    let res;
+    try { res = await fetch(url, { signal: ctl.signal, cache: "no-store" }); } catch (e) { say("Relay host unreachable: " + (e.message || e), true); return; }
+    if (!res.ok) { const d = await res.json().catch(() => ({})); say(d.error || ("HTTP " + res.status), true); return; }
+    const mime = res.headers.get("X-KASTR-Mime") || 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
+    if (!MediaSource.isTypeSupported(mime)) { say("This browser cannot play " + mime + " — trying progressive", true); try { ctl.abort(); } catch {} v.src = url; v.play().catch(() => {}); return; }
+    const ms = new MediaSource();
+    v.src = URL.createObjectURL(ms);
+    await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
+    const sb = ms.addSourceBuffer(mime);
+    sb.mode = "segments";
+    const reader = res.body.getReader();
+    const queue = [];
+    let pumping = false, bytes = 0;
+    const pump = () => {
+      if (pumping || sb.updating || !queue.length) return;
+      pumping = true;
+      try { sb.appendBuffer(queue.shift()); } catch (e) { pumping = false; say("Buffer error: " + (e.message || e), true); }
+    };
+    sb.addEventListener("updateend", () => {
+      pumping = false;
+      // stay near the live edge: jump when more than 3 s behind, trim what is behind us
+      try {
+        const end = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0;
+        if (end - v.currentTime > 3) v.currentTime = end - 0.5;
+        if (v.buffered.length && v.currentTime - v.buffered.start(0) > 30 && !sb.updating) sb.remove(0, v.currentTime - 20);
+      } catch {}
+      pump();
+    });
+    say("Playing (" + mime + ")");
+    v.play().catch(() => say("Tap play", true));
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        queue.push(value); pump();
+      }
+      say("Stream ended — retrying in 3 s", true);
+      retryT = setTimeout(() => play(b, code), 3000);
+    } catch (e) {
+      if (ctl && ctl.signal.aborted) return;
+      say("Connection lost — retrying in 3 s", true);
+      retryT = setTimeout(() => play(b, code), 3000);
+    }
+  }
+  f.addEventListener("submit", (e) => { e.preventDefault(); if (f.b.value.trim()) play(f.b.value.trim(), f.code.value); });
+  if (f.b.value) play(f.b.value.trim(), f.code.value);
+})();
+</script>
+</body>
+</html>

@@ -10,7 +10,7 @@
 // 0.13.0: "Relay server" left the nav -- it is reached from the Relay ▾ popover
 // ("Relay server settings…"), and the app shell creates its tab link on demand.
 const NAV = [
-  { href: "/app.html", label: "App" },
+  { href: "/app.html", label: "App", app: true },   // 0.17.0: the shell is the host window's; web clients get Go Live only
   { href: "/moq-watch-lite.html", label: "Go Live" },
 ];
 
@@ -27,6 +27,13 @@ const RELAY = "http://localhost:4443";
 // page is opened by something that does not substitute.
 const RAW_VERSION = "__KASTR_VERSION__";
 const VERSION = /^[0-9][0-9.]*(-dev)?$/.test(RAW_VERSION) ? RAW_VERSION : "dev";
+
+// 0.17.0: the client class (assets/client.js): "web" = a browser on another device
+// that opened this relay host's web port. A web client has no host controls here
+// (relay switching, updates, window geometry, heartbeat) and follows the host's
+// version by reloading.
+const CLIENT = window.__kastrClient ?? null;
+const IS_WEB = CLIENT?.class === "web";
 
 // 0.12.0: the operating mode this KASTR boots as (full | viewer | publisher |
 // relay | publisher-relay), from /api/instance -- the launcher sets it, so one
@@ -81,7 +88,7 @@ function build() {
 
   const nav = document.createElement("nav");
   nav.className = "asi-nav";
-  for (const item of NAV) {
+  for (const item of NAV.filter((n) => !(n.app && IS_WEB))) {
     const a = document.createElement("a");
     a.href = item.href;
     a.textContent = item.label;
@@ -248,14 +255,14 @@ function build() {
     }
     for (const sel of [".rrow", ".rhist"]) {
       const el = pop.querySelector(sel);
-      if (el) el.style.display = viewer ? "none" : "";   // the stylesheet's display:flex beats [hidden]
+      if (el) el.style.display = (viewer || IS_WEB) ? "none" : "";   // the stylesheet's display:flex beats [hidden]; 0.17.0: web clients cannot switch the host's relay
     }
     // 0.13.0: "Relay server settings…" -- a viewer box has no relay to run and
     // a publisher box is armed once from the address row above; only full,
     // relay and publisher-relay boxes host a relay worth configuring. Also
     // pointless on the Relay page itself (the ?solo=1 relay-only boot too).
     const rset = pop.querySelector(".rset");
-    if (rset) rset.style.display = (viewer || m === "publisher" || onRelayPage) ? "none" : "";
+    if (rset) rset.style.display = (viewer || m === "publisher" || onRelayPage || IS_WEB) ? "none" : "";   // 0.17.0: + web clients
   };
   modeHooks.push(paintMode);
   paintMode(MODE);
@@ -328,6 +335,13 @@ function build() {
       const res = await fetch("/api/instance", { cache: "no-store" });
       if (!res.ok) return;
       const inst = await res.json();
+      // 0.17.0: a web client runs the relay host's build -- when the host updates, reload
+      if (IS_WEB && inst.version && VERSION !== "dev" && inst.version !== VERSION && !window.__kastrReloading) {
+        window.__kastrReloading = true;
+        try { brandToast("KASTR on the host updated to v" + inst.version + " \u2014 reloading"); } catch {}
+        setTimeout(() => { try { location.reload(); } catch {} }, 2500);
+        return;
+      }
       if (inst.mode) applyMode(inst.mode);   // 0.12.0: same poll carries the mode
       if (!inst.relay || inst.relay === currentRelay) return;
       currentRelay = inst.relay;
@@ -354,6 +368,7 @@ function build() {
     + '<button type="button" class="close" title="Close">✕</button></div>'
     + '<div class="body">Loading…</div>';
 
+  if (IS_WEB) { notesPop.querySelector(".upd")?.remove(); notesPop.querySelector(".updst")?.remove(); }   // 0.17.0: no host update from a web client
   const closeNotes = () => { notesPop.hidden = true; };
   notesPop.addEventListener("click", (e) => {   // 0.15.1: previous versions fold
     const b = e.target.closest(".prevbtn"); if (!b) return;
@@ -494,6 +509,7 @@ function build() {
   };
   const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
   window.__kastrCheckUpdate = async (host) => {
+    if (IS_WEB) return { status: "web", text: "Updates are installed on the KASTR that hosts the relay; this page follows it." };   // 0.17.0
     const h = host || hostOf(currentRelay);
     const t0 = Date.now() / 1000 - 2;
     let r;
@@ -642,6 +658,7 @@ if (document.readyState === "loading") {
 // instead of guessed at from the outside. Local only: the same loopback
 // server that served this page, and nothing is stored on disk.
 setInterval(() => {
+  if (IS_WEB) return;   // 0.17.0: diagnostics are the host window's (the server refuses them anyway)
   let snap;
   try {
     snap = {
@@ -663,7 +680,7 @@ setInterval(() => {
 
 // Remember where this window is, because the browser does not restore an
 // app window's bounds. Reported on change so the launcher can put it back.
-if (window.top === window) {
+if (window.top === window && !IS_WEB) {   // 0.17.0: a phone's geometry is not the host window's
   let lastGeom = "";
   const reportGeometry = () => {
     try {
@@ -693,7 +710,7 @@ if (window.top === window) {
   reportGeometry();
 }
 
-if (window.top === window) {
+if (window.top === window && !IS_WEB) {   // 0.17.0: a web client must not keep a closed KASTR alive (nor be closed by its 205)
   const beat = () => {
     // keepalive so a ping in flight during teardown still lands.
     // 0.8.8: 205 = the launcher is relaunching for an update -- close this

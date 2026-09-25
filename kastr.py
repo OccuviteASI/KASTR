@@ -2412,7 +2412,9 @@ def main():
         try:
             import kastr_tls
             import kastr_relay as _kr
-            tls = kastr_tls.ensure(state_dir(), _kr.local_ips())
+            # 0.17.0: the operator's certificate (kastr.ini tls_cert/tls_key) when given,
+            # else the local CA; tls_hostname / web_names / <hostname>.local join the SANs
+            tls = kastr_tls.resolve(state_dir(), _kr.local_ips(), ini, note)
             if tls:
                 https_port = int(ini.get("https_port", 8443))
                 relay_obj = getattr(server, "relay", None)
@@ -2426,14 +2428,51 @@ def main():
                 threading.Thread(target=tls_server.serve_forever, daemon=True).start()
                 kastr_serve.HTTPS_INFO.update(port=tls_server.server_address[1],
                                               fingerprint=tls["fingerprint"],
-                                              ca=tls["ca_crt"], names=tls["names"])
+                                              ca=tls["ca_crt"], names=tls["names"],
+                                              trust=tls.get("source") or "local-ca", hostname=tls.get("hostname"),
+                                              expires=tls.get("expires"), error=None)   # 0.17.0
                 _EXTRA_SERVERS.append(tls_server)
                 _kr._FIREWALL_HTTPS_PORT = tls_server.server_address[1]
                 _kr.HTTPS_PORT = tls_server.server_address[1]     # 0.15.0: /api/auth advertises it
                 print(f"{APP_NAME}: https on {args.host}:{tls_server.server_address[1]} "
-                      f"(CA {tls['fingerprint'][:12]}...)", flush=True)
+                      f"({tls.get('source', 'local-ca')} {tls['fingerprint'][:12]}...)", flush=True)
+                note("tls: https on :%d (%s%s, expires %s)" % (tls_server.server_address[1], tls.get("source") or "local-ca",
+                                                                 (" for " + tls["hostname"]) if tls.get("hostname") else "", tls.get("expires") or "?"))
+                dl = kastr_tls.days_left(tls)
+                if dl is not None and dl <= 14:
+                    note("tls: certificate expires in %d days" % dl)
+
+                # 0.17.0: ONE daily check, no watcher -- a swapped operator certificate (certbot,
+                # win-acme write into the tls_* paths) or a new LAN address is picked up within a day:
+                # the https listener reloads its chain, the relay restarts once for its wss listener.
+                def _tls_tick(_tls=[tls], _srv=tls_server, _relay=relay_obj):
+                    new = kastr_tls.resolve(state_dir(), _kr.local_ips(), read_ini(), note)
+                    if not new:
+                        return
+                    dl2 = kastr_tls.days_left(new)
+                    if dl2 is not None and dl2 <= 14:
+                        note("tls: certificate expires in %d days" % dl2)
+                    if new.get("stamp") == _tls[0].get("stamp"):
+                        return
+                    kastr_serve.reload_tls(_srv, new)
+                    kastr_serve.HTTPS_INFO.update(fingerprint=new["fingerprint"], ca=new["ca_crt"], names=new["names"],
+                                                  trust=new.get("source") or "local-ca", hostname=new.get("hostname"),
+                                                  expires=new.get("expires"))
+                    _tls[0] = new
+                    note("tls: certificate changed (%s, expires %s) -- https reloaded%s"
+                         % (new.get("source") or "local-ca", new.get("expires") or "?",
+                            ", relay restarting for its wss listener" if (_relay is not None and _relay.running()) else ""))
+                    if _relay is not None:
+                        _relay.tls = new
+                        if _relay.running():
+                            try:
+                                _relay.restart()
+                            except Exception as e:
+                                note("tls: relay restart after certificate change failed: %s" % e)
+                start_update_sweeper(_tls_tick, every=86400, label="tls: daily certificate check")
         except Exception as e:
             print(f"{APP_NAME}: https listener not started: {e}", flush=True)
+            kastr_serve.HTTPS_INFO["error"] = str(e)[:200]   # 0.17.0: the Relay page shows why 8443 is down
 
     # 0.8.6: on-demand fleet update (relay switch / "Check for updates"). The
     # hook tears the live server down before the relaunch so the ports are

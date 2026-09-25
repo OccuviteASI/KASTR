@@ -46,15 +46,35 @@ def available():
         return False
 
 
-def _names(extra=None):
+def _ini_names(ini):
+    """0.17.0: the operator's names for this host -- kastr.ini `tls_hostname` (the DNS
+    name devices use) and `web_names` (comma list of extra SANs for the local-CA leaf)."""
+    out = []
+    if not ini:
+        return out
+    hn = str(ini.get("tls_hostname", "") or "").strip().lower()
+    if hn:
+        out.append(hn)
+    for n in str(ini.get("web_names", "") or "").split(","):
+        n = n.strip().lower()
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def _names(extra=None, ini=None):
     names = ["localhost", "127.0.0.1"]
     try:
         hn = socket.gethostname()
         if hn:
             names.append(hn)
             names.append(hn.lower())
+            names.append(hn.lower() + ".local")   # 0.17.0: mDNS name phones resolve on the LAN
     except OSError:
         pass
+    for n in _ini_names(ini):                     # 0.17.0
+        if n and n not in names:
+            names.append(n)
     for n in extra or []:
         if n and n not in names:
             names.append(n)
@@ -211,22 +231,125 @@ def _fingerprint(cert):
     return hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
 
 
-def ensure(state_dir, extra_names=None):
+def ensure(state_dir, extra_names=None, ini=None):
     """Make sure the CA and a leaf covering `extra_names` (IPs/hosts) exist.
 
     Returns a dict of paths plus `fingerprint` (CA, sha-256 hex) and `names`;
-    None when the cryptography package is missing (source checkouts)."""
+    None when the cryptography package is missing (source checkouts).
+    0.17.0: `ini` adds tls_hostname / web_names / <hostname>.local to the SANs;
+    a changed SAN set reissues the leaf under the SAME CA (phones stay trusted)."""
     if not available():
         return None
     p = _paths(state_dir)
     os.makedirs(p["dir"], exist_ok=True)
-    names = _names(extra_names)
+    names = _names(extra_names, ini)
     ca_key, ca_cert = _ensure_ca(p)
     if not _leaf_current(p, names, ca_cert):
         _issue_leaf(p, names, ca_key, ca_cert)
     p["fingerprint"] = _fingerprint(ca_cert)
     p["names"] = names
+    p["source"] = "local-ca"
+    p["hostname"] = (_ini_names(ini) or [None])[0]
+    try:
+        p["expires"] = _load_cert(p["cert"]).not_valid_after_utc.isoformat()
+    except Exception:
+        p["expires"] = None
+    p["stamp"] = _stamp(p["chain"], p["key"])
     return p
+
+
+def _stamp(*files):
+    """sha256 over the PEM files -- the daily check compares it to notice a swap."""
+    h = hashlib.sha256()
+    for f in files:
+        try:
+            with open(f, "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            h.update(b"-")
+    return h.hexdigest()
+
+
+def _cert_names(cert):
+    from cryptography import x509
+    out = []
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        out += [str(v) for v in san.get_values_for_type(x509.DNSName)]
+        out += [str(v) for v in san.get_values_for_type(x509.IPAddress)]
+    except Exception:
+        pass
+    return [n.lower() for n in out]
+
+
+def operator_paths(state_dir, ini, log=None):
+    """0.17.0: an operator-provided certificate -- kastr.ini `tls_cert` + `tls_key`
+    (PEM; unencrypted key), optional `tls_chain` (intermediates). Both must load,
+    or None is returned and the caller falls back to the local CA (logged once).
+    The chain file KASTR and moq-relay serve is leaf + chain, written under
+    <state_dir>/tls/operator-chain.crt; the key is used from where it lives."""
+    if not ini or not available():
+        return None
+    cert_p = str(ini.get("tls_cert", "") or "").strip()
+    key_p = str(ini.get("tls_key", "") or "").strip()
+    if not cert_p and not key_p:
+        return None
+    say = log or (lambda m: None)
+    if not (cert_p and key_p):
+        say("tls: operator certificate needs BOTH tls_cert and tls_key in kastr.ini -- using the local CA")
+        return None
+    try:
+        cert = _load_cert(cert_p)
+        _load_key(key_p)
+    except Exception as e:
+        say("tls: operator certificate unusable (%s) -- using the local CA" % e)
+        return None
+    p = _paths(state_dir)
+    os.makedirs(p["dir"], exist_ok=True)
+    chain_p = str(ini.get("tls_chain", "") or "").strip()
+    with open(cert_p, "rb") as f:
+        leaf_pem = f.read()
+    if chain_p:
+        try:
+            with open(chain_p, "rb") as f:
+                extra = f.read()
+            chain_file = os.path.join(p["dir"], "operator-chain.crt")
+            _write(chain_file, leaf_pem.rstrip(b"\n") + b"\n" + extra)
+        except OSError as e:
+            say("tls: tls_chain unreadable (%s) -- serving the leaf alone" % e)
+            chain_file = cert_p
+    else:
+        chain_file = cert_p
+    names = _cert_names(cert)
+    hostname = (_ini_names(ini) or [None])[0]
+    if hostname and hostname not in names:
+        say("tls: %s is not a name in the operator certificate (%s)" % (hostname, ", ".join(names) or "no SANs"))
+    out = {"dir": p["dir"], "ca_key": None, "ca_crt": None, "key": key_p, "cert": cert_p, "chain": chain_file,
+           "meta": None, "fingerprint": _fingerprint(cert), "names": names, "source": "operator",
+           "hostname": hostname or (names[0] if names else None), "stamp": _stamp(chain_file, key_p)}
+    try:
+        out["expires"] = cert.not_valid_after_utc.isoformat()
+    except Exception:
+        out["expires"] = None
+    return out
+
+
+def resolve(state_dir, extra_names=None, ini=None, log=None):
+    """0.17.0: the certificate both listeners serve -- the operator's when kastr.ini
+    names one and it loads, else the local CA's leaf (issued/reissued as needed)."""
+    op = operator_paths(state_dir, ini, log)
+    if op:
+        return op
+    return ensure(state_dir, extra_names, ini)
+
+
+def days_left(paths):
+    """Days until the served certificate expires (None when unknown)."""
+    try:
+        cert = _load_cert(paths["cert"])
+        return (cert.not_valid_after_utc - datetime.datetime.now(datetime.timezone.utc)).days
+    except Exception:
+        return None
 
 
 def ssl_context(paths):

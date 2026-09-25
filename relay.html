@@ -7,6 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
 <link rel="stylesheet" href="/assets/asi-brand.css">
 <!-- 0.12.0: the streams probe below imports @moq/watch; vendored like the main page (no esm.sh at run time) -->
+<script src="/assets/client.js"></script>
 <script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs","https://esm.sh/@moq/publish":"/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs"}}</script>
 <script type="module" src="/assets/asi-brand.js"></script>
 <style>
@@ -197,6 +198,13 @@
         Every KASTR already serves updates; this just makes THIS one reachable: writes
         <code>host = 0.0.0.0</code> to kastr.ini (next launch) and adds the firewall rules now
         (one prompt). Relay-only machines do this on their own.</span>
+      <!-- 0.17.0: browser clients on other devices -- the same host switch plus https + the URLs to open -->
+      <label class="f" style="display:flex;align-items:center;gap:7px">
+        <input type="checkbox" id="webClients">
+        <span style="margin:0">Web clients &mdash; phones, tablets and browsers without KASTR open this relay host's page</span>
+      </label>
+      <span id="webClientsMsg" class="hint" style="display:block;margin-top:2px">Loading&hellip;</span>
+      <div id="webUrls" style="margin:4px 0 6px"></div>
       <p class="hint" id="fwOk" hidden style="color:var(--asi-green)">Firewall rules are in place.</p>
       <p class="hint" id="fwHint" hidden>
         <span id="fwIntro"></span><br>
@@ -291,7 +299,9 @@
         <dt>LAN mesh</dt><dd id="hLan">\u2014</dd>
         <dt>Publisher pairs</dt><dd id="hPairs">\u2014</dd>
         <dt>Helpers</dt><dd id="hHelpers">\u2014</dd>
+        <dt>Removed members</dt><dd id="hBans">\u2014</dd>
       </dl>
+      <div id="hBanList" style="font-family:var(--font-mono,monospace);font-size:11px;line-height:1.7"></div>
       <div id="hPairList" style="font-family:var(--font-mono,monospace);font-size:11px;line-height:1.7;margin-top:6px"></div>
       <p class="hint" id="hMetrics" hidden style="margin-top:6px"><a href="/api/relay/metrics" target="_blank" rel="noopener">Prometheus metrics</a> (this machine only)</p>
     </section>
@@ -406,7 +416,7 @@
     b.className = "ghost";
     b.textContent = "Copy";
     b.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(url); b.textContent = "Copied"; }
+      try { await navigator.clipboard?.writeText(url); b.textContent = navigator.clipboard ? "Copied" : "Select and copy"; }   // 0.17.0: no clipboard on http
       catch { b.textContent = "Copy failed"; }
       setTimeout(() => { b.textContent = "Copy"; }, 1200);
     });
@@ -740,6 +750,40 @@
     const v = String(d.value || "");
     $("shareUpd").checked = !!v && !["127.0.0.1", "localhost", "::1"].includes(v);
   }).catch(() => {});
+  // 0.17.0: web clients -- reads /api/web (loopback), the switch writes host/https + firewall
+  async function paintWeb() {
+    let w;
+    try { w = await api("/api/web"); } catch (e) { $("webClientsMsg").textContent = "Web clients: not available from this server."; return; }
+    if (w.error) { $("webClientsMsg").textContent = w.error; $("webClients").disabled = true; return; }
+    $("webClients").checked = !!w.enabled;
+    $("webClients").disabled = !LOCAL || !!w.relayOnly;
+    const parts = [];
+    if (w.relayOnly) parts.push("On (relay-only mode binds every interface).");
+    if (w.live) {
+      parts.push("Serving https on port " + w.https + (w.trust === "operator" ? " with the operator's certificate" + (w.hostname ? " for " + w.hostname : "") : " with the KASTR certificate authority (install /ca.crt once per device)") + (w.expires ? ", expires " + String(w.expires).slice(0, 10) : "") + ".");
+      parts.push("Plain http (port " + w.web + ") shows the lobby only \u2014 rooms, People, chat; video needs https.");
+    } else if (w.enabled) {
+      parts.push(w.httpsError ? "HTTPS listener failed: " + w.httpsError : (w.note || "applies at the next launch \u2014 Apply & relaunch"));
+    } else {
+      parts.push("Off. Turning it on writes host = 0.0.0.0 and https to kastr.ini (next launch) and adds the firewall rules now (one prompt).");
+    }
+    if (w.enabled && !w.relayRunning) parts.push("The relay is not running here \u2014 web clients dial the relay this box hosts.");
+    else if (w.enabled && w.relayRunning && !w.relayLan) parts.push("The relay is bound to this machine only \u2014 start it with \u2018Reachable from the LAN\u2019 or web clients cannot connect.");
+    $("webClientsMsg").textContent = parts.join(" ");
+    const box = $("webUrls"); box.innerHTML = "";
+    if (w.live) for (const u of (w.urls || [])) box.append(urlRow(u, u === (w.urls || [])[0]));
+  }
+  paintWeb();
+  $("webClients").addEventListener("change", async () => {
+    const on = $("webClients").checked;
+    $("webClientsMsg").textContent = on ? "Turning on\u2026" : "Turning off\u2026";
+    try {
+      const r = await api("/api/web", { enabled: on });
+      if (r.error) { $("webClientsMsg").textContent = r.error; $("webClients").checked = !on; return; }
+      $("shareUpd").checked = on;   // the same host key
+      await paintWeb();
+    } catch (e) { $("webClientsMsg").textContent = "Failed: " + (e?.message || e); }
+  });
   $("shareUpd").addEventListener("change", async () => {
     const on = $("shareUpd").checked;
     try {
@@ -901,6 +945,25 @@
     const hv = h.helpers || {};
     $("hHelpers").textContent = Object.keys(hv).length ? Object.entries(hv).map(([k, v]) => k + " " + v).join(" \u00b7 ") : "\u2014";
     $("hMetrics").hidden = !LOCAL;
+    paintBans(a.bans);   // 0.17.0
+  }
+  // 0.17.0: members an admin removed at the relay (refused on reconnect and re-mint until `until`)
+  async function paintBans(n) {
+    $("hBans").textContent = n ? n + " active" : "none";
+    const box = $("hBanList");
+    if (!n) { box.replaceChildren(); return; }
+    let r;
+    try { r = await api("/api/relay/bans"); } catch { return; }
+    box.replaceChildren(...(r.bans || []).map((b) => {
+      const d = document.createElement("div");
+      d.textContent = (b.room || "?") + "  " + (b.target || b.host || "?") + "  by " + (b.by || "?") + "  until " + new Date((b.until || 0) * 1000).toLocaleTimeString() + (b.via && b.via !== "local" ? "  (" + b.via + ")" : "") + "  ";
+      if (LOCAL) {
+        const btn = document.createElement("button"); btn.className = "ghost"; btn.textContent = "Clear";
+        btn.addEventListener("click", async () => { await api("/api/relay/bans/clear", { room: b.room, host: b.host }); refresh(); });
+        d.append(btn);
+      }
+      return d;
+    }));
   }
   function paintLan(l) {
     if (document.activeElement !== $("lanOn")) $("lanOn").checked = !!l.enabled;

@@ -183,6 +183,19 @@ Test the entrypoint logic without Docker: `KASTR_IMAGE_DIR=... KASTR_APP_DIR=...
 KASTR_STATE_DIR=... docker/entrypoint.sh` runs against any directories, with
 a stub `KASTR` script standing in for the binary (the release smoke does).
 
+## Web clients (0.17.0)
+
+A container's KASTR binds `0.0.0.0` already, so browsers on the LAN can open `http://<box>:8000/` (the lobby) and, once
+the https listener is up (`cryptography` is in the image), `https://<box>:8443/` after installing `/ca.crt` -- or mount a
+real certificate into the state volume and set `tls_cert` / `tls_key` / `tls_hostname` in kastr.ini. The relay must be
+started "Reachable from the LAN" (`lan: true`) for browser clients to reach its WebSocket listener.
+
+Smoke to run where Docker exists (none on the build box in 0.17.0): `python build.py --keep-version --publish` in WSL,
+`./docker-build.sh`, `docker compose up -d`, then `curl -s localhost:8000/api/instance` (version), `curl -s -X POST
+localhost:8000/api/relay/start -d '{"port":4443,"lan":true,"secured":true}'`, `curl -s localhost:4444/api/auth`
+(`session: true`), `curl -s localhost:8000/api/relay/health` (relay + auth up), `curl -s localhost:8000/api/web`
+(`live: true`), and the exit-75 relaunch loop via `/api/mode`.
+
 ## Not done / deferred
 
 - A `builder` stage compiling inside Docker (needs a `build.py --bare` that

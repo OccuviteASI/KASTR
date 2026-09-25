@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KASTR — ASI</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#002B45">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KASTR">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/asi-brand.css">
+<script src="/assets/client.js"></script>
 <script type="module" src="/assets/asi-brand.js"></script>
 
 <script>
@@ -86,12 +94,14 @@
   </div>
 
 
+  <div id="relaySec">
   <h2 class="sec">Relay server</h2>
   <div class="grid">
     <a class="card" href="/relay.html">
       <span class="t"><b>Relay server</b><span class="asi-badge blue">host it here</span></span>
       <span class="d">Run a MoQ relay on this machine with the bundled moq-relay — for an isolated network, or when the shared relay is unreachable.</span>
     </a>
+  </div>
   </div>
 
   <div class="asi-note" style="margin-top:20px; max-width:900px">

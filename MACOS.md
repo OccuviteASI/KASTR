@@ -108,6 +108,16 @@ Where things are:
    `updating v… -> v…`, the app relaunches, `/api/instance` reports the hub's
    version. (Downgrade the same way to repeat.)
 
+### 0.17.0 additions to the checklist
+
+- `bin/moq export fmp4 --help` answers (the arm64 CLI carries the exporter the fMP4 fallback depends on).
+- A Windows browser opens `https://<mac>:8443/moq-watch-lite.html` after installing the Mac's `/ca.crt`, joins and sees a
+  camera published from the Mac; `http://<mac>:8000/` shows the lobby and plays the spotlit stream via `/api/watch`.
+- An admin Remove writes `relay-bans.json` under `~/Library/Application Support/ASI/KASTR/` and the removed page's re-join
+  is refused with the ban message.
+- The daily certificate check logs `tls: https on :8443 (...)` at start; with `tls_cert`/`tls_key` in kastr.ini the
+  Relay page's Web clients row says "operator's certificate".
+
 ## 6. Release ritual with a Mac
 
 The feed must be assembled where **all three** platform folders are present,

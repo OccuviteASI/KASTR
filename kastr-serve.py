@@ -43,6 +43,8 @@ if __name__ == "__main__":
     parser.add_argument("--coep", choices=kastr_serve.COEP_MODES, default=kastr_serve.COEP_MODES[0])
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--mode", choices=kastr_serve.MODES, default="full")   # 0.12.0
+    parser.add_argument("--tls", type=int, nargs="?", const=8443, default=None,
+                        help="0.17.0: also serve https on this port with the local CA (kastr_tls), like the launcher")
     args = parser.parse_args()
     kastr_serve.MODE = args.mode   # 0.12.0: what /api/instance + /api/mode report
 
@@ -53,6 +55,21 @@ if __name__ == "__main__":
                                    bridge=bridge, relay_srv=relay_srv)
     # 0.9.8: POST /api/quit stops the harness through its finally (children too)
     kastr_serve.QUIT_HOOK = lambda: threading.Thread(target=server.shutdown, daemon=True).start()
+    kastr_serve.HTTP_PORT = server.server_address[1]
+    kastr_serve.LAN_OK = args.host not in ("127.0.0.1", "localhost", "::1")   # 0.17.0: like the launcher
+    if args.tls:
+        # 0.17.0: the web-client rig -- https with the local CA, mirroring kastr.py's listener
+        import kastr_tls, kastr_relay
+        tls = kastr_tls.ensure(os.path.join(ROOT, ".kast"), kastr_relay.local_ips())
+        relay_srv.tls = tls
+        tls_server = kastr_serve.make_tls_server(ROOT, args.host, args.tls, tls, coep=args.coep, quiet=True,
+                                                 bridge=bridge, relay_srv=relay_srv,
+                                                 relay_ref=server.relay_ref, alive_ref=server.alive_ref)
+        threading.Thread(target=tls_server.serve_forever, daemon=True).start()
+        kastr_serve.HTTPS_INFO.update(port=tls_server.server_address[1], fingerprint=tls["fingerprint"],
+                                      ca=tls["ca_crt"], names=tls["names"])
+        kastr_relay.HTTPS_PORT = tls_server.server_address[1]
+        print(f"https    on {args.host}:{tls_server.server_address[1]} (CA {tls['fingerprint'][:12]}...)", flush=True)
 
     print(f"Serving {ROOT}")
     print(f"mode     {args.mode}")   # 0.12.0

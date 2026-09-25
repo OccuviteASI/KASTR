@@ -840,3 +840,36 @@ speculative was later removed (see Decisions).
 - **Spawn, verify, retry, escalate, never exit blind.** A relaunch after an update fired one `Start-Process` at a file
   Defender was still scanning and discarded the error. Retry while locked, watch the child, escalate to the shell, and
   exit only once a successor answers -- or stay and say so.
+
+### 0.17.0
+
+- **A Host header is a claim; peer and Origin make it an identity.** Six host controls trusted `Host: 127.0.0.1`, which
+  any client can type. One request class (`request_class`) now decides for every route, and the machine's own window is
+  the only `local` caller.
+- **A served page inherits nothing from its server.** The relay host used to bake its own host slug and a loopback relay
+  into every page it served, so a phone would have been the relay box in disguise. Identity and relay address are per
+  request (`__KASTR_CLIENT__`, `web`, `page_relay`); a web device derives its own `web-<id>` host.
+- **http is a lobby, not a viewer -- unless the host decodes for you.** WebCodecs, camera, microphone and SubtleCrypto are
+  secure-context APIs, so an http page on a LAN address has none of them. The honest degradation is rooms, People, chat
+  and admin, plus one stream played through the relay host as fragmented MP4 (`moq export fmp4`). Video for everyone
+  and publishing need https.
+- **Heartbeats belong to the host window.** A phone pinging `/api/alive` kept a closed KASTR alive and was told to close
+  itself on an update; the diag and window-geometry posts had the same shape. Web clients follow the host's version by
+  reloading, not by heartbeat.
+- **Two module scripts, two top-level landmines.** One unguarded `navigator.mediaDevices.addEventListener` and one
+  unguarded `VideoEncoder` monkey-patch killed the publish half on every insecure page. A capability object measured
+  before the modules load (`assets/client.js`) is what the page gates on.
+- **The proxy must dial loopback or the minter cannot tell phones apart.** X-Forwarded-For is honoured from a loopback
+  peer only; a proxy dialling its own LAN address put every phone's wrong codes on one address.
+- **Trust has two doors and one daily check.** The local CA (install once) or the operator's certificate (`tls_*`), both
+  serving the page and the relay's wss listener; a swapped file is picked up within a day, the leaf is reissued under
+  the same CA when a name is added, and nothing watches anything.
+- **Revoke by the identity the token carries.** Operator and peer are not in a token; the host slug and the room are.
+  A kick bans (room, host), revokes the live sessions and asks the relay to re-validate now (`POST
+  /sessions/revalidate`, measured: a 403 closes the session within two seconds); the page leaves first (announce), the
+  relay refuses second, and a device whose sessions stay refused re-mints once to learn why.
+- **Measure the exporter before naming its flags.** `moq export --video-name video` matched nothing (the native pairs'
+  rendition is not called `video`) and produced an empty init segment; the exporter also writes ftyp+moov before the
+  codec boxes exist, so the codec sniff must wait for the first fragment.
+- **The rig's browser pane is not a browser.** Its per-site sandbox blocks WebSocket from a LAN-address page; real
+  engines under Playwright (Edge, Firefox, WebKit) are the verification, and the pane stays the loopback tool.

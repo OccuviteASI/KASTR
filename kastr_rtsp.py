@@ -620,7 +620,14 @@ def _seed_label(broadcast, url):
         return "rtsp"
 
 
-# What moq says about its relay session (moq CLI 0.11.2, measured 2026-09-19).
+# What moq says about its relay session (moq CLI 0.11.2, measured 2026-09-19;
+# RE-MEASURED 2026-09-25 on moq CLI 0.12.1 + moq-relay 0.15.1 with KASTR's auth
+# server -- the same strings still fire: a refused token prints "Error: unauthorized"
+# (HARD -> park -> re-mint, seen at first publish with a stale session token and
+# again after `POST /api/relay/rotate`); a relay bounce prints "session closed,
+# reconnecting peer=..." (SOFT, counted, the pair survives a 6 s bounce); a 25 s
+# outage lets --backoff-timeout 10s expire and moq exits, which the pipe reports
+# as ffmpeg exit 0xFFFFFFE0 (EPIPE) -> the ladder restarts, never parks).
 # HARD: the relay refused the session -- a stale/invalid token, or moq's
 # reconnect loop giving up (it exits 1 right after). Restarting with the same
 # URL cannot help; only a fresh token can. SOFT: the session dropped and moq
@@ -2277,12 +2284,18 @@ def handle_api(handler, bridge, path):
 
     def from_loopback():
         # 0.9.1: the page on this machine reaches us as 127.0.0.1/localhost;
-        # anything else (LAN IP, phone over HTTPS, a remote page) is foreign
-        h = (handler.headers.get("Host") or "").split(":")[0].lower()
-        return h in ("127.0.0.1", "localhost")
+        # anything else (LAN IP, phone over HTTPS, a remote page) is foreign.
+        # 0.17.0: the request class -- Host AND peer AND Origin (a typed Host
+        # header is not an identity). Imported here: kastr_relay imports us.
+        import kastr_relay
+        return kastr_relay.is_local(handler)
 
     if path == "/api/rtsp/list":
-        reply({"feeds": bridge.list(redact=not from_loopback()),   # 0.13.3: credentials stay on the box
+        if not from_loopback():
+            # 0.17.0: a web client has no bridge here -- the page hides its RTSP paths
+            reply({"feeds": [], "ffmpeg": False, "ffmpegPath": "", "moq": False, "remote": True})
+            return True
+        reply({"feeds": bridge.list(redact=False),
                "ffmpeg": bool(bridge.ffmpeg),
                "ffmpegPath": bridge.ffmpeg or "",
                "moq": bool(bridge.moq)})                      # 0.9.1: native publishing available
@@ -2333,6 +2346,9 @@ def handle_api(handler, bridge, path):
         return True
 
     if path in ("/api/rtsp/add", "/api/rtsp/remove"):
+        if not from_loopback():   # 0.17.0: these spawn ffmpeg on this machine
+            import kastr_relay
+            return kastr_relay.deny_remote(handler, "feed changes")
         try:
             n = int(handler.headers.get("Content-Length") or 0)
             payload = json.loads(handler.rfile.read(n) or b"{}")
@@ -2369,6 +2385,10 @@ def handle_stream(handler, bridge, path):
     """Serve GET /rtsp/<id> as an endless fragmented MP4."""
     if not path.startswith("/rtsp/"):
         return False
+    import kastr_relay
+    if not kastr_relay.is_local(handler):   # 0.17.0: the monitor is the owner page's
+        handler.send_error(403, "feed monitors only for the machine itself")
+        return True
     feed_id, transcode, passthrough = parse_stream_path(path)
     try:
         feed = bridge.get(feed_id)

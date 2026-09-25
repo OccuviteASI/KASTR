@@ -387,3 +387,6 @@ body.asi-upstream a { color: var(--asi-blue); }
 .asi-notespop .prevbtn { display:block; margin:14px 0 6px; padding:6px 12px; font:inherit; font-size:12px; color:var(--asi-blue, #3b82f6); background:transparent; border:1px solid currentColor; border-radius:6px; cursor:pointer; }
 .asi-notespop .prevbtn:hover { background:rgba(59,130,246,.10); }
 .asi-notespop .prev { border-top:1px solid rgba(255,255,255,.08); margin-top:8px; padding-top:4px; }
+
+/* 0.17.0: a web client (another device) has no app shell or relay page of its own */
+html.client-web a[href="/app.html"], html.client-web a[href="/relay.html"], html.client-web #relaySec { display: none !important; }

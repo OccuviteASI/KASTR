@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KASTR</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#002B45">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KASTR">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/asi-brand.css">
+<script src="/assets/client.js"></script>
 <script src="/assets/prefs.js"></script>
 <script type="module" src="/assets/asi-brand.js"></script>
 <style>
@@ -272,7 +280,8 @@
       const inst = await (await fetch("/api/instance", { cache: "no-store" })).json();
       mode = inst.mode || "full";
     } catch {}
-    if (mode !== "viewer" && mode !== "publisher") return;
+    const web = window.__kastrClient?.class === "web";   // 0.17.0: a web client has no relay page here
+    if (!web && mode !== "viewer" && mode !== "publisher") return;
     hiddenTabs.add("relay");
     if (open.has("relay")) closeTab("relay");   // 0.13.0: also removes the link it created
     const a = linkFor("relay");

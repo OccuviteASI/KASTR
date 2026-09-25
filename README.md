@@ -7,8 +7,13 @@ Linux binary, macOS app) that bundles a local web UI, a Chrome for Testing brows
 `moq-relay` / `moq` CLI. A box can be a viewer, a publisher, a relay, or all three, and relays federate
 into a hub-and-spoke cluster.
 
+Since 0.17.0 a relay host also serves KASTR to any browser: open `https://<relay-host>:8443/` (install the host's
+certificate once from `/ca.crt`, or give the host a real certificate with `tls_cert` / `tls_key` / `tls_hostname` in
+kastr.ini) for the full client, or `http://<relay-host>:8000/` for the lobby (rooms, People, chat, one stream played
+through the host). Turn it on from the Relay page's "Web clients" switch. Browser clients follow the relay host's version.
+
 Fleet updates flow hub-first: update the hub relay box, its spokes follow the hub's version within the hour, and
-clients pick the new build up on their next launch. Relay operators set viewer, publisher and (since 0.16.0) admin
+clients pick the new build up on their next launch; browser clients reload on their own. Relay operators set viewer, publisher and (since 0.16.0) admin
 access codes on the Relay page; an admin code set on the hub is honoured by every federated spoke.
 
 ## Layout

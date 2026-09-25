@@ -2,6 +2,50 @@
 
 What changed in each build, newest first.
 
+## v0.17.0 — open KASTR in any browser: the relay host serves the client
+
+**No executable needed any more.** Point a phone, tablet or laptop browser at the relay host's web address and you get
+KASTR — the same page the app shows, served by the relay's own KASTR, so browser clients always run the relay's version
+(they reload themselves when the host updates). Over **https** (port 8443) a browser client does everything a full client
+does short of the host's own hardware: rooms, People, chat, spotlight, the admin code's Stop / Mute / Remove, and it
+publishes its camera, microphone and (on desktop browsers) its screen. Over plain **http** (port 8000) the browser blocks
+its camera, microphone and its own decoder, so the page is a lobby with video: rooms, People, chat and admin work, and the
+spotlit stream plays through the relay host as fragmented MP4 (one stream at a time). What stays on the host: the RTSP
+bridge, media-file transcoding, relay controls, updates, preferences. Each browser is its own device (`web-<id>` host, so
+two phones never collide), and a page on another device can no longer keep the host's window alive, move its window,
+rename its operator, spawn feeds on it or read its diagnostics — every host control now checks Host, peer and Origin,
+not the Host header alone. Chrome/Edge and Firefox were verified end to end on the rig (lobby, https publish + view,
+admin stop and remove, chat, PWA manifest); Safari, iPhone and Android are best-effort this release.
+
+**Trust has two doors.** The relay host's KASTR certificate authority still works as before — install `/ca.crt` once per
+device (the Phone access card shows the QR and the addresses, now including `<hostname>.local`) — and an operator can
+drop a real certificate in instead: `tls_cert`, `tls_key`, optional `tls_chain` and `tls_hostname` in kastr.ini serve
+both the web page and the relay's wss listener, with a daily check that picks up a renewed file (certbot / win-acme write
+into those paths) and one log line a fortnight before expiry. Automatic Let's Encrypt is not in this release: it needs a
+public name and an inbound path the robot-site relays do not have. The Relay page gained a **Web clients** switch that
+writes the host and https settings, adds the firewall rules and lists the addresses to open; it also warns when the relay
+is bound to the machine only (browser clients need it on the LAN). Installable as an app: `manifest.webmanifest` + icons,
+"Add to Home Screen" opens KASTR full-screen (https only).
+
+**A removed member is removed at the relay too.** An admin's Remove used to ask the page to leave; now it also tells the
+relay host, which bans that device's identity in that room for an hour (`relay-bans.json`), closes its live sessions at
+once (the relay re-validates every session on request — measured: a refused re-validation closes the session within two
+seconds) and refuses its re-entry with an honest gate message. A kick on a spoke is forwarded to the hub with the
+federation token; other spokes still rely on the page-side announce. The Relay page's Health panel lists removed members
+with a Clear button.
+
+**Measured and recorded.** moq CLI 0.12.1 against relay 0.15.1 prints the same session strings 0.11.2 did (`Error:
+unauthorized` for a refused token — the pair parks and re-mints; `session closed, reconnecting` on a bounce — it survives),
+and a 25 s outage lets the CLI's backoff expire and the pair ladder, never park. The LAN mesh discovered a second relay on
+the same box over mDNS within 20 s (`advertising on the LAN … app=kastr`, `dialing LAN cluster peer`, `accepted LAN
+peer`). The auth server's revalidate cadence: measured on the rig at about 605 s after connect for every session (the grant's 600 s plus the relay's tick), and the token rides the revalidate request, so a ban lands at connect, at revalidate and at the minter. The pane's per-site sandbox blocks WebSocket
+from a LAN-address page, so browser verification moved to real browsers (Playwright: Edge, Firefox, WebKit).
+
+**Not in this release.** HLS for iPhones older than iOS 17 (the CLI can export it; the endpoint waits for 0.18), a
+service worker / offline mode, per-subscription priority on viewer tiles, Let's Encrypt, the Docker and Mac smokes (no
+Docker or Mac on the build box — the commands are in DOCKER.md / MACOS.md), and the media items from
+`docs/moq-landscape.md` (3, 5, 6, 8, 12) which form v0.18.0.
+
 ## v0.16.0 — relay stack 0.15, an admin code, a relaunch that comes back, shares that end
 
 **The relay stack moved to moq-relay 0.15.1 / moq 0.12.1, and KASTR now answers the relay's questions.** A 0.15 relay no

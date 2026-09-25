@@ -353,6 +353,26 @@ def session_jwt(req):
     return (parse_qs(q).get("jwt") or [""])[0]
 
 
+def claims_identity(claims):
+    """0.17.0: (room, host) a member token names -- room = its `get` (one room per member
+    token), host = the `<host>` of its `.state/<room>/<host>` put. (None, None) for a
+    federation or 0.12-shaped wide token. This is the identity a relay-side kick bans:
+    operator and peer are not in the token."""
+    try:
+        room = claims.get("get")
+        if not isinstance(room, str) or not room:
+            return None, None
+        host = None
+        for p in _patterns(claims.get("put")) if claims.get("put") is not None else []:
+            m = re.match(r"^\.state/%s/([a-z0-9-]{1,32}-[0-9a-f]{4})$" % re.escape(room), str(p))
+            if m:
+                host = m.group(1)
+                break
+        return room, host
+    except Exception:
+        return None, None
+
+
 def claims_role(claims):
     if is_relay_claims(claims):
         return "relay"
@@ -415,6 +435,96 @@ class Lockout:
     def ok(self, peer):
         with self.lock:
             self._fails.pop(peer, None)
+
+
+class BanList:
+    """0.17.0: who an admin removed, so the relay refuses them for a while.
+
+    A ban keys on (room, host): the host slug the member's token carries (a
+    machine's `<name>-<4hex>`, a web device's `web-<8hex>-<4hex>`), plus the
+    remote addresses of the sessions that were live when the kick landed (for
+    0.12-shaped tokens without a host). Kept in relay-bans.json; expired rows
+    are pruned on load and on every add. `until` is capped at a day."""
+
+    MAX = 500
+
+    def __init__(self, state_dir, log=None):
+        self.state_dir = state_dir
+        self.log = log or (lambda m: None)
+        self.lock = threading.Lock()
+        self.bans = []
+        self._load()
+
+    def _path(self):
+        return os.path.join(self.state_dir, "relay-bans.json")
+
+    def _load(self):
+        try:
+            with open(self._path(), encoding="utf-8-sig") as f:
+                d = json.load(f)
+            rows = d.get("bans") if isinstance(d, dict) else None
+            now = time.time()
+            self.bans = [b for b in (rows or []) if isinstance(b, dict) and float(b.get("until") or 0) > now]
+        except Exception:
+            self.bans = []
+
+    def _save(self):
+        try:
+            os.makedirs(self.state_dir, exist_ok=True)
+            tmp = self._path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"bans": self.bans}, f)
+            for i in range(6):
+                try:
+                    os.replace(tmp, self._path())
+                    return
+                except PermissionError:
+                    if i == 5:
+                        raise
+                    time.sleep(0.02 * (i + 1))
+        except Exception as e:
+            self.log("relay auth: bans not saved: %s" % e)
+
+    def _prune(self, now):
+        self.bans = [b for b in self.bans if float(b.get("until") or 0) > now][-self.MAX:]
+
+    def add(self, ban):
+        with self.lock:
+            now = time.time()
+            self._prune(now)
+            # one row per (room, host|target): a repeat kick extends it
+            key = (ban.get("room"), ban.get("host") or ban.get("target"))
+            self.bans = [b for b in self.bans if (b.get("room"), b.get("host") or b.get("target")) != key]
+            self.bans.append(ban)
+            self._save()
+        return ban
+
+    def hit(self, room, host, remote=None, now=None):
+        """The active ban covering this identity, or None."""
+        now = now or time.time()
+        with self.lock:
+            for b in self.bans:
+                if float(b.get("until") or 0) <= now or b.get("room") != room:
+                    continue
+                if host and b.get("host") and b.get("host") == host:
+                    return dict(b)
+                if remote and not b.get("host") and remote in (b.get("remotes") or []):
+                    return dict(b)
+            return None
+
+    def active(self, room=None):
+        now = time.time()
+        with self.lock:
+            return [dict(b) for b in self.bans if float(b.get("until") or 0) > now and (room is None or b.get("room") == room)]
+
+    def clear(self, room, host=None):
+        with self.lock:
+            before = len(self.bans)
+            self.bans = [b for b in self.bans if not (b.get("room") == room and (host is None or b.get("host") == host))]
+            n = before - len(self.bans)
+            if n:
+                self._save()
+            return n
 
 
 class AuthStore:
@@ -970,10 +1080,15 @@ class AuthService:
     doubles from 30 s to 10 min.
     """
 
-    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None):
+    bans = None   # 0.17.0: set by __init__; a test double without one simply never bans
+
+    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None):
         self.store = store or AuthStore(os.getcwd(), log)
         self.hub = hub                       # 0.16.0: callable -> the hub minter's base URL (a spoke forwards admin codes there), or None
+        self.fed_token = fed_token           # 0.17.0: callable -> this spoke's federation token (a kick rides it to the hub), or None
+        self.revalidate = revalidate         # 0.17.0: callable -> asks the relay to re-validate its sessions now ("post"|"get"|"unavailable")
         self.log = log or (lambda m: None)
+        self.bans = BanList(getattr(self.store, "state_dir", os.getcwd()), log)   # 0.17.0: relay-side kicks
         self.lock = threading.Lock()
         self.lockout = Lockout(self.log)     # 0.12.0: the brute-force counter, one class with kastr_serve
         self._fails = self.lockout._fails
@@ -1082,6 +1197,9 @@ class AuthService:
                     ip = (self.client_address[0] if self.client_address else "") or ""
                     obj, code = svc.session(p, ip)
                     self._reply(obj, code)
+                elif path == "/api/kick":   # 0.17.0: an admin removes a member relay-side
+                    obj, code = svc.kick(p, self._peer(), self.headers.get("Authorization"))
+                    self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
 
@@ -1151,6 +1269,10 @@ class AuthService:
             return {"error": "bad room name"}, 400
         if host is not None and not HOST_RE.match(host):
             return {"ok": False, "error": "bad host"}, 400
+        b = self.bans.hit(slug, host, peer) if self.bans else None   # 0.17.0: removed by an admin -- not a wrong code, no lockout
+        if b:
+            return {"ok": False, "error": "removed from this room by an admin", "until": int(b.get("until") or 0),
+                    "by": b.get("by")}, 403
         wait = self.locked_for(peer)
         if wait:
             return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
@@ -1251,9 +1373,17 @@ class AuthService:
             # lasts (never a downgrade to the public grant -- that would end a publisher's session)
             with self.lock:
                 rec = self._sessions.get(sid)
+            if rec and (rec.get("revoked") or (self.bans and self.bans.hit(rec.get("room"), rec.get("host"), rec.get("remote"), now))):
+                return self._revoked_answer(ev, sid, remote, now)   # 0.17.0: an admin removed this identity
             if rec and float(rec.get("expires") or 0) > now:
                 return rec["grant"], 200
         status, grant, why = session_grant(req, self.key, now)
+        room = host = None
+        if status == "grant":
+            claims = verify_token(session_jwt(req), self.key, now) or {}
+            room, host = claims_identity(claims)
+            if self.bans and self.bans.hit(room, host, remote, now):   # 0.17.0
+                return self._revoked_answer(ev, sid, remote, now)
         if status == "refuse":
             with self.lock:
                 self.refusals += 1
@@ -1274,14 +1404,133 @@ class AuthService:
                         self._sessions.pop(k, None)
                 self._sessions[sid] = {"at": now, "remote": remote, "role": why,
                                        "publisher": bool(grant.get("publish")),
-                                       "expires": grant.get("expires") or (now + 86400), "grant": grant}
+                                       "expires": grant.get("expires") or (now + 86400), "grant": grant,
+                                       "room": room, "host": host, "revoked": False}   # 0.17.0: the identity a kick keys on
         return grant, 200
+
+    # ---- 0.17.0: relay-side kicks --------------------------------------------------------
+    # The relay answers to us for every session: a banned identity is refused at connect,
+    # at revalidate (the relay re-asks on a timer, and at once when we POST
+    # /sessions/revalidate on its internal listener) and at the minter. REVOKE_ANSWER picks
+    # the refusal shape: "refuse" = HTTP 403 (the relay logs "the auth server refused the
+    # session" and closes it); "empty" = 200 with no patterns ("grant names nothing; the
+    # session is refused"). Measured on the rig; see ARCHITECTURE.md.
+    REVOKE_ANSWER = "refuse"
+    REVOKED_TEXT = "removed from this room by an admin"
+
+    def _revoked_answer(self, ev, sid, remote, now):
+        with self.lock:
+            self.refusals += 1
+            self._refused.append({"at": int(now), "remote": remote, "path": "", "why": "banned"})
+            del self._refused[:-20]
+            rec = self._sessions.get(sid)
+            if rec:
+                rec["revoked"] = True
+        self.log("relay session: refused %s from %s (removed by an admin)" % (ev, remote))
+        if self.REVOKE_ANSWER == "empty":
+            return {"publish": [], "subscribe": []}, 200
+        return {"error": self.REVOKED_TEXT}, 403
+
+    def revoke_sessions(self, room, host):
+        """Mark the live sessions of (room, host) revoked; -> (session ids, their remotes)."""
+        ids, remotes = [], []
+        with self.lock:
+            for sid, rec in self._sessions.items():
+                if rec.get("room") == room and host and rec.get("host") == host:
+                    rec["revoked"] = True
+                    ids.append(sid)
+                    if rec.get("remote") and rec["remote"] not in remotes:
+                        remotes.append(rec["remote"])
+        return ids, remotes
+
+    def trigger_revalidate(self):
+        try:
+            return self.revalidate() if callable(self.revalidate) else "unavailable"
+        except Exception:
+            return "unavailable"
+
+    def kick(self, p, peer="", bearer=None):
+        """POST /api/kick. From an admin page: {token, room, target: "host/op[/peer]", until?}
+        (the token must carry the room's .admin put). From a SPOKE: Authorization: Bearer
+        <federation token> + {ban} -- applied here as well (the hub), never forwarded on."""
+        now = time.time()
+        if bearer and str(bearer).lower().startswith("bearer "):
+            claims = verify_token(str(bearer)[7:].strip(), self.key, now)
+            if not claims or not is_relay_claims(claims):
+                return {"ok": False, "error": "not a federation token"}, 403
+            ban = p.get("ban") if isinstance(p, dict) else None
+            if not isinstance(ban, dict) or not SLUG_RE.match(str(ban.get("room") or "")):
+                return {"ok": False, "error": "bad ban"}, 400
+            ban = {"room": str(ban.get("room")), "host": (str(ban.get("host")) if ban.get("host") else None),
+                   "remotes": [str(r) for r in (ban.get("remotes") or [])][:16], "target": str(ban.get("target") or "")[:120],
+                   "by": str(ban.get("by") or "")[:40], "at": int(now), "until": min(int(now) + 86400, max(int(now) + 60, int(ban.get("until") or 0))),
+                   "via": "spoke:" + (peer or "?")}
+            ids, _ = self.revoke_sessions(ban["room"], ban["host"])
+            self.bans.add(ban)
+            how = self.trigger_revalidate()
+            self.log("relay auth: kick %s in %s forwarded by a spoke (%s) -- %d sessions revoked, until %s"
+                     % (ban["target"] or ban["host"], ban["room"], peer, len(ids), time.strftime("%H:%M:%S", time.localtime(ban["until"]))))
+            return {"ok": True, "ban": ban, "revoked": [i[:8] for i in ids], "revalidate": how}, 200
+        tok = str(p.get("token") or "")
+        slug = str(p.get("room") or "")
+        target = str(p.get("target") or "").strip()
+        if not SLUG_RE.match(slug):
+            return {"ok": False, "error": "bad room name"}, 400
+        m = re.match(r"^([a-z0-9-]{1,32}-[0-9a-f]{4})/([a-z0-9-]{1,40})(?:/([A-Za-z0-9-]{1,40}))?$", target)
+        if not m:
+            return {"ok": False, "error": "bad target (host/operator[/peer])"}, 400
+        claims = verify_token(tok, self.key, now)
+        if not claims:
+            return {"ok": False, "error": "token refused"}, 403
+        puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
+        if (slug + "/" + ADMIN_KIND) not in puts and (slug + "/" + ADMIN_KIND + "/**") not in puts:
+            return {"ok": False, "error": "not an admin token for this room"}, 403
+        try:
+            until_s = int(p.get("until") or 3600)
+        except (TypeError, ValueError):
+            until_s = 3600
+        until_s = min(86400, max(60, until_s))
+        host = m.group(1)
+        ids, remotes = self.revoke_sessions(slug, host)
+        by = str(p.get("by") or "")[:40]
+        if not by:
+            _r, admin_host = claims_identity(claims)
+            by = admin_host or "admin"
+        ban = {"room": slug, "host": host, "remotes": remotes[:16], "target": target, "by": by,
+               "at": int(now), "until": int(now) + until_s, "via": "local"}
+        self.bans.add(ban)
+        how = self.trigger_revalidate()
+        self.log("relay auth: kick %s in %s by %s -- %d sessions revoked, until %s (revalidate %s)"
+                 % (target, slug, by, len(ids), time.strftime("%H:%M:%S", time.localtime(ban["until"])), how))
+        threading.Thread(target=self._forward_ban, args=(ban,), daemon=True).start()
+        return {"ok": True, "ban": ban, "revoked": [i[:8] for i in ids], "revalidate": how}, 200
+
+    def _forward_ban(self, ban):
+        """A spoke tells its hub (the hub applies the ban to its own sessions; other spokes
+        rely on the cooperative .admin announce -- documented gap)."""
+        try:
+            minter = self.hub() if callable(self.hub) else None
+            tok = self.fed_token() if callable(self.fed_token) else None
+        except Exception:
+            minter = tok = None
+        if not minter or not tok:
+            return
+        try:
+            req = urllib.request.Request(minter + "/api/kick", data=json.dumps({"ban": ban}).encode(),
+                                         headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok},
+                                         method="POST")
+            with urllib.request.urlopen(req, timeout=4) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+            self.log("relay auth: kick %s forwarded to the hub -- %s" % (ban.get("target"), "applied" if d.get("ok") else d.get("error")))
+        except Exception as e:
+            self.log("relay auth: kick %s not forwarded to the hub: %s" % (ban.get("target"), str(e)[:120]))
 
     def stats(self):
         with self.lock:
             pubs = sum(1 for r in self._sessions.values() if r.get("publisher"))
             return {"up": True, "sessions": len(self._sessions), "publishers": pubs,
                     "grants": self.grants, "refusals": self.refusals, "ended": self.ended,
+                    "bans": len(self.bans.active()) if self.bans else 0,   # 0.17.0
                     "lastRefusal": (dict(self._refused[-1]) if self._refused else None),
                     "recent": [dict(e) for e in self._events[-8:]]}
 
@@ -1675,6 +1924,34 @@ class Relay:
                 return r.read().decode("utf-8", "replace")
         except Exception:
             return None
+
+    def internal_post(self, path, body=None, timeout=2.0):
+        """0.17.0: POST <internal listener>/<path> -> (status, text), or (None, None)."""
+        port = getattr(self, "internal_port", None)
+        if not port or not self.running():
+            return None, None
+        try:
+            data = json.dumps(body).encode() if body is not None else b""
+            req = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=data, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, ""
+        except Exception:
+            return None, None
+
+    def _force_revalidate(self):
+        """0.17.0: ask the relay to re-validate its sessions now (a kick must not wait for the
+        600 s revalidate timer). POST first, GET on 405; -> "post" | "get" | "unavailable"."""
+        code, _ = self.internal_post("/sessions/revalidate")
+        if code is not None and 200 <= code < 300:
+            return "post"
+        if code == 405 or code is None:
+            txt = self.internal_get("/sessions/revalidate")
+            if txt is not None:
+                return "get"
+        return "unavailable"
 
     def _hub_minter_url(self):
         """0.16.0: the hub minter's base URL (relay port + 1) when a hub is saved, else None."""
@@ -2125,7 +2402,9 @@ class Relay:
             try:
                 self.auth = AuthService("" if bind_all else "127.0.0.1",
                                         port + 1, key, port, self.store, self.log,
-                                        hub=self._hub_minter_url)   # 0.16.0: admin codes are verified at the hub when none is set here
+                                        hub=self._hub_minter_url,   # 0.16.0: admin codes are verified at the hub when none is set here
+                                        fed_token=lambda: self._fed_active,      # 0.17.0: a kick rides the federation token to the hub
+                                        revalidate=self._force_revalidate)       # 0.17.0: the relay re-asks at once
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -2290,7 +2569,22 @@ class Relay:
         hosts = local_ips() if self.bind_all else ["127.0.0.1"]
         return [f"https://{ip}:{self.port + 2}" for ip in hosts]
 
-    def status(self):
+    # 0.17.0: a remote reader (a LAN box, a web client) gets the public shape -- no
+    # relay log, binary path, cluster/auth/internal/LAN detail; the federation block
+    # keeps hub/token/tls only. The machine's own pages see everything.
+    PUBLIC_STATUS_DROP = ("log", "binary", "error", "auth", "internal", "cluster", "autostart", "lan")
+
+    def status(self, public=False):
+        d = self._status_full()
+        if public:
+            for k in self.PUBLIC_STATUS_DROP:
+                d.pop(k, None)
+            fed = d.get("federation")
+            if isinstance(fed, dict):
+                d["federation"] = {k: fed.get(k) for k in ("hub", "token", "tls") if k in fed}
+        return d
+
+    def _status_full(self):
         with self._lock:
             log = list(self._log[-40:])
         return {
@@ -2480,7 +2774,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/webport",         # 0.14.0 F
                  "/api/relay/rooms/group",     # 0.15.0
                  "/api/relay/lan",             # 0.16.0
-                 "/api/relay/admin/token")     # 0.16.0
+                 "/api/relay/admin/token",     # 0.16.0
+                 "/api/relay/bans/clear")      # 0.17.0
 
 
 def _host_of(value):
@@ -2514,6 +2809,33 @@ def _payload_of(handler):
         return {}
 
 
+# 0.17.0: ONE notion of who is asking. "local" = the machine's own pages and tools
+# (Host names loopback AND the peer IS loopback AND any Origin is a loopback page);
+# "remote" = everything else -- a LAN KASTR box, a phone, a browser on another
+# computer that opened this relay host's web port. A Host header alone is a claim
+# any client can type; the peer address makes it an identity.
+def request_class(handler):
+    return "local" if _local_only(handler) else "remote"
+
+
+def is_local(handler):
+    return _local_only(handler)
+
+
+def deny_remote(handler, what, code=403):
+    """Refuse a remote caller with a JSON error (no CORS) after draining its body,
+    so the connection stays sane. Returns True for `return deny_remote(...)`."""
+    _payload_of(handler)
+    body = json.dumps({"error": "%s only from the machine itself" % what}).encode()
+    handler.send_response(code)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(body)
+    return True
+
+
 def handle_api(handler, relay, path, set_relay_url=None):
     """Serve /api/relay/*. Returns True if it handled the request."""
     if not path.startswith("/api/relay"):
@@ -2541,8 +2863,29 @@ def handle_api(handler, relay, path, set_relay_url=None):
         reply({"error": "relay controls only from the machine itself (open KASTR on this computer)"}, 403)
         return True
 
+    local = _local_only(handler)
     if path == "/api/relay/status":
-        reply(relay.status())
+        reply(relay.status(public=not local))
+        return True
+    # 0.17.0: every other read under /api/relay/* (name, cluster, autostart, codes,
+    # firewall, webport, lan, health, bans) belongs to the Relay page, which is a
+    # host page; the room list stays public (pages on other machines list rooms).
+    if not local and handler.command in ("GET", "HEAD") and not path.startswith("/api/relay/rooms"):
+        reply({"error": "relay settings are read from the machine itself"}, 403)
+        return True
+
+    if path == "/api/relay/bans":   # 0.17.0: who an admin removed (host page; never the remotes)
+        auth = getattr(relay, "auth", None)
+        rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until", "via")} for b in (auth.bans.active() if auth else [])]
+        reply({"bans": rows, "authUp": auth is not None})
+        return True
+    if path == "/api/relay/bans/clear":
+        p = _payload_of(handler)
+        auth = getattr(relay, "auth", None)
+        n = auth.bans.clear(str(p.get("room") or ""), (str(p.get("host")) if p.get("host") else None)) if auth else 0
+        if n:
+            relay.log("relay auth: %d ban(s) cleared by the operator (%s%s)" % (n, p.get("room"), ("/" + str(p.get("host"))) if p.get("host") else ""))
+        reply({"ok": True, "cleared": n})
         return True
 
     if path == "/api/relay/webport":

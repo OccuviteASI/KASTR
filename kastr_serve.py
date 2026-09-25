@@ -49,6 +49,11 @@ HOST_TOKEN = "__ASI_HOSTNAME__"
 # page carrying it is still rewritten).
 BUILTIN_NAME = '"me.hang"'
 
+# 0.17.0: who the page is being served to -- "app" for the machine's own window,
+# "web" for a browser on another device that opened this relay host's web port.
+# Substituted per request like the hostname; the page reads it synchronously.
+CLIENT_TOKEN = "__KASTR_CLIENT__"
+
 # Replaced with the build's version as pages are served.
 VERSION_TOKEN = "__KASTR_VERSION__"
 
@@ -243,7 +248,8 @@ RELAUNCH_HOOK = None
 # the window does, children included) and by the dev harness (server.shutdown).
 QUIT_HOOK = None
 # 0.8.9: filled by the launcher when the https listener is up.
-HTTPS_INFO = {"port": None, "fingerprint": None, "ca": None, "names": []}
+HTTPS_INFO = {"port": None, "fingerprint": None, "ca": None, "names": [],
+              "trust": None, "hostname": None, "expires": None, "error": None}   # 0.17.0: + trust path, operator hostname, last error
 
 # 0.8.13: converted media files outlive their GET now (Range streaming), so the
 # folder is swept; and the bundled ffmpeg's version is reported once.
@@ -666,6 +672,81 @@ def _own_hosts():
     return _OWN_HOSTS[1]
 
 
+_REMOTE_SEEN = {}
+
+# 0.17.0: the fMP4 fallback (docs/moq-landscape item 7). A browser without WebCodecs
+# (an insecure http page, an older WebKit, a kiosk) cannot run <moq-watch>; the relay
+# host consumes the broadcast for it with the bundled moq CLI (`export fmp4`) and
+# streams CMAF over plain HTTP -- one child per viewer, the viewer's own token, a cap.
+WATCH_MAX = 6
+_WATCH_LIVE = [0]
+_WATCH_LOCK = threading.Lock()
+WATCH_SEG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _fmp4_codecs(head):
+    """The MIME codecs string for an fMP4 init segment (best effort from the box tags)."""
+    out = []
+    i = head.find(b"avcC")
+    if i >= 0 and len(head) >= i + 8:
+        p = head[i + 5:i + 8]   # configurationVersion, then profile / compat / level
+        out.append("avc1.%02X%02X%02X" % (p[0], p[1], p[2]) if len(p) == 3 else "avc1.42E01E")
+    elif b"hvc1" in head or b"hev1" in head:
+        out.append("hvc1.1.6.L93.B0")
+    elif b"vp09" in head or b"vpcC" in head:
+        out.append("vp09.00.10.08")
+    elif b"av01" in head:
+        out.append("av01.0.04M.08")
+    if b"mp4a" in head:
+        out.append("mp4a.40.2")
+    elif b"Opus" in head:
+        out.append("opus")
+    return ",".join(out)
+
+
+def _remote_seen(handler, what):
+    """0.17.0: log a remote client once an hour per address (never per request --
+    a web page polls every few seconds)."""
+    try:
+        peer = (handler.client_address[0] if handler.client_address else "") or "?"
+        now = time.time()
+        if now - _REMOTE_SEEN.get(peer, 0) < 3600:
+            return
+        _REMOTE_SEEN[peer] = now
+        if len(_REMOTE_SEEN) > 512:
+            for k in [k for k, t in _REMOTE_SEEN.items() if now - t > 3600][:256]:
+                _REMOTE_SEEN.pop(k, None)
+        _note("web: remote client %s served %s" % (peer, what))
+    except Exception:
+        pass
+
+
+def page_relay(current, tls=False, req_host=None, remote=False, own_hosts=None):
+    """0.17.0: the relay URL a served page should dial.
+
+    A page opened on THIS machine keeps `current` verbatim (its relay may be
+    another box, or this one by any spelling). A page served to ANOTHER device
+    (remote) or over https must never be handed a loopback address -- the relay
+    this box hosts is named by the address the client used to reach us
+    (`req_host`), and an https page gets the relay's wss listener (port + 2).
+    Pure: unit-tested with a fake own_hosts set."""
+    try:
+        u = urlparse(current or BUILTIN_RELAY)
+        rh = u.hostname or "localhost"
+        port = u.port or 4443
+    except Exception:
+        rh, port = "localhost", 4443
+    own = own_hosts if own_hosts is not None else _own_hosts()
+    loop = rh in kastr_relay.LOOPBACK_HOSTS
+    if req_host and (loop or (remote and rh in own)):
+        rh = req_host
+    if ":" in rh and not rh.startswith("["):
+        rh = "[" + rh + "]"
+    if tls:
+        return "https://%s:%d" % (rh, port + WSS_OFFSET)
+    return "http://%s:%d" % (rh, port)
+
+
 def chat_store(state_dir=None, relay_srv=None):
     """The process-wide ChatStore, created on first use from the relay's state
     dir (or the launcher's STATE_DIR); None when there is no state dir at all.
@@ -751,26 +832,25 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
     if alive_ref is None:
         alive_ref = [0.0]
 
-    def subs(tls=False, req_host=None):
+    def subs(tls=False, req_host=None, remote=False):
         current = relay_ref[0] or BUILTIN_RELAY
         # 0.8.9: a page served over https cannot use an http:// relay (mixed
         # content; no fingerprint pinning either) -- it gets the relay's wss
         # listener instead: https://<relay host>:<port+2>. A relay on THIS
         # machine is named by the address the phone used to reach us.
-        if tls:
-            try:
-                u = urlparse(current)
-                rh = u.hostname or "localhost"   # NOT `host` -- that is the machine name for HOST_TOKEN
-                if rh in ("localhost", "127.0.0.1", "::1") and req_host:
-                    rh = req_host
-                current = "https://%s:%d" % (rh, (u.port or 4443) + WSS_OFFSET)
-            except Exception:
-                pass
+        # 0.17.0: a REMOTE page (another device on this relay host's web port)
+        # gets the same treatment on plain http -- never a loopback relay --
+        # and its own identity: `web` for the host token (the page derives a
+        # per-device slug from it) and "web" as its client class.
+        if tls or remote:
+            current = page_relay(current, tls=tls, req_host=req_host, remote=remote)
+        page_host = "web" if remote else host
         out = [
             (VERSION_TOKEN.encode(), read_version().encode()),
-            (HOST_TOKEN.encode(), host.encode()),
+            (HOST_TOKEN.encode(), page_host.encode()),
+            (CLIENT_TOKEN.encode(), (b"web" if remote else b"app")),
             # Give the upstream demo page a machine-specific default too.
-            (BUILTIN_NAME.encode(), f'"{host}/me.hang"'.encode()),
+            (BUILTIN_NAME.encode(), f'"{page_host}/me.hang"'.encode()),
         ]
         if current != BUILTIN_RELAY:
             out.append((BUILTIN_RELAY.encode(), current.encode()))
@@ -872,7 +952,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ".mjs": "text/javascript",
             ".wasm": "application/wasm",
             ".tflite": "application/octet-stream",
+            ".webmanifest": "application/manifest+json",   # 0.17.0: PWA manifest
         }
+
+        # 0.17.0: the request class (kastr_relay.request_class) -- "local" is the
+        # machine's own window/tools, "remote" a LAN box or a web client.
+        def _local(self):
+            return kastr_relay.is_local(self)
+
+        def _deny(self, what):
+            return kastr_relay.deny_remote(self, what)
 
         def end_headers(self):
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
@@ -912,8 +1001,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except OSError:
                 return None
             tls = bool(getattr(self.server, "is_tls", False))
-            req_host = (self.headers.get("Host") or "").split(":")[0] or None
-            for needle, value in subs(tls, req_host):
+            req_host = kastr_relay._host_of(self.headers.get("Host")) or None
+            remote = not self._local()   # 0.17.0: another device -> web identity + a dialable relay
+            for needle, value in subs(tls, req_host, remote):
                 body = body.replace(needle, value)
             if tls and BUILTIN_RELAY.encode() in body:
                 # relay_ref still IS the builtin (localhost): the plain
@@ -959,7 +1049,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             spawned process exits at once, which looked exactly like "the user
             closed the window" and tore the server down. A ping from the page
             itself is the honest signal, and it works the same on every OS.
+            0.17.0: only the machine's own window -- a web client's ping must
+            not keep a closed KASTR alive, nor be told to close (205).
             """
+            if not self._local():
+                return self._deny("heartbeat")
             alive_ref[0] = time.monotonic()
             self.send_response(205 if CLOSING[0] else 204)   # 0.8.8: 205 = please close
             self.send_header("Cache-Control", "no-store")
@@ -967,6 +1061,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         def _window_post(self):
             """Where the window is, so the next launch can put it back."""
+            if not self._local():
+                return self._deny("window geometry")   # 0.17.0
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else b"{}"
@@ -996,6 +1092,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             served back to this machine. It exists so a fault can be read
             rather than inferred from the outside.
             """
+            if not self._local():
+                return self._deny("diagnostics")   # 0.17.0
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else b"{}"
@@ -1013,6 +1111,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             self.end_headers()
 
         def _diag_get(self):
+            if not self._local():
+                return self._deny("diagnostics")   # 0.17.0
             body = json.dumps(diag_ref, indent=1, default=str).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1093,8 +1193,17 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
             A GET, and deliberately read-only: probing for a running instance
             must not refresh that instance's heartbeat and keep it alive.
+
+            0.17.0: a REMOTE caller (LAN box, web client) gets the public shape:
+            no pid/operator/diagnostics/helper detail, `mode` is always "full"
+            (a web client is a full client whatever this box boots as; the real
+            mode rides `hostMode`), `relay` is the address that caller can dial,
+            and `client` says "web".
             """
-            body = json.dumps({
+            local = self._local()
+            tls = bool(getattr(self.server, "is_tls", False))
+            req_host = kastr_relay._host_of(self.headers.get("Host")) or None
+            d = {
                 "app": "KASTR",
                 "version": read_version(),
                 "frozen": bool(getattr(sys, "frozen", False)),
@@ -1142,7 +1251,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "web": int(HTTP_PORT or self.server.server_address[1]),
                 "https": HTTPS_INFO.get("port"),
                 "hubWeb": {h: {"web": r.get("web"), "https": r.get("https")} for h, r in HUB_WEB.items()},
-            }).encode()
+            }
+            if not local:
+                for k in ("pid", "swept", "operator", "updateCheck", "aliveAge", "ffmpeg", "viewing", "hubWeb", "platform"):
+                    d.pop(k, None)
+                d["hostMode"] = MODE
+                d["mode"] = "full"
+                d["client"] = "web"
+                d["relay"] = page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=True)
+                _remote_seen(self, "/api/instance")
+            body = json.dumps(d).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1818,8 +1936,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         def _relaunch(self):
             """0.8.9: relay-only mode switch -> restart KASTR now (local pages only)."""
-            h = (self.headers.get("Host") or "").split(":")[0].lower()
-            if h not in ("127.0.0.1", "localhost"):
+            if not self._local():   # 0.17.0: Host + peer + Origin
                 return self._json_cors(403, {"error": "relaunch only from the machine itself"})
             if RELAUNCH_HOOK is None:
                 return self._json_cors(200, {"status": "dev", "note": "source checkouts do not relaunch"})
@@ -1857,7 +1974,13 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             phone, not per proxy (the minter trusts it from a loopback peer only)."""
             try:
                 u = urlparse(relay_ref[0] or BUILTIN_RELAY)
-                base = "http://%s:%d" % (u.hostname or "127.0.0.1", (u.port or 4443) + 1)
+                rh = u.hostname or "127.0.0.1"
+                # 0.17.0: the minter honours X-Forwarded-For from a LOOPBACK peer only.
+                # When the relay is this very machine (named by its LAN IP), dial it on
+                # loopback so every phone's wrong codes count against that phone.
+                if rh.lower() in _own_hosts():
+                    rh = "127.0.0.1"
+                base = "http://%s:%d" % (rh, (u.port or 4443) + 1)
                 target = base + self.path
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else None
@@ -1918,8 +2041,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         def _media_probe(self):
             """0.8.10: what does the browser need converted? (first MBs of the file)"""
-            h = (self.headers.get("Host") or "").split(":")[0].lower()
-            if h not in ("127.0.0.1", "localhost"):
+            if not self._local():   # 0.17.0: Host + peer + Origin
                 return self._json_cors(403, {"error": "probe only for the machine itself"})
             try:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -1954,8 +2076,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         # ---- 0.14.0: stream-while-converting media (replaces the 0.8.9 convert endpoint) ----
         def _media_local(self):
-            h = (self.headers.get("Host") or "").split(":")[0].lower()
-            return h in ("127.0.0.1", "localhost")
+            return self._local()   # 0.17.0: the request class, not the Host header alone
 
         def _media_dir(self):
             d = os.path.join(self._state_dir() or os.getcwd(), "media")
@@ -2330,9 +2451,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._media_delete(path0[len("/api/media/"):])
             if path0 == "/api/prefs":               # 0.14.0
                 return self._prefs_post()
+            if path0 == "/api/web":                 # 0.17.0: web clients switch
+                return self._web_api("POST")
             if path0 == "/api/relaunch":
                 return self._relaunch()
-            if path0 in ("/api/token", "/api/auth", "/api/room"):   # 0.10.0: /api/room too (https pages hold room locks)
+            if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick"):   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
                 return self._file_post()
@@ -2352,8 +2475,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._quit()       # 0.9.8
             if path == "/api/autorun":
                 # Machine-boot autorun (0.8.2). Local pages only.
-                h = (self.headers.get("Host") or "").split(":")[0].lower()
-                if h not in ("127.0.0.1", "localhost"):
+                if not self._local():   # 0.17.0: Host + peer + Origin
                     body = json.dumps({"error": "autorun changes only from the machine itself"}).encode()
                     self.send_response(403)
                 else:
@@ -2373,8 +2495,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/update/check":
                 # 0.8.6: on-demand fleet update. Local pages only. Runs on a
                 # thread; progress lands in update-check.json (/api/instance).
-                h = (self.headers.get("Host") or "").split(":")[0].lower()
-                if h not in ("127.0.0.1", "localhost"):
+                if not self._local():   # 0.17.0: Host + peer + Origin
                     body = json.dumps({"error": "update checks only from the machine itself"}).encode()
                     self.send_response(403)
                 else:
@@ -2404,8 +2525,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             if path == "/api/ini":
                 # 0.8.6: allow-listed kastr.ini keys (host, mode). Local only.
-                h = (self.headers.get("Host") or "").split(":")[0].lower()
-                if h not in ("127.0.0.1", "localhost"):
+                if not self._local():   # 0.17.0: Host + peer + Origin
                     body = json.dumps({"error": "ini changes only from the machine itself"}).encode()
                     self.send_response(403)
                 else:
@@ -2434,8 +2554,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/mode":
                 # Relay-only mode toggle (0.8.3): edits kastr.ini next to the
                 # binary. Local pages only, same guard as autorun.
-                h = (self.headers.get("Host") or "").split(":")[0].lower()
-                if h not in ("127.0.0.1", "localhost"):
+                if not self._local():   # 0.17.0: Host + peer + Origin
                     body = json.dumps({"error": "mode changes only from the machine itself"}).encode()
                     self.send_response(403)
                 else:
@@ -2459,6 +2578,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 self.wfile.write(body)
                 return
             if path == "/api/operator":
+                if not self._local():
+                    return self._deny("the operator name")   # 0.17.0: a web client would rename the host
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
                     name = str(json.loads(self.rfile.read(n) or b"{}").get("name") or "")
@@ -2485,20 +2606,264 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             self.send_error(404, "not found")
 
+        def _client_api(self):
+            """0.17.0: GET /api/client -- what kind of client this page is and what it
+            may do here. Open (no secrets), no-store, CORS. `client` is "app" for
+            the machine's own window, "web" for another device; a web client's
+            masthead polls it (with /api/instance) and reloads when `version`
+            moves -- so browser clients always run the relay host's build."""
+            local = self._local()
+            tls = bool(getattr(self.server, "is_tls", False))
+            req_host = kastr_relay._host_of(self.headers.get("Host")) or None
+            web = not local
+            feats = {"publish": True, "chat": True, "admin": True,
+                     "rtsp": not web, "media": not web, "relayControls": not web,
+                     "updates": not web, "prefs": not web, "window": not web}
+            return self._json_cors(200, {
+                "app": "KASTR", "version": read_version(),
+                "client": "web" if web else "app",
+                "relay": page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=web),
+                "hostMode": MODE,
+                "web": int(HTTP_PORT or self.server.server_address[1]),
+                "https": HTTPS_INFO.get("port"),
+                "trust": HTTPS_INFO.get("trust") or ("local-ca" if HTTPS_INFO.get("ca") else None),
+                "ca": "/ca.crt" if HTTPS_INFO.get("ca") else None,
+                "hostname": HTTPS_INFO.get("hostname"),
+                "closing": bool(CLOSING[0]),
+                "features": feats,
+            })
+
+        def _web_urls(self):
+            """0.17.0: the addresses a device opens, by trust path. Local CA: every LAN IP and
+            the mDNS name (the CA must be installed once). Operator certificate: the DNS name
+            first, LAN IPs only when they are names IN that certificate (public CAs do not
+            issue for private addresses)."""
+            import kastr_relay as _kr
+            port = HTTPS_INFO.get("port")
+            if not port:
+                return []
+            trust = HTTPS_INFO.get("trust") or "local-ca"
+            names = [str(n).lower() for n in (HTTPS_INFO.get("names") or [])]
+            hn = HTTPS_INFO.get("hostname")
+            out = []
+            if trust == "operator":
+                if hn:
+                    out.append("https://%s:%d/moq-watch-lite.html" % (hn, port))
+                for ip in _kr.local_ips():
+                    if ip.lower() in names:
+                        out.append("https://%s:%d/moq-watch-lite.html" % (ip, port))
+            else:
+                if hn:
+                    out.append("https://%s:%d/moq-watch-lite.html" % (hn, port))
+                for ip in _kr.local_ips():
+                    out.append("https://%s:%d/moq-watch-lite.html" % (ip, port))
+                for n in names:
+                    if n.endswith(".local"):
+                        out.append("https://%s:%d/moq-watch-lite.html" % (n, port))
+            seen, uniq = set(), []
+            for u in out:
+                if u not in seen:
+                    seen.add(u); uniq.append(u)
+            return uniq
+
+        def _watch_stream(self, path):
+            """0.17.0: GET /api/watch/<broadcast path>.mp4[?jwt=] -> endless fragmented MP4 of one
+            broadcast, consumed from the relay on this machine by the bundled moq CLI. The
+            caller's member token governs the subscription (bans apply); an open relay trusts
+            the LAN like /api/files. Lifetime = this request; no timers."""
+            rel = path[len("/api/watch/"):]
+            if not rel.lower().endswith(".mp4"):
+                return self._json_cors(404, {"error": "use /api/watch/<broadcast>.mp4"})
+            from urllib.parse import unquote
+            bcast = unquote(rel[:-4]).strip("/")
+            segs = bcast.split("/")
+            if len(segs) < 2 or segs[0].startswith(".") or any(not WATCH_SEG_RE.match(x) for x in segs):
+                return self._json_cors(400, {"error": "bad broadcast path"})
+            if not (relay_srv is not None and relay_srv.running()):
+                return self._json_cors(503, {"error": "no relay on this machine -- open the relay host's KASTR"})
+            moq = getattr(bridge, "moq", None) if bridge else None
+            if not moq:
+                return self._json_cors(503, {"error": "moq helper not available here"})
+            qs = parse_qs(urlparse(self.path).query)
+            jwt = (qs.get("jwt") or [""])[0] or (self.headers.get("X-Kastr-Jwt") or "")
+            secured = bool(getattr(relay_srv, "secured", False))
+            if secured:
+                state = self._state_dir()
+                key = kastr_relay.read_jwk(state) if state else None
+                claims = kastr_relay.verify_token(jwt, key) if (key and jwt) else None
+                if claims is None:
+                    return self._json_cors(401, {"error": "token required"})
+                if not kastr_relay.claims_cover(claims, segs[0]):
+                    return self._json_cors(403, {"error": "token does not cover this room"})
+            with _WATCH_LOCK:
+                if _WATCH_LIVE[0] >= WATCH_MAX:
+                    return self._json_cors(503, {"error": "too many fallback viewers on this relay host (%d)" % WATCH_MAX})
+                _WATCH_LIVE[0] += 1
+            peer = (self.client_address[0] if self.client_address else "") or "?"
+            leaf = segs[-1]
+            blog = getattr(bridge, "log", None) or _note
+            url = relay_srv.url().rstrip("/") + "/" + (("?jwt=" + jwt) if (secured and jwt) else "")
+            argv = [moq, "--log-level", "warn", "--connect-once", "--quic-idle-timeout", "15s",
+                    "--connect", url, "--broadcast", bcast,
+                    "export", "fmp4", "--max-age", "4s"]   # no --video-name: the native pairs' rendition is not called "video" (measured); 0.18 names renditions; 4 s = join mid-GOP
+            proc = None
+            try:
+                try:
+                    proc = bridge.spawn_media(argv, tag="watch:" + leaf[:24], nice=True)
+                except TypeError:
+                    proc = bridge.spawn_media(argv, tag="watch:" + leaf[:24])
+                # the init segment first (a helper thread: `moq` may sit on an absent broadcast)
+                # `moq export` writes an empty ftyp+moov first and the real init (with the codec
+                # boxes) only when tracks arrive -- gather until the first fragment (moof), 64 KiB
+                # or 3 s after the first byte, so X-KASTR-Mime names the codecs
+                first = [b""]
+                def rd():
+                    t_first = None
+                    try:
+                        while True:
+                            chunk = proc.stdout.read(65536)
+                            if not chunk:
+                                break
+                            first[0] += chunk
+                            if t_first is None:
+                                t_first = time.time()
+                            if b"moof" in first[0] or len(first[0]) >= 65536 or time.time() - t_first > 3:
+                                break
+                    except Exception:
+                        pass
+                th = threading.Thread(target=rd, daemon=True); th.start(); th.join(12)
+                head = first[0]
+                if not head:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    err = " | ".join(getattr(proc, "kastr_errors", [])[-3:]) or "no data from the relay within 12 s (is the broadcast live?)"
+                    blog("watch: %s for %s failed -- %s" % (bcast, peer, err[:160]))
+                    return self._json_cors(502, {"error": err[:300]})
+                codecs = _fmp4_codecs(head)
+                mime = 'video/mp4; codecs="%s"' % codecs if codecs else "video/mp4"
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("X-KASTR-Mime", mime)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Expose-Headers", "X-KASTR-Mime")
+                self._cors()
+                self._corp_cross = True
+                self.end_headers()
+                blog("watch: start %s for %s (%s)" % (bcast, peer, codecs or "unknown codecs"))
+                self.connection.settimeout(15)
+                t0 = time.time()
+                sent = 0
+                try:
+                    self.wfile.write(head); sent += len(head)
+                    while True:
+                        chunk = proc.stdout.read(16384)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk); sent += len(chunk)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass   # the viewer left
+                blog("watch: end %s for %s after %ds, %d KB" % (bcast, peer, time.time() - t0, sent // 1024))
+            finally:
+                with _WATCH_LOCK:
+                    _WATCH_LIVE[0] = max(0, _WATCH_LIVE[0] - 1)
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        bridge.release_media(proc)
+                    except Exception:
+                        pass
+
         def _mobile(self):
-            """0.8.9: what a phone needs -- the https links, the CA, readiness."""
+            """0.8.9: what a phone needs -- the https links, the CA, readiness.
+            0.17.0: + the trust path (local CA vs operator certificate) and the relay's reach."""
             import kastr_relay as _kr
             port = HTTPS_INFO.get("port")
             ips = _kr.local_ips()
-            urls = ["https://%s:%d/moq-watch-lite.html" % (ip, port) for ip in ips] if port else []
+            urls = self._web_urls()
             lan = ["http://%s:%d" % (ip, HTTP_PORT) for ip in ips] if (LAN_OK and HTTP_PORT) else []
+            trust = (HTTPS_INFO.get("trust") or "local-ca") if port else None
+            relay_running = bool(relay_srv and relay_srv.running())
             return self._json_cors(200, {
                 "ready": bool(port), "https": urls, "port": port, "lan": lan,
-                "ca": "/ca.crt" if port else None, "fingerprint": HTTPS_INFO.get("fingerprint"),
+                "trust": trust,
+                "ca": "/ca.crt" if (port and trust == "local-ca") else None, "fingerprint": HTTPS_INFO.get("fingerprint"),
                 "names": HTTPS_INFO.get("names") or [],
-                "note": None if port else ("HTTPS is off -- the web host is loopback only. Turn on "
-                                           "'Allow other KASTR machines to update from this one' on "
-                                           "the Relay page (or relay-only mode) and relaunch."),
+                "hostname": HTTPS_INFO.get("hostname"),
+                "expires": HTTPS_INFO.get("expires"),
+                "relayRunning": relay_running,
+                "relayLan": bool(relay_running and getattr(relay_srv, "bind_all", False)),
+                "note": None if port else (HTTPS_INFO.get("error") and ("HTTPS listener failed: " + HTTPS_INFO["error"])) or (None if port else
+                                          ("HTTPS is off -- the web host is loopback only. Turn on "
+                                           "'Web clients' (or 'Allow other KASTR machines to update from this one') on "
+                                           "the Relay page and relaunch.")),
+            })
+
+        def _web_api(self, method):
+            """0.17.0: GET/POST /api/web -- the turnkey switch for browser clients. Loopback only.
+            on: kastr.ini host = 0.0.0.0, https on, firewall rules for web/https/relay ports;
+            off: host removed. Applies at the next launch (Apply & relaunch)."""
+            if not self._local():
+                return self._deny("web client settings")
+            import kastr_relay as _kr
+            if method == "POST":
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    want = bool(json.loads(self.rfile.read(n) or b"{}").get("enabled"))
+                except Exception:
+                    want = False
+                try:
+                    if want:
+                        ini_set("host", "0.0.0.0")
+                        if str(ini_get("https") or "").lower() in ("off", "false", "0", "no"):
+                            ini_set("https", None)
+                        fw = None
+                        try:
+                            if relay_srv is not None:
+                                if not _kr._FIREWALL_WEB_PORT:
+                                    _kr._FIREWALL_WEB_PORT = int(HTTP_PORT or self.server.server_address[1])
+                                if not _kr._FIREWALL_HTTPS_PORT:
+                                    try:
+                                        _kr._FIREWALL_HTTPS_PORT = int(ini_get("https_port") or 8443)
+                                    except (TypeError, ValueError):
+                                        _kr._FIREWALL_HTTPS_PORT = 8443
+                                fw = _kr.add_firewall_rules(getattr(relay_srv, "port", None) or 4443)
+                        except Exception as e:
+                            fw = {"error": str(e)[:200]}
+                        _note("web: clients ON by the operator (host=0.0.0.0, firewall %s)" % (json.dumps(fw)[:120] if fw is not None else "untouched"))
+                    else:
+                        ini_set("host", None)
+                        _note("web: clients OFF by the operator (host removed from kastr.ini)")
+                except Exception as e:
+                    return self._json_plain(500, {"error": str(e)})
+            host = ini_get("host")
+            enabled = bool(host) and host.strip() not in ("127.0.0.1", "localhost", "::1") \
+                and str(ini_get("https") or "").lower() not in ("off", "false", "0", "no")
+            live = bool(HTTPS_INFO.get("port")) and LAN_OK
+            relay_running = bool(relay_srv and relay_srv.running())
+            fw_state = None   # no firewall probe here: it shells out to PowerShell for seconds (the Relay page has its own block)
+            return self._json_plain(200, {
+                "enabled": enabled or MODE in ("relay", "publisher-relay"),
+                "live": live,
+                "web": int(HTTP_PORT or self.server.server_address[1]),
+                "https": HTTPS_INFO.get("port"),
+                "httpsError": HTTPS_INFO.get("error"),
+                "trust": HTTPS_INFO.get("trust") if HTTPS_INFO.get("port") else None,
+                "hostname": HTTPS_INFO.get("hostname"),
+                "expires": HTTPS_INFO.get("expires"),
+                "urls": self._web_urls(),
+                "lan": ["http://%s:%d" % (ip, HTTP_PORT) for ip in _kr.local_ips()] if (LAN_OK and HTTP_PORT) else [],
+                "relayRunning": relay_running,
+                "relayLan": bool(relay_running and getattr(relay_srv, "bind_all", False)),
+                "firewall": fw_state,
+                "relayOnly": MODE in ("relay", "publisher-relay"),
+                "hostIni": host,
+                "path": _ini_file(),
+                "note": None if live else "applies at the next launch -- Apply & relaunch",
             })
 
         def _ca_cert(self):
@@ -2525,6 +2890,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             path = self.path.split("?", 1)[0]
             if path.startswith("/api/chat/") or path.startswith("/api/rooms/"):   # 0.12.0 (NOT /api/rooms itself: the minter proxy)
                 return self._chat_api("GET")
+            if path.startswith("/api/watch/"):                                # 0.17.0: the fMP4 fallback
+                return self._watch_stream(path)
             if path == "/ca.crt":
                 return self._ca_cert()
             if path == "/api/media":                                        # 0.14.0: the registry
@@ -2548,6 +2915,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._alive()
             if path == "/api/instance":
                 return self._instance()
+            if path == "/api/client":                                       # 0.17.0
+                return self._client_api()
+            if path == "/api/web":                                          # 0.17.0
+                return self._web_api("GET")
+            if path in ("/api/autorun", "/api/ini", "/api/mode") and not self._local():
+                return self._deny("host settings")   # 0.17.0
             if path == "/api/autorun":
                 body = json.dumps(autorun_state()).encode()
                 self.send_response(200)
@@ -2576,6 +2949,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 host = (qs.get("host") or [""])[0].strip()
                 port = (qs.get("port") or ["8000"])[0]
                 data = {"error": "bad host"}
+                if not self._local():
+                    # 0.17.0: a remote page may ask about THIS machine only (the web
+                    # client's "Relay host:" line), never use us to dial elsewhere.
+                    try:
+                        relay_host = (urlparse(relay_ref[0] or "").hostname or "").lower()
+                    except Exception:
+                        relay_host = ""
+                    if host.strip("[]").lower() in _own_hosts() or (relay_host and host.lower() == relay_host):
+                        return self._instance()
+                    return self._deny("peer probes")
                 if re.match(r"^[A-Za-z0-9.\-\[\]:]{1,253}$", host) and re.match(r"^\d{1,5}$", port):
                     try:
                         import urllib.request
@@ -2804,7 +3187,17 @@ def make_tls_server(root, host, port, tls_paths, **kw):
     ctx = kastr_tls.ssl_context(tls_paths)
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     srv.is_tls = True
+    srv.tls_ctx = ctx      # 0.17.0: kept so reload_tls can swap the chain in place
     return srv
+
+
+def reload_tls(srv, tls_paths):
+    """0.17.0: load a new certificate chain into the running https listener. OpenSSL
+    applies it to new handshakes; connections already open finish on the old one."""
+    ctx = getattr(srv, "tls_ctx", None)
+    if ctx is None:
+        raise RuntimeError("listener has no TLS context")
+    ctx.load_cert_chain(tls_paths["chain"], tls_paths["key"])
 
 
 def bind_free(root, host="127.0.0.1", preferred=8000, **kw):

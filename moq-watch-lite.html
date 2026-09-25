@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Go Live — KASTR</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#002B45">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KASTR">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/asi-brand.css">
+<script src="/assets/client.js"></script>
 <script type="module" src="/assets/asi-brand.js"></script>
 <style>
   * { box-sizing:border-box; }
@@ -549,8 +557,12 @@
     #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
     #stageBack { top:auto; bottom:8px; }
   }
+  #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
+  #stage .pane video.fb:not([src]) { display:none; }
   @media (hover: none) {
     #stage .pubpane .bar, #stage .pchev { opacity:1; pointer-events:auto; }
+    #stage .pane .zoomctl, #stage .pubpane .zoomctl { opacity:1; }          /* 0.17.0: no hover on a phone */
+    #stage .pane.mainstage, #stage .pubpane.mainstage { touch-action:none; } /* 0.17.0: two fingers zoom the stage */
   }
   /* 0.8.7: recording save dialog + RTSP grid layout menu + People files */
   #recSave { position:fixed; left:50%; top:22%; transform:translateX(-50%); z-index:80; width:min(440px, 92vw); }
@@ -1903,6 +1915,12 @@
   import "https://esm.sh/@moq/watch/element";
   import { Net, Signals } from "https://esm.sh/@moq/watch";
 
+  // ---- 0.17.0: who this page runs for (assets/client.js, substituted by the server) ----
+  // "app" = the machine's own KASTR window; "web" = a browser on another device that
+  // opened this relay host's web port. `secure`/`webcodecs` say what the browser can do.
+  const CLIENT = window.__kastrClient ?? { class: "app", secure: true, media: true, webcodecs: true, displayCapture: true, host: null, browser: "chromium", mobile: false };
+  const IS_WEB = CLIENT.class === "web";
+
   // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
   // announced() takes a PATTERN now (nothing = everything) and yields route entries
   // {prefix: Path, kind: "announced" | "retracted" | "updated"}; consuming a broadcast is
@@ -1942,6 +1960,12 @@
   import { Snapshot, Window } from "https://esm.sh/@moq/json";   // 0.13.0: JSON state tracks
 
   const urlInput = document.getElementById("url");
+  if (IS_WEB) {   // 0.17.0: "the relay is the host that served me" -- a loopback default would dial the phone itself
+    try {
+      const u = new URL(urlInput.value.trim());
+      if (/^(localhost|127\.0\.0\.1|\[::1\]|::1)$/.test(u.hostname)) { u.hostname = location.hostname; urlInput.value = u.href.replace(/\/$/, ""); }
+    } catch {}
+  }
   // The prefix and latency controls are gone from the UI: everything under the
   // relay is wanted, and 500 ms is the target the pages have always shipped.
   // Keeping them as constants means the rest of the logic is unchanged.
@@ -2819,6 +2843,7 @@
   const isRelayOperator = () => ownRelayHere && relayHostBase() === location.origin;
   let chimeMuted = false;
   const STAGE_EMPTY_PUBONLY = "Publish only \u2014 other people\u2019s streams are not shown on this device (View \u25b8 Publish only to turn off)";
+  const STAGE_EMPTY_NODECODE = "Searching for live broadcasts\u2026 (this browser plays video through the relay host, one stream at a time)";   // 0.17.0
   function setPublishOnly(on) {
     publishOnly = !!on;
     try { localStorage.setItem("kastr.publishOnly", publishOnly ? "1" : "0"); } catch {}
@@ -2853,6 +2878,45 @@
       if (!publishOnly) setPublishOnly(true);
       const el = document.getElementById("viewPublishOnly"); if (el) el.hidden = true;
     }
+    // 0.17.0: a web client (another device on this relay host's web port) has no
+    // host controls here: no Phone-access card (it describes the HOST), no update
+    // check, no relay row. An INSECURE page (http on a LAN address) has no camera,
+    // microphone or decoder at all -- the gate says so (paintCtxBanner) and the
+    // media controls go; rooms, People and chat stay.
+    document.body.classList.toggle("client-web", IS_WEB);
+    document.body.classList.toggle("ctx-insecure", !CLIENT.secure);
+    if (IS_WEB) {
+      for (const id of ["optMobile", "aboutUpd", "aboutUpdSt", "joinRelayRow"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
+    }
+    if (typeof MediaRecorder === "undefined") { for (const id of ["recBtn", "optRec"]) { const el = document.getElementById(id); if (el) el.hidden = true; } }
+    if (!CLIENT.secure || !CLIENT.media) {
+      for (const id of ["joinPreview", "permBtn", "optEnc", "optAud", "optAudio", "optVideo"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
+      for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
+      for (const id of ["joinCam", "joinMic"]) document.getElementById(id)?.closest("label")?.setAttribute("hidden", "");
+    }
+  }
+  // 0.17.0: the lobby notice on an insecure page (http on a LAN address): the browser
+  // blocks WebCodecs, camera and microphone there, so video needs the https listener.
+  function paintCtxBanner() {
+    const card = document.querySelector("#joinGate .card");
+    if (!card) return;
+    let b = document.getElementById("ctxBanner");
+    if (CLIENT.secure) { if (b) b.remove(); return; }
+    if (!b) {
+      b = document.createElement("div");
+      b.id = "ctxBanner";
+      b.style.cssText = "margin:0 0 12px;padding:10px 12px;border:1px solid var(--asi-amber, #f5b942);border-radius:6px;background:rgba(245,185,66,.08);font-size:13px;line-height:1.45";
+      card.insertBefore(b, card.firstChild);
+    }
+    const port = authHttps || 8443;
+    const href = "https://" + location.hostname + ":" + port + "/moq-watch-lite.html";
+    let relayTxt = "";
+    try { const u = new URL(urlInput.value.trim()); relayTxt = u.host; } catch {}
+    b.innerHTML = "<b>This page is on http, so the browser blocks the camera, the microphone and its own decoder.</b> "
+      + "Video plays through the relay host instead, one stream at a time. For camera and microphone and the full grid, open "
+      + "<a href=\"" + href + "\" style=\"color:var(--asi-blue, #4aa3ff)\">" + href + "</a> "
+      + "(install the KASTR certificate once: <a href=\"/ca.crt\" style=\"color:var(--asi-blue, #4aa3ff)\">/ca.crt</a>)."
+      + (relayTxt ? "<div style=\"margin-top:6px;color:var(--text-dim)\">Relay: " + relayTxt.replace(/</g, "&lt;") + "</div>" : "");
   }
   // 0.12.0: the machine remembers the session (room + codes, relay) so its native
   // camera publishers can be republished at launch with no page joined. Loopback
@@ -3736,13 +3800,36 @@
       viewZoomAt(c, e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
     }, { passive: false });
     let pan = null;
+    const pts = new Map();   // 0.17.0: active touch pointers -- two of them pinch
+    let pinch = null;        // { d0, s0 }: the finger distance and zoom when the second finger landed
     pane.addEventListener("pointerdown", (e) => {
       const c = canvasOf();
-      if (!c || e.button !== 0 || !allow() || !viewZoomed(c) || e.target.closest("button, input")) return;
+      if (!c || !allow() || e.target.closest("button, input")) return;
+      if (e.pointerType === "touch") {
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        try { pane.setPointerCapture(e.pointerId); } catch {}
+        if (pts.size === 2) {
+          const [a, b] = [...pts.values()];
+          pinch = { d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), s0: views.get(c)?.s || 1 };
+          pan = null;
+          return;
+        }
+      }
+      if (e.button !== 0 || !viewZoomed(c)) return;
       pan = { x: e.clientX, y: e.clientY, moved: false };
       try { pane.setPointerCapture(e.pointerId); } catch {}
     });
     pane.addEventListener("pointermove", (e) => {
+      if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size === 2) {
+        const c = canvasOf();
+        if (!c) return;
+        const [a, b] = [...pts.values()];
+        const target = Math.min(8, Math.max(1, pinch.s0 * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0));
+        const cur = views.get(c)?.s || 1;
+        if (Math.abs(target / cur - 1) > 0.01) viewZoomAt(c, target / cur, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        return;
+      }
       if (!pan) return;
       const c = canvasOf(), v = c && views.get(c), f = c && viewFitBox(c);
       if (!v || !f) return;
@@ -3752,7 +3839,9 @@
       v.cx -= dx / (v.s * f.sc); v.cy -= dy / (v.s * f.sc);
       viewApply(c);
     });
-    const end = () => {
+    const end = (e) => {
+      if (e && pts.has(e.pointerId)) pts.delete(e.pointerId);   // 0.17.0
+      if (pts.size < 2) pinch = null;
       if (pan?.moved) { viewDragged = true; setTimeout(() => { viewDragged = false; }, 0); }
       pan = null;
     };
@@ -4437,6 +4526,15 @@
       if (t.watch.getAttribute("visible") !== wantVisible) {
         t.watch.setAttribute("visible", wantVisible);
       }
+      if (t.fb) {   // 0.17.0: the fallback plays the promoted tile only -- one relay-host pipeline per page
+        const want = (wantVisible !== "never" && isSelected && !parkedStreams.has(name)) ? watchFallbackUrl(name) : "";
+        if ((t.fb.dataset.src || "") !== want) {
+          t.fb.dataset.src = want;
+          if (want) { t.fb.src = want; t.fb.play?.().catch(() => {}); }
+          else { t.fb.removeAttribute("src"); try { t.fb.load(); } catch {} }
+        }
+        t.fb.volume = Math.max(0, Math.min(1, levelOf(name) / 100)); t.fb.muted = mutedStreams.has(name) || manualMute;
+      }
       { // 0.16.0: per-class delay/buffer (WATCH_TUNING): the spotlit main, rail thumbnails, and
         // live-edge cells (grid composites, audio-less feeds behind a grid -- `instant` resets audio)
         const cls = (isSelected && !gridMode && !selfSpotEl) ? "main"
@@ -4538,7 +4636,7 @@
     // first and continuing in a .then() discards the transient user
     // activation, and the request is then refused -- so no exit/enter dance
     // here; Chrome moves full screen between elements on its own.
-    const req = t.pane.requestFullscreen?.();
+    const req = (t.pane.requestFullscreen ?? t.pane.webkitRequestFullscreen)?.call(t.pane);   // 0.17.0: WebKit prefix
     req?.catch((err) => {
       const why = err?.message ?? String(err);
       // Do NOT route this through log(): the diagnostics interval rewrites
@@ -4880,6 +4978,14 @@
     resizeTimer = setTimeout(applyState, 150);
   });
 
+  // 0.17.0: a browser without WebCodecs (http on a LAN address, an older WebKit) cannot run
+  // <moq-watch>; the relay host plays the broadcast for it as fragmented MP4 (/api/watch/…),
+  // one pipeline per page: the promoted tile only (applyState arms it).
+  function watchFallbackUrl(name) {
+    const base = relayHostBase() || location.origin;
+    const tok = (authSecured && authTokens?.member) ? "?jwt=" + encodeURIComponent(authTokens.member) : "";
+    return base + "/api/watch/" + String(name).split("/").map(encodeURIComponent).join("/") + ".mp4" + tok;
+  }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
     personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced)
@@ -4925,7 +5031,7 @@
     const watch = document.createElement("moq-watch");
     // Parked tiles carry NO url: the element opens nothing at all until
     // watchStream() arms the attribute. Remembered streams come back armed.
-    if (isWatched(name)) watch.setAttribute("url", withToken(urlInput.value.trim()));
+    if (isWatched(name) && CLIENT.webcodecs) watch.setAttribute("url", withToken(urlInput.value.trim()));   // 0.17.0: never a decoder the browser lacks
     watch.setAttribute("name", name);
     watch.setAttribute("delay", WATCH_TUNING.rail.delay); watch.setAttribute("buffer", WATCH_TUNING.rail.buffer);   // 0.16.0
     watch.setAttribute("visible", "never"); // applyState promotes the selected one
@@ -5102,6 +5208,14 @@
     personGroupFor(name).appendChild(row);   // grouped by person (0.8.1)
 
     const tile = { pane, watch, canvas, row, faceCap, faceInit, eq, av };
+    if (!CLIENT.webcodecs) {   // 0.17.0: the fallback player (armed by applyState for the promoted tile)
+      const fb = document.createElement("video");
+      fb.className = "fb"; fb.autoplay = true; fb.playsInline = true; fb.setAttribute("playsinline", ""); fb.crossOrigin = "anonymous";
+      fb.addEventListener("error", () => { if (fb.dataset.src) setTimeout(() => { if (fb.dataset.src && fb.isConnected) { fb.src = fb.dataset.src; fb.play?.().catch(() => {}); } }, 3000); });   // the pipeline ended (relay bounce): ask again
+      fb.addEventListener("ended", () => { if (fb.dataset.src && fb.isConnected) setTimeout(() => { fb.src = fb.dataset.src; fb.play?.().catch(() => {}); }, 2000); });
+      pane.appendChild(fb);
+      tile.fb = fb;
+    }
     tile.mediabar = buildMediaBar(name, tile);   // 0.8.10: shared-file controls (shown when .media state arrives)
     pane.appendChild(tile.mediabar);
     tiles.set(name, tile);
@@ -5189,9 +5303,45 @@
   let lastChannelList = [];     // 0.12.0: DERIVED from the live room model (deriveRooms); joinNow reads it
 
   async function sha256Hex(text) {
+    if (!crypto.subtle) return sha256HexJs(text);   // 0.17.0: http on a LAN address has no SubtleCrypto
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
   }
+  // 0.17.0: FIPS 180-4 SHA-256 in plain JS -- bit-identical to hashlib.sha256 on the relay
+  // (the room-code hash is compared server-side), used only where crypto.subtle is missing.
+  function sha256HexJs(text) {
+    const K = new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+    const H = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+    const msg = new TextEncoder().encode(text);
+    const len = msg.length, padLen = ((len + 9 + 63) >> 6) << 6;
+    const buf = new Uint8Array(padLen); buf.set(msg); buf[len] = 0x80;
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(padLen - 8, Math.floor(len * 8 / 0x100000000)); dv.setUint32(padLen - 4, (len * 8) >>> 0);
+    const W = new Uint32Array(64);
+    const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+    for (let off = 0; off < padLen; off += 64) {
+      for (let i = 0; i < 16; i++) W[i] = dv.getUint32(off + i * 4);
+      for (let i = 16; i < 64; i++) {
+        const s0 = rotr(W[i - 15], 7) ^ rotr(W[i - 15], 18) ^ (W[i - 15] >>> 3);
+        const s1 = rotr(W[i - 2], 17) ^ rotr(W[i - 2], 19) ^ (W[i - 2] >>> 10);
+        W[i] = (W[i - 16] + s0 + W[i - 7] + s1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 64; i++) {
+        const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+        const ch = (e & f) ^ (~e & g);
+        const t1 = (h + S1 + ch + K[i] + W[i]) >>> 0;
+        const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+        const maj = (a & b) ^ (a & c) ^ (b & c);
+        const t2 = (S0 + maj) >>> 0;
+        h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+      }
+      H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+      H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+    }
+    return [...H].map((x) => x.toString(16).padStart(8, "0")).join("");
+  }
+  window.__sha256 = sha256HexJs;   // rig: compare with hashlib
   function randomSaltHex() {
     const b = new Uint8Array(8);
     crypto.getRandomValues(b);
@@ -5659,7 +5809,7 @@
     selfSpotEl = null;
     gridMode = true; autoContent = null; manualPick = false;   // 0.13.3: a new room starts in the gallery, nothing carried over
     recomputeMine();             // mineNames re-prefix under the (new) channel
-    stageEmpty.textContent = listEmpty.textContent = publishOnly ? STAGE_EMPTY_PUBONLY : "Searching for live broadcasts…";   // 0.9.10
+    stageEmpty.textContent = listEmpty.textContent = publishOnly ? STAGE_EMPTY_PUBONLY : (!CLIENT.webcodecs ? STAGE_EMPTY_NODECODE : "Searching for live broadcasts…");   // 0.9.10 / 0.17.0
     applyState();
 
     const urlStr = withToken(urlInput.value.trim());
@@ -5868,7 +6018,7 @@
   const tapUnmute = document.getElementById("tapUnmute");
   function tileCtxs() {
     const out = [];
-    for (const [, t] of tiles) { try { const c = t.watch.audio?.out?.root?.peek?.()?.context; if (c) out.push(c); } catch {} }
+    for (const [, t] of tiles) { try { const c = t.watch.audio?.out?.context?.peek?.() ?? t.watch.audio?.out?.root?.peek?.()?.context; if (c) out.push(c); } catch {} }   // 0.17.0: the context exists before the worklet lands
     return out;
   }
   const audioBlocked = () => tileCtxs().some((c) => c.state !== "running");
@@ -5882,6 +6032,7 @@
   }
   tapUnmute.addEventListener("click", audioUnlock);
   document.addEventListener("pointerdown", () => { if (audioBlocked()) audioUnlock(); }, { capture: true, passive: true });
+  document.addEventListener("keydown", () => { if (audioBlocked()) audioUnlock(); }, { capture: true, passive: true });   // 0.17.0: a keyboard is a gesture too
   setInterval(paintUnmute, 1000);
 
   // ---- 0.8.9: phone access card -----------------------------------------------
@@ -6319,7 +6470,7 @@
     closeAllPops();
     const el = document.documentElement;
     if (document.fullscreenElement) document.exitFullscreen?.();
-    else (el.requestFullscreen?.() ?? Promise.reject()).catch?.(() => { if (selectedName) toggleFullscreen(selectedName); });
+    else ((el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el) ?? Promise.reject()).catch?.(() => { if (selectedName) toggleFullscreen(selectedName); });   // 0.17.0: WebKit prefix
   });
   // hide-me follows newly started camera panes too
   new MutationObserver(() => { if (hideMe) for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.add("hideme"); })
@@ -7312,7 +7463,7 @@
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
   const VIEWER_KINDS = [".since", ".stalled", ".spotlight", ".recording", ".mediactl", ".avatar", ".presence", ".talking", ".chat"];   // 0.11.0: + public presence; 0.12.0: + speaking, chat pulse
   function authBase() {
-    if (location.protocol === "https:") return location.origin;   // 0.8.9: same-origin proxy to the room-code service
+    if (location.protocol === "https:" || IS_WEB) return location.origin;   // 0.8.9: same-origin proxy to the room-code service; 0.17.0: every web client
     try {
       const u = new URL(urlInput.value.trim());
       return "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);
@@ -7387,6 +7538,45 @@
     if (!tok) return urlStr;
     return urlStr + (urlStr.includes("?") ? "&" : "?") + "jwt=" + encodeURIComponent(tok);
   }
+  // 0.17.0: the relay-side half of an admin kick -- the auth service bans the target's
+  // (room, host) identity, revokes its live sessions and refuses its re-mints for a while.
+  window.__adminKick = async (target, until = 3600) => {
+    if (!authSecured || !authTokens?.member) return { ok: false, error: "open relay \u2014 no relay-side removal" };
+    const base = authBase();
+    if (!base) return { ok: false, error: "no relay" };
+    try {
+      const r = await fetch(base + "/api/kick", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: authTokens.member, room: CHANNEL, target, until }) });
+      const d = await r.json().catch(() => ({}));
+      return { ...d, ok: !!(r.ok && d.ok), status: r.status };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  };
+  // 0.17.0: a session the relay refuses (an admin removed this identity) looks like a dead
+  // relay to the library, which reconnects forever. Once the state tracks have been down
+  // 15 s while joined on a secured relay, re-mint once: a banned identity gets the honest
+  // gate message instead of an endless spinner; anything else just refreshes the tokens.
+  let authDownSince = 0, authHealBusy = false;
+  setInterval(async () => {
+    try {
+      if (!authSecured || !authTokens || !window.__joinedChannel?.() || authHealBusy) { authDownSince = 0; return; }
+      const st = window.__state?.debug?.()?.status || [];
+      if (!st.length || st.some((x) => x === "connected")) { authDownSince = 0; return; }
+      if (!authDownSince) { authDownSince = Date.now(); return; }
+      if (Date.now() - authDownSince < 15000) return;
+      authDownSince = Date.now();
+      authHealBusy = true;
+      try { await authMint(readChannel(), authAccessCode, authRoomCode); }
+      catch (e) {
+        const msg = String(e?.message || e);
+        if (/removed from this room/i.test(msg)) {
+          log("Removed from the room by an admin (the relay refuses this device for a while).");
+          window.__toast?.("You were removed from this room by an admin.", 8000, { level: "warn" });
+          try { leaveMeeting(); } catch {}
+          try { gateMsg("You were removed from this room by an admin — try again later."); } catch {}
+        }
+      } finally { authHealBusy = false; }
+    } catch {}
+  }, 5000);
   window.__auth = {
     get secured() { return authSecured; },
     get exp() { return authExp; },
@@ -7431,7 +7621,8 @@
   const STATE_PRIORITY = 200;
   const HOST_RE = /^[a-z0-9-]{1,32}-[0-9a-f]{4}$/;
   const RAW_HOST1 = "__ASI_HOSTNAME__";
-  const HOSTNAME1 = /^[a-z0-9-]+$/.test(RAW_HOST1) ? RAW_HOST1 : "local";
+  // 0.17.0: a web device is its own host (web-<8hex>-<4hex>, HOST_RE shape) -- never the server's
+  const HOSTNAME1 = (window.__kastrClient?.host) || (/^[a-z0-9-]+$/.test(RAW_HOST1) ? RAW_HOST1 : "local");
   const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
   const stateFallbackPeer = "P-" + Math.random().toString(36).slice(2, 8);
   const statePeer = () => String(window.__publisher?.peer || stateFallbackPeer);
@@ -7832,8 +8023,11 @@
     tapAll();
     const stream = cv.captureStream(30);
     for (const a of dest.stream.getAudioTracks()) stream.addTrack(a);
-    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
-    const mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4000000 });
+    // 0.17.0: the container the browser can write -- Chromium/Firefox WebM (vp9 or vp8), Safari MP4
+    const mimes = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4"];
+    const mime = mimes.find((m) => { try { return MediaRecorder.isTypeSupported(m); } catch { return false; } }) || "";
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 4000000 } : { videoBitsPerSecond: 4000000 });
+    recExt = /mp4/i.test(mime || mr.mimeType || "") ? ".mp4" : ".webm";
     const chunks = [];
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     rec = { mr, cv, cx, actx, mix, dest, taps, tapAll, chunks, t0: Date.now(), raf: 0, timer: 0, stream };
@@ -7929,10 +8123,11 @@
     document.getElementById("recSaveInfo").textContent = Math.max(1, Math.round(blob.size / 1048576)) + " MB \u00b7 webm";
     recSaveEl.hidden = false;
   }
+  let recExt = ".webm";   // 0.17.0: follows the recorder's container
   function recSaveName() {
-    let n = (document.getElementById("recName").value || recPending?.name || "recording.webm").trim();
+    let n = (document.getElementById("recName").value || recPending?.name || ("recording" + recExt)).trim();
     n = n.replace(/[\\/:*?"<>|]+/g, "-");
-    if (!/\.webm$/i.test(n)) n += ".webm";
+    if (!/\.(webm|mp4)$/i.test(n)) n += recExt;
     return n;
   }
   function recDownloadNow() {
@@ -7955,7 +8150,7 @@
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: name, id: "kastr-recordings",
-        types: [{ description: "WebM video", accept: { "video/webm": [".webm"] } }],
+        types: [recExt === ".mp4" ? { description: "MP4 video", accept: { "video/mp4": [".mp4"] } } : { description: "WebM video", accept: { "video/webm": [".webm"] } }],   // 0.17.0
       });
       const w = await handle.createWritable();
       await w.write(recPending.blob);
@@ -9541,6 +9736,7 @@
 
   function gateShow() {
     joinState = "prejoin";
+    try { paintCtxBanner(); } catch {}   // 0.17.0
     joinEls.leaveBtn.hidden = true;      // Leave means nothing at the gate
     authDetect().catch(() => {}).then(() => { try { paintPwdRow(); } catch {} });   // 0.10.0: the access-code row follows the relay's answer
     try { joinEls.joinName.value = localStorage.getItem("kastr.operator.name") || ""; } catch {}
@@ -9551,7 +9747,7 @@
     // 0.8.0: the install remembers the name server-side too -- browser
     // localStorage is silently ephemeral under snap Chromium (the Linux
     // "name never sticks" report).
-    if (!joinEls.joinName.value) {
+    if (!joinEls.joinName.value && !IS_WEB) {   // 0.17.0: the host's name is the host's, not a web client's
       fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
         if (d.operator && !joinEls.joinName.value) joinEls.joinName.value = d.operator;
       }).catch(() => {});
@@ -9746,7 +9942,8 @@
         await authMint(slug, joinEls.joinAccess.value, joinEls.joinPwd.value);   // 0.10.0: access code + room code
       } catch (e) {
         const msg = String(e?.message || e);
-        return joinFail(/wrong access code/i.test(msg) ? "Wrong access code for this relay."
+        return joinFail(/removed from this room/i.test(msg) ? "You were removed from this room by an admin \u2014 try again later."   // 0.17.0
+          : /wrong access code/i.test(msg) ? "Wrong access code for this relay."
           : /wrong room code/i.test(msg) ? "Wrong room code."
           : /too many attempts/i.test(msg) ? msg.replace(" -- ", " \u2014 ")
           : /bad room name/i.test(msg) ? "Room names: lowercase letters, digits and dashes (up to 32)."
@@ -9781,7 +9978,7 @@
       // segment and labels showed a bare filename.
       if (joinEls.joinName.value.trim()) {
         syncOperator(joinEls.joinName.value);
-        fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" },
+        if (!IS_WEB) fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" },   // 0.17.0: never rename the host
           body: JSON.stringify({ name: joinEls.joinName.value.trim() }) }).catch(() => {});
       }
       const d = pub.devices();
@@ -9836,7 +10033,7 @@
                                                                     relay: urlInput.value.trim() })); } catch {}   // 0.8.8 / 0.10.0 / 0.12.0: toggles too / 0.13.0: the relay the codes belong to
     gateCodesStale = false;   // 0.13.0 (F7): these codes are the current relay's
     sessionPersist(slug, joinEls.joinAccess.value, joinEls.joinPwd.value);   // 0.12.0
-    if (!isViewerMode()) setTimeout(() => { try { window.__rtspRestore?.(); } catch {} }, 800);   // 0.8.8: persistent RTSP feeds
+    if (!isViewerMode() && !IS_WEB) setTimeout(() => { try { window.__rtspRestore?.(); } catch {} }, 800);   // 0.8.8: persistent RTSP feeds; 0.17.0: not from a web client
     paintTopCam();
   }
 
@@ -9982,6 +10179,9 @@
   // `audio.in.source`; every page seam (files, RTSP, screens, effects, denoise) goes through these.
   const pubCap = (pub) => (pub?.capture ?? pub?.video?.in?.capture?.peek?.() ?? null);
   const pubAud = (pub) => (pub?.audio?.in?.source ? pub.audio.in : (pub?.audio?.in?.capture?.peek?.()?.in ?? null));
+  // 0.17.0: the client class (assets/client.js) -- "web" = another device on this relay host's web port
+  const CLIENT2 = window.__kastrClient ?? { class: "app", secure: true, media: true, webcodecs: true, host: null };
+  const IS_WEB2 = CLIENT2.class === "web";
 
   const $ = (id) => document.getElementById(id);
   const urlInput = $("url");
@@ -10110,7 +10310,7 @@
   const authUrl = (u, role) => (window.__auth?.withToken ?? ((x) => x))(u, role);
 
   const RAW_HOST = "__ASI_HOSTNAME__";
-  const HOSTNAME = /^[a-z0-9-]+$/.test(RAW_HOST) ? RAW_HOST : "local";
+  const HOSTNAME = (window.__kastrClient?.host) || (/^[a-z0-9-]+$/.test(RAW_HOST) ? RAW_HOST : "local");   // 0.17.0: a web device is its own host
 
   const SCREEN = "screen";   // source kind for getDisplayMedia captures
   const RTSP = "rtsp";       // source kind fed by the local ffmpeg bridge
@@ -10134,10 +10334,11 @@
   // for every viewer. When that happens, steer the library's own probe to
   // software -- per machine, remembered in this profile -- and rebuild.
   const SW_FLAG = "kastr.encoder.software";
+  let avc1Ok = true;         // 0.17.0: does this browser's VideoEncoder do H.264? (probeCodecs measures; Firefox varies by platform)
   let softwareEncode = false;
   try { softwareEncode = localStorage.getItem(SW_FLAG) === "1"; } catch {}
 
-  {
+  if ("VideoEncoder" in globalThis) {   // 0.17.0: absent on an insecure page -- the patch must not take the module down
     const real = VideoEncoder.isConfigSupported.bind(VideoEncoder);
     VideoEncoder.isConfigSupported = (cfg) => {
       if (softwareEncode && cfg && cfg.hardwareAcceleration === "prefer-hardware") {
@@ -10740,6 +10941,11 @@
   // ---- device discovery ---------------------------------------------------
 
   async function scanDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) {   // 0.17.0: insecure context -- no devices, an honest empty picker
+      cameras = []; mics = []; permission = false;
+      renderPickers(); renderSources(); refreshUi();
+      return;
+    }
     const devs = await navigator.mediaDevices.enumerateDevices();
     cameras = devs.filter((d) => d.kind === "videoinput").map((d) => ({ deviceId: d.deviceId, label: d.label }));
     mics = devs.filter((d) => d.kind === "audioinput").map((d) => ({ deviceId: d.deviceId, label: d.label, groupId: d.groupId }));
@@ -11167,14 +11373,20 @@
       // card decide the picker (naming a surface opens Chrome on that pane).
       const snd = document.getElementById("shareSound")?.checked ?? true;
       const surf = slot.entry.surface;
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: surf ? { displaySurface: surf } : true,
-        audio: snd,
-        systemAudio: snd ? "include" : "exclude",
-        monitorTypeSurfaces: "include",
-        surfaceSwitching: "include",
-        selfBrowserSurface: "include",   // 0.8.3: own tabs shareable
-      });
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: surf ? { displaySurface: surf } : true,
+          audio: snd,
+          systemAudio: snd ? "include" : "exclude",
+          monitorTypeSurfaces: "include",
+          surfaceSwitching: "include",
+          selfBrowserSurface: "include",   // 0.8.3: own tabs shareable
+        });
+      } catch (e1) {
+        // 0.17.0: a browser that rejects the Chromium-only options (not a user cancel) gets the plain ask
+        if (e1 && /TypeError|NotSupportedError|OverconstrainedError/.test(e1.name || String(e1))) stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: snd });
+        else throw e1;
+      }
     } catch (err) {
       const cancelled = err && (err.name === "NotAllowedError" || err.name === "AbortError");
       slot.metaEl.textContent = cancelled ? "share cancelled" : "share failed: " + (err && err.name);
@@ -11275,7 +11487,7 @@
     // Auto choice was VP9, which has no hardware encoder on most laptops -- a software VP9 encode
     // of a 720p30 composite dropped frames and every viewer saw a choppy share. H.264 encodes in
     // hardware nearly everywhere and decodes in hardware on every viewer.
-    if (slot.entry.kind === FILE && !vcfg.codec) vcfg.codec = "avc1";
+    if (slot.entry.kind === FILE && !vcfg.codec) vcfg.codec = avc1Ok ? "avc1" : "vp09";   // 0.17.0: vp09 where the browser cannot encode H.264 (Firefox on some platforms)
 
     try { slot.publish.video.config.set(vcfg); } catch {}
     try { slot.publish.audio.codec.set(audioConfig()); } catch {}
@@ -11337,7 +11549,11 @@
   ];
 
   async function probeCodecs() {
-    if (!("VideoEncoder" in globalThis)) return;
+    if (!("VideoEncoder" in globalThis)) { avc1Ok = false; return; }
+    try {   // 0.17.0: the FILE-share default (H.264) needs an H.264 encoder -- Firefox has one only on some platforms
+      const r = await VideoEncoder.isConfigSupported({ codec: "avc1.42E01E", width: 640, height: 360, latencyMode: "realtime", avc: { format: "annexb" } });
+      avc1Ok = !!r.supported;
+    } catch { avc1Ok = false; }
     for (const opt of [...enc.codec.options]) {
       const want = opt.value;
       if (!want) continue;
@@ -14503,7 +14719,7 @@
   }
   let feedPoll = null;
   function pollFeeds() {
-    if (feedPoll) return;
+    if (feedPoll || IS_WEB2) return;   // 0.17.0: no bridge for a web client
     feedPoll = fetch("/api/rtsp/list")
       .then((r) => r.json())
       .then((d) => {
@@ -14670,6 +14886,7 @@
   addTestBtn.addEventListener("click", () => addRtsp(TEST_URL));
 
   async function prepareMediaFile(f) {
+    if (IS_WEB2) return f;   // 0.17.0: a web client has no media store here -- the browser plays what it can decode
     // 0.8.10: the server probes the codecs with ffmpeg (first 16 MB) and says
     // what needs converting -- video the browser cannot decode (HEVC, MPEG-4,
     // VP8 in MKV...) as well as AC-3/DTS audio. Anything already web-safe is
@@ -14803,7 +15020,7 @@
   // events one physical replug produces; together with the effective-change
   // guard it keeps writes far under the library's 3-per-5s re-open limit.
   let deviceRescanTimer = null;
-  navigator.mediaDevices.addEventListener("devicechange", () => {
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => {   // 0.17.0: undefined on an insecure page
     clearTimeout(deviceRescanTimer);
     deviceRescanTimer = setTimeout(async () => {
       await scanDevices();
@@ -14994,6 +15211,7 @@
     row.hidden = !row.hidden;
     if (!row.hidden) { rtspUrl.focus(); if (!ffmpegOk) probeRtsp(); }   // 0.8.9
   });
+  if (IS_WEB2) { $("srcRtspBtn").hidden = true; $("rtspRow").hidden = true; }   // 0.17.0: the bridge lives on the host
   $("srcFileBtn").addEventListener("click", () => (window.__pickFile ? window.__pickFile(fileInput) : fileInput.click()));
   $("srcUploadBtn").addEventListener("click", () => { const si = document.getElementById("shareFile"); window.__pickFile ? window.__pickFile(si) : si.click(); });
   if (!navigator.mediaDevices?.getDisplayMedia) {   // 0.8.9: phones have no display capture
@@ -15238,7 +15456,7 @@
     // loopback rule the server applies to /api/rtsp/publish; kastr.rtsp.noAdopt=1
     // is a rig switch for a second local page that must stay a viewer.
     try {
-      if (!/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) return 0;
+      if (IS_WEB2 || !/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) return 0;   // 0.17.0: + the client class
       if (localStorage.getItem("kastr.rtsp.noAdopt") === "1") return 0;
     } catch {}
     try {
@@ -15425,6 +15643,12 @@
     const by = (() => { try { return operatorSlug() || "admin"; } catch { return "admin"; } })();
     try { adminAnn.set(nonce, JSON.stringify({ ...cmd, by, nonce, at: Date.now() })); } catch {}
     setTimeout(() => { try { adminAnn.clear(nonce); } catch {} }, 4000);
+    if (cmd.op === "kick" && typeof window.__adminKick === "function") {   // 0.17.0: and the relay refuses them for an hour
+      setTimeout(() => window.__adminKick(cmd.target).then((r) => {   // after the announce has landed: the page leaves on its own first
+        if (r?.ok) window.__toast?.("Removed at the relay too \u2014 " + (r.revoked?.length || 0) + " session(s) closed, re-entry blocked for " + Math.max(1, Math.round(((r.ban?.until || 0) - Date.now() / 1000) / 60)) + " min", 6000, { level: "event" });
+        else if (r?.error) window.__toast?.("Relay-side removal unavailable: " + r.error, 5000, { level: "info" });
+      }).catch(() => {}), 2000);
+    }
   };
   window.__mediaCtl = {
     send: (path, op, value) => {
@@ -15771,6 +15995,7 @@
     addRtsp,
     state: () => ({
       hostname: HOSTNAME,
+      avc1Ok,   // 0.17.0 rig: the browser's H.264 encoder probe
       channel: currentChannel(),
       permission, running, live,
       relay: urlInput.value,
@@ -15875,6 +16100,13 @@
   // in dev, where /api/rtsp doesn't exist at all -- so probe rather than assume.
   let probeBusy = false;
   async function probeRtsp(retries = 3) {
+    if (IS_WEB2) {   // 0.17.0: a web client never has the host's ffmpeg
+      ffmpegOk = false;
+      rtspState.textContent = "unavailable"; rtspState.className = "badge";
+      rtspState.title = "RTSP feeds are published from the KASTR that hosts the relay, not from a browser";
+      addRtspBtn.disabled = addTestBtn.disabled = rtspUrl.disabled = true;
+      return;
+    }
     if (probeBusy) return;
     probeBusy = true;
     try {

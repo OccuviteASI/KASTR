@@ -25,6 +25,11 @@ name pointed at `http://localhost:8000` is enough: browsers open `https://<name>
 offline shell (service worker), a kick reaches spokes behind a tunnel in about a second, and an open relay behind a
 tunnel is flagged on the Relay page and the gate (set codes and require them).
 
+Since 0.21.0 phones get the phone layout in portrait and landscape (every menu a bottom sheet, camera rotate and mirror),
+shared media files scrub without restarting and the sharer hears them ("Hear it myself"), every shared file gets a
+resolution picker, the latency stamp is a thin strip in the bottom-right corner, a spotlight follows the participant,
+full screen is the whole stage, a hub can update its spokes with one button, and the Relay page is a card grid.
+
 Fleet updates flow hub-first: update the hub relay box, its spokes follow the hub's version within the hour, and
 clients pick the new build up on their next launch; browser clients reload on their own. Relay operators set viewer, publisher and (since 0.16.0) admin
 access codes on the Relay page; an admin code set on the hub is honoured by every federated spoke.

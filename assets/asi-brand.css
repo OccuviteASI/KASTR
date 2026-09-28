@@ -238,7 +238,27 @@ body.asi {
   .asi-nav { margin-left: 0; width: 100%; }
 }
 /* 0.8.9: phones -- compact masthead, the relay badge stays (it is the health light) */
-@media (max-width: 720px) {
+/* 0.21.0: one switch component for every page (was private to moq-watch-lite.html) */
+.switch { position:relative; display:inline-block; width:40px; height:22px; flex:none; }
+.switch input { opacity:0; width:0; height:0; margin:0; position:absolute; }
+.switch i { position:absolute; inset:0; background:var(--surface-2, #131b28); border:1px solid var(--line, #243040); border-radius:11px; transition:background .15s; cursor:pointer; }
+.switch i::after { content:""; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:var(--text-dim, #8b98a5); transition:transform .15s, background .15s; }
+.switch input:checked + i { background:var(--asi-blue); border-color:var(--asi-blue); }
+.switch input:checked + i::after { transform:translateX(18px); background:#fff; }
+.switch.sm { width:32px; height:18px; }
+.switch.sm i::after { width:12px; height:12px; top:2px; left:2px; }
+.switch.sm input:checked + i::after { transform:translateX(14px); }
+.switch input:focus-visible + i { box-shadow:0 0 0 2px rgba(0,159,218,.35), 0 0 0 1px var(--asi-blue); }
+.switch input:disabled + i { opacity:.45; cursor:default; }
+.asi-sw { display:flex; align-items:center; gap:10px; font-size:12px; cursor:pointer; }
+.asi-sw > .switch { flex:none; }
+.asi-sw > span:not(.switch) { flex:1; min-width:0; }
+.asi-sw[hidden] { display:none; }
+/* 0.21.0: shared surface tokens (a restrained refresh: radius, layered shadow, one focus ring) */
+:root { --radius-sm:6px; --radius-lg:12px; --shadow-pop:0 18px 48px rgba(0,0,0,.6); --focus:0 0 0 2px rgba(0,159,218,.35), 0 0 0 1px var(--asi-blue); }
+body :is(button, a, input, select, textarea):focus-visible { outline:none; box-shadow:var(--focus); }
+#asiToast { background:var(--surface-2, #131b28); color:var(--text, #e6edf3); border:1px solid var(--line, #243040); box-shadow:0 8px 26px rgba(0,0,0,.45), inset 3px 0 0 var(--asi-blue); }
+@media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: landscape phones too */
   .asi-header { height: 44px; padding: 0 10px; gap: 8px; flex-wrap: nowrap; }
   .asi-mark img { height: 22px; }
   .asi-mark .tag, .asi-nav { display: none; }

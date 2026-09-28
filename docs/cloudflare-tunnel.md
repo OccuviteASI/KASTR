@@ -63,8 +63,9 @@ Browsers get the full client (camera, microphone, all video) because Cloudflare 
 
 - **WebSocket only.** A tunnel carries no UDP, so there is no QUIC/WebTransport through it. Expect a little more
   delay than on the LAN, and head-of-line blocking on a lossy link.
-- **Ban nudges cannot reach a spoke behind a tunnel or NAT.** The spoke pulls the hub's bans on every federation
-  tick (about every 10 minutes) and at relay start, so a kick reaches it within that window.
+- **The hub cannot call a spoke behind a tunnel or NAT.** Since 0.20.0 the spoke holds one request at the hub
+  instead, so a kick reaches it in about a second; since 0.21.0 the same held request carries the hub's "Update
+  spokes now" command (Relay page, Federation card).
 - **Cloudflare Access** in front of the name blocks the native clients (KASTR apps, the moq CLI inside KASTR, spoke
   relays), which cannot do the Access login. Use a bypass policy for the paths KASTR needs, or a service token.
 - **Bandwidth.** Every viewer's video crosses the tunnel. Check your Cloudflare plan's terms for sustained video.

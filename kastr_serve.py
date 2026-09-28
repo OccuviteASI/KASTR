@@ -22,6 +22,7 @@ import mimetypes      # 0.14.0: media sources keep their own extension
 import os
 import re
 import socket
+import struct         # 0.21.0: fmp4_start reads the muxer's edit list
 import sys
 import time
 import uuid
@@ -262,6 +263,7 @@ DEFAULT_RELAY = "http://10.10.105.190:4443"
 # 0.8.6: the launcher installs its on-demand updater here (None in a dev
 # harness -- source checkouts never self-update).
 UPDATE_HOOK = None
+FEDERATION_UPDATE_HOOK = None   # 0.21.0: the launcher's "match the federation master now" (a hub command)
 # 0.8.8: set by the launcher when a self-update is about to relaunch; the
 # heartbeat then answers 205 and the page closes its own window.
 CLOSING = [False]
@@ -751,7 +753,76 @@ HLS_KEYS = {}              # key -> {b, at}
 HLS_LOCK = threading.Lock()
 HLS_IDLE_S = 45
 ARCHIVE_WANTS = lambda broadcast: False   # 0.18.0: make_server points this at the archiver's picks
-HLS_KEY_IDLE_S = 120   # a keyed playlist unused this long is gone (players poll every few seconds)
+HLS_KEY_IDLE_S = 120
+# 0.21.0: the media resolution picker -- output heights the stream accepts (never upscaled) and the
+# bitrate a hardware encoder gets for each; "one rung below" is what the low ladder drops to
+MEDIA_HEIGHTS = (2160, 1440, 1080, 720, 480, 360)
+MEDIA_HW_KBPS = {2160: 12000, 1440: 8000, 1080: 4500, 720: 2500, 480: 1200, 360: 800}
+
+
+def fmp4_start(buf):
+    """0.21.0: (start_seconds, patched_bytes) for the head of an ffmpeg fragmented MP4 written with
+    -copyts + delay_moov after an input seek. ffmpeg's mp4 muxer starts every track's decode time at 0 and
+    records the seek offset as an EMPTY EDIT (media_time -1, duration in mvhd units) -- which MSE ignores, so
+    a seek to 90 s used to buffer at 0 and the page 'restarted from the beginning'. The start is read off
+    that edit; every edts box is renamed 'free' (same size, no re-layout) so browsers never apply it twice.
+    A head without an edit list (t = 0, or a muxer that wrote none) returns 0.0 and the bytes untouched."""
+    start = 0.0
+    mvts = 1000
+    out = bytearray(buf)
+
+    def boxes(off, end):
+        while off + 8 <= end:
+            size, typ = struct.unpack(">I4s", buf[off:off + 8])
+            hdr = 8
+            if size == 1:
+                if off + 16 > end:
+                    return
+                size = struct.unpack(">Q", buf[off + 8:off + 16])[0]
+                hdr = 16
+            if size == 0:
+                size = end - off
+            if size < hdr:
+                return
+            yield typ, off, off + hdr, min(end, off + size)
+            off += size
+
+    try:
+        for typ, _o, a, e in boxes(0, len(buf)):
+            if typ != b"moov":
+                continue
+            for t2, _o2, a2, e2 in boxes(a, e):
+                if t2 == b"mvhd" and e2 - a2 >= 24:
+                    v = buf[a2]
+                    mvts = struct.unpack(">I", buf[a2 + 12:a2 + 16])[0] if v == 0 else struct.unpack(">I", buf[a2 + 20:a2 + 24])[0]
+            for t2, _o2, a2, e2 in boxes(a, e):
+                if t2 != b"trak":
+                    continue
+                for t3, o3, a3, e3 in boxes(a2, e2):
+                    if t3 != b"edts":
+                        continue
+                    for t4, _o4, a4, e4 in boxes(a3, e3):
+                        if t4 == b"elst" and e4 - a4 >= 8:
+                            v = buf[a4]
+                            n = struct.unpack(">I", buf[a4 + 4:a4 + 8])[0]
+                            q = a4 + 8
+                            if n >= 1 and q + (16 if v == 1 else 8) <= e4:
+                                sd, mt = struct.unpack(">Qq", buf[q:q + 16]) if v == 1 else struct.unpack(">Ii", buf[q:q + 8])
+                                if mt == -1 and mvts:
+                                    start = max(start, sd / float(mvts))
+                    out[o3 + 4:o3 + 8] = b"free"
+            break
+    except (struct.error, IndexError, ValueError):
+        return 0.0, buf
+    return start, bytes(out)
+
+
+def _media_rung(h, low):
+    try:
+        i = MEDIA_HEIGHTS.index(int(h))
+    except ValueError:
+        return int(h)
+    return MEDIA_HEIGHTS[min(len(MEDIA_HEIGHTS) - 1, i + 1)] if low else MEDIA_HEIGHTS[i]   # a keyed playlist unused this long is gone (players poll every few seconds)
 HLS_WINDOW = "12s"
 ARCHIVE_HOURS = 24         # kastr.ini archive_hours (the launcher sets it)
 
@@ -2294,17 +2365,19 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             self.wfile.write(data)
 
         def _probe_codecs(self, path):
-            """ffmpeg -i on a (partial) file -> ('h264', 'ac3', 6.0): codec names
-            and the container's duration in seconds (0.14.0; 0.0 when N/A)."""
+            """ffmpeg -i on a (partial) file -> ('h264', 'ac3', 6.0, 29.97, 1920, 1080): codec names, the
+            container's duration in seconds (0.14.0; 0.0 when N/A), the frame rate (0.16.0) and the picture
+            size (0.21.0 -- the resolution picker). Every path returns the same six values (the 0.14-0.20
+            failure path returned three and every caller unpacked four)."""
             ff = getattr(bridge, "ffmpeg", None) if bridge else None
             if not ff:
-                return None, None, 0.0
+                return None, None, 0.0, 0.0, 0, 0
             try:
                 r = subprocess.run([ff, "-hide_banner", "-i", path], capture_output=True, text=True, timeout=60,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 err = r.stderr or ""
             except Exception:
-                return None, None, 0.0
+                return None, None, 0.0, 0.0, 0, 0
             v = re.search(r"Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Video: ([A-Za-z0-9_]+)", err)
             a = re.search(r"Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: ([A-Za-z0-9_]+)", err)
             d = re.search(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", err)
@@ -2322,7 +2395,14 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     fps = float(fm.group(1))
                 except ValueError:
                     fps = 0.0
-            return (v.group(1).lower() if v else None), (a.group(1).lower() if a else None), dur, fps
+            pw = ph = 0
+            sm = re.search(r"Video:[^\n]*?[ ,](\d{2,5})x(\d{2,5})[ ,\[]", err)   # "..., 1920x1080 [SAR..." (the 0x31637661 tag has one digit before x)
+            if sm:
+                try:
+                    pw, ph = int(sm.group(1)), int(sm.group(2))
+                except ValueError:
+                    pw = ph = 0
+            return (v.group(1).lower() if v else None), (a.group(1).lower() if a else None), dur, fps, pw, ph
 
         def _media_probe(self):
             """0.8.10: what does the browser need converted? (first MBs of the file)"""
@@ -2349,7 +2429,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     f.write(chunk)
                     got += len(chunk)
             try:
-                v, a, dur, fps = self._probe_codecs(tmp)
+                v, a, dur, fps, pw, ph = self._probe_codecs(tmp)
             finally:
                 try:
                     os.remove(tmp)
@@ -2357,7 +2437,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     pass
             cv = bool(v) and not any(v.startswith(x) for x in WEB_VIDEO)
             ca = bool(a) and not any(a.startswith(x) for x in WEB_AUDIO)
-            return self._json_cors(200, {"video": v, "audio": a, "duration": dur, "fps": fps, "convertVideo": cv, "convertAudio": ca})   # 0.16.0: + fps
+            return self._json_cors(200, {"video": v, "audio": a, "duration": dur, "fps": fps, "convertVideo": cv, "convertAudio": ca,
+                                         "width": pw, "height": ph})   # 0.16.0: + fps; 0.21.0: + size
 
         # ---- 0.14.0: stream-while-converting media (replaces the 0.8.9 convert endpoint) ----
         def _media_local(self):
@@ -2423,10 +2504,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             rec["done"] = True
-            v, a, dur, _fps = self._probe_codecs(src)
+            v, a, dur, _fps, pw, ph = self._probe_codecs(src)
             rec["video"], rec["audio"], rec["duration"], rec["probedAt"] = v, a, dur, got
+            rec["width"], rec["height"] = pw, ph   # 0.21.0
             return self._json_cors(200, {"id": mid, "url": "/api/media/" + mid, "size": n,
-                                         "duration": dur, "video": v, "audio": a})
+                                         "duration": dur, "video": v, "audio": a, "width": pw, "height": ph})
 
         def _media_adopt(self, mid, base_dir):
             """A source on disk from before a restart -> a complete record."""
@@ -2437,9 +2519,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 size = os.path.getsize(src)
             except OSError:
                 return None
-            v, a, dur, _fps = self._probe_codecs(src)
+            v, a, dur, _fps, pw, ph = self._probe_codecs(src)
             rec = {"path": src, "size": size, "got": size, "done": True, "aborted": False, "procs": set(),
-                   "errors": [], "video": v, "audio": a, "duration": dur, "probedAt": size, "at": time.time()}
+                   "errors": [], "video": v, "audio": a, "duration": dur, "probedAt": size, "at": time.time(),
+                   "width": pw, "height": ph}
             with MEDIA_LOCK:
                 return MEDIA.setdefault(mid, rec)
 
@@ -2468,6 +2551,17 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             a = ((qs.get("a") or ["aac"])[0] or "aac").lower()
             if v not in ("copy", "transcode") or a not in ("copy", "aac"):
                 return self._json_cors(400, {"error": "v=copy|transcode, a=copy|aac"})
+            # 0.21.0: the resolution picker -- a whitelist of heights; ignored for a copy (nothing to scale)
+            hsel = 0
+            if (qs.get("h") or [""])[0]:
+                try:
+                    hsel = int((qs.get("h") or ["0"])[0])
+                except ValueError:
+                    hsel = -1
+                if hsel not in MEDIA_HEIGHTS:
+                    return self._json_cors(400, {"error": "h must be one of %s" % ",".join(str(x) for x in MEDIA_HEIGHTS)})
+            if v == "copy":
+                hsel = 0
             base_dir = self._media_dir()
             rec = _media_rec(mid) or self._media_adopt(mid, base_dir)
             if rec is None:
@@ -2478,9 +2572,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # has it; look again once the upload grew 4 MB if the first look
                 # came up empty.
                 if rec.get("probedAt", -1) < 0 or (not rec["duration"] and rec["got"] - rec["probedAt"] >= 4 << 20):
-                    pv, pa, pdur, pfps = self._probe_codecs(src)
+                    pv, pa, pdur, pfps, ppw, pph = self._probe_codecs(src)
                     if pfps:
                         rec["fps"] = pfps   # 0.16.0
+                    if pph:
+                        rec["width"], rec["height"] = ppw, pph   # 0.21.0
                     rec["probedAt"] = rec["got"]
                     if pv:
                         rec["video"] = pv
@@ -2507,7 +2603,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except Exception:
                 enc = "libx264"
             pre = list(kastr_rtsp.encoder_pre_args(enc)) if enc != "libx264" else []
-            vf = "scale='min(%d,iw)':-2,format=yuv420p" % (960 if low else 1280)
+            if hsel:
+                hout = _media_rung(hsel, low)
+                vf = "scale=-2:'min(%d,ih)',format=yuv420p" % hout        # 0.21.0: the chosen height, never upscaled
+            else:
+                hout = 0
+                vf = "scale='min(%d,iw)':-2,format=yuv420p" % (960 if low else 1280)
             vcodec = ["-vf", kastr_rtsp.encoder_vf(enc, vf), *(["-r", "24"] if low else []), "-c:v", enc]
             if enc == "libx264":
                 # 0.16.0: half the cores (at least 2) -- a software transcode used every core and
@@ -2515,14 +2616,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 thr = max(2, (os.cpu_count() or 4) // 2)
                 vcodec += ["-preset", "ultrafast" if low else "superfast", "-tune", "fastdecode", "-crf", "26" if low else "23", "-threads", str(thr)]
             else:
-                vcodec += ["-b:v", "2M" if low else "4M"]
+                kb = MEDIA_HW_KBPS.get(hout) if hout else None
+                vcodec += ["-b:v", ("%dk" % kb) if kb else ("2M" if low else "4M"), "-maxrate", ("%dk" % kb) if kb else ("2M" if low else "4M"),
+                           "-bufsize", ("%dk" % (kb * 2)) if kb else ("4M" if low else "8M")]
             vcodec += ["-g", "48" if low else "60"]
             argv = [ff, "-hide_banner", "-loglevel", "error", "-nostdin", *pre,
-                    *(["-ss", "%.3f" % t] if t > 0 else []),
+                    *(["-ss", "%.3f" % t, "-noaccurate_seek"] if t > 0 else []),   # 0.21.0: BOTH tracks start at the demuxer's keyframe -- one timestampOffset fits them (accurate seek moved the decoded audio to t and left the copied video at the keyframe: 6 s of A/V skew)
                     "-i", src, "-map", "0:v:0?", "-map", "0:a:0?", "-copyts",
                     *(["-c:v", "copy"] if v == "copy" else vcodec),
                     *(["-c:a", "copy"] if a == "copy" else ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]),
-                    "-f", "mp4", "-movflags", "empty_moov+default_base_moof", "-frag_duration", "500000", "pipe:1"]
+                    "-f", "mp4", "-movflags", "empty_moov+default_base_moof+delay_moov", "-frag_duration", "500000", "pipe:1"]   # 0.21.0: delay_moov = the edit list carries the real start (fmp4_start)
             spawn = getattr(bridge, "spawn_media", None) if bridge else None
             try:
                 try:
@@ -2555,6 +2658,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         rec["errors"] = (rec["errors"] + errs)[-20:]
                     msg = "\n".join((errs or rec["errors"])[-5:]) or "ffmpeg produced no output"
                 return self._json_cors(503, {"error": msg[-800:], "copy": v == "copy"})
+            # 0.21.0: the real start of this stream (a copy begins at the keyframe before t; a transcode at t)
+            start_s, first = fmp4_start(first)
+            if t > 0 and not start_s:
+                start_s = t
             vc = None
             if rec.get("video"):
                 if v == "copy" and rec["video"] in ("hevc", "h265"):
@@ -2575,8 +2682,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             self.send_header("X-KASTR-Mime", 'video/mp4; codecs="%s"' % codecs)
             self.send_header("X-KASTR-Copy", "1" if v == "copy" else "0")
             self.send_header("X-KASTR-Encoder", "copy" if v == "copy" else enc + ("/low" if low else ""))   # 0.15.1
+            self.send_header("X-KASTR-Height", str(hout if v != "copy" else 0))   # 0.21.0: 0 = legacy width cap / copy
             self.send_header("X-KASTR-Fps", self._num(rec.get("fps") or 0))   # 0.16.0
-            self.send_header("X-KASTR-Start", self._num(t))
+            self.send_header("X-KASTR-Start", "%.3f" % start_s)   # 0.21.0: the REAL start (was the requested t)
             self.send_header("X-KASTR-Duration", self._num(rec["duration"]))
             self.end_headers()
             # After the headers: governs only the pump (kastr_rtsp.handle_stream discipline)

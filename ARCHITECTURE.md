@@ -912,6 +912,46 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.0
+
+- **A fragmented MP4 from ffmpeg starts at zero.** Whatever `-ss` and `-copyts` say, movenc writes every track's
+  decode time from its first packet and puts the offset in an edit list; MediaSource ignores edit lists. Data that
+  should sit at 90 s lands at 0, and a "settle the playhead into the buffer" step then looks like a restart. The
+  server reads the offset off the edit list it asked for (`delay_moov`), strips the list so no browser applies it a
+  second time, and the page places the data with `timestampOffset`. `X-KASTR-Start` had carried the requested time
+  since 0.14 — unused by the page, and wrong by a GOP for a copied stream.
+- **One SourceBuffer, one offset: seek both tracks the same way.** Accurate seeking moves decoded audio to the exact
+  second and leaves copied video at the keyframe; with a single `timestampOffset` that is six seconds of skew.
+  `-noaccurate_seek` starts both at the demuxer's keyframe, and the seek is honest about landing there.
+- **A torn fragment is poison.** Orphaning a reader by generation is not enough; its last, half-received chunk is
+  still queued and the next append after a clear feeds the parser a torn box followed by a new header. Flush the
+  queue and `abort()` (which resets the parser) before the new stream's bytes arrive.
+- **`endOfStream()` is a statement about the show, not the buffer.** Calling it on a MediaSource being replaced
+  makes the element fire `ended`, and "ended with loop off" ends the share. A re-attach detaches by replacing the
+  object URL and never ends the old source.
+- **Fetch first, clear second.** A seek that empties the buffer before the server answers turns every 409/503 into
+  a black stage with a moved playhead. Nothing is dropped until the new position is streaming.
+- **The person sharing hears the file.** A monitor created where the microphone tap runs never sees a file's audio,
+  because the file feeds the publish through its own AudioContext destination. Attach the earpiece where the track
+  is made, and give it its own switch — "for me" is not "for everyone".
+- **Calibrate the stamp from the stamp.** The decoded picture is the encoder's size, not the publisher's; a reader
+  that assumes a cell size fails on every downscale. The strip's own sync cells give the cell size and the levels.
+- **A spotlight is a fact about the participant, not the spotlighter.** Mirroring the vote into the target's own
+  record makes it survive the spotlighter leaving and a reload; every viewer just counts one more vote.
+- **Full-screen the container that owns the interaction.** A tile in full screen loses the grid's cell clicks and
+  starves the other tiles; the stage in full screen keeps both.
+- **A state file that fails to load must never be saved over.** The silent empty store, the shared temp name, the
+  missing fsync and the note that rewrote a file it could not read were each harmless alone and together erased a
+  code the operator had typed once. Load tolerant, save atomic with a backup, and freeze a store that could not
+  read its file.
+- **Piggyback commands on the request you already hold.** The spoke's held ban long-poll is a channel; a sequence
+  number on it makes "update now" reach a spoke behind a tunnel in a second without a second connection or a timer.
+- **Start the new build first.** A relaunch that swaps files and then hopes the child starts has no way back; a
+  child that starts, proves it is ready, and then renames the files finishes an update or leaves the old build in
+  place. A silent bootloader is a failure, not a success with a delay.
+- **A dead member is the grid's business.** The owner knows which members are down or evicted in every mode; a
+  viewer that only learned this in "both" mode showed the dying broadcast as a tile.
+
 ### 0.20.0
 
 - **"Open" means something else behind a tunnel.** An open relay trusts its LAN; a tunnel makes the LAN the internet.

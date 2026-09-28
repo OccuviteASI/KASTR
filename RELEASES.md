@@ -2,6 +2,127 @@
 
 What changed in each build, newest first.
 
+## v0.21.0 — the field report: phones, media, relay, fleet
+
+Kenton ran 0.19 and 0.20 through the real tunnel at a public name with phones and other people, and filed 36 items.
+This release is every bug and interface fix from that list. Rooms and permissions (waiting room, per-room passcode,
+five permission levels, raise hand, kick to the waiting room) are v0.22.0; update hosting on GitHub Releases and a
+build guide for every platform are v0.23.0.
+
+**Phones, portrait and landscape.** One phone rule covers both (`max-width: 720px` or `max-height: 500px`), so a
+phone held sideways gets the phone layout too. Every popover is a bottom sheet — the share sheet, the People and
+chat panels, the camera and microphone menus, and the tile menus behind the chevrons, which used to open off-screen.
+Menus that "would not open in portrait" were being closed by the page itself: a phone's address bar fires a resize
+and a scroll as a menu opens, and the menu closed on both. Now a height-only resize re-places the open menu and a
+phone never closes a menu on scroll. Sheets fit a 375 px tall viewport with one scrolling body.
+
+**Sideways camera.** The Camera menu has Rotate (0°, 90°, 180°, 270°) and Mirror. Rotation alone runs the light
+canvas loop (no person segmentation), the output frame swaps its sides for 90° and 270°, backgrounds stay upright,
+and the setting is saved and rides the join like the other effects. A phone with Auto resolution asks for a portrait
+capture when it is held upright, re-asked on rotation; the gate's preview asks for the front camera when no device
+is saved.
+
+**Media shares: the scrub that "restarted the file", and the sharer who heard nothing.** The scrub bug had two
+causes, both found on the rig with a two-minute file. First, ffmpeg's fragmented-MP4 muxer starts every stream's
+clock at zero whatever the seek position was: the real offset only ever lived in an edit list, which MediaSource
+ignores — so a seek to 1:30 buffered as 0:00–0:30 and the page's settle step moved the playhead to the start. The
+server now reads the real start off the muxer's edit list (`X-KASTR-Start`; it used to carry the requested time,
+wrong by up to a GOP for a copied file) and the page places the data there with `timestampOffset`; the copied video
+and the re-encoded audio are seeked the same way, so they share one start (the accurate seek had moved the audio to
+the exact second and left the video at the keyframe — six seconds of skew on the fixture). Second, a seek orphaned
+the previous reader but left its last, half-received fragment queued; it was appended after the buffer was cleared,
+the new stream's header followed the torn fragment, and the SourceBuffer raised the "sourcebuffer error" of the
+report. The seek now fetches first and clears second (nothing is dropped until the server has answered), flushes
+the orphaned bytes, retries a SourceBuffer error once at the same position with a fresh MediaSource, and a re-attach
+never ends the share (the old MediaSource's end-of-stream used to fire `ended`, which with loop off ended the share).
+A rejected video copy escalates to a transcode again (the page checked 502; the server has said 503 since 0.20).
+Rig: seeks to 60, 5, 90, 117 and 0 s land within a keyframe, no restart, no escalation, two seeks back to back
+settle on the last one.
+
+The person sharing a file heard nothing because the sharer's monitor was created inside the microphone tap, which
+never saw a streamed file's audio track. It now attaches straight from the file's own audio, retries on the next
+gesture when autoplay refused, and the media bar has "Hear it myself" (only you) beside "Mute for everyone".
+
+**Media chrome hides itself.** Three seconds without pointer or key input hides the media bar, the file-name bars,
+the chevrons, the zoom controls and the Gallery pill; the pointer resting on a control, a control with focus, or a
+scrub in progress keeps them; on a phone any tap shows them.
+
+**A resolution picker for every shared file.** After the probe, a small card shows the file (size, codecs, frame
+rate, duration, container), warns about unusual files that KASTR will re-encode as they play, and offers "Same as
+source" or any rung below it (2160/1440/1080/720/480/360). A web-safe file is scaled in the composite (no server
+work); anything else is re-encoded at the chosen height (`&h=`, `X-KASTR-Height`), with a bitrate table for the
+hardware encoders and the low ladder one rung below. Web clients get the same card from the browser's own metadata.
+The file encoder follows the chosen or source size instead of the camera's cap: a 1080p file share now leaves at
+about 2.5 Mb/s (was 1.2).
+
+**The latency stamp is a thin strip in the bottom-right corner.** 48 cells of `max(4, width / 200)` px — about a
+quarter of the width from 800 px up, one row tall — with sync cells at both ends, in place of the 0.18 bar across
+the top of the picture. Viewers calibrate the cell size from the strip's own sync cells (the decoded picture is the
+encoder's size, not the publisher's), sample 3×3 averages against the strip's own levels, and still decode the
+0.18–0.20 top-left stamp. A plain camera with the stamp on runs the light canvas loop just to draw it. Rig: the
+strip decodes at 1920, 1280, 640, 426 and 320 wide, and a viewer read 282 ms on a file share and the stamp on a plain
+camera.
+
+**Spotlight follows the participant.** A spotlight used to be the spotlighter's vote; when they left, everyone's
+stage fell back to the gallery. The spotlit participant now mirrors the spotlight into their own room record and
+every viewer counts that mirror as a vote, so the spotlight survives the spotlighter leaving and a late joiner lands
+on it; the participant re-announces it after a reload within 30 minutes. Another spotlight, the spotlighter's
+explicit un-spotlight, the share ending, a room switch or a kick clears it.
+
+**Full screen is the stage.** F, or the full-screen button, puts the whole stage in full screen instead of one tile,
+so the RTSP grid, cell clicks, the back pill, chevrons and zoom keep working inside it, and every tile keeps
+downloading. **Dead RTSP previews** are gone: the grid owner announces every member's path, which are down and which
+are out, in every grid mode, and a viewer never shows a down or evicted member's lingering broadcast as a tile.
+
+**Toasts, switches, small things.** Toasts are a neutral surface with a blue accent; amber for warnings; red only for
+errors. Setting toggles (latency stamp, feeds mode, "re-encoding as it plays") are verbose-only. The "a viewer
+reported your share frozen" toasts are gone (the nudge and the rebuild stay). Every checkbox on the page and the
+Relay page is a switch. The share preview's options button is three dots (it was the same chevron as minimize).
+The sidebar's "+" opens the create-room form in a bubble beside a collapsed rail instead of expanding it. The
+gate's relay field is a real select (the old datalist filtered to its own value and "did nothing"); choosing an
+entry applies at once, "Other…" reveals the address field. Four ASI backgrounds (swoosh, blue motes, light sweep,
+horizon) join the scenes.
+
+**Relay: the federation code that vanished after an upgrade.** Five causes, all fixed: the access-code store opened
+its file without tolerating a BOM and returned silently on any read error, so the next save wrote every code as
+null; every state writer shared one `.tmp` name (a predecessor and its successor, or two threads, interleaved); no
+fsync; the hub fingerprint note rewrote the cluster file with the fingerprint alone when its read failed, dropping
+the hub address and the code; and the Relay page's Save posted a blank hub address before the field had painted,
+which cleared the code. State files now load BOM-tolerant with retries and save through a unique temp name with
+fsync and a `.bak`; the code store recovers from the `.bak`, else moves the bad file aside and records LOST (shown in
+red on the Relay page, with each code's set date); the fingerprint note merges or refuses; a blank hub address keeps
+the code; the page confirms before leaving a hub.
+
+**RTSP feed that kept coming back.** Closing a feed never told the bridge: the page only forgot its own list, the
+running pair stayed in the bridge's session file and came back at the next launch or rejoin. Closing now removes it
+at the bridge, which keeps a tombstone in `rtsp-feeds.json` so a restore never re-adds a closed address; adding it
+again clears the tombstone.
+
+**Windows relaunch after an update.** The shell-escalation path started the new KASTR with no environment, so the
+child inherited the frozen loader's variables and became the "bootloader with no child" of the field reports. Both
+launch paths scrub the environment; a launched child writes a ready marker as its first act and the parent counts
+success only when the marker appears (a silent bootloader is killed and retried); every attempt is logged. Updates
+take over in two phases: the new build is downloaded as `KASTR.new.exe` and started FIRST; once it is ready and the
+old process has quit, it renames the old file aside and itself into place (finished at the next launch if a file is
+locked). `update_takeover = off` in kastr.ini keeps the classic swap. Verified with stub children and on copies; the
+frozen two-build test on the dev box is part of the release ritual.
+
+**Update the spokes from the hub.** The hub's Federation card lists the spokes federated to it (name, address,
+version, last seen) with "Update spokes now"; the command rides the ban long-poll every spoke already holds at the
+hub, so a spoke reacts within a second and relaunches only when its version differs. "Check for updates" on a spoke
+asks the federation master, not the LAN relay.
+
+**Relay page.** A responsive card grid (one column on a phone, the log across the bottom), the Server panel split
+into Server, Access codes, Startup & mode and Network, the duplicate "allow other machines to update from this one"
+switch removed (it fought Web clients over the same setting), the printed firewall command gains the mDNS rule (it
+never matched the seven rules the button adds), and the misleading texts fixed (the streams note blamed room codes;
+the web-clients hint named a switch that does not exist; the Clear tooltip said three codes; the admin field stayed
+filled after a save).
+
+**Not in this release.** Rooms and permissions (v0.22.0); GitHub Releases as the update host and `BUILDING.md`
+(v0.23.0); an iPhone pass of the new phone layout waits for the host to run 0.21; the secured-relay half of the
+live test (admin stop and kick through the real tunnel) still waits for the host to require access codes.
+
 ## v0.20.0 — the tunnel for real, kicks that reach tunneled spokes, an offline shell
 
 **Verified on a real Cloudflare Tunnel.** Kenton's relay host at a public name ran 0.19.0 behind cloudflared. Read-only

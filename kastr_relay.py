@@ -437,6 +437,88 @@ class Lockout:
             self._fails.pop(peer, None)
 
 
+# ---- 0.21.0: state files ---------------------------------------------------------------
+# Every JSON the relay remembers (codes, rooms, bans, hub link, spokes, name, shape) goes
+# through these two. Field report 2026-09-28: a hub "forgot" its federation code after an
+# upgrade. The old readers opened relay-auth.json as plain utf-8 and returned SILENTLY on any
+# parse error, and every writer shared one `<file>.tmp` name -- a predecessor still heart-
+# beating while its successor started could interleave two writes, leave an unparseable
+# file, and the next room heartbeat then rewrote it with every code null. Now: BOM-tolerant
+# reads, one log line per failure naming the file, a per-process/per-thread temp name,
+# fsync before the replace, a `.bak` of the last good copy, and never an empty store
+# written over a file that failed to parse.
+def load_json(path, log=None, what=None, retries=6):
+    """-> (obj | None, why). why is "missing", "" (ok) or the error text ("PermissionError: ..." /
+    "OSError: ..." for a file that could not be READ -- a concurrent os.replace holds it for a moment on
+    Windows, so those are retried, and callers treat them as transient, never as corruption)."""
+    e = None
+    for i in range(max(1, retries)):
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                return json.load(f), ""
+        except FileNotFoundError:
+            return None, "missing"
+        except (PermissionError, OSError) as ex:
+            e = ex
+            time.sleep(0.03 * (i + 1))
+            continue
+        except Exception as ex:
+            e = ex
+            break
+    try:
+        raise e
+    except Exception as e:
+        why = "%s: %s" % (type(e).__name__, str(e)[:120])
+        if log:
+            try:
+                log("state: %s unreadable (%s)" % (what or os.path.basename(path), why))
+            except Exception:
+                pass
+        return None, why
+
+
+def save_json(path, obj, log=None, backup=True):
+    """Atomic write: unique temp name, fsync, `.bak` of the current parseable file, replace with
+    the Windows scanner ladder. -> True when the file is in place."""
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        if backup and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8-sig") as f:
+                    json.load(f)
+                import shutil
+                shutil.copyfile(path, path + ".bak")
+            except Exception:
+                pass          # an unparseable or busy current file is not worth keeping
+        for i in range(6):
+            try:
+                os.replace(tmp, path)
+                return True
+            except PermissionError:
+                if i == 5:
+                    raise
+                time.sleep(0.02 * (i + 1))
+    except Exception as e:
+        if log:
+            try:
+                log("state: %s not saved: %s" % (os.path.basename(path), e))
+            except Exception:
+                pass
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
 class BanList:
     """0.17.0: who an admin removed, so the relay refuses them for a while.
 
@@ -462,8 +544,7 @@ class BanList:
 
     def _load(self):
         try:
-            with open(self._path(), encoding="utf-8-sig") as f:
-                d = json.load(f)
+            d, _why = load_json(self._path(), self.log, "relay-bans.json")
             rows = d.get("bans") if isinstance(d, dict) else None
             now = time.time()
             self.bans = [b for b in (rows or []) if isinstance(b, dict) and float(b.get("until") or 0) > now]
@@ -480,21 +561,14 @@ class BanList:
         self.cv.notify_all()
 
     def _save(self):
-        try:
-            os.makedirs(self.state_dir, exist_ok=True)
-            tmp = self._path() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"bans": self.bans, "ver": self.ver}, f)
-            for i in range(6):
-                try:
-                    os.replace(tmp, self._path())
-                    return
-                except PermissionError:
-                    if i == 5:
-                        raise
-                    time.sleep(0.02 * (i + 1))
-        except Exception as e:
-            self.log("relay auth: bans not saved: %s" % e)
+        save_json(self._path(), {"bans": self.bans, "ver": self.ver}, self.log, backup=False)
+
+    def poke(self):
+        """0.21.0: bump the version without a ban change -- the hub's command channel rides the
+        same long-poll (spokes re-pull, idempotently, and read the command)."""
+        with self.lock:
+            self._changed_locked()
+            self._save()
 
     def _prune(self, now):
         self.bans = [b for b in self.bans if float(b.get("until") or 0) > now][-self.MAX:]
@@ -577,20 +651,50 @@ class AuthStore:
         self.rooms = {}
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
+        self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
+        self.lost = None         # 0.21.0: {"at", "kept"} when relay-auth.json was unreadable and no backup saved it
+        self.recovered = None    # 0.21.0: epoch when the .bak copy was used
+        self.frozen = None       # 0.21.0: the read error when the file could not be OPENED -- saves refuse until a restart
         self._load()
 
     def _path(self):
         return os.path.join(self.state_dir, "relay-auth.json")
 
     def _load(self):
-        try:
-            with open(self._path(), encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
+        p = self._path()
+        d, why = load_json(p, self.log, "relay-auth.json")
+        if d is None and why == "missing":
             return
+        if d is None and why.startswith(("PermissionError", "OSError")):
+            # 0.21.0: could not even open it (locked by a scanner or another KASTR) -- not corruption.
+            # Start empty but FROZEN: nothing is written over a file we never read.
+            self.frozen = why
+            self.log("relay auth: relay-auth.json could not be read (%s) -- codes unavailable and NOT saved until KASTR restarts" % why)
+            return
+        if not isinstance(d, dict):
+            # 0.21.0: NEVER a silent empty store (the next save would wipe every code).
+            b, bwhy = load_json(p + ".bak", self.log, "relay-auth.json.bak")
+            ts = int(time.time())
+            if isinstance(b, dict):
+                d = b
+                self.recovered = ts
+                self.log("relay auth: relay-auth.json was unreadable (%s) -- recovered the codes and rooms from its .bak copy" % why)
+            else:
+                kept = "relay-auth.corrupt-%d.json" % ts
+                try:
+                    os.replace(p, os.path.join(self.state_dir, kept))
+                except OSError:
+                    kept = "(could not be moved)"
+                self.lost = {"at": ts, "kept": kept}
+                self.log("relay auth: relay-auth.json unreadable (%s) and no usable backup -- kept as %s; "
+                         "access codes and rooms start EMPTY, re-enter the codes on the Relay page" % (why, kept))
+                return
         for k in ("viewer", "publisher", "federation", "admin"):
             v = d.get(k)
             self.codes[k] = v if isinstance(v, dict) and v.get("salt") and v.get("hash") else None
+        at = d.get("codesAt")
+        if isinstance(at, dict):
+            self.codes_at = {k: int(v) for k, v in at.items() if k in self.codes and isinstance(v, (int, float))}
         lan = d.get("lan")                   # 0.16.0
         if isinstance(lan, dict):
             sec = str(lan.get("secret") or "").lower()
@@ -631,25 +735,19 @@ class AuthStore:
                 self.groups[gid] = {"name": str(g.get("name") or gid)[:48], "order": order, "rooms": rooms}
 
     def _save(self):
-        os.makedirs(self.state_dir, exist_ok=True)
-        tmp = self._path() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"viewer": self.codes["viewer"], "publisher": self.codes["publisher"],
-                       "federation": self.codes["federation"], "rooms": self.rooms,
-                       "admin": self.codes["admin"],   # 0.16.0
-                       "lan": self.lan,                # 0.16.0
-                       "closed": self.closed,          # 0.12.0: + closed tombstones
-                       "groups": self.groups}, f)     # 0.15.0: + room groups
-        for i in range(6):
-            # 0.12.0: Windows -- a scanner holding the just-written file fails the
-            # replace with "access denied" for a moment; registers now save often.
-            try:
-                os.replace(tmp, self._path())
-                return
-            except PermissionError:
-                if i == 5:
-                    raise
-                time.sleep(0.02 * (i + 1))
+        if self.frozen:
+            if not getattr(self, "_frozen_said", False):
+                self._frozen_said = True
+                self.log("relay auth: not saving relay-auth.json (it could not be read at start: %s)" % self.frozen)
+            return
+        # 0.21.0: through save_json -- unique temp, fsync, .bak of the last good copy
+        save_json(self._path(), {"viewer": self.codes["viewer"], "publisher": self.codes["publisher"],
+                                 "federation": self.codes["federation"], "rooms": self.rooms,
+                                 "admin": self.codes["admin"],   # 0.16.0
+                                 "lan": self.lan,                # 0.16.0
+                                 "closed": self.closed,          # 0.12.0: + closed tombstones
+                                 "groups": self.groups,          # 0.15.0: + room groups
+                                 "codesAt": self.codes_at}, self.log)   # 0.21.0
 
     @staticmethod
     def _derive(code, salt_hex, iters):
@@ -665,7 +763,9 @@ class AuthStore:
     def codes_status(self):
         with self.lock:
             return {"viewer": bool(self.codes["viewer"]), "publisher": bool(self.codes["publisher"]),
-                    "federation": bool(self.codes["federation"]), "admin": bool(self.codes["admin"])}   # 0.16.0: + admin
+                    "federation": bool(self.codes["federation"]), "admin": bool(self.codes["admin"]),   # 0.16.0: + admin
+                    "at": dict(self.codes_at), "lost": self.lost, "recovered": self.recovered,
+                    "frozen": self.frozen}       # 0.21.0
 
     def set_codes(self, viewer=None, publisher=None, federation=None, admin=None):
         """None = unchanged, "" = clear, anything else = the new code."""
@@ -680,6 +780,7 @@ class AuthStore:
                     salt = os.urandom(16).hex()
                     self.codes[k] = {"salt": salt, "hash": self._derive(v, salt, PBKDF2_ITER),
                                      "iter": PBKDF2_ITER}
+                self.codes_at[k] = int(time.time())   # 0.21.0
             self._save()
         return self.codes_status()
 
@@ -1112,7 +1213,7 @@ class AuthService:
 
     bans = None   # 0.17.0: set by __init__; a test double without one simply never bans
 
-    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None):
+    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None, on_cmd=None):
         self.store = store or AuthStore(os.getcwd(), log)
         self.hub = hub                       # 0.16.0: callable -> the hub minter's base URL (a spoke forwards admin codes there), or None
         self.fed_token = fed_token           # 0.17.0: callable -> this spoke's federation token (a kick rides it to the hub), or None
@@ -1123,13 +1224,21 @@ class AuthService:
         # the hub reaches every spoke (each pulls the hub's bans with its federation token)
         self.spokes = {}
         self._spokes_path = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-spokes.json")
-        try:
-            with open(self._spokes_path, encoding="utf-8-sig") as f:
-                d = json.load(f)
-            if isinstance(d, dict) and isinstance(d.get("spokes"), dict):
+        # 0.21.0: the hub's command channel -- {"seq", "update": {"seq", "at", "version"}} rides every
+        # bans long-poll reply; a spoke acts once per new seq (an "Update spokes now" on the hub)
+        self.cmd = {"seq": 0, "update": None}
+        self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
+        self.hub_cmd_seen = None              # the hub's command seq this spoke last saw (baseline first)
+        d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
+        if isinstance(d, dict):
+            if isinstance(d.get("spokes"), dict):
                 self.spokes = {str(k): v for k, v in d["spokes"].items() if isinstance(v, dict)}
-        except Exception:
-            self.spokes = {}
+            if isinstance(d.get("cmd"), dict):
+                try:
+                    self.cmd = {"seq": int(d["cmd"].get("seq") or 0),
+                                "update": d["cmd"].get("update") if isinstance(d["cmd"].get("update"), dict) else None}
+                except (TypeError, ValueError):
+                    pass
         self._pull_at = 0
         self.hub_ver = None                   # 0.20.0: the hub's ban-list version this spoke last saw
         self.lock = threading.Lock()
@@ -1563,29 +1672,56 @@ class AuthService:
         claims = verify_token(str(bearer)[7:].strip(), self.key)
         return claims if (claims and is_relay_claims(claims)) else None
 
+    def _save_spokes(self):
+        with self.lock:
+            doc = {"spokes": dict(self.spokes), "cmd": dict(self.cmd)}
+        save_json(self._spokes_path, doc, self.log, backup=False)
+
     def register_spoke(self, p, peer="", bearer=None):
+        """0.18.0: a spoke tells its hub where its minter answers (ban nudges). 0.21.0: also its
+        name and version, and a spoke with no reachable minter (behind a tunnel or NAT) registers
+        by name only -- it learns of bans and commands through its long-poll."""
         if not self._bearer_relay(bearer):
             return {"ok": False, "error": "federation token required"}, 403
-        url = str((p or {}).get("minter") or "").strip().rstrip("/")
-        if not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]{1,260}$", url):
+        p = p if isinstance(p, dict) else {}
+        url = str(p.get("minter") or "").strip().rstrip("/")
+        if url and not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]{1,260}$", url):
             return {"ok": False, "error": "bad minter url"}, 400
+        name = re.sub(r"[^a-z0-9-]+", "-", str(p.get("name") or "").lower()).strip("-")[:40]
+        version = str(p.get("version") or "")[:24]
+        if not url and not name:
+            return {"ok": False, "error": "a minter url or a name is required"}, 400
+        key = url or ("spoke:" + name)
         with self.lock:
-            fresh = url not in self.spokes
-            self.spokes[url] = {"at": int(time.time()), "peer": peer}
+            fresh = key not in self.spokes
+            self.spokes[key] = {"at": int(time.time()), "peer": peer, "name": name, "version": version,
+                                "minter": url or None}
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
                     self.spokes.pop(k, None)
-            snap = dict(self.spokes)
-        try:
-            tmp = self._spokes_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"spokes": snap}, f)
-            os.replace(tmp, self._spokes_path)
-        except Exception:
-            pass
+        self._save_spokes()
         if fresh:
-            self.log("relay auth: spoke %s registered for ban fan-out (from %s)" % (url, peer or "?"))
-        return {"ok": True, "bans": len(self.bans.active())}, 200
+            self.log("relay auth: spoke %s registered%s (from %s)" % (name or key, " for ban fan-out" if url else " (long-poll only)", peer or "?"))
+        return {"ok": True, "bans": len(self.bans.active()), "cmd": self.cmd["seq"]}, 200
+
+    def spokes_public(self):
+        """0.21.0: the Relay page's spoke table -- never a token, never a code."""
+        with self.lock:
+            rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
+                     "peer": v.get("peer") or "", "at": v.get("at")} for k, v in self.spokes.items()]
+        return sorted(rows, key=lambda r: (r["name"], r["key"]))
+
+    def raise_cmd(self, name, extra=None):
+        """0.21.0: hub side -- publish a command to every spoke (they hold a long-poll here)."""
+        with self.lock:
+            self.cmd["seq"] = int(self.cmd.get("seq") or 0) + 1
+            rec = {"seq": self.cmd["seq"], "at": int(time.time()), **(extra or {})}
+            self.cmd[name] = rec
+            n = len(self.spokes)
+        self._save_spokes()
+        self.bans.poke()
+        self.log("relay auth: '%s' #%d pushed to %d spoke(s)" % (name, rec["seq"], n))
+        return rec
 
     BANS_WAIT_MAX = 30   # 0.20.0: the longest a spoke's long-poll is held (the web-relay proxy allows 40)
 
@@ -1604,12 +1740,14 @@ class AuthService:
             self.bans.wait_change(since_v, wait_s)
         ver, active = self.bans.snapshot()
         rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
-        return {"bans": rows, "ver": ver}, 200
+        with self.lock:
+            cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update")}
+        return {"bans": rows, "ver": ver, "cmd": cmd}, 200   # 0.21.0: + the hub's command channel
 
     def fanout_bans(self):
         """Hub side: nudge every registered spoke (no data -- each pulls with its own token)."""
         with self.lock:
-            urls = list(self.spokes)
+            urls = [u for u in self.spokes if u.startswith("http")]   # 0.21.0: name-only spokes long-poll instead
         hits = []
 
         def nudge(url):   # 0.20.0: in parallel -- a spoke behind a tunnel never answers, and must not delay the rest
@@ -1666,6 +1804,22 @@ class AuthService:
             self.hub_ver = int(d.get("ver")) if d.get("ver") is not None else self.hub_ver
         except (TypeError, ValueError):
             pass
+        # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
+        # and a lower seq (a hub reset) re-baselines, so history is never replayed
+        cmd = d.get("cmd") if isinstance(d.get("cmd"), dict) else None
+        if cmd is not None:
+            try:
+                seq = int(cmd.get("seq") or 0)
+            except (TypeError, ValueError):
+                seq = 0
+            if self.hub_cmd_seen is None or seq < self.hub_cmd_seen:
+                self.hub_cmd_seen = seq
+            elif seq > self.hub_cmd_seen:
+                self.hub_cmd_seen = seq
+                up = cmd.get("update") if isinstance(cmd.get("update"), dict) else None
+                if up and callable(self.on_cmd):
+                    self.log("relay auth: the hub asked its spokes to update (#%d, hub v%s)" % (seq, up.get("version") or "?"))
+                    threading.Thread(target=self.on_cmd, args=("update", up), daemon=True).start()
         now = time.time()
         have = {(b.get("room"), b.get("host") or b.get("target")) for b in self.bans.active()}
         listed = set()
@@ -2294,21 +2448,17 @@ class Relay:
         return None, "insecure"
 
     def _cluster_note_fp(self, pin):
-        try:
-            with open(self._cluster_file(), encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
+        d, why = load_json(self._cluster_file(), self.log, "relay-cluster.json")
+        if d is None and why != "missing":
+            # 0.21.0: never write {"fingerprint"} ALONE over a file we could not read -- that dropped
+            # the hub URL and the federation code
+            self.log("relay federation: relay-cluster.json unreadable -- fingerprint not noted")
+            return
+        if not isinstance(d, dict):
             d = {}
         d["fingerprint"] = {"sha256": pin, "at": int(time.time())}
-        try:
-            os.makedirs(self.state_dir, exist_ok=True)
-            tmp = self._cluster_file() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(d, f)
-            os.replace(tmp, self._cluster_file())
+        if save_json(self._cluster_file(), d, self.log):
             self.log("relay federation: hub certificate pinned (%s...)" % pin[:12])
-        except OSError as e:
-            self.log("relay federation: could not note the hub fingerprint: %s" % e)
 
     def _fingerprint_check(self, reason):
         """0.16.0: the relay logged a certificate problem on the cluster link --
@@ -2394,8 +2544,14 @@ class Relay:
         """{connect, code, master} as stored -- `code` is the hub's federation
         code in PLAIN TEXT (this relay must present it); private to this class."""
         try:
-            with open(self._cluster_file(), encoding="utf-8") as f:
-                d = json.load(f)
+            d, why = load_json(self._cluster_file(), None, "relay-cluster.json")   # 0.21.0: BOM-tolerant, logged once below
+            if d is None and why != "missing":
+                if why != getattr(self, "_cluster_err_said", None):
+                    self._cluster_err_said = why
+                    self.log("relay federation: relay-cluster.json unreadable (%s) -- treating the relay as standalone until it is fixed" % why)
+                raise ValueError(why)
+            if not isinstance(d, dict):
+                d = {}
             try:
                 web = int(d.get("web") or 8000)       # 0.12.0: the hub KASTR's web port (chat forwarding)
             except (TypeError, ValueError):
@@ -2425,21 +2581,12 @@ class Relay:
         return os.path.join(self.state_dir, "relay-federation.json")
 
     def _fed_cache(self):
-        try:
-            with open(self._fed_cache_file(), encoding="utf-8") as f:
-                d = json.load(f)
-            return d if isinstance(d, dict) else {}
-        except Exception:
-            return {}
+        d, _why = load_json(self._fed_cache_file(), None, "relay-federation.json")   # 0.21.0
+        return d if isinstance(d, dict) else {}
 
     def _fed_cache_write(self, d):
-        try:
-            tmp = self._fed_cache_file() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(d, f)
-            os.replace(tmp, self._fed_cache_file())
-        except OSError as e:
-            self.log("relay federation: could not cache the hub token: %s" % e)
+        if not save_json(self._fed_cache_file(), d, None, backup=False):   # 0.21.0
+            self.log("relay federation: could not cache the hub token")
 
     def _fed_say(self, why):
         if why != self._fed_last_reason:
@@ -2583,18 +2730,45 @@ class Relay:
             except Exception as e:
                 self.log("relay federation: watchdog error: %s" % e)
 
+    def _hub_cmd(self, name, info):
+        """0.21.0: a command from the hub (through the bans long-poll). "update" = match the
+        federation master's version now; the launcher installs the hook (a dev checkout has none)."""
+        if name != "update":
+            return
+        try:
+            import kastr_serve as _ks
+            hook = getattr(_ks, "FEDERATION_UPDATE_HOOK", None)
+        except Exception:
+            hook = None
+        if callable(hook):
+            try:
+                hook("hub command #%s" % info.get("seq"))
+            except Exception as e:
+                self.log("relay federation: update command failed: %s" % e)
+        else:
+            self.log("relay federation: hub asked for an update -- this checkout does not self-update")
+
     def _spoke_sync(self):
         """0.18.0: tell the hub where this relay's minter answers (so its bans reach us) and
         copy its active bans. Needs a federation token and a LAN-reachable minter."""
         auth = self.auth
         tok = self._fed_active
         minter = self._hub_minter_url()
-        if not (auth and tok and minter and self.bind_all):
+        if not (auth and tok and minter):
             return
-        ips = [ip for ip in local_ips() if not ip.startswith("172.")] or local_ips()
-        if not ips:
-            return
-        body = json.dumps({"minter": "http://%s:%d" % (ips[0], self.port + 1)}).encode()
+        my_minter = ""
+        if self.bind_all:
+            ips = [ip for ip in local_ips() if not ip.startswith("172.")] or local_ips()
+            if ips:
+                my_minter = "http://%s:%d" % (ips[0], self.port + 1)
+        try:
+            import kastr_serve as _ks
+            name = self.relay_name() or _ks.host_slug()
+            version = _ks.read_version()
+        except Exception:
+            name, version = self.relay_name() or "relay", ""
+        # 0.21.0: name + version always (the hub's spoke table); the minter only when the LAN can reach it
+        body = json.dumps({"minter": my_minter, "name": name, "version": version}).encode()
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -2643,11 +2817,7 @@ class Relay:
         import re as _re
         name = _re.sub(r"[^a-z0-9-]+", "-",
                        str(payload.get("name") or "").lower()).strip("-")[:32]
-        os.makedirs(self.state_dir, exist_ok=True)
-        tmp = self._name_file() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"name": name}, f)
-        os.replace(tmp, self._name_file())
+        save_json(self._name_file(), {"name": name}, self.log, backup=False)   # 0.21.0
         restarted = self._restart()
         return {"ok": True, "name": name, "restarted": restarted}
 
@@ -2720,8 +2890,8 @@ class Relay:
                 cur["web"] = max(1, min(65535, int(payload.get("web"))))
             except (TypeError, ValueError):
                 pass
-        if not cur["connect"]:
-            cur["code"] = ""
+        # 0.21.0: leaving the hub KEEPS the federation code (a blank URL posted before the field had
+        # painted used to wipe both); only an explicit code "" clears it
         if cur["connect"] != prev["connect"] or cur["code"] != prev["code"]:
             # a new hub or a new code must mint afresh -- a cached token would hide
             # a wrong code until it expired weeks later
@@ -2731,16 +2901,13 @@ class Relay:
                 pass
         if cur["connect"] != prev["connect"]:
             cur["fingerprint"] = None    # 0.16.0: a new hub is pinned afresh
-        os.makedirs(self.state_dir, exist_ok=True)
-        tmp = self._cluster_file() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cur, f)
-        os.replace(tmp, self._cluster_file())
+        save_json(self._cluster_file(), cur, self.log)   # 0.21.0
         self._fed_last_reason = None          # say the new situation out loud once
         # A running relay picks the change up by restarting with its own shape.
         restarted = self._restart()
         return {"ok": True, "connect": cur["connect"], "master": cur["master"],
-                "hasCode": bool(cur["code"]), "web": cur["web"], "restarted": restarted}
+                "hasCode": bool(cur["code"]), "web": cur["web"], "restarted": restarted,
+                "codeKept": bool(cur["code"]) and not cur["connect"]}   # 0.21.0: standalone, code kept
 
     # ---- rooms (0.12.0) ------------------------------------------------------
 
@@ -2779,7 +2946,8 @@ class Relay:
                                         port + 1, key, port, self.store, self.log,
                                         hub=self._hub_minter_url,   # 0.16.0: admin codes are verified at the hub when none is set here
                                         fed_token=lambda: self._fed_active,      # 0.17.0: a kick rides the federation token to the hub
-                                        revalidate=self._force_revalidate)       # 0.17.0: the relay re-asks at once
+                                        revalidate=self._force_revalidate,       # 0.17.0: the relay re-asks at once
+                                        on_cmd=self._hub_cmd)                    # 0.21.0: the hub's "update now"
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -2851,11 +3019,7 @@ class Relay:
         try:
             cfg = self.autostart_config()
             cfg.update(port=int(port), lan=bool(bind_all), secured=bool(secured))
-            os.makedirs(self.state_dir, exist_ok=True)
-            tmp = self._autostart_file() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(cfg, f)
-            os.replace(tmp, self._autostart_file())
+            save_json(self._autostart_file(), cfg, self.log, backup=False)   # 0.21.0
         except Exception as e:
             self.log("relay: could not remember the relay shape: %s" % e)
 
@@ -3036,11 +3200,7 @@ class Relay:
                "port": int(payload.get("port") or 4443),
                "lan": bool(payload.get("lan")),
                "secured": bool(payload.get("secured"))}
-        os.makedirs(self.state_dir, exist_ok=True)
-        tmp = self._autostart_file() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f)
-        os.replace(tmp, self._autostart_file())
+        save_json(self._autostart_file(), cfg, self.log, backup=False)   # 0.21.0
         return {"ok": True, "autostart": cfg}
 
 
@@ -3172,7 +3332,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/rooms/group",     # 0.15.0
                  "/api/relay/lan",             # 0.16.0
                  "/api/relay/admin/token",     # 0.16.0
-                 "/api/relay/bans/clear")      # 0.17.0
+                 "/api/relay/bans/clear",      # 0.17.0
+                 "/api/relay/spokes/update")   # 0.21.0
 
 
 def _host_of(value):
@@ -3280,6 +3441,31 @@ def handle_api(handler, relay, path, set_relay_url=None):
         rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until", "via")} for b in (auth.bans.active() if auth else [])]
         reply({"bans": rows, "authUp": auth is not None})
         return True
+    if path == "/api/relay/spokes":   # 0.21.0: the hub's registered spokes (names, versions; never tokens)
+        auth = getattr(relay, "auth", None)
+        try:
+            import kastr_serve as _ks
+            ver = _ks.read_version()
+        except Exception:
+            ver = ""
+        reply({"spokes": auth.spokes_public() if auth else [], "cmd": (auth.cmd if auth else None),
+               "version": ver, "secured": bool(auth)})
+        return True
+
+    if path == "/api/relay/spokes/update":   # 0.21.0: hub operator -> every spoke matches the hub's version now
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine (spokes register with a secured hub)"}, 400)
+            return True
+        try:
+            import kastr_serve as _ks
+            ver = _ks.read_version()
+        except Exception:
+            ver = ""
+        rec = auth.raise_cmd("update", {"version": ver})
+        reply({"ok": True, "seq": rec["seq"], "spokes": len(auth.spokes_public())})
+        return True
+
     if path == "/api/relay/bans/clear":
         p = _payload_of(handler)
         auth = getattr(relay, "auth", None)

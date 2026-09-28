@@ -1647,6 +1647,7 @@ class Bridge:
 
     def __init__(self, state_dir=None, log=None, host_slug=None):
         self._feeds = {}
+        self._removed = []        # 0.21.0: [{url, at}] the operator closed -- restore() and adopt leave them alone
         self._next = 1
         # 0.13.0: this machine's host slug (kastr_serve.host_slug -- set by the
         # caller, this module cannot import kastr_serve); the minter scopes the
@@ -1849,6 +1850,7 @@ class Bridge:
         url = (url or "").strip()
         if not url:
             raise ValueError("no url given")
+        self._removed = [r for r in self._removed if r.get("url") != url]   # 0.21.0: adding again is an explicit act
         # Only ever hand ffmpeg a stream URL, never a local path or shell text.
         # (Popen is given an argv list, so there is no shell to inject into, but
         # a file:// or local path would still let a page read arbitrary files.)
@@ -1879,8 +1881,17 @@ class Bridge:
             feed = self._feeds.pop(int(feed_id), None)
         if feed:
             self.kill(feed)
+            # 0.21.0: remember the closed URL -- a relaunch restore or a page adopt must not bring it back
+            # (field report: "my KASTR keeps trying to use an RTSP feed that I keep closing out")
+            url = getattr(feed, "source_url", None) or getattr(feed, "url", None)
+            if url:
+                self._removed = [r for r in self._removed if r.get("url") != url] + [{"url": url, "at": int(time.time())}]
+                self._removed = self._removed[-50:]
         self.persist_feeds()                     # 0.12.0
         return bool(feed)
+
+    def removed_urls(self):
+        return [r["url"] for r in self._removed]
 
     # ---- native publishing (0.9.1) --------------------------------------
     def publish(self, feed_id, broadcast, relay, hevc=False, audio=True, passthrough=None, force=False, keep=None,
@@ -2054,6 +2065,9 @@ class Bridge:
                              "access": str(d.get("access") or ""),
                              "roomCode": str(d.get("roomCode") or ""),
                              "relay": _relay_key(d.get("relay") or "")}
+            rem = d.get("removed")   # 0.21.0
+            self._removed = [{"url": str(r.get("url")), "at": int(r.get("at") or 0)} for r in (rem or [])
+                             if isinstance(r, dict) and r.get("url")][-50:]
 
     def _feed_records(self):
         out = []
@@ -2080,7 +2094,8 @@ class Bridge:
                     relay = _relay_key(pub.relay)
                     break
         doc = {"room": s.get("room", ""), "access": s.get("access", ""), "roomCode": s.get("roomCode", ""),
-               "relay": relay, "feeds": self._feed_records(), "at": time.time()}
+               "relay": relay, "feeds": self._feed_records(), "at": time.time(),
+               "removed": self._removed[-50:]}   # 0.21.0: closed URLs stay closed across relaunches
         with self._persist_lock:
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2226,8 +2241,9 @@ class Bridge:
         log = log or self.log
         doc = self._read_feeds_file()
         room = str(doc.get("room") or "").strip().lower()
+        gone = {str(r.get("url")) for r in (doc.get("removed") or []) if isinstance(r, dict) and r.get("url")}   # 0.21.0
         feeds = [f for f in (doc.get("feeds") or [])
-                 if isinstance(f, dict) and f.get("url") and f.get("keep", True)]
+                 if isinstance(f, dict) and f.get("url") and f.get("keep", True) and str(f.get("url")) not in gone]
         if not room or not feeds:
             return 0
         self._session = {"room": room, "access": str(doc.get("access") or ""),

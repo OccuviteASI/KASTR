@@ -473,7 +473,7 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
         update_note("no-binary", f"relay host runs v{theirs} but offers no "
                     f"{plat} binary; staying on v{mine}")
         return "no-binary"
-    target = sys.executable
+    target = exe_path()   # 0.21.0
     tmp = target + ".new"
     print(f"{APP_NAME}: updating v{mine} -> v{theirs} from {base} ...", flush=True)
     update_note("updating", f"v{mine} -> v{theirs} from {base}")
@@ -502,6 +502,20 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             raise RuntimeError("checksum mismatch")
         if os.path.getsize(tmp) != int(info.get("size") or 0):
             raise RuntimeError("size mismatch")
+        # 0.21.0: two-phase takeover -- run the new build BEFORE touching KASTR.exe
+        if _takeover_enabled():
+            newexe = os.path.join(os.path.dirname(target), "KASTR.new.exe")
+            try:
+                os.replace(tmp, newexe)
+            except OSError as e:
+                note("takeover: could not stage %s (%s) -- classic swap" % (os.path.basename(newexe), e))
+                newexe = None
+            if newexe:
+                takeover_spawn(newexe, target, relaunch_delay_ms, before_exit, theirs)   # exits on success
+                try:
+                    os.replace(newexe, tmp)   # fell back: the file goes on as the classic swap's .new
+                except OSError as e:
+                    raise RuntimeError("takeover fallback could not reclaim the download (%s)" % e)
         # The running image keeps working from the renamed file (both
         # platforms); the .old- prefix is what build.py already sweeps.
         aside = os.path.join(os.path.dirname(target),
@@ -579,11 +593,46 @@ _EXIT_OVERRIDE = [None]    # 0.13.1: teardown's exit code when a relaunch must e
 RELAUNCH_PORT_HINT = [0]   # 0.16.0: the port a launch-time relaunch will bind (HTTP_PORT is not set yet then)
 
 
-def _shell_execute_alive(target, args, wait_s):
+_LAST_SHELL_PID = [0]      # 0.21.0: the pid the last shell launch started (0 = unknown)
+EXE_PATH = [None]          # 0.21.0: where this executable LIVES now (a takeover child renames itself into place)
+
+
+def exe_path():
+    return EXE_PATH[0] or sys.executable
+
+
+def _shell_execute_alive(target, args, wait_s, env=None):
     """0.16.0: launch `target args` through the Windows shell (ShellExecuteExW, the
     path every double-click uses -- no PowerShell, outside any ambient job) and
     report whether the process is still alive after `wait_s`. None = could not
-    even be started."""
+    even be started.
+    0.21.0: `env` is installed into os.environ for the duration of the call (the
+    shell child inherits it) -- the fallback used to hand the new exe OUR
+    environment, PyInstaller's _MEI*/_PYI* variables included, which is exactly
+    the "bootloader with no child" the loop was trying to survive; and it lacked
+    KASTR_RELAUNCH*, so the child never waited for us."""
+    import ctypes
+    _LAST_SHELL_PID[0] = 0
+    saved = None
+    if env is not None:
+        saved = dict(os.environ)
+        for k in list(os.environ):
+            if k not in env:
+                del os.environ[k]
+        for k, v in env.items():
+            os.environ[k] = v
+    try:
+        return _shell_execute_alive_raw(target, args, wait_s)
+    finally:
+        if saved is not None:
+            for k in list(os.environ):
+                if k not in saved:
+                    del os.environ[k]
+            for k, v in saved.items():
+                os.environ[k] = v
+
+
+def _shell_execute_alive_raw(target, args, wait_s):
     import ctypes
     from ctypes import wintypes
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
@@ -613,13 +662,93 @@ def _shell_execute_alive(target, args, wait_s):
     h = info.hProcess
     if not h:
         return True     # started, but the shell gave us no handle to watch -- assume alive
+    try:
+        _LAST_SHELL_PID[0] = int(k32.GetProcessId(h) or 0)   # 0.21.0: so a childless bootloader can be killed
+    except Exception:
+        _LAST_SHELL_PID[0] = 0
     WAIT_TIMEOUT = 0x102
     alive = k32.WaitForSingleObject(h, int(wait_s * 1000)) == WAIT_TIMEOUT
     k32.CloseHandle(h)
     return alive
 
 
-def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_after_s=10.0, settle_s=4.0):
+# ---- 0.21.0: the ready marker -- "the successor reached Python" ---------------------------------
+RELAUNCH_READY_FILE = "relaunch-ready.json"
+
+
+def _ready_path():
+    try:
+        return os.path.join(state_dir(), RELAUNCH_READY_FILE)
+    except Exception:
+        return None
+
+
+def write_relaunch_ready():
+    """The first thing a KASTR_RELAUNCH=1 child does: prove it is a running KASTR, not a
+    bootloader that lost its child. The parent waits for this file, not for a pid to stay alive."""
+    p = _ready_path()
+    if not p:
+        return
+    try:
+        tmp = "%s.%d.tmp" % (p, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(), "version": kastr_serve.read_version(), "exe": sys.executable, "at": time.time()}, f)
+        os.replace(tmp, p)
+    except Exception:
+        pass
+
+
+def _ready_since(path, t0):
+    """-> the marker's pid when a marker newer than t0 exists, else None."""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            d = json.load(f)
+        return int(d.get("pid") or 0) if float(d.get("at") or 0) >= t0 else None
+    except Exception:
+        return None
+
+
+def _kill_pid(pid):
+    """Windows: TerminateProcess by pid (a bootloader that never reached Python)."""
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return False
+        if WINDOWS:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_TERMINATE = 0x0001
+            h = k32.OpenProcess(PROCESS_TERMINATE, False, pid)
+            if not h:
+                return False
+            try:
+                return bool(k32.TerminateProcess(h, 1))
+            finally:
+                k32.CloseHandle(h)
+        os.kill(pid, 9)
+        return True
+    except Exception:
+        return False
+
+
+def _wait_ready(ready_file, t_att, budget_s, alive_fn, pid_hint=0):
+    """Wait up to budget_s for a marker newer than t_att while the child stays alive.
+    -> "ready" | "died" | "silent"."""
+    end = time.monotonic() + budget_s
+    while time.monotonic() < end:
+        pid = _ready_since(ready_file, t_att)
+        if pid is not None:          # a marker newer than this attempt: the child reached Python
+            return "ready"
+        if not alive_fn():
+            return "died"
+        time.sleep(0.25)
+    return "silent"
+
+
+def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_after_s=10.0, settle_s=6.0,
+                    ready_file=None, ready_budget_s=15.0):
     """0.16.0: start the just-swapped executable and make sure it STAYS up.
 
     Field record (launch.log.1, 2026-09-16): the swap fought Defender/OneDrive's
@@ -630,22 +759,39 @@ def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_a
     `settle_s` (a bootloader that lost its child exits within a second or two),
     respawn while the budget lasts, after `escalate_after_s` switch to the
     shell's own launch path, and tell the caller honestly whether a successor
-    is running. Never a blind exit."""
+    is running. Never a blind exit.
+
+    0.21.0: with `ready_file` (the state dir's relaunch-ready.json) a successor counts
+    only once it has WRITTEN the marker -- a bootloader that stays alive without a
+    child used to pass the 4 s test and we exited into nothing. A silent child is
+    killed and the loop goes on. The shell fallback gets the scrubbed `env` too."""
     time.sleep(max(0.3, delay_s))
     t0 = time.monotonic()
     attempt = 0
     said = set()
     while time.monotonic() - t0 < budget_s:
         attempt += 1
+        t_att = time.time()
         if time.monotonic() - t0 >= escalate_after_s:
             try:
-                alive = _shell_execute_alive(target, args, settle_s)
+                alive = _shell_execute_alive(target, args, settle_s if not ready_file else 1.0, env)
             except Exception as e:   # 0.18.0: an exception here ended the whole window at 10 s
                 key = "shell:" + type(e).__name__
                 if key not in said:
                     said.add(key)
                     note("relaunch: shell launch raised (%s: %s) -- retrying while the file settles" % (type(e).__name__, e))
                 alive = None
+            if alive and ready_file:
+                spid = _LAST_SHELL_PID[0]
+                st = _wait_ready(ready_file, t_att, ready_budget_s, lambda: (not spid) or not _pid_dead(spid), spid)
+                if st == "ready":
+                    note("relaunch: successor started through the shell and reached Python (pid %s, attempt %d)" % (spid or "?", attempt))
+                    return True
+                note("relaunch: shell-started successor pid %s %s after %.0f s -- %s, retrying"
+                     % (spid or "?", "exited" if st == "died" else "never reached Python (bootloader without a child?)",
+                        ready_budget_s, "killed" if (st == "silent" and _kill_pid(spid)) else "respawning"))
+                time.sleep(1.0)
+                continue
             if alive:
                 note("relaunch: successor started through the shell (attempt %d)" % attempt)
                 return True
@@ -664,6 +810,22 @@ def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_a
                 note("relaunch: spawn refused (%s: %s) -- retrying while the file settles" % (key, e))
             time.sleep(0.5)
             continue
+        if ready_file:
+            st = _wait_ready(ready_file, t_att, ready_budget_s, lambda: p.poll() is None, p.pid)
+            if st == "ready":
+                note("relaunch: successor pid %d reached Python (attempt %d)" % (p.pid, attempt))
+                return True
+            if st == "silent":
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+                note("relaunch: successor pid %d alive but never reached Python after %.0f s (bootloader without a child?) -- killed, retrying (attempt %d)"
+                     % (p.pid, ready_budget_s, attempt))
+            else:
+                note("relaunch: successor pid %d exited at once (code %s, attempt %d) -- respawning" % (p.pid, p.returncode, attempt))
+            time.sleep(1.0)
+            continue
         t1 = time.monotonic()
         while time.monotonic() - t1 < settle_s:
             if p.poll() is not None:
@@ -674,6 +836,167 @@ def spawn_successor(target, args, env, flags, delay_s, budget_s=30.0, escalate_a
             return True
         note("relaunch: successor pid %d exited at once (code %s, attempt %d) -- respawning" % (p.pid, p.returncode, attempt))
         time.sleep(1.0)
+    return False
+
+
+# ---- 0.21.0: two-phase takeover (Windows, frozen) ------------------------------------------------
+# The classic swap renames the RUNNING exe aside, places the new file, and only then tries to
+# start it -- while Defender/OneDrive may still hold the just-placed file. The takeover starts
+# the NEW file first (as KASTR.new.exe, with the scrubbed environment and the ready marker), and
+# once it runs it renames KASTR.exe -> KASTR.old-<ts>.exe and itself -> KASTR.exe (renaming a
+# running image is allowed on Windows). No marker -> the .new file is removed and the classic
+# path runs. kastr.ini `update_takeover = off` turns it off.
+TAKEOVER_PENDING_FILE = "takeover-pending.json"
+
+
+def _takeover_enabled():
+    if not (WINDOWS and getattr(sys, "frozen", False)):
+        return False
+    try:
+        return str(kastr_serve.ini_get("update_takeover") or "").strip().lower() not in ("off", "false", "0", "no")
+    except Exception:
+        return True
+
+
+def _relaunch_env(reason="update"):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("_MEI", "_PYI"))}
+    env.pop("KASTR_UPDATED", None)
+    env.pop("KASTR_TAKEOVER_TARGET", None)
+    if reason == "update":
+        env["KASTR_UPDATED"] = "1"
+    env["KASTR_RELAUNCH"] = "1"
+    env["KASTR_RELAUNCH_PID"] = str(os.getpid())
+    env["KASTR_RELAUNCH_PORT"] = str(kastr_serve.HTTP_PORT or RELAUNCH_PORT_HINT[0] or "")
+    return env
+
+
+def _sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def takeover_spawn(newexe, target, delay_ms, before_exit, theirs=""):
+    """Parent side. -> False when no successor reached Python (the caller falls back);
+    never returns on success (teardown + exit, like relaunch_self)."""
+    env = _relaunch_env("update")
+    env["KASTR_TAKEOVER_TARGET"] = target
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+             | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0))
+    note("takeover: starting %s as v%s (it renames itself into place once it runs)" % (os.path.basename(newexe), theirs or "?"))
+    ok = spawn_successor(newexe, list(sys.argv[1:]), env, flags, max(0.3, delay_ms / 1000.0), ready_file=_ready_path())
+    if not ok:
+        note("takeover: no successor reached Python -- falling back to the classic swap")
+        return False
+    if before_exit:
+        try:
+            before_exit()          # runtime path: teardown() -- ends the process
+        except Exception:
+            pass
+    time.sleep(0.3)
+    os._exit(0)
+
+
+def _takeover_pending_path():
+    try:
+        return os.path.join(state_dir(), TAKEOVER_PENDING_FILE)
+    except Exception:
+        return None
+
+
+def finish_takeover(target, me=None, attempts=6):
+    """Child side (KASTR.new.exe running): KASTR.exe -> KASTR.old-<ts>.exe, then me -> KASTR.exe.
+    -> True when this process now lives at `target`. A failure leaves takeover-pending.json for
+    the sweep timers and the next launch."""
+    me = me or sys.executable
+    if os.path.normcase(os.path.abspath(me)) == os.path.normcase(os.path.abspath(target)):
+        EXE_PATH[0] = target
+        return True
+    d = os.path.dirname(target)
+    aside = os.path.join(d, "KASTR.old-%d.exe" % int(time.time()))
+    last = None
+    for i in range(attempts):
+        try:
+            if os.path.exists(target):
+                os.rename(target, aside)
+            os.rename(me, target)
+            EXE_PATH[0] = target
+            note("takeover: %s is now %s (previous build kept aside as %s)" % (os.path.basename(me), os.path.basename(target), os.path.basename(aside)))
+            pp = _takeover_pending_path()
+            try:
+                if pp and os.path.exists(pp):
+                    os.remove(pp)
+            except OSError:
+                pass
+            return True
+        except OSError as e:
+            last = e
+            # a half-done first rename: put the old one back so the folder always has a KASTR.exe
+            try:
+                if not os.path.exists(target) and os.path.exists(aside):
+                    os.rename(aside, target)
+            except OSError:
+                pass
+            time.sleep(0.4 * (i + 1))
+    pp = _takeover_pending_path()
+    try:
+        if pp:
+            with open(pp + ".tmp", "w", encoding="utf-8") as f:
+                json.dump({"new": me, "target": target, "sha256": _sha256_file(me), "at": time.time()}, f)
+            os.replace(pp + ".tmp", pp)
+    except Exception:
+        pass
+    note("takeover: could not rename into place yet (%s) -- KASTR runs from %s; retrying from the sweep timers and the next launch"
+         % (last, os.path.basename(me)))
+    return False
+
+
+def takeover_retry():
+    """From the sweep timers: finish a pending takeover (this process is the misnamed new exe)."""
+    pp = _takeover_pending_path()
+    if not pp or not os.path.exists(pp):
+        return
+    try:
+        with open(pp, encoding="utf-8-sig") as f:
+            d = json.load(f)
+        if os.path.normcase(os.path.abspath(str(d.get("new") or ""))) == os.path.normcase(os.path.abspath(sys.executable)):
+            finish_takeover(str(d.get("target")), sys.executable, attempts=3)
+    except Exception:
+        pass
+
+
+def takeover_pending_check():
+    """At launch (frozen, Windows): a takeover that never finished. If we ARE the old KASTR.exe and
+    a verified KASTR.new.exe waits beside us, swap the names now and relaunch as the new build; if
+    we are the misnamed new exe, finish the rename."""
+    pp = _takeover_pending_path()
+    if not (pp and os.path.exists(pp) and getattr(sys, "frozen", False)):
+        return False
+    try:
+        with open(pp, encoding="utf-8-sig") as f:
+            d = json.load(f)
+        new, target = str(d.get("new") or ""), str(d.get("target") or "")
+        me = os.path.normcase(os.path.abspath(sys.executable))
+        if me == os.path.normcase(os.path.abspath(new)):
+            return finish_takeover(target, sys.executable, attempts=3)
+        if me == os.path.normcase(os.path.abspath(target)) and os.path.isfile(new):
+            if _sha256_file(new) != str(d.get("sha256") or ""):
+                note("takeover: pending %s does not match its recorded checksum -- removed" % os.path.basename(new))
+                os.remove(new); os.remove(pp)
+                return False
+            aside = os.path.join(os.path.dirname(target), "KASTR.old-%d.exe" % int(time.time()))
+            os.rename(target, aside)
+            os.rename(new, target)
+            os.remove(pp)
+            note("takeover: finished at launch -- %s is the new build; relaunching" % os.path.basename(target))
+            relaunch_self(500, reason="update")     # spawn_successor on the new file, with the marker
+            return True
+        os.remove(pp)
+    except Exception as e:
+        note("takeover: pending check failed: %s" % e)
     return False
 
 
@@ -717,7 +1040,7 @@ def relaunch_self(delay_ms=800, before_exit=None, argv=None, reason="update"):
 
     0.16.0: returns False (and keeps this process running) when an "update"
     relaunch could not get a successor up; otherwise never returns."""
-    target = sys.executable
+    target = exe_path()   # 0.21.0: a takeover child may have renamed itself into place
     args = list(sys.argv[1:] if argv is None else argv)
     note("relaunching (%s) %s %s" % (reason, target, " ".join(args)))
     if os.environ.get("KASTR_CONTAINER") == "1":
@@ -752,7 +1075,7 @@ def relaunch_self(delay_ms=800, before_exit=None, argv=None, reason="update"):
             # DEVNULL -- "it updates but doesn't restart" (launch.log.1, 2026-09-16).
             # Now: spawn, verify the child stays up, retry, escalate to the shell's
             # own launch path, and REPORT failure instead of exiting blind.
-            if not spawn_successor(target, args, env, flags, delay_s):
+            if not spawn_successor(target, args, env, flags, delay_s, ready_file=_ready_path()):   # 0.21.0: the marker decides
                 note("relaunch: successor never came up -- staying on this version")
                 return False
         else:
@@ -903,8 +1226,9 @@ def sweep_old_binaries():
     (and a failed swap left the operator launching the .old file)."""
     if not getattr(sys, "frozen", False):
         return
-    d = os.path.dirname(sys.executable)
-    me = os.path.basename(sys.executable)
+    takeover_retry()   # 0.21.0: a rename the scanner blocked earlier
+    d = os.path.dirname(exe_path())
+    me = os.path.basename(exe_path())
     try:
         names = os.listdir(d)
     except OSError:
@@ -915,6 +1239,12 @@ def sweep_old_binaries():
                 os.remove(os.path.join(d, fn))
             except OSError:
                 pass            # still held by a dying process; next launch
+        elif fn == "KASTR.new.exe" and fn != me and not os.path.exists(_takeover_pending_path() or ""):
+            try:   # 0.21.0: a takeover file nobody claims (older than a day)
+                if time.time() - os.path.getmtime(os.path.join(d, fn)) > 86400:
+                    os.remove(os.path.join(d, fn))
+            except OSError:
+                pass
 
 
 def federation_master(sd=None):
@@ -2287,10 +2617,19 @@ def main():
             f.write("\n".join(lines) + "\n")
         return 0
 
+    # 0.21.0: prove we reached Python BEFORE waiting on anything (the parent's success test)
+    if os.environ.get("KASTR_RELAUNCH") == "1":
+        write_relaunch_ready()
+    takeover_target = os.environ.pop("KASTR_TAKEOVER_TARGET", None)
     # 0.13.1: a relaunched child waits for its parent to be gone before it
     # looks at the port (see relaunch_self / await_predecessor).
     relaunched = await_predecessor(args.port)
     updated = os.environ.get("KASTR_UPDATED") == "1"
+    if takeover_target and getattr(sys, "frozen", False):
+        finish_takeover(takeover_target)      # 0.21.0: KASTR.new.exe -> KASTR.exe now that the old one is gone
+    elif getattr(sys, "frozen", False) and WINDOWS:
+        if takeover_pending_check():          # 0.21.0: an earlier takeover the scanner blocked
+            return 0
 
     if not os.path.exists(os.path.join(root, "index.html")):
         alert(f"Web files are missing.\n\nExpected index.html in:\n{root}")
@@ -2541,6 +2880,17 @@ def main():
             return args.relay
 
     def _update_hook(host):
+        # 0.21.0: "Check for updates" on a spoke follows the FEDERATION MASTER when one is saved
+        # (asking the relay host answered "authority" on a box whose pages use its own relay)
+        try:
+            from urllib.parse import urlparse as _up
+            hub, master = federation_master()
+            cur_host = (_up(_current_relay() or "").hostname or "").lower()
+            if hub and master and hub not in ("127.0.0.1", "localhost", "::1") and (not host or str(host).lower() == cur_host):
+                note("update-check: following the federation master %s instead of %s" % (hub, host or "the relay host"))
+                host = hub
+        except Exception:
+            pass
         # 0.16.0: a switched-to relay's web port is learned BEFORE the check dials it
         try:
             learn_hub_web_host(host, _current_relay(), ini)
@@ -2571,6 +2921,11 @@ def main():
         mirror_after_update(args.relay, ini, st, relay=getattr(server, "relay", None))
     if not args.no_update:
         start_update_sweeper(_federation_update)
+        # 0.21.0: the hub's "Update spokes now" lands here through the relay's ban long-poll
+        def _fed_update_now(why=""):
+            note("federation master: version match now (%s)" % (why or "hub command"))
+            _federation_update()
+        kastr_serve.FEDERATION_UPDATE_HOOK = _fed_update_now
     # 0.15.0: re-learn the hub's web port every 5 minutes (a hub relaunched on
     # another port is followed without a restart here)
     start_update_sweeper(lambda: learn_hub_web(_current_relay(), ini), every=300, label="hub web port: learner")   # 0.16.0: the CURRENT relay

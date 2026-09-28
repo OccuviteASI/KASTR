@@ -43,7 +43,7 @@ if (IS_WEB && window.isSecureContext && "serviceWorker" in navigator && !/[?&]em
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   });
 }
-window.addEventListener("offline", () => { try { window.__kastrToast?.("Offline \u2014 showing the last page KASTR loaded; rooms and video need the relay host"); } catch {} });
+window.addEventListener("offline", () => { try { window.__kastrToast?.("Offline \u2014 showing the last page KASTR loaded; rooms and video need the relay host", 6000, { level: "warn" }); } catch {} });
 window.addEventListener("online", () => { try { window.__kastrToast?.("Back online"); } catch {} });
 
 // 0.12.0: the operating mode this KASTR boots as (full | viewer | publisher |
@@ -510,7 +510,8 @@ function build() {
   // 0.8.6: on-demand fleet update -- POST the check, follow update-check.json
   // through /api/instance, report. Shared by the Release-notes button, About,
   // and the relay Connect button (a NEW relay may be a new authority).
-  const brandToast = (msg, ms = 6000) => {
+  const brandToast = (msg, ms = 6000, opts) => {
+    if (typeof window.__toast === "function") { window.__toast(msg, ms, opts || { level: "event" }); return; }   // 0.21.0: one toast channel on the page
     let t = document.getElementById("asiToast");
     if (!t) { t = document.createElement("div"); t.id = "asiToast"; document.body.appendChild(t); }
     t.textContent = msg;

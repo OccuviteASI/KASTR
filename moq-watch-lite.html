@@ -134,6 +134,7 @@
     max-height:calc(100vh - 16px); overflow-y:auto; overscroll-behavior:contain;   /* 0.16.0: a small window scrolls the menu instead of clipping it */
   }
   #mineMenu .msep { border-top:1px solid var(--line); margin:3px 0; }
+  #mineMenu.roomform { min-width:260px; padding:8px; }   /* 0.21.0: the "+" bubble */
   #mineMenu .mcap { font-size:10px; color:var(--text-mute); padding:3px 8px 1px; text-transform:uppercase; letter-spacing:.04em; }
   #mineMenu .mhint { font-size:10px; color:var(--text-mute); padding:4px 8px; }
   #mineMenu[hidden] { display:none; }
@@ -360,12 +361,12 @@
   .popcard.teams .rd.dis { opacity:.45; cursor:default; }
   .popcard.teams .rd input { accent-color:var(--asi-blue); width:16px; height:16px; margin:0; flex:none; }
   .popcard.teams .sw { display:flex; align-items:center; justify-content:space-between; padding:8px 8px; font-size:12px; }
-  .switch { position:relative; display:inline-block; width:40px; height:22px; flex:none; }
-  .switch input { opacity:0; width:0; height:0; }
-  .switch i { position:absolute; inset:0; background:var(--surface-2); border:1px solid var(--line); border-radius:11px; transition:background .15s; }
-  .switch i::after { content:""; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:var(--text-dim); transition:transform .15s, background .15s; }
-  .switch input:checked + i { background:var(--asi-blue); border-color:var(--asi-blue); }
-  .switch input:checked + i::after { transform:translateX(18px); background:#fff; }
+  .popcard.teams .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }   /* 0.21.0: Rotate */
+  .popcard.teams .seg button { background:transparent; border:0; color:var(--text-dim); padding:5px 9px; font-size:11px; cursor:pointer; }
+  .popcard.teams .seg button + button { border-left:1px solid var(--line); }
+  .popcard.teams .seg button.on { background:var(--asi-blue); color:#06121a; }
+  /* .switch lives in assets/asi-brand.css since 0.21.0 (shared with the Relay page) */
+  .chk.asi-sw, .pwkeep { display:flex; align-items:center; gap:8px; }
   .popcard.teams .volrow, .popcard.teams .lvlrow { display:flex; align-items:center; gap:8px; padding:4px 8px 8px; }
   .popcard.teams .volrow input[type=range] { flex:1; accent-color:var(--asi-blue); }
   .popcard.teams .vic { width:18px; display:inline-flex; color:var(--text-dim); flex:none; }
@@ -503,7 +504,7 @@
   .popcard.teams .grp label.f > span { margin:0; flex:1; display:inline; font-size:12px; color:var(--text); }
   .popcard.teams .grp select, .popcard.teams .grp input[type=number] { width:52%; }
   .popcard.teams .grp input[type=range] { width:52%; }
-  .popcard.teams .grp label.f.chkrow input { width:18px; height:18px; accent-color:var(--asi-blue); }
+  .popcard.teams .grp label.f.chkrow { display:flex; justify-content:space-between; align-items:center; gap:10px; }   /* 0.21.0: a switch, not a box */
   #encPop, #audOutPop { width:min(380px, 92vw); }
   .pubui .shrowwrap { position:relative; }
   .pubui .shrowwrap .shrow { width:100%; }
@@ -526,7 +527,7 @@
     background:var(--asi-blue); color:#06121a; box-shadow:0 8px 26px rgba(0,0,0,.5); }
   #tapUnmute[hidden] { display:none; }
   /* ==== 0.8.9 phone layout (standalone on iPhone/Android) ==================== */
-  @media (max-width: 720px) {
+  @media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: a landscape phone is a phone too */
     body.asi { height:100dvh; }
     main.asi-page { padding:6px 8px calc(6px + env(safe-area-inset-bottom)); }
     button, .tb, .tchev, .opt, .rd { touch-action:manipulation; }
@@ -555,8 +556,9 @@
     body.sb-collapsed .sbgroup { height:28px; padding:0 4px; margin-top:4px; gap:5px; justify-content:flex-start; border-top:0; border-radius:6px; }   /* 0.15.0 (B4) */
     body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:revert; }
     body.sb-collapsed .sbgroup .gchip { display:none; }
-    .popcard, #sharePop, #peoplePanel { top:auto !important; bottom:0; left:0 !important; right:0;
+    .popcard, #sharePop, #peoplePanel, #mineMenu { top:auto !important; bottom:0; left:0 !important; right:0;
       width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
+    #mineMenu { min-width:0; padding-bottom:calc(6px + env(safe-area-inset-bottom)); }   /* 0.21.0: the chevron/room menus are sheets too */
     #sharePop { height:min(760px, 80dvh); }
     #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #mobilePop, #profilePop, #chatPanel { width:100vw; }
     #chatPanel { height:min(78dvh, 720px); }
@@ -575,12 +577,32 @@
     #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
     #stageBack { top:auto; bottom:8px; }
   }
+  #fileResPop { top:18vh !important; left:50% !important; transform:translateX(-50%); width:min(440px, calc(100vw - 24px)); }
+  #fileResPop .f select { width:100%; }
+  /* 0.21.0: idle chrome (see idleShow) -- two ids beat every hover/phone rule above */
+  #stagewrap.idle #stage .pane .mediabar, #stagewrap.idle #stage .pubpane .mediabar,
+  #stagewrap.idle #stage .pane .pchev, #stagewrap.idle #stage .pubpane .pchev,
+  #stagewrap.idle #stage.spot .pubpane .bar, #stagewrap.idle #stage.spot .pane .label,
+  #stagewrap.idle #stage .zoomctl, #stagewrap.idle #stage .zoomlbl, #stagewrap.idle #stageBack, #stagewrap.idle #stage .latb {
+    opacity:0 !important; pointer-events:none; transition:opacity .25s ease; }
+  #stagewrap.idle #stage.spot .pane.mainstage, #stagewrap.idle #stage.spot .pubpane.mainstage { cursor:none; }
+  #stagewrap.idle #stage .pubpane.warnstate .bar { opacity:1 !important; pointer-events:auto; }
+  .mediabar .mhear { opacity:.45; } .mediabar .mhear.on { opacity:1; }
+  /* 0.21.0: landscape phone -- one topbar row, sheets that fit a ~375 px tall viewport */
+  @media (max-height: 500px) and (min-width: 600px) {
+    .popcard, #sharePop, #peoplePanel, #mineMenu { max-height:calc(100dvh - 48px) !important; }
+    #sharePop { height:calc(100dvh - 48px) !important; }
+    #chatPanel { height:calc(100dvh - 48px) !important; max-height:none; }
+    #joinGate .card { max-height:100dvh; overflow-y:auto; }
+  }
+  /* 0.21.0: shared surface tokens on the page's own popovers */
+  .popcard, #sharePop, #mineMenu { box-shadow:var(--shadow-pop, 0 12px 32px rgba(0,0,0,.5)); }
   /* 0.18.0: on-demand cameras (chips above the stage) + the latency-stamp badge */
   #odRow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 10px 0; font-size:12px; color:var(--text-dim); }
   #odRow[hidden] { display:none; }
   #odRow button { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:3px 10px; font-size:12px; cursor:pointer; }
   #odRow button.wait { opacity:.7; cursor:progress; }
-  #stage .pane .latb { position:absolute; right:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
+  #stage .pane .latb { position:absolute; left:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
   @media (hover: none) {
@@ -678,15 +700,21 @@
   #stopShareBtn { color:var(--asi-red); border-color:var(--asi-red); }
   #stopShareBtn:hover { color:#fff; background:var(--asi-red); }
   /* 0.7.8: transient notice chip (RTSP failures etc.) */
+  /* 0.21.0: a toast is neutral; the level shows as an accent. Red is for errors ONLY (field: "all alerts come in red"). */
   #kToast { position:fixed; top:54px; left:50%; transform:translate(-50%, -8px); z-index:90;
-    max-width:min(560px, 90vw); padding:9px 14px; border-radius:6px; font-size:12px;
-    background:var(--asi-red); color:#fff; box-shadow:0 8px 26px rgba(0,0,0,.45);
+    max-width:min(560px, 90vw); padding:9px 14px; border-radius:var(--radius-sm, 6px); font-size:12px;
+    background:var(--surface-2); color:var(--text); border:1px solid var(--line);
+    box-shadow:0 8px 26px rgba(0,0,0,.45), inset 3px 0 0 var(--asi-blue);
     opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease; }
+  #kToast[data-level="info"] { color:var(--text-dim); box-shadow:0 8px 26px rgba(0,0,0,.45); }
+  #kToast[data-level="warn"] { box-shadow:0 8px 26px rgba(0,0,0,.45), inset 3px 0 0 var(--asi-amber); }
+  #kToast[data-level="error"] { background:var(--asi-red); color:#fff; border-color:var(--asi-red); box-shadow:0 8px 26px rgba(0,0,0,.45); }
   #kToast.show { opacity:1; transform:translate(-50%, 0); }
   /* 0.15.0: an optional action inside the chip (grid "Undo"); the chip itself stays click-through */
   #kToast .tact { display:inline-block; margin-left:10px; padding:2px 8px; font-size:11px; font-weight:600; line-height:1.3;
-    border:1px solid rgba(255,255,255,.55); border-radius:4px; background:rgba(255,255,255,.94); color:var(--asi-blue); cursor:pointer; pointer-events:auto; }
-  #kToast .tact:hover { background:#fff; }
+    border:1px solid transparent; border-radius:4px; background:var(--asi-blue); color:#06121a; cursor:pointer; pointer-events:auto; }
+  #kToast .tact:hover { filter:brightness(1.1); }
+  #kToast[data-level="error"] .tact { background:rgba(255,255,255,.94); color:var(--asi-red); }
   /* 0.7.7: the gate is dismissible -- relay-only machines never join */
   #joinGate .card { position:relative; }
   #joinGateClose { position:absolute; top:10px; right:10px; width:26px; height:26px;
@@ -752,6 +780,10 @@
 
   /* A full-screened pane must fill the screen and centre the video, otherwise
      the element keeps its grid-cell width and floats in a black field. */
+  /* 0.21.0: the stage in full screen -- black backdrop, the stage fills it, controls keep working */
+  #stagewrap:fullscreen { background:#000; overflow:hidden; display:flex; flex-direction:column; }
+  #stagewrap:fullscreen #stage { flex:1; min-height:0; }
+  #stagewrap:fullscreen #kToast { position:fixed; }
   .pane:fullscreen { display:flex; flex-direction:column; background:#000; border:0; }
   .pane:fullscreen moq-watch { flex:1; display:flex; align-items:center; justify-content:center; }
   .pane:fullscreen canvas { width:100%; height:100%; object-fit:contain; }
@@ -916,7 +948,8 @@
   .pubui .camrow .top .lbl { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pubui .camrow input[type=text] { font-size:11px; padding:5px 7px; }
   .pubui .camrow .gsel { width:auto; flex:none; font-size:11px; padding:2px 4px; max-width:130px; font-family:inherit; }   /* 0.15.0: which grid a feed joins */
-  .pubui .camrow input[type=checkbox] { accent-color:var(--asi-blue); width:auto; }
+  .pubui .camrow .switch { flex:none; }   /* 0.21.0: the enable box and the Audio box are switches */
+  .pubui .camrow label.aud { display:inline-flex; align-items:center; gap:4px; }
   .pubui .camrow.remote { border-left:2px solid var(--asi-blue-dim); opacity:.9; }
   .pubui .camrow.remote .lbl { color:var(--text-dim); }
   .pubui .camrow .from { font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:var(--asi-blue); border:1px solid var(--asi-blue-dim); border-radius:3px; padding:1px 5px; flex:none; }
@@ -1377,13 +1410,13 @@
           <button id="addRtspBtn" type="button" style="flex:none" disabled>Add</button>
         </div>
         <div class="chk" style="margin-top:6px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)">
-          <input type="checkbox" id="rtspKeep" style="width:auto" checked> <label for="rtspKeep">Keep sharing this feed after KASTR restarts</label></div>
+          <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspKeep" checked><i></i></span><span>Keep sharing this feed after KASTR restarts</span></label></div>
         <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
              title="Publish the camera's audio track with the feed (AAC). Off by default = video only. Changeable later from the feed's Audio box or \u25be menu.">
-          <input type="checkbox" id="rtspAudio" style="width:auto"> <label for="rtspAudio">Send the camera's audio (off by default)</label></div>
+          <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspAudio"><i></i></span><span>Send the camera's audio (off by default)</span></label></div>
         <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
              title="The camera's own stream is published as-is -- no re-encode on this machine, the lowest CPU -- whenever viewers can decode it (H.264 and H.265 today; also 4K and full-range H.264, which were converted before). Viewers need hardware decode for H.265; a viewer that cannot decode a stream sees a notice on that tile. Off = H.264 up to 1080p passes through, everything else is converted to H.264.">
-          <input type="checkbox" id="rtspPassthrough" style="width:auto"> <label for="rtspPassthrough">Pass cameras through untouched when viewers can decode them (H.264/H.265, no re-encode, lowest CPU)</label></div>
+          <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspPassthrough"><i></i></span><span>Pass cameras through untouched when viewers can decode them (H.264/H.265, no re-encode, lowest CPU)</span></label></div>
         <div class="btnrow" id="rtspRecentRow" hidden style="margin-top:6px">
           <select id="rtspRecent" style="flex:1">
             <option value="">Recently used…</option>
@@ -1641,18 +1674,35 @@
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div class="body">
     <div class="camprev"><video id="camPrev" muted playsinline autoplay></video><div id="camPrevOff" class="off">No camera</div></div>
-    <div class="tabs"><span class="tab on">Effects and settings</span></div>
     <h3 class="sect">Camera</h3>
     <div id="camRadios" class="radios"></div>
     <h3 class="sect">Backgrounds</h3>
     <div id="bgRow" class="bgrow"></div>
     <div class="sw"><span>Adjust brightness</span><label class="switch"><input type="checkbox" id="fxBright"><i></i></label></div>
     <div class="sw"><span>Soft focus</span><label class="switch"><input type="checkbox" id="fxSoft"><i></i></label></div>
+    <!-- 0.21.0: phones deliver sideways frames -- rotate and mirror the camera before it leaves this device -->
+    <div class="sw"><span>Rotate</span><div class="seg" id="fxRot" role="radiogroup" aria-label="Rotate the camera">
+      <button type="button" data-rot="0">0&deg;</button><button type="button" data-rot="90">90&deg;</button>
+      <button type="button" data-rot="180">180&deg;</button><button type="button" data-rot="270">270&deg;</button></div></div>
+    <div class="sw"><span>Mirror</span><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label></div>
     <div class="sw"><span>Background quality<small id="fxQualityLbl">Balanced</small></span><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label></div>
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
 </div>
 
+<!-- 0.21.0: the media resolution picker (Share -> Media file). Default: same as the source. -->
+<div id="fileResPop" class="popcard teams" hidden>
+  <div class="head"><span>Share a media file</span><span class="sp"></span>
+    <button type="button" class="close" id="frpCancel" title="Cancel">&#10005;</button></div>
+  <div class="body">
+    <div class="row" style="font-weight:600" id="frpName"></div>
+    <div class="row" id="frpSrc" style="color:var(--text-dim)"></div>
+    <div class="row" id="frpWarn" hidden style="color:var(--asi-amber)">Unusual file: KASTR re-encodes it as it plays. If it will not play, convert it to MP4 / H.264 first.</div>
+    <label class="f"><span>Resolution</span><select id="frpRes"></select></label>
+    <div class="row" id="frpNote" style="color:var(--text-dim);font-size:11px"></div>
+    <div class="btnrow" style="margin-top:8px"><button type="button" id="frpShare">Share</button><button type="button" class="ghost" id="frpCancel2">Cancel</button></div>
+  </div>
+</div>
 <div id="filesPop" class="popcard teams" hidden>
   <div class="head"><span>Files</span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
@@ -1762,8 +1812,8 @@
         <label class="f"><span>Expected packet loss (%)</span>
           <input type="number" id="encPlc" min="0" max="100" step="1" placeholder="auto">
         </label>
-        <label class="f chkrow"><span>In-band FEC</span><input type="checkbox" id="encFec" style="width:auto"></label>
-        <label class="f chkrow"><span>DTX (discontinuous transmission)</span><input type="checkbox" id="encDtx" style="width:auto"></label>
+        <label class="f chkrow"><span>In-band FEC</span><span class="switch sm"><input type="checkbox" id="encFec"><i></i></span></label>
+        <label class="f chkrow"><span>DTX (discontinuous transmission)</span><span class="switch sm"><input type="checkbox" id="encDtx"><i></i></span></label>
         <label class="f" style="margin-bottom:0"><span>Gain</span>
           <input type="range" id="encGain" min="0" max="2" step="0.05" value="1" style="accent-color:var(--asi-blue)">
         </label>
@@ -1862,9 +1912,9 @@
     <!-- 0.13.0 (F7): the relay this machine dials. Loopback pages in non-viewer modes only
          (POST /api/relay/use is local-only); Enter or leaving the field applies it. -->
     <label class="f" id="joinRelayRow" hidden><span>Relay</span>
-      <input type="text" id="joinRelay" list="joinRelayHist" placeholder="https://relay-host:4443"
-             autocomplete="off" spellcheck="false" title="The relay this KASTR connects to &mdash; Enter or leave the field to apply">
-      <datalist id="joinRelayHist"></datalist></label>
+      <select id="joinRelaySel" title="The relay this KASTR connects to &mdash; pick one to switch"></select>
+      <input type="text" id="joinRelay" placeholder="https://relay-host:4443" hidden
+             autocomplete="off" spellcheck="false" title="Another relay address &mdash; Enter or leave the field to apply"></label>
     <label class="f"><span>Room</span>
       <div style="display:flex; gap:6px">
         <select id="joinChanSel" style="flex:1"></select>
@@ -1879,8 +1929,8 @@
     <label class="f" id="joinPwdRow" hidden><span id="joinPwdLabel">Room code</span>
       <input type="text" id="joinPwd" class="masked" autocomplete="off" spellcheck="false"></label>
     <!-- 0.12.0: persistent rooms -- kept on the relay (with their chat) until closed -->
-    <label class="f" id="joinKeepRow" hidden>
-      <input type="checkbox" id="joinKeep"><span style="margin:0">Keep this room &mdash; it stays on the relay with its chat until its creator or the relay operator closes it</span></label>
+    <label class="f asi-sw" id="joinKeepRow" hidden>
+      <span class="switch sm"><input type="checkbox" id="joinKeep"><i></i></span><span style="margin:0">Keep this room &mdash; it stays on the relay with its chat until its creator or the relay operator closes it</span></label>
     <div class="btns">
       <button id="joinBtn" type="button" class="join">Join now</button>
     </div>
@@ -2048,6 +2098,8 @@
   // by --lvl (0..1) on any ancestor -- no <defs>, no clipPath ids, so the
   // string can be stamped into innerHTML any number of times.
   const ICONS = {
+    // 0.21.0: "options" -- three dots (the share preview used the minimize glyph for both buttons)
+    more: '<circle cx="4.5" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.6" fill="currentColor" stroke="none"/>',
     // 0.8.8: Teams-style toolbar glyphs
     view: '<rect x="2.5" y="3.5" width="6.5" height="5.5" rx="1"/><rect x="11" y="3.5" width="6.5" height="5.5" rx="1"/>'
         + '<rect x="2.5" y="11" width="6.5" height="5.5" rx="1"/><rect x="11" y="11" width="6.5" height="5.5" rx="1"/>',
@@ -2091,6 +2143,7 @@
       + ' stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
       + ICONS[name] + "</svg>";
   }
+  window.__icon = icon;   // 0.21.0: the publish half's share chevron draws the same glyph
 
   // Standby art: assets/asi-favicon.svg minus the navy plate. The viewBox
   // and the glyph's centring transform are copied as-is so nothing needs
@@ -2347,13 +2400,27 @@
       if (e.key === "Escape") closeMineMenu();
     });
     // 0.16.0: a scroll or resize moves the anchor away from the menu; a drag on the stage closes it too
-    window.addEventListener("resize", closeMineMenu);
-    document.addEventListener("scroll", (e) => { if (mineMenu && !mineMenu.hidden && !mineMenu.contains(e.target)) closeMineMenu(); }, true);
+    // 0.21.0: on phones the address bar showing/hiding fires resize + scroll AS the menu opens (field:
+    // "menus don't pop up in portrait") -- a height-only change re-places the menu, a phone ignores scroll,
+    // and nothing closes within 500 ms of opening
+    let mmW = innerWidth, mmH = innerHeight;
+    window.addEventListener("resize", () => {
+      const dw = Math.abs(innerWidth - mmW), dh = Math.abs(innerHeight - mmH);
+      mmW = innerWidth; mmH = innerHeight;
+      if (!mineMenu || mineMenu.hidden) return;
+      if ((dw === 0 && dh < 160) || performance.now() - mineMenuOpenedAt < 500) { placeMineMenu(); return; }
+      closeMineMenu();
+    });
+    document.addEventListener("scroll", (e) => {
+      if (!mineMenu || mineMenu.hidden || mineMenu.contains(e.target)) return;
+      if (isPhone() || performance.now() - mineMenuOpenedAt < 500) return;
+      closeMineMenu();
+    }, true);
     document.addEventListener("pointerdown", (e) => { if (mineMenu && !mineMenu.hidden && !mineMenu.contains(e.target) && !mineMenuAnchor?.contains?.(e.target)) closeMineMenu(); }, true);
     return mineMenu;
   }
   function closeMineMenu() {
-    if (mineMenu) mineMenu.hidden = true;
+    if (mineMenu) { mineMenu.hidden = true; mineMenu.classList.remove("roomform"); }   // 0.21.0
   }
   // Below the anchor when it fits, above when it would fall off the
   // bottom: the self-view controls sit at the BOTTOM of the preview
@@ -2392,6 +2459,14 @@
       menu.appendChild(b);
     }
     menu.hidden = false;
+    mineMenuOpenedAt = performance.now();
+    placeMineMenu();
+  }
+  let mineMenuOpenedAt = 0;   // 0.21.0
+  function placeMineMenu() {
+    const menu = mineMenu, anchor = mineMenuAnchor;
+    if (!menu || !anchor) return;
+    if (isPhone()) { menu.style.left = ""; menu.style.top = ""; return; }   // 0.21.0: the CSS bottom sheet
     const r = anchor.getBoundingClientRect();
     const w = menu.offsetWidth || 200;
     menu.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
@@ -3453,7 +3528,7 @@
   const gridKin = (gp) => [...gridChildOf].filter(([, g]) => g === gp).map(([f]) => f);   // 0.9.5: the members behind a grid path
   window.__gridDebug = {   // rig hooks (0.9.4)
     children: () => [...gridChildOf.entries()],
-    metas: () => [...gridMeta.entries()].map(([k, m]) => ({ path: k, feeds: m.feeds, known: [...(m.known || [])], gone: m.gone || 0, tileGone: m.tileGone || 0, ts: m.ts })),
+    metas: () => [...gridMeta.entries()].map(([k, m]) => ({ path: k, feeds: m.feeds, known: [...(m.known || [])], members: m.members || [], dead: [...(m.dead || [])], gone: m.gone || 0, tileGone: m.tileGone || 0, ts: m.ts })),   // 0.21.0: + members/dead
     accept: (path, active) => gridAccept(path, active),   // inject an announce (old-owner compatibility tests)
   };
   // 0.13.0 (F4/F5): while ONE full-quality feed is open (spot, its grid's child
@@ -3462,7 +3537,8 @@
   // The return paths (feedview label, dataset.back, Gallery pill) select the
   // grid path again, which un-parks it.
   const gridParked = (name) => !gridMode && !selfSpotEl && gridMeta.has(name) && gridChildOf.get(selectedName) === name;
-  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name);
+  const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
+  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name);
   // 0.9.8: fill-first auto grid. Rows may hold different cell counts (2 over 3
   // for five cameras) when that draws more picture than equal cells would, no
   // cell smaller than half the biggest; partial rows and the whole block are
@@ -3675,9 +3751,12 @@
       if (!cur || cur.ts <= ts) {
         const feeds = Array.isArray(meta.feeds) ? meta.feeds : [];
         const out = (Array.isArray(meta.out) ? meta.out : []).map(String);   // 0.14.0: evicted members (offline after N attempts) -- hidden, not shown as their own tile
-        const known = new Set([...feeds.filter(Boolean).map(String), ...out]);   // 0.9.4 sticky union -> 0.14.0: exactly what the owner lists now (feeds + out); a path that leaves both is a normal tile again
+        const members = (Array.isArray(meta.members) ? meta.members : []).map(String);   // 0.21.0: every member, every mode
+        const down = (Array.isArray(meta.down) ? meta.down : []).map(Number);
+        const dead = new Set([...out, ...down.map((i) => members[i]).filter(Boolean)]);   // 0.21.0: never shown as a tile of their own
+        const known = new Set([...feeds.filter(Boolean).map(String), ...out, ...dead]);   // 0.9.4 sticky union -> 0.14.0: exactly what the owner lists now (feeds + out); a path that leaves both is a normal tile again
         gridMeta.set(meta.path, { n: Number(meta.n) || 1, layout: meta.layout || "auto", cells: meta.cells || [],
-          feeds, out, down: Array.isArray(meta.down) ? meta.down : [], mode: meta.mode || "grid", ts, key: String(path),
+          feeds, out, members, dead, down, mode: meta.mode || "grid", ts, key: String(path),
           id: meta.id != null ? String(meta.id) : "1", label: String(meta.label || "").slice(0, 40),   // 0.15.0: which of the owner's grids, and its display name
           known, gone: 0, tileGone: tiles.has(meta.path) ? 0 : (cur?.tileGone || 0) });   // 0.8.12 / 0.9.4 / 0.14.0
       }
@@ -3925,6 +4004,22 @@
   stageBack.type = "button"; stageBack.id = "stageBack"; stageBack.textContent = "\u25a6 Gallery";
   stageBack.addEventListener("click", (e) => { e.stopPropagation(); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); });
   stageWrap.appendChild(stageBack);
+  // 0.21.0: idle chrome -- 3 s without pointer/key input hides the media bar, the filename bars, the
+  // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
+  // chevron button and any other overlay"). Never while scrubbing, while a control has focus, or while
+  // the pointer rests on a control. Touch: any tap shows (no tap-to-hide -- a tap already selects).
+  const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.bar,.label,.gmenu,.latb";
+  let idleT = null, idleOver = false;
+  const idleBusy = () => idleOver || !!stageWrap.querySelector('[data-scrub="1"], .gmenu')
+    || (document.activeElement && document.activeElement !== document.body && stageWrap.contains(document.activeElement) && document.activeElement.matches("button,input,select"));
+  const idleHide = () => { if (idleBusy()) { idleT = setTimeout(idleHide, 1000); return; } stageWrap.classList.add("idle"); };
+  const idleShow = () => { stageWrap.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(idleHide, IDLE_MS); };
+  for (const ev of ["pointermove", "pointerdown", "wheel"]) stageWrap.addEventListener(ev, idleShow, { passive: true });
+  document.addEventListener("keydown", idleShow);
+  stageWrap.addEventListener("pointerover", (e) => { idleOver = !!e.target.closest?.(IDLE_CTL); });
+  stageWrap.addEventListener("pointerleave", () => { idleOver = false; });
+  idleShow();
+  window.__idleChrome = { hide: () => stageWrap.classList.add("idle"), show: idleShow, is: () => stageWrap.classList.contains("idle") };   // rig
   function paintStageBack() {
     const remoteGrid = !!selectedName && !selfSpotEl && (gridMeta.has(selectedName) || isGridChild(selectedName));
     const ownGrid = !!(selfSpotEl && selfSpotEl.dataset && selfSpotEl.dataset.grid);   // 0.8.12
@@ -4093,6 +4188,10 @@
   window.__relayout = queueRelayout;
   // 0.8.6: hidden app / a full-screen tile change what should download.
   document.addEventListener("fullscreenchange", queueRelayout);
+  document.addEventListener("fullscreenchange", () => {   // 0.21.0: toasts follow the stage into full screen
+    const fs = document.fullscreenElement, kt = document.getElementById("kToast");
+    if (kt) (fs === stageWrap ? stageWrap : document.body).appendChild(kt);
+  });
   document.addEventListener("visibilitychange", queueRelayout);
   // 0.13.0 (F2): visible="never" stops only VIDEO -- warm audio keeps every
   // camera's audio subscription and catalog alive in a hidden tab. After 60 s
@@ -4232,6 +4331,11 @@
     // DOM itself never moves. 0.6.10: collage (uniform best-fit) or spot
     // (content + ladder), both plain grid placement of the same panes.
     autoContentCheck();
+    if (spotLit) {   // 0.21.0: my spotlit share ended (8 s grace for a self-heal that re-announces)
+      if (mineNames.has(spotLit.target)) spotLitMissAt = 0;
+      else if (!spotLitMissAt) spotLitMissAt = Date.now();
+      else if (Date.now() - spotLitMissAt > 8000) spotLitClear(true);
+    }
     stageEl.classList.toggle("collage", gridMode);
     stageEl.classList.toggle("spot", !gridMode);
     const shownNames = orderedNames().filter((n) => isWatched(n) && !hiddenChild(n));   // 0.8.12
@@ -4562,7 +4666,7 @@
         // behind another tile's full screen downloads nothing -- audio is
         // volume-driven and unaffected.
         : (document.hidden && !window.__rigVisible) ? "never"   // 0.16.0: __rigVisible = the rig's hidden browser pane still decodes
-        : (document.fullscreenElement && document.fullscreenElement !== t.pane) ? "never"
+        : (document.fullscreenElement && !document.fullscreenElement.contains(t.pane)) ? "never"   // 0.21.0: the stage in full screen CONTAINS every pane
         : isSelected ? "always"
         : GRID_PREFETCH;   // ladder tiles are on-screen; the margin resolves them
 
@@ -4673,16 +4777,20 @@
    * the API requires.
    */
   function toggleFullscreen(name) {
-    const t = tiles.get(name);
-    if (!t) return;
-    if (document.fullscreenElement === t.pane) { document.exitFullscreen?.(); return; }
-    if (!gridMode && selectedName !== name) select(name);
+    // 0.21.0: the STAGE (#stagewrap) goes full screen, not the tile pane -- so the RTSP grid, the
+    // cell click, the back pill, the chevrons and the zoom keep working inside it (the field report:
+    // "the grid view does not have a full screen option") and every tile keeps downloading.
+    const t = name ? tiles.get(name) : null;
+    if (name && !t) return;
+    const fs = document.fullscreenElement;
+    if (fs && (fs === stageWrap || (t && fs === t.pane))) { document.exitFullscreen?.(); return; }
+    if (t && !gridMode && selectedName !== name) select(name);
 
     // Must be called synchronously on the click. Awaiting exitFullscreen()
     // first and continuing in a .then() discards the transient user
     // activation, and the request is then refused -- so no exit/enter dance
     // here; Chrome moves full screen between elements on its own.
-    const req = (t.pane.requestFullscreen ?? t.pane.webkitRequestFullscreen)?.call(t.pane);   // 0.17.0: WebKit prefix
+    const req = (stageWrap.requestFullscreen ?? stageWrap.webkitRequestFullscreen)?.call(stageWrap);   // 0.17.0: WebKit prefix
     req?.catch((err) => {
       const why = err?.message ?? String(err);
       // Do NOT route this through log(): the diagnostics interval rewrites
@@ -5120,7 +5228,7 @@
       const pchev = document.createElement("button");
       pchev.type = "button";
       pchev.className = "pchev";
-      pchev.innerHTML = icon("chevron");
+      pchev.innerHTML = icon("more");   // 0.21.0: options = three dots
       pchev.title = "Options for this stream";
       pchev.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -5271,6 +5379,7 @@
 
     if (selectedName === undefined && isWatched(name) && !isGridChild(name)) selectedName = name;   // 0.9.4: never a hidden child
     renumber();
+    spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
     applyState();
     return tile;
   }
@@ -5283,6 +5392,7 @@
     t.pane.remove(); // disconnects <moq-watch>, stops its connection
     t.row.remove();
     tiles.delete(name);
+    if (spotDone && spotDone.split("@")[0] === name) spotDone = null;   // 0.21.0: a re-created tile re-applies the standing vote
     personChime(name, false);   // 0.8.2: leave chime (after delete: last-tile test)
     if (manualOrder.includes(name)) saveOrder();   // tiles no longer has it
     // 0.9.4: a grid whose tile left keeps its meta (and its hidden children) for
@@ -5813,6 +5923,7 @@
     suppressed.clear();
     spotVotes.clear();
     spotDone = null;
+    spotLitClear(true);   // 0.21.0: leaving the room forgets the mirrored spotlight
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
     for (const name of [...tiles.keys()]) removeTile(name);
@@ -5856,7 +5967,9 @@
     selectedName = undefined;
     selfSpotEl = null;
     gridMode = true; autoContent = null; manualPick = false;   // 0.13.3: a new room starts in the gallery, nothing carried over
+    spotLitClear(false);         // 0.21.0: the mirror re-announces below if this is the same room within 30 min
     recomputeMine();             // mineNames re-prefix under the (new) channel
+    spotLitRestore();
     stageEmpty.textContent = listEmpty.textContent = publishOnly ? STAGE_EMPTY_PUBONLY : (!CLIENT.webcodecs ? STAGE_EMPTY_NODECODE : "Searching for live broadcasts…");   // 0.9.10 / 0.17.0
     applyState();
 
@@ -5940,8 +6053,41 @@
   // Track-less announces under <room>/.spotlight carry "put this share on
   // everyone's stage". Applied ONCE per winner -- later local clicks win
   // locally, because fighting the person at the keyboard helps nobody.
-  const spotVotes = new Map();   // announce path -> { ts, target }
-  let spotDone = null;           // winner target we already acted on
+  const spotVotes = new Map();   // announce path -> { ts, target, by }
+  let spotDone = null;           // winner "<target>@<ts>" we already acted on (0.21.0: keyed by ts so a re-spotlight re-applies)
+  // 0.21.0: the spotlight FOLLOWS THE PARTICIPANT. When a vote lands on one of my own shares I mirror it
+  // into my room.json (`spotlit`); viewers count the mirror as a vote keyed "<my path>#lit", so the
+  // spotlight survives the spotlighter leaving, and I re-announce it after a reload within 30 min
+  // (sessionStorage). Cleared by another spotlight, the spotlighter's explicit un-spotlight, the
+  // share ending, a room switch or a kick.
+  let spotLit = null;            // { target, by, ts } -- my mirrored spotlight
+  let spotLitMissAt = 0;
+  const SPOT_LIT_RESTORE_MS = 1800000;
+  function spotLitSet(v) {
+    if (spotLit && spotLit.target === v.target && spotLit.ts === v.ts) return;
+    spotLit = { target: String(v.target), by: String(v.by || ""), ts: Number(v.ts) || Date.now() };
+    spotLitMissAt = 0;
+    try { window.__state?.set?.("spotlit", spotLit); } catch {}
+    try { sessionStorage.setItem("kastr.spotlit", JSON.stringify({ ...spotLit, room: CHANNEL, at: Date.now() })); } catch {}
+  }
+  function spotLitClear(forget) {
+    if (spotLit) { spotLit = null; try { window.__state?.set?.("spotlit", null); } catch {} }
+    spotLitMissAt = 0;
+    if (forget) { try { sessionStorage.removeItem("kastr.spotlit"); } catch {} }
+  }
+  function spotLitRestore() {   // after a rejoin: same room, within 30 min, once my share is announced again
+    let rec = null;
+    try { rec = JSON.parse(sessionStorage.getItem("kastr.spotlit") || "null"); } catch {}
+    if (!rec || !rec.target || rec.room !== CHANNEL || Date.now() - (Number(rec.at) || 0) > SPOT_LIT_RESTORE_MS) { spotLitClear(true); return; }
+    let tries = 0;
+    const tick = () => {
+      if (!connection || CHANNEL !== rec.room || ++tries > 20) return;
+      if (mineNames.has(rec.target)) { spotLitSet(rec); return; }
+      setTimeout(tick, 1500);
+    };
+    setTimeout(tick, 1500);
+  }
+  window.__spotLit = () => spotLit;   // rig
   function spotAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
     const i = parts.indexOf(".spotlight");
@@ -5950,7 +6096,7 @@
     let target = "";
     try { target = atob(parts[i + 2].replace(/-/g, "+").replace(/_/g, "/")); } catch {}
     if (!target) return;
-    if (active) spotVotes.set(String(path), { ts, target });
+    if (active) spotVotes.set(String(path), { ts, target, by: String(path) });
     else spotVotes.delete(String(path));
     spotApplyWinner();
   }
@@ -5959,18 +6105,20 @@
     let win = null;
     for (const v of spotVotes.values()) if (!win || v.ts > win.ts) win = v;
     if (win) {
-      if (win.target === spotDone) return;             // one-shot
+      const key = win.target + "@" + (win.ts || 0);
+      if (spotLit && win.target !== spotLit.target && win.by !== "mirror") spotLitClear(true);   // 0.21.0: another spotlight replaces mine
+      if (key === spotDone) return;             // one-shot
       // 0.13.3: room.json remembers a click forever -- a spotlight older than ten minutes is
       // history, not an instruction; and a spotlight on a grid CHILD means 'the grid' here.
-      if (win.ts && Date.now() - win.ts > SPOT_STALE_MS) { spotDone = win.target; return; }
+      if (win.ts && Date.now() - win.ts > SPOT_STALE_MS) { spotDone = key; return; }
       let target = win.target;
       const gp = gridChildOf.get(target);
       if (gp && tiles.has(gp)) target = gp;
       // The sharer's own page: the self-view already shows it, and the
       // suppressed path has no tile to select.
-      if (mineNames.has(target)) { spotDone = win.target; return; }
+      if (mineNames.has(target)) { spotDone = key; if (win.by !== "mirror") spotLitSet(win); return; }   // 0.21.0: mirror it
       if (!tiles.has(target)) return;                  // tile not here (yet)
-      spotDone = win.target;
+      spotDone = key;
       selfSpotEl = null;
       selectedName = target;
       gridMode = false;
@@ -5978,7 +6126,7 @@
     } else if (spotDone) {
       // every vote gone (sharer left or cleared): release the stage only
       // if the user has not picked something else since
-      const was = spotDone;
+      const was = spotDone.split("@")[0];
       spotDone = null;
       if (!gridMode && selectedName === was) { gridMode = true; applyState(); }
     }
@@ -6222,7 +6370,7 @@
     if (e.key === "Escape") { closeAllPops(); return; }
     if (e.key === "ArrowRight" || e.key === "ArrowDown") { step(1); e.preventDefault(); }
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { step(-1); e.preventDefault(); }
-    else if (e.key === "f" || e.key === "F") { if (selectedName) toggleFullscreen(selectedName); }
+    else if (e.key === "f" || e.key === "F") toggleFullscreen(selectedName);   // 0.21.0: the stage, selection or not
     else if (e.key === "g" || e.key === "G") { if (gridMode) enterSpotlight(); else { gridMode = true; applyState(); } }
     else if (e.key === "m" || e.key === "M") { manualMute = !manualMute; applyState(); }
     else if (e.key === "PageDown") { if (railFlip(1)) e.preventDefault(); }     // 0.8.12: rail pages
@@ -6242,6 +6390,7 @@
   const shareLive = document.getElementById("shareLive");
 
   function placeShare() {
+    if (isPhone()) { sharePop.style.top = sharePop.style.left = sharePop.style.height = ""; return; }   // 0.21.0: the inline height beat the sheet's CSS
     // Anchor under the button, but keep the panel on screen.
     const b = shareBtn.getBoundingClientRect();
     const w = sharePop.offsetWidth || 900;
@@ -6308,9 +6457,16 @@
     t = setTimeout(clear, 90000);
     input.click();
   };
-  const phoneMq = matchMedia("(max-width: 720px)");   // 0.8.9
+  const PHONE_MQ = "(max-width: 720px), (max-height: 500px)";   // 0.21.0: landscape phones (812x375) were getting the desktop layout
+  const phoneMq = matchMedia(PHONE_MQ);   // 0.8.9
   const isPhone = () => phoneMq.matches;
-  phoneMq.addEventListener("change", () => queueRelayout());
+  window.__isPhone = isPhone;
+  phoneMq.addEventListener("change", () => {
+    queueRelayout();
+    // 0.21.0: an orientation flip re-places every open sheet/popover instead of leaving it mid-air
+    try { for (const p of pagePops) if (p.isOpen?.()) p.place?.(); } catch {}
+    if (mineMenu && !mineMenu.hidden) closeMineMenu();
+  });
   // ---- small popovers (relay / audio / help) --------------------------------
   //
   // The Share panel's life cycle, generalized: button toggles, clicks inside
@@ -6548,10 +6704,11 @@
       url = custom && url === custom ? "bg:custom" : "preset:navy";
     }
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
-             bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced" };
+             bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced",
+             rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror };   // 0.21.0: phone cameras
   }
   camFx = normalizeCamFx(camFx);
-  const camFxActive = (fx) => !!fx && ((fx.bg?.mode || "none") !== "none" || !!fx.bright || !!fx.soft);
+  const camFxActive = (fx) => !!fx && ((fx.bg?.mode || "none") !== "none" || !!fx.bright || !!fx.soft || !!fx.rot || !!fx.mirror);
   // ---- 0.15.0: built-in animated scenes (assets/bg/manifest.json, fetched once) -------------
   let bgScenes = null, bgScenesReq = null;
   function loadBgScenes() {
@@ -6687,7 +6844,8 @@
   function saveCamFx() { try { localStorage.setItem(CAMFX_KEY, JSON.stringify(camFx)); } catch {} }
   // The bag that rides sendControl / the announce: markers only (see normalizeCamFx).
   const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "bg:custom" : (camFx.bg.url || "") },
-                             bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced" });
+                             bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced",
+                             rot: camFx.rot || 0, mirror: !!camFx.mirror });   // 0.21.0
   const camFxPushed = new Set();   // 0.15.0: source ids that already carry the saved bag
   // 0.15.0: a no-op without a camera; syncCamFxToOwnCamera (called from acceptAnnounce) pushes
   // the saved bag once when the local camera source first appears -- a join used to create the
@@ -6787,11 +6945,19 @@
     }));
     document.getElementById("fxBright").checked = !!camFx.bright;
     document.getElementById("fxSoft").checked = !!camFx.soft;
+    for (const b of document.querySelectorAll("#fxRot button")) b.classList.toggle("on", Number(b.dataset.rot) === (camFx.rot || 0));   // 0.21.0
+    document.getElementById("fxMirror").checked = !!camFx.mirror;
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
   }
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
   document.getElementById("fxSoft").addEventListener("change", (e) => { camFx.soft = e.target.checked; pushCamFx(); });
+  document.getElementById("fxRot").addEventListener("click", (e) => {   // 0.21.0
+    const b = e.target.closest("button[data-rot]"); if (!b) return;
+    camFx.rot = Number(b.dataset.rot) || 0; pushCamFx(); paintCamPop();
+  });
+  document.getElementById("fxMirror").addEventListener("change", (e) => { camFx.mirror = e.target.checked; pushCamFx(); });
+  window.__camRotate = (deg) => { camFx.rot = ((Number(deg) || 0) % 360 + 360) % 360; pushCamFx(); paintCamPop(); };   // rig + the tile menu
   document.getElementById("fxQuality").addEventListener("change", (e) => {
     camFx.quality = e.target.checked ? "best" : "balanced";
     document.getElementById("fxQualityLbl").textContent = e.target.checked ? "Best" : "Balanced";
@@ -7677,12 +7843,46 @@
     if (best) { window.__clockOffset = best.off; window.__clockRtt = best.rtt; }
   }
   clockSync(); setInterval(clockSync, 60000);
-  const STAMP_CELLS = 44, STAMP_DIV = 80;
+  const STAMP_CELLS = 44, STAMP_DIV = 80, STAMP_RD_N = 48;   // 0.21.0: 48-cell strip (the publisher half defines its own STAMP_N -- separate module scope)
+  // 0.21.0: the bottom-right strip. The viewer's canvas is the ENCODER's size, not the publisher's,
+  // so the cell size is calibrated from the strip's own sync cells: candidates are the proportional
+  // w/200 and the 4 px floor scaled from the common small publisher widths; each candidate must
+  // decode both sync groups (8 bits) with real contrast. Samples are 3x3 averages, the threshold is
+  // the midpoint of the sync cells' own levels. The 0.18-0.20 top-left decoder is the fallback.
   function stampRead(t) {
     const c = t.canvas;
     if (!c || !c.width || !c.height || !c.isConnected) return null;
     let cx; try { cx = c.getContext("2d"); } catch { return null; }
     if (!cx) return null;
+    const W = c.width, H = c.height;
+    const cands = [W / 200];
+    for (const wp of [640, 480, 426, 352, 320]) { const v = 4 * W / wp; if (!cands.some((x) => Math.abs(x - v) < 0.35)) cands.push(v); }
+    const hh = Math.min(H, Math.ceil(Math.max(...cands)) + 2);
+    let img; try { img = cx.getImageData(0, H - hh, W, hh).data; } catch { return null; }
+    const lum = (x, y) => {   // 3x3 average around (x, y) in canvas space, clamped
+      let sum = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = Math.min(W - 1, Math.max(0, x + dx)), yy = Math.min(H - 1, Math.max(H - hh, y + dy));
+        const o = ((yy - (H - hh)) * W + xx) * 4; sum += (img[o] + img[o + 1] + img[o + 2]) / 3; n++;
+      }
+      return sum / n;
+    };
+    for (const cs of cands) {
+      if (cs < 2 || STAMP_RD_N * cs > W) continue;
+      const y = Math.floor(H - cs / 2);
+      const at = (i) => lum(Math.floor(W - (STAMP_RD_N - i - 0.5) * cs), y);
+      const ones = [0, 2, 44, 46].map(at), zeros = [1, 3, 45, 47].map(at);   // (1,0,1,0) at both ends
+      const hi = Math.min(...ones), lo = Math.max(...zeros);
+      if (hi - lo < 40) continue;                       // no sync here
+      const thr = (ones.reduce((a, b) => a + b, 0) / 4 + zeros.reduce((a, b) => a + b, 0) / 4) / 2;
+      let v = 0;
+      for (let i = 0; i < 40; i++) v = v * 2 + (at(4 + i) > thr ? 1 : 0);
+      return v;
+    }
+    return stampReadLegacy(t, cx);
+  }
+  function stampReadLegacy(t, cx) {
+    const c = t.canvas;
     const cs = c.width / STAMP_DIV;
     if (cs * STAMP_CELLS > c.width || cs < 2) return null;
     let img; try { img = cx.getImageData(0, 0, Math.ceil(cs * STAMP_CELLS), Math.max(1, Math.ceil(cs))).data; } catch { return null; }
@@ -7709,12 +7909,14 @@
     }
   }, 1000);
   window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));
+  window.__stampRead = (canvas) => stampRead({ canvas });   // 0.21.0 rig: decode any canvas
   window.__latencyStamp = (() => { try { return localStorage.getItem("kastr.latencyStamp") === "1"; } catch { return false; } })();
   document.getElementById("viewLatency")?.addEventListener("click", () => {
     window.__latencyStamp = !window.__latencyStamp;
     try { localStorage.setItem("kastr.latencyStamp", window.__latencyStamp ? "1" : "0"); } catch {}
+    try { window.__publisher?.refx?.(); } catch {}   // 0.21.0: a plain camera starts/stops the light canvas loop
     document.getElementById("viewLatency")?.classList.toggle("on", window.__latencyStamp);
-    window.__toast?.(window.__latencyStamp ? "Latency stamp on \u2014 file, RTSP-grid and effected-camera shares carry a time code" : "Latency stamp off", 4000, { level: "event" });
+    window.__toast?.(window.__latencyStamp ? "Latency stamp on \u2014 your camera, file and RTSP-grid shares carry a thin time code in their bottom-right corner" : "Latency stamp off", 4000, { level: "info" });   // 0.21.0: a setting toggle is verbose-only
   });
   document.getElementById("viewLatency")?.classList.toggle("on", window.__latencyStamp);
 
@@ -7903,7 +8105,7 @@
   }
   // the two models (schema v1) and their producers
   const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
-  const roomModel = { v: 1, peer: "", spotlight: null, recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
+  const roomModel = { v: 1, peer: "", spotlight: null, spotlit: null, recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
   const pubState = stateProducer(() => ".state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/.member/" + statePeer(), ["room.json", "chat.json"]);
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
@@ -7936,6 +8138,7 @@
         case "publishing": pubModel.publishing = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;
         case "avatar": pubModel.avatar = String(value || ""); break;
         case "spotlight": roomModel.spotlight = value ? { target: String(value), ts: now } : null; break;
+        case "spotlit": roomModel.spotlit = value && value.target ? { target: String(value.target), by: String(value.by || ""), ts: Number(value.ts) || now } : null; break;   // 0.21.0
         case "recording": roomModel.recording = value ? { who: String(value), ts: now } : null; break;
         case "grid": {   // 0.15.0: {id, meta|null} -- one entry per grid, keyed by path; `grid` mirrors the lowest id for pre-0.15 viewers
           const gid = String(value?.id ?? "1");
@@ -8085,7 +8288,12 @@
     if (!v || typeof v !== "object") return;
     const prev = h.prev;
     // spotlight / recording: the announce maps keyed by the member path
-    if (v.spotlight?.target) spotVotes.set(path, { ts: Number(v.spotlight.ts) || 0, target: String(v.spotlight.target) }); else spotVotes.delete(path);
+    const hadVote = spotVotes.get(path);
+    if (v.spotlight?.target) spotVotes.set(path, { ts: Number(v.spotlight.ts) || 0, target: String(v.spotlight.target), by: path }); else spotVotes.delete(path);
+    // 0.21.0: the spotlighter's EXPLICIT un-spotlight (their room.json says null while they are still here) ends my mirror
+    if (hadVote && !v.spotlight?.target && spotLit && hadVote.target === spotLit.target) spotLitClear(true);
+    // 0.21.0: the target's mirror counts as a vote of its own (survives the spotlighter leaving)
+    if (v.spotlit?.target) spotVotes.set(path + "#lit", { ts: Number(v.spotlit.ts) || 0, target: String(v.spotlit.target), by: "mirror" }); else spotVotes.delete(path + "#lit");
     spotApplyWinner();
     const recHad = recVotes.has(path);
     if (v.recording?.who) { if (!recHad) recApply(path, String(v.recording.who), Number(v.recording.ts) || 0, true); }
@@ -8123,7 +8331,8 @@
     }
   }
   function memberClear(path, h) {
-    if (spotVotes.delete(path)) spotApplyWinner();
+    const hadLit = spotVotes.delete(path + "#lit");   // 0.21.0
+    if (spotVotes.delete(path) || hadLit) spotApplyWinner();
     if (recVotes.has(path)) recApply(path, recVotes.get(path)?.who || "", 0, false);
     const prev = h?.prev;
     for (const gp of prev?.gridPaths || []) gridApply(path, { path: gp }, 0, false);   // 0.15.0
@@ -8475,7 +8684,7 @@
       sort: sortMode,
       order: orderedNames(),
       fullscreen: document.fullscreenElement
-        ? ([...tiles.entries()].find(([, t]) => t.pane === document.fullscreenElement)?.[0] ?? "other")
+        ? (document.fullscreenElement === stageWrap ? "stage" : ([...tiles.entries()].find(([, t]) => t.pane === document.fullscreenElement)?.[0] ?? "other"))   // 0.21.0
         : null,
       audioActive: [...tiles.entries()].filter(([, t]) => t.watch.muted === false).map(([n]) => n),
       shown: [...tiles.entries()].filter(([, t]) => t.pane.classList.contains("shown")).map(([n]) => n),
@@ -8513,7 +8722,7 @@
                     "joinBtn", "joinMicBtn", "joinVidBtn", "joinPrevVideo",
                     "joinPrevOff", "joinMsg",
                     "joinKeepRow", "joinKeep",   // 0.12.0: persistent rooms
-                    "joinRelayRow", "joinRelay", "joinRelayHist",   // 0.13.0 (F7): the gate's Relay row
+                    "joinRelayRow", "joinRelay", "joinRelaySel",    // 0.13.0 (F7): the gate's Relay row; 0.21.0: a select
                     "joinChannelCur", "roomBanner", "leaveBtn", "peopleBtn"]) {   // 0.12.0: the banner replaced the chip
     joinEls[id] = document.getElementById(id);
   }
@@ -8947,14 +9156,34 @@
       try { joinEls.joinChanNew.focus(); } catch {}
       return;
     }
+    if (sbCollapsed() && !isPhone()) { sbCreateBubble(); return; }   // 0.21.0: a pop-out beside the rail; the rail stays a rail
     sbFormOpen(null, "create", null);
   });
+  // 0.21.0: the create form in the shared #mineMenu, anchored to the right of the collapsed rail's "+"
+  function sbCreateBubble() {
+    const menu = ensureMineMenu();
+    const btn = document.getElementById("sbCreate");
+    if (!menu.hidden && mineMenuAnchor === btn) { closeMineMenu(); return; }
+    mineMenuAnchor = btn;
+    menu.replaceChildren();
+    menu.classList.add("roomform");
+    roomMenuCreate(menu);
+    menu.hidden = false;
+    mineMenuOpenedAt = performance.now();
+    placeRoomMenu(menu, btn, "right");
+  }
 
   // ---- room forms (create / code) -- render into the sidebar form host or the shared #mineMenu
-  function placeRoomMenu(menu, anchor) {
+  function placeRoomMenu(menu, anchor, side) {
     if (!menu || menu.id === "sbForm") return;   // 0.12.0: the sidebar form sits in the flow (0.15.0 B1: every OTHER menu is positioned)
+    if (isPhone()) { menu.style.left = ""; menu.style.top = ""; return; }   // 0.21.0: bottom sheet
     const r = (anchor || document.getElementById("roomsBtn")).getBoundingClientRect();
     const w = menu.offsetWidth || 200;
+    if (side === "right") {   // 0.21.0: the collapsed rail's "+" bubble sits beside the rail
+      menu.style.left = Math.round(Math.min(r.right + 8, innerWidth - w - 8)) + "px";
+      menu.style.top = Math.round(Math.max(8, Math.min(r.top, innerHeight - (menu.offsetHeight || 200) - 8))) + "px";
+      return;
+    }
     menu.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
     menu.style.top = Math.round(menuTopFor(menu, r)) + "px";
   }
@@ -9635,7 +9864,8 @@
     keepRow.className = "pwkeep";
     const keepInp = document.createElement("input");
     keepInp.type = "checkbox";
-    keepRow.append(keepInp, document.createTextNode(" Keep this room (stays on the relay with its chat until closed)"));
+    const keepSw = document.createElement("span"); keepSw.className = "switch sm"; keepSw.append(keepInp, document.createElement("i"));   // 0.21.0
+    keepRow.append(keepSw, document.createTextNode(" Keep this room (stays on the relay with its chat until closed)"));
     const err = document.createElement("div");
     err.className = "pwerr";
     const cancel = document.createElement("button");
@@ -9767,7 +9997,7 @@
     const id = joinEls.joinCam.value || undefined;
     try {
       const stream = await navigator.mediaDevices.getUserMedia(
-        { video: id ? { deviceId: { exact: id } } : true });
+        { video: id ? { deviceId: { exact: id } } : { facingMode: "user" } });   // 0.21.0: a phone with no saved camera starts on the selfie camera
       if (!joinVidOn) { for (const t of stream.getTracks()) t.stop(); return; }
       if (gateStream) for (const t of gateStream.getTracks()) t.stop();
       gateStream = stream;
@@ -9845,22 +10075,33 @@
     let v = urlInput.value.trim();
     if (!v) { try { v = String(window.top.document.querySelector(".rurl")?.value || "").trim(); } catch {} }
     inp.value = v;
+    const sel = joinEls.joinRelaySel;   // 0.21.0
+    if (sel && document.activeElement !== sel) {
+      if (v && ![...sel.options].some((o) => o.value === v)) sel.insertBefore(new Option(v, v), sel.firstChild);
+      if (v) sel.value = v;
+    }
   }
   function paintRelayRow() {
     const row = joinEls.joinRelayRow;
     if (!row) return;
     row.hidden = isViewerMode() || !gateIsLoopback();
     if (row.hidden) return;
-    gateRelayMirror();
     let hist = [];
     try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
-    const dl = joinEls.joinRelayHist;
-    if (dl) { dl.replaceChildren(); for (const u of hist) dl.appendChild(new Option(u)); }
+    const sel = joinEls.joinRelaySel;   // 0.21.0: a real select -- the datalist filtered itself down to the current value and "did nothing"
+    if (sel && document.activeElement !== sel) {
+      const cur = urlInput.value.trim();
+      const opts = [...new Set([cur, ...hist].filter(Boolean))];
+      sel.replaceChildren(...opts.map((u) => new Option(u, u)), new Option("Other\u2026", "__other"));
+      if (cur) sel.value = cur;
+      if (joinEls.joinRelay) joinEls.joinRelay.hidden = true;
+    }
+    gateRelayMirror();
   }
-  async function gateRelayApply() {
+  async function gateRelayApply(urlArg) {   // 0.21.0: the select passes its pick
     const inp = joinEls.joinRelay;
     if (!inp || gateRelayBusy) return;
-    let u = inp.value.trim();
+    let u = String(urlArg ?? inp.value).trim();
     if (!u) { gateRelayMirror(); return; }
     if (!/^https?:\/\//.test(u)) u = (location.protocol === "https:" ? "https://" : "http://") + u;   // same rule as the badge (0.8.9)
     try { new URL(u); } catch { gateMsg("Not a relay address: " + u); return; }
@@ -10203,7 +10444,7 @@
         // a camera created bare here was the "background resets on join" bug.
         let joinFx = null;
         try { joinFx = window.__camFx?.() || JSON.parse(localStorage.getItem("kastr.camfx") || "null"); } catch {}
-        if (joinFx && typeof joinFx === "object" && (!joinFx.bg || joinFx.bg.mode === "none") && !joinFx.bright && !joinFx.soft) joinFx = null;
+        if (joinFx && typeof joinFx === "object" && (!joinFx.bg || joinFx.bg.mode === "none") && !joinFx.bright && !joinFx.soft && !joinFx.rot && !joinFx.mirror) joinFx = null;   // 0.21.0: a saved rotation rides the join
         const entry = pub.addSource("camera", camId, camLabel,
           { micMuted: !joinMicOn, videoPaused: !joinVidOn, ...(joinFx && typeof joinFx === "object" ? { fx: joinFx, blur: joinFx.bg?.mode === "blur" } : {}) });
         joinAdded.push(entry.id);
@@ -10280,6 +10521,11 @@
     if (joinEls.joinRelay) {
       joinEls.joinRelay.addEventListener("change", () => { gateRelayApply(); });
       joinEls.joinRelay.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); gateRelayApply(); } });
+      joinEls.joinRelaySel?.addEventListener("change", () => {   // 0.21.0: picking an entry switches at once
+        const sel = joinEls.joinRelaySel;
+        if (sel.value === "__other") { joinEls.joinRelay.hidden = false; joinEls.joinRelay.value = ""; try { joinEls.joinRelay.focus(); } catch {} return; }
+        gateRelayApply(sel.value);
+      });
       urlInput.addEventListener("change", gateRelayMirror);
     }
     document.getElementById("roomsBtn").addEventListener("click", (e) => {
@@ -10420,6 +10666,18 @@
     try { localStorage.setItem(RTSP_PERSIST_KEY, JSON.stringify(next)); } catch {}
   }
   const rtspPersistHas = (url) => rtspPersist().some((x) => x.url === url);
+  // 0.21.0: URLs this page CLOSED whose removal the bridge has not acknowledged yet -- the adopt path
+  // retries the removal instead of re-adopting them (a closed feed used to come back on every join)
+  const RTSP_CLOSED_KEY = "kastr.rtsp.closed";
+  function rtspClosed() {
+    try { const r = JSON.parse(localStorage.getItem(RTSP_CLOSED_KEY) || "{}"); return r && typeof r === "object" ? r : {}; } catch { return {}; }
+  }
+  function rtspClosedSet(url, on) {
+    const u = String(url || "").trim(); if (!u) return;
+    const cur = rtspClosed();
+    if (on) cur[u] = Date.now(); else delete cur[u];
+    try { localStorage.setItem(RTSP_CLOSED_KEY, JSON.stringify(cur)); } catch {}
+  }
 
   function rtspHistory() {
     try {
@@ -10515,17 +10773,28 @@
   // watch half owns detection/minting and exposes the decorator.
   const authUrl = (u, role) => (window.__auth?.withToken ?? ((x) => x))(u, role);
 
-  // 0.18.0: the latency stamp (View > Latency stamp on my shares): 4 sync cells + 40 bits of ms
+  // 0.18.0: the latency stamp (View > Latency stamp on my shares). 0.21.0: a thin strip in the
+  // BOTTOM-RIGHT corner -- 48 cells of max(4, w/200) px: 4 sync (1,0,1,0) + 40 bits of ms + 4 sync
+  // (1,0,1,0); ~24 % of the width at 800 px and up. The field report called the 0.18 top bar
+  // "a wide band across the top of the video".
+  const STAMP_N = 48;
+  const stampCell = (w) => Math.max(4, w / 200);
   function drawStamp(cx, w, h) {
-    if (!window.__latencyStamp || !cx || !w) return;
-    const cs = w / 80;
-    if (cs < 2) return;
-    const v = (Date.now() + (window.__clockOffset || 0)) % 2 ** 40;
+    if (!window.__latencyStamp || !cx || !w || !h) return;
+    const cs = stampCell(w);
+    if (STAMP_N * cs > w) return;
+    const v = Math.floor((Date.now() + (window.__clockOffset || 0)) % 2 ** 40);   // the offset can be fractional
     const bits = [1, 0, 1, 0];
     for (let i = 39; i >= 0; i--) bits.push(Math.floor(v / 2 ** i) % 2);
+    bits.push(1, 0, 1, 0);
+    const x0 = w - STAMP_N * cs, y0 = Math.floor(h - cs);
     try {
       cx.save(); cx.filter = "none"; cx.globalAlpha = 1; cx.globalCompositeOperation = "source-over";
-      for (let i = 0; i < bits.length; i++) { cx.fillStyle = bits[i] ? "#fff" : "#000"; cx.fillRect(Math.floor(i * cs), 0, Math.ceil(cs), Math.ceil(cs)); }
+      cx.setTransform(1, 0, 0, 1, 0, 0);
+      for (let i = 0; i < bits.length; i++) {
+        const xa = Math.round(x0 + i * cs), xb = Math.round(x0 + (i + 1) * cs);
+        cx.fillStyle = bits[i] ? "#fff" : "#000"; cx.fillRect(xa, y0, xb - xa, h - y0);
+      }
       cx.restore();
     } catch {}
   }
@@ -11340,6 +11609,12 @@
     // too late to know a retarget is owed.
     const wasMicTarget = micTargetSel.value === String(id);
     stopSlot(id);
+    if (going.kind === RTSP && going.feedId != null && !IS_WEB2) {
+      // 0.21.0: the bridge forgets the feed too (unpublish alone left the pair running with keep=true,
+      // so the next join adopted it and the next launch restored it)
+      rtspClosedSet(going.url, true);
+      nativePost("/api/rtsp/remove", { id: going.feedId }).then((r) => { if (r && !r.error) rtspClosedSet(going.url, false); }).catch(() => {});
+    }
     added.splice(i, 1);
     if (going.kind === RTSP) { going.gridSeat = false; going.evicted = false; seatSet(going.url, false); updateRtspGrid(); }   // 0.8.12: a removed feed gives up its cell (0.9.10: remembered too; 0.14.0: and its eviction)
     renderPickers();
@@ -11383,9 +11658,9 @@
       row.className = "camrow";
       row.dataset.id = String(a.id);
       row.innerHTML =
-        '<div class="top"><input type="checkbox" style="width:auto">' +
+        '<div class="top"><span class="switch sm" title="On air"><input type="checkbox"><i></i></span>' +
         '<span class="lbl"></span><span class="badge">off</span>' +
-        '<label class="aud" title="Publish the camera\'s audio (AAC) with this feed. Off = video only."><input type="checkbox" style="width:auto"> <span>Audio</span></label>' +   // 0.9.8
+        '<label class="aud" title="Publish the camera\'s audio (AAC) with this feed. Off = video only."><span class="switch sm"><input type="checkbox"><i></i></span> <span>Audio</span></label>' +   // 0.9.8
         '<button class="vid" type="button" ' +
         'style="flex:none;padding:2px 8px;background:transparent;border:1px solid var(--line);color:var(--text-mute)"></button>' +
         '<button class="rm" type="button" title="Remove" ' +
@@ -11443,8 +11718,8 @@
                                           ["lowr", LOWR_KEY, "Low for thumbnails", "Also publish a small 640-wide, 15 fps copy that rail tiles and grid cells use (one extra encode)."]]) {
           const lb = document.createElement("label");
           lb.className = "aud shown " + cls; lb.title = tip;
-          lb.innerHTML = '<input type="checkbox" style="width:auto"> <span></span>';
-          lb.querySelector("span").textContent = txt;
+          lb.innerHTML = '<span class="switch sm"><input type="checkbox"><i></i></span> <span></span>';
+          lb.querySelector("span:last-child").textContent = txt;   // 0.21.0: the first span is the switch
           const cbx = lb.querySelector("input");
           cbx.checked = urlFlag(k, a.url);
           cbx.addEventListener("change", () => { urlFlagSet(k, a.url, cbx.checked); clearTimeout(window.__rtspOptT); window.__rtspOptT = setTimeout(() => { syncNative(true); refreshUi(); }, 400); });   // debounced: two quick toggles = one re-publish
@@ -11715,6 +11990,14 @@
     // -- a backwards jump at the loop point could freeze video for a whole
     // loop. Let the encoder read the rate off the track instead.
     if (slot.entry.kind === FILE) delete vcfg.frameRate;
+    if (slot.entry.kind === FILE && (slot.entry.shareH || slot.entry.srcH)) {   // 0.21.0: the encoder follows the chosen (or source) size, never above the Auto cap
+      const RUNG_PX = { 2160: 3840 * 2160, 1440: 2560 * 1440, 1080: 1920 * 1080, 720: 1280 * 720, 480: 854 * 480, 360: 640 * 360 };
+      const FILE_KBPS = { 2160: 6000, 1440: 4000, 1080: 2500, 720: 1500, 480: 900, 360: 600 };
+      const hh = slot.entry.shareH || slot.entry.srcH;
+      const rung = Object.keys(RUNG_PX).map(Number).sort((a, b) => a - b).find((r) => r >= hh) || 2160;
+      if (!enc.res?.value) vcfg.maxPixels = Math.min(vcfg.maxPixels || RUNG_PX[rung], RUNG_PX[rung]);
+      if (!enc.bitrate?.value) vcfg.maxBitrate = FILE_KBPS[rung] * 1000;
+    }
     // 0.15.1: a shared FILE defaults to H.264 unless the operator picked a codec. The library's
     // Auto choice was VP9, which has no hardware encoder on most laptops -- a software VP9 encode
     // of a 720p30 composite dropped frames and every viewer saw a choppy share. H.264 encodes in
@@ -11744,6 +12027,10 @@
         if (w) c.width = { ideal: w, max: w };
         if (h) c.height = { ideal: h, max: h };
         if (fps) c.frameRate = { ideal: fps, max: fps };
+        if (!w && !h && window.__isPhone?.()) {   // 0.21.0: a portrait phone should deliver portrait frames, not a cropped 1280x720 ideal
+          const portrait = matchMedia("(orientation: portrait)").matches;
+          c.width = { ideal: portrait ? 720 : 1280 }; c.height = { ideal: portrait ? 1280 : 720 };
+        }
         try { vsrc.constraints.set(Object.keys(c).length ? c : undefined); } catch {}
       }
       if (asrc && "constraints" in asrc) {
@@ -12533,7 +12820,7 @@
   // 0.8.8: one effects bag per camera -- background (none/blur/image; 0.15.0: gif/video too),
   // brightness, soft focus, 0.15.0: segmentation quality. The loop runs while any effect
   // is on; only the background modes need the person mask.
-  const fxActive = (fx) => !!fx && ((fx.bg && fx.bg.mode !== "none") || fx.bright || fx.soft);
+  const fxActive = (fx) => !!fx && ((fx.bg && fx.bg.mode !== "none") || fx.bright || fx.soft || !!fx.rot || !!fx.mirror);   // 0.21.0: rotation alone runs the light loop
   const fxNeedsMask = (fx) => !!fx && !!fx.bg && fx.bg.mode !== "none";
   const FX_BG_MODES = new Set(["none", "blur", "image", "gif", "video"]);
   // 0.15.0: the bag that rides the announce carries markers only ("bg:<key>", "preset:<id>",
@@ -12546,7 +12833,8 @@
     let url = typeof bg.url === "string" ? bg.url : "";
     if (/^(data|blob):/i.test(url)) url = "bg:custom";
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
-             quality: fx.quality === "best" ? "best" : "balanced" };
+             quality: fx.quality === "best" ? "best" : "balanced",
+             rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror };   // 0.21.0
   }
   // 0.15.0: background markers -> something drawImage can take.
   //   bg:<key>        Blob in IndexedDB kastr-bg/bg (written by the Watch half) -> object URL, cached per key
@@ -12593,11 +12881,14 @@
     console.warn("[fx] " + why + " (source " + (slot.entry?.name || slot.entry?.id) + ")");
     window.__toast?.("Video effects unavailable \u2014 " + why, 6000, { level: "warn" });
   }
+  const NONE_FX = { bg: { mode: "none", url: "" } };
+  // 0.21.0: a plain camera with the latency stamp on runs the light (no-mask) loop just to draw the strip
+  const stampOnly = (slot) => !!window.__latencyStamp && slot.entry.kind === "camera" && !slot.rtsp;
   async function applyFx(slot) {
     const want = () => slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null);
     const fx = want();
-    if (!fxActive(fx)) { stopBlur(slot); return; }
-    if (slot.blur) { retuneFx(slot, fx); return; }   // live retune
+    if (!fxActive(fx) && !stampOnly(slot)) { stopBlur(slot); return; }
+    if (slot.blur) { retuneFx(slot, fx || NONE_FX); return; }   // live retune
     let seg = null;
     if (fxNeedsMask(fx)) {
       // 0.15.0: ensureSegmenter is the wait itself (one shared promise per quality); "best"
@@ -12606,12 +12897,12 @@
       if (!seg && fx.quality === "best") seg = await ensureSegmenter("balanced");
       if (!seg) { fxFailOnce(slot, "the person segmenter could not start"); return; }
     }
-    if (!slots.has(slot.entry.id) || !fxActive(want())) return;   // removed or switched off while we waited
-    if (slot.blur) { retuneFx(slot, want()); return; }              // a parallel call already started the loop
+    if (!slots.has(slot.entry.id) || (!fxActive(want()) && !stampOnly(slot))) return;   // removed or switched off while we waited
+    if (slot.blur) { retuneFx(slot, want() || NONE_FX); return; }              // a parallel call already started the loop
     const raw = unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
     if (!raw) { armFxOnTrack(slot); return; }                        // 0.15.0: was a toast + give-up
     slot.fxFailed = null;
-    startBlurLoop(slot, raw, seg, want());
+    startBlurLoop(slot, raw, seg, want() || NONE_FX);
   }
   // 0.15.0: no raw track yet (a saved effect on a camera that has not landed) -- run applyFx once
   // the capture source publishes its first track (same subscribe seam blurWatch uses), with a
@@ -12838,8 +13129,15 @@
       if (!b.alive) return;
       const w = video.videoWidth, h = video.videoHeight;
       if (w && h) {
-        if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; person.width = w; person.height = h; }
         const fxNow = b.fx || {};
+        // 0.21.0: rotation + mirror (phones deliver sideways frames): the OUTPUT canvas swaps its sides
+        // for 90/270; the person/mask canvases stay in source space
+        const rot = Number(fxNow.rot) || 0, mir = !!fxNow.mirror, swap = rot === 90 || rot === 270;
+        const ow = swap ? h : w, oh = swap ? w : h;
+        if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
+        if (person.width !== w || person.height !== h) { person.width = w; person.height = h; }
+        const xf = () => { cx.translate(ow / 2, oh / 2); cx.rotate(rot * Math.PI / 180); if (mir) cx.scale(-1, 1); cx.translate(-w / 2, -h / 2); };
+        b.cw = ow; b.ch = oh; b.rot = rot; b.mirror = mir;
         const mode = fxNow.bg?.mode || "none";
         const needMask = !!b.seg && mode !== "none";
         const baseFilter = (fxNow.bright ? "brightness(1.15) contrast(1.05) " : "") + (fxNow.soft ? "blur(0.8px)" : "");
@@ -12859,11 +13157,11 @@
         const vidReady = b.vid && b.vid.readyState >= 2 && b.vid.videoWidth;
         const imgReady = b.img && b.img.complete && b.img.naturalWidth;
         const gifFrame = mode === "gif" ? fxGifFrame(b, performance.now()) : null;   // 0.16.0: animated
-        if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, w, h);
-        else if (gifFrame) drawCover(cx, gifFrame, gifFrame.displayWidth || gifFrame.codedWidth, gifFrame.displayHeight || gifFrame.codedHeight, w, h);
-        else if ((mode === "image" || mode === "gif") && imgReady) drawCover(cx, b.img, b.img.naturalWidth, b.img.naturalHeight, w, h);
-        else if (mode !== "none") { cx.filter = "blur(14px)"; cx.drawImage(video, 0, 0, w, h); }   // blur, or a background still loading
-        else { cx.filter = baseFilter || "none"; cx.drawImage(video, 0, 0, w, h); }
+        if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, ow, oh);   // scenes fill the OUTPUT frame upright
+        else if (gifFrame) drawCover(cx, gifFrame, gifFrame.displayWidth || gifFrame.codedWidth, gifFrame.displayHeight || gifFrame.codedHeight, ow, oh);
+        else if ((mode === "image" || mode === "gif") && imgReady) drawCover(cx, b.img, b.img.naturalWidth, b.img.naturalHeight, ow, oh);
+        else if (mode !== "none") { xf(); cx.filter = "blur(14px)"; cx.drawImage(video, 0, 0, w, h); }   // blur, or a background still loading
+        else { xf(); cx.filter = baseFilter || "none"; cx.drawImage(video, 0, 0, w, h); }
         cx.restore();
         if (needMask && b.haveMask) {
           try {
@@ -12875,12 +13173,13 @@
             px.filter = "none";
             px.globalCompositeOperation = "source-over";
             cx.save();
+            xf();   // 0.21.0: the person layer follows the rotation
             cx.filter = baseFilter || "none";   // brightness / soft focus ride on the person layer
             cx.drawImage(person, 0, 0, w, h);
             cx.restore();
           } catch {}
         }
-        drawStamp(cx, w, h);   // 0.18.0
+        drawStamp(cx, ow, oh);   // 0.18.0 (0.21.0: output dims)
         b.drawN++;
         if (now - b.fpsAt >= 1000) {
           const dt = (now - b.fpsAt) / 1000;
@@ -12919,6 +13218,7 @@
   // 0.15.0: per-loop telemetry for the console.
   window.__fxDebug = () => [...slots.values()].filter((s) => s.blur).map((s) => ({
     id: s.entry.id, mode: s.blur.fx?.bg?.mode || "none", quality: s.blur.quality, running: !!s.blur.alive,
+    rot: s.blur.rot || 0, mirror: !!s.blur.mirror, cw: s.blur.cw || 0, ch: s.blur.ch || 0, stampOnly: !fxActive(s.blur.fx),   // 0.21.0
     segFps: s.blur.segFps, drawFps: s.blur.drawFps, lastStepAgoMs: s.blur.lastStep ? Math.round(performance.now() - s.blur.lastStep) : null, tick: !!s.blur.tickT, vw: s.blur.video?.videoWidth, readyState: s.blur.video?.readyState, paused: s.blur.video?.paused,
     delegate: segInfo[s.blur.quality]?.delegate ?? null, model: segInfo[s.blur.quality]?.model ?? null,
     gif: s.blur.gif ? { n: s.blur.gif.n, i: s.blur.gif.i, shown: s.blur.gif.shown, fps: Math.round(s.blur.gif.shown / Math.max(0.001, (performance.now() - s.blur.gif.t0) / 1000) * 10) / 10 } : null }));   // 0.16.0
@@ -13267,6 +13567,8 @@
   // monitor so a shared FILE is audible to the sharer (screens are never
   // monitored -- that would feed back into the captured system audio).
   let ownAudioCtx = null;
+  // 0.21.0: any gesture also retries the sharer's own file monitor (the field report: "make sure the person sharing can hear it")
+  for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => { try { for (const s2 of slots.values()) if (s2.monitor && s2.monitorBlocked && !s2.monitor.muted) s2.monitor.play().then(() => { s2.monitorBlocked = false; }).catch(() => {}); } catch {} }, true);
   document.addEventListener("click", () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); for (const s2 of slots.values()) s2.media?.actx?.resume?.(); } catch {} }, true);
   // ---- 0.8.10: KASTR-owned media player for FILE slots -----------------------
   function startFileMedia(slot) {
@@ -13311,7 +13613,7 @@
         log("Media stream first frame after " + Math.round(m.ttff) + " ms (" + (m.plan.v === "copy" ? "video copied" : "video re-encoded") + ", audio " + m.plan.a + ")");
         window.__toast?.("Streaming \u2014 converting " + mediaWhat(m) + " as it plays", 5000, { level: "info" });
       }, { once: true });
-      v.addEventListener("ended", () => { if (!m.alive || !m.stream || m.failed) return; if (m.loop) reopenMediaStream(slot, 0, false, "loop"); else mediaFinished(slot); });   // 0.16.0
+      v.addEventListener("ended", () => { if (!m.alive || !m.stream || m.failed || m.reattaching) return; if (m.loop) reopenMediaStream(slot, 0, false, "loop"); else mediaFinished(slot); });   // 0.16.0; 0.21.0: never during a re-attach
       attachMediaStream(slot, rs.t || 0);
     }
     // Frames are pushed from two clocks: requestVideoFrameCallback while the
@@ -13325,8 +13627,11 @@
       const key = v.currentTime + ":" + v.paused;
       if (key === m.lastKey && (!v.paused || performance.now() - (m.lastDraw || 0) < 1000)) return;   // paused: 1 Hz keeps the picture alive (0.8.13)
       m.lastKey = key; m.lastDraw = performance.now();
-      if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-      try { cx.drawImage(v, 0, 0, w, h); drawStamp(cx, w, h); vtrack.requestFrame?.(); } catch {}   // 0.18.0: + stamp
+      // 0.21.0: a web-safe file with a chosen resolution is scaled here (one decode, one encode, no server)
+      const th = slot.entry.shareH && slot.entry.shareH < h ? slot.entry.shareH : h;
+      const tw = th === h ? w : 2 * Math.round(w * th / h / 2);
+      if (cv.width !== tw || cv.height !== th) { cv.width = tw; cv.height = th; }
+      try { cx.drawImage(v, 0, 0, tw, th); drawStamp(cx, tw, th); vtrack.requestFrame?.(); } catch {}   // 0.18.0: + stamp
     };
     const draw = () => {
       if (!m.alive) return;
@@ -13343,6 +13648,7 @@
         m.atrack = dest.stream.getAudioTracks()[0];
         pubAud(slot.publish)?.source.set({ track: m.atrack, kind: "music" });
         m.actx.resume().catch(() => {});
+        monitorAttach(slot, m.atrack);   // 0.21.0: the sharer hears the file (the mic tap below never saw this track)
       } catch (e) { log("File audio: " + (e?.message || e)); }
       try { pubCap(slot.publish)?.in?.source.set(vtrack); } catch {}
       // a still frame before play so viewers get a picture immediately
@@ -13361,6 +13667,7 @@
     for (const ev of ["play", "pause", "seeked", "ended", "ratechange"]) v.addEventListener(ev, () => announceMedia(slot, true));
     v.addEventListener("timeupdate", () => announceMedia(slot, false));
     v.addEventListener("error", () => {
+      if (m.stream && m.reattaching) return;   // 0.21.0: the SourceBuffer retry is already reopening
       if (m.stream) { escalateMedia(slot, "decode error " + (v.error?.message || v.error?.code || "?")); return; }   // 0.14.0: ask for H.264 instead of a re-add
       log("Media file failed to decode: " + (v.error?.message || v.error?.code || "?"));
       window.__toast?.("The browser cannot decode this file's video. Re-add it through Share \u2192 Media file so KASTR converts it.", 8000, { level: "error" });
@@ -13390,6 +13697,24 @@
     return 0;
   }
   function bufferedEndS(m) { let b = null; try { b = m.video.buffered; } catch {} return b && b.length ? b.end(b.length - 1) : 0; }
+  // 0.21.0: the scrub fix. A seek used to clear the SourceBuffer BEFORE the server answered (a 409 or 503
+  // then left a black, empty buffer with the playhead moved), abort()'s asynchronous updateend fired the
+  // "cleared" handler while the remove was still pending, remove(0, Infinity) throws on a NaN duration,
+  // and an errored element reports currentTime 0 -- which is how a scrub became "restarted from the
+  // beginning". Now: fetch first, clear second, and the position comes from the last good time.
+  const sbIdle = (sb, ms = 1500) => sb.updating
+    ? new Promise((r) => { const t = setTimeout(r, ms); sb.addEventListener("updateend", () => { clearTimeout(t); r(); }, { once: true }); })
+    : Promise.resolve();
+  async function sbClear(m) {
+    const sb = m.sb; if (!sb || !m.ms || m.ms.readyState !== "open") return;
+    m.queue = []; m.queued = 0;
+    try { sb.abort(); } catch {}   // aborts a pending append AND resets the parser (a half-appended fragment is forgotten)
+    await sbIdle(sb);
+    const end = Math.max(bufferedEndS(m), isFinite(m.ms.duration) ? m.ms.duration : 0);
+    if (end > 0) { try { sb.remove(0, end); await sbIdle(sb); } catch {} }
+    try { sb.timestampOffset = 0; sb.mode = "segments"; } catch {}
+  }
+  const mediaPos = (m) => (m.video.error || !(m.video.currentTime > 0)) && m.lastT != null ? m.lastT : (m.video.currentTime || 0);
   // The server's first fragment after a (re)open lands at the keyframe before
   // the target, or a frame after it -- a playhead parked just outside the new
   // range never reaches canplay. Step into the range once data is there.
@@ -13419,10 +13744,14 @@
     if (!m.stallT) m.stallT = setInterval(() => mediaStallTick(slot), 1000);
     if (!m.bufT) m.bufT = setInterval(() => mediaBufferTick(slot), 250);   // 0.15.0
   }
-  async function startMediaFetch(slot, t) {
+  async function startMediaFetch(slot, t, opts = {}) {   // 0.21.0: opts.clearFirst -- a seek drops the old buffer only once the new one is on its way
     const m = slot.media; if (!m || !m.alive) return;
     const v = m.video, entry = slot.entry, up = entry.upload;
     const gen = m.gen = (m.gen || 0) + 1;   // a reopen orphans the previous reader loop
+    if (opts.clearFirst) {   // 0.21.0: ...and its request ends now; its queued bytes (a torn fragment) must never reach the buffer
+      try { m.ctl?.abort(); } catch {}
+      m.queue = []; m.queued = 0; m.eof = false; clearTimeout(m.catchupT); m.catchupT = null;
+    }
     t = Math.max(0, Number(t) || 0);
     // a still-uploading file: wait for the whole thing or the first 32 MB
     while (up && !up.done && !up.failed && up.loaded < Math.min(up.total, MEDIA_START_BYTES)) {
@@ -13433,7 +13762,7 @@
     if (up && up.failed && !up.done) { log("Media stream: the upload failed, nothing to play"); window.__toast?.("The upload failed \u2014 remove the file and add it again.", 8000, { level: "error" }); return; }
     m.ctl = new AbortController();
     m.lastByteAt = performance.now();
-    const url = entry.mediaUrl + "/stream?t=" + t.toFixed(3) + "&v=" + m.plan.v + "&a=" + m.plan.a + (m.lowQ ? "&q=low" : "");   // 0.15.1: lowered quality after repeated rebuffers
+    const url = entry.mediaUrl + "/stream?t=" + t.toFixed(3) + "&v=" + m.plan.v + "&a=" + m.plan.a + (m.lowQ ? "&q=low" : "") + (m.plan.h ? "&h=" + m.plan.h : "");   // 0.15.1: lowered quality after repeated rebuffers; 0.21.0: the chosen height
     let res;
     try { res = await fetch(url, { signal: m.ctl.signal, cache: "no-store" }); }
     catch (e) {
@@ -13449,7 +13778,7 @@
       try { v.pause(); } catch {}
       return;
     }
-    if (res.status === 502) { const j = await body(); escalateMedia(slot, j?.copy ? "copy rejected" : (j?.error || "ffmpeg failed")); return; }
+    if (res.status === 502 || res.status === 503) { const j = await body(); escalateMedia(slot, j?.copy ? "copy rejected" : (j?.error || "ffmpeg failed")); return; }   // 0.21.0: the server says 503 (0.20.0), the page checked 502 -- a rejected copy never escalated
     if (!res.ok || !res.body) {
       const j = await body();
       log("Media stream request " + res.status + (j?.error ? ": " + j.error : ""));
@@ -13459,11 +13788,27 @@
     const mime = res.headers.get("X-KASTR-Mime") || "";
     if (!mime || !MediaSource.isTypeSupported(mime)) { try { m.ctl.abort(); } catch {} escalateMedia(slot, "unsupported " + (mime || "stream type")); return; }
     if (!m.ms || m.ms.readyState !== "open") { try { m.ctl.abort(); } catch {} return; }
+    if (opts.clearFirst && m.sb) {   // 0.21.0: the server is streaming the new position -- NOW drop the old buffer
+      await sbClear(m);
+      if (!m.alive || m.gen !== gen) { try { m.ctl.abort(); } catch {} return; }
+      m.seekPending = t;
+      try { v.currentTime = t; } catch {}
+    }
     try {
       const wireSb = () => {
         m.sb.mode = "segments";
-        m.sb.addEventListener("updateend", () => { mediaSettleSeek(m); pumpMedia(slot); });
-        m.sb.addEventListener("error", () => escalateMedia(slot, "sourcebuffer error"));
+        m.sb.addEventListener("updateend", () => { if (m.video.currentTime > 0 && !m.video.error) m.lastT = m.video.currentTime; mediaSettleSeek(m); pumpMedia(slot); });
+        m.sb.addEventListener("error", () => {
+          // 0.21.0: one retry at the same position with a fresh MediaSource before giving up
+          const now = performance.now();
+          if (!m.sbRetryAt || now - m.sbRetryAt > 15000) {
+            m.sbRetryAt = now; m.reattaching = true; setTimeout(() => { m.reattaching = false; }, 4000);
+            log("Media stream: SourceBuffer error at " + mediaPos(m).toFixed(1) + " s \u2014 reopening once at the same position");
+            reopenMediaStream(slot, mediaPos(m), false, "sberror", { fresh: true });
+            return;
+          }
+          escalateMedia(slot, "sourcebuffer error");
+        });
       };
       if (!m.sb) { m.sb = m.ms.addSourceBuffer(mime); wireSb(); }
       else if (m.mime !== mime) {   // copy -> transcode changed the codec string
@@ -13474,6 +13819,10 @@
     } catch (e) { try { m.ctl.abort(); } catch {} escalateMedia(slot, "cannot open a buffer for " + mime + ": " + (e?.message || e)); return; }
     m.copy = res.headers.get("X-KASTR-Copy") === "1";
     m.encoder = res.headers.get("X-KASTR-Encoder") || null;   // 0.15.1
+    // 0.21.0: the fragments' own clock starts at 0 whatever `t` was (ffmpeg's mp4 muxer); the server read the
+    // real start off the muxer's edit list -- place the data there, so a seek to 90 s buffers at ~90 s
+    m.startAt = Number(res.headers.get("X-KASTR-Start")) || 0;
+    try { if (!m.sb.updating && Math.abs((m.sb.timestampOffset || 0) - m.startAt) > 0.001) m.sb.timestampOffset = m.startAt; } catch (e) { log("Media stream: timestampOffset refused: " + (e?.message || e)); }
     m.srcFps = Number(res.headers.get("X-KASTR-Fps")) || 0;    // 0.16.0
     const reader = res.body.getReader();
     try {
@@ -13531,7 +13880,7 @@
   // Abort the reader, empty the buffer and fetch again from t. A source the
   // element gave up on (decode error, or an ended MediaSource after the last
   // fragment) gets a fresh MediaSource; otherwise the SourceBuffer is reused.
-  function reopenMediaStream(slot, t, keepHead, why) {
+  function reopenMediaStream(slot, t, keepHead, why, opts = {}) {   // 0.21.0: opts.fresh = a new MediaSource
     const m = slot.media; if (!m || !m.alive || !m.stream) return;
     const v = m.video;
     t = Math.max(0, Number(t) || 0);
@@ -13544,16 +13893,10 @@
     m.queue = []; m.queued = 0; m.eof = false; m.wait409 = null; m.lastByteAt = performance.now();
     clearTimeout(m.catchupT); m.catchupT = null;
     if (keepHead) { startMediaFetch(slot, t); return; }   // resuming behind the uploader: the buffer stays, the playhead too
-    m.seekPending = t;
-    if (v.error || !m.ms || m.ms.readyState !== "open") { detachMediaStream(m, true); attachMediaStream(slot, t); return; }
-    try { v.currentTime = t; } catch {}   // the bar shows the target while the server seeks
-    if (m.sb) {
-      if (m.sb.updating) try { m.sb.abort(); } catch {}
-      let fired = false;
-      const clear = () => { if (fired) return; fired = true; try { m.sb?.removeEventListener("updateend", clear); } catch {} if (m.alive) startMediaFetch(slot, t); };
-      m.sb.addEventListener("updateend", clear);
-      try { m.sb.remove(0, Infinity); } catch { clear(); }
-    } else startMediaFetch(slot, t);
+    m.lastT = t;
+    if (opts.fresh || v.error || !m.ms || m.ms.readyState !== "open") { m.seekPending = t; detachMediaStream(m, true); attachMediaStream(slot, t); return; }
+    // 0.21.0: nothing is cleared and the playhead does not move until the server has answered 200
+    startMediaFetch(slot, t, { clearFirst: !!m.sb });
   }
   function detachMediaStream(m, reattaching) {
     if (!m) return;
@@ -13562,7 +13905,10 @@
     clearInterval(m.stallT); m.stallT = null;
     clearTimeout(m.catchupT); m.catchupT = null;
     m.queue = []; m.queued = 0;
-    try { if (m.ms && m.ms.readyState === "open") { if (m.sb?.updating) m.sb.abort(); m.ms.endOfStream(); } } catch {}
+    // 0.21.0: a re-attach never calls endOfStream() -- the element would fire `ended` and a loop-off share
+    // ends on `ended`; the new object URL detaches the old MediaSource by itself
+    try { if (m.ms && m.ms.readyState === "open") { if (m.sb?.updating) m.sb.abort(); if (!reattaching) m.ms.endOfStream(); } } catch {}
+    if (reattaching) { m.reattaching = true; clearTimeout(m.reattachT); m.reattachT = setTimeout(() => { m.reattaching = false; }, 4000); }
     m.sb = null; m.mime = null;
     if (!reattaching) { try { if (m.url && m.url.startsWith("blob:")) URL.revokeObjectURL(m.url); } catch {} m.url = null; }
   }
@@ -13576,7 +13922,7 @@
       m.escalated = true; m.escalatedAt = performance.now(); m.plan.v = "transcode";
       log("Media stream: " + why + " \u2014 re-encoding video to H.264 as it plays");
       window.__toast?.("This window cannot play the file's video as-is \u2014 re-encoding it to H.264 as it plays.", 6000);
-      reopenMediaStream(slot, m.video.currentTime, false, "escalate");   // 0.16.0: never "|| 0" -- that was a restart from the beginning
+      reopenMediaStream(slot, mediaPos(m), false, "escalate");   // 0.16.0: never "|| 0" -- that was a restart from the beginning; 0.21.0: an errored element reports 0 too
     } else {
       m.failed = true;
       try { m.ctl?.abort(); } catch {}
@@ -13622,7 +13968,7 @@
   function mediaLowerQuality(slot, why) {
     const m = slot.media; if (!m || m.lowQ || m.plan?.v !== "transcode") return;
     m.lowQ = true;
-    log("Media stream: the transcode cannot keep up on this machine (" + why + ") — lowering to 960 wide / 24 fps");
+    log("Media stream: the transcode cannot keep up on this machine (" + why + ") — lowering one step (960 wide / 24 fps, or one rung below the chosen size)");
     window.__toast?.("This machine cannot convert the file fast enough — lowered the quality so it plays smoothly", 6000, { level: "event" });
     reopenMediaStream(slot, m.video.currentTime, false, "lowQ");
   }
@@ -13672,7 +14018,7 @@
     slot.media = null;
     try {   // 0.16.0: a rebuild (self-heal, republish) resumes here instead of restarting from 0, playing
       const v0 = m.video;
-      slot.entry.resume = { t: Number(v0.currentTime) || 0, paused: !!(m.userPaused || (v0.paused && !m.rebuffering && !v0.ended)) };
+      slot.entry.resume = { t: mediaPos(m), paused: !!(m.userPaused || (v0.paused && !m.rebuffering && !v0.ended)) };   // 0.21.0: never the errored element's 0
     } catch {}
     m.alive = false;
     if (m.stream) detachMediaStream(m);   // 0.14.0: abort the reader, close the MediaSource
@@ -13747,6 +14093,7 @@
       + '<span class="mhealth" title="Share health: encoded fps \u00b7 kb/s \u00b7 hardware/software encoder \u00b7 buffer ahead \u00b7 rebuffers"></span>'
       + '<button type="button" class="mloop" title="Loop">\u27f2</button>'
       + '<button type="button" class="mmute" title="Mute the file for everyone">\u{1F50A}</button>'
+      + '<button type="button" class="mhear on" title="Hear it myself (only you)">\u{1F3A7}</button>'   // 0.21.0
       + '<input type="range" class="mvol" min="0" max="1" step="0.05" value="1" title="File volume (everyone)">';
     for (const ev of ["pointerdown", "click", "dblclick"]) bar.addEventListener(ev, (e) => e.stopPropagation());
     const path = () => chanPath(ensureHang(slot.entry.name));
@@ -13758,8 +14105,13 @@
     q(".mmute").addEventListener("click", () => {
       slot.entry.micMuted = !slot.entry.micMuted;
       slot.publish.muted = !!slot.entry.micMuted;
-      if (slot.monitor) slot.monitor.muted = !!slot.entry.micMuted;
+      monitorSync(slot);
       announce(); paintOwnerMediaBar(slot);
+    });
+    q(".mhear").addEventListener("click", () => {   // 0.21.0: local only -- never announced
+      slot.entry.monitorOff = !slot.entry.monitorOff;
+      try { localStorage.setItem("kastr.share.monitor", slot.entry.monitorOff ? "off" : "on"); } catch {}
+      monitorSync(slot); paintOwnerMediaBar(slot);
     });
     q(".mvol").addEventListener("input", () => mediaCtl({ path: path(), op: "volume", value: Number(q(".mvol").value) }));
     q(".mvol").value = String(slot.entry.gain ?? 1);
@@ -13785,10 +14137,27 @@
       lbl.textContent = e.label + (!onBar && !upload.done && !upload.failed ? " \u2014 uploading " + pct + "%" : "");
     }
   }
+  function monitorAttach(slot, track) {   // 0.21.0: the sharer's own earpiece for a file share, fed straight from the file's audio track
+    if (!track || !slot.pane) return;
+    if (!slot.monitor) {
+      const mon = document.createElement("audio");
+      mon.autoplay = true; mon.style.display = "none";
+      slot.pane.appendChild(mon); slot.monitor = mon;
+    }
+    slot.monitor.muted = !!slot.entry.micMuted || !!slot.entry.monitorOff;
+    if (slot.monitorTrack !== track) { slot.monitorTrack = track; slot.monitor.srcObject = new MediaStream([track]); }
+    slot.monitor.play?.().then(() => { slot.monitorBlocked = false; }).catch(() => { slot.monitorBlocked = true; });   // autoplay may refuse -- retried on the next gesture
+  }
+  function monitorSync(slot) {   // 0.21.0: the sharer's own earpiece follows mute-for-everyone OR hear-it-myself
+    if (!slot.monitor) return;
+    slot.monitor.muted = !!slot.entry.micMuted || !!slot.entry.monitorOff;
+    if (!slot.monitor.muted && slot.monitorBlocked) slot.monitor.play?.().then(() => { slot.monitorBlocked = false; }).catch(() => {});
+  }
   function paintOwnerMediaBar(slot) {
     const bar = slot.mediabar, v = slot.media?.video;
     if (!bar || !v) return;
     const q = (c) => bar.querySelector(c);
+    q(".mhear")?.classList.toggle("on", !slot.entry.monitorOff);   // 0.21.0
     q(".mplay").textContent = ((v.paused && !slot.media?.rebuffering) || v.ended) ? "\u25b6" : "\u23f8";   // 0.15.0: a rebuffer is not a pause
     q(".mloop").classList.toggle("on", mediaLoopOn(slot));
     const dur = mediaDur(slot);
@@ -13855,18 +14224,7 @@
         slot.meterBuf = new Float32Array(256);
         slot.tapTrack = t;
       noteVoiceIsoCap(t);   // 0.13.1: does this device honour voiceIsolation?
-        if (slot.entry.kind === FILE) {
-          if (!slot.monitor) {
-            const mon = document.createElement("audio");
-            mon.autoplay = true;
-            mon.muted = !!slot.entry.micMuted;
-            mon.style.display = "none";
-            slot.pane.appendChild(mon);
-            slot.monitor = mon;
-          }
-          slot.monitor.srcObject = ms;
-          slot.monitor.play?.().catch(() => {});
-        }
+        if (slot.entry.kind === FILE) monitorAttach(slot, t);   // 0.21.0 (a file's track normally attaches from wire())
       } catch {}
     };
     tap();
@@ -15075,6 +15433,7 @@
       // 0.15.0: the display label and the grid ride in `extra` (last, so they win); the
       // broadcast NAME still derives from rtspLabel(url), so a renamed feed keeps its path.
       const gridId = String(opts?.gridId || gridOfSaved(url) || "1");
+      rtspClosedSet(url, false);   // 0.21.0: adding it again is an explicit act
       const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: audioWanted(url), label: opts?.label || rtspLabel(url), gridId });   // 0.9.5
       gridOfSet(url, gridId);
       if (seatSaved(url)) updateRtspGrid();   // 0.9.10: a remembered seat holds its cell from now on, not from the first frame
@@ -15128,8 +15487,30 @@
   });
   addTestBtn.addEventListener("click", () => addRtsp(TEST_URL));
 
+  function webProbe(f) {   // 0.21.0: width/height/duration from a <video> element (web clients have no ffmpeg)
+    return new Promise((resolve) => {
+      const v = document.createElement("video"); v.preload = "metadata"; v.muted = true;
+      let url = ""; try { url = URL.createObjectURL(f); } catch {}
+      let t = 0;
+      const done = (ok) => { clearTimeout(t); try { v.removeAttribute("src"); URL.revokeObjectURL(url); } catch {}
+        resolve({ web: true, decodable: ok, width: ok ? v.videoWidth : 0, height: ok ? v.videoHeight : 0, duration: ok && isFinite(v.duration) ? v.duration : 0,
+                  video: ok && v.videoWidth ? "web" : null, audio: ok ? "web" : null, convertVideo: false, convertAudio: false }); };
+      if (!url) { done(false); return; }
+      t = setTimeout(() => done(false), 6000);
+      v.onloadedmetadata = () => done(true); v.onerror = () => done(false);
+      v.src = url;
+    });
+  }
   async function prepareMediaFile(f) {
-    if (IS_WEB2) return f;   // 0.17.0: a web client has no media store here -- the browser plays what it can decode
+    if (IS_WEB2) {   // 0.17.0: a web client has no media store here -- the browser plays what it can decode
+      // 0.21.0: ...and still gets the resolution picker (canvas downscale in the composite)
+      const wp = await webProbe(f);
+      const pickedH = await pickFileRes(f, wp);
+      if (pickedH === null) return null;
+      const srcH = Number(wp.height) || 0;
+      try { f.kastrShareH = pickedH && srcH && pickedH < srcH ? pickedH : 0; f.kastrSrcH = srcH; } catch {}
+      return f;
+    }
     // 0.8.10: the server probes the codecs with ffmpeg (first 16 MB) and says
     // what needs converting -- video the browser cannot decode (HEVC, MPEG-4,
     // VP8 in MKV...) as well as AC-3/DTS audio. Anything already web-safe is
@@ -15141,7 +15522,13 @@
         headers: { "X-Kastr-Name": encodeURIComponent(f.name) } });
       probe = await res.json();
     } catch {}
-    if (!probe || (!probe.convertVideo && !probe.convertAudio)) return f;
+    if (!probe) return f;
+    // 0.21.0: the resolution picker -- every probed file gets it (default "same as source")
+    const pickedH = await pickFileRes(f, probe);
+    if (pickedH === null) return null;   // cancelled
+    const srcH = Number(probe.height) || 0;
+    const shareH = pickedH && srcH && pickedH < srcH ? pickedH : 0;   // 0 = as the source
+    if (!probe.convertVideo && !probe.convertAudio) { try { f.kastrShareH = shareH; f.kastrSrcH = srcH; } catch {} return f; }   // web-safe: the composite scales, no server
     // 0.14.0: no conversion step any more. The file is uploaded as picked and
     // the local server re-muxes / re-encodes it ON THE FLY (GET
     // /api/media/<id>/stream) while the upload is still in flight, so playback
@@ -15155,9 +15542,10 @@
     const xhr = new XMLHttpRequest();
     const upload = { xhr, loaded: 0, total: f.size, done: false, failed: false, promise: null };   // promise resolves with the server record (or null)
     const out = { mediaUrl: "/api/media/" + id, mediaId: id, name: f.name, size: f.size, duration: probe.duration || 0, hasVideo: !!probe.video, fps: Number(probe.fps) || 0,   // 0.16.0
-      plan: { v: probe.convertVideo ? "transcode" : "copy",
-              a: (probe.convertAudio || String(probe.audio || "").toLowerCase() !== "aac") ? "aac" : "copy" },
-      upload };
+      plan: { v: (probe.convertVideo || shareH) ? "transcode" : "copy",   // 0.21.0: a downscale is a transcode
+              a: (probe.convertAudio || String(probe.audio || "").toLowerCase() !== "aac") ? "aac" : "copy",
+              h: shareH || 0 },
+      shareH, srcH, upload };
     upload.promise = new Promise((resolve) => {
       xhr.open("POST", "/api/media/upload?id=" + id);
       xhr.setRequestHeader("X-Kastr-Name", encodeURIComponent(f.name));
@@ -15183,6 +15571,36 @@
     });
     return out;
   }
+  // 0.21.0: the picker -> the chosen height (0 = same as source) or null (cancelled)
+  function pickFileRes(f, probe) {
+    return new Promise((resolve) => {
+      const pop = document.getElementById("fileResPop");
+      if (!pop) return resolve(0);
+      const sel = pop.querySelector("#frpRes"), srcH = Number(probe.height) || 0, srcW = Number(probe.width) || 0;
+      const rungs = [2160, 1440, 1080, 720, 480, 360].filter((h) => srcH && h < srcH);
+      sel.replaceChildren(new Option("Same as source" + (srcH ? " (" + srcW + "\u00d7" + srcH + ")" : ""), "0"), ...rungs.map((h) => new Option(h + "p", String(h))));
+      sel.value = "0";
+      pop.querySelector("#frpName").textContent = f.name;
+      const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+      const dur = Number(probe.duration) || 0, durTxt = dur ? Math.floor(dur / 60) + ":" + String(Math.floor(dur % 60)).padStart(2, "0") : null;
+      pop.querySelector("#frpSrc").textContent = (probe.web
+        ? [srcH ? srcW + "\u00d7" + srcH : "size unknown", durTxt, ext, "(this browser)"]
+        : [srcH ? srcW + "\u00d7" + srcH : "size unknown", probe.video ? String(probe.video).toUpperCase() : "no video", probe.audio ? String(probe.audio).toUpperCase() : "no audio", probe.fps ? Math.round(probe.fps) + " fps" : null, durTxt, ext]).filter(Boolean).join(" \u00b7 ");
+      const odd = probe.web ? !probe.decodable
+        : (!["h264", "hevc", "vp8", "vp9", "av1", "mpeg4", "mpeg2video"].includes(String(probe.video || "").toLowerCase()) || [".avi", ".wmv", ".flv", ".ts", ".m2ts", ".mpg", ".mpeg"].includes(ext) || !probe.duration);
+      pop.querySelector("#frpWarn").textContent = probe.web
+        ? "This browser could not read the file, so it may not play here. Convert it to MP4 / H.264 first, or share it from the KASTR app."
+        : "Unusual file: KASTR re-encodes it as it plays. If it will not play, convert it to MP4 / H.264 first.";
+      pop.querySelector("#frpWarn").hidden = !odd;
+      const note = () => { const h = Number(sel.value) || 0; pop.querySelector("#frpNote").textContent = h ? (probe.convertVideo ? "Re-encoded at " + h + "p as it plays." : "Scaled to " + h + "p in this " + (probe.web ? "browser" : "window") + " (no server work).") : (probe.convertVideo ? "Re-encoded to H.264 as it plays (the source cannot be played as-is)." : "Shared as it is."); };
+      sel.onchange = note; note();
+      const done = (h) => { pop.hidden = true; sel.onchange = null; resolve(h); };
+      pop.querySelector("#frpShare").onclick = () => done(Number(sel.value) || 0);
+      pop.querySelector("#frpCancel").onclick = pop.querySelector("#frpCancel2").onclick = () => done(null);
+      pop.hidden = false;
+      try { sel.focus(); } catch {}
+    });
+  }
   fileInput.addEventListener("change", async () => {
     const picked = fileInput.files && fileInput.files[0];
     fileInput.value = "";          // allow re-picking the same file later
@@ -15190,11 +15608,13 @@
     let f = picked, extra = {};
     try {
       const r = await prepareMediaFile(picked);
+      if (r === null) return;   // 0.21.0: cancelled in the picker
       if (r && r.mediaUrl) {   // 0.14.0: streamed from the local server, converted as it plays
         f = new File([], r.name, { type: "video/mp4" });   // an empty stand-in: the player streams by URL (0.8.13 trick, kept)
-        extra = { mediaUrl: r.mediaUrl, mediaId: r.mediaId, duration: r.duration || 0, plan: r.plan, hasVideo: r.hasVideo, upload: r.upload, fps: r.fps || 0 };   // 0.16.0: + fps
+        extra = { mediaUrl: r.mediaUrl, mediaId: r.mediaId, duration: r.duration || 0, plan: r.plan, hasVideo: r.hasVideo, upload: r.upload, fps: r.fps || 0,   // 0.16.0: + fps
+                  shareH: r.shareH || 0, srcH: r.srcH || 0 };   // 0.21.0
       }
-      else f = r;
+      else { f = r; extra = { shareH: Number(r.kastrShareH) || 0, srcH: Number(r.kastrSrcH) || 0 }; }
     }
     catch (e) { window.__toast?.("Could not prepare the file (" + (e?.message || e) + ") \u2014 sharing it as is.", 7000, { level: "warn" }); }
     // Stash the File itself on the entry; startSlot assigns it to publish.source
@@ -15611,7 +16031,7 @@
     const b = document.createElement("button");
     b.type = "button";
     b.className = "pchev";
-    b.textContent = "\u25be";
+    b.innerHTML = window.__icon?.("more") ?? "\u22ef";   // 0.21.0: options, not the minimize glyph
     b.title = "Options for this share";
     b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -15708,6 +16128,10 @@
       for (const f of d.feeds ?? []) {
         if (f.id == null || !f.url) continue;
         if (added.some((a) => a.kind === RTSP && a.feedId === f.id)) continue;   // by feed id only: two feeds may share a URL (test patterns)
+        if (rtspClosed()[f.url]) {   // 0.21.0: this page closed it and the bridge never heard -- finish the close, never adopt
+          nativePost("/api/rtsp/remove", { id: f.id }).then((r) => { if (r && !r.error) rtspClosedSet(f.url, false); }).catch(() => {});
+          continue;
+        }
         const parts = String(f.publish?.broadcast || "").split("/");
         const name = parts.length > 1 ? parts.slice(1).join("/") : "";   // chanPath put the room first
         const extra = { feedId: f.id, url: f.url, audio: f.publish ? f.publish.audio !== false : audioWanted(f.url) };
@@ -15852,9 +16276,12 @@
           // hidden behind the grid instead of showing the dying tile on its own.
           feeds: ms.map((m) => gridFeeds === "both" ? chanPath(ensureHang(m.entry.name)) : null),
           down: ms.map((m, i) => (m.placeholder ? i : -1)).filter((i) => i >= 0),
+          // 0.21.0: every member's path in every mode (viewers hide a DOWN or OUT member's lingering
+          // broadcast instead of showing a dead tile -- the field report's "dead RTSP previews")
+          members: ms.map((m) => chanPath(ensureHang(m.entry.name))),
           // 0.14.0: members evicted after GRID_EVICT_AFTER failed attempts -- not a cell, but still
           // hidden behind the grid at every viewer (their seat is kept, they rejoin when back)
-          out: gridFeeds === "both" ? (g.evicted || []).map((a) => chanPath(ensureHang(a.name))) : [],
+          out: (g.evicted || []).map((a) => chanPath(ensureHang(a.name))),   // 0.21.0: in every mode
           mode: gridFeeds }));
       }
       for (const id of [...gridAnnounced]) if (!seen.has(id)) gridAnn.clear("grid:" + id);
@@ -16035,7 +16462,7 @@
       ng.lastNudge = now;
       log("Viewer reported the grid " + (ng.name || ng.id) + " frozen \u2014 rebuilding its connection");
       rebuildRtspMoq(ng); refreshUi();
-      window.__toast?.("A viewer reported your grid " + (ng.name || "") + " frozen \u2014 rebuilt it", 4000);
+      
       return;
     }
     for (const slot of [...slots.values()]) {
@@ -16077,7 +16504,7 @@
         const entry = slot.entry;
         stopSlot(entry.id); startSlot(entry); refreshUi();
       }
-      window.__toast?.("A viewer reported your " + (slot.entry.kind || "stream") + " frozen \u2014 " + (again ? "rebuilt it" : "nudged the encoder"), 4000);
+      
       return;
     }
   }
@@ -16200,7 +16627,7 @@
     const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused, lowQ: !!m.lowQ, encoder: m.encoder || null,
       capFps: m.capFps || null, srcFps: m.srcFps || null, encFps: m.encFps == null ? null : +m.encFps.toFixed(1), encKbps: m.encKbps == null ? null : Math.round(m.encKbps), cpuHint: (m.encFps == null || !m.capFps) ? null : +(m.encFps / m.capFps).toFixed(2) };   // 0.15.0/0.15.1/0.16.0
     const audInfo = { actx: m.actx?.state || null, atrack: m.atrack ? { readyState: m.atrack.readyState, enabled: m.atrack.enabled, muted: m.atrack.muted } : null, elMuted: v.muted, elVolume: v.volume, audioDecoded: v.webkitAudioDecodedByteCount ?? null, pubMuted: !!s.publish?.muted };   // 0.15.1 rig
-    return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, restarts: m.log || [], finished: !!m.finished, buffered: b,
+    return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, restarts: m.log || [], finished: !!m.finished, buffered: b, startAt: m.startAt ?? null,   // 0.21.0: + startAt
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,
       upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo, ...audInfo };
   });
@@ -16210,6 +16637,7 @@
     opSlug: () => operatorSlug(),                            // 0.12.0: chat records carry the same op key as presence
     fakeTalk: (ms) => { talkForceUntil = Date.now() + (Number(ms) || 3000); },   // 0.12.0 (rig): pretend the mic is loud
     nudge: nudgeFromViewer,   // 0.8.7: viewer stall report -> nudge/rebuild
+    refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.0: the stamp toggle
     resumeAudio: () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); } catch {} },   // 0.8.9: phones
     // 0.8.8: Camera / Audio popovers
     selfTrack: () => {

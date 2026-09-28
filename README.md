@@ -21,7 +21,9 @@ for thumbnails ("Low for thumbnails"), and be recorded on the relay host (Relay 
 
 Since 0.19.0 the relay host's web port also carries the video (`/relay`, WebSocket), so one Cloudflare Tunnel
 name pointed at `http://localhost:8000` is enough: browsers open `https://<name>/`, KASTR apps and spokes use
-`https://<name>/relay` as the relay address. See `docs/cloudflare-tunnel.md`.
+`https://<name>/relay` as the relay address. See `docs/cloudflare-tunnel.md`. Since 0.20.0 browser clients keep an
+offline shell (service worker), a kick reaches spokes behind a tunnel in about a second, and an open relay behind a
+tunnel is flagged on the Relay page and the gate (set codes and require them).
 
 Fleet updates flow hub-first: update the hub relay box, its spokes follow the hub's version within the hour, and
 clients pick the new build up on their next launch; browser clients reload on their own. Relay operators set viewer, publisher and (since 0.16.0) admin

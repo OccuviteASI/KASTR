@@ -35,6 +35,17 @@ const VERSION = /^[0-9][0-9.]*(-dev)?$/.test(RAW_VERSION) ? RAW_VERSION : "dev";
 const CLIENT = window.__kastrClient ?? null;
 const IS_WEB = CLIENT?.class === "web";
 
+// 0.20.0: browser clients keep the app shell in a service worker cache (sw.js) so an installed
+// KASTR opens at once and still renders when the relay host is unreachable. Web class over https
+// only -- the app's own window never registers, and http has no service workers.
+if (IS_WEB && window.isSecureContext && "serviceWorker" in navigator && !/[?&]embed=1/.test(location.search)) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+window.addEventListener("offline", () => { try { window.__kastrToast?.("Offline \u2014 showing the last page KASTR loaded; rooms and video need the relay host"); } catch {} });
+window.addEventListener("online", () => { try { window.__kastrToast?.("Back online"); } catch {} });
+
 // 0.12.0: the operating mode this KASTR boots as (full | viewer | publisher |
 // relay | publisher-relay), from /api/instance -- the launcher sets it, so one
 // fetch at start is the truth (the badge's 5 s poll re-applies it anyway).
@@ -507,6 +518,7 @@ function build() {
     clearTimeout(brandToast._t);
     brandToast._t = setTimeout(() => t.classList.remove("show"), ms);
   };
+  window.__kastrToast = brandToast;   // 0.20.0: the module-level offline/online listeners use it
   const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
   window.__kastrCheckUpdate = async (host) => {
     if (IS_WEB) return { status: "web", text: "Updates are installed on the KASTR that hosts the relay; this page follows it." };   // 0.17.0

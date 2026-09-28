@@ -63,7 +63,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs   # 0.20.0: + parse_qs (the bans long-poll query)
 
 import kastr_rtsp
 
@@ -452,6 +452,8 @@ class BanList:
         self.state_dir = state_dir
         self.log = log or (lambda m: None)
         self.lock = threading.Lock()
+        self.cv = threading.Condition(self.lock)   # 0.20.0: long-pollers wait here for a change
+        self.ver = 0                                # 0.20.0: bumped on every add/clear (persisted)
         self.bans = []
         self._load()
 
@@ -465,15 +467,24 @@ class BanList:
             rows = d.get("bans") if isinstance(d, dict) else None
             now = time.time()
             self.bans = [b for b in (rows or []) if isinstance(b, dict) and float(b.get("until") or 0) > now]
+            try:
+                self.ver = int(d.get("ver") or 0) if isinstance(d, dict) else 0
+            except (TypeError, ValueError):
+                self.ver = 0
         except Exception:
             self.bans = []
+
+    def _changed_locked(self):
+        """Under self.lock: a new version, everyone waiting wakes."""
+        self.ver += 1
+        self.cv.notify_all()
 
     def _save(self):
         try:
             os.makedirs(self.state_dir, exist_ok=True)
             tmp = self._path() + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"bans": self.bans}, f)
+                json.dump({"bans": self.bans, "ver": self.ver}, f)
             for i in range(6):
                 try:
                     os.replace(tmp, self._path())
@@ -496,8 +507,26 @@ class BanList:
             key = (ban.get("room"), ban.get("host") or ban.get("target"))
             self.bans = [b for b in self.bans if (b.get("room"), b.get("host") or b.get("target")) != key]
             self.bans.append(ban)
+            self._changed_locked()
             self._save()
         return ban
+
+    def snapshot(self):
+        """0.20.0: (ver, active rows) in one lock."""
+        now = time.time()
+        with self.lock:
+            return self.ver, [dict(b) for b in self.bans if float(b.get("until") or 0) > now]
+
+    def wait_change(self, since, timeout):
+        """0.20.0: block up to `timeout` s while ver == since -> True when it changed."""
+        end = time.monotonic() + max(0.0, float(timeout))
+        with self.lock:
+            while self.ver == since:
+                left = end - time.monotonic()
+                if left <= 0:
+                    return False
+                self.cv.wait(left)
+            return True
 
     def hit(self, room, host, remote=None, now=None):
         """The active ban covering this identity, or None."""
@@ -523,6 +552,7 @@ class BanList:
             self.bans = [b for b in self.bans if not (b.get("room") == room and (host is None or b.get("host") == host))]
             n = before - len(self.bans)
             if n:
+                self._changed_locked()
                 self._save()
             return n
 
@@ -1101,6 +1131,7 @@ class AuthService:
         except Exception:
             self.spokes = {}
         self._pull_at = 0
+        self.hub_ver = None                   # 0.20.0: the hub's ban-list version this spoke last saw
         self.lock = threading.Lock()
         self.lockout = Lockout(self.log)     # 0.12.0: the brute-force counter, one class with kastr_serve
         self._fails = self.lockout._fails
@@ -1174,7 +1205,9 @@ class AuthService:
                     # 0.15.0: + the relay-defined room groups
                     self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public()})
                 elif path == "/api/bans":              # 0.18.0: the hub's active bans, for its spokes only
-                    obj, code = svc.bans_for_spoke(self.headers.get("Authorization"))
+                    qs = parse_qs(urlparse(self.path).query)   # 0.20.0: ?since=<ver>&wait=<s> holds until they change
+                    obj, code = svc.bans_for_spoke(self.headers.get("Authorization"),
+                                                   since=(qs.get("since") or [None])[0], wait=(qs.get("wait") or [0])[0])
                     self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
@@ -1554,27 +1587,47 @@ class AuthService:
             self.log("relay auth: spoke %s registered for ban fan-out (from %s)" % (url, peer or "?"))
         return {"ok": True, "bans": len(self.bans.active())}, 200
 
-    def bans_for_spoke(self, bearer):
+    BANS_WAIT_MAX = 30   # 0.20.0: the longest a spoke's long-poll is held (the web-relay proxy allows 40)
+
+    def bans_for_spoke(self, bearer, since=None, wait=0):
+        """0.18.0: the hub's active bans for a spoke. 0.20.0: with `since` == the current version
+        the request is HELD up to `wait` s (max 30) until a ban is added or cleared -- a spoke
+        behind a tunnel or NAT, which the hub cannot nudge, learns of a kick within a second."""
         if not self._bearer_relay(bearer):
             return {"error": "federation token required"}, 403
-        rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in self.bans.active()]
-        return {"bans": rows}, 200
+        try:
+            since_v = int(since) if since is not None else None
+            wait_s = min(self.BANS_WAIT_MAX, max(0.0, float(wait or 0)))
+        except (TypeError, ValueError):
+            since_v, wait_s = None, 0.0
+        if since_v is not None and wait_s > 0:
+            self.bans.wait_change(since_v, wait_s)
+        ver, active = self.bans.snapshot()
+        rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
+        return {"bans": rows, "ver": ver}, 200
 
     def fanout_bans(self):
         """Hub side: nudge every registered spoke (no data -- each pulls with its own token)."""
         with self.lock:
             urls = list(self.spokes)
-        n = 0
-        for url in urls:
+        hits = []
+
+        def nudge(url):   # 0.20.0: in parallel -- a spoke behind a tunnel never answers, and must not delay the rest
             try:
                 req = urllib.request.Request(url + "/api/bans/notify", data=b"{}", method="POST",
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=3):
-                    n += 1
+                    hits.append(url)
             except Exception:
                 pass
+        ts = [threading.Thread(target=nudge, args=(u,), daemon=True) for u in urls]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(4)
+        n = len(hits)
         if urls:
-            self.log("relay auth: ban fan-out -- %d of %d spoke(s) notified" % (n, len(urls)))
+            self.log("relay auth: ban fan-out -- %d of %d spoke(s) notified (the rest long-poll)" % (n, len(urls)))
         return n
 
     def bans_notified(self, peer=""):
@@ -1586,9 +1639,12 @@ class AuthService:
         threading.Thread(target=self.pull_hub_bans, daemon=True).start()
         return {"ok": True}, 200
 
-    def pull_hub_bans(self):
+    def pull_hub_bans(self, since=None, wait=0):
         """Spoke side: copy the hub's active bans (federation token as Bearer), revoke the
-        matching live sessions here and ask the relay to re-validate. -> bans applied."""
+        matching live sessions here and ask the relay to re-validate. -> bans applied.
+        0.20.0: `since`/`wait` long-poll the hub (held until its list changes); the hub's
+        version lands in self.hub_ver; hub-sourced rows the hub no longer lists are lifted.
+        Raises on a transport failure when `wait` is set (the watch loop ladders on it)."""
         try:
             minter = self.hub() if callable(self.hub) else None
             tok = self.fed_token() if callable(self.fed_token) else None
@@ -1596,15 +1652,23 @@ class AuthService:
             minter = tok = None
         if not minter or not tok:
             return 0
+        q = ("?since=%d&wait=%d" % (int(since), int(wait))) if (since is not None and wait) else ""
         try:
-            req = urllib.request.Request(minter + "/api/bans", headers={"Authorization": "Bearer " + tok})
-            with urllib.request.urlopen(req, timeout=4) as r:
+            req = urllib.request.Request(minter + "/api/bans" + q, headers={"Authorization": "Bearer " + tok})
+            with urllib.request.urlopen(req, timeout=(float(wait) + 10) if wait else 4) as r:
                 d = json.loads(r.read().decode("utf-8", "replace") or "{}")
         except Exception as e:
+            if wait:
+                raise
             self.log("relay auth: pulling the hub's bans failed: %s" % str(e)[:120])
             return 0
+        try:
+            self.hub_ver = int(d.get("ver")) if d.get("ver") is not None else self.hub_ver
+        except (TypeError, ValueError):
+            pass
         now = time.time()
         have = {(b.get("room"), b.get("host") or b.get("target")) for b in self.bans.active()}
+        listed = set()
         added = 0
         for b in d.get("bans") or []:
             if not isinstance(b, dict) or not SLUG_RE.match(str(b.get("room") or "")):
@@ -1614,6 +1678,7 @@ class AuthService:
             except (TypeError, ValueError):
                 continue
             key = (b.get("room"), b.get("host") or b.get("target"))
+            listed.add(key)
             if until <= now or key in have:
                 continue
             ban = {"room": str(b["room"]), "host": (str(b["host"]) if b.get("host") else None), "remotes": [],
@@ -1622,9 +1687,17 @@ class AuthService:
             self.revoke_sessions(ban["room"], ban["host"])
             self.bans.add(ban)
             added += 1
+        # 0.20.0: what the hub lifted, we lift (only rows that came from the hub)
+        lifted = 0
+        if isinstance(d.get("bans"), list):
+            for b in self.bans.active():
+                if b.get("via") == "hub" and (b.get("room"), b.get("host") or b.get("target")) not in listed:
+                    lifted += self.bans.clear(b["room"], b.get("host"))
         if added:
             how = self.trigger_revalidate()
             self.log("relay auth: %d ban(s) copied from the hub (revalidate %s)" % (added, how))
+        if lifted:
+            self.log("relay auth: %d ban(s) lifted by the hub" % lifted)
         return added
 
     def _forward_ban(self, ban):
@@ -2466,6 +2539,39 @@ class Relay:
         evt = threading.Event()
         self._fed_stop = evt
         threading.Thread(target=self._federation_watch, args=(evt,), daemon=True).start()
+        threading.Thread(target=self._ban_watch, args=(evt,), daemon=True).start()   # 0.20.0
+
+    BAN_WATCH_LADDER = (2, 5, 10, 30, 60)
+
+    def _ban_watch(self, evt):
+        """0.20.0: the spoke's subscription to the hub's ban list -- one held GET at a time
+        (`/api/bans?since=<ver>&wait=25`), answered the moment the hub adds or clears a ban.
+        Replaces the nudge the hub cannot deliver to a spoke behind a tunnel or NAT; the
+        600 s federation tick stays as the backstop. Ends with the relay (the same stop
+        event as the federation watcher); errors ladder 2..60 s."""
+        fails = 0
+        while not evt.is_set():
+            auth = self.auth
+            if not (auth and self.running() and self._fed_active):
+                if evt.wait(30):
+                    return
+                continue
+            try:
+                since = auth.hub_ver
+                if since is None:
+                    auth.pull_hub_bans()          # learn the version first (plain pull)
+                    if auth.hub_ver is None:
+                        raise RuntimeError("hub answered without a version (older KASTR)")
+                    continue
+                auth.pull_hub_bans(since=since, wait=25)
+                fails = 0
+            except Exception as e:
+                delay = self.BAN_WATCH_LADDER[min(fails, len(self.BAN_WATCH_LADDER) - 1)]
+                if fails in (0, 3):
+                    self.log("relay auth: ban watch: %s -- retrying in %d s" % (str(e)[:120], delay))
+                fails += 1
+                if evt.wait(delay):
+                    return
 
     def _federation_watch(self, evt):
         while not evt.wait(FEDERATION_CHECK):

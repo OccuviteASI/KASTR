@@ -14,6 +14,24 @@
 <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/asi-brand.css">
 <script src="/assets/client.js"></script>
+<!-- 0.20.0: the import map lives HERE, before the first module script (asi-brand.js). Firefox rejects an
+     import map that arrives after any module load has started ("Import maps are not allowed after a module
+     load or preload has started") and then fetched the whole MoQ library live from esm.sh -- newer versions
+     than the vendored ones, and members/state stopped matching between browsers (found 2026-09-28). -->
+<!-- 0.8.13: the MoQ library ships INSIDE the app (assets/vendor/esm, mirrored
+     from esm.sh by vendor-moq.py at a pinned version). The module sources below
+     keep their https://esm.sh specifiers; this map points them at the vendored
+     files, so a checkout without the vendor folder still runs against esm.sh. -->
+<script type="importmap">{
+ "imports": {
+  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.0.target-es2022.mjs",
+  "https://esm.sh/@moq/publish": "/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs",
+  "https://esm.sh/@moq/publish/element": "/assets/vendor/esm/@moq/publish@0.5.0/element.target-es2022.mjs",
+  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs",
+  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.0/element.target-es2022.mjs",
+  "https://esm.sh/qrcode-generator@1.4.4": "/assets/vendor/esm/qrcode-generator@1.4.4.target-es2022.mjs"
+ }
+}</script>
 <script type="module" src="/assets/asi-brand.js"></script>
 <style>
   * { box-sizing:border-box; }
@@ -1876,20 +1894,6 @@
   <span>Media over QUIC · <span class="asi-mono">moq-lite-05</span></span>
 </footer>
 
-<!-- 0.8.13: the MoQ library ships INSIDE the app (assets/vendor/esm, mirrored
-     from esm.sh by vendor-moq.py at a pinned version). The module sources below
-     keep their https://esm.sh specifiers; this map points them at the vendored
-     files, so a checkout without the vendor folder still runs against esm.sh. -->
-<script type="importmap">{
- "imports": {
-  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.0.target-es2022.mjs",
-  "https://esm.sh/@moq/publish": "/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs",
-  "https://esm.sh/@moq/publish/element": "/assets/vendor/esm/@moq/publish@0.5.0/element.target-es2022.mjs",
-  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs",
-  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.0/element.target-es2022.mjs",
-  "https://esm.sh/qrcode-generator@1.4.4": "/assets/vendor/esm/qrcode-generator@1.4.4.target-es2022.mjs"
- }
-}</script>
 <script src="/assets/prefs.js"></script>
 <script>
   // 0.13.0 (F3): the rooms sidebar starts COLLAPSED unless the toggle saved
@@ -2921,9 +2925,24 @@
   }
   // 0.17.0: the lobby notice on an insecure page (http on a LAN address): the browser
   // blocks WebCodecs, camera and microphone there, so video needs the https listener.
+  // 0.20.0: a web visitor of an OPEN relay through a tunnel is told so (the operator chose warn, not refuse)
+  let openNoteAsked = false;
+  function paintOpenTunnelNote(card) {
+    if (!IS_WEB || openNoteAsked) return;
+    openNoteAsked = true;
+    fetch("/api/client", { cache: "no-store" }).then((r) => r.json()).then((c) => {
+      if (!c || !c.openTunnel || document.getElementById("openNote")) return;
+      const n = document.createElement("div");
+      n.id = "openNote";
+      n.style.cssText = "margin:0 0 12px;padding:8px 12px;border:1px solid var(--asi-amber, #f5b942);border-radius:6px;background:rgba(245,185,66,.08);font-size:13px;line-height:1.45";
+      n.textContent = "This relay has no access codes, so anyone who knows its name can watch and publish here. Ask the operator to set codes on the Relay page.";
+      card.insertBefore(n, card.firstChild);
+    }).catch(() => {});
+  }
   function paintCtxBanner() {
     const card = document.querySelector("#joinGate .card");
     if (!card) return;
+    paintOpenTunnelNote(card);
     let b = document.getElementById("ctxBanner");
     if (CLIENT.secure) { if (b) b.remove(); return; }
     if (!b) {

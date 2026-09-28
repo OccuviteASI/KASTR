@@ -2,6 +2,49 @@
 
 What changed in each build, newest first.
 
+## v0.20.0 — the tunnel for real, kicks that reach tunneled spokes, an offline shell
+
+**Verified on a real Cloudflare Tunnel.** Kenton's relay host at a public name ran 0.19.0 behind cloudflared. Read-only
+probes, then Edge under Playwright: the page was handed `https://<name>/relay`, the WebSocket upgrade got the relay's
+101, every host control answered 403, a fake camera published and played, chat crossed, and the latency stamp read
+about 0.5 s glass-to-glass through Cloudflare's edge. The moq CLI published and subscribed through the same name over
+WebSocket (valid H.264 back). Two defects came out of it, both fixed below.
+
+**An open relay behind a tunnel is public, and KASTR now says so.** With no access codes a relay trusts "the LAN";
+through a tunnel that is the whole internet: anyone with the name can list cameras, read chat, pull recordings and
+watch. The operator chose to keep it working and be warned: the Relay page's One-port card shows a red line, the
+launch log says it once an hour, and every browser visitor sees an amber note on the gate until codes are set.
+Setting codes also means starting the relay with "Require access codes" — saved codes alone leave it open.
+
+**Cloudflare swaps origin 502s for its own page.** On an open relay the room-code service does not run, and KASTR
+answered 502 for `/api/auth`; Cloudflare replaced that with `error code: 502`, which `watch.html` read as "no KASTR
+here". An open relay now answers its own shape with 200 (`secured: false, open: true`), and no KASTR error is a 502
+any more (503 passes a tunnel untouched).
+
+**A kick reaches a spoke behind a tunnel or NAT in about a second.** The hub's ban list is versioned, and a spoke
+keeps one request held at the hub (`GET /api/bans?since=<ver>&wait=25`) that answers the moment a ban is added or
+cleared. Measured on the rig with the spoke federated through a tunnel: 0–2 s from the kick to the spoke's refusal,
+against up to 10 minutes before. Un-bans propagate the same way (a ban cleared on the hub's Relay page is lifted on the
+spokes), the hub nudges its reachable spokes in parallel, and the 10-minute tick stays as the backstop.
+
+**Browser clients keep an offline shell.** Over https a browser client installs a service worker that caches the app
+shell (the page, the masthead, the vendored MoQ library, icons; about 2.5 MB) under the KASTR version that served it.
+An installed KASTR opens at once, still renders when the relay host is unreachable and says "Offline" in a toast; rooms,
+chat and video need the host and are never served from the cache, nor is anything under `/api/`, the `/relay` pipe or
+a request with a query string. A new KASTR build's worker drops the older cache, and the existing version poll reloads
+the page. Verified in Edge (registered, 86 files cached, offline boot, API not cached) and Firefox (all but the
+"back online" toast, which Firefox does not fire under Playwright's offline switch).
+
+**Firefox was loading the MoQ library from the internet.** The page's import map, which points the library at the
+vendored copy, sat below the masthead's module script; Firefox refuses an import map that arrives after a module has
+started loading, so every Firefox client fetched `@moq/*` live from esm.sh at whatever version esm.sh served that day.
+It passed on 25 September and failed on the 28th, when esm.sh moved to publish 0.5.1 / net 0.4.1: Firefox pages
+connected but saw no members and no chat. The map now comes first in the head, and a rig check keeps it there. Edge
+and Chrome always honoured the map, so they were never affected.
+
+**Not in this release.** The secured-relay half of the live test (admin stop and kick through the real tunnel) waits
+for the host to run with access codes required; an iPhone test of the installed shell; Docker and Mac smokes.
+
 ## v0.19.0 — everything on one web port (Cloudflare Tunnel)
 
 **One name, one port.** The relay host's web port now carries the video too: `/relay` on it is a WebSocket pipe to

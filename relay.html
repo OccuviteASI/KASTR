@@ -798,7 +798,9 @@
         + (w.relayRunning ? "" : " <b>The relay is not running here</b> \u2014 start it, or visitors get no media.")
         + (t.singlePort ? " kastr.ini <code>single_port</code> is on: every remote page uses this path." : "")
         + "<br>" + (t.seen ? "Last proxied visitor: <code>" + esc(t.seen) + "</code>, " + t.seenAgo + " s ago" : "No proxied visitor yet")
-        + " \u00b7 live relay pipes: " + (t.pipes || 0) + ".";
+        + " \u00b7 live relay pipes: " + (t.pipes || 0) + "."
+        + (t.open ? "<br><b style=\"color:var(--asi-red, #e5484d)\">This relay has no access codes: anyone with the name can watch and publish. "
+                   + "Set the viewer and publisher codes above.</b>" : "");   // 0.20.0: an open relay through a tunnel is public
     }
   }
   paintWeb();

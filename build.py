@@ -57,6 +57,7 @@ PAGES = [
     "index.html", "app.html", "moq-watch-lite.html",
     "stats.html", "relay.html",
     "watch.html", "manifest.webmanifest",   # 0.17.0: the fMP4 fallback player + the PWA manifest
+    "sw.js",                                 # 0.20.0: the service worker (offline shell for browser clients)
 ]
 HELPERS = [
     ("ffmpeg", "RTSP ingest"),

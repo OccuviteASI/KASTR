@@ -71,6 +71,36 @@ Browsers get the full client (camera, microphone, all video) because Cloudflare 
 - Another reverse proxy that sends no forwarded headers: set `single_port = true` in kastr.ini so every remote page
   is handed the `/relay` address.
 
+## Access codes matter here
+
+An open relay (no access codes) trusts "the LAN". Through a tunnel that is everyone on the internet: anyone with the
+name can list cameras, read chat, pull recordings and watch. Since 0.20.0 KASTR says so on the Relay page's One-port
+card, in the launch log, and on every browser visitor's gate, but it does not refuse. Set viewer, publisher and admin
+codes on the Relay page **and start the relay with "Require access codes"** — saved codes alone leave the relay open
+(the room-code service only runs on a secured relay).
+
+## Kicks and spokes behind a tunnel
+
+Since 0.20.0 a spoke keeps one request held at the hub for ban changes, so a kick on the hub reaches a spoke behind a
+tunnel or NAT in about a second (measured 0–2 s on the rig), and a ban cleared on the hub is lifted on the spokes.
+
+## Cloudflare and error pages
+
+Cloudflare replaces an origin's 502/504 with its own text page. KASTR 0.20.0 never answers 502 (503 passes through),
+and an open relay answers its room-code endpoints with a 200 "open" shape instead of an error, so `watch.html` and
+the page behave the same behind Cloudflare as on the LAN.
+
+## Verified for real (2026-09-28, kastr.madlabs.app, KASTR 0.19.0, open relay)
+
+- Page served through the tunnel is handed `https://kastr.madlabs.app/relay`; `/relay` upgrade → the relay's 101;
+  every host control 403; `/api/instance` and `/api/rtsp/list` redacted.
+- Edge (Playwright): join, publish a fake camera, view (tile decodes), chat; **glass-to-glass 496–504 ms** measured by
+  the latency stamp between two browsers through Cloudflare's edge.
+- moq CLI: publish and subscribe through `https://kastr.madlabs.app/relay` over WebSocket, valid H.264 back.
+- Found: the relay ran open (`/api/auth` came back as Cloudflare's `error code: 502`), which led to the two fixes above.
+  The secured half (admin stop and kick through the tunnel) is verified on the rig's stand-in and waits for the host
+  to run with access codes required.
+
 ## Verified (2026-09-25, rig)
 
 A local stand-in for cloudflared (one TLS port, cloudflared's headers, Host rewritten to `localhost`): Edge and

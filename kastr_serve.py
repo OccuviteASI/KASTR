@@ -56,6 +56,29 @@ CLIENT_TOKEN = "__KASTR_CLIENT__"
 
 # Replaced with the build's version as pages are served.
 VERSION_TOKEN = "__KASTR_VERSION__"
+PRECACHE_TOKEN = "__KASTR_PRECACHE__"   # 0.20.0: sw.js -- the JSON list of shell files to cache
+_PRECACHE = [None]                       # computed once per process from the served folder
+
+
+def precache_list(root):
+    """0.20.0: what the service worker caches at install -- the shell pages, the brand and
+    client scripts, icons, and every vendored ESM file (about 3 MB). Never mediapipe, the
+    noise model or the scenes (cached on first use), never anything under /api/."""
+    if _PRECACHE[0] is not None:
+        return _PRECACHE[0]
+    out = ["/moq-watch-lite.html", "/index.html", "/watch.html", "/manifest.webmanifest",
+           "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
+           "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg"]
+    for sub in ("assets/icons", "assets/vendor/esm"):
+        base = os.path.join(root, sub)
+        for dp, _dn, fns in os.walk(base):
+            for fn in sorted(fns):
+                rel = os.path.relpath(os.path.join(dp, fn), root).replace(os.sep, "/")
+                if not fn.startswith(".") and rel not in out:
+                    out.append("/" + rel)
+    out = [p for p in out if os.path.isfile(os.path.join(root, p.lstrip("/")))]
+    _PRECACHE[0] = out
+    return out
 
 
 def read_version():
@@ -638,7 +661,8 @@ _CHAT_HUB_SAID = set()             # hosts whose "hub is this KASTR on another p
 
 
 _RELAY_WS = [0]       # 0.19.0: live /relay WebSocket pipes
-TUNNEL_SEEN = {}      # 0.19.0: the last proxied visitor {"base", "at"} (the Relay page's one-port card)
+TUNNEL_SEEN = {}      # 0.19.0: the last proxied visitor {"base", "at"} (the Relay page's one-port card); 0.20.0: + "open"
+_TUNNEL_OPEN_SAID = [0.0]   # 0.20.0: when the "proxied visitors reach an OPEN relay" line was last logged
 SINGLE_PORT = False   # 0.19.0: kastr.ini single_port -- every remote page gets the /relay web relay
 
 
@@ -985,6 +1009,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         page_host = "web" if remote else host
         out = [
             (VERSION_TOKEN.encode(), read_version().encode()),
+            (PRECACHE_TOKEN.encode(), json.dumps(precache_list(root)).encode()),   # 0.20.0: sw.js
             (HOST_TOKEN.encode(), page_host.encode()),
             (CLIENT_TOKEN.encode(), (b"web" if remote else b"app")),
             # Give the upstream demo page a machine-specific default too.
@@ -1124,6 +1149,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             base = self._web_base()
             if kastr_relay.is_forwarded(self):
                 TUNNEL_SEEN.update(base=base, at=time.time())
+                if not getattr(relay_srv, "secured", False):
+                    # 0.20.0: an open relay trusts "the LAN"; through a tunnel that is everyone. Warn, never refuse
+                    # (the operator's choice, 2026-09-28).
+                    TUNNEL_SEEN["open"] = True
+                    if time.time() - _TUNNEL_OPEN_SAID[0] > 3600:
+                        _TUNNEL_OPEN_SAID[0] = time.time()
+                        _note("web: proxied visitors reach an OPEN relay -- anyone with the name %s can watch and publish; "
+                              "set access codes on the Relay page" % base)
+                else:
+                    TUNNEL_SEEN["open"] = False
             return base + kastr_relay.WEB_RELAY_PATH
 
         def _relay_ws(self):
@@ -1141,7 +1176,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             try:
                 up = socket.create_connection(("127.0.0.1", port), timeout=5)
             except OSError as e:
-                return self._json_cors(502, {"error": "relay unreachable: %s" % e})
+                return self._json_cors(503, {"error": "relay unreachable: %s" % e})   # 0.20.0: 503 passes a tunnel
             lines = ["GET %s%s HTTP/1.1" % (rest, ("?" + u.query) if u.query else ""), "Host: 127.0.0.1:%d" % port]
             for k, v in self.headers.items():
                 if k.lower() in ("host", "x-forwarded-for"):
@@ -2208,6 +2243,24 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     base = "http://127.0.0.1:%d" % (int(relay_srv.port) + 1)   # 0.19.0: we ARE the web relay
                 elif hop:
                     return self._json_cors(508, {"error": "web relay loop (this machine runs no relay)"})
+                path0 = self.path.split("?", 1)[0]
+                if (relay_srv is not None and relay_srv.running() and not getattr(relay_srv, "secured", False)
+                        and base.startswith("http://127.0.0.1:")):
+                    # 0.20.0: an OPEN relay runs no token service. Answer its shape here (200) instead of
+                    # a 502 nobody can read: Cloudflare replaces an origin 502 with its own text page, and
+                    # watch.html took that for "no KASTR here".
+                    self.rfile.read(int(self.headers.get("Content-Length") or 0) or 0)
+                    if path0 == "/api/auth":
+                        return self._json_cors(200, {"app": "KASTR", "secured": False, "codes": False, "legacy": False,
+                                                     "federation": False, "open": True, "relayPort": int(relay_srv.port),
+                                                     "web": int(HTTP_PORT or self.server.server_address[1]),
+                                                     "https": HTTPS_INFO.get("port"), "talking": True, "chat": True, "state": True})
+                    if path0 == "/api/rooms":
+                        st = getattr(relay_srv, "store", None)
+                        return self._json_cors(200, {"rooms": st.rooms_public() if st else [], "groups": st.groups_public() if st else []})
+                    if path0 == "/api/token":
+                        return self._json_cors(200, {"ok": True, "open": True, "role": "member"})
+                    return self._json_cors(503, {"error": "this relay has no access codes (set them on the Relay page)"})
                 target = base + self.path
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else None
@@ -2219,14 +2272,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     hdrs["X-Kastr-Hop"] = "1"
                 req = urllib.request.Request(target, data=body, method=method, headers=hdrs)
                 retry_after = None
-                with urllib.request.urlopen(req, timeout=5) as r:
+                # 0.20.0: a spoke's ban long-poll (GET /api/bans?since=&wait=) may hold for 30 s
+                to = 40 if (method == "GET" and path0 == "/api/bans" and "wait=" in self.path) else 5
+                with urllib.request.urlopen(req, timeout=to) as r:
                     data = r.read()
                     code = r.status
             except urllib.error.HTTPError as e:
                 data = e.read(); code = e.code
                 retry_after = e.headers.get("Retry-After") if e.headers else None   # 0.10.0: lockouts travel through
             except Exception as e:
-                return self._json_cors(502, {"error": "room-code service unreachable: %s" % e})
+                return self._json_cors(503, {"error": "room-code service unreachable: %s" % e})   # 0.20.0: 503, never 502 (Cloudflare swaps 502s)
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
@@ -2499,7 +2554,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     if errs:
                         rec["errors"] = (rec["errors"] + errs)[-20:]
                     msg = "\n".join((errs or rec["errors"])[-5:]) or "ffmpeg produced no output"
-                return self._json_cors(502, {"error": msg[-800:], "copy": v == "copy"})
+                return self._json_cors(503, {"error": msg[-800:], "copy": v == "copy"})
             vc = None
             if rec.get("video"):
                 if v == "copy" and rec["video"] in ("hevc", "h265"):
@@ -2859,6 +2914,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "client": "web" if web else "app",
                 "relay": (self._web_relay_for() if web else None) or page_relay(relay_ref[0] or BUILTIN_RELAY, tls=tls, req_host=req_host, remote=web),
                 "webRelay": bool(web and self._web_relay_for()),   # 0.19.0
+                "openTunnel": bool(web and self._web_relay_for() and not getattr(relay_srv, "secured", False)),   # 0.20.0: warn the visitor
                 "hostMode": MODE,
                 "web": int(HTTP_PORT or self.server.server_address[1]),
                 "https": HTTPS_INFO.get("port"),
@@ -3222,7 +3278,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except urllib.error.HTTPError as e:
                 data, ctype, code = e.read(), e.headers.get("Content-Type") or "text/plain", e.code
             except Exception as e:
-                return self._json_cors(502, {"error": "exporter: %s" % str(e)[:120]})
+                return self._json_cors(503, {"error": "exporter: %s" % str(e)[:120]})
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -3311,7 +3367,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         pass
                     err = " | ".join(getattr(proc, "kastr_errors", [])[-3:]) or "no data from the relay within 12 s (is the broadcast live?)"
                     blog("watch: %s for %s failed -- %s" % (bcast, peer, err[:160]))
-                    return self._json_cors(502, {"error": err[:300]})
+                    return self._json_cors(503, {"error": err[:300]})
                 codecs = _fmp4_codecs(head)
                 mime = 'video/mp4; codecs="%s"' % codecs if codecs else "video/mp4"
                 self.send_response(200)
@@ -3446,7 +3502,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "tunnel": {"origin": "http://localhost:%d" % int(HTTP_PORT or self.server.server_address[1]),
                            "path": kastr_relay.WEB_RELAY_PATH, "pipes": _RELAY_WS[0], "singlePort": SINGLE_PORT,
                            "seen": TUNNEL_SEEN.get("base"),
-                           "seenAgo": (int(time.time() - TUNNEL_SEEN["at"]) if TUNNEL_SEEN.get("at") else None)},
+                           "seenAgo": (int(time.time() - TUNNEL_SEEN["at"]) if TUNNEL_SEEN.get("at") else None),
+                           # 0.20.0: proxied visitors have reached this relay while it had no access codes
+                           "open": bool(TUNNEL_SEEN.get("at") and relay_running and not getattr(relay_srv, "secured", False))},
             })
 
         def _ca_cert(self):

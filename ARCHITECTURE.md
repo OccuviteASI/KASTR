@@ -911,3 +911,25 @@ speculative was later removed (see Decisions).
   module; the pipe uses one select loop and honours `pending()`.
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
+
+### 0.20.0
+
+- **"Open" means something else behind a tunnel.** An open relay trusts its LAN; a tunnel makes the LAN the internet.
+  Refusing would break the operator's test server, so KASTR warns in every place a person looks (card, log, gate)
+  and lets the operator decide. Saved codes are not enforced codes: the relay must run with "Require access codes".
+- **A 502 is not yours to send through Cloudflare.** Cloudflare replaces origin 502/504 with its own text page, so a
+  JSON error on those codes is unreadable by the page. KASTR answers 503 for its own failures and, for an open relay,
+  answers the open shape with 200 instead of failing at all.
+- **Subscribe where you cannot be called.** The hub cannot nudge a spoke behind a tunnel or NAT; the spoke holds one
+  request at the hub instead, answered when the versioned ban list changes. One held thread per spoke on the hub, one
+  connection per spoke, nothing polls: the wait is on a Condition, not a timer.
+- **Un-bans are data too.** A spoke that only copied bans could never lift one; it now mirrors the hub's list for the
+  rows the hub gave it, and keeps its own.
+- **Vendoring is only as good as the import map's position.** A pinned library that the browser never resolves
+  through the map is not pinned. Firefox discards an import map placed after the first module script, and the
+  masthead module sits in the head, so Firefox clients ran whatever esm.sh served that day and broke when it moved.
+  The map is the first script-shaped thing in the head now, and the rig asserts the order.
+- **A cache named after a version needs no invalidation logic.** The worker's cache is `kastr-<version>`; a new build
+  serves a new worker whose activate step deletes the rest. Identity-substituted pages stay network-first so the
+  cache is only ever the offline fallback; `/api/` and `/relay` are never intercepted, so nothing stale can be mistaken
+  for live.

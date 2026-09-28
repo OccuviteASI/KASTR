@@ -837,7 +837,7 @@
         + " UNREACHABLE at launch — clients cannot match versions. The relay-host "
         + "machine needs KASTR running, host = 0.0.0.0 in its kastr.ini, and the "
         + "firewall rules (including “KASTR web”)." + when;
-    } else if (u.status === "failed" || u.status === "no-binary") {
+    } else if (u.status === "failed" || u.status === "no-binary" || u.status === "stale-feed") {   // 0.21.1: the hub offers another version's binary
       el.style.color = "var(--asi-amber, #d9a03f)";
       el.textContent = "Fleet update: " + (u.detail || u.status) + when;
     } else {

@@ -414,6 +414,15 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.1
+
+| Area | Requirement | Since |
+|---|---|---|
+| B | `publish_feed` writes `updates/<plat>/BUILT_VERSION` beside every feed binary and `version` per platform into `latest.json`; `feed_version(folder)`; `colocate_feeds(upd, root, browser, version)` copies the marker and refuses to co-locate a binary whose feed version is not the release; `archive_current` leaves another platform's `updates/<sub>/` out of a zip unless its `BUILT_VERSION` is the release (printed); `--publish-only --rezip` rewrites the host platform's zip. Release ritual: Windows build → Linux build → `build.py --publish-only --rezip`. | 0.21.1 |
+| S | `/api/update/manifest` platforms carry `version` (the running binary's for `sys.executable`, `BUILT_VERSION` beside a co-located binary, `null` for an unversioned file). | 0.21.1 |
+| U | `feed_version_ok(info, theirs)` → `(ok, offered)` (no per-platform version = trusted, as before); `update_from` returns `"stale-feed"` with the note *relay host runs vX but its <plat> binary is vY; staying on vZ (the hub's updates/<sub>/ folder needs the vX <plat> build)* and downloads nothing; `mirror_feeds` skips a mismatched binary (`not mirrored` note) and writes `BUILT_VERSION` beside what it mirrors. Relay page: `stale-feed` in amber. | 0.21.1 |
+| T | `v0211/test_v0211.py` (publish/colocate/archive on a scratch root incl. stale and unversioned co-located binaries; `feed_version_ok`; `update_from` against a fake hub offering the wrong version: `stale-feed`, no binary request); smokes `v0211/smoke_*` check the manifest's per-platform versions. | 0.21.1 |
+
 ### Added in 0.21.0
 
 | Area | Requirement | Since |

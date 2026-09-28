@@ -1114,7 +1114,18 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         h.update(chunk)
                 c = (st.st_mtime, st.st_size, h.hexdigest())
                 _upd_cache[p] = c
-            plats[plat] = {"path": p, "size": c[1], "sha256": c[2]}
+            # 0.21.1: the version beside a co-located binary (build.py writes updates/<sub>/BUILT_VERSION);
+            # the running binary's own version for sys.executable
+            ver = None
+            if frozen and p == sys.executable:
+                ver = read_version()
+            else:
+                try:
+                    with open(os.path.join(os.path.dirname(p), "BUILT_VERSION"), encoding="utf-8-sig") as f:
+                        ver = f.read().strip() or None
+                except OSError:
+                    ver = None
+            plats[plat] = {"path": p, "size": c[1], "sha256": c[2], "version": ver}
 
         frozen = bool(getattr(sys, "frozen", False))
         if frozen:
@@ -3751,7 +3762,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 bf = _browser_feed()   # 0.9.0
                 body = json.dumps({
                     "app": "KASTR", "version": read_version(),
-                    "platforms": {k: {"size": v["size"], "sha256": v["sha256"]}
+                    "platforms": {k: {"size": v["size"], "sha256": v["sha256"], "version": v.get("version")}   # 0.21.1: + version
                                   for k, v in plats.items()},
                     "browser": {"version": bf["version"],
                                 "platforms": {k: {"size": v["size"], "sha256": v["sha256"], "root": v["root"]}

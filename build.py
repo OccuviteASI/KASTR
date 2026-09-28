@@ -328,6 +328,16 @@ def archive_current(version):
                     # release archive; the browser/ folder itself ships.
                     if os.path.basename(root) == "updates":
                         dirs[:] = [d for d in dirs if d != "browser"]
+                        # 0.21.1: another platform's co-located binary ships only when it IS this release
+                        # (the Windows zip, built first, used to carry the previous Linux build)
+                        keep = []
+                        for d in dirs:
+                            fv = feed_version(os.path.join(root, d)) if d in PLATFORMS else version
+                            if d in PLATFORMS and fv != version:
+                                print("  left out of the %s zip: updates/%s is %s, not v%s" % (plat, d, ("v" + fv) if fv else "unversioned", version))
+                            else:
+                                keep.append(d)
+                        dirs[:] = keep
                     if root == folder:
                         dirs[:] = [d for d in dirs if not d.startswith("browser.old-")]
                     # 0.8.6: the co-located update feed (dist/<plat>/updates,
@@ -501,8 +511,13 @@ def publish_feed(version, have, root=None):
         shutil.copyfile(src, dst)
         if plat != "windows":
             os.chmod(dst, 0o755)
+        # 0.21.1: the binary's version travels beside it -- kastr_serve reports it per platform and a client
+        # refuses a binary of another version than the hub runs (the 0.21.0 Windows zip carried the 0.20.0
+        # Linux build; Mendon "updated" to it and came back as 0.20.0)
+        with open(os.path.join(dstdir, BUILT_MARKER), "w", encoding="utf-8", newline=chr(10)) as f:
+            f.write(version + chr(10))
         manifest["platforms"][PLATFORM_API_KEY[plat]] = {"size": os.path.getsize(dst),
-                                                         "sha256": _sha256_file(dst)}
+                                                         "sha256": _sha256_file(dst), "version": version}
     # 0.13.1: a platform folder that is NOT part of this release leaves its
     # previous binary in updates/ -- say so, because the co-location below
     # would ship it beside the fresh ones and a hub serves whatever it holds.
@@ -521,7 +536,16 @@ def publish_feed(version, have, root=None):
     return upd
 
 
-def colocate_feeds(upd, root=None, browser=True):
+def feed_version(folder):
+    """0.21.1: the version recorded beside an update binary (updates/<sub>/BUILT_VERSION), or ""."""
+    try:
+        with open(os.path.join(folder, BUILT_MARKER), encoding="utf-8-sig") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def colocate_feeds(upd, root=None, browser=True, version=None):
     """0.8.4: co-locate the feed INSIDE each app folder so a deployed app is
     a turnkey relay -- kastr_serve serves updates/<sub>/ next to the binary
     (the running platform comes from sys.executable). After the normal
@@ -544,12 +568,21 @@ def colocate_feeds(upd, root=None, browser=True):
             srcbin = os.path.join(upd, sub, fn)
             if not os.path.exists(srcbin):
                 continue
+            fv = feed_version(os.path.join(upd, sub))
+            if version and fv and fv != version:
+                # 0.21.1: never co-locate another release's binary -- the app folder would serve it as this one
+                print("  NOT co-located into dist/%s/updates/%s: the feed's %s binary is v%s, not v%s (build that platform, then --publish-only --rezip)"
+                      % (plat, sub, sub, fv, version))
+                continue
             subdir = os.path.join(dstroot, sub)
             os.makedirs(subdir, exist_ok=True)
             cp = os.path.join(subdir, fn)
             shutil.copyfile(srcbin, cp)
             if sub != "windows":
                 os.chmod(cp, 0o755)
+            if fv:
+                with open(os.path.join(subdir, BUILT_MARKER), "w", encoding="utf-8", newline=chr(10)) as f:
+                    f.write(fv + chr(10))   # 0.21.1
         # 0.9.0: both platforms' browser zips beside the binary, so a KASTR
         # that serves the fleet can hand out the browser folder too
         # (/api/update/browser). From the cache; downloaded when missing.
@@ -598,6 +631,9 @@ def main():
                     help="also refresh dist/updates/ (per-platform binaries + "
                          "latest.json) -- copy that folder next to the relay "
                          "host's KASTR so the fleet can update from it")
+    ap.add_argument("--rezip", action="store_true",
+                    help="with --publish-only: rewrite THIS platform's release zip so it carries the "
+                         "fresh co-located feed (run after the last platform of a release is built)")
     ap.add_argument("--publish-only", action="store_true",
                     help="no compile, no archive: regenerate dist/updates/, "
                          "latest.json and the co-located feeds from every "
@@ -630,7 +666,12 @@ def main():
             sys.exit("nothing to publish for v%s -- no dist/<plat> carries a matching %s and its binary." % (version, BUILT_MARKER))
         check_release_contents(have)
         upd = publish_feed(version, have)
-        colocate_feeds(upd)
+        colocate_feeds(upd, version=version)
+        if args.rezip:
+            # 0.21.1: the zip built first carried the OTHER platform's previous binary; rewrite ours now that
+            # both are fresh (archive_current always rewrites the host platform's own zip)
+            zip_dir, zhave, counts = archive_current(version)
+            print("Re-archived v%s -> %s (%s)" % (version, zip_dir, ", ".join("%s %s" % (p, ("%d files" % counts[p]) if counts[p] is not None else "kept") for p in zhave)))
         print("\nPublished v%s from dist/%s." % (version, ", dist/".join(have)))
         return 0
 
@@ -807,7 +848,7 @@ def main():
     if args.publish:
         # Fleet update feed + co-located copies (0.13.1: see publish_feed /
         # colocate_feeds -- the same code --publish-only runs without a build).
-        colocate_feeds(publish_feed(version, have))
+        colocate_feeds(publish_feed(version, have), version=version)
     prune_archives(protect=version)
 
     # Last of all, and only now that the release is on disk: record that this

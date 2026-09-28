@@ -2,6 +2,26 @@
 
 What changed in each build, newest first.
 
+## v0.21.1 — hotfix: a hub never hands out another release's binary
+
+**Mendon "updated" to 0.21.0 and came back as 0.20.0.** The hub at the public name ran 0.21.0 and its manifest said
+so, but the Linux file in its `updates/linux/` folder was still the 0.20.0 build: releases are built Windows first,
+then Linux, and the Windows zip carried the Linux binary as mirrored at that moment — the previous release's. The
+manifest hashes whatever file the hub holds, so the checksum verified, the spoke swapped, relaunched as 0.20.0, saw
+0.21.0 on the hub again and would have repeated it every hour. Nothing in the chain carried a per-platform version.
+
+Now every update binary travels with its version (`BUILT_VERSION` beside it, written by `build.py --publish` and by
+the hub-to-spoke mirror), the manifest reports a `version` per platform, and a client refuses a binary whose version
+is not the one the hub runs — logging *"relay host runs v0.21.1 but its linux binary is v0.21.0; staying on v0.21.0
+(the hub's updates/linux/ folder needs the v0.21.1 linux build)"*, shown in amber on the Relay page — instead of
+downgrading and looping. A relay box mirroring from its hub skips such a binary the same way. A release zip ships
+another platform's co-located binary only when it is the same release, `--publish-only --rezip` rewrites the first
+platform's zip once the second is built (part of the release ritual now), and the frozen smokes check that every
+platform in the manifest is the release version.
+
+Fixing a hub already holding a stale file: put the right binary in its `updates/<platform>/` folder (a 0.21.1 zip
+carries the right ones), or let it re-mirror from its authority; spokes then update on their next check.
+
 ## v0.21.0 — the field report: phones, media, relay, fleet
 
 Kenton ran 0.19 and 0.20 through the real tunnel at a public name with phones and other people, and filed 36 items.

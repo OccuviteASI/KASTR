@@ -452,6 +452,15 @@ def _probe_authority(base):
     return inst
 
 
+def feed_version_ok(info, theirs):
+    """0.21.1: does this manifest entry offer the version the hub runs? Older hubs send no per-platform
+    version (None -> trusted, as before). Returns (ok, offered)."""
+    offered = str((info or {}).get("version") or "").strip()
+    if not offered:
+        return True, ""
+    return offered == str(theirs or "").strip(), offered
+
+
 def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
     """Download, verify, swap and relaunch as the authority's version.
 
@@ -473,6 +482,16 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
         update_note("no-binary", f"relay host runs v{theirs} but offers no "
                     f"{plat} binary; staying on v{mine}")
         return "no-binary"
+    ok, offered = feed_version_ok(info, theirs)
+    if not ok:
+        # 0.21.1: the hub runs v{theirs} but its updates/<plat>/ holds another build (the 0.21.0 Windows zip
+        # shipped the 0.20.0 Linux binary): downloading it would "update" us to the wrong version and loop
+        sub = {"win32": "windows", "linux": "linux", "darwin": "macos"}.get(plat, plat)
+        msg = (f"relay host runs v{theirs} but its {plat} binary is v{offered}; staying on v{mine} "
+               f"(the hub's updates/{sub}/ folder needs the v{theirs} {plat} build)")
+        print(f"{APP_NAME}: {msg}", flush=True)
+        update_note("stale-feed", msg)
+        return "stale-feed"
     target = exe_path()   # 0.21.0
     tmp = target + ".new"
     print(f"{APP_NAME}: updating v{mine} -> v{theirs} from {base} ...", flush=True)
@@ -1519,6 +1538,10 @@ def mirror_feeds(base, ini, relay=None, app_root=None, sd=None):
         for plat, info in (man.get("platforms") or {}).items():
             if plat == own_platform() or plat not in MIRROR_PLATFORMS or not isinstance(info, dict):
                 continue
+            ok, offered = feed_version_ok(info, man.get("version"))
+            if not ok:   # 0.21.1: never mirror another release's binary from the hub
+                note("update mirror: %s binary at %s is v%s, not v%s -- not mirrored" % (plat, base, offered, man.get("version")))
+                continue
             sub, fn = MIRROR_PLATFORMS[plat]
             plan.append(("%s binary" % plat, base + "/api/update/binary?platform=" + plat,
                          os.path.join(root, "updates", sub, fn), info))
@@ -1550,6 +1573,12 @@ def mirror_feeds(base, ini, relay=None, app_root=None, sd=None):
             try:
                 _mirror_one(url, target, str(info.get("sha256") or ""), info.get("size"))
                 out["mirrored"].append(target)
+                if info.get("version") and label.endswith(" binary"):   # 0.21.1: the version travels with the binary
+                    try:
+                        with open(os.path.join(os.path.dirname(target), "BUILT_VERSION"), "w", encoding="utf-8", newline=chr(10)) as f:
+                            f.write(str(info["version"]).strip() + chr(10))
+                    except OSError:
+                        pass
                 note("update mirror: %s -> %s" % (label, target))
             except Exception as e:
                 out["failed"].append((label, str(e)))

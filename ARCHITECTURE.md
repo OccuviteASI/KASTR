@@ -912,6 +912,13 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.1
+
+- **A checksum proves integrity, not identity.** The manifest hashed whatever file the hub held, so a stale binary
+  verified perfectly and a spoke "updated" to an older build. The version must travel with the file and be checked
+  against the version the hub claims — by the client, by the mirror and by the packaging step, so the wrong file is
+  refused at every hop instead of trusted because it arrived intact.
+
 ### 0.21.0
 
 - **A fragmented MP4 from ffmpeg starts at zero.** Whatever `-ss` and `-copyts` say, movenc writes every track's

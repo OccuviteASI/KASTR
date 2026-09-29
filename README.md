@@ -29,6 +29,11 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.5 phones get the layout they were promised (the phone rules now win the cascade), an iPhone camera goes out
+upright (the canvas loop runs wherever WebKit would lose the orientation), an RTSP grid rebuilds only on its own evidence
+instead of on any viewer's stall report, a dead camera leaves the grid on its monitor's ladder, and an open spoke says
+why it is not registering with the hub.
+
 Since 0.21.0 phones get the phone layout in portrait and landscape (every menu a bottom sheet, camera rotate and mirror),
 shared media files scrub without restarting and the sharer hears them ("Hear it myself"), every shared file gets a
 resolution picker, the latency stamp is a thin strip in the bottom-right corner, a spotlight follows the participant,

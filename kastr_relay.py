@@ -2236,6 +2236,7 @@ class Relay:
         self._fed_stop = None
         self._fed_active = None
         self._fed_last_reason = None
+        self._spoke_last_reason = None                  # 0.21.5: registered-with-the-hub state, said once per change
         self.proc = None
         self.port = 4443
         self.bind_all = False
@@ -2606,9 +2607,12 @@ class Relay:
 
     def _fed_cache(self):
         d, _why = load_json(self._fed_cache_file(), None, "relay-federation.json")   # 0.21.0
-        return d if isinstance(d, dict) else {}
+        if isinstance(d, dict) and d:
+            return d
+        return dict(getattr(self, "_fed_mem", None) or {})   # 0.21.5: the copy in memory when the file cannot be written
 
     def _fed_cache_write(self, d):
+        self._fed_mem = dict(d) if isinstance(d, dict) else None   # 0.21.5: an unwritable cache used to mint + restart every check
         if not save_json(self._fed_cache_file(), d, None, backup=False):   # 0.21.0
             self.log("relay federation: could not cache the hub token")
 
@@ -2616,6 +2620,20 @@ class Relay:
         if why != self._fed_last_reason:
             self._fed_last_reason = why
             self.log("relay federation: " + why)
+
+    def _spoke_state(self, registered, why):
+        """0.21.5: remember, and say once per change, whether this relay is registered with its hub. An open
+        spoke never registered and never said so -- its box was simply missing from the hub's spokes table."""
+        import time as _t
+        try:
+            if isinstance(self.federation, dict):
+                self.federation["spoke"] = {"registered": bool(registered), "why": why, "at": int(_t.time())}
+            key = ("ok " if registered else "no ") + why
+            if key != self._spoke_last_reason:
+                self._spoke_last_reason = key
+                self.log("relay federation: " + why if registered else "relay federation: not registering with the hub: " + why)
+        except Exception:
+            pass
 
     def hub_auth(self, hub):
         """GET <hub minter>/api/auth -> dict, {} when it is not a KASTR minter,
@@ -2791,7 +2809,18 @@ class Relay:
         auth = self.auth
         tok = self._fed_active
         minter = self._hub_minter_url()
+        if not (isinstance(self.federation, dict) and self.federation.get("hub")):
+            return                                  # no hub saved: nothing to register with
         if not (auth and tok and minter):
+            # 0.21.5: say why (once per reason) instead of returning in silence
+            if not auth:
+                why = ("this relay runs open (no access codes) -- the hub's spokes table will not list it and hub commands "
+                       "cannot reach it; media still flows over the cluster link. Tick \"Require access codes\" to register")
+            elif not tok:
+                why = "no hub federation token (%s)" % (self.federation.get("reason") or "?")
+            else:
+                why = "the hub's minter address is unknown"
+            self._spoke_state(False, why)
             return
         my_minter = ""
         if self.bind_all:
@@ -2816,8 +2845,10 @@ class Relay:
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
             with urllib.request.urlopen(req, timeout=4):
                 pass
+            self._spoke_state(True, "registered with the hub as %s" % name)   # 0.21.5
         except Exception as e:
             self.log("relay federation: spoke registration with the hub failed: %s" % str(e)[:120])
+            self._spoke_state(False, "registration failed: %s" % str(e)[:80])   # 0.21.5
         try:
             auth.pull_hub_bans()
         except Exception:
@@ -2950,6 +2981,7 @@ class Relay:
             cur["fingerprint"] = None    # 0.16.0: a new hub is pinned afresh
         save_json(self._cluster_file(), cur, self.log)   # 0.21.0
         self._fed_last_reason = None          # say the new situation out loud once
+        self._spoke_last_reason = None        # 0.21.5
         # A running relay picks the change up by restarting with its own shape.
         restarted = self._restart()
         return {"ok": True, "connect": cur["connect"], "master": cur["master"],
@@ -3679,7 +3711,8 @@ def handle_api(handler, relay, path, set_relay_url=None):
                "auth": ({"up": bool(st.get("authUp")), **{k: auth.get(k) for k in ("sessions", "publishers", "grants", "refusals", "ended", "lastRefusal")}}
                         if st.get("secured") else {"up": None}),
                "federation": ({"hub": (st.get("federation") or {}).get("hub"), "token": (st.get("federation") or {}).get("token"),
-                               "tls": (st.get("federation") or {}).get("tls"), "fingerprint": (st.get("federation") or {}).get("fingerprint")}
+                               "tls": (st.get("federation") or {}).get("tls"), "fingerprint": (st.get("federation") or {}).get("fingerprint"),
+                               "spoke": (st.get("federation") or {}).get("spoke")}   # 0.21.5: registered with the hub?
                               if st.get("federation") else None),
                "lan": st.get("lan"), "pairs": pairs, "helpers": helpers})
         return True

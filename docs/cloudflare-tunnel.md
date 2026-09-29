@@ -82,6 +82,11 @@ codes on the Relay page **and start the relay with "Require access codes"** — 
 
 ## Kicks and spokes behind a tunnel
 
+A spoke registers with the hub only when its own relay runs **secured** (access codes required) and holds a hub
+federation token. Since 0.21.5 a spoke that cannot register says why in launch.log and on its Relay page ("not registering
+with the hub: this relay runs open …"); media still flows over the cluster link either way, but hub commands, ban fan-out
+and the hub's spokes table need the registration.
+
 Since 0.20.0 a spoke keeps one request held at the hub for ban changes, so a kick on the hub reaches a spoke behind a
 tunnel or NAT in about a second (measured 0–2 s on the rig), and a ban cleared on the hub is lifted on the spokes.
 

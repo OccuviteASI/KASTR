@@ -505,7 +505,8 @@
       else if (f && f.token) {
         fs.textContent = "Hub token OK" + (f.exp ? " \u2014 renews before " + new Date((f.exp - 7 * 86400) * 1000).toLocaleDateString() : "") + "."
           + (f.tls === "pinned" ? " Certificate pinned." : f.tls === "pinned-cached" ? " Certificate pinned (cached)." : f.tls === "insecure" ? " Certificate NOT verified." : "");   // 0.16.0
-        fs.style.color = f.tls === "insecure" ? "var(--asi-amber)" : "var(--asi-green)";
+        if (f.spoke) fs.textContent += f.spoke.registered ? " Registered with the hub." : " Not registered with the hub: " + f.spoke.why + ".";   // 0.21.5
+        fs.style.color = f.tls === "insecure" || (f.spoke && !f.spoke.registered) ? "var(--asi-amber)" : "var(--asi-green)";
       } else if (f) {
         fs.textContent = "No hub token: " + (f.reason || "?") + (f.hubCodes && !s.cluster.hasCode ? " Paste the federation code from the hub's Relay page." : "");
         fs.style.color = f.hubCodes ? "var(--asi-red)" : "var(--asi-amber)";
@@ -1016,7 +1017,8 @@
     else if (!a.up) { ha.textContent = "DOWN \u2014 the relay admits no session until it answers"; ha.style.color = "var(--asi-red)"; }
     else { ha.textContent = "up \u2014 " + (a.sessions ?? 0) + " sessions (" + (a.publishers ?? 0) + " publishing), " + (a.grants ?? 0) + " grants, " + (a.refusals ?? 0) + " refusals"
       + (a.lastRefusal ? " \u2014 last: " + a.lastRefusal.remote + " (" + a.lastRefusal.why + ")" : ""); ha.style.color = a.refusals ? "var(--asi-amber)" : "var(--asi-green)"; }
-    $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : "NOT verified")) : "standalone";
+    $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : "NOT verified")
+      + (f.spoke ? (f.spoke.registered ? ", registered" : ", not registered (" + String(f.spoke.why || "").split(" -- ")[0] + ")") : "")) : "standalone";   // 0.21.5: registered with the hub?
     $("hLan").textContent = l.enabled ? ("enabled" + (l.hasSecret ? " with a secret" : " (OPEN \u2014 no secret)") + (l.active ? "" : " \u2014 not active (loopback relay, or a secured relay without a secret)")) : "off";
     const pairs = h.pairs || [];
     $("hPairs").textContent = pairs.length ? (pairs.filter((p) => p.running).length + " running, " + pairs.filter((p) => p.parked).length + " parked of " + pairs.length) : "none on this machine";

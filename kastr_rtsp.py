@@ -2754,7 +2754,7 @@ def handle_api(handler, bridge, path):
         return True
 
     if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge",
-                "/api/rtsp/keep", "/api/rtsp/persist"):   # 0.12.0: keep, persist
+                "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note"):   # 0.12.0: keep, persist; 0.21.5: note
         # 0.9.1: local pages only -- these start processes and name relays
         if not from_loopback():
             reply({"error": "publishing is controlled from the machine itself"}, 403)
@@ -2792,6 +2792,11 @@ def handle_api(handler, bridge, path):
                     raise ValueError("relay must be an http(s) url")
                 bridge.set_session(room, payload.get("access"), payload.get("roomCode"), relay)
                 reply(bridge.session_public())
+            elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
+                text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:240]
+                if text:
+                    bridge.log("page: " + text)
+                reply({"ok": bool(text)})
             else:
                 why = str(payload.get("why") or "api").strip()[:32] or "api"   # 0.13.1
                 reply({"ok": bridge.nudge(payload.get("id"), why)})

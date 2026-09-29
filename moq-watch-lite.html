@@ -156,6 +156,7 @@
     background:var(--surface); border:1px solid var(--line); border-radius:6px;
     box-shadow:0 12px 32px rgba(0,0,0,.5); padding:4px;
     max-height:calc(100vh - 16px); overflow-y:auto; overscroll-behavior:contain;   /* 0.16.0: a small window scrolls the menu instead of clipping it */
+    max-height:calc(100dvh - 16px);   /* 0.21.5: iOS Safari's vh includes the hidden address bar */
   }
   #mineMenu .msep { border-top:1px solid var(--line); margin:3px 0; }
   #mineMenu.roomform { min-width:260px; padding:8px; }   /* 0.21.0: the "+" bubble */
@@ -421,6 +422,7 @@
   #filesPop { width:min(420px, 92vw); }
   /* 0.12.0: room chat */
   #chatPanel { width:min(380px, calc(100vw - 24px)); height:min(78vh, 720px); max-height:min(78vh, 720px); }
+  #chatPanel { height:min(78dvh, 720px); max-height:min(78dvh, 720px); }   /* 0.21.5 */
   #chatPanel .head .sub { color:var(--text-mute); text-transform:none; letter-spacing:0; font-weight:400; font-family:var(--font-mono); }
   #chatLog { display:flex; flex-direction:column; gap:1px; padding:8px 10px; scroll-behavior:smooth; }
   .cmsg { display:flex; flex-direction:column; gap:1px; padding:4px 0 2px; }
@@ -550,58 +552,8 @@
     z-index:85; padding:12px 18px; border-radius:999px; font-size:13px; font-weight:600; border:0; cursor:pointer;
     background:var(--asi-blue); color:#06121a; box-shadow:0 8px 26px rgba(0,0,0,.5); }
   #tapUnmute[hidden] { display:none; }
-  /* ==== 0.8.9 phone layout (standalone on iPhone/Android) ==================== */
-  @media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: a landscape phone is a phone too */
-    body.asi { height:100dvh; }
-    main.asi-page { padding:6px 8px calc(6px + env(safe-area-inset-bottom)); }
-    button, .tb, .tchev, .opt, .rd { touch-action:manipulation; }
-    input, select, textarea { font-size:16px; }
-    #topbar { gap:6px; padding:2px 0 6px; margin-bottom:6px; }
-    #topbar .sp { flex:1 0 100%; height:0; }
-    #topbar .tb { width:40px; height:40px; gap:0; padding:0; }
-    #topbar .tb .lbl { display:none; }
-    #topbar .tb .icon { width:22px; height:22px; }
-    #topbar .tbgrp .tb { width:38px; }
-    #topbar .tchev { width:16px; height:40px; }
-    #topbar .tbdiv, #topbar #filesBtn { display:none; }
-    #topbar #leaveBtn.tb { width:44px; margin-left:auto; }
-    #roomBanner { max-width:min(62vw, 260px); }   /* 0.13.3: the ellipsis lives on .rbname */
-    /* 0.12.0: phones -- the sidebar is a drawer over the page (never the collapsed rail) */
-    main.asi-page { flex-direction:column; }
-    :root, body.sb-collapsed { --sbw:0px; }
-    #joinGate { left:0; }
-    #sidebar, body.sb-collapsed #sidebar { position:fixed; left:0; top:0; bottom:0; width:min(82vw, 300px); margin:0; padding:10px 10px calc(10px + env(safe-area-inset-bottom));
-      background:var(--surface); border-right:1px solid var(--line); z-index:82; transform:translateX(calc(-100% - 2px)); transition:transform .18s ease; }
-    body.sb-open #sidebar { transform:none; }
-    body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
-    body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
-    body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
-    body.sb-collapsed .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
-    body.sb-collapsed .sbgroup { height:28px; padding:0 4px; margin-top:4px; gap:5px; justify-content:flex-start; border-top:0; border-radius:6px; }   /* 0.15.0 (B4) */
-    body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:revert; }
-    body.sb-collapsed .sbgroup .gchip { display:none; }
-    .popcard, #sharePop, #peoplePanel, #mineMenu { top:auto !important; bottom:0; left:0 !important; right:0;
-      width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
-    #mineMenu { min-width:0; padding-bottom:calc(6px + env(safe-area-inset-bottom)); }   /* 0.21.0: the chevron/room menus are sheets too */
-    #sharePop { height:min(760px, 80dvh); }
-    #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #mobilePop, #profilePop, #chatPanel { width:100vw; }
-    #chatPanel { height:min(78dvh, 720px); }
-    #profilePop.modal { top:auto !important; left:0 !important; transform:none; }
-    .popcard .body, #sharePop .body, #peoplePanel .pbody { padding-bottom:calc(12px + env(safe-area-inset-bottom)); }
-    .popcard .head .close { min-width:36px; height:32px; }
-    .popcard.teams .rd, .popcard .opt { padding:11px 10px; }
-    #joinGate { padding:0; align-items:flex-end; }
-    #joinGate .card { width:100vw; max-height:92dvh; border-radius:12px 12px 0 0; padding:16px 14px calc(16px + env(safe-area-inset-bottom)); }
-    #stagewrap:has(> #stage.collage) { overflow-y:auto; }
-    #stage.collage { height:auto; min-height:100%; align-content:start; }
-    #stage.collage .pane { touch-action:pan-y; }
-    #railGrip, #railPager { display:none !important; }
-    #stage .pubpane.screenkind { display:none !important; }   /* 0.8.12: phones cannot share a screen */
-    .pchev { width:32px; height:32px; }
-    #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
-    #stageBack { top:auto; bottom:8px; }
-  }
   #fileResPop { top:18vh !important; left:50% !important; transform:translateX(-50%); width:min(440px, calc(100vw - 24px)); }
+  #fileResPop { top:18dvh !important; }   /* 0.21.5 */
   #fileResPop .f select { width:100%; }
   /* 0.21.0: idle chrome (see idleShow) -- two ids beat every hover/phone rule above */
   #stagewrap.idle #stage .pane .mediabar, #stagewrap.idle #stage .pubpane .mediabar,
@@ -612,13 +564,6 @@
   #stagewrap.idle #stage.spot .pane.mainstage, #stagewrap.idle #stage.spot .pubpane.mainstage { cursor:none; }
   #stagewrap.idle #stage .pubpane.warnstate .bar { opacity:1 !important; pointer-events:auto; }
   .mediabar .mhear { opacity:.45; } .mediabar .mhear.on { opacity:1; }
-  /* 0.21.0: landscape phone -- one topbar row, sheets that fit a ~375 px tall viewport */
-  @media (max-height: 500px) and (min-width: 600px) {
-    .popcard, #sharePop, #peoplePanel, #mineMenu { max-height:calc(100dvh - 48px) !important; }
-    #sharePop { height:calc(100dvh - 48px) !important; }
-    #chatPanel { height:calc(100dvh - 48px) !important; max-height:none; }
-    #joinGate .card { max-height:100dvh; overflow-y:auto; }
-  }
   /* 0.21.0: shared surface tokens on the page's own popovers */
   .popcard, #sharePop, #mineMenu { box-shadow:var(--shadow-pop, 0 12px 32px rgba(0,0,0,.5)); }
   /* 0.18.0: on-demand cameras (chips above the stage) + the latency-stamp badge */
@@ -633,7 +578,7 @@
   @media (hover: none) {
     #stage .pubpane .bar, #stage .pchev { opacity:1; pointer-events:auto; }
     #stage .pane .zoomctl, #stage .pubpane .zoomctl { opacity:1; }          /* 0.17.0: no hover on a phone */
-    #stage .pane.mainstage, #stage .pubpane.mainstage { touch-action:none; } /* 0.17.0: two fingers zoom the stage */
+    #stage .pane.mainstage.zoomable, #stage .pubpane.mainstage[data-grid], #stage .pubpane.mainstage[data-zoom] { touch-action:none; } /* 0.17.0: two fingers zoom the stage; 0.21.5: only where the stage zoom applies -- a camera keeps native scroll and pinch */
   }
   /* 0.8.7: recording save dialog + RTSP grid layout menu + People files */
   #recSave { position:fixed; left:50%; top:22%; transform:translateX(-50%); z-index:80; width:min(440px, 92vw); }
@@ -820,6 +765,7 @@
     position:fixed; z-index:70; top:0; left:0;
     width:min(560px, calc(100vw - 24px));
     height:min(760px, calc(100vh - 90px));
+    height:min(760px, calc(100dvh - 90px));   /* 0.21.5 */
     background:var(--surface); border:1px solid var(--asi-blue-dim);
     border-radius:var(--radius); box-shadow:0 18px 48px rgba(0,0,0,.6);
     display:flex; flex-direction:column; overflow:hidden;
@@ -922,6 +868,7 @@
     position:fixed; z-index:70; top:0; left:0;
     width:min(400px, calc(100vw - 24px));
     max-height:min(72vh, 600px);
+    max-height:min(72dvh, 600px);   /* 0.21.5 */
     background:var(--surface); border:1px solid var(--asi-blue-dim);
     border-radius:var(--radius); box-shadow:0 18px 48px rgba(0,0,0,.6);
     display:flex; flex-direction:column; overflow:hidden;
@@ -1036,7 +983,7 @@
   #sbGrip:hover, #sbGrip.dragging { background:var(--asi-blue-glow); }
   #sidebar.resizing { transition:none; }
   body.sb-collapsed #sbGrip { display:none; }
-  @media (max-width: 720px) { #sbGrip { display:none; } }
+  @media (max-width: 720px), (max-height: 500px) { #sbGrip { display:none; } }   /* 0.21.5: landscape phones too (it was visible but dead there) */
   .sbcard .sbrow { display:flex; align-items:center; gap:7px; min-width:0; }
   .sbcard .sbx { margin-left:auto; flex:none; background:transparent; border:0; color:var(--text-mute); cursor:pointer; font-size:11px; padding:0 4px; height:auto; visibility:hidden; }   /* 0.21.2 */
   .sbcard:hover .sbx, .sbcard .sbx:focus-visible { visibility:visible; }
@@ -1206,7 +1153,7 @@
   #joinGate #joinKeepRow[hidden] { display:none; }
   #bootFail { background:var(--asi-red); color:#fff; padding:10px 12px; border-radius:6px; margin-bottom:10px; font-size:13px; line-height:1.4; }
   #bootFail button { margin-left:8px; padding:3px 10px; border-radius:5px; border:1px solid rgba(255,255,255,.6); background:transparent; color:#fff; cursor:pointer; }
-  #joinGate .card { width:min(460px, 96vw); max-height:92vh; overflow-y:auto;
+  #joinGate .card { width:min(460px, 96vw); max-height:92vh; max-height:92dvh; overflow-y:auto;   /* 0.21.5: dvh */
     background:var(--surface); border:1px solid var(--asi-blue-dim);
     border-radius:var(--radius); box-shadow:0 18px 48px rgba(0,0,0,.6); padding:18px; }
   #joinGate h2 { margin:0 0 12px; font-size:15px; }
@@ -1273,6 +1220,67 @@
     align-items:center; justify-content:center; padding:0; cursor:pointer; }
   #joinPreview .jctl button .icon { width:20px; height:20px; }
   #joinPreview .jctl button.off { background:var(--asi-red); border-color:var(--asi-red); color:#fff; }
+  /* 0.21.5: the two phone blocks sit LAST on purpose -- they used to come before the base layout (lines ~800-1250), whose equal-specificity rules for the same selectors won the cascade and undid the phone layout on every phone */
+  /* ==== 0.8.9 phone layout (standalone on iPhone/Android) ==================== */
+  @media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: a landscape phone is a phone too */
+    body.asi { height:100dvh; }
+    main.asi-page { padding:6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }   /* 0.21.5: side insets (the notch in landscape) */
+    button, .tb, .tchev, .opt, .rd { touch-action:manipulation; }
+    input, select, textarea { font-size:16px !important; }   /* 0.21.5: under 16 px iOS zooms into the field and never zooms back; the base rules say 11-13 px */
+    #topbar { gap:6px; padding:2px 0 6px; margin-bottom:6px; }
+    #topbar .sp { flex:1 0 100%; height:0; }
+    #topbar .tb { width:40px; height:40px; gap:0; padding:0; }
+    #topbar .tb .lbl { display:none; }
+    #topbar .tb .icon { width:22px; height:22px; }
+    #topbar .tbgrp .tb { width:38px; }
+    #topbar .tchev { width:16px; height:40px; }
+    #topbar .tbdiv, #topbar #filesBtn { display:none; }
+    #topbar #leaveBtn.tb { width:44px; margin-left:auto; }
+    #roomBanner { max-width:min(62vw, 260px); }   /* 0.13.3: the ellipsis lives on .rbname */
+    /* 0.12.0: phones -- the sidebar is a drawer over the page (never the collapsed rail) */
+    main.asi-page { flex-direction:column; }
+    :root, body.sb-collapsed { --sbw:0px; }
+    #joinGate { left:0; }
+    #sidebar, body.sb-collapsed #sidebar { position:fixed; left:0; top:0; bottom:0; width:min(82vw, 300px); margin:0; padding:10px 10px calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+      background:var(--surface); border-right:1px solid var(--line); z-index:82; transform:translateX(calc(-100% - 2px)); transition:transform .18s ease; }
+    body.sb-open #sidebar { transform:none; }
+    body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
+    body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
+    body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
+    body.sb-collapsed .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
+    body.sb-collapsed .sbgroup { height:28px; padding:0 4px; margin-top:4px; gap:5px; justify-content:flex-start; border-top:0; border-radius:6px; }   /* 0.15.0 (B4) */
+    body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:revert; }
+    body.sb-collapsed .sbgroup .gchip { display:none; }
+    .popcard, #sharePop, #peoplePanel, #mineMenu { top:auto !important; bottom:0; left:0 !important; right:0;
+      width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
+    #mineMenu { min-width:0; padding-bottom:calc(6px + env(safe-area-inset-bottom)); }   /* 0.21.0: the chevron/room menus are sheets too */
+    #sharePop { height:min(760px, 80dvh); }
+    #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #mobilePop, #profilePop, #chatPanel { width:100vw; }
+    #chatPanel { height:min(78dvh, 720px); }
+    #profilePop.modal { top:auto !important; left:0 !important; transform:none; }
+    .popcard .body, #sharePop .body, #peoplePanel .pbody { padding-bottom:calc(12px + env(safe-area-inset-bottom)); }
+    .popcard .head .close { min-width:36px; height:32px; }
+    .popcard.teams .rd, .popcard .opt { padding:11px 10px; }
+    #joinGate { padding:0; align-items:flex-end; }
+    #joinGate .card { width:100vw; max-height:92dvh; border-radius:12px 12px 0 0; padding:16px max(14px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
+    #stagewrap:has(> #stage.collage) { overflow-y:auto; }
+    #stage.collage { height:auto; min-height:100%; align-content:start; }
+    #stage.collage .pane { touch-action:pan-y; }
+    #railGrip, #railPager { display:none !important; }
+    #stage .pubpane.screenkind { display:none !important; }   /* 0.8.12: phones cannot share a screen */
+    .pchev { width:32px; height:32px; }
+    #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
+    #stageBack { top:auto; bottom:8px; }
+    #stagewrap, .sbrooms, .popcard .body, #sharePop .body, #peoplePanel .pbody { overscroll-behavior:contain; }   /* 0.21.5: no rubber-band reveal of the page behind a sheet */
+  }
+  /* 0.21.0: landscape phone -- one topbar row, sheets that fit a ~375 px tall viewport */
+  @media (max-height: 500px) and (min-width: 600px) {
+    .popcard, #sharePop, #peoplePanel, #mineMenu { max-height:calc(100dvh - 48px) !important; }
+    #sharePop { height:calc(100dvh - 48px) !important; }
+    #chatPanel { height:calc(100dvh - 48px) !important; max-height:none; }
+    #joinGate .card { max-height:100dvh; overflow-y:auto; }
+    #topbar .sp { flex:1; height:auto; }   /* 0.21.5: one toolbar row in landscape (the phone block above forces a second row for portrait) */
+  }
 </style>
 </head>
 <body class="asi">
@@ -1711,7 +1719,7 @@
     <div class="sw"><span>Adjust brightness</span><label class="switch"><input type="checkbox" id="fxBright"><i></i></label></div>
     <div class="sw"><span>Soft focus</span><label class="switch"><input type="checkbox" id="fxSoft"><i></i></label></div>
     <!-- 0.21.0: phones deliver sideways frames -- rotate and mirror the camera before it leaves this device -->
-    <div class="sw"><span>Rotate</span><div class="seg" id="fxRot" role="radiogroup" aria-label="Rotate the camera">
+    <div class="sw"><span>Rotate<small id="fxRotHint" hidden>Auto-upright on this phone; Rotate adds to it</small></span><div class="seg" id="fxRot" role="radiogroup" aria-label="Rotate the camera">
       <button type="button" data-rot="0">0&deg;</button><button type="button" data-rot="90">90&deg;</button>
       <button type="button" data-rot="180">180&deg;</button><button type="button" data-rot="270">270&deg;</button></div></div>
     <div class="sw"><span>Mirror</span><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label></div>
@@ -1979,7 +1987,7 @@
   // 0.13.0 (F3): the rooms sidebar starts COLLAPSED unless the toggle saved
   // "1". Set here, before the module graph loads, so the wide sidebar never
   // flashes; phones neutralise sb-collapsed in CSS and keep their drawer.
-  try { if (localStorage.getItem("kastr.sidebar") !== "1") document.body.classList.add("sb-collapsed"); } catch {}
+  try { if (localStorage.getItem("kastr.sidebar") !== "1" || matchMedia("(max-width: 720px), (max-height: 500px)").matches) document.body.classList.add("sb-collapsed"); } catch {}   // 0.21.5: a phone always starts collapsed (its drawer keys off sb-collapsed; keep the query in sync with PHONE_MQ)
   // 0.13.1: the operator's open width, before the first paint
   try { const w = Number(localStorage.getItem("kastr.sidebar.w")); if (w >= 180 && w <= 440) document.documentElement.style.setProperty("--sbw-open", w + "px"); } catch {}
   // 0.8.13: boot watchdog. If a module never finishes starting (a missing
@@ -4096,6 +4104,17 @@
   const idleHide = () => { if (idleBusy()) { idleT = setTimeout(idleHide, 1000); return; } stageWrap.classList.add("idle"); };
   const idleShow = () => { stageWrap.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(idleHide, IDLE_MS); };
   for (const ev of ["pointermove", "pointerdown", "wheel"]) stageWrap.addEventListener(ev, idleShow, { passive: true });
+  // 0.21.5: a touch on a hidden control (pointer-events:none while idle) fell through to the tile underneath
+  // and switched the spotlight; the first tap only wakes the controls (mouse never enters this path)
+  let idleSwallowUntil = 0;
+  stageWrap.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" || !stageWrap.classList.contains("idle")) return;
+    for (const el of stageWrap.querySelectorAll(IDLE_CTL)) {
+      const r = el.getBoundingClientRect();
+      if (r.width && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { idleSwallowUntil = performance.now() + 700; break; }
+    }
+  }, { capture: true, passive: true });
+  stageWrap.addEventListener("click", (e) => { if (performance.now() < idleSwallowUntil) { idleSwallowUntil = 0; e.stopPropagation(); e.preventDefault(); } }, true);
   document.addEventListener("keydown", idleShow);
   stageWrap.addEventListener("pointerover", (e) => { idleOver = !!e.target.closest?.(IDLE_CTL); });
   stageWrap.addEventListener("pointerleave", () => { idleOver = false; });
@@ -4451,7 +4470,7 @@
       const gaps = 8;
       let tw = Math.floor((W - (best + 1) * gaps) / best);
       const th = Math.floor((H - (rows + 1) * gaps) / rows);
-      tw = Math.max(140, Math.min(tw, Math.floor(th * 16 / 9)));
+      tw = Math.max(140, isPhone() ? tw : Math.min(tw, Math.floor(th * 16 / 9)));   // 0.21.5: a phone's single column is full width and scrolls; the height budget shrank it to 140-265 px
       // 0.8.8: fine tracks -- two half-tracks + one gap per tile -- so a short
       // last row can start one half-tile in and sit centred (placement below).
       stageEl.style.gridTemplateColumns = "repeat(" + (best * 2) + ", " + ((tw - gaps) / 2) + "px)";
@@ -4509,7 +4528,7 @@
       if (railPage >= pages) railPage = pages - 1;
       if (railPage < 0) railPage = 0;
       const pagerH = pages > 1 ? 40 : 0;
-      const railH = Math.max(64, Math.floor((H - pagerH - 8 * (railRows + 1)) / railRows));   // 0.8.6: rows fill the stage -- no bottom gap
+      const railH = Math.max(railOff ? 0 : 64, Math.floor((H - pagerH - 8 * (railRows + 1)) / railRows));   // 0.8.6: rows fill the stage -- no bottom gap; 0.21.5: no 64 px floor without a rail (phone landscape: 4 x 64 overflowed a ~210 px stage)
       stageEl.style.gridAutoRows = railH + "px";
       stageEl.style.gridTemplateRows = "repeat(" + railRows + ", " + railH + "px)"
         + (pages > 1 ? " 32px" : "");
@@ -6794,6 +6813,18 @@
              rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror };   // 0.21.0: phone cameras
   }
   camFx = normalizeCamFx(camFx);
+  // 0.21.5: on a device whose camera runs the upright loop (WebKit), a Rotate saved before 0.21.5 was
+  // compensating for the sideways picture -- it would now turn an upright picture sideways. Reset it once.
+  (() => {
+    const fix = () => {
+      if (!window.__frameLoop?.needed) return;
+      let done = null; try { done = localStorage.getItem("kastr.camfx.upright"); } catch {}
+      if (done === "1") return;
+      try { localStorage.setItem("kastr.camfx.upright", "1"); } catch {}
+      if (camFx.rot) { camFx.rot = 0; pushCamFx(); try { if (camPop && !camPop.hidden) paintCamPop(); } catch {} }
+    };
+    if (window.__frameLoop?.done) fix(); else window.addEventListener("kastr:frameloop", fix, { once: true });
+  })();
   const camFxActive = (fx) => !!fx && ((fx.bg?.mode || "none") !== "none" || !!fx.bright || !!fx.soft || !!fx.rot || !!fx.mirror);
   // ---- 0.15.0: built-in animated scenes (assets/bg/manifest.json, fetched once) -------------
   let bgScenes = null, bgScenesReq = null;
@@ -7032,6 +7063,7 @@
     document.getElementById("fxBright").checked = !!camFx.bright;
     document.getElementById("fxSoft").checked = !!camFx.soft;
     for (const b of document.querySelectorAll("#fxRot button")) b.classList.toggle("on", Number(b.dataset.rot) === (camFx.rot || 0));   // 0.21.0
+    { const h = document.getElementById("fxRotHint"); if (h) h.hidden = !window.__frameLoop?.needed; }   // 0.21.5
     document.getElementById("fxMirror").checked = !!camFx.mirror;
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
@@ -7998,6 +8030,40 @@
   window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));
   window.__stampRead = (canvas) => stampRead({ canvas });   // 0.21.0 rig: decode any canvas
   window.__latencyStamp = (() => { try { return localStorage.getItem("kastr.latencyStamp") === "1"; } catch { return false; } })();
+  // 0.21.5: does the publisher library take camera frames through its <video> polyfill? It does wherever
+  // MediaStreamTrackProcessor is missing on the main thread AND in a worker (WebKit: Safari and every iOS
+  // browser). Those frames keep the sensor's orientation and lose the rotation tag, so an iPhone camera
+  // went out sideways to every viewer. The light canvas loop fixes it (drawImage applies the orientation):
+  // "needed" says so -- on WebKit only: Firefox lacks the processor too (its polyfill path draws upright frames on
+  // a desktop) and Chromium has it on the main thread. localStorage kastr.frameLoop = "1" / "0" forces either way
+  // (rig + field escape hatch).
+  window.__frameLoop = { needed: false, why: "probe", main: "MediaStreamTrackProcessor" in self, worker: null, done: false };
+  (() => {
+    const fl = window.__frameLoop;
+    const settle = (needed, why) => {
+      fl.needed = !!needed; fl.why = why; fl.done = true;
+      try { const h = document.getElementById("fxRotHint"); if (h) h.hidden = !fl.needed; } catch {}   // the Camera menu's hint, right before the menu ever paints
+      try { window.dispatchEvent(new CustomEvent("kastr:frameloop", { detail: { needed: fl.needed, why } })); } catch {}
+      if (fl.needed) { try { window.__publisher?.refx?.(); } catch {} }   // a camera that started before the probe finished
+    };
+    let forced = null;
+    try { forced = localStorage.getItem("kastr.frameLoop"); } catch {}
+    if (forced === "1" || forced === "0") { settle(forced === "1", "forced"); return; }
+    if (fl.main) { settle(false, "main"); return; }
+    const ua = navigator.userAgent || "";
+    const webkitUa = /AppleWebKit/.test(ua) && !/Chrom|Edg\//.test(ua) && !/Firefox\//.test(ua);
+    fl.webkit = webkitUa;
+    if (!webkitUa) { settle(false, "engine"); return; }   // not WebKit: whatever the worker says, its frames are upright
+    let w = null, tm = null, url = null;
+    const fallback = () => { clearTimeout(tm); try { w?.terminate?.(); } catch {} settle(webkitUa, "ua"); };
+    try {
+      url = URL.createObjectURL(new Blob(['postMessage("MediaStreamTrackProcessor" in self);'], { type: "text/javascript" }));
+      w = new Worker(url);
+      tm = setTimeout(fallback, 1500);
+      w.onmessage = (e) => { clearTimeout(tm); fl.worker = !!e.data; try { w.terminate(); } catch {} try { URL.revokeObjectURL(url); } catch {} settle(!fl.worker, "worker"); };
+      w.onerror = fallback;
+    } catch { fallback(); }
+  })();
   document.getElementById("viewLatency")?.addEventListener("click", () => {
     window.__latencyStamp = !window.__latencyStamp;
     try { localStorage.setItem("kastr.latencyStamp", window.__latencyStamp ? "1" : "0"); } catch {}
@@ -8890,7 +8956,7 @@
     try { localStorage.setItem("kastr.sidebar", c ? "0" : "1"); } catch {}
     try { queueRelayout(); } catch {}
   }
-  try { if (localStorage.getItem("kastr.sidebar") !== "1") document.body.classList.add("sb-collapsed"); } catch {}   // 0.13.0 (F3): collapsed by default (the boot script already did this; idempotent)
+  try { if (isPhone() || localStorage.getItem("kastr.sidebar") !== "1") document.body.classList.add("sb-collapsed"); } catch {}   // 0.13.0 (F3): collapsed by default (the boot script already did this; idempotent); 0.21.5: phones always
   document.getElementById("sbScrim")?.addEventListener("click", () => document.body.classList.remove("sb-open"));
   function sbFormClose() {
     if (!sbFormEl) return;
@@ -12171,7 +12237,7 @@
         if (w) c.width = { ideal: w, max: w };
         if (h) c.height = { ideal: h, max: h };
         if (fps) c.frameRate = { ideal: fps, max: fps };
-        if (!w && !h && window.__isPhone?.()) {   // 0.21.0: a portrait phone should deliver portrait frames, not a cropped 1280x720 ideal
+        if (!w && !h && window.__isPhone?.() && !window.__frameLoop?.needed) {   // 0.21.0: a portrait phone should deliver portrait frames, not a cropped 1280x720 ideal; 0.21.5: not where the upright loop already follows the phone
           const portrait = matchMedia("(orientation: portrait)").matches;
           c.width = { ideal: portrait ? 720 : 1280 }; c.height = { ideal: portrait ? 1280 : 720 };
         }
@@ -12433,7 +12499,7 @@
   // every native feed so the server's publisher carries it on its next
   // restart (Bridge.publish's reuse path refreshes the relay URL), and the Go
   // live gating follows the role.
-  window.addEventListener("kastr:auth", () => { try { refreshUi(); } catch {} try { syncNative(true); } catch {} });
+  window.addEventListener("kastr:auth", () => { try { refreshUi(); } catch {} try { syncNative(true); } catch {} try { gridsRedialOnToken(); } catch {} });   // 0.21.5: grids too
 
 
   /**
@@ -12575,7 +12641,7 @@
   }
   function monitorEnded(slot, why) {      // the bridge stopped, or the player is beyond nudging: the 0.9.4 ladder
     if (!slots.has(slot.entry.id)) return;
-    slot.monitorDown = true; slot.monitorDownAt = performance.now();
+    slot.monitorDown = true; slot.monitorDownAt = performance.now(); slot.monitorUpAt = 0;   // 0.21.5
     scheduleRtspRestart(slot.entry, why);
   }
   function monitorBroken(slot, why) {     // this window cannot play what it got: ask for an H.264 encode next
@@ -12731,7 +12797,7 @@
     });
     // 0.9.4: the monitor came (back). A persistent listener, unlike the two
     // once-listeners above, because restartMonitor re-points the same element.
-    video.addEventListener("loadeddata", () => { slot.monitorDown = false; slot.monitorLoaded = true; gridEvictionTick(); refreshUi(); });   // 0.14.0: an evicted member may rejoin
+    video.addEventListener("loadeddata", () => { slot.monitorDown = false; slot.monitorLoaded = true; slot.monitorUpAt = performance.now(); gridEvictionTick(); refreshUi(); });   // 0.14.0: an evicted member may rejoin; 0.21.5: readmit after 5 s up
 
     // No silence timer here, deliberately: it guessed, and its false alarms
     // restarted healthy streams. The unambiguous signals -- the feed ending
@@ -13028,10 +13094,25 @@
   const NONE_FX = { bg: { mode: "none", url: "" } };
   // 0.21.0: a plain camera with the latency stamp on runs the light (no-mask) loop just to draw the strip
   const stampOnly = (slot) => !!window.__latencyStamp && slot.entry.kind === "camera" && !slot.rtsp;
+  // 0.21.5: a camera whose frames the library would take through its <video> polyfill (WebKit) runs the
+  // light loop at 0 degrees so the phone's orientation is baked into the pixels (see window.__frameLoop)
+  const uprightOnly = (slot) => !!window.__frameLoop?.needed && slot.entry.kind === "camera" && !slot.rtsp;
+  const loopWanted = (slot, fx) => fxActive(fx) || stampOnly(slot) || uprightOnly(slot);
+  // the field readout: one verbose toast when an upright loop starts or its frame size changes
+  function uprightNote(slot, b, ow, oh) {
+    if (!uprightOnly(slot) || fxActive(b.fx)) return;
+    const now = performance.now();
+    if (b.noteAt && now - b.noteAt < 1000) return;
+    b.noteAt = now;
+    let raw = "";
+    try { const st = b.raw?.getSettings?.(); if (st?.width) raw = " (source " + st.width + "\u00d7" + st.height + ")"; } catch {}
+    window.__toast?.("Camera upright via canvas loop \u2014 " + ow + "\u00d7" + oh + raw, 4000, { level: "info" });
+  }
   async function applyFx(slot) {
     const want = () => slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null);
     const fx = want();
-    if (!fxActive(fx) && !stampOnly(slot)) { stopBlur(slot); return; }
+    window.__fxTrace?.push?.(["applyFx", slot.entry.id, !!fx, loopWanted(slot, fx), !!window.__frameLoop?.needed, !!slot.blur]);   // 0.21.5 rig trace (window.__fxTrace = [] to enable)
+    if (!loopWanted(slot, fx)) { stopBlur(slot); return; }   // 0.21.5: effects, the stamp, or the upright loop
     if (slot.blur) { retuneFx(slot, fx || NONE_FX); return; }   // live retune
     let seg = null;
     if (fxNeedsMask(fx)) {
@@ -13041,9 +13122,10 @@
       if (!seg && fx.quality === "best") seg = await ensureSegmenter("balanced");
       if (!seg) { fxFailOnce(slot, "the person segmenter could not start"); return; }
     }
-    if (!slots.has(slot.entry.id) || (!fxActive(want()) && !stampOnly(slot))) return;   // removed or switched off while we waited
+    if (!slots.has(slot.entry.id) || !loopWanted(slot, want())) return;   // removed or switched off while we waited
     if (slot.blur) { retuneFx(slot, want() || NONE_FX); return; }              // a parallel call already started the loop
     const raw = unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
+    window.__fxTrace?.push?.(["raw", slot.entry.id, !!raw]);
     if (!raw) { armFxOnTrack(slot); return; }                        // 0.15.0: was a toast + give-up
     slot.fxFailed = null;
     startBlurLoop(slot, raw, seg, want() || NONE_FX);
@@ -13053,7 +13135,12 @@
   // slow poll as the belt to that brace. fxRetryAt keeps a chatty source from re-entering.
   function armFxOnTrack(slot) {
     if (slot.fxArm) return;
-    const src = pubCap(slot.publish)?.in?.source;
+    // 0.21.5: the capture (and its source signal) may not exist yet when the loop is first wanted -- a fresh
+    // camera slot 800 ms after its start -- and a `src` caught as undefined here never fired, so effects (and
+    // now the upright loop) silently never started on a slow camera. Resolve it on every look; subscribe when
+    // it appears.
+    const srcOf = () => pubCap(slot.publish)?.in?.source;
+    let un = null;
     const fire = () => {
       if (!slot.fxArm) return;
       if (slot.fxRetryAt && performance.now() - slot.fxRetryAt < 1000) return;
@@ -13062,13 +13149,20 @@
       slot.fxArm = null; clearTimeout(slot.fxArmT); slot.fxArmT = 0;
       if (slots.has(slot.entry.id)) applyFx(slot).catch(() => {});
     };
-    let un = null;
-    try { un = src?.subscribe?.(() => { if (unwrapTrack(src.peek?.())) fire(); }) ?? null; } catch { un = null; }
-    slot.fxArm = typeof un === "function" ? un : () => {};
+    slot.fxArm = () => { try { un?.(); } catch {} un = null; };
+    const hook = () => {
+      if (un || !slot.fxArm) return;
+      let u = null;
+      try { u = srcOf()?.subscribe?.(() => { if (unwrapTrack(srcOf()?.peek?.())) fire(); }) ?? null; } catch { u = null; }
+      if (typeof u === "function") un = u;
+    };
+    hook();
     const t0 = performance.now();
     const poll = () => {
       if (!slot.fxArm) return;
-      if (unwrapTrack(src?.peek?.())) { fire(); return; }
+      hook();
+      window.__fxTrace?.push?.(["poll", slot.entry.id, !!pubCap(slot.publish), !!srcOf(), !!srcOf()?.peek?.(), !!unwrapTrack(srcOf()?.peek?.()), !!slot.publish?.capture, !!slot.publish?.video?.in?.capture?.peek?.()]);   // 0.21.5 rig trace
+      if (unwrapTrack(srcOf()?.peek?.())) { fire(); return; }
       if (performance.now() - t0 > 30000) {
         try { slot.fxArm(); } catch {}
         slot.fxArm = null; slot.fxArmT = 0;
@@ -13209,6 +13303,7 @@
   const loadFxImage = loadFxBg;   // 0.8.8 name
   const SEG_MIN_MS = 66;   // <= 15 segmentations a second; frames in between reuse the last matte
   function startBlurLoop(slot, raw, seg, fx) {
+    window.__fxTrace?.push?.(["startLoop", slot.entry.id, !!seg]);   // 0.21.5 rig trace
     const video = document.createElement("video");
     video.muted = true;
     video.playsInline = true;
@@ -13278,7 +13373,12 @@
         // for 90/270; the person/mask canvases stay in source space
         const rot = Number(fxNow.rot) || 0, mir = !!fxNow.mirror, swap = rot === 90 || rot === 270;
         const ow = swap ? h : w, oh = swap ? w : h;
-        if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
+        if (cv.width !== ow || cv.height !== oh) {
+          // 0.21.5: a phone re-orienting mid-call may report one odd frame size; after the first frame a new
+          // size is committed only when two consecutive frames agree (the encoder reconfigures on each change)
+          if (!cv.width || (b.pendW === ow && b.pendH === oh)) { cv.width = ow; cv.height = oh; b.pendW = b.pendH = 0; try { uprightNote(slot, b, ow, oh); } catch {} }
+          else { b.pendW = ow; b.pendH = oh; return; }
+        }
         if (person.width !== w || person.height !== h) { person.width = w; person.height = h; }
         const xf = () => { cx.translate(ow / 2, oh / 2); cx.rotate(rot * Math.PI / 180); if (mir) cx.scale(-1, 1); cx.translate(-w / 2, -h / 2); };
         b.cw = ow; b.ch = oh; b.rot = rot; b.mirror = mir;
@@ -13362,7 +13462,7 @@
   // 0.15.0: per-loop telemetry for the console.
   window.__fxDebug = () => [...slots.values()].filter((s) => s.blur).map((s) => ({
     id: s.entry.id, mode: s.blur.fx?.bg?.mode || "none", quality: s.blur.quality, running: !!s.blur.alive,
-    rot: s.blur.rot || 0, mirror: !!s.blur.mirror, cw: s.blur.cw || 0, ch: s.blur.ch || 0, stampOnly: !fxActive(s.blur.fx),   // 0.21.0
+    rot: s.blur.rot || 0, mirror: !!s.blur.mirror, cw: s.blur.cw || 0, ch: s.blur.ch || 0, stampOnly: !fxActive(s.blur.fx) && !uprightOnly(s), upright: uprightOnly(s), why: window.__frameLoop?.why ?? null, vh: s.blur.video?.videoHeight, raw: (() => { try { const st = s.blur.raw?.getSettings?.(); return st ? { w: st.width, h: st.height } : null; } catch { return null; } })(),   // 0.21.0 / 0.21.5
     segFps: s.blur.segFps, drawFps: s.blur.drawFps, lastStepAgoMs: s.blur.lastStep ? Math.round(performance.now() - s.blur.lastStep) : null, tick: !!s.blur.tickT, vw: s.blur.video?.videoWidth, readyState: s.blur.video?.readyState, paused: s.blur.video?.paused,
     delegate: segInfo[s.blur.quality]?.delegate ?? null, model: segInfo[s.blur.quality]?.model ?? null,
     gif: s.blur.gif ? { n: s.blur.gif.n, i: s.blur.gif.i, shown: s.blur.gif.shown, fps: Math.round(s.blur.gif.shown / Math.max(0.001, (performance.now() - s.blur.gif.t0) / 1000) * 10) / 10 } : null }));   // 0.16.0
@@ -13624,7 +13724,7 @@
       // revert. Same session-durable idiom as entry.videoPaused above.
       publish.muted = !!entry.micMuted || !audioFor(entry);
       // Session-durable blur re-engages once the camera track lands (0.8.2).
-      if (entry.fx || entry.blur) setTimeout(() => { try { applyFx(slot); } catch {} }, 800);   // 0.8.8: effects bag
+      if (entry.fx || entry.blur || stampOnly(slot) || uprightOnly(slot)) setTimeout(() => { try { applyFx(slot); } catch {} }, 800);   // 0.8.8: effects bag; 0.21.5: the stamp / upright loop too
       if (micMode === "rnnoise") setTimeout(() => { try { applyDenoise(slot); } catch {} }, 400);   // 0.13.1
       armTrackHealth(slot);   // 0.8.6: lock-screen / device-loss auto-pause
     }
@@ -14720,7 +14820,7 @@
     // last frame for a moment; the whole canvas is cleared only when the
     // geometry changes (stale pixels would otherwise survive a re-layout).
     const geo = n + "|" + (g.layout || "auto") + "|" + g.canvas.width + "x" + g.canvas.height;
-    if (g.lastGeo !== geo) { g.lastGeo = geo; g.cx.fillStyle = "#000"; g.cx.fillRect(0, 0, g.canvas.width, g.canvas.height); }
+    if (g.lastGeo !== geo) { g.lastGeo = geo; g.cx.fillStyle = "#000"; g.cx.fillRect(0, 0, g.canvas.width, g.canvas.height); gridNote(g, "relayout " + geo); }   // 0.21.5: noted
     const nowMs = performance.now();
     ms.forEach((s, i) => {
       const r = rects[i]; if (!r) return;
@@ -14990,10 +15090,12 @@
     rebuildRtspMoq(g);   // one graph over the canvas track (0.8.2 machinery)
     g.timer = setInterval(() => drawRtspGrid(g), 1000 / 15);
     rtspGrids.set(gid, g);   // 0.15.0
+    gridNote(g, "built " + (g.canvas ? g.canvas.width + "x" + g.canvas.height : "?") + " layout=" + (g.layout || "auto"));   // 0.21.5
     return g;
   }
   function teardownRtspGrid(g) {   // 0.15.0: takes the grid
     if (!g) return;
+    gridNote(g, "torn down");   // 0.21.5
     closeGridMember(g, false);   // 0.9.5
     rtspGrids.delete(g.id);
     clearInterval(g.timer);
@@ -15207,7 +15309,7 @@
   function slotStatus(slot) {
     if (slot.rtsp && slot.native) {   // 0.9.1: the server publishes; relay truth is still the echo
       if (slotFailed(slot)) return { text: "failed", cls: "warn", onair: false };
-      if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (attempt " + ((slot.feed?.publish || slot.pub)?.restarts ?? slot.entry.evictAttempt ?? slot.entry.retries ?? "?") + "); retrying", cls: "warn", onair: false };   // 0.14.0
+      if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (" + (slot.entry.evictWhy === "monitor" ? "monitor attempt " + (slot.entry.evictAttempt ?? slot.entry.retries ?? "?") : "attempt " + ((slot.feed?.publish || slot.pub)?.restarts ?? slot.entry.evictAttempt ?? slot.entry.retries ?? "?")) + "); retrying", cls: "warn", onair: false };   // 0.14.0 / 0.21.5
       if (slot.inGrid && !slot.ownPath) return { text: "in grid", cls: "ready", onair: false };
       if (!slot.pubWanted) return { text: slot.inGrid ? "in grid" : "preview", cls: "ready", onair: false };
       const echoed = !!window.__echoed?.has?.(chanPath(ensureHang(slot.entry.name)));
@@ -15221,7 +15323,7 @@
     }
     if (slot.rtsp) {
       if (slotFailed(slot)) return { text: "failed", cls: "warn", onair: false };
-      if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (attempt " + (slot.entry.evictAttempt ?? slot.entry.retries ?? "?") + "); retrying", cls: "warn", onair: false };   // 0.14.0
+      if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (" + (slot.entry.evictWhy === "monitor" ? "monitor attempt " : "attempt ") + (slot.entry.evictAttempt ?? slot.entry.retries ?? "?") + "); retrying", cls: "warn", onair: false };   // 0.14.0 / 0.21.5
       if (slot.inGrid) return { text: slot.ownPath && slot.moq?.broadcast ? "in grid \u00b7 full feed" : "in grid", cls: "ready", onair: false };   // 0.8.3 / 0.8.12
       // Neutral, not amber: still starting up is not a warning. Amber is
       // reserved for "failed", so the two are not the same colour at a glance.
@@ -15443,18 +15545,28 @@
       const pi = slot?.feed?.publish || slot?.pub || null;
       const native = !!(slot?.native && pi);
       const attempts = native ? (pi.restarts || 0) : (a.retries || 0);
+      // 0.21.5: the cell is drawn from the MONITOR, so the monitor's own ladder evicts too -- a camera with no
+      // publisher running (Grid only, on-demand standby) or one that answers TCP but never streams sat in the
+      // grid "reconnecting" forever. A publisher that has been up for a minute vouches for the camera.
+      const nowS = Date.now() / 1000;
+      const pubHealthy = !!(pi && pi.running === true && pi.since && nowS - pi.since >= 60);
+      const monAttempts = a.retries || 0;
+      const downMon = !!(slot?.monitorDown && monAttempts > GRID_EVICT_AFTER && !pubHealthy);
       if (!a.evicted) {
-        const down = native ? (pi.running === false && attempts > GRID_EVICT_AFTER) : (attempts > GRID_EVICT_AFTER);
-        if (!down) continue;
-        a.evicted = true; a.evictedAt = Date.now(); a.evictAttempt = attempts;
-        log("Camera " + shortName(a.name) + " offline after " + attempts + " attempts \u2014 removed from the grid until it reconnects (its seat is kept)");
+        const downPub = native ? (pi.running === false && attempts > GRID_EVICT_AFTER) : (attempts > GRID_EVICT_AFTER);
+        if (!downPub && !downMon) continue;
+        a.evicted = true; a.evictedAt = Date.now(); a.evictAttempt = downPub ? attempts : monAttempts; a.evictWhy = downPub ? "publisher" : "monitor";
+        log("Camera " + shortName(a.name) + " offline after " + a.evictAttempt + (downPub ? "" : " monitor") + " attempts \u2014 removed from the grid until it reconnects (its seat is kept)");
+        gridNoteAll("evicted " + shortName(a.name) + " (" + a.evictWhy + " attempt " + a.evictAttempt + ")");
         changed = true;
       } else {
-        const back = native ? (pi.running === true && pi.since && Date.now() / 1000 - pi.since >= GRID_READMIT_LIVED_S)
-                            : !!(slot?.monitorLoaded && !slot.monitorDown && !(a.retries > 0));
+        const backPub = native ? !!(pi.running === true && pi.since && nowS - pi.since >= GRID_READMIT_LIVED_S) : false;
+        const backMon = !!(slot?.monitorLoaded && !slot.monitorDown && !(a.retries > 0) && slot.monitorUpAt && performance.now() - slot.monitorUpAt >= GRID_READMIT_LIVED_S * 1000);
+        const back = a.evictWhy === "monitor" ? backMon : (backPub || (!native && backMon));
         if (!back) continue;
-        a.evicted = false;
+        a.evicted = false; a.evictWhy = null;
         log("Camera " + shortName(a.name) + " is back \u2014 rejoining the grid");
+        gridNoteAll("readmitted " + shortName(a.name));
         changed = true;
       }
     }
@@ -16614,15 +16726,78 @@
       return listed.some((x) => wants.has(x));
     } catch { return null; }
   }
+  // 0.21.5: the grid's OWN evidence -- it is composited and encoded in THIS page, so the encoder's frame
+  // counter and the connection state say whether the picture is leaving here, whatever a viewer reports
+  // 0.21.5: the grid OBJECT is torn down and rebuilt on every membership change (updateRtspGrid), so its
+  // diagnostics live in a record keyed by grid id that outlives it: events, stall reports, the last rebuild, the
+  // encoder sample -- what /api/diag shows and what the viewer-stall gate reasons over
+  const gridDiagMap = new Map();
+  function gridDiag(g) { let d = gridDiagMap.get(String(g.id)); if (!d) { d = { events: [], stallReports: 0, lastStallAt: 0, lastRebuild: 0, lastRebuildWhy: null, encLast: null, encAdvancedAt: 0 }; gridDiagMap.set(String(g.id), d); } return d; }
+  function gridEncSample(g) {
+    let fc = null;
+    try { const st = g.moq?.encoder?.out?.stats?.peek?.(); fc = st ? (st.frames ?? st.frameCount ?? st.encoded ?? st.count ?? null) : null; } catch {}
+    const d = gridDiag(g);
+    if (fc !== null && fc !== d.encLast) { d.encLast = fc; d.encAdvancedAt = Date.now(); }
+    return fc;
+  }
+  const gridEncAdvancing = (g) => { gridEncSample(g); const d = gridDiag(g); return !!d.encAdvancedAt && Date.now() - d.encAdvancedAt < 12000; };
+  const gridConnected = (g) => { try { return g.moq?.connection?.status?.peek?.() === "connected"; } catch { return false; } };
+  // 0.21.5: grid events -- the status bar, a ring the diag carries (/api/diag publisher.grids[].events), and
+  // launch.log through the bridge (loopback POST /api/rtsp/note; at most one line per 2 s per grid, the rest counted)
+  function gridNote(g, text) {
+    const line = "grid " + (g.name || g.id) + ": " + text;
+    try { log(line); } catch {}
+    const d = gridDiag(g); d.events.push({ at: Date.now(), text });
+    if (d.events.length > 12) d.events.splice(0, d.events.length - 12);
+    if (IS_WEB2) return;   // a web client has no bridge
+    const now = Date.now();
+    if (g.noteAt && now - g.noteAt < 2000) { g.noteDropped = (g.noteDropped || 0) + 1; return; }
+    g.noteAt = now;
+    const extra = g.noteDropped ? " (+" + g.noteDropped + " more)" : "";
+    g.noteDropped = 0;
+    nativePost("/api/rtsp/note", { text: line + extra });
+  }
+  function gridNoteAll(text) { for (const g of rtspGrids.values()) gridNote(g, text); }
+  // 0.21.5: a grid's connection was built with the token of the moment (rebuildRtspMoq); a renewed or rotated
+  // token otherwise reached it only when the relay closed the session (a 20-60 s gap once a day)
+  function gridsRedialOnToken() {
+    if (!live) return;
+    let want = null; try { want = new URL(authUrl(urlInput.value.trim())).searchParams.get("jwt"); } catch {}
+    if (!want) return;
+    for (const g of rtspGrids.values()) {
+      let cur = null; try { cur = g.moq?.relayUrl?.peek?.()?.searchParams?.get?.("jwt") ?? null; } catch {}
+      if (!g.moq || cur === want) continue;
+      const d = gridDiag(g); d.lastRebuild = Date.now(); d.lastRebuildWhy = "token-refresh";
+      gridNote(g, "rebuild reason=token-refresh");
+      rebuildRtspMoq(g);
+    }
+  }
   function nudgeFromViewer(fullPath) {
     const now = Date.now();
     const ng = gridsSorted().find((g) => chanPath(ensureHang(g.entry.name)) === fullPath);   // 0.15.0: the grid by path
     if (ng) {
+      // 0.21.5: a viewer's report is a hint, never the evidence. The grid is built and published from THIS
+      // page: if its encoder still emits frames and its connection is up, the picture left here fine and the
+      // stall is the viewer's (a weak cluster link, a phone). Rebuilding on every report cut the grid for
+      // everyone about every 45 s -- and each cut starved the other viewers into reporting.
+      const dg = gridDiag(ng); dg.stallReports += 1; dg.lastStallAt = now;
       if (ng.lastNudge && now - ng.lastNudge < 45000) return;
       ng.lastNudge = now;
-      log("Viewer reported the grid " + (ng.name || ng.id) + " frozen \u2014 rebuilding its connection");
-      rebuildRtspMoq(ng); refreshUi();
-      
+      if (dg.lastRebuild && now - dg.lastRebuild < 120000) { gridNote(ng, "viewer stall noted — rebuilt " + Math.round((now - dg.lastRebuild) / 1000) + " s ago, letting it settle (reports=" + dg.stallReports + ")"); return; }
+      if (window.__relayHealthTri?.() !== "ok") { gridNote(ng, "viewer stall noted — the relay itself is not healthy here (reports=" + dg.stallReports + ")"); return; }
+      const enc = gridEncAdvancing(ng), conn = gridConnected(ng);
+      const echoed = !!window.__echoed?.has?.(fullPath);
+      const facts = "enc " + (enc ? "advancing" : "flat " + Math.round((Date.now() - (dg.encAdvancedAt || 0)) / 1000) + " s") + ", " + (conn ? "connected" : "not connected") + ", echoed=" + echoed + ", reports=" + dg.stallReports;
+      if (enc && conn) { gridNote(ng, "viewer stall ignored \u2014 grid live here (" + facts + ")"); return; }
+      (async () => {
+        const listed = conn ? await relayLists(fullPath) : false;   // null = no evidence (a secured relay lists nothing)
+        if (!rtspGrids.has(ng.id)) return;
+        if (listed === true && gridEncAdvancing(ng)) { gridNote(ng, "viewer stall ignored \u2014 the relay lists the grid (" + facts + ")"); return; }
+        const why = !gridEncAdvancing(ng) ? "encFlat" : !conn ? "disconnected" : listed === false ? "relay-unlisted" : "no-evidence";
+        dg.lastRebuild = Date.now(); dg.lastRebuildWhy = "viewer-stall/" + why;
+        gridNote(ng, "rebuild reason=viewer-stall/" + why + " (" + facts + ")");
+        rebuildRtspMoq(ng); refreshUi();
+      })();
       return;
     }
     for (const slot of [...slots.values()]) {
@@ -16735,13 +16910,14 @@
     // 0.8.3: the grid composite heals like any slot -- live for 20s under a
     // healthy relay with no echo of its path means rebuild its moq graph.
     for (const g of rtspGrids.values()) {   // 0.15.0: every grid
+      gridEncSample(g);   // 0.21.5: the frame counter the viewer-stall gate reads
       let on = false;
       try { on = g.moq?.broadcast?.in?.enabled?.peek?.() === true; } catch {}
       if (on && g.liveSince && performance.now() - g.liveSince > 20000
           && !window.__echoed?.has?.(chanPath(ensureHang(g.entry.name)))
           && !(g.lastHeal && Date.now() - g.lastHeal < 30000)) {
-        g.lastHeal = Date.now();
-        log("Grid " + (g.name || g.id) + " not reaching the relay \u2014 rebuilding its connection");
+        g.lastHeal = Date.now(); { const d = gridDiag(g); d.lastRebuild = Date.now(); d.lastRebuildWhy = "no-echo"; }
+        gridNote(g, "rebuild reason=no-echo (live " + Math.round((performance.now() - g.liveSince) / 1000) + " s, relay ok, no echo of the path)");   // 0.21.5: noted
         rebuildRtspMoq(g);
         refreshUi();
       }
@@ -16766,6 +16942,7 @@
   const gridStateOf = (g) => ({ name: g.name, layout: g.layout, order: [...g.order], members: g.members.map((m) => m.entry.id), evicted: (g.evicted || []).map((a) => a.id) });   // 0.15.0
   window.__gridState = () => { const g = gridById("1"); return g ? gridStateOf(g) : null; };   // rig hook (0.14.0: evicted; 0.15.0: grid "1" -- see __gridStates)
   window.__gridStates = () => Object.fromEntries(gridsSorted().map((g) => [g.id, gridStateOf(g)]));   // 0.15.0: every grid by id
+  window.__gridMoqClose = (id) => { const g = gridById(String(id)); try { g?.moq?.connection?.close?.(); } catch {} return !!g; };   // 0.21.5 rig: sever the grid's relay connection
   // 0.14.0: streamed media files die with the page (the Files beacon pattern)
   window.addEventListener("pagehide", () => {
     for (const a of added) if (a.kind === FILE && a.mediaId && a.mediaUrl) { try { navigator.sendBeacon?.(a.mediaUrl + "?_method=DELETE", ""); } catch {} }
@@ -16888,6 +17065,19 @@
         encoded: (() => { try { return s.publish.video.out.stats?.peek?.() ?? null; } catch { return null; } })(),
         trackFps: (() => { try { return pubCap(s.publish)?.in?.source.peek()?.getSettings?.().frameRate ?? null; } catch { return null; } })(),
       }),
+      // 0.21.5: the grids (composited + encoded in this page) -- what launch.log alone cannot see
+      grids: [...rtspGrids.values()].map((g) => ({
+        id: g.id, name: g.name || null, path: chanPath(ensureHang(g.entry.name)),
+        members: (g.members || []).map((m2) => m2?.entry?.name ?? null), evicted: (g.evicted || []).map((e) => e?.name ?? e?.id ?? e),
+        layout: g.layout || "auto", canvas: g.canvas ? g.canvas.width + "x" + g.canvas.height : null,
+        liveS: g.liveSince ? Math.round((performance.now() - g.liveSince) / 1000) : null,
+        connected: gridConnected(g), announcing: (() => { try { return g.moq?.broadcast?.in?.enabled?.peek?.() ?? null; } catch { return null; } })(),
+        encoded: (() => { try { return g.moq?.encoder?.out?.stats?.peek?.() ?? null; } catch { return null; } })(),
+        encFlatS: gridDiag(g).encAdvancedAt ? Math.round((Date.now() - gridDiag(g).encAdvancedAt) / 1000) : null,
+        lastRebuild: gridDiag(g).lastRebuild ? { at: gridDiag(g).lastRebuild, why: gridDiag(g).lastRebuildWhy || null } : null,
+        stallReports: { n: gridDiag(g).stallReports, lastAt: gridDiag(g).lastStallAt || null },
+        events: gridDiag(g).events,
+      })),
     }),
     addSource, removeSource, applySettingsAll,
     // 0.6.7 join-gate seams: the gate lives in the watch module and drives

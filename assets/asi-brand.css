@@ -194,6 +194,7 @@ body.asi {
   right: 14px;
   width: min(680px, calc(100vw - 28px));
   height: min(560px, calc(100vh - 80px));
+  height: min(560px, calc(100dvh - 80px));   /* 0.21.5 */
   background: var(--surface);
   border: 1px solid var(--asi-blue-dim);
   border-radius: var(--radius);
@@ -259,7 +260,7 @@ body.asi {
 body :is(button, a, input, select, textarea):focus-visible { outline:none; box-shadow:var(--focus); }
 #asiToast { background:var(--surface-2, #131b28); color:var(--text, #e6edf3); border:1px solid var(--line, #243040); box-shadow:0 8px 26px rgba(0,0,0,.45), inset 3px 0 0 var(--asi-blue); }
 @media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: landscape phones too */
-  .asi-header { height: 44px; padding: 0 10px; gap: 8px; flex-wrap: nowrap; }
+  .asi-header { height: calc(44px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left)); gap: 8px; flex-wrap: nowrap; }   /* 0.21.5: status-bar / notch insets (standalone, landscape); zero in a Safari tab held upright */
   .asi-mark img { height: 22px; }
   .asi-mark .tag, .asi-nav { display: none; }
   .asi-product { font-size: 12px; margin-left: auto; }

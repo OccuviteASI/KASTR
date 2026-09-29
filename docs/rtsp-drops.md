@@ -27,6 +27,26 @@ Since 0.13.3 the launch.log also carries one line per pair generation: `rtsp pai
 `… exit who= code= lived= restarts= sessionFails= sessionKills= last=<last stderr line>` — the timeline of every drop.
 `restarts` forgets after 60 healthy seconds; `restartsTotal` and `gen` do not. `--diagnose` no longer needs `--port`.
 
+## The grid (0.21.5)
+
+The RTSP grid is composited and encoded in the owner's own page, so until 0.21.5 nothing about it reached launch.log
+and `/api/diag` listed only the individual camera slots. Now:
+
+- **launch.log** carries `page: grid <name>: …` lines (loopback `/api/rtsp/note`, at most one per two seconds per grid):
+  `built 1280x720 layout=auto`, `relayout n=..|..|WxH`, `viewer stall ignored — grid live here (enc advancing, connected,
+  echoed=true, reports=N)`, `rebuild reason=viewer-stall/<encFlat|disconnected|relay-unlisted|no-evidence> (…)`,
+  `rebuild reason=no-echo (…)`, `rebuild reason=token-refresh`, `evicted <camera> (monitor attempt 6)`, `readmitted <camera>`,
+  `torn down`.
+- **`/api/diag`** → `publisher.grids[]`: `members`, `evicted`, `layout`, `canvas`, `liveS`, `connected`, `announcing`,
+  `encoded` (the encoder's own frame count), `encFlatS` (seconds since the counter last moved), `lastRebuild {at, why}`,
+  `stallReports {n, lastAt}` and the last twelve events.
+
+Reading it: a grid that remote viewers see going black every ~45 s while the box shows it live was, before 0.21.5, being
+rebuilt on every viewer stall report; after 0.21.5 the same reports show as `viewer stall ignored — grid live here` and
+`stallReports.n` climbs while `lastRebuild` stays old. A `rebuild reason=viewer-stall/encFlat` means the owner's encoder
+really stopped; `…/disconnected` means the owner's relay connection dropped — look at the relay log and the federation
+lines next.
+
 ## Reading the counters
 
 | Pattern | Meaning | Row in ARCHITECTURE's restart table |

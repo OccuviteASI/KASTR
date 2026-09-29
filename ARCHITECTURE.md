@@ -912,6 +912,31 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.5
+
+- **A media-query block's position in the sheet is part of its contract.** The phone rules were correct and lost anyway:
+  written before the desktop base rules for the same selectors, they lost every equal-specificity tie. Raising
+  specificity would have meant forty prefixed selectors and a dozen `!important`s; moving the blocks to the end fixed
+  every row at once. The comment above them now says why they sit last.
+- **Chromium emulation is not Safari.** The phone rig passed for a year while the phone was broken: Chromium's device
+  emulation has `vh == dvh`, no focus zoom below 16 px, and `hover:hover`. WebKit device presets (Playwright) catch all
+  three; they are the phone rig from now on.
+- **A frame's orientation is metadata until something rasterises it.** WebKit's `new VideoFrame(videoElement)` keeps the
+  sensor's pixels and a rotation tag the vendored publisher drops; `drawImage(videoElement)` applies it. So the fix for a
+  sideways phone camera is not a rotation setting but a capability decision: where the library would take the polyfill
+  path on WebKit, the canvas loop is the path. The rule lives in one probe, with a stored override for the field.
+- **A subscription captured before its subject exists never fires.** The effects re-arm read the capture's source signal
+  once, 800 ms after a camera started; on a slow camera the capture did not exist yet and the poll compared `undefined`
+  with itself for thirty seconds. Resolve late-bound objects on every look.
+- **A rebuild needs local evidence.** The grid is composited and encoded in the owner's page; a viewer's stall report says
+  nothing about the owner's side. The 0.13.3 rule for cameras — restart only when the relay does not list the path —
+  applies to the grid with even better evidence: the encoder's own frame counter and the connection state. A heal that
+  acts on remote symptoms alone can be made to fire by the outage it causes.
+- **A cell is drawn from its monitor, so its monitor's health evicts it.** Eviction keyed on the publisher pair's ladder
+  and the grid's own monitor could fail forever without anyone counting.
+- **Silence is not a state.** A spoke that could not register returned without a word; the operator saw an empty table
+  and nothing else. Every early return that changes what an operator sees gets one line per change of reason.
+
 ### 0.21.4
 
 - **A cache-first shell must know when it is out of date.** The 0.20.0 worker cached assets under its own version and

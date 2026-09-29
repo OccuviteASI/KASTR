@@ -2,6 +2,73 @@
 
 What changed in each build, newest first.
 
+## v0.21.5 — the iPhone that fits, an upright camera, a grid that stays up
+
+Kenton's report after 0.21.4: on his iPhone (Safari, iOS 18) "things don't seem to be constrained to the visible
+area, it's collapsing some parts and I can't resize", the camera is "always stuck sideways" for him and for every
+viewer, the Southridge box's RTSP grid is steady on the box but remote viewers see it "go black, come back for a few
+seconds, go black again", a camera that failed more than five times never left the grid, and Southridge never appears
+in the hub's spoke table. Four separate causes, one release.
+
+**The phone layout was being undone by source order.** The phone block of the stylesheet came BEFORE the desktop
+base rules that use the same selectors, so at equal specificity the desktop rule won: the sidebar stayed a 236 px
+column in the page flow, the join gate started beside a rail that is not there, sheets kept desktop widths and `vh`
+heights, the drawer showed only bubbles (its "Create room" form landed in a `display:none` box), the 16 px input rule
+lost to 11–13 px rules so iOS zoomed into every field and never zoomed back, and `touch-action:none` on every
+mainstage meant no pinching back out. The two phone blocks now sit last in the sheet, on purpose and with a comment
+saying so. Around that: phone inputs are 16 px (the one `!important` that is warranted), `dvh` twins for every
+phone-facing `vh` height, side and top safe-area insets for the notch, `overscroll-behavior:contain` on the sheets and
+the stage, a phone always starts with the sidebar collapsed whatever an old session saved, the gallery column is the
+full width, a landscape spotlight no longer keeps a 64 px rail-row floor it has no rail for, `touch-action:none` only
+where the stage zoom applies (shared content; a camera keeps native scroll and pinch), the sidebar grip hides on
+landscape phones too, and a tap on a hidden control while the chrome is idle only wakes the controls instead of
+switching the spotlight underneath. Verified in WebKit at iPhone 14 and 15, portrait and landscape.
+
+**The camera was sideways because the vendored publisher loses the frame's orientation on WebKit.** Safari has no
+`MediaStreamTrackProcessor`, so the library takes camera frames through its `<video>` polyfill: sensor-oriented
+pixels, no rotation in the catalog, sideways for everyone including the phone's own tile. Drawing the `<video>` into a
+canvas applies the phone's orientation, and the page already has that loop (the one Rotate, Mirror and the latency
+stamp use) — it just never ran with no effect on. A probe (`window.__frameLoop`) now decides: on WebKit without the
+processor the light loop runs at 0° for every camera, following the phone as it turns (a new frame size is committed
+when two consecutive frames agree; the encoder reconfigures itself). A Rotate saved before 0.21.5 on such a device was
+compensating for the sideways picture and is reset once. The portrait constraint swap is skipped there (the loop
+already follows the phone). Chromium keeps its raw path; Firefox too (it lacks the processor as well, but its frames
+are upright). `localStorage kastr.frameLoop = "1"/"0"` forces either way. With Verbose alerts on, a toast reports
+"Camera upright via canvas loop — 720×1280". Also fixed on the way: effects that never started when the camera was
+slow to produce its track (the re-arm captured a source that did not exist yet and could never see the track).
+
+**The grid blacked out because any single viewer's stall report rebuilt it.** The grid is composited in the box's
+own browser page and published from there; a viewer that starves for five seconds tells the owner, and the owner
+closed and re-dialled the grid's connection on every report — at most every 45 s, with no check that anything was
+wrong on its side. Single cameras got an evidence check in 0.13.3; the grid never did. One viewer on a weak link cut
+the grid for everyone, the cut starved the others into reporting, and the cycle sustained itself while the box's own
+canvas never blinked. A report is now a hint: the grid rebuilds only when its own encoder has stopped emitting frames,
+its connection is not connected, or its relay no longer lists it — none of which a remote report can cause. Reports are
+counted; every decision, build, teardown, relayout, eviction and readmit is a grid event: on the status bar, in
+`/api/diag` (`publisher.grids[]`, with encoder stats, connection, last rebuild and reason, stall reports, a ring of
+recent events) and in launch.log as `page: grid …` through a loopback `/api/rtsp/note`. A renewed token re-dials the
+grids too (one two-second cut instead of the daily gap when the relay closed the old session).
+
+**A dead camera now leaves the grid.** Eviction keyed on the per-camera publisher's restart ladder, but the cell is
+drawn from a separate local monitor — so in Grid-only mode, in on-demand standby, or with a camera that accepts TCP and
+never streams, the cell said "reconnecting… (attempt N)" forever. The monitor's own ladder evicts too (after the same
+five attempts), unless a publisher for that camera has been up for a minute and vouches for it; the cell is readmitted
+five seconds after its monitor delivers frames again. The Share row says which ladder removed it.
+
+**An open spoke says so.** A spoke registers with the hub only when its own relay runs secured and holds a hub
+federation token; an open relay never registered and never said why, which is how Southridge went missing from the
+hub's spoke table. launch.log now carries one line per change of reason ("not registering with the hub: this relay
+runs open …", "registered with the hub as <name>"), the Relay page's Federation card and Health line say it too, and a
+hub token that could not be cached to disk is kept in memory instead of being re-minted — with a relay restart — on
+every ten-minute check.
+
+**Verified on the rig.** WebKit at iPhone 14 / 15 portrait and landscape (gate, join, drawer, sheets, gallery,
+landscape spotlight, idle tap) plus an Edge desktop pass unchanged; the upright loop forced in Edge (loop at 0° with
+the source's dims, a viewer decodes it, stamp on/off keeps it, rotate 90/0), Firefox and Edge keep the raw path, WebKit's
+real probe says the loop is needed; the grid gate (three stall reports and a real `.stalled` announce → no rebuild; a
+closed connection → rebuild), `/api/diag` grid entry, monitor-ladder eviction and readmit; an open spoke logs once and a
+secured one registers. Both frozen smokes, the frozen two-build update test 0.21.4 → 0.21.5.
+
 ## v0.21.4 — the shell that would not update: a stale service worker stands aside
 
 **An iPhone showed "v0.20.0" under a 0.21.3 host for a week, and reloaded forever.** The 0.20.0 service worker
@@ -156,8 +223,9 @@ phone never closes a menu on scroll. Sheets fit a 375 px tall viewport with one 
 **Sideways camera.** The Camera menu has Rotate (0°, 90°, 180°, 270°) and Mirror. Rotation alone runs the light
 canvas loop (no person segmentation), the output frame swaps its sides for 90° and 270°, backgrounds stay upright,
 and the setting is saved and rides the join like the other effects. A phone with Auto resolution asks for a portrait
-capture when it is held upright, re-asked on rotation; the gate's preview asks for the front camera when no device
-is saved.
+capture when it is held upright (checked once at start — 0.21.5 corrects the claim that it was re-asked on rotation, and
+skips the request where the upright loop already follows the phone); the gate's preview asks for the front camera when
+no device is saved.
 
 **Media shares: the scrub that "restarted the file", and the sharer who heard nothing.** The scrub bug had two
 causes, both found on the rig with a two-minute file. First, ffmpeg's fragmented-MP4 muxer starts every stream's

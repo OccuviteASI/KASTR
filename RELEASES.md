@@ -2,6 +2,56 @@
 
 What changed in each build, newest first.
 
+## v0.21.2 — field fixes, round two: boxes, grid quadrants, closing rooms, admins, web cameras
+
+Kenton's second list after 0.21.1 on kastr.madlabs.app, with relay/publisher boxes, on-demand RTSP grids and web
+clients through the tunnel.
+
+**An unattended box has no camera tile.** A relay, publisher or publisher-relay box is not a person: since 0.15.0 it
+stayed out of People and the counts, but its own webcam still made a tile in the rail. Every viewer now hides that
+camera (the box's RTSP feeds and grids are content and still show). The mode travels in the box's presence, so
+nothing changes on the box.
+
+**The grid quadrant is the play button.** Clicking a quadrant of an RTSP grid whose feed was on demand (or down)
+used to zoom into the composite — low quality, and not the camera. The click now wakes that feed on the relay host,
+shows "starting…" over the cell, and opens the feed at full quality the moment its tile exists; in every grid mode,
+since the owner announces each member's path. The "On demand" chips disappear for feeds that belong to a grid (the
+quadrant does their job); they stay for stand-alone on-demand feeds.
+
+**Nothing leaves its card on the Relay page.** The rooms and spoke tables overflowed a 340 px card by up to 120 px
+and the page scrolled sideways, so buttons sat outside their box. Tables scroll inside their card, long addresses
+and fingerprints wrap, inputs never exceed the card, and a card is never wider than its column.
+
+**Close a room from the sidebar — and from the hub.** The room's creator, and anyone joined with the admin access
+code, sees a ✕ on the room's sidebar card (hover) that closes the room for everyone; the relay operator keeps the
+Relay page. The hub's Federation card now lists each spoke's rooms, each with a Close that rides the command channel
+to that spoke (it acts within a second and re-registers), so a hub operator closes any room in the federation.
+
+**Admins remove files and chat lines.** An admin-code holder sees a delete on every chat line and a ✕ on every
+shared file, not only their own; the relay host accepts the admin's member token for both. Loopback pages (the
+operator) could always do this.
+
+**File links through the tunnel.** A web client that shared a file announced it under the host's LAN address (the
+page guessed a "reachable" address the way the app window has to), so nobody through the tunnel could download it.
+A page reached by any address but loopback now announces the address it was reached by — the tunnel name through
+Cloudflare, the LAN https on the LAN — and a viewer whose relay host is public fetches a file announced under a
+private address through that host.
+
+**Web clients add RTSP cameras through the host.** A browser has no ffmpeg, but the relay host does: a web client
+joined with the publisher code can add a camera address (Share ▸ RTSP feed) and the host pulls it, transcodes it on
+its hardware encoder and publishes it into the room under the adding person's name — offered only when the host has
+a hardware encoder and its relay requires access codes; the feed is kept across the host's restarts, and only the
+person who added it (or an admin) can remove it. A host that has never joined a room with its publisher code says
+so instead of adding.
+
+Verified on the rig (Edge): the box camera never becomes a tile; a quadrant click on a down member starts a wake
+instead of a zoom; the creator's and the admin's sidebar cards show Close and the creator's click closes the room;
+an admin deletes another poster's chat line and another member's file; a web client's file link carries the page's
+own origin; the web client's Share menu offers RTSP through the host and an add round-trips; the Relay page keeps
+every element inside its card at 1100 and 375 px. HTTP checks: admin close without a key, viewer refused; admin
+chat/file deletes from another address; remote RTSP add refused without a token and with a viewer token, accepted
+with a publisher token (published under `<room>/<host>/<adder>/`), another publisher cannot remove it, the adder can.
+
 ## v0.21.1 — hotfix: a hub never hands out another release's binary
 
 **Mendon "updated" to 0.21.0 and came back as 0.20.0.** The hub at the public name ran 0.21.0 and its manifest said

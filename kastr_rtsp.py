@@ -559,6 +559,17 @@ def registry_files(state_dir):
     return out
 
 
+def _rtsp_leaf(url):
+    """0.21.2: a broadcast leaf for a camera URL nobody named: host + last path segment (never credentials)."""
+    try:
+        from urllib.parse import urlsplit
+        u = urlsplit(str(url or ""))
+        seg = [s for s in u.path.split("/") if s]
+        return "-".join(x for x in ((u.hostname or "").replace(".", "-"), seg[-1] if seg else "") if x) or "cam"
+    except Exception:
+        return "cam"
+
+
 def _relay_key(url):
     """A relay URL without its room token: same relay, whatever the token says.
     0.13.3: nor is a trailing "/" a different relay -- mint_member returns
@@ -2076,8 +2087,47 @@ class Bridge:
                 continue
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
-                        "ondemand": bool(pub.ondemand), "low": pub.lowPub is not None, "label": pub.label})   # 0.18.0
+                        "ondemand": bool(pub.ondemand), "low": pub.lowPub is not None, "label": pub.label,   # 0.18.0
+                        "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})   # 0.21.2: a web client's feed
         return out
+
+    def remote_add(self, url, room, label, op):
+        """0.21.2: a web client (publisher token, verified by the caller) adds an RTSP camera that THIS host
+        pulls, hardware-transcodes and publishes into `room` under <room>/<host>/<op>/<leaf>.hang -- the adder's
+        op, so People files it under them. Needs the box's saved publisher code (its own room session) to mint
+        the host's token for that room. -> feed.info() + publish, or raises ValueError with the reason."""
+        room = str(room or "").strip().lower()
+        op = re.sub(r"[^a-z0-9-]+", "-", str(op or "").lower()).strip("-")[:40] or "web"
+        if not re.match(r"^[a-z0-9][a-z0-9-]{0,63}$", room):
+            raise ValueError("bad room")
+        ses = self._session
+        if not ses.get("relay") or not ses.get("access"):
+            raise ValueError("this host has no publisher code saved -- join a room from the host's KASTR once")
+        enc = self.usable_encoder()
+        if not enc or enc == "libx264":
+            raise ValueError("this host has no hardware encoder")
+        label = str(label or "").strip()[:40]
+        leaf = re.sub(r"[^a-z0-9-]+", "-", (label or _rtsp_leaf(url)).lower()).strip("-")[:32] or "cam"
+        status, tok_url, detail = mint_member(ses["relay"], room, ses.get("access", ""), "", host=self.host_slug)
+        if status not in ("token", "open"):
+            raise ValueError("the relay did not mint a token for room %s: %s (%s)" % (room, status, detail))
+        feed = self.add(url)
+        feed.added_by = op
+        feed.room = room
+        broadcast = "%s/%s/%s/%s.hang" % (room, self.host_slug, op, leaf)
+        n = 2
+        while any(p.broadcast == broadcast and p.feed is not feed for p in self._pubs.values()):
+            broadcast = "%s/%s/%s/%s-%d.hang" % (room, self.host_slug, op, leaf, n); n += 1
+        try:
+            self.publish(feed.id, broadcast, tok_url, keep=True, label=label or _rtsp_leaf(url))
+        except Exception:
+            self.remove(feed.id)
+            raise
+        self.log("rtsp: web client %s added %s -> %s (hardware %s)" % (op, _redact_url(url), broadcast, enc))
+        d = feed.info()
+        d["publish"] = self.publication(feed.id)
+        d["url"] = _redact_url(d.get("url"))
+        return d
 
     def persist_feeds(self):
         """Write room + codes + the feeds on air. Atomic (tmp + replace), owner-only
@@ -2210,7 +2260,8 @@ class Bridge:
                 return None
             cur = self._pubs.get(fid)
             base = ses.get("relay") or _relay_key(cur.relay if cur is not None else relay)
-            status, url, detail = mint_member(base, ses["room"], ses.get("access", ""), ses.get("roomCode", ""),
+            room = getattr(feed, "room", "") or ses["room"]   # 0.21.2: a web client's feed lives in ITS room
+            status, url, detail = mint_member(base, room, ses.get("access", ""), ses.get("roomCode", "") if room == ses["room"] else "",
                                               host=self.host_slug)     # 0.13.0
             # 0.13.2: "open" because the minter did not answer is not a licence to go bare: a publisher
             # that had a token keeps waiting for one (a secured relay severs a bare dial with code=6).
@@ -2262,7 +2313,14 @@ class Bridge:
         def one(rec):
             try:
                 feed = self._feed_by_source(rec["url"]) or self.add(rec["url"])
-                self.publish(feed.id, rec.get("broadcast") or ("cam%d" % feed.id), url,
+                rurl = url
+                if rec.get("room") and rec.get("room") != room:   # 0.21.2: a web client's feed in another room
+                    feed.added_by = str(rec.get("addedBy") or ""); feed.room = str(rec.get("room"))
+                    st, u2, det = mint_member(self._session["relay"], rec["room"], self._session.get("access", ""), "", host=self.host_slug)
+                    if st not in ("token", "open"):
+                        raise RuntimeError("no token for room %s: %s (%s)" % (rec["room"], st, det))
+                    rurl = u2
+                self.publish(feed.id, rec.get("broadcast") or ("cam%d" % feed.id), rurl,
                              audio=(rec.get("audio") is not False), passthrough=bool(rec.get("passthrough")), keep=True,
                              ondemand=bool(rec.get("ondemand")), low=bool(rec.get("low")), label=str(rec.get("label") or ""))   # 0.18.0
                 with lock:
@@ -2304,6 +2362,7 @@ class Bridge:
         for f in self._feeds.values():
             d = f.info()
             d["publish"] = self.publication(f.id)   # 0.9.1
+            d["addedBy"] = getattr(f, "added_by", "") or ""   # 0.21.2: a web client's camera (empty = the box's own)
             if redact:
                 d["url"] = _redact_url(d.get("url"))
                 if isinstance(d.get("error"), str):
@@ -2639,8 +2698,49 @@ def handle_api(handler, bridge, path):
         import kastr_relay
         return kastr_relay.is_local(handler)
 
+    def remote_claims(room, jwt):
+        """0.21.2: a web client's member token (kastr_serve's handler verifies it; None outside kastr_serve).
+        -> (claims, error_reply) -- claims when the token covers `room` and the relay here is secured."""
+        fn = getattr(handler, "_room_claims", None)
+        if not callable(fn):
+            return None, ({"error": "feed changes only from the machine itself"}, 403)
+        import kastr_relay
+        relay_srv = getattr(handler, "kastr_relay_srv", None)
+        if relay_srv is None or not getattr(relay_srv, "secured", False):
+            return None, ({"error": "web clients may add cameras only through a relay that requires access codes"}, 403)
+        err = fn(room, jwt)
+        if err is not None:
+            return None, ({"error": err[1]}, err[0])
+        claims = getattr(handler, "_claims", None)
+        if kastr_relay.claims_role(claims) not in ("publisher", "admin", "relay"):
+            return None, ({"error": "the publisher access code is needed to add a camera"}, 403)
+        return claims, None
+
+    def bearer():
+        h = str(handler.headers.get("Authorization") or "")
+        return h[7:].strip() if h.lower().startswith("bearer ") else ""
+
     if path == "/api/rtsp/list":
         if not from_loopback():
+            # 0.21.2: a web client with a publisher token sees the room's host-published feeds (redacted) + whether it may add
+            q = dict(kv.split("=", 1) if "=" in kv else (kv, "") for kv in getattr(handler, "path", "").partition("?")[2].split("&") if kv)
+            room = q.get("room", "")
+            jwt = bearer() or q.get("jwt", "")
+            if room and jwt:
+                claims, err = remote_claims(room, jwt)
+                if claims is not None:
+                    import kastr_relay
+                    me = ""
+                    try:
+                        _r, me_host = kastr_relay.claims_identity(claims)
+                        me = str(me_host or "")
+                    except Exception:
+                        pass
+                    rows = [f for f in bridge.list(redact=True) if str((f.get("publish") or {}).get("broadcast") or "").startswith(room + "/")]
+                    enc = bridge.usable_encoder()
+                    reply({"feeds": rows, "ffmpeg": bool(bridge.ffmpeg), "ffmpegPath": "", "moq": bool(bridge.moq), "remote": True,
+                           "viaHost": True, "canAdd": bool(enc and enc != "libx264"), "hwEncoder": enc, "me": me})
+                    return True
             # 0.17.0: a web client has no bridge here -- the page hides its RTSP paths
             reply({"feeds": [], "ffmpeg": False, "ffmpegPath": "", "moq": False, "remote": True})
             return True
@@ -2700,14 +2800,44 @@ def handle_api(handler, bridge, path):
         return True
 
     if path in ("/api/rtsp/add", "/api/rtsp/remove"):
-        if not from_loopback():   # 0.17.0: these spawn ffmpeg on this machine
-            import kastr_relay
-            return kastr_relay.deny_remote(handler, "feed changes")
         try:
             n = int(handler.headers.get("Content-Length") or 0)
             payload = json.loads(handler.rfile.read(n) or b"{}")
         except Exception:
             reply({"error": "bad json"}, 400)
+            return True
+        if not from_loopback():
+            # 0.21.2: a WEB CLIENT adds a camera that THIS host pulls -- publisher token for the room, hardware encoder
+            room = str(payload.get("room") or "")
+            jwt = bearer() or str(payload.get("jwt") or "")
+            claims, err = remote_claims(room, jwt)
+            if claims is None:
+                reply(*err)
+                return True
+            import kastr_relay
+            op = ""
+            try:
+                op = str(kastr_relay.claims_identity(claims)[1] or "")   # the web device's host id -- People keys on op; use the name the page sends
+            except Exception:
+                pass
+            who = re.sub(r"[^a-z0-9-]+", "-", str(payload.get("op") or op or "web").lower()).strip("-")[:40] or "web"
+            try:
+                if path == "/api/rtsp/add":
+                    if not bridge.ffmpeg:
+                        reply({"error": "ffmpeg not available on the host"}, 503)
+                        return True
+                    reply(bridge.remote_add(payload.get("url"), room, payload.get("label"), who))
+                else:
+                    feed = bridge.get(payload.get("id"))
+                    if feed is None:
+                        reply({"error": "no such feed"}, 404)
+                        return True
+                    if getattr(feed, "added_by", "") != who and not kastr_relay.claims_admin(claims, room):
+                        reply({"error": "only the person who added this camera (or an admin) can remove it"}, 403)
+                        return True
+                    reply({"ok": bridge.remove(feed.id)})
+            except (ValueError, KeyError, TypeError) as e:
+                reply({"error": str(e)}, 400)
             return True
         try:
             if path == "/api/rtsp/add":

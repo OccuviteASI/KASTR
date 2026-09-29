@@ -14,8 +14,20 @@
   * { box-sizing:border-box; }
   /* 0.21.0: a responsive card grid -- every panel is a card, the log spans the full width, one column
      on a phone (was one 360 px column of stacked panels beside the log) */
-  #main { display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:14px; align-items:start; }
+  #main { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap:14px; align-items:start; }
   #main > div { display:contents; }
+  /* 0.21.2: nothing leaves its card -- tables scroll inside it, long addresses and fingerprints wrap
+     (the field report: fields ran outside their box and could not be clicked without zooming out) */
+  section.panel { overflow:hidden; }
+  section.panel .tblwrap { overflow-x:auto; max-width:100%; }
+  section.panel table { max-width:100%; }
+  section.panel code, section.panel .hint, section.panel dd, section.panel .warn, section.panel #fedState, section.panel #fedMsg,
+  section.panel #spokesList, section.panel #hBanList, section.panel #hPairList, section.panel #bcastList, section.panel #archList { overflow-wrap:anywhere; word-break:break-word; }
+  section.panel .urlrow code { overflow-wrap:normal; word-break:normal; }
+  section.panel input, section.panel select { max-width:100%; min-width:0; }
+  table.rooms td.mono { white-space:normal; }
+  .sproom { display:inline-flex; align-items:center; gap:3px; margin:1px 4px 1px 0; font-family:var(--font-mono); color:var(--asi-blue); }
+  .sproom .sprx { padding:0 5px; font-size:10px; line-height:1.4; }
   #main > section:last-child { grid-column:1 / -1; }
   @media (max-width: 720px) { #main { grid-template-columns:1fr; } }
   label.f.asi-sw { display:flex; align-items:center; gap:10px; }
@@ -326,10 +338,10 @@
     <section class="panel" id="roomsPanel" hidden>
       <h2>Rooms on this relay</h2>
       <div id="roomsNote" class="hint">No rooms yet.</div>
-      <table class="rooms" id="roomsTable">
+      <div class="tblwrap"><table class="rooms" id="roomsTable">
         <thead><tr><th>Room</th><th>Flags</th><th>Creator</th><th>Created</th><th>Last seen</th><th></th></tr></thead>
         <tbody></tbody>
-      </table>
+      </table></div>
     </section>
 
     <section class="panel" style="margin-bottom:0">
@@ -898,9 +910,23 @@
     if (box.hidden) return;
     const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
-    $("spokesList").innerHTML = rows.length ? "<table style=\"border-collapse:collapse;width:100%;font-size:12px\"><tr><th style=\"text-align:left\">Spoke</th><th style=\"text-align:left\">Reached by</th><th style=\"text-align:left\">Version</th><th style=\"text-align:left\">Last seen</th></tr>"
-      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + ago(r.at) + "</td></tr>").join("") + "</table>"
+    // 0.21.2: + each spoke's rooms, closeable from here (the closeRoom command rides the spoke's long-poll)
+    const roomsCell = (r) => (r.rooms || []).length
+      ? (r.rooms || []).map((slug) => "<span class=\"sproom\" data-spoke=\"" + esc(r.name || r.key) + "\" data-slug=\"" + esc(slug) + "\">" + esc(slug) + (LOCAL ? " <button type=\"button\" class=\"ghost sprx\" title=\"Close this room on that spoke\">\u2715</button>" : "") + "</span>").join(" ")
+      : "<span style=\"color:var(--text-mute)\">\u2014</span>";
+    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Last seen</th></tr>"
+      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td></tr>").join("") + "</table></div>"
       : "No spoke has registered yet.";
+    for (const b of $("spokesList").querySelectorAll(".sprx")) b.addEventListener("click", async () => {
+      const sp = b.parentElement.dataset.spoke, slug = b.parentElement.dataset.slug;
+      if (!confirm("Close room " + slug + " on spoke " + sp + " for everyone? Its chat and attachments there are deleted.")) return;
+      b.disabled = true;
+      try {
+        const r = await api("/api/relay/spokes/close-room", { spoke: sp, slug });
+        $("spokesMsg").textContent = r.error ? "Close failed: " + r.error : ("Close of " + slug + " sent to " + sp + " (#" + r.seq + ") \u2014 it acts within a second and re-registers.");
+      } catch (e) { $("spokesMsg").textContent = "Close failed: " + (e?.message || e); }
+      setTimeout(paintSpokes, 3000);
+    });
     $("spokesUpdate").disabled = !LOCAL || !d.secured;
   }
   $("spokesUpdate").addEventListener("click", async () => {

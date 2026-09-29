@@ -29,6 +29,9 @@ Since 0.21.0 phones get the phone layout in portrait and landscape (every menu a
 shared media files scrub without restarting and the sharer hears them ("Hear it myself"), every shared file gets a
 resolution picker, the latency stamp is a thin strip in the bottom-right corner, a spotlight follows the participant,
 full screen is the whole stage, a hub can update its spokes with one button, and the Relay page is a card grid.
+Since 0.21.2 unattended boxes have no camera tile, a grid quadrant wakes and opens its camera, rooms close from the
+sidebar (creator or admin) and from the hub, admins remove files and chat lines, web clients' file links work through
+the tunnel, and a web client can add an RTSP camera that the relay host pulls on its hardware encoder.
 
 Fleet updates flow hub-first: update the hub relay box, its spokes follow the hub's version within the hour, and
 clients pick the new build up on their next launch; browser clients reload on their own. Relay operators set viewer, publisher and (since 0.16.0) admin

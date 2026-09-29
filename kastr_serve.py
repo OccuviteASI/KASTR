@@ -1052,6 +1052,31 @@ class _BoundedReader:
         return b
 
 
+_ENC_PROBE_STARTED = [False]   # 0.21.2: the hardware-encoder probe runs once, off the request thread
+
+
+def rtsp_remote_ok(bridge, relay_srv):
+    """0.21.2: the hardware encoder name when a web client may add RTSP cameras through this host: the relay
+    here runs secured (a publisher token is the permission) and ffmpeg has a hardware H.264 encoder (a software
+    transcode of several cameras would starve the box). None otherwise; the encoder probe is cached by the bridge."""
+    try:
+        if bridge is None or relay_srv is None or not getattr(relay_srv, "secured", False) or not relay_srv.running():
+            return None
+        if not hasattr(bridge, "usable_encoder"):
+            return None
+        enc = getattr(bridge, "_encoder", None)
+        if enc is None:
+            # the probe runs ffmpeg once per encoder (seconds): never inside a page request -- start it once, answer
+            # "not yet"; the page asks again when the RTSP row opens
+            if not _ENC_PROBE_STARTED[0]:
+                _ENC_PROBE_STARTED[0] = True
+                threading.Thread(target=lambda: bridge.usable_encoder(), daemon=True).start()
+            return None
+        return enc if enc and enc != "libx264" else None
+    except Exception:
+        return None
+
+
 def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                  hostname=None, bridge=None, relay_srv=None, relay_ref=None,
                  alive_ref=None, window_file=None):
@@ -1767,7 +1792,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     meta = json.load(f)
             except OSError:
                 return self._json_cors(404, {"error": "no such file"})
-            if token != meta.get("token"):
+            if token != meta.get("token") and not self._admin_for(str(meta.get("room") or "")):   # 0.21.2: or an admin of its room
                 return self._json_cors(403, {"error": "not the owner"})
             for p in (path, path + ".json"):
                 try:
@@ -2009,9 +2034,34 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 store.mark_keep(room, True)
             return self._json_cors(201, rec)          # the ONLY reply that carries the delete token
 
+        def _bearer(self, qs=None):
+            """0.21.2: the member token a page sends as Authorization: Bearer (or ?jwt=)."""
+            h = str(self.headers.get("Authorization") or "")
+            if h.lower().startswith("bearer "):
+                return h[7:].strip()
+            return ((qs or {}).get("jwt") or [""])[0] if qs is not None else ""
+
+        def _admin_for(self, room, qs=None):
+            """0.21.2: True when the caller's token carries `<room>/.admin` (the admin access code). On an
+            OPEN relay nobody is an admin this way (_room_claims returns None with no claims)."""
+            jwt = self._bearer(qs)
+            if not jwt or not room:
+                return False
+            if self._room_claims(room, jwt) is not None:
+                return False
+            return kastr_relay.claims_admin(self._claims, room)
+
+        @property
+        def kastr_relay_srv(self):
+            return relay_srv   # 0.21.2: kastr_rtsp.handle_api checks the relay is secured before a web client adds a camera
+
         def _chat_delete(self, room, msgid, qs, store):
             token = (qs.get("token") or [""])[0]
             force = kastr_relay._local_only(self)     # the operator on the relay host may delete anything
+            if not force and self._admin_for(room, qs):   # 0.21.2: an admin removes any line
+                force = True
+                if callable(globals().get("_chat_log")):
+                    _chat_log("chat: admin removed message %s in %s" % (msgid, room))
             try:
                 ok = store.delete(room, int(msgid), token or None, force=force)
             except ValueError as e:
@@ -2245,6 +2295,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._chat_reply(413, {"error": "body too large"})
                 obj, code = kastr_relay.register_room(store, p, self._chat_peer(), log, CHAT_LOCKOUT)
                 hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                if code == 200:
+                    try:
+                        relay_srv.spoke_sync_soon()   # 0.21.2
+                    except Exception:
+                        pass
                 return self._chat_reply(code, obj, hdrs)
             if path == "/api/rooms/close":
                 if method != "POST":
@@ -2255,9 +2310,18 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 cs = chat_store(relay_srv=relay_srv)
                 hook = (lambda slug, _c=cs: _c.delete_room(slug)) if cs is not None else None
                 slug = str(p.get("slug") or "")
-                obj, code = kastr_relay.close_room(store, slug, p.get("roomKey"), False, hook=hook, log=log)
+                # 0.21.2: an admin-code holder (Authorization: Bearer <member token> with the room's .admin grant)
+                # closes like the operator; the creator still proves itself with the roomKey
+                admin = self._admin_for(slug)
+                obj, code = kastr_relay.close_room(store, slug, p.get("roomKey"), admin, hook=hook, log=log)
                 if code == 200:
+                    if admin and log:
+                        log("relay: room %s closed by an admin" % slug)
                     self._chat_unkeep_at_hub(slug)
+                    try:
+                        relay_srv.spoke_sync_soon()   # 0.21.2: the hub's spoke table lists my rooms
+                    except Exception:
+                        pass
                 return self._chat_reply(code, obj)
             return self._chat_reply(404, {"error": "no such rooms endpoint"})
 
@@ -3025,9 +3089,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             tls = bool(getattr(self.server, "is_tls", False))
             req_host = kastr_relay._host_of(self.headers.get("Host")) or None
             web = not local
+            hw = rtsp_remote_ok(bridge, relay_srv)   # 0.21.2: web clients may add RTSP through THIS host (hardware encoder + secured relay)
             feats = {"publish": True, "chat": True, "admin": True,
-                     "rtsp": not web, "media": not web, "relayControls": not web,
-                     "updates": not web, "prefs": not web, "window": not web}
+                     "rtsp": (not web) or bool(hw), "media": not web, "relayControls": not web,
+                     "updates": not web, "prefs": not web, "window": not web,
+                     "rtspViaHost": bool(hw) and web, "hwEncoder": hw or None}
             return self._json_cors(200, {
                 "app": "KASTR", "version": read_version(),
                 "client": "web" if web else "app",

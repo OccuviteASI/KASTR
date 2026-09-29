@@ -373,6 +373,15 @@ def claims_identity(claims):
         return None, None
 
 
+def claims_admin(claims, slug):
+    """0.21.2: does this token carry the room's admin grant (`<slug>/.admin` put -- the 0.16.0 admin code)?
+    Admins may close the room and remove any file or chat line in it."""
+    if not isinstance(claims, dict) or not slug:
+        return False
+    puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
+    return ("**" in puts) or ((slug + "/" + ADMIN_KIND) in puts) or ((slug + "/" + ADMIN_KIND + "/**") in puts)
+
+
 def claims_role(claims):
     if is_relay_claims(claims):
         return "relay"
@@ -1226,7 +1235,7 @@ class AuthService:
         self._spokes_path = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-spokes.json")
         # 0.21.0: the hub's command channel -- {"seq", "update": {"seq", "at", "version"}} rides every
         # bans long-poll reply; a spoke acts once per new seq (an "Update spokes now" on the hub)
-        self.cmd = {"seq": 0, "update": None}
+        self.cmd = {"seq": 0, "update": None, "closeRoom": []}   # 0.21.2: + closeRoom [{seq, spoke, slug}] (last 16)
         self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
         self.hub_cmd_seen = None              # the hub's command seq this spoke last saw (baseline first)
         d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
@@ -1236,7 +1245,8 @@ class AuthService:
             if isinstance(d.get("cmd"), dict):
                 try:
                     self.cmd = {"seq": int(d["cmd"].get("seq") or 0),
-                                "update": d["cmd"].get("update") if isinstance(d["cmd"].get("update"), dict) else None}
+                                "update": d["cmd"].get("update") if isinstance(d["cmd"].get("update"), dict) else None,
+                                "closeRoom": [c for c in (d["cmd"].get("closeRoom") or []) if isinstance(c, dict)][-16:]}
                 except (TypeError, ValueError):
                     pass
         self._pull_at = 0
@@ -1689,13 +1699,14 @@ class AuthService:
             return {"ok": False, "error": "bad minter url"}, 400
         name = re.sub(r"[^a-z0-9-]+", "-", str(p.get("name") or "").lower()).strip("-")[:40]
         version = str(p.get("version") or "")[:24]
+        rooms = [str(r) for r in (p.get("rooms") or []) if isinstance(r, str) and SLUG_RE.match(r)][:64] if isinstance(p.get("rooms"), list) else []   # 0.21.2
         if not url and not name:
             return {"ok": False, "error": "a minter url or a name is required"}, 400
         key = url or ("spoke:" + name)
         with self.lock:
             fresh = key not in self.spokes
             self.spokes[key] = {"at": int(time.time()), "peer": peer, "name": name, "version": version,
-                                "minter": url or None}
+                                "minter": url or None, "rooms": rooms}
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
                     self.spokes.pop(k, None)
@@ -1708,7 +1719,7 @@ class AuthService:
         """0.21.0: the Relay page's spoke table -- never a token, never a code."""
         with self.lock:
             rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
-                     "peer": v.get("peer") or "", "at": v.get("at")} for k, v in self.spokes.items()]
+                     "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or [])} for k, v in self.spokes.items()]   # 0.21.2: + rooms
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
 
     def raise_cmd(self, name, extra=None):
@@ -1716,7 +1727,10 @@ class AuthService:
         with self.lock:
             self.cmd["seq"] = int(self.cmd.get("seq") or 0) + 1
             rec = {"seq": self.cmd["seq"], "at": int(time.time()), **(extra or {})}
-            self.cmd[name] = rec
+            if name == "closeRoom":   # 0.21.2: a list -- two closes between two polls both arrive
+                self.cmd["closeRoom"] = (list(self.cmd.get("closeRoom") or []) + [rec])[-16:]
+            else:
+                self.cmd[name] = rec
             n = len(self.spokes)
         self._save_spokes()
         self.bans.poke()
@@ -1741,7 +1755,8 @@ class AuthService:
         ver, active = self.bans.snapshot()
         rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
         with self.lock:
-            cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update")}
+            cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update"),
+                   "closeRoom": list(self.cmd.get("closeRoom") or [])}   # 0.21.2
         return {"bans": rows, "ver": ver, "cmd": cmd}, 200   # 0.21.0: + the hub's command channel
 
     def fanout_bans(self):
@@ -1815,11 +1830,20 @@ class AuthService:
             if self.hub_cmd_seen is None or seq < self.hub_cmd_seen:
                 self.hub_cmd_seen = seq
             elif seq > self.hub_cmd_seen:
+                prev = self.hub_cmd_seen
                 self.hub_cmd_seen = seq
                 up = cmd.get("update") if isinstance(cmd.get("update"), dict) else None
-                if up and callable(self.on_cmd):
+                if up and callable(self.on_cmd) and int(up.get("seq") or 0) > prev:
                     self.log("relay auth: the hub asked its spokes to update (#%d, hub v%s)" % (seq, up.get("version") or "?"))
                     threading.Thread(target=self.on_cmd, args=("update", up), daemon=True).start()
+                # 0.21.2: room closes from the hub operator -- every entry newer than what we had seen
+                for c in (cmd.get("closeRoom") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("closeRoom", c), daemon=True).start()
         now = time.time()
         have = {(b.get("room"), b.get("host") or b.get("target")) for b in self.bans.active()}
         listed = set()
@@ -2733,6 +2757,19 @@ class Relay:
     def _hub_cmd(self, name, info):
         """0.21.0: a command from the hub (through the bans long-poll). "update" = match the
         federation master's version now; the launcher installs the hook (a dev checkout has none)."""
+        if name == "closeRoom":   # 0.21.2: the hub operator closed one of MY rooms (by spoke name, or "*")
+            slug = str((info or {}).get("slug") or "")
+            spoke = str((info or {}).get("spoke") or "")
+            try:
+                import kastr_serve as _ks
+                me = self.relay_name() or _ks.host_slug()
+            except Exception:
+                me = self.relay_name() or "relay"
+            if spoke not in ("*", me):
+                return
+            obj, code = close_room(self.store, slug, None, True, log=self.log)   # the chat store's hook is wired at its creation
+            self.log("relay federation: hub closed room %s here -> %s" % (slug, obj.get("ok") and "closed" or obj.get("error")))
+            return
         if name != "update":
             return
         try:
@@ -2768,7 +2805,12 @@ class Relay:
         except Exception:
             name, version = self.relay_name() or "relay", ""
         # 0.21.0: name + version always (the hub's spoke table); the minter only when the LAN can reach it
-        body = json.dumps({"minter": my_minter, "name": name, "version": version}).encode()
+        # 0.21.2: + my rooms, so the hub operator can close one from the hub's Relay page
+        try:
+            rooms = [r["slug"] for r in self.store.rooms_public()][:64]
+        except Exception:
+            rooms = []
+        body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms}).encode()
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -2780,6 +2822,11 @@ class Relay:
             auth.pull_hub_bans()
         except Exception:
             pass
+
+    def spoke_sync_soon(self):
+        """0.21.2: a room opened or closed here -- tell the hub now (its spoke table lists my rooms)."""
+        if self._fed_active and self._hub_minter_url():
+            threading.Thread(target=self._spoke_sync, daemon=True).start()
 
     def _federation_tick(self):
         """-> True when the relay was restarted with a fresh hub token (a rotated
@@ -3333,7 +3380,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/lan",             # 0.16.0
                  "/api/relay/admin/token",     # 0.16.0
                  "/api/relay/bans/clear",      # 0.17.0
-                 "/api/relay/spokes/update")   # 0.21.0
+                 "/api/relay/spokes/update",   # 0.21.0
+                 "/api/relay/spokes/close-room")   # 0.21.2
 
 
 def _host_of(value):
@@ -3450,6 +3498,24 @@ def handle_api(handler, relay, path, set_relay_url=None):
             ver = ""
         reply({"spokes": auth.spokes_public() if auth else [], "cmd": (auth.cmd if auth else None),
                "version": ver, "secured": bool(auth)})
+        return True
+
+    if path == "/api/relay/spokes/close-room":   # 0.21.2: hub operator -> a spoke closes one of its rooms
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        try:
+            n = int(handler.headers.get("Content-Length") or 0)
+            p = json.loads(handler.rfile.read(n) or b"{}")
+        except Exception:
+            p = {}
+        slug = str(p.get("slug") or ""); spoke = str(p.get("spoke") or "")
+        if not SLUG_RE.match(slug) or not spoke:
+            reply({"error": "spoke and slug required"}, 400)
+            return True
+        rec = auth.raise_cmd("closeRoom", {"spoke": spoke, "slug": slug})
+        reply({"ok": True, "seq": rec["seq"], "spoke": spoke, "slug": slug})
         return True
 
     if path == "/api/relay/spokes/update":   # 0.21.0: hub operator -> every spoke matches the hub's version now

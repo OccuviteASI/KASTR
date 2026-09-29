@@ -602,6 +602,7 @@
   #odRow[hidden] { display:none; }
   #odRow button { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:3px 10px; font-size:12px; cursor:pointer; }
   #odRow button.wait { opacity:.7; cursor:progress; }
+  #stage .pane .gwait { position:absolute; z-index:7; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); color:#fff; font-size:12px; border-radius:6px; pointer-events:none; }   /* 0.21.2 */
   #stage .pane .latb { position:absolute; left:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
@@ -1013,6 +1014,10 @@
   body.sb-collapsed #sbGrip { display:none; }
   @media (max-width: 720px) { #sbGrip { display:none; } }
   .sbcard .sbrow { display:flex; align-items:center; gap:7px; min-width:0; }
+  .sbcard .sbx { margin-left:auto; flex:none; background:transparent; border:0; color:var(--text-mute); cursor:pointer; font-size:11px; padding:0 4px; height:auto; visibility:hidden; }   /* 0.21.2 */
+  .sbcard:hover .sbx, .sbcard .sbx:focus-visible { visibility:visible; }
+  .sbcard .sbx:hover { color:var(--asi-red); }
+  body.sb-collapsed .sbcard .sbx { display:none; }
   .sbcard .sbname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--text); }
   .sbcard .sbmeta { display:flex; align-items:center; gap:8px; margin:3px 0 0 35px; font:10px var(--font-mono); color:var(--text-mute);
     font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -1414,6 +1419,7 @@
         <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
              title="Publish the camera's audio track with the feed (AAC). Off by default = video only. Changeable later from the feed's Audio box or \u25be menu.">
           <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspAudio"><i></i></span><span>Send the camera's audio (off by default)</span></label></div>
+        <div id="webRtspList"></div>   <!-- 0.21.2: a web client's cameras on the host -->
         <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
              title="The camera's own stream is published as-is -- no re-encode on this machine, the lowest CPU -- whenever viewers can decode it (H.264 and H.265 today; also 4K and full-range H.264, which were converted before). Viewers need hardware decode for H.265; a viewer that cannot decode a stream sees a notice on that tile. Off = H.264 up to 1080p passes through, everything else is converted to H.264.">
           <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspPassthrough"><i></i></span><span>Pass cameras through untouched when viewers can decode them (H.264/H.265, no re-encode, lowest CPU)</span></label></div>
@@ -1992,6 +1998,7 @@
   const lowOf = (name) => String(name).replace(/\.hang$/, "-low.hang");
   let odFeeds = [];                  // [{broadcast, label, live, low}] from the relay host
   const odWanted = new Map();        // broadcast -> ms this page asked for it (chip click)
+  let gridWake = null;               // 0.21.2: {gp, idx, path, at} -- a quadrant click waiting for its feed
 
   // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
   // announced() takes a PATTERN now (nothing = everything) and yields route entries
@@ -3419,6 +3426,20 @@
   // publisher-relay, relay) are not people -- they stay out of member lists and counts.
   const PRESENCE_HIDDEN_MODES = new Set(["publisher", "publisher-relay", "relay"]);
   const presenceHidden = (w) => !!w && PRESENCE_HIDDEN_MODES.has(String(w.mode || ""));
+  // 0.21.2: ...and the box's own CAMERA is not a tile either (Kenton: "relay and publish devices should not have a
+  // presence box in the rail even if they have a camera"); its RTSP feeds and grids are content and still show
+  function boxHiddenPath(name) {
+    if (isContentPath(name)) return false;
+    const parts = String(name).replace(/\.hang$/, "").split("/").filter(Boolean);
+    if (parts.length < 4) return false;
+    const host = parts[1], op = String(parts[2]).toLowerCase();
+    for (const p of roomsPres.values()) {
+      if (p.goneAt || !p.who || p.slug !== parts[0]) continue;
+      if (String(p.who.host || "") === host && String(p.who.op || "").toLowerCase() === op && presenceHidden(p.who)) return true;
+    }
+    return false;
+  }
+  window.__boxHidden = boxHiddenPath;   // rig
   // members who publish nothing (no camera, no share yet): listed as watching
   function viewerOps() {
     const me = window.__publisher?.peer;
@@ -3991,6 +4012,42 @@
     const w = Math.min(f.cw, f.Bw / (v.s * f.sc)), h = Math.min(f.ch, f.Bh / (v.s * f.sc));
     return { x: Math.min(Math.max(0, v.cx - w / 2), f.cw - w) / f.k, y: Math.min(Math.max(0, v.cy - h / 2), f.ch - h), w: w / f.k, h };   // 0.9.8: back to bitmap px
   }
+  // 0.21.2: the quadrant IS the play button. A cell whose feed is on demand (or down) asks the relay host to wake
+  // it, shows "starting..." over the cell and opens the feed the moment its tile exists (createTile -> gridWakeCheck).
+  const gridMemberSet = () => { const s2 = new Set(); for (const m of gridMeta.values()) for (const x of (m.members || [])) if (x) s2.add(String(x)); return s2; };
+  function gridWakeStart(gp, idx, fp) {
+    const meta = gridMeta.get(gp);
+    const od = odFeeds.some((f) => f.broadcast === fp);
+    const down = !!meta && ((meta.down || []).includes(idx) || (meta.dead && meta.dead.has(fp)));
+    if (!od && !down) return false;
+    odWanted.set(fp, Date.now()); odDemand(fp);
+    gridWake = { gp, idx, path: fp, at: Date.now() };
+    paintGridWait();
+    setTimeout(() => { if (gridWake && gridWake.path === fp && Date.now() - gridWake.at >= 89000) { gridWake = null; paintGridWait(); window.__toast?.("That camera did not start.", 5000, { level: "warn" }); } }, 90000);
+    return true;
+  }
+  function paintGridWait() {
+    for (const el of document.querySelectorAll("#stage .pane .gwait")) el.remove();
+    if (!gridWake) return;
+    const t = tiles.get(gridWake.gp), meta = gridMeta.get(gridWake.gp);
+    if (!t || !meta || !t.canvas.isConnected) return;
+    const f = viewFitBox(t.canvas);
+    const r = gridRectsW(meta.n, meta.layout, f ? f.cw : t.canvas.width, t.canvas.height)[gridWake.idx];
+    if (!r) return;
+    const wb = t.canvas.parentElement.getBoundingClientRect(), pb = t.pane.getBoundingClientRect();
+    const sc = f ? f.sc : (wb.width / t.canvas.width), ox = f ? f.ox : 0, oy = f ? f.oy : 0;
+    const el = document.createElement("div"); el.className = "gwait";
+    el.style.left = (wb.left - pb.left + ox + r.x * sc) + "px"; el.style.top = (wb.top - pb.top + oy + r.y * sc) + "px";
+    el.style.width = (r.w * sc) + "px"; el.style.height = (r.h * sc) + "px";
+    el.innerHTML = '<span>\u23f3 starting\u2026</span>';
+    t.pane.appendChild(el);
+  }
+  function gridWakeCheck(name) {   // a tile was created: is it the one a quadrant asked for?
+    if (!gridWake || gridWake.path !== name) return;
+    gridWake = null; paintGridWait();
+    setTimeout(() => { if (tiles.has(name)) select(name); }, 0);
+  }
+  window.__gridWake = () => gridWake;   // rig
   function paintGridZoom() {   // composite-cell expand (no feed behind the cell): a seeded view
     if (!gridZoom || gridMode) { if (gridZoom) clearGridZoom(); return; }
     const t = tiles.get(gridZoom.name), meta = gridMeta.get(gridZoom.name);
@@ -4188,6 +4245,7 @@
   window.__relayout = queueRelayout;
   // 0.8.6: hidden app / a full-screen tile change what should download.
   document.addEventListener("fullscreenchange", queueRelayout);
+  try { new ResizeObserver(() => { try { paintGridWait(); } catch {} }).observe(stageWrap); } catch {}   // 0.21.2: the wait badge follows the cell
   document.addEventListener("fullscreenchange", () => {   // 0.21.0: toasts follow the stage into full screen
     const fs = document.fullscreenElement, kt = document.getElementById("kToast");
     if (kt) (fs === stageWrap ? stageWrap : document.body).appendChild(kt);
@@ -5144,6 +5202,7 @@
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
+    if (boxHiddenPath(name)) return;   // 0.21.2: an unattended box's camera
     personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced)
     const gm0 = gridMeta.get(name);
     if (gm0) gm0.tileGone = 0;   // 0.9.4: the grid's tile is back
@@ -5310,8 +5369,9 @@
       if (meta && meta.n > 1 && tile.canvas.width > 300) {
         const idx = gridCellAtW(tile, meta, e);
         if (idx >= 0) {
-          const fp = meta.feeds?.[idx];
+          const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
           if (fp && tiles.has(fp)) { select(fp); return; }
+          if (fp && gridWakeStart(name, idx, fp)) return;   // 0.21.2: an on-demand or down feed: wake it, open it when it is up
           gridZoom = { name, idx }; fitMainstage(lastRail.rows); paintGridZoom(); return;   // 0.9.8: the stage takes the cell's shape
         }
       }
@@ -5380,6 +5440,7 @@
     if (selectedName === undefined && isWatched(name) && !isGridChild(name)) selectedName = name;   // 0.9.4: never a hidden child
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
+    gridWakeCheck(name);   // 0.21.2: a quadrant asked for this feed
     applyState();
     return tile;
   }
@@ -5569,6 +5630,7 @@
       const slugs = lastChannelList.map((r) => r.slug).join(",");
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
       try { stateMembersApply(); } catch {}   // 0.13.0
+      try { for (const n of [...tiles.keys()]) if (boxHiddenPath(n)) removeTile(n); } catch {}   // 0.21.2: the mode arrived after the tile
       try { paintSidebar(); } catch {}
       try { paintChannelChip(); } catch {}
       try { gatePaintChannels(); } catch {}
@@ -7782,7 +7844,8 @@
   }
   function odPaint() {
     if (!odRow) return;
-    const idle = odFeeds.filter((f) => !tiles.has(f.broadcast));
+    const inGrid = gridMemberSet();   // 0.21.2: a grid member wakes from its quadrant, not from a chip
+    const idle = odFeeds.filter((f) => !tiles.has(f.broadcast) && !inGrid.has(f.broadcast));
     odRow.hidden = !idle.length;
     odRow.replaceChildren();
     if (!idle.length) return;
@@ -8830,7 +8893,9 @@
     const rb = document.createElement("span"); rb.className = "rb";
     const nm = document.createElement("span"); nm.className = "sbname";
     const spk = document.createElement("span"); spk.className = "spk"; spk.innerHTML = icon("spk"); spk.title = "Someone in this room is speaking";
-    row.append(rb, nm, spk);
+    const sbx = document.createElement("button"); sbx.type = "button"; sbx.className = "sbx"; sbx.textContent = "\u2715"; sbx.title = "Close this room for everyone"; sbx.hidden = true;   // 0.21.2
+    sbx.addEventListener("click", (e) => { e.stopPropagation(); sbCloseRoom(card.__rec || rec); });
+    row.append(rb, nm, spk, sbx);
     const meta = document.createElement("div"); meta.className = "sbmeta";
     const cnt = document.createElement("span"); cnt.className = "sbcnt";
     const tm = document.createElement("span"); tm.className = "sbtime"; tm.title = "Occupied for";
@@ -8845,6 +8910,18 @@
       sbCardClick(card, card.__rec || rec);
     });
     return card;
+  }
+  // 0.21.2: the room's creator (roomKey) and admin-code holders close a room from its sidebar card; the relay
+  // operator keeps the Relay page (and the hub operator closes a spoke's room from the hub's spoke table)
+  function canCloseRoom(rec) {
+    if (!rec || rec.slug === "main") return false;
+    if (myChannels().find((r) => r.slug === rec.slug)?.roomKey) return true;
+    return authSecured && authRole === "admin";
+  }
+  function sbCloseRoom(rec) {
+    if (!canCloseRoom(rec)) return;
+    const key = myChannels().find((r) => r.slug === rec.slug)?.roomKey || null;
+    window.__chatCloseRoom?.(rec.slug, key, !key);
   }
   function sbCardClick(card, rec) {
     if (isPhone()) document.body.classList.remove("sb-open");
@@ -8874,6 +8951,7 @@
     else rb.querySelector(".lk")?.remove();
     rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (kept)" : "");
     card.querySelector(".sbname").textContent = rec.slug;
+    { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
     card.querySelector(".sbcnt").textContent = rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;
@@ -9319,8 +9397,8 @@
       }
     }
     body.appendChild(tx);
-    if (chatMyTokens.has(m.id)) {
-      const del = document.createElement("button"); del.type = "button"; del.className = "cdel"; del.textContent = "\u2715"; del.title = "Delete this message";
+    if (chatMyTokens.has(m.id) || (authSecured && authRole === "admin")) {   // 0.21.2: an admin removes any line
+      const del = document.createElement("button"); del.type = "button"; del.className = "cdel"; del.textContent = "\u2715"; del.title = chatMyTokens.has(m.id) ? "Delete this message" : "Remove this message (admin)";
       del.addEventListener("click", () => chatDelete(m.id));
       body.appendChild(del);
     }
@@ -9429,9 +9507,11 @@
   }
   async function chatDelete(id) {
     const tok = chatMyTokens.get(id);
-    if (!tok || !chatRoom) return;
+    const admin = !tok && authSecured && authRole === "admin" && authTokens?.member;   // 0.21.2
+    if ((!tok && !admin) || !chatRoom) return;
     try {
-      const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/" + id, "token=" + encodeURIComponent(tok)), { method: "DELETE" });
+      // the chat routes read Authorization as a FEDERATION token (spoke -> hub forwarding), so the admin's member token rides ?jwt=
+      const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/" + id, tok ? "token=" + encodeURIComponent(tok) : "jwt=" + encodeURIComponent(authTokens.member)), { method: "DELETE" });
       if (r.ok) { chatMsgs = chatMsgs.filter((m) => m.id !== id); chatMyTokens.delete(id); chatRenderAll(); chatWinPush({ id, cid: chatMyCids.get(id) || "", del: true, ts: Date.now() }); chatMyCids.delete(id); try { window.__chatPulse?.(id); } catch {} }
       else chatHint("Could not delete (" + r.status + ")", true);
     } catch (e) { chatHint("Could not delete \u2014 " + (e?.message || e), true); }
@@ -9587,13 +9667,15 @@
     });
   });
   // Close room (creator): the store deletes record + chat + attachments; members learn from the store
-  window.__chatCloseRoom = async (slug, roomKey) => {
-    if (!slug || !roomKey) return;
+  window.__chatCloseRoom = async (slug, roomKey, asAdmin) => {   // 0.21.2: asAdmin = no roomKey, the member token carries the admin grant
+    if (!slug || (!roomKey && !asAdmin)) return;
     if (!confirm("Close room \u201c" + slug + "\u201d for everyone?\n\nIts chat history and attachments on the relay host are deleted. Members go back to the lobby.")) return;
     const base = chatBase();
     if (!base) return;
     try {
-      const r = await fetch(base + "/api/rooms/close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug, roomKey }) });
+      const hdrs = { "content-type": "application/json" };
+      if (authSecured && authTokens?.member) hdrs.Authorization = "Bearer " + authTokens.member;   // 0.21.2: an admin closes without the key
+      const r = await fetch(base + "/api/rooms/close", { method: "POST", headers: hdrs, body: JSON.stringify(roomKey ? { slug, roomKey } : { slug }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { window.__toast?.("Could not close the room: " + (d.error || r.status), 6000, { level: "error" }); return; }
       try { window.__channels?.closedHint?.(slug); } catch {}
@@ -9683,6 +9765,19 @@
     } catch {}
   }
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+  // 0.21.2: a file announced under a private LAN address by another client is fetched through MY relay host
+  // when that host is public (the store IS the relay host for web clients) -- the address the announcer saw
+  // is not one a tunnel visitor can reach
+  function fileHref(u) {
+    try {
+      const x = new URL(String(u), location.href);
+      const priv = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost$|\[?::1\]?$)/.test(x.hostname) || /\.local$/.test(x.hostname);
+      const mine = relayHostBase() || location.origin;
+      if (priv && /^\/api\/files\//.test(x.pathname) && !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost$)/.test(new URL(mine).hostname)) return mine + x.pathname + x.search;
+      return x.href;
+    } catch { return String(u); }
+  }
+  window.__fileHref = fileHref;   // rig
   function paintFiles() {
     const sec = document.getElementById("filesSec"), box = document.getElementById("file-rows");
     if (!sec || !box) return;
@@ -9716,15 +9811,15 @@
       const row = document.createElement("div");
       row.className = "frow";
       const a = document.createElement("a");
-      a.href = m.url; a.download = m.name; a.textContent = m.name; a.title = "Download " + m.name;
+      a.href = fileHref(m.url); a.download = m.name; a.textContent = m.name; a.title = "Download " + m.name;   // 0.21.2: through my relay host when the announced address is private
       const meta = document.createElement("span");
       meta.className = "fmeta";
       meta.textContent = fmtSize(m.size || 0) + " \u00b7 " + (m.who || "?");
       row.append(a, meta);
-      if (myFiles.has(m.id)) {
+      if (myFiles.has(m.id) || (authSecured && authRole === "admin")) {   // 0.21.2: admins remove any file
         const x = document.createElement("button");
-        x.type = "button"; x.className = "ibtn"; x.title = "Remove this file"; x.textContent = "\u2715";
-        x.addEventListener("click", () => fileRemove(m.id));
+        x.type = "button"; x.className = "ibtn"; x.title = myFiles.has(m.id) ? "Remove this file" : "Remove this file (admin)"; x.textContent = "\u2715";
+        x.addEventListener("click", () => fileRemove(m.id, m.url));
         row.appendChild(x);
       }
       return row;
@@ -9750,9 +9845,20 @@
       const b = filesBtn.querySelector(".bdg"); if (b) { b.classList.remove("pulse"); void b.offsetWidth; b.classList.add("pulse"); }
     }
   }
-  async function fileRemove(id) {
+  async function fileRemove(id, url) {
     const f = myFiles.get(id);
-    if (!f) return;
+    if (!f) {   // 0.21.2: an admin removes someone else's file with the member token
+      if (!(authSecured && authRole === "admin" && authTokens?.member && url)) return;
+      if (!confirm("Remove this file for everyone?")) return;
+      try {
+        const r = await fetch(fileHref(url), { method: "DELETE", headers: { Authorization: "Bearer " + authTokens.member } });
+        if (!r.ok) { window.__toast?.("Could not remove the file (" + r.status + ")", 5000, { level: "error" }); return; }
+      } catch (e) { window.__toast?.("Could not remove the file \u2014 " + (e?.message || e), 5000, { level: "error" }); return; }
+      listedFiles.delete(id);
+      for (const [p, m] of files) if (m.id === id) files.delete(p);
+      paintFiles();
+      return;
+    }
     myFiles.delete(id);
     try { window.__fileAnnounce?.clear?.(id); } catch {}
     try { await fetch((f.deleteUrl || f.url) + "?token=" + encodeURIComponent(f.token), { method: "DELETE" }); } catch {}
@@ -9782,13 +9888,17 @@
     }
     if (!store) {
       let pub = location.origin, note = null;
-      try {
-        const m = await fetch("/api/mobile", { cache: "no-store" }).then((r) => r.json());
-        if (location.protocol === "https:" && m?.https?.length) pub = m.https[0].replace(/\/moq-watch-lite\.html$/, "");
-        else if (m?.lan?.length) pub = m.lan[0];
-        else if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) pub = location.origin;
-        else note = "Stored on this machine, but it is bound to loopback \u2014 others cannot download until 'Allow other KASTR machines' is on (Relay page) and KASTR relaunches.";
-      } catch {}
+      // 0.21.2: a page reached by any address but loopback announces THAT address -- the tunnel name through
+      // Cloudflare, the LAN https on the LAN. The field report: web clients announced the host's LAN IP and nobody
+      // through the tunnel could download. Only the app window (loopback) has to guess a reachable address.
+      if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+        try {
+          const m = await fetch("/api/mobile", { cache: "no-store" }).then((r) => r.json());
+          if (location.protocol === "https:" && m?.https?.length) pub = m.https[0].replace(/\/moq-watch-lite\.html$/, "");
+          else if (m?.lan?.length) pub = m.lan[0];
+          else note = "Stored on this machine, but it is bound to loopback \u2014 others cannot download until 'Allow other KASTR machines' is on (Relay page) and KASTR relaunches.";
+        } catch {}
+      }
       store = { base: location.origin, publicBase: pub, mode: "local", note };
     }
     storeCache = { at: Date.now(), relay: rb, store };
@@ -15468,6 +15578,22 @@
   addRtspBtn.addEventListener("click", () => {
     const u = rtspUrl.value.trim();
     if (!u) { log("Enter an RTSP or HTTP url first."); window.__toast?.("Enter an RTSP or HTTP url first.", 3000, { level: "warn" }); return; }
+    if (IS_WEB2) {   // 0.21.2: the host pulls it
+      if (!rtspViaHost) return;
+      addRtspBtn.disabled = true;
+      const label = (window.prompt("Name for this camera (shown on its tile)", rtspLabel(u)) || "").trim();
+      fetch("/api/rtsp/add", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: u, room: currentChannel(), label, op: operatorSlug(), jwt: memberJwt() }) })
+        .then((r) => r.json()).catch((e) => ({ error: String(e?.message || e) }))
+        .then((d) => {
+          addRtspBtn.disabled = false;
+          if (d?.error) { window.__toast?.("The host could not add the camera: " + d.error, 7000, { level: "error" }); return; }
+          rtspUrl.value = "";
+          window.__toast?.("Camera added \u2014 the relay host is pulling it; its tile appears in a moment.", 5000);
+          webRtspPaint();
+        });
+      return;
+    }
     // 0.9.6: the same camera twice = two publishers and two monitors for one
     // picture (and a second broadcast name). Say so; replace on request.
     const dup = u !== TEST_URL ? added.find((a) => a.kind === RTSP && a.url === u) : null;
@@ -15874,7 +16000,7 @@
     row.hidden = !row.hidden;
     if (!row.hidden) { rtspUrl.focus(); if (!ffmpegOk) probeRtsp(); }   // 0.8.9
   });
-  if (IS_WEB2) { $("srcRtspBtn").hidden = true; $("rtspRow").hidden = true; }   // 0.17.0: the bridge lives on the host
+  if (IS_WEB2) { $("srcRtspBtn").hidden = true; $("rtspRow").hidden = true; setTimeout(() => probeRtsp().catch(() => {}), 1500); }   // 0.17.0: the bridge lives on the host; 0.21.2: it may pull for us
   $("srcFileBtn").addEventListener("click", () => (window.__pickFile ? window.__pickFile(fileInput) : fileInput.click()));
   $("srcUploadBtn").addEventListener("click", () => { const si = document.getElementById("shareFile"); window.__pickFile ? window.__pickFile(si) : si.click(); });
   if (!navigator.mediaDevices?.getDisplayMedia) {   // 0.8.9: phones have no display capture
@@ -16770,12 +16896,52 @@
   // Is the ffmpeg bridge there? The page is also served by plain static hosts
   // in dev, where /api/rtsp doesn't exist at all -- so probe rather than assume.
   let probeBusy = false;
+  // 0.21.2: a web client has no ffmpeg, but the RELAY HOST may pull a camera for it -- when the host has a hardware
+  // encoder and the relay requires access codes (the publisher code is the permission). /api/client says so.
+  let rtspViaHost = null;   // {hwEncoder} when the host offers it
+  const memberJwt = () => { try { return new URL(authUrl("http://k/", "publisher")).searchParams.get("jwt") || ""; } catch { return ""; } };
+  async function webRtspPaint() {
+    const box = document.getElementById("webRtspList"); if (!box) return;
+    box.replaceChildren();
+    if (!rtspViaHost) return;
+    let d = null;
+    try { d = await fetch("/api/rtsp/list?room=" + encodeURIComponent(currentChannel()) + "&jwt=" + encodeURIComponent(memberJwt()), { cache: "no-store" }).then((r) => r.json()); } catch {}
+    const mine = (d?.feeds || []).filter((f) => f.addedBy === operatorSlug());
+    if (!mine.length) return;
+    const h = document.createElement("div"); h.textContent = "Cameras I added on the host:"; h.style.cssText = "font-size:11px;color:var(--text-dim);margin-top:6px"; box.appendChild(h);
+    for (const f of mine) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;align-items:center;font-size:11px";
+      const nm = document.createElement("span"); nm.textContent = (f.publish?.label || f.url || "camera") + (f.publish?.parked ? " (parked)" : f.publish?.running ? "" : " (starting)"); nm.style.flex = "1";
+      const x = document.createElement("button"); x.type = "button"; x.className = "ibtn"; x.textContent = "Remove";
+      x.addEventListener("click", async () => {
+        x.disabled = true;
+        const r = await fetch("/api/rtsp/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: f.id, room: currentChannel(), op: operatorSlug(), jwt: memberJwt() }) }).then((r2) => r2.json()).catch((e) => ({ error: String(e) }));
+        if (r?.error) window.__toast?.("Could not remove: " + r.error, 5000, { level: "error" });
+        webRtspPaint();
+      });
+      row.append(nm, x); box.appendChild(row);
+    }
+  }
   async function probeRtsp(retries = 3) {
-    if (IS_WEB2) {   // 0.17.0: a web client never has the host's ffmpeg
-      ffmpegOk = false;
-      rtspState.textContent = "unavailable"; rtspState.className = "badge";
-      rtspState.title = "RTSP feeds are published from the KASTR that hosts the relay, not from a browser";
-      addRtspBtn.disabled = addTestBtn.disabled = rtspUrl.disabled = true;
+    if (IS_WEB2) {   // 0.17.0: a web client never has the host's ffmpeg -- 0.21.2: but the host may pull for it
+      let c = null;
+      try { c = await fetch("/api/client", { cache: "no-store" }).then((r) => r.json()); } catch {}
+      rtspViaHost = c?.features?.rtspViaHost ? { hwEncoder: c.features.hwEncoder || "" } : null;
+      ffmpegOk = !!rtspViaHost;
+      const srcBtn = document.getElementById("srcRtspBtn");
+      if (srcBtn) srcBtn.hidden = !rtspViaHost;
+      for (const id of ["rtspKeep", "rtspAudio"]) document.getElementById(id)?.closest(".chk")?.toggleAttribute("hidden", true);   // the host keeps it; audio off (the host's default)
+      addTestBtn.hidden = true;
+      if (!rtspViaHost) {
+        rtspState.textContent = "unavailable"; rtspState.className = "badge";
+        rtspState.title = c?.features ? "The relay host has no hardware encoder, or its relay does not require access codes" : "RTSP feeds are published from the KASTR that hosts the relay, not from a browser";
+        addRtspBtn.disabled = rtspUrl.disabled = true;
+        return;
+      }
+      rtspState.textContent = "via the relay host (" + rtspViaHost.hwEncoder + ")"; rtspState.className = "badge ready";
+      rtspState.title = "The relay host pulls this camera, transcodes it on " + rtspViaHost.hwEncoder + " and publishes it under your name";
+      addRtspBtn.disabled = rtspUrl.disabled = false;
+      webRtspPaint();
       return;
     }
     if (probeBusy) return;

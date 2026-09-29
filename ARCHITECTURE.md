@@ -912,6 +912,31 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.2
+
+- **A mode is a fact about the whole device.** Hiding a box from People but not its camera left half a person in
+  the rail. The presence entry already names the mode; the tile factory reads it and the camera path is refused
+  wherever it would have become a tile.
+- **The quadrant is the control.** Two ways to start a camera (a chip and a cell) with one of them doing the wrong
+  thing is worse than one; the cell wakes the feed and the chips retire where a grid exists.
+- **Contain first, then lay out.** A card grid whose cards can be narrower than their content will overflow on a
+  phone no matter how the columns are chosen; `overflow:hidden` on the card and scrolling tables inside it make the
+  layout honest before it is pretty.
+- **Authority travels with the token, not the transport.** The admin grant (`<room>/.admin`) already existed for
+  stop/mute/kick; closing rooms and removing files or chat lines are the same authority, so they check the same
+  claim — with one caveat learned here: the chat routes read `Authorization` as the spoke-to-hub federation token,
+  so a member token rides `?jwt=` there.
+- **A command channel carries lists, not a slot.** "Update" was one record because one update is one intent; room
+  closes between two polls are several intents, so `closeRoom` is a list and a spoke acts on every entry newer than
+  what it had seen.
+- **Announce the address you were reached by.** Guessing a "reachable" LAN address is right only for the loopback
+  app window; every other page knows exactly how the world reached it — `location.origin` — and that is the only
+  address a tunnel visitor can use.
+- **The host lends its encoder, never its judgment.** A web client's camera is pulled by the relay host under the
+  adder's name, with the adder's publisher token as the permission, the host's own token for the publish, and the
+  hardware encoder as the precondition; the encoder probe runs off the request thread so a page load never waits
+  on ffmpeg.
+
 ### 0.21.1
 
 - **A checksum proves integrity, not identity.** The manifest hashed whatever file the hub held, so a stale binary

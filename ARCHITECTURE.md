@@ -912,6 +912,20 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.3
+
+- **Never rename a running PyInstaller image.** The single-file bootloader opens the executable by path to read the
+  bundled archive on demand; rename the file and the next import kills the process with "appears to have been moved
+  or deleted". Both self-update designs (rename the old build while it spawns; rename the new build once it runs)
+  violated this. The only safe sequence is: the running process exits, a process that is not the image swaps the
+  files, and the new build starts at its final path — which is what a hidden cmd helper does (hidden, not detached: a console-less cmd cannot pipe `tasklist` into `findstr`, and the helper waited forever until the dev box showed it).
+- **A lock is not the only reason a swap fails.** The 0.16–0.21 fixes chased Defender's file locks and the
+  bootloader's environment; the reproduction showed a third cause that no retry could beat. A frozen two-build test on
+  the build machine is now part of every Windows release, because the field is a poor place to learn this.
+- **A vouch must come from someone who verified.** A spoke's chat caller is verified by the spoke (its minter's key);
+  the hub cannot re-verify, so the spoke states the one fact the hub needs (admin or not) under a token the hub does
+  verify. Trust flows along the federation link, never from a header alone.
+
 ### 0.21.2
 
 - **A mode is a fact about the whole device.** Hiding a box from People but not its camera left half a person in

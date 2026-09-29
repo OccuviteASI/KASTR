@@ -2,6 +2,42 @@
 
 What changed in each build, newest first.
 
+## v0.21.3 — the Windows relaunch, found and fixed; admins on spokes; purge chat; box UI; a readable stamp
+
+**Why Windows relay boxes updated and never came back.** Reproduced on the build machine with two frozen builds
+(0.21.1 updating to 0.21.2): the new build started, renamed itself into place, wrote "updated and relaunched" — and
+was gone a second later. The cause is PyInstaller's single-file bootloader: it reads the bundled Python archive from
+the executable's path lazily, and when the running image is renamed it aborts ("appears to have been moved or
+deleted since this application was launched"). The 0.21.0 takeover renamed the new build while it ran; the older
+classic path renamed the OLD build while it ran (before it had spawned its successor). Neither can work on Windows.
+Now no running image is ever renamed: the updater writes a small helper (`swap-<ts>.cmd` in the state folder),
+starts it hidden (its own console, outside KASTR's job) with the scrubbed relaunch environment, and exits; the helper waits for
+the old process to be gone, renames `KASTR.exe` → `KASTR.old-<ts>.exe` and `KASTR.new.exe` → `KASTR.exe` (up to
+20 s of retries for a scanner's lock), starts `KASTR.exe` at its final path and writes what it did to
+`launch.log` — and if the new file could not be placed it puts the old build back and starts that, so the box
+always comes back. Verified here: a 0.21.2 box updated from a 0.21.3 authority came back serving 0.21.3 (the
+`swap:` line in its launch.log, the old build aside). The takeover stays in the code behind `update_takeover = on`
+for experiments only. Linux is unchanged (its relaunch has worked in the field).
+
+**An admin on a spoke could not delete chat.** Chat is forwarded from a spoke to the hub under the spoke's
+federation token, and the hub cannot verify a member token the spoke's minter issued — so the admin's delete was a
+stranger's. The spoke, which verifies every chat caller anyway, now vouches for its admin (`X-Kastr-Admin: 1`
+under its federation bearer); a secured hub honours the vouch only from a federation token it verifies.
+
+**Purge chat from the Relay page.** The rooms table (and each spoke room in the Federation card on a hub) gets
+"Purge chat": the transcript and attachments stored on that machine go, the room stays. The relay operator's own
+page also sees the delete on every chat line and every shared file (the host already allowed it).
+
+**Unattended boxes have no webcam or microphone controls.** In publisher, publisher-relay and relay modes the
+camera/mic toolbar groups, the gate's camera/mic switches and preview, and the audio/video option entries are hidden.
+
+**The latency stamp is readable.** Beside the machine strip the publisher now paints the same clock as text
+(`HH:MM:SS.mmm`, relay-host-corrected), and the viewer's badge says "latency 282 ms" instead of a bare number.
+
+**Still to hear from the field:** Southridge did not appear in the hub's spoke table and did not update — a spoke
+registers with the hub only when its own relay runs secured (the registration needs the hub's federation token and
+its own auth service). Its Relay page Federation card and its launch.log say which it is.
+
 ## v0.21.2 — field fixes, round two: boxes, grid quadrants, closing rooms, admins, web cameras
 
 Kenton's second list after 0.21.1 on kastr.madlabs.app, with relay/publisher boxes, on-demand RTSP grids and web

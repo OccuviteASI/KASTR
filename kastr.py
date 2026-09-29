@@ -521,7 +521,13 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             raise RuntimeError("checksum mismatch")
         if os.path.getsize(tmp) != int(info.get("size") or 0):
             raise RuntimeError("size mismatch")
-        # 0.21.0: two-phase takeover -- run the new build BEFORE touching KASTR.exe
+        # 0.21.3: Windows -- a detached helper swaps the files after we exit and starts the new build at its final
+        # path; no running image is ever renamed (PyInstaller onefile aborts on that, see swap_via_helper_windows)
+        if WINDOWS and getattr(sys, "frozen", False) and not _takeover_enabled():
+            if swap_via_helper_windows(tmp, target, theirs, mine, before_exit):   # never returns on success
+                pass
+            note("update: swap helper unavailable -- classic swap")
+        # 0.21.0: two-phase takeover -- run the new build BEFORE touching KASTR.exe (0.21.3: off unless update_takeover = on)
         if _takeover_enabled():
             newexe = os.path.join(os.path.dirname(target), "KASTR.new.exe")
             try:
@@ -869,12 +875,111 @@ TAKEOVER_PENDING_FILE = "takeover-pending.json"
 
 
 def _takeover_enabled():
+    """0.21.3: OFF. The 0.21.0 takeover had the new build rename ITSELF into place -- PyInstaller's onefile
+    bootloader reads the PYZ from the executable's path lazily and aborts when the running image is renamed
+    ("appears to have been moved or deleted since this application was launched"). Reproduced on the dev box
+    2026-09-29: updated, renamed, logged "relaunched", dead a second later. kastr.ini `update_takeover = on`
+    re-enables it for experiments only; the Windows swap is the detached helper (swap_via_helper_windows)."""
     if not (WINDOWS and getattr(sys, "frozen", False)):
         return False
     try:
-        return str(kastr_serve.ini_get("update_takeover") or "").strip().lower() not in ("off", "false", "0", "no")
+        return str(kastr_serve.ini_get("update_takeover") or "").strip().lower() in ("on", "true", "1", "yes")
     except Exception:
-        return True
+        return False
+
+
+SWAP_HELPER_PREFIX = "swap-"
+
+
+def swap_helper_script(newfile, target, aside, log_path, old_pid, theirs, mine, args):
+    """0.21.3: the cmd script that swaps the binaries AFTER the old process is gone and starts the new one at its
+    final path. No running image is ever renamed (see swap_via_helper_windows). `ping` is the sleep (timeout /t
+    refuses redirected input). The outcome lands in launch.log either way; a failed placement puts the old build
+    back and starts it, so the box always comes back."""
+    d = os.path.dirname(target)
+    return "\r\n".join([
+        "@echo off",
+        "setlocal",
+        'set "T=%s"' % target, 'set "N=%s"' % newfile, 'set "A=%s"' % aside, 'set "L=%s"' % log_path, 'set "P=%d"' % int(old_pid),
+        "set /a W=0",   # cmd variables are case-insensitive: never `n` beside `N`
+        ":wait",
+        'tasklist /FI "PID eq %P%" /NH 2>nul | findstr /I "KASTR" >nul',
+        "if errorlevel 1 goto swap",
+        "set /a W+=1",
+        "if %W% geq 120 goto swap",
+        "ping -n 2 127.0.0.1 >nul",
+        "goto wait",
+        ":swap",
+        "set /a k=0",
+        ":try",
+        'if exist "%T%" move /y "%T%" "%A%" >nul 2>&1',
+        'if exist "%T%" goto retry',
+        'move /y "%N%" "%T%" >nul 2>&1',
+        'if exist "%T%" goto started',
+        ":retry",
+        "set /a k+=1",
+        "if %k% geq 20 goto fail",
+        "ping -n 2 127.0.0.1 >nul",
+        "goto try",
+        ":started",
+        'echo %%date%% %%time%% swap: KASTR.exe is now v%s (v%s kept aside as %s, waited %%W%% s for pid %%P%%) -- starting it>>"%%L%%"' % (theirs, mine, os.path.basename(aside)),
+        'start "" /D "%s" "%%T%%" %s' % (d, args),
+        "exit /b 0",
+        ":fail",
+        'if not exist "%T%" if exist "%A%" move /y "%A%" "%T%" >nul 2>&1',
+        'echo %%date%% %%time%% swap: FAILED to place v%s (file still locked after 20 s) -- starting v%s again>>"%%L%%"' % (theirs, mine),
+        'start "" /D "%s" "%%T%%" %s' % (d, args),
+        "exit /b 1",
+        "",
+    ])
+
+
+def swap_via_helper_windows(newfile, target, theirs, mine, before_exit):
+    """0.21.3: the Windows self-update. Writes the helper (state dir), starts it hidden and out of our Job with the
+    scrubbed relaunch environment (KASTR_UPDATED=1, KASTR_RELAUNCH=1 + pid/port), logs, then ends this process --
+    the helper renames KASTR.exe -> KASTR.old-<ts>.exe, KASTR.new.exe -> KASTR.exe and starts KASTR.exe. Returns
+    False (nothing started) when the helper could not be spawned; never returns otherwise."""
+    d = os.path.dirname(target)
+    ts = int(time.time())
+    aside = os.path.join(d, "KASTR.old-%d.exe" % ts)
+    sd = state_dir()
+    bat = os.path.join(sd, "%s%d.cmd" % (SWAP_HELPER_PREFIX, ts))
+    log_path = os.path.join(sd, "launch.log")
+    args = subprocess.list2cmdline(list(sys.argv[1:]))
+    try:
+        with open(bat, "w", encoding="ascii", errors="replace", newline="") as f:
+            f.write(swap_helper_script(newfile, target, aside, log_path, os.getpid(), theirs, mine, args))
+    except OSError as e:
+        note("update: could not write the swap helper (%s)" % e)
+        return False
+    env = _relaunch_env("update")
+    # CREATE_NO_WINDOW, never DETACHED_PROCESS: a console-less cmd cannot run `tasklist | findstr` (the pipe
+    # deadlocks and the helper waits forever -- measured on the dev box); a hidden console of its own works and
+    # outlives us. Breakaway keeps it out of KASTR's kill-on-close job.
+    flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+             | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0))
+    cmd = ["cmd.exe", "/d", "/c", bat]
+    proc = None
+    for fl in (flags, flags & ~getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)):
+        try:
+            proc = subprocess.Popen(cmd, env=env, cwd=d, close_fds=True, creationflags=fl,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            break
+        except OSError as e:
+            note("update: swap helper spawn refused (%s)%s" % (e, " -- retrying inside the job" if fl == flags else ""))
+    if proc is None:
+        return False
+    note("update: swap helper pid %d will replace %s with v%s once this process (pid %d) exits, then start it"
+         % (proc.pid, os.path.basename(target), theirs, os.getpid()))
+    update_note("updating", f"v{mine} -> v{theirs}: swap helper pid {proc.pid} takes over when this process exits")
+    print(f"{APP_NAME}: relaunching as v{theirs} (swap helper)", flush=True)
+    if before_exit:
+        try:
+            _call_before_exit(before_exit, 0)   # runtime path: teardown() -- ends the process
+        except Exception:
+            pass
+    time.sleep(0.3)
+    os._exit(0)
 
 
 def _relaunch_env(reason="update"):
@@ -1238,7 +1343,21 @@ def effective_mode(cli_mode, relay_only_flag, ini):
     return mode, mode in ("relay", "publisher-relay"), mode == "relay"
 
 
+def _sweep_swap_helpers():
+    """0.21.3: swap-<ts>.cmd helpers older than ten minutes (the helper cannot delete itself while it runs)."""
+    try:
+        sd = state_dir()
+        for fn in os.listdir(sd):
+            if fn.startswith(SWAP_HELPER_PREFIX) and fn.endswith(".cmd"):
+                fp = os.path.join(sd, fn)
+                if time.time() - os.path.getmtime(fp) > 600:
+                    os.remove(fp)
+    except OSError:
+        pass
+
+
 def sweep_old_binaries():
+    _sweep_swap_helpers()   # 0.21.3
     """0.8.7: delete KASTR.old-* left beside the executable by earlier
     self-updates. build.py sweeps its dist folder, but a field machine that
     updates itself never runs build.py -- every update left ~100 MB behind

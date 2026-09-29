@@ -2999,7 +2999,7 @@
       for (const id of ["optMobile", "aboutUpd", "aboutUpdSt", "joinRelayRow"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
     }
     if (typeof MediaRecorder === "undefined") { for (const id of ["recBtn", "optRec"]) { const el = document.getElementById(id); if (el) el.hidden = true; } }
-    if (!CLIENT.secure || !CLIENT.media) {
+    if (!CLIENT.secure || !CLIENT.media || isPublisherMode() || PAGE_MODE === "relay") {   // 0.21.3: an unattended box (publisher / publisher-relay / relay) has no webcam or mic UI either
       for (const id of ["joinPreview", "permBtn", "optEnc", "optAud", "optAudio", "optVideo"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
       for (const id of ["joinCam", "joinMic"]) document.getElementById(id)?.closest("label")?.setAttribute("hidden", "");
@@ -7967,7 +7967,7 @@
       if (d < -2000 || d > 60000) continue;               // a bad read, not a latency
       t.latency = t.latency == null ? d : t.latency * 0.7 + d * 0.3;
       if (!badge) { badge = document.createElement("span"); badge.className = "latb"; t.pane.appendChild(badge); }
-      badge.textContent = Math.round(t.latency) + " ms";
+      badge.textContent = "latency " + Math.round(t.latency) + " ms";   // 0.21.3: say what the number is
       badge.title = "Glass-to-glass latency from the publisher's time code (clock offset to the relay host " + Math.round(window.__clockOffset || 0) + " ms, rtt " + (window.__clockRtt ?? "?") + " ms)";
     }
   }, 1000);
@@ -9397,8 +9397,8 @@
       }
     }
     body.appendChild(tx);
-    if (chatMyTokens.has(m.id) || (authSecured && authRole === "admin")) {   // 0.21.2: an admin removes any line
-      const del = document.createElement("button"); del.type = "button"; del.className = "cdel"; del.textContent = "\u2715"; del.title = chatMyTokens.has(m.id) ? "Delete this message" : "Remove this message (admin)";
+    if (chatMyTokens.has(m.id) || (authSecured && authRole === "admin") || isRelayOperator()) {   // 0.21.2: an admin removes any line; 0.21.3: so does the relay operator's own page
+      const del = document.createElement("button"); del.type = "button"; del.className = "cdel"; del.textContent = "\u2715"; del.title = chatMyTokens.has(m.id) ? "Delete this message" : (isRelayOperator() && !(authSecured && authRole === "admin") ? "Remove this message (relay operator)" : "Remove this message (admin)");
       del.addEventListener("click", () => chatDelete(m.id));
       body.appendChild(del);
     }
@@ -9508,10 +9508,11 @@
   async function chatDelete(id) {
     const tok = chatMyTokens.get(id);
     const admin = !tok && authSecured && authRole === "admin" && authTokens?.member;   // 0.21.2
-    if ((!tok && !admin) || !chatRoom) return;
+    const operator = !tok && !admin && isRelayOperator();   // 0.21.3: the relay host's own page -- the server lets loopback delete anything
+    if ((!tok && !admin && !operator) || !chatRoom) return;
     try {
       // the chat routes read Authorization as a FEDERATION token (spoke -> hub forwarding), so the admin's member token rides ?jwt=
-      const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/" + id, tok ? "token=" + encodeURIComponent(tok) : "jwt=" + encodeURIComponent(authTokens.member)), { method: "DELETE" });
+      const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/" + id, tok ? "token=" + encodeURIComponent(tok) : (admin ? "jwt=" + encodeURIComponent(authTokens.member) : (authTokens?.member ? "jwt=" + encodeURIComponent(authTokens.member) : ""))), { method: "DELETE" });
       if (r.ok) { chatMsgs = chatMsgs.filter((m) => m.id !== id); chatMyTokens.delete(id); chatRenderAll(); chatWinPush({ id, cid: chatMyCids.get(id) || "", del: true, ts: Date.now() }); chatMyCids.delete(id); try { window.__chatPulse?.(id); } catch {} }
       else chatHint("Could not delete (" + r.status + ")", true);
     } catch (e) { chatHint("Could not delete \u2014 " + (e?.message || e), true); }
@@ -9816,7 +9817,7 @@
       meta.className = "fmeta";
       meta.textContent = fmtSize(m.size || 0) + " \u00b7 " + (m.who || "?");
       row.append(a, meta);
-      if (myFiles.has(m.id) || (authSecured && authRole === "admin")) {   // 0.21.2: admins remove any file
+      if (myFiles.has(m.id) || (authSecured && authRole === "admin") || isRelayOperator()) {   // 0.21.2: admins remove any file; 0.21.3: the relay operator too
         const x = document.createElement("button");
         x.type = "button"; x.className = "ibtn"; x.title = myFiles.has(m.id) ? "Remove this file" : "Remove this file (admin)"; x.textContent = "\u2715";
         x.addEventListener("click", () => fileRemove(m.id, m.url));
@@ -9847,11 +9848,12 @@
   }
   async function fileRemove(id, url) {
     const f = myFiles.get(id);
-    if (!f) {   // 0.21.2: an admin removes someone else's file with the member token
-      if (!(authSecured && authRole === "admin" && authTokens?.member && url)) return;
+    if (!f) {   // 0.21.2: an admin removes someone else's file with the member token; 0.21.3: the relay operator with none
+      const asAdmin = authSecured && authRole === "admin" && authTokens?.member;
+      if (!url || !(asAdmin || isRelayOperator())) return;
       if (!confirm("Remove this file for everyone?")) return;
       try {
-        const r = await fetch(fileHref(url), { method: "DELETE", headers: { Authorization: "Bearer " + authTokens.member } });
+        const r = await fetch(fileHref(url), { method: "DELETE", headers: asAdmin ? { Authorization: "Bearer " + authTokens.member } : {} });
         if (!r.ok) { window.__toast?.("Could not remove the file (" + r.status + ")", 5000, { level: "error" }); return; }
       } catch (e) { window.__toast?.("Could not remove the file \u2014 " + (e?.message || e), 5000, { level: "error" }); return; }
       listedFiles.delete(id);
@@ -10905,6 +10907,14 @@
         const xa = Math.round(x0 + i * cs), xb = Math.round(x0 + (i + 1) * cs);
         cx.fillStyle = bits[i] ? "#fff" : "#000"; cx.fillRect(xa, y0, xb - xa, h - y0);
       }
+      // 0.21.3: the strip is for machines -- a human gets the same clock as text, two cells to its left
+      const d = new Date(Date.now() + (window.__clockOffset || 0));
+      const txt = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0") + "." + String(d.getMilliseconds()).padStart(3, "0");
+      const fh = Math.max(10, Math.round(cs * 1.8));
+      cx.font = "bold " + fh + "px ui-monospace, Consolas, 'Courier New', monospace"; cx.textBaseline = "alphabetic"; cx.textAlign = "right";
+      const tw = Math.ceil(cx.measureText(txt).width) + 8, tx = Math.floor(x0 - 2 * cs);
+      cx.fillStyle = "rgba(0,0,0,.75)"; cx.fillRect(tx - tw, h - fh - 6, tw, fh + 6);
+      cx.fillStyle = "#fff"; cx.fillText(txt, tx - 4, h - 4);
       cx.restore();
     } catch {}
   }

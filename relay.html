@@ -912,11 +912,19 @@
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
     // 0.21.2: + each spoke's rooms, closeable from here (the closeRoom command rides the spoke's long-poll)
     const roomsCell = (r) => (r.rooms || []).length
-      ? (r.rooms || []).map((slug) => "<span class=\"sproom\" data-spoke=\"" + esc(r.name || r.key) + "\" data-slug=\"" + esc(slug) + "\">" + esc(slug) + (LOCAL ? " <button type=\"button\" class=\"ghost sprx\" title=\"Close this room on that spoke\">\u2715</button>" : "") + "</span>").join(" ")
+      ? (r.rooms || []).map((slug) => "<span class=\"sproom\" data-spoke=\"" + esc(r.name || r.key) + "\" data-slug=\"" + esc(slug) + "\">" + esc(slug) + (LOCAL ? " <button type=\"button\" class=\"ghost sprp\" title=\"Purge this room's chat stored on this hub (the room stays)\">chat</button> <button type=\"button\" class=\"ghost sprx\" title=\"Close this room on that spoke\">\u2715</button>" : "") + "</span>").join(" ")
       : "<span style=\"color:var(--text-mute)\">\u2014</span>";
     $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Last seen</th></tr>"
       + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td></tr>").join("") + "</table></div>"
       : "No spoke has registered yet.";
+    for (const b of $("spokesList").querySelectorAll(".sprp")) b.addEventListener("click", async () => {   // 0.21.3
+      const slug = b.parentElement.dataset.slug;
+      if (!confirm("Delete the chat history and attachments of room " + slug + " stored on this hub? The room stays open.")) return;
+      b.disabled = true;
+      try { const r = await api("/api/relay/chat/purge", { slug }); $("spokesMsg").textContent = r.error ? "Purge failed: " + r.error : ("Chat of " + slug + " purged here (" + (r.removed ?? "?") + " file(s))."); }
+      catch (e) { $("spokesMsg").textContent = "Purge failed: " + (e?.message || e); }
+      b.disabled = false;
+    });
     for (const b of $("spokesList").querySelectorAll(".sprx")) b.addEventListener("click", async () => {
       const sp = b.parentElement.dataset.spoke, slug = b.parentElement.dataset.slug;
       if (!confirm("Close room " + slug + " on spoke " + sp + " for everyone? Its chat and attachments there are deleted.")) return;
@@ -1134,6 +1142,21 @@
       }
     });
     tr.querySelector(".act").appendChild(btn);
+    // 0.21.3: purge the room's chat (transcript + attachments) and keep the room
+    const pb = document.createElement("button");
+    pb.type = "button"; pb.className = "ghost"; pb.textContent = "Purge chat"; pb.style.marginLeft = "4px";
+    pb.title = LOCAL ? "Delete this room's chat history and attachments stored here; the room stays" : "Chat purges only from the machine that hosts the relay";
+    pb.disabled = !LOCAL;
+    pb.addEventListener("click", async () => {
+      if (!confirm("Delete the chat history and attachments of room " + slug + " stored on this machine? The room stays open.")) return;
+      pb.disabled = true; pb.textContent = "Purging\u2026";
+      try {
+        const r = await api("/api/relay/chat/purge", { slug });
+        roomsNote.hidden = false; roomsNote.textContent = r.error ? "Purge failed: " + r.error : ("Chat of " + slug + " purged (" + (r.removed ?? "?") + " file(s)).");
+      } catch (e) { roomsNote.hidden = false; roomsNote.textContent = "Purge failed: " + (e?.message || e); }
+      pb.textContent = "Purge chat"; pb.disabled = !LOCAL;
+    });
+    tr.querySelector(".act").appendChild(pb);
     return tr;
   }
   function fillRow(tr, r, closedAt) {

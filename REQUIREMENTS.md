@@ -414,6 +414,15 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.3
+
+| Area | Requirement | Since |
+|---|---|---|
+| U | Windows self-update = detached swap helper: `swap_helper_script(newfile, target, aside, log, old_pid, theirs, mine, args)` (cmd: wait for the old pid via `tasklist`, `ping` sleeps, `move` old → `KASTR.old-<ts>.exe`, `.new` → `KASTR.exe` with 20 retries, `start "" /D <dir> KASTR.exe <args>`, outcome appended to launch.log; on failure the old build is put back and started; exit 0/1); `swap_via_helper_windows(newfile, target, theirs, mine, before_exit)` writes `<state>/swap-<ts>.cmd`, spawns `cmd /d /c` with `_relaunch_env("update")` (KASTR_UPDATED=1, KASTR_RELAUNCH=1, pid, port) and `CREATE_NO_WINDOW \| CREATE_NEW_PROCESS_GROUP \| CREATE_BREAKAWAY_FROM_JOB` (retried inside the job; a DETACHED cmd cannot run `tasklist \| findstr` -- the pipe deadlocks), logs `update: swap helper pid N …`, runs `before_exit`, exits; `update_from` takes this path on frozen Windows before any rename; `_takeover_enabled()` is False unless kastr.ini `update_takeover = on`; `_sweep_swap_helpers()` (10 min) from `sweep_old_binaries`. No running image is ever renamed. | 0.21.3 |
+| S | Chat: `_chat_auth` records `admin` (claims_admin) for a verified member; a spoke's `_chat_proxy(..., admin=True)` sends `X-Kastr-Admin: 1`; hub `_chat_delete` forces the delete when `_fed_vouched_admin()` (header + a federation bearer verified by a SECURED hub). `POST /api/relay/chat/purge {slug}` (loopback only) → `chat_store.delete_room(slug)` → `{ok, slug, removed}`; `_file_delete` also for a loopback caller. | 0.21.3 |
+| W/R | Chat lines and file rows show the delete/remove control for the relay operator's own page (`isRelayOperator()`); `chatDelete` sends `?jwt=` when a member token exists, else nothing (loopback). Relay page rooms table: "Purge chat" per room; spoke rooms: a `chat` purge button beside the close. `applyPageMode`: publisher / publisher-relay / relay modes hide `#topCamBtn`/`#topMicBtn` groups, gate camera/mic switches and preview, `optEnc/optAud/optAudio/optVideo`. `drawStamp` paints `HH:MM:SS.mmm` (clock-offset corrected) two cells left of the strip on a dark box (`max(10, 1.8·cell)` px mono); the `.latb` badge reads "latency N ms". | 0.21.3 |
+| T | `v0213/test_v0213.py` (takeover off; the helper script on stand-in exes: waits for the old pid, swaps, keeps the old aside, logs; a locked new file → old build back, exit 1; sweep; update_from routes Windows through the helper), frozen two-build update on the dev box (0.21.2 → 0.21.3 via `--host 0.0.0.0` authority), smokes `v0213/smoke_*` (+ `/api/relay/chat/purge` via LAN 403). | 0.21.3 |
+
 ### Added in 0.21.2
 
 | Area | Requirement | Since |

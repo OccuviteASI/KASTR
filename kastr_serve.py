@@ -1792,7 +1792,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     meta = json.load(f)
             except OSError:
                 return self._json_cors(404, {"error": "no such file"})
-            if token != meta.get("token") and not self._admin_for(str(meta.get("room") or "")):   # 0.21.2: or an admin of its room
+            if token != meta.get("token") and not self._admin_for(str(meta.get("room") or "")) and not kastr_relay._local_only(self):   # 0.21.2: or an admin of its room; 0.21.3: or the operator's own page
                 return self._json_cors(403, {"error": "not the owner"})
             for p in (path, path + ".json"):
                 try:
@@ -1959,7 +1959,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if not kastr_relay.claims_cover(claims, room):
                     self._chat_reply(401, {"error": "token does not cover this room"})
                     return None
-                return {"mode": mode, "via": self._chat_via(), "fed": False, "hub": hub}
+                # 0.21.3: remember whether this member is an ADMIN of the room -- a spoke vouches for it to the hub
+                return {"mode": mode, "via": self._chat_via(), "fed": False, "hub": hub, "admin": kastr_relay.claims_admin(claims, room)}
             self._chat_reply(401, {"error": "token required"})
             return None
 
@@ -1980,7 +1981,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if ctx is None:
                 return
             if ctx["mode"] == "proxy":
-                return self._chat_proxy(method, room, ctx["hub"], files=bool(files))
+                return self._chat_proxy(method, room, ctx["hub"], files=bool(files), admin=bool(ctx.get("admin")))
             if ctx.get("fed"):
                 # the spoke says whether IT keeps this room; the hub keeps the transcript for it
                 keep = (self.headers.get("X-Kastr-Persistent") or "").strip()
@@ -2055,9 +2056,53 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def kastr_relay_srv(self):
             return relay_srv   # 0.21.2: kastr_rtsp.handle_api checks the relay is secured before a web client adds a camera
 
+        def _fed_vouched_admin(self):
+            """0.21.3: a forwarding SPOKE says the caller is an admin of the room (X-Kastr-Admin: 1). Trusted only
+            under a federation token this secured hub verifies; an open hub trusts its LAN anyway (no vouch)."""
+            if self.headers.get("X-Kastr-Admin") != "1":
+                return False
+            auth = self.headers.get("Authorization") or ""
+            bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+            if not bearer or not (relay_srv is not None and getattr(relay_srv, "secured", False)):
+                return False
+            state = self._state_dir()
+            key = kastr_relay.read_jwk(state) if state else None
+            claims = kastr_relay.verify_token(bearer, key) if key else None
+            return bool(claims and kastr_relay.is_relay_claims(claims))
+
+        def _chat_purge(self):
+            """0.21.3: the relay operator (a loopback page) deletes a room's chat -- transcript, keep marker and
+            attachments stored HERE -- and the room stays. On a hub this covers the spokes' rooms too (their chat
+            lives here)."""
+            if not kastr_relay._local_only(self):
+                try:
+                    self.rfile.read(int(self.headers.get("Content-Length") or 0) or 0)
+                except Exception:
+                    pass
+                return self._json_cors(403, {"error": "chat purges only from the machine that hosts the relay"})
+            p = self._chat_body_json() or {}
+            slug = str(p.get("slug") or "")
+            if not kastr_relay.SLUG_RE.match(slug):
+                return self._json_cors(400, {"error": "bad room name"})
+            cs = chat_store(relay_srv=relay_srv)
+            if cs is None:
+                return self._json_cors(503, {"error": "no chat store on this KASTR"})
+            try:
+                removed = cs.delete_room(slug)
+            except Exception as e:
+                return self._json_cors(500, {"error": str(e)})
+            n = len(removed) if isinstance(removed, (list, tuple)) else removed
+            if callable(globals().get("_chat_log")):
+                _chat_log("chat: operator purged room %s (%s file(s))" % (slug, n if n is not None else "?"))
+            return self._json_cors(200, {"ok": True, "slug": slug, "removed": n})
+
         def _chat_delete(self, room, msgid, qs, store):
             token = (qs.get("token") or [""])[0]
             force = kastr_relay._local_only(self)     # the operator on the relay host may delete anything
+            if not force and self._fed_vouched_admin():   # 0.21.3: an admin on a spoke, vouched for by that spoke
+                force = True
+                if callable(globals().get("_chat_log")):
+                    _chat_log("chat: admin (via %s) removed message %s in %s" % ((self.headers.get("X-Kastr-Via") or "spoke")[:40], msgid, room))
             if not force and self._admin_for(room, qs):   # 0.21.2: an admin removes any line
                 force = True
                 if callable(globals().get("_chat_log")):
@@ -2175,7 +2220,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except Exception:
                 return None, {}
 
-        def _chat_proxy(self, method, room, hub, files=False):
+        def _chat_proxy(self, method, room, hub, files=False, admin=False):
             """A spoke forwards the whole call to the hub's KASTR with its
             federation token; the hub's reply comes back as-is, except a 404
             from a hub without a chat service and a 410 (room closed there)."""
@@ -2192,6 +2237,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             headers = {"X-Kastr-Via": self._chat_via()}
             if tok:
                 headers["Authorization"] = "Bearer " + tok
+            if admin:
+                headers["X-Kastr-Admin"] = "1"   # 0.21.3: this spoke verified its admin's token; the hub cannot (other minter)
             ct = self.headers.get("Content-Type")
             if ct:
                 headers["Content-Type"] = ct
@@ -3075,6 +3122,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             if bridge and kastr_rtsp.handle_api(self, bridge, path):
                 return
+            if path == "/api/relay/chat/purge":   # 0.21.3: operator purge (kastr_serve owns the chat store)
+                return self._chat_purge()
             if relay_srv and kastr_relay.handle_api(self, relay_srv, path, self._set_relay):
                 return
             self.send_error(404, "not found")
@@ -3883,6 +3932,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             if path == "/api/diag":
                 return self._diag_get()
+            if path == "/api/relay/chat/purge":   # 0.21.3: operator purge (kastr_serve owns the chat store)
+                return self._chat_purge()
             if relay_srv and kastr_relay.handle_api(self, relay_srv, path, self._set_relay):
                 return
             if bridge:

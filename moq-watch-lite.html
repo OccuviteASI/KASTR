@@ -33,6 +33,30 @@
  }
 }</script>
 <script type="module" src="/assets/asi-brand.js"></script>
+<script>
+// 0.21.4: the shell check. This document is fetched fresh, but a service worker from an older build can still
+// hand the masthead script out of its cache (an iPhone showed "v0.20.0" under a 0.21.3 host for a week and
+// reloaded forever). A masthead whose version is not this page's means a stale worker: drop it and its
+// caches once and reload; a second disagreement for the same build gives up quietly.
+(function () {
+  var PAGE_VERSION = "__KASTR_VERSION__";
+  if (!/^[0-9][0-9.]*(-dev)?$/.test(PAGE_VERSION)) return;
+  window.addEventListener("load", function () {
+    if (!("serviceWorker" in navigator) || !navigator.serviceWorker.controller || navigator.onLine === false) return;
+    if (window.__kastrBrandVersion === PAGE_VERSION) return;
+    var done = null;
+    try { done = sessionStorage.getItem("kastr.shellPurged"); sessionStorage.setItem("kastr.shellPurged", PAGE_VERSION); } catch (e) {}
+    if (done === PAGE_VERSION) return;
+    window.__kastrReloading = true;
+    navigator.serviceWorker.getRegistrations()
+      .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); })
+      .then(function () { return caches.keys(); })
+      .then(function (ks) { return Promise.all(ks.filter(function (k) { return k.indexOf("kastr-") === 0; }).map(function (k) { return caches.delete(k); })); })
+      .catch(function () {})
+      .then(function () { location.reload(); });
+  });
+})();
+</script>
 <style>
   * { box-sizing:border-box; }
   .row { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; align-items:end; }

@@ -102,6 +102,18 @@ def read_version():
     return "dev"
 
 
+_VERSION_STAMP = [None]   # 0.21.4: read once per process; stamped on every response
+
+
+def version_stamp():
+    """0.21.4: the version this server stamps on every response as X-KASTR-Version. A browser's
+    service worker compares it with its own and stands aside when the host has moved on (an iPhone
+    showed the 0.20.0 masthead under a 0.21.3 host for a week and reloaded forever)."""
+    if _VERSION_STAMP[0] is None:
+        _VERSION_STAMP[0] = read_version()
+    return _VERSION_STAMP[0]
+
+
 
 def autorun_state():
     """Is KASTR registered to start with this machine? Per-user, no admin.
@@ -1327,6 +1339,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         def end_headers(self):
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("X-KASTR-Version", version_stamp())   # 0.21.4: a stale service worker reads this
             self.send_header("Cross-Origin-Embedder-Policy", coep)
             # Our own assets are same-origin, but stamping this makes the pages
             # embeddable from another COEP document without extra config.

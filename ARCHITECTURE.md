@@ -912,6 +912,23 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.4
+
+- **A cache-first shell must know when it is out of date.** The 0.20.0 worker cached assets under its own version and
+  served them cache-first for as long as it lived; the page was network-first. Those two rules disagree the moment the
+  host updates and the replacement worker does not install — the page is new, the shell under it is old, and the
+  masthead's version poll (itself part of the old shell) reloads forever. The fix is a version signal on every
+  response (`X-KASTR-Version`): the worker that reads a version other than its own stands aside (network first, no
+  caching, ask for its update). Coherence of page and shell is a property of one load, not of the install ever
+  finishing.
+- **The page is the only code guaranteed fresh, so the last resort lives there.** A stuck worker's own code cannot be
+  updated by definition; the page it serves network-first can. The inline shell check compares the masthead's
+  published version with the page's and purges the registration once. Any page-level heal must be bounded (once per
+  version) — an unbounded one is just a different loop.
+- **Installs on phones are cut short.** Sequential precache from an iPhone through a tunnel took long enough to be
+  abandoned, and restarted from nothing. Parallel fetches plus "skip what is already cached" makes the install
+  resumable; the version signal makes finishing it optional for correctness.
+
 ### 0.21.3
 
 - **Never rename a running PyInstaller image.** The single-file bootloader opens the executable by path to read the

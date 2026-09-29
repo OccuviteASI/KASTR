@@ -85,6 +85,17 @@ codes on the Relay page **and start the relay with "Require access codes"** — 
 Since 0.20.0 a spoke keeps one request held at the hub for ban changes, so a kick on the hub reaches a spoke behind a
 tunnel or NAT in about a second (measured 0–2 s on the rig), and a ban cleared on the hub is lifted on the spokes.
 
+## A browser stuck on an old build
+
+Browser clients keep an offline shell in a service worker (since 0.20.0). A phone that visited during 0.20.0–0.21.3
+could keep showing that build's masthead and version after the host updated, reloading every few seconds
+("KASTR on the host updated to … — reloading"): the old worker served the old masthead script from its cache, and
+its replacement never finished installing. Since 0.21.4 the host stamps every response with `X-KASTR-Version`, a
+worker that sees a newer version stands aside, and the page purges a worker that still serves an old masthead. A
+stuck browser heals on its first visit once the host runs 0.21.4. To clear one by hand before that: on an iPhone,
+Settings → Safari → Advanced → Website Data → delete the host's entry; on a desktop browser, clear site data for the
+host (application storage, not just the cache).
+
 ## Cloudflare and error pages
 
 Cloudflare replaces an origin's 502/504 with its own text page. KASTR 0.20.0 never answers 502 (503 passes through),

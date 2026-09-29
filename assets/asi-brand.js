@@ -39,10 +39,31 @@ const IS_WEB = CLIENT?.class === "web";
 // KASTR opens at once and still renders when the relay host is unreachable. Web class over https
 // only -- the app's own window never registers, and http has no service workers.
 if (IS_WEB && window.isSecureContext && "serviceWorker" in navigator && !/[?&]embed=1/.test(location.search)) {
+  // 0.21.4: the browser checks /sw.js itself with no HTTP cache in the way, again whenever the tab
+  // comes back, and the page reloads ONCE when a replacement worker takes over -- never in a loop.
+  // A worker that took over a page already running the host's build (the old worker stood aside
+  // and passed the fresh shell through) changes nothing the user can see, so no reload then.
+  const hadController = !!navigator.serviceWorker.controller;
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((reg) => {
+      window.__kastrSwReg = reg;
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") reg.update().catch(() => {});
+      });
+    }).catch(() => {});
+  });
+  navigator.serviceWorker.addEventListener("controllerchange", async () => {
+    if (!hadController || window.__kastrReloading) return;     // first install: this page is already fresh
+    let host = null;
+    try { host = (await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json())).version || null; } catch {}
+    if (host && host === VERSION) return;
+    window.__kastrReloading = true;
+    setTimeout(() => { try { location.reload(); } catch {} }, 300);
   });
 }
+// 0.21.4: the page compares this with its own version (the shell check in moq-watch-lite.html) --
+// a masthead older than the page means a stale worker served it
+window.__kastrBrandVersion = VERSION;
 window.addEventListener("offline", () => { try { window.__kastrToast?.("Offline \u2014 showing the last page KASTR loaded; rooms and video need the relay host", 6000, { level: "warn" }); } catch {} });
 window.addEventListener("online", () => { try { window.__kastrToast?.("Back online"); } catch {} });
 
@@ -349,6 +370,12 @@ function build() {
       // 0.17.0: a web client runs the relay host's build -- when the host updates, reload
       if (IS_WEB && inst.version && VERSION !== "dev" && inst.version !== VERSION && !window.__kastrReloading) {
         window.__kastrReloading = true;
+        // 0.21.4: never twice for the same host version -- a page that comes back still mismatched after
+        // its reload is in the shell check's hands (moq-watch-lite.html), not in a reload loop
+        let again = false;
+        try { again = sessionStorage.getItem("kastr.hostReload") === inst.version; sessionStorage.setItem("kastr.hostReload", inst.version); } catch {}
+        if (again) return;
+        try { window.__kastrSwReg?.update?.().catch?.(() => {}); } catch {}   // fetch the replacement worker now
         try { brandToast("KASTR on the host updated to v" + inst.version + " \u2014 reloading"); } catch {}
         setTimeout(() => { try { location.reload(); } catch {} }, 2500);
         return;

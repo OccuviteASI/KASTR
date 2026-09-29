@@ -2,6 +2,37 @@
 
 What changed in each build, newest first.
 
+## v0.21.4 — the shell that would not update: a stale service worker stands aside
+
+**An iPhone showed "v0.20.0" under a 0.21.3 host for a week, and reloaded forever.** The 0.20.0 service worker
+(the offline shell) served everything under `/assets` from its own version's cache, and that included the masthead
+script — the file that paints the version and runs the "host updated, reloading" poll. The page itself was fetched
+fresh, so the poll saw the host's newer version, said so, reloaded, and got the same old masthead back. A new worker
+should have installed on the first visit after the host updated; on that phone it never did (86 files, one at a
+time, through the tunnel, and a cut-short install started over from nothing). The server side was fine: the page
+and the worker came through Cloudflare fresh and `no-store`. The design let one failed install freeze a browser
+for good, and that is what changed.
+
+**Every response now says which build sent it** (`X-KASTR-Version`). A worker that fetches a page and reads a
+version other than its own is stale: it stops answering from its cache, passes assets through to the network so
+the fresh page runs with an equally fresh shell, and asks the browser to fetch its replacement. The replacement's
+install runs six fetches at a time and skips files already in its cache, so a phone that cuts an install short
+resumes it. The masthead registers the worker with the HTTP cache out of the way, asks for an update whenever the
+tab comes back, reloads **once** when a replacement takes over (and not at all when the page already runs the
+host's build, which is what standing aside achieves), and never reloads twice for the same host version.
+
+**The page has a last resort for browsers still holding a pre-0.21.4 worker** — every phone and laptop that visited
+during 0.20.0–0.21.3. The page compares the masthead's version with its own; a masthead older than the page can
+only mean a stale worker, so the page drops the worker and its caches once and reloads. A second disagreement for
+the same build gives up quietly instead of looping. That is how the stuck iPhone heals on its first visit after the
+host runs 0.21.4, with nothing to clear by hand.
+
+**Verified on the rig** with one Edge profile against four servers on one origin in turn: 0.21.3 installs its
+worker and takes control; 0.21.4 with a worker that cannot install (the stuck case) — the shell check drops the old
+worker, the masthead reads 0.21.4, no loop; 0.21.4 proper installs without reloading a first-time page; then 0.21.5
+under the 0.21.4 worker — the first load already shows 0.21.5 with no reload at all, the replacement installs and
+the old cache goes. Plus the frozen two-build update test (0.21.3 → 0.21.4 through the swap helper) on Windows.
+
 ## v0.21.3 — the Windows relaunch, found and fixed; admins on spokes; purge chat; box UI; a readable stamp
 
 **Why Windows relay boxes updated and never came back.** Reproduced on the build machine with two frozen builds

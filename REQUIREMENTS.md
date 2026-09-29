@@ -414,6 +414,15 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.4
+
+| Area | Requirement | Since |
+|---|---|---|
+| S | Every response the web server sends carries `X-KASTR-Version` (`version_stamp()`, `read_version()` once per process, stamped in `end_headers`). | 0.21.4 |
+| W | Service worker (`sw.js`): a response whose `X-KASTR-Version` differs from the worker's own version marks the worker STALE — it no longer caches, answers assets from the network first (cache only as fallback), and calls `registration.update()`. Install fetches six at a time and skips URLs already in its cache (resumable). `/api/*`, `/relay`, `/ca.crt`, `/sw.js` and any URL with a query are never cached, as before. | 0.21.4 |
+| W | Masthead (`asi-brand.js`): registers with `updateViaCache: "none"`, calls `update()` when the tab becomes visible, reloads once on `controllerchange` unless this is the first install or `/api/instance` already reports the page's own version; the version poll asks the registration to update, then reloads at most once per host version (`sessionStorage kastr.hostReload`). Publishes `window.__kastrBrandVersion`. | 0.21.4 |
+| W | Shell check (inline in `moq-watch-lite.html` and `index.html`, after the masthead script): with a controlling worker, online, and `window.__kastrBrandVersion !== page version`, unregister every registration, delete `kastr-*` caches and reload — once per page version (`sessionStorage kastr.shellPurged`). This heals browsers that still hold a 0.20.0–0.21.3 worker. | 0.21.4 |
+
 ### Added in 0.21.3
 
 | Area | Requirement | Since |

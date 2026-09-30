@@ -2,6 +2,27 @@
 
 What changed in each build, newest first.
 
+## v0.21.6 — a deleted chat line stays deleted
+
+Found on the first secured live test at kastr.madlabs.app (0.21.5): an admin deleted a viewer's line, the host
+answered 200, and the line stayed on every screen — the admin's own panel showed it again a moment later. Two causes
+in the page's live chat window. A tombstone for someone else's line carries only the store id (the deleter has no
+client id for a post that is not theirs), and the window handler dropped any record without a client id before it
+looked at the tombstone flag, so no receiver ever removed the line. Then the window replayed the original post and the
+deleter's own panel took it back, since nothing remembered that it had been deleted. The handler now honours a
+tombstone by store id or by client id, whichever it carries, and every page remembers the ids it has seen deleted so a
+replay cannot resurrect them. Verified on the rig: an admin's delete leaves the admin's panel and the viewer's panel
+within seconds. Rooms whose chat is kept on the host were already fine, since their history is re-read with the
+tombstone applied; this fixes the rooms that only live on the window, which is every room a web client creates.
+
+**The secured half of the live test, done (0.21.5 at kastr.madlabs.app, relay "kastr-test" behind Cloudflare).**
+Publisher, viewer and admin joined with their codes and got their roles; both state links connected over the
+tunnel; the viewer listed both members, found the camera and decoded the tile and the latency stamp; the encoder
+counted frames; chat crossed through the hub; an admin stop reached the publisher in 0.1 s and an admin kick sent it
+back to the gate in 0.2 s while the viewer, behind the same Cloudflare address, stayed joined with its state link up.
+The moq CLI published and pulled a test pattern through `https://kastr.madlabs.app/relay` over WebSocket as valid
+H.264. The one defect it surfaced is the chat tombstone above. Every room the test created was closed afterwards.
+
 ## v0.21.5 — the iPhone that fits, an upright camera, a grid that stays up
 
 Kenton's report after 0.21.4: on his iPhone (Safari, iOS 18) "things don't seem to be constrained to the visible

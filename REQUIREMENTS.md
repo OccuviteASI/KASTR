@@ -414,6 +414,12 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.6
+
+| Area | Requirement | Since |
+|---|---|---|
+| W | Chat window tombstones: `chatWindowOp` applies a `del` record that carries a store id, a client id, or both (it used to drop any record without a client id first); `chatDeadIds` / `chatDeadCids` remember every tombstone seen (received or issued by this page) and a replayed window never re-appends a deleted line. `chatDelete` records its own tombstone before re-rendering. | 0.21.6 |
+
 ### Added in 0.21.5
 
 | Area | Requirement | Since |

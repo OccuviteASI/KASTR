@@ -9603,7 +9603,7 @@
     try {
       // the chat routes read Authorization as a FEDERATION token (spoke -> hub forwarding), so the admin's member token rides ?jwt=
       const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/" + id, tok ? "token=" + encodeURIComponent(tok) : (admin ? "jwt=" + encodeURIComponent(authTokens.member) : (authTokens?.member ? "jwt=" + encodeURIComponent(authTokens.member) : ""))), { method: "DELETE" });
-      if (r.ok) { chatMsgs = chatMsgs.filter((m) => m.id !== id); chatMyTokens.delete(id); chatRenderAll(); chatWinPush({ id, cid: chatMyCids.get(id) || "", del: true, ts: Date.now() }); chatMyCids.delete(id); try { window.__chatPulse?.(id); } catch {} }
+      if (r.ok) { chatDeadIds.add(id); const dc = chatMyCids.get(id); if (dc) chatDeadCids.add(dc); chatMsgs = chatMsgs.filter((m) => m.id !== id); chatMyTokens.delete(id); chatRenderAll(); /* 0.21.6: the tombstone is remembered above */ chatWinPush({ id, cid: chatMyCids.get(id) || "", del: true, ts: Date.now() }); chatMyCids.delete(id); try { window.__chatPulse?.(id); } catch {} }
       else chatHint("Could not delete (" + r.status + ")", true);
     } catch (e) { chatHint("Could not delete \u2014 " + (e?.message || e), true); }
   }
@@ -9649,11 +9649,27 @@
   const chatCid = () => statePeer() + ":" + (++chatCidN) + ":" + Date.now().toString(36);
   function chatWinPush(rec) { try { roomState.chatPush(rec); } catch {} }
   // a member's chat.json Window op: push {index, value} | pop | skip
+  // 0.21.6: tombstones that arrived (store id and/or cid) -- a replayed window must not bring a deleted line back
+  const chatDeadIds = new Set(), chatDeadCids = new Set();
   function chatWindowOp(path, op) {
     const r = op?.push?.value;
-    if (!r || !r.cid) return;
-    if (r.del) { const before = chatMsgs.length; chatMsgs = chatMsgs.filter((m) => m.cid !== r.cid && (typeof r.id !== "number" || m.id !== r.id)); if (chatMsgs.length !== before) chatRenderAll(); return; }
+    if (!r) return;
+    if (r.del) {
+      // 0.21.6: an admin deleting someone else's line has no cid to attach -- the tombstone carries the store id
+      // alone, and this handler used to drop any record without a cid, so nobody (not even the admin, once the
+      // window replayed) ever removed the line: "deleted" chat that stayed on every screen
+      const byCid = !!r.cid, byId = typeof r.id === "number";
+      if (!byCid && !byId) return;
+      if (byId) chatDeadIds.add(r.id);
+      if (byCid) chatDeadCids.add(r.cid);
+      const before = chatMsgs.length;
+      chatMsgs = chatMsgs.filter((m) => !((byCid && m.cid === r.cid) || (byId && m.id === r.id)));
+      if (chatMsgs.length !== before) chatRenderAll();
+      return;
+    }
+    if (!r.cid) return;
     if (typeof r.id !== "number") return;
+    if (chatDeadIds.has(r.id) || chatDeadCids.has(r.cid)) return;   // 0.21.6: deleted before this replay
     if (chatMsgs.some((m) => m.cid === r.cid || (!r.local && m.id === r.id))) return;
     if (r.local) r.seenLocal = false;
     chatAppend([{ ...r, viaWindow: true }]);

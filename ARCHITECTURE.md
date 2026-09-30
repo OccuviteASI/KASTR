@@ -912,6 +912,14 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.6
+
+- **A tombstone is identified by whatever it carries.** The live chat window keyed deletions on the poster's client id
+  because that is what a poster deleting their own line has; an admin deleting another member's line has only the
+  store id, and a guard written for posts ("no client id, ignore") silently swallowed every admin tombstone. Records
+  that mean different things need different validity rules, and a deletion must be remembered as well as applied,
+  or a replay of the window brings the line back.
+
 ### 0.21.5
 
 - **A media-query block's position in the sheet is part of its contract.** The phone rules were correct and lost anyway:

@@ -107,6 +107,19 @@ Cloudflare replaces an origin's 502/504 with its own text page. KASTR 0.20.0 nev
 and an open relay answers its room-code endpoints with a 200 "open" shape instead of an error, so `watch.html` and
 the page behave the same behind Cloudflare as on the LAN.
 
+## Verified for real (2026-09-30, kastr.madlabs.app, KASTR 0.21.5, SECURED relay)
+
+The half 0.20.0 left open. Access codes required on the relay "kastr-test" behind the tunnel:
+
+- Publisher, viewer and admin joined with their codes and got their roles; both state links connected over the tunnel.
+- The viewer listed both members, found the camera, decoded the tile and read the latency stamp; the encoder counted frames.
+- Chat crossed through the hub. An admin stop reached the publisher in 0.1 s; an admin kick sent it back to the gate in
+  0.2 s while the viewer — behind the same Cloudflare address — stayed joined with its state link up.
+- moq CLI publish and subscribe through `https://kastr.madlabs.app/relay` over WebSocket, valid H.264 back.
+- Found: an admin's chat delete left the line on every screen in rooms whose chat lives on the window (fixed in 0.21.6).
+- A plain-Python client is refused by Cloudflare's browser check (error 1010); curl and browsers pass. Token minting
+  needs a real host slug (`web-<8 hex>-<4 hex>`), otherwise "bad host".
+
 ## Verified for real (2026-09-28, kastr.madlabs.app, KASTR 0.19.0, open relay)
 
 - Page served through the tunnel is handed `https://kastr.madlabs.app/relay`; `/relay` upgrade → the relay's 101;

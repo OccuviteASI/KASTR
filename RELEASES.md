@@ -2,6 +2,83 @@
 
 What changed in each build, newest first.
 
+## v0.21.7 — field fixes round four: the update port, no pane pop-up, download the app, click-to-picture, the spoke grid, audio that does not clip, a firewall prompt that stops
+
+Seven items from the field after 0.21.6, each with its cause.
+
+**The Relay dropdown expected updates on port 8000.** The masthead asked the server to probe the relay host without a
+port; the server defaulted to 8000 and never consulted the hub web port every spoke already learns (Agg and Mendon run
+their web on 8001), and the failure line was a literal `:8000`. Now the server resolves the base itself (a web relay's
+origin, an explicit port, the learned base, the learned port, its hub default, in that order), a probe about this very
+machine answers our own instance, and the reply says which base it asked; the line names that. A web client is on the
+relay host's own web service, so its dropdown reads "Relay host: KASTR vX — this page follows it" with no port at all.
+The Relay page's firewall hint and web-port line follow the server's port too, never the page's.
+
+**A "which server" pop-up stuck on top of every window.** One line set a `title` on every remote pane, grid tile and
+collage cell every ten seconds ("via <relay>"); the bundled Chrome drew it as an OS tooltip that outlived focus. The
+titles on panes, labels, RTSP rows and grid rows are gone — "via" already lives in People.
+
+**Download the app from the web client.** More → Settings → About lists Windows and Linux with the full install zip
+(`KASTR-windows-v0.21.7.zip`, `KASTR-linux-v0.21.7.zip`). The host assembles the zip on the first click from what every
+install already carries — its own binary and pruned browser folder, the other platform's mirrored binary and browser
+zip, and the templates the feed now carries (`updates/<plat>/extras/`: `kastr.ini` and the Linux `README.txt`,
+`install.sh`, `kastr.svg`; a host never ships its own edited `kastr.ini`) — with build.py's entry names and modes,
+caches it under the state folder (`downloads/`, one release per platform, a sha sidecar), and streams it with a
+`Content-Disposition` name. Routes: `POST /api/update/zip?platform=` prepares, `GET` streams (409 while building), the
+manifest carries `zip` and `extras`, `/api/update/extra` hands out a template, binaries and browser zips get download
+names. A page whose certificate the browser distrusts (a LAN https page without the local CA installed) has its
+download blocked by Chromium itself; a trusted page — the tunnel, the LAN with the CA, plain http — downloads.
+
+**Click-to-picture on an on-demand camera.** The low copy of an on-demand camera stays on the air in standby (one
+RTSP pull and a 640p/15 fps encode per camera); viewers get a tile on it at once, under the camera's own name. A click
+spotlights the low picture immediately with a "low quality — full starting…" badge and asks for the full pair, which
+takes over in place when its announce arrives — no tile is torn down. A quadrant click on a composite whose feed has
+no low copy fills the stage with the composite's own cell while the camera starts. Demand now travels the federation
+the way bans and room closes do: a relay host that does not know the camera forwards the demand to its hub with the
+federation token (`POST /api/ondemand/forward`), the hub pushes a `wake` over its command channel to every spoke, and
+the spoke that registers the camera wakes it (Kenton's web client at kastr.madlabs.app → Agg → Southridge). A hub
+before 0.21.7 answers 404 and the page says so instead of waiting 90 s. Rail thumbnails on the low copy ask for nothing,
+so an idle camera stays asleep until someone actually opens it.
+
+**Southridge's grid for remote viewers.** The likely cause is the cluster link itself: every hub restart mints a new
+hub certificate, the spoke re-pins and restarts its relay, and the grid (and its `.member` state) blinks for everyone
+downstream. The spoke now reads the link's state off its relay's own log — `relay federation: cluster link to <hub>
+up|down (…)` in launch.log, `federation.link {up, since, drops, repins}` in `/api/relay/status` and `/api/relay/health`,
+the Relay page's Hub line ("link up 12 m, 3 drops, 1 re-pin, hub sees 2 nodes") — and asks the hub what its relay sees
+(`GET /api/spokes/link` → `federation.hubSees`). The owner page's viewer-stall gate reads both: a link that flapped in
+the last 60 s is noted, not rebuilt. When the hub is unreachable the stored pin is kept and said once (no restart storm);
+composites are a tile class of their own (`grid`, the rail budgets, never `instant`) and get an 8 s removal debounce.
+Still owed from the field: Southridge's launch.log with these lines against the next blackout.
+
+**Audio that clipped for everyone.** The library drops the oldest buffered audio group when the buffered span exceeds
+`maxAge = delay + buffer`; every 20 ms Opus packet is its own group, legacy audio frames carry no duration, so one
+skip registered as a discontinuity — the worklet ring was flushed, the shared sync clock and the decoder reset — and the
+budget (200 ms on the rail tile everyone hears; the min-RTT estimate shrinking it further) made skips routine on a
+tunnel or a two-hop path (`skipping slow group: track=audio` climbing). Four layers: a 1 s floor on the AUDIO consumer's
+`maxAge` in the vendored player (video keeps the library's budget; `vendor-moq.py` now carries `PATCHES`, re-applies
+them after every mirror, `--patch`/`--check`, build.py checks, `tests/test_vendor_patch.py`); rail 200 → 400 ms and
+fixed web budgets (`delay 150 ms + buffer 800 ms` on main/rail/grid through a web relay — a tunnel, `/relay`); a
+tile-class rule that never lands unknown audio on `instant` (which never subscribed audio at all — composites with
+sound played silent); and `frameDuration` in ms (the ×1000 failed the library's check and the config was dropped). The
+latency badge shows `· skips A/V` for the last 60 s and totals in its title; `window.__slowGroups` counts them.
+
+**The Linux box asked for the firewall on every launch.** `ufw status` was run as the user ("need to be root" →
+unknown → pkexec every launch), the web port was set after the check, and a substring match stood in for the ports.
+Now the wanted set is computed first, `<state>/firewall-applied.json` remembers what an earlier launch added (or
+printed once, headless), the checks are unprivileged and exact (firewalld `--query-port`, ufw's rules file, `ufw status`
+as root only), a box with neither tool is told once, Windows joins the port filter so a changed port counts as missing
+and each rule is removed before it is re-added (no duplicates). The Relay page names the missing ports.
+
+**Verified.** Unit: the assembler on a scratch root (entry names, modes, prune, `browser/VERSION`, cache, stale sidecar,
+old-version prune), peer/instance resolution, the vendored patch, firewall decisions with fake tools, the wake relay's
+dedupe and hop rules, the link classifier. Harness rig (Edge): the app's Relay line names the host's version with no
+`:8000`; the web client's line follows the host; no `title` on panes or labels; About lists both platforms and the
+browser downloaded `KASTR-windows-v<ver>.zip` equal to the manifest's size with the release layout inside; a spoke's
+on-demand camera showed on a hub-side viewer as a low tile at once, the truth badge, and the full copy took over 2.6 s
+after the click with the spoke logging `hub relayed a viewer's demand … -> woken here`; a hub relay restart wrote
+`cluster link … down/up`, `drops`/`repins` climbed and the Relay page said so; a viewer through a proxy holding the
+connection 300–600 ms every 2 s heard 65 s with zero audio skips.
+
 ## v0.21.6 — a deleted chat line stays deleted
 
 Found on the first secured live test at kastr.madlabs.app (0.21.5): an admin deleted a viewer's line, the host

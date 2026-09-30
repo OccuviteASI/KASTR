@@ -398,6 +398,7 @@
   // The firewall being configured is the SERVER's, not the browser's --
   // /api/instance says which OS that is (corrected shortly after load).
   let serverPlatform = "win32";
+  let serverWebPort = 0;   // 0.21.7: the port this KASTR's web service runs on (from /api/instance, /api/relay/webport) -- a tunnel page's own port is 443
 
   // 0.10.0: all the rules the button creates (relay UDP+TCP, access codes, wss for phones, KASTR web
   // http + https; 0.21.0: + the 0.16.0 mDNS rule -- SEVEN, matching kastr_relay.FIREWALL_RULES) -- the
@@ -405,7 +406,7 @@
   const HTTPS_PORT = 8443;
   function fwCommand(port) {
     const p = Number(port) || 4443;
-    const web = Number(location.port) || 8000;
+    const web = serverWebPort || Number(location.port) || 8000;   // 0.21.7: the server's port first, the literal last
     if (serverPlatform.startsWith("linux")) {
       return `sudo ufw allow ${p}/udp && sudo ufw allow ${p}/tcp && sudo ufw allow ${p + 1}/tcp && sudo ufw allow ${p + 2}/tcp && sudo ufw allow ${web}/tcp && sudo ufw allow ${HTTPS_PORT}/tcp && sudo ufw allow 5353/udp`;
     }
@@ -565,6 +566,8 @@
   fetch("/api/relay/firewall").then((r) => r.json()).then((d) => {
     fwPresent = d.present ?? null;
     updateFwHint();
+    if (Array.isArray(d.missing) && d.missing.length) $("fwMsg").textContent = "Not open yet: " + d.missing.join(", ") + (d.tool ? " (" + d.tool + ")" : "");   // 0.21.7: exact ports
+    else if (d.present == null && d.note) $("fwMsg").textContent = d.note;
   }).catch(() => {});
 
   async function api(path, body) {
@@ -591,6 +594,7 @@
       $("viewing").textContent = (v && typeof v.n === "number")
         ? `${v.n} (${Math.round(v.ageS)}s ago)`
         : "unknown (no page reporting)";
+      if (inst.web && Number(inst.web) !== serverWebPort) { serverWebPort = Number(inst.web) || 0; updateFwHint(); }   // 0.21.7
       if (inst.platform && inst.platform !== serverPlatform) {
         serverPlatform = inst.platform;
         updateFwHint();
@@ -701,7 +705,7 @@
   }
   $("webPortSet").addEventListener("click", () => webPortPost(Number($("webPort").value) || null));
   $("webPortClear").addEventListener("click", () => webPortPost(null));
-  api("/api/relay/webport").then((r) => { webPortLive = r.port || webPortLive; webPortPinned = r.pinned; paintWebPort(); })
+  api("/api/relay/webport").then((r) => { webPortLive = r.port || webPortLive; serverWebPort = Number(r.port) || serverWebPort; webPortPinned = r.pinned; paintWebPort(); })   // 0.21.7: the firewall hint follows it too
     .catch(() => { $("webPortMsg").textContent = "Web port: not available from this server."; });
   $("webPortSet").disabled = $("webPortClear").disabled = !LOCAL;
   async function newOriginAnswers(port) {
@@ -1018,7 +1022,9 @@
     else { ha.textContent = "up \u2014 " + (a.sessions ?? 0) + " sessions (" + (a.publishers ?? 0) + " publishing), " + (a.grants ?? 0) + " grants, " + (a.refusals ?? 0) + " refusals"
       + (a.lastRefusal ? " \u2014 last: " + a.lastRefusal.remote + " (" + a.lastRefusal.why + ")" : ""); ha.style.color = a.refusals ? "var(--asi-amber)" : "var(--asi-green)"; }
     $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : "NOT verified")
-      + (f.spoke ? (f.spoke.registered ? ", registered" : ", not registered (" + String(f.spoke.why || "").split(" -- ")[0] + ")") : "")) : "standalone";   // 0.21.5: registered with the hub?
+      + (f.spoke ? (f.spoke.registered ? ", registered" : ", not registered (" + String(f.spoke.why || "").split(" -- ")[0] + ")") : "")
+      + (f.link ? (", link " + (f.link.up ? "up" : "DOWN") + " " + Math.max(0, Math.round((Date.now() / 1000 - (f.link.since || 0)) / 60)) + " m, " + (f.link.drops || 0) + " drop" + (f.link.drops === 1 ? "" : "s") + ", " + (f.link.repins || 0) + " re-pin" + (f.link.repins === 1 ? "" : "s")) : "")   // 0.21.7: the cluster link
+      + (f.hubSees && f.hubSees.nodes != null ? (", hub sees " + f.hubSees.nodes + " node" + (f.hubSees.nodes === 1 ? "" : "s") + (f.hubSees.seesYou === true ? " incl. this one" : f.hubSees.seesYou === false ? " (NOT this one)" : "")) : "")) : "standalone";   // 0.21.5: registered with the hub?
     $("hLan").textContent = l.enabled ? ("enabled" + (l.hasSecret ? " with a secret" : " (OPEN \u2014 no secret)") + (l.active ? "" : " \u2014 not active (loopback relay, or a secured relay without a secret)")) : "off";
     const pairs = h.pairs || [];
     $("hPairs").textContent = pairs.length ? (pairs.filter((p) => p.running).length + " running, " + pairs.filter((p) => p.parked).length + " parked of " + pairs.length) : "none on this machine";

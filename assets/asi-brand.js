@@ -182,13 +182,25 @@ function build() {
   const paintRelayHost = async () => {
     const el = pop.querySelector(".rhost");
     if (!el) return;
+    if (IS_WEB) {
+      // 0.21.7: a web client IS on the relay host's web service -- same origin, whatever port the tunnel or
+      // the LAN gave it. The peer probe is denied for a remote page (403) and the line used to print ":8000".
+      try {
+        const i = await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json());
+        el.textContent = i.version ? "Relay host: KASTR v" + i.version + " \u2014 this page follows it" : "Relay host: unknown";
+      } catch { el.textContent = "Relay host: unknown"; }
+      return;
+    }
     let host = "";
     try { host = new URL(currentRelay).hostname; } catch {}
     if (!host) { el.textContent = "Relay host: \u2014"; return; }
     try {
-      const i = await fetch("/api/peer/instance?host=" + encodeURIComponent(host) + "&relay=" + encodeURIComponent(currentRelay || ""), { cache: "no-store" }).then((r) => r.json());   // 0.19.0: a web relay is asked at its origin
+      // 0.19.0: a web relay is asked at its origin; 0.21.7: the server resolves the web port (learned base, learned
+      // port, its hub default) and says which base it asked -- the line names that, never a literal port
+      const i = await fetch("/api/peer/instance?host=" + encodeURIComponent(host) + "&relay=" + encodeURIComponent(currentRelay || ""), { cache: "no-store" }).then((r) => r.json());
+      const where = String(i.base || "").replace(/^https?:\/\//, "") || host;
       el.textContent = i.version ? "Relay host: KASTR v" + i.version + (i.version !== VERSION ? "  (this machine: v" + VERSION + ")" : "")
-        : "Relay host: no KASTR web at " + host + ":8000 \u2014 not an update source";
+        : "Relay host: no KASTR web at " + where + " \u2014 not an update source";
     } catch { el.textContent = "Relay host: unknown"; }
   };
   setInterval(() => { if (!pop.hidden) paintRelayHost(); }, 10000);

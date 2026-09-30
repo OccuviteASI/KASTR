@@ -912,6 +912,31 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.7
+
+- **A tooltip is a contract with the OS.** A `title` on a pane is not a hint the page controls; the browser hands it to the
+  window system, which draws it when and where it likes — and, in the bundled Chrome, kept it on top of every window.
+  Hover text belongs in elements the page owns.
+- **Assemble what every install already carries.** Shipping 300 MB release zips to every box would have been the obvious
+  way to offer a download; instead the host rebuilds the zip from the parts it already holds (its binary, its browser,
+  the mirrored other platform) plus the small templates the feed now carries. The one file a host must never ship is
+  its own edited `kastr.ini` — templates travel separately from working copies.
+- **A wake must travel the way bans do.** Demand used to reach only the viewer's own relay host; a camera on another site
+  never heard it. Anything that has to cross a NAT or a tunnel rides the one channel every spoke already holds open —
+  the hub's command long-poll — and the hub is the only party that can reach every spoke.
+- **The one command list.** `raise_cmd` kept the room-close history under a hardcoded key; the first wake landed in it
+  (the rig caught it: the hub pushed, the spoke ignored). A channel that carries several kinds of record keys them by
+  the kind it was given.
+- **Audio's budget is not video's.** One `maxAge` for both tracks makes audio pay for video's latency discipline: a video
+  skip costs a frame, an audio skip costs a flush of everything buffered and a reset of the shared clock. The floor is on
+  the audio consumer alone; video keeps skipping to the live edge.
+- **A check that cannot fail closed must remember what it did.** An unprivileged firewall probe often cannot tell; the
+  old code treated "cannot tell" as "missing" and prompted forever. The record of what was applied turns a repeated
+  question into a one-time one, and the exact port set makes a changed port a real "missing" rather than a substring hit.
+- **Evidence for the link, not a guess about it.** The cluster link's state was invisible to the grid gate; reading the
+  relay's own log for connect/error lines gives a timeline that blackouts can be matched against, and a link that just
+  flapped explains a viewer stall better than a rebuild.
+
 ### 0.21.6
 
 - **A tombstone is identified by whatever it carries.** The live chat window keyed deletions on the poster's client id

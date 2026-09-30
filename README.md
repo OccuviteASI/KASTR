@@ -29,6 +29,14 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.7 the Relay dropdown names the host's KASTR on the port it actually runs (no more `:8000`), remote panes carry no
+OS tooltip, a web client downloads the full Windows or Linux install zip from More → Settings → About (assembled on the
+host from what every install already carries), an on-demand camera shows its low copy the instant it is clicked and the
+full picture takes over in place — also when the camera sits behind another site's relay — the spoke's cluster link
+writes its state to launch.log and the Relay page, audio through a tunnel no longer clips (a 1 s floor on the audio
+buffer's drop rule in the vendored player, plus wider budgets over WebSocket), and a Linux box asks for its firewall
+rules once, not on every launch.
+
 Since 0.21.5 phones get the layout they were promised (the phone rules now win the cascade), an iPhone camera goes out
 upright (the canvas loop runs wherever WebKit would lose the orientation), an RTSP grid rebuilds only on its own evidence
 instead of on any viewer's stall report, a dead camera leaves the grid on its monitor's ladder, and an open spoke says

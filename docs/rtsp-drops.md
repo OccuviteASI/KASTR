@@ -47,6 +47,25 @@ rebuilt on every viewer stall report; after 0.21.5 the same reports show as `vie
 really stopped; `…/disconnected` means the owner's relay connection dropped — look at the relay log and the federation
 lines next.
 
+## The cluster link (0.21.7)
+
+A spoke's grid that remote viewers lose while the spoke's own page shows it live points at the link between the relays.
+Since 0.21.7 the spoke reads its relay's log for that link and writes:
+
+- **launch.log** `relay federation: cluster link to <hub> up (… connected peer=…)` / `… down (… cluster peer error …)`,
+  one line per transition, plus `relay federation: hub relayed a viewer's demand for <camera> -> woken here | not
+  registered here` when a viewer elsewhere opens an on-demand camera, and `relay federation: hub unreachable -- keeping
+  the stored certificate pin (no restart)` once per hub outage.
+- **`/api/relay/status`** (loopback) and **`/api/relay/health`** → `federation.link {up, since, changedAt, drops, repins,
+  last}` and `federation.hubSees {nodes, sessions, seesYou}` (what the hub's relay reports of its cluster when the spoke
+  registered); the Relay page's Hub line reads `link up 12 m, 3 drops, 1 re-pin, hub sees 2 nodes`.
+- **The grid gate** adds `link=up|down N s, drops=N, hubSees=…` to every `viewer stall …` line, and a link that changed in
+  the last 60 s makes the report `viewer stall noted — cluster link flapped N s ago, not rebuilding`.
+
+Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's certificate is regenerated per start and
+the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
+the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
+
 ## Reading the counters
 
 | Pattern | Meaning | Row in ARCHITECTURE's restart table |

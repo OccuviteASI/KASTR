@@ -36,6 +36,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 import kastr_relay
 import kastr_rtsp
+import kastr_release   # 0.21.7: the install zip a web client downloads, assembled on this host
 
 # The string baked into the prebuilt bundles.
 BUILTIN_RELAY = "http://localhost:4443"
@@ -1559,6 +1560,66 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except Exception:
                 return False
 
+        def _release_zip(self, method):
+            """0.21.7: the full install zip for a platform, assembled on this host from the parts every install
+            already carries (kastr_release: own binary + browser folder, the other platform's mirrored binary +
+            browser zip, the feed's templates). POST starts the assembly (idempotent); GET streams the file when
+            it is ready, else 409 {status: building | not prepared}. Remote callers allowed like the sibling
+            update routes: a web client downloads the app it is looking at."""
+            qs = parse_qs(urlparse(self.path).query)
+            plat = (qs.get("platform") or [""])[0]
+            sd = self._state_dir()
+            if plat not in kastr_release.PLATFORMS or not sd:
+                return self._json_cors(404, {"error": "no install zip for that platform here"})
+            ver = read_version()
+            if method == "POST":
+                st = kastr_release.prepare(plat, ver, sd, log=_note)
+                _remote_seen(self, "/api/update/zip")
+                return self._json_cors(200 if st["can"] else 409, st)
+            p = kastr_release.path_for(plat, ver, sd)
+            if not p:
+                st = kastr_release.status(plat, ver, sd)
+                st["status"] = "building" if st["building"] else ("not prepared" if st["can"] else "unavailable")
+                return self._json_cors(409 if st["can"] else 404, st)
+            size = os.path.getsize(p)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % os.path.basename(p))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                with open(p, "rb") as f:
+                    while True:
+                        chunk = f.read(1 << 20)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+        def _release_extra(self):
+            """0.21.7: one template file from updates/<plat>/extras (the mirror fetches them like binaries)."""
+            qs = parse_qs(urlparse(self.path).query)
+            plat = (qs.get("platform") or [""])[0]
+            name = (qs.get("name") or [""])[0]
+            if plat not in kastr_release.EXTRAS or name not in kastr_release.EXTRAS[plat] or not kastr_release.EXTRA_RE.match(name):
+                return self.send_error(404, "no such template here")
+            p = os.path.join(kastr_release.extras_dir(kastr_release.app_root(), plat), name)
+            if not os.path.isfile(p):
+                return self.send_error(404, "no such template here")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(os.path.getsize(p)))
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                with open(p, "rb") as f:
+                    self.wfile.write(f.read())
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
         def _instance(self):
             """Who is serving here.
 
@@ -2987,6 +3048,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._archive_api("POST", path0)
             if path0 == "/api/relaunch":
                 return self._relaunch()
+            if path0 == "/api/update/zip":         # 0.21.7: start assembling the install zip
+                return self._release_zip("POST")
             if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick",   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
                          "/api/spokes/register", "/api/bans/notify"):         # 0.19.0: federation through a web relay
                 return self._auth_proxy("POST")
@@ -3281,7 +3344,17 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 bad = self._room_claims(room, str(p.get("jwt") or ""))
                 if bad:
                     return self._json_cors(bad[0], {"error": bad[1]})
-                return self._json_cors(200, {"ok": True, "known": ondemand_touch(b)})
+                known = ondemand_touch(b)
+                fwd = None
+                if not known and relay_srv is not None and hasattr(relay_srv, "wake_forward"):
+                    # 0.21.7: the camera is registered with ANOTHER site's KASTR (a spoke behind a tunnel, or the hub's
+                    # other spoke). Demand travels the way bans and room closes do: up to the hub with the federation
+                    # token, out to every spoke over the command channel (kastr_relay.Relay.wake_forward).
+                    try:
+                        fwd = relay_srv.wake_forward(room, b, 0)
+                    except Exception as e:
+                        fwd = ["error: " + str(e)[:80]]
+                return self._json_cors(200, {"ok": True, "known": known, "forwarded": fwd})
             return self._json_cors(404, {"error": "unknown endpoint"})
 
         # ---- 0.18.0: host recording ---------------------------------------------------
@@ -3843,7 +3916,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # COEP without CORS.
                 qs = parse_qs(urlparse(self.path).query)
                 host = (qs.get("host") or [""])[0].strip()
-                port = (qs.get("port") or ["8000"])[0]
+                port = (qs.get("port") or [""])[0].strip()   # 0.21.7: optional -- the learned web port is the fallback, never a literal
                 data = {"error": "bad host"}
                 if not self._local():
                     # 0.17.0: a remote page may ask about THIS machine only (the web
@@ -3856,18 +3929,27 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         return self._instance()
                     return self._deny("peer probes")
                 relay_q = (qs.get("relay") or [""])[0].strip()
+                if host.strip("[]").lower() in _own_hosts() and not (relay_q and kastr_relay.is_web_relay(relay_q)):
+                    return self._instance()   # 0.21.7: the relay host is this very machine -- no dial, no guessed port
                 wbase = None
+                host_ok = bool(re.match(r"^[A-Za-z0-9.\-\[\]:]{1,253}$", host))
                 if relay_q and kastr_relay.is_web_relay(relay_q):
                     wbase = kastr_relay.web_origin(relay_q)          # 0.19.0: https://name/relay -> https://name
-                elif host and (HUB_WEB.get(host.strip("[]").lower()) or {}).get("base"):
-                    wbase = HUB_WEB[host.strip("[]").lower()]["base"]
-                if wbase or (re.match(r"^[A-Za-z0-9.\-\[\]:]{1,253}$", host) and re.match(r"^\d{1,5}$", port)):
+                elif host_ok and re.match(r"^\d{1,5}$", port):
+                    wbase = "http://%s:%s" % (host, port)             # the caller knows the port
+                elif host_ok:
+                    # 0.21.7: the learned base (hub-web.json), else the learned web port, else this box's
+                    # configured hub default -- Agg and Mendon run their web on 8001 and the line said :8000
+                    wbase = hub_web_base(host, HUB_WEB_PORT)
+                if wbase:
                     try:
                         import urllib.request
-                        with urllib.request.urlopen((wbase or "http://%s:%s" % (host, port)) + "/api/instance", timeout=3) as r:
+                        with urllib.request.urlopen(wbase + "/api/instance", timeout=3) as r:
                             data = json.load(r)
                     except Exception as e:
                         data = {"error": "unreachable", "detail": str(e)[:120]}
+                if isinstance(data, dict):
+                    data["base"] = wbase                              # 0.21.7: the page words its line from this
                 body = json.dumps(data).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -3888,6 +3970,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/update/manifest":
                 plats = _update_platforms()
                 bf = _browser_feed()   # 0.9.0
+                sd = self._state_dir()
                 body = json.dumps({
                     "app": "KASTR", "version": read_version(),
                     "platforms": {k: {"size": v["size"], "sha256": v["sha256"], "version": v.get("version")}   # 0.21.1: + version
@@ -3895,6 +3978,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     "browser": {"version": bf["version"],
                                 "platforms": {k: {"size": v["size"], "sha256": v["sha256"], "root": v["root"]}
                                               for k, v in bf["platforms"].items()}},
+                    # 0.21.7: the templates the feed carries (updates/<plat>/extras, mirrored like the binaries) and
+                    # the full install zips this host can assemble for a web client (kastr_release)
+                    "extras": {k: kastr_release.extras_manifest(kastr_release.app_root(), k) for k in kastr_release.EXTRAS},
+                    "zip": ({k: kastr_release.status(k, read_version(), sd) for k in kastr_release.PLATFORMS} if sd else {}),
                 }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -3910,6 +3997,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self.send_error(404, "no browser for that platform here")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", 'attachment; filename="%s"' % os.path.basename(info["path"]))   # 0.21.7
                 self.send_header("Content-Length", str(info["size"]))
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
@@ -3930,6 +4018,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self.send_error(404, "no binary for that platform here")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", 'attachment; filename="%s"' % os.path.basename(info["path"]))   # 0.21.7
                 self.send_header("Content-Length", str(info["size"]))
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
@@ -3943,6 +4032,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
                 return
+            if path == "/api/update/zip":         # 0.21.7: the full install zip, assembled here (POST prepares it)
+                return self._release_zip("GET")
+            if path == "/api/update/extra":       # 0.21.7: one template file of the feed (kastr.ini, Linux extras)
+                return self._release_extra()
             if path == "/api/diag":
                 return self._diag_get()
             if path == "/api/relay/chat/purge":   # 0.21.3: operator purge (kastr_serve owns the chat store)

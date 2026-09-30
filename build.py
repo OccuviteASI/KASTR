@@ -49,6 +49,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import kastr_browser   # noqa: E402 -- 0.9.0 bundled browser: pin, staging, prune, executables
+import kastr_release   # noqa: E402 -- 0.21.7: the templates the feed carries (updates/<plat>/extras) for host-assembled install zips
 WINDOWS = sys.platform == "win32"
 MACOS = sys.platform == "darwin"
 
@@ -333,7 +334,9 @@ def archive_current(version):
                         keep = []
                         for d in dirs:
                             fv = feed_version(os.path.join(root, d)) if d in PLATFORMS else version
-                            if d in PLATFORMS and fv != version:
+                            # 0.21.7: updates/<own>/ holds only extras/ (no binary) -- it ships; only a binary of another release is left out
+                            has_bin = d in PLATFORMS and os.path.exists(os.path.join(root, d, os.path.basename(PLATFORM_UPDATE_BINARY[d])))
+                            if has_bin and fv != version:
                                 print("  left out of the %s zip: updates/%s is %s, not v%s" % (plat, d, ("v" + fv) if fv else "unversioned", version))
                             else:
                                 keep.append(d)
@@ -518,6 +521,20 @@ def publish_feed(version, have, root=None):
             f.write(version + chr(10))
         manifest["platforms"][PLATFORM_API_KEY[plat]] = {"size": os.path.getsize(dst),
                                                          "sha256": _sha256_file(dst), "version": version}
+        # 0.21.7: the templates a host needs to assemble this platform's install zip for a web client
+        # (kastr_release): kastr.ini and the Linux extras, from dist/<plat>/ where they are placed by hand.
+        # A host must never ship its OWN kastr.ini (the operator's edited copy), so the template travels here.
+        exdir = os.path.join(dstdir, "extras")
+        os.makedirs(exdir, exist_ok=True)
+        names = []
+        for name in kastr_release.EXTRAS.get(PLATFORM_API_KEY[plat], ()):
+            sp = os.path.join(root, plat, name)
+            if os.path.isfile(sp):
+                shutil.copyfile(sp, os.path.join(exdir, name))
+                names.append(name)
+            else:
+                print("  note: dist/%s has no %s -- the assembled %s zip will lack it" % (plat, name, plat))
+        manifest["platforms"][PLATFORM_API_KEY[plat]]["extras"] = names
     # 0.13.1: a platform folder that is NOT part of this release leaves its
     # previous binary in updates/ -- say so, because the co-location below
     # would ship it beside the fresh ones and a hub serves whatever it holds.
@@ -562,6 +579,15 @@ def colocate_feeds(upd, root=None, browser=True, version=None):
             continue
         dstroot = os.path.join(folder, "updates")
         for sub in PLATFORMS:
+            exsrc = os.path.join(upd, sub, "extras")
+            if os.path.isdir(exsrc):
+                # 0.21.7: every platform's templates, the OWN platform included -- an install's own kastr.ini is
+                # the operator's edited copy, so the zip it assembles takes the template from here
+                exdst = os.path.join(dstroot, sub, "extras")
+                os.makedirs(exdst, exist_ok=True)
+                for efn in sorted(os.listdir(exsrc)):
+                    if os.path.isfile(os.path.join(exsrc, efn)):
+                        shutil.copyfile(os.path.join(exsrc, efn), os.path.join(exdst, efn))
             if sub == plat:
                 continue    # own platform is served from sys.executable, not updates/
             fn = os.path.basename(PLATFORM_UPDATE_BINARY[sub])
@@ -693,6 +719,9 @@ def main():
         subprocess.run([sys.executable, os.path.join(HERE, "vendor-moq.py")], check=False)
     if not os.path.exists(vendor_manifest):
         sys.exit("assets/vendor/esm/manifest.json is missing -- run vendor-moq.py (needs network once)")
+    # 0.21.7: KASTR's edits to the vendored library (vendor-moq.py PATCHES: the audio maxAge floor) must be in place
+    if subprocess.run([sys.executable, os.path.join(HERE, "vendor-moq.py"), "--check"], check=False).returncode != 0:
+        sys.exit("the vendored MoQ library is not patched -- run vendor-moq.py --patch")
     # 0.13.1: the RNNoise worklet the page loads for background-noise removal (vendor-noise.py)
     if not os.path.exists(os.path.join(HERE, "assets", "noise", "manifest.json")):
         sys.exit("assets/noise/manifest.json is missing -- run vendor-noise.py (needs network once)")

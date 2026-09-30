@@ -92,6 +92,88 @@ def rel(from_name, to_name):
     r = os.path.relpath(to_name, d if d else ".").replace(os.sep, "/")
     return r if r.startswith(".") else "./" + r
 
+# 0.21.7: KASTR's edits to the vendored library. Exact-string anchors, each replaced exactly once; the replacement carries
+# a /* KASTR-PATCH: <id> */ marker so a file that already has it is left alone (idempotent). mirror() re-applies them after
+# every fetch and records post-patch shas + the ids in the manifest; build.py runs `--check`; tests/test_vendor_patch.py
+# asserts marker, replacement, anchor gone and sha == manifest.
+PATCHES = [
+    {"id": "audio-maxage-floor",
+     "file": "@moq/watch@0.6.0/es2022/player-DiUmUis6.mjs",
+     "why": ("hang's container drops the oldest buffered group when the buffered span exceeds maxAge = delay + buffer; "
+             "every 20 ms Opus packet is its own group and legacy audio frames carry no duration, so one skip registered "
+             "as a discontinuity: the worklet ring was flushed, the shared sync clock and the decoder reset -- the clipping "
+             "every KASTR 0.21.6 viewer heard ('skipping slow group: track=audio' climbing). A 1 s floor on the AUDIO "
+             "consumer's maxAge (video keeps the library's budget) turns a late packet into a small gap."),
+     "edits": [
+        ('#g(t){if(!t.get(this.in.enabled)||t.get(this.sync.in.delay)==="instant")return;let e=t.get(this.source.in.broadcast);if(!e)return;',
+         '#g(t){if(!t.get(this.in.enabled)||t.get(this.sync.in.delay)==="instant")return;/* KASTR-PATCH: audio-maxage-floor */this.kastrAudioMaxAge=new u(Math.max(Number(this.sync.out.maxAge.peek())||0,1e3));let e=t.get(this.source.in.broadcast);if(!e)return;'),
+        ('priority:w.PRIORITY.audio,maxAge:this.sync.out.maxAge',
+         'priority:w.PRIORITY.audio,maxAge:this.kastrAudioMaxAge'),
+        ('r=new b.Consumer(e,{format:s,maxAge:this.sync.out.maxAge})',
+         'r=new b.Consumer(e,{format:s,maxAge:this.kastrAudioMaxAge})'),
+        ('c=new b.Consumer(e,{format:new b.Cmaf.Format(s),maxAge:this.sync.out.maxAge})',
+         'c=new b.Consumer(e,{format:new b.Cmaf.Format(s),maxAge:this.kastrAudioMaxAge})'),
+     ]},
+]
+
+
+def _sha_file(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def patch(check=False, update_manifest=True, quiet=False):
+    """Apply PATCHES (check=True: only verify). -> number of files changed. SystemExit on a missing anchor, an anchor
+    that occurs more than once, or (check) an unpatched file / a manifest sha that does not match the file."""
+    changed = 0
+    man = None
+    if os.path.exists(MANIFEST):
+        with open(MANIFEST, encoding="utf-8") as f:
+            man = json.load(f)
+    for pt in PATCHES:
+        path = os.path.join(OUT, *pt["file"].split("/"))
+        if not os.path.exists(path):
+            raise SystemExit("vendor-moq: %s is missing -- run vendor-moq.py" % pt["file"])
+        with open(path, encoding="utf-8", newline="") as f:
+            text = f.read()
+        marker = "/* KASTR-PATCH: %s */" % pt["id"]
+        applied = marker in text
+        if applied:
+            for a, b in pt["edits"]:
+                if text.count(b) != 1 or a in text:
+                    raise SystemExit("vendor-moq: %s carries the %s marker but not its edits (%r)" % (pt["file"], pt["id"], b[:60]))
+        elif check:
+            raise SystemExit("vendor-moq: %s is NOT patched (%s) -- run vendor-moq.py --patch" % (pt["file"], pt["id"]))
+        else:
+            for a, b in pt["edits"]:
+                n = text.count(a)
+                if n != 1:
+                    raise SystemExit("vendor-moq: %s anchor x%d in %s: %r" % (pt["id"], n, pt["file"], a[:70]))
+                text = text.replace(a, b)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            changed += 1
+            if not quiet:
+                print("  patched %s (%s)" % (pt["file"], pt["id"]))
+        if check and isinstance(man, dict):
+            want = (man.get("files") or {}).get(pt["file"])
+            have = _sha_file(path)
+            if want != have:
+                raise SystemExit("vendor-moq: manifest sha for %s is stale (run vendor-moq.py --patch)" % pt["file"])
+            if pt["id"] not in (man.get("patches") or []):
+                raise SystemExit("vendor-moq: manifest does not list patch %s" % pt["id"])
+    if not check and update_manifest and isinstance(man, dict):
+        files = man.get("files") or {}
+        for pt in PATCHES:
+            files[pt["file"]] = _sha_file(os.path.join(OUT, *pt["file"].split("/")))
+        man["files"] = files
+        man["patches"] = [pt["id"] for pt in PATCHES]
+        with open(MANIFEST, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(man, f, indent=1, sort_keys=True)
+    if not quiet:
+        print("vendor-moq: %d patch(es) %s" % (len(PATCHES), "verified" if check else ("applied" if changed else "already in place")))
+    return changed
+
 
 def mirror(force=False):
     want = {"pins": PINS, "target": TARGET}
@@ -157,12 +239,16 @@ def mirror(force=False):
         with open(os.path.join(OUT, name), encoding="utf-8") as f:
             if re.search(r'from\s*["\']/@|import\s*["\']/@|import\(\s*["\']/@', f.read()):
                 raise SystemExit("vendor-moq: %s keeps an absolute import" % name)
+    # 0.21.7: KASTR's own edits, then the shas of what is actually on disk (post-patch)
+    patch(update_manifest=False, quiet=True)
+    for name in list(files):
+        files[name] = _sha_file(os.path.join(OUT, name))
     entries = {spec: local_name(path + ("&" if "?" in path else "?") + "target=" + TARGET)
                for spec, path in PINS.items()}
     manifest = {
         "pins": PINS, "target": TARGET, "entries": entries, "resolved": resolved,
         "files": files, "fetched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": BASE,
+        "source": BASE, "patches": [pt["id"] for pt in PATCHES],
     }
     with open(MANIFEST, "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, indent=1, sort_keys=True)
@@ -197,5 +283,11 @@ def importmap():
 if __name__ == "__main__":
     if "--importmap" in sys.argv:
         print(importmap())
+        sys.exit(0)
+    if "--patch" in sys.argv:      # 0.21.7: (re)apply KASTR's edits to the vendored files + record their shas
+        patch(check=False)
+        sys.exit(0)
+    if "--check" in sys.argv:      # 0.21.7: build.py -- every patch in place, manifest shas current
+        patch(check=True)
         sys.exit(0)
     sys.exit(mirror(force="--force" in sys.argv))

@@ -107,6 +107,20 @@ Cloudflare replaces an origin's 502/504 with its own text page. KASTR 0.20.0 nev
 and an open relay answers its room-code endpoints with a 200 "open" shape instead of an error, so `watch.html` and
 the page behave the same behind Cloudflare as on the LAN.
 
+## Through the tunnel in 0.21.7: audio budgets and the download
+
+- A page whose relay is a web relay (`…/relay` — every tunnel page) rides fixed budgets: `delay 150 ms + buffer 800 ms`
+  on the spotlit tile, the rail and composites, instead of the library's min-RTT estimate that shrank the budget under
+  the jitter. Together with the audio `maxAge` floor in the vendored player (see RELEASES 0.21.7) the clipping heard from
+  every tunnel viewer is gone; the latency badge shows `· skips A/V` when the player dropped media in the last 60 s.
+- More → Settings → About on a tunnel page lists the Windows and Linux install zips; the host assembles the zip on the
+  first click (10–20 s, "Preparing the download on the host…") and the browser downloads `KASTR-<plat>-v<ver>.zip`. The
+  tunnel's certificate is trusted, so the download is allowed; a LAN https page without the local CA installed has its
+  download blocked by Chromium as insecure — install the CA or use the tunnel page.
+- Its Relay dropdown reads "Relay host: KASTR vX — this page follows it" (same origin, no port).
+- A viewer on the tunnel page who opens an on-demand camera that lives on another spoke of the same hub sees the low copy
+  at once; the demand travels tunnel host → hub → that spoke over the hub's command channel.
+
 ## Verified for real (2026-09-30, kastr.madlabs.app, KASTR 0.21.5, SECURED relay)
 
 The half 0.20.0 left open. Access codes required on the relay "kastr-test" behind the tunnel:

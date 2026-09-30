@@ -1674,6 +1674,17 @@ def mirror_feeds(base, ini, relay=None, app_root=None, sd=None):
                 continue
             plan.append(("%s browser" % plat, base + "/api/update/browser?platform=" + plat,
                          os.path.join(root, "updates", "browser", "chrome-%s.zip" % key), info))
+        # 0.21.7: the templates every platform's install zip needs (kastr.ini, the Linux README/install.sh/svg) --
+        # own platform included, since this box's own kastr.ini is the operator's edited copy (kastr_release)
+        for plat, ex in (man.get("extras") or {}).items():
+            sub = (MIRROR_PLATFORMS.get(plat) or (None,))[0]
+            if not sub or not isinstance(ex, dict):
+                continue
+            for name, einfo in ex.items():
+                if not isinstance(einfo, dict) or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", str(name)):
+                    continue
+                plan.append(("%s extra %s" % (plat, name), base + "/api/update/extra?platform=%s&name=%s" % (plat, urllib.request.quote(str(name))),
+                             os.path.join(root, "updates", sub, "extras", str(name)), einfo))
         todo, skipped = [], 0
         for label, url, target, info in plan:
             sha = str(info.get("sha256") or "")
@@ -3110,10 +3121,16 @@ def main():
         # prints a sudo line on a headless robot box.
         if relay_only:
             try:
-                if not kastr_relay.firewall_status().get("present"):
-                    kastr_relay._FIREWALL_WEB_PORT = port
-                    kastr_relay._FIREWALL_DIR = state_dir()
-                    kastr_relay.add_firewall_rules(rport)
+                # 0.21.7: the ports FIRST (the web port used to be set after the check), then a check that remembers:
+                # <state>/firewall-applied.json covers what an earlier launch added (or printed once, headless), so a
+                # Linux box no longer asks for pkexec on every launch; a changed port shows up as missing and asks again
+                kastr_relay._FIREWALL_WEB_PORT = port
+                kastr_relay._FIREWALL_DIR = state_dir()
+                wanted = kastr_relay.firewall_wanted(rport)
+                needed, fw = kastr_relay.firewall_needed(wanted)
+                if needed:
+                    res = kastr_relay.add_firewall_rules(rport, wanted)
+                    print(f"{APP_NAME}: firewall: {res.get('note') or res.get('error')}", flush=True)
             except Exception as e:
                 print(f"{APP_NAME}: firewall setup skipped: {e}", flush=True)
     threading.Thread(target=relay_autostart, daemon=True).start()

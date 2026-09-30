@@ -114,6 +114,33 @@ ADMIN_KIND = ".admin"
 # down answers with its cached pin, so an outage never churns the spoke.
 TLS_FAIL_RE = re.compile(r"invalid peer certificate|fingerprint[^\n]*(mismatch|not match|unknown)|UnknownIssuer|CertificateUnknown|BadSignature|InvalidContentType|cluster peer error", re.I)
 LAN_SECRET_RE = re.compile(r"^[0-9a-f]{64}$")
+# 0.21.7: the cluster link's state, read off the relay's own log (moq-relay 0.15: the spoke dials the hub with
+# moq_tokio; "connected peer=" is the link up, a peer error / closed / timed out is the link down). One launch.log
+# line per transition -- the evidence Southridge's blackouts can be matched against.
+LINK_UP_RE = re.compile(r"moq_tokio::connection: connected peer=", re.I)
+LINK_DOWN_RE = re.compile(r"cluster peer error|WebSocket connection failed|remote\{remote=[^}]*\}[^\n]*?(error|closed|failed|timed out|reset)|moq_relay::cluster:[^\n]*(error|failed|closed|lost)", re.I)
+_WAKE_UNSUP_SAID = [0.0]
+
+
+def forward_wake(minter, tok, room, broadcast, hops, log):
+    """0.21.7: POST a viewer's demand for an on-demand camera to the hub minter (federation token). -> "hub" when the hub
+    took it, "unsupported" when the hub predates 0.21.7 (404; said once an hour), else "hub-error"."""
+    body = json.dumps({"room": room, "broadcast": broadcast, "hops": int(hops)}).encode()
+    try:
+        req = urllib.request.Request(minter + "/api/ondemand/forward", data=body, method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
+        with urllib.request.urlopen(req, timeout=4):
+            return "hub"
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            now = time.time()
+            if now - _WAKE_UNSUP_SAID[0] > 3600:
+                _WAKE_UNSUP_SAID[0] = now
+                log("relay federation: the hub does not relay on-demand wakes (KASTR before 0.21.7) -- a viewer here cannot start a camera on another site until it updates")
+            return "unsupported"
+        return "hub-error"
+    except Exception:
+        return "hub-error"
 # 0.13.0: state tracks. Each member publishes its facts as JSON tracks under
 # `.state/<room>/<host>` (public, subscribe-only, so the lobby reads them);
 # a token scoped to a host may write only that host's paths. The claim
@@ -1222,7 +1249,8 @@ class AuthService:
 
     bans = None   # 0.17.0: set by __init__; a test double without one simply never bans
 
-    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None, on_cmd=None):
+    def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None, on_cmd=None,
+                 wake=None, cluster_view=None):
         self.store = store or AuthStore(os.getcwd(), log)
         self.hub = hub                       # 0.16.0: callable -> the hub minter's base URL (a spoke forwards admin codes there), or None
         self.fed_token = fed_token           # 0.17.0: callable -> this spoke's federation token (a kick rides it to the hub), or None
@@ -1237,6 +1265,8 @@ class AuthService:
         # bans long-poll reply; a spoke acts once per new seq (an "Update spokes now" on the hub)
         self.cmd = {"seq": 0, "update": None, "closeRoom": []}   # 0.21.2: + closeRoom [{seq, spoke, slug}] (last 16)
         self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
+        self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
+        self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
         self.hub_cmd_seen = None              # the hub's command seq this spoke last saw (baseline first)
         d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
         if isinstance(d, dict):
@@ -1323,6 +1353,9 @@ class AuthService:
                     # 0.12.0: rows {slug, locked, persistent, creator, created, at} -- old pages read .slug
                     # 0.15.0: + the relay-defined room groups
                     self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public()})
+                elif path == "/api/spokes/link":       # 0.21.7: what the hub's relay sees of its cluster (a spoke's grid-gate evidence)
+                    obj, code = svc.spoke_link(self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
                 elif path == "/api/bans":              # 0.18.0: the hub's active bans, for its spokes only
                     qs = parse_qs(urlparse(self.path).query)   # 0.20.0: ?since=<ver>&wait=<s> holds until they change
                     obj, code = svc.bans_for_spoke(self.headers.get("Authorization"),
@@ -1367,6 +1400,9 @@ class AuthService:
                     self._reply(obj, code)
                 elif path == "/api/bans/notify":       # 0.18.0: the hub says "bans changed" -- no data, we pull
                     obj, code = svc.bans_notified(self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/ondemand/forward":  # 0.21.7: a spoke relays a viewer's demand for a camera on another site
+                    obj, code = svc.wake_route(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
@@ -1715,6 +1751,42 @@ class AuthService:
             self.log("relay auth: spoke %s registered%s (from %s)" % (name or key, " for ban fan-out" if url else " (long-poll only)", peer or "?"))
         return {"ok": True, "bans": len(self.bans.active()), "cmd": self.cmd["seq"]}, 200
 
+    def wake_route(self, p, bearer):
+        """0.21.7: hub side -- a spoke says a viewer wants an on-demand camera that is not registered there. Touch it here
+        if it is ours, else push a `wake` command to every spoke (and onward to our own hub, when we are a spoke too)."""
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        p = p if isinstance(p, dict) else {}
+        room = str(p.get("room") or "").strip().lower()
+        b = str(p.get("broadcast") or "")
+        if not SLUG_RE.match(room) or not b.startswith(room + "/") or len(b) > 300 or not re.match(r"^[A-Za-z0-9._/-]+$", b):
+            return {"ok": False, "error": "bad room or broadcast"}, 400
+        try:
+            hops = max(0, min(9, int(p.get("hops") or 0)))
+        except (TypeError, ValueError):
+            hops = 0
+        res = None
+        if callable(self.wake):
+            try:
+                res = self.wake(room, b, hops + 1)
+            except Exception as e:
+                res = ["error: " + str(e)[:80]]
+        return {"ok": True, "forwarded": res}, 200
+
+    def spoke_link(self, bearer, peer=""):
+        """0.21.7: hub side -- nodes and sessions the hub's relay reports, and whether the asking spoke's address is among
+        the nodes (None when the node list names no addresses)."""
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        v = {}
+        try:
+            v = self.cluster_view() if callable(self.cluster_view) else {}
+        except Exception:
+            v = {}
+        raw = [str(x) for x in (v.get("raw") or [])]
+        sees = (any(peer and peer in x for x in raw) if (raw and peer) else None)
+        return {"ok": True, "nodes": v.get("nodes"), "sessions": v.get("sessions"), "seesYou": sees, "peer": peer or None}, 200
+
     def spokes_public(self):
         """0.21.0: the Relay page's spoke table -- never a token, never a code."""
         with self.lock:
@@ -1727,8 +1799,8 @@ class AuthService:
         with self.lock:
             self.cmd["seq"] = int(self.cmd.get("seq") or 0) + 1
             rec = {"seq": self.cmd["seq"], "at": int(time.time()), **(extra or {})}
-            if name == "closeRoom":   # 0.21.2: a list -- two closes between two polls both arrive
-                self.cmd["closeRoom"] = (list(self.cmd.get("closeRoom") or []) + [rec])[-16:]
+            if name in ("closeRoom", "wake"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too
+                self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
             n = len(self.spokes)
@@ -1756,7 +1828,8 @@ class AuthService:
         rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
         with self.lock:
             cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update"),
-                   "closeRoom": list(self.cmd.get("closeRoom") or [])}   # 0.21.2
+                   "closeRoom": list(self.cmd.get("closeRoom") or []),   # 0.21.2
+                   "wake": list(self.cmd.get("wake") or [])}             # 0.21.7: on-demand wakes relayed from other sites
         return {"bans": rows, "ver": ver, "cmd": cmd}, 200   # 0.21.0: + the hub's command channel
 
     def fanout_bans(self):
@@ -1844,6 +1917,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("closeRoom", c), daemon=True).start()
+                # 0.21.7: on-demand wakes from viewers on other sites (madlabs -> Agg -> Southridge)
+                for c in (cmd.get("wake") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("wake", c), daemon=True).start()
         now = time.time()
         have = {(b.get("room"), b.get("host") or b.get("target")) for b in self.bans.active()}
         listed = set()
@@ -2237,6 +2318,9 @@ class Relay:
         self._fed_active = None
         self._fed_last_reason = None
         self._spoke_last_reason = None                  # 0.21.5: registered-with-the-hub state, said once per change
+        self._link = None                               # 0.21.7: {up, since, changedAt, drops, repins, last} of the cluster link
+        self._wake_seen = {}                            # 0.21.7: broadcast -> when a wake was last relayed (15 s dedupe)
+        self._pin_kept_said = False
         self.proc = None
         self.port = 4443
         self.bind_all = False
@@ -2718,6 +2802,10 @@ class Relay:
             if not self.running():
                 return False
             port, lan, sec = self.port, self.bind_all, self.secured
+            try:
+                self._link_event(False, "relay restarting")   # 0.21.7: a restart cuts the cluster link for every viewer
+            except Exception:
+                pass
             self.stop()
             self.start(port, lan, sec)
             return True
@@ -2788,6 +2876,14 @@ class Relay:
             obj, code = close_room(self.store, slug, None, True, log=self.log)   # the chat store's hook is wired at its creation
             self.log("relay federation: hub closed room %s here -> %s" % (slug, obj.get("ok") and "closed" or obj.get("error")))
             return
+        if name == "wake":   # 0.21.7: a viewer on another site wants an on-demand camera -- maybe one of mine
+            b = str((info or {}).get("broadcast") or "")
+            try:
+                res = self.wake_forward(str((info or {}).get("room") or ""), b, int((info or {}).get("hops") or 0) + 1, from_hub=True)
+                self.log("relay federation: hub relayed a viewer's demand for %s -> %s" % (b, ("woken here" if res == ["here"] else ", ".join(res) if res else "not registered here")))
+            except Exception as e:
+                self.log("relay federation: wake command failed: %s" % e)
+            return
         if name != "update":
             return
         try:
@@ -2802,6 +2898,90 @@ class Relay:
                 self.log("relay federation: update command failed: %s" % e)
         else:
             self.log("relay federation: hub asked for an update -- this checkout does not self-update")
+
+    def wake_forward(self, room, broadcast, hops=0, from_hub=False):
+        """0.21.7: a viewer wants an on-demand camera that is not registered with THIS KASTR. Touch it here when it is
+        (a command that came down from the hub), else relay the demand: out to my spokes over the command channel and,
+        unless it came from my hub, up to my hub with the federation token. Deduped 15 s per broadcast; at most three
+        relay boundaries (viewer -> spoke -> hub -> spoke). -> list of where it went, or None."""
+        room = str(room or "").strip().lower()
+        broadcast = str(broadcast or "")
+        if not SLUG_RE.match(room) or not broadcast.startswith(room + "/"):
+            return None
+        try:
+            import kastr_serve as _ks
+            if _ks.ondemand_touch(broadcast):
+                return ["here"]
+        except Exception:
+            pass
+        now = time.time()
+        with self._lock:
+            for k in [k for k, t in self._wake_seen.items() if now - t > 120]:
+                self._wake_seen.pop(k, None)
+            if now - self._wake_seen.get(broadcast, 0) < 15:
+                return ["deduped"]
+            self._wake_seen[broadcast] = now
+        if hops >= 3:
+            return ["hops"]
+        out = []
+        auth = self.auth
+        if auth is not None and getattr(auth, "spokes", None):
+            auth.raise_cmd("wake", {"room": room, "broadcast": broadcast, "hops": hops})
+            out.append("spokes")
+        if not from_hub:
+            minter, tok = self._hub_minter_url(), self._fed_active
+            if minter and tok:
+                out.append(forward_wake(minter, tok, room, broadcast, hops, self.log))
+        return out or None
+
+    def _cluster_view(self):
+        """0.21.7: {nodes, sessions, raw} from the relay's internal API (None where it does not answer)."""
+        out = {"nodes": None, "sessions": None, "raw": []}
+        try:
+            jn = self.internal_get("/nodes")
+            if jn:
+                d = json.loads(jn)
+                lst = d.get("nodes") if isinstance(d, dict) and isinstance(d.get("nodes"), list) else (d if isinstance(d, list) else [])
+                out["nodes"] = len(lst)
+                out["raw"] = [str(x)[:160] for x in lst][:32]
+        except Exception:
+            pass
+        try:
+            js = self.internal_get("/sessions")
+            if js:
+                out["sessions"] = len((json.loads(js) or {}).get("sessions") or [])
+        except Exception:
+            pass
+        return out
+
+    def _link_event(self, up, why):
+        """0.21.7: one transition of the cluster link (up/down), remembered in self._link and said once in launch.log."""
+        if not isinstance(self.federation, dict) or not self.federation.get("hub"):
+            return
+        now = int(time.time())
+        lk = self._link or {"up": None, "since": None, "changedAt": None, "drops": 0, "repins": 0, "last": None}
+        self._link = lk
+        was = lk["up"]
+        if up and was is not True:
+            lk.update(up=True, since=now, changedAt=now, last=why)
+            self.log("relay federation: cluster link to %s up (%s)" % (self.federation.get("hub"), why))
+        elif not up and was is not False:
+            if was is True:
+                lk["drops"] = int(lk.get("drops") or 0) + 1
+            lk.update(up=False, since=now, changedAt=now, last=why)
+            self.log("relay federation: cluster link to %s down (%s)" % (self.federation.get("hub"), why))
+        else:
+            return
+        threading.Thread(target=self._spoke_sync, daemon=True).start()   # re-register + ask the hub what it sees
+
+    def _link_line(self, line):
+        """0.21.7: classify one relay log line for the cluster link (secrets redacted)."""
+        if not isinstance(self.federation, dict):
+            return
+        if LINK_UP_RE.search(line):
+            self._link_event(True, re.sub(r"jwt=[^&\s]+", "jwt=...", line)[-140:].strip())
+        elif LINK_DOWN_RE.search(line):
+            self._link_event(False, re.sub(r"jwt=[^&\s]+", "jwt=...", line)[-160:].strip())
 
     def _spoke_sync(self):
         """0.18.0: tell the hub where this relay's minter answers (so its bans reach us) and
@@ -2846,6 +3026,15 @@ class Relay:
             with urllib.request.urlopen(req, timeout=4):
                 pass
             self._spoke_state(True, "registered with the hub as %s" % name)   # 0.21.5
+            try:   # 0.21.7: what the hub's relay sees of its cluster -- evidence for the grid gate (federation.hubSees)
+                req2 = urllib.request.Request(minter + "/api/spokes/link", headers={"Authorization": "Bearer " + tok})
+                with urllib.request.urlopen(req2, timeout=4) as r2:
+                    hs = json.loads(r2.read().decode("utf-8", "replace") or "{}")
+                if isinstance(self.federation, dict) and isinstance(hs, dict) and hs.get("ok"):
+                    self.federation["hubSees"] = {"nodes": hs.get("nodes"), "sessions": hs.get("sessions"),
+                                                  "seesYou": hs.get("seesYou"), "at": int(time.time())}
+            except Exception:
+                pass
         except Exception as e:
             self.log("relay federation: spoke registration with the hub failed: %s" % str(e)[:120])
             self._spoke_state(False, "registration failed: %s" % str(e)[:80])   # 0.21.5
@@ -2875,8 +3064,19 @@ class Relay:
         pin, _st = self._hub_pin_for(hub, info.get("fingerprint"))   # 0.16.0: the hub's cert changes on every hub start
         if pin and pin != getattr(self, "_hub_pin", None):
             self.log("relay federation: hub certificate changed -- restarting the relay pinned to %s..." % pin[:12])
+            if self._link is not None:
+                self._link["repins"] = int(self._link.get("repins") or 0) + 1   # 0.21.7
+            self._pin_kept_said = False
             self._restart()
             return True
+        if _st == "pinned-cached":
+            # 0.21.7: the hub (or its minter) is unreachable -- the stored pin stays and the relay is NOT restarted; a
+            # QUIC hub's certificate is regenerated per hub start, so the re-pin comes when it is back (once per outage)
+            if not self._pin_kept_said:
+                self._pin_kept_said = True
+                self.log("relay federation: hub unreachable -- keeping the stored certificate pin (no restart)")
+        else:
+            self._pin_kept_said = False
         return False
 
     def _name_file(self):
@@ -3026,7 +3226,9 @@ class Relay:
                                         hub=self._hub_minter_url,   # 0.16.0: admin codes are verified at the hub when none is set here
                                         fed_token=lambda: self._fed_active,      # 0.17.0: a kick rides the federation token to the hub
                                         revalidate=self._force_revalidate,       # 0.17.0: the relay re-asks at once
-                                        on_cmd=self._hub_cmd)                    # 0.21.0: the hub's "update now"
+                                        on_cmd=self._hub_cmd,                    # 0.21.0: the hub's "update now"
+                                        wake=self.wake_forward,                  # 0.21.7: a spoke's viewer wants a camera elsewhere
+                                        cluster_view=self._cluster_view)         # 0.21.7: /api/spokes/link
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -3172,6 +3374,10 @@ class Relay:
                 with self._lock:
                     self._log.append(line)
                     del self._log[:-LOG_LINES]
+                try:
+                    self._link_line(line)   # 0.21.7: the cluster link's state
+                except Exception:
+                    pass
                 if getattr(self, "_hub_pin", None) and TLS_FAIL_RE.search(line):   # 0.16.0
                     self._fingerprint_check("relay reported a certificate problem")
         except Exception:
@@ -3248,7 +3454,7 @@ class Relay:
             "codes": self.store.codes_status(),
             "legacy": bool(self.secured and self.running() and not self.store.configured()),
             # 0.11.0: spoke side -- hub, whether a token rides the link, and why not
-            "federation": self.federation,
+            "federation": (dict(self.federation, link=self._link) if isinstance(self.federation, dict) else self.federation),   # 0.21.7: + link
             # 0.16.0: the per-session auth server the relay depends on, and the internal ops port
             "authUp": bool(self.auth is not None and getattr(self.auth, "httpd", None) is not None),
             "auth": (self.auth.stats() if self.auth else None),
@@ -3298,102 +3504,221 @@ _FIREWALL_HTTPS_PORT = None   # set by the launcher when the https listener is u
 HTTPS_PORT = None             # 0.15.0: this KASTR's https listener port (launcher); /api/auth advertises it (None = none)
 
 
-def firewall_status():
-    """Are the KASTR firewall rules already in place? (0.8.2)
+def firewall_wanted(port, web=None, https=None):
+    """0.21.7: the {port/proto} set a relay on `port` needs open: QUIC + cert on the relay port, port+1 (access codes),
+    port+2 (wss), KASTR's web port, mDNS, and the https listener only when one is up. Computed FIRST, so the check
+    and the add speak of the same ports (the web port used to be set after the check)."""
+    port = int(port)
+    want = [(port, "udp"), (port, "tcp"), (port + 1, "tcp"), (port + 2, "tcp"),
+            (int(web or _FIREWALL_WEB_PORT or 8000), "tcp"), (5353, "udp")]
+    h = _FIREWALL_HTTPS_PORT if https is None else https
+    if h:
+        want.append((int(h), "tcp"))
+    return want
 
-    {present: true|false|null} -- null means "cannot tell" (no ufw, odd
-    platform), and the UI treats that like missing (offer the button)."""
+
+_FIREWALL_RECORD = "firewall-applied.json"
+
+
+def _fw_record_path():
+    return os.path.join(_FIREWALL_DIR or os.path.dirname(os.path.abspath(__file__)), _FIREWALL_RECORD)
+
+
+def firewall_record():
+    """0.21.7: what an earlier launch added (or printed once, headless): {tool, ports, at, printed} or None."""
+    try:
+        with open(_fw_record_path(), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) and isinstance(d.get("ports"), list) else None
+    except (OSError, ValueError):
+        return None
+
+
+def firewall_remember(tool, wanted, printed=False):
+    """0.21.7: record the ports that are (or were told to be) open, so the next launch asks nobody."""
+    rec = {"tool": tool, "ports": sorted("%d/%s" % w for w in wanted), "at": int(time.time()), "printed": bool(printed)}
+    try:
+        os.makedirs(os.path.dirname(_fw_record_path()), exist_ok=True)
+        with open(_fw_record_path() + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(rec, f, indent=1)
+        os.replace(_fw_record_path() + ".tmp", _fw_record_path())
+    except OSError:
+        pass
+    return rec
+
+
+def firewall_needed(wanted):
+    """0.21.7: -> (needed, status). The record covers `wanted` -> nothing to do (no check at all); else an unprivileged
+    check; rules present -> remembered; missing -> needed; unknown -> needed once (a success writes the record)."""
+    rec = firewall_record()
+    ports = {"%d/%s" % w for w in wanted}
+    if rec and ports <= set(str(x) for x in rec.get("ports") or []):
+        return False, {"present": True, "tool": rec.get("tool"), "note": "recorded on an earlier launch", "missing": []}
+    st = firewall_status(wanted)
+    if st.get("present") is True:
+        firewall_remember(st.get("tool") or "unknown", wanted)
+        return False, st
+    if st.get("present") is None and rec:
+        return False, dict(st, note="cannot tell; an earlier launch recorded the rules")   # unknown + a record: do not nag
+    return True, st
+
+
+def _which(name):
+    for d in os.environ.get("PATH", "").split(os.pathsep) + ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]:
+        p = os.path.join(d, name)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def _linux_fw_tool():
+    """firewalld (running) first, else ufw when installed, else None."""
+    if _which("firewall-cmd"):
+        try:
+            out = subprocess.run(["firewall-cmd", "--state"], capture_output=True, text=True, timeout=8)
+            if "running" in (out.stdout or "") and "not running" not in (out.stdout or ""):
+                return "firewalld"
+        except Exception:
+            pass
+    if _which("ufw") or os.path.exists("/etc/ufw/ufw.conf"):
+        return "ufw"
+    return None
+
+
+def firewall_status(wanted=None):
+    """Are the KASTR firewall rules in place? (0.8.2; 0.21.7: exact ports, unprivileged where possible.)
+
+    -> {present: true|false|null, tool, missing: [port/proto], found, note}. null = cannot tell (the UI treats
+    that like missing and offers the button; the launcher asks once and then trusts its record)."""
+    wanted = list(wanted or [])
+    want_keys = ["%d/%s" % w for w in wanted]
     try:
         if sys.platform == "win32":
-            # One powershell call; prints each existing DisplayName.
-            names = ";".join("'%s'" % n for n in FIREWALL_RULES)
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "@(%s) | ForEach-Object { if (Get-NetFirewallRule -DisplayName $_ "
-                 "-ErrorAction SilentlyContinue) { $_ } }" % names.replace(";", ",")],
-                capture_output=True, text=True, timeout=20,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            found = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
-            return {"present": all(n in found for n in FIREWALL_RULES),
-                    "found": found}
-        # Linux: ufw only (the hint we print is ufw); inactive ufw means
-        # nothing blocks -- report present so nobody is nagged.
-        out = subprocess.run(["ufw", "status"], capture_output=True, text=True,
-                             timeout=10)
-        text = (out.stdout or "")
-        if "Status: inactive" in text:
-            return {"present": True, "note": "ufw inactive"}
-        return {"present": None if out.returncode != 0 else
-                (str(_FIREWALL_WEB_PORT or 8000) in text or "4443" in text)}
-    except Exception:
-        return {"present": None}
+            names = ",".join("'%s'" % n for n in FIREWALL_RULES)
+            # one powershell call: "<name>|<proto>|<port>" per existing rule (port filter joined -- a changed port counts as missing)
+            script = ("foreach ($n in @(%s)) { Get-NetFirewallRule -DisplayName $n -ErrorAction SilentlyContinue | ForEach-Object "
+                      "{ $f = $_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue; \"$n|$($f.Protocol)|$($f.LocalPort)\" } }" % names)
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=25,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            found_names, have = [], set()
+            for ln in (out.stdout or "").splitlines():
+                parts = ln.strip().split("|")
+                if len(parts) != 3:
+                    continue
+                found_names.append(parts[0])
+                for lp in str(parts[2]).split(","):
+                    lp = lp.strip()
+                    if lp.isdigit():
+                        have.add("%d/%s" % (int(lp), parts[1].strip().lower()))
+            if want_keys:
+                missing = [k for k in want_keys if k not in have]
+            else:
+                missing = [n for n in FIREWALL_RULES if n not in found_names]
+            return {"present": not missing, "tool": "windows", "missing": missing, "found": sorted(have) or found_names}
+        tool = _linux_fw_tool()
+        if tool is None:
+            return {"present": None, "tool": None, "missing": want_keys, "note": "no firewall tool found (ufw / firewalld) -- nothing KASTR can open"}
+        if tool == "firewalld":
+            missing, unknown = [], False
+            for k in want_keys:
+                out = subprocess.run(["firewall-cmd", "--query-port=" + k], capture_output=True, text=True, timeout=8)
+                txt = (out.stdout or "") + (out.stderr or "")
+                if "NOT_AUTHORIZED" in txt or out.returncode not in (0, 1):
+                    unknown = True
+                elif "yes" not in (out.stdout or ""):
+                    missing.append(k)
+            if unknown and not missing:
+                return {"present": None, "tool": "firewalld", "missing": [], "note": "firewalld would not answer an unprivileged query"}
+            return {"present": (not missing) if not unknown else (False if missing else None), "tool": "firewalld", "missing": missing}
+        # ufw: an inactive firewall blocks nothing (no nag); the rules file is world-readable on most boxes;
+        # `ufw status` answers root only (it used to be run as the user -> "need to be root" -> unknown -> pkexec every launch)
+        try:
+            with open("/etc/ufw/ufw.conf", encoding="utf-8", errors="replace") as f:
+                if re.search(r"^\s*ENABLED\s*=\s*no\b", f.read(), re.M | re.I):
+                    return {"present": True, "tool": "ufw", "missing": [], "note": "ufw inactive"}
+        except OSError:
+            pass
+        have = set()
+        parsed = False
+        for rules_file in ("/etc/ufw/user.rules", "/lib/ufw/user.rules"):
+            try:
+                with open(rules_file, encoding="utf-8", errors="replace") as f:
+                    for m in re.finditer(r"^###\s*tuple\s*###\s*allow\s+(tcp|udp)\s+(\d{1,5})\s", f.read(), re.M | re.I):
+                        have.add("%d/%s" % (int(m.group(2)), m.group(1).lower()))
+                parsed = True
+                break
+            except OSError:
+                continue
+        if not parsed and hasattr(os, "geteuid") and os.geteuid() == 0:
+            out = subprocess.run(["ufw", "status"], capture_output=True, text=True, timeout=10)
+            text = out.stdout or ""
+            if "Status: inactive" in text:
+                return {"present": True, "tool": "ufw", "missing": [], "note": "ufw inactive"}
+            if out.returncode == 0:
+                for m in re.finditer(r"^(\d{1,5})/(tcp|udp)\s+ALLOW", text, re.M | re.I):
+                    have.add("%d/%s" % (int(m.group(1)), m.group(2).lower()))
+                parsed = True
+        if not parsed:
+            return {"present": None, "tool": "ufw", "missing": want_keys, "note": "ufw rules are not readable without root"}
+        if not want_keys:   # a bare status call (older callers): the relay and web ports by name
+            want_keys = ["%d/tcp" % int(_FIREWALL_WEB_PORT or 8000), "4443/udp"]
+        missing = [k for k in want_keys if k not in have]
+        return {"present": not missing, "tool": "ufw", "missing": missing, "found": sorted(have)}
+    except Exception as e:
+        return {"present": None, "tool": None, "missing": want_keys, "note": "check failed: %s" % str(e)[:80]}
 
 
-def add_firewall_rules(port):
+def add_firewall_rules(port, wanted=None):
     """Open the relay's ports in the host firewall (0.8.0).
 
-    Windows: an elevated PowerShell runs the same three New-NetFirewallRule
-    commands the Relay page prints (same DisplayNames, so re-running is just
-    duplicate-named rules, not an error). The UAC prompt appears on the
-    machine; declining reports honestly. Linux: pkexec runs the ufw commands
-    when a desktop is present; headless boxes get the commands to run."""
+    Windows: an elevated PowerShell runs the New-NetFirewallRule commands the Relay page prints (same
+    DisplayNames; 0.21.7: each rule is removed first, so re-running never stacks duplicates and a changed
+    port is re-added). The UAC prompt appears on the machine; declining reports honestly. Linux: pkexec
+    runs the ufw or firewalld commands when a desktop is present; headless boxes get the commands to run --
+    once: the record (firewall-applied.json) remembers what was added or printed."""
     port = int(port)
+    wanted = list(wanted or firewall_wanted(port))
     if sys.platform == "win32":
-        # 0.8.1: the rules go through a SCRIPT FILE, not nested -Command
-        # quoting -- the double-quoted rule text inside two PowerShell layers
-        # was a quoting casualty in the field (the button "did nothing").
-        # -File has no inner quoting at all. Also opens the KASTR web port:
-        # fleet updates and remote UI both ride it.
-        state = os.path.dirname(os.path.abspath(__file__))
-        try:
-            # prefer the relay state dir if importable context provides one;
-            # fall back next to the module (source checkouts)
-            state = _FIREWALL_DIR or state
-        except NameError:
-            pass
+        state = _FIREWALL_DIR or os.path.dirname(os.path.abspath(__file__))
         script = os.path.join(state, "kastr-firewall.ps1")
-        rules = "\n".join([
-            'New-NetFirewallRule -DisplayName "KASTR MoQ Relay" -Direction Inbound '
-            "-Protocol UDP -LocalPort %d -Action Allow" % port,
-            'New-NetFirewallRule -DisplayName "KASTR MoQ Relay (cert)" -Direction Inbound '
-            "-Protocol TCP -LocalPort %d -Action Allow" % port,
-            'New-NetFirewallRule -DisplayName "KASTR room codes" -Direction Inbound '
-            "-Protocol TCP -LocalPort %d -Action Allow" % (port + 1),
-            'New-NetFirewallRule -DisplayName "KASTR web" -Direction Inbound '
-            "-Protocol TCP -LocalPort %d -Action Allow" % (_FIREWALL_WEB_PORT or 8000),
-            'New-NetFirewallRule -DisplayName "KASTR MoQ Relay (wss)" -Direction Inbound '
-            "-Protocol TCP -LocalPort %d -Action Allow" % (port + 2),
-            'New-NetFirewallRule -DisplayName "KASTR web (https)" -Direction Inbound '
-            "-Protocol TCP -LocalPort %d -Action Allow" % (_FIREWALL_HTTPS_PORT or 8443),
-            'New-NetFirewallRule -DisplayName "KASTR MoQ Relay (mDNS)" -Direction Inbound '
-            "-Protocol UDP -LocalPort 5353 -Action Allow",   # 0.16.0
-            'exit 0',
-        ])
+        names = {(port, "udp"): "KASTR MoQ Relay", (port, "tcp"): "KASTR MoQ Relay (cert)", (port + 1, "tcp"): "KASTR room codes",
+                 (port + 2, "tcp"): "KASTR MoQ Relay (wss)", (5353, "udp"): "KASTR MoQ Relay (mDNS)"}
+        lines = []
+        for lp, proto in wanted:
+            name = names.get((lp, proto)) or ("KASTR web (https)" if (_FIREWALL_HTTPS_PORT and lp == int(_FIREWALL_HTTPS_PORT)) else "KASTR web")
+            lines.append('Remove-NetFirewallRule -DisplayName "%s" -ErrorAction SilentlyContinue' % name)
+            lines.append('New-NetFirewallRule -DisplayName "%s" -Direction Inbound -Protocol %s -LocalPort %d -Action Allow' % (name, proto.upper(), lp))
+        lines.append("exit 0")
         with open(script, "w", encoding="utf-8") as f:
-            f.write(rules)
+            f.write("\n".join(lines))
         outer = ("$p = Start-Process powershell -Verb RunAs -Wait -PassThru "
                  "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%s'); "
                  "exit $p.ExitCode" % script.replace("'", "''"))
-        code = subprocess.call(
-            ["powershell", "-NoProfile", "-Command", outer],
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        code = subprocess.call(["powershell", "-NoProfile", "-Command", outer],
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if code == 0:
+            firewall_remember("windows", wanted)
             return {"ok": True, "note": "firewall rules added (relay, room codes, KASTR web)"}
         return {"ok": False,
-                "error": "the elevated script did not run (UAC declined, or "
-                         "the rules failed) -- run the printed commands in an "
-                         "admin PowerShell instead"}
-    cmds = ("ufw allow %d/udp && ufw allow %d/tcp && ufw allow %d/tcp && ufw allow %d/tcp"
-            " && ufw allow %d/tcp && ufw allow %d/tcp && ufw allow 5353/udp"
-            % (port, port, port + 1, _FIREWALL_WEB_PORT or 8000, port + 2, _FIREWALL_HTTPS_PORT or 8443))   # 0.16.0: + mDNS
+                "error": "the elevated script did not run (UAC declined, or the rules failed) -- run the printed "
+                         "commands in an admin PowerShell instead"}
+    tool = _linux_fw_tool()
+    if tool is None:
+        firewall_remember("none", wanted, printed=True)
+        return {"ok": False, "error": "no firewall tool found (ufw / firewalld) -- nothing to open; if this box runs another "
+                                      "firewall, allow: " + ", ".join("%d/%s" % w for w in wanted)}
+    if tool == "firewalld":
+        cmds = " && ".join("firewall-cmd --permanent --add-port=%d/%s" % w for w in wanted) + " && firewall-cmd --reload"
+    else:
+        cmds = " && ".join("ufw allow %d/%s" % w for w in wanted)
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         code = subprocess.call(["pkexec", "sh", "-c", cmds])
         if code == 0:
-            return {"ok": True, "note": "firewall rules added"}
-        return {"ok": False, "error": "pkexec did not run the commands -- run "
-                                      "them with sudo instead: sudo " + cmds}
-    return {"ok": False, "error": "no desktop session to ask for privileges -- "
-                                  "run: sudo " + cmds}
+            firewall_remember(tool, wanted)
+            return {"ok": True, "note": "firewall rules added (%s)" % tool}
+        return {"ok": False, "error": "pkexec did not run the commands -- run them with sudo instead: sudo " + cmds}
+    firewall_remember(tool, wanted, printed=True)   # headless: said once, not on every launch
+    return {"ok": False, "error": "no desktop session to ask for privileges -- run once: sudo " + cmds}
 
 
 # 0.10.0: the relay control plane belongs to the machine that owns the relay.
@@ -3712,7 +4037,9 @@ def handle_api(handler, relay, path, set_relay_url=None):
                         if st.get("secured") else {"up": None}),
                "federation": ({"hub": (st.get("federation") or {}).get("hub"), "token": (st.get("federation") or {}).get("token"),
                                "tls": (st.get("federation") or {}).get("tls"), "fingerprint": (st.get("federation") or {}).get("fingerprint"),
-                               "spoke": (st.get("federation") or {}).get("spoke")}   # 0.21.5: registered with the hub?
+                               "spoke": (st.get("federation") or {}).get("spoke"),   # 0.21.5: registered with the hub?
+                               "link": (st.get("federation") or {}).get("link"),     # 0.21.7: the cluster link's state
+                               "hubSees": (st.get("federation") or {}).get("hubSees")}
                               if st.get("federation") else None),
                "lan": st.get("lan"), "pairs": pairs, "helpers": helpers})
         return True
@@ -3788,7 +4115,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
         # GET = presence check (no elevation); POST = add the rules
         # (elevated, local machine only -- the guard above).
         if handler.command != "POST":
-            reply(firewall_status())
+            reply(firewall_status(firewall_wanted(getattr(relay, "port", None) or 4443)))   # 0.21.7: exact ports + `missing`
             return True
         try:
             n = int(handler.headers.get("Content-Length") or 0)

@@ -1144,6 +1144,7 @@ class Publisher:
                 "ondemand": self.ondemand, "standby": self.standby,                # 0.18.0
                 "wantedAt": self.wantedAt, "role": self.role,
                 "low": (self.lowPub.low_info() if self.lowPub else None),
+                "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
                 "error": self.error, "since": self.since}
 
     def low_info(self):
@@ -1313,8 +1314,9 @@ class Publisher:
         self.running = False
         self.bridge.log("rtsp: on-demand %s back to standby (%s)" % (self.broadcast, reason))
         self._notready("standby: " + reason)
-        if self.lowPub is not None:
-            self.lowPub._halt()
+        # 0.21.7: the low copy STAYS on the air in standby -- a viewer's click shows the picture at once (the tile
+        # lives on the low copy) and the full pair replaces it when it is up. Cost per on-demand camera: one RTSP
+        # pull and a 640p / 15 fps / ~400 kb/s encode. stop() still ends both.
         return True
 
     def _halt(self):
@@ -1966,10 +1968,25 @@ class Bridge:
         if pub.ondemand:
             self.log("rtsp: %s published on demand -- standby until a viewer asks" % broadcast)
             self._od_ensure()
+            self._low_standby(pub)   # 0.21.7: click-to-picture -- the low copy runs while the full pair waits
         else:
             pub.start()
         self.persist_feeds()                     # 0.12.0
         return pub
+
+    def _low_standby(self, pub):
+        """0.21.7: start an on-demand pair's low copy while the full pair is in standby (Publisher.start does the same
+        when the full pair wakes; sleep() leaves it running)."""
+        low = getattr(pub, "lowPub", None)
+        if low is None or low.running or low.stopping:
+            return
+        try:
+            low.relay = pub.relay
+            low.standby = False
+            low.start()
+            self.log("rtsp: %s low copy on the air in standby (click-to-picture)" % pub.broadcast)
+        except Exception as e:
+            self.log("rtsp: %s low copy did not start: %s" % (pub.broadcast, e))
 
     # ---- 0.18.0: the on-demand loop -------------------------------------------------
     OD_POLL_S = 5

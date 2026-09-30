@@ -572,6 +572,7 @@
   #odRow button { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:3px 10px; font-size:12px; cursor:pointer; }
   #odRow button.wait { opacity:.7; cursor:progress; }
   #stage .pane .gwait { position:absolute; z-index:7; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); color:#fff; font-size:12px; border-radius:6px; pointer-events:none; }   /* 0.21.2 */
+  #stage .pane .rendb { position:absolute; right:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#ffd27a; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }   /* 0.21.7: click-to-picture */
   #stage .pane .latb { position:absolute; left:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
@@ -1920,6 +1921,11 @@
       <span class="asi-mono" style="color:var(--text-mute)">v__KASTR_VERSION__</span></p>
     <p style="margin:0 0 10px"><button type="button" id="aboutUpd" class="toggle">Check for updates</button>
       <span id="aboutUpdSt" class="hint" style="margin-left:8px"></span></p>
+    <div id="aboutDl" hidden style="margin:0 0 10px">
+      <div style="font-weight:600;margin-bottom:3px">Download KASTR</div>
+      <div id="aboutDlRows" class="hint" style="line-height:1.8"></div>
+      <div id="aboutDlSt" class="hint" style="min-height:14px"></div>
+    </div>
     <p class="asi-note" style="margin:0">Low-latency video over Media over QUIC.
       Publish cameras, screens, RTSP feeds and files &mdash; each its own broadcast &mdash;
       and watch a room&rsquo;s streams from one page. Autonomous Solutions, Inc. &mdash;
@@ -2026,6 +2032,7 @@
   const IS_WEB = CLIENT.class === "web";
   // 0.18.0: renditions + on-demand cameras + latency stamps (module-scoped, used by applyState)
   const lowAvail = new Set();        // full broadcast names whose -low.hang sibling is announced
+  const fullLive = new Set();        // 0.21.7: full broadcast names announced live (a tile may live on its low copy alone -- click-to-picture)
   const LOW_RE = /-low\.hang$/;
   const lowOf = (name) => String(name).replace(/\.hang$/, "-low.hang");
   let odFeeds = [];                  // [{broadcast, label, live, low}] from the relay host
@@ -2105,9 +2112,16 @@
   // and audio-less feeds behind a grid run at the live edge.
   const WATCH_TUNING = {
     main: { delay: "auto", buffer: "400ms" },
-    rail: { delay: "auto", buffer: "200ms" },
+    rail: { delay: "auto", buffer: "400ms" },   // 0.21.7: 200 -> 400 -- the rail tile is the one everyone HEARS (audio rode a 200 ms budget and clipped)
+    grid: { delay: "auto", buffer: "400ms" },   // 0.21.7: composites -- never `instant` (instant never subscribes audio at all)
     cell: { delay: "instant", buffer: "0ms" },
   };
+  // 0.21.7: through a web relay (WebSocket, a tunnel, two cluster hops) a FIXED delay keeps the library's min-RTT
+  // estimate from shrinking the budget under the jitter; main/rail/grid ride 150 ms + 800 ms there.
+  const WATCH_TUNING_WEB = { main: { delay: "150ms", buffer: "800ms" }, rail: { delay: "150ms", buffer: "800ms" }, grid: { delay: "150ms", buffer: "800ms" } };
+  let WEB_RELAY_PAGE = false;   // applyState refreshes it from the relay address
+  const tuningFor = (cls) => (WEB_RELAY_PAGE && WATCH_TUNING_WEB[cls]) || WATCH_TUNING[cls] || WATCH_TUNING.rail;
+  window.__tuning = () => Object.fromEntries([...tiles].map(([n, t]) => [n, { cls: t.tune_cls, key: t.tune, delay: t.watch.getAttribute("delay"), buffer: t.watch.getAttribute("buffer"), rendition: t.rendition }]));   // rig
   const volumeInput = document.getElementById("volume");
   const muteBtn = document.getElementById("muteBtn");
   const gridBtn = document.getElementById("gridBtn");
@@ -3329,8 +3343,8 @@
       for (const [p, n] of next) relayOf.set(p, n);
       pullStats.clear();
       for (const [n, per] of nextPull) pullStats.set(n, per);
-      // row.title stays the bare path (it is the row key); the pane carries the hover hint
-      for (const [name, t] of tiles) { const v = memberVia(personKeyOf(name)) || relayOf.get(name); t.pane.title = v ? "via " + v : ""; }   // 0.11.0: presence first
+      // row.title stays the bare path (it is the row key). 0.21.7: the pane carries NO hover hint any more --
+      // the OS tooltip the bundled Chrome drew for it stuck on top of every window; "via" lives in People.
       paintPersonGroups();
     } catch {} finally { try { conn.close(); } catch {} }
   }
@@ -4053,9 +4067,12 @@
     const down = !!meta && ((meta.down || []).includes(idx) || (meta.dead && meta.dead.has(fp)));
     if (!od && !down) return false;
     odWanted.set(fp, Date.now()); odDemand(fp);
-    gridWake = { gp, idx, path: fp, at: Date.now() };
+    gridWake = { gp, idx, path: fp, at: Date.now(), low: lowAvail.has(fp) };
+    // 0.21.7: the composite's own cell fills the stage at once (the 0.9.8 seeded view): the picture the viewer clicked,
+    // at the grid's quality, while the camera starts -- the feed's own tile takes over the moment it exists
+    if (!gridMode && selectedName === gp && !selfSpotEl) { gridZoom = { name: gp, idx }; fitMainstage(lastRail.rows); paintGridZoom(); }
     paintGridWait();
-    setTimeout(() => { if (gridWake && gridWake.path === fp && Date.now() - gridWake.at >= 89000) { gridWake = null; paintGridWait(); window.__toast?.("That camera did not start.", 5000, { level: "warn" }); } }, 90000);
+    setTimeout(() => { if (gridWake && gridWake.path === fp && Date.now() - gridWake.at >= 89000) { gridWake = null; paintGridWait(); if (gridZoom?.name === gp) clearGridZoom(); window.__toast?.("That camera did not start.", 5000, { level: "warn" }); } }, 90000);
     return true;
   }
   function paintGridWait() {
@@ -4071,12 +4088,15 @@
     const el = document.createElement("div"); el.className = "gwait";
     el.style.left = (wb.left - pb.left + ox + r.x * sc) + "px"; el.style.top = (wb.top - pb.top + oy + r.y * sc) + "px";
     el.style.width = (r.w * sc) + "px"; el.style.height = (r.h * sc) + "px";
-    el.innerHTML = '<span>\u23f3 starting\u2026</span>';
+    if (gridZoom && gridZoom.name === gridWake.gp && gridZoom.idx === gridWake.idx) { el.style.left = el.style.top = "0"; el.style.width = el.style.height = "100%"; }   // 0.21.7: the cell IS the stage now
+    el.innerHTML = '<span>\u23f3 ' + (gridWake.low ? 'low quality \u2014 full starting\u2026' : 'full quality starting\u2026') + '</span>';   // 0.21.7: say which picture is coming
     t.pane.appendChild(el);
   }
   function gridWakeCheck(name) {   // a tile was created: is it the one a quadrant asked for?
     if (!gridWake || gridWake.path !== name) return;
+    const gp = gridWake.gp;
     gridWake = null; paintGridWait();
+    if (gridZoom?.name === gp) { const t = tiles.get(gp); gridZoom = null; if (t) viewReset(t.canvas); }   // 0.21.7: the composite cell hands the stage to the feed's own tile
     setTimeout(() => { if (tiles.has(name)) select(name); }, 0);
   }
   window.__gridWake = () => gridWake;   // rig
@@ -4428,6 +4448,7 @@
   setInterval(() => { if (!gridMode) { fitMainstage(lastRail.rows); viewApplyAll(); } }, 1000);   // 0.9.2: views follow late size changes
 
   function applyState() {
+    try { WEB_RELAY_PAGE = isWebRelay(urlInput.value); } catch { WEB_RELAY_PAGE = false; }   // 0.21.7: budgets by transport
     // Visual order first: grid cells and list rows follow style.order; the
     // DOM itself never moves. 0.6.10: collage (uniform best-fit) or spot
     // (content + ladder), both plain grid placement of the same panes.
@@ -4785,12 +4806,21 @@
       }
       { // 0.16.0: per-class delay/buffer (WATCH_TUNING): the spotlit main, rail thumbnails, and
         // live-edge cells (grid composites, audio-less feeds behind a grid -- `instant` resets audio)
+        // 0.21.7: composites are a class of their own (`grid`, rail budgets -- `instant` never subscribed their audio
+        // at all, so a composite with sound played silent); `cell` only for an audio-less feed behind a grid; a feed
+        // whose audio is not known yet lands on `rail`, never on silence
         const cls = (isSelected && !gridMode && !selfSpotEl) ? "main"
-                  : (gridMeta.has(name) || (isGridChild(name) && t.hasAudio === false)) ? "cell" : "rail";
-        if (t.tune !== cls) { t.tune = cls; t.watch.setAttribute("delay", WATCH_TUNING[cls].delay); t.watch.setAttribute("buffer", WATCH_TUNING[cls].buffer); }
+                  : gridMeta.has(name) ? "grid"
+                  : (isGridChild(name) && t.hasAudio === false) ? "cell" : "rail";
+        const tuneKey = cls + (WEB_RELAY_PAGE ? "@web" : "");
+        if (t.tune !== tuneKey) { const tn = tuningFor(cls); t.tune = tuneKey; t.watch.setAttribute("delay", tn.delay); t.watch.setAttribute("buffer", tn.buffer); }
+        t.tune_cls = cls;
         // 0.18.0: thumbnails pull the -low.hang sibling when the publisher offers one; the spotlit tile the full stream
-        const wantName = (cls !== "main" && lowAvail.has(name)) ? lowOf(name) : name;
+        // 0.21.7: ... and so does a spotlit tile whose FULL copy is not on the air yet (an on-demand camera waking:
+        // the low copy plays at once, the full one takes over when its announce arrives)
+        const wantName = (lowAvail.has(name) && (cls !== "main" || !fullLive.has(name))) ? lowOf(name) : name;
         if (t.watch.getAttribute("name") !== wantName) { t.watch.setAttribute("name", wantName); t.rendition = wantName === name ? "full" : "low"; }
+        if (cls === "main" && wantName !== name && !fullLive.has(name) && !parkedStreams.has(name)) odWake(name);   // 0.21.7: the spotlit low copy asks for the full pair (also for a camera on another site)
       }
       if (shown) matchRendition(t);
 
@@ -5264,8 +5294,7 @@
     label.className = "label";
     const l = document.createElement("span");
     l.className = "l";
-    l.textContent = shortLabel(name, true);   // hover chip: cameras wear just the name
-    l.title = name;
+    l.textContent = shortLabel(name, true);   // hover chip: cameras wear just the name (0.21.7: no title -- OS tooltips stick)
     // 0.8.1: Full screen lives in the chevron menu now; the mute state is
     // a Teams-style chip on the video, not a label marker.
     const paneNoaud = document.createElement("span");
@@ -5291,7 +5320,7 @@
     // watchStream() arms the attribute. Remembered streams come back armed.
     if (isWatched(name) && CLIENT.webcodecs) watch.setAttribute("url", withToken(urlInput.value.trim()));   // 0.17.0: never a decoder the browser lacks
     watch.setAttribute("name", name);
-    watch.setAttribute("delay", WATCH_TUNING.rail.delay); watch.setAttribute("buffer", WATCH_TUNING.rail.buffer);   // 0.16.0
+    { const tn0 = tuningFor("rail"); watch.setAttribute("delay", tn0.delay); watch.setAttribute("buffer", tn0.buffer); }   // 0.16.0; 0.21.7: budgets by transport
     watch.setAttribute("visible", "never"); // applyState promotes the selected one
     // NEVER write watch.muted (see WARM_FLOOR) -- applyState sets volume
     // before the first audio packet arrives, so nothing plays early.
@@ -5413,7 +5442,10 @@
         const idx = gridCellAtW(tile, meta, e);
         if (idx >= 0) {
           const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
-          if (fp && tiles.has(fp)) { select(fp); return; }
+          if (fp && tiles.has(fp)) {   // 0.21.7: a tile on the low copy opens at once; the full pair is asked for right now
+            if (!fullLive.has(fp) && (odFeeds.some((f) => f.broadcast === fp) || lowAvail.has(fp))) odWake(fp);
+            select(fp); return;
+          }
           if (fp && gridWakeStart(name, idx, fp)) return;   // 0.21.2: an on-demand or down feed: wake it, open it when it is up
           gridZoom = { name, idx }; fitMainstage(lastRail.rows); paintGridZoom(); return;   // 0.9.8: the stage takes the cell's shape
         }
@@ -5537,16 +5569,18 @@
   // to never stabilize even though video looked fine. So: don't remove
   // immediately on "inactive" -- wait a bit, and cancel if it comes back.
   const REMOVAL_DEBOUNCE_MS = 4000;
+  const REMOVAL_DEBOUNCE_GRID_MS = 8000;   // 0.21.7: a composite crossing a cluster link blinks longer on a hub re-pin; its .member snapshot outlives 60 s anyway
 
   function scheduleRemoveTile(name) {
     if (pendingRemovals.has(name)) return; // already scheduled
-    console.log(`switcher: "${name}" reported inactive, removing in ${REMOVAL_DEBOUNCE_MS}ms if it doesn't come back`);
+    const ms = gridMeta.has(name) ? REMOVAL_DEBOUNCE_GRID_MS : REMOVAL_DEBOUNCE_MS;
+    console.log(`switcher: "${name}" reported inactive, removing in ${ms}ms if it doesn't come back`);
     tiles.get(name)?.row.classList.add("leaving");
     const id = setTimeout(() => {
       pendingRemovals.delete(name);
       console.log(`switcher: "${name}" stayed inactive, removing now`);
       removeTile(name);
-    }, REMOVAL_DEBOUNCE_MS);
+    }, ms);
     pendingRemovals.set(name, id);
   }
 
@@ -6131,6 +6165,10 @@
       if (LOW_RE.test(path)) {   // 0.18.0: a thumbnail rendition of <leaf>.hang -- not a tile of its own
         const full = path.replace(LOW_RE, ".hang");
         if (entry.active) lowAvail.add(full); else lowAvail.delete(full);
+        // 0.21.7: an on-demand camera keeps its low copy on the air in standby: the tile lives on it (under the full
+        // name) until the full pair is up -- click-to-picture -- and leaves only when neither copy is announced
+        if (entry.active && !mineNames.has(full) && !publishOnly && !tiles.has(full)) { cancelPendingRemoval(full); createTile(full); }
+        else if (!entry.active && tiles.has(full) && !fullLive.has(full)) scheduleRemoveTile(full);
         try { applyState(); } catch {}
         continue;
       }
@@ -6143,11 +6181,15 @@
         else suppressed.delete(path);
         continue;
       }
+      if (entry.active) fullLive.add(path); else fullLive.delete(path);   // 0.21.7: the FULL copy's own state
       if (publishOnly) continue;   // 0.9.10: a publish-only device reads the room but watches nobody
       if (entry.active) {
         cancelPendingRemoval(path);
         if (!tiles.has(path)) createTile(path);
+        else if (tiles.get(path)?.rendition === "low") { try { applyState(); } catch {} }   // 0.21.7: the full copy is up -- the spotlit tile re-points to it
         spotApplyWinner();   // a vote may have arrived before its tile
+      } else if (lowAvail.has(path) && tiles.has(path)) {
+        try { applyState(); } catch {}   // 0.21.7: back to standby -- the tile stays on the low copy
       } else {
         scheduleRemoveTile(path);
       }
@@ -6659,7 +6701,62 @@
   document.getElementById("optEnc").addEventListener("click", () => openFromOptions(encPop));
   document.getElementById("optAud").addEventListener("click", () => openFromOptions(audOutPop));   // 0.8.9
   document.getElementById("optMobile").addEventListener("click", () => { paintMobilePop(); openFromOptions(mobilePop); });
-  document.getElementById("optAbout").addEventListener("click", () => openFromOptions(aboutPop));
+  document.getElementById("optAbout").addEventListener("click", () => { paintAboutDl(); openFromOptions(aboutPop); });
+  // 0.21.7: a web client downloads the full install zip from the host it is looking at (More > About). The
+  // host assembles it from the parts every install carries (kastr_release.py, 10-20 s); a link whose zip is not
+  // ready yet POSTs the preparation, says so, and follows itself when the manifest reports the zip ready.
+  const aboutDl = document.getElementById("aboutDl");
+  let aboutDlBusy = "";
+  const dlMB = (n) => Math.max(1, Math.round((Number(n) || 0) / 1048576)) + " MB";
+  const dlPlat = (k) => k === "win32" ? "Windows" : k === "linux" ? "Linux" : k === "darwin" ? "macOS" : k;
+  async function paintAboutDl() {
+    if (!IS_WEB || !aboutDl) return;
+    const rows = document.getElementById("aboutDlRows"), st = document.getElementById("aboutDlSt");
+    let man = null;
+    try { man = await fetch("/api/update/manifest", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    const can = Object.entries(man?.zip || {}).filter(([, z]) => z && z.can);
+    aboutDl.hidden = !can.length;
+    if (!can.length) return;
+    rows.replaceChildren();
+    for (const [plat, z] of can) {
+      const a = document.createElement("a");
+      a.href = "/api/update/zip?platform=" + encodeURIComponent(plat);
+      a.setAttribute("download", z.name || "");
+      a.dataset.plat = plat;
+      a.textContent = dlPlat(plat) + " \u2014 v" + (man.version || PAGE_VERSION) + ", " + (z.ready && z.size ? dlMB(z.size) : "about " + dlMB(z.estimate)) + (z.ready ? "" : " (prepared on the host when you click)");
+      if (!z.ready) a.addEventListener("click", (e) => { e.preventDefault(); prepareDl(plat); });
+      const d = document.createElement("div"); d.appendChild(a); rows.appendChild(d);
+    }
+    if (!aboutDlBusy) st.textContent = "";
+  }
+  async function prepareDl(plat) {
+    const st = document.getElementById("aboutDlSt");
+    if (aboutDlBusy) return;
+    aboutDlBusy = plat;
+    st.textContent = "Preparing the download on the host\u2026";
+    try {
+      const first = await fetch("/api/update/zip?platform=" + encodeURIComponent(plat), { method: "POST", cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      if (first && !first.can) throw new Error(first.why || "not available on this host");
+      const t0 = Date.now();
+      while (Date.now() - t0 < 240000) {
+        await new Promise((r) => setTimeout(r, 2000));
+        let z = null;
+        try { z = (await fetch("/api/update/manifest", { cache: "no-store" }).then((r) => r.json()))?.zip?.[plat]; } catch {}
+        if (z?.ready) {
+          aboutDlBusy = "";
+          await paintAboutDl();
+          const a = document.querySelector('#aboutDlRows a[data-plat="' + plat + '"]');
+          st.textContent = "Downloading " + (z.name || "") + "\u2026";
+          if (a) a.click();
+          return;
+        }
+        if (z && !z.can && !z.building) throw new Error(z.why || "not available on this host");
+        st.textContent = "Preparing the download on the host\u2026 " + Math.round((Date.now() - t0) / 1000) + " s";
+      }
+      throw new Error("timed out");
+    } catch (e) { st.textContent = "The host could not prepare the download (" + (e?.message || e) + ")."; }
+    aboutDlBusy = "";
+  }
   // ---- 0.8.8: More menu ------------------------------------------------------
   document.getElementById("optRec").addEventListener("click", () => { closeAllPops(); recBtn.click(); });
   document.getElementById("optRoom").addEventListener("click", () => { paintRoomInfo(); openFromOptions(roomInfoPop); });
@@ -7799,7 +7896,7 @@
   let authTalking = false;  // 0.12.0: the relay's public prefixes include .talking (0.12 relays)
   let authChat = false;     // 0.12.0: ... and .chat
   let authState = false;
-  let authWeb = 8000;                 // 0.14.0 F: hub web port from /api/auth (8000 until told otherwise)
+  let authWeb = 0;                    // 0.14.0 F: hub web port from /api/auth; 0.21.7: 0 = not told (consumers fall back to 8000 LAST, and only on the app)
   let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves ".state" publicly (state tracks); open relays always
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
   const VIEWER_KINDS = [".since", ".stalled", ".spotlight", ".recording", ".mediactl", ".avatar", ".presence", ".talking", ".chat"];   // 0.11.0: + public presence; 0.12.0: + speaking, chat pulse
@@ -7829,7 +7926,7 @@
       authLegacy = authSecured && !authCodes;
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
-      authWeb = Number(d.web) || 8000;                  // 0.14.0 F: the hub KASTR's web port (peer lookups)
+      authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
       authHttps = Number(d.https) || 0;                 // 0.15.0
     } catch {}
     if (!authSecured) { authTokens = null; authExp = 0; authRole = ""; authCodes = false; authLegacy = false; authTalking = true; authChat = true; authState = true; return; }
@@ -7916,22 +8013,44 @@
       odRow.appendChild(b);
     }
   }
+  const odSaid = new Set();
+  const odWakeAt = new Map();
+  function odWake(broadcast) {   // 0.21.7: one demand now (5 s debounce), then odPulse keeps it alive while the tile is spotlit
+    const last = odWakeAt.get(broadcast) || 0;
+    if (Date.now() - last < 5000) return;
+    odWakeAt.set(broadcast, Date.now()); odWanted.set(broadcast, Date.now()); odDemand(broadcast);
+  }
+  window.__odWake = odWake;   // rig
   function odDemand(broadcast) {
     const base = relayHostBase(); if (!base) return;
     fetch(base + "/api/ondemand/demand", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ room: CHANNEL, broadcast, jwt: authTokens?.member || "" }) }).catch(() => {});
+      body: JSON.stringify({ room: CHANNEL, broadcast, jwt: authTokens?.member || "" }) })
+      .then((r) => r.ok ? r.json() : null).then((d) => {
+        // 0.21.7: the camera is registered on another site -- the relay host forwarded the demand over the federation
+        // (its hub's command channel). A hub before 0.21.7 cannot: say so instead of waiting 90 s for nothing.
+        if (d && d.known === false && Array.isArray(d.forwarded) && d.forwarded.includes("unsupported") && !odSaid.has(broadcast)) {
+          odSaid.add(broadcast);
+          window.__toast?.("That camera is on another site; its hub needs KASTR 0.21.7 to wake it.", 6000, { level: "warn" });
+        }
+      }).catch(() => {});
   }
   function odPulse() {
     if (!window.__joinedChannel?.()) return;
     const known = new Set(odFeeds.map((f) => f.broadcast));
     for (const [b, at] of [...odWanted]) {
-      if (tiles.has(b)) { odWanted.delete(b); continue; }          // it came up: the tile keeps it alive now
+      if (fullLive.has(b)) { odWanted.delete(b); continue; }        // 0.21.7: the FULL pair came up (a tile may live on the low copy alone)
       if (Date.now() - at > 90000) { odWanted.delete(b); continue; }
       odDemand(b);
     }
     for (const [name, t] of tiles) {
-      if (!known.has(name) || parkedStreams.has(name)) continue;
+      // 0.21.7: a camera registered on ANOTHER site is not in this relay host's list -- its low copy on the air with no
+      // full copy says "on demand" just as well (the demand travels the federation from the relay host)
+      const lowOnly = lowAvail.has(name) && !fullLive.has(name);
+      if ((!known.has(name) && !lowOnly) || parkedStreams.has(name)) continue;
       if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
+      // 0.21.7: a rail thumbnail on the low copy asks for nothing (every viewer's rail would keep every camera awake);
+      // the spotlit tile, a tile with no low copy, or the fallback player keeps the full pair alive
+      if (lowAvail.has(name) && t.tune_cls !== "main" && !t.fb?.dataset.src) continue;
       odDemand(name);
     }
   }
@@ -8023,11 +8142,39 @@
       if (d < -2000 || d > 60000) continue;               // a bad read, not a latency
       t.latency = t.latency == null ? d : t.latency * 0.7 + d * 0.3;
       if (!badge) { badge = document.createElement("span"); badge.className = "latb"; t.pane.appendChild(badge); }
-      badge.textContent = "latency " + Math.round(t.latency) + " ms";   // 0.21.3: say what the number is
-      badge.title = "Glass-to-glass latency from the publisher's time code (clock offset to the relay host " + Math.round(window.__clockOffset || 0) + " ms, rtt " + (window.__clockRtt ?? "?") + " ms)";
+      // 0.21.7: + the library's skipped groups in the last 60 s (audio/video) -- the clipping's cause, visible
+      const sg = window.__slowGroups, cut = Date.now() - 60000;
+      let ra = 0, rv = 0; for (const x of sg.recent) { if (x[0] > cut) { if (x[1] === "audio") ra++; else if (x[1] === "video") rv++; } }
+      badge.textContent = "latency " + Math.round(t.latency) + " ms" + ((ra || rv) ? " \u00b7 skips " + ra + "/" + rv : "");   // 0.21.3: say what the number is
+      badge.title = "Glass-to-glass latency from the publisher's time code (clock offset to the relay host " + Math.round(window.__clockOffset || 0) + " ms, rtt " + (window.__clockRtt ?? "?") + " ms)."
+        + " Skipped groups (this page, total): audio " + sg.audio + ", video " + sg.video + " \u2014 a skip is the player dropping buffered media to catch up.";
     }
   }, 1000);
   window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));
+  // 0.21.7: count the library's "skipping slow group: track=<kind> a -> b" warnings per track kind. A skip drops
+  // buffered media to catch up; on audio it used to flush the worklet ring and reset the sync clock (the clipping).
+  window.__slowGroups = { audio: 0, video: 0, other: 0, lastAt: 0, recent: [] };
+  { const warn0 = console.warn.bind(console);
+    console.warn = (...a) => {
+      try {
+        const m = String(a[0] ?? "");
+        if (m.startsWith("skipping slow group")) {
+          const g = window.__slowGroups, k = /track=audio/.test(m) ? "audio" : /track=video/.test(m) ? "video" : "other";
+          g[k]++; g.lastAt = Date.now(); g.recent.push([g.lastAt, k]);
+          if (g.recent.length > 600) g.recent.splice(0, g.recent.length - 300);
+        }
+      } catch {}
+      return warn0(...a);
+    }; }
+  // 0.21.7: the truth badge for click-to-picture -- the spotlit tile plays the low copy until the full pair is up
+  setInterval(() => {
+    for (const [name, t] of tiles) {
+      const want = t.rendition === "low" && t.tune_cls === "main" && !fullLive.has(name) && lowAvail.has(name);
+      let b = t.pane.querySelector(".rendb");
+      if (!want) { if (b) b.remove(); continue; }
+      if (!b) { b = document.createElement("span"); b.className = "rendb"; b.textContent = "low quality \u2014 full starting\u2026"; t.pane.appendChild(b); }
+    }
+  }, 1000);
   window.__stampRead = (canvas) => stampRead({ canvas });   // 0.21.0 rig: decode any canvas
   window.__latencyStamp = (() => { try { return localStorage.getItem("kastr.latencyStamp") === "1"; } catch { return false; } })();
   // 0.21.5: does the publisher library take camera frames through its <video> polyfill? It does wherever
@@ -9864,7 +10011,7 @@
     relayNames.set(key, "");
     try {
       const same = host === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(host) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
-      const url = same ? "/api/instance" : "/api/peer/instance?host=" + encodeURIComponent(host) + "&port=" + (window.__auth?.web || 8000)   // 0.14.0 F
+      const url = same ? "/api/instance" : "/api/peer/instance?host=" + encodeURIComponent(host) + (window.__auth?.web ? "&port=" + window.__auth.web : "")   // 0.14.0 F; 0.21.7: the port only when the relay told us -- the server resolves the rest (learned base / port)
         + (isWebRelay(urlInput.value) ? "&relay=" + encodeURIComponent(urlInput.value.trim()) : "");   // 0.19.0: asked at its origin
       const d = await fetch(url, { cache: "no-store" }).then((r) => r.json());
       const nm = String(d?.relayName || "");
@@ -12203,7 +12350,7 @@
     const plc = enc.plc.value === "" ? undefined : Number(enc.plc.value);
     const cfg = { mime: "opus", useinbandfec: enc.fec.checked, usedtx: enc.dtx.checked };
     if (kbps) cfg.bitrate = kbps * 1000;
-    if (ms) cfg.frameDuration = ms * 1000;
+    if (ms) cfg.frameDuration = ms;   // 0.21.7: the library's unit is ms (2.5/5/10/20/40/60); x1000 failed its check and the config was dropped
     if (cx !== undefined) cfg.complexity = cx;
     if (plc !== undefined) cfg.packetlossperc = plc;
     return cfg;
@@ -15477,8 +15624,7 @@
       slot.nameEl.textContent = /^camera(-\d+)?$/.test(leafRaw) && operator
         ? cap(operator)
         : (operator ? cap(operator) + " \u2014 " : "") + (slot.rtsp && slot.entry.label ? String(slot.entry.label) : cap(leafRaw));   // 0.16.0: an RTSP feed wears its LABEL (0.15.0 renames never re-key the path)
-      slot.nameEl.title = chanPath(nm);   // the real relay path
-      slot.badge.textContent = st.text;
+      slot.badge.textContent = st.text;   // 0.21.7: no title on the name (OS tooltips stick)
       slot.badge.className = "badge " + st.cls;
       slot.pane.classList.toggle("onair", st.onair);
       slot.pane.classList.toggle("vpaused", !slot.rtsp && !!(slot.entry.videoPaused || slot.autoPaused));   // 0.8.6: incl. auto-pause
@@ -15497,8 +15643,7 @@
       const pretty = (t) => window.__pretty?.(t) ?? t;
       g.nameEl.textContent = (operator ? pretty(operator) + " \u2014 " : "")
         + (g.name || "RTSP Grid") + " (" + g.members.length + ")";
-      g.nameEl.title = chanPath(ensureHang(g.entry.name));
-      let gon = false;
+      let gon = false;   // 0.21.7: no title on the grid name (OS tooltips stick)
       try { gon = g.moq?.broadcast?.in?.enabled?.peek?.() === true; } catch {}
       let gst = { text: gon ? "ON AIR" : "preview", cls: gon ? "on" : "ready", onair: gon };
       if (gon) {
@@ -16806,12 +16951,21 @@
       const facts = "enc " + (enc ? "advancing" : "flat " + Math.round((Date.now() - (dg.encAdvancedAt || 0)) / 1000) + " s") + ", " + (conn ? "connected" : "not connected") + ", echoed=" + echoed + ", reports=" + dg.stallReports;
       if (enc && conn) { gridNote(ng, "viewer stall ignored \u2014 grid live here (" + facts + ")"); return; }
       (async () => {
+        // 0.21.7: the cluster link's state from this box's relay (loopback /api/relay/status -> federation.link, the
+        // hub's view in hubSees): a link that flapped in the last 60 s explains the viewer's stall -- the grid left
+        // here fine and the relay lost it on the way; rebuilding would only cut it again
+        let link = null, hubSees = null;
+        try { const st = await fetch("/api/relay/status", { cache: "no-store" }).then((r) => r.ok ? r.json() : null); link = st?.federation?.link || null; hubSees = st?.federation?.hubSees || null; } catch {}
+        if (!rtspGrids.has(ng.id)) return;
+        const nowS = Date.now() / 1000;
+        const linkFacts = link ? (", link=" + (link.up ? "up" : "down") + " " + Math.max(0, Math.round(nowS - (link.changedAt || 0))) + " s, drops=" + (link.drops || 0) + (hubSees ? ", hubSees=" + (hubSees.seesYou == null ? "?" : hubSees.seesYou) + "/" + hubSees.nodes + "n" : "")) : "";
+        if (link && link.changedAt && nowS - link.changedAt < 60) { gridNote(ng, "viewer stall noted \u2014 cluster link flapped " + Math.round(nowS - link.changedAt) + " s ago, not rebuilding (" + facts + linkFacts + ")"); return; }
         const listed = conn ? await relayLists(fullPath) : false;   // null = no evidence (a secured relay lists nothing)
         if (!rtspGrids.has(ng.id)) return;
-        if (listed === true && gridEncAdvancing(ng)) { gridNote(ng, "viewer stall ignored \u2014 the relay lists the grid (" + facts + ")"); return; }
+        if (listed === true && gridEncAdvancing(ng)) { gridNote(ng, "viewer stall ignored \u2014 the relay lists the grid (" + facts + linkFacts + ")"); return; }
         const why = !gridEncAdvancing(ng) ? "encFlat" : !conn ? "disconnected" : listed === false ? "relay-unlisted" : "no-evidence";
         dg.lastRebuild = Date.now(); dg.lastRebuildWhy = "viewer-stall/" + why;
-        gridNote(ng, "rebuild reason=viewer-stall/" + why + " (" + facts + ")");
+        gridNote(ng, "rebuild reason=viewer-stall/" + why + " (" + facts + linkFacts + ")");
         rebuildRtspMoq(ng); refreshUi();
       })();
       return;

@@ -48,7 +48,7 @@
   "@moq/watch@0.6.0/element.target-es2022.mjs": "cb4e08f1fa4641a8f6606701ea28e9c6ffa7eb14c39de1ddd34752c15fa235a9",
   "@moq/watch@0.6.0/es2022/element.mjs": "0ab68a95678e8e9b49ea5ad8533d4db3f33fed1b5b2ad4914dea4f834a4e5527",
   "@moq/watch@0.6.0/es2022/errors-BiEpf0Gg.mjs": "ce60457ad37e53e1336e9fbf909fd10e3d2c449ae758f7f338ea3e3505e5453b",
-  "@moq/watch@0.6.0/es2022/player-DiUmUis6.mjs": "c58308a91d81db77ae76b1c41bb20ed0723987ad48d3050dab89fa42f165809b",
+  "@moq/watch@0.6.0/es2022/player-DiUmUis6.mjs": "e5b5f8a4293eba11f0a8727e1a5e4ed992ab87388fa73ddbdbd3a454c7f81aec",
   "@moq/watch@0.6.0/es2022/srt-parser-nCurN93p.mjs": "4596525fc51abcd42ead94e272181d44846dc16b9dc11d6123397b164035aea9",
   "@moq/watch@0.6.0/es2022/ssa-parser-BR32ptTi.mjs": "1646a40fbe97f459411ae4b03815d59d69c6684b9d68f71051d2f075feeedc37",
   "@moq/watch@0.6.0/es2022/watch.mjs": "70f740635ebbaf63b5de62facecab6e8341537bfc036a3026d0b0a74acc006ad",
@@ -80,6 +80,9 @@
   "zod@^4.6.0/mini.target-es2022.mjs": "1b41ee4648063f97140943a9e78fb610f95d273f215dbd15cb5d9284c3b3ecd5",
   "zod@^4.6.5/mini.target-es2022.mjs": "1b41ee4648063f97140943a9e78fb610f95d273f215dbd15cb5d9284c3b3ecd5"
  },
+ "patches": [
+  "audio-maxage-floor"
+ ],
  "pins": {
   "https://esm.sh/@moq/json": "/@moq/json@^0.4.0",
   "https://esm.sh/@moq/publish": "/@moq/publish@0.5.0",

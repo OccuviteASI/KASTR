@@ -332,8 +332,8 @@
   /* 0.8.7: avatar circle -- ASI ground, swoosh behind, initials in a per-person
      ASI color, or the person's photo filling the circle. */
   .pane .face, #stage .pubpane .pface { container-type:size; }   /* 0.8.9: the circle sizes from BOTH axes */
-  .pane .face .avatar, #stage .pubpane .pface .avatar { position:relative; width:min(30cqw, 60cqh, 120px); flex:none;
-    aspect-ratio:1; border-radius:50%; overflow:hidden; display:grid; place-items:center;
+  .pane .face .avatar, #stage .pubpane .pface .avatar { position:relative; width:min(36cqw, 70cqh, 150px); flex:none;   /* 0.21.8: a little bigger (was 30/60/120) */
+    aspect-ratio:1; border-radius:50%; overflow:hidden; display:grid; place-items:center; container-type:size;   /* 0.21.8: the initials size from the circle */
     background:radial-gradient(circle at 50% 40%, var(--asi-navy-deep) 0%, #061a33 90%);
     box-shadow:0 0 0 2px var(--ring, rgba(255,255,255,.08)), 0 6px 18px rgba(0,0,0,.35); }   /* 0.8.8: the person's color is the ring */
   .pane .face .avatar .art, #stage .pubpane .pface .avatar .art { position:absolute; inset:4%; width:auto; opacity:.42;
@@ -363,7 +363,14 @@
   #filesSec .frow.up { flex-wrap:wrap; }
   #filesSec .frow.up progress { width:100%; height:6px; accent-color:var(--asi-blue); }
   #filesSec .frow.up .ferr { color:var(--asi-red); font-size:11px; }
-  .pane .face .avatar .init, #stage .pubpane .pface .avatar .init { position:relative; z-index:1; }
+  .pane .face .avatar .init, #stage .pubpane .pface .avatar .init { position:relative; z-index:1;
+    /* 0.21.8: the initials size from the CIRCLE (container units of the avatar), never a fixed 28 px that spilled out of a
+       small tile: one letter 48%, two 40%, three 30% of the diameter; flex-centred, the letter-spacing's trailing gap
+       compensated with text-indent so the glyphs sit in the middle */
+    width:100%; height:100%; display:flex; align-items:center; justify-content:center; text-align:center;
+    font-size:40cqw; letter-spacing:.04em; text-indent:.04em; line-height:1; }
+  .pane .face .avatar .init.n1, #stage .pubpane .pface .avatar .init.n1 { font-size:48cqw; }
+  .pane .face .avatar .init.n3, #stage .pubpane .pface .avatar .init.n3 { font-size:30cqw; }
   .pane .face .avatar img, #stage .pubpane .pface .avatar img { position:absolute; inset:0; width:100%; height:100%;
     object-fit:cover; z-index:2; }
   /* 0.8.8: Teams-style popovers (View / Camera / Audio / More / Files / Profile) */
@@ -2110,10 +2117,12 @@
   // player's target is jitter(delay) + buffer. Per tile class (applyState re-tunes): the
   // spotlit main keeps the old 500 ms feel, rail thumbnails a little less, grid composites
   // and audio-less feeds behind a grid run at the live edge.
+  // 0.21.8: `delay: "auto"` sizes the audio ring from the measured RTT alone (43-54 ms on a LAN); `buffer` is only the skip
+  // ceiling. A fixed 150 ms delay gives audio a real jitter buffer everywhere, as the web-relay budgets already did.
   const WATCH_TUNING = {
-    main: { delay: "auto", buffer: "400ms" },
-    rail: { delay: "auto", buffer: "400ms" },   // 0.21.7: 200 -> 400 -- the rail tile is the one everyone HEARS (audio rode a 200 ms budget and clipped)
-    grid: { delay: "auto", buffer: "400ms" },   // 0.21.7: composites -- never `instant` (instant never subscribes audio at all)
+    main: { delay: "150ms", buffer: "400ms" },
+    rail: { delay: "150ms", buffer: "400ms" },   // 0.21.7: 200 -> 400 -- the rail tile is the one everyone HEARS (audio rode a 200 ms budget and clipped)
+    grid: { delay: "150ms", buffer: "400ms" },   // 0.21.7: composites -- never `instant` (instant never subscribes audio at all)
     cell: { delay: "instant", buffer: "0ms" },
   };
   // 0.21.7: through a web relay (WebSocket, a tunnel, two cluster hops) a FIXED delay keeps the library's min-RTT
@@ -4723,6 +4732,7 @@
       }
       if (t.faceInit) {
         t.faceInit.textContent = initialsOf(name);
+        t.faceInit.className = "init n" + Math.min(3, Math.max(1, t.faceInit.textContent.length));   // 0.21.8: the size class follows the count
         t.faceInit.style.color = "";   // 0.8.8: white glyphs; the person's colour is the ring
       }
       if (t.av) {
@@ -5502,8 +5512,33 @@
     if (!CLIENT.webcodecs) {   // 0.17.0: the fallback player (armed by applyState for the promoted tile)
       const fb = document.createElement("video");
       fb.className = "fb"; fb.autoplay = true; fb.playsInline = true; fb.setAttribute("playsinline", ""); fb.crossOrigin = "anonymous";
-      fb.addEventListener("error", () => { if (fb.dataset.src) setTimeout(() => { if (fb.dataset.src && fb.isConnected) { fb.src = fb.dataset.src; fb.play?.().catch(() => {}); } }, 3000); });   // the pipeline ended (relay bounce): ask again
-      fb.addEventListener("ended", () => { if (fb.dataset.src && fb.isConnected) setTimeout(() => { fb.src = fb.dataset.src; fb.play?.().catch(() => {}); }, 2000); });
+      // 0.21.8: a fallback that cannot play (a codec this browser lacks, a relay bounce) asked again every 2-3 s, and every
+      // ask spawns a moq export child on the relay host that pulls the last 4 s of every track: a burst for the whole relay
+      // every couple of seconds while the viewer sat on a black tile. The retry backs off (3, 6, 12, 24, 48 s, 60 s cap)
+      // and after five tries that never reached 5 s of playback it stops and says so.
+      let fbTries = 0, fbPlayedAt = 0, fbTimer = null;
+      const fbRetry = (why) => {
+        if (!fb.dataset.src || !fb.isConnected || fbTimer) return;
+        if (fbPlayedAt && performance.now() - fbPlayedAt > 5000) fbTries = 0;   // it played for a while: a fresh ladder
+        fbTries++;
+        if (fbTries > 5) {
+          log("Fallback player for " + shortLabel(name, true) + " gave up after five " + why + "s -- this browser cannot play it (codec?); the KASTR app or another browser can");
+          window.__toast?.("This browser cannot play " + shortLabel(name, true) + " (the fallback player failed five times)", 8000, { level: "warn" });
+          return;
+        }
+        const wait = Math.min(60000, 3000 * (2 ** (fbTries - 1)));
+        log("Fallback player for " + shortLabel(name, true) + " " + why + "ed -- trying again in " + Math.round(wait / 1000) + " s (attempt " + fbTries + " of 5)");
+        fbTimer = setTimeout(() => {
+          fbTimer = null;
+          if (!fb.dataset.src || !fb.isConnected) return;
+          fb.src = fb.dataset.src + (fb.dataset.src.includes("?") ? "&" : "?") + "r=" + fbTries;   // a new URL: the browser refetches (an unchanged src after a failed load is not retried)
+          fb.play?.().catch(() => {});
+        }, wait);
+      };
+      fb.addEventListener("error", () => fbRetry("error"));   // the pipeline ended (relay bounce): ask again, later each time
+      fb.addEventListener("ended", () => fbRetry("end"));
+      fb.addEventListener("playing", () => { fbPlayedAt = performance.now(); });
+      tile.fbRetries = () => fbTries;   // rig
       pane.appendChild(fb);
       tile.fb = fb;
     }
@@ -6723,7 +6758,8 @@
       a.href = "/api/update/zip?platform=" + encodeURIComponent(plat);
       a.setAttribute("download", z.name || "");
       a.dataset.plat = plat;
-      a.textContent = dlPlat(plat) + " \u2014 v" + (man.version || PAGE_VERSION) + ", " + (z.ready && z.size ? dlMB(z.size) : "about " + dlMB(z.estimate)) + (z.ready ? "" : " (prepared on the host when you click)");
+      a.textContent = dlPlat(plat) + " \u2014 v" + (man.version || PAGE_VERSION) + ", " + (z.ready && z.size ? dlMB(z.size) : "about " + dlMB(z.estimate))
+        + (z.ready ? "" : z.fetch === "browser" ? " (the host fetches the " + dlPlat(plat) + " browser first, about 200 MB, then prepares the zip)" : " (prepared on the host when you click)");   // 0.21.8: says when a browser fetch comes first
       if (!z.ready) a.addEventListener("click", (e) => { e.preventDefault(); prepareDl(plat); });
       const d = document.createElement("div"); d.appendChild(a); rows.appendChild(d);
     }
@@ -6738,7 +6774,7 @@
       const first = await fetch("/api/update/zip?platform=" + encodeURIComponent(plat), { method: "POST", cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (first && !first.can) throw new Error(first.why || "not available on this host");
       const t0 = Date.now();
-      while (Date.now() - t0 < 240000) {
+      while (Date.now() - t0 < 600000) {   // 0.21.8: a browser fetch (200 MB) may come first
         await new Promise((r) => setTimeout(r, 2000));
         let z = null;
         try { z = (await fetch("/api/update/manifest", { cache: "no-store" }).then((r) => r.json()))?.zip?.[plat]; } catch {}
@@ -6751,7 +6787,7 @@
           return;
         }
         if (z && !z.can && !z.building) throw new Error(z.why || "not available on this host");
-        st.textContent = "Preparing the download on the host\u2026 " + Math.round((Date.now() - t0) / 1000) + " s";
+        st.textContent = (z && z.fetch === "browser" && !z.ready ? "Fetching the browser on the host, then preparing the download\u2026 " : "Preparing the download on the host\u2026 ") + Math.round((Date.now() - t0) / 1000) + " s";   // 0.21.8
       }
       throw new Error("timed out");
     } catch (e) { st.textContent = "The host could not prepare the download (" + (e?.message || e) + ")."; }
@@ -8154,6 +8190,22 @@
   // 0.21.7: count the library's "skipping slow group: track=<kind> a -> b" warnings per track kind. A skip drops
   // buffered media to catch up; on audio it used to flush the worklet ring and reset the sync clock (the clipping).
   window.__slowGroups = { audio: 0, video: 0, other: 0, lastAt: 0, recent: [] };
+  // 0.21.8: the library's reconnects ("connection closed, reconnecting" / "connection error"), counted. Every reconnect
+  // re-subscribes to every tile at once and the relay answers with the latest group of each -- a burst for the whole
+  // relay per reconnect. Three in a minute: say so. Six in a minute: the breaker parks every tile for 20 s.
+  window.__netEvents = { reconnects: 0, recent: [], toasts: 0, breaks: 0, pausedUntil: 0 };
+  function netEvent(m) {
+    const ne = window.__netEvents, now = Date.now();
+    ne.reconnects++; ne.recent.push(now); if (ne.recent.length > 200) ne.recent.splice(0, ne.recent.length - 100);
+    const lastMin = ne.recent.filter((t) => now - t < 60000).length;
+    if (lastMin >= 3 && now - (ne.lastToastAt || 0) > 60000) { ne.lastToastAt = now; ne.toasts++; window.__toast?.("The relay connection keeps dropping (" + lastMin + " reconnects in a minute)", 6000, { level: "warn" }); }
+    if (lastMin >= 6 && now >= ne.pausedUntil) {
+      ne.breaks++; ne.pausedUntil = now + 20000;
+      window.__toast?.("Pausing the streams for 20 s \u2014 the relay connection dropped " + lastMin + " times in a minute", 8000, { level: "error" });
+      for (const w of document.querySelectorAll("moq-watch")) { const u = w.getAttribute("url"); if (u) { w.dataset.pausedUrl = u; w.removeAttribute("url"); } }
+      setTimeout(() => { for (const w of document.querySelectorAll("moq-watch")) { if (w.dataset.pausedUrl && w.isConnected) { w.setAttribute("url", w.dataset.pausedUrl); } delete w.dataset.pausedUrl; } }, 20000);
+    }
+  }
   { const warn0 = console.warn.bind(console);
     console.warn = (...a) => {
       try {
@@ -8162,7 +8214,7 @@
           const g = window.__slowGroups, k = /track=audio/.test(m) ? "audio" : /track=video/.test(m) ? "video" : "other";
           g[k]++; g.lastAt = Date.now(); g.recent.push([g.lastAt, k]);
           if (g.recent.length > 600) g.recent.splice(0, g.recent.length - 300);
-        }
+        } else if (m.startsWith("connection closed, reconnecting") || m.startsWith("connection error")) netEvent(m);   // 0.21.8
       } catch {}
       return warn0(...a);
     }; }
@@ -8987,6 +9039,9 @@
         ? (document.fullscreenElement === stageWrap ? "stage" : ([...tiles.entries()].find(([, t]) => t.pane === document.fullscreenElement)?.[0] ?? "other"))   // 0.21.0
         : null,
       audioActive: [...tiles.entries()].filter(([, t]) => t.watch.muted === false).map(([n]) => n),
+      netEvents: (() => { const ne = window.__netEvents || {}; return { reconnects: ne.reconnects || 0, lastMinute: (ne.recent || []).filter((t) => Date.now() - t < 60000).length, breaks: ne.breaks || 0 }; })(),   // 0.21.8
+      slowGroups: { audio: window.__slowGroups?.audio || 0, video: window.__slowGroups?.video || 0 },   // 0.21.8
+      fallbackRetries: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.fbRetries).map(([n, t]) => [n, t.fbRetries()])),   // 0.21.8
       shown: [...tiles.entries()].filter(([, t]) => t.pane.classList.contains("shown")).map(([n]) => n),
       withCanvas: [...tiles.entries()].filter(([, t]) => t.canvas.isConnected).map(([n]) => n),
       visible: Object.fromEntries([...tiles.entries()].map(([n, t]) => [n, t.watch.getAttribute("visible")])),
@@ -15634,6 +15689,7 @@
       if (fi) {
         fi.textContent = (operator || "?").trim().split(/[-\s]+/).filter(Boolean)
           .map((w) => w[0]).join("").toUpperCase().slice(0, 3);
+        fi.className = "init n" + Math.min(3, Math.max(1, fi.textContent.length));   // 0.21.8: the size class follows the count
         fi.style.color = window.__personColor?.(operatorSlug()) || "";   // 0.8.7
       }
       try { window.__avatarPaint?.(slot.pane.querySelector(".pface .avatar"), window.__avatarLocal || ""); } catch {}
@@ -15710,7 +15766,10 @@
       // publisher running (Grid only, on-demand standby) or one that answers TCP but never streams sat in the
       // grid "reconnecting" forever. A publisher that has been up for a minute vouches for the camera.
       const nowS = Date.now() / 1000;
-      const pubHealthy = !!(pi && pi.running === true && pi.since && nowS - pi.since >= 60);
+      // 0.21.8: a native pair vouches for its camera by STATE, not by age -- 0.21.5's "up for a minute" rule let a monitor
+      // failure evict a camera whose pair had just been restarted (and the stall-report restarts guaranteed that): running,
+      // not in standby, no exit in the last 30 s is healthy
+      const pubHealthy = !!(pi && pi.running === true && !pi.standby && (!pi.lastExit?.at || nowS - pi.lastExit.at > 30) && (!native || pi.since));
       const monAttempts = a.retries || 0;
       const downMon = !!(slot?.monitorDown && monAttempts > GRID_EVICT_AFTER && !pubHealthy);
       if (!a.evicted) {
@@ -15723,7 +15782,7 @@
       } else {
         const backPub = native ? !!(pi.running === true && pi.since && nowS - pi.since >= GRID_READMIT_LIVED_S) : false;
         const backMon = !!(slot?.monitorLoaded && !slot.monitorDown && !(a.retries > 0) && slot.monitorUpAt && performance.now() - slot.monitorUpAt >= GRID_READMIT_LIVED_S * 1000);
-        const back = a.evictWhy === "monitor" ? backMon : (backPub || (!native && backMon));
+        const back = a.evictWhy === "monitor" ? (backMon || (native && backPub)) : (backPub || (!native && backMon));   // 0.21.8: a running pair readmits a monitor-evicted member too
         if (!back) continue;
         a.evicted = false; a.evictWhy = null;
         log("Camera " + shortName(a.name) + " is back \u2014 rejoining the grid");
@@ -16989,7 +17048,16 @@
           const troubled = !!pi && (pi.running === false || (pi.lastExit?.at && nowS - pi.lastExit.at < 60) || (pi.lastSessionAt && nowS - pi.lastSessionAt < 60));
           const listed = troubled ? false : await relayLists(chanPath(ensureHang(slot.entry.name)));
           if (listed === true) { log("Viewer reported " + slot.entry.name + " frozen, but the relay lists it live -- not restarting (the viewer's or the link's problem)"); return; }
-          log("Viewer reported " + slot.entry.name + " frozen -- restarting its publisher" + (troubled ? " (pair troubled)" : listed === false ? " (relay does not list it)" : " (no relay evidence)"));
+          // 0.21.8: NO evidence is not evidence. A secured relay's /announced lists nothing, so `listed` was null for every
+          // camera there and one starving remote viewer (a phone, the tunnel, two cluster hops) restarted a healthy pair for
+          // EVERY viewer every 45 s -- Mendon's and Southridge's "drops constantly". The no-echo heal already refused to act
+          // on null; this branch does too: a running pair with no evidence against it is left alone and the report is noted.
+          if (!troubled && listed !== false) {
+            log("Viewer reported " + slot.entry.name + " frozen, but its pair runs and the relay gives no evidence -- not restarting (the viewer's or the link's problem)");
+            nativePost("/api/rtsp/note", { text: "pair " + slot.entry.name + ": viewer stall noted -- no relay evidence, pair running (gen " + (pi?.gen ?? "?") + ", " + (pi?.since ? Math.round(nowS - pi.since) + " s" : "age ?") + "), not restarting" });
+            return;
+          }
+          log("Viewer reported " + slot.entry.name + " frozen -- restarting its publisher" + (troubled ? " (pair troubled)" : " (relay does not list it)"));
           nativePost("/api/rtsp/nudge", { id: slot.entry.feedId, why: "viewer" });
         })();
         return;
@@ -17004,10 +17072,18 @@
           try { applySettings(slot); } catch {}
         }, 300);
       } else {
-        log("Viewer still reports " + slot.entry.name + " frozen \u2014 rebuilding the source");
+        // 0.21.8: a second report within a minute used to stop and re-acquire the whole camera+mic slot -- everyone lost this
+        // speaker's audio and picture for the getUserMedia + connect + announce seconds, on any remote viewer's say-so (the
+        // one report-driven rebuild that got neither the 0.13.3 nor the 0.21.5 gate). A report is a hint: nudge the encoder
+        // again and note it; the encoder's own watchdog rebuilds when the encoder really is wedged.
+        log("Viewer still reports " + slot.entry.name + " frozen \u2014 nudging the encoder again (a rebuild needs the encoder's own evidence)");
         slot.lastRebuild = now;
-        const entry = slot.entry;
-        stopSlot(entry.id); startSlot(entry); refreshUi();
+        slot.publish.invisible = true;
+        setTimeout(() => {
+          if (!slots.has(slot.entry.id) || slot.entry.videoPaused || slot.autoPaused) return;
+          slot.publish.invisible = false;
+          try { applySettings(slot); } catch {}
+        }, 300);
       }
       
       return;

@@ -101,7 +101,7 @@ def sources(plat, version, root=None, own=None, frozen=None):
         src["binary_version"] = bv
         zp = os.path.join(root, "updates", "browser", "chrome-%s.zip" % spec["bkey"])
         if not os.path.isfile(zp):
-            return None, "no %s browser zip here" % spec["dir"]
+            return None, "no %s browser zip here" % spec["dir"]   # status() turns this into a fetch when the pin is bundled
         src["browser_zip"] = zp
         src["browser_version"] = _first_line(os.path.join(root, "updates", "browser", kastr_browser.VERSION_FILE))
     if not src.get("browser_version"):
@@ -267,17 +267,63 @@ def _sidecar_ok(path):
         return None
 
 
+def browser_pin():
+    """0.21.8: the bundled Chrome for Testing pin (browser.json ships in the frozen app since 0.21.8), or None."""
+    try:
+        return kastr_browser.load_pin()
+    except Exception:
+        return None
+
+
+def _browser_fetchable(plat, why):
+    """0.21.8: the only missing part is the other platform's browser zip and the pin says where to get it."""
+    spec = PLATFORMS.get(plat)
+    if not spec or not why or not why.startswith("no %s browser zip here" % spec["dir"]):
+        return False
+    pin = browser_pin()
+    return bool(pin and (pin.get("platforms") or {}).get(spec["prune"], {}).get("url"))
+
+
+def fetch_browser_zip(plat, root, log=None):
+    """0.21.8: download the pinned Chrome for Testing zip for `plat` (about 200 MB) into <root>/updates/browser/ and
+    write its VERSION when missing -- exactly what a hub's co-located feed would have carried. Spokes mirror it from
+    the hub afterwards (kastr.mirror_feeds). Returns the zip path; raises on failure."""
+    log = log or _log[0]
+    spec = PLATFORMS[plat]
+    pin = browser_pin()
+    if not pin:
+        raise RuntimeError("no browser pin bundled")
+    bdir = os.path.join(root, "updates", "browser")
+    os.makedirs(bdir, exist_ok=True)
+    log("release zip: fetching the %s browser (Chrome for Testing %s, %.0f MB) for the %s install zip" % (spec["dir"], pin["version"], pin["platforms"][spec["prune"]]["size"] / 1e6, spec["dir"]))
+    src = kastr_browser.ensure_zip(spec["prune"], pin, download=True, log=log)
+    dest = os.path.join(bdir, "chrome-%s.zip" % spec["bkey"])
+    tmp = dest + ".part"
+    shutil.copyfile(src, tmp)
+    os.replace(tmp, dest)
+    vf = os.path.join(bdir, kastr_browser.VERSION_FILE)
+    if not os.path.isfile(vf):
+        with open(vf, "w", encoding="utf-8", newline="\n") as f:
+            f.write(pin["version"] + "\n")
+    log("release zip: %s browser zip in place (%s)" % (spec["dir"], dest))
+    return dest
+
+
 def status(plat, version, state_dir, root=None, own=None, frozen=None):
-    """The manifest's `zip` entry for one platform: {name, can, why, ready, building, size, sha256, estimate}."""
+    """The manifest's `zip` entry for one platform: {name, can, why, ready, building, size, sha256, estimate, fetch}."""
     spec = PLATFORMS.get(plat)
     if not spec or not state_dir:
         return None
     name = zip_name(plat, version)
     out = {"name": name, "can": False, "why": None, "ready": False, "building": False,
-           "size": None, "sha256": None, "estimate": ESTIMATE.get(plat)}
+           "size": None, "sha256": None, "estimate": ESTIMATE.get(plat), "fetch": None}
     src, why = sources(plat, version, root=root, own=own, frozen=frozen)
     out["can"] = src is not None
     out["why"] = why
+    if src is None and _browser_fetchable(plat, why):   # 0.21.8: assemblable once the host fetches the browser
+        out["can"] = True
+        out["fetch"] = "browser"
+        out["why"] = None
     path = os.path.join(state_dir, "downloads", name)
     rec = _sidecar_ok(path) if os.path.isfile(path) else None
     if rec:
@@ -299,17 +345,27 @@ def prepare(plat, version, state_dir, root=None, own=None, frozen=None, log=None
     """Start assembling on a daemon thread (idempotent). Returns the status() dict after the kick."""
     log = log or _log[0]
     src, why = sources(plat, version, root=root, own=own, frozen=frozen)
-    if src is None:
+    need_browser = src is None and _browser_fetchable(plat, why)   # 0.21.8
+    if src is None and not need_browser:
         return status(plat, version, state_dir, root=root, own=own, frozen=frozen)
-    src["root"] = root or app_root()
+    root_dir = root or app_root()
+    if src is not None:
+        src["root"] = root_dir
     out_path = os.path.join(state_dir, "downloads", zip_name(plat, version))
     with _lock:
         b = _building.get(plat)
         if not path_for(plat, version, state_dir) and not (b and b["thread"].is_alive()):
             def run():
                 try:
+                    s2 = src
+                    if s2 is None:   # 0.21.8: the other platform's browser first (once), then the parts as usual
+                        fetch_browser_zip(plat, root_dir, log=log)
+                        s2, why2 = sources(plat, version, root=root, own=own, frozen=frozen)
+                        if s2 is None:
+                            raise RuntimeError(why2 or "sources missing after the browser fetch")
+                        s2["root"] = root_dir
                     _prune_old(os.path.dirname(out_path), version)
-                    assemble(plat, version, src, out_path, log=log)
+                    assemble(plat, version, s2, out_path, log=log)
                 except Exception as e:
                     log("release zip: %s NOT assembled (%s)" % (os.path.basename(out_path), e))
                     try:

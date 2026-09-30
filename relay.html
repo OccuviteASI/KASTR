@@ -1020,7 +1020,8 @@
     if (a.up === null || a.up === undefined) { ha.textContent = "not needed (open relay)"; ha.style.color = ""; }
     else if (!a.up) { ha.textContent = "DOWN \u2014 the relay admits no session until it answers"; ha.style.color = "var(--asi-red)"; }
     else { ha.textContent = "up \u2014 " + (a.sessions ?? 0) + " sessions (" + (a.publishers ?? 0) + " publishing), " + (a.grants ?? 0) + " grants, " + (a.refusals ?? 0) + " refusals"
-      + (a.lastRefusal ? " \u2014 last: " + a.lastRefusal.remote + " (" + a.lastRefusal.why + ")" : ""); ha.style.color = a.refusals ? "var(--asi-amber)" : "var(--asi-green)"; }
+      + (a.lastRefusal ? " \u2014 last: " + a.lastRefusal.remote + " (" + a.lastRefusal.why + ")" : "")
+      + (a.churn && a.churn.opens >= 6 ? " \u2014 " + a.churn.remote + " opened " + a.churn.opens + " sessions in a minute (a browser reconnecting in a loop?)" : ""); ha.style.color = (a.refusals || (a.churn && a.churn.opens >= 6)) ? "var(--asi-amber)" : "var(--asi-green)"; }   // 0.21.8: churn
     $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : "NOT verified")
       + (f.spoke ? (f.spoke.registered ? ", registered" : ", not registered (" + String(f.spoke.why || "").split(" -- ")[0] + ")") : "")
       + (f.link ? (", link " + (f.link.up ? "up" : "DOWN") + " " + Math.max(0, Math.round((Date.now() / 1000 - (f.link.since || 0)) / 60)) + " m, " + (f.link.drops || 0) + " drop" + (f.link.drops === 1 ? "" : "s") + ", " + (f.link.repins || 0) + " re-pin" + (f.link.repins === 1 ? "" : "s")) : "")   // 0.21.7: the cluster link

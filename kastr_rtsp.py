@@ -1113,7 +1113,7 @@ class Publisher:
         self.since = None
         self.reused = 0             # 0.9.8: publish requests answered by this same pair
         # 0.13.1: who restarted us and what died -- every "random drop" attributed
-        self.nudges = {"viewer": 0, "noEcho": 0, "api": 0}
+        self.nudges = {"viewer": 0, "noEcho": 0, "api": 0, "refused": 0}   # 0.21.8: + refused (a viewer report against a fresh pair)
         self.lastNudgeWhy = None
         self.lastNudgeAt = None
         self.lastExit = None        # {code, who: "ffmpeg"|"moq", at, lived} from _watch
@@ -1446,7 +1446,17 @@ class Publisher:
         0.13.1: `why` (viewer / stall* / no-echo / api) is counted and kept."""
         if self.standby:            # 0.18.0: nothing runs; a viewer's demand wakes it instead
             return
-        self.nudges[nudge_bucket(why)] += 1
+        bucket = nudge_bucket(why)
+        if bucket == "viewer" and self.running and self.since and time.time() - self.since < 60:
+            # 0.21.8: the 0.13.3 evidence rule on the server side too -- a viewer's stall report restarts nothing that came up
+            # in the last minute (the page's gate no longer sends one for a running pair; older pages still might)
+            self.nudges["refused"] = self.nudges.get("refused", 0) + 1
+            self.lastNudgeWhy = ("refused:" + str(why or ""))[:32]
+            self.lastNudgeAt = time.time()
+            self.bridge.log("rtsp nudge refused %s why=%s -- the pair is %d s into gen %d (a viewer's report is not evidence)"
+                            % (self.broadcast, why, int(time.time() - self.since), self._gen))
+            return
+        self.nudges[bucket] += 1
         self.lastNudgeWhy = str(why or "api")[:32]
         self.lastNudgeAt = time.time()
         with self._lock:

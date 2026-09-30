@@ -414,6 +414,23 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.8
+
+| Area | Requirement | Since |
+|---|---|---|
+| W/PUB | `nudgeFromViewer`, native pair: a viewer's stall report restarts the pair only when the pair is troubled (exited or lost its session in 60 s) or the relay lists the room and not the camera (`listed === false`); `null` (no evidence: a secured relay lists nothing, a timeout) means "noted, not restarting" with a `/api/rtsp/note` line. Camera/screen slots: a second report nudges the encoder again (300 ms invisible) instead of `stopSlot/startSlot`. | 0.21.8 |
+| PUB | `Publisher.nudge(why)`: a `viewer`/`stall*` nudge against a pair that is running and less than 60 s into its generation is refused, counted in `nudges.refused`, `lastNudgeWhy = "refused:<why>"`, logged `rtsp nudge refused <b> why=… -- the pair is N s into gen G`. | 0.21.8 |
+| PUB | `gridEvictionTick`: `pubHealthy = running && !standby && (no lastExit || lastExit > 30 s ago)` (was "up for 60 s"); a monitor-evicted native member is readmitted when its pair is healthy again (`backMon || (native && backPub)`). | 0.21.8 |
+| W | `WATCH_TUNING` main/rail/grid `delay: "150ms"` (was `auto`) with buffer 400 ms; `cell` unchanged. | 0.21.8 |
+| W | fMP4 fallback `<video>`: retries back off (3 s doubling to a 60 s cap), a retry counter resets after 5 s of playback, the sixth failure stops with a page log line and a toast; `tile.fbRetries()`; `state().fallbackRetries`. | 0.21.8 |
+| S | `/api/watch/<b>.mp4`: per peer+broadcast, three starts in 30 s → 429 `Retry-After: 30` and one launch.log line a minute (`watch: fallback viewer <peer> is looping on <b> (N starts in 30 s)`); `_WATCH_STARTS`/`_WATCH_LOOP_SAID`. `/relay` pipe: bytes and lifetime counted; a peer with three pipes under 15 s in a minute is logged once a minute (`relay pipe: <peer> opened N short pipes in 60 s …`). | 0.21.8 |
+| R | `AuthService.session`: connect events per non-loopback remote per 60 s (`_opens`); past six, `relay auth: <remote> opened N sessions in 60 s -- a browser reconnecting in a loop?` once a minute; `stats().churn = {remote, opens}` (the worst remote of the last minute), carried by `/api/relay/health` (`auth.churn`) and the Relay page's Auth line (amber). | 0.21.8 |
+| W | `window.__netEvents {reconnects, recent, toasts, breaks, pausedUntil}`: the console.warn wrapper counts the library's `connection closed, reconnecting` / `connection error`; three in 60 s → a toast (once a minute); six → every `<moq-watch>` loses its `url` for 20 s and gets it back (`data-paused-url`). `state().netEvents`, `state().slowGroups` ride `/api/diag`. Masthead: a host-update reload also gated by `localStorage kastr.hostReloadAt` (once per 10 min). | 0.21.8 |
+| R | `firewall_status()` on Windows: `_windows_rules()` reads `netsh advfirewall firewall show rule name=<rule>` per rule (`Rule Name:`/`Protocol:`/`LocalPort:` parsed per block, ~0.07 s each) and falls back to `_windows_rules_cim()` (one `Get-NetFirewallRule -DisplayName @(…)` piped once through `Get-NetFirewallPortFilter`) when the output is not English. | 0.21.8 |
+| S/B | `kastr_release`: `browser_pin()` (the pin ships in the app: build.py adds `browser.json` at the bundle root), `_browser_fetchable()`, `fetch_browser_zip(plat, root)` (kastr_browser.ensure_zip → `updates/browser/chrome-<key>.zip` + VERSION); `status()` reports `can: true, fetch: "browser"` when only the other platform's browser zip is missing; `prepare()` fetches, then assembles. About: the row says the host fetches the browser first; the wait allows 10 min. | 0.21.8 |
+| W | Avatar circle `width:min(36cqw, 70cqh, 150px)`, `container-type:size`; `.init` is a flex-centred 100 % box with `font-size:40cqw` (`.n1` 48cqw, `.n3` 30cqw), `letter-spacing:.04em; text-indent:.04em`; the size class is set from the initials' length on remote tiles and the own pane's standby face. | 0.21.8 |
+| T | `scratchpad/v0218/`: `patch_hunt.py`, `pw_burst.py` (relay sessions + byte counters per second with a web viewer, `--pipe`), `pw_fallback.py` (the retry ladder + the avatar), `hiccup_proxy.py` reused; the 0.20.0→0.21.7 regression hunt ran as a 49-agent workflow (six readers, two skeptics per finding, one synthesis). | 0.21.8 |
+
 ### Added in 0.21.7
 
 | Area | Requirement | Since |

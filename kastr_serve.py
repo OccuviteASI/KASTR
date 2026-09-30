@@ -748,6 +748,10 @@ _REMOTE_SEEN = {}
 WATCH_MAX = 6
 _WATCH_LIVE = [0]
 _WATCH_LOCK = threading.Lock()
+_WATCH_STARTS = {}     # 0.21.8: "peer|broadcast" -> start times in the last 30 s (a looping fallback player)
+_WATCH_LOOP_SAID = {}  # 0.21.8: "peer|broadcast" -> when the loop was last logged
+_PIPE_SHORT = {}       # 0.21.8: peer -> end times of /relay pipes that lived under 15 s (a reconnecting browser)
+_PIPE_SAID = {}
 WATCH_SEG_RE = re.compile(r"^(?!\.\.?$)[A-Za-z0-9._-]+$")   # 0.18.0: never "." or ".."
 
 
@@ -1307,6 +1311,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if kastr_relay.is_forwarded(self):
                 TUNNEL_SEEN.update(base=self._web_base(), at=time.time())
             cs = self.connection
+            t0 = time.time()
+            nbytes = [0, 0]   # 0.21.8: browser -> relay, relay -> browser
+            peer = kastr_relay.client_ip(self) or "?"
             try:
                 up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1", "replace"))
                 cs.settimeout(None); up.settimeout(None)
@@ -1322,6 +1329,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         if not data:
                             done = True
                             break
+                        nbytes[0 if sk is cs else 1] += len(data)
                         (up if sk is cs else cs).sendall(data)
                     if done:
                         break
@@ -1329,6 +1337,23 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 pass
             finally:
                 _RELAY_WS[0] = max(0, _RELAY_WS[0] - 1)
+                lived = time.time() - t0
+                if lived < 15:
+                    # 0.21.8: a pipe that lived seconds is a browser reconnecting; each reconnect re-pulls every stream it
+                    # watches (a burst per reconnect for the whole relay). Say so once a minute per peer past three.
+                    try:
+                        now1 = time.time()
+                        hist = [t for t in _PIPE_SHORT.get(peer, []) if now1 - t < 60] + [now1]
+                        _PIPE_SHORT[peer] = hist
+                        if len(_PIPE_SHORT) > 256:
+                            for k in sorted(_PIPE_SHORT, key=lambda k: _PIPE_SHORT[k][-1])[:len(_PIPE_SHORT) - 256]:
+                                _PIPE_SHORT.pop(k, None)
+                        if len(hist) >= 3 and now1 - _PIPE_SAID.get(peer, 0) > 60:
+                            _PIPE_SAID[peer] = now1
+                            (getattr(bridge, "log", None) or _note)("relay pipe: %s opened %d short pipes in 60 s (the last lived %.1f s, %d KB in / %d KB out) -- a browser reconnecting in a loop?"
+                                                                   % (peer, len(hist), lived, nbytes[0] // 1024, nbytes[1] // 1024))
+                    except Exception:
+                        pass
                 for sk in (up,):
                     try:
                         sk.close()
@@ -3642,11 +3667,31 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._json_cors(401, {"error": "token required"})
                 if not kastr_relay.claims_cover(claims, segs[0]):
                     return self._json_cors(403, {"error": "token does not cover this room"})
+            peer = kastr_relay.client_ip(self) or "?"   # 0.19.0
+            now0 = time.time()
             with _WATCH_LOCK:
+                # 0.21.8: a fallback player that cannot play asks again every 2-3 s, and every ask is a moq export child that
+                # pulls the last 4 s of every track -- a burst for the whole relay per retry (the field's 250 Mbit/s spikes
+                # every couple of seconds on the tunnel host). Three starts per peer+broadcast in 30 s is a loop: 429 with
+                # Retry-After, one launch.log line a minute.
+                key0 = peer + "|" + bcast
+                hist = [t for t in _WATCH_STARTS.get(key0, []) if now0 - t < 30]
+                if len(hist) >= 3:
+                    _WATCH_STARTS[key0] = hist
+                    if now0 - _WATCH_LOOP_SAID.get(key0, 0) > 60:
+                        _WATCH_LOOP_SAID[key0] = now0
+                        (getattr(bridge, "log", None) or _note)("watch: fallback viewer %s is looping on %s (%d starts in 30 s) -- its browser cannot play it; refusing for 30 s" % (peer, bcast, len(hist)))
+                    self.send_response(429)
+                    self.send_header("Retry-After", "30")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                _WATCH_STARTS[key0] = hist + [now0]
+                for k in [k for k, v in _WATCH_STARTS.items() if not v or now0 - v[-1] > 300][:64]:
+                    _WATCH_STARTS.pop(k, None)
                 if _WATCH_LIVE[0] >= WATCH_MAX:
                     return self._json_cors(503, {"error": "too many fallback viewers on this relay host (%d)" % WATCH_MAX})
                 _WATCH_LIVE[0] += 1
-            peer = kastr_relay.client_ip(self) or "?"   # 0.19.0
             leaf = segs[-1]
             blog = getattr(bridge, "log", None) or _note
             url = relay_srv.url().rstrip("/") + "/" + (("?jwt=" + jwt) if (secured and jwt) else "")

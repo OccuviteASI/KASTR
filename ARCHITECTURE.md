@@ -912,6 +912,22 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.8
+
+- **No evidence is not evidence.** Three different rules turned a viewer's stall report into a restart, a rebuild or an
+  eviction whenever the check that was supposed to protect the source came back empty. Secured relays made "empty" the
+  normal answer. A guard that cannot fail closed must treat the unknown as "leave it alone and write it down", which
+  is what the no-echo heal had done from the start.
+- **A report is a hint about the reporter.** Every report-driven action in this system amplifies: the cut it causes
+  starves more viewers into reporting. The only actions left on a report alone are invisible ones (a 300 ms encoder
+  nudge, a note in launch.log); anything that cuts needs the source's own evidence.
+- **Bound every retry that costs the whole relay.** A fallback player's retry and a connection reload each pull the
+  latest group of every stream from the relay, so a client looping every two seconds is a burst generator for
+  everyone. Retries back off and stop; the server refuses a looping peer; both sides count and say so, because the
+  next field report needs a log line, not a graph.
+- **Delay is the buffer, buffer is the ceiling.** In this player `delay` sizes the audio ring and `buffer` only bounds
+  the skip; an auto delay on a LAN left tens of milliseconds of ring. Set the one that is the buffer.
+
 ### 0.21.7
 
 - **A tooltip is a contract with the OS.** A `title` on a pane is not a hint the page controls; the browser hands it to the

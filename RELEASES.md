@@ -2,6 +2,58 @@
 
 What changed in each build, newest first.
 
+## v0.21.8 — the regression hunt: no restarts on a viewer's say-so, a fallback that stops asking, a fixed audio delay, the firewall check in under a second
+
+**What the 0.20.0 → 0.21.x hunt found.** Six readers went over every change in the window and two skeptics
+checked each finding; the code of the RTSP pipeline, the vendored player and the relay had not changed. What had
+changed was the field: secured relays everywhere, phones and web clients through the tunnel, and a release a day.
+Three pre-existing rules were being exercised for the first time, and every one of them turned a viewer's stall
+report into a cut for everyone:
+
+- **A native camera's pair restarted on a stall report with no evidence.** The 0.13.3 rule asked the relay whether
+  it still listed the camera; a secured relay's listing is empty, so the answer was "no evidence", and the code
+  treated that like "not listed" and restarted the pair. One starving remote viewer (a phone, the tunnel, two cluster
+  hops) restarted a healthy Mendon or Southridge camera for every viewer every 45 s for as long as it kept reporting,
+  and each restart starved more viewers into reporting. Now a running pair with no evidence against it is left
+  alone and the report is written to launch.log (`page: pair <name>: viewer stall noted -- no relay evidence`); the
+  server refuses a viewer-report restart of any pair that came up in the last minute (`rtsp nudge refused …`).
+- **A speaker's camera and mic were torn down on a second stall report.** The camera-slot branch was the one
+  report-driven rebuild that never got a gate; every listener lost that person for the seconds it took to re-acquire
+  the devices. It nudges the encoder again instead; the encoder's own watchdog rebuilds when the encoder really is
+  wedged.
+- **The grid's eviction ladder could evict a camera whose pair was fine.** 0.21.5 let a pair vouch for its camera
+  only after 60 s of age, and the restarts above kept resetting that clock. A pair vouches by state now: running,
+  not in standby, no exit in the last 30 s; a running pair also readmits a monitor-evicted member.
+- **Audio's jitter buffer on the LAN was the measured RTT alone (43 to 54 ms).** `delay: "auto"` sizes the audio
+  ring from the RTT; `buffer` is only the skip ceiling. Main, rail and grid tiles ride a fixed 150 ms delay everywhere
+  now, as web pages already did since 0.21.7.
+
+**The bursts on KASTR-Test and Mendon.** A 250 Mbit/s spike every couple of seconds, with every viewer's session
+appearing and vanishing together on the relay's stats, is a client re-subscribing to everything at once: each time,
+the relay hands out the latest group of every stream (a full GOP of every camera), and the spoke's cameras are
+pulled again over the cluster link. Two loops can do that and both are now bounded and visible: the fMP4 fallback
+player (a browser without WebCodecs, or a codec it cannot play) asked again every 2 to 3 s and each ask spawned a
+`moq export` child pulling the last 4 s of every track; it backs off now (3, 6, 12, 24, 48 s, capped at 60 s) and
+stops after five failed tries with a toast, and the relay host refuses a fallback viewer that starts the same stream
+three times in 30 s (429, `watch: fallback viewer <peer> is looping …`). The library's connection reload (1 to 5 s
+back-off) re-subscribes every tile per reconnect; the page counts them (`window.__netEvents`, in `/api/diag`),
+toasts past three a minute and parks every tile for 20 s past six. The relay host logs `/relay` pipes that lived
+under 15 s (`relay pipe: <peer> opened N short pipes in 60 s`), the auth service counts session opens per remote
+(`relay auth: <remote> opened N sessions in 60 s`), `/api/relay/health` carries `auth.churn` and the Relay page's
+Auth line names the remote; the masthead reloads for a host update at most once per ten minutes. The tell in
+KASTR-Test's launch.log is one of those lines; ask for it when the spikes are next seen.
+
+**Also in this release.** The Windows firewall status check reads `netsh` (0.6 s, was 8 s) with the CIM cmdlets
+as a fallback; a field host assembles the other platform's install zip by fetching the pinned Chrome for Testing
+zip itself (browser.json ships in the app; About says "the host fetches the browser first"); the avatar circle is a
+little bigger, its initials size from the circle (one letter 48 %, two 40 %, three 30 % of the diameter) and sit
+centred, on remote tiles and on the own pane's standby face alike.
+
+**Not regressions**, checked: the RTSP pipeline's ffmpeg and moq arguments, the vendored player and encoder, the
+tile classes and budgets through 0.21.6, the relay configuration and its restart triggers, and the update paths.
+Still to prove in the field: which loop KASTR-Test's viewer was in (the log lines above), and Southridge's
+launch.log against a blackout.
+
 ## v0.21.7 — field fixes round four: the update port, no pane pop-up, download the app, click-to-picture, the spoke grid, audio that does not clip, a firewall prompt that stops
 
 Seven items from the field after 0.21.6, each with its cause.

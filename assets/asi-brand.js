@@ -386,6 +386,9 @@ function build() {
         // its reload is in the shell check's hands (moq-watch-lite.html), not in a reload loop
         let again = false;
         try { again = sessionStorage.getItem("kastr.hostReload") === inst.version; sessionStorage.setItem("kastr.hostReload", inst.version); } catch {}
+        // 0.21.8: and never more than once per ten minutes on this device, whatever the storage the reload comes back with --
+        // a reload is a full re-join (every stream pulled again at once), so a loop here is a burst every few seconds
+        try { const at = Number(localStorage.getItem("kastr.hostReloadAt") || 0); if (Date.now() - at < 600000) again = true; else localStorage.setItem("kastr.hostReloadAt", String(Date.now())); } catch {}
         if (again) return;
         try { window.__kastrSwReg?.update?.().catch?.(() => {}); } catch {}   // fetch the replacement worker now
         try { brandToast("KASTR on the host updated to v" + inst.version + " \u2014 reloading"); } catch {}

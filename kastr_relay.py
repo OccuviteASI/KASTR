@@ -1290,6 +1290,8 @@ class AuthService:
         self._refused = []                   # the last 20 refusals {at, remote, path, why}
         self._refuse_said = {}               # remote -> last log time (one line per remote per minute)
         self._events = []                    # the last 20 session events, shape only
+        self._opens = {}                     # 0.21.8: remote -> session connect times in the last 60 s (a reconnect loop)
+        self._churn_said = {}
         self.grants = self.refusals = self.ended = 0
         self.fingerprint = None              # the relay's QUIC certificate sha256 (Relay sets it once the relay is up)
         svc = self
@@ -1562,6 +1564,21 @@ class AuthService:
             self._events.append({"at": int(now), "event": ev, "remote": remote, "keys": sorted(str(k) for k in req),
                                  "jwt": bool(session_jwt(req)), "role": str(req.get("role") or ""), "transport": str(req.get("transport") or "")})
             del self._events[:-20]
+        if ev == "connect" and remote and remote != "?" and not is_loopback_addr(remote):
+            # 0.21.8: a browser reconnecting every couple of seconds re-subscribes to everything at once and the relay
+            # answers with the latest group of every stream -- a burst per reconnect for the whole relay (the field's
+            # 250 Mbit/s spikes). Count opens per remote per minute; say so once a minute past six; stats().churn names
+            # the worst remote (health + the Relay page).
+            with self.lock:
+                hist = [t for t in self._opens.get(remote, []) if now - t < 60] + [now]
+                self._opens[remote] = hist
+                if len(self._opens) > 256:
+                    for k in sorted(self._opens, key=lambda k: self._opens[k][-1])[:len(self._opens) - 256]:
+                        self._opens.pop(k, None)
+                n = len(hist)
+            if n >= 6 and now - self._churn_said.get(remote, 0) > 60:
+                self._churn_said[remote] = now
+                self.log("relay auth: %s opened %d sessions in 60 s -- a browser reconnecting in a loop? (each reconnect re-pulls every stream it watches)" % (remote, n))
         if ev == "end":
             with self.lock:
                 rec = self._sessions.pop(sid, None)
@@ -1982,10 +1999,17 @@ class AuthService:
     def stats(self):
         with self.lock:
             pubs = sum(1 for r in self._sessions.values() if r.get("publisher"))
+            now = time.time()
+            churn = None   # 0.21.8: the remote that opened the most sessions in the last minute
+            for r, ts in self._opens.items():
+                n = len([t for t in ts if now - t < 60])
+                if n and (churn is None or n > churn["opens"]):
+                    churn = {"remote": r, "opens": n}
             return {"up": True, "sessions": len(self._sessions), "publishers": pubs,
                     "grants": self.grants, "refusals": self.refusals, "ended": self.ended,
                     "bans": len(self.bans.active()) if self.bans else 0,   # 0.17.0
                     "lastRefusal": (dict(self._refused[-1]) if self._refused else None),
+                    "churn": churn,
                     "recent": [dict(e) for e in self._events[-8:]]}
 
     # ---- 0.16.0: the admin code, here or at the hub ---------------------------------
@@ -3585,6 +3609,65 @@ def _linux_fw_tool():
     return None
 
 
+def _windows_rules():
+    """0.21.8: -> (display names found, {"port/proto"}) of the KASTR rules. netsh first (about 0.07 s per rule; the
+    English labels "Rule Name:", "Protocol:", "LocalPort:" parsed per block), the CIM cmdlets as the fallback when netsh
+    prints nothing recognisable (a localised Windows) -- pipelined once through Get-NetFirewallPortFilter (~4.6 s,
+    where 0.21.7's per-rule pipeline took 8 s and the Relay page painted late)."""
+    found_names, have = [], set()
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    parsed_any = False
+    for name in FIREWALL_RULES:
+        try:
+            out = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", "name=%s" % name],
+                                 capture_output=True, text=True, timeout=8, creationflags=flags)
+        except Exception:
+            out = None
+        text = (out.stdout or "") if out is not None else ""
+        if not re.search(r"^Rule Name:", text, re.M):
+            if re.search(r"^\w[\w ]*:\s+\S", text, re.M) and "No rules match" not in text:
+                return _windows_rules_cim()          # labels in another language: let the cmdlets answer
+            continue                                 # no such rule (English "No rules match the specified criteria")
+        parsed_any = True
+        for block in re.split(r"(?m)^Rule Name:", text)[1:]:
+            proto = re.search(r"^Protocol:\s+(\S+)", block, re.M)
+            port = re.search(r"^LocalPort:\s+(\S.*)$", block, re.M)
+            found_names.append(name)
+            if proto and port:
+                for lp in port.group(1).split(","):
+                    lp = lp.strip()
+                    if lp.isdigit():
+                        have.add("%d/%s" % (int(lp), proto.group(1).strip().lower()))
+    if not parsed_any and not found_names:
+        # nothing recognised at all -- either no rules exist or netsh is unusable; the cmdlets decide (once)
+        try:
+            return _windows_rules_cim()
+        except Exception:
+            return found_names, have
+    return found_names, have
+
+
+def _windows_rules_cim():
+    names = ",".join("'%s'" % n for n in FIREWALL_RULES)
+    script = ("$rules = @(Get-NetFirewallRule -DisplayName @(%s) -ErrorAction SilentlyContinue); $map = @{}; "
+              "foreach ($r in $rules) { $map[$r.Name] = $r.DisplayName }; "
+              "if ($rules.Count) { $rules | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | ForEach-Object "
+              "{ \"$($map[$_.InstanceID])|$($_.Protocol)|$($_.LocalPort)\" } }" % names)
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=40,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    found_names, have = [], set()
+    for ln in (out.stdout or "").splitlines():
+        parts = ln.strip().split("|")
+        if len(parts) != 3 or not parts[0]:
+            continue
+        found_names.append(parts[0])
+        for lp in str(parts[2]).split(","):
+            lp = lp.strip()
+            if lp.isdigit():
+                have.add("%d/%s" % (int(lp), parts[1].strip().lower()))
+    return found_names, have
+
+
 def firewall_status(wanted=None):
     """Are the KASTR firewall rules in place? (0.8.2; 0.21.7: exact ports, unprivileged where possible.)
 
@@ -3594,22 +3677,7 @@ def firewall_status(wanted=None):
     want_keys = ["%d/%s" % w for w in wanted]
     try:
         if sys.platform == "win32":
-            names = ",".join("'%s'" % n for n in FIREWALL_RULES)
-            # one powershell call: "<name>|<proto>|<port>" per existing rule (port filter joined -- a changed port counts as missing)
-            script = ("foreach ($n in @(%s)) { Get-NetFirewallRule -DisplayName $n -ErrorAction SilentlyContinue | ForEach-Object "
-                      "{ $f = $_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue; \"$n|$($f.Protocol)|$($f.LocalPort)\" } }" % names)
-            out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=25,
-                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            found_names, have = [], set()
-            for ln in (out.stdout or "").splitlines():
-                parts = ln.strip().split("|")
-                if len(parts) != 3:
-                    continue
-                found_names.append(parts[0])
-                for lp in str(parts[2]).split(","):
-                    lp = lp.strip()
-                    if lp.isdigit():
-                        have.add("%d/%s" % (int(lp), parts[1].strip().lower()))
+            found_names, have = _windows_rules()
             if want_keys:
                 missing = [k for k in want_keys if k not in have]
             else:
@@ -4033,7 +4101,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
             helpers = {}
         reply({"relay": {"running": st.get("running"), "port": st.get("port"), "internal": bool(st.get("internal")),
                          "sessions": sessions if sessions is not None else auth.get("sessions"), "nodes": nodes},
-               "auth": ({"up": bool(st.get("authUp")), **{k: auth.get(k) for k in ("sessions", "publishers", "grants", "refusals", "ended", "lastRefusal")}}
+               "auth": ({"up": bool(st.get("authUp")), **{k: auth.get(k) for k in ("sessions", "publishers", "grants", "refusals", "ended", "lastRefusal", "churn")}}   # 0.21.8: + churn
                         if st.get("secured") else {"up": None}),
                "federation": ({"hub": (st.get("federation") or {}).get("hub"), "token": (st.get("federation") or {}).get("token"),
                                "tls": (st.get("federation") or {}).get("tls"), "fingerprint": (st.get("federation") or {}).get("fingerprint"),

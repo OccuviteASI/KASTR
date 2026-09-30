@@ -107,6 +107,16 @@ Cloudflare replaces an origin's 502/504 with its own text page. KASTR 0.20.0 nev
 and an open relay answers its room-code endpoints with a 200 "open" shape instead of an error, so `watch.html` and
 the page behave the same behind Cloudflare as on the LAN.
 
+## Bursts from a looping client (0.21.8)
+
+Every viewer session appearing and vanishing together on the tunnel host's relay stats, with a spike of a few
+hundred Mbit/s every couple of seconds, is a client re-subscribing to everything at once. Two loops can do that from
+a web client: the fMP4 fallback player (a browser without WebCodecs, or a codec it cannot play) retrying, and the
+library reconnecting a `/relay` WebSocket that keeps dying. Both are bounded now (back-off, a stop, a 429 for a
+looping fallback viewer, a 20 s pause after six reconnects in a minute) and both leave a line in the host's
+launch.log (`watch: fallback viewer … is looping`, `relay pipe: … short pipes`, `relay auth: … opened N sessions in
+60 s`); `/api/relay/health` carries `auth.churn`.
+
 ## Through the tunnel in 0.21.7: audio budgets and the download
 
 - A page whose relay is a web relay (`…/relay` — every tunnel page) rides fixed budgets: `delay 150 ms + buffer 800 ms`

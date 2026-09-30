@@ -29,6 +29,13 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.8 a viewer's stall report no longer restarts a healthy RTSP pair, rebuilds a speaker's camera or evicts a
+grid member without the source's own evidence (a secured relay gives none, and one starving remote viewer was cutting
+every Mendon and Southridge camera for everyone every 45 s), audio rides a fixed 150 ms delay on the LAN too, the fMP4
+fallback player backs off and stops instead of asking every two seconds, the relay host and the page count and log
+reconnect loops (the tell behind the 250 Mbit/s bursts), the Windows firewall check takes under a second, a host fetches
+the other platform's browser to assemble its install zip, and the avatar initials fit their (slightly bigger) circle.
+
 Since 0.21.7 the Relay dropdown names the host's KASTR on the port it actually runs (no more `:8000`), remote panes carry no
 OS tooltip, a web client downloads the full Windows or Linux install zip from More → Settings → About (assembled on the
 host from what every install already carries), an on-demand camera shows its low copy the instant it is clicked and the

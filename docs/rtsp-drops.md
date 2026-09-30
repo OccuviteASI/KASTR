@@ -66,6 +66,29 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## Viewer reports (0.21.8)
+
+A stall report from a viewer is a hint about that viewer's path, never an order. Since 0.21.8 the lines to look for:
+
+- `page: pair <camera>: viewer stall noted -- no relay evidence, pair running (gen G, N s), not restarting` — the owner's
+  page received a report for a running pair and did nothing. Many of these from one camera means one viewer is
+  starving (a phone, the tunnel, two hops), not that the camera is failing.
+- `rtsp nudge refused <camera> why=viewer -- the pair is N s into gen G` — an older page (or a tool) asked for a restart
+  of a pair that came up less than a minute ago; refused. `/api/rtsp/list` → `publish.nudges.refused` counts them.
+- `rtsp nudge <camera> why=viewer …` followed by `rtsp pair … start` — a restart that DID happen: the pair was troubled
+  (an exit or a lost session in the last 60 s) or the relay listed the room without it. Those are the ones to read.
+- `page: grid <name>: evicted <camera> (monitor attempt N)` — a monitor-ladder eviction; since 0.21.8 only for a camera
+  whose pair is not running, is in standby, or exited in the last 30 s.
+
+## Reconnect loops (0.21.8)
+
+A client re-subscribing to everything every couple of seconds pulls the latest group of every stream each time — a
+burst for the whole relay and, for a spoke's cameras, a re-pull over the cluster link. The lines that name it:
+`watch: fallback viewer <peer> is looping on <b> (N starts in 30 s)` (a browser that cannot play the fMP4 fallback),
+`relay pipe: <peer> opened N short pipes in 60 s` (a web client's `/relay` WebSocket dying and coming back),
+`relay auth: <remote> opened N sessions in 60 s` (any client reconnecting), plus `/api/relay/health` → `auth.churn`
+and, on the client, `window.__netEvents` (in `/api/diag` → `netEvents`).
+
 ## Reading the counters
 
 | Pattern | Meaning | Row in ARCHITECTURE's restart table |

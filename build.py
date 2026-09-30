@@ -739,6 +739,9 @@ def main():
     add_data.append(stamp + sep + "site")
     if os.path.exists(RELEASES_FILE):
         add_data.append(RELEASES_FILE + sep + "site")
+    # 0.21.8: the Chrome for Testing pin rides along (beside kastr_browser.py in the bundle) so a field host can fetch
+    # the OTHER platform's browser zip when a web client asks for that platform's install zip (kastr_release)
+    add_data.append(os.path.join(HERE, "browser.json") + sep + ".")
     for page in PAGES:
         src = os.path.join(HERE, page)
         if not os.path.exists(src):

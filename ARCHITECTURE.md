@@ -912,6 +912,20 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.9
+
+- **Measure from where the complaint is.** A web viewer at the tunnel host, driven by a script and reading the page's own
+  hooks, showed in one minute what days of reasoning could not: which stream was starving (Southridge's grid, in bursts),
+  which was fine (Mendon's), and that audio frames were arriving late rather than being skipped. The field observation
+  rig is now a standing tool.
+- **Adapt to what the player reports, not to what a probe guesses.** The library's delay estimate sees the round trip to
+  the nearest relay; the jitter that drops speech comes from hops it cannot see. The player already says when frames are
+  late; the page uses that as the signal and widens the delay in steps.
+- **A library upgrade is a contract change; grep every reader.** 0.16.0 moved the microphone into a Capture object and
+  the code that set the source was updated, but three readers of the old field were not — and nothing failed loudly: the
+  ring simply never lit and the denoiser never engaged. A hook that exposes what a subsystem sees (`__ownAudio`) would
+  have shown the empty tap on day one.
+
 ### 0.21.8
 
 - **No evidence is not evidence.** Three different rules turned a viewer's stall report into a restart, a rebuild or an

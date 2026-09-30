@@ -2,6 +2,36 @@
 
 What changed in each build, newest first.
 
+## v0.21.9 — audio that adapts to the path, the speaking ring and noise removal back, what a tunnel viewer really sees
+
+**Measured from the tunnel (a web viewer at kastr.madlabs.app, 2026-09-30 afternoon).** Kenton's own camera audio
+arrived late 21 times in 40 s on the multi-hop path (app → spoke → hub → tunnel host → browser); every late frame is
+20 ms of speech the player drops, and a run of them is the "almost static" heard in a conversation. The Mendon grid
+arrived at 15 fps with gaps under 0.2 s over the same last hop; the Southridge grid arrived at 1 to 2 fps in bursts,
+with holes of 1 to 9 s — frames come in clusters at the encoder's 15 fps spacing and then nothing, the signature of a
+starving or lossy link between Southridge and Agg, not of a slow encoder. The southridge room published only the
+composite (no per-camera broadcasts, no on-demand feeds), so a quadrant tap had no full-quality camera to switch to.
+
+**Adaptive audio delay.** A fixed 150 ms delay cannot know the jitter of the hops upstream of the viewer's relay. The
+page now listens for the player's own late-frame reports and widens the audio tiles' delay a step at a time while they
+keep coming (LAN 150 → 250 → 400 ms; through a web relay 150 → 300 → 450 → 600 ms), stepping back down after two quiet
+minutes; each step is one re-tune. On the rig, through a proxy holding the connection 300 to 600 ms every 2 s, the delay
+stepped to 600 ms and the late-frame reports stopped completely. `window.__audioDelay` and `state().audioDelay`
+(in `/api/diag`) show the steps and the counts.
+
+**The speaking ring and RNNoise were dead since 0.16.0.** The publish library moved the microphone into an
+`Audio.Capture` at 0.5.0; the own pane's analyser tap, the noise-removal chain and its watch still read the 0.4 field
+and got nothing, so the speaking ring never lit, the mic meter had no live tap, and every microphone went out raw
+without the background-noise removal the operator had switched on. All three read the capture now; the analyser's
+AudioContext is also resumed on the next gesture (an auto-join creates it suspended). `window.__ownAudio()` shows the
+tap, level, context state and denoise state per slot.
+
+**What to check on Southridge** (only that box can tell): `/api/diag` → `publisher.grids[].encoded` frame count and
+`encFlatS` (a steady encoder), `/api/relay/health` → `federation.link` drops and re-pins, the relay log for
+`cluster peer error`, and the box's CPU while OBS runs; a LinkTest between Southridge and Agg for loss and jitter. To
+get full quality from a Southridge camera, publish the cameras as well as the grid ("both"), with On demand and Low
+for thumbnails switched on per camera.
+
 ## v0.21.8 — the regression hunt: no restarts on a viewer's say-so, a fallback that stops asking, a fixed audio delay, the firewall check in under a second
 
 **What the 0.20.0 → 0.21.x hunt found.** Six readers went over every change in the window and two skeptics

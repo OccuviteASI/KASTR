@@ -2129,7 +2129,14 @@
   // estimate from shrinking the budget under the jitter; main/rail/grid ride 150 ms + 800 ms there.
   const WATCH_TUNING_WEB = { main: { delay: "150ms", buffer: "800ms" }, rail: { delay: "150ms", buffer: "800ms" }, grid: { delay: "150ms", buffer: "800ms" } };
   let WEB_RELAY_PAGE = false;   // applyState refreshes it from the relay address
-  const tuningFor = (cls) => (WEB_RELAY_PAGE && WATCH_TUNING_WEB[cls]) || WATCH_TUNING[cls] || WATCH_TUNING.rail;
+  // 0.21.9: the adaptive part -- audioDelayExtra (ms) is added to main/rail/grid delays while the player keeps reporting
+  // late audio frames (see window.__audioDelay below); never to `cell` (instant)
+  let audioDelayExtra = 0;
+  const tuningFor = (cls) => {
+    const base = (WEB_RELAY_PAGE && WATCH_TUNING_WEB[cls]) || WATCH_TUNING[cls] || WATCH_TUNING.rail;
+    if (!audioDelayExtra || cls === "cell") return base;
+    return { delay: (parseInt(base.delay, 10) || 150) + audioDelayExtra + "ms", buffer: base.buffer };
+  };
   window.__tuning = () => Object.fromEntries([...tiles].map(([n, t]) => [n, { cls: t.tune_cls, key: t.tune, delay: t.watch.getAttribute("delay"), buffer: t.watch.getAttribute("buffer"), rendition: t.rendition }]));   // rig
   const volumeInput = document.getElementById("volume");
   const muteBtn = document.getElementById("muteBtn");
@@ -4822,7 +4829,7 @@
         const cls = (isSelected && !gridMode && !selfSpotEl) ? "main"
                   : gridMeta.has(name) ? "grid"
                   : (isGridChild(name) && t.hasAudio === false) ? "cell" : "rail";
-        const tuneKey = cls + (WEB_RELAY_PAGE ? "@web" : "");
+        const tuneKey = cls + (WEB_RELAY_PAGE ? "@web" : "") + (audioDelayExtra ? "+" + audioDelayExtra : "");   // 0.21.9: re-tune on a step
         if (t.tune !== tuneKey) { const tn = tuningFor(cls); t.tune = tuneKey; t.watch.setAttribute("delay", tn.delay); t.watch.setAttribute("buffer", tn.buffer); }
         t.tune_cls = cls;
         // 0.18.0: thumbnails pull the -low.hang sibling when the publisher offers one; the spotlit tile the full stream
@@ -8190,6 +8197,42 @@
   // 0.21.7: count the library's "skipping slow group: track=<kind> a -> b" warnings per track kind. A skip drops
   // buffered media to catch up; on audio it used to flush the worklet ring and reset the sync clock (the clipping).
   window.__slowGroups = { audio: 0, video: 0, other: 0, lastAt: 0, recent: [] };
+  // 0.21.9: ADAPTIVE AUDIO DELAY. The player's sync logs `sync[audio]: N late frame(s), max Nms behind` (console.debug) when
+  // audio arrived after its play time -- each late frame is 20 ms of speech dropped, and a run of them is the crackle
+  // heard on a multi-hop path (app -> spoke -> hub -> tunnel host -> browser). The fixed 150 ms delay cannot know the
+  // upstream hops' jitter, so it adapts: three late-frame reports inside 20 s raise the audio tiles' delay one step
+  // (LAN 150 -> 250 -> 400 ms; web 150 -> 300 -> 450 -> 600 ms); two quiet minutes step it back down. Each step re-tunes
+  // the tiles once (one sync reset), so steps are rate-limited to one per 20 s.
+  window.__audioDelay = { extra: 0, steps: 0, late: 0, lateFrames: 0, recent: [], lastStepAt: 0, lastLateAt: 0, maxBehind: 0 };
+  const AUDIO_DELAY_STEPS_LAN = [0, 100, 250], AUDIO_DELAY_STEPS_WEB = [0, 150, 300, 450];
+  function audioLate(m) {
+    const ad = window.__audioDelay, now = Date.now();
+    const mm = /(\d+) late frame\(s\), max (\d+(?:\.\d+)?)\s*(ms|s)/.exec(m);
+    const n = mm ? Number(mm[1]) : 1, behind = mm ? Number(mm[2]) * (mm[3] === "s" ? 1000 : 1) : 0;
+    ad.late++; ad.lateFrames += n; ad.lastLateAt = now; ad.maxBehind = Math.max(ad.maxBehind, behind);
+    ad.recent.push(now); if (ad.recent.length > 100) ad.recent.splice(0, 50);
+    const steps = WEB_RELAY_PAGE ? AUDIO_DELAY_STEPS_WEB : AUDIO_DELAY_STEPS_LAN;
+    const idx = steps.indexOf(ad.extra);
+    if (ad.recent.filter((t) => now - t < 20000).length >= 3 && now - ad.lastStepAt > 20000 && idx >= 0 && idx < steps.length - 1) {
+      ad.extra = steps[idx + 1]; ad.steps++; ad.lastStepAt = now; ad.recent = [];
+      audioDelayExtra = ad.extra;
+      log("Audio arrived late " + n + "x (up to " + Math.round(behind) + " ms behind) \u2014 widening the audio delay by " + ad.extra + " ms");
+      try { applyState(); } catch {}
+    }
+  }
+  setInterval(() => {   // step back down after two quiet minutes
+    const ad = window.__audioDelay, now = Date.now();
+    if (!ad.extra || now - ad.lastLateAt < 120000 || now - ad.lastStepAt < 120000) return;
+    const steps = WEB_RELAY_PAGE ? AUDIO_DELAY_STEPS_WEB : AUDIO_DELAY_STEPS_LAN;
+    const idx = steps.indexOf(ad.extra);
+    ad.extra = idx > 0 ? steps[idx - 1] : 0; ad.lastStepAt = now; audioDelayExtra = ad.extra;
+    try { applyState(); } catch {}
+  }, 30000);
+  { const debug0 = console.debug.bind(console);
+    console.debug = (...a) => {
+      try { const m = String(a[0] ?? ""); if (m.startsWith("sync[audio]:") && m.includes("late frame")) audioLate(m); } catch {}
+      return debug0(...a);
+    }; }
   // 0.21.8: the library's reconnects ("connection closed, reconnecting" / "connection error"), counted. Every reconnect
   // re-subscribes to every tile at once and the relay answers with the latest group of each -- a burst for the whole
   // relay per reconnect. Three in a minute: say so. Six in a minute: the breaker parks every tile for 20 s.
@@ -9041,6 +9084,7 @@
       audioActive: [...tiles.entries()].filter(([, t]) => t.watch.muted === false).map(([n]) => n),
       netEvents: (() => { const ne = window.__netEvents || {}; return { reconnects: ne.reconnects || 0, lastMinute: (ne.recent || []).filter((t) => Date.now() - t < 60000).length, breaks: ne.breaks || 0 }; })(),   // 0.21.8
       slowGroups: { audio: window.__slowGroups?.audio || 0, video: window.__slowGroups?.video || 0 },   // 0.21.8
+      audioDelay: (() => { const ad = window.__audioDelay || {}; return { extra: ad.extra || 0, steps: ad.steps || 0, late: ad.late || 0, lateFrames: ad.lateFrames || 0, maxBehind: Math.round(ad.maxBehind || 0) }; })(),   // 0.21.9
       fallbackRetries: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.fbRetries).map(([n, t]) => [n, t.fbRetries()])),   // 0.21.8
       shown: [...tiles.entries()].filter(([, t]) => t.pane.classList.contains("shown")).map(([n]) => n),
       withCanvas: [...tiles.entries()].filter(([, t]) => t.canvas.isConnected).map(([n]) => n),
@@ -13738,7 +13782,11 @@
     return v && v.kind === "audio" && typeof v.getSettings === "function" ? v : null;
   }
   function rawMicTrack(slot) {
-    const cur = unwrapAudio(slot.publish.audio?.in?.source?.peek?.());
+    // 0.21.9: publish 0.5.0 keeps the microphone in the Capture (pubAud -> capture.in.source); the 0.4 field read here
+    // since 0.16.0 was always empty, so RNNoise never engaged and the watch below never armed -- every mic went out raw
+    let cur = null;
+    try { cur = unwrapAudio(pubAud(slot.publish)?.source?.peek?.()); } catch {}
+    if (!cur) { try { cur = unwrapAudio(slot.publish.audio?.in?.source?.peek?.()); } catch {} }
     if (cur && cur !== slot.dn?.processed && cur.readyState === "live") return cur;
     try { return unwrapAudio(slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()); } catch { return null; }
   }
@@ -13785,12 +13833,13 @@
     if (!restore) return;
     let live = null;
     try { live = unwrapAudio(slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()); } catch {}
+    if (!live) { try { const c = unwrapAudio(pubAud(slot.publish)?.source?.peek?.()); if (c && c !== v.processed) live = c; } catch {} }   // 0.21.9
     if (!live && v.raw.readyState === "live") live = v.raw;
     if (live) { try { pubAud(slot.publish)?.source.set({ track: live, kind: "voice" }); } catch {} }
     rearmSlotAudio(slot);
   }
   function armDenoiseWatch(slot) {
-    if (slot.dnWatch || !slot.publish.audio?.in?.source?.subscribe) return;
+    if (slot.dnWatch || !pubAud(slot.publish)?.source?.subscribe) return;   // 0.21.9: the capture's source signal (was the dead 0.4 field)
     slot.dnWatch = pubAud(slot.publish)?.source.subscribe(() => {
       if (micMode !== "rnnoise" || !slots.has(slot.entry.id)) return;
       const cur = unwrapAudio(pubAud(slot.publish)?.source.peek?.());
@@ -14662,8 +14711,15 @@
       return (x && x.kind === "audio" && typeof x.getSettings === "function") ? x : null;
     };
     let t = null;
-    try { t = unwrap(slot.publish.audio?.in?.source?.peek?.()); } catch {}
-    if (!t) { try { t = unwrap(slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()); } catch {} }
+    // 0.21.9: publish 0.5.0 (since 0.16.0) exposes the microphone as audio.in.capture -- the 0.4 name `source` returned
+    // nothing, so the own pane's speaking ring and the mic meter had no analyser since the library upgrade
+    // the Capture object wraps the track: capture.in.source (a MediaStreamTrack or MediaStream), like pubCap() for video
+    const cap = () => { try { return slot.publish.audio?.in?.capture?.peek?.() ?? slot.publish.audio?.capture?.peek?.() ?? null; } catch { return null; } };
+    for (const get of [() => cap()?.in?.source?.peek?.(), () => cap()?.source?.peek?.(), () => cap()?.in?.media?.peek?.(), () => cap()?.out?.source?.peek?.(), () => cap(),
+                       () => slot.publish.audio?.in?.source?.peek?.(), () => slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()]) {
+      try { t = unwrap(get()); } catch { t = null; }
+      if (t) break;
+    }
     return t;
   }
 
@@ -14676,6 +14732,7 @@
       if (!t || t === slot.tapTrack) return;
       try {
         ownAudioCtx = ownAudioCtx || new AudioContext();
+        if (ownAudioCtx.state === "suspended") ownAudioCtx.resume().catch(() => {});   // 0.21.9: an auto-join creates it without a gesture -> suspended -> zeros -> no speaking ring
         const ms = new MediaStream([t]);
         const an = ownAudioCtx.createAnalyser();
         an.fftSize = 256;
@@ -14692,6 +14749,20 @@
     tap();
     slot.audioPoll = setInterval(tap, 1000);
   }
+  // 0.21.9: what the speaking ring sees, per slot (rig + field: `window.__ownAudio()`)
+  window.__ownAudio = () => {
+    const out = [];
+    for (const slot of slots.values()) {
+      let level = null;
+      try { if (slot.analyser && slot.meterBuf) { slot.analyser.getFloatTimeDomainData(slot.meterBuf); let sum = 0; for (let i = 0; i < slot.meterBuf.length; i++) sum += slot.meterBuf[i] * slot.meterBuf[i]; level = Math.min(1, Math.sqrt(Math.sqrt(sum / slot.meterBuf.length) * 2)); } } catch {}
+      let track = null; try { const t = ownAudioTrack(slot); track = t ? { label: t.label, state: t.readyState, muted: t.muted, enabled: t.enabled } : null; } catch (e) { track = String(e); }
+      out.push({ id: slot.entry?.id, kind: slot.entry?.kind, analyser: !!slot.analyser, tapped: !!slot.tapTrack, track, level, micMuted: !!slot.entry?.micMuted, talking: slot.pane?.classList.contains("talking") || false, talkUntil: slot.talkUntil || 0,
+                 denoise: !!slot.dn, denoiseWatch: !!slot.dnWatch });
+    }
+    return { ctx: ownAudioCtx ? ownAudioCtx.state : null, micMode: (typeof micMode === "string" ? micMode : null), slots: out };
+  };
+  // 0.21.9: the analyser context resumes on the next gesture too (the browser suspends a context made without one)
+  for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => { try { if (ownAudioCtx && ownAudioCtx.state === "suspended") ownAudioCtx.resume().catch(() => {}); } catch {} }, { passive: true });
   setInterval(() => {
     const now = performance.now();
     let anyLoud = false;   // 0.12.0: feeds the room-wide speaking announce

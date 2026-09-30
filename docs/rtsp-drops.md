@@ -66,6 +66,14 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## Seen from the tunnel (0.21.9)
+
+`scratchpad/v0219/../v0218/pw_field.py <host> <viewer code> --room <slug> [--open <substring>]` joins as a viewer and prints,
+per tile, the frames delivered per second and the longest gaps over the sample, the rendition and tuning, the audio sync
+state (`delay`, `jitter`, `maxAge`, `stalled`) and every console line about audio. Frames arriving in clusters at the
+encoder's spacing with multi-second holes between them (Southridge, 2026-09-30) point at the link into the hub; a steady
+low rate points at the encoder; `sync[audio]: N late frame(s)` lines are the dropped speech behind "static".
+
 ## Viewer reports (0.21.8)
 
 A stall report from a viewer is a hint about that viewer's path, never an order. Since 0.21.8 the lines to look for:

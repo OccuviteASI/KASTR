@@ -414,6 +414,14 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.9
+
+| Area | Requirement | Since |
+|---|---|---|
+| W/A | Adaptive audio delay: `console.debug` is wrapped once; `sync[audio]: N late frame(s), max Xms behind` lines feed `audioLate()`; three reports within 20 s (and 20 s since the last step) raise `audioDelayExtra` one step (`AUDIO_DELAY_STEPS_LAN = [0, 100, 250]`, `AUDIO_DELAY_STEPS_WEB = [0, 150, 300, 450]` ms on top of the 150 ms base); 120 s without a late report steps down; `tuningFor(cls)` adds the extra to main/rail/grid (never `cell`) and the tune key carries it (`main@web+300`) so `applyState` re-tunes once per step. `window.__audioDelay {extra, steps, late, lateFrames, recent, lastStepAt, lastLateAt, maxBehind}`; `state().audioDelay` rides `/api/diag`. | 0.21.9 |
+| PUB/A | `ownAudioTrack(slot)` descends into publish 0.5.0's `Audio.Capture` (`audio.in.capture.peek().in.source`, with the older shapes as fallbacks); `rawMicTrack`, `armDenoiseWatch` and `stopDenoise` read `pubAud(slot.publish).source` — the speaking ring, the mic meter's live tap and RNNoise engage again. The analyser's `ownAudioCtx` is resumed in `tap()` and on the next pointer/key when suspended. | 0.21.9 |
+| T | `window.__ownAudio()` → `{ctx, micMode, slots: [{id, kind, analyser, tapped, track {label, state, muted, enabled}, level, micMuted, talking, talkUntil, denoise, denoiseWatch}]}`. Rigs: `scratchpad/v0219/pw_adapt.py` (hiccup proxy → the delay steps, late reports stop), `pw_ring.py` (the tap attaches), `v0218/pw_field.py <host> <viewer code>` (a read-only field observation: rooms, members, per-tile frame delivery, audio sync state, console). | 0.21.9 |
+
 ### Added in 0.21.8
 
 | Area | Requirement | Since |

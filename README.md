@@ -29,6 +29,10 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.9 the audio delay adapts to the path (it widens while the player reports late frames and relaxes when they stop),
+the speaking ring, the mic meter's live tap and the RNNoise noise removal work again (they had read a field the 0.16.0 library
+upgrade moved), and a scripted field viewer measures what a tunnel viewer actually receives.
+
 Since 0.21.8 a viewer's stall report no longer restarts a healthy RTSP pair, rebuilds a speaker's camera or evicts a
 grid member without the source's own evidence (a secured relay gives none, and one starving remote viewer was cutting
 every Mendon and Southridge camera for everyone every 45 s), audio rides a fixed 150 ms delay on the LAN too, the fMP4

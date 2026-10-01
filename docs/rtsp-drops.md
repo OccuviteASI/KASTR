@@ -66,6 +66,14 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## The push that went nowhere (0.21.14)
+
+Page visible, encoder frozen: the hidden-window push was being made on the pacer's generator track, which has no
+`requestFrame()`, so a covered or minimised window (which still reads "visible" under the app's backgrounding flags)
+got no frames at all. Since 0.21.14 the push reaches the capture behind the pacer and `/api/diag` shows
+`publisher.restamp.pushes` climbing whenever the automatic capture is silent. The signature on 0.21.12 or 0.21.13:
+`encoded.frames` flat, `visibility` visible, no `restamp` field in the diag.
+
 ## Frames in batches (0.21.13)
 
 With the clock fixed the picture stayed frozen: a hidden document hands its captured frames over in batches, and both

@@ -29,6 +29,9 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.14 the hidden-window frame push reaches the capture track behind the pacer (a generator track has no
+`requestFrame`), and `/api/diag` carries the pacer's counters.
+
 Since 0.21.13 that re-stamp is a pacer: a hidden window hands its captured frames over in batches, and they now leave one per
 frame interval, so viewers see continuous video (a little later) instead of one picture every two seconds.
 

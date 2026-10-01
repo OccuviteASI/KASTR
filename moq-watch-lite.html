@@ -12129,6 +12129,7 @@
   }
 
   window.__rtspRerender = () => { try { renderSources(); } catch {} };   // 0.21.10: module 1 learned the host's switch after the first paint
+  window.__rigRebuildGrid = () => { let n = 0; for (const g of rtspGrids.values()) { rebuildRtspMoq(g); n++; } return n; };   // rig: force the grid's self-heal rebuild
   function renderSources() {
     camrowsEl.replaceChildren();
     for (const a of added) {
@@ -13736,7 +13737,7 @@
         }
       }
       b.lastStep = performance.now();   // (`now` above is block-scoped to the drawing branch)
-      if (fromTimer || document.visibilityState !== "visible") { try { b.processed?.requestFrame?.(); } catch {} }   // 0.21.11: a hidden document stops the automatic capture
+      if (fromTimer || document.visibilityState !== "visible") pushCaptureFrame(b.processed);   // 0.21.11 / 0.21.14: a hidden document stops the automatic capture
       if (!fromTimer) { if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => step(false)); else requestAnimationFrame(() => step(false)); }
     };
     step(false);
@@ -14185,7 +14186,7 @@
       const th = slot.entry.shareH && slot.entry.shareH < h ? slot.entry.shareH : h;
       const tw = th === h ? w : 2 * Math.round(w * th / h / 2);
       if (cv.width !== tw || cv.height !== th) { cv.width = tw; cv.height = th; }
-      try { cx.drawImage(v, 0, 0, tw, th); drawStamp(cx, tw, th); vtrack.requestFrame?.(); } catch {}   // 0.18.0: + stamp
+      try { cx.drawImage(v, 0, 0, tw, th); drawStamp(cx, tw, th); pushCaptureFrame(vtrack); } catch {}   // 0.18.0: + stamp
     };
     const draw = () => {
       if (!m.alive) return;
@@ -14206,7 +14207,7 @@
       } catch (e) { log("File audio: " + (e?.message || e)); }
       try { pubCap(slot.publish)?.in?.source.set(vtrack); } catch {}
       // a still frame before play so viewers get a picture immediately
-      try { if (v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); vtrack.requestFrame?.(); } } catch {}
+      try { if (v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); pushCaptureFrame(vtrack); } } catch {}
       if (rs.paused) {   // 0.16.0: rebuilt while paused -> stay paused, right where it was (a heal used to restart from 0, playing)
         m.userPaused = true; m.wantPlay = false; if (m.stream) m.rebuffering = true;
         log("Media share restored paused at " + (Math.round((rs.t || 0) * 10) / 10) + " s");
@@ -15195,7 +15196,7 @@
     // the encoder has not advanced in 1.5 s although we are drawing. While visible and flowing nothing changes.
     const hidden = document.visibilityState !== "visible";
     if (hidden !== !!g.wasHidden) { g.wasHidden = hidden; gridNote(g, hidden ? "window hidden -- composite frames pushed by the timer" : "window visible again"); }
-    if (hidden || gridEncStarved(g)) { try { g.moq?.track?.requestFrame?.(); } catch {} }
+    if (hidden || gridEncStarved(g)) pushCaptureFrame(g.moq?.track);   // 0.21.14: to the capture behind the pacer
   }
   function gridCellAt(g, ev) {
     const b = g.canvas.getBoundingClientRect();
@@ -15384,6 +15385,14 @@
   // clock as it leaves. Steady delivery passes with at most one interval of delay; a batch plays out as continuous
   // video delayed by the batch's own span; a queue longer than two seconds drops its oldest. The generator reports
   // the capture's settings (size, frame rate) so the library sizes its encoder as before.
+  // 0.21.14: push a captured frame. Since 0.21.12 the track the graph holds is the pacer's generator, which has no
+  // requestFrame(): a push there is a silent no-op, and a covered or minimised window -- whose automatic capture is
+  // silent -- froze the composite although the page read 'visible'. The push goes to the capture track behind it.
+  function pushCaptureFrame(track) {
+    const t = track?.__source || track;
+    try { if (t?.requestFrame) { t.requestFrame(); if (window.__restamp) window.__restamp.pushes++; return true; } } catch {}
+    return false;
+  }
   function restampCaptureTrack(track0) {
     try {
       if (!window.MediaStreamTrackGenerator || !window.MediaStreamTrackProcessor || typeof VideoFrame === "undefined") return track0;
@@ -15392,7 +15401,7 @@
       const reader = proc.readable.getReader(), writer = gen.writable.getWriter();
       let fps = 15; try { fps = Number(track0.getSettings().frameRate) || 15; } catch {}
       const stepMs = 1000 / fps, stepUs = Math.round(1e6 / fps), MAXQ = Math.max(4, Math.round(fps * 2));
-      const st = (window.__restamp = window.__restamp || { in: 0, out: 0, dropped: 0, lastOrig: 0, lastNew: 0, origDelta: 0, lag: 0, gapMax: 0, burstMax: 0, burst: 0, lastArrive: 0, qMax: 0, held: 0 });
+      const st = (window.__restamp = window.__restamp || { in: 0, out: 0, dropped: 0, lastOrig: 0, lastNew: 0, origDelta: 0, lag: 0, gapMax: 0, burstMax: 0, burst: 0, lastArrive: 0, qMax: 0, held: 0, pushes: 0 });
       const q = []; let last = 0, alive = true;
       (async () => {
         try {
@@ -15426,7 +15435,7 @@
       gen.getSettings = () => { try { return track0.getSettings(); } catch { return {}; } };
       const stop0 = gen.stop.bind(gen);
       gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close(); } catch {} stop0(); };
-      gen.__restamped = true;
+      gen.__restamped = true; gen.__source = track0;   // 0.21.14: requestFrame() must reach the CAPTURE track -- a generator has none
       return gen;
     } catch { return track0; }
   }
@@ -17490,6 +17499,7 @@
         trackFps: (() => { try { return pubCap(s.publish)?.in?.source.peek()?.getSettings?.().frameRate ?? null; } catch { return null; } })(),
       }),
       // 0.21.5: the grids (composited + encoded in this page) -- what launch.log alone cannot see
+      restamp: (window.__restamp ? { ...window.__restamp, heldQ: undefined } : null),   // 0.21.14: the pacer's counters (in/out/dropped/qMax/burstMax/gapMax)
       grids: [...rtspGrids.values()].map((g) => ({
         id: g.id, name: g.name || null, path: chanPath(ensureHang(g.entry.name)),
         members: (g.members || []).map((m2) => m2?.entry?.name ?? null), evicted: (g.evicted || []).map((e) => e?.name ?? e?.id ?? e),

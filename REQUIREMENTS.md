@@ -414,6 +414,12 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.14
+
+| Area | Requirement | Since |
+|---|---|---|
+| W/PUB | `pushCaptureFrame(track)`: calls `requestFrame()` on `track.__source || track` (the capture behind a paced generator; `restampCaptureTrack` sets `gen.__source = track0`) and counts `window.__restamp.pushes`; used by `drawRtspGrid` (hidden or starved), the fx `step()` (timer clock or hidden) and the file-share `drawOnce` / first still. `window.__publisher.state().restamp` = the pacer's counters (`heldQ` stripped) → `/api/diag publisher.restamp`. `window.__rigRebuildGrid()` forces `rebuildRtspMoq` on every grid (rig). | 0.21.14 |
+
 ### Added in 0.21.13
 
 | Area | Requirement | Since |

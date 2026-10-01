@@ -913,6 +913,15 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.14
+
+- **When you wrap an object, re-check every method the code calls on it.** The pacer replaced a capture track with a
+  generator and kept the name; the one method the hidden-window fix relied on was not there, and optional chaining
+  turned the loss into silence. A bench with its window visible never exercises the branch; the field box with a
+  covered window exercises nothing else.
+- **Diagnostics must carry the new moving part.** Three field bundles went by before the pacer's counters were in the
+  diag. The question "is the pacer running?" should have cost one read, not a release.
+
 ### 0.21.13
 
 - **Reproduce the delivery, not just the clock.** 0.21.12 fixed the timestamps and changed nothing for viewers because

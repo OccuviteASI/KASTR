@@ -2,6 +2,29 @@
 
 What changed in each build, newest first.
 
+## v0.21.14 — the push that went nowhere: a generator track has no requestFrame
+
+**Southridge on 0.21.13, from its own diag.** Page 0.21.13, window reported visible, composite encoder frozen at 5362
+frames with no growth in twenty seconds. Not a hidden-capture problem any more, and the harness could not reproduce it:
+on the bundled browser the stream played through batched delivery, a spoofed hidden page, a publisher restart and two
+forced grid rebuilds. The fault was in 0.21.12's own change. The 0.21.11 fix pushes a frame with `requestFrame()` on
+the grid's track whenever the window is hidden or the encoder has stalled; since 0.21.12 that track is the pacer's
+`MediaStreamTrackGenerator`, which has no `requestFrame()` (checked in the bundled browser: a canvas capture track has
+it, a generator does not), so every push since 0.21.12 was a silent no-op. A window that is covered or minimised reads
+"visible" under the app's own backgrounding flags while its automatic canvas capture stays silent, so the starved
+check fired, the push did nothing and the encoder froze — on Southridge within minutes of each start.
+
+**The fix.** One helper, `pushCaptureFrame(track)`, sends the push to the capture track behind a paced track (the
+generator now remembers its source) and counts it in `window.__restamp.pushes`; the grid, the camera-effects composite
+and the file share all use it. `/api/diag` now carries `publisher.restamp` (frames in and out, dropped, queue depth,
+burst size, pushes) so the field shows the pacer's state without a console. A rig hook `window.__rigRebuildGrid()`
+forces the grid's self-heal rebuild.
+
+**Verified on the dev harness, bundled Chrome for Testing 153.** Pushes land only while the page is hidden or starved
+(213 during a 12 s hidden phase, none while visible and flowing); encoder and viewer 14 to 15 fps in every phase. The
+genuinely covered window is Southridge's to confirm: `publisher.grids[0].encoded.frames` growing while
+`publisher.restamp.pushes` climbs.
+
 ## v0.21.13 — the pacer: a hidden window's frames arrive in batches, and now leave one at a time
 
 **Southridge on 0.21.12, read at the tunnel.** The re-stamp was active (the composite's frames now carried the page's

@@ -15376,33 +15376,56 @@
     if (backToGrid && g.pane?.isConnected) window.__selfSpot?.(g.pane);
     else window.__relayout?.();
   }
-  // 0.21.12: frames a hidden document pushes into a canvas capture (requestFrame while minimised, locked or behind
-  // another tab) all carry the timestamp of the LAST VISIBLE PAINT -- the Southridge composite reached viewers at
-  // 15 fps with one frozen timestamp and the player never advanced. Re-stamp every captured frame with the wall
-  // clock on its way to the encoder; the track keeps the capture's settings (size, frame rate) for the library.
+  // 0.21.12/0.21.13: frames a hidden document pushes into a canvas capture (requestFrame while minimised, locked or
+  // behind another tab) carry the timestamp of the LAST VISIBLE PAINT and are handed over in BATCHES -- Southridge's
+  // composite reached viewers at 15 fps with one frozen timestamp, and once re-stamped at arrival a whole batch sat
+  // within microseconds, so the library kept one frame per batch and viewers saw one picture every two seconds.
+  // This pass is a PACER: captured frames queue, and a timer releases one per frame interval stamped with the wall
+  // clock as it leaves. Steady delivery passes with at most one interval of delay; a batch plays out as continuous
+  // video delayed by the batch's own span; a queue longer than two seconds drops its oldest. The generator reports
+  // the capture's settings (size, frame rate) so the library sizes its encoder as before.
   function restampCaptureTrack(track0) {
     try {
       if (!window.MediaStreamTrackGenerator || !window.MediaStreamTrackProcessor || typeof VideoFrame === "undefined") return track0;
       const gen = new MediaStreamTrackGenerator({ kind: "video" });
       const proc = new MediaStreamTrackProcessor({ track: track0 });
-      let last = 0;
-      const st = (window.__restamp = window.__restamp || { in: 0, out: 0, lastOrig: 0, lastNew: 0, origDelta: 0, lag: 0 });
-      proc.readable.pipeThrough(new TransformStream({
-        transform(frame, ctl) {
-          st.in++; st.origDelta = frame.timestamp - st.lastOrig; st.lastOrig = frame.timestamp;
-          let ts = Math.round(performance.now() * 1000);
-          st.lag = ts - frame.timestamp;
-          if (ts <= last) ts = last + 1;
-          last = ts;
-          let f2 = null;
-          try { f2 = new VideoFrame(frame, { timestamp: ts, duration: frame.duration ?? undefined }); } catch { f2 = null; }
-          try { frame.close(); } catch {}
-          if (f2) { st.out++; st.lastNew = ts; ctl.enqueue(f2); }
-        },
-      })).pipeTo(gen.writable).catch(() => {});
-      gen.getSettings = () => { try { return track0.getSettings(); } catch { return {}; } };   // the library sizes its encoder from these
+      const reader = proc.readable.getReader(), writer = gen.writable.getWriter();
+      let fps = 15; try { fps = Number(track0.getSettings().frameRate) || 15; } catch {}
+      const stepMs = 1000 / fps, stepUs = Math.round(1e6 / fps), MAXQ = Math.max(4, Math.round(fps * 2));
+      const st = (window.__restamp = window.__restamp || { in: 0, out: 0, dropped: 0, lastOrig: 0, lastNew: 0, origDelta: 0, lag: 0, gapMax: 0, burstMax: 0, burst: 0, lastArrive: 0, qMax: 0, held: 0 });
+      const q = []; let last = 0, alive = true;
+      (async () => {
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done || !alive) { try { value?.close(); } catch {} break; }
+            st.in++; st.origDelta = value.timestamp - st.lastOrig; st.lastOrig = value.timestamp;
+            const nowMs = performance.now();
+            if (st.lastArrive) { const gap = nowMs - st.lastArrive; st.gapMax = Math.max(st.gapMax, gap); st.burst = gap < 5 ? st.burst + 1 : 0; st.burstMax = Math.max(st.burstMax, st.burst); }
+            st.lastArrive = nowMs; st.lag = Math.round(nowMs * 1000) - value.timestamp;
+            if (window.__restampDelayMs) {   // rig: hold frames and hand them over in a batch, like a hidden document does
+              st.heldQ = st.heldQ || []; st.heldQ.push([value, nowMs]); st.held = st.heldQ.length;
+              if (nowMs - st.heldQ[0][1] < window.__restampDelayMs) continue;
+              for (const [fr] of st.heldQ) q.push(fr); st.heldQ = []; st.held = 0;
+            } else q.push(value);
+            while (q.length > MAXQ) { try { q.shift().close(); } catch {} st.dropped++; }
+            st.qMax = Math.max(st.qMax, q.length);
+          }
+        } catch {}
+      })();
+      const tick = () => {
+        if (!alive || !q.length) return;
+        const fr = q.shift();
+        let ts = Math.round(performance.now() * 1000); if (ts <= last) ts = last + 1; last = ts;
+        let f2 = null;
+        try { f2 = new VideoFrame(fr, { timestamp: ts, duration: stepUs }); } catch { f2 = null; }
+        try { fr.close(); } catch {}
+        if (f2) { st.out++; st.lastNew = ts; writer.write(f2).catch(() => {}); }
+      };
+      const timer = setInterval(tick, stepMs);   // the app window runs without timer throttling
+      gen.getSettings = () => { try { return track0.getSettings(); } catch { return {}; } };
       const stop0 = gen.stop.bind(gen);
-      gen.stop = () => { try { track0.stop(); } catch {} stop0(); };
+      gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close(); } catch {} stop0(); };
       gen.__restamped = true;
       return gen;
     } catch { return track0; }

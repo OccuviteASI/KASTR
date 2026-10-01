@@ -2,6 +2,26 @@
 
 What changed in each build, newest first.
 
+## v0.21.13 — the pacer: a hidden window's frames arrive in batches, and now leave one at a time
+
+**Southridge on 0.21.12, read at the tunnel.** The re-stamp was active (the composite's frames now carried the page's
+own clock) and the picture was still frozen: the viewer decoded about one frame every two seconds — the keyframe
+cadence — with a stalled buffer. The dev harness reproduced it once the captured frames were held and handed over in
+batches: stamped at arrival, a whole batch sits within microseconds, and the publish library keeps one frame per
+batch; spread across the frame interval instead, the earlier frames of a batch are stamped in the past and the library
+drops them as late. A hidden document does hand its captured frames over in batches, so neither re-stamp could work.
+
+**The fix.** The re-stamp pass is now a pacer: captured frames queue, and a timer releases one per frame interval,
+stamped with the wall clock as it leaves. Steady delivery passes with at most one interval of delay; a batch plays out
+as continuous video delayed by its own span; a queue longer than two seconds drops its oldest frames.
+`window.__restamp` adds `qMax`, `dropped`, `gapMax` and `burstMax` so a box can show whether its capture arrives in
+batches.
+
+**Verified on the dev harness (two browsers).** With frames held for 1.5 s and released in batches, the encoder
+produced 14.5 fps and a viewer received 14.4 fps of distinct frames, no drops, where 0.21.12 produced 1.2 fps; visible
+and spoofed-hidden delivery stayed at 14 to 15 fps. The genuinely hidden case is Southridge's to confirm at the tunnel:
+distinct frame timestamps advancing and a buffered range wider than a point.
+
 ## v0.21.12 — frames with a frozen clock: every canvas composite re-stamps what it captures
 
 **Southridge on 0.21.11, read at the tunnel and on the box.** The 0.21.11 push worked as built: the composite's encoder

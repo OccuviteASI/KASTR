@@ -913,6 +913,15 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.13
+
+- **Reproduce the delivery, not just the clock.** 0.21.12 fixed the timestamps and changed nothing for viewers because
+  the frames also arrived in batches; the harness only showed it once the rig held frames and released them together.
+  When a fix proven on the bench does nothing in the field, the bench is missing a property of the field.
+- **A library's drop rules are part of the contract.** Frames stamped in the past are late and frames stamped too close
+  are too fast; a batch violates one or the other. The only stamping that satisfies both is one that releases frames at
+  the rate they claim.
+
 ### 0.21.12
 
 - **A frame has two parts, and the field can lose either.** 0.21.11 proved the pictures were being produced while

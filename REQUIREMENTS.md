@@ -414,6 +414,12 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.13
+
+| Area | Requirement | Since |
+|---|---|---|
+| W/PUB | `restampCaptureTrack` is a pacer: a reader drains the capture's `MediaStreamTrackProcessor` into a queue (capped at two seconds of frames, oldest dropped, `dropped` counted); a `setInterval(1000/fps)` tick writes one frame per interval to the `MediaStreamTrackGenerator`, re-created with `timestamp = now` (strictly increasing) and `duration = 1/fps`; `gen.stop()` stops the timer, the reader, the capture and the writer. `window.__restamp {in, out, dropped, qMax, gapMax, burstMax, lag, held}`; the rig knob `window.__restampDelayMs` holds frames to simulate batched delivery. | 0.21.13 |
+
 ### Added in 0.21.12
 
 | Area | Requirement | Since |

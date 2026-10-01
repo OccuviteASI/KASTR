@@ -66,6 +66,13 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## Frames in batches (0.21.13)
+
+With the clock fixed the picture stayed frozen: a hidden document hands its captured frames over in batches, and both
+ways of stamping a batch lose it (within microseconds the library keeps one frame; spread backwards the early ones are
+late). Since 0.21.13 the frames queue and leave one per frame interval. The signature: viewer decoding about one frame per
+keyframe interval with a stalled buffer while the publisher's `window.__restamp.burstMax` is large.
+
 ## Frames with a frozen clock (0.21.12)
 
 The follow-up to the dark grid: with 0.21.11 the hidden window kept producing frames, and the viewers still saw nothing.

@@ -2,6 +2,30 @@
 
 What changed in each build, newest first.
 
+## v0.21.12 — frames with a frozen clock: every canvas composite re-stamps what it captures
+
+**Southridge on 0.21.11, read at the tunnel and on the box.** The 0.21.11 push worked as built: the composite's encoder
+produced frames at 15 fps with the window hidden, and the box's own grid events said `window hidden -- composite frames
+pushed by the timer`. The viewers still saw nothing. The probe at the tunnel showed why: the composite's frames arrived at
+about 15 fps, in H.264, with every frame carrying the **same timestamp** — the player's buffered range was a single
+point — while Mendon's composite arrived with advancing timestamps and played. A frame pushed into a canvas capture from
+a hidden document is stamped with the time of the last visible paint, so the pictures were new and the clock was frozen,
+and no player advances on a frozen clock. That was also yesterday's "bursts and holes": a visible window for a few
+seconds, then frozen frames.
+
+**The fix.** Every canvas composite — the RTSP grid, the camera-effects composite and the file share — now feeds the
+encoder through a re-stamping pass: a `MediaStreamTrackProcessor` reads the captured frames, each is re-created with the
+wall clock as its timestamp (monotonic, never repeating) and written to a `MediaStreamTrackGenerator` the library
+encodes from; the generator reports the capture's settings so the encoder is sized as before. Browsers without those
+interfaces keep the plain capture track. `window.__restamp` counts frames in and out and shows the gap between the
+capture's clock and the page's.
+
+**Verified on the dev harness (two browsers).** With the pass in place a viewer received 14.0 fps visible, 14.2 fps with
+the publisher page told it was hidden, and 14.6 fps restored — identical to the encoder's output — with every frame
+re-stamped and none dropped; the capture's clock sat a constant 11 s off the page's, which is why re-stamping is
+harmless while visible. The genuinely frozen clock is Southridge's to confirm: the tunnel viewer's distinct frame
+timestamps must advance while that window is hidden.
+
 ## v0.21.11 — the grid that drew into the dark: a hidden window no longer stops the composite, monitors follow the publisher's passthrough
 
 **From the Southridge box's own diagnostics (2026-10-01, 0.21.10).** The grid composite's encoder had produced zero

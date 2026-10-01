@@ -414,6 +414,12 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.12
+
+| Area | Requirement | Since |
+|---|---|---|
+| W/PUB | `restampCaptureTrack(track0)`: when `MediaStreamTrackGenerator`, `MediaStreamTrackProcessor` and `VideoFrame` exist, every canvas capture track the page hands the publish library (RTSP grid `captureStream(15)`, camera fx `captureStream(30)`, file share `captureStream(capFps)`) is read by a processor, each frame re-created with `timestamp = round(performance.now() * 1000)` (strictly increasing) and the original's duration, written to a generator whose `getSettings()` returns the capture's settings and whose `stop()` stops the capture too; otherwise the plain track is used. `window.__restamp {in, out, lastOrig, lastNew, origDelta, lag}`. | 0.21.12 |
+
 ### Added in 0.21.11
 
 | Area | Requirement | Since |

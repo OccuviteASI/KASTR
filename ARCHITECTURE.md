@@ -913,6 +913,15 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.12
+
+- **A frame has two parts, and the field can lose either.** 0.21.11 proved the pictures were being produced while
+  hidden and stopped there; the clock had frozen with the window and the player, correctly, refused to advance. Read
+  the stream where it is consumed, not only where it is made: the viewer's buffered range told the whole story in one
+  number.
+- **Own the clock you publish.** A capture stream's timestamps belong to the compositor; a composite that must survive
+  the window being hidden stamps its own frames from a clock it controls.
+
 ### 0.21.11
 
 - **A counter that reads zero is not "advancing".** The liveness rule treated the first sample as movement and told

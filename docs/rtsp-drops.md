@@ -66,6 +66,14 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## Frames with a frozen clock (0.21.12)
+
+The follow-up to the dark grid: with 0.21.11 the hidden window kept producing frames, and the viewers still saw nothing.
+At the tunnel the composite arrived at 15 fps with one timestamp on every frame — the player's buffered range was a single
+point — because a frame pushed from a hidden document inherits the clock of the last visible paint. Since 0.21.12 the
+composites re-stamp their frames with the page's clock. The signature on an older build: `w.video.out.stats.frameCount`
+climbing at the viewer while `w.video.out.frame.peek().timestamp` never changes and `buffered` is one point.
+
 ## The grid that drew into the dark (0.21.11)
 
 A relay box whose grid every viewer saw frozen, while its cameras, pairs and hub link were all healthy: `/api/diag`

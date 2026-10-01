@@ -13620,7 +13620,7 @@
     const maskCv = document.createElement("canvas");
     const mx = maskCv.getContext("2d");
     const out = cv.captureStream(30);
-    const processed = out.getVideoTracks()[0];
+    const processed = restampCaptureTrack(out.getVideoTracks()[0]);   // 0.21.12
     const fx0 = fx || slot.entry.fx || { bg: { mode: "blur", url: "" } };
     const b = { alive: true, raw, video, processed, fx: fx0, img: null, vid: null, bgKey: "", missTold: "",
                 seg, quality: fx0.quality === "best" ? "best" : "balanced", segGen: 0,
@@ -14152,7 +14152,7 @@
     // 0.16.0: the composite follows the FILE's frame rate (capped at 30): a 24 fps movie drawn at
     // 30 asked the encoder for six duplicate frames a second -- pure CPU for nothing
     const capFps = Math.min(30, Math.max(5, Math.round(Number(entry.fps) || 30)));
-    const stream = cv.captureStream(capFps); const vtrack = stream.getVideoTracks()[0];
+    const stream = cv.captureStream(capFps); const vtrack = restampCaptureTrack(stream.getVideoTracks()[0]);   // 0.21.12
     const m = { video: v, canvas: cv, cx, vtrack, url, actx: null, atrack: null, alive: true, lastAnn: 0, annT: null, capFps };
     slot.media = m;
     v.addEventListener("ended", () => { if (slot.media === m && m.alive && !m.stream && !v.loop) mediaFinished(slot); });   // 0.16.0
@@ -15376,6 +15376,37 @@
     if (backToGrid && g.pane?.isConnected) window.__selfSpot?.(g.pane);
     else window.__relayout?.();
   }
+  // 0.21.12: frames a hidden document pushes into a canvas capture (requestFrame while minimised, locked or behind
+  // another tab) all carry the timestamp of the LAST VISIBLE PAINT -- the Southridge composite reached viewers at
+  // 15 fps with one frozen timestamp and the player never advanced. Re-stamp every captured frame with the wall
+  // clock on its way to the encoder; the track keeps the capture's settings (size, frame rate) for the library.
+  function restampCaptureTrack(track0) {
+    try {
+      if (!window.MediaStreamTrackGenerator || !window.MediaStreamTrackProcessor || typeof VideoFrame === "undefined") return track0;
+      const gen = new MediaStreamTrackGenerator({ kind: "video" });
+      const proc = new MediaStreamTrackProcessor({ track: track0 });
+      let last = 0;
+      const st = (window.__restamp = window.__restamp || { in: 0, out: 0, lastOrig: 0, lastNew: 0, origDelta: 0, lag: 0 });
+      proc.readable.pipeThrough(new TransformStream({
+        transform(frame, ctl) {
+          st.in++; st.origDelta = frame.timestamp - st.lastOrig; st.lastOrig = frame.timestamp;
+          let ts = Math.round(performance.now() * 1000);
+          st.lag = ts - frame.timestamp;
+          if (ts <= last) ts = last + 1;
+          last = ts;
+          let f2 = null;
+          try { f2 = new VideoFrame(frame, { timestamp: ts, duration: frame.duration ?? undefined }); } catch { f2 = null; }
+          try { frame.close(); } catch {}
+          if (f2) { st.out++; st.lastNew = ts; ctl.enqueue(f2); }
+        },
+      })).pipeTo(gen.writable).catch(() => {});
+      gen.getSettings = () => { try { return track0.getSettings(); } catch { return {}; } };   // the library sizes its encoder from these
+      const stop0 = gen.stop.bind(gen);
+      gen.stop = () => { try { track0.stop(); } catch {} stop0(); };
+      gen.__restamped = true;
+      return gen;
+    } catch { return track0; }
+  }
   function buildRtspGrid(id) {   // 0.15.0: one composite per grid id
     const gid = String(id || "1");
     const cv = document.createElement("canvas");
@@ -15394,7 +15425,7 @@
     pane.appendChild(bar);
     pane.appendChild(cv);
     stageEl.appendChild(pane);
-    const track = cv.captureStream(15).getVideoTracks()[0];
+    const track = restampCaptureTrack(cv.captureStream(15).getVideoTracks()[0]);   // 0.21.12: advancing timestamps while hidden
     const layout = gridPref(gid, "layout", "auto") || "auto";   // 0.15.0: per grid (grid "1" reads the legacy key)
     const g = {
       id: gid, name: gridNameOf(gid),   // 0.15.0

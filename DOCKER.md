@@ -92,6 +92,7 @@ kastr:0.13.1 --diagnose /dev/stdout`).
 | `KASTR_RELAY` | `http://127.0.0.1:4443` | `relay =` -- the relay the pages use and, when it is another machine, the version authority the box follows |
 | `KASTR_PORT` | `8000` | `--port` of the web UI (also the healthcheck) |
 | `KASTR_UPDATE` | `on` | `update =`: `off` disables the in-app update (registry pulls only) |
+| `KASTR_ONDEMAND` | unset | read by KASTR itself, not written to kastr.ini: `1` re-enables on-demand pairs and low copies (off by default since 0.21.10) |
 | `KASTR_IMAGE` | `kastr:local` | compose only: which image to run |
 | `TZ` | `UTC` | log timestamps |
 

@@ -54,7 +54,7 @@ Since 0.21.7 the spoke reads its relay's log for that link and writes:
 
 - **launch.log** `relay federation: cluster link to <hub> up (… connected peer=…)` / `… down (… cluster peer error …)`,
   one line per transition, plus `relay federation: hub relayed a viewer's demand for <camera> -> woken here | not
-  registered here` when a viewer elsewhere opens an on-demand camera, and `relay federation: hub unreachable -- keeping
+  registered here` when a viewer elsewhere opens an on-demand camera (only with `ondemand = on` since 0.21.10), and `relay federation: hub unreachable -- keeping
   the stored certificate pin (no restart)` once per hub outage.
 - **`/api/relay/status`** (loopback) and **`/api/relay/health`** → `federation.link {up, since, changedAt, drops, repins,
   last}` and `federation.hubSees {nodes, sessions, seesYou}` (what the hub's relay reports of its cluster when the spoke
@@ -65,6 +65,14 @@ Since 0.21.7 the spoke reads its relay's log for that link and writes:
 Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's certificate is regenerated per start and
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
+
+## The six-camera wall (0.21.10)
+
+"Add does nothing past six cameras, and closing one makes the new camera appear once per click" is not a KASTR rule: a
+browser allows six concurrent HTTP/1.1 connections to one host, every camera's monitor stream on the owner page held one
+open, and the page's other requests queued behind them. Since 0.21.10 the monitors ride WebSockets (outside that pool)
+and `/api/diag` shows `monitor.ws` per slot; a box on an older build can be checked with `scratchpad/v02110/pw_monitors.py`
+against the dev harness (adds one to five answer in milliseconds, the sixth leaves the next fetch hanging).
 
 ## Seen from the tunnel (0.21.9)
 
@@ -86,7 +94,7 @@ A stall report from a viewer is a hint about that viewer's path, never an order.
 - `rtsp nudge <camera> why=viewer …` followed by `rtsp pair … start` — a restart that DID happen: the pair was troubled
   (an exit or a lost session in the last 60 s) or the relay listed the room without it. Those are the ones to read.
 - `page: grid <name>: evicted <camera> (monitor attempt N)` — a monitor-ladder eviction; since 0.21.8 only for a camera
-  whose pair is not running, is in standby, or exited in the last 30 s.
+  whose pair is not running, is in standby (only with `ondemand = on` since 0.21.10), or exited in the last 30 s.
 
 ## Reconnect loops (0.21.8)
 

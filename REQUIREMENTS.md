@@ -189,7 +189,7 @@ predates versioning (v0.5, 2026-08-25).
 | RT-12 | Published RTSP picture kept near live: wall-vs-media drift chased at 2× past ~3 s (the stream is unseekable — seeks are never attempted); more than 20 s behind reconnects instead. | ✅ | 0.6.2 |
 | RT-13 | A reader that stops consuming `/rtsp/<id>` cannot wedge ffmpeg: 15 s socket send timeout releases the child and the feed list stops claiming it is running; stale stderr is cleared on each new attempt. | ✅ | 0.6.2 |
 | RT-D1 | Publish the RTSP camera's audio. | ⏸ new feature: the publish path has always been video-only; the muxed audio's only effect was throttling video (see RT-9) | |
-| RT-D2 | Demand-gated RTSP standby: stop pulling from the camera when nobody has watched the stream for 30 seconds (grace period decided 2026-08-26); wake it when a viewer subscribes. The announce must persist while parked. | ⏸ next revision, by decision | |
+| RT-D2 | Demand-gated RTSP standby: stop pulling from the camera when nobody has watched the stream for 30 seconds (grace period decided 2026-08-26); wake it when a viewer subscribes. The announce must persist while parked. Shipped 0.18.0 (60 s idle); off by default since 0.21.10 (kastr.ini `ondemand = on` re-enables). | ⏸ next revision, by decision | |
 | RT-17 | Grid composite layout presets — Auto, 2 × 2, One big + strip, Side by side, Stacked — from a ▾ menu on the pane, persisted (`kastr.grid.layout`). | ✅ | 0.8.7 |
 | RT-18 | Drag a feed onto another cell of the composite to swap them (pointer events mapped through the canvas rect); the published mosaic follows. | ✅ | 0.8.7 |
 | RT-19 | Persistent RTSP feeds: `kastr.rtsp.persist` [{url,label}] via the add-row checkbox or the pane menu; restored after the automatic join (dedup by url, go live); Stop sharing removes the entry. | ✅ | 0.8.8 |
@@ -342,7 +342,7 @@ predates versioning (v0.5, 2026-08-25).
 
 | ID | Item |
 |---|---|
-| D-1 | RTSP audio publishing (RT-D1) and demand-gated RTSP standby (RT-D2) — scoped as future work. |
+| D-1 | RTSP audio publishing (RT-D1) shipped 0.9.5; demand-gated RTSP standby (RT-D2) shipped 0.18.0 and switched off by default in 0.21.10 (`ondemand = on` re-enables). |
 | D-2 | macOS binary unbuilt (SH-4). |
 | D-3 | The MoQ libraries load unpinned from esm.sh; pinning/vendoring recommended so all machines run identical library code. |
 | D-4 | A long-lived shared relay once accumulated a path that black-holed subscriptions; restarting the relay clears it. KASTR reports starvation but deliberately does not route around relay faults. |
@@ -413,6 +413,15 @@ predates versioning (v0.5, 2026-08-25).
 | W | Gate: remembered locked rooms listed (`source: "minter"`); "New room…" with a code registers BEFORE the mint (`gateRegister`: 403 → "Only the publisher access code can lock a room.", 409 → the room exists); the last join is preselected and its codes prefilled; NO auto-rejoin at launch (the in-window ticket still rejoins); `authMint` sends the room code in `code` when the minter has no access codes. | 0.11.0 |
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
+
+### Added in 0.21.10
+
+| Area | Requirement | Since |
+|---|---|---|
+| PUB/S | One switch, `kastr_rtsp.ONDEMAND_ENABLED` (env `KASTR_ONDEMAND` at import; kastr.ini `ondemand = on` through the launcher, which notes `ondemand: off|ON` in launch.log), default off. `Publisher` records `wantOndemand` / `wantLow` and ANDs the switch into the effect (`ondemand`, `standby`, the low sibling); `_feed_records` persists the ASKED flags so rtsp-feeds.json keeps the operator's choice; the pair-reuse compare ignores the two flags while off (a reload never restarts a camera over an inert flag); one `rtsp: <b> asked for on demand/low -- ignored ...` line per fresh pair. `/api/instance` and `/api/client` carry `ondemand`; `ondemand_sync` keeps an older box's standby pairs awake when this host is off. `/api/ondemand/*`, the hub `wake` command and the relay code are unchanged and inert. | 0.21.10 |
+| W | The page learns `odOn` from `/api/instance` (fail-closed) and bridges it as `window.__odOn`; while off the two Share-row switches are not painted (`window.__rtspRerender` repaints once the answer lands when it says on), a dead grid cell expands the composite instead of waking anything, `-low.hang` announces are dropped, `odPoll` is silent and `odDemand` sends nothing; `window.__ondemand().enabled` says which. nativePublish still posts what the page remembers -- the server decides what a flag means. | 0.21.10 |
+| PUB/W | The owner's camera monitor rides a WebSocket: `handle_stream` answers an `Upgrade: websocket` with 101, a text frame `{codec, copy}` and binary fMP4 frames (`_ws_frame`); `_ws_watch` answers the browser's close and ping frames so a detached monitor releases its ffmpeg reader within ~1.5 s; the page tries the socket first and keeps the HTTP pump as the fallback; `/api/diag` `monitor.ws`. Chromium's six-connection HTTP/1.1 pool no longer caps the cameras on one page. | 0.21.10 |
+| T | `tests/test_ondemand_switch.py` (four cases, both states); `build.py` runs `python -m unittest discover -s tests` before every build. Rigs: `scratchpad/v02110/pw_monitors.py` (eight test cameras, page fetch timing), `pw_ws_close.py` (reader release), `pw_odswitch.py --expect off|on` (the switch end to end on the dev harness, `KASTR_ONDEMAND=1` for on). | 0.21.10 |
 
 ### Added in 0.21.9
 

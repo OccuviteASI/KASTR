@@ -2,6 +2,58 @@
 
 What changed in each build, newest first.
 
+## v0.21.10 — full quality always: on-demand pairs and low copies off behind one switch, the monitor outside the six-connection wall
+
+**Kenton (2026-10-01):** "The video streams are better now all around, but not smoothly streaming. Maybe we should just
+get rid of the on demand video and go back to full quality always for the time being. I think this may have been the
+change that broke it. We also don't need the low quality for thumbnails." And: "This will also get rid of the egress on
+the agg server for the announce of 400Kbps."
+
+**Full quality always.** Every published camera runs its full pair from the moment it is published, as before 0.18.0.
+No pair sleeps in standby waiting for a viewer, no 640-wide low copy is started, the two per-camera switches ("On
+demand", "Low for thumbnails") are gone from the Share panel, a quadrant tap on a grid opens the already-published full
+feed, and the demand plumbing (viewer page → relay host `/api/ondemand` → hub → spoke `wake`) goes quiet because nothing
+asks and nothing sleeps. Each on-demand camera had cost the publishing box an always-on 640p encode, a third RTSP
+session to the camera and wake/sleep churn against it, and every grid viewer pulled its low copy continuously — 400 kb/s
+per camera per viewer leaving the hub. A relay pulls a full pair across the cluster link only when a viewer subscribes,
+so full-always costs the spoke nothing upstream until someone watches.
+
+**Behind one switch, not deleted.** The code and its tests stay. `ondemand = on` in the kastr.ini beside the exe (or
+`KASTR_ONDEMAND=1` in the environment) brings both features back; it is read once at launch and launch.log says which
+way it went (`ondemand: off -- every camera publishes its full pair always ...`). The demand travels camera box → relay
+host → viewer page, so when it is switched on the key belongs on every KASTR of the fleet. Flags already stored in
+rtsp-feeds.json and in the page's own memory are preserved and ignored, not cleared: a camera that asked for on demand
+or a low copy is published as a plain full pair and logs `rtsp: <camera> asked for on demand/low -- ignored ...` once,
+and the pair-reuse rule ignores those two flags while the switch is off, so a page reload never restarts a healthy
+camera over a flag that has no effect. `/api/instance` and `/api/client` carry `ondemand: false`; the page hides the
+switches, drops an older spoke's `-low.hang` announces and sends no demand. The 0.21.9 advice to switch On demand and
+Low on per Southridge camera is withdrawn. `hook_read` no longer fires for on-demand wakes; it still fires for HLS and
+fMP4 fallback viewers.
+
+**The monitor rides a WebSocket — the six-camera wall.** From Mendon: "KASTR isn't letting me add more than 6. If I hit
+add, it appears to do nothing. If I close another stream, I get the camera that I added and it shows up once for each
+time I hit add." Chromium allows six concurrent HTTP/1.1 connections per host, and every camera's monitor stream on the
+box's own page held one of them open for as long as the camera ran, against an embedded server that speaks HTTP/1.0.
+Six cameras filled the pool; the seventh Add — and every other request the page made, prefs, the diag post, the feed
+poll — waited in the browser's queue until a stream closed, and every queued Add then landed at once. The monitor now
+rides a WebSocket, which sits outside that pool; the HTTP pump stays as the fallback for an older host, and the server
+answers the browser's close frame so a detached monitor releases its ffmpeg reader at once instead of after Chromium's
+60 s close timeout. `/api/diag` shows `monitor.ws` per slot.
+
+**Verified on the dev harness (Windows, Edge).** Eight test-pattern cameras on one page: all eight monitors delivering,
+all over WebSocket, the page's own fetch answering in 4 ms after each Add — before the change adds one to five answered
+in under 10 ms and the sixth camera's monitor left the page's next fetch unanswered until the renderer gave up. A monitor
+socket closed by the page released its ffmpeg reader in 1.5 s. The switch, off: `/api/instance` and `/api/client` say
+`ondemand: false`, the Share rows carry no On demand / Low switches, a publish asking for both answers a plain pair
+(`ondemand false, standby false, no low sibling`), re-publishing with different flags reuses the pair (gen unchanged),
+and rtsp-feeds.json keeps `ondemand: true, low: true`. On (`KASTR_ONDEMAND=1`): the switches are back, the pair sleeps in
+standby with its low sibling, and `/api/ondemand` lists it. Four unit tests in `tests/test_ondemand_switch.py` cover the
+Publisher, the record and the reuse rule in both states; `build.py` runs the unit tests before every build.
+
+**Rollout.** Hub first, as always — the version match also downgrades, so a 0.21.10 spoke under a 0.21.9 hub would be
+put back. A spoke still on 0.21.9 whose cameras were set to On demand stays dark on 0.21.10 pages until it updates,
+because those pages send no demand; update such a spoke first, or run the hub with `ondemand = on` for the rollout hour.
+
 ## v0.21.9 — audio that adapts to the path, the speaking ring and noise removal back, what a tunnel viewer really sees
 
 **Measured from the tunnel (a web viewer at kastr.madlabs.app, 2026-09-30 afternoon).** Kenton's own camera audio

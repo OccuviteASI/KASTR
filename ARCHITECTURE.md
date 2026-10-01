@@ -51,6 +51,7 @@ All served from the same loopback server as the pages.
 | `POST/GET /api/diag` | Pages post their own state (publisher slots, encoder resolved config, recent library errors, watcher state); GET returns the latest per page. In-memory, loopback-only. |
 | `POST /api/window` | The page reports window geometry; stored in `window.json` and replayed as Chrome flags on next launch. |
 | `POST /api/rtsp/add,remove` · `GET /api/rtsp/list` | Manage bridge feeds. |
+| `GET/POST /api/ondemand*` | Demand for on-demand cameras (0.18.0); the routes stay and answer empty while the 0.21.10 switch is off. |
 | `GET /rtsp/<id>` | The feed itself: an endless fragmented MP4. Each GET spawns/attaches an ffmpeg reader. |
 | `POST /api/relay/start,stop,use` · `GET /api/relay/status` | Hosted-relay control. |
 | `GET /api/auth` · `POST /api/token` (relay host, port+1) | Auth shape (`secured, codes, talking, chat, state`) and the minter: `{room, code, roomCode?, host?}` → identity-scoped tokens (0.13.0, see ledger). |
@@ -911,6 +912,18 @@ speculative was later removed (see Decisions).
   module; the pipe uses one select loop and honours `pending()`.
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
+
+### 0.21.10
+
+- **A feature waits behind a switch, not in a branch.** When the field suspects a feature, turning it off everywhere by
+  default while keeping the code and its tests alive answers the question in one release and leaves the road back a
+  one-line setting. Deleting it would have answered nothing and cost the way back.
+- **Ignore a stored flag; never erase it.** The reader decides what a flag means. Publishers remember what was asked and
+  the record keeps it, so a later re-enable restores the operator's choices without anyone retyping them -- and the
+  reuse rule ignores flags that have no effect, so an upgrade restarts no camera.
+- **The browser has limits the server never sees.** Six streaming connections per host is a Chromium rule, and the
+  page's own housekeeping shared that pool with the camera monitors. A long-lived stream belongs on a transport the pool
+  does not count.
 
 ### 0.21.9
 

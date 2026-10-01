@@ -875,7 +875,7 @@ def ondemand_sync(room, host, feeds, now=None):
                        low=(str(f.get("low")) if f.get("low") else None), at=now)
             ONDEMAND[b] = rec
             try:
-                if ARCHIVE_WANTS(b):   # the operator records it -> keep it awake
+                if ARCHIVE_WANTS(b) or not kastr_rtsp.ONDEMAND_ENABLED:   # the operator records it -> keep it awake; 0.21.10: this host is off -> an older box's standby pairs wake and stay up
                     rec["wantedAt"] = now
             except Exception:
                 pass
@@ -1689,6 +1689,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # publisher | relay | publisher-relay); the shell drops its Relay
                 # tab and the masthead its relay controls on a viewer box.
                 "mode": MODE,
+                "ondemand": bool(kastr_rtsp.ONDEMAND_ENABLED),   # 0.21.10: the kill switch -- the page hides the two RTSP switches, drops -low.hang and sends no demand when false
                 # Server-remembered operator name (0.8.0) -- the fallback
                 # when the browser profile lost its localStorage.
                 "operator": op_ref[0],
@@ -3243,7 +3244,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             feats = {"publish": True, "chat": True, "admin": True,
                      "rtsp": (not web) or bool(hw), "media": not web, "relayControls": not web,
                      "updates": not web, "prefs": not web, "window": not web,
-                     "rtspViaHost": bool(hw) and web, "hwEncoder": hw or None}
+                     "rtspViaHost": bool(hw) and web, "hwEncoder": hw or None,
+                     "ondemand": bool(kastr_rtsp.ONDEMAND_ENABLED)}   # 0.21.10
             return self._json_cors(200, {
                 "app": "KASTR", "version": read_version(),
                 "client": "web" if web else "app",

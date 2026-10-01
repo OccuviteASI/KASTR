@@ -2039,6 +2039,8 @@
   const IS_WEB = CLIENT.class === "web";
   // 0.18.0: renditions + on-demand cameras + latency stamps (module-scoped, used by applyState)
   const lowAvail = new Set();        // full broadcast names whose -low.hang sibling is announced
+  let odOn = false;                  // 0.21.10: the host's switch (kastr.ini ondemand / KASTR_ONDEMAND) -- false until /api/instance says ondemand: true
+  window.__odOn = () => odOn;        // module 2 (the RTSP rows) reads it
   const fullLive = new Set();        // 0.21.7: full broadcast names announced live (a tile may live on its low copy alone -- click-to-picture)
   const LOW_RE = /-low\.hang$/;
   const lowOf = (name) => String(name).replace(/\.hang$/, "-low.hang");
@@ -3004,6 +3006,8 @@
       const m = String(d?.mode || "full");
       PAGE_MODE = PAGE_MODES.includes(m) ? m : "full";
       ownRelayHere = !!(d && d.relayName);
+      odOn = d?.ondemand === true;   // 0.21.10
+      if (odOn) { try { window.__rtspRerender?.(); } catch {} }   // module 2 painted its rows before this answer
     }),
     new Promise((res) => setTimeout(res, 1500)),
   ]).catch(() => {});
@@ -4081,7 +4085,7 @@
     const meta = gridMeta.get(gp);
     const od = odFeeds.some((f) => f.broadcast === fp);
     const down = !!meta && ((meta.down || []).includes(idx) || (meta.dead && meta.dead.has(fp)));
-    if (!od && !down) return false;
+    if (!odOn || (!od && !down)) return false;   // 0.21.10: switch off -> the 0.9.8 composite-cell expand
     odWanted.set(fp, Date.now()); odDemand(fp);
     gridWake = { gp, idx, path: fp, at: Date.now(), low: lowAvail.has(fp) };
     // 0.21.7: the composite's own cell fills the stage at once (the 0.9.8 seeded view): the picture the viewer clicked,
@@ -6205,6 +6209,7 @@
       if (String(path).split("/").filter(Boolean)[2] === ".member") { memberAccept(String(path), entry.active); continue; }   // 0.13.0: <room>/<HOST>/.member/<PEER>
       if (!path.endsWith(".hang")) continue; // skip internal .stats etc.
       if (LOW_RE.test(path)) {   // 0.18.0: a thumbnail rendition of <leaf>.hang -- not a tile of its own
+        if (!odOn) continue;   // 0.21.10: low copies are off -- an older spoke's -low.hang is neither a tile nor a thumbnail
         const full = path.replace(LOW_RE, ".hang");
         if (entry.active) lowAvail.add(full); else lowAvail.delete(full);
         // 0.21.7: an on-demand camera keeps its low copy on the air in standby: the tile lives on it (under the full
@@ -8029,7 +8034,7 @@
   // box starts the pair within ~5 s and stops it a minute after the last pulse.
   const odRow = document.getElementById("odRow");
   async function odPoll() {
-    if (!window.__joinedChannel?.() || publishOnly) { odFeeds = []; odPaint(); return; }
+    if (!odOn || !window.__joinedChannel?.() || publishOnly) { odFeeds = []; odPaint(); return; }   // 0.21.10: no poll while the host's switch is off
     const base = relayHostBase(); if (!base) return;
     try {
       const tok = (authSecured && authTokens?.member) ? "&jwt=" + encodeURIComponent(authTokens.member) : "";
@@ -8065,6 +8070,7 @@
   }
   window.__odWake = odWake;   // rig
   function odDemand(broadcast) {
+    if (!odOn) return;   // 0.21.10: no demand leaves this page while the host's switch is off
     const base = relayHostBase(); if (!base) return;
     fetch(base + "/api/ondemand/demand", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ room: CHANNEL, broadcast, jwt: authTokens?.member || "" }) })
@@ -8099,7 +8105,7 @@
   }
   setInterval(odPoll, 10000);
   setInterval(odPulse, 15000);
-  window.__ondemand = () => ({ feeds: odFeeds, wanted: [...odWanted.keys()] });   // rig
+  window.__ondemand = () => ({ feeds: odFeeds, wanted: [...odWanted.keys()], enabled: odOn });   // rig
 
   // ---- 0.18.0: latency stamps -------------------------------------------------------------
   // Publishers with "Latency stamp on my shares" draw a 44-cell strip at the top-left of their
@@ -12122,6 +12128,7 @@
         + "with no audio announces an empty catalog while paused.";
   }
 
+  window.__rtspRerender = () => { try { renderSources(); } catch {} };   // 0.21.10: module 1 learned the host's switch after the first paint
   function renderSources() {
     camrowsEl.replaceChildren();
     for (const a of added) {
@@ -12186,7 +12193,7 @@
         });
         aud.before(gsel);
         // 0.18.0: On demand (standby until a viewer asks) + Low for thumbnails (a -low.hang sibling)
-        for (const [cls, k, txt, tip] of [["od", OD_KEY, "On demand", "Start this camera's relay stream only when someone watches it; it stops a minute after the last viewer leaves."],
+        if (window.__odOn?.()) for (const [cls, k, txt, tip] of [["od", OD_KEY, "On demand", "Start this camera's relay stream only when someone watches it; it stops a minute after the last viewer leaves."],
                                           ["lowr", LOWR_KEY, "Low for thumbnails", "Also publish a small 640-wide, 15 fps copy that rail tiles and grid cells use (one extra encode)."]]) {
           const lb = document.createElement("label");
           lb.className = "aud shown " + cls; lb.title = tip;
@@ -12843,7 +12850,7 @@
     m.objectUrl = URL.createObjectURL(ms);
     v.src = m.objectUrl;
     v.play().catch(() => {});
-    (async () => {
+    const httpPump = async () => {
       let res;
       try { res = await fetch(monitorUrlFor(slot.entry.feedId, slot.monitorTranscode), { signal: m.abort.signal, cache: "no-store" }); }
       catch (e) { if (m === slot.mon) monitorEnded(slot, "Monitor request failed"); return; }
@@ -12864,7 +12871,42 @@
         }
         monitorEnded(slot, "Camera feed ended");
       } catch (e) { if (m === slot.mon && !m.abort.signal.aborted) monitorEnded(slot, "Monitor stream broke"); }
-    })();
+    };
+    // 0.21.10: the monitor rides a WebSocket when the browser has one. Chromium allows six
+    // concurrent HTTP/1.1 connections per host and every monitor held one open for as long as the
+    // camera streamed, so the seventh camera -- and every fetch the page made after it -- waited in
+    // the browser's queue until a stream closed ("Add does nothing past six"). WebSockets sit
+    // outside that pool. The HTTP pump above stays as the fallback when the socket never opens.
+    let ws = null;
+    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + monitorUrlFor(slot.entry.feedId, slot.monitorTranscode)); ws.binaryType = "arraybuffer"; } catch { ws = null; }
+    if (ws) {
+      m.ws = ws; m.wsOpened = false;
+      let frames = 0;
+      ws.onopen = () => { m.wsOpened = true; };
+      ws.onmessage = (ev) => {
+        if (m !== slot.mon) { try { ws.close(); } catch {} return; }
+        if (typeof ev.data === "string") {
+          let j = {}; try { j = JSON.parse(ev.data); } catch {}
+          const codec = String(j.codec || "h264").toLowerCase();
+          const mime = MONITOR_MIME[codec] || MONITOR_MIME.h264;
+          if (!MediaSource.isTypeSupported(mime)) { monitorBroken(slot, codec + " is not decodable in this window"); try { ws.close(); } catch {} return; }
+          m.mime = mime; ready();
+          return;
+        }
+        const value = new Uint8Array(ev.data); frames++;
+        m.queue.push(value); m.queued += value.byteLength; m.bytes += value.byteLength; m.lastBytesAt = performance.now();
+        pumpMonitor(slot);
+      };
+      ws.onerror = () => {};
+      ws.onclose = () => {
+        if (m !== slot.mon || m.abort.signal.aborted) return;
+        if (!m.wsOpened) { m.ws = null; httpPump(); return; }   // no WebSocket on this host: the HTTP pump
+        monitorEnded(slot, frames ? "Camera feed ended" : "Monitor stream broke");
+      };
+      m.abort.signal.addEventListener("abort", () => { try { ws.close(); } catch {} }, { once: true });
+      return;
+    }
+    httpPump();
   }
   // A camera's copied stream keeps the camera's own timestamps, so the first
   // buffered range can start thousands of seconds after the playhead's 0 --
@@ -17369,7 +17411,7 @@
         native: !!s.native, pubWanted: !!s.pubWanted, pub: s.pub || null,   // 0.9.1
         audio: s.entry.audio !== false,   // 0.9.5
         monitor: { behind: +(s.monitorBehind ?? 0).toFixed(1), rate: s.video?.playbackRate, down: !!s.monitorDown, paused: !!s.video?.paused, time: +(s.video?.currentTime ?? 0).toFixed(1),
-                   mse: !!s.mon, bytesAge: s.mon ? Math.round((performance.now() - s.mon.lastBytesAt) / 1000) : null, transcode: !!s.monitorTranscode, loaded: !!s.monitorLoaded },   // 0.9.5 / 0.9.7
+                   mse: !!s.mon, ws: !!(s.mon && s.mon.wsOpened), bytesAge: s.mon ? Math.round((performance.now() - s.mon.lastBytesAt) / 1000) : null, transcode: !!s.monitorTranscode, loaded: !!s.monitorLoaded },   // 0.9.5 / 0.9.7 / 0.21.10 ws
       } : {
         name: s.entry.name, kind: s.entry.kind,
         source: s.entry.kind === FILE ? `file:${s.entry.file?.name ?? "?"}` + (s.entry.mediaUrl ? " (" + s.entry.mediaUrl + ")" : "")

@@ -41,6 +41,11 @@ TEST_URL = "test://pattern"
 
 # Longest we will wait for ffmpeg to name a stream's codec.
 PROBE_TIMEOUT = 20.0
+# 0.21.10: on-demand pairs (0.18.0 standby) and low copies (0.18.0 / 0.21.7 `-low.hang`) are OFF unless this is
+# true -- env KASTR_ONDEMAND=1 here (dev harness, rigs), kastr.ini `ondemand = on` through the launcher (kastr.py).
+# Read once at boot. A Publisher built while it is off never sleeps and never owns a low sibling, but remembers
+# what was ASKED (wantOndemand / wantLow) so rtsp-feeds.json keeps the operator's choice for a later re-enable.
+ONDEMAND_ENABLED = str(os.environ.get("KASTR_ONDEMAND") or "").strip().lower() in ("1", "true", "yes", "on")
 # 0.12.0: a probe that could not tell (camera off when a restored feed came
 # back) is asked again after this long instead of being believed for the run.
 PROBE_RETRY_S = 30.0
@@ -1071,12 +1076,14 @@ class Publisher:
         # an on-demand main pair waits in STANDBY until a viewer asks (Bridge demand loop)
         self.role = role
         self.label = str(label or "")[:80]
-        self.ondemand = bool(ondemand) and role == "main"
+        self.wantOndemand = bool(ondemand)   # 0.21.10: what was asked (persisted) ...
+        self.wantLow = bool(low)
+        self.ondemand = bool(ondemand) and role == "main" and ONDEMAND_ENABLED   # ... and what takes effect
         self.standby = self.ondemand
         self.wantedAt = None        # last time the relay host said a viewer wants it
         self.wokeAt = None
         self.lowPub = None
-        if low and role == "main":
+        if low and role == "main" and ONDEMAND_ENABLED:   # 0.21.10: no -low.hang sibling while the switch is off
             self.lowPub = Publisher(bridge, feed, low_broadcast(broadcast), relay, audio=False, minter=minter,
                                     keep=False, role="low")
         self._readyGen = None       # generation that fired the ready hook
@@ -1947,7 +1954,7 @@ class Bridge:
                 and cur.broadcast == broadcast
                 and _relay_key(cur.relay) == _relay_key(relay)
                 and cur.passthrough == want_pt and cur.audio == bool(audio)
-                and cur.ondemand == bool(ondemand) and (cur.lowPub is not None) == bool(low)):   # 0.18.0
+                and (not ONDEMAND_ENABLED or (cur.ondemand == bool(ondemand) and (cur.lowPub is not None) == bool(low)))):   # 0.18.0; 0.21.10: flags that have no effect never restart a pair
             # 0.12.0: evidence-gated re-token. A reload/rejoin mints a new token
             # but must NOT restart a healthy pair (the 0.9.8 promise). A pair the
             # relay refused, one that is down, one that failed within the last
@@ -1975,6 +1982,8 @@ class Bridge:
                         ondemand=bool(ondemand), low=bool(low), label=label)    # 0.18.0
         with self._lock:
             self._pubs[int(feed_id)] = pub
+        if (pub.wantOndemand or pub.wantLow) and not ONDEMAND_ENABLED:   # 0.21.10
+            self.log("rtsp: %s asked for on demand/low -- ignored (ondemand = off; kastr.ini ondemand = on or KASTR_ONDEMAND=1 allows it)" % broadcast)
         if pub.ondemand:
             self.log("rtsp: %s published on demand -- standby until a viewer asks" % broadcast)
             self._od_ensure()
@@ -2114,7 +2123,7 @@ class Bridge:
                 continue
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
-                        "ondemand": bool(pub.ondemand), "low": pub.lowPub is not None, "label": pub.label,   # 0.18.0
+                        "ondemand": bool(pub.wantOndemand), "low": bool(pub.wantLow), "label": pub.label,   # 0.18.0; 0.21.10: what was ASKED -- preserved while the switch is off
                         "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})   # 0.21.2: a web client's feed
         return out
 
@@ -2897,6 +2906,58 @@ def parse_stream_path(path):
     return base.rsplit("/", 1)[-1], flags.get("transcode") == "1", flags.get("pt") == "1"
 
 
+_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+_WS_SAID = [False]
+
+
+def _ws_frame(payload, opcode=0x2):
+    """0.21.10: one unmasked server->client WebSocket frame (FIN set)."""
+    n = len(payload)
+    if n < 126:
+        head = bytes([0x80 | opcode, n])
+    elif n < 65536:
+        head = bytes([0x80 | opcode, 126]) + n.to_bytes(2, "big")
+    else:
+        head = bytes([0x80 | opcode, 127]) + n.to_bytes(8, "big")
+    return head + payload
+
+
+def _ws_watch(conn, alive):
+    """0.21.10: answer the browser's close and ping frames on a monitor socket. A detached monitor
+    sends a close frame and Chromium then waits up to 60 s for ours before dropping TCP; without
+    this the pump would keep an ffmpeg child busy that long. recv only after select says readable,
+    so the pump's SEND_TIMEOUT never trips here."""
+    import select
+    import socket
+    try:
+        while alive[0]:
+            r, _, _ = select.select([conn], [], [], 1.0)
+            if not r:
+                continue
+            data = conn.recv(4096)
+            if not data:
+                break
+            op = data[0] & 0x0F
+            if op == 0x8:
+                try:
+                    conn.sendall(bytes([0x88, 0x00]))
+                except OSError:
+                    pass
+                break
+            if op == 0x9:
+                try:
+                    conn.sendall(bytes([0x8A, 0x00]))
+                except OSError:
+                    pass
+    except (OSError, ValueError):
+        pass
+    if alive[0]:
+        alive[0] = False
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
 def handle_stream(handler, bridge, path):
     """Serve GET /rtsp/<id> as an endless fragmented MP4."""
     if not path.startswith("/rtsp/"):
@@ -2921,14 +2982,35 @@ def handle_stream(handler, bridge, path):
         return True
 
     codec, copied = bridge.monitor_codec(feed, transcode, passthrough)
-    handler.send_response(200)
-    handler.send_header("Content-Type", "video/mp4")
-    handler.send_header("Cache-Control", "no-store")
-    handler.send_header("X-KASTR-Codec", codec)          # 0.9.7: the page's MSE player needs it up front
-    handler.send_header("X-KASTR-Copy", "1" if copied else "0")
-    # No Content-Length: the stream is open-ended, so the connection staying
-    # open IS the framing.
-    handler.end_headers()
+    # 0.21.10: the page asks for the monitor over a WebSocket when it can. Chromium allows six
+    # concurrent HTTP/1.1 connections per host and every monitor held one for as long as the camera
+    # streamed, so the seventh camera -- and every fetch the page made after it -- waited in the
+    # browser's queue until a stream closed. WebSockets sit outside that pool. Same bytes, framed.
+    ws_key = (handler.headers.get("Sec-WebSocket-Key") or "").strip()
+    ws = bool(ws_key) and (handler.headers.get("Upgrade") or "").strip().lower() == "websocket"
+    if ws:
+        import base64
+        import hashlib
+        accept = base64.b64encode(hashlib.sha1((ws_key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
+        try:
+            handler.wfile.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                 "Sec-WebSocket-Accept: %s\r\n\r\n" % accept).encode("ascii"))
+            handler.wfile.write(_ws_frame(json.dumps({"codec": codec, "copy": copied}).encode("utf-8"), 0x1))
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            bridge.release(feed, proc)
+            return True
+        if not _WS_SAID[0]:
+            _WS_SAID[0] = True
+            bridge.log("rtsp monitor: streaming over WebSocket (outside the browser's six-connection cap)")
+    else:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "video/mp4")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-KASTR-Codec", codec)          # 0.9.7: the page's MSE player needs it up front
+        handler.send_header("X-KASTR-Copy", "1" if copied else "0")
+        # No Content-Length: the stream is open-ended, so the connection staying
+        # open IS the framing.
+        handler.end_headers()
 
     # Set AFTER the headers so it governs only the pump (the request itself
     # was fully read before dispatch). socket.timeout is an OSError, so the
@@ -2939,15 +3021,19 @@ def handle_stream(handler, bridge, path):
     # wedged one goes quiet this long.
     handler.connection.settimeout(SEND_TIMEOUT)
 
+    alive = [True]
+    if ws:
+        threading.Thread(target=_ws_watch, args=(handler.connection, alive), daemon=True).start()
     try:
         while True:
             chunk = proc.stdout.read(16384)
             if not chunk:
                 break
-            handler.wfile.write(chunk)
+            handler.wfile.write(_ws_frame(chunk) if ws else chunk)
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass          # viewer navigated away
     finally:
+        alive[0] = False
         # Only this reader's child -- another connection to the same feed may
         # still be streaming.
         bridge.release(feed, proc)

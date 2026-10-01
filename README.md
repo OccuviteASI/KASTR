@@ -12,10 +12,10 @@ certificate once from `/ca.crt`, or give the host a real certificate with `tls_c
 kastr.ini) for the full client, or `http://<relay-host>:8000/` for the lobby (rooms, People, chat, one stream played
 through the host). Turn it on from the Relay page's "Web clients" switch. Browser clients follow the relay host's version.
 
-Since 0.18.0 an RTSP camera can sleep until a viewer asks for it (the row's "On demand" switch), publish a small copy
+Since 0.18.0 an RTSP camera can sleep until a viewer asks for it (the row's "On demand" switch; off by default since 0.21.10, see below), publish a small copy
 for thumbnails ("Low for thumbnails"), and be recorded on the relay host (Relay page "Record"; segments kept
 `archive_hours`, default 24, downloadable from the Relay page and the room's Files panel). kastr.ini also takes
-`hook_ready` / `hook_notready` / `hook_read` (commands run on camera up, down and viewer demand, with `KASTR_EVENT`,
+`hook_ready` / `hook_notready` / `hook_read` (commands run on camera up, down and a viewer's first HLS or fallback request -- and, with `ondemand = on`, an on-demand wake -- with `KASTR_EVENT`,
 `KASTR_BROADCAST`, `KASTR_FEED_ID`, `KASTR_RELAY`, `KASTR_REASON`, `KASTR_VIEWER` in the environment) and
 `hook_timeout` (seconds, default 30).
 
@@ -28,6 +28,11 @@ tunnel is flagged on the Relay page and the gate (set codes and require them).
 Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worker from an older build stands aside
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
+
+Since 0.21.10 every camera publishes its full pair always: on-demand standby and the 640-wide low copies are off by default
+(kastr.ini `ondemand = on` on every box of the fleet, or `KASTR_ONDEMAND=1`, brings both back; stored flags are kept, not
+cleared), and the owner page's camera monitors ride WebSockets, so Chromium's six-connection limit no longer caps the
+cameras on one page.
 
 Since 0.21.9 the audio delay adapts to the path (it widens while the player reports late frames and relaxes when they stop),
 the speaking ring, the mic meter's live tap and the RNNoise noise removal work again (they had read a field the 0.16.0 library
@@ -42,7 +47,7 @@ the other platform's browser to assemble its install zip, and the avatar initial
 
 Since 0.21.7 the Relay dropdown names the host's KASTR on the port it actually runs (no more `:8000`), remote panes carry no
 OS tooltip, a web client downloads the full Windows or Linux install zip from More → Settings → About (assembled on the
-host from what every install already carries), an on-demand camera shows its low copy the instant it is clicked and the
+host from what every install already carries), with `ondemand = on` an on-demand camera shows its low copy the instant it is clicked and the
 full picture takes over in place — also when the camera sits behind another site's relay — the spoke's cluster link
 writes its state to launch.log and the Relay page, audio through a tunnel no longer clips (a 1 s floor on the audio
 buffer's drop rule in the vendored player, plus wider budgets over WebSocket), and a Linux box asks for its firewall

@@ -722,6 +722,9 @@ def main():
     # 0.21.7: KASTR's edits to the vendored library (vendor-moq.py PATCHES: the audio maxAge floor) must be in place
     if subprocess.run([sys.executable, os.path.join(HERE, "vendor-moq.py"), "--check"], check=False).returncode != 0:
         sys.exit("the vendored MoQ library is not patched -- run vendor-moq.py --patch")
+    # 0.21.10: the unit tests under tests/ gate a release (the on-demand kill switch, the vendored patch)
+    if subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", os.path.join(HERE, "tests")], check=False).returncode != 0:
+        sys.exit("the unit tests under tests/ fail -- fix them before building")
     # 0.13.1: the RNNoise worklet the page loads for background-noise removal (vendor-noise.py)
     if not os.path.exists(os.path.join(HERE, "assets", "noise", "manifest.json")):
         sys.exit("assets/noise/manifest.json is missing -- run vendor-noise.py (needs network once)")

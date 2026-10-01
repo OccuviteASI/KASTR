@@ -128,7 +128,7 @@ launch.log (`watch: fallback viewer … is looping`, `relay pipe: … short pipe
   tunnel's certificate is trusted, so the download is allowed; a LAN https page without the local CA installed has its
   download blocked by Chromium as insecure — install the CA or use the tunnel page.
 - Its Relay dropdown reads "Relay host: KASTR vX — this page follows it" (same origin, no port).
-- A viewer on the tunnel page who opens an on-demand camera that lives on another spoke of the same hub sees the low copy
+- With kastr.ini `ondemand = on` (off by default since 0.21.10): a viewer on the tunnel page who opens an on-demand camera that lives on another spoke of the same hub sees the low copy
   at once; the demand travels tunnel host → hub → that spoke over the hub's command channel.
 
 ## Verified for real (2026-09-30, kastr.madlabs.app, KASTR 0.21.5, SECURED relay)

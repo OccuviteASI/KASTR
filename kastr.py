@@ -2892,6 +2892,12 @@ def main():
     kastr_serve.SINGLE_PORT = str(ini.get("single_port") or "").strip().lower() in ("1", "true", "yes", "on")
     if kastr_serve.SINGLE_PORT:
         note("single_port: remote pages use this web port for media (/relay, WebSocket)")
+    # 0.21.10: on-demand pairs + low copies are OFF unless kastr.ini `ondemand = on` (or env KASTR_ONDEMAND=1, read by
+    # kastr_rtsp at import). The demand travels camera box -> relay host -> viewer page, so the key belongs on EVERY box.
+    kastr_rtsp.ONDEMAND_ENABLED = kastr_rtsp.ONDEMAND_ENABLED or str(ini.get("ondemand") or "").strip().lower() in ("1", "true", "yes", "on")
+    note("ondemand: %s" % ("ON (kastr.ini ondemand / KASTR_ONDEMAND) -- standby pairs and low copies enabled; the same setting must be on at the relay host and every viewer box"
+                           if kastr_rtsp.ONDEMAND_ENABLED else
+                           "off -- every camera publishes its full pair always (kastr.ini ondemand = on or KASTR_ONDEMAND=1 re-enables)"))
     try:   # 0.18.0: host recording retention (kastr.ini archive_hours, default 24)
         kastr_serve.ARCHIVE_HOURS = float(ini.get("archive_hours") or 24)
     except (TypeError, ValueError):

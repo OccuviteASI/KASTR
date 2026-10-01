@@ -13736,6 +13736,7 @@
         }
       }
       b.lastStep = performance.now();   // (`now` above is block-scoped to the drawing branch)
+      if (fromTimer || document.visibilityState !== "visible") { try { b.processed?.requestFrame?.(); } catch {} }   // 0.21.11: a hidden document stops the automatic capture
       if (!fromTimer) { if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => step(false)); else requestAnimationFrame(() => step(false)); }
     };
     step(false);
@@ -15188,6 +15189,13 @@
       if (gridNames && ch >= 90 && s.entry?.label) drawCellName(g.cx, String(s.entry.label).slice(0, 24), x + 8, y + ch - 30);
     });
     drawStamp(g.cx, g.canvas.width, g.canvas.height);   // 0.18.0
+    // 0.21.11: a hidden document (minimised, locked console, covered on a server) stops the AUTOMATIC canvas
+    // capture even though this timer keeps drawing -- the composite's encoder saw zero frames for hours on a
+    // relay box. Push the frame ourselves whenever the automatic capture is silent: the document is hidden, or
+    // the encoder has not advanced in 1.5 s although we are drawing. While visible and flowing nothing changes.
+    const hidden = document.visibilityState !== "visible";
+    if (hidden !== !!g.wasHidden) { g.wasHidden = hidden; gridNote(g, hidden ? "window hidden -- composite frames pushed by the timer" : "window visible again"); }
+    if (hidden || gridEncStarved(g)) { try { g.moq?.track?.requestFrame?.(); } catch {} }
   }
   function gridCellAt(g, ev) {
     const b = g.canvas.getBoundingClientRect();
@@ -17070,9 +17078,12 @@
     let fc = null;
     try { const st = g.moq?.encoder?.out?.stats?.peek?.(); fc = st ? (st.frames ?? st.frameCount ?? st.encoded ?? st.count ?? null) : null; } catch {}
     const d = gridDiag(g);
-    if (fc !== null && fc !== d.encLast) { d.encLast = fc; d.encAdvancedAt = Date.now(); }
+    if (fc !== null && fc !== d.encLast) { d.encLast = fc; if (fc > 0) d.encAdvancedAt = Date.now(); }   // 0.21.11: the first sample (0) is not an advance
     return fc;
   }
+  // 0.21.11: drawn for a while, yet the encoder has not moved -- the automatic canvas capture is silent
+  const gridEncStarved = (g) => { const now = Date.now(); if (!g.firstDrawAt) g.firstDrawAt = now; const fc = gridEncSample(g); const d = gridDiag(g);
+    if (fc === null) return false; return d.encAdvancedAt ? now - d.encAdvancedAt > 1500 : now - g.firstDrawAt > 1500; };
   const gridEncAdvancing = (g) => { gridEncSample(g); const d = gridDiag(g); return !!d.encAdvancedAt && Date.now() - d.encAdvancedAt < 12000; };
   const gridConnected = (g) => { try { return g.moq?.connection?.status?.peek?.() === "connected"; } catch { return false; } };
   // 0.21.5: grid events -- the status bar, a ring the diag carries (/api/diag publisher.grids[].events), and

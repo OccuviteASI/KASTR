@@ -2,6 +2,39 @@
 
 What changed in each build, newest first.
 
+## v0.21.11 — the grid that drew into the dark: a hidden window no longer stops the composite, monitors follow the publisher's passthrough
+
+**From the Southridge box's own diagnostics (2026-10-01, 0.21.10).** The grid composite's encoder had produced zero
+frames since launch while the page reported itself hidden; the five camera monitors were healthy, the relay link to Agg
+was up with no drops, and the box was registered with the hub. Viewers everywhere saw a frozen or empty grid because
+the picture was never produced, not because of the cameras or the link. The grid is drawn by the KASTR window's page
+onto a canvas whose capture stream feeds the encoder, and a hidden Chromium document — a minimised window, a locked or
+disconnected console, the Go Live tab behind the Relay tab — silences the automatic canvas capture even though the
+page's 15 fps timer keeps drawing. The file-share composite had already carried the cure since 0.16.0 (an explicit
+`requestFrame()` after each draw); the grid did not.
+
+**The fix.** After every grid draw the page pushes the frame itself whenever the automatic capture is silent: the
+document is not visible, or the encoder has not advanced in 1.5 s although the timer is drawing. While visible and
+flowing nothing changes. The camera-effects composite gets the same push when its frame clocks fall silent. The grid
+notes `window hidden -- composite frames pushed by the timer` and `window visible again` in its event ring (and so in
+`/api/diag` and launch.log), and the encoder sampler no longer counts a first reading of zero as "advancing", which had
+let a viewer's stall report be dismissed with "grid live here" over an encoder that had never produced a frame.
+
+**Monitors follow the publisher's passthrough.** The same bundle showed every monitor re-encoding — five software 4K
+H.265 decodes, about a core each — although the cameras were passed through: the page asks for a copied monitor only
+when its own localStorage switch is on, while the pairs had been restored from rtsp-feeds.json with the operator's
+persisted `passthrough: true`. The monitor now copies whenever the camera's running publisher copies; a copy the page
+cannot decode still falls back to a transcode on its own, so this only ever removes work. launch.log says
+`rtsp monitor: feed N follows its publisher's passthrough (copy, hevc)` once per feed.
+
+**Verified on the dev harness (Windows, Edge, two browsers).** A publisher with two test cameras and a viewer on its
+grid: 14.3 fps at the encoder and 14.3 fps at the viewer while visible; with the page told it was hidden, 15.2 fps at
+both — the explicit pushes do not double the rate when the automatic capture is also running; the grid events show the
+hidden and visible transitions. The genuinely hidden case is the field's to confirm: on Southridge,
+`/api/diag` → `publisher.grids[0].encoded.frames` must grow while `visibility` is `hidden`.
+
+**On the box until then:** keep the KASTR window restored and its Go Live tab in front; the composite follows that.
+
 ## v0.21.10 — full quality always: on-demand pairs and low copies off behind one switch, the monitor outside the six-connection wall
 
 **Kenton (2026-10-01):** "The video streams are better now all around, but not smoothly streaming. Maybe we should just

@@ -66,6 +66,15 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## The grid that drew into the dark (0.21.11)
+
+A relay box whose grid every viewer saw frozen, while its cameras, pairs and hub link were all healthy: `/api/diag`
+showed `publisher.grids[0].encoded.frames` at 0 for hours and `visibility: hidden`. A hidden Chromium document stops
+automatic canvas capture, so the composite was drawn fifteen times a second into a stream that carried nothing. Since
+0.21.11 the page pushes the frames itself when the document is hidden or the encoder stalls, and the grid's events
+(`/api/diag`, launch.log) say `window hidden -- composite frames pushed by the timer`. The signature to look for on an
+older build: `encoded.frames` flat with `visibility` hidden while every monitor's `time` advances.
+
 ## The six-camera wall (0.21.10)
 
 "Add does nothing past six cameras, and closing one makes the new camera appear once per click" is not a KASTR rule: a

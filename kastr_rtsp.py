@@ -2974,6 +2974,17 @@ def handle_stream(handler, bridge, path):
     if not feed:
         handler.send_error(404, "no such feed")
         return True
+    # 0.21.11: the monitor follows the camera's publisher. The page sends pt=1 only when its own localStorage
+    # switch is on; a box whose pairs were restored with passthrough=true (the operator's choice, persisted) was
+    # re-encoding every monitor -- five software 4K H.265 decodes on one relay box. A copied monitor the page
+    # cannot decode still falls back to transcode=1 on its own (monitorBroken), so this only ever removes work.
+    if not passthrough and not transcode:
+        pub = getattr(bridge, "_pubs", {}).get(feed.id)
+        if pub is not None and getattr(pub, "passthrough", False) and getattr(pub, "copy", False):
+            passthrough = True
+            if not getattr(feed, "_mon_pt_said", False):
+                feed._mon_pt_said = True
+                bridge.log("rtsp monitor: feed %s follows its publisher's passthrough (copy, %s)" % (feed.id, getattr(pub, "codec", None) or "?"))
 
     try:
         proc = bridge.spawn(feed, transcode=transcode, passthrough=passthrough)

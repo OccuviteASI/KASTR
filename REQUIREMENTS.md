@@ -414,6 +414,14 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.11
+
+| Area | Requirement | Since |
+|---|---|---|
+| W/PUB | `drawRtspGrid` ends with `g.moq.track.requestFrame()` whenever the document is not visible or `gridEncStarved(g)` (encoder frames unchanged for 1.5 s while drawing); the camera-fx `step()` pushes `b.processed.requestFrame()` when driven by its timer or the document is not visible; `gridEncSample` counts an advance only for a frame count above zero; the grid notes `window hidden -- composite frames pushed by the timer` / `window visible again` on each transition. | 0.21.11 |
+| PUB/S | `handle_stream`: a monitor request without `pt=1` or `transcode=1` takes `passthrough=True` when the feed's running publisher has `passthrough` and `copy` set, logging `rtsp monitor: feed N follows its publisher's passthrough (copy, <codec>)` once per feed. | 0.21.11 |
+| T | Rig `scratchpad/v02110/pw_grid_hidden2.py`: publisher (room main, two test cameras, auto-live) + viewer in a second browser; samples the encoder's frame count and the viewer's distinct frame timestamps visible / hidden (spoofed `document.visibilityState`) / restored. | 0.21.11 |
+
 ### Added in 0.21.10
 
 | Area | Requirement | Since |

@@ -913,6 +913,18 @@ speculative was later removed (see Decisions).
 - **Test the tunnel you can own.** A real Cloudflare tunnel would publish the build machine; a small stand-in with
   cloudflared's headers, one TLS port and a Host rewrite exercised the same code paths, including the worst case.
 
+### 0.21.11
+
+- **A counter that reads zero is not "advancing".** The liveness rule treated the first sample as movement and told
+  viewers the grid was live over an encoder that had never produced a frame. A sampler must know the difference between
+  "changed" and "started".
+- **The browser stops work you cannot see.** A hidden document silences automatic canvas capture while timers keep
+  running, so a composite can be drawn faithfully fifteen times a second into a stream nobody receives. When one
+  composite already pushed its frames explicitly and another did not, the field found the one that did not.
+- **One switch, one truth.** The page's memory and the server's persisted record both claimed to be the passthrough
+  setting; the monitor believed the page and re-encoded what the publisher copied. The running publisher is the fact;
+  the monitor follows it.
+
 ### 0.21.10
 
 - **A feature waits behind a switch, not in a branch.** When the field suspects a feature, turning it off everywhere by

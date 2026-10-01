@@ -29,6 +29,10 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.11 the grid composite keeps encoding while the KASTR window is hidden (minimised, a locked console, the Relay
+tab in front): the page pushes each drawn frame into the capture stream whenever the browser's automatic capture goes
+quiet, and the grid's events say when that happens. Camera monitors copy whenever the camera's publisher copies.
+
 Since 0.21.10 every camera publishes its full pair always: on-demand standby and the 640-wide low copies are off by default
 (kastr.ini `ondemand = on` on every box of the fleet, or `KASTR_ONDEMAND=1`, brings both back; stored flags are kept, not
 cleared), and the owner page's camera monitors ride WebSockets, so Chromium's six-connection limit no longer caps the

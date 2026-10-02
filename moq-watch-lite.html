@@ -579,6 +579,7 @@
   #odRow button { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:3px 10px; font-size:12px; cursor:pointer; }
   #odRow button.wait { opacity:.7; cursor:progress; }
   #stage .pane .gwait { position:absolute; z-index:7; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); color:#fff; font-size:12px; border-radius:6px; pointer-events:none; }   /* 0.21.2 */
+  #stage .pane .pwait { position:absolute; left:50%; bottom:14%; transform:translateX(-50%); z-index:7; background:rgba(0,0,0,.55); color:#fff; font-size:12px; padding:4px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }   /* 0.21.15: never-painted notice */
   #stage .pane .rendb { position:absolute; right:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#ffd27a; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }   /* 0.21.7: click-to-picture */
   #stage .pane .latb { position:absolute; left:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
@@ -2030,7 +2031,7 @@
 </script>
 <script type="module">
   import "https://esm.sh/@moq/watch/element";
-  import { Net, Signals } from "https://esm.sh/@moq/watch";
+  import { Net, Signals, Video as WatchVideo } from "https://esm.sh/@moq/watch";   // 0.21.15 (P12c): Video.Decoder.supported = the full-config probe
 
   // ---- 0.17.0: who this page runs for (assets/client.js, substituted by the server) ----
   // "app" = the machine's own KASTR window; "web" = a browser on another device that
@@ -2047,6 +2048,7 @@
   let odFeeds = [];                  // [{broadcast, label, live, low}] from the relay host
   const odWanted = new Map();        // broadcast -> ms this page asked for it (chip click)
   let gridWake = null;               // 0.21.2: {gp, idx, path, at} -- a quadrant click waiting for its feed
+  let gridOpen = null;               // 0.21.15 (7b): {gp, idx, path, at, bytes, frames, retried, timer} -- a cell click waiting for the camera's first frame
 
   // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
   // announced() takes a PATTERN now (nothing = everything) and yields route entries
@@ -3294,8 +3296,12 @@
       const n = rows.length;
       if (!n) { g.wrap.remove(); personGroups.delete(key); continue; }
       const op = key.split("/")[1] ?? key;
+      // 0.21.15: a group with no person-class row whose operator is an unattended box (presence mode) is a box's
+      // feeds, and the head says so -- the same pathClass verdict the tile gate and the chime use, read from the
+      // cache (reclassifyTiles): paintPersonGroups runs inside the 1 s applyState loop and never walks roomsPres
+      const box = boxOps.has(op) && ![...rows].some((r) => (tileClasses.get(r.title) ?? "content") === "person");
       g.head.textContent = prettyOperator(op === "?" ? "Unnamed" : op)
-        + " \u2014 " + n + (n === 1 ? " stream" : " streams");
+        + " \u2014 " + n + (box ? (n === 1 ? " feed (box)" : " feeds (box)") : (n === 1 ? " stream" : " streams"));
       // 0.8.7: which relay this person's streams come through. 0.11.0: what THEY
       // said they dialled (presence) first; the .stats guess only for members that
       // announce no relay (in a cluster every node's ingress lists every path).
@@ -3451,18 +3457,38 @@
     } catch {}
   }
   window.__chimeRoom = chimeRoom;   // rig
+  // 0.21.15 (Part 39 item 5): chimes are for PEOPLE only. pathClass() decides; a JOIN waits CHIME_SETTLE_MS so a
+  // box's presence (mode) that lands after its camera tile (the 0.21.2 race) is known before the tone is judged,
+  // and a tile that flaps away inside the window is no arrival. A LEAVE already sits behind the 4 s / 8 s removal
+  // debounce and is judged at once. Every verdict is kept for /api/diag (__switcher.state().chimes).
+  const CHIME_SETTLE_MS = 1500;
+  const chimeLog = { played: 0, held: 0, last: [] };   // last: newest 20 {t, path, cls, joined, why}
+  function chimeNote(path, cls, joined, why) {
+    chimeLog[why === "played" ? "played" : "held"]++;
+    chimeLog.last.push({ t: Date.now(), path, cls, joined: !!joined, why });
+    if (chimeLog.last.length > 20) chimeLog.last.shift();
+  }
+  window.__chimeLog = chimeLog;   // rig
   function personChime(path, joined) {
     if (manualMute || chimeMuted) return;            // master mute covers chimes (0.9.10: publish-only sweeps too)
     if (!connection) return;                         // leave/teardown sweeps are not departures
     if (Date.now() - chimeConnectAt < 4000) return;  // initial discovery flood
-    if (joined && tiles.has(path)) return;           // not actually new
+    if (joined) { setTimeout(() => personChimeJudge(path, true), CHIME_SETTLE_MS); return; }   // let the tile and its presence settle
+    personChimeJudge(path, false);
+  }
+  function personChimeJudge(path, joined) {
+    if (manualMute || chimeMuted || !connection) return;
+    if (joined && !tiles.has(path)) return;          // gone again inside the settle window: a flap, not an arrival
+    const cls = pathClass(path);
+    if (cls !== "person") { chimeNote(path, cls, joined, "not a person"); return; }   // cameras, grids, shares, boxes, low copies
     const key = personKeyOf(path);
     if (key === "?" || key === myPersonKey()) return;   // own streams stay silent
-    // Only the person's FIRST tile arriving / LAST tile leaving chimes.
-    if ([...tiles.keys()].some((n) => n !== path && personKeyOf(n) === key)) return;
+    // Only the person's FIRST person-tile arriving / LAST person-tile leaving chimes (their shares do not count).
+    if (personTilesOf(key, path).length) { chimeNote(path, cls, joined, joined ? "already here" : "still here"); return; }
     const now = Date.now();
-    if (now - (chimeLast.get(key) ?? 0) < 3000) return;  // flap debounce
+    if (now - (chimeLast.get(key) ?? 0) < 3000) { chimeNote(path, cls, joined, "debounce"); return; }  // flap debounce
     chimeLast.set(key, now);
+    chimeNote(path, cls, joined, "played");
     chimeTone(joined);
   }
 
@@ -3506,6 +3532,40 @@
     return false;
   }
   window.__boxHidden = boxHiddenPath;   // rig
+  // 0.21.15 (Part 39 item 5): ONE classification for tile, People row and chime. A path is a PERSON only when
+  // its leaf is the webcam ("camera(-N)", 0.6.8), its operator is not an unattended box (presence mode
+  // publisher / publisher-relay / relay, 0.15.0 + 0.21.2) and it is neither a composite, a grid member nor a
+  // thumbnail copy. Everything else is CONTENT: RTSP cameras, grid composites (rtsp-grid[-N]), screen / file /
+  // media shares, -low.hang copies -- none of them is an arrival or a departure of a person.
+  // (gridMeta / isGridChild are module consts declared further down; only ever read at call time, never during load.)
+  function pathClass(name) {
+    const n = String(name);
+    if (LOW_RE.test(n)) return "low";
+    if (gridMeta.has(n)) return "grid";
+    if (isGridChild(n)) return "gridchild";
+    if (isContentPath(n)) return "content";
+    if (boxHiddenPath(n)) return "box";
+    return "person";
+  }
+  const isPersonPath = (name) => pathClass(name) === "person";
+  // the person's OTHER person-class tiles: the first-in / last-out test must ignore their shares
+  const personTilesOf = (key, except) => [...tiles.keys()].filter((n) => n !== except && personKeyOf(n) === key && isPersonPath(n));
+  window.__pathClass = pathClass;   // rig
+  // The verdicts are CACHED per tile and recomputed once per tile / presence / grid diff (createTile, removeTile,
+  // roomsChanged's debounce, rebuildGridChildren): paintPersonGroups runs inside the 1 s applyState loop and must
+  // not walk roomsPres per row. boxOps = operators with a live hidden-mode presence in the joined room.
+  const tileClasses = new Map();   // tile path -> pathClass verdict
+  const boxOps = new Set();        // lower-case operator -> an unattended box in this room
+  function reclassifyTiles() {
+    tileClasses.clear();
+    for (const n of tiles.keys()) tileClasses.set(n, pathClass(n));
+    boxOps.clear();
+    for (const p of roomsPres.values()) {
+      if (p.goneAt || !p.who || p.slug !== CHANNEL || !presenceHidden(p.who)) continue;
+      boxOps.add(String(p.who.op || "").toLowerCase());
+    }
+  }
+  window.__tileClasses = () => ({ classes: Object.fromEntries(tileClasses), boxOps: [...boxOps] });   // rig
   // members who publish nothing (no camera, no share yet): listed as watching
   function viewerOps() {
     const me = window.__publisher?.peer;
@@ -3577,6 +3637,10 @@
   const GRID_GONE_GRACE_MS = 2500;
   const GRID_TILE_GONE_MS = 3000;   // a grid tile absent this long past the 4 s removal debounce is not flapping
   const gridChildOf = new Map();   // feed path -> grid path
+  const gridForgot = new Map();    // 0.21.15: grid path -> {at, known[]} for 60 s after its meta was forgotten (evidence only -- see createTile)
+  const GRID_FORGOT_HOLD_MS = 60000;
+  function gridForget(gp, m) { gridForgot.set(gp, { at: Date.now(), known: [...(m?.known || [])] }); for (const [k, v] of gridForgot) if (Date.now() - v.at > GRID_FORGOT_HOLD_MS) gridForgot.delete(k);
+    for (const n of m?.known || []) if (tiles.has(n)) console.warn("KASTR: \"" + n + "\" was a member of " + gp + " -- its tile shows on its own now (owner withdrew the grid)"); }   // 0.21.15: an ex-member whose tile already existed (mode both) is named too, not only one created later (createTile)
   function rebuildGridChildren() {
     gridChildOf.clear();
     const current = new Map();   // a path a grid lists RIGHT NOW belongs to that grid
@@ -3585,6 +3649,7 @@
       if ((current.get(f) || gp) !== gp) { m.known.delete(f); continue; }   // moved to another grid
       gridChildOf.set(f, gp);
     }
+    try { reclassifyTiles(); } catch {}   // 0.21.15: a grid diff moves members between gridchild / content
   }
   // 0.13.3: geometry that arrives AFTER the children (room.json is a subscription; the .hang
   // tiles come from the announce loop) used to leave an automatic pick on one hidden child with
@@ -3603,7 +3668,7 @@
     for (const [gp, m] of gridMeta) {
       const announceGone = m.gone && now - m.gone >= GRID_GONE_GRACE_MS;
       const tileGone = m.tileGone && !tiles.has(gp) && now - m.tileGone >= GRID_TILE_GONE_MS;
-      if (announceGone || tileGone) { gridMeta.delete(gp); changed = true; }
+      if (announceGone || tileGone) { gridForget(gp, m); gridMeta.delete(gp); changed = true; }   // 0.21.15: remembered for the evidence log
     }
     if (!changed) return;
     rebuildGridChildren();
@@ -3623,6 +3688,9 @@
   // visible="never", out of the rail counts -- only the chosen feed downloads.
   // The return paths (feedview label, dataset.back, Gallery pill) select the
   // grid path again, which un-parks it.
+  // 0.21.15 (7b-4): a parked composite stays SUBSCRIBED (visible="always" off-stage, canvas removed) so returning from an
+  // opened camera is instant and the zoomed cell keeps moving while the camera starts; costs the composite's ~1.2 Mbit/s + one decode.
+  const GRID_PARKED_WARM = true;
   const gridParked = (name) => !gridMode && !selfSpotEl && gridMeta.has(name) && gridChildOf.get(selectedName) === name;
   const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
   const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name);
@@ -3907,7 +3975,7 @@
       lbl.addEventListener("click", (e) => {
         e.stopPropagation();
         const c = pane.querySelector("canvas:not(.eq)");
-        if (c && viewZoomed(c)) { gridZoom = null; viewReset(c); fitMainstage(lastRail.rows); }
+        if (c && viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); fitMainstage(lastRail.rows); }   // 0.21.15: un-zooming abandons a cold open
         else if (pane.dataset.back && tiles.has(pane.dataset.back)) select(pane.dataset.back);
       });
       pane.appendChild(lbl);
@@ -4060,7 +4128,7 @@
       const c = canvasOf();
       if (!c || !allow() || e.target.closest("button, input")) return;
       e.preventDefault();
-      if (viewZoomed(c)) { gridZoom = null; viewReset(c); } else viewZoomAt(c, 2, e.clientX, e.clientY);
+      if (viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); } else viewZoomAt(c, 2, e.clientX, e.clientY);   // 0.21.15: un-zooming abandons a cold open
     });
   }
   // the publish half's own grid pane uses the same engine
@@ -4097,29 +4165,109 @@
   }
   function paintGridWait() {
     for (const el of document.querySelectorAll("#stage .pane .gwait")) el.remove();
-    if (!gridWake) return;
-    const t = tiles.get(gridWake.gp), meta = gridMeta.get(gridWake.gp);
+    const w = gridWake || gridOpen;   // 0.21.15: one badge painter for the on-demand wake (0.21.2) and the cold open (7b)
+    if (!w) return;
+    const t = tiles.get(w.gp), meta = gridMeta.get(w.gp);
     if (!t || !meta || !t.canvas.isConnected) return;
     const f = viewFitBox(t.canvas);
-    const r = gridRectsW(meta.n, meta.layout, f ? f.cw : t.canvas.width, t.canvas.height)[gridWake.idx];
+    const r = gridRectsW(meta.n, meta.layout, f ? f.cw : t.canvas.width, t.canvas.height)[w.idx];
     if (!r) return;
     const wb = t.canvas.parentElement.getBoundingClientRect(), pb = t.pane.getBoundingClientRect();
     const sc = f ? f.sc : (wb.width / t.canvas.width), ox = f ? f.ox : 0, oy = f ? f.oy : 0;
     const el = document.createElement("div"); el.className = "gwait";
     el.style.left = (wb.left - pb.left + ox + r.x * sc) + "px"; el.style.top = (wb.top - pb.top + oy + r.y * sc) + "px";
     el.style.width = (r.w * sc) + "px"; el.style.height = (r.h * sc) + "px";
-    if (gridZoom && gridZoom.name === gridWake.gp && gridZoom.idx === gridWake.idx) { el.style.left = el.style.top = "0"; el.style.width = el.style.height = "100%"; }   // 0.21.7: the cell IS the stage now
-    el.innerHTML = '<span>\u23f3 ' + (gridWake.low ? 'low quality \u2014 full starting\u2026' : 'full quality starting\u2026') + '</span>';   // 0.21.7: say which picture is coming
+    if (gridZoom && gridZoom.name === w.gp && gridZoom.idx === w.idx) { el.style.left = el.style.top = "0"; el.style.width = el.style.height = "100%"; }   // 0.21.7: the cell IS the stage now
+    const text = w === gridWake ? (gridWake.low ? 'low quality \u2014 full starting\u2026' : 'full quality starting\u2026') : gridOpenText();   // 0.21.7 / 0.21.15: say which picture is coming, and why it waits
+    el.innerHTML = '<span>\u23f3 ' + text + '</span>';
     t.pane.appendChild(el);
   }
   function gridWakeCheck(name) {   // a tile was created: is it the one a quadrant asked for?
     if (!gridWake || gridWake.path !== name) return;
-    const gp = gridWake.gp;
+    const gp = gridWake.gp, idx = gridWake.idx;
     gridWake = null; paintGridWait();
     if (gridZoom?.name === gp) { const t = tiles.get(gp); gridZoom = null; if (t) viewReset(t.canvas); }   // 0.21.7: the composite cell hands the stage to the feed's own tile
-    setTimeout(() => { if (tiles.has(name)) select(name); }, 0);
+    setTimeout(() => { if (tiles.has(name) && !gridOpenStart(gp, idx, name)) select(name); }, 0);   // 0.21.15: a fresh tile has no picture yet -- the cold-open path keeps the cell on the stage
   }
   window.__gridWake = () => gridWake;   // rig
+  // 0.21.15 (Part 39 item 7b): a cell click on a REMOTE grid whose camera tile exists but has no picture yet. A cold pull
+  // delivers nothing until the camera's next keyframe (measured 1-45 s on UniFi; Southridge never), so the stage never shows
+  // the camera's black pane: the composite's cell fills the stage at once (the 0.9.8 seeded view), the camera tile subscribes
+  // OFF-STAGE (visible="always" needs no canvas -- the library gates the video subscription on the renderer's visible signal,
+  // which "always" sets without one; video.out.frame lands on the first decoded frame) and the stage swaps on that frame.
+  // Not for fallback tiles (no WebCodecs: the <video> fallback never has video.out.frame -- hasPicture would wait forever).
+  const GRID_OPEN_POLL_MS = 200, GRID_OPEN_NODATA_MS = 15000, GRID_OPEN_GIVEUP_MS = 90000;
+  function gridOpenStart(gp, idx, fp) {
+    const t = tiles.get(fp);
+    if (!t || t.fb || !CLIENT.webcodecs || !isWatched(fp)) return false;   // a fallback player or an unwatched tile takes the 0.21.7 path
+    if (gridMode || selfSpotEl || selectedName !== gp || !gridMeta.has(gp)) return false;   // only from the composite on the stage
+    if (hasPicture(t) && (t.watch.getAttribute("visible") || "never") !== "never") return false;   // a warm SUBSCRIBED tile opens at once (the 0.21.7 path); a parked child's frame is stale -- the library re-creates the decoder on never -> always, so the instant path showed a black pane until the next keyframe (rig 2026-10-02)
+    gridOpenEnd(false);
+    gridOpen = { gp, idx, path: fp, at: Date.now(), bytes: 0, frames: 0, retried: false, timer: null };
+    gridOpenBytes(gridOpen); gridOpen.frames0 = gridOpen.frames;   // chunks received before the click (cumulative frameCount; the swap needs it to move)
+    gridZoom = { name: gp, idx }; fitMainstage(lastRail.rows); paintGridZoom();   // the picture the viewer clicked, at the grid's quality
+    applyState();   // the camera tile goes visible="always" off-stage (keepWarm)
+    paintGridWait();
+    log("Opening " + shortLabel(fp) + " \u2014 waiting for its first frame");
+    gridOpen.timer = setInterval(gridOpenTick, GRID_OPEN_POLL_MS);
+    return true;
+  }
+  function gridOpenBytes(o) {
+    try { const vs = tiles.get(o.path)?.watch?.video?.out?.stats?.peek?.(); o.bytes = vs?.bytesReceived ?? 0; o.frames = vs?.frameCount ?? 0; } catch { o.bytes = 0; o.frames = 0; }
+  }
+  function gridOpenText() {   // the badge text: which wait this is, and for how long
+    const o = gridOpen; if (!o) return "";
+    const s = Math.round((Date.now() - o.at) / 1000);
+    const gop = gridMeta.get(o.gp)?.gop?.[o.idx];   // an owner MAY announce the camera's keyframe interval (s) -- absent today
+    if (o.bytes <= 0) return (o.retried ? 'no data from the relay \u2014 re-subscribed, still waiting' : 'full quality starting\u2026 no data from the relay yet') + ' (' + s + ' s)';
+    return 'full quality starting\u2026 waiting for the camera\u2019s next keyframe' + (gop ? ' (every ~' + gop + ' s)' : '') + ' (' + s + ' s)';
+  }
+  function gridOpenTick() {
+    const o = gridOpen; if (!o) return;
+    const t = tiles.get(o.path);
+    if (!t || gridMode || selfSpotEl || selectedName !== o.gp || !gridMeta.has(o.gp)) { gridOpenEnd(false); return; }   // the viewer moved on
+    if (document.hidden && !window.__rigVisible) { o.at += GRID_OPEN_POLL_MS; return; }   // a hidden window subscribes nothing (applyState): hold the clock, never time out on it
+    gridOpenBytes(o);
+    const now = Date.now();
+    if (hasPicture(t) && o.frames !== o.frames0) {   // (3) swap on the first decoded frame -- of a chunk received since the click (a stale frame the library has not dropped yet must not pass)
+      log("Opened " + shortLabel(o.path) + " after " + ((now - o.at) / 1000).toFixed(1) + " s" + (o.retried ? " (one re-subscribe)" : ""));
+      gridOpenEnd(true); select(o.path); return;
+    }
+    if (o.bytes <= 0 && !o.retried && now - o.at > GRID_OPEN_NODATA_MS) { o.retried = true; resubscribe(o.path, "No data from the relay"); }   // (5) one retry, never a loop
+    if (now - o.at > GRID_OPEN_GIVEUP_MS) {
+      const why = o.bytes <= 0 ? "no data from the relay" : "no keyframe arrived";
+      log("Could not open " + shortLabel(o.path) + " \u2014 " + why);
+      window.__toast?.("That camera did not start \u2014 " + why + ".", 6000, { level: "warn" });
+      gridOpenEnd(false); return;
+    }
+    paintGridWait();   // the elapsed counter
+  }
+  function gridOpenEnd(swap) {
+    const o = gridOpen; if (!o) return;
+    clearInterval(o.timer); gridOpen = null;
+    if (gridZoom?.name === o.gp) { const t = tiles.get(o.gp); gridZoom = null; if (t) viewReset(t.canvas); if (!swap) fitMainstage(lastRail.rows); }
+    paintGridWait();
+    if (!swap) applyState();   // the camera tile returns to "never"
+  }
+  window.__cellOpen = () => gridOpen ? { ...gridOpen, timer: undefined } : null;   // rig
+  window.__tilePicture = (name) => { const t = tiles.get(name); if (!t) return null; let vs = null; try { vs = t.watch.video?.out?.stats?.peek?.() ?? null; } catch {} return { picture: hasPicture(t), bytes: vs?.bytesReceived ?? 0, frames: vs?.frameCount ?? 0, visible: t.watch.getAttribute("visible"), shown: t.pane.classList.contains("shown") }; };   // rig
+  // 0.21.15 (7b-5): a SHOWN tile whose pane is black right now (no decoded frame -- stallReport needs bytes > 0, so these were
+  // silent): say why on the pane and re-subscribe once when not a byte arrived; cleared the moment a frame lands. Never for a
+  // fallback <video> tile (it has no video.out.frame). Called from the 1 s tick on every path, so a stale notice is always removed.
+  const NEVER_PAINTED_MS = 8000, NEVER_PAINTED_RESUB_MS = 20000;
+  function paintNeverPainted(name, t, nowMs, bytes) {
+    const shown = !gridMode && name === selectedName && t.pane.classList.contains("shown");
+    const since = t.visibleSince;
+    const never = shown && !t.fb && CLIENT.webcodecs && since !== undefined && t.hasVideo !== false && !t.noDecode && (t.watch.getAttribute("visible") || "never") !== "never" && !hasPicture(t);
+    const old = t.pane.querySelector(".pwait");
+    if (!never || nowMs - since < NEVER_PAINTED_MS) { if (old) old.remove(); if (!never) t.coldResub = false; return; }
+    const s = Math.round((nowMs - since) / 1000);
+    const text = bytes <= 0 ? "no data from the relay" + (t.coldResub ? " \u2014 re-subscribed, still waiting" : "") : "waiting for the camera\u2019s next keyframe";
+    const el = old || document.createElement("div");
+    if (!old) { el.className = "pwait"; t.pane.appendChild(el); }
+    el.textContent = "\u23f3 " + text + " (" + s + " s)";
+    if (bytes <= 0 && !t.coldResub && nowMs - since > NEVER_PAINTED_RESUB_MS) { t.coldResub = true; resubscribe(name, "No data from the relay"); }
+  }
   function paintGridZoom() {   // composite-cell expand (no feed behind the cell): a seeded view
     if (!gridZoom || gridMode) { if (gridZoom) clearGridZoom(); return; }
     const t = tiles.get(gridZoom.name), meta = gridMeta.get(gridZoom.name);
@@ -4131,7 +4279,7 @@
   // the Gallery pill on a grid main tile (its click zooms instead of returning)
   const stageBack = document.createElement("button");
   stageBack.type = "button"; stageBack.id = "stageBack"; stageBack.textContent = "\u25a6 Gallery";
-  stageBack.addEventListener("click", (e) => { e.stopPropagation(); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); });
+  stageBack.addEventListener("click", (e) => { e.stopPropagation(); gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); });   // 0.21.15: the Gallery pill abandons a cold open
   stageWrap.appendChild(stageBack);
   // 0.21.0: idle chrome -- 3 s without pointer/key input hides the media bar, the filename bars, the
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
@@ -4796,7 +4944,8 @@
       //                       bandwidth for the rows near the view. Generous, so
       //                       they are decoding by the time they are scrolled to
       //                       rather than starting from black afterwards.
-      const wantVisible = !shown ? "never"
+      const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name));   // 0.21.15: decode off-stage (7b) / keep the parked composite flowing (7b-4)
+      const wantVisible = (!shown && !keepWarm) ? "never"
         // Audio-only: nothing for the video pipeline to do, so don't
         // enable it. Audio is gated by paused/muted alone (bundle-
         // verified), so "never" costs no sound; the starvation check has
@@ -4804,17 +4953,18 @@
         : audioOnly ? "never"
         // Paged out of the rail (0.8.2): no pixels, no download; the pane
         // stays in the DOM and its audio stays volume-driven.
-        : (!gridMode && railHiddenNames.has(name)) ? "never"
+        : (!gridMode && railHiddenNames.has(name) && !keepWarm) ? "never"   // 0.21.15: a hidden grid child / parked composite under keepWarm subscribes off-stage (hiddenChild tiles land in railHiddenNames too)
         // 0.8.6: an app nobody can see (minimized/occluded) or a tile hidden
         // behind another tile's full screen downloads nothing -- audio is
         // volume-driven and unaffected.
         : (document.hidden && !window.__rigVisible) ? "never"   // 0.16.0: __rigVisible = the rig's hidden browser pane still decodes
         : (document.fullscreenElement && !document.fullscreenElement.contains(t.pane)) ? "never"   // 0.21.0: the stage in full screen CONTAINS every pane
-        : isSelected ? "always"
+        : (isSelected || keepWarm) ? "always"   // 0.21.15: "always" needs no canvas -- the library gates the subscription on the renderer's visible signal, which "always" sets without one
         : GRID_PREFETCH;   // ladder tiles are on-screen; the margin resolves them
 
       if (t.watch.getAttribute("visible") !== wantVisible) {
         t.watch.setAttribute("visible", wantVisible);
+        t.visibleSince = wantVisible === "never" ? undefined : performance.now();   // 0.21.15: when this tile began subscribing (never-painted notice)
       }
       if (t.fb) {   // 0.17.0: the fallback plays the promoted tile only -- one relay-host pipeline per page
         const want = (wantVisible !== "never" && isSelected && !parkedStreams.has(name)) ? watchFallbackUrl(name) : "";
@@ -4968,11 +5118,20 @@
    */
   // 0.9.2: can THIS machine decode a codec string? (cached; WebCodecs asks the platform)
   const decodeCache = new Map();
-  function decodeSupported(codec) {
-    if (decodeCache.has(codec)) return Promise.resolve(decodeCache.get(codec));
+  // 0.21.15 (P12c): the library's own full-config probe -- codec + description (avcC/hvcC) + container, with its avc3 -> avc1
+  // retry -- so the answer is the one the player's decoder will get; a bare codec string still works (older callers, rigs).
+  const hexBytes = (h) => { const s = String(h); const b = new Uint8Array(s.length >> 1); for (let i = 0; i < b.length; i++) b[i] = parseInt(s.substr(i * 2, 2), 16); return b; };
+  function decodeSupported(rend) {
+    const r = typeof rend === "string" ? { codec: rend } : (rend || {});
+    const key = String(r.codec || "") + "|" + String(r.description || "") + "|" + String(r.container?.kind || "");
+    if (decodeCache.has(key)) return Promise.resolve(decodeCache.get(key));
     if (typeof VideoDecoder === "undefined" || !VideoDecoder.isConfigSupported) return Promise.resolve(true);
-    return VideoDecoder.isConfigSupported({ codec }).then((r) => { decodeCache.set(codec, !!r.supported); return !!r.supported; })
-      .catch(() => { decodeCache.set(codec, true); return true; });   // unknown -> assume yes, never hide a stream on a guess
+    const full = WatchVideo?.Decoder?.supported;
+    const p = (typeof full === "function" && r.container)
+      ? full({ ...r })   // a copy: the probe rewrites codec on its avc3 -> avc1 fallback
+      : VideoDecoder.isConfigSupported({ codec: r.codec, description: r.description ? hexBytes(r.description) : undefined }).then((x) => !!x.supported);
+    return Promise.resolve(p).then((ok) => { decodeCache.set(key, !!ok); return !!ok; })
+      .catch(() => { decodeCache.set(key, true); return true; });   // unknown -> assume yes, never hide a stream on a guess
   }
   window.__decodeCache = decodeCache;   // rig hook
   function matchRendition(t) {
@@ -5296,10 +5455,11 @@
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
-    if (boxHiddenPath(name)) return;   // 0.21.2: an unattended box's camera
+    if (pathClass(name) === "box") return;   // 0.21.2: an unattended box's camera (0.21.15: the one classifier tile, People and chime share)
     personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced)
     const gm0 = gridMeta.get(name);
     if (gm0) gm0.tileGone = 0;   // 0.9.4: the grid's tile is back
+    for (const [gp, f] of gridForgot) if (f.known.includes(name) && Date.now() - f.at <= GRID_FORGOT_HOLD_MS) { console.warn("KASTR: \"" + name + "\" was a member of " + gp + " " + Math.round((Date.now() - f.at) / 1000) + " s ago -- shown as its own tile (owner withdrew the grid)"); break; }   // 0.21.15: the 'split up in the presence' evidence
     // Auto-watch on join (0.6.7): inside a joined channel a stream you have
     // never parked starts WATCHED -- the channel boundary replaces v0.6.2's
     // global off-by-default rationale. Placed here so every tile creator
@@ -5451,7 +5611,7 @@
       // tile -- a click there must bring it to the stage, never zoom it in place.
       if (name !== selectedName || selfSpotEl) { select(name); return; }
       // zoomed in (wheel or cell): a click shows all again
-      if (viewZoomed(tile.canvas)) { gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape
+      if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape (0.21.15: a click on the waiting cell abandons the open)
       // 0.8.12: a full-quality feed on the stage -- click returns to its grid
       const gp = gridChildOf.get(name);
       if (gp && tiles.has(gp)) { select(gp); return; }
@@ -5465,6 +5625,7 @@
           const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
           if (fp && tiles.has(fp)) {   // 0.21.7: a tile on the low copy opens at once; the full pair is asked for right now
             if (!fullLive.has(fp) && (odFeeds.some((f) => f.broadcast === fp) || lowAvail.has(fp))) odWake(fp);
+            if (gridOpenStart(name, idx, fp)) return;   // 0.21.15 (7b): no picture yet -> the composite cell zoomed, the camera decodes off-stage, swap on its first frame
             select(fp); return;
           }
           if (fp && gridWakeStart(name, idx, fp)) return;   // 0.21.2: an on-demand or down feed: wake it, open it when it is up
@@ -5556,6 +5717,7 @@
     tile.mediabar = buildMediaBar(name, tile);   // 0.8.10: shared-file controls (shown when .media state arrives)
     pane.appendChild(tile.mediabar);
     tiles.set(name, tile);
+    reclassifyTiles();   // 0.21.15: the new tile's class (the People head reads the cache, never the classifier)
     attachMeter(tile);
 
     if (selectedName === undefined && isWatched(name) && !isGridChild(name)) selectedName = name;   // 0.9.4: never a hidden child
@@ -5574,6 +5736,7 @@
     t.pane.remove(); // disconnects <moq-watch>, stops its connection
     t.row.remove();
     tiles.delete(name);
+    reclassifyTiles();   // 0.21.15: drop the tile's cached class
     if (spotDone && spotDone.split("@")[0] === name) spotDone = null;   // 0.21.0: a re-created tile re-applies the standing vote
     personChime(name, false);   // 0.8.2: leave chime (after delete: last-tile test)
     if (manualOrder.includes(name)) saveOrder();   // tiles no longer has it
@@ -5582,7 +5745,7 @@
     const gm = gridMeta.get(name);
     if (gm) {
       gm.tileGone = Date.now();
-      if (gm.gone) { gridMeta.delete(name); rebuildGridChildren(); if (gridZoom?.name === name) gridZoom = null; }
+      if (gm.gone) { gridForget(name, gm); gridMeta.delete(name); rebuildGridChildren(); if (gridZoom?.name === name) gridZoom = null; }   // 0.21.15: remembered for the evidence log
       else setTimeout(pruneGridMeta, GRID_TILE_GONE_MS + 50);
     }
     if (selectedName === name) {
@@ -5753,7 +5916,8 @@
       const slugs = lastChannelList.map((r) => r.slug).join(",");
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
       try { stateMembersApply(); } catch {}   // 0.13.0
-      try { for (const n of [...tiles.keys()]) if (boxHiddenPath(n)) removeTile(n); } catch {}   // 0.21.2: the mode arrived after the tile
+      try { for (const n of [...tiles.keys()]) if (pathClass(n) === "box") removeTile(n); } catch {}   // 0.21.2: the mode arrived after the tile (0.21.15: pathClass)
+      try { reclassifyTiles(); } catch {}   // 0.21.15: a presence diff (mode, op, room) re-judges every tile once
       try { paintSidebar(); } catch {}
       try { paintChannelChip(); } catch {}
       try { gatePaintChannels(); } catch {}
@@ -6129,6 +6293,7 @@
     railPage = 0;                  // fresh room, first rail page
     relayOf.clear(); avatarUrls.clear(); files.clear(); paintFiles();   // 0.8.7: per-room facts
     setTimeout(() => { try { window.__avatarPublish?.(); } catch {} }, 1500);   // 0.8.7: share my picture
+    if (gridOpen) { clearInterval(gridOpen.timer); gridOpen = null; }   // 0.21.15: a cold open does not survive the room
     sinceTs.clear(); members.clear(); roomSince = 0; gridMeta.clear(); gridChildOf.clear(); gridZoom = null; listedFiles.clear(); mediaMeta.clear();   // 0.8.8: per-room facts
     setTimeout(() => { try { window.__sinceAnnounce?.set?.(); } catch {} }, 1200);   // 0.8.8: I am here since now
     learnRelayName();   // 0.11.0: then say which relay this is by name
@@ -7743,14 +7908,14 @@
     const nowMs = performance.now();
     for (const [name, t] of tiles) {
       const el = t.watch;
-      if (el.getAttribute("visible") === "never") { t.starveSince = nowMs; t.framesSince = nowMs; continue; }
+      if (el.getAttribute("visible") === "never") { t.starveSince = nowMs; t.framesSince = nowMs; paintNeverPainted(name, t, nowMs, 0); continue; }   // 0.21.15: drops a stale notice
       // No video advertised: video bytes are then legitimately zero
       // forever, and posting "starved" made the publisher print a bogus
       // warning every 30s for every paused/audio-only source. === false
       // deliberately, not !== true: a broadcast whose catalog never
       // arrives (a fully black-holed relay path -- the case this
       // reporter exists for) still gets reported.
-      if (t.hasVideo === false) { t.starveSince = nowMs; t.framesSince = nowMs; continue; }
+      if (t.hasVideo === false) { t.starveSince = nowMs; t.framesSince = nowMs; paintNeverPainted(name, t, nowMs, 0); continue; }   // 0.21.15: drops a stale notice
       let bytes = 0, frames = 0, stalled = false;
       try { const vs = el.video?.out?.stats?.peek?.(); bytes = vs?.bytesReceived ?? 0; frames = vs?.frameCount ?? 0; } catch {}
       try { stalled = el.video?.out?.stalled?.peek?.() === true; } catch {}
@@ -7778,6 +7943,7 @@
           if (!t.frozenResubAt || nowMs - t.frozenResubAt > 30000) { t.frozenResubAt = nowMs; resubscribe(name, "Picture stopped"); }
         }
       }
+      paintNeverPainted(name, t, nowMs, bytes);   // 0.21.15 (7b-5): the no-frame case stallReport cannot see -- BEFORE the bytes-advance `continue`, so the notice updates and clears while bytes flow
       if (bytes > (t.lastStarveBytes ?? 0) && !stalled) {
         t.lastStarveBytes = bytes;
         t.starveSince = nowMs;
@@ -7820,11 +7986,12 @@
       // 0.9.2: a rendition this machine cannot decode (H.265 pass-through on a
       // box without hardware HEVC) -- say so on the tile instead of showing black.
       if (cat && hasV) {
-        const codecs = Object.values(cat.video.renditions).filter((r) => r && !r.broadcast).map((r) => r?.codec).filter(Boolean);
+        const rends = Object.values(cat.video.renditions).filter((r) => r && !r.broadcast && r.codec);   // 0.21.15 (P12c): whole configs, not codec strings
+        const codecs = rends.map((r) => r.codec);
         const key = codecs.join(",");
         if (key && key !== t.codecKey) {
           t.codecKey = key;
-          Promise.all(codecs.map((c) => decodeSupported(c))).then((oks) => {
+          Promise.all(rends.map((r) => decodeSupported(r))).then((oks) => {   // 0.21.15 (P12c)
             const bad = oks.every((ok) => ok === false);
             const label = codecs.find((c) => /^(hev1|hvc1)/i.test(c)) ? "H.265" : codecs[0];
             const next = bad ? label : null;
@@ -9050,6 +9217,8 @@
       mode: PAGE_MODE,   // 0.12.0
       groups: roomsGroups,   // 0.15.0 (B4)
       streams: [...tiles.keys()],
+      chimes: { played: chimeLog.played, held: chimeLog.held, last: chimeLog.last.slice(-5) },   // 0.21.15: chime verdicts -- rides the diag POST (/api/diag watcher.chimes)
+      classes: Object.fromEntries(tileClasses),   // 0.21.15: what each tile is (person | content | grid | gridchild | box | low) -- the cache the People head reads
       viewing: [...tiles.values()].filter((t) => t.watch.hasAttribute("url")).length,   // 0.13.0 (F2): tiles with a live subscription -- rides the diag POST to /api/instance
       shapes: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.shape).map(([n, t]) => [n, t.shape])),   // 0.9.8: bitmap vs decoded frame
       selected: selectedName,
@@ -9058,6 +9227,7 @@
       mutedStreams: [...mutedStreams],
       gridOf: Object.fromEntries([...gridChildOf]),   // 0.9.5: feed -> grid it is heard through
       gridOut: Object.fromEntries([...gridMeta].map(([k, m]) => [k, [...(m.out || [])]])),   // 0.14.0: grid -> members its owner evicted (still hidden)
+      gridForgot: Object.fromEntries([...gridForgot].map(([k, f]) => [k, { agoS: Math.round((Date.now() - f.at) / 1000), known: f.known }])),   // 0.21.15: grids forgotten in the last 60 s and the members they listed
       warmAudio,
       audioMode,
       channel: CHANNEL,
@@ -11524,8 +11694,12 @@
         if (!a) return;
         if ("videoPaused" in m.set) {
           a.videoPaused = !!m.set.videoPaused;
-          // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back
-          if (!a.videoPaused && (a.fx || a.blur)) { const sl = slots.get(a.id); if (sl) setTimeout(() => { try { applyFx(sl); } catch {} }, 400); }
+          // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back;
+          // 0.21.15: the stamp and upright loops too (applyFx decides via loopWanted); a pause STOPS the loop --
+          // before invisible flips below, so the raw track handed back to the capture source is still live -- and
+          // an explicit resume clears the 0.8.6 auto-pause (the user's lever wins: publish@0.5.0 ends the muted
+          // track when invisible disables the camera, so its unmute never comes to clear it).
+          { const sl = slots.get(a.id); if (sl && !sl.rtsp && a.kind === "camera") { if (a.videoPaused) stopBlur(sl); else { sl.autoPaused = false; setTimeout(() => { try { applyFx(sl); } catch {} }, 400); } } }
           const slot = slots.get(a.id);
           if (slot && !slot.rtsp) {
             slot.publish.invisible = a.videoPaused;
@@ -12138,7 +12312,7 @@
       row.className = "camrow";
       row.dataset.id = String(a.id);
       row.innerHTML =
-        '<div class="top"><span class="switch sm" title="On air"><input type="checkbox"><i></i></span>' +
+        '<div class="top"><label class="switch sm" title="On air"><input type="checkbox"><i></i></label>' +   // 0.21.15: a LABEL, like every other switch -- the span (0.21.0) had no activation behaviour, so the hidden input (asi-brand.css .switch input: 0x0, opacity 0) was unreachable by mouse and a row could never be unchecked
         '<span class="lbl"></span><span class="badge">off</span>' +
         '<label class="aud" title="Publish the camera\'s audio (AAC) with this feed. Off = video only."><span class="switch sm"><input type="checkbox"><i></i></span> <span>Audio</span></label>' +   // 0.9.8
         '<button class="vid" type="button" ' +
@@ -12157,6 +12331,10 @@
         a.enabled = cb.checked;
         row.classList.toggle("off", !a.enabled);
         if (running) { a.enabled ? startSlot(a) : stopSlot(a.id); }
+        const evLine = (a.enabled ? "Enabled " : "Disabled ") + (a.label || a.name) + (a.kind === RTSP ? (a.enabled ? " \u2014 its relay pair publishes again once the monitor loads" : " \u2014 relay pair unpublished, monitor closed, grid seat kept") : "");   // 0.21.15: field evidence for the row switch (Part 39 item 1)
+        log(evLine);   // the status bar (log = the statusEl painter, #pubStatus -- not launch.log)
+        if (a.kind === RTSP && !IS_WEB2) nativePost("/api/rtsp/note", { text: evLine });   // launch.log through the bridge (`page: ...`), the 0.21.5 gridNote idiom; loopback-only route, a web client has no bridge
+        announce();   // 0.21.15: the room's source list drops/re-adds it now, not at the next 4 s re-announce (the .vid click handler does the same)
         refreshUi();
       });
 
@@ -12210,8 +12388,12 @@
         paintVid(vid, a);
         vid.addEventListener("click", () => {
           a.videoPaused = !a.videoPaused;
-          // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back
-          if (!a.videoPaused && (a.fx || a.blur)) { const sl = slots.get(a.id); if (sl) setTimeout(() => { try { applyFx(sl); } catch {} }, 400); }
+          // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back;
+          // 0.21.15: the stamp and upright loops too (applyFx decides via loopWanted); a pause STOPS the loop --
+          // before invisible flips below, so the raw track handed back to the capture source is still live -- and
+          // an explicit resume clears the 0.8.6 auto-pause (the user's lever wins: publish@0.5.0 ends the muted
+          // track when invisible disables the camera, so its unmute never comes to clear it).
+          { const sl = slots.get(a.id); if (sl && !sl.rtsp && a.kind === "camera") { if (a.videoPaused) stopBlur(sl); else { sl.autoPaused = false; setTimeout(() => { try { applyFx(sl); } catch {} }, 400); } } }
           // The library's own lever. invisible=true disables the video
           // ENCODER for every source kind, and for a camera also releases
           // the device outright (its enable gate is !invisible, so a
@@ -13153,6 +13335,7 @@
       tr.addEventListener("mute", () => {
         if (slot.entry.videoPaused || !slots.has(slot.entry.id)) return;   // the user's pause wins
         slot.autoPaused = true;
+        stopBlur(slot);   // 0.21.15: a muted camera gives the loop nothing to draw; camOff now, re-applied on unmute / explicit resume
         slot.publish.invisible = true;
         log("Camera stopped delivering frames (locked screen?) \u2014 video paused for viewers");
         announce(); refreshUi();
@@ -13160,6 +13343,7 @@
       tr.addEventListener("unmute", () => {
         if (!slot.autoPaused || !slots.has(slot.entry.id)) return;
         slot.autoPaused = false;
+        if (!slot.entry.videoPaused) setTimeout(() => { try { applyFx(slot); } catch {} }, 400);   // 0.21.15: saved effect / stamp / upright loop back after an auto-pause (the camera re-enables just below). Likely unreachable on publish@0.5.0 (invisible ENDS the muted track, so unmute never fires) -- kept for a library that keeps the track
         if (!slot.entry.videoPaused) {
           slot.publish.invisible = false;
           setTimeout(() => { try { applySettings(slot); } catch {} }, 150);   // fresh keyframe
@@ -13390,6 +13574,58 @@
     if (url.startsWith("preset:")) { try { return window.__bgPreset?.(url.slice(7)) || ""; } catch { return ""; } }
     return url;
   }
+  // 0.21.15: the camera is ON (not camOff) and 30 s passed without a track. The vendored publisher swallows the
+  // getUserMedia error (Camera source: `.catch(()=>{})`, four fast attempts with 250->1000 ms backoff, then silence
+  // until device.out.available changes or its enable gate flips), so the reason is read from its device signals --
+  // permission / available / active -- and, when those only say "a camera is there and nothing opened it", from ONE
+  // probe getUserMedia of our own whose DOMException name is the answer. A saved deviceId missing from `available`
+  // is NOT a cause by itself (device.requested falls back to undefined and the library opens any camera), so it is
+  // a note on the text and the probe then asks for any camera. A probe that SUCCEEDS means the library merely ran
+  // out of attempts: flip its enable gate once (the 0.8.6 stall nudge's lever) and re-arm; toast only if that fails.
+  async function fxNoTrack(slot) {
+    const base = "the camera produced no video track";
+    let why = null, note = "";
+    try {
+      const v = slot.publish?.sources?.video?.peek?.();
+      const dev = v && "device" in v ? v.device : null;
+      const perm = dev?.out?.permission?.peek?.();
+      const avail = dev?.out?.available?.peek?.();
+      const active = dev?.out?.active?.peek?.();
+      const want = slot.entry.deviceId || null;
+      const stale = !!want && Array.isArray(avail) && avail.length > 0 && !avail.some((d) => d.deviceId === want);
+      if (stale) note = " (the saved camera was not found \u2014 pick it again under Camera)";
+      if (dev && (perm === false || avail === undefined)) why = "camera permission is not granted";
+      else if (Array.isArray(avail) && avail.length === 0) why = "no camera is connected";
+      else if (active) why = "the publisher holds the camera but its track never reached the encoder";
+      window.__fxTrace?.push?.(["noTrack", slot.entry.id, perm ?? null, Array.isArray(avail) ? avail.length : null, !!active, want, stale]);
+      if (!why) {
+        let name = "ok";
+        try {
+          const s = await navigator.mediaDevices.getUserMedia({ video: want && !stale ? { deviceId: { exact: want } } : true });
+          s.getTracks().forEach((t) => { try { t.stop(); } catch {} });
+        } catch (e) { name = e?.name || "Error"; }
+        if (!slots.has(slot.entry.id) || camOff(slot)) return;   // removed or paused while we probed
+        why = name === "NotReadableError" ? "another app holds the camera (or its driver failed)"
+            : name === "NotAllowedError" || name === "SecurityError" ? "camera permission was refused"
+            : name === "NotFoundError" || name === "OverconstrainedError" ? "the camera is gone"
+            : name === "ok" ? null : "camera start failed (" + name + ")";
+        if (!why) {
+          if (!slot.fxNudged) {   // it opens for us: the publisher gave up its attempts -- one nudge through its enable gate
+            slot.fxNudged = true;
+            log("Camera opens but the publisher gave up \u2014 nudging " + slot.entry.name);
+            slot.publish.invisible = true;
+            setTimeout(() => { if (!slots.has(slot.entry.id) || camOff(slot)) return; slot.publish.invisible = false; try { applySettings(slot); } catch {} applyFx(slot).catch(() => {}); }, 300);
+            return;
+          }
+          why = "the camera opens but the publisher never took its track";
+        }
+      }
+    } catch {}
+    if (!slots.has(slot.entry.id) || camOff(slot)) return;   // removed or paused meanwhile: nothing to warn about
+    const text = base + " \u2014 " + (why || "reason unknown") + note;
+    fxFailOnce(slot, text);
+    log("Video effects: " + text + " (" + slot.entry.name + ")");
+  }
   function fxFailOnce(slot, why) {   // 0.15.0: one status line + one warn toast per slot per cause
     if (slot.fxFailed === why) return;
     slot.fxFailed = why;
@@ -13402,7 +13638,13 @@
   // 0.21.5: a camera whose frames the library would take through its <video> polyfill (WebKit) runs the
   // light loop at 0 degrees so the phone's orientation is baked into the pixels (see window.__frameLoop)
   const uprightOnly = (slot) => !!window.__frameLoop?.needed && slot.entry.kind === "camera" && !slot.rtsp;
-  const loopWanted = (slot, fx) => fxActive(fx) || stampOnly(slot) || uprightOnly(slot);
+  // 0.21.15: a camera that is OFF on purpose -- the row's pause, the join contract's videoPaused (a rejoin
+  // starts every camera paused, addSource), or the 0.8.6 auto-pause -- carries publish.invisible = true, which
+  // disables the library's capture outright (publish@0.5.0 element: #n = !invisible -> Camera in.enabled).
+  // There is no track to loop over and none is expected: the loop is not wanted, and its arm must never time
+  // out into "the camera produced no video track" for a camera nobody asked to be on.
+  const camOff = (slot) => slot.entry.kind === "camera" && !slot.rtsp && (!!slot.entry.videoPaused || !!slot.autoPaused);
+  const loopWanted = (slot, fx) => !camOff(slot) && (fxActive(fx) || stampOnly(slot) || uprightOnly(slot));
   // the field readout: one verbose toast when an upright loop starts or its frame size changes
   function uprightNote(slot, b, ow, oh) {
     if (!uprightOnly(slot) || fxActive(b.fx)) return;
@@ -13432,7 +13674,7 @@
     const raw = unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
     window.__fxTrace?.push?.(["raw", slot.entry.id, !!raw]);
     if (!raw) { armFxOnTrack(slot); return; }                        // 0.15.0: was a toast + give-up
-    slot.fxFailed = null;
+    slot.fxFailed = null; slot.fxNudged = false;   // 0.21.15: a track landed -- the one-shot nudge is available again
     startBlurLoop(slot, raw, seg, want() || NONE_FX);
   }
   // 0.15.0: no raw track yet (a saved effect on a camera that has not landed) -- run applyFx once
@@ -13468,10 +13710,16 @@
       hook();
       window.__fxTrace?.push?.(["poll", slot.entry.id, !!pubCap(slot.publish), !!srcOf(), !!srcOf()?.peek?.(), !!unwrapTrack(srcOf()?.peek?.()), !!slot.publish?.capture, !!slot.publish?.video?.in?.capture?.peek?.()]);   // 0.21.5 rig trace
       if (unwrapTrack(srcOf()?.peek?.())) { fire(); return; }
+      if (camOff(slot)) {   // 0.21.15: paused on purpose while we waited -- stand down quietly; the resume path re-arms
+        try { slot.fxArm(); } catch {}
+        slot.fxArm = null; slot.fxArmT = 0;
+        window.__fxTrace?.push?.(["armOff", slot.entry.id]);
+        return;
+      }
       if (performance.now() - t0 > 30000) {
         try { slot.fxArm(); } catch {}
         slot.fxArm = null; slot.fxArmT = 0;
-        fxFailOnce(slot, "the camera produced no video track");
+        fxNoTrack(slot).catch(() => {});   // 0.21.15: the camera is ON and still gave no track -- say which case
         return;
       }
       slot.fxArmT = setTimeout(poll, 1500);
@@ -13766,6 +14014,10 @@
     }
   }
   // 0.15.0: per-loop telemetry for the console.
+  // 0.21.15: the pause/arm side for the rig and /api/diag -- camera slots WITHOUT a loop too
+  window.__fxArms = () => [...slots.values()].filter((s) => s.entry.kind === "camera" && !s.rtsp).map((s) => ({
+    id: s.entry.id, camOff: camOff(s), paused: !!s.entry.videoPaused, autoPaused: !!s.autoPaused, invisible: !!s.publish?.invisible,
+    loop: !!s.blur, armed: !!s.fxArm, failed: s.fxFailed || null, nudged: !!s.fxNudged }));
   window.__fxDebug = () => [...slots.values()].filter((s) => s.blur).map((s) => ({
     id: s.entry.id, mode: s.blur.fx?.bg?.mode || "none", quality: s.blur.quality, running: !!s.blur.alive,
     rot: s.blur.rot || 0, mirror: !!s.blur.mirror, cw: s.blur.cw || 0, ch: s.blur.ch || 0, stampOnly: !fxActive(s.blur.fx) && !uprightOnly(s), upright: uprightOnly(s), why: window.__frameLoop?.why ?? null, vh: s.blur.video?.videoHeight, raw: (() => { try { const st = s.blur.raw?.getSettings?.(); return st ? { w: st.width, h: st.height } : null; } catch { return null; } })(),   // 0.21.0 / 0.21.5
@@ -13918,6 +14170,7 @@
     pane.appendChild(bar);
 
     const publish = document.createElement("moq-publish");
+    try { publish.broadcast?.in?.maxAge?.set?.(5000); } catch {}   // 0.21.15 (P12a): the element's Broadcast exists from the constructor; set before `url` and before the pane is connected (the connection is enabled by connectedCallback), so every track is created with it
     publish.setAttribute("url", authUrl(urlInput.value.trim()));
     publish.setAttribute("name", chanPath(ensureHang(entry.name)));
     // Announce only when the whole rig is live; a source added mid-broadcast
@@ -14860,6 +15113,7 @@
         origin: connection.origin,
         enabled: live,
         name: Net.Path.from(chanPath(ensureHang(slot.entry.name))),
+        maxAge: 5000,   // 0.21.15 (P12a): retention per relay hop = the native pairs' `import --max-age 5s`; hang's default kept 30 s of every page-published track per hop (archive asks 2 s, fMP4 fallback 4 s, page budgets < 1 s)
         display: capture.out.display,
       });
       const encoder = new Video.Encoder("video", { enabled: true, broadcast, capture });
@@ -15023,7 +15277,11 @@
   }
   window.__gridSeats = { saved: seatsSaved, order: (id = "1") => { try { return JSON.parse(gridPref(id, "order", "[]") || "[]"); } catch { return []; } },   // 0.15.0: per grid
                          of: () => Object.fromEntries(added.filter((a) => a.kind === RTSP).map((a) => [a.url, gridIdOf(a)])),   // 0.15.0: url -> grid id
-                         evicted: () => added.filter((a) => a.evicted).map((a) => a.url) };   // rig (0.14.0: evicted urls)
+                         evicted: () => added.filter((a) => a.evicted).map((a) => a.url),   // rig (0.14.0: evicted urls)
+                         evict: (url, on = true) => {   // 0.21.15 rig: evict / readmit a member by hand -- a harness test camera (lavfi) never fails on its own; held until evict(url, false)
+                           const hits = added.filter((x) => x.kind === RTSP && (x.url === url || x.name === url || String(x.id) === String(url))); if (!hits.length) return false;   // url, broadcast name or entry id -- two #addTestBtn cameras share one url
+                           for (const a of hits) { a.evicted = !!on; a.evictWhy = on ? "rig" : null; if (on) { a.evictedAt = Date.now(); a.evictAttempt = 0; } }
+                           updateRtspGrid(); refreshUi(); return hits.length; } };
   window.__gridFeeds = { get: () => gridFeeds, set: setGridFeeds, lock: () => gridLock, setLock: setGridLock,
     names: () => gridNames, setNames: setGridNames, grids: gridRegistry,   // 0.15.0
     count: () => added.filter((a) => a.kind === RTSP && a.enabled).length };   // 0.9.2: feeds mode (View menu shows it when feeds exist)
@@ -15189,6 +15447,14 @@
       // the cell and clear of the OSD lines cameras draw along the top.
       if (gridNames && ch >= 90 && s.entry?.label) drawCellName(g.cx, String(s.entry.label).slice(0, 24), x + 8, y + ch - 30);
     });
+    if (!ms.length && rects[0]) {   // 0.21.15: every member evicted -- one cell says so instead of a black composite
+      const r = rects[0];
+      g.cx.fillStyle = "#000"; g.cx.fillRect(r.x, r.y, r.w, r.h);
+      g.cx.fillStyle = "#101820"; g.cx.fillRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4);
+      g.cx.fillStyle = "#9fb3c8"; g.cx.font = "15px sans-serif"; g.cx.textAlign = "center";
+      g.cx.fillText("cameras offline \u2014 reconnecting (" + (g.evicted || []).length + ")", r.x + r.w / 2, r.y + r.h / 2);
+      g.cx.textAlign = "left";
+    }
     drawStamp(g.cx, g.canvas.width, g.canvas.height);   // 0.18.0
     // 0.21.11: a hidden document (minimised, locked console, covered on a server) stops the AUTOMATIC canvas
     // capture even though this timer keeps drawing -- the composite's encoder saw zero frames for hours on a
@@ -15497,7 +15763,7 @@
   }
   function teardownRtspGrid(g) {   // 0.15.0: takes the grid
     if (!g) return;
-    gridNote(g, "torn down");   // 0.21.5
+    g.noteAt = 0; gridNote(g, "torn down");   // 0.21.5; 0.21.15: the last line of a grid is never throttled (a dropped one could not be recovered -- the grid object dies here)
     closeGridMember(g, false);   // 0.9.5
     rtspGrids.delete(g.id);
     clearInterval(g.timer);
@@ -15525,7 +15791,8 @@
     const allEntries = added.filter((a) => a.kind === RTSP && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
     // 0.14.0: members gridEvictionTick took out after GRID_EVICT_AFTER failed attempts. They keep
     // their seat, their hidden pane and their remembered order; the announce lists them as `out`
-    // so viewers keep their tiles hidden. One surviving member keeps the grid alive meanwhile,
+    // so viewers keep their tiles hidden. 0.21.15: ANY evicted seat keeps the grid alive, even at zero live
+    // members (the rule below) -- an outage never hands the members back to the viewers as loose tiles;
     // so a two-camera room does not flip layouts every time one camera drops.
     const allEvicted = added.filter((a) => a.kind === RTSP && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
     // 0.15.0: the same rules, once per gridId -- a grid exists while its own feeds earn it
@@ -15538,7 +15805,12 @@
       const entries = allEntries.filter((a) => gridIdOf(a) === id);
       const evicted = allEvicted.filter((a) => gridIdOf(a) === id);
       let g = gridById(id);
-      if (gridFeeds !== "separate" && (entries.length >= 2 || (g && evicted.length && entries.length >= 1))) {
+      // 0.21.15: a grid that exists keeps existing while ANY of its members is evicted -- with every member
+      // offline it has zero live entries and used to be torn down, which withdrew the announce, un-hid the
+      // members' panes and (mode both/grid alike) let every reconnecting pair publish as a loose tile until
+      // TWO were readmitted (Mendon grid 2, 2026-10-01). Now the composite stays on the air with every seat
+      // listed as `out`, and the first camera back lands in a one-cell grid.
+      if (gridFeeds !== "separate" && (entries.length >= 2 || (g && evicted.length > 0))) {
         if (!g) g = buildRtspGrid(id);
         anyGrid = true;
         const members = entries.map((a) => ready.get(a.id) || { entry: a, video: null, placeholder: true });
@@ -15555,6 +15827,8 @@
         }
         g.members = members;
         g.evicted = evicted;   // 0.14.0: announced as `out`
+        const allOut = entries.length === 0;   // 0.21.15: every member evicted -- the grid lives on, every seat hidden
+        if (allOut !== !!g.allOut) { g.allOut = allOut; g.noteAt = 0; gridNote(g, allOut ? "all " + evicted.length + " members offline -- grid kept on the air, members hidden as out" : entries.length + " live, " + evicted.length + " out"); }   // noteAt = 0: the transition line is not throttled behind the evicted/readmitted note of the same tick (that throttle is why "torn down" never reached launch.log)
         gridOrdered(g);
         gridOrderSave(g);
       } else if (g) {
@@ -15967,7 +16241,7 @@
         const backPub = native ? !!(pi.running === true && pi.since && nowS - pi.since >= GRID_READMIT_LIVED_S) : false;
         const backMon = !!(slot?.monitorLoaded && !slot.monitorDown && !(a.retries > 0) && slot.monitorUpAt && performance.now() - slot.monitorUpAt >= GRID_READMIT_LIVED_S * 1000);
         const back = a.evictWhy === "monitor" ? (backMon || (native && backPub)) : (backPub || (!native && backMon));   // 0.21.8: a running pair readmits a monitor-evicted member too
-        if (!back) continue;
+        if (!back || a.evictWhy === "rig") continue;   // 0.21.15: a rig eviction is released only by __gridSeats.evict(url, false)
         a.evicted = false; a.evictWhy = null;
         log("Camera " + shortName(a.name) + " is back \u2014 rejoining the grid");
         gridNoteAll("readmitted " + shortName(a.name));
@@ -17193,9 +17467,14 @@
       if (dg.lastRebuild && now - dg.lastRebuild < 120000) { gridNote(ng, "viewer stall noted — rebuilt " + Math.round((now - dg.lastRebuild) / 1000) + " s ago, letting it settle (reports=" + dg.stallReports + ")"); return; }
       if (window.__relayHealthTri?.() !== "ok") { gridNote(ng, "viewer stall noted — the relay itself is not healthy here (reports=" + dg.stallReports + ")"); return; }
       const enc = gridEncAdvancing(ng), conn = gridConnected(ng);
+      // 0.21.15: the vendored publish encoder runs only while a downstream subscriber has REQUESTED the track
+      // (`active = enabled && !!track`), so a flat frame counter with the encoder inactive means nobody is pulling the
+      // composite from THIS relay -- the stall is between the relays and the viewer, and a rebuild here cannot help.
+      let encActive = null; try { encActive = ng.moq?.encoder?.out?.active?.peek?.() === true; } catch {}
       const echoed = !!window.__echoed?.has?.(fullPath);
-      const facts = "enc " + (enc ? "advancing" : "flat " + Math.round((Date.now() - (dg.encAdvancedAt || 0)) / 1000) + " s") + ", " + (conn ? "connected" : "not connected") + ", echoed=" + echoed + ", reports=" + dg.stallReports;
+      const facts = "enc " + (enc ? "advancing" : "flat " + Math.round((Date.now() - (dg.encAdvancedAt || 0)) / 1000) + " s") + ", " + (conn ? "connected" : "not connected") + ", echoed=" + echoed + ", encoderActive=" + encActive + ", reports=" + dg.stallReports;
       if (enc && conn) { gridNote(ng, "viewer stall ignored \u2014 grid live here (" + facts + ")"); return; }
+      if (!enc && encActive === false) { gridNote(ng, "viewer stall noted \u2014 nobody is pulling the grid from this relay (encoder idle, not a fault here; the stall is upstream), not rebuilding (" + facts + ")"); return; }   // 0.21.15
       (async () => {
         // 0.21.7: the cluster link's state from this box's relay (loopback /api/relay/status -> federation.link, the
         // hub's view in hubSees): a link that flapped in the last 60 s explains the viewer's stall -- the grid left
@@ -17492,6 +17771,7 @@
               : (typeof s.publish.source === "string" ? s.publish.source : null),
         announce: s.publish.getAttribute("announce"),
         muted: s.publish.muted, videoPaused: !!s.entry.videoPaused,
+        fx: { camOff: camOff(s), autoPaused: !!s.autoPaused, invisible: !!s.publish?.invisible, loop: !!s.blur, armed: !!s.fxArm, failed: s.fxFailed || null, nudged: !!s.fxNudged },   // 0.21.15: the effects loop / arm state per camera slot
         badge: s.badge.textContent,
         // 0.8.13: the encoder's own facts for camera/screen/file slots too
         resolved: (() => { try { const r = s.publish.video.out.resolved.peek(); return r ? { codec: r.codec, hw: r.hardwareAcceleration, w: r.width, h: r.height, fps: r.framerate, bitrate: r.bitrate } : null; } catch { return null; } })(),
@@ -17507,6 +17787,7 @@
         liveS: g.liveSince ? Math.round((performance.now() - g.liveSince) / 1000) : null,
         connected: gridConnected(g), announcing: (() => { try { return g.moq?.broadcast?.in?.enabled?.peek?.() ?? null; } catch { return null; } })(),
         encoded: (() => { try { return g.moq?.encoder?.out?.stats?.peek?.() ?? null; } catch { return null; } })(),
+        encoderActive: (() => { try { return g.moq?.encoder?.out?.active?.peek?.() ?? null; } catch { return null; } })(),   // 0.21.15: a subscriber has requested the composite from this relay
         encFlatS: gridDiag(g).encAdvancedAt ? Math.round((Date.now() - gridDiag(g).encAdvancedAt) / 1000) : null,
         lastRebuild: gridDiag(g).lastRebuild ? { at: gridDiag(g).lastRebuild, why: gridDiag(g).lastRebuildWhy || null } : null,
         stallReports: { n: gridDiag(g).stallReports, lastAt: gridDiag(g).lastStallAt || null },

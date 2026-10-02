@@ -66,6 +66,50 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## The grid that split up (0.21.15)
+
+When every camera in a grid went offline together (one switch, one PoE budget) the cameras came back on viewers as
+separate tiles, flapping with the server ladder, until two were readmitted and the grid re-formed. The 0.14.0 keep rule
+needed one live member; at zero the owner tore the grid down, which withdrew the `grid:<id>` announce (viewers stop
+hiding the members 2.5 s later) and let every reconnecting pair publish on its own path. Since 0.21.15 a grid lives
+while any seat is evicted. Reading it:
+
+- **launch.log** before the fix: `page: grid 2: evicted <camera> (publisher attempt 6)` (one line per tick; a second
+  camera evicted in the same tick is counted as `(+1 more)` on a later line) and then nothing about the grid until
+  `page: grid 2: built …` when the second camera was readmitted — the `torn down` note fired in the same tick as the
+  last eviction and the bridge throttle (one `page: grid …` line per 2 s per grid) swallowed it, and the readmit notes
+  had no grid to land in. After the fix: `evicted <camera> …`, `page: grid 2: all 2 members offline -- grid kept on
+  the air, members hidden as out` (this note resets the throttle, so it always lands), later `readmitted <camera>` and
+  `page: grid 2: 1 live, 1 out` as the first camera returns, `readmitted <camera>` for the second; no `torn down`.
+- **`/api/diag`** → `publisher.grids[]` keeps the grid through the outage with `members: []` and `evicted: [A, B]`; the
+  last event is the `all N members offline` line. A viewer's diag carries `gridForgot`: `{}` is healthy; a grid path
+  with `agoS` and `known` means the owner withdrew that grid's announce inside the last 60 s (expected only for
+  Separate or a removed feed), and the viewer console shows `KASTR: "<path>" was a member of <grid> N s ago -- shown
+  as its own tile`.
+- **The composite** during the outage is one cell reading `cameras offline — reconnecting (N)` instead of black, so a
+  viewer looking at the tile knows the grid is alive and waiting.
+
+The pairs themselves are unchanged: `restarts` climbs the ladder (1, 2, 5, 10, 20, 30 s) and resets after a healthy
+minute; `gridEvictionTick` evicts once more than five restarts have failed (`restarts > GRID_EVICT_AFTER`) and readmits a pair that has run five seconds.
+
+## A flat composite counter is not a dead encoder (0.21.15)
+
+`publisher.grids[].encoded.frames` flat while `publisher.restamp.in/out/pushes` advance means the page is drawing, capturing and
+re-stamping the grid and nobody has asked this relay for it: the vendored publish encoder creates its track, and encodes, only
+while a downstream subscriber has requested it. Read `encoderActive` next to it (0.21.15): `false` = no subscriber reached this
+relay (the viewer's stall is between the relays and the viewer; the hub's relay log decides), `true` with flat frames = a genuine
+local stall (the self-heal rebuilds). Before 0.21.15 the self-heal rebuilt on the flat counter alone -- Southridge rebuilt four times
+in 22 minutes on 2026-10-02 while its hub had stopped pulling. Also since 0.21.15 the Relay page's 5 s probe no longer floods
+launch.log; `/api/relay/status.logRemote` keeps the relay lines that matter for a bundle.
+
+## Cold opens, deliberate unchecks and silent restarts (0.21.15)
+
+**Cold opens from a grid (0.21.15).** A grid child tile holds a connection and a catalog but no video subscription, so the cell click is the camera's FIRST video subscribe at the viewer's relay and a cold pull delivers nothing until the camera's next keyframe (UniFi 4K H.264 measured at 45 s; the other Mendon cameras 1-19 s). The page no longer shows that wait as a black pane: `gridOpenStart` zooms the composite's cell, decodes the camera off-stage (`visible="always"` without a canvas) and swaps on the first frame; `gridOpenText` says 'no data from the relay yet (N s)' when zero bytes arrive (the Southridge / Tremonton shape -- SUBSCRIBE_OK with 0 bytes, or `remote error: 0`) and 'waiting for the camera’s next keyframe (N s)' once bytes flow. A zero-byte wait re-subscribes once at 15 s and gives up at 90 s; a shown tile with zero bytes gets the same notice (`.pwait`) at 8 s and one re-subscribe at 20 s, where `stallReport` (bytes > 0 only) was silent. Field evidence: the status log lines 'Opening X — waiting for its first frame' / 'Opened X after N s' / 'Could not open X — no data from the relay | no keyframe arrived'. The real cure for long waits stays on the camera: a 1-2 s keyframe interval, Smart Codec off, or the 1080p H.264 stream for 4K HEVC sites.
+
+0.21.15: a camera that leaves the grid because its Share-content row was UNCHECKED is deliberate, not a drop: the row paints `.off`, the status bar reads `Disabled <name> — relay pair unpublished, monitor closed, grid seat kept`, launch.log carries the same line as `page: Disabled ...` (the 0.21.5 `/api/rtsp/note` route), `/api/rtsp/list` shows the feed with `publish: null` and `/api/diag` lists it under `publisher.added` as `rtsp:<name> (off)` with no `slots` entry. Re-checking the row publishes a NEW pair (`Bridge.unpublish` popped the old Publisher, so the fresh `publish` object starts at `gen` 1 with a new `since`, not a continuation of the old counter) and the camera returns to its kept grid seat once the monitor loads. Since 0.21.0 the switch had been a `<span>` the mouse could not operate, so no field record before 0.21.15 can contain an operator uncheck; from 0.21.15 on, read the `page: Disabled` line before treating a vanished cell as a pair failure. A two-camera grid losing a member tears down (a grid needs two entries) and the survivor becomes a loose tile — the 0.15.0 rule, one viewer layout change, not a fault.
+
+0.21.15: a pair restart is no longer audible on the viewers. The join/leave chimes were tile-driven and keyed by the operator segment of the path, so a camera box's first RTSP tile rang the join triad and every restart (announce inactive -> 4 s / 8 s removal debounce -> announce active) rang leave then join on every viewer. `pathClass()` now classifies `<op>/rtsp-<slug>.hang` as `content`, `rtsp-grid[-N].hang` as `grid` and a feed behind a grid as `gridchild`; none of them chimes, and the viewer's `__switcher.state().chimes.last` (also `/api/diag watcher.chimes`) lists each held verdict with its class. A restart still shows as the row's `leaving` class and the 4 s / 8 s tile gap -- the drop is unchanged, only the sound is gone.
+
 ## The push that went nowhere (0.21.14)
 
 Page visible, encoder frozen: the hidden-window push was being made on the pacer's generator track, which has no

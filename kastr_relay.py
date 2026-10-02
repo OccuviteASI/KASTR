@@ -1293,6 +1293,7 @@ class AuthService:
         self._opens = {}                     # 0.21.8: remote -> session connect times in the last 60 s (a reconnect loop)
         self._churn_said = {}
         self.grants = self.refusals = self.ended = 0
+        self.probe_ends = 0   # 0.21.15: loopback role=relay sessions under 5 s (the Relay page's announce probe) -- counted, not logged
         self.fingerprint = None              # the relay's QUIC certificate sha256 (Relay sets it once the relay is up)
         svc = self
 
@@ -1584,7 +1585,17 @@ class AuthService:
                 rec = self._sessions.pop(sid, None)
                 self.ended += 1
             reason = str(req.get("reason") or "")
-            if rec and (rec.get("publisher") or reason):
+            # 0.21.15: the Relay page's "Streams on this relay" probe opens a loopback role=relay session every 5 s for
+            # ~2 s; on the field boxes those lines were 96-100 % of launch.log and the whole relay-log tail. Count, do not log.
+            try:
+                dur = float(req.get("duration") or 0)
+            except (TypeError, ValueError):
+                dur = 0.0
+            probe = bool(rec) and rec.get("role") == "relay" and is_loopback_addr(rec.get("remote")) and dur < 5
+            if probe:
+                with self.lock:
+                    self.probe_ends += 1
+            if rec and (rec.get("publisher") or reason) and not probe:
                 self.log("relay session: end %s remote=%s role=%s %ss %s bytes%s"
                          % (sid[:8] or "?", rec.get("remote"), rec.get("role"), req.get("duration", "?"),
                             req.get("bytes", "?"), (" reason=" + reason) if reason else ""))
@@ -2006,7 +2017,7 @@ class AuthService:
                 if n and (churn is None or n > churn["opens"]):
                     churn = {"remote": r, "opens": n}
             return {"up": True, "sessions": len(self._sessions), "publishers": pubs,
-                    "grants": self.grants, "refusals": self.refusals, "ended": self.ended,
+                    "grants": self.grants, "refusals": self.refusals, "ended": self.ended, "probeEnds": self.probe_ends,   # 0.21.15
                     "bans": len(self.bans.active()) if self.bans else 0,   # 0.17.0
                     "lastRefusal": (dict(self._refused[-1]) if self._refused else None),
                     "churn": churn,
@@ -2352,6 +2363,7 @@ class Relay:
         self.auth = None
         self.error = None
         self._log = []
+        self._log_remote = []   # 0.21.15: relay lines without a loopback remote (cluster, publishers, remote viewers)
         self._lock = threading.Lock()
 
     # ---- config ----------------------------------------------------------
@@ -3239,6 +3251,7 @@ class Relay:
 
         with self._lock:
             self._log = []
+        self._log_remote = []   # 0.21.15: relay lines without a loopback remote (cluster, publishers, remote viewers)
         self.error = None
         if secured:
             # 0.16.0: the relay admits NO session until [auth] url answers, so the token
@@ -3397,6 +3410,9 @@ class Relay:
                     continue
                 with self._lock:
                     self._log.append(line)
+                    if "remote=127.0.0.1:" not in line and "remote=[::ffff:127.0.0.1]" not in line and "remote=[::1]" not in line:   # 0.21.15
+                        self._log_remote.append(line)
+                        del self._log_remote[:-LOG_LINES]
                     del self._log[:-LOG_LINES]
                 try:
                     self._link_line(line)   # 0.21.7: the cluster link's state
@@ -3457,6 +3473,7 @@ class Relay:
     def _status_full(self):
         with self._lock:
             log = list(self._log[-40:])
+            log_remote = list(getattr(self, "_log_remote", [])[-80:])   # 0.21.15
         return {
             "available": bool(self.binary),
             "binary": self.binary or "",
@@ -3470,6 +3487,7 @@ class Relay:
             "fingerprint": self.fingerprint(),
             "error": self.error,
             "log": log,
+            "logRemote": log_remote,   # 0.21.15: the lines the loopback probe used to drown
             "autostart": self.autostart_config(),
             "cluster": self.cluster_config(),
             "name": self.relay_name(),

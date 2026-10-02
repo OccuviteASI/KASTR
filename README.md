@@ -29,6 +29,8 @@ Since 0.21.4 every response carries `X-KASTR-Version`; a browser's service worke
 (fresh page, fresh shell), and the page purges a worker that still serves an old masthead — a phone stuck on 0.20.0
 heals on its first visit.
 
+Since 0.21.15 a camera opened from a remote grid never shows a black pane: the grid's own cell fills the stage at once with a 'full quality starting…' badge and the camera takes over on its first decoded frame, and a tile that receives nothing says so on the pane and re-subscribes once. A grid whose cameras all go offline stays on the air as one 'cameras offline — reconnecting' cell, so viewers never see the reconnecting cameras as loose tiles. The On-air switch on a Share-content camera row can be unchecked again (it had been a `<span>` since 0.21.0; a brand switch only takes a click inside a `<label>`). The join and leave chimes ring for people only, a camera you leave off keeps its effects loop off without a warning, and the page's broadcasts keep 5 s of groups like the native pairs.
+
 Since 0.21.14 the hidden-window frame push reaches the capture track behind the pacer (a generator track has no
 `requestFrame`), and `/api/diag` carries the pacer's counters.
 

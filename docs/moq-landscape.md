@@ -61,6 +61,13 @@ backlog. Primary sources are linked; two items could not be verified and are mar
   https://github.com/facebookexperimental/moxygen · https://github.com/facebookexperimental/moq-encoder-player
 - Interop: eleven vendors at NAB 2026; Safari / iOS 26.4 shipped WebTransport (April 2026).
 
+## Vendored-library facts KASTR leans on (measured 2026-10-02, @moq/watch 0.6.0 / @moq/publish 0.5.0 / hang 0.5.0)
+
+- hang `Broadcast` retention defaults to **30 s per relay hop** (`container.mjs`: `var _=k.Milli(3e4)`, `trackInfo({maxAge: o.maxAge ?? _})`); the publish encoder reads `in.maxAge` inside the effect that creates every media track. KASTR sets 5000 ms (0.21.15), matching the native pairs' `import --max-age 5s`.
+- watch `visible="always"` **subscribes without a canvas**: the renderer's `#s` sets its visible signal for `always` before consulting the canvas; margin values (`"800px"`) need one and read `false` without it. The Player wires that signal to the video decoder's `enabled`, and `video.out.frame` is set on the first decoded frame; the renderer's rAF loop runs only with a 2d context, so re-attaching a canvas paints the current frame on the next frame.
+- watch `Video.Decoder.supported(rendition)` is the full-config probe (container kind, hex `description` or the CMAF init segment, `VideoDecoder.isConfigSupported`, an `avc3.` -> `avc1.` retry that rewrites the codec on the object passed in -- pass a copy).
+
+
 ## Ranked backlog for KASTR
 
 **Status (2026-09-25, v0.18.0; 2026-10-01: items 3 and 5 are off by default since v0.21.10 -- kastr.ini `ondemand = on` on every box re-enables both):** items 3, 5, 6, 8 and 12 shipped in v0.18.0: on-demand RTSP with a KASTR-side

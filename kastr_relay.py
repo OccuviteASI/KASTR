@@ -1263,7 +1263,7 @@ class AuthService:
         self._spokes_path = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-spokes.json")
         # 0.21.0: the hub's command channel -- {"seq", "update": {"seq", "at", "version"}} rides every
         # bans long-poll reply; a spoke acts once per new seq (an "Update spokes now" on the hub)
-        self.cmd = {"seq": 0, "update": None, "closeRoom": []}   # 0.21.2: + closeRoom [{seq, spoke, slug}] (last 16)
+        self.cmd = {"seq": 0, "update": None, "closeRoom": [], "rtsp": []}   # 0.21.2: + closeRoom [{seq, spoke, slug}] (last 16); 0.21.16: + rtsp [{seq, spoke, suspend}]
         self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
         self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
         self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
@@ -1276,7 +1276,8 @@ class AuthService:
                 try:
                     self.cmd = {"seq": int(d["cmd"].get("seq") or 0),
                                 "update": d["cmd"].get("update") if isinstance(d["cmd"].get("update"), dict) else None,
-                                "closeRoom": [c for c in (d["cmd"].get("closeRoom") or []) if isinstance(c, dict)][-16:]}
+                                "closeRoom": [c for c in (d["cmd"].get("closeRoom") or []) if isinstance(c, dict)][-16:],
+                                "rtsp": [c for c in (d["cmd"].get("rtsp") or []) if isinstance(c, dict)][-16:]}   # 0.21.16
                 except (TypeError, ValueError):
                     pass
         self._pull_at = 0
@@ -1770,7 +1771,8 @@ class AuthService:
         with self.lock:
             fresh = key not in self.spokes
             self.spokes[key] = {"at": int(time.time()), "peer": peer, "name": name, "version": version,
-                                "minter": url or None, "rooms": rooms}
+                                "minter": url or None, "rooms": rooms,
+                                "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
                     self.spokes.pop(k, None)
@@ -1819,7 +1821,8 @@ class AuthService:
         """0.21.0: the Relay page's spoke table -- never a token, never a code."""
         with self.lock:
             rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
-                     "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or [])} for k, v in self.spokes.items()]   # 0.21.2: + rooms
+                     "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or []),   # 0.21.2: + rooms
+                     "rtsp": v.get("rtsp")} for k, v in self.spokes.items()]   # 0.21.16: + the spoke's RTSP switch ("on" | "off" | None)
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
 
     def raise_cmd(self, name, extra=None):
@@ -1827,7 +1830,7 @@ class AuthService:
         with self.lock:
             self.cmd["seq"] = int(self.cmd.get("seq") or 0) + 1
             rec = {"seq": self.cmd["seq"], "at": int(time.time()), **(extra or {})}
-            if name in ("closeRoom", "wake"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too
+            if name in ("closeRoom", "wake", "rtsp"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
@@ -1857,7 +1860,8 @@ class AuthService:
         with self.lock:
             cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update"),
                    "closeRoom": list(self.cmd.get("closeRoom") or []),   # 0.21.2
-                   "wake": list(self.cmd.get("wake") or [])}             # 0.21.7: on-demand wakes relayed from other sites
+                   "wake": list(self.cmd.get("wake") or []),             # 0.21.7: on-demand wakes relayed from other sites
+                   "rtsp": list(self.cmd.get("rtsp") or [])}             # 0.21.16: the hub operator's RTSP switch for a spoke
         return {"bans": rows, "ver": ver, "cmd": cmd}, 200   # 0.21.0: + the hub's command channel
 
     def fanout_bans(self):
@@ -1945,6 +1949,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("closeRoom", c), daemon=True).start()
+                # 0.21.16: the hub operator flipped a spoke's RTSP switch (Relay page, spokes table)
+                for c in (cmd.get("rtsp") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("rtsp", c), daemon=True).start()
                 # 0.21.7: on-demand wakes from viewers on other sites (madlabs -> Agg -> Southridge)
                 for c in (cmd.get("wake") or []):
                     try:
@@ -2912,6 +2924,28 @@ class Relay:
             obj, code = close_room(self.store, slug, None, True, log=self.log)   # the chat store's hook is wired at its creation
             self.log("relay federation: hub closed room %s here -> %s" % (slug, obj.get("ok") and "closed" or obj.get("error")))
             return
+        if name == "rtsp":   # 0.21.16: the hub operator turned MY cameras off or on (by spoke name, or "*")
+            spoke = str((info or {}).get("spoke") or "")
+            off = bool((info or {}).get("suspend"))
+            try:
+                import kastr_serve as _ks
+                me = self.relay_name() or _ks.host_slug()
+                bridge = _ks.RTSP_BRIDGE[0]
+            except Exception:
+                me, bridge = self.relay_name() or "relay", None
+            if spoke not in ("*", me):
+                return
+            if bridge is None or not hasattr(bridge, "suspend"):
+                self.log("relay federation: hub asked to switch RTSP %s here -- no bridge on this box" % ("off" if off else "on"))
+                return
+            who = "hub command #%s" % (info or {}).get("seq")
+            res = bridge.suspend(who) if off else bridge.resume(who)
+            self.log("relay federation: hub switched this box's RTSP %s -> %s" % ("off" if off else "on", json.dumps(res)[:120]))
+            try:
+                self.spoke_sync_soon()   # re-register now: the hub's Cameras column shows the new state within a second
+            except Exception:
+                pass
+            return
         if name == "wake":   # 0.21.7: a viewer on another site wants an on-demand camera -- maybe one of mine
             b = str((info or {}).get("broadcast") or "")
             try:
@@ -3055,7 +3089,14 @@ class Relay:
             rooms = [r["slug"] for r in self.store.rooms_public()][:64]
         except Exception:
             rooms = []
-        body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms}).encode()
+        rtsp = None   # 0.21.16: the box's RTSP switch, so the hub's spokes table can show and flip it (None = no cameras here)
+        try:
+            _b = _ks.RTSP_BRIDGE[0]
+            if _b is not None and getattr(_b, "_pubs", None):
+                rtsp = "off" if getattr(_b, "suspended", False) else "on"
+        except Exception:
+            rtsp = None
+        body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp}).encode()
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -3821,6 +3862,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/webport",         # 0.14.0 F
                  "/api/relay/rooms/group",     # 0.15.0
                  "/api/relay/lan",             # 0.16.0
+                 "/api/relay/spokes/rtsp",     # 0.21.16
                  "/api/relay/admin/token",     # 0.16.0
                  "/api/relay/bans/clear",      # 0.17.0
                  "/api/relay/spokes/update",   # 0.21.0
@@ -3959,6 +4001,20 @@ def handle_api(handler, relay, path, set_relay_url=None):
             return True
         rec = auth.raise_cmd("closeRoom", {"spoke": spoke, "slug": slug})
         reply({"ok": True, "seq": rec["seq"], "spoke": spoke, "slug": slug})
+        return True
+
+    if path == "/api/relay/spokes/rtsp":   # 0.21.16: hub operator -> a spoke turns its own cameras off (suspend) or on
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        p = _payload_of(handler)
+        spoke = str(p.get("spoke") or "")[:40]
+        if not spoke:
+            reply({"error": "spoke required"}, 400)
+            return True
+        rec = auth.raise_cmd("rtsp", {"spoke": spoke, "suspend": bool(p.get("suspend"))})
+        reply({"ok": True, "seq": rec["seq"], "spoke": spoke, "suspend": bool(p.get("suspend"))})
         return True
 
     if path == "/api/relay/spokes/update":   # 0.21.0: hub operator -> every spoke matches the hub's version now

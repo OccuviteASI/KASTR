@@ -1081,6 +1081,7 @@ class Publisher:
         self.ondemand = bool(ondemand) and role == "main" and ONDEMAND_ENABLED   # ... and what takes effect
         self.standby = self.ondemand
         self.wantedAt = None        # last time the relay host said a viewer wants it
+        self.suspended = False      # 0.21.16: the box's RTSP switch is off -- recorded, nothing runs (Publisher.suspend / resume)
         self.wokeAt = None
         self.lowPub = None
         if low and role == "main" and ONDEMAND_ENABLED:   # 0.21.10: no -low.hang sibling while the switch is off
@@ -1152,6 +1153,7 @@ class Publisher:
                 "wantedAt": self.wantedAt, "role": self.role,
                 "low": (self.lowPub.low_info() if self.lowPub else None),
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
+                "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
                 "error": self.error, "since": self.since}
 
     def low_info(self):
@@ -1193,7 +1195,7 @@ class Publisher:
 
     def start(self):
         with self._lock:
-            if self.stopping or self.standby:   # 0.18.0: a standby pair starts only through wake()
+            if self.stopping or self.standby or self.suspended:   # 0.18.0: a standby pair starts only through wake(); 0.21.16: a suspended one only through resume()
                 return
             # 0.13.3: whatever timer led here has fired (or was cancelled by the
             # caller); a spent timer left in place would block the next ladder
@@ -1286,7 +1288,7 @@ class Publisher:
     def wake(self, reason="demand", viewer=""):
         """A viewer wants an on-demand pair: leave standby and start it (and its low sibling)."""
         with self._lock:
-            if self.stopping or not self.standby:
+            if self.stopping or not self.standby or self.suspended:   # 0.21.16: the demand loop cannot wake a switched-off camera (no 'woken' line, no read hook, standby kept for resume)
                 return False
             self.standby = False
             self.wokeAt = time.time()
@@ -1324,6 +1326,50 @@ class Publisher:
         # 0.21.7: the low copy STAYS on the air in standby -- a viewer's click shows the picture at once (the tile
         # lives on the low copy) and the full pair replaces it when it is up. Cost per on-demand camera: one RTSP
         # pull and a 640p / 15 fps / ~400 kb/s encode. stop() still ends both.
+        return True
+
+    # ---- 0.21.16: the box's RTSP switch ------------------------------------------
+    def suspend(self, reason="operator"):
+        """Stop the processes and every timer, keep the publisher and its settings. Unlike sleep()
+        this is unconditional (on-demand or not) and start() stays refused until resume(): the
+        ladder, a park retry, a renew, a re-token, a nudge and a wake all land on the gate."""
+        with self._lock:
+            if self.stopping:
+                return False
+            was = self.running
+            self.suspended = True
+            self._gen += 1
+            t, self._timer = self._timer, None
+            r, self._renew = self._renew, None
+            procs = self.procs
+        for x in (t, r):
+            if x:
+                x.cancel()
+        self.parked = False
+        _end_pair(procs, self.bridge._child_ended)   # 0.21.16: ffmpeg first -- viewers lose the member broadcasts at once, not after the relay's idle timeout
+        self.running = False
+        self._notready("suspended: " + reason)
+        if self.lowPub is not None:
+            self.lowPub.suspend(reason)
+        return was
+
+    def resume(self, reason="operator"):
+        """The switch is back on: a plain pair starts now; an on-demand pair returns to standby
+        (Bridge.resume re-arms the demand loop and its low copy, the 0.18.0 shape)."""
+        with self._lock:
+            if self.stopping or not self.suspended:
+                return False
+            self.suspended = False
+            t, self._timer = self._timer, None
+        if t:
+            t.cancel()
+        if self.lowPub is not None:
+            self.lowPub.suspended = False
+        if self.ondemand:
+            self.standby = True
+            self.wokeAt = None
+            return True
+        self.start()
         return True
 
     def _halt(self):
@@ -1451,7 +1497,7 @@ class Publisher:
     def nudge(self, why="api"):
         """A viewer says the stream is frozen: restart the pair now.
         0.13.1: `why` (viewer / stall* / no-echo / api) is counted and kept."""
-        if self.standby:            # 0.18.0: nothing runs; a viewer's demand wakes it instead
+        if self.standby or self.suspended:   # 0.18.0: nothing runs; a viewer's demand wakes it instead; 0.21.16: nor while the box's RTSP switch is off
             return
         bucket = nudge_bucket(why)
         if bucket == "viewer" and self.running and self.since and time.time() - self.since < 60:
@@ -1499,6 +1545,8 @@ class Publisher:
         self._park_tick()
 
     def _park_tick(self):
+        if self.suspended:          # 0.21.16: a park decided by _watch just before suspend() must not tick (no minting, no bare retry, no restarts bump)
+            return
         if self.stopping or not self.parked:
             return
         now = time.time()
@@ -1565,7 +1613,7 @@ class Publisher:
             t, self._renew = self._renew, None
         if t:
             t.cancel()
-        if self.stopping or not self.minter or not self.tokenExp:
+        if self.stopping or self.suspended or not self.minter or not self.tokenExp:   # 0.21.16: a suspend() landing between start()'s lock and this call leaves no renewal timer behind
             return
         t = threading.Timer(max(30, self.tokenExp - time.time() - 900), self._renew_tick)
         t.daemon = True
@@ -1613,17 +1661,39 @@ class Publisher:
         if r:
             r.cancel()
         self.parked = False
-        for p in procs:
-            if p.poll() is None:
-                try:
-                    p.kill()
-                except OSError:
-                    pass
-            self.bridge._child_ended(p.pid)   # 0.9.8
+        _end_pair(procs, self.bridge._child_ended)   # 0.9.8; 0.21.16: ffmpeg first -- moq ends its session on EOF, the relay unannounces at once
         self.running = False
         self._notready("stopped")                                        # 0.18.0
         if self.lowPub is not None:
             self.lowPub.stop()
+
+
+def _end_pair(procs, ended, grace=1.0):
+    """0.21.16: end an ffmpeg|moq pair ffmpeg FIRST. moq reads the encoded stream from ffmpeg's stdout: with ffmpeg
+    gone it sees EOF, closes its session and the relay withdraws the broadcast at once. Killing moq outright left the
+    broadcast announced until the relay's idle timeout (~20 s measured), and viewers kept a dead tile that long.
+    moq gets `grace` seconds, then it is killed like before. `ended(pid)` is Bridge._child_ended."""
+    procs = list(procs or ())
+    for p in procs[:1]:
+        if p.poll() is None:
+            try:
+                p.kill()
+            except OSError:
+                pass
+    deadline = time.time() + grace
+    for p in procs[1:]:
+        if p.poll() is None:
+            try:
+                p.wait(timeout=max(0.05, deadline - time.time()))
+            except Exception:
+                pass
+        if p.poll() is None:
+            try:
+                p.kill()
+            except OSError:
+                pass
+    for p in procs:
+        ended(p.pid)
 
 
 def _ensure_exec(path):
@@ -1695,6 +1765,7 @@ class Bridge:
         self._feed_locks = {}
         self._od_thread = None
         self._od_said = {}
+        self.suspended = False  # 0.21.16: the box's RTSP switch (rtsp-feeds.json `suspended`; _load_session below reads it)
         self._encoder = None    # cached hardware-encoder choice
         self._probed = {}       # url -> (h264, width, height)
         self.encoder_note = None  # which one, for the feed list
@@ -1710,6 +1781,8 @@ class Bridge:
         self._persist_lock = threading.Lock()
         self._session = {"room": "", "access": "", "roomCode": "", "relay": ""}
         self._load_session()
+        if self.suspended:   # 0.21.16
+            self.log("rtsp: publishing is SUSPENDED on this box (rtsp-feeds.json suspended=true) -- cameras are recorded, none starts until the switch is turned on")
         self.started_at = time.time()
         self.swept = 0
         try:
@@ -1984,7 +2057,10 @@ class Bridge:
             self._pubs[int(feed_id)] = pub
         if (pub.wantOndemand or pub.wantLow) and not ONDEMAND_ENABLED:   # 0.21.10
             self.log("rtsp: %s asked for on demand/low -- ignored (ondemand = off; kastr.ini ondemand = on or KASTR_ONDEMAND=1 allows it)" % broadcast)
-        if pub.ondemand:
+        pub.suspended = bool(self.suspended)   # 0.21.16: born while the switch is off -> recorded, not started
+        if pub.suspended:
+            self.log("rtsp: %s recorded while publishing is suspended -- not started" % broadcast)
+        elif pub.ondemand:
             self.log("rtsp: %s published on demand -- standby until a viewer asks" % broadcast)
             self._od_ensure()
             self._low_standby(pub)   # 0.21.7: click-to-picture -- the low copy runs while the full pair waits
@@ -2112,6 +2188,7 @@ class Bridge:
                              "access": str(d.get("access") or ""),
                              "roomCode": str(d.get("roomCode") or ""),
                              "relay": _relay_key(d.get("relay") or "")}
+            self.suspended = d.get("suspended") is True   # 0.21.16: the switch survives a relaunch
             rem = d.get("removed")   # 0.21.0
             self._removed = [{"url": str(r.get("url")), "at": int(r.get("at") or 0)} for r in (rem or [])
                              if isinstance(r, dict) and r.get("url")][-50:]
@@ -2181,7 +2258,8 @@ class Bridge:
                     break
         doc = {"room": s.get("room", ""), "access": s.get("access", ""), "roomCode": s.get("roomCode", ""),
                "relay": relay, "feeds": self._feed_records(), "at": time.time(),
-               "removed": self._removed[-50:]}   # 0.21.0: closed URLs stay closed across relaunches
+               "removed": self._removed[-50:],   # 0.21.0: closed URLs stay closed across relaunches
+               "suspended": bool(self.suspended)}   # 0.21.16: the box's RTSP switch -- a relaunch honours it
         with self._persist_lock:
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2237,6 +2315,7 @@ class Bridge:
         out = {"room": s.get("room", ""), "hasAccess": bool(s.get("access")), "relay": s.get("relay", ""),
                "feeds": [{"broadcast": str(f.get("broadcast") or ""), "keep": bool(f.get("keep", True)),
                           "url": _redact_url(str(f.get("url") or ""))} for f in feeds if isinstance(f, dict)]}
+        out["suspended"] = bool(self.suspended)   # 0.21.16: the gate's hint can say the feeds are kept but switched off
         if doc.get("restoreError"):
             out["restoreError"] = str(doc["restoreError"])
         return out
@@ -2369,13 +2448,15 @@ class Bridge:
         deadline = time.time() + 30
         for t in threads:
             t.join(max(0.1, deadline - time.time()))
-        log("rtsp: republished %d persisted feed(s) into room %s" % (done[0], room))
+        log("rtsp: %s %d persisted feed(s) into room %s" % ("recorded (publishing suspended)" if self.suspended else "republished", done[0], room))   # 0.21.16
         self.persist_feeds()
         return done[0]
 
     def nudge(self, feed_id, why="api"):
         pub = self._pubs.get(int(feed_id))
         if pub:
+            if getattr(pub, "suspended", False):   # 0.21.16: a viewer/no-echo report against a switched-off camera is not news -- no log line, no restart
+                return False
             # 0.13.1: one line per restart request, counters as they stood
             self.log("rtsp nudge %s why=%s restarts=%d sessionFails=%d sessionKills=%d"
                      % (pub.broadcast, why, pub.restarts, pub.sessionFails, pub.sessionKills))
@@ -2424,6 +2505,58 @@ class Bridge:
                 proc.kill()
             except OSError:
                 pass
+
+    # ---- 0.21.16: the box's RTSP switch -----------------------------------------------
+    def suspend(self, who="operator"):
+        """Stop publishing EVERY camera this box owns -- pairs, low copies and the owner's monitors -- and keep
+        every record: feeds, publishers, rtsp-feeds.json, the page's rows and grids. start() refuses until
+        resume(); a publish request meanwhile is recorded, not started. Not a watchdog: nothing here flips
+        the switch by itself -- only /api/rtsp/suspend (page, Relay page) or the hub's `rtsp` command."""
+        with self._lock:
+            if self.suspended:
+                return {"ok": True, "suspended": True, "stopped": 0, "monitors": 0, "records": len(self._pubs)}
+            self.suspended = True
+            pubs = list(self._pubs.values())
+            feeds = list(self._feeds.values())
+        stopped = sum(1 for p in pubs if p.suspend(who))
+        mons = 0
+        for f in feeds:
+            mons += len(f.procs)
+            self.kill(f)                      # the owner's monitors; the page stops re-attaching while suspended
+        self.persist_feeds()
+        self.log("rtsp: publishing SUSPENDED by %s -- %d pair(s) stopped, %d monitor(s) released, %d record(s) kept"
+                 % (who, stopped, mons, len(pubs)))
+        return {"ok": True, "suspended": True, "stopped": stopped, "monitors": mons, "records": len(pubs)}
+
+    def resume(self, who="operator"):
+        """The switch is back on: every recorded pair starts again (an on-demand one returns to standby). The starts
+        run in parallel and are joined for at most 30 s, like restore(): start() probes a camera nobody has probed
+        yet (a feed recorded while the switch was off) for up to PROBE_TIMEOUT under the publisher's own lock."""
+        with self._lock:
+            if not self.suspended:
+                return {"ok": True, "suspended": False, "started": 0, "records": len(self._pubs)}
+            self.suspended = False
+            pubs = list(self._pubs.values())
+        done = []
+
+        def one(p):
+            try:
+                if p.resume(who):
+                    done.append(p.broadcast)
+                    if p.ondemand:               # 0.18.0 shape: standby + demand loop + low copy (inert while ONDEMAND_ENABLED is off)
+                        self._od_ensure()
+                        self._low_standby(p)
+            except Exception as e:
+                self.log("rtsp: resuming %s failed: %s" % (p.broadcast, e))
+        threads = [threading.Thread(target=one, args=(p,), daemon=True, name="kastr-rtsp-resume") for p in pubs]
+        for t in threads:
+            t.start()
+        deadline = time.time() + 30
+        for t in threads:
+            t.join(max(0.1, deadline - time.time()))
+        self.persist_feeds()
+        self.log("rtsp: publishing RESUMED by %s -- %d of %d pair(s) starting" % (who, len(done), len(pubs)))
+        return {"ok": True, "suspended": False, "started": len(done), "records": len(pubs)}
 
     def shutdown(self):
         # 0.9.8: explicit kills as before; the job (shared with the relay, which
@@ -2786,10 +2919,11 @@ def handle_api(handler, bridge, path):
                "ffmpegPath": bridge.ffmpeg or "",
                "moq": bool(bridge.moq),                       # 0.9.1: native publishing available
                "hooks": (hk.configured() if hk else {}),       # 0.18.0: which hooks are set (never the commands)
-               "hookLog": (list(hk.fired) if hk else [])})
+               "hookLog": (list(hk.fired) if hk else []),
+               "suspended": bool(getattr(bridge, "suspended", False))})   # 0.21.16: the box's RTSP switch
         return True
 
-    if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge",
+    if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge", "/api/rtsp/suspend",   # 0.21.16: suspend
                 "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note"):   # 0.12.0: keep, persist; 0.21.5: note
         # 0.9.1: local pages only -- these start processes and name relays
         if not from_loopback():
@@ -2806,6 +2940,7 @@ def handle_api(handler, bridge, path):
             return True
         try:
             if path == "/api/rtsp/publish":
+                had_pubs = bool(getattr(bridge, "_pubs", None))   # 0.21.16: the first camera record -> the hub's Cameras column
                 pub = bridge.publish(payload.get("id"), payload.get("broadcast"), payload.get("relay"),
                                      hevc=bool(payload.get("hevc")),   # 0.9.2 (old name)
                                      audio=(payload.get("audio") is not False),   # 0.9.5: default on
@@ -2814,9 +2949,20 @@ def handle_api(handler, bridge, path):
                                      keep=payload.get("keep"),           # 0.12.0: None = leave as is (new pair: on)
                                      ondemand=bool(payload.get("ondemand")), low=bool(payload.get("low")),   # 0.18.0
                                      label=str(payload.get("label") or ""))
+                if not had_pubs:   # 0.21.16: a spoke re-registers now -- the hub's spokes table learns it HAS cameras (and their switch) at once, not at the 10-min tick
+                    try:
+                        getattr(handler, "kastr_relay_srv", None).spoke_sync_soon()
+                    except Exception:
+                        pass
                 reply(pub.info())
             elif path == "/api/rtsp/unpublish":
-                reply({"ok": bridge.unpublish(payload.get("id"))})
+                ok_un = bridge.unpublish(payload.get("id"))
+                if not getattr(bridge, "_pubs", None):   # 0.21.16: the last camera record went -- the hub's column says so now
+                    try:
+                        getattr(handler, "kastr_relay_srv", None).spoke_sync_soon()
+                    except Exception:
+                        pass
+                reply({"ok": ok_un})
             elif path == "/api/rtsp/keep":                                # 0.12.0
                 reply({"ok": bridge.set_keep(payload.get("id"), payload.get("keep"))})
             elif path == "/api/rtsp/persist":                             # 0.12.0: the page's room + access code
@@ -2828,6 +2974,17 @@ def handle_api(handler, bridge, path):
                     raise ValueError("relay must be an http(s) url")
                 bridge.set_session(room, payload.get("access"), payload.get("roomCode"), relay)
                 reply(bridge.session_public())
+            elif path == "/api/rtsp/suspend":                             # 0.21.16: the box's RTSP switch -- {suspend: bool, who?}; {} = read-back
+                if payload.get("suspend") is None:
+                    reply({"ok": True, "suspended": bool(getattr(bridge, "suspended", False))})
+                else:
+                    who = re.sub(r"[^A-Za-z0-9 ._#:-]+", "", str(payload.get("who") or "operator")).strip()[:24] or "operator"
+                    res = bridge.suspend(who) if payload.get("suspend") else bridge.resume(who)
+                    try:   # the hub's spokes table (Cameras column) follows a local flip now, not at the next registration
+                        getattr(handler, "kastr_relay_srv", None).spoke_sync_soon()
+                    except Exception:
+                        pass
+                    reply(res)
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
                 text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:240]
                 if text:
@@ -2974,6 +3131,10 @@ def handle_stream(handler, bridge, path):
     if not feed:
         handler.send_error(404, "no such feed")
         return True
+    if getattr(bridge, "suspended", False):   # 0.21.16: no monitor decode while the box's RTSP switch is off (the page does not retry meanwhile)
+        handler.send_error(503, "RTSP publishing is suspended on this box")
+        return True
+
     # 0.21.11: the monitor follows the camera's publisher. The page sends pt=1 only when its own localStorage
     # switch is on; a box whose pairs were restored with passthrough=true (the operator's choice, persisted) was
     # re-encoding every monitor -- five software 4K H.265 decodes on one relay box. A copied monitor the page

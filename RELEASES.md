@@ -2,6 +2,62 @@
 
 What changed in each build, newest first.
 
+## v0.21.16 — cameras off without forgetting, and the shared file's sound
+
+Part 40: one switch turns a box's own RTSP cameras off and on to spare CPU/GPU, viewers are told why the cameras left, and the shared-media dropouts Kenton heard on 2026-10-02 are traced to the file player's pipeline.
+
+**Cameras off, nothing forgotten: one switch for the box's own RTSP cameras.**
+
+**Cameras off, nothing forgotten (Part 39 item 4, reading (a)).** One switch now turns this box's OWN RTSP cameras off
+and on to spare CPU/GPU: Share content ▸ **Cameras** (header switch), View ▸ **Cameras off (spare CPU)**, the Relay
+page's new **This box's cameras** card (for unattended boxes) and, on a hub, a **Cameras** column with an on/off button
+in the spokes table. Off stops every ffmpeg|moq pair, low copy and owner monitor the box runs, stops drawing and
+encoding every grid composite, takes each composite off air and withdraws its `grid:<id>` announce in the same tick --
+viewers lose the cameras cleanly (no dead cells, no loose member tiles). Nothing is forgotten: the rows stay listed and
+checked with a `suspended` badge, rtsp-feeds.json keeps every feed and now carries `suspended: true`, grid definitions,
+seats, names and Keep stay as they are, and the same switch brings everything back (the page re-posts each feed with
+the live token first, so the pairs start on it). Why there was no cheap off before: every restart path of a publisher
+(ladder timer, park retry, token renewal, re-token, viewer/no-echo nudge, on-demand wake) funnels into
+`Publisher.start()`, whose only gates were `stopping`/`standby`, and the only stop that kept anything (`sleep()`) is
+on-demand-only -- so "off" meant `unpublish`, which forgets the record. Now `Publisher.suspend()/resume()` stop and
+keep, `start()`, `nudge()`, `wake()`, the park tick and the renewal timer refuse while suspended, a publish request
+meanwhile (adopt, restore, a token refresh) is recorded but not started, `Bridge.nudge` stays silent for a switched-off
+camera, `GET /rtsp/<id>` answers 503, and the page's monitor ladder, grid eviction, viewer-stall rebuilds and
+`syncNative` (which would unpublish) are inert. A relaunch comes back off: launch.log says `rtsp: publishing is
+SUSPENDED on this box (rtsp-feeds.json suspended=true)` and `rtsp: recorded (publishing suspended) N persisted feed(s)`,
+and the join gate says the feeds are kept but switched off. Every flip leaves one launch.log line (`rtsp: publishing
+SUSPENDED by page|relay page|hub command #N -- P pair(s) stopped, M monitor(s) released, K record(s) kept` /
+`... RESUMED by ... -- S of K pair(s) starting`), the grids note it in `/api/diag publisher.grids[].events`, and
+`/api/rtsp/list`, `/api/instance` (`rtspSuspended`) and `/api/diag` (`publisher.rtspSuspended`) report it. A flip made
+on the Relay page or by the hub reaches an open page through its feed poll (a monitor the bridge closed asks at once,
+so even a page that is not live follows within a second); a local flip is shielded for 4 s from a poll already in
+flight. The hub's `rtsp` command rides the bans long-poll command list like `closeRoom` and `wake` (two flips between
+two polls both arrive), and the spoke re-registers right after so the column follows. Everyone else in the room learns
+WHY the cameras went: the box's presence (the public `.presence/<room>` record and its state.json) carries
+`rtsp: "off"` while the switch is off, re-announced on every flip at once (not at the next heartbeat); other pages
+show a quiet line under People (`<box> — cameras switched off`, unattended boxes included) and one info-level
+toast per flip (`Cameras switched off on <box> ...` / `Cameras back on on <box>.`; info toasts show with View ▸
+Verbose alerts), never a chime and nothing on first sight; the tiles themselves leave exactly as before. Not an idle watchdog: only the
+operator (page, Relay page) or the hub operator flips it -- no timer, idle rule or viewer count ever does, and the
+on-demand machinery stays off (`ondemand = on` unchanged). No kastr.ini key: the switch is runtime state in
+rtsp-feeds.json. `POST /api/rtsp/suspend` is loopback-only like its siblings; `POST /api/relay/spokes/rtsp` is a
+guarded relay control. 26 unit tests (`tests/test_rtsp_suspend.py`, `tests/test_relay_rtsp_cmd.py`,
+`tests/test_page_rtsp_suspend.py`) run in the build gate.
+
+**Shared-media audio: no hardware encoder opens under the file player; a gap probe for the field.**
+
+**Kenton, 2026-10-02: the sound of a shared file drops out every couple of seconds, for the sharer ('Hear it myself') and for every viewer.** The server side was already clean (a 60 s cut of the same stream: 2813 contiguous AAC frames, no gaps). Because the sharer hears it too, the fault had to be in the sharing page. So the rig tapped that page: an AudioWorklet beside the file's element source and another on the MediaStreamDestination track (the one the earpiece and the Opus encoder share), a 50 Hz trace of the <video> element, and logs of every SourceBuffer append/remove/abort/timestampOffset and every WebCodecs configure/close. Over 14 configurations (headless and headed with the real output device, the real 90 s cut and a 1 kHz tone control, a 7-minute file with the upload throttled, camera + RNNoise mic live, four RTSP test monitors, a full-core CPU burner, a 44.1 kHz context, 5-minute runs), the steady-state MSE player was clean. There were no rebuffers or reopens, no removes outside Chrome's own eviction, and no periodic dropout in the element output, the encoder track or the viewer's playout. The 2 s cadence did NOT reproduce here.
+
+What does put silence into BOTH outputs at once is a stall of the file's own <video> pipeline: the share's sound is rendered by that element (createMediaElementSource -> MediaStreamDestination -> encoder + earpiece). The one repeatable staller is a hardware WebCodecs VideoEncoder being opened in the same page. A lab page (a plain <video> routed through WebAudio, no KASTR) measured this: every hardware encoder open stalled the playing element 138-279 ms (13/13 opens), against a 40 ms frame period. A software open took 22-41 ms, a bitrate-only reconfigure 0 ms, and a hardware VideoDecoder stalled it only on its first open. The first open after playback started came out as 50.7 ms of digital silence plus a `waiting` event. In KASTR the publish library closes a publication's encoder when its last subscriber leaves and opens a new one about 1 s later. So each demand change on the media composite stalled the movie 180-381 ms (31/32 subscriber churns over four runs; baseline 40 ms), and the first of each run cost 18-43 ms of silence on the sharer AND in the encoded audio.
+
+0.21.16 steers the file composite's encoder to SOFTWARE. The library chooses hardware or software once, in its isConfigSupported probe, and reuses that choice for every later re-open. So the existing software-fallback shim also answers 'unsupported' to prefer-hardware probes for 4 s after `startFileMedia` hands the composite to the library, and again after every composite resize. Rig A/B, same churn (a viewer unsubscribes for 2.5 s every 6 s): hardware stalls 201-260 ms and 1 gap (32 ms); software stalls 40-42 ms and 0 gaps, at 25.6-26 fps and about 2.4 Mb/s encoded. `localStorage kastr.media.swenc = "off"` keeps hardware. The fix covers only the composite. A camera or grid encoder that re-opens in the same page still stalls the player, and the probe below names those openings.
+
+Because the field cadence is unproven, the page now measures it where it happens. The `kastr-gap` worklet beside the file's element source reports every run of digital silence >= 10 ms after the first sound. Each gap is stamped with the media time, the element's `waiting` events and the VideoEncoder configure/close events around it. The results land in `__mediaDebug()[].audioGaps` / `gapCount` / `encoderEvents`, plus one launch.log line per 10 s that had gaps (`page: media audio: N gap(s) in 10 s on <file> (a-b ms, from t=... s); near: waiting xK, hardware encoder opens xJ; composite on software|hardware`). It caught 4/4 forced 160 ms holes at 160 ms, and gave 0 false gaps over 62 s of the real programme.
+
+**The media share fed its pacer twice.** Since 0.21.14 the file share's draw loop pushed every frame with `requestFrame()` while the canvas's own `captureStream` capture delivered the same frames, so about 48 fps reached a 25 fps pacer: half were dropped, its queue sat full and viewers saw the picture about 2 s behind the sound. The push now fires only while the window is hidden or the automatic capture has gone quiet (a per-track arrival clock on the pacer), the same rule the grid composite follows.
+
+**Found by the rigs and fixed before the build.** (1) A switched-off or unchecked camera's broadcast lingered at the relay for ~20 s because the pair's moq process was killed outright: KASTR now stops ffmpeg first, moq sees end of input and closes its broadcast in 0.03 s. (2) Viewers flashed an ex-grid member as a loose tile while its removal was pending; it now stays hidden. (3) A page that had left the room, or was joined but not live, never followed a switch flipped from the Relay page or the hub; the 3 s feed poll now runs whenever the page owns camera rows or is switched off. (4) A hub's Cameras column showed nothing until the spoke's next 10-minute registration; a spoke now re-registers when its first camera appears, its last one goes, and after the launch restore. (5) With another window covering the sharer, the media composite's automatic canvas capture throttled to ~13 fps and never went quiet, so the fallback push never fired: the composite now uses captureStream(0) with exactly one push per video frame and the file's frame rate passed to the pacer (covered and visible both 25/25 fps, queue max 3). Verified on the harness: the toggle rig 31 of 31 steps, the hub-to-spoke command (secured lab hub + spoke) in 0.22 s, the media churn 21-42 ms stalls with zero audio gaps and the pacer in = out; viewer picture behind sound fell from ~940 ms to ~485 ms raw. The remaining ~0.4 s is the viewer tile's 400 ms buffer, which delays video but not audio, on every tile class -- queued for the latency programme.
+
 ## v0.21.15 — the cell that never went black, and five fixes from the field
 
 Kenton's Part 39, built from the 2026-10-02 measurements: a camera opened from a remote grid never shows a black pane; a grid whose cameras all go offline stays on the air; the Share-content row switch works again; the join/leave chimes ring for people only; a camera left off no longer warns about effects; the page's broadcasts keep 5 s like the native pairs, and the decode probe uses the whole rendition. The own-RTSP toggle (item 4) ships on its own as v0.21.16; the priorities programme follows.

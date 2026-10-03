@@ -1363,6 +1363,7 @@
       <span class="bulk" hidden><button id="watchAllBtn" type="button">watch all</button><button id="parkAllBtn" type="button">park all</button></span>
     </h2>
     <div id="list-rows"></div>
+    <div id="rtspOffRows" hidden style="font-size:11px;color:var(--text-mute,#8b98a5);padding:4px 8px 0"></div>   <!-- 0.21.16: members whose own cameras are switched off (rtspOffApply) -->
     <div id="list-empty">Not connected yet.</div>
   </section>
 <!-- 0.8.6: stats + diagnostics panels retired; #status stays as log()'s target. -->
@@ -1373,6 +1374,7 @@
 <div id="sharePop" hidden>
   <div class="head">
     <span>Share content</span>
+    <label class="asi-sw" id="rtspSuspendWrap" hidden style="font-size:11px;margin-right:8px" title="Publish this box's own RTSP cameras. Off = every camera pair, monitor and grid composite stops and the room loses them (CPU/GPU spared); nothing is forgotten -- the same switch brings everything back."><span class="switch sm"><input type="checkbox" id="rtspSuspendSw"><i></i></span><span>Cameras</span></label>
     <span class="live" id="shareLive" hidden>ON AIR</span>
     <span class="sp"></span>
     <button type="button" class="close" title="Close (publishing keeps running)">&#10005;</button>
@@ -1700,6 +1702,7 @@
     <div class="sep"></div>
     <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
+    <button class="opt" id="viewRtspOff" type="button" hidden title="Stop publishing this box's own RTSP cameras and their grids to spare CPU/GPU. Nothing is forgotten: rows, grids and settings stay; the same item turns them back on."><span class="oi">&#128247;</span>Cameras off (spare CPU)<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFull" type="button"><span class="oi">&#9974;</span>Full screen</button>
     <div class="sep"></div>
     <button class="opt" id="viewLatency" type="button" title="Draw a small time code into my canvas shares (file, RTSP grid, effected camera) so viewers can read glass-to-glass latency"><span class="oi">&#9201;</span>Latency stamp on my shares<span class="chk">&#10003;</span></button>
@@ -3693,7 +3696,8 @@
   const GRID_PARKED_WARM = true;
   const gridParked = (name) => !gridMode && !selfSpotEl && gridMeta.has(name) && gridChildOf.get(selectedName) === name;
   const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
-  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name);
+  const leavingExMember = (name) => { if (!pendingRemovals.has(name)) return false; const now = Date.now(); for (const f of gridForgot.values()) if (f.known.includes(name) && now - f.at <= GRID_FORGOT_HOLD_MS) return true; return false; };   // 0.21.16: an ex-member of a just-withdrawn grid whose own broadcast already went inactive stays hidden while its removal debounce runs (owner switched its cameras off: no loose dead tiles)
+  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name);
   // 0.9.8: fill-first auto grid. Rows may hold different cell counts (2 over 3
   // for five cameras) when that draws more picture than equal cells would, no
   // cell smaller than half the biggest; partial rows and the whole block are
@@ -5916,6 +5920,7 @@
       const slugs = lastChannelList.map((r) => r.slug).join(",");
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
       try { stateMembersApply(); } catch {}   // 0.13.0
+      try { rtspOffApply(); } catch {}   // 0.21.16: a member's cameras switched off -> People note + one quiet toast per flip
       try { for (const n of [...tiles.keys()]) if (pathClass(n) === "box") removeTile(n); } catch {}   // 0.21.2: the mode arrived after the tile (0.21.15: pathClass)
       try { reclassifyTiles(); } catch {}   // 0.21.15: a presence diff (mode, op, room) re-judges every tile once
       try { paintSidebar(); } catch {}
@@ -5993,7 +5998,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || "") } });
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "" } });   // 0.21.16: + rtsp
           roomsChanged();
         }));
       });
@@ -7031,6 +7036,7 @@
     on("viewFocus", focusMode && !gridMode);
     on("viewHideMe", hideMe);
     on("viewPublishOnly", publishOnly);   // 0.9.10
+    { const b = document.getElementById("viewRtspOff"); if (b) { const sus = !!window.__rtspSuspend?.get?.(); b.hidden = IS_WEB || (!(window.__gridFeeds?.count?.() > 0) && !sus); b.classList.toggle("on", sus); } }   // 0.21.16: the box's RTSP switch (module 2 owns it; a web client has no bridge cameras)
     on("viewVerbose", toastPolicy().verbose());   // 0.15.0 (D2)
     gridBtn.classList.toggle("on", focusMode && !gridMode);
     { let pb = gridBtn.querySelector(".bdg"); if (!pb) { pb = document.createElement("span"); pb.className = "bdg"; pb.textContent = "pub"; gridBtn.appendChild(pb); } pb.hidden = !publishOnly; }   // 0.9.10: badge
@@ -7058,6 +7064,11 @@
     closeAllPops();
     if (focusMode) { if (gridMode) enterSpotlight(); else applyState(); window.__toast?.("Focus on content \u2014 only the main stage downloads. View \u25b8 Gallery to return.", 4000, { level: hintOnce("kastr.hint.focus") ? "event" : "info" }); }
     else applyState();
+  });
+  document.getElementById("viewRtspOff")?.addEventListener("click", () => {   // 0.21.16: the box's RTSP switch -- module 2 does the work and the toast
+    closeAllPops();
+    window.__rtspSuspend?.set?.(!window.__rtspSuspend?.get?.());
+    paintViewPop();
   });
   document.getElementById("viewPublishOnly")?.addEventListener("click", () => {   // 0.9.10
     closeAllPops();
@@ -8699,6 +8710,7 @@
           pubModel.op = String(p.op || ""); pubModel.name = String(p.name || ""); pubModel.relay = String(p.relay || "");
           pubModel.via = String(p.relayName || ""); pubModel.joinedAt = Number(p.joinedAt) || 0;
           pubModel.mode = PAGE_MODE;   // 0.15.0 (D1)
+          if (p.rtsp === "off") pubModel.rtsp = "off"; else delete pubModel.rtsp;   // 0.21.16: the box's own cameras are switched off (absent = on)
           break;
         }
         case "speaking": pubModel.speaking = !!value; break;
@@ -8814,6 +8826,45 @@
     })();
     return { close() { h.closed = true; try { h.sub?.close(); } catch {} }, get at() { return h.at; }, get n() { return h.n; } };
   }
+  // 0.21.16: a member whose own RTSP cameras are switched off says so in its presence (`rtsp: "off"` in the .presence
+  // record and in state.json). Its camera and grid tiles leave the normal way (the pairs stop, the grid:<id> announce is
+  // withdrawn); this only tells the room WHY: a quiet note under People (unattended boxes too -- their presence mode
+  // keeps them out of the member list) and ONE info-level toast per flip. Never a chime (chimes are person tiles only,
+  // pathClass) and no toast on first sight (joining a room whose box is already off shows the note only). state.json
+  // wins over the .presence copy (it updates in place); a peer between two presence paths keeps its last state for
+  // ROOMS_GRACE_MS, so a flip that replaces the announce is still seen as a flip.
+  const rtspOff = new Map();   // peer -> { off, label, state } for members of the joined room (not this page)
+  function rtspOffApply() {
+    if (joinState !== "joined") { if (rtspOff.size) { rtspOff.clear(); paintRtspOff(); } return; }
+    const now = Date.now(), me = statePeer(), seen = new Map(), known = new Set();
+    for (const p of roomsPres.values()) {
+      if (p.slug !== CHANNEL || !p.who?.peer) continue;
+      const w = p.who, peer = String(w.peer);
+      if (peer === me) continue;
+      if (p.goneAt) { if (now - p.goneAt <= ROOMS_GRACE_MS) known.add(peer); continue; }
+      known.add(peer);
+      if (seen.get(peer)?.state && !p.state) continue;
+      seen.set(peer, { off: w.rtsp === "off", state: !!p.state, label: String(w.name || (w.op ? prettyOperator(w.op) : "") || w.host || "a box") });
+    }
+    for (const [peer, s] of seen) {
+      const prev = rtspOff.get(peer);
+      if (prev && prev.off !== s.off) {
+        window.__toast?.(s.off ? "Cameras switched off on " + s.label + " \u2014 its RTSP cameras and grids are paused to spare CPU; nothing is broken."
+                               : "Cameras back on on " + s.label + ".", 5000, { level: "info" });
+      }
+      rtspOff.set(peer, s);
+    }
+    for (const peer of [...rtspOff.keys()]) if (!known.has(peer)) rtspOff.delete(peer);
+    paintRtspOff();
+  }
+  function paintRtspOff() {
+    const box = document.getElementById("rtspOffRows");
+    if (!box) return;
+    const off = [...rtspOff.values()].filter((s) => s.off);
+    box.hidden = !off.length;
+    box.replaceChildren(...off.map((s) => { const d = document.createElement("div"); d.className = "rtspoff"; d.textContent = s.label + " \u2014 cameras switched off"; return d; }));
+  }
+  window.__rtspOff = () => Object.fromEntries([...rtspOff].map(([k, s]) => [k, s.off ? "off" : "on"]));   // rig
   // in-room members from the lobby's .state entries (correction #8: one consumer, re-scoped by CHANNEL)
   function stateMembersApply() {
     if (joinState !== "joined") return;
@@ -10914,7 +10965,8 @@
       fetch("/api/rtsp/persist", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => {
         const n = (d?.feeds || []).filter((f) => f && f.keep !== false).length;
         if (n && d.room && joinState === "prejoin" && !joinEls.joinGate.hidden) {
-          gateMsg(n + " camera feed" + (n === 1 ? " is" : "s are") + " on air from this machine in room " + d.room + " \u2014 join it to manage them.");
+          gateMsg(d.suspended ? n + " camera feed" + (n === 1 ? " is" : "s are") + " kept on this machine for room " + d.room + " but switched off (Cameras off) \u2014 join it to turn them on."   // 0.21.16: the switch is off -- nothing is on air
+            : n + " camera feed" + (n === 1 ? " is" : "s are") + " on air from this machine in room " + d.room + " \u2014 join it to manage them.");
         }
       }).catch(() => {});
     }
@@ -11475,10 +11527,23 @@
   let softwareEncode = false;
   try { softwareEncode = localStorage.getItem(SW_FLAG) === "1"; } catch {}
 
+  // 0.21.16: a shared file's sound is rendered by its <video> element's pipeline, and opening a HARDWARE VideoEncoder
+  // anywhere in this page stalls that pipeline for 138-279 ms (measured; a software open 22-41 ms) -- the sharer's
+  // earpiece and every viewer hear the hole. The library opens a new encoder each time a publication's demand comes
+  // back, using the codec its first probe chose, so the file composite's probe is steered to software for a few
+  // seconds after its source lands (startFileMedia wire). kastr.media.swenc = "off" keeps it on hardware.
+  let fileSwProbeUntil = 0;
+  const mediaSwEncodeOn = () => { try { return localStorage.getItem("kastr.media.swenc") !== "off"; } catch { return true; } };
+  const wcLog = [];   // 0.21.16: [performance.now(), "configure" | "close", "hw" | "sw", "WxH"] -- the media audio gap probe reads it
   if ("VideoEncoder" in globalThis) {   // 0.17.0: absent on an insecure page -- the patch must not take the module down
     const real = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+    try {   // 0.21.16: stamp every encoder configure / close
+      const P = VideoEncoder.prototype, oc = P.configure, ox = P.close;
+      P.configure = function (c) { try { wcLog.push([performance.now(), "configure", c && c.hardwareAcceleration === "prefer-software" ? "sw" : "hw", ((c && c.width) || 0) + "x" + ((c && c.height) || 0)]); if (wcLog.length > 40) wcLog.shift(); } catch {} return oc.apply(this, arguments); };
+      P.close = function () { try { wcLog.push([performance.now(), "close", "", ""]); if (wcLog.length > 40) wcLog.shift(); } catch {} return ox.apply(this, arguments); };
+    } catch {}
     VideoEncoder.isConfigSupported = (cfg) => {
-      if (softwareEncode && cfg && cfg.hardwareAcceleration === "prefer-hardware") {
+      if ((softwareEncode || performance.now() < fileSwProbeUntil) && cfg && cfg.hardwareAcceleration === "prefer-hardware") {   // 0.21.16: + the file composite's window
         // The probe treats this as "try the software pass instead".
         return Promise.resolve({ supported: false, config: cfg });
       }
@@ -12302,9 +12367,69 @@
         + "with no audio announces an empty catalog while paused.";
   }
 
+  // 0.21.16: the box's RTSP switch. Server truth lives in the bridge (POST /api/rtsp/suspend {suspend}); this page mirrors
+  // it: the native pairs are stopped THERE, the monitors are detached HERE (no retry, no eviction), every grid composite
+  // stops announcing and drawing and its grid:<id> announce is withdrawn (announceGrid clears the ids it no longer sees,
+  // so viewers drop the tile and its hidden members cleanly), and rows, labels, grid seats and Keep stay exactly as they
+  // are. Not a watchdog: only a click here, the Relay page or a hub command flips it; pollFeeds and __rtspAdopt mirror a
+  // flip made elsewhere from /api/rtsp/list `suspended`, /api/instance `rtspSuspended` seeds the first paint.
+  let rtspSuspended = false, rtspSwitchAt = 0;   // rtspSwitchAt: the last LOCAL flip -- a poll already in flight must not flip us back
+  function setRtspSuspended(on, opts) {
+    if (IS_WEB2) return;   // a web client owns no bridge cameras
+    on = !!on;
+    const fromServer = !!opts?.fromServer, seed = !!opts?.seed;
+    if (on === rtspSuspended) { paintRtspSwitch(); return; }
+    rtspSuspended = on;
+    if (!fromServer) rtspSwitchAt = Date.now();
+    const back = [];   // resume: the slots whose monitors come back once the bridge serves them again
+    for (const s of slots.values()) {
+      if (!s.rtsp || s.entry.feedId == null) continue;   // every RTSP slot, native or still waiting for its first monitor frame
+      if (s.entry.retryTimer) { clearTimeout(s.entry.retryTimer); s.entry.retryTimer = null; }   // a queued monitor retry would only meet the 503
+      if (on) {
+        detachMonitor(s); try { s.video.pause(); } catch {} s.liveSince = null;
+        if (!s.native && nativeRtsp) { s.native = true; s.fault = null; s.feedError = null; }   // a slot adopted/started before the switch was known is a recorded member now (feedStuck/slotFailed would otherwise toast 'failed')
+      } else {
+        s.monitorTranscode = false; s.feedError = null; s.entry.retries = 0;
+        if (s.pub?.suspended) s.pub = { ...s.pub, suspended: false };   // the badge must not wait for the next list poll
+        back.push(s);
+      }
+    }
+    // the monitor comes back (a not-yet-native slot turns native on its first frame, begin) -- after the bridge has resumed:
+    // a monitor requested before the resume POST lands would only meet the 503 and start the ladder
+    const reattach = () => { for (const s of back) if (!rtspSuspended && slots.get(s.entry.id) === s) restartMonitor(s); };
+    if (on) updateRtspGrid();   // seats for members marked native above (drawRtspGrid stays idle)
+    for (const g of rtspGrids.values()) {
+      try { g.moq?.broadcast?.in?.enabled?.set?.(!on && live); } catch {}
+      g.liveSince = (!on && live) ? performance.now() : null;
+      gridNote(g, on ? "suspended -- composite off air, announce withdrawn" : "resumed -- composite back on air");   // launch.log + /api/diag events
+    }
+    announceGrid(true);          // gated on rtspSuspended below: on = every grid:<id> announce is cleared at once
+    if (!on) syncNative(true);   // BEFORE the server resume: the records take the live token (Bridge.publish reuse -> retoken while start() is still refused), so the pairs start on it
+    if (!fromServer) nativePost("/api/rtsp/suspend", { suspend: on, who: "page" }).then((r) => {
+      if (r?.error) window.__toast?.("Camera switch: " + r.error, 6000, { level: "event" });
+      reattach();
+      pollFeeds();   // fresh publisher state for the badges (the mirror ignores the server for 4 s after this flip)
+    });
+    else reattach();   // the server has resumed already (Relay page, hub)
+    announce(); renderSources(); refreshUi(); paintRtspSwitch();
+    if (window.__sinceAnnounce?.joinedAt?.()) { try { window.__sinceAnnounce.set(); } catch {} }   // presence + state.json carry rtsp "off" NOW (not at the next heartbeat); only while joined
+    window.__toast?.(seed && on ? "Cameras are off on this box \u2014 none of its RTSP feeds or grids is published. Share content \u25b8 Cameras (or View \u25b8 Cameras off) turns them back on."
+      : (on ? "Cameras off \u2014 this box publishes none of its RTSP feeds or grids until the switch is turned on. Nothing is forgotten."
+            : "Cameras on \u2014 publishing this box's RTSP feeds and grids again.") + (fromServer ? " (switched from the Relay page or the hub)" : ""), 6000, { level: "event" });
+  }
+  function paintRtspSwitch() {
+    const wrap = document.getElementById("rtspSuspendWrap"), sw = document.getElementById("rtspSuspendSw");
+    if (!wrap || !sw) return;
+    wrap.hidden = IS_WEB2 || !(added.some((a) => a.kind === RTSP) || rtspSuspended);
+    if (sw.checked !== !rtspSuspended) sw.checked = !rtspSuspended;
+  }
+  document.getElementById("rtspSuspendSw")?.addEventListener("change", (e) => setRtspSuspended(!e.target.checked));
+  window.__rtspSuspend = { get: () => rtspSuspended, set: (on) => setRtspSuspended(on) };
+  if (!IS_WEB2) fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => { if (d?.rtspSuspended === true) setRtspSuspended(true, { fromServer: true, seed: true }); }).catch(() => {});   // first paint, before any slot exists
   window.__rtspRerender = () => { try { renderSources(); } catch {} };   // 0.21.10: module 1 learned the host's switch after the first paint
   window.__rigRebuildGrid = () => { let n = 0; for (const g of rtspGrids.values()) { rebuildRtspMoq(g); n++; } return n; };   // rig: force the grid's self-heal rebuild
   function renderSources() {
+    try { paintRtspSwitch(); } catch {}   // 0.21.16: the Cameras switch shows once an RTSP feed exists
     camrowsEl.replaceChildren();
     for (const a of added) {
       if (a.kind === "camera") continue;   // 0.8.9: the toolbar owns the camera; Share lists what you SHARE
@@ -12941,6 +13066,7 @@
     nativePost("/api/rtsp/unpublish", { id: slot.entry.feedId });
   }
   function syncNative(force) {
+    if (rtspSuspended) return;   // 0.21.16: the server holds the records; nothing is published or UNpublished while the switch is off (unpublish would forget)
     for (const slot of slots.values()) {
       if (!slot.native) continue;
       if (nativeWanted(slot)) { if (force) slot.pubKey = null; nativePublish(slot); }
@@ -12966,6 +13092,8 @@
   function scheduleRtspRestart(entry, why) {
     if (!slots.has(entry.id)) return;          // removed meanwhile
     if (entry.retryTimer) return;              // already queued
+    if (rtspSuspended) return;                 // 0.21.16: monitors stay detached while the box's cameras are off (no ladder, no attempt counters, no eviction)
+    if (nativeRtsp) pollFeeds();               // 0.21.16: a monitor that ended may mean the switch was turned off elsewhere (Relay page, hub) -- the list says so at once, even on a page that is not live
 
     const n = entry.retries || 0;
     const waitMs = RTSP_RETRY_MS[Math.min(n, RTSP_RETRY_MS.length - 1)];
@@ -13248,7 +13376,11 @@
       return slot;
     }
 
-    attachMonitor(slot);   // 0.9.7: the MSE monitor player (fetch -> SourceBuffer)
+    if (rtspSuspended && nativeRtsp) {   // 0.21.16: the box's cameras are off -- no monitor; the slot is a native (recorded) member at once (begin() below would otherwise never run and feedStuck would call it failed)
+      slot.native = true;
+      slot.fault = null;
+      updateRtspGrid();
+    } else attachMonitor(slot);   // 0.9.7: the MSE monitor player (fetch -> SourceBuffer)
 
     // captureStream needs decoded frames before it yields a live track, so wait
     // for the first one rather than racing the decoder.
@@ -14406,7 +14538,7 @@
     // 0.16.0: the composite follows the FILE's frame rate (capped at 30): a 24 fps movie drawn at
     // 30 asked the encoder for six duplicate frames a second -- pure CPU for nothing
     const capFps = Math.min(30, Math.max(5, Math.round(Number(entry.fps) || 30)));
-    const stream = cv.captureStream(capFps); const vtrack = restampCaptureTrack(stream.getVideoTracks()[0]);   // 0.21.12
+    const stream = cv.captureStream(0); const vtrack = restampCaptureTrack(stream.getVideoTracks()[0], capFps);   // 0.21.12; 0.21.16: no automatic capture -- drawOnce pushes one frame per video frame (a covered window's throttled automatic capture ran the share at half rate; automatic + push doubled it)
     const m = { video: v, canvas: cv, cx, vtrack, url, actx: null, atrack: null, alive: true, lastAnn: 0, annT: null, capFps };
     slot.media = m;
     v.addEventListener("ended", () => { if (slot.media === m && m.alive && !m.stream && !v.loop) mediaFinished(slot); });   // 0.16.0
@@ -14432,14 +14564,14 @@
       if (!m.alive) return;
       const w = v.videoWidth, h = v.videoHeight;
       if (!w || !h) return;
-      const key = v.currentTime + ":" + v.paused;
+      const key = Math.floor(v.currentTime * capFps + 0.001) + ":" + v.paused;   // 0.21.16: one draw (= one pushed frame) per video frame, whichever clock (rVFC, timer) gets there first
       if (key === m.lastKey && (!v.paused || performance.now() - (m.lastDraw || 0) < 1000)) return;   // paused: 1 Hz keeps the picture alive (0.8.13)
       m.lastKey = key; m.lastDraw = performance.now();
       // 0.21.0: a web-safe file with a chosen resolution is scaled here (one decode, one encode, no server)
       const th = slot.entry.shareH && slot.entry.shareH < h ? slot.entry.shareH : h;
       const tw = th === h ? w : 2 * Math.round(w * th / h / 2);
-      if (cv.width !== tw || cv.height !== th) { cv.width = tw; cv.height = th; }
-      try { cx.drawImage(v, 0, 0, tw, th); drawStamp(cx, tw, th); pushCaptureFrame(vtrack); } catch {}   // 0.18.0: + stamp
+      if (cv.width !== tw || cv.height !== th) { cv.width = tw; cv.height = th; if (m.swEncode) fileSwProbeUntil = performance.now() + 4000; }   // 0.21.16: the new size is probed again
+      try { cx.drawImage(v, 0, 0, tw, th); drawStamp(cx, tw, th); pushCaptureFrame(vtrack); } catch {}   // 0.18.0: + stamp; 0.21.16: push only while hidden or when the automatic capture went quiet (every frame reached the pacer twice: ~48 fps in, 25 out, picture ~2 s behind the sound)
     };
     const draw = () => {
       if (!m.alive) return;
@@ -14453,11 +14585,13 @@
         const src = m.actx.createMediaElementSource(v);   // routes the element's audio into the graph (nothing plays out loud)
         const dest = m.actx.createMediaStreamDestination();
         src.connect(dest);
+        armMediaGapProbe(slot, m, src);   // 0.21.16
         m.atrack = dest.stream.getAudioTracks()[0];
         pubAud(slot.publish)?.source.set({ track: m.atrack, kind: "music" });
         m.actx.resume().catch(() => {});
         monitorAttach(slot, m.atrack);   // 0.21.0: the sharer hears the file (the mic tap below never saw this track)
       } catch (e) { log("File audio: " + (e?.message || e)); }
+      if (mediaSwEncodeOn()) { fileSwProbeUntil = performance.now() + 4000; m.swEncode = true; }   // 0.21.16: this composite's encoder probe -> software
       try { pubCap(slot.publish)?.in?.source.set(vtrack); } catch {}
       // a still frame before play so viewers get a picture immediately
       try { if (v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); pushCaptureFrame(vtrack); } } catch {}
@@ -14945,6 +15079,48 @@
       lbl.textContent = e.label + (!onBar && !upload.done && !upload.failed ? " \u2014 uploading " + pct + "%" : "");
     }
   }
+  // 0.21.16: the file share's audio gap probe. A worklet beside the element source (it outputs nothing) reports every
+  // run of digital silence >= 10 ms after the first sound -- what an element stall puts into the earpiece and the
+  // encoder alike. Each gap is stamped with the media time, the element's `waiting` events and the VideoEncoder
+  // configure/close events around it (wcLog) -> __mediaDebug().audioGaps, and one launch.log line per 10 s with gaps.
+  const MEDIA_GAP_WORKLET = "class KastrGap extends AudioWorkletProcessor{constructor(){super();this.z=0;this.s=0;this.sig=0;this.min=Math.round(sampleRate*0.01)}"
+    + "process(i){const c=i[0];let p=0;if(c)for(const ch of c)for(let k=0;k<ch.length;k++){const a=ch[k]<0?-ch[k]:ch[k];if(a>p)p=a}"
+    + "if(p<1e-5){if(!this.z){this.z=1;this.s=currentFrame}}else{if(this.z){const d=currentFrame-this.s;if(this.sig&&d>=this.min)this.port.postMessage([this.s/sampleRate,d/sampleRate]);this.z=0}this.sig=1}return true}}"
+    + "registerProcessor('kastr-gap',KastrGap);";
+  let mediaGapUrl = null;
+  function armMediaGapProbe(slot, m, src) {
+    const v = m.video, ctx = m.actx;
+    m.audioGaps = []; m.gapCount = 0; m.gapWaits = [];
+    v.addEventListener("waiting", () => { m.gapWaits.push(performance.now()); if (m.gapWaits.length > 20) m.gapWaits.shift(); });
+    try {
+      mediaGapUrl = mediaGapUrl || URL.createObjectURL(new Blob([MEDIA_GAP_WORKLET], { type: "application/javascript" }));
+      ctx.audioWorklet.addModule(mediaGapUrl).then(() => {
+        if (!m.alive || m.actx !== ctx) return;
+        const node = new AudioWorkletNode(ctx, "kastr-gap", { numberOfInputs: 1, numberOfOutputs: 0 });
+        src.connect(node); m.gapNode = node;
+        node.port.onmessage = (e) => {
+          if (!m.alive) return;
+          const nowP = performance.now(), at = nowP - (ctx.currentTime - e.data[0]) * 1000, ms = Math.round(e.data[1] * 1000);
+          const waits = m.gapWaits.filter((w) => w > at - 400 && w < at + 600).length;
+          const enc = wcLog.filter((x) => x[0] > at - 1500 && x[0] < at + 300).map((x) => x[1] + (x[2] ? " " + x[2] : "") + " " + Math.round(x[0] - at) + "ms");
+          const g = { at: Date.now() - Math.round(nowP - at), ms, t: +(v.currentTime || 0).toFixed(2), waiting: waits, enc, ahead: +((m.ahead || 0).toFixed(1)), ready: v.readyState };
+          m.gapCount++; m.audioGaps.push(g); if (m.audioGaps.length > 40) m.audioGaps.shift();
+          (m.gapPend ||= []).push(g);
+          if (m.gapNoteT) return;
+          m.gapNoteT = setTimeout(() => {   // one line per 10 s that had gaps
+            m.gapNoteT = null;
+            const p = m.gapPend || []; m.gapPend = [];
+            if (!p.length) return;
+            const ms2 = p.map((x) => x.ms), w = p.reduce((a, x) => a + x.waiting, 0), en = p.reduce((a, x) => a + x.enc.filter((s) => s.startsWith("configure hw")).length, 0);
+            const line = "media audio: " + p.length + " gap(s) in 10 s on " + String(slot.entry.label || slot.entry.name || "file") + " (" + Math.min(...ms2) + "-" + Math.max(...ms2) + " ms, from t=" + p[0].t + " s); "
+              + "near: waiting x" + w + ", hardware encoder opens x" + en + (m.swEncode ? "; composite on software" : "; composite on hardware");
+            try { log(line); } catch {}
+            if (!IS_WEB2) nativePost("/api/rtsp/note", { text: line });
+          }, 10000);
+        };
+      }).catch((err) => { m.gapProbeError = String(err?.message || err); });
+    } catch (err) { m.gapProbeError = String(err?.message || err); }
+  }
   function monitorAttach(slot, track) {   // 0.21.0: the sharer's own earpiece for a file share, fed straight from the file's audio track
     if (!track || !slot.pane) return;
     if (!slot.monitor) {
@@ -15111,7 +15287,7 @@
       const capture = new Video.Capture({ source: old.track });
       const broadcast = new Broadcast({
         origin: connection.origin,
-        enabled: live,
+        enabled: live && !(slot.canvas && rtspSuspended),   // 0.21.16: a grid (re)built while the cameras are off stays off air
         name: Net.Path.from(chanPath(ensureHang(slot.entry.name))),
         maxAge: 5000,   // 0.21.15 (P12a): retention per relay hop = the native pairs' `import --max-age 5s`; hang's default kept 30 s of every page-published track per hop (archive asks 2 s, fMP4 fallback 4 s, page budgets < 1 s)
         display: capture.out.display,
@@ -15398,6 +15574,7 @@
     cx.textBaseline = "alphabetic";
   }
   function drawRtspGrid(g) {   // 0.15.0: per grid (one 15 fps timer each)
+    if (rtspSuspended) return;   // 0.21.16: no compositing while the box's cameras are off (the encoder gets no frames; the heal loop skips a grid whose enabled is false)
     if (!g || !rtspGrids.has(g.id)) return;
     const ms = gridOrdered(g);
     const n = Math.max(1, ms.length);
@@ -15659,13 +15836,13 @@
     try { if (t?.requestFrame) { t.requestFrame(); if (window.__restamp) window.__restamp.pushes++; return true; } } catch {}
     return false;
   }
-  function restampCaptureTrack(track0) {
+  function restampCaptureTrack(track0, fpsHint) {   // 0.21.16: fpsHint -- a captureStream(0) track reports frameRate 0
     try {
       if (!window.MediaStreamTrackGenerator || !window.MediaStreamTrackProcessor || typeof VideoFrame === "undefined") return track0;
       const gen = new MediaStreamTrackGenerator({ kind: "video" });
       const proc = new MediaStreamTrackProcessor({ track: track0 });
       const reader = proc.readable.getReader(), writer = gen.writable.getWriter();
-      let fps = 15; try { fps = Number(track0.getSettings().frameRate) || 15; } catch {}
+      let fps = Number(fpsHint) || 15; if (!fpsHint) { try { fps = Number(track0.getSettings().frameRate) || 15; } catch {} }
       const stepMs = 1000 / fps, stepUs = Math.round(1e6 / fps), MAXQ = Math.max(4, Math.round(fps * 2));
       const st = (window.__restamp = window.__restamp || { in: 0, out: 0, dropped: 0, lastOrig: 0, lastNew: 0, origDelta: 0, lag: 0, gapMax: 0, burstMax: 0, burst: 0, lastArrive: 0, qMax: 0, held: 0, pushes: 0 });
       const q = []; let last = 0, alive = true;
@@ -15678,6 +15855,7 @@
             const nowMs = performance.now();
             if (st.lastArrive) { const gap = nowMs - st.lastArrive; st.gapMax = Math.max(st.gapMax, gap); st.burst = gap < 5 ? st.burst + 1 : 0; st.burstMax = Math.max(st.burstMax, st.burst); }
             st.lastArrive = nowMs; st.lag = Math.round(nowMs * 1000) - value.timestamp;
+            gen.__arrivedAt = nowMs;   // 0.21.16: per-track arrival clock -- a caller pushes only when the automatic capture went quiet
             if (window.__restampDelayMs) {   // rig: hold frames and hand them over in a batch, like a hidden document does
               st.heldQ = st.heldQ || []; st.heldQ.push([value, nowMs]); st.held = st.heldQ.length;
               if (nowMs - st.heldQ[0][1] < window.__restampDelayMs) continue;
@@ -15698,7 +15876,7 @@
         if (f2) { st.out++; st.lastNew = ts; writer.write(f2).catch(() => {}); }
       };
       const timer = setInterval(tick, stepMs);   // the app window runs without timer throttling
-      gen.getSettings = () => { try { return track0.getSettings(); } catch { return {}; } };
+      gen.getSettings = () => { try { const s0 = track0.getSettings(); return s0.frameRate ? s0 : { ...s0, frameRate: fps }; } catch { return {}; } };   // 0.21.16: the pacer's rate when the capture has none (captureStream(0))
       const stop0 = gen.stop.bind(gen);
       gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close(); } catch {} stop0(); };
       gen.__restamped = true; gen.__source = track0;   // 0.21.14: requestFrame() must reach the CAPTURE track -- a generator has none
@@ -15984,6 +16162,7 @@
   // is announcing; badging it "ON AIR" before then states something false.
   function slotStatus(slot) {
     if (slot.rtsp && slot.native) {   // 0.9.1: the server publishes; relay truth is still the echo
+      if (rtspSuspended || slot.pub?.suspended) return { text: "suspended", cls: "ready", onair: false };   // 0.21.16: the box's cameras are switched off
       if (slotFailed(slot)) return { text: "failed", cls: "warn", onair: false };
       if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (" + (slot.entry.evictWhy === "monitor" ? "monitor attempt " + (slot.entry.evictAttempt ?? slot.entry.retries ?? "?") : "attempt " + ((slot.feed?.publish || slot.pub)?.restarts ?? slot.entry.evictAttempt ?? slot.entry.retries ?? "?")) + "); retrying", cls: "warn", onair: false };   // 0.14.0 / 0.21.5
       if (slot.inGrid && !slot.ownPath) return { text: "in grid", cls: "ready", onair: false };
@@ -16038,7 +16217,7 @@
 
   // The echo can appear or vanish with no publish-side event, so the
   // badge needs a slow tick while live -- refreshUi alone is event-driven.
-  setInterval(() => { if (live) { if (nativeRtsp) pollFeeds(); refreshUi(); } }, 3000);
+  setInterval(() => { if (live) { if (nativeRtsp) pollFeeds(); refreshUi(); } else if (nativeRtsp && (rtspSuspended || added.some((a) => a.kind === RTSP))) pollFeeds(); }, 3000);   // 0.21.16: a page that is not live has no monitor whose end would tell it -- it still mirrors a Relay-page / hub flip of the Cameras switch within one tick
   setTimeout(pollFeeds, 0);   // 0.9.1: learn whether moq-cli is here before the first feed starts (after module init: feedPoll is a later `let`)
 
   // 0.13.0 (F2): "N pulling" -- the open subscriptions the relay I dialled holds
@@ -16159,7 +16338,7 @@
         + (g.name || "RTSP Grid") + " (" + g.members.length + ")";
       let gon = false;   // 0.21.7: no title on the grid name (OS tooltips stick)
       try { gon = g.moq?.broadcast?.in?.enabled?.peek?.() === true; } catch {}
-      let gst = { text: gon ? "ON AIR" : "preview", cls: gon ? "on" : "ready", onair: gon };
+      let gst = rtspSuspended ? { text: "suspended", cls: "ready", onair: false } : { text: gon ? "ON AIR" : "preview", cls: gon ? "on" : "ready", onair: gon };   // 0.21.16
       if (gon) {
         if (!g.liveSince) g.liveSince = performance.now();
         const echoed = !!window.__echoed?.has?.(chanPath(ensureHang(g.entry.name)));
@@ -16212,6 +16391,7 @@
   // never came up natively follow the page ladder (entry.retries, reset on timeupdate).
   const GRID_EVICT_AFTER = 5, GRID_READMIT_LIVED_S = 5;
   function gridEvictionTick() {
+    if (rtspSuspended) return;   // 0.21.16: a stopped pair (running=false) is not a failing camera
     let changed = false;
     for (const a of added) {
       if (a.kind !== RTSP || !a.enabled) continue;
@@ -16257,6 +16437,7 @@
       .then((r) => r.json())
       .then((d) => {
         nativeRtsp = d.moq === true;   // 0.9.1
+        if (typeof d.suspended === "boolean" && d.suspended !== rtspSuspended && Date.now() - rtspSwitchAt > 4000) setRtspSuspended(d.suspended, { fromServer: true });   // 0.21.16: flipped on the Relay page or by the hub (a poll already in flight when THIS page flipped is ignored for 4 s)
         const byId = new Map((d.feeds ?? []).map((f) => [f.id, f]));
         for (const slot of slots.values()) {
           const f = byId.get(slot.entry.feedId);
@@ -16781,7 +16962,7 @@
       for (const g of rtspGrids.values()) {   // 0.15.0: every grid
         g.entry.name = gridBroadcastName(g);
         g.moq?.broadcast?.in?.name?.set?.(Net.Path.from(chanPath(g.entry.name)));
-        g.moq?.broadcast?.in?.enabled?.set?.(true);
+        g.moq?.broadcast?.in?.enabled?.set?.(!rtspSuspended);   // 0.21.16: a box whose cameras are off goes live without its grids
         g.liveSince = performance.now();
       }
       live = true;
@@ -17074,6 +17255,7 @@
     } catch {}
     try {
       const d = await fetch("/api/rtsp/list", { cache: "no-store" }).then((r) => r.json());
+      if (typeof d.suspended === "boolean" && d.suspended !== rtspSuspended) setRtspSuspended(d.suspended, { fromServer: true, seed: true });   // 0.21.16: learn the switch BEFORE the adopted slots start (no monitor, no ladder, native at once)
       nativeRtsp = d.moq === true;
       for (const f of d.feeds ?? []) {
         if (f.id == null || !f.url) continue;
@@ -17215,7 +17397,7 @@
     // announcer dedupes, so an early flush never costs a re-dial.
     gridAnnT = setTimeout(() => {
       const seen = new Set();
-      for (const g of (live ? gridsSorted() : [])) {   // 0.15.0: one announce per grid
+      for (const g of ((live && !rtspSuspended) ? gridsSorted() : [])) {   // 0.15.0: one announce per grid; 0.21.16: none while the box's cameras are off (the ids not seen are cleared below)
         const ms = gridOrdered(g);
         seen.add(g.id);
         gridAnn.set("grid:" + g.id, JSON.stringify({ path: chanPath(ensureHang(g.entry.name)), id: g.id, label: g.name || gridNameOf(g.id), n: ms.length, layout: g.layout || "auto",
@@ -17288,7 +17470,7 @@
   function presencePayload() {
     let relay = "";
     try { relay = new URL(urlInput.value.trim()).host; } catch {}
-    return { peer: PEER, op: operatorSlug(), name: operator || "", relay, relayName: window.__relayNameOf?.(relay) || "", mode: window.__pageMode?.() || "full" };   // 0.15.0 (D1)
+    return { peer: PEER, op: operatorSlug(), name: operator || "", relay, relayName: window.__relayNameOf?.(relay) || "", mode: window.__pageMode?.() || "full", ...(rtspSuspended ? { rtsp: "off" } : {}) };   // 0.15.0 (D1); 0.21.16: + rtsp "off" while this box's own cameras are switched off (absent otherwise)
   }
   // 0.12.0: presence keeps the ORIGINAL join time per room -- every re-dial
   // (relay name learned, connect(), a heal) used to stamp Date.now(), so a solo
@@ -17454,6 +17636,7 @@
     }
   }
   function nudgeFromViewer(fullPath) {
+    if (rtspSuspended) return;   // 0.21.16: a viewer's stall report against cameras that are switched off is not evidence (no grid rebuild, no nudge, no diag noise)
     const now = Date.now();
     const ng = gridsSorted().find((g) => chanPath(ensureHang(g.entry.name)) === fullPath);   // 0.15.0: the grid by path
     if (ng) {
@@ -17675,7 +17858,9 @@
     const up = s.entry.upload;
     const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused, lowQ: !!m.lowQ, encoder: m.encoder || null,
       capFps: m.capFps || null, srcFps: m.srcFps || null, encFps: m.encFps == null ? null : +m.encFps.toFixed(1), encKbps: m.encKbps == null ? null : Math.round(m.encKbps), cpuHint: (m.encFps == null || !m.capFps) ? null : +(m.encFps / m.capFps).toFixed(2) };   // 0.15.0/0.15.1/0.16.0
-    const audInfo = { actx: m.actx?.state || null, atrack: m.atrack ? { readyState: m.atrack.readyState, enabled: m.atrack.enabled, muted: m.atrack.muted } : null, elMuted: v.muted, elVolume: v.volume, audioDecoded: v.webkitAudioDecodedByteCount ?? null, pubMuted: !!s.publish?.muted };   // 0.15.1 rig
+    const audInfo = { actx: m.actx?.state || null, atrack: m.atrack ? { readyState: m.atrack.readyState, enabled: m.atrack.enabled, muted: m.atrack.muted } : null, elMuted: v.muted, elVolume: v.volume, audioDecoded: v.webkitAudioDecodedByteCount ?? null, pubMuted: !!s.publish?.muted,   // 0.15.1 rig
+      audioGaps: (m.audioGaps || []).slice(-20), gapCount: m.gapCount || 0, gapProbe: !!m.gapNode, gapProbeError: m.gapProbeError || null, swEncode: !!m.swEncode,   // 0.21.16
+      encoderEvents: wcLog.slice(-12).map((x) => [Math.round(x[0]), x[1], x[2], x[3]]) };
     return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, restarts: m.log || [], finished: !!m.finished, buffered: b, startAt: m.startAt ?? null,   // 0.21.0: + startAt
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,
       upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo, ...audInfo };
@@ -17778,6 +17963,7 @@
         encoded: (() => { try { return s.publish.video.out.stats?.peek?.() ?? null; } catch { return null; } })(),
         trackFps: (() => { try { return pubCap(s.publish)?.in?.source.peek()?.getSettings?.().frameRate ?? null; } catch { return null; } })(),
       }),
+      rtspSuspended,   // 0.21.16: the box's RTSP switch (off = nothing published, records kept) -> /api/diag publisher.rtspSuspended
       // 0.21.5: the grids (composited + encoded in this page) -- what launch.log alone cannot see
       restamp: (window.__restamp ? { ...window.__restamp, heldQ: undefined } : null),   // 0.21.14: the pacer's counters (in/out/dropped/qMax/burstMax/gapMax)
       grids: [...rtspGrids.values()].map((g) => ({

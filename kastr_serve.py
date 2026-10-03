@@ -679,6 +679,7 @@ _RELAY_WS = [0]       # 0.19.0: live /relay WebSocket pipes
 TUNNEL_SEEN = {}      # 0.19.0: the last proxied visitor {"base", "at"} (the Relay page's one-port card); 0.20.0: + "open"
 _TUNNEL_OPEN_SAID = [0.0]   # 0.20.0: when the "proxied visitors reach an OPEN relay" line was last logged
 SINGLE_PORT = False   # 0.19.0: kastr.ini single_port -- every remote page gets the /relay web relay
+RTSP_BRIDGE = [None]  # 0.21.16: the running Bridge (make_server sets it) -- kastr_relay's hub `rtsp` command and the spoke registration reach the switch through it
 
 
 def hub_web_base(host_or_url, default=8000):
@@ -1690,6 +1691,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # tab and the masthead its relay controls on a viewer box.
                 "mode": MODE,
                 "ondemand": bool(kastr_rtsp.ONDEMAND_ENABLED),   # 0.21.10: the kill switch -- the page hides the two RTSP switches, drops -low.hang and sends no demand when false
+                "rtspSuspended": bool(getattr(bridge, "suspended", False)),   # 0.21.16: the box's RTSP switch (the page paints it before its first /api/rtsp/list)
                 # Server-remembered operator name (0.8.0) -- the fallback
                 # when the browser profile lost its localStorage.
                 "operator": op_ref[0],
@@ -4153,6 +4155,7 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
         make_handler(root, coep, relay, quiet, hostname, bridge, relay_srv,
                      relay_ref, alive_ref, window_file))
     srv.rtsp = bridge
+    RTSP_BRIDGE[0] = bridge   # 0.21.16
     srv.relay = relay_srv
     if relay_srv is not None and bridge is not None and getattr(relay_srv, "archiver", None) is None:
         try:   # 0.18.0: host recording (kastr_archive) -- resumes whenever the relay starts

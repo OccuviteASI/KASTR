@@ -3163,6 +3163,8 @@ def main():
                 return
             room = str(doc.get("room") or "").strip().lower()
             feeds = [x for x in (doc.get("feeds") or []) if isinstance(x, dict) and x.get("url") and x.get("keep", True)]
+            if doc.get("suspended") is True:   # 0.21.16: the switch survives the relaunch -- records come back, nothing starts
+                note("rtsp restore: RTSP publishing is suspended on this box (rtsp-feeds.json) -- %d feed(s) are recorded, none starts until the switch is turned on" % len(feeds))
             if not room or not feeds:
                 return
             access = str(doc.get("access") or "")
@@ -3209,7 +3211,13 @@ def main():
                 st, u, _d = _kr.mint_member(relay, room, access, room_code, host=getattr(bridge, "host_slug", None))
                 return u if st in ("open", "token") else None
             n = bridge.restore(mint=mint, log=note)
-            note("rtsp restore: %d of %d persisted feed(s) republished into room %s (relay %s, %s)" % (n, len(feeds), room, relay, status))
+            try:   # 0.21.16: the restore usually lands after the first spoke registration -- re-register so the hub's Cameras column appears now
+                rs_ = getattr(server, "relay", None)
+                if rs_ is not None and n:
+                    rs_.spoke_sync_soon()
+            except Exception:
+                pass
+            note("rtsp restore: %d of %d persisted feed(s) %s into room %s (relay %s, %s)" % (n, len(feeds), ("recorded -- publishing suspended" if getattr(bridge, "suspended", False) else "republished"), room, relay, status))   # 0.21.16
         except Exception as e:
             note("rtsp restore failed: %s" % e)
     threading.Thread(target=feeds_restore, daemon=True).start()

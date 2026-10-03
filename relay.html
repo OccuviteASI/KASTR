@@ -327,6 +327,14 @@
       <div id="archList" style="font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8"></div>
     </section>
 
+    <!-- 0.21.16: the box's own RTSP cameras -- one switch for unattended boxes (reads /api/rtsp/list, writes /api/rtsp/suspend) -->
+    <section class="panel" id="camerasPanel" hidden>
+      <h2>This box&rsquo;s cameras</h2>
+      <label class="f asi-sw"><span class="switch"><input type="checkbox" id="rtspOn"><i></i></span><span>Publish this box&rsquo;s RTSP cameras (off = nothing published, CPU/GPU spared; feeds, grids and settings are kept)</span></label>
+      <div id="rtspNote" class="hint" style="margin-top:4px"></div>
+      <div id="rtspList" style="font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8"></div>
+    </section>
+
     <section class="panel" id="streamsPanel">
       <h2>Streams on this relay</h2>
       <div id="bcastNote" style="font-size:11px;color:var(--text-mute,#8b98a5);margin-bottom:6px;">Relay not running.</div>
@@ -919,8 +927,12 @@
     const roomsCell = (r) => (r.rooms || []).length
       ? (r.rooms || []).map((slug) => "<span class=\"sproom\" data-spoke=\"" + esc(r.name || r.key) + "\" data-slug=\"" + esc(slug) + "\">" + esc(slug) + (LOCAL ? " <button type=\"button\" class=\"ghost sprp\" title=\"Purge this room's chat stored on this hub (the room stays)\">chat</button> <button type=\"button\" class=\"ghost sprx\" title=\"Close this room on that spoke\">\u2715</button>" : "") + "</span>").join(" ")
       : "<span style=\"color:var(--text-mute)\">\u2014</span>";
-    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Last seen</th></tr>"
-      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td></tr>").join("") + "</table></div>"
+    // 0.21.16: the spoke's RTSP switch (it registers "on" / "off"; null = no cameras or an older spoke); the hub operator flips it
+    const camCell = (r) => r.rtsp ? ("<span class=\"sprtsp\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (r.rtsp === "on" ? "1" : "0") + "\">" + (r.rtsp === "on" ? "on" : "<span style=\"color:var(--asi-amber)\">off</span>")
+      + (LOCAL ? " <button type=\"button\" class=\"ghost sprt\" title=\"" + (r.rtsp === "on" ? "Turn that box's cameras off (spare its CPU/GPU; nothing is forgotten)" : "Turn that box's cameras back on") + "\">" + (r.rtsp === "on" ? "off" : "on") + "</button>" : "") + "</span>")
+      : "<span style=\"color:var(--text-mute)\">\u2014</span>";
+    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Cameras</th><th>Last seen</th></tr>"
+      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras
       : "No spoke has registered yet.";
     for (const b of $("spokesList").querySelectorAll(".sprp")) b.addEventListener("click", async () => {   // 0.21.3
       const slug = b.parentElement.dataset.slug;
@@ -938,6 +950,16 @@
         const r = await api("/api/relay/spokes/close-room", { spoke: sp, slug });
         $("spokesMsg").textContent = r.error ? "Close failed: " + r.error : ("Close of " + slug + " sent to " + sp + " (#" + r.seq + ") \u2014 it acts within a second and re-registers.");
       } catch (e) { $("spokesMsg").textContent = "Close failed: " + (e?.message || e); }
+      setTimeout(paintSpokes, 3000);
+    });
+    for (const b of $("spokesList").querySelectorAll(".sprt")) b.addEventListener("click", async () => {   // 0.21.16: flip a spoke's cameras (the `rtsp` command rides its long-poll)
+      const sp = b.parentElement.dataset.spoke, on = b.parentElement.dataset.on === "1";
+      if (!confirm((on ? "Turn OFF" : "Turn ON") + " the cameras of spoke " + sp + "?" + (on ? " Viewers lose them until they are turned on again; nothing is forgotten on that box." : ""))) return;
+      b.disabled = true;
+      try {
+        const r = await api("/api/relay/spokes/rtsp", { spoke: sp, suspend: on });
+        $("spokesMsg").textContent = r.error ? "Switch failed: " + r.error : ("Cameras " + (on ? "off" : "on") + " sent to " + sp + " (#" + r.seq + ") \u2014 it acts within a second; the column follows its next registration.");
+      } catch (e) { $("spokesMsg").textContent = "Switch failed: " + (e?.message || e); }
       setTimeout(paintSpokes, 3000);
     });
     $("spokesUpdate").disabled = !LOCAL || !d.secured;
@@ -1377,6 +1399,43 @@
     panel.hidden = false;
   }
   paintArchive(); setInterval(paintArchive, 20000);
+  // 0.21.16: the box's RTSP switch -- /api/rtsp/list carries `suspended`; POST /api/rtsp/suspend {suspend} flips it (loopback only)
+  let rtspBusy = false;
+  async function paintCameras() {
+    if (!LOCAL || rtspBusy) return;
+    let d = null;
+    try { const r = await fetch("/api/rtsp/list", { cache: "no-store" }); if (r.ok) d = await r.json(); } catch {}
+    const panel = document.getElementById("camerasPanel");
+    const feeds = (d && d.feeds) || [];
+    if (!d || d.remote || (!feeds.length && !d.suspended)) { panel.hidden = true; return; }
+    document.getElementById("rtspOn").checked = !d.suspended;
+    const list = document.getElementById("rtspList");
+    list.replaceChildren();
+    for (const f of feeds) {
+      const p = f.publish || {};
+      const row = document.createElement("div");
+      row.textContent = String(p.broadcast || f.url || ("feed " + f.id)).replace(/\.hang$/, "") + " \u2014 "
+        + (d.suspended || p.suspended ? "suspended" : p.running ? "publishing" + (p.copy ? " (copy)" : "") : p.standby ? "standby" : p.parked ? "parked (token)" : "stopped")
+        + (p.restarts ? ", restarts " + p.restarts : "");
+      list.appendChild(row);
+    }
+    document.getElementById("rtspNote").textContent = d.suspended
+      ? "Off: " + feeds.length + " camera feed" + (feeds.length === 1 ? "" : "s") + " kept but not published (no ffmpeg/moq pairs, no monitors, no grid). Turn the switch on to publish again."
+      : feeds.length + " camera feed" + (feeds.length === 1 ? "" : "s") + " on this box. Turning the switch off stops every pair, monitor and grid composite; nothing is forgotten.";
+    panel.hidden = false;
+  }
+  paintCameras(); setInterval(paintCameras, 10000);
+  document.getElementById("rtspOn").addEventListener("change", async () => {
+    const sw = document.getElementById("rtspOn");
+    rtspBusy = true;
+    document.getElementById("rtspNote").textContent = sw.checked ? "Turning cameras on\u2026" : "Turning cameras off\u2026";
+    try {
+      const r = await fetch("/api/rtsp/suspend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ suspend: !sw.checked, who: "relay page" }) }).then((x) => x.json());
+      if (r.error) { document.getElementById("rtspNote").textContent = r.error; sw.checked = !sw.checked; }
+    } catch (e) { document.getElementById("rtspNote").textContent = "Failed: " + (e?.message || e); }
+    rtspBusy = false;
+    paintCameras();
+  });
   function render(paths, secured, origin) {
     const streams = paths.filter((p) => p.endsWith(".hang"));
     const rooms = new Set(paths.filter((p) => p.startsWith(".channels/"))

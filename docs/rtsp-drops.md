@@ -66,6 +66,10 @@ Reading it: `repins` climbing with every hub restart is expected (a QUIC hub's c
 the spoke restarts its relay to pin it — each restart is one blink for every downstream viewer); `drops` climbing while
 the hub did not restart is the network between the sites. Match the `down`/`up` timestamps against the blackouts.
 
+## Cameras switched off (0.21.16)
+
+0.21.16: cameras that went away because the box's RTSP switch is OFF are not drops. launch.log says so in one line per flip -- `rtsp: publishing SUSPENDED by page|relay page|hub command #N -- P pair(s) stopped, M monitor(s) released, K record(s) kept` and later `rtsp: publishing RESUMED by ... -- S of K pair(s) starting` -- and after a relaunch `rtsp: publishing is SUSPENDED on this box (rtsp-feeds.json suspended=true)` plus `rtsp: recorded (publishing suspended) N persisted feed(s) into room R`. While it is off there are NO `rtsp pair ... start`, `rtsp nudge ...` or `page: grid ...: evicted` lines (every restart path refuses, viewer reports are not logged, the page's ladder and eviction are inert); a `rtsp: <b> recorded while publishing is suspended -- not started` line is a page or restore re-posting a feed. `/api/rtsp/list` -> `suspended: true` (and each `publish.suspended`), `/api/diag` -> `publisher.rtspSuspended` and the grids' `suspended -- composite off air, announce withdrawn` events confirm it; the Share rows read `suspended`. If cameras vanished and none of these lines is there, it is a real drop -- read the tables above.
+
 ## The grid that split up (0.21.15)
 
 When every camera in a grid went offline together (one switch, one PoE budget) the cameras came back on viewers as

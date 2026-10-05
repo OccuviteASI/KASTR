@@ -43,16 +43,19 @@ TARGET = "es2022"
 # publish Broadcast takes {origin} not {connection}, <moq-watch> `latency` is
 # gone (`delay` + `buffer`), hang catalog `timeline` -> root `archive`/`clock`.
 # Pre-0.16 the page ran the 4-8 Sept 2026 versions (watch 0.5.3, publish 0.4.6).
+# 0.21.17: the 2026-10-04 train -- @moq/watch 0.6.2 / publish 0.5.2 / net 0.4.2 / hang 0.5.2 / json 0.4.2 /
+# signals 0.2.5 (moq-relay 0.17.0). net 0.4.2 hides every '.'-led path segment (announce + listing), so KASTR's
+# control paths moved to '~' (kastr_relay.NS); the audio-maxage-floor patch re-anchored on player-DqpNnBDT.mjs.
 PINS = {
-    "https://esm.sh/@moq/watch":            "/@moq/watch@0.6.0",
-    "https://esm.sh/@moq/watch/element":    "/@moq/watch@0.6.0/element",
-    "https://esm.sh/@moq/publish":          "/@moq/publish@0.5.0",
-    "https://esm.sh/@moq/publish/element":  "/@moq/publish@0.5.0/element",
+    "https://esm.sh/@moq/watch":            "/@moq/watch@0.6.2",
+    "https://esm.sh/@moq/watch/element":    "/@moq/watch@0.6.2/element",
+    "https://esm.sh/@moq/publish":          "/@moq/publish@0.5.2",
+    "https://esm.sh/@moq/publish/element":  "/@moq/publish@0.5.2/element",
     "https://esm.sh/qrcode-generator@1.4.4": "/qrcode-generator@1.4.4",
     # 0.13.0: the page reads/writes JSON state tracks (Snapshot/Window). 0.16.0:
     # the same range hang/watch request (^0.4.0), so the page shares the one
     # vendored @moq/json module instance with the library.
-    "https://esm.sh/@moq/json":             "/@moq/json@^0.4.0",
+    "https://esm.sh/@moq/json":             "/@moq/json@^0.4.2",
 }
 
 # 0.16.0: relative sibling chunks ("./name-hash.mjs") inside a vendored bundle
@@ -98,21 +101,35 @@ def rel(from_name, to_name):
 # asserts marker, replacement, anchor gone and sha == manifest.
 PATCHES = [
     {"id": "audio-maxage-floor",
-     "file": "@moq/watch@0.6.0/es2022/player-DiUmUis6.mjs",
+     "file": "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs",
      "why": ("hang's container drops the oldest buffered group when the buffered span exceeds maxAge = delay + buffer; "
              "every 20 ms Opus packet is its own group and legacy audio frames carry no duration, so one skip registered "
              "as a discontinuity: the worklet ring was flushed, the shared sync clock and the decoder reset -- the clipping "
              "every KASTR 0.21.6 viewer heard ('skipping slow group: track=audio' climbing). A 1 s floor on the AUDIO "
              "consumer's maxAge (video keeps the library's budget) turns a late packet into a small gap."),
      "edits": [
-        ('#g(t){if(!t.get(this.in.enabled)||t.get(this.sync.in.delay)==="instant")return;let e=t.get(this.source.in.broadcast);if(!e)return;',
-         '#g(t){if(!t.get(this.in.enabled)||t.get(this.sync.in.delay)==="instant")return;/* KASTR-PATCH: audio-maxage-floor */this.kastrAudioMaxAge=new u(Math.max(Number(this.sync.out.maxAge.peek())||0,1e3));let e=t.get(this.source.in.broadcast);if(!e)return;'),
-        ('priority:w.PRIORITY.audio,maxAge:this.sync.out.maxAge',
-         'priority:w.PRIORITY.audio,maxAge:this.kastrAudioMaxAge'),
-        ('r=new b.Consumer(e,{format:s,maxAge:this.sync.out.maxAge})',
-         'r=new b.Consumer(e,{format:s,maxAge:this.kastrAudioMaxAge})'),
-        ('c=new b.Consumer(e,{format:new b.Cmaf.Format(s),maxAge:this.sync.out.maxAge})',
-         'c=new b.Consumer(e,{format:new b.Cmaf.Format(s),maxAge:this.kastrAudioMaxAge})'),
+        ('#u(t){if(!t.get(this.in.enabled)||t.get(this.sync.in.delay)==="instant")return;let e=t.get(this.source.in.broadcast);if(!e)return;',
+         '#u(t){if(!t.get(this.in.enabled)||t.get(this.sync.in.delay)==="instant")return;/* KASTR-PATCH: audio-maxage-floor */this.kastrAudioMaxAge=new u(Math.max(Number(this.sync.out.maxAge.peek())||0,1e3));let e=t.get(this.source.in.broadcast);if(!e)return;'),
+        ('priority:b.PRIORITY.audio,maxAge:this.sync.out.maxAge',
+         'priority:b.PRIORITY.audio,maxAge:this.kastrAudioMaxAge'),
+        ('a=new y.Consumer(e,{format:s,maxAge:this.sync.out.maxAge})',
+         'a=new y.Consumer(e,{format:s,maxAge:this.kastrAudioMaxAge})'),
+        ('c=new y.Consumer(e,{format:new y.Cmaf.Format(s),maxAge:this.sync.out.maxAge})',
+         'c=new y.Consumer(e,{format:new y.Cmaf.Format(s),maxAge:this.kastrAudioMaxAge})'),
+     ]},
+    {"id": "catalog-delay-cap",
+     "file": "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs",
+     "why": ("watch 0.6.2 adds each rendition's catalog `delay` + measured `jitter` to the playout delay; publish 0.5.2 "
+             "re-publishes both as lifetime MAXIMUMS, so one stall (a hidden window's capture batch, an encoder reopen) "
+             "permanently delays every viewer of that encoder (measured 2026-10-05 on the harness: the RTSP grid advertised "
+             "jitter 148 ms + delay 183 ms -> ~330 ms on top of KASTR's 150 ms). KASTR keeps the 0.6.0 contract: video "
+             "jitter is one frame interval (100 ms when the framerate is unknown), the catalog delay is ignored; audio "
+             "jitter is capped at max(frame, 40 ms). KASTR's adaptive audio delay and its tile buffer handle real lateness."),
+     "edits": [
+        ('function be(t){let e;return t.jitter===void 0?t.framerate&&(e=h.Milli(Math.ceil(1e3/t.framerate))):e=h.Milli(t.jitter),t.delay===void 0?e:h.Milli.add(h.Milli(t.delay),e??h.Milli.zero)}',
+         'function be(t){/* KASTR-PATCH: catalog-delay-cap */let f=t.framerate?Math.ceil(1e3/t.framerate):void 0,j=t.jitter===void 0?f:Math.min(Number(t.jitter)||0,f??100);return j===void 0?void 0:h.Milli(j)}'),
+        ('function Ft(t){let e=(t.jitter||Wt(t))??0,i=Math.ceil(Ot/t.sampleRate*1e3);return h.Milli((t.delay??0)+e+i)}',
+         'function Ft(t){/* KASTR-PATCH: catalog-delay-cap */let w=Wt(t)??0,e=Math.min((t.jitter||w)??0,Math.max(w,40)),i=Math.ceil(Ot/t.sampleRate*1e3);return h.Milli(e+i)}'),
      ]},
 ]
 

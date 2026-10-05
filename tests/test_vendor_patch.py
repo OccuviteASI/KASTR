@@ -38,7 +38,7 @@ class VendorPatchTest(unittest.TestCase):
 
     def test_audio_floor_uses_signal_class(self):
         # the floor must be a Signal (the subscribe helper calls .peek() on maxAge) -- `u` is the Signal import
-        path = os.path.join(vendor_moq.OUT, "@moq", "watch@0.6.0", "es2022", "player-DiUmUis6.mjs")
+        path = os.path.join(vendor_moq.OUT, "@moq", "watch@0.6.2", "es2022", "player-DqpNnBDT.mjs")
         with open(path, encoding="utf-8") as f:
             text = f.read()
         self.assertIn("Signal as u", text[:1500])

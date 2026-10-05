@@ -72,10 +72,19 @@ TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
 VIEWER_TTL = 43200         # 0.10.0: a viewer token lives half a day (pages re-mint at <10 min)
 ROOM_TTL = 86400           # 0.10.0: a persisted room record without a heartbeat for a day is forgotten
 PBKDF2_ITER = 100000       # 0.10.0: relay access codes (the lockout bounds the cost of a wrong guess)
-# The dotted announce kinds a viewer legitimately publishes (presence, stall
-# reports, spotlight votes, recording notice, media control pulses, avatar).
-# .grid, .files and .media stay publisher-only.
-VIEWER_KINDS = (".since", ".stalled", ".spotlight", ".recording", ".mediactl", ".avatar")
+# 0.21.17: KASTR's control namespace. Every control path segment begins with NS. Until 0.21.16 it was '.', but
+# moq-relay >= 0.15.3 never lists a '.'-led segment to a moq-lite-06 client and @moq/net >= 0.4.2 never announces
+# one (measured 2026-10-05: relay 0.15.8/0.17.0 lists nothing under .presence/.state/.member, net 0.4.2 publishers
+# answer `unroutable`), so the fleet could not move to the relay that fixes cross-site cameras. '~' is never in
+# base64url (the presence payload segments), never produced by slug()/HOST_RE, and refused by the /api/watch and
+# archive path regexes, so no media or HTTP path can collide with a control path.
+NS = "~"
+LEGACY_NS = "."            # what a pre-0.21.17 token or page uses; recognised, never minted
+# The announce kinds a viewer legitimately publishes (presence, stall reports, spotlight votes, recording notice,
+# media control pulses, avatar). ~grid, ~files and ~media stay publisher-only.
+SINCE_KIND = NS + "since"
+MEMBER_SEG = NS + "member"
+VIEWER_KINDS = tuple(NS + k for k in ("since", "stalled", "spotlight", "recording", "mediactl", "avatar"))
 LOOPBACK_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 # 0.11.0: federation. A spoke relay dials the hub with a token the HUB minted
@@ -97,13 +106,16 @@ GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
 # 0.12.0: root-prefixed announce kinds every member may put beside .presence:
 # .talking/<room> (who is speaking) and .chat/<room> (a new-message nudge).
-MEMBER_KINDS = (".presence", ".talking", ".chat")
+MEMBER_KINDS = (NS + "presence", NS + "talking", NS + "chat")
+PRESENCE_KIND = MEMBER_KINDS[0]
+CHANNELS_KIND = NS + "channels"
+STATS_KIND = NS + "stats"          # 0.21.17: the relay's own stats prefix ([stats] prefix in relay.toml)
 # 0.16.0: the ADMIN role. A third relay-wide code; its token also puts under
 # <room>/.admin, where stop / mute / kick commands ride as track-less announces
 # (viewer and publisher grants have no .admin pattern, so the relay drops a
 # forged command at the door). A spoke without an admin code of its own asks
 # its hub's minter to verify the code (POST /api/token {admin, verify:true}).
-ADMIN_KIND = ".admin"
+ADMIN_KIND = NS + "admin"
 # 0.16.0: a spoke pins the hub's QUIC certificate; when the relay reports a
 # certificate problem on the cluster link the pin is re-learned (the hub's
 # generated cert changes on every hub start).
@@ -146,7 +158,7 @@ def forward_wake(minter, tok, room, broadcast, hops, log):
 # a token scoped to a host may write only that host's paths. The claim
 # strings carry NO trailing slash: the relay matches per path segment, so
 # "r1/host" covers r1/host/..., not r1/hostx.
-STATE_PREFIX = ".state"
+STATE_PREFIX = NS + "state"
 HOST_RE = re.compile(r"^[a-z0-9-]{1,32}-[0-9a-f]{4}$")
 # 0.16.0: moq-relay 0.15 no longer verifies JWTs itself -- it POSTs one JSON
 # Request per session event (connect | revalidate | end) to [auth] url and
@@ -156,7 +168,7 @@ HOST_RE = re.compile(r"^[a-z0-9-]{1,32}-[0-9a-f]{4}$")
 # 0.13-shaped {root, put, get, exp} claims the minter still issues, so 0.15.1
 # pages and native publishers keep working -- and translating the prefix
 # lists into patterns ("main" -> "main", "main/**").
-PUBLIC_KINDS = (".channels", ".stats", ".presence", ".talking", ".chat", ".state")   # subscribe-only for anyone (the pre-join screen, bubbles, stats)
+PUBLIC_KINDS = (CHANNELS_KIND, STATS_KIND, NS + "presence", NS + "talking", NS + "chat", STATE_PREFIX)   # subscribe-only for anyone (the pre-join screen, bubbles, stats)
 SESSION_REVALIDATE = 600     # s: the relay re-asks; a rotated key ends every session within this
 SESSIONS_MAX = 4096
 
@@ -391,7 +403,8 @@ def claims_identity(claims):
             return None, None
         host = None
         for p in _patterns(claims.get("put")) if claims.get("put") is not None else []:
-            m = re.match(r"^\.state/%s/([a-z0-9-]{1,32}-[0-9a-f]{4})$" % re.escape(room), str(p))
+            # 0.21.17: the ~state spelling; a pre-0.21.17 .state token (cached <= 24 h) still names its host
+            m = re.match(r"^(?:%s|%s)/%s/([a-z0-9-]{1,32}-[0-9a-f]{4})$" % (re.escape(STATE_PREFIX), re.escape(LEGACY_NS + "state"), re.escape(room)), str(p))
             if m:
                 host = m.group(1)
                 break
@@ -409,12 +422,21 @@ def claims_admin(claims, slug):
     return ("**" in puts) or ((slug + "/" + ADMIN_KIND) in puts) or ((slug + "/" + ADMIN_KIND + "/**") in puts)
 
 
+def _is_control_put(p):
+    """0.21.17: a put pattern that names a control path (presence, state, member, since, ...) rather than media --
+    in either namespace, so a cached pre-0.21.17 token classifies exactly as it did."""
+    # any path SEGMENT that opens with a control prefix makes the put a control path: `~state/...`, `<room>/~since`,
+    # `<room>/<host>/~member`, and a 0.12-shaped wide viewer token's `<room>/~stalled` (which 0.21.16's
+    # member/since-only rule wrongly called a publisher)
+    return any(seg.startswith((NS, LEGACY_NS)) for seg in str(p).split("/") if seg and seg != "**")
+
+
 def claims_role(claims):
     if is_relay_claims(claims):
         return "relay"
     puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
     for p in puts:
-        if p == "**" or (not p.startswith(".") and "/.member" not in p and "/.since" not in p):
+        if p == "**" or not _is_control_put(p):
             return "publisher"
     return "viewer"
 
@@ -1043,7 +1065,7 @@ class AuthStore:
         return changed
 
 
-def register_room(store, p, peer="", log=None, lockout=None):
+def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_created=None):
     """0.12.0: the ONE room-record writer behind the minter's POST /api/room and
     kastr_serve's POST /api/rooms/register -> (reply, http code).
 
@@ -1090,6 +1112,14 @@ def register_room(store, p, peer="", log=None, lockout=None):
     cur = store.room(slug)
     if cur is None and not (locking or keep):
         return {"error": "bad room record"}, 400       # nothing to lock or keep (an existing room's holder may heartbeat with the key alone)
+    if cur is None and hub_check is not None:
+        # 0.21.17: a spoke never creates a lock over a name its hub already locked (the lock is the fleet's, not the box's)
+        try:
+            if hub_check(slug) in ("locked", "wrong", "ok"):
+                log("relay auth: room %s is locked at the hub -- not created here (from %s)" % (slug, peer or "?"))
+                return {"error": "room name is locked by someone else on this relay"}, 409
+        except Exception:
+            pass
     if cur is not None:
         by_key = bool(room_key) and room_key == cur.get("roomKey")
         by_code = p.get("code") is not None and _room_code_ok(cur, p.get("code"))
@@ -1153,6 +1183,11 @@ def register_room(store, p, peer="", log=None, lockout=None):
         lockout.ok(peer)
     rec = {"salt": salt, "hash": hsh, "roomKey": os.urandom(16).hex(), "at": now,
            "persistent": bool(keep), "creator": creator, "created": now}
+    if locking and on_created is not None:
+        try:
+            on_created(slug, rec)          # 0.21.17: a spoke mirrors its new lock to the hub
+        except Exception:
+            pass
     store.put_room(slug, rec)
     return {"ok": True, "roomKey": rec["roomKey"], "persistent": bool(keep)}, 200
 
@@ -1268,6 +1303,8 @@ class AuthService:
         self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
         self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
         self.hub_cmd_seen = None              # the hub's command seq this spoke last saw (baseline first)
+        self._hub_locks = {}                  # 0.21.17: slug -> when the hub last said it is locked (fail closed while the hub is dark)
+        self._hub_open = {}                   # 0.21.17: slug -> when the hub last said it is open (30 s: a join does not wait on the hub each time)
         d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
         if isinstance(d, dict):
             if isinstance(d.get("spokes"), dict):
@@ -1341,6 +1378,9 @@ class AuthService:
                                  # 0.13.0: this minter scopes tokens to a host and the relay
                                  # publishes .state/<room>/<host> tracks
                                  "state": True,
+                                 # 0.21.17: the control namespace this minter grants (pages built for '~' re-mint
+                                 # a token cached from a '.' minter, and refuse a '.' minter with a clear reason)
+                                 "ns": NS,
                                  # 0.14.0 F: the hub KASTR's web port -- spokes (chat proxy, peer
                                  # lookups, version follow) and pages stop assuming 8000
                                  "web": WEB_PORT or _FIREWALL_WEB_PORT or None,
@@ -1405,6 +1445,9 @@ class AuthService:
                 elif path == "/api/bans/notify":       # 0.18.0: the hub says "bans changed" -- no data, we pull
                     obj, code = svc.bans_notified(self._peer())
                     self._reply(obj, code)
+                elif path == "/api/rooms/fed":         # 0.21.17: a spoke asks about / mirrors a room lock
+                    obj, code = svc.rooms_fed(p, self.headers.get("Authorization"))
+                    self._reply(obj, code)
                 elif path == "/api/ondemand/forward":  # 0.21.7: a spoke relays a viewer's demand for a camera on another site
                     obj, code = svc.wake_route(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
@@ -1438,7 +1481,122 @@ class AuthService:
 
     def register(self, p, peer=""):
         # 0.12.0: one implementation with kastr_serve's POST /api/rooms/register
-        return register_room(self.store, p, peer, self.log, self.lockout)
+        return register_room(self.store, p, peer, self.log, self.lockout, **self.lock_hooks())
+
+    # ---- 0.21.17: room locks across federation ------------------------------------------------
+
+    def _hub_base(self):
+        try:
+            return self.hub() if callable(self.hub) else None
+        except Exception:
+            return None
+
+    def _hub_bearer(self):
+        try:
+            tok = self.fed_token() if callable(self.fed_token) else None
+        except Exception:
+            tok = None
+        return ("Bearer " + tok) if tok else None
+
+    def hub_room(self, slug, code=None):
+        """Spoke side: what does the HUB say about this room? -> "open" | "locked" (no code asked) | "ok" | "wrong" |
+        None (no hub, or it did not answer). A "locked"/"ok"/"wrong" answer is remembered so the spoke fails closed for
+        that slug while the hub is dark; "open" forgets it."""
+        base, bearer = self._hub_base(), self._hub_bearer()
+        if not base or not bearer or not SLUG_RE.match(str(slug or "")) or slug == "main":
+            return None
+        with self.lock:
+            if time.time() - self._hub_open.get(slug, 0) < 30:
+                return "open"
+        body = {"op": "check", "slug": slug}
+        if code is not None:
+            body["code"] = str(code)
+        try:
+            req = urllib.request.Request(base + "/api/rooms/fed", data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "Authorization": bearer})
+            with urllib.request.urlopen(req, timeout=4) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None                  # a hub before 0.21.17: nothing to ask
+            return None
+        except Exception:
+            return None
+        if not d.get("locked"):
+            with self.lock:
+                self._hub_locks.pop(slug, None)
+                self._hub_open[slug] = time.time()
+                if len(self._hub_open) > 512:
+                    self._hub_open = dict(sorted(self._hub_open.items(), key=lambda kv: kv[1])[-256:])
+            return "open"
+        with self.lock:
+            self._hub_locks[slug] = time.time()
+            self._hub_open.pop(slug, None)
+        if code is None:
+            return "locked"
+        return "ok" if d.get("ok") else "wrong"
+
+    def hub_locked_known(self, slug):
+        with self.lock:
+            return slug in self._hub_locks
+
+    def _hub_lock_push(self, slug, rec):
+        base, bearer = self._hub_base(), self._hub_bearer()
+        if not base or not bearer:
+            return
+        body = {"op": "lock", "slug": slug, "salt": rec.get("salt"), "hash": rec.get("hash"), "creator": rec.get("creator") or ""}
+        try:
+            req = urllib.request.Request(base + "/api/rooms/fed", data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "Authorization": bearer})
+            with urllib.request.urlopen(req, timeout=6):
+                pass
+            self.log("relay auth: room %s lock mirrored to the hub" % slug)
+        except Exception as e:
+            self.log("relay auth: room %s lock not mirrored to the hub (%s)" % (slug, e))
+
+    def lock_hooks(self):
+        """The register_room hooks for this box: none on a hub, the hub check + mirror on a spoke."""
+        if not self._hub_base():
+            return {}
+        return {"hub_check": lambda s: self.hub_room(s),
+                "on_created": lambda s, r: threading.Thread(target=self._hub_lock_push, args=(s, dict(r)), daemon=True).start()}
+
+    def rooms_fed(self, p, bearer):
+        """Hub side, POST /api/rooms/fed with a FEDERATION token: {op:"check", slug, code?} -> {locked, ok?};
+        {op:"lock", slug, salt, hash, creator?} mirrors a spoke-created lock when the name is free here (409 when this hub
+        already holds a different lock). The code is never logged; failures are counted by the spoke's own lockout (the
+        member's address is there, not here)."""
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        p = p if isinstance(p, dict) else {}
+        slug = str(p.get("slug") or "")
+        if not SLUG_RE.match(slug) or slug == "main":
+            return {"ok": False, "error": "bad room"}, 400
+        rec = self.store.room(slug)
+        locked = bool(rec and rec.get("hash"))
+        if p.get("op") == "lock":
+            salt, hsh = str(p.get("salt") or ""), str(p.get("hash") or "")
+            if not (salt and hsh):
+                return {"ok": False, "error": "bad room record"}, 400
+            if rec is not None:
+                if rec.get("hash") == hsh:
+                    rec["at"] = time.time()
+                    self.store.put_room(slug, rec)
+                    return {"ok": True, "mirrored": False}, 200
+                if locked:
+                    return {"ok": False, "error": "room name is locked by someone else on this relay"}, 409
+            now = time.time()
+            self.store.put_room(slug, {"salt": salt, "hash": hsh, "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
+                                       "creator": str(p.get("creator") or "")[:64], "created": now, "mirror": True})
+            self.log("relay auth: room %s lock mirrored from a spoke" % slug)
+            return {"ok": True, "mirrored": True}, 200
+        out = {"ok": True, "locked": locked}
+        if locked and p.get("code") is not None:
+            out["ok"] = bool(_room_code_ok(rec, str(p.get("code"))))
+            if out["ok"]:
+                rec["at"] = time.time()      # B3: in use -> keep the lock alive
+                self.store.put_room(slug, rec)
+        return out, 200
 
     def _federation_token(self, code, peer=""):
         """0.11.0: a relay joining this one presents the FEDERATION code and gets a
@@ -1507,6 +1665,19 @@ class AuthService:
             role = "publisher"
             if rec is not None and rec.get("hash") and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
                 return self._fail(peer, "wrong room code", slug)
+        if rec is None and slug != "main" and self._hub_base():
+            # 0.21.17 (B1): the lock may live at the hub (it was registered there, or mirrored from another spoke)
+            hv = self.hub_room(slug, rc if rc is not None else "")
+            if hv == "wrong":
+                return self._fail(peer, "wrong room code", slug)
+            if hv is None and self.hub_locked_known(slug):
+                return {"ok": False, "error": "room-code service unreachable -- this room's lock lives on the hub"}, 503
+        elif rec is not None and rec.get("hash") and time.time() - float(rec.get("at") or 0) > 300:
+            rec["at"] = time.time()          # 0.21.17 (B3): a member in the room keeps its lock alive past ROOM_TTL
+            try:
+                self.store.put_room(slug, rec)
+            except Exception:
+                pass
         self._ok(peer)
         now = int(time.time())
         ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with .admin
@@ -1520,12 +1691,12 @@ class AuthService:
             # a viewer token off media.
             if role in ("publisher", "admin"):
                 puts = [slug + "/" + host, STATE_PREFIX + "/" + slug + "/" + host,
-                        slug + "/.since", ".presence/" + slug]
+                        slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug]
                 if role == "admin":
                     puts.append(slug + "/" + ADMIN_KIND)   # 0.16.0: stop / mute / kick commands
             else:
-                puts = [STATE_PREFIX + "/" + slug + "/" + host, slug + "/" + host + "/.member",
-                        slug + "/.since", ".presence/" + slug]
+                puts = [STATE_PREFIX + "/" + slug + "/" + host, slug + "/" + host + "/" + MEMBER_SEG,
+                        slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug]
             member = _mint(self.key, {"root": "", "get": slug, "put": puts, "iat": now, "exp": exp})
         elif role in ("publisher", "admin"):
             # 0.11.0: `.presence/<slug>` is the public room-occupancy announce (arrays are fine)
@@ -1544,8 +1715,8 @@ class AuthService:
                                       "put": [slug + "/" + k for k in VIEWER_KINDS] + [k + "/" + slug for k in MEMBER_KINDS],   # 0.12.0
                                       "iat": now, "exp": exp})
         # Every member holds the room's registry record (0.8.6).
-        registry = _mint(self.key, {"root": "", "put": ".channels/" + slug, "iat": now, "exp": exp})
-        return {"ok": True, "exp": exp, "role": role,
+        registry = _mint(self.key, {"root": "", "put": CHANNELS_KIND + "/" + slug, "iat": now, "exp": exp})
+        return {"ok": True, "exp": exp, "role": role, "ns": NS,     # 0.21.17: pages re-mint a token cached without it
                 "tokens": {"member": member, "registry": registry}}, 200
 
     # ---- 0.16.0: the relay's per-session auth ------------------------------------
@@ -2493,7 +2664,8 @@ class Relay:
                'key = "%s"' % str(self.tls["key"]).replace("\\", "/"),
                ""] if getattr(self, "tls", None) else []),
             "[stats]",
-            "enabled = true",      # publishes .stats/<node> for the stats page
+            "enabled = true",      # publishes ~stats/<node> for the stats page
+            f'prefix = "{STATS_KIND}"',   # 0.21.17: the relay's default '.stats' is hidden from browsers on relay >= 0.15.3
             f'node = "{node}"',
             "",
         ]

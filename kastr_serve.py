@@ -1128,6 +1128,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             (CLIENT_TOKEN.encode(), (b"web" if remote else b"app")),
             # Give the upstream demo page a machine-specific default too.
             (BUILTIN_NAME.encode(), f'"{page_host}/me.hang"'.encode()),
+            # 0.21.17: the prebuilt stats bundle (assets/stats-*.js) names the relay's stats prefix and skips '.'-led
+            # keys; the relay now publishes under ~stats (relay.toml [stats] prefix) -- retarget it at serve time so the
+            # vendored bundle on disk stays byte-identical. Both needles occur only in that bundle.
+            (b"`.stats/node`", ("`%s/node`" % kastr_relay.STATS_KIND).encode()),
+            (b"d=e=>e.startsWith(`.`)", ("d=e=>e.startsWith(`.`)||e.startsWith(`%s`)" % kastr_relay.NS).encode()),
         ]
         if current != BUILTIN_RELAY:
             out.append((BUILTIN_RELAY.encode(), current.encode()))
@@ -2442,7 +2447,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 p = self._chat_body_json()
                 if p is None:
                     return self._chat_reply(413, {"error": "body too large"})
-                obj, code = kastr_relay.register_room(store, p, self._chat_peer(), log, CHAT_LOCKOUT)
+                _auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None   # 0.21.17: a spoke checks/mirrors with its hub
+                _hooks = _auth.lock_hooks() if _auth is not None and hasattr(_auth, "lock_hooks") else {}
+                obj, code = kastr_relay.register_room(store, p, self._chat_peer(), log, CHAT_LOCKOUT, **_hooks)
                 hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                 if code == 200:
                     try:
@@ -2549,7 +2556,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         return self._json_cors(200, {"app": "KASTR", "secured": False, "codes": False, "legacy": False,
                                                      "federation": False, "open": True, "relayPort": int(relay_srv.port),
                                                      "web": int(HTTP_PORT or self.server.server_address[1]),
-                                                     "https": HTTPS_INFO.get("port"), "talking": True, "chat": True, "state": True})
+                                                     "https": HTTPS_INFO.get("port"), "talking": True, "chat": True, "state": True,
+                                                     "ns": kastr_relay.NS})   # 0.21.17: the control namespace
                     if path0 == "/api/rooms":
                         st = getattr(relay_srv, "store", None)
                         return self._json_cors(200, {"rooms": st.rooms_public() if st else [], "groups": st.groups_public() if st else []})
@@ -3413,7 +3421,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._json_cors(200, arch.status(room))
             b = (qs.get("b") or [""])[0].strip()
             segs = b.split("/")
-            if len(segs) < 2 or any(not WATCH_SEG_RE.match(x) for x in segs) or segs[0].startswith("."):
+            if len(segs) < 2 or any(not WATCH_SEG_RE.match(x) for x in segs) or segs[0].startswith((".", kastr_relay.NS)):
                 return self._json_cors(400, {"error": "bad broadcast path"})
             if not self._local():
                 bad = self._room_claims(segs[0], jwt)
@@ -3651,7 +3659,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             from urllib.parse import unquote
             bcast = unquote(rel[:-(4 if low.endswith(".mp4") else 5)]).strip("/")
             segs = bcast.split("/")
-            if len(segs) < 2 or segs[0].startswith(".") or any(not WATCH_SEG_RE.match(x) for x in segs):
+            if len(segs) < 2 or segs[0].startswith((".", kastr_relay.NS)) or any(not WATCH_SEG_RE.match(x) for x in segs):
                 return self._json_cors(400, {"error": "bad broadcast path"})
             if low.endswith(".m3u8"):
                 return self._hls_start(bcast)   # 0.18.0

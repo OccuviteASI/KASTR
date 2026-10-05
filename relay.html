@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/assets/asi-brand.css">
 <!-- 0.12.0: the streams probe below imports @moq/watch; vendored like the main page (no esm.sh at run time) -->
 <script src="/assets/client.js"></script>
-<script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs","https://esm.sh/@moq/publish":"/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs"}}</script>
+<script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs","https://esm.sh/@moq/publish":"/assets/vendor/esm/@moq/publish@0.5.2.target-es2022.mjs"}}</script>
 <script type="module" src="/assets/asi-brand.js"></script>
 <style>
   * { box-sizing:border-box; }
@@ -1237,7 +1237,7 @@
   // Streams on this relay (0.7.7): a fresh anonymous probe every 5s lists
   // what the relay is actually carrying -- the split-brain diagnostic in
   // person (a stream badged ON AIR anywhere MUST appear here). On secured
-  // relays anonymous subscribe covers only .channels/.stats, so the list
+  // relays anonymous subscribe covers only .channels/~stats, so the list
   // degrades to room markers plus a note.
   import { Net, Signals } from "https://esm.sh/@moq/watch";
   import { Broadcast } from "https://esm.sh/@moq/publish";   // 0.16.0: the operator pushes admin commands
@@ -1328,8 +1328,8 @@
       // Feature-detected: an @moq/watch without this surface just skips it.
       const origin = new Map();   // broadcast path -> node name
       // .stats/node/<name> -> consume by the relative path, label by the NAME
-      const nodes = paths.filter((p) => p.startsWith(".stats/"))
-        .map((p) => p.slice(".stats/".length)).filter(Boolean);
+      const nodes = paths.filter((p) => p.startsWith("~stats/"))
+        .map((p) => p.slice("~stats/".length)).filter(Boolean);
       // 0.8.7: consume() lives on the ESTABLISHED connection (the Reload
       // wrapper never had it -- this branch was dead), and a single relay is
       // worth attributing too.
@@ -1340,7 +1340,7 @@
         for (const node of nodes) {
           let bc = null;
           try {
-            bc = await requestBroadcast(org, ".stats/" + node, 1500);   // 0.16.0
+            bc = await requestBroadcast(org, "~stats/" + node, 1500);   // 0.16.0
             const tr = bc?.bc?.track?.("subscriber.json")?.subscribe?.({ maxAge: 0 });
             if (!tr || typeof tr.readJson !== "function") continue;
             const j = await Promise.race([
@@ -1349,7 +1349,7 @@
             ]);
             try { tr.close?.(); } catch {}
             for (const [p, st2] of Object.entries(j || {})) {
-              if (p.startsWith(".")) continue;
+              if (p.startsWith(".") || p.startsWith("~")) continue;   // 0.21.17
               const open = (st2?.announced ?? 0) - (st2?.announced_closed ?? 0);
               if (open > 0 && !origin.has(p)) origin.set(p, node.split("/").pop());   // 0.11.0: the name, not "node/<name>"
             }
@@ -1438,11 +1438,11 @@
   });
   function render(paths, secured, origin) {
     const streams = paths.filter((p) => p.endsWith(".hang"));
-    const rooms = new Set(paths.filter((p) => p.startsWith(".channels/"))
+    const rooms = new Set(paths.filter((p) => p.startsWith("~channels/"))
       .map((p) => p.split("/")[1]).filter(Boolean));
     for (const p of streams) {
       const parts = p.split("/").filter(Boolean);
-      if (parts.length >= 2 && !parts[0].startsWith(".")) rooms.add(parts[0]);
+      if (parts.length >= 2 && !parts[0].startsWith(".") && !parts[0].startsWith("~")) rooms.add(parts[0]);
     }
     listEl.replaceChildren();
     for (const p of streams.sort()) {
@@ -1490,7 +1490,7 @@
           : "No rooms announced on " + host + " \u2014 this relay is secured, so this anonymous probe sees room markers only.")   // 0.21.0: it is the access codes, not the room codes
       : "No streams flowing through " + host + " right now.";
   }
-  // 0.16.0: publish one <room>/.admin/<ts>/<b64 cmd> announce with the operator's admin token
+  // 0.16.0: publish one <room>/~admin/<ts>/<b64 cmd> announce with the operator's admin token
   async function adminPush(room, cmd, btn) {
     if (btn) { btn.disabled = true; btn.textContent = "Sending\u2026"; }
     try {
@@ -1501,7 +1501,7 @@
       const b64 = btoa(unescape(encodeURIComponent(payload))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
       const url = new URL(probedUrl); url.search = "?jwt=" + t.token;
       const conn = new Net.Connection({ url: new Signals.Signal(url), enabled: true, share: false });
-      const bc = new Broadcast({ origin: conn.origin, enabled: true, name: Net.Path.from(room + "/.admin/" + Date.now() + "/" + b64) });
+      const bc = new Broadcast({ origin: conn.origin, enabled: true, name: Net.Path.from(room + "/~admin/" + Date.now() + "/" + b64) });
       setTimeout(() => { try { bc.close(); } catch {} try { conn.close(); } catch {} }, 6000);
       if (btn) btn.textContent = "Sent";
     } catch (e) {

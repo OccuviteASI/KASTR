@@ -24,11 +24,11 @@
      files, so a checkout without the vendor folder still runs against esm.sh. -->
 <script type="importmap">{
  "imports": {
-  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.0.target-es2022.mjs",
-  "https://esm.sh/@moq/publish": "/assets/vendor/esm/@moq/publish@0.5.0.target-es2022.mjs",
-  "https://esm.sh/@moq/publish/element": "/assets/vendor/esm/@moq/publish@0.5.0/element.target-es2022.mjs",
-  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.0.target-es2022.mjs",
-  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.0/element.target-es2022.mjs",
+  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.2.target-es2022.mjs",
+  "https://esm.sh/@moq/publish": "/assets/vendor/esm/@moq/publish@0.5.2.target-es2022.mjs",
+  "https://esm.sh/@moq/publish/element": "/assets/vendor/esm/@moq/publish@0.5.2/element.target-es2022.mjs",
+  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs",
+  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.2/element.target-es2022.mjs",
   "https://esm.sh/qrcode-generator@1.4.4": "/assets/vendor/esm/qrcode-generator@1.4.4.target-es2022.mjs"
  }
 }</script>
@@ -2312,7 +2312,7 @@
   function stalledAccept(path, active) {
     if (!active) return;
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".stalled");
+    const i = parts.indexOf("~stalled");
     if (i < 0 || parts.length < i + 3) return;
     let target = "";
     try { target = atob(parts[i + 2].replace(/-/g, "+").replace(/_/g, "/")); } catch {}
@@ -3335,8 +3335,8 @@
     } catch { return; }
     try {
       const deadline = new Promise((res) => setTimeout(res, 1500, null));
-      // announced(".stats") yields paths RELATIVE to the prefix: "node/<name>"
-      const ann = announcedUnder(conn, ".stats");   // 0.16.0 adapter
+      // announced("~stats") yields paths RELATIVE to the prefix: "node/<name>"
+      const ann = announcedUnder(conn, "~stats");   // 0.16.0 adapter
       const nodes = [];
       for (;;) {
         const e = await Promise.race([ann.next(), deadline]);
@@ -3354,14 +3354,14 @@
         const node = rel.split("/").pop();
         let bc = null;
         try {
-          bc = await requestBroadcast(org, ".stats/" + rel, 1500);   // 0.16.0: request(path) -> a consumer once routable
+          bc = await requestBroadcast(org, "~stats/" + rel, 1500);   // 0.16.0: request(path) -> a consumer once routable
           const tr = bc?.bc?.track?.("subscriber.json")?.subscribe?.({ maxAge: 0 });
           if (!tr || typeof tr.readJson !== "function") continue;
           const j = await Promise.race([tr.readJson(), new Promise((res) => setTimeout(res, 1200, undefined))]);
           try { tr.close?.(); } catch {}
           const per = new Map();
           for (const [p, st2] of Object.entries(j || {})) {
-            if (p.startsWith(".")) continue;
+            if (p.startsWith(".") || p.startsWith("~")) continue;   // 0.21.17: control paths in either namespace
             per.set(p, Math.max(0, (Number(st2?.subscriptions) || 0) - (Number(st2?.subscriptions_closed) || 0)));   // 0.13.0
             if (((st2?.announced ?? 0) - (st2?.announced_closed ?? 0)) > 0 && !next.has(p)) next.set(p, node);
           }
@@ -3496,14 +3496,14 @@
   }
 
   // ---- room up-time (0.8.8) ---------------------------------------------------
-  // Each member announces <room>/.since/<joinTs>/<b64 peer>; the earliest
+  // Each member announces <room>/~since/<joinTs>/<b64 peer>; the earliest
   // active one is how long the room has been up.
   const sinceTs = new Map();   // announce path -> ts
   let roomSince = 0;
   const members = new Map();   // 0.8.11: viewers -- announce path -> {peer, op, name, ts}
   function sinceAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".since");
+    const i = parts.indexOf("~since");
     if (i < 0 || parts.length < i + 2) return;
     const ts = Number(parts[i + 1]) || 0;
     if (active && parts.length >= i + 3) {   // 0.13.0: a peer with a state entry is already counted
@@ -3619,7 +3619,7 @@
   };
 
   // ---- remote RTSP grid: expand one cell (0.8.8) ------------------------------
-  // The owner announces <room>/.grid/<ts>/<b64 {path,n,layout,cells}>; the
+  // The owner announces <room>/~grid/<ts>/<b64 {path,n,layout,cells}>; the
   // same rect math as the composite (keep gridRectsW in sync with module 2's
   // gridRects) maps a click on the main tile to a cell, which a CSS
   // transform on the tile's canvas then fills the stage with.
@@ -3761,15 +3761,15 @@
     return rects;
   }
   // ---- shared media files: state + controls for everyone (0.8.10) ----------
-  // The owner announces <room>/.media/<ts>/<b64 {path, playing, t, dur, loop, at}>;
+  // The owner announces <room>/~media/<ts>/<b64 {path, playing, t, dur, loop, at}>;
   // viewers keep the last state per path and extrapolate the position while
-  // playing. Commands go back as <room>/.mediactl/<ts>/<b64 {path, op, value,
+  // playing. Commands go back as <room>/~mediactl/<ts>/<b64 {path, op, value,
   // nonce}> pulses; only the owner (mineNames) acts on them.
   const mediaMeta = new Map();   // path -> {playing, t, dur, loop, at, ts, key}
   const b64json = (seg) => { try { return JSON.parse(decodeURIComponent(escape(atob(seg.replace(/-/g, "+").replace(/_/g, "/"))))); } catch { return null; } };
   function mediaAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".media");
+    const i = parts.indexOf("~media");
     if (i < 0 || parts.length < i + 3) return;
     const meta = b64json(parts[i + 2]);
     if (!meta || !meta.path) return;
@@ -3787,7 +3787,7 @@
   }
   const seenCtl = new Set(), seenCtlQ = [];   // 0.16.0: FIFO -- a wholesale clear let a recent op replay
   // ---- 0.16.0: admin commands -----------------------------------------------------
-  // <room>/.admin/<ts>/<b64 {op, target, by, nonce, at}> -- only an admin token may put
+  // <room>/~admin/<ts>/<b64 {op, target, by, nonce, at}> -- only an admin token may put
   // there (viewer/publisher grants have no .admin pattern), so a command's presence IS
   // its authority. ops: stop (target = a broadcast path of mine), mute (same), kick
   // (target = "<host>/<operator>": this page leaves the room). Cooperative in 0.16.0.
@@ -3795,7 +3795,7 @@
   function adminAccept(path, active) {
     if (!active) return;
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".admin");
+    const i = parts.indexOf("~admin");
     if (i < 0 || parts.length < i + 3) return;
     adminApply(b64json(parts[i + 2]));
   }
@@ -3838,7 +3838,7 @@
   function mediaCtlAccept(path, active) {
     if (!active) return;
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".mediactl");
+    const i = parts.indexOf("~mediactl");
     if (i < 0 || parts.length < i + 3) return;
     const meta = b64json(parts[i + 2]);
     mediaCtlApply(meta);
@@ -3896,7 +3896,7 @@
 
   function gridAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".grid");
+    const i = parts.indexOf("~grid");
     if (i < 0 || parts.length < i + 3) return;
     let meta = null;
     meta = b64json(parts[i + 2]);
@@ -4321,7 +4321,7 @@
 
   // ---- avatars (0.8.7) --------------------------------------------------------
   // Per-person ASI color for initials, and photos (announced by their owner
-  // via <room>/.avatar/<ts>/<b64 {op,url}>, hosted by the relay host's KASTR).
+  // via <room>/~avatar/<ts>/<b64 {op,url}>, hosted by the relay host's KASTR).
   const ASI_PALETTE = ["#009fda", "#3ab54a", "#e0a52a", "#7fd1f5", "#c96bd8"];
   function personColor(key) {
     let h = 0;
@@ -4343,7 +4343,7 @@
   window.__personColor = personColor;
   function avatarAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".avatar");
+    const i = parts.indexOf("~avatar");
     if (i < 0 || parts.length < i + 3) return;
     let meta = null;
     meta = b64json(parts[i + 2]);
@@ -4693,7 +4693,7 @@
     if (selfSpotEl && !pubEls.includes(selfSpotEl)) selfSpotEl = null;   // its slot stopped
     // 0.8.8: focus on content = no rail at all (every non-main tile goes
     // visible="never" through railHiddenNames; own panes park off-stage).
-    const railOff = focusMode || isPhone();   // 0.8.9: a phone behaves like Focus on content
+    const railOff = focusMode || isPhone() || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen
     const railRemote = (!gridMode && !railOff)
       ? orderedNames().filter((n) => tiles.has(n) && isWatched(n) && !hiddenChild(n) && !(n === selectedName && !selfSpotEl))
       : [];
@@ -5082,6 +5082,11 @@
    * that also makes the request come from the click the user just made, which
    * the API requires.
    */
+  // 0.21.17: full screen = the stage or the whole app is the fullscreen element. While it holds, the stage shows ONLY the
+  // selected tile (no rail, own panes parked -- the Focus-on-content path) and no speaking ring is drawn anywhere.
+  const stageFullscreen = () => { const fs = document.fullscreenElement || document.webkitFullscreenElement; return !!fs && (fs === stageWrap || fs === document.documentElement); };
+  const ringsOff = () => focusMode || stageFullscreen();
+  window.__ringsOff = ringsOff;   // the publish module (own panes) reads it
   function toggleFullscreen(name) {
     // 0.21.0: the STAGE (#stagewrap) goes full screen, not the tile pane -- so the RTSP grid, the
     // cell click, the back pill, the chevrons and the zoom keep working inside it (the field report:
@@ -5090,7 +5095,8 @@
     if (name && !t) return;
     const fs = document.fullscreenElement;
     if (fs && (fs === stageWrap || (t && fs === t.pane))) { document.exitFullscreen?.(); return; }
-    if (t && !gridMode && selectedName !== name) select(name);
+    if (t && selectedName !== name) select(name);   // 0.21.17: from the gallery too -- full screen shows that one tile only
+    if (t && gridMode) { gridMode = false; applyState(); }
 
     // Must be called synchronously on the click. Awaiting exitFullscreen()
     // first and continuing in a .then() discards the transient user
@@ -5325,7 +5331,9 @@
       // means audio is actually being received and decoded.
       t.loudEma = (t.loudEma ?? 0) * 0.92 + v * 0.08;
       if (t.meterVal > 0.12) t.talkUntil = nowMs + 900;
-      t.pane.classList.toggle("talking", nowMs < (t.talkUntil ?? 0));
+      // 0.21.17: the ring says WHO is talking -- people only (a shared media file, a screen or a camera feed never rings),
+      // and nothing while focused on content or full screen (Kenton). talkUntil still feeds the sticky speaker.
+      t.pane.classList.toggle("talking", nowMs < (t.talkUntil ?? 0) && !ringsOff() && (tileClasses.get(name) ?? pathClass(name)) === "person");
       if (t.eq && t.pane.classList.contains("audio-only") && isContentPath(name)) drawEq(t);   // 0.8.6; 0.8.8: content only
     }
     // Sticky speaker: the loudest recently-talking tile, re-picked at most
@@ -5862,6 +5870,18 @@
     if (!rec?.hash) return true;                       // open channel
     return (await sha256Hex(String(rec.salt || "") + String(password ?? ""))) === rec.hash;
   }
+  // 0.21.17: may this code enter this LISTED room? -> "" (yes) or the reason. A locked room whose hash this page has not
+  // seen (a store row without salt/hash, or the .channels announce not here yet) passes only on a secured relay, where the
+  // minter checks the code itself; on an open relay it fails closed instead of letting any code in.
+  async function lockedRoomRefusal(rec, code) {
+    if (!rec?.locked && !rec?.hash) return "";
+    if (rec.hash) {
+      if (!String(code ?? "")) return "That room is locked \u2014 enter its code.";
+      return (await verifyPassword(rec, code)) ? "" : "Wrong room code.";
+    }
+    if (authSecured) return String(code ?? "") ? "" : "That room is locked \u2014 enter its code.";
+    return "That room is locked and its code cannot be checked yet \u2014 try again in a moment.";
+  }
   function myChannels() {
     try {
       const raw = JSON.parse(localStorage.getItem(MINE_CHANNELS_KEY) || "[]");
@@ -5877,8 +5897,7 @@
   async function createChannelRecord(slug, password, persistent) {
     const rec = { slug: channelSlug(slug), salt: null, hash: null, persistent: !!persistent };   // 0.12.0: kept rooms
     if (password) { rec.salt = randomSaltHex(); rec.hash = await sha256Hex(rec.salt + password); }
-    rememberChannel(rec);
-    return rec;
+    return rec;   // 0.21.17: remembered by the caller once it registered/joined (a refused create left a stray lock record)
   }
 
   // ---- 0.12.0: the live room model --------------------------------------------
@@ -5903,9 +5922,9 @@
   let roomsUrlSeen = "";         // 0.13.0 (F7): the relay url the model was built from
   let roomsFrozen = true;        // no live connection yet: nothing ages out
   let roomsDownAt = 0;
-  const roomsPres = new Map();   // ".presence" path -> { slug, ts, who, seen, goneAt }
-  const roomsReg = new Map();    // ".channels" path -> { slug, locked, salt, hash, closed, seen, goneAt }
-  const roomsTalk = new Map();   // ".talking" path -> { slug, peer }
+  const roomsPres = new Map();   // "~presence" path -> { slug, ts, who, seen, goneAt }
+  const roomsReg = new Map();    // "~channels" path -> { slug, locked, salt, hash, closed, seen, goneAt }
+  const roomsTalk = new Map();   // "~talking" path -> { slug, peer }
   const roomsRoot = new Map();   // "" (open relays) path -> { slug, op, seen, goneAt } publishers
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
@@ -5974,7 +5993,7 @@
       } catch {}
     };
     // .presence/<room>/<ts>/<b64 {peer, op, name, relay, relayName}> -- every member, public
-    sub(".presence", (e) => {
+    sub("~presence", (e) => {
       const key = String(e.path);
       if (!e.active) { const r = roomsPres.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
       const pp = key.split("/").filter(Boolean);
@@ -5988,10 +6007,10 @@
     if (authState) {
       const subs = new Map();   // full path -> consumer handle
       roomsAnns.push({ close: () => { for (const h of subs.values()) h.close(); subs.clear(); } });
-      sub(".state", (e) => {
+      sub("~state", (e) => {
         const pp = String(e.path).split("/").filter(Boolean);   // <room>/<host>/<peer>
         if (pp.length !== 3 || !ROOM_RE.test(pp[0])) return;
-        const full = ".state/" + pp.join("/");
+        const full = "~state/" + pp.join("/");
         if (!e.active) { subs.get(full)?.close(); subs.delete(full); const r = roomsPres.get(full); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
         if (subs.has(full)) return;
         subs.set(full, stateSubscribe(conn, full, "state.json", "snapshot", (v) => {
@@ -6004,7 +6023,7 @@
       });
     }
     // .channels/<slug>[/locked[/salt/hash]] | /closed/<ts>
-    sub(".channels", (e) => {
+    sub("~channels", (e) => {
       const key = String(e.path);
       if (!e.active) { const r = roomsReg.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
       const parts = key.split("/").filter(Boolean);
@@ -6019,7 +6038,7 @@
     });
     // .talking/<room>/<ts>/<b64 {peer}> -- toggled by the speaker; no grace (inactive = quiet)
     if (!authSecured || authTalking) {
-      sub(".talking", (e) => {
+      sub("~talking", (e) => {
         const key = String(e.path);
         if (!e.active) { if (roomsTalk.delete(key)) roomsChanged(); return; }
         const pp = key.split("/").filter(Boolean);
@@ -6031,18 +6050,18 @@
       });
     }
     // open relays: publishers per room from <room>/<host>/<op>/<leaf>.hang, and
-    // 0.10-era members' <room>/.since presence
+    // 0.10-era members' <room>/~since presence
     if (!authSecured) {
       sub("", (e) => {
         const key = String(e.path);
         const pp = key.split("/").filter(Boolean);
-        if (pp[1] === ".since" && pp.length >= 4) {
+        if (pp[1] === "~since" && pp.length >= 4) {
           if (!e.active) { const r = roomsPres.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
           const who = b64json(pp[3]);
           if (who && who.peer && ROOM_RE.test(pp[0])) { roomsPres.set(key, { slug: pp[0], ts: Number(pp[2]) || 0, who, seen: Date.now(), goneAt: undefined }); roomsChanged(); }
           return;
         }
-        if (!key.endsWith(".hang") || pp.length < 4 || pp[0].startsWith(".") || !ROOM_RE.test(pp[0])) return;
+        if (!key.endsWith(".hang") || pp.length < 4 || pp[0].startsWith(".") || pp[0].startsWith("~") || !ROOM_RE.test(pp[0])) return;
         if (!e.active) { const r = roomsRoot.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
         roomsRoot.set(key, { slug: pp[0], op: String(pp[2]).toLowerCase(), seen: Date.now(), goneAt: undefined });
         roomsChanged();
@@ -6356,27 +6375,27 @@
       if (!entry) break;
       const path = Net.Path.join(prefix, entry.path);
       // 0.7.6: spotlight votes ride announce-only paths under the room
-      // (<room>/.spotlight/<ts>/<b64url target>); newest timestamp wins.
-      if (String(path).split("/").filter(Boolean)[1] === ".spotlight") {
+      // (<room>/~spotlight/<ts>/<b64url target>); newest timestamp wins.
+      if (String(path).split("/").filter(Boolean)[1] === "~spotlight") {
         spotAccept(String(path), entry.active);
         continue;
       }
-      if (String(path).split("/").filter(Boolean)[1] === ".recording") {   // 0.8.6
+      if (String(path).split("/").filter(Boolean)[1] === "~recording") {   // 0.8.6
         recAccept(String(path), entry.active);
         continue;
       }
       {   // 0.8.7: stall reports, avatars, shared files -- all announce-only
         const kind = String(path).split("/").filter(Boolean)[1];
-        if (kind === ".stalled") { stalledAccept(String(path), entry.active); continue; }
-        if (kind === ".avatar") { avatarAccept(String(path), entry.active); continue; }
-        if (kind === ".files") { filesAccept(String(path), entry.active); continue; }
-        if (kind === ".since") { sinceAccept(String(path), entry.active); continue; }   // 0.8.8
-        if (kind === ".grid") { gridAccept(String(path), entry.active); continue; }     // 0.8.8
-        if (kind === ".media") { mediaAccept(String(path), entry.active); continue; }      // 0.8.10
-        if (kind === ".mediactl") { mediaCtlAccept(String(path), entry.active); continue; }
-        if (kind === ".admin") { adminAccept(String(path), entry.active); continue; }   // 0.16.0
+        if (kind === "~stalled") { stalledAccept(String(path), entry.active); continue; }
+        if (kind === "~avatar") { avatarAccept(String(path), entry.active); continue; }
+        if (kind === "~files") { filesAccept(String(path), entry.active); continue; }
+        if (kind === "~since") { sinceAccept(String(path), entry.active); continue; }   // 0.8.8
+        if (kind === "~grid") { gridAccept(String(path), entry.active); continue; }     // 0.8.8
+        if (kind === "~media") { mediaAccept(String(path), entry.active); continue; }      // 0.8.10
+        if (kind === "~mediactl") { mediaCtlAccept(String(path), entry.active); continue; }
+        if (kind === "~admin") { adminAccept(String(path), entry.active); continue; }   // 0.16.0
       }
-      if (String(path).split("/").filter(Boolean)[2] === ".member") { memberAccept(String(path), entry.active); continue; }   // 0.13.0: <room>/<HOST>/.member/<PEER>
+      if (String(path).split("/").filter(Boolean)[2] === "~member") { memberAccept(String(path), entry.active); continue; }   // 0.13.0: <room>/<HOST>/~member/<PEER>
       if (!path.endsWith(".hang")) continue; // skip internal .stats etc.
       if (LOW_RE.test(path)) {   // 0.18.0: a thumbnail rendition of <leaf>.hang -- not a tile of its own
         if (!odOn) continue;   // 0.21.10: low copies are off -- an older spoke's -low.hang is neither a tile nor a thumbnail
@@ -6414,7 +6433,7 @@
   }
 
   // ---- spotlight votes (0.7.6) ---------------------------------------------
-  // Track-less announces under <room>/.spotlight carry "put this share on
+  // Track-less announces under <room>/~spotlight carry "put this share on
   // everyone's stage". Applied ONCE per winner -- later local clicks win
   // locally, because fighting the person at the keyboard helps nobody.
   const spotVotes = new Map();   // announce path -> { ts, target, by }
@@ -6454,7 +6473,7 @@
   window.__spotLit = () => spotLit;   // rig
   function spotAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".spotlight");
+    const i = parts.indexOf("~spotlight");
     if (i < 0 || parts.length < i + 3) return;
     const ts = Number(parts[i + 1]) || 0;
     let target = "";
@@ -6529,6 +6548,8 @@
       const au = window.__rtspAudio?.get?.(ref.id), ac = window.__rtspAudio?.acodec?.(ref.id);   // 0.9.5
       items.push({ value: "audio", label: (au === false ? "Send audio: off" : "Send audio: on")
         + (ac === "" ? " (camera has no audio track)" : ac ? " (" + ac + ")" : "") });
+      const pt = window.__rtspPt?.get?.(ref.id), md = window.__rtspPt?.mode?.(ref.id);   // 0.21.17
+      if (pt !== undefined) items.push({ value: "pt", label: (pt ? "Pass through: on" : "Pass through: off") + (md ? " (" + md + ")" : "") });
     }
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     if (ref.kind === "camera") {   // 0.16.0: my own camera can be spotlit like any tile
@@ -6556,6 +6577,8 @@
       } else if (v === "keep") {
         window.__rtspPersist?.toggle?.(ref.id);
         window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
+      } else if (v === "pt") {   // 0.21.17: per-camera passthrough, live
+        window.__rtspPt?.toggle?.(ref.id);
       } else if (v === "audio") {   // 0.9.5
         window.__rtspAudio?.toggle?.(ref.id);
         window.__toast?.(window.__rtspAudio?.get?.(ref.id) === false ? "Publishing this feed without audio" : "Publishing this feed with the camera's audio", 3500, { level: "info" });
@@ -8123,9 +8146,10 @@
   let authChat = false;     // 0.12.0: ... and .chat
   let authState = false;
   let authWeb = 0;                    // 0.14.0 F: hub web port from /api/auth; 0.21.7: 0 = not told (consumers fall back to 8000 LAST, and only on the app)
-  let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves ".state" publicly (state tracks); open relays always
+  let authNs = "";                    // 0.21.17: the control namespace the cached/minted token grants
+  let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves "~state" publicly (state tracks); open relays always
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
-  const VIEWER_KINDS = [".since", ".stalled", ".spotlight", ".recording", ".mediactl", ".avatar", ".presence", ".talking", ".chat"];   // 0.11.0: + public presence; 0.12.0: + speaking, chat pulse
+  const VIEWER_KINDS = ["~since", "~stalled", "~spotlight", "~recording", "~mediactl", "~avatar", "~presence", "~talking", "~chat"];   // 0.11.0: + public presence; 0.12.0: + speaking, chat pulse
   function authBase() {
     if (location.protocol === "https:" || IS_WEB) return location.origin;   // 0.8.9: same-origin proxy to the room-code service; 0.17.0: every web client
     try {
@@ -8160,12 +8184,13 @@
     if (!authTokens) {
       try {
         const saved = JSON.parse(sessionStorage.getItem(authStoreKey()) || "null");
-        if (saved?.tokens && saved.exp * 1000 > Date.now() + 60000 && (!authState || saved.state)) {   // 0.13.0: a token minted before the relay grew state tracks lacks the .state put
+        if (saved?.tokens && saved.exp * 1000 > Date.now() + 60000 && (!authState || saved.state) && saved.ns === "~") {   // 0.21.17: a token from a '.' minter grants the old namespace   // 0.13.0: a token minted before the relay grew state tracks lacks the .state put
           authTokens = saved.tokens;
           authExp = saved.exp;
           authRoomCode = saved.code ?? "";
           authAccessCode = saved.access ?? "";      // 0.10.0
           authRole = saved.role || "publisher";
+          authNs = saved.ns;   // 0.21.17
         }
       } catch {}
     }
@@ -8185,13 +8210,15 @@
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
     authTokens = d.tokens;
+    authNs = d.ns || ".";   // 0.21.17: '~' from a 0.21.17+ minter; a '.' token cannot announce this page's control paths
+    if (authNs !== "~") console.warn("[kastr] the relay's token service grants the pre-0.21.17 '.' namespace -- update the hub/relay KASTR");
     authExp = d.exp;
     authRole = d.role || "publisher";
     authAccessCode = access ?? "";
     authRoomCode = roomCode ?? "";
     try {
       sessionStorage.setItem(authStoreKey(),
-        JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState }));
+        JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState, ns: authNs }));
     } catch {}
     // the publish half re-posts its native feeds with the fresh token and follows the role
     try { window.dispatchEvent(new CustomEvent("kastr:auth", { detail: { role: authRole, room } })); } catch {}
@@ -8589,8 +8616,8 @@
   };
 
   // ---- 0.13.0: state as JSON tracks --------------------------------------------
-  // Two broadcasts per PAGE: `.state/<room>/<HOST>/<PEER>` (public prefix on 0.13 relays:
-  // state.json + preview) and `<room>/<HOST>/.member/<PEER>` (under the room token:
+  // Two broadcasts per PAGE: `~state/<room>/<HOST>/<PEER>` (public prefix on 0.13 relays:
+  // state.json + preview) and `<room>/<HOST>/~member/<PEER>` (under the room token:
   // room.json + chat.json [+ preview when the room is locked]). Raw Net API on purpose:
   // the publish wrapper closes and re-creates its producer on every reconnect, so the
   // tracks are (re)created per established connection and the latest values rewritten
@@ -8685,8 +8712,8 @@
   // the two models (schema v1) and their producers
   const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
   const roomModel = { v: 1, peer: "", spotlight: null, spotlit: null, recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
-  const pubState = stateProducer(() => ".state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
-  const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/.member/" + statePeer(), ["room.json", "chat.json"]);
+  const pubState = stateProducer(() => "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
+  const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
   function stateCommit() {
     pubModel.peer = statePeer(); roomModel.peer = pubModel.peer;
@@ -8890,7 +8917,7 @@
       try { paintChannelChip(); paintPersonGroups(); queueRelayout(); paintTyping(); } catch {}
     }
   }
-  // <room>/<HOST>/.member/<PEER>: room.json (Snapshot) + chat.json (Window) on the tokened connection
+  // <room>/<HOST>/~member/<PEER>: room.json (Snapshot) + chat.json (Window) on the tokened connection
   const memberSubs = new Map();   // member path -> { room, chat, prev: {gridPath, mediaIds, fileIds, stalled} }
   function memberSubsClear() { for (const [p, h] of memberSubs) { try { h.room.close(); h.chat.close(); } catch {} memberClear(p, h); } memberSubs.clear(); }
   function memberAccept(path, active) {
@@ -8984,7 +9011,7 @@
   // AudioContext (per-tile contexts can't connect directly -- they bridge
   // through MediaStreams), plus this machine's own outgoing audio. webm,
   // downloaded on Stop. The room is told through a track-less announce
-  // (<room>/.recording/<ts>/<b64 operator>) -- the spotlight-vote idiom.
+  // (<room>/~recording/<ts>/<b64 operator>) -- the spotlight-vote idiom.
   const recBtn = document.getElementById("recBtn");
   const recPill = document.getElementById("recPill");
   let rec = null;
@@ -8992,7 +9019,7 @@
   const b64d = (str) => { try { return decodeURIComponent(escape(atob(str.replace(/-/g, "+").replace(/_/g, "/")))); } catch { return ""; } };
   function recAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".recording");
+    const i = parts.indexOf("~recording");
     if (i < 0 || parts.length < i + 3) return;
     recApply(String(path), b64d(parts[i + 2]), Number(parts[i + 1]) || 0, active);
   }
@@ -10238,7 +10265,7 @@
   roomsExtraSubs.push((sub) => {
     if (authSecured && !authChat) return;
     if (authState) return;   // 0.13.0: delivery rides the members' chat.json windows
-    sub(".chat", (e) => {
+    sub("~chat", (e) => {
       if (!e.active) return;
       const pp = String(e.path).split("/").filter(Boolean);
       if (pp.length < 3 || pp[0] !== chatRoom) return;
@@ -10309,7 +10336,7 @@
 
   // ---- shared files (0.8.7) ---------------------------------------------------
   // Upload to the relay host's KASTR (/api/files), announce
-  // <room>/.files/<ts>/<b64 meta> while present; the owner deletes on leave.
+  // <room>/~files/<ts>/<b64 meta> while present; the owner deletes on leave.
   const files = new Map();     // announce path -> meta
   const myFiles = new Map();   // id -> { token, url, path }
   // The relay host's KASTR web service: same machine as this page -> this
@@ -10408,7 +10435,7 @@
   }
   function filesAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf(".files");
+    const i = parts.indexOf("~files");
     if (i < 0 || parts.length < i + 3) return;
     let meta = null;
     meta = b64json(parts[i + 2]);
@@ -10566,8 +10593,15 @@
       const nm = nameInp.value.trim();
       if (!nm) { err.textContent = "Name the room first."; nameInp.focus(); return; }
       const slug = channelSlug(nm);
-      if (lastChannelList.find((r) => r.slug === slug && (r.locked || r.persistent)) && !codeInp.value) {
-        err.textContent = "That room already exists — pick it from the list."; return;
+      // 0.21.17: a name that matches a listed room is that room -- joined with its code, never created again (the
+      // 'trying twice' bypass: a second try with any code minted a fresh lock from the guess and walked in)
+      const existing = lastChannelList.find((r) => r.slug === slug);
+      if (existing) {
+        const why = await lockedRoomRefusal(existing, codeInp.value);
+        if (why) { err.textContent = why; codeInp.focus(); return; }
+        roomFormClose(menu);
+        switchRoom(existing, codeInp.value);
+        return;
       }
       const rec = await createChannelRecord(nm, codeInp.value, keepInp.checked);
       if (rec.hash || rec.persistent) {
@@ -10576,6 +10610,7 @@
         go.disabled = false;
         if (!g.ok) { err.textContent = g.error; return; }
       }
+      rememberChannel(rec);   // 0.21.17: only after it registered
       roomFormClose(menu);
       switchRoom(rec, codeInp.value);
     };
@@ -10603,8 +10638,9 @@
     const err = document.createElement("div");
     err.className = "pwerr";
     const attempt = async () => {
-      if (await verifyPassword(rec, inp.value)) { roomFormClose(menu); switchRoom(rec, inp.value); }
-      else { err.textContent = "Wrong code."; inp.select(); }
+      const why = await lockedRoomRefusal(rec, inp.value);   // 0.21.17: a lock without a known hash fails closed on an open relay
+      if (!why) { roomFormClose(menu); switchRoom(rec, inp.value); }
+      else { err.textContent = why; inp.select(); }
     };
     go.addEventListener("click", attempt);
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") attempt(); if (e.key === "Escape") roomFormClose(menu); });
@@ -11048,28 +11084,32 @@
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
       joinEls.joinPwd.value = rejoinRec.code ?? "";
       joinEls.joinAccess.value = rejoinRec.access ?? "";   // 0.10.0
+      { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: a rejoin ticket is checked too
     } else if (joinEls.joinChanSel.value === "__new") {
       if (!joinEls.joinChanNew.value.trim()) return joinFail("Name the new room first.");
       slug = channelSlug(joinEls.joinChanNew.value);
-      const taken = lastChannelList.find((r) => r.slug === slug && r.locked);
-      if (taken && !joinEls.joinPwd.value) {
-        return joinFail("That room exists and is locked \u2014 pick it from the list and enter its code.");
-      }
-      if (slug !== "main") {
+      // 0.21.17: a typed name that matches a listed room JOINS that room (its code checked) -- it never creates a second
+      // lock over it. Until 0.21.16 only an EMPTY code was refused here, so a second try with any code walked in.
+      const existing = lastChannelList.find((r) => r.slug === slug);
+      if (existing) {
+        const why = await lockedRoomRefusal(existing, joinEls.joinPwd.value);
+        if (why) return joinFail(why);
+        rec = existing;
+      } else if (slug !== "main") {
         rec = await createChannelRecord(slug, joinEls.joinPwd.value, !!joinEls.joinKeep?.checked);   // 0.12.0: kept rooms
         // 0.11.0: a locked room is registered BEFORE the mint, so a refusal shows
         // here instead of joining an unlocked room by surprise. 0.12.0: kept rooms too.
-        if ((rec.hash && authSecured) || rec.persistent) {
+        // 0.21.17: on EVERY relay -- an open relay's room store then refuses a second lock over this one (409)
+        if (rec.hash || rec.persistent) {
           const g = await gateRegister(rec);
           if (!g.ok) return joinFail(g.error);
         }
+        rememberChannel(rec);   // 0.21.17: only after it registered
       }
     } else {
       slug = channelSlug(joinEls.joinChanSel.value);
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
-      if (rec?.locked && !(await verifyPassword(rec, joinEls.joinPwd.value))) {
-        return joinFail("Wrong room code.");
-      }
+      { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: hash-less locks fail closed on open relays
     }
     try { localStorage.setItem(CHANNEL_KEY, slug); } catch {}
 
@@ -11358,6 +11398,21 @@
     try { localStorage.setItem(RTSP_PERSIST_KEY, JSON.stringify(next)); } catch {}
   }
   const rtspPersistHas = (url) => rtspPersist().some((x) => x.url === url);
+  // 0.21.17: a renamed camera keeps its name -- {url: label}, written on every rename, read on every add of that url
+  // (Keep after restart or not, any room). An empty rename forgets it (back to the url-derived name).
+  const RTSP_NAMES_KEY = "kastr.rtsp.names";
+  function rtspNames() { try { const m = JSON.parse(localStorage.getItem(RTSP_NAMES_KEY) || "{}"); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; } catch { return {}; } }
+  const rtspNameOf = (url) => { const v = rtspNames()[String(url || "").trim()]; return typeof v === "string" && v.trim() ? v.trim() : ""; };
+  function rtspNameSet(url, label) {
+    const u = String(url || "").trim();
+    if (!u) return;
+    const m = rtspNames();
+    const l = String(label || "").trim();
+    if (l && l !== rtspLabel(u)) m[u] = l.slice(0, 80); else delete m[u];
+    const keys = Object.keys(m);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete m[k];   // newest 200
+    try { localStorage.setItem(RTSP_NAMES_KEY, JSON.stringify(m)); } catch {}
+  }
   // 0.21.0: URLs this page CLOSED whose removal the bridge has not acknowledged yet -- the adopt path
   // retries the removal instead of re-adopting them (a closed feed used to come back on every join)
   const RTSP_CLOSED_KEY = "kastr.rtsp.closed";
@@ -12475,6 +12530,19 @@
         aud.classList.add("shown");
         ab.checked = a.audio !== false;
         ab.addEventListener("change", () => window.__rtspAudio?.set?.(a.id, ab.checked));
+        // 0.21.17: per-camera passthrough, live (copy the camera untouched vs convert to H.264 here)
+        if (a.url && a.url !== TEST_URL) {
+          const ptl = document.createElement("label");
+          ptl.className = "aud shown pt";
+          ptl.title = "Pass this camera through untouched (no re-encode on this machine) when viewers can decode it. Off = convert to H.264 here. Applies live.";
+          ptl.innerHTML = '<span class="switch sm"><input type="checkbox"><i></i></span> <span>Pass through</span>';
+          const pti = ptl.querySelector("input");
+          pti.checked = ptFor(a.url);
+          const md = window.__rtspPt?.mode?.(a.id);
+          if (md) ptl.title += " Now: " + md + ".";
+          pti.addEventListener("change", () => window.__rtspPt?.set?.(a.id, pti.checked));
+          aud.after(ptl);
+        }
         // 0.15.0: which grid this feed joins (two feeds with the same grid make a composite)
         const gsel = document.createElement("select");
         gsel.className = "gsel";
@@ -12553,6 +12621,7 @@
           ni.value = a.label;
           lbl.textContent = a.label; lbl.title = a.label;
           if (a.url) rtspPersistSet(a.url, a.label, rtspPersistHas(a.url), gridIdOf(a));
+          if (a.url) rtspNameSet(a.url, a.label);   // 0.21.17: shared again later -> the same name
           updateRtspGrid(); renderPickers(); refreshUi(); announce();
           announceGrid();   // a feed outside any grid changes nothing here; a member's cell name travels at once
         });
@@ -13006,9 +13075,13 @@
   const PT_KEY = "kastr.rtsp.passthrough";
   try { if (localStorage.getItem(PT_KEY) === null && localStorage.getItem("kastr.rtsp.hevc") === "1") localStorage.setItem(PT_KEY, "1"); } catch {}
   const passthroughOn = () => { try { return localStorage.getItem(PT_KEY) === "1"; } catch { return false; } };
+  // 0.21.17: per-camera passthrough (kastr.rtsp.pt = {url: true|false}); a camera without its own choice follows the
+  // box-wide switch above, which stays the default for new feeds
+  const PT_FEED_KEY = "kastr.rtsp.pt";
+  const ptFor = (url) => { const m = urlMap(PT_FEED_KEY), u = String(url || ""); return Object.prototype.hasOwnProperty.call(m, u) ? m[u] === true : passthroughOn(); };
   const hevcAllowed = passthroughOn;   // 0.9.2 name, kept for the publish key
   // the monitor stream URL carries the page's decisions for the bridge
-  const monitorUrlFor = (feedId, transcode) => { const q = [passthroughOn() ? "pt=1" : "", transcode ? "transcode=1" : ""].filter(Boolean).join("&"); return "/rtsp/" + feedId + (q ? "?" + q : ""); };
+  const monitorUrlFor = (feedId, transcode, url) => { const q = [(url != null ? ptFor(url) : passthroughOn()) ? "pt=1" : "", transcode ? "transcode=1" : ""].filter(Boolean).join("&"); return "/rtsp/" + feedId + (q ? "?" + q : ""); };   // 0.21.17: per camera
   {
     const cb = document.getElementById("rtspPassthrough");
     if (cb) {
@@ -13046,7 +13119,7 @@
     }
     const broadcast = chanPath(ensureHang(slot.entry.name));
     const relay = authUrl(urlInput.value.trim());
-    const passthrough = passthroughOn();   // 0.9.6 (was the H.265-only `hevc`)
+    const passthrough = ptFor(slot.entry.url);   // 0.9.6 (was the H.265-only `hevc`); 0.21.17: per camera, the box switch is the default
     const audio = slot.entry.audio !== false;   // 0.9.5
     const ondemand = urlFlag(OD_KEY, slot.entry.url), low = urlFlag(LOWR_KEY, slot.entry.url);   // 0.18.0
     const key = broadcast + "|" + relay + "|" + passthrough + "|" + audio + "|" + ondemand + "|" + low;
@@ -13142,7 +13215,7 @@
     detachMonitor(slot);
     const v = slot.video;
     if (slot.entry.feedId == null) return;
-    if (typeof MediaSource === "undefined") { v.src = monitorUrlFor(slot.entry.feedId, slot.monitorTranscode); v.play().catch(() => {}); return; }
+    if (typeof MediaSource === "undefined") { v.src = monitorUrlFor(slot.entry.feedId, slot.monitorTranscode, slot.entry.url); v.play().catch(() => {}); return; }
     const ms = new MediaSource();
     const m = { ms, sb: null, queue: [], queued: 0, abort: new AbortController(), bytes: 0, lastBytesAt: performance.now(), mime: null, opened: false, objectUrl: null };
     slot.mon = m;
@@ -13163,7 +13236,7 @@
     v.play().catch(() => {});
     const httpPump = async () => {
       let res;
-      try { res = await fetch(monitorUrlFor(slot.entry.feedId, slot.monitorTranscode), { signal: m.abort.signal, cache: "no-store" }); }
+      try { res = await fetch(monitorUrlFor(slot.entry.feedId, slot.monitorTranscode, slot.entry.url), { signal: m.abort.signal, cache: "no-store" }); }
       catch (e) { if (m === slot.mon) monitorEnded(slot, "Monitor request failed"); return; }
       if (m !== slot.mon) return;
       if (!res.ok || !res.body) { monitorEnded(slot, "Monitor request " + res.status); return; }
@@ -13189,7 +13262,7 @@
     // the browser's queue until a stream closed ("Add does nothing past six"). WebSockets sit
     // outside that pool. The HTTP pump above stays as the fallback when the socket never opens.
     let ws = null;
-    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + monitorUrlFor(slot.entry.feedId, slot.monitorTranscode)); ws.binaryType = "arraybuffer"; } catch { ws = null; }
+    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + monitorUrlFor(slot.entry.feedId, slot.monitorTranscode, slot.entry.url)); ws.binaryType = "arraybuffer"; } catch { ws = null; }
     if (ws) {
       m.ws = ws; m.wsOpened = false;
       let frames = 0;
@@ -15251,7 +15324,7 @@
         for (let i = 0; i < slot.meterBuf.length; i++) sum += slot.meterBuf[i] * slot.meterBuf[i];
         const v = Math.min(1, Math.sqrt(Math.sqrt(sum / slot.meterBuf.length) * 2));
         if (v > 0.12 && !slot.entry.micMuted) { slot.talkUntil = now + 900; if (slot.entry.kind === "camera") anyLoud = true; }
-        slot.pane.classList.toggle("talking", now < (slot.talkUntil ?? 0));
+        slot.pane.classList.toggle("talking", now < (slot.talkUntil ?? 0) && slot.entry.kind === "camera" && !(window.__ringsOff?.() ?? false));   // 0.21.17: my media file / screen never rings
       } catch {}
     }
     try { talkTick(anyLoud, Date.now()); } catch {}
@@ -16549,7 +16622,7 @@
       // broadcast NAME still derives from rtspLabel(url), so a renamed feed keeps its path.
       const gridId = String(opts?.gridId || gridOfSaved(url) || "1");
       rtspClosedSet(url, false);   // 0.21.0: adding it again is an explicit act
-      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: audioWanted(url), label: opts?.label || rtspLabel(url), gridId });   // 0.9.5
+      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId });   // 0.9.5; 0.21.17: a remembered rename wins
       gridOfSet(url, gridId);
       if (seatSaved(url)) updateRtspGrid();   // 0.9.10: a remembered seat holds its cell from now on, not from the first frame
       log(`Added RTSP feed ${data.id} (${url}).` +
@@ -17087,9 +17160,9 @@
     // 0.8.6: `locked` covers a secured-relay member who inherited the lock
     // without salt/hash -- it must never announce the UNLOCKED path.
     const path = (rec.hash || rec.locked)
-      ? ((secured || !rec.hash) ? ".channels/" + rec.slug + "/locked"
-                 : ".channels/" + rec.slug + "/locked/" + rec.salt + "/" + rec.hash)
-      : ".channels/" + rec.slug;
+      ? ((secured || !rec.hash) ? "~channels/" + rec.slug + "/locked"
+                 : "~channels/" + rec.slug + "/locked/" + rec.salt + "/" + rec.hash)
+      : "~channels/" + rec.slug;
     // 0.12.0: only the roomKey holder heartbeats (a kept room, or a locked room on
     // a secured relay) -- a member without the key posting the record would be a
     // re-key attempt the store now refuses anyway.
@@ -17124,9 +17197,9 @@
     emberClear(rec.slug);
     try {
       const path = (rec.hash || rec.locked)   // 0.8.6: see chanRegSet
-        ? ((window.__auth?.secured || !rec.hash) ? ".channels/" + rec.slug + "/locked"
-                   : ".channels/" + rec.slug + "/locked/" + rec.salt + "/" + rec.hash)
-        : ".channels/" + rec.slug;
+        ? ((window.__auth?.secured || !rec.hash) ? "~channels/" + rec.slug + "/locked"
+                   : "~channels/" + rec.slug + "/locked/" + rec.salt + "/" + rec.hash)
+        : "~channels/" + rec.slug;
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim(), "registry")));
       const connection = new Net.Connection({ url: relayUrl, enabled: true });
       const broadcast = new Broadcast({
@@ -17139,13 +17212,13 @@
     } catch {}
   }
   window.addEventListener("pagehide", () => { for (const k of [...embers.keys()]) emberClear(k); });
-  // 0.12.0: a one-shot ".channels/<slug>/closed/<ts>" hint after Close room (the store is the authority)
+  // 0.12.0: a one-shot "~channels/<slug>/closed/<ts>" hint after Close room (the store is the authority)
   function chanClosedHint(slug) {
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim(), "registry")));
       const connection = new Net.Connection({ url: relayUrl, enabled: true });
       const broadcast = new Broadcast({ origin: connection.origin, enabled: true,
-                                        name: Net.Path.from(".channels/" + slug + "/closed/" + Date.now()) });
+                                        name: Net.Path.from("~channels/" + slug + "/closed/" + Date.now()) });
       setTimeout(() => { try { broadcast.close(); } catch {} try { connection.close(); } catch {} }, 6000);
     } catch {}
   }
@@ -17188,7 +17261,7 @@
     if (!targetPath) return;
     if (window.__state?.enabled) { window.__state.set("spotlight", String(targetPath)); return; }   // 0.13.0
     const b64 = btoa(String(targetPath)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    const path = currentChannel() + "/.spotlight/" + Date.now() + "/" + b64;
+    const path = currentChannel() + "/~spotlight/" + Date.now() + "/" + b64;
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim())));
       const connection = new Net.Connection({ url: relayUrl, enabled: true });
@@ -17221,6 +17294,26 @@
       rtspPersistSet(a.url, a.label, !rtspPersistHas(a.url), gridIdOf(a));   // 0.15.0: + grid
       if (a.feedId != null) nativePost("/api/rtsp/keep", { id: a.feedId, keep: rtspPersistHas(a.url) });   // 0.12.0: the server's memory too
     },
+  };
+  // 0.21.17: per-feed passthrough, live -- the pane menu and the Share row both drive it (the flag lives by url)
+  window.__rtspPt = {
+    get: (id) => { const a = added.find((x) => x.id === id); return a?.url ? ptFor(a.url) : undefined; },
+    mode: (id) => { const a = added.find((x) => x.id === id); const p = a && slots.get(a.id)?.pub; return p ? ((p.copy ? "copy" : "encode") + (p.codec ? " \u00b7 " + p.codec : "")) : ""; },
+    set: (id, on) => {
+      const a = added.find((x) => x.id === id);
+      if (!a?.url || a.url === TEST_URL) return;
+      urlFlagSet(PT_FEED_KEY, a.url, !!on);
+      const slot = slots.get(a.id);
+      if (slot) {
+        slot.monitorTranscode = false;
+        if (slot.native && nativeWanted(slot)) nativePublish(slot);   // the pubKey changed -> one pair swap on the server, same broadcast + grid seat
+        try { if (slot.native) restartMonitor(slot); } catch {}
+      }
+      window.__toast?.(on ? "\u201c" + (a.label || rtspLabel(a.url)) + "\u201d passes through untouched (when viewers can decode it)"
+                          : "\u201c" + (a.label || rtspLabel(a.url)) + "\u201d is converted to H.264 on this machine", 3500, { level: "info" });
+      refreshUi();
+    },
+    toggle: (id) => { const v = window.__rtspPt.get(id); if (v !== undefined) window.__rtspPt.set(id, !v); },
   };
   // 0.9.5: per-feed audio -- pane menu toggle (the flag lives by url)
   window.__rtspAudio = {
@@ -17328,7 +17421,7 @@
     if (window.__state?.enabled) { window.__state.set("recording", String(who || "someone")); return; }   // 0.13.0
     let b64 = "c29tZW9uZQ";
     try { b64 = btoa(unescape(encodeURIComponent(String(who || "someone")))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); } catch {}
-    const path = currentChannel() + "/.recording/" + Date.now() + "/" + b64;
+    const path = currentChannel() + "/~recording/" + Date.now() + "/" + b64;
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim())));
       const connection = new Net.Connection({ url: relayUrl, enabled: true });
@@ -17366,7 +17459,7 @@
       clear(key);
       let b64 = "";
       try { b64 = btoa(unescape(encodeURIComponent(text))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); } catch { return; }
-      // 0.11.0: opts.root puts the kind FIRST (`.presence/<room>/...`): a public prefix
+      // 0.11.0: opts.root puts the kind FIRST (`~presence/<room>/...`): a public prefix
       const path = (opts.root ? kind + "/" + channel : channel + "/" + kind) + "/" + (ts || Date.now()) + "/" + b64;
       try {
         const relayUrl = new Signals.Signal(new URL(relay));
@@ -17379,14 +17472,14 @@
     window.addEventListener("pagehide", clearAll);
     return { set, clear, clearAll };
   }
-  const stallAnn = keyedAnnouncer(".stalled", { state: (key, p) => window.__state.set("stalled", { path: key, on: p != null }) });
+  const stallAnn = keyedAnnouncer("~stalled", { state: (key, p) => window.__state.set("stalled", { path: key, on: p != null }) });
   window.__stallAnnounce = { set: (path) => stallAnn.set(path, path), clear: (path) => stallAnn.clear(path) };
-  const fileAnn = keyedAnnouncer(".files", { state: (id, p) => window.__state.set("files", { id, meta: p ? JSON.parse(p) : null }) });
+  const fileAnn = keyedAnnouncer("~files", { state: (id, p) => window.__state.set("files", { id, meta: p ? JSON.parse(p) : null }) });
   window.__fileAnnounce = { set: (id, meta) => fileAnn.set(id, JSON.stringify(meta)), clear: (id) => fileAnn.clear(id) };
-  const avatarAnn = keyedAnnouncer(".avatar", { state: (k, p) => window.__state.set("avatar", p ? (JSON.parse(p).url || "") : "") });
+  const avatarAnn = keyedAnnouncer("~avatar", { state: (k, p) => window.__state.set("avatar", p ? (JSON.parse(p).url || "") : "") });
   // 0.8.8: composite geometry for viewers (expand one cell) and presence
   // time for the room up-time.
-  const gridAnn = keyedAnnouncer(".grid", { dedupe: true, state: (k, p) => window.__state.set("grid", { id: String(k).replace(/^grid:/, ""), meta: p ? JSON.parse(p) : null }) });   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/.grid, so an announce would be dropped); 0.15.0: keyed "grid:<id>" -> room.json grids
+  const gridAnn = keyedAnnouncer("~grid", { dedupe: true, state: (k, p) => window.__state.set("grid", { id: String(k).replace(/^grid:/, ""), meta: p ? JSON.parse(p) : null }) });   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/~grid, so an announce would be dropped); 0.15.0: keyed "grid:<id>" -> room.json grids
   let gridAnnT = null;
   const gridAnnounced = new Set();   // 0.15.0: ids with a standing announce, so a grid that vanished is cleared
   function announceGrid(now) {
@@ -17421,9 +17514,9 @@
       for (const id of seen) gridAnnounced.add(id);
     }, now ? 0 : 500);
   }
-  const sinceAnn = keyedAnnouncer(".since");
+  const sinceAnn = keyedAnnouncer("~since");
   // 0.12.0: chat delivery pulse -- .chat/<room>/<ts>/<b64 {id}> for 2.5 s after a post
-  const chatAnn = keyedAnnouncer(".chat", { root: true, state: () => {} });   // 0.13.0: no pulse -- delivery rides chat.json
+  const chatAnn = keyedAnnouncer("~chat", { root: true, state: () => {} });   // 0.13.0: no pulse -- delivery rides chat.json
   let chatPulseT = null;
   window.__chatPulse = (id) => {
     try { chatAnn.set("me", JSON.stringify({ id: Number(id) || 0, peer: PEER })); } catch {}
@@ -17431,13 +17524,13 @@
     chatPulseT = setTimeout(() => { try { chatAnn.clear("me"); } catch {} }, 2500);
   };
   // 0.8.10: shared-file playback state (owner -> room) and control pulses (anyone -> owner)
-  const mediaAnn = keyedAnnouncer(".media", { state: (id, p) => window.__state.set("media", { id, meta: p ? JSON.parse(p) : null }) });
-  const mediaCtlAnn = keyedAnnouncer(".mediactl", { state: (nonce, p) => { if (p) window.__state.set("ctl", JSON.parse(p)); } });
+  const mediaAnn = keyedAnnouncer("~media", { state: (id, p) => window.__state.set("media", { id, meta: p ? JSON.parse(p) : null }) });
+  const mediaCtlAnn = keyedAnnouncer("~mediactl", { state: (nonce, p) => { if (p) window.__state.set("ctl", JSON.parse(p)); } });
   // 0.16.0: admin commands -- the same keyed track-less announce; the relay admits it only
-  // from an admin token (its grant carries <room>/.admin). Mirrored on room.json `admin`.
+  // from an admin token (its grant carries <room>/~admin). Mirrored on room.json `admin`.
   // NEVER mirrored on room.json: a member's own state track carries no proof of the admin role;
   // only the relay-refused-or-admitted .admin announce does.
-  const adminAnn = keyedAnnouncer(".admin", {});
+  const adminAnn = keyedAnnouncer("~admin", {});
   window.__adminSent = new Set();   // nonces this page sent (the local origin echoes them; never apply them here)
   window.__adminSend = (cmd) => {
     const nonce = PEER + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 7);
@@ -17464,9 +17557,9 @@
   // 0.8.11: presence carries who I am, so a member with no streams (no camera,
   // nothing shared yet) still appears in everyone's People list.
   // 0.11.0: presence also says which relay I dialled (host:port, and its name once
-  // the watch half learned it), and a copy rides the PUBLIC `.presence/<room>`
+  // the watch half learned it), and a copy rides the PUBLIC `~presence/<room>`
   // prefix so the room list counts people on a secured relay without a token.
-  const presenceAnn = keyedAnnouncer(".presence", { root: true });
+  const presenceAnn = keyedAnnouncer("~presence", { root: true });
   function presencePayload() {
     let relay = "";
     try { relay = new URL(urlInput.value.trim()).host; } catch {}
@@ -17505,7 +17598,7 @@
     const ch = currentChannel();
     const joined = !!window.__join?.state && window.__join.state() === "joined";
     if (window.__state?.enabled) { if (talkReg) talkClear(); talkOn = !!on; window.__state.set("speaking", !!on && joined && live); return; }   // 0.13.0: a model field, not a dial
-    const allowed = !window.__auth?.secured || (window.__auth?.talking && (window.__auth.canAnnounce?.(".talking") ?? true));
+    const allowed = !window.__auth?.secured || (window.__auth?.talking && (window.__auth.canAnnounce?.("~talking") ?? true));
     if (!joined || !live || !allowed) { if (talkReg) talkClear(); return; }
     let relay = "";
     try { relay = authUrl(urlInput.value.trim()); } catch { return; }
@@ -17518,7 +17611,7 @@
         const relayUrl = new Signals.Signal(new URL(relay));
         const connection = new Net.Connection({ url: relayUrl, enabled: true });
         const broadcast = new Broadcast({ origin: connection.origin, enabled: false,
-                                          name: Net.Path.from(".talking/" + ch + "/" + ts + "/" + b64) });
+                                          name: Net.Path.from("~talking/" + ch + "/" + ts + "/" + b64) });
         talkReg = { relayUrl, connection, broadcast, channel: ch, relay };
       } catch { return; }
     }

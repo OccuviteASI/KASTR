@@ -636,6 +636,9 @@ def _seed_label(broadcast, url):
         return "rtsp"
 
 
+# RE-MEASURED 2026-10-05 on moq CLI 0.14.0 + moq-relay 0.17.0 (secured): the same HARD ("connection loop exited
+# err=unauthorized" / "Error: unauthorized", exit 1) and SOFT ("session closed, reconnecting") lines; 0.14.0 rides a
+# 25 s outage by itself (keeps reconnecting) instead of exiting.
 # What moq says about its relay session (moq CLI 0.11.2, measured 2026-09-19;
 # RE-MEASURED 2026-09-25 on moq CLI 0.12.1 + moq-relay 0.15.1 with KASTR's auth
 # server -- the same strings still fire: a refused token prints "Error: unauthorized"

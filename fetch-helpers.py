@@ -63,7 +63,9 @@ def _current(dest, name, want):
     silent no-op ("already present, skipping") until bin/ was cleared by hand."""
     if FORCE or not os.path.exists(dest):
         return False
-    have = _stamp_read().get(name)
+    # 0.21.17: keyed by the FILE (moq-relay.exe / moq-relay): bin/ holds both platforms' binaries, and the bare-name
+    # stamp let a Windows fetch of 0.17.0 mark the Linux 0.15.1 binaries current (the Linux build would have bundled them)
+    have = _stamp_read().get(os.path.basename(dest))
     if have == want:
         return True
     print("%s: %s present, fetching %s" % (name, have or "unstamped build", want))
@@ -74,7 +76,12 @@ def _current(dest, name, want):
 # [server]->[listen], [client]->[connect], [cluster] linger gone, [cluster.lan]
 # mDNS, [internal] /metrics. SHA256SUMS of both releases read 2026-09-24.
 # 0.11.0: 0.14.18 (2026-09-17) -- credentials no longer logged in relay URLs.
-MOQ_VERSION = "0.15.1"
+# 0.21.17: 0.17.0 (2026-10-03) -- the cross-site fix: on a Southridge-shaped link (60 ms RTT, 1.2 % loss, measured
+# in WSL netem 2026-10-05) 0.15.x cold subscribes die ('no route can serve the rest of this group ... err=old') and a
+# 4K camera decays to 0.2 Mbit/s; 0.17.0 holds 13-14 Mbit/s and opens in < 1 s. Hides '.'-led path segments
+# (KASTR's control paths moved to '~'); [stats] prefix; QUIC idle default 10 s; gossip discovery removed (unused).
+# SHA256SUMS of moq-relay-v0.17.0 read 2026-10-05.
+MOQ_VERSION = "0.17.0"
 MOQ_BASE = ("https://github.com/moq-dev/moq/releases/download/"
             "moq-relay-v%s/" % MOQ_VERSION)
 
@@ -89,24 +96,24 @@ MOQ_ASSETS = {
     ("linux", "aarch64"): "moq-relay-v%s-aarch64-unknown-linux-gnu.tar.gz" % MOQ_VERSION,
 }
 MOQ_SHA = {
-    ("win32", "x86_64"): "e1868718afda70292e5577cb61f22d2846dd9a1d7a9243d2b8354b4183bad4d3",
-    ("darwin", "arm64"): "65de25197ab38a0ffdcb3b9864bfbcc1db1f94762cb08f5c7cdcd687195ce535",
-    ("linux", "x86_64"): "d99db66dc987b77f2f5a304f2c07176cd1c50ad76e562378c9028274bdc565c7",
-    ("linux", "aarch64"): "a2f32526ee9288e10aa711ea9d5a29c5798b17b46714ddd8aa90c5d1d5a3105d",   # 0.16.0: pinned too
+    ("win32", "x86_64"): "572172ba96a62601b8e94fa90facf2a63f2bcfa1c160feaffefb349a36daa8f2",
+    ("darwin", "arm64"): "b48c2bb1ff3f2623b7cceb906fdee2d3584500f98e82766744ef6cb0b0adcec8",
+    ("linux", "x86_64"): "971ea26d061aa793e256e36b850d4d9b8d70f83926fab94e8100215120dd74ae",
+    ("linux", "aarch64"): "fd21db12765be965b86ace6a425d372bb0ef736564e030f2d9c918f56415225d",   # 0.16.0: pinned too
 }
 
 # 0.9.1: moq-cli -- the native MoQ publisher (ffmpeg | moq import ts). Same
 # project and release train as the relay; pinned with its sha256.
 # 0.13.1: darwin/arm64 added (SHA256SUMS of moq-cli-v0.11.2, read 2026-09-21).
-MOQ_CLI_VERSION = "0.12.1"   # 0.16.0: --connect / --max-age / import verb (see kastr_rtsp.Publisher._args)
+MOQ_CLI_VERSION = "0.14.0"   # 0.16.0: --connect / --max-age / import verb (see kastr_rtsp.Publisher._args); 0.21.17: 0.14.0 parses every KASTR argv (measured)
 MOQ_CLI_BASE = "https://github.com/moq-dev/moq/releases/download/moq-cli-v%s/" % MOQ_CLI_VERSION
 MOQ_CLI = {
     ("win32", "x86_64"): ("moq-cli-v%s-x86_64-pc-windows-msvc.zip" % MOQ_CLI_VERSION,
-                          "07c818b50c42876ee4bfa1be1a94cc75e5928c0b359d7f35a76f8055606b16f6"),
+                          "019b4e0afc6d6b99591c22474d2bb11092d071d3a0c9c9683fba5502d4c406c6"),
     ("darwin", "arm64"): ("moq-cli-v%s-aarch64-apple-darwin.tar.gz" % MOQ_CLI_VERSION,
-                          "392a26e1ab19d58aaca457fad1e8df9676a572c73a460eed3e8beaa449384966"),
+                          "5568d59e08c599f46bd7fb185a047fc219e5a1f91524a024de7d5e28523b886c"),
     ("linux", "x86_64"): ("moq-cli-v%s-x86_64-unknown-linux-gnu.tar.gz" % MOQ_CLI_VERSION,
-                          "56c016de43847ef1990c82001cbf4174f09450994154813c73bb9cd02cb6302b"),
+                          "9c4425becfe08a2ed6201b3bc451375bf6e50886cbde765811f61c0307c1563c"),
 }
 
 FFMPEG_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -240,7 +247,7 @@ def main():
             if (p, a) in MOQ_SHA:
                 verify(blob, MOQ_SHA[(p, a)])
             if extract(blob, "moq-relay" + exe, dest):
-                _stamp_write("moq-relay", MOQ_VERSION)
+                _stamp_write(os.path.basename(dest), MOQ_VERSION)
                 print("moq-relay: %.0f MB -> %s" % (os.path.getsize(dest) / 1e6, dest))
             else:
                 print("moq-relay: binary not found inside the archive")
@@ -259,7 +266,7 @@ def main():
             blob = download(MOQ_CLI_BASE + pin[0])
             verify(blob, pin[1])
             if extract(blob, "moq" + exe, dest):
-                _stamp_write("moq", MOQ_CLI_VERSION)
+                _stamp_write(os.path.basename(dest), MOQ_CLI_VERSION)
                 print("moq-cli: %.0f MB -> %s" % (os.path.getsize(dest) / 1e6, dest))
             else:
                 print("moq-cli: binary not found inside the archive")

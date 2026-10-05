@@ -239,7 +239,7 @@ class Archiver:
 
     def set(self, broadcast, on):
         b = str(broadcast or "").strip()
-        if not BCAST_RE.match(b) or b.startswith("."):
+        if not BCAST_RE.match(b) or b.startswith((".", "~")):   # 0.21.17: control paths in either namespace
             raise ValueError("bad broadcast path")
         with self.lock:
             if on:

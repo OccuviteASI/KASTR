@@ -2,6 +2,88 @@
 
 What changed in each build, newest first.
 
+## v0.21.17 — the latest MoQ stack, and full quality across sites again
+
+Part 41: Southridge's cameras never reached the hub in full quality and Tremonton's took seconds; the cause was in the relay, not in KASTR, and the fix is the newest MoQ release train -- which hides every '.'-named path, so KASTR's control paths move to '~'. Plus the locked-room bypass, full screen that shows only the content, no speaking ring on content, and two RTSP field requests.
+
+**Why a single camera would not open across relays (found by measurement).** The hub's relay logged `no route can serve
+the rest of this group ... err=old` on every pull from Southridge or Tremonton and received NOTHING -- not even the
+1.6 Mbit/s grid composite -- while the same cameras played at 10-12.5 Mbit/s on Southridge's own relay. GSO off on
+Southridge (`MOQ_QUIC_GSO=false`) changed nothing. Kenton's measurements gave the link: Southridge -> hub RTT ~60 ms
+(48-81) with 1.2-1.4 % UDP loss at 20-30 Mbit/s (plenty of capacity), Tremonton ~22 ms with 0.2-0.6 %. A two-site lab
+on Linux netem (WSL network namespaces, the relays' Linux builds, a 4K camera clip copied through like passthrough)
+reproduced the field exactly: on a Southridge-shaped link moq-relay 0.15.1/0.15.2 delivered 12 -> 3.3 -> 1.6 -> 0.2
+Mbit/s and a cold subscribe that lost its first group stayed dead (`no route ... err=old`, 3 of 4 runs), while
+**moq-relay 0.17.0 held 13-14 Mbit/s and opened every pull in under a second (16 of 16)**. Larger QUIC windows, MTU
+discovery, GSO off and loss-based congestion control did not rescue 0.15.x; 0.15.2 alone does not fix it. The 0.17.0
+notes carry the fixes that matter here: a spliced group's end is asked from the seam (not frame 0), a group awaiting
+its FIN ack still expires and follows priority, a relayed subscription's start resolves from its source, departed
+subscribers are pruned.
+
+**The new stack.** moq-relay 0.17.0, moq-cli 0.14.0, @moq/watch 0.6.2, publish 0.5.2, net 0.4.2, hang 0.5.2, json
+0.4.2, signals 0.2.5 (fetch-helpers.py pins + SHA-256 from the releases' SHA256SUMS; vendor-moq.py pins). Every KASTR
+moq argv parses on 0.14.0 (import ts, export fmp4, export hls); the bridge's refusal/bounce classifier reads the same
+lines (`unauthorized` -> park + re-mint, `session closed, reconnecting` -> soft) and 0.14.0 now rides a 25 s relay
+outage by itself instead of exiting; relay 0.17.0 accepts KASTR's generated relay.toml unchanged; the secured
+federation (AuthService on both sides, spoke mints from the hub's federation code, pinned hub certificate) works in
+every mix -- new/new, hub-new/spoke-old, hub-old/spoke-new -- so a hub-first rollout keeps the cluster up.
+
+**KASTR's control paths moved from '.' to '~'.** Relay >= 0.15.3 never lists a path segment that starts with '.' to a
+moq-lite-06 client (scoped or not), and @moq/net 0.4.2 browser publishers never announce one (the relay answers
+`unroutable`) -- measured with a browser rig against relays 0.15.1/0.15.2/0.15.8/0.17.0 and both library trains. Every
+presence, room-state, member, chat-nudge, spotlight, recording, media-control, grid, files, avatar, stall, admin and
+channel path, and the relay's own stats prefix, now live under `~` (`~presence/<room>`, `~state/<room>/<HOST>/<PEER>`,
+`<room>/<HOST>/~member/<PEER>`, `<room>/~since`, `~channels/<slug>`, `<room>/~admin`, `~stats/node/<name>` ...):
+kastr_relay.NS is the one constant, the minter grants only '~' paths and says so (`ns: "~"` in the mint reply and
+`/api/auth`), pages re-mint a token cached without it, relay.toml gets `[stats] prefix = "~stats"`, and the prebuilt
+stats page bundle is retargeted at serve time (the file on disk stays byte-identical). '~' never occurs in base64url,
+in a room/host/operator slug or in the `/api/watch` and archive path patterns, so no media or HTTP path can collide with
+a control path; the side doors refuse both spellings. Mixed fleet: the hub updates first and its spokes follow it
+within the hour (update checks ride HTTP, untouched); until a box updates, its pages and the updated ones do not see
+each other's presence/chat state -- media keeps flowing.
+
+**Library behaviour kept steady.** KASTR-PATCH audio-maxage-floor is re-anchored on the 0.6.2 player. New
+KASTR-PATCH catalog-delay-cap: watch 0.6.2 adds each rendition's catalog `delay` plus measured `jitter` to the playout
+delay, and publish 0.5.2 republishes both as lifetime maximums -- on the harness the RTSP grid advertised jitter 148 ->
+369 ms plus delay 183 ms within 20 minutes, which would have put every viewer ~0.7 s behind live. The cap keeps
+0.6.0's contract: video jitter = one frame interval (100 ms when the frame rate is unknown), the catalog delay ignored,
+audio jitter capped at max(frame, 40 ms).
+
+**A locked room is locked (Kenton: "a participant joined a locked room by trying twice").** The gate's "New room…"
+and the sidebar's Create refused a locked room's NAME only when the code box was EMPTY; a second try with any code
+built a fresh lock from the guess and walked into the existing room. Now a name that matches a listed room always
+joins THAT room through its code check (never a create); the rejoin ticket checks the lock too; a lock whose hash the
+page has not seen fails closed on an open relay (the secured minter stays authoritative); gate-created locks register
+on every relay, so an open relay's room store refuses a second lock over a name; a room is remembered only after it
+registered. Server side, locks were per box: a spoke's minter minted a hub-locked room for any code (measured 200).
+Now a spoke asks its hub about any room it holds no record for (`POST /api/rooms/fed`, federation token, answers
+cached 30 s when open), refuses a wrong code, fails closed for a room the hub said is locked while the hub is dark,
+refuses to create a lock over a hub-locked name, and mirrors locks created on it up to the hub; and a member's
+successful room-code mint keeps the lock alive past the 24 h record window (it used to lapse a day after the
+creator's page left while the room was still in use). Live on the two-box harness: empty -> "That room is locked --
+enter its code.", "guess" / "guess2" -> "Wrong room code.", the right code joins. Also fixed while here: a 0.12-shaped
+wide VIEWER token was classified as a publisher (the role test only knew the member/since segments); any control
+segment now makes a put a control path.
+
+**Full screen shows only the content; rings only on people.** Making a share full screen now shows that tile alone --
+no rail, own panes parked (the Focus-on-content path), even when started from the gallery. The speaking ring marks
+PEOPLE talking: never on a shared media file, a screen or a camera feed (like 0.21.15's people-only chimes), and not
+at all while focused on content or full screen.
+
+**RTSP: names that stick, passthrough per camera.** A renamed camera keeps its name: the label is remembered per URL
+(`kastr.rtsp.names`, mirrored by the prefs file) and every later share of that URL wears it -- re-add, another room,
+Keep or not. Each RTSP row (and the pane menu) has its own **Pass through** switch that applies live: the one pair is
+re-published copy <-> H.264 on the same broadcast path and grid seat (measured: the hub kept pulling it at 15 Mbit/s
+right after the flip) and its monitor follows; the box-wide switch stays the default for cameras without their own
+choice; the pane menu shows the current mode (`copy · h264` / `encode · h264`).
+
+**Build fix.** fetch-helpers.py stamped binary versions by bare name (`moq-relay`, `moq`) although bin/ holds both platforms' binaries, so a Windows fetch of 0.17.0 marked the Linux 0.15.1 binaries current -- the Linux build would have bundled the old relay. Stamps are now per file (`moq-relay.exe` / `moq-relay`).
+
+**Found, not changed.** `moq export fmp4` (every CLI version, 0.12-0.14) exits on a sample shorter than one tick at the
+track's timescale (`cmaf: sample duration is shorter than one tick`) -- seen on a looping test clip; the /api/watch
+fallback restarts its exporter. The 'fast start, then native' rendition (Part 41 Step 2) is deferred: on the new relay
+the native 4K stream crosses the Southridge-shaped link at full rate.
+
 ## v0.21.16 — cameras off without forgetting, and the shared file's sound
 
 Part 40: one switch turns a box's own RTSP cameras off and on to spare CPU/GPU, viewers are told why the cameras left, and the shared-media dropouts Kenton heard on 2026-10-02 are traced to the file player's pipeline.

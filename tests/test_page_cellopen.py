@@ -19,7 +19,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 PAGE = os.path.join(HERE, "moq-watch-lite.html")
 RTSP = os.path.join(HERE, "kastr_rtsp.py")
-CONTAINER = os.path.join(HERE, "assets", "vendor", "esm", "@moq", "hang@0.5.0", "es2022", "container.mjs")
+CONTAINER = os.path.join(HERE, "assets", "vendor", "esm", "@moq", "hang@0.5.2", "es2022", "container.mjs")
 
 
 def read(p):
@@ -225,9 +225,9 @@ class DecodeProbe(unittest.TestCase):
 
     def test_vendored_probe_still_exists(self):
         # watch.mjs exports `Video` with Decoder; the player's Decoder carries `static supported`
-        watch = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "watch@0.6.0", "es2022", "watch.mjs"))
+        watch = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "watch@0.6.2", "es2022", "watch.mjs"))
         self.assertIn(" as Video}", watch)
-        player = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "watch@0.6.0", "es2022", "player-DiUmUis6.mjs"))
+        player = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "watch@0.6.2", "es2022", "player-DqpNnBDT.mjs"))
         self.assertIn("static supported=", player)
         self.assertIn('t.codec.startsWith("avc3.")', player)
 
@@ -252,14 +252,14 @@ class MaxAge(unittest.TestCase):
         # the reason P12a exists; if the library changes this, revisit the page value
         c = read(CONTAINER)
         self.assertIn("k.Milli(3e4)", c)
-        self.assertIn("maxAge:o.maxAge??", c)
+        self.assertRegex(c, r"maxAge:[a-z]\.maxAge\?\?")   # 0.21.17: hang 0.5.2 renamed the minified local
 
     def test_publish_element_builds_its_broadcast_in_the_constructor(self):
         # the amended P12a position rests on this: connectedCallback only enables the connection
-        el = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "publish@0.5.0", "es2022", "element.mjs"))
+        el = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "publish@0.5.2", "es2022", "element.mjs"))
         self.assertIn("this.broadcast=new ", el)
         self.assertIn("connectedCallback(){this.#a.set(!0)}", el)
-        enc = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "publish@0.5.0", "es2022", "encoder-DXsP0W9b.mjs"))
+        enc = read(os.path.join(HERE, "assets", "vendor", "esm", "@moq", "publish@0.5.2", "es2022", "encoder-CjcsUSCu.mjs"))
         self.assertIn("maxAge:j(t?.maxAge)", enc)
         self.assertIn("o.get(this.in.maxAge)", enc)
 

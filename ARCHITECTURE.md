@@ -6,6 +6,13 @@ a browser-based UI in a self-contained executable, bridges RTSP cameras into
 the browser, and can host its own MoQ relay. This document describes the system
 as of v0.7.0.
 
+
+> **0.21.17 -- the control namespace is `~`.** Every KASTR control path segment (presence, room state, member, chat,
+> spotlight, recording, media control, grid, files, avatar, stall, admin, channel registry, the relay's stats) begins with
+> `~` (kastr_relay.NS). Until 0.21.16 it was `.`, which moq-relay >= 0.15.3 and @moq/net >= 0.4.2 treat as HIDDEN (never
+> listed to moq-lite-06 clients, never announced by browser publishers). The minter grants only `~` paths and reports
+> `ns` in its mint reply and /api/auth; relay.toml sets `[stats] prefix = "~stats"`.
+
 ## System context
 
 ```
@@ -102,10 +109,10 @@ flag.
 not a fault. This shaped several design decisions below.
 
 **State tracks (0.13.0).** Everything about a member that is not media rides two
-small JSON broadcasts written with `@moq/json`: `.state/<room>/<HOST>/<PEER>` on the
+small JSON broadcasts written with `@moq/json`: `~state/<room>/<HOST>/<PEER>` on the
 relay's public prefix (`state.json`: identity, join time, `publishing`, `speaking`,
 `typing`, avatar, preview stamp; `preview`: 224 px WebP frames every 2 s) and
-`<room>/<HOST>/.member/<PEER>` behind the room token (`room.json`: spotlight, recording,
+`<room>/<HOST>/~member/<PEER>` behind the room token (`room.json`: spotlight, recording,
 stall reports, control pulses, grid geometry, media state, shared files; `chat.json`: a
 50-record Window of this member's posts; `preview` when the room is locked). The producers
 use the raw `Net.Broadcast.Producer` on a `Reload` that never gives up (`timeout: 0`):
@@ -113,8 +120,8 @@ every established connection re-creates the tracks (`latencyMax: 60000`), seeds 
 group sequence from the wall clock and rewrites the latest values; a 20 s heartbeat
 rewrites them again. Consumers (`stateSubscribe`) apply every value in order and
 re-consume on error, on silence, or when no first value arrives. The 0.7–0.12 announce
-idiom (`<room>/.kind/<ts>/<b64>`) remains only for `.channels` (the registry, whose
-lifetime is deliberately not a member's) and, for one release, the `.since`/`.presence`
+idiom (`<room>/~kind/<ts>/<b64>`) remains only for `~channels` (the registry, whose
+lifetime is deliberately not a member's) and, for one release, the `~since`/`~presence`
 compat announces so 0.12 pages still see 0.13 members.
 
 **Room rail (0.13.1).** `#sidebar` lists every room as a card (`.sbcard`), the joined one
@@ -322,7 +329,7 @@ speculative was later removed (see Decisions).
 | Warm audio via a floor volume, never a spliced gain | Library `volume` drives a real (ramped) gain; exactly 0 tears the subscription down, values under .001 silence without teardown. The old spliced GainNode ended up wired in parallel with the library's own path — which re-adds root→gain→destination on every volume write — so it muted one path while the other played on. Deleted in 0.6.1; the only KASTR node on the graph is a read-only meter tap. |
 | `VERSION` = last built | The old "next build" meaning read as a version mismatch against the app and `BUILT_VERSION`. |
 | Archive after finishing steps | The zip previously captured the unsigned exe / unpatched plist — the redistributed copy was wrong. |
-| Room codes are the credential; the minter is the authority | A secured relay's kastr mints HS256 JWTs on relay-port+1 (pure stdlib: hmac+sha256; symmetric is correct — signer and verifier are one machine). Claims ride the relay's own contract: root/put/get/exp/iat, token in `?jwt=` on the connection URL (the cert fetch strips the query, bundle-verified). Member tokens scope put+get to the room; the registry announce rides its own token scoped to `.channels/<slug>`. Listing stays anonymous via `public = { subscribe = [".channels", ".stats"] }`. |
+| Room codes are the credential; the minter is the authority | A secured relay's kastr mints HS256 JWTs on relay-port+1 (pure stdlib: hmac+sha256; symmetric is correct — signer and verifier are one machine). Claims ride the relay's own contract: root/put/get/exp/iat, token in `?jwt=` on the connection URL (the cert fetch strips the query, bundle-verified). Member tokens scope put+get to the room; the registry announce rides its own token scoped to `~channels/<slug>`. Listing stays anonymous via `public = { subscribe = ["~channels", "~stats"] }`. |
 | The relay's key path must be RELATIVE | moq-relay 0.14.12 routes the auth key path through a layer that URL-parses it: `C:/...` reads as scheme `c`, every key load fails, every well-formed token dies as 502. The generated config says `key = "auth.jwk"` and the relay runs with cwd = state_dir. Proven live. 0.16.0: the relay no longer reads a key at all -- KASTR's auth server on relay port+1 holds `auth.jwk` and answers `[auth] url` per session; the `lan.secret` path is relative for the same reason. |
 | window.__auth is the one token seam | Detection (GET :port+1/api/auth, 2 s abort) + mint + `withToken(url, role)`; every relay connection site wraps through it and open relays get identity. Tokens live in sessionStorage per relay origin, never localStorage. |
 | Layouts are grid PLACEMENT, never reparenting | Collage and spotlight assign the same #stage children rows/columns via classes and inline styles; a pane never moves in the DOM (the teardown rule that has held since 0.5.x). Content detection rides the 0.6.8 naming contract: camera leaves are literally `camera(-N)`, so any other leaf is content. |
@@ -332,7 +339,7 @@ speculative was later removed (see Decisions).
 | Snap browsers get a snap-visible profile | 0.7.5: snap's home interface denies dot-directories, so `~/.local/share/ASI/KASTR/browser-profile` silently became an ephemeral profile (localStorage lost per run — the Linux "name not saved" report). `browser_is_snap()` routes those browsers to `~/snap/chromium/common/kastr-profile`; non-snap browsers rank first in discovery; launch log and --diagnose print the effective profile. |
 | Publish URLs go through authUrl at EVERY commit | 0.7.6: the go-live rewrite was the one site passing the raw input — on a secured relay it stripped the token at the exact moment of going live and every publish died silently (reproduced: tokened URL before live, bare after, no discovery echo). Grep rule: any `setAttribute("url", ...)` or relay URL handed to a publish-side connection must wrap authUrl()/withToken(). |
 | ON AIR badge = discovery echo, not attributes | The watch half exports its `suppressed` set as `window.__echoed` — exactly the own paths the relay handed back through discovery. An element slot live >8 s with no echo badges "NO RELAY" (3 s tick while live). The attribute-derived badge lied identically for auth failures, wrong relays and network holes. |
-| Spotlight votes are room-scoped announces | `<room>/.spotlight/<ts>/<b64url target>` — the chanReg track-less-Broadcast pattern, but under the room prefix so plain member tokens cover it when secured. Newest ts wins, applied ONCE per winner (fighting the person at the keyboard helps nobody); votes clear on connect()/leaveChannel (room switches must not leak votes), and the stage releases when the last vote dies only if the user hasn't re-selected. |
+| Spotlight votes are room-scoped announces | `<room>/~spotlight/<ts>/<b64url target>` — the chanReg track-less-Broadcast pattern, but under the room prefix so plain member tokens cover it when secured. Newest ts wins, applied ONCE per winner (fighting the person at the keyboard helps nobody); votes clear on connect()/leaveChannel (room switches must not leak votes), and the stage releases when the last vote dies only if the user hasn't re-selected. |
 | Host segments carry a MAC suffix | 0.7.6: cloned images (robot boxes) share hostnames; identical host segments = byte-identical broadcast paths = relay collision + every device suppressing the twin as "its own" (each sees only itself, all lights green). host_slug appends `-%04x` of uuid.getnode() — stable, stateless, invisible in the UI (labels are operator-based). |
 | Top-bar camera controls ride the same bus | The main camera's mic/video/device controls by Leave resolve through minePeers and post the identical sendControl/micdev messages the rows post — no second control path to drift. The local camera row is simply filtered out of #mine-rows. |
 | px-sized layouts must self-relayout | 0.7.5 made collage columns computed px, not fr-elastic — anything that changes the stage box (window resize, panel toggles) MUST re-run applyState. A debounced window resize listener + a ResizeObserver on #stagewrap do it (0.7.7). Note for rigs: RO delivery is render-gated — a hidden pane delivers nothing until a frame is painted (screenshot forces one). |
@@ -349,25 +356,25 @@ speculative was later removed (see Decisions).
 | RTSP panes attach on first data | The <video> loads detached; the pane joins #pubPanes on loadeddata. A camera that never delivers never opens a window — the toast (window.__toast) carries the fault instead, once per failed attempt. |
 | HTTP ingest reuses the RTSP bridge unchanged downstream | input_args grows an http(s) branch (no rtsp knobs; NO -re and NO reconnects for static files — reconnect restarts fought Range seeks into NAL corruption, observed live, and pacing is pointless when the video element plays timestamped output at 1x); page URLs resolve via lazily-imported yt-dlp BEFORE the bridge lock (feed.url = resolved, feed.source_url = typed). Known-page hosts fail loudly; unknown hosts fall back to ffmpeg verbatim. |
 | The operator name is install-state, not browser-state | operator.json beside the relay state (reachable in app AND dev via relay.state_dir); POST /api/operator on join, /api/instance carries it, the gate prefills from it when localStorage came back empty. Root cause history: snap Chromium's ephemeral profile, twice reported. Also: syncOperator runs for EVERY join now — the camera-branch-only call left viewer-joins nameless and every later share unlabeled. |
-| Room embers are leaver-held announces | 5-minute `.channels/<slug>` announce from the page that just left (its own Reload connection, timer-closed). Cancelled by chanRegSet/joinChannel (a real holder or rejoin replaces the ember) and pagehide. The honest limit of a serverless room list: closing the app releases early. |
+| Room embers are leaver-held announces | 5-minute `~channels/<slug>` announce from the page that just left (its own Reload connection, timer-closed). Cancelled by chanRegSet/joinChannel (a real holder or rejoin replaces the ember) and pagehide. The honest limit of a serverless room list: closing the app releases early. |
 | Own-slot audio comes off audio.in.source | The element's `sources.audio` is device plumbing; the live track rides `publish.audio.in.source` as a {track, kind} wrapper (unwrap before use). One AudioContext (click-resumed) feeds per-slot analysers for the own-tile ring; FILE slots also get an <audio> monitor in the pane (dies with stopSlot; screens never monitored — feedback). |
 | Elevated actions stay POST + loopback-only | /api/relay/firewall refuses GET (kastr_serve's do_GET dispatches into relay handlers too) and any non-loopback Host — a LAN-bound instance must not accept firewall changes from other machines. Windows elevation via Start-Process -Verb RunAs -Wait -PassThru; a UAC decline is a reported failure, not silence. |
 | The relay host is the fleet's version authority | 0.8.1: clients MATCH the relay host's KASTR version at launch — different (either direction) means download, sha256-verify, rename-aside swap, relaunch (KASTR_UPDATED guards loops; failures launch as-is). Every KASTR serves its own binary; dist/updates/<plat>/ carries the other platform. The check runs BEFORE anything binds — no teardown obligations. Loopback relay hosts are skipped (that machine IS the authority). |
-| Stats needs a NODE NAME | [stats] enabled without node publishes at exactly `.stats/node` — an announce whose path equals the page's prefix arrives with an empty relative path and is discarded by the stats bundle. One line (node = host_slug) fixed a page that "never worked"; clusters require the uniqueness anyway. |
+| Stats needs a NODE NAME | [stats] enabled without node publishes at exactly `~stats/node` — an announce whose path equals the page's prefix arrives with an empty relative path and is discarded by the stats bundle. One line (node = host_slug) fixed a page that "never worked"; clusters require the uniqueness anyway. |
 | Federation is a saved hub URL | relay-cluster.json → [cluster] connect + [client.tls] disable_verify at config write; a running relay restarts itself on save. disable_verify is the honest LAN tradeoff (throwaway per-start self-signed certs make pinning impossible). |
 | Stage chrome is hover-revealed, truth excepted | Labels/bars/chevrons rest at opacity 0 (pointer-events none) — but a warn badge (NO RELAY) forces its bar visible: the truth surface must never be hidden by a polish rule. |
-| Rings die with their meters | A tile whose audio graph is torn down (mute → volume 0 teardown) must CLEAR .talking, not freeze it — the toggle now runs for analyser-less tiles in both meter loops, and attachMeter clears on root loss. |
+| Rings die with their meters | A tile whose audio graph is torn down (mute → volume 0 teardown) must CLEAR ~talking, not freeze it — the toggle now runs for analyser-less tiles in both meter loops, and attachMeter clears on root loss. |
 | The PiP mini window rides the share gesture | Document Picture-in-Picture needs transient activation: the window opens synchronously with the screen-share click, never later (you cannot pop it when the user leaves — no gesture exists then). Absent API = silent no-op; controls act directly on the publish state. |
 | Recording is composition, not capture | 0.8.6: the stage is recorded by redrawing every visible tile's canvas/video at its on-screen rect into one canvas -- not getDisplayMedia (no picker, no hall-of-mirrors) -- and mixing audio by bridging each tile's own AudioContext through a MediaStreamDestination into one recording context (contexts cannot connect directly). The room learns about it the way it learns about spotlights: a track-less announce under the room prefix. |
 | The relay in use is the version authority, now | 0.8.6: the launch-time check missed every relay switch made afterwards. The launcher installs `kastr_serve.UPDATE_HOOK`; a relay switch or the Check-for-updates button runs the same probe/swap on demand, then `teardown()` (children + browser) before the delayed relaunch so the new version finds its ports free. |
 | Every member holds the room lock | 0.8.6: the single-holder rule (`held`) read a cached channel list that still contained the holder's own just-cancelled ember, so a creator's rejoin cleared instead of set and the passcode vanished. Track-less registry announces tolerate several holders, so every joined member simply holds the record -- the lock lives as long as the room does. |
 | Wedged encoders are detected by demand, never idleness | 0.8.6: the removed-for-cause watchdogs restarted healthy idle encoders. The stall detector only acts when `video.out.active` proves a viewer is pulling, the capture track is live and unmuted, and the frame count is flat -- then it does exactly what the operator did by hand (pause/unpause), escalating to a rebuild. A muted track (locked screen) is handled separately by pausing video for viewers. |
-| The viewer is the only honest freeze detector | 0.8.7: the 0.8.6 detector keys on the encoder's frame count, which keeps moving when the wedge is downstream (track/transport) -- the field freeze survived it, and only the OWNER's rejoin cleared it. So the starving viewer says so: a track-less `<room>/.stalled/<ts>/<b64 path>` announce (spotlight idiom), which the owner's discovery loop maps to its own slot and answers with the manual remedy (nudge, then rebuild) per source. Demand-proven by construction; idle sources are never touched. |
+| The viewer is the only honest freeze detector | 0.8.7: the 0.8.6 detector keys on the encoder's frame count, which keeps moving when the wedge is downstream (track/transport) -- the field freeze survived it, and only the OWNER's rejoin cleared it. So the starving viewer says so: a track-less `<room>/~stalled/<ts>/<b64 path>` announce (spotlight idiom), which the owner's discovery loop maps to its own slot and answers with the manual remedy (nudge, then rebuild) per source. Demand-proven by construction; idle sources are never touched. |
 | Rename re-stamps segment 2, never re-derives names | 0.8.7: `withOperator` deliberately leaves stamped 3-segment names alone (dedup suffixes must survive), so a live rename replaces only the operator segment and re-runs the dedup; element slots follow a `name` attribute write, RTSP/grid must rebuild (their announce is fixed at creation). |
 | A failed swap rolls back; the folder always has KASTR.exe | 0.8.7: field report -- only `KASTR.old-<ts>.exe` remained after an update (AV/OneDrive held the fresh file during `os.replace`). Placement retries, then the aside copy is renamed back; the except path restores too. And the runtime sweeps `.old-*` because a field machine never runs build.py. |
-| Files ride the relay HOST's KASTR, not the relay | 0.8.7: moq-relay moves tracks, not blobs; every KASTR web service already sits beside the relay, so `/api/files` on the relay host is the one address everyone in the room can reach. Presence is the lifetime: the sharer announces `.files/...` while joined and deletes (token) on leave/pagehide (sendBeacon `POST ?_method=DELETE`), with a 24 h server sweep for crashed pages. Cross-origin by design: CORS `*` + CORP `cross-origin` on those responses only. Same-host pages use their own origin (any port); others assume KASTR's default 8000. |
+| Files ride the relay HOST's KASTR, not the relay | 0.8.7: moq-relay moves tracks, not blobs; every KASTR web service already sits beside the relay, so `/api/files` on the relay host is the one address everyone in the room can reach. Presence is the lifetime: the sharer announces `~files/...` while joined and deletes (token) on leave/pagehide (sendBeacon `POST ?_method=DELETE`), with a 24 h server sweep for crashed pages. Cross-origin by design: CORS `*` + CORP `cross-origin` on those responses only. Same-host pages use their own origin (any port); others assume KASTR's default 8000. |
 | People are cameras | 0.8.7: a box that only publishes RTSP/screen/file is a share, not a person -- People counts filter content paths, and such boxes can opt out of watching entirely (publish-only: visible=never + volume 0). |
-| consume() lives on the established connection | 0.8.7: relay attribution was dead code since 0.8.2 -- the Reload wrapper exposes announced/stats/close only; `established.peek().consume(".stats/node/<name>")` yields the subscriber.json whose keys are full announced paths. `announced(prefix)` yields paths RELATIVE to the prefix. |
+| consume() lives on the established connection | 0.8.7: relay attribution was dead code since 0.8.2 -- the Reload wrapper exposes announced/stats/close only; `established.peek().consume("~stats/node/<name>")` yields the subscriber.json whose keys are full announced paths. `announced(prefix)` yields paths RELATIVE to the prefix. |
 | The profile answers the name question once | 0.8.8: `kastr.profile` {first,last,avatar} replaces the loose operator-name and avatar keys (migrated on first load). A saved profile makes the launch a silent rejoin of `kastr.lastjoin` through the existing rejoin-ticket path -- joinNow itself did not change; Leave clears lastjoin so the picker returns. |
 | Focus on content is visibility "never", not teardown | 0.8.8: the rail is emptied so every non-main tile takes the existing railHiddenNames → visible="never" road (no download, audio untouched); own panes are parked off-stage but still painted (captureStream stalls unpainted). One flag, one applyState. |
 | Grid cell zoom is a CSS transform over shared rect math | 0.8.8: the composite is ONE stream; the owner announces its geometry ({n, layout, cells}) track-lessly and the viewer duplicates gridRects to map a click to a cell and to compute translate/scale for the canvas. The recorder crops the same rect. |
@@ -380,11 +387,11 @@ speculative was later removed (see Decisions).
 | Convert audio KASTR cannot decode, keep the video | 0.8.9: Matroska commonly carries AC-3/DTS that no browser plays; a 4 MB EBML peek finds the audio CodecID and the bundled ffmpeg remuxes to MP4/AAC with `-c:v copy` -- seconds, not a transcode. The one-shot `/api/media/<id>` GET deletes the file behind it. |
 | Relaunch is one function now | 0.8.9: `relaunch_self` (detached shell, env scrub, KASTR_UPDATED) is shared by the self-update and the Relay page's Apply & relaunch; the mode switch drops `--relay-only`/`--page` from argv so kastr.ini decides. |
 | A shared file is played by KASTR, not the library | 0.8.10: the vendored file source plays a detached, muxed `<video>` and `captureStream()`s it -- exactly the configuration this repo had already measured stalling (unpainted element, muxed A/V), so viewers got audio-only catalogs. KASTR now owns the element (attached to the pane), draws it to a canvas it captures (rVFC + a 30 Hz timer so a minimized window keeps publishing) and routes audio through WebAudio, handing both tracks to the element's own signals -- the same seam the screen path uses. Owning the element is also what makes play/pause/seek/loop possible. |
-| Room-wide controls are pulses, state is an announce | 0.8.10: `.media` carries the owner's playback state (position extrapolated by viewers from `at`); `.mediactl` carries commands as 2.5 s pulses with a nonce, and only the owner (mineNames) acts. Nothing in the relay knows or cares -- track-less announces again. |
+| Room-wide controls are pulses, state is an announce | 0.8.10: `~media` carries the owner's playback state (position extrapolated by viewers from `at`); `~mediactl` carries commands as 2.5 s pulses with a nonce, and only the owner (mineNames) acts. Nothing in the relay knows or cares -- track-less announces again. |
 | Convert what the browser cannot decode, keep what it can | 0.8.10: a server-side `ffmpeg -i` probe on the first megabytes decides per stream (video → H.264, audio → AAC, else copy); the client no longer guesses from the container. |
 | Store where the file can actually be fetched | 0.8.10: the relay host is asked (`/api/files?room=`) before it is trusted; otherwise the file lives on the sharer's KASTR and is announced under a LAN address from `/api/mobile`, with the loopback caveat said out loud. |
-| Going live is not a camera privilege | 0.8.11: Go live was only ever pressed by the join flow, and only when it published a camera -- a viewer-only join that later shared RTSP or a file was previewing to itself. Adding a source while joined now presses it (once a name exists), and presence (`.since`) carries {peer, op, name} so a member with nothing to publish is still a person in the list. |
-| Full quality is a second path, not a bigger composite | 0.8.12: the mosaic stays a 720p signal-first stream; when a viewer wants one feed they get that feed's own broadcast (members keep their moq graphs in mode `both`), listed per cell in the `.grid` announce and hidden as tiles until asked for -- so N feeds cost N+1 encodes on the owner and exactly one download per viewer. |
+| Going live is not a camera privilege | 0.8.11: Go live was only ever pressed by the join flow, and only when it published a camera -- a viewer-only join that later shared RTSP or a file was previewing to itself. Adding a source while joined now presses it (once a name exists), and presence (`~since`) carries {peer, op, name} so a member with nothing to publish is still a person in the list. |
+| Full quality is a second path, not a bigger composite | 0.8.12: the mosaic stays a 720p signal-first stream; when a viewer wants one feed they get that feed's own broadcast (members keep their moq graphs in mode `both`), listed per cell in the `~grid` announce and hidden as tiles until asked for -- so N feeds cost N+1 encodes on the owner and exactly one download per viewer. |
 | A grid cell is a seat, not a queue position | 0.8.12: membership is the set of feeds (entries with a seat), not the set of live slots; a reconnecting feed is a placeholder in its own cell and the order is remembered by url, so nothing on any viewer's stage moves when a camera blinks. |
 | Zoom is state, not a transform | 0.8.12: `{s, cx, cy}` per canvas, clamped and re-applied on every layout pass; wheel, drag, buttons and the old cell-expand are all writers of the same state, and the recorder reads it -- one engine for remote tiles and the owner's own composite. |
 | Interactions belong to the stage | 0.8.12: cell swap and cell zoom act only on the mainstage pane; in the rail a click means "show me this" and nothing else (a 6 px wobble used to swap cells and eat the click). |
@@ -398,7 +405,7 @@ speculative was later removed (see Decisions).
 | Ship what runs, not what came in the box | 0.9.3: the release zip dropped the exec bits on the bundled browser, and the launcher's fallback (the OS default browser) could never run KASTR -- so a permissions slip became "opens in Firefox". Every file the app must execute is listed in one place (`kastr_browser.EXECUTABLES`), the archive marks them, the launcher fixes and verifies them, and a failure names its cause instead of pretending. The same pass pruned the browser to what a window uses and removed the yt-dlp resolver, the browser-side RTSP encoder and the other dead paths: what ships is what runs. |
 | A fallback that cannot work is worse than a dialog | 0.9.3: `webbrowser.open()` looked like success (a window appeared) while nothing could run in it. Fallbacks must be able to do the job -- `--no-sandbox`, then a system Chromium -- and the last resort tells the operator the reason and the address. |
 | Membership is remembered, not re-derived per announce | 0.9.4: viewers rebuilt "which feeds hide behind this grid" from each geometry announce, so a member that was merely reconnecting (announced as null) or an announce that flickered un-hid the feed's tile and re-laid the stage on every viewer. A relationship that the owner asserted once holds until the owner withdraws it (or the grid is really gone), whatever a single announce says in between. |
-| An announce is identified by its content, not its connection | 0.9.4: `keyedAnnouncer.set` always closed the old track-less announce and dialled a new one, so every unchanged re-announce reached viewers as inactive-then-active. The `.grid` announce now re-dials only when payload, relay or room change; the stall report keeps re-dialling on purpose (each report is an event). |
+| An announce is identified by its content, not its connection | 0.9.4: `keyedAnnouncer.set` always closed the old track-less announce and dialled a new one, so every unchanged re-announce reached viewers as inactive-then-active. The `~grid` announce now re-dials only when payload, relay or room change; the stall report keeps re-dialling on purpose (each report is an event). |
 | A monitor is not a publisher | 0.9.4: the page restarted a feed's server-side publisher whenever its local monitor picture ended, withdrawing the broadcast from the relay for nothing -- the server already supervises the publisher with its own ladder. The page now reloads only what it owns (the `<video>`), and the mosaic says "reconnecting" rather than freezing. |
 | A monitor that feeds a composite is a source, not a preview | 0.9.5: the mosaic is drawn from the members' monitor `<video>` elements, so their liveness IS the grid's liveness for every viewer -- yet since native publishing nothing watched them (the 0.8.x health rules sat inside a browser-publish branch and went with it). Whatever a published picture is drawn from gets the same health rules as a published stream: keep playing, chase the live edge, reconnect when frozen, and say "reconnecting" rather than show a stale frame. |
 | A picture that stops moving is a stall, whatever the bytes say | 0.9.5: the viewer's stall detector counted bytes; a subscription can keep receiving and decode nothing new. Frames are the fact viewers care about, so frames flat while bytes flow re-subscribes locally, and a frozen source (bytes and frames flowing, picture identical) is left to the owner's monitor rules above. |
@@ -433,11 +440,11 @@ speculative was later removed (see Decisions).
 | Speaker + audio ring are meter-fed | The per-tile analyser already computes RMS for the meters; `talking` is a thresholded hold on it and the speaker is the loudest EMA with 1.5 s stickiness — page-side, no protocol. Meters pause in hidden tabs, so the ring freezes there (production windows are visible). |
 | Room switch = stop-announce, re-aim, re-announce | Moving rooms clicks the live toggle off, joins the new room (discovery + registry re-aimed), and clicks it back on — the go-live loop re-stamps every slot name through chanPath() under the new room. Devices never release; old-room viewers lose the feed by definition. |
 | Cross-document popover collapse rides blur | A click inside an iframe never bubbles to the popover's document, but it always moves focus; window blur is the one signal that crosses the boundary, so both the brand popovers and the page popovers close on it. |
-| “Rooms” is UI wording only | localStorage keys (kastr.channel…) and the `.channels/` relay prefix keep their names — renaming them would orphan stored state and break wire compat for nothing a user can see. |
+| “Rooms” is UI wording only | localStorage keys (kastr.channel…) and the `~channels/` relay prefix keep their names — renaming them would orphan stored state and break wire compat for nothing a user can see. |
 | Output routing is per-tile setSinkId | Every tile's audio rides its own AudioContext (watch.audio.out.context); the sink is applied wherever a context first appears (attachMeter) and re-applied to all on change. "" follows the OS default. |
 | The masthead badge owns relay changes | Server first (POST /api/relay/use — owns the value every future page load gets), then a live `__kastrSetRelay` fan-out to open pages (shared-field change event carries it into the publish half: slots + registry follow). |
 | Channels are path prefixes, Scheme B | Internal names stay `HOST/op/leaf.hang`; the channel is prepended only at the five relay-commit boundaries, and discovery joins with `PREFIX = channel`. Labels parse right-anchored (leaf = last, operator = second-to-last), so 3- and 4-segment names read the same. Legacy channel-less publishers are invisible to channel-scoped pages — accepted. |
-| Channel registry is announce-only and advisory | `.channels/<slug>` (or `.../locked/<salt>/<hash>`) is a track-less Broadcast held while joined — bundle-verified that announcement depends on the published path alone. The password is a client-side gate; v0.7 JWT makes it real. The list empties when unoccupied; `kastr.channels.mine` re-establishes a creator's lock. |
+| Channel registry is announce-only and advisory | `~channels/<slug>` (or `.../locked/<salt>/<hash>`) is a track-less Broadcast held while joined — bundle-verified that announcement depends on the published path alone. The password is a client-side gate; v0.7 JWT makes it real. The list empties when unoccupied; `kastr.channels.mine` re-establishes a creator's lock. |
 | Join gate owns connect() | No watching before joining: every connect() caller is refused until the gate has published this machine's presence (camera joins muted+paused). Leave is a full stop — a hot camera after Leave is a surprise nobody wants. |
 | Relay health from the library's own status signal | `Connection.Reload.status` (disconnected/connecting/connected) feeds `__relayHealth`; the badge owns the 15 s red timer. A Reload that dies fatally while the relay is down never redials — the probe is rebuilt on observed death (a reconnect, not a watchdog: the fact is a dead connection, never idleness). |
 | One page, two module scripts | The 0.6.6 merge ports the publish core into the watch page as a SECOND `<script type=module>`: module scope keeps `urlInput`/`log`/`stageEl`/`$` from colliding, and an eval failure there degrades the page to watch-only instead of killing it. |
@@ -540,8 +547,8 @@ speculative was later removed (see Decisions).
 - **Measured relay claim semantics (2026-09-18, bundled moq-relay 0.14.12 + the
   `moq` CLI, subscriber-verified):** the token's claims are exactly `root put get
   exp iat`; `put`/`get` accept a string **or an array**; matching is per path
-  segment (`put:"main/."` covers nothing under `main/.since/…`, `put:"main/.since"`
-  covers `main/.since/1/x`); a token with no `put` is severed at connect ("token
+  segment (`put:"main/."` covers nothing under `main/~since/…`, `put:"main/~since"`
+  covers `main/~since/1/x`); a token with no `put` is severed at connect ("token
   does not grant publisher access"); an announce outside the `put` scope is
   dropped silently and the session stays up (no reconnect storm); `get:"main"`
   receives `main/h/op/x.hang`. Hence one viewer token per room instead of a token
@@ -567,7 +574,7 @@ speculative was later removed (see Decisions).
   remembers the shape it used.
 - **Occupancy counts people, not publishers (revisited).** 0.8.11 made viewers
   announce presence; the room list still counted `*.hang` operators only. The
-  list now unions publishers with `.since` announcers, so a room full of viewers
+  list now unions publishers with `~since` announcers, so a room full of viewers
   is not "empty".
 - **The switcher sits where the room is named.** The chip already said "Room:
   main · 3"; making it the door removes an unlabelled ☰ from the path (the ☰
@@ -598,7 +605,7 @@ speculative was later removed (see Decisions).
   keeps the click cheap and the choice explicit.
 - **Rooms are a strip, not a menu.** The always-visible bubbles make "what rooms
   exist and who is where" a glance; the ☰ is the detail view. A public
-  `.presence` prefix is what lets the strip count people on a secured relay.
+  `~presence` prefix is what lets the strip count people on a secured relay.
 
 ### 0.12.0
 
@@ -679,7 +686,7 @@ speculative was later removed (see Decisions).
     dropped silently (0 bytes at any subscriber);
   - an idle native publisher into a spoke costs 0 bytes on the cluster link: the relay
     subscribes upstream on demand ("subscribe canceled (idle)" as soon as the last reader
-    leaves), so an idle publisher-relay box burns announces and `.stats` only.
+    leaves), so an idle publisher-relay box burns announces and `~stats` only.
 - **The minter cannot authenticate a machine, but it can scope it.** There is no PKI on a
   LAN relay; what a `host`-scoped token buys is that a member can only write under the host
   it named, so nobody clobbers another member's paths by accident, and a leaked viewer
@@ -694,7 +701,7 @@ speculative was later removed (see Decisions).
   first rig runs "lost" every `speaking` flip because the page's own speaking detector wrote
   `false` right after; the relay's debug log showed every group served. Rig facts are read
   from the relay log, not inferred from the page.
-- **Only the room registry stays an announce.** `.channels/<slug>` is held by every member
+- **Only the room registry stays an announce.** `~channels/<slug>` is held by every member
   and kept as a 5-minute ember by a page that has already left; its lifetime is decoupled
   from any member on purpose — the opposite of a state track that dies with its publisher.
 
@@ -753,8 +760,8 @@ speculative was later removed (see Decisions).
 - **Arrival order is not a contract.** The 0.9.4 rule ("the grid announce must reach viewers before the
   members' own broadcasts") was a property of announce ordering; moving geometry onto a subscribed state
   track in 0.13.0 quietly dropped it, and the first `applyState` chose a child it could not yet recognise.
-  Re-announcing `.grid` cannot bring the order back (the identity-scoped token has no claim on
-  `<room>/.grid`; the relay drops the announce without a word), so the viewer stopped trusting order:
+  Re-announcing `~grid` cannot bring the order back (the identity-scoped token has no claim on
+  `<room>/~grid`; the relay drops the announce without a word), so the viewer stopped trusting order:
   an automatic pick that turns out to be a grid child is handed back to the grid whenever geometry lands.
 - **A remembered click is not a standing order.** `room.json` re-serves a spotlight forever; a viewer
   applies a winner once, so a ten-minute-old click still yanked every joiner's stage. Age it out, and read
@@ -762,7 +769,7 @@ speculative was later removed (see Decisions).
 - **A viewer's starvation is a symptom, not an order.** The viewer-stall path restarted a native pair on
   any report; two silent cameras therefore restarted once a minute forever, and every hub dark spell
   restarted the healthy ones. The owner now checks its own evidence first — the relay's list and the
-  pair's counters — and leaves a live pair alone. Read from the relay's `.stats` announce counters
+  pair's counters — and leaves a live pair alone. Read from the relay's `~stats` announce counters
   (public, cluster-wide): per-path `announced` climbing in steps is the fleet-wide restart monitor.
 - **Counters must survive their own reset.** `restarts` forgets after sixty healthy seconds by design; a
   seventy-second cadence read as healthy. `restartsTotal`, `gen` and the per-generation launch.log lines
@@ -835,7 +842,7 @@ speculative was later removed (see Decisions).
   every `play()`, and a reopen carries the position instead of resetting it. A share that ends, ends.
 - **The canvas draws an animated image's first frame.** `drawImage` of a GIF `<img>` is a still by spec; animation needs
   WebCodecs `ImageDecoder` (an `ArrayBuffer`, not a `Blob`) and one decode in flight.
-- **An admin command is proven by its path.** Only an admin token may publish under `<room>/.admin`; the relay drops a
+- **An admin command is proven by its path.** Only an admin token may publish under `<room>/~admin`; the relay drops a
   forged one, so pages need no signature check -- but a page must skip its own echo, target a peer rather than an
   operator (one operator, many pages), and never mirror the command into room.json (a viewer-scoped shape).
 - **Spawn, verify, retry, escalate, never exit blind.** A relaunch after an update fired one `Start-Process` at a file
@@ -950,7 +957,7 @@ speculative was later removed (see Decisions).
 - Retention follows the native pairs: hang's Broadcast default keeps 30 s per hop (`container.mjs` `Milli(3e4)`); the page asks 5 s like `import --max-age 5s`; archive 2 s and fMP4 4 s fit inside.
 - A page-level wait must be reachable by the tick on EVERY path: the 1 s tick `continue`s whenever bytes advance, so a notice placed after `stallReport` could neither update nor clear while bytes flowed; it sits before the bytes-advance block and at both early continues.
 - Every `"never"` branch ahead of `"always"` in applyState's `wantVisible` chain is a veto: `railHiddenNames` receives every `hiddenChild` (the parked composite and the off-stage camera child), so an off-stage subscription lever (`keepWarm`) has to be threaded through that branch too, not only the `!shown` head and the `"always"` tail. The first draft missed it and would have waited 90 s on a camera that never subscribed.
-- Known limitation 0.21.15: the viewer cannot know a camera's GOP before its first group arrives; the badge reads an optional `meta.gop[idx]` (seconds) from the `.grid` announce that no owner sends yet. A warm un-shown composite can stall-report like a shown tile (0.21.8 gates apply). Fallback `<video>` clients keep the old click path. Unverified: whether `video.out.frame` clears on a never → always cycle (a re-opened camera would take the instant path with a stale, not black, first frame).
+- Known limitation 0.21.15: the viewer cannot know a camera's GOP before its first group arrives; the badge reads an optional `meta.gop[idx]` (seconds) from the `~grid` announce that no owner sends yet. A warm un-shown composite can stall-report like a shown tile (0.21.8 gates apply). Fallback `<video>` clients keep the old click path. Unverified: whether `video.out.frame` clears on a never → always cycle (a re-opened camera would take the instant path with a stale, not black, first frame).
 
 ### 0.21.14
 
@@ -1132,7 +1139,7 @@ speculative was later removed (see Decisions).
 - **Contain first, then lay out.** A card grid whose cards can be narrower than their content will overflow on a
   phone no matter how the columns are chosen; `overflow:hidden` on the card and scrolling tables inside it make the
   layout honest before it is pretty.
-- **Authority travels with the token, not the transport.** The admin grant (`<room>/.admin`) already existed for
+- **Authority travels with the token, not the transport.** The admin grant (`<room>/~admin`) already existed for
   stop/mute/kick; closing rooms and removing files or chat lines are the same authority, so they check the same
   claim — with one caveat learned here: the chat routes read `Authorization` as the spoke-to-hub federation token,
   so a member token rides `?jwt=` there.

@@ -251,7 +251,10 @@ body.asi {
 .switch.sm input:checked + i::after { transform:translateX(14px); }
 .switch input:focus-visible + i { box-shadow:0 0 0 2px rgba(0,159,218,.35), 0 0 0 1px var(--asi-blue); }
 .switch input:disabled + i { opacity:.45; cursor:default; }
-.asi-sw { display:flex; align-items:center; gap:10px; font-size:12px; cursor:pointer; }
+.asi-sw { display:flex; flex-direction:row; align-items:center; gap:10px; font-size:12px; cursor:pointer; }
+/* 0.21.17+: a switch and its words share ONE row on every page (Kenton). The pages' generic form rule
+   `label { flex-direction:column }` stacked any label holding a switch, so the text wrapped under the toggle. */
+label:has(> .switch), label.aud, .pwkeep { flex-direction:row; align-items:center; }
 .asi-sw > .switch { flex:none; }
 .asi-sw > span:not(.switch) { flex:1; min-width:0; }
 .asi-sw[hidden] { display:none; }

@@ -22,13 +22,16 @@
   section.panel .tblwrap { overflow-x:auto; max-width:100%; }
   section.panel table { max-width:100%; }
   section.panel code, section.panel .hint, section.panel dd, section.panel .warn, section.panel #fedState, section.panel #fedMsg,
-  section.panel #spokesList, section.panel #hBanList, section.panel #hPairList, section.panel #bcastList, section.panel #archList { overflow-wrap:anywhere; word-break:break-word; }
+  section.panel #spokesList, section.panel #hBanList, section.panel #hPairList, section.panel #bcastList, section.panel #archList { overflow-wrap:break-word; word-break:normal; }   /* next release: only a token wider than its whole line may break -- never an ordinary word mid-way (Kenton) */
   section.panel .urlrow code { overflow-wrap:normal; word-break:normal; }
   section.panel input, section.panel select { max-width:100%; min-width:0; }
   table.rooms td.mono { white-space:normal; }
   .sproom { display:inline-flex; align-items:center; gap:3px; margin:1px 4px 1px 0; font-family:var(--font-mono); color:var(--asi-blue); }
   .sproom .sprx { padding:0 5px; font-size:10px; line-height:1.4; }
   #main > section:last-child { grid-column:1 / -1; }
+  /* next release: the table cards (spokes, rooms, streams) take two columns wherever the grid has them, so their headers and
+     host names fit on one line instead of breaking inside the word */
+  @media (min-width: 900px) { #fedPanel, #roomsPanel, #streamsPanel { grid-column:span 2; } }
   @media (max-width: 720px) { #main { grid-template-columns:1fr; } }
   label.f.asi-sw { display:flex; align-items:center; gap:10px; }
   label.f.asi-sw > span { margin:0; display:block; }
@@ -91,10 +94,10 @@
   table.rooms { width:100%; border-collapse:collapse; font-size:11.5px; }
   table.rooms th {
     text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.08em;
-    color:var(--text-mute); padding:4px 6px; border-bottom:1px solid var(--line); font-weight:600;
+    color:var(--text-mute); padding:4px 6px; border-bottom:1px solid var(--line); font-weight:600; white-space:nowrap;
   }
   table.rooms td { padding:5px 6px; border-bottom:1px solid var(--line); color:var(--text); vertical-align:middle; }
-  table.rooms td.slug { font-family:var(--font-mono); color:var(--asi-blue); word-break:break-all; }
+  table.rooms td.slug { font-family:var(--font-mono); color:var(--asi-blue); word-break:normal; overflow-wrap:break-word; }
   table.rooms td.mono { font-family:var(--font-mono); color:var(--text-dim); white-space:nowrap; }
   table.rooms td.act { text-align:right; }
   table.rooms button { padding:4px 9px; font-size:11px; }
@@ -110,7 +113,7 @@
   .sub { border-left:2px solid var(--line); padding-left:10px; margin:0 0 12px 4px; }
   dl { margin:0; font-size:11.5px; }
   dt { color:var(--text-mute); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; margin-top:9px; }
-  dd { margin:3px 0 0; color:var(--text); font-family:var(--font-mono); word-break:break-all; }
+  dd { margin:3px 0 0; color:var(--text); font-family:var(--font-mono); word-break:normal; overflow-wrap:break-word; }
 </style>
 </head>
 <body class="asi">
@@ -290,7 +293,7 @@
       <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
         <label class="f asi-sw"><span class="switch"><input type="checkbox" id="lanOn"><i></i></span><span>Join same-site relays automatically (LAN, mDNS)</span></label>
         <label class="f">
-          <span>LAN secret (64 hex characters \u2014 the same on every relay of this site; required when access codes are set)</span>
+          <span>LAN secret (64 hex characters — the same on every relay of this site; required when access codes are set)</span>
           <input type="text" id="lanSecret" class="masked" autocomplete="off" spellcheck="false" placeholder="leave empty to keep the current one">
         </label>
         <div class="btnrow">
@@ -306,14 +309,14 @@
     <section class="panel" id="healthPanel" hidden>
       <h2>Health</h2>
       <dl>
-        <dt>Relay sessions</dt><dd id="hSessions">\u2014</dd>
-        <dt>Cluster nodes</dt><dd id="hNodes">\u2014</dd>
-        <dt>Auth server</dt><dd id="hAuth">\u2014</dd>
-        <dt>Hub link</dt><dd id="hHub">\u2014</dd>
-        <dt>LAN mesh</dt><dd id="hLan">\u2014</dd>
-        <dt>Publisher pairs</dt><dd id="hPairs">\u2014</dd>
-        <dt>Helpers</dt><dd id="hHelpers">\u2014</dd>
-        <dt>Removed members</dt><dd id="hBans">\u2014</dd>
+        <dt>Relay sessions</dt><dd id="hSessions">—</dd>
+        <dt>Cluster nodes</dt><dd id="hNodes">—</dd>
+        <dt>Auth server</dt><dd id="hAuth">—</dd>
+        <dt>Hub link</dt><dd id="hHub">—</dd>
+        <dt>LAN mesh</dt><dd id="hLan">—</dd>
+        <dt>Publisher pairs</dt><dd id="hPairs">—</dd>
+        <dt>Helpers</dt><dd id="hHelpers">—</dd>
+        <dt>Removed members</dt><dd id="hBans">—</dd>
       </dl>
       <div id="hBanList" style="font-family:var(--font-mono,monospace);font-size:11px;line-height:1.7"></div>
       <div id="hPairList" style="font-family:var(--font-mono,monospace);font-size:11px;line-height:1.7;margin-top:6px"></div>
@@ -527,7 +530,8 @@
 
     $("connPanel").hidden = !running;
     $("binPath").textContent = s.binary || "not found";
-    $("fp").textContent = s.fingerprint || "—";
+    { const fp = $("fp"); fp.replaceChildren(); const v = String(s.fingerprint || "—");   // next release: breaks only between 16-character groups (<wbr> copies as nothing)
+      for (let i = 0; i < v.length; i += 16) { if (i) fp.appendChild(document.createElement("wbr")); fp.appendChild(document.createTextNode(v.slice(i, i + 16))); } }
     // 0.8.2: keep the federation fields in sync with the server (a change
     // made in another tab/machine used to stay invisible here).
     if (s.cluster && document.activeElement !== $("fedUrl")) $("fedUrl").value = s.cluster.connect || "";

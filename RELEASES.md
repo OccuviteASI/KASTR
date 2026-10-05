@@ -2,6 +2,43 @@
 
 What changed in each build, newest first.
 
+## v0.21.18 — full screen that fills the screen, and a join that never hangs
+
+Five field requests from the 0.21.17 rollout: full screen uses the whole screen, "Joining…" can no longer sit forever, every switch sits on the same row as its words, the Relay page stops breaking words in the middle, and a few stray `—` codes became the dashes they meant.
+
+**Full screen fills the screen (Kenton: "it is leaving a lot of black space around the edges").** In full screen the
+stage already showed only the chosen tile (0.21.17), but the layout still reserved the empty rail's width, capped the
+height at the rail's row stack and kept the 8 px gaps and the tile border. Full screen now gives the one tile the whole
+screen at its own shape -- no stretching, no border, no gaps; only the bands a different aspect makes unavoidable remain
+(simulated 1440x900: a 16:9 grid at 1440x810, edge to edge, where it used 63 % of a smaller box before). The full-screen
+look rides a `fsfill` class the layout sets from the same test, so CSS and sizing never disagree.
+
+**"Joining…" never hangs (Kenton: "it sits on 'Joining…' forever and never joins").** Join now waited without a limit for
+the camera permission, the access-code check and the room registration -- a camera that never answers (another app holding
+it, a hidden prompt, no device) or a token service that never replies kept the gate on "Joining…" until the window was
+closed. Each step is bounded now: the camera gets 8 s, then KASTR joins without it and says so (log + a warning toast;
+Camera ▾ Enable devices tries again later); the access-code check and the room registration get 15 s each and fail with a
+message that names the step. The gate shows which step it is on ("Joining… asking for the camera", "… checking the access
+code", "… registering the room").
+
+**Switches on the same row as their words.** The pages' generic form rule (`label { flex-direction: column }`) stacked every
+label that holds a switch, so the toggle sat on one row and its text on the next (Share content ▸ RTSP, the per-feed Audio
+and Pass-through switches, Keep this room). The shared stylesheet now keeps a switch and its words on one row on every page.
+
+**The Relay page: no words broken mid-way, cards sized to fit.** `word-break: break-all` / `overflow-wrap: anywhere` let the
+browser split any word at any letter; now only a token wider than its whole line may break. The spokes, rooms and streams
+cards take two columns wherever the grid has them, table headers stay on one line, and the certificate fingerprint wraps only
+between 16-character groups (copying it still gives one unbroken string). Measured: no mid-word break and no overflowing card
+at 558, 860, 1024, 1280 and 1600 px wide.
+
+**Stray codes.** Nine `—` placeholders on the Relay page (the LAN-secret label and the health values) and one tooltip's
+`▾` showed as literal text; they are the dash and arrow they meant.
+
+**Open from the field (not in this build).** Kenton's desk app reported 0 cameras and 0 microphones after the 0.21.17 update;
+Windows saw only the laptop's built-in webcam and microphone as present (the C920 and the headsets were disconnected) and the
+same page lists devices in a test browser -- being checked with Kenton. Viewers in the participant rail with a view-only icon
+and the web client's grid-open reliability are next.
+
 ## v0.21.17 — the latest MoQ stack, and full quality across sites again
 
 Part 41: Southridge's cameras never reached the hub in full quality and Tremonton's took seconds; the cause was in the relay, not in KASTR, and the fix is the newest MoQ release train -- which hides every '.'-named path, so KASTR's control paths move to '~'. Plus the locked-room bypass, full screen that shows only the content, no speaking ring on content, and two RTSP field requests.

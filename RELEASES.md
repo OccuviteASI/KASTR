@@ -6,6 +6,8 @@ What changed in each build, newest first.
 
 Kenton: "I would like to add the ability to use the NPU if someone has one for the video effects. Our blur is kind of bad at detecting edges of people compared to other apps." Two changes: a new renderer that every computer gets, and a better person model that runs on the NPU when there is one.
 
+**Effects at the camera's full frame rate (Kenton: "very delayed ... about .5 seconds behind my actual movement").** Since 0.21.5 the background-effects loop lost its per-frame callback on its very first frame -- the size check that waits for two agreeing frames returned without re-arming it -- so effects ran on the 120 ms fallback timer: about 6-8 fps, choppy and visibly late, on every computer. Every exit re-arms it now. Measured with the stock clip as the webcam (25 fps): 25 fps with Standard, NPU and GPU alike (was 5-8 fps); the NPU matte arrives every ~40 ms and trails motion less (lighter smoothing for a matte).
+
 **Clean edges and no halo, on every computer.**
 - Background effects now draw on the GPU (WebGL2).
 - **Edges:** the person mask is refined against the full-resolution picture with a guided filter. The edge follows hair and shoulders instead of a low-resolution mask stretched about 5x, which was the stair-stepped edge.

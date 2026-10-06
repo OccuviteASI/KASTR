@@ -66,6 +66,13 @@ class Page(unittest.TestCase):
         self.assertIn("o = vec4(texture(F, f).rgb * w, w);", self.p)
         self.assertIn("vec3 bg = bw.a > 0.002 ? bw.rgb / bw.a : c;", self.p)
 
+    def test_frame_chain_never_breaks(self):
+        # 0.21.21: the size-settle return used to end the requestVideoFrameCallback chain -- effects ran on the 120 ms
+        # fallback timer (~8 fps, visibly late) from 0.21.5 until this fix
+        p = self.p
+        i = p.index("else { b.pendW = ow; b.pendH = oh;")
+        self.assertIn("video.requestVideoFrameCallback(() => step(false))", p[i:i + 300])
+
     def test_processor_setting_rides_every_bag(self):
         self.assertEqual(self.p.count('proc: ["auto", "npu", "gpu", "standard"].includes('), 2)
         self.assertIn('proc: camFx.proc || "auto" });', self.p)

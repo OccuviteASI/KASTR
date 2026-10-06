@@ -14539,7 +14539,7 @@
   window.__fxEngine = () => {   // the Camera menu's "running on ..." + rig
     const sl = [...slots.values()].find((s2) => s2.blur);
     const b = sl?.blur; if (!b) return null;
-    return { engine: b.engine || (b.seg ? "standard" : ""), ms: b.matMs ? Math.round(b.matMs) : 0, proc: b.proc || "auto", gl: !!b.gl, note: b.note || "",
+    return { engine: b.engine || (b.seg ? "standard" : ""), ms: b.matMs ? Math.round(b.matMs) : 0, proc: b.proc || "auto", gl: !!b.gl, note: b.note || "", drawFps: b.drawFps, segFps: b.segFps, stepMs: b.stepMs ? +b.stepMs.toFixed(1) : null,
              mask: b.mw ? b.mw + "x" + b.mh : "", failed: { ...matFailed } };
   };
   // ---- 0.21.21: the WebGL2 effects renderer (every machine) ---------------------------------------------------------
@@ -14638,7 +14638,7 @@
     };
   }
   function fxGlRender(b, video, maskCv, w, h, mode) {
-    if (b.glFailed) return null;
+    if (b.glFailed || window.__fxNoGL) return null;   // __fxNoGL: rig switch (the 2D path)
     try {
       if (!b.gl || b.gl.lost()) { b.gl = createFxGL(); if (!b.gl) { b.glFailed = true; return null; } }
       return b.gl.render(video, maskCv, w, h, mode);
@@ -14687,7 +14687,8 @@
         b.imgData = mx.createImageData(mw, mh);
       } else {
         const p = b.conf;
-        for (let i = 0; i < n; i++) p[i] = p[i] * 0.6 + cur[i] * 0.4;
+        const k = b.matte ? 0.3 : 0.6;   // 0.21.21: a matte trails motion less (it already arrives a frame late)
+        for (let i = 0; i < n; i++) p[i] = p[i] * k + cur[i] * (1 - k);
       }
       const conf = b.conf, data = b.imgData.data;
       const alpha = b.matte ? (c) => (c <= 0.03 ? 0 : c >= 0.97 ? 255 : (c - 0.03) * 271)   // 0.21.21: MODNet = a real alpha matte
@@ -14711,6 +14712,7 @@
     };
     const step = (fromTimer) => {
       if (!b.alive) return;
+      const stepT0 = performance.now();   // 0.21.21: the loop's own cost (rig)
       const w = video.videoWidth, h = video.videoHeight;
       if (w && h) {
         const fxNow = b.fx || {};
@@ -14722,7 +14724,7 @@
           // 0.21.5: a phone re-orienting mid-call may report one odd frame size; after the first frame a new
           // size is committed only when two consecutive frames agree (the encoder reconfigures on each change)
           if (!cv.width || (b.pendW === ow && b.pendH === oh)) { cv.width = ow; cv.height = oh; b.pendW = b.pendH = 0; try { uprightNote(slot, b, ow, oh); } catch {} }
-          else { b.pendW = ow; b.pendH = oh; return; }
+          else { b.pendW = ow; b.pendH = oh; if (!fromTimer) { if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => step(false)); else requestAnimationFrame(() => step(false)); } return; }   // 0.21.21: re-arm -- this return used to end the frame chain (the loop then crawled on the 120 ms timer, ~8 fps, since 0.21.5)
         }
         if (person.width !== w || person.height !== h) { person.width = w; person.height = h; }
         const xf = () => { cx.translate(ow / 2, oh / 2); cx.rotate(rot * Math.PI / 180); if (mir) cx.scale(-1, 1); cx.translate(-w / 2, -h / 2); };
@@ -14785,6 +14787,7 @@
         }
       }
       b.lastStep = performance.now();   // (`now` above is block-scoped to the drawing branch)
+      { const ms = b.lastStep - stepT0; b.stepMs = b.stepMs ? b.stepMs * 0.9 + ms * 0.1 : ms; }
       if (fromTimer || document.visibilityState !== "visible") pushCaptureFrame(b.processed);   // 0.21.11 / 0.21.14: a hidden document stops the automatic capture
       if (!fromTimer) { if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => step(false)); else requestAnimationFrame(() => step(false)); }
     };

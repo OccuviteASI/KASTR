@@ -728,6 +728,8 @@ def main():
     # 0.13.1: the RNNoise worklet the page loads for background-noise removal (vendor-noise.py)
     if not os.path.exists(os.path.join(HERE, "assets", "noise", "manifest.json")):
         sys.exit("assets/noise/manifest.json is missing -- run vendor-noise.py (needs network once)")
+    if not os.path.exists(os.path.join(HERE, "assets", "npu", "manifest.json")):   # 0.21.21: NPU / GPU person matting
+        sys.exit("assets/npu/manifest.json is missing -- run vendor-npu.py (needs network once)")
     add_data = [os.path.join(HERE, "assets") + sep + os.path.join("site", "assets")]
 
     # Ship the version beside the pages so the frozen app can read it back.

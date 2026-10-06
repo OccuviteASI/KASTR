@@ -1804,6 +1804,8 @@
       <button type="button" data-rot="180">180&deg;</button><button type="button" data-rot="270">270&deg;</button></div></div>
     <div class="sw"><span>Mirror</span><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label></div>
     <div class="sw"><span>Background quality<small id="fxQualityLbl">Balanced</small></span><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label></div>
+    <div class="sw"><span>Processor<small id="fxProcLbl">Auto</small></span><div class="seg" id="fxProc" role="radiogroup" aria-label="Where the background effect runs">
+      <button type="button" data-proc="auto" title="The NPU when this computer has one, else the graphics card, else the standard model">Auto</button><button type="button" data-proc="npu" title="The neural processor (Intel AI Boost, AMD XDNA, Qualcomm Hexagon...)">NPU</button><button type="button" data-proc="gpu" title="The graphics card">GPU</button><button type="button" data-proc="standard" title="The standard model (MediaPipe) -- works everywhere">Standard</button></div></div>
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
 </div>
@@ -7354,7 +7356,8 @@
     }
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
              bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced",
-             rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror };   // 0.21.0: phone cameras
+             rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror,   // 0.21.0: phone cameras
+             proc: ["auto", "npu", "gpu", "standard"].includes(s.proc) ? s.proc : "auto" };   // 0.21.21: where the effect runs
   }
   camFx = normalizeCamFx(camFx);
   // 0.21.5: on a device whose camera runs the upright loop (WebKit), a Rotate saved before 0.21.5 was
@@ -7506,7 +7509,7 @@
   // The bag that rides sendControl / the announce: markers only (see normalizeCamFx).
   const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "bg:custom" : (camFx.bg.url || "") },
                              bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced",
-                             rot: camFx.rot || 0, mirror: !!camFx.mirror });   // 0.21.0
+                             rot: camFx.rot || 0, mirror: !!camFx.mirror, proc: camFx.proc || "auto" });   // 0.21.0; 0.21.21
   const camFxPushed = new Set();   // 0.15.0: source ids that already carry the saved bag
   // 0.15.0: a no-op without a camera; syncCamFxToOwnCamera (called from acceptAnnounce) pushes
   // the saved bag once when the local camera source first appears -- a join used to create the
@@ -7611,7 +7614,20 @@
     document.getElementById("fxMirror").checked = !!camFx.mirror;
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
+    paintFxProc();   // 0.21.21
   }
+  function paintFxProc() {   // 0.21.21: the choice + what actually runs ("Auto \u00b7 NPU 33 ms")
+    const p = camFx.proc || "auto";
+    for (const b of document.querySelectorAll("#fxProc button")) b.classList.toggle("on", b.dataset.proc === p);
+    const e = window.__fxEngine?.(), names = { npu: "NPU", gpu: "GPU", standard: "Standard" };
+    const lbl = document.getElementById("fxProcLbl"); if (!lbl) return;
+    lbl.textContent = (names[p] || "Auto") + (e && e.engine ? " \u00b7 running on " + (names[e.engine] || e.engine) + (e.ms ? " " + e.ms + " ms" : "") + (e.note ? " (" + e.note + ")" : "") : "");
+  }
+  setInterval(() => { if (!document.getElementById("camPop")?.hidden) paintFxProc(); }, 1500);
+  document.getElementById("fxProc")?.addEventListener("click", (e) => {   // 0.21.21
+    const b = e.target.closest("button[data-proc]"); if (!b) return;
+    camFx.proc = b.dataset.proc; pushCamFx(); paintFxProc();
+  });
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
   document.getElementById("fxSoft").addEventListener("change", (e) => { camFx.soft = e.target.checked; pushCamFx(); });
   document.getElementById("fxRot").addEventListener("click", (e) => {   // 0.21.0
@@ -14086,6 +14102,7 @@
     slot.blur = null;
     b.alive = false;
     clearInterval(b.tickT);   // 0.15.0
+    try { b.gl?.dispose(); } catch {} b.gl = null;   // 0.21.21
     try { b.processed?.stop?.(); } catch {}
     try { b.video.srcObject = null; } catch {}
     try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}   // 0.15.0: video / GIF background
@@ -14113,7 +14130,8 @@
     if (/^(data|blob):/i.test(url)) url = "bg:custom";
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
              quality: fx.quality === "best" ? "best" : "balanced",
-             rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror };   // 0.21.0
+             rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror,   // 0.21.0
+             proc: ["auto", "npu", "gpu", "standard"].includes(fx.proc) ? fx.proc : "auto" };   // 0.21.21
   }
   // 0.15.0: background markers -> something drawImage can take.
   //   bg:<key>        Blob in IndexedDB kastr-bg/bg (written by the Watch half) -> object URL, cached per key
@@ -14313,6 +14331,8 @@
     if (!b) return;
     b.fx = fx;
     loadFxBg(b, fx);
+    if ((fx.proc || "auto") !== b.proc) { b.proc = fx.proc || "auto"; b.matTried = true; pickMatte(b); }   // 0.21.21
+    else if (fxNeedsMask(fx) && !b.matTried) { b.matTried = true; pickMatte(b); }   // effects switched on after the loop started
     const q = fx.quality === "best" ? "best" : "balanced";
     if (fxNeedsMask(fx) && (!b.seg || b.quality !== q)) {
       const gen = ++b.segGen;
@@ -14435,6 +14455,195 @@
   }
   const loadFxImage = loadFxBg;   // 0.8.8 name
   const SEG_MIN_MS = 66;   // <= 15 segmentations a second; frames in between reuse the last matte
+  // ---- 0.21.21: MODNet portrait matting over WebNN (NPU, else GPU) --------------------------------------------------
+  // /assets/npu (vendor-npu.py): onnxruntime-web 1.30 (MIT) drives WebNN; modnet_fp16.onnx (Apache-2.0) takes a 512x288
+  // RGB frame (x/127.5-1, planar) and returns an alpha matte. Sessions are per device and orientation (WebNN wants static
+  // shapes); a session that fails to build or to run once is remembered as failed and the ladder moves on.
+  const MAT_MIN_MS = 40;   // <= 25 mattes a second (the NPU measured 33 ms, the GPU 9.5 ms)
+  let ortMod = null;
+  const matSess = {}, matFailed = {};
+  async function ensureModnet(dev, mw, mh) {
+    const key = dev + "|" + mw + "x" + mh;
+    if (matFailed[key]) return null;
+    if (matSess[key]) return matSess[key];
+    const p = (async () => {
+      try {
+        if (!navigator.ml) throw new Error("WebNN is not available in this browser");
+        if (!ortMod) {
+          ortMod = await import("/assets/npu/ort.min.mjs");
+          ortMod.env.wasm.wasmPaths = "/assets/npu/"; ortMod.env.wasm.numThreads = 1; ortMod.env.logLevel = "error";
+        }
+        const sess = await ortMod.InferenceSession.create("/assets/npu/modnet_fp16.onnx", {
+          executionProviders: [{ name: "webnn", deviceType: dev }], graphOptimizationLevel: "all",
+          freeDimensionOverrides: { batch_size: 1, height: mh, width: mw } });
+        const m = { dev, sess, mw, mh, inName: sess.inputNames[0], outName: sess.outputNames[0],
+                    cv: document.createElement("canvas"), buf: new Float32Array(3 * mw * mh) };
+        m.cv.width = mw; m.cv.height = mh; m.cx = m.cv.getContext("2d", { willReadFrequently: true });
+        const t0 = performance.now();
+        await modnetRun(m, m.cv);   // one run proves every op landed somewhere that works
+        m.firstMs = Math.round(performance.now() - t0);
+        matSess[key] = m;
+        return m;
+      } catch (e) {
+        matFailed[key] = String(e?.message || e).slice(0, 160);
+        delete matSess[key];
+        console.warn("[fx] MODNet on " + dev + " unavailable:", matFailed[key]);
+        return null;
+      }
+    })();
+    matSess[key] = p;
+    return p;
+  }
+  async function modnetRun(m, src) {
+    const { mw, mh, buf, cx } = m, n = mw * mh;
+    cx.drawImage(src, 0, 0, mw, mh);
+    const d = cx.getImageData(0, 0, mw, mh).data;
+    for (let i = 0, j = 0; i < n; i++, j += 4) { buf[i] = d[j] / 127.5 - 1; buf[n + i] = d[j + 1] / 127.5 - 1; buf[2 * n + i] = d[j + 2] / 127.5 - 1; }
+    const r = await m.sess.run({ [m.inName]: new ortMod.Tensor("float32", buf, [1, 3, mh, mw]) });
+    const out = r[m.outName];
+    return { width: mw, height: mh, getAsFloat32Array: () => out.data };
+  }
+  // the engine ladder for one camera loop: Auto = NPU -> GPU -> MediaPipe; a forced device that fails says so once
+  async function pickMatte(b) {
+    const proc = b.proc || "auto", gen = ++b.matGen;
+    const order = proc === "npu" ? ["npu"] : proc === "gpu" ? ["gpu"] : proc === "standard" ? [] : ["npu", "gpu"];
+    const portrait = (b.video?.videoHeight || 0) > (b.video?.videoWidth || 0);
+    for (const dev of order) {
+      const m = await ensureModnet(dev, portrait ? 288 : 512, portrait ? 512 : 288);
+      if (gen !== b.matGen || !b.alive) return;
+      if (m) { b.mat = { dev, portrait }; b.matte = true; b.conf = null; b.engine = dev; b.note = ""; b.matMs = m.firstMs; return; }
+    }
+    b.mat = null; b.matte = false; b.conf = null; b.engine = "standard";
+    b.note = order.length ? (navigator.ml ? "no " + order.join("/").toUpperCase() + " here" : "WebNN off") : "";
+    if (proc === "npu" || proc === "gpu") window.__toast?.("The " + proc.toUpperCase() + " is not available for effects here \u2014 using the standard model", 5000, { level: "info" });
+    if (!b.seg) { const s = await ensureSegmenter(b.quality); if (gen === b.matGen && b.alive) b.seg = s; }
+  }
+  function matTick(b, video, w, h, now, onMask) {
+    if (b.matBusy || now - b.lastSegAt < MAT_MIN_MS) return;
+    if ((h > w) !== !!b.mat.portrait) { pickMatte(b); return; }   // the phone turned: the other orientation's session
+    const key = b.mat.dev + "|" + (b.mat.portrait ? "288x512" : "512x288"), m = matSess[key];
+    if (!m || typeof m.then === "function") return;
+    b.matBusy = true; b.lastSegAt = now;
+    const t0 = performance.now(), mat = b.mat;
+    modnetRun(m, video).then((r) => {
+      if (!b.alive || b.mat !== mat) return;
+      const ms = performance.now() - t0; b.matMs = b.matMs ? b.matMs * 0.8 + ms * 0.2 : ms;
+      onMask(r); b.segN++;
+    }).catch((e) => {
+      if (b.mat !== mat) return;
+      matFailed[key] = String(e?.message || e).slice(0, 160); delete matSess[key];
+      console.warn("[fx] MODNet stopped:", matFailed[key]);
+      pickMatte(b);
+    }).finally(() => { b.matBusy = false; });
+  }
+  window.__fxEngine = () => {   // the Camera menu's "running on ..." + rig
+    const sl = [...slots.values()].find((s2) => s2.blur);
+    const b = sl?.blur; if (!b) return null;
+    return { engine: b.engine || (b.seg ? "standard" : ""), ms: b.matMs ? Math.round(b.matMs) : 0, proc: b.proc || "auto", gl: !!b.gl, note: b.note || "",
+             mask: b.mw ? b.mw + "x" + b.mh : "", failed: { ...matFailed } };
+  };
+  // ---- 0.21.21: the WebGL2 effects renderer (every machine) ---------------------------------------------------------
+  // Guided filter (He et al.): the low-res matte p is refined against the frame's luma I at full resolution --
+  //   a = cov(I,p) / (var(I) + eps),  b = mean(p) - a*mean(I),  q = mean(a)*I + mean(b)
+  // so the edge snaps to the real hair / shoulder edges instead of a stretched 256x144 grid. Blur mode blurs the frame
+  // weighted by (1 - matte) at quarter resolution and divides the weight back out: the person never smears into the
+  // background (the dark halo of a plain blur). Person mode returns the premultiplied person for an upright background.
+  function createFxGL() {
+    const c = document.createElement("canvas");
+    const gl = c.getContext("webgl2", { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false });
+    if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
+    gl.getExtension("OES_texture_float_linear");
+    const VS = "#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0., 1.); }";
+    const prog = (fs) => {
+      const mk = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+      const pr = gl.createProgram(); gl.attachShader(pr, mk(gl.VERTEX_SHADER, VS));
+      gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, "#version 300 es\nprecision highp float;\nin vec2 uv; out vec4 o;\n" + fs)); gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+      return pr;
+    };
+    let P;
+    try {
+      P = {
+        pack: prog("uniform sampler2D F, M; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); float I = dot(texture(F, f).rgb, vec3(.299,.587,.114)); float p = texture(M, f).a; o = vec4(I, p, I*I, I*p); }"),
+        box: prog("uniform sampler2D T; uniform vec2 dir; uniform int r; void main(){ vec4 s = vec4(0.); for (int i = -16; i <= 16; i++) { if (i < -r || i > r) continue; s += texture(T, uv + dir * float(i)); } o = s / float(2*r+1); }"),
+        ab: prog("uniform sampler2D T; uniform float eps; void main(){ vec4 m = texture(T, uv); float va = m.z - m.x*m.x, cv = m.w - m.x*m.y; float a = cv / (va + eps); o = vec4(a, m.y - a*m.x, 0., 1.); }"),
+        wpack: prog("uniform sampler2D F, M; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); float w = 1. - texture(M, f).a; w = w * w; o = vec4(texture(F, f).rgb * w, w); }"),
+        out: prog("uniform sampler2D F, AB, BG; uniform int mode; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); vec3 c = texture(F, f).rgb; float I = dot(c, vec3(.299,.587,.114));"
+          + " vec2 ab = texture(AB, uv).xy; float a = clamp(ab.x * I + ab.y, 0., 1.);"
+          + " if (mode == 1) { o = vec4(c * a, a); return; }"
+          + " vec4 bw = texture(BG, uv); vec3 bg = bw.a > 0.002 ? bw.rgb / bw.a : c; o = vec4(mix(bg, c, a), 1.); }"),
+      };
+    } catch (e) { console.warn("[fx] WebGL2 renderer unavailable:", e?.message || e); return null; }
+    const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const tex = (w, h, fl) => {
+      const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      if (fl) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, null);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      return t;
+    };
+    const fbo = (t) => { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return f; };
+    const tF = tex(), tM = tex();
+    let W = 0, H = 0, T = null;
+    const size = (w, h) => {
+      if (w === W && h === H && T) return;
+      W = w; H = h; c.width = w; c.height = h;
+      const q = [Math.max(2, w >> 2), Math.max(2, h >> 2)];
+      const mkT = (ww, hh) => { const t = tex(ww, hh, true); return { t, f: fbo(t), w: ww, h: hh }; };
+      if (T) for (const x of Object.values(T)) { gl.deleteTexture(x.t); gl.deleteFramebuffer(x.f); }
+      T = { A: mkT(w, h), B: mkT(w, h), AB: mkT(w, h), C: mkT(w, h), Q1: mkT(q[0], q[1]), Q2: mkT(q[0], q[1]) };
+    };
+    const draw = (pr, target, u) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.f : null);
+      gl.viewport(0, 0, target ? target.w : W, target ? target.h : H);
+      gl.useProgram(pr);
+      const loc = gl.getAttribLocation(pr, "p"); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      let unit = 0;
+      for (const [k, v] of Object.entries(u)) {
+        const l = gl.getUniformLocation(pr, k);
+        if (v && v.tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v.tex); gl.uniform1i(l, unit++); }
+        else if (Array.isArray(v)) gl.uniform2f(l, v[0], v[1]);
+        else if (v && v.i !== undefined) gl.uniform1i(l, v.i);
+        else gl.uniform1f(l, v);
+      }
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    };
+    const blur2 = (src, tmp, r) => {   // two box passes each way ~ a gaussian
+      for (let k = 0; k < 2; k++) {
+        draw(P.box, tmp, { T: { tex: src.t }, dir: [1 / src.w, 0], r: { i: r } });
+        draw(P.box, src, { T: { tex: tmp.t }, dir: [0, 1 / src.h], r: { i: r } });
+      }
+    };
+    return {
+      canvas: c,
+      lost: () => gl.isContextLost(),
+      render(video, maskCv, w, h, mode) {
+        size(w, h);
+        gl.bindTexture(gl.TEXTURE_2D, tF); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        gl.bindTexture(gl.TEXTURE_2D, tM); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, maskCv);
+        const r = Math.max(3, Math.min(16, Math.round(8 * w / 1280))), eps = 1e-3;
+        draw(P.pack, T.A, { F: { tex: tF }, M: { tex: tM } });
+        draw(P.box, T.B, { T: { tex: T.A.t }, dir: [1 / w, 0], r: { i: r } });
+        draw(P.box, T.A, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
+        draw(P.ab, T.AB, { T: { tex: T.A.t }, eps });
+        draw(P.box, T.B, { T: { tex: T.AB.t }, dir: [1 / w, 0], r: { i: r } });
+        draw(P.box, T.C, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
+        if (mode === "blur") {
+          draw(P.wpack, T.Q1, { F: { tex: tF }, M: { tex: tM } });
+          blur2(T.Q1, T.Q2, Math.max(3, Math.min(16, Math.round(7 * w / 1280))));
+        }
+        draw(P.out, null, { F: { tex: tF }, AB: { tex: T.C.t }, BG: { tex: T.Q1.t }, mode: { i: mode === "person" ? 1 : 0 } });
+        return c;
+      },
+      dispose() { try { gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch {} },
+    };
+  }
+  function fxGlRender(b, video, maskCv, w, h, mode) {
+    if (b.glFailed) return null;
+    try {
+      if (!b.gl || b.gl.lost()) { b.gl = createFxGL(); if (!b.gl) { b.glFailed = true; return null; } }
+      return b.gl.render(video, maskCv, w, h, mode);
+    } catch (e) { console.warn("[fx] WebGL2 render failed, back to 2D:", e?.message || e); b.glFailed = true; try { b.gl?.dispose(); } catch {} b.gl = null; return null; }
+  }
   function startBlurLoop(slot, raw, seg, fx) {
     window.__fxTrace?.push?.(["startLoop", slot.entry.id, !!seg]);   // 0.21.5 rig trace
     const video = document.createElement("video");
@@ -14459,6 +14668,8 @@
                 segN: 0, drawN: 0, segFps: 0, drawFps: 0, fpsAt: performance.now() };
     loadFxBg(b, b.fx);
     slot.blur = b;
+    b.proc = fx0.proc || "auto"; b.matGen = 0; b.engine = seg ? "standard" : "";   // 0.21.21
+    if (fxNeedsMask(fx0)) { b.matTried = true; pickMatte(b); }
     const drawCover = (ctx, el, ew, eh, w, h) => {
       const sc = Math.max(w / ew, h / eh), dw = ew * sc, dh = eh * sc;
       ctx.drawImage(el, (w - dw) / 2, (h - dh) / 2, dw, dh);
@@ -14479,7 +14690,8 @@
         for (let i = 0; i < n; i++) p[i] = p[i] * 0.6 + cur[i] * 0.4;
       }
       const conf = b.conf, data = b.imgData.data;
-      const alpha = (c) => (c <= 0.15 ? 0 : c >= 0.85 ? 255 : (c - 0.15) * 364);
+      const alpha = b.matte ? (c) => (c <= 0.03 ? 0 : c >= 0.97 ? 255 : (c - 0.03) * 271)   // 0.21.21: MODNet = a real alpha matte
+                            : (c) => (c <= 0.15 ? 0 : c >= 0.85 ? 255 : (c - 0.15) * 364);
       if (mw > 320 || mh > 180) {
         const qw = mw >> 2, qh = mh >> 2;
         if (!b.confQ || b.confQ.length !== qw * qh) b.confQ = new Float32Array(qw * qh);
@@ -14516,10 +14728,11 @@
         const xf = () => { cx.translate(ow / 2, oh / 2); cx.rotate(rot * Math.PI / 180); if (mir) cx.scale(-1, 1); cx.translate(-w / 2, -h / 2); };
         b.cw = ow; b.ch = oh; b.rot = rot; b.mirror = mir;
         const mode = fxNow.bg?.mode || "none";
-        const needMask = !!b.seg && mode !== "none";
+        const needMask = (!!b.seg || !!b.mat) && mode !== "none";   // 0.21.21: MODNet (NPU / GPU) or MediaPipe
         const baseFilter = (fxNow.bright ? "brightness(1.15) contrast(1.05) " : "") + (fxNow.soft ? "blur(0.8px)" : "");
         const now = performance.now();
-        if (needMask && now - b.lastSegAt >= SEG_MIN_MS) {
+        if (needMask && b.mat) matTick(b, video, w, h, now, updateMask);   // 0.21.21: asynchronous -- the newest matte, EMA'd like MediaPipe's
+        else if (needMask && b.seg && now - b.lastSegAt >= SEG_MIN_MS) {
           b.lastSegAt = now;
           let res = null;
           try {
@@ -14534,13 +14747,20 @@
         const vidReady = b.vid && b.vid.readyState >= 2 && b.vid.videoWidth;
         const imgReady = b.img && b.img.complete && b.img.naturalWidth;
         const gifFrame = mode === "gif" ? fxGifFrame(b, performance.now()) : null;   // 0.16.0: animated
-        if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, ow, oh);   // scenes fill the OUTPUT frame upright
+        // 0.21.21: the WebGL2 renderer -- a guided-filter edge + (blur mode) a background blurred WITHOUT the person
+        const replaced = (mode === "video" && vidReady) || !!gifFrame || ((mode === "image" || mode === "gif") && imgReady);
+        const glMode = needMask && b.haveMask ? (replaced ? "person" : "blur") : null;
+        const glOut = glMode ? fxGlRender(b, video, maskCv, w, h, glMode) : null;
+        if (glOut && glMode === "blur") { xf(); cx.filter = baseFilter || "none"; cx.drawImage(glOut, 0, 0, w, h); }
+        else if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, ow, oh);   // scenes fill the OUTPUT frame upright
         else if (gifFrame) drawCover(cx, gifFrame, gifFrame.displayWidth || gifFrame.codedWidth, gifFrame.displayHeight || gifFrame.codedHeight, ow, oh);
         else if ((mode === "image" || mode === "gif") && imgReady) drawCover(cx, b.img, b.img.naturalWidth, b.img.naturalHeight, ow, oh);
         else if (mode !== "none") { xf(); cx.filter = "blur(14px)"; cx.drawImage(video, 0, 0, w, h); }   // blur, or a background still loading
         else { xf(); cx.filter = baseFilter || "none"; cx.drawImage(video, 0, 0, w, h); }
         cx.restore();
-        if (needMask && b.haveMask) {
+        if (glOut && glMode === "person") {   // 0.21.21: the refined person over the upright background
+          cx.save(); xf(); cx.filter = baseFilter || "none"; cx.drawImage(glOut, 0, 0, w, h); cx.restore();
+        } else if (needMask && b.haveMask && !glOut) {
           try {
             px.clearRect(0, 0, w, h);
             px.drawImage(video, 0, 0, w, h);

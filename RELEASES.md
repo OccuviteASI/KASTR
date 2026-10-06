@@ -2,6 +2,37 @@
 
 What changed in each build, newest first.
 
+## v0.21.21 — background effects on the NPU, and edges like the other apps
+
+Kenton: "I would like to add the ability to use the NPU if someone has one for the video effects. Our blur is kind of bad at detecting edges of people compared to other apps." Two changes: a new renderer that every computer gets, and a better person model that runs on the NPU when there is one.
+
+**Clean edges and no halo, on every computer.**
+- Background effects now draw on the GPU (WebGL2).
+- **Edges:** the person mask is refined against the full-resolution picture with a guided filter. The edge follows hair and shoulders instead of a low-resolution mask stretched about 5x, which was the stair-stepped edge.
+- **Halo:** blur mode blurs the background *without* the person in it (a mask-weighted blur), so the person's colours no longer smear into a dark halo around them, the other visible flaw next to Teams and Meet.
+- Image, video and GIF backgrounds get the refined edge too.
+- Computers without WebGL2 float support keep the previous drawing path automatically.
+
+**The NPU.**
+- Camera ▾ effects has a new **Processor** setting: Auto, NPU, GPU or Standard.
+- **Auto** runs MODNet, a portrait-matting model (Apache-2.0), on the NPU when the computer has one: Intel AI Boost, AMD XDNA, Qualcomm Hexagon. Otherwise it runs on the graphics card, and otherwise on the standard model (MediaPipe, as before).
+- The setting shows what is actually running, for example "Auto · running on NPU 64 ms".
+- A forced NPU or GPU that isn't there says so and uses the standard model.
+- Measured on a Core Ultra 7 265H with the stock clip as the webcam:
+  - NPU 33 ms per matte in the lab (64 ms in the page, including preparing the frame);
+  - GPU 9.5 ms (18 ms in the page);
+  - today's model 10.8 ms.
+- Running on the NPU frees the GPU and CPU for video.
+- The model runs through WebNN, which the bundled browser keeps behind a feature flag; KASTR now turns it on. Its launcher passes one combined feature list, because Chromium honours only the last one given.
+
+**Shipped files.** `assets/npu` (about 41 MB, all local, never a CDN):
+- onnxruntime-web 1.30.0 (MIT), the JSEP build that carries WebNN;
+- `modnet_fp16.onnx` (13 MB).
+
+`vendor-npu.py` fetches them from pinned URLs, verifies each SHA-256 and writes their licences next to them, and `build.py` refuses to build without them.
+
+**Seen in testing.** MODNet sometimes keeps an object touching the person sharp, for example the top of an office chair behind a shoulder. Choose Standard if that matters.
+
 ## v0.21.20 — share like Teams, and a stream that fills the window
 
 Share content works the way Kenton showed it in his Teams screenshots. KASTR captures any screen or window itself, so there's no browser picker, and the encode runs on the hardware encoder. Presenter layouts put your camera with the content. While you share, a red border, a Stop sharing bar and a floating mini window are on screen. Also in this build: Fill the window really fills the window, viewers see your own preview as a corner tile in one-on-one calls, the room form's buttons are clearer, and grid camera opens survive an impatient second click.

@@ -1972,10 +1972,13 @@ def browser_args(browser, url, page, no_sandbox=False):
     # there, so the library's prefer-hardware encoder probe fails and every
     # robot box silently encodes (and decodes) in software. Windows has
     # hardware video on by default and gets no extra flags.
+    # 0.21.21: WebNN -- the camera's background effects run on the NPU (or the GPU) through it. Chromium keeps it
+    # behind a feature flag, and it honours only the LAST --enable-features, so every feature goes in one list.
+    features = ["WebMachineLearningNeuralNetwork"]
     if sys.platform.startswith("linux"):
-        args.append("--enable-features=VaapiVideoDecoder,VaapiVideoEncoder,"
-                    "VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks")
+        features += ["VaapiVideoDecoder", "VaapiVideoEncoder", "VaapiVideoDecodeLinuxGL", "VaapiIgnoreDriverChecks"]
         args.append("--ignore-gpu-blocklist")
+    args.append("--enable-features=" + ",".join(features))
 
     # Chromium refuses to start its sandbox as root (crbug.com/638180) and
     # exits before any window appears -- seen live on an Ubuntu box driven

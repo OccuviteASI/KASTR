@@ -2,6 +2,62 @@
 
 What changed in each build, newest first.
 
+## v0.21.20 — share like Teams, and a stream that fills the window
+
+Share content works the way Kenton showed it in his Teams screenshots. KASTR captures any screen or window itself, so there's no browser picker, and the encode runs on the hardware encoder. Presenter layouts put your camera with the content. While you share, a red border, a Stop sharing bar and a floating mini window are on screen. Also in this build: Fill the window really fills the window, viewers see your own preview as a corner tile in one-on-one calls, the room form's buttons are clearer, and grid camera opens survive an impatient second click.
+
+**The Share content panel.**
+- The header holds the title and **Include sound** on one row.
+- **Presenter mode** has four layouts (Content only, Standout, Side-by-side, Reporter) and an **Add background** button that opens the camera's background effects.
+- **Screen** shows a live thumbnail of every monitor, and **Window (N)** one of every window, refreshed every 3 s while the panel is open. Minimized windows show their name.
+- One click shares the screen or window. Chrome's picker doesn't appear.
+- Web clients, and hosts that can't capture natively (Linux and macOS for now), keep the Screen and Window tiles that open the browser's picker.
+
+**Native capture on Windows.**
+- The host captures with Windows Graphics Capture (ffmpeg `gfxcapture`), scales at capture time to fit 1920x1080, and sends a steady 30 fps. A still screen therefore keeps sending keyframes to people who join late.
+- It encodes once on the box's validated hardware encoder (x264 otherwise), at 6 Mbit/s hardware or 5 Mbit/s x264 so text stays sharp, and publishes with `moq import` like an RTSP camera, as `.../screen.hang` or `.../window.hang`.
+- Measured in the two-relay lab: the viewer on the other relay decoded 1920x1080 at about 28 fps.
+- A screen share is never a grid member and never restarts after a relaunch.
+- Starting one is allowed only from the computer whose screen it is. A web client's request is refused, and the picker's routes answer only to the machine itself.
+
+**Include sound.**
+- The computer's sound is captured with Windows process loopback that leaves out KASTR's own process tree. Viewers hear the video you share but never themselves.
+- Measured: capture latency about 10 ms, about 1 % of one core.
+- On Windows older than 10 2004 it falls back to the device loopback, which includes the room's sound, and says so in the log.
+
+**Presenter mode.**
+- **Content only** is the native share above.
+- **Standout** puts you, cut out from your background, in front of the content at the bottom right.
+- **Side-by-side** puts the content on the left and your camera on the right.
+- **Reporter** shows the content as a panel with you large beside it.
+- The page composites the host's 1920-wide screen picture with your camera at 15 fps. The cut-out uses the same segmentation model as the background effects.
+- The composite is re-timed like the grid composite, and the computer's sound reaches the page from the host as an audio track.
+- Switching layouts while presenting takes effect at once.
+- All three layouts were measured reaching a viewer on the other relay at 1920x1080.
+
+**While you share.**
+- A red border frames the shared screen or window and follows the window as it moves. It sits outside the window's edge, or inside at a monitor edge.
+- A draggable top-centre bar says "You're sharing a window | Stop sharing".
+- Neither appears in what you share; both are excluded from capture, and a real capture confirmed it.
+- A floating, always-on-top mini window shows:
+  - the elapsed time, and compact or normal size buttons;
+  - camera, mic, people count and a red Stop;
+  - your own tile (camera or picture);
+  - a live preview of what you share.
+
+**Fill the window (Kenton: "fill the whole window, like full screen, but without expanding the window itself").** In the desktop window the page lives inside KASTR's tab shell, whose tab bar stayed visible. The page now asks the shell to hide its masthead and footer too, so the stream gets the entire window: 1440x900 with the stream at 1440x810 in the lab, and nothing else shown. Esc, W or the tile's button brings everything back, and so does an Esc pressed while focus is in the shell. A reload never leaves the tab bar hidden.
+
+**Your preview in the corner (Kenton's screenshot).** When one other person holds the stage and the rail would hold only your own preview, the rail goes away. The stage takes the full width (a 16:9 picture at 1173x660 where it was 1012x569) and your preview floats small in the bottom-right corner. A second person brings the rail back.
+
+**Creating a room.** Create sits at the bottom left in blue, with Cancel beside it in the quiet style. This applies to both the sidebar form and the "+" bubble.
+
+**Opening a grid camera on a slow link.** While a camera opened from a grid waits for its first frame, the cell fills the stage with a "full quality starting…" badge. Any click on it used to cancel the open and drop back to the grid, so an impatient second click restarted the cold subscription from zero every time. That fits the web client's "fails to consistently open". A click now keeps waiting, and the badge says it's still opening. Esc or the Back pill cancels.
+
+**Open, not in this build.**
+- A lab run with Chrome's network throttling made every subscription time out at only 50 ms of added delay. Chrome's throttle queues WebSocket frames, so this is unconfirmed until it's repeated behind a real delay proxy.
+- The vendored audio library logs one harmless "disconnect" line when a share with sound stops.
+- Native capture for Linux and macOS.
+
 ## v0.21.19 — fill the window, a full-screen button, wider rail previews, and viewers in the rail
 
 Four requests from Kenton: one stream can fill the app window without going full screen, full screen is a button on the

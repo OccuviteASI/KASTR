@@ -38,6 +38,11 @@ from urllib.parse import urlsplit
 # camera on the network. Anything that reaches the <video> element here is also
 # going to reach it from a real RTSP source.
 TEST_URL = "test://pattern"
+SCREEN_PREFIX = "screen://"      # 0.21.20: screen://monitor/<n> | screen://window/<hwnd> -- the host captures it natively
+
+
+def is_screen(url):
+    return str(url or "").strip().lower().startswith(SCREEN_PREFIX)
 
 # Longest we will wait for ffmpeg to name a stream's codec.
 PROBE_TIMEOUT = 20.0
@@ -754,6 +759,9 @@ PAGE_SITES = ("youtube", "youtu.be", "vimeo", "twitch", "dailymotion")
 
 
 def input_args(url):
+    if is_screen(url):   # 0.21.20: Windows Graphics Capture, scaled on the GPU side of the capture, constant 30 fps
+        import kastr_screen
+        return kastr_screen.capture_input(url)
     if url == TEST_URL:
         return [
             "-re",                                  # emit at real time, not as fast as possible
@@ -846,7 +854,7 @@ def output_args(url, copy_video, encoder=None, width=None, hvc1=False):
         # format. Without this the encoder throws "Encoding error", the
         # library rebuilds it, and viewers get RESET_STREAM and a black frame.
         # 0.9.6: never wider than MONITOR_WIDTH (the mosaic is 720 rows).
-        cap = min(int(width), MONITOR_WIDTH) if width else MONITOR_WIDTH
+        cap = min(int(width), 1920 if is_screen(url) else MONITOR_WIDTH) if width else MONITOR_WIDTH   # 0.21.20: a presenter screen may be 1920 wide
         scale = "scale=w='min(iw,%d)':h=-2:in_range=pc:out_range=tv" % cap
         enc = encoder or "libx264"
         args += ["-vf", encoder_vf(enc, SQUARE_PIXELS + "," + scale + ",format=yuv420p"),   # 0.9.8: square pixels first
@@ -927,12 +935,14 @@ def find_moq():
     return _darwin_fallback(exe) or shutil.which("moq")
 
 
-def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=None):
+def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=None, audio_input=0, screen=False):
     """0.9.1: ffmpeg output for the native publisher -- MPEG-TS on stdout with
     audio carried (AAC) unless the operator turned it off for this feed (0.9.5:
     audio=False -> video only, -an), video copied when the camera is already
-    H.264 and otherwise encoded once. This replaces the browser's second encode."""
-    args = ["-map", "0:v:0"] + (["-map", "0:a:0?"] if audio else [])
+    H.264 and otherwise encoded once. This replaces the browser's second encode.
+    0.21.20: a screen share's sound is a second input (audio_input=1, PCM on stdin) and screens get
+    a higher bitrate -- text needs it."""
+    args = ["-map", "0:v:0"] + (["-map", "%d:a:0%s" % (audio_input, "" if audio_input else "?")] if audio else [])
     if copy_video:
         args += ["-c:v", "copy"]
     else:
@@ -941,9 +951,9 @@ def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=No
         args += ["-vf", encoder_vf(enc, SQUARE_PIXELS + "," + scale + ",format=yuv420p"), "-color_range", "tv", "-colorspace", "bt709"]   # 0.9.8: square pixels first
         args += ["-c:v", enc]
         if enc == "libx264":
-            args += ["-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-pix_fmt", "yuv420p", "-b:v", "3M"]
+            args += ["-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-pix_fmt", "yuv420p", "-b:v", "5M" if screen else "3M"]
         else:
-            args += ["-b:v", "4M"]
+            args += ["-b:v", "6M" if screen else "4M"]
         args += ["-g", "60"]
     args += (["-c:a", "aac", "-b:a", "128k", "-ac", "2"] if audio else ["-an"])
     if (mux or PUBLISH_MUX) == "fmp4":
@@ -1178,10 +1188,15 @@ class Publisher:
             self.codec = "h264"
         enc = None if self.copy else self.bridge.usable_encoder()
         args = [ff, "-hide_banner", "-loglevel", "error"] + encoder_pre_args(enc) + input_args(self.feed.url)
+        scr = is_screen(self.feed.url)
+        if scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
+            import kastr_screen
+            args += kastr_screen.LOOPBACK_INPUT
         if self.role == "low":
             args += low_output_args(encoder=enc)
         else:
-            args += publish_output_args(self.copy, encoder=enc, width=MAX_WIDTH if wide else None, audio=self.audio)
+            args += publish_output_args(self.copy, encoder=enc, width=MAX_WIDTH if wide else None, audio=self.audio,
+                                        audio_input=1 if scr else 0, screen=scr)
         # 0.12.0: `warn` is where moq's reconnect/refusal lines live (the
         # classifier in _drain reads them); --backoff-timeout 10s is moq's
         # measured default made explicit (it exits 1 after that -> _watch);
@@ -1221,10 +1236,15 @@ class Publisher:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             ff = None
             try:
+                snd = is_screen(self.feed.url) and self.audio and self.role != "low"   # 0.21.20
                 ff = subprocess.Popen(ff_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      stdin=subprocess.PIPE if snd else subprocess.DEVNULL,
                                       bufsize=0, creationflags=flags)
                 mq = subprocess.Popen(moq_args, stdin=ff.stdout, stdout=subprocess.DEVNULL,
                                       stderr=subprocess.PIPE, creationflags=flags)
+                if snd:
+                    import kastr_screen
+                    kastr_screen.feed_loopback(ff, exclude_pid=self.bridge.own_pid(), log=self.bridge.log)
             except OSError as e:
                 if ff is not None and ff.poll() is None:   # 0.9.8: a moq that failed to start must not leak its ffmpeg
                     try:
@@ -1960,7 +1980,10 @@ class Bridge:
         # Only ever hand ffmpeg a stream URL, never a local path or shell text.
         # (Popen is given an argv list, so there is no shell to inject into, but
         # a file:// or local path would still let a page read arbitrary files.)
-        if url != TEST_URL and not url.lower().startswith(
+        if is_screen(url):   # 0.21.20: a native screen / window share -- validated and resolved by kastr_screen
+            import kastr_screen
+            kastr_screen.check_url(url)
+        elif url != TEST_URL and not url.lower().startswith(
                 ("rtsp://", "rtsps://", "http://", "https://")):
             raise ValueError("url must start with rtsp://, rtsps://, http:// or https://")
         # 0.9.3: a video PAGE (YouTube etc.) is refused with a clear reason;
@@ -1979,12 +2002,19 @@ class Bridge:
             feed = Feed(self._next, url, source_url=source)
             self._feeds[feed.id] = feed
             self._next += 1
+        if is_screen(url):   # 0.21.20: a red border + a Stop sharing bar around what is shared (never in the capture)
+            import kastr_screen
+            fid = feed.id
+            kastr_screen.overlay_start(fid, url, on_stop=lambda: (self.log("screen: Stop sharing on the bar"), self.remove(fid)))
         return feed
 
     def remove(self, feed_id):
         self.unpublish(feed_id, persist=False)   # 0.12.0: one write, below
         with self._lock:
             feed = self._feeds.pop(int(feed_id), None)
+        if feed and is_screen(feed.url):   # 0.21.20
+            import kastr_screen
+            kastr_screen.overlay_stop(feed.id)
         if feed:
             self.kill(feed)
             # 0.21.0: remember the closed URL -- a relaunch restore or a page adopt must not bring it back
@@ -2167,6 +2197,9 @@ class Bridge:
             pub.stop()
             if persist:
                 self.persist_feeds()
+        if is_screen(getattr(pub.feed, "url", "") if pub else ""):   # 0.21.20: the red border goes with the share
+            import kastr_screen
+            kastr_screen.overlay_stop(int(feed_id))
         return bool(pub)
 
     # ---- 0.12.0: feed + session memory (rtsp-feeds.json) ------------------
@@ -2199,7 +2232,7 @@ class Bridge:
     def _feed_records(self):
         out = []
         for pub in list(self._pubs.values()):
-            if pub.stopping:
+            if pub.stopping or is_screen(pub.feed.source_url):   # 0.21.20: a screen share never outlives the session
                 continue
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
@@ -2212,6 +2245,8 @@ class Bridge:
         pulls, hardware-transcodes and publishes into `room` under <room>/<host>/<op>/<leaf>.hang -- the adder's
         op, so People files it under them. Needs the box's saved publisher code (its own room session) to mint
         the host's token for that room. -> feed.info() + publish, or raises ValueError with the reason."""
+        if is_screen(url):   # 0.21.20: a screen is shared only from the computer it shows -- never by a web client
+            raise ValueError("a screen share starts only on the computer whose screen it is")
         room = str(room or "").strip().lower()
         op = re.sub(r"[^a-z0-9-]+", "-", str(op or "").lower()).strip("-")[:40] or "web"
         if not re.match(r"^[a-z0-9][a-z0-9-]{0,63}$", room):
@@ -2575,6 +2610,10 @@ class Bridge:
             self._children.clear()
         self._write_children()           # removes our registry file
 
+    def own_pid(self):
+        """0.21.20: the process tree whose sound a screen share leaves out -- this host (its browser is a child)."""
+        return os.getpid()
+
     def usable_encoder(self):
         """First encoder from ENCODERS that actually works here.
 
@@ -2640,6 +2679,11 @@ class Bridge:
             feed.h264 = None
         if feed.url == TEST_URL:
             feed.h264 = False           # lavfi is raw; it has to be encoded
+            return False
+        if is_screen(feed.url):         # 0.21.20: a capture is raw too -- encoded, never copied
+            import kastr_screen
+            feed.h264, feed.vcodec, feed.fullrange, feed.sar = False, "rawvideo", False, None
+            feed.width, feed.height = kastr_screen.capture_size(feed.url)
             return False
 
         # Keyed by url on the bridge, so a reconnect -- which builds a new feed
@@ -2748,7 +2792,8 @@ class Bridge:
         else:
             # 0.9.6: small and fast -- see output_args
             enc = self.usable_encoder()
-            args = head + encoder_pre_args(enc) + input_args(feed.url) + output_args(feed.url, False, encoder=enc)
+            args = head + encoder_pre_args(enc) + input_args(feed.url) + output_args(feed.url, False, encoder=enc,
+                                                                       width=1920 if getattr(feed, "presenter", False) else None)   # 0.21.20: presenter mode composites this picture
         # Windows: keep the console window from flashing up for each feed.
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(
@@ -3046,6 +3091,8 @@ def handle_api(handler, bridge, path):
                     reply({"error": "ffmpeg not available"}, 503)
                     return True
                 feed = bridge.add(payload.get("url"))
+                if is_screen(feed.url) and payload.get("presenter"):   # 0.21.20: the page composites it -- a 1920-wide monitor, no native pair
+                    feed.presenter = True
                 reply(feed.info())
             else:
                 reply({"ok": bridge.remove(payload.get("id"))})

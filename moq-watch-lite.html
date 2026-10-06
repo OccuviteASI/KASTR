@@ -264,6 +264,9 @@
   #stage .pane.vtile .vonly .icon { width:13px; height:13px; flex:none; opacity:.85; }
   #stage .pane.vtile .vonly .vn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pghead .vonlyic .icon { width:12px; height:12px; margin-right:5px; vertical-align:-2px; opacity:.75; }
+  /* 0.21.20: my own preview as picture in picture (Kenton's Teams screenshot) -- small, bottom-right of the stage */
+  #stage .pubpane.ownpip { position:absolute; z-index:6; bottom:12px; width:clamp(160px, 15%, 280px); height:auto !important;
+    aspect-ratio:16/9; right:calc(12px + var(--pipi, 0) * (clamp(160px, 15%, 280px) + 8px)); box-shadow:0 6px 20px rgba(0,0,0,.55); }
   #stage.spot .pane.railsolo { justify-self:center; width:var(--railcolw, 150px); }   /* 0.21.19 */
   /* 0.7.6: overlay chevron ON shared-content windows (own publish panes
      and remote content tiles) -- the old under-the-pane row chevron
@@ -493,6 +496,30 @@
   .pubui .srcgrid.two button { aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; }
   .pubui .srcgrid .ico { font-size:22px; line-height:1; }
   .pubui .shsound { padding:0 0 6px; }
+  /* 0.21.20: Teams-style share picker */
+  #sharePop .head .hsnd { text-transform:none; letter-spacing:0; font-size:12px; font-weight:500; color:var(--text); gap:8px; }
+  .pubui .prrow h2, .pubui #shWinHead { margin-top:2px; }
+  .pubui .prmodes { display:flex; align-items:center; gap:8px; margin:0 0 14px; flex-wrap:wrap; }
+  .pubui .prmodes .prm { width:42px; height:36px; padding:0; display:inline-flex; align-items:center; justify-content:center;
+    background:var(--surface-2); border:1px solid var(--line); border-radius:6px; color:var(--text-dim); cursor:pointer; }
+  .pubui .prmodes .prm svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.4; }
+  .pubui .prmodes .prm:hover { color:#fff; border-color:var(--asi-blue-dim); }
+  .pubui .prmodes .prm.on { color:#fff; border-color:#fff; background:transparent; }
+  .pubui .prmodes .prm:disabled { opacity:.4; cursor:default; }
+  .pubui .prmodes .prbg { margin-left:auto; height:36px; padding:0 14px; border-radius:6px; background:transparent; border:1px solid var(--line);
+    color:var(--text); font-weight:600; cursor:pointer; }
+  .pubui .prmodes .prbg:hover { border-color:var(--asi-blue-dim); }
+  .pubui .thgrid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin:0 0 14px; }
+  .pubui .thgrid[hidden] { display:none; }
+  .pubui .thgrid .th { display:flex; flex-direction:column; gap:5px; padding:4px; background:transparent; border:1px solid transparent;
+    border-radius:8px; cursor:pointer; color:var(--text-dim); text-align:left; min-width:0; height:auto; }
+  .pubui .thgrid .th:hover { border-color:var(--line); background:var(--surface-2); color:#fff; }
+  .pubui .thgrid .th.sharing { border-color:var(--asi-red); }
+  .pubui .thgrid .th .thimg { aspect-ratio:16/10; width:100%; border-radius:5px; background:#0b0f14 center/contain no-repeat; overflow:hidden;
+    display:flex; align-items:center; justify-content:center; }
+  .pubui .thgrid .th .thimg img { width:100%; height:100%; object-fit:contain; display:block; }
+  .pubui .thgrid .th .thimg .ph { font-size:11px; color:var(--text-mute); padding:6px; text-align:center; }
+  .pubui .thgrid .th .thcap { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pubui .shlist { display:flex; flex-direction:column; gap:4px; margin-top:10px; }
   .pubui .shrow { display:flex; flex-direction:column; align-items:flex-start; gap:2px; text-align:left; height:auto; padding:8px 10px;
     background:var(--surface-2); border:1px solid var(--line); border-radius:6px; color:var(--text); }
@@ -663,6 +690,7 @@
     border:2px solid var(--asi-red); border-radius:8px; overflow:hidden; background:#000; box-shadow:0 8px 24px rgba(0,0,0,.45); }
   #stage .pubpane.screenkind moq-publish { position:absolute; inset:0; }
   #stage .pubpane.screenkind canvas { width:100%; height:100%; object-fit:contain; }
+  #stage .pubpane.screenkind video { position:absolute; inset:0; width:100% !important; height:100% !important; object-fit:contain; }   /* 0.21.20: a native share's preview */
   #stage .pubpane.screenkind .bar, #stage .pubpane.screenkind .meta, #stage .pubpane.screenkind .mchip,
   #stage .pubpane.screenkind .vchip, #stage .pubpane.screenkind .pface { display:none; }
   #stage .pubpane.screenkind .thumbcap { position:absolute; left:0; right:0; bottom:0; padding:3px 8px; font-size:11px; color:#fff;
@@ -1113,6 +1141,15 @@
     border:1px solid var(--line); color:var(--text); padding:5px 8px; border-radius:4px;
     font-family:var(--font-mono); font-size:11px; }
   #mineMenu .pwerr { color:var(--asi-red); font-size:10px; padding:0 6px 4px; min-height:12px; }
+  /* 0.21.20 (Kenton): the room form's actions -- Create bottom-left in blue, Cancel beside it in the quiet style */
+  #mineMenu .pwacts, #sbForm .pwacts { display:flex; gap:8px; justify-content:flex-start; align-items:center; padding:6px 4px 2px; }
+  #mineMenu .pwacts .mi.go, #sbForm .pwacts .mi.go { display:inline-flex; width:auto; flex:none; background:var(--asi-blue); color:#06121a; border:0;
+    border-radius:4px; padding:6px 16px; font-size:11px; font-weight:600; cursor:pointer; height:auto; font-family:var(--font-ui); }
+  #mineMenu .pwacts .mi.go:hover, #sbForm .pwacts .mi.go:hover { filter:brightness(1.12); color:#06121a; background:var(--asi-blue); }
+  #mineMenu .pwacts .mi.go:disabled, #sbForm .pwacts .mi.go:disabled { opacity:.55; cursor:default; }
+  #mineMenu .pwacts .pwcancel, #sbForm .pwacts .pwcancel { display:inline-flex; width:auto; flex:none; background:transparent; border:1px solid var(--line);
+    color:var(--text-dim); border-radius:4px; padding:5px 14px; font-size:11px; font-family:var(--font-mono); cursor:pointer; height:auto; }
+  #mineMenu .pwacts .pwcancel:hover, #sbForm .pwacts .pwcancel:hover { background:var(--surface-2); color:#fff; }
   #mineMenu .hdr { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-mute);
     padding:5px 8px 3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }   /* 0.10.0: "Rooms on <relay>" */
   #audioPop [hidden] { display:none !important; }
@@ -1391,6 +1428,8 @@
 <div id="sharePop" hidden>
   <div class="head">
     <span>Share content</span>
+    <span class="sp"></span>
+    <label class="asi-sw hsnd" title="Share the computer's sound with the screen or window"><span>Include sound</span><span class="switch sm"><input type="checkbox" id="shareSound"><i></i></span></label>
     <label class="asi-sw" id="rtspSuspendWrap" hidden style="font-size:11px;margin-right:8px" title="Publish this box's own RTSP cameras. Off = every camera pair, monitor and grid composite stops and the room loses them (CPU/GPU spared); nothing is forgotten -- the same switch brings everything back."><span class="switch sm"><input type="checkbox" id="rtspSuspendSw"><i></i></span><span>Cameras</span></label>
     <span class="live" id="shareLive" hidden>ON AIR</span>
     <span class="sp"></span>
@@ -1435,15 +1474,27 @@
     </section>
 
     <section class="panel">
-      <div class="sw shsound"><span>Include sound</span>
-        <label class="switch" title="Share the audio of the screen or window too"><input type="checkbox" id="shareSound"><i></i></label></div>
+      <!-- 0.21.20: Teams-style picker -- presenter layouts, then live thumbnails from the host (native capture) -->
+      <div class="prrow" id="prRow">
+        <h2>Presenter mode</h2>
+        <div class="prmodes">
+          <button type="button" class="prm on" data-pm="content" title="Content only"><svg viewBox="0 0 20 20"><rect x="2.5" y="4" width="15" height="12" rx="2"/></svg></button>
+          <button type="button" class="prm" data-pm="standout" title="Standout — you in front of your content"><svg viewBox="0 0 20 20"><rect x="2.5" y="4" width="15" height="12" rx="2"/><circle cx="14" cy="11.2" r="1.6"/><path d="M11.4 16c.3-1.7 1.3-2.6 2.6-2.6s2.3.9 2.6 2.6"/></svg></button>
+          <button type="button" class="prm" data-pm="side" title="Side-by-side — you next to your content"><svg viewBox="0 0 20 20"><rect x="2.5" y="4" width="15" height="12" rx="2"/><rect x="5" y="6.5" width="6.5" height="7" rx="1"/><circle cx="14.6" cy="9.2" r="1.3"/><path d="M12.6 13.2c.2-1.2 1-1.9 2-1.9s1.8.7 2 1.9"/></svg></button>
+          <button type="button" class="prm" data-pm="reporter" title="Reporter — your content over your shoulder"><svg viewBox="0 0 20 20"><rect x="2.5" y="4" width="15" height="12" rx="2"/><rect x="4.5" y="6" width="6" height="4.5" rx="1"/><circle cx="13.6" cy="10.4" r="1.7"/><path d="M10.8 16c.3-1.9 1.4-2.9 2.8-2.9s2.5 1 2.8 2.9"/></svg></button>
+          <button type="button" class="prbg" id="prBgBtn" title="Pick a background for your camera">Add background</button>
+        </div>
+      </div>
       <h2>Screen</h2>
-      <div class="srcgrid two">
+      <div class="thgrid" id="shScreens" hidden></div>
+      <div class="srcgrid two" id="shPickerTiles">
         <button id="srcScreenBtn" type="button" title="Share a whole screen">
           <span class="ico">&#128421;</span>Screen</button>
         <button id="srcWindowBtn" type="button" title="Share one window">
           <span class="ico">&#10064;</span>Window</button>
       </div>
+      <h2 id="shWinHead" hidden>Window (<span id="shWinCount">0</span>)</h2>
+      <div class="thgrid" id="shWindows" hidden></div>
       <div class="shlist">
         <button id="srcRtspBtn" type="button" class="shrow"><b>RTSP/HTTP feed</b>
           <span>Camera or stream URL, published from this machine</span></button>
@@ -3018,6 +3069,8 @@
   // and hide-me (own camera pane out of my own view).
   let focusMode = false, hideMe = false;
   let fillWin = false;   // 0.21.19: one stream fills the app window (not the screen); Esc / W / its icon leaves
+  try { if (window.parent !== window) window.parent.postMessage({ kastrFillWin: false }, location.origin); } catch {}   // 0.21.20: a reload never leaves the shell's tab bar hidden
+  window.addEventListener("message", (e) => { if (e.origin === location.origin && e.data?.kastrFillWinExit && fillWin) toggleFillWindow(); });   // 0.21.20: Esc pressed in the shell
   let collagePlan = null;   // {best, n} of the last collage layout (centred last row)
   // 0.9.10: publish-only devices -- this page publishes but never subscribes to
   // other people's broadcasts (no tiles, no decoders, no meters). The announces
@@ -4294,8 +4347,9 @@
     const o = gridOpen; if (!o) return "";
     const s = Math.round((Date.now() - o.at) / 1000);
     const gop = gridMeta.get(o.gp)?.gop?.[o.idx];   // an owner MAY announce the camera's keyframe interval (s) -- absent today
-    if (o.bytes <= 0) return (o.retried ? 'no data from the relay \u2014 re-subscribed, still waiting' : 'full quality starting\u2026 no data from the relay yet') + ' (' + s + ' s)';
-    return 'full quality starting\u2026 waiting for the camera\u2019s next keyframe' + (gop ? ' (every ~' + gop + ' s)' : '') + ' (' + s + ' s)';
+    const hint = o.clicks ? ' \u2014 still opening; Esc or Back cancels' : '';   // 0.21.20: a click while it starts says it is working
+    if (o.bytes <= 0) return (o.retried ? 'no data from the relay \u2014 re-subscribed, still waiting' : 'full quality starting\u2026 no data from the relay yet') + ' (' + s + ' s)' + hint;
+    return 'full quality starting\u2026 waiting for the camera\u2019s next keyframe' + (gop ? ' (every ~' + gop + ' s)' : '') + ' (' + s + ' s)' + hint;
   }
   function gridOpenTick() {
     const o = gridOpen; if (!o) return;
@@ -4595,6 +4649,7 @@
   let railPage = 0;
   let railW = 320;   // 0.8.9: two columns of previews by default
   try { railW = Math.min(464, Math.max(160, Number(localStorage.getItem("kastr.rail.w")) || 320)); } catch {}
+  let ownPip = false;    // 0.21.20: my preview floats in the stage corner (no rail) when it would be the rail's only tile
   let railColsNow = 1;   // 0.21.19: the column count follows how many people there are, not the rail width
   const railCols = () => railColsNow;
   const railColW = () => (railCols() === 2 ? Math.floor((railW - 8) / 2) : railW);
@@ -4679,7 +4734,7 @@
       : rowH ? railRows * rowH + gap * (railRows - 1) : (stageWrap.clientHeight || 720) - 2 * gap;
     const cols = railCols();
     const areaW = fsFill ? (stageWrap.clientWidth || 1280)
-      : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone()) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
+      : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone() || ownPip) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
     for (const el of mains) {
       const ar = mainAspectOf(el);
       let w = areaW, h = w / ar;
@@ -4786,6 +4841,8 @@
     }
     const railList = railRemote.length + railViewers.length;
     const railN = railList + railOwn.length;
+    // 0.21.20 (Kenton): someone else on the stage and only my own preview left for the rail -> no rail, my preview in the corner
+    ownPip = !gridMode && !railOff && railList === 0 && railOwn.length > 0 && !selfSpotEl && !!selectedName;
     // 0.21.19 (Kenton): one column of wide 16:9 previews while everyone fits; two columns of 4:3 ones past that
     const fit1 = Math.floor(((stageWrap.clientHeight || 720) - 8) / (Math.round(railW * 9 / 16) + 8));
     railColsNow = (railN <= Math.max(1, fit1) || railW < 240) ? 1 : 2;
@@ -4815,7 +4872,7 @@
       stageEl.style.setProperty("--railcolw", railColW() + "px");   // 0.21.19: the centred lone tile's width
       stageEl.style.gridTemplateRows = "repeat(" + railRows + ", " + railH + "px)"
         + (pages > 1 ? " 32px" : "");
-      stageEl.style.gridTemplateColumns = railOff
+      stageEl.style.gridTemplateColumns = (railOff || ownPip)
         ? "minmax(0,1fr) repeat(" + rcols + ", 0px)"
         : "minmax(0,1fr) repeat(" + rcols + ", " + railColW() + "px)";
     } else {
@@ -4827,6 +4884,12 @@
     let ownIdx = 0;
     const placeOwn = (el) => {   // 0.8.7: pinned bottom rows, every page
       const i = ownIdx++;
+      if (ownPip) {   // 0.21.20: floating in the stage's bottom-right corner, side by side when there are several
+        el.style.display = ""; el.style.order = ""; el.style.gridColumn = ""; el.style.gridRow = "";
+        el.classList.add("ownpip");
+        el.style.setProperty("--pipi", String(i));
+        return;
+      }
       if (i >= ownRows) { el.style.display = "none"; el.style.gridColumn = ""; el.style.gridRow = ""; return; }   // 0.8.12: beyond the cap
       el.style.display = "";
       el.style.order = "";
@@ -4901,6 +4964,7 @@
     for (const el of railViewers) { el.classList.remove("railsolo"); railPlace(el); }   // 0.21.19: viewers after everyone with media
     // Own panes are grid items too: ladder cells at the rail bottom (0.8.1).
     for (const pe of pubEls) {
+      pe.classList.remove("ownpip");   // 0.21.20: placeOwn sets it again in picture-in-picture
       if (!gridMode) {
         const isMain = pe === selfSpotEl && !pe.classList.contains("screenkind");   // 0.8.12: the share thumbnail never holds the stage
         pe.classList.toggle("mainstage", isMain);
@@ -4958,7 +5022,7 @@
       railPager.style.gridColumn = rcols === 2 ? "2 / span 2" : "2";
       railPager.style.gridRow = String(railRows + 1);
     }
-    railGrip.style.display = gridMode ? "none" : "block";
+    railGrip.style.display = (gridMode || ownPip) ? "none" : "block";   // 0.21.20: no rail to resize while my preview floats
     if (!gridMode) {
       railGrip.style.left = Math.max(0, stageWrap.clientWidth - railW - 16) + "px";
     }
@@ -5197,6 +5261,7 @@
       fillWin = true;
     }
     document.body.classList.toggle("fillwin", fillWin);
+    try { if (window.parent !== window) window.parent.postMessage({ kastrFillWin: fillWin }, location.origin); } catch {}   // 0.21.20: the app shell's tab bar steps aside too (Kenton)
     applyState();
     paintViewTools();
   }
@@ -5751,6 +5816,9 @@
       // 0.8.13: while MY pane holds the stage, selectedName still names a rail
       // tile -- a click there must bring it to the stage, never zoom it in place.
       if (name !== selectedName || selfSpotEl) { select(name); return; }
+      // 0.21.20: a click while the opened camera starts never cancels it -- an impatient second click restarted the cold
+      // subscription from zero on slow links (Kenton: the web client 'fails to consistently open'); Back / Esc leave
+      if (gridOpen && gridOpen.gp === name) { gridOpen.clicks = (gridOpen.clicks || 0) + 1; paintGridWait(); return; }
       // zoomed in (wheel or cell): a click shows all again
       if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape (0.21.15: a click on the waiting cell abandons the open)
       // 0.8.12: a full-quality feed on the stage -- click returns to its grid
@@ -6883,7 +6951,7 @@
     if (t instanceof HTMLSelectElement) return;   // arrows drive the sort select
     if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-    if (e.key === "Escape") { closeAllPops(); if (fillWin) toggleFillWindow(); return; }   // 0.21.19: Esc leaves fill window
+    if (e.key === "Escape") { closeAllPops(); if (fillWin) toggleFillWindow(); if (gridOpen) { const gp = gridOpen.gp; gridOpenEnd(false); const t = tiles.get(gp); if (t) viewReset(t.canvas); fitMainstage(lastRail.rows); } return; }   // 0.21.20: Esc cancels a starting camera   // 0.21.19: Esc leaves fill window
     if (e.key === "w" || e.key === "W") { toggleFillWindow(fillWin ? undefined : selectedName); return; }   // 0.21.19
     if (e.key === "ArrowRight" || e.key === "ArrowDown") { step(1); e.preventDefault(); }
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { step(-1); e.preventDefault(); }
@@ -6931,6 +6999,7 @@
     closeAllPops();          // four popovers now; two open is never meant
     sharePop.hidden = false;
     try { window.__probeRtsp?.(); } catch {}   // 0.8.9: the Add button is only as live as the last probe
+    try { window.__shareOpened?.(); } catch {}   // 0.21.20: live screen / window thumbnails
     placeShare();
     shareBtn.classList.add("grid-on");
   }
@@ -6939,6 +7008,7 @@
     // Only hides. Slots live in #pubPanes and keep publishing.
     sharePop.hidden = true;
     shareBtn.classList.remove("grid-on");
+    try { window.__shareClosed?.(); } catch {}   // 0.21.20
   }
 
 
@@ -9510,6 +9580,7 @@
     joinEls[id] = document.getElementById(id);
   }
 
+  window.__peopleCount = () => peopleCount();   // 0.21.20: the share mini window
   function peopleCount() {
     const ppl = new Set(["me"]);
     for (const nm of tiles.keys()) {
@@ -10706,7 +10777,7 @@
     go.type = "button";
     go.className = "mi go";
     go.textContent = "Create";
-    row2.append(codeInp, go);
+    row2.append(codeInp);   // 0.21.20: Create moved to the action row at the bottom
     // 0.12.0: persistent rooms
     const keepRow = document.createElement("label");
     keepRow.className = "pwkeep";
@@ -10748,7 +10819,10 @@
     for (const el of [nameInp, codeInp]) {
       el.addEventListener("keydown", (e) => { if (e.key === "Enter") attempt(); });
     }
-    menu.append(row1, row2, keepRow, err, cancel);
+    const acts = document.createElement("div");   // 0.21.20 (Kenton): Create bottom-left in blue, Cancel beside it
+    acts.className = "pwacts";
+    acts.append(go, cancel);
+    menu.append(row1, row2, keepRow, err, acts);
     placeRoomMenu(menu);
     nameInp.focus();
   }
@@ -12214,8 +12288,10 @@
   // A camera's label makes a decent name; an RTSP url does not. Use the last
   // meaningful path segment, or the host, so "rtsp://10.0.0.50:554/stream1"
   // becomes "stream1" rather than a slug of the whole url (credentials included).
+  const isScreenUrl = (u) => /^screen:[/][/]/i.test(String(u || ""));   // 0.21.20: a native screen / window share
   function rtspLabel(url) {
     if (url === TEST_URL) return "rtsp-test";
+    if (isScreenUrl(url)) return /[/]window[/]/i.test(url) ? "window" : "screen";   // 0.21.20
     try {
       const u = new URL(url.replace(/^rtsps?:/, "http:"));
       // 0.8.0: drop the media extension -- "Test Tone", not "Test Tone Mp4".
@@ -12518,6 +12594,7 @@
     const going = added[i];
     if (going.retryTimer) { clearTimeout(going.retryTimer); going.retryTimer = null; }
     if (going.kind === RTSP && going.url) rtspPersistSet(going.url, null, false);   // 0.8.8: stopped = not kept
+    if (going.kind === SCREEN && going.native?.feedId != null) nativePost("/api/rtsp/remove", { id: going.native.feedId }).catch(() => {});   // 0.21.20: presenter mode's host capture
     if (going.kind === FILE) { try { going.upload?.xhr?.abort(); } catch {} }   // 0.14.0: a still-running upload dies with the share
     if (going.kind === FILE && going.mediaUrl && !going.keepMedia) fetch(going.mediaUrl, { method: "DELETE" }).catch(() => {});   // 0.8.13: free the converted copy (0.16.0: unless "Play again" may want it)
     // Read the mic target BEFORE renderPickers: its rebuild keeps the
@@ -12874,6 +12951,153 @@
    * forbidden. Other BROWSERS' tabs can never be listed here (Chromium
    * only enumerates its own); those are shared via the Window pane.
    */
+  // ---- 0.21.20: presenter compositor ---------------------------------------------------------------------------------
+  const PRES_W = 1920, PRES_H = 1080, PRES_FPS = 15;
+  function fitBox(sw, sh, bx, by, bw, bh) { const k = Math.min(bw / sw, bh / sh); const w = sw * k, h = sh * k; return [bx + (bw - w) / 2, by + (bh - h) / 2, w, h]; }
+  function roundClip(cx, x, y, w, h, r) { cx.beginPath(); if (cx.roundRect) cx.roundRect(x, y, w, h, r); else cx.rect(x, y, w, h); cx.clip(); }
+  async function presenterSound(slot) {
+    if (!window.MediaStreamTrackGenerator || typeof AudioData === "undefined") return null;
+    const gen = new MediaStreamTrackGenerator({ kind: "audio" });
+    const w = gen.writable.getWriter();
+    const ac = new AbortController();
+    slot.pres.sound = { gen, ac };
+    (async () => {
+      try {
+        const res = await fetch("/api/screen/sound", { signal: ac.signal, cache: "no-store" });
+        if (!res.ok || !res.body) return;
+        const rd = res.body.getReader();
+        let ts = 0, carry = new Uint8Array(0);
+        for (;;) {
+          const { value, done } = await rd.read();
+          if (done) break;
+          let buf = value;
+          if (carry.length) { const b2 = new Uint8Array(carry.length + value.length); b2.set(carry); b2.set(value, carry.length); buf = b2; }
+          const frames = Math.floor(buf.length / 4);
+          carry = buf.slice(frames * 4);
+          if (!frames) continue;
+          const ad = new AudioData({ format: "s16", sampleRate: 48000, numberOfFrames: frames, numberOfChannels: 2, timestamp: ts, data: buf.slice(0, frames * 4) });
+          ts += Math.round(frames * 1e6 / 48000);
+          w.write(ad).catch(() => {});
+        }
+      } catch {}
+    })();
+    return gen;
+  }
+  async function capturePresenter(slot) {
+    const e = slot.entry, nat = e.native;
+    const mon = { entry: { feedId: nat.feedId, url: nat.url }, video: document.createElement("video"), since: performance.now() };
+    mon.video.muted = true; mon.video.playsInline = true; mon.video.autoplay = true;
+    const cv = document.createElement("canvas"); cv.width = PRES_W; cv.height = PRES_H;
+    const cx = cv.getContext("2d", { alpha: false });
+    const person = document.createElement("canvas"), pcx = person.getContext("2d");
+    const maskCv = document.createElement("canvas"), mcx = maskCv.getContext("2d");
+    const p = slot.pres = { mode: e.presenter || "standout", mon, cv, timer: null, cam: null, camId: null, seg: null, segAt: 0, haveMask: false, alive: true };
+    attachMonitor(mon);
+    p.reattach = setInterval(() => { if (p.alive && (!mon.mon || mon.monitorDown)) { try { attachMonitor(mon); } catch {} } }, 3000);
+    ensureSegmenter("balanced").then((sg) => { p.seg = sg; }).catch(() => {});
+    const camOff = () => !!document.getElementById("topCamBtn")?.classList.contains("on");
+    const syncCam = () => {
+      let t = null;
+      try { t = window.__publisher?.selfTrack?.(); } catch {}
+      if (!t || t.readyState !== "live") { if (p.cam) { p.cam.srcObject = null; p.cam = null; p.camId = null; } return; }
+      if (t.id !== p.camId) {
+        p.camId = t.id;
+        if (!p.cam) { p.cam = document.createElement("video"); p.cam.muted = true; p.cam.playsInline = true; }
+        p.cam.srcObject = new MediaStream([t]); p.cam.play().catch(() => {});
+      }
+    };
+    const cutout = (cam) => {   // my picture with the background removed (Standout / Reporter); false until the first mask
+      const w = cam.videoWidth, h = cam.videoHeight;
+      const now = performance.now();
+      if (p.seg && now - p.segAt >= 90) {
+        p.segAt = now;
+        let res = null;
+        try {
+          res = p.seg.segmentForVideo(cam, now);
+          const ms = res?.confidenceMasks ?? [], m = ms[ms.length - 1];
+          if (m) {
+            const mw = m.width, mh = m.height, conf = m.getAsFloat32Array();
+            if (maskCv.width !== mw || maskCv.height !== mh) { maskCv.width = mw; maskCv.height = mh; p.img = null; }
+            const img = p.img || (p.img = mcx.createImageData(mw, mh));
+            for (let i = 0; i < conf.length; i++) { const a = Math.max(0, Math.min(1, (conf[i] - 0.35) / 0.3)); img.data[i * 4 + 3] = a * 255; }
+            mcx.putImageData(img, 0, 0);
+            p.haveMask = true;
+          }
+        } catch {}
+        try { for (const m of res?.confidenceMasks ?? []) m.close?.(); } catch {}
+      }
+      if (!p.haveMask) return false;
+      if (person.width !== w || person.height !== h) { person.width = w; person.height = h; }
+      pcx.globalCompositeOperation = "source-over"; pcx.clearRect(0, 0, w, h);
+      pcx.drawImage(cam, 0, 0, w, h);
+      pcx.globalCompositeOperation = "destination-in"; pcx.filter = "blur(1.5px)";
+      pcx.drawImage(maskCv, 0, 0, w, h);
+      pcx.filter = "none"; pcx.globalCompositeOperation = "source-over";
+      return true;
+    };
+    const draw = () => {
+      if (!p.alive) return;
+      syncCam();
+      const W = PRES_W, H = PRES_H, sv = mon.video;
+      const scrOk = sv.readyState >= 2 && sv.videoWidth;
+      const cam = p.cam, camOk = !!(cam && cam.readyState >= 2 && cam.videoWidth && !camOff());
+      const mode = p.mode;
+      cx.save();
+      cx.fillStyle = mode === "reporter" ? "#10233d" : "#0b0f14"; cx.fillRect(0, 0, W, H);
+      if (mode === "reporter" && camOk) {
+        const g = cx.createLinearGradient(0, 0, W, H); g.addColorStop(0, "#0f2a4a"); g.addColorStop(1, "#07121f"); cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+        if (scrOk) { const [x, y, w, h] = fitBox(sv.videoWidth, sv.videoHeight, 48, 70, W * 0.6, H * 0.66); cx.save(); roundClip(cx, x, y, w, h, 14); cx.drawImage(sv, x, y, w, h); cx.restore(); }
+        const cut = cutout(cam), ch = H * 0.9, cw = ch * cam.videoWidth / cam.videoHeight;
+        cx.drawImage(cut ? person : cam, W - cw + cw * 0.12, H - ch, cw, ch);
+      } else if (mode === "side" && camOk) {
+        if (scrOk) { const [x, y, w, h] = fitBox(sv.videoWidth, sv.videoHeight, 0, 0, W * 0.68, H); cx.drawImage(sv, x, y, w, h); }
+        const [x, y, w, h] = fitBox(cam.videoWidth, cam.videoHeight, W * 0.68 + 16, 0, W * 0.32 - 32, H);
+        cx.save(); roundClip(cx, x, y, w, h, 18); cx.drawImage(cam, x, y, w, h); cx.restore();
+      } else {
+        if (scrOk) { const [x, y, w, h] = fitBox(sv.videoWidth, sv.videoHeight, 0, 0, W, H); cx.drawImage(sv, x, y, w, h); }
+        if (mode === "standout" && camOk) {
+          const ch = H * 0.42, cw = ch * cam.videoWidth / cam.videoHeight;
+          if (cutout(cam)) cx.drawImage(person, W - cw - 24, H - ch, cw, ch);
+          else { const d = H * 0.26, x = W - d - 40, y = H - d - 40; cx.save(); cx.beginPath(); cx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); cx.clip();
+            const [ix, iy, iw, ih] = fitBox(cam.videoWidth, cam.videoHeight, x, y, d, d); const k = Math.max(d / iw, d / ih); cx.drawImage(cam, x + d / 2 - iw * k / 2, y + d / 2 - ih * k / 2, iw * k, ih * k); cx.restore(); }
+        }
+      }
+      cx.restore();
+      if (document.visibilityState !== "visible") pushCaptureFrame(p.track);   // a hidden document stops the automatic capture (0.21.11)
+    };
+    p.track = restampCaptureTrack(cv.captureStream(PRES_FPS).getVideoTracks()[0], PRES_FPS);
+    p.timer = setInterval(draw, 1000 / PRES_FPS);
+    draw();
+    // the publish element builds its capture after it connects -- the picker gave captureDisplay that time for free
+    for (let i = 0; i < 80 && !pubCap(slot.publish)?.in?.source && slots.has(slot.entry.id); i++) await new Promise((r) => setTimeout(r, 100));
+    if (!slots.has(slot.entry.id) || !p.alive) return;
+    pubCap(slot.publish)?.in?.source.set(p.track);
+    const snd = document.getElementById("shareSound")?.checked ?? true;
+    const at = snd ? await presenterSound(slot).catch(() => null) : null;
+    if (at) pubAud(slot.publish)?.source.set(at);
+    slot.publish.muted = !!slot.entry.micMuted || !at;
+    // the element resets its sources while it starts up (the picker's delay hid that from captureDisplay) -- keep ours in place
+    p.assert = setInterval(() => {
+      if (!p.alive) return;
+      try { const c = pubCap(slot.publish)?.in?.source; if (c && c.peek?.() !== p.track) c.set(p.track); } catch {}
+      try { const a2 = pubAud(slot.publish)?.source; if (at && a2 && a2.peek?.() !== at) a2.set(at); } catch {}
+    }, 1000);
+    const cap = slot.pane.querySelector(".thumbcap");
+    if (cap) cap.textContent = "You\u2019re presenting \u00b7 " + (e.label || "screen");
+    log("Presenting " + (e.label || "screen") + " (" + p.mode + ")" + (at ? " with sound." : "."));
+    refreshUi();
+  }
+  function stopPresenter(slot) {
+    const p = slot.pres; if (!p) return;
+    p.alive = false;
+    clearInterval(p.timer); clearInterval(p.reattach); clearInterval(p.assert);
+    try { detachMonitor(p.mon); } catch {}
+    try { p.track?.stop?.(); } catch {}
+    try { p.sound?.ac?.abort(); p.sound?.gen?.stop?.(); } catch {}
+    try { if (p.cam) p.cam.srcObject = null; } catch {}
+    slot.pres = null;
+  }
+  window.__presenter = () => { const sl = [...slots.values()].find((x) => x.pres); return sl ? { mode: sl.pres.mode, mask: sl.pres.haveMask, screen: sl.pres.mon.video.videoWidth + "x" + sl.pres.mon.video.videoHeight, cam: !!sl.pres.cam, sound: !!sl.pres.sound, cap: !!pubCap(sl.publish), src: (() => { try { const t = pubCap(sl.publish)?.in?.source?.peek?.(); return t ? t.kind + ":" + t.readyState : null; } catch (e) { return "err"; } })(), invisible: !!sl.publish.invisible, muted: !!sl.publish.muted, source: String(sl.publish.source) } : null; };   // rig
   async function captureDisplay(slot) {
     let stream;
     try {
@@ -13585,6 +13809,12 @@
     const slot = { entry, pane, video, badge, nameEl: nm, metaEl, rtsp: true, moq: null,
                    fault: null, feedError: null, since: performance.now() };
     slots.set(entry.id, slot);
+    if (entry.screen) {   // 0.21.20: a native screen share is the floating 'You're sharing' thumbnail, never a rail tile
+      pane.classList.add("screenkind");
+      const cap = document.createElement("div"); cap.className = "thumbcap"; cap.textContent = "You’re sharing · " + (entry.label || "screen");
+      pane.appendChild(cap);
+      openSharePip(slot);   // while the click still counts as a gesture (Document PiP needs one)
+    }
 
     if (entry.feedId == null) {
       // No bridge feed behind this entry, so there is nothing to load. Say so
@@ -14617,7 +14847,7 @@
       // hand the resulting tracks straight to the element. capture.in.source and
       // audio.in.source ARE the element's own track signals, so everything
       // downstream (encoder, catalog, announce, preview) behaves identically.
-      captureDisplay(slot);
+      if (entry.native) capturePresenter(slot); else captureDisplay(slot);   // 0.21.20: presenter mode composites the host's capture
     } else if (entry.kind === FILE) {
       // 0.8.10: KASTR-owned media player. The library's file source plays a
       // detached, muxed <video> whose captureStream() yields no frames (the
@@ -14676,48 +14906,105 @@
   // Unavailable API (older Chromium, iframes without the permission) is a
   // silent no-op.
   async function openSharePip(slot) {
+    // 0.21.20 (Kenton's Teams screenshot): elapsed time + size buttons, camera / mic / people / stop, my tile, the share
     try {
       if (!window.documentPictureInPicture?.requestWindow) return;
-      const win = await documentPictureInPicture.requestWindow({ width: 280, height: 130 });
+      if (documentPictureInPicture.window) { try { documentPictureInPicture.window.close(); } catch {} }
+      const NORMAL = { w: 320, h: 430 }, COMPACT = { w: 320, h: 118 };
+      const win = await documentPictureInPicture.requestWindow({ width: NORMAL.w, height: NORMAL.h });
       slot.pip = win;
       const d = win.document;
-      d.body.style.cssText = "margin:0;background:#0b1420;color:#e7edf3;"
-        + "font:12px system-ui;display:flex;flex-direction:column;gap:8px;"
-        + "align-items:center;justify-content:center;height:100vh;";
-      const cap = d.createElement("div");
-      cap.textContent = "KASTR \u2014 sharing your screen";
-      cap.style.cssText = "font-weight:600;font-size:11px;letter-spacing:.05em;";
-      const row = d.createElement("div");
-      row.style.cssText = "display:flex;gap:8px;";
-      const mk = (label) => {
-        const b = d.createElement("button");
-        b.textContent = label;
-        b.style.cssText = "background:#12385c;color:#fff;border:0;border-radius:5px;"
-          + "padding:8px 12px;font-size:12px;cursor:pointer;";
-        row.appendChild(b);
-        return b;
+      const st = d.createElement("style");
+      st.textContent = `
+        :root { color-scheme: dark; }
+        body { margin:0; background:#1f2329; color:#e7edf3; font:13px "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+        .top { display:flex; align-items:center; gap:4px; padding:10px 12px; border-bottom:1px solid #3a3f47; }
+        .time { font-variant-numeric:tabular-nums; font-weight:600; font-size:15px; flex:1; }
+        button { background:transparent; border:0; color:#e7edf3; width:36px; height:32px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+        button:hover { background:rgba(255,255,255,.10); }
+        button.sel { background:rgba(255,255,255,.16); }
+        button svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+        .ctl { display:flex; align-items:center; justify-content:space-between; padding:8px 14px; }
+        .ctl .ppl { width:auto; padding:0 8px; gap:4px; font-size:15px; }
+        .ctl .stop { color:#ff6b6b; border:1.5px solid #e5484d; width:38px; height:30px; }
+        .ctl .stop:hover { background:#e5484d; color:#fff; }
+        .ctl .off { color:#ff8a80; }
+        .me, .shr { margin:0 12px 10px; border-radius:10px; background:#2b3038; border:1px solid #3a3f47; overflow:hidden; position:relative; flex:1; min-height:0; display:flex; align-items:center; justify-content:center; }
+        .me video, .shr img, .shr video { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
+        .me .av { width:82px; height:82px; border-radius:50%; background:#0b2a4d center/cover no-repeat; display:flex; align-items:center; justify-content:center; font-size:28px; font-weight:600; color:#fff; }
+        .sep { height:1px; background:#5b616b; margin:0 34px 10px; flex:none; }
+        body.compact .me, body.compact .shr, body.compact .sep { display:none; }`;
+      d.head.appendChild(st);
+      const SV = {
+        min: '<path d="M5 10h10"/>', normal: '<rect x="4" y="5" width="12" height="10" rx="2"/>',
+        cam: '<rect x="2.5" y="6" width="10.5" height="8" rx="2"/><path d="M13 9l4.5-2.5v7L13 11"/>',
+        camOff: '<rect x="2.5" y="6" width="10.5" height="8" rx="2"/><path d="M13 9l4.5-2.5v7L13 11M2.5 3.5l14 13"/>',
+        mic: '<rect x="7.5" y="2.5" width="5" height="9" rx="2.5"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5"/>',
+        micOff: '<rect x="7.5" y="2.5" width="5" height="9" rx="2.5"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M3 3l14 14"/>',
+        ppl: '<circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.6-3.4 3.2-5.2 6.5-5.2s5.9 1.8 6.5 5.2"/>',
+        stop: '<path d="M6 6l8 8M14 6l-8 8"/>' };
+      const svg = (k) => '<svg viewBox="0 0 20 20">' + SV[k] + '</svg>';
+      const mk = (parent, cls, title, onclick) => { const b = d.createElement("button"); b.className = cls; b.title = title; b.onclick = onclick; parent.appendChild(b); return b; };
+      const top = d.createElement("div"); top.className = "top";
+      const tm = d.createElement("span"); tm.className = "time"; tm.textContent = "0:00"; top.appendChild(tm);
+      const size = (c) => { d.body.classList.toggle("compact", c); try { const z = c ? COMPACT : NORMAL; win.resizeTo(z.w, z.h); } catch {} bMin.classList.toggle("sel", c); bNorm.classList.toggle("sel", !c); };
+      const bMin = mk(top, "", "Compact", () => size(true)); bMin.innerHTML = svg("min");
+      const bNorm = mk(top, "sel", "Show my video and the share", () => size(false)); bNorm.innerHTML = svg("normal");
+      const ctl = d.createElement("div"); ctl.className = "ctl";
+      const tc = () => document.getElementById("topCamBtn"), tmic = () => document.getElementById("topMicBtn");
+      const bCam = mk(ctl, "", "Camera", () => { tc()?.click(); setTimeout(paint, 150); });
+      const bMic = mk(ctl, "", "Microphone", () => { tmic()?.click(); setTimeout(paint, 150); });
+      const bPpl = mk(ctl, "ppl", "People", () => { try { window.focus(); document.getElementById("peopleBtn")?.click(); } catch {} });
+      const bStop = mk(ctl, "stop", "Stop sharing", () => { removeSource(slot.entry.id); try { win.close(); } catch {} }); bStop.innerHTML = svg("stop");
+      const me = d.createElement("div"); me.className = "me";
+      const sep = d.createElement("div"); sep.className = "sep";
+      const shr = d.createElement("div"); shr.className = "shr";
+      d.body.append(top, ctl, me, sep, shr);
+      // my tile: the camera preview while it runs, else my picture / initials
+      const camPane = () => document.querySelector("#pubPanes .pubpane.camkind");
+      let meMode = "";
+      const paintMe = (camOff) => {
+        const cv = camPane()?.querySelector("canvas");
+        const want = !camOff && cv ? "video" : "avatar";
+        if (want === meMode) return;
+        meMode = want; me.textContent = "";
+        if (want === "video") {
+          const v = d.createElement("video"); v.muted = true; v.autoplay = true; v.playsInline = true;
+          try { v.srcObject = cv.captureStream(15); } catch {}
+          me.appendChild(v);
+        } else {
+          const av = d.createElement("div"); av.className = "av";
+          const img = camPane()?.querySelector(".pface .avatar img") || document.querySelector("#pubPanes .pface .avatar img");
+          if (img?.src) av.style.backgroundImage = 'url("' + img.src + '")';
+          else av.textContent = (camPane()?.querySelector(".pface .init")?.textContent || "").trim() || "\u2022";
+          me.appendChild(av);
+        }
       };
-      const bm = mk("Mute mic");
-      const paintMute = () => {
-        const cam = added.find((a) => a.kind === "camera");
-        bm.textContent = cam && cam.micMuted ? "Unmute mic" : "Mute mic";
-        bm.disabled = !cam;
+      // the share: a native screen shows the host's thumbnail (cheap, every 1.5 s); a browser share its own preview canvas
+      const isNative = !!slot.entry.screen;
+      if (isNative) {
+        const img = d.createElement("img"); img.alt = ""; shr.appendChild(img);
+        const sid = String(slot.entry.url || "").replace(/^screen:[/][/]monitor[/]/i, "monitor:").replace(/^screen:[/][/]window[/]/i, "window:");
+        let n = 0; const pull = () => { img.src = "/api/screen/thumb?id=" + encodeURIComponent(sid) + "&w=480&t=" + (n++); };
+        pull(); slot.pipThumb = setInterval(pull, 1500);
+      } else if (slot.canvas) {
+        const v = d.createElement("video"); v.muted = true; v.autoplay = true; v.playsInline = true;
+        try { v.srcObject = slot.canvas.captureStream(10); } catch {}
+        shr.appendChild(v);
+      }
+      const t0 = Date.now();
+      const paint = () => {
+        const s = Math.floor((Date.now() - t0) / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+        tm.textContent = (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s % 60).padStart(2, "0");
+        const camOff = !tc() || tc().classList.contains("on"), micOff = !tmic() || tmic().classList.contains("on");
+        bCam.innerHTML = svg(camOff ? "camOff" : "cam"); bCam.classList.toggle("off", camOff); bCam.title = camOff ? "Turn camera on" : "Turn camera off";
+        bMic.innerHTML = svg(micOff ? "micOff" : "mic"); bMic.classList.toggle("off", micOff); bMic.title = micOff ? "Unmute" : "Mute";
+        bPpl.innerHTML = svg("ppl") + "<span>" + (window.__peopleCount?.() ?? "") + "</span>";
+        paintMe(camOff);
       };
-      bm.onclick = () => {
-        const cam = added.find((a) => a.kind === "camera");
-        if (!cam) return;
-        cam.micMuted = !cam.micMuted;
-        const s2 = slots.get(cam.id);
-        if (s2 && !s2.rtsp) s2.publish.muted = cam.micMuted || !audioFor(cam);
-        paintMute(); redraw(); announce();
-      };
-      const bs = mk("Stop sharing");
-      bs.style.background = "#8c2f2c";
-      bs.onclick = () => { removeSource(slot.entry.id); try { win.close(); } catch {} };
-      const bb = mk("Back to KASTR");
-      bb.onclick = () => { try { window.focus(); } catch {} };
-      paintMute();
-      d.body.append(cap, row);
+      paint();
+      slot.pipTick = setInterval(paint, 1000);
+      win.addEventListener("pagehide", () => { clearInterval(slot.pipTick); clearInterval(slot.pipThumb); slot.pip = null; });
     } catch {}
   }
 
@@ -15678,7 +15965,7 @@
                            updateRtspGrid(); refreshUi(); return hits.length; } };
   window.__gridFeeds = { get: () => gridFeeds, set: setGridFeeds, lock: () => gridLock, setLock: setGridLock,
     names: () => gridNames, setNames: setGridNames, grids: gridRegistry,   // 0.15.0
-    count: () => added.filter((a) => a.kind === RTSP && a.enabled).length };   // 0.9.2: feeds mode (View menu shows it when feeds exist)
+    count: () => added.filter((a) => a.kind === RTSP && !a.screen && a.enabled).length };   // 0.21.20: screens are not cameras   // 0.9.2: feeds mode (View menu shows it when feeds exist)
   // 0.8.7: layout presets + drag-and-drop order for the composite.
   const GRID_LAYOUTS = [["auto", "Auto grid"], ["2x2", "2 \u00d7 2"], ["focus", "One big + strip"], ["row", "Side by side"], ["column", "Stacked"]];
   // 0.9.8: fill-first auto grid. Rows may hold different cell counts (2 over 3
@@ -16184,13 +16471,13 @@
     // full quality on its own path (default), or the feeds alone.
     const liveSlots = [...slots.values()].filter((s) => s.rtsp && (s.inGrid || s.native));   // 0.9.1/0.9.3: members are native slots
     const ready = new Map(liveSlots.map((s) => [s.entry.id, s]));
-    const allEntries = added.filter((a) => a.kind === RTSP && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
+    const allEntries = added.filter((a) => a.kind === RTSP && !a.screen && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
     // 0.14.0: members gridEvictionTick took out after GRID_EVICT_AFTER failed attempts. They keep
     // their seat, their hidden pane and their remembered order; the announce lists them as `out`
     // so viewers keep their tiles hidden. 0.21.15: ANY evicted seat keeps the grid alive, even at zero live
     // members (the rule below) -- an outage never hands the members back to the viewers as loose tiles;
     // so a two-camera room does not flip layouts every time one camera drops.
-    const allEvicted = added.filter((a) => a.kind === RTSP && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
+    const allEvicted = added.filter((a) => a.kind === RTSP && !a.screen && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
     // 0.15.0: the same rules, once per gridId -- a grid exists while its own feeds earn it
     const ids = new Set([...allEntries, ...allEvicted].map(gridIdOf));
     for (const id of rtspGrids.keys()) ids.add(id);
@@ -16275,6 +16562,7 @@
     try { slot.monitor?.remove?.(); } catch {}
     slot.monitor = null;
     slot.analyser = null;
+    clearInterval(slot.pipTick); clearInterval(slot.pipThumb);   // 0.21.20
     try { slot.pip?.close?.(); } catch {}
     slot.pip = null;
     if (slot.rtsp) {
@@ -16299,6 +16587,7 @@
         try { t.stop(); } catch {}
       }
       slot.displayStream = null;
+      if (slot.pres) stopPresenter(slot);   // 0.21.20
     }
     slot.pane.remove();
     slots.delete(id);
@@ -16767,7 +17056,8 @@
       // broadcast NAME still derives from rtspLabel(url), so a renamed feed keeps its path.
       const gridId = String(opts?.gridId || gridOfSaved(url) || "1");
       rtspClosedSet(url, false);   // 0.21.0: adding it again is an explicit act
-      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId });   // 0.9.5; 0.21.17: a remembered rename wins
+      const scr = isScreenUrl(url);   // 0.21.20: a native screen share is never a grid member and sends the computer's sound when asked
+      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: scr ? !!document.getElementById("shareSound")?.checked : audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId, screen: scr || undefined });   // 0.9.5; 0.21.17: a remembered rename wins
       gridOfSet(url, gridId);
       if (seatSaved(url)) updateRtspGrid();   // 0.9.10: a remembered seat holds its cell from now on, not from the first frame
       log(`Added RTSP feed ${data.id} (${url}).` +
@@ -17217,6 +17507,95 @@
     log(running ? "Pick the " + surface + " to share in the browser prompt." : "Screen share added. The picker appears when you click Start.");
   };
   $("srcScreenBtn").addEventListener("click", () => shareSurface("monitor"));
+  // ---- 0.21.20: native screen / window share (Teams-style picker) --------------------------------------------------
+  // The host lists every screen and window and serves small JPEG thumbnails; one click publishes it natively as a
+  // screen:// feed on the RTSP machinery (hardware encode, no Chrome picker). Hosts without native capture (web
+  // clients, Linux/macOS today) answer ok:false and the panel keeps the Screen / Window tiles that open the picker.
+  let shTimer = null, shTick = 0, shBusy = false;
+  const shareKey = (src) => src.kind === "screen" ? "screen://monitor/" + src.index : "screen://window/" + src.hwnd;
+  function shThumb(src) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "th"; b.dataset.id = src.id;
+    b.innerHTML = '<span class="thimg"><img alt="" decoding="async"></span><span class="thcap"></span>';
+    b.addEventListener("click", () => shareNative(b.__src));
+    b.querySelector("img").addEventListener("error", (e) => { const ph = document.createElement("span"); ph.className = "ph"; ph.textContent = b.__src?.minimized ? "Minimized" : "No preview"; e.target.replaceWith(ph); });
+    return b;
+  }
+  function shPaintList(box, list) {
+    const want = new Set(list.map((x) => x.id));
+    for (const el of [...box.children]) if (!want.has(el.dataset.id)) el.remove();
+    list.forEach((src, i) => {
+      let b = box.querySelector('.th[data-id="' + String(src.id).replace(/"/g, "") + '"]');
+      if (!b) b = shThumb(src);
+      if (box.children[i] !== b) box.insertBefore(b, box.children[i] || null);
+      b.__src = src;
+      const cap = src.kind === "screen" ? (src.name || ("Screen " + (src.index + 1))) : (src.title || src.exe || "Window");
+      b.querySelector(".thcap").textContent = cap;
+      b.title = cap + (src.exe && src.kind !== "screen" ? " \u2014 " + src.exe : "");
+      b.classList.toggle("sharing", added.some((a) => a.kind === RTSP && a.url === shareKey(src)));
+      const img = b.querySelector("img");
+      if (img) img.src = "/api/screen/thumb?id=" + encodeURIComponent(src.id) + "&t=" + shTick;
+    });
+  }
+  async function shLoad() {
+    if (shBusy) return;
+    shBusy = true;
+    let d = null;
+    try { if (!IS_WEB2) { const r = await fetch("/api/screen/sources", { cache: "no-store" }); if (r.ok) d = await r.json(); } } catch {}
+    shBusy = false;
+    const native = !!(d && d.ok);
+    $("shPickerTiles").hidden = native;
+    $("shScreens").hidden = !native; $("shWindows").hidden = !native; $("shWinHead").hidden = !native;
+    if (!native) return;
+    shPaintList($("shScreens"), d.screens || []);
+    shPaintList($("shWindows"), d.windows || []);
+    $("shWinCount").textContent = String((d.windows || []).length);
+  }
+  window.__shareOpened = () => { shTick++; shLoad(); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); }, 3000); };
+  window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; };
+  async function shareNative(src) {
+    if (!src) return;
+    const url = shareKey(src);
+    if (added.some((a) => a.kind === RTSP && a.url === url)) { window.__toast?.("Already sharing " + (src.kind === "screen" ? "that screen" : "that window") + ".", 3000); return; }
+    const label = src.kind === "screen" ? (src.name || "Screen") : (src.title || "Window");
+    if (presenterMode() !== "content") return sharePresenter(url, label);   // 0.21.20: composited with my camera
+    const e = await addRtsp(url, { label });
+    if (!e) return;
+    window.__toast?.("Sharing " + label + (e.audio ? " with sound" : "") + ".", 4000);
+    try { document.querySelector("#sharePop .close")?.click(); } catch {}
+  }
+  window.__shareNative = shareNative;   // rig
+  // ---- 0.21.20: presenter mode ------------------------------------------------------------------------------------
+  const PRESENTER_KEY = "kastr.share.presenter";
+  const presenterMode = () => { let m = "content"; try { m = localStorage.getItem(PRESENTER_KEY) || "content"; } catch {} return ["content", "standout", "side", "reporter"].includes(m) ? m : "content"; };
+  function paintPresenter() {
+    const m = presenterMode();
+    for (const b of document.querySelectorAll(".prmodes .prm")) b.classList.toggle("on", b.dataset.pm === m);
+  }
+  for (const b of document.querySelectorAll(".prmodes .prm")) b.addEventListener("click", () => {
+    try { localStorage.setItem(PRESENTER_KEY, b.dataset.pm); } catch {}
+    paintPresenter();
+    const live = added.find((a) => a.kind === SCREEN && a.native);   // a live presenter share follows the switch
+    if (live && b.dataset.pm !== "content") { live.presenter = b.dataset.pm; const sl = slots.get(live.id); if (sl?.pres) sl.pres.mode = b.dataset.pm; }
+  });
+  paintPresenter();
+  $("prBgBtn")?.addEventListener("click", () => {   // the camera's background effects (Camera menu)
+    try { document.querySelector("#sharePop .close")?.click(); } catch {}
+    const cb = document.getElementById("topCamChev") || document.querySelector("#topCamBtn + .tbchev") || document.getElementById("topCamBtn");
+    try { window.__openCamFx ? window.__openCamFx() : cb?.click(); } catch {}
+  });
+  async function sharePresenter(url, label) {
+    let data = null;
+    try {
+      const r = await fetch("/api/rtsp/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, presenter: true }) });
+      data = await r.json();
+      if (!r.ok || data?.error) throw new Error(data?.error || r.status);
+    } catch (e) { window.__toast?.("Could not start the share: " + (e?.message || e), 6000, { level: "error" }); return; }
+    addSource(SCREEN, null, label, { native: { feedId: data.id, url }, presenter: presenterMode(), label });
+    window.__toast?.("Presenting " + label + ".", 4000);
+    try { document.querySelector("#sharePop .close")?.click(); } catch {}
+  }
+  window.__sharePresenter = sharePresenter;   // rig
   $("srcWindowBtn").addEventListener("click", () => shareSurface("window"));
   $("srcRtspBtn").addEventListener("click", () => {
     const row = $("rtspRow");
@@ -17505,6 +17884,7 @@
         const parts = String(f.publish?.broadcast || "").split("/");
         const name = parts.length > 1 ? parts.slice(1).join("/") : "";   // chanPath put the room first
         const extra = { feedId: f.id, url: f.url, audio: f.publish ? f.publish.audio !== false : audioWanted(f.url) };
+        if (isScreenUrl(f.url)) { extra.screen = true; extra.label = f.publish?.label || (/[/]window[/]/i.test(f.url) ? "Window" : "Screen"); }   // 0.21.20: an adopted screen share stays a screen (never a grid member)
         if (name.endsWith(".hang")) extra.name = name;
         if (f.publish) audioSet(f.url, f.publish.audio !== false);   // 0.9.10: the server's actual state, both ways
         { const kept = rtspPersist().find((x) => x.url === f.url);   // 0.15.0: an adopted feed keeps its display name and grid
@@ -18136,6 +18516,8 @@
       } catch { return 0; }
     },
     addRtsp,
+    removeSource,   // 0.21.20 rig: the Stop path
+    screens: () => added.filter((a) => a.screen).map((a) => ({ id: a.id, url: a.url, label: a.label, audio: !!a.audio })),   // 0.21.20 rig
     state: () => ({
       hostname: HOSTNAME,
       avc1Ok,   // 0.17.0 rig: the browser's H.264 encoder probe

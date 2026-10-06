@@ -58,6 +58,7 @@ All served from the same loopback server as the pages.
 | `POST/GET /api/diag` | Pages post their own state (publisher slots, encoder resolved config, recent library errors, watcher state); GET returns the latest per page. In-memory, loopback-only. |
 | `POST /api/window` | The page reports window geometry; stored in `window.json` and replayed as Chrome flags on next launch. |
 | `POST /api/rtsp/add,remove` · `GET /api/rtsp/list` | Manage bridge feeds. |
+| `GET /api/screen/sources` · `GET /api/screen/thumb?id=&w=` · `GET /api/screen/sound` | 0.21.20, this machine only: every screen and window for the Share picker (`kastr_screen` / `kastr_screen_sources`), cached JPEG/PNG thumbnails, and the computer's sound minus this host's tree as s16le 48 kHz stereo for presenter mode (`kastr_loopback`). A `screen://monitor/<n>` or `screen://window/<hwnd>` feed on `/api/rtsp/add` is captured with ffmpeg `gfxcapture` (fit 1920x1080, 30 fps), never persisted, refused from web clients, and framed by `kastr_overlay` (red border + Stop sharing bar, excluded from capture). |
 | `GET/POST /api/ondemand*` | Demand for on-demand cameras (0.18.0); the routes stay and answer empty while the 0.21.10 switch is off. |
 | `GET /rtsp/<id>` | The feed itself: an endless fragmented MP4. Each GET spawns/attaches an ffmpeg reader. |
 | `POST /api/relay/start,stop,use` · `GET /api/relay/status` | Hosted-relay control. |

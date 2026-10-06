@@ -27,6 +27,7 @@
 
   /* The masthead is injected by asi-brand.js; keep it from scrolling away. */
   .asi-header { flex:none; }
+  body.fillwin .asi-header, body.fillwin .asi-footer, body.fillwin #hint { display:none !important; }   /* 0.21.20: Fill the window */
 
   /* Tab affordances layered onto the existing nav buttons. */
   .asi-nav a { position:relative; display:flex; align-items:center; gap:7px; }
@@ -268,6 +269,13 @@
     if (e.origin !== location.origin) return;
     const id = e.data && e.data.kastrShowTab;
     if (typeof id === "string" && TABS.some((t) => t.id === id)) show(id);
+    // 0.21.20: Fill the window -- the page's stream takes the WHOLE window, so the shell's masthead and footer step aside too
+    if (e.data && typeof e.data.kastrFillWin === "boolean") document.body.classList.toggle("fillwin", e.data.kastrFillWin);
+  });
+  document.addEventListener("keydown", (e) => {   // 0.21.20: Esc in the shell (focus outside the page) leaves Fill the window too
+    if (e.key !== "Escape" || !document.body.classList.contains("fillwin")) return;
+    document.body.classList.remove("fillwin");
+    for (const f of document.querySelectorAll("#frames iframe")) { try { f.contentWindow.postMessage({ kastrFillWinExit: true }, location.origin); } catch {} }
   });
 
   // 0.12.0: the mode from /api/instance (the launcher sets it). Runs in

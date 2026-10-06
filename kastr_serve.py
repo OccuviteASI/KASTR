@@ -1253,6 +1253,55 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _local(self):
             return kastr_relay.is_local(self)
 
+        # ---- 0.21.20: native screen / window share picker (this machine only) -----------------
+        def _screen_api(self, path):
+            import kastr_screen
+            def send(code, body, ctype):
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            if not self._local():   # a LAN box or a web client never sees this computer's screens or window titles
+                return send(403, json.dumps({"ok": False, "error": "only on the computer itself"}).encode(), "application/json")
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                if path == "/api/screen/sound":   # presenter mode: the computer's sound (minus this host's tree) as s16le 48 kHz stereo
+                    import kastr_loopback
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.send_header("X-KASTR-Audio", "s16le;rate=48000;channels=2")
+                    self.end_headers()
+                    gone = threading.Event()
+                    def sink(b):
+                        if gone.is_set():
+                            return
+                        try:
+                            self.wfile.write(b)
+                        except Exception:
+                            gone.set()
+                    cap = kastr_loopback.LoopbackCapture(exclude_pid=os.getpid())
+                    try:
+                        cap.start(sink=sink)
+                        while not gone.wait(0.5):
+                            pass
+                    finally:
+                        cap.stop()
+                    self.close_connection = True
+                    return
+                if path == "/api/screen/sources":
+                    return send(200, json.dumps(kastr_screen.sources()).encode(), "application/json")
+                w = int((qs.get("w") or ["320"])[0] or 320)
+                got = kastr_screen.thumb((qs.get("id") or [""])[0], width=w)
+                if not got:
+                    return send(404, b"", "text/plain")
+                return send(200, got[0], got[1])
+            except Exception as e:
+                return send(500, json.dumps({"ok": False, "error": str(e)[:200]}).encode(), "application/json")
+
         # ---- 0.19.0: one web port -------------------------------------------------------
         def _web_base(self):
             """The origin this visitor used: scheme from X-Forwarded-Proto / Cf-Visitor
@@ -4099,6 +4148,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._chat_purge()
             if relay_srv and kastr_relay.handle_api(self, relay_srv, path, self._set_relay):
                 return
+            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound"):   # 0.21.20: the native share picker + presenter sound
+                return self._screen_api(path)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the
                 # static file handler turns the path into a 404.

@@ -785,6 +785,7 @@ def main():
         "--hidden-import", "kastr_archive",   # 0.18.0: imported lazily by kastr_serve.make_server
         "--hidden-import", "kastr_screen", "--hidden-import", "kastr_screen_sources",   # 0.21.20: native screen share (lazy imports)
         "--hidden-import", "kastr_loopback", "--hidden-import", "kastr_overlay",
+        "--hidden-import", "kastr_mdns", "--hidden-import", "kastr_tabs",   # 0.21.22: relay discovery, browser tabs (lazy imports)
         "--noconfirm", "--clean", "--onefile", "--noconsole",
         "--name", NAME,
         "--distpath", DIST,

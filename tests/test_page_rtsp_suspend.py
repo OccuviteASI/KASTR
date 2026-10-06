@@ -76,7 +76,7 @@ class WatchPage(unittest.TestCase):
         self.once('if (p.rtsp === "off") pubModel.rtsp = "off"; else delete pubModel.rtsp;')
         self.once("if (window.__sinceAnnounce?.joinedAt?.()) { try { window.__sinceAnnounce.set(); } catch {} }")
         # the viewer side: the lobby reader keeps it, roomsChanged applies it, People shows it
-        self.once('rtsp: v.rtsp === "off" ? "off" : "" } });')
+        self.once('rtsp: v.rtsp === "off" ? "off" : "", clk:')   # 0.21.22: + clk, rtspPaths
         self.once("      try { rtspOffApply(); } catch {}")
         self.once("function rtspOffApply() {")
         self.once('<div id="rtspOffRows" hidden')

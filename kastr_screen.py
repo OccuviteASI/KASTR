@@ -10,6 +10,8 @@ window and a draggable bar offers Stop sharing (kastr_overlay); neither shows up
 
   screen://monitor/<n>    the n-th screen of /api/screen/sources (primary first, then left to right)
   screen://window/<hwnd>  one top-level window
+  screen://tab/<hwnd>/<i> tab i of a browser window (0.21.22): brought to the front of its window, the window captured
+                          cropped to the web page (kastr_tabs)
 """
 import os
 import re
@@ -22,7 +24,7 @@ MAX_W, MAX_H, FPS = 1920, 1080, 30
 # the computer's sound: s16le PCM on ffmpeg's stdin. kastr_loopback writes it in real time and pads silence, so the
 # sample count IS the clock -- timestamps from 0 like the capture's (wall-clock stamps put the audio ~50 years ahead)
 LOOPBACK_INPUT = ["-thread_queue_size", "1024", "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
-_URL_RE = re.compile(r"^screen://(monitor|window)/(\d{1,20})$", re.I)
+_URL_RE = re.compile(r"^screen://(monitor|window|tab)/(\d{1,20})(?:/(\d{1,4}))?$", re.I)
 
 _src = None
 
@@ -55,15 +57,38 @@ def available():
 
 def parse_url(url):
     m = _URL_RE.match(str(url or "").strip())
-    if not m:
-        raise ValueError("screen urls are screen://monitor/<n> or screen://window/<hwnd>")
+    if not m or (m.group(1).lower() == "tab") != (m.group(3) is not None):
+        raise ValueError("screen urls are screen://monitor/<n>, screen://window/<hwnd> or screen://tab/<hwnd>/<index>")
     return m.group(1).lower(), int(m.group(2))
+
+
+def tab_index(url):
+    m = _URL_RE.match(str(url or "").strip())
+    return int(m.group(3)) if m and m.group(3) is not None else 0
+
+
+def _tab_ready(hwnd, index):
+    """Bring tab `index` to the front of its window (never stealing focus) and un-minimize the window without
+    activating it -- a minimized Chromium window paints nothing."""
+    import ctypes
+    import kastr_tabs
+    u32 = ctypes.windll.user32
+    if not u32.IsWindow(hwnd):
+        raise ValueError("that browser window is gone")
+    r = kastr_tabs.activate_tab(hwnd, index)
+    if not (r or {}).get("ok"):
+        raise ValueError("could not bring that tab to the front")
+    if u32.IsIconic(hwnd):
+        u32.ShowWindow(hwnd, 4)   # SW_SHOWNOACTIVATE
 
 
 def check_url(url):
     if not WINDOWS:
         raise ValueError("native screen sharing needs Windows on this computer -- use Share content in a browser instead")
     kind, n = parse_url(url)
+    if kind == "tab":
+        _tab_ready(n, tab_index(url))
+        return
     if not _resolve(kind, n):
         raise ValueError("that %s is no longer there" % ("screen" if kind == "monitor" else "window"))
 
@@ -88,8 +113,20 @@ def _fit(w, h):
     return max(2, int(w * k) // 2 * 2), max(2, int(h * k) // 2 * 2)
 
 
+def _tab_crop(hwnd):
+    import kastr_tabs
+    crop = kastr_tabs.content_crop(hwnd) or {"left": 0, "top": 0, "right": 0, "bottom": 0}
+    cl = kastr_tabs.client_bounds(hwnd)
+    w = max(2, (cl[2] - cl[0]) - crop["left"] - crop["right"])
+    h = max(2, (cl[3] - cl[1]) - crop["top"] - crop["bottom"])
+    return crop, w, h
+
+
 def capture_size(url):
     kind, n = parse_url(url)
+    if kind == "tab":
+        _, w, h = _tab_crop(n)
+        return _fit(w, h)
     src = _resolve(kind, n) or {}
     r = src.get("rect") or {}
     w = src.get("width") or (r.get("right", 0) - r.get("left", 0)) or (r.get("w") if isinstance(r, dict) else 0)
@@ -97,18 +134,73 @@ def capture_size(url):
     return _fit(w, h)
 
 
+def _clocked(cap, w, h):
+    """A steady 30 fps whatever the capture does: Windows Graphics Capture sends a frame only when the window repaints,
+    and fps= releases frames only as newer ones arrive -- a still page sent nothing at all (lab 2026-10-06). A black
+    clock at 30 fps carries the capture on top and repeats its last frame, so a still screen, window or tab keeps
+    sending frames (and keyframes to late joiners) once its first frame is in."""
+    return ("color=c=black:s=%dx%d:r=%d[kbg];%s,format=yuv420p[kfg];[kbg][kfg]overlay=eof_action=repeat:repeatlast=1:shortest=0,setsar=1"
+            % (w, h, FPS, cap))
+
+
+def kick(url):
+    """Make the shared thing repaint once so the capture gets its first frame (a still page never sends one): a tab
+    -> another tab of its window and straight back; a browser window -> the same on its active tab; another window ->
+    a redraw request; a screen -> the cursor one pixel over and back (the capture draws the cursor)."""
+    import ctypes
+    try:
+        kind, n = parse_url(url)
+        u32 = ctypes.windll.user32
+        if kind in ("tab", "window"):
+            import kastr_tabs
+            win = next((w for w in kastr_tabs.list_windows(budget=0.8) if w["hwnd"] == n), None)
+            tabs = (win or {}).get("tabs") or []
+            idx = tab_index(url) if kind == "tab" else next((t["index"] for t in tabs if t.get("active")), None)
+            other = next((t["index"] for t in tabs if t["index"] != idx), None)
+            if idx is not None and other is not None:
+                kastr_tabs.activate_tab(n, other)
+                time.sleep(0.08)
+                kastr_tabs.activate_tab(n, idx)
+                return
+            u32.RedrawWindow(n, None, None, 0x0001 | 0x0080 | 0x0100 | 0x0400)   # INVALIDATE|ALLCHILDREN|UPDATENOW|FRAME
+            return
+
+        class PT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        p = PT()
+        if u32.GetCursorPos(ctypes.byref(p)):
+            u32.SetCursorPos(p.x + 1, p.y)
+            u32.SetCursorPos(p.x, p.y)
+    except Exception:
+        pass
+
+
+def _kick_soon(url):
+    for delay in (1.0, 3.0):   # the capture opens ~0.5-1 s after ffmpeg starts
+        t = threading.Timer(delay, kick, args=(url,))
+        t.daemon = True
+        t.start()
+
+
 def capture_input(url):
     """ffmpeg input args for a screen:// url: gfxcapture scaled at capture (aspect kept), CPU frames, a steady 30 fps
-    (Windows Graphics Capture only delivers frames when something changes -- fps= repeats the last one so a still screen
-    still sends keyframes to late joiners)."""
+    (see _clocked), plus two repaint kicks so the first frame arrives even on a still page."""
     kind, n = parse_url(url)
+    _kick_soon(url)
+    if kind == "tab":   # crop on the GPU side of the capture, then scale on the CPU (a crop + resize_mode order is not documented)
+        import kastr_tabs
+        crop, cw, ch = _tab_crop(n)
+        w, h = _fit(cw, ch)
+        cap = (kastr_tabs.gfxcapture_args(n, crop) + ":max_framerate=%d:capture_cursor=1,hwdownload,format=bgra,"
+               "scale=%d:%d:flags=bilinear" % (FPS, w, h))
+        return ["-f", "lavfi", "-i", _clocked(cap, w, h)]
     src = _resolve(kind, n) or {}
     w, h = capture_size(url)
     target = ("hmonitor=%d" % int(src.get("hmonitor") or 0)) if kind == "monitor" and src.get("hmonitor") \
         else ("monitor_idx=%d" % n) if kind == "monitor" else ("hwnd=%d" % n)
-    graph = ("gfxcapture=%s:max_framerate=%d:width=%d:height=%d:resize_mode=scale_aspect:capture_cursor=1,"
-             "hwdownload,format=bgra,fps=%d,setsar=1" % (target, FPS, w, h, FPS))
-    return ["-f", "lavfi", "-i", graph]
+    cap = ("gfxcapture=%s:max_framerate=%d:width=%d:height=%d:resize_mode=scale_aspect:capture_cursor=1,"
+           "hwdownload,format=bgra,scale=%d:%d" % (target, FPS, w, h, w, h))
+    return ["-f", "lavfi", "-i", _clocked(cap, w, h)]
 
 
 def feed_loopback(ff, exclude_pid=None, log=None):
@@ -151,7 +243,7 @@ _thumb_lock = threading.Lock()
 THUMB_TTL = 1.2
 
 
-def sources(exclude_pids=()):
+def sources(exclude_pids=(), tabs=False):
     """JSON for /api/screen/sources: screens first (primary, then left to right), then windows in Z-order."""
     if not available():
         return {"ok": False, "reason": "native screen sharing needs Windows"}
@@ -165,7 +257,20 @@ def sources(exclude_pids=()):
     for s in m.list_windows(exclude_pids=tuple(own)):
         windows.append({"id": "window:%d" % s["hwnd"], "kind": "window", "hwnd": s["hwnd"], "title": s.get("title") or "",
                         "exe": s.get("exe") or "", "minimized": bool(s.get("minimized"))})
-    return {"ok": True, "screens": screens, "windows": windows}
+    out = {"ok": True, "screens": screens, "windows": windows}
+    if tabs:   # 0.21.22: only while the panel's Tab list is open (UI Automation, ~0.1 s)
+        out["tabs"] = []
+        try:
+            import kastr_tabs
+            for t in kastr_tabs.list_tabs(exclude_pids=tuple(own), budget=1.2):
+                if t.get("cloaked"):
+                    continue
+                out["tabs"].append({"id": "tab:%d:%d" % (t["hwnd"], t["index"]), "kind": "tab", "hwnd": t["hwnd"], "index": t["index"],
+                                    "title": t.get("title") or "", "browser": t.get("browser") or "", "active": bool(t.get("active")),
+                                    "minimized": bool(t.get("minimized"))})
+        except Exception as e:
+            out["tabsError"] = str(e)[:120]
+    return out
 
 
 def thumb(source_id, width=320):
@@ -223,8 +328,8 @@ def overlay_start(feed_id, url, on_stop):
         if old:
             old.stop()
         ov = kastr_overlay.ShareOverlay(on_stop=on_stop)
-        if kind == "window":
-            ov.start(hwnd=n, label="window")
+        if kind in ("window", "tab"):
+            ov.start(hwnd=n, label=kind)
         else:
             ov.start(hmonitor=int(src.get("hmonitor") or 0) or None, label="screen")
         with _ov_lock:

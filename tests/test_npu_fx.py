@@ -77,6 +77,13 @@ class Page(unittest.TestCase):
         idx = _read("index.html")
         for t in ('id="dlWin" data-plat="win32"', 'id="dlLinux" data-plat="linux"', '"/api/update/zip?platform="'):
             self.assertIn(t, idx)
+        # 0.21.22: the tiles live in their own Download section, after Go Live
+        self.assertLess(idx.index('<h2 class="sec">Go Live</h2>'), idx.index('<div id="dlSec" hidden>'))
+        self.assertLess(idx.index('<div id="dlSec" hidden>'), idx.index('id="dlWin"'))
+        # 0.21.22: a phone (touch-only pointer + the Go Live page's phone size rule) skips the launch page
+        self.assertIn('matchMedia("(hover: none) and (pointer: coarse)").matches', idx)
+        self.assertIn('location.replace("/moq-watch-lite.html" + location.search + location.hash)', idx)
+        self.assertLess(idx.index('location.replace("/moq-watch-lite.html"'), idx.index('<script type="module" src="/assets/asi-brand.js">'))
         self.assertIn('a.textContent = dlPlat(plat) + " ', self.p)   # About: the platform and its size only
         self.assertNotIn('" (prepared on the host when you click)"', self.p)
 

@@ -1253,6 +1253,51 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _local(self):
             return kastr_relay.is_local(self)
 
+        # ---- 0.21.22: relays on the LAN (this machine only) -------------------------------------
+        def _lan_api(self, path, method):
+            def send(code, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            if not self._local():
+                return send(403, {"error": "only on the computer itself"})
+            sd = getattr(relay_srv, "state_dir", None) if relay_srv is not None else None
+            if path == "/api/lan/advertise":
+                if method == "POST":
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                        body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                    except Exception:
+                        return send(400, {"error": "bad json"})
+                    mdns_advertise(sd, bool(body.get("advertise")))
+                return send(200, {"advertise": mdns_advertise(sd), "listening": MDNS_ADV[0] is not None})
+            if method != "GET":
+                return send(405, {"error": "GET"})
+            qs = parse_qs(urlparse(self.path).query)
+            if path == "/api/lan/probe":
+                return send(200, probe_relay((qs.get("url") or [""])[0]))
+            if path == "/api/lan/discover":
+                try:
+                    import kastr_mdns
+                    found = kastr_mdns.browse(1.6)
+                except Exception as e:
+                    return send(200, {"relays": [], "error": str(e)[:120]})
+                out = []
+                for r in found:
+                    t = r.get("txt") or {}
+                    rp = t.get("rp") or ""
+                    if not rp.isdigit():
+                        continue
+                    out.append({"name": t.get("nm") or r.get("name") or "", "urls": ["http://%s:%s" % (ip, rp) for ip in r.get("ips") or []],
+                                "secured": t.get("sec") == "1", "fp": (t.get("fp") or "").lower(), "version": t.get("v") or "",
+                                "web": ["http://%s:%s" % (ip, t.get("wp")) for ip in (r.get("ips") or []) if (t.get("wp") or "").isdigit()]})
+                return send(200, {"relays": out})
+            return send(404, {"error": "no such route"})
+
         # ---- 0.21.20: native screen / window share picker (this machine only) -----------------
         def _screen_api(self, path):
             import kastr_screen
@@ -1293,7 +1338,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     self.close_connection = True
                     return
                 if path == "/api/screen/sources":
-                    return send(200, json.dumps(kastr_screen.sources()).encode(), "application/json")
+                    return send(200, json.dumps(kastr_screen.sources(tabs=(qs.get("tabs") or [""])[0] == "1")).encode(), "application/json")
                 w = int((qs.get("w") or ["320"])[0] or 320)
                 got = kastr_screen.thumb((qs.get("id") or [""])[0], width=w)
                 if not got:
@@ -3125,6 +3170,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._media_delete(path0[len("/api/media/"):])
             if path0 == "/api/prefs":               # 0.14.0
                 return self._prefs_post()
+            if path0.startswith("/api/lan/"):       # 0.21.22
+                return self._lan_api(path0, "POST")
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4148,6 +4195,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._chat_purge()
             if relay_srv and kastr_relay.handle_api(self, relay_srv, path, self._set_relay):
                 return
+            if path.startswith("/api/lan/"):   # 0.21.22: relay discovery + probe (this machine only)
+                return self._lan_api(path, "GET")
             if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound"):   # 0.21.20: the native share picker + presenter sound
                 return self._screen_api(path)
             if bridge:
@@ -4184,6 +4233,66 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
     return partial(Handler, directory=root)
 
 
+# ---- 0.21.22: relay discovery on the LAN (kastr_mdns) ---------------------------------------------------------------
+MDNS_ADV = [None]
+_MDNS_FP = {"at": 0.0, "fp": ""}
+
+
+def mdns_advertise(state_dir, value=None):
+    """Read (value None) or write the 'advertise this relay on mDNS' switch -- mdns.json, ON unless switched off."""
+    p = os.path.join(state_dir or "", "mdns.json")
+    if value is not None:
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"advertise": bool(value)}, f)
+        except OSError:
+            pass
+        return bool(value)
+    try:
+        with open(p, encoding="utf-8") as f:
+            return bool(json.load(f).get("advertise", True))
+    except Exception:
+        return True
+
+
+def _mdns_info(relay_srv, web_port):
+    """What the advertiser says about this relay right now -- None while it is not reachable from other machines."""
+    try:
+        if not (relay_srv.running() and relay_srv.bind_all and mdns_advertise(relay_srv.state_dir)):
+            return None
+        now = time.time()
+        if now - _MDNS_FP["at"] > 30:   # the fingerprint is an HTTP fetch -- not on every query
+            _MDNS_FP["fp"], _MDNS_FP["at"] = relay_srv.fingerprint() or "", now
+        shown = relay_srv.relay_name() or socket.gethostname()
+        inst = re.sub(r"[^A-Za-z0-9 ._-]+", "-", shown)[:40].strip() or "relay"
+        return {"name": inst + " (KASTR)", "host": host_slug(), "port": web_port,
+                "txt": {"v": read_version(), "nm": shown[:40], "rp": str(relay_srv.port), "wp": str(web_port),
+                        "sec": "1" if relay_srv.secured else "0", "fp": _MDNS_FP["fp"]}}
+    except Exception:
+        return None
+
+
+def probe_relay(url, timeout=1.5):
+    """Is a relay address online? A native relay answers /certificate.sha256 over HTTP on its own port (the fingerprint
+    comes back too); a web relay (an address ending /relay) is its host's web server."""
+    import ssl
+    try:
+        u = urlparse(str(url or "").strip())
+        if not u.hostname or u.scheme not in ("http", "https"):
+            return {"online": False, "error": "not a relay address"}
+        web = (u.path or "").rstrip("/").endswith("/relay")
+        hn = "127.0.0.1" if u.hostname in ("localhost", "::1") else u.hostname   # localhost tried ::1 first and waited out the timeout
+        target = ("%s://%s/api/client" % (u.scheme, u.netloc)) if web else ("http://%s:%d/certificate.sha256" % (hn, u.port or 443))
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE   # liveness only
+        t0 = time.time()
+        with urllib.request.urlopen(target, timeout=timeout, context=ctx if target.startswith("https") else None) as r:
+            body = r.read(512).decode("ascii", "replace").strip()
+        fp = "" if web else (body if re.match(r"^[0-9a-fA-F:]{40,}$", body) else "")
+        return {"online": True, "fp": fp.lower(), "ms": int((time.time() - t0) * 1000), "web": web}
+    except Exception as e:
+        return {"online": False, "error": str(e)[:120]}
+
+
 def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
                 relay=DEFAULT_RELAY, quiet=False, hostname=None, bridge=None,
                 relay_srv=None, alive_ref=None, window_file=None, relay_ref=None):
@@ -4215,6 +4324,14 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
                      relay_ref, alive_ref, window_file))
     srv.rtsp = bridge
     RTSP_BRIDGE[0] = bridge   # 0.21.16
+    if relay_srv is not None and MDNS_ADV[0] is None:   # 0.21.22: discovery-only mDNS advertisement of this relay
+        try:
+            import kastr_mdns
+            web_port = srv.server_address[1]
+            MDNS_ADV[0] = kastr_mdns.Advertiser(lambda: _mdns_info(relay_srv, web_port), log=_note)
+            MDNS_ADV[0].start()
+        except Exception as e:
+            _note("mdns: not started: %s" % e)
     srv.relay = relay_srv
     if relay_srv is not None and bridge is not None and getattr(relay_srv, "archiver", None) is None:
         try:   # 0.18.0: host recording (kastr_archive) -- resumes whenever the relay starts

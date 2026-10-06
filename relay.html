@@ -289,6 +289,11 @@
         <div class="btnrow"><button id="spokesUpdate" type="button">Update spokes now</button></div>
         <span id="spokesMsg" class="hint" style="display:block;margin-top:5px">Each spoke keeps a request held at this hub; the command reaches it within a second and it relaunches only when its version differs.</span>
       </div>
+      <!-- 0.21.22: discovery only -- KASTR apps on this network can find this relay (no code or secret is advertised) -->
+      <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
+        <label class="f asi-sw"><span class="switch"><input type="checkbox" id="mdnsAdv"><i></i></span><span>Let KASTR apps on this network find this relay (mDNS &mdash; its name, address and certificate only; access codes are still required)</span></label>
+        <span id="mdnsMsg" class="hint" style="display:block;margin-top:5px"></span>
+      </div>
       <!-- 0.16.0: same-site relays find each other over mDNS (moq-relay [cluster.lan]) -->
       <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
         <label class="f asi-sw"><span class="switch"><input type="checkbox" id="lanOn"><i></i></span><span>Join same-site relays automatically (LAN, mDNS)</span></label>
@@ -376,7 +381,7 @@
 </main>
 <footer class="asi-footer">
   <span>Autonomous Solutions, Inc. — internal tool</span>
-  <span>Media over QUIC · <span class="asi-mono">moq-lite-05</span></span>
+  <span>Media over QUIC · <span class="asi-mono">moq-lite-06</span></span>
 </footer>
 
 <script type="module">
@@ -1103,6 +1108,21 @@
     try { const r = await api("/api/relay/lan", { enabled: false, secret: "" }); $("lanMsg").textContent = r.error || "LAN mesh off."; await refresh(); }
     catch (e) { $("lanMsg").textContent = "Failed: " + (e?.message || e); }
   });
+
+  // 0.21.22: the discovery-only mDNS advertisement (on unless switched off; only while the relay accepts other machines)
+  async function paintMdns() {
+    try {
+      const r = await fetch("/api/lan/advertise", { cache: "no-store" }).then((x) => x.json());
+      $("mdnsAdv").checked = !!r.advertise; $("mdnsAdv").disabled = !LOCAL;
+    } catch { $("mdnsAdv").disabled = true; }
+  }
+  $("mdnsAdv").addEventListener("change", async () => {
+    try {
+      const r = await fetch("/api/lan/advertise", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ advertise: $("mdnsAdv").checked }) }).then((x) => x.json());
+      $("mdnsMsg").textContent = r.advertise ? "Advertised whenever the relay accepts other machines." : "Not advertised \u2014 other KASTR apps will not find this relay on their own.";
+    } catch (e) { $("mdnsMsg").textContent = "Failed: " + (e?.message || e); }
+  });
+  paintMdns();
 
   window.__relay = { state: () => last, refresh, api };
 

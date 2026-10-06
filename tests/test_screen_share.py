@@ -49,6 +49,25 @@ class Urls(unittest.TestCase):
             chk.assert_called_once()
 
 
+class Tabs(unittest.TestCase):
+    def test_tab_urls(self):
+        self.assertEqual(kastr_screen.parse_url("screen://tab/4242/3"), ("tab", 4242))
+        self.assertEqual(kastr_screen.tab_index("screen://tab/4242/3"), 3)
+        for bad in ("screen://tab/4242", "screen://window/1/2", "screen://tab/x/1"):
+            with self.assertRaises(ValueError):
+                kastr_screen.parse_url(bad)
+
+    def test_tabs_listed_only_on_request(self):
+        src = _read("kastr_serve.py")
+        self.assertIn('kastr_screen.sources(tabs=(qs.get("tabs") or [""])[0] == "1")', src)
+        page = _read("moq-watch-lite.html")
+        self.assertIn('"/api/screen/sources" + (shTabOpen ? "?tabs=1" : "")', page)
+        self.assertIn("let shTabOpen = false;", page)
+
+    def test_overlay_names_a_tab(self):
+        self.assertIn('"tab": "You\'re sharing a tab"', _read("kastr_overlay.py"))
+
+
 class Security(unittest.TestCase):
     def test_web_clients_never_start_a_screen_share(self):
         b = kastr_rtsp.Bridge(state_dir=None, log=lambda *a: None)
@@ -93,14 +112,15 @@ class Ffmpeg(unittest.TestCase):
         self.assertIn("3M", cam)
 
     def test_capture_input(self):
-        with mock.patch.object(kastr_screen, "_resolve", return_value={"hmonitor": 77, "width": 2880, "height": 1800}):
+        with mock.patch.object(kastr_screen, "_resolve", return_value={"hmonitor": 77, "width": 2880, "height": 1800}),                 mock.patch.object(kastr_screen, "_kick_soon"):
             args = kastr_screen.capture_input("screen://monitor/2")
         self.assertEqual(args[:3], ["-f", "lavfi", "-i"])
         g = args[3]
         self.assertIn("gfxcapture=hmonitor=77", g)
         self.assertIn("width=1728:height=1080", g)   # 2880x1800 fitted into 1920x1080, aspect kept
-        self.assertIn("fps=30", g)                   # a still screen keeps sending frames (and keyframes)
-        with mock.patch.object(kastr_screen, "_resolve", return_value={"rect": {"x": 0, "y": 0, "w": 800, "h": 601}}):
+        self.assertIn("color=c=black:s=1728x1080:r=30", g)   # 0.21.22: a 30 fps clock carries the capture --
+        self.assertIn("overlay=eof_action=repeat:repeatlast=1", g)   # a still page / window / screen keeps sending frames
+        with mock.patch.object(kastr_screen, "_resolve", return_value={"rect": {"x": 0, "y": 0, "w": 800, "h": 601}}),                 mock.patch.object(kastr_screen, "_kick_soon"):
             g2 = kastr_screen.capture_input("screen://window/99")[3]
         self.assertIn("hwnd=99", g2)
         self.assertIn("width=800:height=600", g2)    # even sizes, never upscaled

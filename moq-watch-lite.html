@@ -509,6 +509,18 @@
   .pubui .prmodes .prbg { margin-left:auto; height:36px; padding:0 14px; border-radius:6px; background:transparent; border:1px solid var(--line);
     color:var(--text); font-weight:600; cursor:pointer; }
   .pubui .prmodes .prbg:hover { border-color:var(--asi-blue-dim); }
+  .pubui #shWinHead, .pubui #shTabHead { cursor:pointer; user-select:none; }   /* 0.21.22: a click opens the window / tab list */
+  .pubui #shWinHead .caret, .pubui #shTabHead .caret { display:inline-block; transition:transform .15s; margin-right:2px; }
+  .pubui #shWinHead.open .caret, .pubui #shTabHead.open .caret { transform:rotate(90deg); }
+  .pubui .tablist { display:flex; flex-direction:column; gap:2px; margin:0 0 14px; }
+  .pubui .tablist[hidden] { display:none; }
+  .pubui .tablist .tabrow { display:flex; align-items:center; gap:8px; width:100%; height:auto; text-align:left; padding:6px 8px; border-radius:6px;
+    background:transparent; border:1px solid transparent; color:var(--text); cursor:pointer; font-size:12px; min-width:0; }
+  .pubui .tablist .tabrow:hover { background:var(--surface-2); border-color:var(--line); }
+  .pubui .tablist .tabrow.sharing { border-color:var(--asi-red); }
+  .pubui .tablist .tabrow .tb { flex:none; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-mute); min-width:52px; }
+  .pubui .tablist .tabrow .tt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pubui .tablist .tabrow .ta { flex:none; font-size:10px; color:var(--asi-blue); }
   .pubui .thgrid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin:0 0 14px; }
   .pubui .thgrid[hidden] { display:none; }
   .pubui .thgrid .th { display:flex; flex-direction:column; gap:5px; padding:4px; background:transparent; border:1px solid transparent;
@@ -650,6 +662,7 @@
   .mchip .icon, .vchip .icon { width:13px; height:13px; }
   #stage .pane.no-audio .mchip, #stage .pane.lmuted .mchip,
   #stage .pubpane.micmuted .mchip { display:flex; }
+  #stage .pane.rtsptile .mchip { display:none !important; }   /* 0.21.22: it covered the cell labels on RTSP grids and feeds */
   #stage .pane.audio-only .vchip, #stage .pubpane.vpaused .vchip { display:flex; }
   /* both chips visible: the mic chip slides to the second slot */
   #stage .pane.audio-only.no-audio .mchip, #stage .pane.audio-only.lmuted .mchip,
@@ -1051,6 +1064,7 @@
   .sbcard .sbm { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-dim); min-width:0; }
   .sbcard .sbm .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sbcard .sbm .role { font:10px var(--font-mono); color:var(--text-mute); flex:none; }
+  .sbcard .sbm .role .icon { width:13px; height:13px; display:block; }   /* 0.21.22: eye / broadcast mark */
   /* speaking icon: hidden until someone talks (the Discord green speaker) */
   .spk { display:inline-flex; width:13px; height:13px; color:var(--asi-green); visibility:hidden; flex:none; }
   .spk .icon { width:13px; height:13px; }
@@ -1286,6 +1300,7 @@
   /* 0.21.5: the two phone blocks sit LAST on purpose -- they used to come before the base layout (lines ~800-1250), whose equal-specificity rules for the same selectors won the cascade and undid the phone layout on every phone */
   /* ==== 0.8.9 phone layout (standalone on iPhone/Android) ==================== */
   @media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: a landscape phone is a phone too */
+    footer.asi-footer { display:none !important; }   /* 0.21.22 (Kenton): no screen to spare on a phone */
     body.asi { height:100dvh; }
     main.asi-page { padding:6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }   /* 0.21.5: side insets (the notch in landscape) */
     button, .tb, .tchev, .opt, .rd { touch-action:manipulation; }
@@ -1493,8 +1508,10 @@
         <button id="srcWindowBtn" type="button" title="Share one window">
           <span class="ico">&#10064;</span>Window</button>
       </div>
-      <h2 id="shWinHead" hidden>Window (<span id="shWinCount">0</span>)</h2>
+      <h2 id="shWinHead" hidden role="button" tabindex="0" title="Show or hide the windows"><span class="caret">&#9656;</span> Window (<span id="shWinCount">0</span>)</h2>
       <div class="thgrid" id="shWindows" hidden></div>
+      <h2 id="shTabHead" hidden role="button" tabindex="0" title="Show or hide the browser tabs"><span class="caret">&#9656;</span> Tab (<span id="shTabCount">0</span>)</h2>
+      <div class="tablist" id="shTabs" hidden></div>   <!-- 0.21.22: tabs of the running browsers (Chrome, Edge, Brave, Firefox...) -->
       <div class="shlist">
         <button id="srcRtspBtn" type="button" class="shrow"><b>RTSP/HTTP feed</b>
           <span>Camera or stream URL, published from this machine</span></button>
@@ -1773,7 +1790,6 @@
     <button class="opt" id="viewRtspOff" type="button" hidden title="Stop publishing this box's own RTSP cameras and their grids to spare CPU/GPU. Nothing is forgotten: rows, grids and settings stay; the same item turns them back on."><span class="oi">&#128247;</span>Cameras off (spare CPU)<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFull" type="button"><span class="oi">&#9974;</span>Full screen</button>
     <div class="sep"></div>
-    <button class="opt" id="viewLatency" type="button" title="Draw a small time code into my canvas shares (file, RTSP grid, effected camera) so viewers can read glass-to-glass latency"><span class="oi">&#9201;</span>Latency stamp on my shares<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewVerbose" type="button" title="Also show the quiet confirmations (setting echoes, saved notes); off = events and problems only"><span class="oi">&#128276;</span>Verbose alerts<span class="chk">&#10003;</span></button>
     <div id="viewFeeds" hidden>
       <div class="sep"></div>
@@ -2066,7 +2082,7 @@
 </main>
 <footer class="asi-footer">
   <span>Autonomous Solutions, Inc. — internal tool</span>
-  <span>Media over QUIC · <span class="asi-mono">moq-lite-05</span></span>
+  <span>Media over QUIC · <span class="asi-mono">moq-lite-06</span></span>
 </footer>
 
 <script src="/assets/prefs.js"></script>
@@ -2244,6 +2260,7 @@
   // by --lvl (0..1) on any ancestor -- no <defs>, no clipPath ids, so the
   // string can be stamped into innerHTML any number of times.
   const ICONS = {
+    bcast: '<circle cx="10" cy="10" r="1.9"/><path d="M6.8 6.6a4.8 4.8 0 0 0 0 6.8M13.2 6.6a4.8 4.8 0 0 1 0 6.8M4.3 4.1a8.4 8.4 0 0 0 0 11.8M15.7 4.1a8.4 8.4 0 0 1 0 11.8"/>',   // 0.21.22: publishing
     eye: '<path d="M1.5 10S4.6 4.5 10 4.5 18.5 10 18.5 10 15.4 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.6"/>',   // 0.21.19: view only
     // 0.21.19: the tile's own view buttons -- full screen (corners out / in) and fill window (a window with arrows out / in)
     fullscreen: '<path d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>',
@@ -2346,6 +2363,29 @@
   // an owner re-published its grid on the same path). Re-subscribe locally;
   // the owner is not told, its side is fine.
   const FRAMES_FLAT_MS = 6000;
+  // 0.21.22 (Kenton's screenshot: John, Mikey, Support Laptop black with no initials or chips): a tile whose CATALOG
+  // never arrived -- a catalog subscription that timed out ("browser stream limit reached?") is not retried by the
+  // library -- stayed black forever in the gallery (the never-painted check only watches the stage). After 6 s it shows
+  // the person's face ("connecting..."), at 12 s it re-subscribes, again at 30 s and 90 s; a catalog clears it all.
+  setInterval(() => {
+    const now = performance.now();
+    let dirty = false;
+    for (const [name, t] of tiles) {
+      const watching = isWatched(name) && !t.fb && t.pane.classList.contains("shown") && t.pane.style.display !== "none";   // NOT `visible` -- the face view itself parks the video
+      if (!watching || t.hasVideo !== undefined) {
+        if (t.noCatalog) { t.noCatalog = false; dirty = true; }
+        t.catWaitSince = 0; t.catResubs = 0;
+        continue;
+      }
+      if (!t.catWaitSince) { t.catWaitSince = now; continue; }
+      const waited = now - t.catWaitSince;
+      if (waited > 6000 && !t.noCatalog) { t.noCatalog = true; dirty = true; }
+      const due = [12000, 30000, 90000][t.catResubs || 0];
+      if (due && waited > due) { t.catResubs = (t.catResubs || 0) + 1; resubscribe(name, "No catalog from the relay"); }
+    }
+    if (dirty) queueRelayout();
+  }, 1000);
+  window.__noCatalog = () => [...tiles].filter(([, t]) => t.noCatalog).map(([n, t]) => [n, t.catResubs || 0]);   // rig
   function resubscribe(name, why) {
     const t = tiles.get(name);
     if (!t) return;
@@ -4752,6 +4792,11 @@
   }
   setInterval(() => { if (!gridMode) { fitMainstage(lastRail.rows); viewApplyAll(); } }, 1000);   // 0.9.2: views follow late size changes
 
+  function rtspPathsNow() {   // 0.21.22: every RTSP feed / grid the room's publishers list in their state
+    const out = new Set();
+    for (const p of roomsPres.values()) for (const x of p?.who?.rtspPaths || []) out.add(x);
+    return out;
+  }
   function applyState() {
     stageWrap.classList.toggle("fsfill", stageFullscreen());   // 0.21.18: the full-screen look (CSS #stagewrap.fsfill) follows the same test as the layout
     try { WEB_RELAY_PAGE = isWebRelay(urlInput.value); } catch { WEB_RELAY_PAGE = false; }   // 0.21.7: budgets by transport
@@ -4896,8 +4941,8 @@
       el.style.display = "";
       el.style.order = "";
       el.style.gridColumn = "2 / span " + rcols;   // 0.8.9: full rail width
-      // 0.21.19: on a single page my preview follows the others; with pages it stays pinned to the bottom
-      el.style.gridRow = String(pages > 1 ? railRows - ownRows + 1 + i : Math.min(railRows - ownRows, Math.ceil(railList / rcols)) + 1 + i);
+      // 0.21.22 (Kenton): my preview is pinned to the bottom of the rail, never pulled up to the others (0.21.19 had moved it)
+      el.style.gridRow = String(railRows - ownRows + 1 + i);
     };
     const railPlace = (el) => {
       const r = railIdx++;
@@ -5049,12 +5094,12 @@
       // black bar -- so an audio-only tile swaps the canvas for the face.
       // undefined = catalog not seen yet: treat as "has video" and claim
       // nothing, the same startup rule as the hasAudio badge below.
-      const audioOnly = t.hasVideo === false || !!t.noDecode;   // 0.9.2: undecodable video shows the face + a notice
+      const audioOnly = t.hasVideo === false || !!t.noDecode || !!t.noCatalog;   // 0.21.22: no catalog yet -> the person's face, never a black void   // 0.9.2: undecodable video shows the face + a notice
       t.pane.classList.toggle("audio-only", shown && audioOnly);
       if (t.faceCap) {
         // 0.8.2: no "audio only" caption -- the face is identity (initials
         // + swoosh) and the chip row tells the audio/video story.
-        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it" : "";   // 0.9.2
+        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it" : t.noCatalog ? "connecting\u2026" : "";   // 0.21.22   // 0.9.2
       }
       if (t.faceInit) {
         t.faceInit.textContent = initialsOf(name);
@@ -5065,6 +5110,7 @@
         paintAvatar(t.av, avatarUrls.get(personKeyOf(name)));   // 0.8.7: photo fills the circle
         t.av.style.setProperty("--ring", personColor(personKeyOf(name)));
       }
+      t.pane.classList.toggle("rtsptile", gridMeta.has(name) || isGridChild(name) || rtspPathsNow().has(name));   // 0.21.22 (Kenton): no muted-mic badge on any RTSP stream
       t.pane.classList.toggle("camera", !isContentPath(name));   // 0.8.8: camera faces show no equalizer
       { // 0.15.0: the grid's display name arrives with its geometry, usually after the tile -- repaint the labels when it changes
         const gl = gridLabel(name);
@@ -5762,7 +5808,9 @@
           if (!isContentPath(name)) items.push({ value: "amute", label: "Mute their microphone (admin)" });
           items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
         }
+        items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
         openMineMenu(pchev, items, "", (v) => {
+          if (v === "lat") { latencyToggle(name); return; }
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
           else if (v === "akick") {
@@ -6216,7 +6264,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "" } });   // 0.21.16: + rtsp
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [] } });   // 0.21.16: + rtsp
           roomsChanged();
         }));
       });
@@ -8223,7 +8271,7 @@
         if (t.hasVideo !== undefined) { t.hasVideo = undefined; hasAudioDirty = true; }
         continue;
       }
-      const cat = t.watch.broadcast?.out?.catalog?.peek?.();
+      const cat = window.__nocatSim === name ? undefined : t.watch.broadcast?.out?.catalog?.peek?.();   // __nocatSim: rig switch (a catalog that never came)
       const has = cat ? Object.keys(cat.audio?.renditions ?? {}).length > 0 : undefined;
       if (has !== t.hasAudio) { t.hasAudio = has; hasAudioDirty = true; }
       // Video presence from the same catalog read -- video.renditions
@@ -8600,14 +8648,50 @@
     for (let i = 0; i < 40; i++) v = v * 2 + bit(4 + i);
     return v;
   }
+  // 0.21.22 (Kenton): latency is a VIEWER's choice per stream and only that viewer sees it -- nothing is drawn into anyone's
+  // picture. The catalog's clock maps a frame's media timestamp to the publisher's wall clock (MoQ epoch 2020-01-01, the
+  // timescale's units); the publisher's offset to the relay host rides its state record (clk), mine is __clockOffset. A
+  // pre-0.21.22 publisher's bottom-right strip is still read while the fleet updates.
+  const LAT_KEY = "kastr.latency.show";
+  const latencyShown = new Set((() => { try { const a = JSON.parse(localStorage.getItem(LAT_KEY) || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } })());
+  function latencyToggle(name) {
+    if (latencyShown.has(name)) latencyShown.delete(name); else latencyShown.add(name);
+    try { localStorage.setItem(LAT_KEY, JSON.stringify([...latencyShown].slice(-64))); } catch {}
+    const t = tiles.get(name);
+    if (t && !latencyShown.has(name)) { t.latency = null; t.pane.querySelector(".latb")?.remove(); }
+  }
+  window.__latencyToggle = latencyToggle;   // rig
+  function memberClk(name) {   // the publisher's clock offset to the relay host (ms), 0 when it does not say
+    const pp = String(name).split("/").filter(Boolean);
+    if (pp.length < 3) return 0;
+    for (const m of members.values()) if (m.host === pp[1] && String(m.op || "").toLowerCase() === pp[2].toLowerCase() && typeof m.clk === "number") return m.clk;
+    return 0;
+  }
+  function frameLatency(t, name) {
+    let cat = null, f = null;
+    try { cat = t.watch.broadcast?.out?.catalog?.peek?.(); } catch {}
+    const clk = cat?.clock;
+    if (!clk || typeof clk.wall !== "number") return null;
+    try { const x = t.watch.video?.out?.frame?.peek?.(); f = x?.frame ?? x; } catch {}
+    const ts = f?.timestamp;
+    if (typeof ts !== "number") return null;
+    const sc = clk.timescale || 1e6;
+    const captured = 1577836800000 + (clk.wall + ts * sc / 1e6) * 1000 / sc + memberClk(name);
+    return Date.now() + (window.__clockOffset || 0) - captured;
+  }
+  window.__frameLatency = (name) => { const t = tiles.get(name); return t ? frameLatency(t, name) : null; };   // rig
   setInterval(() => {
     const now = (Date.now() + (window.__clockOffset || 0)) % 2 ** 40;
-    for (const [, t] of tiles) {
-      if ((t.watch.getAttribute("visible") || "never") === "never") { t.latency = null; continue; }
-      const v = stampRead(t);
+    for (const [name, t] of tiles) {
       let badge = t.pane.querySelector(".latb");
-      if (v == null) { t.latency = null; if (badge) badge.remove(); continue; }
-      let d = now - v; if (d < -(2 ** 39)) d += 2 ** 40;
+      if (!latencyShown.has(name) || (t.watch.getAttribute("visible") || "never") === "never") { t.latency = null; if (badge) badge.remove(); continue; }
+      let d = frameLatency(t, name);
+      if (d == null) { const v = stampRead(t); if (v != null) { d = now - v; if (d < -(2 ** 39)) d += 2 ** 40; } }
+      if (d == null) {
+        if (!badge) { badge = document.createElement("span"); badge.className = "latb"; t.pane.appendChild(badge); }
+        badge.textContent = "latency: this stream carries no clock"; t.latency = null;
+        continue;
+      }
       if (d < -2000 || d > 60000) continue;               // a bad read, not a latency
       t.latency = t.latency == null ? d : t.latency * 0.7 + d * 0.3;
       if (!badge) { badge = document.createElement("span"); badge.className = "latb"; t.pane.appendChild(badge); }
@@ -8697,7 +8781,7 @@
     }
   }, 1000);
   window.__stampRead = (canvas) => stampRead({ canvas });   // 0.21.0 rig: decode any canvas
-  window.__latencyStamp = (() => { try { return localStorage.getItem("kastr.latencyStamp") === "1"; } catch { return false; } })();
+  window.__latencyStamp = false;   // 0.21.22: retired -- latency is a viewer's private, per-stream choice (no time code in anyone's picture)
   // 0.21.5: does the publisher library take camera frames through its <video> polyfill? It does wherever
   // MediaStreamTrackProcessor is missing on the main thread AND in a worker (WebKit: Safari and every iOS
   // browser). Those frames keep the sensor's orientation and lose the rotation tag, so an iPhone camera
@@ -8932,6 +9016,7 @@
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
   function stateCommit() {
     pubModel.peer = statePeer(); roomModel.peer = pubModel.peer;
+    pubModel.clk = Math.round((window.__clockOffset || 0) / 10) * 10;   // 0.21.22: viewers' latency readout corrects for my clock
     const pj = JSON.stringify(pubModel); if (pj !== pubJson) { pubJson = pj; pubState.set("state.json", pubModel); }
     const rj = JSON.stringify(roomModel); if (rj !== roomJson) { roomJson = rj; roomState.set("room.json", roomModel); }
   }
@@ -8958,6 +9043,7 @@
         case "speaking": pubModel.speaking = !!value; break;
         case "typing": pubModel.typing = !!value; break;
         case "publishing": pubModel.publishing = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;
+        case "rtspPaths": pubModel.rtspPaths = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;   // 0.21.22
         case "avatar": pubModel.avatar = String(value || ""); break;
         case "spotlight": roomModel.spotlight = value ? { target: String(value), ts: now } : null; break;
         case "spotlit": roomModel.spotlit = value && value.target ? { target: String(value.target), by: String(value.by || ""), ts: Number(value.ts) || now } : null; break;   // 0.21.0
@@ -9119,7 +9205,7 @@
       live.add(key);
       const w = p.who;
       const rec = { peer: w.peer, op: w.op, name: w.name, relay: w.relay, relayName: w.relayName, ts: p.ts, host: w.host,
-                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || "") };
+                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || ""), clk: w.clk ?? null };   // 0.21.22: + clk
       const cur = members.get(key);
       if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) { members.set(key, rec); changed = true; }
       if (p.ts) sinceTs.set(key, p.ts);
@@ -9779,8 +9865,8 @@
       }
       li.querySelector(".nm").textContent = m.name || m.op;
       li.querySelector(".nm").title = (m.name || m.op) + (m.via ? " via " + m.via : "");
-      li.querySelector(".role").textContent = m.publisher ? "\u25B2" : "\u25CB";
-      li.querySelector(".role").title = m.publisher ? "publishing" : "watching";
+      li.querySelector(".role").innerHTML = icon(m.publisher ? "bcast" : "eye");   // 0.21.22 (Kenton): was a triangle / circle
+      li.querySelector(".role").title = m.publisher ? "Publishing (camera, microphone or shares)" : "View only";
       li.querySelector(".spk").classList.toggle("on", !!m.talking);
     }
     for (const li of [...ul.children]) if (!seen.has(li.dataset.op)) li.remove();
@@ -11027,6 +11113,84 @@
       if (v) sel.value = v;
     }
   }
+  // ---- 0.21.22 (Kenton): relay failover + LAN discovery (the desktop app; a web client cannot browse mDNS) -------------
+  // At launch: the saved relay is probed; offline -> the relays this machine used before are probed and the LAN is
+  // browsed (/api/lan/discover, ~1.6 s). It switches ON ITS OWN only to a relay used before whose certificate still
+  // matches what it saw then (a known relay found under a new address counts). Relays new to this machine become
+  // suggestions in the relay list -- a box on the network can advertise anything, and an access code typed into a
+  // stranger's relay would be theirs. During a session a relay down for 15 s gets an OFFER, never a silent switch.
+  const RELAY_FP_KEY = "kastr.relay.fp";
+  const relayFps = () => { try { const m = JSON.parse(localStorage.getItem(RELAY_FP_KEY) || "{}"); return m && typeof m === "object" ? m : {}; } catch { return {}; } };
+  function relayFpRemember(url, fp) {
+    if (!url || !fp) return;
+    const m = relayFps(); if (m[url] === fp) return;
+    m[url] = fp;
+    try { localStorage.setItem(RELAY_FP_KEY, JSON.stringify(m)); } catch {}
+  }
+  async function relayProbe(url) {
+    try { return await fetch("/api/lan/probe?url=" + encodeURIComponent(url), { cache: "no-store" }).then((r) => r.json()); } catch { return { online: false }; }
+  }
+  async function lanDiscover() {
+    try { const d = await fetch("/api/lan/discover", { cache: "no-store" }).then((r) => r.json()); return Array.isArray(d.relays) ? d.relays : []; } catch { return []; }
+  }
+  window.__lanRelays = [];
+  const relayLabel = (u) => String(u || "").replace(/^https?:[/][/]/, "");
+  let failoverBusy = false;
+  async function relayFailover(trigger) {
+    if (failoverBusy || IS_WEB || !gateIsLoopback() || PAGE_MODE === "relay") return null;
+    failoverBusy = true;
+    try {
+      const cur = urlInput.value.trim();
+      const here = await relayProbe(cur);
+      if (here.online) { relayFpRemember(cur, here.fp); return { ok: true, url: cur }; }
+      let hist = [];
+      try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x && x !== cur); } catch {}
+      const fps = relayFps();
+      const [probes, found] = await Promise.all([Promise.all(hist.map(async (u) => ({ u, r: await relayProbe(u) }))), lanDiscover()]);
+      let pick = null;
+      for (const { u, r } of probes) {
+        if (r.online && (!fps[u] || !r.fp || fps[u] === r.fp)) { pick = { url: u, name: relayLabel(u), fp: r.fp }; break; }
+      }
+      const knownFps = new Set(Object.values(fps).filter(Boolean));
+      if (!pick) {   // a known relay under a new address: the same certificate, answering on the network
+        for (const f of found) {
+          if (!f.fp || !knownFps.has(f.fp)) continue;
+          for (const u of f.urls || []) { const r = await relayProbe(u); if (r.online && r.fp === f.fp) { pick = { url: u, name: f.name || relayLabel(u), fp: f.fp }; break; } }
+          if (pick) break;
+        }
+      }
+      window.__lanRelays = found.filter((f) => !(f.fp && knownFps.has(f.fp)) && !(f.urls || []).includes(cur));
+      try { paintRelayRow(); } catch {}
+      if (pick) {
+        if (trigger === "launch") {
+          await gateRelayApply(pick.url);
+          relayFpRemember(pick.url, pick.fp);
+          window.__toast?.("The relay " + relayLabel(cur) + " is offline \u2014 switched to " + pick.name + ", a relay this computer used before.", 8000, { level: "warn" });
+        } else {
+          window.__toast?.("The relay " + relayLabel(cur) + " has been offline for a while. " + pick.name + " is online.", 30000,
+            { level: "warn", action: { label: "Switch to " + pick.name, fn: () => { gateRelayApply(pick.url).then(() => relayFpRemember(pick.url, pick.fp)).catch(() => {}); } } });
+        }
+      } else if (window.__lanRelays.length) {
+        window.__toast?.("The relay " + relayLabel(cur) + " is offline. Found on your network: " + window.__lanRelays.map((f) => f.name || relayLabel(f.urls?.[0])).join(", ")
+          + " \u2014 pick one in the relay list.", 10000, { level: "warn" });
+      } else if (trigger === "launch") {
+        window.__toast?.("The relay " + relayLabel(cur) + " is offline, and no other relay answered.", 7000, { level: "warn" });
+      }
+      return pick;
+    } finally { failoverBusy = false; }
+  }
+  window.__relayFailover = relayFailover;   // rig
+  setTimeout(() => { relayFailover("launch").catch(() => {}); }, 1500);
+  { // a relay down for 15 s during a session -> one offer per outage
+    let downSince = 0, offered = false;
+    setInterval(() => {
+      if (joinState !== "joined") { downSince = 0; offered = false; return; }
+      const st = window.__relayHealth?.() || "connected";
+      if (st === "connected") { downSince = 0; offered = false; return; }
+      if (!downSince) downSince = Date.now();
+      if (!offered && Date.now() - downSince > 15000) { offered = true; relayFailover("session").catch(() => {}); }
+    }, 5000);
+  }
   function paintRelayRow() {
     const row = joinEls.joinRelayRow;
     if (!row) return;
@@ -11038,7 +11202,10 @@
     if (sel && document.activeElement !== sel) {
       const cur = urlInput.value.trim();
       const opts = [...new Set([cur, ...hist].filter(Boolean))];
-      sel.replaceChildren(...opts.map((u) => new Option(u, u)), new Option("Other\u2026", "__other"));
+      const lan = (window.__lanRelays || []).filter((f) => f.urls?.[0] && !opts.includes(f.urls[0]));   // 0.21.22: found on the network (one click, never automatic)
+      sel.replaceChildren(...opts.map((u) => new Option(u, u)),
+        ...lan.map((f) => new Option("Found on your network: " + (f.name || "relay") + " (" + f.urls[0].replace(/^https?:[/][/]/, "") + ")", f.urls[0])),
+        new Option("Other\u2026", "__other"));
       if (cur) sel.value = cur;
       if (joinEls.joinRelay) joinEls.joinRelay.hidden = true;
     }
@@ -11971,6 +12138,8 @@
     // cold-start race (or exist at the channel's mercy at all).
     try { window.__mineAccept?.(msg); } catch {}
     try { window.__state?.set?.("publishing", msg.sources.filter((x) => x.live && x.enabled !== false && x.name).map((x) => chanPath(ensureHang(x.name)))); } catch {}   // 0.13.0
+    try { window.__state?.set?.("rtspPaths", [...added.filter((a) => a.kind === RTSP && !a.screen && a.enabled !== false && a.name).map((a) => chanPath(ensureHang(a.name))),
+                                              ...gridsSorted().map((g) => chanPath(ensureHang(g.entry.name)))]); } catch {}   // 0.21.22: viewers drop the muted badge on these
     if (!bus) return;
     try { bus.postMessage(msg); } catch {}
   }
@@ -12306,7 +12475,7 @@
   const isScreenUrl = (u) => /^screen:[/][/]/i.test(String(u || ""));   // 0.21.20: a native screen / window share
   function rtspLabel(url) {
     if (url === TEST_URL) return "rtsp-test";
-    if (isScreenUrl(url)) return /[/]window[/]/i.test(url) ? "window" : "screen";   // 0.21.20
+    if (isScreenUrl(url)) return /[/]window[/]/i.test(url) ? "window" : /[/]tab[/]/i.test(url) ? "tab" : "screen";   // 0.21.20; 0.21.22: + tab
     try {
       const u = new URL(url.replace(/^rtsps?:/, "http:"));
       // 0.8.0: drop the media extension -- "Test Tone", not "Test Tone Mp4".
@@ -15206,7 +15375,7 @@
       const isNative = !!slot.entry.screen;
       if (isNative) {
         const img = d.createElement("img"); img.alt = ""; shr.appendChild(img);
-        const sid = String(slot.entry.url || "").replace(/^screen:[/][/]monitor[/]/i, "monitor:").replace(/^screen:[/][/]window[/]/i, "window:");
+        const sid = String(slot.entry.url || "").replace(/^screen:[/][/]monitor[/]/i, "monitor:").replace(/^screen:[/][/]window[/]/i, "window:").replace(/^screen:[/][/]tab[/](\d+)[/]\d+$/i, "window:$1");   // 0.21.22: a tab previews its window
         let n = 0; const pull = () => { img.src = "/api/screen/thumb?id=" + encodeURIComponent(sid) + "&w=480&t=" + (n++); };
         pull(); slot.pipThumb = setInterval(pull, 1500);
       } else if (slot.canvas) {
@@ -17734,7 +17903,41 @@
   // screen:// feed on the RTSP machinery (hardware encode, no Chrome picker). Hosts without native capture (web
   // clients, Linux/macOS today) answer ok:false and the panel keeps the Screen / Window tiles that open the picker.
   let shTimer = null, shTick = 0, shBusy = false;
-  const shareKey = (src) => src.kind === "screen" ? "screen://monitor/" + src.index : "screen://window/" + src.hwnd;
+  let shWinOpen = false;   // 0.21.22 (Kenton): the Window list opens on a click
+  let shTabOpen = false;   // 0.21.22 (Kenton): so does the Tab list ("start with this collapsed")
+  const BROWSER_NAMES = { chrome: "Chrome", msedge: "Edge", brave: "Brave", firefox: "Firefox", opera: "Opera", vivaldi: "Vivaldi", chromium: "Chromium" };
+  function shPaintTabs(list) {
+    const box = $("shTabs");
+    box.replaceChildren(...list.map((src) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "tabrow";
+      b.classList.toggle("sharing", added.some((a) => a.kind === RTSP && a.url === shareKey(src)));
+      const tb = document.createElement("span"); tb.className = "tb"; tb.textContent = BROWSER_NAMES[src.browser] || src.browser || "Browser";
+      const tt = document.createElement("span"); tt.className = "tt"; tt.textContent = src.title || "(untitled tab)";
+      b.append(tb, tt);
+      if (src.active) { const ta = document.createElement("span"); ta.className = "ta"; ta.textContent = "showing"; b.appendChild(ta); }
+      b.title = (src.title || "") + " \u2014 " + (BROWSER_NAMES[src.browser] || src.browser || "") + (src.minimized ? " (minimized)" : "");
+      b.addEventListener("click", () => shareNative(src));
+      return b;
+    }));
+  }
+  function shTabToggle() {
+    shTabOpen = !shTabOpen;
+    $("shTabHead").classList.toggle("open", shTabOpen);
+    $("shTabs").hidden = !shTabOpen;
+    if (shTabOpen) shLoad();
+  }
+  $("shTabHead").addEventListener("click", shTabToggle);
+  $("shTabHead").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); shTabToggle(); } });
+  function shWinToggle() {
+    shWinOpen = !shWinOpen;
+    $("shWinHead").classList.toggle("open", shWinOpen);
+    $("shWindows").hidden = !shWinOpen;
+    if (shWinOpen) { shTick++; shLoad(); }
+  }
+  $("shWinHead").addEventListener("click", shWinToggle);
+  $("shWinHead").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); shWinToggle(); } });
+  const shareKey = (src) => src.kind === "screen" ? "screen://monitor/" + src.index : src.kind === "tab" ? "screen://tab/" + src.hwnd + "/" + src.index : "screen://window/" + src.hwnd;
   function shThumb(src) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "th"; b.dataset.id = src.id;
@@ -17763,14 +17966,16 @@
     if (shBusy) return;
     shBusy = true;
     let d = null;
-    try { if (!IS_WEB2) { const r = await fetch("/api/screen/sources", { cache: "no-store" }); if (r.ok) d = await r.json(); } } catch {}
+    try { if (!IS_WEB2) { const r = await fetch("/api/screen/sources" + (shTabOpen ? "?tabs=1" : ""), { cache: "no-store" }); if (r.ok) d = await r.json(); } } catch {}
     shBusy = false;
     const native = !!(d && d.ok);
     $("shPickerTiles").hidden = native;
-    $("shScreens").hidden = !native; $("shWindows").hidden = !native; $("shWinHead").hidden = !native;
+    $("shScreens").hidden = !native; $("shWindows").hidden = !native || !shWinOpen; $("shWinHead").hidden = !native;   // 0.21.22: windows collapsed until clicked
+    $("shTabHead").hidden = !native; $("shTabs").hidden = !native || !shTabOpen;
+    if (native && shTabOpen && Array.isArray(d.tabs)) { shPaintTabs(d.tabs); $("shTabCount").textContent = String(d.tabs.length); }
     if (!native) return;
     shPaintList($("shScreens"), d.screens || []);
-    shPaintList($("shWindows"), d.windows || []);
+    if (shWinOpen) shPaintList($("shWindows"), d.windows || []);   // no window thumbnails while the list is closed
     $("shWinCount").textContent = String((d.windows || []).length);
   }
   window.__shareOpened = () => { shTick++; shLoad(); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); }, 3000); };
@@ -17778,8 +17983,8 @@
   async function shareNative(src) {
     if (!src) return;
     const url = shareKey(src);
-    if (added.some((a) => a.kind === RTSP && a.url === url)) { window.__toast?.("Already sharing " + (src.kind === "screen" ? "that screen" : "that window") + ".", 3000); return; }
-    const label = src.kind === "screen" ? (src.name || "Screen") : (src.title || "Window");
+    if (added.some((a) => a.kind === RTSP && a.url === url)) { window.__toast?.("Already sharing " + (src.kind === "screen" ? "that screen" : src.kind === "tab" ? "that tab" : "that window") + ".", 3000); return; }
+    const label = src.kind === "screen" ? (src.name || "Screen") : (src.title || (src.kind === "tab" ? "Tab" : "Window"));
     if (presenterMode() !== "content") return sharePresenter(url, label);   // 0.21.20: composited with my camera
     const e = await addRtsp(url, { label });
     if (!e) return;

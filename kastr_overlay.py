@@ -50,7 +50,7 @@ GRIP_RGB = _rgb(0x8B, 0x90, 0x98)
 BTN_RGB = _rgb(0xE5, 0x48, 0x4D)
 BTN_HOVER = _rgb(0xEE, 0x63, 0x67)
 BTN_DOWN = _rgb(0xC4, 0x37, 0x3C)
-LABELS = {"window": "You're sharing a window", "screen": "You're sharing your screen"}
+LABELS = {"window": "You're sharing a window", "screen": "You're sharing your screen", "tab": "You're sharing a tab"}
 BTN_TEXT = "Stop sharing"
 
 if AVAILABLE:

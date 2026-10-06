@@ -2,6 +2,37 @@
 
 What changed in each build, newest first.
 
+## v0.21.22 — latency only you can see, tabs from any browser, and a tidier launch page
+
+**Latency is the viewer's private choice (Kenton: "white/black blocks again in the bottom right corner ... turn it on for myself on a specific stream and only I can see it").** Nothing is drawn into anyone's picture any more: the View menu's "Latency stamp on my shares" switch is gone. Instead every stream's options (the tile's three dots) offer **Show latency (only you see it)**, remembered per stream on this device. The number comes from the stream itself: the catalog's clock maps each decoded frame's timestamp to the moment it was captured, corrected by both computers' measured offsets to the relay host (each page now shares its offset in its room state). Measured in the lab: a camera at 340-360 ms glass to glass, a camera with background effects at 470-500 ms. Streams from a KASTR older than 0.21.22 are still read from their stamp strip while the fleet updates; a stream that carries no clock says so.
+
+**Finding a live relay (Kenton: "if it doesn't detect a live relay, have it do a quick check over mDNS ... auto-switch to one that is online").**
+- Every KASTR whose relay accepts other machines now **advertises it on the local network** (mDNS, `_kastr._tcp`) -- discovery only: its name, address, ports, whether access codes are required, its certificate fingerprint and version. No code, token or secret is ever in it, and joining still needs the relay's access codes. The Relay page has a switch to turn it off. (This is not the LAN mesh, which lets relays join each other and keeps its secret.)
+- At **launch** the desktop app checks the saved relay. If it is offline, it checks the relays this computer used before and browses the network for about 1.6 s; it **switches on its own only to a relay it used before whose certificate still matches** what it saw then (one that moved to a new address counts) and says so in a notice. Relays it has never used appear in the relay list as **"Found on your network: ..."** -- one click, never automatic, because any box on the network can advertise anything and an access code typed into a stranger's relay would be theirs.
+- **During a session**, a relay down for 15 s brings a notice with a **Switch to ...** button -- nothing changes behind your back.
+- Web clients (browsers) cannot browse mDNS; this is the desktop app.
+
+**Share a tab from any browser (Kenton: "share a tab ... pull from the active browser, chrome, edge, etc").** The Share panel has a **Tab** list (collapsed until clicked) of the tabs open in the browsers that are running -- Chrome, Edge and Brave tested; Firefox, Opera and Vivaldi written for but not tested here. A click brings that tab to the front of its window without taking focus, un-minimizes the window without activating it, and shares the window cropped to the web page -- no tab strip, no address bar. The share follows the window: switching tabs there shows the new tab. A browser window that is completely covered or minimized stops painting, so keep it visible somewhere.
+
+**Still pages, windows and screens keep sending (found while testing tabs).** Windows Graphics Capture only sends a frame when the window repaints, and a still page never did -- the share never started. Every native screen, window and tab share now runs on a steady 30 fps clock that repeats the last frame, and KASTR nudges the shared thing to repaint just after the capture opens (a tab flips to a neighbour and back, a screen's cursor moves one pixel and back). Measured: a still test tab reached the viewer in about a second at a steady rate.
+
+**No more black tiles without a face (Kenton's screenshot: John, Mikey and Support Laptop black, no initials, no chips).** A tile shows the person's initials and the camera/microphone chips from the stream's catalog. When a catalog subscription timed out (the library's "browser stream limit reached?" case in a busy room) it was never retried, so the tile stayed black for the whole call -- the 0.21.15 never-painted check only watched the stage, not the gallery or the rail. Now any shown tile without a catalog shows the person's face with "connecting..." after 6 s and re-subscribes at 12, 30 and 90 s; the catalog arriving clears it.
+
+**Smaller things in the room.**
+- **Your own preview stays pinned to the bottom of the rail** again (0.21.19 had pulled it up under the others).
+- The Share panel's **Window** list starts **collapsed**; a click opens it (and only then are window thumbnails captured).
+- **RTSP streams show no muted-microphone badge** -- grids, the cameras behind them and single RTSP feeds (each publisher now lists its RTSP paths in its room state); it covered the camera labels.
+
+**The launch page.**
+- **Download** is its own section below Go Live, with the Windows and Linux marks on its tiles; it disappears when the host cannot offer a download.
+- A **phone** skips the launch page and opens Go Live directly (a tablet or a narrow desktop window still gets the launch page).
+- The introduction and the Go Live card describe what KASTR does today.
+- The section headings inside the page keep their spacing (Download and Relay server sat tight under the section above).
+
+**Smaller things.**
+- People in the sidebar's room list show an **eye** (view only) or a **broadcast mark** (publishing) instead of a circle or a triangle.
+- The footer names the protocol actually negotiated, **moq-lite-06**, on every page (it still said moq-lite-05 from before the 0.21.17 upgrade), and a phone shows no footer at all.
+
 ## v0.21.21 — background effects on the NPU, and edges like the other apps
 
 Kenton: "I would like to add the ability to use the NPU if someone has one for the video effects. Our blur is kind of bad at detecting edges of people compared to other apps." Two changes: a new renderer that every computer gets, and a better person model that runs on the NPU when there is one.

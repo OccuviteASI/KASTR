@@ -27,6 +27,8 @@ Kenton: "I would like to add the ability to use the NPU if someone has one for t
 - Running on the NPU frees the GPU and CPU for video.
 - The model runs through WebNN, which the bundled browser keeps behind a feature flag; KASTR now turns it on. Its launcher passes one combined feature list, because Chromium honours only the last one given.
 
+**Download tiles on the launch page (Kenton).** Beside **Go Live**: **Windows Download** and **Linux Download**, each with its size -- shown only for the platforms this host can assemble an install zip for; a first click prepares the zip on the host (the tile says so while it works), then the download starts. More > About lists the same downloads as just the platform and its size.
+
 **Shipped files.** `assets/npu` (about 41 MB, all local, never a CDN):
 - onnxruntime-web 1.30.0 (MIT), the JSEP build that carries WebNN;
 - `modnet_fp16.onnx` (13 MB).

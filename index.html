@@ -115,6 +115,15 @@
       <span class="t"><b>Go Live</b></span>
       <span class="d">Watching and publishing on one page. Stream list plus grid or program view; per-stream volume and mute. <b>Share</b> opens the native publish panel — cameras, screen, RTSP, files — with a full-framerate self-view under My&nbsp;streams.</span>
     </a>
+    <!-- 0.21.21 (Kenton): the app itself, assembled by this host (kastr_release) -- shown only for what it can offer -->
+    <a class="card dl" id="dlWin" data-plat="win32" href="/api/update/zip?platform=win32" download hidden>
+      <span class="t"><b>Windows Download</b><span class="asi-badge blue dlv"></span></span>
+      <span class="d">The KASTR app for Windows. <span class="dlst"></span></span>
+    </a>
+    <a class="card dl" id="dlLinux" data-plat="linux" href="/api/update/zip?platform=linux" download hidden>
+      <span class="t"><b>Linux Download</b><span class="asi-badge blue dlv"></span></span>
+      <span class="d">The KASTR app for Linux. <span class="dlst"></span></span>
+    </a>
   </div>
 
 
@@ -136,6 +145,48 @@
   </div>
 </main>
 
+<script>
+// 0.21.21: the download tiles -- this host assembles the install zip for a platform on request (POST, 10-20 s, the
+// first Linux/Windows zip may fetch that platform's browser first), then the tile downloads it (GET).
+(() => {
+  const mb = (n) => Math.max(1, Math.round((Number(n) || 0) / 1048576)) + " MB";
+  const cards = [...document.querySelectorAll("a.card.dl")];
+  let man = null, busy = "";
+  const load = async () => { try { man = await fetch("/api/update/manifest", { cache: "no-store" }).then((r) => r.json()); } catch { man = null; } paint(); };
+  const paint = () => {
+    for (const c of cards) {
+      const z = man?.zip?.[c.dataset.plat];
+      c.hidden = !(z && z.can);
+      if (c.hidden) continue;
+      c.querySelector(".dlv").textContent = z.ready && z.size ? mb(z.size) : mb(z.estimate);
+      if (busy !== c.dataset.plat) c.querySelector(".dlst").textContent = "";
+    }
+  };
+  const prepare = async (c) => {
+    const plat = c.dataset.plat, st = c.querySelector(".dlst");
+    if (busy) return;
+    busy = plat;
+    try {
+      st.textContent = "Preparing the download on this host…";
+      const first = await fetch("/api/update/zip?platform=" + encodeURIComponent(plat), { method: "POST", cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      if (first && !first.can) throw new Error(first.why || "not available on this host");
+      const t0 = Date.now();
+      while (Date.now() - t0 < 600000) {
+        await new Promise((r) => setTimeout(r, 2000));
+        await load();
+        const z = man?.zip?.[plat];
+        if (z?.ready) { busy = ""; st.textContent = "Downloading…"; location.href = c.href; setTimeout(paint, 4000); return; }
+        if (z && !z.can && !z.building) throw new Error(z.why || "not available on this host");
+        st.textContent = (z && z.fetch === "browser" ? "Fetching the browser, then preparing the download… " : "Preparing the download on this host… ") + Math.round((Date.now() - t0) / 1000) + " s";
+      }
+      throw new Error("timed out");
+    } catch (e) { st.textContent = "This host could not prepare the download (" + (e?.message || e) + ")."; }
+    busy = "";
+  };
+  for (const c of cards) c.addEventListener("click", (e) => { const z = man?.zip?.[c.dataset.plat]; if (z && z.ready) return; e.preventDefault(); prepare(c); });
+  load();
+})();
+</script>
 <footer class="asi-footer">
   <span>Autonomous Solutions, Inc. — internal tool</span>
   <span>Media over QUIC · <span class="asi-mono">moq-lite-05</span></span>

@@ -7165,8 +7165,7 @@
       a.href = "/api/update/zip?platform=" + encodeURIComponent(plat);
       a.setAttribute("download", z.name || "");
       a.dataset.plat = plat;
-      a.textContent = dlPlat(plat) + " \u2014 v" + (man.version || PAGE_VERSION) + ", " + (z.ready && z.size ? dlMB(z.size) : "about " + dlMB(z.estimate))
-        + (z.ready ? "" : z.fetch === "browser" ? " (the host fetches the " + dlPlat(plat) + " browser first, about 200 MB, then prepares the zip)" : " (prepared on the host when you click)");   // 0.21.8: says when a browser fetch comes first
+      a.textContent = dlPlat(plat) + " \u2014 " + (z.ready && z.size ? dlMB(z.size) : dlMB(z.estimate));   // 0.21.21 (Kenton): the platform and its size, nothing else
       if (!z.ready) a.addEventListener("click", (e) => { e.preventDefault(); prepareDl(plat); });
       const d = document.createElement("div"); d.appendChild(a); rows.appendChild(d);
     }

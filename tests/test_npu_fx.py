@@ -73,6 +73,13 @@ class Page(unittest.TestCase):
         i = p.index("else { b.pendW = ow; b.pendH = oh;")
         self.assertIn("video.requestVideoFrameCallback(() => step(false))", p[i:i + 300])
 
+    def test_launch_page_download_tiles(self):
+        idx = _read("index.html")
+        for t in ('id="dlWin" data-plat="win32"', 'id="dlLinux" data-plat="linux"', '"/api/update/zip?platform="'):
+            self.assertIn(t, idx)
+        self.assertIn('a.textContent = dlPlat(plat) + " ', self.p)   # About: the platform and its size only
+        self.assertNotIn('" (prepared on the host when you click)"', self.p)
+
     def test_processor_setting_rides_every_bag(self):
         self.assertEqual(self.p.count('proc: ["auto", "npu", "gpu", "standard"].includes('), 2)
         self.assertIn('proc: camFx.proc || "auto" });', self.p)

@@ -258,6 +258,13 @@
      inline style on the label. */
   #stage.collage .pane { cursor:grab; touch-action:none; }
   #stage.spot .pane { cursor:pointer; }
+  #stage .pane.vtile { cursor:default; }   /* 0.21.19: a watcher's tile -- avatar + view-only chip */
+  #stage .pane.vtile .vonly { position:absolute; left:6px; bottom:6px; z-index:2; display:inline-flex; align-items:center; gap:5px;
+    max-width:calc(100% - 12px); padding:3px 7px; border-radius:6px; background:rgba(0,0,0,.6); color:#fff; font-size:11px; font-family:var(--font-mono); }
+  #stage .pane.vtile .vonly .icon { width:13px; height:13px; flex:none; opacity:.85; }
+  #stage .pane.vtile .vonly .vn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pghead .vonlyic .icon { width:12px; height:12px; margin-right:5px; vertical-align:-2px; opacity:.75; }
+  #stage.spot .pane.railsolo { justify-self:center; width:var(--railcolw, 150px); }   /* 0.21.19 */
   /* 0.7.6: overlay chevron ON shared-content windows (own publish panes
      and remote content tiles) -- the old under-the-pane row chevron
      never read as belonging to the video. */
@@ -267,6 +274,13 @@
     border-radius:5px; cursor:pointer; font-size:11px; line-height:1; }
   .pchev:hover { background:rgba(10,14,18,.85); }
   .pchev .icon { width:12px; height:12px; }
+  .pchev.pfs { right:34px; }      /* 0.21.19: full screen, beside the options */
+  .pchev.pfill { right:62px; }    /* 0.21.19: fill the window */
+  .pchev.pfs .icon, .pchev.pfill .icon { width:13px; height:13px; }
+  /* 0.21.19: fill window -- the page chrome steps aside and the stage covers the app window (menus 80+, toasts 90 stay above) */
+  body.fillwin header.asi-header, body.fillwin #sidebar, body.fillwin #sbScrim, body.fillwin #topbar,
+  body.fillwin footer.asi-footer { display:none !important; }
+  body.fillwin #stagewrap { position:fixed; inset:0; z-index:65; background:#000; overflow:hidden; }
   #pubPanes .pubpane { position:relative; }
   /* 0.8.8: Teams-style strip -- icon over label, fused chevrons, dividers */
   #topbar { gap:4px; }
@@ -2177,6 +2191,12 @@
   // by --lvl (0..1) on any ancestor -- no <defs>, no clipPath ids, so the
   // string can be stamped into innerHTML any number of times.
   const ICONS = {
+    eye: '<path d="M1.5 10S4.6 4.5 10 4.5 18.5 10 18.5 10 15.4 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.6"/>',   // 0.21.19: view only
+    // 0.21.19: the tile's own view buttons -- full screen (corners out / in) and fill window (a window with arrows out / in)
+    fullscreen: '<path d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>',
+    fsExit: '<path d="M7.5 3v4.5H3M12.5 3v4.5H17M12.5 17v-4.5H17M7.5 17v-4.5H3"/>',
+    fillwin: '<rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><path d="M6.5 10.5v3h3M13.5 9.5v-3h-3"/>',
+    fillExit: '<rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><path d="M9.5 13.5v-3h-3M10.5 6.5v3h3"/>',
     // 0.21.0: "options" -- three dots (the share preview used the minimize glyph for both buttons)
     more: '<circle cx="4.5" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.6" fill="currentColor" stroke="none"/>',
     // 0.8.8: Teams-style toolbar glyphs
@@ -2997,6 +3017,7 @@
   // 0.8.8: view state -- focus on content (main only, nothing else downloads)
   // and hide-me (own camera pane out of my own view).
   let focusMode = false, hideMe = false;
+  let fillWin = false;   // 0.21.19: one stream fills the app window (not the screen); Esc / W / its icon leaves
   let collagePlan = null;   // {best, n} of the last collage layout (centred last row)
   // 0.9.10: publish-only devices -- this page publishes but never subscribes to
   // other people's broadcasts (no tiles, no decoders, no meters). The announces
@@ -3587,6 +3608,52 @@
     return out;
   }
   const viewersExtra = () => viewerOps().size;
+  // 0.21.19 (Kenton): watchers get a rail tile too -- an avatar circle (photo or initials), no media, a view-only chip
+  const viewerTiles = new Map();   // op key -> element
+  function viewerInitials(nm) {
+    const w = String(nm || "?").split(/[\s\-_.]+/).filter(Boolean);
+    return (w.length > 1 ? w.map((x) => x[0]).join("") : (w[0] || "?").slice(0, 2)).toUpperCase().slice(0, 3);
+  }
+  function syncViewerTiles(show) {
+    const want = show ? viewerOps() : new Map();
+    for (const [key, el] of viewerTiles) if (!want.has(key)) { el.remove(); viewerTiles.delete(key); }
+    const out = [];
+    for (const [key, m] of [...want].sort((a, b) => String(a[1].name || a[0]).localeCompare(String(b[1].name || b[0])))) {
+      let el = viewerTiles.get(key);
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "pane shown audio-only camera vtile";
+        el.dataset.vop = key;
+        const face = document.createElement("div"); face.className = "face";
+        const av = document.createElement("div"); av.className = "avatar";
+        const art = document.createElement("div"); art.className = "art"; art.innerHTML = SWOOSH;
+        const init = document.createElement("span"); init.className = "init";
+        av.append(art, init); face.appendChild(av); el.appendChild(face); el.__av = av;
+        const chip = document.createElement("div"); chip.className = "vonly";
+        chip.innerHTML = icon("eye") + '<span class="vn"></span>';
+        el.appendChild(chip);
+        stageEl.appendChild(el);
+        viewerTiles.set(key, el);
+      }
+      const nm = m.name || prettyOperator(key);
+      const init = el.querySelector(".init");
+      init.textContent = viewerInitials(nm);
+      init.className = "init n" + Math.min(3, Math.max(1, init.textContent.length));
+      const av = el.__av;
+      paintAvatar(av, avatarUrls.get(key));
+      av.style.setProperty("--ring", personColor(key));
+      el.querySelector(".vn").textContent = nm;
+      el.title = nm + " is watching (view only)";
+      out.push(el);
+    }
+    return out;
+  }
+  window.__viewerTiles = () => [...viewerTiles.keys()];   // rig
+  window.__rigViewers = (n) => {   // rig: n watch-only members (layout tests), 0 clears them
+    for (const k of [...members.keys()]) if (k.startsWith("rig/")) members.delete(k);
+    for (let i = 0; i < (Number(n) || 0); i++) members.set("rig/" + i, { peer: "rigpeer" + i, op: "rig-viewer-" + (i + 1), name: "Rig Viewer " + (i + 1), ts: Date.now() });
+    queueRelayout();
+  };
   // 0.11.0: the relay a member DIALLED, from their presence announce (name when the
   // relay host's KASTR told them, else host:port). "" when the member predates 0.11.
   function memberVia(op) {
@@ -3610,6 +3677,7 @@
       }
       const head = el.querySelector(".pghead");
       head.textContent = (m.name || prettyOperator(key)) + " \u2014 watching";
+      { const ey = document.createElement("span"); ey.className = "vonlyic"; ey.title = "View only"; ey.innerHTML = icon("eye"); head.prepend(ey); }   // 0.21.19
       const via = m.relayName || m.relay || "";   // 0.11.0: viewers say where they are too
       if (via) { const sp = document.createElement("span"); sp.className = "via"; sp.textContent = " \u00b7 via " + via; head.appendChild(sp); }
     }
@@ -4484,6 +4552,7 @@
   // 0.8.6: hidden app / a full-screen tile change what should download.
   document.addEventListener("fullscreenchange", queueRelayout);
   try { new ResizeObserver(() => { try { paintGridWait(); } catch {} }).observe(stageWrap); } catch {}   // 0.21.2: the wait badge follows the cell
+  document.addEventListener("fullscreenchange", () => { try { paintViewTools(); } catch {} });   // 0.21.19
   document.addEventListener("fullscreenchange", () => {   // 0.21.0: toasts follow the stage into full screen
     const fs = document.fullscreenElement, kt = document.getElementById("kToast");
     if (kt) (fs === stageWrap ? stageWrap : document.body).appendChild(kt);
@@ -4526,7 +4595,8 @@
   let railPage = 0;
   let railW = 320;   // 0.8.9: two columns of previews by default
   try { railW = Math.min(464, Math.max(160, Number(localStorage.getItem("kastr.rail.w")) || 320)); } catch {}
-  const railCols = () => (railW >= 300 ? 2 : 1);
+  let railColsNow = 1;   // 0.21.19: the column count follows how many people there are, not the rail width
+  const railCols = () => railColsNow;
   const railColW = () => (railCols() === 2 ? Math.floor((railW - 8) / 2) : railW);
   const railPager = document.createElement("div");
   railPager.id = "railPager";
@@ -4640,6 +4710,7 @@
     stageEl.classList.toggle("collage", gridMode);
     stageEl.classList.toggle("spot", !gridMode);
     const shownNames = orderedNames().filter((n) => isWatched(n) && !hiddenChild(n));   // 0.8.12
+    const viewerEls = syncViewerTiles(true);   // 0.21.19: watchers are cells in the gallery and tiles in the rail
     if (gridMode) {
       // Best-fit collage: the column count whose cells hold the largest
       // 16:9 picture for the current stage box and tile count.
@@ -4650,7 +4721,7 @@
             .filter((el) => !el.classList.contains("screenkind")
                          && !(el.classList.contains("ingrid") && !el.classList.contains("gridfeed"))   // 0.9.5: an opened member counts
                          && !el.classList.contains("hideme")).length;
-      const n = Math.max(1, shownNames.length + ownCells);
+      const n = Math.max(1, shownNames.length + ownCells + viewerEls.length);
       const W = stageWrap.clientWidth || 1280, H = stageWrap.clientHeight || 720;
       let best = 1, bestScore = -1;
       for (let cols = 1; cols <= n; cols++) {
@@ -4707,29 +4778,41 @@
     const railOwn = (!gridMode && !railOff)
       ? pubEls.filter((pe) => pe !== selfSpotEl && !pe.classList.contains("screenkind"))
       : [];
-    const railN = railRemote.length + railOwn.length;
+    const railViewers = (!gridMode && !railOff) ? viewerEls : [];   // 0.21.19: after the people with media
+    if (!gridMode && railOff) for (const el of viewerEls) el.style.display = "none";
+    if (gridMode) for (const el of viewerEls) {   // 0.21.19: gallery cells after everyone with media
+      el.classList.remove("railsolo");
+      el.style.display = ""; el.style.order = "9999"; el.style.gridColumn = "span 2"; el.style.gridRow = "";
+    }
+    const railList = railRemote.length + railViewers.length;
+    const railN = railList + railOwn.length;
+    // 0.21.19 (Kenton): one column of wide 16:9 previews while everyone fits; two columns of 4:3 ones past that
+    const fit1 = Math.floor(((stageWrap.clientHeight || 720) - 8) / (Math.round(railW * 9 / 16) + 8));
+    railColsNow = (railN <= Math.max(1, fit1) || railW < 240) ? 1 : 2;
     const rcols = railCols();
+    const tileH = Math.max(64, Math.round(railColW() * (rcols === 2 ? 3 / 4 : 9 / 16)));
     // 0.8.7: own panes are PINNED to the bottom rows of every page; only
     // remote tiles page. Capacity = the rows above them.
     let ownRows = railOwn.length;   // 0.8.9: my preview spans the rail -- one row each
-    let railRows = 4, perPage = Math.max(1, railRemote.length), pages = 1;
+    let railRows = 4, perPage = Math.max(1, railList), pages = 1;
     if (!gridMode) {
       const H = stageWrap.clientHeight || 720;
       // At least 4 rows always exist (the mainstage span needs the height),
       // so capacity is rows-that-render, not rows-that-fit-uncrowded.
       // 0.8.12: one pass -- the pager bar (32px) is budgeted whenever paging
       // is possible at all, and own panes never take the whole rail.
-      const fit = Math.max(4, Math.floor((H - 8 - 40) / (92 + 8)));
+      // 0.21.19: rows keep the previews' shape (wider, not taller) -- they no longer stretch to fill the stage
+      const fit = Math.max(4, Math.floor((H - 8 - (rcols === 2 ? 40 : 0)) / (tileH + 8)));
       ownRows = Math.min(ownRows, Math.max(0, fit - 1));
-      const need = ownRows + Math.max(1, Math.ceil(railRemote.length / rcols));
-      railRows = Math.max(4, Math.min(fit, need));
+      railRows = fit;
       perPage = Math.max(1, (railRows - ownRows) * rcols);
-      pages = Math.max(1, Math.ceil(railRemote.length / perPage));
+      pages = Math.max(1, Math.ceil(railList / perPage));
       if (railPage >= pages) railPage = pages - 1;
       if (railPage < 0) railPage = 0;
       const pagerH = pages > 1 ? 40 : 0;
       const railH = Math.max(railOff ? 0 : 64, Math.floor((H - pagerH - (stageFullscreen() ? 0 : 8 * (railRows + 1))) / railRows));   // 0.21.18: full screen has no gaps   // 0.8.6: rows fill the stage -- no bottom gap; 0.21.5: no 64 px floor without a rail (phone landscape: 4 x 64 overflowed a ~210 px stage)
       stageEl.style.gridAutoRows = railH + "px";
+      stageEl.style.setProperty("--railcolw", railColW() + "px");   // 0.21.19: the centred lone tile's width
       stageEl.style.gridTemplateRows = "repeat(" + railRows + ", " + railH + "px)"
         + (pages > 1 ? " 32px" : "");
       stageEl.style.gridTemplateColumns = railOff
@@ -4748,7 +4831,8 @@
       el.style.display = "";
       el.style.order = "";
       el.style.gridColumn = "2 / span " + rcols;   // 0.8.9: full rail width
-      el.style.gridRow = String(railRows - ownRows + 1 + i);
+      // 0.21.19: on a single page my preview follows the others; with pages it stays pinned to the bottom
+      el.style.gridRow = String(pages > 1 ? railRows - ownRows + 1 + i : Math.min(railRows - ownRows, Math.ceil(railList / rcols)) + 1 + i);
     };
     const railPlace = (el) => {
       const r = railIdx++;
@@ -4758,6 +4842,10 @@
       el.style.order = "";
       el.style.gridColumn = onPage ? String(2 + (p % rcols)) : "";
       el.style.gridRow = onPage ? String(1 + Math.floor(p / rcols)) : "";
+      // 0.21.19: a lone last tile in two columns sits centred (Kenton's screenshot)
+      const solo = onPage && rcols === 2 && p % 2 === 0 && p === Math.min(perPage, railList - railStart) - 1;
+      el.classList.toggle("railsolo", solo);
+      if (solo) el.style.gridColumn = "2 / span 2";
       return onPage;
     };
     // 0.13.0 (F6): the RAIL iterates railOrder() -- content first, then the
@@ -4769,6 +4857,7 @@
     (gridMode ? plainNames : railOrder(plainNames)).forEach((n) => {
       const t = tiles.get(n);
       if (!t) return;
+      t.pane.classList.remove("railsolo");   // 0.21.19: railPlace sets it again for the lone last tile
       const i = plainIdx.get(n);
       t.row.style.order = i;
       if (!gridMode && hiddenChild(n)) {   // 0.8.12: a full-quality feed waits behind its grid
@@ -4809,6 +4898,7 @@
         t.pane.style.gridRow = "";
       }
     });
+    for (const el of railViewers) { el.classList.remove("railsolo"); railPlace(el); }   // 0.21.19: viewers after everyone with media
     // Own panes are grid items too: ladder cells at the rail bottom (0.8.1).
     for (const pe of pubEls) {
       if (!gridMode) {
@@ -4846,7 +4936,7 @@
     // (CSS order:-1, DOM order) then the shown tiles in orderedNames().
     if (gridMode && collagePlan) {
       const cells = [...pubEls.filter((pe) => !pe.classList.contains("screenkind")),
-        ...shownNames.map((n) => tiles.get(n)?.pane).filter(Boolean)];
+        ...shownNames.map((n) => tiles.get(n)?.pane).filter(Boolean), ...viewerEls];
       const best = collagePlan.best, nn = cells.length, k = nn % best;
       if (k && nn > best) cells[nn - k].style.gridColumn = (best - k + 1) + " / span 2";
     }
@@ -4862,7 +4952,7 @@
     railPager.classList.toggle("show", !gridMode && pages > 1);
     if (!gridMode && pages > 1) {
       railPager.querySelector(".rp-num").textContent = "Page " + (railPage + 1) + "/" + pages;
-      railPager.querySelector(".rp-more").textContent = "\u00b7 " + Math.max(0, railRemote.length - perPage) + " more";
+      railPager.querySelector(".rp-more").textContent = "\u00b7 " + Math.max(0, railList - perPage) + " more";
       railPager.querySelector(".rp-prev").disabled = railPage <= 0;
       railPager.querySelector(".rp-next").disabled = railPage >= pages - 1;
       railPager.style.gridColumn = rcols === 2 ? "2 / span 2" : "2";
@@ -5091,9 +5181,31 @@
    */
   // 0.21.17: full screen = the stage or the whole app is the fullscreen element. While it holds, the stage shows ONLY the
   // selected tile (no rail, own panes parked -- the Focus-on-content path) and no speaking ring is drawn anywhere.
-  function stageFullscreen() { if (window.__fsSim === true) return true; const fs = document.fullscreenElement || document.webkitFullscreenElement; return !!fs && (fs === stageWrap || fs === document.documentElement); }   // __fsSim: rig (the Browser pane refuses requestFullscreen)   // a declaration: fitMainstage/applyState may run before this line
+  function stageFullscreen() { if (window.__fsSim === true || fillWin) return true;   // 0.21.19: fill window lays out like full screen, inside the window
+ const fs = document.fullscreenElement || document.webkitFullscreenElement; return !!fs && (fs === stageWrap || fs === document.documentElement); }   // __fsSim: rig (the Browser pane refuses requestFullscreen)   // a declaration: fitMainstage/applyState may run before this line
   function ringsOff() { return focusMode || stageFullscreen(); }
   window.__ringsOff = ringsOff;   // the publish module (own panes) reads it
+  // 0.21.19: fill window -- the chosen tile takes the whole app window (page chrome hidden, the stage pinned over it), the
+  // same one-tile layout as full screen but without leaving the window. The tile's icon, W and Esc leave it.
+  function toggleFillWindow(name) {
+    const t = name ? tiles.get(name) : null;
+    if (fillWin && (!name || name === selectedName)) fillWin = false;
+    else {
+      if (name && !t) return;
+      if (t && selectedName !== name) select(name);
+      if (t && gridMode) gridMode = false;
+      fillWin = true;
+    }
+    document.body.classList.toggle("fillwin", fillWin);
+    applyState();
+    paintViewTools();
+  }
+  window.__fillWindow = toggleFillWindow;   // rig
+  function paintViewTools() {
+    const fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    for (const b of document.querySelectorAll("#stage .pchev.pfs")) { b.innerHTML = icon(fs ? "fsExit" : "fullscreen"); b.title = fs ? "Leave full screen (F)" : "Full screen (F)"; }
+    for (const b of document.querySelectorAll("#stage .pchev.pfill")) { b.innerHTML = icon(fillWin ? "fillExit" : "fillwin"); b.title = fillWin ? "Back to the room view (Esc)" : "Fill the window (W)"; }
+  }
   function toggleFullscreen(name) {
     // 0.21.0: the STAGE (#stagewrap) goes full screen, not the tile pane -- so the RTSP grid, the
     // cell click, the back pill, the chevrons and the zoom keep working inside it (the field report:
@@ -5563,7 +5675,7 @@
       pchev.title = "Options for this stream";
       pchev.addEventListener("click", (e) => {
         e.stopPropagation();
-        const items = [{ value: "fs", label: "Full screen" },
+        const items = [   // 0.21.19: full screen and fill window are icons beside this button now
           { value: "mute", label: (mutedStreams.has(name) ? "Unmute" : "Mute") + (gridMeta.has(name) ? " this grid here" : " here") }];   // 0.9.5: a grid's mute covers its feeds
         // 0.8.2: person-wide mute -- audioMode "all" kept a person's OTHER
         // streams audible after muting one tile.
@@ -5609,6 +5721,16 @@
         });
       });
       pane.appendChild(pchev);
+      // 0.21.19 (Kenton): view buttons beside the options -- fill the window, full screen
+      for (const [cls, run] of [["pfs", () => toggleFullscreen(name)], ["pfill", () => toggleFillWindow(name)]]) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pchev " + cls;
+        b.addEventListener("click", (e) => { e.stopPropagation(); run(); });
+        b.addEventListener("dblclick", (e) => e.stopPropagation());
+        pane.appendChild(b);
+      }
+      paintViewTools();
     }
 
     // Created once and attached/detached by applyState -- never recreated, so
@@ -6761,7 +6883,8 @@
     if (t instanceof HTMLSelectElement) return;   // arrows drive the sort select
     if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-    if (e.key === "Escape") { closeAllPops(); return; }
+    if (e.key === "Escape") { closeAllPops(); if (fillWin) toggleFillWindow(); return; }   // 0.21.19: Esc leaves fill window
+    if (e.key === "w" || e.key === "W") { toggleFillWindow(fillWin ? undefined : selectedName); return; }   // 0.21.19
     if (e.key === "ArrowRight" || e.key === "ArrowDown") { step(1); e.preventDefault(); }
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { step(-1); e.preventDefault(); }
     else if (e.key === "f" || e.key === "F") toggleFullscreen(selectedName);   // 0.21.0: the stage, selection or not

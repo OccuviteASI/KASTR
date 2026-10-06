@@ -2,6 +2,42 @@
 
 What changed in each build, newest first.
 
+## v0.21.19 — fill the window, a full-screen button, wider rail previews, and viewers in the rail
+
+Four requests from Kenton: one stream can fill the app window without going full screen, full screen is a button on the
+tile instead of a menu item, the side rail's previews are wide instead of tall, and people who only watch show up in the
+rail.
+
+**Fill the window (Kenton: "maximize a video stream in the current window without taking up the whole screen").** Every
+tile has a Fill-the-window button beside its options. The stream then covers the whole KASTR window at its own shape: the
+header, sidebar, toolbar, rail and footer step aside, and nothing else on the page shows. The same button, W or Esc
+returns to the room. Measured on a simulated 1440x1200 window: the stream fills the window's full width at 16:9 (1440x810)
+with nothing else shown, and Esc restores the room view. It uses the same one-tile layout as full screen, so there are no
+gaps, no border and no speaking ring.
+
+**Full screen is a button.** Full screen left the tile's "⋯" menu and is now an icon beside it (corners out, or corners in
+while full screen). F still works. The tile's buttons, from the right: options, full screen, fill the window.
+
+**Wider rail previews (Kenton: "wider user previews rather than taller", with two Teams screenshots).** The rail used to
+put two 156 px columns side by side and stretch the rows to fill the stage, so with a few people every preview was taller
+than wide (about 156x215). The rail width stays the same, and the column count follows how many people are in it:
+- While everyone fits, it is one column of 16:9 previews (320x185 at the default width).
+- Once they don't fit, it switches to two columns of 4:3 previews (156x125). A lone last preview sits centred.
+- Your own preview spans the rail right after the others, or stays pinned to the bottom when the rail pages.
+
+Rows no longer stretch to fill the height.
+
+**Viewers in the rail (Kenton: "viewers show up in the participant rail, but with an icon so others know they are view
+only").** People who only watch (a viewer access code, or a publisher who joined without camera or microphone) get a
+tile: their photo or initials in the person's colour ring, and an eye chip with their name. These tiles open no media
+subscription and cost no decoding. They come after everyone with media, in the rail and in the gallery alike, and are
+hidden wherever the rail is (focus on content, phones, full screen, fill window). The People list marks them with the
+same eye.
+
+**Still open (not in this build).** The web client's grid-open reliability; the camera/microphone detection check on
+Kenton's desk; the "spawn error announcements are closed" lines in his diagnostics; Southridge's 4K cameras over the
+thin link; subscription priorities.
+
 ## v0.21.18 — full screen that fills the screen, and a join that never hangs
 
 Five field requests from the 0.21.17 rollout: full screen uses the whole screen, "Joining…" can no longer sit forever, every switch sits on the same row as its words, the Relay page stops breaking words in the middle, and a few stray `—` codes became the dashes they meant.

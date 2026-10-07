@@ -87,7 +87,7 @@ class Page(unittest.TestCase):
         # 0.21.22: a tile whose catalog never came shows the face (not black) and re-subscribes at 12 / 30 / 90 s;
         # "watching" must not read `visible` -- the face view parks the video and would clear the flag again
         p = self.p
-        self.assertIn("const audioOnly = t.hasVideo === false || !!t.noDecode || !!t.noCatalog;", p)
+        self.assertIn("const audioOnly = t.hasVideo === false || !!t.noDecode || !!t.noCatalog", p)   # 0.21.23 adds || t.shed
         self.assertIn("const due = [12000, 30000, 90000][t.catResubs || 0];", p)
         self.assertIn('const watching = isWatched(name) && !t.fb && t.pane.classList.contains("shown") && t.pane.style.display !== "none";', p)
 

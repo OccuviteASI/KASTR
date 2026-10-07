@@ -171,6 +171,12 @@
   }
   #mineMenu .mi:hover { background:var(--surface-2); color:#fff; }
   #mineMenu .mi.on { color:var(--asi-blue); }
+  /* 0.21.23 (Kenton, Teams screenshot): menu rows with a glyph before the words */
+  #mineMenu.icons { min-width:220px; padding:4px; }
+  #mineMenu.icons .mi { font-size:13px; padding:7px 10px; gap:10px; font-family:var(--font-ui); }
+  #mineMenu .mi .mico { width:18px; height:18px; flex:none; display:inline-flex; color:var(--text); }
+  #mineMenu .mi .mico .icon { width:18px; height:18px; }
+  #mineMenu .mi:hover .mico { color:#fff; }
 
   .srow .sub {
     font-size:11px; color:var(--text-mute); flex:none; cursor:pointer;
@@ -592,6 +598,7 @@
   .popcard.teams .grp input[type=range] { width:52%; }
   .popcard.teams .grp label.f.chkrow { display:flex; justify-content:space-between; align-items:center; gap:10px; }   /* 0.21.0: a switch, not a box */
   #encPop, #audOutPop { width:min(380px, 92vw); }
+  #optPop .opt.phoneonly { display:none; }   /* 0.21.23: shown by the phone block */
   .pubui .shrowwrap { position:relative; }
   .pubui .shrowwrap .shrow { width:100%; }
   .pubui .shrowwrap .info { position:absolute; top:8px; right:10px; width:18px; height:18px; padding:0; border-radius:50%;
@@ -600,14 +607,6 @@
   .pubui .tipbubble { position:absolute; right:8px; top:34px; z-index:5; max-width:260px; background:var(--surface-2); border:1px solid var(--line);
     border-radius:6px; padding:8px 10px; font-size:11px; color:var(--text); box-shadow:0 8px 20px rgba(0,0,0,.4); }
   .popcard.teams .radios.sub.off { opacity:.45; pointer-events:none; }
-  #mobilePop { width:min(440px, 94vw); }
-  #mobilePop .qrwrap { display:flex; gap:12px; align-items:flex-start; margin:8px 0; }
-  #mobilePop canvas { width:200px; height:200px; background:#fff; border-radius:8px; padding:8px; box-sizing:border-box; flex:none; }
-  #mobilePop .qrside { display:flex; flex-direction:column; gap:8px; min-width:0; flex:1; }
-  #mobilePop .qrside select { width:100%; }
-  #mobilePop .mlink { font-family:var(--font-mono); font-size:11px; color:var(--asi-blue); word-break:break-all; }
-  #mobilePop .steps { margin:4px 0 0; padding-left:18px; font-size:12px; color:var(--text-dim); display:flex; flex-direction:column; gap:6px; }
-  #mobilePop a.toggle { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; }
   #tapUnmute { position:fixed; left:50%; bottom:calc(24px + env(safe-area-inset-bottom)); transform:translateX(-50%);
     z-index:85; padding:12px 18px; border-radius:999px; font-size:13px; font-weight:600; border:0; cursor:pointer;
     background:var(--asi-blue); color:#06121a; box-shadow:0 8px 26px rgba(0,0,0,.5); }
@@ -1213,6 +1212,50 @@
   #peoplePanel { width:min(380px, calc(100vw - 24px)); }
   #peoplePanel .pbody { flex:1; min-height:0; overflow-y:auto; padding:12px; }
   #peoplePanel #stats, #peoplePanel details { margin-top:14px; }
+  /* 0.21.23: Participants (Teams) */
+  #pplTop { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+  .pplsearch { position:relative; display:block; }
+  .pplsearch input { width:100%; box-sizing:border-box; background:var(--surface-2); border:1px solid var(--line); border-radius:6px;
+    color:var(--text); font-size:13px; padding:8px 34px 8px 10px; }
+  .pplsearch input:focus { outline:none; border-color:var(--asi-blue); box-shadow:inset 0 -2px 0 var(--asi-blue); }
+  .pplsearch .sic { position:absolute; right:10px; top:50%; transform:translateY(-50%); display:inline-flex; color:var(--text-mute); pointer-events:none; }
+  .pplsearch .sic .icon { width:16px; height:16px; }
+  .pplinvite { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:7px 10px; border-radius:6px;
+    background:transparent; border:1px solid var(--line); color:var(--text); font-size:13px; font-weight:600; cursor:pointer; }
+  .pplinvite:hover { background:var(--surface-2); border-color:var(--text-mute); }
+  .pplinvite .icon { width:16px; height:16px; }
+  .pplsec { display:flex; align-items:center; gap:8px; margin:4px 0 4px; }
+  .pplsechead { display:flex; align-items:center; gap:6px; background:none; border:0; color:var(--text-mute); font-size:12px; padding:4px 2px; cursor:pointer; }
+  .pplsechead:hover { color:var(--text); }
+  .pplsechead .chev { display:inline-flex; transition:transform .15s; }
+  .pplsechead .chev .icon { width:12px; height:12px; }
+  .pplsechead[aria-expanded="false"] .chev { transform:rotate(-90deg); }
+  .pplmuteall { margin-left:auto; background:transparent; border:1px solid var(--line); color:var(--text); border-radius:5px; font-size:12px; padding:4px 12px; cursor:pointer; }
+  .pplmuteall:hover { background:var(--surface-2); }
+  #pplRows { display:flex; flex-direction:column; }
+  #pplRows[hidden], #pplEmpty[hidden], .pplmuteall[hidden] { display:none; }
+  .pprow { display:flex; align-items:center; gap:12px; padding:8px 8px; border-radius:6px; min-height:44px; }
+  .pprow:hover, .pprow.menu { background:var(--surface-2); }
+  .pprow .ppav { position:relative; flex:none; width:36px; height:36px; border-radius:50%; overflow:hidden; display:grid; place-items:center;
+    background:color-mix(in srgb, var(--ring, var(--asi-blue)) 28%, var(--surface-2)); color:#fff; font-size:13px; font-weight:600; letter-spacing:.02em; }
+  .pprow .ppav img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .pprow.talk .ppav { box-shadow:0 0 0 2px var(--asi-blue); }
+  .pprow .ppname { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .pprow .pn { font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pprow .pn .you { color:var(--text-mute); font-weight:400; }
+  .pprow.talk .pn { font-weight:600; }
+  .pprow .ps { font-size:11px; color:var(--text-mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pprow .ps:empty { display:none; }
+  .pprow .ppmic, .pprow .ppmore { flex:none; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-mute); }
+  .pprow .ppmic .icon, .pprow .ppmore .icon { width:17px; height:17px; }
+  .pprow.talk .ppmic, .pprow .ppmic.live { color:var(--text); }
+  .pprow .ppmore { background:none; border:0; border-radius:5px; cursor:pointer; display:none; padding:0; min-width:28px; }
+  .pprow:hover .ppmore, .pprow.menu .ppmore { display:inline-flex; }
+  .pprow:hover .ppmore ~ .ppmic, .pprow.menu .ppmore ~ .ppmic { display:none; }
+  .pprow .ppmore:hover { background:var(--surface-3, rgba(255,255,255,.08)); color:var(--text); }
+  #pplEmpty { padding:14px 8px; color:var(--text-mute); font-size:12px; text-align:center; }
+  #pplStreams > summary { cursor:pointer; font-size:12px; color:var(--text-mute); padding:4px 2px; }
+  #pplStreams > summary:hover { color:var(--text); }
   /* person groups in the People list */
   .pgroup { display:flex; flex-direction:column; }
   .pgroup .pghead { font-size:10px; text-transform:uppercase; letter-spacing:.08em;
@@ -1313,6 +1356,7 @@
     #topbar .tbgrp .tb { width:38px; }
     #topbar .tchev { width:16px; height:40px; }
     #topbar .tbdiv, #topbar #filesBtn { display:none; }
+    #optPop .opt.phoneonly:not([hidden]) { display:flex; }   /* 0.21.23 */
     #topbar #leaveBtn.tb { width:44px; margin-left:auto; }
     #roomBanner { max-width:min(62vw, 260px); }   /* 0.13.3: the ellipsis lives on .rbname */
     /* 0.12.0: phones -- the sidebar is a drawer over the page (never the collapsed rail) */
@@ -1333,7 +1377,7 @@
       width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
     #mineMenu { min-width:0; padding-bottom:calc(6px + env(safe-area-inset-bottom)); }   /* 0.21.0: the chevron/room menus are sheets too */
     #sharePop { height:min(760px, 80dvh); }
-    #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #mobilePop, #profilePop, #chatPanel { width:100vw; }
+    #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #profilePop, #chatPanel { width:100vw; }
     #chatPanel { height:min(78dvh, 720px); }
     #profilePop.modal { top:auto !important; left:0 !important; transform:none; }
     .popcard .body, #sharePop .body, #peoplePanel .pbody { padding-bottom:calc(12px + env(safe-area-inset-bottom)); }
@@ -1422,11 +1466,24 @@
 </div>
 
 <aside id="peoplePanel" class="popcard" hidden>
-  <div class="head"><span>People</span><span class="sp"></span>
+  <div class="head"><span>Participants</span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div class="pbody">
+  <!-- 0.21.23 (Kenton, Teams screenshot): one row per person -->
+  <div id="pplTop">
+    <label class="pplsearch"><input id="pplSearch" type="search" placeholder="Search participants" autocomplete="off" spellcheck="false"><span class="sic" id="pplSic"></span></label>
+    <button id="pplInvite" type="button" class="pplinvite" title="Copy a link that opens this room (the access code is still needed)"></button>
+  </div>
+  <div class="pplsec">
+    <button id="pplSecHead" type="button" class="pplsechead" aria-expanded="true"><span class="chev" id="pplChev"></span><span>In this room (<span id="pplCount">0</span>)</span></button>
+    <button id="pplMuteAll" type="button" class="pplmuteall" hidden title="Mute every microphone in this room (admin)">Mute all</button>
+  </div>
+  <div id="pplRows"></div>
+  <div id="pplEmpty" hidden></div>
+  <details id="pplStreams">
+  <summary>Streams and volume</summary>
   <section id="list">
-    <h2>People (<span id="count">0</span>)
+    <h2>Streams (<span id="count">0</span>)
       <!-- 0.6.9: the park/watch bulk controls left the UI (auto-watch made
            them a non-feature); ids and wiring stay for the machinery. -->
       <span class="bulk" hidden><button id="watchAllBtn" type="button">watch all</button><button id="parkAllBtn" type="button">park all</button></span>
@@ -1435,6 +1492,7 @@
     <div id="rtspOffRows" hidden style="font-size:11px;color:var(--text-mute,#8b98a5);padding:4px 8px 0"></div>   <!-- 0.21.16: members whose own cameras are switched off (rtspOffApply) -->
     <div id="list-empty">Not connected yet.</div>
   </section>
+  </details>
 <!-- 0.8.6: stats + diagnostics panels retired; #status stays as log()'s target. -->
 <div id="status" hidden></div>
   </div>
@@ -1648,11 +1706,14 @@
     <div class="sw"><span>Noise suppression</span>
       <label class="switch"><input type="checkbox" id="nsToggle"><i></i></label></div>
     <div class="radios sub" id="nsModes">
-      <label class="rd" title="The browser's own echo cancellation, gain control and light noise suppression"><input type="radio" name="nsmode" id="nsBrowser" value="browser" checked><span>Browser built-in (light)</span></label>
-      <label class="rd" title="RNNoise: an open-source neural denoiser running in an AudioWorklet on this machine, on top of the browser's suppression (adds ~40 ms)"><input type="radio" name="nsmode" id="nsRnnoise" value="rnnoise"><span>Background noise removal (RNNoise)</span></label>
+      <label class="rd" title="The browser's own echo cancellation, gain control and light noise suppression"><input type="radio" name="nsmode" id="nsBrowser" value="browser"><span>Browser built-in (light)</span></label>
+      <label class="rd" title="RNNoise: an open-source neural denoiser running in an AudioWorklet on this machine, on top of the browser's suppression (adds ~40 ms)"><input type="radio" name="nsmode" id="nsRnnoise" value="rnnoise" checked><span>Background noise removal (RNNoise)</span></label>
     </div>
     <div class="sw" id="visoRow" hidden title="Offered only when this microphone's driver reports the effect"><span>Voice isolation (system)</span>
       <label class="switch"><input type="checkbox" id="visoToggle"><i></i></label></div>
+    <!-- 0.21.23: the listener's ladder (audio before video on a weak connection) -->
+    <div class="sw" title="When audio arrives late or gets skipped, video from people not on the stage pauses first (their sound keeps playing); it comes back after two quiet minutes"><span>Keep audio clear on a weak connection</span>
+      <label class="switch"><input type="checkbox" id="congestToggle"><i></i></label></div>
     <button class="opt more" id="micMore" type="button">More audio settings</button>
   </div>
 </div>
@@ -1696,19 +1757,14 @@
   <div class="body">
     <button class="opt" id="optRec" type="button"><span class="oi rec"></span>Record</button>
     <button class="opt" id="optRoom" type="button"><span class="oi">&#9432;</span>Room info</button>
-    <button class="opt" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
-    <button class="opt" id="optChat" type="button"><span class="oi">&#128172;</span>Chat</button>
+    <!-- 0.21.23 (Kenton): Files, Chat, Video effects and Audio settings left More -- they live on the toolbar and under
+         the camera / mic chevrons. Files stays for phones only, whose toolbar has no Files button. -->
+    <button class="opt phoneonly" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
     <div class="sep"></div>
-    <button class="opt" id="optVideo" type="button"><span class="oi">&#127909;</span>Video effects and settings</button>
-    <button class="opt" id="optAudio" type="button"><span class="oi">&#128264;</span>Audio settings</button>
     <button class="opt" id="optProfile" type="button"><span class="oi">&#128100;</span>Profile&hellip;</button>
-    <button class="opt" id="optSettings" type="button"><span class="oi">&#9881;</span>Settings <span class="chev">&#9656;</span></button>
-    <div id="optSettingsSub" class="subm" hidden>
-      <button class="opt" id="optAbout" type="button">About KASTR &amp; updates&hellip;</button>
-      <button class="opt" id="optEnc" type="button">Video output&hellip;</button>
-      <button class="opt" id="optAud" type="button">Audio output&hellip;</button>
-      <button class="opt" id="optMobile" type="button">Phone access&hellip;</button>
-    </div>
+    <!-- 0.21.23 (Kenton): About sits in More itself; Video/Audio output open from the camera and mic menus ("More video
+         settings" / "More audio settings"); Phone access is gone -- the web portal replaced it -->
+    <button class="opt" id="optAbout" type="button"><span class="oi">&#8505;</span>About KASTR &amp; updates&hellip;</button>
     <div class="sep"></div>
     <button class="opt" id="optHelp" type="button"><span class="oi">?</span>Help &mdash; keys &amp; gestures</button>
     <input type="file" id="avatarFile" accept="image/*" hidden>
@@ -1973,27 +2029,6 @@
   </div>
 </div>
 
-<div id="mobilePop" class="popcard teams" hidden>
-  <div class="head"><span>Phone access</span><span class="sp"></span>
-    <button type="button" class="close" title="Close">&#10005;</button></div>
-  <div class="body">
-    <p class="hint" id="mobileNote"></p>
-    <div class="qrwrap"><canvas id="mobileQr" width="220" height="220"></canvas>
-      <div class="qrside">
-        <select id="mobileUrlSel"></select>
-        <a id="mobileLink" class="mlink" target="_blank" rel="noopener"></a>
-        <a id="mobileCa" class="toggle" href="/ca.crt" download="kastr-ca.crt">Download certificate</a>
-      </div>
-    </div>
-    <h3 class="sect">One-time setup on the phone</h3>
-    <ol class="steps">
-      <li>Open the link (scan the code) once over <b>http</b> or download the certificate here and send it to the phone.</li>
-      <li><b>iPhone:</b> Settings &rsaquo; Profile Downloaded &rsaquo; Install, then Settings &rsaquo; General &rsaquo; About &rsaquo; Certificate Trust Settings &rsaquo; turn on <i>KASTR Local CA</i>.</li>
-      <li><b>Android:</b> Settings &rsaquo; Security &rsaquo; More security &rsaquo; Install a certificate &rsaquo; CA certificate &rsaquo; pick <i>kastr-ca.crt</i>.</li>
-      <li>Then open the https link above: the phone joins with camera and microphone like any other KASTR.</li>
-    </ol>
-  </div>
-</div>
 <button id="tapUnmute" type="button" hidden>Tap to unmute</button>
 
 <div id="recSave" class="popcard" hidden>
@@ -2262,6 +2297,11 @@
   const ICONS = {
     bcast: '<circle cx="10" cy="10" r="1.9"/><path d="M6.8 6.6a4.8 4.8 0 0 0 0 6.8M13.2 6.6a4.8 4.8 0 0 1 0 6.8M4.3 4.1a8.4 8.4 0 0 0 0 11.8M15.7 4.1a8.4 8.4 0 0 1 0 11.8"/>',   // 0.21.22: publishing
     eye: '<path d="M1.5 10S4.6 4.5 10 4.5 18.5 10 18.5 10 15.4 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.6"/>',   // 0.21.19: view only
+    search: '<circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 17 17"/>',   // 0.21.23: Participants
+    // 0.21.23: the tile menu -- Pin for me / Spotlight for everyone (Teams)
+    pin: '<path d="M11.5 2.5 17.5 8.5 15 9.5 12 12.5 12.5 16 11 17.5 2.5 9 4 7.5 7.5 8 10.5 5z"/><path d="M6.8 13.2 2.5 17.5"/>',
+    spotlight: '<rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><circle cx="8.5" cy="8.3" r="2"/>'
+      + '<path d="M5 14c0-1.9 1.6-3.2 3.5-3.2S12 12.1 12 14"/><path d="M14.6 6v3.2M13 7.6h3.2"/>',
     // 0.21.19: the tile's own view buttons -- full screen (corners out / in) and fill window (a window with arrows out / in)
     fullscreen: '<path d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>',
     fsExit: '<path d="M7.5 3v4.5H3M12.5 3v4.5H17M12.5 17v-4.5H17M7.5 17v-4.5H3"/>',
@@ -2629,6 +2669,8 @@
     if (!menu.hidden && mineMenuAnchor === anchor) { closeMineMenu(); return; }
     mineMenuAnchor = anchor;
     menu.replaceChildren();
+    const withIcons = items.some((it) => it.icon);   // 0.21.23: Teams-style rows
+    menu.classList.toggle("icons", withIcons);
     for (const it of items) {
       if (it.sep) { const d = document.createElement("div"); d.className = "msep"; menu.appendChild(d); continue; }        // 0.16.0
       if (it.cap) { const d = document.createElement("div"); d.className = "mcap"; d.textContent = it.cap; menu.appendChild(d); continue; }
@@ -2637,8 +2679,14 @@
       const b = document.createElement("button");
       b.type = "button";
       b.className = "mi" + (on ? " on" : "");
+      if (withIcons) {   // 0.21.23: every row keeps the glyph column so the words line up
+        const ic = document.createElement("span");
+        ic.className = "mico";
+        if (it.icon) ic.innerHTML = icon(it.icon);
+        b.appendChild(ic);
+      }
       const txt = document.createElement("span");
-      txt.textContent = (on ? "\u2713 " : "\u2007 ") + it.label;
+      txt.textContent = withIcons ? it.label : (on ? "\u2713 " : "\u2007 ") + it.label;
       b.appendChild(txt);
       if (it.locked) {
         const lk = document.createElement("span");
@@ -2646,7 +2694,7 @@
         lk.innerHTML = icon("lock");
         b.appendChild(lk);
       }
-      b.title = it.label;
+      b.title = it.tip || it.label;
       b.addEventListener("click", () => { closeMineMenu(); pick(it.value); });
       menu.appendChild(b);
     }
@@ -2667,6 +2715,11 @@
     menu.style.top = Math.round(top) + "px";
   }
   window.__openMenu = openMineMenu;   // 0.16.0: the publish half's grid chevron uses the same popover
+  // 0.21.23 (Kenton): "accessible with a right click on a user window" -- a menu anchored at the pointer
+  function pointAnchor(x, y) {
+    return { getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }), contains: () => false };
+  }
+  window.__pointAnchor = pointAnchor;
 
   // ---- top-bar camera controls (0.7.6) ------------------------------------
   // The main camera's mic/video toggles live by the Leave button, Teams-
@@ -3167,7 +3220,7 @@
     document.body.classList.toggle("mode-viewer", isViewerMode());
     document.body.classList.toggle("mode-publisher", isPublisherMode());
     if (isViewerMode()) {
-      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "optEnc", "optAud", "optAudio", "optVideo", "joinPreview"]) {
+      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "joinPreview"]) {
         const el = document.getElementById(id); if (el) el.hidden = true;
       }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
@@ -3186,11 +3239,11 @@
     document.body.classList.toggle("client-web", IS_WEB);
     document.body.classList.toggle("ctx-insecure", !CLIENT.secure);
     if (IS_WEB) {
-      for (const id of ["optMobile", "aboutUpd", "aboutUpdSt", "joinRelayRow"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
+      for (const id of ["aboutUpd", "aboutUpdSt", "joinRelayRow"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
     }
     if (typeof MediaRecorder === "undefined") { for (const id of ["recBtn", "optRec"]) { const el = document.getElementById(id); if (el) el.hidden = true; } }
     if (!CLIENT.secure || !CLIENT.media || isPublisherMode() || PAGE_MODE === "relay") {   // 0.21.3: an unattended box (publisher / publisher-relay / relay) has no webcam or mic UI either
-      for (const id of ["joinPreview", "permBtn", "optEnc", "optAud", "optAudio", "optVideo"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
+      for (const id of ["joinPreview", "permBtn"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
       for (const id of ["joinCam", "joinMic"]) document.getElementById(id)?.closest("label")?.setAttribute("hidden", "");
     }
@@ -3411,6 +3464,7 @@
     }));
   }
   function paintPersonGroups() {
+    try { paintParticipants(); } catch {}   // 0.21.23
     paintSelfGroup();
     try { paintViewerGroups(); } catch {}   // 0.8.11
     for (const [key, g] of personGroups) {
@@ -3777,6 +3831,163 @@
       if (via) { const sp = document.createElement("span"); sp.className = "via"; sp.textContent = " \u00b7 via " + via; head.appendChild(sp); }
     }
   }
+  // ---- 0.21.23 (Kenton, Teams screenshot): Participants -- one row per person ------------------------------
+  // me first, then everyone by name; a round avatar (photo or initials), the name, a role line (Organizer = the kept
+  // room's creator, Presenting, View only, Camera box), the mic state (slashed = their mic is off), and on hover a
+  // "..." that opens the same menu as their tile. The per-stream rows (volume, watch/park) stay in "Streams and volume".
+  const ppl = { rows: document.getElementById("pplRows"), count: document.getElementById("pplCount"), search: document.getElementById("pplSearch"),
+    mute: document.getElementById("pplMuteAll"), empty: document.getElementById("pplEmpty"), head: document.getElementById("pplSecHead"),
+    invite: document.getElementById("pplInvite"), panel: document.getElementById("peoplePanel") };
+  let pplOpen = true, pplSig = "";
+  document.getElementById("pplSic").innerHTML = icon("search");
+  document.getElementById("pplChev").innerHTML = icon("chevron");
+  ppl.invite.innerHTML = icon("share") + "<span>Share invite</span>";
+  const opKeyOf = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  function memberNameOf(key) {
+    for (const m of members.values()) if (m.op && String(m.op).toLowerCase() === key && m.name) return m.name;
+    return "";
+  }
+  function participantList() {
+    const now = performance.now();
+    const creator = opKeyOf(roomsMinter.get(CHANNEL)?.creator || "");
+    const meKey = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    const people = new Map();
+    const get = (key) => { let p = people.get(key); if (!p) people.set(key, p = { key, name: "", cam: null, content: [], talk: false, mic: "", viewer: false, me: false }); return p; };
+    for (const [n, t] of tiles) {
+      if (isGridChild(n)) continue;
+      const key = personKeyOf(n);
+      if (key === "?") continue;
+      const p = get(key);
+      if (isContentPath(n)) p.content.push(n);
+      else if (!p.cam) {
+        p.cam = n;
+        p.mic = t.pane.classList.contains("no-audio") ? "off" : "on";
+        p.talk = now < (t.talkUntil ?? 0);
+      }
+    }
+    for (const [key] of viewerOps()) { const p = get(key); p.viewer = true; }
+    const meName = window.__publisher?.state?.()?.operator || "";
+    if (meKey || meName) {
+      const p = get(meKey || opKeyOf(meName));
+      p.me = true; p.name = meName;
+      const own = document.querySelector(".pubpane.camkind");
+      if (own) { p.mic = own.classList.contains("micmuted") ? "off" : "on"; p.talk = own.classList.contains("talking"); }
+      else if (!p.cam) p.mic = "";
+    }
+    const out = [];
+    for (const p of people.values()) {
+      p.name = p.name || memberNameOf(p.key) || prettyOperator(p.key);
+      const role = [];
+      if (creator && creator === p.key) role.push("Organizer");
+      if (p.content.length) role.push("Presenting");
+      if (boxOps.has(p.key)) role.push("Camera box");
+      if (p.viewer && !p.me) role.push("View only");
+      p.role = role.join(" \u00b7 ");
+      out.push(p);
+    }
+    out.sort((a, b) => (b.me - a.me) || a.name.localeCompare(b.name));
+    return out;
+  }
+  function participantMenu(p, anchor) {
+    const tileName = p.cam || p.content[0];
+    const pane = tileName ? tiles.get(tileName)?.pane : null;
+    if (pane?.__openMenu) { pane.__openMenu(anchor); return true; }
+    if (p.viewer && authRole === "admin") {   // a watcher has no tile: the admin can still remove them
+      openMineMenu(anchor, [{ value: "akick", icon: "leave", label: "Remove " + p.name + " from the room (admin)" }], "", () => {
+        if (!confirm("Remove " + p.name + " from the room?")) return;
+        for (const x of roomsPres.values()) {
+          if (!x.state || x.goneAt || String(x.who?.op || "").toLowerCase() !== p.key || x.who.peer === statePeer()) continue;
+          window.__adminSend?.({ op: "kick", target: x.who.host + "/" + x.who.op + "/" + x.who.peer });
+        }
+      });
+      return true;
+    }
+    return false;
+  }
+  function paintParticipants(force) {
+    if (ppl.panel.hidden && !force) return;
+    const list = participantList();
+    const q = ppl.search.value.trim().toLowerCase();
+    const shown = q ? list.filter((p) => p.name.toLowerCase().includes(q)) : list;
+    ppl.count.textContent = String(list.length);
+    ppl.mute.hidden = authRole !== "admin" || !list.some((p) => !p.me && p.cam);
+    ppl.rows.hidden = !pplOpen;
+    ppl.empty.hidden = !pplOpen || shown.length > 0;
+    ppl.empty.textContent = q ? "No one here matches \u201c" + ppl.search.value.trim() + "\u201d" : "No one has joined yet.";
+    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, avatarUrls.get(p.key) || "", p.cam || p.content[0] || ""].join("|")).join("\n");
+    if (sig === pplSig && !force) return;
+    if (ppl.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
+    pplSig = sig;
+    ppl.rows.replaceChildren(...shown.map((p) => {
+      const row = document.createElement("div");
+      row.className = "pprow" + (p.talk ? " talk" : "") + (p.me ? " me" : "");
+      row.dataset.key = p.key;
+      const av = document.createElement("div"); av.className = "ppav";
+      av.style.setProperty("--ring", personColor(p.key));
+      av.textContent = viewerInitials(p.name);
+      paintAvatar(av, avatarUrls.get(p.key));
+      const nm = document.createElement("div"); nm.className = "ppname";
+      const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = p.name;
+      if (p.me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (You)"; pn.appendChild(y); }
+      const ps = document.createElement("div"); ps.className = "ps"; ps.textContent = p.role;
+      nm.append(pn, ps);
+      row.append(av, nm);
+      row.title = p.name + (p.role ? " \u2014 " + p.role : "");
+      const hasMenu = !p.me && (p.cam || p.content.length || (p.viewer && authRole === "admin"));
+      if (hasMenu) {
+        const more = document.createElement("button"); more.type = "button"; more.className = "ppmore"; more.title = "More options";
+        more.innerHTML = icon("more");
+        const open = (anchor) => { if (participantMenu(p, anchor)) { row.classList.add("menu"); watchMenuClose(row); } };
+        more.addEventListener("click", (e) => { e.stopPropagation(); open(more); });
+        row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); open(pointAnchor(e.clientX, e.clientY)); });
+        row.appendChild(more);
+      }
+      const mic = document.createElement("span"); mic.className = "ppmic" + (p.mic === "on" ? " live" : "");
+      if (p.mic) { mic.innerHTML = icon(p.mic === "off" ? "micOff" : "mic"); mic.title = p.mic === "off" ? "Microphone off" : p.talk ? "Speaking" : "Microphone on"; }
+      else if (p.viewer) { mic.innerHTML = icon("eye"); mic.title = "View only"; }
+      row.appendChild(mic);
+      return row;
+    }));
+  }
+  function watchMenuClose(row) {   // the row keeps its highlight while its menu is open (Teams)
+    const t = setInterval(() => { if (!mineMenu || mineMenu.hidden) { row.classList.remove("menu"); clearInterval(t); } }, 250);
+  }
+  ppl.search.addEventListener("input", () => paintParticipants(true));
+  ppl.head.addEventListener("click", () => { pplOpen = !pplOpen; ppl.head.setAttribute("aria-expanded", String(pplOpen)); paintParticipants(true); });
+  ppl.mute.addEventListener("click", () => {
+    const targets = [...tiles.keys()].filter((n) => !isContentPath(n) && !isGridChild(n) && !tiles.get(n)?.pane.classList.contains("no-audio"));
+    if (!targets.length) { window.__toast?.("Every microphone in this room is already off", 3000, { level: "info" }); return; }
+    if (!confirm("Mute " + targets.length + (targets.length === 1 ? " microphone" : " microphones") + " in this room? Each person can unmute themselves.")) return;
+    for (const n of targets) window.__adminSend?.({ op: "mute", target: n });
+    window.__toast?.("Asked " + targets.length + (targets.length === 1 ? " microphone" : " microphones") + " to mute", 3000, { level: "info" });
+  });
+  // Share invite: a link that opens THIS room where it lives -- the tunnel / web relay, else the address this page was
+  // reached by, else (the desktop window, on loopback) this host's network address; the access code is still needed
+  async function inviteLink() {
+    let base = "";
+    try { const wu = new URL(urlInput.value.trim()); if (isWebRelay(wu.href)) base = wu.origin; } catch {}
+    if (!base && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) base = location.origin;
+    if (!base) {
+      try {
+        const m = await fetch("/api/mobile", { cache: "no-store" }).then((r) => r.json());
+        if (m?.https?.length) base = m.https[0].replace(/\/moq-watch-lite\.html$/, "");
+        else if (m?.lan?.length) base = m.lan[0];
+      } catch {}
+    }
+    if (!base) { const rb = relayHostBase(); if (rb && !/\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(rb)) base = rb; }
+    return base ? base.replace(/\/+$/, "") + "/moq-watch-lite.html?room=" + encodeURIComponent(CHANNEL) : "";
+  }
+  ppl.invite.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const link = await inviteLink();
+    if (!link) { window.__toast?.("No address others can reach yet \u2014 turn on 'Allow other machines to connect' on the Relay page", 6000, { level: "warn" }); return; }
+    let copied = false;
+    try { await navigator.clipboard.writeText(link); copied = true; } catch {}
+    if (copied) window.__toast?.("Invite link copied \u2014 they still need the access code", 4000, { level: "info" });
+    else window.prompt("Copy this invite link (they still need the access code):", link);
+  });
+  window.__participants = () => participantList().map((p) => ({ key: p.key, name: p.name, role: p.role, mic: p.mic, talk: p.talk, me: p.me, menu: !!(p.cam || p.content.length) }));   // rig
+  window.__inviteLink = inviteLink;   // rig
   const fmtUp = (ms) => {
     const m = Math.max(0, Math.floor(ms / 60000));
     if (m < 60) return m + "m";
@@ -5094,12 +5305,14 @@
       // black bar -- so an audio-only tile swaps the canvas for the face.
       // undefined = catalog not seen yet: treat as "has video" and claim
       // nothing, the same startup rule as the hasAudio badge below.
-      const audioOnly = t.hasVideo === false || !!t.noDecode || !!t.noCatalog;   // 0.21.22: no catalog yet -> the person's face, never a black void   // 0.9.2: undecodable video shows the face + a notice
+      t.shed = congestShed(name, isSelected || (gridOpen && gridOpen.path === name));   // 0.21.23: the listener's ladder
+      const audioOnly = t.hasVideo === false || !!t.noDecode || !!t.noCatalog || t.shed;   // 0.21.22: no catalog yet -> the person's face, never a black void   // 0.9.2: undecodable video shows the face + a notice
       t.pane.classList.toggle("audio-only", shown && audioOnly);
       if (t.faceCap) {
         // 0.8.2: no "audio only" caption -- the face is identity (initials
         // + swoosh) and the chip row tells the audio/video story.
-        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it" : t.noCatalog ? "connecting\u2026" : "";   // 0.21.22   // 0.9.2
+        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it" : t.noCatalog ? "connecting\u2026"
+          : t.shed && t.hasVideo !== false ? "video paused \u2014 weak connection" : "";   // 0.21.23   // 0.21.22   // 0.9.2
       }
       if (t.faceInit) {
         t.faceInit.textContent = initialsOf(name);
@@ -5786,31 +5999,42 @@
       pchev.className = "pchev";
       pchev.innerHTML = icon("more");   // 0.21.0: options = three dots
       pchev.title = "Options for this stream";
-      pchev.addEventListener("click", (e) => {
-        e.stopPropagation();
+      const openTileMenu = (anchor) => {   // 0.21.23: the three dots and a right-click open the same menu
+        const content = isContentPath(name);
+        const muted = mutedStreams.has(name);
+        const pinned = !gridMode && selectedName === name && !selfSpotEl;
+        const lit = spotLit?.target === name;
+        // 0.21.23 (Kenton, Teams screenshot): Mute participant / Pin for me / Spotlight for everyone, each with its glyph;
+        // the mute stays what it always was -- this person's sound on THIS device (the admin mute is below)
         const items = [   // 0.21.19: full screen and fill window are icons beside this button now
-          { value: "mute", label: (mutedStreams.has(name) ? "Unmute" : "Mute") + (gridMeta.has(name) ? " this grid here" : " here") }];   // 0.9.5: a grid's mute covers its feeds
+          { value: "mute", icon: muted ? "mic" : "micOff",
+            label: (muted ? "Unmute " : "Mute ") + (gridMeta.has(name) ? "grid" : content ? "share" : "participant"),   // 0.9.5: a grid's mute covers its feeds
+            tip: muted ? "Hear them again on this device" : "Silence them on this device only" }];
         // 0.8.2: person-wide mute -- audioMode "all" kept a person's OTHER
         // streams audible after muting one tile.
         const person = personKeyOf(name);
         const kin = [...tiles.keys()].filter((n) => personKeyOf(n) === person);
         if (kin.length > 1) {
           const allMuted = kin.every((n) => mutedStreams.has(n));
-          items.push({ value: "pmute", label: (allMuted ? "Unmute " : "Mute ")
+          items.push({ value: "pmute", icon: allMuted ? "spk" : "spkOff", label: (allMuted ? "Unmute " : "Mute ")
             + prettyOperator(person === "?" ? "Unnamed" : person) + " everywhere" });
         }
-        if (isContentPath(name) && (contentTally() > 1 || gridMeta.has(name))) {   // 0.15.0: a grid can always be spotlit
-          items.push({ value: "me", label: "Spotlight for me" });
-          items.push({ value: "all", label: "Spotlight for everyone" });
-        }
+        // 0.21.23: every tile can be pinned and spotlit (Teams) -- before, only content with a choice to make
+        items.push({ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me",
+          tip: pinned ? "Back to the gallery" : "Keep this on your stage (only you)" });
+        items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Stop spotlighting" : "Spotlight for everyone",
+          tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
+        items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name)) {   // 0.16.0: the admin code
           items.push({ value: "astop", label: "Stop this share (admin)" });
           if (!isContentPath(name)) items.push({ value: "amute", label: "Mute their microphone (admin)" });
           items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
         }
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
-        openMineMenu(pchev, items, "", (v) => {
+        openMineMenu(anchor, items, "", (v) => {
           if (v === "lat") { latencyToggle(name); return; }
+          if (v === "unpin") { gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); return; }   // as the Gallery pill
+          if (v === "unspot") { window.__spot?.clear?.(); spotLitClear(true); applyState(); return; }
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
           else if (v === "akick") {
@@ -5834,6 +6058,13 @@
           else if (v === "me") { gridMode = false; select(name); }
           else window.__spot?.set?.(name);
         });
+      };
+      pchev.addEventListener("click", (e) => { e.stopPropagation(); openTileMenu(pchev); });
+      pane.__openMenu = openTileMenu;   // 0.21.23: the Participants row's ... opens it too
+      pane.addEventListener("contextmenu", (e) => {   // 0.21.23 (Kenton): right-click on a user window
+        if (e.shiftKey) return;   // Shift + right-click keeps the browser's own menu
+        e.preventDefault(); e.stopPropagation();
+        openTileMenu(pointAnchor(e.clientX, e.clientY));
       });
       pane.appendChild(pchev);
       // 0.21.19 (Kenton): view buttons beside the options -- fill the window, full screen
@@ -6800,7 +7031,7 @@
     }
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     if (ref.kind === "camera") {   // 0.16.0: my own camera can be spotlit like any tile
-      items.push({ value: "me", label: "Spotlight for me" });
+      items.push({ value: "me", label: "Pin for me" });   // 0.21.23: Teams names
       items.push({ value: "all", label: "Spotlight for everyone" });
     } else if (contentTally() > 1 || ref.id <= -100) items.push({ value: "all", label: "Spotlight for everyone" });   // 0.15.0: a grid may always be spotlit
     openMineMenu(anchor, items, "", (v) => {
@@ -6871,39 +7102,6 @@
   document.addEventListener("keydown", () => { if (audioBlocked()) audioUnlock(); }, { capture: true, passive: true });   // 0.17.0: a keyboard is a gesture too
   setInterval(paintUnmute, 1000);
 
-  // ---- 0.8.9: phone access card -----------------------------------------------
-  let qrLib = null;
-  async function drawQr(canvas, text) {
-    try {
-      qrLib = qrLib || (await import("https://esm.sh/qrcode-generator@1.4.4")).default;
-      const qr = qrLib(0, "M"); qr.addData(text); qr.make();
-      const n = qr.getModuleCount(), cx = canvas.getContext("2d"), S = canvas.width, cell = Math.floor((S - 16) / n), off = Math.floor((S - cell * n) / 2);
-      cx.fillStyle = "#fff"; cx.fillRect(0, 0, S, S); cx.fillStyle = "#06121a";
-      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) cx.fillRect(off + c * cell, off + r * cell, cell, cell);
-    } catch (e) {
-      const cx = canvas.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, canvas.width, canvas.height);
-      cx.fillStyle = "#900"; cx.font = "12px sans-serif"; cx.fillText("QR unavailable offline", 20, 110);
-    }
-  }
-  async function paintMobilePop() {
-    const note = document.getElementById("mobileNote"), sel = document.getElementById("mobileUrlSel"), link = document.getElementById("mobileLink");
-    let m = null;
-    try { m = await fetch("/api/mobile", { cache: "no-store" }).then((r) => r.json()); } catch {}
-    if (!m || !m.ready) {
-      note.textContent = m?.note || "The phone link needs this KASTR to be reachable on the network.";
-      sel.replaceChildren(); link.textContent = ""; link.removeAttribute("href");
-      document.getElementById("mobileCa").hidden = true;
-      drawQr(document.getElementById("mobileQr"), "https://kastr.local/unavailable");
-      return;
-    }
-    document.getElementById("mobileCa").hidden = false;
-    note.textContent = "Scan with the phone's camera. First time only: install this KASTR's certificate (step 2 or 3), then open the link.";
-    const urls = m.https || [];
-    sel.replaceChildren(...urls.map((u) => new Option(u.replace(/^https:\/\//, "").replace(/\/moq-watch-lite\.html$/, ""), u)));
-    const paintUrl = () => { const u = sel.value || urls[0] || ""; link.textContent = u; link.href = u; drawQr(document.getElementById("mobileQr"), u); };
-    sel.onchange = paintUrl;
-    paintUrl();
-  }
   // Media file ⓘ: a tooltip, never the picker
   {
     const ib = document.getElementById("fileInfo"), tip = document.getElementById("fileInfoTip");
@@ -7166,10 +7364,9 @@
   const profilePop = document.getElementById("profilePop");
   const roomInfoPop = document.getElementById("roomInfoPop");
   registerPop(optPop, optBtn);
-  registerPop(document.getElementById("peoplePanel"), document.getElementById("peopleBtn"));
+  registerPop(document.getElementById("peoplePanel"), document.getElementById("peopleBtn"), () => paintParticipants(true));   // 0.21.23
   const audOutPop = document.getElementById("audOutPop");   // 0.8.9
-  const mobilePop = document.getElementById("mobilePop");
-  for (const p of [encPop, aboutPop, profilePop, roomInfoPop, audOutPop, mobilePop]) {
+  for (const p of [encPop, aboutPop, profilePop, roomInfoPop, audOutPop]) {
     // 0.8.9: the profile card closes through closeProfile (runs the
     // continuation) and never on a stray close while it is the first-run modal.
     const closeIt = () => {
@@ -7187,10 +7384,7 @@
     pop.hidden = false;
     placePop(pop, optBtn);
   };
-  document.getElementById("optAudio").addEventListener("click", () => { paintMicPop(); openFromOptions(audioPop); });
-  document.getElementById("optEnc").addEventListener("click", () => openFromOptions(encPop));
-  document.getElementById("optAud").addEventListener("click", () => openFromOptions(audOutPop));   // 0.8.9
-  document.getElementById("optMobile").addEventListener("click", () => { paintMobilePop(); openFromOptions(mobilePop); });
+
   document.getElementById("optAbout").addEventListener("click", () => { paintAboutDl(); openFromOptions(aboutPop); });
   // 0.21.7: a web client downloads the full install zip from the host it is looking at (More > About). The
   // host assembles it from the parts every install carries (kastr_release.py, 10-20 s); a link whose zip is not
@@ -7251,14 +7445,8 @@
   document.getElementById("optRec").addEventListener("click", () => { closeAllPops(); recBtn.click(); });
   document.getElementById("optRoom").addEventListener("click", () => { paintRoomInfo(); openFromOptions(roomInfoPop); });
   document.getElementById("optFiles").addEventListener("click", () => { closeAllPops(); filesPop.hidden = false; paintFilesPop(); placePop(filesPop, filesBtn); filesBtn.classList.add("grid-on"); });
-  document.getElementById("optChat")?.addEventListener("click", () => { closeAllPops(); try { window.__chatOpen?.(); } catch {} });   // 0.12.0
-  document.getElementById("optVideo").addEventListener("click", () => { closeAllPops(); camPop.hidden = false; paintCamPop(); placePop(camPop, topCamChev); });
   document.getElementById("optProfile").addEventListener("click", () => openProfile(false));
-  document.getElementById("optSettings").addEventListener("click", (e) => {
-    e.stopPropagation();
-    const sub = document.getElementById("optSettingsSub");
-    sub.hidden = !sub.hidden;
-  });
+
   function paintRoomInfo() {
     const body = document.getElementById("roomInfoBody");
     const c = readChannel();
@@ -7762,8 +7950,8 @@
     const mode = window.__micMode?.get?.() ?? ((window.__micProc?.get?.() ?? []).every((v) => v === "on") ? "browser" : "off");
     const nsEl = document.getElementById("nsToggle");
     nsEl.checked = mode !== "off"; nsEl.indeterminate = false;
-    document.getElementById("nsBrowser").checked = mode !== "rnnoise";
-    document.getElementById("nsRnnoise").checked = mode === "rnnoise";
+    document.getElementById("nsBrowser").checked = mode === "browser";   // 0.21.23: with suppression off, switching it on returns to the default (RNNoise)
+    document.getElementById("nsRnnoise").checked = mode !== "browser";
     const broken = window.__micMode?.broken?.() || "";
     const rn = document.getElementById("nsRnnoise");
     rn.disabled = !window.__micMode || !!broken;
@@ -8720,6 +8908,7 @@
     const mm = /(\d+) late frame\(s\), max (\d+(?:\.\d+)?)\s*(ms|s)/.exec(m);
     const n = mm ? Number(mm[1]) : 1, behind = mm ? Number(mm[2]) * (mm[3] === "s" ? 1000 : 1) : 0;
     ad.late++; ad.lateFrames += n; ad.lastLateAt = now; ad.maxBehind = Math.max(ad.maxBehind, behind);
+    try { congestTrouble("late"); } catch {}   // 0.21.23
     ad.recent.push(now); if (ad.recent.length > 100) ad.recent.splice(0, 50);
     const steps = WEB_RELAY_PAGE ? AUDIO_DELAY_STEPS_WEB : AUDIO_DELAY_STEPS_LAN;
     const idx = steps.indexOf(ad.extra);
@@ -8730,6 +8919,51 @@
       try { applyState(); } catch {}
     }
   }
+  // 0.21.23 (Kenton: "audio dropping out for those on slow internet"): the LISTENER'S LADDER -- audio before video.
+  // Late audio is answered first by the wider audio delay above (jitter); when audio is STILL late after that, or the
+  // player had to skip audio to catch up, this page is short of bandwidth and stops downloading video it can live
+  // without: level 1 = people in the rail/gallery show their face (their sound keeps playing), level 2 = shares and
+  // grids that are not on the stage too. What is on the stage (picked, pinned, spotlit, the opened camera) keeps its
+  // video; nothing ever stops audio. Steps are 20 s apart; after two quiet minutes it steps back down, one level at a time.
+  // kastr.congest = "off" turns it off on this device.
+  window.__congest = { level: 0, steps: 0, recent: [], lastStepAt: 0, lastTroubleAt: 0, why: "" };
+  const CONGEST_MAX = 2;
+  const congestOff = () => { try { return localStorage.getItem("kastr.congest") === "off"; } catch { return false; } };
+  function congestTrouble(why) {
+    const c = window.__congest, now = Date.now();
+    if (congestOff() || joinState !== "joined") return;
+    // a late report counts only once the audio delay has already widened -- before that it is jitter, not bandwidth
+    if (why === "late" && !(window.__audioDelay?.extra > 0)) return;
+    c.recent.push(now); c.lastTroubleAt = now;
+    if (c.recent.length > 60) c.recent.splice(0, 30);
+    if (c.level >= CONGEST_MAX || now - c.lastStepAt < 20000 || c.recent.filter((t) => now - t < 20000).length < 3) return;
+    c.level++; c.steps++; c.lastStepAt = now; c.recent = []; c.why = why;
+    log("Audio is struggling (" + why + ") \u2014 bandwidth saver level " + c.level + ": " + (c.level === 1 ? "video off for people not on the stage" : "video off for everything not on the stage"));
+    window.__toast?.(c.level === 1 ? "Weak connection \u2014 video from people not on the stage is paused so their audio stays clear"
+      : "Still a weak connection \u2014 only the stage keeps its video; all audio continues", 6000, { level: "warn" });
+    try { applyState(); } catch {}
+  }
+  function congestShed(name, onStage) {
+    const lvl = window.__congest?.level;   // applyState can run before this block has
+    if (!lvl || onStage) return false;
+    try { if (spotLit?.target === name) return false; } catch {}   // the room's spotlight keeps its picture
+    return lvl >= 2 || (tileClasses.get(name) ?? pathClass(name)) === "person";
+  }
+  setInterval(() => {   // two quiet minutes: one level back
+    const c = window.__congest, now = Date.now();
+    if (!c.level || now - c.lastTroubleAt < 120000 || now - c.lastStepAt < 120000) return;
+    c.level--; c.lastStepAt = now;
+    log("Connection steady for two minutes \u2014 bandwidth saver level " + c.level);
+    if (!c.level) window.__toast?.("Connection recovered \u2014 video is back", 4000, { level: "info" });
+    try { applyState(); } catch {}
+  }, 15000);
+  { const ct = document.getElementById("congestToggle");   // Audio settings switch (on unless kastr.congest = off)
+    ct.checked = !congestOff();
+    ct.addEventListener("change", () => {
+      try { if (ct.checked) localStorage.removeItem("kastr.congest"); else localStorage.setItem("kastr.congest", "off"); } catch {}
+      if (!ct.checked && window.__congest.level) { window.__congest.level = 0; try { applyState(); } catch {} }
+    }); }
+  window.__congestSim = (lvl) => { const c = window.__congest; c.level = Math.max(0, Math.min(CONGEST_MAX, Number(lvl) || 0)); c.lastStepAt = c.lastTroubleAt = Date.now(); applyState(); return c.level; };   // rig
   setInterval(() => {   // step back down after two quiet minutes
     const ad = window.__audioDelay, now = Date.now();
     if (!ad.extra || now - ad.lastLateAt < 120000 || now - ad.lastStepAt < 120000) return;
@@ -8766,6 +9000,7 @@
         if (m.startsWith("skipping slow group")) {
           const g = window.__slowGroups, k = /track=audio/.test(m) ? "audio" : /track=video/.test(m) ? "video" : "other";
           g[k]++; g.lastAt = Date.now(); g.recent.push([g.lastAt, k]);
+          if (k === "audio") try { congestTrouble("skip"); } catch {}   // 0.21.23
           if (g.recent.length > 600) g.recent.splice(0, g.recent.length - 300);
         } else if (m.startsWith("connection closed, reconnecting") || m.startsWith("connection error")) netEvent(m);   // 0.21.8
       } catch {}
@@ -9639,6 +9874,7 @@
       audioActive: [...tiles.entries()].filter(([, t]) => t.watch.muted === false).map(([n]) => n),
       netEvents: (() => { const ne = window.__netEvents || {}; return { reconnects: ne.reconnects || 0, lastMinute: (ne.recent || []).filter((t) => Date.now() - t < 60000).length, breaks: ne.breaks || 0 }; })(),   // 0.21.8
       slowGroups: { audio: window.__slowGroups?.audio || 0, video: window.__slowGroups?.video || 0 },   // 0.21.8
+      congest: (() => { const c = window.__congest || {}; return { level: c.level || 0, steps: c.steps || 0, why: c.why || "", off: congestOff(), shed: [...tiles].filter(([, t]) => t.shed).length }; })(),   // 0.21.23
       audioDelay: (() => { const ad = window.__audioDelay || {}; return { extra: ad.extra || 0, steps: ad.steps || 0, late: ad.late || 0, lateFrames: ad.lateFrames || 0, maxBehind: Math.round(ad.maxBehind || 0) }; })(),   // 0.21.9
       fallbackRetries: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.fbRetries).map(([n, t]) => [n, t.fbRetries()])),   // 0.21.8
       shown: [...tiles.entries()].filter(([, t]) => t.pane.classList.contains("shown")).map(([n]) => n),
@@ -11268,7 +11504,9 @@
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined
-    const want = keep ?? (lj && lj.room ? channelSlug(lj.room) : cur);
+    let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
+    try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
+    const want = keep ?? (invited && list.some((r) => r.slug === invited) ? invited : lj && lj.room ? channelSlug(lj.room) : cur);
     sel.value = [...sel.options].some((o) => o.value === want) ? want
               : list.some((r) => r.slug === cur) ? cur : "main";
     paintPwdRow();
@@ -12546,8 +12784,9 @@
   let micMode = "";
   try { micMode = localStorage.getItem(MIC_MODE_KEY) || ""; } catch {}
   if (micMode === "bg") micMode = "browser"; else if (micMode === "voice") micMode = "rnnoise";   // 0.8.9 names
-  // migrate: the browser's Auto already suppresses, so only an explicit all-off is "off"
-  if (!MIC_MODES.includes(micMode)) micMode = [enc.ns, enc.echo, enc.agc].every((e) => e.value === "off") ? "off" : "browser";
+  // migrate: the browser's Auto already suppresses, so only an explicit all-off is "off"; 0.21.23 (Kenton): background
+  // noise removal (RNNoise) is the default for everyone who never picked a mode -- a saved choice is kept
+  if (!MIC_MODES.includes(micMode)) micMode = [enc.ns, enc.echo, enc.agc].every((e) => e.value === "off") ? "off" : "rnnoise";
   // Chrome 123+ lists the voiceIsolation constraint on every platform but only a few devices
   // honour it: the switch is offered only after a track REPORTED it back (getSettings),
   // remembered per device and forgotten when the browser changes.
@@ -12574,11 +12813,11 @@
     if (voiceIsoOn && VOICE_ISO_HINT) mic.voiceIsolation = true;
     return mic;
   }
-  function setMicMode(mode) {
+  function setMicMode(mode, persist = true) {
     if (mode === "bg") mode = "browser"; else if (mode === "voice") mode = "rnnoise";
     if (!MIC_MODES.includes(mode)) return;
     micMode = mode;
-    try { localStorage.setItem(MIC_MODE_KEY, mode); } catch {}
+    if (persist) try { localStorage.setItem(MIC_MODE_KEY, mode); } catch {}
     const on = mode !== "off";
     for (const e of [enc.ns, enc.echo, enc.agc]) e.value = on ? "on" : "off";
     applySettingsAll();
@@ -15032,7 +15271,7 @@
     const msg = "Background noise removal unavailable \u2014 " + denoiseBroken + ". Using the browser's suppression.";
     log(msg);
     window.__toast?.(msg, 7000, { level: "warn" });
-    if (micMode === "rnnoise") setMicMode("browser");
+    if (micMode === "rnnoise") setMicMode("browser", false);   // 0.21.23: for this session only -- a passing failure never turns the default off for good
   }
   // the Audio card's test tap in rnnoise mode: stream -> RNNoise -> (caller's analyser), in the shared context
   async function denoiseTap(stream) {
@@ -16486,9 +16725,11 @@
     const geo = n + "|" + (g.layout || "auto") + "|" + g.canvas.width + "x" + g.canvas.height;
     if (g.lastGeo !== geo) { g.lastGeo = geo; g.cx.fillStyle = "#000"; g.cx.fillRect(0, 0, g.canvas.width, g.canvas.height); gridNote(g, "relayout " + geo); }   // 0.21.5: noted
     const nowMs = performance.now();
+    const B = Math.max(1, Math.round(g.canvas.width / 1280));   // 0.21.23: border per cell side (2 px between cells at 1280 wide)
     ms.forEach((s, i) => {
       const r = rects[i]; if (!r) return;
-      const { x, y, w: cw, h: ch } = r;
+      // 0.21.23: whole pixels -- fractional cell edges (W / cols) left light seams where two cells met
+      const x = Math.round(r.x), y = Math.round(r.y), cw = Math.round(r.x + r.w) - x, ch = Math.round(r.y + r.h) - y;
       const v = s.video;
       if (v && v.videoWidth && !s.monitorDown) {
         g.cx.fillStyle = "#000";
@@ -16513,6 +16754,7 @@
         g.cx.fillText(s.placeholder || tries ? ("reconnecting\u2026" + (tries ? " (attempt " + tries + ")" : "")) : "connecting\u2026", x + cw / 2, y + ch / 2);
         g.cx.textAlign = "left";
       }
+      g.cx.strokeStyle = "#000"; g.cx.lineWidth = B; g.cx.strokeRect(x + B / 2, y + B / 2, cw - B, ch - B);   // 0.21.23: the cell border
       if (g.dragFrom === i) { g.cx.strokeStyle = "#009fda"; g.cx.lineWidth = 4; g.cx.strokeRect(x + 2, y + 2, cw - 4, ch - 4); }
       // 0.9.7: no name strip by default -- it covered the cameras' own on-screen info bar
       // (the names travel in the .grid announce and in the feed menus). 0.15.0: an opt-in
@@ -16601,7 +16843,7 @@
       items.push({ value: "lock", label: (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
       items.push({ value: "names", label: (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells" });
       items.push({ sep: true }, { value: "rename", label: "Rename grid\u2026" });
-      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Spotlight for me" }, { value: "all", label: "Spotlight for everyone" });
+      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
       items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid" });
       const open = window.__openMenu;
       if (!open) return;
@@ -18234,7 +18476,7 @@
   };
   window.__micProc = {
     get: () => [enc.ns, enc.echo, enc.agc].map((e) => e.value),   // 0.8.8 shim: array of "", "on", "off"
-    set: (on) => setMicMode(on ? (micMode === "rnnoise" ? "rnnoise" : "browser") : "off"),
+    set: (on) => setMicMode(on ? (micMode === "browser" ? "browser" : "rnnoise") : "off"),
   };
   // 0.8.8: persistent RTSP feeds -- pane menu toggle + restore after a restart
   window.__rtspPersist = {

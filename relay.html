@@ -267,6 +267,10 @@
         <span>Relay name (how this relay is labeled in stats and stream origins)</span>
         <input type="text" id="relName" spellcheck="false" placeholder="e.g. hub, garage-spoke" maxlength="32">
       </label>
+      <!-- 0.21.23 (Kenton): a hub hides the spoke-only fields (hub URL, federation code, pull updates) -->
+      <label class="f asi-sw"><span class="switch"><input type="checkbox" id="fedHub"><i></i></span><span>This relay is the hub (other relays join it)</span></label>
+      <div id="fedHubMsg" class="hint" style="margin-top:2px" hidden>Spokes join with this relay's address and the federation code from the Access codes block. Spokes that pull updates follow this KASTR's version.</div>
+      <div id="fedSpoke">
       <label class="f">
         <span>Hub relay URL (e.g. https://10.13.20.82:4443)</span>
         <input type="text" id="fedUrl" spellcheck="false" placeholder="empty = standalone relay">
@@ -279,6 +283,7 @@
       <div class="btnrow">
         <button id="fedSave">Save federation</button>
         <button id="fedClear" class="stop">Clear</button>
+      </div>
       </div>
       <span id="fedMsg" class="hint" style="display:block;margin-top:5px"></span>
       <span id="fedState" class="hint" style="display:block;margin-top:2px"></span>
@@ -293,20 +298,6 @@
       <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
         <label class="f asi-sw"><span class="switch"><input type="checkbox" id="mdnsAdv"><i></i></span><span>Let KASTR apps on this network find this relay (mDNS &mdash; its name, address and certificate only; access codes are still required)</span></label>
         <span id="mdnsMsg" class="hint" style="display:block;margin-top:5px"></span>
-      </div>
-      <!-- 0.16.0: same-site relays find each other over mDNS (moq-relay [cluster.lan]) -->
-      <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
-        <label class="f asi-sw"><span class="switch"><input type="checkbox" id="lanOn"><i></i></span><span>Join same-site relays automatically (LAN, mDNS)</span></label>
-        <label class="f">
-          <span>LAN secret (64 hex characters — the same on every relay of this site; required when access codes are set)</span>
-          <input type="text" id="lanSecret" class="masked" autocomplete="off" spellcheck="false" placeholder="leave empty to keep the current one">
-        </label>
-        <div class="btnrow">
-          <button id="lanGen" type="button">Generate a secret</button>
-          <button id="lanSave">Save LAN</button>
-          <button id="lanClear" class="stop">Clear</button>
-        </div>
-        <span id="lanMsg" class="hint" style="display:block;margin-top:5px"></span>
       </div>
     </section>
 
@@ -511,7 +502,8 @@
     }
     $("codesWarn").hidden = !s.legacy;
     $("remoteNote").hidden = LOCAL;
-    for (const id of ["codesSave", "codesClear", "codesRotate", "fedSave", "fedClear"]) $(id).disabled = !LOCAL;
+    for (const id of ["codesSave", "codesClear", "codesRotate", "fedSave", "fedClear", "fedHub"]) $(id).disabled = !LOCAL;
+    if (s.cluster) paintHub(s.cluster);   // 0.21.23
     // 0.11.0: federation (spoke side): master flag, saved-code hint, hub token state
     if (s.cluster) {
       if (document.activeElement !== $("fedMaster")) $("fedMaster").checked = s.cluster.master !== false;
@@ -599,7 +591,6 @@
       const s = await api("/api/relay/status");
       render(s);
       api("/api/relay/health").then(paintHealth).catch(() => { $("healthPanel").hidden = true; });   // 0.16.0 (an older server 404s -> hidden)
-      if (s.lan) paintLan(s.lan);   // 0.16.0
       // The server owns this answer now: scraping the badge was circular (the
       // badge lives in this same document) and blind inside the app shell,
       // where embedded pages carry no masthead at all.
@@ -920,6 +911,30 @@
     fedApply({ connect: url, code: $("fedCode").value || null, master: $("fedMaster").checked });
   });
   $("fedClear").addEventListener("click", () => fedApply({ connect: "", code: "", master: true }));
+  // 0.21.23 (Kenton): "a toggle to say if a device is the hub" -- on, the spoke-only fields hide. Never said before:
+  // a relay with no hub URL that already has spokes federated to it reads as the hub.
+  function hubNow(c) {
+    if (typeof c.hub === "boolean") return c.hub;
+    return !c.connect && !$("spokesBox").hidden;
+  }
+  function paintHub(c) {
+    const on = hubNow(c);
+    if (document.activeElement !== $("fedHub")) $("fedHub").checked = on;
+    $("fedSpoke").hidden = on;
+    $("fedHubMsg").hidden = !on;
+  }
+  $("fedHub").addEventListener("change", async () => {
+    const on = $("fedHub").checked;
+    const was = lastStatus?.cluster?.connect || "";
+    if (on && was && !confirm("Make this relay the hub? It leaves the hub " + was + " (the federation code is kept).")) { $("fedHub").checked = false; return; }
+    $("fedSpoke").hidden = on; $("fedHubMsg").hidden = !on;
+    try {
+      const r = await api("/api/relay/cluster", { hub: on });
+      if (r.error) { $("fedMsg").textContent = r.error; return; }
+      $("fedMsg").textContent = on ? ("This relay is the hub" + (r.restarted ? " \u2014 relay restarted." : ".")) : "This relay can join a hub \u2014 enter its address below.";
+      await refresh();
+    } catch (e) { $("fedMsg").textContent = "Failed: " + (e?.message || e); }
+  });
 
   // 0.21.0: the hub's spoke table + "Update spokes now"
   let lastStatus = null;
@@ -1085,30 +1100,6 @@
       return d;
     }));
   }
-  function paintLan(l) {
-    if (document.activeElement !== $("lanOn")) $("lanOn").checked = !!l.enabled;
-    $("lanSecret").placeholder = l.hasSecret ? "saved \u2014 leave empty to keep it" : "leave empty to keep the current one";
-    for (const id of ["lanOn", "lanGen", "lanSave", "lanClear"]) $(id).disabled = !LOCAL;
-  }
-  $("lanGen").addEventListener("click", () => {
-    const b = new Uint8Array(32); crypto.getRandomValues(b);
-    $("lanSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
-    $("lanMsg").textContent = "Copy this secret to the other relays of this site, then Save LAN.";
-  });
-  $("lanSave").addEventListener("click", async () => {
-    try {
-      const r = await api("/api/relay/lan", { enabled: $("lanOn").checked, secret: $("lanSecret").value || null });
-      $("lanMsg").textContent = r.error || ("LAN mesh " + (r.enabled ? "enabled" : "disabled") + (r.restarted ? " \u2014 relay restarted." : "."));
-      if (!r.error) $("lanSecret").value = "";
-      await refresh();
-    } catch (e) { $("lanMsg").textContent = "Failed: " + (e?.message || e); }
-  });
-  $("lanClear").addEventListener("click", async () => {
-    if (!confirm("Turn the LAN mesh off and forget its secret?")) return;
-    try { const r = await api("/api/relay/lan", { enabled: false, secret: "" }); $("lanMsg").textContent = r.error || "LAN mesh off."; await refresh(); }
-    catch (e) { $("lanMsg").textContent = "Failed: " + (e?.message || e); }
-  });
-
   // 0.21.22: the discovery-only mDNS advertisement (on unless switched off; only while the relay accepts other machines)
   async function paintMdns() {
     try {

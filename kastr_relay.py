@@ -2893,14 +2893,17 @@ class Relay:
                     # 8000 fallback) so kastr_serve can prefer a learned hub-web.json entry
                     "webStored": web if d.get("web") else None,
                     # 0.16.0: the hub's pinned QUIC certificate {sha256, at}
-                    "fingerprint": d.get("fingerprint") if isinstance(d.get("fingerprint"), dict) else None}
+                    "fingerprint": d.get("fingerprint") if isinstance(d.get("fingerprint"), dict) else None,
+                    # 0.21.23 (Kenton): the operator said "this relay IS the hub" (None = never said)
+                    "hub": d.get("hub") if isinstance(d.get("hub"), bool) else None}
         except Exception:
-            return {"connect": "", "code": "", "master": True, "web": 8000, "webStored": None, "fingerprint": None}
+            return {"connect": "", "code": "", "master": True, "web": 8000, "webStored": None, "fingerprint": None, "hub": None}
 
     def cluster_config(self):
         """The public shape (status(), GET /api/relay/cluster): never the code."""
         raw = self._cluster_raw()
         return {"connect": raw["connect"], "master": raw["master"], "hasCode": bool(raw["code"]),
+                "hub": raw.get("hub"),   # 0.21.23: True / False / None (never said)
                 "web": raw["web"],     # 0.12.0
                 "fingerprint": (raw.get("fingerprint") or {}).get("sha256")}   # 0.16.0: public (it is the hub's cert hash)
 
@@ -3412,6 +3415,10 @@ class Relay:
             cur["code"] = str(payload.get("code"))
         if "master" in payload and payload.get("master") is not None:
             cur["master"] = bool(payload.get("master"))
+        if "hub" in payload and payload.get("hub") is not None:   # 0.21.23 (Kenton): the hub toggle
+            cur["hub"] = bool(payload.get("hub"))
+            if cur["hub"]:
+                cur["connect"] = ""   # a hub dials no other hub; its own federation code (spokes') lives in relay-auth.json
         if "web" in payload and payload.get("web") is not None:      # 0.12.0: hub KASTR web port
             try:
                 cur["web"] = max(1, min(65535, int(payload.get("web"))))
@@ -3431,9 +3438,11 @@ class Relay:
         save_json(self._cluster_file(), cur, self.log)   # 0.21.0
         self._fed_last_reason = None          # say the new situation out loud once
         self._spoke_last_reason = None        # 0.21.5
-        # A running relay picks the change up by restarting with its own shape.
-        restarted = self._restart()
-        return {"ok": True, "connect": cur["connect"], "master": cur["master"],
+        # A running relay picks the change up by restarting with its own shape -- 0.21.23: unless only the hub
+        # flag or the update-follow switch changed (neither is in relay.toml)
+        relay_same = cur["connect"] == prev["connect"] and cur["code"] == prev["code"] and cur.get("web") == prev.get("web")
+        restarted = False if relay_same and (cur.get("hub") != prev.get("hub") or cur["master"] != prev["master"]) else self._restart()
+        return {"ok": True, "connect": cur["connect"], "master": cur["master"], "hub": cur.get("hub"),
                 "hasCode": bool(cur["code"]), "web": cur["web"], "restarted": restarted,
                 "codeKept": bool(cur["code"]) and not cur["connect"]}   # 0.21.0: standalone, code kept
 

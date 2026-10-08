@@ -773,6 +773,12 @@ DEVICE_ROLES = ("pub", "mon", "low")
 # the window and a web client of the same box) -- so the capture sends to MON_SLOTS monitor ports and each monitor
 # claims a free one. Ports come from below every OS's ephemeral range, where outgoing sockets (QUIC, DNS) never land.
 MON_SLOTS = 6
+# 0.21.31: a loopback reader knows what the capture sends (MPEG-TS, H.264 + maybe AAC). ffmpeg's default 5 s stream
+# analysis put every monitor's first byte at 5.1 s (measured), close to the page's 8 s no-bytes reconnect, and a window
+# SHORTER than the source's keyframe spacing fails outright ("dimensions not set") -- so every capture sends a keyframe at
+# least every 2 s (RTMP: every 1 s, re-encoded) and readers analyse for 3 s
+LOOP_IN = ["-f", "mpegts", "-analyzeduration", "3000000", "-probesize", "5000000"]
+RTMP_WIDTH, RTMP_BITRATE = 1920, "6M"
 LOOP_PORTS = (20000, 31999)
 
 
@@ -914,13 +920,23 @@ class DeviceCapture:
         self.stopped = False
         self.restarts = 0
         self.last_error = ""
+        self.connected_at = None   # 0.21.31: an RTMP device is pushing (ffmpeg named its input); None while it only listens
+        self.last_end_at = None
+        self.pushes = 0
 
     def args(self):
         if is_rtmp_in(self.url):   # 0.21.29: wait for a device to push, copy what it sends (video + audio) to every reader
             port, key = rtmp_parts(self.url)
             tee = self._tee()
-            return [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "flv", "-listen", "1",
-                    "-i", "rtmp://0.0.0.0:%d/live/%s" % (port, key), "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+            # 0.21.31: -loglevel info so the "Input #0, flv" line says the moment a device starts pushing
+            return [self.ffmpeg, "-hide_banner", "-nostats", "-loglevel", "info", "-f", "flv", "-listen", "1",
+                    "-i", "rtmp://0.0.0.0:%d/live/%s" % (port, key), "-map", "0:v:0", "-map", "0:a:0?",
+                    # 0.21.31 (field: a GoPro 'Live' but "no video from the bridge"): re-encoded ONCE here with a keyframe
+                    # every second -- a copied device stream starts every reader (preview, publisher, late viewers) at the
+                    # device's own keyframe spacing, and a reader that analyses past it fails with "dimensions not set"
+                    "-vf", "scale=w='min(iw,%d)':h=-2,format=yuv420p" % RTMP_WIDTH, "-c:v", "libx264", "-preset", "veryfast",
+                    "-tune", "zerolatency", "-profile:v", "baseline", "-bf", "0", "-force_key_frames", "expr:gte(t,n_forced*1)",
+                    "-b:v", RTMP_BITRATE, "-maxrate", RTMP_BITRATE, "-bufsize", RTMP_BITRATE, "-c:a", "copy",
                     "-f", "tee", tee]
         name = device_name(self.url)
         if name == "kastr-test":   # rig: a test pattern stands in for a camera
@@ -973,11 +989,24 @@ class DeviceCapture:
             try:
                 self.proc = subprocess.Popen(self.args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                                              errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                err = self.proc.stderr.read() if self.proc.stderr else ""
+                tail = []
+                for line in (self.proc.stderr or ()):   # 0.21.31: line by line -- a device connecting is news now, not at exit
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    if is_rtmp_in(self.url) and self.connected_at is None and line.startswith("Input #0"):
+                        self.connected_at = time.time()
+                        self.pushes += 1
+                        self.log("rtsp: RTMP ingest on port %s -- a device is pushing" % rtmp_parts(self.url)[0])
+                    if re.search(r"error|failed|invalid|refused|denied", line, re.I):
+                        tail = (tail + [line])[-3:]
                 self.proc.wait()
-                self.last_error = (err or "").strip()[-300:]
+                self.last_error = " / ".join(tail)[-300:]
             except Exception as e:
                 self.last_error = str(e)[:300]
+            if self.connected_at is not None:
+                self.last_end_at = time.time()
+            self.connected_at = None
             if self.stopped:
                 return
             self.restarts += 1
@@ -1008,14 +1037,14 @@ def input_args(url, role="pub", claim=None):
                 raise RuntimeError("every monitor of this camera is in use (%d) -- close one and try again" % len(cap.mon_ports))
             if claim is not None:
                 claim["port"] = port
-            return ["-f", "mpegts", "-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
+            return LOOP_IN + ["-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
         port = cap.ports.get(role if role in DEVICE_ROLES else "pub") if cap else 0
         if port:   # 0.21.30: the previous reader of this port may still be dying -- give it up to 3 s
             for _ in range(30):
                 if _udp_free(port):
                     break
                 time.sleep(0.1)
-        return ["-f", "mpegts", "-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
+        return LOOP_IN + ["-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
     if is_hostmedia(url):   # 0.21.26: a media file on this host, looped at real time
         return ["-re", "-stream_loop", "-1", "-i", hostmedia_path(url) or "missing-media-file"]
     if is_screen(url):   # 0.21.20: Windows Graphics Capture, scaled on the GPU side of the capture, constant 30 fps
@@ -1401,6 +1430,8 @@ class Publisher:
         # minute, this never does; `lastSessionAt` = the last HARD/SOFT moq line
         self.restartsTotal = 0
         self.lastSessionAt = None
+        self.flowingAt = None       # 0.21.31: the last time ffmpeg's output grew -- the camera is really streaming
+        self._outSize = 0
         self._timer = None
         self._lock = threading.Lock()
         self._gen = 0
@@ -1426,6 +1457,7 @@ class Publisher:
                 "low": (self.lowPub.low_info() if self.lowPub else None),
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
                 "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
+                "flowingAt": self.flowingAt,                                         # 0.21.31
                 "error": self.error, "since": self.since}
 
     def low_info(self):
@@ -1446,7 +1478,9 @@ class Publisher:
             self.copy = False
             self.codec = "h264"
         enc = None if self.copy else self.bridge.usable_encoder()
-        args = [ff, "-hide_banner", "-loglevel", "error"] + encoder_pre_args(enc) + input_args(self.feed.url, role="low" if self.role == "low" else "pub")
+        # 0.21.31: -progress on stderr -> flowingAt (a pair can RUN for a long time against a dark camera without one byte)
+        args = ([ff, "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "2"] + encoder_pre_args(enc)
+                + input_args(self.feed.url, role="low" if self.role == "low" else "pub"))
         scr = is_screen(self.feed.url)
         if scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
             import kastr_screen
@@ -1491,6 +1525,7 @@ class Publisher:
             self.procs = ()
             self._gen += 1
             gen = self._gen
+            self._outSize = 0                                            # 0.21.31: this generation has delivered nothing yet
             self._hard = {g: r for g, r in self._hard.items() if g >= gen}   # 0.12.0: older verdicts are spent
             ff_args, moq_args = self._args()
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -1678,6 +1713,13 @@ class Publisher:
         try:
             for line in proc.stderr:
                 text = line.decode("utf-8", "replace").strip()
+                if text and tag == "ffmpeg" and PROGRESS_RE.match(text):   # 0.21.31: a -progress line, never an error
+                    if text.startswith("total_size=") and text[11:].isdigit() and gen == self._gen:
+                        n = int(text[11:])
+                        if n > self._outSize:
+                            self._outSize = n
+                            self.flowingAt = time.time()
+                    continue
                 if text:
                     text = _redact(re.sub(r"\x1b\[[0-9;]*m", "", text))   # 0.12.0: never a token
                     text = _redact_url(text)     # 0.13.3: ffmpeg prints the camera URL, credentials and all, on a connect error
@@ -1949,6 +1991,9 @@ class Publisher:
         self._notready("stopped")                                        # 0.18.0
         if self.lowPub is not None:
             self.lowPub.stop()
+
+
+PROGRESS_RE = re.compile(r"^[a-z_]+=\S*$")   # 0.21.31: ffmpeg -progress key=value lines
 
 
 def _end_pair(procs, ended, grace=1.0):
@@ -2863,6 +2908,11 @@ class Bridge:
             d = f.info()
             d["publish"] = self.publication(f.id)   # 0.9.1
             d["addedBy"] = getattr(f, "added_by", "") or ""   # 0.21.2: a web client's camera (empty = the box's own)
+            if is_rtmp_in(f.url):   # 0.21.31: is the device pushing? (a listening ingest is waiting, not failed)
+                cap = DEVICES.get(f.url)
+                d["ingest"] = {"connected": bool(cap and cap.connected_at), "since": cap.connected_at if cap else None,
+                               "lastEnd": cap.last_end_at if cap else None, "pushes": cap.pushes if cap else 0,
+                               "lastError": cap.last_error if cap else ""}
             if redact:
                 d["url"] = _redact_url(d.get("url"))
                 if isinstance(d.get("error"), str):

@@ -2,6 +2,24 @@
 
 What changed in each build, newest first.
 
+## v0.21.31 — GoPros that play, dark cameras stay out, quiet camera boxes
+
+**A GoPro that says "Live" plays (field: "no video from the bridge").** The stream from an RTMP ingest was copied as it came, so every reader (the preview, the publisher, a viewer joining late) had to wait for the device's next keyframe, and a reader that had stopped analysing before that keyframe failed outright ("dimensions not set"). KASTR now re-encodes the picture once, as it arrives, with a keyframe every second; the device's sound is passed on untouched. Lab, with a push whose keyframes came only every 10 seconds: on 0.21.30 one preview failed and the others took 5–7 seconds; now every preview starts in about 3 seconds, even with keyframes 20 seconds apart.
+
+**The RTMP row says whether the device is connected.** Under the push address: "Waiting for the device to connect" (adding "the firewall is closed" when it is), "Receiving from the device", or "The device stopped pushing — waiting for it to come back". A toast says when a device connects. An ingest with nothing pushing is waiting, not failed, so the red "RTSP source failed — no video from the bridge" no longer appears for it.
+
+**Open the firewall for RTMP from the feed itself (Kenton: "it should either automatically ask to open the firewall, or give a button to allow through the firewall without having to go to the relay server page").** On any box, relay or not: after an RTMP ingest is created, KASTR checks the firewall and, when TCP 1935–1944 is closed, asks whether to open it (Windows asks for permission). Cancel leaves an **Allow through firewall** button on the feed's row. Only the RTMP rule is added, never the relay's ports, and the firewall record keeps both.
+
+**A camera that is dark at night stays out of the grid (Kenton: offline cameras "pop back up in the grid showing that it is on attempt 200 or 300 ... They shouldn't open back up until they reconnect").** A camera dropped from a grid came back when its publisher had merely been running for 5 seconds. Against a dark camera, one attempt can hang that long, and the relay lists the camera before any video arrives, so neither proves anything. The bridge now tracks when the camera's video last grew (ffmpeg's own progress report), and a camera rejoins only while video is actually flowing. Lab: a camera that accepted connections, held them 8 seconds and dropped them, next to a real one. On the old rule it came back after 32 seconds while still dark. Now it stayed out for the whole 3 minutes through 10 attempts, and rejoined 8 seconds after it streamed again.
+
+**The latency label no longer covers the name (Kenton: "the latency when shown is covering the muted icon and the window name").** It moved to the tile's top-left corner.
+
+**A relay or publisher box shows a camera only when one is shared (Kenton: "the southridge relay is showing up as a person due to it having OBS saying that it has a camera").** A box put its camera on the air whenever the machine had one, even switched off, so OBS's virtual camera made an avatar tile. A box now joins without its camera unless the camera or mic was turned on there, and turning a box's camera off takes it off the air.
+
+**The join card's room picker is a dropdown again (Kenton: "I still only want 1 showing except when I click the drop-down button").** 0.21.30's open list is gone. The room rail stays hidden while the join card is up.
+
+**A symbol for rooms that stay open (Kenton: "don't put the always open in the rooms, just put a symbol to denote that it will stay. Similar to the lock symbol for the locked rooms").** In the room rail, a room kept open shows ∞ next to its time instead of the words "always open", and a small ∞ badge on its round bubble (the lock badge sits on the other side). Hovering the ∞ says "Stays open when everyone leaves".
+
 ## v0.21.30 — GoPro previews, rooms in the join card, Remove spotlight
 
 **A GoPro on RTMP ingest no longer fails with "bind failed: Error number -10048" (field report).** A camera on the host or an RTMP ingest is received once and handed on over local network ports, one port per reader. The monitor had a single port, so a second monitor of the same feed failed at once. A second monitor appears when a monitor reconnects while the old one is still closing, or when the window and a web client on the same box both show the feed. The capture now feeds six monitor ports, and each monitor takes a free one. The ports also come from below the range Windows and Linux hand out to outgoing connections, so another program can no longer take one first. A restarted publisher waits for the old one to exit before it starts. Lab, with a test push into an RTMP ingest and three monitors at once: on 0.21.29 the second and third died immediately; now all three get the stream, and so does a monitor restarted the moment the old one was killed.

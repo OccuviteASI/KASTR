@@ -4307,7 +4307,11 @@ def firewall_record():
 
 def firewall_remember(tool, wanted, printed=False):
     """0.21.7: record the ports that are (or were told to be) open, so the next launch asks nobody."""
-    rec = {"tool": tool, "ports": sorted("%d/%s" % w for w in wanted), "at": int(time.time()), "printed": bool(printed)}
+    ports = {"%d/%s" % w for w in wanted}
+    old = firewall_record()   # 0.21.31: merged -- an RTMP-only add keeps the relay's ports remembered (and v.v.)
+    if old and not old.get("printed") and not printed:
+        ports |= {str(x) for x in old.get("ports") or []}
+    rec = {"tool": tool, "ports": sorted(ports), "at": int(time.time()), "printed": bool(printed)}
     try:
         os.makedirs(os.path.dirname(_fw_record_path()), exist_ok=True)
         with open(_fw_record_path() + ".tmp", "w", encoding="utf-8") as f:
@@ -4332,6 +4336,28 @@ def firewall_needed(wanted):
     if st.get("present") is None and rec:
         return False, dict(st, note="cannot tell; an earlier launch recorded the rules")   # unknown + a record: do not nag
     return True, st
+
+
+def rtmp_firewall_wanted():
+    """0.21.31: just the RTMP ingest ports -- what a box that is NOT a relay needs open for a GoPro to push to it."""
+    return [(p, "tcp") for p in kastr_rtsp.RTMP_PORTS]
+
+
+def rtmp_firewall_status():
+    """0.21.31: {open: true|false|null, tool, missing, note} for the RTMP ingest ports (null = cannot tell / no firewall
+    tool KASTR can drive). Uses the record first, like the launcher, so a box that already said yes is not checked again."""
+    needed, st = firewall_needed(rtmp_firewall_wanted())
+    if not needed:
+        return {"open": True, "tool": st.get("tool"), "missing": [], "note": st.get("note")}
+    if st.get("present") is None and st.get("tool") is None:
+        return {"open": None, "tool": None, "missing": st.get("missing") or [], "note": st.get("note")}
+    return {"open": False, "tool": st.get("tool"), "missing": st.get("missing") or [], "note": st.get("note")}
+
+
+def add_rtmp_firewall():
+    """0.21.31 (Kenton: a box that is not the relay asks to open the firewall for an RTMP ingest, without the Relay
+    page): ONE rule, TCP 1935-1944 -- none of the relay's ports. Windows asks with UAC on this machine."""
+    return add_firewall_rules(4443, wanted=rtmp_firewall_wanted())
 
 
 def _which(name):
@@ -4517,7 +4543,9 @@ def add_firewall_rules(port, wanted=None):
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if code == 0:
             firewall_remember("windows", wanted)
-            return {"ok": True, "note": "firewall rules added (relay, room codes, KASTR web)"}
+            rtmp_only = all(proto == "tcp" and lp in kastr_rtsp.RTMP_PORTS for lp, proto in wanted)   # 0.21.31
+            return {"ok": True, "note": "firewall rule added (RTMP ingest, TCP %d-%d)" % (kastr_rtsp.RTMP_PORTS[0], kastr_rtsp.RTMP_PORTS[-1])
+                    if rtmp_only else "firewall rules added (relay, room codes, KASTR web)"}
         return {"ok": False,
                 "error": "the elevated script did not run (UAC declined, or the rules failed) -- run the printed "
                          "commands in an admin PowerShell instead"}

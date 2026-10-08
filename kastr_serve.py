@@ -1352,6 +1352,20 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return
                 if path == "/api/screen/sources":
                     return send(200, json.dumps(kastr_screen.sources(tabs=(qs.get("tabs") or [""])[0] == "1")).encode(), "application/json")
+                if path == "/api/screen/rtmp/firewall":   # 0.21.31: GET = are the RTMP ports open here; POST = open them (UAC)
+                    if kastr_relay._FIREWALL_DIR is None and STATE_DIR:
+                        kastr_relay._FIREWALL_DIR = STATE_DIR
+                    if self.command == "POST":
+                        try:
+                            n = int(self.headers.get("Content-Length") or 0)
+                            if n:
+                                self.rfile.read(n)
+                        except Exception:
+                            pass
+                        out = kastr_relay.add_rtmp_firewall()
+                        self.log_message("rtmp firewall: %s", out.get("note") or out.get("error"))
+                        return send(200 if out.get("ok") else 409, json.dumps(out).encode(), "application/json")
+                    return send(200, json.dumps(kastr_relay.rtmp_firewall_status()).encode(), "application/json")
                 if path == "/api/screen/rtmp":   # 0.21.29: a free RTMP ingest port + the addresses devices can reach this host by
                     ips = [ip for ip in kastr_relay.local_ips() if not ip.startswith(("127.", "172."))] or kastr_relay.local_ips()
                     return send(200, json.dumps({"ok": True, "port": kastr_rtsp.rtmp_free_port(), "hosts": ips}).encode(), "application/json")
@@ -3292,6 +3306,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._prefs_post()
             if path0.startswith("/api/lan/"):       # 0.21.22
                 return self._lan_api(path0, "POST")
+            if path0 == "/api/screen/rtmp/firewall":   # 0.21.31: open the RTMP ingest ports (this computer only)
+                return self._screen_api(path0)
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4317,7 +4333,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             if path.startswith("/api/lan/"):   # 0.21.22: relay discovery + probe (this machine only)
                 return self._lan_api(path, "GET")
-            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
+            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp", "/api/screen/rtmp/firewall"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the

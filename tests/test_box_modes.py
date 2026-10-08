@@ -37,6 +37,26 @@ class BoxModes(unittest.TestCase):
         self.assertIn("Not saved yet", r)
         self.assertIn('delete $("fedUrl").dataset.dirty;   // 0.21.24', r)
 
+    def test_box_camera_only_when_shared(self):
+        # 0.21.31 (Kenton: Southridge "showing up as a person due to it having OBS saying that it has a camera")
+        p = self.page
+        self.assertIn("const boxQuiet = isPublisherMode() && !joinVidOn && !joinMicOn;", p)
+        self.assertIn("if (!isViewerMode() && !boxQuiet && d.permission && d.cameras.length", p)
+        self.assertIn("if (isPublisherMode() && !src.videoPaused && src.micMuted && window.__publisher?.removeSource)", p)
+
+    def test_latency_label_clears_the_name(self):
+        # 0.21.31 (Kenton: "the latency when shown is covering the muted icon and the window name")
+        self.assertIn("#stage .pane .latb { position:absolute; left:6px; top:6px;", self.page)
+
+    def test_dark_camera_stays_out_of_the_grid(self):
+        # 0.21.31 (Kenton: offline cameras "pop back up in the grid showing that it is on attempt 200 or 300")
+        p = self.page
+        self.assertIn("const flowing = !!(pi?.flowingAt && pi.since && pi.flowingAt >= pi.since && nowS - pi.flowingAt < 8);", p)
+        self.assertIn("nowS - pi.since >= GRID_READMIT_LIVED_S && flowing)", p)
+        r = _read("kastr_rtsp.py")
+        self.assertIn('"-progress", "pipe:2", "-stats_period", "2"', r)
+        self.assertIn('"flowingAt": self.flowingAt,', r)
+
     def test_webkit_always_draws_upright(self):
         p = self.page
         self.assertIn('settle(true, "webkit");', p)
@@ -107,14 +127,22 @@ class JoinGate(unittest.TestCase):
         # 0.21.30 (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side")
         p = _read("moq-watch-lite.html")
         self.assertIn("body:has(#joinGate:not([hidden])) #sidebar { visibility:hidden; }", p)
-        self.assertIn('<div id="joinRoomList" role="listbox"', p)
-        self.assertIn("sel.value = o.value; sel.dispatchEvent(new Event(\"change\", { bubbles: true }));", p)
+        # 0.21.31 (Kenton: "I still only want 1 showing except when I click the drop-down button"): the dropdown again
+        self.assertIn('<select id="joinChanSel" style="flex:1"></select>', p)
+        self.assertNotIn("joinRoomList", p)
 
     def test_relay_picker_says_online_or_offline(self):
         # 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not")
         p = _read("moq-watch-lite.html")
         self.assertIn("gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);", p)
         self.assertIn('"  \\u2014 online" : "  \\u2014 offline"', p)
+
+    def test_rail_marks_a_kept_room_with_a_symbol(self):
+        # 0.21.31 (Kenton: "don't put the always open in the rooms, just put a symbol ... similar to the lock symbol")
+        p = _read("moq-watch-lite.html")
+        self.assertNotIn('(rec.persistent ? "always open" : "")', p)
+        self.assertIn('kp.className = "kp"; kp.innerHTML = icon("keep")', p)
+        self.assertIn('<span title="Stays open when everyone leaves">\' + icon("keep")', p)
 
     def test_profile_card_never_scrolls_sideways(self):
         self.assertIn("#profilePop .prow input { width:100%; min-width:0; box-sizing:border-box; }", _read("moq-watch-lite.html"))

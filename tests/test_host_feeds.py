@@ -68,7 +68,11 @@ class RtmpIngest(unittest.TestCase):
         a = cap.args()
         self.assertIn("-listen", a)
         self.assertIn("rtmp://0.0.0.0:1936/live/GoProTest42x", a)
-        self.assertEqual(a[a.index("-c") + 1], "copy")
+        self.assertEqual(a[a.index("-c:a") + 1], "copy")             # the device's sound untouched
+        # 0.21.31 (field: GoPro 'Live', "no video from the bridge"): the picture is re-encoded once with a keyframe every
+        # second, so no reader waits for the device's own keyframe spacing
+        self.assertEqual(a[a.index("-c:v") + 1], "libx264")
+        self.assertIn("expr:gte(t,n_forced*1)", a)
         self.assertIn("0:a:0?", a)                         # the device's audio comes along
         self.assertEqual(a[-1].count("udp://127.0.0.1:"), 2 + kr.MON_SLOTS)
 
@@ -76,6 +80,54 @@ class RtmpIngest(unittest.TestCase):
         import kastr_relay
         self.assertIn("KASTR RTMP ingest", kastr_relay.FIREWALL_RULES)
         self.assertEqual(kastr_relay._port_list("1935-1944"), list(range(1935, 1945)))
+
+    def test_any_box_opens_only_the_rtmp_ports(self):
+        # 0.21.31 (Kenton: a box that is not the relay asks to open the firewall, no Relay page needed)
+        import kastr_relay
+        d = tempfile.mkdtemp()
+        with mock.patch.object(kastr_relay, "_FIREWALL_DIR", d), mock.patch.object(kastr_relay.sys, "platform", "win32"), \
+                mock.patch.object(kastr_relay.subprocess, "call", return_value=0):
+            kastr_relay.firewall_remember("windows", [(4443, "udp"), (8001, "tcp")])   # an earlier relay add
+            out = kastr_relay.add_rtmp_firewall()
+            with open(os.path.join(d, "kastr-firewall.ps1"), encoding="utf-8") as f:
+                script = f.read()
+            rec = kastr_relay.firewall_record()
+        self.assertTrue(out["ok"])
+        self.assertIn("RTMP ingest", out["note"])
+        self.assertEqual(script.count("New-NetFirewallRule"), 1)
+        self.assertIn('-DisplayName "KASTR RTMP ingest" -Direction Inbound -Protocol TCP -LocalPort "1935-1944"', script)
+        self.assertIn("4443/udp", rec["ports"])                 # the relay's ports stay remembered
+        self.assertIn("1935/tcp", rec["ports"])
+        with mock.patch.object(kastr_relay, "_FIREWALL_DIR", d):
+            self.assertTrue(kastr_relay.rtmp_firewall_status()["open"])   # recorded -> no check, no nag
+
+    def test_ingest_reports_whether_a_device_is_pushing(self):
+        cap = kr.DeviceCapture("ffmpeg", "rtmp-in://1943/GoProTest42x")
+        b = kr.Bridge(state_dir=tempfile.mkdtemp(), log=lambda *x: None)
+        f = kr.Feed(1, cap.url, source_url=cap.url)
+        b._feeds[1] = f
+        with mock.patch.dict(kr.DEVICES, {cap.url: cap}):
+            self.assertEqual(b.list()[0]["ingest"]["connected"], False)
+            cap.connected_at = 123.0
+            self.assertEqual(b.list()[0]["ingest"]["connected"], True)
+        p = _read("moq-watch-lite.html")
+        self.assertIn("if (slot.feed?.ingest && !slot.feed.ingest.connected) return null;", p)   # waiting is not failed
+        self.assertIn("Waiting for the device to connect", p)
+        self.assertIn("-loglevel", cap.args())
+        self.assertEqual(cap.args()[cap.args().index("-loglevel") + 1], "info")   # the "Input #0" line marks the push
+
+    def test_readers_analyse_longer_than_the_keyframe_spacing(self):
+        self.assertEqual(kr.LOOP_IN[kr.LOOP_IN.index("-analyzeduration") + 1], "3000000")
+
+    def test_page_asks_and_offers_a_button(self):
+        p = _read("moq-watch-lite.html")
+        self.assertIn('fetch("/api/screen/rtmp/firewall", { method: "POST" })', p)
+        self.assertIn('if (fw && fw.open === false) {', p)
+        self.assertIn('fwb.textContent = "Allow through firewall"', p)
+        self.assertNotIn("add the firewall rules on the Relay page", p)
+        s = _read("kastr_serve.py")
+        self.assertIn('if path0 == "/api/screen/rtmp/firewall":', s)
+        self.assertIn("out = kastr_relay.add_rtmp_firewall()", s)
 
     def test_page_offers_it(self):
         p = _read("moq-watch-lite.html")

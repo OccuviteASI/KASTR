@@ -654,7 +654,7 @@
   #stage .pane .gwait { position:absolute; z-index:7; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); color:#fff; font-size:12px; border-radius:6px; pointer-events:none; }   /* 0.21.2 */
   #stage .pane .pwait { position:absolute; left:50%; bottom:14%; transform:translateX(-50%); z-index:7; background:rgba(0,0,0,.55); color:#fff; font-size:12px; padding:4px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }   /* 0.21.15: never-painted notice */
   #stage .pane .rendb { position:absolute; right:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#ffd27a; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }   /* 0.21.7: click-to-picture */
-  #stage .pane .latb { position:absolute; left:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }
+  #stage .pane .latb { position:absolute; left:6px; top:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }   /* 0.21.31 (Kenton: it covered the mute icon and the name): top-left */
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
   @media (hover: none) {
@@ -1101,6 +1101,10 @@
   .rb .lk { position:absolute; bottom:-3px; right:-3px; width:12px; height:12px; border-radius:50%;
     background:var(--surface); display:inline-flex; align-items:center; justify-content:center; }
   .rb .lk .icon { width:8px; height:8px; }
+  .rb .kp { position:absolute; bottom:-3px; left:-3px; width:12px; height:12px; border-radius:50%;   /* 0.21.31: kept open */
+    background:var(--surface); display:inline-flex; align-items:center; justify-content:center; }
+  .rb .kp .icon { width:9px; height:9px; }
+  .sbcard .sbflags { display:inline-flex; align-items:center; gap:4px; }
   .sbfoot { flex:none; padding:8px 4px 2px; }
   .sbbtn { width:100%; background:transparent; border:1px dashed var(--line); color:var(--text-dim); border-radius:8px;
     padding:6px; font-size:11px; cursor:pointer; height:auto; font-family:var(--font-ui); }
@@ -1294,15 +1298,6 @@
   #joinGate #joinKeepRow { display:flex; align-items:center; gap:7px; }
   /* 0.21.30 (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side") */
   body:has(#joinGate:not([hidden])) #sidebar { visibility:hidden; }
-  #joinRoomList { display:flex; flex-direction:column; gap:2px; max-height:min(240px, 34vh); overflow-y:auto; margin-top:6px;
-    border:1px solid var(--line); border-radius:6px; padding:3px; background:var(--surface-2); }
-  #joinRoomList .jr { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:0;
-    border-radius:5px; padding:7px 9px; color:var(--text); font-size:13px; cursor:pointer; }
-  #joinRoomList .jr:hover { background:color-mix(in srgb, var(--asi-blue) 12%, transparent); }
-  #joinRoomList .jr.on { background:color-mix(in srgb, var(--asi-blue) 22%, transparent); outline:1px solid var(--asi-blue); }
-  #joinRoomList .jr .jn { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #joinRoomList .jr .jt { font-size:11px; color:var(--text-mute); white-space:nowrap; }
-  #joinRoomList .jr.new .jn { color:var(--asi-blue); }
   #joinGate #joinKeepRow[hidden] { display:none; }
   #bootFail { background:var(--asi-red); color:#fff; padding:10px 12px; border-radius:6px; margin-bottom:10px; font-size:13px; line-height:1.4; }
   #bootFail button { margin-left:8px; padding:3px 10px; border-radius:5px; border:1px solid rgba(255,255,255,.6); background:transparent; color:#fff; cursor:pointer; }
@@ -2139,11 +2134,9 @@
              autocomplete="off" spellcheck="false" title="Another relay address &mdash; Enter or leave the field to apply"></label>
     <label class="f"><span>Room</span>
       <div style="display:flex; gap:6px">
-        <select id="joinChanSel" style="flex:1" hidden></select>   <!-- 0.21.30: still the value every join path reads; the list below is its face -->
-        <span id="joinChanCur" class="hint" style="flex:1; align-self:center"></span>
+        <select id="joinChanSel" style="flex:1"></select>   <!-- 0.21.31 (Kenton): one row; the rooms show when it is opened -->
         <button id="joinChanRefresh" type="button" class="ghost" style="flex:none" title="Refresh the room list">&#8635;</button>
       </div>
-      <div id="joinRoomList" role="listbox" aria-label="Rooms"></div>   <!-- 0.21.30 (Kenton): the rooms, in the launch window -->
     </label>
     <label class="f" id="joinNewChanRow" hidden><span>Room name</span>
       <input type="text" id="joinChanNew" placeholder="e.g. yard-ops" maxlength="32"></label>
@@ -2389,6 +2382,7 @@
        + '<path d="M2.5 16.5c0-2.6 2-4.6 4.5-4.6s4.5 2 4.5 4.6"/>'
        + '<circle cx="14.2" cy="8.5" r="2.4"/>'
        + '<path d="M13.2 12.5c2.3.2 4.2 2 4.2 4"/>',
+    keep: '<path d="M6 7c-1.9 0-3.3 1.3-3.3 3s1.4 3 3.3 3c2.8 0 5.2-6 8-6 1.9 0 3.3 1.3 3.3 3s-1.4 3-3.3 3c-2.8 0-5.2-6-8-6z"/>',   // 0.21.31: a room kept open
     lock: '<rect x="5" y="9" width="10" height="7.5" rx="1.5"/>'
        + '<path d="M7 9V6.8a3 3 0 0 1 6 0V9"/>',
     chat: '<path d="M3.5 4.5h13a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H9l-4 3v-3H3.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>'   // 0.12.0
@@ -2848,6 +2842,14 @@
       try { const lj = lastJoin() || {}; lj.vidOn = !!on; localStorage.setItem("kastr.lastjoin", JSON.stringify(lj)); } catch {}
     };
     if (!src) { boxRemember(!joinVidOn); ensureLocalCamera({ vid: !joinVidOn, mic: window.__join?.state?.() === "joined" ? false : undefined }); return; }
+    if (isPublisherMode() && !src.videoPaused && src.micMuted && window.__publisher?.removeSource) {   // 0.21.31: a box's camera OFF = off the air (no avatar tile)
+      boxRemember(false);
+      try { window.__publisher.removeSource(src.id); } catch {}
+      try { const i = joinAdded.indexOf(src.id); if (i >= 0) joinAdded.splice(i, 1); } catch {}
+      joinVidOn = false;
+      renderMine();
+      return;
+    }
     src.videoPaused = !src.videoPaused;
     boxRemember(!src.videoPaused);
     sendControl(window.__publisher.peer, src.id, { videoPaused: src.videoPaused });
@@ -10244,6 +10246,8 @@
     else rb.querySelector(".cnt")?.remove();
     if (rec.locked) { if (!rb.querySelector(".lk")) { const lk = document.createElement("span"); lk.className = "lk"; lk.innerHTML = icon("lock"); rb.appendChild(lk); } }
     else rb.querySelector(".lk")?.remove();
+    if (rec.persistent) { if (!rb.querySelector(".kp")) { const kp = document.createElement("span"); kp.className = "kp"; kp.innerHTML = icon("keep"); rb.appendChild(kp); } }   // 0.21.31
+    else rb.querySelector(".kp")?.remove();
     rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "");
     card.querySelector(".sbname").textContent = rec.slug;
     { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
@@ -10251,7 +10255,9 @@
     card.querySelector(".sbcnt").textContent = rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;
     card.querySelector(".sbtime").textContent = rec.since ? "\u23F1 " + fmtHms(Date.now() - rec.since) : "\u23F1 \u2014";
-    card.querySelector(".sbflags").textContent = (rec.locked ? "\uD83D\uDD12 " : "") + (rec.persistent ? "always open" : "");   // 0.21.26
+    // 0.21.31 (Kenton: "don't put the always open in the rooms, just put a symbol ... similar to the lock symbol")
+    card.querySelector(".sbflags").innerHTML = (rec.locked ? '<span title="Locked">' + icon("lock") + "</span>" : "")
+      + (rec.persistent ? '<span title="Stays open when everyone leaves">' + icon("keep") + "</span>" : "");
     // members, reconciled by op
     const ul = card.querySelector(".sbmembers");
     const seen = new Set();
@@ -11695,7 +11701,6 @@
       sel.appendChild(new Option(r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
-    try { paintGateRoomList(); } catch {}   // 0.21.30 (re-painted again below once the selection is decided)
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined
     let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
     try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
@@ -11703,31 +11708,6 @@
     sel.value = [...sel.options].some((o) => o.value === want) ? want
               : list.some((r) => r.slug === cur) ? cur : "main";
     paintPwdRow();
-    try { paintGateRoomList(); } catch {}   // 0.21.30
-  }
-
-  // 0.21.30 (Kenton): the rooms as a list in the launch window -- built from the select's options so every join path
-  // (which reads the select) behaves exactly as before; a click selects the room and fires the select's change.
-  function paintGateRoomList() {
-    const sel = joinEls.joinChanSel, box = document.getElementById("joinRoomList");
-    if (!sel || !box) return;
-    const recs = new Map(lastChannelList.map((r) => [r.slug, r]));
-    box.replaceChildren(...[...sel.options].map((o) => {
-      const b = document.createElement("button");
-      b.type = "button"; b.className = "jr" + (o.value === sel.value ? " on" : "") + (o.value === "__new" ? " new" : "");
-      b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(o.value === sel.value));
-      const r = recs.get(o.value);
-      const nm = document.createElement("span"); nm.className = "jn";
-      nm.textContent = o.value === "__new" ? "+ New room\u2026" : (r?.locked ? "\uD83D\uDD12 " : "") + o.value;
-      const tag = document.createElement("span"); tag.className = "jt";
-      tag.textContent = r ? [r.count > 0 ? r.count + " here" : "", r.persistent ? "always open" : ""].filter(Boolean).join(" \u00b7 ") : "";
-      b.append(nm, tag);
-      b.addEventListener("click", () => { sel.value = o.value; sel.dispatchEvent(new Event("change", { bubbles: true })); paintGateRoomList(); });
-      return b;
-    }));
-    const cur = document.getElementById("joinChanCur");
-    if (cur) cur.textContent = sel.value === "__new" ? "New room" : (sel.value ? "Selected: " + sel.value : "");
-    box.querySelector(".jr.on")?.scrollIntoView({ block: "nearest" });
   }
 
   // The publish module is the SECOND module script and its esm.sh imports
@@ -12023,7 +12003,12 @@
           body: JSON.stringify({ name: joinEls.joinName.value.trim() }) }).catch(() => {});
       }
       const d = pub.devices();
-      if (!isViewerMode() && d.permission && d.cameras.length && window.__auth.canPublish()) {   // 0.10.0: a viewer code joins as a viewer; 0.12.0: so does viewer mode
+      // 0.21.31 (Kenton: "the southridge relay is showing up as a person due to it having OBS saying that it has a camera, but
+      // we don't need it to show as a person unless we share a camera"): an unattended box puts its camera on the air only
+      // when the camera (or mic) was turned on there -- a virtual camera (OBS) alone no longer makes an avatar tile
+      const boxQuiet = isPublisherMode() && !joinVidOn && !joinMicOn;
+      if (boxQuiet && d.cameras.length) log("Camera box: joined without the camera (it is off here) \u2014 turn it on from the toolbar to share it.");
+      if (!isViewerMode() && !boxQuiet && d.permission && d.cameras.length && window.__auth.canPublish()) {   // 0.10.0: a viewer code joins as a viewer; 0.12.0: so does viewer mode
         syncOperator(joinEls.joinName.value);
         if (!pub.operatorValid()) {
           joinEls.joinName.classList.add("bad");
@@ -12109,7 +12094,6 @@
     joinEls.joinVidBtn.addEventListener("click", () => { joinVidOn = !joinVidOn; paintJoinToggles(); gatePreview(); });
     joinEls.joinCam.addEventListener("change", () => { if (joinVidOn) gatePreview(); });
     joinEls.joinChanSel.addEventListener("change", paintPwdRow);
-    joinEls.joinChanSel.addEventListener("change", () => { try { paintGateRoomList(); } catch {} });   // 0.21.30
     joinEls.joinChanRefresh.addEventListener("click", () => { roomsRebuild(); roomsMinterStart(); });   // 0.12.0: re-dial the rooms connection
     // 0.13.0 (F7): the Relay row -- Enter or a change applies; the shared url
     // field's own change (masthead Connect, __kastrSetRelay) mirrors back by assignment
@@ -12367,6 +12351,24 @@
   try { rtmpHostV = localStorage.getItem("kastr.rtmp.host") || ""; } catch {}
   const rtmpHost = () => rtmpHostV;
   const rtmpHostSet = (h) => { rtmpHostV = String(h || ""); try { localStorage.setItem("kastr.rtmp.host", rtmpHostV); } catch {} };
+  // 0.21.31 (Kenton: "it should either automatically ask to open the firewall, or give a button to allow through the
+  // firewall without having to go to the relay server page"): RTMP ports only (TCP 1935-1944), on any box
+  let rtmpFw = null;   // last answer of /api/screen/rtmp/firewall: { open: true|false|null, tool, missing }
+  const rtmpFwCheck = async () => {
+    try { rtmpFw = await fetch("/api/screen/rtmp/firewall", { cache: "no-store" }).then((r) => r.json()); } catch { rtmpFw = null; }
+    return rtmpFw;
+  };
+  const rtmpFwOpen = async (btn) => {
+    if (btn) { btn.disabled = true; btn.textContent = "Waiting for Windows\u2026"; }
+    window.__toast?.("Approve the prompt on this computer to let devices push RTMP here (TCP 1935-1944)", 6000, { level: "info" });
+    let d = null;
+    try { d = await fetch("/api/screen/rtmp/firewall", { method: "POST" }).then((r) => r.json()); } catch {}
+    if (d?.ok) window.__toast?.("Firewall open for RTMP \u2014 devices on the network can push to this computer now", 6000, { level: "info" });
+    else window.__toast?.("The firewall was not opened \u2014 " + (d?.error || "no answer"), 9000, { level: "error" });
+    await rtmpFwCheck();
+    try { renderSources(); } catch {}
+  };
+  window.__rtmpFw = { check: rtmpFwCheck, open: rtmpFwOpen, state: () => rtmpFw };   // rig
   if (!IS_WEB2) setTimeout(() => fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()).then((d) => { if (d?.hosts?.length && d.hosts[0] !== rtmpHostV) { rtmpHostSet(d.hosts[0]); try { renderSources(); } catch {} } }).catch(() => {}), 3000);
   // ---- 0.21.26 (Kenton): host feeds -- a camera or a media file on this computer, published like an RTSP camera ----
   {
@@ -12408,7 +12410,14 @@
       if (e) {
         const url = "rtmp://" + (rtmpHost() || "<this computer>") + ":" + d.port + "/live/" + key;
         try { await navigator.clipboard.writeText(url); } catch {}
-        window.__toast?.("RTMP ingest ready \u2014 " + url + " (copied). If the device cannot connect, add the firewall rules on the Relay page.", 9000, { level: "info" });
+        window.__toast?.("RTMP ingest ready \u2014 " + url + " (copied)", 7000, { level: "info" });
+        const fw = await rtmpFwCheck();   // 0.21.31: closed -> ask now, on this computer
+        if (fw && fw.open === false) {
+          if (window.confirm("Let devices on the network reach this RTMP ingest?\n\nKASTR will open TCP ports 1935-1944 in this computer's firewall. " +
+                             (fw.tool === "windows" ? "Windows will ask for permission." : "You will be asked for permission.") +
+                             "\n\nCancel leaves the firewall as it is (the feed's row keeps an \"Allow through firewall\" button).")) await rtmpFwOpen(null);
+          else try { renderSources(); } catch {}
+        }
       }
     });
     pick.addEventListener("change", async () => {
@@ -13547,8 +13556,25 @@
           const cp = document.createElement("button"); cp.type = "button"; cp.className = "ghost"; cp.textContent = "Copy";
           cp.addEventListener("click", () => { navigator.clipboard?.writeText(code.textContent).then(() => window.__toast?.("RTMP address copied \u2014 paste it into the device's live-stream settings", 4000, { level: "info" })).catch(() => window.prompt("RTMP address", code.textContent)); });
           line.append("Push to ", code, cp);
+          if (rtmpFw && rtmpFw.open === false) {   // 0.21.31: closed here -> one click opens it (no Relay page)
+            const fwb = document.createElement("button"); fwb.type = "button"; fwb.className = "ghost rtmpfw"; fwb.textContent = "Allow through firewall";
+            fwb.title = "Open TCP ports 1935-1944 in this computer's firewall so the device can connect";
+            fwb.addEventListener("click", () => rtmpFwOpen(fwb));
+            line.append(fwb);
+          } else if (!rtmpFw) rtmpFwCheck().then((f) => { if (f && f.open === false) try { renderSources(); } catch {} });
           line.title = "Point the device's RTMP / live-stream setting here. Nothing shows until it pushes.";
           row.appendChild(line);
+          {   // 0.21.31: has the device connected? (a coworker saw "no video from the bridge" while nothing had pushed yet)
+            const ing = [...slots.values()].find((s) => s.entry.id === a.id)?.feed?.ingest;
+            const st = document.createElement("div");
+            st.className = "rtmpstate hint";
+            st.textContent = ing?.connected ? "\u25CF Receiving from the device"
+              : ing?.pushes ? "\u25CB The device stopped pushing \u2014 waiting for it to come back"
+              : "\u25CB Waiting for the device to connect \u2014 nothing has pushed to this address yet"
+                + (rtmpFw && rtmpFw.open === false ? " (the firewall is closed)" : "");
+            st.classList.toggle("on", !!ing?.connected);
+            row.appendChild(st);
+          }
         }
         if (isScreenUrl(a.url)) {   // 0.21.26 (Kenton: "it is showing up as if it is an RTSP stream"): a capture of this computer
           aud.title = "Send this computer's sound with it (KASTR's own sound is left out). Off = picture only.";
@@ -17664,6 +17690,7 @@
   // line and is the only place the real reason exists, then a generic
   // fallback for a feed that simply never produced anything.
   function faultText(slot) {
+    if (slot.feed?.ingest && !slot.feed.ingest.connected) return null;   // 0.21.31: an RTMP ingest with no device pushing yet is waiting, not failed
     if (slot.fault) return slot.fault;
     if (!slot.rtsp || slot.moq || slot.native) return null;   // 0.9.1: a native slot has no browser graph to wait for
     if (!feedDown(slot) && performance.now() - slot.since <= FEED_GIVE_UP_MS) return null;
@@ -17950,7 +17977,12 @@
         gridNoteAll("evicted " + shortName(a.name) + " (" + a.evictWhy + " attempt " + a.evictAttempt + ")");
         changed = true;
       } else {
-        const backPub = native ? !!(pi.running === true && pi.since && nowS - pi.since >= GRID_READMIT_LIVED_S) : false;
+        // 0.21.31 (Kenton: offline cameras at night "pop back up in the grid showing that it is on attempt 200 or 300 ...
+        // They shouldn't open back up until they reconnect"): a pair that is merely RUNNING proves nothing -- ffmpeg can sit
+        // in a connect to a dark camera for longer than the readmit window, and moq announces the broadcast before any data
+        // (measured: the relay listed it). The bridge's flowingAt = ffmpeg's output grew = the camera is streaming.
+        const flowing = !!(pi?.flowingAt && pi.since && pi.flowingAt >= pi.since && nowS - pi.flowingAt < 8);
+        const backPub = native ? !!(pi.running === true && pi.since && nowS - pi.since >= GRID_READMIT_LIVED_S && flowing) : false;
         const backMon = !!(slot?.monitorLoaded && !slot.monitorDown && !(a.retries > 0) && slot.monitorUpAt && performance.now() - slot.monitorUpAt >= GRID_READMIT_LIVED_S * 1000);
         const back = a.evictWhy === "monitor" ? (backMon || (native && backPub)) : (backPub || (!native && backMon));   // 0.21.8: a running pair readmits a monitor-evicted member too
         if (!back || a.evictWhy === "rig") continue;   // 0.21.15: a rig eviction is released only by __gridSeats.evict(url, false)
@@ -17962,6 +17994,13 @@
     }
     if (changed) { updateRtspGrid(); refreshUi(); }
   }
+  window.__gridEvict = () => added.filter((a) => a.kind === RTSP).map((a) => {   // 0.21.31: rig -- why each camera is in or out
+    const slot = slots.get(a.id), pi = slot?.feed?.publish || slot?.pub || null;
+    return { url: a.url, evicted: !!a.evicted, why: a.evictWhy || null, attempt: a.evictAttempt || null, retries: a.retries || 0,
+      pubRunning: pi?.running ?? null, pubSince: pi?.since ?? null, restarts: pi?.restarts ?? null, flowingAt: pi?.flowingAt ?? null,
+      relayHas: !!window.__echoed?.has?.(chanPath(ensureHang(slot?.entry?.name || a.name))),
+      monLoaded: !!slot?.monitorLoaded, monDown: !!slot?.monitorDown, monUpS: slot?.monitorUpAt ? Math.round((performance.now() - slot.monitorUpAt) / 1000) : null };
+  });
   let feedPoll = null;
   function pollFeeds() {
     if (feedPoll || IS_WEB2) return;   // 0.17.0: no bridge for a web client
@@ -17971,14 +18010,20 @@
         nativeRtsp = d.moq === true;   // 0.9.1
         if (typeof d.suspended === "boolean" && d.suspended !== rtspSuspended && Date.now() - rtspSwitchAt > 4000) setRtspSuspended(d.suspended, { fromServer: true });   // 0.21.16: flipped on the Relay page or by the hub (a poll already in flight when THIS page flipped is ignored for 4 s)
         const byId = new Map((d.feeds ?? []).map((f) => [f.id, f]));
+        let ingestFlip = false;
         for (const slot of slots.values()) {
           const f = byId.get(slot.entry.feedId);
+          if (f && f.ingest && !!slot.feed?.ingest?.connected !== !!f.ingest.connected) {   // 0.21.31: the device came or went
+            ingestFlip = true;
+            if (f.ingest.connected) { slot.fault = null; slot.feedError = null; slot.toasted = false; window.__toast?.("RTMP device connected \u2014 " + (slot.entry.label || "RTMP feed"), 4000, { level: "info" }); }
+          }
           if (f) slot.feed = f;   // 0.9.5: acodec and friends for the menu
           if (slot.native && f) slot.pub = f.publish || null;
           if (!feedStuck(slot) || slot.feedError) continue;
           slot.feedError = f ? f.error : "the bridge no longer has this feed";
         }
         gridEvictionTick();   // 0.14.0: slot.pub is fresh -- apply the evict / re-admit rule
+        if (ingestFlip) { try { renderSources(); } catch {} }
       })
       .catch(() => {})
       .finally(() => { feedPoll = null; });

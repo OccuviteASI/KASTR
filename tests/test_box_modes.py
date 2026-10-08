@@ -96,5 +96,16 @@ class RoomsOnTheHub(unittest.TestCase):
         self.assertIn('if (s.cluster && s.cluster.connect && s.cluster.hub !== true) $("roomsPanel").hidden = true;', r)
 
 
+class JoinGate(unittest.TestCase):
+    def test_scrim_covers_the_whole_page(self):
+        # 0.21.28 (Kenton: "the shadow in the back doesn't cover the whole screen")
+        p = _read("moq-watch-lite.html")
+        self.assertNotIn("#joinGate { left:calc(var(--sbw) + 26px); }", p)
+        self.assertIn("#joinGate { z-index:67; }", p)
+
+    def test_profile_card_never_scrolls_sideways(self):
+        self.assertIn("#profilePop .prow input { width:100%; min-width:0; box-sizing:border-box; }", _read("moq-watch-lite.html"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -594,7 +594,8 @@
   #profilePop { width:min(440px, 94vw); }
   #profilePop.modal { position:fixed !important; left:50% !important; top:50% !important; transform:translate(-50%, -50%); z-index:80; }
   #profilePop .prow { display:flex; gap:10px; }
-  #profilePop .prow label { flex:1; }
+  #profilePop .prow label { flex:1; min-width:0; }   /* 0.21.28: a flex item kept its input's intrinsic width -- the card scrolled sideways */
+  #profilePop .prow input { width:100%; min-width:0; box-sizing:border-box; }
   #profilePop .avedit { display:flex; gap:12px; align-items:center; margin:10px 0; }
   #profilePop canvas { width:160px; height:160px; border-radius:50%; background:var(--surface-2); cursor:grab; flex:none; }
   #profilePop .avctl { display:flex; flex-direction:column; gap:6px; flex:1; }
@@ -1282,9 +1283,10 @@
   #joinGate { position:fixed; inset:0; z-index:65; background:rgba(3,5,10,.62);
     display:flex; align-items:center; justify-content:center; padding:18px; }
   #joinGate[hidden] { display:none; }
-  /* 0.12.0: the gate scrim starts right of the sidebar so the list stays usable before joining
-     (after the inset:0 rule above, which would otherwise win) */
-  #joinGate { left:calc(var(--sbw) + 26px); }
+  /* 0.21.28 (Kenton: "the shadow in the back doesn't cover the whole screen, just most of it"): the scrim covers the WHOLE
+     page, room rail included (0.12.0 left the rail uncovered at a fixed offset, which missed on the web page and with the
+     rail collapsed); the gate's own room list picks a room before joining */
+  #joinGate { z-index:67; }   /* above #sidebar (66) */
   #joinGate #joinKeepRow { display:flex; align-items:center; gap:7px; }
   #joinGate #joinKeepRow[hidden] { display:none; }
   #bootFail { background:var(--asi-red); color:#fff; padding:10px 12px; border-radius:6px; margin-bottom:10px; font-size:13px; line-height:1.4; }

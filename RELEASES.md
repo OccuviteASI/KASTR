@@ -2,6 +2,12 @@
 
 What changed in each build, newest first.
 
+## v0.21.28 — the join screen dims the whole page
+
+**The join screen dims the whole page (Kenton: "the shadow in the back doesn't cover the whole screen, just most of it").** Since 0.12.0 the backdrop behind the join card started a fixed distance from the left, to leave the room rail clickable. That offset missed with the rail collapsed and on the web page, leaving a strip undimmed. The backdrop now covers the whole page, room rail included. Pick a room in the join card's own room list. Verified in the desktop window and on the web page.
+
+**The Profile card no longer scrolls sideways.** The Last name field kept its natural width and pushed the card wider than itself.
+
 ## v0.21.27 — one-spoke updates that work, rooms only where they live
 
 **The single Update buttons work (Kenton: "The single update buttons don't seem to be working on the federation page").** 0.21.26's per-spoke Update sent a new command that only 0.21.26 or later understands, and the spokes that need updating are exactly the older ones. The button now sends the ordinary update every KASTR version obeys, delivered only to the address that spoke registers from. Every other spoke sees nothing new. Two spokes behind the same address (one NAT) would both update. This needs the **hub** on 0.21.27; the spokes can be any version.

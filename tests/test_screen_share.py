@@ -84,17 +84,50 @@ class Security(unittest.TestCase):
 
 
 class Persistence(unittest.TestCase):
-    def test_screen_feeds_are_never_persisted(self):
+    def test_screen_feeds_are_persisted_with_their_identity(self):
+        # 0.21.26 (Kenton): "reconnect a desktop, tab, window share when still available after a relaunch"
         b = kastr_rtsp.Bridge(state_dir=None, log=lambda *a: None)
-        pub = mock.Mock(stopping=False, broadcast="r/h/o/screen.hang", audio=True, passthrough=False, keep=True,
+        pub = mock.Mock(stopping=False, broadcast="r/h/o/screen.hang", audio=True, passthrough=False, keep=False,
                         wantOndemand=False, wantLow=False, label="Screen 1")
-        pub.feed = mock.Mock(source_url="screen://monitor/1", added_by="", room="")
+        pub.feed = mock.Mock(source_url="screen://window/77", added_by="", room="",
+                             screen_ident={"kind": "window", "hwnd": 77, "exe": "notepad.exe", "title": "notes"})
         cam = mock.Mock(stopping=False, broadcast="r/h/o/cam.hang", audio=False, passthrough=False, keep=True,
                         wantOndemand=False, wantLow=False, label="Cam")
         cam.feed = mock.Mock(source_url="rtsp://cam/1", added_by="", room="")
         b._pubs = {1: pub, 2: cam}
-        urls = [r["url"] for r in b._feed_records()]
-        self.assertEqual(urls, ["rtsp://cam/1"])
+        recs = {r["url"]: r for r in b._feed_records()}
+        self.assertEqual(sorted(recs), ["rtsp://cam/1", "screen://window/77"])
+        self.assertTrue(recs["screen://window/77"]["keep"])
+        self.assertEqual(recs["screen://window/77"]["screen"]["title"], "notes")
+
+
+class Relocate(unittest.TestCase):
+    """0.21.26: after a relaunch a share comes back only if the thing is still there."""
+
+    def _wins(self, *ws):
+        return mock.patch.object(kastr_screen, "_sources_mod", return_value=mock.Mock(list_windows=lambda exclude_pids=(): list(ws)))
+
+    def test_same_window_handle(self):
+        with mock.patch.object(kastr_screen, "WINDOWS", True), self._wins({"hwnd": 77, "title": "x", "exe": "a.exe"}):
+            self.assertEqual(kastr_screen.relocate("screen://window/77", {"title": "x"}), "screen://window/77")
+
+    def test_reopened_window_found_by_program_and_title(self):
+        with mock.patch.object(kastr_screen, "WINDOWS", True), self._wins({"hwnd": 91, "title": "notes", "exe": "Notepad.exe"}):
+            self.assertEqual(kastr_screen.relocate("screen://window/77", {"title": "notes", "exe": "notepad.exe"}), "screen://window/91")
+
+    def test_closed_window_is_dropped(self):
+        with mock.patch.object(kastr_screen, "WINDOWS", True), self._wins({"hwnd": 5, "title": "other", "exe": "b.exe"}):
+            self.assertIsNone(kastr_screen.relocate("screen://window/77", {"title": "notes", "exe": "notepad.exe"}))
+
+    def test_tab_found_by_title_after_it_moved(self):
+        tabs = [{"hwnd": 10, "index": 0, "title": "Mail", "browser": "chrome"}, {"hwnd": 10, "index": 3, "title": "Dashboard", "browser": "chrome"}]
+        fake_tabs = mock.Mock(list_tabs=mock.Mock(return_value=tabs))   # kastr_tabs is Windows-only: a stand-in on Linux too
+        with mock.patch.object(kastr_screen, "WINDOWS", True), mock.patch.dict(sys.modules, {"kastr_tabs": fake_tabs}):
+            self.assertEqual(kastr_screen.relocate("screen://tab/10/1", {"title": "Dashboard", "browser": "chrome"}), "screen://tab/10/3")
+            self.assertIsNone(kastr_screen.relocate("screen://tab/10/1", {"title": "Closed tab"}))
+
+    def test_restore_drops_what_is_gone(self):
+        self.assertIn("is no longer there -- dropped", _read("kastr_rtsp.py"))
 
 
 class Ffmpeg(unittest.TestCase):
@@ -131,10 +164,13 @@ class Page(unittest.TestCase):
     def setUpClass(cls):
         cls.page = _read("moq-watch-lite.html")
 
-    def test_screens_are_never_grid_members(self):
+    def test_screens_join_a_grid_only_when_picked(self):
+        # 0.21.26 (Kenton: grids take screens, windows and tabs too) -- but a share starts in "No grid"
         p = self.page
-        self.assertIn("added.filter((a) => a.kind === RTSP && !a.screen && a.enabled && !a.evicted && (", p)
-        self.assertIn("added.filter((a) => a.kind === RTSP && !a.screen && a.enabled && a.evicted && (", p)
+        self.assertIn('function gridIdOf(a) { return String(a?.gridId || (a?.screen ? "none" : "1")); }', p)
+        self.assertIn('added.filter((a) => a.kind === RTSP && gridIdOf(a) !== "none" && a.enabled && !a.evicted &&', p)
+        self.assertIn('o.value = "none"; o.textContent = "No grid";', p)
+        self.assertIn('if (a.url && a.url !== TEST_URL && !isScreenUrl(a.url) && !/^(device|media):/i.test(a.url)) {', p)   # no pass-through on a capture
 
     def test_presenter_keeps_its_tracks(self):
         p = self.page

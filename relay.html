@@ -1012,6 +1012,7 @@
     if (box.hidden) return;
     const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
+    const behind = (r) => !!(r.version && d.version && r.version !== d.version);   // 0.21.26
     // 0.21.2: + each spoke's rooms, closeable from here (the closeRoom command rides the spoke's long-poll)
     const roomsCell = (r) => (r.rooms || []).length
       ? (r.rooms || []).map((slug) => "<span class=\"sproom\" data-spoke=\"" + esc(r.name || r.key) + "\" data-slug=\"" + esc(slug) + "\">" + esc(slug) + (LOCAL ? " <button type=\"button\" class=\"ghost sprp\" title=\"Purge this room's chat stored on this hub (the room stays)\">chat</button> <button type=\"button\" class=\"ghost sprx\" title=\"Close this room on that spoke\">\u2715</button>" : "") + "</span>").join(" ")
@@ -1022,8 +1023,8 @@
       : "<span style=\"color:var(--text-mute)\">\u2014</span>";
     { let n = $("spokesStale"); if (!n) { n = document.createElement("span"); n.id = "spokesStale"; n.className = "hint"; n.style.display = "block"; $("spokesList").after(n); }   // 0.21.24
       n.textContent = d.stale ? d.stale + (d.stale === 1 ? " spoke" : " spokes") + " not seen for over 30 minutes " + (d.stale === 1 ? "is" : "are") + " hidden (forgotten after 7 days)." : ""; }
-    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Cameras</th><th>Last seen</th></tr>"
-      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras
+    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
+      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>" + (behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button>" : "") + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one
       : "No spoke has registered yet.";
     for (const b of $("spokesList").querySelectorAll(".sprp")) b.addEventListener("click", async () => {   // 0.21.3
       const slug = b.parentElement.dataset.slug;
@@ -1054,6 +1055,19 @@
       setTimeout(paintSpokes, 3000);
     });
     $("spokesUpdate").disabled = !LOCAL || !d.secured;
+    // 0.21.26 (Kenton): "When all spokes are up to date, don't highlight the update spokes button"
+    const nBehind = rows.filter(behind).length;
+    $("spokesUpdate").classList.toggle("ghost", nBehind === 0);
+    $("spokesUpdate").textContent = nBehind ? "Update " + nBehind + (nBehind === 1 ? " spoke" : " spokes") + " now" : "All spokes up to date";
+    for (const b of $("spokesList").querySelectorAll(".spupd")) b.addEventListener("click", async () => {   // 0.21.26: one at a time
+      const sp = b.dataset.spoke;
+      b.disabled = true;
+      try {
+        const r = await api("/api/relay/spokes/update", { spoke: sp });
+        $("spokesMsg").textContent = r.error ? r.error : ("Asked " + sp + " to update to " + d.version + " (#" + r.seq + ") \u2014 it relaunches within a minute; its Version column follows.");
+      } catch (e) { $("spokesMsg").textContent = "Failed: " + (e?.message || e); b.disabled = false; }
+      setTimeout(paintSpokes, 3000);
+    });
   }
   $("spokesUpdate").addEventListener("click", async () => {
     $("spokesMsg").textContent = "Asking\u2026";
@@ -1214,7 +1228,7 @@
   };
   const roomFlags = (r, closedAt) => {
     const f = [];
-    if (r.persistent) f.push("kept");
+    if (r.persistent) f.push("always open");   // 0.21.26: "Keep room open"
     if (r.locked) f.push("locked");
     if (closedAt) f.push("closed " + fmtAgo(closedAt));
     return f.join(", ") || "\u2014";

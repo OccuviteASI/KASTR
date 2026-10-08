@@ -2,6 +2,32 @@
 
 What changed in each build, newest first.
 
+## v0.21.26 — grids take any source, shares come back, locked rooms are temporary
+
+**Grids take any source (Kenton: "The grids should allow multiple source types in them, including screen, window, tab, RTSP/HTTP, media file, etc").** A screen, window or tab share can be put in a grid from its row in Sources. It starts in **No grid**, so it never lands in your camera grid by surprise. Share ▸ RTSP feed now also offers **Camera on this computer…** and **Add media file…**. Either one becomes a feed published by this computer like an RTSP camera: it can go in any grid and comes back after a restart. A camera added this way is opened once by KASTR and copied over the loopback to its publisher and its grid preview, because most webcams can only be opened by one program. It has no background effects, and KASTR's own camera must be off if it is the same device. A media file loops. Tested in the lab with a test-pattern camera, an RTSP camera and a looping video file in one grid. A real webcam could not be tested here: the build machine's tool sandbox has no camera access.
+
+**A box's camera shows for everyone (Kenton, Logan-ROC: "if a camera starts on a publisher+relay, it should show for everyone and act similar to an RTSP stream").** The camera of a Publisher or Publisher + relay box used to be hidden from viewers. It now shows as a camera feed: no person chimes, not counted as a person, and listed as "Camera box" in Participants. A box's webcam comes back after a relaunch only if it was turned on there: the camera button now remembers its last state for the box's auto-join. To put the box camera in a grid, add it as a camera on this computer (above).
+
+**Shares come back after a relaunch (Kenton: "Reconnect a desktop, tab, window share when still available after a relaunch of KASTR. If not available, drop it").** A screen, window or tab share is now saved like an RTSP feed. At launch it comes back if the thing is still there:
+- the same screen;
+- the same window, or a window of the same program with the same title (closed and reopened);
+- the tab with the same title, even if it moved.
+Otherwise it is dropped, and the log says so.
+
+**Window shares work minimized or maximized (Kenton: "I was getting an error on sharing a window until I maximized the window").** A minimized window has no size and paints nothing, so its capture failed. KASTR now restores it without taking focus (it stays behind your current window) before measuring and capturing it. Verified with a real minimized window.
+
+**A share is not an RTSP stream (Kenton).** A screen, window or tab share now has its own row in Sources: a screen icon, a **Sound** switch for the computer's sound, no Pass-through switch, and **No grid** until you pick one.
+
+**"RTSP Grid" is now "Grid"** (a grid holds more than RTSP cameras now), and the View menu section is **Grids and feeds**.
+
+**Sources grouped by grid (Kenton: "tie those sources together ... Sort alphabetically. Grid groups should also sort alphabetically").** The members of each grid sit together under the grid's name, tied by a blue rail. Grids are sorted A–Z with their sources A–Z, then everything that is in no grid, A–Z.
+
+**Locked rooms are temporary too, and "Keep" is now "Keep room open" (Kenton: "Locked rooms should be temporary also if not checked to keep").** A lock never kept a room by itself, but a locked room lasted a day after its last use. Every room that is not kept open, locked or not, now goes about 10 minutes after the last person leaves. The switch reads **Keep room open**, and such rooms are marked **always open**.
+
+**Update one spoke at a time (Kenton).** The hub's spokes table has an **Update** button on every spoke that runs another version. **Update spokes now** says how many are behind, and turns into a quiet "All spokes up to date" when none is. Fixed alongside: the hand-over's re-point command now reaches spokes within a second. In 0.21.25 it was raised but never sent, and spokes only re-pointed when the old hub answered their next check-in (up to about 30 s).
+
+**"connecting…" says more (Kenton: users stuck on "connecting").** A tile whose stream description never arrives now says, after its second retry, which relay is not delivering ("no stream from Mendon yet — retrying"). /api/diag lists every such tile with how long it has waited, its retries and the relay it came through.
+
 ## v0.21.25 — the hub owns every room, a hub can hand over, and drags you can see
 
 **Every room lives on the hub and every relay lists it (Kenton: "They should all be stored on the hub and distributed to all relays to see. Some of them are storing on the relays ... I was on the Logan Relay and created a room. I couldn't even see it on the laptop I have connected to the relay").** Until now each KASTR kept its own room records, and a room was stored on whichever relay the creating page happened to use. Plain rooms (no code, not kept) were never stored at all: they existed only while someone was in them. Now a spoke forwards every room create, keep, lock, close and group change to the hub, and lists the hub's rooms, so every relay shows the same rooms within 30 seconds.

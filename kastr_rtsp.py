@@ -758,7 +758,141 @@ MEDIA_EXTS = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv",
 PAGE_SITES = ("youtube", "youtu.be", "vimeo", "twitch", "dailymotion")
 
 
-def input_args(url):
+# ---- 0.21.26 (Kenton: grids take "screen, window, tab, RTSP/HTTP, media file, etc"): HOST FEEDS --------------------
+# A camera on THIS computer (device://video/<name>) or a media file uploaded to it (media://<32 hex id>) becomes a feed
+# like an RTSP camera: published natively, in any grid, kept after a restart. A webcam opens only once, so the bridge
+# captures it ONE time (DeviceCapture) and fans an H.264 MPEG-TS copy out over loopback UDP -- one port per reader
+# (publisher, monitor, low copy). A media file is simply read by each reader, looped at real time.
+DEVICE_PREFIX = "device://video/"
+MEDIA_PREFIX = "media://"
+HOSTMEDIA_DIR = [None]   # set by the Bridge: <state>/hostmedia (a copy of the upload that outlives the upload's own life)
+DEVICES = {}             # url -> DeviceCapture
+DEVICE_ROLES = ("pub", "mon", "low")
+
+
+def is_device(url):
+    return str(url or "").startswith(DEVICE_PREFIX)
+
+
+def is_hostmedia(url):
+    return str(url or "").startswith(MEDIA_PREFIX)
+
+
+def is_host_feed(url):
+    return is_device(url) or is_hostmedia(url)
+
+
+def device_name(url):
+    from urllib.parse import unquote
+    return unquote(str(url)[len(DEVICE_PREFIX):]).strip()
+
+
+def hostmedia_path(url):
+    mid = str(url)[len(MEDIA_PREFIX):].strip().lower()
+    d = HOSTMEDIA_DIR[0]
+    if not re.match(r"^[0-9a-f]{32}$", mid) or not d or not os.path.isdir(d):
+        return None
+    for fn in sorted(os.listdir(d)):
+        if fn.startswith(mid + ".") and re.match(r"^[0-9a-f]{32}\.[a-z0-9]{1,5}$", fn):
+            return os.path.join(d, fn)
+    return None
+
+
+def list_devices(ffmpeg):
+    """The cameras this computer can capture: Windows = DirectShow video devices (by name), Linux = /dev/video*."""
+    out = []
+    if sys.platform.startswith("win") and ffmpeg:
+        try:
+            r = subprocess.run([ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                               capture_output=True, text=True, errors="replace", timeout=10,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for line in (r.stderr or "").splitlines():
+                m = re.search(r'"([^"]+)"\s*\(video\)', line)
+                if m and m.group(1) not in out:
+                    out.append(m.group(1))
+        except Exception:
+            pass
+    elif sys.platform.startswith("linux"):
+        import glob
+        out = sorted(glob.glob("/dev/video*"))
+    return out
+
+
+def _free_udp_port():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+class DeviceCapture:
+    """One ffmpeg owns the camera; H.264 (baseline, 2 s GOP, <= 1280 wide) goes out to one loopback UDP port per
+    reader. Restarted with a back-off when it exits; stopped with the feed."""
+
+    def __init__(self, ffmpeg, url, log=None):
+        self.ffmpeg, self.url, self.log = ffmpeg, url, (log or (lambda m: None))
+        self.ports = {r: _free_udp_port() for r in DEVICE_ROLES}
+        self.proc = None
+        self.stopped = False
+        self.restarts = 0
+        self.last_error = ""
+
+    def args(self):
+        name = device_name(self.url)
+        if name == "kastr-test":   # rig: a test pattern stands in for a camera
+            src = ["-re", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30"]
+        elif sys.platform.startswith("win"):
+            src = ["-f", "dshow", "-rtbufsize", "128M", "-i", "video=" + name]
+        else:
+            src = ["-f", "v4l2", "-i", name]
+        tee = "|".join("[f=mpegts]udp://127.0.0.1:%d?pkt_size=1316" % self.ports[r] for r in DEVICE_ROLES)
+        return ([self.ffmpeg, "-hide_banner", "-loglevel", "error"] + src
+                + ["-an", "-vf", "scale=w='min(iw,1280)':h=-2,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
+                   "-tune", "zerolatency", "-profile:v", "baseline", "-g", "60", "-bf", "0", "-b:v", "3M", "-maxrate", "3M",
+                   "-bufsize", "3M", "-map", "0:v:0", "-f", "tee", tee])
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        wait = 1.0
+        while not self.stopped:
+            t0 = time.time()
+            try:
+                self.proc = subprocess.Popen(self.args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                                             errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                err = self.proc.stderr.read() if self.proc.stderr else ""
+                self.proc.wait()
+                self.last_error = (err or "").strip()[-300:]
+            except Exception as e:
+                self.last_error = str(e)[:300]
+            if self.stopped:
+                return
+            self.restarts += 1
+            self.log("rtsp: camera capture %s ended (%s) -- again in %.0f s" % (device_name(self.url), self.last_error or "no reason given", wait))
+            wait = 1.0 if time.time() - t0 > 60 else min(30.0, wait * 2)
+            time.sleep(wait)
+
+    def stop(self):
+        self.stopped = True
+        p = self.proc
+        if p is not None and p.poll() is None:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+
+def input_args(url, role="pub"):
+    if is_device(url):   # 0.21.26: the bridge's one capture of this camera, on this reader's own loopback port
+        cap = DEVICES.get(url)
+        port = cap.ports.get(role if role in DEVICE_ROLES else "pub") if cap else 0
+        return ["-f", "mpegts", "-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
+    if is_hostmedia(url):   # 0.21.26: a media file on this host, looped at real time
+        return ["-re", "-stream_loop", "-1", "-i", hostmedia_path(url) or "missing-media-file"]
     if is_screen(url):   # 0.21.20: Windows Graphics Capture, scaled on the GPU side of the capture, constant 30 fps
         import kastr_screen
         return kastr_screen.capture_input(url)
@@ -1187,7 +1321,7 @@ class Publisher:
             self.copy = False
             self.codec = "h264"
         enc = None if self.copy else self.bridge.usable_encoder()
-        args = [ff, "-hide_banner", "-loglevel", "error"] + encoder_pre_args(enc) + input_args(self.feed.url)
+        args = [ff, "-hide_banner", "-loglevel", "error"] + encoder_pre_args(enc) + input_args(self.feed.url, role="low" if self.role == "low" else "pub")
         scr = is_screen(self.feed.url)
         if scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
             import kastr_screen
@@ -1972,8 +2106,33 @@ class Bridge:
             self.log("rtsp: swept %d orphaned publisher process(es) left by KASTR pid %s" % (swept, owner))
         return swept
 
+    def _hostmedia_ready(self, url):
+        """0.21.26: media://<id> -> its file in <state>/hostmedia, copied there from the upload (<state>/media) once."""
+        if not self.state_dir:
+            return False
+        HOSTMEDIA_DIR[0] = os.path.join(self.state_dir, "hostmedia")
+        if hostmedia_path(url):
+            return True
+        mid = str(url)[len(MEDIA_PREFIX):].strip().lower()
+        if not re.match(r"^[0-9a-f]{32}$", mid):
+            return False
+        src_dir = os.path.join(self.state_dir, "media")
+        try:
+            names = sorted(os.listdir(src_dir))
+        except OSError:
+            return False
+        for fn in names:
+            if fn.startswith(mid + ".") and re.match(r"^[0-9a-f]{32}\.[a-z0-9]{1,5}$", fn):
+                import shutil
+                os.makedirs(HOSTMEDIA_DIR[0], exist_ok=True)
+                shutil.copy2(os.path.join(src_dir, fn), os.path.join(HOSTMEDIA_DIR[0], fn))
+                return True
+        return False
+
     def add(self, url):
         url = (url or "").strip()
+        if self.state_dir and HOSTMEDIA_DIR[0] is None:
+            HOSTMEDIA_DIR[0] = os.path.join(self.state_dir, "hostmedia")
         if not url:
             raise ValueError("no url given")
         self._removed = [r for r in self._removed if r.get("url") != url]   # 0.21.0: adding again is an explicit act
@@ -1983,6 +2142,18 @@ class Bridge:
         if is_screen(url):   # 0.21.20: a native screen / window share -- validated and resolved by kastr_screen
             import kastr_screen
             kastr_screen.check_url(url)
+        elif is_device(url):   # 0.21.26: a camera on this computer, captured once by the bridge
+            if not device_name(url):
+                raise ValueError("no camera name given")
+            if not self.ffmpeg:
+                raise ValueError("ffmpeg is not available here")
+            if url not in DEVICES:
+                cap = DEVICES[url] = DeviceCapture(self.ffmpeg, url, self.log)
+                cap.start()
+                time.sleep(1.5)   # the first packets reach the loopback ports before a reader opens them
+        elif is_hostmedia(url):   # 0.21.26: a media file uploaded to this host -- kept in <state>/hostmedia
+            if not self._hostmedia_ready(url):
+                raise ValueError("that media file is not on this computer (upload it again)")
         elif url != TEST_URL and not url.lower().startswith(
                 ("rtsp://", "rtsps://", "http://", "https://")):
             raise ValueError("url must start with rtsp://, rtsps://, http:// or https://")
@@ -2012,6 +2183,17 @@ class Bridge:
         self.unpublish(feed_id, persist=False)   # 0.12.0: one write, below
         with self._lock:
             feed = self._feeds.pop(int(feed_id), None)
+        if feed and is_device(feed.url):   # 0.21.26: the camera is free again
+            cap = DEVICES.pop(feed.url, None)
+            if cap:
+                cap.stop()
+        if feed and is_hostmedia(feed.url):   # 0.21.26: its kept copy goes with it
+            p = hostmedia_path(feed.url)
+            if p:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
         if feed and is_screen(feed.url):   # 0.21.20
             import kastr_screen
             kastr_screen.overlay_stop(feed.id)
@@ -2232,7 +2414,19 @@ class Bridge:
     def _feed_records(self):
         out = []
         for pub in list(self._pubs.values()):
-            if pub.stopping or is_screen(pub.feed.source_url):   # 0.21.20: a screen share never outlives the session
+            if pub.stopping:
+                continue
+            if is_screen(pub.feed.source_url):   # 0.21.26 (Kenton): a screen / window / tab share comes back after a relaunch
+                ident = getattr(pub.feed, "screen_ident", None)
+                if ident is None:
+                    try:
+                        import kastr_screen
+                        ident = pub.feed.screen_ident = kastr_screen.identity(pub.feed.source_url)
+                    except Exception:
+                        ident = None
+                out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast, "audio": bool(pub.audio),
+                            "keep": True, "label": pub.label, "screen": ident or {},
+                            "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})
                 continue
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
@@ -2245,6 +2439,8 @@ class Bridge:
         pulls, hardware-transcodes and publishes into `room` under <room>/<host>/<op>/<leaf>.hang -- the adder's
         op, so People files it under them. Needs the box's saved publisher code (its own room session) to mint
         the host's token for that room. -> feed.info() + publish, or raises ValueError with the reason."""
+        if is_host_feed(url):   # 0.21.26: a camera or file on this computer -- only from the computer itself
+            raise ValueError("a camera or media file on the host is added from the host itself")
         if is_screen(url):   # 0.21.20: a screen is shared only from the computer it shows -- never by a web client
             raise ValueError("a screen share starts only on the computer whose screen it is")
         room = str(room or "").strip().lower()
@@ -2465,6 +2661,16 @@ class Bridge:
 
         def one(rec):
             try:
+                if is_screen(rec.get("url") or ""):   # 0.21.26: still there? (a closed window / tab is dropped, not retried)
+                    import kastr_screen
+                    now_url = kastr_screen.relocate(rec["url"], rec.get("screen"))
+                    if not now_url:
+                        what = (rec.get("screen") or {}).get("title") or rec.get("label") or rec["url"]
+                        log("rtsp restore: %s share '%s' is no longer there -- dropped" % ((rec.get("screen") or {}).get("kind") or "screen", what))
+                        return
+                    if now_url != rec["url"]:
+                        log("rtsp restore: %s found again as %s" % (rec["url"], now_url))
+                    rec = dict(rec, url=now_url)
                 feed = self._feed_by_source(rec["url"]) or self.add(rec["url"])
                 rurl = url
                 if rec.get("room") and rec.get("room") != room:   # 0.21.2: a web client's feed in another room
@@ -2680,6 +2886,14 @@ class Bridge:
         if feed.url == TEST_URL:
             feed.h264 = False           # lavfi is raw; it has to be encoded
             return False
+        if is_device(feed.url):         # 0.21.26: our own capture -- H.264 baseline, copied by every reader
+            feed.h264, feed.vcodec, feed.fullrange, feed.sar = True, "h264", False, None
+            feed.width, feed.height = 1280, 720
+            return True
+        if is_hostmedia(feed.url):      # 0.21.26: a looped file restarts its timestamps -- always encoded
+            feed.h264, feed.vcodec, feed.fullrange, feed.sar = False, "file", False, None
+            feed.width = feed.height = None
+            return False
         if is_screen(feed.url):         # 0.21.20: a capture is raw too -- encoded, never copied
             import kastr_screen
             feed.h264, feed.vcodec, feed.fullrange, feed.sar = False, "rawvideo", False, None
@@ -2788,11 +3002,11 @@ class Bridge:
         head = [self.ffmpeg, "-hide_banner", "-loglevel", "error"]
         copy, hvc1 = self.monitor_plan(feed, transcode, passthrough)
         if copy:
-            args = head + input_args(feed.url) + output_args(feed.url, True, hvc1=hvc1)
+            args = head + input_args(feed.url, role="mon") + output_args(feed.url, True, hvc1=hvc1)
         else:
             # 0.9.6: small and fast -- see output_args
             enc = self.usable_encoder()
-            args = head + encoder_pre_args(enc) + input_args(feed.url) + output_args(feed.url, False, encoder=enc,
+            args = head + encoder_pre_args(enc) + input_args(feed.url, role="mon") + output_args(feed.url, False, encoder=enc,
                                                                        width=1920 if getattr(feed, "presenter", False) else None)   # 0.21.20: presenter mode composites this picture
         # Windows: keep the console window from flashing up for each feed.
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)

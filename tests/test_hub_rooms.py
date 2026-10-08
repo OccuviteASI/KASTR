@@ -217,6 +217,45 @@ class Rehome(unittest.TestCase):
         r.set_cluster.assert_not_called()
 
 
+class CommandChannel(unittest.TestCase):
+    """0.21.26: the re-point command reaches spokes on the long-poll (0.21.25 raised it but never sent it), and an update
+    can target one spoke."""
+
+    def setUp(self):
+        self.key = os.urandom(32)
+        self.hub = kr.AuthService("127.0.0.1", 0, self.key, 4443, store())
+        self.fed = "Bearer " + kr._mint(self.key, dict(kr.FEDERATION_CLAIMS, iat=int(time.time()), exp=int(time.time()) + 3600))
+
+    def tearDown(self):
+        self.hub.close()
+
+    def test_rehome_and_update_one_ride_the_reply(self):
+        self.hub.raise_cmd("rehome", {"hub": "https://10.0.0.9:4443", "web": 8001})
+        self.hub.raise_cmd("updateOne", {"version": "0.21.26", "spoke": "logan-roc"})
+        self.hub.raise_cmd("updateOne", {"version": "0.21.26", "spoke": "tremonton"})
+        o, c = self.hub.bans_for_spoke(self.fed)
+        self.assertEqual(c, 200)
+        self.assertEqual(o["cmd"]["rehome"]["hub"], "https://10.0.0.9:4443")
+        self.assertEqual([x["spoke"] for x in o["cmd"]["updateOne"]], ["logan-roc", "tremonton"])   # two clicks, both kept
+
+    def test_spoke_acts_only_on_its_own_update(self):
+        r = kr.Relay.__new__(kr.Relay)
+        r.relay_name = lambda: "logan-roc"
+        r.log = lambda *a: None
+        hook = mock.Mock()
+        import kastr_serve
+        with mock.patch.object(kastr_serve, "FEDERATION_UPDATE_HOOK", hook, create=True):
+            r._hub_cmd("update", {"seq": 4, "spoke": "tremonton", "version": "0.21.26"})
+            hook.assert_not_called()
+            r._hub_cmd("update", {"seq": 5, "spoke": "logan-roc", "version": "0.21.26"})
+            hook.assert_called_once()
+
+    def test_relay_page_update_one_and_quiet_button(self):
+        r = _read("relay.html")
+        self.assertIn('api("/api/relay/spokes/update", { spoke: sp })', r)
+        self.assertIn('$("spokesUpdate").classList.toggle("ghost", nBehind === 0);', r)
+
+
 class Pages(unittest.TestCase):
     def test_serve_forwards_room_calls_and_routes_federation(self):
         s = _read("kastr_serve.py")

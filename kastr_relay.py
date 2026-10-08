@@ -70,8 +70,9 @@ import kastr_rtsp
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
 VIEWER_TTL = 43200         # 0.10.0: a viewer token lives half a day (pages re-mint at <10 min)
-ROOM_TTL = 86400           # 0.10.0: a persisted room record without a heartbeat for a day is forgotten
-PLAIN_TTL = 600            # 0.21.25 (Kenton): a PLAIN room (no code, not kept) is stored too, and goes 10 min after its last use
+ROOM_TTL = 600             # 0.10.0: a room record without use is forgotten -- 0.21.26 (Kenton: "locked rooms should be temporary also
+                          # if not checked to keep"): 10 min for EVERY room not kept open (was a day for a locked one)
+PLAIN_TTL = ROOM_TTL       # 0.21.25 (Kenton): a PLAIN room (no code, not kept) is stored too, and goes 10 min after its last use
 HANDOVER_CHAT_MAX = 64 * 1024 * 1024   # 0.21.25: the chat history a hub hand-over carries (bytes, all rooms)
 # 0.21.25: kastr_serve wires the chat store's delete_room here, so a close forwarded by a spoke removes the transcript
 # on the hub too (the hub's token service has no chat store of its own)
@@ -893,11 +894,11 @@ class AuthStore:
 
     @staticmethod
     def _dead(rec, now):
-        """0.12.0: a kept room never expires; a locked one after ROOM_TTL without a heartbeat; 0.21.25: a plain one after
-        PLAIN_TTL without use."""
+        """0.12.0: a room kept open never expires; 0.21.26: every other room (locked or plain) goes ROOM_TTL after its last
+        use -- a member's touch, mint or the holder's heartbeat."""
         if rec.get("persistent"):
             return False
-        ttl = PLAIN_TTL if (rec.get("plain") and not rec.get("hash")) else ROOM_TTL
+        ttl = ROOM_TTL
         return now - float(rec.get("at") or 0) > ttl
 
     def room(self, slug):
@@ -1218,7 +1219,7 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
             if keep is not None and keep != bool(cur.get("persistent")):
                 if keep:
                     if codes and not pub_ok:
-                        return wrong_code("keeping a room needs the publisher access code")
+                        return wrong_code("keeping a room open needs the publisher access code")
                     if over_cap(slug):
                         return {"error": "too many kept rooms"}, 409
                 cur["persistent"] = keep
@@ -1262,7 +1263,7 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
             return wrong_code("wrong publisher access code")
         log("relay auth: room %s not created -- no publisher access code (from %s)" % (slug, peer or "?"))
         return {"error": "creating a %s room needs the publisher access code"
-                         % ("locked" if locking else "kept")}, 403
+                         % ("locked" if locking else "kept-open")}, 403
     if keep and over_cap(slug):
         return {"error": "too many kept rooms"}, 409
     if lockout is not None:
@@ -2228,7 +2229,7 @@ class AuthService:
         with self.lock:
             self.cmd["seq"] = int(self.cmd.get("seq") or 0) + 1
             rec = {"seq": self.cmd["seq"], "at": int(time.time()), **(extra or {})}
-            if name in ("closeRoom", "wake", "rtsp"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too
+            if name in ("closeRoom", "wake", "rtsp", "updateOne"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
@@ -2268,7 +2269,9 @@ class AuthService:
             cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update"),
                    "closeRoom": list(self.cmd.get("closeRoom") or []),   # 0.21.2
                    "wake": list(self.cmd.get("wake") or []),             # 0.21.7: on-demand wakes relayed from other sites
-                   "rtsp": list(self.cmd.get("rtsp") or [])}             # 0.21.16: the hub operator's RTSP switch for a spoke
+                   "rtsp": list(self.cmd.get("rtsp") or []),             # 0.21.16: the hub operator's RTSP switch for a spoke
+                   "rehome": self.cmd.get("rehome"),                      # 0.21.26: 0.21.25 raised it but never sent it (spokes got it from the 403 hint)
+                   "updateOne": list(self.cmd.get("updateOne") or [])}   # 0.21.26: one spoke at a time
         return {"bans": rows, "ver": ver, "cmd": cmd}, 200   # 0.21.0: + the hub's command channel
 
     def fanout_bans(self):
@@ -2375,6 +2378,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("rtsp", c), daemon=True).start()
+                # 0.21.26: one spoke at a time ("Update" on its row of the hub's spokes table)
+                for c in (cmd.get("updateOne") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("update", c), daemon=True).start()
                 # 0.21.25: the hub handed its duties to another box -- re-point there
                 rh = cmd.get("rehome") if isinstance(cmd.get("rehome"), dict) else None
                 if rh and callable(self.on_cmd) and int(rh.get("seq") or 0) > prev:
@@ -3570,6 +3581,15 @@ class Relay:
             return
         if name != "update":
             return
+        if (info or {}).get("spoke"):   # 0.21.26: an update for ONE spoke -- is it me?
+            try:
+                import kastr_serve as _ks
+                me = self.relay_name() or _ks.host_slug()
+            except Exception:
+                me = self.relay_name() or "relay"
+            if str(info["spoke"]) not in ("*", me):
+                return
+            self.log("relay federation: the hub asked THIS spoke to update (#%s)" % info.get("seq"))
         try:
             import kastr_serve as _ks
             hook = getattr(_ks, "FEDERATION_UPDATE_HOOK", None)
@@ -4675,6 +4695,12 @@ def handle_api(handler, relay, path, set_relay_url=None):
             ver = _ks.read_version()
         except Exception:
             ver = ""
+        p = _payload_of(handler) or {}
+        one = str(p.get("spoke") or "").strip()
+        if one:   # 0.21.26 (Kenton): update ONE spoke (its row's Update button)
+            rec = auth.raise_cmd("updateOne", {"version": ver, "spoke": one})
+            reply({"ok": True, "seq": rec["seq"], "spokes": 1, "spoke": one})
+            return True
         rec = auth.raise_cmd("update", {"version": ver})
         reply({"ok": True, "seq": rec["seq"], "spokes": len(auth.spokes_public())})
         return True

@@ -1352,6 +1352,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return
                 if path == "/api/screen/sources":
                     return send(200, json.dumps(kastr_screen.sources(tabs=(qs.get("tabs") or [""])[0] == "1")).encode(), "application/json")
+                if path == "/api/screen/devices":   # 0.21.26: cameras this computer can capture as a host feed
+                    devs = kastr_rtsp.list_devices(getattr(bridge, "ffmpeg", None) if bridge else None)
+                    return send(200, json.dumps({"ok": True, "devices": devs}).encode(), "application/json")
                 w = int((qs.get("w") or ["320"])[0] or 320)
                 got = kastr_screen.thumb((qs.get("id") or [""])[0], width=w)
                 if not got:
@@ -4311,7 +4314,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             if path.startswith("/api/lan/"):   # 0.21.22: relay discovery + probe (this machine only)
                 return self._lan_api(path, "GET")
-            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound"):   # 0.21.20: the native share picker + presenter sound
+            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the

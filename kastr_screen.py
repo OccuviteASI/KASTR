@@ -67,6 +67,22 @@ def tab_index(url):
     return int(m.group(3)) if m and m.group(3) is not None else 0
 
 
+def _window_ready(hwnd):
+    """0.21.26: a MINIMIZED window has no size and paints nothing, so its capture failed until it was maximized.
+    Show it again without activating it (it stays behind whatever has focus), then let it lay itself out."""
+    import ctypes
+    u32 = ctypes.windll.user32
+    if not u32.IsWindow(hwnd):
+        raise ValueError("that window is no longer there")
+    if u32.IsIconic(hwnd):
+        u32.ShowWindow(hwnd, 4)   # SW_SHOWNOACTIVATE
+        for _ in range(20):         # up to ~1 s for the restore animation + first paint
+            time.sleep(0.05)
+            if not u32.IsIconic(hwnd):
+                break
+        time.sleep(0.25)
+
+
 def _tab_ready(hwnd, index):
     """Bring tab `index` to the front of its window (never stealing focus) and un-minimize the window without
     activating it -- a minimized Chromium window paints nothing."""
@@ -89,6 +105,8 @@ def check_url(url):
     if kind == "tab":
         _tab_ready(n, tab_index(url))
         return
+    if kind == "window":
+        _window_ready(n)   # 0.21.26 (Kenton: "an error on sharing a window until I maximized the window")
     if not _resolve(kind, n):
         raise ValueError("that %s is no longer there" % ("screen" if kind == "monitor" else "window"))
 
@@ -105,6 +123,70 @@ def _resolve(kind, n):
         if int(s.get("hwnd") or 0) == n:
             return s
     return None
+
+
+def identity(url):
+    """0.21.26 (Kenton: "reconnect a desktop, tab, window share when still available after a relaunch of KASTR"): what is
+    needed to find the shared thing again after KASTR restarts -- handles survive a KASTR restart (the window's own process
+    keeps it), but a window or tab may have been closed and reopened under a new handle."""
+    try:
+        kind, n = parse_url(url)
+    except ValueError:
+        return None
+    try:
+        if kind == "monitor":
+            src = _resolve(kind, n) or {}
+            return {"kind": kind, "index": n, "device": src.get("device") or ""}
+        if kind == "window":
+            src = _resolve(kind, n) or {}
+            return {"kind": kind, "hwnd": n, "exe": src.get("exe") or "", "title": src.get("title") or ""}
+        import kastr_tabs
+        idx = tab_index(url)
+        t = next((t for t in kastr_tabs.list_tabs(budget=1.5) if t["hwnd"] == n and t["index"] == idx), None) or {}
+        return {"kind": kind, "hwnd": n, "index": idx, "title": t.get("title") or "", "browser": t.get("browser") or ""}
+    except Exception:
+        return {"kind": kind}
+
+
+def relocate(url, ident):
+    """0.21.26: the screen:// url to share after a relaunch, or None when the thing is gone (the share is then dropped).
+    A screen: the same index. A window: the same handle when it still exists, else a window of the same program with the
+    same title. A tab: the same browser window + the tab of the same title (its position may have moved), else that title
+    in any browser window."""
+    if not WINDOWS:
+        return None
+    try:
+        kind, n = parse_url(url)
+    except ValueError:
+        return None
+    ident = ident if isinstance(ident, dict) else {}
+    try:
+        if kind == "monitor":
+            return url if _resolve(kind, n) else None
+        if kind == "window":
+            wins = _sources_mod().list_windows(exclude_pids=())
+            if any(int(w.get("hwnd") or 0) == n for w in wins):
+                return url
+            title, exe = ident.get("title") or "", (ident.get("exe") or "").lower()
+            if title:
+                for w in wins:
+                    if (w.get("title") or "") == title and (not exe or (w.get("exe") or "").lower() == exe):
+                        return "screen://window/%d" % int(w["hwnd"])
+            return None
+        import kastr_tabs
+        title = ident.get("title") or ""
+        tabs = kastr_tabs.list_tabs(budget=2.0)
+        same = [t for t in tabs if t["hwnd"] == n]
+        if not title:   # nothing to match by: the same position in the same window, if that window is still there
+            idx = tab_index(url)
+            return url if any(t["index"] == idx for t in same) else None
+        for pool in (same, [t for t in tabs if not ident.get("browser") or t.get("browser") == ident.get("browser")], tabs):
+            t = next((t for t in pool if (t.get("title") or "") == title), None)
+            if t:
+                return "screen://tab/%d/%d" % (t["hwnd"], t["index"])
+        return None
+    except Exception:
+        return None
 
 
 def _fit(w, h):

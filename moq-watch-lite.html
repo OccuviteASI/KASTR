@@ -159,6 +159,10 @@
     max-height:calc(100dvh - 16px);   /* 0.21.5: iOS Safari's vh includes the hidden address bar */
   }
   #mineMenu .msep { border-top:1px solid var(--line); margin:3px 0; }
+  /* 0.21.26 (Kenton): the sources of one grid sit together, tied by a rail and their grid's name */
+  .gridgroup { display:flex; flex-direction:column; gap:6px; border-left:3px solid var(--asi-blue); border-radius:4px;
+    padding:4px 0 4px 8px; margin:2px 0 8px; background:color-mix(in srgb, var(--asi-blue) 6%, transparent); }
+  .gridgroup > .gghead { font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--asi-blue); padding:2px 0; }
   #mineMenu.roomform { min-width:260px; padding:8px; }   /* 0.21.0: the "+" bubble */
   #mineMenu .mcap { font-size:10px; color:var(--text-mute); padding:3px 8px 1px; text-transform:uppercase; letter-spacing:.04em; }
   #mineMenu .mhint { font-size:10px; color:var(--text-mute); padding:4px 8px; }
@@ -1617,6 +1621,14 @@
         <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
              title="Publish the camera's audio track with the feed (AAC). Off by default = video only. Changeable later from the feed's Audio box or ▾ menu.">
           <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspAudio"><i></i></span><span>Send the camera's audio (off by default)</span></label></div>
+        <!-- 0.21.26 (Kenton): a camera or a media file on this computer as a feed -- like an RTSP camera, it can go in a grid -->
+        <div id="hostFeedRow" style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+          <select id="hostCamSel" style="flex:1; min-width:180px"><option value="">Camera on this computer…</option></select>
+          <button id="hostCamAdd" type="button" class="ghost" style="flex:none" disabled>Add camera</button>
+          <button id="hostFileAdd" type="button" class="ghost" style="flex:none" title="Loop a video file as a feed -- it can go in a grid">Add media file…</button>
+          <input type="file" id="hostFile" accept="video/*,audio/*,.mkv,.ts" hidden>
+        </div>
+        <p class="hint" id="hostFeedHint" style="margin:4px 0 0">Added here, a camera or video file is published by this computer like an RTSP camera: it can go in a grid and comes back after a restart. A camera added this way has no background effects, and KASTR&rsquo;s own camera must be off if it is the same one.</p>
         <div id="webRtspList"></div>   <!-- 0.21.2: a web client's cameras on the host -->
         <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
              title="The camera's own stream is published as-is -- no re-encode on this machine, the lowest CPU -- whenever viewers can decode it (H.264 and H.265 today; also 4K and full-range H.264, which were converted before). Viewers need hardware decode for H.265; a viewer that cannot decode a stream sees a notice on that tile. Off = H.264 up to 1080p passes through, everything else is converted to H.264.">
@@ -1865,7 +1877,7 @@
     <button class="opt" id="viewVerbose" type="button" title="Also show the quiet confirmations (setting echoes, saved notes); off = events and problems only"><span class="oi">&#128276;</span>Verbose alerts<span class="chk">&#10003;</span></button>
     <div id="viewFeeds" hidden>
       <div class="sep"></div>
-      <h3 class="sect">RTSP feeds</h3>
+      <h3 class="sect">Grids and feeds</h3>   <!-- 0.21.26: not only RTSP any more -->
       <button class="opt" data-gf="both" type="button" title="One mosaic stream plus every feed at full quality behind it"><span class="oi">&#9638;</span>Grid + full-quality feeds<span class="chk">&#10003;</span></button>
       <button class="opt" data-gf="grid" type="button" title="One mosaic stream only"><span class="oi">&#9638;</span>Grid only<span class="chk">&#10003;</span></button>
       <button class="opt" data-gf="separate" type="button" title="Every feed as its own stream, no mosaic"><span class="oi">&#9639;</span>Separate feeds<span class="chk">&#10003;</span></button>
@@ -2122,7 +2134,7 @@
       <input type="text" id="joinPwd" class="masked" autocomplete="off" spellcheck="false"></label>
     <!-- 0.12.0: persistent rooms -- kept on the relay (with their chat) until closed -->
     <label class="f asi-sw" id="joinKeepRow" hidden>
-      <span class="switch sm"><input type="checkbox" id="joinKeep"><i></i></span><span style="margin:0">Keep this room &mdash; it stays on the relay with its chat until its creator or the relay operator closes it</span></label>
+      <span class="switch sm"><input type="checkbox" id="joinKeep"><i></i></span><span style="margin:0">Keep room open &mdash; it stays, with its chat, after everyone leaves, until its creator or an admin closes it. Otherwise it goes about 10 minutes after the last person leaves.</span></label>
     <div class="btns">
       <button id="joinBtn" type="button" class="join">Join now</button>
     </div>
@@ -2811,8 +2823,13 @@
   });
   topCamBtn.addEventListener("click", () => {
     const { src } = localCamSrc();
-    if (!src) { ensureLocalCamera({ vid: !joinVidOn, mic: window.__join?.state?.() === "joined" ? false : undefined }); return; }
+    const boxRemember = (on) => {   // 0.21.26: a publisher box remembers its camera for the next relaunch's auto-join
+      if (!isPublisherMode()) return;
+      try { const lj = lastJoin() || {}; lj.vidOn = !!on; localStorage.setItem("kastr.lastjoin", JSON.stringify(lj)); } catch {}
+    };
+    if (!src) { boxRemember(!joinVidOn); ensureLocalCamera({ vid: !joinVidOn, mic: window.__join?.state?.() === "joined" ? false : undefined }); return; }
     src.videoPaused = !src.videoPaused;
+    boxRemember(!src.videoPaused);
     sendControl(window.__publisher.peer, src.id, { videoPaused: src.videoPaused });
     renderMine();
   });
@@ -3752,7 +3769,7 @@
     if (gridMeta.has(n)) return "grid";
     if (isGridChild(n)) return "gridchild";
     if (isContentPath(n)) return "content";
-    if (boxHiddenPath(n)) return "box";
+    if (boxHiddenPath(n)) return "content";   // 0.21.26 (Kenton, Logan-ROC): a box's camera is a camera FEED -- shown to everyone, never a person (was "box": hidden)
     return "person";
   }
   const isPersonPath = (name) => pathClass(name) === "person";
@@ -5343,7 +5360,8 @@
       if (t.faceCap) {
         // 0.8.2: no "audio only" caption -- the face is identity (initials
         // + swoosh) and the chip row tells the audio/video story.
-        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it" : t.noCatalog ? "connecting\u2026"
+        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it"
+          : t.noCatalog ? ((t.catResubs || 0) >= 2 ? "no stream from " + (memberVia(personKeyOf(name)) || "their relay") + " yet \u2014 retrying" : "connecting\u2026")   // 0.21.26: say which relay is not delivering
           : t.shed && t.hasVideo !== false ? "video paused \u2014 weak connection" : "";   // 0.21.23   // 0.21.22   // 0.9.2
       }
       if (t.faceInit) {
@@ -6003,7 +6021,6 @@
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
-    if (pathClass(name) === "box") return;   // 0.21.2: an unattended box's camera (0.21.15: the one classifier tile, People and chime share)
     personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced)
     const gm0 = gridMeta.get(name);
     if (gm0) gm0.tileGone = 0;   // 0.9.4: the grid's tile is back
@@ -6509,7 +6526,6 @@
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
       try { stateMembersApply(); } catch {}   // 0.13.0
       try { rtspOffApply(); } catch {}   // 0.21.16: a member's cameras switched off -> People note + one quiet toast per flip
-      try { for (const n of [...tiles.keys()]) if (pathClass(n) === "box") removeTile(n); } catch {}   // 0.21.2: the mode arrived after the tile (0.21.15: pathClass)
       try { reclassifyTiles(); } catch {}   // 0.21.15: a presence diff (mode, op, room) re-judges every tile once
       try { paintSidebar(); } catch {}
       try { paintChannelChip(); } catch {}
@@ -7558,7 +7574,7 @@
     const rec = lastChannelList.find((r) => r.slug === c);
     const mine = myChannels().find((r) => r.slug === c);
     if (rec?.persistent || mine?.persistent) {
-      kv.push(["Kept", "since " + (rec?.created ? new Date(rec.created * (rec.created < 1e12 ? 1000 : 1)).toLocaleString() : "\u2014")
+      kv.push(["Kept open", "since " + (rec?.created ? new Date(rec.created * (rec.created < 1e12 ? 1000 : 1)).toLocaleString() : "\u2014")
         + (rec?.creator ? " by " + rec.creator : "")]);
     }
     body.replaceChildren(...kv.flatMap(([k, v]) => { const b = document.createElement("b"); b.textContent = k; const d = document.createElement("span"); d.textContent = v; return [b, d]; }));
@@ -9974,6 +9990,9 @@
       audioActive: [...tiles.entries()].filter(([, t]) => t.watch.muted === false).map(([n]) => n),
       netEvents: (() => { const ne = window.__netEvents || {}; return { reconnects: ne.reconnects || 0, lastMinute: (ne.recent || []).filter((t) => Date.now() - t < 60000).length, breaks: ne.breaks || 0 }; })(),   // 0.21.8
       slowGroups: { audio: window.__slowGroups?.audio || 0, video: window.__slowGroups?.video || 0 },   // 0.21.8
+      // 0.21.26 (Kenton: users stuck on "connecting..."): every tile whose catalog never arrived -- how long, how many re-subscribes, through which relay
+      noCatalog: [...tiles].filter(([, t]) => t.noCatalog).map(([n, t]) => ({ name: n, waitedS: t.catWaitSince ? Math.round((performance.now() - t.catWaitSince) / 1000) : null,
+        resubs: t.catResubs || 0, via: memberVia(personKeyOf(n)) || null })),
       congest: (() => { const c = window.__congest || {}; return { level: c.level || 0, steps: c.steps || 0, why: c.why || "", off: congestOff(), shed: [...tiles].filter(([, t]) => t.shed).length }; })(),   // 0.21.23
       audioDelay: (() => { const ad = window.__audioDelay || {}; return { extra: ad.extra || 0, steps: ad.steps || 0, late: ad.late || 0, lateFrames: ad.lateFrames || 0, maxBehind: Math.round(ad.maxBehind || 0) }; })(),   // 0.21.9
       fallbackRetries: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.fbRetries).map(([n, t]) => [n, t.fbRetries()])),   // 0.21.8
@@ -10177,14 +10196,14 @@
     else rb.querySelector(".cnt")?.remove();
     if (rec.locked) { if (!rb.querySelector(".lk")) { const lk = document.createElement("span"); lk.className = "lk"; lk.innerHTML = icon("lock"); rb.appendChild(lk); } }
     else rb.querySelector(".lk")?.remove();
-    rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (kept)" : "");
+    rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "");
     card.querySelector(".sbname").textContent = rec.slug;
     { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
     card.querySelector(".sbcnt").textContent = rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;
     card.querySelector(".sbtime").textContent = rec.since ? "\u23F1 " + fmtHms(Date.now() - rec.since) : "\u23F1 \u2014";
-    card.querySelector(".sbflags").textContent = (rec.locked ? "\uD83D\uDD12 " : "") + (rec.persistent ? "kept" : "");
+    card.querySelector(".sbflags").textContent = (rec.locked ? "\uD83D\uDD12 " : "") + (rec.persistent ? "always open" : "");   // 0.21.26
     // members, reconciled by op
     const ul = card.querySelector(".sbmembers");
     const seen = new Set();
@@ -10685,7 +10704,7 @@
       const d = await r.json();
       if (room !== chatRoom) return;
       chatDisabled = "";
-      chatHint(d.persistent ? "Kept room \u2014 history stays until the room is closed." : "");
+      chatHint(d.persistent ? "Room kept open \u2014 its history stays until the room is closed." : "");
       if (full) { chatMsgs = chatMsgs.filter((m) => m.local || m.viaWindow); chatLastId = 0; }   // 0.13.0: live-delivered records survive a rebind
       chatAppend(Array.isArray(d.messages) ? d.messages : []);
       if (full && !chatMsgs.length) chatRenderAll();
@@ -11223,7 +11242,7 @@
     const keepInp = document.createElement("input");
     keepInp.type = "checkbox";
     const keepSw = document.createElement("span"); keepSw.className = "switch sm"; keepSw.append(keepInp, document.createElement("i"));   // 0.21.0
-    keepRow.append(keepSw, document.createTextNode(" Keep this room (stays on the relay with its chat until closed)"));
+    keepRow.append(keepSw, document.createTextNode(" Keep room open (stays with its chat after everyone leaves, until closed)"));   // 0.21.26
     const err = document.createElement("div");
     err.className = "pwerr";
     const cancel = document.createElement("button");
@@ -11604,7 +11623,7 @@
     sel.replaceChildren();
     for (const r of list) {
       const n = r.count > 0 ? " \u2014 " + r.count + " here" : "";
-      sel.appendChild(new Option(r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (kept)" : "") + n, r.slug));
+      sel.appendChild(new Option(r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined
@@ -11676,7 +11695,7 @@
       const lj = lastJoin();
       if (lj && lj.room) {
         saved = { room: lj.room, code: lj.code || "", access: lj.access || "", synthetic: true,
-                  name: (profile && profileName(profile)) || joinEls.joinName.value || "", micOn: !!lj.micOn, vidOn: lj.vidOn !== false };
+                  name: (profile && profileName(profile)) || joinEls.joinName.value || "", micOn: !!lj.micOn, vidOn: lj.vidOn === true };   // 0.21.26: a box's webcam comes back only if it was turned ON there (box cameras are visible now)
         try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(saved)); } catch {}
       }
     }
@@ -11773,7 +11792,7 @@
     if (hb) tries.push(hb + "/api/rooms/register");
     const ab = authBase();
     if (ab && authSecured && !tries.includes(ab + "/api/room")) tries.push(ab + "/api/room");
-    let last = { ok: false, error: rec.persistent ? "This relay's KASTR cannot keep rooms (older than 0.12.0)." : "Room service unreachable." };
+    let last = { ok: false, error: rec.persistent ? "This relay's KASTR cannot keep rooms open (older than 0.12.0)." : "Room service unreachable." };
     for (const url of tries) {
       try {
         const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -11783,7 +11802,7 @@
         }
         if (r.status === 404 || r.status === 503) continue;   // an older KASTR / no relay here: try the next
         const d = await r.json().catch(() => ({}));
-        if (r.status === 403) return { ok: false, error: "Only the publisher access code can lock or keep a room." };
+        if (r.status === 403) return { ok: false, error: "Only the publisher access code can lock a room or keep it open." };
         if (r.status === 409) return { ok: false, error: /too many/i.test(d.error || "") ? "This relay already keeps its maximum of 64 rooms."
           : "That room already exists and is locked \u2014 pick it from the list and enter its code (a publisher access code may re-key it)." };
         if (r.status === 429) return { ok: false, error: String(d.error || "Too many attempts").replace(" -- ", " \u2014 ") };
@@ -12247,6 +12266,49 @@
   const permBtn = $("permBtn"), rescanBtn = $("rescanBtn");
   const startBtn = $("startBtn"), stopBtn = $("stopBtn"), liveBtn = $("liveBtn");
   const camrowsEl = $("camrows"), srcCount = $("srcCount"), srcEmpty = $("srcEmpty");
+  // ---- 0.21.26 (Kenton): host feeds -- a camera or a media file on this computer, published like an RTSP camera ----
+  {
+    const sel = $("hostCamSel"), addCam = $("hostCamAdd"), addFile = $("hostFileAdd"), pick = $("hostFile");
+    let loaded = 0;
+    const loadCams = async () => {
+      if (IS_WEB2 || Date.now() - loaded < 15000) return;
+      loaded = Date.now();
+      let d = null;
+      try { d = await fetch("/api/screen/devices", { cache: "no-store" }).then((r) => r.json()); } catch {}
+      const keep = sel.value;
+      sel.replaceChildren(new Option((d?.devices || []).length ? "Camera on this computer\u2026" : "No camera found on this computer", ""));
+      for (const n of d?.devices || []) sel.appendChild(new Option(n.replace(/^[/]dev[/]/, ""), n));
+      sel.value = keep;
+      addCam.disabled = !sel.value;
+    };
+    sel.addEventListener("focus", loadCams);
+    sel.addEventListener("pointerdown", loadCams);
+    sel.addEventListener("change", () => { addCam.disabled = !sel.value; });
+    setTimeout(loadCams, 2500);
+    addCam.addEventListener("click", async () => {
+      if (!sel.value) return;
+      addCam.disabled = true;
+      await addRtsp("device://video/" + encodeURIComponent(sel.value), { label: sel.value.replace(/^[/]dev[/]/, "") });
+      addCam.disabled = false;
+    });
+    addFile.addEventListener("click", () => pick.click());
+    pick.addEventListener("change", async () => {
+      const f = pick.files?.[0];
+      pick.value = "";
+      if (!f) return;
+      const id = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      addFile.disabled = true; addFile.textContent = "Uploading\u2026";
+      try {
+        const r = await fetch("/api/media/upload?id=" + id, { method: "POST", body: f, headers: { "X-Kastr-Name": encodeURIComponent(f.name) } });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+        await addRtsp("media://" + id, { label: f.name.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 40) });
+      } catch (e) {
+        window.__toast?.("Media file not added: " + (e?.message || e), 6000, { level: "error" });
+      } finally {
+        addFile.disabled = false; addFile.textContent = "Add media file\u2026";
+      }
+    });
+  }
   const permWarn = $("perm-warn"), stageEl = $("pubPanes"), statusEl = $("pubStatus");
   const fileInput = $("fileInput"), encActual = $("encActual");
 
@@ -12439,7 +12501,7 @@
     // tile) and the discovery echo never proves it reached the relay.
     // 0.15.0: one pseudo-source per grid, ids -100, -101, ... in grid-id order
     gridsSorted().forEach((g, i) => {
-      list.push({ id: -100 - i, kind: "rtsp", label: g.name || "RTSP Grid",
+      list.push({ id: -100 - i, kind: "rtsp", label: g.name || "Grid",
                   name: g.entry.name, enabled: true, live,
                   videoPaused: false, micMuted: true, deviceId: null,
                   carriesAudio: false, pausable: false });
@@ -12823,6 +12885,8 @@
   function rtspLabel(url) {
     if (url === TEST_URL) return "rtsp-test";
     if (isScreenUrl(url)) return /[/]window[/]/i.test(url) ? "window" : /[/]tab[/]/i.test(url) ? "tab" : "screen";   // 0.21.20; 0.21.22: + tab
+    if (/^media:[/][/]/i.test(url)) return "media";   // 0.21.26: a host media file
+    if (/^device:[/][/]video[/]/i.test(url)) return slug(decodeURIComponent(url.slice(15)).replace(/^[/]dev[/]/, ""), "camera");   // 0.21.26: a host camera
     try {
       const u = new URL(url.replace(/^rtsps?:/, "http:"));
       // 0.8.0: drop the media extension -- "Test Tone", not "Test Tone Mp4".
@@ -13240,7 +13304,33 @@
   function renderSources() {
     try { paintRtspSwitch(); } catch {}   // 0.21.16: the Cameras switch shows once an RTSP feed exists
     camrowsEl.replaceChildren();
-    for (const a of added) {
+    // 0.21.26 (Kenton): "when something is assigned to a specific grid, tie those sources together ... Sort alphabetically.
+    // Grid groups should also sort alphabetically." Grids by name (A-Z), each with its members (A-Z); then the rest (A-Z).
+    const byLabel = (x, y) => String(x.label || x.name || "").localeCompare(String(y.label || y.name || ""), undefined, { sensitivity: "base", numeric: true });
+    const inGridOf = (a) => (a.kind === RTSP && gridIdOf(a) !== "none") ? gridIdOf(a) : null;
+    const gids = [...new Set(added.map(inGridOf).filter(Boolean))].sort((x, y) => gridNameOf(x).localeCompare(gridNameOf(y), undefined, { sensitivity: "base", numeric: true }));
+    const ordered = [...gids.flatMap((gid) => added.filter((a) => inGridOf(a) === gid).sort(byLabel)),
+                     ...added.filter((a) => !inGridOf(a)).sort(byLabel)];
+    const groupBoxes = new Map();
+    const homeFor = (a) => {
+      const gid = inGridOf(a);
+      if (!gid) return camrowsEl;
+      let box = groupBoxes.get(gid);
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "gridgroup";
+        box.dataset.gid = gid;
+        const head = document.createElement("div");
+        head.className = "gghead";
+        const n = added.filter((x) => inGridOf(x) === gid).length;
+        head.textContent = gridNameOf(gid) + " \u00b7 " + n + (n === 1 ? " source (a grid needs two)" : " sources");
+        box.appendChild(head);
+        camrowsEl.appendChild(box);
+        groupBoxes.set(gid, box);
+      }
+      return box;
+    };
+    for (const a of ordered) {
       if (a.kind === "camera") continue;   // 0.8.9: the toolbar owns the camera; Share lists what you SHARE
       const row = document.createElement("div");
       row.className = "camrow";
@@ -13256,7 +13346,7 @@
         '</div><input type="text">';
 
       const lbl = row.querySelector(".lbl");
-      lbl.textContent = (a.kind === SCREEN ? "🖵  " : "") + a.label;
+      lbl.textContent = (a.kind === SCREEN || (a.kind === RTSP && isScreenUrl(a.url)) ? "🖵  " : "") + a.label;   // 0.21.26: a native screen share too
       lbl.title = a.label;
 
       const cb = row.querySelector("input[type=checkbox]");
@@ -13284,8 +13374,13 @@
         aud.classList.add("shown");
         ab.checked = a.audio !== false;
         ab.addEventListener("change", () => window.__rtspAudio?.set?.(a.id, ab.checked));
+        if (/^device:/i.test(a.url)) aud.remove();   // 0.21.26: a host camera is captured video-only
+        if (isScreenUrl(a.url)) {   // 0.21.26 (Kenton: "it is showing up as if it is an RTSP stream"): a capture of this computer
+          aud.title = "Send this computer's sound with it (KASTR's own sound is left out). Off = picture only.";
+          row.classList.add("screenrow");
+        }
         // 0.21.17: per-camera passthrough, live (copy the camera untouched vs convert to H.264 here)
-        if (a.url && a.url !== TEST_URL) {
+        if (a.url && a.url !== TEST_URL && !isScreenUrl(a.url) && !/^(device|media):/i.test(a.url)) {   // 0.21.26: a capture / host file is always encoded -- no pass-through
           const ptl = document.createElement("label");
           ptl.className = "aud shown pt";
           ptl.title = "Pass this camera through untouched (no re-encode on this machine) when viewers can decode it. Off = convert to H.264 here. Applies live.";
@@ -13300,10 +13395,11 @@
         // 0.15.0: which grid this feed joins (two feeds with the same grid make a composite)
         const gsel = document.createElement("select");
         gsel.className = "gsel";
-        gsel.title = "Which grid this feed joins (a grid needs two feeds to appear)";
+        gsel.title = "Which grid this joins (a grid needs two members to appear) -- cameras, screens, windows and tabs can share one";
         const paintGsel = () => {
           gsel.replaceChildren();
-          for (const gr of gridRegistry()) { const o = document.createElement("option"); o.value = gr.id; o.textContent = gr.name; gsel.appendChild(o); }
+          { const o = document.createElement("option"); o.value = "none"; o.textContent = "No grid"; gsel.appendChild(o); }   // 0.21.26
+          for (const gr of [...gridRegistry()].sort((x, y) => String(x.name).localeCompare(String(y.name)))) { const o = document.createElement("option"); o.value = gr.id; o.textContent = gr.name; gsel.appendChild(o); }
           const o = document.createElement("option"); o.value = "__new"; o.textContent = "New grid\u2026"; gsel.appendChild(o);
           gsel.value = gridIdOf(a);
         };
@@ -13395,7 +13491,7 @@
 
       row.querySelector(".rm").addEventListener("click", () => removeSource(a.id));
       row.classList.toggle("off", !a.enabled);
-      camrowsEl.appendChild(row);
+      homeFor(a).appendChild(row);   // 0.21.26: grouped under its grid
     }
 
     // Sources started in another view of this page -- the Share dropdown on
@@ -16564,7 +16660,7 @@
   // `kastr.grids` = [{id, name}] (grid "1" implied), `kastr.grid.of` = {url: gridId}.
   const rtspGrids = new Map();   // id -> g
   function gridById(id) { return rtspGrids.get(String(id ?? "1")) || null; }
-  function gridIdOf(a) { return String(a?.gridId || "1"); }
+  function gridIdOf(a) { return String(a?.gridId || (a?.screen ? "none" : "1")); }   // 0.21.26: a screen / window / tab joins a grid only when picked
   function gridOfSlot(slot) { return slot?.entry ? gridById(gridIdOf(slot.entry)) : null; }
   function gridIdCmp(a, b) { return String(a).localeCompare(String(b), undefined, { numeric: true }); }
   function gridsSorted() { return [...rtspGrids.values()].sort((a, b) => gridIdCmp(a.id, b.id)); }
@@ -16574,16 +16670,16 @@
     try { v = JSON.parse(localStorage.getItem(GRIDS_KEY) || "[]"); } catch {}
     if (!Array.isArray(v)) v = [];
     v = v.filter((x) => x && x.id != null).map((x) => ({ id: String(x.id), name: String(x.name || "").trim() }));
-    if (!v.some((x) => x.id === "1")) v.unshift({ id: "1", name: "RTSP Grid" });
-    for (const x of v) if (!x.name) x.name = x.id === "1" ? "RTSP Grid" : "Grid " + x.id;
+    if (!v.some((x) => x.id === "1")) v.unshift({ id: "1", name: "Grid" });
+    for (const x of v) if (!x.name || x.name === "RTSP Grid") x.name = x.id === "1" ? "Grid" : "Grid " + x.id;   // 0.21.26: the old default name becomes "Grid"
     return v.sort((a, b) => gridIdCmp(a.id, b.id));
   }
   function gridOfSavedMap() { try { const m = JSON.parse(localStorage.getItem(GRID_OF_KEY) || "{}"); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; } catch { return {}; } }
   function gridOfSaved(url) { const v = url ? gridOfSavedMap()[url] : null; return v ? String(v) : ""; }
-  function gridOfSet(url, id) {   // grid "1" is the default, so it is stored as absence
+  function gridOfSet(url, id) {   // grid "1" is the default, so it is stored as absence (0.21.26: a screen's default is "none")
     if (!url) return;
     const m = gridOfSavedMap();
-    if (String(id || "1") === "1") delete m[url]; else m[url] = String(id);
+    if (String(id || "1") === (isScreenUrl(url) ? "none" : "1")) delete m[url]; else m[url] = String(id);
     try { localStorage.setItem(GRID_OF_KEY, JSON.stringify(m)); } catch {}
   }
   function gridRegistrySave(list, keep) {   // prunes grids (other than "1") that no url and no live feed references
@@ -16610,7 +16706,7 @@
     gridRegistrySave(list, id);
     const g = gridById(id); if (g) g.name = x.name;
   }
-  function gridNameOf(id) { return gridRegistry().find((r) => r.id === String(id ?? "1"))?.name || (String(id ?? "1") === "1" ? "RTSP Grid" : "Grid " + id); }
+  function gridNameOf(id) { if (String(id) === "none") return "No grid"; return gridRegistry().find((r) => r.id === String(id ?? "1"))?.name || (String(id ?? "1") === "1" ? "Grid" : "Grid " + id); }
   function gridKey(id, leaf) { return "kastr.grid." + String(id) + "." + leaf; }
   function gridPref(id, leaf, dflt) {   // per-grid pref; grid "1" falls back to the legacy kastr.grid.<leaf>
     try {
@@ -17214,7 +17310,7 @@
     // 0.9.2: "I lost the grid" -- feeds were set to Separate and nothing said so
     if (!separateHinted && gridFeeds === "separate" && added.filter((a) => a.kind === RTSP && a.enabled).length >= 2) {
       separateHinted = true;
-      window.__toast?.("Your RTSP feeds are set to Separate. View \u25b8 RTSP feeds puts them in a grid.", 7000);
+      window.__toast?.("Your feeds are set to Separate. View \u25b8 Grids and feeds puts them in a grid.", 7000);
     }
     // 0.8.12: membership is the SET OF FEEDS, not the set of live slots -- with
     // the lock on, a feed that is reconnecting keeps its cell (a placeholder is
@@ -17223,13 +17319,13 @@
     // full quality on its own path (default), or the feeds alone.
     const liveSlots = [...slots.values()].filter((s) => s.rtsp && (s.inGrid || s.native));   // 0.9.1/0.9.3: members are native slots
     const ready = new Map(liveSlots.map((s) => [s.entry.id, s]));
-    const allEntries = added.filter((a) => a.kind === RTSP && !a.screen && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
+    const allEntries = added.filter((a) => a.kind === RTSP && gridIdOf(a) !== "none" && a.enabled && !a.evicted && (ready.has(a.id) || (gridLock && (a.gridSeat || seatSaved(a.url)))));   // 0.9.10: a remembered seat counts; 0.14.0: an evicted member does not
     // 0.14.0: members gridEvictionTick took out after GRID_EVICT_AFTER failed attempts. They keep
     // their seat, their hidden pane and their remembered order; the announce lists them as `out`
     // so viewers keep their tiles hidden. 0.21.15: ANY evicted seat keeps the grid alive, even at zero live
     // members (the rule below) -- an outage never hands the members back to the viewers as loose tiles;
     // so a two-camera room does not flip layouts every time one camera drops.
-    const allEvicted = added.filter((a) => a.kind === RTSP && !a.screen && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
+    const allEvicted = added.filter((a) => a.kind === RTSP && gridIdOf(a) !== "none" && a.enabled && a.evicted && (a.gridSeat || slots.get(a.id)?.inGrid));
     // 0.15.0: the same rules, once per gridId -- a grid exists while its own feeds earn it
     const ids = new Set([...allEntries, ...allEvicted].map(gridIdOf));
     for (const id of rtspGrids.keys()) ids.add(id);
@@ -17594,7 +17690,7 @@
     for (const g of rtspGrids.values()) {   // 0.15.0: every grid
       const pretty = (t) => window.__pretty?.(t) ?? t;
       g.nameEl.textContent = (operator ? pretty(operator) + " \u2014 " : "")
-        + (g.name || "RTSP Grid") + " (" + g.members.length + ")";
+        + (g.name || "Grid") + " (" + g.members.length + ")";
       let gon = false;   // 0.21.7: no title on the grid name (OS tooltips stick)
       try { gon = g.moq?.broadcast?.in?.enabled?.peek?.() === true; } catch {}
       let gst = rtspSuspended ? { text: "suspended", cls: "ready", onair: false } : { text: gon ? "ON AIR" : "preview", cls: gon ? "on" : "ready", onair: gon };   // 0.21.16
@@ -17806,7 +17902,7 @@
       // /rtsp/undefined, which 404s -- the second feed never starts.
       // 0.15.0: the display label and the grid ride in `extra` (last, so they win); the
       // broadcast NAME still derives from rtspLabel(url), so a renamed feed keeps its path.
-      const gridId = String(opts?.gridId || gridOfSaved(url) || "1");
+      const gridId = String(opts?.gridId || gridOfSaved(url) || (isScreenUrl(url) ? "none" : "1"));   // 0.21.26: a screen share starts in no grid
       rtspClosedSet(url, false);   // 0.21.0: adding it again is an explicit act
       const scr = isScreenUrl(url);   // 0.21.20: a native screen share is never a grid member and sends the computer's sound when asked
       const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: scr ? !!document.getElementById("shareSound")?.checked : audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId, screen: scr || undefined });   // 0.9.5; 0.21.17: a remembered rename wins

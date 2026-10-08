@@ -70,8 +70,10 @@ class ChimeMarkers(unittest.TestCase):
         # 0.21.2 sweep read the classifier
         self.assertEqual(self.count("boxHiddenPath("), 2)
         self.assertEqual(self.count("if (boxHiddenPath(name)) return;   // 0.21.2"), 0)
-        self.assertEqual(self.count('if (pathClass(name) === "box") return;'), 1)
-        self.assertEqual(self.count('if (pathClass(n) === "box") removeTile(n);'), 1)
+        # 0.21.26 (Kenton, Logan-ROC): a box's camera is SHOWN as a camera feed -- the classifier says content, no tile gate
+        self.assertEqual(self.count('if (pathClass(name) === "box") return;'), 0)
+        self.assertEqual(self.count('if (boxHiddenPath(n)) return "content";'), 1)
+        self.assertEqual(self.count('vidOn: lj.vidOn === true };'), 1)   # a box's webcam returns only if it was turned on there
 
     def test_chime_path(self):
         self.assertEqual(self.count("const CHIME_SETTLE_MS = 1500;"), 1)

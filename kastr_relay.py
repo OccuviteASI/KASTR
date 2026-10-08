@@ -2189,8 +2189,9 @@ class AuthService:
         sees = (any(peer and peer in x for x in raw) if (raw and peer) else None)
         return {"ok": True, "nodes": v.get("nodes"), "sessions": v.get("sessions"), "seesYou": sees, "peer": peer or None}, 200
 
-    SPOKE_STALE_S = 1800        # 0.21.24 (Kenton: an old hub listed every spoke "as if still connected"): a live spoke re-registers
-                                # at least every 10 min (federation tick) -- 30 min of silence = not ours any more
+    SPOKE_STALE_S = 180         # 0.21.24 (Kenton: an old hub listed every spoke "as if still connected"); 0.21.30 (Kenton: "how often do
+                                # the spokes report ... should be more frequent"): every long-poll (<= ~30 s apart) is a check-in now,
+                                # so 3 minutes of silence = gone (was 30 min against the 10-min re-registration)
     SPOKE_FORGET_S = 7 * 86400
 
     def not_hub(self):
@@ -2253,6 +2254,12 @@ class AuthService:
         behind a tunnel or NAT, which the hub cannot nudge, learns of a kick within a second."""
         if not self._bearer_relay(bearer):
             return {"error": "federation token required"}, 403
+        if peer and not self.not_hub():   # 0.21.30: a spoke's long-poll is its keep-alive -- 'last seen' within ~30 s
+            with self.lock:
+                now = int(time.time())
+                for v in self.spokes.values():
+                    if v.get("peer") == peer:
+                        v["at"] = now
         if self.not_hub():   # 0.21.24: no command channel from a relay that is not the hub
             out = {"error": "this relay is not a hub (its Relay page says so) -- point this spoke at the hub"}
             try:

@@ -103,6 +103,19 @@ class JoinGate(unittest.TestCase):
         self.assertNotIn("#joinGate { left:calc(var(--sbw) + 26px); }", p)
         self.assertIn("#joinGate { z-index:67; }", p)
 
+    def test_rooms_in_the_card_not_behind_it(self):
+        # 0.21.30 (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side")
+        p = _read("moq-watch-lite.html")
+        self.assertIn("body:has(#joinGate:not([hidden])) #sidebar { visibility:hidden; }", p)
+        self.assertIn('<div id="joinRoomList" role="listbox"', p)
+        self.assertIn("sel.value = o.value; sel.dispatchEvent(new Event(\"change\", { bubbles: true }));", p)
+
+    def test_relay_picker_says_online_or_offline(self):
+        # 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not")
+        p = _read("moq-watch-lite.html")
+        self.assertIn("gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);", p)
+        self.assertIn('"  \\u2014 online" : "  \\u2014 offline"', p)
+
     def test_profile_card_never_scrolls_sideways(self):
         self.assertIn("#profilePop .prow input { width:100%; min-width:0; box-sizing:border-box; }", _read("moq-watch-lite.html"))
 

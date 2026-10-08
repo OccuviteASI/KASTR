@@ -1292,6 +1292,17 @@
      rail collapsed); the gate's own room list picks a room before joining */
   #joinGate { z-index:67; }   /* above #sidebar (66) */
   #joinGate #joinKeepRow { display:flex; align-items:center; gap:7px; }
+  /* 0.21.30 (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side") */
+  body:has(#joinGate:not([hidden])) #sidebar { visibility:hidden; }
+  #joinRoomList { display:flex; flex-direction:column; gap:2px; max-height:min(240px, 34vh); overflow-y:auto; margin-top:6px;
+    border:1px solid var(--line); border-radius:6px; padding:3px; background:var(--surface-2); }
+  #joinRoomList .jr { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:0;
+    border-radius:5px; padding:7px 9px; color:var(--text); font-size:13px; cursor:pointer; }
+  #joinRoomList .jr:hover { background:color-mix(in srgb, var(--asi-blue) 12%, transparent); }
+  #joinRoomList .jr.on { background:color-mix(in srgb, var(--asi-blue) 22%, transparent); outline:1px solid var(--asi-blue); }
+  #joinRoomList .jr .jn { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #joinRoomList .jr .jt { font-size:11px; color:var(--text-mute); white-space:nowrap; }
+  #joinRoomList .jr.new .jn { color:var(--asi-blue); }
   #joinGate #joinKeepRow[hidden] { display:none; }
   #bootFail { background:var(--asi-red); color:#fff; padding:10px 12px; border-radius:6px; margin-bottom:10px; font-size:13px; line-height:1.4; }
   #bootFail button { margin-left:8px; padding:3px 10px; border-radius:5px; border:1px solid rgba(255,255,255,.6); background:transparent; color:#fff; cursor:pointer; }
@@ -2128,9 +2139,11 @@
              autocomplete="off" spellcheck="false" title="Another relay address &mdash; Enter or leave the field to apply"></label>
     <label class="f"><span>Room</span>
       <div style="display:flex; gap:6px">
-        <select id="joinChanSel" style="flex:1"></select>
+        <select id="joinChanSel" style="flex:1" hidden></select>   <!-- 0.21.30: still the value every join path reads; the list below is its face -->
+        <span id="joinChanCur" class="hint" style="flex:1; align-self:center"></span>
         <button id="joinChanRefresh" type="button" class="ghost" style="flex:none" title="Refresh the room list">&#8635;</button>
       </div>
+      <div id="joinRoomList" role="listbox" aria-label="Rooms"></div>   <!-- 0.21.30 (Kenton): the rooms, in the launch window -->
     </label>
     <label class="f" id="joinNewChanRow" hidden><span>Room name</span>
       <input type="text" id="joinChanNew" placeholder="e.g. yard-ops" maxlength="32"></label>
@@ -6118,7 +6131,7 @@
         const content = isContentPath(name);
         const muted = mutedStreams.has(name);
         const pinned = !gridMode && selectedName === name && !selfSpotEl;
-        const lit = spotLit?.target === name;
+        const lit = window.__spotIs ? window.__spotIs(name) : spotLit?.target === name;   // 0.21.30: the room's current spotlight, mine included
         // 0.21.23 (Kenton, Teams screenshot): Mute participant / Pin for me / Spotlight for everyone, each with its glyph;
         // the mute stays what it always was -- this person's sound on THIS device (the admin mute is below)
         const items = [   // 0.21.19: full screen and fill window are icons beside this button now
@@ -6137,7 +6150,7 @@
         // 0.21.23: every tile can be pinned and spotlit (Teams) -- before, only content with a choice to make
         items.push({ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me",
           tip: pinned ? "Back to the gallery" : "Keep this on your stage (only you)" });
-        items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Stop spotlighting" : "Spotlight for everyone",
+        items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",
           tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
         items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name)) {   // 0.16.0: the admin code
@@ -6149,7 +6162,7 @@
         openMineMenu(anchor, items, "", (v) => {
           if (v === "lat") { latencyToggle(name); return; }
           if (v === "unpin") { gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); return; }   // as the Gallery pill
-          if (v === "unspot") { window.__spot?.clear?.(); spotLitClear(true); applyState(); return; }
+          if (v === "unspot") { window.__spotRemove(); return; }
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
           else if (v === "akick") {
@@ -7063,6 +7076,19 @@
     setTimeout(tick, 1500);
   }
   window.__spotLit = () => spotLit;   // rig
+  // 0.21.30 (Kenton: "if something is spotlighted already, then the spotlight button should show remove spotlight")
+  window.__spotIs = (target) => {
+    if (spotLit && spotLit.target === String(target)) return true;
+    const w = spotWinnerNow();
+    return !!w && w.target === String(target) && (!w.ts || Date.now() - w.ts < SPOT_STALE_MS);
+  };
+  window.__spotRemove = () => {   // for EVERYONE: a newer "nobody" vote outranks whoever set it
+    spotClearedAt = Date.now();
+    try { window.__spot?.set?.("~none"); } catch {}
+    spotLitClear(true);
+    spotApplyWinner();
+    applyState();
+  };
   function spotAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
     const i = parts.indexOf("~spotlight");
@@ -7076,9 +7102,20 @@
     spotApplyWinner();
   }
   const SPOT_STALE_MS = 600000;   // 0.13.3
-  function spotApplyWinner() {
+  let spotClearedAt = 0;   // 0.21.30: "Remove spotlight" on this page -- every vote older than this is history here
+  function spotWinnerNow() {   // the newest vote in the room, mine included; null when it is a "~none" (removed)
     let win = null;
-    for (const v of spotVotes.values()) if (!win || v.ts > win.ts) win = v;
+    for (const v of spotVotes.values()) if (v.ts > spotClearedAt && (!win || v.ts > win.ts)) win = v;
+    let mine = null;
+    try { mine = window.__spot?.mine?.(); } catch {}
+    if (mine && mine.ts > spotClearedAt && (!win || mine.ts > win.ts)) win = { ts: mine.ts, target: mine.target, by: "me" };
+    return win && win.target === "~none" ? null : win;
+  }
+  function spotApplyWinner() {
+    { let raw = null; for (const v of spotVotes.values()) if (!raw || v.ts > raw.ts) raw = v;   // 0.21.30: someone removed it -> my mirror goes too
+      if (raw && raw.target === "~none" && spotLit && raw.ts > (spotLit.ts || 0)) spotLitClear(true); }
+    let win = spotWinnerNow();   // 0.21.30 (was: the newest vote heard, without mine or a removal)
+    if (win && win.by === "me") win = null;   // my own vote acts through my own pane (as before), never re-selects here
     if (win) {
       const key = win.target + "@" + (win.ts || 0);
       if (spotLit && win.target !== spotLit.target && win.by !== "mirror") spotLitClear(true);   // 0.21.0: another spotlight replaces mine
@@ -7144,10 +7181,12 @@
       if (pt !== undefined) items.push({ value: "pt", label: (pt ? "Pass through: on" : "Pass through: off") + (md ? " (" + md + ")" : "") });
     }
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
+    const ownLit = window.__spotIs?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.30: already spotlit -> offer to remove it
+    const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };
     if (ref.kind === "camera") {   // 0.16.0: my own camera can be spotlit like any tile
       items.push({ value: "me", label: "Pin for me" });   // 0.21.23: Teams names
-      items.push({ value: "all", label: "Spotlight for everyone" });
-    } else if (contentTally() > 1 || ref.id <= -100) items.push({ value: "all", label: "Spotlight for everyone" });   // 0.15.0: a grid may always be spotlit
+      items.push(spotItem);
+    } else if (ownLit || contentTally() > 1 || ref.id <= -100) items.push(spotItem);   // 0.15.0: a grid may always be spotlit
     openMineMenu(anchor, items, "", (v) => {
       if (v === "me") {   // 0.16.0: my own tile takes the stage for me
         const pane = anchor.closest?.(".pubpane");
@@ -7169,6 +7208,8 @@
       } else if (v === "keep") {
         window.__rtspPersist?.toggle?.(ref.id);
         window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
+      } else if (v === "unspot") {   // 0.21.30
+        window.__spotRemove?.();
       } else if (v === "pt") {   // 0.21.17: per-camera passthrough, live
         window.__rtspPt?.toggle?.(ref.id);
       } else if (v === "audio") {   // 0.9.5
@@ -11569,13 +11610,34 @@
       const cur = urlInput.value.trim();
       const opts = [...new Set([cur, ...hist].filter(Boolean))];
       const lan = (window.__lanRelays || []).filter((f) => f.urls?.[0] && !opts.includes(f.urls[0]));   // 0.21.22: found on the network (one click, never automatic)
-      sel.replaceChildren(...opts.map((u) => new Option(u, u)),
-        ...lan.map((f) => new Option("Found on your network: " + (f.name || "relay") + " (" + f.urls[0].replace(/^https?:[/][/]/, "") + ")", f.urls[0])),
+      const mark = (u) => { const st = gateRelayState.get(u); return st == null ? "" : (st.online ? "\uD83D\uDFE2 " : "\uD83D\uDD34 "); };   // 0.21.30
+      const word = (u) => { const st = gateRelayState.get(u); return st == null ? "" : (st.online ? "  \u2014 online" : "  \u2014 offline"); };
+      sel.replaceChildren(...opts.map((u) => new Option(mark(u) + u + word(u), u)),
+        ...lan.map((f) => new Option(mark(f.urls[0]) + "Found on your network: " + (f.name || "relay") + " (" + f.urls[0].replace(/^https?:[/][/]/, "") + ")" + word(f.urls[0]), f.urls[0])),
         new Option("Other\u2026", "__other"));
       if (cur) sel.value = cur;
+      gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);   // 0.21.30 (Kenton): which relays are online, in the picker
       if (joinEls.joinRelay) joinEls.joinRelay.hidden = true;
     }
     gateRelayMirror();
+  }
+  // 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not"): every relay in the join
+  // card's picker is probed (the same /api/lan/probe the failover uses) and marked online / offline; answers are reused
+  // for 20 s and the picker repaints once when they land.
+  const gateRelayState = new Map();   // url -> { online, at }
+  let gateRelayProbing = false;
+  async function gateRelayProbeAll(urls) {
+    if (gateRelayProbing || !gateIsLoopback()) return;
+    const now = Date.now();
+    const due = [...new Set(urls)].filter((u) => u && !(gateRelayState.get(u)?.at > now - 20000));
+    if (!due.length) return;
+    gateRelayProbing = true;
+    try {
+      const res = await Promise.all(due.map((u) => relayProbe(u).then((r) => [u, !!r?.online]).catch(() => [u, false])));
+      let changed = false;
+      for (const [u, on] of res) { if (gateRelayState.get(u)?.online !== on) changed = true; gateRelayState.set(u, { online: on, at: Date.now() }); }
+      if (changed && document.activeElement !== joinEls.joinRelaySel) paintRelayRow();
+    } finally { gateRelayProbing = false; }
   }
   async function gateRelayApply(urlArg) {   // 0.21.0: the select passes its pick
     const inp = joinEls.joinRelay;
@@ -11633,6 +11695,7 @@
       sel.appendChild(new Option(r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
+    try { paintGateRoomList(); } catch {}   // 0.21.30 (re-painted again below once the selection is decided)
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined
     let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
     try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
@@ -11640,6 +11703,31 @@
     sel.value = [...sel.options].some((o) => o.value === want) ? want
               : list.some((r) => r.slug === cur) ? cur : "main";
     paintPwdRow();
+    try { paintGateRoomList(); } catch {}   // 0.21.30
+  }
+
+  // 0.21.30 (Kenton): the rooms as a list in the launch window -- built from the select's options so every join path
+  // (which reads the select) behaves exactly as before; a click selects the room and fires the select's change.
+  function paintGateRoomList() {
+    const sel = joinEls.joinChanSel, box = document.getElementById("joinRoomList");
+    if (!sel || !box) return;
+    const recs = new Map(lastChannelList.map((r) => [r.slug, r]));
+    box.replaceChildren(...[...sel.options].map((o) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "jr" + (o.value === sel.value ? " on" : "") + (o.value === "__new" ? " new" : "");
+      b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(o.value === sel.value));
+      const r = recs.get(o.value);
+      const nm = document.createElement("span"); nm.className = "jn";
+      nm.textContent = o.value === "__new" ? "+ New room\u2026" : (r?.locked ? "\uD83D\uDD12 " : "") + o.value;
+      const tag = document.createElement("span"); tag.className = "jt";
+      tag.textContent = r ? [r.count > 0 ? r.count + " here" : "", r.persistent ? "always open" : ""].filter(Boolean).join(" \u00b7 ") : "";
+      b.append(nm, tag);
+      b.addEventListener("click", () => { sel.value = o.value; sel.dispatchEvent(new Event("change", { bubbles: true })); paintGateRoomList(); });
+      return b;
+    }));
+    const cur = document.getElementById("joinChanCur");
+    if (cur) cur.textContent = sel.value === "__new" ? "New room" : (sel.value ? "Selected: " + sel.value : "");
+    box.querySelector(".jr.on")?.scrollIntoView({ block: "nearest" });
   }
 
   // The publish module is the SECOND module script and its esm.sh imports
@@ -12021,6 +12109,7 @@
     joinEls.joinVidBtn.addEventListener("click", () => { joinVidOn = !joinVidOn; paintJoinToggles(); gatePreview(); });
     joinEls.joinCam.addEventListener("change", () => { if (joinVidOn) gatePreview(); });
     joinEls.joinChanSel.addEventListener("change", paintPwdRow);
+    joinEls.joinChanSel.addEventListener("change", () => { try { paintGateRoomList(); } catch {} });   // 0.21.30
     joinEls.joinChanRefresh.addEventListener("click", () => { roomsRebuild(); roomsMinterStart(); });   // 0.12.0: re-dial the rooms connection
     // 0.13.0 (F7): the Relay row -- Enter or a change applies; the shared url
     // field's own change (masthead Connect, __kastrSetRelay) mirrors back by assignment
@@ -17134,7 +17223,8 @@
       items.push({ value: "lock", label: (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
       items.push({ value: "names", label: (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells" });
       items.push({ sep: true }, { value: "rename", label: "Rename grid\u2026" });
-      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
+      const gLit = window.__spotIs?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30: already spotlit -> offer to remove it
+      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
       items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid" });
       const open = window.__openMenu;
       if (!open) return;
@@ -17152,6 +17242,7 @@
         }
         else if (v === "me") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); }
         else if (v === "all") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); window.__spot?.set?.(chanPath(ensureHang(g.entry.name))); }
+        else if (v === "unspot") window.__spotRemove?.();   // 0.21.30
       });
     });
     g.pane.appendChild(chev);
@@ -18759,9 +18850,11 @@
     try { spotReg.connection?.close?.(); } catch {}
     spotReg = null;
   }
+  let spotMine = null;   // 0.21.30: { target, ts } -- my own vote ("~none" = I removed the spotlight for everyone)
   function spotSet(targetPath) {
     spotClear();
     if (!targetPath) return;
+    spotMine = { target: String(targetPath), ts: Date.now() };
     if (window.__state?.enabled) { window.__state.set("spotlight", String(targetPath)); return; }   // 0.13.0
     const b64 = btoa(String(targetPath)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const path = currentChannel() + "/~spotlight/" + Date.now() + "/" + b64;
@@ -18909,7 +19002,7 @@
       s2.pane.classList.toggle("ghost", !!s2.entry.previewGhost);
     },
   };
-  window.__spot = { set: spotSet, clear: spotClear };
+  window.__spot = { set: spotSet, clear: () => { spotMine = null; spotClear(); }, mine: () => spotMine };   // 0.21.30: + mine
   window.addEventListener("pagehide", spotClear);
   // 0.8.6: "someone is recording" -- the same track-less announce idiom.
   let recReg = null;

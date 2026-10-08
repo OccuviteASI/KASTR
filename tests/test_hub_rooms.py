@@ -250,6 +250,16 @@ class CommandChannel(unittest.TestCase):
         self.assertEqual(o["cmd"]["update"]["seq"], everyone["seq"])   # mendon sees nothing new
         self.assertLess(o["cmd"]["update"]["seq"], o["cmd"]["seq"])
 
+    def test_long_poll_is_the_keep_alive(self):
+        # 0.21.30 (Kenton: spokes should report more often): every bans long-poll refreshes that spoke's "last seen"
+        self.hub.register_spoke({"name": "mendon", "version": "0.21.26"}, peer="10.0.6.6", bearer=self.fed)
+        with self.hub.lock:
+            for v in self.hub.spokes.values():
+                v["at"] = int(time.time()) - 600   # last full registration 10 min ago
+        self.assertEqual(self.hub.spokes_public(), [])   # stale past 3 minutes
+        self.hub.bans_for_spoke(self.fed, peer="10.0.6.6")
+        self.assertEqual([r["name"] for r in self.hub.spokes_public()], ["mendon"])
+
     def test_spoke_acts_only_on_its_own_update(self):
         r = kr.Relay.__new__(kr.Relay)
         r.relay_name = lambda: "logan-roc"

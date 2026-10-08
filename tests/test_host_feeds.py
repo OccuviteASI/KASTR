@@ -38,7 +38,7 @@ class Urls(unittest.TestCase):
         a = cap.args()
         self.assertEqual(a.count("-i"), 1)                 # the camera is opened once
         self.assertIn("tee", a)
-        self.assertEqual(a[-1].count("udp://127.0.0.1:"), 3)
+        self.assertEqual(a[-1].count("udp://127.0.0.1:"), 2 + kr.MON_SLOTS)
 
     def test_media_file_loops_from_the_kept_copy(self):
         d = tempfile.mkdtemp()
@@ -70,7 +70,7 @@ class RtmpIngest(unittest.TestCase):
         self.assertIn("rtmp://0.0.0.0:1936/live/GoProTest42x", a)
         self.assertEqual(a[a.index("-c") + 1], "copy")
         self.assertIn("0:a:0?", a)                         # the device's audio comes along
-        self.assertEqual(a[-1].count("udp://127.0.0.1:"), 3)
+        self.assertEqual(a[-1].count("udp://127.0.0.1:"), 2 + kr.MON_SLOTS)
 
     def test_firewall_rule_covers_the_range(self):
         import kastr_relay
@@ -82,6 +82,54 @@ class RtmpIngest(unittest.TestCase):
         self.assertIn('id="hostRtmpAdd"', p)
         self.assertIn('addRtsp("rtmp-in://" + d.port + "/" + key', p)
         self.assertIn('"/api/screen/rtmp"', _read("kastr_serve.py"))
+
+
+class LoopbackPorts(unittest.TestCase):
+    """0.21.30 (field: a GoPro on RTMP ingest failed with 'bind failed: Error number -10048' on the monitor's port)."""
+
+    def test_ports_avoid_the_ephemeral_ranges(self):
+        cap = kr.DeviceCapture("ffmpeg", "rtmp-in://1937/GoProTest42x")
+        ports = cap.out_ports()
+        self.assertEqual(len(set(ports)), 2 + kr.MON_SLOTS)
+        for p in ports:
+            self.assertTrue(kr.LOOP_PORTS[0] <= p <= kr.LOOP_PORTS[1], p)
+
+    def test_two_monitors_get_two_ports(self):
+        cap = kr.DeviceCapture("ffmpeg", "rtmp-in://1938/GoProTest42x")
+        with mock.patch.dict(kr.DEVICES, {cap.url: cap}):
+            c1, c2 = {}, {}
+            kr.input_args(cap.url, role="mon", claim=c1)
+            kr.input_args(cap.url, role="mon", claim=c2)
+        self.assertNotEqual(c1["port"], c2["port"])
+
+    def test_a_held_port_is_skipped_and_a_finished_monitor_frees_its_slot(self):
+        import socket
+        cap = kr.DeviceCapture("ffmpeg", "rtmp-in://1939/GoProTest42x")
+        squat = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        squat.bind(("127.0.0.1", cap.mon_ports[0]))   # something else holds slot 0 (a dying reader)
+        try:
+            p = cap.claim_mon()
+        finally:
+            squat.close()
+        self.assertEqual(p, cap.mon_ports[1])
+        done = mock.Mock()
+        done.poll.return_value = 0                     # that monitor has exited
+        cap.attach(p, done)
+        self.assertEqual(cap.claim_mon(), cap.mon_ports[0])   # slot 0 is free again
+        self.assertEqual(cap.claim_mon(), cap.mon_ports[1])   # and the exited one's slot is reused
+
+    def test_all_slots_busy_says_so(self):
+        cap = kr.DeviceCapture("ffmpeg", "rtmp-in://1940/GoProTest42x")
+        for _ in cap.mon_ports:
+            self.assertIsNotNone(cap.claim_mon())
+        with mock.patch.dict(kr.DEVICES, {cap.url: cap}):
+            with self.assertRaises(RuntimeError):
+                kr.input_args(cap.url, role="mon")
+
+    def test_a_restarted_pair_waits_for_the_old_ffmpeg(self):
+        src = _read("kastr_rtsp.py")
+        self.assertIn("p.wait(timeout=2)   # 0.21.30: gone before the next one binds the same loopback port", src)
+        self.assertIn("p.wait(timeout=1)   # 0.21.30: its input (a loopback port, a camera) is free when the next pair starts", src)
 
 
 class Bridge(unittest.TestCase):

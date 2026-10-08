@@ -25,7 +25,18 @@ class TileMenu(unittest.TestCase):
         self.assertIn('{ value: "mute", icon: muted ? "mic" : "micOff",', p)
         self.assertIn('content ? "share" : "participant"', p)
         self.assertIn('icon: "pin", label: pinned ? "Unpin" : "Pin for me"', p)
-        self.assertIn('icon: "spotlight", label: lit ? "Stop spotlighting" : "Spotlight for everyone"', p)
+        self.assertIn('icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone"', p)   # 0.21.30 wording
+
+    def test_every_spotlight_item_offers_removal(self):
+        # 0.21.30 (Kenton): already spotlit -> "Remove spotlight" on own panes and grids too
+        p = self.page
+        self.assertIn('const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };', p)
+        self.assertIn('gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" }', p)
+        self.assertIn("window.__spotRemove = () => {", p)
+        # anyone can remove it for everyone: a newer "nobody" vote; my own vote counts as the room's spotlight on my page
+        self.assertIn('try { window.__spot?.set?.("~none"); } catch {}', p)
+        self.assertIn("return win && win.target === \"~none\" ? null : win;", p)
+        self.assertIn("const lit = window.__spotIs ? window.__spotIs(name) : spotLit?.target === name;", p)
         self.assertNotIn("Fit to frame", p)
         self.assertNotIn('label: "Spotlight for me"', p)
         for g in ("    pin: '", "    spotlight: '", "    search: '"):

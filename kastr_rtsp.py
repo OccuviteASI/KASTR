@@ -768,6 +768,12 @@ MEDIA_PREFIX = "media://"
 HOSTMEDIA_DIR = [None]   # set by the Bridge: <state>/hostmedia (a copy of the upload that outlives the upload's own life)
 DEVICES = {}             # url -> DeviceCapture
 DEVICE_ROLES = ("pub", "mon", "low")
+# 0.21.30 (field: a GoPro on RTMP ingest -> "bind failed: Error number -10048" = the monitor's port was already held):
+# a port takes ONE reader, but a feed can have several monitors at once (a reconnect while the old one is still dying,
+# the window and a web client of the same box) -- so the capture sends to MON_SLOTS monitor ports and each monitor
+# claims a free one. Ports come from below every OS's ephemeral range, where outgoing sockets (QUIC, DNS) never land.
+MON_SLOTS = 6
+LOOP_PORTS = (20000, 31999)
 
 
 def is_device(url):
@@ -860,8 +866,28 @@ def list_devices(ffmpeg):
     return out
 
 
-def _free_udp_port():
+def _udp_free(port):
+    """0.21.30: can a reader bind this loopback port right now?"""
     import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("127.0.0.1", int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _free_udp_port(avoid=()):
+    """0.21.30: a free loopback UDP port OUTSIDE the ephemeral ranges (Windows 49152+, Linux 32768+) -- an ephemeral
+    port can be handed to any outgoing socket between our pick and the reader's bind."""
+    import random
+    import socket
+    for _ in range(200):
+        p = random.randint(LOOP_PORTS[0], LOOP_PORTS[1])
+        if p not in avoid and _udp_free(p):
+            return p
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.bind(("127.0.0.1", 0))
@@ -876,7 +902,14 @@ class DeviceCapture:
 
     def __init__(self, ffmpeg, url, log=None):
         self.ffmpeg, self.url, self.log = ffmpeg, url, (log or (lambda m: None))
-        self.ports = {r: _free_udp_port() for r in DEVICE_ROLES}
+        self.ports = {}
+        for r in DEVICE_ROLES:
+            self.ports[r] = _free_udp_port(avoid=set(self.ports.values()))
+        self.mon_ports = [self.ports["mon"]]   # 0.21.30: monitor slot 0 is ports["mon"]
+        while len(self.mon_ports) < MON_SLOTS:
+            self.mon_ports.append(_free_udp_port(avoid=set(self.ports.values()) | set(self.mon_ports)))
+        self.claims = {}                       # 0.21.30: monitor port -> its ffmpeg (or the time it was handed out)
+        self._claim_lock = threading.Lock()
         self.proc = None
         self.stopped = False
         self.restarts = 0
@@ -885,7 +918,7 @@ class DeviceCapture:
     def args(self):
         if is_rtmp_in(self.url):   # 0.21.29: wait for a device to push, copy what it sends (video + audio) to every reader
             port, key = rtmp_parts(self.url)
-            tee = "|".join("[f=mpegts]udp://127.0.0.1:%d?pkt_size=1316" % self.ports[r] for r in DEVICE_ROLES)
+            tee = self._tee()
             return [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "flv", "-listen", "1",
                     "-i", "rtmp://0.0.0.0:%d/live/%s" % (port, key), "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
                     "-f", "tee", tee]
@@ -896,11 +929,39 @@ class DeviceCapture:
             src = ["-f", "dshow", "-rtbufsize", "128M", "-i", "video=" + name]
         else:
             src = ["-f", "v4l2", "-i", name]
-        tee = "|".join("[f=mpegts]udp://127.0.0.1:%d?pkt_size=1316" % self.ports[r] for r in DEVICE_ROLES)
+        tee = self._tee()
         return ([self.ffmpeg, "-hide_banner", "-loglevel", "error"] + src
                 + ["-an", "-vf", "scale=w='min(iw,1280)':h=-2,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
                    "-tune", "zerolatency", "-profile:v", "baseline", "-g", "60", "-bf", "0", "-b:v", "3M", "-maxrate", "3M",
                    "-bufsize", "3M", "-map", "0:v:0", "-f", "tee", tee])
+
+    def out_ports(self):
+        """Every loopback port the capture sends to: publisher, low copy, then the monitor slots."""
+        return [self.ports["pub"], self.ports["low"]] + list(self.mon_ports)
+
+    def _tee(self):
+        # an unbound loopback port is the normal case (no reader yet) -- UDP sends to it never fail
+        return "|".join("[f=mpegts]udp://127.0.0.1:%d?pkt_size=1316" % p for p in self.out_ports())
+
+    def claim_mon(self):
+        """0.21.30: a monitor port nobody reads -- its last ffmpeg has exited and the port binds. None when all are busy."""
+        now = time.time()
+        with self._claim_lock:
+            for p in self.mon_ports:
+                h = self.claims.get(p)
+                if isinstance(h, float) and now - h < 15:
+                    continue                                   # handed out, its ffmpeg is starting
+                if h is not None and not isinstance(h, float) and h.poll() is None:
+                    continue                                   # a running monitor reads it
+                if not _udp_free(p):
+                    continue                                   # something else holds it (a dying reader)
+                self.claims[p] = now
+                return p
+        return None
+
+    def attach(self, port, proc):
+        with self._claim_lock:
+            self.claims[port] = proc
 
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
@@ -938,10 +999,22 @@ class DeviceCapture:
                 pass
 
 
-def input_args(url, role="pub"):
+def input_args(url, role="pub", claim=None):
     if is_device(url) or is_rtmp_in(url):   # 0.21.26: the bridge's one capture of this camera, on this reader's own loopback port; 0.21.29: + RTMP ingest
         cap = DEVICES.get(url)
+        if cap and role == "mon":   # 0.21.30: a free monitor slot (several monitors may read one capture)
+            port = cap.claim_mon()
+            if port is None:
+                raise RuntimeError("every monitor of this camera is in use (%d) -- close one and try again" % len(cap.mon_ports))
+            if claim is not None:
+                claim["port"] = port
+            return ["-f", "mpegts", "-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
         port = cap.ports.get(role if role in DEVICE_ROLES else "pub") if cap else 0
+        if port:   # 0.21.30: the previous reader of this port may still be dying -- give it up to 3 s
+            for _ in range(30):
+                if _udp_free(port):
+                    break
+                time.sleep(0.1)
         return ["-f", "mpegts", "-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
     if is_hostmedia(url):   # 0.21.26: a media file on this host, looped at real time
         return ["-re", "-stream_loop", "-1", "-i", hostmedia_path(url) or "missing-media-file"]
@@ -1411,7 +1484,8 @@ class Publisher:
             for p in stale:
                 try:
                     p.kill()
-                except OSError:
+                    p.wait(timeout=2)   # 0.21.30: gone before the next one binds the same loopback port
+                except Exception:
                     pass
                 self.bridge._child_ended(p.pid)
             self.procs = ()
@@ -1887,7 +1961,8 @@ def _end_pair(procs, ended, grace=1.0):
         if p.poll() is None:
             try:
                 p.kill()
-            except OSError:
+                p.wait(timeout=1)   # 0.21.30: its input (a loopback port, a camera) is free when the next pair starts
+            except Exception:
                 pass
     deadline = time.time() + grace
     for p in procs[1:]:
@@ -3069,12 +3144,13 @@ class Bridge:
             raise RuntimeError("ffmpeg not found")
         head = [self.ffmpeg, "-hide_banner", "-loglevel", "error"]
         copy, hvc1 = self.monitor_plan(feed, transcode, passthrough)
+        claim = {}   # 0.21.30: the monitor slot this ffmpeg reads (camera / RTMP ingest captures)
         if copy:
-            args = head + input_args(feed.url, role="mon") + output_args(feed.url, True, hvc1=hvc1)
+            args = head + input_args(feed.url, role="mon", claim=claim) + output_args(feed.url, True, hvc1=hvc1)
         else:
             # 0.9.6: small and fast -- see output_args
             enc = self.usable_encoder()
-            args = head + encoder_pre_args(enc) + input_args(feed.url, role="mon") + output_args(feed.url, False, encoder=enc,
+            args = head + encoder_pre_args(enc) + input_args(feed.url, role="mon", claim=claim) + output_args(feed.url, False, encoder=enc,
                                                                        width=1920 if getattr(feed, "presenter", False) else None)   # 0.21.20: presenter mode composites this picture
         # Windows: keep the console window from flashing up for each feed.
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -3083,6 +3159,8 @@ class Bridge:
             bufsize=0, creationflags=flags,
         )
         _job_assign(self._job, proc, self.log)   # 0.9.8: dies with KASTR (its pipe would end it anyway)
+        if claim.get("port") and DEVICES.get(feed.url):
+            DEVICES[feed.url].attach(claim["port"], proc)
         feed.procs.add(proc)
         # Clear the tail as well as the summary: clearing only `error` let the
         # drain thread rebuild it from lines the PREVIOUS child left behind, so

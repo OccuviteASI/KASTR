@@ -2,6 +2,20 @@
 
 What changed in each build, newest first.
 
+## v0.21.30 — GoPro previews, rooms in the join card, Remove spotlight
+
+**A GoPro on RTMP ingest no longer fails with "bind failed: Error number -10048" (field report).** A camera on the host or an RTMP ingest is received once and handed on over local network ports, one port per reader. The monitor had a single port, so a second monitor of the same feed failed at once. A second monitor appears when a monitor reconnects while the old one is still closing, or when the window and a web client on the same box both show the feed. The capture now feeds six monitor ports, and each monitor takes a free one. The ports also come from below the range Windows and Linux hand out to outgoing connections, so another program can no longer take one first. A restarted publisher waits for the old one to exit before it starts. Lab, with a test push into an RTMP ingest and three monitors at once: on 0.21.29 the second and third died immediately; now all three get the stream, and so does a monitor restarted the moment the old one was killed.
+
+**The rooms are in the join card, not behind it (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side").** The join card lists the rooms instead of a dropdown, each with its lock, how many people are in it and whether it is kept open, with **+ New room…** last. The room rail on the left is hidden while the join card is up.
+
+**The relay picker shows which relays are online (Kenton: "the launch page is no longer showing which relays are online or not").** Every relay in the join card's Relay picker is checked (the same check the relay failover uses) and marked 🟢 online or 🔴 offline. The answers refresh every 20 seconds.
+
+**Remove spotlight (Kenton: "If something is spotlighted already, then the spotlight button should show remove spotlight").** Every Spotlight item now reads **Remove spotlight** when that tile, share or grid is already spotlit: on other people's tiles, on your own panes and in a grid's menu. Two gaps came out while testing. The person who set a spotlight did not see it as spotlit on their own page, so they still got "Spotlight for everyone". And a removal only withdrew the remover's own vote, so someone else's spotlight stayed for everyone. Now your own vote counts on your page, and **Remove spotlight** clears it for everyone, whoever set it. Tested with two people: the setter removing it and the spotlit person removing it.
+
+**Spokes check in every ~30 seconds (Kenton: "How often do the spokes report to the hub for a keep-alive? I think this should be more frequent").** A spoke used to re-register with the hub only when its relay started, a room opened or closed, and every 10 minutes, so the hub's "Last seen" could be 10 minutes old for a healthy spoke. Every spoke already holds a request open at the hub for kicks and commands, renewed every 25–30 seconds. That request now counts as the spoke's check-in, at no extra traffic. The hub's spokes table is current to within about 30 seconds, and a spoke unseen for 3 minutes (was 30) drops off the table.
+
+**A field check for any box (tools/kastr-field-check.ps1 for Windows, .sh for Linux).** It is read-only and writes one text file: this KASTR's version and mode, relay, federation and cluster status (including what the hub's relay sees of this spoke), relay health, the hub's spokes table, and the relay and launch-log lines about the cluster. Tokens and codes are blanked.
+
 ## v0.21.29 — an RTMP address for a GoPro
 
 **RTMP ingest (Kenton: "does a KASTR relay have an RTMP URL that I can point devices to, such as a go pro for streaming the video?").** Share ▸ RTMP feed ▸ **RTMP ingest (GoPro)…** creates an address like `rtmp://10.10.40.120:1935/live/<key>`. It is copied when created and shown on the feed's row with a **Copy** button. Type it into the GoPro app's live-stream settings, or any device that pushes RTMP.

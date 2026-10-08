@@ -1352,6 +1352,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return
                 if path == "/api/screen/sources":
                     return send(200, json.dumps(kastr_screen.sources(tabs=(qs.get("tabs") or [""])[0] == "1")).encode(), "application/json")
+                if path == "/api/screen/rtmp":   # 0.21.29: a free RTMP ingest port + the addresses devices can reach this host by
+                    ips = [ip for ip in kastr_relay.local_ips() if not ip.startswith(("127.", "172."))] or kastr_relay.local_ips()
+                    return send(200, json.dumps({"ok": True, "port": kastr_rtsp.rtmp_free_port(), "hosts": ips}).encode(), "application/json")
                 if path == "/api/screen/devices":   # 0.21.26: cameras this computer can capture as a host feed
                     devs = kastr_rtsp.list_devices(getattr(bridge, "ffmpeg", None) if bridge else None)
                     return send(200, json.dumps({"ok": True, "devices": devs}).encode(), "application/json")
@@ -4314,7 +4317,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return
             if path.startswith("/api/lan/"):   # 0.21.22: relay discovery + probe (this machine only)
                 return self._lan_api(path, "GET")
-            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
+            if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the

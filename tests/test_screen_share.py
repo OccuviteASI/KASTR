@@ -170,7 +170,7 @@ class Page(unittest.TestCase):
         self.assertIn('function gridIdOf(a) { return String(a?.gridId || (a?.screen ? "none" : "1")); }', p)
         self.assertIn('added.filter((a) => a.kind === RTSP && gridIdOf(a) !== "none" && a.enabled && !a.evicted &&', p)
         self.assertIn('o.value = "none"; o.textContent = "No grid";', p)
-        self.assertIn('if (a.url && a.url !== TEST_URL && !isScreenUrl(a.url) && !/^(device|media):/i.test(a.url)) {', p)   # no pass-through on a capture
+        self.assertIn('if (a.url && a.url !== TEST_URL && !isScreenUrl(a.url) && !/^(device|media|rtmp-in):/i.test(a.url)) {', p)   # no pass-through on a capture
 
     def test_presenter_keeps_its_tracks(self):
         p = self.page

@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.21.29 — an RTMP address for a GoPro
+
+**RTMP ingest (Kenton: "does a KASTR relay have an RTMP URL that I can point devices to, such as a go pro for streaming the video?").** Share ▸ RTMP feed ▸ **RTMP ingest (GoPro)…** creates an address like `rtmp://10.10.40.120:1935/live/<key>`. It is copied when created and shown on the feed's row with a **Copy** button. Type it into the GoPro app's live-stream settings, or any device that pushes RTMP.
+- What the device sends becomes a feed like an RTSP camera: copied without re-encoding (H.264 + its audio), able to go in any grid, and kept after a restart. Nothing shows until the device pushes.
+- If the device stops and starts again, KASTR listens again at once.
+- The key is random per ingest, so nobody else can push into it.
+- Each ingest gets its own port, from 1935 to 1944: one listener per port.
+- The Relay page's **Add firewall rules** now also opens TCP 1935–1944 (one rule, "KASTR RTMP ingest") once an ingest exists.
+- Plain RTMP only, not RTMPS. A device away from this network can reach it only through a forwarded port or a VPN.
+Tested in the lab by pushing a looping clip with ffmpeg: it published and played, and a dropped and restarted push came back. A real GoPro was not tested.
+
 ## v0.21.28 — the join screen dims the whole page
 
 **The join screen dims the whole page (Kenton: "the shadow in the back doesn't cover the whole screen, just most of it").** Since 0.12.0 the backdrop behind the join card started a fixed distance from the left, to leave the room rail clickable. That offset missed with the rail collapsed and on the web page, leaving a strip undimmed. The backdrop now covers the whole page, room rail included. Pick a room in the join card's own room list. Verified in the desktop window and on the web page.

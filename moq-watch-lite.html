@@ -163,6 +163,10 @@
   .gridgroup { display:flex; flex-direction:column; gap:6px; border-left:3px solid var(--asi-blue); border-radius:4px;
     padding:4px 0 4px 8px; margin:2px 0 8px; background:color-mix(in srgb, var(--asi-blue) 6%, transparent); }
   .gridgroup > .gghead { font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--asi-blue); padding:2px 0; }
+  /* 0.21.29: an RTMP ingest row says where to push */
+  .camrow .rtmpurl { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); margin-top:4px; flex-wrap:wrap; }
+  .camrow .rtmpurl code { font-family:var(--font-mono); color:var(--text); background:var(--surface-2); padding:2px 6px; border-radius:4px; user-select:all; -webkit-user-select:all; }
+  .camrow .rtmpurl button { padding:1px 8px; font-size:11px; }
   #mineMenu.roomform { min-width:260px; padding:8px; }   /* 0.21.0: the "+" bubble */
   #mineMenu .mcap { font-size:10px; color:var(--text-mute); padding:3px 8px 1px; text-transform:uppercase; letter-spacing:.04em; }
   #mineMenu .mhint { font-size:10px; color:var(--text-mute); padding:4px 8px; }
@@ -1628,6 +1632,7 @@
           <select id="hostCamSel" style="flex:1; min-width:180px"><option value="">Camera on this computer…</option></select>
           <button id="hostCamAdd" type="button" class="ghost" style="flex:none" disabled>Add camera</button>
           <button id="hostFileAdd" type="button" class="ghost" style="flex:none" title="Loop a video file as a feed -- it can go in a grid">Add media file…</button>
+          <button id="hostRtmpAdd" type="button" class="ghost" style="flex:none" title="An address a GoPro or another device can push RTMP to -- it becomes a feed like an RTSP camera">RTMP ingest (GoPro)…</button>
           <input type="file" id="hostFile" accept="video/*,audio/*,.mkv,.ts" hidden>
         </div>
         <p class="hint" id="hostFeedHint" style="margin:4px 0 0">Added here, a camera or video file is published by this computer like an RTSP camera: it can go in a grid and comes back after a restart. A camera added this way has no background effects, and KASTR&rsquo;s own camera must be off if it is the same one.</p>
@@ -12268,6 +12273,12 @@
   const permBtn = $("permBtn"), rescanBtn = $("rescanBtn");
   const startBtn = $("startBtn"), stopBtn = $("stopBtn"), liveBtn = $("liveBtn");
   const camrowsEl = $("camrows"), srcCount = $("srcCount"), srcEmpty = $("srcEmpty");
+  // 0.21.29: the address devices reach this computer by (its first LAN address), for the RTMP ingest rows
+  let rtmpHostV = "";
+  try { rtmpHostV = localStorage.getItem("kastr.rtmp.host") || ""; } catch {}
+  const rtmpHost = () => rtmpHostV;
+  const rtmpHostSet = (h) => { rtmpHostV = String(h || ""); try { localStorage.setItem("kastr.rtmp.host", rtmpHostV); } catch {} };
+  if (!IS_WEB2) setTimeout(() => fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()).then((d) => { if (d?.hosts?.length && d.hosts[0] !== rtmpHostV) { rtmpHostSet(d.hosts[0]); try { renderSources(); } catch {} } }).catch(() => {}), 3000);
   // ---- 0.21.26 (Kenton): host feeds -- a camera or a media file on this computer, published like an RTSP camera ----
   {
     const sel = $("hostCamSel"), addCam = $("hostCamAdd"), addFile = $("hostFileAdd"), pick = $("hostFile");
@@ -12294,6 +12305,23 @@
       addCam.disabled = false;
     });
     addFile.addEventListener("click", () => pick.click());
+    // 0.21.29 (Kenton: "an RTMP URL that I can point devices to, such as a go pro"): one ingest = one port + a random key
+    $("hostRtmpAdd").addEventListener("click", async () => {
+      let d = null;
+      try { d = await fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()); } catch {}
+      if (!d?.port) { window.__toast?.("No free RTMP port (1935-1944) on this computer", 6000, { level: "error" }); return; }
+      if (d.hosts?.length) rtmpHostSet(d.hosts[0]);
+      const label = window.prompt("Name for this RTMP feed", "GoPro");
+      if (label == null) return;
+      const abc = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const key = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => abc[b % abc.length]).join("");
+      const e = await addRtsp("rtmp-in://" + d.port + "/" + key, { label: (label.trim() || "GoPro").slice(0, 40) });
+      if (e) {
+        const url = "rtmp://" + (rtmpHost() || "<this computer>") + ":" + d.port + "/live/" + key;
+        try { await navigator.clipboard.writeText(url); } catch {}
+        window.__toast?.("RTMP ingest ready \u2014 " + url + " (copied). If the device cannot connect, add the firewall rules on the Relay page.", 9000, { level: "info" });
+      }
+    });
     pick.addEventListener("change", async () => {
       const f = pick.files?.[0];
       pick.value = "";
@@ -12888,6 +12916,7 @@
     if (url === TEST_URL) return "rtsp-test";
     if (isScreenUrl(url)) return /[/]window[/]/i.test(url) ? "window" : /[/]tab[/]/i.test(url) ? "tab" : "screen";   // 0.21.20; 0.21.22: + tab
     if (/^media:[/][/]/i.test(url)) return "media";   // 0.21.26: a host media file
+    if (/^rtmp-in:[/][/]/i.test(url)) return "rtmp";   // 0.21.29: an RTMP ingest
     if (/^device:[/][/]video[/]/i.test(url)) return slug(decodeURIComponent(url.slice(15)).replace(/^[/]dev[/]/, ""), "camera");   // 0.21.26: a host camera
     try {
       const u = new URL(url.replace(/^rtsps?:/, "http:"));
@@ -13420,12 +13449,24 @@
         ab.checked = a.audio !== false;
         ab.addEventListener("change", () => window.__rtspAudio?.set?.(a.id, ab.checked));
         if (/^device:/i.test(a.url)) aud.remove();   // 0.21.26: a host camera is captured video-only
+        if (/^rtmp-in:/i.test(a.url)) {   // 0.21.29: where the device pushes -- shown on the row, one click copies it
+          const m = /^rtmp-in:[/][/](\d+)[/](\w+)$/i.exec(a.url);
+          const line = document.createElement("div");
+          line.className = "rtmpurl";
+          const code = document.createElement("code");
+          code.textContent = m ? "rtmp://" + (rtmpHost() || "<this computer>") + ":" + m[1] + "/live/" + m[2] : a.url;
+          const cp = document.createElement("button"); cp.type = "button"; cp.className = "ghost"; cp.textContent = "Copy";
+          cp.addEventListener("click", () => { navigator.clipboard?.writeText(code.textContent).then(() => window.__toast?.("RTMP address copied \u2014 paste it into the device's live-stream settings", 4000, { level: "info" })).catch(() => window.prompt("RTMP address", code.textContent)); });
+          line.append("Push to ", code, cp);
+          line.title = "Point the device's RTMP / live-stream setting here. Nothing shows until it pushes.";
+          row.appendChild(line);
+        }
         if (isScreenUrl(a.url)) {   // 0.21.26 (Kenton: "it is showing up as if it is an RTSP stream"): a capture of this computer
           aud.title = "Send this computer's sound with it (KASTR's own sound is left out). Off = picture only.";
           row.classList.add("screenrow");
         }
         // 0.21.17: per-camera passthrough, live (copy the camera untouched vs convert to H.264 here)
-        if (a.url && a.url !== TEST_URL && !isScreenUrl(a.url) && !/^(device|media):/i.test(a.url)) {   // 0.21.26: a capture / host file is always encoded -- no pass-through
+        if (a.url && a.url !== TEST_URL && !isScreenUrl(a.url) && !/^(device|media|rtmp-in):/i.test(a.url)) {   // 0.21.26: a capture / host file is always encoded -- no pass-through
           const ptl = document.createElement("label");
           ptl.className = "aud shown pt";
           ptl.title = "Pass this camera through untouched (no re-encode on this machine) when viewers can decode it. Off = convert to H.264 here. Applies live.";

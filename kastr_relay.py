@@ -4244,7 +4244,8 @@ WEB_PORT = None            # 0.14.0 F: this KASTR's web port (set by the launche
 FIREWALL_RULES = ("KASTR MoQ Relay", "KASTR MoQ Relay (cert)",
                   "KASTR room codes", "KASTR web",
                   "KASTR MoQ Relay (wss)", "KASTR web (https)",   # 0.8.9: phone paths
-                  "KASTR MoQ Relay (mDNS)")                        # 0.16.0: LAN mesh discovery
+                  "KASTR MoQ Relay (mDNS)",                        # 0.16.0: LAN mesh discovery
+                  "KASTR RTMP ingest")                             # 0.21.29: devices (GoPro) push here
 _FIREWALL_HTTPS_PORT = None   # set by the launcher when the https listener is up
 HTTPS_PORT = None             # 0.15.0: this KASTR's https listener port (launcher); /api/auth advertises it (None = none)
 
@@ -4259,7 +4260,25 @@ def firewall_wanted(port, web=None, https=None):
     h = _FIREWALL_HTTPS_PORT if https is None else https
     if h:
         want.append((int(h), "tcp"))
+    try:   # 0.21.29: the RTMP ingest ports, once an ingest exists on this box
+        if kastr_rtsp.rtmp_ports_in_use():
+            want += [(p, "tcp") for p in kastr_rtsp.RTMP_PORTS]
+    except Exception:
+        pass
     return want
+
+
+def _port_list(text):
+    """0.21.29: a LocalPort value -> ints ("1935-1944" is a range; "4443" one port; anything else nothing)."""
+    out = []
+    for lp in str(text).split(","):
+        lp = lp.strip()
+        m = re.match(r"^(\d{1,5})-(\d{1,5})$", lp)
+        if m and int(m.group(2)) - int(m.group(1)) <= 64:
+            out += list(range(int(m.group(1)), int(m.group(2)) + 1))
+        elif lp.isdigit():
+            out.append(int(lp))
+    return out
 
 
 _FIREWALL_RECORD = "firewall-applied.json"
@@ -4355,10 +4374,8 @@ def _windows_rules():
             port = re.search(r"^LocalPort:\s+(\S.*)$", block, re.M)
             found_names.append(name)
             if proto and port:
-                for lp in port.group(1).split(","):
-                    lp = lp.strip()
-                    if lp.isdigit():
-                        have.add("%d/%s" % (int(lp), proto.group(1).strip().lower()))
+                for lp in _port_list(port.group(1)):   # 0.21.29: ranges too
+                    have.add("%d/%s" % (lp, proto.group(1).strip().lower()))
     if not parsed_any and not found_names:
         # nothing recognised at all -- either no rules exist or netsh is unusable; the cmdlets decide (once)
         try:
@@ -4382,10 +4399,8 @@ def _windows_rules_cim():
         if len(parts) != 3 or not parts[0]:
             continue
         found_names.append(parts[0])
-        for lp in str(parts[2]).split(","):
-            lp = lp.strip()
-            if lp.isdigit():
-                have.add("%d/%s" % (int(lp), parts[1].strip().lower()))
+        for lp in _port_list(parts[2]):   # 0.21.29: ranges too
+            have.add("%d/%s" % (lp, parts[1].strip().lower()))
     return found_names, have
 
 
@@ -4473,7 +4488,15 @@ def add_firewall_rules(port, wanted=None):
         names = {(port, "udp"): "KASTR MoQ Relay", (port, "tcp"): "KASTR MoQ Relay (cert)", (port + 1, "tcp"): "KASTR room codes",
                  (port + 2, "tcp"): "KASTR MoQ Relay (wss)", (5353, "udp"): "KASTR MoQ Relay (mDNS)"}
         lines = []
+        rtmp_done = False
         for lp, proto in wanted:
+            if proto == "tcp" and lp in kastr_rtsp.RTMP_PORTS:   # 0.21.29: one rule for the whole RTMP range
+                if not rtmp_done:
+                    rtmp_done = True
+                    lines.append('Remove-NetFirewallRule -DisplayName "KASTR RTMP ingest" -ErrorAction SilentlyContinue')
+                    lines.append('New-NetFirewallRule -DisplayName "KASTR RTMP ingest" -Direction Inbound -Protocol TCP -LocalPort "%d-%d" -Action Allow'
+                                 % (kastr_rtsp.RTMP_PORTS[0], kastr_rtsp.RTMP_PORTS[-1]))
+                continue
             name = names.get((lp, proto)) or ("KASTR web (https)" if (_FIREWALL_HTTPS_PORT and lp == int(_FIREWALL_HTTPS_PORT)) else "KASTR web")
             lines.append('Remove-NetFirewallRule -DisplayName "%s" -ErrorAction SilentlyContinue' % name)
             lines.append('New-NetFirewallRule -DisplayName "%s" -Direction Inbound -Protocol %s -LocalPort %d -Action Allow' % (name, proto.upper(), lp))

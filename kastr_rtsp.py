@@ -778,8 +778,50 @@ def is_hostmedia(url):
     return str(url or "").startswith(MEDIA_PREFIX)
 
 
+# 0.21.29 (Kenton: "does a KASTR relay have an RTMP URL that I can point devices to, such as a go pro"): an RTMP INGEST --
+# KASTR listens (ffmpeg -listen 1) on its own port per stream (one ffmpeg listener per port) for rtmp://<this host>:<port>/
+# live/<key>; whatever a device pushes is fanned out like a host camera (copied, no re-encode) to the publisher, monitor
+# and low copy. The key is random per stream, so nobody else can push into it.
+RTMP_PREFIX = "rtmp-in://"
+RTMP_PORTS = range(1935, 1945)
+
+
+def is_rtmp_in(url):
+    return str(url or "").startswith(RTMP_PREFIX)
+
+
+def rtmp_parts(url):
+    """rtmp-in://<port>/<key> -> (port, key) or (None, None)."""
+    m = re.match(r"^rtmp-in://(\d{2,5})/([A-Za-z0-9]{6,40})$", str(url or ""))
+    if not m or int(m.group(1)) not in RTMP_PORTS:
+        return None, None
+    return int(m.group(1)), m.group(2)
+
+
+def rtmp_ports_in_use():
+    return sorted({rtmp_parts(u)[0] for u in DEVICES if is_rtmp_in(u)} - {None})
+
+
+def rtmp_free_port():
+    """The first port of RTMP_PORTS no ingest uses and nothing else listens on (TCP)."""
+    import socket
+    used = set(rtmp_ports_in_use())
+    for p in RTMP_PORTS:
+        if p in used:
+            continue
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("0.0.0.0", p))
+            return p
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return None
+
+
 def is_host_feed(url):
-    return is_device(url) or is_hostmedia(url)
+    return is_device(url) or is_hostmedia(url) or is_rtmp_in(url)
 
 
 def device_name(url):
@@ -841,6 +883,12 @@ class DeviceCapture:
         self.last_error = ""
 
     def args(self):
+        if is_rtmp_in(self.url):   # 0.21.29: wait for a device to push, copy what it sends (video + audio) to every reader
+            port, key = rtmp_parts(self.url)
+            tee = "|".join("[f=mpegts]udp://127.0.0.1:%d?pkt_size=1316" % self.ports[r] for r in DEVICE_ROLES)
+            return [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "flv", "-listen", "1",
+                    "-i", "rtmp://0.0.0.0:%d/live/%s" % (port, key), "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                    "-f", "tee", tee]
         name = device_name(self.url)
         if name == "kastr-test":   # rig: a test pattern stands in for a camera
             src = ["-re", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30"]
@@ -872,6 +920,10 @@ class DeviceCapture:
             if self.stopped:
                 return
             self.restarts += 1
+            if is_rtmp_in(self.url):   # 0.21.29: the device stopped pushing (or never came) -- listen again at once
+                self.log("rtsp: RTMP ingest on port %s ended (%s) -- listening again" % (rtmp_parts(self.url)[0], self.last_error or "the device disconnected"))
+                time.sleep(1.0)
+                continue
             self.log("rtsp: camera capture %s ended (%s) -- again in %.0f s" % (device_name(self.url), self.last_error or "no reason given", wait))
             wait = 1.0 if time.time() - t0 > 60 else min(30.0, wait * 2)
             time.sleep(wait)
@@ -887,7 +939,7 @@ class DeviceCapture:
 
 
 def input_args(url, role="pub"):
-    if is_device(url):   # 0.21.26: the bridge's one capture of this camera, on this reader's own loopback port
+    if is_device(url) or is_rtmp_in(url):   # 0.21.26: the bridge's one capture of this camera, on this reader's own loopback port; 0.21.29: + RTMP ingest
         cap = DEVICES.get(url)
         port = cap.ports.get(role if role in DEVICE_ROLES else "pub") if cap else 0
         return ["-f", "mpegts", "-i", "udp://127.0.0.1:%d?fifo_size=1000000&overrun_nonfatal=1" % port]
@@ -2151,6 +2203,18 @@ class Bridge:
                 cap = DEVICES[url] = DeviceCapture(self.ffmpeg, url, self.log)
                 cap.start()
                 time.sleep(1.5)   # the first packets reach the loopback ports before a reader opens them
+        elif is_rtmp_in(url):   # 0.21.29: an RTMP ingest -- listen on its port for a device to push
+            port, key = rtmp_parts(url)
+            if not port:
+                raise ValueError("bad RTMP ingest (port %d-%d and a key of 6-40 letters or digits)" % (RTMP_PORTS[0], RTMP_PORTS[-1]))
+            if not self.ffmpeg:
+                raise ValueError("ffmpeg is not available here")
+            if url not in DEVICES:
+                if port in rtmp_ports_in_use():
+                    raise ValueError("RTMP port %d is already in use by another ingest" % port)
+                cap = DEVICES[url] = DeviceCapture(self.ffmpeg, url, self.log)
+                cap.start()
+                self.log("rtsp: RTMP ingest listening on port %d" % port)
         elif is_hostmedia(url):   # 0.21.26: a media file uploaded to this host -- kept in <state>/hostmedia
             if not self._hostmedia_ready(url):
                 raise ValueError("that media file is not on this computer (upload it again)")
@@ -2183,7 +2247,7 @@ class Bridge:
         self.unpublish(feed_id, persist=False)   # 0.12.0: one write, below
         with self._lock:
             feed = self._feeds.pop(int(feed_id), None)
-        if feed and is_device(feed.url):   # 0.21.26: the camera is free again
+        if feed and (is_device(feed.url) or is_rtmp_in(feed.url)):   # 0.21.26: the camera is free again; 0.21.29: the RTMP port too
             cap = DEVICES.pop(feed.url, None)
             if cap:
                 cap.stop()
@@ -2886,6 +2950,10 @@ class Bridge:
         if feed.url == TEST_URL:
             feed.h264 = False           # lavfi is raw; it has to be encoded
             return False
+        if is_rtmp_in(feed.url):        # 0.21.29: what a device pushes over RTMP is H.264 (+ AAC) -- copied
+            feed.h264, feed.vcodec, feed.fullrange, feed.sar = True, "h264", False, None
+            feed.width = feed.height = None
+            return True
         if is_device(feed.url):         # 0.21.26: our own capture -- H.264 baseline, copied by every reader
             feed.h264, feed.vcodec, feed.fullrange, feed.sar = True, "h264", False, None
             feed.width, feed.height = 1280, 720

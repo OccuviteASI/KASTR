@@ -54,6 +54,36 @@ class Urls(unittest.TestCase):
             self.assertIsNone(kr.hostmedia_path("media://../../etc/passwd"))
 
 
+class RtmpIngest(unittest.TestCase):
+    """0.21.29 (Kenton: an RTMP URL to point a GoPro at)."""
+
+    def test_url_rules(self):
+        self.assertEqual(kr.rtmp_parts("rtmp-in://1935/GoProTest42x"), (1935, "GoProTest42x"))
+        for bad in ("rtmp-in://80/GoProTest42x", "rtmp-in://1935/../x", "rtmp-in://1935/ab"):
+            self.assertEqual(kr.rtmp_parts(bad), (None, None), bad)
+        self.assertTrue(kr.is_host_feed("rtmp-in://1935/GoProTest42x"))   # never from a web client
+
+    def test_listener_copies_and_fans_out(self):
+        cap = kr.DeviceCapture("ffmpeg", "rtmp-in://1936/GoProTest42x")
+        a = cap.args()
+        self.assertIn("-listen", a)
+        self.assertIn("rtmp://0.0.0.0:1936/live/GoProTest42x", a)
+        self.assertEqual(a[a.index("-c") + 1], "copy")
+        self.assertIn("0:a:0?", a)                         # the device's audio comes along
+        self.assertEqual(a[-1].count("udp://127.0.0.1:"), 3)
+
+    def test_firewall_rule_covers_the_range(self):
+        import kastr_relay
+        self.assertIn("KASTR RTMP ingest", kastr_relay.FIREWALL_RULES)
+        self.assertEqual(kastr_relay._port_list("1935-1944"), list(range(1935, 1945)))
+
+    def test_page_offers_it(self):
+        p = _read("moq-watch-lite.html")
+        self.assertIn('id="hostRtmpAdd"', p)
+        self.assertIn('addRtsp("rtmp-in://" + d.port + "/" + key', p)
+        self.assertIn('"/api/screen/rtmp"', _read("kastr_serve.py"))
+
+
 class Bridge(unittest.TestCase):
     def test_a_web_client_never_adds_a_host_feed(self):
         self.assertIn('raise ValueError("a camera or media file on the host is added from the host itself")', _read("kastr_rtsp.py"))

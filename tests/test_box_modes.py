@@ -85,5 +85,16 @@ class NotTheHub(unittest.TestCase):
         self.assertIn("  footer.asi-footer { display:none !important; }   /* 0.21.24", _read("moq-watch-lite.html"))
 
 
+class RoomsOnTheHub(unittest.TestCase):
+    """0.21.27 (Kenton): no Rooms column in the spokes table; the Rooms panel only where rooms live (hub / standalone)."""
+
+    def test_relay_page(self):
+        r = _read("relay.html")
+        self.assertNotIn("<th>Rooms</th>", r)
+        self.assertNotIn('"</td><td>" + roomsCell(r) + "</td>', r)
+        self.assertIn("const isSpoke = !!(lastStatus && lastStatus.cluster && lastStatus.cluster.connect && lastStatus.cluster.hub !== true);", r)
+        self.assertIn('if (s.cluster && s.cluster.connect && s.cluster.hub !== true) $("roomsPanel").hidden = true;', r)
+
+
 if __name__ == "__main__":
     unittest.main()

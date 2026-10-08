@@ -1494,7 +1494,8 @@ class AuthService:
                 elif path == "/api/bans":              # 0.18.0: the hub's active bans, for its spokes only
                     qs = parse_qs(urlparse(self.path).query)   # 0.20.0: ?since=<ver>&wait=<s> holds until they change
                     obj, code = svc.bans_for_spoke(self.headers.get("Authorization"),
-                                                   since=(qs.get("since") or [None])[0], wait=(qs.get("wait") or [0])[0])
+                                                   since=(qs.get("since") or [None])[0], wait=(qs.get("wait") or [0])[0],
+                                                   peer=self._peer())   # 0.21.27: a targeted update reaches its spoke only
                     self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
@@ -2229,6 +2230,11 @@ class AuthService:
         with self.lock:
             self.cmd["seq"] = int(self.cmd.get("seq") or 0) + 1
             rec = {"seq": self.cmd["seq"], "at": int(time.time()), **(extra or {})}
+            if name == "update":   # 0.21.27
+                if rec.get("spoke"):
+                    rec["peer"] = next((v.get("peer") for v in self.spokes.values() if (v.get("name") or "") == rec["spoke"]), None)
+                else:
+                    self.cmd["updateAll"] = rec
             if name in ("closeRoom", "wake", "rtsp", "updateOne"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
@@ -2241,7 +2247,7 @@ class AuthService:
 
     BANS_WAIT_MAX = 30   # 0.20.0: the longest a spoke's long-poll is held (the web-relay proxy allows 40)
 
-    def bans_for_spoke(self, bearer, since=None, wait=0):
+    def bans_for_spoke(self, bearer, since=None, wait=0, peer=""):
         """0.18.0: the hub's active bans for a spoke. 0.20.0: with `since` == the current version
         the request is HELD up to `wait` s (max 30) until a ban is added or cleared -- a spoke
         behind a tunnel or NAT, which the hub cannot nudge, learns of a kick within a second."""
@@ -2266,7 +2272,14 @@ class AuthService:
         ver, active = self.bans.snapshot()
         rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
         with self.lock:
-            cmd = {"seq": int(self.cmd.get("seq") or 0), "update": self.cmd.get("update"),
+            up = self.cmd.get("update")
+            if isinstance(up, dict) and up.get("spoke") and not (peer and up.get("peer") == peer):
+                # 0.21.27 (Kenton: "the single update buttons don't seem to be working"): 0.21.26 sent a NEW command
+                # (updateOne) that only 0.21.26+ spokes understand -- and the spokes behind are exactly the older ones. Now
+                # the plain `update` every version obeys is shown only to the asking spoke's address; the rest see the last
+                # fleet-wide update (an older seq: nothing to do).
+                up = self.cmd.get("updateAll")
+            cmd = {"seq": int(self.cmd.get("seq") or 0), "update": up,
                    "closeRoom": list(self.cmd.get("closeRoom") or []),   # 0.21.2
                    "wake": list(self.cmd.get("wake") or []),             # 0.21.7: on-demand wakes relayed from other sites
                    "rtsp": list(self.cmd.get("rtsp") or []),             # 0.21.16: the hub operator's RTSP switch for a spoke
@@ -4697,8 +4710,11 @@ def handle_api(handler, relay, path, set_relay_url=None):
             ver = ""
         p = _payload_of(handler) or {}
         one = str(p.get("spoke") or "").strip()
-        if one:   # 0.21.26 (Kenton): update ONE spoke (its row's Update button)
-            rec = auth.raise_cmd("updateOne", {"version": ver, "spoke": one})
+        if one:   # 0.21.26 (Kenton): update ONE spoke (its row's Update button); 0.21.27: one any spoke version obeys
+            if not any((v.get("name") or "") == one and v.get("peer") for v in auth.spokes.values()):
+                reply({"error": "%s has not registered its address with this hub yet -- try again in a minute" % one}, 409)
+                return True
+            rec = auth.raise_cmd("update", {"version": ver, "spoke": one})
             reply({"ok": True, "seq": rec["seq"], "spokes": 1, "spoke": one})
             return True
         rec = auth.raise_cmd("update", {"version": ver})

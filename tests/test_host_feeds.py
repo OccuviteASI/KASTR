@@ -77,6 +77,13 @@ class Page(unittest.TestCase):
         self.assertIn('addRtsp("media://" + id', p)
         self.assertIn('"/api/screen/devices"', _read("kastr_serve.py"))
 
+    def test_toolbar_camera_can_be_moved_into_a_grid(self):
+        # 0.21.27 (Kenton, Logan-ROC): the toolbar camera has a Sources row whose picker moves it to a host feed
+        p = _read("moq-watch-lite.html")
+        self.assertIn("if (!IS_WEB2) camrowsEl.appendChild(cameraGridRow(a));", p)
+        self.assertIn("removeSource(a.id);   // the webcam opens once", p)
+        self.assertIn('addRtsp("device://video/" + encodeURIComponent(dev), { label:', p)
+
 
 if __name__ == "__main__":
     unittest.main()

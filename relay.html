@@ -509,6 +509,7 @@
     // 0.10.0: access codes -- which are set, never what they are.
     const codes = s.codes || {};
     lastStatus = s;   // 0.21.0: the Federation save asks before leaving a hub
+    if (s.cluster && s.cluster.connect && s.cluster.hub !== true) $("roomsPanel").hidden = true;   // 0.21.27: a spoke stores no rooms
     const both = !!(codes.viewer && codes.publisher);
     const cs = $("codesState");
     cs.textContent = both ? "Access codes set \u2713 \u2014 viewers and publishers each need theirs."
@@ -1023,8 +1024,8 @@
       : "<span style=\"color:var(--text-mute)\">\u2014</span>";
     { let n = $("spokesStale"); if (!n) { n = document.createElement("span"); n.id = "spokesStale"; n.className = "hint"; n.style.display = "block"; $("spokesList").after(n); }   // 0.21.24
       n.textContent = d.stale ? d.stale + (d.stale === 1 ? " spoke" : " spokes") + " not seen for over 30 minutes " + (d.stale === 1 ? "is" : "are") + " hidden (forgotten after 7 days)." : ""; }
-    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
-      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>" + (behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button>" : "") + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one
+    $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
+      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>" + (behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button>" : "") + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one
       : "No spoke has registered yet.";
     for (const b of $("spokesList").querySelectorAll(".sprp")) b.addEventListener("click", async () => {   // 0.21.3
       const slug = b.parentElement.dataset.slug;
@@ -1307,7 +1308,11 @@
       d = await res.json();
     } catch { roomsPanel.hidden = true; return; }
     if (!d || d.error || !Array.isArray(d.rooms)) { roomsPanel.hidden = true; return; }
-    roomsPanel.hidden = false;
+    // 0.21.27 (Kenton): "hide the rooms tile unless it's a hub" -- a spoke stores no rooms since 0.21.25 (the hub does);
+    // a standalone relay (no hub) keeps its own rooms, so it keeps the panel
+    const isSpoke = !!(lastStatus && lastStatus.cluster && lastStatus.cluster.connect && lastStatus.cluster.hub !== true);
+    roomsPanel.hidden = isSpoke;
+    if (isSpoke) return;
     const closed = d.closed || {};
     const seen = new Set();
     for (const r of d.rooms) {

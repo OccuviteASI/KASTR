@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.27 — one-spoke updates that work, rooms only where they live
+
+**The single Update buttons work (Kenton: "The single update buttons don't seem to be working on the federation page").** 0.21.26's per-spoke Update sent a new command that only 0.21.26 or later understands, and the spokes that need updating are exactly the older ones. The button now sends the ordinary update every KASTR version obeys, delivered only to the address that spoke registers from. Every other spoke sees nothing new. Two spokes behind the same address (one NAT) would both update. This needs the **hub** on 0.21.27; the spokes can be any version.
+
+**Your camera can go in a grid from Sources (Kenton: "The camera source on Logan-ROC isn't showing in the sources section for me to add to a grid").** The toolbar camera runs inside KASTR's browser window and could not be a grid member, so Sources left it out. It now has a row with **Put in a grid…**. Choosing a grid turns KASTR's own camera off (a webcam opens only once) and adds the same device as a camera on this computer (0.21.26) in that grid, published like an RTSP camera. If the browser's camera name does not match a device KASTR can capture, it says so and points to Share ▸ RTSP feed ▸ Camera on this computer.
+
+**Rooms only where they live (Kenton).** The spokes table no longer has a Rooms column: rooms are stored on the hub since 0.21.25. A relay connected to a hub no longer shows the Rooms panel. The hub, and a standalone relay with no hub, keep it.
+
 ## v0.21.26 — grids take any source, shares come back, locked rooms are temporary
 
 **Grids take any source (Kenton: "The grids should allow multiple source types in them, including screen, window, tab, RTSP/HTTP, media file, etc").** A screen, window or tab share can be put in a grid from its row in Sources. It starts in **No grid**, so it never lands in your camera grid by surprise. Share ▸ RTSP feed now also offers **Camera on this computer…** and **Add media file…**. Either one becomes a feed published by this computer like an RTSP camera: it can go in any grid and comes back after a restart. A camera added this way is opened once by KASTR and copied over the loopback to its publisher and its grid preview, because most webcams can only be opened by one program. It has no background effects, and KASTR's own camera must be off if it is the same device. A media file loops. Tested in the lab with a test-pattern camera, an RTSP camera and a looping video file in one grid. A real webcam could not be tested here: the build machine's tool sandbox has no camera access.

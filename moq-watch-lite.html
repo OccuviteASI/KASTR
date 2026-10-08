@@ -13301,6 +13301,46 @@
   if (!IS_WEB2) fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => { if (d?.rtspSuspended === true) setRtspSuspended(true, { fromServer: true, seed: true }); }).catch(() => {});   // first paint, before any slot exists
   window.__rtspRerender = () => { try { renderSources(); } catch {} };   // 0.21.10: module 1 learned the host's switch after the first paint
   window.__rigRebuildGrid = () => { let n = 0; for (const g of rtspGrids.values()) { rebuildRtspMoq(g); n++; } return n; };   // rig: force the grid's self-heal rebuild
+  // 0.21.27 (Kenton: "the camera source on Logan-ROC isn't showing in the sources section for me to add to a grid"): the
+  // toolbar camera lives in the browser and cannot be a grid member, so its row offers to MOVE it to this computer as a
+  // host feed (0.21.26): KASTR's own camera goes off (a webcam opens once), the same device is captured by the bridge.
+  function cameraGridRow(a) {
+    const row = document.createElement("div");
+    row.className = "camrow camsrc";
+    const top = document.createElement("div"); top.className = "top";
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = "\u{1F4F7}  " + (a.label || "Camera");
+    lbl.title = "Your camera (toolbar). Put it in a grid to publish it from this computer like an RTSP camera.";
+    const sel = document.createElement("select"); sel.className = "gsel";
+    sel.appendChild(new Option("Put in a grid\u2026", ""));
+    for (const gr of [...gridRegistry()].sort((x, y) => String(x.name).localeCompare(String(y.name)))) sel.appendChild(new Option(gr.name, gr.id));
+    sel.appendChild(new Option("New grid\u2026", "__new"));
+    sel.addEventListener("change", async () => {
+      let gid = sel.value;
+      if (!gid) return;
+      if (gid === "__new") {
+        const nm = window.prompt("Name for the new grid", "Grid " + (gridRegistry().length + 1));
+        if (nm == null || !nm.trim()) { sel.value = ""; return; }
+        gid = gridCreate(nm.trim());
+      }
+      sel.disabled = true;
+      let devs = [];
+      try { devs = (await fetch("/api/screen/devices", { cache: "no-store" }).then((r) => r.json())).devices || []; } catch {}
+      const want = String(a.label || "").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "").trim().toLowerCase();   // Chrome adds "(vid:pid)"
+      const dev = devs.find((d) => d.toLowerCase() === want) || devs.find((d) => want && (want.startsWith(d.toLowerCase()) || d.toLowerCase().startsWith(want))) || (devs.length === 1 ? devs[0] : null);
+      if (!dev) {
+        sel.disabled = false; sel.value = "";
+        window.__toast?.("This camera was not found as a device on this computer \u2014 use Share \u25b8 RTSP feed \u25b8 Camera on this computer", 7000, { level: "warn" });
+        return;
+      }
+      removeSource(a.id);   // the webcam opens once: KASTR's own camera lets go first
+      await new Promise((r) => setTimeout(r, 800));
+      const e = await addRtsp("device://video/" + encodeURIComponent(dev), { label: String(a.label || dev).replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, ""), gridId: gid });
+      if (e) window.__toast?.("Camera moved to this computer's feeds \u2014 it is in " + gridNameOf(gid) + " now", 5000, { level: "info" });
+    });
+    top.append(lbl, sel);
+    row.appendChild(top);
+    return row;
+  }
   function renderSources() {
     try { paintRtspSwitch(); } catch {}   // 0.21.16: the Cameras switch shows once an RTSP feed exists
     camrowsEl.replaceChildren();
@@ -13331,7 +13371,10 @@
       return box;
     };
     for (const a of ordered) {
-      if (a.kind === "camera") continue;   // 0.8.9: the toolbar owns the camera; Share lists what you SHARE
+      if (a.kind === "camera") {   // 0.8.9: the toolbar owns the camera; 0.21.27 (Kenton, Logan-ROC): but it can be put in a grid from here
+        if (!IS_WEB2) camrowsEl.appendChild(cameraGridRow(a));
+        continue;
+      }
       const row = document.createElement("div");
       row.className = "camrow";
       row.dataset.id = String(a.id);

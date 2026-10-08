@@ -238,6 +238,18 @@ class CommandChannel(unittest.TestCase):
         self.assertEqual(o["cmd"]["rehome"]["hub"], "https://10.0.0.9:4443")
         self.assertEqual([x["spoke"] for x in o["cmd"]["updateOne"]], ["logan-roc", "tremonton"])   # two clicks, both kept
 
+    def test_targeted_update_reaches_only_that_spokes_address(self):
+        # 0.21.27: works for OLD spokes too -- they act on `update` when its seq moves past what they saw
+        self.hub.register_spoke({"name": "logan-roc", "version": "0.21.20"}, peer="10.0.5.5", bearer=self.fed)
+        self.hub.register_spoke({"name": "mendon", "version": "0.21.20"}, peer="10.0.6.6", bearer=self.fed)
+        everyone = self.hub.raise_cmd("update", {"version": "0.21.27"})
+        one = self.hub.raise_cmd("update", {"version": "0.21.27", "spoke": "logan-roc"})
+        o, _ = self.hub.bans_for_spoke(self.fed, peer="10.0.5.5")
+        self.assertEqual(o["cmd"]["update"]["seq"], one["seq"])        # logan-roc sees its update
+        o, _ = self.hub.bans_for_spoke(self.fed, peer="10.0.6.6")
+        self.assertEqual(o["cmd"]["update"]["seq"], everyone["seq"])   # mendon sees nothing new
+        self.assertLess(o["cmd"]["update"]["seq"], o["cmd"]["seq"])
+
     def test_spoke_acts_only_on_its_own_update(self):
         r = kr.Relay.__new__(kr.Relay)
         r.relay_name = lambda: "logan-roc"

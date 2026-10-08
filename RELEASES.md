@@ -2,6 +2,23 @@
 
 What changed in each build, newest first.
 
+## v0.21.25 — the hub owns every room, a hub can hand over, and drags you can see
+
+**Every room lives on the hub and every relay lists it (Kenton: "They should all be stored on the hub and distributed to all relays to see. Some of them are storing on the relays ... I was on the Logan Relay and created a room. I couldn't even see it on the laptop I have connected to the relay").** Until now each KASTR kept its own room records, and a room was stored on whichever relay the creating page happened to use. Plain rooms (no code, not kept) were never stored at all: they existed only while someone was in them. Now a spoke forwards every room create, keep, lock, close and group change to the hub, and lists the hub's rooms, so every relay shows the same rooms within 30 seconds.
+- **Plain rooms are stored too** and listed everywhere. One nobody has used for about 10 minutes goes away, unless it is kept. Everyone in a room keeps it alive while they are there.
+- **A dark hub refuses new rooms** with "The hub is unreachable — rooms are created on the hub. Try again when it is back." Existing rooms keep working, and the room list shows the hub's last known rooms.
+- **Rooms a relay stored itself move up to the hub** the first time it registers after the update. A name the hub already holds differently stays on that relay, and its log says so.
+- **The spoke still checks its own codes and admins**, and vouches for them to the hub with its federation token, so a spoke whose access codes differ from the hub's still works.
+- **Behind a Cloudflare tunnel:** since 0.21.17 a hub reached through its tunnel address silently skipped every room-lock check (its web port answered those calls as chat). Fixed.
+
+**Move hub duties to another relay (Kenton: "when I toggle on a new hub, it will talk to the old hub, propagate to all relays the new hub info, and disable hub on the old hub, and keep it as a relay ... a pop-up ... move all chats, rooms, etc").** On a relay connected to a hub, switching **This relay is the hub** on opens a prompt that explains what will happen and asks for the address the other relays should use plus the fleet's admin code. Confirmed:
+- the current hub checks the admin code and sends its rooms, room groups, chat history, access codes (as salted hashes — everyone keeps their codes) and active kicks;
+- it tells every relay to connect to the new hub within a second (one that was offline is told the next time it checks in);
+- it switches its own hub duties off and keeps running as an ordinary relay connected to the new one.
+Shared files and recordings stay on the old hub. Tested end to end on the two-relay lab: the spoke became the hub, the old hub re-joined it as a spoke with a working federation token, both rooms and the chat history arrived, and a wrong admin code was refused.
+
+**What you drag floats under the pointer, and a drag never highlights text (Kenton).** Dragging a tile to reorder, a room card in the sidebar, or a cell of your own camera grid now shows a semi-transparent copy of it under the pointer (at most 260 × 180): the live picture where there is one, the person's face or the room card otherwise. A click-drag anywhere on the page no longer selects text or picks up images. Chat, text fields and the Room info / About / Help cards stay selectable, so you can still copy from them.
+
 ## v0.21.24 — field fixes: the way back from a box mode, box cameras, the hub URL, the iPhone camera
 
 **Every mode can switch back (Kenton: "no way to switch back from Publisher + relay to Full client").** The mode picker lived only on the Relay page. A Viewer or Publisher box hides that page entirely, and on a Publisher + relay box the only way in was a button at the very bottom of the Relay ▾ popover. **More ▸ KASTR mode and relay settings…** now opens the Relay page with the mode picker focused, in every mode, on the box itself. Choose a mode and press **Apply & relaunch**. Web clients never see it, since the mode belongs to the host.

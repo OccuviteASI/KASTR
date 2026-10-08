@@ -32,6 +32,14 @@
   /* next release: the table cards (spokes, rooms, streams) take two columns wherever the grid has them, so their headers and
      host names fit on one line instead of breaking inside the word */
   @media (min-width: 900px) { #fedPanel, #roomsPanel, #streamsPanel { grid-column:span 2; } }
+  /* 0.21.25: the hub hand-over prompt */
+  dialog.hubmove { max-width:min(560px, calc(100vw - 32px)); border:1px solid var(--asi-blue, #009fda); border-radius:10px;
+    background:var(--surface-1, #0c141c); color:var(--text, #e6edf3); padding:18px 20px; box-shadow:0 18px 48px rgba(0,0,0,.6); }
+  dialog.hubmove::backdrop { background:rgba(0,0,0,.55); }
+  dialog.hubmove h3 { margin:0 0 8px; font-size:17px; }
+  dialog.hubmove ul { margin:6px 0 10px 18px; padding:0; display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  dialog.hubmove p { margin:6px 0; font-size:13px; }
+  dialog.hubmove .btnrow { margin-top:10px; }
   @media (max-width: 720px) { #main { grid-template-columns:1fr; } }
   label.f.asi-sw { display:flex; align-items:center; gap:10px; }
   label.f.asi-sw > span { margin:0; display:block; }
@@ -270,6 +278,28 @@
       <!-- 0.21.23 (Kenton): a hub hides the spoke-only fields (hub URL, federation code, pull updates) -->
       <label class="f asi-sw"><span class="switch"><input type="checkbox" id="fedHub"><i></i></span><span>This relay is the hub (other relays join it)</span></label>
       <div id="fedHubMsg" class="hint" style="margin-top:2px" hidden>Spokes join with this relay's address and the federation code from the Access codes block. Spokes that pull updates follow this KASTR's version.</div>
+      <!-- 0.21.25 (Kenton): switching the hub ON while this relay belongs to a hub moves the hub here -->
+      <dialog id="hubMove" class="hubmove">
+        <form method="dialog" id="hubMoveForm">
+          <h3>Move hub duties to this relay?</h3>
+          <p>This relay is connected to the hub <b id="hubMoveOld"></b>. Making it the hub will:</p>
+          <ul>
+            <li>copy the hub's <b>rooms, room groups and chat history</b> here, with its <b>access codes and kicks</b> (everyone keeps their codes);</li>
+            <li>tell <b>every relay</b> connected to that hub to connect here instead;</li>
+            <li>turn hub duties <b>off</b> on <span id="hubMoveOld2"></span>, which keeps running as an ordinary relay connected to this one.</li>
+          </ul>
+          <p class="hint">Shared files and recordings stay on the old hub. This relay's own access codes are replaced by the hub's.</p>
+          <label class="f"><span>Address the other relays will use to reach this one</span>
+            <input type="text" id="hubMoveAddr" spellcheck="false" placeholder="https://10.0.0.5:4443"></label>
+          <label class="f"><span>The fleet's admin code (checked by the current hub)</span>
+            <input type="password" id="hubMoveAdmin" autocomplete="off"></label>
+          <span id="hubMoveMsg" class="hint" style="display:block;min-height:1.2em"></span>
+          <div class="btnrow">
+            <button id="hubMoveGo" type="button">Move hub here</button>
+            <button id="hubMoveCancel" type="button" class="ghost">Cancel</button>
+          </div>
+        </form>
+      </dialog>
       <div id="fedSpoke">
       <label class="f">
         <span>Hub relay URL (e.g. https://10.13.20.82:4443)</span>
@@ -931,10 +961,37 @@
     $("fedSpoke").hidden = on;
     $("fedHubMsg").hidden = !on;
   }
+  // 0.21.25 (Kenton: "have a pop-up on the one you're turning on as hub that says as much and a prompt to make sure"):
+  // the hand-over prompt. The current hub checks the admin code, sends its records and tells every relay to re-point.
+  function hubMoveOpen(old) {
+    const d = $("hubMove");
+    $("hubMoveOld").textContent = old; $("hubMoveOld2").textContent = old;
+    const lan = (lastStatus && lastStatus.lanUrls) || [];
+    if (!$("hubMoveAddr").value) $("hubMoveAddr").value = String(lan[0] || (lastStatus && lastStatus.url) || "").replace(/\/+$/, "").replace(/^http:/i, "https:");   // spokes dial a hub as https://host:port (QUIC)
+    $("hubMoveAdmin").value = ""; $("hubMoveMsg").textContent = ""; $("hubMoveGo").disabled = false;
+    try { d.showModal(); } catch { d.setAttribute("open", ""); }
+    setTimeout(() => $("hubMoveAdmin").focus(), 50);
+  }
+  $("hubMoveCancel").addEventListener("click", () => { $("hubMove").close(); });
+  $("hubMoveGo").addEventListener("click", async () => {
+    const addr = $("hubMoveAddr").value.trim(), admin = $("hubMoveAdmin").value;
+    if (!addr) { $("hubMoveMsg").textContent = "Enter the address the other relays will use."; return; }
+    if (!admin) { $("hubMoveMsg").textContent = "Enter the admin code."; return; }
+    $("hubMoveGo").disabled = true;
+    $("hubMoveMsg").textContent = "Asking the current hub to hand over\u2026";
+    let r = null;
+    try { r = await api("/api/relay/hub/takeover", { address: addr, admin }); } catch (e) { r = { ok: false, error: e?.message || String(e) }; }
+    $("hubMoveAdmin").value = "";
+    if (!r || !r.ok) { $("hubMoveGo").disabled = false; $("hubMoveMsg").textContent = "Not moved: " + ((r && r.error) || "no answer"); return; }
+    $("hubMove").close();
+    $("fedHub").checked = true; $("fedSpoke").hidden = true; $("fedHubMsg").hidden = false;
+    $("fedMsg").textContent = "This relay is the hub now \u2014 took " + r.rooms + " room(s), " + r.chats + " chat history file(s), " + r.codes + " access code(s) and " + r.kicks + " kick(s) from " + r.from + ". Every relay is being told to connect here" + ((r.spokes || []).length ? " (" + r.spokes.join(", ") + ")" : "") + "; " + r.from + " is now an ordinary relay." + ((r.chatSkipped || []).length ? " Chat too large to move: " + r.chatSkipped.join(", ") + "." : "");
+    await refresh();
+  });
   $("fedHub").addEventListener("change", async () => {
     const on = $("fedHub").checked;
     const was = lastStatus?.cluster?.connect || "";
-    if (on && was && !confirm("Make this relay the hub? It leaves the hub " + was + " (the federation code is kept).")) { $("fedHub").checked = false; return; }
+    if (on && was) { $("fedHub").checked = false; hubMoveOpen(was); return; }   // 0.21.25: a real hand-over, confirmed in a prompt
     $("fedSpoke").hidden = on; $("fedHubMsg").hidden = !on;
     try {
       const r = await api("/api/relay/cluster", { hub: on });

@@ -289,6 +289,17 @@
   /* 0.21.19: fill window -- the page chrome steps aside and the stage covers the app window (menus 80+, toasts 90 stay above) */
   body.fillwin header.asi-header, body.fillwin #sidebar, body.fillwin #sbScrim, body.fillwin #topbar,
   body.fillwin footer.asi-footer { display:none !important; }
+  /* 0.21.25 (Kenton): a click-drag never highlights text or images -- the app is controls, not a document. Chat,
+     inputs and the info cards (Room info, About, Help) keep selectable text. What is dragged floats under the pointer. */
+  body { -webkit-user-select:none; user-select:none; }
+  input, textarea, select, [contenteditable], #chatLog, #chatLog *, #roomInfoPop .body, #aboutPop .body, #helpPop .body,
+  #roomInfoPop .body *, #aboutPop .body *, #helpPop .body * { -webkit-user-select:text; user-select:text; }
+  img, svg, canvas, video { -webkit-user-drag:none; }
+  body.kdragging, body.kdragging * { -webkit-user-select:none !important; user-select:none !important; cursor:grabbing !important; }
+  .dragghost { position:fixed; left:0; top:0; z-index:10000; pointer-events:none; opacity:.62; border-radius:8px; overflow:hidden;
+    background:var(--surface-1, #0c141c); outline:2px solid var(--asi-blue); box-shadow:0 12px 30px rgba(0,0,0,.55); will-change:transform; }
+  .dragghost > canvas { display:block; width:100%; height:100%; }
+  .dragghost > .dgclone { position:absolute; left:0; top:0; transform-origin:0 0; margin:0 !important; pointer-events:none; }
   footer.asi-footer { display:none !important; }   /* 0.21.24 (Kenton): no bottom bar on Go Live -- web portal and desktop app */
   body.fillwin #stagewrap { position:fixed; inset:0; z-index:65; background:#000; overflow:hidden; }
   #pubPanes .pubpane { position:relative; }
@@ -4996,8 +5007,8 @@
     return w / h;
   }
   function fitMainstage(railRows) {
-    const mains = gridMode ? [] : [...stageEl.querySelectorAll(".mainstage")];
-    for (const el of stageEl.querySelectorAll(".pane, .pubpane")) {
+    const mains = gridMode ? [] : [...stageEl.querySelectorAll(".mainstage:not(.dgclone)")];   // 0.21.25: never the drag ghost's copy
+    for (const el of stageEl.querySelectorAll(".pane:not(.dgclone), .pubpane:not(.dgclone)")) {
       if (!mains.includes(el)) { el.style.width = ""; el.style.height = ""; }
     }
     if (!mains.length) return;
@@ -5839,7 +5850,63 @@
   let drag = null;          // { name, label, x, y, started, overPane, after }
   let justDragged = false;  // swallows the click that ends a drag gesture
 
+  // ---- 0.21.25 (Kenton): "a floating semi-transparent window showing what I'm moving" ------------------------------
+  // One ghost for every drag: a tile (its live picture, or its face), a sidebar room card, a grid cell. At most 260 x 180,
+  // the grab point stays under the pointer; it never takes pointer events, so the drop logic below sees what it saw before.
+  const dragGhost = (() => {
+    let g = null, ox = 0, oy = 0;
+    const box = (w, h) => { const b = document.createElement("div"); b.className = "dragghost"; b.style.width = w + "px"; b.style.height = h + "px"; return b; };
+    const fit = (rw, rh) => Math.min(1, 260 / Math.max(1, rw), 180 / Math.max(1, rh));
+    function show(b, e, home) {
+      g = b; (home || document.body).appendChild(g);   // inside the stage/rail the copy keeps the styles scoped there
+      document.body.classList.add("kdragging");
+      try { getSelection()?.removeAllRanges(); } catch {}
+      move(e);
+    }
+    function start(src, e) {   // an element: its live canvas when it shows one, else a scaled copy of it
+      end();
+      if (!src) return;
+      const r = src.getBoundingClientRect(), k = fit(r.width, r.height);
+      const w = Math.max(40, Math.round(r.width * k)), h = Math.max(24, Math.round(r.height * k));
+      const b = box(w, h);
+      const cv = [...src.querySelectorAll("canvas")].find((c) => c.isConnected && c.width > 2 && c.height > 2 && c.offsetWidth > 0 && getComputedStyle(c).display !== "none");
+      if (cv) {
+        const c = document.createElement("canvas"), dpr = Math.min(2, devicePixelRatio || 1);
+        c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+        try { const x = c.getContext("2d"), sc = Math.min(c.width / cv.width, c.height / cv.height), dw = cv.width * sc, dh = cv.height * sc;
+          x.fillStyle = "#000"; x.fillRect(0, 0, c.width, c.height); x.drawImage(cv, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh); } catch {}
+        b.appendChild(c);
+      } else {
+        const cl = src.cloneNode(true);
+        cl.removeAttribute("id"); for (const n of cl.querySelectorAll("[id]")) n.removeAttribute("id");
+        for (const n of cl.querySelectorAll("video, audio, moq-watch, iframe")) n.remove();
+        cl.classList.remove("dragging", "drop-target", "drop-before", "drop-after", "drop-into", "mainstage", "selected");
+        cl.classList.add("dgclone");
+        cl.style.width = r.width + "px"; cl.style.height = r.height + "px"; cl.style.transform = "scale(" + k + ")";
+        b.appendChild(cl);
+      }
+      ox = (e.clientX - r.left) * k; oy = (e.clientY - r.top) * k;
+      show(b, e, cv ? null : src.parentElement);
+    }
+    function startCanvas(cv, cell, e, pageRect) {   // a region of a canvas (one grid cell), placed where it sits on screen
+      end();
+      if (!cv || !cell) return;
+      const k = fit(pageRect.width, pageRect.height);
+      const w = Math.max(40, Math.round(pageRect.width * k)), h = Math.max(24, Math.round(pageRect.height * k));
+      const b = box(w, h), c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      try { c.getContext("2d").drawImage(cv, cell.x, cell.y, cell.w, cell.h, 0, 0, w, h); } catch {}
+      b.appendChild(c);
+      ox = (e.clientX - pageRect.left) * k; oy = (e.clientY - pageRect.top) * k;
+      show(b, e);
+    }
+    function move(e) { if (g && e) g.style.transform = "translate(" + Math.round(e.clientX - ox) + "px," + Math.round(e.clientY - oy) + "px)"; }
+    function end() { if (g) { g.remove(); g = null; } document.body.classList.remove("kdragging"); }
+    return { start, startCanvas, move, end, active: () => !!g };
+  })();
+  window.__dragGhost = dragGhost;
   function dragStart(e, name, el) {
+    try { getSelection()?.removeAllRanges(); } catch {}   // 0.21.25
     drag = { name, el, x: e.clientX, y: e.clientY,
              started: false, overPane: null, after: false };
     try { el.setPointerCapture(e.pointerId); } catch {}   // synthetic events have no active pointer
@@ -5856,7 +5923,9 @@
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
       drag.started = true;
       tiles.get(drag.name)?.pane.classList.add("dragging");
+      dragGhost.start(tiles.get(drag.name)?.pane, e);   // 0.21.25
     }
+    dragGhost.move(e);
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const pane = el?.closest?.(".pane") ?? null;
     const over = pane && pane !== tiles.get(drag.name)?.pane ? pane : null;
@@ -5900,6 +5969,7 @@
     }
   }
   function dragCancel(e) {
+    dragGhost.end();   // 0.21.25
     if (!drag) return;
     tiles.get(drag.name)?.pane.classList.remove("dragging");
     drag.overPane?.classList.remove("drop-target");
@@ -9661,7 +9731,7 @@
       const sx = cv.width / Math.max(1, r.width), sy = cv.height / Math.max(1, r.height);
       cx.fillStyle = "#0b0f14";
       cx.fillRect(0, 0, cv.width, cv.height);
-      for (const el of stageEl.querySelectorAll(".pane.shown, .pubpane")) {
+      for (const el of stageEl.querySelectorAll(".pane.shown:not(.dgclone), .pubpane:not(.dgclone)")) {
         if (getComputedStyle(el).display === "none") continue;
         if (el.classList.contains("screenkind")) continue;   // 0.8.12: the share thumbnail is not stage content
         const b = el.getBoundingClientRect();
@@ -10303,7 +10373,7 @@
   // 0.13.1: drag a room card to reorder the rail (per operator; main stays on top). Pointer
   // events with a 6 px threshold like the stage tiles; mouse/pen only -- the phone drawer scrolls.
   let sbDrag = null;
-  const sbDragClear = () => { if (!sbDrag) return; sbDrag.card.classList.remove("dragging"); sbDrag.over?.classList.remove("drop-before", "drop-after", "drop-into"); sbDrag = null; };
+  const sbDragClear = () => { dragGhost.end(); if (!sbDrag) return; sbDrag.card.classList.remove("dragging"); sbDrag.over?.classList.remove("drop-before", "drop-after", "drop-into"); sbDrag = null; };
   sbRoomsEl?.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.pointerType === "touch" || isPhone()) return;
     const card = e.target.closest(".sbcard");
@@ -10316,7 +10386,9 @@
       if (Math.hypot(e.clientX - sbDrag.x, e.clientY - sbDrag.y) < 6) return;
       sbDrag.moved = true; sbDrag.card.classList.add("dragging");
       try { sbRoomsEl.setPointerCapture(e.pointerId); } catch {}
+      dragGhost.start(sbDrag.card, e);   // 0.21.25
     }
+    dragGhost.move(e);
     const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".sbcard, .sbgroup, .sbhead");   // 0.15.0 (B4): a group header / the Rooms title = move the room
     sbDrag.over?.classList.remove("drop-before", "drop-after", "drop-into");
     if (!over || over === sbDrag.card || over.dataset.slug === "main") { sbDrag.over = null; return; }
@@ -11172,11 +11244,13 @@
         return;
       }
       const rec = await createChannelRecord(nm, codeInp.value, keepInp.checked);
-      if (rec.hash || rec.persistent) {
+      {   // 0.21.25: EVERY room registers (on the hub, through this relay) so every relay lists it; a plain room may still
+          // open on an old relay without a room service, never while the hub is dark
         go.disabled = true; err.textContent = "Registering…";
         const g = await registerRoomRec(rec, authAccessCode);
         go.disabled = false;
-        if (!g.ok) { err.textContent = g.error; return; }
+        if (!g.ok && (rec.hash || rec.persistent || g.hubDown)) { err.textContent = g.error; return; }
+        err.textContent = "";
       }
       rememberChannel(rec);   // 0.21.17: only after it registered
       roomFormClose(menu);
@@ -11692,7 +11766,8 @@
   // relay) first, the secured minter's /api/room (0.10/0.11 contract) second.
   async function registerRoomRec(rec, access) {
     const body = { slug: rec.slug, salt: rec.salt, hash: rec.hash, roomKey: rec.roomKey ?? null, access: access || "",
-                   persistent: !!rec.persistent, creator: (window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").slice(0, 40) };
+                   persistent: !!rec.persistent, creator: (window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").slice(0, 40),
+                   plain: !(rec.hash || rec.persistent) };   // 0.21.25: plain rooms are stored on the hub too (gone 10 min after their last use)
     const tries = [];
     const hb = relayHostBase();
     if (hb) tries.push(hb + "/api/rooms/register");
@@ -11702,6 +11777,10 @@
     for (const url of tries) {
       try {
         const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        if (r.status === 503) {   // 0.21.25: a spoke whose hub is dark refuses -- never fall back to storing the room here
+          const d5 = await r.clone().json().catch(() => ({}));
+          if (d5.hubDown) return { ok: false, hubDown: true, error: d5.error || "The hub is unreachable \u2014 rooms are created on the hub." };
+        }
         if (r.status === 404 || r.status === 503) continue;   // an older KASTR / no relay here: try the next
         const d = await r.json().catch(() => ({}));
         if (r.status === 403) return { ok: false, error: "Only the publisher access code can lock or keep a room." };
@@ -11760,11 +11839,11 @@
         // 0.11.0: a locked room is registered BEFORE the mint, so a refusal shows
         // here instead of joining an unlocked room by surprise. 0.12.0: kept rooms too.
         // 0.21.17: on EVERY relay -- an open relay's room store then refuses a second lock over this one (409)
-        if (rec.hash || rec.persistent) {
+        {   // 0.21.25: every room registers -- see the sidebar form
           gateMsg("Joining\u2026 registering the room");
           const g = await withinMs(gateRegister(rec), 15000);   // 0.21.18
-          if (g === JOIN_TIMEOUT) return joinFail("The room service did not answer in 15 s \u2014 try again.");
-          if (!g.ok) return joinFail(g.error);
+          if (g === JOIN_TIMEOUT && (rec.hash || rec.persistent)) return joinFail("The room service did not answer in 15 s \u2014 try again.");
+          if (g !== JOIN_TIMEOUT && !g.ok && (rec.hash || rec.persistent || g.hubDown)) return joinFail(g.error);
         }
         rememberChannel(rec);   // 0.21.17: only after it registered
       }
@@ -16906,9 +16985,19 @@
       g.dragMoved = false;
     });
     g.pane.addEventListener("pointermove", (e) => {
-      if (g.dragFrom >= 0 && g.dragStart && Math.hypot(e.clientX - g.dragStart.x, e.clientY - g.dragStart.y) > 6) g.dragMoved = true;
+      if (g.dragFrom >= 0 && g.dragStart && Math.hypot(e.clientX - g.dragStart.x, e.clientY - g.dragStart.y) > 6) {
+        if (!g.dragMoved) {   // 0.21.25: the dragged cell floats under the pointer
+          const n = Math.max(1, g.members.length), cell = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height)[g.dragFrom];
+          const bx = cell && gridCellBox(g, g.dragFrom), pb = g.pane.getBoundingClientRect();
+          const box = bx && { left: pb.left + bx.x, top: pb.top + bx.y, width: bx.w, height: bx.h };
+          if (cell && box) { try { g.pane.setPointerCapture(e.pointerId); } catch {} window.__dragGhost?.startCanvas(g.canvas, cell, e, box); }
+        }
+        g.dragMoved = true;
+      }
+      if (g.dragMoved) window.__dragGhost?.move(e);
     });
     g.pane.addEventListener("pointerup", (e) => {
+      window.__dragGhost?.end();   // 0.21.25
       const from = g.dragFrom;
       g.dragFrom = -1;
       if (from < 0) return;
@@ -16923,7 +17012,7 @@
       gridOrderSave(g);   // 0.8.12
       announceGrid();   // 0.8.8
     });
-    g.pane.addEventListener("pointercancel", () => { g.dragFrom = -1; });
+    g.pane.addEventListener("pointercancel", () => { g.dragFrom = -1; window.__dragGhost?.end(); });
     // 0.15.0: per-cell close (owner only). A small x sits in the top-left of the hovered cell
     // while the grid holds the stage (not while dragging or zoomed); the pane's click and
     // pointerdown handlers already ignore buttons, so it never spotlights or swaps.
@@ -18326,7 +18415,15 @@
   // the Broadcast publish effect is gated on enabled+connection alone. The
   // one cost is a cosmetic console.warn about the missing .hang suffix.
   let chanReg = null;   // { rec, relayUrl, connection, broadcast }
+  let roomTouchT = null;   // 0.21.25
+  function roomTouch(slug) {
+    const hb = window.__relayHostBase?.();
+    if (!hb || !slug || slug === "main") return;
+    const creator = (window.__publisher?.state?.()?.operator || "").slice(0, 40);
+    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug, creator }) }).catch(() => {});
+  }
   function chanRegClear() {
+    if (roomTouchT) { clearInterval(roomTouchT); roomTouchT = null; }
     if (!chanReg) return;
     if (chanReg.hb) clearInterval(chanReg.hb);
     try { chanReg.broadcast?.close?.(); } catch {}
@@ -18391,6 +18488,7 @@
     // re-key attempt the store now refuses anyway.
     const holder = !!rec.roomKey && (rec.persistent || (secured && rec.hash));
     if (holder || (secured && rec.hash && !rec.roomKey)) registerRoom(rec);
+    roomTouch(rec.slug); roomTouchT = setInterval(() => roomTouch(rec.slug), 120000);   // 0.21.25: the room is in use
     try {
       const relayUrl = new Signals.Signal(new URL(authUrl(urlInput.value.trim(), "registry")));
       const connection = new Net.Connection({ url: relayUrl, enabled: true });

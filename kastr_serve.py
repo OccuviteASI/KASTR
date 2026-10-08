@@ -996,6 +996,9 @@ def page_relay(current, tls=False, req_host=None, remote=False, own_hosts=None):
     return "http://%s:%d" % (rh, port)
 
 
+_HUB_ROOMS_CACHE = [None]   # 0.21.25: {"at", "obj"} -- the hub's last /api/rooms answer on a spoke
+
+
 def chat_store(state_dir=None, relay_srv=None):
     """The process-wide ChatStore, created on first use from the relay's state
     dir (or the launcher's STATE_DIR); None when there is no state dir at all.
@@ -1019,6 +1022,16 @@ def chat_store(state_dir=None, relay_srv=None):
                 except Exception:
                     pass
         return CHAT
+
+
+def _room_close_hook(slug):
+    """0.21.25: a room closed at the hub by a spoke's page -- the hub's transcript goes too (chat store created lazily)."""
+    cs = chat_store()
+    if cs is not None:
+        cs.delete_room(slug)
+
+
+kastr_relay.ROOM_CLOSE_HOOK[0] = _room_close_hook
 
 
 def chat_sweep_once(relay_srv=None):
@@ -2519,6 +2532,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._chat_reply(503, {"error": "no relay on this KASTR"})
             log = getattr(relay_srv, "log", None)
             log = log if callable(log) else None
+            if hasattr(relay_srv, "hub_rooms_call"):
+                fwd = self._rooms_at_hub(method, path, store, log)   # 0.21.25: a spoke -> the hub owns rooms
+                if fwd is not False:
+                    return fwd
             if path == "/api/rooms/list":
                 if method != "GET":
                     return self._chat_reply(405, {"error": "GET only"})
@@ -2573,7 +2590,102 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     except Exception:
                         pass
                 return self._chat_reply(code, obj)
+            if path == "/api/rooms/touch":   # 0.21.25: a room in use (any member) -- plain rooms live while used
+                if method != "POST":
+                    return self._chat_reply(405, {"error": "POST only"})
+                p = self._chat_body_json() or {}
+                slug = str(p.get("slug") or "")
+                if not kastr_relay.SLUG_RE.match(slug) or slug == "main":
+                    return self._chat_reply(400, {"error": "bad room"})
+                created = store.touch_room(slug, str(p.get("creator") or ""))
+                return self._chat_reply(200, {"ok": True, "created": created})
             return self._chat_reply(404, {"error": "no such rooms endpoint"})
+
+        HUB_DOWN = "The hub is unreachable \u2014 rooms are created on the hub. Try again when it is back."
+
+        def _rooms_at_hub(self, method, path, store, log):
+            """0.21.25 (Kenton: "they should all be stored on the hub and distributed to all relays to see"): on a SPOKE every
+            room call goes to the hub. What only this box can check (its publisher code, its admins' tokens) is checked
+            here and vouched for. -> a sent reply, or False when this relay is not a spoke (handle locally)."""
+            try:
+                probe = relay_srv.hub_rooms_call is not None and relay_srv._hub_minter_url()
+                if not probe or relay_srv._cluster_raw().get("hub") is True:
+                    return False
+            except Exception:
+                return False
+            peer = self._chat_peer()
+            if path == "/api/rooms/list":
+                if method != "GET":
+                    return self._chat_reply(405, {"error": "GET only"})
+                try:
+                    out = relay_srv.hub_rooms_call({"op": "list"}, timeout=4)
+                    obj, code = out if out else ({}, 0)
+                    if code == 200 and isinstance(obj.get("rooms"), list):
+                        _HUB_ROOMS_CACHE[0] = {"at": time.time(), "obj": obj}
+                        return self._json_cors(200, self._rooms_merge(obj, store, False))
+                except kastr_relay.HubDown:
+                    pass
+                cached = (_HUB_ROOMS_CACHE[0] or {}).get("obj") or {"rooms": [], "closed": {}, "groups": {}}
+                return self._json_cors(200, self._rooms_merge(cached, store, True))
+            if method != "POST":
+                return self._chat_reply(405, {"error": "POST only"})
+            p = self._chat_body_json()
+            if p is None:
+                return self._chat_reply(413, {"error": "body too large"})
+            slug = str(p.get("slug") or "")
+            if path == "/api/rooms/register":
+                wait = CHAT_LOCKOUT.locked_for(peer)
+                if wait:
+                    return self._chat_reply(429, {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait},
+                                            {"Retry-After": wait})
+                access = str(p.get("access") or "")
+                vouch = "publisher" if (access and store.configured() and store.check("publisher", access)) else None
+                body = {"op": "register", "body": p, "peer": peer, "vouch": vouch}
+            elif path == "/api/rooms/close":
+                body = {"op": "close", "slug": slug, "roomKey": p.get("roomKey"), "vouch": "admin" if self._admin_for(slug) else None}
+            elif path == "/api/rooms/group":
+                body = {"op": "group", "body": p}
+            elif path == "/api/rooms/touch":
+                body = {"op": "touch", "slug": slug, "creator": str(p.get("creator") or "")[:64]}
+            else:
+                return self._chat_reply(404, {"error": "no such rooms endpoint"})
+            try:
+                out = relay_srv.hub_rooms_call(body)
+            except kastr_relay.HubDown as e:
+                if path == "/api/rooms/touch":
+                    return self._chat_reply(200, {"ok": True, "offline": True})
+                if log:
+                    log("relay federation: room %s %s -- the hub is unreachable (%s)" % (slug or "?", path.rsplit("/", 1)[-1], e))
+                return self._chat_reply(503, {"error": self.HUB_DOWN, "hubDown": True, "why": str(e)[:120]})
+            if out is None:
+                return False
+            obj, code = out
+            if path == "/api/rooms/register" and code == 403 and p.get("access"):
+                CHAT_LOCKOUT.fail(peer, "wrong publisher access code", slug)   # the guess counts here, where the member is
+            if path == "/api/rooms/close" and code == 200:
+                try:
+                    if store.room(slug) is not None:
+                        store.close_room(slug)   # a copy left from before the hub owned rooms
+                except Exception:
+                    pass
+                if log and body.get("vouch") == "admin":
+                    log("relay: room %s closed at the hub by an admin here" % slug)
+            hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+            return self._chat_reply(code, obj, hdrs)
+
+        def _rooms_merge(self, hub_obj, store, offline):
+            """The hub's rooms, plus any room this spoke still holds itself (a name the hub has differently)."""
+            rooms = [dict(r, source="hub") for r in (hub_obj.get("rooms") or []) if isinstance(r, dict)]
+            have = {r.get("slug") for r in rooms}
+            try:
+                rooms += [dict(r, source="local") for r in store.rooms_public() if r.get("slug") not in have]
+            except Exception:
+                pass
+            out = {"rooms": rooms, "closed": hub_obj.get("closed") or {}, "groups": hub_obj.get("groups") or {}, "fromHub": True}
+            if offline:
+                out["hubOffline"] = True
+                out["hubAt"] = int((_HUB_ROOMS_CACHE[0] or {}).get("at") or 0)
+            return out
 
         def do_DELETE(self):
             path = self.path.split("?", 1)[0]
@@ -3158,6 +3270,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
 
         def do_POST(self):
             path0 = self.path.split("?", 1)[0]
+            if path0 in ("/api/rooms/fed", "/api/ondemand/forward", "/api/hub/handover"):   # 0.21.25: federation calls reach the
+                return self._auth_proxy("POST")                                            # minter (the chat branch 404ed them)
             if path0.startswith("/api/chat/") or path0.startswith("/api/rooms/"):   # 0.12.0
                 return self._chat_api("POST")
             if path0 == "/api/media/upload":       # 0.14.0: stream-while-converting source (convert is gone)
@@ -4027,7 +4141,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._prefs_get()
             if path == "/api/mobile":
                 return self._mobile()
-            if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans"):   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans
+            if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans", "/api/spokes/link"):   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans; 0.21.25: + spokes/link
                 return self._auth_proxy("GET")
             if path == "/api/files":
                 return self._file_list(parse_qs(urlparse(self.path).query))

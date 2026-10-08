@@ -531,7 +531,8 @@
       for (let i = 0; i < v.length; i += 16) { if (i) fp.appendChild(document.createElement("wbr")); fp.appendChild(document.createTextNode(v.slice(i, i + 16))); } }
     // 0.8.2: keep the federation fields in sync with the server (a change
     // made in another tab/machine used to stay invisible here).
-    if (s.cluster && document.activeElement !== $("fedUrl")) $("fedUrl").value = s.cluster.connect || "";
+    // 0.21.24 (Kenton): an edited, unsaved hub URL is never overwritten by this refresh (it reverted on blur)
+    if (s.cluster && document.activeElement !== $("fedUrl") && !$("fedUrl").dataset.dirty) $("fedUrl").value = s.cluster.connect || "";
     if (s.name !== undefined && document.activeElement !== $("relName")) $("relName").value = s.name || "";
 
     urlsEl.replaceChildren();
@@ -775,6 +776,7 @@
       $("soloApply").hidden = false;
     }
   }).catch(() => {});
+  if (location.hash === "#modeSel") setTimeout(() => { try { modeSel.scrollIntoView({ block: "center" }); modeSel.focus(); } catch {} }, 400);   // 0.21.24: More > KASTR mode
   modeSel.addEventListener("change", async () => {
     try {
       const r = await api("/api/mode", { mode: modeSel.value });
@@ -885,13 +887,19 @@
   });
 
   // 0.8.1: federation (join this relay to a hub relay).
-  api("/api/relay/cluster").then((c) => { $("fedUrl").value = c.connect || ""; }).catch(() => {});
+  api("/api/relay/cluster").then((c) => { if (!$("fedUrl").dataset.dirty) $("fedUrl").value = c.connect || ""; }).catch(() => {});
+  $("fedUrl").addEventListener("input", () => {   // 0.21.24: kept until saved, and said so
+    const saved = (lastStatus?.cluster?.connect || "").replace(/\/+$/, ""), now = $("fedUrl").value.trim().replace(/\/+$/, "");
+    if (now === saved) { delete $("fedUrl").dataset.dirty; $("fedMsg").textContent = ""; }
+    else { $("fedUrl").dataset.dirty = "1"; $("fedMsg").textContent = "Not saved yet — press Save federation."; }
+  });
   // 0.11.0: {connect, code, master} -- the code is never echoed back (hasCode).
   const fedApply = async (body) => {
     $("fedMsg").textContent = "Saving…";
     try {
       const r = await api("/api/relay/cluster", body);
       if (r.error) { $("fedMsg").textContent = r.error; return; }
+      delete $("fedUrl").dataset.dirty;   // 0.21.24
       $("fedUrl").value = r.connect || "";
       $("fedCode").value = "";
       $("fedMsg").textContent = r.connect
@@ -943,7 +951,7 @@
     try { d = await api("/api/relay/spokes"); } catch { return; }
     const box = $("spokesBox"); if (!box) return;
     const rows = d.spokes || [];
-    box.hidden = !(rows.length || (d.cmd && d.cmd.seq));
+    box.hidden = !!d.notHub || !(rows.length || (d.cmd && d.cmd.seq));   // 0.21.24: a relay switched off as the hub shows no spoke table
     if (box.hidden) return;
     const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
@@ -955,6 +963,8 @@
     const camCell = (r) => r.rtsp ? ("<span class=\"sprtsp\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (r.rtsp === "on" ? "1" : "0") + "\">" + (r.rtsp === "on" ? "on" : "<span style=\"color:var(--asi-amber)\">off</span>")
       + (LOCAL ? " <button type=\"button\" class=\"ghost sprt\" title=\"" + (r.rtsp === "on" ? "Turn that box's cameras off (spare its CPU/GPU; nothing is forgotten)" : "Turn that box's cameras back on") + "\">" + (r.rtsp === "on" ? "off" : "on") + "</button>" : "") + "</span>")
       : "<span style=\"color:var(--text-mute)\">\u2014</span>";
+    { let n = $("spokesStale"); if (!n) { n = document.createElement("span"); n.id = "spokesStale"; n.className = "hint"; n.style.display = "block"; $("spokesList").after(n); }   // 0.21.24
+      n.textContent = d.stale ? d.stale + (d.stale === 1 ? " spoke" : " spokes") + " not seen for over 30 minutes " + (d.stale === 1 ? "is" : "are") + " hidden (forgotten after 7 days)." : ""; }
     $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Rooms</th><th>Cameras</th><th>Last seen</th></tr>"
       + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + roomsCell(r) + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras
       : "No spoke has registered yet.";

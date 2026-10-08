@@ -2,6 +2,20 @@
 
 What changed in each build, newest first.
 
+## v0.21.24 — field fixes: the way back from a box mode, box cameras, the hub URL, the iPhone camera
+
+**Every mode can switch back (Kenton: "no way to switch back from Publisher + relay to Full client").** The mode picker lived only on the Relay page. A Viewer or Publisher box hides that page entirely, and on a Publisher + relay box the only way in was a button at the very bottom of the Relay ▾ popover. **More ▸ KASTR mode and relay settings…** now opens the Relay page with the mode picker focused, in every mode, on the box itself. Choose a mode and press **Apply & relaunch**. Web clients never see it, since the mode belongs to the host.
+
+**Publisher boxes with a camera or microphone show their controls (Kenton).** Publisher and Publisher + relay boxes used to hide the camera and mic buttons on principle. They now show the camera controls when the machine has a camera, and the mic controls when it has a microphone, and follow devices being plugged in or removed. A box without them looks as before.
+
+**The hub URL no longer reverts (Kenton: "if I click outside of the field before saving, it reverts to the previous IP").** The Relay page refreshes every few seconds and wrote the saved hub address back into the field as soon as it lost focus. An edited address is now kept until you save it, and the page says "Not saved yet — press Save federation".
+
+**An old hub stops acting as one (Kenton: Agg-Azure "showing all of the other relays as if they are still connected ... the hub toggle is off").** A hub kept every spoke that ever registered, forever. Its Relay page now lists only spokes seen in the last 30 minutes (live spokes re-register at least every 10 minutes) and says how many older ones are hidden. Spokes silent for a week are forgotten. When **This relay is the hub** is switched **off**, the relay refuses hub duties: spoke registration, the spoke long-poll that carries kicks and commands, and minting relay-to-relay tokens. Its spoke table is cleared and hidden. A relay that never set the switch keeps working as before, so the real hub cannot drop its spokes by accident.
+
+**No bottom bar on Go Live (Kenton).** The "Autonomous Solutions, Inc. — internal tool" / Media over QUIC footer is gone from the Go Live page, in the desktop app and on the web portal.
+
+**iPhone camera follows the phone again (Kenton: "in iOS the camera is locked to sideways orientation").** 0.21.5 drew iPhone cameras upright only when the phone could not hand camera frames to a background worker. Newer iOS can, so that check now said "not needed", and frames went out in the sensor's fixed sideways orientation whichever way the phone was held. Safari and every iOS browser (all WebKit) now always use the upright drawing loop, which follows the phone's rotation. Not yet verified on a phone.
+
 ## v0.21.23 — a Teams-style tile menu and Participants panel, audio first on a weak connection
 
 **The tile menu reads like Teams (Kenton's screenshot).** A person's three dots now offer **Mute participant**, **Pin for me** and **Spotlight for everyone**, each with its icon; latency and the admin actions sit below a line. Pin and spotlight work on every tile, people included (before, only shares and grids could be spotlit). A pinned tile offers **Unpin**, a spotlit one **Stop spotlighting**. Mute participant is still the mute on this device; the admin's mute for everyone stays in the admin part. **Right-click** any user window to open the same menu (Shift + right-click keeps the browser's own). No "Fit to frame", as asked.

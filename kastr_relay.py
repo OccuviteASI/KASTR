@@ -1285,7 +1285,7 @@ class AuthService:
     bans = None   # 0.17.0: set by __init__; a test double without one simply never bans
 
     def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None, on_cmd=None,
-                 wake=None, cluster_view=None):
+                 wake=None, cluster_view=None, is_hub=None):
         self.store = store or AuthStore(os.getcwd(), log)
         self.hub = hub                       # 0.16.0: callable -> the hub minter's base URL (a spoke forwards admin codes there), or None
         self.fed_token = fed_token           # 0.17.0: callable -> this spoke's federation token (a kick rides it to the hub), or None
@@ -1302,13 +1302,15 @@ class AuthService:
         self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
         self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
         self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
+        self.is_hub = is_hub                  # 0.21.24: callable -> True / False / None (the Relay page's hub switch; None = never said)
         self.hub_cmd_seen = None              # the hub's command seq this spoke last saw (baseline first)
         self._hub_locks = {}                  # 0.21.17: slug -> when the hub last said it is locked (fail closed while the hub is dark)
         self._hub_open = {}                   # 0.21.17: slug -> when the hub last said it is open (30 s: a join does not wait on the hub each time)
         d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
         if isinstance(d, dict):
             if isinstance(d.get("spokes"), dict):
-                self.spokes = {str(k): v for k, v in d["spokes"].items() if isinstance(v, dict)}
+                cut = time.time() - self.SPOKE_FORGET_S   # 0.21.24: a spoke silent for a week is gone (re-pointed or retired)
+                self.spokes = {str(k): v for k, v in d["spokes"].items() if isinstance(v, dict) and (v.get("at") or 0) >= cut}
             if isinstance(d.get("cmd"), dict):
                 try:
                     self.cmd = {"seq": int(d["cmd"].get("seq") or 0),
@@ -1605,6 +1607,9 @@ class AuthService:
         wait = self.locked_for(peer)
         if wait:
             return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if self.not_hub():   # 0.21.24: a relay switched off as the hub mints no relay-to-relay tokens
+            self.log("relay auth: federation refused -- this relay is not the hub (from %s)" % (peer or "?"))
+            return {"error": "this relay is not a hub (its Relay page says so)"}, 403
         if not self.store.codes_status()["federation"]:
             self.log("relay auth: federation refused -- no federation code set here (from %s)" % (peer or "?"))
             return {"error": "no federation code on this relay"}, 403
@@ -1929,6 +1934,8 @@ class AuthService:
         by name only -- it learns of bans and commands through its long-poll."""
         if not self._bearer_relay(bearer):
             return {"ok": False, "error": "federation token required"}, 403
+        if self.not_hub():   # 0.21.24
+            return {"ok": False, "error": "this relay is not a hub (its Relay page says so) -- point this spoke at the hub"}, 403
         p = p if isinstance(p, dict) else {}
         url = str(p.get("minter") or "").strip().rstrip("/")
         if url and not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]{1,260}$", url):
@@ -1988,13 +1995,41 @@ class AuthService:
         sees = (any(peer and peer in x for x in raw) if (raw and peer) else None)
         return {"ok": True, "nodes": v.get("nodes"), "sessions": v.get("sessions"), "seesYou": sees, "peer": peer or None}, 200
 
-    def spokes_public(self):
-        """0.21.0: the Relay page's spoke table -- never a token, never a code."""
+    SPOKE_STALE_S = 1800        # 0.21.24 (Kenton: an old hub listed every spoke "as if still connected"): a live spoke re-registers
+                                # at least every 10 min (federation tick) -- 30 min of silence = not ours any more
+    SPOKE_FORGET_S = 7 * 86400
+
+    def not_hub(self):
+        """0.21.24: the operator switched 'This relay is the hub' OFF -- no hub duties (None = never said: as before)."""
+        try:
+            return callable(self.is_hub) and self.is_hub() is False
+        except Exception:
+            return False
+
+    def forget_spokes(self):
+        """0.21.24: the hub switch went off -- the spoke table is cleared."""
+        with self.lock:
+            n = len(self.spokes)
+            self.spokes = {}
+        self._save_spokes()
+        if n:
+            self.log("relay auth: not the hub any more -- forgot %d spoke(s)" % n)
+
+    def spokes_public(self, stale=False):
+        """0.21.0: the Relay page's spoke table -- never a token, never a code. 0.21.24: only spokes seen in the last
+        30 minutes unless `stale`; spokes_stale() counts the rest."""
+        cut = time.time() - self.SPOKE_STALE_S
         with self.lock:
             rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
                      "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or []),   # 0.21.2: + rooms
-                     "rtsp": v.get("rtsp")} for k, v in self.spokes.items()]   # 0.21.16: + the spoke's RTSP switch ("on" | "off" | None)
+                     "rtsp": v.get("rtsp")} for k, v in self.spokes.items()
+                    if stale or (v.get("at") or 0) >= cut]
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
+
+    def spokes_stale(self):
+        cut = time.time() - self.SPOKE_STALE_S
+        with self.lock:
+            return sum(1 for v in self.spokes.values() if (v.get("at") or 0) < cut)
 
     def raise_cmd(self, name, extra=None):
         """0.21.0: hub side -- publish a command to every spoke (they hold a long-poll here)."""
@@ -2019,6 +2054,8 @@ class AuthService:
         behind a tunnel or NAT, which the hub cannot nudge, learns of a kick within a second."""
         if not self._bearer_relay(bearer):
             return {"error": "federation token required"}, 403
+        if self.not_hub():   # 0.21.24: no command channel from a relay that is not the hub
+            return {"error": "this relay is not a hub (its Relay page says so) -- point this spoke at the hub"}, 403
         try:
             since_v = int(since) if since is not None else None
             wait_s = min(self.BANS_WAIT_MAX, max(0.0, float(wait or 0)))
@@ -3419,6 +3456,11 @@ class Relay:
             cur["hub"] = bool(payload.get("hub"))
             if cur["hub"]:
                 cur["connect"] = ""   # a hub dials no other hub; its own federation code (spokes') lives in relay-auth.json
+            elif getattr(self, "auth", None) is not None:
+                try:
+                    self.auth.forget_spokes()   # 0.21.24: off = no hub duties, and the old spoke table goes
+                except Exception:
+                    pass
         if "web" in payload and payload.get("web") is not None:      # 0.12.0: hub KASTR web port
             try:
                 cur["web"] = max(1, min(65535, int(payload.get("web"))))
@@ -3487,7 +3529,8 @@ class Relay:
                                         revalidate=self._force_revalidate,       # 0.17.0: the relay re-asks at once
                                         on_cmd=self._hub_cmd,                    # 0.21.0: the hub's "update now"
                                         wake=self.wake_forward,                  # 0.21.7: a spoke's viewer wants a camera elsewhere
-                                        cluster_view=self._cluster_view)         # 0.21.7: /api/spokes/link
+                                        cluster_view=self._cluster_view,         # 0.21.7: /api/spokes/link
+                                        is_hub=lambda: self._cluster_raw().get("hub"))   # 0.21.24: the hub switch
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -4162,7 +4205,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
             ver = _ks.read_version()
         except Exception:
             ver = ""
-        reply({"spokes": auth.spokes_public() if auth else [], "cmd": (auth.cmd if auth else None),
+        reply({"spokes": auth.spokes_public() if auth else [], "stale": auth.spokes_stale() if auth else 0, "notHub": bool(auth and auth.not_hub()), "cmd": (auth.cmd if auth else None),
                "version": ver, "secured": bool(auth)})
         return True
 

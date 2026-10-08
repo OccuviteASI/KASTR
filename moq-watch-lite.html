@@ -289,6 +289,7 @@
   /* 0.21.19: fill window -- the page chrome steps aside and the stage covers the app window (menus 80+, toasts 90 stay above) */
   body.fillwin header.asi-header, body.fillwin #sidebar, body.fillwin #sbScrim, body.fillwin #topbar,
   body.fillwin footer.asi-footer { display:none !important; }
+  footer.asi-footer { display:none !important; }   /* 0.21.24 (Kenton): no bottom bar on Go Live -- web portal and desktop app */
   body.fillwin #stagewrap { position:fixed; inset:0; z-index:65; background:#000; overflow:hidden; }
   #pubPanes .pubpane { position:relative; }
   /* 0.8.8: Teams-style strip -- icon over label, fused chevrons, dividers */
@@ -1765,6 +1766,10 @@
     <!-- 0.21.23 (Kenton): About sits in More itself; Video/Audio output open from the camera and mic menus ("More video
          settings" / "More audio settings"); Phone access is gone -- the web portal replaced it -->
     <button class="opt" id="optAbout" type="button"><span class="oi">&#8505;</span>About KASTR &amp; updates&hellip;</button>
+    <!-- 0.21.24 (Kenton: "no way to switch back from Publisher + relay to Full client"): the mode switch is reachable in
+         EVERY mode on the box itself -- viewer and publisher boxes have no Relay tab, and the Relay popover's button sits
+         at its very bottom -->
+    <button class="opt" id="optMode" type="button"><span class="oi">&#9881;</span>KASTR mode and relay settings&hellip;</button>
     <div class="sep"></div>
     <button class="opt" id="optHelp" type="button"><span class="oi">?</span>Help &mdash; keys &amp; gestures</button>
     <input type="file" id="avatarFile" accept="image/*" hidden>
@@ -3239,7 +3244,7 @@
     document.body.classList.toggle("client-web", IS_WEB);
     document.body.classList.toggle("ctx-insecure", !CLIENT.secure);
     if (IS_WEB) {
-      for (const id of ["aboutUpd", "aboutUpdSt", "joinRelayRow"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
+      for (const id of ["aboutUpd", "aboutUpdSt", "joinRelayRow", "optMode"]) { const el = document.getElementById(id); if (el) el.hidden = true; }
     }
     if (typeof MediaRecorder === "undefined") { for (const id of ["recBtn", "optRec"]) { const el = document.getElementById(id); if (el) el.hidden = true; } }
     if (!CLIENT.secure || !CLIENT.media || isPublisherMode() || PAGE_MODE === "relay") {   // 0.21.3: an unattended box (publisher / publisher-relay / relay) has no webcam or mic UI either
@@ -3247,6 +3252,22 @@
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
       for (const id of ["joinCam", "joinMic"]) document.getElementById(id)?.closest("label")?.setAttribute("hidden", "");
     }
+    if (isPublisherMode() && CLIENT.secure && CLIENT.media) boxDevicesShow();   // 0.21.24
+  }
+  // 0.21.24 (Kenton): a publisher box shows the camera controls when this machine HAS a camera, and the mic controls
+  // when it has a microphone -- an unattended box without them stays as it was. Re-checked when devices come and go.
+  let boxDevWatch = false;
+  async function boxDevicesShow() {
+    let devs = [];
+    try { devs = await navigator.mediaDevices.enumerateDevices(); } catch {}
+    const has = { cam: devs.some((d) => d.kind === "videoinput"), mic: devs.some((d) => d.kind === "audioinput") };
+    for (const [k, btn, pick] of [["cam", "topCamBtn", "joinCam"], ["mic", "topMicBtn", "joinMic"]]) {
+      const grp = document.getElementById(btn)?.closest(".tbgrp"), lab = document.getElementById(pick)?.closest("label");
+      if (has[k]) { grp?.removeAttribute("hidden"); lab?.removeAttribute("hidden"); }
+      else { grp?.setAttribute("hidden", ""); lab?.setAttribute("hidden", ""); }
+    }
+    window.__boxDevices = has;   // rig
+    if (!boxDevWatch) { boxDevWatch = true; try { navigator.mediaDevices.addEventListener("devicechange", () => boxDevicesShow()); } catch {} }
   }
   // 0.17.0: the lobby notice on an insecure page (http on a LAN address): the browser
   // blocks WebCodecs, camera and microphone there, so video needs the https listener.
@@ -7385,6 +7406,13 @@
     placePop(pop, optBtn);
   };
 
+  document.getElementById("optMode").addEventListener("click", () => {   // 0.21.24
+    closeAllPops();
+    let app = null;
+    try { app = window.top !== window ? window.top.__app : null; } catch {}
+    if (app?.show && PAGE_MODE !== "viewer" && PAGE_MODE !== "publisher") { try { app.show("relay"); return; } catch {} }
+    try { window.top.location.href = "/relay.html#modeSel"; } catch { location.href = "/relay.html#modeSel"; }   // the shell hides the Relay tab in this mode
+  });
   document.getElementById("optAbout").addEventListener("click", () => { paintAboutDl(); openFromOptions(aboutPop); });
   // 0.21.7: a web client downloads the full install zip from the host it is looking at (More > About). The
   // host assembles it from the parts every install carries (kastr_release.py, 10-20 s); a link whose zip is not
@@ -9041,15 +9069,17 @@
     const webkitUa = /AppleWebKit/.test(ua) && !/Chrom|Edg\//.test(ua) && !/Firefox\//.test(ua);
     fl.webkit = webkitUa;
     if (!webkitUa) { settle(false, "engine"); return; }   // not WebKit: whatever the worker says, its frames are upright
-    let w = null, tm = null, url = null;
-    const fallback = () => { clearTimeout(tm); try { w?.terminate?.(); } catch {} settle(webkitUa, "ua"); };
+    // 0.21.24 (Kenton: "in iOS the camera is locked to sideways orientation"): newer iOS gives workers the track processor
+    // too, so the 0.21.5 worker probe answered "not needed" and the frames went out in the sensor's fixed landscape
+    // orientation whichever way the phone was held. On WebKit the light loop is always the path: drawImage takes the
+    // <video>'s current (device-rotated) picture. The worker answer is still recorded for /api/diag.
+    settle(true, "webkit");
     try {
-      url = URL.createObjectURL(new Blob(['postMessage("MediaStreamTrackProcessor" in self);'], { type: "text/javascript" }));
-      w = new Worker(url);
-      tm = setTimeout(fallback, 1500);
-      w.onmessage = (e) => { clearTimeout(tm); fl.worker = !!e.data; try { w.terminate(); } catch {} try { URL.revokeObjectURL(url); } catch {} settle(!fl.worker, "worker"); };
-      w.onerror = fallback;
-    } catch { fallback(); }
+      const url = URL.createObjectURL(new Blob(['postMessage("MediaStreamTrackProcessor" in self);'], { type: "text/javascript" }));
+      const w = new Worker(url);
+      w.onmessage = (e) => { fl.worker = !!e.data; try { w.terminate(); } catch {} try { URL.revokeObjectURL(url); } catch {} };
+      w.onerror = () => { try { w.terminate(); } catch {} };
+    } catch {}
   })();
   document.getElementById("viewLatency")?.addEventListener("click", () => {
     window.__latencyStamp = !window.__latencyStamp;

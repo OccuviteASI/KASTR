@@ -70,21 +70,16 @@ window.addEventListener("online", () => { try { window.__kastrToast?.("Back onli
 // 0.12.0: the operating mode this KASTR boots as (full | viewer | publisher |
 // relay | publisher-relay), from /api/instance -- the launcher sets it, so one
 // fetch at start is the truth (the badge's 5 s poll re-applies it anyway).
-// Exported for the pages, embedded ones too (they never build a masthead):
-// window.__kastrMode is the string once known, window.__kastrModeReady a
-// promise of it. body.asi-viewer lets a page's CSS react to a viewer box.
 let MODE = "full";
 const modeHooks = [];   // masthead painters registered by build()
 function applyMode(m) {
   MODE = (typeof m === "string" && m) ? m : "full";
-  window.__kastrMode = MODE;
-  try { document.body.classList.toggle("asi-viewer", MODE === "viewer"); } catch {}
   for (const h of modeHooks) { try { h(MODE); } catch {} }
 }
-window.__kastrModeReady = fetch("/api/instance", { cache: "no-store" })
+fetch("/api/instance", { cache: "no-store" })
   .then((r) => r.json())
-  .then((inst) => { applyMode(inst.mode); return MODE; })
-  .catch(() => { applyMode("full"); return MODE; });
+  .then((inst) => applyMode(inst.mode))
+  .catch(() => applyMode("full"));
 
 function build() {
   // ?embed=1 -- the page is framed by the app shell or the Watch page's Share
@@ -816,16 +811,29 @@ if (window.top === window && !IS_WEB) {   // 0.17.0: a phone's geometry is not t
 }
 
 if (window.top === window && !IS_WEB) {   // 0.17.0: a web client must not keep a closed KASTR alive (nor be closed by its 205)
+  const pageId = Math.random().toString(36).slice(2, 10);   // 0.21.40: the launcher counts open pages, not pings
+  // 0.21.40: in the person's own browser a script may not always close its window -- say so instead of a dead page
+  const closeSelf = () => {
+    try { window.close(); } catch {}
+    setTimeout(() => {
+      if (window.closed) return;
+      try { navigator.sendBeacon("/api/alive/bye?p=" + pageId, ""); } catch {}
+      document.title = "KASTR closed";
+      document.body.innerHTML = '<div style="font:15px system-ui,sans-serif;color:#ccc;background:#111;position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:24px">KASTR closed or restarted in a new window.<br>You can close this one.</div>';
+    }, 600);
+  };
   const beat = () => {
     // keepalive so a ping in flight during teardown still lands.
     // 0.8.8: 205 = the launcher is relaunching for an update -- close this
     // window ourselves (the honest way; the launcher insists if we cannot).
-    fetch("/api/alive", { method: "POST", cache: "no-store", keepalive: true })
-      .then((r) => { if (r.status === 205) { try { window.close(); } catch {} } })
+    fetch("/api/alive?p=" + pageId, { method: "POST", cache: "no-store", keepalive: true })
+      .then((r) => { if (r.status === 205) closeSelf(); })
       .catch(() => {});
   };
   beat();
   setInterval(beat, 5000);
+  // 0.21.40: the window is going -- say so, so a KASTR in the person's own browser ends in seconds, not 150 s
+  addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/alive/bye?p=" + pageId, ""); } catch {} });
   // Background windows get their timers throttled hard, so also ping whenever
   // the window is touched or refocused.
   document.addEventListener("visibilitychange", () => { if (!document.hidden) beat(); });

@@ -25,9 +25,6 @@
   section.panel #spokesList, section.panel #hBanList, section.panel #hPairList, section.panel #bcastList, section.panel #archList { overflow-wrap:break-word; word-break:normal; }   /* next release: only a token wider than its whole line may break -- never an ordinary word mid-way (Kenton) */
   section.panel .urlrow code { overflow-wrap:normal; word-break:normal; }
   section.panel input, section.panel select { max-width:100%; min-width:0; }
-  table.rooms td.mono { white-space:normal; }
-  .sproom { display:inline-flex; align-items:center; gap:3px; margin:1px 4px 1px 0; font-family:var(--font-mono); color:var(--asi-blue); }
-  .sproom .sprx { padding:0 5px; font-size:10px; line-height:1.4; }
   #main > section:last-child { grid-column:1 / -1; }
   /* next release: the table cards (spokes, rooms, streams) take two columns wherever the grid has them, so their headers and
      host names fit on one line instead of breaking inside the word */
@@ -91,6 +88,8 @@
     padding:10px; height:340px; overflow:auto; white-space:pre-wrap; line-height:1.5;
   }
   .hint { font-size:11px; color:var(--text-mute); line-height:1.6; margin:0 0 10px; }
+  .hint.blk { display:block; margin-top:2px; }   /* a status line under its control */
+  .hint.blk.gap { margin-top:5px; }
   /* 0.12.0: operating-mode select + rooms table */
   select#modeSel {
     width:100%; background:var(--surface-2); border:1px solid var(--line); color:var(--text);
@@ -114,11 +113,9 @@
     border:1px solid rgba(240,173,0,.3); background:rgba(240,173,0,.07); border-radius:6px;
     padding:10px 11px; font-size:11.5px; color:var(--asi-amber); line-height:1.6; margin-bottom:11px;
   }
-  code { font-family:var(--font-mono); }
   /* 0.10.0: access codes */
   .masked { -webkit-text-security:disc; }
   .warn.red { border-color:rgba(220,80,80,.4); background:rgba(220,80,80,.08); color:var(--asi-red); }
-  .sub { border-left:2px solid var(--line); padding-left:10px; margin:0 0 12px 4px; }
   dl { margin:0; font-size:11.5px; }
   dt { color:var(--text-mute); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; margin-top:9px; }
   dd { margin:3px 0 0; color:var(--text); font-family:var(--font-mono); word-break:normal; overflow-wrap:break-word; }
@@ -181,8 +178,8 @@
           <button id="codesClear" type="button" class="ghost" title="Remove all four codes &mdash; the relay falls back to room codes only">Clear all</button>
           <button id="codesRotate" type="button" class="ghost" title="New signing key: every outstanding token dies; pages re-mint with their codes within a minute, publishers reconnect">Rotate keys</button>
         </div>
-        <span id="codesState" class="hint" style="display:block;margin-top:5px"></span>
-      <span id="codesLost" class="hint" style="display:block;margin-top:2px" hidden></span>
+        <span id="codesState" class="hint blk gap"></span>
+      <span id="codesLost" class="hint blk" hidden></span>
       </div>
     </section>
 
@@ -190,7 +187,7 @@
       <h2>Startup &amp; mode</h2>
       <label class="f asi-sw"><span class="switch"><input type="checkbox" id="autostart"><i></i></span><span>Start the relay when KASTR launches (with the settings above)</span></label>
       <label class="f asi-sw"><span class="switch"><input type="checkbox" id="bootrun"><i></i></span><span>Start KASTR when this machine boots (this user)</span></label>
-      <span id="bootMsg" class="hint" style="display:block;margin-top:2px"></span>
+      <span id="bootMsg" class="hint blk"></span>
       <!-- 0.12.0: four operating modes (was the relay-only checkbox) -->
       <label class="f" for="modeSel">
         <span>Operating mode of this KASTR &mdash; <code>mode = &hellip;</code> in kastr.ini, applies at the next launch</span>
@@ -202,14 +199,14 @@
           <option value="publisher-relay">Publisher + relay</option>
         </select>
       </label>
-      <span id="modeHint" class="hint" style="display:block;margin-top:2px">
+      <span id="modeHint" class="hint blk">
         <b>Full client</b>: everything &mdash; the client you know.<br>
         <b>Viewer only</b>: watch only &mdash; no share/camera controls, no relay controls.<br>
         <b>Publisher</b>: publishes cameras, auto-rejoins its last room at launch, watches nobody.<br>
         <b>Relay only</b>: boots to this page, binds all interfaces, autostarts the LAN relay + firewall rules (was <code>--relay-only</code>).<br>
         <b>Publisher + relay</b>: both &mdash; the camera box also hosts the relay.
       </span>
-      <span id="soloMsg" class="hint" style="display:block;margin-top:2px"></span>
+      <span id="soloMsg" class="hint blk"></span>
       <div class="btnrow" style="margin-top:6px">
         <button id="soloApply" type="button" hidden title="Restart KASTR now in the mode chosen above">Apply &amp; relaunch KASTR</button>
       </div>
@@ -222,14 +219,14 @@
           <button id="webPortClear" type="button" class="ghost" title="Forget the pinned port: kastr.ini or 8000 again">Clear</button>
         </div>
       </label>
-      <span id="webPortMsg" class="hint" style="display:block;margin-top:2px">Loading&hellip;</span>
+      <span id="webPortMsg" class="hint blk">Loading&hellip;</span>
     </section>
 
     <section class="panel" id="networkPanel">
       <h2>Network</h2>
       <!-- 0.17.0: browser clients on other devices -- the host switch plus https + the URLs to open -->
       <label class="f asi-sw"><span class="switch"><input type="checkbox" id="webClients"><i></i></span><span>Web clients &mdash; phones, tablets and browsers without KASTR open this relay host's page</span></label>
-      <span id="webClientsMsg" class="hint" style="display:block;margin-top:2px">Loading&hellip;</span>
+      <span id="webClientsMsg" class="hint blk">Loading&hellip;</span>
       <div id="webUrls" style="margin:4px 0 6px"></div>
       <!-- 0.19.0: everything on one web port (Cloudflare Tunnel and other single-port proxies) -->
       <div id="tunnelCard" style="margin:8px 0 8px;padding:8px 10px;border:1px solid var(--line, #233047);border-radius:6px">
@@ -315,19 +312,19 @@
         <button id="fedClear" class="stop">Clear</button>
       </div>
       </div>
-      <span id="fedMsg" class="hint" style="display:block;margin-top:5px"></span>
-      <span id="fedState" class="hint" style="display:block;margin-top:2px"></span>
+      <span id="fedMsg" class="hint blk gap"></span>
+      <span id="fedState" class="hint blk"></span>
       <!-- 0.21.0: the spokes federated to THIS hub, and one button to make them match its version -->
-      <div id="spokesBox" style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px" hidden>
+      <div id="spokesBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
         <b style="font-size:13px">Spokes federated here</b>
         <div id="spokesList" class="hint" style="margin:4px 0 6px"></div>
         <div class="btnrow"><button id="spokesUpdate" type="button">Update spokes now</button></div>
-        <span id="spokesMsg" class="hint" style="display:block;margin-top:5px">Each spoke keeps a request held at this hub; the command reaches it within a second and it relaunches only when its version differs.</span>
+        <span id="spokesMsg" class="hint blk gap">Each spoke keeps a request held at this hub; the command reaches it within a second and it relaunches only when its version differs.</span>
       </div>
       <!-- 0.21.22: discovery only -- KASTR apps on this network can find this relay (no code or secret is advertised) -->
-      <div style="margin-top:12px;border-top:1px solid var(--asi-line,#243040);padding-top:10px">
+      <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
         <label class="f asi-sw"><span class="switch"><input type="checkbox" id="mdnsAdv"><i></i></span><span>Let KASTR apps on this network find this relay (mDNS &mdash; its name, address and certificate only; access codes are still required)</span></label>
-        <span id="mdnsMsg" class="hint" style="display:block;margin-top:5px"></span>
+        <span id="mdnsMsg" class="hint blk gap"></span>
       </div>
     </section>
 
@@ -339,7 +336,6 @@
         <dt>Cluster nodes</dt><dd id="hNodes">—</dd>
         <dt>Auth server</dt><dd id="hAuth">—</dd>
         <dt>Hub link</dt><dd id="hHub">—</dd>
-        <dt>LAN mesh</dt><dd id="hLan">—</dd>
         <dt>Publisher pairs</dt><dd id="hPairs">—</dd>
         <dt>Helpers</dt><dd id="hHelpers">—</dd>
         <dt>Removed members</dt><dd id="hBans">—</dd>
@@ -371,7 +367,7 @@
     </section>
 
     <!-- 0.12.0: rooms this relay remembers (kept / locked), with a Close for the operator.
-         Hidden until GET /api/relay/rooms answers (older servers: 404 -> stays hidden). -->
+         Hidden until GET /api/relay/rooms answers (and where rooms do not live here). -->
     <section class="panel" id="roomsPanel" hidden>
       <h2>Rooms on this relay</h2>
       <div id="roomsNote" class="hint">No rooms yet.</div>
@@ -381,7 +377,7 @@
       </table></div>
     </section>
 
-    <section class="panel" style="margin-bottom:0">
+    <section class="panel">
       <h2>Details</h2>
       <dl>
         <dt>Binary</dt><dd id="binPath">—</dd>
@@ -393,7 +389,7 @@
   </div>
 
   <section>
-    <section class="panel" style="margin-bottom:0">
+    <section class="panel">
       <h2>Relay log</h2>
       <div id="log">Not started.</div>
     </section>
@@ -407,6 +403,7 @@
 
 <script type="module">
   const $ = (id) => document.getElementById(id);
+  const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const portInput = $("port"), lanInput = $("lan");
   const startBtn = $("startBtn"), stopBtn = $("stopBtn"), useBtn = $("useBtn");
   const stateBadge = $("stateBadge"), logEl = $("log"), urlsEl = $("urls");
@@ -622,7 +619,7 @@
     try {
       const s = await api("/api/relay/status");
       render(s);
-      api("/api/relay/health").then(paintHealth).catch(() => { $("healthPanel").hidden = true; });   // 0.16.0 (an older server 404s -> hidden)
+      api("/api/relay/health").then(paintHealth).catch(() => { $("healthPanel").hidden = true; });   // 0.16.0
       // The server owns this answer now: scraping the badge was circular (the
       // badge lives in this same document) and blind inside the app shell,
       // where embedded pages carry no masthead at all.
@@ -799,7 +796,7 @@
     }
   });
   api("/api/mode").then((m) => {
-    modePainted = m.mode || (m.relay ? "relay" : "full");   // m.mode: 0.12.0; m.relay: older server
+    modePainted = m.mode || "full";
     modeSel.value = modePainted;
     if (m.running && m.running !== modePainted) {
       $("soloMsg").textContent = "Running as " + modeLabel(m.running) + " \u2014 " + modeLabel(modePainted)
@@ -854,7 +851,6 @@
     if (w.live) for (const u of (w.urls || [])) box.append(urlRow(u, u === (w.urls || [])[0]));
     const t = w.tunnel;
     if (t) {
-      const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
       const pub = t.seen && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(t.seen) ? t.seen : null;   // a Host-rewriting tunnel shows localhost
       const base = pub ? esc(pub) : "https://&lt;your name&gt;";
       $("tunnelMsg").innerHTML =
@@ -888,7 +884,7 @@
     el.hidden = false;
     if (!u) {
       el.textContent = "Fleet update: no check recorded on this machine "
-        + "(dev harness, or a pre-0.8.3 launch).";
+        + "(a source checkout, or no check has run since this launch).";
       return;
     }
     const when = u.at ? " · " + new Date(u.at * 1000).toLocaleString() : "";
@@ -1014,13 +1010,8 @@
     const rows = d.spokes || [];
     box.hidden = !!d.notHub || !(rows.length || (d.cmd && d.cmd.seq));   // 0.21.24: a relay switched off as the hub shows no spoke table
     if (box.hidden) return;
-    const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
     const behind = (r) => !!(r.version && d.version && r.version !== d.version);   // 0.21.26
-    // 0.21.2: + each spoke's rooms, closeable from here (the closeRoom command rides the spoke's long-poll)
-    const roomsCell = (r) => (r.rooms || []).length
-      ? (r.rooms || []).map((slug) => "<span class=\"sproom\" data-spoke=\"" + esc(r.name || r.key) + "\" data-slug=\"" + esc(slug) + "\">" + esc(slug) + (LOCAL ? " <button type=\"button\" class=\"ghost sprp\" title=\"Purge this room's chat stored on this hub (the room stays)\">chat</button> <button type=\"button\" class=\"ghost sprx\" title=\"Close this room on that spoke\">\u2715</button>" : "") + "</span>").join(" ")
-      : "<span style=\"color:var(--text-mute)\">\u2014</span>";
     // 0.21.16: the spoke's RTSP switch (it registers "on" / "off"; null = no cameras or an older spoke); the hub operator flips it
     const camCell = (r) => r.rtsp ? ("<span class=\"sprtsp\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (r.rtsp === "on" ? "1" : "0") + "\">" + (r.rtsp === "on" ? "on" : "<span style=\"color:var(--asi-amber)\">off</span>")
       + (LOCAL ? " <button type=\"button\" class=\"ghost sprt\" title=\"" + (r.rtsp === "on" ? "Turn that box's cameras off (spare its CPU/GPU; nothing is forgotten)" : "Turn that box's cameras back on") + "\">" + (r.rtsp === "on" ? "off" : "on") + "</button>" : "") + "</span>")
@@ -1030,24 +1021,6 @@
     $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
       + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>" + (behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button>" : "") + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one
       : "No spoke has registered yet.";
-    for (const b of $("spokesList").querySelectorAll(".sprp")) b.addEventListener("click", async () => {   // 0.21.3
-      const slug = b.parentElement.dataset.slug;
-      if (!confirm("Delete the chat history and attachments of room " + slug + " stored on this hub? The room stays open.")) return;
-      b.disabled = true;
-      try { const r = await api("/api/relay/chat/purge", { slug }); $("spokesMsg").textContent = r.error ? "Purge failed: " + r.error : ("Chat of " + slug + " purged here (" + (r.removed ?? "?") + " file(s))."); }
-      catch (e) { $("spokesMsg").textContent = "Purge failed: " + (e?.message || e); }
-      b.disabled = false;
-    });
-    for (const b of $("spokesList").querySelectorAll(".sprx")) b.addEventListener("click", async () => {
-      const sp = b.parentElement.dataset.spoke, slug = b.parentElement.dataset.slug;
-      if (!confirm("Close room " + slug + " on spoke " + sp + " for everyone? Its chat and attachments there are deleted.")) return;
-      b.disabled = true;
-      try {
-        const r = await api("/api/relay/spokes/close-room", { spoke: sp, slug });
-        $("spokesMsg").textContent = r.error ? "Close failed: " + r.error : ("Close of " + slug + " sent to " + sp + " (#" + r.seq + ") \u2014 it acts within a second and re-registers.");
-      } catch (e) { $("spokesMsg").textContent = "Close failed: " + (e?.message || e); }
-      setTimeout(paintSpokes, 3000);
-    });
     for (const b of $("spokesList").querySelectorAll(".sprt")) b.addEventListener("click", async () => {   // 0.21.16: flip a spoke's cameras (the `rtsp` command rides its long-poll)
       const sp = b.parentElement.dataset.spoke, on = b.parentElement.dataset.on === "1";
       if (!confirm((on ? "Turn OFF" : "Turn ON") + " the cameras of spoke " + sp + "?" + (on ? " Viewers lose them until they are turned on again; nothing is forgotten on that box." : ""))) return;
@@ -1140,11 +1113,11 @@
     $("codesRotate").disabled = !LOCAL;
   });
 
-  // ---- 0.16.0: health panel + LAN mesh controls ----------------------------------
+  // ---- 0.16.0: health panel ------------------------------------------------------
   function paintHealth(h) {
     if (!h || !h.relay) { $("healthPanel").hidden = true; return; }
     $("healthPanel").hidden = false;
-    const r = h.relay, a = h.auth || {}, f = h.federation, l = h.lan || {};
+    const r = h.relay, a = h.auth || {}, f = h.federation;
     $("hSessions").textContent = r.sessions == null ? "\u2014" : String(r.sessions);
     $("hNodes").textContent = r.nodes == null ? "\u2014" : String(r.nodes);
     const ha = $("hAuth");
@@ -1157,7 +1130,6 @@
       + (f.spoke ? (f.spoke.registered ? ", registered" : ", not registered (" + String(f.spoke.why || "").split(" -- ")[0] + ")") : "")
       + (f.link ? (", link " + (f.link.up ? "up" : "DOWN") + " " + Math.max(0, Math.round((Date.now() / 1000 - (f.link.since || 0)) / 60)) + " m, " + (f.link.drops || 0) + " drop" + (f.link.drops === 1 ? "" : "s") + ", " + (f.link.repins || 0) + " re-pin" + (f.link.repins === 1 ? "" : "s")) : "")   // 0.21.7: the cluster link
       + (f.hubSees && f.hubSees.nodes != null ? (", hub sees " + f.hubSees.nodes + " node" + (f.hubSees.nodes === 1 ? "" : "s") + (f.hubSees.seesYou === true ? " incl. this one" : f.hubSees.seesYou === false ? " (NOT this one)" : "")) : "")) : "standalone";   // 0.21.5: registered with the hub?
-    $("hLan").textContent = l.enabled ? ("enabled" + (l.hasSecret ? " with a secret" : " (OPEN \u2014 no secret)") + (l.active ? "" : " \u2014 not active (loopback relay, or a secured relay without a secret)")) : "off";
     const pairs = h.pairs || [];
     $("hPairs").textContent = pairs.length ? (pairs.filter((p) => p.running).length + " running, " + pairs.filter((p) => p.parked).length + " parked of " + pairs.length) : "none on this machine";
     $("hPairList").replaceChildren(...pairs.map((p) => { const d = document.createElement("div");

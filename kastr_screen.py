@@ -30,7 +30,7 @@ _src = None
 
 
 def _sources_mod():
-    """kastr_screen_sources with the bundled ffmpeg (its own default is a dev path)."""
+    """kastr_screen_sources with the bundled ffmpeg (its own default is KASTR_FFMPEG or none)."""
     global _src
     if _src is None:
         import kastr_screen_sources as m

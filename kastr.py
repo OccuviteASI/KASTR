@@ -156,15 +156,7 @@ def profile_dir(browser=None):
             return d
     except Exception:
         pass
-    current = os.path.join(state_dir(), "browser-profile")
-    if _has_profile(current):
-        return current
-    base = state_base()
-    for name in LEGACY_STATE_NAMES:
-        legacy = os.path.join(base, "ASI", name, "browser-profile")
-        if _has_profile(legacy):
-            return legacy
-    return current
+    return legacy_profile_dir() or os.path.join(state_dir(), "browser-profile")
 
 
 # Set when anything asks KASTR to stop: a signal, a dialog being dismissed,
@@ -262,13 +254,80 @@ def read_ini():
     return {}, None
 
 
-BROWSER_PREF = "bundled"   # kastr.ini `browser = bundled|system|<path>` (0.9.0)
+BROWSER_PREF = "auto"   # kastr.ini `browser = auto|default|bundled|system|<path>` (0.9.0; 0.21.40: auto)
+# 0.21.40 (Kenton: "KASTR to use the default browser on each computer and only use the built in browser if they don't have a
+# chromium based browser available or if they are a relay/hub/spoke ... This should allow them to share their tabs more
+# easily"): the window opens in the person's OWN browser profile -- their tabs are offered by the browser's share picker.
+USER_BROWSER = [False]   # True while the window lives in the person's own browser (no KASTR profile, never killed)
+CHROMIUM_EXES = {"chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe", "chromium.exe",
+                 "google-chrome", "google-chrome-stable", "google-chrome-beta", "microsoft-edge", "microsoft-edge-stable",
+                 "brave-browser", "brave", "vivaldi", "vivaldi-stable", "opera", "chromium", "chromium-browser"}
+
+
+def default_browser():
+    """0.21.40: the computer's default web browser when it is Chromium-based (it can run KASTR), else None.
+    Windows: the https association's ProgId -> its open command. Linux: xdg-settings -> the .desktop file's Exec.
+    macOS: None for now (the bundled browser)."""
+    path = None
+    try:
+        if WINDOWS:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice") as k:
+                prog = winreg.QueryValueEx(k, "ProgId")[0]
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, prog + r"\shell\open\command") as k:
+                cmd = winreg.QueryValueEx(k, "")[0]
+            m = re.match(r'\s*"([^"]+)"', cmd) or re.match(r"\s*(\S+)", cmd)
+            path = m.group(1) if m else None
+        elif not MACOS:
+            r = subprocess.run(["xdg-settings", "get", "default-web-browser"], capture_output=True, text=True, timeout=5)
+            desk = (r.stdout or "").strip()
+            if desk.endswith(".desktop"):
+                for d in (os.path.expanduser("~/.local/share/applications"), "/usr/local/share/applications",
+                          "/usr/share/applications", "/var/lib/snapd/desktop/applications"):
+                    f = os.path.join(d, desk)
+                    if os.path.exists(f):
+                        with open(f, encoding="utf-8", errors="replace") as fh:
+                            for ln in fh:
+                                if ln.startswith("Exec="):
+                                    exe = ln[5:].strip().split()[0]
+                                    path = exe if os.path.isabs(exe) else shutil.which(exe)
+                                    break
+                        break
+    except Exception:
+        path = None
+    if not path or not os.path.exists(path):
+        return None
+    return path if os.path.basename(path).lower() in CHROMIUM_EXES else None
+
+
+def wants_builtin_browser():
+    """0.21.40: boxes keep the KASTR browser -- relay / hub / spoke, unattended publisher and viewer boxes, and any machine
+    that hosts camera feeds or grids (a grid is drawn by its owner's window, and a person's own browser slows a minimized
+    window's page to a crawl, which froze composites before 0.21.11)."""
+    if kastr_serve.MODE in ("relay", "publisher-relay", "publisher", "viewer"):
+        return True
+    try:
+        if hosts_relay():
+            return True
+    except Exception:
+        pass
+    try:
+        with open(os.path.join(state_dir(), "rtsp-feeds.json"), encoding="utf-8-sig") as f:
+            doc = json.load(f)
+        if isinstance(doc, dict) and any(isinstance(x, dict) and x.get("url") for x in (doc.get("feeds") or [])):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def bundled_browser():
     """The Chromium KASTR ships in browser/ next to the binary (0.9.0), unless
     kastr.ini says otherwise. A path in the ini names a specific browser."""
     pref = (BROWSER_PREF or "bundled").strip()
+    if pref.lower() in ("auto", "default"):   # 0.21.40: the bundled one is the fallback of the default
+        pref = "bundled"
     if pref.lower() == "system":
         return None
     if pref.lower() not in ("bundled", ""):
@@ -290,6 +349,12 @@ def find_browser(system_only=False):
     0.9.0: the bundled browser wins; the system ones below are the fallback.
     0.9.3: system_only=True skips the bundled one (launch() falls back to it).
     """
+    USER_BROWSER[0] = False
+    if not system_only and (BROWSER_PREF or "auto").strip().lower() in ("auto", "default") and not wants_builtin_browser():
+        d = default_browser()   # 0.21.40: the person's own Chromium browser and profile
+        if d:
+            USER_BROWSER[0] = True
+            return d
     if not system_only:
         b = bundled_browser()
         if b:
@@ -1919,6 +1984,16 @@ def _start(args, errlog):
     except OSError:
         fh = None
     try:
+        if USER_BROWSER[0]:
+            # 0.21.40: this may become the person's whole browser -- it must outlive KASTR (out of any job, own session)
+            if WINDOWS:
+                fl = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                try:
+                    return subprocess.Popen(args, stderr=fh, stdin=subprocess.DEVNULL, creationflags=fl)
+                except OSError:
+                    return subprocess.Popen(args, stderr=fh, stdin=subprocess.DEVNULL,
+                                            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            return subprocess.Popen(args, stderr=fh, stdin=subprocess.DEVNULL, start_new_session=True)
         return subprocess.Popen(args, stderr=fh, stdin=subprocess.DEVNULL)
     finally:
         if fh is not None:
@@ -1933,8 +2008,15 @@ def browser_args(browser, url, page, no_sandbox=False):
     immediately, so there would be no process to wait on -- and the window
     would arrive as a tab rather than an app window.
     """
-    profile = profile_dir(browser)
     global _ACTIVE_PROFILE
+    if USER_BROWSER[0]:
+        # 0.21.40: the person's own browser and profile -- an app window and nothing else (KASTR's flags would apply to all
+        # of their browsing when this starts the browser, and are ignored when it is already running)
+        _ACTIVE_PROFILE = None
+        buster = ("&" if "?" in page else "?") + "launch=" + str(int(time.time()))
+        print(f"browser: {browser} (the default browser, own profile)", flush=True)
+        return [browser, f"--app={url}{page}{buster}"]
+    profile = profile_dir(browser)
     _ACTIVE_PROFILE = profile
     print(f"browser: {browser}", flush=True)   # 0.9.0: which engine actually opened
     print(f"browser profile: {profile}", flush=True)
@@ -2061,6 +2143,8 @@ def no_window_message(url, reason):
 # How long to keep serving after the last page heartbeat. Generous, because
 # browsers throttle timers hard in a background or minimised window.
 HEARTBEAT_GRACE = 150.0
+# 0.21.40: after the last open page says goodbye (own-browser window), how long a reload has to come back.
+BYE_GRACE = 8.0
 # How long to wait for the FIRST heartbeat before giving up on a window ever
 # appearing. Covers a cold browser start.
 STARTUP_GRACE = 60.0
@@ -2152,6 +2236,14 @@ def close_app_window(profile, proc, grace=3.0):
     except Exception:
         pass
     t0 = time.monotonic()
+    if USER_BROWSER[0]:
+        # 0.21.40: the person's own browser -- only ever asked. The page's next heartbeat (every 5 s) gets 205 and closes
+        # the window; its goodbye says it went. Nothing is killed.
+        while time.monotonic() - t0 < max(grace, 6.5):
+            if kastr_serve.BYE_AT[0] > t0:
+                return True
+            time.sleep(0.25)
+        return False
     while time.monotonic() - t0 < grace and not browser_gone(profile):
         time.sleep(0.25)
     if browser_gone(profile):
@@ -2251,7 +2343,8 @@ def teardown(server, proc=None, code=0):
                 extra.server_close()
             except Exception:
                 pass
-        stop_child(proc, 3)
+        if not USER_BROWSER[0]:   # 0.21.40: never the person's own browser
+            stop_child(proc, 3)
 
         # A windowed build has no stdio: these are None, not files.
         for stream in (sys.stdout, sys.stderr):
@@ -2515,6 +2608,32 @@ def supervise(proc, server):
     """
     alive = getattr(server, "alive_ref", None)
     started = time.monotonic()
+    if USER_BROWSER[0]:
+        # 0.21.40: the browser process is the person's whole browser (or a hand-off to it) -- never a signal about OUR
+        # window. The page's heartbeat is; its goodbye (pagehide) ends KASTR within seconds unless the page comes back
+        # (a reload says goodbye too).
+        while not STOP.is_set():
+            time.sleep(0.5)
+            last = alive[0] if alive else 0.0
+            bye = kastr_serve.BYE_AT[0]
+            now = time.monotonic()
+            for pid, t in list(kastr_serve.PAGES.items()):   # a page that vanished without a goodbye
+                if now - t > HEARTBEAT_GRACE:
+                    kastr_serve.PAGES.pop(pid, None)
+            # every KASTR page (the window, a Relay page tab) said goodbye and none came back (a reload comes back)
+            if bye and not kastr_serve.PAGES and now - bye > BYE_GRACE:
+                note("window closed (the page said goodbye)")
+                return
+            if last and now - last > HEARTBEAT_GRACE:
+                note("page heartbeat stopped; exiting")
+                return
+            if not last and now - started > STARTUP_GRACE:
+                note("no window: the default browser never opened the page")
+                alert_async(APP_NAME + " could not open its window in your browser." + chr(10) + chr(10)
+                            + "Open this address in Chrome or Edge:" + chr(10)
+                            + "http://127.0.0.1:%d" % server.server_address[1])
+                started = now   # keep serving; ask again only after another grace
+        return
     profile = _ACTIVE_PROFILE or profile_dir()
     fell_back = False
     died_at = None
@@ -2679,7 +2798,7 @@ def main():
     root = site_root()
 
     global BROWSER_PREF
-    BROWSER_PREF = str(ini.get("browser", "bundled") or "bundled")   # 0.9.0
+    BROWSER_PREF = str(ini.get("browser", "auto") or "auto")   # 0.9.0; 0.21.40: auto = the default browser where it fits
 
     if args.diagnose:
         lines = [
@@ -2749,7 +2868,7 @@ def main():
             ch = inst.get("chatHub")
             lines.append("chatHub        : " + ("yes -- chat on this origin is the fleet's shared store" if ch is True
                                                 else "no -- chat here would be a private store" if ch is False
-                                                else "unknown (pre-0.13 instance)"))
+                                                else "unknown"))
             # 0.13.1: the RTSP drop recipe -- every publisher's counters in one line each
             try:
                 with urllib.request.urlopen(inst["url"] + "/api/rtsp/list", timeout=3) as r:

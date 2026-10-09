@@ -122,7 +122,7 @@ def passthrough_ok(vcodec, width, fullrange, passthrough, sar=None):
     catalog the viewer sizes its picture from carries the coded frame size,
     so a copied anamorphic stream shows squeezed on every viewer; one encode
     with setsar=1 gives it square pixels and the right shape."""
-    if sar_nonsquare(sar) and not os.environ.get("KASTR_IGNORE_SAR"):   # the env switch only exists to reproduce the old behaviour in a rig
+    if sar_nonsquare(sar):
         return False
     vc = (vcodec or "").lower()
     if vc not in PASSTHROUGH_CODECS:
@@ -242,31 +242,6 @@ def _job_assign(job, proc, log=None):
             if log:
                 log("rtsp: could not bind pid %s to the job (%s)" % (getattr(proc, "pid", "?"), e))
         return False
-
-
-def _job_terminate(job):
-    if not job:
-        return
-    try:
-        from ctypes import wintypes
-        k32 = _k32()
-        k32.TerminateJobObject.restype = wintypes.BOOL
-        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        k32.TerminateJobObject(job, 1)
-    except Exception:
-        pass
-
-
-def _job_close(job):
-    if not job:
-        return
-    try:
-        from ctypes import wintypes
-        k32 = _k32()
-        k32.CloseHandle.argtypes = [wintypes.HANDLE]
-        k32.CloseHandle(job)
-    except Exception:
-        pass
 
 
 def _pid_alive(pid):
@@ -1112,7 +1087,9 @@ def output_args(url, copy_video, encoder=None, width=None, hvc1=False):
     copy so the <video> element accepts the fMP4). Otherwise `encoder` says
     how to re-encode it -- 0.9.6: capped at MONITOR_WIDTH and MONITOR_FPS with
     the fastest preset, because this picture only feeds a preview and the
-    15 fps mosaic; `width` (legacy) caps lower still when given.
+    15 fps mosaic. `width`, when given, sets the cap instead: below
+    MONITOR_WIDTH for any source, up to 1920 for a screen source (0.21.20:
+    presenter mode passes width=1920 because it composites this picture).
     """
     args = []
 
@@ -1689,25 +1666,6 @@ class Publisher:
             return True
         self.start()
         return True
-
-    def _halt(self):
-        """Stop the processes of a sibling without marking it stopping for good."""
-        with self._lock:
-            self._gen += 1
-            t, self._timer = self._timer, None
-            r, self._renew = self._renew, None
-            procs = self.procs
-        for x in (t, r):
-            if x:
-                x.cancel()
-        for p in procs:
-            if p.poll() is None:
-                try:
-                    p.kill()
-                except OSError:
-                    pass
-            self.bridge._child_ended(p.pid)
-        self.running = False
 
     def _drain(self, proc, tag, gen=0):
         try:
@@ -2391,9 +2349,6 @@ class Bridge:
                 self._removed = self._removed[-50:]
         self.persist_feeds()                     # 0.12.0
         return bool(feed)
-
-    def removed_urls(self):
-        return [r["url"] for r in self._removed]
 
     # ---- native publishing (0.9.1) --------------------------------------
     def publish(self, feed_id, broadcast, relay, hevc=False, audio=True, passthrough=None, force=False, keep=None,

@@ -14,3 +14,11 @@ __pycache__/
 .DS_Store
 KASTR.old-*
 browser.old-*
+# 0.21.40: a source checkout's own kastr.ini is that dev run's live config (kastr_serve.ini_set writes it); the shipped
+# templates are tracked in extras/<plat>/
+/kastr.ini
+# 0.21.40: large vendored binaries are not tracked -- pinned by sha256 in their manifests, fetched by vendor-npu.py /
+# vendor-mediapipe.py (build.py verifies them before every build and runs the script when one is missing or corrupt)
+/assets/npu/ort-wasm-simd-threaded.jsep.wasm
+/assets/npu/modnet_fp16.onnx
+/assets/mediapipe/wasm/vision_wasm_internal.wasm

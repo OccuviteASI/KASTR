@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """v0.21.17: KASTR's control paths live under '~' (moq-relay >= 0.15.3 and @moq/net >= 0.4.2 hide every '.'-led path
 segment from listings and browser announces -- measured 2026-10-05). These tests pin the rename on every side: the minter's
-grants, role and identity classification (both namespaces, so a cached pre-0.21.17 token still classifies), the relay's
-stats prefix, the HTTP side doors, and the pages (no '.'-spelled control kind may come back)."""
+grants, role and identity classification ('~' only since 0.21.40 -- pre-0.21.17 tokens are long expired), the relay's
+stats prefix (and no LAN mesh block since 0.21.40), the HTTP side doors, and the pages (no '.'-spelled control kind may
+come back)."""
 import io, os, re, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,23 +42,20 @@ class Constants(unittest.TestCase):
 
 
 class Roles(unittest.TestCase):
-    def test_viewer_token_is_a_viewer_in_both_namespaces(self):
+    def test_viewer_token_is_a_viewer(self):
         new = {"put": ["~state/r/h-1a2b", "r/h-1a2b/~member", "r/~since", "~presence/r"], "get": "r"}
-        old = {"put": [".state/r/h-1a2b", "r/h-1a2b/.member", "r/.since", ".presence/r"], "get": "r"}
         self.assertEqual(kr.claims_role(new), "viewer")
-        self.assertEqual(kr.claims_role(old), "viewer")
 
     def test_publisher_token_is_a_publisher(self):
         self.assertEqual(kr.claims_role({"put": ["r/h-1a2b", "~state/r/h-1a2b", "r/~since", "~presence/r"]}), "publisher")
-        self.assertEqual(kr.claims_role({"put": ["r/h-1a2b", ".state/r/h-1a2b"]}), "publisher")
 
     def test_viewer_wide_token_stays_viewer(self):
         wide_viewer = {"get": "r", "put": ["r/" + k for k in kr.VIEWER_KINDS] + [k + "/r" for k in kr.MEMBER_KINDS]}
         self.assertEqual(kr.claims_role(wide_viewer), "viewer")
 
-    def test_identity_from_either_spelling(self):
+    def test_identity(self):
         self.assertEqual(kr.claims_identity({"get": "r", "put": ["~state/r/abc-1a2b"]}), ("r", "abc-1a2b"))
-        self.assertEqual(kr.claims_identity({"get": "r", "put": [".state/r/abc-1a2b"]}), ("r", "abc-1a2b"))
+        self.assertEqual(kr.claims_identity({"get": "r", "put": [".state/r/abc-1a2b"]}), ("r", None))   # the old '.' spelling is gone
         self.assertEqual(kr.claims_identity({"get": "r", "put": ["~state/other/abc-1a2b"]}), ("r", None))
 
     def test_admin_claim(self):
@@ -92,6 +90,27 @@ class RelayConfig(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             cfg = f.read()
         self.assertIn('prefix = "~stats"', cfg)
+
+    def test_stale_lan_mesh_state_is_ignored(self):
+        # 0.21.40: the LAN mesh is gone. A box that had it on (a "lan" block in relay-auth.json, a lan.secret file)
+        # must load, write a relay.toml without [cluster.lan], drop the secret file, and save without the block.
+        import json
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "relay-auth.json"), "w", encoding="utf-8") as f:
+            json.dump({"lan": {"enabled": True, "secret": "ab" * 32, "at": 1}, "rooms": {}}, f)
+        with open(os.path.join(d, "lan.secret"), "w", encoding="utf-8") as f:
+            f.write("ab" * 32)
+        r = kr.Relay(d, lambda m: None)
+        path = r._write_config(4999, True, True)
+        with open(path, encoding="utf-8") as f:
+            cfg = f.read()
+        self.assertNotIn("cluster.lan", cfg)
+        self.assertFalse(os.path.exists(os.path.join(d, "lan.secret")))
+        self.assertNotIn("lan", r.status())
+        st = kr.AuthStore(d)
+        st.set_codes(viewer="v1")
+        with open(os.path.join(d, "relay-auth.json"), encoding="utf-8") as f:
+            self.assertNotIn("lan", json.load(f))
 
 
 class Pages(unittest.TestCase):

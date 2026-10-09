@@ -49,7 +49,7 @@ class PlainRooms(unittest.TestCase):
         again = kr.AuthStore(st.state_dir)   # a relay bounce keeps it
         self.assertIsNotNone(again.room("yard"))
         with again.lock:
-            again.rooms["yard"]["at"] = time.time() - kr.PLAIN_TTL - 5
+            again.rooms["yard"]["at"] = time.time() - kr.ROOM_TTL - 5
         self.assertIsNone(again.room("yard"))
         self.assertNotIn("yard", [r["slug"] for r in again.rooms_public()])
 

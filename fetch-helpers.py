@@ -116,7 +116,20 @@ MOQ_CLI = {
                           "9c4425becfe08a2ed6201b3bc451375bf6e50886cbde765811f61c0307c1563c"),
 }
 
-FFMPEG_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+# 0.21.40: pinned like every other helper -- it used to be the floating ffmpeg-release-essentials.zip, fetched
+# unverified, so two build machines could bundle different ffmpegs. 9.0.1 is the build bin/ffmpeg.exe carries
+# (`ffmpeg -version`: 9.0.1-essentials_build-www.gyan.dev) and the same release line as FFMPEG_LINUX. gyan.dev's
+# own packages/ folder keeps only the CURRENT release (9.0.1 is gone from it; 9.0.2 is current on 2026-10-09), so
+# the URL is Gyan's GitHub release mirror (GyanD/codexffmpeg, linked from gyan.dev/ffmpeg/builds), which keeps every
+# version. sha256 = that release asset's published digest (GitHub API, read 2026-10-09); for 9.0.2 the mirror's
+# digest equals gyan.dev's ffmpeg-release-essentials.zip.sha256, i.e. the mirror carries gyan.dev's exact bytes.
+# To move to a newer release: take https://github.com/GyanD/codexffmpeg/releases/tag/<ver>, the
+# ffmpeg-<ver>-essentials_build.zip asset and its sha256 digest, and update all three fields together.
+FFMPEG_WIN = {
+    "version": "9.0.1",
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-essentials_build.zip",
+    "sha256": "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9",
+}
 
 # 0.13.1: macOS (Apple Silicon) ffmpeg -- a placeholder until Kenton pins one.
 # Homebrew's ffmpeg is dylib-linked into /opt/homebrew and cannot be copied
@@ -153,7 +166,7 @@ FFMPEG_MAC = None
 # When it does, pick a current month-end tag from the releases page and update
 # all three fields together; the fetch prints those instructions on failure.
 FFMPEG_LINUX_BASE = "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
-FFMPEG_LINUX = {   # 0.8.13: 9.0.1 (release/9.0), matching the Windows essentials build
+FFMPEG_LINUX = {   # 0.8.13: 9.0.1 (release/9.0 branch, n9.0.1+27) -- the same 9.0.1 line as FFMPEG_WIN (0.21.40: both pinned)
     "tag": "autobuild-2026-09-09-14-51",
     "asset": "ffmpeg-n9.0.1-27-g9b0578816c-linux64-gpl-9.0.tar.xz",
     "sha256": "899208a8c705cfeea45199377a5926908ec78dbe002de488df8fbdc7425aafd1",
@@ -279,12 +292,15 @@ def main():
         print("ffmpeg: already present, skipping")
     elif p == "win32":
         try:
-            if extract(download(FFMPEG_WIN), "ffmpeg.exe", dest):
-                print("ffmpeg: %.0f MB -> %s" % (os.path.getsize(dest) / 1e6, dest))
+            blob = download(FFMPEG_WIN["url"])
+            verify(blob, FFMPEG_WIN["sha256"])   # 0.21.40: pinned, like the Linux build and moq
+            if extract(blob, "ffmpeg.exe", dest):
+                print("ffmpeg: %s, %.0f MB -> %s" % (FFMPEG_WIN["version"], os.path.getsize(dest) / 1e6, dest))
             else:
                 print("ffmpeg: binary not found inside the archive")
         except Exception as e:
             print("ffmpeg: FAILED (%s)" % e)
+            print("        Re-check FFMPEG_WIN at the top of this script (version + url + sha256).")
     elif p == "linux" and a == "x86_64":
         try:
             blob = download(FFMPEG_LINUX_BASE + FFMPEG_LINUX["tag"] + "/"

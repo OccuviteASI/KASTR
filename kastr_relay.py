@@ -5,49 +5,47 @@ moq-relay is the upstream Rust server (kixelated/moq). Speaking moq-lite over
 QUIC/WebTransport is not something to reimplement, so the official binary is
 bundled and driven here -- the same approach as ffmpeg for RTSP.
 
-Configuration goes through a generated TOML file rather than CLI flags: the
+Configuration goes through a generated relay.toml rather than CLI flags: the
 public-access prefix for an unauthenticated relay is the empty string, and an
 empty argv entry is unreliable to pass through a Windows shell.
 
-Secured mode (0.7.0): the relay verifies HS256 JWTs against a locally
-generated JWK, and a tiny token service on relay-port+1 mints them -- room
-codes are the only credential. Lock holders register {slug, salt, hash}
-records; joiners present the raw code. The room table is in-memory: holders
-re-POST on a heartbeat, so a restart heals itself. Room listing and stats
-stay public (subscribe-only) so the pre-join screen needs no token.
+Secured mode (0.7.0; 0.16.0 per-session auth): the relay POSTs every session
+event to the token service on relay-port+1, which verifies KASTR's HS256
+tokens (signed with a locally generated JWK) and answers a grant. Room records
+-- locked {slug, salt, hash}, kept and plain rooms -- are saved in
+relay-auth.json; a room that is not kept is forgotten ROOM_TTL after its last
+use. Room listing and stats stay public (subscribe-only) so the pre-join
+screen needs no token.
 
-Access codes (0.10.0): relay-wide VIEWER and PUBLISHER codes, kept hashed
-(PBKDF2-HMAC-SHA256) in relay-auth.json beside the locked-room records, decide
-the ROLE of a token; the room decides its paths. With codes configured every
-room -- main included -- refuses to mint without one. A viewer token can
-subscribe to the room and announce the presence-class kinds (.since, .stalled,
-.spotlight, .recording, .mediactl, .avatar) but carries no publish claim on
-media; the relay drops such an announce and keeps the session (measured
-2026-09-18: claims may be arrays, prefix matching is per path segment). Room
-codes remain an extra per-room lock. Without codes a secured relay keeps the
-0.7-0.9 behaviour (any room code mints) and status() says so (`legacy`).
-The relay control plane (/api/relay/* POSTs) answers the machine itself only.
+Access codes (0.10.0): relay-wide VIEWER, PUBLISHER, ADMIN and FEDERATION
+codes, kept hashed (PBKDF2-HMAC-SHA256) in relay-auth.json, decide the ROLE of
+a token; the room decides its paths. With codes configured every room -- main
+included -- refuses to mint without one. A viewer token can subscribe to the
+room and announce the presence-class kinds (VIEWER_KINDS) but carries no
+publish claim on media; the relay drops such an announce and keeps the
+session. Every control path lives under the '~' namespace (NS). Room codes
+remain an extra per-room lock. Without codes a secured relay mints for any
+room code and status() says so (`legacy`). The relay control plane
+(GUARDED_POSTS) answers the machine itself only.
 
-Endpoints (wired up by kastr_serve):
-    GET  /api/relay/status  -> {running, url, port, bind, fingerprint, codes, legacy, ...}
-    POST /api/relay/start   {"port":4443,"lan":true,"secured":true}   (persists the shape)
+Endpoints (wired up by kastr_serve; the main ones):
+    GET  /api/relay/status  -> {running, url, port, bindAll, fingerprint, codes, legacy, federation, ...}
+    POST /api/relay/start   {"port":4443,"lan":true,"secured":true}   (lan = bind all interfaces; persists the shape)
     POST /api/relay/stop
-    GET  /api/relay/codes   -> {"viewer":bool,"publisher":bool,"federation":bool,"configured":bool}
-    POST /api/relay/codes   {"viewer":"..."|""|null, "publisher":..., "federation":...}  ("" clears, null keeps)
-    GET  /api/relay/cluster -> {"connect","master","hasCode"};  POST {connect?, code?, master?}  (0.11.0)
+    GET  /api/relay/codes   -> which codes are set;  POST {"viewer"|"publisher"|"federation"|"admin": "..."|""|null}  ("" clears, null keeps)
+    GET  /api/relay/cluster -> {"connect","master","hasCode"};  POST {connect?, code?, master?}
     POST /api/relay/rotate  -> new signing key (every token dies), relay restarted
-    GET  /api/relay/rooms   -> {"rooms":[{slug,locked,persistent,creator,created,at}], "closed":{slug:ts_ms}, "groups":{gid:{name,order,rooms}}}  (0.12.0; 0.15.0 groups)
-    POST /api/relay/rooms/close {"slug"}  -> operator close: record, chat and attachments gone (0.12.0)
-    POST /api/relay/rooms/group {"op":"create|rename|delete|assign","gid"?,"name"?,"order"?,"slug"?} -> {"ok":true,"groups"}  (0.15.0, operator)
+    GET  /api/relay/rooms   -> {"rooms":[...], "closed":{slug:ts_ms}, "groups":{gid:{name,order,rooms}}}
+    POST /api/relay/rooms/close {"slug"}  -> operator close: record, chat and attachments gone
+    POST /api/relay/rooms/group {"op":"create|rename|delete|assign",...}  (operator)
 Token service (its own listener, relay-port+1):
-    GET  /api/auth          -> {"app":"KASTR","secured":true,"codes":bool,"legacy":bool,"federation":bool,"kid":...,"state":true,"web":int|null,"https":int|null}
-    GET  /api/rooms         -> {"rooms":[{"slug","locked","persistent","creator","created","at"}],"groups":{gid:{name,order,rooms}}}   (0.11.0 names; 0.12.0 rows; 0.15.0 groups)
-    POST /api/room          {"slug","salt"?,"hash"?,"roomKey"?,"code"?,"access"?,"persistent"?,"creator"?,"rekey"?}  (0.12.0: kept rooms)
-    POST /api/token         {"federation":"<code>"} -> {"ok":true,"role":"relay","token",...}  (0.11.0)
-    POST /api/room          {"slug","salt","hash","roomKey"?,"code"?,"access"?}
-    POST /api/token         {"room","code","roomCode"?,"host"?} -> {"ok":true,"role","exp",tokens:{member,registry}}
-                            0.13.0: with "host" (<slug>-<4 hex>) the member token's puts are scoped to that
-                            host's own paths (+ the .state/<room>/<host> track); without it the 0.12 shape.
+    GET  /api/auth          -> {"app":"KASTR","secured":true,"codes","legacy","federation","kid","ns","web","https",...}
+    GET  /api/rooms         -> {"rooms":[...],"groups":{...}}
+    POST /api/room          {"slug","salt"?,"hash"?,"roomKey"?,"code"?,"access"?,"persistent"?,"creator"?,"rekey"?,"plain"?}
+    POST /api/token         {"room","code","roomCode"?,"host"?} -> {"ok":true,"role","exp","ns",tokens:{member,registry}}
+                            with "host" (<slug>-<4 hex>) the member token's puts are scoped to that host's own
+                            paths (+ its ~state/<room>/<host> track); {"federation":"<code>"} -> a relay token
+    POST /api/session       the relay's per-session auth callback (loopback only)
 """
 import base64
 import hashlib
@@ -72,7 +70,6 @@ TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
 VIEWER_TTL = 43200         # 0.10.0: a viewer token lives half a day (pages re-mint at <10 min)
 ROOM_TTL = 600             # 0.10.0: a room record without use is forgotten -- 0.21.26 (Kenton: "locked rooms should be temporary also
                           # if not checked to keep"): 10 min for EVERY room not kept open (was a day for a locked one)
-PLAIN_TTL = ROOM_TTL       # 0.21.25 (Kenton): a PLAIN room (no code, not kept) is stored too, and goes 10 min after its last use
 HANDOVER_CHAT_MAX = 64 * 1024 * 1024   # 0.21.25: the chat history a hub hand-over carries (bytes, all rooms)
 # 0.21.25: kastr_serve wires the chat store's delete_room here, so a close forwarded by a spoke removes the transcript
 # on the hub too (the hub's token service has no chat store of its own)
@@ -89,7 +86,6 @@ PBKDF2_ITER = 100000       # 0.10.0: relay access codes (the lockout bounds the 
 # base64url (the presence payload segments), never produced by slug()/HOST_RE, and refused by the /api/watch and
 # archive path regexes, so no media or HTTP path can collide with a control path.
 NS = "~"
-LEGACY_NS = "."            # what a pre-0.21.17 token or page uses; recognised, never minted
 # The announce kinds a viewer legitimately publishes (presence, stall reports, spotlight votes, recording notice,
 # media control pulses, avatar). ~grid, ~files and ~media stay publisher-only.
 SINCE_KIND = NS + "since"
@@ -114,15 +110,15 @@ KEPT_MAX = 64
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
-# 0.12.0: root-prefixed announce kinds every member may put beside .presence:
-# .talking/<room> (who is speaking) and .chat/<room> (a new-message nudge).
+# 0.12.0: root-prefixed announce kinds every member may put beside ~presence:
+# ~talking/<room> (who is speaking) and ~chat/<room> (a new-message nudge).
 MEMBER_KINDS = (NS + "presence", NS + "talking", NS + "chat")
 PRESENCE_KIND = MEMBER_KINDS[0]
 CHANNELS_KIND = NS + "channels"
 STATS_KIND = NS + "stats"          # 0.21.17: the relay's own stats prefix ([stats] prefix in relay.toml)
 # 0.16.0: the ADMIN role. A third relay-wide code; its token also puts under
-# <room>/.admin, where stop / mute / kick commands ride as track-less announces
-# (viewer and publisher grants have no .admin pattern, so the relay drops a
+# <room>/~admin, where stop / mute / kick commands ride as track-less announces
+# (viewer and publisher grants have no ~admin pattern, so the relay drops a
 # forged command at the door). A spoke without an admin code of its own asks
 # its hub's minter to verify the code (POST /api/token {admin, verify:true}).
 ADMIN_KIND = NS + "admin"
@@ -135,36 +131,28 @@ ADMIN_KIND = NS + "admin"
 # is cheap (debounced 30 s, restarts the relay only when the pin actually changed), and a hub that is merely
 # down answers with its cached pin, so an outage never churns the spoke.
 TLS_FAIL_RE = re.compile(r"invalid peer certificate|fingerprint[^\n]*(mismatch|not match|unknown)|UnknownIssuer|CertificateUnknown|BadSignature|InvalidContentType|cluster peer error", re.I)
-LAN_SECRET_RE = re.compile(r"^[0-9a-f]{64}$")
 # 0.21.7: the cluster link's state, read off the relay's own log (moq-relay 0.15: the spoke dials the hub with
 # moq_tokio; "connected peer=" is the link up, a peer error / closed / timed out is the link down). One launch.log
 # line per transition -- the evidence Southridge's blackouts can be matched against.
 LINK_UP_RE = re.compile(r"moq_tokio::connection: connected peer=", re.I)
 LINK_DOWN_RE = re.compile(r"cluster peer error|WebSocket connection failed|remote\{remote=[^}]*\}[^\n]*?(error|closed|failed|timed out|reset)|moq_relay::cluster:[^\n]*(error|failed|closed|lost)", re.I)
-_WAKE_UNSUP_SAID = [0.0]
 
 
-def forward_wake(minter, tok, room, broadcast, hops, log):
+def forward_wake(minter, tok, room, broadcast, hops):
     """0.21.7: POST a viewer's demand for an on-demand camera to the hub minter (federation token). -> "hub" when the hub
-    took it, "unsupported" when the hub predates 0.21.7 (404; said once an hour), else "hub-error"."""
+    took it, else "hub-error"."""
     body = json.dumps({"room": room, "broadcast": broadcast, "hops": int(hops)}).encode()
     try:
         req = urllib.request.Request(minter + "/api/ondemand/forward", data=body, method="POST",
                                      headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
         with urllib.request.urlopen(req, timeout=4):
             return "hub"
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            now = time.time()
-            if now - _WAKE_UNSUP_SAID[0] > 3600:
-                _WAKE_UNSUP_SAID[0] = now
-                log("relay federation: the hub does not relay on-demand wakes (KASTR before 0.21.7) -- a viewer here cannot start a camera on another site until it updates")
-            return "unsupported"
-        return "hub-error"
     except Exception:
         return "hub-error"
+
+
 # 0.13.0: state tracks. Each member publishes its facts as JSON tracks under
-# `.state/<room>/<host>` (public, subscribe-only, so the lobby reads them);
+# `~state/<room>/<host>` (public, subscribe-only, so the lobby reads them);
 # a token scoped to a host may write only that host's paths. The claim
 # strings carry NO trailing slash: the relay matches per path segment, so
 # "r1/host" covers r1/host/..., not r1/hostx.
@@ -353,7 +341,7 @@ def claims_cover(claims, room):
 
 def _patterns(v):
     """A KASTR claim prefix (str or list) -> relay 0.15 patterns. "" -> ["**"];
-    "main" -> ["main", "main/**"]; ".state/main/h-1a2b" -> [itself, itself/**].
+    "main" -> ["main", "main/**"]; "~state/main/h-1a2b" -> [itself, itself/**].
     Per-segment semantics are preserved ("r1/host/**" never covers r1/hostx)."""
     items = v if isinstance(v, (list, tuple)) else [v]
     out = []
@@ -427,7 +415,7 @@ def session_jwt(req):
 
 def claims_identity(claims):
     """0.17.0: (room, host) a member token names -- room = its `get` (one room per member
-    token), host = the `<host>` of its `.state/<room>/<host>` put. (None, None) for a
+    token), host = the `<host>` of its `~state/<room>/<host>` put. (None, None) for a
     federation or 0.12-shaped wide token. This is the identity a relay-side kick bans:
     operator and peer are not in the token."""
     try:
@@ -436,8 +424,7 @@ def claims_identity(claims):
             return None, None
         host = None
         for p in _patterns(claims.get("put")) if claims.get("put") is not None else []:
-            # 0.21.17: the ~state spelling; a pre-0.21.17 .state token (cached <= 24 h) still names its host
-            m = re.match(r"^(?:%s|%s)/%s/([a-z0-9-]{1,32}-[0-9a-f]{4})$" % (re.escape(STATE_PREFIX), re.escape(LEGACY_NS + "state"), re.escape(room)), str(p))
+            m = re.match(r"^%s/%s/([a-z0-9-]{1,32}-[0-9a-f]{4})$" % (re.escape(STATE_PREFIX), re.escape(room)), str(p))
             if m:
                 host = m.group(1)
                 break
@@ -447,7 +434,7 @@ def claims_identity(claims):
 
 
 def claims_admin(claims, slug):
-    """0.21.2: does this token carry the room's admin grant (`<slug>/.admin` put -- the 0.16.0 admin code)?
+    """0.21.2: does this token carry the room's admin grant (`<slug>/~admin` put -- the 0.16.0 admin code)?
     Admins may close the room and remove any file or chat line in it."""
     if not isinstance(claims, dict) or not slug:
         return False
@@ -456,12 +443,11 @@ def claims_admin(claims, slug):
 
 
 def _is_control_put(p):
-    """0.21.17: a put pattern that names a control path (presence, state, member, since, ...) rather than media --
-    in either namespace, so a cached pre-0.21.17 token classifies exactly as it did."""
+    """0.21.17: a put pattern that names a control path (presence, state, member, since, ...) rather than media."""
     # any path SEGMENT that opens with a control prefix makes the put a control path: `~state/...`, `<room>/~since`,
     # `<room>/<host>/~member`, and a 0.12-shaped wide viewer token's `<room>/~stalled` (which 0.21.16's
     # member/since-only rule wrongly called a publisher)
-    return any(seg.startswith((NS, LEGACY_NS)) for seg in str(p).split("/") if seg and seg != "**")
+    return any(seg.startswith(NS) for seg in str(p).split("/") if seg and seg != "**")
 
 
 def claims_role(claims):
@@ -738,7 +724,6 @@ class AuthStore:
         self.log = log or (lambda m: None)
         self.lock = threading.Lock()
         self.codes = {"viewer": None, "publisher": None, "federation": None, "admin": None}   # 0.11.0: + federation; 0.16.0: + admin
-        self.lan = {"enabled": False, "secret": None, "at": 0}   # 0.16.0: mDNS LAN mesh (secret = 64 hex, plaintext, loopback-written, never echoed)
         self.rooms = {}
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
@@ -786,11 +771,7 @@ class AuthStore:
         at = d.get("codesAt")
         if isinstance(at, dict):
             self.codes_at = {k: int(v) for k, v in at.items() if k in self.codes and isinstance(v, (int, float))}
-        lan = d.get("lan")                   # 0.16.0
-        if isinstance(lan, dict):
-            sec = str(lan.get("secret") or "").lower()
-            self.lan = {"enabled": bool(lan.get("enabled")), "secret": sec if LAN_SECRET_RE.match(sec) else None,
-                        "at": int(lan.get("at") or 0)}
+        # 0.21.40: a "lan" block (the 0.16.0 LAN mesh, removed) is ignored here and dropped at the next save
         rooms = d.get("rooms")
         if isinstance(rooms, dict):
             now = time.time()
@@ -835,7 +816,6 @@ class AuthStore:
         save_json(self._path(), {"viewer": self.codes["viewer"], "publisher": self.codes["publisher"],
                                  "federation": self.codes["federation"], "rooms": self.rooms,
                                  "admin": self.codes["admin"],   # 0.16.0
-                                 "lan": self.lan,                # 0.16.0
                                  "closed": self.closed,          # 0.12.0: + closed tombstones
                                  "groups": self.groups,          # 0.15.0: + room groups
                                  "codesAt": self.codes_at}, self.log)   # 0.21.0
@@ -874,33 +854,6 @@ class AuthStore:
                 self.codes_at[k] = int(time.time())   # 0.21.0
             self._save()
         return self.codes_status()
-
-    # ---- 0.16.0: mDNS LAN mesh
-
-    def lan_status(self):
-        with self.lock:
-            return {"enabled": bool(self.lan.get("enabled")), "hasSecret": bool(self.lan.get("secret"))}
-
-    def set_lan(self, enabled=None, secret=None):
-        """None = unchanged, secret "" = clear; a secret must be 64 hex characters."""
-        with self.lock:
-            if secret is not None:
-                sec = str(secret).strip().lower()
-                if sec == "":
-                    self.lan["secret"] = None
-                elif LAN_SECRET_RE.match(sec):
-                    self.lan["secret"] = sec
-                else:
-                    raise ValueError("the LAN secret must be 64 hexadecimal characters")
-            if enabled is not None:
-                self.lan["enabled"] = bool(enabled)
-            self.lan["at"] = int(time.time())
-            self._save()
-        return self.lan_status()
-
-    def lan_secret(self):
-        with self.lock:
-            return self.lan.get("secret")
 
     def check(self, kind, code):
         with self.lock:
@@ -946,7 +899,7 @@ class AuthStore:
         """Live (unexpired) room names -- for /api/rooms and the codes status."""
         with self.lock:
             now = time.time()
-            dead = [k for k, r in self.rooms.items() if self._dead(r, now)]   # 0.12.0; 0.21.25: plain rooms after PLAIN_TTL
+            dead = [k for k, r in self.rooms.items() if self._dead(r, now)]   # 0.12.0; 0.21.25: plain rooms after ROOM_TTL
             for k in dead:
                 del self.rooms[k]
             if dead:
@@ -980,7 +933,7 @@ class AuthStore:
 
     def touch_room(self, slug, creator=""):
         """0.21.25: a room is in use -> its record's `at` moves; a name with no record becomes a PLAIN record (stored on
-        the hub, listed everywhere, gone PLAIN_TTL after its last use). Never changes a lock or the kept flag. -> created?"""
+        the hub, listed everywhere, gone ROOM_TTL after its last use). Never changes a lock or the kept flag. -> created?"""
         with self.lock:
             now = time.time()
             rec = self.rooms.get(slug)
@@ -1142,13 +1095,6 @@ class AuthStore:
                 self._save()
             return gid
 
-    def group_of(self, slug):
-        with self.lock:
-            for gid, g in self.groups.items():
-                if slug in g["rooms"]:
-                    return gid
-            return None
-
     def _group_forget(self, slug, keep=None):
         """Lock held: drop `slug` from every group but `keep` -> changed?"""
         changed = False
@@ -1183,7 +1129,7 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
     access = str(p.get("access") or "")
     room_key = p.get("roomKey")
     locking = bool(salt and hsh)
-    plain = bool(p.get("plain"))   # 0.21.25: a room with no code that is not kept -- stored too (PLAIN_TTL after its last use)
+    plain = bool(p.get("plain"))   # 0.21.25: a room with no code that is not kept -- stored too (ROOM_TTL after its last use)
     if not SLUG_RE.match(slug) or slug == "main" or bool(salt) != bool(hsh):
         return {"error": "bad room record"}, 400
     if lockout is not None:
@@ -1495,10 +1441,10 @@ class AuthService:
                                  # 0.11.0: can relays join here, and which key signs
                                  "federation": svc.store.codes_status()["federation"],
                                  "kid": svc.kid,
-                                 # 0.12.0: members may announce .talking/<room> and .chat/<room>
+                                 # 0.12.0: members may announce ~talking/<room> and ~chat/<room>
                                  "talking": True, "chat": True,
                                  # 0.13.0: this minter scopes tokens to a host and the relay
-                                 # publishes .state/<room>/<host> tracks
+                                 # publishes ~state/<room>/<host> tracks
                                  "state": True,
                                  # 0.21.17: the control namespace this minter grants (pages built for '~' re-mint
                                  # a token cached from a '.' minter, and refuse a '.' minter with a clear reason)
@@ -1645,10 +1591,6 @@ class AuthService:
                                          headers={"Content-Type": "application/json", "Authorization": bearer})
             with urllib.request.urlopen(req, timeout=4) as r:
                 d = json.loads(r.read().decode("utf-8", "replace") or "{}")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None                  # a hub before 0.21.17: nothing to ask
-            return None
         except Exception:
             return None
         if not d.get("locked"):
@@ -1913,13 +1855,13 @@ class AuthService:
                 pass
         self._ok(peer)
         now = int(time.time())
-        ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with .admin
+        ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with ~admin
         exp = now + ttl
         if host:
             # 0.13.0: identity-scoped puts. A token writes only under the host
-            # it named (its media / its .member broadcast, its .state track) plus
-            # the two one-release compat announces (`<room>/.since`,
-            # `.presence/<room>`, gone in 0.14). The viewer's `<room>/<host>/.member`
+            # it named (its media / its ~member broadcast, its ~state track) plus
+            # the room-wide `<room>/~since` and `~presence/<room>` announces (still
+            # granted: running pages announce both). The viewer's `<room>/<host>/~member`
             # is narrower than the publisher's `<room>/<host>`: that is what keeps
             # a viewer token off media.
             if role in ("publisher", "admin"):
@@ -1932,8 +1874,8 @@ class AuthService:
                         slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug]
             member = _mint(self.key, {"root": "", "get": slug, "put": puts, "iat": now, "exp": exp})
         elif role in ("publisher", "admin"):
-            # 0.11.0: `.presence/<slug>` is the public room-occupancy announce (arrays are fine)
-            # 0.12.0: + .talking/<slug> and .chat/<slug> (speaking + chat nudges)
+            # 0.11.0: `~presence/<slug>` is the public room-occupancy announce (arrays are fine)
+            # 0.12.0: + ~talking/<slug> and ~chat/<slug> (speaking + chat nudges)
             self._wide_once(peer)
             member = _mint(self.key, {"root": "", "put": [slug] + [k + "/" + slug for k in MEMBER_KINDS]
                                                         + ([slug + "/" + ADMIN_KIND] if role == "admin" else []),   # 0.16.0
@@ -2088,7 +2030,7 @@ class AuthService:
 
     def kick(self, p, peer="", bearer=None):
         """POST /api/kick. From an admin page: {token, room, target: "host/op[/peer]", until?}
-        (the token must carry the room's .admin put). From a SPOKE: Authorization: Bearer
+        (the token must carry the room's ~admin put). From a SPOKE: Authorization: Bearer
         <federation token> + {ban} -- applied here as well (the hub), never forwarded on."""
         now = time.time()
         if bearer and str(bearer).lower().startswith("bearer "):
@@ -2503,7 +2445,7 @@ class AuthService:
 
     def _forward_ban(self, ban):
         """A spoke tells its hub (the hub applies the ban to its own sessions; other spokes
-        rely on the cooperative .admin announce -- documented gap)."""
+        rely on the cooperative ~admin announce -- documented gap)."""
         try:
             minter = self.hub() if callable(self.hub) else None
             tok = self.fed_token() if callable(self.fed_token) else None
@@ -2931,7 +2873,7 @@ class Relay:
                 # Request per session event to this URL and applies the Grant. The token
                 # service on port+1 (AuthService.session) verifies OUR tokens with auth.jwk
                 # and answers patterns; the public kinds ride every grant, subscribe-only
-                # (.channels/.stats/.presence/.talking/.chat/.state -- the pre-join screen).
+                # (~channels/~stats/~presence/~talking/~chat/~state -- the pre-join screen).
                 # http:// is accepted for a loopback host only; the minter always binds
                 # loopback too (or everything, which includes it).
                 'url = "http://127.0.0.1:%d/api/session"' % (port + 1),
@@ -2979,7 +2921,7 @@ class Relay:
             ]
 
         # The stats NODE NAME is load-bearing twice over (0.8.1): without it
-        # the relay publishes its one stats broadcast at exactly .stats/node,
+        # the relay publishes its one stats broadcast at exactly ~stats/node,
         # whose announce the stats page DISCARDS (an entry whose path equals
         # the prefix arrives with an empty relative path) -- the eternal
         # "searching for nodes..." with a green light. And in a cluster,
@@ -3004,7 +2946,6 @@ class Relay:
             "",
             *cluster,
             *(["[internal]", f'listen = "127.0.0.1:{self.internal_port}"', ""] if self.internal_port else []),
-            *self._lan_lines(bind_all, secured),   # 0.16.0: [cluster.lan] when enabled
             "[web]",
             "ws = true",           # WebSocket fallback for clients without WebTransport
             "",
@@ -3032,6 +2973,10 @@ class Relay:
         path = os.path.join(self.state_dir, "relay.toml")
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(cfg))
+        try:
+            os.remove(os.path.join(self.state_dir, "lan.secret"))   # 0.21.40: the LAN mesh is gone; its plaintext secret goes too
+        except OSError:
+            pass
         return path
 
     # ---- federation (0.8.1) ------------------------------------------------
@@ -3158,55 +3103,6 @@ class Relay:
         self._fp_check_at = now
         self.log("relay federation: %s -- re-learning the hub certificate" % reason)
         threading.Thread(target=lambda: self._federation_tick(), daemon=True).start()
-
-    def _lan_lines(self, bind_all, secured):
-        """0.16.0: the [cluster.lan] block when the operator enabled the LAN mesh.
-        A loopback-only relay has no LAN to mesh on; a secured relay needs a secret."""
-        st = self.store.lan_status()
-        if not st["enabled"]:
-            return []
-        if not bind_all:
-            self.log("relay: LAN mesh enabled but the relay is loopback-only -- tick 'Allow other machines'")
-            return []
-        secret = self.store.lan_secret()
-        if secured and not secret:
-            self.log("relay: LAN mesh needs a secret on a secured relay -- not enabled")
-            return []
-        lines = ["[cluster.lan]", "enabled = true", 'app = "kastr"']
-        if secret:
-            p = os.path.join(self.state_dir, "lan.secret")
-            try:
-                tmp = p + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
-                    f.write(secret)
-                try:
-                    os.chmod(tmp, 0o600)
-                except OSError:
-                    pass
-                os.replace(tmp, p)
-                lines.append('secret = "lan.secret"')   # RELATIVE: the relay runs with cwd = state_dir (the auth.jwk lesson)
-            except OSError as e:
-                self.log("relay: could not write lan.secret (%s) -- LAN mesh not enabled" % e)
-                return []
-        else:
-            self.log("relay: LAN mesh is OPEN (no secret) -- anyone on this network may join it")
-        lines.append("")
-        return lines
-
-    def lan_status(self):
-        st = self.store.lan_status()
-        st["active"] = bool(self.running() and st["enabled"] and self.bind_all)
-        return st
-
-    def set_lan(self, payload):
-        """POST /api/relay/lan {enabled?, secret?} (loopback-guarded)."""
-        st = self.store.set_lan(payload.get("enabled"), payload.get("secret"))
-        self.log("relay: LAN mesh %s%s" % ("enabled" if st["enabled"] else "disabled", " with a secret" if st["hasSecret"] else ""))
-        restarted = self._restart()
-        out = self.lan_status()
-        out["ok"] = True
-        out["restarted"] = restarted
-        return out
 
     def admin_token(self, room):
         """0.16.0: the operator's own admin token for `room` (loopback-guarded: the
@@ -3733,7 +3629,7 @@ class Relay:
         if not from_hub:
             minter, tok = self._hub_minter_url(), self._fed_active
             if minter and tok:
-                out.append(forward_wake(minter, tok, room, broadcast, hops, self.log))
+                out.append(forward_wake(minter, tok, room, broadcast, hops))
         return out or None
 
     def _cluster_view(self):
@@ -3949,15 +3845,8 @@ class Relay:
         if cur["web"] == web or not cur["connect"]:
             return
         cur["web"] = web
-        try:
-            os.makedirs(self.state_dir, exist_ok=True)
-            tmp = self._cluster_file() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(cur, f)
-            os.replace(tmp, self._cluster_file())
+        if save_json(self._cluster_file(), cur, self.log):   # 0.21.40: like every other relay-cluster.json write (keeps the .bak)
             self.log("relay federation: hub KASTR web port is %d (learned from its token service)" % web)
-        except OSError as e:
-            self.log("relay federation: could not store the hub web port: %s" % e)
 
     def set_cluster(self, payload):
         """0.11.0: partial update of {connect, code, master}. A key that is absent
@@ -4237,17 +4126,10 @@ class Relay:
             return []
         return [f"http://{ip}:{self.port}" for ip in local_ips()]
 
-    def wss_urls(self):
-        """0.8.9: the TLS web listener phones use (port + 2), when configured."""
-        if not getattr(self, "tls", None):
-            return []
-        hosts = local_ips() if self.bind_all else ["127.0.0.1"]
-        return [f"https://{ip}:{self.port + 2}" for ip in hosts]
-
     # 0.17.0: a remote reader (a LAN box, a web client) gets the public shape -- no
-    # relay log, binary path, cluster/auth/internal/LAN detail; the federation block
+    # relay log, binary path, cluster/auth/internal detail; the federation block
     # keeps hub/token/tls only. The machine's own pages see everything.
-    PUBLIC_STATUS_DROP = ("log", "binary", "error", "auth", "internal", "cluster", "autostart", "lan")
+    PUBLIC_STATUS_DROP = ("log", "binary", "error", "auth", "internal", "cluster", "autostart")
 
     def status(self, public=False):
         d = self._status_full()
@@ -4290,7 +4172,6 @@ class Relay:
             "authUp": bool(self.auth is not None and getattr(self.auth, "httpd", None) is not None),
             "auth": (self.auth.stats() if self.auth else None),
             "internal": (getattr(self, "internal_port", None) if self.running() else None),
-            "lan": self.lan_status(),   # 0.16.0
         }
 
     # ---- autostart (0.8.0) -------------------------------------------------
@@ -4330,7 +4211,7 @@ WEB_PORT = None            # 0.14.0 F: this KASTR's web port (set by the launche
 FIREWALL_RULES = ("KASTR MoQ Relay", "KASTR MoQ Relay (cert)",
                   "KASTR room codes", "KASTR web",
                   "KASTR MoQ Relay (wss)", "KASTR web (https)",   # 0.8.9: phone paths
-                  "KASTR MoQ Relay (mDNS)",                        # 0.16.0: LAN mesh discovery
+                  "KASTR MoQ Relay (mDNS)",                        # 0.16.0; 0.21.22: relay discovery (kastr_mdns)
                   "KASTR RTMP ingest")                             # 0.21.29: devices (GoPro) push here
 _FIREWALL_HTTPS_PORT = None   # set by the launcher when the https listener is up
 HTTPS_PORT = None             # 0.15.0: this KASTR's https listener port (launcher); /api/auth advertises it (None = none)
@@ -4661,12 +4542,10 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/rooms/close",     # 0.12.0
                  "/api/relay/webport",         # 0.14.0 F
                  "/api/relay/rooms/group",     # 0.15.0
-                 "/api/relay/lan",             # 0.16.0
                  "/api/relay/spokes/rtsp",     # 0.21.16
                  "/api/relay/admin/token",     # 0.16.0
                  "/api/relay/bans/clear",      # 0.17.0
-                 "/api/relay/spokes/update",   # 0.21.0
-                 "/api/relay/spokes/close-room")   # 0.21.2
+                 "/api/relay/spokes/update")   # 0.21.0
 
 
 def _host_of(value):
@@ -4709,10 +4588,6 @@ def _payload_of(handler):
 # "remote" = everything else -- a LAN KASTR box, a phone, a browser on another
 # computer that opened this relay host's web port. A Host header alone is a claim
 # any client can type; the peer address makes it an identity.
-def request_class(handler):
-    return "local" if _local_only(handler) else "remote"
-
-
 def is_local(handler):
     return _local_only(handler)
 
@@ -4801,24 +4676,6 @@ def handle_api(handler, relay, path, set_relay_url=None):
             web = int(WEB_PORT or 8000)
         out = relay.hub_takeover(p.get("address"), p.get("admin"), web)
         reply(out, 200 if out.get("ok") else 409)
-        return True
-
-    if path == "/api/relay/spokes/close-room":   # 0.21.2: hub operator -> a spoke closes one of its rooms
-        auth = getattr(relay, "auth", None)
-        if not auth:
-            reply({"error": "the relay is not running secured on this machine"}, 400)
-            return True
-        try:
-            n = int(handler.headers.get("Content-Length") or 0)
-            p = json.loads(handler.rfile.read(n) or b"{}")
-        except Exception:
-            p = {}
-        slug = str(p.get("slug") or ""); spoke = str(p.get("spoke") or "")
-        if not SLUG_RE.match(slug) or not spoke:
-            reply({"error": "spoke and slug required"}, 400)
-            return True
-        rec = auth.raise_cmd("closeRoom", {"spoke": spoke, "slug": slug})
-        reply({"ok": True, "seq": rec["seq"], "spoke": spoke, "slug": slug})
         return True
 
     if path == "/api/relay/spokes/rtsp":   # 0.21.16: hub operator -> a spoke turns its own cameras off (suspend) or on
@@ -4944,19 +4801,6 @@ def handle_api(handler, relay, path, set_relay_url=None):
         reply(obj, code)
         return True
 
-    if path == "/api/relay/lan":
-        # 0.16.0: the mDNS LAN mesh -- GET {enabled, hasSecret, active}; POST {enabled?, secret?} (GUARDED)
-        if handler.command == "POST":
-            try:
-                reply(relay.set_lan(_payload_of(handler)))
-            except ValueError as e:
-                reply({"error": str(e)}, 400)
-            except Exception as e:
-                reply({"error": str(e)}, 400)
-        else:
-            reply(relay.lan_status())
-        return True
-
     if path == "/api/relay/admin/token":
         # 0.16.0: the operator's admin token for a room (GUARDED: the machine itself)
         if handler.command != "POST":
@@ -5010,7 +4854,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
                                "link": (st.get("federation") or {}).get("link"),     # 0.21.7: the cluster link's state
                                "hubSees": (st.get("federation") or {}).get("hubSees")}
                               if st.get("federation") else None),
-               "lan": st.get("lan"), "pairs": pairs, "helpers": helpers})
+               "pairs": pairs, "helpers": helpers})
         return True
 
     if path == "/api/relay/metrics":

@@ -8,6 +8,10 @@ MoQ project publishes `aarch64-apple-darwin` builds of `moq-relay` 0.17.0 and
 `moq-cli` 0.14.0 (0.21.17 pins) and no `x86_64` ones, so an Intel build would have no relay
 and no RTSP publisher; `build-mac.sh` refuses on anything but `arm64`.
 
+**Not yet tested on a Mac.** The build script, the pins and the bundle
+handling exist, but the Mac binary has not yet been tested on Mac hardware;
+treat §5 as the first-run checklist.
+
 ## 1. Prerequisites
 
 | What | Why | How |
@@ -15,19 +19,20 @@ and no RTSP publisher; `build-mac.sh` refuses on anything but `arm64`.
 | Apple Silicon Mac, macOS 13 or newer | the helpers are arm64 Mach-O; WebTransport needs a current Chrome | -- |
 | Xcode Command Line Tools | `codesign`, compilers for wheels | `xcode-select --install` |
 | Python 3.11+ | the launcher is Python; `python3 --version` | Homebrew `brew install python@3.12` or python.org |
-| Google Chrome (or Chromium/Edge) | the app window. Chrome for Testing is bundled on Windows/Linux only (`browser.json`); the Mac uses the **system** Chrome | https://www.google.com/chrome/ |
+| Google Chrome (or Chromium/Edge) | the app window. Chrome for Testing is bundled on Windows/Linux only (`browser.json`); the Mac uses the **system** Chrome on KASTR's own profile. The 0.21.40 default `browser = auto` (open the person's default browser) detects the default on Windows and Linux only, so on a Mac it falls back to that system Chrome | https://www.google.com/chrome/ |
 | ffmpeg (optional, for RTSP cameras) | until a static arm64 build is pinned in `fetch-helpers.py` (`FFMPEG_MAC`), nothing is bundled and KASTR uses the one on PATH / `/opt/homebrew/bin` | `brew install ffmpeg` |
 
 `fetch-helpers.py` downloads `bin/moq-relay` and `bin/moq` (sha256-pinned from
-the releases' `SHA256SUMS`: relay `4ac8e7e5…7fd18`, cli `486e9e99…4465`) and
+the releases' `SHA256SUMS`: relay 0.17.0 `b48c2bb1…dcec8`, cli 0.14.0
+`5568d59e…b886c`) and
 prints the `brew install ffmpeg` hint.
 
 ## 2. Get the tree onto the Mac
 
-Copy the KASTR folder (the sources, `assets/`, `icons/`, `browser.json`,
-`VERSION`, `RELEASES.md`; `dist/` and `bin/` are not needed -- `bin/` is
-platform-specific and gets fetched) to the Mac, e.g. a zip from Windows or a
-share. `VERSION` must already say the release being built (it is set by hand
+Clone the repository (github.com/OccuviteASI/KASTR) or copy the KASTR folder
+(the sources, `assets/`, `icons/`, `browser.json`, `VERSION`, `RELEASES.md`;
+`dist/` and `bin/` are not needed -- `bin/` is platform-specific and gets
+fetched) to the Mac, e.g. a zip from Windows or a share. `VERSION` must already say the release being built (it is set by hand
 on Windows; the Mac builds with `--keep-version` and never bumps it).
 
 ## 3. Build

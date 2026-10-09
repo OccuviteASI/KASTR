@@ -1,2 +1,4 @@
 # KASTR keeps its files byte-exact (the page and most Python modules are CRLF, the shell scripts LF); no line-ending conversion on either side.
 * -text
+# 0.21.40: the shipped Linux templates (extras/linux: install.sh runs under /bin/sh) stay LF on every checkout
+extras/linux/* text eol=lf

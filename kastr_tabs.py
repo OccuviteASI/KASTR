@@ -257,7 +257,6 @@ IID_IUIAutomation = GUID("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee")
 # property / control-type / pattern ids (UIAutomationClient.h)
 P_PROCESSID, P_CONTROLTYPE, P_NAME, P_CLASSNAME = 30002, 30003, 30005, 30012
 P_HWND, P_OFFSCREEN, P_ISSELECTED, P_LEGACYSTATE = 30020, 30022, 30079, 30096
-P_AUTOMATIONID = 30011
 CT_TAB, CT_TABITEM, CT_DOCUMENT = 50018, 50019, 50030
 PAT_INVOKE, PAT_SELITEM, PAT_LEGACY = 10000, 10010, 10018
 SCOPE_CHILDREN, SCOPE_DESCENDANTS, SCOPE_SUBTREE = 2, 4, 7
@@ -308,14 +307,6 @@ class _Com:
         o = ctypes.c_void_p()
         self.call(idx, *args, ctypes.byref(o))
         return o.value
-
-
-def _bstr(p):
-    if not p:
-        return ""
-    s = ctypes.wstring_at(p, oleaut32.SysStringLen(p))
-    oleaut32.SysFreeString(p)
-    return s
 
 
 def _variant_value(v):

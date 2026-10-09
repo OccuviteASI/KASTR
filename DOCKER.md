@@ -69,7 +69,7 @@ now stale (`check_release_contents`).
 
 ```bash
 docker compose up -d                                       # kastr:local
-KASTR_IMAGE=ghcr.io/<you>/kastr:0.13.1 docker compose up -d
+KASTR_IMAGE=ghcr.io/<you>/kastr:<version> docker compose up -d
 docker compose logs -f
 ```
 
@@ -77,12 +77,12 @@ or without compose (smoke on any Docker, bridge networking is fine for the
 web UI only):
 
 ```bash
-docker run --rm -e KASTR_MODE=viewer -p 18000:8000 kastr:0.13.1
+docker run --rm -e KASTR_MODE=viewer -p 18000:8000 kastr:<version>
 curl -s http://127.0.0.1:18000/api/instance      # {"app": "KASTR", "version": ..., "platform": "linux", ...}
 ```
 
 Extra arguments after the image name go to KASTR (`docker run --rm
-kastr:0.13.1 --diagnose /dev/stdout`).
+kastr:<version> --diagnose /dev/stdout`).
 
 ### Environment (first-run defaults)
 
@@ -98,7 +98,7 @@ kastr:0.13.1 --diagnose /dev/stdout`).
 
 `KASTR_MODE`, `KASTR_RELAY` and `KASTR_UPDATE` are written into
 `/data/app/kastr.ini` **once**, on the first start with an empty volume. After
-that the Relay page (`/api/mode`, `/api/ini`) edits that same file, exactly as
+that the Relay page (`/api/mode`, `/api/web` and its other settings) edits that same file, exactly as
 on a desktop; changing the compose environment does nothing until you delete
 `kastr.ini` in the volume (or edit it: `docker compose exec kastr vi
 /data/app/kastr.ini`, then `docker compose restart`). `host = 0.0.0.0` is
@@ -113,6 +113,8 @@ always written.
 | 4443/udp + tcp | moq-relay: QUIC (WebTransport) and its TCP/WebSocket fallback |
 | 4444/tcp | token minter (secured relays) |
 | 4445/tcp | wss relay listener |
+| 1935-1944/tcp | RTMP ingest, one port per ingest (0.21.29) |
+| 5353/udp | mDNS: the relay is advertised as `_kastr._tcp` on the local network (0.21.22; a Relay page switch turns it off) |
 
 ### Volume
 
@@ -181,8 +183,12 @@ compose up -d` on hubs; spokes follow their hub by themselves.
 | `network_mode: host` warnings on Docker Desktop | build and smoke there, run on a Linux host |
 
 Test the entrypoint logic without Docker: `KASTR_IMAGE_DIR=... KASTR_APP_DIR=...
-KASTR_STATE_DIR=... docker/entrypoint.sh` runs against any directories, with
-a stub `KASTR` script standing in for the binary (the release smoke does).
+KASTR_STATE_DIR=... docker/entrypoint.sh` runs against any directories.
+`bash docker/test-entrypoint.sh` (bash 4+, GNU coreutils; WSL is fine) does
+exactly that with a stub `KASTR` script standing in for the binary: the first
+seed, kastr.ini from the environment, the exit-75 relaunch loop with
+`KASTR_UPDATED=1`, keep vs re-seed by image version, and a TERM forwarded to
+the child.
 
 ## Web clients (0.17.0)
 
@@ -190,6 +196,10 @@ A container's KASTR binds `0.0.0.0` already, so browsers on the LAN can open `ht
 the https listener is up (`cryptography` is in the image), `https://<box>:8443/` after installing `/ca.crt` -- or mount a
 real certificate into the state volume and set `tls_cert` / `tls_key` / `tls_hostname` in kastr.ini. The relay must be
 started "Reachable from the LAN" (`lan: true`) for browser clients to reach its WebSocket listener.
+
+Since 0.21.32 `web_page = off` in kastr.ini stops handing the page to browsers on other devices while KASTR apps and
+federated relays keep every `/api/` route and `/relay`. Switching a box into a relay mode from the Relay page turns
+Web clients off (0.21.37), so turn the switch back on there for a box that should serve browsers.
 
 Smoke to run where Docker exists (none on the build box in 0.17.0): `python build.py --keep-version --publish` in WSL,
 `./docker-build.sh`, `docker compose up -d`, then `curl -s localhost:8000/api/instance` (version), `curl -s -X POST
@@ -217,4 +227,5 @@ container's web port and hand out `https://<name>/` and `https://<name>/relay`. 
 - Chrome for Testing zips in the image (`/api/update/browser`): excluded to
   keep the image ~250 MB; remove the `dist/updates/browser` line from
   `.dockerignore` for a hub that must hand desktops a browser update.
-- No CI: the repo is not under git; images are built and pushed by hand.
+- No CI: the repository is on GitHub without a build pipeline; images are
+  built and pushed by hand.

@@ -19,7 +19,8 @@ hostname is enough: the page, the API, chat, files, recordings, updates, and the
 On the relay host (the machine that runs the relay):
 
 1. Start the relay on the Relay page. It can stay bound to this machine only; the tunnel reaches it through the
-   web port.
+   web port. Keep the Relay page's "Web clients" switch on: with `web_page = off` (0.21.32) browsers coming through
+   the tunnel are refused the page, and switching a box into a relay mode turns it off (0.21.37).
 2. Install `cloudflared` and create a named tunnel:
 
    ```bash
@@ -117,16 +118,19 @@ looping fallback viewer, a 20 s pause after six reconnects in a minute) and both
 launch.log (`watch: fallback viewer … is looping`, `relay pipe: … short pipes`, `relay auth: … opened N sessions in
 60 s`); `/api/relay/health` carries `auth.churn`.
 
-## Through the tunnel in 0.21.7: audio budgets and the download
+## Through the tunnel: audio budgets and the download (0.21.7, updated since)
 
-- A page whose relay is a web relay (`…/relay` — every tunnel page) rides fixed budgets: `delay 150 ms + buffer 800 ms`
-  on the spotlit tile, the rail and composites, instead of the library's min-RTT estimate that shrank the budget under
-  the jitter. Together with the audio `maxAge` floor in the vendored player (see RELEASES 0.21.7) the clipping heard from
-  every tunnel viewer is gone; the latency badge shows `· skips A/V` when the player dropped media in the last 60 s.
-- More → Settings → About on a tunnel page lists the Windows and Linux install zips; the host assembles the zip on the
-  first click (10–20 s, "Preparing the download on the host…") and the browser downloads `KASTR-<plat>-v<ver>.zip`. The
-  tunnel's certificate is trusted, so the download is allowed; a LAN https page without the local CA installed has its
-  download blocked by Chromium as insecure — install the CA or use the tunnel page.
+- A page whose relay is a web relay (`…/relay` — every tunnel page) starts from `delay 150 ms + buffer 800 ms` on the
+  spotlit tile, the rail and composites, instead of the library's min-RTT estimate that shrank the budget under the
+  jitter (0.21.7). Since 0.21.9 the audio delay adapts: while the player reports late audio frames it widens a step at
+  a time (150 → 300 → 450 → 600 ms on a web relay) and steps back after two quiet minutes. Together with the audio
+  `maxAge` floor in the vendored player (see RELEASES 0.21.7) the clipping heard from every tunnel viewer is gone. Since
+  0.21.37 the latency readout adds `· dropped N audio, M video` when the player threw media away in the last minute.
+- The launch page's Download tiles and More ▸ About KASTR & updates list the Windows and Linux install zips. Since
+  0.21.32 a host whose page is open to the network builds both zips in the background after launch, so the download
+  starts at once (before that, the first click assembled the zip on the host). The tunnel's certificate is trusted, so
+  the download is allowed; a LAN https page without the local CA installed has its download blocked by Chromium as
+  insecure — install the CA or use the tunnel page.
 - Its Relay dropdown reads "Relay host: KASTR vX — this page follows it" (same origin, no port).
 - With kastr.ini `ondemand = on` (off by default since 0.21.10): a viewer on the tunnel page who opens an on-demand camera that lives on another spoke of the same hub sees the low copy
   at once; the demand travels tunnel host → hub → that spoke over the hub's command channel.

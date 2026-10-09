@@ -49,7 +49,8 @@ class TileMenu(unittest.TestCase):
         p = self.page
         self.assertIn('window.__spot = { set: spotAdd, add: spotAdd, off: spotOff,', p)
         self.assertIn('window.__state.set("spots", spotMineList);', p)
-        self.assertIn('const vs = Array.isArray(v.spots) ? v.spots : (v.spotlight?.target ? [v.spotlight] : []);', p)   # pre-0.21.32 members still count
+        self.assertIn('const vs = Array.isArray(v.spots) ? v.spots : [];', p)   # 0.21.40: the pre-0.21.32 single `spotlight` is gone
+        self.assertNotIn('window.__state.set("spotlight"', p)
         self.assertIn("const mosaicOn = mosaic.length >= 2;", p)
         self.assertIn('const mainCols = mosaicOn ? "repeat(" + (2 * mk) + ", minmax(0,1fr))" : "minmax(0,1fr)";', p)
         self.assertIn("if (isMain && mosaicOn) placeMosaic(t.pane, mosaicIdx.get(n));", p)

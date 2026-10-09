@@ -2,50 +2,57 @@
 
 KASTR (Kenton's ASI Streaming Tool with Relay) is a desktop application for
 publishing and watching low-latency video over Media over QUIC (MoQ). It wraps
-a browser-based UI in a self-contained executable, bridges RTSP cameras into
-the browser, and can host its own MoQ relay. This document describes the system
-as of v0.7.0.
+a browser-based UI in a self-contained executable, publishes RTSP cameras and
+other host sources natively (ffmpeg and the moq CLI), and can host its own MoQ
+relay. This document describes the system as of v0.21.40. Most sections were
+written as each part landed and name the release that introduced a rule;
+"Since 0.21.16" below summarises what came after the per-release notes stop, and
+RELEASES.md is the per-version record.
 
 
 > **0.21.17 -- the control namespace is `~`.** Every KASTR control path segment (presence, room state, member, chat,
 > spotlight, recording, media control, grid, files, avatar, stall, admin, channel registry, the relay's stats) begins with
-> `~` (kastr_relay.NS). Until 0.21.16 it was `.`, which moq-relay >= 0.15.3 and @moq/net >= 0.4.2 treat as HIDDEN (never
+> `~` (kastr_relay.NS); since 0.21.40 the old `.` spelling is not recognised anywhere. Until 0.21.16 it was `.`, which moq-relay >= 0.15.3 and @moq/net >= 0.4.2 treat as HIDDEN (never
 > listed to moq-lite-06 clients, never announced by browser publishers). The minter grants only `~` paths and reports
 > `ns` in its mint reply and /api/auth; relay.toml sets `[stats] prefix = "~stats"`.
 
 ## System context
 
 ```
-  UniFi / RTSP cameras ──RTSPS──▶ ffmpeg bridge ─┐
-                                                 │ fMP4 over localhost HTTP
-  webcams / screens / files ──▶ browser ◀────────┘
-                                  │  WebCodecs encode
-                                  ▼  MoQ (moq-lite-05) over WebTransport/QUIC
-                            MoQ relay  ◀──── viewers (KASTR on other machines)
-                    (shared 10.10.105.190:4443, or hosted locally)
+  RTSP/HTTP cameras, RTMP pushes,      ──▶ ffmpeg | moq import ──────────┐
+  host screens/windows, local webcams       │ monitor: fMP4 to the page  │
+                                            ▼                            │
+  webcams / screens / files ──▶ browser (previews, grids, WebCodecs) ──┤
+                                                                        ▼  MoQ (moq-lite-06) over
+                                                                           WebTransport/QUIC or WebSocket
+                                          MoQ relay (moq-relay 0.17.0)  ◀──── viewers (KASTR apps, browsers)
+                  (hosted on this machine, or a hub-and-spoke fleet; the nearest relay is picked at launch)
 ```
 
 Everything on the publishing machine is one process tree: the launcher, a local
-HTTP server, per-feed ffmpeg children, an optional moq-relay child, and one
-Chrome app window.
+HTTP server, per-feed `ffmpeg | moq` pairs and monitors, an optional moq-relay
+child, and one app window (the bundled Chrome for Testing, or since 0.21.40 the
+person's own Chromium browser; see Lifecycle).
 
 ## Components
 
 | Component | File | Role |
 |---|---|---|
-| Launcher | `kastr.py` | Frozen entry point. Starts the server, opens Chrome as an app window on a dedicated profile, ties process lifetime to the window, tears everything down on exit. |
+| Launcher | `kastr.py` | Frozen entry point. Starts the server, opens the app window (the bundled Chrome for Testing on its own profile, or since 0.21.40 the person's default Chromium browser with their own profile), ties process lifetime to the window, tears everything down on exit. |
 | HTTP server | `kastr_serve.py` | Serves the UI with token substitution and COOP/COEP isolation; exposes the local APIs. |
-| RTSP bridge | `kastr_rtsp.py` | One ffmpeg per feed. Turns RTSP/RTSPS into browser-playable fragmented MP4, video-only. |
-| Relay supervisor | `kastr_relay.py` | Runs the bundled `moq-relay` (0.15.1) from a generated TOML config (`[listen]`, `[auth] url`, `[connect]`, `[internal]`, optional `[cluster]`/`[cluster.lan]`); TLS auto-generated, stats enabled; hosts the auth server the relay asks per session (0.16.0). |
+| RTSP bridge | `kastr_rtsp.py` | Native publisher pairs (0.9.1): `ffmpeg \| moq import ts` per feed, stream copy or one hardware encode, the camera's audio per feed (0.9.5), passthrough per camera. Monitors (fMP4 over HTTP or WebSocket) feed the page's previews and grids. Host feeds beside RTSP/HTTP: `device://` (a camera on this computer), `media://` (a looping file), `rtmp-in://` (RTMP ingest, 0.21.29) and `screen://` (native share, 0.21.20). |
+| Relay supervisor | `kastr_relay.py` | Runs the bundled `moq-relay` (0.17.0) from a generated TOML config (`[listen]`, `[auth] url`, `[connect]`, `[internal]`, optional `[cluster]`); TLS auto-generated, stats enabled. Hosts the auth server the relay asks per session (`POST /api/session` on port+1, 0.16.0), the token minter, and federation: a spoke presents the hub's federation code and the hub mints its relay-to-relay token (0.11.0). |
+| Host helpers | `kastr_screen.py`, `kastr_screen_sources.py`, `kastr_tabs.py`, `kastr_overlay.py`, `kastr_loopback.py`, `kastr_mdns.py`, `kastr_archive.py`, `kastr_chat.py`, `kastr_tls.py`, `kastr_release.py`, `kastr_browser.py` | Native screen/window/tab capture and its overlay and sound (Windows), mDNS relay discovery, host recording, the room chat store, the local CA and certificates, install-zip assembly, the bundled browser. |
 | Tab shell | `app.html` | The window's chrome: masthead nav as tabs over persistent iframes. Inactive tabs are parked, not hidden. |
-| ~~Publish page (legacy)~~ | removed in 0.6.9 | The old stand-alone publisher lived one release as a fallback after the 0.6.6 merge, then was deleted and unbundled. dist/archive builds still carry it. |
-| Live Streams page | `moq-watch-lite.html` (~12,000 lines) | Discovery, grid/program view, per-stream audio with level meters, ordering, stats — plus, since 0.6.6, a second module script carrying the ported publish core (sources, slots, encoder control, operator naming, resilience). Module scope is the collision boundary; `window.__mineAccept` and `window.__publisher` are the seams. |
+| Live Streams page | `moq-watch-lite.html` (~20,000 lines) | Discovery, grid/program view, per-stream audio with level meters, ordering, stats — plus, since 0.6.6, a second module script carrying the ported publish core (sources, slots, encoder control, operator naming, resilience). Module scope is the collision boundary; `window.__mineAccept` and `window.__publisher` are the seams. |
 | Brand/shell script | `assets/asi-brand.js` | Masthead, version + release-notes popover, relay badge with stats popover (polls `/api/instance` to follow runtime repoints), heartbeat, diagnostics self-report, window-geometry reporter. |
 | Home / relay / stats | `index.html`, `relay.html`, `stats.html` | Cards, relay hosting UI, relay statistics (embedded in the relay badge popover). |
 | Build | `build.py`, `fetch-helpers.py` | PyInstaller onefile builds, versioning, release archives, helper binaries. |
 
-The MoQ implementation is the `@moq/publish` and `@moq/watch` libraries, loaded
-from esm.sh (currently unpinned — see Risks).
+The MoQ implementation is the `@moq/publish` and `@moq/watch` libraries,
+vendored under `assets/vendor/esm/` at pinned versions (@moq/watch 0.6.2,
+@moq/publish 0.5.2, hang 0.5.2, net 0.4.2 since 0.21.17) and resolved through an
+import map. Since 0.8.13 nothing is loaded from a CDN (`vendor-moq.py`).
 
 ## Local HTTP API
 
@@ -64,6 +71,7 @@ All served from the same loopback server as the pages.
 | `GET /rtsp/<id>` | The feed itself: an endless fragmented MP4. Each GET spawns/attaches an ffmpeg reader. |
 | `POST /api/relay/start,stop,use` · `GET /api/relay/status` | Hosted-relay control. |
 | `GET /api/auth` · `POST /api/token` (relay host, port+1) | Auth shape (`secured, codes, talking, chat, state`) and the minter: `{room, code, roomCode?, host?}` → identity-scoped tokens (0.13.0, see ledger). |
+| `POST /api/session` (relay host, port+1, loopback) | The relay's per-session auth question (0.16.0): one JSON event per `connect` / `revalidate` / `end`, answered with a grant of publish/subscribe patterns or a 403. |
 
 ## Publishing paths
 
@@ -84,7 +92,10 @@ idiom): it is folded into every place the effective `muted` is derived
 and a bare property write would silently revert. Both levers are
 remotely controllable over the sources channel.
 
-**RTSP sources** cannot enter the browser directly, so they take the bridge:
+**RTSP sources** cannot enter the browser directly. Since 0.9.1 they are
+published natively by `ffmpeg | moq import ts` (see the 0.9.1 ledger row) and
+carry the camera's audio per feed (0.9.5); the page only monitors them. The
+browser path below is the 0.5–0.9.0 design, kept for the decisions it explains:
 
 ```
 camera ──RTSPS/TLS──▶ ffmpeg ──fMP4 (video-only)──▶ <video> element
@@ -103,8 +114,7 @@ The bridge output is **video-only, deliberately**. The RTSP publish path builds
 a video-only broadcast, so camera audio was never published — and its presence
 in the muxed stream throttled `captureStream()` to ~1 fps (bisected on a real
 camera: with audio 1 fps, without 30 fps, resample to 48 kHz no help).
-Publishing RTSP audio is future work: a separate audio pipeline, not a bridge
-flag.
+Camera audio shipped in 0.9.5 on the native publisher, not on this path.
 
 **Encoding is pull-based.** MoQ only produces what is subscribed to:
 `encoderActive=false, frames=0` with no viewers is the *correct* idle state,
@@ -294,6 +304,15 @@ speculative was later removed (see Decisions).
   throttling disabled (occluded windows would otherwise throttle capture to
   ~1 fps), geometry restored from `window.json` (`--start-maximized` on first
   run or implausible saved bounds).
+- **The person's own browser (0.21.40)**: kastr.ini `browser = auto` (default;
+  `bundled`, `system` or a path override it) opens the window in the default
+  browser with the person's own profile when that browser is Chromium-based,
+  except on boxes (relay/hub/spoke, Publisher and Viewer modes, a machine with
+  camera feeds or grids, `wants_builtin_browser()`), where the background
+  throttling above matters. There KASTR never closes or kills the browser: the
+  window reports its own close, KASTR counts its open pages and ends about 8 s
+  after the last one goes, and an update or mode switch asks the window to
+  close itself.
 - **Parked tabs stay painted**: inactive shell tabs get `.bg` (z-index 0,
   opacity 0.004, `inert`) instead of `display:none`, because `captureStream()`
   only produces frames from rendered elements.
@@ -304,19 +323,20 @@ speculative was later removed (see Decisions).
 
 
 - **PyInstaller onefile** per platform (no cross-compiling): Windows native,
-  Linux via WSL (`/opt/kastrbuild`), macOS supported by the script but no
-  hardware to build on. Bundled: site files, `VERSION` (generated from the
-  version being built, not copied), `RELEASES.md`, ffmpeg + moq-relay from
-  `bin/` (Linux ffmpeg pinned by SHA-256 in `fetch-helpers.py`).
+  Linux via WSL (`/opt/kastrbuild`), macOS by `build-mac.sh` (not yet run on Mac
+  hardware). Bundled: site files, `VERSION` (generated from the version being
+  built, not copied), `RELEASES.md`, ffmpeg + moq-relay + the moq CLI from `bin/`
+  (pinned by SHA-256 in `fetch-helpers.py`), and beside the binary the Chrome for
+  Testing browser pinned in `browser.json`.
 - **Version discipline**: `VERSION` records the *last built* version, matching
   `BUILT_VERSION` markers and the running app. A build takes the next patch
   number; `--keep-version` joins the same release from a second platform.
   Failed builds burn nothing. Release notes are enforced: an undocumented
   version gets a visible stub.
-- **Archives**: written *after* signing/plist finishing, one zip per release
-  containing every platform folder whose `BUILT_VERSION` matches (provenance-
-  gated, named skips), never silently shrunk (`--allow-shrink` to override),
-  retention keeps the newest 5 (`--discard <ver>` retires a broken one).
+- **Archives**: written *after* signing/plist finishing, one zip per platform
+  in `dist/archive/v<ver>/` for every platform folder whose `BUILT_VERSION`
+  matches (provenance-gated, named skips); only the version just built is kept
+  (0.9.8; `--discard <ver>` retires a broken one).
 
 ## Decision ledger
 
@@ -349,7 +369,7 @@ speculative was later removed (see Decisions).
 | The gate is a formality, never a wall | 0.7.7: relay-only machines dismiss the gate (✕/Esc) and live at prejoin — the chip ("Join a room…") and ☰ reopen it. The gate covered the in-page masthead relay badge, which read as "can't reach the relay server" on machines using the bare page. |
 | Occupancy = publishers, counted from paths | People per room = distinct host/operator segments: pre-join from the open-relay root scan (listChannels `count`), joined from tile keys + self. Pure viewers announce nothing and are honestly uncountable; secured relays hide the pre-join scan, so the badge is omitted rather than wrong. |
 | The relay page probes its own relay anonymously | "Streams on this relay" opens a fresh 1.5 s announce drain every 5 s against `state().url` — no persistent connection to wedge, self-healing by construction, and truthful under auth (secured relays show room markers + a note, because that is exactly what anonymous subscribe can see). |
-| Cluster-ready, config-only | moq-relay 0.15.1 (bundled) does symmetric mesh clustering: `[cluster] connect=[hub?jwt=]` per spoke + `[connect] tls.fingerprint=[sha256]` (0.16.0 pins the hub's certificate; `tls.insecure` only when the hub's web port is unreachable) and `[cluster.lan]` mDNS for same-site relays; paths federate unchanged so discovery/rooms need zero client work; each node needs a unique `[stats] node`. Secured mode needs the same JWK everywhere + a full-access relay token. kastr_relay writes all of it since 0.11.0 (federation) and 0.16.0 (pinning, LAN, internal API). |
+| Cluster-ready, config-only | moq-relay (0.17.0 bundled) does symmetric mesh clustering: `[cluster] connect=[hub?jwt=]` per spoke + `[connect] tls.fingerprint=[sha256]` (0.16.0 pins the hub's certificate; `tls.insecure` only when the hub's web port is unreachable); paths federate unchanged so discovery/rooms need zero client work; each node needs a unique `[stats] node`. Secured mode copies no key: the spoke presents the hub's federation code and the hub mints its full-access relay token (0.11.0), and each relay's own KASTR answers that relay's per-session auth question (`POST /api/session`, 0.16.0). kastr_relay writes all of it since 0.11.0 (federation) and 0.16.0 (pinning, internal API). The `[cluster.lan]` mDNS mesh for same-site relays (0.16.0) left the Relay page in 0.21.23 and is removed in 0.21.40. |
 | Own panes are grid items via display:contents | 0.7.8: #mine and #pubPanes are display:contents wrappers, so each .pubpane is a direct #stage grid cell — first-class tiles without moving a node (the never-reparent rule holds; captureStream keeps painting). Every "my windows stack wrong" report traced to the one-card-with-sub-panes design; there is no card any more. |
 | Collage rows are definite px | grid-auto-rows:auto lets CONTENT stretch a row (an RTSP video's natural height, a rows strip). applyState writes gridAutoRows = round(tw·9/16) with the px columns — no content anywhere can bend the grid. |
 | Publish is healed by the discovery echo | The watch side always had heal loops; the publish side had none — the root of "I see them, they can't see me". A slot live 20 s under a healthy relay (tri ok + joined) with no echo of its own path in window.__echoed is objectively dead: rebuild it (30 s backoff). The echo is an observed fact; the guard on tri prevents pointless rebuilds during outages. |
@@ -469,19 +489,78 @@ speculative was later removed (see Decisions).
 | 15 s send timeout in `handle_stream` | A reader that stops consuming blocked the pump forever and wedged ffmpeg; ffmpeg's `-timeout` cannot fire while blocked writing to the pipe. |
 | Teardown exits from `finally` | A flush on the windowed build's `None` stdout once threw *between* cleanup and exit, leaving a zombie holding the port. |
 
+## Since 0.21.16
+
+The per-release sections further down stop at 0.21.16. This is the short version of what changed in the architecture
+from 0.21.17 to 0.21.40; RELEASES.md has the detail and the measurements for each release.
+
+- **The relay 0.17 stack and the `~` control namespace (0.21.17).** moq-relay 0.17.0, moq CLI 0.14.0, @moq/watch 0.6.2,
+  @moq/publish 0.5.2, hang 0.5.2, net 0.4.2. The new relay hides '.'-named paths from moq-lite-06 clients, so every KASTR
+  control path moved from `.` to `~` (`kastr_relay.NS`, see the note at the top). Two KASTR patches on the vendored
+  player keep 0.6.0's playout behaviour (the audio max-age floor and the catalog delay cap).
+- **Native screen, window and tab sharing (0.21.20, 0.21.22).** On Windows the host captures with ffmpeg `gfxcapture`
+  and publishes a `screen://` feed through the same `ffmpeg | moq import` pair a camera uses (`kastr_screen`,
+  `kastr_screen_sources`). `kastr_loopback` captures the computer's sound without KASTR's own process tree,
+  `kastr_overlay` draws the red border and the Stop sharing bar (both excluded from capture), and `kastr_tabs` lists and
+  crops the tabs of running browsers through UI Automation.
+- **Background effects on the GPU and the NPU (0.21.21).** A WebGL2 renderer refines the person mask with a guided
+  filter; MODNet runs over WebNN on an NPU when there is one (`assets/npu`, pinned by `vendor-npu.py`), otherwise on the
+  GPU, otherwise MediaPipe as before.
+- **Latency from the stream's own clock (0.21.22, 0.21.37).** The picture-strip stamp is retired: a viewer maps each
+  decoded frame's timestamp to its capture time through the catalog clock, shown only to the viewer who asks. Since
+  0.21.37 every relay measures its offset to the hub's clock (every 3 minutes, best of three round trips) and hands it
+  to its pages, so the whole fleet reads one clock.
+- **Finding a relay (0.21.22, 0.21.36).** `kastr_mdns` advertises a reachable relay as `_kastr._tcp` (discovery data
+  only, never a code or secret) and browses for relays when the saved one is offline. At every launch a Full or Viewer
+  KASTR ranks every relay it knows (`kastr_serve.rank_relays`, `/api/lan/nearest`): a private address before a public
+  one, then fewer network hops (read from one ping's reply), then response time. Publisher and relay boxes never switch on their own.
+  The relay-to-relay LAN mesh (`[cluster.lan]`, 0.16.0) lost its Relay page block in 0.21.23 and is removed in 0.21.40:
+  relay.toml never has `[cluster.lan]`, a stale `lan` block in relay-auth.json is ignored and a leftover `lan.secret` is
+  deleted. mDNS discovery and its UDP 5353 firewall rule stay.
+- **Audio first on a weak connection (0.21.23).** After the adaptive audio delay (0.21.9), a listener still short of
+  bandwidth pauses video from people off the stage, then shares and grids off the stage. Audio is never stopped, and
+  the ladder steps back after two quiet minutes.
+- **The hub owns every room (0.21.25, 0.21.27, 0.21.35).** A spoke forwards every room create, keep, lock, close and
+  group change to the hub and lists the hub's rooms; a dark hub refuses new rooms. Every relay keeps a copy of the hub's
+  list on disk (`hub-rooms.json` in its state folder), so a relay restarted while the hub is down still lists them.
+  Hub duties can move to another relay: the old hub checks the admin code, sends its rooms, room groups, chat history,
+  access codes (as salted hashes) and active kicks, tells every spoke to re-point, and carries on as a spoke.
+- **Grids take any source (0.21.26).** Besides RTSP/HTTP, a feed can be `device://` (a webcam KASTR opens once and copies
+  over loopback), `media://` (a looping file) or `screen://` (a share). Each is published like an RTSP camera and can sit
+  in any grid. Screen, window and tab shares are saved and come back after a relaunch when the same target still exists.
+- **RTMP ingest (0.21.29 to 0.21.31).** An `rtmp-in://` feed listens on its own TCP port in 1935-1944 behind a random
+  key. The picture is re-encoded once as it arrives, with a keyframe every second, and the sound passes through. A host
+  capture (a camera on this computer or an RTMP ingest) feeds up to six monitor ports, one per reader (0.21.30), and a
+  dark camera rejoins its grid only while ffmpeg reports its video growing (0.21.31).
+- **Spokes check in over the held request (0.21.30, 0.21.39).** The request every spoke already holds at the hub for
+  kicks and commands counts as its check-in (about every 30 s); a spoke unseen for 3 minutes leaves the hub's table.
+  Since 0.21.39 a spoke also sends a machine id that a rename does not change, so one machine is one row.
+- **Several spotlights (0.21.32).** Spotlight votes add up instead of replacing each other; two or more spotlit tiles
+  share the stage as a grid, and Remove spotlight takes one out for everyone.
+- **Web clients off on a relay, downloads ready (0.21.32, 0.21.37).** `web_page = off` in kastr.ini stops handing the
+  page to other devices while KASTR apps and federated relays keep every `/api/` route and `/relay`; switching a box to
+  a relay mode turns it off (0.21.37). A box whose page is open to the network builds both install zips
+  (`kastr_release`) in the background, starting 2 minutes after launch, and keeps them until the next version.
+- **Frozen grid cells restart (0.21.33).** A cell's preview player that decodes no new frame for 12 s while data arrives
+  is restarted; a second freeze within 10 minutes switches it to KASTR's H.264 conversion.
+- **The person's own browser (0.21.40).** kastr.ini `browser = auto` (the new default; also `bundled`, `system` or a
+  path): on a person's computer the window opens in their default browser when it is Chromium-based, with their own
+  profile, so Share ▸ a browser tab lists their real tabs. KASTR's bundled browser is still used on boxes (relay, hub
+  and spoke machines, Publisher and Viewer modes, a machine with camera feeds or grids), when the default browser is not
+  Chromium-based, and on macOS (no default-browser detection there yet). In the person's browser KASTR never closes or
+  kills the browser: the window reports its own close and KASTR ends within about 8 seconds once no page is left. The
+  NPU engine needs a browser flag, so effects run on the GPU there.
+- **Server cleanup (0.21.40).** `request_class` is gone (locality is `kastr_relay.is_local`); `/api/ini`, `/api/archive/seg`,
+  `/api/relay/lan` and `/api/relay/spokes/close-room` are removed; `/api/relay/status` and `/api/relay/health` carry no
+  `lan` field; only the `~` control namespace is recognised.
+
 ## Known limitations & risks
 
-- **RTSP audio is not published** (never was; now explicit at the bridge).
-- **macOS binary** is unbuilt/unverified — `build.py` supports it, no Mac here.
-- **esm.sh imports are unpinned**: a library release can change behaviour per
-  browser profile cache. Vendored copies exist in `assets/` but are not what
-  the pages load. Pinning is recommended future work.
+- **macOS binary**: `build-mac.sh` builds it (0.13.1), but the Mac binary has not
+  yet been run on Mac hardware.
 - **Shared relay state**: a long-lived relay accumulated a path that black-holed
   subscriptions once; restart clears it. KASTR reports starvation but no longer
   tries to route around relay faults.
-- **OneDrive/antivirus** intermittently locks the exe during builds
-  (PE-checksum retries succeed); excluding the folder from sync/scanning is
-  advised.
 
 ### 0.9.8
 
@@ -855,7 +934,7 @@ speculative was later removed (see Decisions).
 
 - **A Host header is a claim; peer and Origin make it an identity.** Six host controls trusted `Host: 127.0.0.1`, which
   any client can type. One request class (`request_class`) now decides for every route, and the machine's own window is
-  the only `local` caller.
+  the only `local` caller. (0.21.40: `request_class` is gone; `kastr_relay.is_local` is the one check.)
 - **A served page inherits nothing from its server.** The relay host used to bake its own host slug and a loopback relay
   into every page it served, so a phone would have been the relay box in disguise. Identity and relay address are per
   request (`__KASTR_CLIENT__`, `web`, `page_relay`); a web device derives its own `web-<id>` host.
@@ -954,7 +1033,7 @@ speculative was later removed (see Decisions).
 - **A warning needs a wish.** The effects arm waited thirty seconds for a camera track and then warned that none came — on a camera the operator had switched off, where no track was ever possible (`invisible` disables the library's capture outright). A timeout is only a fault when something was asked for: the loop's gate now reads the pause first, and the warning is reserved for a camera that is on, where the library's device signals plus one probe getUserMedia of our own can say why — the library swallows the error, but its DOMException name is still there for whoever asks again.
 - **A one-way latch needs the user's lever.** The 0.8.6 auto-pause cleared itself on the track's `unmute`; the 0.16.0 library bump made `invisible` END the muted track instead, so the unmute never came and `autoPaused` stuck for the slot's lifetime, silently gating stall nudges and now the effects loop. When a flag is cleared by an event the library may no longer deliver, the explicit user action that overrides it must clear it too.
 - A cold open shows the picture you clicked, not the picture you asked for: the composite's cell is the only frame the viewer's relay already carries; the camera's first subscribe waits for its next keyframe (1-45 s on UniFi). Zoom the cell at once and pull the camera behind it.
-- An off-stage tile may still decode: `visible="always"` is a subscription lever, not a paint lever -- the player's renderer `#s` sets its visible signal for `always` before reading the canvas, the Player feeds that signal to the decoder's `enabled`, and `video.out.frame` is set on the first decoded frame without a canvas (vendored @moq/watch 0.6.0 player). Recorded so it is not re-derived.
+- An off-stage tile may still decode: `visible="always"` is a subscription lever, not a paint lever -- the player's renderer `#s` sets its visible signal for `always` before reading the canvas, the Player feeds that signal to the decoder's `enabled`, and `video.out.frame` is set on the first decoded frame without a canvas (vendored @moq/watch 0.6.0 player, measured in 0.21.15; KASTR vendors 0.6.2 since 0.21.17). Recorded so it is not re-derived.
 - A parked composite stays warm: ~1.2 Mbit/s + one 720p decode buys an instant return and a moving cell during the wait; `GRID_PARKED_WARM` is the one switch, and the `document.hidden` branch still wins.
 - Retention follows the native pairs: hang's Broadcast default keeps 30 s per hop (`container.mjs` `Milli(3e4)`); the page asks 5 s like `import --max-age 5s`; archive 2 s and fMP4 4 s fit inside.
 - A page-level wait must be reachable by the tick on EVERY path: the 1 s tick `continue`s whenever bytes advance, so a notice placed after `stallReport` could neither update nor clear while bytes flowed; it sits before the bytes-advance block and at both early continues.

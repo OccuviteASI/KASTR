@@ -66,7 +66,7 @@
   try { Object.freeze(client); } catch (e) {}
   window.__kastrClient = client;
   window.__client = client;                       // rig alias
-  window.__caps = function () { var o = {}; for (var k in client) o[k] = client[k]; return o; };
+  window.__caps = function () { var o = {}; for (var k in client) o[k] = client[k]; return o; };   // rig
 
   // Needed by the vendored @moq/net, qmux, signals, watch player and web-socket-stream,
   // which load as modules after this script (Chrome 119+/Safari 17.4+/Firefox 121+ have it).

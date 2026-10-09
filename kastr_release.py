@@ -31,6 +31,8 @@ PLATFORMS = {
     "win32": {"dir": "windows", "binary": "KASTR.exe", "bkey": "win64", "prune": "windows"},
     "linux": {"dir": "linux", "binary": "KASTR", "bkey": "linux64", "prune": "linux"},
 }
+# The template files each platform ships beside its binary. 0.21.40: their sources are tracked in the repo as
+# extras/<dir>/<name> (build.py TEMPLATES); build.py publish_feed copies them into updates/<dir>/extras/.
 EXTRAS = {
     "win32": ("kastr.ini",),
     "linux": ("kastr.ini", "README.txt", "install.sh", "kastr.svg"),
@@ -42,11 +44,6 @@ ESTIMATE = {"win32": 390 << 20, "linux": 420 << 20}   # shown before the first a
 
 _lock = threading.Lock()
 _building = {}                      # plat -> {"at": t, "thread": Thread}
-_log = [print]
-
-
-def set_log(fn):
-    _log[0] = fn
 
 
 def zip_name(plat, version):
@@ -166,7 +163,7 @@ def _pruned(rel, plat):
 def assemble(plat, version, src, out_path, log=None):
     """Write the `plat` release zip from `src` (see sources()) to out_path via .part + os.replace.
     Returns the entry count. Entry names keep the <plat>/ root like build.py's archive."""
-    log = log or _log[0]
+    log = log or print
     spec = PLATFORMS[plat]
     top = spec["dir"] + "/"
     tmp = out_path + ".part"
@@ -288,7 +285,7 @@ def fetch_browser_zip(plat, root, log=None):
     """0.21.8: download the pinned Chrome for Testing zip for `plat` (about 200 MB) into <root>/updates/browser/ and
     write its VERSION when missing -- exactly what a hub's co-located feed would have carried. Spokes mirror it from
     the hub afterwards (kastr.mirror_feeds). Returns the zip path; raises on failure."""
-    log = log or _log[0]
+    log = log or print
     spec = PLATFORMS[plat]
     pin = browser_pin()
     if not pin:
@@ -343,7 +340,7 @@ def path_for(plat, version, state_dir):
 
 def prepare(plat, version, state_dir, root=None, own=None, frozen=None, log=None):
     """Start assembling on a daemon thread (idempotent). Returns the status() dict after the kick."""
-    log = log or _log[0]
+    log = log or print
     src, why = sources(plat, version, root=root, own=own, frozen=frozen)
     need_browser = src is None and _browser_fetchable(plat, why)   # 0.21.8
     if src is None and not need_browser:
@@ -413,7 +410,7 @@ def start_prebuilder(state_dir, version_fn, log=None, first=120.0, busy=120.0, i
     """0.21.32: on a host that serves the web page to others, keep both install zips of the running version ready:
     first look `first` s after launch (the box settles first), then every `busy` s until they are, then every `idle` s
     (a mirror of the other platform's files can arrive later; a new version means a relaunch, which starts over)."""
-    log = log or _log[0]
+    log = log or print
 
     def tick():
         wait = idle

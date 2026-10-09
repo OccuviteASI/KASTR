@@ -72,7 +72,7 @@ class FxPausedToastTest(unittest.TestCase):
         cam = cam[:cam.index(EOL)]
         for must in ('slot.entry.kind === "camera"', "!slot.rtsp", "slot.entry.videoPaused", "slot.autoPaused"):
             self.assertIn(must, cam)
-        self.assertEqual(s.count("  const loopWanted = (slot, fx) => !camOff(slot) && (fxActive(fx) || stampOnly(slot) || uprightOnly(slot));"), 1)
+        self.assertEqual(s.count("  const loopWanted = (slot, fx) => !camOff(slot) && (fxActive(fx) || uprightOnly(slot));"), 1)   # 0.21.40: no stamp loop
         self.assertNotIn("  const loopWanted = (slot, fx) => fxActive(fx) ||", s, "the old ungated loopWanted is back")
         # the gate is consulted by applyFx (stop + never arm), the arm's poll, fxNoTrack, __fxArms and /api/diag
         self.assertGreaterEqual(s.count("camOff("), 7)

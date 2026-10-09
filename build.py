@@ -76,6 +76,20 @@ PLATFORM_DIR = "windows" if WINDOWS else ("macos" if MACOS else "linux")
 DIST = os.path.join(HERE, "dist", PLATFORM_DIR)
 DIST_ROOT = os.path.join(HERE, "dist")
 ARCHIVE = os.path.join(DIST_ROOT, "archive")
+# 0.21.40: the templates a release ships beside the binary (kastr.ini; on Linux also README.txt, install.sh and
+# kastr.svg) are TRACKED in extras/<plat>/ -- they used to live only in the git-ignored dist/<plat>/, placed by
+# hand. Which names a platform ships is kastr_release.EXTRAS (the list a host's install-zip assembler reads).
+TEMPLATES = os.path.join(HERE, "extras")
+# dist/<plat>/kastr.ini is ALSO the live config of a KASTR run from that folder (the app edits it: relay, mode,
+# ports), so a build never overwrites it -- the release zip and the update feed take kastr.ini from extras/.
+LIVE_CONFIG = frozenset({"kastr.ini"})
+# 0.21.40: the large vendored binaries (the NPU runtime + MODNet model, the MediaPipe wasm) are no longer tracked in
+# git. Every file these manifests pin is verified (size + sha256) before a build; the vendor script fetches whatever
+# is missing or corrupt from its pinned URL. (manifest, vendor script)
+VENDORED = (
+    (os.path.join(HERE, "assets", "npu", "manifest.json"), "vendor-npu.py"),
+    (os.path.join(HERE, "assets", "mediapipe", "manifest.json"), "vendor-mediapipe.py"),
+)
 
 # Platform folders that make up a release, in the order they go into the zip.
 PLATFORMS = ("windows", "macos", "linux")
@@ -85,6 +99,65 @@ STALE_PREFIX = NAME + ".old-"
 
 # 0.9.8: only the release just built stays in dist/archive (one folder per
 # version, one zip per platform). Broken builds go with --discard.
+
+
+def vendored_files(manifest_path):
+    """0.21.40: [(path, sha256, bytes)] for every file a vendor manifest pins -- assets/npu (runtime.files + model)
+    and assets/mediapipe (models + runtime)."""
+    import json
+    with open(manifest_path, encoding="utf-8") as f:
+        man = json.load(f)
+    base = os.path.dirname(manifest_path)
+    rt = man.get("runtime") or {}
+    groups = [rt.get("files") if isinstance(rt.get("files"), dict) else rt, man.get("models") or {}]
+    out = []
+    for group in groups:
+        for rel, rec in sorted(group.items()):
+            if isinstance(rec, dict) and rec.get("sha256"):
+                out.append((os.path.join(base, *rel.split("/")), rec["sha256"], rec.get("bytes")))
+    model = man.get("model")
+    if isinstance(model, dict) and model.get("name") and model.get("sha256"):
+        out.append((os.path.join(base, model["name"]), model["sha256"], model.get("bytes")))
+    return out
+
+
+def verify_vendored(manifest_path):
+    """0.21.40: what is wrong with the files a vendor manifest pins -- [] when each is present with its size and
+    sha256 (a missing manifest, or one that pins nothing, is a problem too)."""
+    if not os.path.isfile(manifest_path):
+        return ["%s is missing" % manifest_path]
+    try:
+        files = vendored_files(manifest_path)
+    except (OSError, ValueError) as e:
+        return ["%s is unreadable (%s)" % (manifest_path, e)]
+    if not files:
+        return ["%s pins no files" % manifest_path]
+    bad = []
+    for path, want, size in files:
+        if not os.path.isfile(path):
+            bad.append("missing: %s" % path)
+        elif size is not None and os.path.getsize(path) != size:
+            bad.append("wrong size: %s (%d bytes, pinned %d)" % (path, os.path.getsize(path), size))
+        elif _sha256_file(path) != want:
+            bad.append("sha256 mismatch: %s" % path)
+    return bad
+
+
+def ensure_vendored(vendored=None, run=None, log=print):
+    """0.21.40: before a build -- verify every vendored file; when one is missing or corrupt run its vendor script
+    (pinned URLs, sha256-checked downloads) and verify again. A release never ships without the model."""
+    run = run or (lambda script: subprocess.run([sys.executable, os.path.join(HERE, script)], check=False))
+    for manifest, script in (vendored or VENDORED):
+        bad = verify_vendored(manifest)
+        if not bad:
+            continue
+        for b in bad:
+            log("  " + b)
+        log("  fetching with %s (pinned, sha256-checked)" % script)
+        run(script)
+        bad = verify_vendored(manifest)
+        if bad:
+            sys.exit("vendored files still wrong after %s: %s -- fix that before building" % (script, "; ".join(bad)))
 
 
 def read_version():
@@ -272,6 +345,123 @@ def zip_entry(z, full, arcname):
         z.writestr(zi, f.read())
 
 
+def template_files(plat, templates=None):
+    """0.21.40: {name: path} of the templates dist/<plat> ships -- extras/<plat>/<name> for each name
+    kastr_release.EXTRAS lists for that platform and the tree carries (macos has none yet)."""
+    d = os.path.join(templates or TEMPLATES, plat)
+    out = {}
+    for name in kastr_release.EXTRAS.get(PLATFORM_API_KEY.get(plat, plat), ()):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            out[name] = p
+    return out
+
+
+def _same_bytes(a, b):
+    try:
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            return fa.read() == fb.read()
+    except OSError:
+        return False
+
+
+def stage_templates(plat, folder=None, templates=None, log=print):
+    """0.21.40: copy the templates into dist/<plat>/ so the folder is a complete install. Files only the
+    release ships (README.txt, install.sh, kastr.svg) are refreshed when they differ; kastr.ini (LIVE_CONFIG)
+    is only SEEDED when the folder has none -- an existing one may be the operator's edited live config.
+    Returns the names written."""
+    import shutil
+    folder = folder or os.path.join(DIST_ROOT, plat)
+    written = []
+    for name, src in sorted(template_files(plat, templates).items()):
+        dst = os.path.join(folder, name)
+        if os.path.exists(dst) and (name in LIVE_CONFIG or _same_bytes(src, dst)):
+            continue
+        os.makedirs(folder, exist_ok=True)
+        shutil.copyfile(src, dst)
+        if name.endswith(".sh") and not WINDOWS:
+            os.chmod(dst, 0o755)
+        written.append(name)
+    if written:
+        log("  templates -> dist/%s: %s" % (plat, ", ".join(written)))
+    return written
+
+
+def template_overrides(plat, templates=None):
+    """0.21.40: arcname -> template path for the release zip of dist/<plat>: <plat>/<name> and every
+    <plat>/updates/<sub>/extras/<name>. The zip takes these from extras/, never from the folder, so it
+    cannot carry a host's edited kastr.ini (dist/windows is where KASTR runs on the build box)."""
+    out = {}
+    for name, p in template_files(plat, templates).items():
+        out["%s/%s" % (plat, name)] = p
+    for sub in PLATFORMS:
+        for name, p in template_files(sub, templates).items():
+            out["%s/updates/%s/extras/%s" % (plat, sub, name)] = p
+    return out
+
+
+def write_platform_zip(plat, version, zip_path, root=None, templates=None):
+    """Zip dist/<plat> (arcnames keep the <plat>/ root) into zip_path; returns the entry count. 0.21.40:
+    factored out of archive_current (so it can run against a scratch tree) and the shipped templates come
+    from extras/ (template_overrides) -- a top-level template the folder lacks is added."""
+    import zipfile
+
+    root_dir = root or DIST_ROOT
+
+    def blew_up(err):
+        # os.walk swallows scandir failures by default, which would silently
+        # produce a partial bundle (an unreadable .app subtree, say).
+        raise err
+
+    overrides = template_overrides(plat, templates)
+    n = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        folder = os.path.join(root_dir, plat)
+        for root, dirs, files in os.walk(folder, onerror=blew_up):
+            dirs.sort()
+            # 0.9.0: the fleet-feed browser zips (updates/browser/*.zip,
+            # ~200 MB each) and browser.old-* leftovers stay out of the
+            # release archive; the browser/ folder itself ships.
+            if os.path.basename(root) == "updates":
+                dirs[:] = [d for d in dirs if d != "browser"]
+                # 0.21.1: another platform's co-located binary ships only when it IS this release
+                # (the Windows zip, built first, used to carry the previous Linux build)
+                keep = []
+                for d in dirs:
+                    fv = feed_version(os.path.join(root, d)) if d in PLATFORMS else version
+                    # 0.21.7: updates/<own>/ holds only extras/ (no binary) -- it ships; only a binary of another release is left out
+                    has_bin = d in PLATFORMS and os.path.exists(os.path.join(root, d, os.path.basename(PLATFORM_UPDATE_BINARY[d])))
+                    if has_bin and fv != version:
+                        print("  left out of the %s zip: updates/%s is %s, not v%s" % (plat, d, ("v" + fv) if fv else "unversioned", version))
+                    else:
+                        keep.append(d)
+                dirs[:] = keep
+            if root == folder:
+                dirs[:] = [d for d in dirs if not d.startswith("browser.old-")]
+            # 0.8.6: the co-located update feed (dist/<plat>/updates,
+            # the OTHER platform's binary) ships INSIDE the zip -- one
+            # archive is a complete, fleet-serving deployment.
+            for fn in sorted(files):
+                if fn.startswith(STALE_PREFIX):
+                    continue    # a binary still held by a running app
+                # 0.13.1: PyInstaller --onefile --windowed leaves a
+                # loose dist/macos/KASTR beside KASTR.app, byte-for-
+                # byte the bundle's Contents/MacOS/KASTR. The zip
+                # carries the bundle tree only (100 MB saved).
+                if plat == "macos" and root == folder and fn == NAME:
+                    continue
+                full = os.path.join(root, fn)
+                arc = os.path.relpath(full, root_dir).replace(os.sep, '/')
+                zip_entry(z, overrides.pop(arc, full), arc)
+                n += 1
+        # 0.21.40: a template the folder does not hold yet still ships beside the binary
+        for arc in sorted(overrides):
+            if arc.count("/") == 1:
+                zip_entry(z, overrides[arc], arc)
+                n += 1
+    return n
+
+
 def archive_dir(version):
     """dist/archive/v<version> -- the one folder a release's zips live in (0.9.8)."""
     return os.path.join(ARCHIVE, "v%s" % version)
@@ -292,17 +482,10 @@ def archive_current(version):
     without redoing the first one. Arcnames keep the <plat>/ root, so an
     unpacked zip still yields windows/KASTR.exe or linux/KASTR.
     """
-    import zipfile
-
     out_dir = archive_dir(version)
     os.makedirs(out_dir, exist_ok=True)
     have = []
     counts = {}
-
-    def blew_up(err):
-        # os.walk swallows scandir failures by default, which would silently
-        # produce a partial bundle (an unreadable .app subtree, say).
-        raise err
 
     for plat in PLATFORMS:
         ok, why = archivable(plat, version)
@@ -318,47 +501,8 @@ def archive_current(version):
         # Build beside the target and swap, so an interrupted run cannot leave
         # a half-written zip standing in for a release.
         tmp = zip_path + ".part"
-        n = 0
         try:
-            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-                folder = os.path.join(DIST_ROOT, plat)
-                for root, dirs, files in os.walk(folder, onerror=blew_up):
-                    dirs.sort()
-                    # 0.9.0: the fleet-feed browser zips (updates/browser/*.zip,
-                    # ~200 MB each) and browser.old-* leftovers stay out of the
-                    # release archive; the browser/ folder itself ships.
-                    if os.path.basename(root) == "updates":
-                        dirs[:] = [d for d in dirs if d != "browser"]
-                        # 0.21.1: another platform's co-located binary ships only when it IS this release
-                        # (the Windows zip, built first, used to carry the previous Linux build)
-                        keep = []
-                        for d in dirs:
-                            fv = feed_version(os.path.join(root, d)) if d in PLATFORMS else version
-                            # 0.21.7: updates/<own>/ holds only extras/ (no binary) -- it ships; only a binary of another release is left out
-                            has_bin = d in PLATFORMS and os.path.exists(os.path.join(root, d, os.path.basename(PLATFORM_UPDATE_BINARY[d])))
-                            if has_bin and fv != version:
-                                print("  left out of the %s zip: updates/%s is %s, not v%s" % (plat, d, ("v" + fv) if fv else "unversioned", version))
-                            else:
-                                keep.append(d)
-                        dirs[:] = keep
-                    if root == folder:
-                        dirs[:] = [d for d in dirs if not d.startswith("browser.old-")]
-                    # 0.8.6: the co-located update feed (dist/<plat>/updates,
-                    # the OTHER platform's binary) ships INSIDE the zip -- one
-                    # archive is a complete, fleet-serving deployment.
-                    for fn in sorted(files):
-                        if fn.startswith(STALE_PREFIX):
-                            continue    # a binary still held by a running app
-                        # 0.13.1: PyInstaller --onefile --windowed leaves a
-                        # loose dist/macos/KASTR beside KASTR.app, byte-for-
-                        # byte the bundle's Contents/MacOS/KASTR. The zip
-                        # carries the bundle tree only (100 MB saved).
-                        if plat == "macos" and root == folder and fn == NAME:
-                            continue
-                        full = os.path.join(root, fn)
-                        arc = os.path.relpath(full, DIST_ROOT).replace(os.sep, '/')
-                        zip_entry(z, full, arc)
-                        n += 1
+            n = write_platform_zip(plat, version, tmp)
             os.replace(tmp, zip_path)
         except OSError as e:
             try:
@@ -376,11 +520,12 @@ def archive_current(version):
 def check_release_contents(have):
     """Flag drift in what actually ships, without pretending to fix it.
 
-    build.py deposits a binary and a marker; kastr.ini and README.txt are
-    placed by hand. Silently publishing whatever happens to be sitting in the
-    folder is how the two shipped kastr.ini files came to disagree.
+    build.py deposits a binary and a marker. 0.21.40: kastr.ini and the Linux
+    extras are no longer placed by hand -- they are tracked in extras/<plat>/
+    and the zip and the feed take them from there, so a missing template is
+    what is worth flagging (dist/<plat>/kastr.ini is that install's own config).
     """
-    expected = {"kastr.ini", BUILT_MARKER}
+    expected = {BUILT_MARKER}
     for plat in have:
         folder = os.path.join(DIST_ROOT, plat)
         names = {f for f in os.listdir(folder)
@@ -388,6 +533,9 @@ def check_release_contents(have):
         missing = expected - names
         if missing:
             print("  note: dist/%s has no %s" % (plat, ", ".join(sorted(missing))))
+        lacking = [n for n in kastr_release.EXTRAS.get(PLATFORM_API_KEY[plat], ()) if n not in template_files(plat)]
+        if lacking:
+            print("  note: extras/%s has no %s -- the %s release ships without it" % (plat, ", ".join(lacking), plat))
     # 0.13.1: the Docker image wraps dist/linux/KASTR, so a fresh Linux
     # binary means a stale image until docker-build.sh runs. Information only.
     if "linux" in have and os.path.exists(os.path.join(HERE, "Dockerfile")):
@@ -490,7 +638,7 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
-def publish_feed(version, have, root=None):
+def publish_feed(version, have, root=None, templates=None):
     """Fleet update feed (0.8.1): <root>/updates/<plat>/<binary> + latest.json.
 
     A KASTR instance serves this folder when it sits next to its binary;
@@ -522,18 +670,19 @@ def publish_feed(version, have, root=None):
         manifest["platforms"][PLATFORM_API_KEY[plat]] = {"size": os.path.getsize(dst),
                                                          "sha256": _sha256_file(dst), "version": version}
         # 0.21.7: the templates a host needs to assemble this platform's install zip for a web client
-        # (kastr_release): kastr.ini and the Linux extras, from dist/<plat>/ where they are placed by hand.
-        # A host must never ship its OWN kastr.ini (the operator's edited copy), so the template travels here.
+        # (kastr_release): kastr.ini and the Linux extras. A host must never ship its OWN kastr.ini (the
+        # operator's edited copy), so the template travels here. 0.21.40: from the tracked extras/<plat>/
+        # (TEMPLATES), no longer from dist/<plat>/, where kastr.ini is the build box's live config.
         exdir = os.path.join(dstdir, "extras")
         os.makedirs(exdir, exist_ok=True)
         names = []
+        tpl = template_files(plat, templates)
         for name in kastr_release.EXTRAS.get(PLATFORM_API_KEY[plat], ()):
-            sp = os.path.join(root, plat, name)
-            if os.path.isfile(sp):
-                shutil.copyfile(sp, os.path.join(exdir, name))
+            if name in tpl:
+                shutil.copyfile(tpl[name], os.path.join(exdir, name))
                 names.append(name)
             else:
-                print("  note: dist/%s has no %s -- the assembled %s zip will lack it" % (plat, name, plat))
+                print("  note: extras/%s has no %s -- the assembled %s zip will lack it" % (plat, name, plat))
         manifest["platforms"][PLATFORM_API_KEY[plat]]["extras"] = names
     # 0.13.1: a platform folder that is NOT part of this release leaves its
     # previous binary in updates/ -- say so, because the co-location below
@@ -722,14 +871,16 @@ def main():
     # 0.21.7: KASTR's edits to the vendored library (vendor-moq.py PATCHES: the audio maxAge floor) must be in place
     if subprocess.run([sys.executable, os.path.join(HERE, "vendor-moq.py"), "--check"], check=False).returncode != 0:
         sys.exit("the vendored MoQ library is not patched -- run vendor-moq.py --patch")
+    # 0.21.40: the NPU runtime + model and the MediaPipe wasm are not in git -- verified by sha256, fetched when
+    # missing or corrupt (before the tests: tests/test_npu_fx.py checks them too)
+    ensure_vendored()
     # 0.21.10: the unit tests under tests/ gate a release (the on-demand kill switch, the vendored patch)
     if subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", os.path.join(HERE, "tests")], check=False).returncode != 0:
         sys.exit("the unit tests under tests/ fail -- fix them before building")
     # 0.13.1: the RNNoise worklet the page loads for background-noise removal (vendor-noise.py)
     if not os.path.exists(os.path.join(HERE, "assets", "noise", "manifest.json")):
         sys.exit("assets/noise/manifest.json is missing -- run vendor-noise.py (needs network once)")
-    if not os.path.exists(os.path.join(HERE, "assets", "npu", "manifest.json")):   # 0.21.21: NPU / GPU person matting
-        sys.exit("assets/npu/manifest.json is missing -- run vendor-npu.py (needs network once)")
+    # 0.21.21: NPU / GPU person matting -- assets/npu (and assets/mediapipe) are checked file by file by ensure_vendored()
     add_data = [os.path.join(HERE, "assets") + sep + os.path.join("site", "assets")]
 
     # Ship the version beside the pages so the frozen app can read it back.
@@ -847,6 +998,13 @@ def main():
             f.write(version + chr(10))
     except OSError as e:
         sys.exit("built, but could not record %s (%s)" % (BUILT_MARKER, e))
+
+    # 0.21.40: README.txt / install.sh / kastr.svg refreshed from extras/<plat>/; kastr.ini only seeded when
+    # missing (dist/windows/kastr.ini is the live config of the KASTR run from there)
+    try:
+        stage_templates(PLATFORM_DIR)
+    except OSError as e:
+        print("  WARNING: templates not staged into dist/%s (%s) -- the zip still takes them from extras/" % (PLATFORM_DIR, e))
 
     # 0.9.0: the bundled browser. dist/<plat>/browser holds the pinned Chrome
     # for Testing (browser.json); the zip comes from the cache or is downloaded.

@@ -162,11 +162,11 @@ class CellOpen(unittest.TestCase):
     def test_cold_open_is_abandoned_on_every_exit(self):
         p = self.page
         # start, tick (moved on), tick (give-up), Gallery pill, cell click, zoom label, dblclick, Esc (0.21.20)
-        self.assertEqual(p.count("gridOpenEnd(false);"), 9)   # 0.21.23: + the tile menu's Unpin
+        self.assertEqual(p.count("gridOpenEnd(false);"), 8)   # 0.21.23: + the tile menu's Unpin; 0.21.40: Unpin + the Gallery button share goGallery()
         # 0.21.20: a click while the camera starts never cancels it (an impatient second click restarted the cold open)
         self.once("if (gridOpen && gridOpen.gp === name) { gridOpen.clicks = (gridOpen.clicks || 0) + 1; paintGridWait(); return; }")
         self.assertLess(p.index("if (gridOpen && gridOpen.gp === name) {"), p.index("if (viewZoomed(tile.canvas)) { gridOpenEnd(false);"))
-        self.once("e.stopPropagation(); gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null;")   # 0.21.38: the Gallery button (full screen / Fill window)
+        self.once("gridOpenEnd(false); manualPick = true; galleryChosen = true; viewResetAll(); selfSpotEl = null;")   # 0.21.38: the Gallery button; 0.21.40: every way back (goGallery)
         self.once("if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }")
         self.once("if (c && viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); fitMainstage(lastRail.rows); }")
         self.once("if (viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); } else viewZoomAt(c, 2, e.clientX, e.clientY);")

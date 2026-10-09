@@ -130,14 +130,5 @@
   }
   window.addEventListener("pagehide", function () { flush(); });
 
-  window.__prefs = {
-    seeded: seeded,
-    keys: function () {
-      var out = [];
-      try { for (var n = 0; n < ls.length; n++) { var kk = ls.key(n); if (kk && WL.test(kk)) out.push(kk); } } catch (e) {}
-      return out;
-    },
-    flush: flush
-  };
   if (seeded > 0) console.info("[prefs] seeded " + seeded + " keys from the server");
 })();

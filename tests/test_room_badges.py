@@ -17,8 +17,8 @@ class RoomBadges(unittest.TestCase):
     def test_video_count_published_and_read(self):
         p = _read("moq-watch-lite.html")
         self.assertIn('case "video": pubModel.video = Math.max(0, Number(value) || 0); break;', p)
-        self.assertIn('x.live && x.enabled !== false && x.name && !x.videoPaused).length', p)   # a camera switched off is not video
-        self.assertIn("video: Number.isFinite(v.video) ? v.video : undefined } });", p)
+        self.assertIn('if (!x.live || x.enabled === false || !x.name || x.videoPaused) continue;', p)   # a camera switched off is not video (0.21.40: onAirCount)
+        self.assertIn("video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1", p)
         self.assertIn('(p.who.video ?? (p.who.publishing?.length || 0)) > 0 || (p.who.rtspPaths?.length && p.who.rtsp !== "off")', p)
 
     def test_badge_places(self):

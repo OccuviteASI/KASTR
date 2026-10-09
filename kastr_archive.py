@@ -330,12 +330,6 @@ class Archiver:
             out.append(s["path"])
         return out
 
-    def seg_path(self, broadcast, name):
-        if not SEG_RE.match(str(name or "")):
-            return None
-        p = os.path.join(self.root, safe_name(broadcast), name)
-        return p if os.path.isfile(p) else None
-
     # ---- retention -----------------------------------------------------------------
     def sweep(self, now=None):
         now = now or time.time()

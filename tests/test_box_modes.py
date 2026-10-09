@@ -102,7 +102,7 @@ class NotTheHub(unittest.TestCase):
         self.assertFalse(self._auth(True).not_hub())
 
     def test_go_live_has_no_footer(self):
-        self.assertIn("  footer.asi-footer { display:none !important; }   /* 0.21.24", _read("moq-watch-lite.html"))
+        self.assertNotIn('<footer class="asi-footer">', _read("moq-watch-lite.html"))   # 0.21.24 hid it; 0.21.40 removed it
 
 
 class RoomsOnTheHub(unittest.TestCase):
@@ -111,7 +111,9 @@ class RoomsOnTheHub(unittest.TestCase):
     def test_relay_page(self):
         r = _read("relay.html")
         self.assertNotIn("<th>Rooms</th>", r)
-        self.assertNotIn('"</td><td>" + roomsCell(r) + "</td>', r)
+        # 0.21.40: the dropped column's renderer, its chat/close buttons and the close-room call are gone too
+        for gone in ("roomsCell", ".sprp", ".sprx", ".sproom", "/api/relay/spokes/close-room"):
+            self.assertNotIn(gone, r)
         self.assertIn("const isSpoke = !!(lastStatus && lastStatus.cluster && lastStatus.cluster.connect && lastStatus.cluster.hub !== true);", r)
         self.assertIn('if (s.cluster && s.cluster.connect && s.cluster.hub !== true) $("roomsPanel").hidden = true;', r)
 
@@ -121,7 +123,7 @@ class JoinGate(unittest.TestCase):
         # 0.21.28 (Kenton: "the shadow in the back doesn't cover the whole screen")
         p = _read("moq-watch-lite.html")
         self.assertNotIn("#joinGate { left:calc(var(--sbw) + 26px); }", p)
-        self.assertIn("#joinGate { z-index:67; }", p)
+        self.assertIn("#joinGate { position:fixed; inset:0; z-index:67;", p)
 
     def test_rooms_in_the_card_not_behind_it(self):
         # 0.21.30 (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side")

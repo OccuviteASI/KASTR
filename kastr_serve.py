@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Shared static-file server for the KASTR pages.
+"""KASTR's HTTP server: the pages and the whole local API.
 
-Single source of truth for the two things the pages need from their host:
+Used by both kastr-serve.py (plain CLI) and kastr.py (packaged app), so the two
+cannot drift apart.
 
-1. COOP/COEP headers, so the document is cross-origin isolated and
-   SharedArrayBuffer is available. @moq/watch uses SharedArrayBuffer for its
-   primary (reliable) audio path; without isolation it silently falls back to a
-   postMessage path that can stall indefinitely.
+Pages: every document is served with COOP/COEP headers, so it is cross-origin
+isolated and SharedArrayBuffer is available (@moq/watch's reliable audio path
+needs it; without isolation it silently falls back to a postMessage path that
+can stall). Pages are rewritten on the way out -- this machine's name, the
+version, the client class and the relay address replace placeholders (the
+prebuilt stats bundle has `http://localhost:4443` baked in and reads no
+override) -- so the files on disk stay pristine and the relay lives in one
+place.
 
-2. Relay substitution. stats.html is a prebuilt bundle with
-   `http://localhost:4443` baked in as a minified constant and reads no query
-   param or localStorage override (the upstream watch.html/publish.html demo
-   pages were dropped in 0.9.3). Rewriting on the way out keeps the build on
-   disk pristine and puts the relay in exactly one place.
-
-Used by both kastr-serve.py (plain CLI) and kastr.py (packaged app).
+API (/api/*): instance and diagnostics, the RTSP bridge (kastr_rtsp), the
+bundled relay's control plane and token service (kastr_relay), chat, media,
+archive, the fMP4 stream watch.html plays (/api/watch/), fleet updates and
+install downloads.
 """
 import hashlib
 import json
@@ -46,10 +48,6 @@ BUILTIN_RELAY = "http://localhost:4443"
 # on the relay and clobber each other -- which is exactly what the upstream
 # demo's hardcoded "me.hang" does on every computer that opens it.
 HOST_TOKEN = "__ASI_HOSTNAME__"
-
-# The upstream demo pages hardcoded this as their broadcast name (kept: any
-# page carrying it is still rewritten).
-BUILTIN_NAME = '"me.hang"'
 
 # 0.17.0: who the page is being served to -- "app" for the machine's own window,
 # "web" for a browser on another device that opened this relay host's web port.
@@ -200,9 +198,6 @@ def mode_state():
             "running": MODE,
             "path": _ini_file(),
             "note": "applies when KASTR relaunches (Apply & relaunch)"}
-
-
-INI_KEYS = ("mode", "host")   # what the pages may write (0.8.6)
 
 
 # 0.21.32 (Kenton: "I don't have the ability to turn off the web client toggle" -- "I am going to turn it off on most
@@ -728,6 +723,8 @@ def hub_web_base(host_or_url, default=8000):
     return "http://%s:%d" % (("[%s]" % host) if ":" in host else host, hub_web_for(host, default))
 
 
+BYE_AT = [0.0]   # 0.21.40: monotonic time of the page's last goodbye (pagehide)
+PAGES = {}       # 0.21.40: page id -> monotonic time of its last heartbeat (a page that said goodbye leaves)
 HUB_CLOCK = {"off": 0.0, "rtt": None, "at": 0}   # 0.21.37: this host's clock offset to the HUB's (ms; 0 on the hub / unknown)
 _HUB_CLOCK_RUNNING = [False]
 
@@ -1270,8 +1267,6 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             (PRECACHE_TOKEN.encode(), json.dumps(precache_list(root)).encode()),   # 0.20.0: sw.js
             (HOST_TOKEN.encode(), page_host.encode()),
             (CLIENT_TOKEN.encode(), (b"web" if remote else b"app")),
-            # Give the upstream demo page a machine-specific default too.
-            (BUILTIN_NAME.encode(), f'"{page_host}/me.hang"'.encode()),
             # 0.21.17: the prebuilt stats bundle (assets/stats-*.js) names the relay's stats prefix and skips '.'-led
             # keys; the relay now publishes under ~stats (relay.toml [stats] prefix) -- retarget it at serve time so the
             # vendored bundle on disk stays byte-identical. Both needles occur only in that bundle.
@@ -1392,7 +1387,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ".webmanifest": "application/manifest+json",   # 0.17.0: PWA manifest
         }
 
-        # 0.17.0: the request class (kastr_relay.request_class) -- "local" is the
+        # 0.17.0: the request class (kastr_relay.is_local) -- "local" is the
         # machine's own window/tools, "remote" a LAN box or a web client.
         def _local(self):
             return kastr_relay.is_local(self)
@@ -1708,6 +1703,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 except OSError:
                     pass
 
+        def _alive_bye(self):
+            """0.21.40: the page is going (pagehide) -- the launcher ends KASTR unless a heartbeat follows (a reload)."""
+            if not self._local():
+                return self._deny("heartbeat")
+            BYE_AT[0] = time.monotonic()
+            PAGES.pop((parse_qs(urlparse(self.path).query).get("p") or [""])[0], None)
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
         def _alive(self):
             """Heartbeat from a served page.
 
@@ -1722,6 +1727,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if not self._local():
                 return self._deny("heartbeat")
             alive_ref[0] = time.monotonic()
+            PAGES[(parse_qs(urlparse(self.path).query).get("p") or [""])[0]] = alive_ref[0]   # 0.21.40
             self.send_response(205 if CLOSING[0] else 204)   # 0.8.8: 205 = please close
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -1807,8 +1813,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             `watcher.viewing` in its 3 s diag POST; here it is the MAX over the
             watcher snapshots younger than VIEWING_FRESH_S, with the age of the
             newest one: {"n": int, "ageS": float}. None when no such snapshot
-            exists -- a `?solo=1` box (no page reporting), a hidden-only page or
-            a 0.12 page without the field: "unknown", never 0."""
+            exists -- a `?solo=1` box (no page reporting) or a hidden-only page:
+            "unknown", never 0."""
             now = time.time()
             best, newest = None, None
             for snap in list(diag_ref.values()):
@@ -1961,13 +1967,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # when the browser profile lost its localStorage.
                 "operator": op_ref[0],
                 # 0.8.3: the launch-time fleet-update check's outcome (the
-                # updater used to fail in silence). null in dev harnesses
-                # and on pre-0.8.3 launches.
+                # updater used to fail in silence). null in dev harnesses.
                 "updateCheck": self._update_check(),
                 # 0.8.13: seconds since the app window last pinged (None: never)
                 # -- the launcher's hand-off check reads it -- and the bundled
                 # ffmpeg's version, so a smoke test can assert the bundle.
-                "aliveAge": (round(time.monotonic() - alive_ref[0], 1) if alive_ref and alive_ref[0] else None),
+                "aliveAge": (round(time.monotonic() - alive_ref[0], 1) if alive_ref and alive_ref[0] else None), "pages": len(PAGES),
                 "ffmpeg": ffmpeg_version(getattr(bridge, "ffmpeg", None)) if bridge and getattr(bridge, "ffmpeg", None) else None,
                 # 0.13.0: feeds the pages on this box are pulling ({n, ageS} or
                 # null = no page reporting) and whether chat on this origin is
@@ -2410,7 +2415,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             return ((qs or {}).get("jwt") or [""])[0] if qs is not None else ""
 
         def _admin_for(self, room, qs=None):
-            """0.21.2: True when the caller's token carries `<room>/.admin` (the admin access code). On an
+            """0.21.2: True when the caller's token carries `<room>/~admin` (the admin access code). On an
             OPEN relay nobody is an admin this way (_room_claims returns None with no claims)."""
             jwt = self._bearer(qs)
             if not jwt or not room:
@@ -2633,7 +2638,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 code = getattr(r, "status", None) or r.code
                 hdrs = r.headers
                 if code == 404 and "json" not in (hdrs.get("Content-Type") or ""):
-                    return self._chat_reply(502, {"error": "hub KASTR is older than 0.12.0 (no chat service)"})
+                    return self._chat_reply(502, {"error": "hub chat unavailable"})
                 if code == 410:
                     return self._chat_reply(502, {"error": "hub chat closed this room"})
                 self.send_response(code)
@@ -2730,7 +2735,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 cs = chat_store(relay_srv=relay_srv)
                 hook = (lambda slug, _c=cs: _c.delete_room(slug)) if cs is not None else None
                 slug = str(p.get("slug") or "")
-                # 0.21.2: an admin-code holder (Authorization: Bearer <member token> with the room's .admin grant)
+                # 0.21.2: an admin-code holder (Authorization: Bearer <member token> with the room's ~admin grant)
                 # closes like the operator; the creator still proves itself with the roomKey
                 admin = self._admin_for(slug)
                 obj, code = kastr_relay.close_room(store, slug, p.get("roomKey"), admin, hook=hook, log=log)
@@ -3469,6 +3474,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             path = self.path.split("?", 1)[0]
             if path == "/api/alive":
                 return self._alive()
+            if path == "/api/alive/bye":   # 0.21.40
+                return self._alive_bye()
             if path == "/api/quit":
                 return self._quit()       # 0.9.8
             if path == "/api/autorun":
@@ -3515,34 +3522,6 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         threading.Thread(target=UPDATE_HOOK, args=(host,), daemon=True).start()
                         body = json.dumps({"status": "checking", "host": host}).encode()
                     self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if path == "/api/ini":
-                # 0.8.6: allow-listed kastr.ini keys (host, mode). Local only.
-                if not self._local():   # 0.17.0: Host + peer + Origin
-                    body = json.dumps({"error": "ini changes only from the machine itself"}).encode()
-                    self.send_response(403)
-                else:
-                    try:
-                        n = int(self.headers.get("Content-Length") or 0)
-                        d = json.loads(self.rfile.read(n) or b"{}")
-                        key = str(d.get("key") or "")
-                        val = d.get("value")
-                        if key not in INI_KEYS:
-                            raise ValueError("key not allowed: " + key)
-                        if val is not None and not re.match(r"^[A-Za-z0-9.:_\-]{1,64}$", str(val)):
-                            raise ValueError("bad value")
-                        ini_set(key, None if val is None else str(val))
-                        body = json.dumps({"key": key, "value": ini_get(key), "path": _ini_file(),
-                                           "note": "takes effect at the next launch"}).encode()
-                        self.send_response(200)
-                    except Exception as e:
-                        body = json.dumps({"error": str(e)}).encode()
-                        self.send_response(400)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
@@ -3795,28 +3774,6 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if bad:
                     return self._json_cors(bad[0], {"error": bad[1]})
             leaf = segs[-1][:-5] if segs[-1].endswith(".hang") else segs[-1]
-            if path == "/api/archive/seg":
-                fp = arch.seg_path(b, (qs.get("f") or [""])[0])
-                if not fp:
-                    return self._json_cors(404, {"error": "no such segment"})
-                size = os.path.getsize(fp)
-                self.send_response(200)
-                self.send_header("Content-Type", "video/mp4")
-                self.send_header("Content-Length", str(size))
-                self.send_header("Content-Disposition", 'attachment; filename="%s-%s"' % (leaf, os.path.basename(fp)))
-                self.send_header("Cache-Control", "no-store")
-                self._cors(); self._corp_cross = True
-                self.end_headers()
-                try:
-                    with open(fp, "rb") as f:
-                        while True:
-                            chunk = f.read(1 << 20)
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    pass
-                return
             if path == "/api/archive/get":
                 def num(k):
                     try:
@@ -4079,10 +4036,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     "export", "fmp4", "--max-age", "4s"]   # no --video-name: the native pairs' rendition is not called "video" (measured); 0.18 names renditions; 4 s = join mid-GOP
             proc = None
             try:
-                try:
-                    proc = bridge.spawn_media(argv, tag="watch:" + leaf[:24], nice=True)
-                except TypeError:
-                    proc = bridge.spawn_media(argv, tag="watch:" + leaf[:24])
+                proc = bridge.spawn_media(argv, tag="watch:" + leaf[:24], nice=True)
                 # the init segment first (a helper thread: `moq` may sit on an absent broadcast)
                 # `moq export` writes an empty ftyp+moov first and the real init (with the codec
                 # boxes) only when tracks arrive -- gather until the first fragment (moof), 64 KiB
@@ -4308,7 +4262,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._hls_proxy(path)
             if path == "/api/ondemand":                                       # 0.18.0
                 return self._ondemand_api("GET", path)
-            if path in ("/api/archive", "/api/archive/seg", "/api/archive/get"):   # 0.18.0
+            if path in ("/api/archive", "/api/archive/get"):   # 0.18.0
                 return self._archive_api("GET", path)
             if path == "/ca.crt":
                 return self._ca_cert()
@@ -4337,21 +4291,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._client_api()
             if path == "/api/web":                                          # 0.17.0
                 return self._web_api("GET")
-            if path in ("/api/autorun", "/api/ini", "/api/mode") and not self._local():
+            if path in ("/api/autorun", "/api/mode") and not self._local():
                 return self._deny("host settings")   # 0.17.0
             if path == "/api/autorun":
                 body = json.dumps(autorun_state()).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if path == "/api/ini":
-                qs = parse_qs(urlparse(self.path).query)
-                key = (qs.get("key") or [""])[0]
-                body = json.dumps({"key": key, "value": ini_get(key) if key in INI_KEYS else None}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -4814,15 +4757,3 @@ def reload_tls(srv, tls_paths):
     if ctx is None:
         raise RuntimeError("listener has no TLS context")
     ctx.load_cert_chain(tls_paths["chain"], tls_paths["key"])
-
-
-def bind_free(root, host="127.0.0.1", preferred=8000, **kw):
-    """Try the preferred port, then fall back to an OS-assigned one.
-
-    A packaged app can't assume 8000 is free -- another copy of itself, or any
-    other dev server, may already hold it.
-    """
-    try:
-        return make_server(root, host, preferred, **kw)
-    except OSError:
-        return make_server(root, host, 0, **kw)

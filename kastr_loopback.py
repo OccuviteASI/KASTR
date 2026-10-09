@@ -49,8 +49,6 @@ HRESULT = ctypes.HRESULT  # restype that raises OSError on failure codes
 # ---------------------------------------------------------------- constants
 S_OK = 0
 E_NOINTERFACE = c_long(0x80004002).value
-AUDCLNT_E_DEVICE_INVALIDATED = c_long(0x88890004).value
-AUDCLNT_E_SERVICE_NOT_RUNNING = c_long(0x88890010).value
 CLSCTX_ALL = 0x17
 COINIT_MULTITHREADED = 0x0
 RPC_E_CHANGED_MODE = c_long(0x80010106).value

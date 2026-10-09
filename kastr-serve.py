@@ -18,8 +18,9 @@ current working directory is.
                           opt in with a Cross-Origin-Resource-Policy header.
            credentialless Chromium-only, still enables SharedArrayBuffer, but
                           lets no-cors cross-origin fetches through without
-                          CORP. Use this if the libav.js worker fails to load
-                          from cdn.jsdelivr.net.
+                          CORP. Use this if a cross-origin subresource a page
+                          needs is blocked (every library is served locally
+                          since 0.8.13, so the default normally suffices).
 --host   Interface to bind. Defaults to 0.0.0.0 so other machines on the
          network can load the UI from this one.
 --mode   Operating mode to REPORT (0.12.0): full (default) | viewer | publisher |

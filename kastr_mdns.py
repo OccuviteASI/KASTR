@@ -3,7 +3,7 @@
 A KASTR whose relay is reachable from other machines ADVERTISES it as a `_kastr._tcp.local` service -- discovery data
 only: a display name, the web and relay ports, whether access codes are required, the relay's certificate fingerprint
 and the KASTR version. No code, token or secret is ever in it (joining still needs the relay's access codes), and it
-is not the relay LAN mesh (moq-relay [cluster.lan], which lets relays join each other and keeps its secret).
+never joins relays to each other (the old relay LAN mesh was removed in 0.21.40).
 
 A KASTR whose saved relay is offline BROWSES for it (a 1-2 s query). The page decides what to do with the answers:
 it switches on its own only to a relay this machine used before whose certificate still matches; anything new is a

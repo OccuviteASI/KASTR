@@ -22,7 +22,7 @@
   },
   "model": {
     "name": "modnet_fp16.onnx",
-    "url": "https://huggingface.co/Xenova/modnet/resolve/main/onnx/model_fp16.onnx",
+    "url": "https://huggingface.co/Xenova/modnet/resolve/fa2fa546052fba4c08921230a26cc69a333fca12/onnx/model_fp16.onnx",
     "sha256": "25f165da9bfd30830a575f1f0490f1acd995975cb349bc02f3d79332e1fe5cf6",
     "input": [
       1,

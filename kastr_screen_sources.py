@@ -43,7 +43,7 @@ try:                                    # optional -- JPEG encoding only
 except Exception:                       # pragma: no cover
     _PILImage = None
 
-FFMPEG = os.environ.get("KASTR_FFMPEG") or r"C:\Users\KentonJeffery\Claude\KASTR\bin\ffmpeg.exe"
+FFMPEG = os.environ.get("KASTR_FFMPEG") or None   # kastr_screen sets the bundled one; None -> kastr_rtsp.find_ffmpeg()
 FFMPEG_TIMEOUT = 5.0
 JPEG_QUALITY = 70
 
@@ -538,7 +538,13 @@ def _grab_ffmpeg(src, width):
         sel = "hwnd=%d" % src["hwnd"]
     graph = ("gfxcapture=%s:max_framerate=5:capture_cursor=0,hwdownload,format=bgra,"
              "scale=%d:-2:flags=area,setsar=1,format=yuvj420p" % (sel, width))
-    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-filter_complex", graph,
+    ff = FFMPEG
+    if not ff:
+        import kastr_rtsp
+        ff = kastr_rtsp.find_ffmpeg()
+        if not ff:
+            raise OSError("ffmpeg not found")
+    cmd = [ff, "-hide_banner", "-loglevel", "error", "-nostdin", "-filter_complex", graph,
            "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "4", "-"]
     # ffmpeg 9.0.1's gfxcapture often writes the frame and then never exits
     # (window captures hang in teardown), so read until the JPEG's EOI and kill.

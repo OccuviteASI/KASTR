@@ -60,6 +60,8 @@
 <style>
   * { box-sizing:border-box; }
   .row { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; align-items:end; }
+  /* 0.21.40: an author `display` beats the browser's own [hidden] rule -- these hid nothing (cleanup audit) */
+  .row[hidden], .catt[hidden], .cemoji[hidden] { display:none; }
   label { display:flex; flex-direction:column; font-size:11px; color:var(--text-dim); gap:4px; }
   input[type=text] {
     background:var(--surface-2); border:1px solid var(--line); color:var(--text);
@@ -80,14 +82,14 @@
   /* 0.6.7: the two-column grid is gone; the meeting-layout block at the end
      of this sheet owns the page frame (top bar / stage / People panel). */
 
-  #list, #mine { border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); }
+  #list { border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); }
   #list-rows { display:flex; flex-direction:column; }   /* rows follow style.order */
   .pane.dragging { opacity:.55; }
   .pane.drop-target { outline:2px solid var(--asi-blue); outline-offset:-2px; }
   /* The whole tile is the drag handle now, so grab/grabbing live on the
      pane (see #stage.grid .pane below); the label-only rules are gone. */
   #stage.collage .pane.dragging { cursor:grabbing; }
-  #list h2, #mine h2 {
+  #list h2 {
     font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--text-mute);
     margin:0; padding:10px 12px; background:var(--surface-2); border-bottom:1px solid var(--line); font-weight:600;
   }
@@ -119,37 +121,8 @@
   }
   .srow .mut:hover { color:#fff; border-color:var(--line); background:var(--surface-2); }
   /* 0.6.8: muted/paused are FILLED red -- the loud state reads at a glance. */
-  /* Both selectors: the .ibtn base list ends with #mine .srow .ibtn (1,2,0),
-     placed LAST -- a bare .srow .mut.on (0,3,0) loses inside #mine. */
-  .srow .mut.on, #mine .srow .mut.on { color:#fff; border-color:var(--asi-red); background:var(--asi-red); }
+  .srow .mut.on { color:#fff; border-color:var(--asi-red); background:var(--asi-red); }
 
-  /* Self-view rows reuse the .srow vocabulary but are not selectable; the
-     video toggle goes amber like the Publish row's paused face -- a
-     deliberate state, not a fault. */
-  #mine .srow { cursor:default; }
-  #mine .srow .dot.dim { background:var(--text-mute); }
-  #mine .srow .pv {
-    font-size:11px; color:var(--text-mute); flex:none; cursor:pointer;
-    background:transparent; border:1px solid transparent; border-radius:3px;
-    padding:1px 5px; font-family:var(--font-ui); line-height:1.4;
-  }
-  #mine .srow .pv:hover { color:#fff; border-color:var(--line); background:var(--surface-2); }
-  #mine .srow .pv.on { color:#fff; border-color:var(--asi-red); background:var(--asi-red); }
-  /* Self-view thumbnail: hidden until the first blob arrives; .paused is
-     the standby hook. */
-  #mine .srow .thumb {
-    width:64px; height:36px; flex:none; border-radius:3px; object-fit:cover;
-    background:#000; border:1px solid var(--line-soft); display:none;
-  }
-  #mine .srow .thumb.has { display:block; }
-  #mine .srow .thumb.paused { opacity:.35; filter:grayscale(1); }
-  #mine .srow .chev {
-    flex:none; height:26px; padding:2px 3px; border-radius:3px; cursor:pointer;
-    background:transparent; border:1px solid var(--line); color:var(--text-mute);
-    display:inline-flex; align-items:center;
-  }
-  #mine .srow .chev:hover { color:#fff; border-color:var(--line); background:var(--surface-2); }
-  #mine .srow .chev .icon { width:11px; height:11px; }
   /* One shared device menu for every chevron. Above #sharePop (z 70). */
   #mineMenu {
     position:fixed; z-index:80; min-width:180px; max-width:320px;
@@ -178,7 +151,7 @@
   #mineMenu .mhint { font-size:10px; color:var(--text-mute); padding:4px 8px; }
   #mineMenu[hidden] { display:none; }
   #mineMenu .mi {
-    display:block; width:100%; text-align:left; background:transparent; border:0;
+    display:flex; align-items:center; gap:6px; width:100%; text-align:left; background:transparent; border:0;
     color:var(--text-dim); font-size:11px; font-family:var(--font-mono);
     padding:6px 8px; border-radius:4px; cursor:pointer;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -192,31 +165,17 @@
   #mineMenu .mi .mico .icon { width:18px; height:18px; }
   #mineMenu .mi:hover .mico { color:#fff; }
 
-  .srow .sub {
-    font-size:11px; color:var(--text-mute); flex:none; cursor:pointer;
-    background:transparent; border:1px solid transparent; border-radius:3px;
-    padding:1px 5px; font-family:var(--font-ui); line-height:1.4; min-width:22px;
-  }
-  .srow .sub:hover { color:#fff; border-color:var(--line); background:var(--surface-2); }
-  .srow .sub.on { color:var(--asi-blue); }
   /* Parked: listed but not connected. Audio controls hide because hasAudio is
      unknowable without a catalog, which a parked tile deliberately never has. */
   .srow.parked .name, .srow.parked .idx { color:var(--text-mute); }
   .srow.parked .lvl, .srow.parked .mut,
   .srow.parked .spk, .srow.parked .noaud { display:none; }
-  #list h2, #mine h2 { display:flex; align-items:center; gap:8px; }
-  #list h2 .bulk { margin-left:auto; display:flex; gap:6px; }
-  #list h2 .bulk button {
-    background:transparent; border:1px solid var(--line); color:var(--text-mute);
-    height:auto; padding:1px 7px; font-size:9px; font-weight:500;
-    letter-spacing:.04em; text-transform:none; border-radius:3px;
-  }
-  #list h2 .bulk button:hover { color:#fff; border-color:var(--asi-blue-dim); background:var(--asi-blue-glow); }
+  #list h2 { display:flex; align-items:center; gap:8px; }
 
   /* 0.8.0: the VU bars are gone -- the green talking ring is the one
      audio-activity signal. The meter machinery stays (it feeds the ring). */
   .noaud { color:var(--text-mute); text-decoration:line-through; flex:none; display:none; }
-  .srow.no-audio .noaud, .pane.no-audio .label .noaud { display:inline; }
+  .srow.no-audio .noaud { display:inline; }
   .srow.no-audio .lvl, .srow.no-audio .mut, .srow.no-audio .spk { display:none; }
   /* 0.9.8: per-share Audio box on the Share tab's RTSP rows */
   .camrow .aud { flex:none; display:none; align-items:center; gap:4px; font-size:11px; color:var(--text-dim); cursor:pointer; user-select:none; }
@@ -248,7 +207,7 @@
      width in px from the same best-fit, so rows derive from the aspect
      ratio instead of stretching. */
   #stage.collage { grid-auto-rows:auto; align-content:center; justify-content:center; }
-  #stage.collage .pane, #stage.collage #mine { aspect-ratio:16/9; }
+  #stage.collage .pane { aspect-ratio:16/9; }
   #stage.spot {
     grid-template-columns:minmax(0, 1fr) 232px;
     grid-auto-rows:minmax(96px, 1fr);
@@ -301,8 +260,7 @@
   .pchev.pfill { right:calc(14px + 2 * var(--pw)); }  /* 0.21.19: fill the window (Kenton: "these boxes overlap" at a browser zoom) */
   .pchev.pfs .icon, .pchev.pfill .icon { width:13px; height:13px; }
   /* 0.21.19: fill window -- the page chrome steps aside and the stage covers the app window (menus 80+, toasts 90 stay above) */
-  body.fillwin header.asi-header, body.fillwin #sidebar, body.fillwin #sbScrim, body.fillwin #topbar,
-  body.fillwin footer.asi-footer { display:none !important; }
+  body.fillwin header.asi-header, body.fillwin #sidebar, body.fillwin #sbScrim, body.fillwin #topbar { display:none !important; }
   /* 0.21.25 (Kenton): a click-drag never highlights text or images -- the app is controls, not a document. Chat,
      inputs and the info cards (Room info, About, Help) keep selectable text. What is dragged floats under the pointer. */
   body { -webkit-user-select:none; user-select:none; }
@@ -314,11 +272,9 @@
     background:var(--surface-1, #0c141c); outline:2px solid var(--asi-blue); box-shadow:0 12px 30px rgba(0,0,0,.55); will-change:transform; }
   .dragghost > canvas { display:block; width:100%; height:100%; }
   .dragghost > .dgclone { position:absolute; left:0; top:0; transform-origin:0 0; margin:0 !important; pointer-events:none; }
-  footer.asi-footer { display:none !important; }   /* 0.21.24 (Kenton): no bottom bar on Go Live -- web portal and desktop app */
   body.fillwin #stagewrap { position:fixed; inset:0; z-index:65; background:#000; overflow:hidden; }
   #pubPanes .pubpane { position:relative; }
   /* 0.8.8: Teams-style strip -- icon over label, fused chevrons, dividers */
-  #topbar { gap:4px; }
   #topbar .tb { display:inline-flex; flex-direction:column; align-items:center; justify-content:center;
     gap:3px; width:56px; height:52px; padding:4px 0; border:1px solid transparent; border-radius:6px;
     background:transparent; color:var(--text-dim); font-size:10px; line-height:1; white-space:nowrap;
@@ -344,7 +300,7 @@
   #topbar #leaveBtn.tb:hover { filter:brightness(1.12); }
   #topbar #recPill { align-self:center; }
   /* 0.12.0: viewer mode hides publish controls; the display rules above must not resurrect them */
-  #topbar .tb[hidden], #topbar .tbgrp[hidden], #topbar .tchev[hidden], .popcard.teams .opt[hidden], #joinGate label.f[hidden], #joinPreview[hidden] { display:none !important; }
+  .popcard.teams .opt[hidden], #joinGate label.f[hidden], #joinPreview[hidden] { display:none !important; }
   /* 0.8.1: own paused tile wears EXACTLY the remote standby face */
   #stage .pubpane .pface { display:none; }
   #stage .pubpane.vpaused .pface { position:absolute; inset:0; z-index:1;
@@ -433,21 +389,20 @@
   .popcard.teams .opt .chev { margin-left:auto; color:var(--text-dim); }
   .popcard.teams .opt.more { color:var(--text); margin-top:6px; border-top:1px solid var(--line); padding-top:10px; border-radius:0; }
   .popcard.teams .sep { height:1px; background:var(--line); margin:6px 0; }
-  .popcard.teams .subm { padding-left:14px; }
   .popcard.teams .sect { font-size:12px; font-weight:600; color:var(--text); margin:10px 0 6px; letter-spacing:0; text-transform:none; }
   .popcard.teams .radios { display:flex; flex-direction:column; gap:2px; }
   .popcard.teams .radios.sub { padding-left:12px; }
   .popcard.teams .rd { display:flex; flex-direction:row; align-items:center; gap:10px; padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12px; }   /* 0.8.10: row -- the global label rule stacked the dot above its text */
   .popcard.teams .rd:hover { background:var(--surface-2); }
-  .popcard.teams .rd.dis { opacity:.45; cursor:default; }
   .popcard.teams .rd input { accent-color:var(--asi-blue); width:16px; height:16px; margin:0; flex:none; }
-  .popcard.teams .sw { display:flex; align-items:center; justify-content:space-between; padding:8px 8px; font-size:12px; }
+  .popcard.teams .sw { display:flex; align-items:center; justify-content:flex-start; gap:10px; padding:8px 8px; font-size:12px; }   /* 0.21.40 (Kenton): switches before their names */
   .popcard.teams .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }   /* 0.21.0: Rotate */
   .popcard.teams .seg button { background:transparent; border:0; color:var(--text-dim); padding:5px 9px; font-size:11px; cursor:pointer; }
   .popcard.teams .seg button + button { border-left:1px solid var(--line); }
   .popcard.teams .seg button.on { background:var(--asi-blue); color:#06121a; }
   /* .switch lives in assets/asi-brand.css since 0.21.0 (shared with the Relay page) */
-  .chk.asi-sw, .pwkeep { display:flex; align-items:center; gap:8px; }
+  .pwkeep { display:flex; align-items:center; gap:8px; }
+  .pubui .chk { margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim); }   /* the Share panel's switch rows */
   .popcard.teams .volrow, .popcard.teams .lvlrow { display:flex; align-items:center; gap:8px; padding:4px 8px 8px; }
   .popcard.teams .volrow input[type=range] { flex:1; accent-color:var(--asi-blue); }
   .popcard.teams .vic { width:18px; display:inline-flex; color:var(--text-dim); flex:none; }
@@ -530,6 +485,9 @@
   .pubui .shsound { padding:0 0 6px; }
   /* 0.21.20: Teams-style share picker */
   #sharePop .head .hsnd { text-transform:none; letter-spacing:0; font-size:12px; font-weight:500; color:var(--text); gap:8px; }
+  /* 0.21.40 (Kenton: "the camera toggle and the include sounds toggle are right next to each other, which is confusing") */
+  #sharePop .head #rtspSuspendWrap:not([hidden]) { margin-left:6px; padding-left:12px; border-left:1px solid var(--line); gap:8px;
+    text-transform:none; letter-spacing:0; font-size:12px !important; font-weight:500; color:var(--text); }
   .pubui .prrow h2, .pubui #shWinHead { margin-top:2px; }
   .pubui .prmodes { display:flex; align-items:center; gap:8px; margin:0 0 14px; flex-wrap:wrap; }
   .pubui .prmodes .prm { width:42px; height:36px; padding:0; display:inline-flex; align-items:center; justify-content:center;
@@ -545,7 +503,6 @@
   .pubui #shWinHead .caret, .pubui #shTabHead .caret { display:inline-block; transition:transform .15s; margin-right:2px; }
   .pubui #shWinHead.open .caret, .pubui #shTabHead.open .caret { transform:rotate(90deg); }
   .pubui .tablist { display:flex; flex-direction:column; gap:2px; margin:0 0 14px; }
-  .pubui .tablist[hidden] { display:none; }
   .pubui .tablist .tabrow { display:flex; align-items:center; gap:8px; width:100%; height:auto; text-align:left; padding:6px 8px; border-radius:6px;
     background:transparent; border:1px solid transparent; color:var(--text); cursor:pointer; font-size:12px; min-width:0; }
   .pubui .tablist .tabrow:hover { background:var(--surface-2); border-color:var(--line); }
@@ -554,7 +511,6 @@
   .pubui .tablist .tabrow .tt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pubui .tablist .tabrow .ta { flex:none; font-size:10px; color:var(--asi-blue); }
   .pubui .thgrid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin:0 0 14px; }
-  .pubui .thgrid[hidden] { display:none; }
   .pubui .thgrid .th { display:flex; flex-direction:column; gap:5px; padding:4px; background:transparent; border:1px solid transparent;
     border-radius:8px; cursor:pointer; color:var(--text-dim); text-align:left; min-width:0; height:auto; }
   .pubui .thgrid .th:hover { border-color:var(--line); background:var(--surface-2); color:#fff; }
@@ -625,7 +581,7 @@
   .popcard.teams .grp label.f > span { margin:0; flex:1; display:inline; font-size:12px; color:var(--text); }
   .popcard.teams .grp select, .popcard.teams .grp input[type=number] { width:52%; }
   .popcard.teams .grp input[type=range] { width:52%; }
-  .popcard.teams .grp label.f.chkrow { display:flex; justify-content:space-between; align-items:center; gap:10px; }   /* 0.21.0: a switch, not a box */
+  .popcard.teams .grp label.f.chkrow { display:flex; justify-content:flex-start; align-items:center; gap:10px; }   /* 0.21.0: a switch, not a box; 0.21.40: switch first, text after it */
   #encPop, #audOutPop { width:min(380px, 92vw); }
   #optPop .opt.phoneonly { display:none; }   /* 0.21.23: shown by the phone block */
   .pubui .shrowwrap { position:relative; }
@@ -655,7 +611,7 @@
   .mediabar .mhear { opacity:.45; } .mediabar .mhear.on { opacity:1; }
   /* 0.21.0: shared surface tokens on the page's own popovers */
   .popcard, #sharePop, #mineMenu { box-shadow:var(--shadow-pop, 0 12px 32px rgba(0,0,0,.5)); }
-  /* 0.18.0: on-demand cameras (chips above the stage) + the latency-stamp badge */
+  /* 0.18.0: on-demand cameras (chips above the stage) */
   #odRow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 10px 0; font-size:12px; color:var(--text-dim); }
   #odRow[hidden] { display:none; }
   #odRow button { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:3px 10px; font-size:12px; cursor:pointer; }
@@ -691,6 +647,11 @@
   .mchip .icon, .vchip .icon { width:13px; height:13px; }
   #stage .pane.no-audio .mchip, #stage .pane.lmuted .mchip,
   #stage .pubpane.micmuted .mchip { display:flex; }
+  /* 0.21.40 (Kenton: "When deafen is enabled, show other people that it is on"): the chip turns into headphones-off */
+  .mchip .earOff { display:none; }
+  #stage .pane.deaf .mchip, #stage .pubpane.deaf .mchip { display:flex; }
+  #stage .pane.deaf .mchip .micOff, #stage .pubpane.deaf .mchip .micOff { display:none; }
+  #stage .pane.deaf .mchip .earOff, #stage .pubpane.deaf .mchip .earOff { display:block; }
   #stage .pane.rtsptile .mchip { display:none !important; }   /* 0.21.22: it covered the cell labels on RTSP grids and feeds */
   #stage .pane.audio-only .vchip, #stage .pubpane.vpaused .vchip { display:flex; }
   /* both chips visible: the mic chip slides to the second slot */
@@ -702,7 +663,6 @@
   #stage .pane.audio-only.no-audio .label, #stage .pane.audio-only.lmuted .label { padding-left:68px; }
   #stage .pubpane.micmuted .bar, #stage .pubpane.vpaused .bar { padding-left:38px; }
   #stage .pubpane.vpaused.micmuted .bar { padding-left:68px; }
-  #stage .pane .label .noaud { display:none; }   /* the chip replaces it */
   /* 0.8.2: rail pager + resize grip -- 0.8.12: a real bar (‹ Page 1/3 › · 8 more), wheel flips pages */
   #railPager { display:none; align-items:center; justify-content:center; gap:8px; font-size:12px; color:var(--text);
     background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:0 6px; }
@@ -720,7 +680,6 @@
   html.sharing-self::after { content:""; position:fixed; inset:0; z-index:9999;
     pointer-events:none; box-shadow:inset 0 0 0 3px var(--asi-red); }
   /* 0.8.6: recording */
-  #recBtn.on { color:#fff; background:var(--asi-red); border-color:var(--asi-red); }
   #recPill { color:var(--asi-red); font-size:11px; font-weight:700; letter-spacing:.06em;
     align-self:center; animation:kastr-blink 1.2s steps(2) infinite; }
   @keyframes kastr-blink { 50% { opacity:.35; } }
@@ -834,13 +793,6 @@
     display:flex; justify-content:space-between; gap:8px; font-family:var(--font-mono);
   }
   .pane .label .l { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .pane .label .btns { display:flex; gap:4px; flex:none; }
-  .pane .label button {
-    background:transparent; border:1px solid var(--line); color:var(--text-mute);
-    border-radius:3px; padding:1px 6px; font-size:10px; height:auto;
-    cursor:pointer; font-family:var(--font-ui); line-height:1.5;
-  }
-  .pane .label button:hover { color:#fff; border-color:var(--asi-blue-dim); background:var(--asi-blue-glow); }
 
   /* A full-screened pane must fill the screen and centre the video, otherwise
      the element keeps its grid-cell width and floats in a black field. */
@@ -891,28 +843,6 @@
   #sharePop .body { flex:1; min-height:0; overflow-y:auto; padding:12px; background:var(--bg); }
   #shareBtn.grid-on { background:var(--asi-blue); border-color:var(--asi-blue); color:#06121a; }
 
-  /* Stats panel */
-  #stats { margin-top:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); }
-  #stats > summary {
-    padding:10px 12px; font-size:11px; color:var(--text-dim); cursor:pointer;
-    display:flex; align-items:center; gap:8px;
-  }
-  #stats[open] > summary { border-bottom:1px solid var(--line); }
-  #stats .body { padding:12px; display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
-  .statgrp { border:1px solid var(--line-soft); border-radius:6px; padding:10px; background:var(--surface-2); }
-  .statgrp h4 {
-    margin:0 0 8px; font-size:10px; text-transform:uppercase; letter-spacing:.09em;
-    color:var(--text-mute); font-weight:600; display:flex; align-items:center; gap:6px;
-  }
-  .statgrp .tag { font-size:9px; padding:1px 5px; border-radius:3px; background:var(--asi-blue-glow); color:var(--asi-blue); }
-  .statrow { display:flex; justify-content:space-between; gap:10px; font-size:11px; padding:2px 0; }
-  .statrow .k { color:var(--text-mute); }
-  .statrow .v { color:var(--text); font-family:var(--font-mono); text-align:right; word-break:break-all; }
-  .statrow .v.warn { color:var(--asi-amber); }
-  #catalogRaw {
-    margin:0; font-family:var(--font-mono); font-size:10px; color:var(--text-dim);
-    max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-all;
-  }
   moq-watch { display:block; width:100%; }
   canvas { width:100%; height:auto; display:block; }
   #stage-empty {
@@ -921,7 +851,6 @@
   }
   details { margin-top:14px; }
   summary { font-size:11px; color:var(--text-dim); cursor:pointer; }
-  #status { font-size:11px; color:var(--text-dim); margin-top:8px; white-space:pre-wrap; line-height:1.5; font-family:var(--font-mono); }
   kbd {
     background:var(--surface-2); border:1px solid var(--line); border-radius:3px;
     padding:1px 5px; font-size:10px; color:var(--text-dim); font-family:var(--font-mono);
@@ -937,17 +866,16 @@
      this page for our own mic (see renderMine), so today it pins an idle
      fill; the hook is what a future publish-side level meter drives. */
   .icon .lvlfill { opacity:.55; clip-path:inset(calc((1 - var(--lvl, 0)) * 100%) 0 0 0); }
-  #mine .srow .mut .icon.mic { --lvl:.35; }
   /* The legacy text-button rules (.srow .spk etc.) out-rank a bare .ibtn,
      so the square geometry is repeated at their specificity; this block
      sits last in the sheet and wins the ties. */
-  .ibtn, .srow .ibtn, #mine .srow .ibtn {
+  .ibtn, .srow .ibtn {
     display:inline-flex; align-items:center; justify-content:center;
     width:26px; height:26px; padding:0; flex:none; min-width:0;
     background:transparent; border:1px solid transparent; border-radius:5px;
     color:var(--text-mute); cursor:pointer;
   }
-  .ibtn:hover, .srow .ibtn:hover, #mine .srow .ibtn:hover {
+  .ibtn:hover, .srow .ibtn:hover {
     color:#fff; border-color:var(--line); background:var(--surface-2);
   }
   .row .ibtn { width:32px; height:32px; }      /* match the 32px toolbar */
@@ -992,9 +920,8 @@
   #helpPop .keys td:first-child { white-space:nowrap; padding-right:12px; }
 
   /* ---- Ported publish UI (0.6.6 "Live Streams" merge) --------------------
-     The legacy publish page's control styling, scoped so nothing leaks into
-     the watch chrome: .pubui is the Share panel body, #pubPanes the
-     self-view preview strip. Values inherited from the old publish page. */
+     The publish controls' styling, scoped so nothing leaks into the watch
+     chrome: .pubui is the Share panel body, #pubPanes the self-view tiles. */
   .pubui section.panel { border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); padding:13px; margin-bottom:12px; }
   .pubui section.panel h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--text-mute); margin:0 0 11px; font-weight:600; }
   .pubui label.f { display:block; font-size:11px; color:var(--text-dim); margin-bottom:11px; }
@@ -1052,7 +979,7 @@
      (captureStream stalls unpainted) -- the bar wraps, it never clips. */
   html, body { height:100%; }
   body.asi { display:flex; flex-direction:column; overflow:hidden; }
-  .asi-header, .asi-footer { flex:none; }
+  .asi-header { flex:none; }
   main.asi-page { flex:1; min-height:0; display:flex; flex-direction:row; padding:10px 14px; }
   body.asi-embed main.asi-page { padding:8px 10px; }
   /* 0.12.0: sidebar | page column */
@@ -1169,22 +1096,17 @@
   #roomBanner.free { cursor:pointer; }
   #roomBanner.free:hover { border-color:var(--asi-blue-dim); color:#fff; }
   #roomBanner:not(.free):hover { border-color:var(--asi-blue-dim); }
-  #roomBanner .rbname { color:var(--text); font-weight:600; }
-  #roomBanner .sep { color:var(--text-mute); }
+  #roomBanner .rbname { color:var(--text); font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #roomBanner .icon { width:11px; height:11px; }
-  #roomBanner .rbkept, #roomBanner .rbrole { color:var(--asi-blue); }
   #roomBanner .spk { width:12px; height:12px; }
   #roomBanner .spk .icon { width:12px; height:12px; }
   #roomBanner .spk:not(.on) { display:none; }   /* 0.13.3: a hidden speaker kept 19 px of air after the name */
-  #roomBanner .rbname { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
   #topbar { flex:none; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
     padding:2px 0 10px; border-bottom:1px solid var(--line); margin-bottom:10px; }
-  #topbar .asi-title { font-size:14px; margin:0; }
   #topbar .sp { flex:1; }
   /* 0.12.0: the chip and the bubbles became the banner and the sidebar */
   /* Room menu extras on the shared #mineMenu. */
-  #mineMenu .mi { display:flex; align-items:center; gap:6px; width:100%; }
   #mineMenu .mi .lk { margin-left:auto; display:inline-flex; }
   #mineMenu .mi .lk .icon { width:11px; height:11px; }
   #mineMenu .pwrow { display:flex; gap:6px; padding:4px; }
@@ -1201,8 +1123,6 @@
   #mineMenu .pwacts .pwcancel, #sbForm .pwacts .pwcancel { display:inline-flex; width:auto; flex:none; background:transparent; border:1px solid var(--line);
     color:var(--text-dim); border-radius:4px; padding:5px 14px; font-size:11px; font-family:var(--font-mono); cursor:pointer; height:auto; }
   #mineMenu .pwacts .pwcancel:hover, #sbForm .pwacts .pwcancel:hover { background:var(--surface-2); color:#fff; }
-  #mineMenu .hdr { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-mute);
-    padding:5px 8px 3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }   /* 0.10.0: "Rooms on <relay>" */
   #audioPop [hidden] { display:none !important; }
   #leaveBtn { background:var(--asi-red); color:#fff; }
   #leaveBtn:hover { background:#e4645f; }
@@ -1216,7 +1136,6 @@
   #stage #mine[hidden] { display:none; }
   #stage #mine h2 { display:none; }             /* #mineCount stays writable */
   #stage #pubPanes { display:contents; }
-  #stage #mine-rows { display:none; }           /* rows retired from the stage */
   #stage .pubpane { position:relative; overflow:hidden; min-width:0; min-height:0;
     border:1px solid var(--line); border-radius:var(--radius); background:#000; }
   #stage.collage .pubpane { order:-1; aspect-ratio:16/9; }  /* my tiles FIRST in the grid (0.8.2) */
@@ -1249,7 +1168,7 @@
   /* 0.8.1: People is a POPOVER (popcard) under its button, not a slide-over. */
   #peoplePanel { width:min(380px, calc(100vw - 24px)); }
   #peoplePanel .pbody { flex:1; min-height:0; overflow-y:auto; padding:12px; }
-  #peoplePanel #stats, #peoplePanel details { margin-top:14px; }
+  #peoplePanel details { margin-top:14px; }
   /* 0.21.23: Participants (Teams) */
   #pplTop { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
   .pplsearch { position:relative; display:block; }
@@ -1301,17 +1220,15 @@
 
   /* Pre-join gate. NEVER holds #pubPanes (paint rule); backdrop deliberately
      translucent so anything already painting behind it keeps compositing. */
-  #joinGate { position:fixed; inset:0; z-index:65; background:rgba(3,5,10,.62);
+  #joinGate { position:fixed; inset:0; z-index:67; background:rgba(3,5,10,.62);   /* above #sidebar (66) */
     display:flex; align-items:center; justify-content:center; padding:18px; }
   #joinGate[hidden] { display:none; }
   /* 0.21.28 (Kenton: "the shadow in the back doesn't cover the whole screen, just most of it"): the scrim covers the WHOLE
      page, room rail included (0.12.0 left the rail uncovered at a fixed offset, which missed on the web page and with the
      rail collapsed); the gate's own room list picks a room before joining */
-  #joinGate { z-index:67; }   /* above #sidebar (66) */
   #joinGate #joinKeepRow { display:flex; align-items:center; gap:7px; }
   /* 0.21.30 (Kenton: "show the rooms in the launch window, but don't show them in the backdrop on the side") */
   body:has(#joinGate:not([hidden])) #sidebar { visibility:hidden; }
-  #joinGate #joinKeepRow[hidden] { display:none; }
   #bootFail { background:var(--asi-red); color:#fff; padding:10px 12px; border-radius:6px; margin-bottom:10px; font-size:13px; line-height:1.4; }
   #bootFail button { margin-left:8px; padding:3px 10px; border-radius:5px; border:1px solid rgba(255,255,255,.6); background:transparent; color:#fff; cursor:pointer; }
   #joinGate .card { width:min(460px, 96vw); max-height:92vh; max-height:92dvh; overflow-y:auto;   /* 0.21.5: dvh */
@@ -1325,7 +1242,6 @@
     color:var(--text); padding:7px 9px; border-radius:5px;
     font-family:var(--font-mono); font-size:12px; }
   #joinGate input.bad { border-color:var(--asi-red); }
-  #joinGate .btnrow { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:11px; }
   #joinGate .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
   #joinGate button.join { background:var(--asi-blue); color:#06121a; font-weight:600; }
   #joinGate button.ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
@@ -1348,16 +1264,11 @@
   .masked { -webkit-text-security:disc; }
 
   /* ---- 0.6.8 refinements -------------------------------------------------- */
-  /* The device chevron fuses onto its mute/pause icon: one control. */
-  #mine .srow .ibtn:has(+ .chev) { border-top-right-radius:0; border-bottom-right-radius:0; }
-  #mine .srow .ibtn + .chev { margin-left:-9px; border-top-left-radius:0; border-bottom-left-radius:0; border-left:0; }
   /* Retired toolbar controls stay in the DOM (their wiring is load-bearing)
      but never render: relay moved to the masthead badge, grid is a tile
      click, sort is manual-only now. */
   #topbar [hidden] { display:none !important; }
-  #joinGate label.f[hidden] { display:none; }
   /* 0.6.9: park controls left the UI -- rows just select. */
-  #list .bulk[hidden] { display:none; }
   #list .srow .sub { display:none; }
   /* Standby face: WHO it is, not a status string. */
   .pane .face .init { font-size:28px; font-weight:700; color:#fff;   /* 0.8.8 */
@@ -1384,7 +1295,6 @@
   /* 0.21.5: the two phone blocks sit LAST on purpose -- they used to come before the base layout (lines ~800-1250), whose equal-specificity rules for the same selectors won the cascade and undid the phone layout on every phone */
   /* ==== 0.8.9 phone layout (standalone on iPhone/Android) ==================== */
   @media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: a landscape phone is a phone too */
-    footer.asi-footer { display:none !important; }   /* 0.21.22 (Kenton): no screen to spare on a phone */
     body.asi { height:100dvh; }
     main.asi-page { padding:6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }   /* 0.21.5: side insets (the notch in landscape) */
     button, .tb, .tchev, .opt, .rd { touch-action:manipulation; }
@@ -1500,7 +1410,6 @@
     <section id="mine" hidden>
       <h2>My streams (<span id="mineCount">0</span>)</h2>
       <div id="pubPanes"></div>
-      <div id="mine-rows"></div>
     </section>
   </div>
   <div id="stage-empty">Not connected yet.</div>
@@ -1524,11 +1433,7 @@
   <details id="pplStreams">
   <summary>Streams and volume</summary>
   <section id="list">
-    <h2>Streams (<span id="count">0</span>)
-      <!-- 0.6.9: the park/watch bulk controls left the UI (auto-watch made
-           them a non-feature); ids and wiring stay for the machinery. -->
-      <span class="bulk" hidden><button id="watchAllBtn" type="button">watch all</button><button id="parkAllBtn" type="button">park all</button></span>
-    </h2>
+    <h2>Streams (<span id="count">0</span>)</h2>
     <div id="list-rows"></div>
     <div id="rtspOffRows" hidden style="font-size:11px;color:var(--text-mute,#8b98a5);padding:4px 8px 0"></div>   <!-- 0.21.16: members whose own cameras are switched off (rtspOffApply) -->
     <div id="list-empty">Not connected yet.</div>
@@ -1543,7 +1448,7 @@
   <div class="head">
     <span>Share content</span>
     <span class="sp"></span>
-    <label class="asi-sw hsnd" title="Share the computer's sound with the screen or window"><span>Include sound</span><span class="switch sm"><input type="checkbox" id="shareSound"><i></i></span></label>
+    <label class="asi-sw hsnd" title="Share the computer's sound with the screen or window"><span class="switch sm"><input type="checkbox" id="shareSound"><i></i></span><span>Include sound</span></label>
     <label class="asi-sw" id="rtspSuspendWrap" hidden style="font-size:11px;margin-right:8px" title="Publish this box's own RTSP cameras. Off = every camera pair, monitor and grid composite stops and the room loses them (CPU/GPU spared); nothing is forgotten -- the same switch brings everything back."><span class="switch sm"><input type="checkbox" id="rtspSuspendSw"><i></i></span><span>Cameras</span></label>
     <span class="live" id="shareLive" hidden>ON AIR</span>
     <span class="sp"></span>
@@ -1641,9 +1546,9 @@
           <datalist id="rtspSeen"></datalist>
           <button id="addRtspBtn" type="button" style="flex:none" disabled>Add</button>
         </div>
-        <div class="chk" style="margin-top:6px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)">
+        <div class="chk" style="margin-top:6px">
           <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspKeep" checked><i></i></span><span>Keep sharing this feed after KASTR restarts</span></label></div>
-        <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
+        <div class="chk"
              title="Publish the camera's audio track with the feed (AAC). Off by default = video only. Changeable later from the feed's Audio box or ▾ menu.">
           <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspAudio"><i></i></span><span>Send the camera's audio (off by default)</span></label></div>
         <!-- 0.21.26 (Kenton): a camera or a media file on this computer as a feed -- like an RTSP camera, it can go in a grid -->
@@ -1656,7 +1561,7 @@
         </div>
         <p class="hint" id="hostFeedHint" style="margin:4px 0 0">Added here, a camera or video file is published by this computer like an RTSP camera: it can go in a grid and comes back after a restart. A camera added this way has no background effects, and KASTR&rsquo;s own camera must be off if it is the same one.</p>
         <div id="webRtspList"></div>   <!-- 0.21.2: a web client's cameras on the host -->
-        <div class="chk" style="margin-top:4px; display:flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim)"
+        <div class="chk"
              title="The camera's own stream is published as-is -- no re-encode on this machine, the lowest CPU -- whenever viewers can decode it (H.264 and H.265 today; also 4K and full-range H.264, which were converted before). Viewers need hardware decode for H.265; a viewer that cannot decode a stream sees a notice on that tile. Off = H.264 up to 1080p passes through, everything else is converted to H.264.">
           <label class="asi-sw"><span class="switch sm"><input type="checkbox" id="rtspPassthrough"><i></i></span><span>Pass cameras through untouched when viewers can decode them (H.264/H.265, no re-encode, lowest CPU)</span></label></div>
         <div class="btnrow" id="rtspRecentRow" hidden style="margin-top:6px">
@@ -1787,6 +1692,7 @@
       <tr><td><kbd>F</kbd></td><td>full-screen the selected stream</td></tr>
       <tr><td><kbd>G</kbd></td><td>collage / spotlight (same as clicking a tile)</td></tr>
       <tr><td><kbd>M</kbd></td><td>mute everything</td></tr>
+      <tr><td><kbd>D</kbd></td><td>deafen: hear nothing and mute your mic (again to undo)</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close panels; leave full screen</td></tr>
     </table>
     <p style="margin-top:10px">Rows: click to select; &#9679;/&#9675; watches or
@@ -1807,6 +1713,8 @@
   <div class="body">
     <button class="opt" id="optRec" type="button"><span class="oi rec"></span>Record</button>
     <button class="opt" id="optRoom" type="button"><span class="oi">&#9432;</span>Room info</button>
+    <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
+    <button class="opt" id="optDeafen" type="button" title="Turn off all sound from the room and mute your microphone (D)"><span class="oi">&#127911;</span>Deafen<span class="chk">&#10003;</span></button>
     <!-- 0.21.23 (Kenton): Files, Chat, Video effects and Audio settings left More -- they live on the toolbar and under
          the camera / mic chevrons. Files stays for phones only, whose toolbar has no Files button. -->
     <button class="opt phoneonly" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
@@ -1922,14 +1830,14 @@
     <div id="camRadios" class="radios"></div>
     <h3 class="sect">Backgrounds</h3>
     <div id="bgRow" class="bgrow"></div>
-    <div class="sw"><span>Adjust brightness</span><label class="switch"><input type="checkbox" id="fxBright"><i></i></label></div>
-    <div class="sw"><span>Soft focus</span><label class="switch"><input type="checkbox" id="fxSoft"><i></i></label></div>
+    <div class="sw"><label class="switch"><input type="checkbox" id="fxBright"><i></i></label><span>Adjust brightness</span></div>
+    <div class="sw"><label class="switch"><input type="checkbox" id="fxSoft"><i></i></label><span>Soft focus</span></div>
     <!-- 0.21.0: phones deliver sideways frames -- rotate and mirror the camera before it leaves this device -->
     <div class="sw"><span>Rotate<small id="fxRotHint" hidden>Auto-upright on this phone; Rotate adds to it</small></span><div class="seg" id="fxRot" role="radiogroup" aria-label="Rotate the camera">
       <button type="button" data-rot="0">0&deg;</button><button type="button" data-rot="90">90&deg;</button>
       <button type="button" data-rot="180">180&deg;</button><button type="button" data-rot="270">270&deg;</button></div></div>
-    <div class="sw"><span>Mirror</span><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label></div>
-    <div class="sw"><span>Background quality<small id="fxQualityLbl">Balanced</small></span><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label></div>
+    <div class="sw"><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label><span>Mirror</span></div>
+    <div class="sw"><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label><span>Background quality<small id="fxQualityLbl">Balanced</small></span></div>
     <div class="sw"><span>Processor<small id="fxProcLbl">Auto</small></span><div class="seg" id="fxProc" role="radiogroup" aria-label="Where the background effect runs">
       <button type="button" data-proc="auto" title="The NPU when this computer has one, else the graphics card, else the standard model">Auto</button><button type="button" data-proc="npu" title="The neural processor (Intel AI Boost, AMD XDNA, Qualcomm Hexagon...)">NPU</button><button type="button" data-proc="gpu" title="The graphics card">GPU</button><button type="button" data-proc="standard" title="The standard model (MediaPipe) -- works everywhere">Standard</button></div></div>
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
@@ -2058,8 +1966,8 @@
         <label class="f"><span>Expected packet loss (%)</span>
           <input type="number" id="encPlc" min="0" max="100" step="1" placeholder="auto">
         </label>
-        <label class="f chkrow"><span>In-band FEC</span><span class="switch sm"><input type="checkbox" id="encFec"><i></i></span></label>
-        <label class="f chkrow"><span>DTX (discontinuous transmission)</span><span class="switch sm"><input type="checkbox" id="encDtx"><i></i></span></label>
+        <label class="f chkrow"><span class="switch sm"><input type="checkbox" id="encFec"><i></i></span><span>In-band FEC</span></label>
+        <label class="f chkrow"><span class="switch sm"><input type="checkbox" id="encDtx"><i></i></span><span>DTX (discontinuous transmission)</span></label>
         <label class="f" style="margin-bottom:0"><span>Gain</span>
           <input type="range" id="encGain" min="0" max="2" step="0.05" value="1" style="accent-color:var(--asi-blue)">
         </label>
@@ -2170,10 +2078,6 @@
 </div>
 </div>
 </main>
-<footer class="asi-footer">
-  <span>Autonomous Solutions, Inc. — internal tool</span>
-  <span>Media over QUIC · <span class="asi-mono">moq-lite-06</span></span>
-</footer>
 
 <script src="/assets/prefs.js"></script>
 <script>
@@ -2217,7 +2121,7 @@
   // opened this relay host's web port. `secure`/`webcodecs` say what the browser can do.
   const CLIENT = window.__kastrClient ?? { class: "app", secure: true, media: true, webcodecs: true, displayCapture: true, host: null, browser: "chromium", mobile: false };
   const IS_WEB = CLIENT.class === "web";
-  // 0.18.0: renditions + on-demand cameras + latency stamps (module-scoped, used by applyState)
+  // 0.18.0: renditions + on-demand cameras (module-scoped, used by applyState)
   const lowAvail = new Set();        // full broadcast names whose -low.hang sibling is announced
   let odOn = false;                  // 0.21.10: the host's switch (kastr.ini ondemand / KASTR_ONDEMAND) -- false until /api/instance says ondemand: true
   window.__odOn = () => odOn;        // module 2 (the RTSP rows) reads it
@@ -2350,6 +2254,7 @@
   // by --lvl (0..1) on any ancestor -- no <defs>, no clipPath ids, so the
   // string can be stamped into innerHTML any number of times.
   const ICONS = {
+    earOff: '<path d="M4 12.5V10a6 6 0 0 1 12 0v2.5"/><rect x="2.8" y="11.5" width="3.6" height="5.7" rx="1.2"/><rect x="13.6" y="11.5" width="3.6" height="5.7" rx="1.2"/><path d="M2.5 2.5l15 15"/>',   // 0.21.40: deafened
     bcast: '<circle cx="10" cy="10" r="1.9"/><path d="M6.8 6.6a4.8 4.8 0 0 0 0 6.8M13.2 6.6a4.8 4.8 0 0 1 0 6.8M4.3 4.1a8.4 8.4 0 0 0 0 11.8M15.7 4.1a8.4 8.4 0 0 1 0 11.8"/>',   // 0.21.22: publishing
     eye: '<path d="M1.5 10S4.6 4.5 10 4.5 18.5 10 18.5 10 15.4 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.6"/>',   // 0.21.19: view only
     search: '<circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 17 17"/>',   // 0.21.23: Participants
@@ -2445,6 +2350,7 @@
   const pendingRemovals = new Map(); // path -> timeoutId, debounces transient "inactive" flaps
   let selectedName = undefined;
   let manualMute = false;
+  let deafened = false, deafMicWas = null;   // 0.21.40: Deafen = all incoming sound off + my mic muted; deafMicWas = my mic was on before
 
   // ---- starvation reporting ---------------------------------------------
   //
@@ -2541,7 +2447,6 @@
   // so a stream this page has parked still shows. Identity is the channel
   // itself: same origin + profile = this machine's views.
   const mineEl = document.getElementById("mine");
-  const mineRows = document.getElementById("mine-rows");
   const mineCount = document.getElementById("mineCount");
   const minePeers = new Map();    // peer -> { view, at, sources: [...] }
   const MINE_TIMEOUT = 12000;     // matches the publish side's PEER_TIMEOUT
@@ -2615,58 +2520,6 @@
     try {
       starveBus.postMessage({ kind: "control", from: "watch", target: peer, id, set });
     } catch {}
-  }
-
-  // ---- self-view thumbnails ------------------------------------------------
-  //
-  // Local, not relayed: the publish views paint their own slots into tiny
-  // webp Blobs and post them over the sources channel -- same profile, same
-  // machine. This page LEASES them: {kind:"thumbs"} every 5s while the pane
-  // is visible; a publisher stops ~12s after the last ask, so a closed
-  // Watch page costs nothing anywhere.
-  const THUMBS_ASK_MS = 5000;
-  function askThumbs() {
-    if (!starveBus || document.hidden || mineEl.hidden) return;
-    // Thumbs are for REMOTE peers only now -- local sources show live
-    // panes. Without this, the native core would webp-encode its own
-    // slots for a consumer that ignores them.
-    if (![...minePeers.keys()].some((p) => p !== window.__publisher?.peer)) return;
-    try { starveBus.postMessage({ kind: "thumbs", on: true, from: "watch" }); } catch {}
-  }
-
-  // (peer + "\u0001" + id) -> object URL of the freshest thumb. One URL per
-  // source at rest: each arrival revokes the one it replaces, renderMine
-  // prunes removed sources, and dropThumbs sweeps a departed peer -- a long
-  // session cannot pile Blobs up.
-  const thumbUrls = new Map();
-  const thumbKey = (peer, id) => peer + "\u0001" + id;
-
-  function acceptThumb(m) {
-    // Local sources have a live pane in #pubPanes; their webp copies are
-    // for OTHER windows on this profile.
-    if (m.peer === window.__publisher?.peer) return;
-    const key = thumbKey(m.peer, m.id);
-    const old = thumbUrls.get(key);
-    const url = URL.createObjectURL(m.blob);
-    thumbUrls.set(key, url);
-    // Straight into the existing row's <img>: no re-render, so a thumb can
-    // never eat a hover or a click the way a rebuild would.
-    const img = mineRows.querySelector(
-      '[data-peer="' + CSS.escape(String(m.peer)) + '"][data-sid="'
-      + CSS.escape(String(m.id)) + '"] img.thumb');
-    if (img) { img.src = url; img.classList.add("has"); }
-    // Revoke AFTER the swap: the old bitmap is already decoded; revocation
-    // only forbids future fetches of that URL.
-    if (old) URL.revokeObjectURL(old);
-  }
-
-  function dropThumbs(peer) {
-    for (const [key, url] of thumbUrls) {
-      if (key.startsWith(peer + "\u0001")) {
-        URL.revokeObjectURL(url);
-        thumbUrls.delete(key);
-      }
-    }
   }
 
   // ---- device menus ---------------------------------------------------------
@@ -2776,7 +2629,6 @@
   function pointAnchor(x, y) {
     return { getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }), contains: () => false };
   }
-  window.__pointAnchor = pointAnchor;
 
   // ---- top-bar camera controls (0.7.6) ------------------------------------
   // The main camera's mic/video toggles live by the Leave button, Teams-
@@ -2843,7 +2695,30 @@
       return null;
     }
   }
+  // 0.21.40 (Kenton): Deafen -- one switch for "hear nothing, say nothing". Undeafen brings the room's sound back, and my mic
+  // only if it was on before. Unmuting the mic while deafened undeafens (as in Discord).
+  function setDeafen(on) {
+    const { src } = localCamSrc();
+    const setMic = (muted) => { if (!src || !!src.micMuted === muted) return; src.micMuted = muted; sendControl(window.__publisher.peer, src.id, { micMuted: muted }); renderMine(); };
+    if (on) {
+      deafMicWas = src ? !src.micMuted : joinMicOn;
+      manualMute = true;
+      if (src) setMic(true); else { joinMicOn = false; try { paintJoinToggles(); } catch {} paintTopCam(); }
+    } else {
+      manualMute = false;
+      if (deafMicWas) { if (src) setMic(false); else { joinMicOn = true; try { paintJoinToggles(); } catch {} paintTopCam(); } }
+      deafMicWas = null;
+    }
+    deafened = !!on;
+    try { window.__state?.set?.("deaf", deafened); } catch {}   // 0.21.40: the room sees it
+    for (const el of document.querySelectorAll("#pubPanes .pubpane.camkind")) el.classList.toggle("deaf", deafened);
+    applyState();
+    window.__toast?.(on ? "Deafened — you hear nothing and your mic is muted" : "Undeafened", 2500, { level: "event" });
+  }
+  window.__deafen = (on) => setDeafen(on === undefined ? !deafened : !!on);   // rig
+  document.getElementById("optDeafen").addEventListener("click", () => { closeAllPops(); setDeafen(!deafened); });
   topMicBtn.addEventListener("click", () => {
+    if (deafened) { const wasOn = deafMicWas; setDeafen(false); if (wasOn) return; }   // 0.21.40: unmuting the mic undeafens
     const { src } = localCamSrc();
     if (!src) { ensureLocalCamera({ mic: !joinMicOn, vid: window.__join?.state?.() === "joined" ? false : undefined }); return; }
     src.micMuted = !src.micMuted;
@@ -2873,174 +2748,14 @@
   // the chevrons open the Camera / Audio popovers (registered with the other pops)
 
   function renderMine() {
-    closeMineMenu();   // rows are about to be replaced; never orphan the menu
+    closeMineMenu();   // a source change can orphan an open chevron menu
     const list = [];
     for (const [peer, rec] of minePeers) {
       for (const src of rec.sources) list.push({ peer, view: rec.view, rec, src });
     }
-    list.sort((a, b) => String(a.src.name).localeCompare(String(b.src.name)));
-    const appearing = mineEl.hidden && list.length > 0;
     mineEl.hidden = list.length === 0;
-    // First thumb inside ~1s of the pane appearing, not after the 5s tick.
-    if (appearing) askThumbs();
-    // Prune thumbs of sources that no longer exist (peer alive, source
-    // removed); whole peers are swept in the bye/timeout paths.
-    const liveKeys = new Set(list.map((x) => thumbKey(x.peer, x.src.id)));
-    for (const [key, url] of thumbUrls) {
-      if (!liveKeys.has(key)) { URL.revokeObjectURL(url); thumbUrls.delete(key); }
-    }
     mineCount.textContent = String(list.length);
     paintTopCam();
-    mineRows.replaceChildren();
-    // 0.7.8: NO local rows at all -- the camera lives in the top bar and
-    // every share's controls live in its tile's chevron menu. Rows only
-    // remain for another window's sources (not shown in the stage view).
-    const myPeer = window.__publisher?.peer;
-    const rows = list.filter((x) => x.peer !== myPeer);
-    for (const { peer, view, rec, src } of rows) {
-      const row = document.createElement("div");
-      row.className = "srow";
-      row.dataset.peer = peer;
-      row.dataset.sid = String(src.id);
-      // Rows for THIS page's own sources: the live pane in #pubPanes above
-      // is their preview, so no webp thumb -- and say so on hover.
-      const isLocal = peer === window.__publisher?.peer;
-      row.classList.toggle("local", isLocal);
-      row.title = isLocal ? "Publishing from this page \u2014 live preview above"
-                          : "Publishing from the " + view + " view";
-      // Remote self-preview, fed by acceptThumb by (peer, id) -- hidden until
-      // the first blob arrives. A paused source stops receiving thumbs, and
-      // .paused is the standby hook. Local sources skip it: their preview
-      // is the live pane, not an 800 ms webp.
-      let th = null;
-      if (!isLocal) {
-        th = document.createElement("img");
-        th.className = "thumb";
-        th.alt = "";
-        const known = thumbUrls.get(thumbKey(peer, src.id));
-        if (known) { th.src = known; th.classList.add("has"); }
-        th.classList.toggle("paused", !!src.videoPaused);
-      }
-      const dot = document.createElement("span");
-      dot.className = "dot" + (src.live ? "" : " dim");
-      dot.title = src.live ? "ON AIR" : "previewing (not published)";
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = shortLabel(String(src.name || src.label || "?"));
-      if (th) row.appendChild(th);
-      row.append(dot, name);
-      if (src.carriesAudio) {
-        const mut = document.createElement("button");
-        mut.type = "button";
-        mut.className = "mut ibtn" + (src.micMuted ? " on" : "");
-        // The mic pair, not the speaker pair: this is the publisher's own
-        // microphone, the one surface where "muted mic" means exactly that.
-        // Rows rebuild on every state change (signature dedup), so stamping
-        // innerHTML here is safe -- nothing repaints these in place.
-        mut.innerHTML = icon(src.micMuted ? "micOff" : "mic");
-        mut.title = src.micMuted ? "Mic muted \u2014 click to unmute"
-                                 : "Mute this source's audio";
-        mut.addEventListener("click", () => {
-          // Optimistic flip, resolved through minePeers rather than this
-          // closure's `src`: every announcement REPLACES the sources
-          // array, and the signature dedup skips rebuilding on no-change
-          // ticks -- so after any 4s tick this closure holds an orphaned
-          // object. peer + id are primitives and stay true.
-          const cur = minePeers.get(peer)?.sources.find((x) => x.id === src.id) ?? src;
-          cur.micMuted = !cur.micMuted;
-          sendControl(peer, src.id, { micMuted: cur.micMuted });
-          renderMine();
-        });
-        row.appendChild(mut);
-        if (src.kind === "camera" && (rec.mics ?? []).length) {
-          const chev = document.createElement("button");
-          chev.type = "button";
-          chev.className = "chev";
-          chev.innerHTML = icon("chevron");
-          chev.title = "Switch which microphone that machine uses";
-          chev.addEventListener("click", (e) => {
-            // Same idiom as shareBtn: the opening click must not reach the
-            // document closer that would immediately shut the menu.
-            e.stopPropagation();
-            // Peer-level on purpose: the publish page has ONE mic binding
-            // shared by every slot, so this menu speaks for the machine,
-            // not the row -- addressed by target alone, no entry id.
-            const localDef = peer === window.__publisher?.peer
-              ? (window.__publisher.devices?.().defaultMic ?? null) : null;
-            const items = [{ value: "", label: localDef
-                ? "System default (" + localDef + ")" : "System default" },
-              ...(minePeers.get(peer)?.mics ?? rec.mics).map((mm, i) =>
-                ({ value: mm.deviceId, label: mm.label || ("Microphone " + (i + 1)) }))];
-            openMineMenu(chev, items, minePeers.get(peer)?.micDevice ?? "", (micId) => {
-              const r2 = minePeers.get(peer);
-              if (r2) r2.micDevice = micId;   // optimistic; the announce is the authority
-              try {
-                starveBus.postMessage({ kind: "micdev", from: "watch", target: peer, micId });
-              } catch {}
-            });
-          });
-          row.appendChild(chev);
-        }
-      }
-      if (src.pausable) {
-        const pv = document.createElement("button");
-        pv.type = "button";
-        pv.className = "pv ibtn" + (src.videoPaused ? " on" : "");
-        // Camera pair. .on keeps the amber from v0.6.3 -- a paused video is
-        // a deliberate state, not a fault -- so no Teams-red here.
-        pv.innerHTML = icon(src.videoPaused ? "camOff" : "cam");
-        pv.title = src.videoPaused ? "Video paused \u2014 click to resume"
-                                   : "Pause video, keep audio";
-        pv.addEventListener("click", () => {
-          const cur = minePeers.get(peer)?.sources.find((x) => x.id === src.id) ?? src;
-          cur.videoPaused = !cur.videoPaused;
-          sendControl(peer, src.id, { videoPaused: cur.videoPaused });
-          renderMine();
-        });
-        row.appendChild(pv);
-      }
-      if (src.kind === "camera" && (rec.cameras ?? []).length) {
-        const chev = document.createElement("button");
-        chev.type = "button";
-        chev.className = "chev";
-        chev.innerHTML = icon("chevron");
-        chev.title = "Switch which camera feeds this stream";
-        chev.addEventListener("click", (e) => {
-          e.stopPropagation();
-          // Resolve through minePeers, not this closure: announcements
-          // REPLACE the sources array (see the mut handler above), so the
-          // captured src goes stale after any rebuild-skipped tick.
-          const items = (minePeers.get(peer)?.cameras ?? rec.cameras).map((c, i) =>
-            ({ value: c.deviceId, label: c.label || ("Camera " + (i + 1)) }));
-          const cur = minePeers.get(peer)?.sources.find((x) => x.id === src.id)?.deviceId
-                    ?? src.deviceId;
-          openMineMenu(chev, items, cur, (cameraId) => {
-            const curSrc = minePeers.get(peer)?.sources.find((x) => x.id === src.id);
-            if (curSrc) curSrc.deviceId = cameraId;   // optimistic
-            sendControl(peer, src.id, { cameraId });
-          });
-        });
-        row.appendChild(chev);
-      }
-      // 0.7.6: this page's shares wear the chevron ON the pane (overlay);
-      // the row keeps one only for another window's shares, whose panes
-      // live in that other window.
-      if (src.kind !== "camera" && !isLocal) {
-        const chev = document.createElement("button");
-        chev.type = "button";
-        chev.className = "chev";
-        chev.innerHTML = icon("chevron");
-        chev.title = "Options for this share";
-        chev.addEventListener("click", (e) => {
-          e.stopPropagation();
-          openMineMenu(chev, [{ value: "stop", label: "Stop sharing" }], "", () => {
-            try { starveBus.postMessage({ kind: "stop", from: "watch", target: peer, id: src.id }); } catch {}
-          });
-        });
-        row.appendChild(chev);
-      }
-      mineRows.appendChild(row);
-    }
   }
 
   // Announcement intake, shared by the channel listener below and the ported
@@ -3067,11 +2782,7 @@
       const m = e.data;
       if (!m) return;
       if (m.kind === "bye") {
-        if (minePeers.delete(m.peer)) { dropThumbs(m.peer); recomputeMine(); renderMine(); }
-        return;
-      }
-      if (m.kind === "thumb" && m.peer != null && m.blob) {
-        acceptThumb(m);
+        if (minePeers.delete(m.peer)) { recomputeMine(); renderMine(); }
         return;
       }
       // Announcements only: "starved" is our own kind, and control chatter
@@ -3088,7 +2799,7 @@
       let changed = false;
       for (const [peer, rec] of minePeers) {
         if (now - rec.at > MINE_TIMEOUT) {
-          minePeers.delete(peer); dropThumbs(peer); changed = true;
+          minePeers.delete(peer); changed = true;
         }
       }
       if (changed) { recomputeMine(); renderMine(); }
@@ -3097,10 +2808,6 @@
     // instead of waiting out their 4s tick. No peer/sources on purpose:
     // this page owns nothing, it only solicits.
     try { starveBus.postMessage({ kind: "hello", from: "watch" }); } catch {}
-    // Keep the thumbnail lease alive while the pane is visible. Publishers
-    // hold a 12s lease per ask, so one lost message costs nothing, and a
-    // hidden or self-view-free page simply stops asking.
-    setInterval(askThumbs, THUMBS_ASK_MS);
   }
 
 
@@ -3196,8 +2903,6 @@
   // How far outside the view an unselected grid tile starts downloading. Big
   // enough that scrolling reaches a picture rather than a black square.
   const GRID_PREFETCH = "800px";
-
-  try { localStorage.removeItem("kastr.watch.size"); } catch {}   // 0.9.3: per-tile spans (the corner grip) retired
 
   // Multi-source audio. `audioOn` holds the names you want to hear by hand;
   // the other two modes ignore it and answer from the selection instead.
@@ -3639,7 +3344,7 @@
   setInterval(drainRelayNodes, 10000);   // 0.13.0: 10 s (was 15 s)
   setTimeout(drainRelayNodes, 5000);
   window.__relayOf = () => Object.fromEntries(relayOf);   // rig hook
-  window.__drainRelayNodes = drainRelayNodes;
+  window.__drainRelayNodes = drainRelayNodes;   // rig
   // 0.13.0 (F2): open subscriptions on `path` at the node I dialled (its name
   // from /api/instance.relayName, else the node that announces the path, else
   // the only node there is). null = no table for that node yet.
@@ -3784,27 +3489,11 @@
   }
 
   // ---- room up-time (0.8.8) ---------------------------------------------------
-  // Each member announces <room>/~since/<joinTs>/<b64 peer>; the earliest
-  // active one is how long the room has been up.
-  const sinceTs = new Map();   // announce path -> ts
+  // Each member's state record carries its join time (stateMembersApply); the
+  // earliest one is how long the room has been up.
+  const sinceTs = new Map();   // state path -> ts
   let roomSince = 0;
   const members = new Map();   // 0.8.11: viewers -- announce path -> {peer, op, name, ts}
-  function sinceAccept(path, active) {
-    const parts = String(path).split("/").filter(Boolean);
-    const i = parts.indexOf("~since");
-    if (i < 0 || parts.length < i + 2) return;
-    const ts = Number(parts[i + 1]) || 0;
-    if (active && parts.length >= i + 3) {   // 0.13.0: a peer with a state entry is already counted
-      const w0 = b64json(parts[i + 2]);
-      if (w0?.peer && [...members.values()].some((m) => m.state && m.peer === w0.peer)) return;
-    }
-    if (active && ts) sinceTs.set(String(path), ts); else sinceTs.delete(String(path));
-    roomSince = sinceTs.size ? Math.min(...sinceTs.values()) : 0;
-    let who = null;
-    if (parts.length >= i + 3) who = b64json(parts[i + 2]);
-    if (active && who && who.peer) members.set(String(path), { ...who, ts }); else members.delete(String(path));
-    try { paintChannelChip(); paintPersonGroups(); queueRelayout(); } catch {}   // the header count lives in applyState
-  }
   // 0.15.0 (D1): presence carries the page's MODE; unattended boxes (publisher,
   // publisher-relay, relay) are not people -- they stay out of member lists and counts.
   const PRESENCE_HIDDEN_MODES = new Set(["publisher", "publisher-relay", "relay"]);
@@ -3962,6 +3651,13 @@
     for (const m of members.values()) if (m.op && String(m.op).toLowerCase() === key && m.name) return m.name;
     return "";
   }
+  // 0.21.40: people in my room who are deafened (their state.json carries deaf: 1)
+  function deafOps() {
+    const out = new Set();
+    for (const p of roomsPres.values()) if (p.state && !p.goneAt && p.slug === CHANNEL && p.who?.deaf) out.add(String(p.who.op || "").toLowerCase());
+    return out;
+  }
+  let deafSeen = "";
   function participantList() {
     const now = performance.now();
     const creator = opKeyOf(roomsMinter.get(CHANNEL)?.creator || "");
@@ -3990,6 +3686,7 @@
       else if (!p.cam) p.mic = "";
     }
     const out = [];
+    const deafNow = deafOps();
     for (const p of people.values()) {
       p.name = p.name || memberNameOf(p.key) || prettyOperator(p.key);
       const role = [];
@@ -3998,6 +3695,7 @@
       if (boxOps.has(p.key)) role.push("Camera box");
       if (p.viewer && !p.me) role.push("View only");
       p.role = role.join(" \u00b7 ");
+      p.deaf = p.me ? deafened : deafNow.has(p.key);   // 0.21.40
       out.push(p);
     }
     out.sort((a, b) => (b.me - a.me) || a.name.localeCompare(b.name));
@@ -4058,7 +3756,8 @@
         row.appendChild(more);
       }
       const mic = document.createElement("span"); mic.className = "ppmic" + (p.mic === "on" ? " live" : "");
-      if (p.mic) { mic.innerHTML = icon(p.mic === "off" ? "micOff" : "mic"); mic.title = p.mic === "off" ? "Microphone off" : p.talk ? "Speaking" : "Microphone on"; }
+      if (p.deaf) { mic.innerHTML = icon("earOff"); mic.title = "Deafened \u2014 hears nothing, mic muted"; }   // 0.21.40
+      else if (p.mic) { mic.innerHTML = icon(p.mic === "off" ? "micOff" : "mic"); mic.title = p.mic === "off" ? "Microphone off" : p.talk ? "Speaking" : "Microphone on"; }
       else if (p.viewer) { mic.innerHTML = icon("eye"); mic.title = "View only"; }
       row.appendChild(mic);
       return row;
@@ -4101,14 +3800,8 @@
     if (copied) window.__toast?.("Invite link copied \u2014 they still need the access code", 4000, { level: "info" });
     else window.prompt("Copy this invite link (they still need the access code):", link);
   });
-  window.__participants = () => participantList().map((p) => ({ key: p.key, name: p.name, role: p.role, mic: p.mic, talk: p.talk, me: p.me, menu: !!(p.cam || p.content.length) }));   // rig
+  window.__participants = () => participantList().map((p) => ({ key: p.key, name: p.name, role: p.role, mic: p.mic, talk: p.talk, me: p.me, deaf: !!p.deaf, menu: !!(p.cam || p.content.length) }));   // rig
   window.__inviteLink = inviteLink;   // rig
-  const fmtUp = (ms) => {
-    const m = Math.max(0, Math.floor(ms / 60000));
-    if (m < 60) return m + "m";
-    const h = Math.floor(m / 60), d = Math.floor(h / 24);
-    return d ? d + "d " + (h % 24) + "h" : h + "h " + (m % 60) + "m";
-  };
 
   // ---- remote RTSP grid: expand one cell (0.8.8) ------------------------------
   // The owner announces <room>/~grid/<ts>/<b64 {path,n,layout,cells}>; the
@@ -4629,7 +4322,7 @@
   }
   // the publish half's own grid pane uses the same engine
   window.__viewArm = armView;
-  window.__viewZoom = (canvas, rect, label) => viewSetRect(canvas, rect, label);
+  window.__viewZoom = (canvas, rect, label) => viewSetRect(canvas, rect, label);   // rig
   window.__viewReset = (canvas) => viewReset(canvas);
   window.__viewZoomed = (canvas) => viewZoomed(canvas);
   window.__viewDragged = () => viewDragged;
@@ -4779,12 +4472,7 @@
   // in full screen or full window ... the icon only unless moused over, then show the wording. Keep the gallery button in the
   // view options"): full screen / Fill window only; it leaves them for the gallery
   stageBack.type = "button"; stageBack.id = "stageBack"; stageBack.innerHTML = '\u25a6<span class="gl"> Gallery</span>'; stageBack.title = "Gallery";
-  stageBack.addEventListener("click", (e) => {
-    e.stopPropagation(); gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null;
-    if (fillWin) { try { toggleFillWindow(null); } catch {} }
-    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
-    gridMode = true; applyState();
-  });   // 0.21.15: the Gallery pill abandons a cold open
+  stageBack.addEventListener("click", (e) => { e.stopPropagation(); goGallery(); });   // 0.21.15: the Gallery pill abandons a cold open
   stageWrap.appendChild(stageBack);
   // 0.21.0: idle chrome -- 3 s without pointer/key input hides the media bar, the filename bars, the
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
@@ -4933,7 +4621,7 @@
   }
   let autoContent = null;   // the content tile the layout auto-followed
   let selfSpotEl = null;    // one of MY pubpanes, spotlit (0.7.8)
-  window.__selfSpotDbg = () => ({ el: selfSpotEl?.dataset?.sid ?? null, connected: !!selfSpotEl?.isConnected, gridMode, selectedName, manualPick });   // 0.16.0 rig
+  window.__selfSpotDbg = () => ({ el: selfSpotEl?.dataset?.sid ?? null, connected: !!selfSpotEl?.isConnected, gridMode, selectedName, manualPick });   // rig (0.16.0)
   window.__selfSpot = (pane) => {
     manualPick = true;   // 0.13.3
     // Clicking my own tile: spotlight it for me; clicking it again in
@@ -4945,6 +4633,17 @@
   // 0.13.3: a gesture picked the stage (select/click/Gallery/self-spotlight); automatic
   // corrections (a grid whose geometry arrived after its children) leave such a pick alone.
   let manualPick = false;
+  // 0.21.40 (Kenton: "I need a view button to go back to the gallery ... It does kick me back to the spotlight view if
+  // something gets added or removed"): the person CHOSE the gallery -- it stays until they pick something, or someone
+  // spotlights something new. A share arriving, or tiles coming and going, no longer pulls the stage back.
+  let galleryChosen = false;
+  function goGallery() {
+    gridOpenEnd(false); manualPick = true; galleryChosen = true; viewResetAll(); selfSpotEl = null; focusMode = false;
+    if (fillWin) { try { toggleFillWindow(null); } catch {} }
+    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
+    gridMode = true; applyState();
+  }
+  window.__goGallery = goGallery;   // rig
   function autoContentCheck() {
     const content = orderedNames().filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n));   // 0.8.12: feeds behind a grid are not arrivals
     const newest = content[content.length - 1] ?? null;
@@ -4956,7 +4655,7 @@
       autoContent = newest;
       const curIsContent = !gridMode && selectedName
         && isContentPath(selectedName) && (content.includes(selectedName) || (manualPick && isGridChild(selectedName)));   // 0.13.3: an automatic pick of a hidden child is not content
-      if (!curIsContent) {
+      if (!curIsContent && !(galleryChosen && gridMode)) {   // 0.21.40: a chosen gallery stays
         selectedName = newest;
         gridMode = false;
       }
@@ -5630,6 +5329,7 @@
       t.pane.classList.toggle("no-audio", noAudio);
       // 0.8.2: a locally muted tile wears the mic chip too.
       t.pane.classList.toggle("lmuted", mutedStreams.has(name));
+      { const df = !isContentPath(name) && deafOps().has(personKeyOf(name)); if (t.pane.classList.contains("deaf") !== df) { t.pane.classList.toggle("deaf", df); const mc = t.pane.querySelector(".mchip"); if (mc) mc.title = df ? "Deafened \u2014 hears nothing, mic muted" : "Muted"; } }   // 0.21.40
 
       t.row.classList.toggle("active", isSelected);
       t.row.classList.toggle("parked", !watched);
@@ -5661,6 +5361,8 @@
     applyVolumes();
 
     muteBtn.classList.toggle("on", manualMute);
+    if (deafened && !manualMute) { deafened = false; deafMicWas = null; try { window.__state?.set?.("deaf", false); } catch {} for (const el of document.querySelectorAll("#pubPanes .pubpane.deaf")) el.classList.remove("deaf"); }   // 0.21.40: sound turned back on another way (M) ends it
+    document.getElementById("optDeafen")?.classList.toggle("on", deafened);
     muteBtn.textContent = manualMute ? "Unmute" : "Mute";
     paintViewPop();   // 0.8.8: the View menu shows the mode
 
@@ -5820,6 +5522,7 @@
   function select(name) {
     if (!tiles.has(name)) return;
     manualPick = true;   // 0.13.3
+    galleryChosen = false;   // 0.21.40
     if (name !== selectedName) viewResetAll();   // 0.8.12: a new pick starts unzoomed
     selfSpotEl = null;         // a remote pick replaces a self-spotlight
     selectedName = name;
@@ -6187,16 +5890,11 @@
     l.textContent = shortLabel(name, true);   // hover chip: cameras wear just the name (0.21.7: no title -- OS tooltips stick)
     // 0.8.1: Full screen lives in the chevron menu now; the mute state is
     // a Teams-style chip on the video, not a label marker.
-    const paneNoaud = document.createElement("span");
-    paneNoaud.className = "noaud";
-    paneNoaud.title = "This stream has no audio";
-    paneNoaud.innerHTML = icon("spkOff");
-    label.append(l, paneNoaud);
+    label.append(l);
     pane.appendChild(label);
-    const mediabarEl = null;   // filled below once the tile object exists (0.8.10)
     const mchip = document.createElement("div");
     mchip.className = "mchip";
-    mchip.innerHTML = icon("micOff");
+    mchip.innerHTML = icon("micOff") + icon("earOff");   // 0.21.40: + deafened
     mchip.title = "Muted";
     pane.appendChild(mchip);
     const vchip = document.createElement("div");
@@ -6285,7 +5983,7 @@
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
         openMineMenu(anchor, items, "", (v) => {
           if (v === "lat") { latencyToggle(name); return; }
-          if (v === "unpin") { gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); return; }   // as the Gallery pill
+          if (v === "unpin") { goGallery(); return; }   // as the Gallery pill
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
@@ -6658,7 +6356,7 @@
   const roomsReg = new Map();    // "~channels" path -> { slug, locked, salt, hash, closed, seen, goneAt }
   const roomsTalk = new Map();   // "~talking" path -> { slug, peer }
   const roomsRoot = new Map();   // "" (open relays) path -> { slug, op, seen, goneAt } publishers
-  window.__roomsPresDbg = () => [...roomsPres.values()].map((p) => ({ slug: p.slug, op: p.who?.op, mode: p.who?.mode, state: !!p.state, gone: !!p.goneAt, video: p.who?.video, pub: (p.who?.publishing || []).length, rtsp: (p.who?.rtspPaths || []).length }));   // 0.21.36 rig
+  window.__roomsPresDbg = () => [...roomsPres.values()].map((p) => ({ slug: p.slug, op: p.who?.op, mode: p.who?.mode, state: !!p.state, gone: !!p.goneAt, video: p.who?.video, pub: (p.who?.publishing || []).length, rtsp: (p.who?.rtspPaths || []).length }));   // rig (0.21.36)
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
@@ -6669,6 +6367,7 @@
     roomsChangedT = setTimeout(() => {
       roomsChangedT = null;
       lastChannelList = deriveRooms();
+      { const ds = [...deafOps()].sort().join(","); if (ds !== deafSeen) { deafSeen = ds; applyState(); try { paintParticipants?.(); } catch {} } }   // 0.21.40
       const slugs = lastChannelList.map((r) => r.slug).join(",");
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
       try { stateMembersApply(); } catch {}   // 0.13.0
@@ -6749,7 +6448,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined } });   // 0.21.16: + rtsp; 0.21.36: + video
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           roomsChanged();
         }));
       });
@@ -6781,18 +6480,11 @@
         roomsChanged();
       });
     }
-    // open relays: publishers per room from <room>/<host>/<op>/<leaf>.hang, and
-    // 0.10-era members' <room>/~since presence
+    // open relays: publishers per room from <room>/<host>/<op>/<leaf>.hang
     if (!authSecured) {
       sub("", (e) => {
         const key = String(e.path);
         const pp = key.split("/").filter(Boolean);
-        if (pp[1] === "~since" && pp.length >= 4) {
-          if (!e.active) { const r = roomsPres.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
-          const who = b64json(pp[3]);
-          if (who && who.peer && ROOM_RE.test(pp[0])) { roomsPres.set(key, { slug: pp[0], ts: Number(pp[2]) || 0, who, seen: Date.now(), goneAt: undefined }); roomsChanged(); }
-          return;
-        }
         if (!key.endsWith(".hang") || pp.length < 4 || pp[0].startsWith(".") || pp[0].startsWith("~") || !ROOM_RE.test(pp[0])) return;
         if (!e.active) { const r = roomsRoot.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
         roomsRoot.set(key, { slug: pp[0], op: String(pp[2]).toLowerCase(), seen: Date.now(), goneAt: undefined });
@@ -6926,7 +6618,8 @@
       const op = String(p.who.op || "").toLowerCase() || ("peer:" + p.who.peer);
       // 0.21.36 (Kenton: "another symbol on the circle of a room to denote that there is an active video stream"): a picture
       // on the air -- a source with video on (pages before 0.21.36: anything published), or a box's RTSP feeds / grids
-      if (p.state && ((p.who.video ?? (p.who.publishing?.length || 0)) > 0 || (p.who.rtspPaths?.length && p.who.rtsp !== "off"))) r.video = true;
+      if (p.state && (p.who.airv ? p.who.video > 0   // 0.21.40: a box that counts only what is on the air
+          : ((p.who.video ?? (p.who.publishing?.length || 0)) > 0 || (p.who.rtspPaths?.length && p.who.rtsp !== "off")))) r.video = true;
       if (presenceHidden(p.who)) {   // 0.15.0 (D1)
         hiddenOps.add(p.slug + "/" + op);
         if (p.ts && (!r.since || p.ts < r.since)) r.since = p.ts;
@@ -7032,7 +6725,7 @@
     suppressed.clear();
     spotVotes.clear();
     spotOffs.clear(); spotStage = [];   // 0.21.32
-    spotDone = null;
+    spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
     spotLitClear(true);   // 0.21.0: leaving the room forgets the mirrored spotlight
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
@@ -7072,7 +6765,7 @@
     spotVotes.clear();           // ...nor old-room spotlight votes apply here
     spotOffs.clear(); spotStage = [];   // 0.21.32
     memberSubsClear();           // 0.13.0: the previous room's .member consumers
-    spotDone = null;
+    spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
     for (const name of [...tiles.keys()]) removeTile(name);
@@ -7127,7 +6820,6 @@
         if (kind === "~stalled") { stalledAccept(String(path), entry.active); continue; }
         if (kind === "~avatar") { avatarAccept(String(path), entry.active); continue; }
         if (kind === "~files") { filesAccept(String(path), entry.active); continue; }
-        if (kind === "~since") { sinceAccept(String(path), entry.active); continue; }   // 0.8.8
         if (kind === "~grid") { gridAccept(String(path), entry.active); continue; }     // 0.8.8
         if (kind === "~media") { mediaAccept(String(path), entry.active); continue; }      // 0.8.10
         if (kind === "~mediactl") { mediaCtlAccept(String(path), entry.active); continue; }
@@ -7175,23 +6867,22 @@
   // similar to the RTSP grid" -- a second spotlight ADDS, no limit, everything else stays in the rail). Every member's
   // room.json carries `spots` [{target, ts}] (what they spotlit for everyone) and `unspots` [{target, ts}] (what they
   // removed, for everyone, whoever set it). A target is spotlit while its newest add is newer than its newest removal.
-  // A pre-0.21.32 member carries ONE `spotlight` (its "~none" removes everything older). Applied ONCE per change of
-  // the set -- later local clicks win locally, because fighting the person at the keyboard helps nobody.
+  // Applied ONCE per change of the set -- later local clicks win locally, because fighting the person at the keyboard helps nobody.
   const spotVotes = new Map();   // vote key (member path, "<path>#lit", announce path) -> [{ ts, target, by }]
   const spotOffs = new Map();    // member path -> [{ ts, target }]
   let spotDone = null;           // signature of the spotlight set this page last applied
+  let spotVotesDone = "";        // 0.21.40: the room's spotlight votes last acted on (targets + times)
   let spotStage = [];            // 0.21.32: the spotlight grid: [{ target, name } | { target, el }] (two or more)
   let stageMosaicNames = new Set();   // 0.21.32: remote tiles in the spotlight grid right now (applyState keeps it)
   // 0.21.0: the spotlight FOLLOWS THE PARTICIPANT. When a vote lands on one of my own shares I mirror it into my
-  // room.json (`spotlits`; `spotlit` = the newest, for older pages); viewers count the mirror as a vote keyed
+  // room.json (`spotlits`); viewers count the mirror as a vote keyed
   // "<my path>#lit", so the spotlight survives the spotlighter leaving, and I re-announce it after a reload within
   // 30 min (sessionStorage). Cleared by a removal, the share ending, a room switch or a kick.
   const spotLits = new Map();    // target -> { target, by, ts, missAt }
   const SPOT_LIT_RESTORE_MS = 1800000;
   function spotLitCommit(persist) {
     const list = [...spotLits.values()].map(({ target, by, ts }) => ({ target, by, ts }));
-    const newest = list.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
-    try { window.__state?.set?.("spotlits", list); window.__state?.set?.("spotlit", newest); } catch {}
+    try { window.__state?.set?.("spotlits", list); } catch {}
     if (persist) {
       try {
         if (list.length) sessionStorage.setItem("kastr.spotlit", JSON.stringify({ list, room: CHANNEL, at: Date.now() }));
@@ -7215,7 +6906,7 @@
   function spotLitRestore() {   // after a rejoin: same room, within 30 min, once each share is announced again
     let rec = null;
     try { rec = JSON.parse(sessionStorage.getItem("kastr.spotlit") || "null"); } catch {}
-    const list = rec ? (Array.isArray(rec.list) ? rec.list : (rec.target ? [rec] : [])) : [];
+    const list = rec && Array.isArray(rec.list) ? rec.list : [];
     if (!list.length || rec.room !== CHANNEL || Date.now() - (Number(rec.at) || 0) > SPOT_LIT_RESTORE_MS) { spotLitClear(true); return; }
     for (const one of list) {
       let tries = 0;
@@ -7252,10 +6943,6 @@
     return [...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts);
   }
   window.__spotSet = spotSetNow;   // rig
-  function spotWinnerNow() {   // the newest spotlight (pre-0.21.32 callers)
-    const set = spotSetNow();
-    return set.length ? set[set.length - 1] : null;
-  }
   const spotOnRoom = (name) => spotSetNow().some((v) => v.target === String(name) || gridChildOf.get(v.target) === String(name));
   // 0.21.30 (Kenton: "if something is spotlighted already, then the spotlight button should show remove spotlight")
   window.__spotIs = (target) => spotOnRoom(target);
@@ -7308,6 +6995,13 @@
     if (sig === spotDone) return;   // one-shot per change
     const was = spotDone;
     spotDone = sig;
+    // 0.21.40: only a new spotlight (or a removed one) is news. A tile that comes or goes changes what this page can show,
+    // not what the room chose -- a person who chose the gallery stays in it.
+    const votes = set.map((v) => v.target + "@" + v.ts).join("|");
+    const news = votes !== spotVotesDone;
+    spotVotesDone = votes;
+    if (galleryChosen && gridMode && !news) { spotStage = items.length >= 2 ? items : []; return; }
+    if (news) galleryChosen = false;
     if (!items.length) {
       spotStage = [];
       // every spotlight gone: back to the gallery, unless the user picked something since
@@ -7504,14 +7198,6 @@
   };
 
   document.getElementById("connect").addEventListener("click", connect);
-  document.getElementById("watchAllBtn").addEventListener("click", () => {
-    for (const name of orderedNames()) if (!isWatched(name)) watchStream(name);
-  });
-  document.getElementById("parkAllBtn").addEventListener("click", () => {
-    // Allowed while something is selected: selection falls to undefined and
-    // the stats/diagnostics panels already have "no stream selected" paths.
-    for (const name of orderedNames()) if (isWatched(name)) parkStream(name);
-  });
   // 0.8.9: the master volume sticks (it reset to 50% on every reload)
   try { const v0 = localStorage.getItem("kastr.volume"); if (v0 !== null && v0 !== "") volumeInput.value = v0; } catch {}
   volumeInput.addEventListener("input", () => { try { localStorage.setItem("kastr.volume", volumeInput.value); } catch {} applyState(); });
@@ -7519,6 +7205,7 @@
   // 0.8.8: the toolbar View button opens a menu; this is the Speaker action.
   function enterSpotlight() {
     manualPick = true;   // 0.13.3
+    galleryChosen = false;   // 0.21.40
     gridMode = false;
     if (!gridMode && (!selectedName || !tiles.has(selectedName))) {
       // Manual spotlight needs a main: content first, then the current
@@ -7547,8 +7234,9 @@
     if (e.key === "ArrowRight" || e.key === "ArrowDown") { step(1); e.preventDefault(); }
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { step(-1); e.preventDefault(); }
     else if (e.key === "f" || e.key === "F") toggleFullscreen(selectedName);   // 0.21.0: the stage, selection or not
-    else if (e.key === "g" || e.key === "G") { if (gridMode) enterSpotlight(); else { gridMode = true; applyState(); } }
+    else if (e.key === "g" || e.key === "G") { if (gridMode) enterSpotlight(); else goGallery(); }
     else if (e.key === "m" || e.key === "M") { manualMute = !manualMute; applyState(); }
+    else if (e.key === "d" || e.key === "D") { setDeafen(!deafened); }   // 0.21.40
     else if (e.key === "PageDown") { if (railFlip(1)) e.preventDefault(); }     // 0.8.12: rail pages
     else if (e.key === "PageUp") { if (railFlip(-1)) e.preventDefault(); }
     else if (/^[1-9]$/.test(e.key)) {
@@ -7585,7 +7273,7 @@
     // dead controls (this page then still watches fine).
     if (!window.__publisher) {
       log("Publishing is unavailable (the publish module failed to load) \u2014 "
-        + "use the legacy publish page (link in the panel header).");
+        + "reload the page; watching still works.");
     }
     closeAllPops();          // four popovers now; two open is never meant
     sharePop.hidden = false;
@@ -7867,7 +7555,7 @@
   }
   document.getElementById("viewGridLock")?.addEventListener("click", () => { window.__gridFeeds?.setLock?.(!window.__gridFeeds?.lock?.()); paintViewPop(); });
   document.getElementById("viewGridNames")?.addEventListener("click", () => { window.__gridFeeds?.setNames?.(!window.__gridFeeds?.names?.()); paintViewPop(); });   // 0.15.0
-  document.getElementById("viewGallery").addEventListener("click", () => { focusMode = false; gridMode = true; closeAllPops(); applyState(); });
+  document.getElementById("viewGallery").addEventListener("click", () => { closeAllPops(); goGallery(); });   // 0.21.40: the full way back (cell open, zoom, my own spotlit pane, fill/full screen)
   document.getElementById("viewSpeaker").addEventListener("click", () => { focusMode = false; closeAllPops(); enterSpotlight(); });
   document.getElementById("viewFocus").addEventListener("click", () => {
     focusMode = !focusMode;
@@ -7935,10 +7623,7 @@
     const bg = s.bg && typeof s.bg === "object" ? s.bg : {};
     const mode = FX_MODES.includes(bg.mode) ? bg.mode : "none";
     let url = typeof bg.url === "string" ? bg.url : "";
-    if (/^(data|blob):/i.test(url)) {   // a pre-0.15 bag: the custom still or a canvas preset
-      let custom = ""; try { custom = localStorage.getItem("kastr.bg.custom") || ""; } catch {}
-      url = custom && url === custom ? "bg:custom" : "preset:navy";
-    }
+    if (/^(data|blob):/i.test(url)) url = "preset:navy";   // never a data: URL in the bag
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
              bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror,   // 0.21.0: phone cameras
@@ -8055,22 +7740,6 @@
       }
     });
   }
-  let bgMigrated = false;
-  async function bgMigrateLegacy() {   // 0.15.0: the pre-0.15 kastr.bg.custom data URL moves into IndexedDB, once
-    if (bgMigrated) return; bgMigrated = true;
-    let custom = ""; try { custom = localStorage.getItem("kastr.bg.custom") || ""; } catch {}
-    if (!custom.startsWith("data:")) return;
-    try {
-      const blob = await (await fetch(custom)).blob();
-      const type = blob.type || "image/jpeg";
-      const poster = await bgPoster(blob, type);
-      const key = await bgPut(blob, type, "My picture", poster);
-      if (camFx.bg.mode === "image" && camFx.bg.url === "bg:custom") { camFx.bg.url = "bg:" + key; saveCamFx(); }
-      try { localStorage.removeItem("kastr.bg.custom"); } catch {}
-      if (!camPop.hidden) paintCamPop();
-    } catch {}   // IndexedDB refused: the legacy key stays and the menu keeps offering it as "bg:custom"
-  }
-  let camPrevStream = null;
   const bgPresetUrls = {};
   function bgPreset(id) {
     if (bgPresetUrls[id]) return bgPresetUrls[id];
@@ -8092,7 +7761,7 @@
   }
   function saveCamFx() { try { localStorage.setItem(CAMFX_KEY, JSON.stringify(camFx)); } catch {} }
   // The bag that rides sendControl / the announce: markers only (see normalizeCamFx).
-  const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "bg:custom" : (camFx.bg.url || "") },
+  const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "preset:navy" : (camFx.bg.url || "") },
                              bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced",
                              rot: camFx.rot || 0, mirror: !!camFx.mirror, proc: camFx.proc || "auto" });   // 0.21.0; 0.21.21
   const camFxPushed = new Set();   // 0.15.0: source ids that already carry the saved bag
@@ -8128,7 +7797,7 @@
     // prefs (re-read: the prefs shim may have reseeded localStorage after this module booted).
     if (!src) { try { const saved = JSON.parse(localStorage.getItem(CAMFX_KEY) || "null"); if (saved && typeof saved === "object") camFx = normalizeCamFx(saved); } catch {} }
     else if (src.fx && typeof src.fx === "object") camFx = normalizeCamFx({ ...camFx, ...src.fx, bg: src.fx.bg || camFx.bg });
-    loadBgScenes(); bgMigrateLegacy();
+    loadBgScenes();
     bgRefresh().then((changed) => { if (changed && !camPop.hidden) paintCamPop(); });
     // preview: the processed camera track when publishing, else the gate stream
     const v = document.getElementById("camPrev");
@@ -8163,8 +7832,6 @@
     for (const u of bgUser) opts.push({ id: "bg:" + u.key, label: u.name, url: "bg:" + u.key, thumb: u.poster, del: u.key,
                                         mode: u.type.startsWith("video/") ? "video" : u.type === "image/gif" ? "gif" : "image",
                                         anim: u.type.startsWith("video/") || u.type === "image/gif" });
-    let custom = ""; try { custom = localStorage.getItem("kastr.bg.custom") || ""; } catch {}
-    if (custom) opts.push({ id: "custom", label: "My picture", mode: "image", url: "bg:custom", thumb: custom });   // not yet migrated
     opts.push({ id: "add", label: "+ Add picture" }, { id: "addAnim", label: "+ Add GIF / video" });
     const mode = camFx.bg?.mode || "none", curUrl = camFx.bg?.url || "";
     row.replaceChildren(...opts.map((o) => {
@@ -8602,43 +8269,6 @@
     }
   });
 
-  // ---- stats ---------------------------------------------------------------
-  //
-  // The same figures the upstream Watch page showed, read from the same
-  // signals it read. Only rendered while the panel is open, so a collapsed
-  // panel costs nothing.
-
-  const statsEl = document.getElementById("stats");
-  const statsName = document.getElementById("statsName");
-  const catalogRaw = document.getElementById("catalogRaw");
-
-  function bytes(n) {
-    if (!Number.isFinite(n) || n <= 0) return null;
-    const u = ["B", "KB", "MB", "GB"];
-    let i = 0;
-    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    return n.toFixed(i ? 1 : 0) + " " + u[i];
-  }
-
-  function rows(groupId, pairs) {
-    const box = document.querySelector("#" + groupId + " .rows");
-    if (!box) return;
-    const shown = pairs.filter(([, v]) => v !== undefined && v !== null && v !== "");
-    if (!shown.length) {
-      box.innerHTML = '<div class="statrow"><span class="k">no data yet</span>'
-                    + '<span class="v" style="color:var(--text-mute)">—</span></div>';
-      return;
-    }
-    box.replaceChildren(...shown.map(([k, v, warn]) => {
-      const row = document.createElement("div");
-      row.className = "statrow";
-      const ke = document.createElement("span"); ke.className = "k"; ke.textContent = k;
-      const ve = document.createElement("span"); ve.className = "v" + (warn ? " warn" : ""); ve.textContent = v;
-      row.append(ke, ve);
-      return row;
-    }));
-  }
-
   /**
    * Is there actually a decoded frame to paint?
    *
@@ -8655,88 +8285,12 @@
     }
   }
 
-  function renderStats() {
-    if (!statsEl?.open) return;   // 0.8.6: stats panel retired -- machinery dormant
-    const t = selectedName ? tiles.get(selectedName) : null;
-    statsName.textContent = selectedName ? shortLabel(selectedName) : "the selected stream";
-    if (!t) {
-      for (const g of ["grp-video", "grp-audio", "grp-net"]) rows(g, []);
-      catalogRaw.textContent = "\u2014";
-      return;
-    }
-    const w = t.watch;
-    const peek = (fn) => { try { return fn(); } catch { return undefined; } };
-
-    const live = peek(() => w.broadcast?.out?.status?.peek?.()) === "live";
-    const vcfg = peek(() => w.video?.source?.out?.config?.peek?.());
-    const vstats = peek(() => w.video?.out?.stats?.peek?.());
-    const vstalled = peek(() => w.video?.out?.stalled?.peek?.());
-    const acfg = peek(() => w.audio?.source?.out?.config?.peek?.());
-    const astats = peek(() => w.audio?.out?.stats?.peek?.());
-    const rate = peek(() => w.audio?.out?.sampleRate?.peek?.());
-    const ctx = peek(() => w.audio?.out?.context?.peek?.());
-    const catalog = peek(() => w.broadcast?.out?.catalog?.peek?.());
-
-    // An audio-only catalog leaves the video pipeline inert: stats stay
-    // undefined and `stalled` reads true forever, so the usual rows would
-    // show a permanent amber "picture: no / state: recovering" for a
-    // broadcast behaving exactly as published. Say what it is instead.
-    if (t.hasVideo === false) {
-      rows("grp-video", [["video", "none (audio only)"]]);
-    } else {
-      rows("grp-video", [
-        ["codec", vcfg?.codec],
-        ["resolution", vcfg?.codedWidth && vcfg?.codedHeight
-          ? vcfg.codedWidth + "\u00d7" + vcfg.codedHeight : undefined],
-        // The publisher reports a measured rate, so it is rarely a round number.
-        ["frame rate", vcfg?.framerate ? vcfg.framerate.toFixed(1) + " fps" : undefined],
-        // NOT frames decoded: the library counts each chunk as it comes off the
-        // wire, before handing it to the decoder. A climbing number here says
-        // data is arriving, nothing more.
-        ["chunks received", vstats?.frameCount],
-        ["received", bytes(vstats?.bytesReceived)],
-        // This is the question a black picture actually asks: does the decoder
-        // currently hold a frame to draw?
-        ["picture", hasPicture(t) ? "yes" : "no", !hasPicture(t)],
-        ["state", live && vstalled ? "recovering" : undefined, true],
-      ]);
-    }
-
-    rows("grp-audio", [
-      ["codec", acfg?.codec],
-      ["sample rate", rate ? rate + " Hz" : undefined],
-      ["channels", acfg?.numberOfChannels],
-      ["received", bytes(astats?.bytesReceived)],
-      // A suspended context is the usual reason for "video fine, no sound".
-      ["context", ctx?.state, ctx?.state === "suspended"],
-      ["audible", isAudible(selectedName) ? "yes" : "no (gain 0)"],
-    ]);
-
-    rows("grp-net", [
-      ["broadcast", live ? "live" : "offline", !live],
-      ["relay", urlInput.value.replace(/^https?:\/\//, "")],
-      ["room", CHANNEL],
-      ["watch tuning", (w?.getAttribute?.("delay") || "auto") + " + " + (w?.getAttribute?.("buffer") || "0ms")],   // 0.16.0
-      ["rendition", (w?.getAttribute?.("name") || "").endsWith("-low.hang") ? "low (thumbnail)" : "full"],   // 0.18.0
-      ["latency (stamp)", (() => { const t = tiles.get(selectedName); return t && t.latency != null ? Math.round(t.latency) + " ms" : "\u2014 (no stamp)"; })()],   // 0.18.0
-      ["video + audio", bytes((vstats?.bytesReceived ?? 0) + (astats?.bytesReceived ?? 0))],
-      ["streams", tiles.size],
-      ["audio warm", warmAudio ? "on (all subscribed)" : "off"],
-    ]);
-
-    catalogRaw.textContent = catalog ? JSON.stringify(catalog, null, 2) : "\u2014";
-  }
-
-  statsEl?.addEventListener("toggle", renderStats);   // 0.8.6: panel retired
-
   // Diagnostic: surface the real reason audio/video isn't flowing for the
   // selected stream, instead of guessing. Audio only downloads/plays when
   // watch.muted === false AND watch.paused === false, and even then the
   // browser's AudioContext must be "running" (not "suspended" by autoplay
   // policy) for sound to actually come out of the speakers.
   setInterval(() => {
-    renderStats();
-
     // Starvation check: shown, subscribed, and not a single byte for a long
     // time. Publishers cannot see this state at all, so it is reported from
     // here. Grace from tile creation covers slow startups.
@@ -8924,17 +8478,14 @@
     );
   }, 1000);
 
-  // Exposed so the switcher can be exercised without live publishers on the
-  // relay: __switcher.createTile("yard/cam1.hang") adds a row/pane for a name
-  // that may not exist yet, which is enough to drive the selection logic.
   // ---- relay auth (0.7.0) ---------------------------------------------------
   //
-  // A secured KASTR relay runs a token service on relay-port+1. Room codes
-  // are the only credential: the service checks them against the records
-  // the lock holders register, and mints HS256 JWTs the relay enforces
-  // (?jwt= on the connection URL; the cert-fingerprint fetch strips the
-  // query, bundle-verified). Open relays: detection misses and every
-  // helper is a no-op -- byte-identical pre-0.7 behaviour.
+  // A secured KASTR relay runs a token service on relay-port+1 (an https page,
+  // a web client and a KASTR web port reach it through a same-origin proxy --
+  // authBase). Access and room codes are the credentials: the service checks
+  // them and mints HS256 JWTs the relay enforces (?jwt= on the connection URL;
+  // the cert-fingerprint fetch strips the query, bundle-verified). Open relays:
+  // detection misses and every helper is a no-op.
   let authSecured = false;
   let authCodes = false;    // 0.10.0: the relay has viewer/publisher access codes
   let authLegacy = false;   // 0.10.0: secured, but no access codes yet (room codes only)
@@ -9011,8 +8562,7 @@
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
     authTokens = d.tokens;
-    authNs = d.ns || ".";   // 0.21.17: '~' from a 0.21.17+ minter; a '.' token cannot announce this page's control paths
-    if (authNs !== "~") console.warn("[kastr] the relay's token service grants the pre-0.21.17 '.' namespace -- update the hub/relay KASTR");
+    authNs = d.ns || "~";   // 0.21.17: the control namespace (every minter in the fleet grants '~')
     authExp = d.exp;
     authRole = d.role || "publisher";
     authAccessCode = access ?? "";
@@ -9067,7 +8617,6 @@
       odRow.appendChild(b);
     }
   }
-  const odSaid = new Set();
   const odWakeAt = new Map();
   function odWake(broadcast) {   // 0.21.7: one demand now (5 s debounce), then odPulse keeps it alive while the tile is spotlit
     const last = odWakeAt.get(broadcast) || 0;
@@ -9080,14 +8629,7 @@
     const base = relayHostBase(); if (!base) return;
     fetch(base + "/api/ondemand/demand", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ room: CHANNEL, broadcast, jwt: authTokens?.member || "" }) })
-      .then((r) => r.ok ? r.json() : null).then((d) => {
-        // 0.21.7: the camera is registered on another site -- the relay host forwarded the demand over the federation
-        // (its hub's command channel). A hub before 0.21.7 cannot: say so instead of waiting 90 s for nothing.
-        if (d && d.known === false && Array.isArray(d.forwarded) && d.forwarded.includes("unsupported") && !odSaid.has(broadcast)) {
-          odSaid.add(broadcast);
-          window.__toast?.("That camera is on another site; its hub needs KASTR 0.21.7 to wake it.", 6000, { level: "warn" });
-        }
-      }).catch(() => {});
+      .catch(() => {});   // 0.21.7: a camera on another site -- the relay host forwards the demand to its hub
   }
   function odPulse() {
     if (!window.__joinedChannel?.()) return;
@@ -9113,11 +8655,9 @@
   setInterval(odPulse, 15000);
   window.__ondemand = () => ({ feeds: odFeeds, wanted: [...odWanted.keys()], enabled: odOn });   // rig
 
-  // ---- 0.18.0: latency stamps -------------------------------------------------------------
-  // Publishers with "Latency stamp on my shares" draw a 44-cell strip at the top-left of their
-  // canvas shares: 4 sync cells (1,0,1,0) + 40 bits of the relay-host-corrected clock in ms.
-  // Every page reads it back from its tile canvases. The offset to the relay host's clock comes
-  // from /api/client round trips (the best of five, refreshed every minute).
+  // ---- 0.18.0: the page's clock offset (per-stream latency reads it) -----------------------
+  // The offset to the relay host's clock comes from /api/client round trips (the best of five,
+  // refreshed every minute).
   window.__clockOffset = 0;
   async function clockSync() {
     const base = relayHostBase() || location.origin;
@@ -9136,60 +8676,9 @@
     if (best) { window.__clockOffset = best.off; window.__clockRtt = best.rtt; }
   }
   clockSync(); setInterval(clockSync, 60000);
-  const STAMP_CELLS = 44, STAMP_DIV = 80, STAMP_RD_N = 48;   // 0.21.0: 48-cell strip (the publisher half defines its own STAMP_N -- separate module scope)
-  // 0.21.0: the bottom-right strip. The viewer's canvas is the ENCODER's size, not the publisher's,
-  // so the cell size is calibrated from the strip's own sync cells: candidates are the proportional
-  // w/200 and the 4 px floor scaled from the common small publisher widths; each candidate must
-  // decode both sync groups (8 bits) with real contrast. Samples are 3x3 averages, the threshold is
-  // the midpoint of the sync cells' own levels. The 0.18-0.20 top-left decoder is the fallback.
-  function stampRead(t) {
-    const c = t.canvas;
-    if (!c || !c.width || !c.height || !c.isConnected) return null;
-    let cx; try { cx = c.getContext("2d"); } catch { return null; }
-    if (!cx) return null;
-    const W = c.width, H = c.height;
-    const cands = [W / 200];
-    for (const wp of [640, 480, 426, 352, 320]) { const v = 4 * W / wp; if (!cands.some((x) => Math.abs(x - v) < 0.35)) cands.push(v); }
-    const hh = Math.min(H, Math.ceil(Math.max(...cands)) + 2);
-    let img; try { img = cx.getImageData(0, H - hh, W, hh).data; } catch { return null; }
-    const lum = (x, y) => {   // 3x3 average around (x, y) in canvas space, clamped
-      let sum = 0, n = 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const xx = Math.min(W - 1, Math.max(0, x + dx)), yy = Math.min(H - 1, Math.max(H - hh, y + dy));
-        const o = ((yy - (H - hh)) * W + xx) * 4; sum += (img[o] + img[o + 1] + img[o + 2]) / 3; n++;
-      }
-      return sum / n;
-    };
-    for (const cs of cands) {
-      if (cs < 2 || STAMP_RD_N * cs > W) continue;
-      const y = Math.floor(H - cs / 2);
-      const at = (i) => lum(Math.floor(W - (STAMP_RD_N - i - 0.5) * cs), y);
-      const ones = [0, 2, 44, 46].map(at), zeros = [1, 3, 45, 47].map(at);   // (1,0,1,0) at both ends
-      const hi = Math.min(...ones), lo = Math.max(...zeros);
-      if (hi - lo < 40) continue;                       // no sync here
-      const thr = (ones.reduce((a, b) => a + b, 0) / 4 + zeros.reduce((a, b) => a + b, 0) / 4) / 2;
-      let v = 0;
-      for (let i = 0; i < 40; i++) v = v * 2 + (at(4 + i) > thr ? 1 : 0);
-      return v;
-    }
-    return stampReadLegacy(t, cx);
-  }
-  function stampReadLegacy(t, cx) {
-    const c = t.canvas;
-    const cs = c.width / STAMP_DIV;
-    if (cs * STAMP_CELLS > c.width || cs < 2) return null;
-    let img; try { img = cx.getImageData(0, 0, Math.ceil(cs * STAMP_CELLS), Math.max(1, Math.ceil(cs))).data; } catch { return null; }
-    const W = Math.ceil(cs * STAMP_CELLS);
-    const bit = (i) => { const x = Math.floor((i + 0.5) * cs), y = Math.floor(cs / 2); const o = (y * W + x) * 4; return (img[o] + img[o + 1] + img[o + 2]) / 3 > 128 ? 1 : 0; };
-    if (bit(0) !== 1 || bit(1) !== 0 || bit(2) !== 1 || bit(3) !== 0) return null;
-    let v = 0;
-    for (let i = 0; i < 40; i++) v = v * 2 + bit(4 + i);
-    return v;
-  }
   // 0.21.22 (Kenton): latency is a VIEWER's choice per stream and only that viewer sees it -- nothing is drawn into anyone's
   // picture. The catalog's clock maps a frame's media timestamp to the publisher's wall clock (MoQ epoch 2020-01-01, the
-  // timescale's units); the publisher's offset to the relay host rides its state record (clk), mine is __clockOffset. A
-  // pre-0.21.22 publisher's bottom-right strip is still read while the fleet updates.
+  // timescale's units); the publisher's offset to the relay host rides its state record (clk), mine is __clockOffset.
   const LAT_KEY = "kastr.latency.show";
   const latencyShown = new Set((() => { try { const a = JSON.parse(localStorage.getItem(LAT_KEY) || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } })());
   function latencyToggle(name) {
@@ -9219,12 +8708,10 @@
   }
   window.__frameLatency = (name) => { const t = tiles.get(name); return t ? frameLatency(t, name) : null; };   // rig
   setInterval(() => {
-    const now = (Date.now() + (window.__clockOffset || 0)) % 2 ** 40;
     for (const [name, t] of tiles) {
       let badge = t.pane.querySelector(".latb");
       if (!latencyShown.has(name) || (t.watch.getAttribute("visible") || "never") === "never") { t.latency = null; if (badge) badge.remove(); continue; }
-      let d = frameLatency(t, name);
-      if (d == null) { const v = stampRead(t); if (v != null) { d = now - v; if (d < -(2 ** 39)) d += 2 ** 40; } }
+      const d = frameLatency(t, name);
       if (d == null) {
         if (!badge) { badge = document.createElement("span"); badge.className = "latb"; t.pane.appendChild(badge); }
         badge.textContent = "latency: this stream carries no clock"; t.latency = null;
@@ -9247,7 +8734,7 @@
         + " Dropped = chunks of audio or video this page threw away in the last minute to catch up after falling behind (all streams on the page; total since the page opened: audio " + sg.audio + ", video " + sg.video + ").";
     }
   }, 1000);
-  window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));
+  window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));   // rig
   // 0.21.7: count the library's "skipping slow group: track=<kind> a -> b" warnings per track kind. A skip drops
   // buffered media to catch up; on audio it used to flush the worklet ring and reset the sync clock (the clipping).
   window.__slowGroups = { audio: 0, video: 0, other: 0, lastAt: 0, recent: [] };
@@ -9371,8 +8858,6 @@
       if (!b) { b = document.createElement("span"); b.className = "rendb"; b.textContent = "low quality \u2014 full starting\u2026"; t.pane.appendChild(b); }
     }
   }, 1000);
-  window.__stampRead = (canvas) => stampRead({ canvas });   // 0.21.0 rig: decode any canvas
-  window.__latencyStamp = false;   // 0.21.22: retired -- latency is a viewer's private, per-stream choice (no time code in anyone's picture)
   // 0.21.5: does the publisher library take camera frames through its <video> polyfill? It does wherever
   // MediaStreamTrackProcessor is missing on the main thread AND in a worker (WebKit: Safari and every iOS
   // browser). Those frames keep the sensor's orientation and lose the rotation tag, so an iPhone camera
@@ -9409,14 +8894,6 @@
       w.onerror = () => { try { w.terminate(); } catch {} };
     } catch {}
   })();
-  document.getElementById("viewLatency")?.addEventListener("click", () => {
-    window.__latencyStamp = !window.__latencyStamp;
-    try { localStorage.setItem("kastr.latencyStamp", window.__latencyStamp ? "1" : "0"); } catch {}
-    try { window.__publisher?.refx?.(); } catch {}   // 0.21.0: a plain camera starts/stops the light canvas loop
-    document.getElementById("viewLatency")?.classList.toggle("on", window.__latencyStamp);
-    window.__toast?.(window.__latencyStamp ? "Latency stamp on \u2014 your camera, file and RTSP-grid shares carry a thin time code in their bottom-right corner" : "Latency stamp off", 4000, { level: "info" });   // 0.21.0: a setting toggle is verbose-only
-  });
-  document.getElementById("viewLatency")?.classList.toggle("on", window.__latencyStamp);
 
   // ---- 0.18.0: recordings on the relay host (Files panel) -------------------------------
   async function paintRecordings() {
@@ -9603,7 +9080,7 @@
   }
   // the two models (schema v1) and their producers
   const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
-  const roomModel = { v: 1, peer: "", spotlight: null, spotlit: null, spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
+  const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
   const pubState = stateProducer(() => "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
@@ -9638,23 +9115,22 @@
         case "publishing": pubModel.publishing = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;
         case "rtspPaths": pubModel.rtspPaths = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;   // 0.21.22
         case "video": pubModel.video = Math.max(0, Number(value) || 0); break;   // 0.21.36: my live sources with their picture on
+        case "airv": pubModel.airv = 1; break;   // 0.21.40: `video` counts only pictures on the air
+        case "deaf": if (value) pubModel.deaf = 1; else delete pubModel.deaf; break;   // 0.21.40: Deafen is on
         case "avatar": pubModel.avatar = String(value || ""); break;
-        case "spotlight": roomModel.spotlight = value ? { target: String(value), ts: now } : null; break;
-        case "spotlit": roomModel.spotlit = value && value.target ? { target: String(value.target), by: String(value.by || ""), ts: Number(value.ts) || now } : null; break;   // 0.21.0
         case "spots": case "unspots": case "spotlits": {   // 0.21.32: several spotlights -- [{target, ts(, by)}]
           roomModel[field] = (Array.isArray(value) ? value : []).filter((x) => x && x.target).slice(-64)
             .map((x) => field === "spotlits" ? { target: String(x.target), by: String(x.by || ""), ts: Number(x.ts) || now } : { target: String(x.target), ts: Number(x.ts) || now });
           break;
         }
         case "recording": roomModel.recording = value ? { who: String(value), ts: now } : null; break;
-        case "grid": {   // 0.15.0: {id, meta|null} -- one entry per grid, keyed by path; `grid` mirrors the lowest id for pre-0.15 viewers
+        case "grid": {   // 0.15.0: {id, meta|null} -- one entry per grid, keyed by path
           const gid = String(value?.id ?? "1");
           const meta = value && typeof value === "object" && "meta" in value ? value.meta : (value && value.path ? value : null);
           const gs = { ...roomModel.grids };
           for (const [p, m] of Object.entries(gs)) if (String(m?.id ?? "1") === gid) delete gs[p];
           if (meta && meta.path) gs[String(meta.path)] = { ...meta, id: gid, ts: now };
           roomModel.grids = gs;
-          roomModel.grid = Object.values(gs).sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }))[0] || null;
           break;
         }
         case "media": {   // {id, meta|null}
@@ -9808,7 +9284,6 @@
       const cur = members.get(key);
       if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) { members.set(key, rec); changed = true; }
       if (p.ts) sinceTs.set(key, p.ts);
-      for (const [k2, m2] of members) if (!m2.state && m2.peer === rec.peer) { members.delete(k2); sinceTs.delete(k2); changed = true; }   // the peer's compat .since entry
       if (rec.avatar && rec.op) { const ak = String(rec.op).toLowerCase(); if (avatarUrls.get(ak) !== rec.avatar) { avatarUrls.set(ak, rec.avatar); changed = true; } }
     }
     for (const [key, m] of members) if (m.state && !live.has(key)) { members.delete(key); sinceTs.delete(key); changed = true; }
@@ -9834,22 +9309,22 @@
     if (!v || typeof v !== "object") return;
     const prev = h.prev;
     // spotlight / recording: the announce maps keyed by the member path
-    // 0.21.32: `spots` (several) when the member has them, else the single pre-0.21.32 `spotlight`
-    const vs = Array.isArray(v.spots) ? v.spots : (v.spotlight?.target ? [v.spotlight] : []);
+    // 0.21.32: `spots` (several)
+    const vs = Array.isArray(v.spots) ? v.spots : [];
     const vlist = vs.filter((x) => x && x.target).map((x) => ({ ts: Number(x.ts) || 0, target: String(x.target), by: path }));
     if (vlist.length) spotVotes.set(path, vlist); else spotVotes.delete(path);
     const offs = (Array.isArray(v.unspots) ? v.unspots : []).filter((x) => x && x.target).map((x) => ({ ts: Number(x.ts) || 0, target: String(x.target) }));
     if (offs.length) spotOffs.set(path, offs); else spotOffs.delete(path);
     // 0.21.0: the target's mirror counts as a vote of its own (survives the spotlighter leaving)
-    const ls = Array.isArray(v.spotlits) ? v.spotlits : (v.spotlit?.target ? [v.spotlit] : []);
+    const ls = Array.isArray(v.spotlits) ? v.spotlits : [];
     const llist = ls.filter((x) => x && x.target).map((x) => ({ ts: Number(x.ts) || 0, target: String(x.target), by: "mirror" }));
     if (llist.length) spotVotes.set(path + "#lit", llist); else spotVotes.delete(path + "#lit");
     spotApplyWinner();
     const recHad = recVotes.has(path);
     if (v.recording?.who) { if (!recHad) recApply(path, String(v.recording.who), Number(v.recording.ts) || 0, true); }
     else if (recHad) recApply(path, recVotes.get(path)?.who || "", 0, false);
-    // grid geometry -- 0.15.0: `grids` (by path) carries every grid the member runs; `grid` alone = a pre-0.15 owner
-    const grids = v.grids && typeof v.grids === "object" ? v.grids : (v.grid && v.grid.path ? { [String(v.grid.path)]: v.grid } : {});
+    // grid geometry -- 0.15.0: `grids` (by path) carries every grid the member runs
+    const grids = v.grids && typeof v.grids === "object" ? v.grids : {};
     const seenGrids = new Set();
     for (const gm of Object.values(grids)) {
       if (!gm || !gm.path) continue;
@@ -10223,7 +9698,6 @@
       audible: [...tiles.keys()].filter(isAudible),
       watching: [...enabledStreams],
       parked: [...tiles.keys()].filter((n) => !isWatched(n)),
-      statsOpen: !!statsEl?.open,
       shareOpen: !sharePop.hidden,
       shareLoaded: !!window.__publisher,
       levels: Object.fromEntries([...tiles.keys()].map((n) => [n, levelOf(n)])),
@@ -10260,7 +9734,6 @@
       mineDevices: Object.fromEntries([...minePeers.entries()].map(([p, r]) =>
         [p, { micDevice: r.micDevice ?? "", cameras: (r.cameras ?? []).length,
               mics: (r.mics ?? []).length }])),
-      thumbCount: thumbUrls.size,
     }),
   };
 
@@ -10299,7 +9772,6 @@
     return ppl.size + viewersExtra();   // 0.8.11: viewers count as people
   }
   // 0.12.0: the current room is a BANNER: name · people · ⏱ occupancy · lock · kept · role.
-  // paintChannelChip keeps its name for the many callers; paintRoomBanner is the alias.
   function fmtHms(ms) {
     const t = Math.max(0, Math.floor(ms / 1000));
     const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
@@ -10333,17 +9805,13 @@
     const n = peopleCount();
     const el = (cls, txt) => { const x = document.createElement("span"); x.className = cls; x.textContent = txt; return x; };
     // 0.13.1: the banner names the room; people, time, lock, kept and role live on its card in the rail
-    const parts = [el("rbname", c)];
     const role = authSecured ? authRole : "";
     const spk = document.createElement("span"); spk.className = "spk" + (ownRoomTalking() ? " on" : ""); spk.innerHTML = icon("spk"); spk.title = "Someone is speaking";
-    b.replaceChildren();
-    parts.forEach((p, i) => { if (i) b.appendChild(el("sep", "\u00b7")); b.appendChild(p); });
-    b.appendChild(spk);
+    b.replaceChildren(el("rbname", c), spk);
     b.title = "Room " + c + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
       + (roomSince ? ", occupied for " + fmtHms(Date.now() - roomSince) : "") + (rec?.locked ? ", locked" : "") + (rec?.persistent ? ", kept" : "")
       + (role ? ", " + role : "") + "\nClick for room info";
   }
-  const paintRoomBanner = paintChannelChip;
 
   // ---- 0.12.0: the rooms sidebar ---------------------------------------------
   // One card per room (every room at the gate; every room but yours while
@@ -11177,7 +10645,7 @@
     chatFetch();
     setTimeout(() => { try { chatInput.focus(); chatLog.scrollTop = chatLog.scrollHeight; } catch {} }, 50);
   }
-  window.__chatOpen = () => { if (chatPanel.hidden) chatBtn.click(); };
+  window.__chatOpen = () => { if (chatPanel.hidden) chatBtn.click(); };   // rig
   function chatRoomClosed(why) {
     const room = chatRoom;
     if (!room) return;
@@ -12755,39 +12223,6 @@
   // watch half owns detection/minting and exposes the decorator.
   const authUrl = (u, role) => (window.__auth?.withToken ?? ((x) => x))(u, role);
 
-  // 0.18.0: the latency stamp (View > Latency stamp on my shares). 0.21.0: a thin strip in the
-  // BOTTOM-RIGHT corner -- 48 cells of max(4, w/200) px: 4 sync (1,0,1,0) + 40 bits of ms + 4 sync
-  // (1,0,1,0); ~24 % of the width at 800 px and up. The field report called the 0.18 top bar
-  // "a wide band across the top of the video".
-  const STAMP_N = 48;
-  const stampCell = (w) => Math.max(4, w / 200);
-  function drawStamp(cx, w, h) {
-    if (!window.__latencyStamp || !cx || !w || !h) return;
-    const cs = stampCell(w);
-    if (STAMP_N * cs > w) return;
-    const v = Math.floor((Date.now() + (window.__clockOffset || 0)) % 2 ** 40);   // the offset can be fractional
-    const bits = [1, 0, 1, 0];
-    for (let i = 39; i >= 0; i--) bits.push(Math.floor(v / 2 ** i) % 2);
-    bits.push(1, 0, 1, 0);
-    const x0 = w - STAMP_N * cs, y0 = Math.floor(h - cs);
-    try {
-      cx.save(); cx.filter = "none"; cx.globalAlpha = 1; cx.globalCompositeOperation = "source-over";
-      cx.setTransform(1, 0, 0, 1, 0, 0);
-      for (let i = 0; i < bits.length; i++) {
-        const xa = Math.round(x0 + i * cs), xb = Math.round(x0 + (i + 1) * cs);
-        cx.fillStyle = bits[i] ? "#fff" : "#000"; cx.fillRect(xa, y0, xb - xa, h - y0);
-      }
-      // 0.21.3: the strip is for machines -- a human gets the same clock as text, two cells to its left
-      const d = new Date(Date.now() + (window.__clockOffset || 0));
-      const txt = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0") + "." + String(d.getMilliseconds()).padStart(3, "0");
-      const fh = Math.max(10, Math.round(cs * 1.8));
-      cx.font = "bold " + fh + "px ui-monospace, Consolas, 'Courier New', monospace"; cx.textBaseline = "alphabetic"; cx.textAlign = "right";
-      const tw = Math.ceil(cx.measureText(txt).width) + 8, tx = Math.floor(x0 - 2 * cs);
-      cx.fillStyle = "rgba(0,0,0,.75)"; cx.fillRect(tx - tw, h - fh - 6, tw, fh + 6);
-      cx.fillStyle = "#fff"; cx.fillText(txt, tx - 4, h - 4);
-      cx.restore();
-    } catch {}
-  }
   const RAW_HOST = "__ASI_HOSTNAME__";
   const HOSTNAME = (window.__kastrClient?.host) || (/^[a-z0-9-]+$/.test(RAW_HOST) ? RAW_HOST : "local");   // 0.17.0: a web device is its own host
 
@@ -12895,11 +12330,10 @@
 
   // ---- sources shared between views of this page ------------------------
   //
-  // The Share dropdown on Watch and the Publish tab are two instances of this
-  // file. Each announces what it is publishing so both can show the whole
-  // picture; the instance that started a source keeps ownership of it.
-  // This document IS the Live Streams page; other windows on the profile
-  // (the legacy publish page included) see it as the "Live" view.
+  // Every window of this page on the same profile announces what it is
+  // publishing on the kastr.sources channel; the window that started a
+  // source keeps ownership of it. Own paths learned this way stay out of
+  // the grid (recomputeMine); other windows see this one as the "Live" view.
   const VIEW = "Live";
   const PEER = VIEW + "-" + Math.random().toString(36).slice(2, 8);
   const PEER_TIMEOUT = 12000;      // no announcement for this long => gone
@@ -12956,6 +12390,32 @@
     pausable: a.kind !== RTSP,
   });
 
+  // 0.21.40 (Kenton: "drones room is showing a play icon, eventhough there is nothing playing in there"): a box's camera counts
+  // toward the room's play badge only while its stream FLOWS (ffmpeg's output grew in the last 15 s) -- a dark, unplugged or
+  // out-of-range camera keeps its pair running and retrying, which used to light the badge all night. `airv` tells viewers
+  // that `video` already means this (boxes before 0.21.40 also listed every added camera in rtspPaths, which lit it too).
+  let onAirSources = [];
+  function onAirCount() {
+    const nowS = Date.now() / 1000;
+    let n = 0;
+    for (const x of onAirSources) {
+      if (!x.live || x.enabled === false || !x.name || x.videoPaused) continue;
+      if (x.kind === RTSP) {
+        if (rtspSuspended) continue;
+        const slot = slots.get(x.id);
+        const pi = slot?.feed?.publish || slot?.pub || null;
+        const flowing = !!(pi?.flowingAt && nowS - pi.flowingAt < 15);   // the native pair's ffmpeg output grew
+        const playing = !!(slot && !slot.native && slot.monitorLoaded && !slot.monitorDown);   // a browser-path feed's preview plays
+        if (!flowing && !playing) continue;   // proof of a picture, not just a feed that was added
+      }
+      n++;
+    }
+    return n;
+  }
+  function pushOnAir() { try { window.__state?.set?.("video", onAirCount()); window.__state?.set?.("airv", 1); } catch {} }
+  setInterval(pushOnAir, 5000);
+  window.__onAir = onAirCount;   // rig
+
   function announce(kind) {
     const msg = {
       kind: kind || "sources", peer: PEER, view: VIEW,
@@ -12972,7 +12432,7 @@
     // cold-start race (or exist at the channel's mercy at all).
     try { window.__mineAccept?.(msg); } catch {}
     try { window.__state?.set?.("publishing", msg.sources.filter((x) => x.live && x.enabled !== false && x.name).map((x) => chanPath(ensureHang(x.name)))); } catch {}   // 0.13.0
-    try { window.__state?.set?.("video", msg.sources.filter((x) => x.live && x.enabled !== false && x.name && !x.videoPaused).length); } catch {}   // 0.21.36
+    onAirSources = msg.sources; pushOnAir();   // 0.21.36: the room's play badge; 0.21.40: only pictures really on the air
     try { window.__state?.set?.("rtspPaths", [...added.filter((a) => a.kind === RTSP && !a.screen && a.enabled !== false && a.name).map((a) => chanPath(ensureHang(a.name))),
                                               ...gridsSorted().map((g) => chanPath(ensureHang(g.entry.name)))]); } catch {}   // 0.21.22: viewers drop the muted badge on these
     if (!bus) return;
@@ -13053,7 +12513,7 @@
         if ("videoPaused" in m.set) {
           a.videoPaused = !!m.set.videoPaused;
           // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back;
-          // 0.21.15: the stamp and upright loops too (applyFx decides via loopWanted); a pause STOPS the loop --
+          // 0.21.15: the upright loop too (applyFx decides via loopWanted); a pause STOPS the loop --
           // before invisible flips below, so the raw track handed back to the capture source is still live -- and
           // an explicit resume clears the 0.8.6 auto-pause (the user's lever wins: publish@0.5.0 ends the muted
           // track when invisible disables the camera, so its unmute never comes to clear it).
@@ -13114,14 +12574,6 @@
         applyMicDevice(String(m.micId ?? ""));
         return;
       }
-      if (m.kind === "thumbs") {
-        // A Watch pane wants self-view thumbnails. Lease, don't subscribe:
-        // each ask buys a few seconds, the sender stops itself on expiry,
-        // so a Watch tab that dies mid-ask costs at most one lease.
-        thumbsUntil = Date.now() + THUMBS_LEASE_MS;
-        ensureThumbTimer();
-        return;
-      }
       if (m.kind === "hello") {
         announce();                // a new view: tell it what we have
       }
@@ -13146,71 +12598,6 @@
     addEventListener("pagehide", () => {
       try { bus.postMessage({ kind: "bye", peer: PEER }); } catch {}
     });
-  }
-
-  // ---- self-view thumbnails ----------------------------------------------
-  //
-  // The Watch page's "My streams" pane asks for row thumbnails with
-  // {kind:"thumbs"} every 5s while it is visible. Each ask buys a short
-  // lease; while it holds, a timer paints every running slot small and
-  // posts it as a webp Blob on the channel. BroadcastChannel is same-
-  // profile IPC -- no relay, no network -- and once the lease lapses the
-  // timer tears itself down, so an unwatched publisher spends nothing.
-  const THUMBS_LEASE_MS = 12000;   // survives two missed 5s asks
-  const THUMB_EVERY_MS = 800;
-  const THUMB_W = 224;             // plenty for a 64px row image, cheap to encode
-  let thumbsUntil = 0;
-  let thumbTimer = null;
-  const thumbCanvas = document.createElement("canvas");
-
-  function ensureThumbTimer() {
-    if (!thumbTimer) thumbTimer = setInterval(sendThumbs, THUMB_EVERY_MS);
-  }
-
-  function sendThumbs() {
-    if (Date.now() > thumbsUntil) {   // lease over: stand down completely
-      clearInterval(thumbTimer);
-      thumbTimer = null;
-      return;
-    }
-    if (!bus || document.hidden) return;
-    for (const [id, slot] of slots) {
-      if (slot.entry.videoPaused) continue;   // the pane shows standby, not a stale frame
-      // Freshest cheap pixels, in order of preference:
-      //   - RTSP: its own <video> monitor element.
-      //   - previews on (the default): the preview canvas the library is
-      //     already painting -- drawImage from a canvas can never throw on
-      //     a closed frame, and the app shell keeps background tabs
-      //     composited, so it stays fresh there too.
-      //   - previews off: peek the capture's latest VideoFrame. The library
-      //     owns it and closes it when the next one lands, so it can die
-      //     between peek and draw -- hence the try/catch, and never a
-      //     close() from us.
-      let src = null, w = 0, h = 0;
-      if (slot.rtsp) {
-        src = slot.video; w = src.videoWidth; h = src.videoHeight;
-      } else if (slot.canvas && slot.canvas.isConnected) {
-        src = slot.canvas; w = src.width; h = src.height;
-      } else {
-        const f = slot.publish?.capture?.out?.frame?.peek?.();
-        if (f) { src = f; w = f.displayWidth; h = f.displayHeight; }
-      }
-      if (!src || !w || !h) continue;
-      const tw = THUMB_W, th = Math.max(2, Math.round((tw * h) / w));
-      try {
-        thumbCanvas.width = tw;    // assignment also clears; sizes vary per slot
-        thumbCanvas.height = th;
-        thumbCanvas.getContext("2d").drawImage(src, 0, 0, tw, th);
-      } catch {
-        continue;                  // closed frame mid-draw: skip this cycle
-      }
-      // toBlob snapshots the bitmap synchronously and encodes async, so one
-      // shared canvas across the loop is safe.
-      thumbCanvas.toBlob((blob) => {
-        if (!blob) return;
-        try { bus.postMessage({ kind: "thumb", peer: PEER, id, w: tw, h: th, blob }); } catch {}
-      }, "image/webp", 0.55);
-    }
   }
 
   const log = (m) => { statusEl.textContent = m; };
@@ -13838,7 +13225,7 @@
         const ptSw = ptMembers.length ? ggSwitch("Pass through", ptMembers.every((x) => ptFor(x.url)),
           "Pass every camera in this grid through untouched when viewers can decode it (off = convert to H.264 here). Applies live.",
           (on) => { for (const x of ptMembers) window.__rtspPt?.set?.(x.id, on); renderSources(); }) : null;
-        head.append(ht, audSw, ...(ptSw ? [ptSw] : []), sw);
+        head.append(sw, ht, audSw, ...(ptSw ? [ptSw] : []));   // 0.21.40: the grid's on-air switch before its name
         box.appendChild(head);
         camrowsEl.appendChild(box);
         groupBoxes.set(gid, box);
@@ -13979,7 +13366,7 @@
         vid.addEventListener("click", () => {
           a.videoPaused = !a.videoPaused;
           // 0.15.0: a camera that resumes after a pause (a rejoin starts it paused) gets its saved effect back;
-          // 0.21.15: the stamp and upright loops too (applyFx decides via loopWanted); a pause STOPS the loop --
+          // 0.21.15: the upright loop too (applyFx decides via loopWanted); a pause STOPS the loop --
           // before invisible flips below, so the raw track handed back to the capture source is still live -- and
           // an explicit resume clears the 0.8.6 auto-pause (the user's lever wins: publish@0.5.0 ends the muted
           // track when invisible disables the camera, so its unmute never comes to clear it).
@@ -14591,7 +13978,6 @@
   const MONITOR_NOFRAME_MS = 12000;
   let monAnyFrameAt = 0;            // the last time ANY monitor on this page decoded a frame (a hidden page that decodes none is not one frozen camera)
   const MONITOR_HOLD_MS = 4000;     // a cell keeps its last frame this long into a reconnect
-  const RTSP_FROZEN_MS = MONITOR_FROZEN_MS;   // 0.9.5 name, kept
   // 0.14.0: shared media files that need converting stream from the local
   // server as fMP4 through a MediaSource this page owns (attachMediaStream).
   const MEDIA_AHEAD_S = 45;             // stop reading when this much is buffered ahead of the playhead (the blocked write idles ffmpeg)
@@ -14622,16 +14008,13 @@
   }
   // 0.9.6: pass cameras through untouched whenever viewers can decode them
   // (H.264 and H.265 today) -- zero encodes on the publish side, and the
-  // monitor copies too. kastr.rtsp.passthrough; the 0.9.2 H.265-only switch
-  // (kastr.rtsp.hevc) migrates once.
+  // monitor copies too. kastr.rtsp.passthrough.
   const PT_KEY = "kastr.rtsp.passthrough";
-  try { if (localStorage.getItem(PT_KEY) === null && localStorage.getItem("kastr.rtsp.hevc") === "1") localStorage.setItem(PT_KEY, "1"); } catch {}
   const passthroughOn = () => { try { return localStorage.getItem(PT_KEY) === "1"; } catch { return false; } };
   // 0.21.17: per-camera passthrough (kastr.rtsp.pt = {url: true|false}); a camera without its own choice follows the
   // box-wide switch above, which stays the default for new feeds
   const PT_FEED_KEY = "kastr.rtsp.pt";
   const ptFor = (url) => { const m = urlMap(PT_FEED_KEY), u = String(url || ""); return Object.prototype.hasOwnProperty.call(m, u) ? m[u] === true : passthroughOn(); };
-  const hevcAllowed = passthroughOn;   // 0.9.2 name, kept for the publish key
   // the monitor stream URL carries the page's decisions for the bridge
   const monitorUrlFor = (feedId, transcode, url) => { const q = [(url != null ? ptFor(url) : passthroughOn()) ? "pt=1" : "", transcode ? "transcode=1" : ""].filter(Boolean).join("&"); return "/rtsp/" + feedId + (q ? "?" + q : ""); };   // 0.21.17: per camera
   {
@@ -15124,7 +14507,7 @@
       tr.addEventListener("unmute", () => {
         if (!slot.autoPaused || !slots.has(slot.entry.id)) return;
         slot.autoPaused = false;
-        if (!slot.entry.videoPaused) setTimeout(() => { try { applyFx(slot); } catch {} }, 400);   // 0.21.15: saved effect / stamp / upright loop back after an auto-pause (the camera re-enables just below). Likely unreachable on publish@0.5.0 (invisible ENDS the muted track, so unmute never fires) -- kept for a library that keeps the track
+        if (!slot.entry.videoPaused) setTimeout(() => { try { applyFx(slot); } catch {} }, 400);   // 0.21.15: saved effect / upright loop back after an auto-pause (the camera re-enables just below). Likely unreachable on publish@0.5.0 (invisible ENDS the muted track, so unmute never fires) -- kept for a library that keeps the track
         if (!slot.entry.videoPaused) {
           slot.publish.invisible = false;
           setTimeout(() => { try { applySettings(slot); } catch {} }, 150);   // fresh keyframe
@@ -15312,7 +14695,7 @@
     const bg = fx.bg && typeof fx.bg === "object" ? fx.bg : { mode: "none", url: "" };
     const mode = FX_BG_MODES.has(bg.mode) ? bg.mode : "none";
     let url = typeof bg.url === "string" ? bg.url : "";
-    if (/^(data|blob):/i.test(url)) url = "bg:custom";
+    if (/^(data|blob):/i.test(url)) url = "preset:navy";
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
              quality: fx.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror,   // 0.21.0
@@ -15320,7 +14703,6 @@
   }
   // 0.15.0: background markers -> something drawImage can take.
   //   bg:<key>        Blob in IndexedDB kastr-bg/bg (written by the Watch half) -> object URL, cached per key
-  //   bg:custom       the pre-0.15 data URL still in localStorage
   //   preset:<id>     the Watch half's canvas presets (window.__bgPreset)
   //   anything else   as is (/assets/bg/<file>, or a legacy data: URL from an older peer)
   const bgUrlCache = new Map();
@@ -15343,7 +14725,6 @@
   }
   async function resolveBgUrl(url) {
     if (!url) return "";
-    if (url === "bg:custom") { try { return localStorage.getItem("kastr.bg.custom") || ""; } catch { return ""; } }
     if (url.startsWith("bg:")) {
       const key = url.slice(3);
       if (bgUrlCache.has(key)) return bgUrlCache.get(key);
@@ -15416,8 +14797,6 @@
     window.__toast?.("Video effects unavailable \u2014 " + why, 6000, { level: "warn" });
   }
   const NONE_FX = { bg: { mode: "none", url: "" } };
-  // 0.21.0: a plain camera with the latency stamp on runs the light (no-mask) loop just to draw the strip
-  const stampOnly = (slot) => !!window.__latencyStamp && slot.entry.kind === "camera" && !slot.rtsp;
   // 0.21.5: a camera whose frames the library would take through its <video> polyfill (WebKit) runs the
   // light loop at 0 degrees so the phone's orientation is baked into the pixels (see window.__frameLoop)
   const uprightOnly = (slot) => !!window.__frameLoop?.needed && slot.entry.kind === "camera" && !slot.rtsp;
@@ -15427,7 +14806,7 @@
   // There is no track to loop over and none is expected: the loop is not wanted, and its arm must never time
   // out into "the camera produced no video track" for a camera nobody asked to be on.
   const camOff = (slot) => slot.entry.kind === "camera" && !slot.rtsp && (!!slot.entry.videoPaused || !!slot.autoPaused);
-  const loopWanted = (slot, fx) => !camOff(slot) && (fxActive(fx) || stampOnly(slot) || uprightOnly(slot));
+  const loopWanted = (slot, fx) => !camOff(slot) && (fxActive(fx) || uprightOnly(slot));
   // the field readout: one verbose toast when an upright loop starts or its frame size changes
   function uprightNote(slot, b, ow, oh) {
     if (!uprightOnly(slot) || fxActive(b.fx)) return;
@@ -15442,7 +14821,7 @@
     const want = () => slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null);
     const fx = want();
     window.__fxTrace?.push?.(["applyFx", slot.entry.id, !!fx, loopWanted(slot, fx), !!window.__frameLoop?.needed, !!slot.blur]);   // 0.21.5 rig trace (window.__fxTrace = [] to enable)
-    if (!loopWanted(slot, fx)) { stopBlur(slot); return; }   // 0.21.5: effects, the stamp, or the upright loop
+    if (!loopWanted(slot, fx)) { stopBlur(slot); return; }   // 0.21.5: effects or the upright loop
     if (slot.blur) { retuneFx(slot, fx || NONE_FX); return; }   // live retune
     let seg = null;
     if (fxNeedsMask(fx)) {
@@ -15529,11 +14908,6 @@
         b.seg = s; b.quality = q; b.conf = null; b.haveMask = false;
       })().catch(() => {});
     }
-  }
-  async function applyBlur(slot, on) {   // legacy entry point (0.8.2 callers)
-    slot.entry.fx = { ...(slot.entry.fx || {}), bg: on ? { mode: "blur", url: "" } : { mode: "none", url: "" } };
-    slot.entry.blur = !!on;
-    return applyFx(slot);
   }
   function fxBgHolder() {   // GIFs only animate while painted: a 2x2 px near-invisible corner
     let h = document.getElementById("fxBgHolder");
@@ -15638,7 +15012,6 @@
     }
     return g.frame;
   }
-  const loadFxImage = loadFxBg;   // 0.8.8 name
   const SEG_MIN_MS = 66;   // <= 15 segmentations a second; frames in between reuse the last matte
   // ---- 0.21.21: MODNet portrait matting over WebNN (NPU, else GPU) --------------------------------------------------
   // /assets/npu (vendor-npu.py): onnxruntime-web 1.30 (MIT) drives WebNN; modnet_fp16.onnx (Apache-2.0) takes a 512x288
@@ -15963,7 +15336,6 @@
             cx.restore();
           } catch {}
         }
-        drawStamp(cx, ow, oh);   // 0.18.0 (0.21.0: output dims)
         b.drawN++;
         if (now - b.fpsAt >= 1000) {
           const dt = (now - b.fpsAt) / 1000;
@@ -16003,12 +15375,12 @@
   }
   // 0.15.0: per-loop telemetry for the console.
   // 0.21.15: the pause/arm side for the rig and /api/diag -- camera slots WITHOUT a loop too
-  window.__fxArms = () => [...slots.values()].filter((s) => s.entry.kind === "camera" && !s.rtsp).map((s) => ({
+  window.__fxArms = () => [...slots.values()].filter((s) => s.entry.kind === "camera" && !s.rtsp).map((s) => ({   // rig
     id: s.entry.id, camOff: camOff(s), paused: !!s.entry.videoPaused, autoPaused: !!s.autoPaused, invisible: !!s.publish?.invisible,
     loop: !!s.blur, armed: !!s.fxArm, failed: s.fxFailed || null, nudged: !!s.fxNudged }));
   window.__fxDebug = () => [...slots.values()].filter((s) => s.blur).map((s) => ({
     id: s.entry.id, mode: s.blur.fx?.bg?.mode || "none", quality: s.blur.quality, running: !!s.blur.alive,
-    rot: s.blur.rot || 0, mirror: !!s.blur.mirror, cw: s.blur.cw || 0, ch: s.blur.ch || 0, stampOnly: !fxActive(s.blur.fx) && !uprightOnly(s), upright: uprightOnly(s), why: window.__frameLoop?.why ?? null, vh: s.blur.video?.videoHeight, raw: (() => { try { const st = s.blur.raw?.getSettings?.(); return st ? { w: st.width, h: st.height } : null; } catch { return null; } })(),   // 0.21.0 / 0.21.5
+    rot: s.blur.rot || 0, mirror: !!s.blur.mirror, cw: s.blur.cw || 0, ch: s.blur.ch || 0, upright: uprightOnly(s), why: window.__frameLoop?.why ?? null, vh: s.blur.video?.videoHeight, raw: (() => { try { const st = s.blur.raw?.getSettings?.(); return st ? { w: st.width, h: st.height } : null; } catch { return null; } })(),   // 0.21.0 / 0.21.5
     segFps: s.blur.segFps, drawFps: s.blur.drawFps, lastStepAgoMs: s.blur.lastStep ? Math.round(performance.now() - s.blur.lastStep) : null, tick: !!s.blur.tickT, vw: s.blur.video?.videoWidth, readyState: s.blur.video?.readyState, paused: s.blur.video?.paused,
     delegate: segInfo[s.blur.quality]?.delegate ?? null, model: segInfo[s.blur.quality]?.model ?? null,
     gif: s.blur.gif ? { n: s.blur.gif.n, i: s.blur.gif.i, shown: s.blur.gif.shown, fps: Math.round(s.blur.gif.shown / Math.max(0.001, (performance.now() - s.blur.gif.t0) / 1000) * 10) / 10 } : null }));   // 0.16.0
@@ -16203,7 +15575,7 @@
     if (entry.kind === "camera") pane.classList.add("camkind");   // 0.8.8: View -> Hide me targets it
     const mchip = document.createElement("div");
     mchip.className = "mchip";
-    mchip.innerHTML = window.__icon?.("micOff") ?? "";
+    mchip.innerHTML = (window.__icon?.("micOff") ?? "") + (window.__icon?.("earOff") ?? "");   // 0.21.40: + deafened
     mchip.title = "Muted";
     pane.appendChild(mchip);
     const vchip = document.createElement("div");
@@ -16276,7 +15648,7 @@
       // revert. Same session-durable idiom as entry.videoPaused above.
       publish.muted = !!entry.micMuted || !audioFor(entry);
       // Session-durable blur re-engages once the camera track lands (0.8.2).
-      if (entry.fx || entry.blur || stampOnly(slot) || uprightOnly(slot)) setTimeout(() => { try { applyFx(slot); } catch {} }, 800);   // 0.8.8: effects bag; 0.21.5: the stamp / upright loop too
+      if (entry.fx || entry.blur || uprightOnly(slot)) setTimeout(() => { try { applyFx(slot); } catch {} }, 800);   // 0.8.8: effects bag; 0.21.5: the upright loop too
       if (micMode === "rnnoise") setTimeout(() => { try { applyDenoise(slot); } catch {} }, 400);   // 0.13.1
       armTrackHealth(slot);   // 0.8.6: lock-screen / device-loss auto-pause
     }
@@ -16484,7 +15856,7 @@
       const th = slot.entry.shareH && slot.entry.shareH < h ? slot.entry.shareH : h;
       const tw = th === h ? w : 2 * Math.round(w * th / h / 2);
       if (cv.width !== tw || cv.height !== th) { cv.width = tw; cv.height = th; if (m.swEncode) fileSwProbeUntil = performance.now() + 4000; }   // 0.21.16: the new size is probed again
-      try { cx.drawImage(v, 0, 0, tw, th); drawStamp(cx, tw, th); pushCaptureFrame(vtrack); } catch {}   // 0.18.0: + stamp; 0.21.16: push only while hidden or when the automatic capture went quiet (every frame reached the pacer twice: ~48 fps in, 25 out, picture ~2 s behind the sound)
+      try { cx.drawImage(v, 0, 0, tw, th); pushCaptureFrame(vtrack); } catch {}   // 0.21.16: push only while hidden or when the automatic capture went quiet (every frame reached the pacer twice: ~48 fps in, 25 out, picture ~2 s behind the sound)
     };
     const draw = () => {
       if (!m.alive) return;
@@ -16965,7 +16337,6 @@
     });
     q(".mhear").addEventListener("click", () => {   // 0.21.0: local only -- never announced
       slot.entry.monitorOff = !slot.entry.monitorOff;
-      try { localStorage.setItem("kastr.share.monitor", slot.entry.monitorOff ? "off" : "on"); } catch {}
       monitorSync(slot); paintOwnerMediaBar(slot);
     });
     q(".mvol").addEventListener("input", () => mediaCtl({ path: path(), op: "volume", value: Number(q(".mvol").value) }));
@@ -17234,7 +16605,6 @@
   const rtspGrids = new Map();   // id -> g
   function gridById(id) { return rtspGrids.get(String(id ?? "1")) || null; }
   function gridIdOf(a) { return String(a?.gridId || (a?.screen ? "none" : "1")); }   // 0.21.26: a screen / window / tab joins a grid only when picked
-  function gridOfSlot(slot) { return slot?.entry ? gridById(gridIdOf(slot.entry)) : null; }
   function gridIdCmp(a, b) { return String(a).localeCompare(String(b), undefined, { numeric: true }); }
   function gridsSorted() { return [...rtspGrids.values()].sort((a, b) => gridIdCmp(a.id, b.id)); }
   const GRIDS_KEY = "kastr.grids", GRID_OF_KEY = "kastr.grid.of";
@@ -17548,7 +16918,6 @@
       g.cx.fillText("cameras offline \u2014 reconnecting (" + (g.evicted || []).length + ")", r.x + r.w / 2, r.y + r.h / 2);
       g.cx.textAlign = "left";
     }
-    drawStamp(g.cx, g.canvas.width, g.canvas.height);   // 0.18.0
     // 0.21.11: a hidden document (minimised, locked console, covered on a server) stops the AUTOMATIC canvas
     // capture even though this timer keeps drawing -- the composite's encoder saw zero frames for hours on a
     // relay box. Push the frame ourselves whenever the automatic capture is silent: the document is hidden, or
@@ -18368,7 +17737,7 @@
     }
     if (changed) { updateRtspGrid(); refreshUi(); }
   }
-  window.__gridEvict = () => added.filter((a) => a.kind === RTSP).map((a) => {   // 0.21.31: rig -- why each camera is in or out
+  window.__gridEvict = () => added.filter((a) => a.kind === RTSP).map((a) => {   // rig (0.21.31): why each camera is in or out
     const slot = slots.get(a.id), pi = slot?.feed?.publish || slot?.pub || null;
     return { url: a.url, evicted: !!a.evicted, why: a.evictWhy || null, attempt: a.evictAttempt || null, retries: a.retries || 0,
       pubRunning: pi?.running ?? null, pubSince: pi?.since ?? null, restarts: pi?.restarts ?? null, flowingAt: pi?.flowingAt ?? null,
@@ -19263,7 +18632,6 @@
   // applies the newest timestamp; closing the connection retracts the vote.
   let spotReg = null;
   function spotClear() {
-    try { window.__state?.set?.("spotlight", null); } catch {}   // 0.13.0
     if (!spotReg) return;
     try { spotReg.broadcast?.close?.(); } catch {}
     try { spotReg.connection?.close?.(); } catch {}
@@ -19271,14 +18639,11 @@
   }
   let spotMine = null;   // 0.21.30: { target, ts } -- my newest vote
   let spotMineList = [], spotOffList = [];   // 0.21.32: everything I spotlit for everyone / removed for everyone
-  let spotLegacy = null;                     // the single `spotlight` pre-0.21.32 pages read (re-stamped only when it changes)
   function spotCommit() {
     spotMine = spotMineList.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
     if (window.__state?.enabled) {
       window.__state.set("spots", spotMineList);
       window.__state.set("unspots", spotOffList);
-      const leg = spotMine ? spotMine.target : (spotOffList.length ? "~none" : null);
-      if (leg !== spotLegacy) { spotLegacy = leg; window.__state.set("spotlight", leg); }
     } else if (spotMine) spotSet(spotMine.target, true);   // a page without state: the announce carries the newest one
     try { window.__spotApply?.(); } catch {}
   }
@@ -19448,9 +18813,9 @@
     },
   };
   window.__spot = { set: spotAdd, add: spotAdd, off: spotOff,   // 0.21.32: set = ADD (several at once); off = remove one for everyone
-    clear: () => { spotMine = null; spotMineList = []; spotOffList = []; spotLegacy = null; spotClear(); },
+    clear: () => { spotMine = null; spotMineList = []; spotOffList = []; spotClear(); },
     mine: () => spotMine, mineList: () => spotMineList, mineOffs: () => spotOffList };
-  window.__monVideo = (id) => slots.get(Number(id))?.video || null;   // 0.21.33 rig: a feed's monitor player
+  window.__monVideo = (id) => slots.get(Number(id))?.video || null;   // rig (0.21.33): a feed's monitor player
   // 0.21.32: my own pane for a broadcast path (the spotlight grid places it); a screen share's thumbnail never holds the stage
   window.__ownPaneFor = (path) => {
     for (const sl of slots.values()) {
@@ -19567,7 +18932,6 @@
       for (const id of seen) gridAnnounced.add(id);
     }, now ? 0 : 500);
   }
-  const sinceAnn = keyedAnnouncer("~since");
   // 0.12.0: chat delivery pulse -- .chat/<room>/<ts>/<b64 {id}> for 2.5 s after a post
   const chatAnn = keyedAnnouncer("~chat", { root: true, state: () => {} });   // 0.13.0: no pulse -- delivery rides chat.json
   let chatPulseT = null;
@@ -19627,10 +18991,10 @@
       const ch = currentChannel();
       if (ch !== joinedChan || !joinedAt) { joinedChan = ch; joinedAt = Date.now(); }
       const body = JSON.stringify(presencePayload());
-      sinceAnn.set("me", body, joinedAt); presenceAnn.set("me", body, joinedAt);
+      presenceAnn.set("me", body, joinedAt);
       try { window.__state?.set?.("presence", { ...presencePayload(), joinedAt }); } catch {}   // 0.13.0: state.json carries the same facts
     },
-    clear: () => { sinceAnn.clear("me"); presenceAnn.clear("me"); joinedChan = ""; joinedAt = 0; try { window.__state?.set?.("presence", null); } catch {} },
+    clear: () => { presenceAnn.clear("me"); joinedChan = ""; joinedAt = 0; try { window.__state?.set?.("presence", null); } catch {} },
     joinedAt: () => joinedAt,
   };
   // ---- 0.12.0: speaking -------------------------------------------------------
@@ -19983,12 +19347,12 @@
   const gridStateOf = (g) => ({ name: g.name, layout: g.layout, order: [...g.order], members: g.members.map((m) => m.entry.id), evicted: (g.evicted || []).map((a) => a.id) });   // 0.15.0
   window.__gridState = () => { const g = gridById("1"); return g ? gridStateOf(g) : null; };   // rig hook (0.14.0: evicted; 0.15.0: grid "1" -- see __gridStates)
   window.__gridStates = () => Object.fromEntries(gridsSorted().map((g) => [g.id, gridStateOf(g)]));   // 0.15.0: every grid by id
-  window.__gridMoqClose = (id) => { const g = gridById(String(id)); try { g?.moq?.connection?.close?.(); } catch {} return !!g; };   // 0.21.5 rig: sever the grid's relay connection
+  window.__gridMoqClose = (id) => { const g = gridById(String(id)); try { g?.moq?.connection?.close?.(); } catch {} return !!g; };   // rig (0.21.5): sever the grid's relay connection
   // 0.14.0: streamed media files die with the page (the Files beacon pattern)
   window.addEventListener("pagehide", () => {
     for (const a of added) if (a.kind === FILE && a.mediaId && a.mediaUrl) { try { navigator.sendBeacon?.(a.mediaUrl + "?_method=DELETE", ""); } catch {} }
   });
-  window.__mediaAudioRms = async (idx = 0) => {   // 0.15.1 rig: is the published file audio carrying signal?
+  window.__mediaAudioRms = async (idx = 0) => {   // rig (0.15.1): is the published file audio carrying signal?
     const s2 = [...slots.values()].filter((x) => x.media)[idx]; const tr = s2?.media?.atrack; if (!tr) return null;
     const ac = new AudioContext(); const src = ac.createMediaStreamSource(new MediaStream([tr])); const an = ac.createAnalyser(); an.fftSize = 2048; src.connect(an);
     try { await ac.resume(); } catch {}
@@ -19997,7 +19361,7 @@
     try { ac.close(); } catch {}
     return { rms: +(sum / n).toFixed(4), peak: +peak.toFixed(4), actx: s2.media.actx?.state };
   };
-  window.__pubSlots = () => [...slots.values()];   // 0.16.0 rig hook: the raw slot objects (publish graph, media, pane)
+  window.__pubSlots = () => [...slots.values()];   // rig (0.16.0): the raw slot objects (publish graph, media, pane)
   window.__mediaDebug = () => [...slots.values()].filter((s) => s.media).map((s) => {   // rig hook
     const m = s.media, v = m.video, b = [];
     try { for (let i = 0; i < v.buffered.length; i++) b.push([+v.buffered.start(i).toFixed(2), +v.buffered.end(i).toFixed(2)]); } catch {}
@@ -20017,7 +19381,7 @@
     opSlug: () => operatorSlug(),                            // 0.12.0: chat records carry the same op key as presence
     fakeTalk: (ms) => { talkForceUntil = Date.now() + (Number(ms) || 3000); },   // 0.12.0 (rig): pretend the mic is loud
     nudge: nudgeFromViewer,   // 0.8.7: viewer stall report -> nudge/rebuild
-    refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.0: the stamp toggle
+    refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.5: the upright loop probe settling late
     resumeAudio: () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); } catch {} },   // 0.8.9: phones
     // 0.8.8: Camera / Audio popovers
     selfTrack: () => {
@@ -20053,7 +19417,6 @@
       permission, running, live,
       relay: urlInput.value,
       micDevice: micDeviceSel.value || "system-default",
-      thumbs: !!thumbTimer,
       operator: operator || null,
       softwareEncode,
       recentErrors: [...libErrors],

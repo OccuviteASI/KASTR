@@ -20,7 +20,9 @@ class Latency(unittest.TestCase):
 
     def test_no_time_code_in_anyones_picture(self):
         self.assertNotIn('id="viewLatency"', self.p)
-        self.assertIn("window.__latencyStamp = false;", self.p)
+        # 0.21.40: the retired stamp writer and the picture-strip reader are gone
+        for gone in ("__latencyStamp", "function drawStamp", "stampOnly", "stampRead", "kastr.latencyStamp"):
+            self.assertNotIn(gone, self.p)
 
     def test_viewer_choice_per_stream(self):
         p = self.p
@@ -33,8 +35,8 @@ class Latency(unittest.TestCase):
         self.assertIn("const captured = 1577836800000 + (clk.wall + ts * sc / 1e6) * 1000 / sc + memberClk(name);", p)
         self.assertIn("pubModel.clk = Math.round((window.__clockOffset || 0) / 10) * 10;", p)
         self.assertIn("clk: Number.isFinite(v.clk) ? v.clk : null", p)
-        # an older publisher's strip is still read while the fleet updates
-        self.assertIn("if (d == null) { const v = stampRead(t);", p)
+        # 0.21.40: the catalog clock is the only source (the fleet is past the strip)
+        self.assertIn("const d = frameLatency(t, name);", p)
 
 
 class Ui(unittest.TestCase):
@@ -46,15 +48,16 @@ class Ui(unittest.TestCase):
         self.assertNotIn('"\\u25B2" : "\\u25CB"', p)
 
     def test_footers_name_the_negotiated_protocol(self):
-        for name in ("index.html", "moq-watch-lite.html", "relay.html"):
+        for name in ("index.html", "relay.html"):
             s = _read(name)
             self.assertIn("moq-lite-06", s, name)
             self.assertNotIn(">moq-lite-05<", s, name)
 
-    def test_phone_has_no_footer(self):
+    def test_go_live_has_no_footer(self):
+        # 0.21.24 hid it everywhere (0.21.22 on phones); 0.21.40 removed the element and its rules
         p = _read("moq-watch-lite.html")
-        i = p.index("@media (max-width: 720px), (max-height: 500px) {   /* 0.21.0: a landscape phone is a phone too */")
-        self.assertIn("footer.asi-footer { display:none !important; }", p[i:i + 300])
+        self.assertNotIn('<footer class="asi-footer">', p)
+        self.assertNotIn("footer.asi-footer", p)
 
     def test_download_tiles_have_os_marks(self):
         idx = _read("index.html")

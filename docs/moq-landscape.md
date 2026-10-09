@@ -1,7 +1,8 @@
 # MoQ landscape, September 2026 — what other stacks do that KASTR could use
 
-Read-only research done for v0.15.0 (2026-09-23). Nothing here is implemented yet; the ranked list at the end is the
-backlog. Primary sources are linked; two items could not be verified and are marked.
+Read-only research done for v0.15.0 (2026-09-23), before any of it was implemented; the ranked list at the end was the
+backlog, and its Status column says what has shipped since. Primary sources are linked; two items could not be verified
+and are marked.
 
 ## MediaMTX (bluenviron)
 
@@ -61,7 +62,7 @@ backlog. Primary sources are linked; two items could not be verified and are mar
   https://github.com/facebookexperimental/moxygen · https://github.com/facebookexperimental/moq-encoder-player
 - Interop: eleven vendors at NAB 2026; Safari / iOS 26.4 shipped WebTransport (April 2026).
 
-## Vendored-library facts KASTR leans on (measured 2026-10-02, @moq/watch 0.6.0 / @moq/publish 0.5.0 / hang 0.5.0)
+## Vendored-library facts KASTR leans on (measured 2026-10-02 on @moq/watch 0.6.0 / @moq/publish 0.5.0 / hang 0.5.0; vendored since 0.21.17: @moq/watch 0.6.2 / @moq/publish 0.5.2 / hang 0.5.2, where hang's 30 s default below is unchanged)
 
 - hang `Broadcast` retention defaults to **30 s per relay hop** (`container.mjs`: `var _=k.Milli(3e4)`, `trackInfo({maxAge: o.maxAge ?? _})`); the publish encoder reads `in.maxAge` inside the effect that creates every media track. KASTR sets 5000 ms (0.21.15), matching the native pairs' `import --max-age 5s`.
 - watch `visible="always"` **subscribes without a canvas**: the renderer's `#s` sets its visible signal for `always` before consulting the canvas; margin values (`"800px"`) need one and read `false` without it. The Player wires that signal to the video decoder's `enabled`, and `video.out.frame` is set on the first decoded frame; the renderer's rAF loop runs only with a 2d context, so re-attaching a canvas paints the current frame on the next frame.
@@ -95,7 +96,7 @@ attributes, and per-subscription priority is NOT exposed by the element (item 2'
 | 1 | Adopt moq-relay 0.15 / moq-cli 0.12 and re-tune `latencyMax` | relay-enforced subscriber latency budgets are the stall/eviction problem KASTR solves client-side; needs the vendored `@moq/*` update for the `timeline→archive` catalog break | M | relay bundle, state tracks, vendored JS | shipped 0.16.0 |
 | 2 | Per-subscription priority + max-age | audio above video, grid cells max-age 0 (live edge), spotlight higher — a cheap latency win under congestion | S | viewer/publisher | 0.16.0: per-tile `delay`/`buffer` classes (main 400 ms, rail 200 ms, grid cells live edge); priority deferred |
 | 3 | On-demand RTSP ingestion (MediaMTX `sourceOnDemand`) | start the ffmpeg→moq pair when the first viewer subscribes, stop after an idle timeout; saves CPU and bandwidth on many-camera rigs | M | RTSP bridge | shipped 0.18.0; off by default since 0.21.10 (`ondemand = on`) (per-feed On demand switch, 60 s idle, `/api/ondemand/*`) |
-| 4 | mDNS LAN mesh for same-site spokes | replaces hand-pasted federation codes on one site; keep hub/spoke JWT for the WAN | M | Relay page, federation | shipped 0.16.0 (`[cluster.lan]`, Relay page block, UDP 5353 rule) |
+| 4 | mDNS LAN mesh for same-site spokes | replaces hand-pasted federation codes on one site; keep hub/spoke JWT for the WAN | M | Relay page, federation | shipped 0.16.0 (`[cluster.lan]`, Relay page block, UDP 5353 rule); the Relay page block was removed in 0.21.23 and the mesh in 0.21.40 (relays are found by mDNS discovery, `_kastr._tcp`, since 0.21.22) |
 | 5 | Simulcast ladder via `broadcast`-referencing renditions | publish the cheap 15 fps monitor encode as a rendition; grid cells pick low, spotlight picks full | M | publisher, grid | shipped 0.18.0 as a sibling broadcast; off by default since 0.21.10 (`<leaf>-low.hang`, 640 px 15 fps; rail/cell low, spotlight full) |
 | 6 | Recording via hang `archive` + a `/list`/`/get` time-range API | replaces stage-only recording with a host-side segment store the Files panel can fetch by time | L | media, files | shipped 0.18.0 (`kastr_archive`, 1-min segments, `archive_hours`, `/api/archive*`, Relay page + Files panel) |
 | 7 | WebSocket fMP4 fallback (WINK pattern) | phones/kiosks without WebTransport; KASTR already has `/stream?t=` fMP4 + MSE to reuse | M | phones, HTTPS | shipped 0.17.0 (`/api/watch/<b>.mp4` via `moq export fmp4`, `watch.html`, tile fallback; HLS for iPhones without MediaSource shipped 0.18.0 as `/api/watch/<b>.m3u8`) |
@@ -103,4 +104,4 @@ attributes, and per-subscription priority is NOT exposed by the element (item 2'
 | 9 | Prometheus `/metrics` passthrough + health dashboard | relay 0.15 counters plus per-pair `gen/restartsTotal` on the Relay page | S | Relay page | shipped 0.16.0 (`/api/relay/health`, `/api/relay/metrics`, Health panel) |
 | 10 | `--auth-api-mode proxy` | the relay asks KASTR's `/api/auth` per session instead of pre-minted tokens; central revocation and role-shaped grants | M | auth | shipped 0.16.0 (KASTR's auth server answers the relay per session) |
 | 11 | Certificate-fingerprint peer identity for spoke↔hub | replaces 30-day tokens between relays | S–M | federation | shipped 0.16.0 (`[connect] tls.fingerprint`, re-pinned within 30 s of a hub restart) |
-| 12 | Latency overlay pixel stamp (Meta) | opt-in glass-to-glass latency measurement in the viewer | S | diagnostics | shipped 0.18.0 (44-cell stamp, relay-host clock, stats row) |
+| 12 | Latency overlay pixel stamp (Meta) | opt-in glass-to-glass latency measurement in the viewer | S | diagnostics | shipped 0.18.0 (44-cell stamp, relay-host clock, stats row); the stamp was retired in 0.21.22: latency now comes from the catalog clock, shown only to the viewer who asks |

@@ -260,6 +260,53 @@ class CommandChannel(unittest.TestCase):
         self.hub.bans_for_spoke(self.fed, peer="10.0.6.6")
         self.assertEqual([r["name"] for r in self.hub.spokes_public()], ["mendon"])
 
+    def test_renamed_spoke_is_one_row(self):
+        # 0.21.39 (Kenton: the renamed Linux relay showed under its old name AND its new one, the old row "1 s ago" forever)
+        self.hub.register_spoke({"name": "mendon-rtsp", "version": "0.21.34", "node": "mobius-moq-0361"}, peer="203.0.113.5", bearer=self.fed)
+        self.hub.register_spoke({"name": "mendon-relay", "version": "0.21.39", "node": "mobius-moq-0361"}, peer="203.0.113.5", bearer=self.fed)
+        self.assertEqual([r["name"] for r in self.hub.spokes_public(stale=True)], ["mendon-relay"])
+
+    def test_old_spoke_keep_alive_touches_its_newest_row_only(self):
+        # a spoke older than 0.21.39 sends no machine id: of the rows from its address, the newest registration is kept alive
+        self.hub.register_spoke({"name": "mendon-rtsp", "version": "0.21.34"}, peer="203.0.113.5", bearer=self.fed)
+        with self.hub.lock:
+            for v in self.hub.spokes.values():
+                v["reg"] = v["at"] = int(time.time()) - 600
+        self.hub.register_spoke({"name": "mendon-relay", "version": "0.21.38"}, peer="203.0.113.5", bearer=self.fed)
+        with self.hub.lock:
+            self.hub.spokes["spoke:mendon-relay"]["at"] = int(time.time()) - 600
+        self.hub.bans_for_spoke(self.fed, peer="203.0.113.5")
+        self.assertEqual([r["name"] for r in self.hub.spokes_public()], ["mendon-relay"])   # the old name ages out
+
+    def test_keep_alive_by_machine_id(self):
+        self.hub.register_spoke({"name": "logan-roc", "version": "0.21.39", "node": "logan-a1"}, peer="198.51.100.9", bearer=self.fed)
+        self.hub.register_spoke({"name": "tremonton", "version": "0.21.39", "node": "trem-b2"}, peer="198.51.100.9", bearer=self.fed)   # same NAT
+        with self.hub.lock:
+            for v in self.hub.spokes.values():
+                v["at"] = int(time.time()) - 600
+        self.hub.bans_for_spoke(self.fed, peer="198.51.100.9", node="trem-b2")
+        self.hub.bans_for_spoke(self.fed, peer="198.51.100.9", node="logan-a1")
+        self.assertEqual(sorted(r["name"] for r in self.hub.spokes_public()), ["logan-roc", "tremonton"])
+
+    def test_spoke_says_which_machine(self):
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kastr_relay.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"node": _machine_node()}).encode()', src)
+        self.assertIn('q += ("&" if q else "?") + "node=" + _machine_node()', src)
+
+    def test_linux_finds_its_lan_address(self):
+        # 0.21.39 (Kenton: "why does the Mendon relay show long poll / tunnel-nat instead of the IP address"): Ubuntu maps the
+        # hostname to 127.0.1.1 -- the outgoing route still names the LAN address
+        class FakeSock:
+            def connect(self, addr): pass
+            def getsockname(self): return ("10.10.105.190", 50000)
+            def close(self): pass
+        with mock.patch.object(kr.socket, "getaddrinfo", return_value=[(2, 2, 17, "", ("127.0.1.1", 0))]), \
+                mock.patch.object(kr.socket, "socket", return_value=FakeSock()), \
+                mock.patch.object(kr.sys, "platform", "linux"), \
+                mock.patch.object(kr.subprocess, "run", return_value=mock.Mock(stdout="10.10.105.190 172.17.0.1")):
+            self.assertEqual(kr.local_ips(), ["10.10.105.190", "172.17.0.1"])
+
     def test_spoke_acts_only_on_its_own_update(self):
         r = kr.Relay.__new__(kr.Relay)
         r.relay_name = lambda: "logan-roc"

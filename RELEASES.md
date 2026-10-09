@@ -2,6 +2,12 @@
 
 What changed in each build, newest first.
 
+## v0.21.39 — one row per relay, Linux relays show their address
+
+**A renamed relay is one row on the hub (Kenton: the renamed Linux relay showed its old name and its new one in the federation spokes, the old one stuck on 0.21.34).** Since 0.21.30 a spoke's regular check-in refreshed every row in the hub's spokes table that came from the same network address -- so after a rename the old row, from the same machine, looked alive forever. Now each spoke sends a machine id that a rename does not change: registering under a new name removes the same machine's old row, and a check-in refreshes only that machine's row. Spokes still on 0.21.38 or older refresh only the row registered last from their address, so a renamed box's old row ages out within minutes once the hub runs 0.21.39.
+
+**Linux relays show their address on the hub (Kenton: "why does the Mendon relay show long poll / tunnel-nat instead of the IP address it is on?").** On Ubuntu and Debian the machine's own name points at 127.0.1.1, so a Linux KASTR found no network address for itself: it told the hub it could not be reached (shown as "long-poll (tunnel/NAT)"), and its Relay page listed no LAN addresses. KASTR now also asks which address its outgoing traffic uses, and `hostname -I` on Linux. Checked on WSL's Linux: the address is found where it was empty before.
+
 ## v0.21.38 — chat tone, Gallery in full screen, auto-pick keeps codes
 
 **A tone for new chat messages (Kenton: "a tone for if a chat comes in while you're in a room" -- "I don't want the same chime as the enter/exit for the chat").** A short two-note bell (higher and quicker than the join / leave chime) plays when a message from someone else arrives that you have not seen: the chat panel is closed or the window is not in front. A burst of messages rings once; the history loaded when you enter a room stays silent; muting all sound mutes it too. Tested: Alex's message reached Kenton with a badge of 1 and the two-note tone.

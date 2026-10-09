@@ -205,15 +205,38 @@ def find_relay():
 
 
 def local_ips():
-    """IPv4 addresses other machines could reach this one on."""
+    """IPv4 addresses other machines could reach this one on.
+    0.21.39 (Kenton: the Linux relay showed as "long-poll (tunnel/NAT)" on the hub instead of its address): Debian / Ubuntu
+    map the hostname to 127.0.1.1, so the hostname lookup alone found nothing there. Also: the address this machine leaves
+    by (a UDP 'connect' sends no packet) and, on Linux, `hostname -I`."""
     out = []
+
+    def add(ip):
+        ip = str(ip or "").strip()
+        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip) and not ip.startswith(("127.", "169.254.", "0.")) and ip not in out:
+            out.append(ip)
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = info[4][0]
-            if not ip.startswith(("127.", "169.254.")) and ip not in out:
-                out.append(ip)
+            add(info[4][0])
     except OSError:
         pass
+    for probe in ("10.255.255.255", "192.0.2.1"):   # private / documentation targets: never contacted, only routed
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect((probe, 9))
+                add(s.getsockname()[0])
+            finally:
+                s.close()
+        except OSError:
+            pass
+    if sys.platform.startswith("linux"):
+        try:
+            r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3)
+            for ip in (r.stdout or "").split():
+                add(ip)
+        except Exception:
+            pass
     return out
 
 
@@ -1506,7 +1529,7 @@ class AuthService:
                     qs = parse_qs(urlparse(self.path).query)   # 0.20.0: ?since=<ver>&wait=<s> holds until they change
                     obj, code = svc.bans_for_spoke(self.headers.get("Authorization"),
                                                    since=(qs.get("since") or [None])[0], wait=(qs.get("wait") or [0])[0],
-                                                   peer=self._peer())   # 0.21.27: a targeted update reaches its spoke only
+                                                   peer=self._peer(), node=(qs.get("node") or [""])[0])   # 0.21.27: a targeted update reaches its spoke only; 0.21.39: + node
                     self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
@@ -2151,9 +2174,17 @@ class AuthService:
         if not url and not name:
             return {"ok": False, "error": "a minter url or a name is required"}, 400
         key = url or ("spoke:" + name)
+        # 0.21.39 (Kenton: a renamed Linux relay showed under its old name AND its new one): the spoke's machine id survives a
+        # rename -- a registration drops the same machine's rows under any other key
+        node = re.sub(r"[^a-z0-9-]+", "-", str(p.get("node") or "").lower()).strip("-")[:64]
         with self.lock:
             fresh = key not in self.spokes
-            self.spokes[key] = {"at": int(time.time()), "peer": peer, "name": name, "version": version,
+            gone = [k for k, v in self.spokes.items() if node and k != key and v.get("node") == node]
+            for k in gone:
+                self.log("relay auth: spoke %s is now %s (same machine) -- the old row is gone" % (self.spokes[k].get("name") or k, name or key))
+                self.spokes.pop(k, None)
+            now = int(time.time())
+            self.spokes[key] = {"at": now, "reg": now, "node": node or None, "peer": peer, "name": name, "version": version,
                                 "minter": url or None, "rooms": rooms,
                                 "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
@@ -2259,18 +2290,24 @@ class AuthService:
 
     BANS_WAIT_MAX = 30   # 0.20.0: the longest a spoke's long-poll is held (the web-relay proxy allows 40)
 
-    def bans_for_spoke(self, bearer, since=None, wait=0, peer=""):
+    def bans_for_spoke(self, bearer, since=None, wait=0, peer="", node=""):
         """0.18.0: the hub's active bans for a spoke. 0.20.0: with `since` == the current version
         the request is HELD up to `wait` s (max 30) until a ban is added or cleared -- a spoke
         behind a tunnel or NAT, which the hub cannot nudge, learns of a kick within a second."""
         if not self._bearer_relay(bearer):
             return {"error": "federation token required"}, 403
-        if peer and not self.not_hub():   # 0.21.30: a spoke's long-poll is its keep-alive -- 'last seen' within ~30 s
+        if (peer or node) and not self.not_hub():   # 0.21.30: a spoke's long-poll is its keep-alive -- 'last seen' within ~30 s
+            node = re.sub(r"[^a-z0-9-]+", "-", str(node or "").lower()).strip("-")[:64]
             with self.lock:
                 now = int(time.time())
-                for v in self.spokes.values():
-                    if v.get("peer") == peer:
-                        v["at"] = now
+                if node:   # 0.21.39: the machine says who it is -- that machine's row only
+                    for v in self.spokes.values():
+                        if v.get("node") == node:
+                            v["at"] = now
+                else:      # an older spoke: of the rows from this address, the one registered last (a renamed box's old row ages out)
+                    same = [v for v in self.spokes.values() if v.get("peer") == peer]
+                    if same:
+                        max(same, key=lambda v: (v.get("reg") or 0, v.get("at") or 0))["at"] = now
         if self.not_hub():   # 0.21.24: no command channel from a relay that is not the hub
             out = {"error": "this relay is not a hub (its Relay page says so) -- point this spoke at the hub"}
             try:
@@ -2352,6 +2389,7 @@ class AuthService:
         if not minter or not tok:
             return 0
         q = ("?since=%d&wait=%d" % (int(since), int(wait))) if (since is not None and wait) else ""
+        q += ("&" if q else "?") + "node=" + _machine_node()   # 0.21.39: the keep-alive names the machine
         try:
             req = urllib.request.Request(minter + "/api/bans" + q, headers={"Authorization": "Bearer " + tok})
             with urllib.request.urlopen(req, timeout=(float(wait) + 10) if wait else 4) as r:
@@ -2649,6 +2687,16 @@ def normalize_relay_url(url):
     if re.search(r"/relay/?$", path) or (path and path != "/"):
         return u
     return m.group(1) + m.group(2) + ":4443" + m.group(4)
+
+
+def _machine_node():
+    """0.21.39: this machine's stable id for the hub's spokes table -- the host slug (hostname + a per-machine suffix), which a
+    relay rename does not change."""
+    try:
+        import kastr_serve
+        return re.sub(r"[^a-z0-9-]+", "-", str(kastr_serve.host_slug() or "").lower()).strip("-")[:64]
+    except Exception:
+        return ""
 
 
 def _normalize_hub(url):
@@ -3780,7 +3828,8 @@ class Relay:
                 rtsp = "off" if getattr(_b, "suspended", False) else "on"
         except Exception:
             rtsp = None
-        body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp}).encode()
+        body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp,
+                           "node": _machine_node()}).encode()   # 0.21.39: the machine id (survives a rename)
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})

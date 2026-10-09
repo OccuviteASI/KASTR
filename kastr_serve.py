@@ -1364,6 +1364,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             qs = parse_qs(urlparse(self.path).query)
             if path == "/api/lan/probe":
                 return send(200, probe_relay((qs.get("url") or [""])[0]))
+            if path == "/api/lan/nearest":   # 0.21.36: ?url=a&url=b... -> the relays nearest first (this machine only)
+                return send(200, {"relays": rank_relays((qs.get("url") or [])[:24])})
             if path == "/api/lan/discover":
                 try:
                     import kastr_mdns
@@ -4539,6 +4541,75 @@ def probe_relay(url, timeout=1.5):
         return out
     except Exception as e:
         return {"online": False, "error": str(e)[:120]}
+
+
+def _is_private_ip(ip):
+    """0.21.36: RFC 1918, CGNAT 100.64/10, link-local and loopback count as 'on our network'."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.is_private or a.is_loopback or a.is_link_local or (a.version == 4 and a in ipaddress.ip_network("100.64.0.0/10"))
+
+
+def hops_to(ip, timeout_ms=1000):
+    """0.21.36 (Kenton: "auto selecting a relay based on hops"): the hop count from ONE ping's reply TTL -- what a
+    traceroute counts, in one round trip. The sender's starting TTL is the next of 64 / 128 / 255 at or above the reply's
+    (Linux / Windows / network gear). None when the host does not answer ICMP."""
+    win = sys.platform == "win32"
+    cmd = ["ping", "-n", "1", "-w", str(int(timeout_ms)), ip] if win else ["ping", "-c", "1", "-W", str(max(1, int(timeout_ms / 1000))), ip]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout_ms / 1000.0 + 3,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        m = re.search(r"ttl[=:]\s*(\d+)", out.stdout or "", re.I)
+        if not m:
+            return None
+        ttl = int(m.group(1))
+        start = 64 if ttl <= 64 else 128 if ttl <= 128 else 255
+        return max(0, start - ttl)
+    except Exception:
+        return None
+
+
+def rank_relays(urls, probe=None, hops=None, resolve=None):
+    """0.21.36: the relays nearest first. Each: {url, online, private, hops, ms, name}. Online beats offline; a PRIVATE
+    address beats a public one (the public address is only for when no relay on our network answers); then fewer hops
+    (an unknown hop count after every known one), then the faster answer (Kenton: "hops, then time")."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+    probe = probe or probe_relay
+    hops = hops or hops_to
+    resolve = resolve or (lambda h: socket.gethostbyname(h))
+    seen, todo = set(), []
+    for u in urls or []:
+        u = str(u or "").strip()
+        if u and u not in seen and u.startswith(("http://", "https://")):
+            seen.add(u)
+            todo.append(u)
+
+    def one(u):
+        rec = {"url": u, "online": False, "private": False, "hops": None, "ms": None}
+        try:
+            host = urlparse(u).hostname or ""
+            ip = host if re.match(r"^[0-9.]+$|:", host) else resolve(host)
+            rec["private"] = _is_private_ip(ip) and not kastr_relay.is_web_relay(u)   # a tunnel address is the public way in
+        except Exception:
+            ip = None
+        r = probe(u)
+        rec["online"] = bool(r.get("online"))
+        if rec["online"]:
+            rec["ms"] = r.get("ms")
+            if r.get("name"):
+                rec["name"] = r["name"]
+            if ip:
+                rec["hops"] = hops(ip)
+        return rec
+    with ThreadPoolExecutor(max_workers=min(16, max(1, len(todo)))) as ex:
+        out = list(ex.map(one, todo))
+    big = 10 ** 6
+    out.sort(key=lambda r: (not r["online"], not r["private"], r["hops"] if r["hops"] is not None else big, r["ms"] if r["ms"] is not None else big))
+    return out
 
 
 def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],

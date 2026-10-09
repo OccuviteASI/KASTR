@@ -162,7 +162,9 @@
   /* 0.21.26 (Kenton): the sources of one grid sit together, tied by a rail and their grid's name */
   .gridgroup { display:flex; flex-direction:column; gap:6px; border-left:3px solid var(--asi-blue); border-radius:4px;
     padding:4px 0 4px 8px; margin:2px 0 8px; background:color-mix(in srgb, var(--asi-blue) 6%, transparent); }
-  .gridgroup > .gghead { font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--asi-blue); padding:2px 0; }
+  .gridgroup > .gghead { font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--asi-blue); padding:2px 0;
+    display:flex; align-items:center; gap:8px; }   /* 0.21.36: + the grid's on-air switch */
+  .gridgroup > .gghead .ggt { flex:1; min-width:0; }
   /* 0.21.29: an RTMP ingest row says where to push */
   .camrow .rtmpurl { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); margin-top:4px; flex-wrap:wrap; }
   .camrow .rtmpurl code { font-family:var(--font-mono); color:var(--text); background:var(--surface-2); padding:2px 6px; border-radius:4px; user-select:all; -webkit-user-select:all; }
@@ -1098,7 +1100,10 @@
   .rb.talk { box-shadow:0 0 0 2px var(--asi-green); }
   .rb .cnt { position:absolute; top:-5px; right:-5px; min-width:14px; height:14px; border-radius:7px; padding:0 3px;
     background:var(--asi-blue); color:#06121a; font-size:9px; line-height:14px; text-align:center; }
-  .rb .lk { position:absolute; bottom:-3px; right:-3px; width:12px; height:12px; border-radius:50%;
+  .rb .pl { position:absolute; bottom:-3px; right:-3px; width:12px; height:12px; border-radius:50%;   /* 0.21.36: video on the air */
+    background:var(--surface); color:var(--asi-green, #3fb950); display:inline-flex; align-items:center; justify-content:center; }
+  .rb .pl .icon { width:9px; height:9px; }
+  .rb .lk { position:absolute; top:-3px; left:-3px; width:12px; height:12px; border-radius:50%;   /* 0.21.36: top-left (was bottom-right) */
     background:var(--surface); display:inline-flex; align-items:center; justify-content:center; }
   .rb .lk .icon { width:8px; height:8px; }
   .rb .kp { position:absolute; bottom:-3px; left:-3px; width:12px; height:12px; border-radius:50%;   /* 0.21.31: kept open */
@@ -2384,6 +2389,7 @@
        + '<circle cx="14.2" cy="8.5" r="2.4"/>'
        + '<path d="M13.2 12.5c2.3.2 4.2 2 4.2 4"/>',
     keep: '<path d="M6 7c-1.9 0-3.3 1.3-3.3 3s1.4 3 3.3 3c2.8 0 5.2-6 8-6 1.9 0 3.3 1.3 3.3 3s-1.4 3-3.3 3c-2.8 0-5.2-6-8-6z"/>',   // 0.21.31: a room kept open
+    play: '<path d="M7 4.8v10.4l8.2-5.2z" fill="currentColor"/>',   // 0.21.36: a room with video on the air
     lock: '<rect x="5" y="9" width="10" height="7.5" rx="1.5"/>'
        + '<path d="M7 9V6.8a3 3 0 0 1 6 0V9"/>',
     chat: '<path d="M3.5 4.5h13a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H9l-4 3v-3H3.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>'   // 0.12.0
@@ -5088,6 +5094,40 @@
     for (const p of roomsPres.values()) for (const x of p?.who?.rtspPaths || []) out.add(x);
     return out;
   }
+  // The gallery's shape for n cells: the column count whose cells hold the largest 16:9 picture in the stage box.
+  // 0.21.36 (Kenton: tiles pushed off the screen) -- also called again with the number of cells actually SHOWN.
+  function collageSize(n) {
+    n = Math.max(1, n);
+    const W = stageWrap.clientWidth || 1280, H = stageWrap.clientHeight || 720;
+    let best = 1, bestScore = -1;
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const cw = W / cols, ch = H / rows;
+      const w169 = Math.min(cw, ch * 16 / 9);   // 16:9 box inside the cell
+      const score = w169 * w169;
+      // >= : a tie goes to MORE columns (the wider arrangement -- what
+      // Teams picks for 5-on-a-widescreen and friends).
+      if (score >= bestScore) { bestScore = score; best = cols; }
+    }
+    // 0.7.5: px columns. With aspect-locked cards the tile size IS the
+    // layout: fit the 16:9 tile into both the width and height budget
+    // (gaps included) so the centered block never overflows the stage.
+    if (isPhone()) best = 1;   // 0.8.9: one scrolling column on a phone
+    const rows = Math.ceil(n / best);
+    const gaps = 8;
+    let tw = Math.floor((W - (best + 1) * gaps) / best);
+    const th = Math.floor((H - (rows + 1) * gaps) / rows);
+    tw = Math.max(isPhone() ? 140 : 60, isPhone() ? tw : Math.min(tw, Math.floor(th * 16 / 9)));   // 0.21.5: a phone's single column is full width and scrolls; 0.21.36: a desktop never grows past the stage (60 px floor)
+    // 0.8.8: fine tracks -- two half-tracks + one gap per tile -- so a short
+    // last row can start one half-tile in and sit centred (placement below).
+    stageEl.style.gridTemplateColumns = "repeat(" + (best * 2) + ", " + ((tw - gaps) / 2) + "px)";
+    collagePlan = { best, n, tw };
+    // Definite rows (0.7.8): auto rows took CONTENT contributions, so
+    // anything inside a cell could stretch its whole row (the own-
+    // windows field reports). A px row height ends the entire class.
+    stageEl.style.gridAutoRows = Math.round(tw * 9 / 16) + "px";
+    stageEl.style.gridTemplateRows = "";   // spot's explicit rows (0.8.2)
+  }
   function applyState() {
     stageWrap.classList.toggle("fsfill", stageFullscreen());   // 0.21.18: the full-screen look (CSS #stagewrap.fsfill) follows the same test as the layout
     try { WEB_RELAY_PAGE = isWebRelay(urlInput.value); } catch { WEB_RELAY_PAGE = false; }   // 0.21.7: budgets by transport
@@ -5114,36 +5154,7 @@
             .filter((el) => !el.classList.contains("screenkind")
                          && !(el.classList.contains("ingrid") && !el.classList.contains("gridfeed"))   // 0.9.5: an opened member counts
                          && !el.classList.contains("hideme")).length;
-      const n = Math.max(1, shownNames.length + ownCells + viewerEls.length);
-      const W = stageWrap.clientWidth || 1280, H = stageWrap.clientHeight || 720;
-      let best = 1, bestScore = -1;
-      for (let cols = 1; cols <= n; cols++) {
-        const rows = Math.ceil(n / cols);
-        const cw = W / cols, ch = H / rows;
-        const w169 = Math.min(cw, ch * 16 / 9);   // 16:9 box inside the cell
-        const score = w169 * w169;
-        // >= : a tie goes to MORE columns (the wider arrangement -- what
-        // Teams picks for 5-on-a-widescreen and friends).
-        if (score >= bestScore) { bestScore = score; best = cols; }
-      }
-      // 0.7.5: px columns. With aspect-locked cards the tile size IS the
-      // layout: fit the 16:9 tile into both the width and height budget
-      // (gaps included) so the centered block never overflows the stage.
-      if (isPhone()) best = 1;   // 0.8.9: one scrolling column on a phone
-      const rows = Math.ceil(n / best);
-      const gaps = 8;
-      let tw = Math.floor((W - (best + 1) * gaps) / best);
-      const th = Math.floor((H - (rows + 1) * gaps) / rows);
-      tw = Math.max(140, isPhone() ? tw : Math.min(tw, Math.floor(th * 16 / 9)));   // 0.21.5: a phone's single column is full width and scrolls; the height budget shrank it to 140-265 px
-      // 0.8.8: fine tracks -- two half-tracks + one gap per tile -- so a short
-      // last row can start one half-tile in and sit centred (placement below).
-      stageEl.style.gridTemplateColumns = "repeat(" + (best * 2) + ", " + ((tw - gaps) / 2) + "px)";
-      collagePlan = { best, n, tw };
-      // Definite rows (0.7.8): auto rows took CONTENT contributions, so
-      // anything inside a cell could stretch its whole row (the own-
-      // windows field reports). A px row height ends the entire class.
-      stageEl.style.gridAutoRows = Math.round(tw * 9 / 16) + "px";
-      stageEl.style.gridTemplateRows = "";   // spot's explicit rows (0.8.2)
+      collageSize(Math.max(1, shownNames.length + ownCells + viewerEls.length));   // 0.21.36: re-run below with the cells actually shown
     } else {
       stageEl.style.gridTemplateColumns = "";
       stageEl.style.gridAutoRows = "";
@@ -5377,8 +5388,16 @@
     // 0.8.8: centre a short last row. Cells in visual order = own panes
     // (CSS order:-1, DOM order) then the shown tiles in orderedNames().
     if (gridMode && collagePlan) {
-      const cells = [...pubEls.filter((pe) => !pe.classList.contains("screenkind")),
-        ...shownNames.map((n) => tiles.get(n)?.pane).filter(Boolean), ...viewerEls];
+      // 0.21.36 (Kenton: "The user windows should not center justify unless they are the bottom row ... They should also
+      // not push off the screen, they should resize to fit"): the cells as they really are on the stage -- shown, in their
+      // visual order (CSS order, then document order) -- not three lists guessed apart. A count that differs from the plan
+      // re-sizes the gallery; only the true last row is centred.
+      const all = [...stageEl.querySelectorAll(".pane, .pubpane")];
+      const cells = all.filter((el) => !el.classList.contains("dgclone") && !el.classList.contains("screenkind") && getComputedStyle(el).display !== "none")
+        .map((el) => ({ el, o: Number(getComputedStyle(el).order) || 0, i: all.indexOf(el) }))
+        .sort((a, b) => a.o - b.o || a.i - b.i).map((x) => x.el);
+      if (cells.length && cells.length !== collagePlan.n) collageSize(cells.length);
+      for (const el of cells) el.style.gridColumn = "span 2";
       const best = collagePlan.best, nn = cells.length, k = nn % best;
       if (k && nn > best) cells[nn - k].style.gridColumn = (best - k + 1) + " / span 2";
     }
@@ -6585,6 +6604,7 @@
   const roomsReg = new Map();    // "~channels" path -> { slug, locked, salt, hash, closed, seen, goneAt }
   const roomsTalk = new Map();   // "~talking" path -> { slug, peer }
   const roomsRoot = new Map();   // "" (open relays) path -> { slug, op, seen, goneAt } publishers
+  window.__roomsPresDbg = () => [...roomsPres.values()].map((p) => ({ slug: p.slug, op: p.who?.op, mode: p.who?.mode, state: !!p.state, gone: !!p.goneAt, video: p.who?.video, pub: (p.who?.publishing || []).length, rtsp: (p.who?.rtspPaths || []).length }));   // 0.21.36 rig
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
@@ -6675,7 +6695,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [] } });   // 0.21.16: + rtsp
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined } });   // 0.21.16: + rtsp; 0.21.36: + video
           roomsChanged();
         }));
       });
@@ -6843,13 +6863,16 @@
     const hiddenOps = new Set();   // 0.15.0 (D1): "<slug>/<op>" of unattended boxes (their streams are not members either)
     const get = (slug, source) => {
       let r = rooms.get(slug);
-      if (!r) rooms.set(slug, r = { slug, locked: false, salt: null, hash: null, source, members: new Map(), since: 0, talking: false, persistent: false, creator: "", created: 0, publishers: new Set() });
+      if (!r) rooms.set(slug, r = { slug, locked: false, salt: null, hash: null, source, members: new Map(), since: 0, talking: false, persistent: false, creator: "", created: 0, publishers: new Set(), video: false });
       return r;
     };
     for (const p of roomsPres.values()) {
       if (!alive(p)) continue;
       const r = get(p.slug, "presence");
       const op = String(p.who.op || "").toLowerCase() || ("peer:" + p.who.peer);
+      // 0.21.36 (Kenton: "another symbol on the circle of a room to denote that there is an active video stream"): a picture
+      // on the air -- a source with video on (pages before 0.21.36: anything published), or a box's RTSP feeds / grids
+      if (p.state && ((p.who.video ?? (p.who.publishing?.length || 0)) > 0 || (p.who.rtspPaths?.length && p.who.rtsp !== "off"))) r.video = true;
       if (presenceHidden(p.who)) {   // 0.15.0 (D1)
         hiddenOps.add(p.slug + "/" + op);
         if (p.ts && (!r.since || p.ts < r.since)) r.since = p.ts;
@@ -6876,6 +6899,7 @@
       const r = get(x.slug, "streams");
       if (hiddenOps.has(x.slug + "/" + String(x.op || "").toLowerCase())) continue;   // 0.15.0 (D1)
       r.publishers.add(x.op);
+      r.video = true;   // 0.21.36: an open relay lists the broadcast itself
       const m = r.members.get(x.op);
       if (m) m.publisher = true;
       else r.members.set(x.op, { op: x.op, name: x.op, publisher: true, talking: false, since: 0, peers: new Set(), via: "" });
@@ -6896,7 +6920,7 @@
     for (const [slug, r] of [...rooms]) if (slug !== "main" && roomsClosed[slug] && !r.members.size) rooms.delete(slug);
     const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main"));   // 0.13.1: the operator's order, then alphabetical
     return [rooms.get("main"), ...list].map((r) => ({
-      slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking,
+      slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking, video: !!r.video,
       persistent: r.persistent, creator: r.creator, created: r.created,
       group: roomGroupOf(r.slug),   // 0.15.0 (B4): gid | null
       members: [...r.members.values()].map((m) => ({ op: m.op, name: m.name, publisher: m.publisher, talking: m.talking, since: m.since, via: m.via })),
@@ -9553,6 +9577,7 @@
         case "typing": pubModel.typing = !!value; break;
         case "publishing": pubModel.publishing = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;
         case "rtspPaths": pubModel.rtspPaths = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;   // 0.21.22
+        case "video": pubModel.video = Math.max(0, Number(value) || 0); break;   // 0.21.36: my live sources with their picture on
         case "avatar": pubModel.avatar = String(value || ""); break;
         case "spotlight": roomModel.spotlight = value ? { target: String(value), ts: now } : null; break;
         case "spotlit": roomModel.spotlit = value && value.target ? { target: String(value.target), by: String(value.by || ""), ts: Number(value.ts) || now } : null; break;   // 0.21.0
@@ -10371,7 +10396,9 @@
     else rb.querySelector(".lk")?.remove();
     if (rec.persistent) { if (!rb.querySelector(".kp")) { const kp = document.createElement("span"); kp.className = "kp"; kp.innerHTML = icon("keep"); rb.appendChild(kp); } }   // 0.21.31
     else rb.querySelector(".kp")?.remove();
-    rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "");
+    if (rec.video) { if (!rb.querySelector(".pl")) { const pl = document.createElement("span"); pl.className = "pl"; pl.innerHTML = icon("play"); rb.appendChild(pl); } }   // 0.21.36
+    else rb.querySelector(".pl")?.remove();
+    rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "") + (rec.video ? " (video on the air)" : "");
     card.querySelector(".sbname").textContent = rec.slug;
     { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
@@ -11746,7 +11773,37 @@
     } finally { failoverBusy = false; }
   }
   window.__relayFailover = relayFailover;   // rig
-  setTimeout(() => { relayFailover("launch").catch(() => {}); }, 1500);
+  // 0.21.36 (Kenton: "auto selecting a relay based on hops ... auto connect to the nearest private IP ... only select the
+  // Public IP when no private IP relay can be found"; decided: hops, then time; every launch, always): at launch this
+  // computer connects to the nearest relay it knows -- the fleet's, its own recent ones, the ones found on the network.
+  // Not on a camera / relay box (they keep the relay they were armed with), not on a web client, not on an in-window
+  // reload of a session (only a real launch).
+  async function relayAutoPick() {
+    if (IS_WEB || !gateIsLoopback() || !["full", "viewer"].includes(PAGE_MODE)) return null;
+    try { if (sessionStorage.getItem("kastr.rejoin") || sessionStorage.getItem("kastr.autopicked")) return null; } catch {}
+    try { sessionStorage.setItem("kastr.autopicked", "1"); } catch {}
+    const cur = urlInput.value.trim();
+    let hist = [];
+    try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
+    const found = await lanDiscover().catch(() => []);
+    const urls = [...new Set([cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || []), ...found.map((f) => f.urls?.[0]).filter(Boolean)].filter(Boolean))];
+    let d = null;
+    try { d = await fetch("/api/lan/nearest?" + urls.map((u) => "url=" + encodeURIComponent(u)).join("&"), { cache: "no-store" }).then((r) => r.json()); } catch {}
+    const ranked = (d?.relays || []).filter((r) => r.online);
+    for (const r of d?.relays || []) { if (r.name) relayNameSet(r.url, r.name); gateRelayState.set(r.url, { online: !!r.online, at: Date.now() }); }
+    window.__relayRanked = d?.relays || [];   // rig
+    const best = ranked[0];
+    if (!best) return null;
+    if (best.url !== cur) {
+      await gateRelayApply(best.url);
+      window.__toast?.("Connected to the nearest relay: " + (relayNameOf(best.url) || relayLabel(best.url))
+        + (best.hops != null ? " (" + best.hops + " hop" + (best.hops === 1 ? "" : "s") + ")" : ""), 6000, { level: "info" });
+    }
+    try { paintRelayRow(); } catch {}
+    return best.url;
+  }
+  window.__relayAutoPick = relayAutoPick;   // rig
+  setTimeout(() => { relayAutoPick().then((u) => { if (!u) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }); }, 1500);
   { // a relay down for 15 s during a session -> one offer per outage
     let downSince = 0, offered = false;
     setInterval(() => {
@@ -12848,6 +12905,7 @@
     // cold-start race (or exist at the channel's mercy at all).
     try { window.__mineAccept?.(msg); } catch {}
     try { window.__state?.set?.("publishing", msg.sources.filter((x) => x.live && x.enabled !== false && x.name).map((x) => chanPath(ensureHang(x.name)))); } catch {}   // 0.13.0
+    try { window.__state?.set?.("video", msg.sources.filter((x) => x.live && x.enabled !== false && x.name && !x.videoPaused).length); } catch {}   // 0.21.36
     try { window.__state?.set?.("rtspPaths", [...added.filter((a) => a.kind === RTSP && !a.screen && a.enabled !== false && a.name).map((a) => chanPath(ensureHang(a.name))),
                                               ...gridsSorted().map((g) => chanPath(ensureHang(g.entry.name)))]); } catch {}   // 0.21.22: viewers drop the muted badge on these
     if (!bus) return;
@@ -13643,6 +13701,27 @@
     row.appendChild(top);
     return row;
   }
+  // 0.21.36: a grid's cameras together -- on when any of them is on the air
+  function gridOnAir(gid) {
+    return added.some((a) => a.kind === RTSP && gridIdOf(a) === String(gid) && a.enabled);
+  }
+  function setGridOnAir(gid, on) {
+    const members = added.filter((a) => a.kind === RTSP && gridIdOf(a) === String(gid) && !!a.enabled !== !!on);
+    if (!members.length) { renderSources(); return; }
+    for (const a of members) {
+      a.enabled = !!on;
+      if (running) { on ? startSlot(a) : stopSlot(a.id); }
+    }
+    const evLine = (on ? "Turned on " : "Turned off ") + members.length + " camera" + (members.length === 1 ? "" : "s") + " of " + gridNameOf(gid)
+      + (on ? " \u2014 their relay pairs publish again once the monitors load" : " \u2014 relay pairs unpublished, monitors closed, grid seats kept");
+    log(evLine);
+    if (!IS_WEB2) nativePost("/api/rtsp/note", { text: evLine });
+    window.__toast?.(evLine.split(" \u2014 ")[0], 4000, { level: "info" });
+    announce();
+    renderSources();
+    refreshUi();
+  }
+  window.__gridOnAir = { get: gridOnAir, set: setGridOnAir };   // rig
   function renderSources() {
     try { paintRtspSwitch(); } catch {}   // 0.21.16: the Cameras switch shows once an RTSP feed exists
     camrowsEl.replaceChildren();
@@ -13665,7 +13744,14 @@
         const head = document.createElement("div");
         head.className = "gghead";
         const n = added.filter((x) => inGridOf(x) === gid).length;
-        head.textContent = gridNameOf(gid) + " \u00b7 " + n + (n === 1 ? " source (a grid needs two)" : " sources");
+        const ht = document.createElement("span"); ht.className = "ggt";
+        ht.textContent = gridNameOf(gid) + " \u00b7 " + n + (n === 1 ? " source (a grid needs two)" : " sources");
+        // 0.21.36 (Kenton: "Ability to stop all of the cameras in a grid with 1 toggle"): every camera of this grid on / off
+        const sw = document.createElement("label"); sw.className = "switch sm"; sw.title = "All cameras in this grid on the air (off stops every one of them; the grid keeps its seats)";
+        const swi = document.createElement("input"); swi.type = "checkbox"; swi.checked = gridOnAir(gid);
+        swi.addEventListener("change", () => setGridOnAir(gid, swi.checked));
+        sw.append(swi, document.createElement("i"));
+        head.append(ht, sw);
         box.appendChild(head);
         camrowsEl.appendChild(box);
         groupBoxes.set(gid, box);
@@ -17448,6 +17534,7 @@
       items.push({ value: "lock", label: (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
       items.push({ value: "names", label: (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells" });
       items.push({ sep: true }, { value: "rename", label: "Rename grid\u2026" });
+      items.push({ value: "camsoff", label: "Turn off all cameras in this grid" });   // 0.21.36 (Kenton): one switch for the grid's cameras (back on: the grid's switch in Sources)
       const gLit = window.__spotIs?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30: already spotlit -> offer to remove it
       items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
       items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid" });
@@ -17465,6 +17552,7 @@
           g.name = gridNameOf(g.id);
           renderSources(); refreshUi(); announceGrid(true); announce();
         }
+        else if (v === "camsoff") setGridOnAir(g.id, false);   // 0.21.36
         else if (v === "me") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); }
         else if (v === "all") window.__spot?.set?.(chanPath(ensureHang(g.entry.name)));   // 0.21.32: the set puts it on my stage too
         else if (v === "unspot") window.__spotRemove?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30; 0.21.32: this one only

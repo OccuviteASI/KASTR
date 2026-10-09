@@ -584,6 +584,8 @@
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #stageBack { top:8px; left:8px; }
   #stageBack.show { display:block; }
+  #stageBack .gl { display:none; }            /* 0.21.38: the icon until hovered */
+  #stageBack:hover .gl, #stageBack:focus-visible .gl { display:inline; }
   .zoomctl { position:absolute; right:8px; bottom:8px; z-index:8; display:none; gap:4px; opacity:0; transition:opacity .15s ease; }
   #stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl, #stage .pubpane.mainstage[data-zoom] .zoomctl { display:flex; }
   #stage .pane:hover .zoomctl, #stage .pubpane:hover .zoomctl, #stage .zoomed .zoomctl { opacity:1; }
@@ -3663,6 +3665,35 @@
     const op = window.__publisher?.state?.()?.operator || "";
     return op.trim().toLowerCase().replace(/\s+/g, "-");
   }
+  // 0.21.38 (Kenton: "a tone for if a chat comes in while you're in a room" -- "I don't want the same chime as the
+  // enter/exit for the chat"): two short, higher bell notes on a triangle wave -- a message, not a person
+  let chatToneAt = 0;
+  function chatTone() {
+    if (manualMute || chimeMuted) return;
+    if (Date.now() - chatToneAt < 2500) return;   // a burst of messages rings once
+    chatToneAt = Date.now();
+    try {
+      chimeCtx = chimeCtx || new AudioContext();
+      const ctx = chimeCtx;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const t0 = ctx.currentTime + 0.01;
+      [[1174.66, 0], [1567.98, 0.09]].forEach(([f, dt]) => {   // D6 then G6
+        const at = t0 + dt;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.linearRampToValueAtTime(0.07, at + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.32);
+        g.connect(ctx.destination);
+        const o = ctx.createOscillator();
+        o.type = "triangle";
+        o.frequency.setValueAtTime(f, at);
+        o.connect(g);
+        o.start(at);
+        o.stop(at + 0.34);
+        o.onended = () => { try { o.disconnect(); g.disconnect(); } catch {} };
+      });
+    } catch {}
+  }
   function chimeTone(up) {
     try {
       chimeCtx = chimeCtx || new AudioContext();
@@ -4744,8 +4775,16 @@
   }
   // the Gallery pill on a grid main tile (its click zooms instead of returning)
   const stageBack = document.createElement("button");
-  stageBack.type = "button"; stageBack.id = "stageBack"; stageBack.textContent = "\u25a6 Gallery";
-  stageBack.addEventListener("click", (e) => { e.stopPropagation(); gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); });   // 0.21.15: the Gallery pill abandons a cold open
+  // 0.21.38 (Kenton: "remove the gallery button from in the main page when on a grid or in a single stream. Only show it when
+  // in full screen or full window ... the icon only unless moused over, then show the wording. Keep the gallery button in the
+  // view options"): full screen / Fill window only; it leaves them for the gallery
+  stageBack.type = "button"; stageBack.id = "stageBack"; stageBack.innerHTML = '\u25a6<span class="gl"> Gallery</span>'; stageBack.title = "Gallery";
+  stageBack.addEventListener("click", (e) => {
+    e.stopPropagation(); gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null;
+    if (fillWin) { try { toggleFillWindow(null); } catch {} }
+    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
+    gridMode = true; applyState();
+  });   // 0.21.15: the Gallery pill abandons a cold open
   stageWrap.appendChild(stageBack);
   // 0.21.0: idle chrome -- 3 s without pointer/key input hides the media bar, the filename bars, the
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
@@ -4780,7 +4819,8 @@
   function paintStageBack() {
     const remoteGrid = !!selectedName && !selfSpotEl && (gridMeta.has(selectedName) || isGridChild(selectedName));
     const ownGrid = !!(selfSpotEl && selfSpotEl.dataset && selfSpotEl.dataset.grid);   // 0.8.12
-    stageBack.classList.toggle("show", !gridMode && (remoteGrid || ownGrid));
+    void remoteGrid; void ownGrid;
+    stageBack.classList.toggle("show", !gridMode && stageFullscreen());   // 0.21.38: full screen / Fill window only
   }
   window.addEventListener("resize", () => viewApplyAll());   // 0.9.9: corrected canvases too (cheap)
 
@@ -10818,6 +10858,8 @@
     b.hidden = n === 0;
     b.textContent = n > 99 ? "99+" : String(n);
     if (n > was) { b.classList.remove("pulse"); void b.offsetWidth; b.classList.add("pulse"); }
+    // 0.21.38: a new unseen message from someone else, in the room I am in -- not the history a join loads
+    if (n > was && chatRoom && joinState === "joined" && Date.now() - chatBoundAt > 6000) { try { chatTone(); } catch {} }
   }
   function chatMarkSeen() {
     if (!chatRoom || !chatVisible()) return;
@@ -11026,9 +11068,11 @@
     }
   }
   // ---- room binding, open/close, closed rooms
+  let chatBoundAt = 0;   // 0.21.38: the history a join loads never rings
   function chatBind(room) {
     if (room === chatRoom) return;
     chatRoom = room || "";
+    chatBoundAt = Date.now();
     chatMsgs = []; chatLastId = 0; chatSeenId = 0; chatSeenAtOpen = 0; chatDisabled = "";
     chatPending = []; chatAttachEl.replaceChildren(); chatAttachEl.hidden = true;
     document.getElementById("chatRoomLbl").textContent = chatRoom ? "#" + chatRoom : "";
@@ -11815,7 +11859,7 @@
     const best = ranked[0];
     if (!best) return null;
     if (best.url !== cur) {
-      await gateRelayApply(best.url);
+      await gateRelayApply(best.url, { keepCodes: true });   // 0.21.38: the saved codes stay
       window.__toast?.("Connected to the nearest relay: " + (relayNameOf(best.url) || relayLabel(best.url))
         + (best.hops != null ? " (" + best.hops + " hop" + (best.hops === 1 ? "" : "s") + ")" : ""), 6000, { level: "info" });
     }
@@ -11893,7 +11937,7 @@
     return m[1] + m[2] + ":4443" + m[4];
   };
   window.__relayAddr = relayAddr;   // rig
-  async function gateRelayApply(urlArg) {   // 0.21.0: the select passes its pick
+  async function gateRelayApply(urlArg, opts) {   // 0.21.0: the select passes its pick; 0.21.38: opts.keepCodes (the launch auto-pick)
     const inp = joinEls.joinRelay;
     if (!inp || gateRelayBusy) return;
     let u = String(urlArg ?? inp.value).trim();
@@ -11922,11 +11966,14 @@
       inp.disabled = false;
       gateRelayBusy = false;
     }
-    // the codes on the gate belonged to the previous relay
-    gateCodesStale = true;
-    authAccessCode = "";
-    joinEls.joinAccess.value = "";
-    joinEls.joinPwd.value = "";
+    // the codes on the gate belonged to the previous relay -- 0.21.38: unless KASTR switched by itself (the nearest relay at
+    // launch): clearing them made every launch ask again; where a relay takes different codes, the join says so
+    if (!opts?.keepCodes) {
+      gateCodesStale = true;
+      authAccessCode = "";
+      joinEls.joinAccess.value = "";
+      joinEls.joinPwd.value = "";
+    }
     paintRelayRow();
     paintPwdRow();
   }

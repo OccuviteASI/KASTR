@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.38 — chat tone, Gallery in full screen, auto-pick keeps codes
+
+**A tone for new chat messages (Kenton: "a tone for if a chat comes in while you're in a room" -- "I don't want the same chime as the enter/exit for the chat").** A short two-note bell (higher and quicker than the join / leave chime) plays when a message from someone else arrives that you have not seen: the chat panel is closed or the window is not in front. A burst of messages rings once; the history loaded when you enter a room stays silent; muting all sound mutes it too. Tested: Alex's message reached Kenton with a badge of 1 and the two-note tone.
+
+**The Gallery button only in full screen and Fill window (Kenton: "remove the gallery button from in the main page when on a grid or in a single stream. Only show it when in full screen or full window ... the icon only unless moused over").** On the normal stage the button is gone (it could overlap the picture); View ▸ Gallery is unchanged. In full screen or Fill window a ▦ button shows at the top-left, reads "Gallery" while the mouse is on it, and takes you out of full screen / Fill window back to the gallery.
+
+**The nearest-relay pick keeps your access codes (found while testing).** 0.21.36's launch-time switch to the nearest relay cleared the codes on the join card, as a relay picked by hand does, so a computer whose nearest relay differed from its last one asked for the code again at every launch. An automatic switch now keeps them; where a relay takes a different code, the join says so.
+
 ## v0.21.37 — tile chrome, one fleet clock, relays start with web clients off
 
 **Tile buttons that never overlap or go blank (Kenton: button boxes empty on a black background; "when the browser zoom is used, these boxes overlap").** A new tile's full-screen and fill-window buttons got their icons from a repaint that only reached tiles already on the stage, so they could sit empty until something else (entering full screen) repainted them; they now get their icons when they are made. The three buttons are spaced from their own size, so the larger phone-size buttons (which a browser zoom can trigger) no longer overlap.

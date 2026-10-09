@@ -205,6 +205,24 @@ def mode_state():
 INI_KEYS = ("mode", "host")   # what the pages may write (0.8.6)
 
 
+# 0.21.32 (Kenton: "I don't have the ability to turn off the web client toggle" -- "I am going to turn it off on most
+# relays"): a relay box must keep its web port on the network (spokes reach the hub there: updates, rooms, chat,
+# federation), so on a relay the switch no longer closes the port -- `web_page = off` in kastr.ini stops handing the
+# PAGE to browsers on other devices while every /api/ route and the /relay pipe stay open. Read once, then cached.
+_WEB_PAGE_OFF = [None]
+
+
+def web_page_off():
+    if _WEB_PAGE_OFF[0] is None:
+        _WEB_PAGE_OFF[0] = str(ini_get("web_page") or "").strip().lower() in ("off", "false", "0", "no")
+    return _WEB_PAGE_OFF[0]
+
+
+def set_web_page(on):
+    ini_set("web_page", None if on else "off")
+    _WEB_PAGE_OFF[0] = not on
+
+
 def ini_get(key):
     """Current value of `key` in kastr.ini, or None."""
     try:
@@ -4046,6 +4064,25 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                            "the Relay page and relaunch.")),
             })
 
+        def _web_page_refused(self, head=False):
+            """0.21.32: `web_page = off` -> a browser on another device gets a short notice instead of the page. This
+            computer's own window, every /api/ route and the /relay pipe are never refused (KASTR boxes use those)."""
+            p = self.path.split("?", 1)[0]
+            if not web_page_off() or self._local() or p.startswith("/api/") or p == kastr_relay.WEB_RELAY_PATH:
+                return False
+            body = ("<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
+                    "<title>KASTR</title><body style=\"font:16px system-ui;background:#0b0f14;color:#dfe7ef;padding:32px\">"
+                    "<h1 style=\"font-size:20px\">Web clients are off on this relay</h1>"
+                    "<p>Open KASTR from the app, or from a relay that has web clients turned on.</p>").encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if not head:
+                self.wfile.write(body)
+            return True
+
         def _web_api(self, method):
             """0.17.0: GET/POST /api/web -- the turnkey switch for browser clients. Loopback only.
             on: kastr.ini host = 0.0.0.0, https on, firewall rules for web/https/relay ports;
@@ -4060,7 +4097,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 except Exception:
                     want = False
                 try:
-                    if want:
+                    if MODE in ("relay", "publisher-relay"):   # 0.21.32: the port stays on the network; only the page goes
+                        set_web_page(want)
+                        _note("web: clients %s by the operator on a relay box (web_page %s; the API stays open for KASTR boxes)"
+                              % ("ON" if want else "OFF", "on" if want else "off"))
+                    elif want:
+                        set_web_page(True)
                         ini_set("host", "0.0.0.0")
                         if str(ini_get("https") or "").lower() in ("off", "false", "0", "no"):
                             ini_set("https", None)
@@ -4090,7 +4132,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             relay_running = bool(relay_srv and relay_srv.running())
             fw_state = None   # no firewall probe here: it shells out to PowerShell for seconds (the Relay page has its own block)
             return self._json_plain(200, {
-                "enabled": enabled or MODE in ("relay", "publisher-relay"),
+                "enabled": (not web_page_off()) if MODE in ("relay", "publisher-relay") else (enabled and not web_page_off()),   # 0.21.32
+                "pageOff": web_page_off(),
                 "live": live,
                 "web": int(HTTP_PORT or self.server.server_address[1]),
                 "https": HTTPS_INFO.get("port"),
@@ -4342,6 +4385,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return
                 if kastr_rtsp.handle_stream(self, bridge, path):
                     return
+            if self._web_page_refused():   # 0.21.32
+                return
             body = self._rewritten()
             if body is None:
                 return super().do_GET()
@@ -4354,6 +4399,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._file_get(self.path.split("?", 1)[0][len("/api/files/"):], head=True)
             if self.path.split("?", 1)[0].startswith("/api/media/"):   # 0.8.13
                 return self._media_get(self.path.split("?", 1)[0][len("/api/media/"):], head=True)
+            if self._web_page_refused(head=True):   # 0.21.32
+                return
             body = self._rewritten()
             if body is None:
                 return super().do_HEAD()

@@ -833,10 +833,13 @@
     try { w = await api("/api/web"); } catch (e) { $("webClientsMsg").textContent = "Web clients: not available from this server."; return; }
     if (w.error) { $("webClientsMsg").textContent = w.error; $("webClients").disabled = true; return; }
     $("webClients").checked = !!w.enabled;
-    $("webClients").disabled = !LOCAL || !!w.relayOnly;
+    $("webClients").disabled = !LOCAL;   // 0.21.32: a relay box can switch it too (the page goes, the port stays for KASTR boxes)
     const parts = [];
-    if (w.relayOnly) parts.push("On (relay-only mode binds every interface).");
-    if (w.live) {
+    if (w.relayOnly && !w.enabled) parts.push("Off. Browsers on other devices are told web clients are off; KASTR apps and federated relays still reach this box.");
+    else if (w.relayOnly) parts.push("On.");
+    if (w.relayOnly && !w.enabled) {
+      // nothing more to say about https when the page is off
+    } else if (w.live) {
       parts.push("Serving https on port " + w.https + (w.trust === "operator" ? " with the operator's certificate" + (w.hostname ? " for " + w.hostname : "") : " with the KASTR certificate authority (install /ca.crt once per device)") + (w.expires ? ", expires " + String(w.expires).slice(0, 10) : "") + ".");
       parts.push("Plain http (port " + w.web + ") shows the lobby only \u2014 rooms, People, chat; video needs https.");
     } else if (w.enabled) {

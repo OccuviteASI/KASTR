@@ -32,15 +32,28 @@ class TileMenu(unittest.TestCase):
         p = self.page
         self.assertIn('const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };', p)
         self.assertIn('gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" }', p)
-        self.assertIn("window.__spotRemove = () => {", p)
-        # anyone can remove it for everyone: a newer "nobody" vote; my own vote counts as the room's spotlight on my page
-        self.assertIn('try { window.__spot?.set?.("~none"); } catch {}', p)
-        self.assertIn("return win && win.target === \"~none\" ? null : win;", p)
-        self.assertIn("const lit = window.__spotIs ? window.__spotIs(name) : spotLit?.target === name;", p)
+        # 0.21.32: removal is per item and for everyone (a newer removal outranks whoever set it); my own votes count
+        self.assertIn("window.__spotRemove = (target) => {", p)
+        self.assertIn('if (v === "unspot") { window.__spotRemove(name); return; }', p)
+        self.assertIn("return [...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts);", p)
+        self.assertIn("for (const v of mine) addV(v, \"me\");", p)
+        self.assertIn("const lit = window.__spotIs ? window.__spotIs(name) : false;", p)
         self.assertNotIn("Fit to frame", p)
         self.assertNotIn('label: "Spotlight for me"', p)
         for g in ("    pin: '", "    spotlight: '", "    search: '"):
             self.assertIn(g, p)
+
+    def test_several_spotlights_share_the_stage(self):
+        # 0.21.32 (Kenton: "If multiple things are spotlighted, they will both show in the main viewing area in a grid
+        # format, similar to the RTSP grid"; a second spotlight ADDS, no limit, the rest stays in the rail)
+        p = self.page
+        self.assertIn('window.__spot = { set: spotAdd, add: spotAdd, off: spotOff,', p)
+        self.assertIn('window.__state.set("spots", spotMineList);', p)
+        self.assertIn('const vs = Array.isArray(v.spots) ? v.spots : (v.spotlight?.target ? [v.spotlight] : []);', p)   # pre-0.21.32 members still count
+        self.assertIn("const mosaicOn = mosaic.length >= 2;", p)
+        self.assertIn('const mainCols = mosaicOn ? "repeat(" + (2 * mk) + ", minmax(0,1fr))" : "minmax(0,1fr)";', p)
+        self.assertIn("if (isMain && mosaicOn) placeMosaic(t.pane, mosaicIdx.get(n));", p)
+        self.assertIn("return name === selectedName || stageMosaicNames.has(name);", p)   # every spotlit tile is heard
 
     def test_menu_draws_icons(self):
         p = self.page

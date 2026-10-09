@@ -2951,6 +2951,13 @@ def main():
     _kr_web.WEB_PORT = port              # 0.14.0 F: the token service advertises it on /api/auth
     kastr_serve.LAN_OK = args.host not in ("127.0.0.1", "localhost", "::1")
     kastr_serve.start_media_sweeper(state_dir())   # 0.8.13: converted media has a shelf life
+    if kastr_serve.LAN_OK:   # 0.21.32: a box that serves the web page keeps its install downloads ready (no "Preparing…")
+        try:
+            import kastr_release as _krel
+            _krel.start_prebuilder(state_dir(), kastr_serve.read_version, log=note,
+                                   enabled=lambda: not kastr_serve.web_page_off())   # Web clients off -> nothing to prepare
+        except Exception as e:
+            note("release zip: background preparation not started (%s)" % e)
     note("serving %s (host %s, relay %s, version %s)" % (url, args.host, args.relay, kastr_serve.read_version()))
 
     # 0.8.9: phones. When the web host is reachable from the LAN, also serve

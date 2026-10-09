@@ -379,6 +379,64 @@ def prepare(plat, version, state_dir, root=None, own=None, frozen=None, log=None
     return status(plat, version, state_dir, root=root, own=own, frozen=frozen)
 
 
+class _Skip(Exception):
+    pass
+
+
+def prebuild_tick(version, state_dir, log=None, root=None, own=None, frozen=None):
+    """0.21.32 (Kenton: "Why can't the app download be readily available instead of having to prepare it?" -- "Only to
+    boxes that serve the webpage"): start the next missing install zip, ONE at a time (two ~400 MB assemblies at once
+    would fight for the disk). -> "ready" (every platform this host can build is ready), "building", or "waiting"
+    (one could not be built yet -- e.g. the other platform's files are not mirrored yet)."""
+    building = False
+    waiting = False
+    for plat in PLATFORMS:
+        st = status(plat, version, state_dir, root=root, own=own, frozen=frozen)
+        if not st:
+            continue
+        if st["building"]:
+            building = True
+            continue
+        if st["ready"]:
+            continue
+        if not st["can"]:
+            waiting = True
+            continue
+        if building:
+            continue                      # the next one starts when this one is done
+        prepare(plat, version, state_dir, root=root, own=own, frozen=frozen, log=log)
+        building = True
+    return "building" if building else ("waiting" if waiting else "ready")
+
+
+def start_prebuilder(state_dir, version_fn, log=None, first=120.0, busy=120.0, idle=1800.0, enabled=None):
+    """0.21.32: on a host that serves the web page to others, keep both install zips of the running version ready:
+    first look `first` s after launch (the box settles first), then every `busy` s until they are, then every `idle` s
+    (a mirror of the other platform's files can arrive later; a new version means a relaunch, which starts over)."""
+    log = log or _log[0]
+
+    def tick():
+        wait = idle
+        try:
+            if enabled is not None and not enabled():   # the operator turned web clients off since launch
+                raise _Skip()
+            state = prebuild_tick(version_fn(), state_dir, log=log)
+            if state != "ready":
+                wait = busy
+        except _Skip:
+            pass
+        except Exception as e:
+            log("release zip: background preparation skipped (%s)" % e)
+        t = threading.Timer(wait, tick)
+        t.daemon = True
+        t.start()
+    t0 = threading.Timer(first, tick)
+    t0.daemon = True
+    t0.start()
+    log("release zip: the install downloads are prepared in the background (this host serves the web page)")
+    return t0
+
+
 def _prune_old(folder, version):
     """Drop zips (and sidecars) of other versions -- one release per platform lives in the cache."""
     try:

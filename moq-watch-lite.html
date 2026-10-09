@@ -3414,7 +3414,7 @@
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return false;   // 0.9.5
     if (audioMode === "all") return true;
     if (audioMode === "manual") return audioOn.has(name);
-    return name === selectedName;
+    return name === selectedName || stageMosaicNames.has(name);   // 0.21.32: the spotlight grid is heard
   }
 
   function toggleMute(name) {
@@ -4951,7 +4951,7 @@
       if (!document.hidden) return;
       let n = 0;
       for (const [name, t] of tiles) {
-        if (name === selectedName || !t.watch.hasAttribute("url")) continue;
+        if (name === selectedName || stageMosaicNames.has(name) || !t.watch.hasAttribute("url")) continue;
         try { t.watch.removeAttribute("url"); n++; } catch {}
       }
       if (n) log("Hidden for 60 s \u2014 " + n + " stream" + (n === 1 ? "" : "s") + " torn down until the window is shown again");
@@ -5031,6 +5031,7 @@
 
   // ---- mainstage content fit (0.8.6) -----------------------------------------
   let lastRail = { rows: 4, pages: 1 };
+  let stageMosaic = null;   // 0.21.32: { k, m, n } while the spotlight grid holds the stage
   function mainAspectOf(el) {
     const c = el.querySelector("canvas:not(.eq), video");
     const w = c ? (c.videoWidth || c.width || 0) * aspectFixOf(c) : 0;   // 0.9.8: the decoder's shape
@@ -5058,11 +5059,18 @@
       : rowH ? railRows * rowH + gap * (railRows - 1) : (stageWrap.clientHeight || 720) - 2 * gap;
     const cols = railCols();
     const areaW = fsFill ? (stageWrap.clientWidth || 1280)
-      : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone() || ownPip) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
+      : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone() || ownPip || stageMosaic?.railGone) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
+    const mos = mains.length > 1 ? stageMosaic : null;   // 0.21.32: the spotlight grid -- each picture fits its own cell
     for (const el of mains) {
       const ar = mainAspectOf(el);
-      let w = areaW, h = w / ar;
-      if (h > areaH) { h = areaH; w = h * ar; }
+      let cw = areaW, chh = areaH;
+      if (mos) {
+        cw = (areaW - (mos.k - 1) * gap) / mos.k;
+        const rr = Number(el.dataset.mrows) || 1;
+        chh = rowH ? rr * rowH + gap * (rr - 1) : (areaH - (mos.m - 1) * gap) / mos.m;
+      }
+      let w = cw, h = w / ar;
+      if (h > chh) { h = chh; w = h * ar; }
       el.style.width = Math.floor(w) + "px";
       el.style.height = Math.floor(h) + "px";
       // 0.9.9: the box moved -- a zoomed or shape-corrected canvas follows it now,
@@ -5086,10 +5094,10 @@
     // DOM itself never moves. 0.6.10: collage (uniform best-fit) or spot
     // (content + ladder), both plain grid placement of the same panes.
     autoContentCheck();
-    if (spotLit) {   // 0.21.0: my spotlit share ended (8 s grace for a self-heal that re-announces)
-      if (mineNames.has(spotLit.target)) spotLitMissAt = 0;
-      else if (!spotLitMissAt) spotLitMissAt = Date.now();
-      else if (Date.now() - spotLitMissAt > 8000) spotLitClear(true);
+    for (const lit of [...spotLits.values()]) {   // 0.21.0: my spotlit share ended (8 s grace for a self-heal that re-announces)
+      if (mineNames.has(lit.target)) lit.missAt = 0;
+      else if (!lit.missAt) lit.missAt = Date.now();
+      else if (Date.now() - lit.missAt > 8000) spotLitClear(true, lit.target);
     }
     stageEl.classList.toggle("collage", gridMode);
     stageEl.classList.toggle("spot", !gridMode);
@@ -5156,11 +5164,20 @@
     // 0.8.8: focus on content = no rail at all (every non-main tile goes
     // visible="never" through railHiddenNames; own panes park off-stage).
     const railOff = focusMode || isPhone() || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen
+    // 0.21.32: the spotlight grid -- two or more spotlit things share the stage (best-fit columns, like the gallery);
+    // a click on anything (manualPick) or the Gallery pill leaves it, the next change of the spotlight set brings it back
+    const mosaic = (!gridMode && !manualPick && spotStage.length >= 2)
+      ? spotStage.filter((x) => (x.el ? x.el.isConnected && pubEls.includes(x.el) : tiles.has(x.name) && isWatched(x.name) && !hiddenChild(x.name)))
+      : [];
+    const mosaicOn = mosaic.length >= 2;
+    const mosaicIdx = new Map(mosaicOn ? mosaic.map((x, i) => [x.el || x.name, i]) : []);
+    stageMosaicNames = new Set(mosaicOn ? mosaic.filter((x) => x.name).map((x) => x.name) : []);
+    let mk = 1, mm = 1, RC0 = 2;   // grid columns/rows; RC0 = the rail's first column (two fine tracks per grid cell before it)
     const railRemote = (!gridMode && !railOff)
-      ? orderedNames().filter((n) => tiles.has(n) && isWatched(n) && !hiddenChild(n) && !(n === selectedName && !selfSpotEl))
+      ? orderedNames().filter((n) => tiles.has(n) && isWatched(n) && !hiddenChild(n) && !(mosaicOn ? stageMosaicNames.has(n) : (n === selectedName && !selfSpotEl)))
       : [];
     const railOwn = (!gridMode && !railOff)
-      ? pubEls.filter((pe) => pe !== selfSpotEl && !pe.classList.contains("screenkind"))
+      ? pubEls.filter((pe) => pe !== selfSpotEl && !mosaicIdx.has(pe) && !pe.classList.contains("screenkind"))
       : [];
     const railViewers = (!gridMode && !railOff) ? viewerEls : [];   // 0.21.19: after the people with media
     if (!gridMode && railOff) for (const el of viewerEls) el.style.display = "none";
@@ -5170,6 +5187,23 @@
     }
     const railList = railRemote.length + railViewers.length;
     const railN = railList + railOwn.length;
+    // 0.21.32: the spotlight grid's shape -- best-fit columns for its area; everyone in it (no rail) = the whole width
+    const mosaicRailGone = mosaicOn && railN === 0;
+    if (mosaicOn) {
+      const n = mosaic.length, gp = 8;
+      const Wm = Math.max(240, (stageWrap.clientWidth || 1280) - ((railOff || mosaicRailGone) ? 2 * gp : railColW() * railCols() + gp * (railCols() + 2)));
+      const Hm = stageWrap.clientHeight || 720;
+      let bestScore = -1;
+      for (let c = 1; c <= n; c++) {
+        const r = Math.ceil(n / c);
+        const w169 = Math.min((Wm - gp * (c - 1)) / c, ((Hm - gp * (r - 1)) / r) * 16 / 9);
+        if (w169 * w169 >= bestScore) { bestScore = w169 * w169; mk = c; }   // a tie goes to more columns (the wider arrangement)
+      }
+      if (isPhone()) mk = 1;
+      mm = Math.ceil(n / mk);
+      RC0 = 2 * mk + 1;
+    }
+    stageMosaic = mosaicOn ? { k: mk, m: mm, n: mosaic.length, railGone: mosaicRailGone } : null;
     // 0.21.20 (Kenton): someone else on the stage and only my own preview left for the rail -> no rail, my preview in the corner
     ownPip = !gridMode && !railOff && railList === 0 && railOwn.length > 0 && !selfSpotEl && !!selectedName;
     // 0.21.19 (Kenton): one column of wide 16:9 previews while everyone fits; two columns of 4:3 ones past that
@@ -5190,7 +5224,7 @@
       // 0.21.19: rows keep the previews' shape (wider, not taller) -- they no longer stretch to fill the stage
       const fit = Math.max(4, Math.floor((H - 8 - (rcols === 2 ? 40 : 0)) / (tileH + 8)));
       ownRows = Math.min(ownRows, Math.max(0, fit - 1));
-      railRows = fit;
+      railRows = Math.max(fit, mm);   // 0.21.32: the spotlight grid needs a track per row at least
       perPage = Math.max(1, (railRows - ownRows) * rcols);
       pages = Math.max(1, Math.ceil(railList / perPage));
       if (railPage >= pages) railPage = pages - 1;
@@ -5201,9 +5235,10 @@
       stageEl.style.setProperty("--railcolw", railColW() + "px");   // 0.21.19: the centred lone tile's width
       stageEl.style.gridTemplateRows = "repeat(" + railRows + ", " + railH + "px)"
         + (pages > 1 ? " 32px" : "");
-      stageEl.style.gridTemplateColumns = (railOff || ownPip)
-        ? "minmax(0,1fr) repeat(" + rcols + ", 0px)"
-        : "minmax(0,1fr) repeat(" + rcols + ", " + railColW() + "px)";
+      const mainCols = mosaicOn ? "repeat(" + (2 * mk) + ", minmax(0,1fr))" : "minmax(0,1fr)";   // 0.21.32
+      stageEl.style.gridTemplateColumns = (railOff || ownPip || mosaicRailGone)
+        ? mainCols + " repeat(" + rcols + ", 0px)"
+        : mainCols + " repeat(" + rcols + ", " + railColW() + "px)";
     } else {
       railPage = 0;
     }
@@ -5222,7 +5257,7 @@
       if (i >= ownRows) { el.style.display = "none"; el.style.gridColumn = ""; el.style.gridRow = ""; return; }   // 0.8.12: beyond the cap
       el.style.display = "";
       el.style.order = "";
-      el.style.gridColumn = "2 / span " + rcols;   // 0.8.9: full rail width
+      el.style.gridColumn = RC0 + " / span " + rcols;   // 0.8.9: full rail width
       // 0.21.22 (Kenton): my preview is pinned to the bottom of the rail, never pulled up to the others (0.21.19 had moved it)
       el.style.gridRow = String(railRows - ownRows + 1 + i);
     };
@@ -5232,12 +5267,12 @@
       el.style.display = onPage ? "" : "none";
       const p = r - railStart;
       el.style.order = "";
-      el.style.gridColumn = onPage ? String(2 + (p % rcols)) : "";
+      el.style.gridColumn = onPage ? String(RC0 + (p % rcols)) : "";
       el.style.gridRow = onPage ? String(1 + Math.floor(p / rcols)) : "";
       // 0.21.19: a lone last tile in two columns sits centred (Kenton's screenshot)
       const solo = onPage && rcols === 2 && p % 2 === 0 && p === Math.min(perPage, railList - railStart) - 1;
       el.classList.toggle("railsolo", solo);
-      if (solo) el.style.gridColumn = "2 / span 2";
+      if (solo) el.style.gridColumn = RC0 + " / span 2";
       return onPage;
     };
     // 0.13.0 (F6): the RAIL iterates railOrder() -- content first, then the
@@ -5246,6 +5281,17 @@
     // manual/drag order keep the plain orderedNames() index.
     const plainNames = orderedNames();
     const plainIdx = new Map(plainNames.map((n, i) => [n, i]));
+    const placeMosaic = (el, i) => {   // 0.21.32: cell i of the spotlight grid; a short last row sits centred
+      const r = Math.floor(i / mk), c = i % mk;
+      const inRow = Math.min(mk, mosaic.length - r * mk);
+      const col0 = 1 + (mk - inRow) + 2 * c;
+      const rs = Math.floor(r * railRows / mm) + 1, re = Math.floor((r + 1) * railRows / mm) + 1;
+      el.style.display = "";
+      el.style.order = "0";
+      el.style.gridColumn = col0 + " / span 2";
+      el.style.gridRow = rs + " / " + re;
+      el.dataset.mrows = String(re - rs);
+    };
     (gridMode ? plainNames : railOrder(plainNames)).forEach((n) => {
       const t = tiles.get(n);
       if (!t) return;
@@ -5259,11 +5305,12 @@
         return;
       }
       if (!gridMode) {
-        const isMain = n === selectedName && !selfSpotEl;   // my tile can hold the stage
+        const isMain = mosaicOn ? stageMosaicNames.has(n) : (n === selectedName && !selfSpotEl);   // my tile can hold the stage; 0.21.32: or a cell of the spotlight grid
         t.pane.classList.toggle("mainstage", isMain);
         // 0.8.0: the sticky speaker no longer resizes or reorders the
         // ladder -- the green talking ring is the speaking signal.
-        if (isMain) {
+        if (isMain && mosaicOn) placeMosaic(t.pane, mosaicIdx.get(n));
+        else if (isMain) {
           t.pane.style.display = "";
           t.pane.style.order = 0;
           t.pane.style.gridColumn = "1";
@@ -5295,9 +5342,10 @@
     for (const pe of pubEls) {
       pe.classList.remove("ownpip");   // 0.21.20: placeOwn sets it again in picture-in-picture
       if (!gridMode) {
-        const isMain = pe === selfSpotEl && !pe.classList.contains("screenkind");   // 0.8.12: the share thumbnail never holds the stage
+        const isMain = mosaicOn ? mosaicIdx.has(pe) : (pe === selfSpotEl && !pe.classList.contains("screenkind"));   // 0.8.12: the share thumbnail never holds the stage
         pe.classList.toggle("mainstage", isMain);
-        if (isMain) {
+        if (isMain && mosaicOn) placeMosaic(pe, mosaicIdx.get(pe));   // 0.21.32
+        else if (isMain) {
           pe.style.display = "";
           pe.style.order = "0";
           pe.style.gridColumn = "1";
@@ -5359,7 +5407,7 @@
     for (const [name, t] of tiles) {
       const watched = isWatched(name);
       const shown = watched && !hiddenChild(name);   // 0.6.10: both layouts show everyone -- 0.8.12: except feeds behind a grid
-      const isSelected = name === selectedName;
+      const isSelected = name === selectedName || stageMosaicNames.has(name);   // 0.21.32: every cell of the spotlight grid
       // 0.13.0 (F2): re-arm a watched tile whose url was torn down (the hidden-
       // tab teardown below, or a resubscribe that skipped a "never" tile) --
       // the same construction createTile uses; nothing re-arms while hidden.
@@ -6133,7 +6181,7 @@
         const content = isContentPath(name);
         const muted = mutedStreams.has(name);
         const pinned = !gridMode && selectedName === name && !selfSpotEl;
-        const lit = window.__spotIs ? window.__spotIs(name) : spotLit?.target === name;   // 0.21.30: the room's current spotlight, mine included
+        const lit = window.__spotIs ? window.__spotIs(name) : false;   // 0.21.30: the room's current spotlight, mine included
         // 0.21.23 (Kenton, Teams screenshot): Mute participant / Pin for me / Spotlight for everyone, each with its glyph;
         // the mute stays what it always was -- this person's sound on THIS device (the admin mute is below)
         const items = [   // 0.21.19: full screen and fill window are icons beside this button now
@@ -6164,7 +6212,7 @@
         openMineMenu(anchor, items, "", (v) => {
           if (v === "lat") { latencyToggle(name); return; }
           if (v === "unpin") { gridOpenEnd(false); manualPick = true; viewResetAll(); selfSpotEl = null; gridMode = true; applyState(); return; }   // as the Gallery pill
-          if (v === "unspot") { window.__spotRemove(); return; }
+          if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
           else if (v === "akick") {
@@ -6357,7 +6405,7 @@
     t.row.remove();
     tiles.delete(name);
     reclassifyTiles();   // 0.21.15: drop the tile's cached class
-    if (spotDone && spotDone.split("@")[0] === name) spotDone = null;   // 0.21.0: a re-created tile re-applies the standing vote
+    if (spotDone && spotDone.split("@")[0].split("|").includes(name)) spotDone = null;   // 0.21.0: a re-created tile re-applies the standing set
     personChime(name, false);   // 0.8.2: leave chime (after delete: last-tile test)
     if (manualOrder.includes(name)) saveOrder();   // tiles no longer has it
     // 0.9.4: a grid whose tile left keeps its meta (and its hidden children) for
@@ -6902,6 +6950,7 @@
     pendingRemovals.clear();
     suppressed.clear();
     spotVotes.clear();
+    spotOffs.clear(); spotStage = [];   // 0.21.32
     spotDone = null;
     spotLitClear(true);   // 0.21.0: leaving the room forgets the mirrored spotlight
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
@@ -6940,6 +6989,7 @@
     pendingRemovals.clear();
     suppressed.clear();          // old-channel paths must never resurrect as tiles
     spotVotes.clear();           // ...nor old-room spotlight votes apply here
+    spotOffs.clear(); spotStage = [];   // 0.21.32
     memberSubsClear();           // 0.13.0: the previous room's .member consumers
     spotDone = null;
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
@@ -7039,55 +7089,103 @@
     }
   }
 
-  // ---- spotlight votes (0.7.6) ---------------------------------------------
-  // Track-less announces under <room>/~spotlight carry "put this share on
-  // everyone's stage". Applied ONCE per winner -- later local clicks win
-  // locally, because fighting the person at the keyboard helps nobody.
-  const spotVotes = new Map();   // announce path -> { ts, target, by }
-  let spotDone = null;           // winner "<target>@<ts>" we already acted on (0.21.0: keyed by ts so a re-spotlight re-applies)
-  // 0.21.0: the spotlight FOLLOWS THE PARTICIPANT. When a vote lands on one of my own shares I mirror it
-  // into my room.json (`spotlit`); viewers count the mirror as a vote keyed "<my path>#lit", so the
-  // spotlight survives the spotlighter leaving, and I re-announce it after a reload within 30 min
-  // (sessionStorage). Cleared by another spotlight, the spotlighter's explicit un-spotlight, the
-  // share ending, a room switch or a kick.
-  let spotLit = null;            // { target, by, ts } -- my mirrored spotlight
-  let spotLitMissAt = 0;
+  // ---- spotlight votes (0.7.6; 0.21.32: SEVERAL at once) -----------------------------
+  // 0.21.32 (Kenton: "If multiple things are spotlighted, they will both show in the main viewing area in a grid format,
+  // similar to the RTSP grid" -- a second spotlight ADDS, no limit, everything else stays in the rail). Every member's
+  // room.json carries `spots` [{target, ts}] (what they spotlit for everyone) and `unspots` [{target, ts}] (what they
+  // removed, for everyone, whoever set it). A target is spotlit while its newest add is newer than its newest removal.
+  // A pre-0.21.32 member carries ONE `spotlight` (its "~none" removes everything older). Applied ONCE per change of
+  // the set -- later local clicks win locally, because fighting the person at the keyboard helps nobody.
+  const spotVotes = new Map();   // vote key (member path, "<path>#lit", announce path) -> [{ ts, target, by }]
+  const spotOffs = new Map();    // member path -> [{ ts, target }]
+  let spotDone = null;           // signature of the spotlight set this page last applied
+  let spotStage = [];            // 0.21.32: the spotlight grid: [{ target, name } | { target, el }] (two or more)
+  let stageMosaicNames = new Set();   // 0.21.32: remote tiles in the spotlight grid right now (applyState keeps it)
+  // 0.21.0: the spotlight FOLLOWS THE PARTICIPANT. When a vote lands on one of my own shares I mirror it into my
+  // room.json (`spotlits`; `spotlit` = the newest, for older pages); viewers count the mirror as a vote keyed
+  // "<my path>#lit", so the spotlight survives the spotlighter leaving, and I re-announce it after a reload within
+  // 30 min (sessionStorage). Cleared by a removal, the share ending, a room switch or a kick.
+  const spotLits = new Map();    // target -> { target, by, ts, missAt }
   const SPOT_LIT_RESTORE_MS = 1800000;
-  function spotLitSet(v) {
-    if (spotLit && spotLit.target === v.target && spotLit.ts === v.ts) return;
-    spotLit = { target: String(v.target), by: String(v.by || ""), ts: Number(v.ts) || Date.now() };
-    spotLitMissAt = 0;
-    try { window.__state?.set?.("spotlit", spotLit); } catch {}
-    try { sessionStorage.setItem("kastr.spotlit", JSON.stringify({ ...spotLit, room: CHANNEL, at: Date.now() })); } catch {}
+  function spotLitCommit(persist) {
+    const list = [...spotLits.values()].map(({ target, by, ts }) => ({ target, by, ts }));
+    const newest = list.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
+    try { window.__state?.set?.("spotlits", list); window.__state?.set?.("spotlit", newest); } catch {}
+    if (persist) {
+      try {
+        if (list.length) sessionStorage.setItem("kastr.spotlit", JSON.stringify({ list, room: CHANNEL, at: Date.now() }));
+        else sessionStorage.removeItem("kastr.spotlit");
+      } catch {}
+    }
   }
-  function spotLitClear(forget) {
-    if (spotLit) { spotLit = null; try { window.__state?.set?.("spotlit", null); } catch {} }
-    spotLitMissAt = 0;
+  function spotLitSet(v) {
+    const cur = spotLits.get(String(v.target));
+    if (cur && cur.ts === (Number(v.ts) || 0)) return;
+    spotLits.set(String(v.target), { target: String(v.target), by: String(v.by || ""), ts: Number(v.ts) || Date.now(), missAt: 0 });
+    spotLitCommit(true);
+  }
+  function spotLitClear(forget, target) {
+    if (target != null) { if (!spotLits.delete(String(target))) return; spotLitCommit(true); return; }
+    const had = spotLits.size > 0;
+    spotLits.clear();
+    if (had) spotLitCommit(false);
     if (forget) { try { sessionStorage.removeItem("kastr.spotlit"); } catch {} }
   }
-  function spotLitRestore() {   // after a rejoin: same room, within 30 min, once my share is announced again
+  function spotLitRestore() {   // after a rejoin: same room, within 30 min, once each share is announced again
     let rec = null;
     try { rec = JSON.parse(sessionStorage.getItem("kastr.spotlit") || "null"); } catch {}
-    if (!rec || !rec.target || rec.room !== CHANNEL || Date.now() - (Number(rec.at) || 0) > SPOT_LIT_RESTORE_MS) { spotLitClear(true); return; }
-    let tries = 0;
-    const tick = () => {
-      if (!connection || CHANNEL !== rec.room || ++tries > 20) return;
-      if (mineNames.has(rec.target)) { spotLitSet(rec); return; }
+    const list = rec ? (Array.isArray(rec.list) ? rec.list : (rec.target ? [rec] : [])) : [];
+    if (!list.length || rec.room !== CHANNEL || Date.now() - (Number(rec.at) || 0) > SPOT_LIT_RESTORE_MS) { spotLitClear(true); return; }
+    for (const one of list) {
+      let tries = 0;
+      const tick = () => {
+        if (!connection || CHANNEL !== rec.room || ++tries > 20) return;
+        if (mineNames.has(one.target)) { spotLitSet(one); return; }
+        setTimeout(tick, 1500);
+      };
       setTimeout(tick, 1500);
-    };
-    setTimeout(tick, 1500);
+    }
   }
-  window.__spotLit = () => spotLit;   // rig
+  window.__spotLit = () => [...spotLits.values()].reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);   // rig: the newest mirror
+  const SPOT_STALE_MS = 600000;   // 0.13.3: a spotlight older than this does not pull a newcomer's stage (it is still listed)
+  let spotClearedAt = 0;          // 0.21.30: "Remove spotlight" for everything -- every vote older than this is history here
+  // 0.21.32: the room's spotlight set, oldest first (the grid's reading order): [{ target, ts, by }]
+  function spotSetNow() {
+    const add = new Map(), off = new Map();
+    let noneAt = spotClearedAt;
+    const addV = (v, by) => {
+      if (!v || !v.target) return;
+      const ts = Number(v.ts) || 0;
+      if (v.target === "~none") { if (ts > noneAt) noneAt = ts; return; }
+      const c = add.get(v.target);
+      if (!c || ts > c.ts) add.set(String(v.target), { target: String(v.target), ts, by });
+    };
+    for (const [k, arr] of spotVotes) for (const v of arr) addV(v, v.by || k);
+    let mine = [];
+    try { mine = window.__spot?.mineList?.() || []; } catch {}
+    for (const v of mine) addV(v, "me");
+    const offV = (o) => { if (o && o.target) off.set(String(o.target), Math.max(off.get(String(o.target)) || 0, Number(o.ts) || 0)); };
+    for (const arr of spotOffs.values()) for (const o of arr) offV(o);
+    let mineOff = [];
+    try { mineOff = window.__spot?.mineOffs?.() || []; } catch {}
+    for (const o of mineOff) offV(o);
+    return [...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts);
+  }
+  window.__spotSet = spotSetNow;   // rig
+  function spotWinnerNow() {   // the newest spotlight (pre-0.21.32 callers)
+    const set = spotSetNow();
+    return set.length ? set[set.length - 1] : null;
+  }
+  const spotOnRoom = (name) => spotSetNow().some((v) => v.target === String(name) || gridChildOf.get(v.target) === String(name));
   // 0.21.30 (Kenton: "if something is spotlighted already, then the spotlight button should show remove spotlight")
-  window.__spotIs = (target) => {
-    if (spotLit && spotLit.target === String(target)) return true;
-    const w = spotWinnerNow();
-    return !!w && w.target === String(target) && (!w.ts || Date.now() - w.ts < SPOT_STALE_MS);
-  };
-  window.__spotRemove = () => {   // for EVERYONE: a newer "nobody" vote outranks whoever set it
-    spotClearedAt = Date.now();
-    try { window.__spot?.set?.("~none"); } catch {}
-    spotLitClear(true);
+  window.__spotIs = (target) => spotOnRoom(target);
+  // 0.21.32: remove ONE thing from the spotlight (for everyone); no target = everything
+  window.__spotRemove = (target) => {
+    const all = spotSetNow();
+    const list = target != null ? all.filter((v) => v.target === String(target) || gridChildOf.get(v.target) === String(target)).map((v) => v.target)
+      : all.map((v) => v.target);
+    if (target != null && !list.length) list.push(String(target));
+    for (const t of list) { try { window.__spot?.off?.(t); } catch {} spotLitClear(true, t); }
     spotApplyWinner();
     applyState();
   };
@@ -7099,52 +7197,61 @@
     let target = "";
     try { target = atob(parts[i + 2].replace(/-/g, "+").replace(/_/g, "/")); } catch {}
     if (!target) return;
-    if (active) spotVotes.set(String(path), { ts, target, by: String(path) });
+    if (active) spotVotes.set(String(path), [{ ts, target, by: String(path) }]);
     else spotVotes.delete(String(path));
     spotApplyWinner();
   }
-  const SPOT_STALE_MS = 600000;   // 0.13.3
-  let spotClearedAt = 0;   // 0.21.30: "Remove spotlight" on this page -- every vote older than this is history here
-  function spotWinnerNow() {   // the newest vote in the room, mine included; null when it is a "~none" (removed)
-    let win = null;
-    for (const v of spotVotes.values()) if (v.ts > spotClearedAt && (!win || v.ts > win.ts)) win = v;
-    let mine = null;
-    try { mine = window.__spot?.mine?.(); } catch {}
-    if (mine && mine.ts > spotClearedAt && (!win || mine.ts > win.ts)) win = { ts: mine.ts, target: mine.target, by: "me" };
-    return win && win.target === "~none" ? null : win;
-  }
   function spotApplyWinner() {
-    { let raw = null; for (const v of spotVotes.values()) if (!raw || v.ts > raw.ts) raw = v;   // 0.21.30: someone removed it -> my mirror goes too
-      if (raw && raw.target === "~none" && spotLit && raw.ts > (spotLit.ts || 0)) spotLitClear(true); }
-    let win = spotWinnerNow();   // 0.21.30 (was: the newest vote heard, without mine or a removal)
-    if (win && win.by === "me") win = null;   // my own vote acts through my own pane (as before), never re-selects here
-    if (win) {
-      const key = win.target + "@" + (win.ts || 0);
-      if (spotLit && win.target !== spotLit.target && win.by !== "mirror") spotLitClear(true);   // 0.21.0: another spotlight replaces mine
-      if (key === spotDone) return;             // one-shot
-      // 0.13.3: room.json remembers a click forever -- a spotlight older than ten minutes is
-      // history, not an instruction; and a spotlight on a grid CHILD means 'the grid' here.
-      if (win.ts && Date.now() - win.ts > SPOT_STALE_MS) { spotDone = key; return; }
-      let target = win.target;
+    const set = spotSetNow();
+    // my mirror: every spotlit share of mine is mirrored; a removed one goes
+    const live = new Set(set.map((v) => v.target));
+    for (const tg of [...spotLits.keys()]) if (!live.has(tg)) spotLitClear(true, tg);
+    for (const v of set) if (v.by !== "mirror" && mineNames.has(v.target)) spotLitSet(v);
+    // what this page can put on its stage: a grid child means its grid; my own shares are my panes
+    const items = [], seen = new Set();
+    let newest = 0;
+    for (const v of set) {
+      let target = v.target;
       const gp = gridChildOf.get(target);
       if (gp && tiles.has(gp)) target = gp;
-      // The sharer's own page: the self-view already shows it, and the
-      // suppressed path has no tile to select.
-      if (mineNames.has(target)) { spotDone = key; if (win.by !== "mirror") spotLitSet(win); return; }   // 0.21.0: mirror it
-      if (!tiles.has(target)) return;                  // tile not here (yet)
-      spotDone = key;
-      selfSpotEl = null;
-      selectedName = target;
-      gridMode = false;
-      applyState();
-    } else if (spotDone) {
-      // every vote gone (sharer left or cleared): release the stage only
-      // if the user has not picked something else since
-      const was = spotDone.split("@")[0];
-      spotDone = null;
-      if (!gridMode && selectedName === was) { gridMode = true; applyState(); }
+      if (seen.has(target)) continue;
+      if (mineNames.has(target)) {
+        const el = window.__ownPaneFor?.(target);   // never a screen share (its own thumbnail never holds the stage)
+        if (!el) continue;
+        seen.add(target); items.push({ target, el });
+      } else if (tiles.has(target)) {
+        seen.add(target); items.push({ target, name: target });
+      } else continue;
+      newest = Math.max(newest, v.ts || 0);
     }
+    const sig = items.map((x) => x.target).join("|") + "@" + set.map((v) => v.ts).join(",");
+    if (sig === spotDone) return;   // one-shot per change
+    const was = spotDone;
+    spotDone = sig;
+    if (!items.length) {
+      spotStage = [];
+      // every spotlight gone: back to the gallery, unless the user picked something since
+      if (was && !manualPick && !gridMode) { selfSpotEl = null; gridMode = true; applyState(); }
+      return;
+    }
+    // 0.13.3: room.json remembers a click forever -- a spotlight set last changed more than ten minutes ago is
+    // history for a newcomer, not an instruction (it still shows "Remove spotlight" in the menus)
+    if (!was && newest && Date.now() - newest > SPOT_STALE_MS) return;   // a page already showing the spotlight follows every change
+    manualPick = false;
+    gridMode = false;
+    if (items.length === 1) {
+      spotStage = [];
+      if (items[0].el) selfSpotEl = items[0].el;
+      else { selfSpotEl = null; selectedName = items[0].name; }
+    } else {
+      spotStage = items;
+      selfSpotEl = null;
+      const firstRemote = items.find((x) => x.name);
+      if (firstRemote) selectedName = firstRemote.name;
+    }
+    applyState();
   }
+  window.__spotApply = spotApplyWinner;   // the publish half after a local add / removal (my own votes are not heard back)
   // How many shared-content streams are live in the room right now:
   // remote content tiles plus this page's own live non-camera sources
   // (own shares are suppressed from the grid, so they never double-count).
@@ -7210,16 +7317,15 @@
       } else if (v === "keep") {
         window.__rtspPersist?.toggle?.(ref.id);
         window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
-      } else if (v === "unspot") {   // 0.21.30
-        window.__spotRemove?.();
+      } else if (v === "unspot") {   // 0.21.30; 0.21.32: this one only
+        window.__spotRemove?.(CHANNEL + "/" + hangName(ref.name));
       } else if (v === "pt") {   // 0.21.17: per-camera passthrough, live
         window.__rtspPt?.toggle?.(ref.id);
       } else if (v === "audio") {   // 0.9.5
         window.__rtspAudio?.toggle?.(ref.id);
         window.__toast?.(window.__rtspAudio?.get?.(ref.id) === false ? "Publishing this feed without audio" : "Publishing this feed with the camera's audio", 3500, { level: "info" });
       } else {
-        window.__spot?.set?.(CHANNEL + "/" + hangName(ref.name));
-        if (ref.kind === "camera") { const pane = anchor.closest?.(".pubpane"); if (pane && !pane.classList.contains("mainstage")) window.__selfSpot?.(pane); }   // 0.16.0
+        window.__spot?.set?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.32: the set puts it on my stage too (alone or in the grid)
       }
     });
   };
@@ -9110,7 +9216,7 @@
   function congestShed(name, onStage) {
     const lvl = window.__congest?.level;   // applyState can run before this block has
     if (!lvl || onStage) return false;
-    try { if (spotLit?.target === name) return false; } catch {}   // the room's spotlight keeps its picture
+    try { if (stageMosaicNames.has(name) || spotOnRoom(name)) return false; } catch {}   // the room's spotlight keeps its picture
     return lvl >= 2 || (tileClasses.get(name) ?? pathClass(name)) === "person";
   }
   setInterval(() => {   // two quiet minutes: one level back
@@ -9411,7 +9517,7 @@
   }
   // the two models (schema v1) and their producers
   const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
-  const roomModel = { v: 1, peer: "", spotlight: null, spotlit: null, recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
+  const roomModel = { v: 1, peer: "", spotlight: null, spotlit: null, spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grid: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path (grid = the lowest id's meta, for older viewers)
   const pubState = stateProducer(() => "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
@@ -9448,6 +9554,11 @@
         case "avatar": pubModel.avatar = String(value || ""); break;
         case "spotlight": roomModel.spotlight = value ? { target: String(value), ts: now } : null; break;
         case "spotlit": roomModel.spotlit = value && value.target ? { target: String(value.target), by: String(value.by || ""), ts: Number(value.ts) || now } : null; break;   // 0.21.0
+        case "spots": case "unspots": case "spotlits": {   // 0.21.32: several spotlights -- [{target, ts(, by)}]
+          roomModel[field] = (Array.isArray(value) ? value : []).filter((x) => x && x.target).slice(-64)
+            .map((x) => field === "spotlits" ? { target: String(x.target), by: String(x.by || ""), ts: Number(x.ts) || now } : { target: String(x.target), ts: Number(x.ts) || now });
+          break;
+        }
         case "recording": roomModel.recording = value ? { who: String(value), ts: now } : null; break;
         case "grid": {   // 0.15.0: {id, meta|null} -- one entry per grid, keyed by path; `grid` mirrors the lowest id for pre-0.15 viewers
           const gid = String(value?.id ?? "1");
@@ -9636,12 +9747,16 @@
     if (!v || typeof v !== "object") return;
     const prev = h.prev;
     // spotlight / recording: the announce maps keyed by the member path
-    const hadVote = spotVotes.get(path);
-    if (v.spotlight?.target) spotVotes.set(path, { ts: Number(v.spotlight.ts) || 0, target: String(v.spotlight.target), by: path }); else spotVotes.delete(path);
-    // 0.21.0: the spotlighter's EXPLICIT un-spotlight (their room.json says null while they are still here) ends my mirror
-    if (hadVote && !v.spotlight?.target && spotLit && hadVote.target === spotLit.target) spotLitClear(true);
+    // 0.21.32: `spots` (several) when the member has them, else the single pre-0.21.32 `spotlight`
+    const vs = Array.isArray(v.spots) ? v.spots : (v.spotlight?.target ? [v.spotlight] : []);
+    const vlist = vs.filter((x) => x && x.target).map((x) => ({ ts: Number(x.ts) || 0, target: String(x.target), by: path }));
+    if (vlist.length) spotVotes.set(path, vlist); else spotVotes.delete(path);
+    const offs = (Array.isArray(v.unspots) ? v.unspots : []).filter((x) => x && x.target).map((x) => ({ ts: Number(x.ts) || 0, target: String(x.target) }));
+    if (offs.length) spotOffs.set(path, offs); else spotOffs.delete(path);
     // 0.21.0: the target's mirror counts as a vote of its own (survives the spotlighter leaving)
-    if (v.spotlit?.target) spotVotes.set(path + "#lit", { ts: Number(v.spotlit.ts) || 0, target: String(v.spotlit.target), by: "mirror" }); else spotVotes.delete(path + "#lit");
+    const ls = Array.isArray(v.spotlits) ? v.spotlits : (v.spotlit?.target ? [v.spotlit] : []);
+    const llist = ls.filter((x) => x && x.target).map((x) => ({ ts: Number(x.ts) || 0, target: String(x.target), by: "mirror" }));
+    if (llist.length) spotVotes.set(path + "#lit", llist); else spotVotes.delete(path + "#lit");
     spotApplyWinner();
     const recHad = recVotes.has(path);
     if (v.recording?.who) { if (!recHad) recApply(path, String(v.recording.who), Number(v.recording.ts) || 0, true); }
@@ -9680,7 +9795,8 @@
   }
   function memberClear(path, h) {
     const hadLit = spotVotes.delete(path + "#lit");   // 0.21.0
-    if (spotVotes.delete(path) || hadLit) spotApplyWinner();
+    const hadOff = spotOffs.delete(path);             // 0.21.32
+    if (spotVotes.delete(path) || hadLit || hadOff) spotApplyWinner();
     if (recVotes.has(path)) recApply(path, recVotes.get(path)?.who || "", 0, false);
     const prev = h?.prev;
     for (const gp of prev?.gridPaths || []) gridApply(path, { path: gp }, 0, false);   // 0.15.0
@@ -17267,8 +17383,8 @@
           renderSources(); refreshUi(); announceGrid(true); announce();
         }
         else if (v === "me") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); }
-        else if (v === "all") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); window.__spot?.set?.(chanPath(ensureHang(g.entry.name))); }
-        else if (v === "unspot") window.__spotRemove?.();   // 0.21.30
+        else if (v === "all") window.__spot?.set?.(chanPath(ensureHang(g.entry.name)));   // 0.21.32: the set puts it on my stage too
+        else if (v === "unspot") window.__spotRemove?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30; 0.21.32: this one only
       });
     });
     g.pane.appendChild(chev);
@@ -18895,12 +19011,38 @@
     try { spotReg.connection?.close?.(); } catch {}
     spotReg = null;
   }
-  let spotMine = null;   // 0.21.30: { target, ts } -- my own vote ("~none" = I removed the spotlight for everyone)
-  function spotSet(targetPath) {
+  let spotMine = null;   // 0.21.30: { target, ts } -- my newest vote
+  let spotMineList = [], spotOffList = [];   // 0.21.32: everything I spotlit for everyone / removed for everyone
+  let spotLegacy = null;                     // the single `spotlight` pre-0.21.32 pages read (re-stamped only when it changes)
+  function spotCommit() {
+    spotMine = spotMineList.reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);
+    if (window.__state?.enabled) {
+      window.__state.set("spots", spotMineList);
+      window.__state.set("unspots", spotOffList);
+      const leg = spotMine ? spotMine.target : (spotOffList.length ? "~none" : null);
+      if (leg !== spotLegacy) { spotLegacy = leg; window.__state.set("spotlight", leg); }
+    } else if (spotMine) spotSet(spotMine.target, true);   // a page without state: the announce carries the newest one
+    try { window.__spotApply?.(); } catch {}
+  }
+  function spotAdd(targetPath) {
+    if (!targetPath) return;
+    const t = String(targetPath);
+    spotMineList = spotMineList.filter((x) => x.target !== t).concat([{ target: t, ts: Date.now() }]).slice(-64);
+    spotOffList = spotOffList.filter((x) => x.target !== t);
+    spotCommit();
+  }
+  function spotOff(targetPath) {
+    if (!targetPath) return;
+    const t = String(targetPath);
+    spotMineList = spotMineList.filter((x) => x.target !== t);
+    spotOffList = spotOffList.filter((x) => x.target !== t).concat([{ target: t, ts: Date.now() }]).slice(-64);
+    spotCommit();
+  }
+  function spotSet(targetPath, announceOnly) {
     spotClear();
     if (!targetPath) return;
-    spotMine = { target: String(targetPath), ts: Date.now() };
-    if (window.__state?.enabled) { window.__state.set("spotlight", String(targetPath)); return; }   // 0.13.0
+    if (!announceOnly) { spotAdd(targetPath); return; }   // 0.21.32: every caller ADDS now
+    if (window.__state?.enabled) return;   // 0.13.0
     const b64 = btoa(String(targetPath)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const path = currentChannel() + "/~spotlight/" + Date.now() + "/" + b64;
     try {
@@ -19047,7 +19189,17 @@
       s2.pane.classList.toggle("ghost", !!s2.entry.previewGhost);
     },
   };
-  window.__spot = { set: spotSet, clear: () => { spotMine = null; spotClear(); }, mine: () => spotMine };   // 0.21.30: + mine
+  window.__spot = { set: spotAdd, add: spotAdd, off: spotOff,   // 0.21.32: set = ADD (several at once); off = remove one for everyone
+    clear: () => { spotMine = null; spotMineList = []; spotOffList = []; spotLegacy = null; spotClear(); },
+    mine: () => spotMine, mineList: () => spotMineList, mineOffs: () => spotOffList };
+  // 0.21.32: my own pane for a broadcast path (the spotlight grid places it); a screen share's thumbnail never holds the stage
+  window.__ownPaneFor = (path) => {
+    for (const sl of slots.values()) {
+      if (sl?.entry?.name && sl.pane && chanPath(ensureHang(sl.entry.name)) === path) return sl.pane.classList.contains("screenkind") ? null : sl.pane;
+    }
+    for (const g of rtspGrids.values()) if (g?.entry?.name && g.pane && chanPath(ensureHang(g.entry.name)) === path) return g.pane;
+    return null;
+  };
   window.addEventListener("pagehide", spotClear);
   // 0.8.6: "someone is recording" -- the same track-less announce idiom.
   let recReg = null;

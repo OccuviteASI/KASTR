@@ -2,6 +2,41 @@
 
 What changed in each build, newest first.
 
+## v0.21.41 — share to several rooms, the mic button, the room rail's people
+
+**Share to several rooms (Kenton: "the ability to share from 1 device to multiple rooms. Maybe a room selection on the share after toggling the feature on ... in the more (ellipsis) menu").** Turn on More ▸ "Share to several rooms". After that, each new share (and your camera) offers "Choose rooms", and every share's menu has "Also show in other rooms…": tick the rooms and Apply. A locked room asks for its code.
+
+The share is sent once and stays in its own room; the other rooms list it, so nothing extra is uploaded. Their members see it as a tile marked "(from <room>)".
+- **How it is kept:** the hub keeps the list (spokes forward to it and mirror it, like rooms). A listing needs your token for the share's room plus a member token for each other room. It is refreshed every minute and lapses 3 minutes after it stops being refreshed.
+- **Access:** members of a listed room are allowed to read only that one stream, through a separate connection. Unticking a room, stopping the share or leaving the room ends the listing.
+
+Tested with two lab windows in rooms xa and xb: Kenton in xb played Alex's camera from xa (772 frames), and unticking xb removed it. Mixed fleets: a 0.21.39 relay passes the stream on, but only 0.21.41 pages show listings.
+
+**Changing rooms asks first and arrives quiet (Kenton: "When clicking to change rooms, prompt to let the user know they will be leaving the current room ... When changing rooms, mute mic and disable camera").** Clicking another room in the rail asks "Leave … and join …? Your microphone will be muted and your camera turned off." Every room change, including creating a new room, mutes your mic and turns your camera off on the way. Tested: Cancel stayed in main with the mic and camera on; OK arrived in the other room muted with the camera off.
+
+**Shared sound starts off (Kenton: "When sharing something, default to audio off unless it's a media file").** "Include sound" for a screen, window or tab now starts off every time KASTR opens; turn it on when you want the computer's sound. RTSP cameras and camera feeds already start without sound. Media files keep their sound.
+
+**The people in the room rail (Kenton, four requests).**
+- **Alphabetical order:** "The people displaying in the rooms on the left rail should be in alphabetical order." Names now sort A to Z in every room.
+- **A switch to hide them:** "an option to collapse the users in the rooms and only show the other info". The people icon beside Rooms hides or shows the names under every room, and this device remembers the choice.
+- **A ring when someone speaks:** "a highlight or border when audio is playing ... just around their name in the left rail". The name gets the same blue ring as a speaking tile. In the room you are in it follows exactly what your window hears, the same signal the tiles use.
+- **The person's menu from the rail:** "allow mute/unmute/spotlight, etc from the left side rail on a user". In the room you are in, hovering a name shows ⋯, and right-clicking a name opens the same menu as their tile (mute, pin, spotlight for everyone, admin items).
+
+Tested with three lab windows: names sorted, the ring followed the person heard speaking, the menu offered mute, pin and spotlight, and the hide switch held through a reload.
+
+**Room cards and the Create room button (Kenton: "move the people and time to the right of the room name, when space allows" -- "Move the Create Room button to the right of the Rooms and server info with just a + in a circle").** A room's people count and timer sit beside its name and drop under it only when the name is long or the rail narrow. Create room is a circled + at the top of the rail, beside the people switch; the collapsed icon rail keeps its + at the bottom.
+
+**Your microphone's own mute button works in KASTR (Kenton: "auto detect when a mic has unmuted and unmute in KASTR? Certain microphones announce this to windows and it works on Teams").** Two ways, both on unless you turn off Mic menu ▸ "Follow my microphone's mute button". KASTR only follows the device and never changes its mute itself.
+- **Windows mute:** when the microphone you use is muted or unmuted in Windows (a headset's or USB mic's mute switch, or a laptop's mic key), KASTR's mic does the same within a second. When you join with the device already muted, KASTR's mic starts muted, but KASTR never unmutes on its own at the start.
+- **Headset buttons:** for telephony headsets (Jabra, Poly, EPOS, Yealink and others), Mic menu ▸ "Use my headset's buttons…" asks once which headset to use. After that, the headset's mute button mutes and unmutes KASTR, and its mute light shows KASTR's mute. The headset reconnects by itself the next time.
+Tested in the lab with a simulated Windows mute and a simulated headset. A real headset still needs testing: KASTR sees Kenton's Yealink BH76 Plus as the default microphone.
+
+**Locking the computer stops screen sharing (Kenton: "Sharing should stop when a computer is locked, and shouldn't reconnect automatically" -- "If it's a relay + publisher box it can keep sharing while locked").** While you share a screen, window or tab, KASTR checks every 2 seconds whether Windows (or the Linux desktop) has locked the session. On a lock it stops those shares exactly as Stop sharing does: they do not come back after you unlock, and a relaunch does not restore them. Cameras, RTSP feeds, grids and media files keep going. Publisher and Publisher + relay boxes (unattended, usually locked) keep sharing. Tested with a captured test tab: the share stopped within 2 seconds of the lock and stayed stopped after the unlock.
+
+**The last switches now come first too.** Three Mic menu switches (Noise suppression, Voice isolation, Keep audio clear) still sat after their labels in 0.21.40; they now lead like every other switch.
+
+**Smaller zoom buttons (Kenton: "the zoom and + - buttons are quite big. The % should only show when zooming in/out").** The − and + are smaller (20 px), and the zoom percentage appears only while you zoom, for about a second and a half. Tested: 150% showed right after zooming in and was gone two seconds later.
+
 ## v0.21.40 — your own browser, Deafen, the gallery stays, a cleanup
 
 **KASTR opens in your own browser (Kenton: "use the default browser on each computer and only use the built in browser if they don't have a chromium based browser available or if they are a relay/hub/spoke ... This should allow them to share their tabs more easily").** On a person's computer, KASTR now opens its window in the default browser when that browser is Chromium-based (Chrome, Edge, Brave, Vivaldi, Opera, Chromium), with the person's own profile: Share ▸ a browser tab lists their real tabs, and their sign-ins and extensions stay as they are. KASTR's own browser is used when the default is not Chromium-based (Firefox, Safari), and always on boxes: relay, hub and spoke machines, Publisher and Viewer modes, and any machine that shares cameras or grids (a person's own browser slows a hidden window's drawing, and a grid is drawn by its owner's window). `browser = bundled` in kastr.ini keeps the old behaviour on any machine, and `browser = auto` is the new default.

@@ -46,6 +46,9 @@ Token service (its own listener, relay-port+1):
                             with "host" (<slug>-<4 hex>) the member token's puts are scoped to that host's own
                             paths (+ its ~state/<room>/<host> track); {"federation":"<code>"} -> a relay token
     POST /api/session       the relay's per-session auth callback (loopback only)
+    POST /api/xshare        0.21.41: list a room's stream in other rooms (Bearer = member token of the stream's room)
+                            {path, to:[slug], tokens:{slug: member token}, label?, kind?, by?, stop?}
+    GET  /api/xshare?room=  0.21.41: the live listings into a room (Bearer / ?jwt= member token; loopback page: none)
 """
 import base64
 import hashlib
@@ -110,6 +113,16 @@ KEPT_MAX = 64
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
+# 0.21.41: "share to several rooms" (Kenton: ONE stream, LISTED in other rooms -- no second upload). A member of room A
+# lists its broadcast <A>/<host>/.../<name>.hang in room B with a member token for B; sessions holding a room-B token
+# may then subscribe to it (session() adds the path to their grant). The hub keeps the one registry; spokes mirror it
+# through the bans long-poll (fields `xshare` + `xshareVer`).
+XSHARE_TTL = 180            # a listing lives this long unless re-POSTed (the page heartbeats)
+XSHARE_MAX = 256            # listings one registry holds
+XSHARE_TARGETS_MAX = 16     # rooms one stream may be listed in
+XSHARE_KINDS = ("camera", "screen", "rtsp", "grid", "media", "other")
+XSHARE_MIRROR_FRESH = 90    # a spoke trusts the hub's copy this long after a long-poll reply (it re-polls every <= 25 s)
+XSHARE_SEG_RE = re.compile(r"^(?!\.\.?$)[A-Za-z0-9._-]{1,96}$")
 # 0.12.0: root-prefixed announce kinds every member may put beside ~presence:
 # ~talking/<room> (who is speaking) and ~chat/<room> (a new-message nudge).
 MEMBER_KINDS = (NS + "presence", NS + "talking", NS + "chat")
@@ -472,6 +485,195 @@ def session_grant(req, key, now=None):
     return "grant", claims_to_grant(claims, now), claims_role(claims)
 
 
+# ---- 0.21.41: cross-room listings ("share to several rooms") ------------------------------
+
+def xshare_path_ok(path, room, host=None):
+    """A listable broadcast: <room>/<host>/.../<name>.hang -- 3..8 plain segments (never a control path), in `room`,
+    under `host`. host None (an open relay: no tokens to name one) -> any host-shaped second segment."""
+    p = str(path or "")
+    if not p or len(p) > 256 or not p.endswith(".hang") or not room:
+        return False
+    segs = p.split("/")
+    if not 3 <= len(segs) <= 8 or segs[0] != room:
+        return False
+    if any(not XSHARE_SEG_RE.match(x) or x.startswith(NS) for x in segs):
+        return False
+    return segs[1] == host if host else bool(HOST_RE.match(segs[1]))
+
+
+def _xs_text(v, n):
+    return re.sub(r"[\x00-\x1f\x7f]+", " ", str(v or "")).strip()[:n]
+
+
+def xshare_body(p):
+    """A POST body -> (path, to [deduped, as sent], label, kind, by, stop)."""
+    p = p if isinstance(p, dict) else {}
+    raw = p.get("to")
+    if isinstance(raw, str):
+        raw = [raw]
+    to = []
+    for t in (raw if isinstance(raw, list) else [])[:32]:
+        v = str(t or "")[:40]
+        if v and v not in to:
+            to.append(v)
+    kind = str(p.get("kind") or "other")
+    return (str(p.get("path") or "")[:300], to, _xs_text(p.get("label"), 80),
+            kind if kind in XSHARE_KINDS else "other", _xs_text(p.get("by"), 64), bool(p.get("stop")))
+
+
+def xshare_patterns(paths):
+    """Listed broadcast paths -> relay subscribe patterns (each path, its children, and its -low.hang thumbnail copy)."""
+    out = []
+    for p in paths:
+        qs = [p, p + "/**"]
+        if not p.endswith("-low.hang"):
+            low = p[:-5] + "-low.hang"
+            qs += [low, low + "/**"]
+        for q in qs:
+            if q not in out:
+                out.append(q)
+    return out
+
+
+class XShareRegistry:
+    """The cross-room listings one box keeps: {(path, to): entry}. In memory only -- every entry is refreshed by its
+    page's heartbeat (XSHARE_TTL), so a restart loses nothing a minute of heartbeats does not restore. `ver` moves on
+    every change a reader must see (new, removed, relabelled, or an expiry pushed out by >= 60 s -- spokes judge
+    liveness by `exp`, so a refresh must reach them before the copy they hold runs out)."""
+
+    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp")
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.items = {}
+        self.ver = 0
+
+    def _prune(self, now):
+        for k in [k for k, e in self.items.items() if e["exp"] <= now]:
+            self.items.pop(k, None)
+
+    def apply(self, path, frm, to, label="", kind="other", by="", now=None, ttl=XSHARE_TTL):
+        """List `path` (a stream of room `frm`) in each room of `to` -> (accepted, refused {slug: why}, new, changed)."""
+        now = time.time() if now is None else now
+        exp = int(now + ttl)
+        acc, ref, new, changed = [], {}, [], False
+        with self.lock:
+            self._prune(now)
+            for b in to:
+                k = (path, b)
+                cur = self.items.get(k)
+                if cur is None:
+                    if len(self.items) >= XSHARE_MAX:
+                        ref[b] = "too many listings on this relay"
+                        continue
+                    if sum(1 for (p, _b) in self.items if p == path) >= XSHARE_TARGETS_MAX:
+                        ref[b] = "listed in too many rooms"
+                        continue
+                    self.items[k] = {"path": path, "from": frm, "to": b, "label": label, "kind": kind, "by": by,
+                                     "exp": exp, "dist": exp}
+                    new.append(b)
+                    changed = True
+                else:
+                    if (cur["from"], cur["label"], cur["kind"], cur["by"]) != (frm, label, kind, by):
+                        changed = True
+                    cur.update({"from": frm, "label": label, "kind": kind, "by": by, "exp": max(cur["exp"], exp)})
+                    if cur["exp"] - cur["dist"] >= 60:
+                        changed = True
+                    if changed:
+                        cur["dist"] = cur["exp"]
+                acc.append(b)
+            if changed:
+                self.ver += 1
+        return acc, ref, new, changed
+
+    def drop(self, path, to=None):
+        """Remove `path`'s listings (in the rooms of `to`, or all) -> the slugs removed."""
+        with self.lock:
+            keys = [k for k in self.items if k[0] == path and (not to or k[1] in to)]
+            for k in keys:
+                self.items.pop(k, None)
+            if keys:
+                self.ver += 1
+        return sorted(k[1] for k in keys)
+
+    def into(self, room, now=None):
+        now = time.time() if now is None else now
+        with self.lock:
+            return [{k: e.get(k) for k in self.PUBLIC} for e in self.items.values() if e["to"] == room and e["exp"] > now]
+
+    def snapshot(self, now=None):
+        now = time.time() if now is None else now
+        with self.lock:
+            return self.ver, [{k: e.get(k) for k in self.PUBLIC} for e in self.items.values() if e["exp"] > now]
+
+    def replace(self, rows, ver=None, now=None):
+        """A spoke's copy of the hub's registry (the long-poll's `xshare`)."""
+        now = time.time() if now is None else now
+        items = {}
+        for e in (rows if isinstance(rows, list) else [])[:XSHARE_MAX]:
+            if not isinstance(e, dict):
+                continue
+            path, frm, to = str(e.get("path") or ""), str(e.get("from") or ""), str(e.get("to") or "")
+            try:
+                exp = int(float(e.get("exp")))
+            except (TypeError, ValueError):
+                continue
+            if exp <= now or not SLUG_RE.match(frm) or not SLUG_RE.match(to) or to == frm or not xshare_path_ok(path, frm):
+                continue
+            kind = str(e.get("kind") or "other")
+            items[(path, to)] = {"path": path, "from": frm, "to": to, "label": _xs_text(e.get("label"), 80),
+                                 "kind": kind if kind in XSHARE_KINDS else "other", "by": _xs_text(e.get("by"), 64),
+                                 "exp": exp, "dist": exp}
+        with self.lock:
+            self.items = items
+            try:
+                self.ver = int(ver) if ver is not None else self.ver + 1
+            except (TypeError, ValueError):
+                self.ver += 1
+
+
+XSHARE_OPEN = XShareRegistry()   # an OPEN relay's listings (no token service runs there; kastr_serve answers for it)
+_XS_INIT_LOCK = threading.Lock()
+
+
+def xshare_open(method, p=None, room=None, now=None):
+    """/api/xshare on an OPEN relay (no access codes: every session reads everything, so the registry is only the
+    listing). GET ?room= -> the live listings; POST {from, path, to, label?, kind?, by?, stop?} -> (reply, code)."""
+    now = time.time() if now is None else now
+    reg = XSHARE_OPEN
+    if method == "GET":
+        room = str(room or "")
+        if not SLUG_RE.match(room):
+            return {"ok": False, "error": "room required"}, 400
+        items = [{k: e[k] for k in ("path", "from", "label", "kind", "by", "exp")} for e in reg.into(room, now)]
+        return {"ok": True, "room": room, "items": items, "ver": reg.ver, "open": True}, 200
+    p = p if isinstance(p, dict) else {}
+    frm = str(p.get("from") or "")
+    if not SLUG_RE.match(frm):
+        return {"ok": False, "error": "from (the stream's room) required", "open": True}, 400
+    path, to, label, kind, by, stop = xshare_body(p)
+    if not xshare_path_ok(path, frm):
+        return {"ok": False, "error": "not a stream of that room", "open": True}, 403
+    if stop:
+        gone = reg.drop(path, set(to) or None)
+        return {"ok": True, "to": gone, "stopped": gone, "refused": {}, "open": True}, 200
+    refused, ok_to = {}, []
+    for b in to:
+        if not SLUG_RE.match(b):
+            refused[b] = "bad room name"
+        elif b == frm:
+            refused[b] = "the stream's own room"
+        else:
+            ok_to.append(b)
+    acc, ref, _new, _ch = reg.apply(path, frm, ok_to, label, kind, by, now) if ok_to else ([], {}, [], False)
+    refused.update(ref)
+    out = {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused, "open": True}
+    if not acc:
+        out["error"] = "no room accepted the listing"
+        return out, 403
+    return out, 200
+
+
 class Lockout:
     """0.10.0's brute-force counter, its own class in 0.12.0 so the minter and
     kastr_serve's room endpoints count the same way: five wrong codes within a
@@ -646,6 +848,12 @@ class BanList:
         with self.lock:
             self._changed_locked()
             self._save()
+
+    def nudge(self):
+        """0.21.41: wake the long-pollers (a new version) without a ban change and without a disk write -- the
+        cross-room listings ride the same reply and change on every page heartbeat that matters."""
+        with self.lock:
+            self._changed_locked()
 
     def _prune(self, now):
         self.bans = [b for b in self.bans if float(b.get("until") or 0) > now][-self.MAX:]
@@ -1415,7 +1623,7 @@ class AuthService:
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")   # 0.21.41: /api/xshare
                 for k, v in (headers or {}).items():
                     self.send_header(k, str(v))
                 self.end_headers()
@@ -1428,7 +1636,7 @@ class AuthService:
                 self.send_response(204)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")   # 0.21.41: /api/xshare
                 self.end_headers()
 
             def do_GET(self):
@@ -1468,6 +1676,11 @@ class AuthService:
                     # 0.12.0: rows {slug, locked, persistent, creator, created, at} -- old pages read .slug
                     # 0.15.0: + the relay-defined room groups
                     self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public()})
+                elif path == "/api/xshare":            # 0.21.41: the cross-room listings into one room
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, code = svc.xshare_get((qs.get("room") or [""])[0], self.headers.get("Authorization"),
+                                               (qs.get("jwt") or [""])[0], self._peer())
+                    self._reply(obj, code)
                 elif path == "/api/spokes/link":       # 0.21.7: what the hub's relay sees of its cluster (a spoke's grid-gate evidence)
                     obj, code = svc.spoke_link(self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
@@ -1516,6 +1729,9 @@ class AuthService:
                     self._reply(obj, code)
                 elif path == "/api/bans/notify":       # 0.18.0: the hub says "bans changed" -- no data, we pull
                     obj, code = svc.bans_notified(self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/xshare":            # 0.21.41: list a stream in other rooms (or stop)
+                    obj, code = svc.xshare_post(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
                 elif path == "/api/rooms/fed":         # 0.21.17: a spoke asks about / mirrors a room lock
                     obj, code = svc.rooms_fed(p, self.headers.get("Authorization"))
@@ -1654,6 +1870,8 @@ class AuthService:
         if op == "group":
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return group_op(self.store, body, operator=False, log=self.log)
+        if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
+            return self._xs_fed(p)
         slug = str(p.get("slug") or "")
         if not SLUG_RE.match(slug) or slug == "main":
             return {"ok": False, "error": "bad room"}, 400
@@ -1955,7 +2173,7 @@ class AuthService:
             if rec and (rec.get("revoked") or (self.bans and self.bans.hit(rec.get("room"), rec.get("host"), rec.get("remote"), now))):
                 return self._revoked_answer(ev, sid, remote, now)   # 0.17.0: an admin removed this identity
             if rec and float(rec.get("expires") or 0) > now:
-                return rec["grant"], 200
+                return self._xs_grant(rec.get("base") or rec["grant"], rec.get("room"), now), 200   # 0.21.41: listings recomputed
         status, grant, why = session_grant(req, self.key, now)
         room = host = None
         if status == "grant":
@@ -1975,6 +2193,9 @@ class AuthService:
             if say:
                 self.log("relay session: refused %s from %s (%s)" % (ev, remote, why))
             return {"error": why}, 403
+        base = grant
+        if status == "grant" and room:
+            grant = self._xs_grant(grant, room, now)   # 0.21.41: + the streams listed into this room from other rooms
         with self.lock:
             self.grants += 1
             if sid:
@@ -1983,9 +2204,280 @@ class AuthService:
                         self._sessions.pop(k, None)
                 self._sessions[sid] = {"at": now, "remote": remote, "role": why,
                                        "publisher": bool(grant.get("publish")),
-                                       "expires": grant.get("expires") or (now + 86400), "grant": grant,
+                                       "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False}   # 0.17.0: the identity a kick keys on
         return grant, 200
+
+    # ---- 0.21.41: cross-room listings ("share to several rooms") ------------------------------------------
+    # POST /api/xshare (Bearer = a member token of the stream's room A, `tokens` = one member token per target room)
+    # lists the stream in other rooms; GET /api/xshare?room=B answers the live listings into B; session() adds them to
+    # every room-B grant. The hub keeps the one registry (spokes forward with op "xshare" on /api/rooms/fed and mirror
+    # the hub's copy from the bans long-poll); a spoke whose hub link is down keeps a local one meanwhile.
+
+    def _xs(self, which="local"):
+        name = "_xsreg_" + which   # (not "_xs_<which>": _xs_local is a method)
+        r = self.__dict__.get(name)
+        if r is None:
+            with _XS_INIT_LOCK:
+                r = self.__dict__.setdefault(name, XShareRegistry())
+        return r
+
+    def _xs_spoke(self):
+        """A spoke: a hub is saved and the operator does not say this box IS the hub."""
+        try:
+            ih = getattr(self, "is_hub", None)
+            if callable(ih) and ih() is True:
+                return False
+        except Exception:
+            pass
+        try:
+            hub = getattr(self, "hub", None)
+            return bool(hub() if callable(hub) else None)
+        except Exception:
+            return False
+
+    def _xs_view(self, now=None):
+        """-> (the registry this box reads, hubDown). A spoke reads the hub's copy while its long-poll is fresh (one
+        writer: the hub); a hub or a lone relay reads its own; a spoke whose hub link is down reads its local one."""
+        now = time.time() if now is None else now
+        if not self._xs_spoke():
+            return self._xs("local"), False
+        if now - float(self.__dict__.get("_xs_mirror_at") or 0) < XSHARE_MIRROR_FRESH:
+            return self._xs("mirror"), False
+        return self._xs("local"), True
+
+    def _xs_grant(self, grant, room, now=None):
+        """A session grant + subscribe patterns for every live listing into `room` (a copy; the input is kept)."""
+        if not room or not isinstance(grant, dict):
+            return grant
+        sub = list(grant.get("subscribe") or [])
+        if "**" in sub:
+            return grant
+        try:
+            reg, _down = self._xs_view(now)
+            rows = reg.into(room, now)
+        except Exception:
+            return grant
+        if not rows:
+            return grant
+        for q in xshare_patterns([r["path"] for r in rows]):
+            if q not in sub:
+                sub.append(q)
+        try:   # one line per room and listing set a minute -- the field can see a member's session was granted them
+            key = (room, tuple(sorted(r["path"] for r in rows)))
+            said = getattr(self, "_xs_said", None)
+            if said is None:
+                said = self._xs_said = {}
+            t = time.time()
+            if t - said.get(key, 0) > 60:
+                said[key] = t
+                self.log("relay session: room %s also reads %d stream(s) listed from other rooms" % (room, len(rows)))
+        except Exception:
+            pass
+        g = dict(grant)
+        g["subscribe"] = sub
+        return g
+
+    def _xs_changed(self):
+        """The hub's registry changed: wake the spokes' long-polls (they re-pull and copy it)."""
+        f = getattr(getattr(self, "bans", None), "nudge", None) or getattr(getattr(self, "bans", None), "poke", None)
+        if callable(f):
+            try:
+                f()
+            except Exception:
+                pass
+
+    def _xs_local(self, path, frm, to, label, kind, by, now, via="local"):
+        acc, ref, new, changed = self._xs("local").apply(path, frm, to, label, kind, by, now)
+        if changed and not self._xs_spoke():
+            self._xs_changed()
+        if new:
+            self.log("relay auth: %s listed in %s by %s (%s)" % (path, ", ".join(new), by or "?", via))
+        return acc, ref
+
+    def _xs_hub(self, body):
+        """Spoke side: one xshare call at the hub -> (reply, code); (None, 0) when the hub is unreachable, holds no
+        token for us, or is older than 0.21.41 (it answers 400 'bad room' / 404) -- the caller keeps it locally."""
+        base, bearer = self._hub_base(), self._hub_bearer()
+        if not base or not bearer:
+            return None, 0
+        try:
+            req = urllib.request.Request(base + "/api/rooms/fed", data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "Authorization": bearer})
+            with urllib.request.urlopen(req, timeout=4) as r:
+                return json.loads(r.read().decode("utf-8", "replace") or "{}"), (getattr(r, "status", None) or 200)
+        except urllib.error.HTTPError as e:
+            try:
+                d = json.loads(e.read().decode("utf-8", "replace") or "{}")
+            except Exception:
+                d = {}
+            if e.code in (403, 409, 429) and d.get("error") and d.get("error") != "federation token required":
+                return d, e.code
+            return None, e.code
+        except Exception:
+            return None, 0
+
+    def xshare_mirror_apply(self, d):
+        """Spoke side: the hub's long-poll reply carries its registry (`xshare`, `xshareVer`) -> our copy."""
+        if isinstance(d, dict) and isinstance(d.get("xshare"), list):
+            self._xs("mirror").replace(d["xshare"], d.get("xshareVer"))
+            self._xs_mirror_at = time.time()
+
+    def xshare_post(self, p, bearer, peer=""):
+        """POST /api/xshare. Bearer = a member token of room A (the stream's room) that publishes under <A>/<host>;
+        body {path, to:[slug], tokens:{slug: member token for that room}, label?, kind?, by?, stop?}.
+        -> {ok, expires, to:[accepted], refused:{slug: why}} (+ hubDown on a spoke whose hub is unreachable).
+        stop=true removes the listings of `path` in `to` (all of them when `to` is empty) and needs the A token only."""
+        now = time.time()
+        p = p if isinstance(p, dict) else {}
+        tok = str(bearer or "")
+        tok = tok[7:].strip() if tok.lower().startswith("bearer ") else ""
+        claims = verify_token(tok, self.key, now) if tok else None
+        if not claims:
+            return {"ok": False, "error": "token refused"}, 403
+        if is_relay_claims(claims):
+            return {"ok": False, "error": "a member token is required"}, 403
+        room, host = claims_identity(claims)
+        if not room or not host:
+            return {"ok": False, "error": "this token names no room and host"}, 403
+        bans = getattr(self, "bans", None)
+        if bans and bans.hit(room, host, peer, now):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
+        if "**" not in puts and (room + "/" + host) not in puts:
+            return {"ok": False, "error": "this token does not publish media"}, 403
+        path, to, label, kind, by, stop = xshare_body(p)
+        if not xshare_path_ok(path, room, host):
+            return {"ok": False, "error": "not a stream of this token's host in this room"}, 403
+        spoke = self._xs_spoke()
+        if stop:
+            want = set(to) or None
+            gone = set(self._xs("local").drop(path, want)) | set(self._xs("mirror").drop(path, want))
+            out = {"ok": True, "to": [], "stopped": [], "refused": {}}
+            if spoke:
+                d, code = self._xs_hub({"op": "xshare", "vouch": "member", "stop": True, "path": path, "from": room,
+                                        "host": host, "to": to})
+                if d is not None and code == 200:
+                    gone |= set(d.get("to") or [])
+                elif d is None:
+                    out["hubDown"] = True
+            elif gone:
+                self._xs_changed()
+            if gone:
+                self.log("relay auth: %s no longer listed in %s" % (path, ", ".join(sorted(gone))))
+            out["to"] = out["stopped"] = sorted(gone)
+            return out, 200
+        if not to:
+            return {"ok": False, "error": "no target rooms"}, 400
+        toks = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
+        refused, ok_to = {}, []
+        for b in to:
+            if not SLUG_RE.match(b):
+                refused[b] = "bad room name"
+                continue
+            if b == room:
+                refused[b] = "the stream's own room"
+                continue
+            c = verify_token(str(toks.get(b) or ""), self.key, now)
+            if not c or is_relay_claims(c):
+                refused[b] = "no valid member token for that room"
+                continue
+            if c.get("get") != b:
+                refused[b] = "the token is not for that room"
+                continue
+            _rb, hb = claims_identity(c)
+            if bans and bans.hit(b, hb, peer, now):
+                refused[b] = "removed from that room by an admin"
+                continue
+            ok_to.append(b)
+        if not ok_to:
+            return {"ok": False, "error": "no room accepted the listing", "to": [], "refused": refused}, 403
+        out = None
+        if spoke:
+            d, code = self._xs_hub({"op": "xshare", "vouch": "member", "path": path, "from": room, "host": host,
+                                    "to": ok_to, "label": label, "kind": kind, "by": by})
+            if d is not None and code == 200:
+                acc = [b for b in (d.get("to") or []) if b in ok_to]
+                try:
+                    exp = int(d.get("expires"))
+                except (TypeError, ValueError):
+                    exp = int(now + XSHARE_TTL)
+                if acc:   # seen here at once; the next long-poll reply replaces the copy with the hub's own
+                    self._xs("mirror").apply(path, room, acc, label, kind, by, now, ttl=max(1, exp - now))
+                for k, v in (d.get("refused") or {}).items():
+                    refused[str(k)[:40]] = str(v)[:80]
+                out = {"ok": bool(acc), "expires": exp, "to": acc, "refused": refused}
+            elif d is not None:
+                return {"ok": False, "error": str(d.get("error") or "the hub refused")[:120], "to": [], "refused": refused}, code
+        if out is None:   # a hub, a lone relay, or a spoke whose hub is out of reach (kept here meanwhile)
+            acc, ref = self._xs_local(path, room, ok_to, label, kind, by, now)
+            refused.update(ref)
+            out = {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused}
+            if spoke:
+                out["hubDown"] = True
+        if not out["to"]:
+            out["error"] = "no room accepted the listing"
+            return out, 403
+        return out, 200
+
+    def _xs_fed(self, p):
+        """Hub side of op "xshare" (rooms_fed already checked the federation bearer): {vouch:"member", path, from,
+        host, to, label?, kind?, by?, stop?} -- the spoke verified the member tokens with its own key."""
+        if p.get("vouch") != "member":
+            return {"ok": False, "error": "the spoke must vouch for the member"}, 403
+        now = time.time()
+        frm, host = str(p.get("from") or ""), str(p.get("host") or "")
+        path, to, label, kind, by, stop = xshare_body(p)
+        if not SLUG_RE.match(frm) or not HOST_RE.match(host) or not xshare_path_ok(path, frm, host):
+            return {"ok": False, "error": "bad listing"}, 400
+        bans = getattr(self, "bans", None)
+        if bans and bans.hit(frm, host, None, now):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        if stop:
+            gone = self._xs("local").drop(path, set(to) or None)
+            if gone:
+                self._xs_changed()
+                self.log("relay auth: %s no longer listed in %s (via a spoke)" % (path, ", ".join(gone)))
+            return {"ok": True, "to": gone, "stopped": gone, "refused": {}}, 200
+        refused, ok_to = {}, []
+        for b in to:
+            if not SLUG_RE.match(b):
+                refused[b] = "bad room name"
+            elif b == frm:
+                refused[b] = "the stream's own room"
+            else:
+                ok_to.append(b)
+        acc, ref = self._xs_local(path, frm, ok_to, label, kind, by, now, via="via a spoke") if ok_to else ([], {})
+        refused.update(ref)
+        return {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused}, 200
+
+    def xshare_get(self, room, bearer=None, jwt=None, peer=""):
+        """GET /api/xshare?room=<B>: the live listings into B -> {ok, room, items:[{path, from, label, kind, by, exp}],
+        ver} (+ hubDown). Needs a member token for B (Bearer or ?jwt=; a federation token also reads); the relay box's
+        own page (a loopback peer) reads without one."""
+        now = time.time()
+        room = str(room or "")
+        if not SLUG_RE.match(room):
+            return {"ok": False, "error": "room required"}, 400
+        tok = str(bearer or "")
+        tok = tok[7:].strip() if tok.lower().startswith("bearer ") else ""
+        tok = tok or str(jwt or "")
+        if tok:
+            claims = verify_token(tok, self.key, now)
+            if not claims or not (is_relay_claims(claims) or claims_cover(claims, room)):
+                return {"ok": False, "error": "a member token for this room is required"}, 403
+            r0, h0 = claims_identity(claims)
+            bans = getattr(self, "bans", None)
+            if r0 and bans and bans.hit(r0, h0, peer, now):
+                return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        elif not is_loopback_addr(peer):
+            return {"ok": False, "error": "a member token for this room is required"}, 403
+        reg, down = self._xs_view(now)
+        items = [{k: e[k] for k in ("path", "from", "label", "kind", "by", "exp")} for e in reg.into(room, now)]
+        out = {"ok": True, "room": room, "items": items, "ver": reg.ver}
+        if down:
+            out["hubDown"] = True
+        return out, 200
 
     # ---- 0.17.0: relay-side kicks --------------------------------------------------------
     # The relay answers to us for every session: a banned identity is refused at connect,
@@ -2282,7 +2774,8 @@ class AuthService:
                    "rtsp": list(self.cmd.get("rtsp") or []),             # 0.21.16: the hub operator's RTSP switch for a spoke
                    "rehome": self.cmd.get("rehome"),                      # 0.21.26: 0.21.25 raised it but never sent it (spokes got it from the 403 hint)
                    "updateOne": list(self.cmd.get("updateOne") or [])}   # 0.21.26: one spoke at a time
-        return {"bans": rows, "ver": ver, "cmd": cmd}, 200   # 0.21.0: + the hub's command channel
+        xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
+        return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver}, 200   # 0.21.0: + the hub's command channel
 
     def fanout_bans(self):
         """Hub side: nudge every registered spoke (no data -- each pulls with its own token)."""
@@ -2356,6 +2849,7 @@ class AuthService:
             self.hub_ver = int(d.get("ver")) if d.get("ver") is not None else self.hub_ver
         except (TypeError, ValueError):
             pass
+        self.xshare_mirror_apply(d)   # 0.21.41
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed
         cmd = d.get("cmd") if isinstance(d.get("cmd"), dict) else None

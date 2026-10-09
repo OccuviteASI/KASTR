@@ -550,10 +550,13 @@
   #stage .pane:has(> .mediabar:not([hidden])) .zoomctl, #stage .pubpane:has(> .mediabar:not([hidden])) .zoomctl,
   #stage .pane:has(> .mediabar:not([hidden])) .mchip, #stage .pubpane:has(> .mediabar:not([hidden])) .mchip,
   #stage .pane:has(> .mediabar:not([hidden])) .vchip, #stage .pubpane:has(> .mediabar:not([hidden])) .vchip { bottom:78px; }
-  .zoomctl button { min-width:26px; height:24px; padding:0 6px; background:rgba(10,14,18,.72); color:#fff; border:1px solid rgba(255,255,255,.25);
-    border-radius:5px; cursor:pointer; font-size:12px; line-height:1; }
+  /* 0.21.41 (Kenton: "the zoom and + - buttons are quite big. The % should only show when zooming in/out and should be smaller
+     for the + and - when showing") */
+  .zoomctl button { min-width:20px; height:20px; padding:0 4px; background:rgba(10,14,18,.72); color:#fff; border:1px solid rgba(255,255,255,.25);
+    border-radius:4px; cursor:pointer; font-size:12px; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
   .zoomctl button:hover { background:rgba(10,14,18,.9); }
-  .zoomctl .zpct { min-width:44px; font-family:var(--font-mono); font-size:11px; }
+  .zoomctl .zpct { display:none; min-width:38px; font-family:var(--font-mono); font-size:10px; }
+  .zoomctl.zchg .zpct { display:inline-flex; }   /* 0.21.41: for 1.5 s after the zoom changes */
   #stage .pane.zoomed, #stage .pubpane.zoomed { cursor:grab; }
   /* camera faces never show the equalizer (0.8.8) */
   #stage .pane.camera .face canvas.eq { display:none; }
@@ -1013,14 +1016,46 @@
   .sbcard:hover .sbx, .sbcard .sbx:focus-visible { visibility:visible; }
   .sbcard .sbx:hover { color:var(--asi-red); }
   body.sb-collapsed .sbcard .sbx { display:none; }
-  .sbcard .sbname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--text); }
-  .sbcard .sbmeta { display:flex; align-items:center; gap:8px; margin:3px 0 0 35px; font:10px var(--font-mono); color:var(--text-mute);
+  .sbcard .sbhd { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; column-gap:10px; row-gap:3px; }   /* 0.21.41 */
+  .sbcard .sbname { flex:0 1 auto; max-width:100%; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--text); }
+  .sbcard .sbmeta { flex:none; display:flex; align-items:center; gap:8px; margin:0; font:10px var(--font-mono); color:var(--text-mute);
     font-variant-numeric:tabular-nums; white-space:nowrap; }
   .sbcard .sbmeta .icon { width:10px; height:10px; }
   .sbcard .sbmembers { list-style:none; margin:4px 0 0 35px; padding:0; display:flex; flex-direction:column; gap:2px; }
   .sbcard .sbm { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-dim); min-width:0; }
-  .sbcard .sbm .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .sbcard .sbm .role { font:10px var(--font-mono); color:var(--text-mute); flex:none; }
+  .sbcard .sbm .nm { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 4px; margin-left:-4px; border-radius:4px; }   /* 0.21.41: hugs the name (the ring goes around it) */
+  /* 0.21.41 (Kenton: "The user in a room should get a highlight or border when audio is playing, similar to the user rail on
+     the right. But this is just around their name in the left rail"): the same blue ring as a speaking tile */
+  .sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--asi-blue); color:var(--text); }
+  /* 0.21.41: "Also show in other rooms" picker */
+  #xsPop { position:fixed; z-index:120; width:280px; max-height:70vh; overflow:auto; background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; box-shadow:var(--shadow-pop, 0 10px 30px rgba(0,0,0,.45)); padding:10px 12px; font-size:12px; color:var(--text); }
+  #xsPop h4 { margin:0 0 4px; font-size:12px; font-weight:600; }
+  #xsPop .xshint { color:var(--text-mute); font-size:11px; margin:0 0 8px; }
+  #xsPop .xsrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
+  #xsPop .xsrow input[type=password] { flex:1; min-width:0; font-size:11px; padding:3px 6px; }
+  #xsPop .xsrow .lk { color:var(--text-mute); font-size:10px; }
+  #xsPop .xsbtns { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
+  #xsPop .xserr { color:var(--asi-red); font-size:11px; min-height:0; }
+  /* 0.21.41 (Kenton: "allow mute/unmute/spotlight, etc from the left side rail on a user"): the person's menu */
+  .sbcard .sbm .mm { flex:none; margin-left:auto; display:none; width:18px; height:18px; padding:0; border:0; border-radius:4px; background:none; color:var(--text-mute); cursor:pointer; align-items:center; justify-content:center; }
+  .sbcard .sbm .mm .icon { width:13px; height:13px; }
+  .sbcard .sbm.menuable:hover .mm, .sbcard .sbm.menuable.open .mm { display:inline-flex; }
+  .sbcard .sbm.menuable:hover .role, .sbcard .sbm.menuable.open .role { display:none; }
+  .sbcard .sbm .mm:hover { background:var(--surface-3, rgba(255,255,255,.08)); color:var(--text); }
+  /* 0.21.41 (Kenton: "an option to collapse the users in the rooms and only show the other info") */
+  body.sb-nopeople .sbcard .sbmembers { display:none; }
+  .sbhead { position:relative; }
+  /* 0.21.41 (Kenton: "Move the Create Room button to the right of the Rooms and server info with just a + in a circle") */
+  .sbhead .sbtools { position:absolute; top:4px; right:2px; display:flex; gap:2px; }
+  .sbhead .sbnew .icon { width:18px; height:18px; }
+  .sbfoot { display:none; }
+  body.sb-collapsed .sbfoot { display:block; }   /* the icon rail has no header: its "+" stays at the bottom */
+  .sbhead .sbppl { flex:none; width:24px; height:24px; padding:0; border:0; border-radius:5px; background:none; color:var(--text-mute); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+  .sbhead .sbppl .icon { width:15px; height:15px; }
+  .sbhead .sbppl:hover { background:var(--surface-3, rgba(255,255,255,.08)); color:var(--text); }
+  body.sb-nopeople .sbhead .sbppl { color:var(--asi-blue); }
+  .sbcard .sbm .role { font:10px var(--font-mono); color:var(--text-mute); flex:none; margin-left:auto; }
   .sbcard .sbm .role .icon { width:13px; height:13px; display:block; }   /* 0.21.22: eye / broadcast mark */
   /* speaking icon: hidden until someone talks (the Discord green speaker) */
   .spk { display:inline-flex; width:13px; height:13px; color:var(--asi-green); visibility:hidden; flex:none; }
@@ -1320,6 +1355,7 @@
     body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
     body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
     body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
+    body.sb-collapsed .sbfoot { display:none; }   /* 0.21.41: the phone drawer shows the header, whose circled + creates */
     body.sb-collapsed .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
     body.sb-collapsed .sbgroup { height:28px; padding:0 4px; margin-top:4px; gap:5px; justify-content:flex-start; border-top:0; border-radius:6px; }   /* 0.15.0 (B4) */
     body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:revert; }
@@ -1363,7 +1399,7 @@
      it works before joining. -->
 <div id="sbScrim"></div>
 <aside id="sidebar">
-  <div class="sbhead"><span class="sbtitle">Rooms</span><span class="sbhost" id="sbHost"></span></div>
+  <div class="sbhead"><span class="sbtitle">Rooms</span><span class="sbhost" id="sbHost"></span><span class="sbtools"><button type="button" id="sbPeopleTog" class="sbppl" title="Hide the people in each room"></button><button type="button" id="sbCreateHd" class="sbppl sbnew" title="Create a room"></button></span></div>
   <div id="sbRooms" class="sbrooms"></div>
   <div id="sbFormHome"><div id="sbForm" hidden></div></div>
   <div id="sbGrip" title="Drag to resize"></div>
@@ -1658,17 +1694,21 @@
     <div id="micRadios" class="radios"></div>
     <div class="row lvlrow"><span class="vic" id="micIco"></span><div class="lvlbar" id="micLevel"><i></i></div></div>
     <div id="micTestNote"></div>
-    <div class="sw"><span>Noise suppression</span>
-      <label class="switch"><input type="checkbox" id="nsToggle"><i></i></label></div>
+    <div class="sw"><label class="switch"><input type="checkbox" id="nsToggle"><i></i></label>
+      <span>Noise suppression</span></div>
     <div class="radios sub" id="nsModes">
       <label class="rd" title="The browser's own echo cancellation, gain control and light noise suppression"><input type="radio" name="nsmode" id="nsBrowser" value="browser"><span>Browser built-in (light)</span></label>
       <label class="rd" title="RNNoise: an open-source neural denoiser running in an AudioWorklet on this machine, on top of the browser's suppression (adds ~40 ms)"><input type="radio" name="nsmode" id="nsRnnoise" value="rnnoise" checked><span>Background noise removal (RNNoise)</span></label>
     </div>
-    <div class="sw" id="visoRow" hidden title="Offered only when this microphone's driver reports the effect"><span>Voice isolation (system)</span>
-      <label class="switch"><input type="checkbox" id="visoToggle"><i></i></label></div>
+    <div class="sw" id="visoRow" hidden title="Offered only when this microphone's driver reports the effect"><label class="switch"><input type="checkbox" id="visoToggle"><i></i></label>
+      <span>Voice isolation (system)</span></div>
     <!-- 0.21.23: the listener's ladder (audio before video on a weak connection) -->
-    <div class="sw" title="When audio arrives late or gets skipped, video from people not on the stage pauses first (their sound keeps playing); it comes back after two quiet minutes"><span>Keep audio clear on a weak connection</span>
-      <label class="switch"><input type="checkbox" id="congestToggle"><i></i></label></div>
+    <div class="sw" title="When audio arrives late or gets skipped, video from people not on the stage pauses first (their sound keeps playing); it comes back after two quiet minutes"><label class="switch"><input type="checkbox" id="congestToggle"><i></i></label>
+      <span>Keep audio clear on a weak connection</span></div>
+    <!-- 0.21.41 (Kenton: "auto detect when a mic has unmuted and unmute in KASTR ... it works on Teams") -->
+    <div class="sw" title="When your headset or microphone is muted or unmuted on the device itself (its button, or Windows), KASTR's mic follows"><label class="switch"><input type="checkbox" id="hwFollowToggle"><i></i></label>
+      <span>Follow my microphone's mute button</span></div>
+    <button class="opt" id="hidConnect" type="button" hidden title="Headsets such as Jabra, Poly, EPOS or Yealink: their mute button works with KASTR and their mute light shows KASTR's mute">Use my headset's buttons&hellip;</button>
     <button class="opt more" id="micMore" type="button">More audio settings</button>
   </div>
 </div>
@@ -1714,6 +1754,8 @@
     <button class="opt" id="optRec" type="button"><span class="oi rec"></span>Record</button>
     <button class="opt" id="optRoom" type="button"><span class="oi">&#9432;</span>Room info</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
+    <!-- 0.21.41 (Kenton: "share from 1 device to multiple rooms ... a room selection on the share after toggling the feature on") -->
+    <button class="opt" id="optXshare" type="button" title="Offer to show what you share in other rooms too (one stream -- no extra upload)"><span class="oi">&#10697;</span>Share to several rooms<span class="chk">&#10003;</span></button>
     <button class="opt" id="optDeafen" type="button" title="Turn off all sound from the room and mute your microphone (D)"><span class="oi">&#127911;</span>Deafen<span class="chk">&#10003;</span></button>
     <!-- 0.21.23 (Kenton): Files, Chat, Video effects and Audio settings left More -- they live on the toolbar and under
          the camera / mic chevrons. Files stays for phones only, whose toolbar has no Files button. -->
@@ -2254,6 +2296,7 @@
   // by --lvl (0..1) on any ancestor -- no <defs>, no clipPath ids, so the
   // string can be stamped into innerHTML any number of times.
   const ICONS = {
+    plusc: '<circle cx="10" cy="10" r="7.6"/><path d="M10 6.6v6.8M6.6 10h6.8"/>',   // 0.21.41: create a room
     earOff: '<path d="M4 12.5V10a6 6 0 0 1 12 0v2.5"/><rect x="2.8" y="11.5" width="3.6" height="5.7" rx="1.2"/><rect x="13.6" y="11.5" width="3.6" height="5.7" rx="1.2"/><path d="M2.5 2.5l15 15"/>',   // 0.21.40: deafened
     bcast: '<circle cx="10" cy="10" r="1.9"/><path d="M6.8 6.6a4.8 4.8 0 0 0 0 6.8M13.2 6.6a4.8 4.8 0 0 1 0 6.8M4.3 4.1a8.4 8.4 0 0 0 0 11.8M15.7 4.1a8.4 8.4 0 0 1 0 11.8"/>',   // 0.21.22: publishing
     eye: '<path d="M1.5 10S4.6 4.5 10 4.5 18.5 10 18.5 10 15.4 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.6"/>',   // 0.21.19: view only
@@ -2395,7 +2438,7 @@
     log(why + " \u2014 re-subscribing: " + shortLabel(name));
     try {
       t.watch.removeAttribute("url");
-      setTimeout(() => { if (tiles.has(name) && !parkedStreams.has(name) && t.watch.getAttribute("visible") !== "never") t.watch.setAttribute("url", withToken(urlInput.value.trim())); }, 400);
+      setTimeout(() => { if (tiles.has(name) && !parkedStreams.has(name) && t.watch.getAttribute("visible") !== "never") t.watch.setAttribute("url", tileUrl(name)); }, 400);
     } catch {}
     t.lastFrames = 0; t.framesSince = undefined; t.pictureStopped = false;
   }
@@ -2420,7 +2463,7 @@
       log("Stream stalled \u2014 re-subscribing: " + shortLabel(name));
       try {
         t.watch.removeAttribute("url");
-        setTimeout(() => { if (tiles.has(name) && !parkedStreams.has(name) && t.watch.getAttribute("visible") !== "never") t.watch.setAttribute("url", withToken(urlInput.value.trim())); }, 400);
+        setTimeout(() => { if (tiles.has(name) && !parkedStreams.has(name) && t.watch.getAttribute("visible") !== "never") t.watch.setAttribute("url", tileUrl(name)); }, 400);
       } catch {}
     }
   }
@@ -2662,6 +2705,7 @@
     topCamChev.innerHTML = icon("chevron");
     const joining = window.__join?.state?.() === "joining";
     for (const el of [topMicBtn, topMicChev, topCamBtn, topCamChev]) el.disabled = joining;
+    try { hidSync(); } catch {}   // 0.21.41: the headset's mute light
   }
   // 0.8.8: a viewer join has no camera slot; the toolbar buttons add one on
   // demand -- the exact joinNow sequence (permission, addSource, start, live).
@@ -2716,6 +2760,336 @@
     window.__toast?.(on ? "Deafened — you hear nothing and your mic is muted" : "Undeafened", 2500, { level: "event" });
   }
   window.__deafen = (on) => setDeafen(on === undefined ? !deafened : !!on);   // rig
+
+  // ---- 0.21.41 (Kenton: "the ability to share from 1 device to multiple rooms"): ONE stream, LISTED in other rooms --------
+  // The share stays where it is (<room A>/<host>/<op>/<leaf>.hang). The host's minter keeps a cross-listing (POST
+  // /api/xshare, proven by my token for A and a member token for each other room, refreshed every 60 s, gone 3 min after the
+  // last refresh); members of a listed room see it as a tile (GET /api/xshare?room=B) and their relay session is granted
+  // read on that one path. No extra upload. More > "Share to several rooms" turns the offer on.
+  const XS_KEY = "kastr.xshare.on";
+  const xsOn = () => { try { return localStorage.getItem(XS_KEY) === "on"; } catch { return false; } };
+  const xsMine = new Map();   // my own source path -> { rooms: Set<slug>, tokens: {slug: jwt}, label, kind }
+  const xsTiles = new Map();  // a foreign path listed into my room -> { from, label, by, kind }
+  window.__xs = { mine: xsMine, tiles: xsTiles };   // rig
+  // a stream listed from another room rides its OWN relay connection: tiles with one URL share one connection, and that
+  // session was granted before the listing existed -- a distinct URL opens a new session, which the relay grants the path
+  function tileUrl(name) {
+    const u = withToken(urlInput.value.trim());
+    const x = xsTiles.get(name);
+    return x ? u + (u.includes("?") ? "&" : "?") + "xs=" + encodeURIComponent(x.from) : u;
+  }
+  function paintXsOpt() { document.getElementById("optXshare")?.classList.toggle("on", xsOn()); }
+  paintXsOpt();
+  document.getElementById("optXshare").addEventListener("click", () => {
+    const on = !xsOn();
+    try { localStorage.setItem(XS_KEY, on ? "on" : "off"); } catch {}
+    closeAllPops(); paintXsOpt();
+    if (!on) { for (const p of [...xsMine.keys()]) xsStop(p); }
+    window.__toast?.(on ? "Share to several rooms: on \u2014 each share's menu (and a prompt when you start one) offers other rooms" : "Share to several rooms: off", 4000, { level: "event" });
+  });
+  async function xsTokenFor(slug, code) {   // a member token for another room, minted beside mine (never replaces mine)
+    if (!authSecured) return "";
+    const base = authBase();
+    const r = await fetch(base + "/api/token", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ room: slug, code: authCodes ? (authAccessCode || "") : ((authAccessCode || "") || (code || "")), roomCode: code || "",
+                             host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok || !d.tokens?.member) throw new Error(d.error || ("refused (" + r.status + ")"));
+    return d.tokens.member;
+  }
+  function xsKindOf(path) {
+    const leaf = String(path).split("/").pop().replace(/\.hang$/, "");
+    return /^camera/.test(leaf) ? "camera" : /grid/.test(leaf) ? "grid" : /^screen|window|tab/.test(leaf) ? "screen" : /^rtsp/.test(leaf) ? "rtsp" : /^media|file/.test(leaf) ? "media" : "other";
+  }
+  async function xsPost(path, opts) {
+    const x = xsMine.get(path);
+    const base = authBase();
+    if (!base) return null;
+    const stop = !!opts?.stop;
+    const to = opts?.to || (x ? [...x.rooms] : []);
+    const body = { path, from: CHANNEL, to, label: x?.label || shortLabel(path), kind: x?.kind || xsKindOf(path),
+                   by: window.__publisher?.state?.()?.operator || "", tokens: stop ? {} : (x?.tokens || {}), stop };
+    const headers = { "content-type": "application/json" };
+    if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;
+    try {
+      const r = await fetch(base + "/api/xshare", { method: "POST", headers, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!stop && x && d.refused && typeof d.refused === "object") {
+        for (const [slug, why] of Object.entries(d.refused)) {
+          x.rooms.delete(slug); delete x.tokens[slug];
+          window.__toast?.("Not shown in " + slug + ": " + why, 5000, { level: "warn" });
+        }
+      }
+      return d;
+    } catch { return null; }
+  }
+  function xsStop(path) {
+    const x = xsMine.get(path);
+    xsMine.delete(path);
+    if (x && x.rooms.size) xsPost(path, { stop: true, to: [...x.rooms] });
+  }
+  setInterval(() => {   // refresh my listings; drop the ones whose share ended or whose room I left
+    if (!xsMine.size) return;
+    for (const p of [...xsMine.keys()]) {
+      if (!p.startsWith(CHANNEL + "/") || !mineNames.has(p)) { xsStop(p); continue; }
+      if (xsMine.get(p).rooms.size) xsPost(p);
+    }
+  }, 60000);
+  function xsClosePicker() { document.getElementById("xsPop")?.remove(); }
+  function openXsPicker(path, anchor) {
+    xsClosePicker();
+    const x = xsMine.get(path) || { rooms: new Set(), tokens: {}, label: shortLabel(path), kind: xsKindOf(path) };
+    const rooms = (lastChannelList || []).filter((r) => r.slug !== CHANNEL).sort((a, b) => a.slug.localeCompare(b.slug));
+    const pop = document.createElement("div"); pop.id = "xsPop";
+    pop.innerHTML = '<h4></h4><p class="xshint">One stream \u2014 people in the rooms you tick see it too. Nothing extra is uploaded.</p><div class="xslist"></div><div class="xserr"></div><div class="xsbtns"><button type="button" class="ghost xscancel">Cancel</button><button type="button" class="primary xsok">Apply</button></div>';
+    pop.querySelector("h4").textContent = "Also show \u201c" + x.label + "\u201d in";
+    const list = pop.querySelector(".xslist");
+    if (!rooms.length) list.textContent = "No other rooms on this relay yet.";
+    const rows = [];
+    for (const r of rooms) {
+      const row = document.createElement("label"); row.className = "xsrow";
+      const sw = document.createElement("span"); sw.className = "switch sm";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = x.rooms.has(r.slug);
+      sw.append(cb, document.createElement("i"));
+      const nm = document.createElement("span"); nm.textContent = r.slug;
+      row.append(sw, nm);
+      let code = null;
+      if (r.locked && !x.tokens[r.slug]) {
+        const lk = document.createElement("span"); lk.className = "lk"; lk.textContent = "locked";
+        code = document.createElement("input"); code.type = "password"; code.placeholder = "room code"; code.hidden = !cb.checked;
+        cb.addEventListener("change", () => { code.hidden = !cb.checked; if (cb.checked) code.focus(); });
+        row.append(lk, code);
+      }
+      list.appendChild(row);
+      rows.push({ slug: r.slug, cb, code });
+    }
+    pop.querySelector(".xscancel").addEventListener("click", xsClosePicker);
+    pop.querySelector(".xsok").addEventListener("click", async () => {
+      const err = pop.querySelector(".xserr"); err.textContent = "";
+      const add = [], drop = [];
+      for (const r of rows) { if (r.cb.checked && !x.rooms.has(r.slug)) add.push(r); else if (!r.cb.checked && x.rooms.has(r.slug)) drop.push(r.slug); }
+      for (const r of add) {
+        try { x.tokens[r.slug] = await xsTokenFor(r.slug, r.code?.value || ""); x.rooms.add(r.slug); }
+        catch (e) { err.textContent = r.slug + ": " + (e?.message || e); return; }
+      }
+      for (const slug of drop) { x.rooms.delete(slug); delete x.tokens[slug]; }
+      if (drop.length) xsPost(path, { stop: true, to: drop });
+      if (x.rooms.size) { xsMine.set(path, x); await xsPost(path); } else xsMine.delete(path);
+      xsClosePicker();
+      window.__toast?.(x.rooms.size ? "Also showing in " + [...x.rooms].join(", ") : "Shown in this room only", 3500, { level: "event" });
+    });
+    document.body.appendChild(pop);
+    const a = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2 - 140, bottom: 120, top: 120 };
+    pop.style.left = Math.max(8, Math.min(innerWidth - 296, a.left)) + "px";
+    pop.style.top = Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, a.bottom + 6)) + "px";
+    setTimeout(() => {
+      const off = (e) => { if (!pop.isConnected) { document.removeEventListener("pointerdown", off, true); return; } if (!pop.contains(e.target)) { xsClosePicker(); document.removeEventListener("pointerdown", off, true); } };
+      document.addEventListener("pointerdown", off, true);
+    }, 0);
+  }
+  window.__xsPicker = openXsPicker;   // rig
+  // a new share of mine while the switch is on: offer the picker (once per share)
+  const xsOffered = new Set();
+  function xsOfferNew() {
+    if (!xsOn() || joinState !== "joined") return;
+    for (const p of mineNames) {
+      if (xsOffered.has(p) || !p.startsWith(CHANNEL + "/")) continue;
+      xsOffered.add(p);
+      if (!(lastChannelList || []).some((r) => r.slug !== CHANNEL)) continue;
+      window.__toast?.("Also show " + shortLabel(p) + " in other rooms?", 8000, { level: "event", action: { label: "Choose rooms", fn: () => openXsPicker(p, document.getElementById("shareBtn")) } });
+    }
+  }
+  // members' side: what is listed into my room becomes a tile (the tile's own relay session is granted that path)
+  let xsBusy = false;
+  async function xsPoll() {
+    if (xsBusy || !window.__joinedChannel?.() || publishOnly) return;
+    const base = authBase();
+    if (!base) return;
+    xsBusy = true;
+    let d = null;
+    try {
+      const headers = (authSecured && authTokens?.member) ? { authorization: "Bearer " + authTokens.member } : {};   // a header, never the URL (logs)
+      const r = await fetch(base + "/api/xshare?room=" + encodeURIComponent(CHANNEL), { cache: "no-store", headers });
+      d = r.ok ? await r.json() : null;
+    } catch {}
+    xsBusy = false;
+    if (!d || !d.ok || d.room !== CHANNEL) return;
+    const live = new Set();
+    const me = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    for (const it of d.items || []) {
+      const p = String(it.path || "");
+      const parts = p.split("/");
+      if (!p.endsWith(".hang") || parts.length < 4 || p.startsWith(CHANNEL + "/")) continue;
+      if (parts[1] === HOSTNAME1 && String(parts[2]).toLowerCase() === me) continue;   // my own share, listed back into my room
+      live.add(p);
+      xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || "") });
+      if (!tiles.has(p)) { cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }
+    }
+    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p)) scheduleRemoveTile(p); }
+  }
+  setInterval(() => { xsPoll(); xsOfferNew(); }, 8000);
+  window.__xsPoll = xsPoll;   // rig
+
+  // ---- 0.21.41 (Kenton): the microphone's OWN mute button drives KASTR's mic -------------------------------------
+  // Two sources, both only followed (KASTR never changes the device):
+  //  (1) Windows: the capture endpoint's mute (headset / USB-mic switches and laptop mic keys flip it) -- the host polls
+  //      it (GET /api/mic/hwmute, this machine's window only) and the page follows a change on the mic it uses;
+  //  (2) WebHID telephony headsets (Jabra, Poly, EPOS, Yealink): the Phone Mute button toggles KASTR's mic, and KASTR's
+  //      mute lights the headset's mute LED (Off-Hook is held while joined -- many headsets ignore the button otherwise).
+  const hwFollowEl = document.getElementById("hwFollowToggle");
+  const hwFollowOn = () => { try { return localStorage.getItem("kastr.mic.hwfollow") !== "off"; } catch { return true; } };
+  hwFollowEl.checked = hwFollowOn();
+  hwFollowEl.addEventListener("change", () => { try { localStorage.setItem("kastr.mic.hwfollow", hwFollowEl.checked ? "on" : "off"); } catch {} hwMuteSeen = null; });
+  function setMicFromDevice(muted, why) {   // the device says muted / unmuted
+    const { src } = localCamSrc();
+    if (!src) return;
+    if (!muted && deafened) { setDeafen(false); }   // unmuting on the device undeafens (as the Mic button does)
+    if (!!src.micMuted === !!muted) return;
+    src.micMuted = !!muted;
+    sendControl(window.__publisher.peer, src.id, { micMuted: src.micMuted });
+    renderMine();
+    window.__toast?.((muted ? "Mic muted" : "Mic unmuted") + " \u2014 " + why, 2500, { level: "event" });
+  }
+  function hwMicName() {
+    const { rec } = localCamSrc();
+    const pub = window.__publisher;
+    const mics = rec?.mics ?? pub?.devices?.().mics ?? [];
+    const cur = rec?.micDevice ?? pub?.state?.().micDevice ?? "";
+    const m = cur && cur !== "system-default" ? mics.find((x) => x.deviceId === cur) : null;
+    return String(m?.label || pub?.devices?.().defaultMic || "").replace(/^(Default|Communications)\s*-\s*/i, "").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "").trim().toLowerCase();
+  }
+  function hwPickEndpoint(eps, name) {
+    const n = (e) => String(e.name || "").toLowerCase();
+    return (name && eps.find((e) => n(e) === name)) || (name && eps.find((e) => n(e) && (name.startsWith(n(e)) || n(e).startsWith(name)))) || eps.find((e) => e.default) || null;
+  }
+  window.__hwPickEndpoint = hwPickEndpoint;   // rig
+  let hwMuteSeen = null, hwMuteBusy = false;
+  async function hwMuteTick() {
+    if (IS_WEB || hwMuteBusy || joinState !== "joined" || !hwFollowOn()) return;
+    const { src } = localCamSrc();
+    if (!src) { hwMuteSeen = null; return; }
+    hwMuteBusy = true;
+    let d = null;
+    try { d = await (await fetch("/api/mic/hwmute", { cache: "no-store" })).json(); } catch {}
+    hwMuteBusy = false;
+    if (!d || !d.supported || !Array.isArray(d.endpoints) || !d.at) return;
+    const ep = hwPickEndpoint(d.endpoints, hwMicName());
+    if (!ep) return;
+    const key = ep.name + "|" + (ep.muted ? 1 : 0);
+    const was = hwMuteSeen;
+    hwMuteSeen = key;
+    if (was === null || !was.startsWith(ep.name + "|")) {   // first look at this mic: only a MUTED device acts (never unmute by surprise)
+      if (ep.muted) setMicFromDevice(true, ep.name + " is muted");
+      return;
+    }
+    if (was !== key) setMicFromDevice(ep.muted, ep.name);
+  }
+  setInterval(hwMuteTick, 1000);
+  window.__hwMuteTick = hwMuteTick;   // rig
+
+  // WebHID telephony headsets
+  const HID_TEL = 0x0B, HID_LED = 0x08, U_MUTE = 0x2F, U_HOOK = 0x20, L_MUTE = 0x09, L_OFFHOOK = 0x17;
+  const hid = { dev: null, inMute: null, outLeds: null, lastBit: 0, sent: "" };
+  // every field of every report: [{reportId, kind, bitOffset, size, usage(extended)}], from the device's descriptor
+  function hidFields(dev) {
+    const out = [];
+    const seen = new Set();
+    const walk = (cols) => {
+      for (const c of cols || []) {
+        for (const kind of ["inputReports", "outputReports"]) {
+          for (const r of c[kind] || []) {
+            const k = kind + ":" + r.reportId;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            let bit = 0;
+            for (const it of r.items || []) {
+              const size = it.reportSize || 0, count = it.reportCount || 0;
+              const usages = it.isRange ? null : (it.usages || []);
+              for (let i = 0; i < count; i++) {
+                const u = it.isRange ? Math.min((it.usageMinimum || 0) + i, it.usageMaximum || 0) : (usages.length ? usages[Math.min(i, usages.length - 1)] : 0);
+                out.push({ reportId: r.reportId, kind, bitOffset: bit + i * size, size, usage: u });
+              }
+              bit += size * count;
+            }
+            out.push({ reportId: r.reportId, kind, total: bit });
+          }
+        }
+        walk(c.children);
+      }
+    };
+    walk(dev.collections);
+    return out;
+  }
+  window.__hidFields = hidFields;   // rig
+  const xu = (page, id) => ((page << 16) | id) >>> 0;
+  function hidAttach(dev) {
+    const f = hidFields(dev);
+    const inMute = f.find((x) => x.kind === "inputReports" && x.usage === xu(HID_TEL, U_MUTE));
+    if (!inMute) return false;
+    const outs = f.filter((x) => x.kind === "outputReports" && (x.usage === xu(HID_LED, L_MUTE) || x.usage === xu(HID_LED, L_OFFHOOK)));
+    const rid = outs[0]?.reportId;
+    const total = f.find((x) => x.kind === "outputReports" && x.reportId === rid && x.total)?.total || 0;
+    hid.dev = dev; hid.inMute = inMute; hid.lastBit = 0; hid.sent = "";
+    hid.outLeds = outs.length ? { reportId: rid, bytes: Math.ceil(total / 8), mute: outs.find((x) => x.usage === xu(HID_LED, L_MUTE)), hook: outs.find((x) => x.usage === xu(HID_LED, L_OFFHOOK)) } : null;
+    dev.oninputreport = (e) => {
+      if (!hwFollowOn() || e.reportId !== hid.inMute.reportId) return;
+      const o = hid.inMute.bitOffset, byte = e.data.byteLength > (o >> 3) ? e.data.getUint8(o >> 3) : 0;
+      const b = (byte >> (o & 7)) & 1;
+      if (b && !hid.lastBit) {   // the button went down: Phone Mute is a toggle
+        const { src } = localCamSrc();
+        if (src) setMicFromDevice(!src.micMuted, (dev.productName || "headset") + " button");
+      }
+      hid.lastBit = b;
+    };
+    hidSync(true);
+    paintHidRow();
+    return true;
+  }
+  window.__hidAttach = hidAttach;   // rig
+  function hidSync(force) {   // KASTR -> headset lights
+    if (!hid.dev || !hid.outLeds || !hid.dev.opened) return;
+    const { src } = localCamSrc();
+    const offHook = joinState === "joined" && !!src, mute = offHook && !!src.micMuted;
+    const sig = offHook + "|" + mute;
+    if (!force && sig === hid.sent) return;
+    hid.sent = sig;
+    const data = new Uint8Array(Math.max(1, hid.outLeds.bytes));
+    const set = (fld, on) => { if (fld && on) data[fld.bitOffset >> 3] |= 1 << (fld.bitOffset & 7); };
+    set(hid.outLeds.hook, offHook);
+    set(hid.outLeds.mute, mute);
+    hid.dev.sendReport(hid.outLeds.reportId, data).catch(() => {});
+  }
+  window.__hidSync = hidSync;   // rig
+  async function hidOpen(dev) {
+    try { if (!dev.opened) await dev.open(); } catch { return false; }
+    return hidAttach(dev);
+  }
+  function paintHidRow() {
+    const b = document.getElementById("hidConnect");
+    if (!b) return;
+    b.hidden = !navigator.hid;
+    b.textContent = hid.dev ? "Headset buttons: " + (hid.dev.productName || "connected") + " \u2713" : "Use my headset's buttons\u2026";
+    b.title = hid.dev ? "Click to stop using this headset's buttons" : "Headsets such as Jabra, Poly, EPOS or Yealink: their mute button works with KASTR and their mute light shows KASTR's mute";
+  }
+  document.getElementById("hidConnect").addEventListener("click", async () => {
+    if (!navigator.hid) return;
+    if (hid.dev) {   // forget it
+      try { hid.dev.oninputreport = null; await hid.dev.close(); await hid.dev.forget?.(); } catch {}
+      hid.dev = null; paintHidRow(); return;
+    }
+    let devs = [];
+    try { devs = await navigator.hid.requestDevice({ filters: [{ usagePage: HID_TEL }] }); } catch {}
+    for (const d of devs) if (await hidOpen(d)) { window.__toast?.("Headset buttons on: " + (d.productName || "headset"), 3000, { level: "event" }); return; }
+    if (devs.length) window.__toast?.("That device has no mute button KASTR can read.", 4000, { level: "warn" });
+  });
+  if (navigator.hid) {   // a headset allowed before reconnects by itself
+    navigator.hid.getDevices().then(async (ds) => { for (const d of ds) if (await hidOpen(d)) break; }).catch(() => {});
+    navigator.hid.addEventListener?.("connect", (e) => { if (!hid.dev) hidOpen(e.device); });
+    navigator.hid.addEventListener?.("disconnect", (e) => { if (hid.dev === e.device) { hid.dev = null; paintHidRow(); } });
+  }
+  paintHidRow();
   document.getElementById("optDeafen").addEventListener("click", () => { closeAllPops(); setDeafen(!deafened); });
   topMicBtn.addEventListener("click", () => {
     if (deafened) { const wasOn = deafMicWas; setDeafen(false); if (wasOn) return; }   // 0.21.40: unmuting the mic undeafens
@@ -3172,7 +3546,7 @@
     parkedStreams.delete(name);
     saveParked();
     saveEnabled();
-    if (!t.watch.getAttribute("url")) t.watch.setAttribute("url", withToken(urlInput.value.trim()));
+    if (!t.watch.getAttribute("url")) t.watch.setAttribute("url", tileUrl(name));
     if (selectedName === undefined) selectedName = name;
     applyState();
   }
@@ -4170,7 +4544,16 @@
       pane.appendChild(lbl);
     }
     const pct = pane.querySelector(".zoomctl .zpct");
-    if (pct) pct.textContent = Math.round((v?.s || 1) * 100) + "%";
+    if (pct) {
+      const txt = Math.round((v?.s || 1) * 100) + "%";
+      if (pct.textContent !== txt) {   // 0.21.41: the % shows only while zooming
+        pct.textContent = txt;
+        const ctl = pct.parentElement;
+        ctl.classList.add("zchg");
+        clearTimeout(ctl.__zchgT);
+        ctl.__zchgT = setTimeout(() => ctl.classList.remove("zchg"), 1500);
+      }
+    }
     if (v && v.s > 1.0001) lbl.textContent = (v.label ? v.label + " \u2014 " : "") + Math.round(v.s * 100) + "% \u00b7 click to show all";
     else if (pane.classList.contains("feedview")) lbl.textContent = (pane.dataset.feed || "Feed") + " \u2014 full quality \u00b7 click for all feeds";
     else lbl.textContent = "";
@@ -4569,12 +4952,14 @@
     // "Kenton", not "Kenton \u2014 Camera"; shares keep the full form so
     // two shares from one person stay tellable apart.
     if (hover && parts.length >= 3 && /^camera(-\d+)?$/.test(leaf)) {
-      return prettyOperator(parts[parts.length - 2]);
+      const fromC = xsTiles.get(path)?.from;   // 0.21.41
+      return prettyOperator(parts[parts.length - 2]) + (fromC ? " (from " + fromC + ")" : "");
     }
     // 0.6.8: title-case the leaf too -- it is a device TYPE now
     // ("camera", "screen"), not a model name.
     const nice = prettyOperator(leaf);
-    return parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice;
+    const from = xsTiles.get(path)?.from;   // 0.21.41: shown here from another room
+    return (parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice) + (from ? " (from " + from + ")" : "");
   }
   window.__pretty = prettyOperator;   // one casing rule for both page halves
   // 0.15.0: a grid tile wears its owner's display name ("Kenton \u2014 Vehicle 2") once the
@@ -5182,7 +5567,7 @@
       // tab teardown below, or a resubscribe that skipped a "never" tile) --
       // the same construction createTile uses; nothing re-arms while hidden.
       if (watched && !document.hidden && !t.watch.getAttribute("url")) {
-        try { t.watch.setAttribute("url", withToken(urlInput.value.trim())); } catch {}
+        try { t.watch.setAttribute("url", tileUrl(name)); } catch {}
       }
 
       t.pane.classList.toggle("shown", shown);
@@ -5678,6 +6063,7 @@
       t.pane.classList.toggle("talking", nowMs < (t.talkUntil ?? 0) && !ringsOff() && (tileClasses.get(name) ?? pathClass(name)) === "person");
       if (t.eq && t.pane.classList.contains("audio-only") && isContentPath(name)) drawEq(t);   // 0.8.6; 0.8.8: content only
     }
+    sbTalkPaint(nowMs);   // 0.21.41: the room rail rings the same people as the tiles
     // Sticky speaker: the loudest recently-talking tile, re-picked at most
     // twice a second and held ~1.5s so the ladder does not flap.
     if (nowMs - lastSpeakerPick > 500) {
@@ -5906,7 +6292,7 @@
     const watch = document.createElement("moq-watch");
     // Parked tiles carry NO url: the element opens nothing at all until
     // watchStream() arms the attribute. Remembered streams come back armed.
-    if (isWatched(name) && CLIENT.webcodecs) watch.setAttribute("url", withToken(urlInput.value.trim()));   // 0.17.0: never a decoder the browser lacks
+    if (isWatched(name) && CLIENT.webcodecs) watch.setAttribute("url", tileUrl(name));   // 0.17.0: never a decoder the browser lacks
     watch.setAttribute("name", name);
     { const tn0 = tuningFor("rail"); watch.setAttribute("delay", tn0.delay); watch.setAttribute("buffer", tn0.buffer); }   // 0.16.0; 0.21.7: budgets by transport
     watch.setAttribute("visible", "never"); // applyState promotes the selected one
@@ -6726,6 +7112,7 @@
     spotVotes.clear();
     spotOffs.clear(); spotStage = [];   // 0.21.32
     spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
+    xsTiles.clear();   // 0.21.41
     spotLitClear(true);   // 0.21.0: leaving the room forgets the mirrored spotlight
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
@@ -6766,6 +7153,7 @@
     spotOffs.clear(); spotStage = [];   // 0.21.32
     memberSubsClear();           // 0.13.0: the previous room's .member consumers
     spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
+    xsTiles.clear();   // 0.21.41
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
     for (const name of [...tiles.keys()]) removeTile(name);
@@ -7063,6 +7451,7 @@
       const pt = window.__rtspPt?.get?.(ref.id), md = window.__rtspPt?.mode?.(ref.id);   // 0.21.17
       if (pt !== undefined) items.push({ value: "pt", label: (pt ? "Pass through: on" : "Pass through: off") + (md ? " (" + md + ")" : "") });
     }
+    if (xsOn()) items.push({ value: "xshare", label: "Also show in other rooms\u2026" });   // 0.21.41
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     const ownLit = window.__spotIs?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.30: already spotlit -> offer to remove it
     const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };
@@ -7091,6 +7480,8 @@
       } else if (v === "keep") {
         window.__rtspPersist?.toggle?.(ref.id);
         window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
+      } else if (v === "xshare") {   // 0.21.41
+        openXsPicker(CHANNEL + "/" + hangName(ref.name), anchor);
       } else if (v === "unspot") {   // 0.21.30; 0.21.32: this one only
         window.__spotRemove?.(CHANNEL + "/" + hangName(ref.name));
       } else if (v === "pt") {   // 0.21.17: per-camera passthrough, live
@@ -9868,14 +10259,18 @@
     const spk = document.createElement("span"); spk.className = "spk"; spk.innerHTML = icon("spk"); spk.title = "Someone in this room is speaking";
     const sbx = document.createElement("button"); sbx.type = "button"; sbx.className = "sbx"; sbx.textContent = "\u2715"; sbx.title = "Close this room for everyone"; sbx.hidden = true;   // 0.21.2
     sbx.addEventListener("click", (e) => { e.stopPropagation(); sbCloseRoom(card.__rec || rec); });
-    row.append(rb, nm, spk, sbx);
     const meta = document.createElement("div"); meta.className = "sbmeta";
     const cnt = document.createElement("span"); cnt.className = "sbcnt";
     const tm = document.createElement("span"); tm.className = "sbtime"; tm.title = "Occupied for";
     const fl = document.createElement("span"); fl.className = "sbflags";
     meta.append(cnt, tm, fl);
+    // 0.21.41 (Kenton: "move the people and time to the right of the room name, when space allows"): name and meta share a
+    // wrapping line -- the meta drops under the name only when both do not fit
+    const head = document.createElement("span"); head.className = "sbhd";
+    head.append(nm, meta);
+    row.append(rb, head, spk, sbx);
     const ul = document.createElement("ul"); ul.className = "sbmembers";
-    card.append(row, meta, ul);
+    card.append(row, ul);
     card.addEventListener("click", (e) => {
       if (e.target.closest("#sbForm")) return;
       e.stopPropagation();
@@ -9900,6 +10295,8 @@
     if (isPhone()) document.body.classList.remove("sb-open");
     if (joinState === "joined") {
       if (rec.slug === CHANNEL) { try { closeAllPops(); paintRoomInfo(); openFromOptions(roomInfoPop); } catch {} return; }   // 0.13.1: my room -> Room info
+      // 0.21.41 (Kenton: "When clicking to change rooms, prompt to let the user know they will be leaving the current room")
+      if (!isPublisherMode() && !confirm("Leave \u201c" + CHANNEL + "\u201d and join \u201c" + rec.slug + "\u201d?\n\nYour microphone will be muted and your camera turned off.")) return;
       if (rec.locked && !(myChannels().find((r) => r.slug === rec.slug)?.roomKey)) { sbFormOpen(card, "password", rec); return; }
       sbFormClose();
       switchRoom(rec, "");
@@ -9939,7 +10336,10 @@
     // members, reconciled by op
     const ul = card.querySelector(".sbmembers");
     const seen = new Set();
-    for (const m of rec.members) {
+    // 0.21.41 (Kenton: "The people displaying in the rooms on the left rail should be in alphabetical order")
+    const sorted = [...rec.members].sort((a, b) => String(a.name || a.op).localeCompare(String(b.name || b.op), undefined, { sensitivity: "base" }));
+    const here = joinState === "joined" && rec.slug === CHANNEL;
+    for (const m of sorted) {
       seen.add(m.op);
       let li = ul.querySelector('li[data-op="' + m.op.replace(/"/g, "") + '"]');
       if (!li) {
@@ -9947,9 +10347,15 @@
         const sp = document.createElement("span"); sp.className = "spk"; sp.innerHTML = icon("spk");
         const nm = document.createElement("span"); nm.className = "nm";
         const role = document.createElement("span"); role.className = "role";
-        li.append(sp, nm, role);
-        ul.appendChild(li);
+        const mm = document.createElement("button"); mm.type = "button"; mm.className = "mm"; mm.title = "More options"; mm.innerHTML = icon("more");
+        mm.addEventListener("click", (e) => { e.stopPropagation(); sbMemberMenu(li, mm); });
+        li.addEventListener("contextmenu", (e) => { if (!li.classList.contains("menuable")) return; e.preventDefault(); e.stopPropagation(); sbMemberMenu(li, pointAnchor(e.clientX, e.clientY)); });
+        li.append(sp, nm, role, mm);
       }
+      ul.appendChild(li);   // in name order (an existing row moves)
+      li.dataset.ptalk = m.talking ? "1" : "";   // 0.21.41: their presence says they speak (other rooms); sbTalkPaint adds what this window hears
+      li.classList.toggle("talk", !!m.talking || (here && li.classList.contains("talk")));
+      li.classList.toggle("menuable", here && !!sbMemberPerson(m.op));   // 0.21.41: the person's menu, in the room I am in
       li.querySelector(".nm").textContent = m.name || m.op;
       li.querySelector(".nm").title = (m.name || m.op) + (m.via ? " via " + m.via : "");
       // 0.21.35 (Kenton: "the indicator for viewing only and publisher don't always align. SR on the left shows publisher, but
@@ -9964,6 +10370,48 @@
       li.querySelector(".spk").classList.toggle("on", !!m.talking);
     }
     for (const li of [...ul.children]) if (!seen.has(li.dataset.op)) li.remove();
+  }
+  // 0.21.41 (Kenton: "a highlight or border when audio is playing, similar to the user rail on the right"): in the room I am
+  // in, a name rings while this window HEARS that person (the tile's own meter, as the right rail), or while their presence
+  // says they speak; my own name rings with my own preview.
+  let sbTalkAt = 0;
+  function sbTalkPaint(nowMs) {
+    if (nowMs - sbTalkAt < 200) return;
+    sbTalkAt = nowMs;
+    const card = document.querySelector("#sbRooms .sbcard.cur");
+    if (!card) return;
+    const loud = new Set();
+    for (const [n, t] of tiles) if (nowMs < (t.talkUntil ?? 0) && !isContentPath(n)) loud.add(personKeyOf(n));
+    if (document.querySelector("#pubPanes .pubpane.camkind.talking")) loud.add(String(window.__publisher?.opSlug?.() || "").toLowerCase());
+    for (const li of card.querySelectorAll(".sbm")) li.classList.toggle("talk", li.dataset.ptalk === "1" || loud.has(String(li.dataset.op || "").toLowerCase()));
+  }
+  // 0.21.41: the rail's person = the Participants entry for that name (same menu as their tile and their Participants row)
+  function sbMemberPerson(op) {
+    const key = String(op || "").toLowerCase();
+    return participantList().find((p) => p.key === key && !p.me && (p.cam || p.content.length || p.viewer)) || null;
+  }
+  function sbMemberMenu(li, anchor) {
+    const p = sbMemberPerson(li.dataset.op);
+    if (!p) return;
+    li.classList.add("open");
+    if (!participantMenu(p, anchor)) window.__toast?.("Nothing to do for " + p.name + " from here.", 2500, { level: "info" });
+    setTimeout(() => { const off = () => { li.classList.remove("open"); document.removeEventListener("pointerdown", off, true); }; document.addEventListener("pointerdown", off, true); }, 0);
+  }
+  // 0.21.41: the header's circled + is the Create room button (the bottom one stays for the icon rail)
+  { const hb = document.getElementById("sbCreateHd"); hb.innerHTML = icon("plusc"); hb.addEventListener("click", (e) => { e.stopPropagation(); document.getElementById("sbCreate")?.click(); }); }
+  // 0.21.41: hide / show the people under every room (remembered on this device)
+  {
+    const tog = document.getElementById("sbPeopleTog");
+    const apply = (off) => {
+      document.body.classList.toggle("sb-nopeople", off);
+      tog.innerHTML = icon("people");
+      tog.title = off ? "Show the people in each room" : "Hide the people in each room";
+      tog.setAttribute("aria-pressed", off ? "true" : "false");
+    };
+    let off = false;
+    try { off = localStorage.getItem("kastr.rail.people") === "off"; } catch {}
+    apply(off);
+    tog.addEventListener("click", () => { off = !off; try { localStorage.setItem("kastr.rail.people", off ? "off" : "on"); } catch {} apply(off); });
   }
   // ---- 0.15.0 (B4): room groups in the sidebar ----------------------------------
   // Headers are .sbgroup rows reconciled by data-gid like the cards by data-slug.
@@ -11064,6 +11512,17 @@
   }
   async function switchRoom(rec, code) {
     if (joinState !== "joined") return;
+    // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
+    if (!isPublisherMode()) {
+      try {
+        const { src } = localCamSrc();
+        if (src) {
+          if (!src.micMuted) { src.micMuted = true; sendControl(window.__publisher.peer, src.id, { micMuted: true }); }
+          if (!src.videoPaused) { src.videoPaused = true; sendControl(window.__publisher.peer, src.id, { videoPaused: true }); }
+          renderMine();
+        }
+      } catch {}
+    }
     if (authSecured) {
       // 0.10.0: the cached relay access code plus the room's own code
       try { await authMint(rec.slug, authAccessCode, code ?? ""); }
@@ -12695,6 +13154,30 @@
   // meaningful path segment, or the host, so "rtsp://10.0.0.50:554/stream1"
   // becomes "stream1" rather than a slug of the whole url (credentials included).
   const isScreenUrl = (u) => /^screen:[/][/]/i.test(String(u || ""));   // 0.21.20: a native screen / window share
+  // 0.21.41 (Kenton: "Sharing should stop when a computer is locked, and shouldn't reconnect automatically"): while this
+  // machine shares a screen, window or tab, the page asks the host every 2 s whether the session is locked; on a lock every
+  // such share is REMOVED (exactly as Stop sharing -- nothing heals it back, and a relaunch does not restore it). Cameras,
+  // RTSP feeds, grids and media files are not screen captures and keep going (a camera box is often locked).
+  const isScreenShare = (a) => a.kind === SCREEN || (a.kind === RTSP && (a.screen || isScreenUrl(a.url)));
+  let lockBusy = false, lockSeen = false;
+  async function lockTick() {
+    if (lockBusy || IS_WEB2) return;
+    if (["publisher", "publisher-relay"].includes(window.__pageMode?.())) return;   // 0.21.41 (Kenton: "If it's a relay + publisher box it can keep sharing while locked"): unattended boxes are locked by design
+    const shares = added.filter(isScreenShare);
+    if (!shares.length) { lockSeen = false; return; }
+    lockBusy = true;
+    let d = null;
+    try { d = await (await fetch("/api/lockstate", { cache: "no-store" })).json(); } catch {}
+    lockBusy = false;
+    if (!d || d.locked !== true) { lockSeen = false; return; }
+    if (lockSeen) return;
+    lockSeen = true;
+    for (const a of added.filter(isScreenShare)) { try { removeSource(a.id); } catch {} }
+    log("This computer was locked \u2014 screen sharing stopped");
+    window.__toast?.("Screen sharing stopped \u2014 this computer was locked. Share again when you are back.", 8000, { level: "warn" });
+  }
+  setInterval(lockTick, 2000);
+  window.__lockTick = lockTick;   // rig
   function rtspLabel(url) {
     if (url === TEST_URL) return "rtsp-test";
     if (isScreenUrl(url)) return /[/]window[/]/i.test(url) ? "window" : /[/]tab[/]/i.test(url) ? "tab" : "screen";   // 0.21.20; 0.21.22: + tab
@@ -13634,7 +14117,7 @@
     for (let i = 0; i < 80 && !pubCap(slot.publish)?.in?.source && slots.has(slot.entry.id); i++) await new Promise((r) => setTimeout(r, 100));
     if (!slots.has(slot.entry.id) || !p.alive) return;
     pubCap(slot.publish)?.in?.source.set(p.track);
-    const snd = document.getElementById("shareSound")?.checked ?? true;
+    const snd = document.getElementById("shareSound")?.checked ?? false;
     const at = snd ? await presenterSound(slot).catch(() => null) : null;
     if (at) pubAud(slot.publish)?.source.set(at);
     slot.publish.muted = !!slot.entry.micMuted || !at;
@@ -13665,7 +14148,7 @@
     try {
       // 0.8.8: the Share menu's Include-sound switch and the Screen/Window
       // card decide the picker (naming a surface opens Chrome on that pane).
-      const snd = document.getElementById("shareSound")?.checked ?? true;
+      const snd = document.getElementById("shareSound")?.checked ?? false;
       const surf = slot.entry.surface;
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({
@@ -18460,7 +18943,7 @@
   }
   try {
     const ss = document.getElementById("shareSound");
-    ss.checked = localStorage.getItem("kastr.share.sound") !== "0";
+    ss.checked = false;   // 0.21.41 (Kenton: "When sharing something, default to audio off unless it's a media file"): every launch starts without the computer's sound; media files keep theirs
     ss.addEventListener("change", () => {
       try { localStorage.setItem("kastr.share.sound", ss.checked ? "1" : "0"); } catch {}
       // a live screen share follows the switch through its own mute

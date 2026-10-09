@@ -2916,7 +2916,18 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     # 0.20.0: an OPEN relay runs no token service. Answer its shape here (200) instead of
                     # a 502 nobody can read: Cloudflare replaces an origin 502 with its own text page, and
                     # watch.html took that for "no KASTR here".
-                    self.rfile.read(int(self.headers.get("Content-Length") or 0) or 0)
+                    _obody = self.rfile.read(int(self.headers.get("Content-Length") or 0) or 0)
+                    if path0 == "/api/xshare":   # 0.21.41: an OPEN relay lists cross-room shares too (no tokens: `from` names the room)
+                        if method == "GET":
+                            _q = parse_qs(urlparse(self.path).query)
+                            obj, code = kastr_relay.xshare_open("GET", room=(_q.get("room") or [""])[0])
+                        else:
+                            try:
+                                _ob = json.loads(_obody or b"{}")
+                            except ValueError:
+                                _ob = {}
+                            obj, code = kastr_relay.xshare_open("POST", _ob)
+                        return self._json_cors(code, obj)
                     if path0 == "/api/auth":
                         return self._json_cors(200, {"app": "KASTR", "secured": False, "codes": False, "legacy": False,
                                                      "federation": False, "open": True, "relayPort": int(relay_srv.port),
@@ -3458,7 +3469,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 == "/api/update/zip":         # 0.21.7: start assembling the install zip
                 return self._release_zip("POST")
             if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick",   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
-                         "/api/spokes/register", "/api/bans/notify"):         # 0.19.0: federation through a web relay
+                         "/api/spokes/register", "/api/bans/notify",          # 0.19.0: federation through a web relay
+                         "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
                 return self._file_post()
@@ -4277,7 +4289,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._prefs_get()
             if path == "/api/mobile":
                 return self._mobile()
-            if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans", "/api/spokes/link"):   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans; 0.21.25: + spokes/link
+            if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans", "/api/spokes/link",   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans; 0.21.25: + spokes/link
+                        "/api/xshare"):                                                         # 0.21.41: the cross-room listings into a room
                 return self._auth_proxy("GET")
             if path == "/api/files":
                 return self._file_list(parse_qs(urlparse(self.path).query))
@@ -4285,6 +4298,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._file_get(path[len("/api/files/"):])
             if path == "/api/alive":
                 return self._alive()
+            if path == "/api/lockstate":   # 0.21.41: is this computer locked? (screen shares stop) -- this machine's window only
+                if not self._local():
+                    return self._deny("session state")
+                import kastr_lock
+                return self._json_plain(200, {"locked": kastr_lock.locked()})
+            if path == "/api/mic/hwmute":   # 0.21.41: the microphones' own (Windows) mute -- this machine's window only
+                if not self._local():
+                    return self._deny("microphone state")
+                import kastr_micmute
+                return self._json_plain(200, kastr_micmute.snapshot())
             if path == "/api/instance":
                 return self._instance()
             if path == "/api/client":                                       # 0.17.0

@@ -209,6 +209,10 @@ function build() {
   // back as a datalist suggestion (MRU, capped; shared with the pages via
   // localStorage since everything is same-origin).
   const HIST_KEY = "kastr.relay.history";
+  // 0.21.34 (Kenton: "automatically prefill these relays and show as normal, if they are online or not"): the fleet's
+  // relays are always in the lists (after this machine's own recent ones); the Go Live page reads the same list
+  const KNOWN_RELAYS = ["http://10.10.105.190:4443", "http://10.13.20.196:4443", "http://10.126.104.2:4443", "http://10.11.252.203:4443"];
+  window.__KASTR_KNOWN_RELAYS = KNOWN_RELAYS;
   const relayHist = () => {
     try { return JSON.parse(localStorage.getItem(HIST_KEY) || "[]").filter(Boolean); }
     catch { return []; }
@@ -254,7 +258,8 @@ function build() {
   const paintRelayHist = (probe = true) => {
     const box = pop.querySelector(".rhist");
     if (!box) return;
-    const list = relayHist().slice(0, 5);
+    const recent = relayHist().slice(0, 5);
+    const list = [...recent, ...KNOWN_RELAYS.filter((u) => !recent.includes(u))];   // 0.21.34: + the fleet's relays
     box.replaceChildren(...list.map((u) => {
       const row = document.createElement("div");
       row.className = "rh" + (u === currentRelay ? " cur" : "");

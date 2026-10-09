@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.34 — no room question, fleet relays listed, no rail grip without a rail
+
+**No room question on the join card (Kenton: "remove the room option and have everyone join main by default and whatever room they were in last after that").** The Room row is gone. The first join goes to `main`; after that, to the room you were last in. If that room has closed, or it is locked and its code was not saved on this computer, you land in `main`. A Share invite link that names a room still opens that room. Rooms are switched from the room rail once you are in.
+
+**The fleet's relays are always listed (Kenton: "automatically prefill these relays and show as normal, if they are online or not").** 10.10.105.190, 10.13.20.196, 10.126.104.2 and 10.11.252.203 (port 4443) appear in the join card's Relay picker and the Relay menu, after this computer's own recent relays, each with its online dot and its name once it runs 0.21.33 or later. They are offered, never switched to automatically: the automatic failover still only picks a relay this computer has used.
+
+**No rail resize handle without a rail (Kenton: "When in full window on a share, I can still mouse over and get the resize on the rail").** The handle is hidden in Fill window, full screen, focus on content, and when everyone is in the spotlight grid. Also fixed: with the spotlight grid on the stage, the rail's page buttons sat in the grid's columns instead of under the rail.
+
 ## v0.21.33 — frozen grid cells restart, relay names, short relay addresses
 
 **A frozen camera in the grid restarts itself (Kenton: cells stuck for hours, e.g. Main Track at 3:32 AM while the rest were live; "when I click on those previews, it shows the up to date / full quality video. But when I exit ... it goes back to the stuck frame").** Each grid cell is drawn from a small preview player on the box that runs the grid. Its health check watched two things: data arriving, and the playback time moving. A player whose decoder stopped producing pictures (a camera's mid-stream format change, such as a night/day switch, can do this) still got its playback time moved every few seconds by the code that keeps it at the live edge, so it never counted as frozen. The check now also counts the frames the player actually decodes. No new frame for 12 seconds while data is arriving restarts that preview. A second freeze within 10 minutes switches it to KASTR's converted H.264 preview, which survives such changes. A page whose window is hidden and decodes nothing at all is not treated as frozen. Lab, with two test cameras in a grid and one preview's frame counter pinned: it restarted after 14 seconds, switched to the conversion on the second freeze, and was live again at 30 seconds; the other camera was untouched.

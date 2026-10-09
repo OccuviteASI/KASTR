@@ -162,7 +162,7 @@ function build() {
     // 0.6.8: the badge is also where the relay gets CHANGED -- the pages'
     // own relay buttons are retired. Server first (owns the substituted
     // value), then every live page that exposes __kastrSetRelay.
-    '<div class="rrow">relay <input class="rurl" type="text" spellcheck="false">' +
+    '<div class="rrow">relay <input class="rurl" type="text" spellcheck="false" placeholder="e.g. 10.0.2.14 (port only if not 4443)">' +
     '<button type="button" class="rgo">Connect</button></div>' +
     '<div class="rhist"></div>' +
     '<div class="rhost">Relay host: \u2026</div>' +
@@ -224,6 +224,23 @@ function build() {
   // available dot per entry (the same reachability probe the badge uses),
   // click a row to put it in the field, Connect to switch.
   const histStatus = new Map();   // url -> true | false | null
+  // 0.21.33 (Kenton: relay names, the address on hover): the names the Go Live page learned (same origin, same key);
+  // a nameless entry asks this machine's probe once per open (it answers the machine itself only)
+  const relayNameOf = (u) => { try { return (JSON.parse(localStorage.getItem("kastr.relay.names") || "{}") || {})[u] || ""; } catch { return ""; } };
+  const nameAsked = new Set();
+  const askName = async (u) => {
+    if (nameAsked.has(u) || relayNameOf(u)) return;
+    nameAsked.add(u);
+    try {
+      const r = await fetch("/api/lan/probe?url=" + encodeURIComponent(u), { cache: "no-store" }).then((x) => x.json());
+      if (r && r.name) {
+        const m = JSON.parse(localStorage.getItem("kastr.relay.names") || "{}") || {};
+        m[u] = String(r.name).slice(0, 32);
+        localStorage.setItem("kastr.relay.names", JSON.stringify(m));
+        paintRelayHist(false);
+      }
+    } catch {}
+  };
   const probeOne = async (u) => {
     try {
       const ctl = new AbortController();
@@ -247,16 +264,16 @@ function build() {
       dot.title = st === true ? "Available" : st === false ? "Not available" : "Checking\u2026";
       const txt = document.createElement("span");
       txt.className = "rurlt";
-      txt.textContent = u.replace(/^https?:\/\//, "") + (u === currentRelay ? "  (current)" : "");
+      txt.textContent = (relayNameOf(u) || u.replace(/^https?:\/\//, "")) + (u === currentRelay ? "  (current)" : "");   // 0.21.33: the name
       const stt = document.createElement("span");
       stt.className = "rst";
-      stt.textContent = st === true ? "Available" : st === false ? "Not available" : "\u2026";
+      stt.textContent = st == null ? "\u2026" : "";   // 0.21.33 (Kenton): the dot's colour says it; the words are on hover
       row.append(dot, txt, stt);
-      row.title = "Click to put " + u + " in the relay field";
+      row.title = (relayNameOf(u) ? relayNameOf(u) + " \u2014 " : "") + u + (st === true ? " (available)" : st === false ? " (not available)" : "") + "\nClick to put it in the relay field";   // 0.21.33: the address on hover
       row.addEventListener("click", (e) => { e.stopPropagation(); pop.querySelector(".rurl").value = u; });
       return row;
     }));
-    if (probe) for (const u of list) probeOne(u);
+    if (probe) for (const u of list) { probeOne(u); askName(u); }
   };
   setInterval(() => { if (!pop.hidden) paintRelayHist(true); }, 10000);
 
@@ -327,11 +344,25 @@ function build() {
   // -- notably when the server refuses the switch off-loopback (403: the relay
   // control plane answers the machine itself only), which the button used to
   // swallow in silence.
+  // 0.21.33 (Kenton: "allow people to just type the IP and have it autofill the http:// and the :4443. Port should only
+  // be required when it is not the default 4443. If they type :4444 it should not auto-add :4443" -- "If they type the full
+  // URL, it should still accept it"): a typed port always wins; a web relay (".../relay") keeps its origin's port
+  const relayAddr = (raw) => {
+    let u = String(raw ?? "").trim();
+    if (!u) return "";
+    const hasScheme = /^[a-z][a-z0-9+.-]*:[/][/]/i.test(u);
+    if (!hasScheme) u = (location.protocol === "https:" || /[/]relay[/]?$/i.test(u) ? "https://" : "http://") + u;   // a tunnel's web relay is https
+    const m = /^([a-z][a-z0-9+.-]*:[/][/])(\[[^\]]+\]|[^/:?#]+)(:\d+)?(.*)$/i.exec(u);
+    if (!m || m[3]) return u;
+    const path = m[4].split(/[?#]/)[0];
+    if (/[/]relay[/]?$/.test(path) || (path && path !== "/")) return u;
+    return m[1] + m[2] + ":4443" + m[4];
+  };
   const connectRelay = async (raw) => {
     if (MODE === "viewer") return { ok: false, error: "viewer" };   // 0.12.0: no relay changes from a viewer box
     let u = String(raw ?? "").trim();
     if (!u) return { ok: false, error: "empty" };
-    if (!/^https?:\/\//.test(u)) u = (location.protocol === "https:" ? "https://" : "http://") + u;   // 0.8.9
+    u = relayAddr(u);   // 0.21.33: an address alone gets http:// and :4443; a typed port or a full URL is kept
     let res = null;
     try {
       res = await fetch("/api/relay/use", { method: "POST", headers: { "content-type": "application/json" },

@@ -4471,7 +4471,18 @@ def probe_relay(url, timeout=1.5):
         with urllib.request.urlopen(target, timeout=timeout, context=ctx if target.startswith("https") else None) as r:
             body = r.read(512).decode("ascii", "replace").strip()
         fp = "" if web else (body if re.match(r"^[0-9a-fA-F:]{40,}$", body) else "")
-        return {"online": True, "fp": fp.lower(), "ms": int((time.time() - t0) * 1000), "web": web}
+        out = {"online": True, "fp": fp.lower(), "ms": int((time.time() - t0) * 1000), "web": web}
+        # 0.21.33: the relay's name for the pickers -- its access-code service answers /api/auth (port + 1 on a native
+        # relay, the web port behind a web relay); an open relay has none and stays nameless
+        try:
+            auth = ("%s://%s/api/auth" % (u.scheme, u.netloc)) if web else ("http://%s:%d/api/auth" % (hn, (u.port or 443) + 1))
+            with urllib.request.urlopen(auth, timeout=1.0, context=ctx if auth.startswith("https") else None) as r2:
+                nm = json.loads(r2.read(4096) or b"{}").get("name")
+            if isinstance(nm, str) and nm.strip():
+                out["name"] = nm.strip()[:32]
+        except Exception:
+            pass
+        return out
     except Exception as e:
         return {"online": False, "error": str(e)[:120]}
 

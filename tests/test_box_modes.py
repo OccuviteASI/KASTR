@@ -135,7 +135,7 @@ class JoinGate(unittest.TestCase):
         # 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not")
         p = _read("moq-watch-lite.html")
         self.assertIn("gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);", p)
-        self.assertIn('"  \\u2014 online" : "  \\u2014 offline"', p)
+        self.assertIn('o.title = u + (st == null ? "" : st.online ? " (online)" : " (offline)");', p)   # 0.21.33: the dot says it; words on hover
 
     def test_rail_marks_a_kept_room_with_a_symbol(self):
         # 0.21.31 (Kenton: "don't put the always open in the rooms, just put a symbol ... similar to the lock symbol")

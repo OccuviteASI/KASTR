@@ -2130,7 +2130,7 @@
          (POST /api/relay/use is local-only); Enter or leaving the field applies it. -->
     <label class="f" id="joinRelayRow" hidden><span>Relay</span>
       <select id="joinRelaySel" title="The relay this KASTR connects to &mdash; pick one to switch"></select>
-      <input type="text" id="joinRelay" placeholder="https://relay-host:4443" hidden
+      <input type="text" id="joinRelay" placeholder="relay address, e.g. 10.0.2.14 (port only if not 4443)" hidden
              autocomplete="off" spellcheck="false" title="Another relay address &mdash; Enter or leave the field to apply"></label>
     <label class="f"><span>Room</span>
       <div style="display:flex; gap:6px">
@@ -2141,8 +2141,7 @@
     <label class="f" id="joinNewChanRow" hidden><span>Room name</span>
       <input type="text" id="joinChanNew" placeholder="e.g. yard-ops" maxlength="32"></label>
     <label class="f" id="joinAccessRow" hidden><span id="joinAccessLabel">Access code for this relay</span>
-      <input type="text" id="joinAccess" class="masked" autocomplete="off" spellcheck="false"
-             placeholder="viewer, publisher or admin code"></label>
+      <input type="text" id="joinAccess" class="masked" autocomplete="off" spellcheck="false"></label>   <!-- 0.21.33 (Kenton): no list of code kinds -->
     <label class="f" id="joinPwdRow" hidden><span id="joinPwdLabel">Room code</span>
       <input type="text" id="joinPwd" class="masked" autocomplete="off" spellcheck="false"></label>
     <!-- 0.12.0: persistent rooms -- kept on the relay (with their chat) until closed -->
@@ -11656,8 +11655,25 @@
     m[url] = fp;
     try { localStorage.setItem(RELAY_FP_KEY, JSON.stringify(m)); } catch {}
   }
+  // 0.21.33 (Kenton: "I would like the Relay section to show the name of the relay rather than the IP address. Maybe keep
+  // the IP if hovering"): names learned from probes and from the network scan, remembered per address (an offline relay
+  // keeps its name in the list); shared with the Relay menu (assets/asi-brand.js reads the same key)
+  const RELAY_NAMES_KEY = "kastr.relay.names";
+  const relayNameMap = () => { try { return JSON.parse(localStorage.getItem(RELAY_NAMES_KEY) || "{}") || {}; } catch { return {}; } };
+  const relayNameSet = (u, n) => {
+    if (!u || !n) return;
+    const m = relayNameMap();
+    if (m[u] === n) return;
+    m[u] = String(n).slice(0, 32);
+    try { localStorage.setItem(RELAY_NAMES_KEY, JSON.stringify(m)); } catch {}
+  };
+  const relayNameOf = (u) => relayNameMap()[u] || "";
   async function relayProbe(url) {
-    try { return await fetch("/api/lan/probe?url=" + encodeURIComponent(url), { cache: "no-store" }).then((r) => r.json()); } catch { return { online: false }; }
+    try {
+      const r = await fetch("/api/lan/probe?url=" + encodeURIComponent(url), { cache: "no-store" }).then((x) => x.json());
+      if (r?.name) relayNameSet(url, r.name);
+      return r;
+    } catch { return { online: false }; }
   }
   async function lanDiscover() {
     try { const d = await fetch("/api/lan/discover", { cache: "no-store" }).then((r) => r.json()); return Array.isArray(d.relays) ? d.relays : []; } catch { return []; }
@@ -11733,11 +11749,14 @@
       const opts = [...new Set([cur, ...hist].filter(Boolean))];
       const lan = (window.__lanRelays || []).filter((f) => f.urls?.[0] && !opts.includes(f.urls[0]));   // 0.21.22: found on the network (one click, never automatic)
       const mark = (u) => { const st = gateRelayState.get(u); return st == null ? "" : (st.online ? "\uD83D\uDFE2 " : "\uD83D\uDD34 "); };   // 0.21.30
-      const word = (u) => { const st = gateRelayState.get(u); return st == null ? "" : (st.online ? "  \u2014 online" : "  \u2014 offline"); };
-      sel.replaceChildren(...opts.map((u) => new Option(mark(u) + u + word(u), u)),
-        ...lan.map((f) => new Option(mark(f.urls[0]) + "Found on your network: " + (f.name || "relay") + " (" + f.urls[0].replace(/^https?:[/][/]/, "") + ")" + word(f.urls[0]), f.urls[0])),
+      const word = () => "";   // 0.21.33 (Kenton): the dot's colour says online / offline -- no words
+      for (const f of lan) if (f.name) relayNameSet(f.urls[0], f.name);   // 0.21.33
+      const opt = (label, u) => { const o = new Option(label, u); const st = gateRelayState.get(u); o.title = u + (st == null ? "" : st.online ? " (online)" : " (offline)"); return o; };   // the address (and the state) on hover
+      sel.replaceChildren(...opts.map((u) => opt(mark(u) + (relayNameOf(u) || relayLabel(u)) + word(u), u)),   // 0.21.33: the name, not the address
+        ...lan.map((f) => opt(mark(f.urls[0]) + "Found on your network: " + (f.name || relayLabel(f.urls[0])) + word(f.urls[0]), f.urls[0])),
         new Option("Other\u2026", "__other"));
       if (cur) sel.value = cur;
+      sel.title = cur ? (relayNameOf(cur) ? relayNameOf(cur) + " \u2014 " : "") + cur : "";
       gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);   // 0.21.30 (Kenton): which relays are online, in the picker
       if (joinEls.joinRelay) joinEls.joinRelay.hidden = true;
     }
@@ -11761,12 +11780,27 @@
       if (changed && document.activeElement !== joinEls.joinRelaySel) paintRelayRow();
     } finally { gateRelayProbing = false; }
   }
+  // 0.21.33 (Kenton: "allow people to just type the IP and have it autofill the http:// and the :4443. Port should only
+  // be required when it is not the default 4443. If they type :4444 it should not auto-add :4443" -- "If they type the full
+  // URL, it should still accept it"): a typed port always wins; a web relay (".../relay") keeps its origin's port
+  const relayAddr = (raw) => {
+    let u = String(raw ?? "").trim();
+    if (!u) return "";
+    const hasScheme = /^[a-z][a-z0-9+.-]*:[/][/]/i.test(u);
+    if (!hasScheme) u = (location.protocol === "https:" || /[/]relay[/]?$/i.test(u) ? "https://" : "http://") + u;   // a tunnel's web relay is https
+    const m = /^([a-z][a-z0-9+.-]*:[/][/])(\[[^\]]+\]|[^/:?#]+)(:\d+)?(.*)$/i.exec(u);
+    if (!m || m[3]) return u;
+    const path = m[4].split(/[?#]/)[0];
+    if (/[/]relay[/]?$/.test(path) || (path && path !== "/")) return u;
+    return m[1] + m[2] + ":4443" + m[4];
+  };
+  window.__relayAddr = relayAddr;   // rig
   async function gateRelayApply(urlArg) {   // 0.21.0: the select passes its pick
     const inp = joinEls.joinRelay;
     if (!inp || gateRelayBusy) return;
     let u = String(urlArg ?? inp.value).trim();
     if (!u) { gateRelayMirror(); return; }
-    if (!/^https?:\/\//.test(u)) u = (location.protocol === "https:" ? "https://" : "http://") + u;   // same rule as the badge (0.8.9)
+    u = relayAddr(u);   // 0.21.33: an address alone gets http:// and :4443 (same rule as the Relay menu)
     try { new URL(u); } catch { gateMsg("Not a relay address: " + u); return; }
     if (u === urlInput.value.trim()) { inp.value = u; return; }
     gateRelayBusy = true;
@@ -14352,6 +14386,14 @@
   const MONITOR_KEEP_S = 12;        // trim buffered media older than this behind the playhead
   const MONITOR_STALL_MS = 8000;    // no bytes from the bridge for this long -> reconnect
   const MONITOR_FROZEN_MS = 6000;   // playhead not moving with data ahead -> seek once, then reconnect
+  // 0.21.33 (Kenton: grid cells frozen for hours -- "when I click on those previews, it shows the up to date / full
+  // quality video. But when I exit ... it goes back to the stuck frame"): the playhead check above can be fooled -- a
+  // player whose decoder stopped producing pictures still has its playhead MOVED by the live-edge seek every few
+  // seconds while bytes keep arriving. The decoded-frame counter cannot be fooled: none for this long while data
+  // arrives -> a fresh monitor; a second time within 10 minutes -> the H.264 conversion (it survives a camera's
+  // mid-stream format change, e.g. a night/day switch).
+  const MONITOR_NOFRAME_MS = 12000;
+  let monAnyFrameAt = 0;            // the last time ANY monitor on this page decoded a frame (a hidden page that decodes none is not one frozen camera)
   const MONITOR_HOLD_MS = 4000;     // a cell keeps its last frame this long into a reconnect
   const RTSP_FROZEN_MS = MONITOR_FROZEN_MS;   // 0.9.5 name, kept
   // 0.14.0: shared media files that need converting stream from the local
@@ -14674,6 +14716,23 @@
       }
       trimMonitor(slot, false);
     }
+    let tf = null;   // 0.21.33: decoded frames (see MONITOR_NOFRAME_MS)
+    try { tf = v.getVideoPlaybackQuality?.().totalVideoFrames; } catch {}
+    if (typeof tf === "number") {
+      info.frames = tf;
+      if (tf !== slot.lastTf) { slot.lastTf = tf; slot.lastTfAt = now; monAnyFrameAt = now; }
+      else if (slot.monitorLoaded && now - m.lastBytesAt < 3000 && now - (slot.lastTfAt ?? slot.since) > MONITOR_NOFRAME_MS
+               && (document.visibilityState === "visible" || now - monAnyFrameAt < 5000)) {
+        const recent = (slot.noFrameRestarts || []).filter((t) => now - t < 600000);
+        recent.push(now);
+        slot.noFrameRestarts = recent;
+        slot.lastTfAt = now;
+        info.noFrames = true;
+        if (recent.length >= 2 && !slot.monitorTranscode) { monitorBroken(slot, "the picture froze again while data kept arriving"); return info; }
+        monitorEnded(slot, "Monitor picture frozen (no new frames while data arrives)");
+        return info;
+      }
+    }
     if (now - m.lastBytesAt > MONITOR_STALL_MS && !m.abort.signal.aborted) monitorEnded(slot, "Monitor stream stalled (no data from the bridge)");
     slot.monitorBehind = info.behind;
     return info;
@@ -14690,6 +14749,7 @@
     slot.lastTimeVal = undefined; slot.lastTimeAt = undefined;   // 0.9.5: liveness trackers start over
     slot.drift = 0; slot.lastDriftAt = undefined; slot.monitorBehind = 0;
     slot.frozenNudged = false; slot.monitorLoaded = false;   // 0.9.7
+    slot.lastTf = undefined; slot.lastTfAt = undefined;      // 0.21.33: a new player counts its own frames
     try { v.playbackRate = 1; } catch {}
     detachMonitor(slot);   // 0.9.7: abort the fetch, drop the MediaSource
     try { v.pause(); } catch {}
@@ -19192,6 +19252,7 @@
   window.__spot = { set: spotAdd, add: spotAdd, off: spotOff,   // 0.21.32: set = ADD (several at once); off = remove one for everyone
     clear: () => { spotMine = null; spotMineList = []; spotOffList = []; spotLegacy = null; spotClear(); },
     mine: () => spotMine, mineList: () => spotMineList, mineOffs: () => spotOffList };
+  window.__monVideo = (id) => slots.get(Number(id))?.video || null;   // 0.21.33 rig: a feed's monitor player
   // 0.21.32: my own pane for a broadcast path (the spotlight grid places it); a screen share's thumbnail never holds the stage
   window.__ownPaneFor = (path) => {
     for (const sl of slots.values()) {

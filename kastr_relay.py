@@ -1371,6 +1371,14 @@ class AuthService:
 
     bans = None   # 0.17.0: set by __init__; a test double without one simply never bans
 
+    def relay_name(self):
+        """0.21.33: this relay's operator-set name (Relay page), read from the shared state folder; "" when unset."""
+        try:
+            with open(os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-name.json"), encoding="utf-8") as f:
+                return str(json.load(f).get("name") or "")[:32]
+        except (OSError, ValueError, AttributeError):
+            return ""
+
     def __init__(self, host, port, key, relay_port, store=None, log=None, hub=None, fed_token=None, revalidate=None, on_cmd=None,
                  wake=None, cluster_view=None, is_hub=None, on_handover=None, rehome_info=None):
         self.store = store or AuthStore(os.getcwd(), log)
@@ -1481,7 +1489,10 @@ class AuthService:
                                  # relay's certificate fingerprint (spokes pin it instead of disable_verify)
                                  "session": True, "fingerprint": svc.fingerprint,
                                  # 0.16.0: an admin code exists here (the gate can say so)
-                                 "adminCode": svc.store.codes_status()["admin"]})
+                                 "adminCode": svc.store.codes_status()["admin"],
+                                 # 0.21.33 (Kenton: relay pickers show names, "this should help people with finding
+                                 # the correct relay for their location")
+                                 "name": svc.relay_name() or None})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
                     # gate can list them and take their codes -- names only.
@@ -2619,6 +2630,25 @@ def client_ip(handler):
         if xff and re.match(r"^[0-9A-Fa-f:.]{2,45}$", xff):
             return xff
     return ip
+
+
+def normalize_relay_url(url):
+    """0.21.33 (Kenton): the relay a page connects to, typed loosely. '10.0.2.14' -> 'http://10.0.2.14:4443';
+    '10.0.2.14:4444' keeps 4444; a full URL is kept as typed (a typed port always wins); a web relay ('.../relay')
+    keeps its origin's port. The page normalises the same way; this covers any other caller."""
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    has_scheme = re.match(r"^[a-z][a-z0-9+.-]*://", u, re.I) is not None
+    if not has_scheme:
+        u = ("https://" if re.search(r"/relay/?$", u, re.I) else "http://") + u   # a tunnel's web relay is https
+    m = re.match(r"^([a-z][a-z0-9+.-]*://)(\[[^\]]+\]|[^/:?#]+)(:\d+)?(.*)$", u, re.I)
+    if not m or m.group(3):
+        return u
+    path = re.split(r"[?#]", m.group(4))[0]
+    if re.search(r"/relay/?$", path) or (path and path != "/"):
+        return u
+    return m.group(1) + m.group(2) + ":4443" + m.group(4)
 
 
 def _normalize_hub(url):
@@ -5084,8 +5114,9 @@ def handle_api(handler, relay, path, set_relay_url=None):
             else:
                 # Repoint every served page at a relay without a restart.
                 if set_relay_url:
-                    set_relay_url(payload.get("url") or "")
-                    reply({"ok": True, "relay": payload.get("url")})
+                    url = normalize_relay_url(payload.get("url") or "")   # 0.21.33: a bare address gets http:// and :4443
+                    set_relay_url(url)
+                    reply({"ok": True, "relay": url})
                 else:
                     reply({"error": "not supported"}, 400)
         except Exception as e:

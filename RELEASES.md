@@ -2,6 +2,16 @@
 
 What changed in each build, newest first.
 
+## v0.21.42 — KASTR's own popup, locked rooms always ask
+
+**Questions in KASTR's own popup (Kenton: "I would like the popup for the room change moved to a stylized popup in the middle of the screen, not just a chrome popup").** Every yes/no question KASTR asks now appears in a KASTR card in the middle of the screen over a dimmed page, with specific buttons (for example "Join vault" / "Stay in main"). That covers changing rooms, closing a room, removing someone, muting everyone, deleting a room group, removing a file, opening the RTMP firewall ports and replacing a camera that is already shared. Enter answers yes, Esc or a click beside the card answers no, and the page's shortcut keys stay quiet while it asks. Tested on desktop and at phone width: the card is exactly centred, and no browser popup appears.
+
+**A locked room asks for its code, wherever it sits in the rail (Kenton: a locked room "at the bottom of the rail, it never pops up the enter code prompt").** Two causes:
+- **A room you had created yourself:** it is remembered with its room key, so the click skipped the code question. The relay still wants the code, so the switch failed without a word.
+- **The old inline code form:** it opened below the visible part of the rail.
+
+Now a locked room always asks for its code inside the same centred popup, and the relay checks the code before you leave the room you are in. A wrong code says "Wrong room code." and keeps the popup open, with your mic and camera untouched. A refused switch says so, and nothing gets muted. Tested: the wrong code kept Alex in main with the mic and camera on; the right code joined vault, muted with the camera off.
+
 ## v0.21.41 — share to several rooms, the mic button, the room rail's people
 
 **Share to several rooms (Kenton: "the ability to share from 1 device to multiple rooms. Maybe a room selection on the share after toggling the feature on ... in the more (ellipsis) menu").** Turn on More ▸ "Share to several rooms". After that, each new share (and your camera) offers "Choose rooms", and every share's menu has "Also show in other rooms…": tick the rooms and Apply. A locked room asks for its code.

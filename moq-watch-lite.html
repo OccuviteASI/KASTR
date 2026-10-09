@@ -916,6 +916,27 @@
   .popcard .head .close:hover { color:#fff; border-color:var(--asi-red); background:var(--asi-red); }
   .popcard .body { flex:1; min-height:0; overflow-y:auto; padding:12px; font-size:12px; color:var(--text-dim); }
   .popcard .body .row:last-child { margin-bottom:0; }
+  /* 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): KASTR's own yes/no question */
+  #kConfirm { position:fixed; inset:0; z-index:140; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kConfirm[hidden] { display:none; }
+  #kConfirm .popcard.kconfirm { position:static; width:min(420px, calc(100vw - 32px)); max-height:none; animation:kcIn .14s ease-out; }
+  #kConfirm .kconfirm .body { padding:16px 16px 2px; flex:none; overflow:visible; }
+  #kConfirm .kcmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
+  #kConfirm .kcdet { margin:8px 0 0; font-size:12px; line-height:1.5; color:var(--text-dim); overflow-wrap:break-word; }
+  #kConfirm .kcdet[hidden] { display:none; }
+  #kConfirm .kcin { display:block; width:100%; margin:12px 0 0; background:var(--surface-2); border:1px solid var(--line); color:var(--text);
+    padding:8px 10px; border-radius:5px; font-family:var(--font-mono); font-size:13px; }
+  #kConfirm .kcin:focus { outline:none; border-color:var(--asi-blue); }
+  #kConfirm .kcin[hidden], #kConfirm .kcerr[hidden] { display:none; }
+  #kConfirm .kcerr { margin:6px 0 0; font-size:12px; color:var(--asi-red); }
+  #kConfirm .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:14px 16px 16px; }
+  #kConfirm .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kConfirm .kcbtns .ghost:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  #kConfirm .kcbtns .danger { background:var(--asi-red); color:#fff; }
+  #kConfirm .kcbtns .danger:hover { filter:brightness(1.1); }
+  #kConfirm .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  @keyframes kcIn { from { opacity:0; transform:scale(.97); } to { opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce) { #kConfirm .popcard.kconfirm { animation:none; } }
   #helpPop { width:min(480px, calc(100vw - 24px)); }
   #helpPop .body p { margin:0 0 10px; line-height:1.65; }
   #helpPop .keys { width:100%; border-collapse:collapse; }
@@ -4080,8 +4101,8 @@
     const pane = tileName ? tiles.get(tileName)?.pane : null;
     if (pane?.__openMenu) { pane.__openMenu(anchor); return true; }
     if (p.viewer && authRole === "admin") {   // a watcher has no tile: the admin can still remove them
-      openMineMenu(anchor, [{ value: "akick", icon: "leave", label: "Remove " + p.name + " from the room (admin)" }], "", () => {
-        if (!confirm("Remove " + p.name + " from the room?")) return;
+      openMineMenu(anchor, [{ value: "akick", icon: "leave", label: "Remove " + p.name + " from the room (admin)" }], "", async () => {
+        if (!(await kastrConfirm({ title: "Remove from the room", message: "Remove " + p.name + " from the room?", ok: "Remove", danger: true }))) return;
         for (const x of roomsPres.values()) {
           if (!x.state || x.goneAt || String(x.who?.op || "").toLowerCase() !== p.key || x.who.peer === statePeer()) continue;
           window.__adminSend?.({ op: "kick", target: x.who.host + "/" + x.who.op + "/" + x.who.peer });
@@ -4142,10 +4163,11 @@
   }
   ppl.search.addEventListener("input", () => paintParticipants(true));
   ppl.head.addEventListener("click", () => { pplOpen = !pplOpen; ppl.head.setAttribute("aria-expanded", String(pplOpen)); paintParticipants(true); });
-  ppl.mute.addEventListener("click", () => {
+  ppl.mute.addEventListener("click", async () => {
     const targets = [...tiles.keys()].filter((n) => !isContentPath(n) && !isGridChild(n) && !tiles.get(n)?.pane.classList.contains("no-audio"));
     if (!targets.length) { window.__toast?.("Every microphone in this room is already off", 3000, { level: "info" }); return; }
-    if (!confirm("Mute " + targets.length + (targets.length === 1 ? " microphone" : " microphones") + " in this room? Each person can unmute themselves.")) return;
+    if (!(await kastrConfirm({ title: "Mute everyone", message: "Mute " + targets.length + (targets.length === 1 ? " microphone" : " microphones") + " in this room?",
+                               detail: "Each person can unmute themselves.", ok: "Mute all" }))) return;
     for (const n of targets) window.__adminSend?.({ op: "mute", target: n });
     window.__toast?.("Asked " + targets.length + (targets.length === 1 ? " microphone" : " microphones") + " to mute", 3000, { level: "info" });
   });
@@ -6367,7 +6389,7 @@
           items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
         }
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
-        openMineMenu(anchor, items, "", (v) => {
+        openMineMenu(anchor, items, "", async (v) => {
           if (v === "lat") { latencyToggle(name); return; }
           if (v === "unpin") { goGallery(); return; }   // as the Gallery pill
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
@@ -6375,7 +6397,7 @@
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
           else if (v === "akick") {
             const pp = String(name).split("/").filter(Boolean);   // <room>/<host>/<operator>/<leaf>
-            if (pp.length >= 3 && confirm("Remove " + prettyOperator(person) + " from the room?")) {
+            if (pp.length >= 3 && await kastrConfirm({ title: "Remove from the room", message: "Remove " + prettyOperator(person) + " from the room?", ok: "Remove", danger: true })) {
               // one kick per PAGE of that operator on that machine (their .state records name the peers);
               // without any, the host/operator pair (every page of theirs there)
               const peers = [...roomsPres.values()].filter((x) => x.state && !x.goneAt && x.who?.host === pp[1] && String(x.who?.op || "").toLowerCase() === String(pp[2]).toLowerCase() && x.who.peer !== statePeer()).map((x) => x.who.peer);   // never yourself
@@ -7557,6 +7579,78 @@
   // replacing it (a dead camera's error used to erase the Undo before it could be clicked).
   const toastQueue = [];
   let toastHold = 0;
+  // 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): every yes/no question KASTR
+  // asks. Resolves true on OK; Esc, Cancel or a click beside the card resolve false. One question at a time.
+  let kcBusy = Promise.resolve();
+  function kastrConfirm(o) {
+    o = o || {};
+    const run = () => new Promise((resolve) => {
+      let el = document.getElementById("kConfirm");
+      if (!el) {
+        el = document.createElement("div"); el.id = "kConfirm"; el.hidden = true;
+        el.innerHTML = '<div class="popcard kconfirm" role="dialog" aria-modal="true" aria-labelledby="kcTitle" aria-describedby="kcMsg"><div class="head"><span id="kcTitle"></span></div>'
+          + '<div class="body"><p class="kcmsg" id="kcMsg"></p><p class="kcdet"></p><input class="kcin" type="text" autocomplete="off" spellcheck="false" hidden><p class="kcerr" hidden></p></div>'
+          + '<div class="kcbtns"><button type="button" class="ghost kcno"></button><button type="button" class="kcyes"></button></div></div>';
+        document.body.appendChild(el);
+      }
+      const q = (sel) => el.querySelector(sel);
+      q("#kcTitle").textContent = o.title || "Are you sure?";
+      q(".kcmsg").textContent = o.message || "";
+      const det = q(".kcdet"); det.textContent = o.detail || ""; det.hidden = !o.detail;
+      const yes = q(".kcyes"), no = q(".kcno");
+      yes.textContent = o.ok || "OK"; no.textContent = o.cancel || "Cancel";
+      yes.classList.toggle("danger", !!o.danger);
+      // 0.21.42: an optional field (a locked room's code) -- the popup resolves its value; `check(value)` may answer an error
+      // string, which keeps the popup open with the error under the field
+      const inp = q(".kcin"), err = q(".kcerr");
+      inp.hidden = !o.input; inp.value = ""; err.hidden = true; err.textContent = "";
+      if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
+      yes.disabled = no.disabled = false;
+      const prev = document.activeElement;
+      const order = () => (o.input ? [inp, no, yes] : [no, yes]);
+      const onKey = (e) => {
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
+        else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (document.activeElement === no) done(false); else accept(); }
+        else if (e.key === "Tab") {
+          e.preventDefault(); e.stopPropagation();
+          const f = order(), i = f.indexOf(document.activeElement);
+          f[(i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus();
+        }
+        else e.stopPropagation();   // the page's shortcuts (G, D, M, W ...) stay quiet while it asks (typing in the field still works)
+      };
+      async function accept() {
+        if (yes.disabled) return;
+        if (!o.input) { done(true); return; }
+        const v = inp.value;
+        if (o.check) {
+          yes.disabled = no.disabled = true;
+          let why = null;
+          try { why = await o.check(v); } catch (e2) { why = e2?.message || String(e2); }
+          yes.disabled = no.disabled = false;
+          if (el.hidden) return;
+          if (why) { err.textContent = why; err.hidden = false; inp.select(); inp.focus(); return; }
+        }
+        done(v);
+      }
+      function done(v) {
+        el.hidden = true;
+        document.removeEventListener("keydown", onKey, true);
+        el.onclick = null; yes.onclick = null; no.onclick = null;
+        try { prev?.focus?.(); } catch {}
+        resolve(v);
+      }
+      yes.onclick = () => accept();
+      no.onclick = () => done(false);
+      el.onclick = (e) => { if (e.target === el) done(false); };
+      document.addEventListener("keydown", onKey, true);
+      el.hidden = false;
+      (o.input ? inp : yes).focus();
+    });
+    const p = kcBusy.then(run);
+    kcBusy = p.catch(() => {});
+    return p;
+  }
+  window.__confirm = kastrConfirm;   // the publish half asks through it too
   window.__toast = (msg, ms = 6000, opts) => {
     const level = opts?.level || "event";
     if (level === "info" && !window.__toastPolicy.verbose()) return;
@@ -10248,6 +10342,7 @@
     if (card) card.appendChild(sbFormEl); else sbFormHome.appendChild(sbFormEl);
     sbFormEl.hidden = false;
     if (mode === "create") roomMenuCreate(sbFormEl); else roomMenuPassword(sbFormEl, rec);
+    try { sbFormEl.scrollIntoView({ block: "nearest" }); } catch {}   // 0.21.42: a card at the bottom of the rail opened its form out of sight
   }
   function sbCardNew(rec) {
     const card = document.createElement("div");
@@ -10291,13 +10386,32 @@
     const key = myChannels().find((r) => r.slug === rec.slug)?.roomKey || null;
     window.__chatCloseRoom?.(rec.slug, key, !key);
   }
-  function sbCardClick(card, rec) {
+  async function sbCardClick(card, rec) {
     if (isPhone()) document.body.classList.remove("sb-open");
     if (joinState === "joined") {
       if (rec.slug === CHANNEL) { try { closeAllPops(); paintRoomInfo(); openFromOptions(roomInfoPop); } catch {} return; }   // 0.13.1: my room -> Room info
       // 0.21.41 (Kenton: "When clicking to change rooms, prompt to let the user know they will be leaving the current room")
-      if (!isPublisherMode() && !confirm("Leave \u201c" + CHANNEL + "\u201d and join \u201c" + rec.slug + "\u201d?\n\nYour microphone will be muted and your camera turned off.")) return;
-      if (rec.locked && !(myChannels().find((r) => r.slug === rec.slug)?.roomKey)) { sbFormOpen(card, "password", rec); return; }
+      const needCode = !!rec.locked;   // 0.21.42: the minter always wants a locked room's code -- a remembered roomKey (my own room) skipped the prompt and the switch failed silently
+      if (!isPublisherMode()) {
+        // 0.21.42: KASTR's own popup; a locked room asks for its code in it (Kenton: a locked room at the bottom of the rail
+        // "never pops up the enter code prompt" -- the inline form opened below the visible part of the rail)
+        const ans = await kastrConfirm({ title: "Change room",
+          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to leave \u201c" + CHANNEL + "\u201d and join it."
+                            : "Leave \u201c" + CHANNEL + "\u201d and join \u201c" + rec.slug + "\u201d?",
+          detail: "Your microphone will be muted and your camera turned off.",
+          ok: "Join " + rec.slug, cancel: "Stay in " + CHANNEL,
+          input: needCode ? { placeholder: "Code for " + rec.slug, masked: true } : null,
+          check: needCode ? async (v) => {
+            if (!String(v || "").trim()) return "Enter the room\u2019s code.";
+            const why = await lockedRoomRefusal(rec, v);
+            if (why || !authSecured) return why;
+            // the page may not know this room's code hash: ask the relay itself (a side token, my session untouched)
+            try { await xsTokenFor(rec.slug, v); return ""; }
+            catch (e) { const m = String(e?.message || e); return /too many|locked out|try again in/i.test(m) ? m : "Wrong room code."; }
+          } : null });
+        if (ans === false) return;
+        if (needCode) { sbFormClose(); switchRoom(rec, ans); return; }
+      } else if (needCode) { sbFormOpen(card, "password", rec); return; }
       sbFormClose();
       switchRoom(rec, "");
       return;
@@ -10526,7 +10640,7 @@
       }
       if (v === "ungroup") { for (const slug of g.rooms) await roomGroupPost({ op: "assign", slug, group: null, roomKey: null }); return; }
       if (v === "delete") {
-        if (!confirm("Delete the group \u201c" + g.name + "\u201d?\n\nIts rooms stay; they are just ungrouped.")) return;
+        if (!(await kastrConfirm({ title: "Delete group", message: "Delete the group \u201c" + g.name + "\u201d?", detail: "Its rooms stay; they are just ungrouped.", ok: "Delete group", danger: true }))) return;
         await roomGroupPost({ op: "delete", group: g.gid });
       }
     });
@@ -11132,7 +11246,8 @@
   // Close room (creator): the store deletes record + chat + attachments; members learn from the store
   window.__chatCloseRoom = async (slug, roomKey, asAdmin) => {   // 0.21.2: asAdmin = no roomKey, the member token carries the admin grant
     if (!slug || (!roomKey && !asAdmin)) return;
-    if (!confirm("Close room \u201c" + slug + "\u201d for everyone?\n\nIts chat history and attachments on the relay host are deleted. Members go back to the lobby.")) return;
+    if (!(await kastrConfirm({ title: "Close room", message: "Close room \u201c" + slug + "\u201d for everyone?",
+                               detail: "Its chat history and attachments on the relay host are deleted. Members go back to the lobby.", ok: "Close room", danger: true }))) return;
     const base = chatBase();
     if (!base) return;
     try {
@@ -11313,7 +11428,7 @@
     if (!f) {   // 0.21.2: an admin removes someone else's file with the member token; 0.21.3: the relay operator with none
       const asAdmin = authSecured && authRole === "admin" && authTokens?.member;
       if (!url || !(asAdmin || isRelayOperator())) return;
-      if (!confirm("Remove this file for everyone?")) return;
+      if (!(await kastrConfirm({ title: "Remove file", message: "Remove this file for everyone?", ok: "Remove", danger: true }))) return;
       try {
         const r = await fetch(fileHref(url), { method: "DELETE", headers: asAdmin ? { Authorization: "Bearer " + authTokens.member } : {} });
         if (!r.ok) { window.__toast?.("Could not remove the file (" + r.status + ")", 5000, { level: "error" }); return; }
@@ -11512,6 +11627,11 @@
   }
   async function switchRoom(rec, code) {
     if (joinState !== "joined") return;
+    if (authSecured) {
+      // 0.10.0: the cached relay access code plus the room's own code
+      try { await authMint(rec.slug, authAccessCode, code ?? ""); }
+      catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.("Could not join " + rec.slug + ": " + (e?.message || e), 5000, { level: "warn" }); return; }   // 0.21.42: said, and nothing muted
+    }
     // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
     if (!isPublisherMode()) {
       try {
@@ -11522,11 +11642,6 @@
           renderMine();
         }
       } catch {}
-    }
-    if (authSecured) {
-      // 0.10.0: the cached relay access code plus the room's own code
-      try { await authMint(rec.slug, authAccessCode, code ?? ""); }
-      catch (e) { log("Room switch refused: " + (e?.message || e)); return; }
     }
     chimeRoom();   // 0.15.0 (D3): the switch tone (the sidebar card path goes through here too)
     const pub = window.__publisher;
@@ -12637,9 +12752,10 @@
         window.__toast?.("RTMP ingest ready \u2014 " + url + " (copied)", 7000, { level: "info" });
         const fw = await rtmpFwCheck();   // 0.21.31: closed -> ask now, on this computer
         if (fw && fw.open === false) {
-          if (window.confirm("Let devices on the network reach this RTMP ingest?\n\nKASTR will open TCP ports 1935-1944 in this computer's firewall. " +
-                             (fw.tool === "windows" ? "Windows will ask for permission." : "You will be asked for permission.") +
-                             "\n\nCancel leaves the firewall as it is (the feed's row keeps an \"Allow through firewall\" button).")) await rtmpFwOpen(null);
+          if (await window.__confirm({ title: "Open the firewall", message: "Let devices on the network reach this RTMP ingest?",
+                                       detail: "KASTR will open TCP ports 1935-1944 in this computer's firewall. " + (fw.tool === "windows" ? "Windows will ask for permission." : "You will be asked for permission.")
+                                         + " Not now leaves the firewall as it is (the feed's row keeps an \"Allow through firewall\" button).",
+                                       ok: "Open the ports", cancel: "Not now" })) await rtmpFwOpen(null);
           else try { renderSources(); } catch {}
         }
       }
@@ -18384,7 +18500,7 @@
       ab.addEventListener("change", () => { try { localStorage.setItem(AUDIO_DEFAULT_KEY, ab.checked ? "1" : "0"); } catch {} });
     }
   }
-  addRtspBtn.addEventListener("click", () => {
+  addRtspBtn.addEventListener("click", async () => {
     const u = rtspUrl.value.trim();
     if (!u) { log("Enter an RTSP or HTTP url first."); window.__toast?.("Enter an RTSP or HTTP url first.", 3000, { level: "warn" }); return; }
     if (IS_WEB2) {   // 0.21.2: the host pulls it
@@ -18407,7 +18523,8 @@
     // picture (and a second broadcast name). Say so; replace on request.
     const dup = u !== TEST_URL ? added.find((a) => a.kind === RTSP && a.url === u) : null;
     if (dup) {
-      const ok = window.confirm("This camera is already being shared as \"" + (dup.label || rtspLabel(u)) + "\".\n\nOK replaces that feed with a fresh one; Cancel keeps things as they are.");
+      const ok = await window.__confirm({ title: "Camera already shared", message: "This camera is already being shared as \u201c" + (dup.label || rtspLabel(u)) + "\u201d.",
+                                          detail: "Replace it with a fresh feed, or keep things as they are.", ok: "Replace it", cancel: "Keep it" });
       if (!ok) { window.__toast?.("Already shared as " + (dup.label || rtspLabel(u)) + " \u2014 nothing added.", 4000, { level: "warn" }); return; }
       removeSource(dup.id);
       window.__toast?.("Replaced the existing feed.", 3000, { level: "info" });

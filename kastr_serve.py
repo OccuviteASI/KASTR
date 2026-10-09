@@ -272,7 +272,16 @@ def mode_set(want):
         mode = str(want).strip().lower() or "full"
     if mode not in MODES:
         raise ValueError("unknown mode %r (one of: %s)" % (mode, ", ".join(MODES)))
+    was = str(ini_get("mode") or "full").strip().lower()
     ini_set("mode", None if mode == "full" else mode)
+    # 0.21.37 (Kenton: "When setting a device as a relay, keep web-client access off by default"): becoming a relay box
+    # turns the page for other devices off (the Relay page's Web clients switch turns it back on). Only on the change --
+    # a relay that already serves web clients (the tunnel's hub) keeps them across updates.
+    if mode in ("relay", "publisher-relay") and was not in ("relay", "publisher-relay"):
+        try:
+            set_web_page(False)
+        except Exception:
+            pass
     return mode_state()
 
 
@@ -717,6 +726,57 @@ def hub_web_base(host_or_url, default=8000):
     if rec.get("base"):
         return rec["base"]
     return "http://%s:%d" % (("[%s]" % host) if ":" in host else host, hub_web_for(host, default))
+
+
+HUB_CLOCK = {"off": 0.0, "rtt": None, "at": 0}   # 0.21.37: this host's clock offset to the HUB's (ms; 0 on the hub / unknown)
+_HUB_CLOCK_RUNNING = [False]
+
+
+def hub_clock_tick(relay_srv):
+    """0.21.37 (Kenton: "latency -1404 ms"): a page measures its clock against its OWN relay host; a publisher on another
+    relay measured against THAT host, so two host clocks a second apart read as a negative latency. A spoke measures its
+    clock against the hub's (best of three /api/client round trips) and hands the offset to its pages, which then all
+    agree on the hub's time."""
+    import ssl
+    try:
+        connect = (relay_srv._cluster_raw() or {}).get("connect")
+        if not connect or (relay_srv._cluster_raw() or {}).get("hub") is True:
+            HUB_CLOCK.update(off=0.0, rtt=None, at=time.time())
+            return
+        base = hub_web_base(connect)
+        if not base:
+            return
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        best = None
+        for _ in range(3):
+            t0 = time.time() * 1000.0
+            with urllib.request.urlopen(base + "/api/client", timeout=4, context=ctx if base.startswith("https") else None) as r:
+                d = json.loads(r.read(8192) or b"{}")
+            t1 = time.time() * 1000.0
+            if not isinstance(d.get("now"), (int, float)):
+                return
+            rtt, off = t1 - t0, d["now"] - (t0 + t1) / 2.0
+            if best is None or rtt < best[0]:
+                best = (rtt, off)
+        if best:
+            HUB_CLOCK.update(off=round(best[1], 1), rtt=round(best[0], 1), at=time.time())
+    except Exception:
+        pass   # the last measurement stands
+
+
+def start_hub_clock(relay_srv, every=180.0):
+    if _HUB_CLOCK_RUNNING[0] or relay_srv is None:
+        return
+    _HUB_CLOCK_RUNNING[0] = True
+
+    def tick():
+        hub_clock_tick(relay_srv)
+        t = threading.Timer(every, tick)
+        t.daemon = True
+        t.start()
+    t0 = threading.Timer(8.0, tick)
+    t0.daemon = True
+    t0.start()
 
 
 def hub_web_for(host, default=8000):
@@ -3576,6 +3636,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "hostname": HTTPS_INFO.get("hostname"),
                 "closing": bool(CLOSING[0]),
                 "now": int(time.time() * 1000),   # 0.18.0: the relay host's clock (latency stamps are corrected to it)
+                "hubOff": HUB_CLOCK.get("off") or 0,   # 0.21.37: this host's offset to the hub's clock -- pages add it (one fleet clock)
                 "features": feats,
             })
 
@@ -4710,6 +4771,7 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
     if relay_srv is not None:
         start_chat_sweeper(relay_srv)   # 0.12.0: idle transcripts go hourly (kept rooms stay); once per process
         start_hub_rooms_keeper(relay_srv)   # 0.21.35: the hub's rooms, copied here every minute
+        start_hub_clock(relay_srv)          # 0.21.37: one fleet clock for latency (the hub's)
     srv.relay_ref = relay_ref
     srv.alive_ref = alive_ref
     return srv

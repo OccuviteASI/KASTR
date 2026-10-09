@@ -165,6 +165,10 @@
   .gridgroup > .gghead { font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--asi-blue); padding:2px 0;
     display:flex; align-items:center; gap:8px; }   /* 0.21.36: + the grid's on-air switch */
   .gridgroup > .gghead .ggt { flex:1; min-width:0; }
+  /* 0.21.37 (Kenton: "the audio toggle and passthrough toggle to be on the grid, and not on the separate shares when in a
+     grid" -- "only ... in the share menu"): a grid member's row loses its own two switches; the header carries them */
+  .gridgroup .camrow .aud, .gridgroup .camrow .pt { display:none !important; }
+  .gridgroup > .gghead .ggsw { display:inline-flex; align-items:center; gap:4px; text-transform:none; letter-spacing:0; color:var(--text-dim); }
   /* 0.21.29: an RTMP ingest row says where to push */
   .camrow .rtmpurl { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); margin-top:4px; flex-wrap:wrap; }
   .camrow .rtmpurl code { font-family:var(--font-mono); color:var(--text); background:var(--surface-2); padding:2px 6px; border-radius:4px; user-select:all; -webkit-user-select:all; }
@@ -287,14 +291,14 @@
   /* 0.7.6: overlay chevron ON shared-content windows (own publish panes
      and remote content tiles) -- the old under-the-pane row chevron
      never read as belonging to the video. */
-  .pchev { position:absolute; top:6px; right:6px; z-index:6; width:24px; height:24px;
+  .pchev { --pw:24px; position:absolute; top:6px; right:6px; z-index:6; width:var(--pw); height:var(--pw);
     display:flex; align-items:center; justify-content:center; padding:0;
     background:rgba(10,14,18,.62); color:#fff; border:1px solid rgba(255,255,255,.25);
     border-radius:5px; cursor:pointer; font-size:11px; line-height:1; }
   .pchev:hover { background:rgba(10,14,18,.85); }
   .pchev .icon { width:12px; height:12px; }
-  .pchev.pfs { right:34px; }      /* 0.21.19: full screen, beside the options */
-  .pchev.pfill { right:62px; }    /* 0.21.19: fill the window */
+  .pchev.pfs { right:calc(10px + var(--pw)); }        /* 0.21.19: full screen, beside the options; 0.21.37: spaced by the size */
+  .pchev.pfill { right:calc(14px + 2 * var(--pw)); }  /* 0.21.19: fill the window (Kenton: "these boxes overlap" at a browser zoom) */
   .pchev.pfs .icon, .pchev.pfill .icon { width:13px; height:13px; }
   /* 0.21.19: fill window -- the page chrome steps aside and the stage covers the app window (menus 80+, toasts 90 stay above) */
   body.fillwin header.asi-header, body.fillwin #sidebar, body.fillwin #sbScrim, body.fillwin #topbar,
@@ -641,7 +645,8 @@
   #stagewrap.idle #stage .pane .mediabar, #stagewrap.idle #stage .pubpane .mediabar,
   #stagewrap.idle #stage .pane .pchev, #stagewrap.idle #stage .pubpane .pchev,
   #stagewrap.idle #stage.spot .pubpane .bar, #stagewrap.idle #stage.spot .pane .label,
-  #stagewrap.idle #stage .zoomctl, #stagewrap.idle #stage .zoomlbl, #stagewrap.idle #stageBack, #stagewrap.idle #stage .latb {
+  #stagewrap.idle #stage .zoomctl, #stagewrap.idle #stage .zoomlbl, #stagewrap.idle #stageBack, #stagewrap.idle #stage .latb,
+  #stagewrap.idle #stage .mchip, #stagewrap.idle #stage .vchip {   /* 0.21.37 (Kenton): the mute / camera-off marks only while the mouse moves over the stage */
     opacity:0 !important; pointer-events:none; transition:opacity .25s ease; }
   #stagewrap.idle #stage.spot .pane.mainstage, #stagewrap.idle #stage.spot .pubpane.mainstage { cursor:none; }
   #stagewrap.idle #stage .pubpane.warnstate .bar { opacity:1 !important; pointer-events:auto; }
@@ -793,7 +798,8 @@
   }
   #stage.collage .pane.shown.audio-only .face, #stage.spot .pane.shown.audio-only .face { flex:1; min-height:0; }
   #stage.collage .pane.shown.audio-only moq-watch, #stage.spot .pane.shown.audio-only moq-watch { flex:0 0 0; min-height:0; }
-  .pane .face .cap { font-size:11px; color:var(--text-mute); font-family:var(--font-mono); }
+  .pane .face .cap { font-size:11px; color:var(--text-mute); font-family:var(--font-mono);
+    max-width:92%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }   /* 0.21.37: one line -- it ran under the name label on rail tiles */
   /* 0.8.6: the equalizer strip -- outranks the pane's fill-the-tile canvas rule */
   #stage .pane .face canvas.eq { width:min(60%, 160px); height:28px; display:block; flex:0 0 auto;
     position:static; object-fit:fill; }
@@ -1423,7 +1429,7 @@
     #stage.collage .pane { touch-action:pan-y; }
     #railGrip, #railPager { display:none !important; }
     #stage .pubpane.screenkind { display:none !important; }   /* 0.8.12: phones cannot share a screen */
-    .pchev { width:32px; height:32px; }
+    .pchev { --pw:32px; }   /* 0.21.37: the offsets follow the size (was width/height only -> the three overlapped) */
     #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
     #stageBack { top:auto; bottom:8px; }
     #stagewrap, .sbrooms, .popcard .body, #sharePop .body, #peoplePanel .pbody { overscroll-behavior:contain; }   /* 0.21.5: no rubber-band reveal of the page behind a sheet */
@@ -4745,7 +4751,7 @@
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
   // chevron button and any other overlay"). Never while scrubbing, while a control has focus, or while
   // the pointer rests on a control. Touch: any tap shows (no tap-to-hide -- a tap already selects).
-  const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.bar,.label,.gmenu,.latb";
+  const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.bar,.label,.gmenu,.latb,.mchip,.vchip";
   let idleT = null, idleOver = false;
   const idleBusy = () => idleOver || !!stageWrap.querySelector('[data-scrub="1"], .gmenu')
     || (document.activeElement && document.activeElement !== document.body && stageWrap.contains(document.activeElement) && document.activeElement.matches("button,input,select"));
@@ -4765,7 +4771,10 @@
   stageWrap.addEventListener("click", (e) => { if (performance.now() < idleSwallowUntil) { idleSwallowUntil = 0; e.stopPropagation(); e.preventDefault(); } }, true);
   document.addEventListener("keydown", idleShow);
   stageWrap.addEventListener("pointerover", (e) => { idleOver = !!e.target.closest?.(IDLE_CTL); });
-  stageWrap.addEventListener("pointerleave", () => { idleOver = false; });
+  stageWrap.addEventListener("pointerleave", (e) => {   // 0.21.37: the mouse left the stage -> the chrome goes now, not in 3 s
+    idleOver = false;
+    if (e.pointerType === "mouse" && !idleBusy()) { clearTimeout(idleT); stageWrap.classList.add("idle"); }
+  });
   idleShow();
   window.__idleChrome = { hide: () => stageWrap.classList.add("idle"), show: idleShow, is: () => stageWrap.classList.contains("idle") };   // rig
   function paintStageBack() {
@@ -5453,8 +5462,11 @@
         // 0.8.2: no "audio only" caption -- the face is identity (initials
         // + swoosh) and the chip row tells the audio/video story.
         t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it"
-          : t.noCatalog ? ((t.catResubs || 0) >= 2 ? "no stream from " + (memberVia(personKeyOf(name)) || "their relay") + " yet \u2014 retrying" : "connecting\u2026")   // 0.21.26: say which relay is not delivering
+          : t.noCatalog ? ((t.catResubs || 0) >= 2 ? "waiting on relay " + (memberVia(personKeyOf(name)) || "?") + "\u2026" : "connecting\u2026")   // 0.21.26: say which relay is not delivering; 0.21.37 (Kenton read "mendon-rtsp" as an RTSP camera): "relay" said out loud
           : t.shed && t.hasVideo !== false ? "video paused \u2014 weak connection" : "";   // 0.21.23   // 0.21.22   // 0.9.2
+        t.faceCap.title = t.noCatalog && (t.catResubs || 0) >= 2
+          ? "No stream from this person has reached your relay yet. It is published on the relay " + (memberVia(personKeyOf(name)) || "?") + " and has to travel from there; KASTR keeps asking."
+          : t.faceCap.textContent;   // 0.21.37: the full story on hover
       }
       if (t.faceInit) {
         t.faceInit.textContent = initialsOf(name);
@@ -6272,6 +6284,8 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = "pchev " + cls;
+        b.innerHTML = icon(cls === "pfs" ? "fullscreen" : "fillwin");   // 0.21.37 (Kenton: empty boxes) -- paintViewTools only reached tiles already on the stage
+        b.title = cls === "pfs" ? "Full screen (F)" : "Fill the window (W)";
         b.addEventListener("click", (e) => { e.stopPropagation(); run(); });
         b.addEventListener("dblclick", (e) => e.stopPropagation());
         pane.appendChild(b);
@@ -9075,7 +9089,7 @@
         const t1 = Date.now();
         const d = await r.json();
         if (typeof d.now !== "number") return;
-        const rtt = t1 - t0, off = d.now - (t0 + t1) / 2;
+        const rtt = t1 - t0, off = d.now - (t0 + t1) / 2 + (Number(d.hubOff) || 0);   // 0.21.37: + the host's offset to the hub -> every page on the hub's clock
         if (!best || rtt < best.rtt) best = { rtt, off };
       } catch { return; }
     }
@@ -9182,9 +9196,15 @@
       // 0.21.7: + the library's skipped groups in the last 60 s (audio/video) -- the clipping's cause, visible
       const sg = window.__slowGroups, cut = Date.now() - 60000;
       let ra = 0, rv = 0; for (const x of sg.recent) { if (x[0] > cut) { if (x[1] === "audio") ra++; else if (x[1] === "video") rv++; } }
-      badge.textContent = "latency " + Math.round(t.latency) + " ms" + ((ra || rv) ? " \u00b7 skips " + ra + "/" + rv : "");   // 0.21.3: say what the number is
-      badge.title = "Glass-to-glass latency from the publisher's time code (clock offset to the relay host " + Math.round(window.__clockOffset || 0) + " ms, rtt " + (window.__clockRtt ?? "?") + " ms)."
-        + " Skipped groups (this page, total): audio " + sg.audio + ", video " + sg.video + " \u2014 a skip is the player dropping buffered media to catch up.";
+      // 0.21.37 (Kenton: "I'm sometimes showing a negative latency, which isn't possible. Also, what does the skips mean?"):
+      // a reading below zero means the two clocks still disagree (a publisher on an older KASTR, or a spoke that has not
+      // measured the hub yet) -- said as such, never as a number; "skips" is spelled out (page-wide, last minute)
+      const lat = Math.round(t.latency);
+      const drops = [ra ? ra + " audio" : "", rv ? rv + " video" : ""].filter(Boolean).join(", ");
+      badge.textContent = (lat < 0 ? "latency: clocks out of step" : "latency " + lat + " ms") + (drops ? " \u00b7 dropped " + drops : "");
+      badge.title = "Glass-to-glass latency from the publisher's time code (this page's clock offset to the fleet clock " + Math.round(window.__clockOffset || 0) + " ms, rtt " + (window.__clockRtt ?? "?") + " ms)."
+        + (lat < 0 ? " The reading came out below zero: the publisher's clock and this page's clock do not agree yet." : "")
+        + " Dropped = chunks of audio or video this page threw away in the last minute to catch up after falling behind (all streams on the page; total since the page opened: audio " + sg.audio + ", video " + sg.video + ").";
     }
   }, 1000);
   window.__latency = () => Object.fromEntries([...tiles].filter(([, t]) => t.latency != null).map(([n, t]) => [n, Math.round(t.latency)]));
@@ -13751,7 +13771,27 @@
         const swi = document.createElement("input"); swi.type = "checkbox"; swi.checked = gridOnAir(gid);
         swi.addEventListener("change", () => setGridOnAir(gid, swi.checked));
         sw.append(swi, document.createElement("i"));
-        head.append(ht, sw);
+        // 0.21.37: the grid's Audio and Pass through, for every member at once
+        const members = added.filter((x) => inGridOf(x) === gid);
+        const ptOk = (x) => x.url && x.url !== TEST_URL && !isScreenUrl(x.url) && !/^(device|media|rtmp-in):/i.test(x.url);
+        const ggSwitch = (label, checked, title, onChange) => {
+          const l = document.createElement("label"); l.className = "ggsw"; l.title = title;
+          const w = document.createElement("span"); w.className = "switch sm";
+          const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = checked;
+          inp.addEventListener("change", () => onChange(inp.checked));
+          w.append(inp, document.createElement("i"));
+          const t = document.createElement("span"); t.textContent = label;
+          l.append(w, t);
+          return l;
+        };
+        const audSw = ggSwitch("Audio", members.length > 0 && members.every((x) => x.audio !== false),
+          "Publish the cameras' audio with every feed in this grid (off = video only)",
+          (on) => { for (const x of members) window.__rtspAudio?.set?.(x.id, on); renderSources(); });
+        const ptMembers = members.filter(ptOk);
+        const ptSw = ptMembers.length ? ggSwitch("Pass through", ptMembers.every((x) => ptFor(x.url)),
+          "Pass every camera in this grid through untouched when viewers can decode it (off = convert to H.264 here). Applies live.",
+          (on) => { for (const x of ptMembers) window.__rtspPt?.set?.(x.id, on); renderSources(); }) : null;
+        head.append(ht, audSw, ...(ptSw ? [ptSw] : []), sw);
         box.appendChild(head);
         camrowsEl.appendChild(box);
         groupBoxes.set(gid, box);

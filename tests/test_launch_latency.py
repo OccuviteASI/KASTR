@@ -40,7 +40,9 @@ class Latency(unittest.TestCase):
 class Ui(unittest.TestCase):
     def test_sidebar_role_icons(self):
         p = _read("moq-watch-lite.html")
-        self.assertIn('li.querySelector(".role").innerHTML = icon(m.publisher ? "bcast" : "eye");', p)
+        self.assertIn('li.querySelector(".role").innerHTML = icon(pub ? "bcast" : "eye");', p)
+        # 0.21.35: in the joined room the rail follows the tiles (the view-only tile's rule)
+        self.assertIn("pub = [...tiles.keys()].some((n) => personKeyOf(n) === String(m.op || \"\").toLowerCase());", p)
         self.assertNotIn('"\\u25B2" : "\\u25CB"', p)
 
     def test_footers_name_the_negotiated_protocol(self):

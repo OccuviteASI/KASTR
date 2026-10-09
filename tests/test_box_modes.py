@@ -142,7 +142,23 @@ class JoinGate(unittest.TestCase):
         p = _read("moq-watch-lite.html")
         self.assertNotIn('(rec.persistent ? "always open" : "")', p)
         self.assertIn('kp.className = "kp"; kp.innerHTML = icon("keep")', p)
-        self.assertIn('<span title="Stays open when everyone leaves">\' + icon("keep")', p)
+        # 0.21.35 (Kenton: "remove the symbol after the time ... The symbol on the circle should be indicator enough")
+        self.assertIn('card.querySelector(".sbflags").innerHTML = "";', p)
+        self.assertNotIn('<span title="Stays open when everyone leaves">\' + icon("keep")', p)
+
+    def test_room_timers_without_seconds(self):
+        # 0.21.35 (Kenton: "remove the seconds on the room timers")
+        p = _read("moq-watch-lite.html")
+        self.assertIn('return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");', p)
+        self.assertIn('"\\u23F1 " + fmtHm(now - card.__since)', p)
+        self.assertIn('(roomSince ? fmtHm(now - roomSince) : "0:00")', p)
+
+    def test_chat_new_only_recent_and_unseen(self):
+        # 0.21.35 (Kenton: "Chats should show new chat until seen or for a certain amount of time, not for everyone new to the room")
+        p = _read("moq-watch-lite.html")
+        self.assertIn("const CHAT_NEW_MS = 15 * 60 * 1000;", p)
+        self.assertIn("(m.local ? !m.seenLocal : m.id > chatSeenId) && chatRecent(m) &&", p)
+        self.assertIn("m.id > chatSeenAtOpen && chatRecent(m) &&", p)
 
     def test_profile_card_never_scrolls_sideways(self):
         self.assertIn("#profilePop .prow input { width:100%; min-width:0; box-sizing:border-box; }", _read("moq-watch-lite.html"))

@@ -1015,6 +1015,59 @@ def page_relay(current, tls=False, req_host=None, remote=False, own_hosts=None):
 
 
 _HUB_ROOMS_CACHE = [None]   # 0.21.25: {"at", "obj"} -- the hub's last /api/rooms answer on a spoke
+_HUB_ROOMS_KEEPER = [False]
+HUB_ROOMS_FILE = "hub-rooms.json"
+
+
+def hub_rooms_remember(state_dir, obj):
+    """0.21.35 (Kenton: "Store a local copy of the rooms on each relay, so if the hub goes down, they are still visible"):
+    the hub's room list, in memory AND on disk (<state>/hub-rooms.json) -- a relay restarted while the hub is dark still
+    lists the rooms. Written only when the list changed."""
+    prev = (_HUB_ROOMS_CACHE[0] or {}).get("obj")
+    _HUB_ROOMS_CACHE[0] = {"at": time.time(), "obj": obj}
+    if not state_dir or prev == obj:
+        return
+    try:
+        kastr_relay.save_json(os.path.join(state_dir, HUB_ROOMS_FILE), {"at": int(time.time()), "obj": obj}, backup=False)
+    except Exception:
+        pass
+
+
+def hub_rooms_load(state_dir):
+    """0.21.35: the saved copy, when this process has none yet."""
+    if _HUB_ROOMS_CACHE[0] is not None or not state_dir:
+        return
+    try:
+        d, _why = kastr_relay.load_json(os.path.join(state_dir, HUB_ROOMS_FILE), retries=1)
+        if isinstance(d, dict) and isinstance((d.get("obj") or {}).get("rooms"), list):
+            _HUB_ROOMS_CACHE[0] = {"at": float(d.get("at") or 0), "obj": d["obj"]}
+    except Exception:
+        pass
+
+
+def start_hub_rooms_keeper(relay_srv, every=60.0):
+    """0.21.35: on a spoke, ask the hub for its rooms once a minute (nobody has to open a room list for the copy to stay
+    current). Once per process; a box that is not a spoke asks nothing."""
+    if _HUB_ROOMS_KEEPER[0] or relay_srv is None:
+        return
+    _HUB_ROOMS_KEEPER[0] = True
+    sd = getattr(relay_srv, "state_dir", None) or STATE_DIR
+    hub_rooms_load(sd)
+
+    def tick():
+        try:
+            if relay_srv._hub_minter_url() and relay_srv._cluster_raw().get("hub") is not True:
+                out = relay_srv.hub_rooms_call({"op": "list"}, timeout=5)
+                if out and out[1] == 200 and isinstance((out[0] or {}).get("rooms"), list):
+                    hub_rooms_remember(sd, out[0])
+        except Exception:
+            pass   # HubDown and friends: the copy stays as it was
+        t = threading.Timer(every, tick)
+        t.daemon = True
+        t.start()
+    t0 = threading.Timer(15.0, tick)
+    t0.daemon = True
+    t0.start()
 
 
 def chat_store(state_dir=None, relay_srv=None):
@@ -2659,10 +2712,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     out = relay_srv.hub_rooms_call({"op": "list"}, timeout=4)
                     obj, code = out if out else ({}, 0)
                     if code == 200 and isinstance(obj.get("rooms"), list):
-                        _HUB_ROOMS_CACHE[0] = {"at": time.time(), "obj": obj}
+                        hub_rooms_remember(self._state_dir(), obj)   # 0.21.35: kept on disk too
                         return self._json_cors(200, self._rooms_merge(obj, store, False))
                 except kastr_relay.HubDown:
                     pass
+                hub_rooms_load(self._state_dir())   # 0.21.35: a relay restarted while the hub is dark
                 cached = (_HUB_ROOMS_CACHE[0] or {}).get("obj") or {"rooms": [], "closed": {}, "groups": {}}
                 return self._json_cors(200, self._rooms_merge(cached, store, True))
             if method != "POST":
@@ -4584,6 +4638,7 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
         pass
     if relay_srv is not None:
         start_chat_sweeper(relay_srv)   # 0.12.0: idle transcripts go hourly (kept rooms stay); once per process
+        start_hub_rooms_keeper(relay_srv)   # 0.21.35: the hub's rooms, copied here every minute
     srv.relay_ref = relay_ref
     srv.alive_ref = alive_ref
     return srv

@@ -7150,7 +7150,6 @@
     }
   }
   window.__spotLit = () => [...spotLits.values()].reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);   // rig: the newest mirror
-  const SPOT_STALE_MS = 600000;   // 0.13.3: a spotlight older than this does not pull a newcomer's stage (it is still listed)
   let spotClearedAt = 0;          // 0.21.30: "Remove spotlight" for everything -- every vote older than this is history here
   // 0.21.32: the room's spotlight set, oldest first (the grid's reading order): [{ target, ts, by }]
   function spotSetNow() {
@@ -7237,9 +7236,9 @@
       if (was && !manualPick && !gridMode) { selfSpotEl = null; gridMode = true; applyState(); }
       return;
     }
-    // 0.13.3: room.json remembers a click forever -- a spotlight set last changed more than ten minutes ago is
-    // history for a newcomer, not an instruction (it still shows "Remove spotlight" in the menus)
-    if (!was && newest && Date.now() - newest > SPOT_STALE_MS) return;   // a page already showing the spotlight follows every change
+    // 0.21.35 (Kenton: "when something is spotlighted for everyone, I'll leave the room and come back and the spotlight will
+    // not be set anymore"): 0.13.3's ten-minute rule (an older spotlight did not pull a newcomer's stage) is gone -- anyone
+    // can remove a spotlight now, so a standing one applies to everyone who (re)joins
     manualPick = false;
     gridMode = false;
     if (items.length === 1) {
@@ -10221,6 +10220,11 @@
     const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
     return h + ":" + String(m).padStart(2, "0") + ":" + String(x).padStart(2, "0");
   }
+  // 0.21.35 (Kenton: "remove the seconds on the room timers"): the rail and the banner count h:mm (Room info keeps seconds)
+  function fmtHm(ms) {
+    const t = Math.max(0, Math.floor(ms / 60000));
+    return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+  }
   function ownRoomTalking() {
     const now = performance.now();
     for (const t of tiles.values()) if (now < (t.talkUntil ?? 0)) return true;
@@ -10373,10 +10377,10 @@
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
     card.querySelector(".sbcnt").textContent = rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;
-    card.querySelector(".sbtime").textContent = rec.since ? "\u23F1 " + fmtHms(Date.now() - rec.since) : "\u23F1 \u2014";
-    // 0.21.31 (Kenton: "don't put the always open in the rooms, just put a symbol ... similar to the lock symbol")
-    card.querySelector(".sbflags").innerHTML = (rec.locked ? '<span title="Locked">' + icon("lock") + "</span>" : "")
-      + (rec.persistent ? '<span title="Stays open when everyone leaves">' + icon("keep") + "</span>" : "");
+    card.querySelector(".sbtime").textContent = rec.since ? "\u23F1 " + fmtHm(Date.now() - rec.since) : "\u23F1 \u2014";
+    // 0.21.35 (Kenton: "remove the symbol after the time to denote locked or keep. The symbol on the circle should be
+    // indicator enough"): the lock / infinity badges on the round bubble say it; nothing after the time
+    card.querySelector(".sbflags").innerHTML = "";
     // members, reconciled by op
     const ul = card.querySelector(".sbmembers");
     const seen = new Set();
@@ -10393,8 +10397,15 @@
       }
       li.querySelector(".nm").textContent = m.name || m.op;
       li.querySelector(".nm").title = (m.name || m.op) + (m.via ? " via " + m.via : "");
-      li.querySelector(".role").innerHTML = icon(m.publisher ? "bcast" : "eye");   // 0.21.22 (Kenton): was a triangle / circle
-      li.querySelector(".role").title = m.publisher ? "Publishing (camera, microphone or shares)" : "View only";
+      // 0.21.35 (Kenton: "the indicator for viewing only and publisher don't always align. SR on the left shows publisher, but
+      // on the right shows view only"): in the room I am in, the rail follows the tiles -- publishing = something of theirs is
+      // on screen here, the same rule as the view-only tile (viewerOps); other rooms keep what their presence says
+      let pub = m.publisher;
+      if (joinState === "joined" && rec.slug === CHANNEL && String(m.op || "").toLowerCase() !== String(window.__publisher?.opSlug?.() || "").toLowerCase()) {
+        pub = [...tiles.keys()].some((n) => personKeyOf(n) === String(m.op || "").toLowerCase());
+      }
+      li.querySelector(".role").innerHTML = icon(pub ? "bcast" : "eye");   // 0.21.22 (Kenton): was a triangle / circle
+      li.querySelector(".role").title = pub ? "Publishing (camera, microphone or shares)" : "View only";
       li.querySelector(".spk").classList.toggle("on", !!m.talking);
     }
     for (const li of [...ul.children]) if (!seen.has(li.dataset.op)) li.remove();
@@ -10637,11 +10648,11 @@
     const now = Date.now();
     for (const card of sbRoomsEl?.querySelectorAll(":scope > .sbcard") || []) {
       const t = card.querySelector(".sbtime");
-      if (t) t.textContent = card.__since ? "\u23F1 " + fmtHms(now - card.__since) : "\u23F1 \u2014";
+      if (t) t.textContent = card.__since ? "\u23F1 " + fmtHm(now - card.__since) : "\u23F1 \u2014";
     }
     if (joinState === "joined") {
       const t = joinEls.roomBanner?.querySelector(".rbtime");
-      if (t) t.textContent = "\u23F1 " + (roomSince ? fmtHms(now - roomSince) : "0:00:00");
+      if (t) t.textContent = "\u23F1 " + (roomSince ? fmtHm(now - roomSince) : "0:00");
       joinEls.roomBanner?.querySelector(".spk")?.classList.toggle("on", ownRoomTalking());
     }
   }, 1000);
@@ -10746,11 +10757,16 @@
     chatPanel.style.left = Math.round(Math.max(12, window.innerWidth - w - 12)) + "px";
   }
   window.addEventListener("resize", () => { if (!chatPanel.hidden) chatPlace(); });
+  // 0.21.35 (Kenton: "Chats should show new chat until seen or for a certain amount of time, not for everyone new to the
+  // room"): a message is new to me while I have not seen it AND it is younger than CHAT_NEW_MS -- someone entering a room
+  // no longer gets its whole history counted as new, and an old unseen message stops counting on its own
+  const CHAT_NEW_MS = 15 * 60 * 1000;
+  const chatRecent = (m) => Date.now() - (Number(m.ts) || 0) < CHAT_NEW_MS;
   function paintChatBadge() {
     const b = chatBtn.querySelector(".bdg");
     if (!b) return;
     const me = chatMe();
-    const n = chatRoom ? chatMsgs.filter((m) => (m.local ? !m.seenLocal : m.id > chatSeenId) && String(m.op || "").toLowerCase() !== me).length : 0;
+    const n = chatRoom ? chatMsgs.filter((m) => (m.local ? !m.seenLocal : m.id > chatSeenId) && chatRecent(m) && String(m.op || "").toLowerCase() !== me).length : 0;
     const was = b.hidden ? 0 : Number(b.textContent) || 0;
     b.hidden = n === 0;
     b.textContent = n > 99 ? "99+" : String(n);
@@ -10764,6 +10780,7 @@
     paintChatBadge();
   }
   document.addEventListener("visibilitychange", () => { chatMarkSeen(); });
+  setInterval(() => { if (chatRoom) paintChatBadge(); }, 60000);   // 0.21.35: messages age out of "new" on their own
   function chatPollArm() {
     clearInterval(chatPollT);
     chatPollT = null;
@@ -10835,7 +10852,7 @@
     for (const m of chatMsgs) {
       const day = fmtDay(new Date(tsMs(m)));
       if (day !== lastDay) { const d = document.createElement("div"); d.className = "cday"; d.textContent = day; chatLog.appendChild(d); lastDay = day; prev = null; }
-      if (!newShown && chatSeenAtOpen && m.id > chatSeenAtOpen && String(m.op || "").toLowerCase() !== chatMe()) {
+      if (!newShown && chatSeenAtOpen && m.id > chatSeenAtOpen && chatRecent(m) && String(m.op || "").toLowerCase() !== chatMe()) {   // 0.21.35: + recent
         const n = document.createElement("div"); n.className = "cnew"; n.textContent = "new"; chatLog.appendChild(n); newShown = true; prev = null;
       }
       chatLog.appendChild(chatRenderOne(m, prev));

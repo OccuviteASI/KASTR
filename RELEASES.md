@@ -2,6 +2,18 @@
 
 What changed in each build, newest first.
 
+## v0.21.35 — rooms survive a dark hub, chat new means recent, steady spotlight
+
+**Rooms stay visible when the hub is down (Kenton: "Store a local copy of the rooms on each relay, so if the hub goes down, they are still visible").** Every relay asks the hub for its room list once a minute and keeps a copy on disk (`hub-rooms.json` in its state folder), not only in memory. A relay restarted while the hub is offline still lists the rooms, marked as the hub's last known list. Tested on the lab pair: with the hub stopped and the spoke restarted, the spoke still listed the hub's kept room; it went back to live answers when the hub returned.
+
+**A standing spotlight applies when you come back (Kenton: "I'll leave the room and come back and the spotlight will not be set anymore").** Since 0.13.3 a spotlight older than ten minutes did not pull the stage of someone (re)joining, a guard from before anyone could remove a spotlight. Now that **Remove spotlight** exists on every tile, the guard is gone: a standing spotlight applies to everyone who joins or rejoins.
+
+**The rail and the tiles agree on who is publishing (Kenton: "SR on the left shows publisher, but on the right shows view only").** For the room you are in, the room rail now marks someone as publishing only when something of theirs is on screen, the same rule as the view-only tile. Before, the rail believed the member's status ("publishing something") even when nothing of theirs arrived. Other rooms in the rail still use the status, since there are no tiles to compare.
+
+**Chat "new" means recent and unseen (Kenton: "Chats should show new chat until seen or for a certain amount of time, not for everyone new to the room").** The chat badge counted every message newer than the last one you had seen, so someone entering a room for the first time got its whole history as new. A message now counts as new while you have not seen it and it is less than 15 minutes old; older unseen messages drop out of the count on their own. The "new" line inside the chat panel follows the same rule. Tested: a newcomer to a room with two 2-hour-old messages and one fresh one saw a badge of 1 (it would have been 3).
+
+**Room timers without seconds, no symbol after the time (Kenton: "remove the seconds on the room timers and also remove the symbol after the time to denote locked or keep. The symbol on the circle should be indicator enough").** The room rail and the room banner count hours and minutes (`1:05`); Room info still shows seconds. The lock and ∞ badges on the round room bubble are the only markers now.
+
 ## v0.21.34 — no room question, fleet relays listed, no rail grip without a rail
 
 **No room question on the join card (Kenton: "remove the room option and have everyone join main by default and whatever room they were in last after that").** The Room row is gone. The first join goes to `main`; after that, to the room you were last in. If that room has closed, or it is locked and its code was not saved on this computer, you land in `main`. A Share invite link that names a room still opens that room. Rooms are switched from the room rail once you are in.

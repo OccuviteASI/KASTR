@@ -936,6 +936,28 @@
   #kConfirm .kcbtns .danger:hover { filter:brightness(1.1); }
   #kConfirm .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
   @keyframes kcIn { from { opacity:0; transform:scale(.97); } to { opacity:1; transform:none; } }
+  /* 0.21.43: MY view of a grid -- a canvas over the grid tile's own picture (same box, same fit) */
+  .pane canvas.vgcv { position:absolute; pointer-events:none; z-index:1; background:#000; }
+  /* 0.21.43: the grid layout editor -- boxes over the grid picture on a 24 x 24 snap grid */
+  .gedit { position:absolute; inset:0; z-index:30; }
+  .gedit .getools { position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:85; display:flex; flex-wrap:wrap; align-items:center;
+    gap:6px; max-width:calc(100% - 16px); background:var(--surface); border:1px solid var(--asi-blue-dim); border-radius:8px; padding:6px 8px;
+    box-shadow:0 10px 30px rgba(0,0,0,.5); font-size:12px; color:var(--text-dim); }
+  .gedit .getools .gettl { font-weight:600; color:var(--text); margin-right:4px; white-space:nowrap; }
+  .gedit .getools button { height:26px; padding:0 10px; font-size:12px; }
+  .gedit .getools button.ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  .gedit .getools button.ghost.on { border-color:var(--asi-blue); color:#fff; }
+  .gedit .getools label { display:inline-flex; flex-direction:row !important; align-items:center; gap:6px; white-space:nowrap; }
+  .gedit .getools input[type=range] { width:90px; }
+  .gedit .getools .sep { width:1px; height:20px; background:var(--line); }
+  .gedit .geframe { position:absolute; background-image:linear-gradient(to right, rgba(255,255,255,.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,.08) 1px, transparent 1px);
+    background-size:calc(100% / 24) calc(100% / 24); outline:1px dashed rgba(255,255,255,.25); }
+  .gedit .gebox { position:absolute; box-sizing:border-box; border:2px solid var(--asi-blue); background:rgba(0,159,218,.14); color:#fff;
+    font:600 12px var(--font-ui); padding:6px 8px; cursor:grab; user-select:none; touch-action:none; overflow:hidden; text-shadow:0 1px 2px #000; }
+  .gedit .gebox.drag { cursor:grabbing; background:rgba(0,159,218,.28); z-index:2; }
+  .gedit .gebox.bad { border-color:var(--asi-red); background:rgba(220,60,60,.2); }
+  .gedit .gebox.swap { border-style:dashed; }
+  .gedit .gebox .geh { position:absolute; right:0; bottom:0; width:16px; height:16px; background:var(--asi-blue); cursor:nwse-resize; border-radius:4px 0 0 0; }
   @media (prefers-reduced-motion: reduce) { #kConfirm .popcard.kconfirm { animation:none; } }
   #helpPop { width:min(480px, calc(100vw - 24px)); }
   #helpPop .body p { margin:0 0 10px; line-height:1.65; }
@@ -4264,7 +4286,7 @@
   const gridKin = (gp) => [...gridChildOf].filter(([, g]) => g === gp).map(([f]) => f);   // 0.9.5: the members behind a grid path
   window.__gridDebug = {   // rig hooks (0.9.4)
     children: () => [...gridChildOf.entries()],
-    metas: () => [...gridMeta.entries()].map(([k, m]) => ({ path: k, feeds: m.feeds, known: [...(m.known || [])], members: m.members || [], dead: [...(m.dead || [])], gone: m.gone || 0, tileGone: m.tileGone || 0, ts: m.ts })),   // 0.21.0: + members/dead
+    metas: () => [...gridMeta.entries()].map(([k, m]) => ({ path: k, n: m.n, layout: m.layout, rects: m.rects, gap: m.gap, cells: m.cells, feeds: m.feeds, known: [...(m.known || [])], members: m.members || [], dead: [...(m.dead || [])], gone: m.gone || 0, tileGone: m.tileGone || 0, ts: m.ts })),   // 0.21.0: + members/dead
     accept: (path, active) => gridAccept(path, active),   // inject an announce (old-owner compatibility tests)
   };
   // 0.13.0 (F4/F5): while ONE full-quality feed is open (spot, its grid's child
@@ -4319,6 +4341,177 @@
     });
     return rects;
   }
+  // 0.21.43: the owner's drawn rects when it sends them (every layout, custom ones included); older owners: the shared math
+  function gridRectsOf(meta, W, H) {
+    const rs = meta && Array.isArray(meta.rects) ? meta.rects : null;
+    if (rs && rs.length >= (meta.n || 1) && rs.every((r) => Array.isArray(r) && r.length === 4 && r.every(Number.isFinite))) return rs.map(([x, y, w, h]) => ({ x: x * W, y: y * H, w: w * W, h: h * H }));
+    return gridRectsW(meta?.n || 1, meta?.layout || "auto", W, H);
+  }
+  window.__gridRectsOf = gridRectsOf;   // rig
+  // ---- 0.21.43 (Kenton): MY view of a grid -- arrange its cells on my screen only, and up to 4 cells at full quality ------
+  // Kept per grid (its path without the room, so a room change keeps it): {rects: {member: [x,y,w,h] units}, gap, hq: [member]}.
+  // When any of it is set, a canvas over the grid tile redraws every frame: each cell = the owner's cell cropped from the
+  // grid picture, or -- a full-quality cell -- that camera's own stream (its tile subscribes off-stage), placed where MY
+  // layout puts it. Nothing changes for anyone else.
+  const VG_KEY = "kastr.vgrid.", VG_HQ_MAX = 4;
+  const vgKey = (p) => String(p || "").split("/").slice(1).join("/");
+  function vgGet(gp) { try { const v = JSON.parse(localStorage.getItem(VG_KEY + vgKey(gp)) || "null"); return v && typeof v === "object" ? v : null; } catch { return null; } }
+  function vgSet(gp, v) {
+    try {
+      if (!v || (!Object.keys(v.rects || {}).length && !(v.hq || []).length)) localStorage.removeItem(VG_KEY + vgKey(gp));
+      else localStorage.setItem(VG_KEY + vgKey(gp), JSON.stringify(v));
+    } catch {}
+    vgSync(); try { applyState(); } catch {}
+  }
+  const vgHasRects = (gp) => { const v = vgGet(gp); return !!(v && v.rects && Object.keys(v.rects).length); };
+  const vgHq = (gp) => new Set((vgGet(gp)?.hq || []).map(String));
+  const vgActive = (gp) => { const v = vgGet(gp); return !!(v && ((v.rects && Object.keys(v.rects).length) || (v.hq || []).length)); };
+  function vgUnits(gp, meta) {   // my blocks per cell (units), overlaps resolved; null = I follow the owner's layout
+    const v = vgGet(gp), gu = window.__gu;
+    if (!v || !v.rects || !Object.keys(v.rects).length || !gu) return null;
+    const placed = [];
+    return (meta.members || []).map((mp) => {
+      let u = v.rects[vgKey(mp)];
+      if (!gu.ok(u) || placed.some((p) => gu.hit(p, u))) u = gu.free(placed);
+      placed.push(u);
+      return u;
+    });
+  }
+  function vgDstRects(gp, meta, W, H) {   // where each cell goes on MY screen
+    const units = vgUnits(gp, meta);
+    if (!units) return gridRectsOf(meta, W, H);
+    const gp2 = Math.max(0, Math.min(24, Number(vgGet(gp)?.gap ?? 2))) / 2 * (W / 1280);
+    return units.map((u) => ({ x: u[0] * W / 24 + gp2, y: u[1] * H / 24 + gp2, w: Math.max(2, u[2] * W / 24 - 2 * gp2), h: Math.max(2, u[3] * H / 24 - 2 * gp2) }));
+  }
+  function vgHqWanted(name) {   // a full-quality cell's camera subscribes while its grid is drawn my way
+    for (const [gp, m] of gridMeta) if (tiles.get(gp)?.vg && (m.members || []).includes(name) && vgHq(gp).has(vgKey(name))) return true;
+    return false;
+  }
+  const vgFrameOf = (t) => { try { return t.watch.video?.out?.frame?.peek?.() || t.watch.renderer?.out?.frame?.peek?.() || null; } catch { return null; } };
+  let vgRaf = 0, vgLast = 0;
+  function vgSync() {
+    for (const [name, t] of tiles) {
+      const want = gridMeta.has(name) && vgActive(name);
+      if (want && !t.vg) { const cv = document.createElement("canvas"); cv.className = "vgcv"; t.pane.appendChild(cv); t.vg = { cv, cx: cv.getContext("2d", { alpha: false }) }; }
+      if (!want && t.vg) { t.vg.cv.remove(); t.vg = null; }
+    }
+    if (!vgRaf && [...tiles.values()].some((t) => t.vg)) vgRaf = requestAnimationFrame(vgFrame);
+  }
+  window.__vgSync = vgSync;
+  function vgFrame(ts) {
+    vgRaf = 0;
+    let any = false;
+    for (const [name, t] of tiles) {
+      if (!t.vg) continue;
+      any = true;
+      if (ts - vgLast >= 30) { try { vgDraw(name, t); } catch {} }
+    }
+    if (ts - vgLast >= 30) vgLast = ts;
+    if (any) vgRaf = requestAnimationFrame(vgFrame);
+  }
+  function vgDraw(name, t) {
+    const meta = gridMeta.get(name), st = t.vg, cv = st.cv, src = t.canvas;
+    if (!meta || !src) return;
+    // the grid's own zoom / a cell opening shows the real picture underneath
+    const hide = !src.isConnected || !t.pane.classList.contains("shown") || viewZoomed(src) || (gridOpen && gridOpen.gp === name) || (gridZoom && gridZoom.name === name);
+    cv.style.display = hide ? "none" : "";
+    if (hide) return;
+    const W = src.width || 1280, H = src.height || 720;
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const cs = getComputedStyle(src);
+    Object.assign(cv.style, { left: src.offsetLeft + "px", top: src.offsetTop + "px", width: src.offsetWidth + "px", height: src.offsetHeight + "px", objectFit: cs.objectFit, transform: cs.transform === "none" ? "" : cs.transform, transformOrigin: cs.transformOrigin });
+    const cx = st.cx;
+    cx.fillStyle = "#000"; cx.fillRect(0, 0, W, H);
+    const fr = vgFrameOf(t);
+    const fw = fr ? (fr.displayWidth || fr.codedWidth) : W, fh = fr ? (fr.displayHeight || fr.codedHeight) : H;
+    const srcR = gridRectsOf(meta, W, H), dst = vgDstRects(name, meta, W, H), hq = vgHq(name);
+    (meta.members || []).forEach((mp, i) => {
+      const d = dst[i], sr = srcR[i];
+      if (!d || !sr) return;
+      let drawn = false;
+      if (hq.has(vgKey(mp))) {   // full quality: the camera's own stream
+        const mt = tiles.get(mp), f2 = mt && vgFrameOf(mt);
+        if (f2) {
+          const sw = f2.displayWidth || f2.codedWidth, sh = f2.displayHeight || f2.codedHeight, sc = Math.min(d.w / sw, d.h / sh);
+          try { cx.drawImage(f2, d.x + (d.w - sw * sc) / 2, d.y + (d.h - sh * sc) / 2, sw * sc, sh * sc); drawn = true; } catch {}
+        }
+      }
+      if (!drawn) {   // the owner's cell, cropped from the grid picture
+        const kx = fw / W, ky = fh / H, sw = sr.w * kx, sh = sr.h * ky, sc = Math.min(d.w / sw, d.h / sh);
+        try { cx.drawImage(fr || src, sr.x * kx, sr.y * ky, sw, sh, d.x + (d.w - sw * sc) / 2, d.y + (d.h - sh * sc) / 2, sw * sc, sh * sc); }
+        catch { try { cx.drawImage(src, sr.x, sr.y, sr.w, sr.h, d.x + (d.w - sr.w * sc) / 2, d.y + (d.h - sr.h * sc) / 2, sr.w * sc, sr.h * sc); } catch {} }
+      }
+      if (hq.has(vgKey(mp))) {   // a small mark: this cell is the camera's own stream (or waiting for it)
+        cx.font = "600 12px sans-serif";
+        const txt = drawn ? "Full quality" : "Full quality\u2026";
+        const tw = cx.measureText(txt).width + 12;
+        cx.fillStyle = "rgba(0,159,218,.85)"; cx.fillRect(d.x + d.w - tw - 6, d.y + 6, tw, 18);
+        cx.fillStyle = "#fff"; cx.textBaseline = "middle"; cx.fillText(txt, d.x + d.w - tw, d.y + 16); cx.textBaseline = "alphabetic";
+      }
+    });
+  }
+  function vgToggleHq(gp, member) {   // max 4 per grid
+    const v = vgGet(gp) || {}, hq = new Set((v.hq || []).map(String)), k = vgKey(member);
+    if (hq.has(k)) hq.delete(k);
+    else {
+      if (hq.size >= VG_HQ_MAX) { window.__toast?.("Up to " + VG_HQ_MAX + " cells of a grid at full quality \u2014 turn one off first.", 4500, { level: "warn" }); return; }
+      hq.add(k);
+    }
+    v.hq = [...hq];
+    vgSet(gp, v);
+    window.__toast?.(hq.has(k) ? "Full quality in the grid \u2014 only on your screen (more data for this camera)" : "Back to the grid picture for that cell", 3500, { level: "event" });
+  }
+  function vgEdit(name) {   // arrange the grid on MY screen
+    const t = tiles.get(name), meta = gridMeta.get(name), gu = window.__gu, ed = window.__gridEditor;
+    if (!t || !meta || !gu || !ed) return;
+    if (gridMode || selectedName !== name) { gridMode = false; select(name); }
+    const before = JSON.stringify(vgGet(name) || null);
+    const labelOf = (i) => String(meta.cells?.[i] || ("Camera " + (i + 1))).slice(0, 32);
+    const boxesNow = () => {
+      const mine = vgUnits(name, meta);
+      if (mine) return (meta.members || []).map((mp, i) => ({ key: vgKey(mp), label: labelOf(i), u: mine[i] }));
+      const W = 1280, H = 720, rs = gridRectsOf(meta, W, H), placed = [];   // start from the owner's layout
+      return (meta.members || []).map((mp, i) => {
+        const r = rs[i];
+        let u = r ? [Math.round(r.x * 24 / W), Math.round(r.y * 24 / H), Math.max(2, Math.round(r.w * 24 / W)), Math.max(2, Math.round(r.h * 24 / H))] : null;
+        if (u) { u[2] = Math.min(u[2], 24 - u[0]); u[3] = Math.min(u[3], 24 - u[1]); }
+        if (!gu.ok(u) || placed.some((p) => gu.hit(p, u))) u = gu.free(placed);
+        placed.push(u);
+        return { key: vgKey(mp), label: labelOf(i), u };
+      });
+    };
+    const save = (boxes, gap) => {
+      const v = vgGet(name) || {};
+      if (boxes) v.rects = Object.fromEntries(boxes.map((b) => [b.key, b.u]));
+      if (gap != null) v.gap = gap;
+      if (!v.rects || !Object.keys(v.rects).length) v.rects = Object.fromEntries(boxesNow().map((b) => [b.key, b.u]));   // a gap change alone still means "my layout"
+      vgSet(name, v);
+    };
+    setTimeout(() => ed.open({
+      pane: t.pane, layout: vgHasRects(name) ? "custom" : "", gap: Number(vgGet(name)?.gap ?? meta.gap ?? 2), templates: gu.templates.filter(([id]) => id !== "row" && id !== "column"),
+      title: "My view of " + (meta.label || "this grid") + " \u2014 only you see it",
+      frame: () => {
+        const f = viewFitBox(t.canvas);
+        if (!f) return null;
+        const b = t.canvas.getBoundingClientRect(), pb = t.pane.getBoundingClientRect();
+        return { x: b.left - pb.left + f.ox, y: b.top - pb.top + f.oy, w: f.cw * f.sc, h: f.ch * f.sc };
+      },
+      boxes: boxesNow(),
+      onChange: (boxes) => save(boxes, null),
+      onGap: (gap) => save(null, gap),
+      onTemplate: (id) => {
+        const n = (meta.members || []).length, units = id === "auto" ? null : gu.template(n, id);
+        if (!units) { const v = vgGet(name) || {}; delete v.rects; vgSet(name, v); return boxesNow(); }
+        const boxes = (meta.members || []).map((mp, i) => ({ key: vgKey(mp), label: labelOf(i), u: units[i] || gu.free(units.slice(0, i)) }));
+        save(boxes, null);
+        return boxes;
+      },
+      onReset: () => { const v = vgGet(name) || {}; delete v.rects; delete v.gap; vgSet(name, v); return boxesNow(); },
+      onCancel: () => { try { const b = JSON.parse(before); const v = b || {}; vgSet(name, b ? v : null); } catch {} },
+      onClose: () => {},
+    }), 300);
+  }
+  window.__vg = { edit: vgEdit, hq: vgToggleHq, get: vgGet, set: vgSet };   // rig
   function gridRectsW(n, layout, W, H) {
     const rects = [];
     const grid = (cols, rows) => {   // 0.9.8: a short last row is centred
@@ -4498,7 +4691,8 @@
         gridMeta.set(meta.path, { n: Number(meta.n) || 1, layout: meta.layout || "auto", cells: meta.cells || [],
           feeds, out, members, dead, down, mode: meta.mode || "grid", ts, key: String(path),
           id: meta.id != null ? String(meta.id) : "1", label: String(meta.label || "").slice(0, 40),   // 0.15.0: which of the owner's grids, and its display name
-          known, gone: 0, tileGone: tiles.has(meta.path) ? 0 : (cur?.tileGone || 0) });   // 0.8.12 / 0.9.4 / 0.14.0
+          known, gone: 0, tileGone: tiles.has(meta.path) ? 0 : (cur?.tileGone || 0),   // 0.8.12 / 0.9.4 / 0.14.0
+          rects: Array.isArray(meta.rects) ? meta.rects.slice(0, 64) : null, gap: Number(meta.gap) || 0, path: String(meta.path) });   // 0.21.43: the owner's drawn geometry
       }
     } else {
       const cur = gridMeta.get(meta.path);
@@ -4511,6 +4705,7 @@
     }
     rebuildGridChildren();   // 0.8.12
     gridSelectionFix();   // 0.13.3: an automatic pick that turned out to be a child goes back to the grid
+    try { vgSync(); } catch {}   // 0.21.43: my view of this grid
     if (gridZoom && !gridMeta.has(gridZoom.name)) gridZoom = null;
     queueRelayout();
   }
@@ -4522,7 +4717,8 @@
     const wb = t.canvas.parentElement.getBoundingClientRect();
     if (!wb.width || !wb.height) return -1;
     const px = (ev.clientX - wb.left - f.ox) / f.sc, py = (ev.clientY - wb.top - f.oy) / f.sc;
-    return gridRectsW(meta.n, meta.layout, f.cw, f.ch).findIndex((r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
+    const rs = meta.path && vgHasRects(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);   // 0.21.43: my layout
+    return rs.findIndex((r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
   }
   // ---- view engine (0.8.12) --------------------------------------------------
   // Zoom is STATE, not a one-off transform: view = {s, cx, cy} per canvas --
@@ -4764,7 +4960,7 @@
     const t = tiles.get(w.gp), meta = gridMeta.get(w.gp);
     if (!t || !meta || !t.canvas.isConnected) return;
     const f = viewFitBox(t.canvas);
-    const r = gridRectsW(meta.n, meta.layout, f ? f.cw : t.canvas.width, t.canvas.height)[w.idx];
+    const r = gridRectsOf(meta, f ? f.cw : t.canvas.width, t.canvas.height)[w.idx];
     if (!r) return;
     const wb = t.canvas.parentElement.getBoundingClientRect(), pb = t.pane.getBoundingClientRect();
     const sc = f ? f.sc : (wb.width / t.canvas.width), ox = f ? f.ox : 0, oy = f ? f.oy : 0;
@@ -4868,7 +5064,7 @@
     const t = tiles.get(gridZoom.name), meta = gridMeta.get(gridZoom.name);
     if (!t || !meta || gridZoom.name !== selectedName || selfSpotEl) { gridZoom = null; return; }   // 0.8.13: never on a rail tile
     const f = viewFitBox(t.canvas);   // 0.9.8: rects in the corrected frame
-    const r = gridRectsW(meta.n, meta.layout, f ? f.cw : t.canvas.width, t.canvas.height)[gridZoom.idx];
+    const r = gridRectsOf(meta, f ? f.cw : t.canvas.width, t.canvas.height)[gridZoom.idx];
     if (r) viewSetRect(t.canvas, r, meta.cells?.[gridZoom.idx] || "Feed " + (gridZoom.idx + 1));
   }
   // the Gallery pill on a grid main tile (its click zooms instead of returning)
@@ -5203,7 +5399,7 @@
     const gt = gridZoom && tiles.get(gridZoom.name);
     if (gt && gt.pane === el) {
       const meta = gridMeta.get(gridZoom.name);
-      const r = meta && gridRectsW(meta.n, meta.layout, w, h)[gridZoom.idx];
+      const r = meta && gridRectsOf(meta, w, h)[gridZoom.idx];
       if (r && r.w > 0 && r.h > 0) return r.w / r.h;
     }
     return w / h;
@@ -5670,7 +5866,7 @@
       //                       bandwidth for the rows near the view. Generous, so
       //                       they are decoding by the time they are scrolled to
       //                       rather than starting from black afterwards.
-      const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name));   // 0.21.15: decode off-stage (7b) / keep the parked composite flowing (7b-4)
+      const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name)) || vgHqWanted(name);   // 0.21.43: a full-quality cell of a grid drawn my way   // 0.21.15: decode off-stage (7b) / keep the parked composite flowing (7b-4)
       const wantVisible = (!shown && !keepWarm) ? "never"
         // Audio-only: nothing for the video pipeline to do, so don't
         // enable it. Audio is gated by paused/muted alone (bundle-
@@ -6389,8 +6585,33 @@
           items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
         }
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
+        // 0.21.43 (Kenton): a grid -- arrange it on my screen; the cell under a right-click at full quality (up to 4)
+        let hqCell = null;
+        const gm = gridMeta.get(name);
+        if (gm) {
+          items.push({ sep: true });
+          items.push({ value: "vgedit", icon: "view", label: "Arrange this grid for me\u2026", tip: "Move and resize its cells on your screen only" });
+          if (vgHasRects(name)) items.push({ value: "vgreset", label: "Use the owner\u2019s layout" });
+          try {
+            const ar = anchor?.getBoundingClientRect?.();
+            if (ar && ar.width === 0 && ar.height === 0) {   // a right-click: which cell?
+              const idx = gridCellAtW(tiles.get(name), gm, { clientX: ar.left, clientY: ar.top });
+              const mp = idx >= 0 ? (gm.members || [])[idx] : null;
+              if (mp) {
+                hqCell = mp;
+                const on = vgHq(name).has(vgKey(mp));
+                items.push({ value: "vghq", label: (on ? "\u2611 " : "\u2610 ") + "Full quality in the grid: " + String(gm.cells?.[idx] || "this camera").slice(0, 24), tip: "This cell shows the camera's own stream on your screen (up to 4 per grid)" });
+              }
+            }
+          } catch {}
+          if (!hqCell && vgHq(name).size) items.push({ value: "vghqoff", label: "Back to the grid picture for every cell" });
+        }
         openMineMenu(anchor, items, "", async (v) => {
           if (v === "lat") { latencyToggle(name); return; }
+          if (v === "vgedit") { vgEdit(name); return; }   // 0.21.43
+          if (v === "vgreset") { const s0 = vgGet(name) || {}; delete s0.rects; delete s0.gap; vgSet(name, s0); return; }
+          if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
+          if (v === "vghqoff") { const s0 = vgGet(name) || {}; s0.hq = []; vgSet(name, s0); return; }
           if (v === "unpin") { goGallery(); return; }   // as the Gallery pill
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
@@ -6574,6 +6795,7 @@
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
     gridWakeCheck(name);   // 0.21.2: a quadrant asked for this feed
+    try { vgSync(); } catch {}   // 0.21.43: a grid I arranged my way comes back that way
     applyState();
     return tile;
   }
@@ -7651,6 +7873,130 @@
     return p;
   }
   window.__confirm = kastrConfirm;   // the publish half asks through it too
+  // ---- 0.21.43 (Kenton: grid layouts -- "some cells bigger", "drag, gaps, resize"): ONE layout editor for both halves ------
+  // Boxes in a 24 x 24 unit grid (1 unit = 1/24 of the picture each way, so k x k is 16:9) drawn over the grid picture.
+  // Drag a box to move it (a drop on another box swaps their places), drag its corner to resize; boxes never overlap.
+  // opts: { pane, frame() -> {x,y,w,h} in pane px, boxes: [{key, label, u:[x,y,w,h]}], gap, templates: [[id,label]],
+  //         layout, title, onChange(boxes), onGap(gap), onTemplate(id) -> boxes, onReset() -> boxes, onCancel(), onClose() }
+  const GEU = 24;
+  const gridEditor = (() => {
+    let cur = null;
+    const okU = (u) => u && u[2] >= 2 && u[3] >= 2 && u[0] >= 0 && u[1] >= 0 && u[0] + u[2] <= GEU && u[1] + u[3] <= GEU;
+    const hit = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+    const fits = (boxes, key, u) => okU(u) && boxes.every((b) => b.key === key || !hit(b.u, u));
+    const area = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+    function close(cancel) {
+      if (!cur) return;
+      const c = cur; cur = null;
+      try { c.ro?.disconnect(); } catch {}
+      removeEventListener("resize", c.place);
+      document.removeEventListener("keydown", c.key, true);
+      c.root.remove();
+      if (cancel) { try { c.o.onCancel?.(); } catch {} }
+      try { c.o.onClose?.(); } catch {}
+    }
+    function open(o) {
+      close(false);
+      const root = document.createElement("div"); root.className = "gedit";
+      const tools = document.createElement("div"); tools.className = "getools";
+      const frameEl = document.createElement("div"); frameEl.className = "geframe";
+      root.append(frameEl, tools);
+      const c = cur = { o, root, frameEl, boxes: (o.boxes || []).map((b) => ({ ...b, u: b.u.slice() })), layout: o.layout || "" };
+      // toolbar: title | templates | gap | reset cancel done
+      const ttl = document.createElement("span"); ttl.className = "gettl"; ttl.textContent = o.title || "Edit layout";
+      tools.append(ttl);
+      const tbtn = new Map();
+      for (const [id, label] of o.templates || []) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "ghost"; b.textContent = label; b.title = "Start from this layout";
+        b.addEventListener("click", () => { const nb = o.onTemplate?.(id); if (Array.isArray(nb)) { c.boxes = nb.map((x) => ({ ...x, u: x.u.slice() })); c.layout = id; paint(); } });
+        tbtn.set(id, b); tools.append(b);
+      }
+      const sep1 = document.createElement("span"); sep1.className = "sep"; tools.append(sep1);
+      const gl = document.createElement("label"); gl.title = "The space between cells";
+      const gr = document.createElement("input"); gr.type = "range"; gr.min = "0"; gr.max = "24"; gr.step = "1"; gr.value = String(o.gap ?? 2);
+      const gv = document.createElement("span"); gv.textContent = gr.value + " px";
+      gl.append("Gap", gr, gv); tools.append(gl);
+      let gT = null;
+      gr.addEventListener("input", () => { gv.textContent = gr.value + " px"; clearTimeout(gT); gT = setTimeout(() => o.onGap?.(Number(gr.value)), 120); });
+      const sep2 = document.createElement("span"); sep2.className = "sep"; tools.append(sep2);
+      const mk = (txt, cls, fn, tip) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = txt; if (tip) b.title = tip; b.addEventListener("click", fn); tools.append(b); return b; };
+      mk("Reset", "ghost", () => { const nb = o.onReset?.(); if (Array.isArray(nb)) { c.boxes = nb.map((x) => ({ ...x, u: x.u.slice() })); c.layout = "auto"; gr.value = "2"; gv.textContent = "2 px"; paint(); } }, "Back to equal cells, 2 px gap");
+      mk("Cancel", "ghost", () => close(true), "Undo every change since Edit layout (Esc)");
+      mk("Done", "", () => close(false));
+      c.place = () => {
+        const f = o.frame?.(); if (!f) return;
+        Object.assign(frameEl.style, { left: f.x + "px", top: f.y + "px", width: f.w + "px", height: f.h + "px" });
+        // the toolbar sits just above the picture when there is room (it covered the top cameras), else over its top edge
+        const fr = frameEl.getBoundingClientRect(), th = tools.offsetHeight || 40;
+        tools.style.left = (fr.left + fr.width / 2) + "px";
+        tools.style.top = Math.max(4, fr.top - th - 8 >= 60 ? fr.top - th - 8 : fr.top + 8) + "px";
+      };
+      c.key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); } };
+      document.addEventListener("keydown", c.key, true);
+      addEventListener("resize", c.place);
+      try { c.ro = new ResizeObserver(c.place); c.ro.observe(o.pane); } catch {}
+      for (const ev of ["click", "dblclick", "pointerdown", "wheel", "contextmenu"]) root.addEventListener(ev, (e) => { e.stopPropagation(); if (ev === "wheel" || ev === "contextmenu") e.preventDefault(); }, ev === "wheel" ? { passive: false } : undefined);
+      function paint() {
+        for (const [id, b] of tbtn) b.classList.toggle("on", id === c.layout);
+        frameEl.replaceChildren(...c.boxes.map((b) => {
+          const el = document.createElement("div"); el.className = "gebox"; el.dataset.key = b.key;
+          el.textContent = b.label || "Camera";
+          const h = document.createElement("span"); h.className = "geh"; h.title = "Drag to resize";
+          el.appendChild(h);
+          setPos(el, b.u);
+          el.addEventListener("pointerdown", (e) => startDrag(e, b, el, e.target === h));
+          return el;
+        }));
+      }
+      function setPos(el, u) { Object.assign(el.style, { left: (u[0] / GEU * 100) + "%", top: (u[1] / GEU * 100) + "%", width: (u[2] / GEU * 100) + "%", height: (u[3] / GEU * 100) + "%" }); }
+      function startDrag(e, b, el, resize) {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        try { el.setPointerCapture(e.pointerId); } catch {}
+        const r = frameEl.getBoundingClientRect(), ux = r.width / GEU, uy = r.height / GEU;
+        const x0 = e.clientX, y0 = e.clientY, u0 = b.u.slice();
+        let cand = u0.slice(), swapWith = null;
+        el.classList.add("drag");
+        const move = (ev) => {
+          const dx = Math.round((ev.clientX - x0) / ux), dy = Math.round((ev.clientY - y0) / uy);
+          swapWith = null;
+          if (resize) {
+            const u = [u0[0], u0[1], Math.max(2, Math.min(GEU - u0[0], u0[2] + dx)), Math.max(2, Math.min(GEU - u0[1], u0[3] + dy))];
+            if (fits(c.boxes, b.key, u)) cand = u;
+            setPos(el, cand); el.classList.remove("bad");
+          } else {
+            cand = [Math.max(0, Math.min(GEU - u0[2], u0[0] + dx)), Math.max(0, Math.min(GEU - u0[3], u0[1] + dy)), u0[2], u0[3]];
+            setPos(el, cand);
+            const ok = fits(c.boxes, b.key, cand);
+            if (!ok) {   // over another box: the two cameras trade places, block and all ("put this one in the big spot")
+              const over = c.boxes.filter((o2) => o2.key !== b.key && hit(o2.u, cand));
+              const t = over.length === 1 ? over[0] : over.sort((p, q) => area(q.u, cand) - area(p.u, cand))[0];
+              if (t) swapWith = { t, mine: t.u.slice(), theirs: u0.slice() };
+            }
+            el.classList.toggle("bad", !ok && !swapWith);
+            for (const x of frameEl.querySelectorAll(".gebox.swap")) x.classList.remove("swap");
+            if (swapWith) frameEl.querySelector('.gebox[data-key="' + cssEsc(swapWith.t.key) + '"]')?.classList.add("swap");
+          }
+        };
+        const up = () => {
+          el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+          el.classList.remove("drag", "bad");
+          let changed = false;
+          if (resize || fits(c.boxes, b.key, cand)) { if (cand.join() !== u0.join()) { b.u = cand; changed = true; } }
+          else if (swapWith) { b.u = swapWith.mine; swapWith.t.u = swapWith.theirs; changed = true; }
+          if (changed) { c.layout = "custom"; try { o.onChange?.(c.boxes.map((x) => ({ key: x.key, label: x.label, u: x.u.slice() }))); } catch {} }
+          paint();
+        };
+        el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+      }
+      const cssEsc = (v) => (window.CSS && CSS.escape ? CSS.escape(String(v)) : String(v).replace(/["\\]/g, "\\$&"));
+      o.pane.appendChild(root);
+      c.place(); paint();
+      requestAnimationFrame(c.place);
+    }
+    return { open, close: () => close(false), isOpen: () => !!cur };
+  })();
+  window.__gridEditor = gridEditor;
   window.__toast = (msg, ms = 6000, opts) => {
     const level = opts?.level || "event";
     if (level === "info" && !window.__toastPolicy.verbose()) return;
@@ -17418,6 +17764,110 @@
     }
     return { w: 1280, h: 720 };
   }
+  // ---- 0.21.43 (Kenton: "some cells bigger", "drag, gaps, resize"): templates + custom layouts in a 24 x 24 unit grid ----
+  // 1 unit = W/24 x H/24 of the 1280x720 composite, so a k x k block is 16:9. A CUSTOM layout keeps one block per camera
+  // URL (kastr.grid.<id>.custom), so a camera that leaves and comes back finds its place; `gap` = px at 1280 wide.
+  const GU = 24;
+  const GRID_TEMPLATES = [["auto", "Equal"], ["big1", "One big"], ["big2", "Two big"], ["row", "Side by side"], ["column", "Stacked"]];
+  function gridTemplateUnits(n, kind) {
+    if (n <= 1) return [[0, 0, GU, GU]];
+    if (kind === "big1") {   // one big top-left; small blocks down the right and along the bottom
+      for (const sz of [8, 6, 4, 3]) {   // the big one is always bigger (12 would make four equal cells)
+        const b = GU - sz;
+        if (1 + Math.floor(b / sz) + Math.floor(GU / sz) < n) continue;
+        const out = [[0, 0, b, b]];
+        for (let y = 0; y + sz <= b && out.length < n; y += sz) out.push([b, y, sz, sz]);
+        for (let x = 0; x + sz <= GU && out.length < n; x += sz) out.push([x, b, sz, sz]);
+        return out;
+      }
+      return null;
+    }
+    if (kind === "big2") {   // two big side by side on top; small blocks below, rows centred
+      if (n <= 2) return [[0, 6, 12, 12], [12, 6, 12, 12]].slice(0, n);
+      for (const sz of [8, 6, 4, 3]) {   // the small ones are smaller than the two big ones
+        const per = Math.floor(GU / sz), rows = Math.floor(12 / sz);
+        if (2 + per * rows < n) continue;
+        const out = [[0, 0, 12, 12], [12, 0, 12, 12]];
+        let left = n - 2;
+        for (let r = 0; r < rows && left > 0; r++) {
+          const cnt = Math.min(per, left), x0 = Math.floor((GU - cnt * sz) / 2);
+          for (let j = 0; j < cnt; j++) out.push([x0 + j * sz, 12 + r * sz, sz, sz]);
+          left -= cnt;
+        }
+        return out;
+      }
+      return null;
+    }
+    return null;
+  }
+  const guOk = (u) => Array.isArray(u) && u.length === 4 && u.every((v) => Number.isInteger(v)) && u[2] >= 2 && u[3] >= 2 && u[0] >= 0 && u[1] >= 0 && u[0] + u[2] <= GU && u[1] + u[3] <= GU;
+  const guHit = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+  function guFree(placed) {   // the first free 16:9 block, biggest first
+    for (const sz of [6, 4, 3, 2]) for (let y = 0; y + sz <= GU; y++) for (let x = 0; x + sz <= GU; x++) {
+      const u = [x, y, sz, sz];
+      if (placed.every((p) => !guHit(p, u))) return u;
+    }
+    return [0, 0, 2, 2];
+  }
+  function gridCustomUnits(g, ms) {
+    const map = g.custom || {}, placed = [], out = new Array(ms.length);
+    ms.forEach((m, i) => { const u = map[m.entry.url || ""]; if (guOk(u) && placed.every((p) => !guHit(p, u))) { out[i] = u; placed.push(u); } });
+    ms.forEach((m, i) => { if (!out[i]) { const u = guFree(placed); out[i] = u; placed.push(u); } });
+    return out;
+  }
+  function gridGap(g) { const v = Number(g?.gap); return Number.isFinite(v) ? Math.max(0, Math.min(24, Math.round(v))) : 2; }
+  function gridLayoutPx(g, ms, W, H) {   // every layout -> pixel rects (before the gap), index-aligned with ms
+    const n = Math.max(1, ms.length), lay = g.layout || "auto";
+    let units = null;
+    if (lay === "custom") units = ms.length ? gridCustomUnits(g, ms) : null;
+    else if (lay === "big1" || lay === "big2") units = gridTemplateUnits(n, lay);
+    if (units && units.length >= n) return units.map(([x, y, w, h]) => ({ x: x * W / GU, y: y * H / GU, w: w * W / GU, h: h * H / GU }));
+    return gridRects(n, (lay === "custom" || lay === "big1" || lay === "big2") ? "auto" : lay, W, H);
+  }
+  function gridUnitsNow(g) {   // the current layout as blocks (the editor's starting point), overlaps resolved
+    const ms = gridOrdered(g), W = 1280, H = 720;
+    const px = gridLayoutPx(g, ms, W, H), placed = [];
+    return ms.map((m, i) => {
+      const r = px[i];
+      let u = r ? [Math.round(r.x * GU / W), Math.round(r.y * GU / H), Math.max(2, Math.round(r.w * GU / W)), Math.max(2, Math.round(r.h * GU / H))] : null;
+      if (u) { u[2] = Math.min(u[2], GU - u[0]); u[3] = Math.min(u[3], GU - u[1]); }
+      if (!guOk(u) || placed.some((p) => guHit(p, u))) u = guFree(placed);
+      placed.push(u);
+      return { key: m.entry.url || ("id:" + m.entry.id), label: String(m.entry.label || "Camera").slice(0, 32), u };
+    });
+  }
+  function gridLayoutSave(g) {
+    gridPrefSet(g.id, "layout", g.layout || "auto");
+    gridPrefSet(g.id, "custom", JSON.stringify(g.custom || {}));
+    gridPrefSet(g.id, "gap", String(gridGap(g)));
+    announceGrid();
+  }
+  function gridEditOpen(g) {   // the owner's layout -- everyone sees it
+    const ed = window.__gridEditor;
+    if (!ed) return;
+    if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane);
+    const snap = { layout: g.layout, custom: JSON.stringify(g.custom || {}), gap: gridGap(g) };
+    g.editing = true;
+    setTimeout(() => ed.open({
+      pane: g.pane, layout: g.layout || "auto", gap: gridGap(g), templates: GRID_TEMPLATES,
+      title: (g.name || gridNameOf(g.id)) + " \u2014 everyone sees this layout",
+      frame: () => {
+        const b = g.canvas.getBoundingClientRect(), pb = g.pane.getBoundingClientRect();
+        if (!b.width || !b.height) return null;
+        const sc = Math.min(b.width / g.canvas.width, b.height / g.canvas.height), dw = g.canvas.width * sc, dh = g.canvas.height * sc;
+        return { x: b.left - pb.left + (b.width - dw) / 2, y: b.top - pb.top + (b.height - dh) / 2, w: dw, h: dh };
+      },
+      boxes: gridUnitsNow(g),
+      onChange: (boxes) => { g.custom = Object.fromEntries(boxes.filter((b) => !String(b.key).startsWith("id:")).map((b) => [b.key, b.u])); g.layout = "custom"; gridLayoutSave(g); },
+      onGap: (gap) => { g.gap = gap; gridLayoutSave(g); },
+      onTemplate: (id) => { g.layout = id; gridLayoutSave(g); return gridUnitsNow(g); },
+      onReset: () => { g.layout = "auto"; g.custom = {}; g.gap = 2; gridLayoutSave(g); return gridUnitsNow(g); },
+      onCancel: () => { g.layout = snap.layout; try { g.custom = JSON.parse(snap.custom); } catch { g.custom = {}; } g.gap = snap.gap; gridLayoutSave(g); },
+      onClose: () => { g.editing = false; },
+    }), 300);   // after the stage has laid the grid out
+  }
+  window.__gridEdit = (id) => { const g = gridById(id); if (g) gridEditOpen(g); return !!g; };   // rig
+  window.__gu = { ok: guOk, hit: guHit, free: guFree, template: gridTemplateUnits, templates: GRID_TEMPLATES };   // 0.21.43: the watch half (my view) uses the same units
   function gridOrdered(g) {
     const byId = new Map(g.members.map((m) => [m.entry.id, m]));
     const order = (g.order || []).filter((id) => byId.has(id));
@@ -17465,18 +17915,22 @@
       g.canvas.width = size.w;
       g.canvas.height = size.h;   // the captured track and the encoder follow the new frame size
     }
-    const rects = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height);
+    const raw = gridLayoutPx(g, ms, g.canvas.width, g.canvas.height);   // 0.21.43: templates + custom blocks
+    // 0.21.43: the gap -- each cell is inset by half of it (2 px at 1280 = the old border); whole pixels, as 0.21.23
+    const gp = gridGap(g) / 2 * (g.canvas.width / 1280);
+    const rects = raw.map((r) => { const x = Math.round(r.x + gp), y = Math.round(r.y + gp); return { x, y, w: Math.max(2, Math.round(r.x + r.w - gp) - x), h: Math.max(2, Math.round(r.y + r.h - gp) - y) }; });
+    g.lastRects = rects;   // what viewers are told (announceGrid) and what the owner's hit-tests use
     // 0.9.7: cells repaint individually so a monitor mid-reconnect can keep its
     // last frame for a moment; the whole canvas is cleared only when the
     // geometry changes (stale pixels would otherwise survive a re-layout).
-    const geo = n + "|" + (g.layout || "auto") + "|" + g.canvas.width + "x" + g.canvas.height;
+    const geo = g.canvas.width + "x" + g.canvas.height + "|" + (g.layout || "auto") + "|" + rects.map((r) => r.x + "," + r.y + "," + r.w + "," + r.h).join(";");
     if (g.lastGeo !== geo) { g.lastGeo = geo; g.cx.fillStyle = "#000"; g.cx.fillRect(0, 0, g.canvas.width, g.canvas.height); gridNote(g, "relayout " + geo); }   // 0.21.5: noted
     const nowMs = performance.now();
     const B = Math.max(1, Math.round(g.canvas.width / 1280));   // 0.21.23: border per cell side (2 px between cells at 1280 wide)
     ms.forEach((s, i) => {
       const r = rects[i]; if (!r) return;
-      // 0.21.23: whole pixels -- fractional cell edges (W / cols) left light seams where two cells met
-      const x = Math.round(r.x), y = Math.round(r.y), cw = Math.round(r.x + r.w) - x, ch = Math.round(r.y + r.h) - y;
+      // 0.21.23: whole pixels -- fractional cell edges (W / cols) left light seams where two cells met (0.21.43: done above)
+      const x = r.x, y = r.y, cw = r.w, ch = r.h;
       const v = s.video;
       if (v && v.videoWidth && !s.monitorDown) {
         g.cx.fillStyle = "#000";
@@ -17501,7 +17955,7 @@
         g.cx.fillText(s.placeholder || tries ? ("reconnecting\u2026" + (tries ? " (attempt " + tries + ")" : "")) : "connecting\u2026", x + cw / 2, y + ch / 2);
         g.cx.textAlign = "left";
       }
-      g.cx.strokeStyle = "#000"; g.cx.lineWidth = B; g.cx.strokeRect(x + B / 2, y + B / 2, cw - B, ch - B);   // 0.21.23: the cell border
+      void B;   // 0.21.43: the gap between cells replaces the 0.21.23 border
       if (g.dragFrom === i) { g.cx.strokeStyle = "#009fda"; g.cx.lineWidth = 4; g.cx.strokeRect(x + 2, y + 2, cw - 4, ch - 4); }
       // 0.9.7: no name strip by default -- it covered the cameras' own on-screen info bar
       // (the names travel in the .grid announce and in the feed menus). 0.15.0: an opt-in
@@ -17533,8 +17987,7 @@
     const sc = fit(b.width / g.canvas.width, b.height / g.canvas.height);
     const dw = g.canvas.width * sc, dh = g.canvas.height * sc;
     const px = (ev.clientX - b.left - (b.width - dw) / 2) / sc, py = (ev.clientY - b.top - (b.height - dh) / 2) / sc;
-    const n = Math.max(1, g.members.length);
-    const rects = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height);
+    const rects = g.lastRects || [];   // 0.21.43: exactly what was drawn
     return rects.findIndex((r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
   }
   function gridCellBox(g, idx) {   // 0.15.0: a cell's rect in PANE space (the same object-fit mapping as gridCellAt)
@@ -17543,8 +17996,7 @@
     const fit = g.pane.classList.contains("mainstage") ? Math.min : Math.max;
     const sc = fit(b.width / g.canvas.width, b.height / g.canvas.height);
     const dw = g.canvas.width * sc, dh = g.canvas.height * sc;
-    const n = Math.max(1, g.members.length);
-    const r = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height)[idx];
+    const r = (g.lastRects || [])[idx];   // 0.21.43
     if (!r) return null;
     const ox = b.left - pb.left + (b.width - dw) / 2, oy = b.top - pb.top + (b.height - dh) / 2;
     return { x: ox + r.x * sc, y: oy + r.y * sc, w: r.w * sc, h: r.h * sc };
@@ -17582,7 +18034,9 @@
       // 0.16.0: the shared body-level popover (viewport-clamped, scrollable) -- the in-pane
       // .gmenu was clipped by the pane's overflow in a small window and could not scroll
       const items = [];
-      for (const [id, label] of GRID_LAYOUTS) items.push({ value: "layout:" + id, label, on: (g.layout || "auto") === id });
+      for (const [id, label] of GRID_TEMPLATES) items.push({ value: "layout:" + id, label, on: (g.layout || "auto") === id || (id === "big1" && g.layout === "focus") });   // 0.21.43
+      if ((g.layout || "auto") === "custom") items.push({ value: "layout:custom", label: "Custom", on: true });
+      items.push({ value: "edit", label: "Edit layout\u2026" });   // 0.21.43 (Kenton): drag, resize, gap
       items.push({ sep: true }, { cap: "Publish feeds as" });
       for (const [id, label] of GRID_FEEDS) items.push({ value: "feeds:" + id, label, on: gridFeeds === id });
       items.push({ sep: true });
@@ -17592,11 +18046,12 @@
       items.push({ value: "camsoff", label: "Turn off all cameras in this grid" });   // 0.21.36 (Kenton): one switch for the grid's cameras (back on: the grid's switch in Sources)
       const gLit = window.__spotIs?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30: already spotlit -> offer to remove it
       items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
-      items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid" });
+      items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid. Edit layout: drag cells, resize from the corner, set the gap." });
       const open = window.__openMenu;
       if (!open) return;
       open(chev, items, "", (v) => {
-        if (v.startsWith("layout:")) { g.layout = v.slice(7); gridPrefSet(g.id, "layout", g.layout); announceGrid(); }
+        if (v.startsWith("layout:")) { g.layout = v.slice(7); gridLayoutSave(g); }
+        else if (v === "edit") gridEditOpen(g);   // 0.21.43
         else if (v.startsWith("feeds:")) setGridFeeds(v.slice(6));
         else if (v === "lock") setGridLock(!gridLock);
         else if (v === "names") setGridNames(!gridNames);
@@ -17616,7 +18071,7 @@
     g.pane.appendChild(chev);
     // drag-and-drop reorder
     g.pane.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || e.target.closest("button")) return;
+      if (e.button !== 0 || e.target.closest("button") || g.editing) return;   // 0.21.43: the editor owns the mouse
       // 0.8.12: swaps happen on the STAGE only -- in the rail a wobbly click
       // used to swap two cells and swallow the spotlight click; when zoomed
       // in, the drag pans instead.
@@ -17628,7 +18083,7 @@
     g.pane.addEventListener("pointermove", (e) => {
       if (g.dragFrom >= 0 && g.dragStart && Math.hypot(e.clientX - g.dragStart.x, e.clientY - g.dragStart.y) > 6) {
         if (!g.dragMoved) {   // 0.21.25: the dragged cell floats under the pointer
-          const n = Math.max(1, g.members.length), cell = gridRects(n, g.layout || "auto", g.canvas.width, g.canvas.height)[g.dragFrom];
+          const cell = (g.lastRects || [])[g.dragFrom];   // 0.21.43
           const bx = cell && gridCellBox(g, g.dragFrom), pb = g.pane.getBoundingClientRect();
           const box = bx && { left: pb.left + bx.x, top: pb.top + bx.y, width: bx.w, height: bx.h };
           if (cell && box) { try { g.pane.setPointerCapture(e.pointerId); } catch {} window.__dragGhost?.startCanvas(g.canvas, cell, e, box); }
@@ -17646,7 +18101,12 @@
       if (!g.dragMoved) return;
       const to = gridCellAt(g, e);
       if (to < 0 || to === from) return;
-      const order = gridOrdered(g).map((m) => m.entry.id);
+      const ms0 = gridOrdered(g), order = ms0.map((m) => m.entry.id);
+      if ((g.layout || "auto") === "custom") {   // 0.21.43: blocks belong to cameras -- swap the two cameras' blocks
+        const units = gridCustomUnits(g, ms0), ua = ms0[from]?.entry?.url, ub = ms0[to]?.entry?.url;
+        g.custom = { ...(g.custom || {}) };
+        if (ua && ub) { g.custom[ua] = units[to]; g.custom[ub] = units[from]; gridLayoutSave(g); }
+      }
       [order[from], order[to]] = [order[to], order[from]];
       g.order = order;
       g.dragged = true;   // the click that follows must not self-spotlight
@@ -17667,7 +18127,7 @@
     g.hoverCell = -1;
     const hideX = () => { g.hoverCell = -1; cx.classList.remove("show"); };
     g.pane.addEventListener("pointermove", (e) => {
-      if (!g.pane.classList.contains("mainstage") || g.dragFrom >= 0 || g.members.length < 2 || window.__viewZoomed?.(g.canvas)) { hideX(); return; }
+      if (g.editing || !g.pane.classList.contains("mainstage") || g.dragFrom >= 0 || g.members.length < 2 || window.__viewZoomed?.(g.canvas)) { hideX(); return; }
       const idx = e.target === cx ? g.hoverCell : gridCellAt(g, e);
       const box = idx >= 0 ? gridCellBox(g, idx) : null;
       if (!box) { hideX(); return; }
@@ -17808,11 +18268,13 @@
       liveSince: null, fault: null, lastHeal: 0,
       canvas: cv, cx: cx2, pane, nameEl: nm, badge, members: [], timer: null,
       layout, order: [], dragFrom: -1, dragMoved: false, dragged: false,   // 0.8.7
+      custom: (() => { try { const c = JSON.parse(gridPref(gid, "custom", "{}") || "{}"); return c && typeof c === "object" && !Array.isArray(c) ? c : {}; } catch { return {}; } })(),   // 0.21.43
+      gap: (() => { const v = Number(gridPref(gid, "gap", "2")); return Number.isFinite(v) ? v : 2; })(),
     };
     g.entry.name = gridBroadcastName(g);   // 0.15.0: grid "1" = .../rtsp-grid as ever, grid N = .../rtsp-grid-N
     pane.dataset.grid = gid;   // 0.8.12: the Gallery pill and the zoom controls key on this (0.15.0: the grid id)
     pane.addEventListener("click", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button") || g.editing) return;
       if (g.dragged) { g.dragged = false; return; }   // a swap, not a spotlight click
       if (window.__viewDragged?.()) return;           // a pan, not a click
       // 0.8.12: in the rail the click brings the grid front and centre, nothing
@@ -19525,7 +19987,10 @@
           // 0.14.0: members evicted after GRID_EVICT_AFTER failed attempts -- not a cell, but still
           // hidden behind the grid at every viewer (their seat is kept, they rejoin when back)
           out: (g.evicted || []).map((a) => chanPath(ensureHang(a.name))),   // 0.21.0: in every mode
-          mode: gridFeeds }));
+          mode: gridFeeds,
+          // 0.21.43: the geometry actually drawn (fractions of the picture, index-aligned) -- viewers stop recomputing it
+          rects: (g.lastRects || []).length === ms.length ? g.lastRects.map((r) => [r.x / g.canvas.width, r.y / g.canvas.height, r.w / g.canvas.width, r.h / g.canvas.height].map((v) => Math.round(v * 10000) / 10000)) : undefined,
+          gap: gridGap(g) }));
       }
       for (const id of [...gridAnnounced]) if (!seen.has(id)) gridAnn.clear("grid:" + id);
       gridAnnounced.clear();

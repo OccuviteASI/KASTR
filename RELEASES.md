@@ -2,6 +2,33 @@
 
 What changed in each build, newest first.
 
+## v0.21.43 — the grid layout editor
+
+**Arrange a grid: templates, drag, resize, gap (Kenton: "some cells bigger", "drag, gaps, resize", "viewers' own layouts", "several full-quality streams in one grid").** Three parts, as Kenton chose them.
+
+**The owner's layout, which everyone sees.**
+- **Templates:** the grid's ▾ menu offers Equal, One big, Two big, Side by side and Stacked. In One big and Two big the first cameras in the order are the big ones; drag a camera onto the big spot to choose.
+- **Edit layout…:** opens an editor over the grid on the stage. Drag a cell to move it, drag its corner to resize it on a 24 × 24 snap grid, and drop a cell on another to trade places, size and all. Cells never overlap. A Gap slider sets the space between cells (0–24 px; 2 px is the old look). There are Reset, Cancel (Esc) and Done buttons, and the toolbar sits above the picture when there is room.
+- **It sticks to the cameras:** the layout is kept per camera, so a camera that drops and comes back returns to its place.
+- **Viewers get the exact layout:** the owner now sends the cell rectangles it draws, so viewers' clicks, cell zoom and "opening" badges follow any layout. Viewers on 0.21.42 or older still see the new layouts in the picture, but their clicks follow the old math.
+
+**My own view, which only I see.**
+- **Arrange this grid for me…:** on a grid's ⋯ or right-click menu, opens the same editor on your screen only. Each cell is cut from the grid picture and placed where you put it, with no extra download.
+- **Use the owner's layout:** goes back to theirs.
+- **Remembered per grid on this device,** also across room changes.
+
+**Up to 4 cells at full quality, on my screen.**
+- **Turning it on:** right-click a cell, then "Full quality in the grid: <camera>". That cell shows the camera's own stream instead of the grid picture, marked "Full quality". It works with or without your own arrangement.
+- **The limit:** a fifth asks you to turn one off first, because 4K cameras are 10+ Mbit/s each.
+- **Turning them off:** "Back to the grid picture for every cell" turns them all off.
+
+**Tested** with two lab windows on two boxes and four test cameras:
+- the owner's One big and the drag that put Yard in the big spot reached the viewer exactly;
+- the viewer's own One big left the owner's layout untouched;
+- Gate at full quality decoded its own stream (180 frames) while the others stayed on the grid picture;
+- a fifth full-quality cell was refused;
+- a click on the big cell in the viewer's layout opened Gate.
+
 ## v0.21.42 — KASTR's own popup, locked rooms always ask
 
 **Questions in KASTR's own popup (Kenton: "I would like the popup for the room change moved to a stylized popup in the middle of the screen, not just a chrome popup").** Every yes/no question KASTR asks now appears in a KASTR card in the middle of the screen over a dimmed page, with specific buttons (for example "Join vault" / "Stay in main"). That covers changing rooms, closing a room, removing someone, muting everyone, deleting a room group, removing a file, opening the RTMP firewall ports and replacing a camera that is already shared. Enter answers yes, Esc or a click beside the card answers no, and the page's shortcut keys stay quiet while it asks. Tested on desktop and at phone width: the card is exactly centred, and no browser popup appears.

@@ -188,8 +188,9 @@ class GridAndMore(unittest.TestCase):
 
     def test_grid_cells_on_whole_pixels_with_a_border(self):
         p = self.page
-        self.assertIn("const x = Math.round(r.x), y = Math.round(r.y), cw = Math.round(r.x + r.w) - x, ch = Math.round(r.y + r.h) - y;", p)
-        self.assertIn('g.cx.strokeStyle = "#000"; g.cx.lineWidth = B; g.cx.strokeRect(x + B / 2, y + B / 2, cw - B, ch - B);', p)
+        # 0.21.43: whole pixels still, and the configurable gap (default 2 px at 1280) replaces the 0.21.23 border
+        self.assertIn("const x = Math.round(r.x + gp), y = Math.round(r.y + gp); return { x, y, w: Math.max(2, Math.round(r.x + r.w - gp) - x), h: Math.max(2, Math.round(r.y + r.h - gp) - y) };", p)
+        self.assertIn("const gp = gridGap(g) / 2 * (g.canvas.width / 1280);", p)
 
     def test_more_menu(self):
         p = self.page

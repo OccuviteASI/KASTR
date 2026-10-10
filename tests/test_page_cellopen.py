@@ -99,7 +99,7 @@ class CellOpen(unittest.TestCase):
     def test_keep_warm_governs_visible(self):
         self.once('const wantVisible = (!shown && !keepWarm) ? "never"')
         self.once(': (isSelected || keepWarm) ? "always"')
-        self.once("const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name));")
+        self.once("const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name)) || vgHqWanted(name);")   # 0.21.43: + full-quality cells
         self.assertNotIn('const wantVisible = !shown ? "never"', self.page)
         # the rail-hidden branch holds every hiddenChild (the parked composite, the off-stage camera child: applyState adds
         # them to railHiddenNames) and sits BEFORE "always" -- it must yield to keepWarm or the camera never subscribes

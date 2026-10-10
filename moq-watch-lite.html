@@ -1059,6 +1059,17 @@
   .sbcard:hover .sbx, .sbcard .sbx:focus-visible { visibility:visible; }
   .sbcard .sbx:hover { color:var(--asi-red); }
   body.sb-collapsed .sbcard .sbx { display:none; }
+  /* 0.21.44: watch this room too (eye), lit while watching */
+  .sbcard .sbw { flex:none; display:inline-flex; align-items:center; background:transparent; border:0; color:var(--text-mute); cursor:pointer; padding:0 2px; height:auto; visibility:hidden; }
+  .sbcard .sbw[hidden] { display:none; }
+  .sbcard .sbw .icon { width:14px; height:14px; }
+  .sbcard:hover .sbw, .sbcard .sbw:focus-visible, .sbcard .sbw.on, .sbcard .sbw.err { visibility:visible; }
+  .sbcard .sbw.on { color:var(--asi-blue); }
+  .sbcard .sbw.err { color:var(--asi-amber); }
+  .sbcard .sbw:hover { color:var(--text); }
+  .sbcard.watching { border-color:var(--asi-blue-dim); }
+  .sbcard.watching .rb { box-shadow:0 0 0 2px var(--asi-blue-dim); }
+  body.sb-collapsed .sbcard .sbw { display:none; }
   .sbcard .sbhd { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; column-gap:10px; row-gap:3px; }   /* 0.21.41 */
   .sbcard .sbname { flex:0 1 auto; max-width:100%; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--text); }
   .sbcard .sbmeta { flex:none; display:flex; align-items:center; gap:8px; margin:0; font:10px var(--font-mono); color:var(--text-mute);
@@ -2285,6 +2296,7 @@
     try { return channelSlug(localStorage.getItem(CHANNEL_KEY)); } catch { return "main"; }
   }
   let CHANNEL = "main";
+  const watchRooms = new Map();   // 0.21.44: rooms I only WATCH (slug -> state), see "watch extra rooms"
   // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
   // player's target is jitter(delay) + buffer. Per tile class (applyState re-tunes): the
   // spotlit main keeps the old 500 ms feel, rail thumbnails a little less, grid composites
@@ -2499,7 +2511,7 @@
     if (!t) return;
     if (!t.stallReportedAt || nowMs - t.stallReportedAt > 10000) {
       t.stallReportedAt = nowMs;
-      try { window.__stallAnnounce?.set?.(name); } catch {}
+      if (!wrRoomOf(name)) { try { window.__stallAnnounce?.set?.(name); } catch {} }   // 0.21.44: never into my room for a watched one
     }
     if (nowMs - t.starveSince > 12000 && (!t.stallResubAt || nowMs - t.stallResubAt > 30000)) {
       t.stallResubAt = nowMs;
@@ -2817,6 +2829,8 @@
   // a stream listed from another room rides its OWN relay connection: tiles with one URL share one connection, and that
   // session was granted before the listing existed -- a distinct URL opens a new session, which the relay grants the path
   function tileUrl(name) {
+    const wr = wrRoomOf(name);   // 0.21.44: a watched room's tile rides that room's own token
+    if (wr) return wrUrl(watchRooms.get(wr));
     const u = withToken(urlInput.value.trim());
     const x = xsTiles.get(name);
     return x ? u + (u.includes("?") ? "&" : "?") + "xs=" + encodeURIComponent(x.from) : u;
@@ -2970,10 +2984,257 @@
       xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || "") });
       if (!tiles.has(p)) { cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }
     }
-    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p)) scheduleRemoveTile(p); }
+    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p)) scheduleRemoveTile(p); }
   }
   setInterval(() => { xsPoll(); xsOfferNew(); }, 8000);
   window.__xsPoll = xsPoll;   // rig
+
+  // ---- 0.21.44 (Kenton: "one window for several sites" -- several rooms on one fleet; stay in ONE room and WATCH others) -------
+  // Only watching: my camera and microphone stay in the room I joined. Each watched room gets a member token of its own (a side
+  // mint, my session untouched), its own relay connection and announce loop under that room; its cameras, grids and shares
+  // become tiles WITH mine (after them), labelled "Gate (southridge)", muted until I ask to hear the room. Its members' room.json
+  // is read for GRIDS only (so a grid's cameras hide behind it); spotlights, recordings, files and stall reports stay in that
+  // room. The list (slug + sound) is kept per relay on this device; a locked room's code only in this session.
+  let wrLoopId = 0, wrLoadedKey = "";
+  const wrKey = () => "kastr.watchrooms." + sbRelayHost();
+  function wrRoomOf(path) {
+    if (!watchRooms.size) return "";
+    const r = String(path).split("/", 1)[0];
+    return r && r !== CHANNEL && watchRooms.has(r) ? r : "";
+  }
+  const wrTag = (path) => { const r = wrRoomOf(path); return r ? " (" + r + ")" : ""; };
+  function wrNew(slug, sound) {
+    return { slug, sound: !!sound, token: "", exp: 0, code: "", conn: null, ann: null, gen: 0, subs: new Map(), live: new Set(), seen: new Set(), state: "idle", err: "", needCode: false };
+  }
+  function jwtExp(tok) {
+    try { return Number(JSON.parse(atob(String(tok).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp) || 0; } catch { return 0; }
+  }
+  function wrSetToken(w, tok) { w.token = String(tok || ""); w.exp = jwtExp(w.token); }
+  function wrUrl(w) {
+    const u = urlInput.value.trim();
+    return w?.token ? u + (u.includes("?") ? "&" : "?") + "jwt=" + encodeURIComponent(w.token) : u;
+  }
+  function wrSave() {
+    try { localStorage.setItem(wrKey(), JSON.stringify([...watchRooms.values()].map((w) => ({ slug: w.slug, sound: w.sound })))); } catch {}
+    try { sessionStorage.setItem("kastr.watchcodes", JSON.stringify(Object.fromEntries([...watchRooms.values()].filter((w) => w.code).map((w) => [w.slug, w.code])))); } catch {}
+  }
+  function wrLoad() {
+    const k = wrKey();
+    if (wrLoadedKey === k) return;
+    wrLoadedKey = k;
+    let list = [], codes = {};
+    try { list = JSON.parse(localStorage.getItem(k) || "[]"); } catch {}
+    try { codes = JSON.parse(sessionStorage.getItem("kastr.watchcodes") || "{}") || {}; } catch {}
+    for (const it of Array.isArray(list) ? list : []) {
+      const slug = channelSlug(it?.slug);
+      if (!it?.slug || watchRooms.has(slug)) continue;
+      const w = wrNew(slug, it.sound);
+      if (typeof codes[slug] === "string") w.code = codes[slug];
+      watchRooms.set(slug, w);
+    }
+  }
+  function wrStop(w, keepTiles) {
+    if (!w) return;
+    w.gen = ++wrLoopId;   // cancels its loop
+    try { w.ann?.close(); } catch {}
+    w.ann = null;
+    for (const [p, h] of w.subs) { try { h.room.close(); } catch {} if (!keepTiles) wrMemberClear(p, h); }
+    w.subs.clear();
+    try { w.conn?.close(); } catch {}
+    w.conn = null;
+    if (!keepTiles && w.slug !== CHANNEL) {
+      for (const n of [...tiles.keys()]) if (n.startsWith(w.slug + "/")) removeTile(n);
+      let g = false;
+      for (const k of [...gridMeta.keys()]) if (k.startsWith(w.slug + "/")) { gridMeta.delete(k); g = true; }
+      if (g) { try { rebuildGridChildren(); } catch {} }
+    }
+    if (!keepTiles) w.live.clear();
+    w.state = "idle";
+  }
+  async function wrStart(w, redial) {
+    wrStop(w, !!redial);
+    if (joinState !== "joined" || publishOnly || isPublisherMode() || w.slug === CHANNEL || watchRooms.get(w.slug) !== w) return;
+    const my = w.gen;
+    w.state = "connecting"; w.err = "";
+    if (authSecured && (!w.token || w.exp * 1000 - Date.now() < 120000)) {
+      try { wrSetToken(w, await xsTokenFor(w.slug, w.code || "")); }
+      catch (e) {
+        if (w.gen !== my) return;
+        w.state = "error"; w.err = String(e?.message || e).slice(0, 120);
+        w.needCode = /code|locked|password/i.test(w.err);
+        try { paintSidebar(); } catch {}
+        return;
+      }
+      if (w.gen !== my) return;
+    }
+    let url;
+    try { url = new URL(wrUrl(w)); } catch { w.state = "error"; w.err = "bad relay address"; return; }
+    const conn = w.conn = new Net.Connection({ url: new Signals.Signal(url), enabled: true });
+    const ann = w.ann = announcedUnder(conn, w.slug);
+    w.state = "on";
+    try { paintSidebar(); } catch {}
+    const me = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    for (;;) {
+      let e = null;
+      try { e = await ann.next(); } catch { e = null; }
+      if (w.gen !== my) return;
+      if (!e) break;
+      try { wrEntry(w, String(e.full), e.active, me); } catch (err) { console.warn("KASTR watch " + w.slug + ":", err); }
+    }
+    // the announce stream ended (the connection dropped): its tiles go unless they come back; dial again
+    for (const p of w.live) if (tiles.has(p)) scheduleRemoveTile(p);
+    setTimeout(() => { if (w.gen === my && watchRooms.get(w.slug) === w) wrStart(w, true); }, 3000);
+  }
+  function wrEntry(w, path, active, me) {
+    const parts = path.split("/").filter(Boolean);
+    if (parts[0] !== w.slug) return;
+    const kind = parts[1] || "";
+    if (kind === "~grid") { gridAccept(path, active); return; }   // its grids' geometry: the cameras behind a grid stay behind it
+    if (parts[2] === "~member") { wrMemberAccept(w, path, active); return; }
+    if (kind.startsWith("~") || !path.endsWith(".hang") || LOW_RE.test(path)) return;
+    if (parts[1] === HOSTNAME1 && String(parts[2] || "").toLowerCase() === me) return;   // my own page in that room (another window)
+    if (active) {
+      w.live.add(path);
+      cancelPendingRemoval(path);
+      if (!tiles.has(path)) { createTile(path); try { applyState(); } catch {} }
+    } else {
+      w.live.delete(path);
+      if (tiles.has(path)) scheduleRemoveTile(path);
+    }
+  }
+  function wrMemberAccept(w, path, active) {
+    const cur = w.subs.get(path);
+    if (!active) { if (cur) { try { cur.room.close(); } catch {} w.subs.delete(path); wrMemberClear(path, cur); } return; }
+    if (cur || !w.conn) return;
+    const conn = w.conn;
+    const h = { gridPaths: new Set() };
+    h.room = stateSubscribe(conn, path, "room.json", "snapshot", (v) => { if (w.conn === conn && w.subs.get(path) === h) wrMemberApply(path, v, h); });
+    w.subs.set(path, h);
+  }
+  function wrMemberApply(path, v, h) {   // grids only -- nothing of that room's spotlight / recording / files lands in mine
+    if (!v || typeof v !== "object") return;
+    const room = path.split("/", 1)[0] + "/";
+    const grids = v.grids && typeof v.grids === "object" ? v.grids : {};
+    const seen = new Set();
+    for (const gm of Object.values(grids)) {
+      if (!gm || !gm.path || !String(gm.path).startsWith(room)) continue;
+      seen.add(String(gm.path));
+      gridApply(path, gm, Number(gm.ts) || Date.now(), true);
+    }
+    for (const gp of [...h.gridPaths]) if (!seen.has(gp)) gridApply(path, { path: gp }, 0, false);
+    h.gridPaths = seen;
+  }
+  function wrMemberClear(path, h) { for (const gp of h?.gridPaths || []) gridApply(path, { path: gp }, 0, false); }
+  // muted on first sight, unless I asked to hear that room
+  function wrFirstSight(slug, name) {
+    const w = watchRooms.get(slug);
+    if (!w || w.seen.has(name)) return;
+    w.seen.add(name);
+    if (w.sound) mutedStreams.delete(name); else mutedStreams.add(name);
+  }
+  function wrSetSound(slug, on) {
+    const w = watchRooms.get(slug);
+    if (!w) return;
+    w.sound = !!on;
+    for (const n of tiles.keys()) if (wrRoomOf(n) === slug) { if (on) mutedStreams.delete(n); else mutedStreams.add(n); }
+    wrSave();
+    try { applyState(); } catch {}
+    window.__toast?.(on ? "Hearing " + slug : slug + " muted", 2500, { level: "event" });
+  }
+  function wrRemove(slug) {
+    const w = watchRooms.get(slug);
+    if (!w) return;
+    wrStop(w);   // its tiles leave while it is still listed (no departure chimes)
+    watchRooms.delete(slug);
+    wrSave();
+    try { applyState(); paintSidebar(); } catch {}
+  }
+  function wrStopAll() { for (const w of watchRooms.values()) wrStop(w); try { paintSidebar(); } catch {} }
+  function wrRestartAll() {   // connect(): a join or a room change -- every watch dials again; the room I am now IN leaves the list
+    wrLoad();
+    for (const w of [...watchRooms.values()]) {
+      if (w.slug === CHANNEL) { wrStop(w); watchRooms.delete(w.slug); wrSave(); continue; }
+      wrStart(w);
+    }
+  }
+  async function wrAskCode(rec) {
+    let tok = "";
+    const ans = await kastrConfirm({ title: "Watch a room",
+      message: "\u201c" + rec.slug + "\u201d is locked. Enter its code to watch it from here.",
+      detail: "You stay in \u201c" + CHANNEL + "\u201d; its cameras and shares appear here, muted.",
+      ok: "Watch " + rec.slug, cancel: "Cancel",
+      input: { placeholder: "Code for " + rec.slug, masked: true },
+      check: async (v) => {
+        if (!String(v || "").trim()) return "Enter the room\u2019s code.";
+        const why = await lockedRoomRefusal(rec, v);
+        if (why || !authSecured) return why;
+        try { tok = await xsTokenFor(rec.slug, v); return ""; }
+        catch (e) { const m = String(e?.message || e); return /too many|locked out|try again in/i.test(m) ? m : "Wrong room code."; }
+      } });
+    return ans === false ? null : { code: String(ans), tok };
+  }
+  const wrCan = (rec) => !!rec && joinState === "joined" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly;
+  async function wrToggle(rec) {
+    if (!wrCan(rec)) return;
+    const slug = rec.slug;
+    const cur = watchRooms.get(slug);
+    if (cur && cur.state !== "error") { wrRemove(slug); window.__toast?.("Stopped watching " + slug, 2500, { level: "event" }); return; }
+    let code = cur?.code || "", tok = "";
+    if (rec.locked && authSecured && (!cur || cur.needCode || !code)) {
+      const a = await wrAskCode(rec);
+      if (!a) return;
+      code = a.code; tok = a.tok;
+    }
+    if (!wrCan(rec)) return;
+    const w = cur || wrNew(slug, false);
+    w.code = code; w.needCode = false;
+    if (tok) wrSetToken(w, tok);
+    watchRooms.set(slug, w);
+    wrSave();
+    wrStart(w);
+    window.__toast?.("Watching " + slug + " \u2014 its cameras and shares appear here, muted. You stay in " + CHANNEL + ".", 4500, { level: "event" });
+  }
+  function wrPaintCard(card, rec) {
+    const can = wrCan(rec);
+    const w = can ? watchRooms.get(rec.slug) : null;
+    card.classList.toggle("watching", !!w);
+    const b = card.querySelector(".sbw");
+    if (!b) return;
+    b.hidden = !can;
+    b.classList.toggle("on", !!w && w.state !== "error");
+    b.classList.toggle("err", !!w && w.state === "error");
+    b.setAttribute("aria-pressed", w ? "true" : "false");
+    b.title = !w ? "Watch this room too (you stay in " + CHANNEL + ")"
+            : w.state === "error" ? "Not watching: " + (w.err || "refused") + " \u2014 click to try again"
+            : "Watching " + rec.slug + " \u2014 click to stop";
+  }
+  function wrCardItems(rec) {
+    if (!wrCan(rec)) return [];
+    const w = watchRooms.get(rec.slug);
+    const items = w ? [{ value: "unwatch", icon: "eye", label: "Stop watching " + rec.slug },
+                       { value: "sound", icon: w.sound ? "spkOff" : "spk", label: (w.sound ? "Mute " : "Hear ") + rec.slug, tip: w.sound ? "Silence this room on this device" : "Hear this room's people and shares" }]
+                    : [{ value: "watch", icon: "eye", label: "Watch " + rec.slug + " too", tip: "Its cameras and shares appear here, muted \u2014 you stay in " + CHANNEL }];
+    items.push({ sep: true }, { value: "join", label: "Join " + rec.slug + "\u2026" });
+    return items;
+  }
+  function wrCardPick(card, rec, v) {
+    if (v === "watch") wrToggle(rec);
+    else if (v === "unwatch") { wrRemove(rec.slug); window.__toast?.("Stopped watching " + rec.slug, 2500, { level: "event" }); }
+    else if (v === "sound") wrSetSound(rec.slug, !watchRooms.get(rec.slug)?.sound);
+    else if (v === "join") sbCardClick(card, rec);
+  }
+  setInterval(() => {   // fresh tokens 10 min before expiry (live sessions ride out the old one; re-armed tiles take the new)
+    if (!authSecured || joinState !== "joined") return;
+    for (const w of watchRooms.values()) {
+      if (w.state !== "on" || !w.token || w.exp * 1000 - Date.now() > 600000) continue;
+      xsTokenFor(w.slug, w.code || "").then((t) => wrSetToken(w, t)).catch(() => {});
+    }
+  }, 60000);
+  window.__watchRooms = {   // rig
+    list: () => [...watchRooms.values()].map((w) => ({ slug: w.slug, state: w.state, err: w.err, sound: w.sound, live: [...w.live], members: [...w.subs.keys()] })),
+    add: (slug) => wrToggle(lastChannelList.find((r) => r.slug === slug) || { slug }),
+    remove: (slug) => wrRemove(slug), sound: (slug, on) => wrSetSound(slug, on),
+  };
 
   // ---- 0.21.41 (Kenton): the microphone's OWN mute button drives KASTR's mic -------------------------------------
   // Two sources, both only followed (KASTR never changes the device):
@@ -3285,7 +3546,14 @@
     manualOrder = manualOrder.filter((n) => tiles.has(n));
     try { localStorage.setItem(ORDER_KEY, JSON.stringify(manualOrder)); } catch {}
   }
-  function orderedNames() {
+  function orderedNames() {   // 0.21.44: a watched room's tiles come after my room's, room by room in watch order
+    const all = orderedNames0();
+    if (!watchRooms.size) return all;
+    const rooms = [...watchRooms.keys()];
+    const rk = (n) => { const w = wrRoomOf(n); return w ? 1 + rooms.indexOf(w) : 0; };
+    return all.map((n, i) => [n, rk(n), i]).sort((a, b) => a[1] - b[1] || a[2] - b[2]).map((x) => x[0]);
+  }
+  function orderedNames0() {
     const names = [...tiles.keys()];
     if (sortMode === "name") {
       return names.sort((a, b) => shortLabel(a).localeCompare(shortLabel(b)));
@@ -3308,8 +3576,11 @@
   // people who share that content, then everyone else. Used ONLY by the
   // rail placement loop in applyState; every other consumer keeps
   // orderedNames() (row order, collage, manualOrder/saveOrder/drag).
-  function railOrder(names) {
+  function railOrder(names, flat) {
     const list = names || orderedNames();
+    if (!flat && watchRooms.size && list.some((n) => wrRoomOf(n))) {   // 0.21.44: my room's tiles first, then the watched rooms'
+      return [...railOrder(list.filter((n) => !wrRoomOf(n)), true), ...railOrder(list.filter((n) => wrRoomOf(n)), true)];
+    }
     const content = list.filter((n) => isContentPath(n));
     const sharers = new Set(content.map((n) => personKeyOf(n)));
     const kin = list.filter((n) => !isContentPath(n) && sharers.has(personKeyOf(n)));
@@ -3622,7 +3893,7 @@
     // One entry per NAME ("tie each name as 1 person") -- the same person
     // on two machines is still one person in the People list.
     const parts = String(path).replace(/\.hang$/, "").split("/").filter(Boolean);
-    if (parts.length >= 4) return parts[2].toLowerCase();
+    if (parts.length >= 4) { const wr = wrRoomOf(path); return parts[2].toLowerCase() + (wr ? "@" + wr : ""); }   // 0.21.44: "alex@southridge" is not my room's Alex
     if (parts.length === 3) return parts[1].toLowerCase();
     return "?";
   }
@@ -3884,6 +4155,7 @@
   window.__chimeLog = chimeLog;   // rig
   function personChime(path, joined) {
     if (manualMute || chimeMuted) return;            // master mute covers chimes (0.9.10: publish-only sweeps too)
+    if (wrRoomOf(path)) return;                      // 0.21.44: a room I only watch comes and goes silently
     if (!connection) return;                         // leave/teardown sweeps are not departures
     if (Date.now() - chimeConnectAt < 4000) return;  // initial discovery flood
     if (joined) { setTimeout(() => personChimeJudge(path, true), CHIME_SETTLE_MS); return; }   // let the tile and its presence settle
@@ -4082,7 +4354,7 @@
     const people = new Map();
     const get = (key) => { let p = people.get(key); if (!p) people.set(key, p = { key, name: "", cam: null, content: [], talk: false, mic: "", viewer: false, me: false }); return p; };
     for (const [n, t] of tiles) {
-      if (isGridChild(n)) continue;
+      if (isGridChild(n) || wrRoomOf(n)) continue;   // 0.21.44: a watched room's people are not in my meeting
       const key = personKeyOf(n);
       if (key === "?") continue;
       const p = get(key);
@@ -5171,13 +5443,13 @@
     // two shares from one person stay tellable apart.
     if (hover && parts.length >= 3 && /^camera(-\d+)?$/.test(leaf)) {
       const fromC = xsTiles.get(path)?.from;   // 0.21.41
-      return prettyOperator(parts[parts.length - 2]) + (fromC ? " (from " + fromC + ")" : "");
+      return prettyOperator(parts[parts.length - 2]) + (fromC ? " (from " + fromC + ")" : wrTag(path));   // 0.21.44: + a watched room
     }
     // 0.6.8: title-case the leaf too -- it is a device TYPE now
     // ("camera", "screen"), not a model name.
     const nice = prettyOperator(leaf);
     const from = xsTiles.get(path)?.from;   // 0.21.41: shown here from another room
-    return (parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice) + (from ? " (from " + from + ")" : "");
+    return (parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice) + (from ? " (from " + from + ")" : wrTag(path));   // 0.21.44
   }
   window.__pretty = prettyOperator;   // one casing rule for both page halves
   // 0.15.0: a grid tile wears its owner's display name ("Kenton \u2014 Vehicle 2") once the
@@ -5191,12 +5463,12 @@
         const gp = gridChildOf.get(name), m = gridMeta.get(gp);
         const i = (m?.feeds || []).indexOf(name);
         const cl = i >= 0 ? String(m.cells?.[i] || "").trim() : "";
-        if (cl) { const op2 = operatorOf(gp) || operatorOf(name); return (op2 ? prettyOperator(op2) + " \u2014 " : "") + cl; }
+        if (cl) { const op2 = operatorOf(gp) || operatorOf(name); return (op2 ? prettyOperator(op2) + " \u2014 " : "") + cl + wrTag(name); }
       }
       return null;
     }
     const op = operatorOf(name);
-    return (op ? prettyOperator(op) + " \u2014 " : "") + gl;
+    return (op ? prettyOperator(op) + " \u2014 " : "") + gl + wrTag(name);   // 0.21.44
   }
 
   /**
@@ -5248,7 +5520,7 @@
   }
   window.__goGallery = goGallery;   // rig
   function autoContentCheck() {
-    const content = orderedNames().filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n));   // 0.8.12: feeds behind a grid are not arrivals
+    const content = orderedNames().filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !wrRoomOf(n));   // 0.8.12: feeds behind a grid are not arrivals; 0.21.44: nor a watched room's shares
     const newest = content[content.length - 1] ?? null;
     // 0.8.3: the stage auto-moves TO shared content only, and never hops
     // between two live shares -- a second share must not yank the stage
@@ -6484,6 +6756,7 @@
       enabledStreams.add(name);
       saveEnabled();
     }
+    { const wr = wrRoomOf(name); if (wr) wrFirstSight(wr, name); }   // 0.21.44 (Kenton): a watched room starts muted
     const pane = document.createElement("div");
     pane.className = "pane";
 
@@ -6571,20 +6844,22 @@
         if (kin.length > 1) {
           const allMuted = kin.every((n) => mutedStreams.has(n));
           items.push({ value: "pmute", icon: allMuted ? "spk" : "spkOff", label: (allMuted ? "Unmute " : "Mute ")
-            + prettyOperator(person === "?" ? "Unnamed" : person) + " everywhere" });
+            + prettyOperator(person === "?" ? "Unnamed" : person.split("@")[0]) + " everywhere" });
         }
         // 0.21.23: every tile can be pinned and spotlit (Teams) -- before, only content with a choice to make
         items.push({ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me",
           tip: pinned ? "Back to the gallery" : "Keep this on your stage (only you)" });
-        items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",
+        if (!wrRoomOf(name)) items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44: not into my room for a watched one
           tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
         items.push({ sep: true });
-        if (authRole === "admin" && !mineNames.has(name)) {   // 0.16.0: the admin code
+        if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
           items.push({ value: "astop", label: "Stop this share (admin)" });
           if (!isContentPath(name)) items.push({ value: "amute", label: "Mute their microphone (admin)" });
           items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
         }
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
+        { const wrn = wrRoomOf(name); if (wrn) { const ww = watchRooms.get(wrn); items.push({ sep: true }, { value: "wrsound", icon: ww?.sound ? "spkOff" : "spk", label: (ww?.sound ? "Mute " : "Hear ") + wrn },
+            { value: "wrstop", icon: "eye", label: "Stop watching " + wrn }); } }   // 0.21.44
         // 0.21.43 (Kenton): a grid -- arrange it on my screen; the cell under a right-click at full quality (up to 4)
         let hqCell = null;
         const gm = gridMeta.get(name);
@@ -6608,6 +6883,7 @@
         }
         openMineMenu(anchor, items, "", async (v) => {
           if (v === "lat") { latencyToggle(name); return; }
+          if (v === "wrsound" || v === "wrstop") { const r0 = wrRoomOf(name); if (r0) { if (v === "wrstop") wrRemove(r0); else wrSetSound(r0, !watchRooms.get(r0)?.sound); } return; }   // 0.21.44
           if (v === "vgedit") { vgEdit(name); return; }   // 0.21.43
           if (v === "vgreset") { const s0 = vgGet(name) || {}; delete s0.rects; delete s0.gap; vgSet(name, s0); return; }
           if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
@@ -6791,7 +7067,7 @@
     reclassifyTiles();   // 0.21.15: the new tile's class (the People head reads the cache, never the classifier)
     attachMeter(tile);
 
-    if (selectedName === undefined && isWatched(name) && !isGridChild(name)) selectedName = name;   // 0.9.4: never a hidden child
+    if (selectedName === undefined && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
     gridWakeCheck(name);   // 0.21.2: a quadrant asked for this feed
@@ -7357,6 +7633,7 @@
     spotOffs.clear(); spotStage = [];   // 0.21.32
     spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
     xsTiles.clear();   // 0.21.41
+    wrStopAll();   // 0.21.44: watching needs a room of my own
     spotLitClear(true);   // 0.21.0: leaving the room forgets the mirrored spotlight
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
@@ -7407,6 +7684,7 @@
     spotLitClear(false);         // 0.21.0: the mirror re-announces below if this is the same room within 30 min
     recomputeMine();             // mineNames re-prefix under the (new) channel
     spotLitRestore();
+    wrRestartAll();              // 0.21.44: the rooms I watch dial again (the one I just joined leaves the list)
     stageEmpty.textContent = listEmpty.textContent = publishOnly ? STAGE_EMPTY_PUBONLY : (!CLIENT.webcodecs ? STAGE_EMPTY_NODECODE : "Searching for live broadcasts…");   // 0.9.10 / 0.17.0
     applyState();
 
@@ -10709,7 +10987,10 @@
     // wrapping line -- the meta drops under the name only when both do not fit
     const head = document.createElement("span"); head.className = "sbhd";
     head.append(nm, meta);
-    row.append(rb, head, spk, sbx);
+    // 0.21.44 (Kenton): watch this room too -- the eye, and the card's right-click menu
+    const sbw = document.createElement("button"); sbw.type = "button"; sbw.className = "sbw"; sbw.innerHTML = icon("eye"); sbw.hidden = true;
+    sbw.addEventListener("click", (e) => { e.stopPropagation(); wrToggle(card.__rec || rec); });
+    row.append(rb, head, sbw, spk, sbx);
     const ul = document.createElement("ul"); ul.className = "sbmembers";
     card.append(row, ul);
     card.addEventListener("click", (e) => {
@@ -10717,6 +10998,14 @@
       e.stopPropagation();
       if (card.__skipClick && Date.now() - card.__skipClick < 600) return;   // 0.13.1: the click that ends a drag
       sbCardClick(card, card.__rec || rec);
+    });
+    card.addEventListener("contextmenu", (e) => {   // 0.21.44
+      if (e.target.closest("#sbForm") || e.shiftKey) return;
+      const r = card.__rec || rec;
+      const items = wrCardItems(r);
+      if (!items.length) return;
+      e.preventDefault(); e.stopPropagation();
+      openMineMenu(pointAnchor(e.clientX, e.clientY), items, "", (v) => wrCardPick(card, r, v));
     });
     return card;
   }
@@ -10786,6 +11075,7 @@
     rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "") + (rec.video ? " (video on the air)" : "");
     card.querySelector(".sbname").textContent = rec.slug;
     { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
+    wrPaintCard(card, rec);   // 0.21.44
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
     card.querySelector(".sbcnt").textContent = rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;

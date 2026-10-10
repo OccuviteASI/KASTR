@@ -30,7 +30,7 @@ class ShareToSeveralRooms(unittest.TestCase):
         self.assertIn("function tileUrl(name) {", p)
         self.assertEqual(p.count("tileUrl(name)") >= 6, True)
         self.assertIn('fetch(base + "/api/xshare?room=" + encodeURIComponent(CHANNEL), { cache: "no-store", headers })', p)
-        self.assertIn('(from ? " (from " + from + ")" : "")', p)
+        self.assertIn('(from ? " (from " + from + ")" : wrTag(path))', p)
 
     def test_the_token_never_rides_the_listing_url(self):
         p = _page()

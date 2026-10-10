@@ -2,6 +2,25 @@
 
 What changed in each build, newest first.
 
+## v0.21.44 — watch extra rooms
+
+**One window, several sites (Kenton: "one window for several sites" — several rooms on one fleet, stay in one room, watch the others).**
+- **Watch a room too:** each room in the left rail has an eye button, and its right-click menu has "Watch <room> too". You stay in your own room; your camera and microphone stay there. A locked room asks for its code in KASTR's popup.
+- **Where it shows:** the watched room's cameras, grids and shares appear with yours, after your room's tiles, each labelled with its room, e.g. "Alex Rivera — Gate (southridge)". A grid's cameras stay behind the grid as usual. Pin for me, full screen, Arrange this grid for me and full-quality cells all work on them.
+- **Muted until you ask:** a watched room starts silent. "Hear <room>" on the room's right-click menu (or on any of its tiles' menus) turns its sound on; "Mute <room>" turns it off again. Each tile's own mute still works.
+- **It stays out of your room:** a watched room never takes your stage on its own, never chimes, and its people are not listed in your Participants. "Spotlight for everyone" and the admin items are not offered on its tiles, and stall reports for its streams are not sent into your room.
+- **Remembered:** the rooms you watch are kept per relay on this device and come back after a reload or a relaunch. A locked room's code is kept only for this session; after a relaunch its eye turns amber, and a click asks for the code again.
+- **Changing rooms:** a room change keeps watching the others. Joining a room you were watching takes it off the list, because it is your room now.
+- **Not on unattended boxes:** publisher, publisher + relay and publish-only devices never watch.
+
+**Tested** on the two-relay lab, with a viewer in room wb watching room wa (a grid of three test cameras plus a person):
+- the wa tiles arrived labelled "(wa)", muted and playing, with the three cameras hidden behind the grid;
+- the viewer's stage, Participants list and chimes were unchanged;
+- the right-click menu and "Hear wa" worked;
+- the watch survived a reload;
+- the eye stopped and restarted the watch;
+- switching into wa removed it from the list and dropped the "(wa)" labels.
+
 ## v0.21.43 — the grid layout editor
 
 **Arrange a grid: templates, drag, resize, gap (Kenton: "some cells bigger", "drag, gaps, resize", "viewers' own layouts", "several full-quality streams in one grid").** Three parts, as Kenton chose them.

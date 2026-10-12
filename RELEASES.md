@@ -10,8 +10,18 @@ What changed in each build, newest first.
 
 **You choose the standby's address (Kenton asked which IP Make standby uses).** Before, the hub guessed it from the spoke's first network address, which on a box with several network adapters could be the wrong network.
 - **The dialog:** Make standby now asks which address the other spokes should use. It lists every address the spoke reports, plus the one the hub sees it connecting from, with the likely one first. You can also type your own, such as `10.0.5.2`, `10.0.5.2:4443` or a name. Without a port, the spoke's relay port is used.
+- **Its public address too (Kenton: "Have spoke check whatsmyip and suggest that as an option for hub standby"):** each spoke asks api.ipify.org for its public address when its relay starts and every 6 hours. If that service does not answer, it tries icanhazip.com, then ifconfig.me. The dialog offers that address marked "needs a port forward to it": spokes at other sites can reach the standby there only if its router forwards the relay port (UDP) and the port above it (TCP) to it.
 - **The check:** when you confirm, the hub tries the address. If it gets no answer, the message says so in amber, so you can fix a wrong address or a firewall before you need the standby.
 - **On the row:** the standby's row shows "spokes use <address>".
+
+**Sort the Users table by any column (Kenton: "Sort Users on relay server page alphabetically. Or allow for sorting by any column").** On the hub's Relay page, click a heading in the Users table (Name, Machine, Kind, Room, Relay, KASTR or Last seen) to sort by it, and click it again to reverse the order.
+- **Default:** by name, A to Z.
+- **Order:** numbers sort naturally (Box 2 before Box 10) and capitals do not matter. Empty values go last. Last seen puts the most recent first.
+- **Kept:** your choice is remembered on that computer.
+
+**A failing camera leaves the grid after 3 attempts (Kenton: "still sometimes showing up beyond 5 attempts. Lets set it to 3 attempts before it drops from the grid").** A camera that stops answering now leaves the grid on its third failed reconnect instead of after its fifth, and comes back when it streams again. The seat stays reserved.
+- **Why it could reach attempt 14:** a camera only left the grid when its feed's ffmpeg had also stopped. An ffmpeg waiting on a camera that accepts the connection but never sends video keeps running, so the camera was never removed. A running feed now counts as healthy only if video arrived in the last 30 seconds.
+- **Lab test:** a camera that went dark in that way left the grid on attempt 3, 26 seconds later, stayed out while dark, and came back 42 seconds after it streamed again.
 
 ## v0.21.53 — a standby hub
 

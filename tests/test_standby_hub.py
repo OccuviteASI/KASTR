@@ -200,6 +200,41 @@ class Pick(unittest.TestCase):
         self.assertEqual((o["standby"]["address"], o["reach"]), (kr._normalize_hub("https://192.168.50.7:5443"), True))
         self.assertEqual(self.r.make_standby({"name": "southridge", "address": "not an address!"})[1], 400)
 
+    def test_the_public_address_is_offered(self):   # 0.21.54 (Kenton: "check whatsmyip and suggest that")
+        v = {"peer": "10.9.9.9", "port": 4573, "node": "x", "ips": ["10.9.9.9"], "publicIp": "198.51.100.4"}
+        c = kr.standby_candidates(v)
+        self.assertEqual([x["address"] for x in c], ["https://10.9.9.9:4573", "https://198.51.100.4:4573"])
+        self.assertIn("port forward", c[1]["why"])
+
+    def test_public_ip_lookup_falls_through_and_caches(self):
+        import threading, urllib.request
+        calls, done = [], threading.Event()
+
+        class R:
+            def __init__(self, body): self.body = body
+            def read(self, n=-1): return self.body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake(req, timeout=0):
+            calls.append(req.full_url)
+            if "ipify" in req.full_url:
+                raise OSError("down")
+            return R(b"198.51.100.4\n")
+        old, saved = urllib.request.urlopen, dict(kr._PUBLIC_IP)
+        urllib.request.urlopen = fake
+        try:
+            kr._PUBLIC_IP.update({"ip": "", "at": 0.0, "busy": False})
+            self.assertIn(kr.public_ip(done.set), ("", "198.51.100.4"))   # the first call starts the lookup (in the background)
+            self.assertTrue(done.wait(5))                              # a new address -> the spoke re-registers
+            self.assertEqual(kr.public_ip(), "198.51.100.4")
+            self.assertEqual(len(calls), 2)                            # ipify failed, the next service answered
+            kr.public_ip(); time.sleep(0.2)
+            self.assertEqual(len(calls), 2)                            # cached for 6 hours
+        finally:
+            urllib.request.urlopen = old
+            kr._PUBLIC_IP.clear(); kr._PUBLIC_IP.update(saved)
+
     def test_a_spoke_without_lan_offers_the_address_the_hub_sees(self):
         v = {"peer": "10.9.9.9", "port": 4573, "node": "x"}
         self.assertEqual(kr.standby_candidates(v), [{"address": "https://10.9.9.9:4573", "why": "as this hub sees it"}])

@@ -558,6 +558,48 @@ def check_code_record(rec, code):
         return False
 
 
+# 0.21.54 (Kenton: "Have spoke check whatsmyip and suggest that as an option for hub standby"): a spoke's public address,
+# looked up when its relay starts and every 6 hours (one small HTTPS GET; the next service is tried when one fails)
+PUBLIC_IP_URLS = ("https://api.ipify.org", "https://icanhazip.com", "https://ifconfig.me/ip")
+PUBLIC_IP_EVERY = 6 * 3600
+_PUBLIC_IP = {"ip": "", "at": 0.0, "busy": False}
+
+
+def public_ip(on_new=None):
+    """-> the last public IPv4 learned ("" until the first answer); refreshes in the background when stale and calls
+    on_new() once a new address arrives."""
+    now = time.time()
+    if now - _PUBLIC_IP["at"] >= PUBLIC_IP_EVERY and not _PUBLIC_IP["busy"]:
+        _PUBLIC_IP["busy"] = True
+
+        def run():
+            got = ""
+            try:
+                for u in PUBLIC_IP_URLS:
+                    try:
+                        req = urllib.request.Request(u, headers={"User-Agent": "KASTR"})
+                        with urllib.request.urlopen(req, timeout=5) as r:
+                            ip = r.read(64).decode("ascii", "replace").strip()
+                        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+                            got = ip
+                            break
+                    except Exception:
+                        continue
+            finally:
+                # a miss is retried in 10 minutes, an answer kept for 6 hours
+                _PUBLIC_IP["at"] = time.time() - (0 if got else PUBLIC_IP_EVERY - 600)
+                _PUBLIC_IP["busy"] = False
+            if got and got != _PUBLIC_IP["ip"]:
+                _PUBLIC_IP["ip"] = got
+                if callable(on_new):
+                    try:
+                        on_new()
+                    except Exception:
+                        pass
+        threading.Thread(target=run, daemon=True).start()
+    return _PUBLIC_IP["ip"]
+
+
 def standby_guess(v):
     """0.21.54: the address other spokes would dial for this spoke row -- its reported LAN address (the minter it
     registered), else the address the hub sees it from; with its relay port."""
@@ -583,6 +625,8 @@ def standby_candidates(v):
     add(standby_guess(v), "its first network address" if v.get("minter") else "as this hub sees it")
     for ip in v.get("ips") or []:
         add("https://%s:%d" % (ip, port), "one of its network addresses")
+    if v.get("publicIp"):   # 0.21.54: what an internet "what's my IP" service sees (needs those ports forwarded to it)
+        add("https://%s:%d" % (v["publicIp"], port), "its public address (needs a port forward to it)")
     if v.get("peer"):
         add("https://%s:%d" % (("[" + v["peer"] + "]") if ":" in v["peer"] else v["peer"], port), "as this hub sees it")
     return out
@@ -2857,6 +2901,7 @@ class AuthService:
                                 "web": int(p.get("web") or 0) if str(p.get("web") or "0").isdigit() else 0,      # 0.21.53: its KASTR web port
                                 "ips": [ip for ip in (p.get("ips") if isinstance(p.get("ips"), list) else [])
                                         if isinstance(ip, str) and re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip)][:8],      # 0.21.54: its addresses
+                                "publicIp": p.get("publicIp") if isinstance(p.get("publicIp"), str) and re.match(r"^\d{1,3}(\.\d{1,3}){3}$", p.get("publicIp")) else "",   # 0.21.54
                                 "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
@@ -4807,7 +4852,8 @@ class Relay:
         body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp,
                            "node": _machine_node(), "clients": clients, "boot": BOOT_AT,
                            "port": self.port, "web": web,
-                           "ips": (local_ips() if self.bind_all else [])[:8]}).encode()   # 0.21.39: the machine id (survives a rename); 0.21.54: + ips
+                           "ips": (local_ips() if self.bind_all else [])[:8],
+                           "publicIp": public_ip(lambda: threading.Thread(target=self._spoke_sync, daemon=True).start())}).encode()   # 0.21.39: the machine id (survives a rename); 0.21.54: + ips
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})

@@ -19497,7 +19497,9 @@
   // Native slots follow the server ladder (publish.restarts = consecutive failed restarts,
   // reset after a generation lived 60 s; publish.since = that generation's start); slots that
   // never came up natively follow the page ladder (entry.retries, reset on timeupdate).
-  const GRID_EVICT_AFTER = 5, GRID_READMIT_LIVED_S = 5;
+  // 0.21.54 (Kenton: "still sometimes showing up beyond 5 attempts. Lets set it to 3 attempts before it drops from the grid"):
+  // out ON the third failed attempt (was: after the fifth)
+  const GRID_EVICT_AFTER = 3, GRID_READMIT_LIVED_S = 5;
   function gridEvictionTick() {
     if (rtspSuspended) return;   // 0.21.16: a stopped pair (running=false) is not a failing camera
     let changed = false;
@@ -19515,11 +19517,14 @@
       // 0.21.8: a native pair vouches for its camera by STATE, not by age -- 0.21.5's "up for a minute" rule let a monitor
       // failure evict a camera whose pair had just been restarted (and the stall-report restarts guaranteed that): running,
       // not in standby, no exit in the last 30 s is healthy
-      const pubHealthy = !!(pi && pi.running === true && !pi.standby && (!pi.lastExit?.at || nowS - pi.lastExit.at > 30) && (!native || pi.since));
+      // 0.21.54: ... and STREAMING -- the field grid showed "reconnecting (attempt 14)": its pair sat running against a dark
+      // camera (ffmpeg in its connect, not one byte), so it vouched for a camera that was gone. flowingAt = output grew.
+      const pubHealthy = !!(pi && pi.running === true && !pi.standby && (!pi.lastExit?.at || nowS - pi.lastExit.at > 30) && (!native || pi.since)
+        && (!native || (pi.flowingAt && nowS - pi.flowingAt < 30)));
       const monAttempts = a.retries || 0;
-      const downMon = !!(slot?.monitorDown && monAttempts > GRID_EVICT_AFTER && !pubHealthy);
+      const downMon = !!(slot?.monitorDown && monAttempts >= GRID_EVICT_AFTER && !pubHealthy);
       if (!a.evicted) {
-        const downPub = native ? (pi.running === false && attempts > GRID_EVICT_AFTER) : (attempts > GRID_EVICT_AFTER);
+        const downPub = native ? (pi.running === false && attempts >= GRID_EVICT_AFTER) : (attempts >= GRID_EVICT_AFTER);
         if (!downPub && !downMon) continue;
         a.evicted = true; a.evictedAt = Date.now(); a.evictAttempt = downPub ? attempts : monAttempts; a.evictWhy = downPub ? "publisher" : "monitor";
         log("Camera " + shortName(a.name) + " offline after " + a.evictAttempt + (downPub ? "" : " monitor") + " attempts \u2014 removed from the grid until it reconnects (its seat is kept)");

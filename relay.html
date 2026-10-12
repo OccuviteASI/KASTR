@@ -124,6 +124,11 @@
   select#modeSel:disabled { color:var(--text-mute); cursor:default; }
   #modeHint b { color:var(--text-dim); font-weight:600; }
   table.rooms { width:100%; border-collapse:collapse; font-size:11.5px; }
+  /* 0.21.54: sortable headings (the Users table) */
+  table.rooms th.sortable { cursor:pointer; user-select:none; }
+  table.rooms th.sortable:hover, table.rooms th.sortable:focus-visible { color:var(--text); outline:none; text-decoration:underline; text-underline-offset:3px; }
+  table.rooms th.sorted { color:var(--text); }
+  table.rooms th .sarr { display:inline-block; width:1em; margin-left:2px; font-size:10px; }
   table.rooms th {
     text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--text-mute); padding:4px 6px; border-bottom:1px solid var(--line); font-weight:600; white-space:nowrap;
@@ -1273,6 +1278,21 @@
     paintSpokes();
   });
   // 0.21.50: the users table -- every user of this relay and (on the hub) of every spoke, with the KASTR each runs
+  // 0.21.54: the Users table's columns as sort keys (Last seen ascending = the most recent first)
+  const USER_COLS = [
+    { key: "name", label: "Name", val: (r) => r.name || "" },
+    { key: "node", label: "Machine", val: (r) => r.node || "" },
+    { key: "kind", label: "Kind", val: (r) => r.kind || "" },
+    { key: "room", label: "Room", val: (r) => (r.rooms || []).join(", ") },
+    { key: "relay", label: "Relay", val: (r) => r.relay || "" },
+    { key: "version", label: "KASTR", val: (r) => r.version || "" },
+    { key: "seen", label: "Last seen", val: (r) => r.at ? -Number(r.at) : "" },
+  ];
+  function usersSortGet() {
+    try { const v = JSON.parse(localStorage.getItem("kastr.relay.usersSort") || "null"); if (v && USER_COLS.some((c) => c.key === v.key)) return { key: v.key, dir: v.dir === "desc" ? "desc" : "asc" }; } catch {}
+    return { key: "name", dir: "asc" };
+  }
+  function usersSortSet(v) { try { localStorage.setItem("kastr.relay.usersSort", JSON.stringify(v)); } catch {} }
   function paintUsers(d) {
     const box = $("usersBox"); if (!box) return;
     const rows = Array.isArray(d.clients) ? d.clients : [];
@@ -1286,18 +1306,39 @@
     const verCell = (r) => r.kind === "web" ? esc(r.version || "?") + ' <span class="hint">(web)</span>'
       : !r.checkin ? '<span class="updbad" title="Older than 0.21.50: it does not say its version, and an Update cannot reach it -- restart KASTR on that machine (it updates at launch)">older KASTR</span>'
       : '<span style="color:' + (behind(r) ? "var(--asi-amber)" : "inherit") + '">' + esc(r.version) + "</span>";
-    const html = rows.map((r) => {
+    const items = rows.map((r) => {
       const key = "user:" + r.node;
       const cell = pendCell(key, r.version, true, r.offer, "usersMsg")
         ?? (behind(r) && LOCAL ? '<button type="button" class="usrupd" data-node="' + esc(r.node) + '" data-relay="' + esc(r.relay || "") + '" data-ver="' + esc(r.relayVersion || "") + '" data-label="' + esc(r.name || r.node) + '" title="Update to ' + esc(r.relayVersion || "") + ' from ' + esc(r.relay || "its relay") + ' (the person is asked first)">Update</button>' : "");
-      return "<tr><td>" + esc(r.name || "\u2014") + '</td><td class="mono">' + esc(r.node) + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono">' + ago(r.at) + "</td><td>" + cell + "</td></tr>";
+      return { r, html: "<tr><td>" + esc(r.name || "\u2014") + '</td><td class="mono">' + esc(r.node) + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono">' + ago(r.at) + "</td><td>" + cell + "</td></tr>" };
     });
     // a user who went quiet while restarting keeps a row with its spinner
     for (const [k, p] of pending) if (k.startsWith("user:") && !rows.some((r) => "user:" + r.node === k)) {
       const cell = pendCell(k, "", false, "", "usersMsg");
-      if (cell) html.push("<tr><td>" + esc(p.label) + '</td><td class="mono">' + esc(k.slice(5)) + "</td><td>app</td><td>\u2014</td><td>" + esc(p.relay) + "</td><td>\u2014</td><td>\u2014</td><td>" + cell + "</td></tr>");
+      if (cell) items.push({ r: { name: p.label, node: k.slice(5), kind: "app", relay: p.relay },
+        html: "<tr><td>" + esc(p.label) + '</td><td class="mono">' + esc(k.slice(5)) + "</td><td>app</td><td>\u2014</td><td>" + esc(p.relay) + "</td><td>\u2014</td><td>\u2014</td><td>" + cell + "</td></tr>" });
     }
-    $("usersList").innerHTML = html.length ? '<div class="tblwrap"><table class="rooms" style="font-size:12px"><tr><th>Name</th><th>Machine</th><th>Kind</th><th>Room</th><th>Relay</th><th>KASTR</th><th>Last seen</th><th></th></tr>' + html.join("") + "</table></div>" : "Nobody is connected right now.";
+    // 0.21.54 (Kenton: "Sort Users on relay server page alphabetically. Or allow for sorting by any column"): click a heading
+    // to sort by it, again to reverse; Name A-Z by default; remembered on this machine. Empty values sort last either way;
+    // ties fall back to the name, then the machine.
+    const srt = usersSortGet();
+    const col = USER_COLS.find((c) => c.key === srt.key) || USER_COLS[0];
+    const cmpTxt = (a, b) => String(a ?? "").localeCompare(String(b ?? ""), undefined, { sensitivity: "base", numeric: true });
+    items.sort((A, B) => {
+      const a = col.val(A.r), b = col.val(B.r);
+      const ea = a === "" || a == null, eb = b === "" || b == null;
+      if (ea !== eb) return ea ? 1 : -1;
+      const c = ea ? 0 : (typeof a === "number" && typeof b === "number" ? a - b : cmpTxt(a, b)) * (srt.dir === "desc" ? -1 : 1);
+      return c || (!A.r.name - !B.r.name) || cmpTxt(A.r.name, B.r.name) || cmpTxt(A.r.node, B.r.node);
+    });
+    const head = USER_COLS.map((c) => '<th class="sortable' + (c === col ? " sorted" : "") + '" data-sort="' + c.key + '" title="Sort by ' + c.label.toLowerCase() + '" tabindex="0" aria-sort="'
+      + (c === col ? (srt.dir === "desc" ? "descending" : "ascending") : "none") + '">' + c.label + '<span class="sarr">' + (c === col ? (srt.dir === "desc" ? "\u25be" : "\u25b4") : "") + "</span></th>").join("");
+    $("usersList").innerHTML = items.length ? '<div class="tblwrap"><table class="rooms" style="font-size:12px"><tr>' + head + "<th></th></tr>" + items.map((x) => x.html).join("") + "</table></div>" : "Nobody is connected right now.";
+    for (const th of $("usersList").querySelectorAll("th.sortable")) {
+      const go = () => { const k = th.dataset.sort; usersSortSet({ key: k, dir: srt.key === k && srt.dir !== "desc" ? "desc" : "asc" }); paintUsers(d); };
+      th.addEventListener("click", go);
+      th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    }
     for (const b of $("usersList").querySelectorAll(".usrupd")) b.addEventListener("click", async () => {
       b.disabled = true;
       try {

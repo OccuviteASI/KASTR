@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.54 — back to the spotlight (in progress)
+## v0.21.54 — back to the spotlight, a chosen standby address, a tidier top
 
 **Hide the top bar (Kenton: "Give an option to collapse the top bar with the ASI logo, version, etc. and then an option to expand when collapsed").** A chevron at the right end of the top bar (logo, version, App, Go Live, Relay) hides it, which gives the page that height back. A small tab at the top centre brings it back. The choice is remembered on that computer, for the app and for every page in a browser.
 

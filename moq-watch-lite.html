@@ -1944,6 +1944,7 @@
   <div class="body">
     <button class="opt" id="viewGallery" type="button"><span class="oi">&#9638;</span>Gallery<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewSpeaker" type="button"><span class="oi">&#9673;</span>Speaker<span class="chk">&#10003;</span></button>
+    <button class="opt" id="viewSpot" type="button" title="Back to what the room spotlighted" hidden><span class="oi">&#10022;</span>Spotlight<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFocus" type="button" title="Only the main stage: everything else stops downloading"><span class="oi">&#9635;</span>Focus on content<span class="chk">&#10003;</span></button>
     <div class="sep"></div>
     <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
@@ -8697,8 +8698,26 @@
   volumeInput.addEventListener("input", () => { try { localStorage.setItem("kastr.volume", volumeInput.value); } catch {} applyState(); });
   muteBtn.addEventListener("click", () => { manualMute = !manualMute; applyState(); });
   // 0.8.8: the toolbar View button opens a menu; this is the Speaker action.
+  // 0.21.54 (Kenton: "There still isn't a way to get back to the spotlight view without adding/removing a spotlight"): the
+  // room's spotlight was applied only when a spotlight was added or removed -- after Gallery, a tile click or Speaker on
+  // another tile nothing brought it back. spotBack() re-applies it (one item, or the spotlight grid).
+  function roomSpotOnStage() {
+    return !!spotDone && spotSetNow().length > 0 && !gridMode && !manualPick && !galleryChosen && !pinsLive().length;
+  }
+  function spotBack() {
+    if (!spotSetNow().length) return false;
+    if (pinsLive().length) { window.__toast?.("Your pins hold the stage \u2014 unpin them to see the room\u2019s spotlight.", 4000); return true; }
+    gridOpenEnd(false);
+    try { viewResetAll(); } catch {}
+    spotDone = null; galleryChosen = false; manualPick = false;   // (Focus on content keeps its own switch)
+    spotApplyWinner();
+    if (!spotDone || spotDone.startsWith("@")) return false;   // nothing of it on this page (a share that has not arrived yet)
+    return true;
+  }
+  window.__spotBack = spotBack;   // rig
   function enterSpotlight() {
     if (pinsShow()) return;   // 0.21.45: my pins first
+    if (spotBack()) return;   // 0.21.54: the room's spotlight next
     manualPick = true;   // 0.13.3
     galleryChosen = false;   // 0.21.40
     gridMode = false;
@@ -9026,6 +9045,7 @@
     const on = (id, v) => document.getElementById(id)?.classList.toggle("on", !!v);
     on("viewGallery", gridMode);
     on("viewSpeaker", !gridMode);
+    { const b = document.getElementById("viewSpot"); if (b) { b.hidden = !spotSetNow().length; b.classList.toggle("on", roomSpotOnStage()); } }   // 0.21.54
     on("viewFocus", focusMode && !gridMode);
     on("viewHideMe", hideMe);
     on("viewPublishOnly", publishOnly);   // 0.9.10
@@ -9052,6 +9072,7 @@
   document.getElementById("viewGridNames")?.addEventListener("click", () => { window.__gridFeeds?.setNames?.(!window.__gridFeeds?.names?.()); paintViewPop(); });   // 0.15.0
   document.getElementById("viewGallery").addEventListener("click", () => { closeAllPops(); goGallery(); });   // 0.21.40: the full way back (cell open, zoom, my own spotlit pane, fill/full screen)
   document.getElementById("viewSpeaker").addEventListener("click", () => { focusMode = false; closeAllPops(); enterSpotlight(); });
+  document.getElementById("viewSpot")?.addEventListener("click", () => { closeAllPops(); focusMode = false; if (!spotBack()) window.__toast?.("Nothing the room spotlighted is on this page yet.", 3500); });   // 0.21.54
   document.getElementById("viewFocus").addEventListener("click", () => {
     focusMode = !focusMode;
     closeAllPops();

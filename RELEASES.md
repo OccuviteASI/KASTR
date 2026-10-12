@@ -2,6 +2,12 @@
 
 What changed in each build, newest first.
 
+## v0.21.54 — back to the spotlight (in progress)
+
+**Back to the room's spotlight without changing it (Kenton: "There still isn't a way to get back to the spotlight view without adding/removing a spotlight").** Until now, the room's spotlight reached your stage only at the moment someone added or removed one. After you chose Gallery or clicked another tile, nothing brought it back.
+- **View ▸ Spotlight** appears while the room has a spotlight and is ticked while it is on your stage. Choose it to put the room's spotlight back, whether that is one person, one share or the spotlight grid.
+- **View ▸ Speaker** and the **G** key now go to the room's spotlight too, when one is set. Your own pins still come first.
+
 ## v0.21.53 — a standby hub
 
 **A spoke can stand in for the hub (Kenton: "Lets start on the standby hub").** Pick one spoke with **Make standby** on its row of the hub's spokes table. That spoke keeps working as an ordinary relay and also keeps a copy of the hub's records.

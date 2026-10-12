@@ -387,6 +387,7 @@
         <!-- 0.21.55 (Kenton): users not seen for a day are hidden unless this is ticked -->
         <label class="usrold"><input type="checkbox" id="usersOld"><span id="usersOldTxt">Show users not seen for over 24 hours</span></label>
         <div id="usersList" class="hint" style="margin:4px 0 6px"></div>
+        <div class="btnrow" id="usersAllRow" hidden><button id="usersUpdateAll" type="button" class="ghost">All users up to date</button></div>
         <span id="usersMsg" class="hint blk gap">An Update reaches the person's KASTR through the relay it uses: their window asks them first (Update now / In 10 minutes) and it updates by itself after 10 minutes. Web visitors follow their relay's version on their own.</span>
       </div>
       <!-- 0.21.51 (Kenton): every relay's, box's and app's logs, collected here on request -->
@@ -1328,6 +1329,16 @@
     try { oldBox.checked = localStorage.getItem("kastr.relay.usersOld") === "1"; } catch {}
     $("usersOldTxt").textContent = "Show users not seen for over 24 hours" + (nOld ? " (" + nOld + ")" : " (none)");
     const shown = oldBox.checked ? rows : rows.filter((r) => !isOld(r));
+    // 0.21.55 (Kenton: "I want an update all users button"): every app behind its relay's version that is still around
+    // (not the day-old ones) and not already updating -- the same ask as each row's Update
+    usersBehind = rows.filter((r) => behind(r) && !isOld(r) && !pending.has("user:" + r.node));
+    { const b = $("usersUpdateAll"), nPend = [...pending.keys()].filter((k) => k.startsWith("user:")).length;
+      $("usersAllRow").hidden = !LOCAL;
+      b.classList.toggle("ghost", !usersBehind.length);
+      if (usersAllBusy) { /* the click handler owns the label while it sends */ }
+      else if (usersBehind.length) { b.disabled = false; b.textContent = "Update " + usersBehind.length + (usersBehind.length === 1 ? " user" : " users"); }
+      else if (nPend) { b.disabled = true; b.innerHTML = '<span class="updspin"></span>Updating ' + nPend + (nPend === 1 ? " user" : " users") + "\u2026"; }
+      else { b.disabled = true; b.textContent = "All users up to date"; } }
     const items = shown.map((r) => {
       const key = "user:" + r.node;
       const cell = pendCell(key, r.version, true, r.offer, "usersMsg")
@@ -1373,6 +1384,32 @@
     });
   }
   window.__relayPending = pending;   // rig
+  // 0.21.55: Update all users -- one confirm, then each user's update in turn (each spins in its row until done)
+  let usersBehind = [], usersAllBusy = false;
+  $("usersUpdateAll")?.addEventListener("click", async () => {
+    const list = usersBehind.slice();
+    if (!list.length || usersAllBusy) return;
+    const vers = [...new Set(list.map((r) => r.relayVersion).filter(Boolean))].join(" / ");
+    if (!confirm("Update " + list.length + (list.length === 1 ? " user" : " users") + " to " + vers + "?" + String.fromCharCode(10, 10)
+                 + "Each person's KASTR asks them first (Update now / In 10 minutes) and updates by itself after 10 minutes; unattended boxes update at once.")) return;
+    const b = $("usersUpdateAll");
+    usersAllBusy = true; b.disabled = true;
+    let ok = 0;
+    const bad = [];
+    for (const [i, r] of list.entries()) {
+      b.innerHTML = '<span class="updspin"></span>Asking ' + (i + 1) + " of " + list.length + "\u2026";
+      try {
+        const res = await api("/api/relay/clients/update", { node: r.node, relay: r.relay || "" });
+        if (res.error) bad.push((r.name || r.node) + ": " + res.error);
+        else { ok++; pendStart("user:" + r.node, r.relayVersion || "", r.name || r.node, r.relay || ""); }
+      } catch (e) { bad.push((r.name || r.node) + ": " + (e?.message || e)); }
+    }
+    usersAllBusy = false;
+    $("usersMsg").textContent = "Asked " + ok + (ok === 1 ? " user" : " users") + " to update \u2014 each window asks its person first\u2026"
+      + (bad.length ? " Not asked: " + bad.join("; ") : "");
+    $("usersMsg").style.color = bad.length ? "var(--asi-amber)" : "";
+    paintSpokes();
+  });
   // ---- 0.21.51 (Kenton: "Could we have the logs all send to the hub to make log collection easier?") ----------------
   let lastFleet = null, logRun = null, logTimer = null;
   const LOG_WAIT_MS = 180000;

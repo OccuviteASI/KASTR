@@ -56,6 +56,16 @@ class Seen(unittest.TestCase):   # 0.21.55 (Kenton: hide users not seen for 24 h
         self.assertIn('localStorage.getItem("kastr.relay.usersOld") === "1"', rel)
 
 
+class UpdateAll(unittest.TestCase):   # 0.21.55 (Kenton: "I want an update all users button")
+    def test_button_and_who_it_asks(self):
+        with io.open(os.path.join(HERE, "relay.html"), encoding="utf-8") as f:
+            rel = f.read()
+        self.assertIn('<button id="usersUpdateAll" type="button" class="ghost">All users up to date</button>', rel)
+        self.assertIn('usersBehind = rows.filter((r) => behind(r) && !isOld(r) && !pending.has("user:" + r.node));', rel)
+        self.assertIn('const res = await api("/api/relay/clients/update", { node: r.node, relay: r.relay || "" });', rel)
+        self.assertIn('pendStart("user:" + r.node, r.relayVersion || "", r.name || r.node, r.relay || "");', rel)
+
+
 class Pages(unittest.TestCase):
     def test_the_page_checks_in_and_the_relay_page_shows_the_browser(self):
         with io.open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:

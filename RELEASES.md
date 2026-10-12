@@ -10,6 +10,11 @@ What changed in each build, newest first.
 - **Safe on a public tunnel:** a relay accepts a check-in for a `web-…` ID only while that ID has a live session on it, so nobody can add made-up users from outside.
 - **Older relay hosts:** pages from a relay host older than 0.21.55 don't check in, so their visitors appear as before.
 
+**Update all users (Kenton: "I want an update all users button").** Below the Users table, **Update N users** sends the same update request as each row's Update button to every KASTR app that is behind its relay's version, after one confirmation.
+- **Each person is asked first:** their KASTR shows "Update now / In 10 minutes", as with a single Update. Unattended boxes update at once.
+- **Who is left out:** web visitors (they follow their relay host by themselves), apps older than 0.21.50 (they can't receive a pushed update) and anyone not seen for 24 hours.
+- **While it runs:** each row spins until that person is on the new version, and the button reads "Updating N users…". When nobody is behind, it reads "All users up to date".
+
 **Users not seen for a day are hidden (Kenton: "Hide those that haven't connected in over 24 hours. But have a check box to show them").** The Users table hides anyone not seen for more than 24 hours.
 - **Showing them:** tick **Show users not seen for over 24 hours (N)** above the table. The number tells you how many are hidden, and the tick is remembered on that computer. Someone with an update in progress always shows.
 - **Connected boxes no longer look stale:** for boxes and apps older than 0.21.50, "Last seen" used to show when they *connected*, so a box online for two days read "2 days ago". Anyone with an open connection now counts as seen now, and hovering over Last seen shows when they connected.

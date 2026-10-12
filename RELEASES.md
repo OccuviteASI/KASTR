@@ -2,6 +2,16 @@
 
 What changed in each build, newest first.
 
+## v0.21.46 — Southridge's full-quality cameras come back
+
+**Southridge's cameras never opened in full quality (Kenton: "Southridge doesn't seem to be getting the trigger to send full quality video").** Southridge's grid was published as `obs-svr-395f`, but every camera in it was still published as `obs-svr-1980`.
+- **Why:** the four-character suffix on a machine's name comes from a network adapter's MAC address, and KASTR re-read it at every launch. On a machine whose adapters come and go (VPN, virtual or USB adapters), a different adapter can answer, and the name changes. The camera feeds KASTR restored after a restart kept the old name. The relay only lets a machine publish under its current name, so it refused every one of them, while the grid, published fresh, kept working. A grid-cell click found no full-quality stream to open.
+- **Fix 1 — the name stays put:** the suffix is now chosen once and kept in KASTR's state folder (`host-id`), together with the adapter it came from. Adapters coming and going no longer change it. A cloned disk image on other hardware, or a replaced network card, still gets a name of its own, so cloned boxes never collide.
+- **Fix 2 — restored feeds follow the machine:** a feed the server restored under an older name is taken back under the machine's current name and republished, so the relay accepts it again.
+- **Southridge needs this update and one page reload** for its cameras to come back. Until then, removing and re-adding its cameras on that box does the same.
+
+**Tested:** on the lab spoke, a camera feed forced onto an old machine name was renamed and republished on the next page load, and a viewer on the other relay received it in full (189 frames). Unit tests cover: the name kept across launches; another adapter answering, or uuid's random fallback, leaving it unchanged; and a clone on other hardware getting a new name.
+
 ## v0.21.45 — pin several sources for yourself
 
 **Pin several sources from different rooms, for yourself (Kenton: "I need to be able to pin multiple sources from separate rooms for myself").**

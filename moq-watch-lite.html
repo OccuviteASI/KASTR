@@ -20180,7 +20180,17 @@
         const name = parts.length > 1 ? parts.slice(1).join("/") : "";   // chanPath put the room first
         const extra = { feedId: f.id, url: f.url, audio: f.publish ? f.publish.audio !== false : audioWanted(f.url) };
         if (isScreenUrl(f.url)) { extra.screen = true; extra.label = f.publish?.label || (/[/]window[/]/i.test(f.url) ? "Window" : "Screen"); }   // 0.21.20: an adopted screen share stays a screen (never a grid member)
-        if (name.endsWith(".hang")) extra.name = name;
+        if (name.endsWith(".hang")) {
+          // 0.21.46 (field, Southridge): a pair the server restored under an OLD host segment (the host id moved between
+          // launches) is published where this machine's token no longer reaches -- the relay refuses it and the camera's
+          // full stream never reaches anyone. Adopt it under THIS machine's host; the next publish moves the pair.
+          const np = name.split("/");
+          if (np.length >= 2 && HOSTNAME && np[0] !== HOSTNAME && /^[a-z0-9-]+-[0-9a-f]{4}$/.test(np[0])) {
+            console.warn("KASTR: feed " + f.id + " was published as host " + np[0] + "; this machine is " + HOSTNAME + " -- republishing under " + HOSTNAME);
+            np[0] = HOSTNAME;
+          }
+          extra.name = np.join("/");
+        }
         if (f.publish) audioSet(f.url, f.publish.audio !== false);   // 0.9.10: the server's actual state, both ways
         { const kept = rtspPersist().find((x) => x.url === f.url);   // 0.15.0: an adopted feed keeps its display name and grid
           extra.gridId = String(kept?.gridId || gridOfSaved(f.url) || "1");

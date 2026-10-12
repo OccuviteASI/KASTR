@@ -285,12 +285,78 @@ def host_slug(name=None):
     stable per-machine suffix. Cloned images (normal on robot boxes) share a
     hostname, and identical host segments mean byte-identical broadcast
     paths: they collide on the relay AND every device suppresses the other's
-    tile as "its own" -- each machine then sees only itself. The MAC-derived
-    suffix needs no stored state and survives reinstalls."""
+    tile as "its own" -- each machine then sees only itself. The suffix comes
+    from a MAC address (host_suffix: kept in the state folder, 0.21.46)."""
     raw = name or socket.gethostname() or "host"
     slug = re.sub(r"[^a-z0-9]+", "-", raw.split(".")[0].lower()).strip("-")
     slug = slug[:32] or "host"
-    return "%s-%04x" % (slug, uuid.getnode() & 0xFFFF)
+    return "%s-%04x" % (slug, host_suffix())
+
+
+# 0.21.46 (field, Southridge): uuid.getnode() reads "a" MAC at every launch -- with VPN / virtual / USB adapters coming
+# and going (or none readable: a RANDOM node) the suffix changed between launches (obs-svr-1980 -> obs-svr-395f). The
+# box's restored camera pairs kept publishing under the OLD host segment, which its token no longer grants: the relay
+# refused them and every full-quality stream from that site vanished while the grid (published fresh) kept working.
+# Now the suffix is chosen once and kept in <state>/host-id with the MAC it came from; it is kept while that MAC is still
+# one of this machine's adapters (adapters coming and going never move it). A cloned image carrying the file onto other
+# hardware (that MAC absent) or a replaced network card gets a fresh suffix -- the clone rule above still holds.
+_HOST_SUFFIX = None
+
+
+def _machine_macs():
+    """Every adapter MAC this machine reports, as 12 lower-case hex digits; empty when it cannot tell."""
+    out = set()
+    try:
+        if sys.platform.startswith("linux"):
+            for nic in os.listdir("/sys/class/net"):
+                try:
+                    with open("/sys/class/net/%s/address" % nic, encoding="ascii") as f:
+                        out.add(f.read().strip().lower().replace(":", ""))
+                except OSError:
+                    pass
+        else:
+            cmd = ["getmac", "/fo", "csv", "/nh", "/v"] if sys.platform == "win32" else ["ifconfig", "-a"]
+            kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}   # CREATE_NO_WINDOW
+            txt = subprocess.run(cmd, capture_output=True, text=True, timeout=8, **kw).stdout or ""
+            for m in re.finditer(r"(?i)\b([0-9a-f]{2}(?:[-:][0-9a-f]{2}){5})\b", txt):
+                out.add(re.sub(r"[-:]", "", m.group(1).lower()))
+    except Exception:
+        pass
+    out.discard("000000000000")
+    return out
+
+
+def host_suffix():
+    global _HOST_SUFFIX
+    if _HOST_SUFFIX is not None:
+        return _HOST_SUFFIX
+    node = uuid.getnode()
+    real = not (node >> 40) & 1          # the multicast bit marks uuid's random fallback
+    mac = "%012x" % node
+    path = os.path.join(STATE_DIR, "host-id") if STATE_DIR else None
+    if path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                rec = json.load(f)
+            sfx, smac = int(rec.get("suffix")) & 0xFFFF, str(rec.get("mac") or "").lower()
+            if smac == mac or (smac and smac in _machine_macs()) or (not real and smac):
+                _HOST_SUFFIX = sfx       # the same machine: keep the name it has always had
+                return sfx
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    sfx = node & 0xFFFF
+    if not path:
+        return sfx                       # no state folder yet (a harness, or before launch set it): not kept
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"suffix": sfx, "mac": mac if real else "", "at": int(time.time())}, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    _HOST_SUFFIX = sfx
+    return sfx
 
 # The relay currently on the network.
 DEFAULT_RELAY = "http://10.10.105.190:4443"
@@ -4749,6 +4815,9 @@ def make_bridge(state_dir=None, log=None, hostname=None):
     0.13.0: `hostname` must be the SAME value the launcher gives make_server /
     make_handler (both None today): the bridge's publishers mint tokens scoped
     to host_slug(hostname), and the page's HOSTNAME comes from the same slug."""
+    global STATE_DIR
+    if state_dir and not STATE_DIR:
+        STATE_DIR = state_dir   # 0.21.46: the kept host id lives there -- the bridge is made before the launcher sets it
     b = kastr_rtsp.Bridge(state_dir=state_dir, log=log, host_slug=host_slug(hostname))
     b.web_base_for = _od_web_base      # 0.18.0: where the on-demand loop syncs
     return b

@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.56 — arrange the Relay page on a grid (in progress)
+## v0.21.56 — arrange the Relay page on a grid
 
 **Collapse, resize and snap the Relay page's cards (Kenton: "allow for collapsing individual tiles on the relay server page. Also allow for resizing and snap to grid instead of highlighting the other tile edges").** The cards now sit on a 12-column grid.
 - **Collapse:** the chevron at the right of a card's title folds it down to its title. Click it again to open the card.

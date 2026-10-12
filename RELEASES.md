@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.58 — sites that stay fresh (in progress)
+## v0.21.58 — sites that stay fresh
 
 **Sites no longer go stale after days connected (field, Kenton: "sites get stale if they are connected too long ... I had to restart 2 sites after the weekend").** The two sites were Linux boxes. The relay showed auth refusals, and cameras and the grid stopped showing or froze. Every token a site box holds lasts a day at most, and several long-lived connections kept using their old token until the relay cut them off.
 - **Camera feeds renew the token they are actually using:** when the box page handed a running camera feed a fresh token, the feed noted it but kept streaming on the old one. Its renewal timer then saw a full day left and did nothing, so the relay cut the camera about a day later. Now a feed moves onto the fresh token 15 minutes before its current one ends: one planned restart instead of a cut.

@@ -2,6 +2,22 @@
 
 What changed in each build, newest first.
 
+## v0.21.45 — pin several sources for yourself
+
+**Pin several sources from different rooms, for yourself (Kenton: "I need to be able to pin multiple sources from separate rooms for myself").**
+- **Pin for me adds:** each tile's menu (⋯ or right-click) has "Pin for me", which adds the tile to your pins. You can pin up to 9 sources, from your own room and from rooms you watch. Two or more pins share your stage as a grid; one pin fills it. A pin badge marks each pinned tile.
+- **Unpin removes just that one:** the others stay. When you unpin the last one, the stage goes back to the room's spotlight if there is one, otherwise to the gallery.
+- **Your pins win:** while you have pins, a "Spotlight for everyone" from someone else does not move your stage, and a new share does not take it either.
+- **Remembered on this device:** pins are kept per relay and come back after a reload, a relaunch or a room change, once each source is live again. Gallery leaves the pins in place; View › Speaker brings them back.
+- **The limit:** a tenth pin asks you to unpin one first. Pins whose source has gone away are cleared first to make room.
+
+**Tested** on the two-relay lab with three windows (Alex in wa with a grid of three test cameras, Sam in wb, Kenton in wb watching wa):
+- Kenton pinned wa's grid, Sam (wb) and Alex (wa), and they shared his stage as three equal cells;
+- Sam's "Spotlight for everyone" left Kenton's stage unchanged;
+- unpinning Alex left two pins;
+- a reload brought both pins back;
+- unpinning both handed the stage to the room's spotlight.
+
 ## v0.21.44 — watch extra rooms
 
 **One window, several sites (Kenton: "one window for several sites" — several rooms on one fleet, stay in one room, watch the others).**

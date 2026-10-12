@@ -622,6 +622,12 @@
   #stage .pane .gwait { position:absolute; z-index:7; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); color:#fff; font-size:12px; border-radius:6px; pointer-events:none; }   /* 0.21.2 */
   #stage .pane .pwait { position:absolute; left:50%; bottom:14%; transform:translateX(-50%); z-index:7; background:rgba(0,0,0,.55); color:#fff; font-size:12px; padding:4px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }   /* 0.21.15: never-painted notice */
   #stage .pane .rendb { position:absolute; right:6px; bottom:6px; z-index:4; background:rgba(0,0,0,.6); color:#ffd27a; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }   /* 0.21.7: click-to-picture */
+  /* 0.21.45: pinned for me */
+  .pane .pinc { position:absolute; left:6px; top:6px; z-index:4; width:22px; height:22px; display:none; align-items:center; justify-content:center;
+    background:rgba(10,14,18,.72); border-radius:6px; color:var(--asi-blue); pointer-events:none; }
+  .pane .pinc .icon { width:13px; height:13px; }
+  #stage .pane.mypin .pinc { display:flex; }
+  #stage .pane.mypin .latb { left:32px; }
   #stage .pane .latb { position:absolute; left:6px; top:6px; z-index:4; background:rgba(0,0,0,.6); color:#9fe0ff; font:11px/1.4 var(--font-mono, monospace); padding:1px 6px; border-radius:4px; pointer-events:none; }   /* 0.21.31 (Kenton: it covered the mute icon and the name): top-left */
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
@@ -2447,6 +2453,8 @@
   const tiles = new Map(); // path -> { pane, watch, canvas, row }
   const pendingRemovals = new Map(); // path -> timeoutId, debounces transient "inactive" flaps
   let selectedName = undefined;
+  const PIN_MAX = 9;   // 0.21.45: my pins (declared early: the stage reads them)
+  let myPins = [], pinsKeyLoaded = "", pinsLiveSig = "";
   let manualMute = false;
   let deafened = false, deafMicWas = null;   // 0.21.40: Deafen = all incoming sound off + my mic muted; deafMicWas = my mic was on before
 
@@ -5519,6 +5527,50 @@
     gridMode = true; applyState();
   }
   window.__goGallery = goGallery;   // rig
+  // ---- 0.21.45 (Kenton: "pin multiple sources from separate rooms for myself") ------------------------------------------
+  // "Pin for me" ADDS to my pins (up to 9, any room I am in or watch); two or more share my stage as a grid (the spotlight
+  // grid's layout), one fills it. My pins win over the room's spotlight; unpinning the last one gives the stage back to the
+  // room's spotlight, else the gallery. Kept per relay on this device and shown again as each source comes back.
+  const pinKey = () => "kastr.pins." + sbRelayHost();
+  function pinsLoad() {
+    const k = pinKey();
+    if (pinsKeyLoaded === k) return;
+    pinsKeyLoaded = k;
+    try { const a = JSON.parse(localStorage.getItem(k) || "[]"); myPins = Array.isArray(a) ? a.filter((x) => typeof x === "string").slice(0, PIN_MAX) : []; } catch { myPins = []; }
+  }
+  function pinsSave() { try { localStorage.setItem(pinKey(), JSON.stringify(myPins)); } catch {} }
+  function isPinned(name) { pinsLoad(); return myPins.includes(name); }
+  function pinsLive() { pinsLoad(); return myPins.filter((n) => tiles.has(n) && isWatched(n) && !hiddenChild(n)); }
+  function pinsShow() {   // my stage = my pins
+    const live = pinsLive();
+    if (!live.length) return false;
+    manualPick = false; galleryChosen = false; gridMode = false; selfSpotEl = null;
+    if (!live.includes(selectedName)) { try { viewResetAll(); } catch {} selectedName = live[0]; }
+    applyState();
+    return true;
+  }
+  function pinsGone() {   // no pin on screen any more: the room's spotlight, else the gallery
+    if (spotSetNow().length) { spotDone = null; spotVotesDone = ""; galleryChosen = false; manualPick = false; spotApplyWinner(); }
+    else goGallery();
+  }
+  function pinToggle(name) {
+    pinsLoad();
+    if (myPins.includes(name)) {
+      myPins = myPins.filter((n) => n !== name);
+      pinsSave();
+      if (!pinsShow()) pinsGone();
+      return;
+    }
+    if (myPins.length >= PIN_MAX) myPins = myPins.filter((n) => tiles.has(n));   // pins whose source is gone make room first
+    if (myPins.length >= PIN_MAX) {
+      window.__toast?.("Up to " + PIN_MAX + " pins \u2014 unpin one first.", 4000, { level: "warn" });
+      return;
+    }
+    myPins.push(name);
+    pinsSave();
+    pinsShow();
+  }
+  window.__pins = { list: () => (pinsLoad(), myPins.slice()), live: pinsLive, toggle: pinToggle, show: pinsShow };   // rig
   function autoContentCheck() {
     const content = orderedNames().filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !wrRoomOf(n));   // 0.8.12: feeds behind a grid are not arrivals; 0.21.44: nor a watched room's shares
     const newest = content[content.length - 1] ?? null;
@@ -5530,13 +5582,13 @@
       autoContent = newest;
       const curIsContent = !gridMode && selectedName
         && isContentPath(selectedName) && (content.includes(selectedName) || (manualPick && isGridChild(selectedName)));   // 0.13.3: an automatic pick of a hidden child is not content
-      if (!curIsContent && !(galleryChosen && gridMode)) {   // 0.21.40: a chosen gallery stays
+      if (!curIsContent && !(galleryChosen && gridMode) && !pinsLive().length) {   // 0.21.40: a chosen gallery stays; 0.21.45: so do my pins
         selectedName = newest;
         gridMode = false;
       }
     } else if (!newest && autoContent) {
       autoContent = null;
-      gridMode = true;
+      if (!pinsLive().length) gridMode = true;
     }
   }
 
@@ -5801,8 +5853,12 @@
     const railOff = focusMode || isPhone() || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen
     // 0.21.32: the spotlight grid -- two or more spotlit things share the stage (best-fit columns, like the gallery);
     // a click on anything (manualPick) or the Gallery pill leaves it, the next change of the spotlight set brings it back
-    const mosaic = (!gridMode && !manualPick && spotStage.length >= 2)
-      ? spotStage.filter((x) => (x.el ? x.el.isConnected && pubEls.includes(x.el) : tiles.has(x.name) && isWatched(x.name) && !hiddenChild(x.name)))
+    const pinNow = pinsLive();   // 0.21.45: my pins win over the room's spotlight
+    { const sig = pinNow.join("|"); if (pinsLiveSig && !sig) setTimeout(() => { if (!pinsLive().length && !gridMode && !manualPick) pinsGone(); }, 0); pinsLiveSig = sig; }
+    if (pinNow.length && !gridMode && !manualPick && !pinNow.includes(selectedName)) { selfSpotEl = null; selectedName = pinNow[0]; }
+    const stageSet = pinNow.length ? pinNow.map((n) => ({ target: n, name: n })) : spotStage;
+    const mosaic = (!gridMode && !manualPick && stageSet.length >= 2)
+      ? stageSet.filter((x) => (x.el ? x.el.isConnected && pubEls.includes(x.el) : tiles.has(x.name) && isWatched(x.name) && !hiddenChild(x.name)))
       : [];
     const mosaicOn = mosaic.length >= 2;
     const mosaicIdx = new Map(mosaicOn ? mosaic.map((x, i) => [x.el || x.name, i]) : []);
@@ -6053,6 +6109,7 @@
       const watched = isWatched(name);
       const shown = watched && !hiddenChild(name);   // 0.6.10: both layouts show everyone -- 0.8.12: except feeds behind a grid
       const isSelected = name === selectedName || stageMosaicNames.has(name);   // 0.21.32: every cell of the spotlight grid
+      { const pn = myPins.includes(name); if (t.pane.classList.contains("mypin") !== pn) t.pane.classList.toggle("mypin", pn); }   // 0.21.45
       // 0.13.0 (F2): re-arm a watched tile whose url was torn down (the hidden-
       // tab teardown below, or a resubscribe that skipped a "never" tile) --
       // the same construction createTile uses; nothing re-arms while hidden.
@@ -6765,6 +6822,7 @@
     const l = document.createElement("span");
     l.className = "l";
     l.textContent = shortLabel(name, true);   // hover chip: cameras wear just the name (0.21.7: no title -- OS tooltips stick)
+    { const pc = document.createElement("span"); pc.className = "pinc"; pc.title = "Pinned for you"; pc.innerHTML = icon("pin"); pane.appendChild(pc); }   // 0.21.45
     // 0.8.1: Full screen lives in the chevron menu now; the mute state is
     // a Teams-style chip on the video, not a label marker.
     label.append(l);
@@ -6829,7 +6887,7 @@
       const openTileMenu = (anchor) => {   // 0.21.23: the three dots and a right-click open the same menu
         const content = isContentPath(name);
         const muted = mutedStreams.has(name);
-        const pinned = !gridMode && selectedName === name && !selfSpotEl;
+        const pinned = isPinned(name);   // 0.21.45: one of my pins (several allowed)
         const lit = window.__spotIs ? window.__spotIs(name) : false;   // 0.21.30: the room's current spotlight, mine included
         // 0.21.23 (Kenton, Teams screenshot): Mute participant / Pin for me / Spotlight for everyone, each with its glyph;
         // the mute stays what it always was -- this person's sound on THIS device (the admin mute is below)
@@ -6848,7 +6906,7 @@
         }
         // 0.21.23: every tile can be pinned and spotlit (Teams) -- before, only content with a choice to make
         items.push({ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me",
-          tip: pinned ? "Back to the gallery" : "Keep this on your stage (only you)" });
+          tip: pinned ? "Take it off your stage" : "Add it to your stage (only you; up to " + PIN_MAX + ")" });
         if (!wrRoomOf(name)) items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44: not into my room for a watched one
           tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
         items.push({ sep: true });
@@ -6888,7 +6946,7 @@
           if (v === "vgreset") { const s0 = vgGet(name) || {}; delete s0.rects; delete s0.gap; vgSet(name, s0); return; }
           if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
           if (v === "vghqoff") { const s0 = vgGet(name) || {}; s0.hq = []; vgSet(name, s0); return; }
-          if (v === "unpin") { goGallery(); return; }   // as the Gallery pill
+          if (v === "unpin") { pinToggle(name); return; }   // 0.21.45: this one only
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
@@ -6910,7 +6968,7 @@
             for (const n of kin2) { if (all2) mutedStreams.delete(n); else mutedStreams.add(n); }
             applyState();
           }
-          else if (v === "me") { gridMode = false; select(name); }
+          else if (v === "me") pinToggle(name);   // 0.21.45: adds to my pins
           else window.__spot?.set?.(name);
         });
       };
@@ -7068,6 +7126,7 @@
     attachMeter(tile);
 
     if (selectedName === undefined && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
+    if (isPinned(name) && !manualPick && !galleryChosen) setTimeout(() => { if (tiles.has(name) && !manualPick && !galleryChosen) pinsShow(); }, 0);   // 0.21.45: a pin came back
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
     gridWakeCheck(name);   // 0.21.2: a quadrant asked for this feed
@@ -7910,6 +7969,7 @@
     const votes = set.map((v) => v.target + "@" + v.ts).join("|");
     const news = votes !== spotVotesDone;
     spotVotesDone = votes;
+    if (pinsLive().length) { spotStage = items.length >= 2 ? items : []; return; }   // 0.21.45: my pins win (the spotlight waits)
     if (galleryChosen && gridMode && !news) { spotStage = items.length >= 2 ? items : []; return; }
     if (news) galleryChosen = false;
     if (!items.length) {
@@ -8313,6 +8373,7 @@
   muteBtn.addEventListener("click", () => { manualMute = !manualMute; applyState(); });
   // 0.8.8: the toolbar View button opens a menu; this is the Speaker action.
   function enterSpotlight() {
+    if (pinsShow()) return;   // 0.21.45: my pins first
     manualPick = true;   // 0.13.3
     galleryChosen = false;   // 0.21.40
     gridMode = false;

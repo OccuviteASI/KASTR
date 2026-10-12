@@ -19,7 +19,8 @@ class Gallery(unittest.TestCase):
         p = _page()
         self.assertIn('document.getElementById("viewGallery").addEventListener("click", () => { closeAllPops(); goGallery(); });', p)
         self.assertIn('stageBack.addEventListener("click", (e) => { e.stopPropagation(); goGallery(); });', p)
-        self.assertIn('if (v === "unpin") { goGallery(); return; }', p)
+        self.assertIn('if (v === "unpin") { pinToggle(name); return; }', p)   # 0.21.45: one pin; the last one -> pinsGone -> goGallery
+        self.assertIn("else goGallery();", p[p.index("  function pinsGone() {"):p.index("  function pinToggle(name) {")])
         self.assertIn("if (gridMode) enterSpotlight(); else goGallery();", p)
 
     def test_reset_covers_open_cell_own_pane_fill_and_full_screen(self):
@@ -32,7 +33,7 @@ class Gallery(unittest.TestCase):
     def test_only_a_new_spotlight_takes_the_stage_back(self):
         p = _page()
         self.assertIn("if (galleryChosen && gridMode && !news) {", p)
-        self.assertIn("if (!curIsContent && !(galleryChosen && gridMode)) {", p)
+        self.assertIn("if (!curIsContent && !(galleryChosen && gridMode) && !pinsLive().length) {", p)
         # a pick on the stage ends the chosen gallery
         sel = p[p.index("  function select(name) {"):p.index("  function select(name) {") + 300]
         self.assertIn("galleryChosen = false;", sel)

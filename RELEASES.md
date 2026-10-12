@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.21.56 — arrange the Relay page on a grid (in progress)
+
+**Collapse, resize and snap the Relay page's cards (Kenton: "allow for collapsing individual tiles on the relay server page. Also allow for resizing and snap to grid instead of highlighting the other tile edges").** The cards now sit on a 12-column grid.
+- **Collapse:** the chevron at the right of a card's title folds it down to its title. Click it again to open the card.
+- **Resize:** drag the grip at a card's bottom-right corner. The width snaps to columns: a quarter, a third, half, two-thirds, the full width, and so on. The height snaps to 8-pixel rows, and a card shorter than its contents scrolls. Double-click the grip to make the card fit its contents again.
+- **Move:** drag a card by its title. A dashed box shows exactly where it will land, and the other cards make room around it, instead of a highlighted edge.
+- **No holes:** cards always float up into any space above them, so collapsing or shrinking a card closes the gap (Kenton chose "Cards float up").
+- **Kept:** the layout is saved on this machine; a saved 0.21.52 card order carries over. **Reset layout** puts back the original order and sizes and opens every card. In a narrow window, every card is full width.
+
+**Fixed:** in 0.21.55 an empty amber badge showed next to "Federation" on every Relay page that is not a standby.
+
 ## v0.21.55 — names for web visitors, update everyone, standby fixes
 
 **Web visitors show by name on the Relay page (Kenton: "I need to have a name for web clients that shows in the relay server page").** The Users table used to list someone in a browser only as a `web-…` ID with no name.

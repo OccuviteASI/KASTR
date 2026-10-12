@@ -49,6 +49,7 @@
   .sbaddr { display:block; font-size:11px; color:var(--text-dim); }
   /* 0.21.55 (Kenton: "On the standby, show something in that section to know it is a hub standby"): the role as a badge on
      the Federation heading and a boxed line under the hub fields */
+  .sbbadge[hidden] { display:none !important; }
   h2 .sbbadge { margin-left:8px; font-size:10px; letter-spacing:.06em; vertical-align:2px; }
   h2 .sbbadge.warn { background:color-mix(in srgb, var(--asi-amber, #f0a020) 24%, transparent); }
   #standbyState.sbcall { display:block; margin:8px 0 4px; padding:8px 10px; border:1px solid color-mix(in srgb, var(--asi-blue, #3b82f6) 55%, transparent);
@@ -59,16 +60,31 @@
   /* 0.21.52 (Kenton: "drag around the windows in the relay server page to where I want them. Have the tiles only take up the
      space they need, not just use the same height for everything in the row"): 4 px grid rows -- each card spans just the
      rows its content needs (measured, kept current by a ResizeObserver) -- and the card title is a drag handle */
-  #main.masonry { grid-auto-rows:4px; row-gap:0; grid-auto-flow:row dense; }   /* dense: a smaller card fills the hole a two-column card leaves */
-  #main.masonry section.panel { margin-bottom:14px; align-self:start; }
-  #main.masonry > section:last-child { grid-column:auto; }
-  #main.masonry section.panel.fullw { grid-column:1 / -1; }
-  section.panel > h2 { cursor:grab; user-select:none; touch-action:none; }
+  /* 0.21.56 (Kenton: "allow for collapsing individual tiles ... resizing and snap to grid instead of highlighting the other
+     tile edges"): a 12-column snap grid -- cards float up into any gap, width snaps to columns and height to 8 px rows, a
+     dashed box shows where a dragged card will land */
+  #main.g12 { display:block; position:relative; }
+  #main.g12 > section.panel { position:absolute; margin:0; box-sizing:border-box; }
+  #main.g12.anim > section.panel:not(.dragging):not(.resizing) { transition:top .18s ease, left .18s ease, width .18s ease; }
+  @media (prefers-reduced-motion: reduce) { #main.g12.anim > section.panel { transition:none !important; } #main .gph { transition:none !important; } }
+  #main.g12 > section.panel.dragging { z-index:30; box-shadow:0 16px 40px rgba(0,0,0,.55); opacity:.92; }
+  #main.g12 > section.panel.fixedh { overflow:auto; }
+  #main.g12 > section.panel.collapsed > :not(h2) { display:none !important; }
+  #main.g12 > section.panel.collapsed > h2 { margin-bottom:0; }
+  #main .gph { display:block; position:absolute; z-index:1; box-sizing:border-box; border:2px dashed color-mix(in srgb, var(--asi-blue, #009fda) 70%, transparent);
+    border-radius:8px; background:color-mix(in srgb, var(--asi-blue, #009fda) 8%, transparent); pointer-events:none; transition:top .12s ease, left .12s ease, width .12s ease, height .12s ease; }
+  #main .rsz { display:block; position:absolute; z-index:31; width:16px; height:16px; cursor:nwse-resize; touch-action:none; opacity:.35;
+    background:linear-gradient(135deg, transparent 0 55%, var(--text-mute) 55% 62%, transparent 62% 72%, var(--text-mute) 72% 79%, transparent 79%); }
+  #main .rsz:hover, #main .rsz.on { opacity:1; }
+  #main .rsz[hidden], #main .gph[hidden] { display:none; }   /* (#main > div is display:contents for the old column wrappers) */
+  section.panel > h2 { cursor:grab; user-select:none; touch-action:none; display:flex; align-items:center; gap:6px; }
   section.panel > h2::before { content:"\2059"; font-size:13px; letter-spacing:0; color:var(--text-mute); opacity:.45; margin-right:-2px; }
   section.panel > h2:hover::before { opacity:.9; }
-  section.panel.dragging { opacity:.45; }
-  section.panel.drop-before { box-shadow:0 -3px 0 0 var(--asi-blue); }
-  section.panel.drop-after { box-shadow:0 3px 0 0 var(--asi-blue); }
+  section.panel > h2 .pcol { margin-left:auto; flex:none; display:grid; place-items:center; width:22px; height:22px; padding:0; border:1px solid transparent;
+    border-radius:5px; background:transparent; color:var(--text-mute); cursor:pointer; }
+  section.panel > h2 .pcol:hover, section.panel > h2 .pcol:focus-visible { color:var(--text); border-color:var(--line); outline:none; }
+  section.panel > h2 .pcol svg { transition:transform .15s ease; }
+  section.panel.collapsed > h2 .pcol svg { transform:rotate(-90deg); }
   #layoutReset { font-size:11px; color:var(--text-mute); background:none; border:0; padding:0; cursor:pointer; text-decoration:underline; height:auto; }
   #layoutReset:hover { color:var(--text); }
   label.f.asi-sw { display:flex; align-items:center; gap:10px; }
@@ -178,7 +194,7 @@
   useful on an isolated network, or when the shared relay is unreachable. This starts the
   bundled <code>moq-relay</code> with a self-signed certificate that browsers trust via its
   fingerprint. Nothing listens until you press Start.
-  <button type="button" id="layoutReset" title="Put the cards back in their original order" hidden>Reset layout</button>
+  <button type="button" id="layoutReset" title="Put the cards back where they started: original order, sizes, nothing collapsed" hidden>Reset layout</button>
 </p>
 
 <div id="main">
@@ -2024,88 +2040,203 @@
   setInterval(scan, 5000);
 </script>
 <script>
-// 0.21.52 (Kenton): cards only as tall as they need, dragged where you want them (the order is kept on this machine)
+// 0.21.56 (Kenton: "allow for collapsing individual tiles on the relay server page. Also allow for resizing and snap to grid
+// instead of highlighting the other tile edges"; chose: cards float up, width + height, 12 columns). Replaces 0.21.52's
+// masonry. Each card keeps {x, w (columns), h (8 px rows; 0 = fit its contents), c (collapsed), o (order)} on this machine;
+// cards are packed in order, each as high as the cards above it allow (no holes), so moving or shrinking one lets the rest
+// float up. Narrow windows stack every card full width.
 (() => {
   const main = document.getElementById("main");
   if (!main) return;
-  const KEY = "kastr.relay.layout";
-  const panels = () => [...main.querySelectorAll("section.panel")];
-  panels().forEach((p, i) => { if (!p.id) p.id = "panel" + i; p.dataset.home = String(i); });
-  for (const p of panels()) main.appendChild(p);   // every card a direct grid item (the old wrappers stay, empty)
-  for (const w of [...main.children]) if (!w.matches("section.panel")) w.style.display = "none";   // the emptied wrappers take no grid cell
-  const saveOrder = () => { try { localStorage.setItem(KEY, JSON.stringify(panels().map((p) => p.id))); } catch {} };
+  const KEY = "kastr.relay.grid", OLD_KEY = "kastr.relay.layout";
+  const COLS = 12, ROW = 8, GAP = 14, MINW = 3, MINROWS = 11, NARROW = 760;   // 11 rows: the title + a couple of lines
+  const DEFAULT_W = { fedPanel: 8, roomsPanel: 8, streamsPanel: 8, logPanel: 12 };
+  const all = [...main.querySelectorAll("section.panel")];
+  all.forEach((p, i) => { if (!p.id) p.id = "panel" + i; p.dataset.home = String(i); });
+  for (const p of all) main.appendChild(p);   // every card a direct child (the old column wrappers stay, empty)
+  for (const w of [...main.children]) if (!w.matches("section.panel")) w.style.display = "none";
   const reset = document.getElementById("layoutReset");
-  const applyOrder = (ids) => {
-    const byId = new Map(panels().map((p) => [p.id, p]));
-    for (const id of ids) { const p = byId.get(id); if (p) { main.appendChild(p); byId.delete(id); } }
-    for (const p of [...byId.values()].sort((a, b) => a.dataset.home - b.dataset.home)) main.appendChild(p);   // cards a newer KASTR added
+  let st = {};
+  try { const v = JSON.parse(localStorage.getItem(KEY) || "null"); if (v && typeof v === "object" && v.items) st = v.items; } catch {}
+  if (!Object.keys(st).length) {   // 0.21.52's saved order carries over
+    try { const old = JSON.parse(localStorage.getItem(OLD_KEY) || "null"); if (Array.isArray(old)) old.forEach((id, i) => { st[id] = { o: i }; }); } catch {}
+  }
+  if (reset) reset.hidden = !Object.keys(st).length;
+  const S = (p) => {
+    const d = st[p.id] || (st[p.id] = {});
+    if (!(d.w >= MINW && d.w <= COLS)) d.w = DEFAULT_W[p.id] || 4;
+    if (!(d.h >= 0)) d.h = 0;
+    if (typeof d.o !== "number") d.o = 1000 + Number(p.dataset.home);
+    return d;
   };
-  try { const saved = JSON.parse(localStorage.getItem(KEY) || "null"); if (Array.isArray(saved)) { applyOrder(saved); if (reset) reset.hidden = false; } } catch {}
-  // masonry: each card spans ceil((its height + the 14 px gap) / 4 px) rows
-  main.classList.add("masonry");
-  const fit = (p) => { const h = p.hidden ? 0 : p.getBoundingClientRect().height; p.style.gridRowEnd = h ? "span " + Math.ceil((h + 14) / 4) : ""; };
-  const ro = new ResizeObserver((es) => { for (const e of es) fit(e.target); });
-  for (const p of panels()) { ro.observe(p); fit(p); }
-  new MutationObserver(() => panels().forEach(fit)).observe(main, { attributes: true, subtree: true, attributeFilter: ["hidden"] });
-  addEventListener("resize", () => panels().forEach(fit));
-  // drag by the title (pointer events, like the room rail): a see-through copy follows the pointer; the card under it shows
-  // where it lands -- before it (upper half) or after it (lower half)
-  let drag = null;
-  const clearMarks = () => { for (const x of panels()) x.classList.remove("drop-before", "drop-after"); };
-  for (const p of panels()) {
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ v: 1, items: st })); } catch {} if (reset) reset.hidden = false; };
+  const visible = () => all.filter((p) => !p.hidden).sort((a, b) => S(a).o - S(b).o || a.dataset.home - b.dataset.home);
+  // the collapse chevron in every heading
+  const CHEV = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  for (const p of all) {
     const h = p.querySelector(":scope > h2");
     if (!h) continue;
     h.title = "Drag to move this card";
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "pcol"; b.innerHTML = CHEV;
+    const paint = () => { const c = !!S(p).c; b.title = c ? "Expand this card" : "Collapse this card"; b.setAttribute("aria-label", b.title); b.setAttribute("aria-expanded", String(!c)); };
+    paint();
+    b.addEventListener("click", (e) => { e.stopPropagation(); S(p).c = !S(p).c; paint(); save(); layout(); });
+    h.appendChild(b);
+  }
+  // one resize grip per card, kept at its bottom-right corner (outside the card, so a scrolling card never hides it)
+  const grips = new Map();
+  for (const p of all) {
+    const g = document.createElement("div");
+    g.className = "rsz"; g.dataset.for = p.id; g.title = "Drag to resize (snaps to the grid) \u00b7 double-click to fit the contents";
+    main.appendChild(g); grips.set(p, g);
+  }
+  const ph = document.createElement("div"); ph.className = "gph"; ph.hidden = true; main.appendChild(ph);
+  let drag = null, rsz = null, last = [];
+  const geo = () => { const W = main.clientWidth; const narrow = W < NARROW; return { W, narrow, colW: (W - (COLS - 1) * GAP) / COLS }; };
+  const pxW = (g, w) => w * g.colW + (w - 1) * GAP;
+  function layout() {
+    const g = geo();
+    const list = visible();
+    if (drag?.on) { const k = list.indexOf(drag.p); if (k >= 0) { list.splice(k, 1); list.splice(Math.min(drag.at, list.length), 0, drag.p); } }
+    // widths first, then one read of every height
+    for (const p of list) {
+      const d = S(p), w = g.narrow ? COLS : d.w;
+      p.style.width = pxW(g, w) + "px";
+      p.classList.toggle("collapsed", !!d.c);
+      const fixed = !d.c && d.h > 0;
+      p.classList.toggle("fixedh", fixed);
+      p.style.height = fixed ? d.h * ROW + "px" : "";
+    }
+    const hs = list.map((p) => p.getBoundingClientRect().height);
+    const sky = new Array(COLS).fill(0);
+    last = list.map((p, i) => {
+      const d = S(p), w = g.narrow ? COLS : Math.min(d.w, COLS);
+      let x;
+      if (g.narrow) x = 0;
+      else if (drag?.on && p === drag.p) x = Math.max(0, Math.min(COLS - w, drag.gx));
+      else if (typeof d.x === "number") x = Math.max(0, Math.min(COLS - w, d.x));
+      else {   // never placed by hand: the leftmost spot where it sits highest
+        let best = 0, bestY = Infinity;
+        for (let c = 0; c <= COLS - w; c++) { const y = Math.max(...sky.slice(c, c + w)); if (y < bestY) { bestY = y; best = c; } }
+        x = best;
+      }
+      const y = Math.max(...sky.slice(x, x + w));
+      const rows = Math.ceil((hs[i] + GAP) / ROW);
+      for (let c = x; c < x + w; c++) sky[c] = y + rows;
+      return { p, x, y, w, rows, h: hs[i] };
+    });
+    main.style.height = Math.max(0, Math.max(0, ...sky) * ROW - GAP) + "px";
+    for (const it of last) {
+      const left = it.x * (g.colW + GAP), top = it.y * ROW;
+      const grip = grips.get(it.p);
+      if (drag?.on && it.p === drag.p) {
+        Object.assign(ph.style, { left: left + "px", top: top + "px", width: pxW(g, it.w) + "px", height: it.h + "px" });
+        ph.hidden = false;
+        if (grip) grip.hidden = true;
+        continue;
+      }
+      it.p.style.left = left + "px"; it.p.style.top = top + "px";
+      if (grip) {
+        grip.hidden = !!S(it.p).c;
+        grip.style.left = (left + pxW(g, it.w) - 17) + "px"; grip.style.top = (top + it.h - 17) + "px";
+      }
+    }
+    for (const p of all) if (p.hidden) { const gr = grips.get(p); if (gr) gr.hidden = true; }
+    if (!drag?.on) ph.hidden = true;
+  }
+  // keep the packing current: contents change height, cards appear and disappear, the window resizes
+  let raf = 0;
+  const soon = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (!rsz) layout(); }); };
+  const ro = new ResizeObserver(soon);
+  for (const p of all) ro.observe(p);
+  new MutationObserver(soon).observe(main, { attributes: true, subtree: true, attributeFilter: ["hidden"] });
+  addEventListener("resize", soon);
+  main.classList.add("g12");
+  layout();
+  requestAnimationFrame(() => main.classList.add("anim"));   // no slide-in on the first paint
+  // move: the card follows the pointer; the dashed box shows the snapped spot; the others re-pack around it
+  const snapshot = () => { for (const [i, it] of last.entries()) { const d = S(it.p); d.o = i; if (!geo().narrow) d.x = it.x; } };
+  for (const p of all) {
+    const h = p.querySelector(":scope > h2");
+    if (!h) continue;
     h.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || e.target.closest("button, input, select, a")) return;
-      drag = { p, x0: e.clientX, y0: e.clientY, on: false, ghost: null, target: null, after: false };
+      drag = { p, x0: e.clientX, y0: e.clientY, on: false };
       try { h.setPointerCapture(e.pointerId); } catch {}
     });
     h.addEventListener("pointermove", (e) => {
       if (!drag || drag.p !== p) return;
+      const mr = main.getBoundingClientRect(), g = geo();
       if (!drag.on) {
         if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
-        drag.on = true;
         const r = p.getBoundingClientRect();
-        const g = drag.ghost = p.cloneNode(true);
-        g.removeAttribute("id");
-        Object.assign(g.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: Math.min(r.height, 260) + "px",
-          overflow: "hidden", opacity: ".55", pointerEvents: "none", zIndex: "200", margin: "0", boxShadow: "0 12px 32px rgba(0,0,0,.5)" });
-        drag.dx = e.clientX - r.left; drag.dy = e.clientY - r.top;
-        document.body.appendChild(g);
+        drag.on = true; drag.dx = e.clientX - r.left; drag.dy = e.clientY - r.top;
+        drag.at = last.findIndex((it) => it.p === p);
         p.classList.add("dragging");
       }
-      drag.ghost.style.left = (e.clientX - drag.dx) + "px";
-      drag.ghost.style.top = (e.clientY - drag.dy) + "px";
-      const under = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("#main section.panel");
-      clearMarks();
-      drag.target = under && under !== p ? under : null;
-      if (drag.target) {
-        const r = drag.target.getBoundingClientRect();
-        drag.after = e.clientY > r.top + r.height / 2;
-        drag.target.classList.add(drag.after ? "drop-after" : "drop-before");
-      }
+      const left = e.clientX - mr.left - drag.dx, top = e.clientY - mr.top - drag.dy;
+      p.style.left = left + "px"; p.style.top = top + "px";
+      drag.gx = Math.round(left / (g.colW + GAP));
+      // its place in the order: after every other card whose top is above its own (ties: further left first)
+      const others = last.filter((it) => it.p !== p);
+      drag.at = others.filter((it) => it.y * ROW < top || (it.y * ROW === top && it.x * (g.colW + GAP) <= left)).length;
+      layout();
     });
     const end = () => {
       if (!drag || drag.p !== p) return;
-      const d = drag; drag = null;
-      d.ghost?.remove(); p.classList.remove("dragging"); clearMarks();
-      if (!d.on || !d.target) return;
-      if (d.after) d.target.after(p); else d.target.before(p);
-      saveOrder();
-      if (reset) reset.hidden = false;
-      panels().forEach(fit);
+      const was = drag.on;
+      if (was) { layout(); snapshot(); }   // the dragged card takes the dashed box's spot
+      drag = null;
+      p.classList.remove("dragging");
+      ph.hidden = true;
+      if (was) { save(); layout(); }
     };
     h.addEventListener("pointerup", end);
     h.addEventListener("pointercancel", end);
   }
+  // resize: the corner grip -- width in columns, height in 8 px rows (a card shorter than its contents scrolls)
+  for (const [p, gr] of grips) {
+    gr.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      rsz = { p };
+      gr.classList.add("on"); p.classList.add("resizing");
+      try { gr.setPointerCapture(e.pointerId); } catch {}
+    });
+    gr.addEventListener("pointermove", (e) => {
+      if (!rsz || rsz.p !== p) return;
+      const g = geo(), r = p.getBoundingClientRect(), d = S(p);
+      if (!g.narrow) {
+        const w = Math.max(MINW, Math.min(COLS, Math.round((e.clientX - r.left + GAP) / (g.colW + GAP))));
+        const it = last.find((x) => x.p === p);
+        if (it && it.x + w > COLS) d.x = COLS - w;
+        d.w = w;
+      }
+      d.h = Math.max(MINROWS, Math.round((e.clientY - r.top) / ROW));
+      layout();
+    });
+    const done = () => {
+      if (!rsz || rsz.p !== p) return;
+      rsz = null; gr.classList.remove("on"); p.classList.remove("resizing");
+      snapshot(); save(); layout();
+    };
+    gr.addEventListener("pointerup", done);
+    gr.addEventListener("pointercancel", done);
+    gr.addEventListener("dblclick", () => { S(p).h = 0; snapshot(); save(); layout(); });   // back to fitting its contents
+  }
   if (reset) reset.addEventListener("click", () => {
-    try { localStorage.removeItem(KEY); } catch {}
-    for (const p of panels().sort((a, b) => a.dataset.home - b.dataset.home)) main.appendChild(p);
+    try { localStorage.removeItem(KEY); localStorage.removeItem(OLD_KEY); } catch {}
+    st = {};
+    for (const p of all) { const b = p.querySelector(":scope > h2 .pcol"); if (b) { b.title = "Collapse this card"; b.setAttribute("aria-expanded", "true"); } }
     reset.hidden = true;
-    panels().forEach(fit);
+    layout();
   });
-  window.__relayLayout = { order: () => panels().map((p) => p.id), spans: () => panels().map((p) => [p.id, p.style.gridRowEnd]) };   // rig
+  window.__relayLayout = {   // rig
+    state: () => JSON.parse(JSON.stringify(st)),
+    rects: () => last.map((it) => ({ id: it.p.id, x: it.x, y: it.y, w: it.w, rows: it.rows })),
+    order: () => last.map((it) => it.p.id),
+  };
 })();
 </script>
 </body>

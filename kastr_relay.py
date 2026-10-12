@@ -531,6 +531,9 @@ def log_slice(paths, since=0, find="", cap=LOG_FILE_CAP):
     return redact_log("".join(keep))
 
 
+BOOT_AT = int(time.time())   # 0.21.52: this KASTR's start (a remotely restarted spoke comes back with a newer one)
+
+
 def clean_clients(rows):
     """0.21.50: a spoke's user list as the hub keeps it -- known fields only, bounded."""
     out = []
@@ -2722,6 +2725,7 @@ class AuthService:
             self.spokes[key] = {"at": now, "reg": now, "node": node or None, "peer": peer, "name": name, "version": version,
                                 "minter": url or None, "rooms": rooms,
                                 "clients": clean_clients(p.get("clients")),   # 0.21.50: the users connected to that spoke
+                                "boot": int(p.get("boot") or 0) if str(p.get("boot") or "0").isdigit() else 0,   # 0.21.52: when it started
                                 "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
@@ -2795,7 +2799,7 @@ class AuthService:
         with self.lock:
             rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
                      "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or []),   # 0.21.2: + rooms
-                     "rtsp": v.get("rtsp")} for k, v in self.spokes.items()
+                     "rtsp": v.get("rtsp"), "boot": v.get("boot") or 0} for k, v in self.spokes.items()
                     if stale or (v.get("at") or 0) >= cut]
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
 
@@ -2990,7 +2994,7 @@ class AuthService:
                     rec["peer"] = next((v.get("peer") for v in self.spokes.values() if (v.get("name") or "") == rec["spoke"]), None)
                 else:
                     self.cmd["updateAll"] = rec
-            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient", "logs"):   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
+            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient", "logs", "restart"):   # 0.21.52: + restart   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
@@ -3053,7 +3057,8 @@ class AuthService:
                    "rehome": self.cmd.get("rehome"),                      # 0.21.26: 0.21.25 raised it but never sent it (spokes got it from the 403 hint)
                    "updateOne": list(self.cmd.get("updateOne") or []),   # 0.21.26: one spoke at a time
                    "updateClient": list(self.cmd.get("updateClient") or []),   # 0.21.50: one user, through the relay it uses
-                   "logs": list(self.cmd.get("logs") or [])}   # 0.21.51: a log collection
+                   "logs": list(self.cmd.get("logs") or []),   # 0.21.51: a log collection
+                   "restart": list(self.cmd.get("restart") or [])}   # 0.21.52: restart one spoke
         xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
         return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver}, 200   # 0.21.0: + the hub's command channel
 
@@ -3171,6 +3176,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("update", c), daemon=True).start()
+                # 0.21.52: the hub restarts one spoke
+                for c in (cmd.get("restart") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("restart", c), daemon=True).start()
                 # 0.21.51: the hub collects logs
                 for c in (cmd.get("logs") or []):
                     try:
@@ -4363,6 +4376,23 @@ class Relay:
             except Exception as e:
                 self.log("relay federation: wake command failed: %s" % e)
             return
+        if name == "restart":   # 0.21.52: the hub operator restarts THIS spoke (its whole KASTR, the relay with it)
+            try:
+                import kastr_serve as _ks
+                me = self.relay_name() or _ks.host_slug()
+                hook = getattr(_ks, "RELAUNCH_HOOK", None)
+            except Exception:
+                me, hook = self.relay_name() or "relay", None
+            if str((info or {}).get("spoke") or "") != me:
+                return
+            if not callable(hook):
+                self.log("relay federation: the hub asked this spoke to restart -- this checkout cannot relaunch itself")
+                return
+            self.log("relay federation: the hub asked THIS spoke to restart (#%s) -- relaunching KASTR" % (info or {}).get("seq"))
+            t = threading.Timer(1.5, hook)   # let this long-poll reply finish first
+            t.daemon = True
+            t.start()
+            return
         if name == "logs":   # 0.21.51: the hub collects logs -- mine now, my apps' on their next check-in
             self.collect_logs(info or {})
             return
@@ -4533,7 +4563,7 @@ class Relay:
         except Exception:
             clients = []
         body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp,
-                           "node": _machine_node(), "clients": clients}).encode()   # 0.21.39: the machine id (survives a rename)
+                           "node": _machine_node(), "clients": clients, "boot": BOOT_AT}).encode()   # 0.21.39: the machine id (survives a rename)
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -4568,6 +4598,14 @@ class Relay:
         sd = self.state_dir
         files = {"relay.log": log_slice([os.path.join(sd, "relay.log.1"), os.path.join(sd, "relay.log")], since, find),
                  "launch.log": log_slice([os.path.join(sd, "launch.log")], since, find)}
+        try:   # 0.21.52: this box's own page (its grids, its room state) -- the last-hour collection only
+            import kastr_serve as _ks2
+            port = int(getattr(_ks2, "HTTP_PORT", 0) or 0)
+            if port and not find:
+                with urllib.request.urlopen("http://127.0.0.1:%d/api/diag" % port, timeout=5) as r:
+                    files["diag.json"] = redact_log(r.read().decode("utf-8", "replace"))[-LOG_FILE_CAP:]
+        except Exception:
+            pass
         try:
             import kastr_serve as _ks
             me, ver, mode = self.relay_name() or _ks.host_slug(), _ks.read_version(), _ks.MODE
@@ -5456,7 +5494,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/bans/clear",      # 0.17.0
                  "/api/relay/spokes/update",   # 0.21.0
                  "/api/relay/clients/update",  # 0.21.50
-                 "/api/relay/logs/collect")    # 0.21.51
+                 "/api/relay/logs/collect",    # 0.21.51
+                 "/api/relay/spokes/restart")  # 0.21.52
 
 
 def _host_of(value):
@@ -5688,6 +5727,19 @@ def handle_api(handler, relay, path, set_relay_url=None):
         reply({"ok": True, "seq": rec["seq"], "spoke": spoke, "suspend": bool(p.get("suspend"))})
         return True
 
+    if path == "/api/relay/spokes/restart":   # 0.21.52 (Kenton): restart ONE spoke's KASTR from the hub
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        p = _payload_of(handler) or {}
+        one = str(p.get("spoke") or "").strip()[:40]
+        if not one or not any((v.get("name") or "") == one for v in auth.spokes.values()):
+            reply({"error": "%s is not a registered spoke" % (one or "that")}, 409)
+            return True
+        rec = auth.raise_cmd("restart", {"spoke": one})
+        reply({"ok": True, "seq": rec["seq"], "spoke": one})
+        return True
     if path == "/api/relay/spokes/update":   # 0.21.0: hub operator -> every spoke matches the hub's version now
         auth = getattr(relay, "auth", None)
         if not auth:
@@ -5833,7 +5885,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
                 pairs.append({"broadcast": pub.get("broadcast") or f.get("broadcast") or "", "running": bool(pub.get("running")),
                               "parked": bool(pub.get("parked")), "gen": pub.get("gen"), "restartsTotal": pub.get("restartsTotal"),
                               "sessionFails": pub.get("sessionFails"), "sessionKills": pub.get("sessionKills"),
-                              "lastSessionAt": pub.get("lastSessionAt")})
+                              "lastSessionAt": pub.get("lastSessionAt"), "lastExit": pub.get("lastExit")})   # 0.21.52: + why it last ended
         except Exception:
             pairs = []
         try:

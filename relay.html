@@ -38,6 +38,21 @@
   dialog.hubmove p { margin:6px 0; font-size:13px; }
   dialog.hubmove .btnrow { margin-top:10px; }
   @media (max-width: 720px) { #main { grid-template-columns:1fr; } }
+  /* 0.21.52 (Kenton: "drag around the windows in the relay server page to where I want them. Have the tiles only take up the
+     space they need, not just use the same height for everything in the row"): 4 px grid rows -- each card spans just the
+     rows its content needs (measured, kept current by a ResizeObserver) -- and the card title is a drag handle */
+  #main.masonry { grid-auto-rows:4px; row-gap:0; grid-auto-flow:row dense; }   /* dense: a smaller card fills the hole a two-column card leaves */
+  #main.masonry section.panel { margin-bottom:14px; align-self:start; }
+  #main.masonry > section:last-child { grid-column:auto; }
+  #main.masonry section.panel.fullw { grid-column:1 / -1; }
+  section.panel > h2 { cursor:grab; user-select:none; touch-action:none; }
+  section.panel > h2::before { content:"\2059"; font-size:13px; letter-spacing:0; color:var(--text-mute); opacity:.45; margin-right:-2px; }
+  section.panel > h2:hover::before { opacity:.9; }
+  section.panel.dragging { opacity:.45; }
+  section.panel.drop-before { box-shadow:0 -3px 0 0 var(--asi-blue); }
+  section.panel.drop-after { box-shadow:0 3px 0 0 var(--asi-blue); }
+  #layoutReset { font-size:11px; color:var(--text-mute); background:none; border:0; padding:0; cursor:pointer; text-decoration:underline; height:auto; }
+  #layoutReset:hover { color:var(--text); }
   label.f.asi-sw { display:flex; align-items:center; gap:10px; }
   label.f.asi-sw > span { margin:0; display:block; }
   label.f.asi-sw > .switch { display:inline-block; flex:none; }
@@ -137,11 +152,12 @@
   useful on an isolated network, or when the shared relay is unreachable. This starts the
   bundled <code>moq-relay</code> with a self-signed certificate that browsers trust via its
   fingerprint. Nothing listens until you press Start.
+  <button type="button" id="layoutReset" title="Put the cards back in their original order" hidden>Reset layout</button>
 </p>
 
 <div id="main">
   <div>
-    <section class="panel">
+    <section class="panel" id="serverPanel">
       <h2>Server <span id="stateBadge" class="badge down">stopped</span></h2>
 
       <div id="missing" class="warn" hidden>
@@ -402,7 +418,7 @@
       </table></div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="detailsPanel">
       <h2>Details</h2>
       <dl>
         <dt>Binary</dt><dd id="binPath">—</dd>
@@ -414,7 +430,7 @@
   </div>
 
   <section>
-    <section class="panel">
+    <section class="panel fullw" id="logPanel">
       <h2>Relay log</h2>
       <div id="log">Not started.</div>
     </section>
@@ -1066,6 +1082,16 @@
       : offer === "failed" ? "update failed there\u2026" : "updating\u2026";
     return '<span class="updst"><span class="updspin"></span>' + st + " " + mmss(age) + "</span>";
   }
+  // 0.21.52: a spoke restart is done when the spoke registers again with a newer start time (5 minutes at most)
+  const restarting = new Map();   // spoke name -> { at }
+  function restartCell(r) {
+    const k = r.name || r.key, p = restarting.get(k);
+    if (!p) return null;
+    const age = Date.now() - p.at;
+    if (r.boot && r.boot * 1000 > p.at) { restarting.delete(k); updNote("spokesMsg", k + " restarted \u2713"); return '<span class="updst updok">\u2713 restarted</span>'; }
+    if (age > 300000) { restarting.delete(k); updNote("spokesMsg", k + " didn\u2019t come back within 5 minutes \u2014 check that box"); return '<span class="updst updbad">didn\u2019t come back</span>'; }
+    return '<span class="updst"><span class="updspin"></span>restarting\u2026 ' + mmss(age) + "</span>";
+  }
   let lastStatus = null;
   async function paintSpokes() {
     let d;
@@ -1087,7 +1113,8 @@
       n.textContent = d.stale ? d.stale + (d.stale === 1 ? " spoke" : " spokes") + " not seen for over 30 minutes " + (d.stale === 1 ? "is" : "are") + " hidden (forgotten after 7 days)." : ""; }
     $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
       + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>"
-        + (pendCell("spoke:" + (r.name || r.key), r.version, true, "", "spokesMsg") ?? (behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button>" : "")) + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done
+        + (restartCell(r) ?? pendCell("spoke:" + (r.name || r.key), r.version, true, "", "spokesMsg") ?? ((behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button> " : "")
+          + (LOCAL ? "<button type=\"button\" class=\"ghost sprst\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Restart that spoke's KASTR (its relay restarts too; viewers there reconnect within seconds)\">Restart</button>" : ""))) + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done; 0.21.52: + Restart
       : "No spoke has registered yet.";
     for (const b of $("spokesList").querySelectorAll(".sprt")) b.addEventListener("click", async () => {   // 0.21.16: flip a spoke's cameras (the `rtsp` command rides its long-poll)
       const sp = b.parentElement.dataset.spoke, on = b.parentElement.dataset.on === "1";
@@ -1108,6 +1135,19 @@
     $("spokesUpdate").classList.toggle("ghost", nBehind === 0 && !nPend);
     if (nPend) { $("spokesUpdate").disabled = true; $("spokesUpdate").innerHTML = '<span class="updspin"></span>Updating ' + nPend + (nPend === 1 ? " spoke" : " spokes") + "\u2026"; }
     else $("spokesUpdate").textContent = nBehind ? "Update " + nBehind + (nBehind === 1 ? " spoke" : " spokes") + " now" : "All spokes up to date";
+    for (const b of $("spokesList").querySelectorAll(".sprst")) b.addEventListener("click", async () => {   // 0.21.52: restart one spoke
+      const sp = b.dataset.spoke;
+      if (!confirm("Restart " + sp + "? Its KASTR closes and opens again; its relay restarts, so people on that relay reconnect within seconds.")) return;
+      b.disabled = true;
+      try {
+        const r = await api("/api/relay/spokes/restart", { spoke: sp });
+        if (r.error) { $("spokesMsg").textContent = r.error; b.disabled = false; return; }
+        restarting.set(sp, { at: Date.now() });
+        $("spokesMsg").textContent = "Asked " + sp + " to restart (#" + r.seq + ") \u2014 waiting for it to come back\u2026";
+        if (!pendTimer) pendTimer = setInterval(() => { if (!pending.size && !restarting.size) { clearInterval(pendTimer); pendTimer = null; return; } paintSpokes(); }, 5000);
+      } catch (e) { $("spokesMsg").textContent = "Failed: " + (e?.message || e); b.disabled = false; }
+      paintSpokes();
+    });
     for (const b of $("spokesList").querySelectorAll(".spupd")) b.addEventListener("click", async () => {   // 0.21.26: one at a time
       const sp = b.dataset.spoke;
       b.disabled = true;
@@ -1297,7 +1337,10 @@
     const pairs = h.pairs || [];
     $("hPairs").textContent = pairs.length ? (pairs.filter((p) => p.running).length + " running, " + pairs.filter((p) => p.parked).length + " parked of " + pairs.length) : "none on this machine";
     $("hPairList").replaceChildren(...pairs.map((p) => { const d = document.createElement("div");
-      d.textContent = (p.broadcast || "?") + "  gen=" + (p.gen ?? "?") + " restarts=" + (p.restartsTotal ?? 0) + " fails=" + (p.sessionFails ?? 0) + " kills=" + (p.sessionKills ?? 0) + (p.parked ? "  [parked]" : p.running ? "" : "  [stopped]"); return d; }));
+      d.textContent = (p.broadcast || "?") + "  gen=" + (p.gen ?? "?") + " restarts=" + (p.restartsTotal ?? 0) + " fails=" + (p.sessionFails ?? 0) + " kills=" + (p.sessionKills ?? 0) + (p.parked ? "  [parked]" : p.running ? "" : "  [stopped]")
+        + (p.restartsTotal && p.lastExit ? "  last exit: " + (p.lastExit.who || "?") + " " + (p.lastExit.reason || ("code " + p.lastExit.code)) + " after " + p.lastExit.lived + " s" : "");   // 0.21.52
+      if ((p.restartsTotal || 0) > 3) d.style.color = "var(--asi-amber)";
+      return d; }));
     const hv = h.helpers || {};
     $("hHelpers").textContent = Object.keys(hv).length ? Object.entries(hv).map(([k, v]) => k + " " + v).join(" \u00b7 ") : "\u2014";
     $("hMetrics").hidden = !LOCAL;
@@ -1752,6 +1795,91 @@
   }
   scan();
   setInterval(scan, 5000);
+</script>
+<script>
+// 0.21.52 (Kenton): cards only as tall as they need, dragged where you want them (the order is kept on this machine)
+(() => {
+  const main = document.getElementById("main");
+  if (!main) return;
+  const KEY = "kastr.relay.layout";
+  const panels = () => [...main.querySelectorAll("section.panel")];
+  panels().forEach((p, i) => { if (!p.id) p.id = "panel" + i; p.dataset.home = String(i); });
+  for (const p of panels()) main.appendChild(p);   // every card a direct grid item (the old wrappers stay, empty)
+  for (const w of [...main.children]) if (!w.matches("section.panel")) w.style.display = "none";   // the emptied wrappers take no grid cell
+  const saveOrder = () => { try { localStorage.setItem(KEY, JSON.stringify(panels().map((p) => p.id))); } catch {} };
+  const reset = document.getElementById("layoutReset");
+  const applyOrder = (ids) => {
+    const byId = new Map(panels().map((p) => [p.id, p]));
+    for (const id of ids) { const p = byId.get(id); if (p) { main.appendChild(p); byId.delete(id); } }
+    for (const p of [...byId.values()].sort((a, b) => a.dataset.home - b.dataset.home)) main.appendChild(p);   // cards a newer KASTR added
+  };
+  try { const saved = JSON.parse(localStorage.getItem(KEY) || "null"); if (Array.isArray(saved)) { applyOrder(saved); if (reset) reset.hidden = false; } } catch {}
+  // masonry: each card spans ceil((its height + the 14 px gap) / 4 px) rows
+  main.classList.add("masonry");
+  const fit = (p) => { const h = p.hidden ? 0 : p.getBoundingClientRect().height; p.style.gridRowEnd = h ? "span " + Math.ceil((h + 14) / 4) : ""; };
+  const ro = new ResizeObserver((es) => { for (const e of es) fit(e.target); });
+  for (const p of panels()) { ro.observe(p); fit(p); }
+  new MutationObserver(() => panels().forEach(fit)).observe(main, { attributes: true, subtree: true, attributeFilter: ["hidden"] });
+  addEventListener("resize", () => panels().forEach(fit));
+  // drag by the title (pointer events, like the room rail): a see-through copy follows the pointer; the card under it shows
+  // where it lands -- before it (upper half) or after it (lower half)
+  let drag = null;
+  const clearMarks = () => { for (const x of panels()) x.classList.remove("drop-before", "drop-after"); };
+  for (const p of panels()) {
+    const h = p.querySelector(":scope > h2");
+    if (!h) continue;
+    h.title = "Drag to move this card";
+    h.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest("button, input, select, a")) return;
+      drag = { p, x0: e.clientX, y0: e.clientY, on: false, ghost: null, target: null, after: false };
+      try { h.setPointerCapture(e.pointerId); } catch {}
+    });
+    h.addEventListener("pointermove", (e) => {
+      if (!drag || drag.p !== p) return;
+      if (!drag.on) {
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+        drag.on = true;
+        const r = p.getBoundingClientRect();
+        const g = drag.ghost = p.cloneNode(true);
+        g.removeAttribute("id");
+        Object.assign(g.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: Math.min(r.height, 260) + "px",
+          overflow: "hidden", opacity: ".55", pointerEvents: "none", zIndex: "200", margin: "0", boxShadow: "0 12px 32px rgba(0,0,0,.5)" });
+        drag.dx = e.clientX - r.left; drag.dy = e.clientY - r.top;
+        document.body.appendChild(g);
+        p.classList.add("dragging");
+      }
+      drag.ghost.style.left = (e.clientX - drag.dx) + "px";
+      drag.ghost.style.top = (e.clientY - drag.dy) + "px";
+      const under = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("#main section.panel");
+      clearMarks();
+      drag.target = under && under !== p ? under : null;
+      if (drag.target) {
+        const r = drag.target.getBoundingClientRect();
+        drag.after = e.clientY > r.top + r.height / 2;
+        drag.target.classList.add(drag.after ? "drop-after" : "drop-before");
+      }
+    });
+    const end = () => {
+      if (!drag || drag.p !== p) return;
+      const d = drag; drag = null;
+      d.ghost?.remove(); p.classList.remove("dragging"); clearMarks();
+      if (!d.on || !d.target) return;
+      if (d.after) d.target.after(p); else d.target.before(p);
+      saveOrder();
+      if (reset) reset.hidden = false;
+      panels().forEach(fit);
+    };
+    h.addEventListener("pointerup", end);
+    h.addEventListener("pointercancel", end);
+  }
+  if (reset) reset.addEventListener("click", () => {
+    try { localStorage.removeItem(KEY); } catch {}
+    for (const p of panels().sort((a, b) => a.dataset.home - b.dataset.home)) main.appendChild(p);
+    reset.hidden = true;
+    panels().forEach(fit);
+  });
+  window.__relayLayout = { order: () => panels().map((p) => p.id), spans: () => panels().map((p) => [p.id, p.style.gridRowEnd]) };   // rig
+})();
 </script>
 </body>
 </html>

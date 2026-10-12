@@ -50,6 +50,23 @@ PROBE_TIMEOUT = 20.0
 # true -- env KASTR_ONDEMAND=1 here (dev harness, rigs), kastr.ini `ondemand = on` through the launcher (kastr.py).
 # Read once at boot. A Publisher built while it is off never sleeps and never owns a low sibling, but remembers
 # what was ASKED (wantOndemand / wantLow) so rtsp-feeds.json keeps the operator's choice for a later re-enable.
+def ffmpeg_exit_reason(code):
+    """0.21.52: what an ffmpeg exit code says (Linux keeps the low byte of the negative AVERROR, Windows the whole 32 bits)."""
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return ""
+    if c > 0x7FFFFFFF:
+        c -= 0x100000000
+    known = {-1094995529: "invalid data from the camera", -541478725: "the camera's stream ended", -110: "the camera timed out",
+             -138: "the camera timed out", -111: "the camera refused the connection", -10061: "the camera refused the connection",
+             -5: "input/output error", -113: "no route to the camera", -10065: "no route to the camera", -2: "not found"}
+    if c in known:
+        return known[c]
+    low = {183: -1094995529, 187: -541478725, 146: -110, 145: -111, 251: -5, 143: -113}
+    return known.get(low.get(c & 0xFF if 0 < c < 256 else None), "")
+
+
 ONDEMAND_ENABLED = str(os.environ.get("KASTR_ONDEMAND") or "").strip().lower() in ("1", "true", "yes", "on")
 # 0.12.0: a probe that could not tell (camera off when a restored feed came
 # back) is asked again after this long instead of being believed for the run.
@@ -1740,9 +1757,14 @@ class Publisher:
             self.lastExit = {"code": code, "who": who, "at": time.time(), "lived": round(lived, 1)}   # 0.13.1
             # 0.13.3: the generation's obituary for launch.log -- with the ladder
             # position BEFORE the good-minute reset below (written after the lock)
-            exit_line = ("rtsp pair %s gen=%d exit who=%s code=%s lived=%.1fs restarts=%d sessionFails=%d sessionKills=%d last=%s"
-                         % (self.broadcast, gen, who, code, lived, self.restarts, self.sessionFails, self.sessionKills,
-                            (self.errors[-1] if self.errors else "")[:160]))
+            # 0.21.52 (field, Mendon: a camera exited every 10.5 s and the line ended with the moq tool's message): the line
+            # names the process that exited -- its own last stderr line, and what its exit code means
+            mine = [e for e in self.errors if e.startswith(who + ":")]
+            why = ffmpeg_exit_reason(code) if who == "ffmpeg" else ""
+            self.lastExit["reason"] = why
+            exit_line = ("rtsp pair %s gen=%d exit who=%s code=%s%s lived=%.1fs restarts=%d sessionFails=%d sessionKills=%d last=%s"
+                         % (self.broadcast, gen, who, code, (" (" + why + ")") if why else "", lived, self.restarts, self.sessionFails, self.sessionKills,
+                            ((mine or self.errors)[-1] if (mine or self.errors) else "")[:160]))
             if lived > 60:
                 self.restarts = 0       # it was working; forget the past
             hard = self._hard.pop(gen, None)                              # 0.12.0

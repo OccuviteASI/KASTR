@@ -2,6 +2,25 @@
 
 What changed in each build, newest first.
 
+## v0.21.52 — arrange the Relay page, restart a spoke, grids that heal
+
+**The Relay page's cards fit their contents and go where you put them (Kenton: "drag around the windows in the relay server page to where I want them. Have the tiles only take up the space they need, not just use the same height for everything in the row").**
+- **Height:** each card is only as tall as its contents, and smaller cards fill the gaps beside taller ones, so a short card no longer stretches to the tallest card in its row. Cards resize live as their contents change.
+- **Moving a card:** drag it by its title (the dotted mark). A see-through copy follows the pointer, and a blue line shows whether it will land before or after the card underneath.
+- **Kept:** your arrangement is saved on this machine. "Reset layout", next to the page introduction, puts the cards back in their original order.
+
+**Restart a spoke from the hub (Kenton: "Build in ability to do remote restart of a spoke from the hub").** Each row of the hub's spokes table has a Restart button.
+- **What happens:** after you confirm, that spoke's KASTR closes and opens again, and its relay restarts with it, so people on that relay reconnect within seconds.
+- **Waiting:** the button spins until the spoke registers again with a newer start time, then says "✓ restarted". After 5 minutes it says "didn't come back".
+
+**Grids no longer stay split into separate tiles (field, Mendon: "it has everything split out into separate tiles ... resolved by restarting KASTR on the mendon-relay").** The cause was on the viewer's side: a viewer that missed the box page's announcement of its room state never learned the grid's layout, so the grid and its cameras showed as separate tiles until the box restarted. Now a grid with no layout for 20 seconds looks up its owner's room state from presence and subscribes directly, and the grid comes back by itself, in your room and in rooms you watch. The diagnostics now show the room state a page publishes and reads, and a relay's log collection includes its own page's diagnostics.
+
+**The person's circle stays centred (Kenton: "Sometimes the circle is not centered and is pushed up").** A tile with no picture showed its round avatar, sound meter and caption as one centred stack, so a caption such as "connecting…" or "waiting on relay …" pushed the circle up, into the top edge on short rail tiles. Now only the circle is centred, with the meter and caption hanging below it. In the lab it was exactly centred (0 px off) in the gallery and in a 177 px rail tile, with and without a caption.
+
+**A failing camera says why (field, Mendon's log collection: camera `d9wxp8a5o5cjvhep` stopped every 10.5 seconds and its log line ended with the moq tool's message).**
+- **The log line:** a camera feed's exit line now quotes the process that actually stopped, and says what ffmpeg's exit code means. Mendon's code 183 means "invalid data from the camera": the camera sends a stream ffmpeg cannot parse, so check its codec settings (H.265+/smart codec) or use its substream.
+- **The Relay page:** the health card shows each feed's last exit and why, in amber once a feed has restarted more than three times.
+
 ## v0.21.51 — logs collected at the hub
 
 **Every machine's logs in one place, on request (Kenton: "Could we have the logs all send to the hub to make log collection easier?").** A new Logs section on the Relay page has two actions:

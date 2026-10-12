@@ -291,7 +291,7 @@ class CommandChannel(unittest.TestCase):
     def test_spoke_says_which_machine(self):
         with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kastr_relay.py"), encoding="utf-8") as f:
             src = f.read()
-        self.assertIn('"node": _machine_node(), "clients": clients}).encode()', src)
+        self.assertIn('"node": _machine_node(), "clients": clients, "boot": BOOT_AT}).encode()', src)
         self.assertIn('q += ("&" if q else "?") + "node=" + _machine_node()', src)
 
     def test_linux_finds_its_lan_address(self):

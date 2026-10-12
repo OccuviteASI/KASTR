@@ -783,6 +783,12 @@
   #stage .pane .face canvas.eq { width:min(60%, 160px); height:28px; display:block; flex:0 0 auto;
     position:static; object-fit:fill; }
   @media (prefers-reduced-motion: reduce) { .pane .face .eq { display:none; } }
+  /* 0.21.52 (Kenton: "Sometimes the circle is not centered and is pushed up"): only the circle takes part in the centring --
+     the meter and the caption hang below it, so a caption ("connecting...", "waiting on relay ...") never lifts the circle */
+  .pane.audio-only .face { position:relative; }
+  #stage .pane.audio-only .face > canvas.eq, .pane.audio-only .face > .cap { position:absolute; left:50%; transform:translateX(-50%); margin:0; }
+  #stage .pane.audio-only .face > canvas.eq { top:calc(50% + min(18cqw, 35cqh, 75px) + 8px); }
+  .pane.audio-only .face > .cap { top:calc(50% + min(18cqw, 35cqh, 75px) + 40px); }
 
   /* Standby art: the ASI swoosh breathing on a navy pool instead of a bare
      meter in a black void. One face serves audio-only and video-paused --
@@ -10779,6 +10785,32 @@
   // <room>/<HOST>/~member/<PEER>: room.json (Snapshot) + chat.json (Window) on the tokened connection
   const memberSubs = new Map();   // member path -> { room, chat, prev: {gridPath, mediaIds, fileIds, stalled} }
   function memberSubsClear() { for (const [p, h] of memberSubs) { try { h.room.close(); h.chat.close(); } catch {} memberClear(p, h); } memberSubs.clear(); }
+  // 0.21.52 (field, Mendon: "it has everything split out into separate tiles ... resolved by restarting KASTR on the
+  // mendon-relay"): a viewer that missed the owner's ~member announce never learned the grid's geometry -- its cameras
+  // stayed separate tiles. A grid composite on screen for 20 s without geometry now subscribes the room.json of every page
+  // of that machine straight from presence (the ~state records name host + peer), for my room and for rooms I watch.
+  let gridRescues = 0;
+  window.__forgetRoomState = () => { memberSubsClear(); gridMeta.clear(); rebuildGridChildren(); applyState(); };   // rig: as if the ~member announces were missed
+  setInterval(() => {
+    if (joinState !== "joined") return;
+    const now = Date.now();
+    for (const [name, t] of tiles) {
+      if (!/\/rtsp-grid(-\d+)?\.hang$/.test(name) || gridMeta.has(name)) { if (t.gridWantAt) t.gridWantAt = 0; continue; }
+      t.gridWantAt = t.gridWantAt || now;
+      if (now - t.gridWantAt < 20000) continue;
+      const parts = name.split("/");
+      const w = parts[0] === CHANNEL ? null : watchRooms.get(parts[0]);
+      if (parts[0] !== CHANNEL && !w) continue;
+      for (const p of roomsPres.values()) {
+        if (!p.state || p.goneAt || p.slug !== parts[0] || p.who?.host !== parts[1] || !p.who?.peer) continue;
+        const mp = parts[0] + "/" + parts[1] + "/~member/" + p.who.peer;
+        if (w ? w.subs.has(mp) : memberSubs.has(mp)) continue;
+        if (w) wrMemberAccept(w, mp, true); else if (connection) memberAccept(mp, true); else continue;
+        gridRescues++;
+        console.warn("KASTR: grid " + name + " had no geometry for " + Math.round((now - t.gridWantAt) / 1000) + " s -- subscribing " + mp + " from presence");
+      }
+    }
+  }, 15000);
   function memberAccept(path, active) {
     const cur = memberSubs.get(path);
     if (!active) { if (cur) { try { cur.room.close(); cur.chat.close(); } catch {} memberSubs.delete(path); memberClear(path, cur); } return; }
@@ -11202,6 +11234,11 @@
       netEvents: (() => { const ne = window.__netEvents || {}; return { reconnects: ne.reconnects || 0, lastMinute: (ne.recent || []).filter((t) => Date.now() - t < 60000).length, breaks: ne.breaks || 0 }; })(),   // 0.21.8
       slowGroups: { audio: window.__slowGroups?.audio || 0, video: window.__slowGroups?.video || 0 },   // 0.21.8
       // 0.21.26 (Kenton: users stuck on "connecting..."): every tile whose catalog never arrived -- how long, how many re-subscribes, through which relay
+      // 0.21.52: the room-state view -- my producers, the room.json I read (values, age), grids learned, rescues
+      roomState: (() => { try { const s = window.__state?.debug?.() || {};
+        return { pub: s.pub, room: s.room, live: s.live, writes: s.writes, gens: s.gens, status: s.status, events: (s.events || []).map((e) => (e || []).slice(-6)),
+                 subs: s.subs, myGrids: Object.keys(roomModel.grids || {}), grids: [...gridMeta.keys()], rescues: gridRescues,
+                 reading: [...memberSubs].map(([p, h]) => ({ path: p, values: h.room?.n || 0, ageS: h.room?.at ? Math.round((Date.now() - h.room.at) / 1000) : null })) }; } catch { return null; } })(),
       noCatalog: [...tiles].filter(([, t]) => t.noCatalog).map(([n, t]) => ({ name: n, waitedS: t.catWaitSince ? Math.round((performance.now() - t.catWaitSince) / 1000) : null,
         resubs: t.catResubs || 0, via: memberVia(personKeyOf(n)) || null })),
       congest: (() => { const c = window.__congest || {}; return { level: c.level || 0, steps: c.steps || 0, why: c.why || "", off: congestOff(), shed: [...tiles].filter(([, t]) => t.shed).length }; })(),   // 0.21.23

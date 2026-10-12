@@ -39,6 +39,14 @@
   dialog.hubmove ul { margin:6px 0 10px 18px; padding:0; display:flex; flex-direction:column; gap:4px; font-size:13px; }
   dialog.hubmove p { margin:6px 0; font-size:13px; }
   dialog.hubmove .btnrow { margin-top:10px; }
+  /* 0.21.54: the standby's address choices */
+  .sbaddrs { display:flex; flex-direction:column; gap:4px; margin:4px 0 2px; }
+  label.sbopt { display:flex; flex-direction:row; align-items:center; gap:8px; font-size:13px; cursor:pointer; margin:0; }
+  label.sbopt input[type=radio] { width:auto; margin:0; flex:none; }
+  label.sbopt .mono { font-family:var(--font-mono, monospace); }
+  label.sbopt .why { color:var(--text-mute, #8b98a8); font-size:12px; }
+  label.sbopt input[type=text] { flex:1; min-width:0; }
+  .sbaddr { display:block; font-size:11px; color:var(--text-dim); }
   @media (max-width: 720px) { #main { grid-template-columns:1fr; } }
   /* 0.21.52 (Kenton: "drag around the windows in the relay server page to where I want them. Have the tiles only take up the
      space they need, not just use the same height for everything in the row"): 4 px grid rows -- each card spans just the
@@ -320,6 +328,23 @@
           <div class="btnrow">
             <button id="hubMoveGo" type="button">Move hub here</button>
             <button id="hubMoveCancel" type="button" class="ghost">Cancel</button>
+          </div>
+        </form>
+      </dialog>
+      <!-- 0.21.54 (Kenton): choose the address the other spokes will use to reach the standby -->
+      <dialog id="sbDlg" class="hubmove">
+        <form method="dialog" id="sbForm">
+          <h3>Make <span id="sbName"></span> the standby hub?</h3>
+          <p>It keeps a copy of this hub's rooms, access codes, kicks and chat. If this hub is unreachable for 2 minutes (and a spoke agrees, or after 5 minutes alone) it takes over; when this hub is back it hands everything back by itself.</p>
+          <p><b>Address the other spokes will use to reach it</b> &mdash; pick the network they share with it:</p>
+          <div id="sbAddrs" class="sbaddrs"></div>
+          <label class="sbopt"><input type="radio" name="sbAddr" value="__other"><span>Other:</span>
+            <input type="text" id="sbOther" spellcheck="false" placeholder="10.0.5.2 or 10.0.5.2:4443"></label>
+          <p class="hint">Spokes need its relay port (UDP) and the port above it (TCP) on that address.</p>
+          <span id="sbMsg" class="hint" style="display:block;min-height:1.2em"></span>
+          <div class="btnrow">
+            <button id="sbGo" type="button">Make standby</button>
+            <button id="sbCancel" type="button" class="ghost">Cancel</button>
           </div>
         </form>
       </dialog>
@@ -1103,6 +1128,47 @@
     return '<span class="updst"><span class="updspin"></span>restarting\u2026 ' + mmss(age) + "</span>";
   }
   let lastStatus = null;
+  // 0.21.54 (Kenton: which IP does it use? -> choose it): the Make standby dialog -- the spoke's addresses, the likely one first
+  let sbRow = null;
+  function sbOpen(row) {
+    sbRow = row;
+    $("sbName").textContent = row.name || row.key || "";
+    const list = $("sbAddrs"); list.replaceChildren();
+    const addrs = row.standbyAddrs || [];
+    addrs.forEach((a, i) => {
+      const l = document.createElement("label"); l.className = "sbopt";
+      const r = document.createElement("input"); r.type = "radio"; r.name = "sbAddr"; r.value = a.address; r.checked = i === 0;
+      const m = document.createElement("span"); m.className = "mono"; m.textContent = a.address;
+      const w = document.createElement("span"); w.className = "why"; w.textContent = a.why + (i === 0 ? " (the guess)" : "");
+      l.append(r, m, w); list.appendChild(l);
+    });
+    const other = document.querySelector("#sbForm input[value=__other]");
+    other.checked = !addrs.length;
+    $("sbOther").value = "";
+    $("sbMsg").textContent = addrs.length ? "" : "This spoke reported no address \u2014 type the one the other spokes can reach.";
+    $("sbMsg").style.color = "";
+    $("sbGo").disabled = false;
+    $("sbDlg").showModal();
+  }
+  $("sbOther").addEventListener("input", () => { document.querySelector("#sbForm input[value=__other]").checked = true; });
+  $("sbOther").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("sbGo").click(); } });
+  $("sbCancel").addEventListener("click", () => $("sbDlg").close());
+  $("sbGo").addEventListener("click", async () => {
+    const pick = document.querySelector("#sbForm input[name=sbAddr]:checked");
+    const address = !pick ? "" : pick.value === "__other" ? $("sbOther").value.trim() : pick.value;
+    if (!address) { $("sbMsg").textContent = "Pick an address or type one."; $("sbMsg").style.color = "var(--asi-amber)"; return; }
+    $("sbGo").disabled = true; $("sbMsg").textContent = "Checking that this hub can reach " + address + "\u2026"; $("sbMsg").style.color = "";
+    try {
+      const r = await api("/api/relay/standby", { name: sbRow.name || sbRow.key, address });
+      if (r.error) { $("sbMsg").textContent = r.error; $("sbMsg").style.color = "var(--asi-red)"; $("sbGo").disabled = false; return; }
+      $("sbDlg").close();
+      $("spokesMsg").textContent = (sbRow.name || sbRow.key) + " is the standby hub \u2014 spokes will use " + r.standby.address + "."
+        + (r.reach ? " This hub reaches it there; it starts copying within a few seconds."
+                   : " WARNING: this hub could not reach it at that address \u2014 check the address and its firewall (other spokes may still reach it).");
+      $("spokesMsg").style.color = r.reach ? "" : "var(--asi-amber)";
+    } catch (e) { $("sbMsg").textContent = "Failed: " + (e?.message || e); $("sbMsg").style.color = "var(--asi-red)"; $("sbGo").disabled = false; return; }
+    setTimeout(paintSpokes, 1500);
+  });
   // 0.21.53 (Kenton: "the standby hub"): who the standby is and this relay's part in it
   function paintStandby(sb) {
     const el = $("standbyState"); if (!el) return;
@@ -1136,7 +1202,7 @@
     { let n = $("spokesStale"); if (!n) { n = document.createElement("span"); n.id = "spokesStale"; n.className = "hint"; n.style.display = "block"; $("spokesList").after(n); }   // 0.21.24
       n.textContent = d.stale ? d.stale + (d.stale === 1 ? " spoke" : " spokes") + " not seen for over 30 minutes " + (d.stale === 1 ? "is" : "are") + " hidden (forgotten after 7 days)." : ""; }
     $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
-      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + (sbName && sbName === (r.name || r.key) ? " <span class=\"sbbadge\" title=\"Takes over as the hub when this hub is unreachable for 2 minutes\">Standby</span>" : "") + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>"
+      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + (sbName && sbName === (r.name || r.key) ? " <span class=\"sbbadge\" title=\"Takes over as the hub when this hub is unreachable for 2 minutes\">Standby</span><span class=\"sbaddr\" title=\"The address the other spokes use to reach it when it takes over\">spokes use " + esc((d.standby || {}).address || "?") + "</span>" : "") + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>"
         + (restartCell(r) ?? pendCell("spoke:" + (r.name || r.key), r.version, true, "", "spokesMsg") ?? ((behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button> " : "")
           + (LOCAL ? "<button type=\"button\" class=\"ghost sprst\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Restart that spoke's KASTR (its relay restarts too; viewers there reconnect within seconds)\">Restart</button>" : "")
           + (LOCAL && r.node ? " <button type=\"button\" class=\"ghost spsb\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (sbName === (r.name || r.key) ? "1" : "") + "\" title=\"" + (sbName === (r.name || r.key) ? "Stop using this spoke as the standby hub" : "This spoke keeps a copy of the hub's rooms, codes, kicks and chat and takes over as the hub when this hub is unreachable for 2 minutes") + "\">" + (sbName === (r.name || r.key) ? "Remove standby" : "Make standby") + "</button>" : ""))) + "</td></tr>").join("")   // 0.21.53: + standby + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done; 0.21.52: + Restart
@@ -1162,12 +1228,12 @@
     else $("spokesUpdate").textContent = nBehind ? "Update " + nBehind + (nBehind === 1 ? " spoke" : " spokes") + " now" : "All spokes up to date";
     for (const b of $("spokesList").querySelectorAll(".spsb")) b.addEventListener("click", async () => {   // 0.21.53: pick the standby hub
       const sp = b.dataset.spoke, off = b.dataset.on === "1";
-      if (!confirm(off ? "Stop using " + sp + " as the standby hub? Nothing takes over if this hub goes down."
-                       : "Make " + sp + " the standby hub?\n\nIt keeps a copy of this hub's rooms, access codes, kicks and chat. If this hub is unreachable for 2 minutes (and a spoke agrees, or after 5 minutes alone) it takes over; when this hub is back it hands everything back automatically.")) return;
+      if (!off) { sbOpen(rows.find((r) => (r.name || r.key) === sp) || { name: sp }); return; }   // 0.21.54: choose the address
+      if (!confirm("Stop using " + sp + " as the standby hub? Nothing takes over if this hub goes down.")) return;
       b.disabled = true;
       try {
-        const r = await api("/api/relay/standby", off ? { clear: true } : { name: sp });
-        $("spokesMsg").textContent = r.error ? r.error : off ? "No standby hub." : sp + " is the standby hub (" + r.standby.address + ") \u2014 it starts copying within a few seconds.";
+        const r = await api("/api/relay/standby", { clear: true });
+        $("spokesMsg").textContent = r.error ? r.error : "No standby hub.";
       } catch (e) { $("spokesMsg").textContent = "Failed: " + (e?.message || e); }
       setTimeout(paintSpokes, 1500);
     });

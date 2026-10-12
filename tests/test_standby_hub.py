@@ -156,6 +156,7 @@ class Pick(unittest.TestCase):
     def setUp(self):
         self.r = kr.Relay(tempfile.mkdtemp())
         self.r._restart = lambda: False
+        self.r.hub_auth = lambda hub: None   # no network in unit tests (Make standby probes the address)
         st = kr.AuthStore(self.r.state_dir)
         self.r.auth = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, st)
         self.r.auth.spokes["k1"] = {"name": "southridge", "node": "sr-0001", "minter": "http://10.0.5.2:4444", "peer": "10.0.5.2",
@@ -183,6 +184,25 @@ class Pick(unittest.TestCase):
         self.assertEqual(self.r.standby_view()["name"], "southridge")
         self.r.make_standby({"clear": True})
         self.assertNotIn("standby", self.r._cluster_raw())
+
+    def test_candidates_and_a_chosen_address(self):   # 0.21.54 (Kenton: choose the address)
+        self.r.auth.spokes["k1"]["ips"] = ["10.0.5.2", "192.168.50.7"]
+        self.r.auth.spokes["k1"]["peer"] = "203.0.113.9"
+        c = kr.standby_candidates(self.r.auth.spokes["k1"])
+        self.assertEqual([x["address"] for x in c], ["https://10.0.5.2:4443", "https://192.168.50.7:4443", "https://203.0.113.9:4443"])
+        self.assertIn("standbyAddrs", self.r.auth.spokes_public()[0])
+        kr.save_json(self.r._cluster_file(), {"hub": True})
+        self.r.hub_auth = lambda hub: None                          # nobody answers there
+        o, c = self.r.make_standby({"name": "southridge", "address": "192.168.50.7"})
+        self.assertEqual((c, o["standby"]["address"], o["reach"]), (200, kr._normalize_hub("https://192.168.50.7:4443"), False))   # the spoke's port added
+        self.r.hub_auth = lambda hub: {"app": "KASTR"}
+        o, _ = self.r.make_standby({"name": "southridge", "address": "https://192.168.50.7:5443"})
+        self.assertEqual((o["standby"]["address"], o["reach"]), (kr._normalize_hub("https://192.168.50.7:5443"), True))
+        self.assertEqual(self.r.make_standby({"name": "southridge", "address": "not an address!"})[1], 400)
+
+    def test_a_spoke_without_lan_offers_the_address_the_hub_sees(self):
+        v = {"peer": "10.9.9.9", "port": 4573, "node": "x"}
+        self.assertEqual(kr.standby_candidates(v), [{"address": "https://10.9.9.9:4573", "why": "as this hub sees it"}])
 
     def test_a_promoted_standby_advertises_no_standby(self):
         kr.save_json(self.r._cluster_file(), {"hub": True, "promoted": {"at": 1}, "standby": {"name": "me", "address": "https://me:4443"}})

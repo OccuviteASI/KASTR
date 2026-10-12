@@ -8,6 +8,11 @@ What changed in each build, newest first.
 - **View ▸ Spotlight** appears while the room has a spotlight and is ticked while it is on your stage. Choose it to put the room's spotlight back, whether that is one person, one share or the spotlight grid.
 - **View ▸ Speaker** and the **G** key now go to the room's spotlight too, when one is set. Your own pins still come first.
 
+**You choose the standby's address (Kenton asked which IP Make standby uses).** Before, the hub guessed it from the spoke's first network address, which on a box with several network adapters could be the wrong network.
+- **The dialog:** Make standby now asks which address the other spokes should use. It lists every address the spoke reports, plus the one the hub sees it connecting from, with the likely one first. You can also type your own, such as `10.0.5.2`, `10.0.5.2:4443` or a name. Without a port, the spoke's relay port is used.
+- **The check:** when you confirm, the hub tries the address. If it gets no answer, the message says so in amber, so you can fix a wrong address or a firewall before you need the standby.
+- **On the row:** the standby's row shows "spokes use <address>".
+
 ## v0.21.53 — a standby hub
 
 **A spoke can stand in for the hub (Kenton: "Lets start on the standby hub").** Pick one spoke with **Make standby** on its row of the hub's spokes table. That spoke keeps working as an ordinary relay and also keeps a copy of the hub's records.

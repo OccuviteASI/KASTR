@@ -558,6 +558,36 @@ def check_code_record(rec, code):
         return False
 
 
+def standby_guess(v):
+    """0.21.54: the address other spokes would dial for this spoke row -- its reported LAN address (the minter it
+    registered), else the address the hub sees it from; with its relay port."""
+    from urllib.parse import urlparse as _up
+    m = _up(v.get("minter") or "")
+    host = m.hostname or v.get("peer") or ""
+    if not host:
+        return ""
+    port = int(v.get("port") or 0) or ((m.port - 1) if m.port else 4443)
+    return "https://%s:%d" % (("[" + host + "]") if ":" in host else host, port)
+
+
+def standby_candidates(v):
+    """0.21.54: every address the Make standby dialog offers -- the guess, each address the spoke reported, the one the hub
+    sees it from -- [{address, why}] without repeats."""
+    port = int(v.get("port") or 0) or 4443
+    out, seen = [], set()
+
+    def add(addr, why):
+        if addr and addr not in seen:
+            seen.add(addr)
+            out.append({"address": addr, "why": why})
+    add(standby_guess(v), "its first network address" if v.get("minter") else "as this hub sees it")
+    for ip in v.get("ips") or []:
+        add("https://%s:%d" % (ip, port), "one of its network addresses")
+    if v.get("peer"):
+        add("https://%s:%d" % (("[" + v["peer"] + "]") if ":" in v["peer"] else v["peer"], port), "as this hub sees it")
+    return out
+
+
 def standby_sig(secret, ts):
     return hmac.new(str(secret or "").encode(), str(ts).encode(), hashlib.sha256).hexdigest()
 
@@ -2825,6 +2855,8 @@ class AuthService:
                                 "boot": int(p.get("boot") or 0) if str(p.get("boot") or "0").isdigit() else 0,   # 0.21.52: when it started
                                 "port": int(p.get("port") or 0) if str(p.get("port") or "0").isdigit() else 0,   # 0.21.53: its relay port
                                 "web": int(p.get("web") or 0) if str(p.get("web") or "0").isdigit() else 0,      # 0.21.53: its KASTR web port
+                                "ips": [ip for ip in (p.get("ips") if isinstance(p.get("ips"), list) else [])
+                                        if isinstance(ip, str) and re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip)][:8],      # 0.21.54: its addresses
                                 "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
@@ -2898,7 +2930,8 @@ class AuthService:
         with self.lock:
             rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
                      "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or []),   # 0.21.2: + rooms
-                     "rtsp": v.get("rtsp"), "boot": v.get("boot") or 0, "node": v.get("node") or ""} for k, v in self.spokes.items()
+                     "rtsp": v.get("rtsp"), "boot": v.get("boot") or 0, "node": v.get("node") or "",
+                     "standbyAddrs": standby_candidates(v) if v.get("node") else []} for k, v in self.spokes.items()
                     if stale or (v.get("at") or 0) >= cut]
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
 
@@ -4773,7 +4806,8 @@ class Relay:
             web = None
         body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp,
                            "node": _machine_node(), "clients": clients, "boot": BOOT_AT,
-                           "port": self.port, "web": web}).encode()   # 0.21.39: the machine id (survives a rename)
+                           "port": self.port, "web": web,
+                           "ips": (local_ips() if self.bind_all else [])[:8]}).encode()   # 0.21.39: the machine id (survives a rename); 0.21.54: + ips
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -4896,15 +4930,23 @@ class Relay:
             return {"ok": False, "error": "%s runs a KASTR too old to be a standby -- update it first" % name}, 409
         addr = str(p.get("address") or "").strip()
         if not addr:
-            from urllib.parse import urlparse as _up
-            m = _up(v.get("minter") or "")
-            host = m.hostname or v.get("peer") or ""
-            port = int(v.get("port") or 0) or ((m.port - 1) if m.port else 4443)
-            if not host:
+            addr = standby_guess(v)
+            if not addr:
                 return {"ok": False, "error": "%s has not told the hub its address -- type it in" % name}, 409
-            addr = "https://%s:%d" % (("[" + host + "]") if ":" in host else host, port)
-        elif not addr.lower().startswith(("http://", "https://")):
-            addr = "https://" + addr
+        else:   # 0.21.54: the operator's choice -- host, host:port or a URL; no port = the spoke's relay port
+            if not addr.lower().startswith(("http://", "https://")):
+                addr = "https://" + addr
+            from urllib.parse import urlparse as _up
+            try:
+                u = _up(addr)
+                host, port = u.hostname, u.port
+            except ValueError:
+                host, port = None, None
+            if not host or not re.match(r"^[A-Za-z0-9.:\[\]-]+$", host):
+                return {"ok": False, "error": "%s is not an address (type an IP or name, e.g. 10.0.5.2 or 10.0.5.2:4443)" % addr[:80]}, 400
+            if not port:
+                addr = "https://%s:%d" % (("[" + host + "]") if ":" in host else host, int(v.get("port") or 0) or 4443)
+        reach = self.hub_auth(addr) is not None   # 0.21.54: can THIS hub reach its minter there? (a hint -- spokes may differ)
         old = self._cluster_raw().get("standby")
         secret = old.get("secret") if isinstance(old, dict) and old.get("node") == v["node"] and old.get("secret") else os.urandom(16).hex()
         st = {"name": name, "node": v["node"], "address": _normalize_hub(addr), "web": int(v.get("web") or 0) or None,
@@ -4914,8 +4956,8 @@ class Relay:
             auth.bans.poke()
         except Exception:
             pass
-        self.log("relay federation: %s (%s) is the standby hub now" % (name, st["address"]))
-        return {"ok": True, "standby": {k: st[k] for k in ("name", "node", "address", "web", "at")}}, 200
+        self.log("relay federation: %s (%s) is the standby hub now%s" % (name, st["address"], "" if reach else " -- NOT reachable from this hub"))
+        return {"ok": True, "standby": {k: st[k] for k in ("name", "node", "address", "web", "at")}, "reach": reach}, 200
 
     def _standby_seen(self, st):
         with self._cluster_wl:   # 0.21.53: threads saving relay-cluster.json lost each other's keys

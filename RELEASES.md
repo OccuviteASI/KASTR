@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.53 — a standby hub (in progress)
+## v0.21.53 — a standby hub
 
 **A spoke can stand in for the hub (Kenton: "Lets start on the standby hub").** Pick one spoke with **Make standby** on its row of the hub's spokes table. That spoke keeps working as an ordinary relay and also keeps a copy of the hub's records.
 - **What it copies:** rooms and room groups, access codes (as their salted hashes, never the codes), kicks, and chat history. The copy follows the hub within seconds; the hub's Relay page shows how old it is, and the standby's own Relay page says whose standby it is.

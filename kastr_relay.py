@@ -643,7 +643,7 @@ def clean_clients(rows):
         if not isinstance(r, dict) or not HOST_RE.match(str(r.get("node") or "")):
             continue
         out.append({"node": str(r["node"]), "name": str(r.get("name") or "")[:60], "version": str(r.get("version") or "")[:24],
-                    "mode": str(r.get("mode") or "")[:24], "platform": str(r.get("platform") or "")[:16], "ip": str(r.get("ip") or "")[:46],
+                    "mode": str(r.get("mode") or "")[:24], "platform": str(r.get("platform") or "")[:32], "ip": str(r.get("ip") or "")[:46],
                     "at": int(r.get("at") or 0) if str(r.get("at") or "0").isdigit() else 0, "offer": str(r.get("offer") or "")[:20],
                     "pending": str(r.get("pending") or "")[:24], "checkin": bool(r.get("checkin")),
                     "kind": r.get("kind") if r.get("kind") in ("app", "box", "web") else "app",
@@ -2992,11 +2992,19 @@ class AuthService:
         if not HOST_RE.match(node):
             return {"ok": False, "error": "node required"}, 400
         now = int(time.time())
+        if node.startswith("web-"):
+            # 0.21.55 (Kenton: "a name for web clients that shows in the relay server page"): a web page checks in too -- but
+            # only for a web identity with a live session on this relay (the endpoint is reachable through a public tunnel;
+            # nobody can list made-up users)
+            with self.lock:
+                live = any(str(v.get("host") or "") == node and not v.get("revoked") for v in self._sessions.values())
+            if not live:
+                return {"ok": False, "error": "no session"}, 200
         with self.lock:
             rec = self.clients.get(node) or {}
             before = (rec.get("version"), rec.get("offer"), bool(rec))
             rec.update({"version": str(p.get("version") or "")[:24], "mode": str(p.get("mode") or "")[:24],
-                        "platform": str(p.get("platform") or "")[:16], "name": str(p.get("name") or "")[:60],
+                        "platform": str(p.get("platform") or "")[:32], "name": str(p.get("name") or "")[:60],   # 0.21.55: 32 ("Chrome on Windows")
                         "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now})
             pend = rec.get("pending")
             if isinstance(pend, dict) and pend.get("version") and pend["version"] == rec["version"]:

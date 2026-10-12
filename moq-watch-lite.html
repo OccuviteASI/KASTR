@@ -11941,6 +11941,32 @@
   const chatSeenKey = () => "kastr.chat.seen." + (chatBase() || "") + "." + chatRoom;
   const chatMe = () => { try { return String(window.__publisher?.opSlug?.() || "").toLowerCase(); } catch { return ""; } };
   const chatName = () => { try { return window.__publisher?.state?.()?.operator || joinEls.joinName.value || localStorage.getItem("kastr.operator.name") || ""; } catch { return ""; } };
+  // 0.21.55 (Kenton: "I need to have a name for web clients that shows in the relay server page"): a web page checks in with
+  // the relay host it was served from, like the app does (0.21.50) -- its web identity, the name it joined with, and the
+  // browser it runs in. Every minute while in a room; the relay forgets it 3 minutes after the last one.
+  if (IS_WEB) {
+    const webBrowser = () => {
+      const ua = navigator.userAgent || "";
+      const b = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox" : /CriOS|Chrome\//.test(ua) ? "Chrome"
+        : /Safari\//.test(ua) ? "Safari" : "Browser";
+      const os = /iPhone|iPod/.test(ua) ? "iPhone" : /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? "iPad"
+        : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : /Mac OS X|Macintosh/.test(ua) ? "macOS" : /CrOS/.test(ua) ? "ChromeOS"
+        : /Linux/.test(ua) ? "Linux" : "";
+      return b + (os ? " on " + os : "");
+    };
+    const webCheckin = async () => {
+      let next = 5000;
+      try {
+        if (joinState === "joined" && /^web-/.test(HOSTNAME1)) {
+          const r = await fetch("/api/clients/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
+            body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser() }) });
+          next = r.ok ? 60000 : 20000;
+        }
+      } catch { next = 20000; }
+      setTimeout(webCheckin, next);
+    };
+    setTimeout(webCheckin, 3000);
+  }
   const chatVisible = () => chatOpen && document.visibilityState === "visible";
   function chatHint(text, bad) { chatMsgEl.textContent = text || ""; chatMsgEl.style.color = bad ? "var(--asi-red)" : ""; }
   function chatPlace() {

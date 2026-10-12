@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.55 — names for web visitors (in progress)
+
+**Web visitors show by name on the Relay page (Kenton: "I need to have a name for web clients that shows in the relay server page").** The Users table used to list someone in a browser only as a `web-…` ID with no name.
+- **Check-in:** a page opened in a browser now checks in with the relay host it came from, as the app does. It sends the name the person joined with and which browser it is. It checks in once a minute while in a room, and the row goes 3 minutes after the last check-in.
+- **What the table shows:** the visitor's name in the Name column, and their browser, such as "Chrome on Windows" or "Safari on iPhone", in the Machine column. Hover over that cell to see the `web-…` ID.
+- **Safe on a public tunnel:** a relay accepts a check-in for a `web-…` ID only while that ID has a live session on it, so nobody can add made-up users from outside.
+- **Older relay hosts:** pages from a relay host older than 0.21.55 don't check in, so their visitors appear as before.
+
 ## v0.21.54 — back to the spotlight, a chosen standby address, a tidier top
 
 **Hide the top bar (Kenton: "Give an option to collapse the top bar with the ASI logo, version, etc. and then an option to expand when collapsed").** A chevron at the right end of the top bar (logo, version, App, Go Live, Relay) hides it, which gives the page that height back. A small tab at the top centre brings it back. The choice is remembered on that computer, for the app and for every page in a browser.

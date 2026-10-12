@@ -1281,13 +1281,15 @@
   // 0.21.54: the Users table's columns as sort keys (Last seen ascending = the most recent first)
   const USER_COLS = [
     { key: "name", label: "Name", val: (r) => r.name || "" },
-    { key: "node", label: "Machine", val: (r) => r.node || "" },
+    { key: "node", label: "Machine", val: (r) => machineText(r) },
     { key: "kind", label: "Kind", val: (r) => r.kind || "" },
     { key: "room", label: "Room", val: (r) => (r.rooms || []).join(", ") },
     { key: "relay", label: "Relay", val: (r) => r.relay || "" },
     { key: "version", label: "KASTR", val: (r) => r.version || "" },
     { key: "seen", label: "Last seen", val: (r) => r.at ? -Number(r.at) : "" },
   ];
+  // 0.21.55: a web visitor's "machine" is its browser ("Chrome on Windows"); its web-... id stays in the tooltip
+  const machineText = (r) => r.kind === "web" && r.platform ? r.platform : (r.node || "");
   function usersSortGet() {
     try { const v = JSON.parse(localStorage.getItem("kastr.relay.usersSort") || "null"); if (v && USER_COLS.some((c) => c.key === v.key)) return { key: v.key, dir: v.dir === "desc" ? "desc" : "asc" }; } catch {}
     return { key: "name", dir: "asc" };
@@ -1310,7 +1312,7 @@
       const key = "user:" + r.node;
       const cell = pendCell(key, r.version, true, r.offer, "usersMsg")
         ?? (behind(r) && LOCAL ? '<button type="button" class="usrupd" data-node="' + esc(r.node) + '" data-relay="' + esc(r.relay || "") + '" data-ver="' + esc(r.relayVersion || "") + '" data-label="' + esc(r.name || r.node) + '" title="Update to ' + esc(r.relayVersion || "") + ' from ' + esc(r.relay || "its relay") + ' (the person is asked first)">Update</button>' : "");
-      return { r, html: "<tr><td>" + esc(r.name || "\u2014") + '</td><td class="mono">' + esc(r.node) + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono">' + ago(r.at) + "</td><td>" + cell + "</td></tr>" };
+      return { r, html: "<tr><td>" + esc(r.name || "\u2014") + '</td><td class="' + (r.kind === "web" && r.platform ? "" : "mono") + '" title="' + esc(r.node) + '">' + esc(machineText(r)) + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono">' + ago(r.at) + "</td><td>" + cell + "</td></tr>" };
     });
     // a user who went quiet while restarting keeps a row with its spinner
     for (const [k, p] of pending) if (k.startsWith("user:") && !rows.some((r) => "user:" + r.node === k)) {

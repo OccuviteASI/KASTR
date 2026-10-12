@@ -4956,6 +4956,20 @@ class Relay:
                     cur[k] = v
             save_json(self._cluster_file(), cur, self.log)
 
+    def _acts_as_hub(self, cur=None):
+        """0.21.55: the switch says so -- or it was never set (a hub older than 0.21.23, like the Relay page's hubNow()):
+        no hub of its own and spokes registered with it."""
+        cur = cur if isinstance(cur, dict) else self._cluster_raw()
+        if isinstance(cur.get("hub"), bool):
+            return cur["hub"]
+        if cur.get("connect"):
+            return False
+        auth = self.auth
+        try:
+            return bool(auth is not None and auth.spokes)
+        except Exception:
+            return False
+
     def standby_view(self):
         """The Relay page: who the standby is (never the secret), whether it keeps its copy, and this relay's own role."""
         cur = self._cluster_raw()
@@ -4963,7 +4977,7 @@ class Relay:
         seen = dict(getattr(self.auth, "replica_seen", None) or {}) if self.auth else {}
         me = _machine_node()
         role = ("promoted" if cur.get("hub") is True and isinstance(cur.get("promoted"), dict)
-                else "hub" if cur.get("hub") is True else "standby" if st and st.get("node") == me
+                else "hub" if self._acts_as_hub(cur) else "standby" if st and st.get("node") == me
                 else "failedOver" if cur.get("failover") else "spoke" if cur.get("connect") else "none")
         rep = self._replica_load() if role == "standby" else {}
         return {"name": (st or {}).get("name"), "node": (st or {}).get("node"), "address": (st or {}).get("address"),
@@ -4975,7 +4989,7 @@ class Relay:
         """POST /api/relay/standby on the hub: {name[, address]} names one registered spoke as the standby hub;
         {clear: true} removes it. The spokes learn it on their long-poll."""
         auth = self.auth
-        if auth is None or self._cluster_raw().get("hub") is not True:
+        if auth is None or not self._acts_as_hub():   # 0.21.55: an older hub never saved the switch
             return {"ok": False, "error": "only the hub picks a standby (turn on 'This relay is the hub' first)"}, 409
         if p.get("clear"):
             self.cluster_note(standby=None)
@@ -5163,7 +5177,7 @@ class Relay:
         now = time.time()
         st = cur.get("standby") if isinstance(cur.get("standby"), dict) else None
         me = _machine_node()
-        if cur.get("hub") is True:
+        if self._acts_as_hub(cur):   # 0.21.55: + a hub that never saved the switch
             if st and st.get("node") != me and st.get("address") and not cur.get("promoted"):
                 self._failback_tick(cur, st)
             return

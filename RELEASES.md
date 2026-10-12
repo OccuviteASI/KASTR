@@ -10,6 +10,11 @@ What changed in each build, newest first.
 - **Safe on a public tunnel:** a relay accepts a check-in for a `web-…` ID only while that ID has a live session on it, so nobody can add made-up users from outside.
 - **Older relay hosts:** pages from a relay host older than 0.21.55 don't check in, so their visitors appear as before.
 
+**Make standby works on older hubs (field, Kenton on the hub: "only the hub picks a standby (turn on 'This relay is the hub' first)").** A hub set up before 0.21.23 never saved its "This relay is the hub" setting. The Relay page shows the switch on, because the relay dials no hub and spokes register with it, but the standby code only accepted a hub whose setting was saved. Picking a standby, taking the hub's duties back after a takeover, and the hub's standby line now treat it as the hub too.
+- **Only on the hub (Kenton: "hide the standby option unless it is a hub"):** the Make standby / Remove standby buttons appear only on the hub's Relay page. They don't appear on a spoke, or on a standby while it is acting as the hub.
+
+**The standby says so (Kenton: "On the standby, show something in that section to know it is a hub standby").** The standby's Relay page shows a **Standby hub** badge next to the Federation heading. Below the hub fields, a highlighted box says whose standby it is, how recently it copied the hub's records, and when it would take over. The box turns amber if the copy is more than 2 minutes old. A standby acting as the hub shows **Acting as hub**, and a spoke that moved to the standby shows **On standby hub**, both in amber.
+
 **Update all users (Kenton: "I want an update all users button").** Below the Users table, **Update N users** sends the same update request as each row's Update button to every KASTR app that is behind its relay's version, after one confirmation.
 - **Each person is asked first:** their KASTR shows "Update now / In 10 minutes", as with a single Update. Unattended boxes update at once.
 - **Who is left out:** web visitors (they follow their relay host by themselves), apps older than 0.21.50 (they can't receive a pushed update) and anyone not seen for 24 hours.

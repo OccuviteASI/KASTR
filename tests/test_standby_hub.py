@@ -167,7 +167,17 @@ class Pick(unittest.TestCase):
         self.r.auth.close()
 
     def test_only_a_hub_picks(self):
+        kr.save_json(self.r._cluster_file(), {"hub": False})
         self.assertEqual(self.r.make_standby({"name": "southridge"})[1], 409)
+        kr.save_json(self.r._cluster_file(), {"connect": "https://other:4443"})          # a spoke
+        self.assertEqual(self.r.make_standby({"name": "southridge"})[1], 409)
+
+    def test_a_hub_that_never_saved_the_switch_picks_too(self):   # 0.21.55 (field: the Kastr hub predates the switch)
+        kr.save_json(self.r._cluster_file(), {"connect": ""})                            # hub None, spokes registered
+        self.assertEqual(self.r.make_standby({"name": "southridge"})[1], 200)
+        self.assertEqual(self.r.standby_view()["role"], "hub")
+        self.r.auth.spokes.clear()                                                        # a standalone relay is not a hub
+        self.assertFalse(self.r._acts_as_hub())
 
     def test_pick_derive_address_keep_secret_clear(self):
         kr.save_json(self.r._cluster_file(), {"hub": True})
@@ -256,6 +266,9 @@ class Wiring(unittest.TestCase):
         # locked rooms stay locked: the saved copy of the hub's rooms is consulted after a restart
         self.assertIn("_ks._HUB_ROOMS_CACHE[0]", src)
         page = io.open(os.path.join(HERE, "relay.html"), encoding="utf-8").read()
+        self.assertIn('(LOCAL && sbHub && r.node ? " <button', page)   # 0.21.55: the buttons only on the hub
+        self.assertIn('<h2>Federation <span id="fedRoleBadge" class="sbbadge" hidden></span></h2>', page)   # 0.21.55: the role badge
+        self.assertIn('const roleTxt = { standby: "Standby hub", promoted: "Acting as hub", failedOver: "On standby hub" }[sb.role] || "";', page)
         for needle in ('id="standbyState"', "function paintStandby(", 'class=\\"ghost spsb\\"', '"/api/relay/standby"',
                        "function agoText(sec)", '" min " + String(t % 60).padStart(2, "0") + " s ago"'):
             self.assertIn(needle, page)

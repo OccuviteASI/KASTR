@@ -47,6 +47,14 @@
   label.sbopt .why { color:var(--text-mute, #8b98a8); font-size:12px; }
   label.sbopt input[type=text] { flex:1; min-width:0; }
   .sbaddr { display:block; font-size:11px; color:var(--text-dim); }
+  /* 0.21.55 (Kenton: "On the standby, show something in that section to know it is a hub standby"): the role as a badge on
+     the Federation heading and a boxed line under the hub fields */
+  h2 .sbbadge { margin-left:8px; font-size:10px; letter-spacing:.06em; vertical-align:2px; }
+  h2 .sbbadge.warn { background:color-mix(in srgb, var(--asi-amber, #f0a020) 24%, transparent); }
+  #standbyState.sbcall { display:block; margin:8px 0 4px; padding:8px 10px; border:1px solid color-mix(in srgb, var(--asi-blue, #3b82f6) 55%, transparent);
+    border-radius:6px; background:color-mix(in srgb, var(--asi-blue, #3b82f6) 9%, transparent); color:var(--text) !important; font-size:12px; line-height:1.45; }
+  #standbyState.sbcall.warn { border-color:color-mix(in srgb, var(--asi-amber, #f0a020) 60%, transparent); background:color-mix(in srgb, var(--asi-amber, #f0a020) 10%, transparent); }
+  #standbyState.sbcall b { font-weight:700; }
   @media (max-width: 720px) { #main { grid-template-columns:1fr; } }
   /* 0.21.52 (Kenton: "drag around the windows in the relay server page to where I want them. Have the tiles only take up the
      space they need, not just use the same height for everything in the row"): 4 px grid rows -- each card spans just the
@@ -298,7 +306,7 @@
     </section>
 
     <section class="panel" id="fedPanel">
-      <h2>Federation</h2>
+      <h2>Federation <span id="fedRoleBadge" class="sbbadge" hidden></span></h2>
       <p class="hint" style="margin-top:0">
         Join this relay to a hub relay on another KASTR machine — rooms and
         streams then flow across all federated relays. A hub that requires
@@ -1192,6 +1200,22 @@
     else if (sb.role === "hub") { txt = sb.name ? "Standby hub: " + sb.name + " (" + (sb.address || "?") + ")" + (sb.copyAt ? " \u2014 copied " + agoText(Date.now() / 1000 - sb.copyAt) : " \u2014 has not copied yet") + "." : "No standby hub \u2014 pick one with Make standby on a spoke below."; col = sb.name && !(sb.copyAt && Date.now() / 1000 - sb.copyAt < 120) ? "var(--asi-amber)" : ""; }
     else if (sb.role === "spoke" && sb.name) { txt = "Standby hub: " + sb.name + " (" + (sb.address || "?") + ")."; }
     el.textContent = txt; el.style.color = col; el.hidden = !txt;
+    // 0.21.55: the role in the Federation heading, and the standby's own line as a box that says what it does
+    const badge = $("fedRoleBadge");
+    const roleTxt = { standby: "Standby hub", promoted: "Acting as hub", failedOver: "On standby hub" }[sb.role] || "";
+    if (badge) { badge.textContent = roleTxt; badge.hidden = !roleTxt; badge.classList.toggle("warn", sb.role !== "standby");
+      badge.title = sb.role === "standby" ? "This relay stands in for the hub " + (sb.standbyOf || "") + " if it goes down" : txt; }
+    el.classList.toggle("sbcall", !!roleTxt);
+    el.classList.toggle("warn", !!roleTxt && sb.role !== "standby");
+    if (sb.role === "standby") {
+      const age = sb.copyAt ? Date.now() / 1000 - sb.copyAt : null;
+      el.replaceChildren();
+      const head = document.createElement("b"); head.textContent = "This relay is the standby hub";
+      el.append(head, document.createTextNode(" for " + (sb.standbyOf || "the hub") + ". It keeps a copy of the hub\u2019s rooms, access codes, kicks and chat"
+        + (age == null ? " \u2014 no copy yet (it starts within a few seconds of being picked)." : " \u2014 last copied " + agoText(age) + ".")
+        + " If the hub is unreachable for 2 minutes (and a spoke agrees, or after 5 minutes alone) it takes over, and it hands everything back when the hub returns."));
+      if (age != null && age > 120) el.classList.add("warn");
+    }
   }
   async function paintSpokes() {
     let d;
@@ -1207,6 +1231,7 @@
     const ago = (t) => t ? agoText(Date.now() / 1000 - t) : "\u2014";   // 0.21.53: minutes past a minute
     const behind = (r) => !!(r.version && d.version && r.version !== d.version);   // 0.21.26
     const sbName = (d.standby || {}).name || "";   // 0.21.53
+    const sbHub = (d.standby || {}).role === "hub";   // 0.21.55 (Kenton: "hide the standby option unless it is a hub")
     // 0.21.16: the spoke's RTSP switch (it registers "on" / "off"; null = no cameras or an older spoke); the hub operator flips it
     const camCell = (r) => r.rtsp ? ("<span class=\"sprtsp\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (r.rtsp === "on" ? "1" : "0") + "\">" + (r.rtsp === "on" ? "on" : "<span style=\"color:var(--asi-amber)\">off</span>")
       + (LOCAL ? " <button type=\"button\" class=\"ghost sprt\" title=\"" + (r.rtsp === "on" ? "Turn that box's cameras off (spare its CPU/GPU; nothing is forgotten)" : "Turn that box's cameras back on") + "\">" + (r.rtsp === "on" ? "off" : "on") + "</button>" : "") + "</span>")
@@ -1217,7 +1242,7 @@
       + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + (sbName && sbName === (r.name || r.key) ? " <span class=\"sbbadge\" title=\"Takes over as the hub when this hub is unreachable for 2 minutes\">Standby</span><span class=\"sbaddr\" title=\"The address the other spokes use to reach it when it takes over\">spokes use " + esc((d.standby || {}).address || "?") + "</span>" : "") + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>"
         + (restartCell(r) ?? pendCell("spoke:" + (r.name || r.key), r.version, true, "", "spokesMsg") ?? ((behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button> " : "")
           + (LOCAL ? "<button type=\"button\" class=\"ghost sprst\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Restart that spoke's KASTR (its relay restarts too; viewers there reconnect within seconds)\">Restart</button>" : "")
-          + (LOCAL && r.node ? " <button type=\"button\" class=\"ghost spsb\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (sbName === (r.name || r.key) ? "1" : "") + "\" title=\"" + (sbName === (r.name || r.key) ? "Stop using this spoke as the standby hub" : "This spoke keeps a copy of the hub's rooms, codes, kicks and chat and takes over as the hub when this hub is unreachable for 2 minutes") + "\">" + (sbName === (r.name || r.key) ? "Remove standby" : "Make standby") + "</button>" : ""))) + "</td></tr>").join("")   // 0.21.53: + standby + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done; 0.21.52: + Restart
+          + (LOCAL && sbHub && r.node ? " <button type=\"button\" class=\"ghost spsb\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (sbName === (r.name || r.key) ? "1" : "") + "\" title=\"" + (sbName === (r.name || r.key) ? "Stop using this spoke as the standby hub" : "This spoke keeps a copy of the hub's rooms, codes, kicks and chat and takes over as the hub when this hub is unreachable for 2 minutes") + "\">" + (sbName === (r.name || r.key) ? "Remove standby" : "Make standby") + "</button>" : ""))) + "</td></tr>").join("")   // 0.21.53: + standby + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done; 0.21.52: + Restart
       : "No spoke has registered yet.";
     for (const b of $("spokesList").querySelectorAll(".sprt")) b.addEventListener("click", async () => {   // 0.21.16: flip a spoke's cameras (the `rtsp` command rides its long-poll)
       const sp = b.parentElement.dataset.spoke, on = b.parentElement.dataset.on === "1";

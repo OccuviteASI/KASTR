@@ -59,7 +59,7 @@ class ShownToOthers(unittest.TestCase):
 
     def test_watch_only_tile(self):
         p = self._p()
-        self.assertIn("clk: w.clk ?? null, deaf: !!w.deaf };", p)
+        self.assertIn("clk: w.clk ?? null, deaf: !!w.deaf,", p)
         self.assertIn('el.classList.toggle("deaf", !!m.deaf);   // 0.21.48', p)
         self.assertIn('<span class="vdf"', p)
 

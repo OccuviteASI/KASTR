@@ -63,7 +63,7 @@ class StaysOutOfMyRoom(unittest.TestCase):
 
     def test_no_room_wide_actions_into_my_room(self):
         p = _page()
-        self.assertIn('if (!wrRoomOf(name)) items.push({ value: lit ? "unspot" : "all"', p)
+        self.assertIn('if (!wrSrc || wrBring) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all")', p)   # 0.21.49: a watched source is brought in first
         self.assertIn('if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {', p)
         self.assertIn("if (!wrRoomOf(name)) { try { window.__stallAnnounce?.set?.(name); } catch {} }", p)
         self.assertIn("if (isGridChild(n) || wrRoomOf(n)) continue;", p)

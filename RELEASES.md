@@ -2,6 +2,18 @@
 
 What changed in each build, newest first.
 
+## v0.21.49 — spotlight a watched source for everyone, see who's out of date, choose the RTMP address
+
+**Spotlight a source from another room for everyone (Kenton: "I'm still not able to spotlight a share from another room except for pinning it for myself").** A source you watch from another room now offers "Spotlight for everyone".
+- **How it works:** it brings that one source into your room (everyone there receives it), then spotlights it. The source stays listed while it is spotlit and is withdrawn about a minute after the spotlight is removed.
+- **Locked rooms:** as Kenton chose, anyone who can see a source may bring it in, except that a source from a locked room needs the admin code, so a locked room's content can't leak out through a plain member. The relay enforces this, not just the page.
+
+**See who is on an old KASTR (field: Support Laptop on 0.21.34 stayed "connecting…" for everyone until it was updated).** Each person's presence now says which KASTR they run. Participants marks anyone older than you: "KASTR 0.21.4x — needs updating", or "Older KASTR — needs updating" for versions before 0.21.49, which don't report one.
+
+**Choose the RTMP push address (Kenton: "The support laptop is choosing an IP that is on an interface I don't want to use").** The RTMP ingest always accepted pushes on every interface; only the address shown in the push URL was fixed to the computer's first one. An RTMP feed's row now has a menu of the computer's addresses. Your choice is remembered, and is no longer replaced by the first address when KASTR starts.
+
+**Tested** on the two-relay lab: Kenton (kb3) watched Alex's camera feed in ka3 and spotlit it for everyone; Sam (kb3) received it, played it (162 frames) and his stage showed it. Unit tests cover the relay side: a view-only member may bring in, a token from a different room may not, a locked room needs the admin code, the target room still needs its member token, and a stop withdraws the listing.
+
 ## v0.21.48 — everyone can see you're deafened
 
 **Deafen shows to others wherever they look (Kenton: "I need to show others when I have deafen turned on").** Since 0.21.40 the mark appeared only on your camera tile's mic chip, and that chip fades out when the viewer's mouse is still, and in Participants.

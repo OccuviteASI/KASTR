@@ -144,6 +144,7 @@
   .gridgroup > .gghead .ggsw { display:inline-flex; align-items:center; gap:4px; text-transform:none; letter-spacing:0; color:var(--text-dim); }
   /* 0.21.29: an RTMP ingest row says where to push */
   .camrow .rtmpurl { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); margin-top:4px; flex-wrap:wrap; }
+  .camrow .rtmpurl .rtmphost { font:11px var(--font-mono); padding:1px 4px; height:auto; max-width:150px; }   /* 0.21.49 */
   .camrow .rtmpurl code { font-family:var(--font-mono); color:var(--text); background:var(--surface-2); padding:2px 6px; border-radius:4px; user-select:all; -webkit-user-select:all; }
   .camrow .rtmpurl button { padding:1px 8px; font-size:11px; }
   #mineMenu.roomform { min-width:260px; padding:8px; }   /* 0.21.0: the "+" bubble */
@@ -3076,6 +3077,48 @@
   }
   setInterval(() => { xsPoll(); xsOfferNew(); }, 8000);
   window.__xsPoll = xsPoll;   // rig
+  // 0.21.49 (Kenton: "I'm still not able to spotlight a share from another room except for pinning it for myself"):
+  // "Spotlight for everyone" on a source I WATCH from another room first LISTS it into my room (a bring-in: my member token
+  // for that room proves I can see it; a locked room's source needs the admin code) so everyone here receives it, then
+  // spotlights it. The listing is refreshed while it is spotlit here and withdrawn a minute after the spotlight goes.
+  const xsBrought = new Map();   // path -> { slug, idleSince }
+  async function xsBring(path, stop, quiet) {
+    const slug = String(path).split("/", 1)[0];
+    const w = watchRooms.get(slug);
+    const base = authBase();
+    if (!base) return false;
+    const headers = { "content-type": "application/json" };
+    if (authSecured) {
+      if (!w?.token || !authTokens?.member) { if (!quiet) window.__toast?.("Watch " + slug + " again to show its sources here.", 5000, { level: "warn" }); return false; }
+      headers.authorization = "Bearer " + w.token;
+    }
+    const body = { path, bring: true, from: slug, to: [CHANNEL], stop: !!stop, tokens: authSecured ? { [CHANNEL]: authTokens.member } : {},
+                   label: shortLabel(path).replace(" (" + slug + ")", ""), kind: xsKindOf(path), by: window.__publisher?.state?.()?.operator || "" };
+    try {
+      const r = await fetch(base + "/api/xshare", { method: "POST", headers, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) return true;
+      if (!quiet) window.__toast?.("Could not show it to " + CHANNEL + ": " + (d.refused?.[CHANNEL] || d.error || ("HTTP " + r.status)), 6000, { level: "warn" });
+    } catch (e) { if (!quiet) window.__toast?.("Could not show it to " + CHANNEL + ": " + (e?.message || e), 6000, { level: "warn" }); }
+    return false;
+  }
+  async function wrSpotForAll(path) {
+    const slug = String(path).split("/", 1)[0];
+    if (!(await xsBring(path))) return;
+    xsBrought.set(path, { slug, idleSince: 0 });
+    await xsPoll();   // my own copy becomes my room's tile at once (the others' within one poll)
+    window.__spot?.set?.(path);
+    window.__toast?.("Spotlit for everyone in " + CHANNEL + " (from " + slug + ")", 3500, { level: "event" });
+  }
+  setInterval(() => {
+    for (const [p, b] of [...xsBrought]) {
+      if (!window.__joinedChannel?.()) { xsBrought.delete(p); continue; }
+      if (spotOnRoom(p)) { b.idleSince = 0; xsBring(p, false, true); continue; }
+      if (!b.idleSince) { b.idleSince = Date.now(); continue; }
+      if (Date.now() - b.idleSince > 60000) { xsBrought.delete(p); xsBring(p, true, true); }
+    }
+  }, 30000);
+  window.__xsBrought = xsBrought;   // rig
 
   // ---- 0.21.44 (Kenton: "one window for several sites" -- several rooms on one fleet; stay in ONE room and WATCH others) -------
   // Only watching: my camera and microphone stay in the room I joined. Each watched room gets a member token of its own (a side
@@ -4565,6 +4608,23 @@
     return out;
   }
   let deafSeen = "";
+  // 0.21.49 (field: Support Laptop on 0.21.34 stayed "connecting..." for everyone until it updated): who runs an older KASTR
+  const KASTR_VER = "__KASTR_VERSION__".replace(/-dev$/, "");
+  function verOlder(a, b) {   // "0.21.34" < "0.21.49"
+    const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d < 0; }
+    return false;
+  }
+  function staleOps() {   // op -> "0.21.40" | "" (older than 0.21.49: it says nothing)
+    const out = new Map();
+    if (!/^\d+(\.\d+)+$/.test(KASTR_VER)) return out;   // a source checkout: nothing to compare with
+    for (const m of members.values()) {
+      if (!m.op || !m.state) continue;
+      const kv = String(m.kv || "");
+      if (!kv || verOlder(kv, KASTR_VER)) out.set(String(m.op).toLowerCase(), kv);
+    }
+    return out;
+  }
   function participantList() {
     const now = performance.now();
     const creator = opKeyOf(roomsMinter.get(CHANNEL)?.creator || "");
@@ -4594,12 +4654,14 @@
     }
     const out = [];
     const deafNow = deafOps();
+    const stale = staleOps();   // 0.21.49
     for (const p of people.values()) {
       p.name = p.name || memberNameOf(p.key) || prettyOperator(p.key);
       const role = [];
       if (creator && creator === p.key) role.push("Organizer");
       if (p.content.length) role.push("Presenting");
       if (boxOps.has(p.key)) role.push("Camera box");
+      if (!p.me && stale.has(p.key)) role.push(stale.get(p.key) ? "KASTR " + stale.get(p.key) + " \u2014 needs updating" : "Older KASTR \u2014 needs updating");   // 0.21.49
       if (p.viewer && !p.me) role.push("View only");
       p.role = role.join(" \u00b7 ");
       p.deaf = p.me ? deafened : deafNow.has(p.key);   // 0.21.40
@@ -7117,7 +7179,9 @@
         // 0.21.23: every tile can be pinned and spotlit (Teams) -- before, only content with a choice to make
         items.push({ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me",
           tip: pinned ? "Take it off your stage" : "Add it to your stage (only you; up to " + PIN_MAX + ")" });
-        if (!wrRoomOf(name)) items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44: not into my room for a watched one
+        const wrSrc = wrRoomOf(name);   // 0.21.49: a watched source can be brought in -- a locked room's only by an admin
+        const wrBring = !!wrSrc && (authRole === "admin" || !(lastChannelList || []).find((r) => r.slug === wrSrc)?.locked);
+        if (!wrSrc || wrBring) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all"), icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44 / 0.21.49
           tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
         items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
@@ -7151,6 +7215,7 @@
         }
         openMineMenu(anchor, items, "", async (v) => {
           if (v === "lat") { latencyToggle(name); return; }
+          if (v === "wrall") { wrSpotForAll(name); return; }   // 0.21.49: bring it into my room, then spotlight it
           if (v === "wrsound" || v === "wrstop" || v === "wrpick") {   // 0.21.44; 0.21.47: one source / the room's list
             const r0 = wrRoomOf(name), w0 = r0 && watchRooms.get(r0);
             if (!w0) return;
@@ -7630,7 +7695,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           roomsChanged();
         }));
       });
@@ -10468,7 +10533,8 @@
     };
   }
   // the two models (schema v1) and their producers
-  const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE };
+  const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE,
+                     kv: KASTR_VER };   // 0.21.49: which KASTR this page runs (absent = older than 0.21.49)
   const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
   const pubState = stateProducer(() => "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
@@ -10669,7 +10735,7 @@
       live.add(key);
       const w = p.who;
       const rec = { peer: w.peer, op: w.op, name: w.name, relay: w.relay, relayName: w.relayName, ts: p.ts, host: w.host,
-                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || ""), clk: w.clk ?? null, deaf: !!w.deaf };   // 0.21.22: + clk; 0.21.48: + deaf
+                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || ""), clk: w.clk ?? null, deaf: !!w.deaf, kv: w.kv || "" };   // 0.21.22: + clk; 0.21.48: + deaf
       const cur = members.get(key);
       if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) { members.set(key, rec); changed = true; }
       if (p.ts) sinceTs.set(key, p.ts);
@@ -13608,6 +13674,13 @@
   try { rtmpHostV = localStorage.getItem("kastr.rtmp.host") || ""; } catch {}
   const rtmpHost = () => rtmpHostV;
   const rtmpHostSet = (h) => { rtmpHostV = String(h || ""); try { localStorage.setItem("kastr.rtmp.host", rtmpHostV); } catch {} };
+  // 0.21.49 (Kenton: "The support laptop is choosing an IP that is on an interface I don't want to use"): the ingest listens on
+  // every interface; the address in the push URL is this computer's first LAN address unless the person picked another (kept)
+  let rtmpHosts = [];
+  const rtmpHostsLearn = (hosts) => {
+    rtmpHosts = Array.isArray(hosts) ? hosts.map(String) : [];
+    if (rtmpHosts.length && !rtmpHosts.includes(rtmpHostV)) rtmpHostSet(rtmpHosts[0]);   // a kept choice that still exists stays
+  };
   // 0.21.31 (Kenton: "it should either automatically ask to open the firewall, or give a button to allow through the
   // firewall without having to go to the relay server page"): RTMP ports only (TCP 1935-1944), on any box
   let rtmpFw = null;   // last answer of /api/screen/rtmp/firewall: { open: true|false|null, tool, missing }
@@ -13626,7 +13699,7 @@
     try { renderSources(); } catch {}
   };
   window.__rtmpFw = { check: rtmpFwCheck, open: rtmpFwOpen, state: () => rtmpFw };   // rig
-  if (!IS_WEB2) setTimeout(() => fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()).then((d) => { if (d?.hosts?.length && d.hosts[0] !== rtmpHostV) { rtmpHostSet(d.hosts[0]); try { renderSources(); } catch {} } }).catch(() => {}), 3000);
+  if (!IS_WEB2) setTimeout(() => fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()).then((d) => { const was = rtmpHostV + "|" + rtmpHosts.join(","); rtmpHostsLearn(d?.hosts); if (was !== rtmpHostV + "|" + rtmpHosts.join(",")) { try { renderSources(); } catch {} } }).catch(() => {}), 3000);
   // ---- 0.21.26 (Kenton): host feeds -- a camera or a media file on this computer, published like an RTSP camera ----
   {
     const sel = $("hostCamSel"), addCam = $("hostCamAdd"), addFile = $("hostFileAdd"), pick = $("hostFile");
@@ -13658,7 +13731,7 @@
       let d = null;
       try { d = await fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()); } catch {}
       if (!d?.port) { window.__toast?.("No free RTMP port (1935-1944) on this computer", 6000, { level: "error" }); return; }
-      if (d.hosts?.length) rtmpHostSet(d.hosts[0]);
+      rtmpHostsLearn(d.hosts);   // 0.21.49: keeps the address the person chose
       const label = window.prompt("Name for this RTMP feed", "GoPro");
       if (label == null) return;
       const abc = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -14806,6 +14879,13 @@
           const cp = document.createElement("button"); cp.type = "button"; cp.className = "ghost"; cp.textContent = "Copy";
           cp.addEventListener("click", () => { navigator.clipboard?.writeText(code.textContent).then(() => window.__toast?.("RTMP address copied \u2014 paste it into the device's live-stream settings", 4000, { level: "info" })).catch(() => window.prompt("RTMP address", code.textContent)); });
           line.append("Push to ", code, cp);
+          if (m && rtmpHosts.length > 1) {   // 0.21.49: which of this computer's addresses the URL names
+            const hs = document.createElement("select"); hs.className = "rtmphost"; hs.title = "The address devices push to (this computer listens on all of them)";
+            for (const h of rtmpHosts) hs.appendChild(new Option(h, h));
+            hs.value = rtmpHosts.includes(rtmpHost()) ? rtmpHost() : rtmpHosts[0];
+            hs.addEventListener("change", () => { rtmpHostSet(hs.value); try { renderSources(); } catch {} window.__toast?.("RTMP address now uses " + hs.value + " — copy it into the device again", 4000, { level: "info" }); });
+            line.append(hs);
+          }
           if (rtmpFw && rtmpFw.open === false) {   // 0.21.31: closed here -> one click opens it (no Relay page)
             const fwb = document.createElement("button"); fwb.type = "button"; fwb.className = "ghost rtmpfw"; fwb.textContent = "Allow through firewall";
             fwb.title = "Open TCP ports 1935-1944 in this computer's firewall so the device can connect";

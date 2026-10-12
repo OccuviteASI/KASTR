@@ -2344,11 +2344,25 @@ class AuthService:
         if bans and bans.hit(room, host, peer, now):
             return {"ok": False, "error": self.REVOKED_TEXT}, 403
         puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
-        if "**" not in puts and (room + "/" + host) not in puts:
-            return {"ok": False, "error": "this token does not publish media"}, 403
         path, to, label, kind, by, stop = xshare_body(p)
-        if not xshare_path_ok(path, room, host):
-            return {"ok": False, "error": "not a stream of this token's host in this room"}, 403
+        if p.get("bring") is True:
+            # 0.21.49 (Kenton: "let anyone spotlight it as normal" -- a share watched from another room): a BRING-IN. Any
+            # member of room A (this token) may list one of A's streams into another room it holds a member token for;
+            # the people there then receive it. A LOCKED room's stream needs the admin code (its content never leaks
+            # out of the lock by a plain member). The listing names the stream's own host (the hub re-checks against it).
+            segs = str(path or "").split("/")
+            src = segs[1] if len(segs) >= 3 else ""
+            if not HOST_RE.match(src) or not xshare_path_ok(path, room, src):
+                return {"ok": False, "error": "not a stream of this token's room"}, 403
+            if not stop and "**" not in puts and (room + "/" + ADMIN_KIND) not in puts and self._room_locked(room):
+                return {"ok": False, "error": "only an admin can bring a locked room's stream into another room"}, 403
+            self.log("relay auth: %s brought %s into %s" % (host, path, ", ".join(to) or "-"))
+            host = src
+        else:
+            if "**" not in puts and (room + "/" + host) not in puts:
+                return {"ok": False, "error": "this token does not publish media"}, 403
+            if not xshare_path_ok(path, room, host):
+                return {"ok": False, "error": "not a stream of this token's host in this room"}, 403
         spoke = self._xs_spoke()
         if stop:
             want = set(to) or None
@@ -2419,6 +2433,20 @@ class AuthService:
             out["error"] = "no room accepted the listing"
             return out, 403
         return out, 200
+
+    def _room_locked(self, slug):
+        """0.21.49: is this room locked -- here, or on the hub (a spoke)? Unknown while the hub is dark = as last heard."""
+        try:
+            rec = self.store.room(slug) if getattr(self, "store", None) is not None else None
+        except Exception:
+            rec = None
+        if rec is not None and rec.get("hash"):
+            return True
+        if rec is None and slug != "main" and self._hub_base():
+            if self.hub_locked_known(slug):
+                return True
+            return self.hub_room(slug) in ("locked", "ok", "wrong")
+        return False
 
     def _xs_fed(self, p):
         """Hub side of op "xshare" (rooms_fed already checked the federation bearer): {vouch:"member", path, from,

@@ -335,6 +335,17 @@
         <div id="usersList" class="hint" style="margin:4px 0 6px"></div>
         <span id="usersMsg" class="hint blk gap">An Update reaches the person's KASTR through the relay it uses: their window asks them first (Update now / In 10 minutes) and it updates by itself after 10 minutes. Web visitors follow their relay's version on their own.</span>
       </div>
+      <!-- 0.21.51 (Kenton): every relay's, box's and app's logs, collected here on request -->
+      <div id="logsBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
+        <b style="font-size:13px">Logs</b>
+        <div class="btnrow" style="align-items:center;gap:8px;flex-wrap:wrap">
+          <button id="logsAll" type="button">Collect the last hour</button>
+          <input id="logsFind" type="text" placeholder="or search every log for&hellip; (e.g. mikey/camera)" style="flex:1;min-width:200px">
+          <button id="logsSearch" type="button" class="ghost">Search every log</button>
+        </div>
+        <div id="logsList" class="hint" style="margin:6px 0"></div>
+        <span id="logsMsg" class="hint blk gap">Every relay, unattended box and KASTR app sends its logs here when asked (tokens and codes blanked). Relays answer within seconds; apps at their next check-in (within a minute).</span>
+      </div>
       <!-- 0.21.22: discovery only -- KASTR apps on this network can find this relay (no code or secret is advertised) -->
       <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
         <label class="f asi-sw"><span class="switch"><input type="checkbox" id="mdnsAdv"><i></i></span><span>Let KASTR apps on this network find this relay (mDNS &mdash; its name, address and certificate only; access codes are still required)</span></label>
@@ -1060,6 +1071,8 @@
     let d;
     try { d = await api("/api/relay/spokes"); } catch { return; }
     try { paintUsers(d); } catch (e) { console.warn("KASTR users table:", e); }   // 0.21.50
+    lastFleet = d;   // 0.21.51: who a log collection waits for
+    { const lb = $("logsBox"); if (lb) lb.hidden = !LOCAL || !d.secured; }
     const box = $("spokesBox"); if (!box) return;
     const rows = d.spokes || [];
     box.hidden = !!d.notHub || !(rows.length || (d.cmd && d.cmd.seq));   // 0.21.24: a relay switched off as the hub shows no spoke table
@@ -1155,6 +1168,56 @@
     });
   }
   window.__relayPending = pending;   // rig
+  // ---- 0.21.51 (Kenton: "Could we have the logs all send to the hub to make log collection easier?") ----------------
+  let lastFleet = null, logRun = null, logTimer = null;
+  const LOG_WAIT_MS = 180000;
+  function logExpected() {   // relays (me + spokes) and apps that check in (web visitors have no log of their own)
+    const d = lastFleet || {};
+    const out = new Map();
+    if (d.me) out.set(d.me + "|relay", d.me);
+    for (const sp of d.spokes || []) out.set((sp.name || sp.key) + "|relay", sp.name || sp.key);
+    for (const c of d.clients || []) if (c.checkin && c.kind !== "web") out.set(c.relay + "|" + c.node, (c.name || c.node) + " (" + c.relay + ")");
+    return out;
+  }
+  async function logPaint() {
+    if (!logRun) return;
+    let d;
+    try { d = await api("/api/relay/logs?id=" + encodeURIComponent(logRun.id)); } catch { return; }
+    const run = d.run; if (!run) return;
+    const kb = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+    const got = new Set(run.entries.map((e) => (e.kind === "relay" || e.kind === "box" && e.relay === e.name ? e.relay + "|relay" : e.relay + "|" + e.node)));
+    const want = logExpected();
+    const missing = [...want].filter(([k]) => !got.has(k)).map(([, label]) => label);
+    const age = Date.now() - logRun.at;
+    const done = !missing.length || age > LOG_WAIT_MS;
+    const rows = run.entries.slice().sort((a, b) => (a.relay + a.kind + a.name).localeCompare(b.relay + b.kind + b.name)).map((e) =>
+      "<tr><td>" + esc(e.relay) + "</td><td>" + esc(e.name || "\u2014") + '</td><td class="mono">' + esc(e.node) + "</td><td>" + esc(e.kind) + "</td><td>" + esc(e.version || "") + "</td><td>"
+      + Object.entries(e.files || {}).map(([k, v]) => esc(k) + " " + kb(v)).join(", ") + "</td></tr>");
+    $("logsList").innerHTML = (rows.length ? '<div class="tblwrap"><table class="rooms" style="font-size:12px"><tr><th>Relay</th><th>Name</th><th>Machine</th><th>Kind</th><th>KASTR</th><th>Files</th></tr>' + rows.join("") + "</table></div>" : "")
+      + '<div style="margin-top:6px">' + (done ? "" : '<span class="updspin"></span>') + run.entries.length + " answered"
+      + (missing.length ? (done ? " \u2014 no answer from: " : " \u2014 waiting for: ") + esc(missing.slice(0, 12).join(", ")) + (missing.length > 12 ? " and " + (missing.length - 12) + " more" : "") : " \u2014 everyone answered")
+      + (run.entries.length ? ' &nbsp; <a href="/api/relay/logs/bundle?id=' + encodeURIComponent(run.id) + '" download>Download all (.zip)</a>' : "") + "</div>";
+    if (done) {
+      clearInterval(logTimer); logTimer = null;
+      $("logsAll").disabled = $("logsSearch").disabled = false;
+      $("logsMsg").textContent = (run.find ? "Search \u201c" + run.find + "\u201d" : "The last hour") + " collected: " + run.entries.length + " machine" + (run.entries.length === 1 ? "" : "s") + " answered.";
+    }
+  }
+  async function logStart(find) {
+    $("logsAll").disabled = $("logsSearch").disabled = true;
+    $("logsMsg").textContent = find ? "Searching every log for \u201c" + find + "\u201d\u2026" : "Collecting the last hour from every relay, box and app\u2026";
+    try {
+      const r = await api("/api/relay/logs/collect", { find });
+      if (r.error) throw new Error(r.error);
+      logRun = { id: r.id, at: Date.now() };
+      clearInterval(logTimer); logTimer = setInterval(logPaint, 3000);
+      setTimeout(logPaint, 1500);
+    } catch (e) { $("logsMsg").textContent = "Failed: " + (e?.message || e); $("logsAll").disabled = $("logsSearch").disabled = false; }
+  }
+  $("logsAll").addEventListener("click", () => logStart(""));
+  $("logsSearch").addEventListener("click", () => { const q = $("logsFind").value.trim(); if (q) logStart(q); else $("logsFind").focus(); });
+  $("logsFind").addEventListener("keydown", (e) => { if (e.key === "Enter") $("logsSearch").click(); });
+  window.__logRun = () => logRun;   // rig
   paintSpokes(); setInterval(paintSpokes, 20000);
 
   // 0.8.0: relay autostart + one-click firewall rules.

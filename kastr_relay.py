@@ -487,6 +487,50 @@ def session_grant(req, key, now=None):
 
 # ---- 0.21.41: cross-room listings ("share to several rooms") ------------------------------
 
+# ---- 0.21.51 (Kenton: "Could we have the logs all send to the hub to make log collection easier?") -------------------
+LOG_FILE_CAP = 4 * 1024 * 1024    # per file per machine (the newest lines are kept)
+LOG_KEEP_COLLECTIONS = 5          # the hub keeps the last five collections
+_LOG_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+
+def redact_log(text):
+    """The field check's rules: no token, code or bearer ever leaves a machine in a collected log."""
+    t = re.sub(r"(?i)(jwt=)[A-Za-z0-9._\-]+", r"\1<redacted>", str(text or ""))
+    t = re.sub(r'(?i)("(token|code|access|secret|roomKey|admin|publisher|viewer|federation)"\s*:\s*)"[^"]*"', r'\1"<redacted>"', t)
+    t = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1<redacted>", t)
+    return t
+
+
+def log_slice(paths, since=0, find="", cap=LOG_FILE_CAP):
+    """The lines of `paths` (oldest file first) stamped at or after `since` (local time; an unstamped line follows the one
+    before it) or, with `find`, the lines holding every word of it -> text, newest kept within `cap` bytes."""
+    words = [w.lower() for w in str(find or "").split() if w][:6]
+    keep, total, on = [], 0, False
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if words:
+                        if not all(w in line.lower() for w in words):
+                            continue
+                    else:
+                        m = _LOG_STAMP.match(line)
+                        if m:
+                            try:
+                                on = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) >= since
+                            except ValueError:
+                                pass
+                        if not on:
+                            continue
+                    keep.append(line)
+                    total += len(line)
+                    while total > cap and keep:
+                        total -= len(keep.pop(0))
+        except OSError:
+            pass
+    return redact_log("".join(keep))
+
+
 def clean_clients(rows):
     """0.21.50: a spoke's user list as the hub keeps it -- known fields only, bounded."""
     out = []
@@ -1589,6 +1633,9 @@ class AuthService:
         self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
         self.clients = {}                     # 0.21.50: node -> an app's last check-in here {version, mode, platform, name, ip, at, offer, pending}
         self.on_clients = None                # 0.21.50: callable() -- the list changed (a spoke re-registers with the hub soon)
+        self.log_asks = {}                    # 0.21.51: collection id -> {id, find, since, at, told:set(node)} (my apps are told on check-in)
+        self.on_client_logs = None            # 0.21.51: callable(entry) -- an app sent its logs here (the relay passes them to the hub)
+        self.log_runs = {}                    # 0.21.51: hub side -- collection id -> {id, at, find, since, entries:[...]}
         self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
         self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
         self.is_hub = is_hub                  # 0.21.24: callable -> True / False / None (the Relay page's hub switch; None = never said)
@@ -1740,6 +1787,12 @@ class AuthService:
                     self._reply(obj, code)
                 elif path == "/api/kick":   # 0.17.0: an admin removes a member relay-side
                     obj, code = svc.kick(p, self._peer(), self.headers.get("Authorization"))
+                    self._reply(obj, code)
+                elif path == "/api/clients/logs":      # 0.21.51: an app sends the logs a collection asked for
+                    obj, code = svc.client_logs(p, self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/logs/upload":       # 0.21.51: a spoke sends logs to the hub's collection
+                    obj, code = svc.logs_upload(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
                 elif path == "/api/clients/checkin":   # 0.21.50: an app connected to this relay says who it is
                     obj, code = svc.client_checkin(p, self._peer())
@@ -2784,7 +2837,80 @@ class AuthService:
         out = {"ok": True}
         if isinstance(pend, dict) and pend.get("version"):
             out["update"] = pend["version"]
+        with self.lock:   # 0.21.51: a log collection this app has not been told about yet
+            for ask in self.log_asks.values():
+                if node not in ask["told"] and now - ask["at"] < 600:
+                    ask["told"].add(node)
+                    out["logs"] = {"id": ask["id"], "find": ask["find"], "since": ask["since"]}
+                    break
         return out, 200
+
+    # ---- 0.21.51: logs collected at the hub ------------------------------------------------------------------------------
+    def log_ask(self, cid, find, since):
+        """This relay's apps are told on their next check-in (10 minutes at most)."""
+        with self.lock:
+            self.log_asks[str(cid)] = {"id": str(cid), "find": str(find or "")[:200], "since": int(since or 0), "at": time.time(), "told": set()}
+            for k in sorted(self.log_asks, key=lambda k: self.log_asks[k]["at"])[:-LOG_KEEP_COLLECTIONS]:
+                self.log_asks.pop(k, None)
+
+    def client_logs(self, p, peer=""):
+        """POST /api/clients/logs {id, node, kind, name, files:{name: text}} from an app connected here -> passed on to the hub."""
+        p = p if isinstance(p, dict) else {}
+        cid, node = str(p.get("id") or "")[:40], str(p.get("node") or "")[:64]
+        with self.lock:
+            known = cid in self.log_asks and node in self.log_asks[cid]["told"]
+        if not known or not HOST_RE.match(node):
+            return {"ok": False, "error": "no log collection asked for this app"}, 403
+        entry = {"id": cid, "node": node, "kind": str(p.get("kind") or "app")[:12], "name": str(p.get("name") or "")[:60],
+                 "version": str(p.get("version") or "")[:24], "ip": peer,
+                 "files": {str(k)[:40]: redact_log(v)[-LOG_FILE_CAP:] for k, v in (p.get("files") or {}).items() if isinstance(v, str)}}
+        if callable(self.on_client_logs):
+            threading.Thread(target=self.on_client_logs, args=(entry,), daemon=True).start()
+        return {"ok": True}, 200
+
+    def logs_start(self, find=""):
+        """Hub side: a new collection -> its id (the hub's own relay, its apps and every spoke are asked)."""
+        now = int(time.time())
+        cid = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + "-" + os.urandom(2).hex()
+        with self.lock:
+            self.log_runs[cid] = {"id": cid, "at": now, "find": str(find or "")[:200], "since": now - 3600, "entries": []}
+            for k in sorted(self.log_runs, key=lambda k: self.log_runs[k]["at"])[:-LOG_KEEP_COLLECTIONS]:
+                self.log_runs.pop(k, None)
+        return self.log_runs[cid]
+
+    def logs_store(self, entry):
+        """Hub side: one machine's logs -> <state>/logs/<id>/<relay>__<node>__<kind>__<file>.txt."""
+        cid = str(entry.get("id") or "")
+        with self.lock:
+            run = self.log_runs.get(cid)
+        if not run or not re.match(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$", cid):
+            return False
+        d = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "logs", cid)
+        os.makedirs(d, exist_ok=True)
+        safe = lambda x: re.sub(r"[^A-Za-z0-9._-]+", "-", str(x or "?"))[:60]
+        sizes = {}
+        for fname, text in (entry.get("files") or {}).items():
+            fn = "%s__%s__%s__%s.txt" % (safe(entry.get("relay")), safe(entry.get("node")), safe(entry.get("kind")), safe(fname))
+            try:
+                with open(os.path.join(d, fn), "w", encoding="utf-8") as f:
+                    f.write(str(text))
+                sizes[fname] = len(text)
+            except OSError:
+                pass
+        with self.lock:
+            run["entries"] = [e for e in run["entries"] if not (e["relay"] == entry.get("relay") and e["node"] == entry.get("node") and e["kind"] == entry.get("kind"))]
+            run["entries"].append({"relay": str(entry.get("relay") or ""), "node": str(entry.get("node") or ""), "kind": str(entry.get("kind") or ""),
+                                   "name": str(entry.get("name") or ""), "version": str(entry.get("version") or ""), "at": int(time.time()), "files": sizes})
+        self.log("relay auth: logs %s -- %s / %s (%s)" % (cid, entry.get("relay"), entry.get("node"), ", ".join("%s %d KB" % (k, v // 1024) for k, v in sizes.items())))
+        return True
+
+    def logs_upload(self, p, bearer):
+        """POST /api/logs/upload (a spoke, federation token) -> stored in the hub's collection."""
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        p = p if isinstance(p, dict) else {}
+        p["files"] = {str(k)[:40]: redact_log(v)[-LOG_FILE_CAP:] for k, v in (p.get("files") or {}).items() if isinstance(v, str)}
+        return ({"ok": True}, 200) if self.logs_store(p) else ({"ok": False, "error": "no such collection"}, 404)
 
     def client_pend(self, node, version):
         """An Update for one app connected here: its next check-in is told to update (from this relay). -> True when known."""
@@ -2864,7 +2990,7 @@ class AuthService:
                     rec["peer"] = next((v.get("peer") for v in self.spokes.values() if (v.get("name") or "") == rec["spoke"]), None)
                 else:
                     self.cmd["updateAll"] = rec
-            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient"):   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
+            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient", "logs"):   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
@@ -2926,7 +3052,8 @@ class AuthService:
                    "rtsp": list(self.cmd.get("rtsp") or []),             # 0.21.16: the hub operator's RTSP switch for a spoke
                    "rehome": self.cmd.get("rehome"),                      # 0.21.26: 0.21.25 raised it but never sent it (spokes got it from the 403 hint)
                    "updateOne": list(self.cmd.get("updateOne") or []),   # 0.21.26: one spoke at a time
-                   "updateClient": list(self.cmd.get("updateClient") or [])}   # 0.21.50: one user, through the relay it uses
+                   "updateClient": list(self.cmd.get("updateClient") or []),   # 0.21.50: one user, through the relay it uses
+                   "logs": list(self.cmd.get("logs") or [])}   # 0.21.51: a log collection
         xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
         return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver}, 200   # 0.21.0: + the hub's command channel
 
@@ -3044,6 +3171,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("update", c), daemon=True).start()
+                # 0.21.51: the hub collects logs
+                for c in (cmd.get("logs") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("logs", c), daemon=True).start()
                 # 0.21.50: an Update for one user connected to a spoke (the hub's Relay page, users table)
                 for c in (cmd.get("updateClient") or []):
                     try:
@@ -4228,6 +4363,9 @@ class Relay:
             except Exception as e:
                 self.log("relay federation: wake command failed: %s" % e)
             return
+        if name == "logs":   # 0.21.51: the hub collects logs -- mine now, my apps' on their next check-in
+            self.collect_logs(info or {})
+            return
         if name == "updateClient":   # 0.21.50: the hub asked ONE of my users to update -- from me (this relay's feed)
             try:
                 import kastr_serve as _ks
@@ -4419,6 +4557,48 @@ class Relay:
             auth.pull_hub_bans()
         except Exception:
             pass
+
+    def collect_logs(self, ask):
+        """0.21.51: a log collection reached this relay: my relay.log + launch.log (the last hour, or the lines matching
+        `find`) go to the hub now; my apps are told on their next check-in."""
+        cid, find, since = str(ask.get("id") or ""), str(ask.get("find") or ""), int(ask.get("since") or (time.time() - 3600))
+        if not cid or not self.auth:
+            return
+        self.auth.log_ask(cid, find, since)
+        sd = self.state_dir
+        files = {"relay.log": log_slice([os.path.join(sd, "relay.log.1"), os.path.join(sd, "relay.log")], since, find),
+                 "launch.log": log_slice([os.path.join(sd, "launch.log")], since, find)}
+        try:
+            import kastr_serve as _ks
+            me, ver, mode = self.relay_name() or _ks.host_slug(), _ks.read_version(), _ks.MODE
+        except Exception:
+            me, ver, mode = self.relay_name() or "relay", "", ""
+        self._logs_send({"id": cid, "relay": me, "node": _machine_node(), "kind": "box" if mode in ("publisher", "publisher-relay") else "relay",
+                         "name": me, "version": ver, "files": files})
+
+    def _logs_send(self, entry):
+        """To the hub's collection: stored here when I am the hub (or have none), else uploaded with the federation token."""
+        if "relay" not in entry or not entry.get("relay"):
+            try:
+                import kastr_serve as _ks
+                entry["relay"] = self.relay_name() or _ks.host_slug()
+            except Exception:
+                entry["relay"] = self.relay_name() or "relay"
+        hub, tok = self._hub_minter_url(), self._fed_active
+        if not hub:
+            if self.auth:
+                self.auth.logs_store(entry)
+            return
+        if not tok:
+            self.log("relay federation: logs for %s not sent -- no hub federation token" % entry.get("id"))
+            return
+        try:
+            req = urllib.request.Request(hub + "/api/logs/upload", data=json.dumps(entry).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
+            with urllib.request.urlopen(req, timeout=60):
+                pass
+        except Exception as e:
+            self.log("relay federation: logs for %s not sent to the hub: %s" % (entry.get("id"), str(e)[:120]))
 
     def _clients_changed(self):
         """0.21.50: a user arrived, left, updated or answered an update offer -- tell the hub (at most every 20 s)."""
@@ -4633,6 +4813,7 @@ class Relay:
                                         on_handover=self.handover_done,          # 0.21.25: this hub handed over
                                         rehome_info=lambda: self._cluster_raw().get("rehomed"))   # 0.21.25
                 self.auth.on_clients = self._clients_changed   # 0.21.50
+                self.auth.on_client_logs = self._logs_send      # 0.21.51: an app's logs go on to the hub
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -5274,7 +5455,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/admin/token",     # 0.16.0
                  "/api/relay/bans/clear",      # 0.17.0
                  "/api/relay/spokes/update",   # 0.21.0
-                 "/api/relay/clients/update")  # 0.21.50
+                 "/api/relay/clients/update",  # 0.21.50
+                 "/api/relay/logs/collect")    # 0.21.51
 
 
 def _host_of(value):
@@ -5403,6 +5585,49 @@ def handle_api(handler, relay, path, set_relay_url=None):
                "clients": (auth.fleet_clients(me, ver, _machine_node()) if auth else [])})   # 0.21.50: every user in the federation
         return True
 
+    if path == "/api/relay/logs/collect":   # 0.21.51: the hub collects every relay's, box's and app's last hour (or a search)
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        p = _payload_of(handler) or {}
+        run = auth.logs_start(str(p.get("find") or "").strip())
+        ask = {"id": run["id"], "find": run["find"], "since": run["since"]}
+        threading.Thread(target=relay.collect_logs, args=(ask,), daemon=True).start()   # mine, and my apps on their next check-in
+        rec = auth.raise_cmd("logs", ask)                                                  # every spoke, and theirs
+        reply({"ok": True, "id": run["id"], "seq": rec["seq"], "spokes": len(auth.spokes_public())})
+        return True
+    if path == "/api/relay/logs":   # 0.21.51: a collection's progress (who answered)
+        auth = getattr(relay, "auth", None)
+        qs = parse_qs(urlparse(handler.path).query)
+        cid = (qs.get("id") or [""])[0]
+        with (auth.lock if auth else threading.Lock()):
+            runs = [dict(r, entries=list(r["entries"])) for r in (auth.log_runs.values() if auth else [])]
+        run = next((r for r in runs if r["id"] == cid), None) if cid else (max(runs, key=lambda r: r["at"]) if runs else None)
+        reply({"run": run, "runs": [{"id": r["id"], "at": r["at"], "find": r["find"], "n": len(r["entries"])} for r in sorted(runs, key=lambda r: -r["at"])]})
+        return True
+    if path == "/api/relay/logs/bundle":   # 0.21.51: one collection as a zip (this machine only)
+        auth = getattr(relay, "auth", None)
+        qs = parse_qs(urlparse(handler.path).query)
+        cid = (qs.get("id") or [""])[0]
+        d = os.path.join(getattr(auth.store, "state_dir", "") if auth else "", "logs", cid)
+        if not auth or not re.match(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$", cid) or not os.path.isdir(d):
+            reply({"error": "no such collection"}, 404)
+            return True
+        import io as _io, zipfile as _zip
+        buf = _io.BytesIO()
+        with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
+            for fn in sorted(os.listdir(d)):
+                z.write(os.path.join(d, fn), "kastr-logs-%s/%s" % (cid, fn))
+        body = buf.getvalue()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/zip")
+        handler.send_header("Content-Disposition", 'attachment; filename="kastr-logs-%s.zip"' % cid)
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(body)
+        return True
     if path == "/api/relay/clients/update":   # 0.21.50: one user updates FROM THE RELAY IT USES (here, or a spoke via the hub)
         auth = getattr(relay, "auth", None)
         if not auth:

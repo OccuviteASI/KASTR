@@ -3541,6 +3541,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick",   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
                          "/api/spokes/register", "/api/bans/notify",          # 0.19.0: federation through a web relay
                          "/api/clients/checkin",                              # 0.21.50: an app says who it is to the relay it uses
+                         "/api/clients/logs", "/api/logs/upload",             # 0.21.51: logs collected at the hub
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":

@@ -1592,6 +1592,31 @@ CHECKIN_FAST = 20      # ... while an update is offered (the Relay page's spinne
 OFFER_WAIT_S = 600     # Kenton: "Update now / In 10 minutes" -- then it updates by itself
 
 
+_LOGS_SENT = set()
+
+
+def send_logs(ask, base, node, mode, inst, port):
+    """0.21.51 (Kenton: "Could we have the logs all send to the hub"): this app's launch.log (the last hour, or the lines
+    matching the search) and its pages' diagnostics, to the relay it uses -- which passes them to the hub."""
+    import kastr_relay
+    files = {"launch.log": kastr_relay.log_slice([os.path.join(state_dir(), "launch.log")], int(ask.get("since") or 0), str(ask.get("find") or ""))}
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/diag" % int(port), timeout=5) as r:
+            files["diag.json"] = r.read().decode("utf-8", "replace")[:2000000]
+    except Exception:
+        pass
+    body = {"id": ask["id"], "node": node, "kind": "box" if mode in ("publisher", "publisher-relay") else "app",
+            "name": str(inst.get("operator") or "")[:60], "version": kastr_serve.read_version(), "files": files}
+    try:
+        req = urllib.request.Request(base + "/api/clients/logs", data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60):
+            pass
+        note("logs: sent this KASTR's last hour to the relay for collection %s" % ask["id"])
+    except Exception as e:
+        note("logs: collection %s not sent: %s" % (ask["id"], str(e)[:120]))
+
+
 def client_checkin_loop(get_relay, ini, port, mode):
     """0.21.50 (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the
     client and see what version it is. The update push should come from the connected relay"): tell the relay this app
@@ -1631,6 +1656,10 @@ def client_checkin_loop(get_relay, ini, port, mode):
         except Exception:
             d = {}
         mine = kastr_serve.read_version()
+        ask = d.get("logs") if isinstance(d, dict) and isinstance(d.get("logs"), dict) else None
+        if ask and ask.get("id") and ask.get("id") not in _LOGS_SENT:   # 0.21.51: the hub collects logs -- mine go to my relay
+            _LOGS_SENT.add(ask["id"])
+            threading.Thread(target=send_logs, args=(ask, base, node, mode, inst, port), daemon=True).start()
         want = str(d.get("update") or "") if isinstance(d, dict) else ""
         if want and want != mine and not off.get("version"):
             now = time.time()

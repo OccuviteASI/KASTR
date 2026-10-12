@@ -2,6 +2,23 @@
 
 What changed in each build, newest first.
 
+## v0.21.51 — logs collected at the hub
+
+**Every machine's logs in one place, on request (Kenton: "Could we have the logs all send to the hub to make log collection easier?").** A new Logs section on the Relay page has two actions:
+- **Collect the last hour:** every relay (the hub and every spoke), every unattended box and every KASTR app sends its last hour of logs to the hub.
+- **Search every log for …:** each machine sends only the lines that contain your words, for example a stuck camera's path such as "mikey/camera". This is quick even over thin site links.
+
+**How a collection runs:**
+- **Who sends what:** a relay sends its relay log and its launch log; an app or box sends its launch log and its pages' diagnostics.
+- **When they answer:** relays answer within seconds over the hub's command channel. Apps answer at their next check-in, within a minute, and their logs reach the hub through the relay they use.
+- **Watching it:** the section lists each machine as it answers and shows who it is still waiting for, for up to 3 minutes. "Download all (.zip)" gives one file per machine and log.
+- **Secrets:** tokens, access codes and bearer keys are blanked on each machine before anything is sent.
+- **Limits:** at most 4 MB per log file per machine (the newest lines are kept). The hub keeps the last five collections.
+
+Nothing is sent until someone presses one of the buttons, so there is no standing traffic between sites.
+
+**Tested** on the two-relay lab: "Collect the last hour" got answers from the hub's relay, the spoke's relay and a simulated app connected to the spoke ("3 answered — everyone answered"). The zip held all six files, and the app's token appeared as `jwt=<redacted>`. A search for "connected" reached the same three.
+
 ## v0.21.50 — every user on the hub's Relay page, updates that wait, the relay's log on disk
 
 **Every user, with their KASTR version, on the hub's Relay page (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the client and see what version it is").** A new Users table on the Relay page lists everyone connected to this relay and, on the hub, to every spoke: name, machine, app, box or web, room, the relay they use, their KASTR version (amber when behind their relay) and when they were last seen.

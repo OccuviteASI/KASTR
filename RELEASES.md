@@ -10,6 +10,11 @@ What changed in each build, newest first.
 - **Safe on a public tunnel:** a relay accepts a check-in for a `web-…` ID only while that ID has a live session on it, so nobody can add made-up users from outside.
 - **Older relay hosts:** pages from a relay host older than 0.21.55 don't check in, so their visitors appear as before.
 
+**Users not seen for a day are hidden (Kenton: "Hide those that haven't connected in over 24 hours. But have a check box to show them").** The Users table hides anyone not seen for more than 24 hours.
+- **Showing them:** tick **Show users not seen for over 24 hours (N)** above the table. The number tells you how many are hidden, and the tick is remembered on that computer. Someone with an update in progress always shows.
+- **Connected boxes no longer look stale:** for boxes and apps older than 0.21.50, "Last seen" used to show when they *connected*, so a box online for two days read "2 days ago". Anyone with an open connection now counts as seen now, and hovering over Last seen shows when they connected.
+- **Long gaps:** past two days, Last seen reads "3 days ago".
+
 ## v0.21.54 — back to the spotlight, a chosen standby address, a tidier top
 
 **Hide the top bar (Kenton: "Give an option to collapse the top bar with the ASI logo, version, etc. and then an option to expand when collapsed").** A chevron at the right end of the top bar (logo, version, App, Go Live, Relay) hides it, which gives the page that height back. A small tab at the top centre brings it back. The choice is remembered on that computer, for the app and for every page in a browser.

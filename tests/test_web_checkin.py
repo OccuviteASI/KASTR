@@ -35,6 +35,27 @@ class WebCheckin(unittest.TestCase):
         self.assertFalse(self.s.client_checkin({"node": "web-1a2b3c4d-5e6f", "name": "X"}, "")[0].get("ok"))
 
 
+class Seen(unittest.TestCase):   # 0.21.55 (Kenton: hide users not seen for 24 hours, a checkbox shows them)
+    def test_an_open_session_is_seen_now_and_keeps_since(self):
+        s = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, kr.AuthStore(tempfile.mkdtemp()))
+        try:
+            started = time.time() - 2 * 86400
+            s._sessions["s1"] = {"host": "box-1a2b", "room": "main", "remote": "10.0.0.9", "at": started}
+            r = s.clients_view("0.21.55")[0]
+            self.assertGreater(r["at"], time.time() - 5)          # connected = seen now (was: the connect time)
+            self.assertEqual(r["since"], int(started))
+            self.assertEqual(kr.clean_clients([dict(r, kind="app")])[0]["since"], int(started))
+        finally:
+            s.close()
+
+    def test_the_relay_page_hides_a_day_old_row(self):
+        with io.open(os.path.join(HERE, "relay.html"), encoding="utf-8") as f:
+            rel = f.read()
+        self.assertIn('<input type="checkbox" id="usersOld">', rel)
+        self.assertIn("const isOld = (r) => !!r.at && nowS - r.at > OLD_S && !pending.has(\"user:\" + r.node);", rel)
+        self.assertIn('localStorage.getItem("kastr.relay.usersOld") === "1"', rel)
+
+
 class Pages(unittest.TestCase):
     def test_the_page_checks_in_and_the_relay_page_shows_the_browser(self):
         with io.open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:

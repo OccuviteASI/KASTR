@@ -646,6 +646,7 @@ def clean_clients(rows):
                     "mode": str(r.get("mode") or "")[:24], "platform": str(r.get("platform") or "")[:32], "ip": str(r.get("ip") or "")[:46],
                     "at": int(r.get("at") or 0) if str(r.get("at") or "0").isdigit() else 0, "offer": str(r.get("offer") or "")[:20],
                     "pending": str(r.get("pending") or "")[:24], "checkin": bool(r.get("checkin")),
+                    "since": int(r.get("since") or 0) if str(r.get("since") or "0").isdigit() else 0,   # 0.21.55: connected since
                     "kind": r.get("kind") if r.get("kind") in ("app", "box", "web") else "app",
                     "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16]})
     return out
@@ -3138,8 +3139,15 @@ class AuthService:
             if r is None:
                 web = host.startswith("web-")
                 r = rows[host] = {"node": host, "name": "", "version": my_version if web else "", "mode": "", "platform": "",
-                                  "ip": str(v.get("remote") or ""), "at": int(v.get("at") or now), "offer": "", "pending": "",
+                                  "ip": str(v.get("remote") or ""), "at": int(now), "offer": "", "pending": "",
                                   "checkin": False, "rooms": []}
+            # 0.21.55: an open session = connected NOW (its start used to show as "last seen": a box connected for two days
+            # read "2 days ago"); `since` keeps when it connected
+            r["at"] = int(now)
+            try:
+                r["since"] = min(int(r.get("since") or now), int(v.get("at") or now))
+            except (TypeError, ValueError):
+                pass
             room = str(v.get("room") or "")
             if room and room not in r["rooms"]:
                 r["rooms"].append(room)

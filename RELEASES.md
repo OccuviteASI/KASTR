@@ -2,6 +2,10 @@
 
 What changed in each build, newest first.
 
+## v0.21.57 — one standby at a time (in progress)
+
+**Make standby hides once a standby is chosen (Kenton: "Lets just hide the 'make standby' if one is already chosen for now").** The hub keeps one standby. While one is chosen, only its row shows a button, **Remove standby**, and the other spokes show none. Remove it to pick a different spoke.
+
 ## v0.21.56 — arrange the Relay page on a grid
 
 **Collapse, resize and snap the Relay page's cards (Kenton: "allow for collapsing individual tiles on the relay server page. Also allow for resizing and snap to grid instead of highlighting the other tile edges").** The cards now sit on a 12-column grid.

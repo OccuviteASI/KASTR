@@ -266,7 +266,7 @@ class Wiring(unittest.TestCase):
         # locked rooms stay locked: the saved copy of the hub's rooms is consulted after a restart
         self.assertIn("_ks._HUB_ROOMS_CACHE[0]", src)
         page = io.open(os.path.join(HERE, "relay.html"), encoding="utf-8").read()
-        self.assertIn('(LOCAL && sbHub && r.node ? " <button', page)   # 0.21.55: the buttons only on the hub
+        self.assertIn('(LOCAL && sbHub && r.node && (!sbName || sbName === (r.name || r.key)) ? " <button', page)   # 0.21.55: only on the hub; 0.21.57: one standby
         self.assertIn('<h2>Federation <span id="fedRoleBadge" class="sbbadge" hidden></span></h2>', page)   # 0.21.55: the role badge
         self.assertIn('const roleTxt = { standby: "Standby hub", promoted: "Acting as hub", failedOver: "On standby hub" }[sb.role] || "";', page)
         for needle in ('id="standbyState"', "function paintStandby(", 'class=\\"ghost spsb\\"', '"/api/relay/standby"',

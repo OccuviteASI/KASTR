@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.55 — names for web visitors (in progress)
+## v0.21.55 — names for web visitors, update everyone, standby fixes
 
 **Web visitors show by name on the Relay page (Kenton: "I need to have a name for web clients that shows in the relay server page").** The Users table used to list someone in a browser only as a `web-…` ID with no name.
 - **Check-in:** a page opened in a browser now checks in with the relay host it came from, as the app does. It sends the name the person joined with and which browser it is. It checks in once a minute while in a room, and the row goes 3 minutes after the last check-in.

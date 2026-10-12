@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.57 — one standby at a time (in progress)
+## v0.21.57 — one standby at a time
 
 **Make standby hides once a standby is chosen (Kenton: "Lets just hide the 'make standby' if one is already chosen for now").** The hub keeps one standby. While one is chosen, only its row shows a button, **Remove standby**, and the other spokes show none. Remove it to pick a different spoke.
 

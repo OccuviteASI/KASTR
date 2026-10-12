@@ -2491,6 +2491,7 @@
   document.getElementById("leaveBtn").innerHTML = tbHtml("leave", "Leave");
 
   let connection = null;
+  let mainUrlSig = null;   // 0.21.58: the main connection's URL signal (moved onto each fresh token)
   let discoveryLoopId = 0; // bump to cancel a stale discovery loop on reconnect
   const tiles = new Map(); // path -> { pane, watch, canvas, row }
   const pendingRemovals = new Map(); // path -> timeoutId, debounces transient "inactive" flaps
@@ -8086,6 +8087,7 @@
     log(`Connecting to ${urlStr} ...`);
 
     const urlSignal = new Signals.Signal(url);
+    mainUrlSig = urlSignal;   // 0.21.58: re-dialled with each fresh token (below)
     connection = new Net.Connection({ url: urlSignal, enabled: true });
     stateSync();   // 0.13.0: my state broadcasts follow the room + token
 
@@ -10922,9 +10924,19 @@
   authDetect().catch(() => {}).finally(() => { try { roomsRebuild(); roomsMinterStart(); } catch {} });
   // Re-mint well before expiry; live sessions ride out the old token and
   // any reconnect (incl. the 10s heal below) picks up the fresh one.
-  setInterval(() => {
+  // 0.21.58 (field: Linux sites stale after a weekend, auth refusals): the relay cuts a session whose token runs out
+  // (relay 0.15+ re-checks it), so "riding it out" became a daily cut of the box page's main connection at a random
+  // moment. After a successful re-mint the main connection is moved onto the fresh token at once.
+  setInterval(async () => {
     if (authSecured && authTokens && authExp * 1000 - Date.now() < 600000) {
-      window.__auth.refresh();
+      const before = authExp;
+      await window.__auth.refresh();
+      try {
+        if (authExp > before && mainUrlSig && connection) {
+          const fresh = new URL(withToken(urlInput.value.trim()));
+          if (String(mainUrlSig.peek?.() ?? "") !== fresh.toString()) { mainUrlSig.set(fresh); log("Relay token renewed -- the room connection moves onto it"); }
+        }
+      } catch (e) { console.warn("KASTR: re-dial on the fresh token failed", e); }
     }
   }, 60000);
 

@@ -1394,7 +1394,8 @@ class Publisher:
         self.sessionFails = 0       # SOFT: severed/closed, moq reconnecting on its own
         self.sessionKills = 0       # HARD: refused / reconnect loop gave up
         self.parked = False
-        self.tokenExp = None        # `exp` of the token in self.relay
+        self.tokenExp = None        # `exp` of the token the RUNNING moq process holds (0.21.58: was "in self.relay")
+        self.runToken = None        # 0.21.58: that token itself -- self.relay may already carry a fresher one
         self._hard = {}             # generation -> the refusal line that ends it
         self._drains = []           # this generation's stderr readers
         self._mintAt = 0            # last minter() call (one per minute at most)
@@ -1558,7 +1559,8 @@ class Publisher:
             self.errors.clear()
             self.error = None
             self.parked = False                                          # 0.12.0
-            self.tokenExp = _jwt_exp(_relay_token(self.relay))          # 0.12.0
+            self.runToken = _relay_token(self.relay)                     # 0.21.58: what this generation dials with
+            self.tokenExp = _jwt_exp(self.runToken)                      # 0.12.0
             drains = [threading.Thread(target=self._drain, args=(ff, "ffmpeg", gen), daemon=True),
                       threading.Thread(target=self._drain, args=(mq, "moq", gen), daemon=True)]
             self._drains = drains
@@ -1865,13 +1867,18 @@ class Publisher:
             if url:
                 self.retoken(url)
                 return
-        if now - self._bareAt >= 300:
+        live_exp = _jwt_exp(_relay_token(self.relay))
+        if now - self._bareAt >= 300 and not (live_exp and live_exp <= now):   # 0.21.58: an expired token is refused for ever
             self._bareAt = now
             with self._lock:
                 self.parked = False
             self.restarts += 1
             self.start()                # bounded bare retry with the old URL
             return
+        if live_exp and live_exp <= now and now - getattr(self, "_expSaidAt", 0) > 1800:
+            self._expSaidAt = now
+            self.bridge.log("rtsp: publisher %s: its room token ran out %d min ago and no fresh one could be minted -- "
+                            "waiting for the minter (it asks every minute)" % (self.broadcast, (now - live_exp) // 60))
         with self._lock:
             if self.stopping or not self.parked:
                 return
@@ -1929,9 +1936,21 @@ class Publisher:
     def _renew_tick(self):
         if self.stopping:
             return
-        exp = _jwt_exp(_relay_token(self.relay))
-        if exp and exp - time.time() > 900:
-            self.tokenExp = exp         # the page re-posted a fresh token meanwhile
+        # 0.21.58 (field: Linux sites stale after a weekend, "auth server refusals"): this used to read the expiry of
+        # self.relay -- which a page re-post had ALREADY refreshed (Bridge.publish keeps a healthy pair running and only
+        # swaps self.relay) -- saw a day left and re-armed, while moq kept dialling with the OLD token until the relay cut
+        # it ("bad or expired token"). Now: the token the process actually runs with decides; a fresher one waiting in
+        # self.relay is moved onto here, 15 minutes before the old one ends (one planned restart instead of a cut).
+        now = time.time()
+        live = _relay_token(self.relay)
+        live_exp = _jwt_exp(live)
+        if live and live != self.runToken and live_exp and live_exp - now > 900:
+            self.bridge.log("rtsp: publisher %s: moving onto the fresher room token before the old one ends" % self.broadcast)
+            self.retoken(self.relay)    # start() re-arms from it
+            return
+        exp = _jwt_exp(self.runToken) if self.runToken else live_exp
+        if exp and exp - now > 900:
+            self.tokenExp = exp
             self._arm_renew()
             return
         url = None
@@ -2567,6 +2586,8 @@ class Bridge:
                              "access": str(d.get("access") or ""),
                              "roomCode": str(d.get("roomCode") or ""),
                              "relay": _relay_key(d.get("relay") or "")}
+            if self._session["room"]:
+                self._last_session = dict(self._session)   # 0.21.58
             self.suspended = d.get("suspended") is True   # 0.21.16: the switch survives a relaunch
             rem = d.get("removed")   # 0.21.0
             self._removed = [{"url": str(r.get("url")), "at": int(r.get("at") or 0)} for r in (rem or [])
@@ -2694,6 +2715,7 @@ class Bridge:
         self._session = {"room": str(room or "").strip().lower(), "access": str(access or ""),
                          "roomCode": str(room_code or ""), "relay": _relay_key(relay)}
         if self._session["room"]:
+            self._last_session = dict(self._session)   # 0.21.58: kept for the pairs when the page leaves
             for pub in list(self._pubs.values()):
                 if pub.minter is None:
                     pub.minter = self._minter_for(pub.feed, pub.broadcast, pub.relay)
@@ -2759,7 +2781,7 @@ class Bridge:
         the session (room + access code). None when no room is known. The
         callable returns the tokened URL ("token"), the bare URL ("open") or
         None (refused / down), logging each new refusal reason once."""
-        if not self._session.get("room"):
+        if not self._session.get("room") and not (getattr(self, "_last_session", None) or {}).get("room"):
             return None
         fid = feed.id
         last = [None]
@@ -2767,11 +2789,15 @@ class Bridge:
         def mint():
             ses = self._session
             if not ses.get("room"):
-                return None
+                # 0.21.58: the page left its room (Leave posts room "") -- its kept cameras still publish there, and a
+                # parked one used to wait for a token for ever; the last room the page was in still mints for them
+                ses = getattr(self, "_last_session", None) or {}
+                if not ses.get("room"):
+                    return None
             cur = self._pubs.get(fid)
             base = ses.get("relay") or _relay_key(cur.relay if cur is not None else relay)
             room = getattr(feed, "room", "") or ses["room"]   # 0.21.2: a web client's feed lives in ITS room
-            status, url, detail = mint_member(base, room, ses.get("access", ""), ses.get("roomCode", "") if room == ses["room"] else "",
+            status, url, detail = mint_member(base, room, ses.get("access", ""), ses.get("roomCode", "") if room == ses.get("room") else "",
                                               host=self.host_slug)     # 0.13.0
             # 0.13.2: "open" because the minter did not answer is not a licence to go bare: a publisher
             # that had a token keeps waiting for one (a secured relay severs a bare dial with code=6).

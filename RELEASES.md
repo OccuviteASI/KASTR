@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.21.58 — sites that stay fresh (in progress)
+
+**Sites no longer go stale after days connected (field, Kenton: "sites get stale if they are connected too long ... I had to restart 2 sites after the weekend").** The two sites were Linux boxes. The relay showed auth refusals, and cameras and the grid stopped showing or froze. Every token a site box holds lasts a day at most, and several long-lived connections kept using their old token until the relay cut them off.
+- **Camera feeds renew the token they are actually using:** when the box page handed a running camera feed a fresh token, the feed noted it but kept streaming on the old one. Its renewal timer then saw a full day left and did nothing, so the relay cut the camera about a day later. Now a feed moves onto the fresh token 15 minutes before its current one ends: one planned restart instead of a cut.
+- **A cut camera feed can always recover:** a feed that was cut waits for a fresh token. It used to retry every 5 minutes with its expired token, which is refused every time, and it could not get a new token at all once the box page had left its room. It now never retries with an expired token, and it keeps getting tokens for the last room the page was in.
+- **One hour of grace (Kenton chose this):** when the relay re-checks a connection that is already open, it accepts a token that ran out less than an hour ago, provided the relay itself signed it. A new connection still needs a valid token, and anyone kicked, banned or removed is still refused at once. The relay log notes each connection kept on an old token.
+- **The box page's main connection** switches to its fresh token as soon as it gets one, instead of being cut at a random moment once a day.
+- **The relay restarts itself:** if moq-relay exits on its own (for example, killed by Linux when memory runs low), KASTR restarts it after 5 seconds, waiting longer each time if it keeps failing within the hour, and says so in the log. Before, nothing restarted it, and the box looked half-alive because its token service kept answering. In the lab, a killed relay was back within 6 seconds.
+- **The relay's log reader keeps going:** a line it could not decode used to stop it for good, and with nobody reading, moq-relay could freeze while still looking alive. Now it reads UTF-8 whatever the system setting and skips a bad line.
+- **Recordings:** the token they record with lasts a day instead of an hour, so they are no longer cut every hour.
+
 ## v0.21.57 — one standby at a time
 
 **Make standby hides once a standby is chosen (Kenton: "Lets just hide the 'make standby' if one is already chosen for now").** The hub keeps one standby. While one is chosen, only its row shows a button, **Remove standby**, and the other spokes show none. Remove it to pick a different spoke.

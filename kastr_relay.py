@@ -330,6 +330,21 @@ def verify_token(tok, key, now=None):
         return None
 
 
+# 0.21.58 (Kenton chose a 1-hour grace): a session re-check carrying a token that ran out less than an hour ago (and that
+# THIS key signed) keeps its grant -- a long-lived connection still holding yesterday's token is not cut on the minute.
+# A new connection still needs a live token; a kicked / banned / revoked identity is still refused at once.
+TOKEN_GRACE_S = 3600
+
+
+def token_exp_signed(tok, key):
+    """0.21.58: the `exp` of a token this key signed, expired or not (None when the signature does not check)."""
+    claims = verify_token(tok, key, now=0)
+    try:
+        return float(claims.get("exp")) if claims else None
+    except (TypeError, ValueError):
+        return None
+
+
 def is_relay_claims(claims):
     """The federation shape (root, put and get all ""): a relay, not a person."""
     return (isinstance(claims, dict) and claims.get("root") == ""
@@ -2423,9 +2438,27 @@ class AuthService:
             if rec and float(rec.get("expires") or 0) > now:
                 return self._xs_grant(rec.get("base") or rec["grant"], rec.get("room"), now), 200   # 0.21.41: listings recomputed
         status, grant, why = session_grant(req, self.key, now)
+        vnow = now
+        if status == "refuse" and ev == "revalidate" and why == "bad or expired token":   # 0.21.58: the grace hour
+            exp = token_exp_signed(session_jwt(req), self.key)
+            with self.lock:
+                rec = self._sessions.get(sid)
+            if exp and 0 < now - exp < TOKEN_GRACE_S and not (rec and rec.get("revoked")):
+                st2, g2, w2 = session_grant(req, self.key, exp - 1)
+                if st2 == "grant":
+                    status, grant, why, vnow = st2, g2, w2, exp - 1
+                    with self.lock:
+                        self.graced = getattr(self, "graced", 0) + 1
+                        said = self._refuse_said.get("grace:" + remote)
+                        say = not said or now - said > 600
+                        if say:
+                            self._refuse_said["grace:" + remote] = now
+                    if say:
+                        self.log("relay session: %s from %s kept on a token that ran out %d min ago (grace %d min) -- it should "
+                                 "pick up a fresh one before then" % (ev, remote, (now - exp) // 60, TOKEN_GRACE_S // 60))
         room = host = None
         if status == "grant":
-            claims = verify_token(session_jwt(req), self.key, now) or {}
+            claims = verify_token(session_jwt(req), self.key, vnow) or {}
             room, host = claims_identity(claims)
             if self.bans and self.bans.hit(room, host, remote, now):   # 0.17.0
                 return self._revoked_answer(ev, sid, remote, now)
@@ -4200,7 +4233,7 @@ class Relay:
             return {"error": "the relay is not running secured on this machine"}, 400
         slug = str(room or "")
         now = int(time.time())
-        exp = now + 3600
+        exp = now + (86400 if not slug else 3600)   # 0.21.58: the operator token (recordings) lasts a day -- an hour cut every recording hourly
         if not slug:
             # the whole relay (the Relay page's stream probe + push): the machine that owns
             # the relay is its operator -- the same shape a federated relay holds
@@ -5626,7 +5659,7 @@ class Relay:
         self.proc = subprocess.Popen(
             [self.binary, cfg, "--log-level", "info"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=1, universal_newlines=True, creationflags=flags,
+            bufsize=1, text=True, encoding="utf-8", errors="replace", creationflags=flags,   # 0.21.58: never a decode error
             # cwd anchors the config's RELATIVE auth.jwk (see _write_config).
             cwd=self.state_dir,
         )
@@ -5756,24 +5789,71 @@ class Relay:
         p = self.proc
         try:
             for line in p.stdout:
-                line = ANSI.sub("", line).rstrip()
-                if not line:
-                    continue
-                self._log_disk(line)   # 0.21.50: the whole log, for a field check's -Find
-                with self._lock:
-                    self._log.append(line)
-                    if "remote=127.0.0.1:" not in line and "remote=[::ffff:127.0.0.1]" not in line and "remote=[::1]" not in line:   # 0.21.15
-                        self._log_remote.append(line)
-                        del self._log_remote[:-LOG_LINES]
-                    del self._log[:-LOG_LINES]
-                try:
-                    self._link_line(line)   # 0.21.7: the cluster link's state
+                try:   # 0.21.58: one bad line is skipped -- the reader never stops while the relay runs
+                    line = ANSI.sub("", line).rstrip()
+                    if not line:
+                        continue
+                    self._log_disk(line)   # 0.21.50: the whole log, for a field check's -Find
+                    with self._lock:
+                        self._log.append(line)
+                        if "remote=127.0.0.1:" not in line and "remote=[::ffff:127.0.0.1]" not in line and "remote=[::1]" not in line:   # 0.21.15
+                            self._log_remote.append(line)
+                            del self._log_remote[:-LOG_LINES]
+                        del self._log[:-LOG_LINES]
+                    try:
+                        self._link_line(line)   # 0.21.7: the cluster link's state
+                    except Exception:
+                        pass
+                    if getattr(self, "_hub_pin", None) and TLS_FAIL_RE.search(line):   # 0.16.0
+                        self._fingerprint_check("relay reported a certificate problem")
                 except Exception:
                     pass
-                if getattr(self, "_hub_pin", None) and TLS_FAIL_RE.search(line):   # 0.16.0
-                    self._fingerprint_check("relay reported a certificate problem")
+        except Exception as e:
+            try:
+                self.log("relay: log reader stopped: %s" % e)
+            except Exception:
+                pass
+        self._supervise(p)
+
+    # 0.21.58 (field: Linux sites stale after days): nothing restarted a moq-relay that exited on its own (killed for memory,
+    # a crash) -- the token service kept answering, so the box looked half alive. An unexpected exit restarts it after
+    # 5 s, doubling to 5 minutes while it keeps failing within the hour; the federation watcher comes back with it.
+    def _supervise(self, p):
+        if p is None:
+            return
+        try:
+            code = p.wait(timeout=30)
         except Exception:
-            pass
+            return
+        if self.proc is not p:
+            return   # stopped or replaced on purpose
+        now = time.time()
+        crashes = [t for t in getattr(self, "_crashes", []) if now - t < 3600] + [now]
+        self._crashes = crashes
+        delay = min(300, 5 * 2 ** (len(crashes) - 1))
+        self.log("relay: moq-relay exited on its own (code %s) -- restarting it in %d s (%d unexpected exit(s) in the last hour)"
+                 % (code, delay, len(crashes)))
+
+        def again():
+            with self._ctl:
+                if self.proc is not p:
+                    return   # someone started or stopped it meanwhile
+                port, lan, sec = self.port, self.bind_all, self.secured
+                try:
+                    self._stop_locked()
+                    self._start_locked(port, lan, sec)
+                except Exception as e:
+                    self.log("relay: restart after the unexpected exit failed: %s" % e)
+                ok = self.running()
+            self.log("relay: moq-relay %s" % ("is back" if ok else "did not come back -- trying again"))
+            if not ok:
+                self._crashes = getattr(self, "_crashes", []) + [time.time()]
+                t2 = threading.Timer(min(300, 5 * 2 ** len(self._crashes)), again)
+                t2.daemon = True
+                t2.start()
+        t = threading.Timer(delay, again)
+        t.daemon = True
+        t.start()
 
     RELAY_LOG_MAX = 20 * 1024 * 1024   # 0.21.50: <state>/relay.log, then one old copy (relay.log.1)
 

@@ -661,6 +661,14 @@
   #stage .pane.deaf .mchip, #stage .pubpane.deaf .mchip { display:flex; }
   #stage .pane.deaf .mchip .micOff, #stage .pubpane.deaf .mchip .micOff { display:none; }
   #stage .pane.deaf .mchip .earOff, #stage .pubpane.deaf .mchip .earOff { display:block; }
+  /* 0.21.48 (Kenton: "I need to show others when I have deafen turned on"): never faded with the idle mouse, and amber */
+  #stage .pane.deaf .mchip, #stage .pubpane.deaf .mchip { color:var(--asi-amber); }
+  #stagewrap.idle #stage .pane.deaf .mchip, #stagewrap.idle #stage .pubpane.deaf .mchip { opacity:1 !important; }
+  #stage .pane.vtile .vonly .vdf { display:none; color:var(--asi-amber); }
+  #stage .pane.vtile.deaf .vonly .vdf { display:inline-flex; }
+  .sbcard .sbm .df { display:none; flex:none; color:var(--asi-amber); }
+  .sbcard .sbm .df.on { display:inline-flex; }
+  .sbcard .sbm .df .icon { width:12px; height:12px; display:block; }
   #stage .pane.rtsptile .mchip { display:none !important; }   /* 0.21.22: it covered the cell labels on RTSP grids and feeds */
   #stage .pane.audio-only .vchip, #stage .pubpane.vpaused .vchip { display:flex; }
   /* both chips visible: the mic chip slides to the second slot */
@@ -4481,7 +4489,7 @@
         const init = document.createElement("span"); init.className = "init";
         av.append(art, init); face.appendChild(av); el.appendChild(face); el.__av = av;
         const chip = document.createElement("div"); chip.className = "vonly";
-        chip.innerHTML = icon("eye") + '<span class="vn"></span>';
+        chip.innerHTML = '<span class="vdf" title="Deafened \u2014 hears nothing, mic muted">' + icon("earOff") + "</span>" + icon("eye") + '<span class="vn"></span>';   // 0.21.48: + deafened
         el.appendChild(chip);
         stageEl.appendChild(el);
         viewerTiles.set(key, el);
@@ -4494,7 +4502,8 @@
       paintAvatar(av, avatarUrls.get(key));
       av.style.setProperty("--ring", personColor(key));
       el.querySelector(".vn").textContent = nm;
-      el.title = nm + " is watching (view only)";
+      el.classList.toggle("deaf", !!m.deaf);   // 0.21.48
+      el.title = nm + " is watching (view only)" + (m.deaf ? " \u2014 deafened" : "");
       out.push(el);
     }
     return out;
@@ -7799,7 +7808,7 @@
         continue;
       }
       let m = r.members.get(op);
-      if (!m) r.members.set(op, m = { op, name: p.who.name || p.who.op || "", publisher: false, talking: false, since: 0, peers: new Set(), via: p.who.relayName || p.who.relay || "" });
+      if (!m) r.members.set(op, m = { op, name: p.who.name || p.who.op || "", publisher: false, talking: false, deaf: false, since: 0, peers: new Set(), via: p.who.relayName || p.who.relay || "" });
       if (p.ts && (!m.since || p.ts < m.since)) m.since = p.ts;
       if (!m.name && (p.who.name || p.who.op)) m.name = p.who.name || p.who.op;
       m.peers.add(String(p.who.peer));
@@ -7807,6 +7816,7 @@
       if (p.state) {   // 0.13.0: state entries carry the facts the announce kinds used to
         if (p.who.publishing?.length) { m.publisher = true; r.publishers.add(op); }
         if (p.who.speaking) { m.talking = true; r.talking = true; }
+        if (p.who.deaf) m.deaf = true;   // 0.21.48
       }
     }
     for (const g of roomsReg.values()) {
@@ -7843,7 +7853,7 @@
       slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking, video: !!r.video,
       persistent: r.persistent, creator: r.creator, created: r.created,
       group: roomGroupOf(r.slug),   // 0.15.0 (B4): gid | null
-      members: [...r.members.values()].map((m) => ({ op: m.op, name: m.name, publisher: m.publisher, talking: m.talking, since: m.since, via: m.via })),
+      members: [...r.members.values()].map((m) => ({ op: m.op, name: m.name, publisher: m.publisher, talking: m.talking, deaf: !!m.deaf, since: m.since, via: m.via })),
       count: r.members.size ? r.members.size : undefined,
     }));
   }
@@ -10659,7 +10669,7 @@
       live.add(key);
       const w = p.who;
       const rec = { peer: w.peer, op: w.op, name: w.name, relay: w.relay, relayName: w.relayName, ts: p.ts, host: w.host,
-                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || ""), clk: w.clk ?? null };   // 0.21.22: + clk
+                    typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || ""), clk: w.clk ?? null, deaf: !!w.deaf };   // 0.21.22: + clk; 0.21.48: + deaf
       const cur = members.get(key);
       if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) { members.set(key, rec); changed = true; }
       if (p.ts) sinceTs.set(key, p.ts);
@@ -11367,16 +11377,18 @@
         const sp = document.createElement("span"); sp.className = "spk"; sp.innerHTML = icon("spk");
         const nm = document.createElement("span"); nm.className = "nm";
         const role = document.createElement("span"); role.className = "role";
+        const df = document.createElement("span"); df.className = "df"; df.innerHTML = icon("earOff"); df.title = "Deafened \u2014 hears nothing, mic muted";   // 0.21.48
         const mm = document.createElement("button"); mm.type = "button"; mm.className = "mm"; mm.title = "More options"; mm.innerHTML = icon("more");
         mm.addEventListener("click", (e) => { e.stopPropagation(); sbMemberMenu(li, mm); });
         li.addEventListener("contextmenu", (e) => { if (!li.classList.contains("menuable")) return; e.preventDefault(); e.stopPropagation(); sbMemberMenu(li, pointAnchor(e.clientX, e.clientY)); });
-        li.append(sp, nm, role, mm);
+        li.append(sp, nm, df, role, mm);
       }
       ul.appendChild(li);   // in name order (an existing row moves)
       li.dataset.ptalk = m.talking ? "1" : "";   // 0.21.41: their presence says they speak (other rooms); sbTalkPaint adds what this window hears
       li.classList.toggle("talk", !!m.talking || (here && li.classList.contains("talk")));
       li.classList.toggle("menuable", here && !!sbMemberPerson(m.op));   // 0.21.41: the person's menu, in the room I am in
       li.querySelector(".nm").textContent = m.name || m.op;
+      { const df = li.querySelector(".df"); if (df) df.classList.toggle("on", !!m.deaf); }   // 0.21.48
       li.querySelector(".nm").title = (m.name || m.op) + (m.via ? " via " + m.via : "");
       // 0.21.35 (Kenton: "the indicator for viewing only and publisher don't always align. SR on the left shows publisher, but
       // on the right shows view only"): in the room I am in, the rail follows the tiles -- publishing = something of theirs is

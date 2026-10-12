@@ -46,5 +46,30 @@ class Deafen(unittest.TestCase):
         self.assertIn("#stage .pane.deaf .mchip .earOff, #stage .pubpane.deaf .mchip .earOff { display:block; }", p)
 
 
+class ShownToOthers(unittest.TestCase):
+    """0.21.48 (Kenton: "I need to show others when I have deafen turned on")."""
+
+    def _p(self):
+        with open(os.path.join(ROOT, "moq-watch-lite.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_tile_chip_never_fades(self):
+        p = self._p()
+        self.assertIn("#stagewrap.idle #stage .pane.deaf .mchip, #stagewrap.idle #stage .pubpane.deaf .mchip { opacity:1 !important; }", p)
+
+    def test_watch_only_tile(self):
+        p = self._p()
+        self.assertIn("clk: w.clk ?? null, deaf: !!w.deaf };", p)
+        self.assertIn('el.classList.toggle("deaf", !!m.deaf);   // 0.21.48', p)
+        self.assertIn('<span class="vdf"', p)
+
+    def test_room_rail_every_room(self):
+        p = self._p()
+        self.assertIn("if (p.who.deaf) m.deaf = true;   // 0.21.48", p)
+        self.assertIn("talking: m.talking, deaf: !!m.deaf, since: m.since", p)
+        self.assertIn('li.append(sp, nm, df, role, mm);', p)
+        self.assertIn('df.classList.toggle("on", !!m.deaf)', p)
+
+
 if __name__ == "__main__":
     unittest.main()

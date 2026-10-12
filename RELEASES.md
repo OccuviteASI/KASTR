@@ -2,6 +2,16 @@
 
 What changed in each build, newest first.
 
+## v0.21.48 — everyone can see you're deafened
+
+**Deafen shows to others wherever they look (Kenton: "I need to show others when I have deafen turned on").** Since 0.21.40 the mark appeared only on your camera tile's mic chip, and that chip fades out when the viewer's mouse is still, and in Participants.
+- **On your tile:** the headphones-off chip is now amber and stays visible, even when the viewer's mouse is idle.
+- **Without a camera:** your view-only tile (avatar and eye) shows the headphones-off mark too.
+- **In the room rail:** a headphones-off mark appears beside your name in the left room list, both for people in your room and for people in other rooms.
+- **It clears the moment you undeafen.**
+
+**Tested** on the two-relay lab with four windows: Alex (camera on) and Sam (view only) deafened in room dz. Kenton (in dz) saw the amber chip on Alex's tile with the mouse idle, the mark on Sam's view-only tile, and both names marked in the rail. Olive, in another room, saw both marked on dz's card. Undeafening cleared everything.
+
 ## v0.21.47 — choose what you watch, rooms in Share, spotlights stay in their room
 
 **Watching another room: you choose the sources (Kenton: "don't show all of the room shares, let me select which one or multiple are viewed in my current room").**

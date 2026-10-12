@@ -225,6 +225,33 @@ class ChatStore:
             self.touch(room)
         return True
 
+    def merge_in(self, room, text, keep=None):
+        """0.21.53 (standby hub): add the lines of `text` this transcript does not have yet (a take-over or a hand-back
+        merges another hub's copy). Under the lock; the id counter is re-read afterwards. -> lines added."""
+        room = check_room(room)
+        with self.lock:
+            os.makedirs(self.dir, exist_ok=True)
+            have = set()
+            try:
+                with open(self._path(room), encoding="utf-8") as f:
+                    have = {ln.rstrip("\n") for ln in f}
+            except OSError:
+                pass
+            add = [ln for ln in str(text or "").splitlines() if ln.strip() and ln not in have]
+            if add:
+                with open(self._path(room), "a", encoding="utf-8", newline="") as f:   # LF line ends, like append()
+                    f.write("\n".join(add) + "\n")
+            if keep is not None:
+                try:
+                    if keep:
+                        open(self._keep_path(room), "a").close()
+                    elif os.path.exists(self._keep_path(room)):
+                        os.remove(self._keep_path(room))
+                except OSError:
+                    pass
+            self._last_id.pop(room, None)
+        return len(add)
+
     def delete_room(self, room):
         """The room's transcript, keep marker and chat attachments are gone."""
         room = check_room(room)

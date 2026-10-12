@@ -2,6 +2,24 @@
 
 What changed in each build, newest first.
 
+## v0.21.53 — a standby hub (in progress)
+
+**A spoke can stand in for the hub (Kenton: "Lets start on the standby hub").** Pick one spoke with **Make standby** on its row of the hub's spokes table. That spoke keeps working as an ordinary relay and also keeps a copy of the hub's records.
+- **What it copies:** rooms and room groups, access codes (as their salted hashes, never the codes), kicks, and chat history. The copy follows the hub within seconds; the hub's Relay page shows how old it is, and the standby's own Relay page says whose standby it is.
+- **When it takes over (Kenton chose "Standby + a spoke agree"):** the standby must have lost the main hub for 2 minutes, and at least one other spoke must have lost it too. With no spoke to agree, it takes over alone after 5 minutes. This keeps a broken link between just the standby and the hub from splitting the federation.
+- **What spokes do:** a spoke that cannot reach the main hub for 2 minutes asks the standby to take over and, once it has, moves there. Its access code works there unchanged, because the standby holds the same code records. Viewers on a spoke reconnect within seconds while its relay re-points.
+- **Locked rooms stay locked (Kenton: "Stay locked"):** while the hub is down, a spoke refuses to open a hub-locked room without its code. This now holds even after a spoke restarts, because each spoke reads the saved copy of the hub's room list, which records which rooms are locked.
+- **Back to normal by itself:** when the main hub returns, it finds the standby acting as the hub. It takes back everything that changed meanwhile: new and closed rooms, groups, code changes, kicks and chat lines. It then sends every spoke home, and the standby returns to being a standby.
+- **On the Relay page:** the standby's row has a "Standby" badge, and the button on that row becomes "Remove standby". A spoke that moved shows "Moved to the standby hub … the main hub … was unreachable", and a standby acting as the hub says so in amber.
+
+**View-only people show just the eye (Kenton: "On view only people, autohide their name when not moving the mouse same as the publishers. Just keep the eye symbol").** In the speaker view and the side rail, a watcher's name now behaves like a publisher's: it shows while the pointer is on the tile and folds away when the mouse rests, leaving only the eye (and the deafened mark when it applies). In the gallery, names stay visible, as publishers' names do.
+
+**"Last seen" reads naturally past a minute (Kenton: "Change Last seen to show minutes/seconds when over 60 seconds").** The spokes and Users tables now show "45 s ago", "2 min 05 s ago" and "1 h 03 min ago".
+
+**Fixed on the way:**
+- **Hand-over notes were lost:** relay-cluster.json dropped every setting it did not know when saved. This included the 0.21.25 hand-over note, so a spoke that started late never learned the hub had moved. Those settings are now kept.
+- **Chat numbering after a hand-over:** a hub that took over another hub's chat history could reuse message numbers until it restarted. It now re-reads them at once.
+
 ## v0.21.52 — arrange the Relay page, restart a spoke, grids that heal
 
 **The Relay page's cards fit their contents and go where you put them (Kenton: "drag around the windows in the relay server page to where I want them. Have the tiles only take up the space they need, not just use the same height for everything in the row").**

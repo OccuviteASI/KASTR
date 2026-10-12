@@ -21,6 +21,8 @@
   section.panel { overflow:hidden; }
   section.panel .tblwrap { overflow-x:auto; max-width:100%; }
   section.panel table { max-width:100%; }
+  .sbbadge { display:inline-block; font-size:10px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; padding:1px 6px; border-radius:8px;
+             background:color-mix(in srgb, var(--asi-blue, #3b82f6) 22%, transparent); color:var(--text); vertical-align:1px; }   /* 0.21.53 */
   section.panel code, section.panel .hint, section.panel dd, section.panel .warn, section.panel #fedState, section.panel #fedMsg,
   section.panel #spokesList, section.panel #hBanList, section.panel #hPairList, section.panel #bcastList, section.panel #archList { overflow-wrap:break-word; word-break:normal; }   /* next release: only a token wider than its whole line may break -- never an ordinary word mid-way (Kenton) */
   section.panel .urlrow code { overflow-wrap:normal; word-break:normal; }
@@ -338,6 +340,7 @@
       </div>
       <span id="fedMsg" class="hint blk gap"></span>
       <span id="fedState" class="hint blk"></span>
+      <span id="standbyState" class="hint blk" hidden></span>
       <!-- 0.21.0: the spokes federated to THIS hub, and one button to make them match its version -->
       <div id="spokesBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
         <b style="font-size:13px">Spokes federated here</b>
@@ -1054,6 +1057,13 @@
     pending.set(key, { target, at: Date.now(), label, relay: relay || "" });
     if (!pendTimer) pendTimer = setInterval(() => { if (!pending.size) { clearInterval(pendTimer); pendTimer = null; return; } paintSpokes(); }, 5000);
   }
+  // 0.21.53 (Kenton: "Change Last seen to show minutes/seconds when over 60 seconds"): 45 s ago / 2 min 05 s ago / 1 h 03 min ago
+  function agoText(sec) {
+    const t = Math.max(0, Math.round(sec));
+    if (t < 60) return t + " s ago";
+    if (t < 3600) return Math.floor(t / 60) + " min " + String(t % 60).padStart(2, "0") + " s ago";
+    return Math.floor(t / 3600) + " h " + String(Math.floor(t % 3600 / 60)).padStart(2, "0") + " min ago";
+  }
   const mmss = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
   function updNote(id, text) {   // a line per finished update, newest first (the last six)
     const el = $(id); if (!el) return;
@@ -1093,18 +1103,32 @@
     return '<span class="updst"><span class="updspin"></span>restarting\u2026 ' + mmss(age) + "</span>";
   }
   let lastStatus = null;
+  // 0.21.53 (Kenton: "the standby hub"): who the standby is and this relay's part in it
+  function paintStandby(sb) {
+    const el = $("standbyState"); if (!el) return;
+    const t = (sec) => sec ? new Date(sec * 1000).toLocaleString() : "?";
+    let txt = "", col = "";
+    if (sb.role === "promoted") { txt = "ACTING AS THE HUB since " + t((sb.promoted || {}).at) + " \u2014 the main hub " + (sb.home || "") + " was unreachable. It takes its duties back by itself when it returns."; col = "var(--asi-amber)"; }
+    else if (sb.role === "standby") { txt = "This relay is the STANDBY HUB for " + (sb.standbyOf || "the hub") + (sb.copyAt ? " \u2014 copy of its records " + agoText(Date.now() / 1000 - sb.copyAt) : " \u2014 no copy of its records yet") + "."; col = sb.copyAt && Date.now() / 1000 - sb.copyAt < 120 ? "var(--asi-green)" : "var(--asi-amber)"; }
+    else if (sb.role === "failedOver") { txt = "Moved to the standby hub " + ((sb.failover || {}).to || "") + " at " + t((sb.failover || {}).at) + " \u2014 the main hub " + (sb.home || "") + " was unreachable; this relay returns when it is back."; col = "var(--asi-amber)"; }
+    else if (sb.role === "hub") { txt = sb.name ? "Standby hub: " + sb.name + " (" + (sb.address || "?") + ")" + (sb.copyAt ? " \u2014 copied " + agoText(Date.now() / 1000 - sb.copyAt) : " \u2014 has not copied yet") + "." : "No standby hub \u2014 pick one with Make standby on a spoke below."; col = sb.name && !(sb.copyAt && Date.now() / 1000 - sb.copyAt < 120) ? "var(--asi-amber)" : ""; }
+    else if (sb.role === "spoke" && sb.name) { txt = "Standby hub: " + sb.name + " (" + (sb.address || "?") + ")."; }
+    el.textContent = txt; el.style.color = col; el.hidden = !txt;
+  }
   async function paintSpokes() {
     let d;
     try { d = await api("/api/relay/spokes"); } catch { return; }
     try { paintUsers(d); } catch (e) { console.warn("KASTR users table:", e); }   // 0.21.50
     lastFleet = d;   // 0.21.51: who a log collection waits for
     { const lb = $("logsBox"); if (lb) lb.hidden = !LOCAL || !d.secured; }
+    paintStandby(d.standby || {});   // 0.21.53
     const box = $("spokesBox"); if (!box) return;
     const rows = d.spokes || [];
     box.hidden = !!d.notHub || !(rows.length || (d.cmd && d.cmd.seq));   // 0.21.24: a relay switched off as the hub shows no spoke table
     if (box.hidden) return;
-    const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
+    const ago = (t) => t ? agoText(Date.now() / 1000 - t) : "\u2014";   // 0.21.53: minutes past a minute
     const behind = (r) => !!(r.version && d.version && r.version !== d.version);   // 0.21.26
+    const sbName = (d.standby || {}).name || "";   // 0.21.53
     // 0.21.16: the spoke's RTSP switch (it registers "on" / "off"; null = no cameras or an older spoke); the hub operator flips it
     const camCell = (r) => r.rtsp ? ("<span class=\"sprtsp\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (r.rtsp === "on" ? "1" : "0") + "\">" + (r.rtsp === "on" ? "on" : "<span style=\"color:var(--asi-amber)\">off</span>")
       + (LOCAL ? " <button type=\"button\" class=\"ghost sprt\" title=\"" + (r.rtsp === "on" ? "Turn that box's cameras off (spare its CPU/GPU; nothing is forgotten)" : "Turn that box's cameras back on") + "\">" + (r.rtsp === "on" ? "off" : "on") + "</button>" : "") + "</span>")
@@ -1112,9 +1136,10 @@
     { let n = $("spokesStale"); if (!n) { n = document.createElement("span"); n.id = "spokesStale"; n.className = "hint"; n.style.display = "block"; $("spokesList").after(n); }   // 0.21.24
       n.textContent = d.stale ? d.stale + (d.stale === 1 ? " spoke" : " spokes") + " not seen for over 30 minutes " + (d.stale === 1 ? "is" : "are") + " hidden (forgotten after 7 days)." : ""; }
     $("spokesList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Spoke</th><th>Reached by</th><th>Version</th><th>Cameras</th><th>Last seen</th><th></th></tr>"
-      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>"
+      + rows.map((r) => "<tr><td>" + esc(r.name || r.key) + (sbName && sbName === (r.name || r.key) ? " <span class=\"sbbadge\" title=\"Takes over as the hub when this hub is unreachable for 2 minutes\">Standby</span>" : "") + "</td><td>" + esc(r.minter ? r.minter.replace(/^https?:\/\//, "") : "long-poll (tunnel/NAT)") + "</td><td style=\"color:" + (r.version && d.version && r.version !== d.version ? "var(--asi-amber)" : "inherit") + "\">" + esc(r.version || "?") + "</td><td>" + camCell(r) + "</td><td class=\"mono\">" + ago(r.at) + "</td><td>"
         + (restartCell(r) ?? pendCell("spoke:" + (r.name || r.key), r.version, true, "", "spokesMsg") ?? ((behind(r) && LOCAL ? "<button type=\"button\" class=\"spupd\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Update only this spoke to " + esc(d.version) + "\">Update</button> " : "")
-          + (LOCAL ? "<button type=\"button\" class=\"ghost sprst\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Restart that spoke's KASTR (its relay restarts too; viewers there reconnect within seconds)\">Restart</button>" : ""))) + "</td></tr>").join("") + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done; 0.21.52: + Restart
+          + (LOCAL ? "<button type=\"button\" class=\"ghost sprst\" data-spoke=\"" + esc(r.name || r.key) + "\" title=\"Restart that spoke's KASTR (its relay restarts too; viewers there reconnect within seconds)\">Restart</button>" : "")
+          + (LOCAL && r.node ? " <button type=\"button\" class=\"ghost spsb\" data-spoke=\"" + esc(r.name || r.key) + "\" data-on=\"" + (sbName === (r.name || r.key) ? "1" : "") + "\" title=\"" + (sbName === (r.name || r.key) ? "Stop using this spoke as the standby hub" : "This spoke keeps a copy of the hub's rooms, codes, kicks and chat and takes over as the hub when this hub is unreachable for 2 minutes") + "\">" + (sbName === (r.name || r.key) ? "Remove standby" : "Make standby") + "</button>" : ""))) + "</td></tr>").join("")   // 0.21.53: + standby + "</table></div>"   // 0.21.16: + Cameras; 0.21.26: + Update one; 0.21.50: spins until done; 0.21.52: + Restart
       : "No spoke has registered yet.";
     for (const b of $("spokesList").querySelectorAll(".sprt")) b.addEventListener("click", async () => {   // 0.21.16: flip a spoke's cameras (the `rtsp` command rides its long-poll)
       const sp = b.parentElement.dataset.spoke, on = b.parentElement.dataset.on === "1";
@@ -1135,6 +1160,17 @@
     $("spokesUpdate").classList.toggle("ghost", nBehind === 0 && !nPend);
     if (nPend) { $("spokesUpdate").disabled = true; $("spokesUpdate").innerHTML = '<span class="updspin"></span>Updating ' + nPend + (nPend === 1 ? " spoke" : " spokes") + "\u2026"; }
     else $("spokesUpdate").textContent = nBehind ? "Update " + nBehind + (nBehind === 1 ? " spoke" : " spokes") + " now" : "All spokes up to date";
+    for (const b of $("spokesList").querySelectorAll(".spsb")) b.addEventListener("click", async () => {   // 0.21.53: pick the standby hub
+      const sp = b.dataset.spoke, off = b.dataset.on === "1";
+      if (!confirm(off ? "Stop using " + sp + " as the standby hub? Nothing takes over if this hub goes down."
+                       : "Make " + sp + " the standby hub?\n\nIt keeps a copy of this hub's rooms, access codes, kicks and chat. If this hub is unreachable for 2 minutes (and a spoke agrees, or after 5 minutes alone) it takes over; when this hub is back it hands everything back automatically.")) return;
+      b.disabled = true;
+      try {
+        const r = await api("/api/relay/standby", off ? { clear: true } : { name: sp });
+        $("spokesMsg").textContent = r.error ? r.error : off ? "No standby hub." : sp + " is the standby hub (" + r.standby.address + ") \u2014 it starts copying within a few seconds.";
+      } catch (e) { $("spokesMsg").textContent = "Failed: " + (e?.message || e); }
+      setTimeout(paintSpokes, 1500);
+    });
     for (const b of $("spokesList").querySelectorAll(".sprst")) b.addEventListener("click", async () => {   // 0.21.52: restart one spoke
       const sp = b.dataset.spoke;
       if (!confirm("Restart " + sp + "? Its KASTR closes and opens again; its relay restarts, so people on that relay reconnect within seconds.")) return;
@@ -1179,7 +1215,7 @@
     const kindTxt = { app: "app", box: "box", web: "web" };
     const cnt = { app: 0, box: 0, web: 0 }; for (const r of rows) cnt[r.kind] = (cnt[r.kind] || 0) + 1;
     $("usersCount").textContent = rows.length + (rows.length === 1 ? " user" : " users") + " \u2014 " + cnt.app + " app" + (cnt.app === 1 ? "" : "s") + ", " + cnt.box + " box" + (cnt.box === 1 ? "" : "es") + ", " + cnt.web + " web";
-    const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "\u2014";
+    const ago = (t) => t ? agoText(Date.now() / 1000 - t) : "\u2014";   // 0.21.53: minutes past a minute
     const behind = (r) => r.kind !== "web" && r.checkin && r.version && r.relayVersion && r.version !== r.relayVersion;
     const verCell = (r) => r.kind === "web" ? esc(r.version || "?") + ' <span class="hint">(web)</span>'
       : !r.checkin ? '<span class="updbad" title="Older than 0.21.50: it does not say its version, and an Update cannot reach it -- restart KASTR on that machine (it updates at launch)">older KASTR</span>'

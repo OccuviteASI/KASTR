@@ -243,6 +243,12 @@
     max-width:calc(100% - 12px); padding:3px 7px; border-radius:6px; background:rgba(0,0,0,.6); color:#fff; font-size:11px; font-family:var(--font-mono); }
   #stage .pane.vtile .vonly .icon { width:13px; height:13px; flex:none; opacity:.85; }
   #stage .pane.vtile .vonly .vn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* 0.21.53 (Kenton: "On view only people, autohide their name when not moving the mouse same as the publishers. Just keep the
+     eye symbol"): where a publisher's name hides (speaker view + rail: shown while the pointer is on the tile, gone when the mouse
+     rests) the watcher's name folds away too and the chip keeps only the eye (+ the deafened mark) */
+  #stage.spot .pane.vtile .vonly .vn { max-width:0; margin-left:-5px; opacity:0; transition:max-width .25s ease, opacity .2s ease, margin-left .25s ease; }
+  #stage.spot .pane.vtile:hover .vonly .vn, #stage.spot .pane.vtile:focus-within .vonly .vn { max-width:24em; margin-left:0; opacity:1; }
+  #stagewrap.idle #stage.spot .pane.vtile .vonly .vn { max-width:0 !important; margin-left:-5px !important; opacity:0 !important; }
   .pghead .vonlyic .icon { width:12px; height:12px; margin-right:5px; vertical-align:-2px; opacity:.75; }
   /* 0.21.20: my own preview as picture in picture (Kenton's Teams screenshot) -- small, bottom-right of the stage */
   #stage .pubpane.ownpip { position:absolute; z-index:6; bottom:12px; width:clamp(160px, 15%, 280px); height:auto !important;

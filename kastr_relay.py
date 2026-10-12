@@ -55,6 +55,7 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -532,6 +533,33 @@ def log_slice(paths, since=0, find="", cap=LOG_FILE_CAP):
 
 
 BOOT_AT = int(time.time())   # 0.21.52: this KASTR's start (a remotely restarted spoke comes back with a newer one)
+# 0.21.53 (Kenton: the standby hub) -- relay-cluster.json keys beyond connect/code/master/web/fingerprint/hub:
+#   standby   {name, node, address, web, secret?, at}  the standby hub (the hub keeps the secret; spokes keep the rest)
+#   standbyOf {main, web, secret}                       on the standby: whose standby it is
+#   home      the main hub's address while a spoke (or the promoted standby) is away from it
+#   failover  {from, at}                                a spoke that moved to the standby
+#   promoted  {at, from, chat:{room: bytes}, epoch}     the standby acting as hub
+#   rehomed   {hub, web, at}                            a hub that handed over (0.21.25)
+CLUSTER_EXTRA = ("standby", "standbyOf", "home", "failover", "promoted", "rehomed")
+FAILOVER_AFTER_S = 120       # Kenton: 2 minutes without the main hub
+STANDBY_ALONE_S = 300        # Kenton: the standby takes over alone only after 5 minutes (else it needs a spoke's vote)
+REPLICA_WAIT_S = 20          # the replica long-poll's hold
+REPLICA_CHAT_MAX = 4 * 1024 * 1024
+
+
+def check_code_record(rec, code):
+    """0.21.53: a federation code against a stored record (salted PBKDF2, as AuthStore.check)."""
+    if not isinstance(rec, dict) or not rec.get("salt") or not rec.get("hash") or not code:
+        return False
+    try:
+        got = hashlib.pbkdf2_hmac("sha256", str(code).encode("utf-8"), bytes.fromhex(rec["salt"]), int(rec.get("iter") or PBKDF2_ITER)).hex()
+        return hmac.compare_digest(got, rec["hash"])
+    except Exception:
+        return False
+
+
+def standby_sig(secret, ts):
+    return hmac.new(str(secret or "").encode(), str(ts).encode(), hashlib.sha256).hexdigest()
 
 
 def clean_clients(rows):
@@ -998,6 +1026,7 @@ class AuthStore:
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
         self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
+        self.ver = 0             # 0.21.53: bumped on every save -- the standby's copy follows it
         self.lost = None         # 0.21.0: {"at", "kept"} when relay-auth.json was unreadable and no backup saved it
         self.recovered = None    # 0.21.0: epoch when the .bak copy was used
         self.frozen = None       # 0.21.0: the read error when the file could not be OPENED -- saves refuse until a restart
@@ -1077,6 +1106,7 @@ class AuthStore:
                 self.groups[gid] = {"name": str(g.get("name") or gid)[:48], "order": order, "rooms": rooms}
 
     def _save(self):
+        self.ver += 1   # 0.21.53
         if self.frozen:
             if not getattr(self, "_frozen_said", False):
                 self._frozen_said = True
@@ -1224,6 +1254,45 @@ class AuthStore:
         with self.lock:
             return json.loads(json.dumps({"codes": self.codes, "codesAt": self.codes_at, "rooms": self.rooms,
                                           "closed": self.closed, "groups": self.groups}))
+
+    def merge_bundle(self, b):
+        """0.21.53: a hand-BACK -- what the standby changed while it was the hub. Per room the newer `at` wins, a newer
+        close tombstone wins, the standby's groups replace ours for the ids it has, a code set later there wins."""
+        b = b if isinstance(b, dict) else {}
+        n = {"rooms": 0, "closed": 0, "groups": 0, "codes": 0}
+        with self.lock:
+            for slug, rec in (b.get("rooms") or {}).items():
+                if not isinstance(rec, dict) or not SLUG_RE.match(str(slug)):
+                    continue
+                mine = self.rooms.get(str(slug))
+                if mine is None or float(rec.get("at") or 0) > float(mine.get("at") or 0):
+                    self.rooms[str(slug)] = rec
+                    n["rooms"] += 1
+            for slug, ts in (b.get("closed") or {}).items():
+                try:
+                    if int(ts) > int(self.closed.get(str(slug)) or 0):
+                        self.closed[str(slug)] = int(ts)
+                        self.rooms.pop(str(slug), None)
+                        n["closed"] += 1
+                except (TypeError, ValueError):
+                    pass
+            for gid, g in (b.get("groups") or {}).items():
+                if isinstance(g, dict):
+                    self.groups[str(gid)] = g
+                    n["groups"] += 1
+            at = b.get("codesAt") if isinstance(b.get("codesAt"), dict) else {}
+            for k in ("viewer", "publisher", "federation", "admin"):
+                v = (b.get("codes") or {}).get(k)
+                try:
+                    newer = float(at.get(k) or 0) > float(self.codes_at.get(k) or 0)
+                except (TypeError, ValueError):
+                    newer = False
+                if newer and (v is None or (isinstance(v, dict) and v.get("salt") and v.get("hash"))):
+                    self.codes[k] = v
+                    self.codes_at[k] = int(at[k])
+                    n["codes"] += 1
+            self._save()
+        return n
 
     def import_bundle(self, b):
         """0.21.25: the new hub takes the old hub's records. Codes: the hub's replace these (every member's and spoke's
@@ -1639,6 +1708,11 @@ class AuthService:
         self.log_asks = {}                    # 0.21.51: collection id -> {id, find, since, at, told:set(node)} (my apps are told on check-in)
         self.on_client_logs = None            # 0.21.51: callable(entry) -- an app sent its logs here (the relay passes them to the hub)
         self.log_runs = {}                    # 0.21.51: hub side -- collection id -> {id, at, find, since, entries:[...]}
+        self.standby_info = None              # 0.21.53: callable -> the standby {name, node, address, web, secret} (hub side)
+        self.on_standby_state = None          # 0.21.53: callable(standby | None) -- what the hub's long-poll says (spoke side)
+        self.hub_ok_at = 0.0                  # 0.21.53: the last good reply from the hub (spoke side; failover clock)
+        self.replica_seen = {}                # 0.21.53: hub side -- the standby's last replica pull {at, peer}
+        self.standby_api = None               # 0.21.53: callable(op, payload, peer) -> (obj, code) -- the standby's own endpoints
         self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
         self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
         self.is_hub = is_hub                  # 0.21.24: callable -> True / False / None (the Relay page's hub switch; None = never said)
@@ -1708,6 +1782,10 @@ class AuthService:
 
             def do_GET(self):
                 path = self.path.split("?")[0]
+                if path == "/api/hub/standby":   # 0.21.53: is this box a standby, or acting as the hub?
+                    obj, code = svc.standby_api("role", {}, self._peer()) if callable(getattr(svc, "standby_api", None)) else ({"role": "none"}, 200)
+                    self._reply(obj, code)
+                    return
                 if path == "/api/auth":
                     codes = svc.store.configured()
                     self._reply({"app": "KASTR", "secured": True,
@@ -1790,6 +1868,15 @@ class AuthService:
                     self._reply(obj, code)
                 elif path == "/api/kick":   # 0.17.0: an admin removes a member relay-side
                     obj, code = svc.kick(p, self._peer(), self.headers.get("Authorization"))
+                    self._reply(obj, code)
+                elif path == "/api/hub/replica":       # 0.21.53: the standby keeps its copy of the hub's records
+                    obj, code = svc.replica(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
+                elif path in ("/api/hub/failover", "/api/hub/handback", "/api/hub/handback/done"):   # 0.21.53: the standby's own
+                    if callable(getattr(svc, "standby_api", None)):
+                        obj, code = svc.standby_api(path.rsplit("/api/hub/", 1)[1], p, self._peer())
+                    else:
+                        obj, code = {"ok": False, "error": "not available"}, 404
                     self._reply(obj, code)
                 elif path == "/api/clients/logs":      # 0.21.51: an app sends the logs a collection asked for
                     obj, code = svc.client_logs(p, self._peer())
@@ -1901,7 +1988,17 @@ class AuthService:
 
     def hub_locked_known(self, slug):
         with self.lock:
-            return slug in self._hub_locks
+            if slug in self._hub_locks:
+                return True
+        # 0.21.53 (Kenton: locked rooms "stay locked" while the hub is down): the memory above is empty after a restart --
+        # the saved copy of the hub's room list (hub-rooms.json, refreshed every minute) remembers which rooms are locked
+        try:
+            import kastr_serve as _ks
+            _ks.hub_rooms_load(_ks.STATE_DIR or getattr(self.store, "state_dir", None))
+            c = _ks._HUB_ROOMS_CACHE[0] or {}
+            return any(r.get("slug") == slug and r.get("locked") for r in ((c.get("obj") or {}).get("rooms") or []))
+        except Exception:
+            return False
 
     def _hub_lock_push(self, slug, rec):
         base, bearer = self._hub_base(), self._hub_bearer()
@@ -2726,6 +2823,8 @@ class AuthService:
                                 "minter": url or None, "rooms": rooms,
                                 "clients": clean_clients(p.get("clients")),   # 0.21.50: the users connected to that spoke
                                 "boot": int(p.get("boot") or 0) if str(p.get("boot") or "0").isdigit() else 0,   # 0.21.52: when it started
+                                "port": int(p.get("port") or 0) if str(p.get("port") or "0").isdigit() else 0,   # 0.21.53: its relay port
+                                "web": int(p.get("web") or 0) if str(p.get("web") or "0").isdigit() else 0,      # 0.21.53: its KASTR web port
                                 "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
@@ -2799,7 +2898,7 @@ class AuthService:
         with self.lock:
             rows = [{"key": k, "name": v.get("name") or "", "minter": v.get("minter"), "version": v.get("version") or "",
                      "peer": v.get("peer") or "", "at": v.get("at"), "rooms": list(v.get("rooms") or []),   # 0.21.2: + rooms
-                     "rtsp": v.get("rtsp"), "boot": v.get("boot") or 0} for k, v in self.spokes.items()
+                     "rtsp": v.get("rtsp"), "boot": v.get("boot") or 0, "node": v.get("node") or ""} for k, v in self.spokes.items()
                     if stale or (v.get("at") or 0) >= cut]
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
 
@@ -3060,7 +3159,83 @@ class AuthService:
                    "logs": list(self.cmd.get("logs") or []),   # 0.21.51: a log collection
                    "restart": list(self.cmd.get("restart") or [])}   # 0.21.52: restart one spoke
         xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
-        return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver}, 200   # 0.21.0: + the hub's command channel
+        return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver,   # 0.21.0: + the hub's command channel
+                "standby": self.standby_public()}, 200                                       # 0.21.53: as STATE (a baseline never hides it)
+
+    # ---- 0.21.53 (Kenton: "the standby hub") -- the hub side -------------------------------------------------------------
+    def standby_public(self):
+        sb = self.standby_info() if callable(getattr(self, "standby_info", None)) else None
+        if not isinstance(sb, dict) or not sb.get("address"):
+            return None
+        return {k: sb.get(k) for k in ("name", "node", "address", "web")}
+
+    def replica(self, p, bearer, peer=""):
+        """POST /api/hub/replica {node, since:{store, bans}, chat:{room: offset}, wait} from the named standby (federation
+        token): held until something changed (or `wait`), then the store bundle / bans when their versions moved and the
+        chat bytes appended since each offset (whole lines). The first reply hands over the shared secret."""
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        p = p if isinstance(p, dict) else {}
+        sb = self.standby_info() if callable(getattr(self, "standby_info", None)) else None
+        if not isinstance(sb, dict) or not sb.get("node") or str(p.get("node") or "") != sb.get("node"):
+            return {"ok": False, "error": "this relay is not the hub's standby"}, 403
+        since = p.get("since") if isinstance(p.get("since"), dict) else {}
+        offs = {str(k): int(v) for k, v in (p.get("chat") or {}).items() if str(v).lstrip("-").isdigit()} if isinstance(p.get("chat"), dict) else {}
+        try:
+            wait = min(REPLICA_WAIT_S, max(0.0, float(p.get("wait") or 0)))
+        except (TypeError, ValueError):
+            wait = 0.0
+        cdir = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "chat")
+
+        def sizes():
+            out = {}
+            try:
+                for fn in os.listdir(cdir):
+                    if fn.endswith(".jsonl"):
+                        out[fn[:-6]] = os.path.getsize(os.path.join(cdir, fn))
+            except OSError:
+                pass
+            return out
+        t0 = time.time()
+        while True:
+            sz = sizes()
+            bver, active = self.bans.snapshot()
+            sver, bver = "%d.%d" % (BOOT_AT, self.store.ver), "%d.%d" % (BOOT_AT, bver)   # a restarted hub counts from 0 again
+            moved = (since.get("store") != sver or since.get("bans") != bver
+                     or any(sz.get(r, -1) != offs.get(r, -1) for r in set(sz) | set(offs)))
+            if moved or time.time() - t0 >= wait:
+                break
+            time.sleep(1.0)
+        with self.lock:
+            self.replica_seen = {"at": int(time.time()), "peer": peer}
+            spokes = sorted({v.get("name") or "" for v in self.spokes.values()} - {""})
+        out = {"ok": True, "storeVer": sver, "bansVer": bver, "secret": sb.get("secret"), "spokes": spokes, "at": int(time.time())}
+        if since.get("store") != sver:
+            out["store"] = self.store.export_bundle()
+        if since.get("bans") != bver:
+            out["bans"] = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
+        chat, budget = {}, REPLICA_CHAT_MAX
+        for room, size in sz.items():
+            off = offs.get(room, 0)
+            if off > size or off < 0:
+                off = 0   # the file was rewritten (a delete) -- send it whole
+            if size <= off or budget <= 0:
+                continue
+            try:
+                with open(os.path.join(cdir, room + ".jsonl"), "rb") as f:
+                    f.seek(off)
+                    data = f.read(min(size - off, budget))
+            except OSError:
+                continue
+            cut = data.rfind(b"\n") + 1   # whole lines only (an append may be in flight)
+            if cut <= 0:
+                continue
+            budget -= cut
+            chat[room] = {"from": off, "to": off + cut, "text": data[:cut].decode("utf-8", "replace"),
+                          "keep": os.path.exists(os.path.join(cdir, room + ".keep"))}
+        out["chat"] = chat
+        out["chatGone"] = [r for r in offs if r not in sz]
+        return out, 200
 
     def fanout_bans(self):
         """Hub side: nudge every registered spoke (no data -- each pulls with its own token)."""
@@ -3134,6 +3309,12 @@ class AuthService:
             self.hub_ver = int(d.get("ver")) if d.get("ver") is not None else self.hub_ver
         except (TypeError, ValueError):
             pass
+        self.hub_ok_at = time.time()   # 0.21.53: the hub answered (the failover clock)
+        if callable(getattr(self, "on_standby_state", None)):
+            try:
+                self.on_standby_state(d.get("standby") if isinstance(d.get("standby"), dict) else None)
+            except Exception:
+                pass
         self.xshare_mirror_apply(d)   # 0.21.41
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed
@@ -3436,7 +3617,10 @@ def normalize_relay_url(url):
 
 def _machine_node():
     """0.21.39: this machine's stable id for the hub's spokes table -- the host slug (hostname + a per-machine suffix), which a
-    relay rename does not change."""
+    relay rename does not change. 0.21.53: KASTR_NODE overrides it (several KASTRs on one machine -- the lab harness)."""
+    o = re.sub(r"[^a-z0-9-]+", "-", str(os.environ.get("KASTR_NODE") or "").lower()).strip("-")[:64]
+    if o:
+        return o
     try:
         import kastr_serve
         return re.sub(r"[^a-z0-9-]+", "-", str(kastr_serve.host_slug() or "").lower()).strip("-")[:64]
@@ -3625,10 +3809,13 @@ def hub_web_note(state_dir, host, web, https=None, base=None):
 
 
 class Relay:
+    _cluster_wl = threading.RLock()   # 0.21.53: class-level fallback (each Relay sets its own in __init__)
+
     def __init__(self, state_dir, log=None):
         self.binary = find_relay()
         self.state_dir = state_dir
         self.log = log or print                         # 0.10.0: the launcher's note()
+        self._cluster_wl = threading.RLock()            # 0.21.53: one relay-cluster.json read-modify-write at a time
         self.store = AuthStore(state_dir, self.log)     # 0.10.0: codes + rooms, persisted
         # 0.11.0: federation (spoke side) -- what the last config write found out,
         # the token in use, and the watchdog that renews it.
@@ -3885,6 +4072,10 @@ class Relay:
         return None, "insecure"
 
     def _cluster_note_fp(self, pin):
+        with self._cluster_wl:   # 0.21.53: threads saving relay-cluster.json lost each other's keys
+            return self._cluster_note_fp_locked(pin)
+
+    def _cluster_note_fp_locked(self, pin):
         d, why = load_json(self._cluster_file(), self.log, "relay-cluster.json")
         if d is None and why != "missing":
             # 0.21.0: never write {"fingerprint"} ALONE over a file we could not read -- that dropped
@@ -3954,7 +4145,10 @@ class Relay:
                     # 0.16.0: the hub's pinned QUIC certificate {sha256, at}
                     "fingerprint": d.get("fingerprint") if isinstance(d.get("fingerprint"), dict) else None,
                     # 0.21.23 (Kenton): the operator said "this relay IS the hub" (None = never said)
-                    "hub": d.get("hub") if isinstance(d.get("hub"), bool) else None}
+                    "hub": d.get("hub") if isinstance(d.get("hub"), bool) else None,
+                    # 0.21.53: kept as stored -- every writer starts from this dict, and unknown keys used to be dropped
+                    # (a hand-over's `rehomed` was lost; the standby hub's settings would be too)
+                    **{k: d[k] for k in CLUSTER_EXTRA if k in d}}
         except Exception:
             return {"connect": "", "code": "", "master": True, "web": 8000, "webStored": None, "fingerprint": None, "hub": None}
 
@@ -4303,6 +4497,14 @@ class Relay:
                 chats += 1
         except OSError as e:
             self.log("relay federation: hand-over -- chat history not fully written: %s" % e)
+        try:   # 0.21.53: the chat store's id counters re-read the merged transcripts
+            import kastr_serve as _ks
+            cs = _ks.chat_store(state_dir=self.state_dir, relay_srv=self)
+            if cs is not None:
+                with cs.lock:
+                    cs._last_id.clear()
+        except Exception:
+            pass
         cur = self._cluster_raw()
         cur["hub"] = True
         cur["connect"] = ""
@@ -4325,6 +4527,9 @@ class Relay:
             if not hub or cur.get("hub") is True or hub == _normalize_hub(cur.get("connect") or ""):
                 return
             self.log("relay federation: the hub moved to %s -- re-pointing this relay there" % hub)
+            if cur.get("failover") and _normalize_hub(cur.get("home") or "") == hub:   # 0.21.53: back home from the standby
+                self.cluster_note(failover=None, home=None)
+                self.log("relay federation: back on the main hub %s (failback)" % hub)
             payload = {"connect": hub}
             try:
                 if (info or {}).get("web"):
@@ -4562,8 +4767,13 @@ class Relay:
             clients = auth.clients_view(version, _machine_node())
         except Exception:
             clients = []
+        try:
+            web = int(_ks.HTTP_PORT or 0) or None
+        except Exception:
+            web = None
         body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp,
-                           "node": _machine_node(), "clients": clients, "boot": BOOT_AT}).encode()   # 0.21.39: the machine id (survives a rename)
+                           "node": _machine_node(), "clients": clients, "boot": BOOT_AT,
+                           "port": self.port, "web": web}).encode()   # 0.21.39: the machine id (survives a rename)
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -4637,6 +4847,432 @@ class Relay:
                 pass
         except Exception as e:
             self.log("relay federation: logs for %s not sent to the hub: %s" % (entry.get("id"), str(e)[:120]))
+
+    # ---- 0.21.53 (Kenton: "the standby hub") -------------------------------------------------------------------------
+    def cluster_note(self, **kv):
+        """Standby / failover facts in relay-cluster.json -- no relay restart. None removes a key."""
+        with self._cluster_wl:
+            cur = self._cluster_raw()
+            for k, v in kv.items():
+                if v is None:
+                    cur.pop(k, None)
+                else:
+                    cur[k] = v
+            save_json(self._cluster_file(), cur, self.log)
+
+    def standby_view(self):
+        """The Relay page: who the standby is (never the secret), whether it keeps its copy, and this relay's own role."""
+        cur = self._cluster_raw()
+        st = cur.get("standby") if isinstance(cur.get("standby"), dict) else None
+        seen = dict(getattr(self.auth, "replica_seen", None) or {}) if self.auth else {}
+        me = _machine_node()
+        role = ("promoted" if cur.get("hub") is True and isinstance(cur.get("promoted"), dict)
+                else "hub" if cur.get("hub") is True else "standby" if st and st.get("node") == me
+                else "failedOver" if cur.get("failover") else "spoke" if cur.get("connect") else "none")
+        rep = self._replica_load() if role == "standby" else {}
+        return {"name": (st or {}).get("name"), "node": (st or {}).get("node"), "address": (st or {}).get("address"),
+                "at": (st or {}).get("at"), "copyAt": seen.get("at") or rep.get("at"), "role": role,
+                "home": cur.get("home"), "failover": cur.get("failover"), "promoted": cur.get("promoted"),
+                "standbyOf": ((cur.get("standbyOf") or {}).get("main") if isinstance(cur.get("standbyOf"), dict) else None)}
+
+    def make_standby(self, p):
+        """POST /api/relay/standby on the hub: {name[, address]} names one registered spoke as the standby hub;
+        {clear: true} removes it. The spokes learn it on their long-poll."""
+        auth = self.auth
+        if auth is None or self._cluster_raw().get("hub") is not True:
+            return {"ok": False, "error": "only the hub picks a standby (turn on 'This relay is the hub' first)"}, 409
+        if p.get("clear"):
+            self.cluster_note(standby=None)
+            auth.bans.poke()
+            self.log("relay federation: standby hub removed")
+            return {"ok": True, "standby": None}, 200
+        name = str(p.get("name") or "").strip()[:40]
+        with auth.lock:
+            rows = [dict(v) for v in auth.spokes.values() if (v.get("name") or "") == name]
+        if not name or not rows:
+            return {"ok": False, "error": "%s is not a registered spoke" % (name or "that")}, 409
+        v = max(rows, key=lambda r: r.get("at") or 0)
+        if not v.get("node"):
+            return {"ok": False, "error": "%s runs a KASTR too old to be a standby -- update it first" % name}, 409
+        addr = str(p.get("address") or "").strip()
+        if not addr:
+            from urllib.parse import urlparse as _up
+            m = _up(v.get("minter") or "")
+            host = m.hostname or v.get("peer") or ""
+            port = int(v.get("port") or 0) or ((m.port - 1) if m.port else 4443)
+            if not host:
+                return {"ok": False, "error": "%s has not told the hub its address -- type it in" % name}, 409
+            addr = "https://%s:%d" % (("[" + host + "]") if ":" in host else host, port)
+        elif not addr.lower().startswith(("http://", "https://")):
+            addr = "https://" + addr
+        old = self._cluster_raw().get("standby")
+        secret = old.get("secret") if isinstance(old, dict) and old.get("node") == v["node"] and old.get("secret") else os.urandom(16).hex()
+        st = {"name": name, "node": v["node"], "address": _normalize_hub(addr), "web": int(v.get("web") or 0) or None,
+              "secret": secret, "at": int(time.time())}
+        self.cluster_note(standby=st)
+        try:
+            auth.bans.poke()
+        except Exception:
+            pass
+        self.log("relay federation: %s (%s) is the standby hub now" % (name, st["address"]))
+        return {"ok": True, "standby": {k: st[k] for k in ("name", "node", "address", "web", "at")}}, 200
+
+    def _standby_seen(self, st):
+        with self._cluster_wl:   # 0.21.53: threads saving relay-cluster.json lost each other's keys
+            return self._standby_seen_locked(st)
+
+    def _standby_seen_locked(self, st):
+        """Spoke side: the hub's long-poll names the standby (or none). Kept in relay-cluster.json; the standby itself
+        starts keeping its copy of the hub's records."""
+        cur = self._cluster_raw()
+        mine = cur.get("standby")
+        if (st or None) != ({k: mine.get(k) for k in ("name", "node", "address", "web")} if isinstance(mine, dict) else None):
+            self.cluster_note(standby=st)
+            self.log("relay federation: the hub's standby is %s" % ((st or {}).get("name") or "none"))
+        me = _machine_node()
+        if st and st.get("node") == me:
+            if not isinstance(cur.get("standbyOf"), dict) or cur["standbyOf"].get("main") != cur.get("connect"):
+                self.cluster_note(standbyOf={"main": cur.get("connect"), "web": cur.get("web"), "secret": (cur.get("standbyOf") or {}).get("secret")})
+                self.log("relay federation: THIS relay is the standby hub for %s -- keeping a copy of its records" % cur.get("connect"))
+            self._replica_start()
+        elif isinstance(cur.get("standbyOf"), dict) and not cur.get("promoted"):
+            self.cluster_note(standbyOf=None)
+            self.log("relay federation: no longer the standby hub")
+
+    def _replica_path(self):
+        return os.path.join(self.state_dir, "hub-replica.json")
+
+    def _replica_load(self):
+        d, _why = load_json(self._replica_path(), None, "hub-replica.json")
+        return d if isinstance(d, dict) else {}
+
+    def _replica_start(self):
+        if getattr(self, "_replica_thread", None) and self._replica_thread.is_alive():
+            return
+        self._replica_thread = threading.Thread(target=self._replica_loop, daemon=True)
+        self._replica_thread.start()
+
+    def _replica_loop(self):
+        """The standby's copy of the main hub's records: rooms, groups, codes (hashes), kicks, chat. A long-poll on the
+        main hub's minter; kept apart from this relay's own records until a take-over."""
+        rdir = os.path.join(self.state_dir, "replica", "chat")
+        os.makedirs(rdir, exist_ok=True)
+        fails = 0
+        while True:
+            cur = self._cluster_raw()
+            st = cur.get("standby") if isinstance(cur.get("standby"), dict) else None
+            if not st or st.get("node") != _machine_node() or cur.get("hub") is True:
+                return   # not the standby any more (or acting as the hub)
+            minter, tok = self._hub_minter_url(), self._fed_active
+            if not minter or not tok:
+                time.sleep(15)
+                continue
+            rep = self._replica_load()
+            offs = {}
+            try:
+                for fn in os.listdir(rdir):
+                    if fn.endswith(".jsonl"):
+                        offs[fn[:-6]] = os.path.getsize(os.path.join(rdir, fn))
+            except OSError:
+                pass
+            body = {"node": _machine_node(), "since": {"store": rep.get("storeVer"), "bans": rep.get("bansVer")}, "chat": offs, "wait": REPLICA_WAIT_S}
+            try:
+                req = urllib.request.Request(minter + "/api/hub/replica", data=json.dumps(body).encode(), method="POST",
+                                             headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
+                with urllib.request.urlopen(req, timeout=REPLICA_WAIT_S + 15) as r:
+                    d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+            except Exception as e:
+                fails += 1
+                if fails in (1, 4):
+                    self.log("relay federation: standby copy -- the main hub did not answer (%s)" % str(e)[:100])
+                time.sleep(min(30, 2 * fails))
+                continue
+            if fails:
+                self.log("relay federation: standby copy -- the main hub answers again")
+            fails = 0
+            if self.auth:
+                self.auth.hub_ok_at = time.time()
+            changed = False
+            if "store" in d:
+                rep["store"], changed = d["store"], True
+            if "bans" in d:
+                rep["bans"], changed = d["bans"], True
+            for room, c in (d.get("chat") or {}).items():
+                if not re.match(r"^[a-z0-9-]{1,32}$", str(room)):
+                    continue
+                path = os.path.join(rdir, room + ".jsonl")
+                try:
+                    with open(path, "r+b" if os.path.exists(path) else "wb") as f:
+                        f.seek(int(c.get("from") or 0))
+                        f.truncate()
+                        f.write(str(c.get("text") or "").encode("utf-8"))
+                    keep = os.path.join(rdir, room + ".keep")
+                    if c.get("keep"):
+                        open(keep, "a").close()
+                    elif os.path.exists(keep):
+                        os.remove(keep)
+                except OSError:
+                    pass
+            for room in d.get("chatGone") or []:
+                for ext in (".jsonl", ".keep"):
+                    try:
+                        os.remove(os.path.join(rdir, str(room) + ext))
+                    except OSError:
+                        pass
+            if d.get("secret"):
+                with self._cluster_wl:   # read fresh under the lock: the long-poll thread writes standbyOf too
+                    c2 = self._cluster_raw()
+                    so = c2.get("standbyOf") if isinstance(c2.get("standbyOf"), dict) else {}
+                    if so.get("secret") != d["secret"] and c2.get("hub") is not True:
+                        self.cluster_note(standbyOf=dict(so, secret=d["secret"], main=c2.get("connect"), web=c2.get("web")))
+            rep.update({"storeVer": d.get("storeVer"), "bansVer": d.get("bansVer"), "spokes": d.get("spokes") or [], "at": int(time.time())})
+            save_json(self._replica_path(), rep, self.log, backup=False)
+
+    def _failover_watch_start(self):
+        if getattr(self, "_fo_thread", None) and self._fo_thread.is_alive():
+            return
+        self._hub_ok_at = time.time()   # a fresh start gets the full grace
+        self._fo_next = 0.0
+        self._votes = {}
+        self._fo_thread = threading.Thread(target=self._failover_watch, daemon=True)
+        self._fo_thread.start()
+
+    def _failover_watch(self):
+        while True:
+            time.sleep(15)
+            try:
+                self._failover_tick()
+            except Exception as e:
+                self.log("relay federation: failover check failed: %s" % e)
+
+    def _failover_tick(self):
+        """Every 15 s. A SPOKE that has not heard the main hub for 2 minutes (and whose /api/auth is dark too) asks the
+        standby to take over and, once it has, moves there. The STANDBY takes over when it has lost the main hub too and a
+        spoke agrees -- or alone after 5 minutes. A HUB with a standby checks whether the standby is acting as the hub
+        (it was down) and takes its duties back (failback)."""
+        if not self.running():
+            return
+        cur = self._cluster_raw()
+        auth = self.auth
+        if auth is not None:
+            self._hub_ok_at = max(self._hub_ok_at, float(getattr(auth, "hub_ok_at", 0) or 0))
+        now = time.time()
+        st = cur.get("standby") if isinstance(cur.get("standby"), dict) else None
+        me = _machine_node()
+        if cur.get("hub") is True:
+            if st and st.get("node") != me and st.get("address") and not cur.get("promoted"):
+                self._failback_tick(cur, st)
+            return
+        main = cur.get("connect") or ""
+        if not main or not st or not st.get("address"):
+            return
+        down = now - self._hub_ok_at
+        if st.get("node") == me:   # I am the standby
+            if down >= FAILOVER_AFTER_S and self.hub_auth(main) is None:
+                votes = [t for t in self._votes.values() if now - t < 300]
+                if votes or down >= STANDBY_ALONE_S:
+                    self._promote(cur, down, len(votes))
+            return
+        if cur.get("failover") or down < FAILOVER_AFTER_S or now < self._fo_next:
+            return
+        if self.hub_auth(main) is not None:
+            return   # its minter answers -- a long-poll problem, not a dead hub
+        time.sleep(random.uniform(0, 15))   # spokes do not all ask in the same second
+        try:
+            import kastr_serve as _ks
+            name = self.relay_name() or _ks.host_slug()
+        except Exception:
+            name = self.relay_name() or "relay"
+        sminter = _hub_parts(st["address"])[2]
+        body = {"code": cur.get("code") or "", "from": main, "downFor": int(down), "spoke": name}
+        try:
+            req = urllib.request.Request(sminter + "/api/hub/failover", data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                d, code = json.loads(r.read().decode("utf-8", "replace") or "{}"), r.status
+        except urllib.error.HTTPError as e:
+            try:
+                d, code = json.loads(e.read().decode("utf-8", "replace") or "{}"), e.code
+            except Exception:
+                d, code = {}, e.code
+        except Exception as e:
+            self.log("relay federation: the main hub is unreachable for %d s and so is the standby %s (%s)" % (down, st.get("name"), str(e)[:80]))
+            self._fo_next = now + 60
+            return
+        if code == 200 and d.get("promoted"):
+            self.log("relay federation: the main hub %s is unreachable for %d s -- moving to the standby hub %s" % (main, down, st.get("name")))
+            self.cluster_note(home=main, failover={"from": main, "at": int(now), "to": st.get("address")})
+            self.set_cluster({"connect": st["address"], "web": st.get("web") or None})
+            return
+        if code == 409:
+            self.log("relay federation: the main hub looks down from here, but the standby %s still reaches it -- staying" % st.get("name"))
+            self._fo_next = now + 60
+        else:
+            self._fo_next = now + 15   # the standby is taking over -- ask again shortly
+
+    def _promote(self, cur, down, votes):
+        """The standby becomes the hub: the copy of the main hub's records goes live here, then hub duties."""
+        rep = self._replica_load()
+        if not isinstance(rep.get("store"), dict):
+            self.log("relay federation: the main hub is gone, but this standby holds no copy of its records yet -- not taking over")
+            return
+        main = cur.get("connect") or ""
+        self.log("relay federation: THE MAIN HUB %s IS UNREACHABLE (%d s; %d spoke vote(s)) -- this standby takes over as the hub" % (main, down, votes))
+        auth = self.auth
+        if auth is not None:
+            n = auth.store.import_bundle(rep["store"])
+            have = {(b.get("room"), b.get("host"), b.get("target")) for b in auth.bans.active()}
+            for b in rep.get("bans") or []:
+                if isinstance(b, dict) and (b.get("room"), b.get("host"), b.get("target")) not in have:
+                    auth.bans.add(dict(b))
+            self.log("relay federation: took the main hub's records -- %s, %d kick(s)" % (n, len(rep.get("bans") or [])))
+        offsets = {}
+        try:
+            import kastr_serve as _ks
+            chat = _ks.chat_store(state_dir=self.state_dir, relay_srv=self)
+            rdir = os.path.join(self.state_dir, "replica", "chat")
+            for fn in os.listdir(rdir) if os.path.isdir(rdir) else []:
+                if fn.endswith(".jsonl") and chat is not None:
+                    room = fn[:-6]
+                    with open(os.path.join(rdir, fn), encoding="utf-8", errors="replace") as f:
+                        chat.merge_in(room, f.read(), keep=os.path.exists(os.path.join(rdir, room + ".keep")))
+            cdir = os.path.join(self.state_dir, "chat")
+            for fn in os.listdir(cdir) if os.path.isdir(cdir) else []:
+                if fn.endswith(".jsonl"):
+                    offsets[fn[:-6]] = os.path.getsize(os.path.join(cdir, fn))
+        except Exception as e:
+            self.log("relay federation: chat copy not merged: %s" % e)
+        epoch = int((cur.get("promoted") or {}).get("epoch") or 0) + 1
+        self.cluster_note(home=main, promoted={"at": int(time.time()), "from": main, "chat": offsets, "epoch": epoch})
+        self.set_cluster({"hub": True})   # connect "" -- a hub dials no hub; the relay restarts as the hub
+
+    def _standby_api(self, op, p, peer=""):
+        """The standby's own endpoints (its minter): role, a spoke's failover request, the main hub's hand-back."""
+        cur = self._cluster_raw()
+        st = cur.get("standby") if isinstance(cur.get("standby"), dict) else None
+        me = _machine_node()
+        promoted = cur.get("hub") is True and isinstance(cur.get("promoted"), dict)
+        if op == "role":
+            role = "promoted" if promoted else ("standby" if st and st.get("node") == me else "none")
+            rep = self._replica_load() if role == "standby" else {}
+            return {"role": role, "epoch": (cur.get("promoted") or {}).get("epoch"), "since": (cur.get("promoted") or {}).get("at"),
+                    "copyAt": rep.get("at"), "home": cur.get("home")}, 200
+        if op == "failover":
+            if promoted:
+                return {"ok": True, "promoted": True, "epoch": cur["promoted"].get("epoch")}, 200
+            if not st or st.get("node") != me:
+                return {"ok": False, "error": "this relay is not the standby hub"}, 403
+            rec = ((self._replica_load().get("store") or {}).get("codes") or {}).get("federation")
+            if not check_code_record(rec, p.get("code")):
+                return {"ok": False, "error": "wrong federation code"}, 403
+            if time.time() - self._hub_ok_at < 60:
+                return {"ok": False, "mainUp": True, "standby": True}, 409
+            self._votes[str(p.get("spoke") or peer)[:40]] = time.time()
+            self.log("relay federation: spoke %s reports the main hub down for %s s -- vote counted" % (p.get("spoke") or peer, p.get("downFor")))
+            threading.Thread(target=self._failover_tick, daemon=True).start()
+            return {"ok": True, "promoting": True}, 202
+        if op in ("handback", "handback/done"):
+            so = cur.get("standbyOf") if isinstance(cur.get("standbyOf"), dict) else {}
+            try:
+                ts = int(p.get("ts") or 0)
+            except (TypeError, ValueError):
+                ts = 0
+            if not so.get("secret") or abs(time.time() - ts) > 120 or not hmac.compare_digest(str(p.get("sig") or ""), standby_sig(so["secret"], ts)):
+                return {"ok": False, "error": "not the main hub"}, 403
+            if not promoted:
+                return {"ok": False, "error": "this standby is not acting as the hub"}, 409
+            if op == "handback":
+                auth = self.auth
+                base = (cur.get("promoted") or {}).get("chat") or {}
+                chat = {}
+                cdir = os.path.join(self.state_dir, "chat")
+                for fn in os.listdir(cdir) if os.path.isdir(cdir) else []:
+                    if not fn.endswith(".jsonl"):
+                        continue
+                    room = fn[:-6]
+                    try:
+                        with open(os.path.join(cdir, fn), "rb") as f:
+                            f.seek(int(base.get(room) or 0))
+                            chat[room] = {"text": f.read().decode("utf-8", "replace"), "keep": os.path.exists(os.path.join(cdir, room + ".keep"))}
+                    except OSError:
+                        pass
+                bans = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in (auth.bans.active() if auth else [])]
+                self.log("relay federation: the main hub is back -- handing back (%d chat room(s) with new lines)" % sum(1 for c in chat.values() if c["text"]))
+                return {"ok": True, "store": auth.store.export_bundle() if auth else {}, "bans": bans, "chat": chat}, 200
+            home = cur.get("home") or so.get("main") or ""
+            if self.auth is not None:
+                self.auth.raise_cmd("rehome", {"hub": home, "web": so.get("web")})
+            self.log("relay federation: hand-back done -- spokes told to return to %s; this relay is the standby again" % home)
+            threading.Timer(6.0, self._demote, args=(home, so.get("web"))).start()
+            return {"ok": True}, 200
+        return {"ok": False, "error": "unknown"}, 404
+
+    def _demote(self, home, web):
+        with self._cluster_wl:   # 0.21.53: threads saving relay-cluster.json lost each other's keys
+            self._demote_locked(home, web)
+        self._restart()
+
+    def _demote_locked(self, home, web):
+        cur = self._cluster_raw()
+        cur.update({"connect": _normalize_hub(home) if home else "", "rehomed": {"hub": home, "web": web, "at": int(time.time())}})
+        cur["hub"] = None
+        for k in ("promoted", "failover", "home"):
+            cur.pop(k, None)
+        save_json(self._cluster_file(), cur, self.log)
+        try:
+            os.remove(self._fed_cache_file())
+        except OSError:
+            pass
+        if self.auth is not None:
+            self.auth.forget_spokes()
+
+    def _failback_tick(self, cur, st):
+        """The main hub (back): is the standby acting as the hub? Then take its changes back and send the spokes home."""
+        now = time.time()
+        if now < getattr(self, "_fb_next", 0):
+            return
+        self._fb_next = now + 30
+        sminter = _hub_parts(st["address"])[2]
+        try:
+            with urllib.request.urlopen(sminter + "/api/hub/standby", timeout=4) as r:
+                role = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            return
+        if role.get("role") != "promoted" or not st.get("secret"):
+            return
+        self.log("relay federation: the standby %s is acting as the hub -- taking the hub duties back" % st.get("name"))
+
+        def call(op):
+            ts = int(time.time())
+            body = json.dumps({"ts": ts, "sig": standby_sig(st["secret"], ts)}).encode()
+            req = urllib.request.Request(sminter + "/api/hub/" + op, data=body, method="POST", headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read().decode("utf-8", "replace") or "{}")
+        try:
+            d = call("handback")
+        except Exception as e:
+            self.log("relay federation: hand-back from the standby failed: %s" % str(e)[:120])
+            return
+        auth = self.auth
+        if auth is not None:
+            n = auth.store.merge_bundle(d.get("store") or {})
+            have = {(b.get("room"), b.get("host"), b.get("target")) for b in auth.bans.active()}
+            for b in d.get("bans") or []:
+                if isinstance(b, dict) and (b.get("room"), b.get("host"), b.get("target")) not in have:
+                    auth.bans.add(dict(b))
+            self.log("relay federation: hand-back merged -- %s" % n)
+        try:
+            import kastr_serve as _ks
+            chat = _ks.chat_store(state_dir=self.state_dir, relay_srv=self)
+            added = sum(chat.merge_in(room, c.get("text") or "", keep=c.get("keep")) for room, c in (d.get("chat") or {}).items()
+                        if chat is not None and re.match(r"^[a-z0-9-]{1,32}$", str(room)))
+            self.log("relay federation: hand-back chat -- %d line(s) added" % added)
+        except Exception as e:
+            self.log("relay federation: hand-back chat not merged: %s" % e)
+        try:
+            call("handback/done")
+        except Exception as e:
+            self.log("relay federation: hand-back 'done' not acknowledged: %s" % str(e)[:120])
 
     def _clients_changed(self):
         """0.21.50: a user arrived, left, updated or answered an update offer -- tell the hub (at most every 20 s)."""
@@ -4755,6 +5391,13 @@ class Relay:
             self.log("relay federation: hub KASTR web port is %d (learned from its token service)" % web)
 
     def set_cluster(self, payload):
+        with self._cluster_wl:   # 0.21.53: threads saving relay-cluster.json lost each other's keys
+            out = self._set_cluster_locked(payload)
+        if out.get("restarted") == "pending":   # never restart under the lock (start pins the hub certificate -> a write)
+            out["restarted"] = self._restart()
+        return out
+
+    def _set_cluster_locked(self, payload):
         """0.11.0: partial update of {connect, code, master}. A key that is absent
         or null keeps the stored value; "" clears it; an empty connect drops the
         code too. The code is never echoed back."""
@@ -4800,7 +5443,7 @@ class Relay:
         # A running relay picks the change up by restarting with its own shape -- 0.21.23: unless only the hub
         # flag or the update-follow switch changed (neither is in relay.toml)
         relay_same = cur["connect"] == prev["connect"] and cur["code"] == prev["code"] and cur.get("web") == prev.get("web")
-        restarted = False if relay_same and (cur.get("hub") != prev.get("hub") or cur["master"] != prev["master"]) else self._restart()
+        restarted = False if relay_same and (cur.get("hub") != prev.get("hub") or cur["master"] != prev["master"]) else "pending"   # 0.21.53: set_cluster restarts
         return {"ok": True, "connect": cur["connect"], "master": cur["master"], "hub": cur.get("hub"),
                 "hasCode": bool(cur["code"]), "web": cur["web"], "restarted": restarted,
                 "codeKept": bool(cur["code"]) and not cur["connect"]}   # 0.21.0: standalone, code kept
@@ -4852,6 +5495,10 @@ class Relay:
                                         rehome_info=lambda: self._cluster_raw().get("rehomed"))   # 0.21.25
                 self.auth.on_clients = self._clients_changed   # 0.21.50
                 self.auth.on_client_logs = self._logs_send      # 0.21.51: an app's logs go on to the hub
+                self.auth.standby_info = lambda: (None if self._cluster_raw().get("promoted") else self._cluster_raw().get("standby"))   # 0.21.53
+                self._failover_watch_start()                                          # 0.21.53
+                self.auth.on_standby_state = self._standby_seen                       # 0.21.53
+                self.auth.standby_api = self._standby_api                             # 0.21.53
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -5495,7 +6142,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/spokes/update",   # 0.21.0
                  "/api/relay/clients/update",  # 0.21.50
                  "/api/relay/logs/collect",    # 0.21.51
-                 "/api/relay/spokes/restart")  # 0.21.52
+                 "/api/relay/spokes/restart",  # 0.21.52
+                 "/api/relay/standby")         # 0.21.53
 
 
 def _host_of(value):
@@ -5621,7 +6269,11 @@ def handle_api(handler, relay, path, set_relay_url=None):
             me = "relay"
         reply({"spokes": auth.spokes_public() if auth else [], "stale": auth.spokes_stale() if auth else 0, "notHub": bool(auth and auth.not_hub()), "cmd": (auth.cmd if auth else None),
                "version": ver, "secured": bool(auth), "me": me,
-               "clients": (auth.fleet_clients(me, ver, _machine_node()) if auth else [])})   # 0.21.50: every user in the federation
+               "clients": (auth.fleet_clients(me, ver, _machine_node()) if auth else []),   # 0.21.50: every user in the federation
+               "standby": relay.standby_view()})                                             # 0.21.53: the standby hub
+        return True
+    if path == "/api/relay/standby":   # 0.21.53 (Kenton: "Make standby" on a spoke's row) {name, address?} | {clear: true}
+        reply(*relay.make_standby(_payload_of(handler) or {}))
         return True
 
     if path == "/api/relay/logs/collect":   # 0.21.51: the hub collects every relay's, box's and app's last hour (or a search)
@@ -5635,6 +6287,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
         threading.Thread(target=relay.collect_logs, args=(ask,), daemon=True).start()   # mine, and my apps on their next check-in
         rec = auth.raise_cmd("logs", ask)                                                  # every spoke, and theirs
         reply({"ok": True, "id": run["id"], "seq": rec["seq"], "spokes": len(auth.spokes_public())})
+        return True
         return True
     if path == "/api/relay/logs":   # 0.21.51: a collection's progress (who answered)
         auth = getattr(relay, "auth", None)

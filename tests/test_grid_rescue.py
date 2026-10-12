@@ -29,7 +29,7 @@ class RemoteRestart(unittest.TestCase):
         self.assertIn('if path == "/api/relay/spokes/restart":', r)
         self.assertIn('rec = auth.raise_cmd("restart", {"spoke": one})', r)
         self.assertIn('if name == "restart":   # 0.21.52', r)
-        self.assertIn('"boot": BOOT_AT}).encode()', r)
+        self.assertIn('"boot": BOOT_AT,', r)
 
     def test_relay_page_spins_until_it_is_back(self):
         h = read("relay.html")

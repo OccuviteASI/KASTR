@@ -43,7 +43,7 @@ class OwnConnection(unittest.TestCase):
     def test_entries_skip_room_internals_and_low_copies(self):
         p = _page()
         body = _js_fn(p, "  function wrEntry(w, path, active, me) {")
-        self.assertIn('if (kind === "~grid") { gridAccept(path, active); return; }', body)
+        self.assertIn('if (kind === "~grid") { gridAccept(path, active); wrSync(w); return; }', body)
         self.assertIn('if (kind.startsWith("~") || !path.endsWith(".hang") || LOW_RE.test(path)) return;', body)
 
 
@@ -104,6 +104,55 @@ class RailUi(unittest.TestCase):
     def test_box_modes_never_watch(self):
         p = _page()
         self.assertIn("const wrCan = (rec) => !!rec && joinState === \"joined\" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly;", p)
+
+
+class PickPerSource(unittest.TestCase):
+    """0.21.47 (Kenton): only the ticked sources show; new ones are counted; the list belongs to the room I am in."""
+
+    def test_only_ticked_sources_become_tiles(self):
+        p = _page()
+        body = _js_fn(p, "  function wrEntry(w, path, active, me) {")
+        self.assertIn("if (wrWanted(w, path)) { cancelPendingRemoval(path);", body)
+        wanted = _js_fn(p, "  function wrWanted(w, p) {")
+        self.assertIn("return !!gp && w.pick.has(gp);", wanted)   # a ticked grid brings its cameras (a cell opens full quality)
+
+    def test_new_sources_are_counted_not_shown(self):
+        p = _page()
+        self.assertIn("const wrNewCount = (w) => wrListable(w).filter((p) => !w.pick.has(p) && !w.known.has(p)).length;", p)
+        self.assertIn('c.className = "wcnt";', p)
+        self.assertIn('nw.className = "wrnew"; nw.textContent = "new";', p)
+
+    def test_the_list_belongs_to_my_room(self):
+        p = _page()
+        load = _js_fn(p, "  function wrLoad() {")
+        self.assertIn('const k = wrKey() + "|" + CHANNEL;', load)
+        self.assertIn("const list = Array.isArray(o[CHANNEL]) ? o[CHANNEL] : [];", load)
+        save = _js_fn(p, "  function wrSave() {")
+        self.assertIn("o[wrLoadedRoom] = list", save)
+
+    def test_nothing_ticked_means_not_watching(self):
+        body = _js_fn(_page(), "  function wrPickerClose() {")
+        self.assertIn("if (w && !w.pick.size) wrRemove(w.slug);", body)
+
+
+class RoomScoped(unittest.TestCase):
+    def test_a_listed_share_is_my_rooms_tile(self):
+        body = _js_fn(_page(), "  function wrRoomOf(path) {")
+        self.assertIn('if (xsTiles.has(String(path))) return "";', body)
+
+    def test_a_spotlight_stays_in_its_room(self):
+        p = _page()
+        self.assertIn('if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target))) return;   // 0.21.47', p)
+
+
+class ShareRoomsRow(unittest.TestCase):
+    def test_row_and_new_shares_follow_it(self):
+        p = _page()
+        self.assertIn('<div class="xsrooms" id="xsRoomsRow" hidden><span class="xsrl">Also show in</span><span id="xsRoomChips"></span></div>', p)
+        body = p[p.index("  async function xsOfferNew() {"):p.index("  // members' side: what is listed into my room")]
+        self.assertIn("const rooms = [...xsDefault.rooms].filter((r) => r !== CHANNEL);", body)
+        self.assertIn("/\/camera(-\d+)?\.hang$/.test(p)", body)
+        self.assertIn("await xsPost(p);", body)
 
 
 if __name__ == "__main__":

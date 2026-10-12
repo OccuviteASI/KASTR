@@ -1088,11 +1088,29 @@
      the right. But this is just around their name in the left rail"): the same blue ring as a speaking tile */
   .sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--asi-blue); color:var(--text); }
   /* 0.21.41: "Also show in other rooms" picker */
-  #xsPop { position:fixed; z-index:120; width:280px; max-height:70vh; overflow:auto; background:var(--surface); border:1px solid var(--line);
+  #wrPop, #xsPop { position:fixed; z-index:120; width:280px; max-height:70vh; overflow:auto; background:var(--surface); border:1px solid var(--line);
     border-radius:10px; box-shadow:var(--shadow-pop, 0 10px 30px rgba(0,0,0,.45)); padding:10px 12px; font-size:12px; color:var(--text); }
-  #xsPop h4 { margin:0 0 4px; font-size:12px; font-weight:600; }
-  #xsPop .xshint { color:var(--text-mute); font-size:11px; margin:0 0 8px; }
-  #xsPop .xsrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
+  #wrPop h4, #xsPop h4 { margin:0 0 4px; font-size:12px; font-weight:600; }
+  #wrPop .xshint, #xsPop .xshint { color:var(--text-mute); font-size:11px; margin:0 0 8px; }
+  #wrPop .xsrow, #xsPop .xsrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
+  #wrPop { width:300px; }   /* 0.21.47: a watched room's sources */
+  #wrPop .wrhd { margin:8px 0 2px; font:600 10px var(--font-mono); letter-spacing:.06em; text-transform:uppercase; color:var(--text-mute); }
+  #wrPop .wrnm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #wrPop .wrnew { flex:none; font:600 9px var(--font-mono); color:var(--asi-blue); border:1px solid var(--asi-blue-dim); border-radius:999px; padding:0 6px; }
+  #wrPop .xsbtns { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+  #wrPop .xsbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #wrPop .xsbtns .ghost:hover { color:var(--asi-red); border-color:var(--asi-red); }
+  .sbcard .sbw { position:relative; }
+  .sbcard .sbw.cnt { visibility:visible; }
+  .sbcard .sbw .wcnt { position:absolute; top:-6px; right:-7px; min-width:13px; height:13px; padding:0 3px; border-radius:7px; background:var(--asi-blue); color:#fff;
+    font:600 9px/13px var(--font-mono); text-align:center; }
+  /* 0.21.47: Share > Also show in (share to several rooms) */
+  .xsrooms { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 12px; font-size:11.5px; }
+  .xsrooms[hidden] { display:none; }
+  .xsrooms .xsrl { color:var(--text-mute); margin-right:2px; }
+  .xsrooms .xsrchip { height:auto; border:1px solid var(--line); background:transparent; color:var(--text-dim); border-radius:999px; padding:2px 10px; font-size:11.5px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+  .xsrooms .xsrchip .icon { width:11px; height:11px; }
+  .xsrooms .xsrchip.on { border-color:var(--asi-blue); color:var(--asi-blue); background:var(--asi-blue-glow); }
   #xsPop .xsrow input[type=password] { flex:1; min-width:0; font-size:11px; padding:3px 6px; }
   #xsPop .xsrow .lk { color:var(--text-mute); font-size:10px; }
   #xsPop .xsbtns { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
@@ -1588,6 +1606,8 @@
       </label>
     </section>
 
+    <!-- 0.21.47 (Kenton): share to several rooms -- the rooms every new share also goes to -->
+    <div class="xsrooms" id="xsRoomsRow" hidden><span class="xsrl">Also show in</span><span id="xsRoomChips"></span></div>
     <section class="panel">
       <!-- 0.21.20: Teams-style picker -- presenter layouts, then live thumbnails from the host (native capture) -->
       <div class="prrow" id="prRow">
@@ -2848,7 +2868,7 @@
   document.getElementById("optXshare").addEventListener("click", () => {
     const on = !xsOn();
     try { localStorage.setItem(XS_KEY, on ? "on" : "off"); } catch {}
-    closeAllPops(); paintXsOpt();
+    closeAllPops(); paintXsOpt(); paintXsRooms();
     if (!on) { for (const p of [...xsMine.keys()]) xsStop(p); }
     window.__toast?.(on ? "Share to several rooms: on \u2014 each share's menu (and a prompt when you start one) offers other rooms" : "Share to several rooms: off", 4000, { level: "event" });
   });
@@ -2955,15 +2975,67 @@
     }, 0);
   }
   window.__xsPicker = openXsPicker;   // rig
-  // a new share of mine while the switch is on: offer the picker (once per share)
+  // 0.21.47 (Kenton: "Give options to choose which rooms in the share section"): Share > "Also show in" -- the rooms every NEW
+  // share of mine is listed into (kept per relay on this device; a locked room's code is asked once and kept for this session).
+  // My camera is not a share: its own menu lists it. A share's own menu still changes one share.
+  const XS_ROOMS_KEY = () => "kastr.xshare.rooms." + sbRelayHost();
+  const xsDefault = { rooms: new Set(), tokens: {}, codes: {} };
+  try { for (const r of JSON.parse(localStorage.getItem(XS_ROOMS_KEY()) || "[]")) if (typeof r === "string") xsDefault.rooms.add(r); } catch {}
+  function xsDefaultSave() { try { localStorage.setItem(XS_ROOMS_KEY(), JSON.stringify([...xsDefault.rooms])); } catch {} }
+  function paintXsRooms() {
+    const row = document.getElementById("xsRoomsRow"), box = document.getElementById("xsRoomChips");
+    if (!row || !box) return;
+    const rooms = (lastChannelList || []).filter((r) => r.slug !== CHANNEL).sort((a, b) => a.slug.localeCompare(b.slug));
+    row.hidden = !xsOn() || joinState !== "joined" || publishOnly || !rooms.length;
+    if (row.hidden) return;
+    box.replaceChildren();
+    for (const r of rooms) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "xsrchip" + (xsDefault.rooms.has(r.slug) ? " on" : "");
+      b.innerHTML = r.locked ? icon("lock") : "";
+      b.append(document.createTextNode(r.slug));
+      b.title = xsDefault.rooms.has(r.slug) ? "New shares also show in " + r.slug + " \u2014 click to stop" : "Also show new shares in " + r.slug;
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (xsDefault.rooms.has(r.slug)) { xsDefault.rooms.delete(r.slug); delete xsDefault.tokens[r.slug]; xsDefaultSave(); paintXsRooms(); return; }
+        let code = "";
+        if (r.locked && authSecured) {
+          const a = await kastrConfirm({ title: "Also show in a locked room", message: "\u201c" + r.slug + "\u201d is locked. Enter its code to show your shares there.",
+            ok: "Show in " + r.slug, cancel: "Cancel", input: { placeholder: "Code for " + r.slug, masked: true },
+            check: async (v) => { if (!String(v || "").trim()) return "Enter the room\u2019s code."; try { xsDefault.tokens[r.slug] = await xsTokenFor(r.slug, v); return ""; } catch (err) { return String(err?.message || err); } } });
+          if (a === false) return;
+          code = String(a);
+        } else {
+          try { xsDefault.tokens[r.slug] = await xsTokenFor(r.slug, ""); } catch (err) { window.__toast?.("Not shown in " + r.slug + ": " + (err?.message || err), 5000, { level: "warn" }); return; }
+        }
+        if (code) xsDefault.codes[r.slug] = code;
+        xsDefault.rooms.add(r.slug); xsDefaultSave(); paintXsRooms();
+      });
+      box.appendChild(b);
+    }
+  }
+  // a new share of mine while the switch is on: list it into the rooms ticked under Share (once per share)
   const xsOffered = new Set();
-  function xsOfferNew() {
+  async function xsOfferNew() {
+    paintXsRooms();
     if (!xsOn() || joinState !== "joined") return;
     for (const p of mineNames) {
       if (xsOffered.has(p) || !p.startsWith(CHANNEL + "/")) continue;
       xsOffered.add(p);
-      if (!(lastChannelList || []).some((r) => r.slug !== CHANNEL)) continue;
-      window.__toast?.("Also show " + shortLabel(p) + " in other rooms?", 8000, { level: "event", action: { label: "Choose rooms", fn: () => openXsPicker(p, document.getElementById("shareBtn")) } });
+      if (/\/camera(-\d+)?\.hang$/.test(p) || xsMine.has(p)) continue;   // my camera is not a share; a share already listed keeps its rooms
+      const rooms = [...xsDefault.rooms].filter((r) => r !== CHANNEL);
+      if (!rooms.length) continue;
+      const x = { rooms: new Set(), tokens: {}, label: shortLabel(p), kind: xsKindOf(p) };
+      for (const r of rooms) {
+        let tok = xsDefault.tokens[r];
+        if (authSecured && (!tok || jwtExp(tok) * 1000 - Date.now() < 120000)) {
+          try { tok = xsDefault.tokens[r] = await xsTokenFor(r, xsDefault.codes[r] || ""); } catch { window.__toast?.("Not shown in " + r + " (its code is needed again \u2014 Share \u25b8 Also show in)", 5000, { level: "warn" }); xsDefault.rooms.delete(r); xsDefaultSave(); continue; }
+        }
+        x.rooms.add(r); x.tokens[r] = tok || "";
+      }
+      if (!x.rooms.size) continue;
+      xsMine.set(p, x);
+      await xsPost(p);
+      window.__toast?.(shortLabel(p) + " also shows in " + [...x.rooms].join(", "), 3500, { level: "event" });
     }
   }
   // members' side: what is listed into my room becomes a tile (the tile's own relay session is granted that path)
@@ -2999,20 +3071,26 @@
 
   // ---- 0.21.44 (Kenton: "one window for several sites" -- several rooms on one fleet; stay in ONE room and WATCH others) -------
   // Only watching: my camera and microphone stay in the room I joined. Each watched room gets a member token of its own (a side
-  // mint, my session untouched), its own relay connection and announce loop under that room; its cameras, grids and shares
-  // become tiles WITH mine (after them), labelled "Gate (southridge)", muted until I ask to hear the room. Its members' room.json
-  // is read for GRIDS only (so a grid's cameras hide behind it); spotlights, recordings, files and stall reports stay in that
-  // room. The list (slug + sound) is kept per relay on this device; a locked room's code only in this session.
-  let wrLoopId = 0, wrLoadedKey = "";
+  // mint, my session untouched), its own relay connection and announce loop under that room. Its members' room.json is read for
+  // GRIDS only (so a grid's cameras hide behind it); spotlights, recordings, files and stall reports stay in that room.
+  // 0.21.47 (Kenton: "don't show all of the room shares, let me select which one or multiple are viewed in my current room";
+  // "it should stay with the room I'm in, not follow me around"): the eye opens a LIST of that room's sources and only the ticked
+  // ones become tiles (a ticked grid brings its cameras along, hidden behind it, so a cell still opens in full quality); sources
+  // that start later are only COUNTED on the eye (and marked new in the list). The list belongs to the room I am IN: each room of
+  // mine keeps its own (kastr.watchrooms.<relay> = { myRoom: [{slug, sound, pick, known}] }); a room change shows that room's.
+  // A locked room's code stays in this session only.
+  let wrLoopId = 0, wrLoadedKey = "", wrLoadedRoom = "";
   const wrKey = () => "kastr.watchrooms." + sbRelayHost();
   function wrRoomOf(path) {
     if (!watchRooms.size) return "";
+    if (xsTiles.has(String(path))) return "";   // 0.21.47: listed INTO my room by its sharer -- my room's tile (anyone may spotlight it)
     const r = String(path).split("/", 1)[0];
     return r && r !== CHANNEL && watchRooms.has(r) ? r : "";
   }
   const wrTag = (path) => { const r = wrRoomOf(path); return r ? " (" + r + ")" : ""; };
   function wrNew(slug, sound) {
-    return { slug, sound: !!sound, token: "", exp: 0, code: "", conn: null, ann: null, gen: 0, subs: new Map(), live: new Set(), seen: new Set(), state: "idle", err: "", needCode: false };
+    return { slug, sound: !!sound, token: "", exp: 0, code: "", conn: null, ann: null, gen: 0, subs: new Map(), live: new Set(), seen: new Set(),
+             pick: new Set(), known: new Set(), state: "idle", err: "", needCode: false };
   }
   function jwtExp(tok) {
     try { return Number(JSON.parse(atob(String(tok).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp) || 0; } catch { return 0; }
@@ -3022,24 +3100,38 @@
     const u = urlInput.value.trim();
     return w?.token ? u + (u.includes("?") ? "&" : "?") + "jwt=" + encodeURIComponent(w.token) : u;
   }
+  function wrStore() {
+    try { const o = JSON.parse(localStorage.getItem(wrKey()) || "{}"); return o && typeof o === "object" ? o : {}; } catch { return {}; }
+  }
   function wrSave() {
-    try { localStorage.setItem(wrKey(), JSON.stringify([...watchRooms.values()].map((w) => ({ slug: w.slug, sound: w.sound })))); } catch {}
+    if (!wrLoadedRoom) return;
+    let o = wrStore();
+    if (Array.isArray(o)) o = {};   // 0.21.44's one list for every room
+    const list = [...watchRooms.values()].map((w) => ({ slug: w.slug, sound: w.sound, pick: [...w.pick], known: [...w.known].slice(-300) }));
+    if (list.length) o[wrLoadedRoom] = list; else delete o[wrLoadedRoom];
+    try { localStorage.setItem(wrKey(), JSON.stringify(o)); } catch {}
     try { sessionStorage.setItem("kastr.watchcodes", JSON.stringify(Object.fromEntries([...watchRooms.values()].filter((w) => w.code).map((w) => [w.slug, w.code])))); } catch {}
   }
-  function wrLoad() {
-    const k = wrKey();
+  function wrLoad() {   // the list of the room I am IN (a room change swaps it)
+    const k = wrKey() + "|" + CHANNEL;
     if (wrLoadedKey === k) return;
-    wrLoadedKey = k;
-    let list = [], codes = {};
-    try { list = JSON.parse(localStorage.getItem(k) || "[]"); } catch {}
+    for (const w of watchRooms.values()) wrStop(w);
+    watchRooms.clear();
+    wrLoadedKey = k; wrLoadedRoom = CHANNEL;
+    let o = wrStore(), codes = {};
+    if (Array.isArray(o)) { o = { [CHANNEL]: o }; }   // 0.21.44 -> 0.21.47: the old list belongs to the room I am in now
     try { codes = JSON.parse(sessionStorage.getItem("kastr.watchcodes") || "{}") || {}; } catch {}
-    for (const it of Array.isArray(list) ? list : []) {
+    const list = Array.isArray(o[CHANNEL]) ? o[CHANNEL] : [];
+    for (const it of list) {
       const slug = channelSlug(it?.slug);
-      if (!it?.slug || watchRooms.has(slug)) continue;
+      if (!it?.slug || slug === CHANNEL || watchRooms.has(slug)) continue;
       const w = wrNew(slug, it.sound);
+      for (const p of Array.isArray(it.pick) ? it.pick : []) if (typeof p === "string" && p.startsWith(slug + "/")) w.pick.add(p);
+      for (const p of Array.isArray(it.known) ? it.known : []) if (typeof p === "string") w.known.add(p);
       if (typeof codes[slug] === "string") w.code = codes[slug];
       watchRooms.set(slug, w);
     }
+    wrSave();
   }
   function wrStop(w, keepTiles) {
     if (!w) return;
@@ -3051,7 +3143,7 @@
     try { w.conn?.close(); } catch {}
     w.conn = null;
     if (!keepTiles && w.slug !== CHANNEL) {
-      for (const n of [...tiles.keys()]) if (n.startsWith(w.slug + "/")) removeTile(n);
+      for (const n of [...tiles.keys()]) if (n.startsWith(w.slug + "/") && !xsTiles.has(n)) removeTile(n);
       let g = false;
       for (const k of [...gridMeta.keys()]) if (k.startsWith(w.slug + "/")) { gridMeta.delete(k); g = true; }
       if (g) { try { rebuildGridChildren(); } catch {} }
@@ -3071,6 +3163,7 @@
         w.state = "error"; w.err = String(e?.message || e).slice(0, 120);
         w.needCode = /code|locked|password/i.test(w.err);
         try { paintSidebar(); } catch {}
+        wrPickerPaint(w);
         return;
       }
       if (w.gen !== my) return;
@@ -3093,22 +3186,46 @@
     for (const p of w.live) if (tiles.has(p)) scheduleRemoveTile(p);
     setTimeout(() => { if (w.gen === my && watchRooms.get(w.slug) === w) wrStart(w, true); }, 3000);
   }
+  // a source shows when it is ticked, or when it is a camera behind a ticked grid (hidden there; a cell click opens it)
+  function wrWanted(w, p) {
+    if (w.pick.has(p)) return true;
+    const gp = gridChildOf.get(p);
+    return !!gp && w.pick.has(gp);
+  }
+  function wrSync(w) {   // tiles of this room = its live sources that are wanted
+    if (!w || w.slug === CHANNEL) return;
+    let changed = false;
+    for (const p of w.live) {
+      if (!wrWanted(w, p) || tiles.has(p)) continue;
+      cancelPendingRemoval(p); createTile(p); changed = true;
+    }
+    for (const n of [...tiles.keys()]) {
+      if (!n.startsWith(w.slug + "/") || xsTiles.has(n) || wrWanted(w, n)) continue;
+      removeTile(n); changed = true;
+    }
+    if (changed) { try { applyState(); } catch {} }
+  }
+  let wrPaintT = 0;
+  function wrPaintSoon(w) {
+    if (wrPaintT) return;
+    wrPaintT = setTimeout(() => { wrPaintT = 0; try { paintSidebar(); } catch {} wrPickerPaint(w); }, 400);
+  }
   function wrEntry(w, path, active, me) {
     const parts = path.split("/").filter(Boolean);
     if (parts[0] !== w.slug) return;
     const kind = parts[1] || "";
-    if (kind === "~grid") { gridAccept(path, active); return; }   // its grids' geometry: the cameras behind a grid stay behind it
+    if (kind === "~grid") { gridAccept(path, active); wrSync(w); return; }   // its grids' geometry: the cameras behind a grid stay behind it
     if (parts[2] === "~member") { wrMemberAccept(w, path, active); return; }
     if (kind.startsWith("~") || !path.endsWith(".hang") || LOW_RE.test(path)) return;
     if (parts[1] === HOSTNAME1 && String(parts[2] || "").toLowerCase() === me) return;   // my own page in that room (another window)
     if (active) {
       w.live.add(path);
-      cancelPendingRemoval(path);
-      if (!tiles.has(path)) { createTile(path); try { applyState(); } catch {} }
+      if (wrWanted(w, path)) { cancelPendingRemoval(path); if (!tiles.has(path)) { createTile(path); try { applyState(); } catch {} } }
     } else {
       w.live.delete(path);
       if (tiles.has(path)) scheduleRemoveTile(path);
     }
+    wrPaintSoon(w);
   }
   function wrMemberAccept(w, path, active) {
     const cur = w.subs.get(path);
@@ -3116,7 +3233,7 @@
     if (cur || !w.conn) return;
     const conn = w.conn;
     const h = { gridPaths: new Set() };
-    h.room = stateSubscribe(conn, path, "room.json", "snapshot", (v) => { if (w.conn === conn && w.subs.get(path) === h) wrMemberApply(path, v, h); });
+    h.room = stateSubscribe(conn, path, "room.json", "snapshot", (v) => { if (w.conn === conn && w.subs.get(path) === h) { wrMemberApply(path, v, h); wrSync(w); wrPaintSoon(w); } });
     w.subs.set(path, h);
   }
   function wrMemberApply(path, v, h) {   // grids only -- nothing of that room's spotlight / recording / files lands in mine
@@ -3133,6 +3250,11 @@
     h.gridPaths = seen;
   }
   function wrMemberClear(path, h) { for (const gp of h?.gridPaths || []) gridApply(path, { path: gp }, 0, false); }
+  // the room's sources a person can pick: no camera that sits behind one of its grids, no thumbnail copies
+  function wrListable(w) {
+    return [...w.live].filter((p) => !LOW_RE.test(p) && !xsTiles.has(p) && !(gridChildOf.has(p) && w.live.has(gridChildOf.get(p))));   // a share listed into my room already shows
+  }
+  const wrNewCount = (w) => wrListable(w).filter((p) => !w.pick.has(p) && !w.known.has(p)).length;
   // muted on first sight, unless I asked to hear that room
   function wrFirstSight(slug, name) {
     const w = watchRooms.get(slug);
@@ -3149,16 +3271,23 @@
     try { applyState(); } catch {}
     window.__toast?.(on ? "Hearing " + slug : slug + " muted", 2500, { level: "event" });
   }
+  function wrSetPick(w, p, on) {
+    if (on) w.pick.add(p); else w.pick.delete(p);
+    w.known.add(p);
+    wrSave(); wrSync(w);
+    try { paintSidebar(); } catch {}
+  }
   function wrRemove(slug) {
     const w = watchRooms.get(slug);
     if (!w) return;
     wrStop(w);   // its tiles leave while it is still listed (no departure chimes)
     watchRooms.delete(slug);
     wrSave();
+    if (document.getElementById("wrPop")?.dataset.slug === slug) wrPickerClose();
     try { applyState(); paintSidebar(); } catch {}
   }
   function wrStopAll() { for (const w of watchRooms.values()) wrStop(w); try { paintSidebar(); } catch {} }
-  function wrRestartAll() {   // connect(): a join or a room change -- every watch dials again; the room I am now IN leaves the list
+  function wrRestartAll() {   // connect(): a join or a room change -- the list of the room I am in now dials
     wrLoad();
     for (const w of [...watchRooms.values()]) {
       if (w.slug === CHANNEL) { wrStop(w); watchRooms.delete(w.slug); wrSave(); continue; }
@@ -3168,12 +3297,12 @@
   async function wrAskCode(rec) {
     let tok = "";
     const ans = await kastrConfirm({ title: "Watch a room",
-      message: "\u201c" + rec.slug + "\u201d is locked. Enter its code to watch it from here.",
-      detail: "You stay in \u201c" + CHANNEL + "\u201d; its cameras and shares appear here, muted.",
-      ok: "Watch " + rec.slug, cancel: "Cancel",
+      message: "“" + rec.slug + "” is locked. Enter its code to watch it from here.",
+      detail: "You stay in “" + CHANNEL + "”; you choose which of its sources show here, muted.",
+      ok: "Continue", cancel: "Cancel",
       input: { placeholder: "Code for " + rec.slug, masked: true },
       check: async (v) => {
-        if (!String(v || "").trim()) return "Enter the room\u2019s code.";
+        if (!String(v || "").trim()) return "Enter the room’s code.";
         const why = await lockedRoomRefusal(rec, v);
         if (why || !authSecured) return why;
         try { tok = await xsTokenFor(rec.slug, v); return ""; }
@@ -3182,11 +3311,12 @@
     return ans === false ? null : { code: String(ans), tok };
   }
   const wrCan = (rec) => !!rec && joinState === "joined" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly;
-  async function wrToggle(rec) {
+  // the eye: start watching (a locked room asks for its code) and open the room's list; already watching -> the list
+  async function wrToggle(rec, anchor) {
     if (!wrCan(rec)) return;
     const slug = rec.slug;
     const cur = watchRooms.get(slug);
-    if (cur && cur.state !== "error") { wrRemove(slug); window.__toast?.("Stopped watching " + slug, 2500, { level: "event" }); return; }
+    if (cur && cur.state !== "error") { wrPickerOpen(slug, anchor); return; }
     let code = cur?.code || "", tok = "";
     if (rec.locked && authSecured && (!cur || cur.needCode || !code)) {
       const a = await wrAskCode(rec);
@@ -3200,33 +3330,103 @@
     watchRooms.set(slug, w);
     wrSave();
     wrStart(w);
-    window.__toast?.("Watching " + slug + " \u2014 its cameras and shares appear here, muted. You stay in " + CHANNEL + ".", 4500, { level: "event" });
+    wrPickerOpen(slug, anchor);
+  }
+  // ---- the room's list: tick what shows here (only for me, in the room I am in) ----
+  function wrPickerClose() {
+    const pop = document.getElementById("wrPop");
+    if (!pop) return;
+    const w = watchRooms.get(pop.dataset.slug);
+    pop.remove();
+    if (w && !w.pick.size) wrRemove(w.slug);   // nothing ticked = not watching
+  }
+  function wrRowLabel(w, p) {
+    const raw = gridLabel(p) || shortLabel(p);
+    return raw.replace(" (" + w.slug + ")", "");
+  }
+  function wrPickerPaint(w) {
+    const pop = document.getElementById("wrPop");
+    if (!pop || !w || pop.dataset.slug !== w.slug) return;
+    const list = pop.querySelector(".xslist");
+    const hint = pop.querySelector(".xshint");
+    const items = wrListable(w).sort((a, b) => (isContentPath(a) ? 0 : 1) - (isContentPath(b) ? 0 : 1) || wrRowLabel(w, a).localeCompare(wrRowLabel(w, b)));
+    hint.textContent = "Only you see these, and only while you are in “" + CHANNEL + "”. Sound starts muted.";
+    const fresh = pop.__fresh || new Set();
+    list.replaceChildren();
+    if (w.state === "error") { list.textContent = "Not watching: " + (w.err || "refused") + "."; return; }
+    if (!items.length) { list.textContent = w.state === "on" ? "Nothing is being shared in “" + w.slug + "” right now." : "Looking for “" + w.slug + "”’s sources…"; return; }
+    let head = null;
+    for (const p of items) {
+      const h = isContentPath(p) ? "Shares, grids and cameras" : "People";
+      if (h !== head) { head = h; const hd = document.createElement("div"); hd.className = "wrhd"; hd.textContent = h; list.appendChild(hd); }
+      const row = document.createElement("label"); row.className = "xsrow";
+      const sw = document.createElement("span"); sw.className = "switch sm";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = w.pick.has(p);
+      cb.addEventListener("change", () => wrSetPick(w, p, cb.checked));
+      sw.append(cb, document.createElement("i"));
+      const nm = document.createElement("span"); nm.className = "wrnm"; nm.textContent = wrRowLabel(w, p);
+      row.append(sw, nm);
+      if (fresh.has(p)) { const nw = document.createElement("span"); nw.className = "wrnew"; nw.textContent = "new"; row.appendChild(nw); }
+      list.appendChild(row);
+      w.known.add(p);   // seen in the list: no longer counted on the eye
+    }
+    wrSave();
+  }
+  function wrPickerOpen(slug, anchor) {
+    const w = watchRooms.get(slug);
+    if (!w) return;
+    document.getElementById("wrPop")?.remove();
+    document.getElementById("xsPop")?.remove();
+    const pop = document.createElement("div"); pop.id = "wrPop"; pop.dataset.slug = slug;
+    pop.__fresh = new Set(wrListable(w).filter((p) => !w.pick.has(p) && !w.known.has(p)));
+    pop.innerHTML = '<h4></h4><p class="xshint"></p><div class="xslist"></div><div class="xsbtns"><button type="button" class="ghost wrstop">Stop watching</button><button type="button" class="primary wrdone">Done</button></div>';
+    pop.querySelector("h4").textContent = "Watch from “" + slug + "”";
+    pop.querySelector(".wrstop").addEventListener("click", () => { pop.remove(); wrRemove(slug); window.__toast?.("Stopped watching " + slug, 2500, { level: "event" }); });
+    pop.querySelector(".wrdone").addEventListener("click", wrPickerClose);
+    document.body.appendChild(pop);
+    wrPickerPaint(w);
+    const a = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2 - 150, bottom: 120, top: 120 };
+    pop.style.left = Math.max(8, Math.min(innerWidth - 316, a.left)) + "px";
+    pop.style.top = Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, a.bottom + 6)) + "px";
+    try { paintSidebar(); } catch {}
+    setTimeout(() => {
+      const off = (e) => {
+        if (!pop.isConnected) { document.removeEventListener("pointerdown", off, true); return; }
+        if (!pop.contains(e.target) && !e.target.closest?.("#kConfirm")) { wrPickerClose(); document.removeEventListener("pointerdown", off, true); }
+      };
+      document.addEventListener("pointerdown", off, true);
+    }, 0);
   }
   function wrPaintCard(card, rec) {
     const can = wrCan(rec);
     const w = can ? watchRooms.get(rec.slug) : null;
-    card.classList.toggle("watching", !!w);
+    card.classList.toggle("watching", !!w && w.pick.size > 0);
     const b = card.querySelector(".sbw");
     if (!b) return;
     b.hidden = !can;
-    b.classList.toggle("on", !!w && w.state !== "error");
+    const n = w && w.state === "on" ? wrNewCount(w) : 0;
+    b.classList.toggle("on", !!w && w.state !== "error" && w.pick.size > 0);
     b.classList.toggle("err", !!w && w.state === "error");
+    b.classList.toggle("cnt", n > 0);
+    let c = b.querySelector(".wcnt");
+    if (n > 0) { if (!c) { c = document.createElement("span"); c.className = "wcnt"; b.appendChild(c); } c.textContent = String(n); }
+    else c?.remove();
     b.setAttribute("aria-pressed", w ? "true" : "false");
-    b.title = !w ? "Watch this room too (you stay in " + CHANNEL + ")"
-            : w.state === "error" ? "Not watching: " + (w.err || "refused") + " \u2014 click to try again"
-            : "Watching " + rec.slug + " \u2014 click to stop";
+    b.title = !w ? "Watch sources from this room (only you, while you are in " + CHANNEL + ")"
+            : w.state === "error" ? "Not watching: " + (w.err || "refused") + " — click to try again"
+            : "Watching " + w.pick.size + " source" + (w.pick.size === 1 ? "" : "s") + " from " + rec.slug + (n ? " — " + n + " new" : "") + " — click to choose";
   }
   function wrCardItems(rec) {
     if (!wrCan(rec)) return [];
     const w = watchRooms.get(rec.slug);
-    const items = w ? [{ value: "unwatch", icon: "eye", label: "Stop watching " + rec.slug },
-                       { value: "sound", icon: w.sound ? "spkOff" : "spk", label: (w.sound ? "Mute " : "Hear ") + rec.slug, tip: w.sound ? "Silence this room on this device" : "Hear this room's people and shares" }]
-                    : [{ value: "watch", icon: "eye", label: "Watch " + rec.slug + " too", tip: "Its cameras and shares appear here, muted \u2014 you stay in " + CHANNEL }];
-    items.push({ sep: true }, { value: "join", label: "Join " + rec.slug + "\u2026" });
+    const items = [{ value: "watch", icon: "eye", label: (w ? "Choose what to watch from " : "Watch from ") + rec.slug + "…", tip: "Pick its sources to show here — only you, while you are in " + CHANNEL }];
+    if (w) items.push({ value: "unwatch", label: "Stop watching " + rec.slug },
+                      { value: "sound", icon: w.sound ? "spkOff" : "spk", label: (w.sound ? "Mute " : "Hear ") + rec.slug, tip: w.sound ? "Silence this room on this device" : "Hear this room's people and shares" });
+    items.push({ sep: true }, { value: "join", label: "Join " + rec.slug + "…" });
     return items;
   }
   function wrCardPick(card, rec, v) {
-    if (v === "watch") wrToggle(rec);
+    if (v === "watch") wrToggle(rec, card.querySelector(".sbw") || card);
     else if (v === "unwatch") { wrRemove(rec.slug); window.__toast?.("Stopped watching " + rec.slug, 2500, { level: "event" }); }
     else if (v === "sound") wrSetSound(rec.slug, !watchRooms.get(rec.slug)?.sound);
     else if (v === "join") sbCardClick(card, rec);
@@ -3239,9 +3439,10 @@
     }
   }, 60000);
   window.__watchRooms = {   // rig
-    list: () => [...watchRooms.values()].map((w) => ({ slug: w.slug, state: w.state, err: w.err, sound: w.sound, live: [...w.live], members: [...w.subs.keys()] })),
+    list: () => [...watchRooms.values()].map((w) => ({ slug: w.slug, state: w.state, err: w.err, sound: w.sound, live: [...w.live], pick: [...w.pick], count: wrNewCount(w), members: [...w.subs.keys()] })),
     add: (slug) => wrToggle(lastChannelList.find((r) => r.slug === slug) || { slug }),
-    remove: (slug) => wrRemove(slug), sound: (slug, on) => wrSetSound(slug, on),
+    pick: (slug, path, on) => { const w = watchRooms.get(slug); if (w) wrSetPick(w, path, on !== false); },
+    remove: (slug) => wrRemove(slug), sound: (slug, on) => wrSetSound(slug, on), close: () => wrPickerClose(),
   };
 
   // ---- 0.21.41 (Kenton): the microphone's OWN mute button drives KASTR's mic -------------------------------------
@@ -6917,7 +7118,7 @@
         }
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
         { const wrn = wrRoomOf(name); if (wrn) { const ww = watchRooms.get(wrn); items.push({ sep: true }, { value: "wrsound", icon: ww?.sound ? "spkOff" : "spk", label: (ww?.sound ? "Mute " : "Hear ") + wrn },
-            { value: "wrstop", icon: "eye", label: "Stop watching " + wrn }); } }   // 0.21.44
+            { value: "wrstop", icon: "eye", label: "Stop watching this", tip: "Take it out of this room's view (only you)" }, { value: "wrpick", label: "Choose what to watch from " + wrn + "\u2026" }); } }   // 0.21.44; 0.21.47: per source
         // 0.21.43 (Kenton): a grid -- arrange it on my screen; the cell under a right-click at full quality (up to 4)
         let hqCell = null;
         const gm = gridMeta.get(name);
@@ -6941,7 +7142,14 @@
         }
         openMineMenu(anchor, items, "", async (v) => {
           if (v === "lat") { latencyToggle(name); return; }
-          if (v === "wrsound" || v === "wrstop") { const r0 = wrRoomOf(name); if (r0) { if (v === "wrstop") wrRemove(r0); else wrSetSound(r0, !watchRooms.get(r0)?.sound); } return; }   // 0.21.44
+          if (v === "wrsound" || v === "wrstop" || v === "wrpick") {   // 0.21.44; 0.21.47: one source / the room's list
+            const r0 = wrRoomOf(name), w0 = r0 && watchRooms.get(r0);
+            if (!w0) return;
+            if (v === "wrsound") wrSetSound(r0, !w0.sound);
+            else if (v === "wrpick") wrPickerOpen(r0, document.querySelector('.sbcard[data-slug="' + r0 + '"] .sbw') || pchev);
+            else { wrSetPick(w0, w0.pick.has(name) ? name : (gridChildOf.get(name) || name), false); if (!w0.pick.size) wrRemove(r0); }
+            return;
+          }
           if (v === "vgedit") { vgEdit(name); return; }   // 0.21.43
           if (v === "vgreset") { const s0 = vgGet(name) || {}; delete s0.rects; delete s0.gap; vgSet(name, s0); return; }
           if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
@@ -7897,6 +8105,7 @@
       if (!v || !v.target) return;
       const ts = Number(v.ts) || 0;
       if (v.target === "~none") { if (ts > noneAt) noneAt = ts; return; }
+      if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target))) return;   // 0.21.47 (Kenton): a spotlight stays in its room
       const c = add.get(v.target);
       if (!c || ts > c.ts) add.set(String(v.target), { target: String(v.target), ts, by });
     };
@@ -11050,7 +11259,7 @@
     head.append(nm, meta);
     // 0.21.44 (Kenton): watch this room too -- the eye, and the card's right-click menu
     const sbw = document.createElement("button"); sbw.type = "button"; sbw.className = "sbw"; sbw.innerHTML = icon("eye"); sbw.hidden = true;
-    sbw.addEventListener("click", (e) => { e.stopPropagation(); wrToggle(card.__rec || rec); });
+    sbw.addEventListener("click", (e) => { e.stopPropagation(); wrToggle(card.__rec || rec, sbw); });
     row.append(rb, head, sbw, spk, sbx);
     const ul = document.createElement("ul"); ul.className = "sbmembers";
     card.append(row, ul);

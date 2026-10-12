@@ -2,6 +2,28 @@
 
 What changed in each build, newest first.
 
+## v0.21.47 — choose what you watch, rooms in Share, spotlights stay in their room
+
+**Watching another room: you choose the sources (Kenton: "don't show all of the room shares, let me select which one or multiple are viewed in my current room").**
+- **The list:** the eye on a room card (or its right-click "Watch from <room>…") opens that room's list: shares, grids and cameras first, then people. Only what you tick shows in your window, muted until you choose "Hear <room>". Ticking a grid brings its cameras along, hidden behind it, so a cell still opens in full quality. Close the list with nothing ticked and you're not watching that room.
+- **Later sources:** a source that starts in that room later is not shown on its own. The eye shows how many you have not looked at yet, and the list marks them "new".
+- **A tile's own menu:** a watched tile's menu has "Stop watching this" (that one source) and "Choose what to watch from <room>…".
+
+**It stays with the room you're in (Kenton: "it should stay with the room I'm in, not follow me around").** Each room you join keeps its own watch list. What you picked while in A shows only in A; switching to C shows C's list (empty until you pick), and coming back to A brings A's back. Lists are kept per relay on this device. The list you had in 0.21.44–0.21.46 moves to the room you're in when you first open 0.21.47.
+
+**Share › Also show in (Kenton: "Give options to choose which rooms in the share section").** With More › "Share to several rooms" on, the Share panel shows "Also show in" with a chip per room. Every share you start after that also shows in the ticked rooms. A locked room asks for its code once per session. Your camera isn't a share, so its own menu still lists it. A share's own menu still changes the rooms for that one share.
+
+**A share listed into your room is your room's (Kenton: "let anyone spotlight it as normal").** Anyone in the room can "Spotlight for everyone" a share listed in from another room, even someone who is also watching the room it came from. Before, that person's copy counted as "watched" and the option was hidden.
+
+**Spotlights stay in their room (Kenton: "pin the view to the room, don't follow the person").** A spotlight applies only to its own room's sources and to shares listed into that room; it never pulls in a source from somewhere else.
+
+**Tested** on the two-relay lab with three windows (Alex in qa or wa, Sam and Kenton in qb or wb):
+- the eye opened qa's list (Grid, then Alex's camera) and nothing showed until ticked;
+- ticking the grid brought the grid plus its two cameras, hidden behind it;
+- Alex's Share row listed kept-room, main and wb, and ticking wb listed his next share there;
+- Kenton spotlit that share for everyone and Sam's stage followed;
+- Kenton's watch list emptied in main and came back in wb.
+
 ## v0.21.46 — Southridge's full-quality cameras come back
 
 **Southridge's cameras never opened in full quality (Kenton: "Southridge doesn't seem to be getting the trigger to send full quality video").** Southridge's grid was published as `obs-svr-395f`, but every camera in it was still published as `obs-svr-1980`.

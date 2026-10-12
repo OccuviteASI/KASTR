@@ -575,8 +575,37 @@ function build() {
   // the one signal that crosses the boundary (0.6.9).
   window.addEventListener("blur", () => { closePop(); closeNotes(); });
 
-  header.append(mark, product, nav, relay);
+  // 0.21.54 (Kenton: "Give an option to collapse the top bar with the ASI logo, version, etc. and then an option to expand
+  // when collapsed"): a chevron at the right end hides the masthead; a small tab at the top centre brings it back.
+  // Remembered on this machine (the app shell's masthead and every standalone page share the setting).
+  const MAST_KEY = "kastr.masthead.collapsed";
+  const CHEV = (d) => '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="' + d
+    + '" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const fold = document.createElement("button");
+  fold.type = "button";
+  fold.className = "asi-hdrbtn";
+  fold.title = "Hide the top bar";
+  fold.setAttribute("aria-label", "Hide the top bar");
+  fold.innerHTML = CHEV("M3.5 10 8 5.5 12.5 10");
+  const tab = document.createElement("button");
+  tab.type = "button";
+  tab.className = "asi-hdrtab";
+  tab.title = "Show the top bar";
+  tab.setAttribute("aria-label", "Show the top bar");
+  tab.innerHTML = CHEV("M3.5 6 8 10.5 12.5 6");
+  const mastSet = (off, focus) => {
+    document.body.classList.toggle("asi-hdr-off", !!off);
+    try { off ? localStorage.setItem(MAST_KEY, "1") : localStorage.removeItem(MAST_KEY); } catch {}
+    if (off) { closePop(); closeNotes(); }
+    try { window.dispatchEvent(new Event("resize")); } catch {}   // pages that size their stage from the window re-fit
+    if (focus) (off ? tab : fold).focus({ preventScroll: true });
+  };
+  fold.addEventListener("click", (e) => { e.stopPropagation(); mastSet(true, e.detail === 0); });
+  tab.addEventListener("click", (e) => { e.stopPropagation(); mastSet(false, e.detail === 0); });
+  try { if (localStorage.getItem(MAST_KEY) === "1") document.body.classList.add("asi-hdr-off"); } catch {}
+  header.append(mark, product, nav, relay, fold);
   document.body.prepend(header);
+  document.body.appendChild(tab);
   document.body.appendChild(pop);
   document.body.appendChild(notesPop);
 

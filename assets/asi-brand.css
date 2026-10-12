@@ -64,6 +64,26 @@ body.asi {
 }
 
 .asi-mark { display: flex; align-items: center; gap: 11px; text-decoration: none; flex: none; }
+
+/* 0.21.54 (Kenton): collapse the masthead -- the chevron at its right end; a small tab at the top centre brings it back */
+.asi-hdrbtn {
+  flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; margin-left: -8px;
+  background: transparent; border: 1px solid transparent; border-radius: 6px; color: rgba(255,255,255,.55); cursor: pointer;
+}
+.asi-hdrbtn:hover, .asi-hdrbtn:focus-visible { color: #fff; border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.06); outline: none; }
+.asi-hdrtab {
+  position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 60;
+  display: none; place-items: center; width: 46px; height: 14px; padding: 0;
+  background: var(--asi-navy); color: #fff; border: 1px solid var(--asi-blue); border-top: 0; border-radius: 0 0 8px 8px;
+  opacity: .5; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+.asi-hdrtab svg { width: 12px; height: 12px; }
+.asi-hdrtab:hover, .asi-hdrtab:focus-visible { opacity: 1; height: 18px; outline: none; }
+@media (prefers-reduced-motion: no-preference) { .asi-hdrtab { transition: opacity .15s ease, height .15s ease; } }
+body.asi-hdr-off .asi-header { display: none !important; }
+body.asi-hdr-off .asi-hdrtab { display: grid; }
+body.fillwin .asi-hdrtab, body.asi-embed .asi-hdrtab { display: none !important; }   /* fill window hides every chrome; framed pages have none */
+@media print { .asi-hdrtab { display: none !important; } }
 .asi-mark img { height: 32px; width: auto; display: block; }
 .asi-mark .tag {
   font-size: 9px;

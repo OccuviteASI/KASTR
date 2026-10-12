@@ -291,7 +291,7 @@ class CommandChannel(unittest.TestCase):
     def test_spoke_says_which_machine(self):
         with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kastr_relay.py"), encoding="utf-8") as f:
             src = f.read()
-        self.assertIn('"node": _machine_node()}).encode()', src)
+        self.assertIn('"node": _machine_node(), "clients": clients}).encode()', src)
         self.assertIn('q += ("&" if q else "?") + "node=" + _machine_node()', src)
 
     def test_linux_finds_its_lan_address(self):
@@ -322,7 +322,7 @@ class CommandChannel(unittest.TestCase):
     def test_relay_page_update_one_and_quiet_button(self):
         r = _read("relay.html")
         self.assertIn('api("/api/relay/spokes/update", { spoke: sp })', r)
-        self.assertIn('$("spokesUpdate").classList.toggle("ghost", nBehind === 0);', r)
+        self.assertIn('$("spokesUpdate").classList.toggle("ghost", nBehind === 0 && !nPend);', r)
 
 
 class Pages(unittest.TestCase):

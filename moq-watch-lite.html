@@ -3119,6 +3119,35 @@
     }
   }, 30000);
   window.__xsBrought = xsBrought;   // rig
+  // ---- 0.21.50 (Kenton: push an update to a person from the Relay page -- "Ask them first"): the update arrives through the
+  // relay this app uses; the window asks "Update now" or "In 10 minutes" (then it updates by itself)
+  let offerAsking = false, offerSaid = "";
+  async function updateOfferTick() {
+    if (IS_WEB || offerAsking) return;
+    let d = null;
+    try { d = await fetch("/api/update/offer", { cache: "no-store" }).then((r) => r.json()); } catch { return; }
+    const off = d?.offer;
+    if (!off?.version) return;
+    if (off.state === "deferred") {
+      const left = Math.round(((off.deadline || 0) * 1000 - Date.now()) / 60000);
+      if (left <= 1 && offerSaid !== off.version + "@1") { offerSaid = off.version + "@1"; window.__toast?.("KASTR updates to " + off.version + " in about a minute (it closes and reopens)", 8000, { level: "warn" }); }
+      return;
+    }
+    if (off.state !== "asked") return;
+    offerAsking = true;
+    try {
+      const mins = Math.max(1, Math.round(((off.deadline || 0) * 1000 - Date.now()) / 60000));
+      const now = await kastrConfirm({ title: "Update KASTR",
+        message: "KASTR " + off.version + " is ready from your relay" + (off.host ? " (" + off.host + ")" : "") + ". Restart KASTR now to update?",
+        detail: "KASTR closes and reopens on the new version in a few seconds. If you choose later, it updates by itself in " + mins + " minute" + (mins === 1 ? "" : "s") + ".",
+        ok: "Update now", cancel: "In " + mins + " minute" + (mins === 1 ? "" : "s") });
+      const r = await fetch("/api/update/offer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: now ? "now" : "later" }) }).then((x) => x.json()).catch(() => null);
+      window.__toast?.(now ? "Updating to " + off.version + " — KASTR reopens in a moment" : "KASTR updates to " + off.version + " by itself in " + mins + " minute" + (mins === 1 ? "" : "s"), 6000, { level: "event" });
+      if (!r?.ok && now) window.__toast?.("The update did not start: " + (r?.error || "no answer"), 6000, { level: "warn" });
+    } finally { offerAsking = false; }
+  }
+  setInterval(updateOfferTick, 10000);
+  window.__updateOfferTick = updateOfferTick;   // rig
 
   // ---- 0.21.44 (Kenton: "one window for several sites" -- several rooms on one fleet; stay in ONE room and WATCH others) -------
   // Only watching: my camera and microphone stay in the room I joined. Each watched room gets a member token of its own (a side

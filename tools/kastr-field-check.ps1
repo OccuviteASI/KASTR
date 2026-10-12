@@ -2,7 +2,8 @@
 #   powershell -ExecutionPolicy Bypass -File kastr-field-check.ps1
 # Collects this KASTR's version, relay + federation + cluster status, relay health, the hub's spoke table and the
 # relay / launch log lines about the cluster into one text file on the Desktop. Tokens and access codes are blanked.
-param([int]$Port = 0)   # optional: the KASTR web port when it is not the remembered one
+param([int]$Port = 0,      # optional: the KASTR web port when it is not the remembered one
+      [string]$Find = "")     # 0.21.50: optional, comma-separated -- every relay log line about these (e.g. "mikey/camera,support-laptop")
 $ErrorActionPreference = "SilentlyContinue"
 $state = Join-Path $env:LOCALAPPDATA "ASI\KASTR"
 $port = $Port
@@ -22,6 +23,12 @@ if (-not $port) { Section "error" "no KASTR answered on this machine (is it runn
 foreach ($ep in "/api/instance", "/api/relay/status", "/api/relay/cluster", "/api/relay/health", "/api/relay/spokes", "/api/lan/advertise") {
   try { $r = Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:$port" + $ep) -TimeoutSec 15; Section $ep $r.Content }
   catch { Section $ep ("failed: " + $_.Exception.Message) }
+}
+foreach ($q in ($Find -split ",")) {   # 0.21.50: the relay's on-disk log, searched on this machine
+  $q = $q.Trim(); if (-not $q) { continue }
+  try { $r = Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:$port/api/relay/logfind?n=600&q=" + [uri]::EscapeDataString($q)) -TimeoutSec 60
+        $lines = (ConvertFrom-Json $r.Content).lines; Section ("relay log lines with '" + $q + "' (last 600)") (($lines | Select-Object -Last 600) -join "`r`n") }
+  catch { Section ("relay log lines with '" + $q + "'") ("failed: " + $_.Exception.Message) }
 }
 $ll = Join-Path $state "launch.log"
 if (Test-Path $ll) {

@@ -365,6 +365,10 @@ DEFAULT_RELAY = "http://10.10.105.190:4443"
 # harness -- source checkouts never self-update).
 UPDATE_HOOK = None
 FEDERATION_UPDATE_HOOK = None   # 0.21.0: the launcher's "match the federation master now" (a hub command)
+# 0.21.50: an Update pressed for THIS app on a Relay page (it arrives in the check-in reply): {version, host, at, deadline,
+# state: "asked" | "deferred" | "updating"}; the page asks the person (Update now / In 10 minutes), the launcher updates by
+# itself at the deadline (or at once with no page open / on an unattended box)
+UPDATE_OFFER = {}
 # 0.8.8: set by the launcher when a self-update is about to relaunch; the
 # heartbeat then answers 205 and the page closes its own window.
 CLOSING = [False]
@@ -3536,6 +3540,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._release_zip("POST")
             if path0 in ("/api/token", "/api/auth", "/api/room", "/api/kick",   # 0.10.0: /api/room too (https pages hold room locks); 0.17.0: /api/kick
                          "/api/spokes/register", "/api/bans/notify",          # 0.19.0: federation through a web relay
+                         "/api/clients/checkin",                              # 0.21.50: an app says who it is to the relay it uses
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
@@ -3574,6 +3579,35 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if path == "/api/update/offer":   # 0.21.50: the person's answer -- "now" updates at once, "later" waits for the deadline
+                if not self._local():
+                    return self._deny("update answers")
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    ans = str(json.loads(self.rfile.read(n) or b"{}").get("answer") or "")
+                except Exception:
+                    ans = ""
+                off = UPDATE_OFFER
+                if not off.get("version"):
+                    body, code = {"ok": False, "error": "no update offered"}, 409
+                elif ans == "now" and UPDATE_HOOK is not None:
+                    off["state"] = "updating"
+                    import threading
+                    threading.Thread(target=UPDATE_HOOK, args=(off.get("host") or "",), daemon=True).start()
+                    body, code = {"ok": True, "state": "updating"}, 200
+                elif ans == "later":
+                    off["state"] = "deferred"
+                    body, code = {"ok": True, "state": "deferred", "deadline": off.get("deadline")}, 200
+                else:
+                    body, code = {"ok": False, "error": "answer now or later"}, 400
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(raw)
                 return
             if path == "/api/update/check":
                 # 0.8.6: on-demand fleet update. Local pages only. Runs on a
@@ -4340,6 +4374,18 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._hls_proxy(path)
             if path == "/api/ondemand":                                       # 0.18.0
                 return self._ondemand_api("GET", path)
+            if path == "/api/update/offer":                                   # 0.21.50: is an update waiting for the person's answer?
+                if not self._local():
+                    return self._deny("update offers")
+                off = dict(UPDATE_OFFER) if UPDATE_OFFER.get("version") else None
+                raw = json.dumps({"offer": off, "version": read_version()}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(raw)
+                return
             if path in ("/api/archive", "/api/archive/get"):   # 0.18.0
                 return self._archive_api("GET", path)
             if path == "/ca.crt":

@@ -1587,6 +1587,83 @@ def learn_hub_web_host(host, relay_url, ini, once=False, budget=3.0):
     return found
 
 
+CHECKIN_EVERY = 60     # 0.21.50: an app's check-in with the relay it uses
+CHECKIN_FAST = 20      # ... while an update is offered (the Relay page's spinner follows it)
+OFFER_WAIT_S = 600     # Kenton: "Update now / In 10 minutes" -- then it updates by itself
+
+
+def client_checkin_loop(get_relay, ini, port, mode):
+    """0.21.50 (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the
+    client and see what version it is. The update push should come from the connected relay"): tell the relay this app
+    uses who it is (machine id, version, mode, platform, the person's name). A reply naming a version is an Update pressed
+    for this app on a Relay page: it becomes kastr_serve.UPDATE_OFFER, the page asks the person, and the update itself is
+    taken from THAT relay (UPDATE_HOOK -> runtime_update(relay host)). A box that is its own relay checks in nowhere -- its
+    spoke row on the hub already says its version."""
+    from urllib.parse import urlparse
+    node = kastr_serve.host_slug()
+    delay = 20   # the first check-in soon after launch
+    while not STOP.wait(delay):
+        off = kastr_serve.UPDATE_OFFER
+        delay = CHECKIN_FAST if off.get("version") else CHECKIN_EVERY
+        relay = ""
+        try:
+            relay = get_relay() or ""
+        except Exception:
+            pass
+        host = (urlparse(relay).hostname or "").lower() if relay else ""
+        if not host or host in ("127.0.0.1", "localhost", "::1"):
+            continue
+        inst = {}
+        try:   # what this machine's own pages know: the person's name, and whether a window is open
+            with urllib.request.urlopen("http://127.0.0.1:%d/api/instance" % int(port), timeout=3) as r:
+                inst = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            inst = {}
+        d = {}
+        try:
+            body = {"node": node, "version": kastr_serve.read_version(), "mode": mode, "platform": sys.platform,
+                    "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or ""}
+            base = authority_base(host, ini, relay)
+            req = urllib.request.Request(base + "/api/clients/checkin", data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            d = {}
+        mine = kastr_serve.read_version()
+        want = str(d.get("update") or "") if isinstance(d, dict) else ""
+        if want and want != mine and not off.get("version"):
+            now = time.time()
+            off.clear()
+            off.update({"version": want, "host": host, "at": now, "deadline": now + OFFER_WAIT_S, "state": "asked"})
+            note("update offer: the relay %s asked this KASTR to update to %s (the window asks; by itself in %d min)"
+                 % (host, want, OFFER_WAIT_S // 60))
+        off = kastr_serve.UPDATE_OFFER
+        if not off.get("version"):
+            continue
+        if off.get("state") == "failed" and time.time() - off.get("at", 0) > 1800:
+            off.clear()   # a failed offer is forgotten after 30 min (the next Update asks again)
+            continue
+        if off.get("state") in ("updating", "failed") or kastr_serve.UPDATE_HOOK is None:
+            continue
+        age = inst.get("aliveAge")
+        no_window = age is None or age > 60
+        box = mode in ("publisher", "publisher-relay", "relay")
+        if box or no_window or time.time() >= off.get("deadline", 0):
+            off["state"] = "updating"
+            why = "an unattended box" if box else "no window open" if no_window else "the 10 minutes are up"
+            note("update offer: updating to %s now (%s)" % (off.get("version"), why))
+
+            def run(h=off.get("host") or host):
+                try:
+                    kastr_serve.UPDATE_HOOK(h)
+                finally:   # still here = the update did not relaunch us
+                    if kastr_serve.read_version() == mine and kastr_serve.UPDATE_OFFER.get("state") == "updating":
+                        kastr_serve.UPDATE_OFFER["state"] = "failed"
+                        kastr_serve.UPDATE_OFFER["at"] = time.time()
+            threading.Thread(target=run, daemon=True).start()
+
+
 def start_update_sweeper(check, every=3600, label="federation master: hourly check"):
     """0.11.0: hourly version match against the federation master (kastr_serve.
     start_media_sweeper idiom). The first tick waits a full period -- the
@@ -3223,6 +3300,8 @@ def main():
     # 0.15.0: re-learn the hub's web port every 5 minutes (a hub relaunched on
     # another port is followed without a restart here)
     start_update_sweeper(lambda: learn_hub_web(_current_relay(), ini), every=300, label="hub web port: learner")   # 0.16.0: the CURRENT relay
+    if not args.no_update:   # 0.21.50: tell the relay this app uses who it is (the hub's Relay page lists every user)
+        threading.Thread(target=client_checkin_loop, args=(_current_relay, ini, args.port, mode), daemon=True).start()
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

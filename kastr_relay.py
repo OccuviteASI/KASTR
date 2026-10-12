@@ -487,6 +487,21 @@ def session_grant(req, key, now=None):
 
 # ---- 0.21.41: cross-room listings ("share to several rooms") ------------------------------
 
+def clean_clients(rows):
+    """0.21.50: a spoke's user list as the hub keeps it -- known fields only, bounded."""
+    out = []
+    for r in (rows if isinstance(rows, list) else [])[:300]:
+        if not isinstance(r, dict) or not HOST_RE.match(str(r.get("node") or "")):
+            continue
+        out.append({"node": str(r["node"]), "name": str(r.get("name") or "")[:60], "version": str(r.get("version") or "")[:24],
+                    "mode": str(r.get("mode") or "")[:24], "platform": str(r.get("platform") or "")[:16], "ip": str(r.get("ip") or "")[:46],
+                    "at": int(r.get("at") or 0) if str(r.get("at") or "0").isdigit() else 0, "offer": str(r.get("offer") or "")[:20],
+                    "pending": str(r.get("pending") or "")[:24], "checkin": bool(r.get("checkin")),
+                    "kind": r.get("kind") if r.get("kind") in ("app", "box", "web") else "app",
+                    "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16]})
+    return out
+
+
 def xshare_path_ok(path, room, host=None):
     """A listable broadcast: <room>/<host>/.../<name>.hang -- 3..8 plain segments (never a control path), in `room`,
     under `host`. host None (an open relay: no tokens to name one) -> any host-shaped second segment."""
@@ -1572,6 +1587,8 @@ class AuthService:
         # bans long-poll reply; a spoke acts once per new seq (an "Update spokes now" on the hub)
         self.cmd = {"seq": 0, "update": None, "closeRoom": [], "rtsp": []}   # 0.21.2: + closeRoom [{seq, spoke, slug}] (last 16); 0.21.16: + rtsp [{seq, spoke, suspend}]
         self.on_cmd = on_cmd                  # callable(name, info) on the spoke side
+        self.clients = {}                     # 0.21.50: node -> an app's last check-in here {version, mode, platform, name, ip, at, offer, pending}
+        self.on_clients = None                # 0.21.50: callable() -- the list changed (a spoke re-registers with the hub soon)
         self.wake = wake                      # 0.21.7: callable(room, broadcast, hops) -- a spoke relayed a viewer's demand (Relay.wake_forward)
         self.cluster_view = cluster_view      # 0.21.7: callable -> {nodes, sessions, raw} of this relay's cluster (the hub answers /api/spokes/link)
         self.is_hub = is_hub                  # 0.21.24: callable -> True / False / None (the Relay page's hub switch; None = never said)
@@ -1723,6 +1740,9 @@ class AuthService:
                     self._reply(obj, code)
                 elif path == "/api/kick":   # 0.17.0: an admin removes a member relay-side
                     obj, code = svc.kick(p, self._peer(), self.headers.get("Authorization"))
+                    self._reply(obj, code)
+                elif path == "/api/clients/checkin":   # 0.21.50: an app connected to this relay says who it is
+                    obj, code = svc.client_checkin(p, self._peer())
                     self._reply(obj, code)
                 elif path == "/api/spokes/register":   # 0.18.0: a spoke tells its hub where its minter is
                     obj, code = svc.register_spoke(p, self._peer(), self.headers.get("Authorization"))
@@ -2648,6 +2668,7 @@ class AuthService:
             now = int(time.time())
             self.spokes[key] = {"at": now, "reg": now, "node": node or None, "peer": peer, "name": name, "version": version,
                                 "minter": url or None, "rooms": rooms,
+                                "clients": clean_clients(p.get("clients")),   # 0.21.50: the users connected to that spoke
                                 "rtsp": (p.get("rtsp") if p.get("rtsp") in ("on", "off") else None)}   # 0.21.16: the spoke's RTSP switch
             if len(self.spokes) > 64:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
@@ -2725,6 +2746,109 @@ class AuthService:
                     if stale or (v.get("at") or 0) >= cut]
         return sorted(rows, key=lambda r: (r["name"], r["key"]))
 
+    # ---- 0.21.50 (Kenton: "see all of the users in the hub relay server page ... push an update to the client and see
+    # what version it is. The update push should come from the connected relay, not the hub") ----------------------------
+    CLIENT_FORGET_S = 180   # an app checks in every 60 s (20 s while an update is offered)
+
+    def client_checkin(self, p, peer=""):
+        """POST /api/clients/checkin {node, version, mode, platform, name, offer} from an app whose relay is this one ->
+        {ok, update?: version} -- `update` is an Update pressed for it on the hub's Relay page (or this relay's)."""
+        p = p if isinstance(p, dict) else {}
+        node = re.sub(r"[^a-z0-9-]+", "-", str(p.get("node") or "").lower()).strip("-")[:64]
+        if not HOST_RE.match(node):
+            return {"ok": False, "error": "node required"}, 400
+        now = int(time.time())
+        with self.lock:
+            rec = self.clients.get(node) or {}
+            before = (rec.get("version"), rec.get("offer"), bool(rec))
+            rec.update({"version": str(p.get("version") or "")[:24], "mode": str(p.get("mode") or "")[:24],
+                        "platform": str(p.get("platform") or "")[:16], "name": str(p.get("name") or "")[:60],
+                        "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now})
+            pend = rec.get("pending")
+            if isinstance(pend, dict) and pend.get("version") and pend["version"] == rec["version"]:
+                rec.pop("pending", None)   # it runs what it was asked to run: done
+                pend = None
+            elif isinstance(pend, dict) and now - int(pend.get("at") or 0) > 1800:
+                rec.pop("pending", None)   # an ask nobody acted on for 30 min is history
+                pend = None
+            self.clients[node] = rec
+            if len(self.clients) > 512:
+                for k in sorted(self.clients, key=lambda k: self.clients[k].get("at", 0))[:len(self.clients) - 512]:
+                    self.clients.pop(k, None)
+            changed = before != (rec.get("version"), rec.get("offer"), True)
+        if changed and callable(self.on_clients):
+            try:
+                self.on_clients()
+            except Exception:
+                pass
+        out = {"ok": True}
+        if isinstance(pend, dict) and pend.get("version"):
+            out["update"] = pend["version"]
+        return out, 200
+
+    def client_pend(self, node, version):
+        """An Update for one app connected here: its next check-in is told to update (from this relay). -> True when known."""
+        node = str(node or "")
+        with self.lock:
+            rec = self.clients.get(node)
+            if not rec or time.time() - (rec.get("at") or 0) > self.CLIENT_FORGET_S:
+                return False
+            rec["pending"] = {"version": str(version or "")[:24], "at": int(time.time())}
+        self.log("relay auth: asked %s (%s) to update to %s on its next check-in" % (rec.get("name") or node, node, version))
+        if callable(self.on_clients):
+            try:
+                self.on_clients()
+            except Exception:
+                pass
+        return True
+
+    def clients_view(self, my_version="", me_node=""):
+        """The users of THIS relay: apps that checked in, joined with the live sessions (rooms; web visitors and apps older
+        than 0.21.50 appear from their sessions alone). Never a token."""
+        now = time.time()
+        rows = {}
+        with self.lock:
+            for node, c in self.clients.items():
+                if now - (c.get("at") or 0) > self.CLIENT_FORGET_S:
+                    continue
+                rows[node] = {"node": node, "name": c.get("name") or "", "version": c.get("version") or "", "mode": c.get("mode") or "",
+                              "platform": c.get("platform") or "", "ip": c.get("ip") or "", "at": c.get("at"), "offer": c.get("offer") or "",
+                              "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": []}
+            sess = [dict(v) for v in self._sessions.values()]
+        for v in sess:
+            host = str(v.get("host") or "")
+            if not host or v.get("revoked") or not HOST_RE.match(host):
+                continue
+            r = rows.get(host)
+            if r is None:
+                web = host.startswith("web-")
+                r = rows[host] = {"node": host, "name": "", "version": my_version if web else "", "mode": "", "platform": "",
+                                  "ip": str(v.get("remote") or ""), "at": int(v.get("at") or now), "offer": "", "pending": "",
+                                  "checkin": False, "rooms": []}
+            room = str(v.get("room") or "")
+            if room and room not in r["rooms"]:
+                r["rooms"].append(room)
+        for r in rows.values():
+            n = r["node"]
+            r["kind"] = "web" if n.startswith("web-") else ("box" if r["mode"] in ("publisher", "publisher-relay", "relay") else "app")
+        rows.pop(me_node, None)   # this relay box itself is listed as a relay (its spoke row), not as a user
+        return sorted(rows.values(), key=lambda r: ((r["name"] or r["node"]).lower(), r["node"]))[:300]
+
+    def fleet_clients(self, my_name, my_version, me_node=""):
+        """The hub's Relay page: my users, then each live spoke's (as it last registered), each tagged with its relay."""
+        out = [dict(r, relay=my_name, relayVersion=my_version) for r in self.clients_view(my_version, me_node)]
+        cut = time.time() - self.SPOKE_STALE_S
+        with self.lock:
+            spokes = [dict(v) for v in self.spokes.values() if (v.get("at") or 0) >= cut]
+        seen = {r["node"] for r in out}
+        for sp in sorted(spokes, key=lambda v: v.get("name") or ""):
+            for r in sp.get("clients") or []:
+                if r.get("node") in seen:
+                    continue
+                seen.add(r.get("node"))
+                out.append(dict(r, relay=sp.get("name") or "", relayVersion=sp.get("version") or ""))
+        return out
+
     def spokes_stale(self):
         cut = time.time() - self.SPOKE_STALE_S
         with self.lock:
@@ -2740,7 +2864,7 @@ class AuthService:
                     rec["peer"] = next((v.get("peer") for v in self.spokes.values() if (v.get("name") or "") == rec["spoke"]), None)
                 else:
                     self.cmd["updateAll"] = rec
-            if name in ("closeRoom", "wake", "rtsp", "updateOne"):   # 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
+            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient"):   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
@@ -2801,7 +2925,8 @@ class AuthService:
                    "wake": list(self.cmd.get("wake") or []),             # 0.21.7: on-demand wakes relayed from other sites
                    "rtsp": list(self.cmd.get("rtsp") or []),             # 0.21.16: the hub operator's RTSP switch for a spoke
                    "rehome": self.cmd.get("rehome"),                      # 0.21.26: 0.21.25 raised it but never sent it (spokes got it from the 403 hint)
-                   "updateOne": list(self.cmd.get("updateOne") or [])}   # 0.21.26: one spoke at a time
+                   "updateOne": list(self.cmd.get("updateOne") or []),   # 0.21.26: one spoke at a time
+                   "updateClient": list(self.cmd.get("updateClient") or [])}   # 0.21.50: one user, through the relay it uses
         xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
         return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver}, 200   # 0.21.0: + the hub's command channel
 
@@ -2919,6 +3044,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("update", c), daemon=True).start()
+                # 0.21.50: an Update for one user connected to a spoke (the hub's Relay page, users table)
+                for c in (cmd.get("updateClient") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("updateClient", c), daemon=True).start()
                 # 0.21.25: the hub handed its duties to another box -- re-point there
                 rh = cmd.get("rehome") if isinstance(cmd.get("rehome"), dict) else None
                 if rh and callable(self.on_cmd) and int(rh.get("seq") or 0) > prev:
@@ -4095,6 +4228,17 @@ class Relay:
             except Exception as e:
                 self.log("relay federation: wake command failed: %s" % e)
             return
+        if name == "updateClient":   # 0.21.50: the hub asked ONE of my users to update -- from me (this relay's feed)
+            try:
+                import kastr_serve as _ks
+                me, ver = self.relay_name() or _ks.host_slug(), _ks.read_version()
+            except Exception:
+                me, ver = self.relay_name() or "relay", ""
+            if str((info or {}).get("spoke") or "") not in ("*", me) or not self.auth:
+                return
+            ok = self.auth.client_pend(str((info or {}).get("node") or ""), ver)
+            self.log("relay federation: hub asked user %s to update here -> %s" % ((info or {}).get("node"), "asked" if ok else "not connected here"))
+            return
         if name != "update":
             return
         if (info or {}).get("spoke"):   # 0.21.26: an update for ONE spoke -- is it me?
@@ -4246,8 +4390,12 @@ class Relay:
                 rtsp = "off" if getattr(_b, "suspended", False) else "on"
         except Exception:
             rtsp = None
+        try:   # 0.21.50: the users connected here (the hub's Relay page lists them; an Update comes back down to me)
+            clients = auth.clients_view(version, _machine_node())
+        except Exception:
+            clients = []
         body = json.dumps({"minter": my_minter, "name": name, "version": version, "rooms": rooms, "rtsp": rtsp,
-                           "node": _machine_node()}).encode()   # 0.21.39: the machine id (survives a rename)
+                           "node": _machine_node(), "clients": clients}).encode()   # 0.21.39: the machine id (survives a rename)
         try:
             req = urllib.request.Request(minter + "/api/spokes/register", data=body, method="POST",
                                          headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
@@ -4271,6 +4419,24 @@ class Relay:
             auth.pull_hub_bans()
         except Exception:
             pass
+
+    def _clients_changed(self):
+        """0.21.50: a user arrived, left, updated or answered an update offer -- tell the hub (at most every 20 s)."""
+        now = time.time()
+        if now - getattr(self, "_clients_sync_at", 0) < 20:
+            if not getattr(self, "_clients_sync_due", False):
+                self._clients_sync_due = True
+                t = threading.Timer(20, self._clients_sync_late)
+                t.daemon = True
+                t.start()
+            return
+        self._clients_sync_at = now
+        self.spoke_sync_soon()
+
+    def _clients_sync_late(self):
+        self._clients_sync_due = False
+        self._clients_sync_at = time.time()
+        self.spoke_sync_soon()
 
     def spoke_sync_soon(self):
         """0.21.2: a room opened or closed here -- tell the hub now (its spoke table lists my rooms)."""
@@ -4466,6 +4632,7 @@ class Relay:
                                         is_hub=lambda: self._cluster_raw().get("hub"),   # 0.21.24: the hub switch
                                         on_handover=self.handover_done,          # 0.21.25: this hub handed over
                                         rehome_info=lambda: self._cluster_raw().get("rehomed"))   # 0.21.25
+                self.auth.on_clients = self._clients_changed   # 0.21.50
             except OSError as e:
                 # A secured relay without its minter would lock everyone out
                 # silently -- refuse to half-start.
@@ -4608,6 +4775,7 @@ class Relay:
                 line = ANSI.sub("", line).rstrip()
                 if not line:
                     continue
+                self._log_disk(line)   # 0.21.50: the whole log, for a field check's -Find
                 with self._lock:
                     self._log.append(line)
                     if "remote=127.0.0.1:" not in line and "remote=[::ffff:127.0.0.1]" not in line and "remote=[::1]" not in line:   # 0.21.15
@@ -4622,6 +4790,44 @@ class Relay:
                     self._fingerprint_check("relay reported a certificate problem")
         except Exception:
             pass
+
+    RELAY_LOG_MAX = 20 * 1024 * 1024   # 0.21.50: <state>/relay.log, then one old copy (relay.log.1)
+
+    def _log_disk(self, line):
+        """0.21.50 (field, Mendon: the 200 lines in memory covered a few seconds, so a stuck stream left no trace): every
+        relay line goes to <state>/relay.log with a wall-clock stamp; at 20 MB it becomes relay.log.1."""
+        try:
+            f = getattr(self, "_logf", None)
+            path = os.path.join(self.state_dir, "relay.log")
+            if f is None:
+                f = self._logf = open(path, "a", encoding="utf-8", errors="replace")
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
+            f.flush()
+            if f.tell() > self.RELAY_LOG_MAX:
+                f.close()
+                self._logf = None
+                os.replace(path, path + ".1")
+        except Exception:
+            self._logf = None
+
+    def log_find(self, q, n=400):
+        """0.21.50: the last `n` relay.log lines (this file, then the old copy) that contain every word of `q`."""
+        words = [w.lower() for w in str(q or "").split() if w][:6]
+        if not words:
+            return []
+        out = []
+        for name in ("relay.log.1", "relay.log"):
+            try:
+                with open(os.path.join(self.state_dir, name), encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        low = line.lower()
+                        if all(w in low for w in words):
+                            out.append(line.rstrip("\n"))
+                            if len(out) > n * 4:
+                                del out[:-n]
+            except OSError:
+                pass
+        return out[-n:]
 
     def _last_log(self):
         with self._lock:
@@ -5067,7 +5273,8 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/spokes/rtsp",     # 0.21.16
                  "/api/relay/admin/token",     # 0.16.0
                  "/api/relay/bans/clear",      # 0.17.0
-                 "/api/relay/spokes/update")   # 0.21.0
+                 "/api/relay/spokes/update",   # 0.21.0
+                 "/api/relay/clients/update")  # 0.21.50
 
 
 def _host_of(value):
@@ -5166,6 +5373,15 @@ def handle_api(handler, relay, path, set_relay_url=None):
         reply({"error": "relay settings are read from the machine itself"}, 403)
         return True
 
+    if path == "/api/relay/logfind":   # 0.21.50: relay log lines about one stream (this machine only -- a field check)
+        qs = parse_qs(urlparse(handler.path).query)
+        try:
+            n = max(1, min(2000, int((qs.get("n") or ["400"])[0])))
+        except ValueError:
+            n = 400
+        q = (qs.get("q") or [""])[0][:200]
+        reply({"q": q, "lines": relay.log_find(q, n)})
+        return True
     if path == "/api/relay/bans":   # 0.17.0: who an admin removed (host page; never the remotes)
         auth = getattr(relay, "auth", None)
         rows = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until", "via")} for b in (auth.bans.active() if auth else [])]
@@ -5178,8 +5394,41 @@ def handle_api(handler, relay, path, set_relay_url=None):
             ver = _ks.read_version()
         except Exception:
             ver = ""
+        try:
+            me = relay.relay_name() or _ks.host_slug()
+        except Exception:
+            me = "relay"
         reply({"spokes": auth.spokes_public() if auth else [], "stale": auth.spokes_stale() if auth else 0, "notHub": bool(auth and auth.not_hub()), "cmd": (auth.cmd if auth else None),
-               "version": ver, "secured": bool(auth)})
+               "version": ver, "secured": bool(auth), "me": me,
+               "clients": (auth.fleet_clients(me, ver, _machine_node()) if auth else [])})   # 0.21.50: every user in the federation
+        return True
+
+    if path == "/api/relay/clients/update":   # 0.21.50: one user updates FROM THE RELAY IT USES (here, or a spoke via the hub)
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        p = _payload_of(handler) or {}
+        node, via = str(p.get("node") or "")[:64], str(p.get("relay") or "")[:40]
+        try:
+            import kastr_serve as _ks
+            ver, me = _ks.read_version(), relay.relay_name() or _ks.host_slug()
+        except Exception:
+            ver, me = "", relay.relay_name() or "relay"
+        if not HOST_RE.match(node):
+            reply({"error": "node required"}, 400)
+            return True
+        if not via or via == me:
+            if not auth.client_pend(node, ver):
+                reply({"error": "that user's KASTR has not checked in here in the last 3 minutes (0.21.50 or newer checks in)"}, 409)
+                return True
+            reply({"ok": True, "node": node, "relay": me, "version": ver})
+            return True
+        if not any((v.get("name") or "") == via for v in auth.spokes.values()):
+            reply({"error": "%s is not a registered spoke" % via}, 409)
+            return True
+        rec = auth.raise_cmd("updateClient", {"spoke": via, "node": node})
+        reply({"ok": True, "seq": rec["seq"], "node": node, "relay": via})
         return True
 
     if path == "/api/relay/hub/takeover":   # 0.21.25 (Kenton): make THIS relay the hub -- the current hub hands over

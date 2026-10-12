@@ -2,6 +2,30 @@
 
 What changed in each build, newest first.
 
+## v0.21.50 — every user on the hub's Relay page, updates that wait, the relay's log on disk
+
+**Every user, with their KASTR version, on the hub's Relay page (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the client and see what version it is").** A new Users table on the Relay page lists everyone connected to this relay and, on the hub, to every spoke: name, machine, app, box or web, room, the relay they use, their KASTR version (amber when behind their relay) and when they were last seen.
+- **How it knows:** every KASTR app now checks in with the relay it uses about once a minute, saying its machine, version and mode. Spokes pass their list up to the hub.
+- **Web visitors and older apps:** web visitors and apps older than 0.21.50 still appear, from their relay connection. Older apps are marked "older KASTR" and have no Update button; restarting KASTR on that machine updates it.
+
+**Update pushes come from the user's own relay (Kenton: "The update push should come from the connected relay, not the hub").**
+- **Delivery:** Update on a user's row asks the relay that user is connected to. The app hears it on its next check-in and downloads the update from that relay.
+- **Asking the person first:** their window says "KASTR 0.21.x is ready from your relay. Restart KASTR now to update?" with Update now / In 10 minutes. After 10 minutes it updates by itself.
+- **No one to ask:** unattended boxes, and apps with no window open, update straight away.
+
+**Update buttons that wait (Kenton: "don't go back immediately to being able to click update. Have it spin and wait ... before coming back and saying that the updates are done").**
+- **Pending state:** an Update (for a user, a spoke, or "Update N spokes now") becomes a spinner with a timer and what it waits for: "waiting for the person…", "updates by itself soon…", "updating…" or "restarting…".
+- **Finished:** it ends with "✓ updated to 0.21.x" once the new version reports back, or after 10 minutes with "didn't update" and the reason (offline, still on the old version, the person chose later, or the update failed there).
+- **Refresh:** the table refreshes every 5 seconds while anything is waiting, and the finished results stay listed under the table.
+
+**The relay's log on disk, and a search for the field check (field, Mendon: the 200 lines kept in memory covered a few seconds, so a stuck camera left no trace).** Every relay line now also goes to relay.log in KASTR's state folder (about 20 MB plus one older copy). The field check can pull every line about a stream:
+
+  powershell -ExecutionPolicy Bypass -File kastr-field-check.ps1 -Find "mikey/camera,support-laptop"
+
+On Linux use `FIND="mikey/camera,support-laptop" bash kastr-field-check.sh`.
+
+**Tested** on the two-relay lab. A simulated app (Test PC, KASTR 0.21.40) checked in with the spoke, and the hub's Users table listed it under lab-spoke with an Update button. Pressing Update reached the app through the spoke. The cell showed "waiting for the person… 0:30" while the app asked, then "✓ updated" once it checked in on the new version, and the result line said "Test PC updated to …". The relay log search returned the cluster link lines from relay.log.
+
 ## v0.21.49 — spotlight a watched source for everyone, see who's out of date, choose the RTMP address
 
 **Spotlight a source from another room for everyone (Kenton: "I'm still not able to spotlight a share from another room except for pinning it for myself").** A source you watch from another room now offers "Spotlight for everyone".

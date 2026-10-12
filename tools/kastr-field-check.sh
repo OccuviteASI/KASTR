@@ -17,6 +17,13 @@ if [ -z "$PORT" ]; then echo "no KASTR answered on this machine (is it running?)
 for ep in /api/instance /api/relay/status /api/relay/cluster /api/relay/health /api/relay/spokes /api/lan/advertise; do
   curl -s -m 15 "http://127.0.0.1:$PORT$ep" | section "$ep"
 done
+# 0.21.50: FIND="mikey/camera,support-laptop" bash kastr-field-check.sh -- every relay log line about these
+IFS=',' read -ra _FINDS <<< "${FIND:-}"
+for q in "${_FINDS[@]}"; do
+  q="$(echo "$q" | xargs)"; [ -z "$q" ] && continue
+  curl -s -m 60 -G "http://127.0.0.1:$PORT/api/relay/logfind" --data-urlencode "q=$q" --data "n=600" \
+    | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("lines", [])))' 2>/dev/null | section "relay log lines with '$q' (last 600)"
+done
 if [ -f "$STATE/launch.log" ]; then
   tail -n 4000 "$STATE/launch.log" | grep -Ei 'cluster|federation|spoke|hub|relay:|rehome|token|session' | tail -n 250 | section "launch.log (cluster / federation lines, last 250)"
 else

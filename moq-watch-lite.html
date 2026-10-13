@@ -1190,12 +1190,22 @@
   .sbcard .sbw .wcnt { position:absolute; top:-6px; right:-7px; min-width:13px; height:13px; padding:0 3px; border-radius:7px; background:var(--asi-blue); color:#fff;
     font:600 9px/13px var(--font-mono); text-align:center; }
   /* 0.21.47: Share > Also show in (share to several rooms) */
-  .xsrooms { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 12px; font-size:11.5px; }
-  .xsrooms[hidden] { display:none; }
-  .xsrooms .xsrl { color:var(--text-mute); margin-right:2px; }
-  .xsrooms .xsrchip { height:auto; border:1px solid var(--line); background:transparent; color:var(--text-dim); border-radius:999px; padding:2px 10px; font-size:11.5px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
-  .xsrooms .xsrchip .icon { width:11px; height:11px; }
-  .xsrooms .xsrchip.on { border-color:var(--asi-blue); color:var(--asi-blue); background:var(--asi-blue-glow); }
+  /* 0.21.62: Share > Show in other rooms (shares x rooms) and the Rooms button on each source */
+  #xsTable { overflow-x:auto; }
+  .xstab { border-collapse:collapse; font-size:11.5px; min-width:100%; }
+  .xstab th, .xstab td { padding:4px 6px; border-bottom:1px solid var(--line-soft); text-align:center; white-space:nowrap; }
+  .xstab th { color:var(--text-mute); font-weight:600; font-size:10.5px; }
+  .xstab th:first-child, .xstab td:first-child { text-align:left; max-width:180px; overflow:hidden; text-overflow:ellipsis; }
+  .xstab td:first-child { color:var(--text); }
+  .xstab .lk { width:10px; height:10px; vertical-align:-1px; margin-left:3px; }
+  .xstab input { accent-color:var(--asi-blue); width:15px; height:15px; cursor:pointer; }
+  .pubui .camrow .xsbtn, .pubui .gghead .xsbtn { flex:none; height:auto; padding:2px 8px; font-size:10.5px; font-weight:500; background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:999px; }
+  .pubui .camrow .xsbtn.on, .pubui .gghead .xsbtn.on { border-color:var(--asi-blue); color:var(--asi-blue); background:var(--asi-blue-glow); }
+  #xsPop.xsprompt { left:50% !important; top:28% !important; transform:translateX(-50%); width:min(320px, calc(100vw - 24px)); box-shadow:0 18px 50px rgba(0,0,0,.55); }
+  #xsPop .xsrow.here { color:var(--text-mute); }
+  #xsPop .xsbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  #xsPop .xsbtns .ghost:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .xstab th:first-child, .xstab td:first-child { position:sticky; left:0; background:var(--surface); z-index:1; }
   #xsPop .xsrow input[type=password] { flex:1; min-width:0; font-size:11px; padding:3px 6px; }
   #xsPop .xsrow .lk { color:var(--text-mute); font-size:10px; }
   #xsPop .xsbtns { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
@@ -1692,8 +1702,6 @@
       </label>
     </section>
 
-    <!-- 0.21.47 (Kenton): share to several rooms -- the rooms every new share also goes to -->
-    <div class="xsrooms" id="xsRoomsRow" hidden><span class="xsrl">Also show in</span><span id="xsRoomChips"></span></div>
     <section class="panel">
       <!-- 0.21.20: Teams-style picker -- presenter layouts, then live thumbnails from the host (native capture) -->
       <div class="prrow" id="prRow">
@@ -1803,6 +1811,12 @@
         <span>Attach microphone to</span>
         <select id="micTarget"><option value="">Nobody (everything silent)</option></select>
       </label>
+    </section>
+    <!-- 0.21.62 (Kenton): which of my shares show in which other rooms -- one tick per share and room -->
+    <section class="panel" id="xsTablePanel" hidden>
+      <h2>Show in other rooms</h2>
+      <div id="xsTable"></div>
+      <p class="hint">One stream &mdash; people in a ticked room see that share too. Nothing extra is uploaded. Your choices come back when KASTR restarts.</p>
     </section>
 
     <section class="panel" data-adv-relay hidden>
@@ -1975,7 +1989,6 @@
     <button class="opt" id="optRoom" type="button"><span class="oi">&#9432;</span>Room info</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
     <!-- 0.21.41 (Kenton: "share from 1 device to multiple rooms ... a room selection on the share after toggling the feature on") -->
-    <button class="opt" id="optXshare" type="button" title="Offer to show what you share in other rooms too (one stream -- no extra upload)"><span class="oi">&#10697;</span>Share to several rooms<span class="chk">&#10003;</span></button>
     <button class="opt" id="optDeafen" type="button" title="Turn off all sound from the room and mute your microphone (D)"><span class="oi">&#127911;</span>Deafen<span class="chk">&#10003;</span></button>
     <!-- 0.21.23 (Kenton): Files, Chat, Video effects and Audio settings left More -- they live on the toolbar and under
          the camera / mic chevrons. Files stays for phones only, whose toolbar has no Files button. -->
@@ -2109,6 +2122,7 @@
     <div class="sw"><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label><span>Background quality<small id="fxQualityLbl">Balanced</small></span></div>
     <div class="sw"><span>Processor<small id="fxProcLbl">Auto</small></span><div class="seg" id="fxProc" role="radiogroup" aria-label="Where the background effect runs">
       <button type="button" data-proc="auto" title="The NPU when this computer has one, else the graphics card, else the standard model">Auto</button><button type="button" data-proc="npu" title="The neural processor (Intel AI Boost, AMD XDNA, Qualcomm Hexagon...)">NPU</button><button type="button" data-proc="gpu" title="The graphics card">GPU</button><button type="button" data-proc="standard" title="The standard model (MediaPipe) -- works everywhere">Standard</button></div></div>
+    <button class="opt" id="camXs" type="button">Show my camera in other rooms&hellip;</button>   <!-- 0.21.62 -->
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
 </div>
@@ -3007,7 +3021,7 @@
   // last refresh); members of a listed room see it as a tile (GET /api/xshare?room=B) and their relay session is granted
   // read on that one path. No extra upload. More > "Share to several rooms" turns the offer on.
   const XS_KEY = "kastr.xshare.on";
-  const xsOn = () => { try { return localStorage.getItem(XS_KEY) === "on"; } catch { return false; } };
+  const xsOn = () => true;   // 0.21.62 (Kenton): always offered -- the More switch is gone; each share picks its rooms
   const xsMine = new Map();   // my own source path -> { rooms: Set<slug>, tokens: {slug: jwt}, label, kind }
   const xsTiles = new Map();  // a foreign path listed into my room -> { from, label, by, kind }
   window.__xs = { mine: xsMine, tiles: xsTiles };   // rig
@@ -3020,15 +3034,6 @@
     const x = xsTiles.get(name);
     return x ? u + (u.includes("?") ? "&" : "?") + "xs=" + encodeURIComponent(x.from) : u;
   }
-  function paintXsOpt() { document.getElementById("optXshare")?.classList.toggle("on", xsOn()); }
-  paintXsOpt();
-  document.getElementById("optXshare").addEventListener("click", () => {
-    const on = !xsOn();
-    try { localStorage.setItem(XS_KEY, on ? "on" : "off"); } catch {}
-    closeAllPops(); paintXsOpt(); paintXsRooms();
-    if (!on) { for (const p of [...xsMine.keys()]) xsStop(p); }
-    window.__toast?.(on ? "Share to several rooms: on \u2014 each share's menu (and a prompt when you start one) offers other rooms" : "Share to several rooms: off", 4000, { level: "event" });
-  });
   async function xsTokenFor(slug, code) {   // a member token for another room, minted beside mine (never replaces mine)
     if (!authSecured) return "";
     const base = authBase();
@@ -3071,34 +3076,143 @@
     const x = xsMine.get(path);
     xsMine.delete(path);
     if (x && x.rooms.size) xsPost(path, { stop: true, to: [...x.rooms] });
+    xsChanged();
   }
+  // 0.21.62 (Kenton: "I need to be able to choose which shares go to different rooms, not all shares will go to every
+  // room"): rooms are chosen PER SHARE (my camera too) and remembered per share on this device (kastr.xshare.paths.<relay>),
+  // so a restart, an update or a rejoin lists it again; a locked room's code is kept in memory for this window only
+  const XS_PATHS_KEY = () => "kastr.xshare.paths." + sbRelayHost();
+  const xsCodes = {};   // slug -> code (never stored)
+  function xsSaved() { try { const o = JSON.parse(localStorage.getItem(XS_PATHS_KEY()) || "{}"); return o && typeof o === "object" ? o : {}; } catch { return {}; } }
+  // keyed by room + the share's own name: a renamed profile (a new operator segment) still finds its rooms
+  const xsKey = (path) => { const parts = String(path).split("/"); return parts[0] + "/" + parts[parts.length - 1]; };
+  function xsSave(path, rooms) {
+    const o = xsSaved();
+    if (rooms.length) o[xsKey(path)] = rooms; else delete o[xsKey(path)];
+    try { localStorage.setItem(XS_PATHS_KEY(), JSON.stringify(o)); } catch {}
+  }
+  const xsOtherRooms = () => (lastChannelList || []).filter((r) => r.slug !== CHANNEL && r.slug !== LOBBY).sort((a, b) => a.slug.localeCompare(b.slug));
+  const xsRoomsOf = (path) => [...(xsMine.get(path)?.rooms || [])].sort();
+  const xsLabel = (path) => String(xsMine.get(path)?.label || shortLabel(path)).replace(/^.*? — /, "");   // my own share: no name in front
+  function xsChanged() {
+    try { window.dispatchEvent(new CustomEvent("kastr-xs")); } catch {}
+    try { paintXsTable(true); } catch {}
+  }
+  // exactly these other rooms for one share of mine -> { ok, rooms } | { needCode: slug } | { error }
+  async function xsSetRooms(path, want, opts) {
+    const x = xsMine.get(path) || { rooms: new Set(), tokens: {}, label: shortLabel(path), kind: xsKindOf(path) };
+    const wantSet = new Set([...want].filter((sl) => sl && sl !== CHANNEL && sl !== LOBBY));
+    const add = [...wantSet].filter((sl) => !x.rooms.has(sl)), drop = [...x.rooms].filter((sl) => !wantSet.has(sl));
+    for (const slug of add) {
+      const code = opts?.codes?.[slug] ?? xsCodes[slug] ?? "";
+      try { x.tokens[slug] = await xsTokenFor(slug, code); x.rooms.add(slug); if (code) xsCodes[slug] = code; }
+      catch (e) {
+        if ((lastChannelList || []).find((r) => r.slug === slug)?.locked && !code) return { needCode: slug };
+        return { error: slug + ": " + (e?.message || e) };
+      }
+    }
+    for (const slug of drop) { x.rooms.delete(slug); delete x.tokens[slug]; }
+    if (drop.length) xsPost(path, { stop: true, to: drop });
+    if (x.rooms.size) { xsMine.set(path, x); await xsPost(path); } else xsMine.delete(path);
+    if (opts?.remember !== false) xsSave(path, [...x.rooms]);
+    xsChanged();
+    return { ok: true, rooms: [...x.rooms] };
+  }
+  // one room on / off for one share; a locked room asks its code in KASTR's popup
+  async function xsToggle(path, slug, on) {
+    const want = new Set(xsRoomsOf(path));
+    if (on) want.add(slug); else want.delete(slug);
+    const r = await xsSetRooms(path, want);
+    if (r.needCode) {
+      let ok = false;
+      await kastrConfirm({ title: "Show in a locked room", message: "\u201c" + slug + "\u201d is locked. Enter its code to show " + shortLabel(path) + " there.",
+        ok: "Show in " + slug, cancel: "Cancel", input: { placeholder: "Code for " + slug, masked: true },
+        check: async (v) => {
+          if (!String(v || "").trim()) return "Enter the room\u2019s code.";
+          const rr = await xsSetRooms(path, want, { codes: { [slug]: String(v) } });
+          if (rr.ok) { ok = true; return ""; }
+          return /too many|locked out|try again in/i.test(rr.error || "") ? rr.error : "Wrong room code.";
+        } });
+      if (!ok) xsChanged();
+      return ok;
+    }
+    if (r.error) { window.__toast?.("Not shown in " + r.error, 5000, { level: "warn" }); xsChanged(); return false; }
+    window.__toast?.(on ? shortLabel(path) + " also shows in " + slug : shortLabel(path) + " no longer shows in " + slug, 3000, { level: "event" });
+    return true;
+  }
+  // Share > Show in other rooms: my shares down the side, the other rooms across the top
+  function paintXsTable(force) {
+    const box = document.getElementById("xsTable"), panel = document.getElementById("xsTablePanel");
+    if (!box || !panel) return;
+    const rooms = xsOtherRooms();
+    const mine = [...mineNames].filter((p) => p.startsWith(CHANNEL + "/") && p.endsWith(".hang") && !/-low\.hang$/.test(p))
+      .sort((a, b) => xsLabel(a).localeCompare(xsLabel(b), undefined, { sensitivity: "base", numeric: true }));
+    panel.hidden = joinState !== "joined" || publishOnly || CHANNEL === LOBBY || !rooms.length || !mine.length;
+    if (panel.hidden) { box.dataset.sig = ""; return; }
+    const sig = JSON.stringify([rooms.map((r) => r.slug + (r.locked ? "*" : "")), mine.map((p) => [p, xsLabel(p), xsRoomsOf(p)])]);
+    if (!force && sig === box.dataset.sig) return;
+    if (box.contains(document.activeElement) && !force) return;
+    box.dataset.sig = sig;
+    const t = document.createElement("table"); t.className = "xstab";
+    const hr = document.createElement("tr");
+    const h0 = document.createElement("th"); h0.textContent = "Share"; hr.appendChild(h0);
+    for (const r of rooms) { const th = document.createElement("th"); th.textContent = r.slug; if (r.locked) th.insertAdjacentHTML("beforeend", icon("lock").replace("<svg", '<svg class="lk"')); th.title = r.locked ? r.slug + " is locked \u2014 its code is asked once" : r.slug; hr.appendChild(th); }
+    const th = document.createElement("thead"); th.appendChild(hr); t.appendChild(th);
+    const tb = document.createElement("tbody");
+    for (const p of mine) {
+      const tr = document.createElement("tr");
+      const td0 = document.createElement("td"); td0.textContent = xsLabel(p); td0.title = xsLabel(p); tr.appendChild(td0);
+      const on = new Set(xsRoomsOf(p));
+      for (const r of rooms) {
+        const td = document.createElement("td");
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = on.has(r.slug);
+        cb.setAttribute("aria-label", "Show " + xsLabel(p) + " in " + r.slug);
+        cb.addEventListener("change", async () => { cb.disabled = true; await xsToggle(p, r.slug, cb.checked); paintXsTable(true); });
+        td.appendChild(cb); tr.appendChild(td);
+      }
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb);
+    box.replaceChildren(t);
+  }
+  window.__xsRooms = { of: xsRoomsOf, others: () => xsOtherRooms().length, open: (path, anchor) => openXsPicker(path, anchor), set: xsSetRooms, saved: xsSaved };   // the Sources rows (module 2) + rig
   setInterval(() => {   // refresh my listings; drop the ones whose share ended or whose room I left
     if (!xsMine.size) return;
     for (const p of [...xsMine.keys()]) {
-      if (!p.startsWith(CHANNEL + "/") || !mineNames.has(p)) { xsStop(p); continue; }
+      if (!p.startsWith(CHANNEL + "/") || !mineNames.has(p)) { xsStop(p); continue; }   // 0.21.62: its remembered rooms stay for when it comes back
       if (xsMine.get(p).rooms.size) xsPost(p);
     }
   }, 60000);
   function xsClosePicker() { document.getElementById("xsPop")?.remove(); }
-  function openXsPicker(path, anchor) {
+  function openXsPicker(path, anchor, opts) {
     xsClosePicker();
-    const x = xsMine.get(path) || { rooms: new Set(), tokens: {}, label: shortLabel(path), kind: xsKindOf(path) };
-    const rooms = (lastChannelList || []).filter((r) => r.slug !== CHANNEL).sort((a, b) => a.slug.localeCompare(b.slug));
+    const prompt = !!opts?.prompt;
+    const label = xsLabel(path);
+    const cur = new Set(xsRoomsOf(path));
+    const rooms = xsOtherRooms();
     const pop = document.createElement("div"); pop.id = "xsPop";
-    pop.innerHTML = '<h4></h4><p class="xshint">One stream \u2014 people in the rooms you tick see it too. Nothing extra is uploaded.</p><div class="xslist"></div><div class="xserr"></div><div class="xsbtns"><button type="button" class="ghost xscancel">Cancel</button><button type="button" class="primary xsok">Apply</button></div>';
-    pop.querySelector("h4").textContent = "Also show \u201c" + x.label + "\u201d in";
+    if (prompt) pop.className = "xsprompt";
+    pop.innerHTML = '<h4></h4><p class="xshint">One stream \u2014 people in the rooms you tick see it too. Nothing extra is uploaded.</p><div class="xslist"></div><div class="xserr"></div><div class="xsbtns"><button type="button" class="ghost xscancel"></button><button type="button" class="primary xsok">Apply</button></div>';
+    pop.querySelector("h4").textContent = prompt ? "Show \u201c" + label + "\u201d in other rooms too?" : "Show \u201c" + label + "\u201d in";
+    pop.querySelector(".xscancel").textContent = prompt ? "Just this room" : "Cancel";
     const list = pop.querySelector(".xslist");
-    if (!rooms.length) list.textContent = "No other rooms on this relay yet.";
+    const here = document.createElement("label"); here.className = "xsrow here";
+    const hsw = document.createElement("span"); hsw.className = "switch sm";
+    const hcb = document.createElement("input"); hcb.type = "checkbox"; hcb.checked = true; hcb.disabled = true;
+    hsw.append(hcb, document.createElement("i"));
+    const hn = document.createElement("span"); hn.textContent = roomTitle(CHANNEL) + " (this room)";
+    here.append(hsw, hn); list.appendChild(here);
+    if (!rooms.length) { const p = document.createElement("p"); p.className = "xshint"; p.textContent = "No other rooms on this relay yet."; list.appendChild(p); }
     const rows = [];
     for (const r of rooms) {
       const row = document.createElement("label"); row.className = "xsrow";
       const sw = document.createElement("span"); sw.className = "switch sm";
-      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = x.rooms.has(r.slug);
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = cur.has(r.slug);
       sw.append(cb, document.createElement("i"));
       const nm = document.createElement("span"); nm.textContent = r.slug;
       row.append(sw, nm);
       let code = null;
-      if (r.locked && !x.tokens[r.slug]) {
+      if (r.locked && !cur.has(r.slug) && !xsCodes[r.slug]) {
         const lk = document.createElement("span"); lk.className = "lk"; lk.textContent = "locked";
         code = document.createElement("input"); code.type = "password"; code.placeholder = "room code"; code.hidden = !cb.checked;
         cb.addEventListener("change", () => { code.hidden = !cb.checked; if (cb.checked) code.focus(); });
@@ -3110,90 +3224,57 @@
     pop.querySelector(".xscancel").addEventListener("click", xsClosePicker);
     pop.querySelector(".xsok").addEventListener("click", async () => {
       const err = pop.querySelector(".xserr"); err.textContent = "";
-      const add = [], drop = [];
-      for (const r of rows) { if (r.cb.checked && !x.rooms.has(r.slug)) add.push(r); else if (!r.cb.checked && x.rooms.has(r.slug)) drop.push(r.slug); }
-      for (const r of add) {
-        try { x.tokens[r.slug] = await xsTokenFor(r.slug, r.code?.value || ""); x.rooms.add(r.slug); }
-        catch (e) { err.textContent = r.slug + ": " + (e?.message || e); return; }
-      }
-      for (const slug of drop) { x.rooms.delete(slug); delete x.tokens[slug]; }
-      if (drop.length) xsPost(path, { stop: true, to: drop });
-      if (x.rooms.size) { xsMine.set(path, x); await xsPost(path); } else xsMine.delete(path);
+      const want = new Set(rows.filter((r) => r.cb.checked).map((r) => r.slug));
+      const codes = {};
+      for (const r of rows) if (r.code && r.cb.checked) codes[r.slug] = r.code.value;
+      const res = await xsSetRooms(path, want, { codes });
+      if (res.needCode) { err.textContent = res.needCode + " is locked \u2014 enter its code."; return; }
+      if (res.error) { err.textContent = res.error; return; }
       xsClosePicker();
-      window.__toast?.(x.rooms.size ? "Also showing in " + [...x.rooms].join(", ") : "Shown in this room only", 3500, { level: "event" });
+      window.__toast?.(res.rooms.length ? label + " also shows in " + res.rooms.join(", ") : label + " shows in this room only", 3500, { level: "event" });
     });
     document.body.appendChild(pop);
-    const a = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2 - 140, bottom: 120, top: 120 };
-    pop.style.left = Math.max(8, Math.min(innerWidth - 296, a.left)) + "px";
-    pop.style.top = Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, a.bottom + 6)) + "px";
+    if (!prompt) {
+      const a = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2 - 140, bottom: 120, top: 120 };
+      pop.style.left = Math.max(8, Math.min(innerWidth - 296, a.left)) + "px";
+      pop.style.top = Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, a.bottom + 6)) + "px";
+    }
     setTimeout(() => {
+      (pop.querySelector(".xsrow:not(.here) input") || pop.querySelector(".xsok"))?.focus?.();
+      if (prompt) return;   // the question stays until it is answered
       const off = (e) => { if (!pop.isConnected) { document.removeEventListener("pointerdown", off, true); return; } if (!pop.contains(e.target)) { xsClosePicker(); document.removeEventListener("pointerdown", off, true); } };
       document.addEventListener("pointerdown", off, true);
     }, 0);
   }
   window.__xsPicker = openXsPicker;   // rig
-  // 0.21.47 (Kenton: "Give options to choose which rooms in the share section"): Share > "Also show in" -- the rooms every NEW
-  // share of mine is listed into (kept per relay on this device; a locked room's code is asked once and kept for this session).
-  // My camera is not a share: its own menu lists it. A share's own menu still changes one share.
-  const XS_ROOMS_KEY = () => "kastr.xshare.rooms." + sbRelayHost();
-  const xsDefault = { rooms: new Set(), tokens: {}, codes: {} };
-  try { for (const r of JSON.parse(localStorage.getItem(XS_ROOMS_KEY()) || "[]")) if (typeof r === "string") xsDefault.rooms.add(r); } catch {}
-  function xsDefaultSave() { try { localStorage.setItem(XS_ROOMS_KEY(), JSON.stringify([...xsDefault.rooms])); } catch {} }
-  function paintXsRooms() {
-    const row = document.getElementById("xsRoomsRow"), box = document.getElementById("xsRoomChips");
-    if (!row || !box) return;
-    const rooms = (lastChannelList || []).filter((r) => r.slug !== CHANNEL).sort((a, b) => a.slug.localeCompare(b.slug));
-    row.hidden = !xsOn() || joinState !== "joined" || publishOnly || !rooms.length;
-    if (row.hidden) return;
-    box.replaceChildren();
-    for (const r of rooms) {
-      const b = document.createElement("button"); b.type = "button"; b.className = "xsrchip" + (xsDefault.rooms.has(r.slug) ? " on" : "");
-      b.innerHTML = r.locked ? icon("lock") : "";
-      b.append(document.createTextNode(r.slug));
-      b.title = xsDefault.rooms.has(r.slug) ? "New shares also show in " + r.slug + " \u2014 click to stop" : "Also show new shares in " + r.slug;
-      b.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (xsDefault.rooms.has(r.slug)) { xsDefault.rooms.delete(r.slug); delete xsDefault.tokens[r.slug]; xsDefaultSave(); paintXsRooms(); return; }
-        let code = "";
-        if (r.locked && authSecured) {
-          const a = await kastrConfirm({ title: "Also show in a locked room", message: "\u201c" + r.slug + "\u201d is locked. Enter its code to show your shares there.",
-            ok: "Show in " + r.slug, cancel: "Cancel", input: { placeholder: "Code for " + r.slug, masked: true },
-            check: async (v) => { if (!String(v || "").trim()) return "Enter the room\u2019s code."; try { xsDefault.tokens[r.slug] = await xsTokenFor(r.slug, v); return ""; } catch (err) { return String(err?.message || err); } } });
-          if (a === false) return;
-          code = String(a);
-        } else {
-          try { xsDefault.tokens[r.slug] = await xsTokenFor(r.slug, ""); } catch (err) { window.__toast?.("Not shown in " + r.slug + ": " + (err?.message || err), 5000, { level: "warn" }); return; }
-        }
-        if (code) xsDefault.codes[r.slug] = code;
-        xsDefault.rooms.add(r.slug); xsDefaultSave(); paintXsRooms();
-      });
-      box.appendChild(b);
-    }
-  }
-  // a new share of mine while the switch is on: list it into the rooms ticked under Share (once per share)
-  const xsOffered = new Set();
-  async function xsOfferNew() {
-    paintXsRooms();
-    if (!xsOn() || joinState !== "joined") return;
+  // 0.21.62: a share of mine on the air: its remembered rooms come back (a restart, an update, a rejoin); a NEW share I
+  // start asks which other rooms should see it ("Just this room" = no). My camera and a box never ask.
+  const xsSeen = new Set(), xsAsked = new Set();
+  let xsJoinedAt = 0, xsJoinedRoom = "";
+  window.__xsDbg = () => ({ seen: [...xsSeen], asked: [...xsAsked], joinedAgo: Date.now() - xsJoinedAt, mine: [...mineNames], others: xsOtherRooms().map((r) => r.slug) });   // rig
+  async function xsTick() {
+    paintXsTable();
+    if (joinState !== "joined" || publishOnly || CHANNEL === LOBBY) return;
+    if (xsJoinedRoom !== CHANNEL) { xsJoinedRoom = CHANNEL; xsJoinedAt = Date.now(); }
+    const saved = xsSaved();
     for (const p of mineNames) {
-      if (xsOffered.has(p) || !p.startsWith(CHANNEL + "/")) continue;
-      xsOffered.add(p);
-      if (/\/camera(-\d+)?\.hang$/.test(p) || xsMine.has(p)) continue;   // my camera is not a share; a share already listed keeps its rooms
-      const rooms = [...xsDefault.rooms].filter((r) => r !== CHANNEL);
-      if (!rooms.length) continue;
-      const x = { rooms: new Set(), tokens: {}, label: shortLabel(p), kind: xsKindOf(p) };
-      for (const r of rooms) {
-        let tok = xsDefault.tokens[r];
-        if (authSecured && (!tok || jwtExp(tok) * 1000 - Date.now() < 120000)) {
-          try { tok = xsDefault.tokens[r] = await xsTokenFor(r, xsDefault.codes[r] || ""); } catch { window.__toast?.("Not shown in " + r + " (its code is needed again \u2014 Share \u25b8 Also show in)", 5000, { level: "warn" }); xsDefault.rooms.delete(r); xsDefaultSave(); continue; }
-        }
-        x.rooms.add(r); x.tokens[r] = tok || "";
+      if (xsSeen.has(p) || !p.startsWith(CHANNEL + "/") || !p.endsWith(".hang") || /-low\.hang$/.test(p)) continue;
+      xsSeen.add(p);
+      if (xsMine.has(p)) continue;
+      const keep = saved[xsKey(p)];
+      if (Array.isArray(keep) && keep.length) {
+        const r = await xsSetRooms(p, keep, { remember: false });
+        if (r.needCode || r.error) window.__toast?.(shortLabel(p) + " is not shown in " + (r.needCode || r.error) + " \u2014 Share \u25b8 Show in other rooms", 6000, { level: "warn" });
+        else if (r.rooms?.length) window.__toast?.(shortLabel(p) + " also shows in " + r.rooms.join(", "), 3500, { level: "event" });
+        continue;
       }
-      if (!x.rooms.size) continue;
-      xsMine.set(p, x);
-      await xsPost(p);
-      window.__toast?.(shortLabel(p) + " also shows in " + [...x.rooms].join(", "), 3500, { level: "event" });
+      if (/\/camera(-\d+)?\.hang$/.test(p) || isPublisherMode() || xsAsked.has(p)) continue;
+      if (Date.now() - xsJoinedAt < 45000 || !xsOtherRooms().length || document.getElementById("xsPop")) continue;   // what a (re)join brings back (a restored camera can take 30 s) is not news
+      xsAsked.add(p);
+      openXsPicker(p, null, { prompt: true });
+      break;   // one question at a time
     }
+    for (const p of [...xsSeen]) if (!mineNames.has(p)) xsSeen.delete(p);   // a share that comes back later is looked at again
   }
   // members' side: what is listed into my room becomes a tile (the tile's own relay session is granted that path)
   let xsBusy = false;
@@ -3223,7 +3304,7 @@
     }
     for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p)) scheduleRemoveTile(p); }
   }
-  setInterval(() => { xsPoll(); xsOfferNew(); }, 8000);
+  setInterval(() => { xsPoll(); xsTick(); }, 8000);   // 0.21.62
   window.__xsPoll = xsPoll;   // rig
   // 0.21.49 (Kenton: "I'm still not able to spotlight a share from another room except for pinning it for myself"):
   // "Spotlight for everyone" on a source I WATCH from another room first LISTS it into my room (a bring-in: my member token
@@ -8644,7 +8725,7 @@
       const pt = window.__rtspPt?.get?.(ref.id), md = window.__rtspPt?.mode?.(ref.id);   // 0.21.17
       if (pt !== undefined) items.push({ value: "pt", label: (pt ? "Pass through: on" : "Pass through: off") + (md ? " (" + md + ")" : "") });
     }
-    if (xsOn()) items.push({ value: "xshare", label: "Also show in other rooms\u2026" });   // 0.21.41
+    if (CHANNEL !== LOBBY && !publishOnly) items.push({ value: "xshare", label: "Show in other rooms\u2026" });   // 0.21.41; 0.21.62: always, my camera too
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     const ownLit = window.__spotIs?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.30: already spotlit -> offer to remove it
     const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };
@@ -9726,6 +9807,12 @@
     } catch (err) { window.__toast?.("Could not store that background: " + (err?.message || err), 5000, { level: "warn" }); }
   });
   document.getElementById("camMore").addEventListener("click", () => { closeAllPops(); encPop.hidden = false; placePop(encPop, topCamChev); });
+  document.getElementById("camXs").addEventListener("click", () => {   // 0.21.62 (Kenton: "When sharing my camera, I don't have the ability to share it to another room")
+    closeAllPops();
+    const { src } = localCamSrc();
+    if (!src?.name || joinState !== "joined") { window.__toast?.("Turn your camera on first \u2014 then choose the rooms it shows in", 4000, { level: "info" }); return; }
+    openXsPicker(CHANNEL + "/" + hangName(src.name), topCamChev);
+  });
   window.__camFx = () => camFxWire();   // the join flow (publish half) passes it to the camera source
   window.__bgPreset = bgPreset;          // the publish half resolves "preset:<id>" through it
 
@@ -15232,6 +15319,18 @@
   // 0.21.27 (Kenton: "the camera source on Logan-ROC isn't showing in the sources section for me to add to a grid"): the
   // toolbar camera lives in the browser and cannot be a grid member, so its row offers to MOVE it to this computer as a
   // host feed (0.21.26): KASTR's own camera goes off (a webcam opens once), the same device is captured by the bridge.
+  // 0.21.62: the rooms one source shows in (this room + N) -- a click opens its own rooms list
+  function xsRoomsBtn(name) {
+    if (!name || !window.__xsRooms?.others?.() || IS_WEB2 && !window.__joinedChannel?.()) return null;
+    const path = chanPath(ensureHang(name));
+    const rooms = window.__xsRooms.of(path) || [];
+    const b = document.createElement("button"); b.type = "button"; b.className = "xsbtn" + (rooms.length ? " on" : "");
+    b.textContent = rooms.length ? "This room +" + rooms.length : "This room";
+    b.title = rooms.length ? "Also shown in " + rooms.join(", ") + " \u2014 click to change" : "Shown in this room only \u2014 click to show it in other rooms too";
+    b.addEventListener("click", (e) => { e.stopPropagation(); window.__xsRooms.open(path, b); });
+    return b;
+  }
+  window.addEventListener("kastr-xs", () => { try { renderSources(); } catch {} });
   function cameraGridRow(a) {
     const row = document.createElement("div");
     row.className = "camrow camsrc";
@@ -15266,6 +15365,7 @@
       if (e) window.__toast?.("Camera moved to this computer's feeds \u2014 it is in " + gridNameOf(gid) + " now", 5000, { level: "info" });
     });
     top.append(lbl, sel);
+    { const xb = xsRoomsBtn(a.name); if (xb) top.appendChild(xb); }   // 0.21.62: my camera in other rooms
     row.appendChild(top);
     return row;
   }
@@ -15340,6 +15440,7 @@
           "Pass every camera in this grid through untouched when viewers can decode it (off = convert to H.264 here). Applies live.",
           (on) => { for (const x of ptMembers) window.__rtspPt?.set?.(x.id, on); renderSources(); }) : null;
         head.append(sw, ht, audSw, ...(ptSw ? [ptSw] : []));   // 0.21.40: the grid's on-air switch before its name
+        { const g = rtspGrids.get(gid); const xb = xsRoomsBtn(g?.entry?.name); if (xb) head.appendChild(xb); }   // 0.21.62: the grid in other rooms
         box.appendChild(head);
         camrowsEl.appendChild(box);
         groupBoxes.set(gid, box);
@@ -15366,6 +15467,7 @@
 
       const lbl = row.querySelector(".lbl");
       lbl.textContent = (a.kind === SCREEN || (a.kind === RTSP && isScreenUrl(a.url)) ? "🖵  " : "") + a.label;   // 0.21.26: a native screen share too
+      { const xb = xsRoomsBtn(a.name); if (xb) row.querySelector(".top").insertBefore(xb, row.querySelector(".rm")); }   // 0.21.62: this share in other rooms
       lbl.title = a.label;
 
       const cb = row.querySelector("input[type=checkbox]");

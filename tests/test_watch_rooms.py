@@ -146,14 +146,15 @@ class RoomScoped(unittest.TestCase):
         self.assertIn('if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target))) return;   // 0.21.47', p)
 
 
-class ShareRoomsRow(unittest.TestCase):
-    def test_row_and_new_shares_follow_it(self):
+class ShareRoomsPerShare(unittest.TestCase):
+    """0.21.62 (Kenton): no pill row of rooms for every share -- each share (camera included) picks its own rooms."""
+    def test_no_pill_row_and_new_shares_ask(self):
         p = _page()
-        self.assertIn('<div class="xsrooms" id="xsRoomsRow" hidden><span class="xsrl">Also show in</span><span id="xsRoomChips"></span></div>', p)
-        body = p[p.index("  async function xsOfferNew() {"):p.index("  // members' side: what is listed into my room")]
-        self.assertIn("const rooms = [...xsDefault.rooms].filter((r) => r !== CHANNEL);", body)
-        self.assertIn("/\/camera(-\d+)?\.hang$/.test(p)", body)
-        self.assertIn("await xsPost(p);", body)
+        self.assertNotIn('id="xsRoomsRow"', p)
+        body = p[p.index("  async function xsTick() {"):p.index("  // members' side: what is listed into my room")]
+        self.assertIn("const r = await xsSetRooms(p, keep, { remember: false });", body)   # remembered rooms come back
+        self.assertIn(r"/\/camera(-\d+)?\.hang$/.test(p) || isPublisherMode()", body)   # the camera and a box never ask
+        self.assertIn("openXsPicker(p, null, { prompt: true });", body)
 
 
 if __name__ == "__main__":

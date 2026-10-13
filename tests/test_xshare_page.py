@@ -14,10 +14,17 @@ def _page():
 
 
 class ShareToSeveralRooms(unittest.TestCase):
-    def test_switch_in_more_and_menu_item(self):
+    def test_always_offered_per_share(self):
+        # 0.21.62 (Kenton): the More switch is gone; every own tile (camera too), the camera menu, a Rooms button per
+        # source and the Share table pick the rooms of ONE share, remembered per share (codes never stored)
         p = _page()
-        self.assertIn('id="optXshare"', p)
-        self.assertIn('if (xsOn()) items.push({ value: "xshare", label: "Also show in other rooms\\u2026" });', p)
+        self.assertNotIn('id="optXshare"', p)
+        self.assertIn('items.push({ value: "xshare", label: "Show in other rooms\\u2026" });', p)
+        self.assertIn('id="camXs"', p)
+        self.assertIn('id="xsTablePanel"', p)
+        self.assertIn("function xsRoomsBtn(name) {", p)
+        self.assertIn('const XS_PATHS_KEY = () => "kastr.xshare.paths." + sbRelayHost();', p)
+        self.assertIn("const xsCodes = {};   // slug -> code (never stored)", p)
 
     def test_listing_is_proven_by_both_rooms_tokens(self):
         p = _page()
@@ -34,7 +41,7 @@ class ShareToSeveralRooms(unittest.TestCase):
 
     def test_the_token_never_rides_the_listing_url(self):
         p = _page()
-        body = p[p.index("  async function xsPoll() {"):p.index("  setInterval(() => { xsPoll(); xsOfferNew(); }, 8000);")]
+        body = p[p.index("  async function xsPoll() {"):p.index("  setInterval(() => { xsPoll(); xsTick(); }, 8000);")]
         self.assertNotIn("jwt=", body)
 
 

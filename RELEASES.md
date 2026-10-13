@@ -2,6 +2,16 @@
 
 What changed in each build, newest first.
 
+## v0.21.62 — each share picks its rooms
+
+**Choose the rooms for each share, your camera included (Kenton: "When sharing my camera, I don't have the ability to share it to another room ... I need to be able to choose which shares go to different rooms, not all shares will go to every room").** Every share still sends one stream; people in each room you pick for it see it too, and nothing extra is uploaded. Kenton chose all four ways to pick:
+- **Rooms button:** every source in **Share ▸ Sources** (camera, screens, RTSP and RTMP feeds, files) and every grid shows where it goes: **This room**, or **This room +2**. Click it to tick rooms for that share only.
+- **Show in other rooms table:** a card under Sources lists your shares down the side and the other rooms across the top. Tick any box. A locked room asks for its code once.
+- **Asked when you start a share:** a new share asks **Show “…” in other rooms too?** Answer **Just this room**, or tick rooms and **Apply**. Your camera, a camera box, and shares that come back when you rejoin never ask.
+- **Menus:** **Show in other rooms…** is in every one of your own tiles' menus, and in the camera menu (**Show my camera in other rooms…**).
+- **Remembered:** each share's rooms are remembered on this computer. A reload, a restart or an update lists it in the same rooms again. Room codes are never saved; a locked room asks again after a restart.
+- **Removed:** the **Also show in** pill row in Share (which sent every new share everywhere) and the **More ▸ Share to several rooms** switch. Choosing rooms is always available now.
+
 ## v0.21.61 — light mode, your colours, updates that put you back, spotlights that wait
 
 **Choose Light, Dark or System (Kenton: "Let people choose light/dark mode or the system default").** **More ▸ Appearance** switches between **Dark**, **Light** and **System**. System follows the device's own light or dark setting, and changes along with it.

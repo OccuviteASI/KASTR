@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.60 — a guide in Help, and the iPhone app's top edge (in progress)
+## v0.21.60 — the Lobby, a guide in Help, and the iPhone app's top edge
 
 **`main` is now the Lobby (Kenton: "Lets change main to something like waiting room ... disable all views and people seeing each other").** The room everyone starts in is shown as **Lobby** everywhere: the room pill, the rooms list, the join screen and the change-room prompt. Kenton chose these rules:
 - **Nothing is shared in the Lobby:** Camera, Mic, Share, People, Chat, Files and View are switched off there. The relay itself enforces it: a Lobby token can announce only that its holder is present, cannot publish media and cannot watch anything in the room. **An unattended box left in `main` stops publishing** and says so on its page. Move each box to its site room.

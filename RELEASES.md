@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.59 — pick any source on a phone (in progress)
+## v0.21.59 — pick any source on a phone
 
 **A row of thumbnails under the stage on phones (Kenton, iPhone: "I don't have the ability to see the side rail to pick anything other than the spotlighted items").** A phone held upright used to show only the stage in speaker view, with no rail, the same as Focus on content. Now it shows a row of small live thumbnails directly under the stage: everyone and everything else in the room, with your own preview last. Swipe the row sideways and tap a thumbnail to put it on the stage; the stage stays where it is while you swipe.
 - **Spotlight grid:** when several things are spotlighted, the phone shows the first on the stage and the rest at the start of the row.

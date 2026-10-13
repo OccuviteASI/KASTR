@@ -107,6 +107,11 @@ FEDERATION_RENEW = 7 * 86400
 FEDERATION_CHECK = 600
 FEDERATION_CLAIMS = {"root": "", "put": "", "get": ""}
 SLUG_RE = re.compile(r"[a-z0-9-]{1,32}$")
+# 0.21.60 (Kenton: "change main to something like waiting room ... disable all views and people seeing each other";
+# chose "Lobby", enforced by the relay): the room `main` is the Lobby. Its tokens put only the holder's presence
+# (~state/main/<host>, ~presence/main) and subscribe to nothing of the room -- no media, no room state, no chat -- so
+# nobody publishes there (unattended boxes left in main stop) and nobody sees anyone. The public kinds stay public.
+LOBBY_SLUG = "main"
 # 0.12.0: kept (persistent) rooms -- their records and chat outlive the 24 h
 # heartbeat window -- are capped, and a closed room leaves an hour-long
 # tombstone so pages learn WHY the chat answers 410.
@@ -413,6 +418,9 @@ def claims_to_grant(claims, now=None):
     else:
         pub = _patterns(claims.get("put")) if claims.get("put") is not None else []
         sub = _patterns(claims.get("get")) if claims.get("get") is not None else []
+    if claims.get("lobby"):   # 0.21.60: the Lobby -- its own presence out, nothing of the room in (the public kinds below)
+        pub = [p for p in pub if _is_control_put(p)]
+        sub = []
     if "**" not in sub:
         for q in public_patterns():
             if q not in sub:
@@ -2338,6 +2346,12 @@ class AuthService:
         now = int(time.time())
         ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with ~admin
         exp = now + ttl
+        if slug == LOBBY_SLUG:   # 0.21.60: the Lobby -- presence only, whatever the code's role
+            puts = ([STATE_PREFIX + "/" + slug + "/" + host] if host else []) + [PRESENCE_KIND + "/" + slug]
+            member = _mint(self.key, {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp})
+            registry = _mint(self.key, {"root": "", "put": CHANNELS_KIND + "/" + slug, "iat": now, "exp": exp})
+            return {"ok": True, "exp": exp, "role": role, "ns": NS, "lobby": True,
+                    "tokens": {"member": member, "registry": registry}}, 200
         if host:
             # 0.13.0: identity-scoped puts. A token writes only under the host
             # it named (its media / its ~member broadcast, its ~state track) plus

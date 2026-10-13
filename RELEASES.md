@@ -4,6 +4,14 @@ What changed in each build, newest first.
 
 ## v0.21.60 — a guide in Help, and the iPhone app's top edge (in progress)
 
+**`main` is now the Lobby (Kenton: "Lets change main to something like waiting room ... disable all views and people seeing each other").** The room everyone starts in is shown as **Lobby** everywhere: the room pill, the rooms list, the join screen and the change-room prompt. Kenton chose these rules:
+- **Nothing is shared in the Lobby:** Camera, Mic, Share, People, Chat, Files and View are switched off there. The relay itself enforces it: a Lobby token can announce only that its holder is present, cannot publish media and cannot watch anything in the room. **An unattended box left in `main` stops publishing** and says so on its page. Move each box to its site room.
+- **Nobody sees anybody:** no tiles, no people list, and the Lobby's card in the rooms list shows no names and no count.
+- **Other rooms, seen from the Lobby:** their names and how many people are in each, but not who. You can't watch another room from the Lobby.
+- **No chat:** the Lobby refuses chat messages and files, and keeps no history.
+- **Joining a room:** the stage lists every room with its count; tap one to go straight in (a locked room asks for its code). The rooms list works as before.
+- **Unchanged:** KASTR still opens in your last room; the Lobby is where first-timers start and where you land when your last room is gone. The room's internal name stays `main`, so saved settings, invite links and older KASTRs keep working. A relay enforces the Lobby rules only once it runs 0.21.60; on an older relay, only the page hides things.
+
 **Help is now a guide to basic use (Kenton: "I would like an update to the help section with a guide for basic use").** **More ▸ Help & guide** opens short sections you can open and close: Getting started, The screen, Watching, Talking, Sharing, Rooms, Phones and tablets (including how to add KASTR to an iPhone or Android home screen), Keyboard shortcuts, and Something not working?. It replaces the old help text, which still described the 0.7 layout. The guide scrolls inside its card, so it fits on a phone.
 
 **The iPhone home-screen app's top edge works (Kenton, iPhone in full screen: "I can't click on everything at the top. When I collapsed the top bar it won't let me click on the expand button. The expand button is overlapping with the people button").**

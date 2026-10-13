@@ -103,7 +103,8 @@ class RailUi(unittest.TestCase):
 
     def test_box_modes_never_watch(self):
         p = _page()
-        self.assertIn("const wrCan = (rec) => !!rec && joinState === \"joined\" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly;", p)
+        self.assertIn("const wrCan = (rec) => !!rec && joinState === \"joined\" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly", p)
+        self.assertIn("&& CHANNEL !== LOBBY && rec.slug !== LOBBY;", p)   # 0.21.60: never from or of the Lobby
 
 
 class PickPerSource(unittest.TestCase):

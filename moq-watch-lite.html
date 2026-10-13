@@ -190,6 +190,21 @@
      Never move one between containers: a DOM move fires disconnected/connected
      on the custom element, which is exactly the full teardown that broke audio. */
   #stage { display:grid; grid-template-columns:1fr; gap:12px; }
+  /* 0.21.60: the Lobby -- the toolbar's sharing, people, chat and files are off; the stage shows the rooms to join */
+  body.inlobby #topCamBtn, body.inlobby #topCamChev, body.inlobby #topMicBtn, body.inlobby #topMicChev, body.inlobby #shareBtn,
+  body.inlobby #peopleBtn, body.inlobby #chatBtn, body.inlobby #filesBtn, body.inlobby #gridBtn { opacity:.3; pointer-events:none; }
+  body.inlobby #stage { visibility:hidden; }
+  #lobbyCard { position:absolute; left:50%; top:max(24px, 12%); transform:translateX(-50%); width:min(520px, calc(100% - 32px)); z-index:5;
+    padding:20px 22px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 18px 48px rgba(0,0,0,.45); }
+  #lobbyCard[hidden] { display:none; }
+  #lobbyCard h2 { margin:0 0 6px; font-size:20px; letter-spacing:.01em; }
+  #lobbyCard p { margin:0 0 14px; color:var(--text-dim); font-size:13px; line-height:1.55; }
+  #lobbyCard .lbrooms { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; font-size:13px; color:var(--text-dim); }
+  #lobbyCard .lbroom { display:flex; flex-direction:column; align-items:flex-start; gap:2px; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+    background:var(--surface-2); color:var(--text); cursor:pointer; text-align:left; height:auto; }
+  #lobbyCard .lbroom:hover, #lobbyCard .lbroom:focus-visible { border-color:var(--asi-blue); outline:none; }
+  #lobbyCard .lbroom .nm { font-weight:600; }
+  #lobbyCard .lbroom .ct { font-size:12px; color:var(--text-mute); }
   /* 0.21.59: an upright phone in speaker view -- the stage on top (sticky while you swipe), live thumbnails in a row below */
   #stage.phonestrip { overflow-x:auto; overflow-y:hidden; overflow-anchor:none; overscroll-behavior-x:contain; -webkit-overflow-scrolling:touch;
     align-content:start; gap:8px; padding-bottom:4px; scrollbar-width:none; }
@@ -1456,7 +1471,7 @@
     #topbar .tchev { width:16px; height:40px; }
     #topbar .tbdiv, #topbar #filesBtn { display:none; }
     #optPop .opt.phoneonly:not([hidden]) { display:flex; }   /* 0.21.23 */
-    #topbar #leaveBtn.tb { width:44px; margin-left:auto; }
+    #topbar #leaveBtn.tb { width:44px; margin-left:auto; }   /* (0.21.60 Lobby rules are global, below) */
     #roomBanner { max-width:min(62vw, 260px); }   /* 0.13.3: the ellipsis lives on .rbname */
     /* 0.12.0: phones -- the sidebar is a drawer over the page (never the collapsed rail) */
     main.asi-page { flex-direction:column; }
@@ -1836,7 +1851,7 @@
     <details open><summary>Getting started</summary>
       <ol>
         <li>Open KASTR &mdash; the app, or the web address you were given.</li>
-        <li>Type your <b>name</b> and the <b>access code</b> you were given, then press <b>Join</b>. You start in the room you used last.</li>
+        <li>Type your <b>name</b> and the <b>access code</b> you were given, then press <b>Join</b>. You start in the room you used last &mdash; the first time, in the <b>Lobby</b>.</li>
         <li>You arrive with your camera and microphone <b>off</b>. Turn them on with <b>Camera</b> and <b>Mic</b> at the top.</li>
         <li>The red button on the right <b>leaves</b> the room.</li>
       </ol>
@@ -1876,6 +1891,7 @@
     </details>
     <details><summary>Rooms</summary>
       <ul>
+        <li>The <b>Lobby</b> is where you wait: nothing is shared there and nobody sees who else is waiting. Pick a room on the stage or in the list to join it.</li>
         <li><b>Switch rooms</b> by clicking another room in the list (your mic is muted and camera turned off on the way).</li>
         <li><b>Create a room</b> with the &#8853; in the list&rsquo;s header. A room can have its own code (locked) and can be kept open when empty.</li>
         <li><b>Watch another room</b> without leaving yours: the eye on its card, or right-click it &#9656; <b>Watch from &hellip;</b>. Watched rooms stay silent until you choose <b>Hear &hellip;</b>.</li>
@@ -2411,6 +2427,12 @@
     try { return channelSlug(localStorage.getItem(CHANNEL_KEY)); } catch { return "main"; }
   }
   let CHANNEL = "main";
+  // 0.21.60 (Kenton: "change main to something like waiting room ... disable all views and people seeing each other"):
+  // the room `main` is the Lobby -- its name everywhere, nothing published or watched in it (the relay enforces that),
+  // no people lists, no chat, no watching other rooms from it; the rooms list there shows names and counts only.
+  const LOBBY = "main";
+  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : String(slug || ""));
+  const inLobby = () => { try { return joinState === "joined" && CHANNEL === LOBBY; } catch { return false; } };   // (joinState is declared further down: early callers get false)
   const watchRooms = new Map();   // 0.21.44: rooms I only WATCH (slug -> state), see "watch extra rooms"
   // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
   // player's target is jitter(delay) + buffer. Per tile class (applyState re-tunes): the
@@ -3471,7 +3493,8 @@
       } });
     return ans === false ? null : { code: String(ans), tok };
   }
-  const wrCan = (rec) => !!rec && joinState === "joined" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly;
+  const wrCan = (rec) => !!rec && joinState === "joined" && rec.slug !== CHANNEL && !isPublisherMode() && !publishOnly
+    && CHANNEL !== LOBBY && rec.slug !== LOBBY;   // 0.21.60: not from the Lobby, and the Lobby is never watched
   // the eye: start watching (a locked room asks for its code) and open the room's list; already watching -> the list
   async function wrToggle(rec, anchor) {
     if (!wrCan(rec)) return;
@@ -4627,7 +4650,7 @@
     return (w.length > 1 ? w.map((x) => x[0]).join("") : (w[0] || "?").slice(0, 2)).toUpperCase().slice(0, 3);
   }
   function syncViewerTiles(show) {
-    const want = show ? viewerOps() : new Map();
+    const want = show && !inLobby() ? viewerOps() : new Map();   // 0.21.60: nobody sees anybody in the Lobby
     for (const [key, el] of viewerTiles) if (!want.has(key)) { el.remove(); viewerTiles.delete(key); }
     const out = [];
     for (const [key, m] of [...want].sort((a, b) => String(a[1].name || a[0]).localeCompare(String(b[1].name || b[0])))) {
@@ -11464,8 +11487,8 @@
     // 0.13.1: the banner names the room; people, time, lock, kept and role live on its card in the rail
     const role = authSecured ? authRole : "";
     const spk = document.createElement("span"); spk.className = "spk" + (ownRoomTalking() ? " on" : ""); spk.innerHTML = icon("spk"); spk.title = "Someone is speaking";
-    b.replaceChildren(el("rbname", c), spk);
-    b.title = "Room " + c + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
+    b.replaceChildren(el("rbname", roomTitle(c)), spk);
+    b.title = (c === LOBBY ? "The Lobby" : "Room " + c) + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
       + (roomSince ? ", occupied for " + fmtHms(Date.now() - roomSince) : "") + (rec?.locked ? ", locked" : "") + (rec?.persistent ? ", kept" : "")
       + (role ? ", " + role : "") + "\nClick for room info";
   }
@@ -11575,14 +11598,15 @@
       if (rec.slug === CHANNEL) { try { closeAllPops(); paintRoomInfo(); openFromOptions(roomInfoPop); } catch {} return; }   // 0.13.1: my room -> Room info
       // 0.21.41 (Kenton: "When clicking to change rooms, prompt to let the user know they will be leaving the current room")
       const needCode = !!rec.locked;   // 0.21.42: the minter always wants a locked room's code -- a remembered roomKey (my own room) skipped the prompt and the switch failed silently
+      if (CHANNEL === LOBBY && !needCode) { sbFormClose(); switchRoom(rec, ""); return; }   // 0.21.60: from the Lobby straight in (nothing to lose there)
       if (!isPublisherMode()) {
         // 0.21.42: KASTR's own popup; a locked room asks for its code in it (Kenton: a locked room at the bottom of the rail
         // "never pops up the enter code prompt" -- the inline form opened below the visible part of the rail)
         const ans = await kastrConfirm({ title: "Change room",
-          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to leave \u201c" + CHANNEL + "\u201d and join it."
-                            : "Leave \u201c" + CHANNEL + "\u201d and join \u201c" + rec.slug + "\u201d?",
+          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and join it."
+                            : "Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and join \u201c" + rec.slug + "\u201d?",
           detail: "Your microphone will be muted and your camera turned off.",
-          ok: "Join " + rec.slug, cancel: "Stay in " + CHANNEL,
+          ok: "Join " + rec.slug, cancel: "Stay in " + roomTitle(CHANNEL),
           input: needCode ? { placeholder: "Code for " + rec.slug, masked: true } : null,
           check: needCode ? async (v) => {
             if (!String(v || "").trim()) return "Enter the room\u2019s code.";
@@ -11610,22 +11634,23 @@
     const joined = joinState === "joined";
     card.classList.toggle("cur", joined && rec.slug === CHANNEL);   // 0.13.1: the room I am in
     const rb = card.querySelector(".rb");
-    rb.textContent = bubbleLabel(rec.slug);
+    rb.textContent = rec.slug === LOBBY ? "LB" : bubbleLabel(rec.slug);   // 0.21.60
     rb.classList.toggle("talk", !!rec.talking);
-    if (rec.count > 0) { let c = rb.querySelector(".cnt"); if (!c) { c = document.createElement("span"); c.className = "cnt"; rb.appendChild(c); } c.textContent = String(rec.count); }
+    if (rec.count > 0 && rec.slug !== LOBBY) { let c = rb.querySelector(".cnt"); if (!c) { c = document.createElement("span"); c.className = "cnt"; rb.appendChild(c); } c.textContent = String(rec.count); }   // 0.21.60: no Lobby count
     else rb.querySelector(".cnt")?.remove();
     if (rec.locked) { if (!rb.querySelector(".lk")) { const lk = document.createElement("span"); lk.className = "lk"; lk.innerHTML = icon("lock"); rb.appendChild(lk); } }
     else rb.querySelector(".lk")?.remove();
     if (rec.persistent) { if (!rb.querySelector(".kp")) { const kp = document.createElement("span"); kp.className = "kp"; kp.innerHTML = icon("keep"); rb.appendChild(kp); } }   // 0.21.31
     else rb.querySelector(".kp")?.remove();
-    if (rec.video) { if (!rb.querySelector(".pl")) { const pl = document.createElement("span"); pl.className = "pl"; pl.innerHTML = icon("play"); rb.appendChild(pl); } }   // 0.21.36
+    if (rec.video && rec.slug !== LOBBY) { if (!rb.querySelector(".pl")) { const pl = document.createElement("span"); pl.className = "pl"; pl.innerHTML = icon("play"); rb.appendChild(pl); } }   // 0.21.36
     else rb.querySelector(".pl")?.remove();
-    rb.title = rec.slug + (rec.count > 0 ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "") + (rec.video ? " (video on the air)" : "");
-    card.querySelector(".sbname").textContent = rec.slug;
+    rb.title = roomTitle(rec.slug) + (rec.count > 0 && rec.slug !== LOBBY ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "") + (rec.video ? " (video on the air)" : "");
+    card.querySelector(".sbname").textContent = roomTitle(rec.slug);
+    card.classList.toggle("lobby", rec.slug === LOBBY);   // 0.21.60
     { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
     wrPaintCard(card, rec);   // 0.21.44
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
-    card.querySelector(".sbcnt").textContent = rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
+    card.querySelector(".sbcnt").textContent = rec.slug === LOBBY ? "pick a room to join" : rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;
     card.querySelector(".sbtime").textContent = rec.since ? "\u23F1 " + fmtHm(Date.now() - rec.since) : "\u23F1 \u2014";
     // 0.21.35 (Kenton: "remove the symbol after the time to denote locked or keep. The symbol on the circle should be
@@ -11634,6 +11659,9 @@
     // members, reconciled by op
     const ul = card.querySelector(".sbmembers");
     const seen = new Set();
+    // 0.21.60: who is in a room is never shown for the Lobby, nor for any room while I am in the Lobby (names + counts only)
+    if (rec.slug === LOBBY || inLobby()) { ul.replaceChildren(); ul.hidden = true; return; }
+    ul.hidden = false;
     // 0.21.41 (Kenton: "The people displaying in the rooms on the left rail should be in alphabetical order")
     const sorted = [...rec.members].sort((a, b) => String(a.name || a.op).localeCompare(String(b.name || b.op), undefined, { sensitivity: "base" }));
     const here = joinState === "joined" && rec.slug === CHANNEL;
@@ -11831,6 +11859,40 @@
       }
     });
   }
+  // 0.21.60: the Lobby on the stage -- what it is and every room to join (names and counts only)
+  let lobbyEl = null, lobbySaid = false;
+  function paintLobby() {
+    const on = inLobby();
+    document.body.classList.toggle("inlobby", on);
+    if (!on) { if (lobbyEl) lobbyEl.hidden = true; return; }
+    if (!lobbyEl) {
+      lobbyEl = document.createElement("div"); lobbyEl.id = "lobbyCard";
+      lobbyEl.innerHTML = '<h2>Lobby</h2><p>Pick a room to join. Nothing is shared here, and nobody can see who else is waiting; cameras, microphones and chat start once you are in a room.</p><div class="lbrooms"></div>';
+      document.getElementById("stagewrap")?.appendChild(lobbyEl);
+    }
+    lobbyEl.hidden = false;
+    const box = lobbyEl.querySelector(".lbrooms");
+    const rooms = lastChannelList.filter((r) => r.slug !== LOBBY);
+    const key = rooms.map((r) => r.slug + ":" + (r.count || 0) + ":" + (r.locked ? 1 : 0)).join(",");
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      box.replaceChildren();
+      for (const r of rooms) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "lbroom";
+        const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = r.slug;
+        const ct = document.createElement("span"); ct.className = "ct"; ct.textContent = (r.locked ? "\u{1F512} " : "") + (r.count > 0 ? r.count + (r.count === 1 ? " person" : " people") : "empty");
+        b.append(nm, ct);
+        b.addEventListener("click", () => { const card = sbRoomsEl?.querySelector('.sbcard[data-slug="' + r.slug + '"]'); if (card) sbCardClick(card, card.__rec || r); });
+        box.appendChild(b);
+      }
+      if (!rooms.length) box.textContent = "No rooms yet \u2014 create one with \u2295 in the rooms list.";
+    }
+    if (isPublisherMode() && !lobbySaid) {
+      lobbySaid = true;
+      window.__toast?.("This box is in the Lobby, where nothing is published \u2014 choose its room.", 10000, { level: "warn" });
+    }
+  }
+  setInterval(() => { try { paintLobby(); } catch {} }, 1000);
   function paintSidebar() {
     if (!sbRoomsEl) return;
     let host = urlInput.value.trim();
@@ -13247,7 +13309,7 @@
     sel.replaceChildren();
     for (const r of list) {
       const n = r.count > 0 ? " \u2014 " + r.count + " here" : "";
-      sel.appendChild(new Option(r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));
+      sel.appendChild(new Option(r.slug === LOBBY ? "Lobby" : r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));   // 0.21.60: the Lobby says nothing of who is there
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined

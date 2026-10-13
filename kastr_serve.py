@@ -2450,6 +2450,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             return self._chat_reply(405, {"error": "GET or POST"})
 
         def _chat_get(self, room, qs, store):
+            if room == "main":   # 0.21.60: the Lobby keeps no history to show
+                return self._json_cors(200, {"room": room, "messages": [], "persistent": False, "closed": False, "lobby": True})
             ts = self._chat_closed(room)
             if ts:
                 return self._chat_reply(410, {"error": "room closed", "closed": ts})
@@ -2462,6 +2464,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                          "closed": False})
 
         def _chat_post(self, room, store, ctx):
+            if room == "main":   # 0.21.60: the Lobby has no chat (nothing shared there; the page hides it too)
+                return self._chat_reply(403, {"error": "the Lobby has no chat -- join a room", "lobby": True})
             ts = self._chat_closed(room)
             if ts:
                 return self._chat_reply(410, {"error": "room closed", "closed": ts})
@@ -2558,6 +2562,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             return self._json_cors(200, {"ok": True})
 
         def _chat_file_post(self, room, store, ctx):
+            if room == "main":   # 0.21.60: the Lobby has no chat (nothing shared there; the page hides it too)
+                return self._chat_reply(403, {"error": "the Lobby has no chat -- join a room", "lobby": True})
             """An attachment: stored like a shared file (kind "chat", the room,
             its content type) so the sweeps and the room close find it."""
             ts = self._chat_closed(room)

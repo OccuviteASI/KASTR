@@ -28,6 +28,8 @@ import struct         # 0.21.0: fmp4_start reads the muxer's edit list
 import sys
 import time
 import uuid
+
+_SERVE_T0 = time.time()   # 0.21.61: when this KASTR started (justUpdated below)
 import subprocess
 import threading      # 0.12.0
 from urllib.parse import quote, parse_qs, urlparse
@@ -2039,6 +2041,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 # 0.8.3: the launch-time fleet-update check's outcome (the
                 # updater used to fail in silence). null in dev harnesses.
                 "updateCheck": self._update_check(),
+                # 0.21.61: this KASTR is the relaunch of an update (the last 15 min) -- the page rejoins its room
+                "justUpdated": os.environ.get("KASTR_UPDATED") == "1" and time.time() - _SERVE_T0 < 900,
                 # 0.8.13: seconds since the app window last pinged (None: never)
                 # -- the launcher's hand-off check reads it -- and the bundled
                 # ffmpeg's version, so a smoke test can assert the bundle.

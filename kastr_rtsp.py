@@ -981,6 +981,10 @@ class DeviceCapture:
             try:
                 self.proc = subprocess.Popen(self.args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                                              errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                try:
+                    _job_assign(app_job(self.log), self.proc, self.log)   # 0.21.61: an RTMP listener held its port past an update
+                except Exception:
+                    pass
                 tail = []
                 for line in (self.proc.stderr or ()):   # 0.21.31: line by line -- a device connecting is news now, not at exit
                     line = line.rstrip()
@@ -2108,6 +2112,9 @@ class Bridge:
         # mirrored to rtsp-feeds.json so a relaunch can republish them
         self._persist_lock = threading.Lock()
         self._session = {"room": "", "access": "", "roomCode": "", "relay": ""}
+        # 0.21.61: kept feeds read from rtsp-feeds.json that are not on the air (yet) -- written back by every
+        # persist_feeds until they publish again or the operator removes / un-keeps them
+        self._pending = []
         self._load_session()
         if self.suspended:   # 0.21.16
             self.log("rtsp: publishing is SUSPENDED on this box (rtsp-feeds.json suspended=true) -- cameras are recorded, none starts until the switch is turned on")
@@ -2386,6 +2393,7 @@ class Bridge:
             # (field report: "my KASTR keeps trying to use an RTSP feed that I keep closing out")
             url = getattr(feed, "source_url", None) or getattr(feed, "url", None)
             if url:
+                self._pending_drop(url)   # 0.21.61
                 self._removed = [r for r in self._removed if r.get("url") != url] + [{"url": url, "at": int(time.time())}]
                 self._removed = self._removed[-50:]
         self.persist_feeds()                     # 0.12.0
@@ -2452,6 +2460,7 @@ class Bridge:
             self._pubs[int(feed_id)] = pub
         if (pub.wantOndemand or pub.wantLow) and not ONDEMAND_ENABLED:   # 0.21.10
             self.log("rtsp: %s asked for on demand/low -- ignored (ondemand = off; kastr.ini ondemand = on or KASTR_ONDEMAND=1 allows it)" % broadcast)
+        self._pending_drop(feed.source_url)   # 0.21.61: on the air again
         pub.suspended = bool(self.suspended)   # 0.21.16: born while the switch is off -> recorded, not started
         if pub.suspended:
             self.log("rtsp: %s recorded while publishing is suspended -- not started" % broadcast)
@@ -2592,6 +2601,9 @@ class Bridge:
             rem = d.get("removed")   # 0.21.0
             self._removed = [{"url": str(r.get("url")), "at": int(r.get("at") or 0)} for r in (rem or [])
                              if isinstance(r, dict) and r.get("url")][-50:]
+            gone = {r["url"] for r in self._removed}
+            self._pending = [dict(f) for f in (d.get("feeds") or []) if isinstance(f, dict) and f.get("url")
+                             and f.get("keep", True) and str(f.get("url")) not in gone]   # 0.21.61
 
     def _feed_records(self):
         out = []
@@ -2614,7 +2626,15 @@ class Bridge:
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
                         "ondemand": bool(pub.wantOndemand), "low": bool(pub.wantLow), "label": pub.label,   # 0.18.0; 0.21.10: what was ASKED -- preserved while the switch is off
                         "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})   # 0.21.2: a web client's feed
+        # 0.21.61: what has not come back yet stays on file (a failed or unfinished restore, a Join mid-restore)
+        live = {r["url"] for r in out}
+        gone = {r.get("url") for r in getattr(self, "_removed", [])}
+        out += [dict(p) for p in getattr(self, "_pending", []) if p.get("url") not in live and p.get("url") not in gone]
         return out
+
+    def _pending_drop(self, url):
+        """0.21.61: this kept feed is back on the air (or the operator let it go) -- no longer pending."""
+        self._pending = [p for p in self._pending if p.get("url") != url]
 
     def remote_add(self, url, room, label, op):
         """0.21.2: a web client (publisher token, verified by the caller) adds an RTSP camera that THIS host
@@ -2706,6 +2726,7 @@ class Bridge:
         if not pub:
             return False
         pub.keep = bool(keep)
+        self._pending_drop(pub.feed.source_url)   # 0.21.61
         self.persist_feeds()
         return True
 
@@ -2854,6 +2875,7 @@ class Bridge:
                     if not now_url:
                         what = (rec.get("screen") or {}).get("title") or rec.get("label") or rec["url"]
                         log("rtsp restore: %s share '%s' is no longer there -- dropped" % ((rec.get("screen") or {}).get("kind") or "screen", what))
+                        self._pending_drop(rec["url"])   # 0.21.61
                         return
                     if now_url != rec["url"]:
                         log("rtsp restore: %s found again as %s" % (rec["url"], now_url))
@@ -2872,7 +2894,7 @@ class Bridge:
                 with lock:
                     done[0] += 1
             except Exception as e:
-                log("rtsp restore: %s -> %s failed: %s" % (_redact_url(str(rec.get("url"))), rec.get("broadcast"), e))
+                log("rtsp restore: %s -> %s failed: %s -- kept for the next launch" % (_redact_url(str(rec.get("url"))), rec.get("broadcast"), e))   # 0.21.61
         threads = [threading.Thread(target=one, args=(r,), daemon=True) for r in feeds]
         for t in threads:
             t.start()
@@ -3004,6 +3026,12 @@ class Bridge:
             self.kill(feed)
         for proc in list(self._media):   # 0.14.0: the player's ffmpeg children
             self.release_media(proc)
+        for url, cap in list(DEVICES.items()):   # 0.21.61: camera captures + RTMP listeners (the port is free for the next launch)
+            try:
+                cap.stop()
+            except Exception:
+                pass
+            DEVICES.pop(url, None)
         with self._children_lock:
             self._children.clear()
         self._write_children()           # removes our registry file

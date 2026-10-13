@@ -98,6 +98,24 @@ function themeSet(v) {
   themeApply();
 }
 window.__kastrTheme = { get: themeGet, set: themeSet };
+// 0.21.61 (Kenton: "Let me choose a highlight color to replace the ASI blue for my own view"): this app's accent --
+// localStorage kastr.accent (#rrggbb); none = ASI blue. Only this device sees it (the colour others see is the profile's).
+const ACCENT_KEY = "kastr.accent";
+const accentGet = () => { try { const v = String(localStorage.getItem(ACCENT_KEY) || "").toLowerCase(); return /^#[0-9a-f]{6}$/.test(v) ? v : ""; } catch { return ""; } };
+function accentApply() {
+  const c = accentGet(), st = document.documentElement.style;
+  if (c) { st.setProperty("--asi-blue", c); st.setProperty("--asi-blue-dim", "color-mix(in srgb, " + c + " 72%, #000)"); }
+  else { st.removeProperty("--asi-blue"); st.removeProperty("--asi-blue-dim"); }
+  try { window.dispatchEvent(new CustomEvent("kastr-accent", { detail: { accent: c } })); } catch {}
+}
+function accentSet(v) {
+  const c = String(v || "").toLowerCase();
+  try { /^#[0-9a-f]{6}$/.test(c) ? localStorage.setItem(ACCENT_KEY, c) : localStorage.removeItem(ACCENT_KEY); } catch {}
+  accentApply();
+}
+window.__kastrAccent = { get: accentGet, set: accentSet };
+accentApply();
+window.addEventListener("storage", (e) => { if (e.key === ACCENT_KEY) accentApply(); });
 themeApply();
 window.addEventListener("storage", (e) => { if (e.key === THEME_KEY) themeApply(); });
 try { themeMq?.addEventListener("change", () => { if (themeGet() === "system") themeApply(); }); } catch {}
@@ -676,6 +694,53 @@ function build() {
       : (u.status + (u.detail ? " \u2014 " + u.detail : ""));
     return { status: u?.status || "unknown", text };
   };
+  // 0.21.61 (Kenton: "When a desktop user is not up to date, show an update now button at the top next to the version
+  // number. Make it strobe brighter/darker."): a KASTR app (not a web page -- those follow their host) whose relay host
+  // runs a newer KASTR, or that has an update offered by the hub's Relay page, shows a pulsing "Update now" beside its
+  // version; one click runs the same update as About > Check for updates.
+  if (!IS_WEB) {
+    const upd = document.createElement("button");
+    upd.type = "button"; upd.className = "asi-updnow"; upd.hidden = true;
+    upd.textContent = "Update now";
+    product.appendChild(upd);
+    const vparts = (v) => String(v || "").replace(/-dev$/, "").split(".").map((x) => parseInt(x, 10) || 0);
+    const newer = (a, b) => { const x = vparts(a), y = vparts(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+    let target = "";
+    const checkBehind = async () => {
+      if (/-dev$/.test(VERSION) || VERSION === "dev") { upd.hidden = true; return; }   // a source checkout never self-updates
+      let v = "";
+      try {
+        const o = await fetch("/api/update/offer", { cache: "no-store" }).then((r) => r.json());   // the hub's Relay page pushed one (0.21.50)
+        if (o?.offer?.version) v = String(o.offer.version);
+      } catch {}
+      if (!v) {
+        let host = "";
+        try { host = new URL(currentRelay).hostname; } catch {}
+        if (host) {
+          try {
+            const i = await fetch("/api/peer/instance?host=" + encodeURIComponent(host) + "&relay=" + encodeURIComponent(currentRelay || ""), { cache: "no-store" }).then((r) => r.json());
+            if (i && i.version) v = String(i.version);
+          } catch {}
+        }
+      }
+      const behind = !!v && newer(v, VERSION);
+      target = behind ? v : "";
+      if (upd.dataset.busy !== "1") {
+        upd.hidden = !behind;
+        upd.title = behind ? "KASTR v" + v + " is available from your relay host (you have v" + VERSION + ") \u2014 click to update now; KASTR restarts" : "";
+      }
+    };
+    upd.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (upd.dataset.busy === "1") return;
+      upd.dataset.busy = "1"; upd.classList.add("busy"); upd.textContent = "Updating\u2026";
+      const r = await window.__kastrCheckUpdate();
+      brandToast(r.text, 7000);
+      if (r.status !== "updating") { upd.dataset.busy = ""; upd.classList.remove("busy"); upd.textContent = "Update now"; checkBehind(); }
+    });
+    setTimeout(checkBehind, 4000);
+    setInterval(checkBehind, 120000);
+  }
   {
     const updBtn = notesPop.querySelector(".upd"), updSt = notesPop.querySelector(".updst");
     updBtn?.addEventListener("click", async (e) => {

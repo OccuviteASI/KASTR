@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.61 — light mode
+## v0.21.61 — light mode, your colours, updates that put you back, spotlights that wait
 
 **Choose Light, Dark or System (Kenton: "Let people choose light/dark mode or the system default").** **More ▸ Appearance** switches between **Dark**, **Light** and **System**. System follows the device's own light or dark setting, and changes along with it.
 - **Default:** Dark stays the default, so nothing changes for anyone until they choose (Kenton chose this).
@@ -11,6 +11,29 @@ What changed in each build, newest first.
 - **No flash:** each page applies the theme before it draws, so a light page never flashes dark first.
 
 **The Lobby is called the Lobby everywhere (Kenton: "I clicked on the Lobby and got this message" -- it said "join main").** Going to the Lobby from a room now asks "Leave “tremonton” and go to the Lobby?" with a **Go to the Lobby** button. The join screen's title and **Room info** say Lobby too, and Room info no longer shows how many people are waiting there.
+
+**Two colours of your own (Kenton: "1 to replace the global highlights for myself and 1 to choose my colors that other people see").**
+- **Your colour (Profile):** pick one of ten colours, a custom one, or Automatic (today's colour). Everyone sees it on your rings: around your picture, around your name in the rooms list, and around your tile and your People entry while you talk.
+- **Accent colour (More ▸ Accent colour):** replaces ASI blue across your own KASTR, on every page: buttons, highlights, the selected room, switches and the top bar's line. Nobody else sees it. The first swatch puts ASI blue back.
+- **Older KASTRs:** older versions show ASI blue on your rings until they update.
+
+**Update now beside the version (Kenton: "When a desktop user is not up to date, show an update now button at the top next to the version number. Make it strobe brighter/darker").** A KASTR app whose relay host runs a newer KASTR, or that the hub's Relay page offered an update, shows a pulsing amber **Update now** button next to its version. It checks every 2 minutes. One click runs the same update as About ▸ Check for updates. Web pages never show it, since they follow their host anyway.
+
+**An update puts you back where you were (Kenton: "When pushing an update to a client, have it reconnect to the room and shares exactly as it was prior to upgrading").** After an update restarts it, a desktop KASTR goes straight back into the room it was in, with no join screen. It returns with your mic and camera as you left them, and puts back what you had spotlighted for everyone, unless someone removed it meanwhile.
+- **Shares:** cameras, RTMP ingests, host files, screen and window shares kept on this computer come back as before.
+- **Browser shares:** a share picked in the browser's own picker can't restart by itself, so a note asks you to share it again.
+- **Other launches:** this happens only for a launch that follows an update, within 20 minutes; an ordinary launch shows the join screen as before. **Leave** clears it.
+
+**RTMP ingests survive updates (Kenton: "RTMP URLs didn't stick after upgrading on the Support Laptop").**
+- **Always kept:** an RTMP ingest (GoPro) is kept from the moment it's added, because the device holds its URL. Host cameras and host media files follow the "Keep sharing after restart" switch.
+- **Nothing lost on restart:** a kept feed that can't come back at launch, or hasn't come back yet when you join, stays saved and is tried again next launch. Before, joining during a restart's first minute, or a failed restore, could erase the feed for good. Only Remove, or turning Keep off, forgets a feed.
+- **Port freed at exit:** the RTMP listener now stops with KASTR, so the next launch can reuse its port.
+
+**A spotlighted camera or grid waits 10 minutes for its box (Kenton: "retain the spotlighting through a relay/client reboot/upgrade ... hold Spotlighting for 5 or 10 mins").** When an RTSP camera or a camera grid is spotlighted, the box sharing it remembers that on its own disk. If the box or its relay restarts or updates, the spotlight comes back as soon as the box rejoins, if that happens within 10 minutes. While the camera is away the spotlight is held for those 10 minutes; screen shares and files still let go after 8 seconds. Lab test: the box closed and a new session joined, and the viewer's stage showed the camera spotlighted again at once.
+
+**Room changes show at once (Kenton: "Is there a way to shorten the time it takes to show someone in a room and removing them from the old room?").** Someone who changes rooms now leaves the old room's list at the moment they appear in the new one: about 1 s on the lab LAN, where it used to take about 10 s. Someone who only reloads still gets the old 8-second grace, so they don't flicker out.
+
+**RTMP feeds on a weak signal leave the grid (Kenton: "On an RTMP feed, on a weak signal, it keeps going to Connecting and doesn't remove it from the grid").** An RTMP ingest that stops delivering pictures for 10 s is taken out of its grid. It comes back after 15 s of steady pictures, so a flapping signal stays out instead of blinking in and out.
 
 ## v0.21.60 — the Lobby, a guide in Help, and the iPhone app's top edge
 

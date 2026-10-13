@@ -806,6 +806,9 @@ def main():
                     help="also refresh dist/updates/ (per-platform binaries + "
                          "latest.json) -- copy that folder next to the relay "
                          "host's KASTR so the fleet can update from it")
+    ap.add_argument("--no-archive", action="store_true",
+                    help="compile (and stage) only -- no release zip; the release script zips both platforms once both are "
+                         "built (two builds running at once both rewrote the same zip)")
     ap.add_argument("--rezip", action="store_true",
                     help="with --publish-only: rewrite THIS platform's release zip so it carries the "
                          "fresh co-located feed (run after the last platform of a release is built)")
@@ -1036,18 +1039,23 @@ def main():
     elif WINDOWS:
         print("Unsigned. SmartScreen will warn on first run elsewhere.")
 
-    zip_dir, have, counts = archive_current(version)
-    check_release_contents(have)
-    print("Archived v%s -> %s" % (version, zip_dir))
-    print("  %s" % ", ".join(
-        "%s %s" % (p, ("%d files" % counts[p]) if counts[p] is not None else "already zipped")
-        for p in have))
+    if args.no_archive:
+        have = release_folders(version)   # what --publish would need
+        print("No release zip (--no-archive): zip with archive_current once every platform is built")
+    else:
+        zip_dir, have, counts = archive_current(version)
+        check_release_contents(have)
+        print("Archived v%s -> %s" % (version, zip_dir))
+        print("  %s" % ", ".join(
+            "%s %s" % (p, ("%d files" % counts[p]) if counts[p] is not None else "already zipped")
+            for p in have))
 
     if args.publish:
         # Fleet update feed + co-located copies (0.13.1: see publish_feed /
         # colocate_feeds -- the same code --publish-only runs without a build).
         colocate_feeds(publish_feed(version, have), version=version)
-    prune_archives(protect=version)
+    if not args.no_archive:   # parallel builds would prune the same folders at once
+        prune_archives(protect=version)
 
     # Last of all, and only now that the release is on disk: record that this
     # version exists, so the next build takes the number after it.

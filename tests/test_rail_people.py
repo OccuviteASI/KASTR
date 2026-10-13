@@ -27,7 +27,7 @@ class RailPeople(unittest.TestCase):
 
     def test_speaking_ring_follows_what_this_window_hears(self):
         p = _page()
-        self.assertIn(".sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--asi-blue);", p)
+        self.assertIn(".sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--pc, var(--asi-blue));", p)
         self.assertIn("sbTalkPaint(nowMs);   // 0.21.41", p)
         body = p[p.index("  function sbTalkPaint(nowMs) {"):p.index("  // 0.21.41: the rail's person")]
         self.assertIn("nowMs < (t.talkUntil ?? 0)", body)

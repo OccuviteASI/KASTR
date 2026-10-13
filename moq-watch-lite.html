@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<script>/* 0.21.61: the theme before the first paint (Dark / Light / System; default Dark) */try{var t=localStorage.getItem("kastr.theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}</script>
+<script>/* 0.21.61: the theme before the first paint (Dark / Light / System; default Dark) */try{var t=localStorage.getItem("kastr.theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}try{var a=String(localStorage.getItem("kastr.accent")||"").toLowerCase();if(/^#[0-9a-f]{6}$/.test(a)){document.documentElement.style.setProperty("--asi-blue",a);document.documentElement.style.setProperty("--asi-blue-dim","color-mix(in srgb, "+a+" 72%, #000)");}}catch(e){}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Go Live — KASTR</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
@@ -359,7 +359,7 @@
   #stage .pubpane.ghost::after { content:"preview hidden \2014  still broadcasting";
     position:absolute; left:0; right:0; top:45%; text-align:center;
     color:var(--text-dim); font-size:11px; font-family:var(--font-mono); }
-  #stage .pubpane.talking { border-color:var(--asi-blue); box-shadow:0 0 0 2px var(--asi-blue); }
+  #stage .pubpane.talking { border-color:var(--pc-me, var(--asi-blue)); box-shadow:0 0 0 2px var(--pc-me, var(--asi-blue)); }   /* 0.21.61: my colour */
   /* 0.8.1: Teams-style chrome -- names and chevrons appear on hover only */
   /* 0.8.9: the NAME stays put in every layout (it shares the bar with the
      mute/pause chips); only own bars and chevrons keep the hover reveal. */
@@ -432,6 +432,18 @@
   .themerow .seg button:first-child { border-left:0; }
   .themerow .seg button.on { background:var(--asi-blue); color:#fff; }
   .themerow .seg button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:-2px; }
+  /* 0.21.61: colour swatches (Profile > Your colour, More > Accent colour) */
+  .hcsw { display:flex; flex-wrap:wrap; gap:7px; align-items:center; }
+  .themerow .hcsw { flex:1 0 100%; }
+  .hcsw button, .hcsw label.cust { width:22px; height:22px; min-height:0; flex:none; border-radius:50%; padding:0; margin:0; cursor:pointer; box-sizing:border-box;
+    background:var(--c, transparent); border:2px solid var(--surface); box-shadow:0 0 0 1px var(--line); position:relative; }
+  .hcsw button.on, .hcsw label.cust.on { box-shadow:0 0 0 2px var(--text); }
+  .hcsw button:focus-visible, .hcsw label.cust:focus-within { outline:2px solid var(--text); outline-offset:2px; }
+  .hcsw button.none { background:linear-gradient(135deg, var(--surface-2) 44%, var(--text-mute) 44% 56%, var(--surface-2) 56%); }
+  .hcsw label.cust:not(.on) { background:conic-gradient(#e5533d, #e0a52a, #3ab54a, #2ec4b6, #009fda, #8e9bff, #c96bd8, #e5533d); }
+  .hcsw label.cust input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; }
+  #profilePop .hcrow { display:flex; flex-direction:column; gap:6px; margin:4px 0 12px; }
+  #profilePop .hcrow .hclbl { font-size:11px; color:var(--text-dim); }
   .popcard.teams .opt .oi { width:18px; display:inline-flex; justify-content:center; color:var(--text-dim); flex:none; font-size:13px; }
   .popcard.teams .opt .oi.rec { width:10px; height:10px; border-radius:50%; border:2px solid var(--text-dim); margin:0 4px; }
   .popcard.teams .opt.on .oi.rec { background:var(--asi-red); border-color:var(--asi-red); }
@@ -861,7 +873,7 @@
      .selected rules had, so nothing else can outrank it. */
   #stage .pane.talking,
   #stage.collage .pane.talking,
-  #stage.spot .pane.talking { border-color:var(--asi-blue); box-shadow:0 0 0 2px var(--asi-blue); }
+  #stage.spot .pane.talking { border-color:var(--pc, var(--asi-blue)); box-shadow:0 0 0 2px var(--pc, var(--asi-blue)); }   /* 0.21.61: the person's colour */
   .pane .label {
     font-size:11px; padding:7px 10px; background:var(--surface-2); color:var(--text-dim);
     display:flex; justify-content:space-between; gap:8px; font-family:var(--font-mono);
@@ -1159,7 +1171,7 @@
   .sbcard .sbm .nm { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 4px; margin-left:-4px; border-radius:4px; }   /* 0.21.41: hugs the name (the ring goes around it) */
   /* 0.21.41 (Kenton: "The user in a room should get a highlight or border when audio is playing, similar to the user rail on
      the right. But this is just around their name in the left rail"): the same blue ring as a speaking tile */
-  .sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--asi-blue); color:var(--text); }
+  .sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--pc, var(--asi-blue)); color:var(--text); }
   /* 0.21.41: "Also show in other rooms" picker */
   #wrPop, #xsPop { position:fixed; z-index:120; width:280px; max-height:70vh; overflow:auto; background:var(--surface); border:1px solid var(--line);
     border-radius:10px; box-shadow:var(--shadow-pop, 0 10px 30px rgba(0,0,0,.45)); padding:10px 12px; font-size:12px; color:var(--text); }
@@ -1383,7 +1395,7 @@
     background:color-mix(in srgb, var(--ring, var(--asi-blue)) 28%, var(--surface-2)); color:#fff; font-size:13px; font-weight:600; letter-spacing:.02em; }
   .pprow .ppav img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
   :root[data-theme="light"] .pprow .ppav { background:color-mix(in srgb, var(--ring, var(--asi-blue)) 70%, #24384a); }   /* 0.21.61: white initials need a deeper disc on light */
-  .pprow.talk .ppav { box-shadow:0 0 0 2px var(--asi-blue); }
+  .pprow.talk .ppav { box-shadow:0 0 0 2px var(--pc, var(--asi-blue)); }
   .pprow .ppname { flex:1; min-width:0; display:flex; flex-direction:column; }
   .pprow .pn { font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .pprow .pn .you { color:var(--text-mute); font-weight:400; }
@@ -1973,6 +1985,9 @@
     <!-- 0.21.61 (Kenton: "Let people choose light/dark mode or the system default") -->
     <div class="opt themerow" role="radiogroup" aria-label="Appearance"><span class="oi">&#9680;</span><span class="tl">Appearance</span>
       <span class="seg"><button type="button" data-theme="dark" role="radio">Dark</button><button type="button" data-theme="light" role="radio">Light</button><button type="button" data-theme="system" role="radio" title="Follow this device's light or dark setting">System</button></span></div>
+    <!-- 0.21.61 (Kenton: "1 to replace the global highlights for myself"): this app only; nobody else sees it -->
+    <div class="opt themerow" aria-label="Accent colour" title="Replaces ASI blue in this app only -- nobody else sees it"><span class="oi">&#9673;</span><span class="tl">Accent colour</span>
+      <span class="hcsw" id="optAccent"></span></div>
     <!-- 0.21.23 (Kenton): About sits in More itself; Video/Audio output open from the camera and mic menus ("More video
          settings" / "More audio settings"); Phone access is gone -- the web portal replaced it -->
     <button class="opt" id="optAbout" type="button"><span class="oi">&#8505;</span>About KASTR &amp; updates&hellip;</button>
@@ -2176,6 +2191,9 @@
         <p class="hint">Drag the picture to reposition it inside the circle.</p>
       </div>
     </div>
+    <!-- 0.21.61 (Kenton): the colour OTHERS see around me -- separate from my own app's accent (More > Accent colour) -->
+    <div class="hcrow"><span class="hclbl">Your colour</span><span class="hcsw" id="profHc" aria-label="Your colour"></span>
+      <p class="hint">Everyone sees it on your rings &mdash; around your picture, around your name in the rooms list and around your tile while you talk.</p></div>
     <div class="btnrow"><button type="button" id="profSave" class="join">Save</button><span id="profMsg" class="hint"></span></div>
   </div>
 </div>
@@ -4704,6 +4722,7 @@
       const av = el.__av;
       paintAvatar(av, avatarUrls.get(key));
       av.style.setProperty("--ring", personColor(key));
+      setPc(el, hiOf(key));   // 0.21.61
       el.querySelector(".vn").textContent = nm;
       el.classList.toggle("deaf", !!m.deaf);   // 0.21.48
       el.title = nm + " is watching (view only)" + (m.deaf ? " \u2014 deafened" : "");
@@ -4856,7 +4875,7 @@
     ppl.rows.hidden = !pplOpen;
     ppl.empty.hidden = !pplOpen || shown.length > 0;
     ppl.empty.textContent = q ? "No one here matches \u201c" + ppl.search.value.trim() + "\u201d" : "No one has joined yet.";
-    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, avatarUrls.get(p.key) || "", p.cam || p.content[0] || ""].join("|")).join("\n");
+    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, avatarUrls.get(p.key) || "", p.cam || p.content[0] || "", hiOf(p.key)].join("|")).join("\n");   // 0.21.61: + colour
     if (sig === pplSig && !force) return;
     if (ppl.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
     pplSig = sig;
@@ -4866,6 +4885,7 @@
       row.dataset.key = p.key;
       const av = document.createElement("div"); av.className = "ppav";
       av.style.setProperty("--ring", personColor(p.key));
+      setPc(row, hiOf(p.key));   // 0.21.61: the talking ring in their colour
       av.textContent = viewerInitials(p.name);
       paintAvatar(av, avatarUrls.get(p.key));
       const nm = document.createElement("div"); nm.className = "ppname";
@@ -5829,7 +5849,64 @@
   // Per-person ASI color for initials, and photos (announced by their owner
   // via <room>/~avatar/<ts>/<b64 {op,url}>, hosted by the relay host's KASTR).
   const ASI_PALETTE = ["#009fda", "#3ab54a", "#e0a52a", "#7fd1f5", "#c96bd8"];
+  // 0.21.61 (Kenton: "the option to set a highlight color that is used for their presence ring as well as around their
+  // name in the rooms rail, and also around anything highlighted while talking"): a person's chosen colour rides their
+  // state.json (`hc`); every ring of theirs uses it (--pc on their tile / People row / rail name; --pc-me for my panes)
+  const HC_RE = /^#[0-9a-f]{6}$/;
+  const HC_PRESETS = ["#009fda", "#3ab54a", "#e0a52a", "#e5533d", "#c96bd8", "#7fd1f5", "#f28cb1", "#2ec4b6", "#ff8a3d", "#8e9bff"];
+  const hiColors = new Map();   // op (lower case) -> "#rrggbb"
+  let hiRepaintT = null;
+  function hiNote(op, c) {
+    const k = String(op || "").toLowerCase(), v = HC_RE.test(String(c || "").toLowerCase()) ? String(c).toLowerCase() : "";
+    if (!k || (hiColors.get(k) || "") === v) return;
+    if (v) hiColors.set(k, v); else hiColors.delete(k);
+    clearTimeout(hiRepaintT);
+    hiRepaintT = setTimeout(() => { try { applyState(); paintPersonGroups(); paintSidebar(); } catch {} }, 50);
+  }
+  function hiOf(key) {
+    const k = String(key || "").toLowerCase().replace(/@.*$/, "");
+    if (!k) return "";
+    const me = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    if (me && k === me) return HC_RE.test(profile?.color || "") ? profile.color : "";
+    return hiColors.get(k) || "";
+  }
+  function setPc(el, c, prop) { if (!el) return; if (c) el.style.setProperty(prop || "--pc", c); else el.style.removeProperty(prop || "--pc"); }
+  function hiMine() { setPc(document.documentElement, HC_RE.test(profile?.color || "") ? profile.color : "", "--pc-me"); }
+  hiMine();
+  window.__hiColors = () => Object.fromEntries(hiColors);   // rig
+  // a row of swatches: opts { value, none: "Automatic" (a "no colour" swatch) | noneColor: "#009fda" (the default shown as a
+  // colour), skip, onPick(c) } -> { get, set }
+  function hcPicker(box, opts) {
+    if (!box) return { get: () => "", set() {} };
+    box.replaceChildren(); box.setAttribute("role", "radiogroup");
+    let val = HC_RE.test(String(opts.value || "").toLowerCase()) ? String(opts.value).toLowerCase() : "";
+    const btns = [];
+    const mk = (c, title, cls, show) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = cls || ""; b.title = title;
+      b.setAttribute("role", "radio"); b.setAttribute("aria-label", title); b.dataset.c = c;
+      if (show) b.style.setProperty("--c", show);
+      btns.push(b); return b;
+    };
+    if (opts.noneColor) mk("", opts.none || "Default", "", opts.noneColor);
+    else if (opts.none) mk("", opts.none, "none");
+    for (const c of HC_PRESETS) if (c !== opts.skip) mk(c, c, "", c);
+    const cust = document.createElement("label"); cust.className = "cust"; cust.title = "Custom colour\u2026";
+    const inp = document.createElement("input"); inp.type = "color"; inp.setAttribute("aria-label", "Custom colour"); cust.appendChild(inp);
+    const paint = () => {
+      for (const b of btns) { const on = b.dataset.c === val; b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false"); }
+      const isCust = !!val && !btns.some((b) => b.dataset.c === val);
+      cust.classList.toggle("on", isCust);
+      if (isCust) { cust.style.setProperty("--c", val); inp.value = val; } else cust.style.removeProperty("--c");
+    };
+    const pick = (c) => { val = c; paint(); try { opts.onPick?.(c); } catch {} };
+    for (const b of btns) b.addEventListener("click", () => pick(b.dataset.c));
+    inp.addEventListener("input", () => pick(String(inp.value).toLowerCase()));
+    box.append(...btns, cust);
+    paint();
+    return { get: () => val, set: (c) => { val = HC_RE.test(String(c || "").toLowerCase()) ? String(c).toLowerCase() : ""; paint(); } };
+  }
   function personColor(key) {
+    { const hc = hiOf(key); if (hc) return hc; }   // 0.21.61: their chosen colour first
     let h = 0;
     for (const ch of String(key || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return ASI_PALETTE[h % ASI_PALETTE.length];
@@ -6245,9 +6322,12 @@
     // (content + ladder), both plain grid placement of the same panes.
     autoContentCheck();
     for (const lit of [...spotLits.values()]) {   // 0.21.0: my spotlit share ended (8 s grace for a self-heal that re-announces)
+      // 0.21.61 (Kenton: hold a spotlit RTSP camera / grid "5 or 10 mins to give a device long enough to reboot/upgrade"):
+      // cameras and grids keep their spotlight SPOT_LIT_HOLD_MS while they are gone; screens and files keep the 8 s
+      const hold = spotLitHeld(lit) ? SPOT_LIT_HOLD_MS : 8000;
       if (mineNames.has(lit.target)) lit.missAt = 0;
       else if (!lit.missAt) lit.missAt = Date.now();
-      else if (Date.now() - lit.missAt > 8000) spotLitClear(true, lit.target);
+      else if (Date.now() - lit.missAt > hold) spotLitClear(true, lit.target);
     }
     stageEl.classList.toggle("collage", gridMode);
     stageEl.classList.toggle("spot", !gridMode);
@@ -6610,6 +6690,7 @@
         paintAvatar(t.av, avatarUrls.get(personKeyOf(name)));   // 0.8.7: photo fills the circle
         t.av.style.setProperty("--ring", personColor(personKeyOf(name)));
       }
+      setPc(t.pane, hiOf(personKeyOf(name)));   // 0.21.61: their talking ring in their colour
       t.pane.classList.toggle("rtsptile", gridMeta.has(name) || isGridChild(name) || rtspPathsNow().has(name));   // 0.21.22 (Kenton): no muted-mic badge on any RTSP stream
       t.pane.classList.toggle("camera", !isContentPath(name));   // 0.8.8: camera faces show no equalizer
       { // 0.15.0: the grid's display name arrives with its geometry, usually after the tile -- repaint the labels when it changes
@@ -7799,6 +7880,14 @@
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
   let roomsSlugsSeen = "", roomsMinterAt = 0;
   let roomsChangedT = null;
+  // 0.21.61 (Kenton: "shorten the time it takes to show someone in a room and removing them from the old room"): the
+  // same page (peer) announcing in another room has MOVED -- its old-room entries go at once instead of after the
+  // ROOMS_GRACE_MS reload grace (which stays for a page that drops and comes back in the same room)
+  function roomsMoved(key, peer, slug) {
+    if (!peer) return;
+    const past = Date.now() - ROOMS_GRACE_MS - 1;
+    for (const [k, r] of roomsPres) if (k !== key && r.slug !== slug && String(r.who?.peer || "") === String(peer)) { r.goneAt = past; r.moved = true; }
+  }
   function roomsChanged() {
     clearTimeout(roomsChangedT);
     roomsChangedT = setTimeout(() => {
@@ -7863,12 +7952,13 @@
     // .presence/<room>/<ts>/<b64 {peer, op, name, relay, relayName}> -- every member, public
     sub("~presence", (e) => {
       const key = String(e.path);
-      if (!e.active) { const r = roomsPres.get(key); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
+      if (!e.active) { const r = roomsPres.get(key); if (r) { if (!r.moved) r.goneAt = Date.now(); roomsChanged(); } return; }
       const pp = key.split("/").filter(Boolean);
       if (pp.length < 3 || !ROOM_RE.test(pp[0])) return;
       const who = b64json(pp[2]);
       if (!who || !who.peer) return;
       roomsPres.set(key, { slug: pp[0], ts: Number(pp[1]) || 0, who, seen: Date.now(), goneAt: undefined });
+      roomsMoved(key, who.peer, pp[0]);   // 0.21.61
       roomsChanged();
     });
     // 0.13.0: .state/<room>/<HOST>/<PEER> -> state.json per page (public prefix on 0.13 relays)
@@ -7879,13 +7969,15 @@
         const pp = String(e.path).split("/").filter(Boolean);   // <room>/<host>/<peer>
         if (pp.length !== 3 || !ROOM_RE.test(pp[0])) return;
         const full = "~state/" + pp.join("/");
-        if (!e.active) { subs.get(full)?.close(); subs.delete(full); const r = roomsPres.get(full); if (r) { r.goneAt = Date.now(); roomsChanged(); } return; }
+        if (!e.active) { subs.get(full)?.close(); subs.delete(full); const r = roomsPres.get(full); if (r) { if (!r.moved) r.goneAt = Date.now(); roomsChanged(); } return; }
         if (subs.has(full)) return;
         subs.set(full, stateSubscribe(conn, full, "state.json", "snapshot", (v) => {
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
                    speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+          hiNote(v.op, v.hc);   // 0.21.61: their colour
+          roomsMoved(full, String(v.peer), pp[0]);   // 0.21.61: moved rooms -> gone from the old one now
           roomsChanged();
         }));
       });
@@ -8321,22 +8413,42 @@
   // room.json (`spotlits`); viewers count the mirror as a vote keyed
   // "<my path>#lit", so the spotlight survives the spotlighter leaving, and I re-announce it after a reload within
   // 30 min (sessionStorage). Cleared by a removal, the share ending, a room switch or a kick.
-  const spotLits = new Map();    // target -> { target, by, ts, missAt }
+  const spotLits = new Map();    // target -> { target, by, ts, missAt, kind }
   const SPOT_LIT_RESTORE_MS = 1800000;
+  // 0.21.61 (Kenton: keep a spotlit camera / grid "through a relay/client reboot/upgrade ... hold Spotlighting for 5 or 10
+  // mins"): the mirror of a spotlit RTSP camera or grid outlives this page -- kept in localStorage (sessionStorage ended
+  // with the app's browser on a reboot or an upgrade), refreshed every minute while it stands, restored when the same
+  // room comes back within SPOT_LIT_HOLD_MS, and held that long while the camera itself is away.
+  const SPOT_LIT_HOLD_MS = 600000;
+  // the page going away (an app restart, an upgrade, a closed window) tears down shares and votes as it goes -- none of
+  // that is a removal, so the device's held copy stays; capture = before every other pagehide listener
+  let spotLitGoing = false;
+  window.addEventListener("pagehide", () => { spotLitGoing = true; }, { capture: true });
+  const SPOT_LIT_KEY = () => "kastr.spotlit." + (sbRelayHost?.() || "");
+  const spotLitHeld = (lit) => lit.kind === "rtsp" || /\/rtsp-grid(-\d+)?\.hang$/.test(String(lit.target || ""));
+  function spotLitKindOf(target) {
+    for (const [, rec] of minePeers) for (const src of rec.sources || []) if (CHANNEL + "/" + hangName(src.name) === target) return src.kind || "";
+    return "";
+  }
   function spotLitCommit(persist) {
-    const list = [...spotLits.values()].map(({ target, by, ts }) => ({ target, by, ts }));
+    const list = [...spotLits.values()].map(({ target, by, ts, kind }) => ({ target, by, ts, kind }));
     try { window.__state?.set?.("spotlits", list); } catch {}
     if (persist) {
       try {
         if (list.length) sessionStorage.setItem("kastr.spotlit", JSON.stringify({ list, room: CHANNEL, at: Date.now() }));
         else sessionStorage.removeItem("kastr.spotlit");
+        const held = list.filter((x) => x.kind === "rtsp" || /\/rtsp-grid(-\d+)?\.hang$/.test(x.target));
+        if (held.length) localStorage.setItem(SPOT_LIT_KEY(), JSON.stringify({ list: held, room: CHANNEL, at: Date.now() }));
+        else if (!spotLitGoing) localStorage.removeItem(SPOT_LIT_KEY());
       } catch {}
     }
   }
+  setInterval(() => { if ([...spotLits.values()].some(spotLitHeld)) spotLitCommit(true); }, 60000);   // "still spotlit" -- the restore window counts from here
   function spotLitSet(v) {
     const cur = spotLits.get(String(v.target));
     if (cur && cur.ts === (Number(v.ts) || 0)) return;
-    spotLits.set(String(v.target), { target: String(v.target), by: String(v.by || ""), ts: Number(v.ts) || Date.now(), missAt: 0 });
+    spotLits.set(String(v.target), { target: String(v.target), by: String(v.by || ""), ts: Number(v.ts) || Date.now(), missAt: 0,
+                                     kind: v.kind || spotLitKindOf(String(v.target)) });   // 0.21.61: cameras and grids are held
     spotLitCommit(true);
   }
   function spotLitClear(forget, target) {
@@ -8344,19 +8456,43 @@
     const had = spotLits.size > 0;
     spotLits.clear();
     if (had) spotLitCommit(false);
-    if (forget) { try { sessionStorage.removeItem("kastr.spotlit"); } catch {} }
+    if (forget) { try { sessionStorage.removeItem("kastr.spotlit"); if (!spotLitGoing) localStorage.removeItem(SPOT_LIT_KEY()); } catch {} }
   }
   function spotLitRestore() {   // after a rejoin: same room, within 30 min, once each share is announced again
     let rec = null;
     try { rec = JSON.parse(sessionStorage.getItem("kastr.spotlit") || "null"); } catch {}
+    // 0.21.61: after a reboot / an upgrade the session copy is gone -- the held cameras and grids come back from the
+    // device's own copy when the same room returns within SPOT_LIT_HOLD_MS of the last "still spotlit"
+    if (!rec || !Array.isArray(rec.list) || !rec.list.length) {
+      let held = null;
+      try { held = JSON.parse(localStorage.getItem(SPOT_LIT_KEY()) || "null"); } catch {}
+      if (held && Array.isArray(held.list) && held.list.length && held.room === CHANNEL && Date.now() - (Number(held.at) || 0) <= SPOT_LIT_HOLD_MS) rec = held;
+    }
     const list = rec && Array.isArray(rec.list) ? rec.list : [];
-    if (!list.length || rec.room !== CHANNEL || Date.now() - (Number(rec.at) || 0) > SPOT_LIT_RESTORE_MS) { spotLitClear(true); return; }
+    if (!list.length || rec.room !== CHANNEL || Date.now() - (Number(rec.at) || 0) > SPOT_LIT_RESTORE_MS) {
+      // 0.21.61: another room (the first connect after a launch, before the box's own room) must not wipe the held copy --
+      // only an expired one goes
+      spotLitClear(false);
+      try {
+        sessionStorage.removeItem("kastr.spotlit");
+        const held = JSON.parse(localStorage.getItem(SPOT_LIT_KEY()) || "null");
+        if (held && Date.now() - (Number(held.at) || 0) > SPOT_LIT_HOLD_MS) localStorage.removeItem(SPOT_LIT_KEY());
+      } catch {}
+      return;
+    }
     for (const one of list) {
       let tries = 0;
+      const held = spotLitHeld(one);
       const tick = () => {
-        if (!connection || CHANNEL !== rec.room || ++tries > 20) return;
-        if (mineNames.has(one.target)) { spotLitSet(one); return; }
-        setTimeout(tick, 1500);
+        // a held camera / grid is waited for as long as it is held (its pair and its grid take a while after a reboot)
+        if (!connection || CHANNEL !== rec.room || ++tries > (held ? SPOT_LIT_HOLD_MS / 3000 : 20)) return;
+        if (mineNames.has(one.target)) {
+          // 0.21.61: my own mirror reaches the room's spotlight set only after a round trip -- until then (30 s) the
+          // restored spotlight is not "removed" just for being missing from the set
+          spotLitSet(one); const lit = spotLits.get(String(one.target)); if (lit) lit.restoredAt = Date.now();
+          spotApplyWinner(); setTimeout(() => { try { spotApplyWinner(); applyState(); } catch {} }, 31000); return;
+        }
+        setTimeout(tick, held ? 3000 : 1500);
       };
       setTimeout(tick, 1500);
     }
@@ -8416,7 +8552,7 @@
     const set = spotSetNow();
     // my mirror: every spotlit share of mine is mirrored; a removed one goes
     const live = new Set(set.map((v) => v.target));
-    for (const tg of [...spotLits.keys()]) if (!live.has(tg)) spotLitClear(true, tg);
+    for (const [tg, lit] of [...spotLits]) if (!live.has(tg) && !(lit.restoredAt && Date.now() - lit.restoredAt < 30000)) spotLitClear(true, tg);
     for (const v of set) if (v.by !== "mirror" && mineNames.has(v.target)) spotLitSet(v);
     // what this page can put on its stage: a grid child means its grid; my own shares are my panes
     const items = [], seen = new Set();
@@ -9805,8 +9941,10 @@
     profilePop.hidden = false;
     if (!modal) placePop(profilePop, optBtn);
     profLoad(profile?.avatar || "");
+    profHc.set(profile?.color || "");   // 0.21.61
     setTimeout(() => document.getElementById("profFirst").focus(), 50);
   }
+  const profHc = hcPicker(document.getElementById("profHc"), { value: profile?.color || "", none: "Automatic" });   // 0.21.61
   function closeProfile() {
     profilePop.hidden = true;
     profilePop.classList.remove("modal");
@@ -9836,6 +9974,7 @@
   document.getElementById("profSave").addEventListener("click", () => {
     const norm = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 20);
     const p = { first: norm(document.getElementById("profFirst").value), last: norm(document.getElementById("profLast").value), avatar: profExport() };
+    if (profHc.get()) p.color = profHc.get();   // 0.21.61: the colour others see
     if (!p.first) { document.getElementById("profMsg").textContent = "First name is required."; return; }
     saveProfile(p);
     const name = profileName(p);
@@ -9843,6 +9982,9 @@
     try { syncOperator(name); } catch {}
     fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => {});
     try { window.__avatarPublish?.(); } catch {}
+    try { window.__state?.set?.("hc", p.color || ""); } catch {}   // 0.21.61
+    hiMine();
+    try { paintPersonGroups(); } catch {}
     applyState();
     window.__toast?.("Profile saved \u2014 " + name, 3000, { level: "info" });
     closeProfile();
@@ -9886,6 +10028,11 @@
   });
   document.getElementById("optHelp").addEventListener("click", () => openFromOptions(helpPop));
   // 0.21.61: More > Appearance (Dark / Light / System) -- the setting lives in asi-brand.js (every page follows it)
+  {   // 0.21.61: this app's accent (asi-brand.js keeps it in kastr.accent and applies it on every page)
+    const acc = hcPicker(document.getElementById("optAccent"), { value: window.__kastrAccent?.get?.() || "", none: "ASI blue (default)", noneColor: "#009fda", skip: "#009fda",
+      onPick: (c) => { if (window.__kastrAccent) window.__kastrAccent.set(c); else { try { c ? localStorage.setItem("kastr.accent", c) : localStorage.removeItem("kastr.accent"); } catch {} } } });
+    window.addEventListener("kastr-accent", (e) => acc.set(e.detail?.accent || ""));
+  }
   { const seg = document.querySelectorAll("#optPop .themerow .seg button");
     const themeNow = () => window.__kastrTheme?.get?.() || "dark";
     const paintTheme = () => { const v = themeNow(); for (const b of seg) { b.classList.toggle("on", b.dataset.theme === v); b.setAttribute("aria-checked", String(b.dataset.theme === v)); } };
@@ -10753,6 +10900,7 @@
   // the two models (schema v1) and their producers
   const pubModel = { v: 1, peer: "", host: HOSTNAME1, op: "", name: "", relay: "", via: "", joinedAt: 0, publishing: [], speaking: false, typing: false, avatar: "", mode: PAGE_MODE,
                      kv: KASTR_VER };   // 0.21.49: which KASTR this page runs (absent = older than 0.21.49)
+  if (HC_RE.test(profile?.color || "")) pubModel.hc = profile.color;   // 0.21.61
   const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
   const pubState = stateProducer(() => "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
@@ -10791,6 +10939,7 @@
         case "airv": pubModel.airv = 1; break;   // 0.21.40: `video` counts only pictures on the air
         case "deaf": if (value) pubModel.deaf = 1; else delete pubModel.deaf; break;   // 0.21.40: Deafen is on
         case "avatar": pubModel.avatar = String(value || ""); break;
+        case "hc": if (HC_RE.test(String(value || ""))) pubModel.hc = String(value); else delete pubModel.hc; break;   // 0.21.61: my colour
         case "spots": case "unspots": case "spotlits": {   // 0.21.32: several spotlights -- [{target, ts(, by)}]
           roomModel[field] = (Array.isArray(value) ? value : []).filter((x) => x && x.target).slice(-64)
             .map((x) => field === "spotlits" ? { target: String(x.target), by: String(x.by || ""), ts: Number(x.ts) || now } : { target: String(x.target), ts: Number(x.ts) || now });
@@ -11716,6 +11865,7 @@
       ul.appendChild(li);   // in name order (an existing row moves)
       li.dataset.ptalk = m.talking ? "1" : "";   // 0.21.41: their presence says they speak (other rooms); sbTalkPaint adds what this window hears
       li.classList.toggle("talk", !!m.talking || (here && li.classList.contains("talk")));
+      setPc(li, hiOf(m.op));   // 0.21.61: the ring around their name in their colour
       li.classList.toggle("menuable", here && !!sbMemberPerson(m.op));   // 0.21.41: the person's menu, in the room I am in
       li.querySelector(".nm").textContent = m.name || m.op;
       { const df = li.querySelector(".df"); if (df) df.classList.toggle("on", !!m.deaf); }   // 0.21.48
@@ -13377,6 +13527,40 @@
     }, 200);
   }
 
+  // 0.21.61: after an update relaunch (the app says justUpdated) the room this window was in within the last 20 minutes
+  // comes back without the gate: the last join's codes, the mic and camera as they were, then the spotlights I had set
+  let resumeTried = false;
+  function resumeCheck() {
+    if (resumeTried || IS_WEB || isPublisherMode() || isViewerMode()) return;
+    resumeTried = true;
+    let live = null;
+    try { live = JSON.parse(localStorage.getItem(LIVE_KEY) || "null"); } catch {}
+    const lj = lastJoin();
+    if (!live || !live.room || !lj || lj.room !== live.room || Date.now() - (Number(live.at) || 0) > 1200000) return;
+    fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
+      if (!d?.justUpdated || joinState !== "prejoin" || joinEls.joinGate.hidden) return;
+      try { localStorage.removeItem(LIVE_KEY); } catch {}   // once: a failed rejoin leaves the normal gate
+      const t = { room: live.room, code: lj.code || "", access: lj.access || "", synthetic: true, resumed: true,
+                  name: (profile && profileName(profile)) || joinEls.joinName.value || "", micOn: !!live.micOn, vidOn: !!live.vidOn,
+                  spots: Array.isArray(live.spots) ? live.spots.slice(0, 16) : [], hadShare: !!live.hadShare };
+      try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
+      gateShow();
+    }).catch(() => {});
+  }
+  function resumeAfterJoin(t) {
+    window.__toast?.("Updated to v" + KASTR_VER + " \u2014 back in " + roomTitle(CHANNEL) + (t.hadShare ? ". Share your screen again if you need it." : "."), 8000, { level: "info" });
+    setTimeout(() => {   // the room's votes and my shares are back by now
+      if (joinState !== "joined" || CHANNEL !== t.room) return;
+      const live = new Set(spotSetNow().map((v) => v.target));
+      for (const sp of t.spots || []) {
+        if (!sp?.target || live.has(sp.target)) continue;
+        let removed = false;   // someone took it down after I set it -- that stands
+        for (const arr of spotOffs.values()) for (const o of arr) if (o?.target === sp.target && (Number(o.ts) || 0) > sp.ts) removed = true;
+        if (spotClearedAt > sp.ts) removed = true;
+        if (!removed) { try { window.__spot?.add?.(sp.target); } catch {} }
+      }
+    }, 8000);
+  }
   function gateShow() {
     joinState = "prejoin";
     try { paintCtxBanner(); } catch {}   // 0.17.0
@@ -13438,6 +13622,7 @@
       // authDetect must land first: joining a secured relay without the
       // beacon answer would skip the mint and bounce off the relay.
       const go = () => authDetect().catch(() => {}).then(() => joinNow()).then(() => {
+        if (saved.resumed && joinState === "joined") resumeAfterJoin(saved);   // 0.21.61
         if (joinState !== "joined") {
           rejoinRec = null;
           try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
@@ -13458,6 +13643,7 @@
       }
       return;
     }
+    resumeCheck();                      // 0.21.61: an update relaunch rejoins (async; the gate shows meanwhile)
     joinMicOn = false;                  // both default OFF at every gate
     joinVidOn = false;
     paintJoinToggles();
@@ -13710,8 +13896,22 @@
     paintTopCam();
   }
 
+  // 0.21.61: what this window is doing right now -- an update relaunch puts it back (gateShow's resume below)
+  const LIVE_KEY = "kastr.live";
+  function liveSave() {
+    if (joinState !== "joined" || IS_WEB || isPublisherMode() || isViewerMode()) return;
+    try {
+      const { rec, src } = localCamSrc();
+      let spots = [];
+      try { spots = (window.__spot?.mineList?.() || []).map((v) => ({ target: String(v.target), ts: Number(v.ts) || 0 })); } catch {}
+      localStorage.setItem(LIVE_KEY, JSON.stringify({ room: CHANNEL, at: Date.now(), micOn: !!src && !src.micMuted, vidOn: !!src && !src.videoPaused,
+        spots, hadShare: !!rec?.sources?.some((x) => x.kind === "screen") }));
+    } catch {}
+  }
+  setInterval(liveSave, 5000);
   function leaveMeeting() {
     if (joinState !== "joined") return;
+    try { localStorage.removeItem(LIVE_KEY); } catch {}   // 0.21.61: Leave = nothing to resume
     joinState = "leaving";
     try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
     try { localStorage.removeItem("kastr.lastjoin"); } catch {}   // 0.8.8: Leave = pick a room next time
@@ -14046,7 +14246,7 @@
     addCam.addEventListener("click", async () => {
       if (!sel.value) return;
       addCam.disabled = true;
-      await addRtsp("device://video/" + encodeURIComponent(sel.value), { label: sel.value.replace(/^[/]dev[/]/, "") });
+      await addRtsp("device://video/" + encodeURIComponent(sel.value), { label: sel.value.replace(/^[/]dev[/]/, ""), keep: document.getElementById("rtspKeep")?.checked !== false });   // 0.21.61
       addCam.disabled = false;
     });
     addFile.addEventListener("click", () => pick.click());
@@ -14060,7 +14260,7 @@
       if (label == null) return;
       const abc = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       const key = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => abc[b % abc.length]).join("");
-      const e = await addRtsp("rtmp-in://" + d.port + "/" + key, { label: (label.trim() || "GoPro").slice(0, 40) });
+      const e = await addRtsp("rtmp-in://" + d.port + "/" + key, { label: (label.trim() || "GoPro").slice(0, 40), keep: true });   // 0.21.61: the device holds this URL -- always kept
       if (e) {
         const url = "rtmp://" + (rtmpHost() || "<this computer>") + ":" + d.port + "/live/" + key;
         try { await navigator.clipboard.writeText(url); } catch {}
@@ -14084,7 +14284,7 @@
       try {
         const r = await fetch("/api/media/upload?id=" + id, { method: "POST", body: f, headers: { "X-Kastr-Name": encodeURIComponent(f.name) } });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
-        await addRtsp("media://" + id, { label: f.name.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 40) });
+        await addRtsp("media://" + id, { label: f.name.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 40), keep: document.getElementById("rtspKeep")?.checked !== false });   // 0.21.61
       } catch (e) {
         window.__toast?.("Media file not added: " + (e?.message || e), 6000, { level: "error" });
       } finally {
@@ -19731,6 +19931,7 @@
   // 0.21.54 (Kenton: "still sometimes showing up beyond 5 attempts. Lets set it to 3 attempts before it drops from the grid"):
   // out ON the third failed attempt (was: after the fifth)
   const GRID_EVICT_AFTER = 3, GRID_READMIT_LIVED_S = 5;
+  const GRID_INGEST_OUT_S = 10, GRID_INGEST_BACK_S = 15;   // 0.21.62: RTMP ingests leave / rejoin a grid by time
   function gridEvictionTick() {
     if (rtspSuspended) return;   // 0.21.16: a stopped pair (running=false) is not a failing camera
     let changed = false;
@@ -19752,6 +19953,30 @@
       // camera (ffmpeg in its connect, not one byte), so it vouched for a camera that was gone. flowingAt = output grew.
       const pubHealthy = !!(pi && pi.running === true && !pi.standby && (!pi.lastExit?.at || nowS - pi.lastExit.at > 30) && (!native || pi.since)
         && (!native || (pi.flowingAt && nowS - pi.flowingAt < 30)));
+      // 0.21.62 (Kenton: "On an RTMP feed, on a weak signal, it keeps going to 'Connecting' and doesn't remove it from the
+      // grid"): an RTMP ingest never FAILS -- its listener waits for the device, so no attempt is ever counted and the
+      // attempt rule below never fires; the cell sat on "connecting...". An ingest goes by time instead: out of the grid
+      // after GRID_INGEST_OUT_S without the device pushing or without data flowing, back after GRID_INGEST_BACK_S of steady
+      // data -- a weak link that flaps keeps out instead of blinking in and out.
+      const ing = slot?.feed?.ingest;
+      if (ing && a.evictWhy !== "rig") {
+        const flowing = !!(ing.connected && pi?.flowingAt && nowS - pi.flowingAt < 7);   // the pair reports every 2 s, the page polls every 3 s
+        if (flowing) { a.ingOkSince = a.ingOkSince || nowS; a.ingBadSince = 0; }
+        else { a.ingBadSince = a.ingBadSince || nowS; a.ingOkSince = 0; }
+        if (!a.evicted && a.ingBadSince && nowS - a.ingBadSince >= GRID_INGEST_OUT_S) {
+          a.evicted = true; a.evictedAt = Date.now(); a.evictAttempt = 0; a.evictWhy = "ingest";
+          log("RTMP feed " + shortName(a.name) + (ing.connected ? " has had no picture for " : " lost its device for ") + Math.round(nowS - a.ingBadSince)
+            + " s \u2014 removed from the grid until it streams steadily again (its seat is kept)");
+          gridNoteAll("evicted " + shortName(a.name) + " (ingest " + (ing.connected ? "stalled" : "disconnected") + ")");
+          changed = true;
+        } else if (a.evicted && a.evictWhy === "ingest" && a.ingOkSince && nowS - a.ingOkSince >= GRID_INGEST_BACK_S) {
+          a.evicted = false; a.evictWhy = null;
+          log("RTMP feed " + shortName(a.name) + " is streaming steadily again \u2014 rejoining the grid");
+          gridNoteAll("readmitted " + shortName(a.name));
+          changed = true;
+        }
+        continue;
+      }
       const monAttempts = a.retries || 0;
       const downMon = !!(slot?.monitorDown && monAttempts >= GRID_EVICT_AFTER && !pubHealthy);
       if (!a.evicted) {
@@ -19911,6 +20136,9 @@
       // broadcast NAME still derives from rtspLabel(url), so a renamed feed keeps its path.
       const gridId = String(opts?.gridId || gridOfSaved(url) || (isScreenUrl(url) ? "none" : "1"));   // 0.21.26: a screen share starts in no grid
       rtspClosedSet(url, false);   // 0.21.0: adding it again is an explicit act
+      // 0.21.61 (Kenton: "RTMP URLs didn't stick after upgrading"): an ingest / host camera / host file asked to be kept is
+      // on the keep list BEFORE its first publish, so the box records keep=true and a relaunch brings it back
+      if (opts?.keep) { rtspPersistSet(url, opts.label || rtspLabel(url), true, gridId); if (opts.label) rtspNameSet(url, opts.label); }
       const scr = isScreenUrl(url);   // 0.21.20: a native screen share is never a grid member and sends the computer's sound when asked
       const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: scr ? !!document.getElementById("shareSound")?.checked : audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId, screen: scr || undefined });   // 0.9.5; 0.21.17: a remembered rename wins
       gridOfSet(url, gridId);
@@ -20824,7 +21052,7 @@
         if (f.publish) audioSet(f.url, f.publish.audio !== false);   // 0.9.10: the server's actual state, both ways
         { const kept = rtspPersist().find((x) => x.url === f.url);   // 0.15.0: an adopted feed keeps its display name and grid
           extra.gridId = String(kept?.gridId || gridOfSaved(f.url) || "1");
-          if (kept?.label) extra.label = kept.label; }
+          { const lb = kept?.label || rtspNameOf(f.url) || f.publish?.label; if (lb) extra.label = lb; } }   // 0.21.61: an un-kept feed keeps its name too
         addSource(RTSP, null, rtspLabel(f.url), extra);
         if (seatSaved(f.url)) updateRtspGrid();   // 0.9.10
         n++;

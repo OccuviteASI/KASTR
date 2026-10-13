@@ -2,6 +2,10 @@
 
 What changed in each build, newest first.
 
+## v0.21.63 — the vehicle API
+
+**Release notes and the Relay menu open above the rooms list (Kenton: "When looking at the version menu, the room rail is over top of it").** Both now sit above the rooms list and the toolbar menus. KASTR's confirm popups still come in front of them.
+
 ## v0.21.62 — each share picks its rooms
 
 **Choose the rooms for each share, your camera included (Kenton: "When sharing my camera, I don't have the ability to share it to another room ... I need to be able to choose which shares go to different rooms, not all shares will go to every room").** Every share still sends one stream; people in each room you pick for it see it too, and nothing extra is uploaded. Kenton chose all four ways to pick:

@@ -966,7 +966,7 @@
         + "this machine only \u2014 the tunnel reaches it through the web port."
         + (w.relayRunning ? "" : " <b>The relay is not running here</b> \u2014 start it, or visitors get no media.")
         + (t.singlePort ? " kastr.ini <code>single_port</code> is on: every remote page uses this path." : "")
-        + "<br>" + (t.seen ? "Last proxied visitor: <code>" + esc(t.seen) + "</code>, " + t.seenAgo + " s ago" : "No proxied visitor yet")
+        + "<br>" + (t.seen ? "Last proxied visitor: <code>" + esc(t.seen) + "</code>, " + t.seenAgo + "s ago" : "No proxied visitor yet")
         + " \u00b7 live relay pipes: " + (t.pipes || 0) + "."
         + (t.open ? "<br><b style=\"color:var(--asi-red, #e5484d)\">This relay has no access codes: anyone with the name can watch and publish. "
                    + "Set the viewer and publisher codes above.</b>" : "");   // 0.20.0: an open relay through a tunnel is public
@@ -1118,13 +1118,14 @@
     pending.set(key, { target, at: Date.now(), label, relay: relay || "" });
     if (!pendTimer) pendTimer = setInterval(() => { if (!pending.size) { clearInterval(pendTimer); pendTimer = null; return; } paintSpokes(); }, 5000);
   }
-  // 0.21.53 (Kenton: "Change Last seen to show minutes/seconds when over 60 seconds"): 45 s ago / 2 min 05 s ago / 1 h 03 min ago
+  // 0.21.53 (Kenton: "Change Last seen to show minutes/seconds when over 60 seconds"); 0.21.63 (Kenton: "instead of showing
+  // 3 min 23 s, just change it to 3m 23s"): 45s ago / 2m 05s ago / 1h 03m ago
   function agoText(sec) {
     const t = Math.max(0, Math.round(sec));
-    if (t < 60) return t + " s ago";
-    if (t < 3600) return Math.floor(t / 60) + " min " + String(t % 60).padStart(2, "0") + " s ago";
+    if (t < 60) return t + "s ago";
+    if (t < 3600) return Math.floor(t / 60) + "m " + String(t % 60).padStart(2, "0") + "s ago";
     if (t >= 172800) { const dd = Math.floor(t / 86400); return dd + " days ago"; }   // 0.21.55: past two days
-    return Math.floor(t / 3600) + " h " + String(Math.floor(t % 3600 / 60)).padStart(2, "0") + " min ago";
+    return Math.floor(t / 3600) + "h " + String(Math.floor(t % 3600 / 60)).padStart(2, "0") + "m ago";
   }
   const mmss = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
   function updNote(id, text) {   // a line per finished update, newest first (the last six)
@@ -1582,7 +1583,7 @@
     $("hPairs").textContent = pairs.length ? (pairs.filter((p) => p.running).length + " running, " + pairs.filter((p) => p.parked).length + " parked of " + pairs.length) : "none on this machine";
     $("hPairList").replaceChildren(...pairs.map((p) => { const d = document.createElement("div");
       d.textContent = (p.broadcast || "?") + "  gen=" + (p.gen ?? "?") + " restarts=" + (p.restartsTotal ?? 0) + " fails=" + (p.sessionFails ?? 0) + " kills=" + (p.sessionKills ?? 0) + (p.parked ? "  [parked]" : p.running ? "" : "  [stopped]")
-        + (p.restartsTotal && p.lastExit ? "  last exit: " + (p.lastExit.who || "?") + " " + (p.lastExit.reason || ("code " + p.lastExit.code)) + " after " + p.lastExit.lived + " s" : "");   // 0.21.52
+        + (p.restartsTotal && p.lastExit ? "  last exit: " + (p.lastExit.who || "?") + " " + (p.lastExit.reason || ("code " + p.lastExit.code)) + " after " + p.lastExit.lived + "s" : "");   // 0.21.52
       if ((p.restartsTotal || 0) > 3) d.style.color = "var(--asi-amber)";
       return d; }));
     const hv = h.helpers || {};
@@ -1650,8 +1651,8 @@
     const ms = tsMs(v);
     if (!ms) return "\u2014";
     const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-    return s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min ago"
-      : s < 86400 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago";
+    return s < 60 ? s + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago"   // 0.21.63: 3m, not 3 min
+      : s < 86400 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago";
   };
   const roomFlags = (r, closedAt) => {
     const f = [];

@@ -270,7 +270,7 @@ class Wiring(unittest.TestCase):
         self.assertIn('<h2>Federation <span id="fedRoleBadge" class="sbbadge" hidden></span></h2>', page)   # 0.21.55: the role badge
         self.assertIn('const roleTxt = { standby: "Standby hub", promoted: "Acting as hub", failedOver: "On standby hub" }[sb.role] || "";', page)
         for needle in ('id="standbyState"', "function paintStandby(", 'class=\\"ghost spsb\\"', '"/api/relay/standby"',
-                       "function agoText(sec)", '" min " + String(t % 60).padStart(2, "0") + " s ago"'):
+                       "function agoText(sec)", '"m " + String(t % 60).padStart(2, "0") + "s ago"'):
             self.assertIn(needle, page)
 
 

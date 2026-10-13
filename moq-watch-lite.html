@@ -673,6 +673,10 @@
   #stagewrap.idle #stage .mchip, #stagewrap.idle #stage .vchip {   /* 0.21.37 (Kenton): the mute / camera-off marks only while the mouse moves over the stage */
     opacity:0 !important; pointer-events:none; transition:opacity .25s ease; }
   #stagewrap.idle #stage.spot .pane.mainstage, #stagewrap.idle #stage.spot .pubpane.mainstage { cursor:none; }
+  /* 0.21.63 (Kenton: "When showing user previews in the gallery view show their the mute/no cam icons whether hovering or
+     not"): in the gallery a muted mic / camera-off mark stays put; elsewhere it still fades with the idle chrome */
+  #stagewrap.idle #stage.collage .pane .mchip, #stagewrap.idle #stage.collage .pane .vchip,
+  #stagewrap.idle #stage.collage .pubpane .mchip, #stagewrap.idle #stage.collage .pubpane .vchip { opacity:1 !important; }
   #stagewrap.idle #stage .pubpane.warnstate .bar { opacity:1 !important; pointer-events:auto; }
   .mediabar .mhear { opacity:.45; } .mediabar .mhear.on { opacity:1; }
   /* 0.21.0: shared surface tokens on the page's own popovers */

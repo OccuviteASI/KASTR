@@ -4,6 +4,10 @@ What changed in each build, newest first.
 
 ## v0.21.63 — the vehicle API
 
+**Shorter times on the Relay page (Kenton: "instead of showing 3 min 23 s, just change it to 3m 23s").** "Last seen" and the other times there read **45s ago**, **3m 23s ago**, **1h 03m ago**.
+
+**Mute and camera-off marks stay in the gallery (Kenton: "When showing user previews in the gallery view show their the mute/no cam icons whether hovering or not").** In the gallery view a person's muted-mic and camera-off marks stay visible when the mouse is away. Elsewhere they still fade with the other controls.
+
 **Release notes and the Relay menu open above the rooms list (Kenton: "When looking at the version menu, the room rail is over top of it").** Both now sit above the rooms list and the toolbar menus. KASTR's confirm popups still come in front of them.
 
 ## v0.21.62 — each share picks its rooms

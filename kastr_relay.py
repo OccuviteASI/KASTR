@@ -38,6 +38,8 @@ Endpoints (wired up by kastr_serve; the main ones):
     GET  /api/relay/rooms   -> {"rooms":[...], "closed":{slug:ts_ms}, "groups":{gid:{name,order,rooms}}}
     POST /api/relay/rooms/close {"slug"}  -> operator close: record, chat and attachments gone
     POST /api/relay/rooms/group {"op":"create|rename|delete|assign",...}  (operator)
+    GET  /api/relay/vehicles -> {"vehicles":[{id,name,host,created,lastUsed,lastRoom,revoked}], "spoke"}  (hub; never a key)
+    POST /api/relay/vehicles {"op":"create","name"} -> {"ok","vehicle","key"} (the key ONCE); {"op":"revoke|delete","id"}
 Token service (its own listener, relay-port+1):
     GET  /api/auth          -> {"app":"KASTR","secured":true,"codes","legacy","federation","kid","ns","web","https",...}
     GET  /api/rooms         -> {"rooms":[...],"groups":{...}}
@@ -45,6 +47,9 @@ Token service (its own listener, relay-port+1):
     POST /api/token         {"room","code","roomCode"?,"host"?} -> {"ok":true,"role","exp","ns",tokens:{member,registry}}
                             with "host" (<slug>-<4 hex>) the member token's puts are scoped to that host's own
                             paths (+ its ~state/<room>/<host> track); {"federation":"<code>"} -> a relay token
+    POST /api/vehicle       0.21.63: {"key","room","name"?,"roomCode"?} -> {"ok","room","host","op","prefix","relay","jwt",
+                            "connect","exp","refreshEvery","created"} -- a publish-only token for <room>/<host>; the room
+                            is made plain when missing and touched by every call (docs/vehicle-api.md)
     POST /api/session       the relay's per-session auth callback (loopback only)
     POST /api/xshare        0.21.41: list a room's stream in other rooms (Bearer = member token of the stream's room)
                             {path, to:[slug], tokens:{slug: member token}, label?, kind?, by?, stop?}
@@ -177,6 +182,35 @@ def forward_wake(minter, tok, room, broadcast, hops):
 # "r1/host" covers r1/host/..., not r1/hostx.
 STATE_PREFIX = NS + "state"
 HOST_RE = re.compile(r"^[a-z0-9-]{1,32}-[0-9a-f]{4}$")
+# 0.21.63: the vehicle API (Kenton: "I need to be able to send a POST request without having to set a room code"). A
+# vehicle holds an API key made on the hub's Relay page -- `kv-<id>-<secret>` (id 8 hex, secret 32 base64url chars), shown
+# once, only its PBKDF2 hash stored -- and POSTs /api/vehicle {key, room} to the minter of the relay it publishes to. It
+# gets a publish-only token for `<room>/<host>` (no `get`: vehicles do not watch) and the room is created as a PLAIN room
+# when it does not exist; every call touches it, so it closes ROOM_TTL after the vehicle's last call.
+VEHICLE_KEY_RE = re.compile(r"^kv-([0-9a-f]{8})-([A-Za-z0-9_-]{32})$")
+VEHICLES_MAX = 256
+VEHICLE_NAME_MAX = 48
+VEHICLE_CACHE_S = 60         # a spoke trusts the hub's "this key is good" this long
+VEHICLE_REFRESH_S = 300      # what the reply tells the vehicle: POST again every 5 min (keeps the room alive)
+VEHICLE_OP = "vehicle"       # the <op> segment of a vehicle's media paths (<room>/<host>/vehicle/<leaf>.hang)
+
+
+def vehicle_name(name):
+    """A vehicle's display name: printable, trimmed, at most VEHICLE_NAME_MAX characters ("" when nothing is left)."""
+    s = re.sub(r"[\x00-\x1f\x7f]+", " ", str(name or "")).strip()
+    return re.sub(r"\s+", " ", s)[:VEHICLE_NAME_MAX]
+
+
+def vehicle_host(name, vid):
+    """The HOST_RE-valid host a vehicle publishes under: a slug of its name + the first 4 hex of its key id
+    ("Vehicle 12" + 3f9a01bc -> "vehicle-12-3f9a"), stable across calls, so its tiles stay one member."""
+    s = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:27].strip("-") or "vehicle"
+    return s + "-" + str(vid or "0000")[:4]
+
+
+def vehicle_key_digest(key):
+    """What a spoke's positive-answer cache is keyed on -- never the key itself."""
+    return hashlib.sha256(str(key or "").encode("utf-8")).hexdigest()
 # 0.16.0: moq-relay 0.15 no longer verifies JWTs itself -- it POSTs one JSON
 # Request per session event (connect | revalidate | end) to [auth] url and
 # applies the Grant we answer: {publish: [patterns], subscribe: [patterns],
@@ -466,6 +500,22 @@ def claims_identity(claims):
                 host = m.group(1)
                 break
         return room, host
+    except Exception:
+        return None, None
+
+
+def vehicle_identity(claims):
+    """0.21.63: (room, host) of a vehicle token -- its `room` claim and the host of its `<room>/<host>` put. Kept apart from
+    claims_identity on purpose: the chat, file and on-demand doors read that one, and a vehicle is not a member there."""
+    try:
+        room = claims.get("room") if claims.get("vehicle") else None
+        if not isinstance(room, str) or not SLUG_RE.match(room):
+            return None, None
+        for p in _patterns(claims.get("put")) if claims.get("put") is not None else []:
+            m = re.match(r"^%s/([a-z0-9-]{1,32}-[0-9a-f]{4})$" % re.escape(room), str(p))
+            if m:
+                return room, m.group(1)
+        return room, None
     except Exception:
         return None, None
 
@@ -1124,7 +1174,8 @@ class AuthStore:
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
         self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
-        self.ver = 0             # 0.21.53: bumped on every save -- the standby's copy follows it
+        self.vehicles = {}       # 0.21.63: id -> {id, name, salt, hash, iter, created, lastUsed, lastRoom, revoked} (never a key)
+        self.ver = 0            # 0.21.53: bumped on every save -- the standby's copy follows it
         self.lost = None         # 0.21.0: {"at", "kept"} when relay-auth.json was unreadable and no backup saved it
         self.recovered = None    # 0.21.0: epoch when the .bak copy was used
         self.frozen = None       # 0.21.0: the read error when the file could not be OPENED -- saves refuse until a restart
@@ -1169,6 +1220,7 @@ class AuthStore:
         if isinstance(at, dict):
             self.codes_at = {k: int(v) for k, v in at.items() if k in self.codes and isinstance(v, (int, float))}
         # 0.21.40: a "lan" block (the 0.16.0 LAN mesh, removed) is ignored here and dropped at the next save
+        self.vehicles = self._vehicles_clean(d.get("vehicles"))   # 0.21.63
         rooms = d.get("rooms")
         if isinstance(rooms, dict):
             now = time.time()
@@ -1216,6 +1268,7 @@ class AuthStore:
                                  "admin": self.codes["admin"],   # 0.16.0
                                  "closed": self.closed,          # 0.12.0: + closed tombstones
                                  "groups": self.groups,          # 0.15.0: + room groups
+                                 "vehicles": self.vehicles,      # 0.21.63: + vehicle API keys (hashes only)
                                  "codesAt": self.codes_at}, self.log)   # 0.21.0
 
     @staticmethod
@@ -1263,6 +1316,116 @@ class AuthStore:
                 self._derive(code, rec["salt"], rec.get("iter") or PBKDF2_ITER), rec["hash"])
         except Exception:
             return False
+
+    # ---- 0.21.63: vehicle API keys
+
+    @staticmethod
+    def _vehicles_clean(v):
+        out = {}
+        if not isinstance(v, dict):
+            return out
+        for vid, r in v.items():
+            vid = str(vid)
+            if not (isinstance(r, dict) and re.match(r"^[0-9a-f]{8}$", vid) and r.get("salt") and r.get("hash")):
+                continue
+            out[vid] = {"id": vid, "name": vehicle_name(r.get("name")) or vid, "salt": str(r["salt"]), "hash": str(r["hash"]),
+                        "iter": int(r.get("iter") or PBKDF2_ITER), "created": r.get("created"), "lastUsed": r.get("lastUsed"),
+                        "lastRoom": str(r.get("lastRoom") or "")[:32], "revoked": bool(r.get("revoked")),
+                        "revokedAt": r.get("revokedAt")}
+            if len(out) >= VEHICLES_MAX:
+                break
+        return out
+
+    @staticmethod
+    def _vehicle_row(r):
+        return {"id": r["id"], "name": r.get("name") or r["id"], "host": vehicle_host(r.get("name"), r["id"]),
+                "created": r.get("created"), "lastUsed": r.get("lastUsed"), "lastRoom": r.get("lastRoom") or "",
+                "revoked": bool(r.get("revoked")), "revokedAt": r.get("revokedAt")}
+
+    def vehicles_public(self):
+        """The Relay page's table -- never a salt, hash or key."""
+        with self.lock:
+            rows = [self._vehicle_row(r) for r in self.vehicles.values()]
+        return sorted(rows, key=lambda r: (float(r.get("created") or 0), r["id"]))
+
+    def vehicle_create(self, name):
+        """-> (row, key) -- the key exists only in this return value; (None, why) when refused."""
+        name = vehicle_name(name)
+        if not name:
+            return None, "name the vehicle first"
+        with self.lock:
+            if len(self.vehicles) >= VEHICLES_MAX:
+                return None, "this hub already holds %d vehicle keys -- delete one first" % VEHICLES_MAX
+            if any((r.get("name") or "").lower() == name.lower() and not r.get("revoked") for r in self.vehicles.values()):
+                return None, "a vehicle named %s already has a key" % name
+            vid = os.urandom(4).hex()
+            while vid in self.vehicles:
+                vid = os.urandom(4).hex()
+            secret = _b64u(os.urandom(24))            # 32 base64url characters
+            key = "kv-%s-%s" % (vid, secret)
+            salt = os.urandom(16).hex()
+            rec = {"id": vid, "name": name, "salt": salt, "hash": self._derive(key, salt, PBKDF2_ITER), "iter": PBKDF2_ITER,
+                   "created": int(time.time()), "lastUsed": None, "lastRoom": "", "revoked": False, "revokedAt": None}
+            self.vehicles[vid] = rec
+            self._save()
+            return self._vehicle_row(rec), key
+
+    def vehicle_revoke(self, vid):
+        with self.lock:
+            rec = self.vehicles.get(str(vid or ""))
+            if rec is None:
+                return None
+            if not rec.get("revoked"):
+                rec["revoked"], rec["revokedAt"] = True, int(time.time())
+                self._save()
+            return self._vehicle_row(rec)
+
+    def vehicle_delete(self, vid):
+        with self.lock:
+            rec = self.vehicles.pop(str(vid or ""), None)
+            if rec is not None:
+                self._save()
+            return rec is not None
+
+    def vehicle_holds(self, key):
+        """Is this key's id one of OUR vehicle records (verified here, not at the hub)?"""
+        m = VEHICLE_KEY_RE.match(str(key or ""))
+        with self.lock:
+            return bool(m) and m.group(1) in self.vehicles
+
+    def vehicle_check(self, key):
+        """-> ("ok", row) | ("revoked", row) | ("wrong", None). A malformed key is "wrong" too (it counts as a guess)."""
+        m = VEHICLE_KEY_RE.match(str(key or ""))
+        if not m:
+            return "wrong", None
+        with self.lock:
+            rec = self.vehicles.get(m.group(1))
+            rec = dict(rec) if rec else None
+        if rec is None:
+            return "wrong", None
+        try:
+            good = hmac.compare_digest(self._derive(str(key), rec["salt"], rec.get("iter") or PBKDF2_ITER), rec["hash"])
+        except Exception:
+            good = False
+        if not good:
+            return "wrong", None
+        return ("revoked" if rec.get("revoked") else "ok"), self._vehicle_row(rec)
+
+    def vehicle_used(self, vid, room):
+        """Stamp lastUsed / lastRoom (saved when the room changed or a minute passed -- not a file write per call)."""
+        with self.lock:
+            rec = self.vehicles.get(str(vid or ""))
+            if rec is None:
+                return
+            now = int(time.time())
+            saved = getattr(self, "_veh_saved", None)
+            if saved is None:
+                saved = self._veh_saved = {}
+            moved = rec.get("lastRoom") != room
+            rec["lastUsed"], rec["lastRoom"] = now, str(room or "")[:32]
+            if moved or now - saved.get(rec["id"], 0) >= 60:
+                saved[rec["id"]] = now
+                self._save()
 
     # ---- rooms
 
@@ -1351,7 +1514,8 @@ class AuthStore:
         their roomKeys (the creators keep closing and heartbeating), close tombstones and room groups."""
         with self.lock:
             return json.loads(json.dumps({"codes": self.codes, "codesAt": self.codes_at, "rooms": self.rooms,
-                                          "closed": self.closed, "groups": self.groups}))
+                                          "closed": self.closed, "groups": self.groups,
+                                          "vehicles": self.vehicles}))   # 0.21.63: vehicle keys (hashes) go with the hub
 
     def merge_bundle(self, b):
         """0.21.53: a hand-BACK -- what the standby changed while it was the hub. Per room the newer `at` wins, a newer
@@ -1389,6 +1553,15 @@ class AuthStore:
                     self.codes[k] = v
                     self.codes_at[k] = int(at[k])
                     n["codes"] += 1
+            for vid, rec in self._vehicles_clean(b.get("vehicles")).items():   # 0.21.63: keys made there are kept; a revoke sticks
+                mine = self.vehicles.get(vid)
+                if mine is None:
+                    self.vehicles[vid] = rec
+                    continue
+                if rec.get("revoked") and not mine.get("revoked"):
+                    mine["revoked"], mine["revokedAt"] = True, rec.get("revokedAt")
+                if float(rec.get("lastUsed") or 0) > float(mine.get("lastUsed") or 0):
+                    mine["lastUsed"], mine["lastRoom"] = rec.get("lastUsed"), rec.get("lastRoom") or ""
             self._save()
         return n
 
@@ -1418,6 +1591,8 @@ class AuthStore:
             if isinstance(b.get("groups"), dict) and b["groups"]:
                 self.groups = {str(g): v for g, v in b["groups"].items() if isinstance(v, dict) and SLUG_RE.match(str(g))}
                 n["groups"] = len(self.groups)
+            if isinstance(b.get("vehicles"), dict):   # 0.21.63: the hub's vehicle keys keep working on the new hub
+                self.vehicles.update(self._vehicles_clean(b["vehicles"]))
             self._save()
         return n
 
@@ -1598,6 +1773,11 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
             return {"ok": True, "plain": True, "persistent": False}, 200
         if not holder:
             cur = None
+    if cur is None and not (locking or keep) and not room_key:
+        # 0.21.63 (Kenton: "I need to be able to send a POST request without having to set a room code"): a create with no
+        # lock and no keep IS a plain room -- `plain: true` is no longer required (was 400 "bad room record"). A body that
+        # carries a roomKey is a holder's heartbeat for a record that is gone: still the 400 below, never a re-create.
+        plain = True
     if cur is None and plain and not (locking or keep):
         created = store.touch_room(slug, creator)
         rec = store.room(slug) or {}
@@ -1819,6 +1999,7 @@ class AuthService:
         self.hub_cmd_seen = None              # the hub's command seq this spoke last saw (baseline first)
         self._hub_locks = {}                  # 0.21.17: slug -> when the hub last said it is locked (fail closed while the hub is dark)
         self._hub_open = {}                   # 0.21.17: slug -> when the hub last said it is open (30 s: a join does not wait on the hub each time)
+        self._veh_cache = {}                  # 0.21.63: sha256(vehicle key) -> (at, row) -- the hub said "good" (VEHICLE_CACHE_S)
         d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
         if isinstance(d, dict):
             if isinstance(d.get("spokes"), dict):
@@ -1958,6 +2139,10 @@ class AuthService:
                     obj, code = svc.token(p, self._peer())
                     hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                     self._reply(obj, code, hdrs)
+                elif path == "/api/vehicle":           # 0.21.63: a vehicle's API key -> a publish-only token for one room
+                    obj, code = svc.vehicle(p, self._peer(), svc.vehicle_relay_url(self))
+                    hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                    self._reply(obj, code, hdrs)
                 elif path in ("/api/session", "/"):
                     # 0.16.0: the relay's session events. The PEER must be loopback itself
                     # (never X-Forwarded-For -- the relay runs beside us).
@@ -2007,7 +2192,8 @@ class AuthService:
                     self._reply({"error": "unknown endpoint"}, 404)
 
         self.key = key
-        self.kid = key_id(key)          # 0.11.0: spokes compare it to notice a rotated hub key
+        self.relay_port = relay_port    # 0.21.63: the vehicle API names this relay's URL
+        self.kid = key_id(key)         # 0.11.0: spokes compare it to notice a rotated hub key
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -2143,6 +2329,16 @@ class AuthService:
             return group_op(self.store, body, operator=False, log=self.log)
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
             return self._xs_fed(p)
+        if op == "vehicle":  # 0.21.63: a spoke asks "is this one of the fleet's vehicle keys?" (the key is never logged)
+            verdict, row = self.store.vehicle_check(str(p.get("key") or ""))
+            if verdict == "ok":
+                room = str(p.get("room") or "")
+                if SLUG_RE.match(room):
+                    self.store.vehicle_used(row["id"], room)
+                return {"ok": True, "vehicle": {"id": row["id"], "name": row["name"]}}, 200
+            if verdict == "revoked":
+                return {"ok": False, "revoked": True, "error": "this vehicle key was revoked"}, 403
+            return {"ok": False, "error": "wrong vehicle key"}, 403   # counted by the spoke's lockout (the vehicle's address is there)
         slug = str(p.get("slug") or "")
         if not SLUG_RE.match(slug) or slug == "main":
             return {"ok": False, "error": "bad room"}, 400
@@ -2389,6 +2585,182 @@ class AuthService:
         return {"ok": True, "exp": exp, "role": role, "ns": NS,     # 0.21.17: pages re-mint a token cached without it
                 "tokens": {"member": member, "registry": registry}}, 200
 
+    # ---- 0.21.63: the vehicle API -----------------------------------------------------------------------------------
+    # Kenton: "I now need to have a vehicle ... be able to connect via POST to the relay to share the cameras on the vehicle.
+    # They need to be able to create a room and share the cameras directly from the vehicle." A vehicle POSTs /api/vehicle
+    # {key, room} to the minter of the relay it publishes to; keys are made on the hub's Relay page (a spoke asks the hub),
+    # rooms are created PLAIN at the hub when missing, and each call keeps the room alive (it closes ROOM_TTL after the last).
+
+    def _vehicle_spoke(self):
+        """A spoke: a hub is saved and this box is not switched on as the hub (vehicle keys and rooms live at the hub)."""
+        if not self._hub_base():
+            return False
+        try:
+            return not (callable(self.is_hub) and self.is_hub() is True)
+        except Exception:
+            return True
+
+    def _hub_fed(self, body, timeout=6):
+        """Spoke side: one POST /api/rooms/fed at the hub -> (reply, code); None when there is no hub or token, or it did not
+        answer at all."""
+        base, bearer = self._hub_base(), self._hub_bearer()
+        if not base or not bearer:
+            return None
+        req = urllib.request.Request(base + "/api/rooms/fed", data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": bearer})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+                return (d if isinstance(d, dict) else {}), (getattr(r, "status", None) or 200)
+        except urllib.error.HTTPError as e:
+            try:
+                d = json.loads(e.read().decode("utf-8", "replace") or "{}")
+            except Exception:
+                d = {}
+            return (d if isinstance(d, dict) else {}), e.code
+        except Exception:
+            return None
+
+    def _vehicle_verify(self, key, room):
+        """-> (verdict, row): "ok" | "revoked" | "wrong" | "down". A key this box holds is checked here; on a spoke any other
+        key is checked by the hub (federation token) and a positive answer is cached VEHICLE_CACHE_S. Never logs the key."""
+        if self.store.vehicle_holds(key) or not self._vehicle_spoke():
+            return self.store.vehicle_check(key)
+        if not VEHICLE_KEY_RE.match(str(key or "")):
+            return "wrong", None             # a malformed key never bothers the hub (still a guess)
+        dig, now = vehicle_key_digest(key), time.time()
+        with self.lock:
+            hit = self._veh_cache.get(dig)
+        if hit and now - hit[0] < VEHICLE_CACHE_S:
+            return "ok", dict(hit[1])
+        out = self._hub_fed({"op": "vehicle", "key": str(key), "room": room}, timeout=5)
+        if out is None:
+            return "down", None
+        d, code = out
+        v = d.get("vehicle") if isinstance(d.get("vehicle"), dict) else {}
+        if code == 200 and d.get("ok") and re.match(r"^[0-9a-f]{8}$", str(v.get("id") or "")):
+            row = {"id": str(v["id"]), "name": vehicle_name(v.get("name")) or str(v["id"])}
+            with self.lock:
+                self._veh_cache[dig] = (now, row)
+                if len(self._veh_cache) > 512:
+                    for k in sorted(self._veh_cache, key=lambda k: self._veh_cache[k][0])[:256]:
+                        self._veh_cache.pop(k, None)
+            return "ok", dict(row)
+        with self.lock:
+            self._veh_cache.pop(dig, None)
+        if code == 403 and d.get("revoked"):
+            return "revoked", None
+        if code == 403:
+            return "wrong", None
+        return "down", None                  # an older hub (no vehicle op) or a hub error: not the vehicle's fault
+
+    def vehicle_relay_url(self, handler):
+        """The relay URL a vehicle should dial: the name it reached this minter by, on the relay's port. http:// -- moq
+        fetches the relay's self-signed certificate fingerprint over HTTP on that port, then publishes over QUIC (what
+        KASTR's own native publishers do). Through KASTR's web port (kastr_serve forwards X-Kastr-Host / X-Kastr-Via from
+        loopback) the name the vehicle used; through a tunnel, which carries no QUIC, the web relay https://<name>/relay."""
+        try:
+            peer = (handler.client_address[0] if handler.client_address else "") or ""
+            raw = handler.headers.get("Host") or ""
+            via = ""
+            if peer in LOOPBACK_PEERS and handler.headers.get("X-Kastr-Host"):
+                raw, via = handler.headers.get("X-Kastr-Host") or "", handler.headers.get("X-Kastr-Via") or ""
+            raw = raw.split(",")[0].strip()
+            if not re.match(r"^[A-Za-z0-9.\-:\[\]]{1,260}$", raw):
+                raw = "127.0.0.1"
+            if via == "tunnel":
+                return "https://%s%s" % (raw, WEB_RELAY_PATH)
+            name = _host_of(raw) or "127.0.0.1"
+            return "http://%s:%d/" % (("[%s]" % name) if ":" in name else name, int(self.relay_port))
+        except Exception:
+            return "http://127.0.0.1:%d/" % int(getattr(self, "relay_port", 4443) or 4443)
+
+    def vehicle(self, p, peer="", relay_url=""):
+        """POST /api/vehicle {key, room, name?, roomCode?} -> a token for THIS relay that may publish only under
+        <room>/<host> (+ the vehicle's presence and state, so room lists count it), never subscribe to the room. The room
+        is created as a PLAIN room when it does not exist (at the hub when this box is a spoke) and touched on every call.
+        A wrong key counts toward the lockout like a wrong code; a revoked key is refused without counting."""
+        p = p if isinstance(p, dict) else {}
+        key = str(p.get("key") or "").strip()
+        slug = str(p.get("room") or "")
+        room_code = p.get("roomCode")
+        room_code = None if room_code is None or room_code == "" else str(room_code)
+        if not SLUG_RE.match(slug):
+            return {"ok": False, "error": "bad room name -- lowercase letters, digits and -, at most 32"}, 400
+        if slug == LOBBY_SLUG:
+            return {"ok": False, "error": "the Lobby takes no publishers"}, 403
+        wait = self.locked_for(peer)
+        if wait:
+            return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if not key:
+            return {"ok": False, "error": "a vehicle key is required (make one on the hub's Relay page)"}, 403
+        verdict, row = self._vehicle_verify(key, slug)
+        if verdict == "down":
+            return {"ok": False, "hubDown": True,
+                    "error": "the hub could not be asked about this vehicle key -- try again shortly"}, 503
+        if verdict == "revoked":
+            self.log("relay auth: a revoked vehicle key (%s) was refused for room %s (from %s)"
+                     % ((row or {}).get("name") or "?", slug, peer or "?"))
+            return {"ok": False, "revoked": True, "error": "this vehicle key was revoked"}, 403
+        if verdict != "ok" or not row:
+            out, code = self._fail(peer, "wrong vehicle key", slug, what="vehicle")
+            out["ok"] = False
+            return out, code
+        name = vehicle_name(p.get("name")) or row["name"]
+        host = vehicle_host(name, row["id"])
+        b = self.bans.hit(slug, host, peer) if self.bans else None
+        if b:
+            return {"ok": False, "error": "removed from this room by an admin", "until": int(b.get("until") or 0),
+                    "by": b.get("by")}, 403
+        locked = {"ok": False, "locked": True, "error": "this room is locked -- send its room code as roomCode"}
+        if self._vehicle_spoke():
+            hv = self.hub_room(slug, room_code)
+            if hv == "locked":
+                return locked, 403
+            if hv == "wrong":
+                out, code = self._fail(peer, "wrong room code", slug)
+                out["ok"] = False
+                return out, code
+            out = self._hub_fed({"op": "touch", "slug": slug, "creator": name}, timeout=5) if hv is not None else None
+            if out is None or out[1] != 200:
+                return {"ok": False, "hubDown": True,
+                        "error": "the hub is unreachable -- rooms are created on the hub; keep publishing with the token "
+                                 "you have and try again"}, 503
+            created = bool(out[0].get("created"))
+        else:
+            rec = self.store.room(slug)
+            if rec is not None and rec.get("hash"):
+                if room_code is None:
+                    return locked, 403
+                if not _room_code_ok(rec, room_code):
+                    out, code = self._fail(peer, "wrong room code", slug)
+                    out["ok"] = False
+                    return out, code
+            created = self.store.touch_room(slug, name)
+        if self.store.vehicle_holds(key):
+            self.store.vehicle_used(row["id"], slug)
+        self._ok(peer)
+        now = int(time.time())
+        exp = now + TOKEN_TTL
+        puts = [slug + "/" + host, STATE_PREFIX + "/" + slug + "/" + host, PRESENCE_KIND + "/" + slug]
+        jwt = _mint(self.key, {"root": "", "put": puts, "vehicle": row["id"], "room": slug, "iat": now, "exp": exp})
+        relay = relay_url or "http://127.0.0.1:%d/" % int(self.relay_port)
+        said_key = (row["id"], slug)
+        with self.lock:
+            said = getattr(self, "_veh_said", None)
+            if said is None:
+                said = self._veh_said = {}
+            say = created or now - said.get(said_key, 0) > 3600
+            if say:
+                said[said_key] = now
+        if say:   # one line per vehicle and room an hour (a vehicle calls every 5 min); never the key or the token
+            self.log("relay auth: vehicle %s publishes in room %s as %s%s (from %s)"
+                     % (name, slug, host, " -- room created" if created else "", peer or "?"))
+        return {"ok": True, "room": slug, "host": host, "name": name, "op": VEHICLE_OP,
+                "prefix": "%s/%s/%s/" % (slug, host, VEHICLE_OP), "relay": relay, "jwt": jwt,
+                "connect": relay + "?jwt=" + jwt, "exp": exp, "refreshEvery": VEHICLE_REFRESH_S,
+                "roomTtl": ROOM_TTL, "created": bool(created)}, 200
+
     # ---- 0.16.0: the relay's per-session auth ------------------------------------
 
     def session(self, req, peer=""):
@@ -2471,9 +2843,13 @@ class AuthService:
                         self.log("relay session: %s from %s kept on a token that ran out %d min ago (grace %d min) -- it should "
                                  "pick up a fresh one before then" % (ev, remote, (now - exp) // 60, TOKEN_GRACE_S // 60))
         room = host = None
+        is_vehicle = False
         if status == "grant":
             claims = verify_token(session_jwt(req), self.key, vnow) or {}
             room, host = claims_identity(claims)
+            if not room and claims.get("vehicle"):   # 0.21.63: a vehicle token has no `get`; a kick still finds it
+                room, host = vehicle_identity(claims)
+                is_vehicle = True
             if self.bans and self.bans.hit(room, host, remote, now):   # 0.17.0
                 return self._revoked_answer(ev, sid, remote, now)
         if status == "refuse":
@@ -2489,7 +2865,7 @@ class AuthService:
                 self.log("relay session: refused %s from %s (%s)" % (ev, remote, why))
             return {"error": why}, 403
         base = grant
-        if status == "grant" and room:
+        if status == "grant" and room and not is_vehicle:   # 0.21.63: vehicles do not watch (no listings either)
             grant = self._xs_grant(grant, room, now)   # 0.21.41: + the streams listed into this room from other rooms
         with self.lock:
             self.grants += 1
@@ -5756,6 +6132,49 @@ class Relay:
             "set" if st["federation"] else "not set", "set" if st["admin"] else "not set"))
         return {"ok": True, "codes": st, "configured": bool(st["viewer"] or st["publisher"])}
 
+    # ---- 0.21.63: vehicle API keys (the hub's Relay page) ------------------------------------------------------------
+
+    def is_spoke(self):
+        """A hub is saved and this box is not switched on as the hub -- the Relay page's own test (rooms, vehicles)."""
+        raw = self._cluster_raw()
+        return bool(raw.get("connect")) and raw.get("hub") is not True
+
+    VEHICLES_ON_HUB = "Vehicle keys are managed on the hub"
+
+    def vehicles_view(self):
+        """GET /api/relay/vehicles -> {vehicles: [...rows, never a key or hash], spoke, hub?, port, authPort}."""
+        if self.is_spoke():
+            return {"vehicles": [], "spoke": True, "hub": self._cluster_raw().get("connect") or "", "note": self.VEHICLES_ON_HUB}
+        return {"vehicles": self.store.vehicles_public(), "spoke": False, "port": self.port,
+                "secured": bool(self.secured and self.running()), "refreshEvery": VEHICLE_REFRESH_S, "roomTtl": ROOM_TTL}
+
+    def vehicles_op(self, payload):
+        """POST /api/relay/vehicles {op: create, name} -> {ok, vehicle, key} (the key once, never again);
+        {op: revoke|delete, id}. -> (reply, code)."""
+        payload = payload if isinstance(payload, dict) else {}
+        if self.is_spoke():
+            return {"ok": False, "spoke": True, "error": self.VEHICLES_ON_HUB}, 409
+        op = str(payload.get("op") or "")
+        if op == "create":
+            row, key = self.store.vehicle_create(payload.get("name"))
+            if row is None:
+                return {"ok": False, "error": key}, 400
+            self.log("relay: vehicle key made for %s (%s)" % (row["name"], row["id"]))   # never the key
+            return {"ok": True, "vehicle": row, "key": key}, 200
+        vid = str(payload.get("id") or "")
+        if op == "revoke":
+            row = self.store.vehicle_revoke(vid)
+            if row is None:
+                return {"ok": False, "error": "no such vehicle"}, 404
+            self.log("relay: vehicle key of %s (%s) revoked" % (row["name"], row["id"]))
+            return {"ok": True, "vehicle": row}, 200
+        if op == "delete":
+            if not self.store.vehicle_delete(vid):
+                return {"ok": False, "error": "no such vehicle"}, 404
+            self.log("relay: vehicle key %s deleted" % vid)
+            return {"ok": True}, 200
+        return {"ok": False, "error": "op must be create, revoke or delete"}, 400
+
     def rotate(self):
         """A new signing key: every outstanding token dies. Pages re-mint with
         their cached codes within a minute; native publishers restart on their
@@ -6355,6 +6774,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/clients/update",  # 0.21.50
                  "/api/relay/logs/collect",    # 0.21.51
                  "/api/relay/spokes/restart",  # 0.21.52
+                 "/api/relay/vehicles",        # 0.21.63: vehicle API keys
                  "/api/relay/standby")         # 0.21.53
 
 
@@ -6824,6 +7244,15 @@ def handle_api(handler, relay, path, set_relay_url=None):
                 reply({"error": str(e)}, 400)
         else:
             reply(relay.codes_status())
+        return True
+
+    if path == "/api/relay/vehicles":
+        # 0.21.63: vehicle API keys -- the hub's Relay page (GET is host-only like every /api/relay read; POST is GUARDED)
+        if handler.command == "POST":
+            obj, code = relay.vehicles_op(_payload_of(handler))
+            reply(obj, code)
+        else:
+            reply(relay.vehicles_view())
         return True
 
     if path == "/api/relay/rotate":

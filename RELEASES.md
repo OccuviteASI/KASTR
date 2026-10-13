@@ -4,6 +4,18 @@ What changed in each build, newest first.
 
 ## v0.21.63 — the vehicle API
 
+**Vehicles share their cameras without a room code (Kenton: "I now need to have a vehicle syslogic be able to connect via POST to the relay to share the cameras on the vehicle. They need to be able to create a room and share the cameras directly from the vehicle" ... "I need to be able to send a POST request without having to set a room code").** Each vehicle gets its own key. With it, the vehicle POSTs once to make a room (or join one) and publishes its cameras with the `moq` tool, the same tool it uses today. Kenton chose:
+- **A key per vehicle, made on the hub:** the hub's Relay page has a new **Vehicles** card. Type the vehicle's name and press **Add vehicle**. The key is shown once, with **Copy** and a ready-to-run example (the POST and the camera command). Only a hash of the key is kept, so it cannot be shown again. The table lists each vehicle's name, when it was made, when it was last used and its last room, with **Revoke** and **Delete**. A spoke's Relay page says "Vehicle keys are managed on the hub".
+- **The key can only make rooms and publish:** it cannot watch and has no admin rights. Each vehicle publishes under its own name in the room (for example `vehicle-12-3f9a`), and every camera shows as its own tile.
+- **No room code:** the vehicle sends `POST /api/vehicle` with its key and a room name. If the room does not exist it is created as an ordinary room with no code. A room someone locked still needs its code. The Lobby (`main`) takes no vehicles.
+- **Any relay in the fleet:** the vehicle posts to the relay it publishes to, hub or spoke. A spoke asks the hub whether the key is good and remembers a yes for a minute. The room is made on the hub, like a room made from a page.
+- **The room closes when the vehicle stops:** the vehicle posts again every 5 minutes, which keeps the room open. About 10 minutes after the last post the room closes by itself.
+- **Outbound only:** the vehicle makes an HTTP POST to the relay's port + 1 and connects to the relay on QUIC 4443, the same as a spoke. That works from a cellular link behind NAT.
+- **Wrong keys count like wrong codes:** five wrong keys within a minute lock that address out, as with access codes. A revoked key is refused with "this vehicle key was revoked".
+- **For the vehicle team:** `docs/vehicle-api.md` has the request and reply, the camera command (`ffmpeg ... | moq ... import ts`), the refresh rule and what each error means.
+
+**Rooms made without a code are ordinary rooms now (Kenton asked for this with the vehicle API).** A request to make a room with no code that is not set to stay open used to be refused ("bad room record") unless it was marked plain. Now it simply makes a plain room. Heartbeats and take-overs work as before.
+
 **Shorter times on the Relay page (Kenton: "instead of showing 3 min 23 s, just change it to 3m 23s").** "Last seen" and the other times there read **45s ago**, **3m 23s ago**, **1h 03m ago**.
 
 **Mute and camera-off marks stay in the gallery (Kenton: "When showing user previews in the gallery view show their the mute/no cam icons whether hovering or not").** In the gallery view a person's muted-mic and camera-off marks stay visible when the mouse is away. Elsewhere they still fade with the other controls.

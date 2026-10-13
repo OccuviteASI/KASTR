@@ -3025,6 +3025,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 body = self.rfile.read(n) if n else None
                 peer = kastr_relay.client_ip(self)          # 0.19.0: the visitor behind a tunnel
                 hdrs = {"Content-Type": self.headers.get("Content-Type") or "application/json", "X-Forwarded-For": peer}
+                if path0 == "/api/vehicle":
+                    # 0.21.63: the minter names the relay URL a vehicle dials from the name the vehicle used here (and a
+                    # tunnelled request gets the web relay https://<name>/relay -- a tunnel carries no QUIC)
+                    fwd = kastr_relay.is_forwarded(self)
+                    hdrs["X-Kastr-Host"] = ((self.headers.get("X-Forwarded-Host") if fwd else None) or self.headers.get("Host") or "").split(",")[0].strip()
+                    hdrs["X-Kastr-Via"] = "tunnel" if fwd else "web"
                 if self.headers.get("Authorization"):
                     hdrs["Authorization"] = self.headers.get("Authorization")   # 0.19.0: federation Bearer (bans, spokes)
                 if kastr_relay.is_web_relay(cur) and not hop:
@@ -3552,6 +3558,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/spokes/register", "/api/bans/notify",          # 0.19.0: federation through a web relay
                          "/api/clients/checkin",                              # 0.21.50: an app says who it is to the relay it uses
                          "/api/clients/logs", "/api/logs/upload",             # 0.21.51: logs collected at the hub
+                         "/api/vehicle",                                      # 0.21.63: a vehicle's key -> a publish token
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":

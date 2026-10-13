@@ -31,7 +31,19 @@
   #main > section:last-child { grid-column:1 / -1; }
   /* next release: the table cards (spokes, rooms, streams) take two columns wherever the grid has them, so their headers and
      host names fit on one line instead of breaking inside the word */
-  @media (min-width: 900px) { #fedPanel, #roomsPanel, #streamsPanel { grid-column:span 2; } }
+  @media (min-width: 900px) { #fedPanel, #roomsPanel, #streamsPanel, #vehPanel { grid-column:span 2; } }
+  /* 0.21.63: the Vehicles card -- add a key, see it once, copy a ready-to-run example */
+  .vehadd { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .vehadd input { flex:1; min-width:0; }
+  .vehkey { display:block; margin:8px 0 10px; padding:9px 10px; border:1px solid color-mix(in srgb, var(--asi-blue, #3b82f6) 55%, transparent);
+    border-radius:6px; background:color-mix(in srgb, var(--asi-blue, #3b82f6) 9%, transparent); color:var(--text); font-size:12px; line-height:1.5; }
+  .vehkey[hidden] { display:none; }
+  .vehkey .urlrow { margin:6px 0 8px; }
+  .vehkey .urlrow code { color:var(--text); white-space:normal; overflow-wrap:anywhere; }
+  pre.vehex { margin:4px 0 8px; padding:8px 9px; background:var(--surface-2); border:1px solid var(--line); border-radius:5px; color:var(--text-dim);
+    font-family:var(--font-mono); font-size:11px; line-height:1.5; white-space:pre; overflow:auto; max-height:260px; }
+  table.rooms tr.revoked td { opacity:.55; }
+  table.rooms td .vflag { font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--asi-amber); margin-left:6px; }
   /* 0.21.25: the hub hand-over prompt */
   dialog.hubmove { max-width:min(560px, calc(100vw - 32px)); border:1px solid var(--asi-blue, #009fda); border-radius:10px;
     background:var(--surface-1, #0c141c); color:var(--text, #e6edf3); padding:18px 20px; box-shadow:0 18px 48px rgba(0,0,0,.6); }
@@ -480,6 +492,39 @@
         <thead><tr><th>Room</th><th>Flags</th><th>Creator</th><th>Created</th><th>Last seen</th><th></th></tr></thead>
         <tbody></tbody>
       </table></div>
+    </section>
+
+    <!-- 0.21.63: vehicle API keys (Kenton: "They need to be able to create a room and share the cameras directly from the
+         vehicle"). Made on the hub; a spoke shows one line. Hidden until GET /api/relay/vehicles answers (this machine only). -->
+    <section class="panel" id="vehPanel" hidden>
+      <h2>Vehicles</h2>
+      <p class="hint" id="vehSpoke" hidden>Vehicle keys are managed on the hub.</p>
+      <div id="vehBox">
+        <p class="hint">One API key per vehicle. A key can create a room and publish the vehicle's cameras there &mdash; it cannot
+          watch and has no admin rights. The vehicle POSTs <code>/api/vehicle</code> with its key and a room name (no room code)
+          and publishes with the <code>moq</code> tool; its room closes 10 minutes after the vehicle stops calling.</p>
+        <div class="warn" id="vehUnsecured" hidden>The relay is not secured. Vehicles get tokens only from a secured relay
+          (<b>Require access codes</b> in Server) &mdash; the keys below are kept until then.</div>
+        <div class="vehadd">
+          <input type="text" id="vehName" maxlength="48" placeholder="Vehicle name, e.g. Vehicle 12" autocomplete="off" spellcheck="false">
+          <button type="button" id="vehAdd">Add vehicle</button>
+        </div>
+        <span id="vehMsg" class="hint blk"></span>
+        <div id="vehKeyBox" class="vehkey" hidden>
+          <b>Key for <span id="vehKeyName"></span> &mdash; shown once.</b> Copy it now: only its hash is kept here, so it cannot be shown again
+          (revoke it and add the vehicle again if it is lost).
+          <div class="urlrow"><code id="vehKey"></code><button type="button" class="ghost" id="vehKeyCopy">Copy</button></div>
+          <span class="hint blk">Ready to run on the vehicle (one camera; repeat step 2 per camera with its own name):</span>
+          <pre id="vehExample" class="vehex"></pre>
+          <div class="btnrow"><button type="button" class="ghost" id="vehExCopy">Copy example</button>
+            <button type="button" class="ghost" id="vehKeyDone">Done &mdash; hide the key</button></div>
+        </div>
+        <div id="vehNote" class="hint">No vehicles yet.</div>
+        <div class="tblwrap"><table class="rooms" id="vehTable">
+          <thead><tr><th>Vehicle</th><th>Created</th><th>Last used</th><th>Last room</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
     </section>
 
     <section class="panel" id="detailsPanel">
@@ -1757,6 +1802,159 @@
   paintRooms();
   setInterval(paintRooms, 10000);
 
+  // 0.21.63 (Kenton: "I need to be able to send a POST request without having to set a room code"): vehicle API keys.
+  // GET /api/relay/vehicles every 10 s -> {vehicles:[{id, name, host, created, lastUsed, lastRoom, revoked}], spoke, port,
+  // secured}; POST {op:"create", name} answers the key ONCE (shown in a box with a ready-to-run example), {op:"revoke"|
+  // "delete", id}. This machine only (the server refuses everyone else, so a remote page hides the card).
+  const vehPanel = $("vehPanel"), vehBody = $("vehTable").querySelector("tbody"), vehNote = $("vehNote"), vehMsg = $("vehMsg");
+  const vehRows = new Map();   // id -> <tr>
+  let vehLast = null;
+  const vehAgo = (sec) => sec ? agoText(Date.now() / 1000 - Number(sec)) : "never";
+  function vehRelayHost() {
+    if (!LOCAL) return location.hostname;
+    const lan = (lastStatus && lastStatus.lanUrls) || [];
+    try { if (lan[0]) return new URL(lan[0]).hostname; } catch {}
+    return "RELAY-ADDRESS";
+  }
+  function vehExample(key, row) {
+    const port = Number(vehLast?.port) || 4443;
+    const host = vehRelayHost();
+    const room = (row.host || "vehicle").replace(/-[0-9a-f]{4}$/, "");
+    return [
+      "# 1. Ask the relay for a token. Do this every 5 minutes -- it also keeps the room open",
+      "#    (the room closes 10 minutes after the last call). No room code is needed.",
+      `curl -s -X POST http://${host}:${port + 1}/api/vehicle \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '{"key":"${key}","room":"${room}"}'`,
+      "#    The reply's \"connect\" is the relay URL with the token; \"prefix\" is where this vehicle may publish:",
+      `#    ${room}/${row.host}/vehicle/`,
+      "",
+      "# 2. Publish one camera (its RTSP address) -- one ffmpeg | moq pair per camera, each with its own name",
+      `ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -timeout 10000000 -fflags nobuffer -flags low_delay \\`,
+      `  -i "rtsp://CAMERA-ADDRESS/stream" -map 0:v:0 -map "0:a:0?" -c:v copy -c:a aac -b:a 128k -ac 2 \\`,
+      `  -f mpegts -pes_payload_size 0 - \\`,
+      `| moq --log-level warn --backoff-timeout 10s --quic-idle-timeout 15s \\`,
+      `  --connect "CONNECT-FROM-THE-REPLY" \\`,
+      `  --broadcast "${room}/${row.host}/vehicle/front.hang" import --max-age 5s ts`,
+    ].join("\n");
+  }
+  async function vehCopy(btn, text) {
+    try { await navigator.clipboard?.writeText(text); btn.textContent = navigator.clipboard ? "Copied" : "Select and copy"; }   // no clipboard on http
+    catch { btn.textContent = "Copy failed"; }
+    setTimeout(() => { btn.textContent = btn.dataset.label || "Copy"; }, 1200);
+  }
+  $("vehKeyCopy").dataset.label = "Copy";
+  $("vehExCopy").dataset.label = "Copy example";
+  $("vehKeyCopy").addEventListener("click", (e) => vehCopy(e.currentTarget, $("vehKey").textContent));
+  $("vehExCopy").addEventListener("click", (e) => vehCopy(e.currentTarget, $("vehExample").textContent));
+  $("vehKeyDone").addEventListener("click", () => {
+    $("vehKey").textContent = ""; $("vehExample").textContent = ""; $("vehKeyBox").hidden = true;   // the key leaves the page
+  });
+  async function vehOp(body) {
+    try {
+      const res = await fetch("/api/relay/vehicles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return await res.json().catch(() => ({ ok: false, error: "HTTP " + res.status }));
+    } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+  }
+  async function vehAdd() {
+    const name = $("vehName").value.trim();
+    if (!name) { vehMsg.textContent = "Name the vehicle first."; return; }
+    $("vehAdd").disabled = true;
+    vehMsg.textContent = "Adding…";
+    const r = await vehOp({ op: "create", name });
+    $("vehAdd").disabled = !LOCAL;
+    if (!r.ok || !r.key) { vehMsg.textContent = "Not added: " + (r.error || "no answer"); return; }
+    vehMsg.textContent = "";
+    $("vehName").value = "";
+    $("vehKeyName").textContent = r.vehicle?.name || name;
+    $("vehKey").textContent = r.key;
+    $("vehExample").textContent = vehExample(r.key, r.vehicle || {});
+    $("vehKeyBox").hidden = false;
+    paintVehicles();
+  }
+  $("vehAdd").addEventListener("click", vehAdd);
+  $("vehName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); vehAdd(); } });
+  function vehRow(id) {
+    const tr = document.createElement("tr");
+    tr.setAttribute("data-veh", id);
+    for (const cls of ["slug", "created mono", "used mono", "room mono", "act"]) {
+      const td = document.createElement("td");
+      td.className = cls;
+      tr.appendChild(td);
+    }
+    const name = document.createElement("span"), flag = document.createElement("span");
+    flag.className = "vflag";
+    tr.querySelector(".slug").append(name, flag);
+    const mk = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "ghost"; b.textContent = label; b.title = title; b.dataset.label = label;
+      b.style.marginLeft = "4px";
+      b.addEventListener("click", fn);
+      tr.querySelector(".act").appendChild(b);
+      return b;
+    };
+    mk("Revoke", "Stop this key working now; the row stays so you can see it", async (e) => {
+      const nm = tr.__name || id;
+      if (!confirm("Revoke the key of " + nm + "? The vehicle gets no new tokens (a token it already holds runs out within a day).")) return;
+      const b = e.currentTarget; b.disabled = true;
+      const r = await vehOp({ op: "revoke", id });
+      if (!r.ok) vehMsg.textContent = "Revoke failed: " + (r.error || "no answer");
+      paintVehicles();
+    });
+    mk("Delete", "Forget this vehicle and its key", async (e) => {
+      const nm = tr.__name || id;
+      if (!confirm("Delete " + nm + " and its key? This cannot be undone.")) return;
+      const b = e.currentTarget; b.disabled = true;
+      const r = await vehOp({ op: "delete", id });
+      if (!r.ok) vehMsg.textContent = "Delete failed: " + (r.error || "no answer");
+      paintVehicles();
+    });
+    return tr;
+  }
+  function vehFill(tr, v) {
+    const set = (sel, txt) => { const el = tr.querySelector(sel); if (el.textContent !== txt) el.textContent = txt; };
+    tr.__name = v.name || v.id;
+    set(".slug > span:first-child", v.name || v.id);
+    set(".vflag", v.revoked ? "revoked" : "");
+    tr.querySelector(".slug").title = "Publishes as " + (v.host || "?") + " — key id " + v.id;
+    set(".created", fmtWhen(v.created));
+    set(".used", vehAgo(v.lastUsed));
+    set(".room", v.lastRoom || "—");
+    tr.classList.toggle("revoked", !!v.revoked);
+    const [rv, del] = tr.querySelectorAll(".act button");
+    rv.disabled = !LOCAL || !!v.revoked;
+    del.disabled = !LOCAL;
+  }
+  async function paintVehicles() {
+    let d = null;
+    try {
+      const res = await fetch("/api/relay/vehicles", { cache: "no-store" });
+      if (!res.ok) { vehPanel.hidden = true; return; }
+      d = await res.json();
+    } catch { vehPanel.hidden = true; return; }
+    if (!d || d.error || !Array.isArray(d.vehicles)) { vehPanel.hidden = true; return; }
+    vehLast = d;
+    vehPanel.hidden = false;
+    $("vehSpoke").hidden = !d.spoke;
+    $("vehBox").hidden = !!d.spoke;
+    if (d.spoke) return;
+    $("vehUnsecured").hidden = !!d.secured;
+    $("vehAdd").disabled = !LOCAL;
+    const seen = new Set();
+    for (const v of d.vehicles) {
+      if (!v || !v.id) continue;
+      seen.add(v.id);
+      let tr = vehRows.get(v.id);
+      if (!tr) { tr = vehRow(v.id); vehRows.set(v.id, tr); vehBody.appendChild(tr); }
+      vehFill(tr, v);
+    }
+    for (const [id, tr] of vehRows) if (!seen.has(id)) { tr.remove(); vehRows.delete(id); }
+    vehNote.hidden = vehRows.size > 0;
+    vehNote.textContent = vehRows.size ? "" : "No vehicles yet.";
+  }
+  paintVehicles();
+  setInterval(paintVehicles, 10000);
+
   updateFwHint();
   refresh();
   setInterval(refresh, 2000);
@@ -2052,7 +2250,7 @@
   if (!main) return;
   const KEY = "kastr.relay.grid", OLD_KEY = "kastr.relay.layout";
   const COLS = 12, ROW = 8, GAP = 14, MINW = 3, MINROWS = 11, NARROW = 760;   // 11 rows: the title + a couple of lines
-  const DEFAULT_W = { fedPanel: 8, roomsPanel: 8, streamsPanel: 8, logPanel: 12 };
+  const DEFAULT_W = { fedPanel: 8, roomsPanel: 8, streamsPanel: 8, vehPanel: 8, logPanel: 12 };
   const all = [...main.querySelectorAll("section.panel")];
   all.forEach((p, i) => { if (!p.id) p.id = "panel" + i; p.dataset.home = String(i); });
   for (const p of all) main.appendChild(p);   // every card a direct child (the old column wrappers stay, empty)

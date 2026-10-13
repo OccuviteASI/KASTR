@@ -71,15 +71,20 @@ body.asi {
   background: transparent; border: 1px solid transparent; border-radius: 6px; color: rgba(255,255,255,.55); cursor: pointer;
 }
 .asi-hdrbtn:hover, .asi-hdrbtn:focus-visible { color: #fff; border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.06); outline: none; }
+/* 0.21.60 (Kenton, iPhone home-screen app: "When I collapsed the top bar it won't let me click on the expand button. The
+   expand button is overlapping with the people button"): the collapsed bar is a thin strip of its own at the top of the page
+   (in the page flow, never floating over the toolbar), below the status bar of a full-screen web app; the whole strip is
+   the button. */
 .asi-hdrtab {
-  position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 60;
-  display: none; place-items: center; width: 46px; height: 14px; padding: 0;
-  background: var(--asi-navy); color: #fff; border: 1px solid var(--asi-blue); border-top: 0; border-radius: 0 0 8px 8px;
-  opacity: .5; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  position: sticky; top: 0; z-index: 50; flex: none; box-sizing: content-box;
+  display: none; place-items: center; width: 100%; height: 16px; margin: 0;
+  padding: env(safe-area-inset-top) 0 0; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--asi-blue) 55%, transparent);
+  background: linear-gradient(90deg, var(--asi-navy) 0%, var(--asi-navy-deep) 55%, var(--asi-ink) 100%);
+  color: rgba(255,255,255,.6); cursor: pointer;
 }
-.asi-hdrtab svg { width: 12px; height: 12px; }
-.asi-hdrtab:hover, .asi-hdrtab:focus-visible { opacity: 1; height: 18px; outline: none; }
-@media (prefers-reduced-motion: no-preference) { .asi-hdrtab { transition: opacity .15s ease, height .15s ease; } }
+@media (pointer: coarse) { .asi-hdrtab { height: 26px; } }   /* a finger-sized strip on phones and tablets */
+.asi-hdrtab svg { width: 14px; height: 14px; }
+.asi-hdrtab:hover, .asi-hdrtab:focus-visible { color: #fff; outline: none; }
 body.asi-hdr-off .asi-header { display: none !important; }
 body.asi-hdr-off .asi-hdrtab { display: grid; }
 body.fillwin .asi-hdrtab, body.asi-embed .asi-hdrtab { display: none !important; }   /* fill window hides every chrome; framed pages have none */

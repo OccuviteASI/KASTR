@@ -605,7 +605,7 @@ function build() {
   try { if (localStorage.getItem(MAST_KEY) === "1") document.body.classList.add("asi-hdr-off"); } catch {}
   header.append(mark, product, nav, relay, fold);
   document.body.prepend(header);
-  document.body.appendChild(tab);
+  header.after(tab);   // 0.21.60: the strip takes the bar's place in the page flow (it floated over the toolbar)
   document.body.appendChild(pop);
   document.body.appendChild(notesPop);
 

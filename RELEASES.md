@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.60 — a guide in Help, and the iPhone app's top edge (in progress)
+
+**Help is now a guide to basic use (Kenton: "I would like an update to the help section with a guide for basic use").** **More ▸ Help & guide** opens short sections you can open and close: Getting started, The screen, Watching, Talking, Sharing, Rooms, Phones and tablets (including how to add KASTR to an iPhone or Android home screen), Keyboard shortcuts, and Something not working?. It replaces the old help text, which still described the 0.7 layout. The guide scrolls inside its card, so it fits on a phone.
+
+**The iPhone home-screen app's top edge works (Kenton, iPhone in full screen: "I can't click on everything at the top. When I collapsed the top bar it won't let me click on the expand button. The expand button is overlapping with the people button").**
+- **Show top bar:** with the top bar hidden, a thin strip across the top of the page brings it back. It sits below the iPhone's status bar, pushes the page down instead of floating over the toolbar, and on phones it is tall enough for a finger.
+- **Rooms list:** the side panel on a phone starts below the status bar, so its first rooms can be tapped.
+
 ## v0.21.59 — pick any source on a phone
 
 **A row of thumbnails under the stage on phones (Kenton, iPhone: "I don't have the ability to see the side rail to pick anything other than the spotlighted items").** A phone held upright used to show only the stage in speaker view, with no rail, the same as Focus on content. Now it shows a row of small live thumbnails directly under the stage: everyone and everything else in the room, with your own preview last. Swipe the row sideways and tap a thumbnail to put it on the stage; the stage stays where it is while you swipe.

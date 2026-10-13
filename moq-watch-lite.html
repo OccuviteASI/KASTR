@@ -992,8 +992,16 @@
   .gedit .gebox.swap { border-style:dashed; }
   .gedit .gebox .geh { position:absolute; right:0; bottom:0; width:16px; height:16px; background:var(--asi-blue); cursor:nwse-resize; border-radius:4px 0 0 0; }
   @media (prefers-reduced-motion: reduce) { #kConfirm .popcard.kconfirm { animation:none; } }
-  #helpPop { width:min(480px, calc(100vw - 24px)); }
+  #helpPop { width:min(560px, calc(100vw - 24px)); }
+  #helpPop .body { max-height:min(72vh, 680px); overflow:auto; }   /* 0.21.60: the guide scrolls inside the card */
   #helpPop .body p { margin:0 0 10px; line-height:1.65; }
+  #helpPop details { border-bottom:1px solid var(--line); padding:6px 0; }
+  #helpPop details:last-child { border-bottom:0; }
+  #helpPop summary { cursor:pointer; font-weight:600; font-size:13px; padding:4px 0; color:var(--text); }
+  #helpPop summary:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; border-radius:3px; }
+  #helpPop details ul, #helpPop details ol { margin:4px 0 6px 18px; padding:0; display:flex; flex-direction:column; gap:5px; font-size:12.5px; line-height:1.5; color:var(--text-dim); }
+  #helpPop details li b { color:var(--text); font-weight:600; }
+  #helpPop kbd { font-family:var(--font-mono); font-size:11px; padding:0 4px; border:1px solid var(--line); border-radius:3px; background:var(--surface-2); }
   #helpPop .keys { width:100%; border-collapse:collapse; }
   #helpPop .keys td { padding:3px 0; vertical-align:top; }
   #helpPop .keys td:first-child { white-space:nowrap; padding-right:12px; }
@@ -1454,7 +1462,7 @@
     main.asi-page { flex-direction:column; }
     :root, body.sb-collapsed { --sbw:0px; }
     #joinGate { left:0; }
-    #sidebar, body.sb-collapsed #sidebar { position:fixed; left:0; top:0; bottom:0; width:min(82vw, 300px); margin:0; padding:10px 10px calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    #sidebar, body.sb-collapsed #sidebar { position:fixed; left:0; top:0; bottom:0; width:min(82vw, 300px); margin:0; padding:max(10px, env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));   /* 0.21.60: + the status bar of a full-screen web app */
       background:var(--surface); border-right:1px solid var(--line); z-index:82; transform:translateX(calc(-100% - 2px)); transition:transform .18s ease; }
     body.sb-open #sidebar { transform:none; }
     body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
@@ -1520,7 +1528,7 @@
   <button id="recBtn" class="toggle" type="button" hidden>Record</button>
   <button id="stopShareBtn" class="toggle" type="button" hidden
           title="Stop every shared screen, RTSP feed and file at once">Stop sharing</button>
-  <button id="helpBtn" class="toggle ibtn" title="Help &mdash; keys and gestures" hidden>?</button>
+  <button id="helpBtn" class="toggle ibtn" title="Help &mdash; how to use KASTR" hidden>?</button>
   <!-- 0.8.8: Teams-style strip -- icon over label, fused chevrons, dividers -->
   <button id="peopleBtn" class="toggle tb" type="button" title="People"></button>
   <button id="gridBtn" class="toggle tb" type="button" title="View"></button>
@@ -1821,32 +1829,85 @@
 </div>
 
 <div id="helpPop" class="popcard" hidden>
-  <div class="head"><span>Help</span><span class="sp"></span>
+  <div class="head"><span>Help &mdash; using KASTR</span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div class="body">
-    <p>Discovers every <code>.hang</code> broadcast announced on the relay and
-      lists it in the People panel. Opens as a collage that resizes to the
-      room; click a tile to spotlight it (big stage, everyone else on the
-      right-hand ladder, the current speaker enlarged), click the big tile
-      to return. Sharing a screen, RTSP feed or file takes the spotlight
-      automatically; a green ring means audio is arriving. Streams this machine is publishing appear under <b>My
-      streams</b>, never in the grid. <b>Share</b> opens the publishing
-      controls without leaving this page; <b>Stats</b> below has codec,
-      resolution, throughput and the raw catalog.</p>
-    <table class="keys">
-      <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>select the previous / next watched stream</td></tr>
-      <tr><td><kbd>1</kbd>&ndash;<kbd>9</kbd></td><td>select by row number (watched rows only)</td></tr>
-      <tr><td><kbd>F</kbd></td><td>full-screen the selected stream</td></tr>
-      <tr><td><kbd>G</kbd></td><td>collage / spotlight (same as clicking a tile)</td></tr>
-      <tr><td><kbd>M</kbd></td><td>mute everything</td></tr>
-      <tr><td><kbd>D</kbd></td><td>deafen: hear nothing and mute your mic (again to undo)</td></tr>
-      <tr><td><kbd>Esc</kbd></td><td>close panels; leave full screen</td></tr>
-    </table>
-    <p style="margin-top:10px">Rows: click to select; &#9679;/&#9675; watches or
-      parks a stream (parked = nothing downloads); the speaker plays several
-      streams at once; the slider sets that stream's own level. Tiles: drag
-      anywhere to reorder (collage); click a ladder tile to swap it into the
-      big stage.</p>
+    <!-- 0.21.60 (Kenton: "an update to the help section with a guide for basic use") -->
+    <details open><summary>Getting started</summary>
+      <ol>
+        <li>Open KASTR &mdash; the app, or the web address you were given.</li>
+        <li>Type your <b>name</b> and the <b>access code</b> you were given, then press <b>Join</b>. You start in the room you used last.</li>
+        <li>You arrive with your camera and microphone <b>off</b>. Turn them on with <b>Camera</b> and <b>Mic</b> at the top.</li>
+        <li>The red button on the right <b>leaves</b> the room.</li>
+      </ol>
+    </details>
+    <details><summary>The screen</summary>
+      <ul>
+        <li><b>Toolbar:</b> People (who is here), View (gallery or one big picture), Chat, More (record, room info, your profile, deafen, this help), Camera, Mic, Share, Leave. The small arrows beside Camera and Mic choose the device and effects.</li>
+        <li><b>Rooms list</b> on the left (the &#9776; button on a phone): every room on this relay, who is in it, and how long it has been going.</li>
+        <li><b>Stage:</b> the gallery shows everyone at the same size; speaker view shows one source big with the others in a strip beside it (underneath on a phone).</li>
+        <li>The <b>Relay</b> button at the top right shows whether the relay is healthy. The chevron next to it hides the top bar; the thin strip at the top brings it back.</li>
+      </ul>
+    </details>
+    <details><summary>Watching</summary>
+      <ul>
+        <li><b>Click or tap a tile</b> to put it on your stage &mdash; only for you. <b>View &#9656; Gallery</b> goes back to everyone.</li>
+        <li>A tile&rsquo;s <b>&#8943;</b> menu (or right-click): <b>Pin for me</b> keeps it on your stage (several pins share it), <b>Spotlight for everyone</b> puts it on everybody&rsquo;s stage, <b>Remove spotlight</b> takes it off again.</li>
+        <li><b>View &#9656; Spotlight</b> returns to what the room spotlighted. <b>Focus on content</b> downloads only the stage &mdash; useful on a slow connection.</li>
+        <li><b>Full screen:</b> the tile&rsquo;s full-screen button or <kbd>F</kbd>. <b>Fill window:</b> <kbd>W</kbd>. <kbd>Esc</kbd> leaves either.</li>
+        <li><b>Camera grids</b> show several cameras in one tile; click a camera in a grid to open it at full quality.</li>
+        <li>A <b>coloured ring</b> around someone means you are hearing them; a mic with a line through it means they are muted; an eye means they only watch.</li>
+      </ul>
+    </details>
+    <details><summary>Talking</summary>
+      <ul>
+        <li><b>Mic</b> mutes and unmutes you. Its arrow picks the microphone and noise suppression.</li>
+        <li><b>Deafen</b> (More &#9656; Deafen, or <kbd>D</kbd>) turns off all sound from the room and mutes your mic. Others see that you are deafened.</li>
+        <li>To quieten one person for yourself, use <b>Mute participant</b> in their tile&rsquo;s &#8943; menu (only you stop hearing them); <b>Streams and volume</b> in People sets each one&rsquo;s level.</li>
+      </ul>
+    </details>
+    <details><summary>Sharing</summary>
+      <ul>
+        <li><b>Share</b> &#9656; a <b>screen</b>, a <b>window</b> or a <b>browser tab</b>; or an <b>IP camera</b> (RTSP), a <b>camera on this computer</b>, a <b>media file</b>, or an <b>RTMP</b> feed (for example a GoPro).</li>
+        <li>Several cameras can share one tile: <b>Put in a grid&hellip;</b> on a camera&rsquo;s row.</li>
+        <li>Stop a share from the Share menu or the share&rsquo;s own tile.</li>
+        <li><b>People &#9656; Share invite</b> copies a link that opens this room.</li>
+      </ul>
+    </details>
+    <details><summary>Rooms</summary>
+      <ul>
+        <li><b>Switch rooms</b> by clicking another room in the list (your mic is muted and camera turned off on the way).</li>
+        <li><b>Create a room</b> with the &#8853; in the list&rsquo;s header. A room can have its own code (locked) and can be kept open when empty.</li>
+        <li><b>Watch another room</b> without leaving yours: the eye on its card, or right-click it &#9656; <b>Watch from &hellip;</b>. Watched rooms stay silent until you choose <b>Hear &hellip;</b>.</li>
+      </ul>
+    </details>
+    <details><summary>Phones and tablets</summary>
+      <ul>
+        <li>Held upright, the stage is on top and everyone else is in a row underneath &mdash; swipe the row and tap someone to put them on the stage.</li>
+        <li><b>Full-screen app on an iPhone or iPad:</b> open the page in <b>Safari</b> (not inside Teams or Outlook), tap <b>Share</b> &#9656; <b>Add to Home Screen</b> and leave <b>Open as Web App</b> on.</li>
+        <li><b>On Android:</b> Chrome&rsquo;s menu &#9656; <b>Add to home screen</b> (or <b>Install app</b>).</li>
+      </ul>
+    </details>
+    <details><summary>Keyboard shortcuts</summary>
+      <table class="keys">
+        <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>the previous / next stream</td></tr>
+        <tr><td><kbd>1</kbd>&ndash;<kbd>9</kbd></td><td>a stream by its number</td></tr>
+        <tr><td><kbd>G</kbd></td><td>gallery &harr; speaker view</td></tr>
+        <tr><td><kbd>F</kbd></td><td>full screen</td></tr>
+        <tr><td><kbd>W</kbd></td><td>fill the window</td></tr>
+        <tr><td><kbd>M</kbd></td><td>mute everything you hear</td></tr>
+        <tr><td><kbd>D</kbd></td><td>deafen (again to undo)</td></tr>
+        <tr><td><kbd>PgUp</kbd> <kbd>PgDn</kbd></td><td>more people in the strip</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>close panels; leave full screen</td></tr>
+      </table>
+    </details>
+    <details><summary>Something not working?</summary>
+      <ul>
+        <li>A tile that says <b>connecting&hellip;</b> or <b>waiting on relay&hellip;</b> is still reaching that person&rsquo;s relay; it usually clears by itself within seconds.</li>
+        <li>Check the <b>Relay</b> button&rsquo;s light (green is good) and <b>More &#9656; Room info</b>.</li>
+        <li>Your administrator can collect every machine&rsquo;s logs from the hub&rsquo;s Relay page &mdash; say roughly when it happened.</li>
+      </ul>
+    </details>
   </div>
 </div>
 
@@ -1877,7 +1938,7 @@
          at its very bottom -->
     <button class="opt" id="optMode" type="button"><span class="oi">&#9881;</span>KASTR mode and relay settings&hellip;</button>
     <div class="sep"></div>
-    <button class="opt" id="optHelp" type="button"><span class="oi">?</span>Help &mdash; keys &amp; gestures</button>
+    <button class="opt" id="optHelp" type="button"><span class="oi">?</span>Help &amp; guide</button>
     <input type="file" id="avatarFile" accept="image/*" hidden>
     <input type="file" id="shareFile" hidden>
     <input type="file" id="bgFile" accept="image/*" hidden>

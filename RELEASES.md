@@ -10,6 +10,8 @@ What changed in each build, newest first.
 - **The video stays on dark (Kenton chose this):** in Light, the panels, toolbar, menus, rooms list and Relay page turn light, while the video stage and tiles stay on a dark background so pictures aren't surrounded by white. The ASI top bar keeps its navy look in both.
 - **No flash:** each page applies the theme before it draws, so a light page never flashes dark first.
 
+**The Lobby is called the Lobby everywhere (Kenton: "I clicked on the Lobby and got this message" -- it said "join main").** Going to the Lobby from a room now asks "Leave “tremonton” and go to the Lobby?" with a **Go to the Lobby** button. The join screen's title and **Room info** say Lobby too, and Room info no longer shows how many people are waiting there.
+
 ## v0.21.60 — the Lobby, a guide in Help, and the iPhone app's top edge
 
 **`main` is now the Lobby (Kenton: "Lets change main to something like waiting room ... disable all views and people seeing each other").** The room everyone starts in is shown as **Lobby** everywhere: the room pill, the rooms list, the join screen and the change-room prompt. Kenton chose these rules:

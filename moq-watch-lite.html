@@ -190,6 +190,12 @@
      Never move one between containers: a DOM move fires disconnected/connected
      on the custom element, which is exactly the full teardown that broke audio. */
   #stage { display:grid; grid-template-columns:1fr; gap:12px; }
+  /* 0.21.59: an upright phone in speaker view -- the stage on top (sticky while you swipe), live thumbnails in a row below */
+  #stage.phonestrip { overflow-x:auto; overflow-y:hidden; overflow-anchor:none; overscroll-behavior-x:contain; -webkit-overflow-scrolling:touch;
+    align-content:start; gap:8px; padding-bottom:4px; scrollbar-width:none; }
+  #stage.phonestrip::-webkit-scrollbar { display:none; }
+  /* (no scroll-snap: Chrome re-snapped the row to its last snapped tile after every layout -- it opened scrolled to the end) */
+  #stage.phonestrip .mainstage { position:sticky; left:0; z-index:3; justify-self:start; align-self:center; }
   /* Fine cells so tiles can span any rectangle of them. The default tile
      is span 3x2 = 3*104 + 2*12 = 336px minimum, matching the old
      minmax(340px) look. `dense` backfills the holes big spans leave --
@@ -5971,6 +5977,7 @@
   let railW = 320;   // 0.8.9: two columns of previews by default
   try { railW = Math.min(464, Math.max(160, Number(localStorage.getItem("kastr.rail.w")) || 320)); } catch {}
   let ownPip = false;    // 0.21.20: my preview floats in the stage corner (no rail) when it would be the rail's only tile
+  let phoneStripPlan = null;   // 0.21.59: { mainH, W } while a phone held upright shows the rail as a row under the stage
   let railColsNow = 1;   // 0.21.19: the column count follows how many people there are, not the rail width
   const railCols = () => railColsNow;
   const railColW = () => (railCols() === 2 ? Math.floor((railW - 8) / 2) : railW);
@@ -6052,10 +6059,11 @@
     const gap = 8;
     const rowH = parseFloat(stageEl.style.gridAutoRows) || 0;
     const fsFill = stageFullscreen();   // 0.21.18: full screen = the whole fullscreen box, edge to edge (no rail, no gaps)
-    const areaH = fsFill ? (stageWrap.clientHeight || 720)
+    const strip = !fsFill && phoneStripPlan;   // 0.21.59: an upright phone's stage = row 1, the full width
+    const areaH = fsFill ? (stageWrap.clientHeight || 720) : strip ? strip.mainH
       : rowH ? railRows * rowH + gap * (railRows - 1) : (stageWrap.clientHeight || 720) - 2 * gap;
     const cols = railCols();
-    const areaW = fsFill ? (stageWrap.clientWidth || 1280)
+    const areaW = fsFill ? (stageWrap.clientWidth || 1280) : strip ? Math.max(120, strip.W - 2 * gap)
       : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone() || ownPip || stageMosaic?.railGone) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
     const mos = mains.length > 1 ? stageMosaic : null;   // 0.21.32: the spotlight grid -- each picture fits its own cell
     for (const el of mains) {
@@ -6165,14 +6173,19 @@
     if (selfSpotEl && !pubEls.includes(selfSpotEl)) selfSpotEl = null;   // its slot stopped
     // 0.8.8: focus on content = no rail at all (every non-main tile goes
     // visible="never" through railHiddenNames; own panes park off-stage).
-    const railOff = focusMode || isPhone() || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen
+    // 0.21.59 (Kenton, iPhone: "I don't have the ability to see the side rail to pick anything other than the spotlighted
+    // items"; chose live thumbnails below): a phone held upright in speaker view shows the rail as a swipeable row of live
+    // thumbnails under the stage (tap one = on the stage). Sideways phones and full screen keep 0.8.9's no-rail stage.
+    const phoneStrip = !gridMode && isPhone() && !focusMode && !stageFullscreen() && window.innerHeight > window.innerWidth;
+    const railOff = focusMode || (isPhone() && !phoneStrip) || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen
+    stageEl.classList.toggle("phonestrip", phoneStrip);
     // 0.21.32: the spotlight grid -- two or more spotlit things share the stage (best-fit columns, like the gallery);
     // a click on anything (manualPick) or the Gallery pill leaves it, the next change of the spotlight set brings it back
     const pinNow = pinsLive();   // 0.21.45: my pins win over the room's spotlight
     { const sig = pinNow.join("|"); if (pinsLiveSig && !sig) setTimeout(() => { if (!pinsLive().length && !gridMode && !manualPick) pinsGone(); }, 0); pinsLiveSig = sig; }
     if (pinNow.length && !gridMode && !manualPick && !pinNow.includes(selectedName)) { selfSpotEl = null; selectedName = pinNow[0]; }
     const stageSet = pinNow.length ? pinNow.map((n) => ({ target: n, name: n })) : spotStage;
-    const mosaic = (!gridMode && !manualPick && stageSet.length >= 2)
+    const mosaic = (!gridMode && !manualPick && stageSet.length >= 2 && !phoneStrip)
       ? stageSet.filter((x) => (x.el ? x.el.isConnected && pubEls.includes(x.el) : tiles.has(x.name) && isWatched(x.name) && !hiddenChild(x.name)))
       : [];
     const mosaicOn = mosaic.length >= 2;
@@ -6211,7 +6224,7 @@
     }
     stageMosaic = mosaicOn ? { k: mk, m: mm, n: mosaic.length, railGone: mosaicRailGone } : null;
     // 0.21.20 (Kenton): someone else on the stage and only my own preview left for the rail -> no rail, my preview in the corner
-    ownPip = !gridMode && !railOff && railList === 0 && railOwn.length > 0 && !selfSpotEl && !!selectedName;
+    ownPip = !gridMode && !railOff && !phoneStrip && railList === 0 && railOwn.length > 0 && !selfSpotEl && !!selectedName;
     // 0.21.19 (Kenton): one column of wide 16:9 previews while everyone fits; two columns of 4:3 ones past that
     const fit1 = Math.floor(((stageWrap.clientHeight || 720) - 8) / (Math.round(railW * 9 / 16) + 8));
     railColsNow = (railN <= Math.max(1, fit1) || railW < 240) ? 1 : 2;
@@ -6245,15 +6258,32 @@
       stageEl.style.gridTemplateColumns = (railOff || ownPip || mosaicRailGone)
         ? mainCols + " repeat(" + rcols + ", 0px)"
         : mainCols + " repeat(" + rcols + ", " + railColW() + "px)";
+      if (phoneStrip) {   // 0.21.59: row 1 = the stage (sticky while the row below scrolls sideways), row 2 = the thumbnails
+        const W = stageWrap.clientWidth || 390, g = 8;
+        const thumbW = Math.max(110, Math.floor((W - 3 * g) / 2.4)), thumbH = Math.round(thumbW * 9 / 16);
+        const mainH = Math.max(140, Math.min(Math.round((W - 2 * g) * 9 / 16), (stageWrap.clientHeight || 700) - thumbH - 3 * g));   // the row sits right under the picture
+        railRows = 1; ownRows = railOwn.length; perPage = Math.max(1, railN); pages = 1; railPage = 0;
+        stageEl.style.gridTemplateRows = mainH + "px " + thumbH + "px";
+        stageEl.style.gridAutoRows = thumbH + "px";
+        stageEl.style.gridTemplateColumns = "repeat(" + Math.max(1, railN) + ", " + thumbW + "px)";
+        if (!phoneStripPlan || phoneStripPlan.main !== (selfSpotEl ? "me" : selectedName)) stageEl.scrollLeft = 0;   // a new stage starts the row at its beginning
+        phoneStripPlan = { mainH, W, main: selfSpotEl ? "me" : selectedName };
+      } else { if (phoneStripPlan) stageEl.scrollLeft = 0; phoneStripPlan = null; }
     } else {
       railPage = 0;
+      phoneStripPlan = null;
     }
+    let stripIdx = 0;   // 0.21.59: the next free thumbnail column in the phone row
     const railStart = railPage * perPage;
     const railHiddenNames = new Set();
     let railIdx = 0;
     let ownIdx = 0;
     const placeOwn = (el) => {   // 0.8.7: pinned bottom rows, every page
       const i = ownIdx++;
+      if (phoneStrip) {   // 0.21.59: my preview is a thumbnail in the phone row too (after the others)
+        el.style.display = ""; el.style.order = ""; el.style.gridRow = "2"; el.style.gridColumn = String(1 + stripIdx++);
+        return;
+      }
       if (ownPip) {   // 0.21.20: floating in the stage's bottom-right corner, side by side when there are several
         el.style.display = ""; el.style.order = ""; el.style.gridColumn = ""; el.style.gridRow = "";
         el.classList.add("ownpip");
@@ -6268,6 +6298,12 @@
       el.style.gridRow = String(railRows - ownRows + 1 + i);
     };
     const railPlace = (el) => {
+      if (phoneStrip) {   // 0.21.59: every rail tile is a thumbnail in the phone row, never paged
+        railIdx++;
+        el.classList.remove("railsolo");
+        el.style.display = ""; el.style.order = ""; el.style.gridRow = "2"; el.style.gridColumn = String(1 + stripIdx++);
+        return true;
+      }
       const r = railIdx++;
       const onPage = r >= railStart && r < railStart + perPage;
       el.style.display = onPage ? "" : "none";
@@ -6415,7 +6451,7 @@
     }
     // 0.21.20: no rail to resize while my preview floats; 0.21.34 (Kenton: "When in full window on a share, I can still
     // mouse over and get the resize on the rail"): nor in Fill window / full screen / focus, or with everyone in the spotlight grid
-    railGrip.style.display = (gridMode || ownPip || railOff || stageMosaic?.railGone) ? "none" : "block";
+    railGrip.style.display = (gridMode || ownPip || railOff || phoneStrip || stageMosaic?.railGone) ? "none" : "block";
     if (!gridMode) {
       railGrip.style.left = Math.max(0, stageWrap.clientWidth - railW - 16) + "px";
     }

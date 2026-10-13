@@ -29,7 +29,7 @@ class JoinDefaults(unittest.TestCase):
 
     def test_no_grip_without_a_rail(self):
         p = _read("moq-watch-lite.html")
-        self.assertIn('railGrip.style.display = (gridMode || ownPip || railOff || stageMosaic?.railGone) ? "none" : "block";', p)
+        self.assertIn('railGrip.style.display = (gridMode || ownPip || railOff || phoneStrip || stageMosaic?.railGone) ? "none" : "block";', p)
         self.assertIn('railPager.style.gridColumn = rcols === 2 ? RC0 + " / span 2" : String(RC0);', p)
 
 

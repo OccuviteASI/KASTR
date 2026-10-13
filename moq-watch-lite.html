@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>/* 0.21.61: the theme before the first paint (Dark / Light / System; default Dark) */try{var t=localStorage.getItem("kastr.theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Go Live — KASTR</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
@@ -312,6 +313,18 @@
   #topbar .tb:hover { background:var(--surface-2); color:#fff; }
   #topbar .tb.grid-on { background:var(--surface-2); border-color:var(--asi-blue); color:#fff; }
   #topbar .tb.on { color:#fff; background:var(--asi-red); border-color:var(--asi-red); }   /* muted / camera off */
+  /* 0.21.61: light mode -- hover / pressed states outside the video area were white on a light surface */
+  :root[data-theme="light"] button.toggle:hover, :root[data-theme="light"] .srow .spk:hover, :root[data-theme="light"] .srow .mut:hover,
+  :root[data-theme="light"] #mineMenu .mi:hover, :root[data-theme="light"] #mineMenu .mi:hover .mico,
+  :root[data-theme="light"] #topbar .tb:hover, :root[data-theme="light"] #topbar .tb.grid-on,
+  :root[data-theme="light"] #topbar .tchev:hover, :root[data-theme="light"] #topbar .tchev.grid-on,
+  :root[data-theme="light"] .cbtn:hover, :root[data-theme="light"] .pubui .prmodes .prm:hover, :root[data-theme="light"] .pubui .thgrid .th:hover,
+  :root[data-theme="light"] #joinGateClose:hover, :root[data-theme="light"] #sharePop .head a:hover, :root[data-theme="light"] #sharePop .head button:hover,
+  :root[data-theme="light"] .sbbtn:hover, :root[data-theme="light"] .sbgroup .gmenu:hover, :root[data-theme="light"] #roomBanner.free:hover,
+  :root[data-theme="light"] #mineMenu .pwacts .pwcancel:hover, :root[data-theme="light"] #sbForm .pwacts .pwcancel:hover { color:var(--text); }
+  :root[data-theme="light"] .pubui .prmodes .prm.on { color:var(--asi-blue); border-color:var(--asi-blue); }
+  :root[data-theme="light"] #topbar .tb.on, :root[data-theme="light"] #topbar .tb.on:hover { color:#fff; }   /* muted / camera off stays white on red */
+  :root[data-theme="light"] #stagewrap.asi-dark { border-radius:8px; }
   #topbar .tb .bdg { position:absolute; top:3px; right:8px; min-width:14px; height:14px; padding:0 3px; border-radius:7px;
     background:var(--asi-blue); color:#06121a; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center; }
   #topbar .tb .bdg.pulse { animation:kastr-blink 1s ease-in-out 3; }
@@ -409,6 +422,16 @@
   /* 0.8.8: Teams-style popovers (View / Camera / Audio / More / Files / Profile) */
   .popcard.teams .body { padding:8px 10px 10px; }
   .popcard.teams .opt { display:flex; align-items:center; gap:10px; width:100%; text-align:left; }
+  /* 0.21.61: More > Appearance -- a three-way segmented switch on one row */
+  .popcard .opt.themerow { cursor:default; }
+  .popcard .opt.themerow:hover { background:transparent; }
+  .popcard.teams .opt.themerow { flex-wrap:wrap; row-gap:6px; }
+  .themerow .tl { flex:1; }
+  .themerow .seg { display:flex; flex:1 0 100%; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .themerow .seg button { flex:1; background:transparent; border:0; border-left:1px solid var(--line); color:var(--text-dim); font-size:12px; padding:5px 6px; cursor:pointer; height:auto; min-height:0; }
+  .themerow .seg button:first-child { border-left:0; }
+  .themerow .seg button.on { background:var(--asi-blue); color:#fff; }
+  .themerow .seg button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:-2px; }
   .popcard.teams .opt .oi { width:18px; display:inline-flex; justify-content:center; color:var(--text-dim); flex:none; font-size:13px; }
   .popcard.teams .opt .oi.rec { width:10px; height:10px; border-radius:50%; border:2px solid var(--text-dim); margin:0 4px; }
   .popcard.teams .opt.on .oi.rec { background:var(--asi-red); border-color:var(--asi-red); }
@@ -1359,6 +1382,7 @@
   .pprow .ppav { position:relative; flex:none; width:36px; height:36px; border-radius:50%; overflow:hidden; display:grid; place-items:center;
     background:color-mix(in srgb, var(--ring, var(--asi-blue)) 28%, var(--surface-2)); color:#fff; font-size:13px; font-weight:600; letter-spacing:.02em; }
   .pprow .ppav img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  :root[data-theme="light"] .pprow .ppav { background:color-mix(in srgb, var(--ring, var(--asi-blue)) 70%, #24384a); }   /* 0.21.61: white initials need a deeper disc on light */
   .pprow.talk .ppav { box-shadow:0 0 0 2px var(--asi-blue); }
   .pprow .ppname { flex:1; min-width:0; display:flex; flex-direction:column; }
   .pprow .pn { font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -1565,7 +1589,7 @@
   <button id="leaveBtn" class="tb" type="button" title="Leave &mdash; stop publishing and disconnect"></button>
 </div>
 
-<div id="stagewrap">
+<div id="stagewrap" class="asi-dark">
   <div id="odRow" hidden title="Cameras that start only when someone watches (0.18.0)"></div>
   <div id="stage">
     <!-- My preview lives INSIDE the stage since 0.7.0: the top-left cell
@@ -1946,6 +1970,9 @@
     <button class="opt phoneonly" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
     <div class="sep"></div>
     <button class="opt" id="optProfile" type="button"><span class="oi">&#128100;</span>Profile&hellip;</button>
+    <!-- 0.21.61 (Kenton: "Let people choose light/dark mode or the system default") -->
+    <div class="opt themerow" role="radiogroup" aria-label="Appearance"><span class="oi">&#9680;</span><span class="tl">Appearance</span>
+      <span class="seg"><button type="button" data-theme="dark" role="radio">Dark</button><button type="button" data-theme="light" role="radio">Light</button><button type="button" data-theme="system" role="radio" title="Follow this device's light or dark setting">System</button></span></div>
     <!-- 0.21.23 (Kenton): About sits in More itself; Video/Audio output open from the camera and mic menus ("More video
          settings" / "More audio settings"); Phone access is gone -- the web portal replaced it -->
     <button class="opt" id="optAbout" type="button"><span class="oi">&#8505;</span>About KASTR &amp; updates&hellip;</button>
@@ -9858,6 +9885,13 @@
     st.textContent = r?.text || r?.status || "";
   });
   document.getElementById("optHelp").addEventListener("click", () => openFromOptions(helpPop));
+  // 0.21.61: More > Appearance (Dark / Light / System) -- the setting lives in asi-brand.js (every page follows it)
+  { const seg = document.querySelectorAll("#optPop .themerow .seg button");
+    const themeNow = () => window.__kastrTheme?.get?.() || "dark";
+    const paintTheme = () => { const v = themeNow(); for (const b of seg) { b.classList.toggle("on", b.dataset.theme === v); b.setAttribute("aria-checked", String(b.dataset.theme === v)); } };
+    for (const b of seg) b.addEventListener("click", (e) => { e.stopPropagation(); window.__kastrTheme?.set?.(b.dataset.theme); paintTheme(); });
+    window.addEventListener("kastr-theme", paintTheme);
+    paintTheme(); }
   registerPop(helpPop, helpBtn);
   pagePops.push({ isOpen: () => !sharePop.hidden, close: closeShare,
                   place: placeShare });

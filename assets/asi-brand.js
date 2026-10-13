@@ -81,6 +81,27 @@ fetch("/api/instance", { cache: "no-store" })
   .then((inst) => applyMode(inst.mode))
   .catch(() => applyMode("full"));
 
+// 0.21.61 (Kenton: "Let people choose light/dark mode or the system default"): one setting for every KASTR page on this
+// device (localStorage kastr.theme = dark | light | system; Dark when unset). The page heads apply it before they paint;
+// this keeps it live -- another tab or frame changing it, or the OS switching while "System" is chosen.
+const THEME_KEY = "kastr.theme";
+const themeMq = (() => { try { return matchMedia("(prefers-color-scheme: light)"); } catch { return null; } })();
+function themeGet() { try { const v = localStorage.getItem(THEME_KEY); return v === "light" || v === "system" ? v : "dark"; } catch { return "dark"; } }
+function themeApply() {
+  const pick = themeGet();
+  const t = pick === "system" ? (themeMq && themeMq.matches ? "light" : "dark") : pick;
+  document.documentElement.dataset.theme = t;
+  try { window.dispatchEvent(new CustomEvent("kastr-theme", { detail: { pick, theme: t } })); } catch {}
+}
+function themeSet(v) {
+  try { v === "dark" ? localStorage.removeItem(THEME_KEY) : localStorage.setItem(THEME_KEY, v); } catch {}
+  themeApply();
+}
+window.__kastrTheme = { get: themeGet, set: themeSet };
+themeApply();
+window.addEventListener("storage", (e) => { if (e.key === THEME_KEY) themeApply(); });
+try { themeMq?.addEventListener("change", () => { if (themeGet() === "system") themeApply(); }); } catch {}
+
 function build() {
   // ?embed=1 -- the page is framed by the app shell or the Watch page's Share
   // panel, both of which supply the masthead. Injecting a second one would

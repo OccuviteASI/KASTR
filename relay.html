@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>/* 0.21.61: the theme before the first paint (Dark / Light / System; default Dark) */try{var t=localStorage.getItem("kastr.theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Relay — KASTR</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
@@ -116,7 +117,7 @@
   button.stop { background:var(--asi-red); color:#fff; }
   button.stop:hover:not(:disabled) { background:#e4645f; }
   button.ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
-  button.ghost:hover:not(:disabled) { border-color:var(--asi-blue-dim); color:#fff; background:var(--asi-blue-glow); }
+  button.ghost:hover:not(:disabled) { border-color:var(--asi-blue-dim); color:var(--text); background:var(--asi-blue-glow); }   /* 0.21.61: follows the theme */
   .btnrow { display:flex; gap:8px; flex-wrap:wrap; }
 
   .badge { font-size:10px; padding:2px 8px; border-radius:3px; background:var(--line); color:var(--text-dim); font-family:var(--font-mono); }

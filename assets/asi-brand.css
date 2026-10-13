@@ -40,6 +40,46 @@
   --radius: 8px;
 }
 
+/* 0.21.61 (Kenton: "Let people choose light/dark mode or the system default"): the light palette. Dark stays the default
+   (html[data-theme] is set before the first paint by each page's head snippet); the masthead keeps its navy brand bar;
+   the video stage keeps the dark palette (Kenton: "keep the stage dark") -- see .asi-dark below. */
+:root { color-scheme: dark; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:        #eef2f6;
+  --surface:   #ffffff;
+  --surface-2: #f2f5f8;
+  --line:      #d2dbe5;
+  --line-soft: #e3e9ef;
+  --text:      #0f1d2c;
+  --text-dim:  #45586c;
+  --text-mute: #6a7b8e;
+  --asi-blue-glow: rgba(0, 159, 218, 0.12);
+  --asi-amber: #a86f00;   /* amber / green / red as TEXT need more contrast on white */
+  --asi-green: #2f8a35;
+  --asi-red:   #c63c37;
+}
+/* the dark palette again, for whatever must stay dark in light mode: the video stage, the masthead, full screen */
+:root[data-theme="light"] .asi-dark, :root[data-theme="light"] .asi-header, :root[data-theme="light"] .asi-hdrtab {
+  color-scheme: dark;
+  --bg:        #06070d;
+  --surface:   #0d1119;
+  --surface-2: #121824;
+  --line:      #1e2735;
+  --line-soft: #172030;
+  --text:      #e6ecf3;
+  --text-dim:  #8ea0b5;
+  --text-mute: #5f7186;
+  --asi-blue-glow: rgba(0, 159, 218, 0.14);
+  --asi-amber: #F0AD00;
+  --asi-green: #5CB85C;
+  --asi-red:   #D9534F;
+}
+
+/* light mode: text that was white on a dark surface follows the text colour; the stage area keeps its dark ground */
+:root[data-theme="light"] .asi-title { color: var(--text); }
+:root[data-theme="light"] .asi-dark:not(.asi-header):not(.asi-hdrtab) { background: var(--bg); color: var(--text); }
+
 body.asi {
   background: var(--bg);
   color: var(--text);

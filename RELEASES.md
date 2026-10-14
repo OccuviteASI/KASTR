@@ -25,6 +25,13 @@ What changed in each build, newest first.
 - **Colours:** every ring of a person (their name in the rooms list, their tile, their People entry) is their own colour: the one they picked, or else their automatic colour, the same one as their picture's ring. It used to fall back to your own accent colour.
 - **Overlap:** the ring is drawn inside the name's box, and the rows have a little more room, so neighbouring rings no longer run into each other.
 
+**Viewer-code members see what they can't use greyed out (Kenton: "Viewer code users are able to see the share, camera, and mic buttons. But they can't use those").** Someone who joined with the viewer code sees **Share**, **Camera** and **Mic**, and their menus, greyed out. Hovering explains: "Your access code is for watching only — sharing, camera and microphone need the publisher code". Clicking does nothing but repeat that.
+
+**Up-to-date apps no longer show as "older KASTR" without a name (Kenton: "Sometimes devices are showing in here as not up to date and without a name when they are up to date").** An app reports its name and version to its relay every minute. Two things stopped that report, and the hub then showed only that the app was connected:
+- **Web portal:** an app reaching the hub through the web portal was refused by Cloudflare (fixed above).
+- **Wrong web port:** an app sent its report to the relay's KASTR on the default web port 8000 when it hadn't learned the real one, and Southridge's KASTR doesn't run on 8000. A failed report now makes the app ask the relay for its web port and try again, and the failure is written to the app's launch.log.
+- **Label:** a row whose app doesn't report now says **not reporting**, and its tooltip gives the reasons, instead of claiming the app is old.
+
 **RNNoise comes back by itself (Kenton: "I just had an error about the RNNoise filter not being able to connect").** When background noise removal fails to start, KASTR still switches to the browser's own suppression, but now:
 - **Retries:** it tries RNNoise once more 30 seconds later, instead of leaving it off for the rest of the session.
 - **Recorded:** the reason is written to the app's launch.log and to its diagnostics, so the logs collected at the hub show what failed even without a screenshot.

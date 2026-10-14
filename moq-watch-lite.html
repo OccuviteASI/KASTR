@@ -1257,7 +1257,9 @@
   .rb { position:relative; width:28px; height:28px; border-radius:50%; background:var(--surface-2); flex:none;
     border:1px solid var(--line); color:var(--text-dim); font:600 10px var(--font-mono); letter-spacing:.02em;
     text-transform:uppercase; display:inline-flex; align-items:center; justify-content:center; padding:0; }
-  .rb.rb3 { font-size:8.5px; letter-spacing:0; }   /* 0.21.63: three initials (control-center-2 -> CC2) */
+  .rb.rb3 { font-size:8.5px; letter-spacing:0; }
+  /* 0.21.64: a viewer-code member -- the buttons it cannot use stay visible, greyed, and say why */
+  body.viewonly #topCamBtn, body.viewonly #topCamChev, body.viewonly #topMicBtn, body.viewonly #topMicChev, body.viewonly #shareBtn { opacity:.35; cursor:not-allowed; filter:grayscale(1); }   /* 0.21.63: three initials (control-center-2 -> CC2) */
   .sbcard.on .rb { border-color:var(--asi-blue); color:var(--asi-blue); box-shadow:0 0 0 2px var(--asi-blue-glow); }
   .rb.talk { box-shadow:0 0 0 2px var(--asi-green); }
   .rb .cnt { position:absolute; top:-5px; right:-5px; min-width:14px; height:14px; border-radius:7px; padding:0 3px;
@@ -11432,6 +11434,29 @@
                     mem: [...members.values()].map((m) => ({ peer: m.peer, op: m.op, state: !!m.state, typing: !!m.typing })) }),
   };
   window.addEventListener("kastr:auth", () => setTimeout(stateSync, 0));   // fresh token: re-dial the state broadcasts
+  // 0.21.64 (Kenton: "Viewer code users are able to see the share, camera, and mic buttons. But they can't use those. I would
+  // like this hidden or grayed out"): a viewer-code token greys Share / Camera / Mic (and their menus) and says why on click
+  const VIEW_ONLY_BTNS = ["topCamBtn", "topCamChev", "topMicBtn", "topMicChev", "shareBtn"];
+  const VIEW_ONLY_TIP = "Your access code is for watching only — sharing, camera and microphone need the publisher code";
+  function paintViewOnly() {
+    const vo = authRole === "viewer";
+    document.body.classList.toggle("viewonly", vo);
+    for (const id of VIEW_ONLY_BTNS) {
+      const b = document.getElementById(id);
+      if (!b) continue;
+      if (vo) { if (b.dataset.voTitle === undefined) b.dataset.voTitle = b.title || ""; b.title = VIEW_ONLY_TIP; b.setAttribute("aria-disabled", "true"); }
+      else if (b.dataset.voTitle !== undefined) { b.title = b.dataset.voTitle; delete b.dataset.voTitle; b.removeAttribute("aria-disabled"); }
+    }
+  }
+  for (const id of VIEW_ONLY_BTNS) {
+    document.getElementById(id)?.addEventListener("click", (e) => {
+      if (!document.body.classList.contains("viewonly")) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      window.__toast?.(VIEW_ONLY_TIP, 4000, { level: "info" });
+    }, true);
+  }
+  window.addEventListener("kastr:auth", paintViewOnly);
+  setInterval(paintViewOnly, 3000);   // a reload's saved token, a role change and leaving all settle here
   window.addEventListener("pagehide", () => { try { pubState.stop(); roomState.stop(); } catch {} });
   setInterval(() => { try { stateSync(); } catch {} }, 1000);   // cheap: string compares unless something changed
 

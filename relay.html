@@ -1405,7 +1405,7 @@
     const ago = (t) => t ? agoText(Date.now() / 1000 - t) : "\u2014";   // 0.21.53: minutes past a minute
     const behind = (r) => r.kind !== "web" && r.checkin && r.version && r.relayVersion && r.version !== r.relayVersion;
     const verCell = (r) => r.kind === "web" ? esc(r.version || "?") + ' <span class="hint">(web)</span>'
-      : !r.checkin ? '<span class="updbad" title="Older than 0.21.50: it does not say its version, and an Update cannot reach it -- restart KASTR on that machine (it updates at launch)">older KASTR</span>'
+      : !r.checkin ? '<span class="updbad" title="Connected, but its KASTR has not reported its name and version to this relay. Either it is older than 0.21.50, or it cannot reach this relay’s KASTR web port (through the web portal: Cloudflare’s Browser Integrity Check refuses KASTR before 0.21.64). An Update cannot reach it until it reports — restart KASTR on that machine (it updates at launch).">not reporting</span>'
       : '<span style="color:' + (behind(r) ? "var(--asi-amber)" : "inherit") + '">' + esc(r.version) + "</span>";
     // 0.21.55 (Kenton: "Hide those that haven't connected in over 24 hours. But have a check box to show them"): a row
     // whose last sign of life is older than a day is hidden unless the box is ticked (remembered on this machine); one

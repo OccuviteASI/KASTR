@@ -1594,6 +1594,8 @@ OFFER_WAIT_S = 600     # Kenton: "Update now / In 10 minutes" -- then it updates
 
 
 _LOGS_SENT = set()
+_CHECKIN_LEARN = {}    # 0.21.64: relay host -> when its web port was last looked up after a failed check-in
+_CHECKIN_SAID = {}     # 0.21.64: relay host -> when a failed check-in was last written to launch.log
 
 
 def send_logs(ask, base, node, mode, inst, port):
@@ -1646,16 +1648,40 @@ def client_checkin_loop(get_relay, ini, port, mode):
         except Exception:
             inst = {}
         d = {}
-        try:
-            body = {"node": node, "version": kastr_serve.read_version(), "mode": mode, "platform": sys.platform,
-                    "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or ""}
-            base = authority_base(host, ini, relay)
-            req = urllib.request.Request(base + "/api/clients/checkin", data=json.dumps(body).encode(), method="POST",
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=6) as r:
-                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
-        except Exception:
-            d = {}
+        body = {"node": node, "version": kastr_serve.read_version(), "mode": mode, "platform": sys.platform,
+                "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or ""}
+        base = authority_base(host, ini, relay)
+        err = None
+        for attempt in (1, 2):
+            try:
+                req = urllib.request.Request(base + "/api/clients/checkin", data=json.dumps(body).encode(), method="POST",
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=6) as r:
+                    d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+                err = None
+                break
+            except Exception as e:
+                d, err = {}, e
+                # 0.21.64 (Kenton: up-to-date apps listed as "older KASTR" with no name): the relay's KASTR web port was
+                # only guessed (:8000) -- Southridge's is not 8000 -- so the check-in went nowhere, silently. Ask the relay
+                # for its web port (at most every 5 min per relay) and try once more.
+                if attempt == 1 and time.time() - _CHECKIN_LEARN.get(host, 0) > 300:
+                    _CHECKIN_LEARN[host] = time.time()
+                    try:
+                        if learn_hub_web_host(host, relay, ini, budget=3.0):
+                            nb = authority_base(host, ini, relay)
+                            if nb != base:
+                                base = nb
+                                continue
+                    except Exception:
+                        pass
+                break
+        if err is not None and time.time() - _CHECKIN_SAID.get(host, 0) > 1800:
+            _CHECKIN_SAID[host] = time.time()
+            note("check-in with the relay %s failed (%s): %s -- the hub's Users list shows this app without its name and version"
+                 % (host, base, str(err)[:120]))
+        elif err is None and _CHECKIN_SAID.pop(host, None):
+            note("check-in with the relay %s works again (%s)" % (host, base))
         mine = kastr_serve.read_version()
         ask = d.get("logs") if isinstance(d, dict) and isinstance(d.get("logs"), dict) else None
         if ask and ask.get("id") and ask.get("id") not in _LOGS_SENT:   # 0.21.51: the hub collects logs -- mine go to my relay

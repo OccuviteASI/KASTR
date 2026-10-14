@@ -70,7 +70,7 @@ class ShownToOthers(unittest.TestCase):
         p = self._p()
         self.assertIn("if (p.who.deaf) m.deaf = true;   // 0.21.48", p)
         self.assertIn("talking: m.talking, deaf: !!m.deaf, since: m.since", p)
-        self.assertIn('li.append(sp, nm, df, role, mm);', p)
+        self.assertIn('li.append(sp, nm, nj, df, role, mm);', p)   # 0.21.65: + the 'just joined' icon
         self.assertIn('df.classList.toggle("on", !!m.deaf)', p)
 
 

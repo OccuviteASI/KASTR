@@ -54,8 +54,8 @@ Token service (its own listener, relay-port+1):
     POST /api/xshare        0.21.41: list a room's stream in other rooms (Bearer = member token of the stream's room)
                             {path, to:[slug], tokens:{slug: member token}, label?, kind?, by?, stop?}
     GET  /api/xshare?room=  0.21.41: the live listings into a room (Bearer / ?jwt= member token; loopback page: none)
-    GET  /api/rooms/board?room=  0.21.64: the room board {ok, room, pins, spots, ver} (member token of that room; loopback: none)
-    POST /api/rooms/board   0.21.64: {room, op: pin|unpin|spot|unspot, path|target, from?, label?, kind?, by?, ts?,
+    GET  /api/rooms/board?room=  0.21.63: the room board {ok, room, pins, spots, ver} (member token of that room; loopback: none)
+    POST /api/rooms/board   0.21.63: {room, op: pin|unpin|spot|unspot, path|target, from?, label?, kind?, by?, ts?,
                             tokens?: {<from room>: member token}} with Bearer = a PUBLISHER member token for <room>
 """
 import base64
@@ -137,7 +137,7 @@ XSHARE_TARGETS_MAX = 16     # rooms one stream may be listed in
 XSHARE_KINDS = ("camera", "screen", "rtsp", "grid", "media", "other")
 XSHARE_MIRROR_FRESH = 90    # a spoke trusts the hub's copy this long after a long-poll reply (it re-polls every <= 25 s)
 XSHARE_SEG_RE = re.compile(r"^(?!\.\.?$)[A-Za-z0-9._-]{1,96}$")
-# 0.21.64: the ROOM BOARD (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the
+# 0.21.63: the ROOM BOARD (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the
 # room, and come back. The spotlights should stay tied to the room." and "When pinning a feed to a room, does it show for
 # everyone?"). A room record may carry `board` = {pins: [{path, from, label, kind, by, at}], spots: [{target, by, ts}]}:
 # feeds PINNED to the room (a tile for everyone there, from this room or another, even when nobody who shares it is in the
@@ -798,7 +798,7 @@ def _int0(v):
 
 
 def board_clean(b):
-    """0.21.64: a stored / mirrored / replied board -> {"pins": [...], "spots": [...]} holding only well-formed rows (caps
+    """0.21.63: a stored / mirrored / replied board -> {"pins": [...], "spots": [...]} holding only well-formed rows (caps
     applied, one row per path / target)."""
     b = b if isinstance(b, dict) else {}
     pins, spots, seen = [], [], set()
@@ -831,7 +831,7 @@ def board_clean(b):
 
 
 def board_item(op, p, now=None):
-    """0.21.64: a board op's item from a request body -> (item, None) | (None, why). pin/unpin name a stream `path`
+    """0.21.63: a board op's item from a request body -> (item, None) | (None, why). pin/unpin name a stream `path`
     (<room>/<host>/.../<name>.hang -- this room's or another's; `from`, when sent, must be its first segment); spot/unspot
     name a `target` (the same shape). A spot's `ts` (ms, the spotlighter's clock -- the page compares it with removal
     votes from the same clocks) is kept within a day of now."""
@@ -872,7 +872,7 @@ def board_listings(boards):
 
 
 def board_sync_registry(reg, boards, now=None):
-    """0.21.64: make `reg`'s PINNED listings exactly the board pins of other rooms' feeds -> changed? An entry about to run
+    """0.21.63: make `reg`'s PINNED listings exactly the board pins of other rooms' feeds -> changed? An entry about to run
     out (under half of BOARD_XS_TTL left) is re-applied; one no longer pinned stays only while its sharer heartbeats it."""
     now = time.time() if now is None else now
     want = board_listings(boards)
@@ -893,7 +893,7 @@ class XShareRegistry:
     every change a reader must see (new, removed, relabelled, or an expiry pushed out by >= 60 s -- spokes judge
     liveness by `exp`, so a refresh must reach them before the copy they hold runs out)."""
 
-    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp", "pinned")   # 0.21.64: + pinned (a room board's pin)
+    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp", "pinned")   # 0.21.63: + pinned (a room board's pin)
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -906,7 +906,7 @@ class XShareRegistry:
 
     def apply(self, path, frm, to, label="", kind="other", by="", now=None, ttl=XSHARE_TTL, pinned=False):
         """List `path` (a stream of room `frm`) in each room of `to` -> (accepted, refused {slug: why}, new, changed).
-        0.21.64: `pinned` = a room board's pin (BOARD_XS_TTL, re-applied by the board); `sexp` is the sharer's own expiry,
+        0.21.63: `pinned` = a room board's pin (BOARD_XS_TTL, re-applied by the board); `sexp` is the sharer's own expiry,
         so an unpin leaves a listing its sharer still heartbeats, and a sharer's stop leaves a pinned one."""
         now = time.time() if now is None else now
         exp = int(now + ttl)
@@ -928,7 +928,7 @@ class XShareRegistry:
                     new.append(b)
                     changed = True
                 else:
-                    if pinned:   # 0.21.64: a board pin over a sharer's listing keeps the sharer's label
+                    if pinned:   # 0.21.63: a board pin over a sharer's listing keeps the sharer's label
                         if not cur.get("pinned"):
                             cur["pinned"] = True
                             changed = True
@@ -948,7 +948,7 @@ class XShareRegistry:
         return acc, ref, new, changed
 
     def drop(self, path, to=None, which="share"):
-        """Remove `path`'s listings (in the rooms of `to`, or all) -> the slugs removed. 0.21.64: `which` -- "share" (its
+        """Remove `path`'s listings (in the rooms of `to`, or all) -> the slugs removed. 0.21.63: `which` -- "share" (its
         sharer stopped: a listing PINNED to a room board stays, as the pin), "pin" (an unpin: the listing stays only while
         its sharer still heartbeats it), "all"."""
         now = time.time()
@@ -974,7 +974,7 @@ class XShareRegistry:
         return sorted(gone)
 
     def unpin_except(self, keep, now=None):
-        """0.21.64: every PINNED listing whose (path, room) is not in `keep` stops being pinned (kept while its sharer still
+        """0.21.63: every PINNED listing whose (path, room) is not in `keep` stops being pinned (kept while its sharer still
         heartbeats it, else removed) -> changed?"""
         now = time.time() if now is None else now
         changed = False
@@ -1018,7 +1018,7 @@ class XShareRegistry:
             kind = str(e.get("kind") or "other")
             items[(path, to)] = {"path": path, "from": frm, "to": to, "label": _xs_text(e.get("label"), 80),
                                  "kind": kind if kind in XSHARE_KINDS else "other", "by": _xs_text(e.get("by"), 64),
-                                 "exp": exp, "dist": exp, "pinned": bool(e.get("pinned")), "sexp": 0}   # 0.21.64
+                                 "exp": exp, "dist": exp, "pinned": bool(e.get("pinned")), "sexp": 0}   # 0.21.63
         with self.lock:
             self.items = items
             try:
@@ -1034,7 +1034,7 @@ _XS_INIT_LOCK = threading.Lock()
 def xshare_open(method, p=None, room=None, now=None, store=None):
     """/api/xshare on an OPEN relay (no access codes: every session reads everything, so the registry is only the
     listing). GET ?room= -> the live listings; POST {from, path, to, label?, kind?, by?, stop?} -> (reply, code).
-    0.21.64: `store` -- the relay's AuthStore: its room boards' pins are listed too."""
+    0.21.63: `store` -- the relay's AuthStore: its room boards' pins are listed too."""
     now = time.time() if now is None else now
     reg = XSHARE_OPEN
     if method == "GET":
@@ -1076,7 +1076,7 @@ def xshare_open(method, p=None, room=None, now=None, store=None):
 
 
 def board_open(method, store, p=None, room=None, now=None):
-    """0.21.64: /api/rooms/board on an OPEN relay (no token service: every page may read and change a board; the stream's
+    """0.21.63: /api/rooms/board on an OPEN relay (no token service: every page may read and change a board; the stream's
     room is its path's first segment). GET ?room= / POST {room, op, path|target, ...} -> (reply, code)."""
     now = time.time() if now is None else now
     if store is None or not hasattr(store, "board_apply"):
@@ -1368,8 +1368,8 @@ class AuthStore:
         self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
         self.vehicles = {}       # 0.21.63: id -> {id, name, salt, hash, iter, created, lastUsed, lastRoom, revoked} (never a key)
         self.ver = 0            # 0.21.53: bumped on every save -- the standby's copy follows it
-        self.board_ver = 0       # 0.21.64: bumped on every room-board change (spokes copy the boards with it)
-        self.on_board = None     # 0.21.64: callable() -- a board changed or went with its room (AuthService re-lists the pins)
+        self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
+        self.on_board = None     # 0.21.63: callable() -- a board changed or went with its room (AuthService re-lists the pins)
         self.lost = None         # 0.21.0: {"at", "kept"} when relay-auth.json was unreadable and no backup saved it
         self.recovered = None    # 0.21.0: epoch when the .bak copy was used
         self.frozen = None       # 0.21.0: the read error when the file could not be OPENED -- saves refuse until a restart
@@ -1649,7 +1649,7 @@ class AuthStore:
             new = dict(rec)
             old = self.rooms.get(slug)
             if old is not None and "board" in old:
-                new["board"] = old["board"]  # 0.21.64: only board_apply changes a board (a heartbeat's older copy never wins)
+                new["board"] = old["board"]  # 0.21.63: only board_apply changes a board (a heartbeat's older copy never wins)
             self.rooms[slug] = new
             self.closed.pop(slug, None)      # 0.12.0: registering a name re-opens it
             self._save()
@@ -1691,7 +1691,7 @@ class AuthStore:
                        "plain": bool(r.get("plain") and not r.get("hash") and not r.get("persistent")),   # 0.21.25
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
                 b = r.get("board") if isinstance(r.get("board"), dict) else {}
-                if b.get("pins") or b.get("spots"):   # 0.21.64: how much the room board holds (counts only -- this list is public)
+                if b.get("pins") or b.get("spots"):   # 0.21.63: how much the room board holds (counts only -- this list is public)
                     row["board"] = {"pins": len(b.get("pins") or []), "spots": len(b.get("spots") or [])}
                 rows.append(row)
             return rows
@@ -1818,7 +1818,7 @@ class AuthStore:
             self._prune_closed()
             self._group_forget(slug)         # 0.15.0: a closed room leaves its group
             if rec is not None and rec.get("board"):
-                self.board_ver += 1          # 0.21.64: its board goes with it
+                self.board_ver += 1          # 0.21.63: its board goes with it
             self._save()
         if rec is not None and rec.get("board"):
             self._board_fire()
@@ -1837,7 +1837,7 @@ class AuthStore:
             self._board_fire()
         return rec
 
-    # ---- 0.21.64: the room board ---------------------------------------------------------------------------------------
+    # ---- 0.21.63: the room board ---------------------------------------------------------------------------------------
 
     def _board_fire(self):
         cb = getattr(self, "on_board", None)
@@ -2123,7 +2123,7 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
             if creator and not cur.get("creator"):
                 cur["creator"] = creator
             if keep is False and cur.get("keptBy") == "board":
-                keep = None   # 0.21.64: a holder's heartbeat repeats its create-time flag -- it never un-keeps a room its board kept
+                keep = None   # 0.21.63: a holder's heartbeat repeats its create-time flag -- it never un-keeps a room its board kept
             if keep is not None and keep != bool(cur.get("persistent")):
                 if keep:
                     if codes and not pub_ok:
@@ -2322,7 +2322,7 @@ class AuthService:
         self._hub_locks = {}                  # 0.21.17: slug -> when the hub last said it is locked (fail closed while the hub is dark)
         self._hub_open = {}                   # 0.21.17: slug -> when the hub last said it is open (30 s: a join does not wait on the hub each time)
         self._veh_cache = {}                  # 0.21.63: sha256(vehicle key) -> (at, row) -- the hub said "good" (VEHICLE_CACHE_S)
-        self._board_mirror = {}               # 0.21.64: spoke side -- the hub's room boards {slug: board} (bans long-poll)
+        self._board_mirror = {}               # 0.21.63: spoke side -- the hub's room boards {slug: board} (bans long-poll)
         self._board_mirror_at = 0.0
         self._board_mirror_ver = None
         self._board_stop = threading.Event()
@@ -2431,7 +2431,7 @@ class AuthService:
                     obj, code = svc.xshare_get((qs.get("room") or [""])[0], self.headers.get("Authorization"),
                                                (qs.get("jwt") or [""])[0], self._peer())
                     self._reply(obj, code)
-                elif path == "/api/rooms/board":       # 0.21.64: a room's board (pins + spotlights that stay)
+                elif path == "/api/rooms/board":       # 0.21.63: a room's board (pins + spotlights that stay)
                     qs = parse_qs(urlparse(self.path).query)
                     obj, code = svc.board_get((qs.get("room") or [""])[0], self.headers.get("Authorization"),
                                               (qs.get("jwt") or [""])[0], self._peer())
@@ -2510,7 +2510,7 @@ class AuthService:
                 elif path == "/api/xshare":            # 0.21.41: list a stream in other rooms (or stop)
                     obj, code = svc.xshare_post(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
-                elif path == "/api/rooms/board":       # 0.21.64: pin / unpin / spot / unspot on a room's board
+                elif path == "/api/rooms/board":       # 0.21.63: pin / unpin / spot / unspot on a room's board
                     obj, code = svc.board_post(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
                 elif path == "/api/rooms/fed":         # 0.21.17: a spoke asks about / mirrors a room lock
@@ -2530,7 +2530,7 @@ class AuthService:
         self.kid = key_id(key)         # 0.11.0: spokes compare it to notice a rotated hub key
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        # 0.21.64: the room board -- this store's changes re-list the pins at once; the minute loop re-applies them
+        # 0.21.63: the room board -- this store's changes re-list the pins at once; the minute loop re-applies them
         if hasattr(self.store, "on_board"):
             self.store.on_board = self._board_changed
         self._board_mirror_load()
@@ -2538,7 +2538,7 @@ class AuthService:
 
     def close(self):
         try:
-            self._board_stop.set()   # 0.21.64
+            self._board_stop.set()   # 0.21.63
         except Exception:
             pass
         try:
@@ -2672,7 +2672,7 @@ class AuthService:
             return group_op(self.store, body, operator=False, log=self.log)
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
             return self._xs_fed(p)
-        if op == "board":    # 0.21.64: a spoke verified a publisher member (vouch "publisher"); the hub keeps the boards
+        if op == "board":    # 0.21.63: a spoke verified a publisher member (vouch "publisher"); the hub keeps the boards
             return self._board_fed(p)
         if op == "vehicle":  # 0.21.63: a spoke asks "is this one of the fleet's vehicle keys?" (the key is never logged)
             verdict, row = self.store.vehicle_check(str(p.get("key") or ""))
@@ -3518,13 +3518,13 @@ class AuthService:
             return {"ok": False, "error": "a member token for this room is required"}, 403
         reg, down = self._xs_view(now)
         items = [dict({k: e.get(k) for k in ("path", "from", "label", "kind", "by", "exp")},
-                      pinned=bool(e.get("pinned"))) for e in reg.into(room, now)]   # 0.21.64: + pinned to this room's board
+                      pinned=bool(e.get("pinned"))) for e in reg.into(room, now)]   # 0.21.63: + pinned to this room's board
         out = {"ok": True, "room": room, "items": items, "ver": reg.ver}
         if down:
             out["hubDown"] = True
         return out, 200
 
-    # ---- 0.21.64: the room board (pins + spotlights that stay with the room) ---------------------------------------------
+    # ---- 0.21.63: the room board (pins + spotlights that stay with the room) ---------------------------------------------
     # GET /api/rooms/board?room=B (member token for B, or the relay box's own page) -> {ok, room, pins, spots, ver}; POST
     # /api/rooms/board {room, op, ...} with a PUBLISHER member token for the room. The hub (or a lone relay) keeps the board
     # in the room record; a spoke checks the member here and forwards (op "board", vouch "publisher"), and answers reads
@@ -4224,7 +4224,7 @@ class AuthService:
                    "restart": list(self.cmd.get("restart") or [])}   # 0.21.52: restart one spoke
         xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
         st = getattr(self, "store", None)
-        try:   # 0.21.64: the room boards (spokes answer GET /api/rooms/board and re-list the pins from this copy)
+        try:   # 0.21.63: the room boards (spokes answer GET /api/rooms/board and re-list the pins from this copy)
             boards, bver = (st.boards_public(), int(getattr(st, "board_ver", 0) or 0)) if hasattr(st, "boards_public") else ({}, 0)
         except Exception:
             boards, bver = {}, 0
@@ -4386,7 +4386,7 @@ class AuthService:
             except Exception:
                 pass
         self.xshare_mirror_apply(d)   # 0.21.41
-        self.board_mirror_apply(d)    # 0.21.64
+        self.board_mirror_apply(d)    # 0.21.63
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed
         cmd = d.get("cmd") if isinstance(d.get("cmd"), dict) else None
@@ -7733,7 +7733,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
         out = {"rooms": relay.store.rooms_public(), "closed": relay.store.closed_public(),
                "groups": relay.store.groups_public()}
         if local and hasattr(relay.store, "boards_public"):
-            out["boards"] = relay.store.boards_public()   # 0.21.64: the Board column's tooltip (counts ride the rows for everyone)
+            out["boards"] = relay.store.boards_public()   # 0.21.63: the Board column's tooltip (counts ride the rows for everyone)
         reply(out)
         return True
 

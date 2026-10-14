@@ -695,7 +695,7 @@
   .pane .pinc .icon { width:13px; height:13px; }
   #stage .pane.mypin .pinc { display:flex; }
   #stage .pane.mypin .latb { left:32px; }
-  /* 0.21.64: pinned to this room (the room board -- everyone sees it) */
+  /* 0.21.63: pinned to this room (the room board -- everyone sees it) */
   .pane .rpin { position:absolute; left:6px; top:6px; z-index:4; width:22px; height:22px; display:none; align-items:center; justify-content:center;
     background:rgba(10,14,18,.72); border-radius:6px; color:#ffd27a; pointer-events:none; }
   .pane .rpin .icon { width:13px; height:13px; }
@@ -3347,7 +3347,7 @@
   }
   async function wrSpotForAll(path) {
     const slug = String(path).split("/", 1)[0];
-    // 0.21.64 (Kenton: spotlights "should stay tied to the room"): pin it to my room's board and spotlight it there, so it
+    // 0.21.63 (Kenton: spotlights "should stay tied to the room"): pin it to my room's board and spotlight it there, so it
     // stays after everyone leaves; the 0.21.49 bring-in below remains for a viewer and for a relay without room boards
     if (boardCan() && await boardPin(path, true, true)) {
       window.__spot?.set?.(path);   // spotAdd -> the board's spotlight too (the pin is already there)
@@ -3369,7 +3369,7 @@
     }
   }, 30000);
   window.__xsBrought = xsBrought;   // rig
-  // ---- 0.21.64 (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the room, and come
+  // ---- 0.21.63 (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the room, and come
   // back. The spotlights should stay tied to the room." and "When pinning a feed to a room, does it show for everyone?") -- THE
   // ROOM BOARD. The hub keeps, in the room's record, the feeds PINNED to the room (a tile for everyone there -- from this room or
   // another -- even when nobody who shares it is in the room) and the room's SPOTLIGHTS; both last until someone removes them.
@@ -6870,7 +6870,7 @@
       const shown = watched && !hiddenChild(name);   // 0.6.10: both layouts show everyone -- 0.8.12: except feeds behind a grid
       const isSelected = name === selectedName || stageMosaicNames.has(name);   // 0.21.32: every cell of the spotlight grid
       { const pn = myPins.includes(name); if (t.pane.classList.contains("mypin") !== pn) t.pane.classList.toggle("mypin", pn); }   // 0.21.45
-      { const rn = boardPinned(name); if (t.pane.classList.contains("roompin") !== rn) t.pane.classList.toggle("roompin", rn); }   // 0.21.64
+      { const rn = boardPinned(name); if (t.pane.classList.contains("roompin") !== rn) t.pane.classList.toggle("roompin", rn); }   // 0.21.63
       // 0.13.0 (F2): re-arm a watched tile whose url was torn down (the hidden-
       // tab teardown below, or a resubscribe that skipped a "never" tile) --
       // the same construction createTile uses; nothing re-arms while hidden.
@@ -7585,7 +7585,7 @@
     l.className = "l";
     l.textContent = shortLabel(name, true);   // hover chip: cameras wear just the name (0.21.7: no title -- OS tooltips stick)
     { const pc = document.createElement("span"); pc.className = "pinc"; pc.title = "Pinned for you"; pc.innerHTML = icon("pin"); pane.appendChild(pc); }   // 0.21.45
-    { const rp = document.createElement("span"); rp.className = "rpin"; rp.title = "Pinned to this room"; rp.innerHTML = icon("pin"); pane.appendChild(rp); }   // 0.21.64: the room board
+    { const rp = document.createElement("span"); rp.className = "rpin"; rp.title = "Pinned to this room"; rp.innerHTML = icon("pin"); pane.appendChild(rp); }   // 0.21.63: the room board
     // 0.8.1: Full screen lives in the chevron menu now; the mute state is
     // a Teams-style chip on the video, not a label marker.
     label.append(l);
@@ -7674,7 +7674,7 @@
         const wrBring = !!wrSrc && (authRole === "admin" || !(lastChannelList || []).find((r) => r.slug === wrSrc)?.locked);
         if (!wrSrc || wrBring) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all"), icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44 / 0.21.49
           tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
-        if (boardCan() && (!wrSrc || wrBring)) {   // 0.21.64: the room board -- listed here for everyone until someone unpins it
+        if (boardCan() && (!wrSrc || wrBring)) {   // 0.21.63: the room board -- listed here for everyone until someone unpins it
           const rp = boardPinned(name);
           items.push({ value: rp ? "rpinoff" : "rpin", icon: "pin", label: rp ? "Unpin from this room" : "Pin to this room",
             tip: rp ? "Stop listing it in this room for everyone" : "Everyone in this room sees it as a tile, until someone unpins it" });
@@ -7725,7 +7725,7 @@
           if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
           if (v === "vghqoff") { const s0 = vgGet(name) || {}; s0.hq = []; vgSet(name, s0); return; }
           if (v === "unpin") { pinToggle(name); return; }   // 0.21.45: this one only
-          if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }   // 0.21.64: the room board
+          if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }   // 0.21.63: the room board
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
@@ -8483,7 +8483,7 @@
     spotOffs.clear(); spotStage = [];   // 0.21.32
     spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
     xsTiles.clear();   // 0.21.41
-    boardReset();   // 0.21.64
+    boardReset();   // 0.21.63
     wrStopAll();   // 0.21.44: watching needs a room of my own
     spotLitClear(true);   // 0.21.0: leaving the room forgets the mirrored spotlight
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
@@ -8526,7 +8526,7 @@
     memberSubsClear();           // 0.13.0: the previous room's .member consumers
     spotDone = null; spotVotesDone = ""; galleryChosen = false;   // 0.21.40
     xsTiles.clear();   // 0.21.41
-    boardReset();   // 0.21.64: the new room's board comes with the first poll (just below)
+    boardReset();   // 0.21.63: the new room's board comes with the first poll (just below)
     setTimeout(() => { boardPoll(); xsPoll(); }, 1200);
     recVotes.clear(); paintRec();   // 0.8.6: recording notices are per room
     window.__spot?.clear?.();
@@ -8729,7 +8729,7 @@
   window.__spotLit = () => [...spotLits.values()].reduce((a, b) => (!a || b.ts > a.ts ? b : a), null);   // rig: the newest mirror
   let spotClearedAt = 0;          // 0.21.30: "Remove spotlight" for everything -- every vote older than this is history here
   // 0.21.32: the room's spotlight set, oldest first (the grid's reading order): [{ target, ts, by }]
-  // 0.21.64: spotVotes["~board"] = the room board's spotlights (by "room") -- they outlive whoever set them
+  // 0.21.63: spotVotes["~board"] = the room board's spotlights (by "room") -- they outlive whoever set them
   function spotSetNow() {
     const add = new Map(), off = new Map();
     let noneAt = spotClearedAt;
@@ -8875,7 +8875,7 @@
       if (pt !== undefined) items.push({ value: "pt", label: (pt ? "Pass through: on" : "Pass through: off") + (md ? " (" + md + ")" : "") });
     }
     if (CHANNEL !== LOBBY && !publishOnly) items.push({ value: "xshare", label: "Show in other rooms\u2026" });   // 0.21.41; 0.21.62: always, my camera too
-    if (boardCan()) {   // 0.21.64: the room board -- my share stays listed here (it shows whenever it is on the air)
+    if (boardCan()) {   // 0.21.63: the room board -- my share stays listed here (it shows whenever it is on the air)
       const rp = boardPinned(CHANNEL + "/" + hangName(ref.name));
       items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
     }
@@ -8909,7 +8909,7 @@
         window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
       } else if (v === "xshare") {   // 0.21.41
         openXsPicker(CHANNEL + "/" + hangName(ref.name), anchor);
-      } else if (v === "rpin" || v === "rpinoff") {   // 0.21.64
+      } else if (v === "rpin" || v === "rpinoff") {   // 0.21.63
         boardPin(CHANNEL + "/" + hangName(ref.name), v === "rpin");
       } else if (v === "unspot") {   // 0.21.30; 0.21.32: this one only
         window.__spotRemove?.(CHANNEL + "/" + hangName(ref.name));
@@ -19481,7 +19481,7 @@
       items.push({ value: "camsoff", label: "Turn off all cameras in this grid" });   // 0.21.36 (Kenton): one switch for the grid's cameras (back on: the grid's switch in Sources)
       const gLit = window.__spotIs?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30: already spotlit -> offer to remove it
       items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
-      if (window.__board?.can?.()) {   // 0.21.64: the room board
+      if (window.__board?.can?.()) {   // 0.21.63: the room board
         const rp = window.__board.pinned(chanPath(ensureHang(g.entry.name)));
         items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
       }
@@ -19505,7 +19505,7 @@
         else if (v === "me") { if (!g.pane.classList.contains("mainstage")) window.__selfSpot?.(g.pane); }
         else if (v === "all") window.__spot?.set?.(chanPath(ensureHang(g.entry.name)));   // 0.21.32: the set puts it on my stage too
         else if (v === "unspot") window.__spotRemove?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30; 0.21.32: this one only
-        else if (v === "rpin" || v === "rpinoff") window.__board?.pin?.(chanPath(ensureHang(g.entry.name)), v === "rpin");   // 0.21.64
+        else if (v === "rpin" || v === "rpinoff") window.__board?.pin?.(chanPath(ensureHang(g.entry.name)), v === "rpin");   // 0.21.63
       });
     });
     g.pane.appendChild(chev);
@@ -21189,14 +21189,14 @@
     spotMineList = spotMineList.filter((x) => x.target !== t).concat([{ target: t, ts }]).slice(-64);
     spotOffList = spotOffList.filter((x) => x.target !== t);
     spotCommit();
-    try { window.__board?.spot?.(t, true, ts); } catch {}   // 0.21.64: the room board keeps it (it stays with the room)
+    try { window.__board?.spot?.(t, true, ts); } catch {}   // 0.21.63: the room board keeps it (it stays with the room)
   }
   function spotOff(targetPath) {
     if (!targetPath) return;
     const t = String(targetPath);
     spotMineList = spotMineList.filter((x) => x.target !== t);
     spotOffList = spotOffList.filter((x) => x.target !== t).concat([{ target: t, ts: Date.now() }]).slice(-64);
-    try { window.__board?.spot?.(t, false); } catch {}   // 0.21.64: off the room board too (before the re-apply below)
+    try { window.__board?.spot?.(t, false); } catch {}   // 0.21.63: off the room board too (before the re-apply below)
     spotCommit();
   }
   function spotSet(targetPath, announceOnly) {
@@ -21362,7 +21362,7 @@
   };
   window.__spot = { set: spotAdd, add: spotAdd, off: spotOff,   // 0.21.32: set = ADD (several at once); off = remove one for everyone
     clear: () => { spotMine = null; spotMineList = []; spotOffList = []; spotClear(); },
-    // 0.21.64: someone took it off the room board -- my own vote for it goes quietly (no removal vote, no board call)
+    // 0.21.63: someone took it off the room board -- my own vote for it goes quietly (no removal vote, no board call)
     forget: (t) => { const n = spotMineList.length; spotMineList = spotMineList.filter((x) => x.target !== String(t)); if (spotMineList.length !== n) spotCommit(); },
     mine: () => spotMine, mineList: () => spotMineList, mineOffs: () => spotOffList };
   window.__monVideo = (id) => slots.get(Number(id))?.video || null;   // rig (0.21.33): a feed's monitor player

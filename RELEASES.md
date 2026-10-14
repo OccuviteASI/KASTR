@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.63 — the vehicle API
+## v0.21.63 — the vehicle API, rooms that keep their pins and spotlights, HEVC cameras whole again
 
 **Spotlights and pinned feeds stay with the room (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the room, and come back. The spotlights should stay tied to the room." and "When pinning a feed to a room, does it show for everyone?").** Each room now has a board, kept on the hub, that remembers what is pinned to the room and what is spotlit. Before, a spotlight lived only in the room's members' own state, so it disappeared when the person who set it left. Kenton chose:
 - **Pin to this room:** a new item in every tile's menu (and in the menus of your own shares and grids). The feed is listed in the room as a tile for everyone, until someone picks **Unpin from this room**. A pinned tile wears a small amber pin in its top-left corner ("Pinned to this room"). **Pin for me** is unchanged and still only changes your own stage.

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v0.21.64 the ROOM BOARD (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the
+"""v0.21.63 the ROOM BOARD (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the
 room, and come back. The spotlights should stay tied to the room." / "When pinning a feed to a room, does it show for
 everyone?"). The hub keeps, in the room record, the feeds pinned to the room and its spotlights; any publisher member
 changes them (GET/POST /api/rooms/board); a pin of another room's feed is a permanent cross-room listing. Spokes forward

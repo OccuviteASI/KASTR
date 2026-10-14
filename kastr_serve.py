@@ -3001,7 +3001,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         if method == "GET":
                             _q = parse_qs(urlparse(self.path).query)
                             obj, code = kastr_relay.xshare_open("GET", room=(_q.get("room") or [""])[0],
-                                                                store=getattr(relay_srv, "store", None))   # 0.21.64: + board pins
+                                                                store=getattr(relay_srv, "store", None))   # 0.21.63: + board pins
                         else:
                             try:
                                 _ob = json.loads(_obody or b"{}")
@@ -3009,7 +3009,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                 _ob = {}
                             obj, code = kastr_relay.xshare_open("POST", _ob)
                         return self._json_cors(code, obj)
-                    if path0 == "/api/rooms/board":   # 0.21.64: an OPEN relay keeps room boards too (no tokens)
+                    if path0 == "/api/rooms/board":   # 0.21.63: an OPEN relay keeps room boards too (no tokens)
                         if method == "GET":
                             _q = parse_qs(urlparse(self.path).query)
                             obj, code = kastr_relay.board_open("GET", getattr(relay_srv, "store", None), room=(_q.get("room") or [""])[0])
@@ -3540,7 +3540,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             path0 = self.path.split("?", 1)[0]
             if path0 in ("/api/rooms/fed", "/api/ondemand/forward", "/api/hub/handover"):   # 0.21.25: federation calls reach the
                 return self._auth_proxy("POST")                                            # minter (the chat branch 404ed them)
-            if path0 == "/api/rooms/board":         # 0.21.64: the room board lives at the minter (token-checked there)
+            if path0 == "/api/rooms/board":         # 0.21.63: the room board lives at the minter (token-checked there)
                 return self._auth_proxy("POST")
             if path0.startswith("/api/chat/") or path0.startswith("/api/rooms/"):   # 0.12.0
                 return self._chat_api("POST")
@@ -4398,7 +4398,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             path = self.path.split("?", 1)[0]
             if re.match(r"^/relay(/|$)", path) and (self.headers.get("Upgrade") or "").lower() == "websocket":
                 return self._relay_ws()                                       # 0.19.0: media through the web port
-            if path == "/api/rooms/board":                                    # 0.21.64: the room board lives at the minter
+            if path == "/api/rooms/board":                                    # 0.21.63: the room board lives at the minter
                 return self._auth_proxy("GET")
             if path.startswith("/api/chat/") or path.startswith("/api/rooms/"):   # 0.12.0 (NOT /api/rooms itself: the minter proxy)
                 return self._chat_api("GET")

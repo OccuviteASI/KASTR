@@ -1709,7 +1709,7 @@
   function roomRow(slug) {
     const tr = document.createElement("tr");
     tr.setAttribute("data-slug", slug);   // reconciled by slug, never rebuilt
-    for (const cls of ["slug", "flags", "board", "creator mono", "created mono", "at mono", "act"]) {   // 0.21.64: + board
+    for (const cls of ["slug", "flags", "board", "creator mono", "created mono", "at mono", "act"]) {   // 0.21.63: + board
       const td = document.createElement("td");
       td.className = cls;
       tr.appendChild(td);
@@ -1759,7 +1759,7 @@
     tr.querySelector(".act").appendChild(pb);
     return tr;
   }
-  // 0.21.64: the room board -- "2 pinned · 1 spotlit"; the tooltip lists them (this machine's page gets the details)
+  // 0.21.63: the room board -- "2 pinned · 1 spotlit"; the tooltip lists them (this machine's page gets the details)
   function boardText(r) {
     const b = r.board || {};
     const parts = [];
@@ -1812,7 +1812,7 @@
       seen.add(slug);
       let tr = roomRows.get(slug);
       if (!tr) { tr = roomRow(slug); roomRows.set(slug, tr); roomsBody.appendChild(tr); }
-      fillRow(tr, r, closed[slug], (d.boards || {})[slug]);   // 0.21.64: + the board's details
+      fillRow(tr, r, closed[slug], (d.boards || {})[slug]);   // 0.21.63: + the board's details
     }
     for (const [slug, tr] of roomRows) if (!seen.has(slug)) { tr.remove(); roomRows.delete(slug); }
     roomsNote.hidden = roomRows.size > 0;

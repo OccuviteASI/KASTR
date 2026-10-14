@@ -131,6 +131,23 @@ PATCHES = [
         ('function Ft(t){let e=(t.jitter||Wt(t))??0,i=Math.ceil(Ot/t.sampleRate*1e3);return h.Milli((t.delay??0)+e+i)}',
          'function Ft(t){/* KASTR-PATCH: catalog-delay-cap */let w=Wt(t)??0,e=Math.min((t.jitter||w)??0,Math.max(w,40)),i=Math.ceil(Ot/t.sampleRate*1e3);return h.Milli(e+i)}'),
      ]},
+    {"id": "hevc-square-dar",
+     "file": "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs",
+     "why": ("moq-cli's HEVC import writes the camera's SAMPLE aspect (1:1) into the catalog as displayAspectWidth/Height, "
+             "so the decoder reports a SQUARE picture (3840x3840 for a 3840x2160 camera); the page then sized a square "
+             "canvas and stretched it back with a transform that showed a zoomed corner whenever it was off (Hollis, "
+             "Southridge's 4K HEVC cameras, 0.21.62). A 1:1 display aspect on a non-square coded picture is that bug, never "
+             "a real camera: it is dropped before the decoder sees it. Real anamorphic aspects pass untouched."),
+     "edits": [
+        ('decoder:{codec:t.codec,container:t.container,description:t.description,displayAspectWidth:t.displayAspectWidth,displayAspectHeight:t.displayAspectHeight',
+         'decoder:{codec:t.codec,container:t.container,description:t.description,/* KASTR-PATCH: hevc-square-dar */displayAspectWidth:(t.displayAspectWidth===t.displayAspectHeight&&t.codedWidth!==t.codedHeight?void 0:t.displayAspectWidth),displayAspectHeight:(t.displayAspectWidth===t.displayAspectHeight&&t.codedWidth!==t.codedHeight?void 0:t.displayAspectHeight)'),
+        ('isConfigSupported({codec:t.codec,description:e,displayAspectWidth:t.displayAspectWidth,displayAspectHeight:t.displayAspectHeight',
+         'isConfigSupported({codec:t.codec,description:e,/* KASTR-PATCH: hevc-square-dar */displayAspectWidth:(t.displayAspectWidth===t.displayAspectHeight&&t.codedWidth!==t.codedHeight?void 0:t.displayAspectWidth),displayAspectHeight:(t.displayAspectWidth===t.displayAspectHeight&&t.codedWidth!==t.codedHeight?void 0:t.displayAspectHeight)'),
+        ('i.configure({codec:this.config.codec,description:this.config.description?w.Hex.toBytes(this.config.description):void 0,displayAspectWidth:this.config.displayAspectWidth,displayAspectHeight:this.config.displayAspectHeight',
+         'i.configure({codec:this.config.codec,description:this.config.description?w.Hex.toBytes(this.config.description):void 0,/* KASTR-PATCH: hevc-square-dar */displayAspectWidth:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectWidth),displayAspectHeight:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectHeight)'),
+        ('i.configure({codec:this.config.codec,description:r,displayAspectWidth:this.config.displayAspectWidth,displayAspectHeight:this.config.displayAspectHeight',
+         'i.configure({codec:this.config.codec,description:r,/* KASTR-PATCH: hevc-square-dar */displayAspectWidth:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectWidth),displayAspectHeight:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectHeight)'),
+     ]},
 ]
 
 

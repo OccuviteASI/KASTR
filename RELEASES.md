@@ -16,6 +16,12 @@ What changed in each build, newest first.
 
 **Rooms made without a code are ordinary rooms now (Kenton asked for this with the vehicle API).** A request to make a room with no code that is not set to stay open used to be refused ("bad room record") unless it was marked plain. Now it simply makes a plain room. Heartbeats and take-overs work as before.
 
+**4K HEVC cameras show the whole picture (Hollis: clicking a Southridge feed "zooms into the top left corner of the video and he can't zoom out ... some work like normal").** The moq tool labels an HEVC camera's picture as square: it writes the camera's pixel shape (1:1) where the picture shape (16:9) belongs. The player then decoded a 3840×2160 camera as 3840×3840, and KASTR stretched it back with a correction that showed a zoomed corner whenever it was off. KASTR's player now ignores a square display shape on a picture that isn't square, so these cameras decode at their real size with no correction. H.264 cameras were never affected. Real anamorphic cameras are left alone.
+
+**Pull test on the Relay page (Kenton: "Sometimes when clicking on a video it still takes a while to display the full quality").** Each stream in **Streams on this relay** has a **Pull test** button (on the relay's own computer). The relay fetches the stream itself for 15 seconds and shows the time to the first byte and the rate. Run it on the hub, while nobody watches that camera, to see whether a slow open comes from the camera's site or the link between relays (slow here too) or from the viewer's side (fast here). In the lab, a cold camera across two relays gives its first byte in 0.1 s.
+
+**Room bubbles show each part's initial (Kenton: "use the first initial of each part of the name").** **aoz-4** shows **A4** and **aoz-6** shows **A6** (both used to show AO), **control-center** shows **CC**, and **southridge** shows **S**. Up to three letters, slightly smaller when there are three. The Lobby shows **L**.
+
 **Shorter times on the Relay page (Kenton: "instead of showing 3 min 23 s, just change it to 3m 23s").** "Last seen" and the other times there read **45s ago**, **3m 23s ago**, **1h 03m ago**.
 
 **Mute and camera-off marks stay in the gallery (Kenton: "When showing user previews in the gallery view show their the mute/no cam icons whether hovering or not").** In the gallery view a person's muted-mic and camera-off marks stay visible when the mouse is away. Elsewhere they still fade with the other controls.

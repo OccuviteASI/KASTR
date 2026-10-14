@@ -4615,6 +4615,71 @@ class Relay:
         self.log("relay federation: %s -- re-learning the hub certificate" % reason)
         threading.Thread(target=lambda: self._federation_tick(), daemon=True).start()
 
+    def pull_test(self, broadcast, seconds=15):
+        """0.21.63: this relay fetches one stream the way a viewer's relay does -- the bundled moq tool subscribes through
+        THIS relay (operator token) and reads it for `seconds`. -> {firstByte s | None, bytes, mbps, seconds}. A stream whose
+        first byte takes long here is slow before any page is involved (its site, or the link between relays)."""
+        bc = str(broadcast or "")
+        if not re.match(r"^[a-z0-9-]{1,32}(/[A-Za-z0-9._~-]{1,64}){2,4}\.hang$", bc):
+            return {"error": "bad stream path"}, 400
+        if not self.running():
+            return {"error": "the relay is not running on this machine"}, 400
+        try:
+            import kastr_rtsp
+            moq = kastr_rtsp.find_moq()
+        except Exception:
+            moq = None
+        if not moq:
+            return {"error": "the moq tool is not available here"}, 500
+        url = "http://127.0.0.1:%d/" % int(self.port)
+        if self.secured and self.auth:
+            now = int(time.time())
+            url += "?jwt=" + _mint(self.auth.key, dict(FEDERATION_CLAIMS, iat=now, exp=now + 300))
+        secs = max(3, min(30, int(seconds or 15)))
+        args = [moq, "--connect", url, "--broadcast", bc, "export", "fmp4", "--max-age", "4s"]
+        t0 = time.time()
+        try:
+            p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as e:
+            return {"error": "could not start the moq tool: %s" % e}, 500
+        try:
+            import kastr_rtsp
+            kastr_rtsp._job_assign(kastr_rtsp.app_job(self.log), p, self.log)   # dies with KASTR
+        except Exception:
+            pass
+        got = {"first": None, "bytes": 0}
+        err = []
+
+        def reader():
+            while True:
+                chunk = p.stdout.read1(65536) if hasattr(p.stdout, "read1") else p.stdout.read(65536)
+                if not chunk:
+                    return
+                if got["first"] is None:
+                    got["first"] = time.time() - t0
+                got["bytes"] += len(chunk)
+
+        def ereader():
+            for line in p.stderr:
+                err.append(line.decode("utf-8", "replace").rstrip()[:200])
+                del err[:-8]
+        th = threading.Thread(target=reader, daemon=True); th.start()
+        threading.Thread(target=ereader, daemon=True).start()
+        th.join(secs)
+        try:
+            p.kill()
+        except OSError:
+            pass
+        th.join(2)
+        took = time.time() - t0
+        first = got["first"]
+        flow = (took - first) if first is not None else 0
+        mbps = round(got["bytes"] * 8 / 1e6 / flow, 2) if flow > 0.5 else None
+        self.log("relay: pull test %s -> first byte %s, %d bytes in %.0f s" % (bc, ("%.2f s" % first) if first is not None else "never", got["bytes"], took))
+        return {"ok": True, "broadcast": bc, "firstByte": round(first, 2) if first is not None else None, "bytes": got["bytes"],
+                "mbps": mbps, "seconds": round(took, 1), "tool": [redact_log(x) for x in err[-3:]] if first is None else []}, 200
+
     def admin_token(self, room):
         """0.16.0: the operator's own admin token for `room` (loopback-guarded: the
         Relay page pushes stop / kick commands with it). No code needed -- the
@@ -6775,6 +6840,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/logs/collect",    # 0.21.51
                  "/api/relay/spokes/restart",  # 0.21.52
                  "/api/relay/vehicles",        # 0.21.63: vehicle API keys
+                 "/api/relay/pulltest",        # 0.21.63: fetch one stream cold, time the first byte
                  "/api/relay/standby")         # 0.21.53
 
 
@@ -7131,6 +7197,16 @@ def handle_api(handler, relay, path, set_relay_url=None):
             return True
         payload = _payload_of(handler)
         obj, code = group_op(relay.store, payload, operator=True, log=relay.log)
+        reply(obj, code)
+        return True
+
+    if path == "/api/relay/pulltest":
+        # 0.21.63: GUARDED (this machine only) -- fetch one stream cold through this relay, time the first byte
+        if handler.command != "POST":
+            reply({"error": "POST only"}, 405)
+            return True
+        payload = _payload_of(handler)
+        obj, code = relay.pull_test(payload.get("broadcast"), payload.get("seconds") or 15)
         reply(obj, code)
         return True
 

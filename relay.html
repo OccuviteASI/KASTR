@@ -2196,6 +2196,24 @@
         });
         row.appendChild(rb);
       }
+      if (LOCAL && parts.length >= 4) {   // 0.21.63 (Kenton: full quality "still takes a while"): this relay fetches it cold and times it
+        const pb = document.createElement("button");
+        pb.type = "button"; pb.textContent = "Pull test"; pb.className = "ghost";
+        pb.style.cssText = "margin-left:8px;padding:1px 8px;font-size:11px";
+        pb.title = "This relay fetches the stream itself for 15 s and times the first byte -- run it while nobody watches this stream for a cold result";
+        const res = document.createElement("span"); res.className = "pullres"; res.style.cssText = "margin-left:8px;font-size:11px;color:var(--text-mute)";
+        pb.addEventListener("click", async () => {
+          pb.disabled = true; res.textContent = "pulling\u2026 (15 s)";
+          let d = null;
+          try { d = await postJson("/api/relay/pulltest", { broadcast: p, seconds: 15 }); } catch (e) { d = { error: String(e?.message || e) }; }
+          pb.disabled = false;
+          res.textContent = d?.error ? "failed: " + d.error
+            : d.firstByte == null ? "no data in " + d.seconds + "s" + (d.tool?.length ? " (" + d.tool[d.tool.length - 1] + ")" : "")
+            : "first byte " + d.firstByte + "s" + (d.mbps != null ? " \u00b7 " + d.mbps + " Mbit/s" : "");
+          res.style.color = d?.error || d?.firstByte == null || d.firstByte > 3 ? "var(--asi-amber)" : "var(--asi-green)";
+        });
+        row.append(pb, res);
+      }
       if (LOCAL && secured && parts.length >= 4) {   // 0.16.0: the operator can end a share from here
         const b = document.createElement("button");
         b.type = "button"; b.textContent = "Stop"; b.className = "stop";

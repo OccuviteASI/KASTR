@@ -48,7 +48,7 @@
   "@moq/watch@0.6.2.target-es2022.mjs": "7c8352d9ec6d6aed025ab3c76366ba8f354855d0617258b5e024f58c78ee7a04",
   "@moq/watch@0.6.2/element.target-es2022.mjs": "cf1052e65bcf9ca29bb110e8c6475792e2e4cb92fd46f3e124b1164bb62adbad",
   "@moq/watch@0.6.2/es2022/element.mjs": "3e254a586c6ae4baa6e2abcf069d9d4997e1dbf597b8aeff7101eeb233af4168",
-  "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs": "f314c1577f2be507461d670aa4f31ec0390c27254c4b355e2e8d2abf170bec23",
+  "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs": "ffcfca9b86578bc2973342e1cb47e302804f2443749609659b3adeef910215fb",
   "@moq/watch@0.6.2/es2022/watch.mjs": "bcfd182fa8a6ef90b02b46cb5277f702416f97e546ab2c815841b1933fc6e067",
   "@moq/web-socket-stream@0.1.1/es2022/web-socket-stream.mjs": "612847a55b590836d4e156aea64e7ed8dddc93542f8e68b17e8540e04415a6b0",
   "@moq/web-socket-stream@^0.1.1.target-es2022.mjs": "65b7590adb1b51bec802d1efbd170af90c0cbe3e24e145e05366a56243d816e0",
@@ -81,7 +81,8 @@
  },
  "patches": [
   "audio-maxage-floor",
-  "catalog-delay-cap"
+  "catalog-delay-cap",
+  "hevc-square-dar"
  ],
  "pins": {
   "https://esm.sh/@moq/json": "/@moq/json@^0.4.2",

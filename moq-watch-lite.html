@@ -1243,6 +1243,7 @@
   .rb { position:relative; width:28px; height:28px; border-radius:50%; background:var(--surface-2); flex:none;
     border:1px solid var(--line); color:var(--text-dim); font:600 10px var(--font-mono); letter-spacing:.02em;
     text-transform:uppercase; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+  .rb.rb3 { font-size:8.5px; letter-spacing:0; }   /* 0.21.63: three initials (control-center-2 -> CC2) */
   .sbcard.on .rb { border-color:var(--asi-blue); color:var(--asi-blue); box-shadow:0 0 0 2px var(--asi-blue-glow); }
   .rb.talk { box-shadow:0 0 0 2px var(--asi-green); }
   .rb .cnt { position:absolute; top:-5px; right:-5px; min-width:14px; height:14px; border-radius:7px; padding:0 3px;
@@ -11780,10 +11781,11 @@
   const sbFormEl = document.getElementById("sbForm");
   const sbFormHome = document.getElementById("sbFormHome");
   const sbHostEl = document.getElementById("sbHost");
+  // 0.21.63 (Kenton: "instead of using the first 2 letters of the name, use the first initial of each part of the name"):
+  // aoz-4 -> A4, aoz-6 -> A6 (both were AO), control-center -> CC, southridge -> S; at most three
   function bubbleLabel(slug) {
-    const words = String(slug).split(/[-_\d]+/).filter(Boolean);
-    const s = words.length >= 2 ? words[0][0] + words[1][0] : String(slug).slice(0, 2);
-    return s.toUpperCase();
+    const parts = String(slug).split(/[-_\s.]+/).filter(Boolean);
+    return (parts.map((w) => w[0]).join("").slice(0, 3) || "?").toUpperCase();
   }
   function sbCollapsed() { return document.body.classList.contains("sb-collapsed"); }
   function sbToggle() {
@@ -11908,7 +11910,8 @@
     const joined = joinState === "joined";
     card.classList.toggle("cur", joined && rec.slug === CHANNEL);   // 0.13.1: the room I am in
     const rb = card.querySelector(".rb");
-    rb.textContent = rec.slug === LOBBY ? "LB" : bubbleLabel(rec.slug);   // 0.21.60
+    rb.textContent = rec.slug === LOBBY ? "L" : bubbleLabel(rec.slug);   // 0.21.60; 0.21.63: the Lobby's initial
+    rb.classList.toggle("rb3", rb.textContent.length > 2);   // 0.21.63: three initials sit a little smaller
     rb.classList.toggle("talk", !!rec.talking);
     if (rec.count > 0 && rec.slug !== LOBBY) { let c = rb.querySelector(".cnt"); if (!c) { c = document.createElement("span"); c.className = "cnt"; rb.appendChild(c); } c.textContent = String(rec.count); }   // 0.21.60: no Lobby count
     else rb.querySelector(".cnt")?.remove();

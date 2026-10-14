@@ -62,14 +62,17 @@ class Templates(unittest.TestCase):
 class OwnerLayout(unittest.TestCase):
     def test_drawn_rects_with_the_gap_are_announced(self):
         p = _page()
-        self.assertIn("const raw = gridLayoutPx(g, ms, g.canvas.width, g.canvas.height);", p)
+        self.assertIn("const plan = gridPlan(g, ms, g.canvas.width, g.canvas.height);", p)   # 0.21.65: spots + cycling
+        self.assertIn("if (!sl || !gb) return { drawn: ms, px: gridLayoutPx(g, ms, W, H), pool: [] };", p)
+        self.assertIn("const raw = plan.px;", p)
         self.assertIn("g.lastRects = rects;", p)
         self.assertIn("rects: (g.lastRects || []).length === ms.length ? g.lastRects.map(", p)
         self.assertIn("gap: gridGap(g) }));", p)
 
     def test_custom_blocks_belong_to_cameras(self):
         p = _page()
-        self.assertIn('g.custom = Object.fromEntries(boxes.filter((b) => !String(b.key).startsWith("id:")).map((b) => [b.key, b.u]));', p)
+        self.assertIn('for (const s of sl) { const k = s.cams[0]; if (k && !String(k).startsWith("id:")) custom[k] = s.rect.slice(); }', p)   # 0.21.65: each spot's first camera
+        self.assertIn("custom.__slots = sl; custom.__known = [...known].slice(0, 256); custom.__sens = sens || gridSens(g);", p)
         self.assertIn('gridPrefSet(g.id, "custom", JSON.stringify(g.custom || {}));', p)
         self.assertIn('if ((g.layout || "auto") === "custom") {   // 0.21.43: blocks belong to cameras', p)
 
@@ -87,11 +90,14 @@ class OwnerLayout(unittest.TestCase):
 class Editor(unittest.TestCase):
     def test_drop_on_another_box_trades_blocks(self):
         p = _page()
-        self.assertIn("if (t) swapWith = { t, mine: t.u.slice(), theirs: u0.slice() };", p)
+        self.assertIn("if (over.length) swapWith = over[0][1];", p)   # 0.21.65: spots trade places
+        self.assertIn("else if (swapWith >= 0) { const t = c.slots[swapWith]; s.rect = t.rect.slice(); t.rect = u0; did = true; }", p)
 
     def test_cancel_and_escape(self):
         p = _page()
-        self.assertIn('c.key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); } };', p)
+        self.assertIn('if (c.choice) { closeChoice(); return; }', p)   # 0.21.65: Esc closes the add/replace choice, then the presets, then the editor
+        self.assertIn('if (!pop.hidden) { pop.hidden = true; return; }', p)
+        self.assertIn('close(true);', p)
 
 
 class Viewers(unittest.TestCase):

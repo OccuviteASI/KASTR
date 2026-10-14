@@ -257,13 +257,13 @@ class Page(unittest.TestCase):
     def test_board_poll_applies_grids_live(self):
         take = self.sec("  function boardTake(d, gen) {", "  let boardBusy = false;")
         self.assertIn("board.grids = grids;", take)
-        self.assertIn("if (JSON.stringify(grids) !== gridsWas) { try { roomGridChanged(); } catch {} }", take)
-        self.assertIn("grid: boardGrid };", self.p)
+        self.assertIn("if (JSON.stringify([grids, split]) !== gridsWas) { try { roomGridChanged(); } catch {} }", take)   # 0.21.65: + split
+        self.assertIn("grid: boardGrid, split: boardSplit };", self.p)   # 0.21.65: + split
 
     def test_menus(self):
         p = self.p
         self.assertIn('items.push({ value: "rgedit", icon: "view", label: "Arrange for everyone in this room\\u2026"', p)
-        self.assertIn('label: roomGridRects(name) ? "Use the room\\u2019s layout" : "Use the owner\\u2019s layout"', p)
+        self.assertIn('label: roomGridSet(name) ? "Use the room\\u2019s layout" : "Use the owner\\u2019s layout"', p)   # 0.21.65: rects or spots
         self.assertIn('items.push({ value: "rghidecam", icon: "eye", label: "Remove from this room",', p)
         self.assertIn('if (v === "rgedit") { rgEdit(name); return; }', p)
         self.assertIn('if (v === "rghidecam") { const g2 = gridChildOf.get(name); if (g2) rgHide(g2, name); return; }', p)
@@ -280,7 +280,7 @@ class Page(unittest.TestCase):
         self.assertIn('"Grid layout saved for everyone in " + roomTitle(room)', rg)
         self.assertIn('resetLabel: "Reset to the box\\u2019s layout"', rg)
         ed = self.sec("  const gridEditor = (() => {", "  window.__gridEditor = gridEditor;")
-        self.assertIn('x.className = "gex"; x.textContent = "\\u2715";', ed)
+        self.assertIn('const x = mkEl("button", "gex", "\\u2715");', ed)   # 0.21.65: the builder -- a spot's x
         self.assertIn('"Removed (" + list.length + "):"', ed)
         self.assertIn('b.textContent = "Add back " + (x.label || "camera");', ed)
         self.assertIn("o.onDone?.(", ed)

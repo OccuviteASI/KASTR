@@ -42,7 +42,7 @@ class GridKeepRuleTest(unittest.TestCase):
         # the page writes an em dash in JS strings as the six characters backslash-u-2-0-1-4
         self.assertEqual(self.text.count('"cameras offline \\u2014 reconnecting ("'), 1)
         self.assertNotIn("cameras offline — reconnecting", self.text, "literal em dash in the placeholder text")
-        self.assertEqual(self.text.count("if (!ms.length && rects[0]) {"), 1)
+        self.assertEqual(self.text.count("if (!ms.length) {   // 0.21.15: every member evicted"), 1)   # 0.21.65: spots draw no cell without cameras
 
     def test_viewer_belt(self):
         self.assertEqual(self.text.count("function gridForget(gp, m)"), 1)

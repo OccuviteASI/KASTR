@@ -30,7 +30,7 @@ class TileMenu(unittest.TestCase):
     def test_every_spotlight_item_offers_removal(self):
         # 0.21.30 (Kenton): already spotlit -> "Remove spotlight" on own panes and grids too
         p = self.page
-        self.assertIn('const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };', p)
+        self.assertIn('const spotItem = viewLockedForMe() ? null : ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };', p)
         self.assertIn('gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" }', p)
         # 0.21.32: removal is per item and for everyone (a newer removal outranks whoever set it); my own votes count
         self.assertIn("window.__spotRemove = (target) => {", p)

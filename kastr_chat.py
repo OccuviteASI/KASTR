@@ -274,6 +274,58 @@ class ChatStore:
             self.log("chat: room %s deleted (%d files)" % (room, len(removed)))
         return removed
 
+    def rename_room(self, old, new):
+        """0.21.65: a renamed room keeps its history -- the transcript, its keep marker and its chat attachments' room move
+        from `old` to `new` (a transcript already under `new` keeps its lines; the old ones are added). -> moved?"""
+        old, new = check_room(old), check_room(new)
+        moved = False
+        with self.lock:
+            src = self._path(old)
+            if os.path.exists(src):
+                if os.path.exists(self._path(new)):
+                    try:
+                        with open(src, encoding="utf-8", newline="") as f:
+                            text = f.read()
+                    except OSError:
+                        text = ""
+                    self.merge_in(new, text)
+                    try:
+                        os.remove(src)
+                    except OSError:
+                        pass
+                else:
+                    os.replace(src, self._path(new))
+                moved = True
+            if os.path.exists(self._keep_path(old)):
+                try:
+                    os.replace(self._keep_path(old), self._keep_path(new))
+                except OSError:
+                    pass
+            d = self.files_dir
+            if d and self.attachments_for is None:
+                try:
+                    names = os.listdir(d)
+                except OSError:
+                    names = []
+                for fn in names:
+                    if not fn.endswith(".json"):
+                        continue
+                    mp = os.path.join(d, fn)
+                    try:
+                        with open(mp, encoding="utf-8") as f:
+                            m = json.load(f)
+                        if m.get("kind") == "chat" and m.get("room") == old:
+                            m["room"] = new
+                            with open(mp, "w", encoding="utf-8", newline="") as f:
+                                json.dump(m, f)
+                    except (OSError, ValueError):
+                        continue
+            self._last_id.pop(old, None)
+            self._last_id.pop(new, None)
+        if moved:
+            self.log("chat: room %s renamed to %s (history moved)" % (old, new))
+        return moved
+
     def _attachments(self, room):
         if self.attachments_for is not None:
             try:

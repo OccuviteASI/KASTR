@@ -93,6 +93,11 @@ HANDOVER_CHAT_MAX = 64 * 1024 * 1024   # 0.21.25: the chat history a hub hand-ov
 # 0.21.25: kastr_serve wires the chat store's delete_room here, so a close forwarded by a spoke removes the transcript
 # on the hub too (the hub's token service has no chat store of its own)
 ROOM_CLOSE_HOOK = [None]
+# 0.21.65: kastr_serve wires the chat store's rename_room(old, new) here (a room renamed at the hub takes its transcript)
+ROOM_RENAME_HOOK = [None]
+RENAMED_TTL = 7 * 86400    # 0.21.65: how long an old room name points at its new one (pages still in it follow)
+SETTINGS_OPS = ("lock", "code", "unlock", "keep", "rename", "group", "viewlock")   # 0.21.65: POST /api/rooms/settings
+VIEW_LOCKED_TEXT = "The view in this room is locked -- only its creator or an admin can change it"   # 0.21.65 (m)
 
 
 class HubDown(Exception):
@@ -570,6 +575,17 @@ def vehicle_identity(claims):
         return None, None
 
 
+def claims_admin_any(claims):
+    """0.21.65: does this member token carry an admin grant for ANY room (the admin code is relay-wide; Room settings
+    may change another room than the one the admin's token is for)? The Lobby's admin token says it with `adm`."""
+    if not isinstance(claims, dict) or is_relay_claims(claims):
+        return False
+    if claims.get("lobby") and claims.get("adm") == 1:
+        return True
+    puts = _patterns(claims.get("put")) if claims.get("put") is not None else []
+    return any(p == "**" or p.endswith("/" + ADMIN_KIND) or p.endswith("/" + ADMIN_KIND + "/**") for p in map(str, puts))
+
+
 def claims_admin(claims, slug):
     """0.21.2: does this token carry the room's admin grant (`<slug>/~admin` put -- the 0.16.0 admin code)?
     Admins may close the room and remove any file or chat line in it."""
@@ -875,7 +891,12 @@ def board_clean(b):
             split.append(mp)
         if len(split) >= BOARD_SPLIT_MAX:
             break
-    return {"pins": pins, "spots": spots, "grids": grids, "split": split}
+    out = {"pins": pins, "spots": spots, "grids": grids, "split": split}
+    if b.get("lock"):
+        out["lock"] = True               # 0.21.65 (m): the room's view is locked (never stored in the board itself)
+    if SLUG_RE.match(str(b.get("renamed") or "")):
+        out["renamed"] = str(b["renamed"])   # 0.21.65: an old room name's redirect (spokes copy it with the boards)
+    return out
 
 
 def board_has(b):
@@ -1169,6 +1190,28 @@ class XShareRegistry:
                 self.ver += 1
         return acc, ref, new, changed
 
+    def rename_room(self, old, new):
+        """0.21.65: a renamed room -- listings INTO it (to == old) and OF its streams (path under old/) follow it."""
+        def fix(s):
+            s = str(s)
+            return new if s == old else (new + s[len(old):] if s.startswith(old + "/") else s)
+        n = 0
+        with self.lock:
+            for k in list(self.items):
+                e = self.items[k]
+                path, to = fix(k[0]), fix(k[1])
+                if (path, to) == k:
+                    continue
+                self.items.pop(k, None)
+                e = dict(e, path=path, to=to, **{"from": fix(e.get("from") or "")})
+                if path.split("/", 1)[0] == to:
+                    continue                     # a listing into its own room is no listing
+                self.items[(path, to)] = e
+                n += 1
+            if n:
+                self.ver += 1
+        return n
+
     def drop(self, path, to=None, which="share"):
         """Remove `path`'s listings (in the rooms of `to`, or all) -> the slugs removed. 0.21.63: `which` -- "share" (its
         sharer stopped: a listing PINNED to a room board stays, as the pin), "pin" (an unpin: the listing stays only while
@@ -1308,8 +1351,11 @@ def board_open(method, store, p=None, room=None, now=None):
         if not SLUG_RE.match(room):
             return {"ok": False, "error": "room required"}, 400
         b = store.board(room)
-        return {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "split": b.get("split") or [],
-                "ver": store.board_ver, "open": True}, 200
+        out = {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "split": b.get("split") or [],
+               "ver": store.board_ver, "open": True, "lock": bool(b.get("lock"))}   # 0.21.65 (m)
+        if b.get("renamed"):
+            out["renamed"] = b["renamed"]
+        return out, 200
     p = p if isinstance(p, dict) else {}
     room, op = str(p.get("room") or ""), str(p.get("op") or "")
     if not SLUG_RE.match(room):
@@ -1317,7 +1363,7 @@ def board_open(method, store, p=None, room=None, now=None):
     item, why = board_item(op, p, now)
     if why:
         return {"ok": False, "error": why}, 400
-    b, code, err = store.board_apply(room, op, item, now)
+    b, code, err = store.board_apply(room, op, item, now, room_key=str(p.get("roomKey") or "")[:64] or None)   # 0.21.65 (m): an open relay has no admins -- the roomKey
     if err:
         return {"ok": False, "error": err}, code
     try:
@@ -1593,6 +1639,7 @@ class AuthStore:
         self.vehicles = {}       # 0.21.63: id -> {id, name, salt, hash, iter, created, lastUsed, lastRoom, revoked} (never a key)
         self.ver = 0            # 0.21.53: bumped on every save -- the standby's copy follows it
         self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
+        self.renamed = {}        # 0.21.65: old slug -> {"to": new slug, "at": ms} (RENAMED_TTL) -- pages in the old name follow
         self.on_board = None     # 0.21.63: callable() -- a board changed or went with its room (AuthService re-lists the pins)
         self.lost = None         # 0.21.0: {"at", "kept"} when relay-auth.json was unreadable and no backup saved it
         self.recovered = None    # 0.21.0: epoch when the .bak copy was used
@@ -1655,6 +1702,14 @@ class AuthStore:
                 except (TypeError, ValueError):
                     pass
             self._prune_closed()
+        ren = d.get("renamed")              # 0.21.65
+        if isinstance(ren, dict):
+            for old, r in ren.items():
+                if isinstance(r, dict) and SLUG_RE.match(str(old)) and SLUG_RE.match(str(r.get("to") or "")):
+                    try:
+                        self.renamed[str(old)] = {"to": str(r["to"]), "at": int(r.get("at") or 0)}
+                    except (TypeError, ValueError):
+                        pass
         groups = d.get("groups")            # 0.15.0
         if isinstance(groups, dict):
             seen = set()
@@ -1687,6 +1742,7 @@ class AuthStore:
                                  "closed": self.closed,          # 0.12.0: + closed tombstones
                                  "groups": self.groups,          # 0.15.0: + room groups
                                  "vehicles": self.vehicles,      # 0.21.63: + vehicle API keys (hashes only)
+                                 "renamed": self.renamed,        # 0.21.65: + old room names -> new
                                  "codesAt": self.codes_at}, self.log)   # 0.21.0
 
     @staticmethod
@@ -1876,6 +1932,7 @@ class AuthStore:
                 new["board"] = old["board"]  # 0.21.63: only board_apply changes a board (a heartbeat's older copy never wins)
             self.rooms[slug] = new
             self.closed.pop(slug, None)      # 0.12.0: registering a name re-opens it
+            self.renamed.pop(slug, None)     # 0.21.65: a room made under an old name is a new room (no redirect any more)
             self._save()
 
     def room_slugs(self):
@@ -1914,6 +1971,10 @@ class AuthStore:
                 row = {"slug": k, "locked": bool(r.get("hash")), "persistent": bool(r.get("persistent")),
                        "plain": bool(r.get("plain") and not r.get("hash") and not r.get("persistent")),   # 0.21.25
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
+                if r.get("viewLock"):
+                    row["viewLock"] = True      # 0.21.65 (m): only the creator or an admin changes the room's view
+                if r.get("persistent") and r.get("keptBy") == "board":
+                    row["keptBy"] = "board"     # 0.21.65: kept open only because its board holds something
                 b = r.get("board") if isinstance(r.get("board"), dict) else {}
                 if board_has(b):   # 0.21.63: how much the room board holds (counts only -- this list is public)
                     row["board"] = {"pins": len(b.get("pins") or []), "spots": len(b.get("spots") or [])}
@@ -1926,13 +1987,16 @@ class AuthStore:
 
     def touch_room(self, slug, creator=""):
         """0.21.25: a room is in use -> its record's `at` moves; a name with no record becomes a PLAIN record (stored on
-        the hub, listed everywhere, gone ROOM_TTL after its last use). Never changes a lock or the kept flag. -> created?"""
+        the hub, listed everywhere, gone ROOM_TTL after its last use). Never changes a lock or the kept flag. -> created?
+        0.21.65: an old name of a renamed room is NOT re-created by a page still in it (it follows the redirect)."""
         with self.lock:
             now = time.time()
             rec = self.rooms.get(slug)
             if rec is not None and not self._dead(rec, now):
                 rec["at"] = now
                 created = False
+            elif self._renamed_live(slug, now):
+                return False
             else:
                 self.closed.pop(slug, None)
                 self.rooms[slug] = {"salt": "", "hash": "", "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
@@ -2033,6 +2097,67 @@ class AuthStore:
             self._prune_closed()
             return dict(self.closed)
 
+    # ---- 0.21.65: renamed rooms (old name -> new name) ----------------------------------------------------------------
+
+    def _renamed_live(self, slug, now=None):
+        """Lock held: the new name an old room name points at (None when it does not, or the redirect expired)."""
+        r = self.renamed.get(slug)
+        if not r:
+            return None
+        if (now if now is not None else time.time()) * 1000 - int(r.get("at") or 0) > RENAMED_TTL * 1000:
+            self.renamed.pop(slug, None)
+            return None
+        return r.get("to")
+
+    def renamed_public(self):
+        """{old slug: new slug} for every live redirect."""
+        with self.lock:
+            now = time.time()
+            return {k: v for k in list(self.renamed) for v in [self._renamed_live(k, now)] if v}
+
+    def renamed_to(self, slug):
+        with self.lock:
+            return self._renamed_live(slug)
+
+    def rename_room(self, old, new):
+        """Move a room's record (with its board, lock, kept flag and roomKey) and its group membership from `old` to `new`;
+        every board path of the old room is re-written to the new one; `old` points at `new` for RENAMED_TTL (pages still
+        in it follow). -> (None, 200) or (error, http code)."""
+        old, new = str(old or ""), str(new or "")
+        if not SLUG_RE.match(new) or new == LOBBY_SLUG:
+            return "pick a different name (lowercase letters, digits and dashes, at most 32)", 400
+        if new == old:
+            return "that is already the room's name", 400
+        with self.lock:
+            now = time.time()
+            rec = self.rooms.get(old)
+            if rec is None or self._dead(rec, now):
+                return "no such room on this relay", 404
+            cur = self.rooms.get(new)
+            if cur is not None and not self._dead(cur, now):
+                return "a room named %s already exists" % new, 409
+            rec = dict(rec)
+            had_board = bool(rec.get("board"))
+            if had_board:
+                rec["board"] = board_clean(board_rename(rec["board"], old, new))
+            rec["at"] = now
+            rec["renamedFrom"] = old
+            self.rooms.pop(old, None)
+            self.rooms[new] = rec
+            self.closed.pop(new, None)
+            self.renamed.pop(new, None)
+            for k, r in list(self.renamed.items()):   # an older name of this room follows it too
+                if r.get("to") == old:
+                    r["to"] = new
+            self.renamed[old] = {"to": new, "at": int(now * 1000)}
+            for g in self.groups.values():
+                if old in g["rooms"]:
+                    g["rooms"] = [new if s == old else s for s in g["rooms"] if s != new]
+            self.board_ver += 1      # boards carry the redirect (spokes copy it with their boards)
+            self._save()
+        self._board_fire()
+        return None, 200
+
     def is_closed(self, slug):
         with self.lock:
             self._prune_closed()
@@ -2076,25 +2201,41 @@ class AuthStore:
                 self.log("relay auth: room board follow-up failed: %s" % e)
 
     def board(self, slug):
-        """The room's board (empty for a room with none or no record)."""
+        """The room's board (empty for a room with none or no record). 0.21.65: + `lock` (the view is locked) and `renamed`
+        (the room's new name, for an old name)."""
         with self.lock:
+            now = time.time()
             rec = self.rooms.get(slug)
-            if rec is None or self._dead(rec, time.time()):
-                return {"pins": [], "spots": [], "grids": {}, "split": []}
-            return board_clean(rec.get("board"))
+            if rec is None or self._dead(rec, now):
+                out = {"pins": [], "spots": [], "grids": {}, "split": []}
+                to = self._renamed_live(slug, now)
+                if to:
+                    out["renamed"] = to
+                return out
+            b = board_clean(rec.get("board"))
+            if rec.get("viewLock"):
+                b["lock"] = True
+            return b
 
     def boards_public(self):
-        """{slug: board} for every live room whose board holds something (the hub's long-poll carries it to spokes)."""
+        """{slug: board} for every live room whose board holds something (the hub's long-poll carries it to spokes).
+        0.21.65: + a room whose view is locked (`lock`) and an old name's redirect (`renamed`)."""
         with self.lock:
             now, out = time.time(), {}
             for k, r in self.rooms.items():
-                if r.get("board") and not self._dead(r, now):
-                    b = board_clean(r["board"])
-                    if board_has(b):
+                if (r.get("board") or r.get("viewLock")) and not self._dead(r, now):
+                    b = board_clean(r.get("board"))
+                    if r.get("viewLock"):
+                        b["lock"] = True
+                    if board_has(b) or b.get("lock"):
                         out[k] = b
+            for k in list(self.renamed):
+                to = self._renamed_live(k, now)
+                if to and k not in out:
+                    out[k] = {"pins": [], "spots": [], "grids": {}, "split": [], "renamed": to}
             return out
 
-    def board_apply(self, slug, op, item, now=None):
+    def board_apply(self, slug, op, item, now=None, boss=False, room_key=None):
         """One board change -> (board, http code, error). pin {path, from, label, kind, by} / unpin {path} / spot {target,
         by, ts} / unspot {target}. A room with no record gets a plain one; the first item KEEPS the room open (refused when
         KEPT_MAX rooms are kept already); removing the last item leaves the keep alone (the Relay page turns it off). A spot
@@ -2112,6 +2253,11 @@ class AuthStore:
             if rec is not None and self._dead(rec, now):
                 del self.rooms[slug]
                 rec = None
+            if rec is None and self._renamed_live(slug, now):
+                return None, 409, "this room was renamed to %s" % self._renamed_live(slug, now)   # 0.21.65: never re-made by a late page
+            # 0.21.65 (m) (Kenton: "lock the view in a room so only an admin/creator can spotlight/change anything")
+            if rec is not None and rec.get("viewLock") and not (boss or (room_key and room_key == rec.get("roomKey"))):
+                return None, 403, VIEW_LOCKED_TEXT
             board = board_clean(rec.get("board") if rec else None)
             was_empty = not board_has(board)
             changed = False
@@ -2304,6 +2450,132 @@ class AuthStore:
         return changed
 
 
+def board_rename(b, old, new):
+    """0.21.65: a board whose paths name room `old` (pins, spotlights, grid layouts by path, split cameras) -> the same
+    board naming `new` (a deep copy; other rooms' paths unchanged)."""
+    def fix(s):
+        s = str(s)
+        if s == old:
+            return new
+        if s.startswith(old + "/"):
+            return new + s[len(old):]
+        return s
+
+    def walk(v):
+        if isinstance(v, dict):
+            return {fix(k): walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, str):
+            return fix(v)
+        return v
+    return walk(b if isinstance(b, dict) else {})
+
+
+def room_settings(store, p, admin=False, log=None, xs=None):
+    """0.21.65 (Kenton: "Ability to change room settings after the fact. Only for admin or creator. Right click menu.")
+    POST /api/rooms/settings {slug, op, roomKey?, ...} -> (reply, http code). The room's creator proves itself with the
+    roomKey (as for close); an admin (the admin code's token, vouched by the KASTR that checked it) or the relay operator
+    needs none. Ops: lock / code {salt, hash} (lock it, or change its code), unlock, keep {keep} (on / off -- off also
+    releases a room kept only because its board holds something), rename {to} (record, board, group, chat via
+    ROOM_RENAME_HOOK, cross-room listings via `xs`; the old name points at the new one), group {group: gid|null},
+    viewlock {locked} (only the creator or an admin changes the room board while it is on). The Lobby has none of these.
+    A room changed here is `managed`: its holder's heartbeat refreshes it but never puts back an old lock or keep."""
+    log = log or (lambda m: None)
+    p = p if isinstance(p, dict) else {}
+    slug, op = str(p.get("slug") or ""), str(p.get("op") or "")
+    if not SLUG_RE.match(slug):
+        return {"ok": False, "error": "bad room name"}, 400
+    if slug == LOBBY_SLUG:
+        return {"ok": False, "error": "the Lobby's settings cannot be changed"}, 403
+    if op not in SETTINGS_OPS:
+        return {"ok": False, "error": "unknown op (%s)" % "|".join(SETTINGS_OPS)}, 400
+    cur = store.room(slug)
+    if cur is None:
+        to = store.renamed_to(slug) if hasattr(store, "renamed_to") else None
+        return {"ok": False, "error": ("this room was renamed to %s" % to) if to else "no such room on this relay"}, 404
+    rk = p.get("roomKey")
+    creator = bool(rk) and rk == cur.get("roomKey")
+    if not (admin or creator):
+        return {"ok": False, "error": "only the room's creator or an admin can change its settings"}, 403
+    who = "an admin" if admin and not creator else "its creator"
+    rec = dict(cur)
+    if op in ("lock", "code"):
+        salt, hsh = str(p.get("salt") or ""), str(p.get("hash") or "")
+        if not (re.match(r"^[0-9a-f]{8,64}$", salt) and re.match(r"^[0-9a-f]{64}$", hsh)):
+            return {"ok": False, "error": "a room code is required"}, 400
+        if op == "code" and not cur.get("hash"):
+            return {"ok": False, "error": "the room is not locked -- lock it with a code"}, 409
+        rec.update(salt=salt, hash=hsh)
+        what = "code changed" if cur.get("hash") else "locked"
+    elif op == "unlock":
+        rec.update(salt="", hash="")
+        what = "unlocked"
+    elif op == "keep":
+        keep = bool(p.get("keep"))
+        if keep and not cur.get("persistent"):
+            kept = store.kept_slugs()
+            if len(kept) >= KEPT_MAX and slug not in kept:
+                return {"ok": False, "error": "this relay already keeps %d rooms open" % KEPT_MAX}, 409
+        rec["persistent"] = keep
+        rec.pop("keptBy", None)
+        what = "kept open" if keep else "no longer kept open"
+    elif op == "viewlock":
+        rec["viewLock"] = bool(p.get("locked"))
+        if not rec["viewLock"]:
+            rec.pop("viewLock", None)
+        what = "view locked" if rec.get("viewLock") else "view unlocked"
+    elif op == "group":
+        gid = p.get("group") if p.get("group") is not None else p.get("gid")
+        gid = str(gid) if gid not in (None, "") else None
+        try:
+            store.group_assign(slug, gid)
+        except KeyError:
+            return {"ok": False, "error": "no such group"}, 404
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}, 400
+        log("relay: room %s %s by %s (room settings)" % (slug, ("grouped under %s" % gid) if gid else "ungrouped", who))
+        return {"ok": True, "op": op, "slug": slug, "group": gid, "groups": store.groups_public()}, 200
+    else:   # rename
+        new = str(p.get("to") or "").strip().lower()
+        err, code = store.rename_room(slug, new)
+        if err:
+            return {"ok": False, "error": err}, code
+        hook = ROOM_RENAME_HOOK[0]
+        if hook is not None:
+            try:
+                hook(slug, new)
+            except Exception as e:
+                log("relay: room %s renamed to %s but its chat could not move: %s" % (slug, new, e))
+        if xs is not None:
+            try:
+                xs.rename_room(slug, new)
+            except Exception as e:
+                log("relay: room %s renamed -- its cross-room listings did not follow: %s" % (slug, e))
+        moved = store.room(new) or {}
+        moved["managed"] = True
+        store.put_room(new, moved)
+        log("relay: room %s renamed to %s by %s" % (slug, new, who))
+        return {"ok": True, "op": op, "slug": new, "from": slug, "renamed": {slug: new}}, 200
+    rec["managed"] = True
+    if rec.get("hash") or rec.get("persistent"):
+        rec.pop("plain", None)
+    else:
+        rec["plain"] = True              # neither locked nor kept: a plain room (ROOM_TTL after its last use)
+    rec.pop("mirror", None)
+    rec["at"] = time.time()
+    if op == "viewlock":
+        with store.lock:
+            if slug in store.rooms:
+                store.board_ver += 1     # the boards carry the lock to spokes and pages
+    store.put_room(slug, rec)
+    if op == "viewlock":
+        store._board_fire()
+    log("relay: room %s %s by %s (room settings)" % (slug, what, who))
+    row = next((r for r in store.rooms_public() if r.get("slug") == slug), {"slug": slug})
+    return {"ok": True, "op": op, "slug": slug, "room": row}, 200
+
+
 def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_created=None, vouched=False):
     """0.12.0: the ONE room-record writer behind the minter's POST /api/room and
     kastr_serve's POST /api/rooms/register -> (reply, http code).
@@ -2384,6 +2656,8 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
         by_code = p.get("code") is not None and _room_code_ok(cur, p.get("code"))
         if by_key or by_code:
             # HEARTBEAT: the holder refreshes its record; never a new key.
+            if cur.get("managed"):
+                locking, keep = False, None   # 0.21.65: changed in Room settings -- an old lock / keep never comes back
             if locking:
                 cur.update(salt=salt, hash=hsh)
             cur["at"] = now
@@ -2692,7 +2966,8 @@ class AuthService:
                     # gate can list them and take their codes -- names only.
                     # 0.12.0: rows {slug, locked, persistent, creator, created, at} -- old pages read .slug
                     # 0.15.0: + the relay-defined room groups
-                    self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public()})
+                    self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
+                                 "renamed": svc.store.renamed_public()})   # 0.21.65
                 elif path == "/api/xshare":            # 0.21.41: the cross-room listings into one room
                     qs = parse_qs(urlparse(self.path).query)
                     obj, code = svc.xshare_get((qs.get("room") or [""])[0], self.headers.get("Authorization"),
@@ -2929,7 +3204,10 @@ class AuthService:
         # codes, its admins' tokens) and says so in `vouch`; the federation token is what makes that trustworthy.
         if op == "list":
             return {"ok": True, "rooms": self.store.rooms_public(), "closed": self.store.closed_public(),
-                    "groups": self.store.groups_public()}, 200
+                    "groups": self.store.groups_public(), "renamed": self.store.renamed_public()}, 200   # 0.21.65: + renamed
+        if op == "settings":   # 0.21.65: Room settings from a spoke's page (vouch "admin": the spoke checked the admin token)
+            body = p.get("body") if isinstance(p.get("body"), dict) else {}
+            return room_settings(self.store, body, admin=p.get("vouch") == "admin", log=self.log, xs=self._xs("local"))
         if op == "register":
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return register_room(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
@@ -3156,7 +3434,10 @@ class AuthService:
         exp = now + ttl
         if slug == LOBBY_SLUG:   # 0.21.60: the Lobby -- presence only, whatever the code's role
             puts = ([STATE_PREFIX + "/" + slug + "/" + host] if host else []) + [PRESENCE_KIND + "/" + slug]
-            member = _mint(self.key, {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp})
+            lc = {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp}
+            if role == "admin":
+                lc["adm"] = 1   # 0.21.65: an admin in the Lobby still proves it for Room settings (no ~admin put there)
+            member = _mint(self.key, lc)
             registry = _mint(self.key, {"root": "", "put": CHANNELS_KIND + "/" + slug, "iat": now, "exp": exp})
             return {"ok": True, "exp": exp, "role": role, "ns": NS, "lobby": True,
                     "tokens": {"member": member, "registry": registry}}, 200
@@ -3857,7 +4138,7 @@ class AuthService:
         if not isinstance(d, dict) or not isinstance(d.get("boards"), dict):
             return
         boards = {str(k): board_clean(v) for k, v in d["boards"].items() if SLUG_RE.match(str(k))}
-        boards = {k: v for k, v in boards.items() if board_has(v)}
+        boards = {k: v for k, v in boards.items() if board_has(v) or v.get("lock") or v.get("renamed")}   # 0.21.65: + lock / redirect
         prev = self.__dict__.get("_board_mirror")
         self._board_mirror = boards
         self._board_mirror_ver = d.get("boardsVer")
@@ -3875,7 +4156,9 @@ class AuthService:
 
     def _board_reply(self, room, b, extra=None):
         out = {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "split": b.get("split") or [],
-               "ver": self._board_ver()}
+               "ver": self._board_ver(), "lock": bool(b.get("lock"))}   # 0.21.65 (m): + the view lock
+        if b.get("renamed"):
+            out["renamed"] = b["renamed"]   # 0.21.65: the room's new name -- pages still in the old one follow
         out.update(extra or {})
         return out
 
@@ -3933,6 +4216,8 @@ class AuthService:
             return {"ok": False, "error": why}, 400
         if not item.get("by"):
             item["by"] = h0 or ""
+        boss = claims_admin(claims, room)   # 0.21.65 (m): an admin changes a room whose view is locked (so does its roomKey)
+        room_key = str(p.get("roomKey") or "")[:64] or None
         if op == "pin" and item["from"] != room:
             frm = item["from"]
             c = verify_token(str((p.get("tokens") if isinstance(p.get("tokens"), dict) else {}).get(frm) or ""), self.key, now)
@@ -3945,7 +4230,8 @@ class AuthService:
             if not own and not claims_admin(c, frm) and self._room_locked(frm):
                 return {"ok": False, "error": "only an admin can pin a locked room's stream into another room"}, 403
         if self._xs_spoke():
-            out = self._hub_fed({"op": "board", "vouch": "publisher", "room": room, "act": op, "item": item}, timeout=5)
+            out = self._hub_fed({"op": "board", "vouch": "publisher", "room": room, "act": op, "item": item,
+                                 "boss": bool(boss), "roomKey": room_key}, timeout=5)   # 0.21.65 (m)
             if out is None:
                 return {"ok": False, "hubDown": True,
                         "error": "the hub is unreachable -- room boards live on the hub; try again shortly"}, 503
@@ -3969,13 +4255,13 @@ class AuthService:
                 except Exception:
                     pass
             return d, code
-        return self._board_apply_local(room, op, item, now)
+        return self._board_apply_local(room, op, item, now, boss=boss, room_key=room_key)
 
-    def _board_apply_local(self, room, op, item, now=None):
+    def _board_apply_local(self, room, op, item, now=None, boss=False, room_key=None):
         st = getattr(self, "store", None)
         if not hasattr(st, "board_apply"):
             return {"ok": False, "error": "no room store here"}, 503
-        b, code, err = st.board_apply(room, op, item, now)
+        b, code, err = st.board_apply(room, op, item, now, boss=boss, room_key=room_key)
         if err:
             return {"ok": False, "error": err}, code
         what = item.get("path") or item.get("target") or ""
@@ -3997,7 +4283,8 @@ class AuthService:
             return {"ok": False, "error": why}, 400
         if isinstance(p.get("item"), dict) and p["item"].get("by"):
             item["by"] = _xs_text(p["item"].get("by"), 64)
-        return self._board_apply_local(room, act, item)
+        # 0.21.65 (m): the spoke checked the admin grant with its own key (`boss`); a roomKey is checked here
+        return self._board_apply_local(room, act, item, boss=bool(p.get("boss")), room_key=str(p.get("roomKey") or "")[:64] or None)
 
     # ---- 0.17.0: relay-side kicks --------------------------------------------------------
     # The relay answers to us for every session: a banned identity is refused at connect,

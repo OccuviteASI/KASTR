@@ -1235,6 +1235,16 @@ def _room_close_hook(slug):
 kastr_relay.ROOM_CLOSE_HOOK[0] = _room_close_hook
 
 
+def _room_rename_hook(old, new):
+    """0.21.65: a room renamed at the hub (Room settings) keeps its chat history (transcript + attachments move)."""
+    cs = chat_store()
+    if cs is not None:
+        cs.rename_room(old, new)
+
+
+kastr_relay.ROOM_RENAME_HOOK[0] = _room_rename_hook
+
+
 def chat_sweep_once(relay_srv=None):
     """Transcripts idle for a day that nobody keeps are gone -> swept slugs."""
     store = chat_store(relay_srv=relay_srv)
@@ -1571,8 +1581,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     ips = [ip for ip in kastr_relay.local_ips() if not ip.startswith(("127.", "172."))] or kastr_relay.local_ips()
                     return send(200, json.dumps({"ok": True, "port": kastr_rtsp.rtmp_free_port(), "hosts": ips}).encode(), "application/json")
                 if path == "/api/screen/devices":   # 0.21.26: cameras this computer can capture as a host feed
-                    devs = kastr_rtsp.list_devices(getattr(bridge, "ffmpeg", None) if bridge else None)
-                    return send(200, json.dumps({"ok": True, "devices": devs}).encode(), "application/json")
+                    # 0.21.65: + `cams` [{id, name, error?}] (the camera's own name; why one cannot be opened) and a `note`
+                    cams, note = kastr_rtsp.list_cameras(getattr(bridge, "ffmpeg", None) if bridge else None)
+                    devs = [c["id"] for c in cams if not c.get("error")]
+                    return send(200, json.dumps({"ok": True, "devices": devs, "cams": cams, "note": note}).encode(), "application/json")
                 w = int((qs.get("w") or ["320"])[0] or 320)
                 got = kastr_screen.thumb((qs.get("id") or [""])[0], width=w)
                 if not got:
@@ -2493,6 +2505,22 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return h[7:].strip()
             return ((qs or {}).get("jwt") or [""])[0] if qs is not None else ""
 
+        def _settings_admin(self):
+            """0.21.65: may this caller change ANY room's settings as an admin? The relay operator's own page (loopback), or
+            a member token of this relay carrying an admin grant (the admin code is relay-wide; the token may be for another
+            room, or the Lobby's)."""
+            try:
+                if self._local():
+                    return True
+            except Exception:
+                pass
+            jwt = self._bearer(None)
+            if not jwt:
+                return False
+            if self._room_claims("", jwt) is not None:
+                return False
+            return kastr_relay.claims_admin_any(self._claims)
+
         def _admin_for(self, room, qs=None):
             """0.21.2: True when the caller's token carries `<room>/~admin` (the admin access code). On an
             OPEN relay nobody is an admin this way (_room_claims returns None with no claims)."""
@@ -2778,9 +2806,26 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/rooms/list":
                 if method != "GET":
                     return self._chat_reply(405, {"error": "GET only"})
-                # 0.15.0: + the relay-defined room groups {gid: {name, order, rooms}}
+                # 0.15.0: + the relay-defined room groups {gid: {name, order, rooms}}; 0.21.65: + renamed {old: new}
                 return self._json_cors(200, {"rooms": store.rooms_public(), "closed": store.closed_public(),
-                                             "groups": store.groups_public()})
+                                             "groups": store.groups_public(), "renamed": store.renamed_public()})
+            if path == "/api/rooms/settings":
+                # 0.21.65 (Kenton: "Ability to change room settings after the fact. Only for admin or creator."): the
+                # creator's roomKey, an admin's member token (Authorization: Bearer) or the relay operator's own page
+                if method != "POST":
+                    return self._chat_reply(405, {"error": "POST only"})
+                p = self._chat_body_json()
+                if p is None:
+                    return self._chat_reply(413, {"error": "body too large"})
+                _auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
+                xs = _auth._xs("local") if _auth is not None and hasattr(_auth, "_xs") else None
+                obj, code = kastr_relay.room_settings(store, p, admin=self._settings_admin(), log=log, xs=xs)
+                if code == 200:
+                    try:
+                        relay_srv.spoke_sync_soon()
+                    except Exception:
+                        pass
+                return self._chat_reply(code, obj)
             if path == "/api/rooms/group":
                 # 0.15.0: a room's creator (roomKey) files its room under a group; the
                 # operator's create/rename/delete live on /api/relay/rooms/group.
@@ -2887,6 +2932,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 body = {"op": "group", "body": p}
             elif path == "/api/rooms/touch":
                 body = {"op": "touch", "slug": slug, "creator": str(p.get("creator") or "")[:64]}
+            elif path == "/api/rooms/settings":   # 0.21.65: the hub owns rooms; this box vouches for an admin it verified
+                body = {"op": "settings", "body": p, "vouch": "admin" if self._settings_admin() else None}
             else:
                 return self._chat_reply(404, {"error": "no such rooms endpoint"})
             try:
@@ -2902,6 +2949,15 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             obj, code = out
             if path == "/api/rooms/register" and code == 403 and p.get("access"):
                 CHAT_LOCKOUT.fail(peer, "wrong publisher access code", slug)   # the guess counts here, where the member is
+            if path == "/api/rooms/settings" and code == 200:   # 0.21.65: this box asks the hub again (a lock is enforced at once)
+                try:
+                    _a = getattr(relay_srv, "auth", None)
+                    with _a.lock:
+                        for s in (slug, str(obj.get("slug") or "")):
+                            _a._hub_open.pop(s, None)
+                            _a._hub_locks.pop(s, None)
+                except Exception:
+                    pass
             if path == "/api/rooms/close" and code == 200:
                 try:
                     if store.room(slug) is not None:
@@ -2921,7 +2977,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 rooms += [dict(r, source="local") for r in store.rooms_public() if r.get("slug") not in have]
             except Exception:
                 pass
-            out = {"rooms": rooms, "closed": hub_obj.get("closed") or {}, "groups": hub_obj.get("groups") or {}, "fromHub": True}
+            out = {"rooms": rooms, "closed": hub_obj.get("closed") or {}, "groups": hub_obj.get("groups") or {}, "fromHub": True,
+                   "renamed": hub_obj.get("renamed") or {}}   # 0.21.65
             if offline:
                 out["hubOffline"] = True
                 out["hubAt"] = int((_HUB_ROOMS_CACHE[0] or {}).get("at") or 0)

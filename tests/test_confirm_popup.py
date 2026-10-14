@@ -39,7 +39,7 @@ class ConfirmPopup(unittest.TestCase):
 
     def test_nothing_is_muted_when_the_switch_is_refused(self):
         p = _page()
-        body = p[p.index("  async function switchRoom(rec, code) {"):p.index("  async function switchRoom(rec, code) {") + 1600]
+        body = p[p.index("  async function switchRoom(rec, code, opts) {"):p.index("  async function switchRoom(rec, code, opts) {") + 1600]
         self.assertLess(body.index("await authMint(rec.slug"), body.index("src.micMuted = true;"))
 
     def test_rail_forms_scroll_into_view(self):

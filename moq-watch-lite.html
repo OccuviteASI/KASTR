@@ -557,6 +557,16 @@
   .pubui .tablist .tabrow .tt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pubui .tablist .tabrow .ta { flex:none; font-size:10px; color:var(--asi-blue); }
   .pubui .thgrid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin:0 0 14px; }
+  /* 0.21.65: the Share panel's Webcam section -- one row per camera on this computer */
+  .pubui .camlist { display:flex; flex-direction:column; gap:6px; margin:0 0 14px; }
+  .pubui .camlist .wc { display:flex; align-items:center; gap:9px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--surface-2); min-width:0; }
+  .pubui .camlist .wc.on { border-color:var(--asi-red); }
+  .pubui .camlist .wc .wi { flex:none; font-size:16px; line-height:1; }
+  .pubui .camlist .wc .wn { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  .pubui .camlist .wc .wn b { font-weight:600; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pubui .camlist .wc .wn span { font-size:11px; color:var(--text-mute); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pubui .camlist .wc .wn span.err { color:var(--asi-amber); white-space:normal; }
+  .pubui .camlist .wc button { flex:none; }
   .pubui .thgrid .th { display:flex; flex-direction:column; gap:5px; padding:4px; background:transparent; border:1px solid transparent;
     border-radius:8px; cursor:pointer; color:var(--text-dim); text-align:left; min-width:0; height:auto; }
   .pubui .thgrid .th:hover { border-color:var(--line); background:var(--surface-2); color:#fff; }
@@ -981,6 +991,29 @@
   /* 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): KASTR's own yes/no question */
   #kConfirm { position:fixed; inset:0; z-index:140; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
   #kConfirm[hidden] { display:none; }
+  /* 0.21.65 (Kenton: "Ability to change room settings after the fact. Only for admin or creator. Right click menu.") */
+  #kRoomSet { position:fixed; inset:0; z-index:139; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kRoomSet[hidden] { display:none; }
+  #kRoomSet .popcard.rsdlg { position:static; width:min(440px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; animation:kcIn .14s ease-out; }
+  #kRoomSet .rsdlg .body { padding:12px 16px 4px; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
+  #kRoomSet .rsrow { display:flex; flex-direction:column; gap:5px; }
+  #kRoomSet .rsrow > .lbl { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
+  #kRoomSet .rsf { display:flex; gap:6px; }
+  #kRoomSet .rsf[hidden], #kRoomSet .rsnote[hidden], #kRoomSet .rshint[hidden] { display:none; }
+  #kRoomSet .rsf input, #kRoomSet select { flex:1; min-width:0; background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 8px; font:inherit; font-size:13px; }
+  #kRoomSet .rsf input:focus, #kRoomSet select:focus { outline:none; border-color:var(--asi-blue); }
+  #kRoomSet .rsf input.masked { -webkit-text-security:disc; }
+  #kRoomSet .rsf button { flex:none; }
+  #kRoomSet .rshint { margin:0; font-size:11.5px; line-height:1.45; color:var(--text-mute); }
+  #kRoomSet .rsnote { margin:0; font-size:12px; line-height:1.45; color:var(--asi-amber); }
+  #kRoomSet .rsmsg { margin:0; min-height:16px; font-size:12px; color:var(--text-dim); }
+  #kRoomSet .rsmsg.err { color:var(--asi-red); }
+  #kRoomSet .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
+  #kRoomSet .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  /* 0.21.65 (m): the room's view is locked -- a small badge after the room's name */
+  #roomBanner .rbvl { display:inline-flex; align-items:center; gap:3px; flex:none; margin-left:2px; padding:1px 6px 1px 4px; border-radius:9px;
+    border:1px solid var(--asi-amber); color:var(--asi-amber); font-size:10px; font-weight:600; letter-spacing:.02em; }
+  #roomBanner .rbvl .icon { width:11px; height:11px; }
   #kConfirm .popcard.kconfirm { position:static; width:min(420px, calc(100vw - 32px)); max-height:none; animation:kcIn .14s ease-out; }
   #kConfirm .kconfirm .body { padding:16px 16px 2px; flex:none; overflow:visible; }
   #kConfirm .kcmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
@@ -1187,6 +1220,14 @@
   #sbGrip:hover, #sbGrip.dragging { background:var(--asi-blue-glow); }
   #sidebar.resizing { transition:none; }
   body.sb-collapsed #sbGrip { display:none; }
+  /* 0.21.65: the expand / collapse tab, straddling the rail's right edge (above the resize grip) */
+  .sbedge { position:absolute; top:50%; right:-9px; transform:translateY(-50%); z-index:68; width:17px; height:42px; padding:0; margin:0;
+    display:flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+    color:var(--text-mute); cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.25); }
+  .sbedge:hover { color:var(--text); border-color:var(--asi-blue-dim); background:var(--surface-2); }
+  .sbedge:focus-visible { outline:2px solid var(--asi-blue); outline-offset:1px; }
+  .sbedge .icon { width:14px; height:14px; transition:transform .15s ease; }
+  .sbedge.closed .icon { transform:rotate(180deg); }
   @media (max-width: 720px), (max-height: 500px) { #sbGrip { display:none; } }   /* 0.21.5: landscape phones too (it was visible but dead there) */
   .sbcard .sbrow { display:flex; align-items:center; gap:7px; min-width:0; }
   .sbcard .sbx { margin-left:auto; flex:none; background:transparent; border:0; color:var(--text-mute); cursor:pointer; font-size:11px; padding:0 4px; height:auto; visibility:hidden; }   /* 0.21.2 */
@@ -1598,6 +1639,8 @@
     #sidebar, body.sb-collapsed #sidebar { position:fixed; left:0; top:0; bottom:0; width:min(82vw, 300px); margin:0; padding:max(10px, env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));   /* 0.21.60: + the status bar of a full-screen web app */
       background:var(--surface); border-right:1px solid var(--line); z-index:82; transform:translateX(calc(-100% - 2px)); transition:transform .18s ease; }
     body.sb-open #sidebar { transform:none; }
+    /* 0.21.65: the edge tab is the drawer's handle -- it sticks out at the screen's left edge while the drawer is shut */
+    .sbedge { right:-27px; width:26px; height:52px; border-radius:0 10px 10px 0; border-left:0; opacity:.92; }
     body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
     body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
     body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
@@ -1641,7 +1684,7 @@
 <body class="asi">
 <main class="asi-page">
 <!-- 0.12.0: Discord-style rooms sidebar (rooms with members, speaking icons,
-     occupancy timers); the &#9776; expands/collapses it. Above the gate scrim so
+     occupancy timers); the tab on its edge (#sbEdge, 0.21.65) expands/collapses it. Above the gate scrim so
      it works before joining. -->
 <div id="sbScrim"></div>
 <aside id="sidebar">
@@ -1649,11 +1692,14 @@
   <div id="sbRooms" class="sbrooms"></div>
   <div id="sbFormHome"><div id="sbForm" hidden></div></div>
   <div id="sbGrip" title="Drag to resize"></div>
+  <!-- 0.21.65 (Kenton: "update the hamburger menu icon to be a expand/collapse icon and put it on the edge of the room
+       sidebar window"): the tab on the rail's right edge; on phones it is the drawer's handle at the screen's left edge -->
+  <button type="button" id="sbEdge" class="sbedge" title="Collapse rooms" aria-label="Collapse rooms" aria-controls="sidebar" aria-expanded="true"></button>
   <div class="sbfoot"><button id="sbCreate" type="button" class="sbbtn" title="Create a room"><span class="pl">+</span><span class="txt"> Create room</span></button></div>
 </aside>
 <div id="pagecol">
 <div id="topbar">
-  <button id="roomsBtn" class="toggle ibtn" type="button" title="Rooms &mdash; show or hide the list">&#9776;</button>
+  <!-- 0.21.65: the rooms list opens and closes from the tab on its own edge (#sbEdge); the topbar's ☰ is gone -->
   <!-- 0.12.0: the current room is a BANNER (name, people, occupancy timer, lock, kept, role) -->
   <button id="roomBanner" class="free" type="button" title="Join a room">Join a room&hellip;</button>
   <span class="sp"></span>
@@ -1794,6 +1840,10 @@
         <button id="srcWindowBtn" type="button" title="Share one window">
           <span class="ico">&#10064;</span>Window</button>
       </div>
+      <!-- 0.21.65 (Kenton: "use multiple webcams on a computer at the same time in the sharing menu"): each webcam on this
+           computer is shared as a SHARED CAMERA (device://video/<id>, its own tile named after the webcam, kept after a restart) -->
+      <h2 id="shCamHead">Webcam</h2>
+      <div class="camlist" id="shWebcams"><p class="hint" style="margin:0">Looking for cameras&hellip;</p></div>
       <h2 id="shWinHead" hidden role="button" tabindex="0" title="Show or hide the windows"><span class="caret">&#9656;</span> Window (<span id="shWinCount">0</span>)</h2>
       <div class="thgrid" id="shWindows" hidden></div>
       <h2 id="shTabHead" hidden role="button" tabindex="0" title="Show or hide the browser tabs"><span class="caret">&#9656;</span> Tab (<span id="shTabCount">0</span>)</h2>
@@ -1981,7 +2031,8 @@
     <details><summary>The screen</summary>
       <ul>
         <li><b>Toolbar:</b> People (who is here), View (gallery or one big picture), Chat, More (record, room info, your profile, deafen, this help), Camera, Mic, Share, Leave. The small arrows beside Camera and Mic choose the device and effects.</li>
-        <li><b>Rooms list</b> on the left (the &#9776; button on a phone): every room on this relay, who is in it, and how long it has been going.</li>
+        <li><b>Rooms list</b> on the left (the arrow tab on its edge opens and closes it; on a phone, the tab at the left edge of the screen): every room on this relay, who is in it, and how long it has been going.</li>
+        <li><b>Room settings&hellip;</b> (right-click a room; its creator or an admin): lock it or change its code, keep it open, rename it (everyone in it moves along), put it in a group, or <b>Lock the view</b> so only the creator or an admin can spotlight, pin or arrange for everyone.</li>
         <li><b>Stage:</b> the gallery shows everyone at the same size; speaker view shows one source big with the others in a strip beside it (underneath on a phone).</li>
         <li>The <b>Relay</b> button at the top right shows whether the relay is healthy. The chevron next to it hides the top bar; the thin strip at the top brings it back.</li>
       </ul>
@@ -2063,6 +2114,8 @@
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
     <!-- 0.21.41 (Kenton: "share from 1 device to multiple rooms ... a room selection on the share after toggling the feature on") -->
     <button class="opt" id="optDeafen" type="button" title="Turn off all sound from the room and mute your microphone (D)"><span class="oi">&#127911;</span>Deafen<span class="chk">&#10003;</span></button>
+    <!-- 0.21.65 (Kenton: "toggle on/off the notification when clicking between rooms. Default should be on"): this device only -->
+    <button class="opt on" id="optAskRoom" type="button" role="switch" aria-checked="true" title="Ask &ldquo;Leave this room and join that one?&rdquo; when you click another room in the rooms list (a locked room always asks for its code)"><span class="oi">&#8644;</span>Ask before changing rooms<span class="chk">&#10003;</span></button>
     <!-- 0.21.23 (Kenton): Files, Chat, Video effects and Audio settings left More -- they live on the toolbar and under
          the camera / mic chevrons. Files stays for phones only, whose toolbar has no Files button. -->
     <button class="opt phoneonly" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
@@ -2621,6 +2674,7 @@
   // string can be stamped into innerHTML any number of times.
   const ICONS = {
     plusc: '<circle cx="10" cy="10" r="7.6"/><path d="M10 6.6v6.8M6.6 10h6.8"/>',   // 0.21.41: create a room
+    sbChev: '<path d="M12.5 4.5 7 10l5.5 5.5"/>',   // 0.21.65: the rooms rail's edge tab (left = collapse; turned for expand)
     earOff: '<path d="M4 12.5V10a6 6 0 0 1 12 0v2.5"/><rect x="2.8" y="11.5" width="3.6" height="5.7" rx="1.2"/><rect x="13.6" y="11.5" width="3.6" height="5.7" rx="1.2"/><path d="M2.5 2.5l15 15"/>',   // 0.21.40: deafened
     bcast: '<circle cx="10" cy="10" r="1.9"/><path d="M6.8 6.6a4.8 4.8 0 0 0 0 6.8M13.2 6.6a4.8 4.8 0 0 1 0 6.8M4.3 4.1a8.4 8.4 0 0 0 0 11.8M15.7 4.1a8.4 8.4 0 0 1 0 11.8"/>',   // 0.21.22: publishing
     eye: '<path d="M1.5 10S4.6 4.5 10 4.5 18.5 10 18.5 10 15.4 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.6"/>',   // 0.21.19: view only
@@ -3439,21 +3493,46 @@
   // GET / POST /api/rooms/board at my relay's minter (a spoke forwards to the hub). Fetched with the xshare poll (8 s) and on
   // join. A pinned feed from another room arrives as an xshare listing (xsPoll makes it a tile); the board's spotlights count
   // as votes of their own in spotSetNow (spotVotes key "~board", by "room") and go only when removed from the board.
-  const board = { room: "", pins: [], spots: [], grids: {}, split: [], ver: null, at: 0 };   // 0.21.64: + grids -- the room's own camera-grid layouts; 0.21.65: + split
+  const board = { room: "", pins: [], spots: [], grids: {}, split: [], ver: null, at: 0, lock: false };   // 0.21.64: + grids -- the room's own camera-grid layouts; 0.21.65: + split, + lock (the view is locked)
   const roomHid = new Set();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
   const boardCan = () => joinState === "joined" && !publishOnly && !isPublisherMode() && !isViewerMode() && CHANNEL !== LOBBY && !!authBase()
-    && (!authSecured || (authRole !== "viewer" && !!authTokens?.member));
+    && (!authSecured || (authRole !== "viewer" && !!authTokens?.member)) && !viewLockedForMe();   // 0.21.65 (m): a locked view -- only its creator or an admin
+  // 0.21.65 (m) (Kenton: "Ability to lock the view in a room so only an admin/creator can spotlight/change anything" ... "Instead
+  // of just ignoring other users, hide the options in the locked room"): the room's view lock (Room settings) rides the board
+  // (`lock`, polled every 8 s) and the room list. While it is on, everyone but the creator (roomKey) / an admin / the relay
+  // operator sees no "for everyone" item (spotlight, pin to this room, arrange for everyone, remove / split out), and every
+  // page counts only the BOARD's spotlights (members' own votes are ignored -- an older page could still cast one).
+  function viewLocked() {
+    try {   // (spotSetNow runs while the module is still loading -- joinState / roomsMinter may not exist yet)
+      if (joinState !== "joined" || CHANNEL === LOBBY) return false;
+      if (board.room === CHANNEL) return !!board.lock;
+      return !!roomsMinter.get(CHANNEL)?.viewLock;
+    } catch { return false; }
+  }
+  function viewBoss() {
+    if (authSecured && authRole === "admin") return true;
+    try { if (isRelayOperator()) return true; } catch {}
+    return !!myChannels().find((r) => r.slug === CHANNEL)?.roomKey;
+  }
+  function viewLockedForMe() { return viewLocked() && !viewBoss(); }
+  window.__viewLockedForMe = viewLockedForMe;   // module 2 (its grid and spotlight menus) + rig
+  window.__viewLock = { locked: viewLocked, boss: viewBoss, why: () => ({ admin: authSecured && authRole === "admin", role: authRole, operator: (() => { try { return isRelayOperator(); } catch { return null; } })(), key: !!myChannels().find((r) => r.slug === CHANNEL)?.roomKey }) };   // rig
   const boardPinned = (path) => board.room === CHANNEL && board.pins.some((p) => p.path === String(path));
   const boardSig = (pins, spots, grids, split) => JSON.stringify([pins.map((p) => p.path), spots.map((s) => s.target + "@" + s.ts), grids || {}, split || []]);
   function boardVotes() {   // the board's spotlights as one vote set of the room
     const list = board.room === CHANNEL ? board.spots.map((s) => ({ ts: Number(s.ts) || 0, target: String(s.target), by: "room" })) : [];
     if (list.length) spotVotes.set("~board", list); else spotVotes.delete("~board");
   }
-  function boardReset() { board.room = ""; board.pins = []; board.spots = []; board.grids = {}; board.split = []; board.ver = null; board.at = 0; spotVotes.delete("~board"); try { roomGridChanged(); } catch {} }
+  function boardReset() { board.room = ""; board.pins = []; board.spots = []; board.grids = {}; board.split = []; board.ver = null; board.at = 0; board.lock = false; spotVotes.delete("~board"); try { roomGridChanged(); } catch {} }
   let boardGen = 0, boardTaken = 0;   // every write and poll carries a generation; an older answer never replaces a newer one
   function boardTake(d, gen) {   // a GET / POST reply -> my copy; a change re-applies the spotlight and the pin badges
-    if (!d || !d.ok || d.room !== CHANNEL || gen < boardTaken) return;
+    if (d && d.ok && d.room === CHANNEL && d.renamed) { roomRenamedFollow(CHANNEL, String(d.renamed)); return; }   // 0.21.65: my room has a new name
+    if (d && d.ok && d.room === CHANNEL && !!d.lock !== !!board.lock && gen >= boardTaken) {   // 0.21.65 (m): the view lock changed
+      board.lock = !!d.lock;
+      if (board.room !== CHANNEL) board.room = CHANNEL;
+      try { paintChannelChip(); spotApplyWinner(); applyState(); } catch {}
+    }
     boardTaken = gen;
     const pins = (Array.isArray(d.pins) ? d.pins : []).filter((p) => p && p.path);
     const spots = (Array.isArray(d.spots) ? d.spots : []).filter((s) => s && s.target);
@@ -3495,8 +3574,9 @@
     const gen = ++boardGen;
     let d = null, status = 0;
     try {
+      const roomKey = myChannels().find((r) => r.slug === room)?.roomKey || undefined;   // 0.21.65 (m): the creator changes a locked view
       const r = await fetch(base + "/api/rooms/board", { method: "POST", headers,
-        body: JSON.stringify({ room, op, by: window.__publisher?.state?.()?.operator || "", ...body }) });
+        body: JSON.stringify({ room, op, by: window.__publisher?.state?.()?.operator || "", roomKey, ...body }) });
       status = r.status;
       d = await r.json().catch(() => ({}));
     } catch (e) { d = { ok: false, error: String(e?.message || e) }; }
@@ -3522,7 +3602,7 @@
       return !!d?.ok;
     }
     const body = { path, from, label, kind: xsKindOf(path) };
-    if (from !== CHANNEL && authSecured) {
+    if (from !== CHANNEL && authSecured) {   // (0.21.65: boardPost adds my roomKey -- a locked view takes the creator's)
       try { body.tokens = { [from]: await boardFromToken(from) }; }
       catch (e) {
         if (!quiet) window.__toast?.("Could not pin it to " + roomTitle(CHANNEL) + ": " + from + " \u2014 " + (e?.message || e), 6000, { level: "warn" });
@@ -3984,6 +4064,7 @@
     else if (v === "unwatch") { wrRemove(rec.slug); window.__toast?.("Stopped watching " + rec.slug, 2500, { level: "event" }); }
     else if (v === "sound") wrSetSound(rec.slug, !watchRooms.get(rec.slug)?.sound);
     else if (v === "join") sbCardClick(card, rec);
+    else if (v === "rsettings") openRoomSettings(rec);   // 0.21.65
   }
   setInterval(() => {   // fresh tokens 10 min before expiry (live sessions ride out the old one; re-armed tiles take the new)
     if (!authSecured || joinState !== "joined") return;
@@ -4158,6 +4239,20 @@
   }
   paintHidRow();
   document.getElementById("optDeafen").addEventListener("click", () => { closeAllPops(); setDeafen(!deafened); });
+  // 0.21.65: "Ask before changing rooms" (default ON, per device). Off: a room card click switches at once (sbCardClick);
+  // a locked room still asks for its code
+  window.askBeforeRoomSwitch = () => { try { return localStorage.getItem("kastr.askRoomSwitch") !== "off"; } catch { return true; } };
+  {
+    const b = document.getElementById("optAskRoom");
+    const paint = () => { const on = askBeforeRoomSwitch(); b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false"); };
+    b.addEventListener("click", () => {
+      const on = !askBeforeRoomSwitch();
+      try { localStorage.setItem("kastr.askRoomSwitch", on ? "on" : "off"); } catch {}
+      paint();
+      window.__toast?.(on ? "KASTR asks before changing rooms." : "Clicking a room changes rooms at once (a locked room still asks for its code).", 3000, { level: "info" });
+    });
+    paint();
+  }
   topMicBtn.addEventListener("click", () => {
     if (deafened) { const wasOn = deafMicWas; setDeafen(false); if (wasOn) return; }   // 0.21.40: unmuting the mic undeafens
     const { src } = localCamSrc();
@@ -5175,6 +5270,14 @@
     out.sort((a, b) => (b.me - a.me) || a.name.localeCompare(b.name));
     return out;
   }
+  // 0.21.65 (Kenton: "Viewers on the left people rail have ellipsis next to their name, but don't give any menu when clicked"):
+  // a person has a menu when something of theirs is a tile here (its own menu), or I am an admin (Remove ... from the room)
+  function participantHasMenu(p) {
+    if (!p || p.me) return false;
+    const tileName = p.cam || p.content[0];
+    if (tileName && tiles.get(tileName)?.pane?.__openMenu) return true;
+    return !!(p.viewer && authRole === "admin");
+  }
   function participantMenu(p, anchor) {
     const tileName = p.cam || p.content[0];
     const pane = tileName ? tiles.get(tileName)?.pane : null;
@@ -5221,7 +5324,7 @@
       nm.append(pn, ps);
       row.append(av, nm);
       row.title = p.name + (p.role ? " \u2014 " + p.role : "");
-      const hasMenu = !p.me && (p.cam || p.content.length || (p.viewer && authRole === "admin"));
+      const hasMenu = !p.me && participantHasMenu(p);   // 0.21.65: only when participantMenu has something to open
       if (hasMenu) {
         const more = document.createElement("button"); more.type = "button"; more.className = "ppmore"; more.title = "More options";
         more.innerHTML = icon("more");
@@ -6179,6 +6282,7 @@
     pane.addEventListener("pointercancel", end);
     pane.addEventListener("dblclick", (e) => {
       const c = canvasOf();
+      clearTimeout(pane.__clickT); pane.__clickT = null;   // 0.21.65: the click that began this double-click does nothing
       if (!c || !allow() || e.target.closest("button, input")) return;
       e.preventDefault();
       if (viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); } else viewZoomAt(c, 2, e.clientX, e.clientY);   // 0.21.15: un-zooming abandons a cold open
@@ -7239,8 +7343,10 @@
           const rn = t.row?.querySelector(".name"); if (rn) rn.textContent = gl || shortLabel(name);
         }
       }
-      // 0.8.12: the stage canvas of a share can be zoomed; a feed behind a grid says so
-      t.pane.classList.toggle("zoomable", shown && isSelected && !gridMode && isContentPath(name) && !selfSpotEl);
+      // 0.8.12: the stage canvas of a share can be zoomed; a feed behind a grid says so. 0.21.65 (Kenton: "I would like to be
+      // able to zoom in on a shared camera"): ANY video on the main stage zooms -- people's cameras too (wheel, pinch, + / -,
+      // double-click 2x); the zoom resets when the tile leaves the stage (viewPrune)
+      t.pane.classList.toggle("zoomable", shown && isSelected && !gridMode && !selfSpotEl);
       const feedview = shown && isSelected && !gridMode && isGridChild(name) && !selfSpotEl;
       t.pane.classList.toggle("feedview", feedview);
       if (feedview) {
@@ -7990,7 +8096,7 @@
           tip: pinned ? "Take it off your stage" : "Add it to your stage (only you; up to " + PIN_MAX + ")" });
         const wrSrc = wrRoomOf(name);   // 0.21.49: a watched source can be brought in -- a locked room's only by an admin
         const wrBring = !!wrSrc && (authRole === "admin" || !(lastChannelList || []).find((r) => r.slug === wrSrc)?.locked);
-        if (!wrSrc || wrBring) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all"), icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44 / 0.21.49
+        if ((!wrSrc || wrBring) && !viewLockedForMe()) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all"), icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone",   // 0.21.44 / 0.21.49; 0.21.65 (m): hidden in a locked view
           tip: lit ? "Everyone goes back to their own view" : "Put this on everyone's stage" });
         if (boardCan() && (!wrSrc || wrBring)) {   // 0.21.63: the room board -- listed here for everyone until someone unpins it
           const rp = boardPinned(name);
@@ -8136,31 +8242,43 @@
       // 0.21.20: a click while the opened camera starts never cancels it -- an impatient second click restarted the cold
       // subscription from zero on slow links (Kenton: the web client 'fails to consistently open'); Back / Esc leave
       if (gridOpen && gridOpen.gp === name) { gridOpen.clicks = (gridOpen.clicks || 0) + 1; paintGridWait(); return; }
-      // zoomed in (wheel or cell): a click shows all again
-      if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape (0.21.15: a click on the waiting cell abandons the open)
-      // 0.8.12: a full-quality feed on the stage -- click returns to its grid
-      const gp = gridOwnerOf(name);   // 0.21.65: not a camera split out in this room
-      if (gp && tiles.has(gp)) { select(gp); return; }
-      // 0.8.8: the main tile is a remote RTSP grid -- click a cell to expand
-      // it (0.8.12: the REAL feed at full quality when the owner publishes
-      // it; the composite cell otherwise). Back to the gallery via the pill.
-      const meta = gridMeta.get(name);
-      if (meta && meta.n > 1 && tile.canvas.width > 300) {
-        const idx = gridCellAtW(tile, meta, e);
-        if (idx >= 0) {
-          const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
-          if (fp && tiles.has(fp)) {   // 0.21.7: a tile on the low copy opens at once; the full pair is asked for right now
-            if (!fullLive.has(fp) && (odFeeds.some((f) => f.broadcast === fp) || lowAvail.has(fp))) odWake(fp);
-            if (gridOpenStart(name, idx, fp)) return;   // 0.21.15 (7b): no picture yet -> the composite cell zoomed, the camera decodes off-stage, swap on its first frame
-            select(fp); return;
-          }
-          if (fp && gridWakeStart(name, idx, fp)) return;   // 0.21.2: an on-demand or down feed: wake it, open it when it is up
-          gridZoom = { name, idx }; fitMainstage(lastRail.rows); paintGridZoom(); return;   // 0.9.8: the stage takes the cell's shape
-        }
+      // 0.21.65: a zoomable stage tile that is not a grid (a person's camera, a share) waits a moment before acting on a
+      // click: a double-click toggles 2x there (the first click used to send the stage back to the gallery). A grid's
+      // cells still open on one click.
+      if (pane.classList.contains("zoomable") && !gridMeta.has(name)) {
+        if (e.detail >= 2) return;   // the second click of a double-click -- the dblclick handler zooms
+        clearTimeout(pane.__clickT);
+        pane.__clickT = setTimeout(() => { pane.__clickT = null; if (!gridMode && name === selectedName) stageClickRest(e); }, 260);
+        return;
       }
-      gridMode = true; applyState();
+      stageClickRest(e);
     });
-    armView(pane, () => tile.canvas, () => !gridMode && name === selectedName && !selfSpotEl && isContentPath(name) && pane.classList.contains("mainstage"));   // 0.8.12
+    function stageClickRest(e) {
+        // zoomed in (wheel or cell): a click shows all again
+        if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape (0.21.15: a click on the waiting cell abandons the open)
+        // 0.8.12: a full-quality feed on the stage -- click returns to its grid
+        const gp = gridOwnerOf(name);   // 0.21.65: not a camera split out in this room
+        if (gp && tiles.has(gp)) { select(gp); return; }
+        // 0.8.8: the main tile is a remote RTSP grid -- click a cell to expand
+        // it (0.8.12: the REAL feed at full quality when the owner publishes
+        // it; the composite cell otherwise). Back to the gallery via the pill.
+        const meta = gridMeta.get(name);
+        if (meta && meta.n > 1 && tile.canvas.width > 300) {
+          const idx = gridCellAtW(tile, meta, e);
+          if (idx >= 0) {
+            const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
+            if (fp && tiles.has(fp)) {   // 0.21.7: a tile on the low copy opens at once; the full pair is asked for right now
+              if (!fullLive.has(fp) && (odFeeds.some((f) => f.broadcast === fp) || lowAvail.has(fp))) odWake(fp);
+              if (gridOpenStart(name, idx, fp)) return;   // 0.21.15 (7b): no picture yet -> the composite cell zoomed, the camera decodes off-stage, swap on its first frame
+              select(fp); return;
+            }
+            if (fp && gridWakeStart(name, idx, fp)) return;   // 0.21.2: an on-demand or down feed: wake it, open it when it is up
+            gridZoom = { name, idx }; fitMainstage(lastRail.rows); paintGridZoom(); return;   // 0.9.8: the stage takes the cell's shape
+          }
+        }
+        gridMode = true; applyState();
+    }
+    armView(pane, () => tile.canvas, () => !gridMode && name === selectedName && !selfSpotEl && pane.classList.contains("mainstage"));   // 0.8.12; 0.21.65: people's cameras too
     pane.addEventListener("pointerdown", (e) => {
       if (!gridMode || e.button !== 0
           || e.target.closest("button")) return;
@@ -8445,6 +8563,7 @@
   window.__roomsPresDbg = () => [...roomsPres.values()].map((p) => ({ slug: p.slug, op: p.who?.op, mode: p.who?.mode, state: !!p.state, gone: !!p.goneAt, video: p.who?.video, pub: (p.who?.publishing || []).length, rtsp: (p.who?.rtspPaths || []).length }));   // rig (0.21.36)
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
+  let roomsRenamed = {};         // 0.21.65: old slug -> new slug (Room settings > Rename)
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
   let roomsSlugsSeen = "", roomsMinterAt = 0;
   let roomsChangedT = null;
@@ -8649,9 +8768,23 @@
       const slug = channelSlug(String(r?.slug || ""));
       if (!slug || !ROOM_RE.test(slug) || slug === "main") continue;
       roomsMinter.set(slug, { slug, locked: r.locked !== false && (r.locked === true || r.persistent !== true),
-                              persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0 });
+                              persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0,
+                              viewLock: !!r.viewLock, keptBy: r.keptBy || "" });   // 0.21.65: + the view lock, kept by the board
     }
     roomsClosed = got.closed && typeof got.closed === "object" ? got.closed : {};
+    // 0.21.65: renamed rooms {old: new} -- I follow my room's new name; my shares listed into an old name follow it too
+    roomsRenamed = got.renamed && typeof got.renamed === "object" ? got.renamed : {};
+    if (joinState === "joined" && roomsRenamed[CHANNEL]) roomRenamedFollow(CHANNEL, String(roomsRenamed[CHANNEL]));
+    try {
+      for (const [old, to] of Object.entries(roomsRenamed)) {
+        for (const [path, x] of xsMine) {
+          if (!x.rooms.has(old) || x.rooms.has(to) || to === CHANNEL) continue;
+          x.rooms.delete(old); delete x.tokens[old]; x.rooms.add(to);
+          xsSave(path, [...x.rooms]);
+          xsTokenFor(to, xsCodes[old] || "").then((t) => { x.tokens[to] = t; xsPost(path); }).catch(() => { x.rooms.delete(to); xsSave(path, [...x.rooms]); });
+        }
+      }
+    } catch {}
     roomsGroups = got.groups && typeof got.groups === "object" ? got.groups : {};   // 0.15.0 (B4)
     roomsGroupsAt = Date.now();
     roomsChanged();
@@ -9084,14 +9217,17 @@
       const c = add.get(v.target);
       if (!c || ts > c.ts) add.set(String(v.target), { target: String(v.target), ts, by });
     };
-    for (const [k, arr] of spotVotes) for (const v of arr) addV(v, v.by || k);
+    // 0.21.65 (m): a locked view counts the BOARD's spotlights only (the creator's / an admin's own votes too: they also go to
+    // the board) -- a member's vote, the share owner's mirror and the legacy announce are ignored
+    const vl = viewLocked(), vb = vl && viewBoss();
+    for (const [k, arr] of spotVotes) { if (vl && k !== "~board") continue; for (const v of arr) addV(v, v.by || k); }
     let mine = [];
-    try { mine = window.__spot?.mineList?.() || []; } catch {}
+    try { if (!vl || vb) mine = window.__spot?.mineList?.() || []; } catch {}
     for (const v of mine) addV(v, "me");
     const offV = (o) => { if (o && o.target) off.set(String(o.target), Math.max(off.get(String(o.target)) || 0, Number(o.ts) || 0)); };
-    for (const arr of spotOffs.values()) for (const o of arr) offV(o);
+    if (!vl) for (const arr of spotOffs.values()) for (const o of arr) offV(o);
     let mineOff = [];
-    try { mineOff = window.__spot?.mineOffs?.() || []; } catch {}
+    try { if (!vl || vb) mineOff = window.__spot?.mineOffs?.() || []; } catch {}
     for (const o of mineOff) offV(o);
     return [...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts);
   }
@@ -9224,11 +9360,11 @@
     }
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     const ownLit = window.__spotIs?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.30: already spotlit -> offer to remove it
-    const spotItem = ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };
+    const spotItem = viewLockedForMe() ? null : ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };   // 0.21.65 (m): none in a locked view
     if (ref.kind === "camera") {   // 0.16.0: my own camera can be spotlit like any tile
       items.push({ value: "me", label: "Pin for me" });   // 0.21.23: Teams names
-      items.push(spotItem);
-    } else if (ownLit || contentTally() > 1 || ref.id <= -100) items.push(spotItem);   // 0.15.0: a grid may always be spotlit
+      if (spotItem) items.push(spotItem);
+    } else if (spotItem && (ownLit || contentTally() > 1 || ref.id <= -100)) items.push(spotItem);   // 0.15.0: a grid may always be spotlit
     openMineMenu(anchor, items, "", (v) => {
       if (v === "me") {   // 0.16.0: my own tile takes the stage for me
         const pane = anchor.closest?.(".pubpane");
@@ -10306,6 +10442,17 @@
       btn.type = "button"; btn.className = "toggle"; btn.textContent = "Close room\u2026";
       btn.title = "Close this room for everyone: its chat history and attachments are deleted";
       btn.addEventListener("click", () => { try { window.__chatCloseRoom?.(c, mine.roomKey); } catch {} });
+      d.appendChild(btn);
+      body.append(b, d);
+    }
+    // 0.21.65: Room settings (lock, keep open, rename, group, lock the view) -- the room's creator or an admin
+    if (joined && c !== "main" && roomSettingsRole(rec || { slug: c })) {
+      const b = document.createElement("b"); b.textContent = "Settings";
+      const d = document.createElement("span");
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "toggle"; btn.textContent = "Room settings\u2026";
+      btn.title = "Lock, keep open, rename, group or lock the view of this room";
+      btn.addEventListener("click", () => { try { closeAllPops(); } catch {} openRoomSettings(rec || { slug: c }); });
       d.appendChild(btn);
       body.append(b, d);
     }
@@ -12704,6 +12851,11 @@
     const role = authSecured ? authRole : "";
     const spk = document.createElement("span"); spk.className = "spk" + (ownRoomTalking() ? " on" : ""); spk.innerHTML = icon("spk"); spk.title = "Someone is speaking";
     b.replaceChildren(el("rbname", roomTitle(c)), spk);
+    if (viewLocked()) {   // 0.21.65 (m): the view is locked
+      const vl = document.createElement("span"); vl.className = "rbvl"; vl.innerHTML = icon("lock") + "View locked";
+      vl.title = viewBoss() ? "The view is locked \u2014 only you (the room\u2019s creator or an admin) can spotlight, pin or arrange for everyone" : "The view is locked by the room\u2019s creator or an admin";
+      b.appendChild(vl);
+    }
     b.title = (c === LOBBY ? "The Lobby" : "Room " + c) + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
       + (roomSince ? ", occupied for " + fmtHms(Date.now() - roomSince) : "") + (rec?.locked ? ", locked" : "") + (rec?.persistent ? ", kept" : "")
       + (role ? ", " + role : "") + "\nClick for room info";
@@ -12737,6 +12889,24 @@
     try { queueRelayout(); } catch {}
   }
   try { if (isPhone() || localStorage.getItem("kastr.sidebar") !== "1") document.body.classList.add("sb-collapsed"); } catch {}   // 0.13.0 (F3): collapsed by default (the boot script already did this; idempotent); 0.21.5: phones always
+  // 0.21.65: the edge tab -- a chevron pointing left while the list is open (collapse), right while it is shut (expand).
+  // It follows every way the list opens or shuts (the tab, the scrim, a card click on a phone, a form opening the rail).
+  {
+    const edge = document.getElementById("sbEdge");
+    if (edge) {
+      edge.innerHTML = icon("sbChev");
+      const paint = () => {
+        const open = isPhone() ? document.body.classList.contains("sb-open") : !sbCollapsed();
+        const t = open ? "Collapse rooms" : "Expand rooms";
+        edge.classList.toggle("closed", !open);
+        edge.title = t; edge.setAttribute("aria-label", t); edge.setAttribute("aria-expanded", open ? "true" : "false");
+      };
+      edge.addEventListener("click", (e) => { e.stopPropagation(); sbToggle(); paint(); });
+      try { new MutationObserver(paint).observe(document.body, { attributes: true, attributeFilter: ["class"] }); } catch {}
+      try { matchMedia("(max-width: 720px), (max-height: 500px)").addEventListener("change", paint); } catch {}
+      paint();
+    }
+  }
   document.getElementById("sbScrim")?.addEventListener("click", () => document.body.classList.remove("sb-open"));
   function sbFormClose() {
     if (!sbFormEl) return;
@@ -12791,6 +12961,7 @@
       if (e.target.closest("#sbForm") || e.shiftKey) return;
       const r = card.__rec || rec;
       const items = wrCardItems(r);
+      if (roomSettingsRole(r)) items.push(...(items.length ? [{ sep: true }] : []), { value: "rsettings", icon: "lock", label: "Room settings\u2026", tip: "Lock, keep open, rename, group, lock the view (the room\u2019s creator or an admin)" });   // 0.21.65
       if (!items.length) return;
       e.preventDefault(); e.stopPropagation();
       openMineMenu(pointAnchor(e.clientX, e.clientY), items, "", (v) => wrCardPick(card, r, v));
@@ -12804,6 +12975,161 @@
     if (myChannels().find((r) => r.slug === rec.slug)?.roomKey) return true;
     return authSecured && authRole === "admin";
   }
+  // ---- 0.21.65 (Kenton: "Ability to change room settings after the fact. Only for admin or creator. Right click menu."): a room
+  // card's right-click (and Room info) opens Room settings for the room's creator (this device holds its roomKey, or the record's
+  // creator is my name), an admin (admin code) or the relay operator. Each control applies at once: POST /api/rooms/settings at
+  // the relay host's KASTR (a spoke forwards to the hub, which owns rooms). Lock / change the code / unlock, Keep this room open
+  // (off also releases a room kept only because of its pins), Rename (people in it follow; chat, board, group move along),
+  // Group, Lock the view (m). The Lobby has none.
+  function roomSettingsRole(rec) {
+    if (!rec || !rec.slug || rec.slug === LOBBY) return "";
+    if (myChannels().find((r) => r.slug === rec.slug)?.roomKey) return "creator";
+    if (authSecured && authRole === "admin") return "admin";
+    try { if (isRelayOperator()) return "operator"; } catch {}
+    const me = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim().toLowerCase();
+    const op = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    const cr = String(rec.creator || roomsMinter.get(rec.slug)?.creator || "").trim().toLowerCase();
+    return cr && (cr === me || cr === op) ? "named" : "";
+  }
+  let rsEl = null, rsSlug = "";
+  async function rsPost(body) {
+    const base = relayHostBase() || chatBase();
+    if (!base) return { ok: false, error: "No relay host to talk to." };
+    const headers = { "content-type": "application/json" };
+    if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;   // an admin proves it with the member token
+    const roomKey = myChannels().find((r) => r.slug === body.slug)?.roomKey || undefined;
+    try {
+      const r = await fetch(base + "/api/rooms/settings", { method: "POST", headers, body: JSON.stringify({ ...body, roomKey }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 && !d.error) return { ok: false, error: "This relay\u2019s KASTR is older than 0.21.65 (no room settings) \u2014 update the hub first." };
+      return r.ok ? { ...d, ok: true } : { ok: false, error: d.error || ("HTTP " + r.status) };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  function rsMyRec(slug, patch) {   // my remembered record follows what the room now is (its next heartbeat says the same)
+    try {
+      const list = myChannels();
+      const i = list.findIndex((r) => r.slug === slug);
+      if (i < 0) return;
+      list[i] = { ...list[i], ...patch };
+      localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list));
+    } catch {}
+  }
+  function rsBuild() {
+    const el = document.createElement("div"); el.id = "kRoomSet"; el.hidden = true;
+    el.innerHTML = '<div class="popcard rsdlg" role="dialog" aria-modal="true" aria-labelledby="rsTitle">'
+      + '<div class="head"><span id="rsTitle">Room settings</span><span class="sp"></span><button type="button" class="close" title="Close">\u2715</button></div>'
+      + '<div class="body">'
+      + '<p class="rsnote" hidden></p>'
+      + '<div class="rsrow"><span class="lbl">Name</span><div class="rsf"><input class="rsname" type="text" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Room name"><button type="button" class="rsren">Rename</button></div>'
+      + '<p class="rshint">Everyone in the room moves to the new name. Its chat, pins, spotlights, grid layouts and group go with it.</p></div>'
+      + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rslock"><i></i></span><span>Locked with a code</span></label>'
+      + '<div class="rsf rscodef" hidden><input class="rscode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Room code"><button type="button" class="rscodeb">Lock</button></div></div>'
+      + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rskeep"><i></i></span><span>Keep this room open</span></label>'
+      + '<p class="rshint rskeephint"></p></div>'
+      + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rsview"><i></i></span><span>Lock the view</span></label>'
+      + '<p class="rshint">Only the room\u2019s creator or an admin can spotlight, pin or arrange things for everyone. Everyone can still pin, arrange, mute and zoom for themselves.</p></div>'
+      + '<div class="rsrow"><span class="lbl">Group</span><div class="rsf"><select class="rsgroup" aria-label="Room group"></select></div></div>'
+      + '<p class="rsmsg" role="status"></p></div>'
+      + '<div class="kcbtns"><button type="button" class="ghost rsclose">Close</button></div></div>';
+    document.body.appendChild(el);
+    const q = (s) => el.querySelector(s);
+    const close = () => { el.hidden = true; rsSlug = ""; document.removeEventListener("keydown", el.__key, true); };
+    el.__close = close;
+    el.__key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } else if (e.key !== "Tab") e.stopPropagation(); };
+    q(".close").onclick = close; q(".rsclose").onclick = close;
+    el.addEventListener("click", (e) => { if (e.target === el) close(); });
+    const say = (t, bad) => { const m = q(".rsmsg"); m.textContent = t || ""; m.classList.toggle("err", !!bad); };
+    el.__say = say;
+    const run = async (body, okText, after) => {
+      const slug = rsSlug;
+      if (!slug) return null;
+      say("Saving\u2026");
+      for (const x of el.querySelectorAll("input, select, button.rsren, button.rscodeb")) x.disabled = true;
+      const d = await rsPost({ slug, ...body });
+      for (const x of el.querySelectorAll("input, select, button.rsren, button.rscodeb")) x.disabled = false;
+      if (!d.ok) { say(d.error, true); rsPaint(); return null; }
+      say(okText);
+      try { after?.(d); } catch {}
+      try { await roomsMinterPoll(); } catch {}
+      if (slug === CHANNEL) { try { boardPoll(); } catch {} }
+      if (rsSlug) rsPaint();
+      return d;
+    };
+    q(".rsren").onclick = async () => {
+      const slug = rsSlug, to = channelSlug(q(".rsname").value || "");
+      if (!to || !ROOM_RE.test(to) || to === LOBBY) { say("Use lowercase letters, digits and dashes (up to 32).", true); return; }
+      if (to === slug) { say("That is already its name.", true); return; }
+      if (!(await kastrConfirm({ title: "Rename room", message: "Rename \u201c" + slug + "\u201d to \u201c" + to + "\u201d?", detail: "Everyone in it moves to the new name. Its chat history, pins, spotlights, layouts and group go with it.", ok: "Rename" }))) return;
+      await run({ op: "rename", to }, "Renamed to \u201c" + to + "\u201d.", (d) => {
+        const nw = String(d.slug || to);
+        rsMyRec(slug, { slug: nw });
+        try { roomOrderSave(roomOrderLoad().map((s) => (s === slug ? nw : s))); } catch {}
+        window.__toast?.("Room \u201c" + slug + "\u201d is now \u201c" + nw + "\u201d.", 4000, { level: "event" });
+        rsSlug = nw;
+        if (joinState === "joined" && CHANNEL === slug) roomRenamedFollow(slug, nw);
+      });
+    };
+    q(".rslock").onchange = async () => {
+      const r = roomsMinter.get(rsSlug) || {};
+      if (q(".rslock").checked) { q(".rscodef").hidden = false; q(".rscodeb").textContent = r.locked ? "Change code" : "Lock"; q(".rscode").focus(); say("Type the room\u2019s code, then " + (r.locked ? "Change code" : "Lock") + "."); return; }
+      if (!r.locked) { q(".rscodef").hidden = true; say(""); return; }
+      if (!(await kastrConfirm({ title: "Unlock room", message: "Unlock \u201c" + rsSlug + "\u201d?", detail: "Anyone on this relay can then join it without a code.", ok: "Unlock" }))) { q(".rslock").checked = true; return; }
+      await run({ op: "unlock" }, "Unlocked.", () => rsMyRec(rsSlug, { salt: null, hash: null }));
+    };
+    const setCode = async () => {
+      const code = q(".rscode").value;
+      if (!code.trim()) { say("Enter the room\u2019s code.", true); return; }
+      const was = !!roomsMinter.get(rsSlug)?.locked;
+      const salt = randomSaltHex(), hash = await sha256Hex(salt + code);
+      const d = await run({ op: was ? "code" : "lock", salt, hash }, was ? "Code changed." : "Locked.", () => rsMyRec(rsSlug, { salt, hash }));
+      if (d) q(".rscode").value = "";
+    };
+    q(".rscodeb").onclick = setCode;
+    q(".rscode").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); setCode(); } });
+    q(".rsname").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); q(".rsren").click(); } });
+    q(".rskeep").onchange = () => { const on = q(".rskeep").checked; run({ op: "keep", keep: on }, on ? "Kept open." : "No longer kept open \u2014 it closes 10 minutes after the last person leaves.", () => rsMyRec(rsSlug, { persistent: on })); };
+    q(".rsview").onchange = () => { const on = q(".rsview").checked; run({ op: "viewlock", locked: on }, on ? "View locked." : "View unlocked."); };
+    q(".rsgroup").onchange = () => { const g = q(".rsgroup").value || null; run({ op: "group", group: g }, g ? "Moved to " + (roomsGroups?.[g]?.name || g) + "." : "Out of its group.", (d) => { if (d.groups) { roomsGroups = d.groups; roomsGroupsAt = Date.now(); roomsChanged(); } }); };
+    return el;
+  }
+  function rsPaint() {
+    if (!rsEl || !rsSlug) return;
+    const q = (s) => rsEl.querySelector(s);
+    const r = roomsMinter.get(rsSlug) || lastChannelList.find((x) => x.slug === rsSlug) || { slug: rsSlug };
+    const role = roomSettingsRole(r);
+    q("#rsTitle").textContent = "Room settings \u2014 " + rsSlug;
+    if (document.activeElement !== q(".rsname")) q(".rsname").value = rsSlug;
+    q(".rslock").checked = !!r.locked || !q(".rscodef").hidden;
+    if (r.locked && q(".rscodef").hidden) { q(".rscodef").hidden = false; q(".rscodeb").textContent = "Change code"; q(".rscode").placeholder = "New code for " + rsSlug; }
+    if (!r.locked) { q(".rscodeb").textContent = "Lock"; q(".rscode").placeholder = "Code for " + rsSlug; }
+    q(".rskeep").checked = !!r.persistent;
+    const kh = q(".rskeephint");
+    kh.textContent = r.keptBy === "board" ? "Kept open because it has pinned feeds, spotlights or a grid layout. Turning this off lets it close 10 minutes after the last person leaves (its pins go with it)."
+      : r.persistent ? "It stays listed, with its chat, when everyone has left." : "Off: it closes 10 minutes after the last person leaves.";
+    q(".rsview").checked = !!r.viewLock;
+    const sel = q(".rsgroup"), cur = roomGroupOf(rsSlug) || "";
+    sel.replaceChildren(new Option("No group", ""), ...sbGroupList().map((g) => new Option(g.name, g.gid)));
+    sel.value = cur;
+    const note = q(".rsnote");
+    const ro = role === "named";
+    note.hidden = !ro;
+    note.textContent = ro ? "You created this room on another computer (or before its key was kept here). Change its settings from that computer, or join with the admin code." : "";
+    for (const x of rsEl.querySelectorAll(".body input, .body select, .body button")) x.disabled = ro;
+  }
+  function openRoomSettings(rec) {
+    if (!roomSettingsRole(rec)) { window.__toast?.("Only the room\u2019s creator or an admin can change its settings.", 4000, { level: "warn" }); return; }
+    if (!rsEl) rsEl = rsBuild();
+    rsSlug = rec.slug;
+    rsEl.querySelector(".rscodef").hidden = true;
+    rsEl.querySelector(".rscode").value = "";
+    rsEl.__say("");
+    rsPaint();
+    rsEl.hidden = false;
+    document.addEventListener("keydown", rsEl.__key, true);
+    try { rsEl.querySelector(".rsname").focus(); } catch {}
+    roomsMinterPoll().then(() => rsPaint()).catch(() => {});
+  }
+  window.__roomSettings = { open: (slug) => openRoomSettings(lastChannelList.find((r) => r.slug === slug) || roomsMinter.get(slug) || { slug }), role: (slug) => roomSettingsRole(lastChannelList.find((r) => r.slug === slug) || { slug }), post: rsPost };   // rig
   function sbCloseRoom(rec) {
     if (!canCloseRoom(rec)) return;
     const key = myChannels().find((r) => r.slug === rec.slug)?.roomKey || null;
@@ -12811,16 +13137,17 @@
   }
   async function sbCardClick(card, rec) {
     if (isPhone()) document.body.classList.remove("sb-open");
+    const ask = askBeforeRoomSwitch();   // 0.21.65: More > "Ask before changing rooms"
     if (joinState === "joined") {
       if (rec.slug === CHANNEL) { try { closeAllPops(); paintRoomInfo(); openFromOptions(roomInfoPop); } catch {} return; }   // 0.13.1: my room -> Room info
       // 0.21.41 (Kenton: "When clicking to change rooms, prompt to let the user know they will be leaving the current room")
       const needCode = !!rec.locked;   // 0.21.42: the minter always wants a locked room's code -- a remembered roomKey (my own room) skipped the prompt and the switch failed silently
       if (CHANNEL === LOBBY && !needCode) { sbFormClose(); switchRoom(rec, ""); return; }   // 0.21.60: from the Lobby straight in (nothing to lose there)
-      if (!isPublisherMode()) {
+      if (!isPublisherMode() && (ask || needCode)) {   // 0.21.65: switched off -> no "Leave X and join Y?" (a code still asks)
         // 0.21.42: KASTR's own popup; a locked room asks for its code in it (Kenton: a locked room at the bottom of the rail
         // "never pops up the enter code prompt" -- the inline form opened below the visible part of the rail)
         const ans = await kastrConfirm({ title: "Change room",
-          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and join it."
+          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to " + (ask ? "leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and " : "") + "join it."
                             : "Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + (rec.slug === LOBBY ? " and go to the Lobby?" : " and join \u201c" + rec.slug + "\u201d?"),   // 0.21.61 (Kenton: it said "join main")
           detail: "Your microphone will be muted and your camera turned off.",
           ok: rec.slug === LOBBY ? "Go to the Lobby" : "Join " + rec.slug, cancel: "Stay in " + roomTitle(CHANNEL),
@@ -12953,7 +13280,7 @@
   // 0.21.41: the rail's person = the Participants entry for that name (same menu as their tile and their Participants row)
   function sbMemberPerson(op) {
     const key = String(op || "").toLowerCase();
-    return participantList().find((p) => p.key === key && !p.me && (p.cam || p.content.length || p.viewer)) || null;
+    return participantList().find((p) => p.key === key && participantHasMenu(p)) || null;   // 0.21.65: no ⋯ / right-click without a menu
   }
   function sbMemberMenu(li, anchor) {
     const p = sbMemberPerson(li.dataset.op);
@@ -13290,7 +13617,7 @@
   function placeRoomMenu(menu, anchor, side) {
     if (!menu || menu.id === "sbForm") return;   // 0.12.0: the sidebar form sits in the flow (0.15.0 B1: every OTHER menu is positioned)
     if (isPhone()) { menu.style.left = ""; menu.style.top = ""; return; }   // 0.21.0: bottom sheet
-    const r = (anchor || document.getElementById("roomsBtn")).getBoundingClientRect();
+    const r = (anchor || document.getElementById("sbEdge")).getBoundingClientRect();
     const w = menu.offsetWidth || 200;
     if (side === "right") {   // 0.21.0: the collapsed rail's "+" bubble sits beside the rail
       menu.style.left = Math.round(Math.min(r.right + 8, innerWidth - w - 8)) + "px";
@@ -14136,7 +14463,23 @@
     placeRoomMenu(menu);
     inp.focus();
   }
-  async function switchRoom(rec, code) {
+  // 0.21.65: my room was renamed (Room settings) -- move with it, as I am (no mute, no chime), with the code I joined with
+  const roomFollowed = new Set();
+  function roomRenamedFollow(old, to) {
+    if (!to || to === old || old !== CHANNEL || joinState !== "joined" || !ROOM_RE.test(to) || roomFollowed.has(old + ">" + to)) return;
+    roomFollowed.add(old + ">" + to);
+    try { localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(myChannels().map((r) => (r.slug === old ? { ...r, slug: to } : r)))); } catch {}
+    try { roomOrderSave(roomOrderLoad().map((s) => (s === old ? to : s))); } catch {}
+    let code = "";
+    try { const s = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); if (s?.room === old) code = s.code || ""; } catch {}
+    if (!code) { const lj = lastJoin(); if (lj?.room === old) code = lj.code || ""; }
+    window.__toast?.("\u201c" + old + "\u201d is now called \u201c" + to + "\u201d \u2014 you moved with it.", 6000, { level: "event" });
+    log("Room " + old + " was renamed to " + to + " \u2014 following it");
+    const rec = lastChannelList.find((r) => r.slug === to) || roomsMinter.get(to) || { slug: to };
+    switchRoom(rec, code, { follow: true });
+  }
+  window.__roomFollow = roomRenamedFollow;   // rig
+  async function switchRoom(rec, code, opts) {
     if (joinState !== "joined") return;
     if (authSecured) {
       // 0.10.0: the cached relay access code plus the room's own code
@@ -14144,7 +14487,7 @@
       catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.("Could not join " + rec.slug + ": " + (e?.message || e), 5000, { level: "warn" }); return; }   // 0.21.42: said, and nothing muted
     }
     // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
-    if (!isPublisherMode()) {
+    if (!isPublisherMode() && !opts?.follow) {   // 0.21.65: following a renamed room is not changing rooms
       try {
         const { src } = localCamSrc();
         if (src) {
@@ -14154,7 +14497,7 @@
         }
       } catch {}
     }
-    chimeRoom();   // 0.15.0 (D3): the switch tone (the sidebar card path goes through here too)
+    if (!opts?.follow) chimeRoom();   // 0.15.0 (D3): the switch tone (the sidebar card path goes through here too)
     const pub = window.__publisher;
     const wasLive = !!pub?.state?.().live;
     // Moving rooms republishes under the new prefix: stop the announce,
@@ -15007,10 +15350,7 @@
       });
       urlInput.addEventListener("change", gateRelayMirror);
     }
-    document.getElementById("roomsBtn").addEventListener("click", (e) => {
-      e.stopPropagation();
-      sbToggle();                    // 0.12.0: the ☰ expands/collapses the rooms sidebar
-    });
+    // 0.21.65: the rooms sidebar opens / closes from its edge tab (#sbEdge), wired with sbToggle
     joinEls.joinBtn.addEventListener("click", () => joinNow());
     // 0.13.2: Enter in any gate field joins (the code fields most of all -- Kenton typed a code and waited)
     for (const el of [joinEls.joinAccess, joinEls.joinPwd, joinEls.joinChanNew, joinEls.joinName]) {
@@ -15277,6 +15617,88 @@
   };
   window.__rtmpFw = { check: rtmpFwCheck, open: rtmpFwOpen, state: () => rtmpFw };   // rig
   if (!IS_WEB2) setTimeout(() => fetch("/api/screen/rtmp", { cache: "no-store" }).then((r) => r.json()).then((d) => { const was = rtmpHostV + "|" + rtmpHosts.join(","); rtmpHostsLearn(d?.hosts); if (was !== rtmpHostV + "|" + rtmpHosts.join(",")) { try { renderSources(); } catch {} } }).catch(() => {}), 3000);
+  // ---- 0.21.65 (Kenton: "I need to be able to use multiple webcams on a computer at the same time in the sharing menu" ...
+  // "any cameras shared through the share button to be configured this way"): Share > Webcam lists every camera on this
+  // computer; one click shares it as a SHARED CAMERA (device://video/<id>: its own tile named after the webcam, can go in a
+  // grid, spotlight / pin, kept after a restart), several at once. Never the toolbar's face camera: if the toolbar camera
+  // holds the same webcam it is let go first (a webcam opens once -- the 0.21.27 cameraGridRow pattern).
+  const webcamUrl = (id) => "device://video/" + encodeURIComponent(id);
+  const webcamShared = (id) => added.find((a) => a.kind === RTSP && a.url === webcamUrl(id)) || null;
+  const camBase = (s) => String(s || "").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "").replace(/\s+#\d+$/, "").trim().toLowerCase();   // Chrome adds "(vid:pid)"
+  function faceCamOn(cam) {   // the toolbar camera using this webcam (by name), if any
+    const want = camBase(cam.name);
+    return added.find((a) => a.kind === "camera" && want && (camBase(a.label) === want || camBase(a.label).startsWith(want) || want.startsWith(camBase(a.label)))) || null;
+  }
+  let webcamList = null, webcamNote = "", webcamAt = 0, webcamBusy = false;
+  async function webcamLoad(force) {
+    if (IS_WEB2 || webcamBusy || (!force && Date.now() - webcamAt < 10000 && webcamList)) { webcamPaint(); return; }
+    webcamBusy = true;
+    let d = null;
+    try { d = await fetch("/api/screen/devices", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    webcamBusy = false; webcamAt = Date.now();
+    webcamList = Array.isArray(d?.cams) ? d.cams : (Array.isArray(d?.devices) ? d.devices.map((n) => ({ id: n, name: String(n).replace(/^[/]dev[/]/, "") })) : []);
+    webcamNote = d ? (d.note || "") : "This computer's KASTR did not answer.";
+    webcamPaint();
+  }
+  function webcamPaint() {
+    const box = $("shWebcams");
+    if (!box) return;
+    if (IS_WEB2) {
+      box.innerHTML = '<p class="hint" style="margin:0">Webcams are shared as shared cameras from the KASTR desktop app on the computer they are plugged into. Here, use the camera button on the toolbar for your own camera.</p>';
+      return;
+    }
+    if (!webcamList) return;
+    box.replaceChildren();
+    for (const cam of webcamList) {
+      const row = document.createElement("div"); row.className = "wc"; row.dataset.id = cam.id;
+      const on = webcamShared(cam.id);
+      row.classList.toggle("on", !!on);
+      const ic = document.createElement("span"); ic.className = "wi"; ic.textContent = "\ud83d\udcf7";
+      const nm = document.createElement("span"); nm.className = "wn";
+      const b = document.createElement("b"); b.textContent = on?.label || cam.name; b.title = cam.name + (cam.id !== cam.name ? " \u2014 " + cam.id : "");
+      const sub = document.createElement("span");
+      const face = !on && faceCamOn(cam);
+      if (cam.error) { sub.className = "err"; sub.textContent = cam.error; }
+      else sub.textContent = on ? "Shared camera \u2014 its own tile in the room" : face ? "Your toolbar camera is using it \u2014 sharing turns that off" : "Share as a shared camera";
+      nm.append(b, sub);
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = on ? "ghost" : "";
+      btn.textContent = on ? "Stop" : "Share";
+      btn.disabled = !!cam.error;
+      btn.title = on ? "Stop sharing " + cam.name : "Share " + cam.name + " as a shared camera (its own tile; it can go in a grid and comes back after a restart)";
+      btn.addEventListener("click", () => (on ? webcamStop(cam) : webcamShare(cam, btn)));
+      row.append(ic, nm, btn);
+      box.appendChild(row);
+    }
+    if (!webcamList.length || webcamNote) {
+      const p = document.createElement("p"); p.className = "hint"; p.style.margin = webcamList.length ? "2px 0 0" : "0";
+      p.textContent = webcamNote || "No camera found on this computer.";
+      box.appendChild(p);
+    }
+  }
+  async function webcamShare(cam, btn) {
+    if (!cam || cam.error) return;
+    if (webcamShared(cam.id)) { webcamPaint(); return; }
+    const face = faceCamOn(cam);
+    if (face) {
+      const ok = await window.__confirm({ title: "Share " + cam.name, message: "Your toolbar camera is using \u201c" + cam.name + "\u201d.",
+                                          detail: "A webcam opens once. KASTR turns your toolbar camera off and shares " + cam.name + " as a shared camera (its own tile).",
+                                          ok: "Turn it off and share", cancel: "Cancel" });
+      if (!ok) return;
+      removeSource(face.id);   // the webcam opens once: KASTR's own camera lets go first
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    if (btn) { btn.disabled = true; btn.textContent = "Starting\u2026"; }
+    const e = await addRtsp(webcamUrl(cam.id), { label: cam.name, keep: true, gridId: "none" });
+    if (e) window.__toast?.("Sharing " + cam.name + " as a shared camera.", 4000, { level: "info" });
+    try { renderSources(); } catch {}
+    webcamPaint();
+  }
+  function webcamStop(cam) {
+    const a = webcamShared(cam.id);
+    if (a) removeSource(a.id);
+    setTimeout(webcamPaint, 50);
+  }
+  window.__webcams = { load: webcamLoad, paint: webcamPaint, share: (id) => webcamShare((webcamList || []).find((c) => c.id === id)), list: () => webcamList };   // rig
   // ---- 0.21.26 (Kenton): host feeds -- a camera or a media file on this computer, published like an RTSP camera ----
   {
     const sel = $("hostCamSel"), addCam = $("hostCamAdd"), addFile = $("hostFileAdd"), pick = $("hostFile");
@@ -15288,7 +15710,8 @@
       try { d = await fetch("/api/screen/devices", { cache: "no-store" }).then((r) => r.json()); } catch {}
       const keep = sel.value;
       sel.replaceChildren(new Option((d?.devices || []).length ? "Camera on this computer\u2026" : "No camera found on this computer", ""));
-      for (const n of d?.devices || []) sel.appendChild(new Option(n.replace(/^[/]dev[/]/, ""), n));
+      const camName = (n) => (d?.cams || []).find((c) => c.id === n)?.name || n.replace(/^[/]dev[/]/, "");   // 0.21.65: the camera's own name
+      for (const n of d?.devices || []) sel.appendChild(new Option(camName(n), n));
       sel.value = keep;
       addCam.disabled = !sel.value;
     };
@@ -15299,7 +15722,7 @@
     addCam.addEventListener("click", async () => {
       if (!sel.value) return;
       addCam.disabled = true;
-      await addRtsp("device://video/" + encodeURIComponent(sel.value), { label: sel.value.replace(/^[/]dev[/]/, ""), keep: document.getElementById("rtspKeep")?.checked !== false });   // 0.21.61
+      await addRtsp("device://video/" + encodeURIComponent(sel.value), { label: sel.selectedOptions[0]?.textContent || sel.value.replace(/^[/]dev[/]/, ""), keep: document.getElementById("rtspKeep")?.checked !== false });   // 0.21.61; 0.21.65: named after the camera
       addCam.disabled = false;
     });
     addFile.addEventListener("click", () => pick.click());
@@ -16325,7 +16748,7 @@
       const dev = devs.find((d) => d.toLowerCase() === want) || devs.find((d) => want && (want.startsWith(d.toLowerCase()) || d.toLowerCase().startsWith(want))) || (devs.length === 1 ? devs[0] : null);
       if (!dev) {
         sel.disabled = false; sel.value = "";
-        window.__toast?.("This camera was not found as a device on this computer \u2014 use Share \u25b8 RTSP feed \u25b8 Camera on this computer", 7000, { level: "warn" });
+        window.__toast?.("This camera was not found as a device on this computer \u2014 use Share \u25b8 Webcam", 7000, { level: "warn" });
         return;
       }
       removeSource(a.id);   // the webcam opens once: KASTR's own camera lets go first
@@ -20385,7 +20808,7 @@
       items.push({ sep: true }, { value: "rename", label: "Rename grid\u2026" });
       items.push({ value: "camsoff", label: "Turn off all cameras in this grid" });   // 0.21.36 (Kenton): one switch for the grid's cameras (back on: the grid's switch in Sources)
       const gLit = window.__spotIs?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30: already spotlit -> offer to remove it
-      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" });   // 0.21.23: Teams names
+      items.push({ sep: true }, { cap: "Spotlight" }, { value: "me", label: "Pin for me" }, ...(window.__viewLockedForMe?.() ? [] : [gLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" }]));   // 0.21.23: Teams names; 0.21.65 (m): none in a locked view
       if (window.__board?.can?.()) {   // 0.21.63: the room board
         const rp = window.__board.pinned(chanPath(ensureHang(g.entry.name)));
         items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
@@ -21852,7 +22275,7 @@
     if (shWinOpen) shPaintList($("shWindows"), d.windows || []);   // no window thumbnails while the list is closed
     $("shWinCount").textContent = String((d.windows || []).length);
   }
-  window.__shareOpened = () => { shTick++; shLoad(); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); }, 3000); };
+  window.__shareOpened = () => { shTick++; shLoad(); webcamLoad(true); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); webcamLoad(false); }, 3000); };   // 0.21.65: + the Webcam section
   window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; };
   async function shareNative(src) {
     if (!src) return;
@@ -22101,6 +22524,7 @@
   }
   function spotAdd(targetPath) {
     if (!targetPath) return;
+    if (window.__viewLockedForMe?.()) { window.__toast?.("The view in this room is locked \u2014 only its creator or an admin can spotlight for everyone.", 4000, { level: "warn" }); return; }   // 0.21.65 (m)
     const t = String(targetPath);
     const ts = Date.now();
     spotMineList = spotMineList.filter((x) => x.target !== t).concat([{ target: t, ts }]).slice(-64);

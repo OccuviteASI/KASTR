@@ -407,7 +407,7 @@ class Page(unittest.TestCase):
         body = p[p.index("  function boardVotes() {"):p.index("  function boardReset() {")]
         self.assertIn('by: "room"', body)
         self.assertIn('spotVotes.set("~board", list)', body)
-        self.assertIn("    for (const [k, arr] of spotVotes) for (const v of arr) addV(v, v.by || k);", p)   # spotSetNow reads them
+        self.assertIn("for (const [k, arr] of spotVotes) { if (vl && k !== \"~board\") continue; for (const v of arr) addV(v, v.by || k); }", p)   # spotSetNow reads them
 
     def test_spotlight_and_removal_write_the_board(self):
         p = self.p

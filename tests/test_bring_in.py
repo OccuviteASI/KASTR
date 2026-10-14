@@ -94,7 +94,7 @@ class Page(unittest.TestCase):
             self.p = f.read()
 
     def test_watched_tile_offers_spotlight_for_everyone(self):
-        self.assertIn('if (!wrSrc || wrBring) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all")', self.p)
+        self.assertIn('if ((!wrSrc || wrBring) && !viewLockedForMe()) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all")', self.p)
         self.assertIn('const wrBring = !!wrSrc && (authRole === "admin" || !(lastChannelList || []).find((r) => r.slug === wrSrc)?.locked);', self.p)
         self.assertIn('if (v === "wrall") { wrSpotForAll(name); return; }', self.p)
         self.assertIn("const body = { path, bring: true, from: slug, to: [CHANNEL], stop: !!stop,", self.p)

@@ -846,23 +846,145 @@ def hostmedia_path(url):
 
 
 def list_devices(ffmpeg):
-    """The cameras this computer can capture: Windows = DirectShow video devices (by name), Linux = /dev/video*."""
-    out = []
-    if sys.platform.startswith("win") and ffmpeg:
+    """The cameras this computer can capture (ids for device://video/<id>): Windows = DirectShow video devices (by name),
+    Linux = the V4L2 capture nodes (0.21.65: a stable /dev/v4l/by-id path when there is one)."""
+    return [c["id"] for c in list_cameras(ffmpeg)[0] if not c.get("error")]
+
+
+def _dshow_names(stderr):
+    """0.21.65: the video device names of `ffmpeg -list_devices true -f dshow` -- both output styles (a `(video)` tag per
+    line, or the older 'DirectShow video devices' section). Two cameras with the same name (two identical webcams) are
+    told apart as "<name> #2", "#3" ... (DeviceCapture opens them with -video_device_number)."""
+    out, section = [], None
+    for line in (stderr or "").splitlines():
+        if "DirectShow video devices" in line:
+            section = "video"
+            continue
+        if "DirectShow audio devices" in line:
+            section = "audio"
+            continue
+        if "Alternative name" in line:
+            continue
+        m = re.search(r'"([^"]+)"\s*\((video|audio|none)\)', line)
+        if m:
+            if m.group(2) != "video":
+                continue
+            name = m.group(1)
+        else:
+            m = re.search(r'\]\s+"([^"]+)"\s*$', line)
+            if not m or section != "video":
+                continue
+            name = m.group(1)
+        n, label = 1, name
+        while label in out:
+            n += 1
+            label = "%s #%d" % (name, n)
+        out.append(label)
+    return out
+
+
+DSHOW_DUP_RE = re.compile(r"^(.*) #(\d{1,2})$")
+V4L2_CAP_DEVICE_CAPS = 0x80000000
+V4L2_CAP_CAPTURE = 0x00000001 | 0x00001000   # VIDEO_CAPTURE | VIDEO_CAPTURE_MPLANE
+
+
+def _v4l2_caps(path):
+    """-> is this node a video CAPTURE node? VIDIOC_QUERYCAP; a UVC camera's second node (metadata) is not one."""
+    import fcntl
+    import struct
+    fd = os.open(path, os.O_RDWR | getattr(os, "O_NONBLOCK", 0))
+    try:
+        buf = bytearray(104)
+        fcntl.ioctl(fd, 0x80685600, buf, True)   # VIDIOC_QUERYCAP
+        caps, dcaps = struct.unpack_from("<II", buf, 84)
+        if caps & V4L2_CAP_DEVICE_CAPS:
+            caps = dcaps
+        return bool(caps & V4L2_CAP_CAPTURE)
+    finally:
+        os.close(fd)
+
+
+def _linux_cameras(dev_dir="/dev", sys_dir="/sys/class/video4linux", caps=None):
+    """0.21.65 (Kenton, Logan-ROC: a webcam that never showed in the share menu): every V4L2 node that CAPTURES video, named
+    from sysfs (the camera's own name, not "video0"), addressed by its /dev/v4l/by-id link when one exists (survives a
+    re-plug or a reboot that renumbers the nodes). A node KASTR may not open says why (most often: the user is not in the
+    `video` group). -> (rows, note)."""
+    import glob
+    caps = caps or _v4l2_caps
+    nodes = sorted(glob.glob(os.path.join(dev_dir, "video*")), key=lambda p: (len(p), p))
+    if not nodes:
+        return [], "No camera on this computer (no %s/video* device)." % dev_dir
+    byid = {}
+    for link in sorted(glob.glob(os.path.join(dev_dir, "v4l", "by-id", "*"))):
+        try:
+            byid.setdefault(os.path.realpath(link), link)
+        except OSError:
+            pass
+    rows, denied, seen_names = [], 0, {}
+    for node in nodes:
+        base = os.path.basename(node)
+        name = ""
+        try:
+            with open(os.path.join(sys_dir, base, "name"), encoding="utf-8", errors="replace") as f:
+                name = f.read().strip()
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(sys_dir, base, "index"), encoding="utf-8") as f:
+                idx = f.read().strip()
+        except OSError:
+            idx = ""
+        err = ""
+        try:
+            if not caps(node):
+                continue   # a metadata / output node
+        except PermissionError:
+            if idx not in ("", "0"):
+                continue   # an extra node of a camera whose node 0 is listed
+            err = "KASTR may not open %s -- add this user to the 'video' group (sudo usermod -aG video $USER), then log in again" % node
+            denied += 1
+        except OSError as e:
+            if idx not in ("", "0"):
+                continue
+            err = "%s could not be opened (%s)" % (node, getattr(e, "strerror", None) or e)
+        real = os.path.realpath(node)
+        cid = byid.get(real) or node
+        label = name or base
+        n = seen_names.get(label, 0) + 1
+        seen_names[label] = n
+        if n > 1:
+            label = "%s #%d" % (label, n)
+        row = {"id": cid, "name": label, "node": node}
+        if err:
+            row["error"] = err
+        rows.append(row)
+    note = ""
+    if not rows:
+        note = "No camera that captures video on this computer (%d video device%s found, none of them a camera)." % (len(nodes), "" if len(nodes) == 1 else "s")
+    elif denied and denied == len(rows):
+        note = "Cameras were found but KASTR may not open them: add this user to the 'video' group and log in again."
+    return rows, note
+
+
+def list_cameras(ffmpeg):
+    """0.21.65: ([{id, name, error?}], note) -- what the Share panel's Webcam section lists."""
+    if sys.platform.startswith("win"):
+        if not ffmpeg:
+            return [], "ffmpeg is missing, so KASTR cannot list this computer's cameras."
         try:
             r = subprocess.run([ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
                                capture_output=True, text=True, errors="replace", timeout=10,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            for line in (r.stderr or "").splitlines():
-                m = re.search(r'"([^"]+)"\s*\(video\)', line)
-                if m and m.group(1) not in out:
-                    out.append(m.group(1))
-        except Exception:
-            pass
-    elif sys.platform.startswith("linux"):
-        import glob
-        out = sorted(glob.glob("/dev/video*"))
-    return out
+            names = _dshow_names(r.stderr)
+        except Exception as e:
+            return [], "Could not list the cameras (%s)." % e
+        return [{"id": n, "name": n} for n in names], ("" if names else "No camera found on this computer.")
+    if sys.platform.startswith("linux"):
+        try:
+            return _linux_cameras()
+        except Exception as e:
+            return [], "Could not list the cameras (%s)." % e
+    return [], "Sharing a webcam as a shared camera works on Windows and Linux (on a Mac, use the camera button on the toolbar)."
 
 
 def _udp_free(port):
@@ -935,7 +1057,11 @@ class DeviceCapture:
         if name == "kastr-test":   # rig: a test pattern stands in for a camera
             src = ["-re", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30"]
         elif sys.platform.startswith("win"):
-            src = ["-f", "dshow", "-rtbufsize", "128M", "-i", "video=" + name]
+            m = DSHOW_DUP_RE.match(name)   # 0.21.65: the 2nd / 3rd camera of the same name
+            if m and int(m.group(2)) >= 2:
+                src = ["-f", "dshow", "-rtbufsize", "128M", "-video_device_number", str(int(m.group(2)) - 1), "-i", "video=" + m.group(1)]
+            else:
+                src = ["-f", "dshow", "-rtbufsize", "128M", "-i", "video=" + name]
         else:
             src = ["-f", "v4l2", "-i", name]
         tee = self._tee()

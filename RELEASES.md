@@ -39,6 +39,53 @@ What changed in each build, newest first.
 - **Lab check:** Kenton split one camera out. Alex saw its own tile within 4 seconds, and spotlighting it put it on Kenton's stage. Bob, in another room watching the same grid, saw no change. **Back into the grid only** hid it again for everyone.
 - **The hub must run this version** for spots in room layouts and for split cameras. A spoke on this version whose hub is older says so.
 
+**The rooms list opens and closes from a tab on its own edge (Kenton: "update the hamburger menu icon to be a expand/collapse icon and put it on the edge of the room sidebar window").** The ☰ button at the top left is gone.
+- **The tab:** a small arrow tab sits on the right edge of the rooms list, halfway down. It points left while the list is open (click to collapse it to the icon rail) and right while it is collapsed (click to open it). Its tooltip says **Collapse rooms** or **Expand rooms**. It can be reached with Tab and pressed with Enter or Space.
+- **Phones:** the rooms list is still a drawer over the page. The same tab sticks out at the left edge of the screen as its handle: tap it to open the drawer, tap it again (or tap outside the drawer) to close it.
+- **Lab check:** the tab collapsed and expanded the list by mouse and by keyboard, the arrow turned with it, and on a 390-pixel phone the handle opened the drawer and the shaded area closed it.
+
+**Room settings after the fact (Kenton: "Ability to change room settings after the fact. Only for admin or creator. Right click menu.").** Right-click a room in the rooms list and choose **Room settings…** (the room you are in also has it in **Room info**). It shows only for the room's creator (the computer that created it), an admin (joined with the admin code) and the relay's own computer. Each change applies at once:
+- **Name / Rename:** the room gets a new name. Everyone in it moves to the new name by themselves within a few seconds, with their camera and microphone as they were. Its chat history, pinned feeds, spotlights, grid layouts, split cameras, group and cross-room listings go with it. The old name points to the new one for a week, so anyone who comes back late is moved too.
+- **Locked with a code:** turn it on and type a code to lock the room, type a new code to change it, or turn it off to unlock it.
+- **Keep this room open:** on or off. Off also releases a room that was kept open only because it had pins or spotlights; it then closes 10 minutes after the last person leaves.
+- **Group:** move the room into a group or out of it.
+- **Lock the view:** see below.
+- **Not for the Lobby:** it cannot be renamed, locked or changed.
+- **Who may:** the creator proves it with the room's key, which stays on the computer that created it. Someone whose name matches the room's creator, but on another computer, sees the settings greyed out with a note to use that computer or the admin code. Anyone else gets "only the room's creator or an admin can change its settings".
+- **The hub keeps rooms:** a change made on a spoke goes to the hub, and every relay shows it. The hub must run this version.
+- **Lab check:** Kenton (on the hub) created a room, and Alex (on a spoke) and Bob joined it. Kenton renamed it from Room settings; all three were moved to the new name within 4 seconds, and the hub listed the old name as renamed.
+
+**Lock the view (Kenton: "Ability to lock the view in a room so only an admin/creator can spotlight/change anything" and "Instead of just ignoring other users, hide the options in the locked room").** A switch in Room settings.
+- **While it is on, for everyone except the room's creator or an admin:** these items are gone from every menu (tile menus, your own share menus, grid menus, a grid cell's right-click, the rooms list and People): **Spotlight for everyone**, **Remove spotlight**, **Pin to this room** / **Unpin from this room**, **Arrange for everyone in this room…**, **Remove from this room** (and "Remove … from this room's grid"), **Show on its own in this room** / **Back into the grid only**, and **Removed from this room (n) — Add back…**.
+- **Still allowed for everyone:** Pin for me, Arrange this grid for me, Mute for me, zoom, and everything that only changes your own screen.
+- **A small amber "View locked" badge** shows after the room's name at the top.
+- **Safety net:** the hub refuses any change to the room's pins, spotlights or layouts from anyone else ("The view in this room is locked -- only its creator or an admin can change it"), and every KASTR shows only the spotlights the creator or an admin set, so an older KASTR that still offers the button cannot spotlight anything.
+- **Lab check:** with the view locked, Bob's menu on Alex's camera showed only Mute, Pin for me and Show latency, while Kenton (the creator) still had Spotlight for everyone and Pin to this room.
+
+**Zoom in on any camera on the main stage (Kenton: "I would like to be able to zoom in on a shared camera").** Any video on the main stage can be zoomed now, people's cameras included (before, only shared screens and camera feeds could).
+- **How:** the mouse wheel, two fingers on a touch screen, or the **−** / **+** buttons at the bottom right of the stage. A double-click zooms to 2x and back. Drag to move around while zoomed; a single click shows the whole picture again.
+- **The zoom resets** when the tile leaves the stage (another tile takes it, or you go back to the gallery).
+- **Grids are unchanged:** a click on a grid's cell still opens that camera, and the grid zooms as before.
+- **Fixed on the way:** a double-click on a stage tile used to send the stage back to the gallery on its first click, so the 2x zoom never happened. A single click now waits a moment to see whether a second click follows.
+- **Lab check:** Alex's camera on Kenton's stage zoomed to 231% with the wheel, 200% with a double-click, back to 100% with a click, and stepped 150% → 225% → 150% with + and −. Going back to the gallery reset it.
+
+**Several webcams shared at once, from the Share menu (Kenton: "I need to be able to use multiple webcams on a computer at the same time in the sharing menu" and "any cameras shared through the share button to be configured this way ... the Logan-ROC has a webcam for a shared camera, but I had to share it as a camera because it wasn't displaying under the share menu").** **Share** now has a **Webcam** section, under Screen.
+- **It lists every camera on this computer** by its own name. **Share** next to a camera shares it as a shared camera: its own tile named after the webcam, which can go in a grid, be spotlit or pinned, and comes back after KASTR restarts. Share as many as the computer has. **Stop** stops one.
+- **The toolbar camera is never used for this.** If your toolbar camera is using the same webcam, KASTR asks first, turns the toolbar camera off, then shares the webcam.
+- **Linux (like the Logan-ROC):** only the devices that really capture video are listed (a webcam's second "metadata" device and video encoders are left out), with the camera's own name instead of "video0", and by a fixed address, so a re-plug or a restart does not mix two cameras up. A camera KASTR is not allowed to open says why and how to fix it (add the user to the `video` group).
+- **Windows:** two webcams with the same name are listed as "Name" and "Name #2", and both can be shared.
+- **A browser (the web portal)** sees a short note instead: webcams are shared from the KASTR desktop app on the computer they are plugged into.
+- **The old picker** under RTSP/HTTP feed ("Camera on this computer…") is still there and now shows the cameras' names too.
+- **Lab check:** the lab computer has no webcam, so the camera list was simulated (a Logitech, a Linux camera KASTR may not open, and KASTR's test pattern standing in for a camera). The section listed all three, the one that cannot be opened said why, and **Share** on the test pattern published it as its own tile that Bob saw on his stage. **Not tested on real hardware:** two physical webcams at once, and the Linux listing on the Logan-ROC itself (it was checked against a simulated set of Linux camera devices).
+
+**Turn off the "change rooms?" question (Kenton: "Give an option in the options menu to toggle on/off the notification when clicking between rooms. Default should be on.").** **More** has **Ask before changing rooms**, on by default, remembered on this computer.
+- **Off:** clicking another room in the rooms list moves you there at once, without "Leave X and join Y?".
+- **A locked room still asks for its code** either way.
+- **Lab check:** with it off, a click on another room moved Kenton there with no question; a locked room still asked for its code; with it back on, the question came back.
+
+**The "…" next to a name in the rooms list only shows when it does something (Kenton: "Viewers on the left people rail have ellipsis next to their name, but don't give any menu when clicked").** The **…** and the right-click menu now appear only for someone who has a camera or a share showing, or, for an admin, someone watching only (to remove them from the room). Someone who only watches shows no **…** to everyone else. The People panel follows the same rule.
+- **Lab check:** a person who joined with the viewer code showed no **…** in Kenton's rooms list.
+
 ## v0.21.64 — KASTR gets through the web portal's tunnel
 
 **Arrange a camera grid for everyone in the room, and take cameras out of it (Kenton: "I need to be able to customize the grid for everyone in the room to see. I need to be able to remove feeds from that grid as well.").** A grid's layout and the cameras removed from it are now saved on the room's board, on the hub, so they apply to everyone in that room and survive everyone leaving and the box restarting. Kenton chose:

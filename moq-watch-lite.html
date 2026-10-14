@@ -1180,10 +1180,11 @@
   .sbcard .sbmeta .icon { width:10px; height:10px; }
   .sbcard .sbmembers { list-style:none; margin:4px 0 0 35px; padding:0; display:flex; flex-direction:column; gap:2px; }
   .sbcard .sbm { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-dim); min-width:0; }
-  .sbcard .sbm .nm { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 4px; margin-left:-4px; border-radius:4px; }   /* 0.21.41: hugs the name (the ring goes around it) */
+  .sbcard .sbm .nm { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:1px 5px; margin-left:-5px; border-radius:4px; }   /* 0.21.41: hugs the name (the ring goes around it) */
   /* 0.21.41 (Kenton: "The user in a room should get a highlight or border when audio is playing, similar to the user rail on
      the right. But this is just around their name in the left rail"): the same blue ring as a speaking tile */
-  .sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--pc, var(--asi-blue)); color:var(--text); }
+  .sbcard .sbm.talk .nm { box-shadow:inset 0 0 0 1.5px var(--pc, var(--asi-blue)); color:var(--text); }   /* 0.21.64 (Kenton: rings overlapping): inside the name's box */
+  .sbcard .sbm { padding:1px 0; }
   /* 0.21.41: "Also show in other rooms" picker */
   #wrPop, #xsPop { position:fixed; z-index:120; width:280px; max-height:70vh; overflow:auto; background:var(--surface); border:1px solid var(--line);
     border-radius:10px; box-shadow:var(--shadow-pop, 0 10px 30px rgba(0,0,0,.45)); padding:10px 12px; font-size:12px; color:var(--text); }
@@ -4940,7 +4941,7 @@
       const av = el.__av;
       paintAvatar(av, avatarUrls.get(key));
       av.style.setProperty("--ring", personColor(key));
-      setPc(el, hiOf(key));   // 0.21.61
+      setPc(el, personColor(key));   // 0.21.61; 0.21.64: chosen or automatic -- the same colour as their picture ring
       el.querySelector(".vn").textContent = nm;
       el.classList.toggle("deaf", !!m.deaf);   // 0.21.48
       el.title = nm + " is watching (view only)" + (m.deaf ? " \u2014 deafened" : "");
@@ -5093,7 +5094,7 @@
     ppl.rows.hidden = !pplOpen;
     ppl.empty.hidden = !pplOpen || shown.length > 0;
     ppl.empty.textContent = q ? "No one here matches \u201c" + ppl.search.value.trim() + "\u201d" : "No one has joined yet.";
-    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, avatarUrls.get(p.key) || "", p.cam || p.content[0] || "", hiOf(p.key)].join("|")).join("\n");   // 0.21.61: + colour
+    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, avatarUrls.get(p.key) || "", p.cam || p.content[0] || "", personColor(p.key)].join("|")).join("\n");   // 0.21.61: + colour
     if (sig === pplSig && !force) return;
     if (ppl.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
     pplSig = sig;
@@ -5103,7 +5104,7 @@
       row.dataset.key = p.key;
       const av = document.createElement("div"); av.className = "ppav";
       av.style.setProperty("--ring", personColor(p.key));
-      setPc(row, hiOf(p.key));   // 0.21.61: the talking ring in their colour
+      setPc(row, personColor(p.key));   // 0.21.61: the talking ring in their colour (0.21.64: or their automatic one)
       av.textContent = viewerInitials(p.name);
       paintAvatar(av, avatarUrls.get(p.key));
       const nm = document.createElement("div"); nm.className = "ppname";
@@ -6089,7 +6090,7 @@
     return hiColors.get(k) || "";
   }
   function setPc(el, c, prop) { if (!el) return; if (c) el.style.setProperty(prop || "--pc", c); else el.style.removeProperty(prop || "--pc"); }
-  function hiMine() { setPc(document.documentElement, HC_RE.test(profile?.color || "") ? profile.color : "", "--pc-me"); }
+  function hiMine() { const me = String(window.__publisher?.opSlug?.() || "").toLowerCase(); setPc(document.documentElement, HC_RE.test(profile?.color || "") ? profile.color : (me ? personColor(me) : ""), "--pc-me"); }   // 0.21.64: my automatic colour too
   hiMine();
   window.__hiColors = () => Object.fromEntries(hiColors);   // rig
   // a row of swatches: opts { value, none: "Automatic" (a "no colour" swatch) | noneColor: "#009fda" (the default shown as a
@@ -6909,7 +6910,7 @@
         paintAvatar(t.av, avatarUrls.get(personKeyOf(name)));   // 0.8.7: photo fills the circle
         t.av.style.setProperty("--ring", personColor(personKeyOf(name)));
       }
-      setPc(t.pane, hiOf(personKeyOf(name)));   // 0.21.61: their talking ring in their colour
+      setPc(t.pane, personColor(personKeyOf(name)));   // 0.21.61: their talking ring in their colour (0.21.64: or their automatic one)
       t.pane.classList.toggle("rtsptile", gridMeta.has(name) || isGridChild(name) || rtspPathsNow().has(name));   // 0.21.22 (Kenton): no muted-mic badge on any RTSP stream
       t.pane.classList.toggle("camera", !isContentPath(name));   // 0.8.8: camera faces show no equalizer
       { // 0.15.0: the grid's display name arrives with its geometry, usually after the tile -- repaint the labels when it changes
@@ -7394,6 +7395,7 @@
       }
     }
     if (any) meterRaf = requestAnimationFrame(meterTick);
+    else { sbTalkAt = 0; sbTalkPaint(nowMs); }   // 0.21.64: the loop stops when nobody's audio is left (the last speaker muted) -- clear the rooms rail's rings on the way out, the 200 ms throttle had skipped it
   }
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { cancelAnimationFrame(meterRaf); meterRaf = 0; }
@@ -12108,8 +12110,8 @@
       }
       ul.appendChild(li);   // in name order (an existing row moves)
       li.dataset.ptalk = m.talking ? "1" : "";   // 0.21.41: their presence says they speak (other rooms); sbTalkPaint adds what this window hears
-      li.classList.toggle("talk", !!m.talking || (here && li.classList.contains("talk")));
-      setPc(li, hiOf(m.op));   // 0.21.61: the ring around their name in their colour
+      li.classList.toggle("talk", here ? li.classList.contains("talk") : !!m.talking);   // 0.21.64: my room's rings come from sbTalkPaint (what I hear)
+      setPc(li, personColor(m.op));   // 0.21.61: the ring around their name in their colour (0.21.64: or their automatic one)
       li.classList.toggle("menuable", here && !!sbMemberPerson(m.op));   // 0.21.41: the person's menu, in the room I am in
       li.querySelector(".nm").textContent = m.name || m.op;
       { const df = li.querySelector(".df"); if (df) df.classList.toggle("on", !!m.deaf); }   // 0.21.48
@@ -12139,7 +12141,7 @@
     const loud = new Set();
     for (const [n, t] of tiles) if (nowMs < (t.talkUntil ?? 0) && !isContentPath(n)) loud.add(personKeyOf(n));
     if (document.querySelector("#pubPanes .pubpane.camkind.talking")) loud.add(String(window.__publisher?.opSlug?.() || "").toLowerCase());
-    for (const li of card.querySelectorAll(".sbm")) li.classList.toggle("talk", li.dataset.ptalk === "1" || loud.has(String(li.dataset.op || "").toLowerCase()));
+    for (const li of card.querySelectorAll(".sbm")) li.classList.toggle("talk", loud.has(String(li.dataset.op || "").toLowerCase()));   // 0.21.64 (Kenton: the ring "sticking around when the user is muted or not making any noise"): what I hear, never a stale flag
   }
   // 0.21.41: the rail's person = the Participants entry for that name (same menu as their tile and their Participants row)
   function sbMemberPerson(op) {
@@ -14152,7 +14154,7 @@
         spots, hadShare: !!rec?.sources?.some((x) => x.kind === "screen") }));
     } catch {}
   }
-  setInterval(liveSave, 5000);
+  setInterval(() => { liveSave(); hiMine(); }, 5000);   // 0.21.64: + my ring colour once my name is known
   function leaveMeeting() {
     if (joinState !== "joined") return;
     try { localStorage.removeItem(LIVE_KEY); } catch {}   // 0.21.61: Leave = nothing to resume
@@ -18933,7 +18935,8 @@
         slot.pane.classList.toggle("talking", now < (slot.talkUntil ?? 0) && slot.entry.kind === "camera" && !(window.__ringsOff?.() ?? false));   // 0.21.17: my media file / screen never rings
       } catch {}
     }
-    try { talkTick(anyLoud, Date.now()); } catch {}
+    const micOpen = [...slots.values()].some((sl) => sl.entry.kind === "camera" && sl.analyser && !sl.entry.micMuted);   // 0.21.64
+    try { talkTick(anyLoud, Date.now(), micOpen); } catch {}
   }, 250);
 
   // 0.8.6: simulcast -- the low rendition every hand-built graph adds.
@@ -21602,7 +21605,8 @@
     }
     if (talkOn !== on) { talkOn = on; try { talkReg.broadcast.in.enabled.set(on); } catch {} }
   }
-  function talkTick(anyLoud, now) {
+  function talkTick(anyLoud, now, micOpen = true) {
+    if (!micOpen) { talkLoud = 0; talkLastLoud = 0; talkApply(false); return; }   // 0.21.64: muted = not speaking, now (no 2 s tail)
     if (now < talkForceUntil) anyLoud = true;
     if (anyLoud) { talkLoud++; talkLastLoud = now; } else talkLoud = 0;
     const want = talkLoud >= 2 ? true : (talkOn && now - talkLastLoud < 2000);

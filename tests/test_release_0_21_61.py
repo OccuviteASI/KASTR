@@ -38,7 +38,7 @@ class Colours(unittest.TestCase):
         self.assertIn('window.__state?.set?.("hc", p.color || "")', self.p)
         self.assertIn("hiNote(v.op, v.hc);", self.p)
         for sel in ("#stage.spot .pane.talking { border-color:var(--pc, var(--asi-blue))",
-                    ".sbcard .sbm.talk .nm { box-shadow:0 0 0 1.5px var(--pc, var(--asi-blue))",
+                    ".sbcard .sbm.talk .nm { box-shadow:inset 0 0 0 1.5px var(--pc, var(--asi-blue))",
                     ".pprow.talk .ppav { box-shadow:0 0 0 2px var(--pc, var(--asi-blue))",
                     "#stage .pubpane.talking { border-color:var(--pc-me, var(--asi-blue))"):
             self.assertIn(sel, self.p)

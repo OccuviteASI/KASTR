@@ -54,9 +54,12 @@ Token service (its own listener, relay-port+1):
     POST /api/xshare        0.21.41: list a room's stream in other rooms (Bearer = member token of the stream's room)
                             {path, to:[slug], tokens:{slug: member token}, label?, kind?, by?, stop?}
     GET  /api/xshare?room=  0.21.41: the live listings into a room (Bearer / ?jwt= member token; loopback page: none)
-    GET  /api/rooms/board?room=  0.21.63: the room board {ok, room, pins, spots, ver} (member token of that room; loopback: none)
+    GET  /api/rooms/board?room=  0.21.63: the room board {ok, room, pins, spots, grids, ver} (member token of that room;
+                            loopback: none)
     POST /api/rooms/board   0.21.63: {room, op: pin|unpin|spot|unspot, path|target, from?, label?, kind?, by?, ts?,
                             tokens?: {<from room>: member token}} with Bearer = a PUBLISHER member token for <room>
+                            0.21.64: + op grid {path, rects: {<member path>: [x,y,w,h] of 24}, gap} | gridHide {path,
+                            member} | gridShow {path, member} | gridReset {path} -- the room's own layout of a camera grid
 """
 import base64
 import hashlib
@@ -151,7 +154,17 @@ BOARD_PINS_MAX = 32
 BOARD_SPOTS_MAX = 16
 BOARD_XS_TTL = 3600         # a pinned listing's lifetime; the board re-applies it long before it ends
 BOARD_SYNC_S = 60
-BOARD_OPS = ("pin", "unpin", "spot", "unspot")
+BOARD_OPS = ("pin", "unpin", "spot", "unspot", "grid", "gridHide", "gridShow", "gridReset")
+# 0.21.64 (Kenton: "I need to be able to customize the grid for everyone in the room to see. I need to be able to remove feeds
+# from that grid as well."): the board also keeps the room's own LAYOUT of a camera grid (a composite one box draws) --
+# `grids` = {<grid path>: {rects: {<member path>: [x, y, w, h] in the editor's 24 x 24 units}, gap, hidden: [<member path>],
+# by, at}}. Every page in the room redraws the composite into those rects (the 0.21.43 viewer-side renderer) and leaves the
+# HIDDEN members out -- their cells and their own tiles, for everyone in THIS room; the box keeps publishing them, so other
+# rooms that watch the same grid or camera see it as before. Any publisher member changes it, as for pins and spotlights.
+BOARD_GRID_OPS = ("grid", "gridHide", "gridShow", "gridReset")
+BOARD_GRIDS_MAX = 16
+BOARD_GRID_MEMBERS_MAX = 64
+BOARD_GRID_UNITS = 24
 # 0.12.0: root-prefixed announce kinds every member may put beside ~presence:
 # ~talking/<room> (who is speaking) and ~chat/<room> (a new-message nudge).
 MEMBER_KINDS = (NS + "presence", NS + "talking", NS + "chat")
@@ -828,7 +841,68 @@ def board_clean(b):
         spots.append({"target": t, "by": _xs_text(x.get("by"), 64), "ts": _int0(x.get("ts"))})
         if len(spots) >= BOARD_SPOTS_MAX:
             break
-    return {"pins": pins, "spots": spots}
+    grids = {}
+    g0 = b.get("grids") if isinstance(b.get("grids"), dict) else {}
+    for gp in list(g0)[:BOARD_GRIDS_MAX * 2]:
+        g = board_grid_clean(gp, g0[gp])
+        if g is not None:
+            grids[str(gp)] = g
+        if len(grids) >= BOARD_GRIDS_MAX:
+            break
+    return {"pins": pins, "spots": spots, "grids": grids}
+
+
+def board_has(b):
+    """0.21.64: does a (clean) board hold anything -- a pin, a spotlight or a room grid layout?"""
+    b = b if isinstance(b, dict) else {}
+    return bool(b.get("pins") or b.get("spots") or b.get("grids"))
+
+
+def board_stream_ok(path):
+    """A stream path of any room (<room>/<host>/.../<name>.hang)."""
+    path = str(path or "")
+    frm = path.split("/", 1)[0]
+    return bool(SLUG_RE.match(frm)) and xshare_path_ok(path, frm)
+
+
+def board_unit_ok(u):
+    """[x, y, w, h] whole units of the 24 x 24 layout grid, every cell at least 2 x 2 and inside the picture."""
+    if not isinstance(u, (list, tuple)) or len(u) != 4 or not all(type(v) is int for v in u):
+        return False
+    x, y, w, h = u
+    return x >= 0 and y >= 0 and w >= 2 and h >= 2 and x + w <= BOARD_GRID_UNITS and y + h <= BOARD_GRID_UNITS
+
+
+def board_gap(v):
+    try:
+        g = int(round(float(v)))
+    except (TypeError, ValueError):
+        return 2
+    return max(0, min(24, g))
+
+
+def board_grid_clean(gp, g):
+    """0.21.64: one stored / mirrored room grid layout -> {rects, gap, hidden, by, at} or None (a bad path, nothing set)."""
+    if not board_stream_ok(gp) or not isinstance(g, dict):
+        return None
+    rects = {}
+    r0 = g.get("rects") if isinstance(g.get("rects"), dict) else {}
+    for mp in list(r0)[:BOARD_GRID_MEMBERS_MAX * 2]:
+        u = r0[mp]
+        if board_stream_ok(mp) and board_unit_ok(u):
+            rects[str(mp)] = [int(v) for v in u]
+        if len(rects) >= BOARD_GRID_MEMBERS_MAX:
+            break
+    hidden = []
+    for mp in (g.get("hidden") if isinstance(g.get("hidden"), list) else [])[:BOARD_GRID_MEMBERS_MAX * 2]:
+        mp = str(mp or "")
+        if board_stream_ok(mp) and mp not in hidden:
+            hidden.append(mp)
+        if len(hidden) >= BOARD_GRID_MEMBERS_MAX:
+            break
+    if not rects and not hidden:
+        return None
+    return {"rects": rects, "gap": board_gap(g.get("gap")), "hidden": hidden, "by": _xs_text(g.get("by"), 64), "at": _int0(g.get("at"))}
 
 
 def board_item(op, p, now=None):
@@ -839,7 +913,34 @@ def board_item(op, p, now=None):
     now = time.time() if now is None else now
     p = p if isinstance(p, dict) else {}
     if op not in BOARD_OPS:
-        return None, "unknown board op (pin|unpin|spot|unspot)"
+        return None, "unknown board op (pin|unpin|spot|unspot|grid|gridHide|gridShow|gridReset)"
+    if op in BOARD_GRID_OPS:   # 0.21.64: the room's layout of a camera grid -- strict shapes (a bad one is refused, never trimmed)
+        gp = str(p.get("path") or "")[:300]
+        if not board_stream_ok(gp):
+            return None, "not a grid's stream path (<room>/<host>/.../<name>.hang)"
+        item = {"path": gp, "by": _xs_text(p.get("by"), 64)}
+        if op == "grid":
+            rects = p.get("rects")
+            if not isinstance(rects, dict) or not rects:
+                return None, "`rects` must name each camera's cell: {<member path>: [x, y, w, h]}"
+            if len(rects) > BOARD_GRID_MEMBERS_MAX:
+                return None, "a grid layout holds at most %d cameras" % BOARD_GRID_MEMBERS_MAX
+            for mp, u in rects.items():
+                if not board_stream_ok(mp):
+                    return None, "not a camera's stream path: %s" % str(mp)[:120]
+                if not board_unit_ok(u):
+                    return None, "a cell is [x, y, w, h] whole units of %d (at least 2 x 2, inside the picture)" % BOARD_GRID_UNITS
+            gap = p.get("gap", 2)
+            if isinstance(gap, bool) or not isinstance(gap, (int, float)) or not 0 <= gap <= 24:
+                return None, "`gap` is 0..24"
+            item["rects"] = {str(k): [int(v) for v in u] for k, u in rects.items()}
+            item["gap"] = int(round(gap))
+        elif op in ("gridHide", "gridShow"):
+            mp = str(p.get("member") or "")[:300]
+            if not board_stream_ok(mp):
+                return None, "not a camera's stream path (<room>/<host>/.../<name>.hang)"
+            item["member"] = mp
+        return item, None
     if op in ("pin", "unpin"):
         path = str(p.get("path") or "")[:300]
         frm = path.split("/", 1)[0]
@@ -1087,7 +1188,8 @@ def board_open(method, store, p=None, room=None, now=None):
         if not SLUG_RE.match(room):
             return {"ok": False, "error": "room required"}, 400
         b = store.board(room)
-        return {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "ver": store.board_ver, "open": True}, 200
+        return {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "ver": store.board_ver,
+                "open": True}, 200
     p = p if isinstance(p, dict) else {}
     room, op = str(p.get("room") or ""), str(p.get("op") or "")
     if not SLUG_RE.match(room):
@@ -1102,7 +1204,8 @@ def board_open(method, store, p=None, room=None, now=None):
         board_sync_registry(XSHARE_OPEN, store.boards_public(), now)
     except Exception:
         pass
-    return {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "ver": store.board_ver, "open": True}, 200
+    return {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "ver": store.board_ver,
+            "open": True}, 200
 
 
 class Lockout:
@@ -1692,8 +1795,10 @@ class AuthStore:
                        "plain": bool(r.get("plain") and not r.get("hash") and not r.get("persistent")),   # 0.21.25
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
                 b = r.get("board") if isinstance(r.get("board"), dict) else {}
-                if b.get("pins") or b.get("spots"):   # 0.21.63: how much the room board holds (counts only -- this list is public)
+                if board_has(b):   # 0.21.63: how much the room board holds (counts only -- this list is public)
                     row["board"] = {"pins": len(b.get("pins") or []), "spots": len(b.get("spots") or [])}
+                    if b.get("grids"):
+                        row["board"]["grids"] = len(b["grids"])   # 0.21.64: the room's own grid layouts
                 rows.append(row)
             return rows
 
@@ -1853,7 +1958,7 @@ class AuthStore:
         with self.lock:
             rec = self.rooms.get(slug)
             if rec is None or self._dead(rec, time.time()):
-                return {"pins": [], "spots": []}
+                return {"pins": [], "spots": [], "grids": {}}
             return board_clean(rec.get("board"))
 
     def boards_public(self):
@@ -1863,7 +1968,7 @@ class AuthStore:
             for k, r in self.rooms.items():
                 if r.get("board") and not self._dead(r, now):
                     b = board_clean(r["board"])
-                    if b["pins"] or b["spots"]:
+                    if board_has(b):
                         out[k] = b
             return out
 
@@ -1879,16 +1984,43 @@ class AuthStore:
         if slug == LOBBY_SLUG:
             return None, 403, "the Lobby has no room board"
         if op not in BOARD_OPS or not isinstance(item, dict):
-            return None, 400, "unknown board op (pin|unpin|spot|unspot)"
+            return None, 400, "unknown board op (pin|unpin|spot|unspot|grid|gridHide|gridShow|gridReset)"
         with self.lock:
             rec = self.rooms.get(slug)
             if rec is not None and self._dead(rec, now):
                 del self.rooms[slug]
                 rec = None
             board = board_clean(rec.get("board") if rec else None)
-            was_empty = not (board["pins"] or board["spots"])
+            was_empty = not board_has(board)
             changed = False
-            if op == "pin":
+            if op in BOARD_GRID_OPS:   # 0.21.64: the room's own layout of a camera grid
+                gp, grids = item["path"], board["grids"]
+                cur = grids.get(gp)
+                before = json.dumps(cur, sort_keys=True)
+                if op == "gridReset":
+                    grids.pop(gp, None)
+                else:
+                    if cur is None:
+                        if op == "gridShow":
+                            return board_clean(board), 200, None
+                        if len(grids) >= BOARD_GRIDS_MAX:
+                            return None, 409, "this room already has %d grid layouts -- reset one first" % BOARD_GRIDS_MAX
+                        cur = grids[gp] = {"rects": {}, "gap": 2, "hidden": [], "by": "", "at": 0}
+                    if op == "grid":
+                        cur["rects"], cur["gap"] = dict(item["rects"]), board_gap(item.get("gap"))
+                    elif op == "gridHide":
+                        if item["member"] not in cur["hidden"]:
+                            if len(cur["hidden"]) >= BOARD_GRID_MEMBERS_MAX:
+                                return None, 409, "this grid already has %d cameras removed" % BOARD_GRID_MEMBERS_MAX
+                            cur["hidden"].append(item["member"])
+                    else:
+                        cur["hidden"] = [x for x in cur["hidden"] if x != item["member"]]
+                    if not cur["rects"] and not cur["hidden"]:
+                        grids.pop(gp, None)   # nothing left of the room's layout: the box's own again
+                    elif json.dumps(cur, sort_keys=True) != before:
+                        cur["by"], cur["at"] = item.get("by") or "", int(now)
+                changed = json.dumps(grids.get(gp), sort_keys=True) != before
+            elif op == "pin":
                 cur = next((x for x in board["pins"] if x["path"] == item["path"]), None)
                 if cur is None:
                     if len(board["pins"]) >= BOARD_PINS_MAX:
@@ -1930,11 +2062,11 @@ class AuthStore:
                 self.closed.pop(slug, None)
                 rec = {"salt": "", "hash": "", "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
                        "creator": str(item.get("by") or "")[:64], "created": now, "plain": True}
-            if was_empty and (board["pins"] or board["spots"]) and not rec.get("persistent"):
+            if was_empty and board_has(board) and not rec.get("persistent"):
                 kept = sum(1 for k, r in self.rooms.items() if r.get("persistent") and k != slug)
                 if kept >= KEPT_MAX:
                     return None, 409, ("this relay already keeps %d rooms open -- turn Keep off for one on the hub's Relay page "
-                                       "first (a room with pinned feeds or spotlights is kept open)" % KEPT_MAX)
+                                       "first (a room with pinned feeds, spotlights or a grid layout is kept open)" % KEPT_MAX)
                 rec["persistent"] = True     # Kenton: a room with board items is kept, so its setup is not lost when it empties
                 rec.pop("plain", None)
                 rec["keptBy"] = "board"
@@ -3591,7 +3723,7 @@ class AuthService:
         if not isinstance(d, dict) or not isinstance(d.get("boards"), dict):
             return
         boards = {str(k): board_clean(v) for k, v in d["boards"].items() if SLUG_RE.match(str(k))}
-        boards = {k: v for k, v in boards.items() if v["pins"] or v["spots"]}
+        boards = {k: v for k, v in boards.items() if board_has(v)}
         prev = self.__dict__.get("_board_mirror")
         self._board_mirror = boards
         self._board_mirror_ver = d.get("boardsVer")
@@ -3608,7 +3740,7 @@ class AuthService:
                 pass
 
     def _board_reply(self, room, b, extra=None):
-        out = {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "ver": self._board_ver()}
+        out = {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "ver": self._board_ver()}
         out.update(extra or {})
         return out
 
@@ -3633,7 +3765,7 @@ class AuthService:
         elif not is_loopback_addr(peer):
             return {"ok": False, "error": "a member token for this room is required"}, 403
         boards, down = self._board_view(now)
-        b = boards.get(room) or {"pins": [], "spots": []}
+        b = boards.get(room) or {"pins": [], "spots": [], "grids": {}}
         return self._board_reply(room, b, {"hubDown": True} if down else None), 200
 
     def board_post(self, p, bearer, peer=""):
@@ -3685,10 +3817,12 @@ class AuthService:
             d, code = out
             if code == 400 and d.get("error") == "bad room":
                 return {"ok": False, "error": "the hub runs an older KASTR without room boards -- update the hub first"}, 501
+            if code == 400 and op in BOARD_GRID_OPS and str(d.get("error") or "").startswith("unknown board op"):   # 0.21.64
+                return {"ok": False, "error": "the hub runs an older KASTR without room grid layouts -- update the hub first"}, 501
             if code == 200 and isinstance(d.get("pins"), list):
                 b = board_clean(d)
                 mirror = dict(self.__dict__.get("_board_mirror") or {})
-                if b["pins"] or b["spots"]:
+                if board_has(b):
                     mirror[room] = b
                 else:
                     mirror.pop(room, None)
@@ -3708,6 +3842,8 @@ class AuthService:
         if err:
             return {"ok": False, "error": err}, code
         what = item.get("path") or item.get("target") or ""
+        if item.get("member"):
+            what += " " + item["member"]   # 0.21.64: which camera left / came back
         self.log("relay auth: room %s board: %s %s (by %s)" % (room, op, what, item.get("by") or "?"))
         return self._board_reply(room, b), 200
 

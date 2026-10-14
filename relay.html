@@ -1765,15 +1765,20 @@
     const parts = [];
     if (b.pins) parts.push(b.pins + " pinned");
     if (b.spots) parts.push(b.spots + " spotlit");
+    if (b.grids) parts.push(b.grids + " grid layout" + (b.grids === 1 ? "" : "s"));   // 0.21.64: the room's own camera-grid layouts
     return parts.join(" \u00b7 ") || "\u2014";
   }
   function boardTip(r, det) {
     const b = r.board || {};
-    if (!b.pins && !b.spots) return "Nothing pinned or spotlit in this room";
-    if (!det) return "Pinned feeds and spotlights stay with the room until someone removes them (details on the relay's own computer)";
+    if (!b.pins && !b.spots && !b.grids) return "Nothing pinned or spotlit in this room";
+    if (!det) return "Pinned feeds, spotlights and grid layouts stay with the room until someone removes them (details on the relay's own computer)";
     const lines = [];
     for (const p of det.pins || []) lines.push("Pinned: " + (p.label || p.path) + (p.from && p.from !== r.slug ? " (from " + p.from + ")" : "") + (p.by ? " \u2014 by " + p.by : ""));
     for (const s of det.spots || []) lines.push("Spotlit: " + s.target + (s.by ? " \u2014 by " + s.by : ""));
+    for (const [gp, g] of Object.entries(det.grids || {})) {   // 0.21.64
+      const n = (g.hidden || []).length;
+      lines.push("Grid layout: " + gp + (Object.keys(g.rects || {}).length ? "" : " (box's layout)") + (n ? " \u2014 " + n + " camera" + (n === 1 ? "" : "s") + " removed" : "") + (g.by ? " \u2014 by " + g.by : ""));
+    }
     return lines.join("\n");
   }
   function fillRow(tr, r, closedAt, det) {

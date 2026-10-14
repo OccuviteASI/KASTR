@@ -149,7 +149,7 @@ class Store(unittest.TestCase):
         self.assertEqual(len(fired), 1)
         kr.close_room(self.st, "beta", operator=True)
         self.assertEqual(len(fired), 2)
-        self.assertEqual(self.st.board("beta"), {"pins": [], "spots": []})
+        self.assertEqual(self.st.board("beta"), {"pins": [], "spots": [], "grids": {}})   # 0.21.64: + grids
         self.assertEqual(self.st.boards_public(), {})
 
 

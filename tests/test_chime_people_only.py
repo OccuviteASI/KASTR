@@ -118,7 +118,7 @@ class ChimeMarkers(unittest.TestCase):
     def test_cache_not_classifier_in_the_paint_loop(self):
         # reclassifyTiles() runs once per tile / presence / grid diff: createTile, removeTile, roomsChanged, rebuildGridChildren
         self.assertEqual(self.count("function reclassifyTiles() {"), 1)
-        self.assertEqual(self.count("reclassifyTiles();"), 4)
+        self.assertEqual(self.count("reclassifyTiles();"), 5)   # 0.21.64: + roomGridChanged (the room board removed / returned a camera)
         for anchor in ("    tiles.set(name, tile);\r\n    reclassifyTiles();", "    tiles.delete(name);\r\n    reclassifyTiles();",
                        "      gridChildOf.set(f, gp);\r\n    }\r\n    try { reclassifyTiles(); } catch {}"):
             self.assertEqual(self.count(anchor), 1, anchor[:50])

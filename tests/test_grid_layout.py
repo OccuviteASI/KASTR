@@ -107,7 +107,7 @@ class Viewers(unittest.TestCase):
         self.assertIn("|| vgHqWanted(name);   // 0.21.43", p)
         self.assertIn('value: "vgedit", icon: "view", label: "Arrange this grid for me\\u2026"', p)
         self.assertIn("if (hq.size >= VG_HQ_MAX) {", p)
-        self.assertIn("const rs = meta.path && vgHasRects(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);", p)
+        self.assertIn("const rs = meta.path && vgLaidOut(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);", p)   # 0.21.64: or the room's layout
 
 
 if __name__ == "__main__":

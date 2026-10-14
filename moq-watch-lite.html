@@ -1052,6 +1052,11 @@
   .gedit .gebox.drag { cursor:grabbing; background:rgba(0,159,218,.28); z-index:2; }
   .gedit .gebox.bad { border-color:var(--asi-red); background:rgba(220,60,60,.2); }
   .gedit .gebox.swap { border-style:dashed; }
+  .gedit .gebox .gex { position:absolute; right:3px; top:3px; width:20px; height:20px; padding:0; border:0; border-radius:50%; background:rgba(0,0,0,.6); color:#fff;
+    font:700 12px/20px var(--font-ui); cursor:pointer; }   /* 0.21.64: remove this camera from the room's grid */
+  .gedit .gebox .gex:hover { background:var(--asi-red); }
+  .gedit .getools .germ { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; white-space:nowrap; color:var(--text-dim); font-size:12px; }
+  .gedit .getools .germ[hidden] { display:none; }
   .gedit .gebox .geh { position:absolute; right:0; bottom:0; width:16px; height:16px; background:var(--asi-blue); cursor:nwse-resize; border-radius:4px 0 0 0; }
   @media (prefers-reduced-motion: reduce) { #kConfirm .popcard.kconfirm { animation:none; } }
   #helpPop { width:min(560px, calc(100vw - 24px)); }
@@ -3378,28 +3383,32 @@
   // GET / POST /api/rooms/board at my relay's minter (a spoke forwards to the hub). Fetched with the xshare poll (8 s) and on
   // join. A pinned feed from another room arrives as an xshare listing (xsPoll makes it a tile); the board's spotlights count
   // as votes of their own in spotSetNow (spotVotes key "~board", by "room") and go only when removed from the board.
-  const board = { room: "", pins: [], spots: [], ver: null, at: 0 };
+  const board = { room: "", pins: [], spots: [], grids: {}, ver: null, at: 0 };   // 0.21.64: + grids -- the room's own camera-grid layouts
+  const roomHid = new Set();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room
   const boardCan = () => joinState === "joined" && !publishOnly && !isPublisherMode() && !isViewerMode() && CHANNEL !== LOBBY && !!authBase()
     && (!authSecured || (authRole !== "viewer" && !!authTokens?.member));
   const boardPinned = (path) => board.room === CHANNEL && board.pins.some((p) => p.path === String(path));
-  const boardSig = (pins, spots) => JSON.stringify([pins.map((p) => p.path), spots.map((s) => s.target + "@" + s.ts)]);
+  const boardSig = (pins, spots, grids) => JSON.stringify([pins.map((p) => p.path), spots.map((s) => s.target + "@" + s.ts), grids || {}]);
   function boardVotes() {   // the board's spotlights as one vote set of the room
     const list = board.room === CHANNEL ? board.spots.map((s) => ({ ts: Number(s.ts) || 0, target: String(s.target), by: "room" })) : [];
     if (list.length) spotVotes.set("~board", list); else spotVotes.delete("~board");
   }
-  function boardReset() { board.room = ""; board.pins = []; board.spots = []; board.ver = null; board.at = 0; spotVotes.delete("~board"); }
+  function boardReset() { board.room = ""; board.pins = []; board.spots = []; board.grids = {}; board.ver = null; board.at = 0; spotVotes.delete("~board"); try { roomGridChanged(); } catch {} }
   let boardGen = 0, boardTaken = 0;   // every write and poll carries a generation; an older answer never replaces a newer one
   function boardTake(d, gen) {   // a GET / POST reply -> my copy; a change re-applies the spotlight and the pin badges
     if (!d || !d.ok || d.room !== CHANNEL || gen < boardTaken) return;
     boardTaken = gen;
     const pins = (Array.isArray(d.pins) ? d.pins : []).filter((p) => p && p.path);
     const spots = (Array.isArray(d.spots) ? d.spots : []).filter((s) => s && s.target);
-    const was = board.room === CHANNEL ? boardSig(board.pins, board.spots) : "";
+    const grids = (d.grids && typeof d.grids === "object" && !Array.isArray(d.grids)) ? d.grids : {};   // 0.21.64
+    const was = board.room === CHANNEL ? boardSig(board.pins, board.spots, board.grids) : "";
+    const gridsWas = board.room === CHANNEL ? JSON.stringify(board.grids) : "{}";
     const gone = board.room === CHANNEL ? board.spots.map((s) => String(s.target)).filter((t) => !spots.some((s) => String(s.target) === t)) : [];
-    board.room = CHANNEL; board.pins = pins; board.spots = spots; board.ver = d.ver ?? null; board.at = Date.now();
+    board.room = CHANNEL; board.pins = pins; board.spots = spots; board.grids = grids; board.ver = d.ver ?? null; board.at = Date.now();
     boardVotes();
+    if (JSON.stringify(grids) !== gridsWas) { try { roomGridChanged(); } catch {} }   // 0.21.64: someone changed the room's grid layout -- live
     for (const t of gone) { try { if ((window.__spot?.mineList?.() || []).some((v) => v.target === t)) window.__spot.forget(t); } catch {} }
-    if (boardSig(pins, spots) !== was) { try { spotApplyWinner(); applyState(); } catch {} }
+    if (boardSig(pins, spots, grids) !== was) { try { spotApplyWinner(); applyState(); } catch {} }
   }
   let boardBusy = false;
   async function boardPoll() {
@@ -3485,7 +3494,27 @@
       await boardPost("spot", { target: t, ts: Number(ts) || Date.now() }, false);
     })();
   }
-  window.__board = { state: () => board, can: boardCan, pinned: boardPinned, pin: boardPin, spot: boardSpot, poll: boardPoll };   // module 2 + rig
+  // 0.21.64 (Kenton: "I need to be able to customize the grid for everyone in the room to see. I need to be able to remove feeds
+  // from that grid as well."): the room's own layout of a camera grid -- op grid {path, rects, gap} / gridHide + gridShow {path,
+  // member} / gridReset {path}. My copy changes at once (everyone else's within one poll); the reply replaces it.
+  async function boardGrid(op, gp, extra, quiet) {
+    gp = String(gp);
+    const g0 = board.room === CHANNEL ? board.grids[gp] : null;
+    const g = g0 ? { ...g0, rects: { ...(g0.rects || {}) }, hidden: [...(g0.hidden || [])] } : { rects: {}, gap: 2, hidden: [] };
+    if (op === "grid") { g.rects = { ...extra.rects }; g.gap = extra.gap; }
+    else if (op === "gridHide") { if (!g.hidden.includes(extra.member)) g.hidden.push(extra.member); }
+    else if (op === "gridShow") g.hidden = g.hidden.filter((m) => m !== extra.member);
+    if (board.room === CHANNEL) {
+      const grids = { ...board.grids };
+      if (op === "gridReset" || (!Object.keys(g.rects).length && !g.hidden.length)) delete grids[gp]; else grids[gp] = g;
+      board.grids = grids;
+      try { roomGridChanged(); } catch {}
+    }
+    const d = await boardPost(op, { path: gp, ...(extra || {}) }, quiet);
+    if (!d?.ok) boardPoll();   // refused: back to the room's real board
+    return d;
+  }
+  window.__board = { state: () => board, can: boardCan, pinned: boardPinned, pin: boardPin, spot: boardSpot, poll: boardPoll, grid: boardGrid };   // module 2 + rig
   // ---- 0.21.50 (Kenton: push an update to a person from the Relay page -- "Ask them first"): the update arrives through the
   // relay this app uses; the window asks "Update now" or "In 10 minutes" (then it updates by itself)
   let offerAsking = false, offerSaid = "";
@@ -4868,7 +4897,7 @@
     const n = String(name);
     if (LOW_RE.test(n)) return "low";
     if (gridMeta.has(n)) return "grid";
-    if (isGridChild(n)) return "gridchild";
+    if (isGridChild(n) || roomHid.has(n)) return "gridchild";   // 0.21.64: a camera the room removed from its grid stays out of the meeting
     if (isContentPath(n)) return "content";
     if (boxHiddenPath(n)) return "content";   // 0.21.26 (Kenton, Logan-ROC): a box's camera is a camera FEED -- shown to everyone, never a person (was "box": hidden)
     return "person";
@@ -5031,6 +5060,7 @@
     const get = (key) => { let p = people.get(key); if (!p) people.set(key, p = { key, name: "", cam: null, content: [], talk: false, mic: "", viewer: false, me: false }); return p; };
     for (const [n, t] of tiles) {
       if (isGridChild(n) || wrRoomOf(n)) continue;   // 0.21.44: a watched room's people are not in my meeting
+      if (roomHid.has(n)) continue;   // 0.21.64: nor a camera the room removed from its grid
       const key = personKeyOf(n);
       if (key === "?") continue;
       const p = get(key);
@@ -5251,7 +5281,7 @@
   const gridParked = (name) => !gridMode && !selfSpotEl && gridMeta.has(name) && gridChildOf.get(selectedName) === name;
   const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
   const leavingExMember = (name) => { if (!pendingRemovals.has(name)) return false; const now = Date.now(); for (const f of gridForgot.values()) if (f.known.includes(name) && now - f.at <= GRID_FORGOT_HOLD_MS) return true; return false; };   // 0.21.16: an ex-member of a just-withdrawn grid whose own broadcast already went inactive stays hidden while its removal debounce runs (owner switched its cameras off: no loose dead tiles)
-  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name);
+  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name) || roomHid.has(name);   // 0.21.64: + removed from this room's grid
   // 0.9.8: fill-first auto grid. Rows may hold different cell counts (2 over 3
   // for five cameras) when that draws more picture than equal cells would, no
   // cell smaller than half the biggest; partial rows and the whole block are
@@ -5316,28 +5346,66 @@
   }
   const vgHasRects = (gp) => { const v = vgGet(gp); return !!(v && v.rects && Object.keys(v.rects).length); };
   const vgHq = (gp) => new Set((vgGet(gp)?.hq || []).map(String));
-  const vgActive = (gp) => { const v = vgGet(gp); return !!(v && ((v.rects && Object.keys(v.rects).length) || (v.hq || []).length)); };
-  function vgUnits(gp, meta) {   // my blocks per cell (units), overlaps resolved; null = I follow the owner's layout
-    const v = vgGet(gp), gu = window.__gu;
-    if (!v || !v.rects || !Object.keys(v.rects).length || !gu) return null;
-    const placed = [];
-    return (meta.members || []).map((mp) => {
-      let u = v.rects[vgKey(mp)];
-      if (!gu.ok(u) || placed.some((p) => gu.hit(p, u))) u = gu.free(placed);
-      placed.push(u);
-      return u;
-    });
+  // ---- 0.21.64 (Kenton: "customize the grid for everyone in the room to see ... remove feeds from that grid as well"): THE ROOM'S
+  // LAYOUT of a grid, kept on the room board (board.grids[<grid path>] = {rects: {<member path>: units}, gap, hidden: [member]}).
+  // Which layout draws a grid here: MY "Arrange for me" layout if I set one, else the ROOM's, else the owner's announced one.
+  // The room's HIDDEN cameras are never drawn (the rest keep the chosen rects, or equal cells when the room set none), never
+  // hit by a click, and their own tiles are not shown anywhere in this room (roomHid). Nothing is sent to the box: other rooms
+  // that watch the same grid see the owner's picture as before. While "Arrange for everyone" is open its draft (vgDraft) wins.
+  let vgDraft = null;   // {gp, rects: {member: u} | null, gap, hidden: [member]}
+  const roomGridOf = (gp) => (board.room === CHANNEL && CHANNEL !== LOBBY && board.grids && board.grids[gp]) || null;
+  const roomGridRects = (gp) => { const g = roomGridOf(gp); return g && g.rects && Object.keys(g.rects).length ? g.rects : null; };
+  function vgEff(gp) {   // -> {src: draft|me|room|owner, rects (keyed by key()), gap, hidden: Set of member paths}
+    if (vgDraft && vgDraft.gp === gp) return { src: "draft", rects: vgDraft.rects && Object.keys(vgDraft.rects).length ? vgDraft.rects : null, gap: vgDraft.gap, hidden: new Set(vgDraft.hidden), key: (mp) => mp };
+    const hidden = new Set(roomGridOf(gp)?.hidden || []), v = vgGet(gp);
+    if (v && v.rects && Object.keys(v.rects).length) return { src: "me", rects: v.rects, gap: v.gap, hidden, key: vgKey };
+    const rr = roomGridRects(gp);
+    if (rr) return { src: "room", rects: rr, gap: roomGridOf(gp).gap, hidden, key: (mp) => mp };
+    return { src: "owner", rects: null, gap: null, hidden, key: vgKey };
   }
-  function vgDstRects(gp, meta, W, H) {   // where each cell goes on MY screen
-    const units = vgUnits(gp, meta);
-    if (!units) return gridRectsOf(meta, W, H);
-    const gp2 = Math.max(0, Math.min(24, Number(vgGet(gp)?.gap ?? 2))) / 2 * (W / 1280);
-    return units.map((u) => ({ x: u[0] * W / 24 + gp2, y: u[1] * H / 24 + gp2, w: Math.max(2, u[2] * W / 24 - 2 * gp2), h: Math.max(2, u[3] * H / 24 - 2 * gp2) }));
+  const vgLaidOut = (gp) => { const e = vgEff(gp); return !!(e.rects || e.hidden.size); };   // drawn by this page (not the owner's picture as is)
+  const vgActive = (gp) => { const v = vgGet(gp); return vgLaidOut(gp) || !!(v && (v.hq || []).length); };
+  function vgUnits(gp, meta, e) {   // the blocks per cell (units), overlaps resolved, null for a removed camera; null = no rects set
+    e = e || vgEff(gp);
+    const gu = window.__gu;
+    if (!e.rects || !gu) return null;
+    const ms = meta.members || [], out = ms.map(() => null), placed = [];
+    ms.forEach((mp, i) => { const u = e.rects[e.key(mp)]; if (!e.hidden.has(mp) && gu.ok(u) && !placed.some((p) => gu.hit(p, u))) { out[i] = u; placed.push(u); } });
+    ms.forEach((mp, i) => { if (!out[i] && !e.hidden.has(mp)) { const u = gu.free(placed); out[i] = u; placed.push(u); } });   // a camera with no block yet: the first free one
+    return out;
+  }
+  function vgDstRects(gp, meta, W, H, noGap) {   // where each cell goes on MY screen (null: a camera the room removed)
+    const e = vgEff(gp), units = vgUnits(gp, meta, e);
+    if (!units && !e.hidden.size) return gridRectsOf(meta, W, H);
+    const g2 = noGap ? 0 : Math.max(0, Math.min(24, Number(e.gap ?? meta.gap ?? 2))) / 2 * (W / 1280);
+    const px = (r) => r && { x: r.x + g2, y: r.y + g2, w: Math.max(2, r.w - 2 * g2), h: Math.max(2, r.h - 2 * g2) };
+    if (units) return units.map((u) => u && px({ x: u[0] * W / 24, y: u[1] * H / 24, w: u[2] * W / 24, h: u[3] * H / 24 }));
+    const ms = meta.members || [], keep = ms.filter((mp) => !e.hidden.has(mp)), auto = autoRows(Math.max(1, keep.length), W, H);   // removed cameras, no rects: equal cells for the rest
+    let j = 0;
+    return ms.map((mp) => (e.hidden.has(mp) ? null : px(auto[j++])));
   }
   function vgHqWanted(name) {   // a full-quality cell's camera subscribes while its grid is drawn my way
+    if (roomHid.has(name)) return false;   // 0.21.64: removed from this room
     for (const [gp, m] of gridMeta) if (tiles.get(gp)?.vg && (m.members || []).includes(name) && vgHq(gp).has(vgKey(name))) return true;
     return false;
   }
+  function roomHidRebuild() {
+    roomHid.clear();
+    if (board.room === CHANNEL && CHANNEL !== LOBBY) for (const [gp, g] of Object.entries(board.grids || {})) if (!(vgDraft && vgDraft.gp === gp)) for (const m of g?.hidden || []) roomHid.add(String(m));
+    if (vgDraft) for (const m of vgDraft.hidden) roomHid.add(String(m));
+  }
+  function roomGridChanged() {   // the room's grid layouts changed (a poll, my own change, the editor's draft): redraw + re-hide, live
+    roomHidRebuild();
+    try { reclassifyTiles(); } catch {}
+    if (selectedName && roomHid.has(selectedName)) {   // the camera on my stage was removed from this room: back to its grid
+      const gp = gridChildOf.get(selectedName);
+      gridZoom = null;
+      if (gp && tiles.has(gp)) selectedName = gp; else { selectedName = undefined; gridMode = true; }
+    }
+    try { vgSync(); } catch {}
+    try { applyState(); } catch {}
+  }
+  const roomGridCan = (gp) => boardCan() && gridMeta.has(gp) && !wrRoomOf(gp);   // publishers of my room (not the Lobby, a box or a viewer)
   const vgFrameOf = (t) => { try { return t.watch.video?.out?.frame?.peek?.() || t.watch.renderer?.out?.frame?.peek?.() || null; } catch { return null; } };
   let vgRaf = 0, vgLast = 0;
   function vgSync() {
@@ -5420,16 +5488,17 @@
     const labelOf = (i) => String(meta.cells?.[i] || ("Camera " + (i + 1))).slice(0, 32);
     const boxesNow = () => {
       const mine = vgUnits(name, meta);
-      if (mine) return (meta.members || []).map((mp, i) => ({ key: vgKey(mp), label: labelOf(i), u: mine[i] }));
-      const W = 1280, H = 720, rs = gridRectsOf(meta, W, H), placed = [];   // start from the owner's layout
+      if (mine) return (meta.members || []).map((mp, i) => ({ key: vgKey(mp), label: labelOf(i), u: mine[i] })).filter((b) => b.u);   // 0.21.64: never a camera the room removed
+      const W = 1280, H = 720, rs = vgDstRects(name, meta, W, H, true), placed = [];   // start from the owner's layout (0.21.64: the room's cells when it removed some)
       return (meta.members || []).map((mp, i) => {
+        if (!rs[i] && roomHid.has(mp)) return null;
         const r = rs[i];
         let u = r ? [Math.round(r.x * 24 / W), Math.round(r.y * 24 / H), Math.max(2, Math.round(r.w * 24 / W)), Math.max(2, Math.round(r.h * 24 / H))] : null;
         if (u) { u[2] = Math.min(u[2], 24 - u[0]); u[3] = Math.min(u[3], 24 - u[1]); }
         if (!gu.ok(u) || placed.some((p) => gu.hit(p, u))) u = gu.free(placed);
         placed.push(u);
         return { key: vgKey(mp), label: labelOf(i), u };
-      });
+      }).filter(Boolean);
     };
     const save = (boxes, gap) => {
       const v = vgGet(name) || {};
@@ -5451,9 +5520,9 @@
       onChange: (boxes) => save(boxes, null),
       onGap: (gap) => save(null, gap),
       onTemplate: (id) => {
-        const n = (meta.members || []).length, units = id === "auto" ? null : gu.template(n, id);
+        const ms = (meta.members || []).filter((mp) => !roomHid.has(mp)), n = ms.length, units = id === "auto" ? null : gu.template(n, id);   // 0.21.64: the cameras still in the room's grid
         if (!units) { const v = vgGet(name) || {}; delete v.rects; vgSet(name, v); return boxesNow(); }
-        const boxes = (meta.members || []).map((mp, i) => ({ key: vgKey(mp), label: labelOf(i), u: units[i] || gu.free(units.slice(0, i)) }));
+        const boxes = ms.map((mp) => ({ key: vgKey(mp), label: labelOf((meta.members || []).indexOf(mp)), u: units[ms.indexOf(mp)] || gu.free(units.slice(0, ms.indexOf(mp))) }));
         save(boxes, null);
         return boxes;
       },
@@ -5462,7 +5531,101 @@
       onClose: () => {},
     }), 300);
   }
-  window.__vg = { edit: vgEdit, hq: vgToggleHq, get: vgGet, set: vgSet };   // rig
+  // 0.21.64: "Arrange for everyone in this room" -- the same editor; the layout is saved to the room board on Done, a camera's
+  // x removes it from this room's grid at once (gridHide), "Add back" returns it (gridShow), "Reset to the box's layout" drops
+  // the room's layout and its removals (gridReset). While it is open my screen shows the draft (vgDraft beats my own layout).
+  function rgEdit(name) {
+    const t = tiles.get(name), meta = gridMeta.get(name), gu = window.__gu, ed = window.__gridEditor;
+    if (!t || !meta || !gu || !ed || !roomGridCan(name)) return;
+    if (gridMode || selectedName !== name) { gridMode = false; select(name); }
+    const g0 = roomGridOf(name), room = CHANNEL;
+    vgDraft = { gp: name, rects: roomGridRects(name) ? { ...g0.rects } : null, gap: Number(g0?.gap ?? meta.gap ?? 2), hidden: [...(g0?.hidden || [])] };
+    let dirty = false;   // the layout (blocks / gap) changed since the editor opened -- Done saves it
+    const labelOf = (mp) => { const i = (meta.members || []).indexOf(mp); return String(meta.cells?.[i] || ("Camera " + (i + 1))).slice(0, 32); };
+    const visible = () => (meta.members || []).filter((mp) => !vgDraft.hidden.includes(mp));
+    const boxesNow = () => {   // what the draft draws, as blocks (the owner's / equal cells turned into blocks when it has none)
+      const e = vgEff(name), units = vgUnits(name, meta, e);
+      if (units) return (meta.members || []).map((mp, i) => ({ key: mp, label: labelOf(mp), u: units[i] })).filter((b) => b.u);
+      const W = 1280, H = 720, rs = vgDstRects(name, meta, W, H, true), placed = [];
+      return (meta.members || []).map((mp, i) => {
+        const r = rs[i];
+        if (!r) return null;
+        let u = [Math.round(r.x * 24 / W), Math.round(r.y * 24 / H), Math.max(2, Math.round(r.w * 24 / W)), Math.max(2, Math.round(r.h * 24 / H))];
+        u[2] = Math.min(u[2], 24 - u[0]); u[3] = Math.min(u[3], 24 - u[1]);
+        if (!gu.ok(u) || placed.some((p) => gu.hit(p, u))) u = gu.free(placed);
+        placed.push(u);
+        return { key: mp, label: labelOf(mp), u };
+      }).filter(Boolean);
+    };
+    const redraw = () => { roomGridChanged(); };
+    const setBoxes = (boxes) => { vgDraft.rects = Object.fromEntries(boxes.map((b) => [b.key, b.u])); dirty = true; redraw(); };
+    setTimeout(() => ed.open({
+      pane: t.pane, layout: vgDraft.rects ? "custom" : "", gap: vgDraft.gap, templates: gu.templates.filter(([id]) => id !== "row" && id !== "column"),
+      title: (meta.label || "This grid") + " \u2014 everyone in " + roomTitle(room) + " sees this layout",
+      resetLabel: "Reset to the box\u2019s layout", resetTip: "Drop this room\u2019s layout and bring back every removed camera, for everyone in " + roomTitle(room),
+      cancelTip: "Undo the layout changes since you opened it (Esc) \u2014 removed cameras stay removed until you add them back",
+      frame: () => {
+        const f = viewFitBox(t.canvas);
+        if (!f) return null;
+        const b = t.canvas.getBoundingClientRect(), pb = t.pane.getBoundingClientRect();
+        return { x: b.left - pb.left + f.ox, y: b.top - pb.top + f.oy, w: f.cw * f.sc, h: f.ch * f.sc };
+      },
+      boxes: boxesNow(),
+      onChange: (boxes) => setBoxes(boxes),
+      onGap: (gap) => { vgDraft.gap = gap; if (!vgDraft.rects) vgDraft.rects = Object.fromEntries(boxesNow().map((b) => [b.key, b.u])); dirty = true; redraw(); },
+      onTemplate: (id) => {
+        const ms = visible(), units = id === "auto" ? null : gu.template(ms.length, id);
+        if (!units) { vgDraft.rects = null; redraw(); vgDraft.rects = Object.fromEntries(boxesNow().map((b) => [b.key, b.u])); dirty = true; redraw(); return boxesNow(); }
+        const boxes = ms.map((mp, i) => ({ key: mp, label: labelOf(mp), u: units[i] || gu.free(units.slice(0, i)) }));
+        setBoxes(boxes);
+        return boxes;
+      },
+      removeTip: "Remove from this room\u2019s grid \u2014 for everyone in " + roomTitle(room) + " (the box keeps sending it)",
+      onRemove: (mp) => {
+        if (visible().length <= 1) { window.__toast?.("Keep at least one camera in the grid \u2014 Reset brings every camera back.", 4500, { level: "warn" }); return null; }
+        vgDraft.hidden.push(mp);
+        if (vgDraft.rects) delete vgDraft.rects[mp];
+        redraw();
+        boardGrid("gridHide", name, { member: mp }).then((d) => { if (d?.ok) window.__toast?.(labelOf(mp) + " is removed from the grid for everyone in " + roomTitle(room), 3500, { level: "event" }); });
+        return boxesNow();
+      },
+      removed: () => vgDraft ? vgDraft.hidden.map((mp) => ({ key: mp, label: labelOf(mp) })) : [],
+      onAddBack: (mp) => {
+        vgDraft.hidden = vgDraft.hidden.filter((m) => m !== mp);
+        if (vgDraft.rects) { const placed = Object.values(vgDraft.rects); vgDraft.rects[mp] = gu.free(placed); }
+        redraw();
+        boardGrid("gridShow", name, { member: mp }).then((d) => { if (d?.ok) window.__toast?.(labelOf(mp) + " is back in the grid for everyone in " + roomTitle(room), 3500, { level: "event" }); });
+        return boxesNow();
+      },
+      onReset: () => {
+        vgDraft.rects = null; vgDraft.hidden = []; vgDraft.gap = Number(meta.gap ?? 2); dirty = false;
+        redraw();
+        boardGrid("gridReset", name, {}).then((d) => { if (d?.ok) window.__toast?.(roomTitle(room) + " sees the box\u2019s own layout again", 3500, { level: "event" }); });
+        return boxesNow();
+      },
+      onDone: (boxes, gap) => {
+        if (!dirty || room !== CHANNEL) return;
+        const rects = Object.fromEntries(boxes.filter((b) => !vgDraft.hidden.includes(b.key)).map((b) => [b.key, b.u]));
+        if (!Object.keys(rects).length) return;
+        boardGrid("grid", name, { rects, gap: Math.max(0, Math.min(24, Math.round(Number(gap ?? vgDraft.gap) || 0))) }).then((d) => {
+          if (!d?.ok) return;
+          window.__toast?.("Grid layout saved for everyone in " + roomTitle(room) + (vgHasRects(name) ? " \u2014 you still see your own arrangement (Use the room\u2019s layout)" : ""), 4500, { level: "event" });
+        });
+      },
+      onCancel: () => {},
+      onClose: () => { vgDraft = null; redraw(); },
+    }), 300);
+  }
+  async function rgHide(gp, mp) {   // a camera's own menu / a right-clicked cell: out of this room's grid, for everyone here
+    if (!roomGridCan(gp)) return;
+    const meta = gridMeta.get(gp), i = (meta?.members || []).indexOf(mp);
+    const label = String(meta?.cells?.[i] || shortLabel(mp)).slice(0, 32);
+    const g = roomGridOf(gp), left = (meta?.members || []).filter((m) => m !== mp && !(g?.hidden || []).includes(m));
+    if (!left.length) { window.__toast?.("Keep at least one camera in the grid.", 4000, { level: "warn" }); return; }
+    const d = await boardGrid("gridHide", gp, { member: mp });
+    if (d?.ok) window.__toast?.(label + " is removed from the grid for everyone in " + roomTitle(CHANNEL) + " \u2014 \u201cArrange for everyone\u201d brings it back", 4500, { level: "event" });
+  }
+  window.__vg = { edit: vgEdit, hq: vgToggleHq, get: vgGet, set: vgSet, roomEdit: rgEdit, hide: rgHide, eff: vgEff, dst: vgDstRects, hidden: () => [...roomHid] };   // rig
   function gridRectsW(n, layout, W, H) {
     const rects = [];
     const grid = (cols, rows) => {   // 0.9.8: a short last row is centred
@@ -5668,8 +5831,8 @@
     const wb = t.canvas.parentElement.getBoundingClientRect();
     if (!wb.width || !wb.height) return -1;
     const px = (ev.clientX - wb.left - f.ox) / f.sc, py = (ev.clientY - wb.top - f.oy) / f.sc;
-    const rs = meta.path && vgHasRects(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);   // 0.21.43: my layout
-    return rs.findIndex((r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
+    const rs = meta.path && vgLaidOut(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);   // 0.21.43: my layout (0.21.64: or the room's)
+    return rs.findIndex((r) => r && px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);   // 0.21.64: a removed camera has no cell
   }
   // ---- view engine (0.8.12) --------------------------------------------------
   // Zoom is STATE, not a one-off transform: view = {s, cx, cy} per canvas --
@@ -6300,7 +6463,7 @@
   }
   window.__pins = { list: () => (pinsLoad(), myPins.slice()), live: pinsLive, toggle: pinToggle, show: pinsShow };   // rig
   function autoContentCheck() {
-    const content = orderedNames().filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !wrRoomOf(n));   // 0.8.12: feeds behind a grid are not arrivals; 0.21.44: nor a watched room's shares
+    const content = orderedNames().filter((n) => !roomHid.has(n)).filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !wrRoomOf(n));   // 0.8.12: feeds behind a grid are not arrivals; 0.21.44: nor a watched room's shares
     const newest = content[content.length - 1] ?? null;
     // 0.8.3: the stage auto-moves TO shared content only, and never hops
     // between two live shares -- a second share must not yank the stage
@@ -7215,7 +7378,7 @@
   }
 
   function select(name) {
-    if (!tiles.has(name)) return;
+    if (!tiles.has(name) || roomHid.has(name)) return;   // 0.21.64: a camera the room removed is never opened here
     manualPick = true;   // 0.13.3
     galleryChosen = false;   // 0.21.40
     if (name !== selectedName) viewResetAll();   // 0.8.12: a new pick starts unzoomed
@@ -7681,6 +7844,9 @@
           items.push({ value: rp ? "rpinoff" : "rpin", icon: "pin", label: rp ? "Unpin from this room" : "Pin to this room",
             tip: rp ? "Stop listing it in this room for everyone" : "Everyone in this room sees it as a tile, until someone unpins it" });
         }
+        const myGrid = gridChildOf.get(name);   // 0.21.64: a camera of a grid shown here -- out of this room's grid (and its own tile)
+        if (myGrid && tiles.has(myGrid) && roomGridCan(myGrid)) items.push({ value: "rghidecam", icon: "eye", label: "Remove from this room",
+          tip: "Its grid cell and its own tile go for everyone in this room \u2014 the box keeps sending it to other rooms" });
         items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
           items.push({ value: "astop", label: "Stop this share (admin)" });
@@ -7696,7 +7862,12 @@
         if (gm) {
           items.push({ sep: true });
           items.push({ value: "vgedit", icon: "view", label: "Arrange this grid for me\u2026", tip: "Move and resize its cells on your screen only" });
-          if (vgHasRects(name)) items.push({ value: "vgreset", label: "Use the owner\u2019s layout" });
+          if (vgHasRects(name)) items.push({ value: "vgreset", label: roomGridRects(name) ? "Use the room\u2019s layout" : "Use the owner\u2019s layout" });   // 0.21.64: the room's layout when it has one
+          if (roomGridCan(name)) {   // 0.21.64: the room's own layout -- everyone in this room sees it
+            const nh = (roomGridOf(name)?.hidden || []).length;
+            items.push({ value: "rgedit", icon: "view", label: "Arrange for everyone in this room\u2026", tip: "Move, resize and remove cameras for everyone in " + roomTitle(CHANNEL) + " (other rooms keep the box\u2019s layout)" });
+            if (nh) items.push({ value: "rgedit", label: "Removed from this room (" + nh + ") \u2014 Add back\u2026" });
+          }
           try {
             const ar = anchor?.getBoundingClientRect?.();
             if (ar && ar.width === 0 && ar.height === 0) {   // a right-click: which cell?
@@ -7704,6 +7875,7 @@
               const mp = idx >= 0 ? (gm.members || [])[idx] : null;
               if (mp) {
                 hqCell = mp;
+                if (roomGridCan(name)) items.push({ value: "rghide", label: "Remove " + String(gm.cells?.[idx] || "this camera").slice(0, 24) + " from this room\u2019s grid", tip: "For everyone in " + roomTitle(CHANNEL) + " \u2014 the box keeps sending it" });   // 0.21.64
                 const on = vgHq(name).has(vgKey(mp));
                 items.push({ value: "vghq", label: (on ? "\u2611 " : "\u2610 ") + "Full quality in the grid: " + String(gm.cells?.[idx] || "this camera").slice(0, 24), tip: "This cell shows the camera's own stream on your screen (up to 4 per grid)" });
               }
@@ -7723,6 +7895,9 @@
             return;
           }
           if (v === "vgedit") { vgEdit(name); return; }   // 0.21.43
+          if (v === "rgedit") { rgEdit(name); return; }   // 0.21.64: the room's layout
+          if (v === "rghide") { if (hqCell) rgHide(name, hqCell); return; }
+          if (v === "rghidecam") { const g2 = gridChildOf.get(name); if (g2) rgHide(g2, name); return; }
           if (v === "vgreset") { const s0 = vgGet(name) || {}; delete s0.rects; delete s0.gap; vgSet(name, s0); return; }
           if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
           if (v === "vghqoff") { const s0 = vgGet(name) || {}; s0.hq = []; vgSet(name, s0); return; }
@@ -7906,7 +8081,7 @@
     reclassifyTiles();   // 0.21.15: the new tile's class (the People head reads the cache, never the classifier)
     attachMeter(tile);
 
-    if (selectedName === undefined && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
+    if (selectedName === undefined && !roomHid.has(name) && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
     if (isPinned(name) && !manualPick && !galleryChosen) setTimeout(() => { if (tiles.has(name) && !manualPick && !galleryChosen) pinsShow(); }, 0);   // 0.21.45: a pin came back
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
@@ -7950,9 +8125,9 @@
         if (!gridMode && idx >= 0) gridZoom = { name: gp, idx };
       } else {
         selectedName = (!gridMode
-          ? orderedNames().find((n) => isWatched(n) && isContentPath(n) && !isGridChild(n))
+          ? orderedNames().find((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !roomHid.has(n))
           : undefined)
-          ?? orderedNames().find((n) => isWatched(n) && !isGridChild(n));   // never a hidden child; empty is fine
+          ?? orderedNames().find((n) => isWatched(n) && !isGridChild(n) && !roomHid.has(n));   // never a hidden child; empty is fine
       }
     }
     renumber();
@@ -9107,9 +9282,22 @@
       gr.addEventListener("input", () => { gv.textContent = gr.value + " px"; clearTimeout(gT); gT = setTimeout(() => o.onGap?.(Number(gr.value)), 120); });
       const sep2 = document.createElement("span"); sep2.className = "sep"; tools.append(sep2);
       const mk = (txt, cls, fn, tip) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = txt; if (tip) b.title = tip; b.addEventListener("click", fn); tools.append(b); return b; };
-      mk("Reset", "ghost", () => { const nb = o.onReset?.(); if (Array.isArray(nb)) { c.boxes = nb.map((x) => ({ ...x, u: x.u.slice() })); c.layout = "auto"; gr.value = "2"; gv.textContent = "2 px"; paint(); } }, "Back to equal cells, 2 px gap");
-      mk("Cancel", "ghost", () => close(true), "Undo every change since Edit layout (Esc)");
-      mk("Done", "", () => close(false));
+      // 0.21.64: cameras taken out (opts.removed() -> [{key, label}], opts.onAddBack(key) -> boxes) -- "Removed (n)" with Add back
+      const rml = document.createElement("span"); rml.className = "germ"; rml.hidden = true;
+      if (o.removed) tools.append(rml);
+      c.paintRemoved = () => {
+        const list = (o.removed?.() || []);
+        rml.hidden = !list.length;
+        rml.replaceChildren(document.createTextNode("Removed (" + list.length + "):"), ...list.map((x) => {
+          const b = document.createElement("button"); b.type = "button"; b.className = "ghost gead"; b.dataset.key = x.key;
+          b.textContent = "Add back " + (x.label || "camera"); b.title = "Put it back in the grid";
+          b.addEventListener("click", () => { const nb = o.onAddBack?.(x.key); if (Array.isArray(nb)) { c.boxes = nb.map((y) => ({ ...y, u: y.u.slice() })); c.layout = "custom"; } paint(); });
+          return b;
+        }));
+      };
+      mk(o.resetLabel || "Reset", "ghost", () => { const nb = o.onReset?.(); if (Array.isArray(nb)) { c.boxes = nb.map((x) => ({ ...x, u: x.u.slice() })); c.layout = "auto"; gr.value = "2"; gv.textContent = "2 px"; paint(); } }, o.resetTip || "Back to equal cells, 2 px gap");
+      mk("Cancel", "ghost", () => close(true), o.cancelTip || "Undo every change since Edit layout (Esc)");
+      mk("Done", "", () => { try { o.onDone?.(c.boxes.map((x) => ({ key: x.key, label: x.label, u: x.u.slice() })), Number(gr.value)); } catch {} close(false); });
       c.place = () => {
         const f = o.frame?.(); if (!f) return;
         Object.assign(frameEl.style, { left: f.x + "px", top: f.y + "px", width: f.w + "px", height: f.h + "px" });
@@ -9125,11 +9313,18 @@
       for (const ev of ["click", "dblclick", "pointerdown", "wheel", "contextmenu"]) root.addEventListener(ev, (e) => { e.stopPropagation(); if (ev === "wheel" || ev === "contextmenu") e.preventDefault(); }, ev === "wheel" ? { passive: false } : undefined);
       function paint() {
         for (const [id, b] of tbtn) b.classList.toggle("on", id === c.layout);
+        try { c.paintRemoved?.(); } catch {}
         frameEl.replaceChildren(...c.boxes.map((b) => {
           const el = document.createElement("div"); el.className = "gebox"; el.dataset.key = b.key;
           el.textContent = b.label || "Camera";
           const h = document.createElement("span"); h.className = "geh"; h.title = "Drag to resize";
           el.appendChild(h);
+          if (o.onRemove) {   // 0.21.64: take this camera out
+            const x = document.createElement("button"); x.type = "button"; x.className = "gex"; x.textContent = "\u2715"; x.title = o.removeTip || "Remove";
+            x.addEventListener("pointerdown", (e) => e.stopPropagation());
+            x.addEventListener("click", (e) => { e.stopPropagation(); const nb = o.onRemove(b.key); if (Array.isArray(nb)) { c.boxes = nb.map((y) => ({ ...y, u: y.u.slice() })); paint(); } });
+            el.appendChild(x);
+          }
           setPos(el, b.u);
           el.addEventListener("pointerdown", (e) => startDrag(e, b, el, e.target === h));
           return el;
@@ -9247,7 +9442,7 @@
     if (!gridMode && (!selectedName || !tiles.has(selectedName))) {
       // Manual spotlight needs a main: content first, then the current
       // speaker, then whatever is first -- or my own first pane.
-      const names = orderedNames().filter((n) => isWatched(n) && !isGridChild(n));   // 0.9.4: feeds behind a grid are not a main
+      const names = orderedNames().filter((n) => isWatched(n) && !isGridChild(n) && !roomHid.has(n));   // 0.9.4: feeds behind a grid are not a main
       const pick = (autoContent && tiles.has(autoContent) ? autoContent : null)
         ?? (speakerName && tiles.has(speakerName) ? speakerName : null)
         ?? names.find(isContentPath) ?? names[0] ?? null;
@@ -19378,6 +19573,7 @@
     // geometry changes (stale pixels would otherwise survive a re-layout).
     const geo = g.canvas.width + "x" + g.canvas.height + "|" + (g.layout || "auto") + "|" + rects.map((r) => r.x + "," + r.y + "," + r.w + "," + r.h).join(";");
     if (g.lastGeo !== geo) { g.lastGeo = geo; g.cx.fillStyle = "#000"; g.cx.fillRect(0, 0, g.canvas.width, g.canvas.height); gridNote(g, "relayout " + geo); }   // 0.21.5: noted
+    if (g.annGeo !== geo && live) { g.annGeo = geo; try { announceGrid(); } catch {} }   // 0.21.64: the drawn rects reach viewers -- an announce made before the first draw had none (a viewer then cropped a custom layout as equal cells)
     const nowMs = performance.now();
     const B = Math.max(1, Math.round(g.canvas.width / 1280));   // 0.21.23: border per cell side (2 px between cells at 1280 wide)
     ms.forEach((s, i) => {

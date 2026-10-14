@@ -489,7 +489,7 @@
       <h2>Rooms on this relay</h2>
       <div id="roomsNote" class="hint">No rooms yet.</div>
       <div class="tblwrap"><table class="rooms" id="roomsTable">
-        <thead><tr><th>Room</th><th>Flags</th><th>Creator</th><th>Created</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Room</th><th>Flags</th><th title="Feeds pinned to the room and its spotlights (they stay until someone removes them)">Board</th><th>Creator</th><th>Created</th><th>Last seen</th><th></th></tr></thead>
         <tbody></tbody>
       </table></div>
     </section>
@@ -1709,7 +1709,7 @@
   function roomRow(slug) {
     const tr = document.createElement("tr");
     tr.setAttribute("data-slug", slug);   // reconciled by slug, never rebuilt
-    for (const cls of ["slug", "flags", "creator mono", "created mono", "at mono", "act"]) {
+    for (const cls of ["slug", "flags", "board", "creator mono", "created mono", "at mono", "act"]) {   // 0.21.64: + board
       const td = document.createElement("td");
       td.className = cls;
       tr.appendChild(td);
@@ -1759,12 +1759,31 @@
     tr.querySelector(".act").appendChild(pb);
     return tr;
   }
-  function fillRow(tr, r, closedAt) {
+  // 0.21.64: the room board -- "2 pinned · 1 spotlit"; the tooltip lists them (this machine's page gets the details)
+  function boardText(r) {
+    const b = r.board || {};
+    const parts = [];
+    if (b.pins) parts.push(b.pins + " pinned");
+    if (b.spots) parts.push(b.spots + " spotlit");
+    return parts.join(" \u00b7 ") || "\u2014";
+  }
+  function boardTip(r, det) {
+    const b = r.board || {};
+    if (!b.pins && !b.spots) return "Nothing pinned or spotlit in this room";
+    if (!det) return "Pinned feeds and spotlights stay with the room until someone removes them (details on the relay's own computer)";
+    const lines = [];
+    for (const p of det.pins || []) lines.push("Pinned: " + (p.label || p.path) + (p.from && p.from !== r.slug ? " (from " + p.from + ")" : "") + (p.by ? " \u2014 by " + p.by : ""));
+    for (const s of det.spots || []) lines.push("Spotlit: " + s.target + (s.by ? " \u2014 by " + s.by : ""));
+    return lines.join("\n");
+  }
+  function fillRow(tr, r, closedAt, det) {
     const set = (cls, txt) => {
       const td = tr.querySelector("." + cls);
       if (td.textContent !== txt) td.textContent = txt;
     };
     set("flags", roomFlags(r, closedAt));
+    set("board", boardText(r));
+    { const td = tr.querySelector(".board"), tip = boardTip(r, det); if (td.title !== tip) td.title = tip; }
     set("creator", r.creator || "\u2014");
     set("created", fmtWhen(r.created));
     set("at", fmtAgo(r.at));
@@ -1793,7 +1812,7 @@
       seen.add(slug);
       let tr = roomRows.get(slug);
       if (!tr) { tr = roomRow(slug); roomRows.set(slug, tr); roomsBody.appendChild(tr); }
-      fillRow(tr, r, closed[slug]);
+      fillRow(tr, r, closed[slug], (d.boards || {})[slug]);   // 0.21.64: + the board's details
     }
     for (const [slug, tr] of roomRows) if (!seen.has(slug)) { tr.remove(); roomRows.delete(slug); }
     roomsNote.hidden = roomRows.size > 0;

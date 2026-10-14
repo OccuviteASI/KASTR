@@ -28,8 +28,24 @@ class TileChrome(unittest.TestCase):
         self.assertIn('b.innerHTML = icon(cls === "pfs" ? "fullscreen" : "fillwin");', self.p)
 
     def test_marks_fade(self):
-        self.assertIn("#stagewrap.idle #stage .mchip, #stagewrap.idle #stage .vchip {", self.p)
+        # 0.21.65 (Kenton: "Always show the no camera/mic on the left when not mousing over"): the marks no longer fade;
+        # only the NAME goes with the idle chrome
+        self.assertNotIn("#stagewrap.idle #stage .mchip, #stagewrap.idle #stage .vchip {", self.p)
+        self.assertNotIn("#stagewrap.idle #stage.collage .pane .mchip", self.p)
+        self.assertIn("#stagewrap.idle #stage .pane .label .l, #stagewrap.idle #stage .pubpane:not(.warnstate) .bar .nm,", self.p)
+        self.assertIn('const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.gmenu,.latb";', self.p)
         self.assertIn('if (e.pointerType === "mouse" && !idleBusy()) { clearTimeout(idleT); stageWrap.classList.add("idle"); }', self.p)
+
+    def test_one_row(self):
+        # 0.21.65: name first (hover only), then camera-off, then mic-off / deafened -- one bottom-left row on every tile
+        self.assertIn("label.append(l, vchip, mchip);", self.p)
+        self.assertIn("nm.after(vchip, mchip);", self.p)
+        self.assertIn("""chip.innerHTML = '<span class="vn"></span><span class="vey">' + icon("eye") + '</span><span class="vdf\"""", self.p)
+        self.assertIn("#stage .pane .label, #stage .pubpane .bar, #stage .pane.vtile .vonly { position:absolute; left:8px;", self.p)
+        self.assertIn("  @media (hover: hover) {\n    #stage .pane .label .l, #stage .pubpane .bar .nm, #stage .pane.vtile .vonly .vn { display:none; }", self.p)
+        for gone in ("padding-left:38px", "padding-left:68px", "#stage .pubpane.vpaused.micmuted .mchip { left:38px; }",
+                     "background:linear-gradient(transparent, rgba(0,0,0,.72)); color:#fff;"):
+            self.assertNotIn(gone, self.p)
 
     def test_stuck_caption(self):
         self.assertIn('"waiting on relay " + (memberVia(personKeyOf(name)) || "?")', self.p)

@@ -279,10 +279,10 @@ class ViewOnlyName(unittest.TestCase):
     def test_the_watchers_name_hides_like_a_publishers(self):
         with io.open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
             page = f.read()
-        self.assertIn("#stage.spot .pane.vtile .vonly .vn { max-width:0;", page)                 # folded unless the pointer is on it
-        self.assertIn("#stage.spot .pane.vtile:hover .vonly .vn", page)
-        self.assertIn("#stagewrap.idle #stage.spot .pane.vtile .vonly .vn { max-width:0 !important;", page)   # mouse resting
-        self.assertIn("#stagewrap.idle #stage.spot .pane .label", page)                          # the publishers' rule it mirrors
+        # 0.21.65: the same row rules as everyone (every view): the name only on hover, gone when the mouse rests
+        self.assertIn("#stage .pane.vtile:hover .vonly .vn, #stage .pane.vtile:focus-within .vonly .vn { display:block; }", page)
+        self.assertIn("#stagewrap.idle #stage .pane.vtile .vonly .vn,", page)                    # mouse resting
+        self.assertIn("#stagewrap.idle #stage .pane .label .l,", page)                           # the publishers' rule it mirrors
 
 if __name__ == "__main__":
     unittest.main()

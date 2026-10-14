@@ -261,16 +261,8 @@
   #stage.collage .pane { cursor:grab; touch-action:none; }
   #stage.spot .pane { cursor:pointer; }
   #stage .pane.vtile { cursor:default; }   /* 0.21.19: a watcher's tile -- avatar + view-only chip */
-  #stage .pane.vtile .vonly { position:absolute; left:6px; bottom:6px; z-index:2; display:inline-flex; align-items:center; gap:5px;
-    max-width:calc(100% - 12px); padding:3px 7px; border-radius:6px; background:rgba(0,0,0,.6); color:#fff; font-size:11px; font-family:var(--font-mono); }
-  #stage .pane.vtile .vonly .icon { width:13px; height:13px; flex:none; opacity:.85; }
-  #stage .pane.vtile .vonly .vn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  /* 0.21.53 (Kenton: "On view only people, autohide their name when not moving the mouse same as the publishers. Just keep the
-     eye symbol"): where a publisher's name hides (speaker view + rail: shown while the pointer is on the tile, gone when the mouse
-     rests) the watcher's name folds away too and the chip keeps only the eye (+ the deafened mark) */
-  #stage.spot .pane.vtile .vonly .vn { max-width:0; margin-left:-5px; opacity:0; transition:max-width .25s ease, opacity .2s ease, margin-left .25s ease; }
-  #stage.spot .pane.vtile:hover .vonly .vn, #stage.spot .pane.vtile:focus-within .vonly .vn { max-width:24em; margin-left:0; opacity:1; }
-  #stagewrap.idle #stage.spot .pane.vtile .vonly .vn { max-width:0 !important; margin-left:-5px !important; opacity:0 !important; }
+  /* 0.21.53 (Kenton: "On view only people, autohide their name ... Just keep the eye symbol") -> 0.21.65: a watcher's tile
+     wears the same bottom-left row as everyone else (see "ONE row" below): the eye (+ deafened) always, the name before it on hover */
   .pghead .vonlyic .icon { width:12px; height:12px; margin-right:5px; vertical-align:-2px; opacity:.75; }
   /* 0.21.20: my own preview as picture in picture (Kenton's Teams screenshot) -- small, bottom-right of the stage */
   #stage .pubpane.ownpip { position:absolute; z-index:6; bottom:12px; width:clamp(160px, 15%, 280px); height:auto !important;
@@ -360,21 +352,12 @@
     position:absolute; left:0; right:0; top:45%; text-align:center;
     color:var(--text-dim); font-size:11px; font-family:var(--font-mono); }
   #stage .pubpane.talking { border-color:var(--pc-me, var(--asi-blue)); box-shadow:0 0 0 2px var(--pc-me, var(--asi-blue)); }   /* 0.21.61: my colour */
-  /* 0.8.1: Teams-style chrome -- names and chevrons appear on hover only */
-  /* 0.8.9: the NAME stays put in every layout (it shares the bar with the
-     mute/pause chips); only own bars and chevrons keep the hover reveal. */
-  #stage .pubpane .bar, #stage .pchev {
+  /* 0.8.1: Teams-style chrome -- chevrons appear on hover only (0.21.65: the name row has its own rules, see "ONE row") */
+  #stage .pchev {
     opacity:0; transition:opacity .15s ease; pointer-events:none; }
-  #stage .pane:hover .label, #stage .pane:focus-within .label,
-  #stage .pubpane:hover .bar, #stage .pubpane:focus-within .bar,
   #stage .pane:hover .pchev, #stage .pane:focus-within .pchev,
   #stage .pubpane:hover .pchev, #stage .pubpane:focus-within .pchev {
     opacity:1; pointer-events:auto; }
-  /* the truth badge must not hide: a NO RELAY warning forces the bar on */
-  #stage .pubpane.warnstate .bar { opacity:1; pointer-events:auto; }
-  /* 0.8.7: in the GRID the name bar stays put (chips + name read as one bar);
-     the spotlight rail keeps the hover reveal. */
-  #stage.collage .pane .label, #stage.collage .pubpane .bar { opacity:1; pointer-events:auto; }
   /* 0.8.7: avatar circle -- ASI ground, swoosh behind, initials in a per-person
      ASI color, or the person's photo filling the circle. */
   .pane .face, #stage .pubpane .pface { container-type:size; }   /* 0.8.9: the circle sizes from BOTH axes */
@@ -608,11 +591,10 @@
   .zoomctl { position:absolute; right:8px; bottom:8px; z-index:8; display:none; gap:4px; opacity:0; transition:opacity .15s ease; }
   #stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl, #stage .pubpane.mainstage[data-zoom] .zoomctl { display:flex; }
   #stage .pane:hover .zoomctl, #stage .pubpane:hover .zoomctl, #stage .zoomed .zoomctl { opacity:1; }
-  /* 0.13.3: a visible media bar owns the bottom row -- zoom controls and the mic/video chips step above it
-     (the three zoom buttons used to sit exactly on the shared file's mute button and volume slider) */
-  #stage .pane:has(> .mediabar:not([hidden])) .zoomctl, #stage .pubpane:has(> .mediabar:not([hidden])) .zoomctl,
-  #stage .pane:has(> .mediabar:not([hidden])) .mchip, #stage .pubpane:has(> .mediabar:not([hidden])) .mchip,
-  #stage .pane:has(> .mediabar:not([hidden])) .vchip, #stage .pubpane:has(> .mediabar:not([hidden])) .vchip { bottom:78px; }
+  /* 0.13.3: a visible media bar owns the bottom row -- zoom controls step above it
+     (the three zoom buttons used to sit exactly on the shared file's mute button and volume slider).
+     0.21.65: the mic/video marks ride the name row now, under the media bar (bottom:36px) where the name always sat */
+  #stage .pane:has(> .mediabar:not([hidden])) .zoomctl, #stage .pubpane:has(> .mediabar:not([hidden])) .zoomctl { bottom:78px; }
   /* 0.21.41 (Kenton: "the zoom and + - buttons are quite big. The % should only show when zooming in/out and should be smaller
      for the + and - when showing") */
   .zoomctl button { min-width:20px; height:20px; padding:0 4px; background:rgba(10,14,18,.72); color:#fff; border:1px solid rgba(255,255,255,.25);
@@ -668,16 +650,11 @@
   /* 0.21.0: idle chrome (see idleShow) -- two ids beat every hover/phone rule above */
   #stagewrap.idle #stage .pane .mediabar, #stagewrap.idle #stage .pubpane .mediabar,
   #stagewrap.idle #stage .pane .pchev, #stagewrap.idle #stage .pubpane .pchev,
-  #stagewrap.idle #stage.spot .pubpane .bar, #stagewrap.idle #stage.spot .pane .label,
-  #stagewrap.idle #stage .zoomctl, #stagewrap.idle #stage .zoomlbl, #stagewrap.idle #stageBack, #stagewrap.idle #stage .latb,
-  #stagewrap.idle #stage .mchip, #stagewrap.idle #stage .vchip {   /* 0.21.37 (Kenton): the mute / camera-off marks only while the mouse moves over the stage */
+  #stagewrap.idle #stage .zoomctl, #stagewrap.idle #stage .zoomlbl, #stagewrap.idle #stageBack, #stagewrap.idle #stage .latb {
     opacity:0 !important; pointer-events:none; transition:opacity .25s ease; }
   #stagewrap.idle #stage.spot .pane.mainstage, #stagewrap.idle #stage.spot .pubpane.mainstage { cursor:none; }
-  /* 0.21.63 (Kenton: "When showing user previews in the gallery view show their the mute/no cam icons whether hovering or
-     not"): in the gallery a muted mic / camera-off mark stays put; elsewhere it still fades with the idle chrome */
-  #stagewrap.idle #stage.collage .pane .mchip, #stagewrap.idle #stage.collage .pane .vchip,
-  #stagewrap.idle #stage.collage .pubpane .mchip, #stagewrap.idle #stage.collage .pubpane .vchip { opacity:1 !important; }
-  #stagewrap.idle #stage .pubpane.warnstate .bar { opacity:1 !important; pointer-events:auto; }
+  /* 0.21.65: the 0.21.37 / 0.21.63 idle fades of the camera-off / mute marks are gone -- the marks never fade now; only the
+     name goes with the idle chrome (see "ONE row") */
   .mediabar .mhear { opacity:.45; } .mediabar .mhear.on { opacity:1; }
   /* 0.21.0: shared surface tokens on the page's own popovers */
   .popcard, #sharePop, #mineMenu { box-shadow:var(--shadow-pop, 0 12px 32px rgba(0,0,0,.5)); }
@@ -707,7 +684,7 @@
   #stage .pane video.fb { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:2; }   /* 0.17.0: the fMP4 fallback */
   #stage .pane video.fb:not([src]) { display:none; }
   @media (hover: none) {
-    #stage .pubpane .bar, #stage .pchev { opacity:1; pointer-events:auto; }
+    #stage .pchev { opacity:1; pointer-events:auto; }
     #stage .pane .zoomctl, #stage .pubpane .zoomctl { opacity:1; }          /* 0.17.0: no hover on a phone */
     #stage .pane.mainstage.zoomable, #stage .pubpane.mainstage[data-grid], #stage .pubpane.mainstage[data-zoom] { touch-action:none; } /* 0.17.0: two fingers zoom the stage; 0.21.5: only where the stage zoom applies -- a camera keeps native scroll and pinch */
   }
@@ -723,9 +700,9 @@
   #filesSec .frow a { color:var(--asi-blue); text-decoration:none; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #filesSec .frow .fmeta { color:var(--text-mute); font-size:11px; white-space:nowrap; }
   .pgroup .pghead .via { color:var(--text-mute); font-weight:400; letter-spacing:0; text-transform:none; }
-  /* Teams status chips (0.8.2): a bottom-left ROW -- camera-off when the
-     tile has no video, mic-off when muted (source-muted or locally muted). */
-  .mchip, .vchip { position:absolute; left:8px; bottom:8px; z-index:3; width:26px; height:26px;
+  /* Teams status chips (0.8.2): camera-off when the tile has no video, mic-off when muted (source-muted or locally muted).
+     0.21.65: members of the tile's name row (after the name), no longer positioned on their own */
+  .mchip, .vchip { flex:none; width:26px; height:26px; box-sizing:border-box;
     display:none; align-items:center; justify-content:center;
     background:rgba(10,14,18,.72); border-radius:6px; color:#fff; }
   .mchip .icon, .vchip .icon { width:13px; height:13px; }
@@ -736,9 +713,8 @@
   #stage .pane.deaf .mchip, #stage .pubpane.deaf .mchip { display:flex; }
   #stage .pane.deaf .mchip .micOff, #stage .pubpane.deaf .mchip .micOff { display:none; }
   #stage .pane.deaf .mchip .earOff, #stage .pubpane.deaf .mchip .earOff { display:block; }
-  /* 0.21.48 (Kenton: "I need to show others when I have deafen turned on"): never faded with the idle mouse, and amber */
+  /* 0.21.48 (Kenton: "I need to show others when I have deafen turned on"): amber (0.21.65: no mark fades with the idle mouse now) */
   #stage .pane.deaf .mchip, #stage .pubpane.deaf .mchip { color:var(--asi-amber); }
-  #stagewrap.idle #stage .pane.deaf .mchip, #stagewrap.idle #stage .pubpane.deaf .mchip { opacity:1 !important; }
   #stage .pane.vtile .vonly .vdf { display:none; color:var(--asi-amber); }
   #stage .pane.vtile.deaf .vonly .vdf { display:inline-flex; }
   .sbcard .sbm .df { display:none; flex:none; color:var(--asi-amber); }
@@ -746,15 +722,6 @@
   .sbcard .sbm .df .icon { width:12px; height:12px; display:block; }
   #stage .pane.rtsptile .mchip { display:none !important; }   /* 0.21.22: it covered the cell labels on RTSP grids and feeds */
   #stage .pane.audio-only .vchip, #stage .pubpane.vpaused .vchip { display:flex; }
-  /* both chips visible: the mic chip slides to the second slot */
-  #stage .pane.audio-only.no-audio .mchip, #stage .pane.audio-only.lmuted .mchip,
-  #stage .pubpane.vpaused.micmuted .mchip { left:38px; }
-  /* chips and the name text never overlap (0.8.2) */
-  #stage .pane.no-audio .label, #stage .pane.lmuted .label,
-  #stage .pane.audio-only .label { padding-left:38px; }
-  #stage .pane.audio-only.no-audio .label, #stage .pane.audio-only.lmuted .label { padding-left:68px; }
-  #stage .pubpane.micmuted .bar, #stage .pubpane.vpaused .bar { padding-left:38px; }
-  #stage .pubpane.vpaused.micmuted .bar { padding-left:68px; }
   /* 0.8.2: rail pager + resize grip -- 0.8.12: a real bar (‹ Page 1/3 › · 8 more), wheel flips pages */
   #railPager { display:none; align-items:center; justify-content:center; gap:8px; font-size:12px; color:var(--text);
     background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:0 6px; }
@@ -1378,21 +1345,40 @@
   #stage .pubpane video { position:absolute; inset:0; height:100% !important;
     width:100% !important; object-fit:cover; }
   #stage .pubpane.mainstage canvas, #stage .pubpane.mainstage video { object-fit:contain; }
-  /* Tile-style bottom label: "Kenton \2014 Camera" left, the truth badge right. */
-  #stage .pubpane .bar { position:absolute; left:0; right:0; bottom:0; top:auto; z-index:2;
-    display:flex; justify-content:space-between; gap:8px; align-items:flex-end;
-    padding:14px 24px 7px 10px; font-size:11px; font-family:var(--font-mono); color:#fff;
-    background:linear-gradient(transparent, rgba(0,0,0,.72)); }
-  #stage .pubpane .bar .nm { color:#fff; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #stage .pubpane .meta { display:none; }
 
   #stagewrap { flex:1; min-height:0; overflow-y:auto; position:relative; }
 
-  /* Teams-style name chip: the EXISTING .label, restyled to a bottom overlay.
-     z 1 keeps it under the grip (z 2); its buttons already opt out of drag. */
-  #stage .pane .label { position:absolute; left:0; right:0; bottom:0; z-index:1;
-    background:linear-gradient(transparent, rgba(0,0,0,.72)); color:#fff;
-    padding:14px 24px 7px 10px; }
+  /* 0.21.65 (Kenton: "Always show the no camera/mic on the left when not mousing over, on hover put the name in the same row as
+     the camera/mic icons but before the icons. This is on the preview rail and the gallery, or any other view."): ONE row,
+     bottom-left, on every tile in every view -- remote panes (.label), my own panes (.bar: name, marks, then the pulling count
+     at the far right) and view-only people (.vonly): [name] [camera-off] [mic-off / deafened]. The marks always show (no
+     gradient bar); the name only while the pointer is on the tile or focus is inside it, and always on a touch screen. The
+     name truncates first, so the marks never move out or overlap. (Was: a full-width gradient bar with the chips on top.) */
+  #stage .pane .label, #stage .pubpane .bar, #stage .pane.vtile .vonly { position:absolute; left:8px; right:auto; top:auto; bottom:8px; z-index:3;
+    display:flex; align-items:center; justify-content:flex-start; gap:4px; max-width:calc(100% - 16px); box-sizing:border-box;
+    padding:0; background:none; color:#fff; font-size:11px; font-family:var(--font-mono); pointer-events:none; }
+  #stage .pubpane .bar { right:8px; }   /* full width: the pulling count sits at the far right */
+  #stage .pane .label > *, #stage .pubpane .bar > *, #stage .pane.vtile .vonly > * { pointer-events:auto; }
+  #stage .pane .label .l, #stage .pubpane .bar .nm, #stage .pane.vtile .vonly .vn { display:block; flex:0 1 auto; min-width:0; height:26px;
+    line-height:26px; padding:0 8px; box-sizing:border-box; border-radius:6px; background:rgba(10,14,18,.72); color:#fff;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #stage .pane.vtile .vonly .vey, #stage .pane.vtile .vonly .vdf { flex:none; width:26px; height:26px; box-sizing:border-box;
+    align-items:center; justify-content:center; background:rgba(10,14,18,.72); border-radius:6px; }
+  #stage .pane.vtile .vonly .vey { display:flex; }
+  #stage .pane.vtile .vonly .icon { width:13px; height:13px; flex:none; }
+  #stage .pane.vtile .vonly .vey .icon { opacity:.85; }
+  #stage .pubpane .bar > .pull { margin-left:auto; align-self:center; padding:2px 6px; border-radius:4px; background:rgba(10,14,18,.72); }
+  #stage .pubpane:not(:hover):not(:focus-within) .bar > .pull { visibility:hidden; }
+  @media (hover: hover) {
+    #stage .pane .label .l, #stage .pubpane .bar .nm, #stage .pane.vtile .vonly .vn { display:none; }
+    #stage .pane:hover .label .l, #stage .pane:focus-within .label .l,
+    #stage .pubpane:hover .bar .nm, #stage .pubpane:focus-within .bar .nm, #stage .pubpane.warnstate .bar .nm,
+    #stage .pane.vtile:hover .vonly .vn, #stage .pane.vtile:focus-within .vonly .vn { display:block; }
+    /* the mouse rests (idle chrome): the name goes with the chrome, the marks stay */
+    #stagewrap.idle #stage .pane .label .l, #stagewrap.idle #stage .pubpane:not(.warnstate) .bar .nm,
+    #stagewrap.idle #stage .pane.vtile .vonly .vn, #stagewrap.idle #stage .pubpane .bar > .pull { display:none; }
+  }
 
   /* 0.8.1: People is a POPOVER (popcard) under its button, not a slide-over. */
   #peoplePanel { width:min(380px, calc(100vw - 24px)); }
@@ -4960,7 +4946,7 @@
         const init = document.createElement("span"); init.className = "init";
         av.append(art, init); face.appendChild(av); el.appendChild(face); el.__av = av;
         const chip = document.createElement("div"); chip.className = "vonly";
-        chip.innerHTML = '<span class="vdf" title="Deafened \u2014 hears nothing, mic muted">' + icon("earOff") + "</span>" + icon("eye") + '<span class="vn"></span>';   // 0.21.48: + deafened
+        chip.innerHTML = '<span class="vn"></span><span class="vey">' + icon("eye") + '</span><span class="vdf" title="Deafened \u2014 hears nothing, mic muted">' + icon("earOff") + "</span>";   // 0.21.48: + deafened; 0.21.65: the name first (on hover), then the eye, then deafened
         el.appendChild(chip);
         stageEl.appendChild(el);
         viewerTiles.set(key, el);
@@ -6195,7 +6181,7 @@
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
   // chevron button and any other overlay"). Never while scrubbing, while a control has focus, or while
   // the pointer rests on a control. Touch: any tap shows (no tap-to-hide -- a tap already selects).
-  const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.bar,.label,.gmenu,.latb,.mchip,.vchip";
+  const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.gmenu,.latb";   // 0.21.65: the name row (.bar/.label + marks) never hides now
   let idleT = null, idleOver = false;
   const idleBusy = () => idleOver || !!stageWrap.querySelector('[data-scrub="1"], .gmenu')
     || (document.activeElement && document.activeElement !== document.body && stageWrap.contains(document.activeElement) && document.activeElement.matches("button,input,select"));
@@ -7755,18 +7741,16 @@
     { const rp = document.createElement("span"); rp.className = "rpin"; rp.title = "Pinned to this room"; rp.innerHTML = icon("pin"); pane.appendChild(rp); }   // 0.21.63: the room board
     // 0.8.1: Full screen lives in the chevron menu now; the mute state is
     // a Teams-style chip on the video, not a label marker.
-    label.append(l);
     pane.appendChild(label);
     const mchip = document.createElement("div");
     mchip.className = "mchip";
     mchip.innerHTML = icon("micOff") + icon("earOff");   // 0.21.40: + deafened
     mchip.title = "Muted";
-    pane.appendChild(mchip);
     const vchip = document.createElement("div");
     vchip.className = "vchip";
     vchip.innerHTML = icon("camOff");
     vchip.title = "No video";
-    pane.appendChild(vchip);
+    label.append(l, vchip, mchip);   // 0.21.65: ONE row -- the name (on hover), then camera-off, then mic-off / deafened
 
     const watch = document.createElement("moq-watch");
     // Parked tiles carry NO url: the element opens nothing at all until
@@ -18194,12 +18178,11 @@
     mchip.className = "mchip";
     mchip.innerHTML = (window.__icon?.("micOff") ?? "") + (window.__icon?.("earOff") ?? "");   // 0.21.40: + deafened
     mchip.title = "Muted";
-    pane.appendChild(mchip);
     const vchip = document.createElement("div");
     vchip.className = "vchip";
     vchip.innerHTML = window.__icon?.("camOff") ?? "";
     vchip.title = "Camera off";
-    pane.appendChild(vchip);
+    nm.after(vchip, mchip);   // 0.21.65: ONE row, like a remote tile -- name, camera-off, mic-off / deafened (the badge after them)
     // 0.8.0: standby face for the paused state (same look as remote).
     const pface = document.createElement("div");
     pface.className = "pface";

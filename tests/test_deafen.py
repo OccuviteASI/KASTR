@@ -55,7 +55,10 @@ class ShownToOthers(unittest.TestCase):
 
     def test_tile_chip_never_fades(self):
         p = self._p()
-        self.assertIn("#stagewrap.idle #stage .pane.deaf .mchip, #stagewrap.idle #stage .pubpane.deaf .mchip { opacity:1 !important; }", p)
+        # 0.21.65: no mark fades with the idle mouse any more (the deafened exception folded into the rule)
+        self.assertIn("#stage .pane.deaf .mchip, #stage .pubpane.deaf .mchip { color:var(--asi-amber); }", p)
+        self.assertNotIn("#stagewrap.idle #stage .mchip", p)
+        self.assertNotIn("#stagewrap.idle #stage .pane.deaf .mchip", p)
 
     def test_watch_only_tile(self):
         p = self._p()

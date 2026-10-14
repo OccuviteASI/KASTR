@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.21.65 — tidier tiles
+
+**The mute and camera-off marks always show; the name joins them on hover (Kenton: "Always show the no camera/mic on the left when not mousing over, on hover put the name in the same row as the camera/mic icons but before the icons. This is on the preview rail and the gallery, or any other view.").** Every person's tile now has one small row in its bottom-left corner, in every view: the gallery, the speaker-view rail, the main stage, full screen and phones, for other people's tiles and for your own preview.
+- **Mouse not on the tile:** only the marks that apply: camera off first, then mic muted (or the amber headphones when the person is deafened). Nothing at all when the camera and mic are both on. No name and no dark bar across the bottom.
+- **Mouse on the tile:** the name, then the same marks right after it, in one row. A long name is cut short with "…" on a narrow tile, so the marks never get pushed off or covered.
+- **The marks no longer fade** when the mouse stops moving (before, they showed only in the gallery, or only while the mouse moved). The name still goes away with the other controls about 3 seconds after the mouse stops.
+- **Phones and tablets** (no mouse): the name and the marks always show.
+- **View-only people:** the eye (and the amber headphones when deafened) always show, with the name before them on hover, the same as everyone else.
+- **Unchanged:** RTSP cameras and grids show no mic mark, your screen-share preview shows no marks, a shared file's play bar still sits just above the row, and the ⋯ / fill / full-screen buttons, pins, latency and the talking ring stay where they were.
+- **Lab check:** five people in one room (camera off and muted; camera paused and talking; deafened with a long name; view-only; and my own paused, muted camera). Every tile was photographed with and without the mouse over it in the gallery, the rail, a narrow rail and the stage, plus a 390-pixel phone. The marks sat at the bottom-left without the mouse; with it, the name came first and the marks followed in the same row.
+
 ## v0.21.64 — KASTR gets through the web portal's tunnel
 
 **Arrange a camera grid for everyone in the room, and take cameras out of it (Kenton: "I need to be able to customize the grid for everyone in the room to see. I need to be able to remove feeds from that grid as well.").** A grid's layout and the cameras removed from it are now saved on the room's board, on the hub, so they apply to everyone in that room and survive everyone leaving and the box restarting. Kenton chose:

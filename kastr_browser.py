@@ -15,6 +15,7 @@ launcher falls back to a system browser when the bundled one is unusable.
 """
 import hashlib
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import os
 import shutil
 import stat

@@ -20,6 +20,7 @@ import argparse
 import configparser
 import hashlib
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import re
 import signal
 import os

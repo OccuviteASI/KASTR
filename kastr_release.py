@@ -15,6 +15,7 @@ kastr.mirror_feeds), and the assembler reads them from there.
 """
 import hashlib
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import os
 import re
 import shutil

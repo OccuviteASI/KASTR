@@ -2,6 +2,16 @@
 
 What changed in each build, newest first.
 
+## v0.21.64 — KASTR gets through the web portal's tunnel
+
+**Update now shows for clients on the web portal (Kenton: "I've been on a desktop client for more than 2 minutes and it doesn't show the button").** The web portal's Cloudflare tunnel refused every request the KASTR app made by itself (HTTP 403, Cloudflare error 1010), because the app identified itself as Python's default client. A desktop KASTR connected through kastr.madlabs.app could therefore never learn the hub's version, so the button never appeared. The same wall blocked its update checks and its other calls to the hub through the tunnel. Every request now identifies itself as KASTR, and Cloudflare lets it through (checked against kastr.madlabs.app).
+- **Clients already in the field (0.21.63 and older) still send the old identity.** Update them once by hand, or switch off Cloudflare's Browser Integrity Check for the web portal; then they reach the hub and update themselves.
+
+**RNNoise comes back by itself (Kenton: "I just had an error about the RNNoise filter not being able to connect").** When background noise removal fails to start, KASTR still switches to the browser's own suppression, but now:
+- **Retries:** it tries RNNoise once more 30 seconds later, instead of leaving it off for the rest of the session.
+- **Recorded:** the reason is written to the app's launch.log and to its diagnostics, so the logs collected at the hub show what failed even without a screenshot.
+- **Lab check:** a failed load switched to the browser's suppression and RNNoise came back after 30 s.
+
 ## v0.21.63 — the vehicle API, rooms that keep their pins and spotlights, HEVC cameras whole again
 
 **Spotlights and pinned feeds stay with the room (Kenton: "Spotlights are not staying in a room when I add views to a room, spotlight, leave the room, and come back. The spotlights should stay tied to the room." and "When pinning a feed to a room, does it show for everyone?").** Each room now has a board, kept on the hub, that remembers what is pinned to the room and what is spotlit. Before, a spotlight lived only in the room's members' own state, so it disappeared when the person who set it left. Kenton chose:

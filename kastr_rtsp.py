@@ -22,6 +22,7 @@ every browser can decode from an MP4 container; audio to AAC for the same
 reason. `-tune zerolatency` and `-g 30` keep the fragment cadence tight.
 """
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import os
 import shutil
 import re

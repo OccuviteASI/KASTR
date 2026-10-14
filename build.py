@@ -935,7 +935,7 @@ def main():
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--hidden-import", "cryptography",
-        "--hidden-import", "kastr_tls",
+        "--hidden-import", "kastr_tls", "--hidden-import", "kastr_ua",   # 0.21.64: the KASTR user agent (Cloudflare refuses Python-urllib)
         "--hidden-import", "kastr_archive",   # 0.18.0: imported lazily by kastr_serve.make_server
         "--hidden-import", "kastr_screen", "--hidden-import", "kastr_screen_sources",   # 0.21.20: native screen share (lazy imports)
         "--hidden-import", "kastr_loopback", "--hidden-import", "kastr_overlay",

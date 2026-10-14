@@ -20,6 +20,7 @@ install downloads.
 """
 import hashlib
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import mimetypes      # 0.14.0: media sources keep their own extension
 import os
 import re

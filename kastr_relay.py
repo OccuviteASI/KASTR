@@ -62,6 +62,7 @@ import base64
 import hashlib
 import hmac
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import os
 import random
 import re

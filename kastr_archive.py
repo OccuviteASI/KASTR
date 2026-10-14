@@ -13,6 +13,7 @@ The picked set lives in <state>/archive.json and resumes whenever the relay star
 module never decides WHO may read a recording: kastr_serve checks tokens before calling it.
 """
 import json
+import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
 import os
 import re
 import subprocess

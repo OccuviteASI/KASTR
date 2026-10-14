@@ -17794,6 +17794,10 @@
     try { node.channelCount = 1; node.channelCountMode = "explicit"; } catch {}   // one RNNoise instance; the voice path is mono anyway
     return node;
   }
+  // 0.21.64 (Kenton: "an error about the RNNoise filter not being able to connect. I didn't get a picture of the error"):
+  // the reason is written to launch.log and /api/diag (publisher.state().denoise), and RNNoise is tried ONCE more after
+  // 30 s -- a load that failed in passing (right after an update, a busy machine) no longer leaves it off all session
+  let denoiseRetried = false;
   function denoiseFail(reason) {
     if (denoiseBroken) return;
     denoiseBroken = String(reason?.message || reason || "unknown error").slice(0, 160);
@@ -17801,7 +17805,18 @@
     const msg = "Background noise removal unavailable \u2014 " + denoiseBroken + ". Using the browser's suppression.";
     log(msg);
     window.__toast?.(msg, 7000, { level: "warn" });
-    if (micMode === "rnnoise") setMicMode("browser", false);   // 0.21.23: for this session only -- a passing failure never turns the default off for good
+    if (!IS_WEB2) { try { nativePost("/api/rtsp/note", { text: "page: " + msg + (denoiseRetried ? " (after the retry)" : " -- retrying in 30 s") }); } catch {} }
+    const wanted = micMode === "rnnoise";
+    if (wanted) setMicMode("browser", false);   // 0.21.23: for this session only -- a passing failure never turns the default off for good
+    if (wanted && !denoiseRetried) {
+      denoiseRetried = true;
+      setTimeout(() => {
+        if (micMode !== "browser") return;   // the person picked something else meanwhile
+        denoiseBroken = ""; denoiseMod = null; denoiseWasm = null; denoiseWorklet = null;
+        if (denoiseCtx && denoiseCtx.state === "closed") denoiseCtx = null;
+        setMicMode("rnnoise", false);
+      }, 30000);
+    }
   }
   // the Audio card's test tap in rnnoise mode: stream -> RNNoise -> (caller's analyser), in the shared context
   async function denoiseTap(stream) {
@@ -21973,6 +21988,7 @@
       operator: operator || null,
       softwareEncode,
       recentErrors: [...libErrors],
+      denoise: denoiseBroken ? "failed: " + denoiseBroken : micMode,   // 0.21.64
       cameras: cameras.length,
       added: added.map((a) => `${a.kind}:${a.name}${a.enabled ? "" : " (off)"}`),
       slots: [...slots.values()].map((s) => s.rtsp ? {

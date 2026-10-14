@@ -13,6 +13,10 @@ What changed in each build, newest first.
 - **Unchanged:** RTSP cameras and grids show no mic mark, your screen-share preview shows no marks, a shared file's play bar still sits just above the row, and the ⋯ / fill / full-screen buttons, pins, latency and the talking ring stay where they were.
 - **Lab check:** five people in one room (camera off and muted; camera paused and talking; deafened with a long name; view-only; and my own paused, muted camera). Every tile was photographed with and without the mouse over it in the gallery, the rail, a narrow rail and the stage, plus a 390-pixel phone. The marks sat at the bottom-left without the mouse; with it, the name came first and the marks followed in the same row.
 
+**Renamed cameras keep their names for everyone (Kenton: "I renamed the videos, but it doesn't show for other users when not in a grid").** A camera you rename on the sharing computer now shows that name on every viewer's tile, for example "Tremonton Relay — Southeast" instead of "Tremonton Relay — Q8msm2q628iwuelf". A rename reaches everyone within seconds. The sharing computer needs 0.21.65; grids already showed their cells' names.
+
+**"Just joined" in the rooms list (Kenton: "When someone joins a room, show an icon in the left side rail for a few seconds to denote that they are new and just joined").** When someone arrives in any room, a green person-with-a-plus shows beside their name in the rooms list for 8 seconds, then fades. Opening KASTR or changing rooms doesn't light up everyone already there. Someone moving in from another room counts as joining.
+
 ## v0.21.64 — KASTR gets through the web portal's tunnel
 
 **Arrange a camera grid for everyone in the room, and take cameras out of it (Kenton: "I need to be able to customize the grid for everyone in the room to see. I need to be able to remove feeds from that grid as well.").** A grid's layout and the cameras removed from it are now saved on the room's board, on the hub, so they apply to everyone in that room and survive everyone leaving and the box restarting. Kenton chose:

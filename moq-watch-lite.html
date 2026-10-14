@@ -1157,6 +1157,12 @@
      the right. But this is just around their name in the left rail"): the same blue ring as a speaking tile */
   .sbcard .sbm.talk .nm { box-shadow:inset 0 0 0 1.5px var(--pc, var(--asi-blue)); color:var(--text); }   /* 0.21.64 (Kenton: rings overlapping): inside the name's box */
   .sbcard .sbm { padding:1px 0; }
+  /* 0.21.65: "just joined" -- a green person-with-a-plus beside the name for 8 s */
+  .sbcard .sbm .nj { display:none; flex:none; color:var(--asi-green); }
+  .sbcard .sbm .nj .icon { width:13px; height:13px; display:block; }
+  .sbcard .sbm.newjoin .nj { display:inline-flex; animation:sbNj 8s ease-out forwards; }
+  @keyframes sbNj { 0% { opacity:0; transform:scale(.6); } 6% { opacity:1; transform:scale(1.15); } 12% { transform:scale(1); } 85% { opacity:1; } 100% { opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .sbcard .sbm.newjoin .nj { animation:none; } }
   /* 0.21.41: "Also show in other rooms" picker */
   #wrPop, #xsPop { position:fixed; z-index:120; width:280px; max-height:70vh; overflow:auto; background:var(--surface); border:1px solid var(--line);
     border-radius:10px; box-shadow:var(--shadow-pop, 0 10px 30px rgba(0,0,0,.45)); padding:10px 12px; font-size:12px; color:var(--text); }
@@ -2603,6 +2609,9 @@
        + '<path d="M2.5 16.5c0-2.6 2-4.6 4.5-4.6s4.5 2 4.5 4.6"/>'
        + '<circle cx="14.2" cy="8.5" r="2.4"/>'
        + '<path d="M13.2 12.5c2.3.2 4.2 2 4.2 4"/>',
+    joined: '<circle cx="8" cy="7.2" r="3"/>'   // 0.21.65: someone just joined (a person with a plus)
+       + '<path d="M3 16.5c0-2.7 2.2-4.7 5-4.7s5 2 5 4.7"/>'
+       + '<path d="M15.5 5.5v5M13 8h5"/>',
     keep: '<path d="M6 7c-1.9 0-3.3 1.3-3.3 3s1.4 3 3.3 3c2.8 0 5.2-6 8-6 1.9 0 3.3 1.3 3.3 3s-1.4 3-3.3 3c-2.8 0-5.2-6-8-6z"/>',   // 0.21.31: a room kept open
     play: '<path d="M7 4.8v10.4l8.2-5.2z" fill="currentColor"/>',   // 0.21.36: a room with video on the air
     lock: '<rect x="5" y="9" width="10" height="7.5" rx="1.5"/>'
@@ -6334,7 +6343,7 @@
     }
     // 0.6.8: title-case the leaf too -- it is a device TYPE now
     // ("camera", "screen"), not a model name.
-    const nice = prettyOperator(leaf);
+    const nice = srcLabelOf(path) || prettyOperator(leaf);   // 0.21.65: the sharer's own name for the camera first
     const from = xsTiles.get(path)?.from;   // 0.21.41: shown here from another room
     return (parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice) + (from ? " (from " + from + ")" : wrTag(path));   // 0.21.44
   }
@@ -6645,6 +6654,12 @@
   }
   setInterval(() => { if (!gridMode) { fitMainstage(lastRail.rows); viewApplyAll(); } }, 1000);   // 0.9.2: views follow late size changes
 
+  // 0.21.65: the name a sharer gave one of its cameras (its state's `labels`), or ""
+  function srcLabelOf(path) {
+    for (const p of roomsPres.values()) { const l = p?.who?.labels?.[path]; if (l) return String(l); }
+    return "";
+  }
+  window.__srcLabel = srcLabelOf;   // rig
   function rtspPathsNow() {   // 0.21.22: every RTSP feed / grid the room's publishers list in their state
     const out = new Set();
     for (const p of roomsPres.values()) for (const x of p?.who?.rtspPaths || []) out.add(x);
@@ -8364,7 +8379,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           hiNote(v.op, v.hc);   // 0.21.61: their colour
           roomsMoved(full, String(v.peer), pp[0]);   // 0.21.61: moved rooms -> gone from the old one now
           roomsChanged();
@@ -8661,6 +8676,7 @@
   }
 
   async function connect() {
+    try { sbJoinQuietUntil = Date.now() + 10000; } catch {}   // 0.21.65: a room switch fills every card -- not joins
     // 0.6.7: no watching before joining. Every caller funnels here (the
     // relay popover's Connect included), so the gate lives here too.
     if (joinState !== "joined") { log("Join first \u2014 discovery starts after you join."); return; }
@@ -11360,6 +11376,12 @@
         case "typing": pubModel.typing = !!value; break;
         case "publishing": pubModel.publishing = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;
         case "rtspPaths": pubModel.rtspPaths = Array.isArray(value) ? value.map(String).slice(0, 64) : []; break;   // 0.21.22
+        case "labels": {   // 0.21.65: path -> the name the sharer gave that camera
+          const m = {};
+          if (value && typeof value === "object") for (const [k, v] of Object.entries(value).slice(0, 64)) if (/\.hang$/.test(k) && v) m[String(k).slice(0, 200)] = String(v).slice(0, 60);
+          if (Object.keys(m).length) pubModel.labels = m; else delete pubModel.labels;
+          break;
+        }
         case "video": pubModel.video = Math.max(0, Number(value) || 0); break;   // 0.21.36: my live sources with their picture on
         case "airv": pubModel.airv = 1; break;   // 0.21.40: `video` counts only pictures on the air
         case "deaf": if (value) pubModel.deaf = 1; else delete pubModel.deaf; break;   // 0.21.40: Deafen is on
@@ -12261,6 +12283,14 @@
     if (joinEls.joinGate.hidden && joinState === "prejoin") gateShow();
     try { joinEls.joinPwdRow.hidden ? joinEls.joinBtn.focus() : joinEls.joinPwd.focus(); } catch {}
   }
+  // 0.21.65 (Kenton: "When someone joins a room, show an icon in the left side rail for a few seconds to denote that they are
+  // new and just joined"): who each room card has shown, and when someone new appeared; quiet for 10 s after a load or a room
+  // switch (the lists fill in then -- that is not anybody joining)
+  const sbJoinSeen = new Map();     // slug -> Set(op)
+  const sbJoinedAt = new Map();     // "slug|op" -> ms
+  let sbJoinQuietUntil = Date.now() + 10000;
+  const SB_JOIN_SHOW_MS = 8000;
+  window.addEventListener("kastr:auth", () => { sbJoinQuietUntil = Math.max(sbJoinQuietUntil, Date.now() + 10000); });
   function sbCardPaint(card, rec) {
     card.__rec = rec;
     const joined = joinState === "joined";
@@ -12298,8 +12328,13 @@
     // 0.21.41 (Kenton: "The people displaying in the rooms on the left rail should be in alphabetical order")
     const sorted = [...rec.members].sort((a, b) => String(a.name || a.op).localeCompare(String(b.name || b.op), undefined, { sensitivity: "base" }));
     const here = joinState === "joined" && rec.slug === CHANNEL;
+    let known = sbJoinSeen.get(rec.slug);
+    if (!known) sbJoinSeen.set(rec.slug, known = new Set());
+    const quiet = Date.now() < sbJoinQuietUntil;
+    const meOp = String(window.__publisher?.opSlug?.() || "").toLowerCase();
     for (const m of sorted) {
       seen.add(m.op);
+      if (!known.has(m.op)) { known.add(m.op); if (!quiet && String(m.op).toLowerCase() !== meOp) sbJoinedAt.set(rec.slug + "|" + m.op, Date.now()); }
       let li = ul.querySelector('li[data-op="' + m.op.replace(/"/g, "") + '"]');
       if (!li) {
         li = document.createElement("li"); li.className = "sbm"; li.dataset.op = m.op;
@@ -12310,8 +12345,12 @@
         const mm = document.createElement("button"); mm.type = "button"; mm.className = "mm"; mm.title = "More options"; mm.innerHTML = icon("more");
         mm.addEventListener("click", (e) => { e.stopPropagation(); sbMemberMenu(li, mm); });
         li.addEventListener("contextmenu", (e) => { if (!li.classList.contains("menuable")) return; e.preventDefault(); e.stopPropagation(); sbMemberMenu(li, pointAnchor(e.clientX, e.clientY)); });
-        li.append(sp, nm, df, role, mm);
+        const nj = document.createElement("span"); nj.className = "nj"; nj.innerHTML = icon("joined"); nj.title = "Just joined";   // 0.21.65
+        li.append(sp, nm, nj, df, role, mm);
       }
+      { const ja = sbJoinedAt.get(rec.slug + "|" + m.op) || 0, left = SB_JOIN_SHOW_MS - (Date.now() - ja);   // 0.21.65: just joined
+        li.classList.toggle("newjoin", left > 0);
+        if (left > 0 && !li.__njT) li.__njT = setTimeout(() => { li.__njT = null; li.classList.remove("newjoin"); }, left + 50); }
       ul.appendChild(li);   // in name order (an existing row moves)
       li.dataset.ptalk = m.talking ? "1" : "";   // 0.21.41: their presence says they speak (other rooms); sbTalkPaint adds what this window hears
       li.classList.toggle("talk", here ? li.classList.contains("talk") : !!m.talking);   // 0.21.64: my room's rings come from sbTalkPaint (what I hear)
@@ -12332,6 +12371,7 @@
       li.querySelector(".spk").classList.toggle("on", !!m.talking);
     }
     for (const li of [...ul.children]) if (!seen.has(li.dataset.op)) li.remove();
+    for (const op of [...known]) if (!seen.has(op)) { known.delete(op); sbJoinedAt.delete(rec.slug + "|" + op); }   // 0.21.65: gone -> a return is a new join
   }
   // 0.21.41 (Kenton: "a highlight or border when audio is playing, similar to the user rail on the right"): in the room I am
   // in, a name rings while this window HEARS that person (the tile's own meter, as the right rail), or while their presence
@@ -14975,6 +15015,9 @@
     onAirSources = msg.sources; pushOnAir();   // 0.21.36: the room's play badge; 0.21.40: only pictures really on the air
     try { window.__state?.set?.("rtspPaths", [...added.filter((a) => a.kind === RTSP && !a.screen && a.enabled !== false && a.name).map((a) => chanPath(ensureHang(a.name))),
                                               ...gridsSorted().map((g) => chanPath(ensureHang(g.entry.name)))]); } catch {}   // 0.21.22: viewers drop the muted badge on these
+    // 0.21.65 (Kenton: "I renamed the videos, but it doesn't show for other users when not in a grid"): the names I gave my
+    // cameras ride my state -- viewers label those tiles with them (grids already announce their cells' names)
+    try { window.__state?.set?.("labels", Object.fromEntries(added.filter((a) => a.kind === RTSP && !a.screen && a.name && a.label).map((a) => [chanPath(ensureHang(a.name)), String(a.label).slice(0, 60)]))); } catch {}
     if (!bus) return;
     try { bus.postMessage(msg); } catch {}
   }

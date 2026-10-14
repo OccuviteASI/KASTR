@@ -33,7 +33,7 @@ class Deafen(unittest.TestCase):
     def test_unmuting_the_mic_or_sound_ends_it(self):
         p = _page()
         self.assertIn("if (deafened) { const wasOn = deafMicWas; setDeafen(false); if (wasOn) return; }", p)
-        self.assertIn("if (deafened && !manualMute) { deafened = false; deafMicWas = null; try { window.__state?.set?.(\"deaf\", false); }", p)
+        self.assertIn("if (deafened && !manualMute) { try { chimeDeaf(false); } catch {} deafened = false; deafMicWas = null; try { window.__state?.set?.(\"deaf\", false); }", p)
 
 
     def test_the_room_sees_it(self):
@@ -72,6 +72,17 @@ class ShownToOthers(unittest.TestCase):
         self.assertIn("talking: m.talking, deaf: !!m.deaf, since: m.since", p)
         self.assertIn('li.append(sp, nm, nj, df, role, mm);', p)   # 0.21.65: + the 'just joined' icon
         self.assertIn('df.classList.toggle("on", !!m.deaf)', p)
+
+
+class DeafenSound(unittest.TestCase):
+    """0.21.65: my own deafen / undeafen sound -- not the room chime, never gated by the chime mute."""
+    def test_wired(self):
+        p = _page()
+        self.assertIn("function chimeDeaf(on) {", p)
+        self.assertIn("if (deafened !== !!on) { try { chimeDeaf(!!on); } catch {} }", p)
+        body = p[p.index("function chimeDeaf(on) {"):p.index("function chimeTone(up) {")]
+        self.assertNotIn("chimeMuted", body)
+        self.assertNotIn("if (manualMute", body)
 
 
 if __name__ == "__main__":

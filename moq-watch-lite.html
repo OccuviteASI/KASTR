@@ -3137,6 +3137,7 @@
       if (deafMicWas) { if (src) setMic(false); else { joinMicOn = true; try { paintJoinToggles(); } catch {} paintTopCam(); } }
       deafMicWas = null;
     }
+    if (deafened !== !!on) { try { chimeDeaf(!!on); } catch {} }   // 0.21.65: my own deafen / undeafen sound
     deafened = !!on;
     try { window.__state?.set?.("deaf", deafened); } catch {}   // 0.21.40: the room sees it
     for (const el of document.querySelectorAll("#pubPanes .pubpane.camkind")) el.classList.toggle("deaf", deafened);
@@ -4943,6 +4944,35 @@
         o.stop(at + 0.34);
         o.onended = () => { try { o.disconnect(); g.disconnect(); } catch {} };
       });
+    } catch {}
+  }
+  // 0.21.65 (Kenton: "Make a noise for yourself when you deafen and another for undeafen ... a different tone than the room
+  // enter/exit tone"): a muffled, low two-note -- triangle through a low-pass, E4 -> A3 deafen, A3 -> E4 undeafen, ~90 ms
+  // each. For me only, and never gated by the chime mute (deafening itself sets manualMute).
+  function chimeDeaf(on) {
+    try {
+      chimeCtx = chimeCtx || new AudioContext();
+      const ctx = chimeCtx;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const t0 = ctx.currentTime + 0.01;
+      const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 900; lp.Q.value = 0.7;
+      lp.connect(ctx.destination);
+      (on ? [329.63, 220.00] : [220.00, 329.63]).forEach((f, i) => {
+        const at = t0 + i * 0.1;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.linearRampToValueAtTime(0.16, at + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+        g.connect(lp);
+        const o = ctx.createOscillator();
+        o.type = "triangle";
+        o.frequency.setValueAtTime(f, at);
+        o.connect(g);
+        o.start(at);
+        o.stop(at + 0.18);
+        o.onended = () => { try { o.disconnect(); g.disconnect(); } catch {} };
+      });
+      setTimeout(() => { try { lp.disconnect(); } catch {} }, 600);
     } catch {}
   }
   function chimeTone(up) {
@@ -7480,7 +7510,7 @@
     applyVolumes();
 
     muteBtn.classList.toggle("on", manualMute);
-    if (deafened && !manualMute) { deafened = false; deafMicWas = null; try { window.__state?.set?.("deaf", false); } catch {} for (const el of document.querySelectorAll("#pubPanes .pubpane.deaf")) el.classList.remove("deaf"); }   // 0.21.40: sound turned back on another way (M) ends it
+    if (deafened && !manualMute) { try { chimeDeaf(false); } catch {} deafened = false; deafMicWas = null; try { window.__state?.set?.("deaf", false); } catch {} for (const el of document.querySelectorAll("#pubPanes .pubpane.deaf")) el.classList.remove("deaf"); }   // 0.21.40: sound turned back on another way (M) ends it
     document.getElementById("optDeafen")?.classList.toggle("on", deafened);
     muteBtn.textContent = manualMute ? "Unmute" : "Mute";
     paintViewPop();   // 0.8.8: the View menu shows the mode

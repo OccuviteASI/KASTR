@@ -4,6 +4,8 @@ What changed in each build, newest first.
 
 ## v0.21.65 — tidier tiles
 
+**A sound when you deafen and undeafen (Kenton: "Make a noise for yourself when you deafen and another for undeafen ... a different tone than the room enter/exit tone").** Deafening plays a short, low, muffled two-note going down; undeafening plays it going up. Only you hear it, even while deafened. It sounds nothing like the room chime and comes with every way in or out, including turning sound back on with M.
+
 **The mute and camera-off marks always show; the name joins them on hover (Kenton: "Always show the no camera/mic on the left when not mousing over, on hover put the name in the same row as the camera/mic icons but before the icons. This is on the preview rail and the gallery, or any other view.").** Every person's tile now has one small row in its bottom-left corner, in every view: the gallery, the speaker-view rail, the main stage, full screen and phones, for other people's tiles and for your own preview.
 - **Mouse not on the tile:** only the marks that apply: camera off first, then mic muted (or the amber headphones when the person is deafened). Nothing at all when the camera and mic are both on. No name and no dark bar across the bottom.
 - **Mouse on the tile:** the name, then the same marks right after it, in one row. A long name is cut short with "…" on a narrow tile, so the marks never get pushed off or covered.

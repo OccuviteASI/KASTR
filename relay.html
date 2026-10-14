@@ -39,7 +39,7 @@
     border-radius:6px; background:color-mix(in srgb, var(--asi-blue, #3b82f6) 9%, transparent); color:var(--text); font-size:12px; line-height:1.5; }
   .vehkey[hidden] { display:none; }
   .vehkey .urlrow { margin:6px 0 8px; }
-  .vehkey .urlrow code { color:var(--text); white-space:normal; overflow-wrap:anywhere; }
+  .vehkey .urlrow code { color:var(--text); white-space:normal; overflow-wrap:break-word; }   /* a key / URL wider than its line may break; never a word */
   pre.vehex { margin:4px 0 8px; padding:8px 9px; background:var(--surface-2); border:1px solid var(--line); border-radius:5px; color:var(--text-dim);
     font-family:var(--font-mono); font-size:11px; line-height:1.5; white-space:pre; overflow:auto; max-height:260px; }
   table.rooms tr.revoked td { opacity:.55; }

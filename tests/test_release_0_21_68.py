@@ -60,6 +60,12 @@ class TokenRetry(unittest.TestCase):
         self.assertIn("await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));", body)
         self.assertIn('if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));', body)   # refusals: no retry
 
+class UsersOldLine(unittest.TestCase):
+    def test_hidden_when_none(self):
+        r = open(os.path.join(HERE, "relay.html"), encoding="utf-8").read()
+        self.assertIn('oldBox.closest("label").style.display = nOld ? "" : "none";', r)
+        self.assertNotIn('" (none)"', r)
+
 
 if __name__ == "__main__":
     unittest.main()

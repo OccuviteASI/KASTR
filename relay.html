@@ -1415,7 +1415,8 @@
     const nOld = rows.filter(isOld).length;
     const oldBox = $("usersOld");
     try { oldBox.checked = localStorage.getItem("kastr.relay.usersOld") === "1"; } catch {}
-    $("usersOldTxt").textContent = "Show users not seen for over 24 hours" + (nOld ? " (" + nOld + ")" : " (none)");
+    $("usersOldTxt").textContent = "Show users not seen for over 24 hours (" + nOld + ")";
+    oldBox.closest("label").style.display = nOld ? "" : "none";   // 0.21.68 (Kenton: "If there are no users to show, don't show the line with the checkbox")
     const shown = oldBox.checked ? rows : rows.filter((r) => !isOld(r));
     // 0.21.55 (Kenton: "I want an update all users button"): every app behind its relay's version that is still around
     // (not the day-old ones) and not already updating -- the same ask as each row's Update

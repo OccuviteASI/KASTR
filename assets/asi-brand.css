@@ -15,6 +15,7 @@
 
 :root {
   --asi-blue:      #009FDA;
+  --on-accent:     #06121a;   /* 0.21.68: text ON the accent -- asi-brand.js picks black or white for a chosen accent */
   --asi-blue-dim:  #0b7fae;
   --asi-blue-glow: color-mix(in srgb, var(--asi-blue) 14%, transparent);
   --asi-navy:      #002B45;

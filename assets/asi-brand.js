@@ -102,10 +102,18 @@ window.__kastrTheme = { get: themeGet, set: themeSet };
 // localStorage kastr.accent (#rrggbb); none = ASI blue. Only this device sees it (the colour others see is the profile's).
 const ACCENT_KEY = "kastr.accent";
 const accentGet = () => { try { const v = String(localStorage.getItem(ACCENT_KEY) || "").toLowerCase(); return /^#[0-9a-f]{6}$/.test(v) ? v : ""; } catch { return ""; } };
+// 0.21.68 (Kenton: the "You're here" pill was unreadable on a yellow accent): text on the accent is black or white, whichever
+// contrasts more (WCAG relative luminance)
+function accentInk(hex) {
+  const ch = (i) => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * ch(1) + 0.7152 * ch(3) + 0.0722 * ch(5), Ld = 0.0058;   // Ld: #06121a
+  return (L + 0.05) / (Ld + 0.05) >= 1.05 / (L + 0.05) ? "#06121a" : "#ffffff";
+}
+window.__kastrAccentInk = accentInk;   // rig / tests
 function accentApply() {
   const c = accentGet(), st = document.documentElement.style;
-  if (c) { st.setProperty("--asi-blue", c); st.setProperty("--asi-blue-dim", "color-mix(in srgb, " + c + " 72%, #000)"); }
-  else { st.removeProperty("--asi-blue"); st.removeProperty("--asi-blue-dim"); }
+  if (c) { st.setProperty("--asi-blue", c); st.setProperty("--asi-blue-dim", "color-mix(in srgb, " + c + " 72%, #000)"); st.setProperty("--on-accent", accentInk(c)); }
+  else { st.removeProperty("--asi-blue"); st.removeProperty("--asi-blue-dim"); st.removeProperty("--on-accent"); }
   try { window.dispatchEvent(new CustomEvent("kastr-accent", { detail: { accent: c } })); } catch {}
 }
 function accentSet(v) {

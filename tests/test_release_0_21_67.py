@@ -19,7 +19,7 @@ class RoomMarks(unittest.TestCase):
     def test_my_room(self):
         p = self.p
         self.assertIn(".sbcard.cur { border-color:var(--asi-blue); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }", p)
-        self.assertIn(".sbcard.cur .rb { border-color:var(--asi-blue); background:var(--asi-blue); color:#fff;", p)
+        self.assertIn(".sbcard.cur .rb { border-color:var(--asi-blue); background:var(--asi-blue); color:var(--on-accent);", p)   # 0.21.68: black or white by the accent
         self.assertIn('.sbcard.cur .sbtag.here { display:inline-block;', p)
         self.assertIn(r'here.className = "sbtag here"; here.textContent = "You\u2019re here";', p)
 

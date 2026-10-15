@@ -18,6 +18,9 @@ What changed in each build, newest first.
 **The right-click menu isn't covered by the hover card any more (Kenton: "When I hover and right click, the right click menu is partially hidden. It shouldn't show the hover menu once right-clicked.").** A right-click closed the hover card, but it also focused the room, and the focus (or the next small mouse move) opened the card again over the menu. Now any click on a room, right-click included, keeps its hover card away until the pointer leaves that room.
 - **Lab check:** collapsed rail. Hover showed the card; a right-click showed the menu alone, still alone after a small move; moving to another room and back brought the card back.
 
+**Room switches are timed (Kenton: "Sometimes it takes a while to switch between rooms.").** Each switch now records three steps: getting the new room's token from the relay host, reconnecting, and the first video tile of the new room appearing. The last 10 switches are in the app's diagnostics (`/api/diag`, `switches`), and one that takes more than 4 seconds to show a tile is also written to launch.log. The next slow switch will say which step was slow.
+- **Lab check:** eight switches between two rooms whose cameras come from two different spokes, watched from the hub: the token in about 35 ms, the reconnect in about 40 ms, the first tile in 0.55–0.65 s every time. So the slow cases in the field come from outside the page (most likely the relay host's token service or the camera's path across sites), and the timings will show which.
+
 ## v0.21.69 — real machine names on the Relay page
 
 **The Users table shows each computer's own name (Kenton: "For the machine name in the user section, can we pull the hostname of the device instead? Or what are the options?").** Kenton chose all four:

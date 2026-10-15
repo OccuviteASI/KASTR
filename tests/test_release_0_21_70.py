@@ -60,5 +60,21 @@ class HoverCards(unittest.TestCase):
         self.assertIn("if (slug === sbPeekHush) return;   // 0.21.70: pressed in the meantime", p)
 
 
+class SwitchTimes(unittest.TestCase):
+    """0.21.70 (Kenton: "Sometimes it takes a while to switch between rooms"): each switch is timed (token, reconnect, first
+    tile); the last 10 ride /api/diag and a slow one reaches launch.log."""
+    def test_wired(self):
+        p = open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8").read()
+        sw = p[p.index("  async function switchRoom(rec, code, opts) {"):p.index("  function gateMsg(m)")]
+        self.assertIn('try { await authMint(rec.slug, authAccessCode, code ?? ""); switchMark("mint"); }', sw)
+        self.assertIn('switchMark("joined");   // 0.21.70', sw)
+        self.assertIn('if (switchNow && String(name).startsWith(switchNow.to + "/")) { try { switchMark("firstTile"); } catch {} }', p)
+        self.assertIn("switches: (() => { try { return window.__switches?.()", p)
+        mod1 = p[p.index('<script type="module">'):]
+        mod1 = mod1[:mod1.index("</script>")]
+        self.assertIn("function switchMark(step) {", mod1)
+        self.assertNotIn("nativePost(", mod1[mod1.index("function switchMark(step) {"):mod1.index("async function switchRoom(")])   # module 2's helper
+
+
 if __name__ == "__main__":
     unittest.main()

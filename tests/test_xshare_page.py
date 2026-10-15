@@ -49,7 +49,7 @@ class RoomSwitch(unittest.TestCase):
     def test_asks_first_and_arrives_quiet(self):
         p = _page()
         self.assertIn("Your microphone will be muted and your camera turned off.", p)
-        body = p[p.index("  async function switchRoom(rec, code, opts) {"):p.index("  async function switchRoom(rec, code, opts) {") + 1100]
+        body = p[p.index("  async function switchRoom(rec, code, opts) {"):p.index("  async function switchRoom(rec, code, opts) {") + 1700]   # 0.21.70: + the switch timings
         self.assertIn("src.micMuted = true;", body)
         self.assertIn("src.videoPaused = true;", body)
 

@@ -8651,6 +8651,7 @@
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
+    if (switchNow && String(name).startsWith(switchNow.to + "/")) { try { switchMark("firstTile"); } catch {} }   // 0.21.70
     if (!isCgName(name)) personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced); 0.21.66: a grid of cameras is nobody
     const gm0 = gridMeta.get(name);
     if (gm0) gm0.tileGone = 0;   // 0.9.4: the grid's tile is back
@@ -13488,6 +13489,7 @@
       audioActive: [...tiles.entries()].filter(([, t]) => t.watch.muted === false).map(([n]) => n),
       netEvents: (() => { const ne = window.__netEvents || {}; return { reconnects: ne.reconnects || 0, lastMinute: (ne.recent || []).filter((t) => Date.now() - t < 60000).length, breaks: ne.breaks || 0 }; })(),   // 0.21.8
       slowGroups: { audio: window.__slowGroups?.audio || 0, video: window.__slowGroups?.video || 0 },   // 0.21.8
+      switches: (() => { try { return window.__switches?.().map((w) => ({ to: w.to, from: w.from, at: w.at, mint: w.mint ?? null, joined: w.joined ?? null, firstTile: w.firstTile ?? null, gaveUp: w.gaveUp ?? null })) || []; } catch { return []; } })(),   // 0.21.70
       // 0.21.26 (Kenton: users stuck on "connecting..."): every tile whose catalog never arrived -- how long, how many re-subscribes, through which relay
       // 0.21.52: the room-state view -- my producers, the room.json I read (values, age), grids learned, rescues
       roomState: (() => { try { const s = window.__state?.debug?.() || {};
@@ -15340,11 +15342,30 @@
     switchRoom(rec, code, { follow: true });
   }
   window.__roomFollow = roomRenamedFollow;   // rig
+  // 0.21.70 (Kenton: "Sometimes it takes a while to switch between rooms"): each switch is timed -- the token from the relay
+  // host (mint), the reconnect (joined), the first tile of the new room (firstTile) -- the last 10 in /api/diag (watcher.switches)
+  // and launch.log, so a slow one names its slow step
+  const switchLog = [];
+  let switchNow = null;
+  function switchMark(step) {
+    const w = switchNow; if (!w || w[step] != null) return;
+    w[step] = Math.round(performance.now() - w.t0);
+    if (step === "firstTile" || step === "gaveUp") {
+      switchNow = null;
+      const line = "Room switch to " + w.to + ": token " + (w.mint ?? "?") + " ms, reconnect " + (w.joined ?? "?") + " ms, first tile " + (w.firstTile != null ? w.firstTile + " ms" : "none in 20 s");
+      log(line);
+      if ((w.firstTile ?? 99999) > 4000 && (window.__kastrClient?.class || "app") !== "web") { try { fetch("/api/rtsp/note", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "page: " + line }) }).catch(() => {}); } catch {} }   // a slow one reaches launch.log
+    }
+  }
+  window.__switches = () => switchLog.slice();   // rig
   async function switchRoom(rec, code, opts) {
     if (joinState !== "joined") return;
+    switchNow = { to: rec.slug, from: CHANNEL, at: Date.now(), t0: performance.now() };   // 0.21.70
+    switchLog.push(switchNow); if (switchLog.length > 10) switchLog.shift();
+    { const w = switchNow; setTimeout(() => { if (switchNow === w) switchMark("gaveUp"); }, 20000); }
     if (authSecured) {
       // 0.10.0: the cached relay access code plus the room's own code
-      try { await authMint(rec.slug, authAccessCode, code ?? ""); }
+      try { await authMint(rec.slug, authAccessCode, code ?? ""); switchMark("mint"); }
       catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.("Could not join " + rec.slug + ": " + (e?.message || e), 5000, { level: "warn" }); return; }   // 0.21.42: said, and nothing muted
     }
     // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
@@ -15368,6 +15389,7 @@
     if (wasLive) document.getElementById("liveBtn").click();
     joinChannel(rec.slug, rec);
     if (wasLive) document.getElementById("liveBtn").click();
+    switchMark("joined");   // 0.21.70
     paintChannelChip(); paintSidebar();   // 0.12.0: the banner names the new room, its card leaves the list
     try { window.__chatRoomChanged?.(); } catch {}
     try {

@@ -2,6 +2,10 @@
 
 What changed in each build, newest first.
 
+## v0.21.68 — (in progress)
+
+**Pull test text without colour codes.** When a Pull test gets no data, the Relay page shows the moq tool's last line. That line was full of terminal colour codes (`[2m`, `[0m`, …); they are removed now, so it reads "subscribe started" plainly.
+
 ## v0.21.67 — your room stands out
 
 **Your room looks different from rooms you watch (Kenton: "We need a way to show which room I'm in and it needs to be different than how it shows what rooms I'm pulling feeds from.").** Before, both had a blue outline and a blue ring; the watched one was just dimmer.

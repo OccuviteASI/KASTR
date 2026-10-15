@@ -6104,7 +6104,7 @@ class Relay:
 
         def ereader():
             for line in p.stderr:
-                err.append(line.decode("utf-8", "replace").rstrip()[:200])
+                err.append(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line.decode("utf-8", "replace")).rstrip()[:200])   # 0.21.68: no terminal colour codes on the Relay page
                 del err[:-8]
         th = threading.Thread(target=reader, daemon=True); th.start()
         threading.Thread(target=ereader, daemon=True).start()

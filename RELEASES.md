@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.67 — your room stands out
+
+**Your room looks different from rooms you watch (Kenton: "We need a way to show which room I'm in and it needs to be different than how it shows what rooms I'm pulling feeds from.").** Before, both had a blue outline and a blue ring; the watched one was just dimmer.
+- **The room you are in:** the card is tinted in your accent colour, its round bubble is filled solid with white initials, and a **You're here** tag sits beside the people count.
+- **A room you pull feeds from:** no fill, a dashed outline, a dashed ring around the bubble with a small eye under it, and a **Watching** tag.
+- **Collapsed rail:** the bubble says it on its own: solid for your room, dashed ring and eye for a watched one.
+- **Lab check:** Kenton in one room, watching a camera in another, in dark and light themes and with the rail collapsed. The two read differently at a glance in every case.
+
 ## v0.21.66 — spotlight you can arrange, grids from any room
 
 **Drag the spotlight around (Kenton: "I want to be able to adjust spotlighted items after they are spotlighted by dragging them around.").** When two or more things are spotlit and share the stage, drag one onto another and they swap places.

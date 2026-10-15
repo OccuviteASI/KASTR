@@ -1225,8 +1225,15 @@
   .sbcard:hover { border-color:var(--asi-blue-dim); }
   .sbcard.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue-glow); }
   /* 0.13.1: the room you are in (Discord pill on the left edge), drag-to-reorder, the resize grip */
-  .sbcard.cur { border-color:var(--asi-blue); background:var(--surface-2); }   /* 0.21.66 (Kenton: "No longer a need for the White bar on the side"): the accent outline is the only mark */
-  .sbcard.cur .rb { border-color:var(--asi-blue); color:var(--asi-blue); box-shadow:0 0 0 2px var(--asi-blue-glow); }
+  /* 0.21.66 (Kenton: "We need a way to show which room I'm in and it needs to be different than how it shows what rooms I'm pulling
+     feeds from"): MY room = an accent-tinted card, a SOLID accent bubble and a "You're here" tag; a WATCHED room = no fill, a dashed
+     outline, a dashed ring, an eye on the bubble and a "Watching" tag */
+  .sbcard.cur { border-color:var(--asi-blue); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }
+  .sbcard.cur .rb { border-color:var(--asi-blue); background:var(--asi-blue); color:#fff; box-shadow:0 0 0 2px var(--asi-blue-glow); }
+  .sbcard.cur .rb .cnt { background:#fff; color:#06121a; }
+  .sbcard .sbtag { display:none; font:600 9px var(--font-ui); letter-spacing:.08em; text-transform:uppercase; border-radius:4px; padding:1px 5px; }
+  .sbcard.cur .sbtag.here { display:inline-block; background:var(--asi-blue); color:#fff; }
+  .sbcard.watching:not(.cur) .sbtag.wtag { display:inline-block; border:1px dashed var(--asi-blue-dim); color:var(--asi-blue); }
   .sbcard.dragging { opacity:.45; }
   .sbcard.drop-before { box-shadow:0 -3px 0 0 var(--asi-blue); }
   .sbcard.drop-after { box-shadow:0 3px 0 0 var(--asi-blue); }
@@ -1256,8 +1263,12 @@
   .sbcard .sbw.on { color:var(--asi-blue); }
   .sbcard .sbw.err { color:var(--asi-amber); }
   .sbcard .sbw:hover { color:var(--text); }
-  .sbcard.watching { border-color:var(--asi-blue-dim); }
-  .sbcard.watching .rb { box-shadow:0 0 0 2px var(--asi-blue-dim); }
+  .sbcard.watching { border-color:var(--asi-blue-dim); border-style:dashed; }
+  .sbcard.watching .rb { box-shadow:none; outline:1.5px dashed var(--asi-blue); outline-offset:2px; }
+  .rb .wb { display:none; position:absolute; bottom:-7px; left:50%; transform:translateX(-50%); width:14px; height:10px; border-radius:5px;
+    background:var(--surface); color:var(--asi-blue); align-items:center; justify-content:center; }   /* 0.21.66: the eye of a watched room */
+  .rb .wb .icon { width:10px; height:10px; }
+  .sbcard.watching .rb .wb { display:inline-flex; }
   body.sb-collapsed .sbcard .sbw { display:none; }
   .sbcard .sbhd { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; column-gap:10px; row-gap:3px; }   /* 0.21.41 */
   .sbcard .sbname { flex:0 1 auto; max-width:100%; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--text); }
@@ -1381,13 +1392,14 @@
   body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:none; }
   body.sb-collapsed .sbcard { border-color:transparent; background:transparent; padding:3px 0; display:flex; justify-content:center; }
   body.sb-collapsed .sbcard.on { box-shadow:none; }
-  body.sb-collapsed .sbcard.cur { border-color:transparent; background:transparent; }   /* 0.21.66: no white bar beside the bubble -- its accent ring says where I am */
+  body.sb-collapsed .sbcard.cur, body.sb-collapsed .sbcard.watching { border-color:transparent; background:transparent; }   /* 0.21.66: the bubble says it -- solid for my room, dashed ring + eye for a watched one */
   body.sb-collapsed .sbbtn { padding:4px 0; }
   /* 0.21.66: the collapsed rail's hover card -- a copy of the room's expanded card beside its bubble */
   #sbPeek { position:fixed; z-index:96; width:260px; max-height:70vh; overflow:auto; border-radius:8px; box-shadow:0 12px 32px rgba(0,0,0,.45); }
   #sbPeek[hidden] { display:none; }
   body.sb-collapsed #sbPeek .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
-  body.sb-collapsed #sbPeek .sbcard.cur { border-color:var(--asi-blue); background:var(--surface-2); }
+  body.sb-collapsed #sbPeek .sbcard.cur { border-color:var(--asi-blue); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }
+  body.sb-collapsed #sbPeek .sbcard.watching { border-color:var(--asi-blue-dim); border-style:dashed; }
   body.sb-collapsed #sbPeek .sbcard .sbname { display:inline; }
   body.sb-collapsed #sbPeek .sbcard .sbmeta { display:flex; }
   body.sb-collapsed #sbPeek .sbcard .sbmembers:not([hidden]) { display:flex; }
@@ -4464,6 +4476,7 @@
     const can = wrCan(rec);
     const w = can ? watchRooms.get(rec.slug) : null;
     card.classList.toggle("watching", !!w && w.pick.size > 0);
+    { const rb = card.querySelector(".rb"); if (rb && !rb.querySelector(".wb")) { const wb = document.createElement("span"); wb.className = "wb"; wb.innerHTML = icon("eye"); rb.appendChild(wb); } }   // 0.21.66: shown by CSS while watching
     const b = card.querySelector(".sbw");
     if (!b) return;
     b.hidden = !can;
@@ -13642,7 +13655,9 @@
     const cnt = document.createElement("span"); cnt.className = "sbcnt";
     const tm = document.createElement("span"); tm.className = "sbtime"; tm.title = "Occupied for";
     const fl = document.createElement("span"); fl.className = "sbflags";
-    meta.append(cnt, tm, fl);
+    const here = document.createElement("span"); here.className = "sbtag here"; here.textContent = "You\u2019re here";   // 0.21.66
+    const wtag = document.createElement("span"); wtag.className = "sbtag wtag"; wtag.textContent = "Watching";   // 0.21.66
+    meta.append(here, wtag, cnt, tm, fl);
     // 0.21.41 (Kenton: "move the people and time to the right of the room name, when space allows"): name and meta share a
     // wrapping line -- the meta drops under the name only when both do not fit
     const head = document.createElement("span"); head.className = "sbhd";

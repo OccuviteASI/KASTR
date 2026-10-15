@@ -5923,7 +5923,31 @@
   const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
   const leavingExMember = (name) => { if (!pendingRemovals.has(name)) return false; const now = Date.now(); for (const f of gridForgot.values()) if (f.known.includes(name) && now - f.at <= GRID_FORGOT_HOLD_MS) return true; return false; };   // 0.21.16: an ex-member of a just-withdrawn grid whose own broadcast already went inactive stays hidden while its removal debounce runs (owner switched its cameras off: no loose dead tiles)
   const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name) || roomHid.has(name)
-    || (cgHide(name) && (gridMode || name !== selectedName));   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
+    || (cgHide(name) && (gridMode || name !== selectedName))   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
+    || gridDark(name);
+  // 0.21.66 (Kenton: an RTMP grid sat on "cameras offline -- reconnecting (3)" -- "It should hide it"): a grid whose every camera is
+  // offline is hidden here like a camera behind its grid (gallery, rail, stage, spotlight, pins); the owner box keeps it running and
+  // it comes back the moment one camera is live again. Not while I have its layout editor open on my stage.
+  const gridDark = (name) => !!gridMeta.get(name)?.allOut && !(selectedName === name && window.__gridEditor?.isOpen?.());
+  let gridDarkLeft = null;   // {gp, sel, mode}: the stage moved off this grid when it went dark -- it returns there if nothing else was picked since
+  function gridDarkCheck(gp, was) {
+    const now = !!gridMeta.get(gp)?.allOut;
+    if (now === was) return;
+    console.log("[kastr] grid " + gp + (now ? ": every camera offline -- hidden" : ": a camera is back -- shown"));
+    if (now && selectedName === gp && gridDark(gp)) {   // the stage moves on, as when a share ends
+      gridZoom = null;
+      const next = (!gridMode ? orderedNames().find((n) => n !== gp && isWatched(n) && isContentPath(n) && !hiddenChild(n)) : undefined)
+        ?? orderedNames().find((n) => n !== gp && isWatched(n) && !hiddenChild(n));
+      const mode = gridMode;
+      selectedName = next;
+      if (next === undefined) gridMode = true;
+      gridDarkLeft = { gp, sel: next, mode };
+    } else if (!now && gridDarkLeft?.gp === gp) {
+      if (selectedName === gridDarkLeft.sel && tiles.has(gp)) { selectedName = gp; gridMode = gridDarkLeft.mode; }   // the gallery stays the gallery
+      gridDarkLeft = null;
+    }
+    queueRelayout();
+  }
   // 0.9.8: fill-first auto grid. Rows may hold different cell counts (2 over 3
   // for five cameras) when that draws more picture than equal cells would, no
   // cell smaller than half the biggest; partial rows and the whole block are
@@ -6519,7 +6543,9 @@
           feeds, out, members, dead, down, more, mode: meta.mode || "grid", ts, key: String(path),
           id: meta.id != null ? String(meta.id) : "1", label: String(meta.label || "").slice(0, 40),   // 0.15.0: which of the owner's grids, and its display name
           known, gone: 0, tileGone: tiles.has(meta.path) ? 0 : (cur?.tileGone || 0),   // 0.8.12 / 0.9.4 / 0.14.0
-          rects: Array.isArray(meta.rects) ? meta.rects.slice(0, 64) : null, gap: Number(meta.gap) || 0, path: String(meta.path) });   // 0.21.43: the owner's drawn geometry
+          rects: Array.isArray(meta.rects) ? meta.rects.slice(0, 64) : null, gap: Number(meta.gap) || 0, path: String(meta.path),   // 0.21.43: the owner's drawn geometry
+          allOut: meta.n != null && Number(meta.n) === 0 });   // 0.21.66: no camera drawn -- the owner shows "cameras offline -- reconnecting"
+        gridDarkCheck(String(meta.path), !!cur?.allOut);
       }
     } else {
       const cur = gridMeta.get(meta.path);
@@ -7483,6 +7509,14 @@
     // DOM itself never moves. 0.6.10: collage (uniform best-fit) or spot
     // (content + ladder), both plain grid placement of the same panes.
     autoContentCheck();
+    {   // 0.21.66 (Mendon): a grid camera on my stage that cannot be shown (parked, down, removed here) parks its grid behind nothing --
+        // the grid "disappears" until a reload. Hand the stage back to the grid instead.
+      const gp = selectedName && gridOwnerOf(selectedName);
+      if (gp && !gridMode && !selfSpotEl && tiles.has(gp) && (!tiles.has(selectedName) || !isWatched(selectedName) || deadMember(selectedName) || roomHid.has(selectedName))) {
+        console.warn("KASTR: " + selectedName + " cannot be shown (" + (!tiles.has(selectedName) ? "no tile" : !isWatched(selectedName) ? "not watched" : deadMember(selectedName) ? "down" : "removed here") + ") -- back to its grid");
+        gridZoom = null; selectedName = gp;
+      }
+    }
     for (const lit of [...spotLits.values()]) {   // 0.21.0: my spotlit share ended (8 s grace for a self-heal that re-announces)
       // 0.21.61 (Kenton: hold a spotlit RTSP camera / grid "5 or 10 mins to give a device long enough to reboot/upgrade"):
       // cameras and grids keep their spotlight SPOT_LIT_HOLD_MS while they are gone; screens and files keep the 8 s
@@ -8881,6 +8915,7 @@
           const idx = gridCellAtW(tile, meta, e);
           if (idx >= 0) {
             const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
+            if (fp && tiles.has(fp) && !isWatched(fp)) watchStream(fp);   // 0.21.66 (Kenton, Mendon: "the grid window disappears"): a click on a PARKED camera's cell watches it -- the click is the ask
             if (fp && tiles.has(fp)) {   // 0.21.7: a tile on the low copy opens at once; the full pair is asked for right now
               if (!fullLive.has(fp) && (odFeeds.some((f) => f.broadcast === fp) || lowAvail.has(fp))) odWake(fp);
               if (gridOpenStart(name, idx, fp)) return;   // 0.21.15 (7b): no picture yet -> the composite cell zoomed, the camera decodes off-stage, swap on its first frame
@@ -19736,7 +19771,11 @@
   async function ensureDenoise() {
     if (denoiseBroken) throw new Error(denoiseBroken);
     if (!denoiseCtx) {
-      denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+      // 0.21.66 (Kenton, Bluetooth headset: "When I turned on RNNoise filter no one could hear me at all"): the filter's
+      // context renders with NO output device (sinkId none) -- tied to the speakers it froze when a Bluetooth headset flipped
+      // to its call mode as the mic opened, and the processed track went silent with no error
+      try { denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive", sinkId: { type: "none" } }); }
+      catch { denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" }); }
       denoiseCtx.addEventListener("statechange", () => { if (denoiseCtx.state !== "running") denoiseCtx.resume().catch(() => {}); });
     }
     if (denoiseCtx.sampleRate !== 48000) throw new Error("the browser refused a 48 kHz audio context");
@@ -19825,13 +19864,52 @@
       node.addEventListener("processorerror", (e) => denoiseFail("the noise worklet crashed" + (e?.message ? " (" + e.message + ")" : "")));
       const processed = dest.stream.getAudioTracks()[0];
       slot.dn = { raw, src, head: node, node, dest, processed };
+      denoiseGuard(slot, d.ctx, src, node);   // 0.21.66: never silent without saying so
       try { pubAud(slot.publish)?.source.set({ track: processed, kind: "voice" }); } catch {}
       rearmSlotAudio(slot);
       log("Background noise removal on (RNNoise).");
     } catch (e) { denoiseFail(e); }
     finally { slot.dnBusy = false; }
   }
+  // 0.21.66: a watchdog per denoised mic, once a second -- the filter's clock must move, and when the mic hears something the
+  // filter must put SOMETHING out (RNNoise lowers noise, it never outputs exact digital silence). Broken -> rebuild once
+  // (a fresh context), then give up: browser suppression + the reason (toast, launch.log, /api/diag).
+  function denoiseGuard(slot, ctx, src, node) {
+    clearInterval(slot.dnGuard);
+    const inA = ctx.createAnalyser(), outA = ctx.createAnalyser();
+    inA.fftSize = outA.fftSize = 2048;
+    try { src.connect(inA); node.connect(outA); } catch { return; }
+    const ib = new Float32Array(inA.fftSize), ob = new Float32Array(outA.fftSize);
+    let lastT = ctx.currentTime, frozen = 0, silent = 0;
+    slot.dnGuard = setInterval(() => {
+      if (!slot.dn || micMode !== "rnnoise") { clearInterval(slot.dnGuard); return; }
+      if (slot.entry.micMuted) { frozen = silent = 0; lastT = ctx.currentTime; return; }
+      const t = ctx.currentTime;
+      frozen = t === lastT ? frozen + 1 : 0; lastT = t;
+      inA.getFloatTimeDomainData(ib); outA.getFloatTimeDomainData(ob);
+      let e = 0, mx = 0;
+      for (let i = 0; i < ib.length; i++) e += ib[i] * ib[i];
+      for (let i = 0; i < ob.length; i++) mx = Math.max(mx, Math.abs(ob[i]));
+      silent = Math.sqrt(e / ib.length) > 0.01 && mx < 1e-6 ? silent + 1 : 0;
+      if (frozen < 2 && silent < 3) return;
+      clearInterval(slot.dnGuard);
+      const why = frozen >= 2 ? "its audio clock stopped (the audio device changed?)" : "no sound came through it";
+      if (!slot.dnRebuilt) {
+        slot.dnRebuilt = true;
+        log("Background noise removal: " + why + " — starting it again");
+        if (!IS_WEB2) { try { nativePost("/api/rtsp/note", { text: "page: RNNoise " + why + " -- rebuilding the filter" }); } catch {} }
+        stopDenoise(slot);
+        try { denoiseCtx?.close?.(); } catch {}
+        denoiseCtx = null; denoiseWorklet = null;
+        setTimeout(() => applyDenoise(slot), 300);
+      } else {
+        stopDenoise(slot);
+        denoiseFail(why);
+      }
+    }, 1000);
+  }
   function stopDenoise(slot, { restore = true } = {}) {
+    clearInterval(slot.dnGuard); slot.dnGuard = null;   // 0.21.66
     try { slot.dnWatch?.(); } catch {}
     slot.dnWatch = null;
     const v = slot.dn;
@@ -22335,7 +22413,7 @@
   }
   window.__gridEvict = () => added.filter((a) => a.kind === RTSP).map((a) => {   // rig (0.21.31): why each camera is in or out
     const slot = slots.get(a.id), pi = slot?.feed?.publish || slot?.pub || null;
-    return { url: a.url, evicted: !!a.evicted, why: a.evictWhy || null, attempt: a.evictAttempt || null, retries: a.retries || 0,
+    return { id: a.id, url: a.url, evicted: !!a.evicted, why: a.evictWhy || null, attempt: a.evictAttempt || null, retries: a.retries || 0,
       pubRunning: pi?.running ?? null, pubSince: pi?.since ?? null, restarts: pi?.restarts ?? null, flowingAt: pi?.flowingAt ?? null,
       relayHas: !!window.__echoed?.has?.(chanPath(ensureHang(slot?.entry?.name || a.name))),
       monLoaded: !!slot?.monitorLoaded, monDown: !!slot?.monitorDown, monUpS: slot?.monitorUpAt ? Math.round((performance.now() - slot.monitorUpAt) / 1000) : null };
@@ -23287,6 +23365,7 @@
   window.__micMode = {
     get: () => micMode, set: setMicMode, modes: MIC_MODES,
     broken: () => denoiseBroken,
+    dnCtx: () => denoiseCtx,   // rig (0.21.66): freeze it to test the watchdog
     constraints: micConstraints,
     denoiseTap,
     viso: { get: () => voiceIsoOn, set: setVoiceIso, capable: voiceIsoCapable, note: noteVoiceIsoCap, hint: VOICE_ISO_HINT },

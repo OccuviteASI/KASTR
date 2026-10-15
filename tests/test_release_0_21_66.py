@@ -332,7 +332,7 @@ class Page(unittest.TestCase):
         self.assertIn("|| vgHqWanted(name) || cgWarm.has(name);", p)                                # keepWarm
         self.assertIn("if (w.pick.has(p) || cgCams.has(p)) return true;", p)                         # a watched room's unticked camera
         self.assertIn('kind: String(it.kind || ""), cg: !!it.cg });', p)                             # listed only for a room grid
-        self.assertIn("|| (cgHide(name) && (gridMode || name !== selectedName));", p)               # hidden, opened from its spot
+        self.assertIn("|| (cgHide(name) && (gridMode || name !== selectedName))", p)               # hidden, opened from its spot
         self.assertIn("if (isWatched(name) && CLIENT.webcodecs && !isCgName(name)) watch.setAttribute", p)
         tick = self.sec("  function cgTick() {", EOL + "  }" + EOL)
         self.assertIn('gb.motion.sample("cg:" + n + "|" + k,', tick)                               # motion from each camera's own frames
@@ -390,6 +390,47 @@ class Page(unittest.TestCase):
         with open(os.path.join(HERE, "moq-watch-lite.html"), "rb") as f:
             raw = f.read()
         self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"))
+
+class FieldFixes(unittest.TestCase):
+    """0.21.66 field fixes: RNNoise silent with a Bluetooth headset; an all-offline grid hides; a parked camera's cell
+    no longer leaves an empty stage (Mendon)."""
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
+            cls.p = f.read()
+
+    def sec(self, start, end):
+        i = self.p.index(start)
+        return self.p[i:self.p.index(end, i)]
+
+    def test_denoise_context_has_no_output_device(self):
+        self.assertIn('denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive", sinkId: { type: "none" } });', self.p)
+        self.assertIn('catch { denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" }); }', self.p)
+
+    def test_denoise_watchdog(self):
+        g = self.sec("  function denoiseGuard(slot, ctx, src, node) {", "  function stopDenoise(")
+        self.assertIn("frozen = t === lastT ? frozen + 1 : 0;", g)
+        self.assertIn("Math.sqrt(e / ib.length) > 0.01 && mx < 1e-6", g)
+        self.assertIn("if (slot.entry.micMuted)", g)
+        self.assertIn("if (!slot.dnRebuilt) {", g)
+        self.assertIn("denoiseFail(why);", g)
+        self.assertIn("denoiseGuard(slot, d.ctx, src, node);", self.p)
+        self.assertIn("clearInterval(slot.dnGuard); slot.dnGuard = null;   // 0.21.66", self.sec("  function stopDenoise(", "  function armDenoiseWatch("))
+
+    def test_all_offline_grid_hidden(self):
+        self.assertIn("allOut: meta.n != null && Number(meta.n) === 0 });", self.p)
+        self.assertIn("gridDarkCheck(String(meta.path), !!cur?.allOut);", self.p)
+        self.assertIn("    || gridDark(name);", self.p)
+        self.assertIn("const gridDark = (name) => !!gridMeta.get(name)?.allOut && !(selectedName === name && window.__gridEditor?.isOpen?.());", self.p)
+        d = self.sec("  function gridDarkCheck(gp, was) {", "    queueRelayout();")
+        self.assertIn("gridDarkLeft = { gp, sel: next, mode };", d)
+        self.assertIn("gridMode = gridDarkLeft.mode;", d)
+
+    def test_parked_cell_click_watches_it(self):
+        self.assertIn("if (fp && tiles.has(fp) && !isWatched(fp)) watchStream(fp);", self.p)
+        a = self.sec("    autoContentCheck();" + chr(10) + "    {", "    for (const lit of [...spotLits.values()]) {")
+        self.assertIn("!isWatched(selectedName) || deadMember(selectedName) || roomHid.has(selectedName)", a)
+        self.assertIn("gridZoom = null; selectedName = gp;", a)
 
 
 if __name__ == "__main__":

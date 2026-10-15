@@ -598,6 +598,18 @@
   #stageBack.show { display:block; }
   #stageBack .gl { display:none; }            /* 0.21.38: the icon until hovered */
   #stageBack:hover .gl, #stageBack:focus-visible .gl { display:inline; }
+  /* 0.21.66 (o): back to the spotlight -- subtle, never idles away (it may be the only way back) */
+  #spotBack { position:absolute; z-index:8; top:8px; left:8px; display:none; align-items:center; gap:5px; font-size:11px; padding:3px 10px 3px 7px;
+    border-radius:999px; border:1px solid var(--line); background:rgba(10,14,18,.62); color:#fff; opacity:.8; cursor:pointer; }
+  #spotBack.show { display:inline-flex; }
+  #spotBack svg { width:14px; height:14px; }
+  #spotBack:hover, #spotBack:focus-visible { opacity:1; border-color:var(--asi-blue); }
+  #stageBack.show ~ #spotBack { top:42px; }
+  /* 0.21.66 (n): a spotlight you can arrange -- drag one onto another to swap their places */
+  #stage.arrange.spot .pane.mainstage, #stage.arrange.spot .pubpane.mainstage { cursor:grab; }
+  #stage .pane.mainstage.drop-target, #stage .pubpane.mainstage.drop-target { outline:3px solid var(--asi-blue); outline-offset:-3px; }
+  #stage .pane.mainstage.dragging { opacity:.55; }
+  #stage .pane.cgtile .mchip, #stage .pane.cgtile .vchip { display:none !important; }   /* 0.21.66 (e): a grid of cameras has no mic or camera of its own */
   .zoomctl { position:absolute; right:8px; bottom:8px; z-index:8; display:none; gap:4px; opacity:0; transition:opacity .15s ease; }
   #stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl, #stage .pubpane.mainstage[data-zoom] .zoomctl { display:flex; }
   #stage .pane:hover .zoomctl, #stage .pubpane:hover .zoomctl, #stage .zoomed .zoomctl { opacity:1; }
@@ -1061,6 +1073,8 @@
   /* 0.21.65: the grid builder -- the presets dropdown, the side list of streams, spots holding several cameras (they take turns) */
   .gedit .getools .gelay { min-width:130px; text-align:left; }
   .gedit .getools .gesens select { height:26px; font-size:12px; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:5px; }
+  .gedit .getools .gename input { width:150px; height:24px; font-size:12px; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:5px; padding:0 6px; }
+  .gedit .getools .geshare { color:var(--text); }
   .gedit .gepre { position:fixed; z-index:90; width:392px; overflow:auto; background:var(--surface); border:1px solid var(--asi-blue-dim); border-radius:8px; padding:8px;
     box-shadow:0 10px 30px rgba(0,0,0,.5); font-size:12px; color:var(--text-dim); }
   .gedit .gepre[hidden] { display:none; }
@@ -1211,7 +1225,7 @@
   .sbcard:hover { border-color:var(--asi-blue-dim); }
   .sbcard.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue-glow); }
   /* 0.13.1: the room you are in (Discord pill on the left edge), drag-to-reorder, the resize grip */
-  .sbcard.cur { border-color:var(--asi-blue); background:var(--surface-2); border-left:3px solid #fff; padding-left:5px; }
+  .sbcard.cur { border-color:var(--asi-blue); background:var(--surface-2); }   /* 0.21.66 (Kenton: "No longer a need for the White bar on the side"): the accent outline is the only mark */
   .sbcard.cur .rb { border-color:var(--asi-blue); color:var(--asi-blue); box-shadow:0 0 0 2px var(--asi-blue-glow); }
   .sbcard.dragging { opacity:.45; }
   .sbcard.drop-before { box-shadow:0 -3px 0 0 var(--asi-blue); }
@@ -1367,8 +1381,18 @@
   body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:none; }
   body.sb-collapsed .sbcard { border-color:transparent; background:transparent; padding:3px 0; display:flex; justify-content:center; }
   body.sb-collapsed .sbcard.on { box-shadow:none; }
-  body.sb-collapsed .sbcard.cur { border-color:transparent; border-left:3px solid #fff; background:transparent; padding-left:0; }
+  body.sb-collapsed .sbcard.cur { border-color:transparent; background:transparent; }   /* 0.21.66: no white bar beside the bubble -- its accent ring says where I am */
   body.sb-collapsed .sbbtn { padding:4px 0; }
+  /* 0.21.66: the collapsed rail's hover card -- a copy of the room's expanded card beside its bubble */
+  #sbPeek { position:fixed; z-index:96; width:260px; max-height:70vh; overflow:auto; border-radius:8px; box-shadow:0 12px 32px rgba(0,0,0,.45); }
+  #sbPeek[hidden] { display:none; }
+  body.sb-collapsed #sbPeek .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
+  body.sb-collapsed #sbPeek .sbcard.cur { border-color:var(--asi-blue); background:var(--surface-2); }
+  body.sb-collapsed #sbPeek .sbcard .sbname { display:inline; }
+  body.sb-collapsed #sbPeek .sbcard .sbmeta { display:flex; }
+  body.sb-collapsed #sbPeek .sbcard .sbmembers:not([hidden]) { display:flex; }
+  body.sb-collapsed #sbPeek .sbcard .sbrow .spk { display:inline-flex; }
+  .sbcard:focus-visible { outline:2px solid var(--asi-blue); outline-offset:1px; }
   /* 0.15.0 (B4): room GROUPS -- one header row per group (chevron, name, count) above its
      cards; the collapsed rail shows a 2 px divider and a 1-letter chip instead. */
   .sbgroup { display:flex; align-items:center; gap:5px; height:28px; flex:none; padding:0 4px; margin-top:4px; cursor:pointer; user-select:none;
@@ -2045,6 +2069,9 @@
         <li><b>View &#9656; Spotlight</b> returns to what the room spotlighted. <b>Focus on content</b> downloads only the stage &mdash; useful on a slow connection.</li>
         <li><b>Full screen:</b> the tile&rsquo;s full-screen button or <kbd>F</kbd>. <b>Fill window:</b> <kbd>W</kbd>. <kbd>Esc</kbd> leaves either.</li>
         <li><b>Camera grids</b> show several cameras in one tile; click a camera in a grid to open it at full quality.</li>
+        <li><b>Back to spotlight</b> (top-left of the stage, or <kbd>S</kbd>) returns to what the room spotlighted, from the gallery or anything you opened.</li>
+        <li>Several things spotlit share the stage: <b>drag one onto another</b> to swap their places &mdash; everyone in the room sees the new order.</li>
+        <li><b>More &#9656; Build a grid&hellip;</b> makes a grid of cameras from any room you can see (rooms you watch too): drag cameras onto spots, several on one spot take turns on motion or on time. It is yours on this device, or <b>Share with this room</b> puts it on the room for everyone. Its &#8943; menu edits, renames or deletes it.</li>
         <li>A <b>coloured ring</b> around someone means you are hearing them; a mic with a line through it means they are muted; an eye means they only watch.</li>
       </ul>
     </details>
@@ -2083,6 +2110,7 @@
         <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>the previous / next stream</td></tr>
         <tr><td><kbd>1</kbd>&ndash;<kbd>9</kbd></td><td>a stream by its number</td></tr>
         <tr><td><kbd>G</kbd></td><td>gallery &harr; speaker view</td></tr>
+        <tr><td><kbd>S</kbd></td><td>back to the spotlight (from the gallery or anything else)</td></tr>
         <tr><td><kbd>F</kbd></td><td>full screen</td></tr>
         <tr><td><kbd>W</kbd></td><td>fill the window</td></tr>
         <tr><td><kbd>M</kbd></td><td>mute everything you hear</td></tr>
@@ -2111,6 +2139,8 @@
   <div class="body">
     <button class="opt" id="optRec" type="button"><span class="oi rec"></span>Record</button>
     <button class="opt" id="optRoom" type="button"><span class="oi">&#9432;</span>Room info</button>
+    <!-- 0.21.66 (Kenton: "I also need to be able to create my own grid with several streams across multiple rooms.") -->
+    <button class="opt" id="optGrid" type="button" title="A grid of cameras from any room you can see -- for you, or shared with this room"><span class="oi">&#9638;</span>Build a grid&hellip;</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
     <!-- 0.21.41 (Kenton: "share from 1 device to multiple rooms ... a room selection on the share after toggling the feature on") -->
     <button class="opt" id="optDeafen" type="button" title="Turn off all sound from the room and mute your microphone (D)"><span class="oi">&#127911;</span>Deafen<span class="chk">&#10003;</span></button>
@@ -2818,7 +2848,7 @@
   window.__noCatalog = () => [...tiles].filter(([, t]) => t.noCatalog).map(([n, t]) => [n, t.catResubs || 0]);   // rig
   function resubscribe(name, why) {
     const t = tiles.get(name);
-    if (!t) return;
+    if (!t || t.cg) return;   // 0.21.66: a grid of cameras has no stream of its own
     log(why + " \u2014 re-subscribing: " + shortLabel(name));
     try {
       t.watch.removeAttribute("url");
@@ -3163,8 +3193,12 @@
     if (wr) return wrUrl(watchRooms.get(wr));
     const u = withToken(urlInput.value.trim());
     const x = xsTiles.get(name);
-    return x ? u + (u.includes("?") ? "&" : "?") + "xs=" + encodeURIComponent(x.from) : u;
+    // 0.21.66: + the from-room's listing version -- a session is granted the listings that exist when it opens, so a stream
+    // listed later from the same room (a second pin, a room grid's camera, a split camera) needs a session of its own
+    const v = x ? xsVer.get(x.from) : 0;
+    return x ? u + (u.includes("?") ? "&" : "?") + "xs=" + encodeURIComponent(x.from) + (v ? "&xv=" + v : "") : u;
   }
+  const xsVer = new Map();   // 0.21.66: from-room -> how many times new listings arrived from it
   async function xsTokenFor(slug, code) {   // a member token for another room, minted beside mine (never replaces mine)
     if (!authSecured) return "";
     const base = authBase();
@@ -3424,13 +3458,16 @@
     if (!d || !d.ok || d.room !== CHANNEL) return;
     const live = new Set();
     const me = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    { const fresh = new Set();   // 0.21.66: rooms with a listing new to this page -- its tiles open a session that is granted it
+      for (const it of d.items || []) { const p = String(it.path || ""); if (p && !xsTiles.has(p) && !tiles.has(p)) fresh.add(String(it.from || p.split("/", 1)[0])); }
+      for (const r of fresh) xsVer.set(r, (xsVer.get(r) || 0) + 1); }
     for (const it of d.items || []) {
       const p = String(it.path || "");
       const parts = p.split("/");
       if (!p.endsWith(".hang") || parts.length < 4 || p.startsWith(CHANNEL + "/")) continue;
       if (parts[1] === HOSTNAME1 && String(parts[2]).toLowerCase() === me) continue;   // my own share, listed back into my room
       live.add(p);
-      xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || "") });
+      xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || ""), cg: !!it.cg });   // 0.21.66: cg = listed only for a room grid (no tile of its own)
       if (!tiles.has(p)) { cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }
     }
     for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p)) scheduleRemoveTile(p); }
@@ -3494,7 +3531,7 @@
   // GET / POST /api/rooms/board at my relay's minter (a spoke forwards to the hub). Fetched with the xshare poll (8 s) and on
   // join. A pinned feed from another room arrives as an xshare listing (xsPoll makes it a tile); the board's spotlights count
   // as votes of their own in spotSetNow (spotVotes key "~board", by "room") and go only when removed from the board.
-  const board = { room: "", pins: [], spots: [], grids: {}, split: [], ver: null, at: 0, lock: false };   // 0.21.64: + grids -- the room's own camera-grid layouts; 0.21.65: + split, + lock (the view is locked)
+  const board = { room: "", pins: [], spots: [], grids: {}, split: [], spotOrder: [], customGrids: {}, gridMetas: {}, ver: null, at: 0, lock: false };   // 0.21.66: + spotOrder, customGrids, gridMetas   // 0.21.64: + grids -- the room's own camera-grid layouts; 0.21.65: + split, + lock (the view is locked)
   const roomHid = new Set();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
   const boardCan = () => joinState === "joined" && !publishOnly && !isPublisherMode() && !isViewerMode() && CHANNEL !== LOBBY && !!authBase()
@@ -3520,12 +3557,12 @@
   window.__viewLockedForMe = viewLockedForMe;   // module 2 (its grid and spotlight menus) + rig
   window.__viewLock = { locked: viewLocked, boss: viewBoss, why: () => ({ admin: authSecured && authRole === "admin", role: authRole, operator: (() => { try { return isRelayOperator(); } catch { return null; } })(), key: !!myChannels().find((r) => r.slug === CHANNEL)?.roomKey }) };   // rig
   const boardPinned = (path) => board.room === CHANNEL && board.pins.some((p) => p.path === String(path));
-  const boardSig = (pins, spots, grids, split) => JSON.stringify([pins.map((p) => p.path), spots.map((s) => s.target + "@" + s.ts), grids || {}, split || []]);
+  const boardSig = (pins, spots, grids, split, order, cgs) => JSON.stringify([pins.map((p) => p.path), spots.map((s) => s.target + "@" + s.ts), grids || {}, split || [], order || [], cgs || {}]);   // 0.21.66: + the order, the room grids
   function boardVotes() {   // the board's spotlights as one vote set of the room
     const list = board.room === CHANNEL ? board.spots.map((s) => ({ ts: Number(s.ts) || 0, target: String(s.target), by: "room" })) : [];
     if (list.length) spotVotes.set("~board", list); else spotVotes.delete("~board");
   }
-  function boardReset() { board.room = ""; board.pins = []; board.spots = []; board.grids = {}; board.split = []; board.ver = null; board.at = 0; board.lock = false; spotVotes.delete("~board"); try { roomGridChanged(); } catch {} }
+  function boardReset() { board.room = ""; board.pins = []; board.spots = []; board.grids = {}; board.split = []; board.spotOrder = []; board.customGrids = {}; board.gridMetas = {}; board.ver = null; board.at = 0; board.lock = false; spotVotes.delete("~board"); try { roomGridChanged(); } catch {} try { cgSync(); } catch {} }
   let boardGen = 0, boardTaken = 0;   // every write and poll carries a generation; an older answer never replaces a newer one
   function boardTake(d, gen) {   // a GET / POST reply -> my copy; a change re-applies the spotlight and the pin badges
     if (d && d.ok && d.room === CHANNEL && d.renamed) { roomRenamedFollow(CHANNEL, String(d.renamed)); return; }   // 0.21.65: my room has a new name
@@ -3539,14 +3576,21 @@
     const spots = (Array.isArray(d.spots) ? d.spots : []).filter((s) => s && s.target);
     const grids = (d.grids && typeof d.grids === "object" && !Array.isArray(d.grids)) ? d.grids : {};   // 0.21.64
     const split = (Array.isArray(d.split) ? d.split : []).map(String);   // 0.21.65: cameras split out of their grid in this room
-    const was = board.room === CHANNEL ? boardSig(board.pins, board.spots, board.grids, board.split) : "";
+    const order = (Array.isArray(d.spotOrder) ? d.spotOrder : []).map(String);   // 0.21.66 (n): the spotlight's order
+    const cgs = (d.customGrids && typeof d.customGrids === "object" && !Array.isArray(d.customGrids)) ? d.customGrids : {};   // 0.21.66 (e): the room's own grids
+    const metas = (d.gridMetas && typeof d.gridMetas === "object" && !Array.isArray(d.gridMetas)) ? d.gridMetas : {};   // 0.21.66: other rooms' grids' geometry
+    const was = board.room === CHANNEL ? boardSig(board.pins, board.spots, board.grids, board.split, board.spotOrder, board.customGrids) : "";
+    const cgWas = board.room === CHANNEL ? JSON.stringify(board.customGrids || {}) : "{}";
     const gridsWas = board.room === CHANNEL ? JSON.stringify([board.grids, board.split]) : "[{},[]]";
     const gone = board.room === CHANNEL ? board.spots.map((s) => String(s.target)).filter((t) => !spots.some((s) => String(s.target) === t)) : [];
     board.room = CHANNEL; board.pins = pins; board.spots = spots; board.grids = grids; board.split = split; board.ver = d.ver ?? null; board.at = Date.now();
+    board.spotOrder = order; board.customGrids = cgs; board.gridMetas = metas;   // 0.21.66
     boardVotes();
+    try { boardMetasApply(); } catch {}   // 0.21.66: another room's grid listed here -- its cells
+    if (JSON.stringify(cgs) !== cgWas) { try { cgSync(); } catch {} }   // 0.21.66 (e): the room's grids changed
     if (JSON.stringify([grids, split]) !== gridsWas) { try { roomGridChanged(); } catch {} }   // 0.21.64: someone changed the room's grid layout -- live (0.21.65: or split a camera out)
     for (const t of gone) { try { if ((window.__spot?.mineList?.() || []).some((v) => v.target === t)) window.__spot.forget(t); } catch {} }
-    if (boardSig(pins, spots, grids, split) !== was) { try { spotApplyWinner(); applyState(); } catch {} }
+    if (boardSig(pins, spots, grids, split, order, cgs) !== was) { try { spotApplyWinner(); applyState(); } catch {} }
   }
   let boardBusy = false;
   async function boardPoll() {
@@ -3672,7 +3716,391 @@
       : label + " is back in its grid only, in " + roomTitle(CHANNEL), 4000, { level: "event" });
     return true;
   }
-  window.__board = { state: () => board, can: boardCan, pinned: boardPinned, pin: boardPin, spot: boardSpot, poll: boardPoll, grid: boardGrid, split: boardSplit };   // module 2 + rig
+  // 0.21.66 (n): the room's ORDER of its spotlight mosaic (op spotOrder) -- my copy at once, everyone else's within one poll
+  async function boardSpotOrder(targets) {
+    targets = [...new Set((targets || []).map(String))].slice(0, 16);
+    if (board.room === CHANNEL) board.spotOrder = targets;
+    try { spotApplyWinner(); applyState(); } catch {}
+    const d = await boardPost("spotOrder", { targets }, false);
+    if (!d?.ok) boardPoll();
+    return d;
+  }
+  // 0.21.66 (e): the ROOM's own grids of cameras from any room (op cgrid / cgridDel). A camera of another room needs my member
+  // token for that room as proof that I can see it (a watched room's own token first), as for a pin.
+  async function boardCgrid(id, g, quiet) {
+    const body = { id, name: g.name, slots: g.slots, gap: g.gap, sens: g.sens };
+    const rooms = [...new Set(g.slots.flatMap((s) => s.cams).map((k) => String(k).split("/", 1)[0]))].filter((r) => r !== CHANNEL);
+    const tokens = {};
+    if (authSecured) for (const r of rooms) {
+      try { tokens[r] = await boardFromToken(r); }
+      catch (e) {
+        if (!quiet) window.__toast?.("Could not share the grid with " + roomTitle(CHANNEL) + ": a camera from " + r + " — " + (e?.message || e), 6000, { level: "warn" });
+        return { ok: false };
+      }
+    }
+    if (board.room === CHANNEL) { board.customGrids = { ...board.customGrids, [id]: { ...body, by: "", at: Math.round(Date.now() / 1000) } }; try { cgSync(); } catch {} }
+    const d = await boardPost("cgrid", { ...body, tokens }, quiet);
+    if (!d?.ok) boardPoll();
+    return d;
+  }
+  async function boardCgridDel(id, quiet) {
+    if (board.room === CHANNEL && board.customGrids[id]) { const c = { ...board.customGrids }; delete c[id]; board.customGrids = c; try { cgSync(); } catch {} }
+    const d = await boardPost("cgridDel", { id }, quiet);
+    if (!d?.ok) boardPoll();
+    return d;
+  }
+  // 0.21.66 (Kenton: "When I right click on this grid from another room that is viewing it, I can't adjust the grid in that room. I
+  // need to be able to do that."): a camera grid of ANOTHER room pinned to / listed into my room takes my room's grid tools (Arrange
+  // for me / for everyone, remove, split, add back, reset) -- they need its geometry (which camera is in which cell), which pages
+  // here only had when they watched its room. Each grid's own box now posts it to its room's board (op gridMeta) and my room's
+  // board read carries the copy for every grid it sees (`gridMetas`); a live copy (I watch that room) always wins.
+  function boardMetasApply() {
+    if (board.room !== CHANNEL) return;
+    for (const [gp, m] of Object.entries(board.gridMetas || {})) {
+      if (!m || typeof m !== "object" || String(gp).split("/", 1)[0] === CHANNEL) continue;
+      const cur = gridMeta.get(gp), sig = JSON.stringify(m);
+      if (cur && !String(cur.key || "").startsWith("~board:")) continue;
+      if (cur && cur.boardSig === sig) continue;
+      gridApply("~board:" + gp, { ...m, path: gp }, Number(m.ts) || 0, true);
+      const nm = gridMeta.get(gp);
+      if (nm) nm.boardSig = sig;
+    }
+  }
+  // the box side: my own grids' geometry onto my room's board (on a change, and every 5 minutes)
+  const gmOut = new Map();   // grid path -> {sig, at, ok, meta}
+  function gridMetaSend(gp) {
+    const e = gmOut.get(gp);
+    if (!e || String(gp).split("/", 1)[0] !== CHANNEL || CHANNEL === LOBBY || joinState !== "joined") return;
+    const base = authBase();
+    if (!base || (authSecured && (authRole === "viewer" || !authTokens?.member))) return;
+    const headers = { "content-type": "application/json" };
+    if (authSecured) headers.authorization = "Bearer " + authTokens.member;
+    e.at = Date.now(); e.ok = false;
+    fetch(base + "/api/rooms/board", { method: "POST", headers, body: JSON.stringify({ room: CHANNEL, op: "gridMeta", path: gp, meta: e.meta }) })
+      .then((r) => { e.ok = r.ok; }).catch(() => {});
+  }
+  window.__gridMetaOut = (meta) => {
+    try {
+      if (!meta || !meta.path) return;
+      const gp = String(meta.path), { ts, ...rest } = meta, sig = JSON.stringify(rest), cur = gmOut.get(gp);
+      if (cur && cur.sig === sig && cur.ok && Date.now() - cur.at < 300000) return;
+      gmOut.set(gp, { sig, at: 0, ok: false, meta: { ...meta, ts: ts || Date.now() } });
+      gridMetaSend(gp);
+    } catch {}
+  };
+  setInterval(() => { for (const [gp, e] of gmOut) if ((!e.ok && Date.now() - e.at > 30000) || Date.now() - e.at > 300000) gridMetaSend(gp); }, 30000);
+  window.__board = { state: () => board, can: boardCan, pinned: boardPinned, pin: boardPin, spot: boardSpot, poll: boardPoll, grid: boardGrid, split: boardSplit,
+    spotOrder: boardSpotOrder, cgrid: boardCgrid, cgridDel: boardCgridDel, metasOut: () => [...gmOut].map(([k, e]) => ({ path: k, ok: e.ok, at: e.at })) };   // module 2 + rig
+  // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
+  // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
+  // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)
+  // and streams listed into my room. Kenton chose BOTH: a grid is MINE (this device, any room I am in: kastr.mygrids.<relay>) or,
+  // with "Share with this room" on, the ROOM's (its board's customGrids: everyone here sees it, it stays when I leave). Either way
+  // it is ONE tile (stage / rail / gallery; pinned or spotlit -- a room grid for everyone -- like any tile) that EVERY VIEWER DRAWS
+  // ITSELF from each camera's own stream: no box composites it. While the grid tile shows, each camera's own tile keeps its
+  // subscription off-stage (keepWarm) at the rail's budget, which takes the camera's small copy (-low) when it offers one.
+  // THE TRADE-OFF: a spot cycling on TIME subscribes only the camera it shows (and the next one from 4 s before its turn, so the
+  // switch is not black); a spot cycling on MOTION keeps every one of its cameras decoding (small copies when offered), because
+  // motion is measured on each camera's own frames (the 0.21.65 64 x 36 detector) -- that is the price of switching to a camera
+  // the moment it moves. A camera that is in my view only for a grid (an unticked source of a watched room, a camera of another
+  // room listed for a room grid) gets a hidden tile: never in the gallery or the rail, silent; a click on its spot opens it at full
+  // quality, a click on it goes back to the grid.
+  const CG_ME = "~me", CG_ME_HOST = "mygrid-0000", CG_ROOM_HOST = "cgrid-0000", CG_MAX = 8;
+  const cgKey = () => "kastr.mygrids." + sbRelayHost();
+  const isCgName = (n) => { const p = String(n || "").split("/"); return p.length === 3 && p[2].endsWith(".hang") && (p[1] === CG_ROOM_HOST || (p[0] === CG_ME && p[1] === CG_ME_HOST)); };
+  const cgNameOf = (kind, id) => (kind === "me" ? CG_ME + "/" + CG_ME_HOST : CHANNEL + "/" + CG_ROOM_HOST) + "/" + id + ".hang";
+  function cgMine() { try { const o = JSON.parse(localStorage.getItem(cgKey()) || "{}"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch { return {}; } }
+  function cgMineWrite(o) { try { localStorage.setItem(cgKey(), JSON.stringify(o)); } catch {} }
+  const cgPending = new Map();   // a new grid while its builder is open: tile name -> def (kept on Done, gone on Cancel)
+  const cgCams = new Set();      // every camera a grid of mine / of my room draws
+  const cgWarm = new Set();      // ... of those, the ones to keep decoding off-stage now
+  let cgDefsNow = new Map();     // tile name -> {kind: "me" | "room", id, g: {name, slots, gap, sens}}
+  let cgOpened = null;           // {cam, grid}: a camera opened from a grid's spot (a click on it goes back)
+  let cgWarmSig = "", cgTickT = 0, cgRaf = 0, cgLastDraw = 0;
+  function cgDefs() {
+    const out = new Map();
+    let ok = false;
+    try { ok = joinState === "joined" && CHANNEL !== LOBBY && !publishOnly && !isPublisherMode(); } catch {}
+    if (!ok) return out;
+    for (const [id, g] of Object.entries(cgMine())) if (g && Array.isArray(g.slots) && /^[a-z0-9][a-z0-9-]{0,23}$/.test(id)) out.set(cgNameOf("me", id), { kind: "me", id, g });
+    if (board.room === CHANNEL) for (const [id, g] of Object.entries(board.customGrids || {})) if (g && Array.isArray(g.slots)) out.set(cgNameOf("room", id), { kind: "room", id, g });
+    for (const [n, d] of cgPending) if (!out.has(n)) out.set(n, d);
+    return out;
+  }
+  function cgSync() {
+    const defs = cgDefs();
+    cgDefsNow = defs;
+    cgCams.clear();
+    for (const d of defs.values()) for (const s of d.g.slots) for (const k of s.cams || []) cgCams.add(String(k));
+    let changed = false;
+    for (const [n, d] of defs) {
+      if (!tiles.has(n)) { createTile(n); changed = true; }
+      const t = tiles.get(n);
+      if (t) t.cgDef = d;
+    }
+    for (const n of [...tiles.keys()]) if (isCgName(n) && !defs.has(n)) { removeTile(n); changed = true; if (cgOpened?.grid === n) cgOpened = null; }
+    for (const w of watchRooms.values()) { try { wrSync(w); } catch {} }   // a watched room's camera a grid draws gets its (hidden) tile
+    if (changed) { try { applyState(); } catch {} }
+    cgLoop();
+  }
+  setInterval(() => { try { cgSync(); } catch {} }, 3000);
+  function cgHide(n) {   // a camera here only for a grid: no tile in the gallery / rail, silent
+    const x = xsTiles.get(n);
+    if (x) return !!x.cg;
+    if (!cgCams.has(n)) return false;
+    const r = wrRoomOf(n), w = r && watchRooms.get(r);
+    if (!w) return false;
+    const gp = gridChildOf.get(n);
+    return !(w.pick.has(n) || (gp && w.pick.has(gp)));
+  }
+  const cgShown = (t) => t.pane.classList.contains("shown") && t.pane.style.display !== "none" && t.canvas.isConnected;
+  const cgSlotsOf = (t) => { const g = t.cgDraft || t.cgDef?.g; return g && Array.isArray(g.slots) ? g.slots : []; };
+  function cgTick() {   // 4 times a second: each spot's turn (time / motion), and which cameras stay warm
+    const gb = window.__gb;
+    if (!gb) return;
+    const now = performance.now(), warm = new Set();
+    for (const [n, t] of tiles) {
+      if (!t.cg || !cgShown(t)) continue;
+      const g = t.cgDraft || t.cgDef?.g || {}, slots = cgSlotsOf(t);
+      t.cgCur = t.cgCur || []; t.cgCyc = t.cgCyc || [];
+      slots.forEach((s, si) => {
+        const avail = (s.cams || []).map(String).filter((k) => tiles.has(k));
+        const st = t.cgCyc[si] || (t.cgCyc[si] = { cur: null, at: now });
+        const motion = s.cycle?.mode !== "time" && avail.length > 1;
+        if (motion) for (const k of avail) {
+          const fr = vgFrameOf(tiles.get(k));
+          gb.motion.sample("cg:" + n + "|" + k, (cx, w, h) => { if (!fr) return false; cx.drawImage(fr, 0, 0, w, h); return true; }, g.sens || "medium", now, k);
+        }
+        const cur = gb.cycleTick(st, avail, s.cycle, now, (k) => gb.motion.get("cg:" + n + "|" + k));
+        t.cgCur[si] = cur;
+        if (motion) for (const k of avail) warm.add(k);
+        else if (cur != null) {
+          warm.add(cur);
+          if (avail.length > 1 && gb.cycle(s.cycle).every * 1000 - (now - st.at) < 4000) warm.add(avail[(avail.indexOf(cur) + 1) % avail.length]);   // the next one, warm before its turn
+        }
+      });
+      t.cgCur.length = slots.length; t.cgCyc.length = slots.length;
+    }
+    if (cgOpened && tiles.has(cgOpened.cam)) warm.add(cgOpened.cam);
+    const sig = [...warm].sort().join("|");
+    cgWarm.clear(); for (const k of warm) cgWarm.add(k);
+    if (sig !== cgWarmSig) { cgWarmSig = sig; try { applyState(); } catch {} }
+    if (performance.now() - cgLastDraw > 400) cgDrawAll();   // no animation frames (a hidden window): still drawn now and then
+  }
+  function cgLoop() {
+    const any = [...tiles.values()].some((t) => t.cg);
+    if (any && !cgTickT) cgTickT = setInterval(() => { try { cgTick(); } catch {} }, 250);
+    if (!any && cgTickT) { clearInterval(cgTickT); cgTickT = 0; cgWarm.clear(); cgWarmSig = ""; }
+    if (any && !cgRaf) cgRaf = requestAnimationFrame(cgFrame);
+  }
+  function cgFrame(ts) {
+    cgRaf = 0;
+    if (![...tiles.values()].some((t) => t.cg)) return;
+    if (ts - cgLastDraw >= 33) cgDrawAll();
+    cgRaf = requestAnimationFrame(cgFrame);
+  }
+  function cgDrawAll() { cgLastDraw = performance.now(); for (const [n, t] of tiles) if (t.cg && cgShown(t)) { try { cgDraw(n, t); } catch {} } }
+  function cgLabelOf(k) {
+    let l = "";
+    try { l = gridLabel(k) || shortLabel(k); } catch { l = String(k); }
+    const r = String(k).split("/", 1)[0];
+    if (r !== CHANNEL && !l.includes(r)) l += " (" + r + ")";
+    return l;
+  }
+  function cgDraw(n, t) {   // every spot: its camera's own latest frame (contain), its name, its turn
+    const cv = t.canvas, W = 1280, H = 720;
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const cx = t.cgCx || (t.cgCx = cv.getContext("2d"));
+    if (!cx) return;
+    const g = t.cgDraft || t.cgDef?.g || {}, gap = Math.max(0, Math.min(24, Number(g.gap ?? 2))) / 2;
+    cx.fillStyle = "#000"; cx.fillRect(0, 0, W, H);
+    const rects = [];
+    cgSlotsOf(t).forEach((s, si) => {
+      const u = s.rect;
+      if (!Array.isArray(u) || u.length !== 4) return;
+      const r = { x: u[0] * W / 24 + gap, y: u[1] * H / 24 + gap, w: Math.max(2, u[2] * W / 24 - 2 * gap), h: Math.max(2, u[3] * H / 24 - 2 * gap) };
+      const cams = (s.cams || []).map(String), k = t.cgCur?.[si] ?? cams[0] ?? null;
+      rects.push({ ...r, cam: k });
+      cx.fillStyle = "#0b1116"; cx.fillRect(r.x, r.y, r.w, r.h);
+      const mt = k && tiles.get(k), fr = mt && vgFrameOf(mt);
+      let drawn = false;
+      if (fr) {
+        const sw = fr.displayWidth || fr.codedWidth, sh = fr.displayHeight || fr.codedHeight;
+        if (sw && sh) { const sc = Math.min(r.w / sw, r.h / sh); try { cx.drawImage(fr, r.x + (r.w - sw * sc) / 2, r.y + (r.h - sh * sc) / 2, sw * sc, sh * sc); drawn = true; } catch {} }
+      }
+      if (!drawn) {
+        cx.fillStyle = "rgba(255,255,255,.5)"; cx.font = "500 15px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "middle";
+        cx.fillText(!k ? "Empty spot" : mt ? "Connecting…" : "Not available here", r.x + r.w / 2, r.y + r.h / 2);
+        cx.textAlign = "left"; cx.textBaseline = "alphabetic";
+      }
+      if (k) {
+        const txt = cgLabelOf(k).slice(0, 40) + (cams.length > 1 ? "  " + (cams.indexOf(k) + 1) + "/" + cams.length : "");
+        cx.font = "600 13px sans-serif";
+        const tw = Math.min(r.w - 8, cx.measureText(txt).width + 14);
+        if (tw > 30 && r.h > 34) {
+          cx.save();
+          cx.fillStyle = "rgba(10,14,18,.62)"; cx.fillRect(r.x + 4, r.y + r.h - 26, tw, 21);
+          cx.beginPath(); cx.rect(r.x + 4, r.y + r.h - 26, tw, 21); cx.clip();
+          cx.fillStyle = "#fff"; cx.textBaseline = "middle"; cx.fillText(txt, r.x + 11, r.y + r.h - 15);
+          cx.restore();
+        }
+      }
+    });
+    t.cgRects = rects;
+  }
+  function cgCamAt(t, ev) {   // the camera under a click on the grid tile (its spot's camera on now)
+    const f = viewFitBox(t.canvas);
+    if (!f || !t.cgRects) return null;
+    const wb = t.canvas.parentElement.getBoundingClientRect();
+    const px = (ev.clientX - wb.left - f.ox) / f.sc, py = (ev.clientY - wb.top - f.oy) / f.sc;
+    const r = t.cgRects.find((x) => px >= x.x && px < x.x + x.w && py >= x.y && py < x.y + x.h);
+    return r ? r.cam : null;
+  }
+  function cgStreams() {   // the builder's camera list: every stream I can see
+    const out = [], seen = new Set();
+    const add = (p) => {
+      p = String(p);
+      if (seen.has(p) || isCgName(p) || LOW_RE.test(p) || mineNames.has(p) || roomHid.has(p) || !p.endsWith(".hang")) return;
+      seen.add(p);
+      out.push({ key: p, label: cgLabelOf(p).slice(0, 40), draw: (cx, w, h) => {
+        const t = tiles.get(p), f = t && vgFrameOf(t);
+        if (!f) return false;
+        const sw = f.displayWidth || f.codedWidth, sh = f.displayHeight || f.codedHeight, sc = Math.min(w / sw, h / sh);
+        cx.drawImage(f, (w - sw * sc) / 2, (h - sh * sc) / 2, sw * sc, sh * sc);
+        return true;
+      } });
+    };
+    for (const n of orderedNames()) if (tiles.has(n)) add(n);
+    for (const n of tiles.keys()) add(n);
+    for (const w of watchRooms.values()) for (const p of w.live) add(p);
+    for (const p of cgCams) add(p);
+    return out;
+  }
+  function cgClean(g) {
+    const gb = window.__gb;
+    return { name: String(g.name || "").trim().slice(0, 48) || "Grid", slots: gb ? gb.slotsClean(g.slots) : [],
+      gap: Math.max(0, Math.min(24, Math.round(Number(g.gap ?? 2)) || 0)), sens: ["low", "medium", "high"].includes(g.sens) ? g.sens : "medium", at: Date.now() };
+  }
+  async function cgSave(def, g, share) {
+    const id = def.id, clean = cgClean(g), was = cgNameOf(def.kind, id), wasSel = selectedName === was;
+    if (!clean.slots.some((s) => s.cams.length)) {
+      window.__toast?.("Put at least one camera on a spot — the grid was not saved.", 5000, { level: "warn" });
+      if (cgPending.delete(was)) cgSync();
+      return false;
+    }
+    let where = share ? "room" : "me";
+    if (share) {
+      const d = await boardCgrid(id, clean);
+      if (!d?.ok) {
+        if (def.kind === "room") return false;
+        where = "me";   // not shared: kept for me, so nothing built is lost
+      } else if (def.kind === "me") { const m = cgMine(); delete m[id]; cgMineWrite(m); }
+    }
+    if (where === "me") {
+      const m = cgMine();
+      if (!m[id] && Object.keys(m).length >= CG_MAX) { window.__toast?.("Up to " + CG_MAX + " grids of your own — delete one first.", 5000, { level: "warn" }); return false; }
+      m[id] = clean; cgMineWrite(m);
+      if (def.kind === "room") await boardCgridDel(id, true);
+    }
+    cgPending.delete(was);
+    cgSync();
+    const now = cgNameOf(where, id);
+    if (wasSel && now !== was && tiles.has(now)) select(now);
+    window.__toast?.(where === "room" ? clean.name + " is shared with everyone in " + roomTitle(CHANNEL) + " — it stays when you leave"
+      : clean.name + (share ? " is kept for you only (not shared)" : " is saved for you — on this device, in any room"), 4500, { level: share && where === "me" ? "warn" : "event" });
+    return true;
+  }
+  async function cgDelete(def) {
+    if (def.kind === "room") { const d = await boardCgridDel(def.id); if (!d?.ok) return false; }
+    else { const m = cgMine(); delete m[def.id]; cgMineWrite(m); }
+    cgSync();
+    window.__toast?.((def.g.name || "The grid") + " is deleted" + (def.kind === "room" ? " for everyone in " + roomTitle(CHANNEL) : ""), 3500, { level: "event" });
+    return true;
+  }
+  function cgEdit(name, isNew) {
+    const t = tiles.get(name), ed = window.__gridEditor, gb = window.__gb, def = t?.cgDef;
+    if (!t || !ed || !gb || !def) return;
+    if (def.kind === "room" && !boardCan()) { window.__toast?.("Only a publisher of " + roomTitle(CHANNEL) + " (or, in a locked view, its creator or an admin) changes the room's grids.", 5000, { level: "warn" }); return; }
+    if (gridMode || selectedName !== name) { gridMode = false; select(name); }
+    const g0 = def.g, snap = JSON.stringify(g0.slots || []);
+    let nm = g0.name || "Grid", share = def.kind === "room";
+    t.cgDraft = { slots: JSON.parse(snap), gap: Number(g0.gap ?? 2), sens: g0.sens || "medium" };
+    t.cgCyc = [];
+    setTimeout(() => ed.open({
+      pane: t.pane, layout: isNew ? "n4" : "custom", gap: t.cgDraft.gap, sens: t.cgDraft.sens,
+      title: isNew ? "New grid — drag cameras from any room onto the spots" : "Edit grid",
+      name: nm, onName: (v) => { nm = v; },
+      share: boardCan() ? { on: share, label: "Share with this room", tip: "On: everyone in " + roomTitle(CHANNEL) + " sees it, and it stays when you leave. Off: only you, on this device, in any room." } : null,
+      onShare: (v) => { share = v; },
+      frame: () => {
+        const f = viewFitBox(t.canvas);
+        if (!f) return null;
+        const b = t.canvas.getBoundingClientRect(), pb = t.pane.getBoundingClientRect();
+        return { x: b.left - pb.left + f.ox, y: b.top - pb.top + f.oy, w: f.cw * f.sc, h: f.ch * f.sc };
+      },
+      streams: cgStreams(), slots: t.cgDraft.slots,
+      onChange: (slots) => { if (t.cgDraft) t.cgDraft.slots = slots; },
+      onGap: (gap) => { if (t.cgDraft) t.cgDraft.gap = gap; },
+      onSens: (sens) => { if (t.cgDraft) t.cgDraft.sens = sens; },
+      onReset: () => { const sl = JSON.parse(snap); if (t.cgDraft) t.cgDraft.slots = sl; return sl; },
+      resetLabel: "Undo changes", resetTip: "Back to the grid as it was when you opened the builder",
+      cancelTip: isNew ? "Throw this new grid away (Esc)" : "Undo every change since you opened it (Esc)",
+      onCancel: () => { if (isNew) cgPending.delete(name); },
+      onDone: (slots, gap, sens, info) => { cgSave(def, { name: info?.name ?? nm, slots, gap, sens }, info?.share ?? share); },
+      onClose: () => { t.cgDraft = null; t.cgCyc = []; cgSync(); },
+    }), 300);
+  }
+  function cgNew() {
+    if (joinState !== "joined" || CHANNEL === LOBBY) { window.__toast?.("Join a room first — then build a grid from any room you can see.", 4500, { level: "warn" }); return; }
+    const gb = window.__gb;
+    if (!gb) return;
+    if (Object.keys(cgMine()).length >= CG_MAX) { window.__toast?.("Up to " + CG_MAX + " grids of your own — delete one first.", 5000, { level: "warn" }); return; }
+    const id = "g" + Date.now().toString(36).slice(-6) + Math.random().toString(36).slice(2, 4);
+    let who = "";
+    try { who = prettyOperator(String(window.__publisher?.opSlug?.() || "")).split(" ")[0]; } catch {}
+    const taken = new Set([...cgDefsNow.values()].map((d) => d.g.name));
+    const base = who ? who + "’s View" : "My View";
+    let nm = base;
+    for (let i = 2; taken.has(nm); i++) nm = base + " " + i;
+    const name = cgNameOf("me", id);
+    cgPending.set(name, { kind: "me", id, g: { name: nm, slots: gb.preset(4).map((u) => ({ rect: u, cams: [], cycle: gb.cycle() })), gap: 2, sens: "medium" } });
+    cgSync();
+    setTimeout(() => cgEdit(name, true), 60);
+  }
+  function cgMenu(anchor, name) {   // the grid tile's own menu
+    const t = tiles.get(name), def = t?.cgDef;
+    if (!def) return;
+    const room = def.kind === "room", pinned = isPinned(name), lit = window.__spotIs ? window.__spotIs(name) : false, can = room ? boardCan() : true;
+    const items = [{ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me", tip: pinned ? "Take it off your stage" : "Add it to your stage (only you)" }];
+    if (room && !viewLockedForMe()) items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone", tip: lit ? "Everyone goes back to their own view" : "Put this grid on everyone's stage" });
+    if (room && boardCan()) { const rp = boardPinned(name); items.push({ value: rp ? "rpinoff" : "rpin", icon: "pin", label: rp ? "Unpin from this room" : "Pin to this room" }); }
+    if (can) {
+      items.push({ sep: true });
+      items.push({ value: "edit", icon: "view", label: "Edit grid…", tip: "Spots, cameras from any room, cycling" });
+      items.push({ value: "rename", label: "Rename…" });
+      if (boardCan()) items.push(room ? { value: "mine", label: "Keep only for me", tip: "Take it off " + roomTitle(CHANNEL) + "; it stays on this device, in any room" }
+        : { value: "share", label: "Share with this room", tip: "Everyone in " + roomTitle(CHANNEL) + " sees it, and it stays when you leave" });
+      items.push({ value: "del", label: "Delete grid", tip: room ? "For everyone in " + roomTitle(CHANNEL) : "On this device" });
+    }
+    openMineMenu(anchor, items, "", async (v) => {
+      if (v === "me" || v === "unpin") { pinToggle(name); return; }
+      if (v === "unspot") { window.__spotRemove(name); return; }
+      if (v === "all") { window.__spot?.set?.(name); return; }
+      if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }
+      if (v === "edit") { cgEdit(name); return; }
+      if (v === "rename") {
+        const nv = await kastrConfirm({ title: "Rename grid", message: "A name for this grid", input: { placeholder: "Grid name", value: def.g.name || "" }, ok: "Rename" });
+        if (typeof nv === "string" && nv.trim()) cgSave(def, { ...def.g, name: nv.trim() }, room);
+        return;
+      }
+      if (v === "share" || v === "mine") { cgSave(def, def.g, v === "share"); return; }
+      if (v === "del" && await kastrConfirm({ title: "Delete grid", message: "Delete “" + (def.g.name || "this grid") + "”?", detail: room ? "It goes for everyone in " + roomTitle(CHANNEL) + "." : "It is only on this device.", ok: "Delete", danger: true })) cgDelete(def);
+    });
+  }
+  window.__cg = { list: () => [...cgDefsNow].map(([n, d]) => ({ name: n, kind: d.kind, id: d.id, title: d.g.name, slots: d.g.slots })), sync: cgSync, new: cgNew, edit: cgEdit,
+    save: cgSave, del: cgDelete, streams: () => cgStreams().map((x) => ({ key: x.key, label: x.label })), warm: () => [...cgWarm], cur: (n) => tiles.get(n)?.cgCur || null,
+    hide: cgHide, rects: (n) => tiles.get(n)?.cgRects || null, opened: () => cgOpened };   // rig
+
   // ---- 0.21.50 (Kenton: push an update to a person from the Relay page -- "Ask them first"): the update arrives through the
   // relay this app uses; the window asks "Update now" or "In 10 minutes" (then it updates by itself)
   let offerAsking = false, offerSaid = "";
@@ -3822,7 +4250,7 @@
   }
   // a source shows when it is ticked, or when it is a camera behind a ticked grid (hidden there; a cell click opens it)
   function wrWanted(w, p) {
-    if (w.pick.has(p)) return true;
+    if (w.pick.has(p) || cgCams.has(p)) return true;   // 0.21.66 (e): + a camera one of my grids draws (its tile stays hidden)
     const gp = gridChildOf.get(p);
     return !!gp && w.pick.has(gp);
   }
@@ -4665,6 +5093,7 @@
     // leaning on the library to hard-zero 0.0001 was the "muted but still
     // audible" report.
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return 0;   // 0.9.5: the grid's mute covers its members
+    if (cgHide(name) && name !== selectedName) return 0;   // 0.21.66 (e): a camera here only for a grid is silent until opened
     if (isAudible(name)) return Math.max(gainFor(name), WARM_FLOOR);
     return warmAudio ? WARM_FLOOR : 0;      // 0 exactly = deliberate teardown
   }
@@ -4678,6 +5107,7 @@
 
   function isAudible(name) {
     if (!enabledStreams.has(name)) return false;   // parked: never audible
+    if (cgHide(name) && name !== selectedName) return false;   // 0.21.66 (e)
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return false;   // 0.9.5
     if (audioMode === "all") return true;
     if (audioMode === "manual") return audioOn.has(name);
@@ -4719,7 +5149,7 @@
     parkedStreams.delete(name);
     saveParked();
     saveEnabled();
-    if (!t.watch.getAttribute("url")) t.watch.setAttribute("url", tileUrl(name));
+    if (!t.watch.getAttribute("url") && !t.cg) t.watch.setAttribute("url", tileUrl(name));
     if (selectedName === undefined) selectedName = name;
     applyState();
   }
@@ -5261,7 +5691,7 @@
     const people = new Map();
     const get = (key) => { let p = people.get(key); if (!p) people.set(key, p = { key, name: "", cam: null, content: [], talk: false, mic: "", viewer: false, me: false }); return p; };
     for (const [n, t] of tiles) {
-      if (isGridChild(n) || wrRoomOf(n)) continue;   // 0.21.44: a watched room's people are not in my meeting
+      if (isGridChild(n) || wrRoomOf(n) || t.cg || cgHide(n)) continue;   // 0.21.44: a watched room's people are not in my meeting; 0.21.66: nor a grid of cameras
       if (roomHid.has(n)) continue;   // 0.21.64: nor a camera the room removed from its grid
       const key = personKeyOf(n);
       if (key === "?") continue;
@@ -5492,7 +5922,8 @@
   const gridParked = (name) => !gridMode && !selfSpotEl && gridMeta.has(name) && gridOwnerOf(selectedName) === name;   // 0.21.65: a split camera on the stage leaves its grid alone
   const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
   const leavingExMember = (name) => { if (!pendingRemovals.has(name)) return false; const now = Date.now(); for (const f of gridForgot.values()) if (f.known.includes(name) && now - f.at <= GRID_FORGOT_HOLD_MS) return true; return false; };   // 0.21.16: an ex-member of a just-withdrawn grid whose own broadcast already went inactive stays hidden while its removal debounce runs (owner switched its cameras off: no loose dead tiles)
-  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name) || roomHid.has(name);   // 0.21.64: + removed from this room's grid
+  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name) || roomHid.has(name)
+    || (cgHide(name) && (gridMode || name !== selectedName));   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
   // 0.9.8: fill-first auto grid. Rows may hold different cell counts (2 over 3
   // for five cameras) when that draws more picture than equal cells would, no
   // cell smaller than half the biggest; partial rows and the whole block are
@@ -6472,6 +6903,50 @@
   stageBack.type = "button"; stageBack.id = "stageBack"; stageBack.innerHTML = '\u25a6<span class="gl"> Gallery</span>'; stageBack.title = "Gallery";
   stageBack.addEventListener("click", (e) => { e.stopPropagation(); goGallery(); });   // 0.21.15: the Gallery pill abandons a cold open
   stageWrap.appendChild(stageBack);
+  // ---- 0.21.66 (o) (Kenton: "I want a shortcut to go straight back to the spotlight view and not have to go through the gallery.")
+  // Whenever the room has a spotlight (or I have pins) and my stage is not showing it -- the gallery, another tile, a grid cell
+  // opened -- a small "Back to spotlight" pill sits top-left on the stage (it never idles away: it may be the only way back), and S
+  // does the same. It restores exactly the spotlight view (the mosaic or the single item), as a fresh spotlight would.
+  const spotBackBtn = document.createElement("button");
+  spotBackBtn.type = "button"; spotBackBtn.id = "spotBack"; spotBackBtn.title = "Back to spotlight (S)";
+  spotBackBtn.innerHTML = icon("spotlight") + "<span>Back to spotlight</span>";
+  spotBackBtn.addEventListener("click", (e) => { e.stopPropagation(); spotGoBack(); });
+  stageWrap.appendChild(spotBackBtn);
+  function spotItemsNow() {   // what the spotlight puts on my stage: my pins first, else the room's set (what this page can show)
+    const pins = pinsLive();
+    if (pins.length) return { pins: true, items: pins.map((n) => ({ target: n, name: n })) };
+    const items = [], seen = new Set();
+    for (const v of spotSetNow()) {
+      let target = v.target;
+      const gp = gridOwnerOf(target);
+      if (gp && tiles.has(gp)) target = gp;
+      if (seen.has(target)) continue;
+      if (mineNames.has(target)) { const el = window.__ownPaneFor?.(target); if (el) { seen.add(target); items.push({ target, el }); } }
+      else if (tiles.has(target)) { seen.add(target); items.push({ target, name: target }); }
+    }
+    return { pins: false, items };
+  }
+  function spotShowing(s) {   // is my stage showing exactly that now?
+    if (gridMode || gridOpen || gridZoom) return false;
+    const it = s.items;
+    if (!it.length) return true;
+    const on = (x) => (x.el ? selfSpotEl === x.el : (selectedName === x.name && !selfSpotEl));
+    if (it.length >= 2) return !manualPick && (!!stageMosaic || it.some(on));
+    return on(it[0]);
+  }
+  function spotGoBack() {
+    const s = spotItemsNow();
+    if (!s.items.length || joinState !== "joined") return false;
+    try { gridOpenEnd(false); } catch {}
+    gridZoom = null; cgOpened = null;
+    try { viewResetAll(); } catch {}
+    if (s.pins) { manualPick = false; galleryChosen = false; gridMode = false; selfSpotEl = null; if (!s.items.some((x) => x.name === selectedName)) selectedName = s.items[0].name; applyState(); return true; }
+    spotDone = null; spotVotesDone = ""; galleryChosen = false; manualPick = false; selfSpotEl = null;
+    spotApplyWinner();
+    applyState();
+    return true;
+  }
+  window.__spotBackBtn = { go: spotGoBack, items: () => spotItemsNow().items.map((x) => x.target), showing: () => spotShowing(spotItemsNow()), shown: () => spotBackBtn.classList.contains("show") };   // rig
   // 0.21.0: idle chrome -- 3 s without pointer/key input hides the media bar, the filename bars, the
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
   // chevron button and any other overlay"). Never while scrubbing, while a control has focus, or while
@@ -6507,6 +6982,9 @@
     const ownGrid = !!(selfSpotEl && selfSpotEl.dataset && selfSpotEl.dataset.grid);   // 0.8.12
     void remoteGrid; void ownGrid;
     stageBack.classList.toggle("show", !gridMode && stageFullscreen());   // 0.21.38: full screen / Fill window only
+    try { const sb = spotItemsNow(); spotBackBtn.classList.toggle("show", joinState === "joined" && CHANNEL !== LOBBY && sb.items.length > 0 && !spotShowing(sb)); }   // 0.21.66 (o)
+    catch { spotBackBtn.classList.remove("show"); }
+    try { stageEl.classList.toggle("arrange", !gridMode && !manualPick && !!stageMosaic && spotArrangeCan()); } catch {}   // 0.21.66 (n)
   }
   window.addEventListener("resize", () => viewApplyAll());   // 0.9.9: corrected canvases too (cheap)
 
@@ -6637,6 +7115,7 @@
   // 0.15.0: a grid tile wears its owner's display name ("Kenton \u2014 Vehicle 2") once the
   // announce carries one; null = no such label, use shortLabel as ever.
   function gridLabel(name) {
+    if (isCgName(name)) { const d = cgDefsNow.get(name); return d ? String(d.g.name || "Grid") + (d.kind === "me" ? " (only you)" : "") : null; }   // 0.21.66 (e)
     const gl = gridMeta.get(name)?.label;
     if (!gl) {
       // 0.16.0: a member opened on its own (a cell click, or `separate` feeds behind a grid) wears the
@@ -6746,7 +7225,7 @@
   }
   window.__pins = { list: () => (pinsLoad(), myPins.slice()), live: pinsLive, toggle: pinToggle, show: pinsShow };   // rig
   function autoContentCheck() {
-    const content = orderedNames().filter((n) => !roomHid.has(n)).filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !wrRoomOf(n));   // 0.8.12: feeds behind a grid are not arrivals; 0.21.44: nor a watched room's shares
+    const content = orderedNames().filter((n) => !roomHid.has(n) && !isCgName(n) && !cgHide(n)).filter((n) => isWatched(n) && isContentPath(n) && !isGridChild(n) && !wrRoomOf(n));   // 0.8.12: feeds behind a grid are not arrivals; 0.21.44: nor a watched room's shares
     const newest = content.filter((n) => !roomSplit.has(n)).pop() ?? null;   // 0.21.65: a camera split out of its grid is not a new share -- it never pulls the stage (pin or spotlight it)
     // 0.8.3: the stage auto-moves TO shared content only, and never hops
     // between two live shares -- a second share must not yank the stage
@@ -6903,10 +7382,11 @@
     }
     return w / h;
   }
+  let geInset = null;   // 0.21.66: {pane, top, right, applied} while the grid editor is open over a stage tile
   function fitMainstage(railRows) {
     const mains = gridMode ? [] : [...stageEl.querySelectorAll(".mainstage:not(.dgclone)")];   // 0.21.25: never the drag ghost's copy
     for (const el of stageEl.querySelectorAll(".pane:not(.dgclone), .pubpane:not(.dgclone)")) {
-      if (!mains.includes(el)) { el.style.width = ""; el.style.height = ""; }
+      if (!mains.includes(el)) { el.style.width = ""; el.style.height = ""; if (el.style.marginTop || el.style.marginRight) { el.style.marginTop = ""; el.style.marginRight = ""; } }
     }
     if (!mains.length) return;
     const gap = 8;
@@ -6919,9 +7399,19 @@
     const areaW = fsFill ? (stageWrap.clientWidth || 1280) : strip ? Math.max(120, strip.W - 2 * gap)
       : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone() || ownPip || stageMosaic?.railGone) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
     const mos = mains.length > 1 ? stageMosaic : null;   // 0.21.32: the spotlight grid -- each picture fits its own cell
+    // 0.21.66: the grid editor's band (toolbar above, camera list beside) -- the edited tile fits in what is left; a margin moves
+    // it clear (a transform would make the editor's fixed toolbar follow the pane)
+    const ins = geInset && mains.length === 1 && mains[0] === geInset.pane ? geInset : null;
+    if (geInset) geInset.applied = !!ins;
+    let insT = 0, insR = 0;
+    if (ins) {
+      insT = Math.round(Math.min(ins.top, areaH * 0.45));
+      const beside = fsFill ? 0 : Math.max(0, (stageWrap.clientWidth || 0) - areaW - 2 * gap);   // the rail's room beside the stage area
+      insR = Math.round(Math.max(0, Math.min(ins.right - beside, areaW * 0.45)));
+    }
     for (const el of mains) {
       const ar = mainAspectOf(el);
-      let cw = areaW, chh = areaH;
+      let cw = areaW - insR, chh = areaH - insT;
       if (mos) {
         cw = (areaW - (mos.k - 1) * gap) / mos.k;
         const rr = Number(el.dataset.mrows) || 1;
@@ -6931,6 +7421,7 @@
       if (h > chh) { h = chh; w = h * ar; }
       el.style.width = Math.floor(w) + "px";
       el.style.height = Math.floor(h) + "px";
+      { const mt = insT ? insT + "px" : "", mr = insR ? insR + "px" : ""; if (el.style.marginTop !== mt) el.style.marginTop = mt; if (el.style.marginRight !== mr) el.style.marginRight = mr; }   // 0.21.66
       // 0.9.9: the box moved -- a zoomed or shape-corrected canvas follows it now,
       // not at the next zoom (0.9.8 drew the corrected picture for the pane's
       // previous shape and it sat small until the user zoomed)
@@ -7327,7 +7818,7 @@
       // 0.13.0 (F2): re-arm a watched tile whose url was torn down (the hidden-
       // tab teardown below, or a resubscribe that skipped a "never" tile) --
       // the same construction createTile uses; nothing re-arms while hidden.
-      if (watched && !document.hidden && !t.watch.getAttribute("url")) {
+      if (watched && !document.hidden && !t.watch.getAttribute("url") && !t.cg) {
         try { t.watch.setAttribute("url", tileUrl(name)); } catch {}
       }
 
@@ -7340,7 +7831,7 @@
       // black bar -- so an audio-only tile swaps the canvas for the face.
       // undefined = catalog not seen yet: treat as "has video" and claim
       // nothing, the same startup rule as the hasAudio badge below.
-      t.shed = congestShed(name, isSelected || (gridOpen && gridOpen.path === name));   // 0.21.23: the listener's ladder
+      t.shed = !t.cg && congestShed(name, isSelected || (gridOpen && gridOpen.path === name) || cgWarm.has(name));   // 0.21.23: the listener's ladder
       const audioOnly = t.hasVideo === false || !!t.noDecode || !!t.noCatalog || t.shed;   // 0.21.22: no catalog yet -> the person's face, never a black void   // 0.9.2: undecodable video shows the face + a notice
       t.pane.classList.toggle("audio-only", shown && audioOnly);
       if (t.faceCap) {
@@ -7412,7 +7903,7 @@
       //                       bandwidth for the rows near the view. Generous, so
       //                       they are decoding by the time they are scrolled to
       //                       rather than starting from black afterwards.
-      const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name)) || vgHqWanted(name);   // 0.21.43: a full-quality cell of a grid drawn my way   // 0.21.15: decode off-stage (7b) / keep the parked composite flowing (7b-4)
+      const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name)) || vgHqWanted(name) || cgWarm.has(name);   // 0.21.66 (e): a camera a shown grid of cameras draws   // 0.21.43: a full-quality cell of a grid drawn my way   // 0.21.15: decode off-stage (7b) / keep the parked composite flowing (7b-4)
       const wantVisible = (!shown && !keepWarm) ? "never"
         // Audio-only: nothing for the video pipeline to do, so don't
         // enable it. Audio is gated by paused/muted alone (bundle-
@@ -7994,6 +8485,92 @@
     drag.el.removeEventListener("pointercancel", dragCancel);
     drag = null;
   }
+  // ---- 0.21.66 (n) (Kenton: "I want to be able to adjust spotlighted items after they are spotlighted by dragging them around.")
+  // On the spotlight mosaic (two or more on the stage) a tile dragged onto another swaps their places: the room's order goes on its
+  // board (everyone in the room sees it, it stays when I leave); my own pins' mosaic keeps my order on this device. 6 px of travel
+  // make a drag (the 0.21.25 ghost follows the pointer, the tile under it is outlined); a click without moving is still a click.
+  // Who may: anyone who may change the room board (a publisher member; in a locked view only its creator or an admin).
+  const spotArrangeCan = () => pinsLive().length >= 2 || boardCan();
+  let mdrag = null;
+  function mosaicDragOk(name, pane, tile) {
+    return pane.classList.contains("mainstage") && !!stageMosaic && stageMosaicNames.has(name) && spotArrangeCan() && !viewZoomed(tile?.canvas);
+  }
+  function mosaicCellAt(x, y, self) {
+    for (const el of stageEl.querySelectorAll(".pane.mainstage, .pubpane.mainstage")) {
+      if (el === self || el.classList.contains("dgclone")) continue;
+      const r = el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return el;
+    }
+    return null;
+  }
+  function mosaicKeyOf(el) {   // a mosaic cell -> its stage target
+    for (const [n, t] of tiles) if (t.pane === el) return n;
+    return spotStage.find((x) => x.el === el)?.target || null;
+  }
+  function mosaicDragStart(e, name, el) {
+    mdrag = { name, el, x: e.clientX, y: e.clientY, started: false, over: null };
+    try { el.setPointerCapture(e.pointerId); } catch {}
+    el.addEventListener("dragstart", mdragNoNative);   // a native drag (a picture, a selection) would cancel the pointer mid-way
+    el.addEventListener("pointermove", mdragMove);
+    el.addEventListener("pointerup", mdragEnd);
+    el.addEventListener("pointercancel", mdragCancel);
+  }
+  function mdragNoNative(e) { e.preventDefault(); }
+  function mdragMove(e) {
+    if (!mdrag) return;
+    if (!mdrag.started) {
+      if (Math.hypot(e.clientX - mdrag.x, e.clientY - mdrag.y) < 6) return;
+      mdrag.started = true;
+      try { getSelection()?.removeAllRanges(); } catch {}
+      mdrag.el.classList.add("dragging");
+      dragGhost.start(mdrag.el, e);
+    }
+    dragGhost.move(e);
+    const over = mosaicCellAt(e.clientX, e.clientY, mdrag.el);
+    if (mdrag.over !== over) { mdrag.over?.classList.remove("drop-target"); mdrag.over = over; over?.classList.add("drop-target"); }
+  }
+  function mdragEnd(e) {
+    if (!mdrag) return;
+    const d = mdrag;
+    mdragCancel();
+    if (!d.started) return;
+    justDragged = true;                 // the gesture ends with a click
+    setTimeout(() => { justDragged = false; }, 0);
+    if (d.over) spotSwap(d.name, mosaicKeyOf(d.over));
+  }
+  function mdragCancel() {
+    dragGhost.end();
+    if (!mdrag) return;
+    mdrag.el.classList.remove("dragging");
+    mdrag.over?.classList.remove("drop-target");
+    mdrag.el.removeEventListener("pointermove", mdragMove);
+    mdrag.el.removeEventListener("pointerup", mdragEnd);
+    mdrag.el.removeEventListener("pointercancel", mdragCancel);
+    mdrag.el.removeEventListener("dragstart", mdragNoNative);
+    mdrag = null;
+  }
+  function spotSwap(a, b) {   // two stage targets trade places
+    if (!a || !b || a === b) return false;
+    if (pinsLive().length >= 2) {   // my pins: my own order, this device
+      pinsLoad();
+      const i = myPins.indexOf(a), j = myPins.indexOf(b);
+      if (i < 0 || j < 0) return false;
+      [myPins[i], myPins[j]] = [myPins[j], myPins[i]];
+      pinsSave(); applyState();
+      return true;
+    }
+    if (!boardCan()) return false;
+    const set = spotSetNow();
+    const stageOf = (t) => { const gp = gridOwnerOf(t); return gp && tiles.has(gp) ? gp : t; };
+    const order = [];
+    for (const v of set) { const s0 = stageOf(v.target); if (!order.includes(s0)) order.push(s0); }
+    const i = order.indexOf(a), j = order.indexOf(b);
+    if (i < 0 || j < 0) return false;
+    [order[i], order[j]] = [order[j], order[i]];
+    boardSpotOrder(order.flatMap((s0) => set.filter((v) => stageOf(v.target) === s0).map((v) => v.target)));
+    return true;
+  }
+  window.__spotArrange = { swap: spotSwap, can: spotArrangeCan, order: () => spotOrderNow().slice(), dbg: (n) => ({ mosaic: !!stageMosaic, names: [...stageMosaicNames], can: spotArrangeCan(), board: boardCan(), ok: tiles.has(n) && mosaicDragOk(n, tiles.get(n).pane, tiles.get(n)), drag: !!mdrag }) };   // rig
 
 
   // Re-clamp spans and re-pick renditions when the window changes size.
@@ -8019,7 +8596,7 @@
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
-    personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced)
+    if (!isCgName(name)) personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced); 0.21.66: a grid of cameras is nobody
     const gm0 = gridMeta.get(name);
     if (gm0) gm0.tileGone = 0;   // 0.9.4: the grid's tile is back
     for (const [gp, f] of gridForgot) if (f.known.includes(name) && Date.now() - f.at <= GRID_FORGOT_HOLD_MS) { console.warn("KASTR: \"" + name + "\" was a member of " + gp + " " + Math.round((Date.now() - f.at) / 1000) + " s ago -- shown as its own tile (owner withdrew the grid)"); break; }   // 0.21.15: the 'split up in the presence' evidence
@@ -8058,7 +8635,7 @@
     const watch = document.createElement("moq-watch");
     // Parked tiles carry NO url: the element opens nothing at all until
     // watchStream() arms the attribute. Remembered streams come back armed.
-    if (isWatched(name) && CLIENT.webcodecs) watch.setAttribute("url", tileUrl(name));   // 0.17.0: never a decoder the browser lacks
+    if (isWatched(name) && CLIENT.webcodecs && !isCgName(name)) watch.setAttribute("url", tileUrl(name));   // 0.21.66: a grid of cameras subscribes nothing itself   // 0.17.0: never a decoder the browser lacks
     watch.setAttribute("name", name);
     { const tn0 = tuningFor("rail"); watch.setAttribute("delay", tn0.delay); watch.setAttribute("buffer", tn0.buffer); }   // 0.16.0; 0.21.7: budgets by transport
     watch.setAttribute("visible", "never"); // applyState promotes the selected one
@@ -8102,6 +8679,7 @@
       pchev.innerHTML = icon("more");   // 0.21.0: options = three dots
       pchev.title = "Options for this stream";
       const openTileMenu = (anchor) => {   // 0.21.23: the three dots and a right-click open the same menu
+        if (isCgName(name)) { cgMenu(anchor, name); return; }   // 0.21.66 (e): a grid of cameras from any room
         const content = isContentPath(name);
         const muted = mutedStreams.has(name);
         const pinned = isPinned(name);   // 0.21.45: one of my pins (several allowed)
@@ -8275,7 +8853,7 @@
       // 0.21.65: a zoomable stage tile that is not a grid (a person's camera, a share) waits a moment before acting on a
       // click: a double-click toggles 2x there (the first click used to send the stage back to the gallery). A grid's
       // cells still open on one click.
-      if (pane.classList.contains("zoomable") && !gridMeta.has(name)) {
+      if (pane.classList.contains("zoomable") && !gridMeta.has(name) && !tile.cg) {
         if (e.detail >= 2) return;   // the second click of a double-click -- the dblclick handler zooms
         clearTimeout(pane.__clickT);
         pane.__clickT = setTimeout(() => { pane.__clickT = null; if (!gridMode && name === selectedName) stageClickRest(e); }, 260);
@@ -8286,6 +8864,12 @@
     function stageClickRest(e) {
         // zoomed in (wheel or cell): a click shows all again
         if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape (0.21.15: a click on the waiting cell abandons the open)
+        if (tile.cg) {   // 0.21.66 (e): a spot of a grid of cameras opens that camera at full quality (a click on it comes back)
+          const k = cgCamAt(tile, e);
+          if (k && tiles.has(k)) { cgOpened = { cam: k, grid: name }; select(k); return; }
+          gridMode = true; applyState(); return;
+        }
+        if (cgOpened && cgOpened.cam === name && tiles.has(cgOpened.grid)) { const g = cgOpened.grid; cgOpened = null; select(g); return; }
         // 0.8.12: a full-quality feed on the stage -- click returns to its grid
         const gp = gridOwnerOf(name);   // 0.21.65: not a camera split out in this room
         if (gp && tiles.has(gp)) { select(gp); return; }
@@ -8310,8 +8894,8 @@
     }
     armView(pane, () => tile.canvas, () => !gridMode && name === selectedName && !selfSpotEl && pane.classList.contains("mainstage"));   // 0.8.12; 0.21.65: people's cameras too
     pane.addEventListener("pointerdown", (e) => {
-      if (!gridMode || e.button !== 0
-          || e.target.closest("button")) return;
+      if (e.button !== 0 || e.target.closest("button")) return;
+      if (!gridMode) { if (mosaicDragOk(name, pane, tile)) mosaicDragStart(e, name, pane); return; }   // 0.21.66 (n): arrange the spotlight
       dragStart(e, name, pane);
     });
     stageEl.appendChild(pane);
@@ -8352,10 +8936,11 @@
       if (!isWatched(name)) { watchStream(name); select(name); return; }   // opt-in gesture
       select(name);
     });
-    personGroupFor(name).appendChild(row);   // grouped by person (0.8.1)
+    if (!isCgName(name)) personGroupFor(name).appendChild(row);   // grouped by person (0.8.1)
 
     const tile = { pane, watch, canvas, row, faceCap, faceInit, eq, av };
-    if (!CLIENT.webcodecs) {   // 0.17.0: the fallback player (armed by applyState for the promoted tile)
+    if (isCgName(name)) { tile.cg = true; tile.hasVideo = true; tile.hasAudio = false; canvas.width = 1280; canvas.height = 720; pane.classList.add("cgtile"); }   // 0.21.66 (e): drawn here
+    if (!CLIENT.webcodecs && !tile.cg) {   // 0.17.0: the fallback player (armed by applyState for the promoted tile)
       const fb = document.createElement("video");
       fb.className = "fb"; fb.autoplay = true; fb.playsInline = true; fb.setAttribute("playsinline", ""); fb.crossOrigin = "anonymous";
       // 0.21.8: a fallback that cannot play (a codec this browser lacks, a relay bounce) asked again every 2-3 s, and every
@@ -8394,7 +8979,7 @@
     reclassifyTiles();   // 0.21.15: the new tile's class (the People head reads the cache, never the classifier)
     attachMeter(tile);
 
-    if (selectedName === undefined && !roomHid.has(name) && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
+    if (selectedName === undefined && !roomHid.has(name) && !cgHide(name) && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
     if (isPinned(name) && !manualPick && !galleryChosen) setTimeout(() => { if (tiles.has(name) && !manualPick && !galleryChosen) pinsShow(); }, 0);   // 0.21.45: a pin came back
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
@@ -8414,7 +8999,7 @@
     tiles.delete(name);
     reclassifyTiles();   // 0.21.15: drop the tile's cached class
     if (spotDone && spotDone.split("@")[0].split("|").includes(name)) spotDone = null;   // 0.21.0: a re-created tile re-applies the standing set
-    personChime(name, false);   // 0.8.2: leave chime (after delete: last-tile test)
+    if (!isCgName(name)) personChime(name, false);   // 0.8.2: leave chime (after delete: last-tile test)
     if (manualOrder.includes(name)) saveOrder();   // tiles no longer has it
     // 0.9.4: a grid whose tile left keeps its meta (and its hidden children) for
     // GRID_TILE_GONE_MS -- unless its announce has gone too: then forget it now.
@@ -9141,6 +9726,7 @@
   const spotVotes = new Map();   // vote key (member path, "<path>#lit", announce path) -> [{ ts, target, by }]
   const spotOffs = new Map();    // member path -> [{ ts, target }]
   let spotDone = null;           // signature of the spotlight set this page last applied
+  let spotSetSig = "";           // 0.21.66 (n): the same set, order aside
   let spotVotesDone = "";        // 0.21.40: the room's spotlight votes last acted on (targets + times)
   let spotStage = [];            // 0.21.32: the spotlight grid: [{ target, name } | { target, el }] (two or more)
   let stageMosaicNames = new Set();   // 0.21.32: remote tiles in the spotlight grid right now (applyState keeps it)
@@ -9259,9 +9845,21 @@
     let mineOff = [];
     try { if (!vl || vb) mineOff = window.__spot?.mineOffs?.() || []; } catch {}
     for (const o of mineOff) offV(o);
-    return [...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts);
+    return spotOrdered([...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts));   // 0.21.66 (n)
   }
   window.__spotSet = spotSetNow;   // rig
+  // 0.21.66 (n) (Kenton: "I want to be able to adjust spotlighted items after they are spotlighted by dragging them around."): the
+  // room board's ORDER first (everyone in the room sees the same arrangement; it stays when the arranger leaves), then the rest
+  // oldest-first as before. An older page ignores the order.
+  function spotOrderNow() {
+    try { return board.room === CHANNEL && Array.isArray(board.spotOrder) ? board.spotOrder : []; } catch { return []; }
+  }
+  function spotOrdered(list) {
+    const ord = spotOrderNow();
+    if (!ord.length) return list;
+    const rank = new Map(ord.map((t, i) => [String(t), i]));
+    return [...list.filter((v) => rank.has(v.target)).sort((a, b) => rank.get(a.target) - rank.get(b.target)), ...list.filter((v) => !rank.has(v.target))];
+  }
   const spotOnRoom = (name) => spotSetNow().some((v) => v.target === String(name) || gridOwnerOf(v.target) === String(name));   // 0.21.65: a split camera's spotlight is its own
   // 0.21.30 (Kenton: "if something is spotlighted already, then the spotlight button should show remove spotlight")
   window.__spotIs = (target) => spotOnRoom(target);
@@ -9312,11 +9910,15 @@
     }
     const sig = items.map((x) => x.target).join("|") + "@" + set.map((v) => v.ts).join(",");
     if (sig === spotDone) return;   // one-shot per change
+    // 0.21.66 (n): only the ORDER changed (someone dragged the spotlight around) -- the mosaic follows; nobody's own choice moves
+    const setSig = items.map((x) => x.target).sort().join("|") + "@" + set.map((v) => v.target + ":" + v.ts).sort().join(",");
+    if (spotDone && setSig === spotSetSig) { spotDone = sig; if (items.length >= 2) spotStage = items; applyState(); return; }
+    spotSetSig = setSig;
     const was = spotDone;
     spotDone = sig;
     // 0.21.40: only a new spotlight (or a removed one) is news. A tile that comes or goes changes what this page can show,
     // not what the room chose -- a person who chose the gallery stays in it.
-    const votes = set.map((v) => v.target + "@" + v.ts).join("|");
+    const votes = set.map((v) => v.target + "@" + v.ts).sort().join("|");   // 0.21.66: the order is no news
     const news = votes !== spotVotesDone;
     spotVotesDone = votes;
     if (pinsLive().length) { spotStage = items.length >= 2 ? items : []; return; }   // 0.21.45: my pins win (the spotlight waits)
@@ -9519,7 +10121,7 @@
       // 0.21.42: an optional field (a locked room's code) -- the popup resolves its value; `check(value)` may answer an error
       // string, which keeps the popup open with the error under the field
       const inp = q(".kcin"), err = q(".kcerr");
-      inp.hidden = !o.input; inp.value = ""; err.hidden = true; err.textContent = "";
+      inp.hidden = !o.input; inp.value = String(o.input?.value || ""); err.hidden = true; err.textContent = "";   // 0.21.66: + a starting value
       if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
       yes.disabled = no.disabled = false;
       const prev = document.activeElement;
@@ -9726,6 +10328,7 @@
       try { c.ro?.disconnect(); } catch {}
       clearInterval(c.thumbT);
       removeEventListener("resize", c.place);
+      if (geInset === c.inset) { geInset = null; try { c.o.pane.style.marginTop = ""; c.o.pane.style.marginRight = ""; fitMainstage(lastRail.rows); } catch {} }   // 0.21.66: the stage takes its room back
       document.removeEventListener("keydown", c.key, true);
       document.removeEventListener("pointerdown", c.outside, true);
       try { c.ghost?.remove(); } catch {}
@@ -9744,6 +10347,8 @@
         if (!o.streams) streams = o.boxes.map((b) => ({ key: String(b.key), label: String(b.label || "Camera").slice(0, 40) }));
       }
       const c = cur = { o, root, frameEl, slots: gb.slotsClean(slots0 || []), layout: o.layout || "", sens: ["low", "medium", "high"].includes(o.sens) ? o.sens : "medium" };
+      c.inset = { pane: o.pane, top: 0, right: 0, applied: false };   // 0.21.66: the room the editor keeps for itself on the stage
+      geInset = c.inset;
       const labelOf = (k) => streams.find((s) => s.key === k)?.label || "Camera (offline)";
       const slotOf = (k) => c.slots.findIndex((s) => s.cams.includes(k));
       const snap = () => c.slots.map((s) => ({ rect: s.rect.slice(), cams: s.cams.slice(), cycle: { ...s.cycle } }));
@@ -9753,6 +10358,21 @@
       // ---- toolbar: title | Layout (presets) | Motion | Gap | + Spot | Removed | Reset Cancel Done
       const ttl = mkEl("span", "gettl", o.title || "Edit layout");
       tools.append(ttl);
+      if (o.name != null) {   // 0.21.66 (e): the grid's own name ("Kenton's View")
+        const nl = mkEl("label", "gename"); nl.title = "The grid's name";
+        const ni = mkEl("input"); ni.type = "text"; ni.maxLength = 48; ni.value = String(o.name); ni.placeholder = "Grid name";
+        ni.addEventListener("keydown", (e) => e.stopPropagation());
+        ni.addEventListener("input", () => { c.name = ni.value; try { o.onName?.(ni.value); } catch {} });
+        nl.append("Name", ni); tools.append(nl);
+        c.name = String(o.name);
+      }
+      if (o.share) {   // 0.21.66 (e): mine (this device) or the room's (everyone here, it stays)
+        const sl = mkEl("label", "geshare"); sl.title = o.share.tip || "";
+        const si = mkEl("input"); si.type = "checkbox"; si.checked = !!o.share.on;
+        si.addEventListener("change", () => { c.share = si.checked; try { o.onShare?.(si.checked); } catch {} });
+        sl.append(si, o.share.label || "Share with this room"); tools.append(sl);
+        c.share = !!o.share.on;
+      }
       const lay = mkEl("button", "ghost gelay"); lay.type = "button"; lay.title = "Presets: how many spots and where (the cameras keep their order)";
       tools.append(lay);
       const pop = mkEl("div", "gepre"); pop.hidden = true; root.appendChild(pop);
@@ -9843,7 +10463,7 @@
       };
       mk(o.resetLabel || "Reset", "ghost", () => { const nb = o.onReset?.(); if (Array.isArray(nb)) { take(nb); c.layout = "auto"; gr.value = "2"; gv.textContent = "2 px"; paint(); } }, o.resetTip || "Back to equal cells, 2 px gap");
       mk("Cancel", "ghost", () => close(true), o.cancelTip || "Undo every change since Edit layout (Esc)");
-      mk("Done", "", () => { try { o.onDone?.(snap(), Number(gr.value), c.sens, { layout: c.layout }); } catch {} close(false); });
+      mk("Done", "", () => { try { o.onDone?.(snap(), Number(gr.value), c.sens, { layout: c.layout, name: c.name, share: c.share }); } catch {} close(false); });
       // ---- the side list: every camera this grid can show
       const sh = mkEl("div", "geshd");
       const sct = mkEl("span", "gescnt");
@@ -9887,15 +10507,25 @@
         cx.fillStyle = "#101820"; cx.fillRect(0, 0, 64, 36);
         try { if (th.__draw) th.__draw(cx, 64, 36); } catch {}
       }
-      c.thumbT = setInterval(() => { if (!document.hidden) for (const th of list.querySelectorAll("canvas.gethumb")) drawThumb(th); }, 1000);
+      c.thumbT = setInterval(() => { if (!document.hidden) for (const th of list.querySelectorAll("canvas.gethumb")) drawThumb(th); try { c.place(); } catch {} }, 1000);   // 0.21.66: + follow a picture that arrives (or changes shape) late
       // ---- placement
       c.place = () => {
-        const f = o.frame?.(); if (!f) return;
+        // 0.21.66 (Kenton: "The grid layout options are put right on top of the grid so I can't see it all to adjust properly."): the
+        // stage keeps a band for the toolbar above the edited picture and room for the camera list beside it -- fitMainstage fits
+        // the tile into what is left, so no spot (nor its x / resize corner) sits under the editor's own controls
+        const want = { top: (tools.offsetHeight || 40) + 16, right: 236 + 16 };
+        if (geInset === c.inset && (c.inset.top !== want.top || c.inset.right !== want.right)) {
+          c.inset.top = want.top; c.inset.right = want.right;
+          try { fitMainstage(lastRail.rows); } catch {}
+          requestAnimationFrame(() => { if (cur === c) c.place(); });
+        }
+        // 0.21.66: no picture yet (a grid still connecting): the pane itself stands in, so the toolbar and the list still place
+        const f = o.frame?.() || (o.pane.clientWidth > 40 ? { x: 0, y: 0, w: o.pane.clientWidth, h: o.pane.clientHeight } : null); if (!f) return;
         Object.assign(frameEl.style, { left: f.x + "px", top: f.y + "px", width: f.w + "px", height: f.h + "px" });
         // the toolbar sits just above the picture when there is room (it covered the top cameras), else over its top edge
         const fr = frameEl.getBoundingClientRect(), th = tools.offsetHeight || 40;
         tools.style.left = (fr.left + fr.width / 2) + "px";
-        const tt = Math.max(4, fr.top - th - 8 >= 60 ? fr.top - th - 8 : fr.top + 8);
+        const tt = c.inset.applied ? Math.max(4, stageWrap.getBoundingClientRect().top + 4, fr.top - th - 8) : Math.max(4, fr.top - th - 8 >= 60 ? fr.top - th - 8 : fr.top + 8);   // 0.21.66: in its own band, never above the stage
         tools.style.top = tt + "px";
         // the list beside the picture where there is room, else over its right edge
         const W = 236, top = Math.max(tt + th + 8, Math.min(fr.top, innerHeight - 200));
@@ -10190,6 +10820,7 @@
     const t = e.target;
     if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return;
     if (t instanceof HTMLSelectElement) return;   // arrows drive the sort select
+    if (t && t.isContentEditable) return;   // 0.21.66
     if (e.ctrlKey || e.altKey || e.metaKey) return;
 
     if (e.key === "Escape") { closeAllPops(); if (fillWin) toggleFillWindow(); if (gridOpen) { const gp = gridOpen.gp; gridOpenEnd(false); const t = tiles.get(gp); if (t) viewReset(t.canvas); fitMainstage(lastRail.rows); } return; }   // 0.21.20: Esc cancels a starting camera   // 0.21.19: Esc leaves fill window
@@ -10198,6 +10829,7 @@
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { step(-1); e.preventDefault(); }
     else if (e.key === "f" || e.key === "F") toggleFullscreen(selectedName);   // 0.21.0: the stage, selection or not
     else if (e.key === "g" || e.key === "G") { if (gridMode) enterSpotlight(); else goGallery(); }
+    else if ((e.key === "s" || e.key === "S") && !e.shiftKey) { if (spotGoBack()) e.preventDefault(); }   // 0.21.66 (o): back to the spotlight
     else if (e.key === "m" || e.key === "M") { manualMute = !manualMute; applyState(); }
     else if (e.key === "d" || e.key === "D") { setDeafen(!deafened); }   // 0.21.40
     else if (e.key === "PageDown") { if (railFlip(1)) e.preventDefault(); }     // 0.8.12: rail pages
@@ -10445,6 +11077,7 @@
   // ---- 0.8.8: More menu ------------------------------------------------------
   document.getElementById("optRec").addEventListener("click", () => { closeAllPops(); recBtn.click(); });
   document.getElementById("optRoom").addEventListener("click", () => { paintRoomInfo(); openFromOptions(roomInfoPop); });
+  document.getElementById("optGrid").addEventListener("click", () => { closeAllPops(); cgNew(); });   // 0.21.66 (e)
   document.getElementById("optFiles").addEventListener("click", () => { closeAllPops(); filesPop.hidden = false; paintFilesPop(); placePop(filesPop, filesBtn); filesBtn.classList.add("grid-on"); });
   document.getElementById("optProfile").addEventListener("click", () => openProfile(false));
 
@@ -11297,6 +11930,7 @@
     const nowMs = performance.now();
     for (const [name, t] of tiles) {
       const el = t.watch;
+      if (t.cg) continue;   // 0.21.66 (e): drawn here, nothing to starve
       if (el.getAttribute("visible") === "never") { t.starveSince = nowMs; t.framesSince = nowMs; paintNeverPainted(name, t, nowMs, 0); continue; }   // 0.21.15: drops a stale notice
       // No video advertised: video bytes are then legitimately zero
       // forever, and posting "starved" made the publisher print a bogus
@@ -11356,6 +11990,7 @@
     // so instead of offering controls that can never do anything.
     let hasAudioDirty = false;
     for (const [name, t] of tiles) {
+      if (t.cg) continue;   // 0.21.66 (e): a grid of cameras has no catalog -- it is all picture, no sound
       if (!isWatched(name)) {
         // Unknowable without a catalog; also clears a badge left over from
         // before the stream was parked.
@@ -12960,6 +13595,8 @@
     const card = document.createElement("div");
     card.className = "sbcard";
     card.dataset.slug = rec.slug;
+    card.tabIndex = 0;   // 0.21.66: a keyboard reaches each room (the collapsed rail's hover card opens on focus too)
+    card.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === card) { e.preventDefault(); sbCardClick(card, card.__rec || rec); } });
     const row = document.createElement("div"); row.className = "sbrow";
     const rb = document.createElement("span"); rb.className = "rb";
     const nm = document.createElement("span"); nm.className = "sbname";
@@ -13300,12 +13937,12 @@
   function sbTalkPaint(nowMs) {
     if (nowMs - sbTalkAt < 200) return;
     sbTalkAt = nowMs;
-    const card = document.querySelector("#sbRooms .sbcard.cur");
-    if (!card) return;
+    const cards = [...document.querySelectorAll("#sbRooms .sbcard.cur, #sbPeek .sbcard.cur")];   // 0.21.66: + the collapsed rail's hover card
+    if (!cards.length) return;
     const loud = new Set();
     for (const [n, t] of tiles) if (nowMs < (t.talkUntil ?? 0) && !isContentPath(n)) loud.add(personKeyOf(n));
     if (document.querySelector("#pubPanes .pubpane.camkind.talking")) loud.add(String(window.__publisher?.opSlug?.() || "").toLowerCase());
-    for (const li of card.querySelectorAll(".sbm")) li.classList.toggle("talk", loud.has(String(li.dataset.op || "").toLowerCase()));   // 0.21.64 (Kenton: the ring "sticking around when the user is muted or not making any noise"): what I hear, never a stale flag
+    for (const card of cards) for (const li of card.querySelectorAll(".sbm")) li.classList.toggle("talk", loud.has(String(li.dataset.op || "").toLowerCase()));   // 0.21.64 (Kenton: the ring "sticking around when the user is muted or not making any noise"): what I hear, never a stale flag
   }
   // 0.21.41: the rail's person = the Participants entry for that name (same menu as their tile and their Participants row)
   function sbMemberPerson(op) {
@@ -13531,7 +14168,64 @@
     }
     for (const h of [...sbRoomsEl.querySelectorAll(":scope > .sbgroup")]) if (!seenG.has(h.dataset.gid)) h.remove();
     if (sbEl) sbEl.classList.toggle("stale", roomsFrozen);
+    try { sbPeekPaint(); } catch {}   // 0.21.66: the collapsed rail's hover card stays live
   }
+  // ---- 0.21.66 (Kenton: "On hover of the collapsed room view, show the info for the room similar to the expanded view."): with the
+  // rail collapsed to bubbles, pointing at one (or focusing it with the keyboard) opens a floating copy of that room's expanded card
+  // beside it -- name, people, timer, badges, the members (the Lobby keeps its rule: no names) -- painted by the same sbCardPaint, so
+  // it stays live while open. It opens after 150 ms, closes when the pointer has left both the bubble and the card, and works like
+  // the expanded card (a click joins / switches, a member's menu). Not on touch-only devices (they open the full rail instead).
+  let sbPeekEl = null, sbPeekSlug = "", sbPeekT = 0, sbPeekCloseT = 0;
+  const sbPeekCan = () => sbCollapsed() && !isPhone() && (() => { try { return matchMedia("(hover: hover)").matches; } catch { return true; } })();
+  function sbPeekHost() {
+    if (sbPeekEl) return sbPeekEl;
+    sbPeekEl = document.createElement("div"); sbPeekEl.id = "sbPeek"; sbPeekEl.hidden = true;
+    sbPeekEl.addEventListener("pointerenter", () => clearTimeout(sbPeekCloseT));
+    sbPeekEl.addEventListener("pointerleave", () => sbPeekCloseSoon());
+    sbPeekEl.addEventListener("click", () => setTimeout(sbPeekClose, 0));   // a click inside acts like the expanded card, then the copy goes
+    document.body.appendChild(sbPeekEl);
+    return sbPeekEl;
+  }
+  function sbPeekPaint() {
+    if (!sbPeekEl || sbPeekEl.hidden || !sbPeekSlug) return;
+    const rec = lastChannelList.find((r) => r.slug === sbPeekSlug);
+    const anchor = sbRoomsEl?.querySelector('.sbcard[data-slug="' + cssq(sbPeekSlug) + '"]');
+    if (!rec || !anchor || !sbPeekCan()) { sbPeekClose(); return; }
+    let card = sbPeekEl.querySelector(".sbcard");
+    if (!card || card.dataset.slug !== rec.slug) { card = sbCardNew(rec); sbPeekEl.replaceChildren(card); }
+    sbCardPaint(card, rec);
+    const r = anchor.getBoundingClientRect(), h = sbPeekEl.offsetHeight || 80, w = sbPeekEl.offsetWidth || 260;
+    sbPeekEl.style.left = Math.round(Math.min(r.right + 8, innerWidth - w - 8)) + "px";
+    sbPeekEl.style.top = Math.round(Math.max(8, Math.min(r.top - 4, innerHeight - h - 8))) + "px";
+  }
+  function sbPeekOpen(slug) {
+    clearTimeout(sbPeekT); clearTimeout(sbPeekCloseT);
+    if (!sbPeekCan()) return;
+    sbPeekT = setTimeout(() => {
+      sbPeekHost();
+      if (sbPeekSlug !== slug) sbPeekEl.replaceChildren();
+      sbPeekSlug = slug; sbPeekEl.hidden = false;
+      sbPeekPaint(); requestAnimationFrame(sbPeekPaint);   // the second pass places it with its real height
+    }, 150);
+  }
+  function sbPeekClose() { clearTimeout(sbPeekT); clearTimeout(sbPeekCloseT); if (sbPeekEl) { sbPeekEl.hidden = true; sbPeekEl.replaceChildren(); } sbPeekSlug = ""; }
+  function sbPeekCloseSoon() { clearTimeout(sbPeekT); clearTimeout(sbPeekCloseT); sbPeekCloseT = setTimeout(sbPeekClose, 220); }
+  sbRoomsEl?.addEventListener("pointerover", (e) => {
+    if (e.pointerType === "touch") return;
+    const card = e.target.closest?.(".sbcard");
+    if (!card || !sbRoomsEl.contains(card)) return;
+    if (sbPeekSlug === card.dataset.slug && sbPeekEl && !sbPeekEl.hidden) { clearTimeout(sbPeekCloseT); return; }
+    sbPeekOpen(card.dataset.slug);
+  });
+  sbRoomsEl?.addEventListener("pointerout", (e) => {
+    const to = e.relatedTarget;
+    if (to && (sbPeekEl?.contains(to) || to.closest?.(".sbcard")?.dataset?.slug === sbPeekSlug)) return;
+    sbPeekCloseSoon();
+  });
+  sbRoomsEl?.addEventListener("focusin", (e) => { const card = e.target.closest?.(".sbcard"); if (card && sbCollapsed()) sbPeekOpen(card.dataset.slug); });
+  sbRoomsEl?.addEventListener("focusout", (e) => { if (!sbPeekEl?.contains(e.relatedTarget)) sbPeekCloseSoon(); });
+  sbRoomsEl?.addEventListener("pointerdown", () => sbPeekClose());   // a press (a click, a drag) on the rail: the copy goes
+  window.__sbPeek = { open: (slug) => { sbPeekOpen(slug); }, close: sbPeekClose, state: () => ({ slug: sbPeekSlug, open: !!sbPeekEl && !sbPeekEl.hidden, html: sbPeekEl?.textContent || "" }) };   // rig
   // 0.13.1: drag a room card to reorder the rail (per operator; main stays on top). Pointer
   // events with a 6 px threshold like the stage tiles; mouse/pen only -- the phone drawer scrolls.
   let sbDrag = null;
@@ -13609,6 +14303,7 @@
       const t = card.querySelector(".sbtime");
       if (t) t.textContent = card.__since ? "\u23F1 " + fmtHm(now - card.__since) : "\u23F1 \u2014";
     }
+    try { sbPeekPaint(); } catch {}   // 0.21.66: the hover card's timer too
     if (joinState === "joined") {
       const t = joinEls.roomBanner?.querySelector(".rbtime");
       if (t) t.textContent = "\u23F1 " + (roomSince ? fmtHm(now - roomSince) : "0:00");
@@ -22818,7 +23513,7 @@
   const avatarAnn = keyedAnnouncer("~avatar", { state: (k, p) => window.__state.set("avatar", p ? (JSON.parse(p).url || "") : "") });
   // 0.8.8: composite geometry for viewers (expand one cell) and presence
   // time for the room up-time.
-  const gridAnn = keyedAnnouncer("~grid", { dedupe: true, state: (k, p) => window.__state.set("grid", { id: String(k).replace(/^grid:/, ""), meta: p ? JSON.parse(p) : null }) });   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/~grid, so an announce would be dropped); 0.15.0: keyed "grid:<id>" -> room.json grids
+  const gridAnn = keyedAnnouncer("~grid", { dedupe: true, state: (k, p) => { window.__state.set("grid", { id: String(k).replace(/^grid:/, ""), meta: p ? JSON.parse(p) : null }); try { if (p) window.__gridMetaOut?.(JSON.parse(p)); } catch {} } });   // 0.21.66: + the room board's copy   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/~grid, so an announce would be dropped); 0.15.0: keyed "grid:<id>" -> room.json grids
   let gridAnnT = null;
   const gridAnnounced = new Set();   // 0.15.0: ids with a standing announce, so a grid that vanished is cleared
   function announceGrid(now) {

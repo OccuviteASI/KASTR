@@ -394,7 +394,7 @@ class Page(unittest.TestCase):
 
     def test_menus_offer_pin_to_this_room(self):
         p = self.p
-        self.assertEqual(p.count('label: rp ? "Unpin from this room" : "Pin to this room"'), 3)   # remote tile, own share, own grid
+        self.assertEqual(p.count('label: rp ? "Unpin from this room" : "Pin to this room"'), 4)   # 0.21.66: + a room grid of cameras   # remote tile, own share, own grid
         self.assertIn('if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }', p)
         self.assertIn('boardPin(CHANNEL + "/" + hangName(ref.name), v === "rpin");', p)
         self.assertIn('window.__board?.pin?.(chanPath(ensureHang(g.entry.name)), v === "rpin");', p)

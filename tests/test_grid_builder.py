@@ -473,7 +473,7 @@ class PageWiring(unittest.TestCase):
                      'if (ev.shiftKey) { place(k, to, "add"); return; }',
                      '[s.cams, t.cams] = [t.cams, s.cams]; [s.cycle, t.cycle] = [t.cycle, s.cycle];',   # spot onto spot: swap
                      'if (from >= 0 && !c.slots[from].cams.length) c.slots[from].cams = was;',
-                     'try { o.onDone?.(snap(), Number(gr.value), c.sens, { layout: c.layout }); } catch {}',
+                     'try { o.onDone?.(snap(), Number(gr.value), c.sens, { layout: c.layout, name: c.name, share: c.share }); } catch {}',   # 0.21.66: + name, share
                      'for (const [v, t] of [["low", "Low"], ["medium", "Medium"], ["high", "High"]])'):
             self.assertIn(need, ed)
         apply = sec("      function applyPreset(n) {", "\n      }\n")

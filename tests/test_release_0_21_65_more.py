@@ -372,7 +372,7 @@ class Page(unittest.TestCase):
         p = self.p
         self.assertIn('t.pane.classList.toggle("zoomable", shown && isSelected && !gridMode && !selfSpotEl);', p)
         self.assertIn('armView(pane, () => tile.canvas, () => !gridMode && name === selectedName && !selfSpotEl && pane.classList.contains("mainstage"));', p)
-        self.assertIn('if (pane.classList.contains("zoomable") && !gridMeta.has(name)) {', p)   # a double-click is not two clicks
+        self.assertIn('if (pane.classList.contains("zoomable") && !gridMeta.has(name) && !tile.cg) {', p)   # a double-click is not two clicks
         self.assertIn("clearTimeout(pane.__clickT); pane.__clickT = null;", p)
 
     def test_j_webcam_section(self):

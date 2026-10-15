@@ -244,12 +244,12 @@ class Page(unittest.TestCase):
         self.assertIn("if (!d || !sr) return;", draw)
         self.assertIn("return rs.findIndex((r) => r && px >= r.x", p)                                  # clicks never land on one
         self.assertIn("vgLaidOut(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch)", p)
-        self.assertIn("|| leavingExMember(name) || roomHid.has(name);", p)                             # rail, gallery, stage
+        self.assertIn("|| leavingExMember(name) || roomHid.has(name)", p)                             # rail, gallery, stage
         self.assertIn("      if (roomHid.has(n)) continue;   // 0.21.64", p)                                   # People
-        self.assertIn("orderedNames().filter((n) => !roomHid.has(n)).filter((n) => isWatched(n) && isContentPath(n)", p)   # arrivals
+        self.assertIn("orderedNames().filter((n) => !roomHid.has(n) && !isCgName(n) && !cgHide(n)).filter((n) => isWatched(n) && isContentPath(n)", p)   # arrivals
         self.assertIn('if (isGridChild(n) || roomHid.has(n)) return "gridchild";', p)
         self.assertIn("if (!tiles.has(name) || roomHid.has(name)) return;", p)                         # never opened
-        self.assertIn("if (selectedName === undefined && !roomHid.has(name) && isWatched(name) && !isGridChild(name) && !wrRoomOf(name))", p)
+        self.assertIn("if (selectedName === undefined && !roomHid.has(name) && !cgHide(name) && isWatched(name) && !isGridChild(name) && !wrRoomOf(name))", p)
         chg = self.sec("  function roomGridChanged() {", "  const roomGridCan =")
         for need in ("roomHidRebuild();", "vgSync();", "applyState();", "if (selectedName && roomHid.has(selectedName))"):
             self.assertIn(need, chg)
@@ -258,7 +258,7 @@ class Page(unittest.TestCase):
         take = self.sec("  function boardTake(d, gen) {", "  let boardBusy = false;")
         self.assertIn("board.grids = grids;", take)
         self.assertIn("if (JSON.stringify([grids, split]) !== gridsWas) { try { roomGridChanged(); } catch {} }", take)   # 0.21.65: + split
-        self.assertIn("grid: boardGrid, split: boardSplit };", self.p)   # 0.21.65: + split
+        self.assertIn("grid: boardGrid, split: boardSplit,", self.p)   # 0.21.66: + spotOrder, cgrid   # 0.21.65: + split
 
     def test_menus(self):
         p = self.p

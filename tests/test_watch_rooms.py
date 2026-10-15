@@ -66,7 +66,7 @@ class StaysOutOfMyRoom(unittest.TestCase):
         self.assertIn('if ((!wrSrc || wrBring) && !viewLockedForMe()) items.push({ value: lit ? "unspot" : (wrSrc ? "wrall" : "all")', p)   # 0.21.49: a watched source is brought in first
         self.assertIn('if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {', p)
         self.assertIn("if (!wrRoomOf(name)) { try { window.__stallAnnounce?.set?.(name); } catch {} }", p)
-        self.assertIn("if (isGridChild(n) || wrRoomOf(n)) continue;", p)
+        self.assertIn("if (isGridChild(n) || wrRoomOf(n) || t.cg || cgHide(n)) continue;", p)
 
 
 class Sound(unittest.TestCase):

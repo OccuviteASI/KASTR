@@ -99,7 +99,7 @@ class CellOpen(unittest.TestCase):
     def test_keep_warm_governs_visible(self):
         self.once('const wantVisible = (!shown && !keepWarm) ? "never"')
         self.once(': (isSelected || keepWarm) ? "always"')
-        self.once("const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name)) || vgHqWanted(name);")   # 0.21.43: + full-quality cells
+        self.once("const keepWarm = (gridOpen && gridOpen.path === name) || (GRID_PARKED_WARM && gridParked(name)) || vgHqWanted(name) || cgWarm.has(name);")   # 0.21.43: + full-quality cells
         self.assertNotIn('const wantVisible = !shown ? "never"', self.page)
         # the rail-hidden branch holds every hiddenChild (the parked composite, the off-stage camera child: applyState adds
         # them to railHiddenNames) and sits BEFORE "always" -- it must yield to keepWarm or the camera never subscribes
@@ -162,7 +162,8 @@ class CellOpen(unittest.TestCase):
     def test_cold_open_is_abandoned_on_every_exit(self):
         p = self.page
         # start, tick (moved on), tick (give-up), Gallery pill, cell click, zoom label, dblclick, Esc (0.21.20)
-        self.assertEqual(p.count("gridOpenEnd(false);"), 9)   # 0.21.23: + the tile menu's Unpin; 0.21.40: Unpin + the Gallery button share goGallery(); 0.21.54: + spotBack (View > Spotlight)
+        self.assertEqual(p.count("gridOpenEnd(false);"), 10)   # 0.21.66: + Back to spotlight (S)
+        # 0.21.23: + the tile menu's Unpin; 0.21.40: Unpin + the Gallery button share goGallery(); 0.21.54: + spotBack (View > Spotlight)
         # 0.21.20: a click while the camera starts never cancels it (an impatient second click restarted the cold open)
         self.once("if (gridOpen && gridOpen.gp === name) { gridOpen.clicks = (gridOpen.clicks || 0) + 1; paintGridWait(); return; }")
         self.assertLess(p.index("if (gridOpen && gridOpen.gp === name) {"), p.index("if (viewZoomed(tile.canvas)) { gridOpenEnd(false);"))

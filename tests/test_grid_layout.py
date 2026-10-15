@@ -110,7 +110,7 @@ class Viewers(unittest.TestCase):
     def test_my_view_and_full_quality(self):
         p = _page()
         self.assertIn('const VG_KEY = "kastr.vgrid.", VG_HQ_MAX = 4;', p)
-        self.assertIn("|| vgHqWanted(name);   // 0.21.43", p)
+        self.assertIn("|| vgHqWanted(name) || cgWarm.has(name);   // 0.21.66 (e)", p)   # 0.21.43; 0.21.66: + a grid of cameras
         self.assertIn('value: "vgedit", icon: "view", label: "Arrange this grid for me\\u2026"', p)
         self.assertIn("if (hq.size >= VG_HQ_MAX) {", p)
         self.assertIn("const rs = meta.path && vgLaidOut(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);", p)   # 0.21.64: or the room's layout

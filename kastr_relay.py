@@ -162,7 +162,8 @@ BOARD_PINS_MAX = 32
 BOARD_SPOTS_MAX = 16
 BOARD_XS_TTL = 3600         # a pinned listing's lifetime; the board re-applies it long before it ends
 BOARD_SYNC_S = 60
-BOARD_OPS = ("pin", "unpin", "spot", "unspot", "grid", "gridHide", "gridShow", "gridReset", "split", "unsplit")
+BOARD_OPS = ("pin", "unpin", "spot", "unspot", "grid", "gridHide", "gridShow", "gridReset", "split", "unsplit",
+             "spotOrder", "cgrid", "cgridDel", "gridMeta")   # 0.21.66: + the spotlight's order, the room's own cross-room grids, a grid's geometry
 # 0.21.64 (Kenton: "I need to be able to customize the grid for everyone in the room to see. I need to be able to remove feeds
 # from that grid as well."): the board also keeps the room's own LAYOUT of a camera grid (a composite one box draws) --
 # `grids` = {<grid path>: {rects: {<member path>: [x, y, w, h] in the editor's 24 x 24 units}, gap, hidden: [<member path>],
@@ -189,6 +190,30 @@ BOARD_SENS = ("low", "medium", "high")
 # room (their tile is no longer hidden behind the grid, for everyone here; the grid keeps its cell; other rooms untouched).
 BOARD_SPLIT_OPS = ("split", "unsplit")
 BOARD_SPLIT_MAX = 32
+# 0.21.66 (n) (Kenton: "I want to be able to adjust spotlighted items after they are spotlighted by dragging them around."):
+# `spotOrder` = [target, ...] -- the room's order of its spotlight mosaic (a drag on the stage swaps two places). Pages put
+# these first, then the remaining spotlights oldest-first; an older page ignores it. Op spotOrder {targets}.
+# 0.21.66 (e) (Kenton: "I also need to be able to create my own grid with several streams across multiple rooms."): a ROOM
+# grid -- `customGrids` = {id: {name, slots: [{rect, cams: [any room's stream path], cycle}], gap, sens, by, at}} -- that every
+# page in the room draws itself from each camera's own stream (no box composites it). Ops cgrid {id, name, slots, gap, sens}
+# (create / update) and cgridDel {id}. A camera of ANOTHER room is made readable for everyone in this room by the same
+# permanent listing a board pin gets (board_listings, flagged `cg`: the page keeps such a camera off the gallery -- it shows
+# inside the grid); saving a camera from another room needs the saver's member token for that room as proof (as a pin).
+# The grid's tile path is <room>/cgrid-0000/<id>.hang (spotlit / pinned / ordered like any tile).
+BOARD_ORDER_OPS = ("spotOrder",)
+BOARD_CGRID_OPS = ("cgrid", "cgridDel")
+BOARD_CGRIDS_MAX = 8
+BOARD_CGRID_HOST = "cgrid-0000"
+BOARD_CGRID_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
+# 0.21.66 (Kenton: "When I right click on this grid from another room that is viewing it, I can't adjust the grid in that room.
+# I need to be able to do that."): a camera grid of ANOTHER room pinned to / listed into this room takes the same room tools as
+# this room's own grids (grid / gridHide / gridShow / gridReset / split / unsplit, keyed by its path on THIS room's board). Pages
+# here need its geometry (which camera sits in which cell) without watching its room: the grid's OWNER posts it (op gridMeta,
+# into the board of the grid's own room as `metas`), and a board read of a room that sees the grid (a pin or a listing) carries
+# it as `gridMetas`. A camera of such a grid SPLIT out here is listed into this room like a pin (its own tile for everyone).
+BOARD_META_OPS = ("gridMeta",)
+BOARD_METAS_MAX = 16
+BOARD_META_BYTES = 16000
 # 0.12.0: root-prefixed announce kinds every member may put beside ~presence:
 # ~talking/<room> (who is speaking) and ~chat/<room> (a new-message nudge).
 MEMBER_KINDS = (NS + "presence", NS + "talking", NS + "chat")
@@ -892,6 +917,30 @@ def board_clean(b):
         if len(split) >= BOARD_SPLIT_MAX:
             break
     out = {"pins": pins, "spots": spots, "grids": grids, "split": split}
+    order = board_order_clean(b.get("spotOrder"))   # 0.21.66 (n)
+    if order:
+        out["spotOrder"] = order
+    cgs = {}   # 0.21.66 (e)
+    c0 = b.get("customGrids") if isinstance(b.get("customGrids"), dict) else {}
+    for gid in list(c0)[:BOARD_CGRIDS_MAX * 2]:
+        g = board_cgrid_clean(gid, c0[gid])
+        if g is not None:
+            cgs[str(gid)] = g
+        if len(cgs) >= BOARD_CGRIDS_MAX:
+            break
+    if cgs:
+        out["customGrids"] = cgs
+    metas = {}   # 0.21.66: this room's grids' geometry (posted by their owner) -- read by rooms the grids are pinned / listed in
+    m0 = b.get("metas") if isinstance(b.get("metas"), dict) else {}
+    for gp in list(m0)[:BOARD_METAS_MAX * 2]:
+        x = m0[gp] if isinstance(m0[gp], dict) else {}
+        m = board_meta_clean(gp, x.get("meta"))
+        if m is not None:
+            metas[str(gp)] = {"meta": m, "at": _int0(x.get("at"))}
+        if len(metas) >= BOARD_METAS_MAX:
+            break
+    if metas:
+        out["metas"] = metas
     if b.get("lock"):
         out["lock"] = True               # 0.21.65 (m): the room's view is locked (never stored in the board itself)
     if SLUG_RE.match(str(b.get("renamed") or "")):
@@ -902,7 +951,143 @@ def board_clean(b):
 def board_has(b):
     """0.21.64: does a (clean) board hold anything -- a pin, a spotlight, a room grid layout (0.21.65: or a split camera)?"""
     b = b if isinstance(b, dict) else {}
-    return bool(b.get("pins") or b.get("spots") or b.get("grids") or b.get("split"))
+    return bool(b.get("pins") or b.get("spots") or b.get("grids") or b.get("split") or b.get("customGrids"))   # 0.21.66: + a room grid
+
+
+def board_order_clean(v, strict=False):
+    """0.21.66 (n): the spotlight mosaic's order -> [target, ...] (stream paths, no repeats, at most BOARD_SPOTS_MAX) or,
+    strict (a request), (None, why) for a bad list."""
+    if not isinstance(v, list):
+        return (None, "`targets` is a list of stream paths") if strict else []
+    if strict and len(v) > BOARD_SPOTS_MAX:
+        return None, "a spotlight holds at most %d items" % BOARD_SPOTS_MAX
+    out = []
+    for t in v[:BOARD_SPOTS_MAX * 2]:
+        t = str(t or "")[:300]
+        if not board_stream_ok(t):
+            if strict:
+                return None, "not a stream path: %s" % t[:120]
+            continue
+        if t not in out:
+            out.append(t)
+        if len(out) >= BOARD_SPOTS_MAX:
+            break
+    return (out, None) if strict else out
+
+
+def board_cgrid_path(room, gid):
+    """0.21.66 (e): the tile path of room `room`'s own grid `gid` (spotlit / pinned / ordered like a stream)."""
+    return "%s/%s/%s.hang" % (room, BOARD_CGRID_HOST, gid)
+
+
+def board_cgrid_clean(gid, g, strict=False):
+    """0.21.66 (e): one room grid {name, slots, gap, sens, by, at} -> the clean copy, or None (strict: (None, why))."""
+    def bad(why):
+        return (None, why) if strict else None
+    if not BOARD_CGRID_ID_RE.match(str(gid or "")):
+        return bad("a grid id is 1..24 of a-z 0-9 -")
+    if not isinstance(g, dict):
+        return bad("a grid is {name, slots, gap, sens}")
+    slots, why = board_slots(None, g.get("slots"), strict=strict)
+    if why:
+        return bad(why)
+    if not any(s["cams"] for s in slots or []):
+        return bad("a grid needs at least one camera in a spot")
+    gap = g.get("gap", 2)
+    if strict and (isinstance(gap, bool) or not isinstance(gap, (int, float)) or not 0 <= gap <= 24):
+        return bad("`gap` is 0..24")
+    sens = g.get("sens", "medium")
+    if sens not in BOARD_SENS:
+        if strict:
+            return bad("`sens` is low | medium | high")
+        sens = "medium"
+    name = _xs_text(g.get("name"), 48).strip() or "Grid"
+    out = {"name": name, "slots": slots, "gap": board_gap(gap), "sens": sens, "by": _xs_text(g.get("by"), 64), "at": _int0(g.get("at"))}
+    return (out, None) if strict else out
+
+
+def board_meta_clean(gp, m):
+    """0.21.66: a grid's geometry as its owner announces it ({path, n, layout, cells, feeds, members, out, down, more, mode,
+    id, label, rects, gap, ts}) -> a clean copy (every camera of the grid's own room), or None (a bad path / too big)."""
+    if not board_stream_ok(gp) or not isinstance(m, dict):
+        return None
+    room = gp.split("/", 1)[0]
+
+    def one(x):
+        x = str(x or "")[:300]
+        return x if board_stream_ok(x) and x.split("/", 1)[0] == room else None
+
+    def paths(v):
+        return [one(x) for x in (v if isinstance(v, list) else [])[:BOARD_GRID_MEMBERS_MAX]]
+    more = []
+    for x in (m.get("more") if isinstance(m.get("more"), list) else [])[:BOARD_GRID_MEMBERS_MAX]:
+        if isinstance(x, dict) and one(x.get("path")):
+            more.append({"path": one(x.get("path")), "label": _xs_text(x.get("label"), 24), "feed": bool(x.get("feed"))})
+    rects = []
+    for r in (m.get("rects") if isinstance(m.get("rects"), list) else [])[:BOARD_GRID_MEMBERS_MAX]:
+        if (isinstance(r, list) and len(r) == 4
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) and -1 <= v <= 2 for v in r)):
+            rects.append([round(float(v), 5) for v in r])
+        else:
+            rects = []
+            break
+    out = {"path": gp, "n": max(1, min(BOARD_GRID_MEMBERS_MAX, _int0(m.get("n")) or 1)),
+           "layout": _xs_text(m.get("layout"), 24) or "auto",
+           "cells": [_xs_text(c, 40) for c in (m.get("cells") if isinstance(m.get("cells"), list) else [])[:BOARD_GRID_MEMBERS_MAX]],
+           "feeds": paths(m.get("feeds")), "members": [x for x in paths(m.get("members")) if x],
+           "out": [x for x in paths(m.get("out")) if x],
+           "down": [i for i in (m.get("down") if isinstance(m.get("down"), list) else [])[:BOARD_GRID_MEMBERS_MAX]
+                    if type(i) is int and 0 <= i < BOARD_GRID_MEMBERS_MAX],
+           "more": more, "mode": _xs_text(m.get("mode"), 16) or "grid", "id": _xs_text(m.get("id"), 16) or "1",
+           "label": _xs_text(m.get("label"), 40), "rects": rects or None, "gap": board_gap(m.get("gap", 0)), "ts": _int0(m.get("ts"))}
+    if len(json.dumps(out)) > BOARD_META_BYTES:
+        return None
+    return out
+
+
+def board_meta_has(meta, mp):
+    """0.21.66: is `mp` a camera of this grid (drawn now, or one its spots are not showing)?"""
+    meta = meta or {}
+    return mp in (meta.get("members") or []) or mp in [x for x in meta.get("feeds") or [] if x] or any(
+        x.get("path") == mp for x in meta.get("more") or [])
+
+
+def board_seen(room, b, listed):
+    """0.21.66: the stream paths room `room` sees from OTHER rooms -- its board pins + the live listings into it (`listed`:
+    the registry's rows for the room)."""
+    out = {p["path"] for p in (b or {}).get("pins") or [] if p.get("path")}
+    out |= {e.get("path") for e in listed or [] if e.get("path")}
+    return {x for x in out if str(x).split("/", 1)[0] != room}
+
+
+def board_metas_for(room, b, boards, listed):
+    """0.21.66: {grid path: geometry} of every grid of another room that `room` sees (from that room's board `metas`)."""
+    out = {}
+    for gp in sorted(board_seen(room, b, listed)):
+        m = (((boards or {}).get(gp.split("/", 1)[0]) or {}).get("metas") or {}).get(gp)
+        if m and m.get("meta"):
+            out[gp] = m["meta"]
+    return out
+
+
+def board_foreign_ok(room, op, item, b, boards, listed):
+    """0.21.66: a grid op / split naming ANOTHER room's grid or camera -> None (fine) or why not: the grid must be pinned to or
+    listed in this room; a split camera must belong to such a grid (its owner's geometry names it)."""
+    path = item.get("path") or ""
+    if path.split("/", 1)[0] == room or op == "unsplit":
+        return None
+    seen = board_seen(room, b, listed)
+    if op in BOARD_GRID_OPS:
+        return None if path in seen else "that grid is not pinned to or listed in this room"
+    for gp, m in board_metas_for(room, b, boards, listed).items():
+        if board_meta_has(m, path):
+            return None
+    return "that camera is not in a grid pinned to or listed in this room"
+
+
+def board_cgrid_rooms(g):
+    """0.21.66 (e): the rooms whose cameras a grid draws -> set of slugs."""
+    return {mp.split("/", 1)[0] for s in (g or {}).get("slots") or [] for mp in s.get("cams") or []}
 
 
 def board_stream_ok(path):
@@ -983,7 +1168,9 @@ def board_slots(gp, slots, strict=False):
         cams = []
         for mp in cams0[:BOARD_SLOT_CAMS_MAX * 2]:
             mp = str(mp or "")[:300]
-            if not board_stream_ok(mp) or not board_same_room(gp, mp) or mp in seen:
+            # 0.21.66 (e): gp None = a room's own cross-room grid -- any room's camera, never another such grid
+            if (not board_stream_ok(mp) or (gp is not None and not board_same_room(gp, mp)) or mp in seen
+                    or (gp is None and mp.split("/")[1] == BOARD_CGRID_HOST)):
                 if strict:
                     return None, ("a camera is in two spots: %s" % mp[:120]) if mp in seen else ("not a camera of this grid: %s" % mp[:120])
                 continue
@@ -1036,7 +1223,32 @@ def board_item(op, p, now=None):
     now = time.time() if now is None else now
     p = p if isinstance(p, dict) else {}
     if op not in BOARD_OPS:
-        return None, "unknown board op (pin|unpin|spot|unspot|grid|gridHide|gridShow|gridReset|split|unsplit)"
+        return None, "unknown board op (" + "|".join(BOARD_OPS) + ")"
+    if op == "gridMeta":   # 0.21.66: a grid's geometry, from its owner
+        gp = str(p.get("path") or "")[:300]
+        if not board_stream_ok(gp):
+            return None, "not a grid's stream path (<room>/<host>/.../<name>.hang)"
+        m = board_meta_clean(gp, p.get("meta"))
+        if m is None:
+            return None, "`meta` is the grid's announced geometry (at most %d bytes)" % BOARD_META_BYTES
+        return {"path": gp, "meta": m, "by": _xs_text(p.get("by"), 64)}, None
+    if op == "spotOrder":   # 0.21.66 (n): the spotlight mosaic's order
+        order, why = board_order_clean(p.get("targets"), strict=True)
+        if why:
+            return None, why
+        return {"targets": order, "by": _xs_text(p.get("by"), 64)}, None
+    if op in BOARD_CGRID_OPS:   # 0.21.66 (e): the room's own grid of cameras from any room
+        gid = str(p.get("id") or "")
+        if not BOARD_CGRID_ID_RE.match(gid):
+            return None, "a grid id is 1..24 of a-z 0-9 -"
+        if op == "cgridDel":
+            return {"id": gid, "by": _xs_text(p.get("by"), 64)}, None
+        src = p.get("grid") if isinstance(p.get("grid"), dict) else p   # a spoke forwards the item it built ({id, grid, by})
+        g, why = board_cgrid_clean(gid, src, strict=True)
+        if why:
+            return None, why
+        g["by"] = _xs_text(p.get("by"), 64)
+        return {"id": gid, "grid": g, "by": g["by"]}, None
     if op in BOARD_SPLIT_OPS:   # 0.21.65: a grid's camera on its own in this room
         mp = str(p.get("path") or "")[:300]
         if not board_stream_ok(mp):
@@ -1111,6 +1323,18 @@ def board_listings(boards):
         for p in (b or {}).get("pins") or []:
             if p.get("from") and p["from"] != slug and p.get("path"):
                 out[(p["path"], slug)] = p
+        for mp in (b or {}).get("split") or []:   # 0.21.66: a camera of another room's grid, split out here -- a tile for everyone
+            frm = str(mp).split("/", 1)[0]
+            if frm != slug and (mp, slug) not in out:
+                out[(mp, slug)] = {"path": mp, "from": frm, "label": "", "kind": "camera", "by": ""}
+        # 0.21.66 (e): a camera of another room in this room's own grid -- listed the same way, flagged `cg` (shown in the
+        # grid, not as a tile of its own) unless it is pinned here as well
+        for gid, g in ((b or {}).get("customGrids") or {}).items():
+            for s in g.get("slots") or []:
+                for mp in s.get("cams") or []:
+                    frm = str(mp).split("/", 1)[0]
+                    if frm != slug and (mp, slug) not in out:
+                        out[(mp, slug)] = {"path": mp, "from": frm, "label": "", "kind": "other", "by": g.get("by") or "", "cg": True}
     return out
 
 
@@ -1122,10 +1346,11 @@ def board_sync_registry(reg, boards, now=None):
     changed = reg.unpin_except(set(want), now)
     for (path, to), p in want.items():
         cur = reg.items.get((path, to))
-        if cur is not None and cur.get("pinned") and cur["exp"] - now > BOARD_XS_TTL / 2:
+        if (cur is not None and cur.get("pinned") and cur["exp"] - now > BOARD_XS_TTL / 2
+                and bool(cur.get("cg")) == bool(p.get("cg") and not int(cur.get("sexp") or 0) > now)):
             continue
         _acc, _ref, _new, ch = reg.apply(path, p["from"], [to], p.get("label") or "", p.get("kind") or "other", p.get("by") or "",
-                                         now, ttl=BOARD_XS_TTL, pinned=True)
+                                         now, ttl=BOARD_XS_TTL, pinned=True, cg=bool(p.get("cg")))
         changed = changed or ch
     return changed
 
@@ -1136,7 +1361,7 @@ class XShareRegistry:
     every change a reader must see (new, removed, relabelled, or an expiry pushed out by >= 60 s -- spokes judge
     liveness by `exp`, so a refresh must reach them before the copy they hold runs out)."""
 
-    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp", "pinned")   # 0.21.63: + pinned (a room board's pin)
+    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp", "pinned", "cg")   # 0.21.63: + pinned (a room board's pin); 0.21.66: + cg (only a room grid's camera)
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -1147,7 +1372,7 @@ class XShareRegistry:
         for k in [k for k, e in self.items.items() if e["exp"] <= now]:
             self.items.pop(k, None)
 
-    def apply(self, path, frm, to, label="", kind="other", by="", now=None, ttl=XSHARE_TTL, pinned=False):
+    def apply(self, path, frm, to, label="", kind="other", by="", now=None, ttl=XSHARE_TTL, pinned=False, cg=False):
         """List `path` (a stream of room `frm`) in each room of `to` -> (accepted, refused {slug: why}, new, changed).
         0.21.63: `pinned` = a room board's pin (BOARD_XS_TTL, re-applied by the board); `sexp` is the sharer's own expiry,
         so an unpin leaves a listing its sharer still heartbeats, and a sharer's stop leaves a pinned one."""
@@ -1167,7 +1392,8 @@ class XShareRegistry:
                         ref[b] = "listed in too many rooms"
                         continue
                     self.items[k] = {"path": path, "from": frm, "to": b, "label": label, "kind": kind, "by": by,
-                                     "exp": exp, "dist": exp, "pinned": bool(pinned), "sexp": 0 if pinned else exp}
+                                     "exp": exp, "dist": exp, "pinned": bool(pinned), "sexp": 0 if pinned else exp,
+                                     "cg": bool(pinned and cg)}   # 0.21.66: listed only for a room grid
                     new.append(b)
                     changed = True
                 else:
@@ -1175,12 +1401,19 @@ class XShareRegistry:
                         if not cur.get("pinned"):
                             cur["pinned"] = True
                             changed = True
+                        want_cg = bool(cg) and not int(cur.get("sexp") or 0) > now   # 0.21.66: a sharer's own listing is a tile
+                        if bool(cur.get("cg")) != want_cg:
+                            cur["cg"] = want_cg
+                            changed = True
                         cur["exp"] = max(cur["exp"], exp)
                     else:
                         if (cur["from"], cur["label"], cur["kind"], cur["by"]) != (frm, label, kind, by):
                             changed = True
                         cur.update({"from": frm, "label": label, "kind": kind, "by": by, "exp": max(cur["exp"], exp)})
                         cur["sexp"] = max(int(cur.get("sexp") or 0), exp)
+                        if cur.get("cg"):
+                            cur["cg"] = False   # 0.21.66: its sharer lists it here too -- a tile of its own
+                            changed = True
                     if cur["exp"] - cur["dist"] >= 60:
                         changed = True
                     if changed:
@@ -1283,7 +1516,7 @@ class XShareRegistry:
             kind = str(e.get("kind") or "other")
             items[(path, to)] = {"path": path, "from": frm, "to": to, "label": _xs_text(e.get("label"), 80),
                                  "kind": kind if kind in XSHARE_KINDS else "other", "by": _xs_text(e.get("by"), 64),
-                                 "exp": exp, "dist": exp, "pinned": bool(e.get("pinned")), "sexp": 0}   # 0.21.63
+                                 "exp": exp, "dist": exp, "pinned": bool(e.get("pinned")), "sexp": 0, "cg": bool(e.get("cg"))}   # 0.21.63; 0.21.66: + cg
         with self.lock:
             self.items = items
             try:
@@ -1311,7 +1544,7 @@ def xshare_open(method, p=None, room=None, now=None, store=None):
                 board_sync_registry(reg, store.boards_public(), now)
             except Exception:
                 pass
-        items = [{k: e.get(k) for k in ("path", "from", "label", "kind", "by", "exp", "pinned")} for e in reg.into(room, now)]
+        items = [{k: e.get(k) for k in ("path", "from", "label", "kind", "by", "exp", "pinned", "cg")} for e in reg.into(room, now)]   # 0.21.66: + cg
         return {"ok": True, "room": room, "items": items, "ver": reg.ver, "open": True}, 200
     p = p if isinstance(p, dict) else {}
     frm = str(p.get("from") or "")
@@ -1352,6 +1585,8 @@ def board_open(method, store, p=None, room=None, now=None):
             return {"ok": False, "error": "room required"}, 400
         b = store.board(room)
         out = {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "split": b.get("split") or [],
+               "spotOrder": b.get("spotOrder") or [], "customGrids": b.get("customGrids") or {},   # 0.21.66
+               "gridMetas": board_metas_for(room, b, store.boards_public(), XSHARE_OPEN.into(room, now)),
                "ver": store.board_ver, "open": True, "lock": bool(b.get("lock"))}   # 0.21.65 (m)
         if b.get("renamed"):
             out["renamed"] = b["renamed"]
@@ -1363,6 +1598,10 @@ def board_open(method, store, p=None, room=None, now=None):
     item, why = board_item(op, p, now)
     if why:
         return {"ok": False, "error": why}, 400
+    if op in BOARD_GRID_OPS + BOARD_SPLIT_OPS:   # 0.21.66: another room's grid -- only one this room sees
+        why = board_foreign_ok(room, op, item, store.board(room), store.boards_public(), XSHARE_OPEN.into(room, now))
+        if why:
+            return {"ok": False, "error": why}, 403
     b, code, err = store.board_apply(room, op, item, now, room_key=str(p.get("roomKey") or "")[:64] or None)   # 0.21.65 (m): an open relay has no admins -- the roomKey
     if err:
         return {"ok": False, "error": err}, code
@@ -1371,6 +1610,8 @@ def board_open(method, store, p=None, room=None, now=None):
     except Exception:
         pass
     return {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "split": b.get("split") or [],
+            "spotOrder": b.get("spotOrder") or [], "customGrids": b.get("customGrids") or {},   # 0.21.66
+            "gridMetas": board_metas_for(room, b, store.boards_public(), XSHARE_OPEN.into(room, now)),
             "ver": store.board_ver, "open": True}, 200
 
 
@@ -2227,7 +2468,7 @@ class AuthStore:
                     b = board_clean(r.get("board"))
                     if r.get("viewLock"):
                         b["lock"] = True
-                    if board_has(b) or b.get("lock"):
+                    if board_has(b) or b.get("lock") or b.get("metas"):   # 0.21.66: + a room whose grids' geometry others read
                         out[k] = b
             for k in list(self.renamed):
                 to = self._renamed_live(k, now)
@@ -2247,7 +2488,7 @@ class AuthStore:
         if slug == LOBBY_SLUG:
             return None, 403, "the Lobby has no room board"
         if op not in BOARD_OPS or not isinstance(item, dict):
-            return None, 400, "unknown board op (pin|unpin|spot|unspot|grid|gridHide|gridShow|gridReset|split|unsplit)"
+            return None, 400, "unknown board op (" + "|".join(BOARD_OPS) + ")"
         with self.lock:
             rec = self.rooms.get(slug)
             if rec is not None and self._dead(rec, now):
@@ -2256,7 +2497,8 @@ class AuthStore:
             if rec is None and self._renamed_live(slug, now):
                 return None, 409, "this room was renamed to %s" % self._renamed_live(slug, now)   # 0.21.65: never re-made by a late page
             # 0.21.65 (m) (Kenton: "lock the view in a room so only an admin/creator can spotlight/change anything")
-            if rec is not None and rec.get("viewLock") and not (boss or (room_key and room_key == rec.get("roomKey"))):
+            if (rec is not None and rec.get("viewLock") and op not in BOARD_META_OPS
+                    and not (boss or (room_key and room_key == rec.get("roomKey")))):   # 0.21.66: a grid's geometry is no view change
                 return None, 403, VIEW_LOCKED_TEXT
             board = board_clean(rec.get("board") if rec else None)
             was_empty = not board_has(board)
@@ -2300,6 +2542,46 @@ class AuthStore:
                 elif item["path"] in sp:
                     board["split"] = [x for x in sp if x != item["path"]]
                     changed = True
+            elif op == "gridMeta":   # 0.21.66: the owner's geometry of a grid of THIS room
+                gp = item["path"]
+                if gp.split("/", 1)[0] != slug:
+                    return None, 400, "a grid's geometry is kept in its own room"
+                metas = board.setdefault("metas", {})
+                cur = metas.get(gp)
+                strip = lambda m: {k: v for k, v in (m or {}).items() if k != "ts"}
+                if cur is None or strip(cur.get("meta")) != strip(item["meta"]):
+                    if cur is None and len(metas) >= BOARD_METAS_MAX:
+                        metas.pop(min(metas, key=lambda k: metas[k].get("at") or 0), None)
+                    metas[gp] = {"meta": item["meta"], "at": int(now)}
+                    changed = True
+            elif op == "spotOrder":   # 0.21.66 (n): the room's order of its spotlight mosaic (stored as sent; pages skip gone ones)
+                if board.get("spotOrder", []) != item["targets"]:
+                    if item["targets"]:
+                        board["spotOrder"] = list(item["targets"])
+                    else:
+                        board.pop("spotOrder", None)
+                    changed = True
+            elif op in BOARD_CGRID_OPS:   # 0.21.66 (e): the room's own grid of cameras from any room
+                cgs = board.setdefault("customGrids", {})
+                gid = item["id"]
+                if op == "cgridDel":
+                    if gid in cgs:
+                        cgs.pop(gid, None)
+                        tp = board_cgrid_path(slug, gid)   # its spotlight and its place in the order go with it
+                        board["spots"] = [x for x in board["spots"] if x["target"] != tp]
+                        if board.get("spotOrder"):
+                            board["spotOrder"] = [x for x in board["spotOrder"] if x != tp]
+                        changed = True
+                else:
+                    if gid not in cgs and len(cgs) >= BOARD_CGRIDS_MAX:
+                        return None, 409, "this room already has %d grids -- delete one first" % BOARD_CGRIDS_MAX
+                    g = dict(item["grid"], by=item.get("by") or "", at=int(now))
+                    cur = cgs.get(gid)
+                    if cur is None or {k: v for k, v in cur.items() if k not in ("by", "at")} != {k: v for k, v in g.items() if k not in ("by", "at")}:
+                        cgs[gid] = g
+                        changed = True
+                if not cgs:
+                    board.pop("customGrids", None)
             elif op == "pin":
                 cur = next((x for x in board["pins"] if x["path"] == item["path"]), None)
                 if cur is None:
@@ -2316,8 +2598,14 @@ class AuthStore:
                 board["pins"] = [x for x in board["pins"] if x["path"] != item["path"]]
                 if len(board["pins"]) != n:
                     changed = True
-                    if item["path"].split("/", 1)[0] != slug:   # another room's feed: its spotlight here goes with the pin
+                    frm = item["path"].split("/", 1)[0]
+                    if frm != slug:   # another room's feed: its spotlight here goes with the pin
                         board["spots"] = [x for x in board["spots"] if x["target"] != item["path"]]
+                        # 0.21.66: ... and, for a grid, this room's layout of it and its cameras split out here
+                        board["grids"].pop(item["path"], None)
+                        meta = (((self.rooms.get(frm) or {}).get("board") or {}).get("metas") or {}).get(item["path"]) or {}
+                        if meta.get("meta"):
+                            board["split"] = [x for x in board["split"] if not board_meta_has(meta["meta"], x)]
             elif op == "spot":
                 t = item["target"]
                 if t.split("/", 1)[0] != slug and not any(x["path"] == t for x in board["pins"]):
@@ -2336,6 +2624,9 @@ class AuthStore:
                 n = len(board["spots"])
                 board["spots"] = [x for x in board["spots"] if x["target"] != item["target"]]
                 changed = len(board["spots"]) != n
+                if board.get("spotOrder") and item["target"] in board["spotOrder"]:   # 0.21.66 (n): its place in the order goes too
+                    board["spotOrder"] = [x for x in board["spotOrder"] if x != item["target"]]
+                    changed = True
             if not changed:
                 return board, 200, None
             if rec is None:
@@ -2469,7 +2760,12 @@ def board_rename(b, old, new):
         if isinstance(v, str):
             return fix(v)
         return v
-    return walk(b if isinstance(b, dict) else {})
+    b = b if isinstance(b, dict) else {}
+    cgs = b.get("customGrids") if isinstance(b.get("customGrids"), dict) else None
+    out = walk({k: v for k, v in b.items() if k != "customGrids"})
+    if cgs:
+        out["customGrids"] = {k: walk(v) for k, v in cgs.items()}   # 0.21.66: grid ids are names, not paths
+    return out
 
 
 def room_settings(store, p, admin=False, log=None, xs=None):
@@ -4066,7 +4362,7 @@ class AuthService:
             return {"ok": False, "error": "a member token for this room is required"}, 403
         reg, down = self._xs_view(now)
         items = [dict({k: e.get(k) for k in ("path", "from", "label", "kind", "by", "exp")},
-                      pinned=bool(e.get("pinned"))) for e in reg.into(room, now)]   # 0.21.63: + pinned to this room's board
+                      pinned=bool(e.get("pinned")), cg=bool(e.get("cg"))) for e in reg.into(room, now)]   # 0.21.63: + pinned to this room's board; 0.21.66: + cg (only in a room grid)
         out = {"ok": True, "room": room, "items": items, "ver": reg.ver}
         if down:
             out["hubDown"] = True
@@ -4138,7 +4434,7 @@ class AuthService:
         if not isinstance(d, dict) or not isinstance(d.get("boards"), dict):
             return
         boards = {str(k): board_clean(v) for k, v in d["boards"].items() if SLUG_RE.match(str(k))}
-        boards = {k: v for k, v in boards.items() if board_has(v) or v.get("lock") or v.get("renamed")}   # 0.21.65: + lock / redirect
+        boards = {k: v for k, v in boards.items() if board_has(v) or v.get("lock") or v.get("renamed") or v.get("metas")}   # 0.21.65: + lock / redirect; 0.21.66: + metas
         prev = self.__dict__.get("_board_mirror")
         self._board_mirror = boards
         self._board_mirror_ver = d.get("boardsVer")
@@ -4156,7 +4452,13 @@ class AuthService:
 
     def _board_reply(self, room, b, extra=None):
         out = {"ok": True, "room": room, "pins": b["pins"], "spots": b["spots"], "grids": b.get("grids") or {}, "split": b.get("split") or [],
+               "spotOrder": b.get("spotOrder") or [], "customGrids": b.get("customGrids") or {},   # 0.21.66
                "ver": self._board_ver(), "lock": bool(b.get("lock"))}   # 0.21.65 (m): + the view lock
+        try:   # 0.21.66: the geometry of other rooms' grids this room sees (pinned / listed)
+            boards, _d = self._board_view()
+            out["gridMetas"] = board_metas_for(room, b, boards, self._xs_view()[0].into(room))
+        except Exception:
+            out["gridMetas"] = {}
         if b.get("renamed"):
             out["renamed"] = b["renamed"]   # 0.21.65: the room's new name -- pages still in the old one follow
         out.update(extra or {})
@@ -4229,6 +4531,28 @@ class AuthService:
             own = bool(hf) and item["path"].split("/")[1] == hf
             if not own and not claims_admin(c, frm) and self._room_locked(frm):
                 return {"ok": False, "error": "only an admin can pin a locked room's stream into another room"}, 403
+        if op == "gridMeta" and item["path"].split("/")[1] != h0:   # 0.21.66: only the grid's owner (its box) says where its cameras are
+            return {"ok": False, "error": "only the grid's own box posts its geometry"}, 403
+        if op in BOARD_GRID_OPS + BOARD_SPLIT_OPS:   # 0.21.66: another room's grid -- only one this room sees (pinned / listed)
+            boards, _d = self._board_view(now)
+            why = board_foreign_ok(room, op, item, boards.get(room) or {}, boards, self._xs_view(now)[0].into(room, now))
+            if why:
+                return {"ok": False, "error": why}, 403
+        if op == "cgrid":   # 0.21.66 (e): a camera of another room NEW to this grid needs the saver's member token for that room
+            old = ((self._board_view(now)[0].get(room) or {}).get("customGrids") or {}).get(item["id"]) or {}
+            had = {mp for s in old.get("slots") or [] for mp in s.get("cams") or []}
+            toks = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
+            for frm in sorted({mp.split("/", 1)[0] for s in item["grid"]["slots"] for mp in s["cams"] if mp not in had} - {room}):
+                c = verify_token(str(toks.get(frm) or ""), self.key, now)
+                if not c or is_relay_claims(c) or c.get("lobby") or not claims_cover(c, frm):
+                    return {"ok": False, "error": "a camera from %s needs your member token for %s" % (frm, frm)}, 403
+                _rf, hf = claims_identity(c)
+                if bans and bans.hit(frm, hf, peer, now):
+                    return {"ok": False, "error": "removed from %s by an admin" % frm}, 403
+                if not claims_admin(c, frm) and self._room_locked(frm):
+                    mine = all(mp.split("/")[1] == hf for s in item["grid"]["slots"] for mp in s["cams"] if mp.split("/", 1)[0] == frm and mp not in had)
+                    if not (hf and mine):
+                        return {"ok": False, "error": "only an admin can put a locked room's camera into another room's grid"}, 403
         if self._xs_spoke():
             out = self._hub_fed({"op": "board", "vouch": "publisher", "room": room, "act": op, "item": item,
                                  "boss": bool(boss), "roomKey": room_key}, timeout=5)   # 0.21.65 (m)
@@ -4242,6 +4566,9 @@ class AuthService:
                 return {"ok": False, "error": "the hub runs an older KASTR without room grid layouts -- update the hub first"}, 501
             if code == 400 and op in BOARD_SPLIT_OPS and str(d.get("error") or "").startswith("unknown board op"):   # 0.21.65
                 return {"ok": False, "error": "the hub runs an older KASTR without split cameras -- update the hub first"}, 501
+            if code == 400 and op in BOARD_ORDER_OPS + BOARD_CGRID_OPS + BOARD_META_OPS and str(d.get("error") or "").startswith("unknown board op"):   # 0.21.66
+                return {"ok": False, "error": "the hub runs an older KASTR without %s -- update the hub first"
+                        % ("arranged spotlights" if op in BOARD_ORDER_OPS else "room grids")}, 501
             if code == 200 and isinstance(d.get("pins"), list):
                 b = board_clean(d)
                 mirror = dict(self.__dict__.get("_board_mirror") or {})
@@ -4264,7 +4591,7 @@ class AuthService:
         b, code, err = st.board_apply(room, op, item, now, boss=boss, room_key=room_key)
         if err:
             return {"ok": False, "error": err}, code
-        what = item.get("path") or item.get("target") or ""
+        what = item.get("path") or item.get("target") or item.get("id") or " ".join(item.get("targets") or []) or ""   # 0.21.66: + a grid, an order
         if item.get("member"):
             what += " " + item["member"]   # 0.21.64: which camera left / came back
         self.log("relay auth: room %s board: %s %s (by %s)" % (room, op, what, item.get("by") or "?"))

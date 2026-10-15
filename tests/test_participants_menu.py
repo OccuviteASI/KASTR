@@ -35,7 +35,7 @@ class TileMenu(unittest.TestCase):
         # 0.21.32: removal is per item and for everyone (a newer removal outranks whoever set it); my own votes count
         self.assertIn("window.__spotRemove = (target) => {", p)
         self.assertIn('if (v === "unspot") { window.__spotRemove(name); return; }', p)
-        self.assertIn("return [...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts);", p)
+        self.assertIn("return spotOrdered([...add.values()].filter((v) => v.ts > noneAt && v.ts > (off.get(v.target) || 0)).sort((a, b) => a.ts - b.ts));", p)   # 0.21.66: the board order first
         self.assertIn("for (const v of mine) addV(v, \"me\");", p)
         self.assertIn("const lit = window.__spotIs ? window.__spotIs(name) : false;", p)
         self.assertNotIn("Fit to frame", p)

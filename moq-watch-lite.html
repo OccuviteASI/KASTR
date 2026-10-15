@@ -1382,6 +1382,10 @@
     padding:5px 8px; border-radius:4px; font-family:var(--font-mono); font-size:11px; }
   #sbForm .pwkeep { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); padding:3px 2px; }
   #sbForm .pwkeep input { accent-color:var(--asi-blue); }
+  #sbForm .pwgroup { align-items:center; }   /* 0.21.70: Create room's Group */
+  #sbForm .pwgroup[hidden] { display:none; }
+  #sbForm .pwgroup .pwlbl { flex:none; font-size:11px; color:var(--text-dim); }
+  #sbForm .pwgroup select { flex:1; min-width:0; background:var(--surface-2); border:1px solid var(--line); color:var(--text); padding:4px 6px; border-radius:4px; font-size:11px; }
   #sbForm .mi.go { background:var(--asi-blue); color:var(--on-accent); border:0; border-radius:4px; padding:5px 10px; font-size:11px;
     font-weight:600; cursor:pointer; height:auto; flex:none; }
   #sbForm .pwerr { color:var(--asi-red); font-size:10px; padding:2px 2px 0; min-height:12px; }
@@ -13938,7 +13942,10 @@
     else rb.querySelector(".kp")?.remove();
     if (rec.video && rec.slug !== LOBBY) { if (!rb.querySelector(".pl")) { const pl = document.createElement("span"); pl.className = "pl"; pl.innerHTML = icon("play"); rb.appendChild(pl); } }   // 0.21.36
     else rb.querySelector(".pl")?.remove();
-    rb.title = roomTitle(rec.slug) + (rec.count > 0 && rec.slug !== LOBBY ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "") + (rec.video ? " (video on the air)" : "");
+    // 0.21.70 (Kenton: "On hover, I get 2 separate pop-ups. It should only be the back one."): the bubble's summary is for screen
+    // readers only -- a title made the browser's own tooltip appear over the collapsed rail's hover card
+    rb.removeAttribute("title");
+    rb.setAttribute("aria-label", roomTitle(rec.slug) + (rec.count > 0 && rec.slug !== LOBBY ? " \u2014 " + rec.count + " here" : "") + (rec.locked ? " (locked)" : "") + (rec.persistent ? " (always open)" : "") + (rec.video ? " (video on the air)" : ""));
     card.querySelector(".sbname").textContent = roomTitle(rec.slug);
     card.classList.toggle("lobby", rec.slug === LOBBY);   // 0.21.60
     { const x = card.querySelector(".sbx"); if (x) x.hidden = !canCloseRoom(rec); }   // 0.21.2
@@ -14289,6 +14296,7 @@
     clearTimeout(sbPeekT); clearTimeout(sbPeekCloseT);
     if (!sbPeekCan()) return;
     sbPeekT = setTimeout(() => {
+      if (slug === sbPeekHush) return;   // 0.21.70: pressed in the meantime
       sbPeekHost();
       if (sbPeekSlug !== slug) sbPeekEl.replaceChildren();
       sbPeekSlug = slug; sbPeekEl.hidden = false;
@@ -14297,21 +14305,28 @@
   }
   function sbPeekClose() { clearTimeout(sbPeekT); clearTimeout(sbPeekCloseT); if (sbPeekEl) { sbPeekEl.hidden = true; sbPeekEl.replaceChildren(); } sbPeekSlug = ""; }
   function sbPeekCloseSoon() { clearTimeout(sbPeekT); clearTimeout(sbPeekCloseT); sbPeekCloseT = setTimeout(sbPeekClose, 220); }
+  // 0.21.70 (Kenton: "When I hover and right click, the right click menu is partially hidden. It shouldn't show the hover menu
+  // once right-clicked."): a press on a room (right-click included) hushes its hover card until the pointer leaves that room --
+  // the press focused the card, and focus (or the next small move) opened the copy again over the menu
+  let sbPeekHush = "";
   sbRoomsEl?.addEventListener("pointerover", (e) => {
     if (e.pointerType === "touch") return;
     const card = e.target.closest?.(".sbcard");
     if (!card || !sbRoomsEl.contains(card)) return;
+    if (sbPeekHush && card.dataset.slug === sbPeekHush) return;
+    sbPeekHush = "";
     if (sbPeekSlug === card.dataset.slug && sbPeekEl && !sbPeekEl.hidden) { clearTimeout(sbPeekCloseT); return; }
     sbPeekOpen(card.dataset.slug);
   });
   sbRoomsEl?.addEventListener("pointerout", (e) => {
     const to = e.relatedTarget;
+    if (sbPeekHush && to?.closest?.(".sbcard")?.dataset?.slug !== sbPeekHush) sbPeekHush = "";   // left the pressed room
     if (to && (sbPeekEl?.contains(to) || to.closest?.(".sbcard")?.dataset?.slug === sbPeekSlug)) return;
     sbPeekCloseSoon();
   });
-  sbRoomsEl?.addEventListener("focusin", (e) => { const card = e.target.closest?.(".sbcard"); if (card && sbCollapsed()) sbPeekOpen(card.dataset.slug); });
+  sbRoomsEl?.addEventListener("focusin", (e) => { const card = e.target.closest?.(".sbcard"); if (card && sbCollapsed() && card.dataset.slug !== sbPeekHush) sbPeekOpen(card.dataset.slug); });
   sbRoomsEl?.addEventListener("focusout", (e) => { if (!sbPeekEl?.contains(e.relatedTarget)) sbPeekCloseSoon(); });
-  sbRoomsEl?.addEventListener("pointerdown", () => sbPeekClose());   // a press (a click, a drag) on the rail: the copy goes
+  sbRoomsEl?.addEventListener("pointerdown", (e) => { sbPeekClose(); sbPeekHush = e.target.closest?.(".sbcard")?.dataset?.slug || ""; });   // a press (a click, a drag, a right-click) on the rail: the copy goes, and stays gone over that room
   window.__sbPeek = { open: (slug) => { sbPeekOpen(slug); }, close: sbPeekClose, state: () => ({ slug: sbPeekSlug, open: !!sbPeekEl && !sbPeekEl.hidden, html: sbPeekEl?.textContent || "" }) };   // rig
   // 0.13.1: drag a room card to reorder the rail (per operator; main stays on top). Pointer
   // events with a 6 px threshold like the stage tiles; mouse/pen only -- the phone drawer scrolls.
@@ -15205,6 +15220,32 @@
     keepInp.type = "checkbox";
     const keepSw = document.createElement("span"); keepSw.className = "switch sm"; keepSw.append(keepInp, document.createElement("i"));   // 0.21.0
     keepRow.append(keepSw, document.createTextNode(" Keep room open (stays with its chat after everyone leaves, until closed)"));   // 0.21.26
+    // 0.21.70 (Kenton: "When creating a room, give it the same options of the room settings from an admin"): Lock the view and
+    // Group as well (Room settings has the code and Keep open too); applied right after the room registers, with its roomKey
+    const viewRow = document.createElement("label");
+    viewRow.className = "pwkeep";
+    const viewInp = document.createElement("input");
+    viewInp.type = "checkbox";
+    const viewSw = document.createElement("span"); viewSw.className = "switch sm"; viewSw.append(viewInp, document.createElement("i"));
+    viewRow.append(viewSw, document.createTextNode(" Lock the view (only you or an admin can spotlight, pin or arrange for everyone)"));
+    const grpRow = document.createElement("div");
+    grpRow.className = "pwrow pwgroup";
+    const grpSel = document.createElement("select");
+    grpSel.setAttribute("aria-label", "Room group");
+    const grpFill = (cur) => {
+      grpSel.replaceChildren(new Option("No group", ""), ...sbGroupList().map((g) => new Option(g.name, g.gid)), ...(canManageGroups() ? [new Option("New group\u2026", "__new")] : []));
+      grpSel.value = cur || "";
+    };
+    grpFill("");
+    grpSel.addEventListener("change", async () => {
+      if (grpSel.value !== "__new") return;
+      const name = await askGroupName("New group");
+      const gid = name ? await roomGroupCreate(name) : null;
+      grpFill(gid || "");
+    });
+    const grpLbl = document.createElement("span"); grpLbl.className = "pwlbl"; grpLbl.textContent = "Group";
+    grpRow.append(grpLbl, grpSel);
+    grpRow.hidden = !sbGroupList().length && !canManageGroups();   // no groups and nobody here to make one
     const err = document.createElement("div");
     err.className = "pwerr";
     const cancel = document.createElement("button");
@@ -15234,6 +15275,14 @@
         err.textContent = "";
       }
       rememberChannel(rec);   // 0.21.17: only after it registered
+      {   // 0.21.70: the rest of Room settings, now that the room exists and this device holds its key
+        const notes = [];
+        if (viewInp.checked) { const d = await rsPost({ slug: rec.slug, op: "viewlock", locked: true }); if (!d?.ok) notes.push("view lock: " + (d?.error || "not saved")); }
+        const gid = grpSel.value && grpSel.value !== "__new" ? grpSel.value : "";
+        if (gid) { const d = await rsPost({ slug: rec.slug, op: "group", group: gid }); if (!d?.ok) notes.push("group: " + (d?.error || "not saved")); }
+        if (notes.length) window.__toast?.("Room created, but " + notes.join("; ") + " \u2014 change it in Room settings.", 7000, { level: "warn" });
+        if (viewInp.checked || gid) { try { await roomsMinterPoll(); } catch {} }
+      }
       roomFormClose(menu);
       switchRoom(rec, codeInp.value);
     };
@@ -15244,7 +15293,7 @@
     const acts = document.createElement("div");   // 0.21.20 (Kenton): Create bottom-left in blue, Cancel beside it
     acts.className = "pwacts";
     acts.append(go, cancel);
-    menu.append(row1, row2, keepRow, err, acts);
+    menu.append(row1, row2, keepRow, viewRow, grpRow, err, acts);
     placeRoomMenu(menu);
     nameInp.focus();
   }

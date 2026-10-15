@@ -30,5 +30,35 @@ class GroupButton(unittest.TestCase):
         self.assertIn('h.querySelector(".sbgmenu").hidden = !canManageGroups();', p)
 
 
+class CreateRoomSettings(unittest.TestCase):
+    """0.21.70 (Kenton: "When creating a room, give it the same options of the room settings from an admin"): Create room has
+    Lock the view and Group too (with New group for admins), applied right after the room registers."""
+    def test_wired(self):
+        p = open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8").read()
+        body = p[p.index("  function roomMenuCreate(menu) {"):p.index("  function roomMenuPassword(menu, rec) {")]
+        self.assertIn('viewRow.append(viewSw, document.createTextNode(" Lock the view', body)
+        self.assertIn('grpSel.setAttribute("aria-label", "Room group");', body)
+        self.assertIn('if (viewInp.checked) { const d = await rsPost({ slug: rec.slug, op: "viewlock", locked: true });', body)
+        self.assertIn('if (gid) { const d = await rsPost({ slug: rec.slug, op: "group", group: gid });', body)
+        self.assertIn("menu.append(row1, row2, keepRow, viewRow, grpRow, err, acts);", body)
+        self.assertLess(body.index("rememberChannel(rec);"), body.index('op: "viewlock"'))   # after it registered (its roomKey)
+
+
+class HoverCards(unittest.TestCase):
+    """0.21.70 (Kenton: two pop-ups on hover; the right-click menu half covered by the hover card)."""
+    def test_one_popup(self):
+        p = open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8").read()
+        self.assertNotIn("rb.title = roomTitle(rec.slug)", p)
+        self.assertIn('rb.removeAttribute("title");', p)
+        self.assertIn('rb.setAttribute("aria-label", roomTitle(rec.slug)', p)
+
+    def test_press_hushes_the_card(self):
+        p = open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8").read()
+        self.assertIn('sbPeekHush = e.target.closest?.(".sbcard")?.dataset?.slug || ""; });', p)
+        self.assertIn("if (sbPeekHush && card.dataset.slug === sbPeekHush) return;", p)
+        self.assertIn("card.dataset.slug !== sbPeekHush) sbPeekOpen(card.dataset.slug); });", p)
+        self.assertIn("if (slug === sbPeekHush) return;   // 0.21.70: pressed in the meantime", p)
+
+
 if __name__ == "__main__":
     unittest.main()

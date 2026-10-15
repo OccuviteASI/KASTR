@@ -2,13 +2,21 @@
 
 What changed in each build, newest first.
 
-## v0.21.70 — the group menu sits on its group
+## v0.21.70 — room rail fixes and Create room options
 
 **The room group's menu button is on its group's row (Kenton: "The group settings button is in a weird spot and doesn't make sense.").** The group's ⋮ button accidentally used the same style as a grid's pop-up menu, which pins itself to the top-right corner. It floated over whichever room card was at the top of the list, with nothing tying it to its group.
 - It now sits at the right end of the group's own row, beside the room count. It is the same **⋯** used on room cards and appears when you hover the row (always shown on touch screens).
 - **Right-click a group row** to open the same menu: Collapse / Expand, Rename…, Ungroup all, Delete group….
 - Admins see it as well as the relay operator, matching 0.21.68's admin room groups.
 - **Lab check:** a group in the rooms rail. The ⋯ sat on the group's row beside its count, and right-clicking the row listed Collapse, Rename…, Ungroup all and Delete group….
+
+**Create room has the Room settings options (Kenton: "When creating a room, give it the same options of the room settings from an admin.").** Besides the name, the room code and **Keep room open**, the Create room form now has **Lock the view** and a **Group** list (with **New group…** for admins). Both are applied the moment the room exists, through the same path as Room settings. If one can't be saved, a message says so and points to Room settings.
+- **Lab check:** a room created with Lock the view on and a group picked came up on the hub with its view locked and filed under that group, and the page joined it.
+
+**One pop-up per room on hover (Kenton: "On hover, I get 2 separate pop-ups. It should only be the back one.").** The round room bubbles also carried a browser tooltip ("sr-rm-1 — 1 here (always open)") that appeared on top of the collapsed rail's hover card. It's gone; the same text stays for screen readers.
+
+**The right-click menu isn't covered by the hover card any more (Kenton: "When I hover and right click, the right click menu is partially hidden. It shouldn't show the hover menu once right-clicked.").** A right-click closed the hover card, but it also focused the room, and the focus (or the next small mouse move) opened the card again over the menu. Now any click on a room, right-click included, keeps its hover card away until the pointer leaves that room.
+- **Lab check:** collapsed rail. Hover showed the card; a right-click showed the menu alone, still alone after a small move; moving to another room and back brought the card back.
 
 ## v0.21.69 — real machine names on the Relay page
 

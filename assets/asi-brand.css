@@ -77,6 +77,17 @@
   --asi-red:   #D9534F;
 }
 
+/* 0.21.72 (Kenton: "I would like more theme options other than light/dark/system"): named palettes on top of the dark / light
+   base (html[data-palette], set with data-theme by each page's head snippet and asi-brand.js). Custom sets these same tokens
+   inline (asi-brand.js). After the light block on purpose: a palette wins over the base's own values. */
+:root[data-palette="midnight"] { --bg:#000000; --surface:#0b0b0e; --surface-2:#131318; --line:#25252d; --line-soft:#1a1a20; --text:#ececf1; --text-dim:#9b9ba8; --text-mute:#6c6c78; }
+:root[data-palette="slate"] { --bg:#15181c; --surface:#1d2127; --surface-2:#252a31; --line:#353b44; --line-soft:#2b3139; --text:#e9ebee; --text-dim:#a5abb4; --text-mute:#767d87; }
+:root[data-palette="warm"] { --bg:#f3eee5; --surface:#fffcf6; --surface-2:#f8f2e8; --line:#ddd2c1; --line-soft:#e9e0d2; --text:#2a2318; --text-dim:#5d5140; --text-mute:#857765; }
+:root[data-palette="contrast"] { --bg:#000000; --surface:#000000; --surface-2:#0d0d0d; --line:#ffffff; --line-soft:#a8a8a8; --text:#ffffff; --text-dim:#f2f2f2; --text-mute:#d4d4d4;
+  --asi-blue-glow: color-mix(in srgb, var(--asi-blue) 35%, transparent); --asi-amber:#ffc21a; --asi-green:#4ade50; --asi-red:#ff5c57; }
+:root[data-palette="contrast"] body { font-weight:500; }
+:root[data-palette="contrast"] :focus-visible { outline:3px solid #ffffff !important; outline-offset:2px !important; }
+
 /* light mode: text that was white on a dark surface follows the text colour; the stage area keeps its dark ground */
 :root[data-theme="light"] .asi-title { color: var(--text); }
 :root[data-theme="light"] .asi-dark:not(.asi-header):not(.asi-hdrtab) { background: var(--bg); color: var(--text); }

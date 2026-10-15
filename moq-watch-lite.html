@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<script>/* 0.21.61: the theme before the first paint (Dark / Light / System; default Dark) */try{var t=localStorage.getItem("kastr.theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}try{var a=String(localStorage.getItem("kastr.accent")||"").toLowerCase();if(/^#[0-9a-f]{6}$/.test(a)){document.documentElement.style.setProperty("--asi-blue",a);document.documentElement.style.setProperty("--asi-blue-dim","color-mix(in srgb, "+a+" 72%, #000)");var f=function(i){var v=parseInt(a.slice(i,i+2),16)/255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);},L=0.2126*f(1)+0.7152*f(3)+0.0722*f(5);document.documentElement.style.setProperty("--on-accent",(L+0.05)/0.0558>=1.05/(L+0.05)?"#06121a":"#ffffff");}}catch(e){}</script>
+<script>/* 0.21.61: the theme before the first paint (default ASI Navy); 0.21.72: + the named palettes and Custom */try{var d=document.documentElement,t=localStorage.getItem("kastr.theme")||"dark",P={dark:"navy",light:"light",midnight:"midnight",slate:"slate",warm:"warm",contrast:"contrast",custom:"custom"};if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";var p=P[t]||"navy",b=p==="light"||p==="warm"?"light":"dark";if(p==="custom"){var v=JSON.parse(localStorage.getItem("kastr.theme.vars")||"null");if(v&&v.vars){b=v.base==="light"?"light":"dark";for(var k in v.vars)d.style.setProperty(k,v.vars[k]);}else p="navy";}d.dataset.theme=b;d.dataset.palette=p;}catch(e){document.documentElement.dataset.theme="dark";}try{var a=String(localStorage.getItem("kastr.accent")||"").toLowerCase();if(/^#[0-9a-f]{6}$/.test(a)){document.documentElement.style.setProperty("--asi-blue",a);document.documentElement.style.setProperty("--asi-blue-dim","color-mix(in srgb, "+a+" 72%, #000)");var f=function(i){var v=parseInt(a.slice(i,i+2),16)/255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);},L=0.2126*f(1)+0.7152*f(3)+0.0722*f(5);document.documentElement.style.setProperty("--on-accent",(L+0.05)/0.0558>=1.05/(L+0.05)?"#06121a":"#ffffff");}}catch(e){}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Go Live — KASTR</title>
 <link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
@@ -415,6 +415,27 @@
   .themerow .seg button:first-child { border-left:0; }
   .themerow .seg button.on { background:var(--asi-blue); color:var(--on-accent); }
   .themerow .seg button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:-2px; }
+  /* 0.21.72: the theme swatches -- a small picture of each palette (ground, a panel, a line of text) and its name */
+  .themerow .thgrid { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px 6px; flex:1 0 100%; }
+  .themerow .thsw { display:flex; flex-direction:column; align-items:stretch; gap:3px; background:transparent; border:0; padding:0; cursor:pointer; color:var(--text-dim); font-size:10px; height:auto; min-height:0; }
+  .themerow .thsw .pv { position:relative; display:block; height:30px; border-radius:5px; border:2px solid var(--line); overflow:hidden; }
+  .themerow .thsw .pv i { position:absolute; left:4px; top:4px; bottom:4px; width:40%; border-radius:2px; }
+  .themerow .thsw .pv b { position:absolute; left:52%; right:5px; top:9px; height:3px; border-radius:2px; }
+  .themerow .thsw .pv em { position:absolute; inset:0 0 0 50%; }
+  .themerow .thsw .pv em i { left:4px; width:30%; }
+  .themerow .thsw .pv em b { left:44%; }
+  .themerow .thsw.hc .pv b { height:4px; }
+  .themerow .thsw.on .pv { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue); }
+  .themerow .thsw.on { color:var(--text); }
+  .themerow .thsw:hover .pv { border-color:var(--asi-blue-dim); }
+  .themerow .thsw:focus-visible { outline:none; }
+  .themerow .thsw:focus-visible .pv { outline:2px solid var(--asi-blue); outline-offset:1px; }
+  .themerow .thsw .nm { text-align:center; line-height:1.2; }
+  .themerow .thcustom { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; flex:1 0 100%; font-size:11px; color:var(--text-dim); }
+  .themerow .thcustom[hidden] { display:none; }
+  .themerow .thcustom label { display:inline-flex; align-items:center; gap:5px; flex-direction:row; }
+  .themerow .thcustom input[type=color] { width:26px; height:20px; padding:0; border:1px solid var(--line); border-radius:4px; background:transparent; cursor:pointer; }
+  .themerow .thcustom .threset { margin-left:auto; background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; height:auto; }
   /* 0.21.61: colour swatches (Profile > Your colour, More > Accent colour) */
   .hcsw { display:flex; flex-wrap:wrap; gap:7px; align-items:center; }
   .themerow .hcsw { flex:1 0 100%; }
@@ -2198,8 +2219,10 @@
     <div class="sep"></div>
     <button class="opt" id="optProfile" type="button"><span class="oi">&#128100;</span>Profile&hellip;</button>
     <!-- 0.21.61 (Kenton: "Let people choose light/dark mode or the system default") -->
-    <div class="opt themerow" role="radiogroup" aria-label="Appearance"><span class="oi">&#9680;</span><span class="tl">Appearance</span>
-      <span class="seg"><button type="button" data-theme="dark" role="radio">Dark</button><button type="button" data-theme="light" role="radio">Light</button><button type="button" data-theme="system" role="radio" title="Follow this device's light or dark setting">System</button></span></div>
+    <!-- 0.21.72 (Kenton: "I would like more theme options other than light/dark/system"): named themes, High contrast, Custom -->
+    <div class="opt themerow" role="radiogroup" aria-label="Theme"><span class="oi">&#9680;</span><span class="tl">Theme</span>
+      <span class="thgrid" id="optThemeGrid"></span>
+      <span class="thcustom" id="optThemeCustom" hidden><label>Background<input type="color" data-k="bg"></label><label>Panels<input type="color" data-k="surface"></label><label>Text<input type="color" data-k="text"></label><button type="button" class="threset" title="Forget the custom colours and go back to ASI Navy">Reset</button></span></div>
     <!-- 0.21.61 (Kenton: "1 to replace the global highlights for myself"): this app only; nobody else sees it -->
     <div class="opt themerow" aria-label="Accent colour" title="Replaces ASI blue in this app only -- nobody else sees it"><span class="oi">&#9673;</span><span class="tl">Accent colour</span>
       <span class="hcsw" id="optAccent"></span></div>
@@ -12010,12 +12033,47 @@
       onPick: (c) => { if (window.__kastrAccent) window.__kastrAccent.set(c); else { try { c ? localStorage.setItem("kastr.accent", c) : localStorage.removeItem("kastr.accent"); } catch {} } } });
     window.addEventListener("kastr-accent", (e) => acc.set(e.detail?.accent || ""));
   }
-  { const seg = document.querySelectorAll("#optPop .themerow .seg button");
-    const themeNow = () => window.__kastrTheme?.get?.() || "dark";
-    const paintTheme = () => { const v = themeNow(); for (const b of seg) { b.classList.toggle("on", b.dataset.theme === v); b.setAttribute("aria-checked", String(b.dataset.theme === v)); } };
-    for (const b of seg) b.addEventListener("click", (e) => { e.stopPropagation(); window.__kastrTheme?.set?.(b.dataset.theme); paintTheme(); });
+  {   // 0.21.72 (Kenton: "I would like more theme options other than light/dark/system"): named themes, High contrast, Custom
+    const NAVY = ["#06070d", "#0d1119", "#e6ecf3"], LIGHT = ["#eef2f6", "#ffffff", "#0f1d2c"];
+    const T = [
+      { v: "system", label: "System", c: NAVY, c2: LIGHT, tip: "ASI Navy or Light, following this device's setting" },
+      { v: "dark", label: "ASI Navy", c: NAVY },
+      { v: "midnight", label: "Midnight", c: ["#000000", "#0b0b0e", "#ececf1"] },
+      { v: "slate", label: "Slate", c: ["#15181c", "#1d2127", "#e9ebee"] },
+      { v: "light", label: "Light", c: LIGHT },
+      { v: "warm", label: "Warm light", c: ["#f3eee5", "#fffcf6", "#2a2318"] },
+      { v: "contrast", label: "High contrast", c: ["#000000", "#000000", "#ffffff"], hc: true, tip: "Black and white, bold outlines and text" },
+      { v: "custom", label: "Custom", custom: true, tip: "Your own background, panel and text colours" },
+    ];
+    const grid = document.getElementById("optThemeGrid"), cust = document.getElementById("optThemeCustom");
+    const tGet = () => window.__kastrTheme?.get?.() || "dark";
+    const cGet = () => window.__kastrTheme?.custom?.() || { bg: "#1b2430", surface: "#232e3c", text: "#eef3f8" };
+    const mini = (c, c2) => '<span class="pv" style="background:' + c[0] + '"><i style="background:' + c[1] + '"></i><b style="background:' + c[2] + '"></b>'
+      + (c2 ? '<em style="background:' + c2[0] + '"><i style="background:' + c2[1] + '"></i><b style="background:' + c2[2] + '"></b></em>' : "") + "</span>";
+    const paintTheme = () => {
+      const v = tGet();
+      grid.replaceChildren(...T.map((t) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "thsw" + (t.hc ? " hc" : "");
+        b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(v === t.v)); b.classList.toggle("on", v === t.v); b.title = t.tip || t.label;
+        const c = t.custom ? (() => { const x = cGet(); return [x.bg, x.surface, x.text]; })() : t.c;
+        b.innerHTML = mini(c, t.c2) + '<span class="nm"></span>';
+        b.querySelector(".nm").textContent = t.label;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (t.custom && !window.__kastrTheme?.custom?.()) window.__kastrTheme?.setCustom?.(cGet());   // first time: a starting set to edit
+          window.__kastrTheme?.set?.(t.v); paintTheme();
+        });
+        return b;
+      }));
+      cust.hidden = v !== "custom";
+      if (!cust.hidden) { const c = cGet(); for (const inp of cust.querySelectorAll("input[type=color]")) if (document.activeElement !== inp) inp.value = c[inp.dataset.k]; }
+    };
+    cust.addEventListener("click", (e) => e.stopPropagation());
+    for (const inp of cust.querySelectorAll("input[type=color]")) inp.addEventListener("input", () => { window.__kastrTheme?.setCustom?.({ ...cGet(), [inp.dataset.k]: inp.value }); paintTheme(); });
+    cust.querySelector(".threset").addEventListener("click", () => { window.__kastrTheme?.setCustom?.(null); window.__kastrTheme?.set?.("dark"); paintTheme(); });
     window.addEventListener("kastr-theme", paintTheme);
-    paintTheme(); }
+    paintTheme();
+  }
   registerPop(helpPop, helpBtn);
   pagePops.push({ isOpen: () => !sharePop.hidden, close: closeShare,
                   place: placeShare });

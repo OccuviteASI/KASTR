@@ -13,6 +13,18 @@ What changed in each build, newest first.
 **Your initials and the compass stay default (Kenton: "I don't want my initials to match the selected color, just leave it default. Same with the compass icon.").** With the camera off, your own tile used to tint your initials with your profile colour, and the ASI compass behind them took your accent colour. Your initials are now white, like everyone else's, and the compass is always ASI blue. Your colour still shows as the ring around your picture.
 - **Lab check:** with a yellow accent, Kenton's own tile showed white initials over the blue compass.
 
+**More themes (Kenton: "I would like more theme options other than light/dark/system").** **More ▸ Theme** (it was Appearance) now shows a small picture of each theme to click. Kenton chose named themes, High contrast and Custom:
+- **System:** ASI Navy or Light, following the device's setting.
+- **ASI Navy:** the dark look KASTR has always had, and still the default.
+- **Midnight:** near-black, for dark rooms and OLED screens.
+- **Slate:** a neutral dark grey with no blue tint.
+- **Light** (as before) and **Warm light:** paper tones instead of cool grey.
+- **High contrast:** pure black and white, white outlines, slightly bolder text, a thick white focus ring and brighter status colours. Easy to read on a projector or with low vision.
+- **Custom:** choose the background, panel and text colours yourself. KASTR works out the lines and dimmer text from those three and decides on its own whether the theme is light or dark. **Reset** goes back to ASI Navy.
+- Every theme applies to every KASTR page on the device, including the Relay page and the start page, before the page first appears. **Accent colour** still works on top of any theme, and the video stage keeps its dark ground in the light themes.
+- The theme, your custom colours and your accent colour are now kept with the app's other settings, so they survive a browser profile reset.
+- **Lab check:** each theme set the expected page colours, a custom set survived a reload (applied before the first paint), and the menu showed all eight with Custom's three colour pickers.
+
 ## v0.21.71 — your backgrounds built in, a new picker, no flash of the room
 
 **No flash of your real room when the camera starts (Kenton: "When sharing the camera, it takes about 1 second for the background video to show up and hide the actual background.").** Until a picture, GIF or video background had loaded, the background effect drew you over a blur of your real room. With a video background that was about a second each time the camera came on.

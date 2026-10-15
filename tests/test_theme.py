@@ -28,12 +28,12 @@ class Theme(unittest.TestCase):
     def test_the_setting_and_its_switch(self):
         js = read(os.path.join("assets", "asi-brand.js"))
         self.assertIn('const THEME_KEY = "kastr.theme";', js)
-        self.assertIn('window.addEventListener("storage", (e) => { if (e.key === THEME_KEY) themeApply(); });', js)
+        self.assertIn('window.addEventListener("storage", (e) => { if (e.key === THEME_KEY || e.key === CUSTOM_KEY) themeApply(); });', js)   # 0.21.72: + Custom
         self.assertIn('if (themeGet() === "system") themeApply();', js)
         page = read("moq-watch-lite.html")
-        self.assertIn('<div class="opt themerow" role="radiogroup" aria-label="Appearance">', page)
+        self.assertIn('<div class="opt themerow" role="radiogroup" aria-label="Theme">', page)   # 0.21.72: Appearance -> Theme (swatches)
         for v in ("dark", "light", "system"):
-            self.assertIn('data-theme="%s" role="radio"' % v, page)
+            self.assertIn('{ v: "%s", label: ' % v, page)   # 0.21.72: the swatches
 
 
 if __name__ == "__main__":

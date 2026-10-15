@@ -86,18 +86,59 @@ fetch("/api/instance", { cache: "no-store" })
 // this keeps it live -- another tab or frame changing it, or the OS switching while "System" is chosen.
 const THEME_KEY = "kastr.theme";
 const themeMq = (() => { try { return matchMedia("(prefers-color-scheme: light)"); } catch { return null; } })();
-function themeGet() { try { const v = localStorage.getItem(THEME_KEY); return v === "light" || v === "system" ? v : "dark"; } catch { return "dark"; } }
+// 0.21.72 (Kenton: "I would like more theme options other than light/dark/system"): named themes (a palette on the dark or light
+// base -- html[data-theme] keeps every page's light rules working, html[data-palette] picks the colours), High contrast, and
+// Custom (three colours of your own; the other tokens are mixed from them and kept in kastr.theme.vars for the page heads).
+const THEMES = ["system", "dark", "midnight", "slate", "light", "warm", "contrast", "custom"];
+const CUSTOM_KEY = "kastr.theme.custom", VARS_KEY = "kastr.theme.vars";
+const PALETTE = { dark: "navy", light: "light", midnight: "midnight", slate: "slate", warm: "warm", contrast: "contrast", custom: "custom" };
+const CUSTOM_PROPS = ["--bg", "--surface", "--surface-2", "--line", "--line-soft", "--text", "--text-dim", "--text-mute"];
+function themeGet() { try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : "dark"; } catch { return "dark"; } }
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const rgbHex = (a) => "#" + a.map((x) => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, "0")).join("");
+const mixHex = (a, b, t) => { const x = hexRgb(a), y = hexRgb(b); return rgbHex(x.map((v, i) => v + (y[i] - v) * t)); };
+const lumHex = (h) => { const c = hexRgb(h).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const HEX6 = /^#[0-9a-f]{6}$/i;
+function customGet() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CUSTOM_KEY) || "null");
+    return c && HEX6.test(c.bg || "") && HEX6.test(c.surface || "") && HEX6.test(c.text || "") ? { bg: c.bg.toLowerCase(), surface: c.surface.toLowerCase(), text: c.text.toLowerCase() } : null;
+  } catch { return null; }
+}
+function customVars(c) {
+  return { base: lumHex(c.bg) > 0.35 ? "light" : "dark",
+           vars: { "--bg": c.bg, "--surface": c.surface, "--surface-2": mixHex(c.surface, c.text, 0.05), "--line": mixHex(c.surface, c.text, 0.16),
+                   "--line-soft": mixHex(c.surface, c.text, 0.09), "--text": c.text, "--text-dim": mixHex(c.text, c.bg, 0.35), "--text-mute": mixHex(c.text, c.bg, 0.55) } };
+}
 function themeApply() {
-  const pick = themeGet();
-  const t = pick === "system" ? (themeMq && themeMq.matches ? "light" : "dark") : pick;
-  document.documentElement.dataset.theme = t;
-  try { window.dispatchEvent(new CustomEvent("kastr-theme", { detail: { pick, theme: t } })); } catch {}
+  const pick = themeGet(), d = document.documentElement;
+  let pal = pick === "system" ? (themeMq && themeMq.matches ? "light" : "navy") : (PALETTE[pick] || "navy");
+  let base = pal === "light" || pal === "warm" ? "light" : "dark";
+  for (const k of CUSTOM_PROPS) d.style.removeProperty(k);
+  if (pal === "custom") {
+    const c = customGet();
+    if (c) {
+      const cv = customVars(c);
+      base = cv.base;
+      for (const [k, v] of Object.entries(cv.vars)) d.style.setProperty(k, v);
+      try { localStorage.setItem(VARS_KEY, JSON.stringify(cv)); } catch {}
+    } else pal = "navy";
+  }
+  d.dataset.theme = base; d.dataset.palette = pal;
+  try { window.dispatchEvent(new CustomEvent("kastr-theme", { detail: { pick, theme: base, palette: pal } })); } catch {}
 }
 function themeSet(v) {
   try { v === "dark" ? localStorage.removeItem(THEME_KEY) : localStorage.setItem(THEME_KEY, v); } catch {}
   themeApply();
 }
-window.__kastrTheme = { get: themeGet, set: themeSet };
+function customSet(c) {
+  try {
+    if (c && HEX6.test(c.bg || "") && HEX6.test(c.surface || "") && HEX6.test(c.text || "")) localStorage.setItem(CUSTOM_KEY, JSON.stringify({ bg: c.bg, surface: c.surface, text: c.text }));
+    else { localStorage.removeItem(CUSTOM_KEY); localStorage.removeItem(VARS_KEY); }
+  } catch {}
+  themeApply();
+}
+window.__kastrTheme = { get: themeGet, set: themeSet, custom: customGet, setCustom: customSet, list: THEMES.slice() };
 // 0.21.61 (Kenton: "Let me choose a highlight color to replace the ASI blue for my own view"): this app's accent --
 // localStorage kastr.accent (#rrggbb); none = ASI blue. Only this device sees it (the colour others see is the profile's).
 const ACCENT_KEY = "kastr.accent";
@@ -125,7 +166,7 @@ window.__kastrAccent = { get: accentGet, set: accentSet };
 accentApply();
 window.addEventListener("storage", (e) => { if (e.key === ACCENT_KEY) accentApply(); });
 themeApply();
-window.addEventListener("storage", (e) => { if (e.key === THEME_KEY) themeApply(); });
+window.addEventListener("storage", (e) => { if (e.key === THEME_KEY || e.key === CUSTOM_KEY) themeApply(); });   // 0.21.72: + Custom
 try { themeMq?.addEventListener("change", () => { if (themeGet() === "system") themeApply(); }); } catch {}
 
 function build() {

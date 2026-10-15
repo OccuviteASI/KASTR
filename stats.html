@@ -3,7 +3,7 @@
 
 <head>
 	<meta charset="utf-8">
-	<script>/* 0.21.61: the theme before the first paint (Dark / Light / System; default Dark) */try{var t=localStorage.getItem("kastr.theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}</script>
+	<script>/* 0.21.61: the theme before the first paint (default ASI Navy); 0.21.72: + the named palettes and Custom */try{var d=document.documentElement,t=localStorage.getItem("kastr.theme")||"dark",P={dark:"navy",light:"light",midnight:"midnight",slate:"slate",warm:"warm",contrast:"contrast",custom:"custom"};if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";var p=P[t]||"navy",b=p==="light"||p==="warm"?"light":"dark";if(p==="custom"){var v=JSON.parse(localStorage.getItem("kastr.theme.vars")||"null");if(v&&v.vars){b=v.base==="light"?"light":"dark";for(var k in v.vars)d.style.setProperty(k,v.vars[k]);}else p="navy";}d.dataset.theme=b;d.dataset.palette=p;}catch(e){document.documentElement.dataset.theme="dark";}</script>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Relay Stats — KASTR</title>
 

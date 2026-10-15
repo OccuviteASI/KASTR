@@ -463,14 +463,40 @@
   .popcard.teams .tabs { display:flex; gap:12px; margin:4px 0 2px; border-bottom:1px solid var(--line); }
   .popcard.teams .tab { font-size:12px; padding:6px 2px; color:var(--text-dim); }
   .popcard.teams .tab.on { color:#fff; border-bottom:2px solid var(--asi-blue); }
+  /* 0.21.71 (Kenton: the background picker like Elgato's): thumbnails only (the name on hover), 16:9, Off / Blur as words, a camera
+     badge on moving backgrounds, the choice outlined; 16 to a page with a pager and an Add split button; Blur strength below */
   .bgrow { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; }
-  .bgrow button { aspect-ratio:16/10; border:2px solid transparent; border-radius:6px; background:var(--surface-2) center/cover no-repeat;
-    color:var(--text); font-size:10px; display:flex; align-items:flex-end; justify-content:center; padding:4px; cursor:pointer; position:relative; }
-  .bgrow button.on { border-color:var(--asi-blue); }
-  .bgrow button.on::after { content:"\2713"; position:absolute; top:3px; right:5px; color:#fff; font-size:11px; }
-  .bgrow button .del { position:absolute; top:1px; left:4px; color:#fff; opacity:.75; font-size:11px; line-height:1; text-shadow:0 1px 2px #000; }   /* 0.15.0 */
-  .bgrow button .del:hover { opacity:1; color:#ff6b6b; }
-  .bgrow button .anim { position:absolute; bottom:3px; left:4px; font-size:9px; color:#fff; opacity:.8; text-shadow:0 1px 2px #000; }
+  .bgrow button { aspect-ratio:16/9; border:2px solid transparent; border-radius:6px; background:var(--surface-2) center/cover no-repeat;
+    color:#fff; padding:0; cursor:pointer; position:relative; overflow:hidden; height:auto; }
+  .bgrow button:hover { border-color:var(--asi-blue-dim); }
+  .bgrow button:focus-visible { outline:none; border-color:var(--asi-blue); }
+  .bgrow button.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue); }
+  .bgrow button.bgword { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; font:600 11px var(--font-ui); background-color:#0b0f16; }
+  .bgrow button.bgblur { background-image:radial-gradient(circle at 35% 40%, #9fb0c4, #4a5a70 40%, #1a2230 80%); text-shadow:0 1px 2px #000; }
+  .bgrow button .bgic { font-size:17px; line-height:1; }
+  .bgrow button .del { position:absolute; top:3px; right:3px; width:16px; height:16px; border-radius:50%; background:rgba(0,0,0,.65); color:#fff;
+    font-size:9px; line-height:16px; text-align:center; visibility:hidden; }   /* 0.15.0 */
+  .bgrow button:hover .del, .bgrow button:focus-within .del { visibility:visible; }
+  .bgrow button .del:hover { background:var(--asi-red); }
+  .bgrow button .anim { position:absolute; bottom:3px; left:3px; display:inline-flex; padding:1px 3px; border-radius:4px; background:rgba(0,0,0,.6); color:#fff; }
+  .bgrow button .anim .icon { width:11px; height:11px; }
+  .bgfoot { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .bgpager { display:flex; align-items:center; gap:3px; }
+  .bgpager button { min-width:22px; height:22px; padding:0 5px; border:0; border-radius:4px; background:transparent; color:var(--text-dim); font-size:12px; cursor:pointer; }
+  .bgpager button:hover:not(:disabled) { color:var(--text); background:var(--surface-2); }
+  .bgpager button.on { background:var(--asi-blue); color:var(--on-accent); }
+  .bgpager button:disabled { opacity:.35; cursor:default; }
+  .bgadd { display:inline-flex; margin-left:auto; }
+  .bgadd button { height:26px; border:1px solid var(--line); background:var(--surface-2); color:var(--text); font-size:12px; cursor:pointer; }
+  .bgadd .bgaddm { border-radius:5px 0 0 5px; padding:0 12px; font-weight:600; }
+  .bgadd .bgaddc { border-radius:0 5px 5px 0; border-left:0; padding:0 6px; }
+  .bgadd button:hover { border-color:var(--asi-blue-dim); }
+  #bgBlurRow { display:flex; align-items:center; gap:10px; margin:8px 0 4px; }
+  #bgBlurRow .lbl { flex:none; font-size:12px; color:var(--text-dim); }
+  #bgBlurRow input[type=range] { flex:1; min-width:0; accent-color:var(--asi-blue); }
+  #bgBlurRow .bgpct { display:inline-flex; align-items:center; gap:3px; font-size:12px; color:var(--text-dim); }
+  #bgBlurRow input[type=number] { width:54px; background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:4px; padding:3px 5px; font-size:12px; }
+  #bgBlurRow.dim { opacity:.45; }
   #fxQualityLbl { color:var(--text-mute); margin-left:6px; font-size:11px; }
   #fxBgHolder { position:fixed; left:0; bottom:0; width:2px; height:2px; overflow:hidden; opacity:.02; pointer-events:none; }   /* GIF backgrounds animate only while painted */
   #camPop, #audioPop.teams { width:min(380px, 92vw); }
@@ -2288,6 +2314,9 @@
     <div id="camRadios" class="radios"></div>
     <h3 class="sect">Backgrounds</h3>
     <div id="bgRow" class="bgrow"></div>
+    <div class="bgfoot"><div class="bgpager" id="bgPager"></div>
+      <div class="bgadd"><button type="button" id="bgAddBtn" class="bgaddm" title="Add a picture">Add</button><button type="button" id="bgAddMore" class="bgaddc" title="Add a picture, or a GIF or video" aria-label="Add a picture, or a GIF or video">&#9662;</button></div></div>
+    <div id="bgBlurRow"><span class="lbl">Blur strength</span><input type="range" id="fxBlurAmt" min="1" max="100" aria-label="Blur strength"><span class="bgpct"><input type="number" id="fxBlurNum" min="1" max="100" aria-label="Blur strength, percent">%</span></div>
     <div class="sw"><label class="switch"><input type="checkbox" id="fxBright"><i></i></label><span>Adjust brightness</span></div>
     <div class="sw"><label class="switch"><input type="checkbox" id="fxSoft"><i></i></label><span>Soft focus</span></div>
     <!-- 0.21.0: phones deliver sideways frames -- rotate and mirror the camera before it leaves this device -->
@@ -11278,6 +11307,9 @@
 
   // ---- 0.8.8: Camera popover (Teams "Effects and settings") ------------------
   const CAMFX_KEY = "kastr.camfx";
+  const BG_PAGE = 16;   // 0.21.71: backgrounds per page of the picker
+  let bgPage = 0, bgPageNav = false;
+  const fxBlurAmt = () => Math.max(1, Math.min(100, Math.round(Number(camFx?.blurAmt) || 50)));   // 0.21.71: % (50 = the blur before 0.21.71)
   let camFx = null;
   try { camFx = JSON.parse(localStorage.getItem(CAMFX_KEY) || "null"); } catch {}
   // 0.15.0: bg modes none | blur | image | gif | video. url is a short MARKER -- "preset:navy",
@@ -11427,7 +11459,9 @@
   }
   function saveCamFx() { try { localStorage.setItem(CAMFX_KEY, JSON.stringify(camFx)); } catch {} }
   // The bag that rides sendControl / the announce: markers only (see normalizeCamFx).
-  const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "preset:navy" : (camFx.bg.url || "") },
+  const camFxWire = () => ({ bg: { mode: camFx.bg.mode, url: /^(data|blob):/i.test(camFx.bg.url || "") ? "preset:navy" : (camFx.bg.url || ""),
+                                   poster: /^\/assets\/bg\/[\w.-]+$/.test(camFx.bg.poster || "") ? camFx.bg.poster : "" },   // 0.21.71: a stand-in while a background loads
+                             blurAmt: fxBlurAmt(),   // 0.21.71
                              bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced",
                              rot: camFx.rot || 0, mirror: !!camFx.mirror, proc: camFx.proc || "auto" });   // 0.21.0; 0.21.21
   const camFxPushed = new Set();   // 0.15.0: source ids that already carry the saved bag
@@ -11436,6 +11470,7 @@
   // camera bare and the background silently reset.
   function pushCamFx() {
     saveCamFx();
+    try { window.__fxBgPrewarm?.(camFxWire()); } catch {}   // 0.21.71: a video background loads before the camera needs it
     const pub = window.__publisher;
     const { src } = localCamSrc();
     if (!pub || !src) return;
@@ -11487,26 +11522,37 @@
       const t = document.createElement("span"); t.textContent = c.label || ("Camera " + (i + 1));
       l.append(r, t); return l;
     }));
-    // backgrounds: none / blur / two canvas presets / built-in animated scenes / the operator's
-    // own stills, GIFs and clips (IndexedDB, with a delete badge) / the two "add" tiles.
+    // backgrounds: Off / Blur / two canvas presets / the built-in pictures and scenes (assets/bg/manifest.json) / the operator's
+    // own stills, GIFs and clips (IndexedDB, with a delete badge). 0.21.71: 16 to a page; adding lives on the Add button.
     const row = document.getElementById("bgRow");
-    const opts = [{ id: "none", label: "None" }, { id: "blur", label: "Standard blur" },
+    const opts = [{ id: "none", label: "Off" }, { id: "blur", label: "Blur" },
       { id: "navy", label: "ASI navy", mode: "image", url: "preset:navy", thumb: bgPreset("navy") },
       { id: "mist", label: "Soft mist", mode: "image", url: "preset:mist", thumb: bgPreset("mist") }];
-    for (const s of bgScenes || []) opts.push({ id: "scene:" + s.id, label: s.label || s.id, mode: "video", url: "/assets/bg/" + s.file,
-                                                thumb: s.poster ? "/assets/bg/" + s.poster : "", anim: true });
+    for (const s of bgScenes || []) {
+      const still = s.type === "image";   // 0.21.71: the manifest lists pictures too
+      const poster = s.poster ? "/assets/bg/" + s.poster : "";
+      opts.push({ id: "scene:" + s.id, label: s.label || s.id, mode: still ? "image" : "video", url: "/assets/bg/" + s.file, thumb: poster, poster, anim: !still });
+    }
     for (const u of bgUser) opts.push({ id: "bg:" + u.key, label: u.name, url: "bg:" + u.key, thumb: u.poster, del: u.key,
                                         mode: u.type.startsWith("video/") ? "video" : u.type === "image/gif" ? "gif" : "image",
                                         anim: u.type.startsWith("video/") || u.type === "image/gif" });
-    opts.push({ id: "add", label: "+ Add picture" }, { id: "addAnim", label: "+ Add GIF / video" });
     const mode = camFx.bg?.mode || "none", curUrl = camFx.bg?.url || "";
-    row.replaceChildren(...opts.map((o) => {
-      const b = document.createElement("button"); b.type = "button"; b.textContent = o.label; b.title = o.label;
-      if (o.thumb) { b.style.backgroundImage = "url(" + o.thumb + ")"; b.style.color = "#fff"; b.style.textShadow = "0 1px 2px #000"; }
-      if (o.id === "blur") b.style.backgroundImage = "linear-gradient(135deg, #3a4656, #1a2230)";
-      const on = o.id === "none" || o.id === "blur" ? o.id === mode : !!o.mode && o.mode === mode && o.url === curUrl;
-      b.classList.toggle("on", on);
-      if (o.anim) { const a = document.createElement("span"); a.className = "anim"; a.textContent = "\u25B6"; b.appendChild(a); }
+    const isOn = (o) => (o.id === "none" || o.id === "blur" ? o.id === mode : !!o.mode && o.mode === mode && o.url === curUrl);
+    const pages = Math.max(1, Math.ceil(opts.length / BG_PAGE));
+    { const sel = opts.findIndex(isOn); if (!bgPageNav && sel >= 0) bgPage = Math.floor(sel / BG_PAGE); }   // open on the page of the choice
+    bgPage = Math.min(Math.max(0, bgPage), pages - 1);
+    row.replaceChildren(...opts.slice(bgPage * BG_PAGE, (bgPage + 1) * BG_PAGE).map((o) => {
+      const b = document.createElement("button"); b.type = "button"; b.title = o.label; b.setAttribute("aria-label", o.label);
+      const on = isOn(o);
+      b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+      if (o.thumb) b.style.backgroundImage = "url(" + o.thumb + ")";
+      if (o.id === "none" || o.id === "blur") {
+        b.classList.add("bgword", o.id === "none" ? "bgoff" : "bgblur");
+        const ic = document.createElement("span"); ic.className = "bgic"; ic.textContent = o.id === "none" ? "\u2298" : "";
+        const t = document.createElement("span"); t.textContent = o.label;
+        b.append(ic, t);
+      }
+      if (o.anim) { const a = document.createElement("span"); a.className = "anim"; a.innerHTML = icon("cam"); a.title = "Moving background"; b.appendChild(a); }
       if (o.del) {
         const x = document.createElement("span"); x.className = "del"; x.textContent = "\u2715"; x.title = "Remove this background";
         x.addEventListener("click", async (ev) => {
@@ -11518,13 +11564,26 @@
         b.appendChild(x);
       }
       b.addEventListener("click", () => {
-        if (o.id === "add") { window.__pickFile(document.getElementById("bgFile")); return; }
-        if (o.id === "addAnim") { window.__pickFile(document.getElementById("bgAnimFile")); return; }
-        camFx.bg = o.id === "none" ? { mode: "none", url: "" } : o.id === "blur" ? { mode: "blur", url: "" } : { mode: o.mode, url: o.url };
+        camFx.bg = o.id === "none" ? { mode: "none", url: "" } : o.id === "blur" ? { mode: "blur", url: "" } : { mode: o.mode, url: o.url, poster: o.poster || "" };
+        bgPageNav = false;
         pushCamFx(); paintCamPop();
       });
       return b;
     }));
+    {   // 0.21.71: the pager (< 1 2 >) and Blur strength
+      const pg = document.getElementById("bgPager");
+      pg.replaceChildren();
+      if (pages > 1) {
+        const mk = (txt, page, on, off, label) => { const x = document.createElement("button"); x.type = "button"; x.textContent = txt; if (on) x.className = "on"; x.disabled = !!off;
+          x.setAttribute("aria-label", label); if (on) x.setAttribute("aria-current", "page"); x.addEventListener("click", () => { bgPage = page; bgPageNav = true; paintCamPop(); }); return x; };
+        pg.append(mk("\u2039", bgPage - 1, false, bgPage === 0, "Previous page"));
+        for (let i = 0; i < pages; i++) pg.append(mk(String(i + 1), i, i === bgPage, false, "Page " + (i + 1)));
+        pg.append(mk("\u203a", bgPage + 1, false, bgPage === pages - 1, "Next page"));
+      }
+      const amt = fxBlurAmt(), blurOn = mode === "blur";
+      document.getElementById("bgBlurRow").classList.toggle("dim", !blurOn);
+      for (const id of ["fxBlurAmt", "fxBlurNum"]) { const el = document.getElementById(id); el.disabled = !blurOn; if (document.activeElement !== el) el.value = String(amt); }
+    }
     document.getElementById("fxBright").checked = !!camFx.bright;
     document.getElementById("fxSoft").checked = !!camFx.soft;
     for (const b of document.querySelectorAll("#fxRot button")) b.classList.toggle("on", Number(b.dataset.rot) === (camFx.rot || 0));   // 0.21.0
@@ -11547,6 +11606,22 @@
     camFx.proc = b.dataset.proc; pushCamFx(); paintFxProc();
   });
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
+  {   // 0.21.71: Blur strength (the slider and the % box agree; the camera follows within 150 ms) and the Add split button
+    let amtT = 0;
+    const setAmt = (v) => {
+      camFx.blurAmt = Math.max(1, Math.min(100, Math.round(Number(v) || 50)));
+      for (const id of ["fxBlurAmt", "fxBlurNum"]) { const el = document.getElementById(id); if (document.activeElement !== el || id === "fxBlurNum") el.value = String(camFx.blurAmt); }
+      clearTimeout(amtT); amtT = setTimeout(pushCamFx, 150);
+    };
+    document.getElementById("fxBlurAmt").addEventListener("input", (e) => setAmt(e.target.value));
+    document.getElementById("fxBlurNum").addEventListener("change", (e) => setAmt(e.target.value));
+    document.getElementById("bgAddBtn").addEventListener("click", () => window.__pickFile(document.getElementById("bgFile")));
+    document.getElementById("bgAddMore").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openMineMenu(e.currentTarget, [{ value: "pic", label: "Picture\u2026" }, { value: "anim", label: "GIF or video\u2026" }], null,
+        (v) => window.__pickFile(document.getElementById(v === "anim" ? "bgAnimFile" : "bgFile")));
+    });
+  }
   document.getElementById("fxSoft").addEventListener("change", (e) => { camFx.soft = e.target.checked; pushCamFx(); });
   document.getElementById("fxRot").addEventListener("click", (e) => {   // 0.21.0
     const b = e.target.closest("button[data-rot]"); if (!b) return;
@@ -19171,7 +19246,7 @@
     try { b.gl?.dispose(); } catch {} b.gl = null;   // 0.21.21
     try { b.processed?.stop?.(); } catch {}
     try { b.video.srcObject = null; } catch {}
-    try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}   // 0.15.0: video / GIF background
+    try { if (b.vid) { b.vid.pause?.(); if (![...fxBgVids.values()].includes(b.vid)) b.vid.removeAttribute?.("src"); } } catch {}   // 0.15.0: video / GIF background (0.21.71: a kept one stays loaded for the next start)
     try { b.img?.remove?.(); } catch {}
     closeFxGif(b);   // 0.16.0
     b.vid = null; b.img = null;
@@ -19416,13 +19491,48 @@
   // on each drawImage, so it animates), video -> hidden muted looping <video>. Async: the
   // marker may need IndexedDB; a stale result (the bag moved on) is dropped. While nothing is
   // loaded the loop falls back to blur(14px), so a missing file never shows the raw room.
+  // 0.21.71 (Kenton: "it takes about 1 second for the background video to show up and hide the actual background"): until the
+  // background media had loaded, the loop blurred the REAL room behind the person. Now a stand-in fills it (the background's
+  // thumbnail when it has one, else a dark fill), and a background video stays loaded between camera restarts.
+  const fxBgVids = new Map();   // real url -> a playing, muted, looping <video> (kept: the next camera start draws it at once)
+  function fxBgVideo(real) {
+    let v = fxBgVids.get(real);
+    if (v && !v.error) { v.play?.().catch(() => {}); return v; }
+    v = document.createElement("video");
+    v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true; v.preload = "auto";
+    v.src = real;
+    v.play().catch(() => {});
+    fxBgVids.set(real, v);
+    while (fxBgVids.size > 3) { const [k, old] = fxBgVids.entries().next().value; fxBgVids.delete(k); try { old.pause(); old.removeAttribute("src"); old.load(); } catch {} }
+    return v;
+  }
+  window.__fxBgPrewarm = (fx) => {   // the saved choice, loaded before the camera starts: its first frame, then paused (no decoding until used)
+    try {
+      const u = fx?.bg?.mode === "video" ? String(fx.bg.url || "") : "";
+      if (!u) return;
+      resolveBgUrl(u).then((real) => {
+        if (!real || fxBgVids.has(real)) return;
+        const v = fxBgVideo(real);
+        const idle = () => { if (![...slots.values()].some((sl) => sl.blur?.vid === v)) { try { v.pause(); } catch {} } };
+        if (v.readyState >= 2) idle(); else v.addEventListener("loadeddata", idle, { once: true });
+      }).catch(() => {});
+    } catch {}
+  };
+  try { window.__fxBgPrewarm(JSON.parse(localStorage.getItem("kastr.camfx") || "null")); } catch {}
   function loadFxBg(b, fx) {
     const mode = fx?.bg?.mode || "none";
+    {   // 0.21.71: the stand-in picture
+      const pu = mode === "image" || mode === "gif" || mode === "video" ? String(fx?.bg?.poster || "") : "";
+      if (pu !== (b.posterUrl || "")) {
+        b.posterUrl = pu; b.poster = null;
+        if (pu) { const pi = new Image(); pi.onload = () => { if (b.posterUrl === pu) b.poster = pi; }; pi.src = pu; }
+      }
+    }
     const url = mode === "image" || mode === "gif" || mode === "video" ? (fx.bg.url || "") : "";
     const key = url ? mode + "|" + url : "";
     if (b.bgKey === key) return;
     b.bgKey = key;
-    try { b.vid?.pause?.(); b.vid?.removeAttribute?.("src"); } catch {}
+    try { if (b.vid) { b.vid.pause?.(); if (![...fxBgVids.values()].includes(b.vid)) b.vid.removeAttribute?.("src"); } } catch {}   // 0.21.71: a kept one stays loaded
     try { b.img?.remove?.(); } catch {}
     closeFxGif(b);   // 0.16.0
     b.img = null; b.vid = null;
@@ -19433,11 +19543,8 @@
       if (b.bgKey !== key || !b.alive) return;
       if (!real) { missing(); return; }
       if (mode === "video") {
-        const v = document.createElement("video");
-        v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true; v.preload = "auto";
-        v.onerror = () => missing();
-        v.src = real;
-        v.play().catch(() => {});
+        const v = fxBgVideo(real);   // 0.21.71: kept between camera restarts
+        v.addEventListener("error", () => missing(), { once: true });
         b.vid = v;
       } else {
         const im = new Image();
@@ -19663,8 +19770,8 @@
       }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     };
-    const blur2 = (src, tmp, r) => {   // two box passes each way ~ a gaussian
-      for (let k = 0; k < 2; k++) {
+    const blur2 = (src, tmp, r, passes = 2) => {   // two box passes each way ~ a gaussian (0.21.71: three for a strong blur)
+      for (let k = 0; k < passes; k++) {
         draw(P.box, tmp, { T: { tex: src.t }, dir: [1 / src.w, 0], r: { i: r } });
         draw(P.box, src, { T: { tex: tmp.t }, dir: [0, 1 / src.h], r: { i: r } });
       }
@@ -19672,7 +19779,7 @@
     return {
       canvas: c,
       lost: () => gl.isContextLost(),
-      render(video, maskCv, w, h, mode) {
+      render(video, maskCv, w, h, mode, amtK = 1) {
         size(w, h);
         gl.bindTexture(gl.TEXTURE_2D, tF); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, video);
         gl.bindTexture(gl.TEXTURE_2D, tM); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, maskCv);
@@ -19685,7 +19792,8 @@
         draw(P.box, T.C, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
         if (mode === "blur") {
           draw(P.wpack, T.Q1, { F: { tex: tF }, M: { tex: tM } });
-          blur2(T.Q1, T.Q2, Math.max(3, Math.min(16, Math.round(7 * w / 1280))));
+          const rr = Math.round(7 * amtK * w / 1280);   // 0.21.71: Blur strength -- the box shader stops at 16, a third pass goes further
+          blur2(T.Q1, T.Q2, Math.max(1, Math.min(16, rr)), rr > 16 ? 3 : 2);
         }
         draw(P.out, null, { F: { tex: tF }, AB: { tex: T.C.t }, BG: { tex: T.Q1.t }, mode: { i: mode === "person" ? 1 : 0 } });
         return c;
@@ -19693,11 +19801,11 @@
       dispose() { try { gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch {} },
     };
   }
-  function fxGlRender(b, video, maskCv, w, h, mode) {
+  function fxGlRender(b, video, maskCv, w, h, mode, amtK = 1) {
     if (b.glFailed || window.__fxNoGL) return null;   // __fxNoGL: rig switch (the 2D path)
     try {
       if (!b.gl || b.gl.lost()) { b.gl = createFxGL(); if (!b.gl) { b.glFailed = true; return null; } }
-      return b.gl.render(video, maskCv, w, h, mode);
+      return b.gl.render(video, maskCv, w, h, mode, amtK);
     } catch (e) { console.warn("[fx] WebGL2 render failed, back to 2D:", e?.message || e); b.glFailed = true; try { b.gl?.dispose(); } catch {} b.gl = null; return null; }
   }
   function startBlurLoop(slot, raw, seg, fx) {
@@ -19807,13 +19915,18 @@
         const gifFrame = mode === "gif" ? fxGifFrame(b, performance.now()) : null;   // 0.16.0: animated
         // 0.21.21: the WebGL2 renderer -- a guided-filter edge + (blur mode) a background blurred WITHOUT the person
         const replaced = (mode === "video" && vidReady) || !!gifFrame || ((mode === "image" || mode === "gif") && imgReady);
-        const glMode = needMask && b.haveMask ? (replaced ? "person" : "blur") : null;
-        const glOut = glMode ? fxGlRender(b, video, maskCv, w, h, glMode) : null;
+        // 0.21.71: a picture / GIF / video background still loading -- its thumbnail (or a dark fill) stands in; never the real room
+        const standIn = !replaced && (mode === "image" || mode === "gif" || mode === "video");
+        const amtK = Math.max(1, Math.min(100, Number(fxNow.blurAmt) || 50)) / 50;   // 0.21.71: Blur strength (1 = the blur before)
+        const glMode = needMask && b.haveMask ? (replaced || standIn ? "person" : "blur") : null;
+        const glOut = glMode ? fxGlRender(b, video, maskCv, w, h, glMode, amtK) : null;
         if (glOut && glMode === "blur") { xf(); cx.filter = baseFilter || "none"; cx.drawImage(glOut, 0, 0, w, h); }
         else if (mode === "video" && vidReady) drawCover(cx, b.vid, b.vid.videoWidth, b.vid.videoHeight, ow, oh);   // scenes fill the OUTPUT frame upright
         else if (gifFrame) drawCover(cx, gifFrame, gifFrame.displayWidth || gifFrame.codedWidth, gifFrame.displayHeight || gifFrame.codedHeight, ow, oh);
         else if ((mode === "image" || mode === "gif") && imgReady) drawCover(cx, b.img, b.img.naturalWidth, b.img.naturalHeight, ow, oh);
-        else if (mode !== "none") { xf(); cx.filter = "blur(14px)"; cx.drawImage(video, 0, 0, w, h); }   // blur, or a background still loading
+        else if (standIn && b.poster) drawCover(cx, b.poster, b.poster.naturalWidth, b.poster.naturalHeight, ow, oh);   // 0.21.71
+        else if (standIn) { cx.fillStyle = "#101820"; cx.fillRect(0, 0, ow, oh); }   // 0.21.71: no thumbnail -- a dark fill, not the room
+        else if (mode !== "none") { xf(); cx.filter = "blur(" + Math.round(14 * amtK) + "px)"; cx.drawImage(video, 0, 0, w, h); }   // blur (0.21.71: its strength)
         else { xf(); cx.filter = baseFilter || "none"; cx.drawImage(video, 0, 0, w, h); }
         cx.restore();
         if (glOut && glMode === "person") {   // 0.21.21: the refined person over the upright background

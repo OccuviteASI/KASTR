@@ -2,6 +2,23 @@
 
 What changed in each build, newest first.
 
+## v0.21.71 — your backgrounds built in, a new picker, no flash of the room
+
+**No flash of your real room when the camera starts (Kenton: "When sharing the camera, it takes about 1 second for the background video to show up and hide the actual background.").** Until a picture, GIF or video background had loaded, the background effect drew you over a blur of your real room. With a video background that was about a second each time the camera came on.
+- While a background loads, its thumbnail stands in behind you; a background without a thumbnail gets a plain dark fill. Your room never shows.
+- The video background you've chosen is loaded as soon as KASTR opens, then waits paused with no decoding until the camera starts. It stays loaded when the camera goes off, so turning it on again starts on the background at once.
+- **Lab check:** a camera with the News room video behind it, watched from another page, with the background video made to arrive 2 seconds late. Before the fix, viewers saw the camera's real picture for 0.2–1.7 s on each start. After it, zero frames of it, even with the video 8 seconds late.
+
+**Fourteen ASI backgrounds built in (Kenton: "I would like to build these videos and backgrounds into the video background options.").** From the shared Backgrounds folder, seven pictures (Elgato lights, Gray home office, Light blue home office, Living room at night, Office space, Porch sunset, Room in the morning) and seven moving backgrounds (Clock, Coffee shop, Lo-fi bedroom, News room, Office, Rainy window, The view). They sit right after the two colour presets.
+- The videos are re-encoded to 1280×720 WebM: the camera never sends more than 720p, and all 14 add 5.6 MB instead of 48 MB, with no visible difference.
+
+**A new background picker (Kenton: "I would like to also update the video selector menu to look more like this", with an Elgato Camera Hub screenshot).**
+- Thumbnails only (the name shows on hover), 16:9, four across. **Off** and **Blur** come first as labelled tiles, moving backgrounds carry a small camera badge, and the choice is outlined in your accent colour.
+- 16 to a page with **‹ 1 2 ›** below the grid. The picker opens on the page of your current background.
+- **Add ▾** at the bottom right: **Add** picks a picture, and the arrow offers **Picture…** or **GIF or video…**. The two "+ Add" tiles are gone. Your own backgrounds still have their ✕ on hover.
+- **Blur strength** (1–100%) under the grid: the slider and the % box agree, and the camera follows within a fraction of a second. 50% is the blur KASTR has always used. It's greyed out unless **Blur** is the background.
+- **Lab check:** the picker showed two pages (Off, Blur, the presets and the new backgrounds first). Choosing Blur enabled Blur strength; 90% was saved and reached the camera. The Add arrow listed Picture… and GIF or video….
+
 ## v0.21.70 — room rail fixes and Create room options
 
 **The room group's menu button is on its group's row (Kenton: "The group settings button is in a weird spot and doesn't make sense.").** The group's ⋮ button accidentally used the same style as a grid's pop-up menu, which pins itself to the top-right corner. It floated over whichever room card was at the top of the list, with nothing tying it to its group.

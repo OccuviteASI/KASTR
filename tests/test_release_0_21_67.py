@@ -21,7 +21,7 @@ class RoomMarks(unittest.TestCase):
         self.assertIn(".sbcard.cur { border-color:var(--asi-blue); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }", p)
         self.assertIn(".sbcard.cur .rb { border-color:var(--asi-blue); background:var(--asi-blue); color:#fff;", p)
         self.assertIn('.sbcard.cur .sbtag.here { display:inline-block;', p)
-        self.assertIn('here.className = "sbtag here"; here.textContent = "You\u2019re here";', p)
+        self.assertIn(r'here.className = "sbtag here"; here.textContent = "You\u2019re here";', p)
 
     def test_watched_room(self):
         p = self.p

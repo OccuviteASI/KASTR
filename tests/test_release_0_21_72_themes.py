@@ -50,8 +50,8 @@ class Themes(unittest.TestCase):
             self.assertIn('{ v: "%s", label: "%s"' % (v, label), p)
 
     def test_remembered_with_the_app(self):
-        self.assertIn("|theme$|theme" + chr(92) + ".custom$|accent$)/;", read("assets/prefs.js"))
-        self.assertIn('r"|theme$|theme' + chr(92) + '.custom$|accent$)")', read("kastr_serve.py"))
+        self.assertIn("|theme$|theme" + chr(92) + ".custom$|accent$|selfmirror$)/;", read("assets/prefs.js"))
+        self.assertIn('r"|theme$|theme' + chr(92) + '.custom$|accent$|selfmirror$)")', read("kastr_serve.py"))
 
 
 if __name__ == "__main__":

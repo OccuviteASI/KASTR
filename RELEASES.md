@@ -25,6 +25,14 @@ What changed in each build, newest first.
 - The theme, your custom colours and your accent colour are now kept with the app's other settings, so they survive a browser profile reset.
 - **Lab check:** each theme set the expected page colours, a custom set survived a reload (applied before the first paint), and the menu showed all eight with Custom's three colour pickers.
 
+**Your own view is mirrored (Kenton: "On the cameras set the default to mirror" — he chose: only my own view).** Your own camera tile, the camera preview in Video effects and the join page's preview now show you mirrored, like a mirror, so moving and pointing feel natural. Everyone else still sees you the right way round, so writing on a whiteboard or a shirt reads correctly.
+- **Video effects** has two switches now: **Mirror my own view** (on unless you turn it off; only you see it) and **Mirror for everyone** (the old **Mirror**, off by default; it flips the picture you send).
+
+**No "Searching for live broadcasts…" in the Lobby (Kenton: "On the lobby page I don't need to be searching for broadcasts").** Nothing plays in the Lobby, which only lists the rooms, so the empty-stage message stays hidden there.
+
+**A sideways phone looks like the desktop app (Kenton, iPhone landscape: "It should be more like the desktop app when in landscape mode and have the video on the left and the rail on the right").** Held sideways, a phone used to drop the rail and stack everything in one narrow column. It now uses the desktop layout: the stage on the left and the rail on the right, at no more than about a quarter of the width, two tiles across when it's busy, with page arrows when there are more. Several spotlit or pinned items share the stage in a grid, as on the desktop. An upright phone keeps its layout (the stage on top, the thumbnail strip under it).
+- **Lab check:** at 844 × 390 (an iPhone on its side), speaker view showed the stage on the left (497 px wide) and the other three cameras plus Kenton two-up in the rail. Four pinned cameras made a 2 × 2 grid on the left with Kenton in the rail.
+
 ## v0.21.71 — your backgrounds built in, a new picker, no flash of the room
 
 **No flash of your real room when the camera starts (Kenton: "When sharing the camera, it takes about 1 second for the background video to show up and hide the actual background.").** Until a picture, GIF or video background had loaded, the background effect drew you over a blur of your real room. With a video background that was about a second each time the camera came on.

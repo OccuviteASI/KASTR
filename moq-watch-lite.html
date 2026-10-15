@@ -479,6 +479,9 @@
   .lvlbar i.on { background:var(--asi-blue); }
   .camprev { position:relative; aspect-ratio:16/9; background:#000; border-radius:6px; overflow:hidden; margin-bottom:8px; }
   .camprev video { width:100%; height:100%; object-fit:cover; display:block; }
+  /* 0.21.72: your own view, mirrored like a mirror (display only -- nothing sent changes) */
+  body.selfmirror #stage .pubpane.camkind moq-publish canvas, body.selfmirror #stage .pubpane.camkind moq-publish video,
+  body.selfmirror #camPrev, body.selfmirror #joinPrevVideo { transform:scaleX(-1); }
   .camprev .off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--text-mute); font-size:12px; }
   .camprev video:not([hidden]) + .off { display:none; }
   .popcard.teams .tabs { display:flex; gap:12px; margin:4px 0 2px; border-bottom:1px solid var(--line); }
@@ -1764,6 +1767,7 @@
   }
   /* 0.21.0: landscape phone -- one topbar row, sheets that fit a ~375 px tall viewport */
   @media (max-height: 500px) and (min-width: 600px) {
+    #stage.spot #railPager.show { display:flex !important; }   /* 0.21.72: the sideways phone keeps the desktop rail -- and its pages */
     .popcard, #sharePop, #peoplePanel, #mineMenu { max-height:calc(100dvh - 48px) !important; }
     #sharePop { height:calc(100dvh - 48px) !important; }
     #chatPanel { height:calc(100dvh - 48px) !important; max-height:none; }
@@ -2346,7 +2350,10 @@
     <div class="sw"><span>Rotate<small id="fxRotHint" hidden>Auto-upright on this phone; Rotate adds to it</small></span><div class="seg" id="fxRot" role="radiogroup" aria-label="Rotate the camera">
       <button type="button" data-rot="0">0&deg;</button><button type="button" data-rot="90">90&deg;</button>
       <button type="button" data-rot="180">180&deg;</button><button type="button" data-rot="270">270&deg;</button></div></div>
-    <div class="sw"><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label><span>Mirror</span></div>
+    <!-- 0.21.72 (Kenton: "On the cameras set the default to mirror" -- he chose: only my own view): your own tile and the previews
+         are mirrored (on unless switched off); what everyone else sees flips only with "Mirror for everyone" -->
+    <div class="sw"><label class="switch"><input type="checkbox" id="fxSelfMirror"><i></i></label><span>Mirror my own view<small>Only you see it mirrored</small></span></div>
+    <div class="sw"><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label><span>Mirror for everyone<small>Flips the picture you send</small></span></div>
     <div class="sw"><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label><span>Background quality<small id="fxQualityLbl">Balanced</small></span></div>
     <div class="sw"><span>Processor<small id="fxProcLbl">Auto</small></span><div class="seg" id="fxProc" role="radiogroup" aria-label="Where the background effect runs">
       <button type="button" data-proc="auto" title="The NPU when this computer has one, else the graphics card, else the standard model">Auto</button><button type="button" data-proc="npu" title="The neural processor (Intel AI Boost, AMD XDNA, Qualcomm Hexagon...)">NPU</button><button type="button" data-proc="gpu" title="The graphics card">GPU</button><button type="button" data-proc="standard" title="The standard model (MediaPipe) -- works everywhere">Standard</button></div></div>
@@ -7411,7 +7418,10 @@
   let phoneStripPlan = null;   // 0.21.59: { mainH, W } while a phone held upright shows the rail as a row under the stage
   let railColsNow = 1;   // 0.21.19: the column count follows how many people there are, not the rail width
   const railCols = () => railColsNow;
-  const railColW = () => (railCols() === 2 ? Math.floor((railW - 8) / 2) : railW);
+  // 0.21.72 (Kenton, iPhone landscape: "It should be more like the desktop app when in landscape mode and have the video on the left
+  // and the rail on the right"): a sideways phone gets the desktop layout with a rail of at most ~28% of the width
+  const railWNow = () => (phoneLand() ? Math.min(railW, Math.max(140, Math.round((stageWrap.clientWidth || 800) * 0.28))) : railW);
+  const railColW = () => (railCols() === 2 ? Math.floor((railWNow() - 8) / 2) : railWNow());
   const railPager = document.createElement("div");
   railPager.id = "railPager";
   railPager.innerHTML = '<button type="button" class="rp-prev" title="Previous page (wheel up over the rail, PageUp)">\u2039</button>'
@@ -7496,7 +7506,7 @@
       : rowH ? railRows * rowH + gap * (railRows - 1) : (stageWrap.clientHeight || 720) - 2 * gap;
     const cols = railCols();
     const areaW = fsFill ? (stageWrap.clientWidth || 1280) : strip ? Math.max(120, strip.W - 2 * gap)
-      : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || isPhone() || ownPip || stageMosaic?.railGone) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; 0.8.9: phones too
+      : Math.max(120, (stageWrap.clientWidth || 1280) - ((focusMode || phoneTall() || ownPip || stageMosaic?.railGone) ? 2 * gap : cols * railColW() + gap * (cols + 2)));   // 0.8.8: focus = full width; (0.21.72: an upright phone) 0.8.9: phones too
     const mos = mains.length > 1 ? stageMosaic : null;   // 0.21.32: the spotlight grid -- each picture fits its own cell
     // 0.21.66: the grid editor's band (toolbar above, camera list beside) -- the edited tile fits in what is left; a margin moves
     // it clear (a transform would make the editor's fixed toolbar follow the pane)
@@ -7559,12 +7569,12 @@
     // 0.7.5: px columns. With aspect-locked cards the tile size IS the
     // layout: fit the 16:9 tile into both the width and height budget
     // (gaps included) so the centered block never overflows the stage.
-    if (isPhone()) best = 1;   // 0.8.9: one scrolling column on a phone
+    if (phoneTall()) best = 1;   // 0.8.9: one scrolling column on a phone (0.21.72: held upright; sideways = the desktop's best fit)
     const rows = Math.ceil(n / best);
     const gaps = 8;
     let tw = Math.floor((W - (best + 1) * gaps) / best);
     const th = Math.floor((H - (rows + 1) * gaps) / rows);
-    tw = Math.max(isPhone() ? 140 : 60, isPhone() ? tw : Math.min(tw, Math.floor(th * 16 / 9)));   // 0.21.5: a phone's single column is full width and scrolls; 0.21.36: a desktop never grows past the stage (60 px floor)
+    tw = Math.max(phoneTall() ? 140 : 60, phoneTall() ? tw : Math.min(tw, Math.floor(th * 16 / 9)));   // 0.21.5: a phone's single column is full width and scrolls; 0.21.36: a desktop never grows past the stage (60 px floor)
     // 0.8.8: fine tracks -- two half-tracks + one gap per tile -- so a short
     // last row can start one half-tile in and sit centred (placement below).
     stageEl.style.gridTemplateColumns = "repeat(" + (best * 2) + ", " + ((tw - gaps) / 2) + "px)";
@@ -7637,7 +7647,7 @@
     // items"; chose live thumbnails below): a phone held upright in speaker view shows the rail as a swipeable row of live
     // thumbnails under the stage (tap one = on the stage). Sideways phones and full screen keep 0.8.9's no-rail stage.
     const phoneStrip = !gridMode && isPhone() && !focusMode && !stageFullscreen() && window.innerHeight > window.innerWidth;
-    const railOff = focusMode || (isPhone() && !phoneStrip) || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen
+    const railOff = focusMode || (phoneTall() && !phoneStrip) || stageFullscreen();   // 0.8.9: a phone behaves like Focus on content; 0.21.17: so does full screen; 0.21.72: sideways keeps the rail
     stageEl.classList.toggle("phonestrip", phoneStrip);
     // 0.21.32: the spotlight grid -- two or more spotlit things share the stage (best-fit columns, like the gallery);
     // a click on anything (manualPick) or the Gallery pill leaves it, the next change of the spotlight set brings it back
@@ -7678,7 +7688,7 @@
         const w169 = Math.min((Wm - gp * (c - 1)) / c, ((Hm - gp * (r - 1)) / r) * 16 / 9);
         if (w169 * w169 >= bestScore) { bestScore = w169 * w169; mk = c; }   // a tie goes to more columns (the wider arrangement)
       }
-      if (isPhone()) mk = 1;
+      if (phoneTall()) mk = 1;   // 0.21.72: sideways = the desktop's best fit
       mm = Math.ceil(n / mk);
       RC0 = 2 * mk + 1;
     }
@@ -7686,8 +7696,8 @@
     // 0.21.20 (Kenton): someone else on the stage and only my own preview left for the rail -> no rail, my preview in the corner
     ownPip = !gridMode && !railOff && !phoneStrip && railList === 0 && railOwn.length > 0 && !selfSpotEl && !!selectedName;
     // 0.21.19 (Kenton): one column of wide 16:9 previews while everyone fits; two columns of 4:3 ones past that
-    const fit1 = Math.floor(((stageWrap.clientHeight || 720) - 8) / (Math.round(railW * 9 / 16) + 8));
-    railColsNow = (railN <= Math.max(1, fit1) || railW < 240) ? 1 : 2;
+    const fit1 = Math.floor(((stageWrap.clientHeight || 720) - 8) / (Math.round(railWNow() * 9 / 16) + 8));
+    railColsNow = (railN <= Math.max(1, fit1) || (railWNow() < 240 && !phoneLand())) ? 1 : 2;   // 0.21.72: a sideways phone's narrow rail still goes two-up rather than squeezing
     const rcols = railCols();
     const tileH = Math.max(64, Math.round(railColW() * (rcols === 2 ? 3 / 4 : 9 / 16)));
     // 0.8.7: own panes are PINNED to the bottom rows of every page; only
@@ -8125,7 +8135,7 @@
     const persons = pk.size;
     // Streams found but none playing is not "empty" -- point at the toggles.
     // With no tiles at all, connect() owns the text ("Searching...").
-    stageEmpty.hidden = watching > 0;
+    stageEmpty.hidden = watching > 0 || inLobby();   // 0.21.72 (Kenton: "On the lobby page I don't need to be searching for broadcasts"): the Lobby lists rooms, nothing plays there
     if (any && !watching) {
       stageEmpty.textContent = "Nothing playing. Streams are listed in the People panel \u2014 "
         + "click a row or its \u25cb toggle to start one.";
@@ -11030,6 +11040,8 @@
   const PHONE_MQ = "(max-width: 720px), (max-height: 500px)";   // 0.21.0: landscape phones (812x375) were getting the desktop layout
   const phoneMq = matchMedia(PHONE_MQ);   // 0.8.9
   const isPhone = () => phoneMq.matches;
+  const phoneLand = () => isPhone() && window.innerWidth > window.innerHeight;   // 0.21.72: a phone held sideways (the desktop layout)
+  const phoneTall = () => isPhone() && !phoneLand();
   window.__isPhone = isPhone;
   phoneMq.addEventListener("change", () => {
     queueRelayout();
@@ -11330,6 +11342,9 @@
 
   // ---- 0.8.8: Camera popover (Teams "Effects and settings") ------------------
   const CAMFX_KEY = "kastr.camfx";
+  // 0.21.72: your own camera view is mirrored unless you switched it off (kastr.selfmirror = "0")
+  const selfMirrorOn = () => { try { return localStorage.getItem("kastr.selfmirror") !== "0"; } catch { return true; } };
+  document.body.classList.toggle("selfmirror", selfMirrorOn());
   const BG_PAGE = 16;   // 0.21.71: backgrounds per page of the picker
   let bgPage = 0, bgPageNav = false;
   const fxBlurAmt = () => Math.max(1, Math.min(100, Math.round(Number(camFx?.blurAmt) || 50)));   // 0.21.71: % (50 = the blur before 0.21.71)
@@ -11643,6 +11658,7 @@
     for (const b of document.querySelectorAll("#fxRot button")) b.classList.toggle("on", Number(b.dataset.rot) === (camFx.rot || 0));   // 0.21.0
     { const h = document.getElementById("fxRotHint"); if (h) h.hidden = !window.__frameLoop?.needed; }   // 0.21.5
     document.getElementById("fxMirror").checked = !!camFx.mirror;
+    document.getElementById("fxSelfMirror").checked = selfMirrorOn();   // 0.21.72
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
     paintFxProc();   // 0.21.21
@@ -11682,6 +11698,10 @@
     camFx.rot = Number(b.dataset.rot) || 0; pushCamFx(); paintCamPop();
   });
   document.getElementById("fxMirror").addEventListener("change", (e) => { camFx.mirror = e.target.checked; pushCamFx(); });
+  document.getElementById("fxSelfMirror").addEventListener("change", (e) => {   // 0.21.72
+    try { e.target.checked ? localStorage.removeItem("kastr.selfmirror") : localStorage.setItem("kastr.selfmirror", "0"); } catch {}
+    document.body.classList.toggle("selfmirror", e.target.checked);
+  });
   window.__camRotate = (deg) => { camFx.rot = ((Number(deg) || 0) % 360 + 360) % 360; pushCamFx(); paintCamPop(); };   // rig + the tile menu
   document.getElementById("fxQuality").addEventListener("change", (e) => {
     camFx.quality = e.target.checked ? "best" : "balanced";

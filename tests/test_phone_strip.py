@@ -15,7 +15,7 @@ class PhoneStrip(unittest.TestCase):
 
     def test_an_upright_phone_keeps_a_rail(self):
         self.assertIn("const phoneStrip = !gridMode && isPhone() && !focusMode && !stageFullscreen() && window.innerHeight > window.innerWidth;", self.p)
-        self.assertIn("const railOff = focusMode || (isPhone() && !phoneStrip) || stageFullscreen();", self.p)
+        self.assertIn("const railOff = focusMode || (phoneTall() && !phoneStrip) || stageFullscreen();", self.p)   # 0.21.72: sideways keeps the rail
 
     def test_thumbnails_go_in_row_two(self):
         self.assertIn('el.style.display = ""; el.style.order = ""; el.style.gridRow = "2"; el.style.gridColumn = String(1 + stripIdx++);', self.p)

@@ -60,7 +60,7 @@ class GalleryFits(unittest.TestCase):
         p = _read("moq-watch-lite.html")
         self.assertIn("if (cells.length && cells.length !== collagePlan.n) collageSize(cells.length);", p)
         self.assertIn(".sort((a, b) => a.o - b.o || a.i - b.i).map((x) => x.el);", p)
-        self.assertIn("tw = Math.max(isPhone() ? 140 : 60,", p)
+        self.assertIn("tw = Math.max(phoneTall() ? 140 : 60,", p)   # 0.21.72: an upright phone
 
 
 if __name__ == "__main__":

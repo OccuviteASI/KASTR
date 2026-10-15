@@ -312,7 +312,7 @@
   :root[data-theme="light"] #topbar .tchev:hover, :root[data-theme="light"] #topbar .tchev.grid-on,
   :root[data-theme="light"] .cbtn:hover, :root[data-theme="light"] .pubui .prmodes .prm:hover, :root[data-theme="light"] .pubui .thgrid .th:hover,
   :root[data-theme="light"] #joinGateClose:hover, :root[data-theme="light"] #sharePop .head a:hover, :root[data-theme="light"] #sharePop .head button:hover,
-  :root[data-theme="light"] .sbbtn:hover, :root[data-theme="light"] .sbgroup .gmenu:hover, :root[data-theme="light"] #roomBanner.free:hover,
+  :root[data-theme="light"] .sbbtn:hover, :root[data-theme="light"] .sbgroup .sbgmenu:hover, :root[data-theme="light"] #roomBanner.free:hover,
   :root[data-theme="light"] #mineMenu .pwacts .pwcancel:hover, :root[data-theme="light"] #sbForm .pwacts .pwcancel:hover { color:var(--text); }
   :root[data-theme="light"] .pubui .prmodes .prm.on { color:var(--asi-blue); border-color:var(--asi-blue); }
   :root[data-theme="light"] #topbar .tb.on, :root[data-theme="light"] #topbar .tb.on:hover { color:#fff; }   /* muted / camera off stays white on red */
@@ -1415,13 +1415,17 @@
   .sbgroup .gname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sbgroup .gcnt { flex:none; font:10px var(--font-mono); font-variant-numeric:tabular-nums; }
   .sbgroup .gchip { display:none; }
-  .sbgroup .gmenu { flex:none; background:transparent; border:0; color:var(--text-mute); font-size:12px; line-height:1; padding:2px 4px; height:auto; cursor:pointer; border-radius:4px; }
-  .sbgroup .gmenu:hover { color:#fff; background:var(--surface-2); }
+  .sbgroup .sbgmenu { flex:none; display:inline-flex; align-items:center; background:transparent; border:0; color:var(--text-mute); line-height:1; padding:2px 4px; height:auto; cursor:pointer; border-radius:4px; visibility:hidden; }
+  .sbgroup .sbgmenu[hidden] { display:none; }
+  .sbgroup .sbgmenu .icon { width:14px; height:14px; }
+  .sbgroup:hover .sbgmenu, .sbgroup .sbgmenu:focus-visible { visibility:visible; }   /* 0.21.70: on the group's row, shown on hover */
+  @media (hover: none) { .sbgroup .sbgmenu { visibility:visible; } }
+  .sbgroup .sbgmenu:hover { color:#fff; background:var(--surface-2); }
   .sbgroup.drop-into, .sbhead.drop-into { box-shadow:0 0 0 1px var(--asi-blue); background:var(--surface-2); color:var(--text); border-radius:6px; }
   .sbcard[hidden] { display:none !important; }
   body.sb-collapsed .sbgroup { height:auto; padding:5px 0 1px; margin-top:3px; gap:0; justify-content:center; border-top:2px solid var(--line); border-radius:0; }
   body.sb-collapsed .sbgroup:hover { background:transparent; }
-  body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:none; }
+  body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .sbgmenu { display:none; }
   body.sb-collapsed .sbgroup .gchip { display:inline-flex; width:18px; height:18px; border-radius:4px; align-items:center; justify-content:center;
     background:var(--surface-2); border:1px solid var(--line); font:600 10px var(--font-mono); color:var(--text-dim); }
   body.sb-collapsed .sbgroup.collapsed .gchip { color:var(--text-mute); border-style:dashed; }
@@ -1683,7 +1687,7 @@
     body.sb-collapsed .sbfoot { display:none; }   /* 0.21.41: the phone drawer shows the header, whose circled + creates */
     body.sb-collapsed .sbcard { border-color:var(--line); background:var(--surface); padding:6px 7px; display:block; }
     body.sb-collapsed .sbgroup { height:28px; padding:0 4px; margin-top:4px; gap:5px; justify-content:flex-start; border-top:0; border-radius:6px; }   /* 0.15.0 (B4) */
-    body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .gmenu { display:revert; }
+    body.sb-collapsed .sbgroup .gchev, body.sb-collapsed .sbgroup .gname, body.sb-collapsed .sbgroup .gcnt, body.sb-collapsed .sbgroup .sbgmenu { display:revert; }
     body.sb-collapsed .sbgroup .gchip { display:none; }
     .popcard, #sharePop, #peoplePanel, #mineMenu { top:auto !important; bottom:0; left:0 !important; right:0;
       width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
@@ -14069,14 +14073,17 @@
     const nm = document.createElement("span"); nm.className = "gname";
     const cnt = document.createElement("span"); cnt.className = "gcnt";
     const chip = document.createElement("span"); chip.className = "gchip";
-    const mb = document.createElement("button"); mb.type = "button"; mb.className = "gmenu"; mb.textContent = "\u22ee"; mb.title = "Group options";
+    // 0.21.70 (Kenton: "The group settings button is in a weird spot"): the button shared the class of the grid's pop-up menu
+    // (.gmenu: position absolute, top-right) and floated over the first room card; its own class, the room cards' "more" icon
+    const mb = document.createElement("button"); mb.type = "button"; mb.className = "sbgmenu"; mb.innerHTML = icon("more"); mb.title = "Group options";
     h.append(chev, nm, cnt, chip, mb);
     h.addEventListener("click", (e) => {
       e.stopPropagation();
       if (h.__skipClick && Date.now() - h.__skipClick < 600) return;
-      if (e.target.closest(".gmenu")) { openGroupMenu(mb, h.__g); return; }
+      if (e.target.closest(".sbgmenu")) { openGroupMenu(mb, h.__g); return; }
       sbGroupToggle(h.dataset.gid);
     });
+    h.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); openGroupMenu(pointAnchor(e.clientX, e.clientY), h.__g); });   // 0.21.70: right-click a group row
     return h;
   }
   function sbGroupPaint(h, g, n, collapsed) {
@@ -14085,7 +14092,7 @@
     h.querySelector(".gname").textContent = g.name;
     h.querySelector(".gcnt").textContent = String(n);
     h.querySelector(".gchip").textContent = (g.name.trim()[0] || "?").toUpperCase();
-    h.querySelector(".gmenu").hidden = !isRelayOperator();   // non-operators: a read-only header (click = collapse/expand)
+    h.querySelector(".sbgmenu").hidden = !canManageGroups();   // 0.21.70: admins too; others: a read-only header (click = collapse/expand)
     h.title = g.name + " \u2014 " + n + (n === 1 ? " room" : " rooms") + (collapsed ? " (collapsed; click to expand)" : "");
   }
   // POST to the room store: the operator's loopback endpoint on the relay host's own

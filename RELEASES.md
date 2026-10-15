@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.70 — the group menu sits on its group
+
+**The room group's menu button is on its group's row (Kenton: "The group settings button is in a weird spot and doesn't make sense.").** The group's ⋮ button accidentally used the same style as a grid's pop-up menu, which pins itself to the top-right corner. It floated over whichever room card was at the top of the list, with nothing tying it to its group.
+- It now sits at the right end of the group's own row, beside the room count. It is the same **⋯** used on room cards and appears when you hover the row (always shown on touch screens).
+- **Right-click a group row** to open the same menu: Collapse / Expand, Rename…, Ungroup all, Delete group….
+- Admins see it as well as the relay operator, matching 0.21.68's admin room groups.
+- **Lab check:** a group in the rooms rail. The ⋯ sat on the group's row beside its count, and right-clicking the row listed Collapse, Rename…, Ungroup all and Delete group….
+
 ## v0.21.69 — real machine names on the Relay page
 
 **The Users table shows each computer's own name (Kenton: "For the machine name in the user section, can we pull the hostname of the device instead? Or what are the options?").** Kenton chose all four:

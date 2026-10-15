@@ -13818,7 +13818,15 @@
     q(".rsname").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); q(".rsren").click(); } });
     q(".rskeep").onchange = () => { const on = q(".rskeep").checked; run({ op: "keep", keep: on }, on ? "Kept open." : "No longer kept open \u2014 it closes 10 minutes after the last person leaves.", () => rsMyRec(rsSlug, { persistent: on })); };
     q(".rsview").onchange = () => { const on = q(".rsview").checked; run({ op: "viewlock", locked: on }, on ? "View locked." : "View unlocked."); };
-    q(".rsgroup").onchange = () => { const g = q(".rsgroup").value || null; run({ op: "group", group: g }, g ? "Moved to " + (roomsGroups?.[g]?.name || g) + "." : "Out of its group.", (d) => { if (d.groups) { roomsGroups = d.groups; roomsGroupsAt = Date.now(); roomsChanged(); } }); };
+    q(".rsgroup").onchange = async () => {   // 0.21.68: "New group..." names one, creates it and files the room under it
+      if (q(".rsgroup").value === "__new") {
+        const name = await askGroupName("New group");
+        const gid = name ? await roomGroupCreate(name) : null;
+        if (!gid) { q(".rsgroup").value = roomGroupOf(rsSlug) || ""; return; }
+        q(".rsgroup").replaceChildren(new Option("No group", ""), ...sbGroupList().map((x) => new Option(x.name, x.gid)), new Option("New group\u2026", "__new"));
+        q(".rsgroup").value = gid;
+      }
+      const g = q(".rsgroup").value || null; run({ op: "group", group: g }, g ? "Moved to " + (roomsGroups?.[g]?.name || g) + "." : "Out of its group.", (d) => { if (d.groups) { roomsGroups = d.groups; roomsGroupsAt = Date.now(); roomsChanged(); } }); };
     return el;
   }
   function rsPaint() {
@@ -13837,7 +13845,7 @@
       : r.persistent ? "It stays listed, with its chat, when everyone has left." : "Off: it closes 10 minutes after the last person leaves.";
     q(".rsview").checked = !!r.viewLock;
     const sel = q(".rsgroup"), cur = roomGroupOf(rsSlug) || "";
-    sel.replaceChildren(new Option("No group", ""), ...sbGroupList().map((g) => new Option(g.name, g.gid)));
+    sel.replaceChildren(new Option("No group", ""), ...sbGroupList().map((g) => new Option(g.name, g.gid)), ...(canManageGroups() ? [new Option("New group\u2026", "__new")] : []));   // 0.21.68
     sel.value = cur;
     const note = q(".rsnote");
     const ro = role === "named";
@@ -14082,11 +14090,21 @@
   }
   // POST to the room store: the operator's loopback endpoint on the relay host's own
   // KASTR, else the creator's (roomKey). The answer's groups repaint at once.
+  // 0.21.68 (Kenton: "I'm not able to group the rooms because I can't create a group name"): an admin (admin code) creates,
+  // renames and deletes groups too -- before, only a page on the relay box itself could, so from any other desk the "New group"
+  // choice never appeared. The admin proves it with the member token (as for Room settings).
+  const canManageGroups = () => isRelayOperator() || (authSecured && authRole === "admin");
+  async function askGroupName(title, value) {
+    const v = await kastrConfirm({ title, message: "A name for the group", input: { placeholder: "Group name", value: value || "" }, ok: value ? "Rename" : "Create" });
+    return typeof v === "string" ? v.trim().slice(0, 40) : "";
+  }
   async function roomGroupPost(body) {
     const hb = relayHostBase();
     if (!hb) { window.__toast?.("No relay host to talk to.", 4000, { level: "warn" }); return null; }
     const asOp = isRelayOperator();
-    const post = (url) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const headers = { "content-type": "application/json" };
+    if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;   // 0.21.68: an admin's proof
+    const post = (url) => fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     try {
       let r = await post(hb + (asOp ? "/api/relay/rooms/group" : "/api/rooms/group"));
       if (asOp && (r.status === 403 || r.status === 404) && body.op === "assign" && body.roomKey) r = await post(hb + "/api/rooms/group");   // not loopback after all: the creator path
@@ -14104,7 +14122,7 @@
   function roomGroupAssign(slug, gid) {
     if (!slug || slug === "main") return null;
     const roomKey = myChannels().find((r) => r.slug === slug)?.roomKey || null;
-    if (!isRelayOperator() && !roomKey) { window.__toast?.("Only " + slug + "'s creator or the relay operator can move it to a group.", 5000, { level: "warn" }); return null; }
+    if (!canManageGroups() && !roomKey) { window.__toast?.("Only " + slug + "'s creator or an admin can move it to a group.", 5000, { level: "warn" }); return null; }
     return roomGroupPost({ op: "assign", slug, group: gid || null, roomKey });
   }
   async function roomGroupCreate(name) {
@@ -14119,11 +14137,11 @@
     const cur = roomGroupOf(slug) || "__none";
     const items = sbGroupList().map((g) => ({ value: g.gid, label: g.name }));
     items.push({ value: "__none", label: "No group" });
-    if (isRelayOperator()) items.push({ value: "__new", label: "New group\u2026" });
+    if (canManageGroups()) items.push({ value: "__new", label: "New group\u2026" });
     openMineMenu(anchor, items, cur, async (v) => {
       if (v === "__none") { await roomGroupAssign(slug, null); return; }
       if (v === "__new") {
-        const name = String(prompt("Name the new group:", "") || "").trim().slice(0, 40);
+        const name = await askGroupName("New group");
         if (!name) return;
         const gid = await roomGroupCreate(name);
         if (gid) await roomGroupAssign(slug, gid);
@@ -14137,11 +14155,11 @@
     if (!g) return;
     const collapsed = sbGroupsCollapsed().has(g.gid);
     const items = [{ value: "toggle", label: collapsed ? "Expand" : "Collapse" }];
-    if (isRelayOperator()) items.push({ value: "rename", label: "Rename\u2026" }, { value: "ungroup", label: "Ungroup all" }, { value: "delete", label: "Delete group\u2026" });
+    if (canManageGroups()) items.push({ value: "rename", label: "Rename\u2026" }, { value: "ungroup", label: "Ungroup all" }, { value: "delete", label: "Delete group\u2026" });
     openMineMenu(anchor, items, null, async (v) => {
       if (v === "toggle") { sbGroupToggle(g.gid); return; }
       if (v === "rename") {
-        const name = String(prompt("Rename group:", g.name) || "").trim().slice(0, 40);
+        const name = await askGroupName("Rename group", g.name);
         if (name && name !== g.name) await roomGroupPost({ op: "rename", group: g.gid, name });
         return;
       }

@@ -3065,7 +3065,7 @@ def group_op(store, p, operator=False, log=None):
     try:
         if op in ("create", "rename", "delete"):
             if not operator:
-                return {"error": "only the relay's operator manages groups"}, 403
+                return {"error": "only an admin (the admin code) or the relay's operator manages groups"}, 403
             if op == "create":
                 same = next((g for g, rec in store.groups_public().items() if str(rec.get("name") or "").strip().lower() == str(p.get("name") or "").strip().lower()), None)
                 gid = same or store.group_set(None, p.get("name"), p.get("order"))   # same name -> same group
@@ -3527,9 +3527,9 @@ class AuthService:
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return register_room(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
                                  vouched=p.get("vouch") == "publisher")
-        if op == "group":
+        if op == "group":   # 0.21.68: vouch "admin" -- the spoke checked an admin token (create / rename / delete groups)
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
-            return group_op(self.store, body, operator=False, log=self.log)
+            return group_op(self.store, body, operator=p.get("vouch") == "admin", log=self.log)
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
             return self._xs_fed(p)
         if op == "board":    # 0.21.63: a spoke verified a publisher member (vouch "publisher"); the hub keeps the boards

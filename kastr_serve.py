@@ -2834,7 +2834,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 p = self._chat_body_json()
                 if p is None:
                     return self._chat_reply(413, {"error": "body too large"})
-                obj, code = kastr_relay.group_op(store, p, operator=False, log=log)
+                # 0.21.68 (Kenton: "I'm not able to group the rooms because I can't create a group name"): an admin (the
+                # admin code's token) manages groups too -- before, only a page on the relay box itself could create one
+                obj, code = kastr_relay.group_op(store, p, operator=self._settings_admin(), log=log)
                 return self._chat_reply(code, obj)
             if path == "/api/rooms/register":
                 if method != "POST":
@@ -2928,8 +2930,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 body = {"op": "register", "body": p, "peer": peer, "vouch": vouch}
             elif path == "/api/rooms/close":
                 body = {"op": "close", "slug": slug, "roomKey": p.get("roomKey"), "vouch": "admin" if self._admin_for(slug) else None}
-            elif path == "/api/rooms/group":
-                body = {"op": "group", "body": p}
+            elif path == "/api/rooms/group":   # 0.21.68: an admin this box verified may create / rename / delete groups too
+                body = {"op": "group", "body": p, "vouch": "admin" if self._settings_admin() else None}
             elif path == "/api/rooms/touch":
                 body = {"op": "touch", "slug": slug, "creator": str(p.get("creator") or "")[:64]}
             elif path == "/api/rooms/settings":   # 0.21.65: the hub owns rooms; this box vouches for an admin it verified

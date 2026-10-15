@@ -132,5 +132,30 @@ class UserHistory(unittest.TestCase):
         self.assertIn('" offline (last 30 days)"', r)
 
 
+class AdminGroups(unittest.TestCase):
+    """0.21.68 (Kenton: "I'm not able to group the rooms because I can't create a group name"): an admin manages room groups
+    from any desk (before: only a page on the relay box itself); names are typed in KASTR's own box."""
+    def test_server(self):
+        st = kr.AuthStore(tempfile.mkdtemp())
+        o, c = kr.group_op(st, {"op": "create", "name": "Sites"}, operator=False)
+        self.assertEqual(c, 403)
+        o, c = kr.group_op(st, {"op": "create", "name": "Sites"}, operator=True)
+        self.assertEqual(c, 200, o)
+        serve = open(os.path.join(HERE, "kastr_serve.py"), encoding="utf-8").read()
+        self.assertIn("obj, code = kastr_relay.group_op(store, p, operator=self._settings_admin(), log=log)", serve)
+        self.assertIn('body = {"op": "group", "body": p, "vouch": "admin" if self._settings_admin() else None}', serve)
+        relay = open(os.path.join(HERE, "kastr_relay.py"), encoding="utf-8").read()
+        self.assertIn('return group_op(self.store, body, operator=p.get("vouch") == "admin", log=self.log)', relay)
+
+    def test_page(self):
+        p = open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8").read()
+        self.assertIn('const canManageGroups = () => isRelayOperator() || (authSecured && authRole === "admin");', p)
+        self.assertIn('if (canManageGroups()) items.push({ value: "__new", label: "New group' + chr(92) + 'u2026" });', p)
+        self.assertIn('...(canManageGroups() ? [new Option("New group' + chr(92) + 'u2026", "__new")] : [])', p)
+        self.assertIn('headers.authorization = "Bearer " + authTokens.member;   // 0.21.68: an admin', p)
+        self.assertNotIn('prompt("Name the new group:"', p)
+        self.assertNotIn('prompt("Rename group:"', p)
+
+
 if __name__ == "__main__":
     unittest.main()

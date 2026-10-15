@@ -2,7 +2,7 @@
 
 What changed in each build, newest first.
 
-## v0.21.72 — (in progress)
+## v0.21.72 — camera previews with effects, more themes, a mirrored self view, sideways phones
 
 **Camera preview with the camera off (Kenton: "In the video options, show a preview of the camera even if the camera is not enabled in the room.").** The **Video effects and settings** panel showed "No camera" unless your camera was on in the room. Now, with the camera off, the panel opens the camera you picked just for itself and shows it through the background you've chosen. You can try backgrounds, blur strength and the other effects before anyone sees you.
 - Nothing is sent: the preview runs on its own, so the room still sees your camera as off.

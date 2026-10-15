@@ -162,7 +162,11 @@
   #modeHint b { color:var(--text-dim); font-weight:600; }
   table.rooms { width:100%; border-collapse:collapse; font-size:11.5px; }
   /* 0.21.55: the Users table's "not seen for a day" switch */
-  #usersList tr.offl td { color:var(--text-mute); }   /* 0.21.68: seen in the last 30 days, not connected now */
+  #usersList tr.offl td { color:var(--text-mute); }
+  #usersList .usub { color:var(--text-mute); font-size:11px; margin-left:4px; }   /* 0.21.69: hostname / OS user under a nickname */
+  #usersList .usrnick { background:transparent; border:0; padding:0 3px; margin-left:2px; color:var(--text-mute); cursor:pointer; font-size:11px; visibility:hidden; }
+  #usersList tr:hover .usrnick, #usersList .usrnick:focus-visible { visibility:visible; }
+  #usersList .usrnick:hover { color:var(--asi-blue); }   /* 0.21.68: seen in the last 30 days, not connected now */
   label.usrold { display:flex; flex-direction:row; align-items:center; gap:6px; margin:4px 0 0; font-size:12px; color:var(--text-dim); cursor:pointer; width:max-content; }
   label.usrold input { width:auto; margin:0; }
   /* 0.21.54: sortable headings (the Users table) */
@@ -1378,6 +1382,7 @@
   const USER_COLS = [
     { key: "name", label: "Name", val: (r) => r.name || "" },
     { key: "node", label: "Machine", val: (r) => machineText(r) },
+    { key: "ip", label: "IP", val: (r) => r.ip || "" },   // 0.21.69
     { key: "kind", label: "Kind", val: (r) => r.kind || "" },
     { key: "room", label: "Room", val: (r) => (r.rooms || []).join(", ") },
     { key: "relay", label: "Relay", val: (r) => r.relay || "" },
@@ -1385,7 +1390,16 @@
     { key: "seen", label: "Last seen", val: (r) => r.at ? -Number(r.at) : "" },
   ];
   // 0.21.55: a web visitor's "machine" is its browser ("Chrome on Windows"); its web-... id stays in the tooltip
-  const machineText = (r) => r.kind === "web" && r.platform ? r.platform : (r.node || "");
+  // 0.21.69 (Kenton: "can we pull the hostname of the device instead?"): the hub's nickname, else the computer's own hostname
+  // (apps report it from 0.21.69), else the machine id; the signed-in OS user beside it, the id in the tooltip
+  const machineText = (r) => r.nick || (r.kind === "web" && r.platform ? r.platform : (r.hostname || r.node || ""));
+  const machineCell = (r) => {
+    const sub = [r.nick ? (r.hostname || (r.kind === "web" ? r.platform : "")) : "", r.user].filter(Boolean).join(" \u00b7 ");
+    const tip = "Machine id: " + (r.node || "?") + (r.hostname ? " \u2014 hostname " + r.hostname : "") + (r.user ? " \u2014 signed in as " + r.user : "");
+    const pen = LOCAL && r.node ? ' <button type="button" class="usrnick" data-node="' + esc(r.node) + '" data-nick="' + esc(r.nick || "") + '" data-host="' + esc(r.hostname || r.node) + '" title="Give this machine a nickname">\u270e</button>' : "";
+    return '<td class="' + (r.nick || (r.kind === "web" && r.platform) || r.hostname ? "" : "mono") + '" title="' + esc(tip) + '">' + esc(machineText(r))
+      + (sub ? ' <span class="usub">' + esc(sub) + "</span>" : "") + pen + "</td>";
+  };
   function usersSortGet() {
     try { const v = JSON.parse(localStorage.getItem("kastr.relay.usersSort") || "null"); if (v && USER_COLS.some((c) => c.key === v.key)) return { key: v.key, dir: v.dir === "desc" ? "desc" : "asc" }; } catch {}
     return { key: "name", dir: "asc" };
@@ -1437,13 +1451,13 @@
       const key = "user:" + r.node;
       const cell = pendCell(key, r.version, true, r.offer, "usersMsg")
         ?? (behind(r) && LOCAL ? '<button type="button" class="usrupd" data-node="' + esc(r.node) + '" data-relay="' + esc(r.relay || "") + '" data-ver="' + esc(r.relayVersion || "") + '" data-label="' + esc(r.name || r.node) + '" title="Update to ' + esc(r.relayVersion || "") + ' from ' + esc(r.relay || "its relay") + ' (the person is asked first)">Update</button>' : "");
-      return { r, html: (r.offline ? '<tr class="offl" title="Offline \u2014 first seen ' + esc(new Date((r.first || r.at) * 1000).toLocaleString()) + '">' : "<tr>") + "<td>" + esc(r.name || "\u2014") + '</td><td class="' + (r.kind === "web" && r.platform ? "" : "mono") + '" title="' + esc(r.node) + '">' + esc(machineText(r)) + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono"' + (r.since ? ' title="Connected since ' + esc(new Date(r.since * 1000).toLocaleString()) + '"' : "") + ">" + ago(r.at) + "</td><td>" + cell + "</td></tr>" };
+      return { r, html: (r.offline ? '<tr class="offl" title="Offline \u2014 first seen ' + esc(new Date((r.first || r.at) * 1000).toLocaleString()) + '">' : "<tr>") + "<td>" + esc(r.name || "\u2014") + "</td>" + machineCell(r) + '<td class="mono">' + esc(r.ip || "\u2014") + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono"' + (r.since ? ' title="Connected since ' + esc(new Date(r.since * 1000).toLocaleString()) + '"' : "") + ">" + ago(r.at) + "</td><td>" + cell + "</td></tr>" };
     });
     // a user who went quiet while restarting keeps a row with its spinner
     for (const [k, p] of pending) if (k.startsWith("user:") && !rows.some((r) => "user:" + r.node === k)) {
       const cell = pendCell(k, "", false, "", "usersMsg");
       if (cell) items.push({ r: { name: p.label, node: k.slice(5), kind: "app", relay: p.relay },
-        html: "<tr><td>" + esc(p.label) + '</td><td class="mono">' + esc(k.slice(5)) + "</td><td>app</td><td>\u2014</td><td>" + esc(p.relay) + "</td><td>\u2014</td><td>\u2014</td><td>" + cell + "</td></tr>" });
+        html: "<tr><td>" + esc(p.label) + '</td><td class="mono">' + esc(k.slice(5)) + "</td><td>\u2014</td><td>app</td><td>\u2014</td><td>" + esc(p.relay) + "</td><td>\u2014</td><td>\u2014</td><td>" + cell + "</td></tr>" });
     }
     // 0.21.54 (Kenton: "Sort Users on relay server page alphabetically. Or allow for sorting by any column"): click a heading
     // to sort by it, again to reverse; Name A-Z by default; remembered on this machine. Empty values sort last either way;
@@ -1466,6 +1480,15 @@
       th.addEventListener("click", go);
       th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
     }
+    for (const b of $("usersList").querySelectorAll(".usrnick")) b.addEventListener("click", async () => {   // 0.21.69
+      const v = prompt("Nickname for " + b.dataset.host + " (leave empty to show its hostname):", b.dataset.nick);
+      if (v === null) return;
+      try {
+        const r = await api("/api/relay/users/nick", { node: b.dataset.node, nick: v.trim() });
+        if (r.error) updNote("usersMsg", r.error);
+      } catch (e) { updNote("usersMsg", String(e?.message || e)); }
+      paintSpokes();
+    });
     for (const b of $("usersList").querySelectorAll(".usrupd")) b.addEventListener("click", async () => {
       b.disabled = true;
       try {

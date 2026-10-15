@@ -74,7 +74,7 @@ class Pages(unittest.TestCase):
         self.assertIn('body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser() })', page)
         with io.open(os.path.join(HERE, "relay.html"), encoding="utf-8") as f:
             rel = f.read()
-        self.assertIn('const machineText = (r) => r.kind === "web" && r.platform ? r.platform : (r.node || "");', rel)
+        self.assertIn('const machineText = (r) => r.nick || (r.kind === "web" && r.platform ? r.platform : (r.hostname || r.node || ""));', rel)   # 0.21.69: nickname / hostname first
 
 
 if __name__ == "__main__":

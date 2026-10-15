@@ -1620,6 +1620,25 @@ def send_logs(ask, base, node, mode, inst, port):
         note("logs: collection %s not sent: %s" % (ask["id"], str(e)[:120]))
 
 
+def _checkin_hostname():
+    """0.21.69 (Kenton: "For the machine name in the user section, can we pull the hostname of the device instead?"): the
+    computer's own name, as the OS has it (the machine id is a lower-cased, shortened slug of it)."""
+    try:
+        import socket
+        return socket.gethostname()[:64]
+    except Exception:
+        return ""
+
+
+def _checkin_user():
+    """0.21.69: the OS account running KASTR (tells people on a shared machine apart)."""
+    try:
+        import getpass
+        return getpass.getuser()[:32]
+    except Exception:
+        return ""
+
+
 def client_checkin_loop(get_relay, ini, port, mode):
     """0.21.50 (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the
     client and see what version it is. The update push should come from the connected relay"): tell the relay this app
@@ -1649,7 +1668,8 @@ def client_checkin_loop(get_relay, ini, port, mode):
             inst = {}
         d = {}
         body = {"node": node, "version": kastr_serve.read_version(), "mode": mode, "platform": sys.platform,
-                "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or ""}
+                "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or "",
+                "hostname": _checkin_hostname(), "user": _checkin_user()}   # 0.21.69: the Relay page's Machine column
         base = authority_base(host, ini, relay)
         err = None
         for attempt in (1, 2):

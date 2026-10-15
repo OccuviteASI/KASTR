@@ -800,6 +800,14 @@ def standby_sig(secret, ts):
     return hmac.new(str(secret or "").encode(), str(ts).encode(), hashlib.sha256).hexdigest()
 
 
+LABEL_DROP = "<>" + chr(34) + chr(39) + chr(96)   # 0.21.69: never in a label shown on the Relay page
+
+
+def clean_label(v, n):
+    """0.21.69: a hostname / OS user / nickname as shown on the Relay page -- printable, no markup characters, bounded."""
+    return "".join(ch for ch in str(v or "") if ch.isprintable() and ch not in LABEL_DROP).strip()[:n]
+
+
 def clean_clients(rows):
     """0.21.50: a spoke's user list as the hub keeps it -- known fields only, bounded."""
     out = []
@@ -812,6 +820,7 @@ def clean_clients(rows):
                     "pending": str(r.get("pending") or "")[:24], "checkin": bool(r.get("checkin")),
                     "since": int(r.get("since") or 0) if str(r.get("since") or "0").isdigit() else 0,   # 0.21.55: connected since
                     "kind": r.get("kind") if r.get("kind") in ("app", "box", "web") else "app",
+                    "hostname": clean_label(r.get("hostname"), 64), "user": clean_label(r.get("user"), 32),   # 0.21.69
                     "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16]})
     return out
 
@@ -3181,6 +3190,7 @@ class AuthService:
         # in <state>/relay-users.json; fed by every check-in, every spoke registration and every Users read
         self._users_path = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-users.json")
         self.user_hist = {}
+        self.user_nick = {}                   # 0.21.69: node -> the nickname given on the hub's Relay page (kept with the history)
         self.hist_me, self.hist_ver = "", ""
         self._users_saved, self._users_dirty = 0.0, False
         h, _why = load_json(self._users_path, self.log, "relay-users.json")
@@ -3191,6 +3201,8 @@ class AuthService:
                 if row and row["at"] >= cut:
                     self.user_hist[row["node"]] = row
             self.hist_me, self.hist_ver = str(h.get("me") or "")[:40], str(h.get("ver") or "")[:24]
+            if isinstance(h.get("nicks"), dict):
+                self.user_nick = {str(k): clean_label(v, 40) for k, v in h["nicks"].items() if HOST_RE.match(str(k)) and clean_label(v, 40)}
         self._pull_at = 0
         self.hub_ver = None                   # 0.20.0: the hub's ban-list version this spoke last saw
         self.lock = threading.Lock()
@@ -4876,7 +4888,7 @@ class AuthService:
             return None
         row = rows[0]
         old = old or {}
-        for k in ("name", "version", "platform", "mode"):   # a session-only sighting knows less than the last check-in did
+        for k in ("name", "version", "platform", "mode", "hostname", "user"):   # a session-only sighting knows less than the last check-in did
             if not row.get(k) and old.get(k):
                 row[k] = old[k]
         row["kind"] = r.get("kind") if r.get("kind") in ("app", "box", "web") else self._user_kind(row["node"], row["mode"])
@@ -4928,7 +4940,24 @@ class AuthService:
             save_json(self._users_path, doc, self.log, backup=False)
 
     def _hist_doc(self):
-        return {"me": self.hist_me, "ver": self.hist_ver, "users": {k: {x: y for x, y in v.items() if x != "node"} for k, v in self.user_hist.items()}}
+        return {"me": self.hist_me, "ver": self.hist_ver, "nicks": dict(getattr(self, "user_nick", {})),
+                "users": {k: {x: y for x, y in v.items() if x != "node"} for k, v in self.user_hist.items()}}
+
+    def set_nick(self, node, nick):
+        """0.21.69 (Kenton: a nickname from the hub): '' clears it. Saved at once."""
+        node = str(node or "")
+        if not HOST_RE.match(node):
+            return {"error": "node required"}, 400
+        nick = clean_label(nick, 40)
+        with self.lock:
+            if nick:
+                self.user_nick[node] = nick
+            else:
+                self.user_nick.pop(node, None)
+            self._users_dirty = True
+        self._hist_flush()
+        self.log("relay auth: machine %s %s" % (node, ("named " + repr(nick)) if nick else "nickname cleared"))
+        return {"ok": True, "node": node, "nick": nick}, 200
 
     def _hist_flush(self):
         """0.21.68: write the Users history now if anything changed since the last write."""
@@ -4967,7 +4996,8 @@ class AuthService:
             before = (rec.get("version"), rec.get("offer"), bool(rec))
             rec.update({"version": str(p.get("version") or "")[:24], "mode": str(p.get("mode") or "")[:24],
                         "platform": str(p.get("platform") or "")[:32], "name": str(p.get("name") or "")[:60],   # 0.21.55: 32 ("Chrome on Windows")
-                        "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now})
+                        "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now,
+                        "hostname": clean_label(p.get("hostname"), 64), "user": clean_label(p.get("user"), 32)})   # 0.21.69
             pend = rec.get("pending")
             if isinstance(pend, dict) and pend.get("version") and pend["version"] == rec["version"]:
                 rec.pop("pending", None)   # it runs what it was asked to run: done
@@ -5090,6 +5120,7 @@ class AuthService:
                 if now - (c.get("at") or 0) > self.CLIENT_FORGET_S:
                     continue
                 rows[node] = {"node": node, "name": c.get("name") or "", "version": c.get("version") or "", "mode": c.get("mode") or "",
+                              "hostname": c.get("hostname") or "", "user": c.get("user") or "",   # 0.21.69
                               "platform": c.get("platform") or "", "ip": c.get("ip") or "", "at": c.get("at"), "offer": c.get("offer") or "",
                               "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": []}
             sess = [dict(v) for v in self._sessions.values()]
@@ -5137,7 +5168,16 @@ class AuthService:
         self._hist_note(out, my_name, my_version)
         with self.lock:
             past = [dict(v, offline=True, rooms=[]) for k, v in getattr(self, "user_hist", {}).items() if k not in seen and k != me_node]
-        return out + sorted(past, key=lambda r: -r["at"])
+            nicks = dict(getattr(self, "user_nick", {}))
+            hist = getattr(self, "user_hist", {})
+            rows = out + sorted(past, key=lambda r: -r["at"])
+            for r in rows:   # 0.21.69: the hub's nickname; a host / user a spoke's older copy lacks comes from the history
+                r["nick"] = nicks.get(r.get("node"), "")
+                h = hist.get(r.get("node")) or {}
+                for k in ("hostname", "user"):
+                    if not r.get(k) and h.get(k):
+                        r[k] = h[k]
+        return rows
 
     def spokes_stale(self):
         cut = time.time() - self.SPOKE_STALE_S
@@ -8388,6 +8428,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/bans/clear",      # 0.17.0
                  "/api/relay/spokes/update",   # 0.21.0
                  "/api/relay/clients/update",  # 0.21.50
+                 "/api/relay/users/nick",      # 0.21.69: a machine's nickname on the hub's Users table
                  "/api/relay/logs/collect",    # 0.21.51
                  "/api/relay/spokes/restart",  # 0.21.52
                  "/api/relay/vehicles",        # 0.21.63: vehicle API keys
@@ -8568,6 +8609,15 @@ def handle_api(handler, relay, path, set_relay_url=None):
         handler.send_header("Cache-Control", "no-store")
         handler.end_headers()
         handler.wfile.write(body)
+        return True
+    if path == "/api/relay/users/nick":   # 0.21.69
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        p = _payload_of(handler) or {}
+        obj, code = auth.set_nick(p.get("node"), p.get("nick"))
+        reply(obj, code)
         return True
     if path == "/api/relay/clients/update":   # 0.21.50: one user updates FROM THE RELAY IT USES (here, or a spoke via the hub)
         auth = getattr(relay, "auth", None)

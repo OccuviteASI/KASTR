@@ -19,7 +19,7 @@ class UsersSort(unittest.TestCase):
 
     def test_every_column_sorts_and_name_is_the_default(self):
         cols = re.findall(r'\{ key: "(\w+)", label: "([^"]+)"', self.page)
-        self.assertEqual([c[1] for c in cols], ["Name", "Machine", "Kind", "Room", "Relay", "KASTR", "Last seen"])
+        self.assertEqual([c[1] for c in cols], ["Name", "Machine", "IP", "Kind", "Room", "Relay", "KASTR", "Last seen"])
         self.assertIn('return { key: "name", dir: "asc" };', self.page)
         self.assertIn('localStorage.setItem("kastr.relay.usersSort"', self.page)
 

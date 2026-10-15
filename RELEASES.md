@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.21.69 — real machine names on the Relay page
+
+**The Users table shows each computer's own name (Kenton: "For the machine name in the user section, can we pull the hostname of the device instead? Or what are the options?").** Kenton chose all four:
+- **Hostname:** the **Machine** column shows the computer's hostname as the operating system has it (`DESKTOP-TC5VJIB`, `mobius-moq`). Before, it showed KASTR's internal machine ID (`desktop-tc5vjib-27a6`), which is now in the tooltip. Apps report their hostname from 0.21.69; an older app keeps showing its ID until it updates.
+- **Signed-in user:** beside the hostname, dimmed, the operating-system account running KASTR, to tell people apart on a shared computer.
+- **IP:** the address each machine connects from has its own column, which you can sort by.
+- **Nickname:** on the hub's own Relay page, hover a machine and click ✎ to give it a nickname ("Support laptop (truck 3)"). The nickname then replaces the hostname, which stays beside it. An empty nickname goes back to the hostname. Nicknames are kept on the hub with the 30-day history, so they survive restarts and upgrades.
+- Web visitors still show their browser ("Chrome on Windows").
+- **Also fixed:** 0.21.68 saved `kastr_relay.py` with Windows line endings. It is back to Unix line endings. Nothing changes when it runs.
+- **Lab check:** an app check-in carrying a hostname and user showed as `DESKTOP-TC5VJIB · support` with its IP in the new column. After a nickname it showed "Support laptop (truck 3)" with the hostname and user beside it, and the nickname, hostname and user were all still there after the hub restarted.
+
 ## v0.21.68 — room groups for admins, 30 days of users, readable accent text
 
 **Text on your accent colour is always readable (Kenton: "The 'You're Here' pill is difficult to see with certain colors.").** With a light accent such as yellow, the white text on the **You're here** pill and on your room's bubble disappeared. Text on the accent colour, there and on every accent button and badge, is now black or white, whichever contrasts more with the accent you picked. The default ASI blue gets dark text (6.2:1 instead of 3:1 for white).

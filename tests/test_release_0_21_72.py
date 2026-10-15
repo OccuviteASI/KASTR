@@ -47,5 +47,17 @@ class JoinPagePreview(unittest.TestCase):
         self.assertIn('const t = window.__fxPreview.retune(w, "gate"), gv = document.getElementById("joinPrevVideo");', p)
 
 
+class DefaultAvatarColours(unittest.TestCase):
+    """0.21.72 (Kenton: "I don't want my initials to match the selected color, just leave it default. Same with the compass icon.")."""
+    def test_white_initials_blue_compass(self):
+        with open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
+            p = f.read()
+        self.assertIn('fi.style.color = "";   // 0.21.72', p)
+        self.assertNotIn("fi.style.color = window.__personColor?.(operatorSlug())", p)
+        sw = p[p.index("  const SWOOSH = "):p.index("  const SWOOSH = ") + 3000]
+        self.assertIn(""" fill="#009FDA"/></g></svg>';""", sw)
+        self.assertNotIn('fill="var(--asi-blue)"', sw[:sw.index("</svg>")])
+
+
 if __name__ == "__main__":
     unittest.main()

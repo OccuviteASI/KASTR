@@ -10,6 +10,9 @@ What changed in each build, newest first.
 - **The join page too (Kenton: "Any preview window, like here and on the join page should have the live video feed with the effects, so you can see your video prior to sharing.").** Turning the camera on on the join page now shows it with your background, so you see what the room will see before you join. While you're on the join page, the panel shows that same picture.
 - **Lab check:** on the join page with ASI navy saved, turning the camera on showed it over navy, and turning it off released it. Kenton then joined with the camera off and opened the panel. The preview showed the camera, took on the ASI navy background when he clicked it, and went back to the plain camera on **Off**. Alex's tile for Kenton's camera received 0 bytes before and during the preview. Closing the panel stopped it.
 
+**Your initials and the compass stay default (Kenton: "I don't want my initials to match the selected color, just leave it default. Same with the compass icon.").** With the camera off, your own tile used to tint your initials with your profile colour, and the ASI compass behind them took your accent colour. Your initials are now white, like everyone else's, and the compass is always ASI blue. Your colour still shows as the ring around your picture.
+- **Lab check:** with a yellow accent, Kenton's own tile showed white initials over the blue compass.
+
 ## v0.21.71 — your backgrounds built in, a new picker, no flash of the room
 
 **No flash of your real room when the camera starts (Kenton: "When sharing the camera, it takes about 1 second for the background video to show up and hide the actual background.").** Until a picture, GIF or video background had loaded, the background effect drew you over a blur of your real room. With a video background that was about a second each time the camera came on.

@@ -3176,6 +3176,21 @@ class AuthService:
                                 "rtsp": [c for c in (d["cmd"].get("rtsp") or []) if isinstance(c, dict)][-16:]}   # 0.21.16
                 except (TypeError, ValueError):
                     pass
+        # 0.21.68 (Kenton: "The user section should store any past users persistent through reboots/upgrades. Keeping a full
+        # history of all devices that have connected in the past 30 days"): node -> its last known row + relay + first seen,
+        # in <state>/relay-users.json; fed by every check-in, every spoke registration and every Users read
+        self._users_path = os.path.join(getattr(self.store, "state_dir", os.getcwd()), "relay-users.json")
+        self.user_hist = {}
+        self.hist_me, self.hist_ver = "", ""
+        self._users_saved, self._users_dirty = 0.0, False
+        h, _why = load_json(self._users_path, self.log, "relay-users.json")
+        if isinstance(h, dict) and isinstance(h.get("users"), dict):
+            cut = time.time() - self.USER_HIST_S
+            for k, v in h["users"].items():
+                row = self._hist_row(dict(v, node=k) if isinstance(v, dict) else None, None)
+                if row and row["at"] >= cut:
+                    self.user_hist[row["node"]] = row
+            self.hist_me, self.hist_ver = str(h.get("me") or "")[:40], str(h.get("ver") or "")[:24]
         self._pull_at = 0
         self.hub_ver = None                   # 0.20.0: the hub's ban-list version this spoke last saw
         self.lock = threading.Lock()
@@ -3377,6 +3392,10 @@ class AuthService:
     def close(self):
         try:
             self._board_stop.set()   # 0.21.63
+        except Exception:
+            pass
+        try:
+            self._hist_flush()   # 0.21.68: the Users history as it stands
         except Exception:
             pass
         try:
@@ -4766,6 +4785,7 @@ class AuthService:
                 for k in sorted(self.spokes, key=lambda k: self.spokes[k].get("at", 0))[:len(self.spokes) - 64]:
                     self.spokes.pop(k, None)
         self._save_spokes()
+        self._hist_note(p.get("clients"), name, version)   # 0.21.68: the users connected to that spoke, kept 30 days
         if fresh:
             self.log("relay auth: spoke %s registered%s (from %s)" % (name or key, " for ban fan-out" if url else " (long-poll only)", peer or "?"))
         return {"ok": True, "bans": len(self.bans.active()), "cmd": self.cmd["seq"]}, 200
@@ -4842,6 +4862,89 @@ class AuthService:
     # ---- 0.21.50 (Kenton: "see all of the users in the hub relay server page ... push an update to the client and see
     # what version it is. The update push should come from the connected relay, not the hub") ----------------------------
     CLIENT_FORGET_S = 180   # an app checks in every 60 s (20 s while an update is offered)
+    USER_HIST_S = 30 * 86400   # 0.21.68: the Users history keeps a device 30 days after it was last seen
+    USER_HIST_MAX = 2000
+
+    @staticmethod
+    def _user_kind(node, mode):
+        return "web" if str(node).startswith("web-") else ("box" if mode in ("publisher", "publisher-relay", "relay") else "app")
+
+    def _hist_row(self, r, old):
+        """One history row from a live row (or a saved one): known fields only."""
+        rows = clean_clients([r]) if isinstance(r, dict) else []
+        if not rows or not rows[0]["at"]:
+            return None
+        row = rows[0]
+        old = old or {}
+        for k in ("name", "version", "platform", "mode"):   # a session-only sighting knows less than the last check-in did
+            if not row.get(k) and old.get(k):
+                row[k] = old[k]
+        row["kind"] = r.get("kind") if r.get("kind") in ("app", "box", "web") else self._user_kind(row["node"], row["mode"])
+        row["relay"] = str(r.get("relay") or old.get("relay") or "")[:40]
+        row["relayVersion"] = str(r.get("relayVersion") or old.get("relayVersion") or "")[:24]
+        try:
+            first = int(old.get("first") or r.get("first") or row.get("since") or row["at"])
+        except (TypeError, ValueError):
+            first = row["at"]
+        row["first"] = min(first, row["at"])
+        row.pop("offer", None); row.pop("pending", None)   # live-only state
+        return row
+
+    def _hist_note(self, rows, relay="", relay_version=""):
+        """0.21.68: remember these users (newer sightings only), forget the ones gone 30 days, save at most once a minute."""
+        if not hasattr(self, "user_hist"):   # a bare service (tests build one without __init__)
+            return
+        now = time.time()
+        doc = None
+        with self.lock:
+            for r in (rows if isinstance(rows, list) else [])[:300]:
+                if not isinstance(r, dict):
+                    continue
+                node = str(r.get("node") or "")
+                old = self.user_hist.get(node)
+                try:
+                    if old and int(r.get("at") or 0) < old["at"]:
+                        continue   # a spoke's older copy of someone seen since
+                except (TypeError, ValueError):
+                    continue
+                row = self._hist_row(dict(r, relay=r.get("relay") or relay, relayVersion=r.get("relayVersion") or relay_version), old)
+                if row and row != old:
+                    self.user_hist[node] = row
+                    self._users_dirty = True
+            cut = now - self.USER_HIST_S
+            for k in [k for k, v in self.user_hist.items() if v["at"] < cut]:
+                self.user_hist.pop(k, None); self._users_dirty = True
+            if len(self.user_hist) > self.USER_HIST_MAX:
+                for k in sorted(self.user_hist, key=lambda k: self.user_hist[k]["at"])[:len(self.user_hist) - self.USER_HIST_MAX]:
+                    self.user_hist.pop(k, None)
+            if self._users_dirty and now - self._users_saved >= 60:
+                doc = self._hist_doc()
+                self._users_dirty, self._users_saved = False, now
+            elif self._users_dirty and not getattr(self, "_users_timer", None):   # written within the minute anyway
+                self._users_timer = threading.Timer(max(1.0, 60 - (now - self._users_saved)), self._hist_flush)
+                self._users_timer.daemon = True
+                self._users_timer.start()
+        if doc is not None:
+            save_json(self._users_path, doc, self.log, backup=False)
+
+    def _hist_doc(self):
+        return {"me": self.hist_me, "ver": self.hist_ver, "users": {k: {x: y for x, y in v.items() if x != "node"} for k, v in self.user_hist.items()}}
+
+    def _hist_flush(self):
+        """0.21.68: write the Users history now if anything changed since the last write."""
+        with self.lock:
+            t, self._users_timer = getattr(self, "_users_timer", None), None
+            doc = self._hist_doc() if self._users_dirty else None
+            if doc is not None:
+                self._users_dirty, self._users_saved = False, time.time()
+        if t:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+        if doc is not None:
+            save_json(self._users_path, doc, self.log, backup=False)
+
 
     def client_checkin(self, p, peer=""):
         """POST /api/clients/checkin {node, version, mode, platform, name, offer} from an app whose relay is this one ->
@@ -4882,6 +4985,7 @@ class AuthService:
                 self.on_clients()
             except Exception:
                 pass
+        self._hist_note([dict(rec, node=node, checkin=True)], self.hist_me, self.hist_ver)   # 0.21.68
         out = {"ok": True}
         if isinstance(pend, dict) and pend.get("version"):
             out["update"] = pend["version"]
@@ -5028,7 +5132,12 @@ class AuthService:
                     continue
                 seen.add(r.get("node"))
                 out.append(dict(r, relay=sp.get("name") or "", relayVersion=sp.get("version") or ""))
-        return out
+        # 0.21.68: remember them, then add everyone else this relay has seen in the last 30 days (offline, never an Update)
+        self.hist_me, self.hist_ver = str(my_name or "")[:40], str(my_version or "")[:24]
+        self._hist_note(out, my_name, my_version)
+        with self.lock:
+            past = [dict(v, offline=True, rooms=[]) for k, v in getattr(self, "user_hist", {}).items() if k not in seen and k != me_node]
+        return out + sorted(past, key=lambda r: -r["at"])
 
     def spokes_stale(self):
         cut = time.time() - self.SPOKE_STALE_S

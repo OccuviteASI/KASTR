@@ -67,5 +67,70 @@ class UsersOldLine(unittest.TestCase):
         self.assertNotIn('" (none)"', r)
 
 
+import json, sys, tempfile, time   # noqa: E402
+sys.path.insert(0, HERE)
+import kastr_relay as kr  # noqa: E402
+
+
+class UserHistory(unittest.TestCase):
+    """0.21.68 (Kenton: "The user section should store any past users persistent through reboots/upgrades. Keeping a full
+    history of all devices that have connected in the past 30 days")."""
+    def svc(self, d):
+        st = kr.AuthStore(d)
+        st.set_codes(viewer="view-1", publisher="pub-1")
+        return kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, st)
+
+    def test_survives_a_restart_with_spoke_users_and_offline_rows(self):
+        d = tempfile.mkdtemp()
+        s = self.svc(d)
+        try:
+            s.client_checkin({"node": "deskpc-1a2b", "version": "0.21.66", "mode": "full", "platform": "win32", "name": "Kenton Jeffery"}, "10.0.0.9")
+            tok = kr._mint(s.key, dict(kr.FEDERATION_CLAIMS, iat=int(time.time()), exp=int(time.time()) + 600))
+            s.register_spoke({"name": "mendon-relay", "version": "0.21.67", "clients": [
+                {"node": "yardbox-9f9f", "name": "Yard", "version": "0.21.67", "mode": "publisher-relay", "kind": "box", "checkin": True, "at": int(time.time()), "rooms": ["mendon"]}]},
+                "10.0.0.2", "Bearer " + tok)
+            rows = {r["node"]: r for r in s.fleet_clients("hub", "0.21.67")}
+            self.assertEqual(set(rows), {"deskpc-1a2b", "yardbox-9f9f"})
+            self.assertTrue(os.path.isfile(os.path.join(d, "relay-users.json")))
+        finally:
+            s.close()
+        s2 = self.svc(d)   # a restart / upgrade: nobody is connected yet
+        try:
+            self.assertEqual(set(s2.user_hist), {"deskpc-1a2b", "yardbox-9f9f"})
+            rows = {r["node"]: r for r in s2.fleet_clients("hub", "0.21.68")}
+            self.assertTrue(rows["deskpc-1a2b"]["offline"])
+            self.assertEqual(rows["deskpc-1a2b"]["name"], "Kenton Jeffery")
+            self.assertEqual(rows["deskpc-1a2b"]["relay"], "hub")
+            self.assertEqual((rows["yardbox-9f9f"]["relay"], rows["yardbox-9f9f"]["kind"]), ("mendon-relay", "box"))
+            # the spoke's last registration is still fresh (relay-spokes.json): its box stays a live row
+            self.assertFalse(rows["yardbox-9f9f"].get("offline"))
+            # back online: a live row again (not offline), first-seen kept
+            first = s2.user_hist["deskpc-1a2b"]["first"]
+            s2.client_checkin({"node": "deskpc-1a2b", "version": "0.21.68", "mode": "full", "platform": "win32", "name": "Kenton Jeffery"}, "10.0.0.9")
+            rows = {r["node"]: r for r in s2.fleet_clients("hub", "0.21.68")}
+            self.assertFalse(rows["deskpc-1a2b"].get("offline"))
+            self.assertEqual(s2.user_hist["deskpc-1a2b"]["first"], first)
+        finally:
+            s2.close()
+
+    def test_forgotten_after_30_days(self):
+        d = tempfile.mkdtemp()
+        old = int(time.time()) - 31 * 86400
+        with open(os.path.join(d, "relay-users.json"), "w", encoding="utf-8") as f:
+            json.dump({"me": "hub", "users": {"gone-1a2b": {"name": "Gone", "at": old, "first": old},
+                                              "recent-1a2b": {"name": "Recent", "at": int(time.time()) - 5 * 86400}}}, f)
+        s = self.svc(d)
+        try:
+            self.assertEqual(set(s.user_hist), {"recent-1a2b"})
+        finally:
+            s.close()
+
+    def test_page(self):
+        r = open(os.path.join(HERE, "relay.html"), encoding="utf-8").read()
+        self.assertIn("const behind = (r) => !r.offline && r.kind !== \"web\" && r.checkin", r)
+        self.assertIn("'<tr class=\"offl\" title=\"Offline", r)
+        self.assertIn('" offline (last 30 days)"', r)
+
+
 if __name__ == "__main__":
     unittest.main()

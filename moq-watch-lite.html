@@ -12235,13 +12235,25 @@
   async function authMint(room, access, roomCode) {
     const base = authBase();
     if (!base) throw new Error("no relay url");
-    const r = await fetch(base + "/api/token", {
-      method: "POST", headers: { "content-type": "application/json" },
-      // 0.11.0: a minter without access codes (0.9.x, or legacy) reads only `code`
-      // -- give it the room code there so locked rooms still open.
-      body: JSON.stringify({ room, code: authCodes ? (access ?? "") : ((access ?? "") || (roomCode ?? "")), roomCode: roomCode ?? "",
-                             host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }),   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
-    });
+    // 0.21.68 (Kenton: "Could not join aoz-6: Failed to fetch" -- it joined on a later try): a NETWORK failure (the relay host's KASTR
+    // restarting for an update, a dropped connection) is tried again twice, 1.5 s then 3 s later; a refusal (bad code, locked) is not
+    let r = null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        r = await fetch(base + "/api/token", {
+          method: "POST", headers: { "content-type": "application/json" },
+          // 0.11.0: a minter without access codes (0.9.x, or legacy) reads only `code`
+          // -- give it the room code there so locked rooms still open.
+          body: JSON.stringify({ room, code: authCodes ? (access ?? "") : ((access ?? "") || (roomCode ?? "")), roomCode: roomCode ?? "",
+                                 host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }),   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
+        });
+        break;
+      } catch (e) {
+        if (attempt >= 2) throw new Error("the relay host's KASTR did not answer (" + (e?.message || e) + ") \u2014 try again in a moment");
+        log("Token request for " + room + " failed (" + (e?.message || e) + ") \u2014 trying again");
+        await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+      }
+    }
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
     authTokens = d.tokens;

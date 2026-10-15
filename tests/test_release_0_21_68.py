@@ -49,6 +49,17 @@ class AccentInk(unittest.TestCase):
         self.assertEqual(ink("#1a237e"), "#ffffff")
         self.assertEqual(ink("#c62828"), "#ffffff")
 
+class TokenRetry(unittest.TestCase):
+    """0.21.68 (Kenton: "Could not join aoz-6: Failed to fetch" -- joined on a later try): a network failure of the token
+    request is tried again twice (1.5 s, 3 s); refusals are not retried."""
+    def test_wired(self):
+        p = open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8").read()
+        body = p[p.index("  async function authMint(room, access, roomCode) {"):p.index("    authTokens = d.tokens;")]
+        self.assertIn("for (let attempt = 0; ; attempt++) {", body)
+        self.assertIn("if (attempt >= 2) throw new Error(", body)
+        self.assertIn("await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));", body)
+        self.assertIn('if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));', body)   # refusals: no retry
+
 
 if __name__ == "__main__":
     unittest.main()

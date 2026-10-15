@@ -7,6 +7,9 @@ What changed in each build, newest first.
 **Text on your accent colour is always readable (Kenton: "The 'You're Here' pill is difficult to see with certain colors.").** With a light accent such as yellow, the white text on the **You're here** pill and on your room's bubble disappeared. Text on the accent colour, there and on every accent button and badge, is now black or white, whichever contrasts more with the accent you picked. The default ASI blue gets dark text (6.2:1 instead of 3:1 for white).
 - **Lab check:** yellow (#e5ff00) and ASI blue gave dark text; navy and red gave white; after a reload the colour was right from the first paint.
 
+**Joining a room survives a dropped connection (Kenton: "Could not join aoz-6: Failed to fetch" — it joined on a later try).** Changing rooms asks the relay host's KASTR for the new room's token in one request. If that request never got an answer (the host restarting for an update, a dropped connection), the switch failed at once with "Failed to fetch". It is now tried again twice, 1.5 and 3 seconds apart. A refusal (a wrong or missing room code) is still reported straight away. If the host stays silent, the message now says the relay host's KASTR did not answer and to try again in a moment.
+- **Lab check:** with the token request made to fail twice, the room switch went through on the third try (about 6 s). With it failing every time, the page stayed in its room after three tries.
+
 **Pull test text without colour codes.** When a Pull test gets no data, the Relay page shows the moq tool's last line. That line was full of terminal colour codes (`[2m`, `[0m`, …); they are removed now, so it reads "subscribe started" plainly.
 
 ## v0.21.67 — your room stands out

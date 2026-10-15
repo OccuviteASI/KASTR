@@ -2,6 +2,13 @@
 
 What changed in each build, newest first.
 
+## v0.21.72 — (in progress)
+
+**Camera preview with the camera off (Kenton: "In the video options, show a preview of the camera even if the camera is not enabled in the room.").** The **Video effects and settings** panel showed "No camera" unless your camera was on in the room. Now, with the camera off, the panel opens the camera you picked just for itself and shows it through the background you've chosen. You can try backgrounds, blur strength and the other effects before anyone sees you.
+- Nothing is sent: the preview runs on its own, so the room still sees your camera as off.
+- It follows the background you click and the camera you pick. When you close the panel the camera is released; when you turn the camera on in the room, the panel shows the live camera again.
+- **Lab check:** Kenton joined with the camera off and opened the panel. The preview showed the camera, took on the ASI navy background when he clicked it, and went back to the plain camera on **Off**. Alex's tile for Kenton's camera received 0 bytes before and during the preview. Closing the panel stopped it.
+
 ## v0.21.71 — your backgrounds built in, a new picker, no flash of the room
 
 **No flash of your real room when the camera starts (Kenton: "When sharing the camera, it takes about 1 second for the background video to show up and hide the actual background.").** Until a picture, GIF or video background had loaded, the background effect drew you over a blur of your real room. With a video background that was about a second each time the camera came on.

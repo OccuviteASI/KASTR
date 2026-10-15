@@ -11470,6 +11470,7 @@
   // camera bare and the background silently reset.
   function pushCamFx() {
     saveCamFx();
+    try { if (camPv?.tr) { const t = window.__fxPreview?.retune(camFxWire()); if (t && t !== camPv.tr) camPv.tr = t; } } catch {}   // 0.21.72: the preview follows the effect
     try { window.__fxBgPrewarm?.(camFxWire()); } catch {}   // 0.21.71: a video background loads before the camera needs it
     const pub = window.__publisher;
     const { src } = localCamSrc();
@@ -11492,6 +11493,25 @@
       sendControl(pub.peer, s.id, { fx: wire });
     }
   }
+  // 0.21.72: the panel's own camera preview while the room camera is off (window.__fxPreview, module 2)
+  var camPv = { dev: null, tr: null, busy: false, failed: false };   // var: pushCamFx may run before this line during start-up
+  function camPreviewTrack(dev) {
+    if (camPv.tr && camPv.dev === dev && camPv.tr.readyState === "live") return camPv.tr;
+    if (!camPv.busy && window.__fxPreview && !(camPv.failed && camPv.dev === dev)) {
+      camPv.busy = true; camPv.dev = dev; camPv.tr = null; camPv.failed = false;
+      window.__fxPreview.start(dev, camFxWire()).then((t) => {
+        camPv.busy = false; camPv.tr = t || null; camPv.failed = !t;
+        if (camPop.hidden) camPreviewStop(); else paintCamPop();
+      }).catch(() => { camPv.busy = false; camPv.failed = true; });
+    }
+    return null;
+  }
+  function camPreviewStop() {
+    if (!camPv.tr && !camPv.busy) return;
+    camPv.tr = null; camPv.dev = null; camPv.busy = false;
+    try { window.__fxPreview?.stop(); } catch {}
+  }
+  new MutationObserver(() => { if (camPop.hidden) { camPreviewStop(); camPv.failed = false; } }).observe(camPop, { attributes: true, attributeFilter: ["hidden"] });
   function paintCamPop() {
     const { rec, src } = localCamSrc();
     // 0.15.0: ticks follow the truth -- the live source's bag when we have a camera, else the saved
@@ -11500,11 +11520,15 @@
     else if (src.fx && typeof src.fx === "object") camFx = normalizeCamFx({ ...camFx, ...src.fx, bg: src.fx.bg || camFx.bg });
     loadBgScenes();
     bgRefresh().then((changed) => { if (changed && !camPop.hidden) paintCamPop(); });
-    // preview: the processed camera track when publishing, else the gate stream
+    // preview: the processed camera track when publishing, else the gate stream, else (0.21.72) a private preview of the
+    // chosen camera through the same effect -- nothing published
     const v = document.getElementById("camPrev");
     let tr = null;
     try { tr = window.__publisher?.selfTrack?.() || null; } catch {}
+    if (tr) camPreviewStop();   // the room camera is on: it is the preview
     if (!tr && typeof gateStream !== "undefined" && gateStream) tr = gateStream.getVideoTracks()[0] || null;
+    if (!tr) tr = camPreviewTrack(src?.deviceId ?? document.getElementById("joinCam")?.value ?? "");
+    { const off = document.getElementById("camPrevOff"); if (off) off.textContent = camPv.busy ? "Starting the camera\u2026" : (camPv.failed ? "The camera could not start" : "No camera"); }
     if (tr) { if (!v.srcObject || v.srcObject.getVideoTracks()[0] !== tr) v.srcObject = new MediaStream([tr]); v.hidden = false; v.play?.().catch(() => {}); }
     else { v.srcObject = null; v.hidden = true; }
     // camera radios
@@ -19984,6 +20008,46 @@
       });
     }
   }
+  // 0.21.72 (Kenton: "In the video options, show a preview of the camera even if the camera is not enabled in the room"): with the
+  // room camera off, the Video effects panel opens the chosen camera for itself and runs it through the same background loop --
+  // a stand-alone slot with no publisher, so nothing leaves this device. Stopped when the panel closes or the camera goes on.
+  let fxPv = null, fxPvGen = 0;
+  async function fxPreviewStart(deviceId, fx) {
+    fxPreviewStop();
+    const gen = ++fxPvGen;
+    let st = null;
+    try {
+      const v = { width: { ideal: 1280 }, height: { ideal: 720 } };
+      st = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { ...v, deviceId: { exact: deviceId } } : v, audio: false });
+    } catch (e) { console.warn("[fx] camera preview:", e?.message || e); return null; }
+    if (gen !== fxPvGen) { for (const t of st.getTracks()) t.stop(); return null; }
+    const raw = st.getVideoTracks()[0];
+    const slot = { entry: { id: "fx-preview", kind: "camera", fx: fx || null }, publish: null, preview: true };
+    fxPv = { slot, st };
+    if (fxActive(fx)) { startBlurLoop(slot, raw, null, fx); retuneFx(slot, fx); }   // the segmenter loads in the background; the stand-in hides the room meanwhile
+    return slot.blur?.processed || raw;
+  }
+  function fxPreviewStop() {
+    fxPvGen++;
+    const pv = fxPv; fxPv = null;
+    if (!pv) return;
+    try { stopBlur(pv.slot); } catch {}
+    try { for (const t of pv.st.getTracks()) t.stop(); } catch {}
+  }
+  window.__fxPreview = {
+    start: fxPreviewStart, stop: fxPreviewStop,
+    // a new effects bag: retune the running loop, or start / drop it (Off = the plain camera)
+    retune: (fx) => {
+      const pv = fxPv; if (!pv) return null;
+      pv.slot.entry.fx = fx;
+      const raw = pv.st.getVideoTracks()[0];
+      if (fxActive(fx) && !pv.slot.blur) { startBlurLoop(pv.slot, raw, null, fx); retuneFx(pv.slot, fx); }
+      else if (fxActive(fx)) retuneFx(pv.slot, fx);
+      else if (pv.slot.blur) stopBlur(pv.slot);
+      return pv.slot.blur?.processed || raw;
+    },
+    running: () => !!fxPv,
+  };
   // 0.15.0: per-loop telemetry for the console.
   // 0.21.15: the pause/arm side for the rig and /api/diag -- camera slots WITHOUT a loop too
   window.__fxArms = () => [...slots.values()].filter((s) => s.entry.kind === "camera" && !s.rtsp).map((s) => ({   // rig

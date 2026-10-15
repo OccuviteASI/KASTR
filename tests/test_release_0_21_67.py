@@ -34,6 +34,18 @@ class RoomMarks(unittest.TestCase):
     def test_collapsed_rail_lets_the_bubble_say_it(self):
         self.assertIn("body.sb-collapsed .sbcard.cur, body.sb-collapsed .sbcard.watching { border-color:transparent; background:transparent; }", self.p)
 
+class PullTestResult(unittest.TestCase):
+    """0.21.67 (Kenton: "I can't find where the pull goes to"): the streams list is rebuilt every 5 s; the Pull test's
+    progress and result are kept by stream outside the rows and painted back on every rebuild."""
+    def test_kept_across_rebuilds(self):
+        with open(os.path.join(HERE, "relay.html"), encoding="utf-8") as f:
+            r = f.read()
+        self.assertIn("const pullRes = new Map();   // path -> {text, color, busy}", r)
+        self.assertIn("const r = pullRes.get(p);", r)
+        self.assertIn("paintRes();" + chr(10) + "        pb.addEventListener", r)
+        self.assertIn('for (const el of document.querySelectorAll(".pullres")) el.__paint?.();', r)
+        self.assertNotIn("pb.disabled = false;" + chr(10) + "          res.textContent = d?.error", r)
+
 
 if __name__ == "__main__":
     unittest.main()

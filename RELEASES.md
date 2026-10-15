@@ -10,6 +10,9 @@ What changed in each build, newest first.
 - **Collapsed rail:** the bubble says it on its own: solid for your room, dashed ring and eye for a watched one.
 - **Lab check:** Kenton in one room, watching a camera in another, in dark and light themes and with the rail collapsed. The two read differently at a glance in every case.
 
+**The Relay page's Pull test shows its result (Kenton: "I saw the button, but I can't find where the pull goes to").** The stream list on the Relay page refreshes every 5 seconds and was rebuilt from scratch each time. That wiped the "pulling… (15 s)" note and the result beside the button before anyone could read them, since a pull takes 15 seconds. The note and the result now stay on the stream's row through every refresh. You see "pulling… (15 s)", then "first byte 0.58 s · 1.21 Mbit/s" (green) or "no data in 15 s" (amber). Hover over the result to see when it ran. The pulled video itself goes nowhere: the relay box reads the stream through its own relay for 15 seconds, counts the bytes and discards them.
+- **Lab check:** on the lab hub's Relay page, a Pull test on a camera shared from the spoke. "pulling…" stayed through two refreshes, and the result showed after 15 seconds and was still there three refreshes later.
+
 ## v0.21.66 — spotlight you can arrange, grids from any room
 
 **Drag the spotlight around (Kenton: "I want to be able to adjust spotlighted items after they are spotlighted by dragging them around.").** When two or more things are spotlit and share the stage, drag one onto another and they swap places.

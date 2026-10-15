@@ -1037,7 +1037,7 @@
         + "(a source checkout, or no check has run since this launch).";
       return;
     }
-    const when = u.at ? " · " + new Date(u.at * 1000).toLocaleString() : "";
+    const when = u.at ? " \u00b7 " + new Date(u.at * 1000).toLocaleString() : "";
     if (u.status === "unreachable") {
       el.style.color = "var(--asi-red)";
       el.textContent = "Fleet update: version authority " + (u.detail || "")
@@ -2189,6 +2189,9 @@
     rtspBusy = false;
     paintCameras();
   });
+  // 0.21.67 (Kenton: "I can't find where the pull goes to"): the list is rebuilt every 5 s (scan), which threw away the
+  // "pulling..." line and the result of a 15 s pull -- they live here, by stream, and every rebuild puts them back
+  const pullRes = new Map();   // path -> {text, color, busy}
   function render(paths, secured, origin) {
     const streams = paths.filter((p) => p.endsWith(".hang"));
     const rooms = new Set(paths.filter((p) => p.startsWith("~channels/"))
@@ -2203,7 +2206,7 @@
       const row = document.createElement("div");
       // room/host/operator/leaf -> "room · operator — leaf"
       row.textContent = parts.length >= 4
-        ? parts[0] + " · " + parts[2] + " — " + parts.slice(3).join("/")
+        ? parts[0] + " \u00b7 " + parts[2] + " — " + parts.slice(3).join("/")
         : p;
       // 0.11.0: subscriber.json says which node the announce ENTERED; in a cluster
       // that is every node the path crossed, so this is not "the publisher's relay".
@@ -2229,16 +2232,24 @@
         pb.style.cssText = "margin-left:8px;padding:1px 8px;font-size:11px";
         pb.title = "This relay fetches the stream itself for 15 s and times the first byte -- run it while nobody watches this stream for a cold result";
         const res = document.createElement("span"); res.className = "pullres"; res.style.cssText = "margin-left:8px;font-size:11px;color:var(--text-mute)";
+        const paintRes = () => {   // 0.21.67: from pullRes, so a rebuilt row shows the pull in progress / its result
+          const r = pullRes.get(p);
+          res.textContent = r ? r.text : ""; res.style.color = r?.color || "var(--text-mute)"; pb.disabled = !!r?.busy;
+          res.title = r?.at ? "Pulled at " + new Date(r.at).toLocaleTimeString() : "";
+        };
+        paintRes();
         pb.addEventListener("click", async () => {
-          pb.disabled = true; res.textContent = "pulling\u2026 (15 s)";
+          pullRes.set(p, { text: "pulling\u2026 (15 s)", busy: true }); paintRes();
           let d = null;
           try { d = await postJson("/api/relay/pulltest", { broadcast: p, seconds: 15 }); } catch (e) { d = { error: String(e?.message || e) }; }
-          pb.disabled = false;
-          res.textContent = d?.error ? "failed: " + d.error
-            : d.firstByte == null ? "no data in " + d.seconds + "s" + (d.tool?.length ? " (" + d.tool[d.tool.length - 1] + ")" : "")
-            : "first byte " + d.firstByte + "s" + (d.mbps != null ? " \u00b7 " + d.mbps + " Mbit/s" : "");
-          res.style.color = d?.error || d?.firstByte == null || d.firstByte > 3 ? "var(--asi-amber)" : "var(--asi-green)";
+          pullRes.set(p, { at: Date.now(),
+            text: d?.error ? "failed: " + d.error
+              : d.firstByte == null ? "no data in " + d.seconds + "s" + (d.tool?.length ? " (" + d.tool[d.tool.length - 1] + ")" : "")
+              : "first byte " + d.firstByte + "s" + (d.mbps != null ? " \u00b7 " + d.mbps + " Mbit/s" : ""),
+            color: d?.error || d?.firstByte == null || d.firstByte > 3 ? "var(--asi-amber)" : "var(--asi-green)" });
+          for (const el of document.querySelectorAll(".pullres")) el.__paint?.();   // the row on screen now (rebuilt meanwhile)
         });
+        res.__paint = paintRes;
         row.append(pb, res);
       }
       if (LOCAL && secured && parts.length >= 4) {   // 0.16.0: the operator can end a share from here

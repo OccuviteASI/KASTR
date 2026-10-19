@@ -2,6 +2,14 @@
 
 What changed in each build, newest first.
 
+## v0.21.74 — a box keeps its window drawing and in its room
+
+**A box looks after its own window (Kenton: Mendon's grid "split into separate streams" and its room lost the play icon after a weekend alone; relaunching KASTR on Mendon fixed it).** A camera box's cameras are published by KASTR itself, so they stayed on the air — but the grid and the room's "on air" marks come from the box's window, and that window had stopped doing its job. Now, on a box (Publisher or Publisher + relay mode), KASTR watches its own window and reopens it when:
+- its page has not reported for 3 minutes while the browser still runs (a frozen or crashed page), or never reported after the window opened;
+- or its page has been out of the box's room for 5 minutes.
+- It reopens at most once every 10 minutes, and gives up after three tries in a row that do not get the box back into its room (launch.log says so). A box someone took out of its room with **Leave** is left alone.
+- **Lab check:** a test box's page was frozen; 181 s later KASTR reopened the window, the new page rejoined its room, and KASTR kept running (and closed that window when it was told to quit).
+
 ## v0.21.73 — encode only while watched, pause sharing, remote Restart and Move, admins can do what publishers do, no more corner zooms
 
 **Encode only while watched (Kenton, Mendon's CPU with Pass through off: "encode only while watched" — he chose: only the cameras the box transcodes).** A grid camera that its box re-encodes (Pass through off, or a camera that cannot pass through) now stops encoding a minute after the last viewer closes it, and starts again when anyone opens it.

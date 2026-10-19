@@ -798,6 +798,7 @@ def hub_web_base(host_or_url, default=8000):
 
 
 BYE_AT = [0.0]   # 0.21.40: monotonic time of the page's last goodbye (pagehide)
+DIAG_REF = {}    # 0.21.74: the pages' latest self-reports (/api/diag), shared with the launcher
 PAGES = {}       # 0.21.40: page id -> monotonic time of its last heartbeat (a page that said goodbye leaves)
 HUB_CLOCK = {"off": 0.0, "rtt": None, "at": 0}   # 0.21.37: this host's clock offset to the HUB's (ms; 0 on the hub / unknown)
 _HUB_CLOCK_RUNNING = [False]
@@ -1370,8 +1371,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             out.append((BUILTIN_RELAY.encode(), current.encode()))
         return out
 
-    # Latest self-report per page. In memory only; never written anywhere.
-    diag_ref = {}
+    # Latest self-report per page. In memory only; never written anywhere. 0.21.74: one per process (DIAG_REF) -- the
+    # launcher's box keeper reads it
+    diag_ref = DIAG_REF
 
     # Fleet updates (0.8.1): this instance serves its own binary -- and any
     # OTHER platform's binary dropped into updates/<windows|linux|macos>/
@@ -4974,6 +4976,7 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
         start_hub_clock(relay_srv)          # 0.21.37: one fleet clock for latency (the hub's)
     srv.relay_ref = relay_ref
     srv.alive_ref = alive_ref
+    srv.diag_ref = DIAG_REF   # 0.21.74: the box keeper reads the box page's own reports (kastr.box_keeper)
     return srv
 
 

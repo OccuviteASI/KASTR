@@ -2814,6 +2814,116 @@ def choose_bind_port(port, host, squatter):
     return 0
 
 
+# ---- 0.21.74 (Kenton: Mendon's grid "split into separate streams" and its room lost the play icon over a weekend -- the
+# box's KASTR kept its cameras on the air, but its window was no longer drawing the grid or in the room; a relaunch fixed it;
+# he chose: build the safeguard). In the box modes the launcher watches its own window and reopens it when its page stops
+# reporting (hung / crashed renderer) or sits outside the room the box belongs in. At most once per 10 minutes, three times in
+# a row without getting back into the room; never for a box someone left on purpose (Leave clears the saved room). ----------
+BOX_KEEP_MODES = ("publisher", "publisher-relay")
+BOX_SETTLE_S = 180.0        # nothing is judged in the first minutes after a launch
+BOX_HUNG_S = 180.0          # the box page has not reported this long while its browser runs
+BOX_OUT_S = 300.0           # the box page reports, but it has not been in the box's room this long
+BOX_REOPEN_EVERY_S = 600.0
+BOX_REOPEN_MAX = 3
+KEEPER_BUSY = [False]       # supervise() ignores the browser exiting while the keeper swaps it
+KEEPER_PROC = [None]        # the window the keeper opened -- supervise() follows it
+
+
+def box_room():
+    """The room this box belongs in (rtsp-feeds.json, written when it joins; Leave writes it empty)."""
+    try:
+        with open(os.path.join(state_dir(), "rtsp-feeds.json"), encoding="utf-8-sig") as f:
+            doc = json.load(f)
+        return str((doc or {}).get("room") or "").strip()
+    except Exception:
+        return ""
+
+
+def box_page_report(diag, now):
+    """(seconds since the box page last reported, joined?) from the newest moq-watch-lite report, or None (never seen)."""
+    best = None
+    for snap in list((diag or {}).values()):
+        if not isinstance(snap, dict) or "moq-watch-lite" not in str(snap.get("page") or ""):
+            continue
+        try:
+            at = float(snap.get("_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        if at and (best is None or at > best[0]):
+            best = (at, snap)
+    if best is None:
+        return None
+    return max(0.0, now - best[0]), bool((best[1].get("watcher") or {}).get("joined"))
+
+
+def box_keeper_reason(report, browser_running, room, out_for, since_open=0.0):
+    """Why the box's window should be reopened, or None. `out_for` = seconds the page has reported being outside a room;
+    `since_open` = seconds since this window was opened (a page that never reports at all)."""
+    if report is None:
+        if browser_running and since_open > BOX_HUNG_S:
+            return "its page has not reported since the window opened %d s ago" % since_open
+        return None
+    age, joined = report
+    if browser_running and age > BOX_HUNG_S:
+        return "its page has not reported for %d s" % age
+    if room and not joined and age < 90 and out_for > BOX_OUT_S:
+        return "it has been out of room %s for %d min" % (room, out_for // 60)
+    return None
+
+
+def box_keeper(server, browser, url, page, proc_ref, mode, sleep=None):
+    if mode not in BOX_KEEP_MODES:
+        return
+    t0 = opened = time.monotonic()
+    last_reopen, reopens, out_since = -BOX_REOPEN_EVERY_S, 0, None
+    wait = sleep or (lambda s: STOP.wait(s))
+    while not wait(15.0):
+        now = time.monotonic()
+        if now - t0 < BOX_SETTLE_S or USER_BROWSER[0] or kastr_serve.CLOSING[0]:
+            continue
+        rep = box_page_report(getattr(server, "diag_ref", None), time.time())
+        if rep and rep[1]:
+            out_since, reopens = None, 0          # in its room: all good, the count starts again
+        elif rep and rep[0] < 90 and out_since is None:
+            out_since = now
+        proc = proc_ref[0]
+        running = proc is not None and proc.poll() is None
+        why = box_keeper_reason(rep, running, box_room(), (now - out_since) if out_since else 0, now - opened)
+        if not why or now - last_reopen < BOX_REOPEN_EVERY_S:
+            continue
+        if reopens >= BOX_REOPEN_MAX:
+            if reopens == BOX_REOPEN_MAX:
+                note("box keeper: the window was reopened %d times and the box is still not back in its room -- leaving it "
+                     "(open KASTR's window on this machine to see why)" % reopens)
+                reopens += 1
+            continue
+        last_reopen, out_since = now, None
+        reopens += 1
+        note("box keeper: reopening the window -- %s (%d of %d)" % (why, reopens, BOX_REOPEN_MAX))
+        KEEPER_BUSY[0] = True
+        try:
+            prof = _ACTIVE_PROFILE or profile_dir(browser)
+            close_app_window(prof, proc, grace=2.0)
+            t = time.monotonic()
+            while time.monotonic() - t < 10.0 and not browser_gone(prof):
+                time.sleep(0.25)
+            kastr_serve.CLOSING[0] = False
+            try:
+                server.diag_ref.clear()   # the old page's reports are not the new one's
+            except Exception:
+                pass
+            np_ = launch(browser, url, page)
+            if np_ is None:
+                note("box keeper: the window did not reopen (%s)" % (LAUNCH_ERROR[0] or "no browser"))
+            else:
+                proc_ref[0] = KEEPER_PROC[0] = np_
+                opened = time.monotonic()
+        except Exception as e:
+            note("box keeper: reopening failed: %s" % e)
+        finally:
+            KEEPER_BUSY[0] = False
+
+
 def supervise(proc, server):
     """Keep serving until the app window is really gone.
 
@@ -2860,6 +2970,10 @@ def supervise(proc, server):
 
     while not STOP.is_set():
         time.sleep(0.5)
+        if KEEPER_BUSY[0]:
+            continue                       # 0.21.74: the box keeper is swapping the window
+        if KEEPER_PROC[0] is not None and KEEPER_PROC[0] is not proc:
+            proc, started, died_at = KEEPER_PROC[0], time.monotonic(), None   # 0.21.74: follow the reopened window
         if proc.poll() is None:
             continue                       # our browser is still running
         if died_at is None:
@@ -3667,13 +3781,16 @@ def main():
         if proc is None:
             alert_until_stop(no_window_message(url, LAUNCH_ERROR[0] or "the browser exited at once"))
             return 0
+        if mode in BOX_KEEP_MODES and not USER_BROWSER[0]:   # 0.21.74: a box keeps its window drawing and in its room
+            threading.Thread(target=box_keeper, args=(server, browser, url, args.page, proc_ref, mode), daemon=True,
+                             name="kastr-box-keeper").start()
 
         supervise(proc, server)
         return 0
     finally:
         # Ends the process. Nothing after this runs, which is the point:
         # a half-torn-down KASTR holding its port is what this exists to stop.
-        teardown(server, proc)
+        teardown(server, proc_ref[0] or proc)   # 0.21.74: the window the box keeper reopened, if it did
 
 
 if __name__ == "__main__":

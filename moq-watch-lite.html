@@ -3628,6 +3628,9 @@
   const board = { room: "", pins: [], spots: [], grids: {}, split: [], spotOrder: [], customGrids: {}, gridMetas: {}, ver: null, at: 0, lock: false };   // 0.21.66: + spotOrder, customGrids, gridMetas   // 0.21.64: + grids -- the room's own camera-grid layouts; 0.21.65: + split, + lock (the view is locked)
   const roomHid = new Set();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
+  // 0.21.75 (Kenton: "hide individual cameras in my grid view"): roomHid also holds the cameras I hid in MY view of a grid (myHid,
+  // this device only) so their own tiles leave my gallery / rail / stage too; roomHidBoard = the room's own removals alone.
+  const myHid = new Set(), roomHidBoard = new Set();
   const boardCan = () => joinState === "joined" && !publishOnly && !isPublisherMode() && !isViewerMode() && CHANNEL !== LOBBY && !!authBase()
     && (!authSecured || (authRole !== "viewer" && !!authTokens?.member)) && !viewLockedForMe();   // 0.21.65 (m): a locked view -- only its creator or an admin
   // 0.21.65 (m) (Kenton: "Ability to lock the view in a room so only an admin/creator can spotlight/change anything" ... "Instead
@@ -3905,6 +3908,36 @@
   const cgNameOf = (kind, id) => (kind === "me" ? CG_ME + "/" + CG_ME_HOST : CHANNEL + "/" + CG_ROOM_HOST) + "/" + id + ".hang";
   function cgMine() { try { const o = JSON.parse(localStorage.getItem(cgKey()) || "{}"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch { return {}; } }
   function cgMineWrite(o) { try { localStorage.setItem(cgKey(), JSON.stringify(o)); } catch {} }
+  // 0.21.75 (Kenton: "hide individual cameras in my grid view"): a camera of a grid of cameras hidden on MY screen only -- kept on
+  // this device (kastr.cghide.<relay>: ["<grid id>|<camera>"]); its spot shows the spot's other cameras, or stays empty ("Hidden for
+  // you"). The grid itself (mine or the room's) is untouched, so nobody else sees a change. Not while its builder is open.
+  const cghKey = () => "kastr.cghide." + sbRelayHost();
+  let cghMem = null;   // {key, set}
+  function cghSet() {
+    const k = cghKey();
+    if (!cghMem || cghMem.key !== k) { let a = []; try { a = JSON.parse(localStorage.getItem(k) || "[]"); } catch {} cghMem = { key: k, set: new Set(Array.isArray(a) ? a.map(String) : []) }; }
+    return cghMem.set;
+  }
+  const cgHid = (id, k) => cghSet().has(id + "|" + k);
+  const cgVis = (t, cams) => (t.cgDraft || !t.cgDef ? cams : cams.filter((k) => !cgHid(t.cgDef.id, k)));
+  const cgHidList = (def) => [...new Set((def?.g?.slots || []).flatMap((s) => (s.cams || []).map(String)))].filter((k) => cgHid(def.id, k));
+  function cgHidPut(id, keys, on) {
+    const s = cghSet();
+    for (const k of keys) { if (on) s.add(id + "|" + k); else s.delete(id + "|" + k); }
+    try { if (s.size) localStorage.setItem(cghKey(), JSON.stringify([...s])); else localStorage.removeItem(cghKey()); } catch {}
+    try { cgSync(); } catch {}
+    try { cgTick(); cgDrawAll(); } catch {}
+  }
+  // 0.21.75: "Show hidden cameras (n)..." -- one row a camera, and Show all (opened after the first menu's click has closed it)
+  function hidShowMenu(anchor, list, show) {
+    if (!list.length) return;
+    const items = [{ cap: "Hidden on your screen only" }, ...list.map((x, i) => ({ value: "s" + i, icon: "eye", label: "Show " + String(x.label || "camera").slice(0, 32) }))];
+    if (list.length > 1) items.push({ sep: true }, { value: "all", icon: "eye", label: "Show all (" + list.length + ")" });
+    setTimeout(() => openMineMenu(anchor, items, "", (v) => {
+      if (v === "all") show(list.map((x) => x.key));
+      else { const x = list[Number(String(v).slice(1))]; if (x) show([x.key]); }
+    }), 0);
+  }
   const cgPending = new Map();   // a new grid while its builder is open: tile name -> def (kept on Done, gone on Cancel)
   const cgCams = new Set();      // every camera a grid of mine / of my room draws
   const cgWarm = new Set();      // ... of those, the ones to keep decoding off-stage now
@@ -3925,7 +3958,7 @@
     const defs = cgDefs();
     cgDefsNow = defs;
     cgCams.clear();
-    for (const d of defs.values()) for (const s of d.g.slots) for (const k of s.cams || []) cgCams.add(String(k));
+    for (const d of defs.values()) for (const s of d.g.slots) for (const k of s.cams || []) if (!cgHid(d.id, String(k))) cgCams.add(String(k));   // 0.21.75: not one I hid there
     let changed = false;
     for (const [n, d] of defs) {
       if (!tiles.has(n)) { createTile(n); changed = true; }
@@ -3958,7 +3991,7 @@
       const g = t.cgDraft || t.cgDef?.g || {}, slots = cgSlotsOf(t);
       t.cgCur = t.cgCur || []; t.cgCyc = t.cgCyc || [];
       slots.forEach((s, si) => {
-        const avail = (s.cams || []).map(String).filter((k) => tiles.has(k));
+        const avail = cgVis(t, (s.cams || []).map(String)).filter((k) => tiles.has(k));   // 0.21.75: never a camera I hid
         const st = t.cgCyc[si] || (t.cgCyc[si] = { cur: null, at: now });
         const motion = s.cycle?.mode !== "time" && avail.length > 1;
         if (motion) for (const k of avail) {
@@ -4013,7 +4046,7 @@
       const u = s.rect;
       if (!Array.isArray(u) || u.length !== 4) return;
       const r = { x: u[0] * W / 24 + gap, y: u[1] * H / 24 + gap, w: Math.max(2, u[2] * W / 24 - 2 * gap), h: Math.max(2, u[3] * H / 24 - 2 * gap) };
-      const cams = (s.cams || []).map(String), k = t.cgCur?.[si] ?? cams[0] ?? null;
+      const all = (s.cams || []).map(String), cams = cgVis(t, all), c0 = t.cgCur?.[si], k = (c0 != null && cams.includes(c0) ? c0 : null) ?? cams[0] ?? null;   // 0.21.75: the cameras I did not hide
       rects.push({ ...r, cam: k });
       cx.fillStyle = "#0b1116"; cx.fillRect(r.x, r.y, r.w, r.h);
       const mt = k && tiles.get(k), fr = mt && vgFrameOf(mt);
@@ -4024,7 +4057,7 @@
       }
       if (!drawn) {
         cx.fillStyle = "rgba(255,255,255,.5)"; cx.font = "500 15px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "middle";
-        cx.fillText(!k ? "Empty spot" : mt ? "Connecting…" : "Not available here", r.x + r.w / 2, r.y + r.h / 2);
+        cx.fillText(!k ? (all.length ? "Hidden for you" : "Empty spot") : mt ? "Connecting…" : "Not available here", r.x + r.w / 2, r.y + r.h / 2);   // 0.21.75
         cx.textAlign = "left"; cx.textBaseline = "alphabetic";
       }
       if (k) {
@@ -4054,7 +4087,7 @@
     const out = [], seen = new Set();
     const add = (p) => {
       p = String(p);
-      if (seen.has(p) || isCgName(p) || LOW_RE.test(p) || mineNames.has(p) || roomHid.has(p) || !p.endsWith(".hang")) return;
+      if (seen.has(p) || isCgName(p) || LOW_RE.test(p) || mineNames.has(p) || roomHidBoard.has(p) || !p.endsWith(".hang")) return;   // 0.21.75: a camera I only hid in my view of a grid stays on offer
       seen.add(p);
       out.push({ key: p, label: cgLabelOf(p).slice(0, 40), draw: (cx, w, h) => {
         const t = tiles.get(p), f = t && vgFrameOf(t);
@@ -4168,6 +4201,13 @@
     const items = [{ value: pinned ? "unpin" : "me", icon: "pin", label: pinned ? "Unpin" : "Pin for me", tip: pinned ? "Take it off your stage" : "Add it to your stage (only you)" }];
     if (room && !viewLockedForMe()) items.push({ value: lit ? "unspot" : "all", icon: "spotlight", label: lit ? "Remove spotlight" : "Spotlight for everyone", tip: lit ? "Everyone goes back to their own view" : "Put this grid on everyone's stage" });
     if (room && boardCan()) { const rp = boardPinned(name); items.push({ value: rp ? "rpinoff" : "rpin", icon: "pin", label: rp ? "Unpin from this room" : "Pin to this room" }); }
+    // 0.21.75 (Kenton: "hide individual cameras in my grid view"): anyone -- the room's grids too -- hides a camera on their own screen
+    let hcam = null;
+    try { const ar = anchor?.getBoundingClientRect?.(); if (ar && ar.width === 0 && ar.height === 0 && !t.cgDraft) hcam = cgCamAt(t, { clientX: ar.left, clientY: ar.top }); } catch {}
+    const nHid = cgHidList(def).length;
+    if (hcam || nHid) items.push({ sep: true });
+    if (hcam) items.push({ value: "cghide", icon: "eye", label: "Hide " + cgLabelOf(hcam).slice(0, 24) + " for me", tip: "Only on your screen \u2014 its spot shows its other cameras, or stays empty; everyone else still sees it" });
+    if (nHid) items.push({ value: "cgshow", icon: "eye", label: "Show hidden cameras (" + nHid + ")\u2026", tip: "Cameras you hid in this grid \u2014 only on your screen" });
     if (can) {
       items.push({ sep: true });
       items.push({ value: "edit", icon: "view", label: "Edit grid…", tip: "Spots, cameras from any room, cycling" });
@@ -4182,6 +4222,8 @@
       if (v === "all") { window.__spot?.set?.(name); return; }
       if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }
       if (v === "edit") { cgEdit(name); return; }
+      if (v === "cghide") { if (hcam) { cgHidPut(def.id, [hcam], true); window.__toast?.(cgLabelOf(hcam) + " is hidden in " + (def.g.name || "this grid") + " \u2014 only on your screen", 3500, { level: "event" }); } return; }   // 0.21.75
+      if (v === "cgshow") { hidShowMenu(anchor, cgHidList(def).map((k) => ({ key: k, label: cgLabelOf(k) })), (ks) => cgHidPut(def.id, ks, false)); return; }
       if (v === "rename") {
         const nv = await kastrConfirm({ title: "Rename grid", message: "A name for this grid", input: { placeholder: "Grid name", value: def.g.name || "" }, ok: "Rename" });
         if (typeof nv === "string" && nv.trim()) cgSave(def, { ...def.g, name: nv.trim() }, room);
@@ -4193,7 +4235,8 @@
   }
   window.__cg = { list: () => [...cgDefsNow].map(([n, d]) => ({ name: n, kind: d.kind, id: d.id, title: d.g.name, slots: d.g.slots })), sync: cgSync, new: cgNew, edit: cgEdit,
     save: cgSave, del: cgDelete, streams: () => cgStreams().map((x) => ({ key: x.key, label: x.label })), warm: () => [...cgWarm], cur: (n) => tiles.get(n)?.cgCur || null,
-    hide: cgHide, rects: (n) => tiles.get(n)?.cgRects || null, opened: () => cgOpened };   // rig
+    hide: cgHide, rects: (n) => tiles.get(n)?.cgRects || null, opened: () => cgOpened,
+    hid: (n) => cgHidList(tiles.get(n)?.cgDef), hidPut: (n, ks, on) => { const d = tiles.get(n)?.cgDef; if (d) cgHidPut(d.id, ks, on); } };   // rig (0.21.75: + my hidden cameras)
 
   // ---- 0.21.50 (Kenton: push an update to a person from the Relay page -- "Ask them first"): the update arrives through the
   // relay this app uses; the window asks "Update now" or "In 10 minutes" (then it updates by itself)
@@ -6116,10 +6159,10 @@
   function vgGet(gp) { try { const v = JSON.parse(localStorage.getItem(VG_KEY + vgKey(gp)) || "null"); return v && typeof v === "object" ? v : null; } catch { return null; } }
   function vgSet(gp, v) {
     try {
-      if (!v || (!Object.keys(v.rects || {}).length && !(v.hq || []).length && !(v.slots || []).length)) localStorage.removeItem(VG_KEY + vgKey(gp));   // 0.21.65: + spots
+      if (!v || (!Object.keys(v.rects || {}).length && !(v.hq || []).length && !(v.slots || []).length && !(v.hidden || []).length)) localStorage.removeItem(VG_KEY + vgKey(gp));   // 0.21.65: + spots; 0.21.75: + my hidden cameras
       else localStorage.setItem(VG_KEY + vgKey(gp), JSON.stringify(v));
     } catch {}
-    vgSync(); try { applyState(); } catch {}
+    try { roomGridChanged(); } catch { vgSync(); try { applyState(); } catch {} }   // 0.21.75: my hidden cameras' own tiles go / come back at once (roomGridChanged = re-hide + vgSync + applyState)
   }
   const vgHasRects = (gp) => { const v = vgGet(gp); return !!(v && ((v.rects && Object.keys(v.rects).length) || (Array.isArray(v.slots) && v.slots.length))); };   // 0.21.65: or spots
   const vgHq = (gp) => new Set((vgGet(gp)?.hq || []).map(String));
@@ -6136,7 +6179,7 @@
   const roomGridSet = (gp) => !!(roomGridRects(gp) || vgSlotsOk(roomGridOf(gp)?.slots));   // the room arranged this grid
   function vgEff(gp) {   // -> {src: draft|me|room|owner, rects (keyed by key()), slots (0.21.65), sens, gap, hidden: Set of member paths}
     if (vgDraft && vgDraft.gp === gp) return { src: "draft", rects: vgDraft.rects && Object.keys(vgDraft.rects).length ? vgDraft.rects : null, slots: vgSlotsOk(vgDraft.slots), sens: vgDraft.sens, gap: vgDraft.gap, hidden: new Set(vgDraft.hidden), key: (mp) => mp };
-    const hidden = new Set(roomGridOf(gp)?.hidden || []), v = vgGet(gp);
+    const v = vgGet(gp), hidden = vgMineHidden(gp, v, new Set(roomGridOf(gp)?.hidden || []));   // 0.21.75: + the cameras I hid for me, whichever layout draws it
     if (v && ((v.rects && Object.keys(v.rects).length) || vgSlotsOk(v.slots))) return { src: "me", rects: v.rects && Object.keys(v.rects).length ? v.rects : null, slots: vgSlotsOk(v.slots), sens: v.sens, gap: v.gap, hidden, key: vgKey };
     const rr = roomGridRects(gp), rg = roomGridOf(gp), rs = vgSlotsOk(rg?.slots);
     if (rr || rs) return { src: "room", rects: rr, slots: rs, sens: rg.sens, gap: rg.gap, hidden, key: (mp) => mp };
@@ -6144,6 +6187,47 @@
   }
   const vgLaidOut = (gp) => { const e = vgEff(gp); return !!(e.rects || e.slots || e.hidden.size); };   // drawn by this page (not the owner's picture as is)
   const vgActive = (gp) => { const v = vgGet(gp); return vgLaidOut(gp) || !!(v && (v.hq || []).length); };
+  // ---- 0.21.75 (Kenton: "hide individual cameras in my grid view"): MY HIDDEN CAMERAS of a grid, kept in my view of it
+  // (kastr.vgrid.<grid>.hidden = [vgKey(camera)], this device). Whatever layout draws the grid (mine, the room's, the owner's) they
+  // are not drawn and not hit by a click; with no rects the rest reflow into equal cells, with spots a spot shows its other cameras.
+  // Their own tiles leave my gallery / rail / stage (myHid, folded into roomHid). Right-click a cell: "Hide <camera> for me";
+  // "Show hidden cameras (n)..." brings them back; "Arrange this grid for me" removes / adds back the same way. Nobody else sees it.
+  function vgCamsOf(meta) { return [...(meta?.members || []), ...(meta?.more || []).map((x) => x.path)]; }
+  function vgMineHidden(gp, v, into) {   // my hidden keys -> this grid's camera paths
+    const ks = (v?.hidden || []).map(String);
+    if (ks.length) for (const mp of vgCamsOf(gridMeta.get(gp))) if (ks.includes(vgKey(mp))) into.add(mp);
+    return into;
+  }
+  function vgCamLabel(gp, mp) { const meta = gridMeta.get(gp), i = (meta?.members || []).indexOf(mp); return String((i >= 0 && meta.cells?.[i]) || (meta?.more || []).find((x) => x.path === mp)?.label || shortLabel(mp)).slice(0, 32); }
+  function vgMyHidList(gp) {   // [{key, label, draw}]: the editor's "Removed" row and the Show menu
+    const meta = gridMeta.get(gp), ks = new Set((vgGet(gp)?.hidden || []).map(String));
+    if (!meta || !ks.size) return [];
+    const out = vgStreams(gp, meta, vgKey, (mp) => !ks.has(vgKey(mp))).map(({ key, label, draw }) => ({ key, label, draw }));
+    for (const k of ks) if (!out.some((s) => s.key === k)) out.push({ key: k, label: k.split("/").pop().replace(/\.hang$/, "").slice(0, 32) });   // not in the grid now: still listed, so it can come back
+    return out;
+  }
+  function vgHideMine(gp, mp, quiet) {
+    const meta = gridMeta.get(gp);
+    if (!meta) return false;
+    const e = vgEff(gp);
+    if (!(meta.members || []).some((m) => m !== mp && !e.hidden.has(m))) { window.__toast?.("Keep at least one camera in the grid \u2014 \u201cShow hidden cameras\u201d brings them back.", 4500, { level: "warn" }); return false; }
+    const v = vgGet(gp) || {}, k = vgKey(mp), h = new Set((v.hidden || []).map(String));
+    h.add(k); v.hidden = [...h];
+    if (Array.isArray(v.hq)) v.hq = v.hq.filter((x) => String(x) !== k);   // its full-quality cell goes with it
+    vgSet(gp, v);
+    if (!quiet) window.__toast?.(vgCamLabel(gp, mp) + " is hidden in this grid \u2014 only on your screen (right-click the grid: Show hidden cameras)", 4500, { level: "event" });
+    return true;
+  }
+  function vgShowMine(gp, keys, inEditor) {
+    const v = vgGet(gp) || {}, ks = new Set(keys.map(String)), gb = window.__gb;
+    v.hidden = (v.hidden || []).map(String).filter((k) => !ks.has(k));
+    if (!inEditor && vgSlotsOk(v.slots) && gb) {   // my spots: a camera no spot names is not drawn -- it gets a free block of its own
+      for (const k of ks) if (!v.slots.some((s) => (s.cams || []).map(String).includes(k))) { const u = gb.free(v.slots.map((s) => s.rect)); if (u) v.slots.push({ rect: u, cams: [k], cycle: null }); }
+      v.rects = vgFirstRects(v.slots);
+    }
+    vgSet(gp, v);
+    if (!inEditor) window.__toast?.((ks.size === 1 ? "The camera is" : ks.size + " cameras are") + " back in the grid on your screen", 3500, { level: "event" });
+  }
   // 0.21.65: SPOTS -- each spot draws ONE of its cameras (the one its turn shows now: time, or the latest motion), a camera of the
   // grid that no spot names is not drawn, a camera the room removed never shows. Which one a spot shows is kept per grid + source.
   const vgCyc = new Map();   // "<grid>|<src>|<spot>" -> {cur, at}
@@ -6192,6 +6276,9 @@
     if (board.room === CHANNEL && CHANNEL !== LOBBY) for (const m of board.split || []) roomSplit.add(String(m));
     if (board.room === CHANNEL && CHANNEL !== LOBBY) for (const [gp, g] of Object.entries(board.grids || {})) if (!(vgDraft && vgDraft.gp === gp)) for (const m of g?.hidden || []) roomHid.add(String(m));
     if (vgDraft) for (const m of vgDraft.hidden) roomHid.add(String(m));
+    roomHidBoard.clear(); for (const m of roomHid) roomHidBoard.add(m);
+    myHid.clear(); for (const gp of gridMeta.keys()) vgMineHidden(gp, vgGet(gp), myHid);   // 0.21.75: + the cameras I hid in my view of a grid
+    for (const m of myHid) roomHid.add(m);
   }
   function roomGridChanged() {   // the room's grid layouts changed (a poll, my own change, the editor's draft): redraw + re-hide, live
     roomHidRebuild();
@@ -6358,7 +6445,7 @@
     if (!t || !meta || !gu || !ed) return;
     if (gridMode || selectedName !== name) { gridMode = false; select(name); }
     const before = JSON.stringify(vgGet(name) || null);
-    const skip = (mp) => roomHid.has(mp);   // 0.21.64: never a camera the room removed
+    const skip = (mp) => roomHid.has(mp);   // 0.21.64: never a camera the room removed (0.21.75: nor one I hid -- roomHid holds both)
     const streams = vgStreams(name, meta, vgKey, skip);
     const save = (slots, gap, sens) => {
       const v = vgGet(name) || {};
@@ -6384,7 +6471,12 @@
       onSens: (sens) => save(null, null, sens),
       onTemplate: (id) => { const slots = vgTemplate(id, streams.map((s) => s.key)); save(slots); return slots; },
       onReset: () => { const v = vgGet(name) || {}; delete v.rects; delete v.slots; delete v.sens; delete v.gap; vgSet(name, v); return vgSlotsNow(name, meta, vgKey, skip); },
-      onCancel: () => { try { const b = JSON.parse(before); const v = b || {}; vgSet(name, b ? v : null); } catch {} },
+      // 0.21.75: hide a camera on my screen (its own tile too) / add it back -- at once, like the room editor's remove; Cancel keeps them
+      removeTip: "Hide on your screen only \u2014 everyone else still sees it", removed: () => vgMyHidList(name),
+      onRemove: (k) => { const mp = vgCamsOf(meta).find((m) => vgKey(m) === k); return mp ? vgHideMine(name, mp, true) : false; },
+      onAddBack: (k) => { vgShowMine(name, [k], true); return true; },
+      cancelTip: "Undo the layout changes since you opened it (Esc) \u2014 hidden cameras stay hidden until you add them back",
+      onCancel: () => { try { const v = JSON.parse(before) || {}, h = vgGet(name)?.hidden || []; if (h.length) v.hidden = h; else delete v.hidden; vgSet(name, v); } catch {} },
       onDone: (slots, gap, sens) => save(slots, gap, sens),
       onClose: () => {},
     }), 300);
@@ -6469,7 +6561,8 @@
     const d = await boardGrid("gridHide", gp, { member: mp });
     if (d?.ok) window.__toast?.(label + " is removed from the grid for everyone in " + roomTitle(CHANNEL) + " \u2014 \u201cArrange for everyone\u201d brings it back", 4500, { level: "event" });
   }
-  window.__vg = { edit: vgEdit, hq: vgToggleHq, get: vgGet, set: vgSet, roomEdit: rgEdit, hide: rgHide, eff: vgEff, dst: vgDstRects, hidden: () => [...roomHid] };   // rig
+  window.__vg = { edit: vgEdit, hq: vgToggleHq, get: vgGet, set: vgSet, roomEdit: rgEdit, hide: rgHide, eff: vgEff, dst: vgDstRects, hidden: () => [...roomHid],
+    hideMine: vgHideMine, showMine: vgShowMine, myHidden: () => [...myHid], myList: (gp) => vgMyHidList(gp).map(({ key, label }) => ({ key, label })) };   // rig (0.21.75: + my hidden cameras)
   function gridRectsW(n, layout, W, H) {
     const rects = [];
     const grid = (cols, rows) => {   // 0.9.8: a short last row is centred
@@ -6670,6 +6763,7 @@
     rebuildGridChildren();   // 0.8.12
     gridSelectionFix();   // 0.13.3: an automatic pick that turned out to be a child goes back to the grid
     try { vgSync(); } catch {}   // 0.21.43: my view of this grid
+    try { const was = [...myHid].join("|"); roomHidRebuild(); if ([...myHid].join("|") !== was) roomGridChanged(); } catch {}   // 0.21.75: a camera I hid joined (or left) a grid
     if (gridZoom && !gridMeta.has(gridZoom.name)) gridZoom = null;
     queueRelayout();
   }
@@ -8894,6 +8988,7 @@
           items.push({ sep: true });
           items.push({ value: "vgedit", icon: "view", label: "Arrange this grid for me\u2026", tip: "Move and resize its cells on your screen only" });
           if (vgHasRects(name)) items.push({ value: "vgreset", label: roomGridSet(name) ? "Use the room\u2019s layout" : "Use the owner\u2019s layout" });   // 0.21.64: the room's layout when it has one (0.21.65: or its spots)
+          { const nh = (vgGet(name)?.hidden || []).length; if (nh) items.push({ value: "vgshow", icon: "eye", label: "Show hidden cameras (" + nh + ")\u2026", tip: "Cameras you hid in this grid \u2014 only on your screen" }); }   // 0.21.75
           if (roomGridCan(name)) {   // 0.21.64: the room's own layout -- everyone in this room sees it
             const nh = (roomGridOf(name)?.hidden || []).length;
             items.push({ value: "rgedit", icon: "view", label: "Arrange for everyone in this room\u2026", tip: "Move, resize and remove cameras for everyone in " + roomTitle(CHANNEL) + " (other rooms keep the box\u2019s layout)" });
@@ -8906,6 +9001,8 @@
               const mp = idx >= 0 ? (gm.members || [])[idx] : null;
               if (mp) {
                 hqCell = mp;
+                // 0.21.75 (Kenton: "hide individual cameras in my grid view"): anyone, viewers too -- only on this screen
+                items.push({ value: "vghide", icon: "eye", label: "Hide " + String(gm.cells?.[idx] || "this camera").slice(0, 24) + " for me", tip: "Only on your screen \u2014 the other cameras fill the grid; everyone else still sees it" });
                 if (roomGridCan(name)) items.push({ value: "rghide", label: "Remove " + String(gm.cells?.[idx] || "this camera").slice(0, 24) + " from this room\u2019s grid", tip: "For everyone in " + roomTitle(CHANNEL) + " \u2014 the box keeps sending it" });   // 0.21.64
                 if (roomGridCan(name) && (gm.feeds?.[idx] || tiles.has(mp))) {   // 0.21.65: split out -- needs the camera's own stream (feeds "both")
                   const sp = roomSplit.has(mp), cl = String(gm.cells?.[idx] || "this camera").slice(0, 24);
@@ -8938,6 +9035,8 @@
           if (v === "rgsplit") { if (hqCell) boardSplit(hqCell, !roomSplit.has(hqCell)); return; }
           if (v === "vgreset") { const s0 = vgGet(name) || {}; delete s0.rects; delete s0.slots; delete s0.sens; delete s0.gap; vgSet(name, s0); return; }   // 0.21.65: + spots
           if (v === "vghq") { if (hqCell) vgToggleHq(name, hqCell); return; }
+          if (v === "vghide") { if (hqCell) vgHideMine(name, hqCell); return; }   // 0.21.75
+          if (v === "vgshow") { hidShowMenu(anchor, vgMyHidList(name), (ks) => vgShowMine(name, ks)); return; }
           if (v === "vghqoff") { const s0 = vgGet(name) || {}; s0.hq = []; vgSet(name, s0); return; }
           if (v === "unpin") { pinToggle(name); return; }   // 0.21.45: this one only
           if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }   // 0.21.63: the room board

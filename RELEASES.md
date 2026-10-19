@@ -2,6 +2,40 @@
 
 What changed in each build, newest first.
 
+## v0.21.73 — encode only while watched, pause sharing, remote Restart and Move, admins can do what publishers do, no more corner zooms
+
+**Encode only while watched (Kenton, Mendon's CPU with Pass through off: "encode only while watched" — he chose: only the cameras the box transcodes).** A grid camera that its box re-encodes (Pass through off, or a camera that cannot pass through) now stops encoding a minute after the last viewer closes it, and starts again when anyone opens it.
+- **The grid itself is unaffected:** it keeps drawing from each camera's preview feed, so every cell stays live. Only the full-quality copy of a camera nobody has open is stopped.
+- **Opening a sleeping camera:** the click asks for it (from any relay of the fleet — the request travels through the hub to the box that has it). In the lab the box restarted the encode 0.3 s after a click made on the hub, then the camera's tile opened as usual; the grid cell fills the stage meanwhile with "full quality starting…".
+- **Pass-through cameras stay on all the time:** copying a camera costs next to nothing, and they keep opening at once.
+- **The box's Share ▸ RTSP rows** say "asleep — encodes only while watched" or "encoding while watched", and an asleep camera is never counted as down or restarted.
+- A recorded camera stays awake. `sleep_unwatched = off` in kastr.ini keeps every camera encoding always.
+- Viewers need 0.21.73 for the click to wake a sleeping camera (they follow their relay's version).
+
+**Restart a user's KASTR remotely (Kenton: "the ability to restart a client KASTR remotely through the fed hub or the relay they are connected to").** The Relay page's **Users** table has a **Restart** button on every app and box that checks in — on the hub for anyone in the federation, or on the relay the person uses.
+- The request reaches their KASTR at its next check-in (within a minute). Their window shows "An admin is restarting KASTR — it closes and reopens in 10 s. You'll be back in <room>.", then KASTR restarts and rejoins that room with the microphone and camera as they were. A box with no window restarts at once.
+- The row spins until the KASTR checks in again with a new start time, then shows **✓ restarted** (or **didn't restart** after 5 minutes, with the reason under the table).
+
+**Move a user to another relay (Kenton: "the ability to force a client to move to a different relay"; he chose: this session only).** **Move…** opens a list of the fleet's relays (this one and each spoke, with their addresses) or takes a typed address.
+- The person's window shows a 10-second notice, then KASTR restarts on the chosen relay and rejoins the room it was in; "nearest relay" does not move it back during that run.
+- The move lasts until they close KASTR — the next launch picks its relay as usual.
+- The row shows **✓ moved to <relay>** once the KASTR checks in from there.
+
+**Pause sharing, and share something else without stopping (Kenton: "I would like a pause share button, so I don't have to stop all streaming before resharing" — he chose both).**
+- **Pause sharing / Resume sharing:** a new amber button next to **Stop sharing** at the top, in your share tile's menu and in the floating mini window. While paused, everyone sees a dark "paused" card in the share's place and hears nothing from it; the share keeps its tile, its spotlight and any pins, so **Resume** carries on right where it was. Your own thumbnail says "Paused — viewers see a pause card". It works for screens, windows and tabs, presenter mode, and browser shares.
+- **Share something else…:** in the share tile's menu and the mini window. The Share panel opens with "Pick what to share instead of …"; the screen, window or tab you pick replaces the current share in place — same tile, spotlight and pins, the red border moves to the new window, nothing stops. A browser share asks the browser's picker again and swaps over.
+- **Lab check:** a shared test window paused in 0.5 s (the same stream switched to the card and kept flowing), resumed, then switched to a second test window: still one share, same stream name, the preview showed the new window.
+- **Fixed on the way:** **Stop sharing** on the red border's bar now ends the share in the KASTR window too — before, the "You're sharing" thumbnail and the mini window stayed behind.
+
+**Admins can do everything a publisher can (Kenton: "Admin needs to be able to do the same functions as a publisher in addition to admin").** The admin access code already shared, published and joined like a publisher, but locking a room, keeping a room open and changing a room's code were checked against the publisher code only — an admin got "Only the publisher access code can lock a room or keep it open", and each try counted towards the wrong-code lockout. The admin code (this relay's, or the hub's on a spoke) now does all three.
+
+**Cameras that open zoomed into a corner (Kenton: "some users that will click on video in Southridge and it will zoom to the top left 1/9 of the camera. It happens on some but not all cameras" — he has not seen it himself).** Two causes, both fixed:
+- **A cell zoom that lost its place.** Clicking a grid cell fills the stage with that cell while the camera opens. The grid comes in two sizes (small for small windows and slow links, full otherwise), and the zoom remembered its position in the small picture's pixels: when the full-size grid arrived during the wait, the zoom landed in the grid's top-left corner, roughly the top-left ninth. It now keeps the same spot when the picture changes size. This depended on window size, screen scaling and link speed, which is why only some users saw it.
+- **An old copy of the player kept in the browser.** The 0.21.63 fix for 4K HEVC cameras opening zoomed into their top-left corner changed a player file without renaming it, and KASTR served its files without telling the browser to check for a newer copy, so a machine that had the old file could keep using it after updating (only the 4K HEVC cameras were affected). KASTR now makes the browser check every file each time (an unchanged file costs a tiny "not modified" answer).
+- **Lab check:** the player file now comes with "check for a newer copy" and an unchanged one answers "not modified".
+
+**Offline users are hidden until you ask (Kenton: "In the user section, I would like a toggle to view offline in addition to online, and have this off by default").** The Users table shows who is online. A **Show offline users (N)** switch below the heading adds the 30-day history; it is off by default and remembered on that machine. It replaces the "not seen for over 24 hours" checkbox and is hidden when nobody is offline.
+
 ## v0.21.72 — camera previews with effects, more themes, a mirrored self view, sideways phones
 
 **Camera preview with the camera off (Kenton: "In the video options, show a preview of the camera even if the camera is not enabled in the room.").** The **Video effects and settings** panel showed "No camera" unless your camera was on in the room. Now, with the camera off, the panel opens the camera you picked just for itself and shows it through the background you've chosen. You can try backgrounds, blur strength and the other effects before anyone sees you.

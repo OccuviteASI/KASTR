@@ -821,8 +821,28 @@ def clean_clients(rows):
                     "since": int(r.get("since") or 0) if str(r.get("since") or "0").isdigit() else 0,   # 0.21.55: connected since
                     "kind": r.get("kind") if r.get("kind") in ("app", "box", "web") else "app",
                     "hostname": clean_label(r.get("hostname"), 64), "user": clean_label(r.get("user"), 32),   # 0.21.69
+                    "started": int(r.get("started") or 0) if str(r.get("started") or "0").isdigit() else 0,   # 0.21.73: its KASTR started at
+                    "cmd": r.get("cmd") if r.get("cmd") in ("restart", "move") else "",                   # 0.21.73: an admin command waiting
                     "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16]})
     return out
+
+
+CLIENT_CMDS = ("restart", "move")   # 0.21.73: what an admin may ask a user's KASTR to do (the Relay page's Users table)
+RELAY_URL_RE = re.compile(r"^(https?|wss?)://[A-Za-z0-9._~%\-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$|^(https?|wss?)://\[[0-9A-Fa-f:.]+\](:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$")
+
+
+def client_move_target(to):
+    """0.21.73: the relay address a Move sends a user to -- a bare host (or host:port) gets http:// and :4443 like the page's
+    relayAddr(); anything that is not a plain relay URL is refused (None)."""
+    u = str(to or "").strip()
+    if not u or len(u) > 200:
+        return None
+    if "://" not in u:
+        u = ("https://" if u.rstrip("/").endswith("/relay") else "http://") + u
+        host = u.split("://", 1)[1].split("/", 1)[0]
+        if not re.search(r":[0-9]{1,5}$", host) and "/relay" not in u:
+            u = u.split("://", 1)[0] + "://" + host + ":4443" + u.split("://", 1)[1][len(host):]
+    return u if RELAY_URL_RE.match(u) else None
 
 
 def xshare_path_ok(path, room, host=None):
@@ -2913,7 +2933,9 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
         if wait:
             return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
     codes = store.configured()
-    pub_ok = bool(codes and access and store.check("publisher", access))
+    # 0.21.73 (Kenton: "Admin needs to be able to do the same functions as a publisher in addition to admin"): the admin
+    # code locks / keeps / re-keys a room like the publisher code
+    pub_ok = bool(codes and access and (store.check("publisher", access) or store.check("admin", access)))
     if vouched:
         pub_ok = True   # 0.21.25: a spoke checked the publisher code against ITS codes and forwards with its federation token
 
@@ -3538,7 +3560,7 @@ class AuthService:
         if op == "register":
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return register_room(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
-                                 vouched=p.get("vouch") == "publisher")
+                                 vouched=p.get("vouch") in ("publisher", "admin"))   # 0.21.73: an admin the spoke verified too
         if op == "group":   # 0.21.68: vouch "admin" -- the spoke checked an admin token (create / rename / delete groups)
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return group_op(self.store, body, operator=p.get("vouch") == "admin", log=self.log)
@@ -4998,6 +5020,13 @@ class AuthService:
                         "platform": str(p.get("platform") or "")[:32], "name": str(p.get("name") or "")[:60],   # 0.21.55: 32 ("Chrome on Windows")
                         "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now,
                         "hostname": clean_label(p.get("hostname"), 64), "user": clean_label(p.get("user"), 32)})   # 0.21.69
+            try:
+                rec["started"] = max(0, int(float(p.get("started") or 0)))   # 0.21.73: a Restart is done when this moves
+            except (TypeError, ValueError):
+                rec["started"] = 0
+            ucmd = rec.pop("cmd", None)   # 0.21.73: an admin's Restart / Move -- delivered once, on this check-in
+            if isinstance(ucmd, dict) and now - int(ucmd.get("at") or 0) > 600:
+                ucmd = None               # nobody was there to take it for 10 minutes
             pend = rec.get("pending")
             if isinstance(pend, dict) and pend.get("version") and pend["version"] == rec["version"]:
                 rec.pop("pending", None)   # it runs what it was asked to run: done
@@ -5009,7 +5038,7 @@ class AuthService:
             if len(self.clients) > 512:
                 for k in sorted(self.clients, key=lambda k: self.clients[k].get("at", 0))[:len(self.clients) - 512]:
                     self.clients.pop(k, None)
-            changed = before != (rec.get("version"), rec.get("offer"), True)
+            changed = before != (rec.get("version"), rec.get("offer"), True) or isinstance(ucmd, dict)   # 0.21.73: the hub's row stops "waiting for its check-in"
         if changed and callable(self.on_clients):
             try:
                 self.on_clients()
@@ -5019,6 +5048,10 @@ class AuthService:
         out = {"ok": True}
         if isinstance(pend, dict) and pend.get("version"):
             out["update"] = pend["version"]
+        if isinstance(ucmd, dict):
+            out["cmd"] = {"id": ucmd.get("id"), "kind": ucmd.get("kind"), "to": ucmd.get("to") or ""}
+            self.log("relay auth: told %s (%s) to %s%s" % (rec.get("name") or node, node, ucmd.get("kind"),
+                                                          (" to " + str(ucmd.get("to"))) if ucmd.get("to") else ""))
         with self.lock:   # 0.21.51: a log collection this app has not been told about yet
             for ask in self.log_asks.values():
                 if node not in ask["told"] and now - ask["at"] < 600:
@@ -5094,6 +5127,26 @@ class AuthService:
         p["files"] = {str(k)[:40]: redact_log(v)[-LOG_FILE_CAP:] for k, v in (p.get("files") or {}).items() if isinstance(v, str)}
         return ({"ok": True}, 200) if self.logs_store(p) else ({"ok": False, "error": "no such collection"}, 404)
 
+    def client_cmd(self, node, kind, to=""):
+        """0.21.73 (Kenton: "restart a client KASTR remotely" / "force a client to move to a different relay"): a Restart or
+        Move for one app connected here, handed over on its next check-in (within a minute). -> True when known."""
+        node = str(node or "")
+        if kind not in CLIENT_CMDS:
+            return False
+        with self.lock:
+            rec = self.clients.get(node)
+            if not rec or time.time() - (rec.get("at") or 0) > self.CLIENT_FORGET_S:
+                return False
+            rec["cmd"] = {"id": os.urandom(6).hex(), "kind": kind, "to": str(to or "")[:200], "at": int(time.time())}
+        self.log("relay auth: %s (%s) will be asked to %s%s on its next check-in"
+                 % (rec.get("name") or node, node, kind, (" to " + str(to)) if to else ""))
+        if callable(self.on_clients):
+            try:
+                self.on_clients()
+            except Exception:
+                pass
+        return True
+
     def client_pend(self, node, version):
         """An Update for one app connected here: its next check-in is told to update (from this relay). -> True when known."""
         node = str(node or "")
@@ -5122,7 +5175,8 @@ class AuthService:
                 rows[node] = {"node": node, "name": c.get("name") or "", "version": c.get("version") or "", "mode": c.get("mode") or "",
                               "hostname": c.get("hostname") or "", "user": c.get("user") or "",   # 0.21.69
                               "platform": c.get("platform") or "", "ip": c.get("ip") or "", "at": c.get("at"), "offer": c.get("offer") or "",
-                              "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": []}
+                              "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": [],
+                              "started": int(c.get("started") or 0), "cmd": (c.get("cmd") or {}).get("kind") or ""}   # 0.21.73
             sess = [dict(v) for v in self._sessions.values()]
         for v in sess:
             host = str(v.get("host") or "")
@@ -5194,7 +5248,7 @@ class AuthService:
                     rec["peer"] = next((v.get("peer") for v in self.spokes.values() if (v.get("name") or "") == rec["spoke"]), None)
                 else:
                     self.cmd["updateAll"] = rec
-            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient", "logs", "restart"):   # 0.21.52: + restart   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
+            if name in ("closeRoom", "wake", "rtsp", "updateOne", "updateClient", "logs", "restart", "clientCmd"):   # 0.21.73: + a user's Restart / Move   # 0.21.52: + restart   # 0.21.50: + one user's update; 0.21.2: a list -- two closes between two polls both arrive; 0.21.7: wakes too; 0.21.16: rtsp switch flips too; 0.21.26: per-spoke updates
                 self.cmd[name] = (list(self.cmd.get(name) or []) + [rec])[-16:]
             else:
                 self.cmd[name] = rec
@@ -5257,6 +5311,7 @@ class AuthService:
                    "rehome": self.cmd.get("rehome"),                      # 0.21.26: 0.21.25 raised it but never sent it (spokes got it from the 403 hint)
                    "updateOne": list(self.cmd.get("updateOne") or []),   # 0.21.26: one spoke at a time
                    "updateClient": list(self.cmd.get("updateClient") or []),   # 0.21.50: one user, through the relay it uses
+                   "clientCmd": list(self.cmd.get("clientCmd") or []),         # 0.21.73: one user's Restart / Move, the same way
                    "logs": list(self.cmd.get("logs") or []),   # 0.21.51: a log collection
                    "restart": list(self.cmd.get("restart") or [])}   # 0.21.52: restart one spoke
         xs_ver, xs_rows = self._xs("local").snapshot()   # 0.21.41: the hub's cross-room listings (spokes mirror them)
@@ -5489,6 +5544,14 @@ class AuthService:
                         continue
                     if prev < cseq <= seq and callable(self.on_cmd):
                         threading.Thread(target=self.on_cmd, args=("updateClient", c), daemon=True).start()
+                # 0.21.73: a Restart / Move for one user connected to a spoke
+                for c in (cmd.get("clientCmd") or []):
+                    try:
+                        cseq = int(c.get("seq") or 0)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if prev < cseq <= seq and callable(self.on_cmd):
+                        threading.Thread(target=self.on_cmd, args=("clientCmd", c), daemon=True).start()
                 # 0.21.25: the hub handed its duties to another box -- re-point there
                 rh = cmd.get("rehome") if isinstance(cmd.get("rehome"), dict) else None
                 if rh and callable(self.on_cmd) and int(rh.get("seq") or 0) > prev:
@@ -6773,6 +6836,18 @@ class Relay:
             return
         if name == "logs":   # 0.21.51: the hub collects logs -- mine now, my apps' on their next check-in
             self.collect_logs(info or {})
+            return
+        if name == "clientCmd":   # 0.21.73: the hub asked ONE of my users to restart / move
+            try:
+                import kastr_serve as _ks
+                me = self.relay_name() or _ks.host_slug()
+            except Exception:
+                me = self.relay_name() or "relay"
+            if str((info or {}).get("spoke") or "") != me or not self.auth:
+                return
+            kind = str((info or {}).get("kind") or "")
+            ok = self.auth.client_cmd(str((info or {}).get("node") or ""), kind, str((info or {}).get("to") or ""))
+            self.log("relay federation: hub asked user %s to %s -> %s" % ((info or {}).get("node"), kind, "queued" if ok else "not connected here"))
             return
         if name == "updateClient":   # 0.21.50: the hub asked ONE of my users to update -- from me (this relay's feed)
             try:
@@ -8428,6 +8503,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/bans/clear",      # 0.17.0
                  "/api/relay/spokes/update",   # 0.21.0
                  "/api/relay/clients/update",  # 0.21.50
+                 "/api/relay/clients/cmd",     # 0.21.73: Restart / Move a user's KASTR
                  "/api/relay/users/nick",      # 0.21.69: a machine's nickname on the hub's Users table
                  "/api/relay/logs/collect",    # 0.21.51
                  "/api/relay/spokes/restart",  # 0.21.52
@@ -8560,6 +8636,8 @@ def handle_api(handler, relay, path, set_relay_url=None):
         reply({"spokes": auth.spokes_public() if auth else [], "stale": auth.spokes_stale() if auth else 0, "notHub": bool(auth and auth.not_hub()), "cmd": (auth.cmd if auth else None),
                "version": ver, "secured": bool(auth), "me": me,
                "clients": (auth.fleet_clients(me, ver, _machine_node()) if auth else []),   # 0.21.50: every user in the federation
+               "meAddrs": [{"address": "http://%s:%d" % (ip, int(getattr(relay, "port", 4443) or 4443)), "why": "one of this relay's network addresses"}
+                           for ip in (local_ips() or [])][:8],                                # 0.21.73: the Move dialog's choices for this relay
                "standby": relay.standby_view()})                                             # 0.21.53: the standby hub
         return True
     if path == "/api/relay/standby":   # 0.21.53 (Kenton: "Make standby" on a spoke's row) {name, address?} | {clear: true}
@@ -8618,6 +8696,39 @@ def handle_api(handler, relay, path, set_relay_url=None):
         p = _payload_of(handler) or {}
         obj, code = auth.set_nick(p.get("node"), p.get("nick"))
         reply(obj, code)
+        return True
+    if path == "/api/relay/clients/cmd":   # 0.21.73: Restart / Move one user -- through the relay it uses (here, or a spoke via the hub)
+        auth = getattr(relay, "auth", None)
+        if not auth:
+            reply({"error": "the relay is not running secured on this machine"}, 400)
+            return True
+        p = _payload_of(handler) or {}
+        node, via, kind = str(p.get("node") or "")[:64], str(p.get("relay") or "")[:40], str(p.get("kind") or "")
+        try:
+            import kastr_serve as _ks
+            me = relay.relay_name() or _ks.host_slug()
+        except Exception:
+            me = relay.relay_name() or "relay"
+        if not HOST_RE.match(node) or kind not in CLIENT_CMDS:
+            reply({"error": "node and kind (restart or move) required"}, 400)
+            return True
+        to = ""
+        if kind == "move":
+            to = client_move_target(p.get("to"))
+            if not to:
+                reply({"error": "a relay address to move to is required (for example 10.0.2.14 or https://10.0.2.14:4443)"}, 400)
+                return True
+        if not via or via == me:
+            if not auth.client_cmd(node, kind, to):
+                reply({"error": "that user's KASTR has not checked in here in the last 3 minutes (0.21.73 or newer can be restarted or moved)"}, 409)
+                return True
+            reply({"ok": True, "node": node, "relay": me, "kind": kind, "to": to})
+            return True
+        if not any((v.get("name") or "") == via for v in auth.spokes.values()):
+            reply({"error": "%s is not a registered spoke" % via}, 409)
+            return True
+        rec = auth.raise_cmd("clientCmd", {"spoke": via, "node": node, "kind": kind, "to": to})
+        reply({"ok": True, "seq": rec["seq"], "node": node, "relay": via, "kind": kind, "to": to})
         return True
     if path == "/api/relay/clients/update":   # 0.21.50: one user updates FROM THE RELAY IT USES (here, or a spoke via the hub)
         auth = getattr(relay, "auth", None)

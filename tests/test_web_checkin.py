@@ -51,9 +51,9 @@ class Seen(unittest.TestCase):   # 0.21.55 (Kenton: hide users not seen for 24 h
     def test_the_relay_page_hides_a_day_old_row(self):
         with io.open(os.path.join(HERE, "relay.html"), encoding="utf-8") as f:
             rel = f.read()
-        self.assertIn('<input type="checkbox" id="usersOld">', rel)
-        self.assertIn("const isOld = (r) => !!r.at && nowS - r.at > OLD_S && !pending.has(\"user:\" + r.node);", rel)
-        self.assertIn('localStorage.getItem("kastr.relay.usersOld") === "1"', rel)
+        self.assertIn('<span class="switch"><input type="checkbox" id="usersOffline"><i></i></span>', rel)   # 0.21.73: offline users, off by default
+        self.assertIn("const isOld = (r) => (!!r.offline || (!!r.at && nowS - r.at > OLD_S)) && !pending.has(\"user:\" + r.node);", rel)
+        self.assertIn('localStorage.getItem("kastr.relay.usersOffline") === "1"', rel)
 
 
 class UpdateAll(unittest.TestCase):   # 0.21.55 (Kenton: "I want an update all users button")

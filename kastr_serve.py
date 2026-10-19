@@ -912,6 +912,9 @@ ONDEMAND = {}
 ONDEMAND_LOCK = threading.Lock()
 ONDEMAND_TTL = 30          # a registration the bridge stopped refreshing is gone
 ONDEMAND_WANT = 120        # demand older than this is not reported back
+ONDEMAND_POKE = None       # 0.21.73: the bridge's od_poke -- a fresh demand starts the camera now, not at the next 5 s round
+ADMIN_NOTICE = {}          # 0.21.73: an admin's Restart / Move about to happen {id, kind, to, from, at, deadline} -- the window says so
+ADMIN_RELAUNCH_HOOK = None  # 0.21.73: kastr.py -- relaunch (optionally on another relay for this run)
 
 # 0.18.0: HLS for browsers without MSE (iPhones before iOS 17): one `moq export hls` per
 # broadcast on a loopback port, shared by its viewers, reached through /api/hls/<key>/...
@@ -999,10 +1002,16 @@ def ondemand_touch(broadcast, now=None):
     now = now or time.time()
     with ONDEMAND_LOCK:
         rec = ONDEMAND.get(broadcast)
-        if rec is not None:
-            rec["wantedAt"] = now
-            return True
-    return False
+        if rec is None:
+            return False
+        fresh = not rec.get("wantedAt") or now - rec["wantedAt"] > 30
+        rec["wantedAt"] = now
+    if fresh and callable(ONDEMAND_POKE):   # 0.21.73: a sleeping camera starts within a second of the click
+        try:
+            ONDEMAND_POKE()
+        except Exception:
+            pass
+    return True
 
 
 def ondemand_sync(room, host, feeds, now=None):
@@ -1025,7 +1034,7 @@ def ondemand_sync(room, host, feeds, now=None):
                        low=(str(f.get("low")) if f.get("low") else None), at=now)
             ONDEMAND[b] = rec
             try:
-                if ARCHIVE_WANTS(b) or not kastr_rtsp.ONDEMAND_ENABLED:   # the operator records it -> keep it awake; 0.21.10: this host is off -> an older box's standby pairs wake and stay up
+                if ARCHIVE_WANTS(b) or (not kastr_rtsp.ONDEMAND_ENABLED and not f.get("idle")):   # the operator records it -> keep it awake; 0.21.10: this host is off -> an older box's standby pairs wake and stay up; 0.21.73: a camera that encodes only while watched sleeps whatever this switch says
                     rec["wantedAt"] = now
             except Exception:
                 pass
@@ -1711,6 +1720,13 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             return kastr_relay.deny_remote(self, what)
 
         def end_headers(self):
+            # 0.21.73 (Kenton: users at Southridge still see a camera "zoom to the top left"): /assets went out with
+            # Last-Modified and no Cache-Control, so a browser kept a vendored player module by heuristic (about a tenth of
+            # its age) -- the 0.21.63 HEVC fix patched player-DqpNnBDT.mjs under the SAME name, and a machine that had the
+            # old one kept running it after updating. Every asset is now revalidated (a 304 is cheap).
+            if self.path.split("?", 1)[0].startswith("/assets/") and not any(
+                    bytes(h).lower().startswith(b"cache-control:") for h in getattr(self, "_headers_buffer", [])):
+                self.send_header("Cache-Control", "no-cache")
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
             self.send_header("X-KASTR-Version", version_stamp())   # 0.21.4: a stale service worker reads this
             self.send_header("Cross-Origin-Embedder-Policy", coep)
@@ -2057,6 +2073,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "updateCheck": self._update_check(),
                 # 0.21.61: this KASTR is the relaunch of an update (the last 15 min) -- the page rejoins its room
                 "justUpdated": os.environ.get("KASTR_UPDATED") == "1" and time.time() - _SERVE_T0 < 900,
+                "justRestarted": os.environ.get("KASTR_RESTARTED") == "1" and time.time() - _SERVE_T0 < 900,   # 0.21.73: an admin's Restart / Move
+                "adminMoved": (os.environ.get("KASTR_MOVED") or "") if time.time() - _SERVE_T0 < 900 else "",
                 # 0.8.13: seconds since the app window last pinged (None: never)
                 # -- the launcher's hand-off check reads it -- and the bundled
                 # ffmpeg's version, so a smoke test can assert the bundle.
@@ -2928,6 +2946,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                             {"Retry-After": wait})
                 access = str(p.get("access") or "")
                 vouch = "publisher" if (access and store.configured() and store.check("publisher", access)) else None
+                if not vouch and access and store.configured():   # 0.21.73: an admin code does what a publisher's does (here, or the hub's)
+                    _a = getattr(relay_srv, "auth", None)
+                    if store.check("admin", access) or (_a is not None and hasattr(_a, "_hub_admin_ok") and _a._hub_admin_ok(access)):
+                        vouch = "admin"
                 body = {"op": "register", "body": p, "peer": peer, "vouch": vouch}
             elif path == "/api/rooms/close":
                 body = {"op": "close", "slug": slug, "roomKey": p.get("roomKey"), "vouch": "admin" if self._admin_for(slug) else None}
@@ -3930,6 +3952,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if not re.match(r"^[a-z0-9-]{1,32}$", room) or not b.startswith(room + "/"):
                     return self._json_cors(400, {"error": "bad room or broadcast"})
                 bad = self._room_claims(room, str(p.get("jwt") or ""))
+                if bad and bad[0] == 403 and "cover" in bad[1]:
+                    # 0.21.73: a camera from another room on my stage (a watched room, a cross-room grid): any member token
+                    # of this relay may ask for it -- a demand only wakes a camera, it grants nothing
+                    bad = self._room_claims("", str(p.get("jwt") or ""))
                 if bad:
                     return self._json_cors(bad[0], {"error": bad[1]})
                 known = ondemand_touch(b)
@@ -4473,7 +4499,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if not self._local():
                     return self._deny("update offers")
                 off = dict(UPDATE_OFFER) if UPDATE_OFFER.get("version") else None
-                raw = json.dumps({"offer": off, "version": read_version()}).encode()
+                adm = dict(ADMIN_NOTICE) if ADMIN_NOTICE.get("kind") and time.time() < float(ADMIN_NOTICE.get("deadline") or 0) + 30 else None   # 0.21.73
+                raw = json.dumps({"offer": off, "version": read_version(), "admin": adm}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
@@ -4961,6 +4988,8 @@ def make_bridge(state_dir=None, log=None, hostname=None):
         STATE_DIR = state_dir   # 0.21.46: the kept host id lives there -- the bridge is made before the launcher sets it
     b = kastr_rtsp.Bridge(state_dir=state_dir, log=log, host_slug=host_slug(hostname))
     b.web_base_for = _od_web_base      # 0.18.0: where the on-demand loop syncs
+    global ONDEMAND_POKE
+    ONDEMAND_POKE = b.od_poke          # 0.21.73
     return b
 
 

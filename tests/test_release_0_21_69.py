@@ -56,7 +56,7 @@ class Machine(unittest.TestCase):
 
     def test_app_reports_it(self):
         k = open(os.path.join(HERE, "kastr.py"), encoding="utf-8").read()
-        self.assertIn('"hostname": _checkin_hostname(), "user": _checkin_user()}', k)
+        self.assertIn('"hostname": _checkin_hostname(), "user": _checkin_user(),', k)   # 0.21.73: + started
         self.assertIn("return socket.gethostname()[:64]", k)
         self.assertIn("return getpass.getuser()[:32]", k)
 

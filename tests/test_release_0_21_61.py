@@ -75,7 +75,7 @@ class ResumeAfterUpdate(unittest.TestCase):
         s = read("kastr_serve.py")
         self.assertIn('"justUpdated": os.environ.get("KASTR_UPDATED") == "1"', s)
         self.assertIn('const LIVE_KEY = "kastr.live";', p)
-        self.assertIn("if (!d?.justUpdated || joinState !== \"prejoin\"", p)
+        self.assertIn("if (!(d?.justUpdated || d?.justRestarted) || joinState !== \"prejoin\"", p)   # 0.21.73: + an admin's Restart / Move
         self.assertIn("try { localStorage.removeItem(LIVE_KEY); } catch {}   // 0.21.61: Leave = nothing to resume", p)
         self.assertIn("if (saved.resumed && joinState === \"joined\") resumeAfterJoin(saved);", p)
 

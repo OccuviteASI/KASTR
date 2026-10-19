@@ -69,6 +69,11 @@ def ffmpeg_exit_reason(code):
 
 
 ONDEMAND_ENABLED = str(os.environ.get("KASTR_ONDEMAND") or "").strip().lower() in ("1", "true", "yes", "on")
+# 0.21.73 (Kenton, Mendon's CPU with pass through off: "encode only while watched"; he chose: only the cameras this box
+# TRANSCODES): a grid camera whose pair encodes stops a minute after its last viewer and starts again on a viewer's demand
+# (the grid keeps drawing from the camera's monitor). A pair that copies costs next to nothing and stays on (instant opens).
+# kastr.ini `sleep_unwatched = off` (or KASTR_SLEEP_UNWATCHED=0) keeps every pair encoding always.
+SLEEP_UNWATCHED = str(os.environ.get("KASTR_SLEEP_UNWATCHED") or "on").strip().lower() not in ("0", "false", "no", "off")
 # 0.12.0: a probe that could not tell (camera off when a restored feed came
 # back) is asked again after this long instead of being believed for the run.
 PROBE_RETRY_S = 30.0
@@ -1472,6 +1477,22 @@ class Hooks:
 PUBLISH_RETRY_S = [1, 2, 5, 10, 20, 30]
 
 
+def pause_card_input(url):
+    """0.21.73 (Kenton: "a pause share button, so I don't have to stop all streaming before resharing"): what a paused
+    share sends instead of the screen -- a dark card with a pause sign, at the size the share has (the same broadcast, so
+    viewers keep its tile, pins and spotlight). No fonts needed (two boxes)."""
+    w, h = 1280, 720
+    try:
+        import kastr_screen
+        w, h = kastr_screen.capture_size(url)
+    except Exception:
+        pass
+    w, h = max(320, int(w or 1280)) // 2 * 2, max(180, int(h or 720)) // 2 * 2
+    bar = "drawbox=x=%s:y=ih*0.38:w=iw*0.035:h=ih*0.24:color=white@0.85:t=fill"
+    vf = ("color=c=0x0f2235:s=%dx%d:r=%d," % (w, h, 30) + bar % "iw*0.455" + "," + bar % "iw*0.51" + ",format=yuv420p,setsar=1")
+    return ["-f", "lavfi", "-i", vf]
+
+
 def nudge_bucket(why):
     """0.13.1: which counter a nudge reason lands in -- the page's viewer
     stall ("viewer", "stall*"), the page's no-echo heal ("no-echo"), or a
@@ -1493,7 +1514,7 @@ class Publisher:
     exiting restarts the pair on the RTSP retry ladder until stop()."""
 
     def __init__(self, bridge, feed, broadcast, relay, hevc=False, audio=True, passthrough=None,
-                 minter=None, keep=True, ondemand=False, low=False, role="main", label=""):   # 0.12.0 / 0.18.0
+                 minter=None, keep=True, ondemand=False, low=False, role="main", label="", idle=False):   # 0.12.0 / 0.18.0; 0.21.73 idle
         self.bridge = bridge
         self.feed = feed
         self.broadcast = broadcast
@@ -1509,6 +1530,9 @@ class Publisher:
         self.wantedAt = None        # last time the relay host said a viewer wants it
         self.suspended = False      # 0.21.16: the box's RTSP switch is off -- recorded, nothing runs (Publisher.suspend / resume)
         self.wokeAt = None
+        self.paused = False                              # 0.21.73: a paused share sends a "paused" card (Bridge.pause)
+        self.wantIdle = bool(idle) and role == "main"   # 0.21.73: the page says this camera is a grid member (asleep while unwatched)
+        self.sleepy = False                              # ... and it takes effect once this pair is known to ENCODE (_sleepy_eval)
         self.lowPub = None
         if low and role == "main" and ONDEMAND_ENABLED:   # 0.21.10: no -low.hang sibling while the switch is off
             self.lowPub = Publisher(bridge, feed, low_broadcast(broadcast), relay, audio=False, minter=minter,
@@ -1579,6 +1603,8 @@ class Publisher:
                 "gen": self._gen, "restartsTotal": self.restartsTotal,            # 0.13.3
                 "lastSessionAt": self.lastSessionAt,                               # 0.13.3
                 "ondemand": self.ondemand, "standby": self.standby,                # 0.18.0
+                "sleepy": self.sleepy, "idle": self.wantIdle,                      # 0.21.73: encodes only while watched
+                "paused": bool(self.paused),                                       # 0.21.73: a share showing its "paused" card
                 "wantedAt": self.wantedAt, "role": self.role,
                 "low": (self.lowPub.low_info() if self.lowPub else None),
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
@@ -1603,12 +1629,16 @@ class Publisher:
         if self.role == "low":      # 0.18.0: the thumbnail sibling is always a small encode
             self.copy = False
             self.codec = "h264"
+        self._sleepy_eval()         # 0.21.73: an encoding grid camera sleeps while nobody watches
         enc = None if self.copy else self.bridge.usable_encoder()
         # 0.21.31: -progress on stderr -> flowingAt (a pair can RUN for a long time against a dark camera without one byte)
-        args = ([ff, "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "2"] + encoder_pre_args(enc)
-                + input_args(self.feed.url, role="low" if self.role == "low" else "pub"))
         scr = is_screen(self.feed.url)
-        if scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
+        card = scr and self.paused and self.role != "low"   # 0.21.73: a paused share -- the card, and silence
+        args = ([ff, "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "2"] + encoder_pre_args(enc)
+                + (pause_card_input(self.feed.url) if card else input_args(self.feed.url, role="low" if self.role == "low" else "pub")))
+        if card and self.audio:
+            args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+        elif scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
             import kastr_screen
             args += kastr_screen.LOOPBACK_INPUT
         if self.role == "low":
@@ -1657,7 +1687,7 @@ class Publisher:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             ff = None
             try:
-                snd = is_screen(self.feed.url) and self.audio and self.role != "low"   # 0.21.20
+                snd = is_screen(self.feed.url) and self.audio and self.role != "low" and not self.paused   # 0.21.20; 0.21.73: a paused share is silent
                 ff = subprocess.Popen(ff_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                       stdin=subprocess.PIPE if snd else subprocess.DEVNULL,
                                       bufsize=0, creationflags=flags)
@@ -1729,6 +1759,21 @@ class Publisher:
         if h:
             h.fire("notready", self.broadcast, self.feed.id, self.relay, reason=reason)
 
+    def _sleepy_eval(self):
+        """0.21.73: encode only while watched -- a grid camera (wantIdle) whose pair ENCODES joins the demand loop: it runs
+        a minute from now, then sleeps until a viewer's demand wakes it. A copying pair, an on-demand one (0.18.0 shape) or
+        the switch off (sleep_unwatched = off) never sleeps this way."""
+        was = self.sleepy
+        self.sleepy = bool(self.role == "main" and self.wantIdle and SLEEP_UNWATCHED and self.copy is False and not self.ondemand)
+        if self.sleepy:
+            if self.wokeAt is None or not was:
+                self.wokeAt = time.time()
+            try:
+                self.bridge._od_ensure()
+            except Exception:
+                pass
+        return self.sleepy
+
     # ---- 0.18.0: on-demand standby -------------------------------------------------
     def wake(self, reason="demand", viewer=""):
         """A viewer wants an on-demand pair: leave standby and start it (and its low sibling)."""
@@ -1747,7 +1792,7 @@ class Publisher:
     def sleep(self, reason="idle"):
         """Back to standby: stop the processes but keep the publisher (and its settings)."""
         with self._lock:
-            if self.stopping or self.standby or not self.ondemand:
+            if self.stopping or self.standby or not (self.ondemand or self.sleepy):   # 0.21.73: + an encoding grid camera
                 return False
             self.standby = True
             self._gen += 1
@@ -1814,6 +1859,8 @@ class Publisher:
             self.standby = True
             self.wokeAt = None
             return True
+        self.standby = False   # 0.21.73: a camera asleep when the switch went off comes back on air (it sleeps again unwatched)
+        self.wokeAt = time.time()
         self.start()
         return True
 
@@ -2528,15 +2575,15 @@ class Bridge:
 
     # ---- native publishing (0.9.1) --------------------------------------
     def publish(self, feed_id, broadcast, relay, hevc=False, audio=True, passthrough=None, force=False, keep=None,
-                ondemand=False, low=False, label=""):   # 0.12.0: keep; 0.18.0: ondemand, low, label
+                ondemand=False, low=False, label="", idle=False):   # 0.12.0: keep; 0.18.0: ondemand, low, label; 0.21.73: idle
         # 0.18.0: one publish at a time per feed -- two quick option toggles on the page sent two
         # requests that raced, and the older one could land last
         with self._lock:
             fl = self._feed_locks.setdefault(int(feed_id), threading.Lock())
         with fl:
-            return self._publish(feed_id, broadcast, relay, hevc, audio, passthrough, force, keep, ondemand, low, label)
+            return self._publish(feed_id, broadcast, relay, hevc, audio, passthrough, force, keep, ondemand, low, label, idle)
 
-    def _publish(self, feed_id, broadcast, relay, hevc, audio, passthrough, force, keep, ondemand, low, label):
+    def _publish(self, feed_id, broadcast, relay, hevc, audio, passthrough, force, keep, ondemand, low, label, idle=False):
         feed = self.get(feed_id)
         if not feed:
             raise ValueError("no such feed")
@@ -2575,6 +2622,11 @@ class Bridge:
                 self.persist_feeds()
             if label and label != cur.label:                             # 0.18.0: a renamed feed
                 cur.label = str(label)[:80]
+            if bool(idle) != cur.wantIdle and cur.role == "main":          # 0.21.73: joined / left a grid -- no restart
+                cur.wantIdle = bool(idle)
+                if cur.copy is not None and not cur._sleepy_eval() and cur.standby and not cur.ondemand:
+                    cur.wake("no longer a grid camera")                    # out of the grid: on the air for good
+                self.persist_feeds()
             cur.reused += 1
             return cur
         self.unpublish(feed_id, persist=False)   # 0.12.0: the new pair is persisted below
@@ -2582,7 +2634,8 @@ class Bridge:
                         passthrough=passthrough,
                         minter=self._minter_for(feed, broadcast, relay),        # 0.12.0
                         keep=(True if keep is None else bool(keep)),
-                        ondemand=bool(ondemand), low=bool(low), label=label)    # 0.18.0
+                        ondemand=bool(ondemand), low=bool(low), label=label,    # 0.18.0
+                        idle=bool(idle))                                         # 0.21.73
         with self._lock:
             self._pubs[int(feed_id)] = pub
         if (pub.wantOndemand or pub.wantLow) and not ONDEMAND_ENABLED:   # 0.21.10
@@ -2626,9 +2679,17 @@ class Bridge:
             self._od_thread = t
         t.start()
 
+    def od_poke(self):
+        """0.21.73: a viewer's demand reached this box's KASTR -- run the demand round now, not at the next 5 s tick."""
+        ev = getattr(self, "_od_evt", None)
+        if ev is not None:
+            ev.set()
+
     def _od_loop(self):
+        if getattr(self, "_od_evt", None) is None:
+            self._od_evt = threading.Event()
         while True:
-            pubs = [p for p in list(self._pubs.values()) if p.ondemand and not p.stopping]
+            pubs = [p for p in list(self._pubs.values()) if (p.ondemand or p.sleepy) and not p.stopping]   # 0.21.73: + sleepy
             if not pubs:
                 with self._lock:
                     self._od_thread = None
@@ -2637,7 +2698,8 @@ class Bridge:
                 self.od_tick(pubs)
             except Exception as e:
                 self.log("rtsp: on-demand tick failed: %s" % e)
-            time.sleep(self.OD_POLL_S)
+            self._od_evt.wait(self.OD_POLL_S)   # 0.21.73: a demand pokes it awake at once
+            self._od_evt.clear()
 
     def od_tick(self, pubs, now=None, post=None):
         """One demand round: tell each relay host which on-demand feeds exist, learn which are
@@ -2657,7 +2719,8 @@ class Bridge:
             if base:
                 body = {"token": _relay_token(ps[0].relay) or "",
                         "feeds": [{"broadcast": p.broadcast, "label": p.label or p.broadcast.rsplit("/", 1)[-1][:-5],
-                                   "live": bool(p.running), "low": (p.lowPub.broadcast if p.lowPub else None)} for p in ps]}
+                                   "live": bool(p.running), "low": (p.lowPub.broadcast if p.lowPub else None),
+                                   "idle": bool(p.sleepy)} for p in ps]}   # 0.21.73: asleep only while unwatched, whatever the host's ondemand switch
                 d = post(base.rstrip("/") + "/api/ondemand/sync", body)
                 if isinstance(d, dict) and isinstance(d.get("wanted"), dict):
                     wanted = d["wanted"]
@@ -2752,6 +2815,7 @@ class Bridge:
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
                         "ondemand": bool(pub.wantOndemand), "low": bool(pub.wantLow), "label": pub.label,   # 0.18.0; 0.21.10: what was ASKED -- preserved while the switch is off
+                        "idle": bool(pub.wantIdle),                                                          # 0.21.73
                         "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})   # 0.21.2: a web client's feed
         # 0.21.61: what has not come back yet stays on file (a failed or unfinished restore, a Join mid-restore)
         live = {r["url"] for r in out}
@@ -3017,7 +3081,8 @@ class Bridge:
                     rurl = u2
                 self.publish(feed.id, rec.get("broadcast") or ("cam%d" % feed.id), rurl,
                              audio=(rec.get("audio") is not False), passthrough=bool(rec.get("passthrough")), keep=True,
-                             ondemand=bool(rec.get("ondemand")), low=bool(rec.get("low")), label=str(rec.get("label") or ""))   # 0.18.0
+                             ondemand=bool(rec.get("ondemand")), low=bool(rec.get("low")), label=str(rec.get("label") or ""),   # 0.18.0
+                             idle=bool(rec.get("idle")))   # 0.21.73
                 with lock:
                     done[0] += 1
             except Exception as e:
@@ -3031,6 +3096,52 @@ class Bridge:
         log("rtsp: %s %d persisted feed(s) into room %s" % ("recorded (publishing suspended)" if self.suspended else "republished", done[0], room))   # 0.21.16
         self.persist_feeds()
         return done[0]
+
+    def pause(self, feed_id, on):
+        """0.21.73: pause / resume a screen share -- the same broadcast restarts on the "paused" card (and back), so viewers
+        keep its tile; the border and the bar stay. -> the publisher's info, or None (no such share)."""
+        pub = self._pubs.get(int(feed_id))
+        if pub is None or not is_screen(pub.feed.url):
+            return None
+        if bool(on) != pub.paused:
+            pub.paused = bool(on)
+            self.log("screen: share %s %s" % (pub.broadcast, "paused" if on else "resumed"))
+            pub.nudge("pause" if on else "resume")
+        return pub.info()
+
+    def retarget(self, feed_id, url):
+        """0.21.73 (Kenton chose: "Share something else" swaps in place): point a running screen share at another screen,
+        window or tab -- the same feed id and broadcast (tile, pins and spotlight stay), a new capture, the border moves.
+        -> the feed's info. ValueError for a bad or already shared target."""
+        import kastr_screen
+        url = str(url or "")
+        if not is_screen(url):
+            raise ValueError("only a screen, window or tab can be shared in place")
+        kastr_screen.check_url(url)
+        feed = self.get(feed_id)
+        if feed is None or not is_screen(feed.url):
+            raise ValueError("no such share")
+        with self._lock:
+            if any(f.url == url and f.id != feed.id for f in self._feeds.values()):
+                raise ValueError("that is already shared")
+            feed.url = feed.source_url = url
+            feed.screen_ident = None
+            feed.width = feed.height = None
+        fid = feed.id
+        kastr_screen.overlay_stop(fid)
+        kastr_screen.overlay_start(fid, url, on_stop=lambda: (self.log("screen: Stop sharing on the bar"), self.remove(fid)))
+        for p in list(feed.procs):   # the old monitor (the page's thumbnail) -- the page reopens it
+            try:
+                p.kill()
+            except OSError:
+                pass
+        pub = self._pubs.get(fid)
+        if pub is not None:
+            pub.paused = False   # what was picked shows at once
+            self.log("screen: share %s now shows %s" % (pub.broadcast, url))
+            pub.nudge("retarget")
+        self.persist_feeds()
+        return feed.info()
 
     def nudge(self, feed_id, why="api"):
         pub = self._pubs.get(int(feed_id))
@@ -3540,6 +3651,7 @@ def handle_api(handler, bridge, path):
         return True
 
     if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge", "/api/rtsp/suspend",   # 0.21.16: suspend
+                "/api/rtsp/pause", "/api/rtsp/retarget",                                             # 0.21.73: a share paused / swapped
                 "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note"):   # 0.12.0: keep, persist; 0.21.5: note
         # 0.9.1: local pages only -- these start processes and name relays
         if not from_loopback():
@@ -3564,7 +3676,8 @@ def handle_api(handler, bridge, path):
                                      force=bool(payload.get("force")),   # 0.9.8: otherwise the same request keeps the running pair
                                      keep=payload.get("keep"),           # 0.12.0: None = leave as is (new pair: on)
                                      ondemand=bool(payload.get("ondemand")), low=bool(payload.get("low")),   # 0.18.0
-                                     label=str(payload.get("label") or ""))
+                                     label=str(payload.get("label") or ""),
+                                     idle=bool(payload.get("idle")))   # 0.21.73: a grid camera -- encodes only while watched
                 if not had_pubs:   # 0.21.16: a spoke re-registers now -- the hub's spokes table learns it HAS cameras (and their switch) at once, not at the 10-min tick
                     try:
                         getattr(handler, "kastr_relay_srv", None).spoke_sync_soon()
@@ -3601,6 +3714,11 @@ def handle_api(handler, bridge, path):
                     except Exception:
                         pass
                     reply(res)
+            elif path == "/api/rtsp/pause":                               # 0.21.73: {id, paused}
+                info = bridge.pause(payload.get("id"), bool(payload.get("paused")))
+                reply(info if info is not None else {"error": "no such share"}, 200 if info is not None else 404)
+            elif path == "/api/rtsp/retarget":                            # 0.21.73: {id, url}
+                reply(bridge.retarget(payload.get("id"), payload.get("url")))
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
                 text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:240]
                 if text:

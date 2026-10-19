@@ -852,6 +852,16 @@
   #stage .pubpane .gcellx:hover { background:var(--asi-red); border-color:var(--asi-red); }
   #stopShareBtn { color:var(--asi-red); border-color:var(--asi-red); }
   #stopShareBtn:hover { color:#fff; background:var(--asi-red); }
+  /* 0.21.73 (Kenton: "a pause share button, so I don't have to stop all streaming before resharing") */
+  #pauseShareBtn { color:var(--asi-amber); border-color:var(--asi-amber); }
+  #pauseShareBtn:hover { color:#000; background:var(--asi-amber); }
+  #pauseShareBtn.paused { color:#000; background:var(--asi-amber); }
+  .pubpane.spaused::after { content:"Paused \2014  viewers see a pause card"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:8px; background:rgba(15,34,53,.78); color:#fff; font-weight:600; font-size:12px; pointer-events:none; z-index:4; }
+  #shSwapNote { margin:0 0 10px; padding:8px 10px; border:1px solid var(--asi-amber); border-radius:6px; color:var(--text); font-size:12.5px;
+    display:flex; align-items:center; gap:8px; }
+  #shSwapNote[hidden] { display:none; }
+  #shSwapNote span { flex:1; }
   /* 0.7.8: transient notice chip (RTSP failures etc.) */
   /* 0.21.0: a toast is neutral; the level shows as an accent. Red is for errors ONLY (field: "all alerts come in red"). */
   #kToast { position:fixed; top:54px; left:50%; transform:translate(-50%, -8px); z-index:90;
@@ -1800,6 +1810,8 @@
   <span class="sp"></span>
   <!-- hidden controls driven from the menus (Record, Stop sharing) -->
   <button id="recBtn" class="toggle" type="button" hidden>Record</button>
+  <button id="pauseShareBtn" class="toggle" type="button" hidden
+          title="Pause what you share (viewers see a pause card; it keeps its place) or carry on">Pause sharing</button>
   <button id="stopShareBtn" class="toggle" type="button" hidden
           title="Stop every shared screen, RTSP feed and file at once">Stop sharing</button>
   <button id="helpBtn" class="toggle ibtn" title="Help &mdash; how to use KASTR" hidden>?</button>
@@ -1878,6 +1890,9 @@
     <button type="button" class="close" title="Close (publishing keeps running)">&#10005;</button>
   </div>
   <div class="body pubui" id="shareBody">
+    <!-- 0.21.73: "Share something else" -- the next screen / window / tab picked replaces the share in place -->
+    <p id="shSwapNote" hidden><span>Pick what to share instead of <b id="shSwapName"></b> &mdash; it takes its place, nothing stops.</span>
+      <button type="button" class="ghost" id="shSwapCancel">Cancel</button></p>
     <p class="hint" id="viewOnlyNote" hidden style="margin:0 0 10px;color:var(--asi-amber)">View-only access code:
       this relay lets you watch, not publish. Ask the relay's owner for the publisher code to share.</p>
     <!-- Ported panels; every id is unchanged from the legacy page so the
@@ -3045,7 +3060,7 @@
                  ].join("\u0001"));
       for (const s of rec.sources) {
         parts.push([peer, rec.view, s.id, s.name, s.live, s.micMuted,
-                    s.videoPaused, s.carriesAudio, s.pausable,
+                    s.videoPaused, s.carriesAudio, s.pausable, s.sharePaused,
                     s.deviceId ?? ""].join("\u0001"));
       }
     }
@@ -4187,6 +4202,7 @@
     if (IS_WEB || offerAsking) return;
     let d = null;
     try { d = await fetch("/api/update/offer", { cache: "no-store" }).then((r) => r.json()); } catch { return; }
+    adminNoticeShow(d?.admin);   // 0.21.73
     const off = d?.offer;
     if (!off?.version) return;
     if (off.state === "deferred") {
@@ -4207,7 +4223,22 @@
       if (!r?.ok && now) window.__toast?.("The update did not start: " + (r?.error || "no answer"), 6000, { level: "warn" });
     } finally { offerAsking = false; }
   }
-  setInterval(updateOfferTick, 10000);
+  // 0.21.73 (Kenton: restart a client's KASTR remotely / move it to another relay -- he chose a 10 s notice, then the
+  // restart): an admin's Restart or Move from the Relay page reaches this app on its check-in; the app says so here, then
+  // closes and reopens (on the new relay for a Move) and this window rejoins its room
+  let adminSaid = "";
+  function adminNoticeShow(a) {
+    if (!a?.kind || !a.id || adminSaid === a.id) return;
+    adminSaid = a.id;
+    const secs = Math.max(1, Math.round(((Number(a.deadline) || 0) * 1000 - Date.now()) / 1000));
+    const back = joinState === "joined" ? " You'll be back in " + roomTitle(CHANNEL) + "." : "";
+    const where = a.to ? (relayNameOf(a.to) || relayLabel(a.to)) : "";
+    window.__toast?.(a.kind === "move"
+      ? "An admin is moving you to the relay " + where + " \u2014 KASTR restarts in " + secs + " s." + back
+      : "An admin is restarting KASTR \u2014 it closes and reopens in " + secs + " s." + back, Math.max(6000, secs * 1000), { level: "warn" });
+    log("Admin " + a.kind + (a.to ? " to " + a.to : "") + " from the relay " + (a.from || "?") + " in " + secs + " s");
+  }
+  setInterval(updateOfferTick, 4000);   // 0.21.73: was 10 s -- the admin notice gives 10 s
   window.__updateOfferTick = updateOfferTick;   // rig
 
   // ---- 0.21.44 (Kenton: "one window for several sites" -- several rooms on one fleet; stay in ONE room and WATCH others) -------
@@ -6723,6 +6754,12 @@
     }
     const f = viewFitBox(canvas);
     if (!f) return;
+    // 0.21.73 (Kenton: users "click on video in Southridge and it will zoom to the top left 1/9"): a view keeps its centre
+    // in bitmap pixels -- when the grid's picture switched rendition under an open cell zoom (640x360 -> 1280x720, e.g. a
+    // click just after the grid took the stage, or a small window / slow link), the old pixels were clamped into the top-left
+    // of the bigger bitmap. The centre now follows the bitmap's size.
+    if (v.cw && (v.cw !== f.cw || v.ch !== f.ch)) { v.cx *= f.cw / v.cw; v.cy *= f.ch / v.ch; }
+    v.cw = f.cw; v.ch = f.ch;
     // the centre may not leave the picture: clamp so the pane stays covered
     const halfW = f.Bw / (2 * v.s * f.sc), halfH = f.Bh / (2 * v.s * f.sc);
     v.cx = Math.min(Math.max(v.cx, Math.min(halfW, f.cw / 2)), Math.max(f.cw - halfW, f.cw / 2));
@@ -6747,6 +6784,7 @@
     const f = viewFitBox(canvas);
     if (!f) return;
     const v = views.get(canvas) || { s: 1, cx: f.cw / 2, cy: f.ch / 2, label: "" };
+    if (v.cw && (v.cw !== f.cw || v.ch !== f.ch)) { v.cx *= f.cw / v.cw; v.cy *= f.ch / v.ch; v.cw = f.cw; v.ch = f.ch; }   // 0.21.73: the bitmap was resized under the view
     const wb = canvas.parentElement.getBoundingClientRect();   // the clipping box (moq-watch / pane)
     const dx = clientX == null ? 0 : clientX - (wb.left + wb.width / 2);
     const dy = clientY == null ? 0 : clientY - (wb.top + wb.height / 2);
@@ -6877,7 +6915,10 @@
     const meta = gridMeta.get(gp);
     const od = odFeeds.some((f) => f.broadcast === fp);
     const down = !!meta && ((meta.down || []).includes(idx) || (meta.dead && meta.dead.has(fp)));
-    if (!odOn || (!od && !down)) return false;   // 0.21.10: switch off -> the 0.9.8 composite-cell expand
+    // 0.21.73 (Kenton: "encode only while watched"): a camera with no tile that the grid does not mark down is ASLEEP (its
+    // box stopped encoding it while nobody watched) -- the click asks for it whatever the host's ondemand switch says
+    const asleep = !tiles.has(fp) && !down && !!meta;
+    if (!asleep && (!odOn || (!od && !down))) return false;   // 0.21.10: switch off -> the 0.9.8 composite-cell expand
     odWanted.set(fp, Date.now()); odDemand(fp);
     gridWake = { gp, idx, path: fp, at: Date.now(), low: lowAvail.has(fp) };
     // 0.21.7: the composite's own cell fills the stage at once (the 0.9.8 seeded view): the picture the viewer clicked,
@@ -10085,15 +10126,18 @@
     const src = cur();
     const items = [];
     if (src?.carriesAudio) items.push({ value: "mute", label: src.micMuted ? "Unmute audio" : "Mute audio" });
-    if (src?.pausable) items.push({ value: "pause", label: src.videoPaused ? "Resume video" : "Pause video" });
-    if (ref.kind === "rtsp") {   // 0.8.12 composite menu; 0.9.2: feeds mode on EVERY feed's menu (a lone feed has no composite)
+    if (src?.share) {   // 0.21.73 (Kenton: "a pause share button ... before resharing")
+      items.push({ value: "spause", label: src.sharePaused ? "Resume sharing" : "Pause sharing" });
+      if (ref.peer === window.__publisher?.peer) items.push({ value: "swap", label: "Share something else\u2026" });
+    } else if (src?.pausable) items.push({ value: "pause", label: src.videoPaused ? "Resume video" : "Pause video" });
+    if (ref.kind === "rtsp" && !src?.share) {   // 0.8.12 composite menu; 0.9.2: feeds mode on EVERY feed's menu (a lone feed has no composite); 0.21.73: not on a screen share
       const gf = window.__gridFeeds?.get?.() || "both";
       items.push({ value: "gf-both", label: (gf === "both" ? "\u25c9 " : "\u25cb ") + "Grid + full-quality feeds" });
       items.push({ value: "gf-grid", label: (gf === "grid" ? "\u25c9 " : "\u25cb ") + "Grid only (one stream)" });
       items.push({ value: "gf-separate", label: (gf === "separate" ? "\u25c9 " : "\u25cb ") + "Separate feeds (no grid)" });
       items.push({ value: "lock", label: (window.__gridFeeds?.lock?.() ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
     }
-    if (ref.kind === "rtsp" && ref.id > -100) {   // 0.15.0: grid composites are ids -100, -101, ...
+    if (ref.kind === "rtsp" && ref.id > -100 && !src?.share) {   // 0.15.0: grid composites are ids -100, -101, ...
       items.push({ value: "ghost", label: window.__ghost?.get?.(ref.id)
         ? "Show preview" : "Hide preview (keeps broadcasting)" });
       items.push({ value: "keep", label: window.__rtspPersist?.get?.(ref.id)   // 0.8.8
@@ -10128,6 +10172,11 @@
       } else if (v === "pause") {
         const c = cur();
         if (c) { c.videoPaused = !c.videoPaused; sendControl(ref.peer, ref.id, { videoPaused: c.videoPaused }); }
+      } else if (v === "spause") {   // 0.21.73
+        const c = cur();
+        if (c) sendControl(ref.peer, ref.id, { sharePaused: !c.sharePaused });
+      } else if (v === "swap") {      // 0.21.73
+        window.__shareSwap?.(ref.id);
       } else if (v.startsWith("gf-")) {
         window.__gridFeeds?.set?.(v.slice(3));   // 0.8.12
       } else if (v === "lock") {
@@ -12127,11 +12176,29 @@
         .some((x) => x.kind !== "camera");
     } catch {}
     document.getElementById("stopShareBtn").hidden = !haveShare;
+    { // 0.21.73: Pause / Resume every screen I share (one click either way)
+      let shares = [];
+      try { shares = (minePeers.get(window.__publisher?.peer)?.sources ?? []).filter((x) => x.share); } catch {}
+      const pb = document.getElementById("pauseShareBtn"), allPaused = shares.length > 0 && shares.every((x) => x.sharePaused);
+      pb.hidden = !shares.length;
+      pb.textContent = allPaused ? "Resume sharing" : "Pause sharing";
+      pb.classList.toggle("paused", allPaused);
+    }
     if (window.__joinedChannel?.()) {
       paintChannelChip();   // 0.8.8: one painter -- count + up-time
     }
   }, 2000);
 
+  document.getElementById("pauseShareBtn").addEventListener("click", () => {   // 0.21.73
+    const peer = window.__publisher?.peer;
+    const shares = (minePeers.get(peer)?.sources ?? []).filter((x) => x.share);
+    if (!shares.length) return;
+    const on = !shares.every((x) => x.sharePaused);
+    for (const x of shares) { x.sharePaused = on; sendControl(peer, x.id, { sharePaused: on }); }
+    const pb = document.getElementById("pauseShareBtn");
+    pb.textContent = on ? "Resume sharing" : "Pause sharing"; pb.classList.toggle("paused", on);
+    window.__toast?.(on ? "Sharing paused \u2014 viewers see a pause card. Resume carries on where you left off." : "Sharing resumed.", 4000, { level: "info" });
+  });
   document.getElementById("stopShareBtn").addEventListener("click", () => {
     // Stop every share this page owns, instantly -- re-sharing is cheap.
     const peer = window.__publisher?.peer;
@@ -12513,15 +12580,19 @@
   }
   window.__odWake = odWake;   // rig
   function odDemand(broadcast) {
-    if (!odOn) return;   // 0.21.10: no demand leaves this page while the host's switch is off
+    // 0.21.73: demand always leaves the page (a grid camera may sleep while unwatched on any box); the room is the camera's
+    // own (a watched room's or a cross-room grid's camera) with that room's token when this page holds one
     const base = relayHostBase(); if (!base) return;
+    const room = String(broadcast).split("/")[0] || CHANNEL;
+    const jwt = (room !== CHANNEL && watchRooms.get(room)?.token) || authTokens?.member || "";
     fetch(base + "/api/ondemand/demand", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ room: CHANNEL, broadcast, jwt: authTokens?.member || "" }) })
+      body: JSON.stringify({ room, broadcast, jwt }) })
       .catch(() => {});   // 0.21.7: a camera on another site -- the relay host forwards the demand to its hub
   }
   function odPulse() {
     if (!window.__joinedChannel?.()) return;
     const known = new Set(odFeeds.map((f) => f.broadcast));
+    const inGrid = gridMemberSet();   // 0.21.73: a grid camera I watch keeps its box encoding it (it sleeps a minute after the last viewer)
     for (const [b, at] of [...odWanted]) {
       if (fullLive.has(b)) { odWanted.delete(b); continue; }        // 0.21.7: the FULL pair came up (a tile may live on the low copy alone)
       if (Date.now() - at > 90000) { odWanted.delete(b); continue; }
@@ -12531,7 +12602,7 @@
       // 0.21.7: a camera registered on ANOTHER site is not in this relay host's list -- its low copy on the air with no
       // full copy says "on demand" just as well (the demand travels the federation from the relay host)
       const lowOnly = lowAvail.has(name) && !fullLive.has(name);
-      if ((!known.has(name) && !lowOnly) || parkedStreams.has(name)) continue;
+      if ((!known.has(name) && !lowOnly && !inGrid.has(name)) || parkedStreams.has(name)) continue;
       if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
       // 0.21.7: a rail thumbnail on the low copy asks for nothing (every viewer's rail would keep every camera awake);
       // the spotlit tile, a tile with no low copy, or the fallback player keeps the full pair alive
@@ -15679,7 +15750,7 @@
     const need = isNew || !!rec?.locked;
     joinEls.joinPwdRow.hidden = !need;
     joinEls.joinPwdLabel.textContent = isNew
-      ? "Room code (optional \u2014 locks the room" + (authCodes ? "; locking needs the publisher access code" : "") + ")"
+      ? "Room code (optional \u2014 locks the room" + (authCodes ? "; locking needs the publisher or admin access code" : "") + ")"
       : "Room code";
     // 0.10.0: a relay with access codes asks for one first (viewer or publisher)
     joinEls.joinAccessRow.hidden = !(authSecured && authCodes);
@@ -15813,6 +15884,11 @@
     if (IS_WEB || !gateIsLoopback() || !["full", "viewer"].includes(PAGE_MODE)) return null;
     try { if (sessionStorage.getItem("kastr.rejoin") || sessionStorage.getItem("kastr.autopicked")) return null; } catch {}
     try { sessionStorage.setItem("kastr.autopicked", "1"); } catch {}
+    { // 0.21.73: an admin restarted or moved this app -- it stays on the relay it was sent to (no "nearest relay" this run)
+      let inst = null;
+      try { inst = await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()); } catch {}
+      if (inst?.justRestarted || inst?.adminMoved) return urlInput.value.trim() || null;
+    }
     const cur = urlInput.value.trim();
     let hist = [];
     try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
@@ -16005,9 +16081,10 @@
     const lj = lastJoin();
     if (!live || !live.room || !lj || lj.room !== live.room || Date.now() - (Number(live.at) || 0) > 1200000) return;
     fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-      if (!d?.justUpdated || joinState !== "prejoin" || joinEls.joinGate.hidden) return;
+      if (!(d?.justUpdated || d?.justRestarted) || joinState !== "prejoin" || joinEls.joinGate.hidden) return;   // 0.21.73: + an admin's Restart / Move
       try { localStorage.removeItem(LIVE_KEY); } catch {}   // once: a failed rejoin leaves the normal gate
       const t = { room: live.room, code: lj.code || "", access: lj.access || "", synthetic: true, resumed: true,
+                  restarted: !d.justUpdated && !!d.justRestarted, moved: String(d.adminMoved || ""),   // 0.21.73
                   name: (profile && profileName(profile)) || joinEls.joinName.value || "", micOn: !!live.micOn, vidOn: !!live.vidOn,
                   spots: Array.isArray(live.spots) ? live.spots.slice(0, 16) : [], hadShare: !!live.hadShare };
       try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
@@ -16015,7 +16092,8 @@
     }).catch(() => {});
   }
   function resumeAfterJoin(t) {
-    window.__toast?.("Updated to v" + KASTR_VER + " \u2014 back in " + roomTitle(CHANNEL) + (t.hadShare ? ". Share your screen again if you need it." : "."), 8000, { level: "info" });
+    window.__toast?.((t.moved ? "An admin moved you to the relay " + (relayNameOf(t.moved) || relayLabel(t.moved)) : t.restarted ? "KASTR restarted by an admin" : "Updated to v" + KASTR_VER)   // 0.21.73
+      + " \u2014 back in " + roomTitle(CHANNEL) + (t.hadShare ? ". Share your screen again if you need it." : "."), 8000, { level: "info" });
     setTimeout(() => {   // the room's votes and my shares are back by now
       if (joinState !== "joined" || CHANNEL !== t.room) return;
       const live = new Set(spotSetNow().map((v) => v.target));
@@ -16177,7 +16255,7 @@
         }
         if (r.status === 404 || r.status === 503) continue;   // an older KASTR / no relay here: try the next
         const d = await r.json().catch(() => ({}));
-        if (r.status === 403) return { ok: false, error: "Only the publisher access code can lock a room or keep it open." };
+        if (r.status === 403) return { ok: false, error: "Only the publisher or admin access code can lock a room or keep it open." };
         if (r.status === 409) return { ok: false, error: /too many/i.test(d.error || "") ? "This relay already keeps its maximum of 64 rooms."
           : "That room already exists and is locked \u2014 pick it from the list and enter its code (a publisher access code may re-key it)." };
         if (r.status === 429) return { ok: false, error: String(d.error || "Too many attempts").replace(" -- ", " \u2014 ") };
@@ -17025,6 +17103,8 @@
     fx: fxWire(a.fx),   // 0.8.8: effects bag {bg:{mode,url}, bright, soft, quality}; 0.15.0: url is a short marker, never pixels
     carriesAudio: a.kind !== RTSP && !!audioFor(a),
     pausable: a.kind !== RTSP,
+    share: isShareEntry(a),            // 0.21.73: a screen / window / tab share -- Pause sharing + Share something else
+    sharePaused: !!a.sharePaused,
   });
 
   // 0.21.40 (Kenton: "drones room is showing a play icon, eventhough there is nothing playing in there"): a box's camera counts
@@ -17170,9 +17250,10 @@
         if ("micMuted" in m.set) {
           a.micMuted = !!m.set.micMuted;
           const slot = slots.get(a.id);
-          if (slot && !slot.rtsp) slot.publish.muted = a.micMuted || !audioFor(a);
+          if (slot && !slot.rtsp) slot.publish.muted = a.micMuted || !audioFor(a) || !!a.sharePaused;   // 0.21.73: a paused share stays silent
           if (slot?.monitor) slot.monitor.muted = !!a.micMuted;
         }
+        if ("sharePaused" in m.set) setSharePaused(a, !!m.set.sharePaused);   // 0.21.73
         if ("cameraId" in m.set) {
           // Repoint this entry at another physical camera. The row label and
           // the broadcast name deliberately KEEP the original device's text:
@@ -18285,6 +18366,11 @@
     };
     const draw = () => {
       if (!p.alive) return;
+      if (e.sharePaused) {   // 0.21.73: paused -- the card, nothing of the screen or the camera
+        drawPauseCard(cx, PRES_W, PRES_H);
+        if (document.visibilityState !== "visible") pushCaptureFrame(p.track);
+        return;
+      }
       syncCam();
       const W = PRES_W, H = PRES_H, sv = mon.video;
       const scrOk = sv.readyState >= 2 && sv.videoWidth;
@@ -18323,7 +18409,8 @@
     const snd = document.getElementById("shareSound")?.checked ?? false;
     const at = snd ? await presenterSound(slot).catch(() => null) : null;
     if (at) pubAud(slot.publish)?.source.set(at);
-    slot.publish.muted = !!slot.entry.micMuted || !at;
+    p.at = at;   // 0.21.73: Resume restores the sound
+    slot.publish.muted = !!slot.entry.micMuted || !at || !!slot.entry.sharePaused;
     // the element resets its sources while it starts up (the picker's delay hid that from captureDisplay) -- keep ours in place
     p.assert = setInterval(() => {
       if (!p.alive) return;
@@ -18346,27 +18433,147 @@
     slot.pres = null;
   }
   window.__presenter = () => { const sl = [...slots.values()].find((x) => x.pres); return sl ? { mode: sl.pres.mode, mask: sl.pres.haveMask, screen: sl.pres.mon.video.videoWidth + "x" + sl.pres.mon.video.videoHeight, cam: !!sl.pres.cam, sound: !!sl.pres.sound, cap: !!pubCap(sl.publish), src: (() => { try { const t = pubCap(sl.publish)?.in?.source?.peek?.(); return t ? t.kind + ":" + t.readyState : null; } catch (e) { return "err"; } })(), invisible: !!sl.publish.invisible, muted: !!sl.publish.muted, source: String(sl.publish.source) } : null; };   // rig
+  // ---- 0.21.73 (Kenton: "I would like a pause share button, so I don't have to stop all streaming before resharing"; he
+  // chose both: Pause / Resume, and "Share something else" in place). A paused share keeps its broadcast -- viewers keep its
+  // tile, pins and spotlight and see a pause card -- and sends no sound; a swapped share keeps them too. ------------------
+  function isShareEntry(a) { return !!a && (a.kind === SCREEN || (a.kind === RTSP && !!a.screen)); }
+  function drawPauseCard(cx, W, H) {
+    cx.fillStyle = "#0f2235"; cx.fillRect(0, 0, W, H);
+    const bw = W * 0.035, bh = H * 0.24, y = H * 0.33;
+    cx.fillStyle = "rgba(255,255,255,.85)";
+    cx.fillRect(W * 0.455, y, bw, bh); cx.fillRect(W * 0.51, y, bw, bh);
+    cx.font = "600 " + Math.max(14, Math.round(H * 0.05)) + "px 'Segoe UI', system-ui, sans-serif";
+    cx.textAlign = "center"; cx.textBaseline = "top";
+    cx.fillText("Paused", W / 2, y + bh + H * 0.06);
+  }
+  function cardTrack(w, h) {   // a browser share's stand-in while paused: the card at the share's size, a few frames a second
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const cx = cv.getContext("2d", { alpha: false });
+    const track = cv.captureStream(5).getVideoTracks()[0];
+    let n = 0;
+    const draw = () => {
+      drawPauseCard(cx, w, h);
+      cx.fillStyle = n++ % 2 ? "#0f2235" : "#0f2236"; cx.fillRect(0, 0, 1, 1);   // a changed pixel = a new frame (late joiners get a keyframe)
+      if (document.visibilityState !== "visible") pushCaptureFrame(track);
+    };
+    draw();
+    const timer = setInterval(draw, 200);
+    return { track, stop: () => { clearInterval(timer); try { track.stop(); } catch {} } };
+  }
+  const even = (x, d) => Math.max(2, Math.round((Number(x) || d) / 2) * 2);
+  function shareAudioOn(slot) {   // the share's own sound, as captureDisplay / capturePresenter set it
+    if (slot?.pres) return !!slot.pres.at;
+    return !!slot?.displayStream?.getAudioTracks?.()[0];
+  }
+  async function setSharePaused(a, on) {
+    if (!isShareEntry(a) || !!a.sharePaused === !!on) return;
+    const slot = slots.get(a.id);
+    a.sharePaused = !!on; a.sharePausedAt = Date.now();
+    if (a.kind === RTSP) {   // a native screen share: the host's pair restarts on the card (and back) under the same broadcast
+      const r = await nativePost("/api/rtsp/pause", { id: a.feedId, paused: !!on });
+      if (r?.error) {
+        a.sharePaused = !on;
+        window.__toast?.("Could not " + (on ? "pause" : "resume") + " the share: " + r.error, 5000, { level: "warn" });
+      }
+    } else if (slot && !slot.pres && slot.displayStream) {   // a browser share: the card track in, the screen track kept for Resume
+      const cap = pubCap(slot.publish)?.in?.source;
+      if (on) {
+        const s = slot.displayStream.getVideoTracks()[0]?.getSettings?.() || {};
+        slot.card?.stop?.();
+        slot.card = cardTrack(even(s.width, 1280), even(s.height, 720));
+        cap?.set(slot.card.track);
+      } else {
+        const v = slot.displayStream.getVideoTracks()[0];
+        if (v && v.readyState === "live") cap?.set(v);
+        const c = slot.card; slot.card = null;
+        setTimeout(() => c?.stop?.(), 500);
+        setTimeout(() => { try { applySettings(slot); } catch {} }, 150);   // a fresh keyframe for everyone
+      }
+    }   // a presenter share draws the card itself (capturePresenter's draw)
+    if (slot && !slot.rtsp) slot.publish.muted = !!a.micMuted || !!a.sharePaused || !shareAudioOn(slot);
+    slot?.pane?.classList.toggle("spaused", !!a.sharePaused);
+    log((a.sharePaused ? "Paused " : "Resumed ") + (a.label || "the share") + ".");
+    renderSources(); announce();
+    try { slot?.pipPaint?.(); } catch {}
+  }
+  window.__sharePause = (id, on) => setSharePaused(added.find((x) => x.id === id), on);   // rig
+  window.__shareIds = () => added.filter(isShareEntry).map((a) => ({ id: a.id, label: a.label, paused: !!a.sharePaused, url: a.url || a.native?.url || "" }));   // rig
+  // "Share something else": a native share (or a presenter share) is re-pointed by the host in place; a browser share asks
+  // the browser's picker again and swaps the tracks
+  let shSwap = null;
+  function shSwapPaint() {
+    const a = shSwap != null ? added.find((x) => x.id === shSwap) : null;
+    if (shSwap != null && !a) shSwap = null;
+    const n = document.getElementById("shSwapNote"); if (!n) return;
+    n.hidden = !a;
+    if (a) document.getElementById("shSwapName").textContent = a.label || "the share";
+  }
+  document.getElementById("shSwapCancel")?.addEventListener("click", () => { shSwap = null; shSwapPaint(); });
+  async function shareSwap(id) {
+    const a = added.find((x) => x.id === id);
+    if (!isShareEntry(a)) return;
+    if (a.kind === SCREEN && !a.native) return displaySwap(slots.get(a.id));
+    shSwap = a.id;
+    if (document.getElementById("sharePop")?.hidden) document.getElementById("shareBtn")?.click();
+    shSwapPaint();
+  }
+  window.__shareSwap = shareSwap;
+  async function retargetShare(a, url, label) {
+    const fid = a.kind === RTSP ? a.feedId : a.native?.feedId;
+    const r = await nativePost("/api/rtsp/retarget", { id: fid, url });
+    if (!r || r.error) { window.__toast?.("Could not switch the share: " + (r?.error || "no answer"), 6000, { level: "warn" }); return false; }
+    if (a.kind === RTSP) a.url = url; else a.native.url = url;
+    a.label = label; a.sharePaused = false;
+    const slot = slots.get(a.id);
+    if (slot) {
+      slot.pane.classList.remove("spaused");
+      const cap = slot.pane.querySelector(".thumbcap");
+      if (cap) cap.textContent = (a.kind === RTSP ? "You\u2019re sharing \u00b7 " : "You\u2019re presenting \u00b7 ") + label;
+      if (a.kind === RTSP) { try { restartMonitor(slot); } catch {} }   // the presenter's monitor reconnects by itself (its 3 s check)
+    }
+    log("Now sharing " + label + " in place of the previous share.");
+    window.__toast?.("Now sharing " + label + ".", 4000);
+    renderSources(); refreshUi(); announce();
+    return true;
+  }
+  async function displayAsk(surf) {
+    // 0.8.8: the Share menu's Include-sound switch and the Screen/Window
+    // card decide the picker (naming a surface opens Chrome on that pane).
+    const snd = document.getElementById("shareSound")?.checked ?? false;
+    try {
+      return await navigator.mediaDevices.getDisplayMedia({
+        video: surf ? { displaySurface: surf } : true,
+        audio: snd,
+        systemAudio: snd ? "include" : "exclude",
+        monitorTypeSurfaces: "include",
+        surfaceSwitching: "include",
+        selfBrowserSurface: "include",   // 0.8.3: own tabs shareable
+      });
+    } catch (e1) {
+      // 0.17.0: a browser that rejects the Chromium-only options (not a user cancel) gets the plain ask
+      if (e1 && /TypeError|NotSupportedError|OverconstrainedError/.test(e1.name || String(e1))) return await navigator.mediaDevices.getDisplayMedia({ video: true, audio: snd });
+      throw e1;
+    }
+  }
+  async function displaySwap(slot) {
+    if (!slot || !slot.displayStream) return;
+    let stream;
+    try { stream = await displayAsk(); }
+    catch (err) { if (!(err && (err.name === "NotAllowedError" || err.name === "AbortError"))) log("Share something else failed: " + (err && err.message)); return; }
+    if (!slots.has(slot.entry.id)) { for (const t of stream.getTracks()) { try { t.stop(); } catch {} } return; }
+    const old = slot.displayStream;
+    const c = slot.card; slot.card = null; c?.stop?.();
+    slot.entry.sharePaused = false; slot.pane.classList.remove("spaused");
+    displayAttach(slot, stream);
+    for (const t of old.getTracks()) { try { t.stop(); } catch {} }   // after the swap: its "ended" is no longer this share's
+    setTimeout(() => { try { applySettings(slot); } catch {} }, 150);
+    window.__toast?.("Now sharing " + (slot.entry.label || "the new screen") + ".", 4000);
+    announce();
+  }
   async function captureDisplay(slot) {
     let stream;
     try {
-      // 0.8.8: the Share menu's Include-sound switch and the Screen/Window
-      // card decide the picker (naming a surface opens Chrome on that pane).
-      const snd = document.getElementById("shareSound")?.checked ?? false;
-      const surf = slot.entry.surface;
-      try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: surf ? { displaySurface: surf } : true,
-          audio: snd,
-          systemAudio: snd ? "include" : "exclude",
-          monitorTypeSurfaces: "include",
-          surfaceSwitching: "include",
-          selfBrowserSurface: "include",   // 0.8.3: own tabs shareable
-        });
-      } catch (e1) {
-        // 0.17.0: a browser that rejects the Chromium-only options (not a user cancel) gets the plain ask
-        if (e1 && /TypeError|NotSupportedError|OverconstrainedError/.test(e1.name || String(e1))) stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: snd });
-        else throw e1;
-      }
+      stream = await displayAsk(slot.entry.surface);
     } catch (err) {
       const cancelled = err && (err.name === "NotAllowedError" || err.name === "AbortError");
       slot.metaEl.textContent = cancelled ? "share cancelled" : "share failed: " + (err && err.name);
@@ -18378,7 +18585,9 @@
       for (const t of stream.getTracks()) { try { t.stop(); } catch {} }
       return;
     }
-
+    displayAttach(slot, stream);
+  }
+  function displayAttach(slot, stream) {   // 0.21.73: shared by the first share and "Share something else"
     const video = stream.getVideoTracks()[0];
     const audio = stream.getAudioTracks()[0];
     slot.displayStream = stream;
@@ -18409,7 +18618,7 @@
     // The browser's own "Stop sharing" bar ends the track behind our back.
     if (video) {
       video.addEventListener("ended", () => {
-        if (!slots.has(slot.entry.id)) return;
+        if (!slots.has(slot.entry.id) || slot.displayStream !== stream) return;   // 0.21.73: a swapped-out track is not the share ending
         log("Screen share was stopped from the browser bar.");
         removeSource(slot.entry.id);
       }, { once: true });
@@ -18743,12 +18952,13 @@
     const passthrough = ptFor(slot.entry.url);   // 0.9.6 (was the H.265-only `hevc`); 0.21.17: per camera, the box switch is the default
     const audio = slot.entry.audio !== false;   // 0.9.5
     const ondemand = urlFlag(OD_KEY, slot.entry.url), low = urlFlag(LOWR_KEY, slot.entry.url);   // 0.18.0
-    const key = broadcast + "|" + relay + "|" + passthrough + "|" + audio + "|" + ondemand + "|" + low;
+    const idle = !!slot.inGrid;   // 0.21.73: a grid camera -- the box stops ENCODING it while nobody watches (copies stay on)
+    const key = broadcast + "|" + relay + "|" + passthrough + "|" + audio + "|" + ondemand + "|" + low + "|" + idle;
     if (slot.pubWanted && slot.pubKey === key) return;
     slot.pubWanted = true; slot.pubKey = key;
     slot.liveSince = performance.now();
     const keep = slot.entry.url !== TEST_URL && rtspPersistHas(slot.entry.url);   // 0.12.0: the server's feed memory follows the Keep box
-    nativePost("/api/rtsp/publish", { id: slot.entry.feedId, broadcast, relay, passthrough, audio, keep, ondemand, low,
+    nativePost("/api/rtsp/publish", { id: slot.entry.feedId, broadcast, relay, passthrough, audio, keep, ondemand, low, idle,
                                       label: slot.entry.label || "" }).then((r) => {
       if (r?.error) { slot.fault = "publish: " + r.error; slot.pubWanted = false; refreshUi(); }
       else { slot.pub = r; refreshUi(); }
@@ -20551,7 +20761,9 @@
         mic: '<rect x="7.5" y="2.5" width="5" height="9" rx="2.5"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5"/>',
         micOff: '<rect x="7.5" y="2.5" width="5" height="9" rx="2.5"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M3 3l14 14"/>',
         ppl: '<circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.6-3.4 3.2-5.2 6.5-5.2s5.9 1.8 6.5 5.2"/>',
-        stop: '<path d="M6 6l8 8M14 6l-8 8"/>' };
+        stop: '<path d="M6 6l8 8M14 6l-8 8"/>',
+        pause: '<path d="M7.5 5v10M12.5 5v10"/>', play: '<path d="M7 5l8 5-8 5z"/>',               // 0.21.73
+        swap: '<path d="M4 7h11l-3-3M16 13H5l3 3"/>' };
       const svg = (k) => '<svg viewBox="0 0 20 20">' + SV[k] + '</svg>';
       const mk = (parent, cls, title, onclick) => { const b = d.createElement("button"); b.className = cls; b.title = title; b.onclick = onclick; parent.appendChild(b); return b; };
       const top = d.createElement("div"); top.className = "top";
@@ -20564,6 +20776,8 @@
       const bCam = mk(ctl, "", "Camera", () => { tc()?.click(); setTimeout(paint, 150); });
       const bMic = mk(ctl, "", "Microphone", () => { tmic()?.click(); setTimeout(paint, 150); });
       const bPpl = mk(ctl, "ppl", "People", () => { try { window.focus(); document.getElementById("peopleBtn")?.click(); } catch {} });
+      const bPause = mk(ctl, "", "Pause sharing", () => setSharePaused(slot.entry, !slot.entry.sharePaused).then(() => paint()));   // 0.21.73
+      const bSwap = mk(ctl, "", "Share something else", () => { try { window.focus(); } catch {} shareSwap(slot.entry.id); }); bSwap.innerHTML = svg("swap");
       const bStop = mk(ctl, "stop", "Stop sharing", () => { removeSource(slot.entry.id); try { win.close(); } catch {} }); bStop.innerHTML = svg("stop");
       const me = d.createElement("div"); me.className = "me";
       const sep = d.createElement("div"); sep.className = "sep";
@@ -20594,7 +20808,8 @@
       if (isNative) {
         const img = d.createElement("img"); img.alt = ""; shr.appendChild(img);
         const sid = String(slot.entry.url || "").replace(/^screen:[/][/]monitor[/]/i, "monitor:").replace(/^screen:[/][/]window[/]/i, "window:").replace(/^screen:[/][/]tab[/](\d+)[/]\d+$/i, "window:$1");   // 0.21.22: a tab previews its window
-        let n = 0; const pull = () => { img.src = "/api/screen/thumb?id=" + encodeURIComponent(sid) + "&w=480&t=" + (n++); };
+        const sidOf = (u) => String(u || "").replace(/^screen:[/][/]monitor[/]/i, "monitor:").replace(/^screen:[/][/]window[/]/i, "window:").replace(/^screen:[/][/]tab[/](\d+)[/]\d+$/i, "window:$1");
+        let n = 0; const pull = () => { img.src = "/api/screen/thumb?id=" + encodeURIComponent(sidOf(slot.entry.url) || sid) + "&w=480&t=" + (n++); };   // 0.21.73: follows "Share something else"
         pull(); slot.pipThumb = setInterval(pull, 1500);
       } else if (slot.canvas) {
         const v = d.createElement("video"); v.muted = true; v.autoplay = true; v.playsInline = true;
@@ -20609,9 +20824,12 @@
         bCam.innerHTML = svg(camOff ? "camOff" : "cam"); bCam.classList.toggle("off", camOff); bCam.title = camOff ? "Turn camera on" : "Turn camera off";
         bMic.innerHTML = svg(micOff ? "micOff" : "mic"); bMic.classList.toggle("off", micOff); bMic.title = micOff ? "Unmute" : "Mute";
         bPpl.innerHTML = svg("ppl") + "<span>" + (window.__peopleCount?.() ?? "") + "</span>";
+        const sp = !!slot.entry.sharePaused;   // 0.21.73
+        bPause.innerHTML = svg(sp ? "play" : "pause"); bPause.title = sp ? "Resume sharing" : "Pause sharing"; bPause.classList.toggle("sel", sp);
         paintMe(camOff);
       };
       paint();
+      slot.pipPaint = paint;   // 0.21.73
       slot.pipTick = setInterval(paint, 1000);
       win.addEventListener("pagehide", () => { clearInterval(slot.pipTick); clearInterval(slot.pipThumb); slot.pip = null; });
     } catch {}
@@ -22514,6 +22732,7 @@
       const pi = slot.feed?.publish || slot.pub;   // 0.12.0: the list poll carries the live publisher state
       if (pi && (pi.parked || pi.needsToken)) return { text: "relay refused \u2014 waiting for a new code", cls: "warn", onair: false };
       if (pi && pi.lastFailAt && Date.now() / 1000 - pi.lastFailAt < 60) return { text: "relay refused \u2014 retrying", cls: "warn", onair: false };
+      if (pi && pi.sleepy && pi.standby) return { text: "in grid \u00b7 asleep (nobody watching)", cls: "ready", onair: false };   // 0.21.73
       if (pi && pi.running === false && pi.restarts > 0) return { text: "reconnecting\u2026", cls: "warn", onair: false };
       if (!echoed && slot.liveSince && performance.now() - slot.liveSince > 12000) return { text: "NO RELAY", cls: "warn", onair: false };
       return echoed ? { text: slot.inGrid ? "in grid \u00b7 full feed" : "ON AIR", cls: "on", onair: true }
@@ -22784,7 +23003,7 @@
       const monAttempts = a.retries || 0;
       const downMon = !!(slot?.monitorDown && monAttempts >= GRID_EVICT_AFTER && !pubHealthy);
       if (!a.evicted) {
-        const downPub = native ? (pi.running === false && attempts >= GRID_EVICT_AFTER) : (attempts >= GRID_EVICT_AFTER);
+        const downPub = native ? (pi.running === false && !pi.standby && attempts >= GRID_EVICT_AFTER) : (attempts >= GRID_EVICT_AFTER);   // 0.21.73: asleep is not down
         if (!downPub && !downMon) continue;
         a.evicted = true; a.evictedAt = Date.now(); a.evictAttempt = downPub ? attempts : monAttempts; a.evictWhy = downPub ? "publisher" : "monitor";
         log("Camera " + shortName(a.name) + " offline after " + a.evictAttempt + (downPub ? "" : " monitor") + " attempts \u2014 removed from the grid until it reconnects (its seat is kept)");
@@ -22836,6 +23055,22 @@
           if (!feedStuck(slot) || slot.feedError) continue;
           slot.feedError = f ? f.error : "the bridge no longer has this feed";
         }
+        // 0.21.73: a screen share stopped from the red border's bar ends here too (it used to leave its thumbnail and mini
+        // window behind), and a pause flipped elsewhere shows here
+        if (Array.isArray(d.feeds)) for (const slot of [...slots.values()]) {
+          const a = slot.entry, fid = a.kind === RTSP && a.screen ? a.feedId : a.kind === SCREEN ? a.native?.feedId : null;
+          if (fid == null) continue;
+          if (!byId.has(fid)) {
+            slot.goneN = (slot.goneN || 0) + 1;
+            if (slot.goneN >= 2) { log("The share " + (a.label || "") + " was stopped on its sharing bar."); removeSource(a.id); }
+            continue;
+          }
+          slot.goneN = 0;
+          const pz = byId.get(fid)?.publish?.paused;
+          if (a.kind === RTSP && typeof pz === "boolean" && pz !== !!a.sharePaused && Date.now() - (a.sharePausedAt || 0) > 4000) {
+            a.sharePaused = pz; slot.pane.classList.toggle("spaused", pz); renderSources(); announce();
+          }
+        }
         gridEvictionTick();   // 0.14.0: slot.pub is fresh -- apply the evict / re-admit rule
         if (ingestFlip) { try { renderSources(); } catch {} }
       })
@@ -22866,6 +23101,7 @@
             `${pub.running === false && pub.error ? "  \u2014 " + String(pub.error).slice(0, 90) : ""}` +
             `${slot.entry.audio === false ? "  \u00b7 no audio" : ""}` +   // 0.9.5
             `${pub.ondemand ? (pub.standby ? "  \u00b7 on demand (idle)" : "  \u00b7 on demand (live)") : ""}` +   // 0.18.0
+            `${pub.sleepy ? (pub.standby ? "  \u00b7 asleep \u2014 encodes only while watched" : "  \u00b7 encoding while watched") : ""}` +   // 0.21.73
             `${pub.low ? "  \u00b7 low copy " + (pub.low.running ? "live" : pub.standby ? "idle" : "starting") : ""}` +
             `${(slot.monitorBehind || 0) > MONITOR_LAG_S ? "  \u00b7 monitor " + Math.round(slot.monitorBehind) + "s behind" : ""}` +   // 0.9.5/0.9.7
             `${slot.monitorDown ? "  \u00b7 monitor reconnecting" : ""}`   // 0.9.4: why the relay side is down
@@ -23476,12 +23712,18 @@
     $("shWinCount").textContent = String((d.windows || []).length);
   }
   window.__shareOpened = () => { shTick++; shLoad(); webcamLoad(true); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); webcamLoad(false); }, 3000); };   // 0.21.65: + the Webcam section
-  window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; };
+  window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; if (shSwap != null) { shSwap = null; shSwapPaint(); } };   // 0.21.73: closing ends "Share something else"
   async function shareNative(src) {
     if (!src) return;
     const url = shareKey(src);
     if (added.some((a) => a.kind === RTSP && a.url === url)) { window.__toast?.("Already sharing " + (src.kind === "screen" ? "that screen" : src.kind === "tab" ? "that tab" : "that window") + ".", 3000); return; }
     const label = src.kind === "screen" ? (src.name || "Screen") : (src.title || (src.kind === "tab" ? "Tab" : "Window"));
+    if (shSwap != null) {   // 0.21.73: "Share something else" -- this replaces that share in place
+      const a = added.find((x) => x.id === shSwap);
+      shSwap = null; shSwapPaint();
+      if (a && await retargetShare(a, url, label)) { try { document.querySelector("#sharePop .close")?.click(); } catch {} }
+      return;
+    }
     if (presenterMode() !== "content") return sharePresenter(url, label);   // 0.21.20: composited with my camera
     const e = await addRtsp(url, { label });
     if (!e) return;
@@ -24302,6 +24544,7 @@
         (async () => {
           const pi = slot.feed?.publish || slot.pub;
           const nowS = Date.now() / 1000;
+          if (pi && pi.standby) return;   // 0.21.73: an asleep camera wakes on demand, not by a restart
           const troubled = !!pi && (pi.running === false || (pi.lastExit?.at && nowS - pi.lastExit.at < 60) || (pi.lastSessionAt && nowS - pi.lastSessionAt < 60));
           const listed = troubled ? false : await relayLists(chanPath(ensureHang(slot.entry.name)));
           if (listed === true) { log("Viewer reported " + slot.entry.name + " frozen, but the relay lists it live -- not restarting (the viewer's or the link's problem)"); return; }

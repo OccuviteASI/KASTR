@@ -1594,6 +1594,7 @@ OFFER_WAIT_S = 600     # Kenton: "Update now / In 10 minutes" -- then it updates
 
 
 _LOGS_SENT = set()
+_CMD_SEEN = set()       # 0.21.73: admin commands (Restart / Move) already acted on
 _CHECKIN_LEARN = {}    # 0.21.64: relay host -> when its web port was last looked up after a failed check-in
 _CHECKIN_SAID = {}     # 0.21.64: relay host -> when a failed check-in was last written to launch.log
 
@@ -1669,7 +1670,8 @@ def client_checkin_loop(get_relay, ini, port, mode):
         d = {}
         body = {"node": node, "version": kastr_serve.read_version(), "mode": mode, "platform": sys.platform,
                 "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or "",
-                "hostname": _checkin_hostname(), "user": _checkin_user()}   # 0.21.69: the Relay page's Machine column
+                "hostname": _checkin_hostname(), "user": _checkin_user(),   # 0.21.69: the Relay page's Machine column
+                "started": int(kastr_serve._SERVE_T0)}                     # 0.21.73: an admin's Restart is done when this changes
         base = authority_base(host, ini, relay)
         err = None
         for attempt in (1, 2):
@@ -1707,6 +1709,10 @@ def client_checkin_loop(get_relay, ini, port, mode):
         if ask and ask.get("id") and ask.get("id") not in _LOGS_SENT:   # 0.21.51: the hub collects logs -- mine go to my relay
             _LOGS_SENT.add(ask["id"])
             threading.Thread(target=send_logs, args=(ask, base, node, mode, inst, port), daemon=True).start()
+        ucmd = d.get("cmd") if isinstance(d, dict) and isinstance(d.get("cmd"), dict) else None
+        if ucmd and ucmd.get("id") and ucmd["id"] not in _CMD_SEEN:   # 0.21.73: an admin's Restart / Move from the Relay page
+            _CMD_SEEN.add(ucmd["id"])
+            admin_command(ucmd, host, inst, mode)
         want = str(d.get("update") or "") if isinstance(d, dict) else ""
         if want and want != mine and not off.get("version"):
             now = time.time()
@@ -1738,6 +1744,67 @@ def client_checkin_loop(get_relay, ini, port, mode):
                         kastr_serve.UPDATE_OFFER["state"] = "failed"
                         kastr_serve.UPDATE_OFFER["at"] = time.time()
             threading.Thread(target=run, daemon=True).start()
+
+
+ADMIN_NOTICE_S = 10   # 0.21.73: the person sees "An admin is restarting KASTR" this long before it happens
+
+
+def admin_command(cmd, host, inst, mode, sleep=time.sleep):
+    """0.21.73 (Kenton: restart a client's KASTR remotely / force it to another relay; he chose a 10 s notice, then the
+    restart; a move lasts this session only): the window shows the notice (kastr_serve.ADMIN_NOTICE), then KASTR relaunches
+    -- on the new relay for a Move (--relay for this run; relay-use.json is not touched, so the next launch picks its relay
+    as usual) -- and the window rejoins the room it was in. An unattended box or one with no window goes at once."""
+    kind = str(cmd.get("kind") or "")
+    to = ""
+    if kind == "move":
+        import kastr_relay
+        to = kastr_relay.client_move_target(cmd.get("to")) or ""
+        if not to:
+            note("admin: the relay %s asked to move this KASTR, but the address is not usable -- ignored" % host)
+            return False
+    elif kind != "restart":
+        return False
+    age = (inst or {}).get("aliveAge")
+    box = mode in ("publisher", "publisher-relay", "relay")
+    delay = 1 if (box or age is None or age > 60) else ADMIN_NOTICE_S
+    now = time.time()
+    kastr_serve.ADMIN_NOTICE.clear()
+    kastr_serve.ADMIN_NOTICE.update({"id": str(cmd.get("id") or ""), "kind": kind, "to": to, "from": host,
+                                     "at": now, "deadline": now + delay})
+    note("admin: the relay %s asked this KASTR to %s -- %s in %d s"
+         % (host, ("move to " + to) if to else "restart", "relaunching" if not to else "relaunching there", delay))
+
+    def run():
+        sleep(delay)
+        os.environ["KASTR_RESTARTED"] = "1"   # the window rejoins its room (kastr_serve /api/instance justRestarted)
+        if to:
+            os.environ["KASTR_MOVED"] = to
+        hook = kastr_serve.ADMIN_RELAUNCH_HOOK
+        if hook is None:
+            note("admin: this KASTR cannot relaunch itself (no relaunch hook) -- not restarted")
+            return
+        hook(to or None)
+    threading.Thread(target=run, daemon=True, name="kastr-admin-cmd").start()
+    return True
+
+
+def admin_relaunch_argv(relay=None):
+    """0.21.73: the mode relaunch's argv; a Move replaces any --relay with the new one (this run only)."""
+    argv = mode_relaunch_argv()
+    if not relay:
+        return argv
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a == "--relay":
+            skip = True
+            continue
+        if a.startswith("--relay="):
+            continue
+        out.append(a)
+    return out + ["--relay", relay]
 
 
 def start_update_sweeper(check, every=3600, label="federation master: hourly check"):
@@ -3170,6 +3237,8 @@ def main():
     # 0.21.10: on-demand pairs + low copies are OFF unless kastr.ini `ondemand = on` (or env KASTR_ONDEMAND=1, read by
     # kastr_rtsp at import). The demand travels camera box -> relay host -> viewer page, so the key belongs on EVERY box.
     kastr_rtsp.ONDEMAND_ENABLED = kastr_rtsp.ONDEMAND_ENABLED or str(ini.get("ondemand") or "").strip().lower() in ("1", "true", "yes", "on")
+    if str(ini.get("sleep_unwatched") or "").strip().lower() in ("0", "false", "no", "off"):   # 0.21.73: encode only while watched (default on)
+        kastr_rtsp.SLEEP_UNWATCHED = False
     note("ondemand: %s" % ("ON (kastr.ini ondemand / KASTR_ONDEMAND) -- standby pairs and low copies enabled; the same setting must be on at the relay host and every viewer box"
                            if kastr_rtsp.ONDEMAND_ENABLED else
                            "off -- every camera publishes its full pair always (kastr.ini ondemand = on or KASTR_ONDEMAND=1 re-enables)"))
@@ -3349,6 +3418,9 @@ def main():
     # 0.13.1: reason "mode" -- direct spawn, no KASTR_UPDATED, the child waits for us.
     kastr_serve.RELAUNCH_HOOK = lambda: relaunch_self(500, lambda code=0: _before_exit(1.5, code),
                                                       argv=mode_relaunch_argv(), reason="mode")
+    # 0.21.73: an admin's Restart / Move from the Relay page (admin_command)
+    kastr_serve.ADMIN_RELAUNCH_HOOK = lambda relay=None: relaunch_self(500, lambda code=0: _before_exit(1.5, code),
+                                                                       argv=admin_relaunch_argv(relay), reason="mode")
     # 0.9.8: POST /api/quit ends KASTR the same way closing the window does
     def _quit_hook():
         note("stop requested via /api/quit")

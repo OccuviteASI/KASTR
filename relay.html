@@ -167,8 +167,7 @@
   #usersList .usrnick { background:transparent; border:0; padding:0 3px; margin-left:2px; color:var(--text-mute); cursor:pointer; font-size:11px; visibility:hidden; }
   #usersList tr:hover .usrnick, #usersList .usrnick:focus-visible { visibility:visible; }
   #usersList .usrnick:hover { color:var(--asi-blue); }   /* 0.21.68: seen in the last 30 days, not connected now */
-  label.usrold { display:flex; flex-direction:row; align-items:center; gap:6px; margin:4px 0 0; font-size:12px; color:var(--text-dim); cursor:pointer; width:max-content; }
-  label.usrold input { width:auto; margin:0; }
+  label.usroff { margin:6px 0 0; color:var(--text-dim); width:max-content; }
   /* 0.21.54: sortable headings (the Users table) */
   table.rooms th.sortable { cursor:pointer; user-select:none; }
   table.rooms th.sortable:hover, table.rooms th.sortable:focus-visible { color:var(--text); outline:none; text-decoration:underline; text-underline-offset:3px; }
@@ -200,6 +199,10 @@
   @keyframes updspin { to { transform:rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .updspin { animation:none; border-top-color:var(--asi-amber); } }
   .updst { white-space:nowrap; font-size:11.5px; }
+  /* 0.21.73: Restart / Move a user's KASTR */
+  .uacts { display:inline-flex; gap:4px; flex-wrap:nowrap; vertical-align:middle; }
+  button.usract { padding:2px 8px; font-size:11.5px; min-height:0; }
+  .mvgrp { font-size:12px; font-weight:600; margin:8px 0 2px; color:var(--text-dim); }
   .updok { color:var(--asi-green, #3fb950); }
   .updbad { color:var(--asi-amber); }
 </style>
@@ -398,6 +401,21 @@
           </div>
         </form>
       </dialog>
+      <!-- 0.21.73 (Kenton: "force a client to move to a different relay"): where to send one user (this session only) -->
+      <dialog id="mvDlg" class="hubmove">
+        <form method="dialog" id="mvForm">
+          <h3>Move <span id="mvName"></span> to another relay</h3>
+          <p>Their window shows a 10-second notice, then KASTR restarts on the relay you pick and rejoins the room it was in. The move lasts until they close KASTR &mdash; the next launch picks its relay as usual.</p>
+          <div id="mvAddrs" class="sbaddrs"></div>
+          <label class="sbopt"><input type="radio" name="mvAddr" value="__other"><span>Other:</span>
+            <input type="text" id="mvOther" spellcheck="false" placeholder="10.0.2.14 or https://10.0.2.14:4443"></label>
+          <span id="mvMsg" class="hint" style="display:block;min-height:1.2em"></span>
+          <div class="btnrow">
+            <button id="mvGo" type="button">Move</button>
+            <button id="mvCancel" type="button" class="ghost">Cancel</button>
+          </div>
+        </form>
+      </dialog>
       <div id="fedSpoke">
       <label class="f">
         <span>Hub relay URL (e.g. https://10.13.20.82:4443)</span>
@@ -426,8 +444,9 @@
       <!-- 0.21.50 (Kenton): every user in the federation, the KASTR each runs, and an Update that comes from the relay they use -->
       <div id="usersBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
         <b style="font-size:13px">Users</b> <span id="usersCount" class="hint"></span>
-        <!-- 0.21.55 (Kenton): users not seen for a day are hidden unless this is ticked -->
-        <label class="usrold"><input type="checkbox" id="usersOld"><span id="usersOldTxt">Show users not seen for over 24 hours</span></label>
+        <!-- 0.21.73 (Kenton: "a toggle to view offline in addition to online, and have this off by default"): offline users
+             (the 30-day history) show only while this is on -->
+        <label class="asi-sw usroff"><span class="switch"><input type="checkbox" id="usersOffline"><i></i></span><span id="usersOfflineTxt">Show offline users</span></label>
         <div id="usersList" class="hint" style="margin:4px 0 6px"></div>
         <div class="btnrow" id="usersAllRow" hidden><button id="usersUpdateAll" type="button" class="ghost">All users up to date</button></div>
         <span id="usersMsg" class="hint blk gap">An Update reaches the person's KASTR through the relay it uses: their window asks them first (Update now / In 10 minutes) and it updates by itself after 10 minutes. Web visitors follow their relay's version on their own.</span>
@@ -1405,14 +1424,14 @@
     return { key: "name", dir: "asc" };
   }
   function usersSortSet(v) { try { localStorage.setItem("kastr.relay.usersSort", JSON.stringify(v)); } catch {} }
-  $("usersOld")?.addEventListener("change", (e) => {   // 0.21.55
-    try { e.target.checked ? localStorage.setItem("kastr.relay.usersOld", "1") : localStorage.removeItem("kastr.relay.usersOld"); } catch {}
+  $("usersOffline")?.addEventListener("change", (e) => {   // 0.21.73 (was the 0.21.55 24-hour checkbox)
+    try { e.target.checked ? localStorage.setItem("kastr.relay.usersOffline", "1") : localStorage.removeItem("kastr.relay.usersOffline"); } catch {}
     if (lastFleet) paintUsers(lastFleet);
   });
   function paintUsers(d) {
     const box = $("usersBox"); if (!box) return;
     const rows = Array.isArray(d.clients) ? d.clients : [];
-    box.hidden = !!d.notHub && !rows.length || (!rows.length && !pending.size);
+    box.hidden = !!d.notHub && !rows.length || (!rows.length && !pending.size && !uact.size);
     if (box.hidden) return;
     const kindTxt = { app: "app", box: "box", web: "web" };
     // 0.21.68 (Kenton: "a full history of all devices that have connected in the past 30 days"): the hub sends its live users,
@@ -1430,11 +1449,12 @@
     // whose last sign of life is older than a day is hidden unless the box is ticked (remembered on this machine); one
     // with an update in flight always shows
     const OLD_S = 86400, nowS = Date.now() / 1000;
-    const isOld = (r) => !!r.at && nowS - r.at > OLD_S && !pending.has("user:" + r.node);
+    // 0.21.73 (Kenton): offline users (and any row quiet for a day) show only while "Show offline users" is on -- off by default
+    const isOld = (r) => (!!r.offline || (!!r.at && nowS - r.at > OLD_S)) && !pending.has("user:" + r.node);
     const nOld = rows.filter(isOld).length;
-    const oldBox = $("usersOld");
-    try { oldBox.checked = localStorage.getItem("kastr.relay.usersOld") === "1"; } catch {}
-    $("usersOldTxt").textContent = "Show users not seen for over 24 hours (" + nOld + ")";
+    const oldBox = $("usersOffline");
+    try { oldBox.checked = localStorage.getItem("kastr.relay.usersOffline") === "1"; } catch {}
+    $("usersOfflineTxt").textContent = "Show offline users (" + nOld + ")";
     oldBox.closest("label").style.display = nOld ? "" : "none";   // 0.21.68 (Kenton: "If there are no users to show, don't show the line with the checkbox")
     const shown = oldBox.checked ? rows : rows.filter((r) => !isOld(r));
     // 0.21.55 (Kenton: "I want an update all users button"): every app behind its relay's version that is still around
@@ -1447,11 +1467,19 @@
       else if (usersBehind.length) { b.disabled = false; b.textContent = "Update " + usersBehind.length + (usersBehind.length === 1 ? " user" : " users"); }
       else if (nPend) { b.disabled = true; b.innerHTML = '<span class="updspin"></span>Updating ' + nPend + (nPend === 1 ? " user" : " users") + "\u2026"; }
       else { b.disabled = true; b.textContent = "All users up to date"; } }
+    // 0.21.73: a Restart / Move is done when the user's KASTR checks in with a newer start time
+    const newest = new Map();
+    for (const r of rows) if (!r.offline && (!newest.has(r.node) || (r.started || 0) > (newest.get(r.node).started || 0))) newest.set(r.node, r);
     const items = shown.map((r) => {
       const key = "user:" + r.node;
+      const acts = uactCell(r.node, newest.get(r.node))
+        ?? (LOCAL && !r.offline && r.kind !== "web" && r.checkin
+          ? '<span class="uacts">' + ["restart", "move"].map((k) => '<button type="button" class="usract ghost" data-act="' + k + '" data-node="' + esc(r.node) + '" data-relay="' + esc(r.relay || "") + '" data-label="' + esc(r.name || r.node) + '" data-started="' + esc(String(r.started || 0)) + '" title="'
+              + (k === "restart" ? "Restart KASTR on this machine (their window shows a 10-second notice; it reopens in the same room)" : "Move this user to another relay for this session (their window shows a 10-second notice)") + '">' + (k === "restart" ? "Restart" : "Move\u2026") + "</button>").join("") + "</span>"
+          : "");
       const cell = pendCell(key, r.version, true, r.offer, "usersMsg")
         ?? (behind(r) && LOCAL ? '<button type="button" class="usrupd" data-node="' + esc(r.node) + '" data-relay="' + esc(r.relay || "") + '" data-ver="' + esc(r.relayVersion || "") + '" data-label="' + esc(r.name || r.node) + '" title="Update to ' + esc(r.relayVersion || "") + ' from ' + esc(r.relay || "its relay") + ' (the person is asked first)">Update</button>' : "");
-      return { r, html: (r.offline ? '<tr class="offl" title="Offline \u2014 first seen ' + esc(new Date((r.first || r.at) * 1000).toLocaleString()) + '">' : "<tr>") + "<td>" + esc(r.name || "\u2014") + "</td>" + machineCell(r) + '<td class="mono">' + esc(r.ip || "\u2014") + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono"' + (r.since ? ' title="Connected since ' + esc(new Date(r.since * 1000).toLocaleString()) + '"' : "") + ">" + ago(r.at) + "</td><td>" + cell + "</td></tr>" };
+      return { r, html: (r.offline ? '<tr class="offl" title="Offline \u2014 first seen ' + esc(new Date((r.first || r.at) * 1000).toLocaleString()) + '">' : "<tr>") + "<td>" + esc(r.name || "\u2014") + "</td>" + machineCell(r) + '<td class="mono">' + esc(r.ip || "\u2014") + "</td><td>" + esc(kindTxt[r.kind] || r.kind) + "</td><td>" + esc((r.rooms || []).join(", ") || "\u2014") + "</td><td>" + esc(r.relay || "") + "</td><td>" + verCell(r) + '</td><td class="mono"' + (r.since ? ' title="Connected since ' + esc(new Date(r.since * 1000).toLocaleString()) + '"' : "") + ">" + ago(r.at) + "</td><td>" + cell + (cell && acts ? " " : "") + acts + "</td></tr>" };
     });
     // a user who went quiet while restarting keeps a row with its spinner
     for (const [k, p] of pending) if (k.startsWith("user:") && !rows.some((r) => "user:" + r.node === k)) {
@@ -1489,6 +1517,7 @@
       } catch (e) { updNote("usersMsg", String(e?.message || e)); }
       paintSpokes();
     });
+    for (const b of $("usersList").querySelectorAll(".usract")) b.addEventListener("click", () => usrAct(b.dataset));   // 0.21.73
     for (const b of $("usersList").querySelectorAll(".usrupd")) b.addEventListener("click", async () => {
       b.disabled = true;
       try {
@@ -1501,6 +1530,98 @@
     });
   }
   window.__relayPending = pending;   // rig
+  // ---- 0.21.73 (Kenton: "restart a client KASTR remotely" / "force a client to move to a different relay", through the hub
+  // or the relay they use): the command waits at the user's relay and rides its next check-in (within a minute) ----------
+  const uact = new Map();   // node -> { kind, at, started0, from, to, label }
+  const UACT_WAIT_MS = 300000;
+  function uactCell(node, r) {
+    const a = uact.get(node);
+    if (!a) return null;
+    const age = Date.now() - a.at;
+    if (r && r.started && r.started !== a.started0) {
+      uact.delete(node);
+      const msg = a.kind !== "move" ? "restarted" : r.relay && r.relay !== a.from ? "moved to " + r.relay : "restarted on " + (r.relay || "this relay");
+      updNote("usersMsg", a.label + " " + msg + " \u2713");
+      return '<span class="updst updok">\u2713 ' + esc(msg) + "</span>";
+    }
+    if (!r && a.kind === "move" && age > 90000) {   // gone from every relay of this fleet: it went where it was sent
+      uact.delete(node);
+      updNote("usersMsg", a.label + " left " + (a.from || "its relay") + " for " + a.to + " \u2713");
+      return null;
+    }
+    if (age > UACT_WAIT_MS) {
+      uact.delete(node);
+      updNote("usersMsg", a.label + " didn\u2019t " + (a.kind === "move" ? "move" : "restart") + " \u2014 "
+        + (!r ? "it went offline" : r.cmd ? "it has not checked in to take the request (older than 0.21.73?)" : "it was told, but its KASTR has not restarted (see its launch.log)"));
+      return '<span class="updst updbad">didn\u2019t ' + (a.kind === "move" ? "move" : "restart") + "</span>";
+    }
+    const st = r && r.cmd ? "waiting for its check-in\u2026" : a.kind === "move" ? "moving\u2026" : "restarting\u2026";
+    return '<span class="updst"><span class="updspin"></span>' + st + " " + mmss(age) + "</span>";
+  }
+  function uactPoll() {
+    if (!pendTimer) pendTimer = setInterval(() => { if (!pending.size && !restarting.size && !uact.size) { clearInterval(pendTimer); pendTimer = null; return; } paintSpokes(); }, 5000);
+  }
+  async function uactSend(ds, kind, to) {
+    const r = await api("/api/relay/clients/cmd", { node: ds.node, relay: ds.relay || "", kind, to: to || "" });
+    if (r.error) { updNote("usersMsg", ds.label + ": " + r.error); return false; }
+    uact.set(ds.node, { kind, at: Date.now(), started0: Number(ds.started) || 0, from: r.relay || ds.relay || "", to: r.to || "", label: ds.label });
+    $("usersMsg").textContent = (kind === "move" ? "Moving " + ds.label + " to " + r.to : "Restarting " + ds.label)
+      + " \u2014 it takes the request at its next check-in (within a minute), shows a 10-second notice, then restarts\u2026";
+    $("usersMsg").style.color = "";
+    uactPoll();
+    paintSpokes();
+    return true;
+  }
+  let mvRow = null;
+  async function usrAct(ds) {
+    if (ds.act === "restart") {
+      if (!confirm("Restart KASTR on " + ds.label + "?" + String.fromCharCode(10, 10)
+                   + "Their window shows a 10-second notice, then KASTR closes and reopens and rejoins the room it was in.")) return;
+      try { await uactSend(ds, "restart"); } catch (e) { updNote("usersMsg", ds.label + ": " + (e?.message || e)); }
+      return;
+    }
+    // Move: every relay of this fleet (this one, then the spokes), the user's own relay left out, plus a typed address
+    mvRow = ds;
+    $("mvName").textContent = ds.label;
+    const d = lastFleet || {};
+    const relays = [{ name: d.me || "this relay", addrs: d.meAddrs || [] }]
+      .concat((d.spokes || []).map((s) => ({ name: s.name || s.key || "", addrs: s.standbyAddrs || [] })))
+      .filter((x) => x.name && x.name !== (ds.relay || d.me) && x.addrs.length);
+    const list = $("mvAddrs"); list.replaceChildren();
+    let first = true;
+    for (const rl of relays) {
+      const h = document.createElement("div"); h.className = "mvgrp"; h.textContent = rl.name; list.appendChild(h);
+      rl.addrs.forEach((a, i) => {
+        const addr = String(a.address || "").replace(/^https:/, "http:");   // an app dials a relay as http://ip:port (it fetches the pinned certificate)
+        const l = document.createElement("label"); l.className = "sbopt";
+        const r = document.createElement("input"); r.type = "radio"; r.name = "mvAddr"; r.value = addr; r.checked = first; first = false;
+        const m = document.createElement("span"); m.className = "mono"; m.textContent = addr;
+        const w = document.createElement("span"); w.className = "why"; w.textContent = a.why + (i === 0 ? " (the guess)" : "");
+        l.append(r, m, w); list.appendChild(l);
+      });
+    }
+    document.querySelector("#mvForm input[value=__other]").checked = first;
+    $("mvOther").value = "";
+    $("mvMsg").textContent = relays.length ? "" : "No other relay of this fleet reported an address \u2014 type the one to use.";
+    $("mvMsg").style.color = "";
+    $("mvGo").disabled = false;
+    $("mvDlg").showModal();
+  }
+  $("mvCancel")?.addEventListener("click", () => $("mvDlg").close());
+  $("mvOther")?.addEventListener("input", () => { const o = document.querySelector("#mvForm input[value=__other]"); if (o) o.checked = true; });
+  $("mvGo")?.addEventListener("click", async () => {
+    if (!mvRow) return;
+    const pick = document.querySelector("#mvForm input[name=mvAddr]:checked");
+    const to = !pick ? "" : pick.value === "__other" ? $("mvOther").value.trim() : pick.value;
+    if (!to) { $("mvMsg").textContent = "Pick a relay or type an address."; $("mvMsg").style.color = "var(--asi-amber)"; return; }
+    $("mvGo").disabled = true;
+    try {
+      if (await uactSend(mvRow, "move", to)) { $("mvDlg").close(); return; }
+      $("mvMsg").textContent = "Not sent \u2014 see the note under the table."; $("mvMsg").style.color = "var(--asi-amber)";
+    } catch (e) { $("mvMsg").textContent = String(e?.message || e); $("mvMsg").style.color = "var(--asi-amber)"; }
+    $("mvGo").disabled = false;
+  });
+  window.__relayUact = uact;   // rig
   // 0.21.55: Update all users -- one confirm, then each user's update in turn (each spins in its row until done)
   let usersBehind = [], usersAllBusy = false;
   $("usersUpdateAll")?.addEventListener("click", async () => {

@@ -1427,6 +1427,11 @@
   #xsPop .xsrow .lk { color:var(--text-mute); font-size:10px; }
   #xsPop .xsbtns { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
   #xsPop .xserr { color:var(--asi-red); font-size:11px; min-height:0; }
+  /* 0.21.75: a box's camera rows -- the rooms the BOX keeps it in, and why a room refused it */
+  .pubui .xswrap { display:inline-flex; align-items:center; gap:6px; flex:none; min-width:0; }
+  .pubui .camrow .xsbtn.bad, .pubui .gghead .xsbtn.bad { border-color:var(--asi-red); color:var(--asi-red); background:transparent; }
+  .pubui .xswhy { font-size:10px; color:var(--asi-red); max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #xsPop .xsrow .xswhy { color:var(--asi-red); font-size:10px; margin-left:auto; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* 0.21.41 (Kenton: "allow mute/unmute/spotlight, etc from the left side rail on a user"): the person's menu */
   .sbcard .sbm .mm { flex:none; margin-left:auto; display:none; width:18px; height:18px; padding:0; border:0; border-radius:4px; background:none; color:var(--text-mute); cursor:pointer; align-items:center; justify-content:center; }
   .sbcard .sbm .mm .icon { width:13px; height:13px; }
@@ -2837,6 +2842,21 @@
   const isPersonalSlug = (s) => PERSONAL_RE.test(String(s || ""));
   window.__isPersonalSlug = isPersonalSlug;   // module 2
   const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? "My room" : String(slug || ""));
+  // 0.21.75 (Kenton: a Publisher box that "only shares its cameras into the rooms I pick"): such a box sits in its own hidden
+  // HOME room box-<host slug> (kastr_rtsp.home_room is the same rule) -- it joins it like any room (its auto-join, restore and
+  // the box keeper keep working); no list shows a box-* room and nobody can create one.
+  const HOME_PREFIX = "box-";
+  const isHomeRoom = (slug) => String(slug || "").startsWith(HOME_PREFIX);
+  function homeRoomOf(host) {
+    const h = String(host || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "host";
+    let s = HOME_PREFIX + h;
+    if (s.length > 32) {
+      const i = h.lastIndexOf("-"), name = h.slice(0, i), suf = h.slice(i + 1);
+      s = i > 0 && suf.length === 4 ? HOME_PREFIX + name.slice(0, 32 - HOME_PREFIX.length - 5).replace(/^-+|-+$/g, "") + "-" + suf : s.slice(0, 32).replace(/-+$/, "");
+    }
+    return s;
+  }
+  window.__homeRoom = { of: homeRoomOf, is: isHomeRoom };   // module 2 + rig
   const inLobby = () => { try { return joinState === "joined" && CHANNEL === LOBBY; } catch { return false; } };   // (joinState is declared further down: early callers get false)
   const watchRooms = new Map();   // 0.21.44: rooms I only WATCH (slug -> state), see "watch extra rooms"
   // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
@@ -3446,7 +3466,22 @@
     if (rooms.length) o[xsKey(path)] = rooms; else delete o[xsKey(path)];
     try { localStorage.setItem(XS_PATHS_KEY(), JSON.stringify(o)); } catch {}
   }
-  const xsOtherRooms = () => (lastChannelList || []).filter((r) => r.slug !== CHANNEL && r.slug !== LOBBY).sort((a, b) => a.slug.localeCompare(b.slug));
+  const xsOtherRooms = () => (lastChannelList || []).filter((r) => r.slug !== CHANNEL && r.slug !== LOBBY && !isHomeRoom(r.slug)).sort((a, b) => a.slug.localeCompare(b.slug));   // 0.21.75: never a box's home
+  // 0.21.75: on a Publisher box a camera's rooms belong to the BOX SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; it re-lists
+  // them every minute with or without this window) -- this page's own listing heartbeat (xsMine) keeps only what the page
+  // itself publishes (a grid composite), so the two never fight over one listing
+  const xsServerPath = (path) => isPublisherMode() && xsKindOf(path) !== "grid";
+  async function xsServerSet(id, rooms, codes) {
+    let d = null;
+    try {
+      const r = await fetch("/api/rtsp/xs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, rooms: [...rooms], codes: codes || {} }) });
+      d = await r.json().catch(() => null);
+    } catch {}
+    if (!d) return { error: "this box did not answer" };
+    if (d.error) return { error: String(d.error) };
+    try { window.__xsServer?.update?.(id, d); } catch {}
+    return d;
+  }
   const xsRoomsOf = (path) => [...(xsMine.get(path)?.rooms || [])].sort();
   const xsLabel = (path) => String(xsMine.get(path)?.label || shortLabel(path)).replace(/^.*? — /, "");   // my own share: no name in front
   function xsChanged() {
@@ -3500,7 +3535,7 @@
     const box = document.getElementById("xsTable"), panel = document.getElementById("xsTablePanel");
     if (!box || !panel) return;
     const rooms = xsOtherRooms();
-    const mine = [...mineNames].filter((p) => p.startsWith(CHANNEL + "/") && p.endsWith(".hang") && !/-low\.hang$/.test(p))
+    const mine = [...mineNames].filter((p) => p.startsWith(CHANNEL + "/") && p.endsWith(".hang") && !/-low\.hang$/.test(p) && !xsServerPath(p))   // 0.21.75: a box's cameras: their own rows
       .sort((a, b) => xsLabel(a).localeCompare(xsLabel(b), undefined, { sensitivity: "base", numeric: true }));
     panel.hidden = joinState !== "joined" || publishOnly || CHANNEL === LOBBY || !rooms.length || !mine.length;
     if (panel.hidden) { box.dataset.sig = ""; return; }
@@ -3530,7 +3565,7 @@
     t.appendChild(tb);
     box.replaceChildren(t);
   }
-  window.__xsRooms = { of: xsRoomsOf, others: () => xsOtherRooms().length, open: (path, anchor) => openXsPicker(path, anchor), set: xsSetRooms, saved: xsSaved };   // the Sources rows (module 2) + rig
+  window.__xsRooms = { of: xsRoomsOf, others: () => xsOtherRooms().length, open: (path, anchor, opts) => openXsPicker(path, anchor, opts), set: xsSetRooms, saved: xsSaved, serverSet: xsServerSet };   // 0.21.75: + opts.server, serverSet   // the Sources rows (module 2) + rig
   setInterval(() => {   // refresh my listings; drop the ones whose share ended or whose room I left
     if (!xsMine.size) return;
     for (const p of [...xsMine.keys()]) {
@@ -3543,8 +3578,11 @@
     xsClosePicker();
     const prompt = !!opts?.prompt;
     const label = xsLabel(path);
-    const cur = new Set(xsRoomsOf(path));
+    const srv = opts?.server || null;   // 0.21.75: {id, rooms, state, locked} -- a box camera's rooms, kept by the box server
+    const cur = new Set(srv ? srv.rooms : xsRoomsOf(path));
     const rooms = xsOtherRooms();
+    if (srv) for (const sl of cur) if (!rooms.some((r) => r.slug === sl)) rooms.push({ slug: sl, locked: false });   // a picked room nobody is in now can still be unticked
+    const home = isHomeRoom(CHANNEL);
     const pop = document.createElement("div"); pop.id = "xsPop";
     if (prompt) pop.className = "xsprompt";
     pop.innerHTML = '<h4></h4><p class="xshint">One stream \u2014 people in the rooms you tick see it too. Nothing extra is uploaded.</p><div class="xslist"></div><div class="xserr"></div><div class="xsbtns"><button type="button" class="ghost xscancel"></button><button type="button" class="primary xsok">Apply</button></div>';
@@ -3556,7 +3594,9 @@
     const hcb = document.createElement("input"); hcb.type = "checkbox"; hcb.checked = true; hcb.disabled = true;
     hsw.append(hcb, document.createElement("i"));
     const hn = document.createElement("span"); hn.textContent = roomTitle(CHANNEL) + " (this room)";
-    here.append(hsw, hn); list.appendChild(here);
+    here.append(hsw, hn);
+    if (home) { here.replaceChildren(); here.textContent = "This box is in no room people see \u2014 its cameras show only in the rooms you tick."; }   // 0.21.75
+    list.appendChild(here);
     if (!rooms.length) { const p = document.createElement("p"); p.className = "xshint"; p.textContent = "No other rooms on this relay yet."; list.appendChild(p); }
     const rows = [];
     for (const r of rooms) {
@@ -3567,12 +3607,14 @@
       const nm = document.createElement("span"); nm.textContent = r.slug;
       row.append(sw, nm);
       let code = null;
-      if (r.locked && !cur.has(r.slug) && !xsCodes[r.slug]) {
+      const why = srv && srv.state?.[r.slug] && srv.state[r.slug] !== "ok" ? String(srv.state[r.slug]) : "";   // 0.21.75: why that room refused it
+      if (r.locked && (srv ? !(srv.locked || []).includes(r.slug) && (!cur.has(r.slug) || /locked|code/i.test(why)) : !cur.has(r.slug) && !xsCodes[r.slug])) {
         const lk = document.createElement("span"); lk.className = "lk"; lk.textContent = "locked";
         code = document.createElement("input"); code.type = "password"; code.placeholder = "room code"; code.hidden = !cb.checked;
         cb.addEventListener("change", () => { code.hidden = !cb.checked; if (cb.checked) code.focus(); });
         row.append(lk, code);
       }
+      if (why) { const w = document.createElement("span"); w.className = "xswhy"; w.textContent = why; w.title = why; row.appendChild(w); }
       list.appendChild(row);
       rows.push({ slug: r.slug, cb, code });
     }
@@ -3582,6 +3624,17 @@
       const want = new Set(rows.filter((r) => r.cb.checked).map((r) => r.slug));
       const codes = {};
       for (const r of rows) if (r.code && r.cb.checked) codes[r.slug] = r.code.value;
+      if (srv) {   // 0.21.75: the box server lists it (and keeps it listed); a room that refuses says why here and on the row
+        const ok = pop.querySelector(".xsok"); ok.disabled = true;
+        const d = await xsServerSet(srv.id, [...want], codes);
+        ok.disabled = false;
+        if (d.error) { err.textContent = d.error; return; }
+        const bad = (d.xs || []).filter((sl) => d.xsState?.[sl] && d.xsState[sl] !== "ok");
+        if (bad.length) { err.textContent = "Not shown in " + bad.map((sl) => sl + " (" + d.xsState[sl] + ")").join(", "); return; }
+        xsClosePicker();
+        window.__toast?.((d.xs || []).length ? label + " shows in " + d.xs.join(", ") : label + " shows in no other room", 3500, { level: "event" });
+        return;
+      }
       const res = await xsSetRooms(path, want, { codes });
       if (res.needCode) { err.textContent = res.needCode + " is locked \u2014 enter its code."; return; }
       if (res.error) { err.textContent = res.error; return; }
@@ -3609,13 +3662,21 @@
   window.__xsDbg = () => ({ seen: [...xsSeen], asked: [...xsAsked], joinedAgo: Date.now() - xsJoinedAt, mine: [...mineNames], others: xsOtherRooms().map((r) => r.slug) });   // rig
   async function xsTick() {
     paintXsTable();
-    if (joinState !== "joined" || publishOnly || CHANNEL === LOBBY) return;
+    if (joinState !== "joined" || CHANNEL === LOBBY) return;   // 0.21.75: a publish-only page restores its shares' rooms too (it only never asks)
     if (xsJoinedRoom !== CHANNEL) { xsJoinedRoom = CHANNEL; xsJoinedAt = Date.now(); }
     const saved = xsSaved();
     for (const p of mineNames) {
       if (xsSeen.has(p) || !p.startsWith(CHANNEL + "/") || !p.endsWith(".hang") || /-low\.hang$/.test(p)) continue;
       xsSeen.add(p);
       if (xsMine.has(p)) continue;
+      if (xsServerPath(p)) {   // 0.21.75: a box's camera -- its rooms are the box server's; rooms this page kept before move there once
+        const sid = window.__xsServer?.owned?.(p);
+        if (sid == null) { xsSeen.delete(p); continue; }   // its row is not known yet: look again next tick
+        const old = saved[xsKey(p)];
+        if (Array.isArray(old) && old.length && !(window.__xsServer.rooms(p) || []).length) await xsServerSet(sid, old.filter((sl) => sl !== CHANNEL && !isHomeRoom(sl)));
+        if (old) xsSave(p, []);
+        continue;
+      }
       const keep = saved[xsKey(p)];
       if (Array.isArray(keep) && keep.length) {
         const r = await xsSetRooms(p, keep, { remember: false });
@@ -3623,7 +3684,7 @@
         else if (r.rooms?.length) window.__toast?.(shortLabel(p) + " also shows in " + r.rooms.join(", "), 3500, { level: "event" });
         continue;
       }
-      if (/\/camera(-\d+)?\.hang$/.test(p) || isPublisherMode() || xsAsked.has(p)) continue;
+      if (/\/camera(-\d+)?\.hang$/.test(p) || isPublisherMode() || publishOnly || xsAsked.has(p)) continue;
       if (Date.now() - xsJoinedAt < 45000 || !xsOtherRooms().length || document.getElementById("xsPop")) continue;   // what a (re)join brings back (a restored camera can take 30 s) is not news
       xsAsked.add(p);
       openXsPicker(p, null, { prompt: true });
@@ -7707,17 +7768,21 @@
     // 0.8.2: the tile's hover chip shows just the person for a camera --
     // "Kenton", not "Kenton \u2014 Camera"; shares keep the full form so
     // two shares from one person stay tellable apart.
+    // 0.21.75: a box's camera listed from its hidden home room: no "(from box-...)", and the listing's own label when the box's
+    // state (its camera names) is not readable from here
+    const xt = xsTiles.get(path), fromBox = !!xt && isHomeRoom(xt.from);
     if (hover && parts.length >= 3 && /^camera(-\d+)?$/.test(leaf)) {
-      const fromC = xsTiles.get(path)?.from;   // 0.21.41
+      const fromC = fromBox ? "" : xt?.from;   // 0.21.41
       return prettyOperator(parts[parts.length - 2]) + (fromC ? " (from " + fromC + ")" : wrTag(path));   // 0.21.44: + a watched room
     }
     // 0.6.8: title-case the leaf too -- it is a device TYPE now
     // ("camera", "screen"), not a model name.
-    const nice = srcLabelOf(path) || prettyOperator(leaf);   // 0.21.65: the sharer's own name for the camera first
-    const from = xsTiles.get(path)?.from;   // 0.21.41: shown here from another room
+    const nice = srcLabelOf(path) || (fromBox && String(xt.label || "").replace(prettyOperator(parts[parts.length - 2] || "") + " \u2014 ", "")) || prettyOperator(leaf);   // 0.21.65: the sharer's own name for the camera first; 0.21.75: a box's listing label
+    const from = fromBox ? "" : xt?.from;   // 0.21.41: shown here from another room
     return (parts.length >= 3 ? prettyOperator(parts[parts.length - 2]) + " \u2014 " + nice : nice) + (from ? " (from " + from + ")" : wrTag(path));   // 0.21.44
   }
   window.__pretty = prettyOperator;   // one casing rule for both page halves
+  window.__shortLabel = shortLabel;   // rig (0.21.75)
   // 0.15.0: a grid tile wears its owner's display name ("Kenton \u2014 Vehicle 2") once the
   // announce carries one; null = no such label, use shortLabel as ever.
   function gridLabel(name) {
@@ -9904,7 +9969,7 @@
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, deaf: v.deaf === 1 } });   // 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, deaf: v.deaf === 1 } });   // 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           hiNote(v.op, v.hc);   // 0.21.61: their colour
           roomsMoved(full, String(v.peer), pp[0]);   // 0.21.61: moved rooms -> gone from the old one now
           roomsChanged();
@@ -10079,6 +10144,7 @@
     const alive = (r) => roomsFrozen || !r.goneAt || now - r.goneAt <= ROOMS_GRACE_MS;
     const rooms = new Map();
     const hiddenOps = new Set();   // 0.15.0 (D1): "<slug>/<op>" of unattended boxes (their streams are not members either)
+    const homeOnly = new Set();    // 0.21.75: rooms a box calls its home (state.json home: 1)
     const get = (slug, source) => {
       let r = rooms.get(slug);
       if (!r) rooms.set(slug, r = { slug, locked: false, salt: null, hash: null, source, members: new Map(), since: 0, talking: false, persistent: false, creator: "", created: 0, publishers: new Set(), video: false });
@@ -10092,6 +10158,7 @@
       // on the air -- a source with video on (pages before 0.21.36: anything published), or a box's RTSP feeds / grids
       if (p.state && (p.who.airv ? p.who.video > 0   // 0.21.40: a box that counts only what is on the air
           : ((p.who.video ?? (p.who.publishing?.length || 0)) > 0 || (p.who.rtspPaths?.length && p.who.rtsp !== "off")))) r.video = true;
+      if (p.who.home) homeOnly.add(p.slug);   // 0.21.75
       if (presenceHidden(p.who)) {   // 0.15.0 (D1)
         hiddenOps.add(p.slug + "/" + op);
         if (p.ts && (!r.since || p.ts < r.since)) r.since = p.ts;
@@ -10138,7 +10205,11 @@
     get("main", "builtin");
     // a closed room (store tombstone) stays out of the list unless someone is actually in it again
     for (const [slug, r] of [...rooms]) if (slug !== "main" && roomsClosed[slug] && !r.members.size) rooms.delete(slug);
-    const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug)));   // 0.13.1: the operator's order, then alphabetical; 0.21.75: never a personal room (mine is its own card)
+    // 0.21.75: a box's home room (any box-* room, or one whose only occupants are boxes that call it home) is in no list --
+    // rails, the gate, watch-room and show-in-rooms pickers -- except, for the box itself, the room it is in
+    const inNow = (() => { try { return joinState === "joined" ? CHANNEL : ""; } catch { return ""; } })();
+    const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug)   // 0.21.75: never a personal room (mine is its own card)
+      && (r.slug === inNow || !(isHomeRoom(r.slug) || (homeOnly.has(r.slug) && !r.members.size)))));   // 0.13.1: the operator's order, then alphabetical
     return [rooms.get("main"), ...list].map((r) => ({
       slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking, video: !!r.video,
       persistent: r.persistent, creator: r.creator, created: r.created,
@@ -13548,6 +13619,7 @@
           pubModel.op = String(p.op || ""); pubModel.name = String(p.name || ""); pubModel.relay = String(p.relay || "");
           pubModel.via = String(p.relayName || ""); pubModel.joinedAt = Number(p.joinedAt) || 0;
           pubModel.mode = PAGE_MODE;   // 0.15.0 (D1)
+          if (isPublisherMode() && isHomeRoom(CHANNEL)) pubModel.home = 1; else delete pubModel.home;   // 0.21.75: viewers leave this room out of every list
           if (p.rtsp === "off") pubModel.rtsp = "off"; else delete pubModel.rtsp;   // 0.21.16: the box's own cameras are switched off (absent = on)
           break;
         }
@@ -14320,7 +14392,7 @@
     // 0.13.1: the banner names the room; people, time, lock, kept and role live on its card in the rail
     const role = authSecured ? authRole : "";
     const spk = document.createElement("span"); spk.className = "spk" + (ownRoomTalking() ? " on" : ""); spk.innerHTML = icon("spk"); spk.title = "Someone is speaking";
-    b.replaceChildren(el("rbname", roomTitle(c)), spk);
+    b.replaceChildren(el("rbname", isHomeRoom(c) ? "No room \u2014 cameras only" : roomTitle(c)), spk);   // 0.21.75: a box in its hidden home room
     if (viewLocked()) {   // 0.21.65 (m): the view is locked
       const vl = document.createElement("span"); vl.className = "rbvl"; vl.innerHTML = icon("lock") + "View locked";
       vl.title = viewBoss() ? "The view is locked \u2014 only you (the room\u2019s creator or an admin) can spotlight, pin or arrange for everyone" : "The view is locked by the room\u2019s creator or an admin";
@@ -14534,6 +14606,7 @@
     };
     q(".rsren").onclick = async () => {
       const slug = rsSlug, to = channelSlug(q(".rsname").value || "");
+      if (isHomeRoom(to)) { say("Names starting with \u201cbox-\u201d are kept for camera boxes.", true); return; }   // 0.21.75
       if (!to || !ROOM_RE.test(to) || to === LOBBY) { say("Use lowercase letters, digits and dashes (up to 32).", true); return; }
       if (to === slug) { say("That is already its name.", true); return; }
       if (!(await kastrConfirm({ title: "Rename room", message: "Rename \u201c" + slug + "\u201d to \u201c" + to + "\u201d?", detail: "Everyone in it moves to the new name. Its chat history, pins, spotlights, layouts and group go with it.", ok: "Rename" }))) return;
@@ -16069,6 +16142,7 @@
       const nm = nameInp.value.trim();
       if (!nm) { err.textContent = "Name the room first."; nameInp.focus(); return; }
       const slug = channelSlug(nm);
+      if (isHomeRoom(slug)) { err.textContent = "Names starting with \u201cbox-\u201d are kept for camera boxes \u2014 pick another name."; nameInp.focus(); return; }   // 0.21.75
       // 0.21.17: a name that matches a listed room is that room -- joined with its code, never created again (the
       // 'trying twice' bypass: a second try with any code minted a fresh lock from the guess and walked in)
       const existing = lastChannelList.find((r) => r.slug === slug);
@@ -16358,7 +16432,7 @@
     // 0.13.0 (F7): ...unless they belong to another relay (the gate's Relay row
     // changed it this session, or the record names a different relay)
     const lj = lastJoin();
-    if (!gateCodesStale && lj && lj.room && channelSlug(lj.room) === joinEls.joinChanSel.value
+    if (!gateCodesStale && lj && lj.room && channelSlug(lj.room) === (joinEls.joinChanSel.value === "__home" ? homeRoomOf(HOSTNAME1) : joinEls.joinChanSel.value)   // 0.21.75
         && (!lj.relay || lj.relay === urlInput.value.trim())) {
       if (!joinEls.joinPwd.value && lj.code) joinEls.joinPwd.value = lj.code;
       if (!joinEls.joinAccess.value && lj.access) joinEls.joinAccess.value = lj.access;
@@ -16628,11 +16702,14 @@
     const cur = readChannel();
     const sel = joinEls.joinChanSel;
     const list = lastChannelList;
-    const key = list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");
+    const key = (isPublisherMode() ? "box:" : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
     if (sel.options.length && (key === gateKey || document.activeElement === sel)) return;
     gateKey = key;
     const keep = sel.options.length ? sel.value : null;
     sel.replaceChildren();
+    // 0.21.75 (Kenton): a Publisher box may join NO room -- it sits in its hidden home room and each camera shows in the rooms
+    // picked on its row ("Show in rooms\u2026")
+    if (isPublisherMode()) sel.appendChild(new Option("No room \u2014 this box only shares its cameras into the rooms I pick", "__home"));
     for (const r of list) {
       const n = r.count > 0 ? " \u2014 " + r.count + " here" : "";
       sel.appendChild(new Option(r.slug === LOBBY ? "Lobby" : r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));   // 0.21.60: the Lobby says nothing of who is there
@@ -16642,6 +16719,7 @@
     let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
     try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
     let want = keep ?? (invited && list.some((r) => r.slug === invited) ? invited : lj && lj.room ? channelSlug(lj.room) : "main");   // 0.21.34: main the first time
+    if (isHomeRoom(want)) want = isPublisherMode() ? "__home" : "main";   // 0.21.75
     // 0.21.34: the last room, unless it is gone, or locked without its code saved here -> main (no room question on the card)
     const wantRec = list.find((r) => r.slug === want);
     if (want !== invited && wantRec?.locked && !(lj && channelSlug(lj.room) === want && lj.code)) want = "main";
@@ -16904,9 +16982,13 @@
       joinEls.joinPwd.value = rejoinRec.code ?? "";
       joinEls.joinAccess.value = rejoinRec.access ?? "";   // 0.10.0
       { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: a rejoin ticket is checked too
+    } else if (joinEls.joinChanSel.value === "__home") {   // 0.21.75: a box in no room -- its own hidden room (no lock, not registered)
+      slug = homeRoomOf(HOSTNAME1);
+      rec = null;
     } else if (joinEls.joinChanSel.value === "__new") {
       if (!joinEls.joinChanNew.value.trim()) return joinFail("Name the new room first.");
       slug = channelSlug(joinEls.joinChanNew.value);
+      if (isHomeRoom(slug)) return joinFail("Names starting with \u201cbox-\u201d are kept for camera boxes \u2014 pick another name.");   // 0.21.75
       // 0.21.17: a typed name that matches a listed room JOINS that room (its code checked) -- it never creates a second
       // lock over it. Until 0.21.16 only an EMPTY code was refused here, so a second try with any code walked in.
       const existing = lastChannelList.find((r) => r.slug === slug);
@@ -18486,12 +18568,46 @@
   // toolbar camera lives in the browser and cannot be a grid member, so its row offers to MOVE it to this computer as a
   // host feed (0.21.26): KASTR's own camera goes off (a webcam opens once), the same device is captured by the bridge.
   // 0.21.62: the rooms one source shows in (this room + N) -- a click opens its own rooms list
+  // 0.21.75 (Kenton: boxes "share without being in a room"): on a Publisher box each camera row's rooms are kept by the BOX
+  // SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; listed every minute with or without this window); the row shows them and
+  // why a room refused the camera (locked without its code, removed by an admin, the relay's limits)
+  const xsSrv = new Map();   // feed id -> { xs: [slug], xsState: {slug: "ok" | why}, xsLocked: [slug] } (/api/rtsp/list)
+  let xsSrvSig = "";
+  const isBoxPage = () => /^publisher/.test(String(window.__pageMode?.() || ""));
+  const xsSrvId = (a) => (a && !IS_WEB2 && isBoxPage() && nativeRtsp && a.kind === RTSP && a.feedId != null) ? a.feedId : null;
+  window.__xsServer = {
+    owned: (path) => { const a = added.find((x) => xsSrvId(x) != null && chanPath(ensureHang(x.name)) === path); return a ? a.feedId : null; },
+    rooms: (path) => { const id = window.__xsServer.owned(path); return id == null ? [] : [...(xsSrv.get(id)?.xs || [])]; },
+    update: (id, d) => { xsSrv.set(id, { xs: Array.isArray(d?.xs) ? d.xs : [], xsState: d?.xsState || {}, xsLocked: d?.xsLocked || [] }); xsSrvSig = ""; try { renderSources(); } catch {} },
+    get: (id) => xsSrv.get(id) || null,
+  };
+  function xsSrvBtn(name, sid) {
+    const s = xsSrv.get(sid) || { xs: [], xsState: {}, xsLocked: [] };
+    const rooms = s.xs || [];
+    if (!window.__xsRooms?.others?.() && !rooms.length) return null;
+    const path = chanPath(ensureHang(name));
+    const bad = rooms.filter((sl) => s.xsState?.[sl] && s.xsState[sl] !== "ok");
+    const home = !!window.__homeRoom?.is?.(currentChannel());
+    const b = document.createElement("button"); b.type = "button"; b.className = "xsbtn" + (rooms.length ? " on" : "") + (bad.length ? " bad" : "");
+    b.textContent = !rooms.length ? "Show in rooms\u2026" : home ? "In " + rooms.length + (rooms.length === 1 ? " room" : " rooms") : "This room +" + rooms.length;
+    b.title = (rooms.length ? "Shown in " + rooms.join(", ") : "Shown in no other room") + " \u2014 click to change. This box keeps the listing, with or without this window.";
+    b.addEventListener("click", (e) => { e.stopPropagation(); window.__xsRooms.open(path, b, { server: { id: sid, rooms: [...rooms], state: { ...(s.xsState || {}) }, locked: [...(s.xsLocked || [])] } }); });
+    if (!bad.length) return b;
+    const w = document.createElement("span"); w.className = "xswrap";
+    const why = document.createElement("span"); why.className = "xswhy";
+    why.textContent = "not in " + bad[0] + ": " + s.xsState[bad[0]] + (bad.length > 1 ? " (+" + (bad.length - 1) + ")" : "");
+    why.title = bad.map((sl) => sl + ": " + s.xsState[sl]).join("\n");
+    w.append(b, why);
+    return w;
+  }
+  const xsRowBtn = (a) => { const sid = xsSrvId(a); return sid != null && a.name ? xsSrvBtn(a.name, sid) : xsRoomsBtn(a.name); };   // 0.21.75: a box's camera -> server-kept
   function xsRoomsBtn(name) {
     if (!name || !window.__xsRooms?.others?.() || IS_WEB2 && !window.__joinedChannel?.()) return null;
     const path = chanPath(ensureHang(name));
     const rooms = window.__xsRooms.of(path) || [];
     const b = document.createElement("button"); b.type = "button"; b.className = "xsbtn" + (rooms.length ? " on" : "");
-    b.textContent = rooms.length ? "This room +" + rooms.length : "This room";
+    const home = !!window.__homeRoom?.is?.(currentChannel());   // 0.21.75: a box in no room -- "this room" is nobody's
+    b.textContent = rooms.length ? (home ? "In " + rooms.length + (rooms.length === 1 ? " room" : " rooms") : "This room +" + rooms.length) : (home ? "Show in rooms\u2026" : "This room");
     b.title = rooms.length ? "Also shown in " + rooms.join(", ") + " \u2014 click to change" : "Shown in this room only \u2014 click to show it in other rooms too";
     b.addEventListener("click", (e) => { e.stopPropagation(); window.__xsRooms.open(path, b); });
     return b;
@@ -18633,7 +18749,7 @@
 
       const lbl = row.querySelector(".lbl");
       lbl.textContent = (a.kind === SCREEN || (a.kind === RTSP && isScreenUrl(a.url)) ? "🖵  " : "") + a.label;   // 0.21.26: a native screen share too
-      { const xb = xsRoomsBtn(a.name); if (xb) row.querySelector(".top").insertBefore(xb, row.querySelector(".rm")); }   // 0.21.62: this share in other rooms
+      { const xb = xsRowBtn(a); if (xb) row.querySelector(".top").insertBefore(xb, row.querySelector(".rm")); }   // 0.21.62: this share in other rooms; 0.21.75: + the row (a box's camera: server-kept)
       lbl.title = a.label;
 
       const cb = row.querySelector("input[type=checkbox]");
@@ -23667,6 +23783,12 @@
         nativeRtsp = d.moq === true;   // 0.9.1
         if (typeof d.suspended === "boolean" && d.suspended !== rtspSuspended && Date.now() - rtspSwitchAt > 4000) setRtspSuspended(d.suspended, { fromServer: true });   // 0.21.16: flipped on the Relay page or by the hub (a poll already in flight when THIS page flipped is ignored for 4 s)
         const byId = new Map((d.feeds ?? []).map((f) => [f.id, f]));
+        {   // 0.21.75: the rooms each camera shows in (kept by this box's server) -> its row
+          let sig = "";
+          for (const f of d.feeds ?? []) { const v = { xs: Array.isArray(f.xs) ? f.xs : [], xsState: f.xsState || {}, xsLocked: f.xsLocked || [] }; xsSrv.set(f.id, v); sig += f.id + ":" + JSON.stringify(v) + ";"; }
+          for (const id of [...xsSrv.keys()]) if (!byId.has(id)) xsSrv.delete(id);
+          if (sig !== xsSrvSig) { xsSrvSig = sig; try { renderSources(); } catch {} }
+        }
         let ingestFlip = false;
         for (const slot of slots.values()) {
           const f = byId.get(slot.entry.feedId);

@@ -77,6 +77,47 @@ SLEEP_UNWATCHED = str(os.environ.get("KASTR_SLEEP_UNWATCHED") or "on").strip().l
 # 0.12.0: a probe that could not tell (camera off when a restored feed came
 # back) is asked again after this long instead of being believed for the run.
 PROBE_RETRY_S = 30.0
+# 0.21.75 (Kenton: a Publisher box "shares its cameras into the rooms I pick" without being in a room): the BOX SERVER keeps
+# each camera's cross-room listings (POST /api/xshare at its relay's minter, the 0.21.41 registry) -- so they hold with no
+# window open and come back after a restart (rtsp-feeds.json `xs` / `xsCodes` per feed record).
+XS_TICK_S = 60           # every listing is re-POSTed this often (the relay keeps one XSHARE_TTL = 180 s)
+XS_ROOMS_MAX = 16        # rooms one camera may show in (kastr_relay XSHARE_TARGETS_MAX)
+XS_TOKEN_MIN_S = 600     # a cached member token is re-minted once it ends within this
+HOME_PREFIX = "box-"     # a box's hidden home room: box-<host slug> (pages leave box-* rooms out of every list)
+_XS_ROOM_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+def home_room(host):
+    """0.21.75: a box's hidden HOME room -- box-<host slug>, cut to a room's 32 characters (the host's 4-hex suffix
+    kept, so two boxes with one long name still get two rooms). The page's homeRoomOf() is the same rule."""
+    h = re.sub(r"[^a-z0-9-]+", "-", str(host or "").lower()).strip("-") or "host"
+    s = HOME_PREFIX + h
+    if len(s) > 32:
+        name, _, suf = h.rpartition("-")
+        if name and len(suf) == 4:
+            s = HOME_PREFIX + name[:32 - len(HOME_PREFIX) - 5].strip("-") + "-" + suf
+        else:
+            s = s[:32].rstrip("-")
+    return s
+
+
+def is_home_room(slug):
+    """0.21.75: a box's home room (no person is ever in one; no list shows one)."""
+    return str(slug or "").startswith(HOME_PREFIX)
+
+
+def _xs_fields(feed):
+    """0.21.75: a feed's rooms (+ the codes of locked ones) for its rtsp-feeds.json record -- {} when it has none."""
+    xs = getattr(feed, "xs", None)
+    if not isinstance(xs, list) or not xs:
+        return {}
+    xs = [str(r) for r in xs]
+    out = {"xs": xs}
+    codes = getattr(feed, "xs_codes", None)
+    codes = {r: str(c) for r, c in (codes if isinstance(codes, dict) else {}).items() if r in xs and c}
+    if codes:
+        out["xsCodes"] = codes
+    return out
 
 # Longest a write to a stream reader may block. A browser that stops reading
 # (frozen demuxer, wedged tab, abandoned socket) used to block wfile.write()
@@ -2235,6 +2276,9 @@ class Feed:
         self.fullrange = None   # full-range source: must be converted
         self.sar = None         # 0.9.8: (num, den) sample aspect ratio from the probe; None = square/unknown
         self.probe_failed_at = None   # 0.12.0: when a codec probe could not tell (re-asked after PROBE_RETRY_S)
+        self.xs = []                  # 0.21.75: the OTHER rooms this camera shows in (the bridge's xs loop lists it there)
+        self.xs_codes = {}            # 0.21.75: room -> code of a locked target room (rtsp-feeds.json only; never sent to a page)
+        self.xs_state = {}            # 0.21.75: room -> "ok" | why that room refused it (the page's row shows the reason)
 
     def info(self):
         return {
@@ -2245,6 +2289,7 @@ class Feed:
             "error": self.error,
             "acodec": self.acodec,        # 0.9.5
             "sar": ("%d:%d" % tuple(self.sar)) if self.sar else None,   # 0.9.8
+            "xs": list(self.xs), "xsState": dict(self.xs_state), "xsLocked": sorted(self.xs_codes),   # 0.21.75 (never the codes)
         }
 
 
@@ -2289,6 +2334,14 @@ class Bridge:
         # 0.21.61: kept feeds read from rtsp-feeds.json that are not on the air (yet) -- written back by every
         # persist_feeds until they publish again or the operator removes / un-keeps them
         self._pending = []
+        # 0.21.75: the cross-room listings this box keeps for its cameras (xs_tick)
+        self._xs_listed = {}      # path -> {"rooms": set, "base", "minter", "room"} -- what was accepted (a stop goes there)
+        self._xs_toks = {}        # (relay, room) -> (member token, exp)
+        self._xs_bad = {}         # (relay, room) -> (access, code, status, why, at): a refused mint is not retried with the same codes
+        self._xs_lock = threading.Lock()
+        self._xs_thread = None
+        self._xs_evt = threading.Event()
+        self._xs_said = {}
         self._load_session()
         if self.suspended:   # 0.21.16
             self.log("rtsp: publishing is SUSPENDED on this box (rtsp-feeds.json suspended=true) -- cameras are recorded, none starts until the switch is turned on")
@@ -2571,6 +2624,8 @@ class Bridge:
                 self._removed = [r for r in self._removed if r.get("url") != url] + [{"url": url, "at": int(time.time())}]
                 self._removed = self._removed[-50:]
         self.persist_feeds()                     # 0.12.0
+        if feed and getattr(self, "_xs_listed", None):   # 0.21.75: its cross-room listings go now, not when they run out
+            self.xs_poke()
         return bool(feed)
 
     # ---- native publishing (0.9.1) --------------------------------------
@@ -2758,6 +2813,8 @@ class Bridge:
             pub.stop()
             if persist:
                 self.persist_feeds()
+            if pub.broadcast in getattr(self, "_xs_listed", {}):   # 0.21.75: off the air -> out of the other rooms now
+                self.xs_poke()
         if is_screen(getattr(pub.feed, "url", "") if pub else ""):   # 0.21.20: the red border goes with the share
             import kastr_screen
             kastr_screen.overlay_stop(int(feed_id))
@@ -2811,12 +2868,14 @@ class Bridge:
                 out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast, "audio": bool(pub.audio),
                             "keep": True, "label": pub.label, "screen": ident or {},
                             "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})
+                out[-1].update(_xs_fields(pub.feed))   # 0.21.75
                 continue
             out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
                         "ondemand": bool(pub.wantOndemand), "low": bool(pub.wantLow), "label": pub.label,   # 0.18.0; 0.21.10: what was ASKED -- preserved while the switch is off
                         "idle": bool(pub.wantIdle),                                                          # 0.21.73
                         "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})   # 0.21.2: a web client's feed
+            out[-1].update(_xs_fields(pub.feed))   # 0.21.75: the other rooms it shows in (+ locked rooms' codes; the file is owner-only)
         # 0.21.61: what has not come back yet stays on file (a failed or unfinished restore, a Join mid-restore)
         live = {r["url"] for r in out}
         gone = {r.get("url") for r in getattr(self, "_removed", [])}
@@ -3072,6 +3131,10 @@ class Bridge:
                         log("rtsp restore: %s found again as %s" % (rec["url"], now_url))
                     rec = dict(rec, url=now_url)
                 feed = self._feed_by_source(rec["url"]) or self.add(rec["url"])
+                if isinstance(rec.get("xs"), list) and not getattr(feed, "xs", None):   # 0.21.75: the rooms it showed in
+                    feed.xs = [str(r) for r in rec["xs"] if _XS_ROOM_RE.match(str(r)) and not is_home_room(r)][:XS_ROOMS_MAX]
+                    codes = rec.get("xsCodes") if isinstance(rec.get("xsCodes"), dict) else {}
+                    feed.xs_codes = {str(r): str(c) for r, c in codes.items() if str(r) in feed.xs and c}
                 rurl = url
                 if rec.get("room") and rec.get("room") != room:   # 0.21.2: a web client's feed in another room
                     feed.added_by = str(rec.get("addedBy") or ""); feed.room = str(rec.get("room"))
@@ -3095,7 +3158,211 @@ class Bridge:
             t.join(max(0.1, deadline - time.time()))
         log("rtsp: %s %d persisted feed(s) into room %s" % ("recorded (publishing suspended)" if self.suspended else "republished", done[0], room))   # 0.21.16
         self.persist_feeds()
+        if self._xs_wanted():   # 0.21.75: the cameras' other rooms come back with them (the loop lists them now and every minute)
+            self._xs_ensure()
+            self.xs_poke()
         return done[0]
+
+    # ---- 0.21.75 (Kenton: boxes "share without being in a room" -- each camera picks the rooms it shows in) -----------
+    # The box server owns the listings: every XS_TICK_S each live main pair with rooms is POSTed to its relay's minter
+    # (/api/xshare: Bearer = a member token of the pair's own room minted for this host, `tokens` = one member token per
+    # target room, minted with the box's saved access code and, for a locked room, the code kept in rtsp-feeds.json);
+    # a room dropped, a camera removed / unpublished / switched off is withdrawn (stop) on the next round.
+    def set_xs(self, feed_id, rooms, codes=None):
+        """POST /api/rtsp/xs {id, rooms, codes?}: exactly these other rooms for one camera (persisted), listed at once.
+        -> {ok, id, xs, xsState, xsLocked} (never a code)."""
+        try:
+            feed = self.get(feed_id)
+        except (TypeError, ValueError):
+            feed = None
+        if feed is None:
+            raise ValueError("no such feed")
+        if not isinstance(rooms, list):
+            raise ValueError("rooms must be a list")
+        pub = self._pubs.get(int(feed.id))
+        own = (pub.broadcast.split("/", 1)[0] if pub is not None else "") or getattr(feed, "room", "") or self._session.get("room", "")
+        out = []
+        for r in rooms:
+            r = str(r or "").strip().lower()
+            if not _XS_ROOM_RE.match(r):
+                raise ValueError("bad room name")
+            if r == own or r in out:   # its own room (the box's home too) and doubles drop out
+                continue
+            if is_home_room(r):
+                raise ValueError("%s is a box's own room" % r)
+            out.append(r)
+        if len(out) > XS_ROOMS_MAX:
+            raise ValueError("a camera shows in at most %d other rooms" % XS_ROOMS_MAX)
+        old = dict(getattr(feed, "xs_codes", None) or {})
+        keep = {r: old[r] for r in out if old.get(r)}
+        for r, c in ((codes or {}).items() if isinstance(codes, dict) else []):
+            r = str(r or "").strip().lower()
+            if r in out and str(c or "").strip():
+                keep[r] = str(c)[:128]
+                for k in [k for k in self._xs_bad if k[1] == r]:   # a new code is tried at once
+                    self._xs_bad.pop(k, None)
+        feed.xs, feed.xs_codes = out, keep
+        feed.xs_state = {r: v for r, v in (getattr(feed, "xs_state", None) or {}).items() if r in out}
+        self.persist_feeds()
+        self.log("rtsp: %s shows in %s" % (pub.broadcast if pub is not None else "feed %s" % feed.id, ", ".join(out) or "its own room only"))
+        try:
+            self.xs_tick()
+        except Exception as e:
+            self.log("rtsp: cross-room listing failed: %s" % e)
+        if self._xs_wanted():
+            self._xs_ensure()
+        return {"ok": True, "id": feed.id, "xs": list(feed.xs), "xsState": dict(feed.xs_state), "xsLocked": sorted(feed.xs_codes)}
+
+    def _xs_wanted(self):
+        if getattr(self, "_xs_lock", None) is None:   # (a bridge built without __init__ -- tests)
+            return False
+        return bool(self._xs_listed) or any(isinstance(getattr(f, "xs", None), list) and f.xs for f in list(self._feeds.values()))
+
+    def _xs_ensure(self):
+        with self._lock:
+            if self._xs_thread is not None and self._xs_thread.is_alive():
+                return
+            t = threading.Thread(target=self._xs_loop, daemon=True, name="kastr-xshare")
+            self._xs_thread = t
+        t.start()
+
+    def xs_poke(self):
+        """Run the listing round now (a room dropped, a camera gone) -- the loop starts if it is not running."""
+        if self._xs_wanted():
+            self._xs_ensure()
+        self._xs_evt.set()
+
+    def _xs_loop(self):
+        while True:
+            if not self._xs_wanted():
+                with self._lock:
+                    self._xs_thread = None
+                return
+            try:
+                self.xs_tick()
+            except Exception as e:
+                self.log("rtsp: cross-room listing round failed: %s" % e)
+            self._xs_evt.wait(XS_TICK_S)
+            self._xs_evt.clear()
+
+    def _xs_token(self, base, room, access, code, mint, now):
+        """-> (status, member token or "" (an open relay), why). Cached until XS_TOKEN_MIN_S before it ends; a mint the
+        relay REFUSED is not retried with the same codes (a wrong code must not lock the box out), a down one after 60 s."""
+        key = (base, room)
+        hit = self._xs_toks.get(key)
+        if hit and hit[1] - now > XS_TOKEN_MIN_S:
+            return "token", hit[0], ""
+        bad = self._xs_bad.get(key)
+        if bad and bad[0] == access and bad[1] == code and (bad[2] == "refused" or now - bad[4] < 60):
+            return bad[2], None, bad[3]
+        st, url, det = mint(base, room, access, code)
+        if st == "token":
+            tok = _relay_token(url)
+            self._xs_toks[key] = (tok, _jwt_exp(tok) or (now + 3600))
+            self._xs_bad.pop(key, None)
+            return "token", tok, ""
+        if st == "open":
+            return "open", "", ""
+        why = str(det or st)[:80]
+        if st == "refused" and not code and re.search(r"room code|locked", why, re.I):
+            why = "locked -- enter its code"
+        self._xs_bad[key] = (access, code, st, why, now)
+        return st, None, why
+
+    def _xs_post(self, url, body, bearer):
+        headers = {"Content-Type": "application/json"}
+        if bearer:
+            headers["Authorization"] = "Bearer " + bearer
+        try:
+            req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=6) as r:
+                return json.loads(r.read().decode("utf-8", "replace") or "{}"), (getattr(r, "status", None) or 200)
+        except urllib.error.HTTPError as e:
+            try:
+                return json.loads(e.read().decode("utf-8", "replace") or "{}"), e.code
+            except Exception:
+                return None, e.code
+        except Exception as e:
+            if time.time() - self._xs_said.get(url, 0) > 600:
+                self._xs_said[url] = time.time()
+                self.log("rtsp: cross-room listing at %s failed: %s" % (re.sub(r"[?].*", "", url), str(e)[:120]))
+            return None, 0
+
+    def xs_tick(self, now=None, post=None, mint=None):
+        """One round. `post(url, body, bearer) -> (dict | None, http code)` and `mint(relay, room, access, room_code) ->
+        (status, url, detail)` (mint_member's shape) are injectable (tests). -> {path: {room: "ok" | why}}."""
+        now = time.time() if now is None else now
+        post = post or self._xs_post
+        mint = mint or (lambda base, room, access, code: mint_member(base, room, access, code, host=self.host_slug))
+        with self._xs_lock:
+            ses = self._session if self._session.get("room") else (getattr(self, "_last_session", None) or self._session)
+            access = str(ses.get("access") or "")
+            want = {}
+            if not self.suspended:
+                for pub in list(self._pubs.values()):
+                    rooms = getattr(pub.feed, "xs", None)
+                    rooms = list(rooms) if isinstance(rooms, list) else []
+                    if rooms and not pub.stopping and not pub.suspended and pub.role == "main":
+                        want[pub.broadcast] = (pub, rooms)
+            out = {}
+            for path, rec in list(self._xs_listed.items()):   # withdrawals first: a dropped room, a camera gone or off
+                drop = sorted(rec["rooms"] - (set(want[path][1]) if path in want else set()))
+                if drop:
+                    room = rec["room"]
+                    st, tok, _w = self._xs_token(rec["base"], room, access, ses.get("roomCode", "") if room == ses.get("room") else "", mint, now)
+                    if st in ("token", "open"):
+                        post(rec["minter"] + "/api/xshare", {"path": path, "to": drop, "stop": True}, tok)
+                    rec["rooms"] -= set(drop)   # (a stop that did not land runs out with the listing's ttl)
+                    self.log("rtsp: %s no longer shown in %s" % (path, ", ".join(drop)))
+                if not rec["rooms"]:
+                    self._xs_listed.pop(path, None)
+            for path, (pub, rooms) in want.items():
+                state = {}
+                base = _relay_key(ses.get("relay") or "") or _relay_key(pub.relay)
+                parts, why = _relay_base(base)
+                room = path.split("/", 1)[0]
+                if not parts:
+                    state = {r: "no relay (%s)" % why for r in rooms}
+                else:
+                    minter = parts[1]
+                    st, htok, hwhy = self._xs_token(base, room, access, ses.get("roomCode", "") if room == ses.get("room") else "", mint, now)
+                    if st not in ("token", "open"):
+                        state = {r: "no token for %s (%s)" % (room, hwhy) for r in rooms}
+                    else:
+                        toks = {}
+                        for r in rooms:
+                            s2, t2, w2 = self._xs_token(base, r, access, (getattr(pub.feed, "xs_codes", None) or {}).get(r, ""), mint, now)
+                            if s2 in ("token", "open"):
+                                toks[r] = t2
+                            else:
+                                state[r] = w2
+                        to = [r for r in rooms if r in toks]
+                        if to:
+                            segs = path.split("/")
+                            body = {"path": path, "to": to, "tokens": {r: t for r, t in toks.items() if t},
+                                    "label": pub.label or segs[-1][:-5], "kind": "screen" if is_screen(pub.feed.url) else "rtsp",
+                                    "by": segs[2] if len(segs) > 3 else ""}
+                            d, code = post(minter + "/api/xshare", body, htok)
+                            if not isinstance(d, dict):
+                                for r in to:
+                                    state[r] = "the relay did not answer"
+                            else:
+                                acc = [r for r in (d.get("to") or []) if r in to]
+                                for r in acc:
+                                    state[r] = "ok"
+                                ref = d.get("refused") if isinstance(d.get("refused"), dict) else {}
+                                for r in to:
+                                    if r not in state:
+                                        state[r] = str(ref.get(r) or d.get("error") or "refused")[:80]
+                                if acc:
+                                    rec = self._xs_listed.setdefault(path, {"rooms": set(), "base": base, "minter": minter, "room": room})
+                                    new = sorted(set(acc) - rec["rooms"])
+                                    rec["rooms"] |= set(acc)
+                                    if new:
+                                        self.log("rtsp: %s shows in %s" % (path, ", ".join(new)))
+                pub.feed.xs_state = state
+                out[path] = state
+            return out
 
     def pause(self, feed_id, on):
         """0.21.73: pause / resume a screen share -- the same broadcast restarts on the "paused" card (and back), so viewers
@@ -3222,6 +3489,8 @@ class Bridge:
         self.persist_feeds()
         self.log("rtsp: publishing SUSPENDED by %s -- %d pair(s) stopped, %d monitor(s) released, %d record(s) kept"
                  % (who, stopped, mons, len(pubs)))
+        if getattr(self, "_xs_listed", None):   # 0.21.75: switched off -> out of the other rooms too
+            self.xs_poke()
         return {"ok": True, "suspended": True, "stopped": stopped, "monitors": mons, "records": len(pubs)}
 
     def resume(self, who="operator"):
@@ -3252,6 +3521,9 @@ class Bridge:
             t.join(max(0.1, deadline - time.time()))
         self.persist_feeds()
         self.log("rtsp: publishing RESUMED by %s -- %d of %d pair(s) starting" % (who, len(done), len(pubs)))
+        if self._xs_wanted():   # 0.21.75
+            self._xs_ensure()
+            self.xs_poke()
         return {"ok": True, "suspended": False, "started": len(done), "records": len(pubs)}
 
     def shutdown(self):
@@ -3652,7 +3924,8 @@ def handle_api(handler, bridge, path):
 
     if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge", "/api/rtsp/suspend",   # 0.21.16: suspend
                 "/api/rtsp/pause", "/api/rtsp/retarget",                                             # 0.21.73: a share paused / swapped
-                "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note"):   # 0.12.0: keep, persist; 0.21.5: note
+                "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note",    # 0.12.0: keep, persist; 0.21.5: note
+                "/api/rtsp/xs"):                                            # 0.21.75: the other rooms a camera shows in
         # 0.9.1: local pages only -- these start processes and name relays
         if not from_loopback():
             reply({"error": "publishing is controlled from the machine itself"}, 403)
@@ -3719,6 +3992,8 @@ def handle_api(handler, bridge, path):
                 reply(info if info is not None else {"error": "no such share"}, 200 if info is not None else 404)
             elif path == "/api/rtsp/retarget":                            # 0.21.73: {id, url}
                 reply(bridge.retarget(payload.get("id"), payload.get("url")))
+            elif path == "/api/rtsp/xs":                                  # 0.21.75: {id, rooms: [slug], codes?: {slug: code}}
+                reply(bridge.set_xs(payload.get("id"), payload.get("rooms"), payload.get("codes")))
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
                 text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:240]
                 if text:

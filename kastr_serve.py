@@ -2897,6 +2897,18 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     except Exception:
                         pass
                 return self._chat_reply(code, obj)
+            if path == "/api/rooms/personal":   # 0.21.75: My room -- make / open (name + personal code) / an admin's reset
+                if method != "POST":
+                    return self._chat_reply(405, {"error": "POST only"})
+                p = self._chat_body_json()
+                if p is None:
+                    return self._chat_reply(413, {"error": "body too large"})
+                _auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
+                _hadm = (lambda c: bool(_auth._hub_admin_ok(c))) if _auth is not None and hasattr(_auth, "_hub_admin_ok") else None
+                obj, code = kastr_relay.personal_op(store, p, self._chat_peer(), log, CHAT_LOCKOUT,
+                                                    admin=(p.get("op") == "reset" and self._settings_admin()), admin_check=_hadm)
+                hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                return self._chat_reply(code, obj, hdrs)
             if path == "/api/rooms/touch":   # 0.21.25: a room in use (any member) -- plain rooms live while used
                 if method != "POST":
                     return self._chat_reply(405, {"error": "POST only"})
@@ -2961,6 +2973,28 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 body = {"op": "touch", "slug": slug, "creator": str(p.get("creator") or "")[:64]}
             elif path == "/api/rooms/settings":   # 0.21.65: the hub owns rooms; this box vouches for an admin it verified
                 body = {"op": "settings", "body": p, "vouch": "admin" if self._settings_admin() else None}
+            elif path == "/api/rooms/personal":   # 0.21.75: personal rooms live on the hub; this box checks the access code
+                wait = CHAT_LOCKOUT.locked_for(peer)
+                if wait:
+                    return self._chat_reply(429, {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait},
+                                            {"Retry-After": wait})
+                vouch = None
+                if p.get("op") == "reset":
+                    vouch = "admin" if self._settings_admin() else None
+                elif p.get("op") == "create":
+                    access = str(p.get("access") or "")
+                    _a = getattr(relay_srv, "auth", None)
+                    if not store.configured():
+                        vouch = "member"   # this relay has no access codes: nothing more to check here
+                    elif access and (store.check("viewer", access) or store.check("publisher", access) or store.check("admin", access)
+                                     or (_a is not None and hasattr(_a, "_hub_admin_ok") and _a._hub_admin_ok(access))):
+                        vouch = "member"
+                    elif access:
+                        lo, lc = CHAT_LOCKOUT.fail(peer, "wrong access code", "(personal room)")
+                        return self._chat_reply(lc, dict(lo, ok=False))
+                    else:
+                        return self._chat_reply(403, {"ok": False, "error": "making your room needs this relay's access code -- join a room first"})
+                body = {"op": "personal", "body": {k: v for k, v in p.items() if k != "access"}, "peer": peer, "vouch": vouch}
             else:
                 return self._chat_reply(404, {"error": "no such rooms endpoint"})
             try:
@@ -2976,6 +3010,13 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             obj, code = out
             if path == "/api/rooms/register" and code == 403 and p.get("access"):
                 CHAT_LOCKOUT.fail(peer, "wrong publisher access code", slug)   # the guess counts here, where the member is
+            if path == "/api/rooms/personal":   # 0.21.75
+                if code == 400 and obj.get("error") == "bad room":
+                    return self._chat_reply(501, {"ok": False, "error": "the hub runs an older KASTR without personal rooms -- update the hub first"})
+                if code == 403 and obj.get("wrong"):
+                    lo, lc = CHAT_LOCKOUT.fail(peer, "wrong personal code", "(personal room)")   # the guess counts here, where the person is
+                    if lc == 429:
+                        obj, code = dict(lo, ok=False), 429
             if path == "/api/rooms/settings" and code == 200:   # 0.21.65: this box asks the hub again (a lock is enforced at once)
                 try:
                     _a = getattr(relay_srv, "auth", None)

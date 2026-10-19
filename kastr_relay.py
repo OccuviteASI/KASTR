@@ -136,6 +136,16 @@ LOBBY_SLUG = "main"
 # heartbeat window -- are capped, and a closed room leaves an hour-long
 # tombstone so pages learn WHY the chat answers 410.
 KEPT_MAX = 64
+# 0.21.75 (Kenton: "everyone can have a personal room that no other user sees in the rooms list, where they set up their own
+# views of feeds from other rooms ... stored on the hub so it follows the person"): PERSONAL ROOMS ("My room"). A record
+# "me-<12 hex>" on the hub, found by its owner's NAME and opened with a personal code the person picked (a salted sha256 like a
+# room code -- the minter's locked-room check opens it). Never listed, never kept-counted; "me-" is reserved for them.
+PERSONAL_PREFIX = "me-"
+PERSONAL_RE = re.compile(r"^me-[0-9a-f]{12}$")
+PERSONAL_MAX = 500          # personal rooms one hub holds (their own cap -- KEPT_MAX counts shared rooms only)
+PERSONAL_CODE_MIN = 4
+PERSONAL_CODE_MAX = 128
+PERSONAL_RESERVED = 'room names starting with "me-" are reserved for personal rooms (My room) -- pick another name'
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
@@ -406,6 +416,30 @@ def _room_code_ok(rec, code):
         return bool(want) and hmac.compare_digest(want, got)
     except Exception:
         return False
+
+
+def is_personal(slug):
+    """0.21.75: a personal room's name (me-<12 hex>)."""
+    return bool(PERSONAL_RE.match(str(slug or "")))
+
+
+def personal_reserved(slug):
+    """0.21.75: a name no room create / rename / auto-create may take (every "me-..." name)."""
+    return str(slug or "").startswith(PERSONAL_PREFIX)
+
+
+def is_personal_rec(rec):
+    return isinstance(rec, dict) and isinstance(rec.get("personal"), dict)
+
+
+def personal_name(name):
+    """0.21.75: an owner's name as shown (trimmed, inner spaces collapsed, at most 48)."""
+    return " ".join(str(name or "").split())[:48]
+
+
+def personal_key(name):
+    """0.21.75: the lookup key of an owner's name (case-insensitive, trimmed)."""
+    return personal_name(name).lower()
 
 
 # ---- 0.12.0: verification (kastr_serve checks chat callers with the relay's key)
@@ -2229,7 +2263,7 @@ class AuthStore:
 
     def kept_slugs(self):
         with self.lock:
-            return sorted(k for k, r in self.rooms.items() if r.get("persistent"))
+            return sorted(k for k, r in self.rooms.items() if r.get("persistent") and not is_personal_rec(r))   # 0.21.75: not My rooms
 
     def rooms_public(self):
         """The /api/rooms rows -- a superset of 0.11's [{slug}]: what a gate or a
@@ -2238,6 +2272,8 @@ class AuthStore:
         with self.lock:
             rows = []
             for k, r in sorted(self.rooms.items()):
+                if is_personal_rec(r):
+                    continue                    # 0.21.75: a personal room is never listed (nobody else learns it exists)
                 row = {"slug": k, "locked": bool(r.get("hash")), "persistent": bool(r.get("persistent")),
                        "plain": bool(r.get("plain") and not r.get("hash") and not r.get("persistent")),   # 0.21.25
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
@@ -2267,6 +2303,8 @@ class AuthStore:
                 created = False
             elif self._renamed_live(slug, now):
                 return False
+            elif personal_reserved(slug):
+                return False                 # 0.21.75: a "me-" name is never made by a page or a vehicle using it
             else:
                 self.closed.pop(slug, None)
                 self.rooms[slug] = {"salt": "", "hash": "", "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
@@ -2274,6 +2312,81 @@ class AuthStore:
                 created = True
             self._save()
             return created
+
+    # ---- 0.21.75: personal rooms ("My room") ---------------------------------------------------------------------------
+
+    def _personal_find(self, key):
+        """Lock held: the slug of the personal room whose owner's name key is `key`, or None."""
+        if not key:
+            return None
+        for k, r in self.rooms.items():
+            if is_personal_rec(r) and r["personal"].get("key") == key:
+                return k
+        return None
+
+    def personal_count(self):
+        with self.lock:
+            return sum(1 for r in self.rooms.values() if is_personal_rec(r))
+
+    def personal_check(self, name, code):
+        """-> (slug, owner) when `name` has a personal room and `code` is its personal code, else (None, None)."""
+        with self.lock:
+            slug = self._personal_find(personal_key(name))
+            rec = self.rooms.get(slug) if slug else None
+            if rec is None or not _room_code_ok(rec, str(code or "")):
+                return None, None
+            return slug, str(rec["personal"].get("owner") or "")
+
+    def personal_create(self, name, code):
+        """-> (slug, verdict): "created", "exists" (that name has one and the code is its code -- it opens), "wrong" (that
+        name has one with another code), "full" (PERSONAL_MAX) or "bad" (no name / a code too short or long)."""
+        disp, key, code = personal_name(name), personal_key(name), str(code or "")
+        if not key or not (PERSONAL_CODE_MIN <= len(code) <= PERSONAL_CODE_MAX):
+            return None, "bad"
+        with self.lock:
+            slug = self._personal_find(key)
+            if slug:
+                return (slug, "exists") if _room_code_ok(self.rooms[slug], code) else (None, "wrong")
+            if sum(1 for r in self.rooms.values() if is_personal_rec(r)) >= PERSONAL_MAX:
+                return None, "full"
+            for _ in range(16):
+                slug = PERSONAL_PREFIX + os.urandom(6).hex()
+                if slug not in self.rooms:
+                    break
+            salt = os.urandom(8).hex()
+            now = time.time()
+            self.rooms[slug] = {"salt": salt, "hash": hashlib.sha256((salt + code).encode()).hexdigest(),
+                                "roomKey": os.urandom(16).hex(), "at": now, "persistent": True, "creator": disp, "created": now,
+                                "personal": {"owner": disp, "key": key}}
+            self.closed.pop(slug, None)
+            self.renamed.pop(slug, None)
+            self._save()
+            return slug, "created"
+
+    def personal_reset(self, name, code=None):
+        """An admin, for a forgotten personal code: with `code` the room keeps its board and takes the new code; without one
+        the room is gone (its owner makes a new one). -> the slug, or None when that name has no personal room."""
+        fire = False
+        with self.lock:
+            slug = self._personal_find(personal_key(name))
+            if not slug:
+                return None
+            if code:
+                salt = os.urandom(8).hex()
+                self.rooms[slug].update(salt=salt, hash=hashlib.sha256((salt + str(code)).encode()).hexdigest(), at=time.time())
+            else:
+                rec = self.rooms.pop(slug)
+                if rec.get("board"):
+                    self.board_ver += 1
+                    fire = True
+            self._save()
+        if fire:
+            self._board_fire()
+        return slug
+
+    def personal_public(self):
+        """The Relay page's count (never the names' rooms or codes)."""
+        return {"count": self.personal_count(), "max": PERSONAL_MAX}
 
     def export_bundle(self):
         """0.21.25: what a hub hands over -- the access-code records (salted hashes, never a code), the room records with
@@ -2396,6 +2509,8 @@ class AuthStore:
         old, new = str(old or ""), str(new or "")
         if not SLUG_RE.match(new) or new == LOBBY_SLUG:
             return "pick a different name (lowercase letters, digits and dashes, at most 32)", 400
+        if personal_reserved(new) or is_personal(old):
+            return PERSONAL_RESERVED if personal_reserved(new) else "a personal room cannot be renamed", 403   # 0.21.75
         if new == old:
             return "that is already the room's name", 400
         with self.lock:
@@ -2487,12 +2602,15 @@ class AuthStore:
                 b["lock"] = True
             return b
 
-    def boards_public(self):
+    def boards_public(self, personal=True):
         """{slug: board} for every live room whose board holds something (the hub's long-poll carries it to spokes).
-        0.21.65: + a room whose view is locked (`lock`) and an old name's redirect (`renamed`)."""
+        0.21.65: + a room whose view is locked (`lock`) and an old name's redirect (`renamed`). 0.21.75: personal=False leaves
+        the personal rooms out (the Relay page's board tooltip); spokes get them (the owner may use any relay)."""
         with self.lock:
             now, out = time.time(), {}
             for k, r in self.rooms.items():
+                if not personal and is_personal_rec(r):
+                    continue
                 if (r.get("board") or r.get("viewLock")) and not self._dead(r, now):
                     b = board_clean(r.get("board"))
                     if r.get("viewLock"):
@@ -2525,6 +2643,14 @@ class AuthStore:
                 rec = None
             if rec is None and self._renamed_live(slug, now):
                 return None, 409, "this room was renamed to %s" % self._renamed_live(slug, now)   # 0.21.65: never re-made by a late page
+            if rec is None and personal_reserved(slug):
+                return None, 404, "no such personal room"   # 0.21.75: a board never makes a "me-" room
+            # 0.21.75: a personal room's feeds stay in it (pinning one elsewhere would show its name -- and its owner's view)
+            if op == "pin" and item.get("from") != slug and personal_reserved(item.get("from")):
+                return None, 403, "a feed from a personal room cannot be pinned to another room"
+            if op == "cgrid" and any(personal_reserved(str(mp).split("/", 1)[0]) and str(mp).split("/", 1)[0] != slug
+                                     for s in (item.get("grid") or {}).get("slots") or [] for mp in s.get("cams") or []):
+                return None, 403, "a camera from a personal room cannot go into another room's grid"
             # 0.21.65 (m) (Kenton: "lock the view in a room so only an admin/creator can spotlight/change anything")
             if (rec is not None and rec.get("viewLock") and op not in BOARD_META_OPS
                     and not (boss or (room_key and room_key == rec.get("roomKey")))):   # 0.21.66: a grid's geometry is no view change
@@ -2663,7 +2789,7 @@ class AuthStore:
                 rec = {"salt": "", "hash": "", "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
                        "creator": str(item.get("by") or "")[:64], "created": now, "plain": True}
             if was_empty and board_has(board) and not rec.get("persistent"):
-                kept = sum(1 for k, r in self.rooms.items() if r.get("persistent") and k != slug)
+                kept = sum(1 for k, r in self.rooms.items() if r.get("persistent") and k != slug and not is_personal_rec(r))   # 0.21.75
                 if kept >= KEPT_MAX:
                     return None, 409, ("this relay already keeps %d rooms open -- turn Keep off for one on the hub's Relay page "
                                        "first (a room with pinned feeds, spotlights, a grid layout or a split camera is kept open)" % KEPT_MAX)
@@ -2813,6 +2939,8 @@ def room_settings(store, p, admin=False, log=None, xs=None):
         return {"ok": False, "error": "bad room name"}, 400
     if slug == LOBBY_SLUG:
         return {"ok": False, "error": "the Lobby's settings cannot be changed"}, 403
+    if personal_reserved(slug):
+        return {"ok": False, "error": "a personal room has no room settings"}, 403   # 0.21.75
     if op not in SETTINGS_OPS:
         return {"ok": False, "error": "unknown op (%s)" % "|".join(SETTINGS_OPS)}, 400
     cur = store.room(slug)
@@ -2928,6 +3056,8 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
     plain = bool(p.get("plain"))   # 0.21.25: a room with no code that is not kept -- stored too (ROOM_TTL after its last use)
     if not SLUG_RE.match(slug) or slug == "main" or bool(salt) != bool(hsh):
         return {"error": "bad room record"}, 400
+    if personal_reserved(slug):
+        return {"error": PERSONAL_RESERVED}, 403   # 0.21.75: only POST /api/rooms/personal makes a "me-" room
     if lockout is not None:
         wait = lockout.locked_for(peer)
         if wait:
@@ -3055,6 +3185,81 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
     return {"ok": True, "roomKey": rec["roomKey"], "persistent": bool(keep)}, 200
 
 
+def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=False, admin_check=None):
+    """0.21.75 (Kenton: identity = "name + a personal code the person picks once"): POST /api/rooms/personal -> (reply, code).
+    {op: "create", name, code, access} makes the person's room (any member access code -- what a token needs anyway; a spoke
+    checked it and `vouched`); a name that has one already opens it when the code matches, else it is a wrong code.
+    {op: "open", name, code} -> its slug. Wrong codes (and unknown names -- the same answer) count toward the lockout.
+    {op: "reset", name, code?} an admin (or the relay's operator): a new code (the board stays), or none (the room is gone).
+    The reply never carries a code; a refusal of a code guess says `wrong: true` (a spoke counts it where the person is)."""
+    log = log or (lambda m: None)
+    p = p if isinstance(p, dict) else {}
+    op = str(p.get("op") or "")
+    name = personal_name(p.get("name"))
+    code = p.get("code")
+    code = "" if code is None else str(code)
+    if op not in ("open", "create", "reset"):
+        return {"ok": False, "error": "unknown op (open|create|reset)"}, 400
+    if not name:
+        return {"ok": False, "error": "your name is required"}, 400
+    if len(code) > PERSONAL_CODE_MAX:
+        return {"ok": False, "error": "that personal code is too long"}, 400
+    if op == "reset":
+        if not admin:
+            return {"ok": False, "error": "only an admin (the admin code) or the relay's operator resets a personal room"}, 403
+        if code and len(code) < PERSONAL_CODE_MIN:
+            return {"ok": False, "error": "a personal code has at least %d characters" % PERSONAL_CODE_MIN}, 400
+        slug = store.personal_reset(name, code or None)
+        if not slug:
+            return {"ok": False, "error": "%s has no personal room" % name}, 404
+        log("relay: personal room of %s %s by an admin" % (name, "given a new code" if code else "cleared"))
+        return {"ok": True, "op": "reset", "name": name, "cleared": not code}, 200
+    if lockout is not None:
+        wait = lockout.locked_for(peer)
+        if wait:
+            return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+
+    def wrong(why):
+        if lockout is not None:
+            out, c = lockout.fail(peer, why, name, what="personal room of")
+        else:
+            out, c = {"error": why}, 403
+        out.update(ok=False, wrong=True)
+        return out, c
+
+    if op == "open":
+        slug, owner = store.personal_check(name, code)
+        if not slug:
+            return wrong("wrong name or personal code")
+        if lockout is not None:
+            lockout.ok(peer)
+        return {"ok": True, "op": "open", "slug": slug, "name": owner or name}, 200
+    if len(code) < PERSONAL_CODE_MIN:
+        return {"ok": False, "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_MIN}, 400
+    if store.configured() and not vouched:
+        access = str(p.get("access") or "")
+        ok = bool(access) and (store.check("viewer", access) or store.check("publisher", access) or store.check("admin", access)
+                               or bool(admin_check and admin_check(access)))
+        if not ok:
+            if access:
+                out, c = wrong("wrong access code")
+                out.pop("wrong", None)   # an access code, not a personal code (the spoke counted it itself)
+                return out, c
+            return {"ok": False, "error": "making your room needs this relay's access code -- join a room first"}, 403
+    slug, verdict = store.personal_create(name, code)
+    if verdict == "wrong":
+        return wrong("%s already has a personal room -- enter its personal code (an admin can reset a forgotten one)" % name)
+    if verdict == "full":
+        return {"ok": False, "error": "this relay already holds %d personal rooms" % PERSONAL_MAX}, 409
+    if verdict == "bad":
+        return {"ok": False, "error": "a name and a personal code of at least %d characters are required" % PERSONAL_CODE_MIN}, 400
+    if lockout is not None:
+        lockout.ok(peer)
+    if verdict == "created":
+        log("relay: personal room made for %s (from %s)" % (name, peer or "?"))
+    return {"ok": True, "op": "create", "slug": slug, "name": name, "created": verdict == "created"}, 200
+
+
 def close_room(store, slug, roomKey=None, operator=False, hook=None, log=None):
     """0.12.0: close a room -> (reply, http code). The creator proves itself with
     the roomKey; the operator (the Relay page on the relay host) needs none and
@@ -3066,6 +3271,8 @@ def close_room(store, slug, roomKey=None, operator=False, hook=None, log=None):
     if not SLUG_RE.match(slug):
         return {"error": "bad room name"}, 400
     cur = store.room(slug)
+    if is_personal_rec(cur) or (cur is None and personal_reserved(slug)):
+        return {"error": "a personal room is not closed -- an admin resets it (Relay page, Personal rooms)"}, 403   # 0.21.75
     if cur is None and not operator:
         return {"error": "no such room on this relay"}, 404
     if not operator and not (roomKey and roomKey == cur.get("roomKey")):
@@ -3114,6 +3321,8 @@ def group_op(store, p, operator=False, log=None):
             slug = str(p.get("slug") or "")
             if not SLUG_RE.match(slug):
                 return {"error": "bad room name"}, 400
+            if personal_reserved(slug):
+                return {"error": "a personal room is in no group"}, 403   # 0.21.75: groups are public
             if not operator:
                 cur = store.room(slug)
                 if cur is None:
@@ -3564,6 +3773,10 @@ class AuthService:
         if op == "group":   # 0.21.68: vouch "admin" -- the spoke checked an admin token (create / rename / delete groups)
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return group_op(self.store, body, operator=p.get("vouch") == "admin", log=self.log)
+        if op == "personal":   # 0.21.75: My room -- the spoke checked the member's access code (vouch "member") or an admin
+            body = p.get("body") if isinstance(p.get("body"), dict) else {}
+            return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
+                               vouched=p.get("vouch") in ("member", "admin"), admin=p.get("vouch") == "admin")
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
             return self._xs_fed(p)
         if op == "board":    # 0.21.63: a spoke verified a publisher member (vouch "publisher"); the hub keeps the boards
@@ -3586,6 +3799,8 @@ class AuthService:
         if op == "touch":
             created = self.store.touch_room(slug, str(p.get("creator") or ""))
             return {"ok": True, "created": created}, 200
+        if op in ("adopt", "lock") and personal_reserved(slug):
+            return {"ok": False, "error": PERSONAL_RESERVED}, 403   # 0.21.75
         if op == "adopt":
             return self._adopt_room(slug, p.get("rec"))
         rec = self.store.room(slug)
@@ -3742,6 +3957,8 @@ class AuthService:
         if wait:
             return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
         rec = self.store.room(slug)
+        # 0.21.75: My room (me-<12 hex>): its personal code is its room code; never a delegated access code; a spoke asks the hub
+        personal = is_personal(slug) and (rec is None or is_personal_rec(rec))
         # The room's own code is what old pages (and the second gate row) send
         # in `code`; with access codes on it travels in `roomCode`.
         rc = room_code if room_code is not None else access
@@ -3752,7 +3969,7 @@ class AuthService:
                 role = "viewer"
             elif self.store.check("admin", access) or self._hub_admin_ok(access):   # 0.16.0: here, or the hub's
                 role = "admin"
-            elif rec is not None and _room_code_ok(rec, access):
+            elif rec is not None and not personal and _room_code_ok(rec, access):
                 role, rc = "publisher", access     # the room's creator (a publisher) delegated its code
             else:
                 return self._fail(peer, "wrong access code", slug)
@@ -3764,11 +3981,17 @@ class AuthService:
             role = "publisher"
             if rec is not None and rec.get("hash") and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
                 return self._fail(peer, "wrong room code", slug)
+        if personal and rec is None and not self._hub_base():
+            return {"ok": False, "error": "no such personal room"}, 404   # 0.21.75: only POST /api/rooms/personal makes one
         if rec is None and slug != "main" and self._hub_base():
             # 0.21.17 (B1): the lock may live at the hub (it was registered there, or mirrored from another spoke)
             hv = self.hub_room(slug, rc if rc is not None else "")
             if hv == "wrong":
                 return self._fail(peer, "wrong room code", slug)
+            if personal and hv != "ok":   # 0.21.75: FAIL CLOSED -- a personal room is always locked; the hub alone says the code is right
+                if hv is None:
+                    return {"ok": False, "error": "personal rooms live on the hub, which is unreachable -- try again shortly"}, 503
+                return {"ok": False, "error": "no such personal room"}, 404
             if hv is None and self.hub_locked_known(slug):
                 return {"ok": False, "error": "room-code service unreachable -- this room's lock lives on the hub"}, 503
         elif rec is not None and rec.get("hash") and time.time() - float(rec.get("at") or 0) > 300:
@@ -3781,6 +4004,18 @@ class AuthService:
         now = int(time.time())
         ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with ~admin
         exp = now + ttl
+        if personal:
+            # 0.21.75 (Kenton: a personal room "no other user sees"): the owner's own page only -- NO public ~presence / ~state /
+            # ~since / ~talking / ~chat puts and no registry (~channels) token, so nothing announces the room; media under the
+            # owner's own host (a publisher) or just its room.json (a viewer). `personal: 1` lets board_post take it as the room's
+            # publisher (the owner arranges their own room whatever their access role).
+            if role in ("publisher", "admin"):
+                puts = [slug + "/" + host] if host else [slug]
+            else:
+                puts = [slug + "/" + host + "/" + MEMBER_SEG] if host else []
+            member = _mint(self.key, {"root": "", "get": slug, "put": puts, "personal": 1, "iat": now, "exp": exp})
+            return {"ok": True, "exp": exp, "role": "publisher" if role == "admin" else role, "ns": NS, "personal": True,
+                    "tokens": {"member": member}}, 200
         if slug == LOBBY_SLUG:   # 0.21.60: the Lobby -- presence only, whatever the code's role
             puts = ([STATE_PREFIX + "/" + slug + "/" + host] if host else []) + [PRESENCE_KIND + "/" + slug]
             lc = {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp}
@@ -3931,6 +4166,8 @@ class AuthService:
             return {"ok": False, "error": "bad room name -- lowercase letters, digits and -, at most 32"}, 400
         if slug == LOBBY_SLUG:
             return {"ok": False, "error": "the Lobby takes no publishers"}, 403
+        if personal_reserved(slug):
+            return {"ok": False, "error": PERSONAL_RESERVED}, 403   # 0.21.75
         wait = self.locked_for(peer)
         if wait:
             return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
@@ -4250,6 +4487,8 @@ class AuthService:
             return {"ok": False, "error": "token refused"}, 403
         if is_relay_claims(claims):
             return {"ok": False, "error": "a member token is required"}, 403
+        if claims.get("personal") or is_personal(claims.get("get") if isinstance(claims.get("get"), str) else ""):
+            return {"ok": False, "error": "a personal room's streams stay in it"}, 403   # 0.21.75
         room, host = claims_identity(claims)
         if not room or not host:
             return {"ok": False, "error": "this token names no room and host"}, 403
@@ -4371,6 +4610,8 @@ class AuthService:
         path, to, label, kind, by, stop = xshare_body(p)
         if not SLUG_RE.match(frm) or not HOST_RE.match(host) or not xshare_path_ok(path, frm, host):
             return {"ok": False, "error": "bad listing"}, 400
+        if personal_reserved(frm) and not stop:
+            return {"ok": False, "error": "a personal room's streams stay in it"}, 403   # 0.21.75
         bans = getattr(self, "bans", None)
         if bans and bans.hit(frm, host, None, now):
             return {"ok": False, "error": self.REVOKED_TEXT}, 403
@@ -4564,7 +4805,8 @@ class AuthService:
         bans = getattr(self, "bans", None)
         if bans and bans.hit(room, h0, peer, now):
             return {"ok": False, "error": self.REVOKED_TEXT}, 403
-        if claims_role(claims) != "publisher":
+        mine = bool(claims.get("personal")) and is_personal(room)   # 0.21.75: My room -- its owner arranges it, whatever their role
+        if claims_role(claims) != "publisher" and not mine:
             return {"ok": False, "error": "viewers cannot change the room board -- join with the publisher code"}, 403
         item, why = board_item(op, p, now)
         if why:
@@ -7852,7 +8094,7 @@ class Relay:
         st = self.store.codes_status()
         st["configured"] = bool(st["viewer"] or st["publisher"])
         st["secured"] = bool(self.secured and self.running())
-        st["rooms"] = self.store.room_slugs()
+        st["rooms"] = [s for s in self.store.room_slugs() if not is_personal(s)]   # 0.21.75: personal rooms are never listed
         return st
 
     def set_codes(self, payload):
@@ -8890,8 +9132,10 @@ def handle_api(handler, relay, path, set_relay_url=None):
         # 0.15.0: + the room groups
         out = {"rooms": relay.store.rooms_public(), "closed": relay.store.closed_public(),
                "groups": relay.store.groups_public()}
+        if hasattr(relay.store, "personal_public"):
+            out["personal"] = relay.store.personal_public()   # 0.21.75: how many personal rooms (a count -- never whose)
         if local and hasattr(relay.store, "boards_public"):
-            out["boards"] = relay.store.boards_public()   # 0.21.63: the Board column's tooltip (counts ride the rows for everyone)
+            out["boards"] = relay.store.boards_public(personal=False)   # 0.21.63: the Board column's tooltip (counts ride the rows for everyone)
         reply(out)
         return True
 

@@ -1082,6 +1082,26 @@
   #kRoomSet .rsmsg.err { color:var(--asi-red); }
   #kRoomSet .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
   #kRoomSet .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  /* 0.21.75: My room -- the dialog (make it / open it on this device / it is set up here) */
+  #kMyRoom { position:fixed; inset:0; z-index:139; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kMyRoom[hidden] { display:none; }
+  #kMyRoom .popcard.rsdlg { position:static; width:min(400px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; animation:kcIn .14s ease-out; }
+  #kMyRoom .rsdlg .body { padding:12px 16px 4px; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
+  #kMyRoom .rsrow { display:flex; flex-direction:column; gap:5px; }
+  #kMyRoom .rsrow[hidden], #kMyRoom .pmtabs[hidden], #kMyRoom .kcbtns button[hidden] { display:none; }
+  #kMyRoom .rsrow > .lbl { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
+  #kMyRoom .rsf { display:flex; gap:6px; }
+  #kMyRoom .rsf input { flex:1; min-width:0; background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 8px; font:inherit; font-size:13px; }
+  #kMyRoom .rsf input:focus { outline:none; border-color:var(--asi-blue); }
+  #kMyRoom .rsf input.masked { -webkit-text-security:disc; }
+  #kMyRoom .rshint { margin:0; font-size:11.5px; line-height:1.45; color:var(--text-mute); }
+  #kMyRoom .rsmsg { margin:0; min-height:16px; font-size:12px; color:var(--text-dim); }
+  #kMyRoom .rsmsg.err { color:var(--asi-red); }
+  #kMyRoom .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
+  #kMyRoom .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  #kMyRoom .pmtabs { display:flex; gap:6px; }
+  #kMyRoom .pmtab { flex:1; background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  #kMyRoom .pmtab.on { border-color:var(--asi-blue); color:var(--text); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }
   /* 0.21.65 (m): the room's view is locked -- a small badge after the room's name */
   #roomBanner .rbvl { display:inline-flex; align-items:center; gap:3px; flex:none; margin-left:2px; padding:1px 6px 1px 4px; border-radius:9px;
     border:1px solid var(--asi-amber); color:var(--asi-amber); font-size:10px; font-weight:600; letter-spacing:.02em; }
@@ -1281,6 +1301,10 @@
   .sbhead .sbhost { text-transform:none; letter-spacing:0; font-weight:400; font-family:var(--font-mono);
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sbrooms { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; display:flex; flex-direction:column; gap:4px; }
+  /* 0.21.75: My room -- the first card, above the room list (only on a device that holds it) */
+  .sbmine { flex:none; display:flex; flex-direction:column; gap:4px; margin-bottom:6px; padding-bottom:6px; border-bottom:1px dashed var(--line); }
+  .sbmine[hidden] { display:none; }
+  .sbcard.mine .rb { font-size:10px; }
   .sbcard { border:1px solid var(--line); border-radius:8px; background:var(--surface); padding:6px 7px; cursor:pointer; }
   .sbcard:hover { border-color:var(--asi-blue-dim); }
   .sbcard.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue-glow); }
@@ -1794,6 +1818,7 @@
 <div id="sbScrim"></div>
 <aside id="sidebar">
   <div class="sbhead"><span class="sbtitle">Rooms</span><span class="sbhost" id="sbHost"></span><span class="sbtools"><button type="button" id="sbPeopleTog" class="sbppl" title="Hide the people in each room"></button><button type="button" id="sbCreateHd" class="sbppl sbnew" title="Create a room"></button></span></div>
+  <div id="sbMine" class="sbmine" hidden></div>   <!-- 0.21.75: My room (this device holds it) -->
   <div id="sbRooms" class="sbrooms"></div>
   <div id="sbFormHome"><div id="sbForm" hidden></div></div>
   <div id="sbGrip" title="Drag to resize"></div>
@@ -2157,6 +2182,7 @@
         <li><b>Camera grids</b> show several cameras in one tile; click a camera in a grid to open it at full quality.</li>
         <li><b>Back to spotlight</b> (top-left of the stage, or <kbd>S</kbd>) returns to what the room spotlighted, from the gallery or anything you opened.</li>
         <li>Several things spotlit share the stage: <b>drag one onto another</b> to swap their places &mdash; everyone in the room sees the new order.</li>
+        <li><b>My room</b> (More &#9656; My room&hellip;) is a room only you see: pin feeds from any room into it (<b>Pin to My room</b> in a tile&rsquo;s menu), spotlight and arrange them. It is kept on the hub under your name and a personal code, so it opens on any device; it is the first card in your rooms list. An admin can reset a forgotten code.</li>
         <li><b>More &#9656; Build a grid&hellip;</b> makes a grid of cameras from any room you can see (rooms you watch too): drag cameras onto spots, several on one spot take turns on motion or on time. It is yours on this device, or <b>Share with this room</b> puts it on the room for everyone. Its &#8943; menu edits, renames or deletes it.</li>
         <li>A <b>coloured ring</b> around someone means you are hearing them; a mic with a line through it means they are muted; an eye means they only watch.</li>
       </ul>
@@ -2227,6 +2253,8 @@
     <button class="opt" id="optRoom" type="button"><span class="oi">&#9432;</span>Room info</button>
     <!-- 0.21.66 (Kenton: "I also need to be able to create my own grid with several streams across multiple rooms.") -->
     <button class="opt" id="optGrid" type="button" title="A grid of cameras from any room you can see -- for you, or shared with this room"><span class="oi">&#9638;</span>Build a grid&hellip;</button>
+    <!-- 0.21.75 (Kenton: "everyone can have a personal room that no other user sees") -->
+    <button class="opt" id="optMyRoom" type="button" title="Your own room: your views of feeds from any room, only you see it, on any device"><span class="oi">&#9733;</span>My room&hellip;</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
     <!-- 0.21.41 (Kenton: "share from 1 device to multiple rooms ... a room selection on the share after toggling the feature on") -->
     <button class="opt" id="optDeafen" type="button" title="Turn off all sound from the room and mute your microphone (D)"><span class="oi">&#127911;</span>Deafen<span class="chk">&#10003;</span></button>
@@ -2740,7 +2768,11 @@
   // the room `main` is the Lobby -- its name everywhere, nothing published or watched in it (the relay enforces that),
   // no people lists, no chat, no watching other rooms from it; the rooms list there shows names and counts only.
   const LOBBY = "main";
-  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : String(slug || ""));
+  // 0.21.75: a personal room's name (me-<12 hex>) -- shown as "My room", never listed, never announced
+  const PERSONAL_RE = /^me-[0-9a-f]{12}$/;
+  const isPersonalSlug = (s) => PERSONAL_RE.test(String(s || ""));
+  window.__isPersonalSlug = isPersonalSlug;   // module 2
+  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? "My room" : String(slug || ""));
   const inLobby = () => { try { return joinState === "joined" && CHANNEL === LOBBY; } catch { return false; } };   // (joinState is declared further down: early callers get false)
   const watchRooms = new Map();   // 0.21.44: rooms I only WATCH (slug -> state), see "watch extra rooms"
   // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
@@ -3629,7 +3661,7 @@
   const roomHid = new Set();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
   const boardCan = () => joinState === "joined" && !publishOnly && !isPublisherMode() && !isViewerMode() && CHANNEL !== LOBBY && !!authBase()
-    && (!authSecured || (authRole !== "viewer" && !!authTokens?.member)) && !viewLockedForMe();   // 0.21.65 (m): a locked view -- only its creator or an admin
+    && (!authSecured || ((authRole !== "viewer" || (authPersonal && isPersonalSlug(CHANNEL))) && !!authTokens?.member)) && !viewLockedForMe();   // 0.21.65 (m): a locked view -- only its creator or an admin; 0.21.75: + My room's owner   // 0.21.65 (m): a locked view -- only its creator or an admin
   // 0.21.65 (m) (Kenton: "Ability to lock the view in a room so only an admin/creator can spotlight/change anything" ... "Instead
   // of just ignoring other users, hide the options in the locked room"): the room's view lock (Room settings) rides the board
   // (`lock`, polled every 8 s) and the room list. While it is on, everyone but the creator (roomKey) / an admin / the relay
@@ -3885,6 +3917,206 @@
   setInterval(() => { for (const [gp, e] of gmOut) if ((!e.ok && Date.now() - e.at > 30000) || Date.now() - e.at > 300000) gridMetaSend(gp); }, 30000);
   window.__board = { state: () => board, can: boardCan, pinned: boardPinned, pin: boardPin, spot: boardSpot, poll: boardPoll, grid: boardGrid, split: boardSplit,
     spotOrder: boardSpotOrder, cgrid: boardCgrid, cgridDel: boardCgridDel, metasOut: () => [...gmOut].map(([k, e]) => ({ path: k, ok: e.ok, at: e.at })) };   // module 2 + rig
+  // ---- 0.21.75 (Kenton: "everyone can have a personal room that no other user sees in the rooms list, where they set up their own
+  // views of feeds from other rooms" ... stored on the hub so it follows the person) -- MY ROOM. The hub keeps a room "me-<12 hex>"
+  // under the person's NAME and a PERSONAL CODE they pick once (POST /api/rooms/personal at the relay host's KASTR; a spoke asks the
+  // hub). This device remembers {slug, name, code} in kastr.personal.<relay host>; the card at the top of the rooms rail switches into
+  // it with the code. Inside, the page announces nothing (no presence, state or registry -- its token cannot either), and everything
+  // the room board does (pins from other rooms, spotlights, layouts, room grids) is stored on the hub. "Pin to My room" in a tile's
+  // menu pins a feed there from any room (a side token for My room, never replacing mine).
+  const personalStoreKey = () => { try { return "kastr.personal." + new URL(urlInput.value.trim()).host; } catch { return ""; } };
+  function personalGet() {
+    try {
+      const k = personalStoreKey(), p = k ? JSON.parse(localStorage.getItem(k) || "null") : null;
+      return p && isPersonalSlug(p.slug) && typeof p.code === "string" ? p : null;
+    } catch { return null; }
+  }
+  let personalTok = null;   // { slug, token, at } -- a side token for My room (pins from other rooms)
+  function personalSave(p) {
+    try {
+      const k = personalStoreKey();
+      if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code })); else localStorage.removeItem(k); }
+    } catch {}
+    personalTok = null;
+    try { paintSidebar(); } catch {}
+  }
+  async function personalToken(p) {
+    if (!authSecured) return "";
+    if (personalTok && personalTok.slug === p.slug && Date.now() - personalTok.at < 600000) return personalTok.token;
+    const t = await xsTokenFor(p.slug, p.code);
+    personalTok = { slug: p.slug, token: t, at: Date.now() };
+    return t;
+  }
+  async function personalApi(body) {
+    const base = relayHostBase() || chatBase();
+    if (!base) return { ok: false, error: "No relay host to talk to." };
+    try {
+      const r = await fetch(base + "/api/rooms/personal", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 && !d.error) return { ok: false, error: "This relay\u2019s KASTR is older than 0.21.75 (no personal rooms) \u2014 update the hub first." };
+      return r.ok ? { ...d, ok: true } : { ...d, ok: false, error: d.error || ("HTTP " + r.status) };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  async function personalEnter() {
+    const p = personalGet();
+    if (!p) { personalDialog(); return; }
+    if (joinState !== "joined") { window.__toast?.("Join a room first \u2014 then My room opens from the top of the rooms list.", 4000, { level: "info" }); return; }
+    if (CHANNEL === p.slug) { try { closeAllPops(); paintRoomInfo(); openFromOptions(roomInfoPop); } catch {} return; }
+    if (authSecured) {   // the code may have been reset by an admin (or the room cleared) since this device saved it
+      try { await personalToken(p); }
+      catch (e) {
+        const m = String(e?.message || e);
+        if (/wrong room code|no such personal room/i.test(m)) {
+          personalSave(null);
+          personalDialog("open", "My room did not open with the code this device remembered \u2014 enter your name and personal code again (an admin may have reset it).");
+          return;
+        }
+        window.__toast?.("Could not open My room: " + m, 5000, { level: "warn" });
+        return;
+      }
+    }
+    if (!isPublisherMode() && askBeforeRoomSwitch() && CHANNEL !== LOBBY) {   // the usual "Leave X?" (More > Ask before changing rooms)
+      const ok = await kastrConfirm({ title: "Change room", message: "Leave \u201c" + roomTitle(CHANNEL) + "\u201d and go to My room?",
+        detail: "Your microphone will be muted and your camera turned off.", ok: "Go to My room", cancel: "Stay in " + roomTitle(CHANNEL) });
+      if (ok === false) return;
+    }
+    switchRoom({ slug: p.slug, personal: true }, p.code);
+  }
+  function personalCanPin(path) {
+    try {
+      const p = personalGet(), s = String(path || ""), from = s.split("/", 1)[0];
+      return !!p && joinState === "joined" && CHANNEL !== p.slug && !publishOnly && !!authBase() && ROOM_RE.test(from) && from !== LOBBY
+        && !isPersonalSlug(from) && s.split("/").length >= 3 && !s.includes("/cgrid-0000/");
+    } catch { return false; }
+  }
+  async function personalPin(path) {
+    const p = personalGet();
+    if (!p) { personalDialog(); return false; }
+    path = String(path);
+    const from = path.split("/", 1)[0];
+    const label = shortLabel(path).replace(/ \(from [^)]*\)$/, "").replace(" (" + from + ")", "");
+    const body = { room: p.slug, op: "pin", path, from, label, kind: xsKindOf(path), by: window.__publisher?.state?.()?.operator || "" };
+    const headers = { "content-type": "application/json" };
+    try {
+      if (authSecured) {
+        headers.authorization = "Bearer " + await personalToken(p);
+        body.tokens = { [from]: (from === CHANNEL && authTokens?.member) ? authTokens.member : await boardFromToken(from) };   // proof that I see it
+      }
+      const r = await fetch(authBase() + "/api/rooms/board", { method: "POST", headers, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || ("HTTP " + r.status));
+      window.__toast?.(label + " is pinned to My room \u2014 it is there whenever you open My room, on any device", 4000, { level: "event" });
+      return true;
+    } catch (e) {
+      window.__toast?.("Could not pin it to My room: " + (e?.message || e), 6000, { level: "warn" });
+      return false;
+    }
+  }
+  // the card at the top of the rooms rail (#sbMine)
+  function personalCardPaint() {
+    const host = document.getElementById("sbMine");
+    if (!host) return;
+    const p = personalGet();
+    host.hidden = !p;
+    if (!p) { host.replaceChildren(); return; }
+    let card = host.querySelector(".sbcard");
+    if (!card) {
+      card = document.createElement("div"); card.className = "sbcard mine"; card.tabIndex = 0;
+      card.innerHTML = '<div class="sbrow"><span class="rb">ME</span><span class="sbhd"><span class="sbname">My room</span>'
+        + '<span class="sbmeta"><span class="sbtag here">You&rsquo;re here</span><span class="sbcnt">only you</span></span></span></div>';
+      card.addEventListener("click", (e) => { e.stopPropagation(); if (isPhone()) document.body.classList.remove("sb-open"); personalEnter(); });
+      card.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === card) { e.preventDefault(); personalEnter(); } });
+      card.addEventListener("contextmenu", (e) => { if (e.shiftKey) return; e.preventDefault(); e.stopPropagation(); personalDialog(); });
+      host.appendChild(card);
+    }
+    card.dataset.slug = p.slug;
+    card.classList.toggle("cur", joinState === "joined" && CHANNEL === p.slug);
+    card.title = "My room \u2014 your own views of feeds from any room; only you see it" + (p.name ? " (" + p.name + ")" : "") + ". Right-click for options.";
+    card.querySelector(".rb").setAttribute("aria-label", "My room");
+  }
+  // More > My room... -- make it (name from the profile, the personal code twice), open it on this device (name + code), or, on a
+  // device that holds it, go there / forget it here
+  let pmEl = null;
+  function pmBuild() {
+    const el = document.createElement("div"); el.id = "kMyRoom"; el.hidden = true;
+    el.innerHTML = '<div class="popcard rsdlg" role="dialog" aria-modal="true" aria-labelledby="pmTitle">'
+      + '<div class="head"><span id="pmTitle">My room</span><span class="sp"></span><button type="button" class="close" title="Close">&#10005;</button></div>'
+      + '<div class="body">'
+      + '<p class="rshint pmintro">A room only you see: pin feeds from any room into it, spotlight and arrange them. It is kept on the hub under your name and a personal code, so it opens on any device.</p>'
+      + '<div class="pmtabs"><button type="button" class="pmtab" data-m="make">Make my room</button><button type="button" class="pmtab" data-m="open">I already have one</button></div>'
+      + '<div class="rsrow pmf"><span class="lbl">Your name</span><div class="rsf"><input class="pmname" type="text" maxlength="48" autocomplete="off" spellcheck="false" aria-label="Your name"></div></div>'
+      + '<div class="rsrow pmf"><span class="lbl">Personal code</span><div class="rsf"><input class="pmcode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Personal code"></div></div>'
+      + '<div class="rsrow pmf pmmake"><span class="lbl">Personal code again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Personal code again"></div>'
+      + '<p class="rshint">Pick a code only you know (4 characters or more). On another device, enter your name and this code once.</p></div>'
+      + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
+      + '<p class="rsmsg" role="status"></p></div>'
+      + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
+    document.body.appendChild(el);
+    const q = (s) => el.querySelector(s);
+    const close = () => { el.hidden = true; document.removeEventListener("keydown", el.__key, true); };
+    el.__close = close;
+    el.__key = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+      else if (e.key === "Enter" && el.contains(e.target) && e.target.tagName === "INPUT") { e.preventDefault(); e.stopPropagation(); q(".pmok").click(); }
+      else if (e.key !== "Tab") e.stopPropagation();   // the page's shortcuts stay quiet while typing here
+    };
+    q(".close").onclick = close; q(".pmclose").onclick = close;
+    el.addEventListener("click", (e) => { if (e.target === el) close(); });
+    const say = (t, bad) => { const m = q(".rsmsg"); m.textContent = t || ""; m.classList.toggle("err", !!bad); };
+    el.__say = say;
+    for (const b of el.querySelectorAll(".pmtab")) b.onclick = () => { pmPaint(b.dataset.m); say(""); };
+    q(".pmforget").onclick = async () => {
+      if (!(await kastrConfirm({ title: "Forget My room here", message: "Forget My room on this device?", detail: "It stays on the hub with everything in it \u2014 open it again with your name and personal code.", ok: "Forget" }))) return;
+      personalSave(null); pmPaint("open"); say("Forgotten on this device.");
+    };
+    q(".pmok").onclick = async () => {
+      const mode = el.__mode;
+      if (mode === "have") { close(); if (!(joinState === "joined" && CHANNEL === personalGet()?.slug)) personalEnter(); return; }
+      const name = q(".pmname").value.trim().replace(/\s+/g, " "), code = q(".pmcode").value;
+      if (!name) { say("Enter your name.", true); q(".pmname").focus(); return; }
+      if (code.length < 4) { say("A personal code has at least 4 characters.", true); q(".pmcode").focus(); return; }
+      if (mode === "make" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
+      say(mode === "make" ? "Making your room\u2026" : "Opening your room\u2026");
+      q(".pmok").disabled = true;
+      const d = await personalApi({ op: mode === "make" ? "create" : "open", name, code, access: authAccessCode || undefined });
+      q(".pmok").disabled = false;
+      if (!d.ok) { say(d.error || "Refused.", true); return; }
+      personalSave({ slug: d.slug, name: d.name || name, code });
+      q(".pmcode").value = ""; q(".pmcode2").value = "";
+      close();
+      window.__toast?.((mode === "make" && d.created ? "My room is ready" : "My room is set up on this device") + " \u2014 it is the first card in your rooms list (only you see it).", 5000, { level: "event" });
+      if (joinState === "joined") personalEnter();
+    };
+    return el;
+  }
+  function pmPaint(mode, note) {
+    if (!pmEl) return;
+    const q = (s) => pmEl.querySelector(s);
+    const p = personalGet();
+    if (!mode) mode = p ? "have" : "make";
+    pmEl.__mode = mode;
+    q(".pmtabs").hidden = mode === "have";
+    for (const b of pmEl.querySelectorAll(".pmtab")) b.classList.toggle("on", b.dataset.m === mode);
+    for (const r of pmEl.querySelectorAll(".pmf")) r.hidden = mode === "have";
+    q(".pmmake").hidden = mode !== "make";
+    q(".pmhave").hidden = mode !== "have";
+    q(".pmforget").hidden = mode !== "have";
+    q(".pmok").textContent = mode === "have" ? (joinState === "joined" && p && CHANNEL === p.slug ? "Close" : "Go to My room") : mode === "make" ? "Make my room" : "Open my room";
+    if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". Only you see it \u2014 it is the first card in your rooms list.";
+    if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
+    if (note) pmEl.__say(note, true);
+  }
+  function personalDialog(mode, note) {
+    closeAllPops();
+    if (!pmEl) pmEl = pmBuild();
+    pmEl.__say("");
+    pmPaint(mode, note);
+    pmEl.hidden = false;
+    document.addEventListener("keydown", pmEl.__key, true);
+    try { (pmEl.__mode === "have" ? pmEl.querySelector(".pmok") : (pmEl.querySelector(".pmname").value ? pmEl.querySelector(".pmcode") : pmEl.querySelector(".pmname"))).focus(); } catch {}
+  }
+  window.__personal = { get: personalGet, save: personalSave, enter: personalEnter, dialog: personalDialog, pin: personalPin, canPin: personalCanPin,
+    api: personalApi, card: personalCardPaint };   // module 2 + rig
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
   // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
   // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)
@@ -8870,6 +9102,7 @@
           items.push({ value: rp ? "rpinoff" : "rpin", icon: "pin", label: rp ? "Unpin from this room" : "Pin to this room",
             tip: rp ? "Stop listing it in this room for everyone" : "Everyone in this room sees it as a tile, until someone unpins it" });
         }
+        if (personalCanPin(name)) items.push({ value: "mypin", icon: "pin", label: "Pin to My room", tip: "Your own room (only you see it, on any device) \u2014 it stays there until you unpin it" });   // 0.21.75
         const myGrid = gridChildOf.get(name);   // 0.21.64: a camera of a grid shown here -- out of this room's grid (and its own tile)
         if (myGrid && tiles.has(myGrid) && roomGridCan(myGrid)) items.push({ value: "rghidecam", icon: "eye", label: "Remove from this room",
           tip: "Its grid cell and its own tile go for everyone in this room \u2014 the box keeps sending it to other rooms" });
@@ -8941,6 +9174,7 @@
           if (v === "vghqoff") { const s0 = vgGet(name) || {}; s0.hq = []; vgSet(name, s0); return; }
           if (v === "unpin") { pinToggle(name); return; }   // 0.21.45: this one only
           if (v === "rpin" || v === "rpinoff") { boardPin(name, v === "rpin"); return; }   // 0.21.63: the room board
+          if (v === "mypin") { personalPin(name); return; }   // 0.21.75: My room
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
@@ -9336,6 +9570,7 @@
   const roomsTalk = new Map();   // "~talking" path -> { slug, peer }
   const roomsRoot = new Map();   // "" (open relays) path -> { slug, op, seen, goneAt } publishers
   window.__roomsPresDbg = () => [...roomsPres.values()].map((p) => ({ slug: p.slug, op: p.who?.op, mode: p.who?.mode, state: !!p.state, gone: !!p.goneAt, video: p.who?.video, pub: (p.who?.publishing || []).length, rtsp: (p.who?.rtspPaths || []).length }));   // rig (0.21.36)
+  window.__roomsRegDbg = () => [...roomsReg.values()].map((r) => ({ slug: r.slug, locked: r.locked, gone: !!r.goneAt }));   // rig (0.21.75): the raw ~channels entries
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
   let roomsRenamed = {};         // 0.21.65: old slug -> new slug (Room settings > Rename)
@@ -9541,7 +9776,7 @@
     roomsMinter.clear();
     for (const r of got.rooms) {
       const slug = channelSlug(String(r?.slug || ""));
-      if (!slug || !ROOM_RE.test(slug) || slug === "main") continue;
+      if (!slug || !ROOM_RE.test(slug) || slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75
       roomsMinter.set(slug, { slug, locked: r.locked !== false && (r.locked === true || r.persistent !== true),
                               persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0,
                               viewLock: !!r.viewLock, keptBy: r.keptBy || "" });   // 0.21.65: + the view lock, kept by the board
@@ -9671,7 +9906,7 @@
     get("main", "builtin");
     // a closed room (store tombstone) stays out of the list unless someone is actually in it again
     for (const [slug, r] of [...rooms]) if (slug !== "main" && roomsClosed[slug] && !r.members.size) rooms.delete(slug);
-    const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main"));   // 0.13.1: the operator's order, then alphabetical
+    const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug)));   // 0.13.1: the operator's order, then alphabetical; 0.21.75: never a personal room (mine is its own card)
     return [rooms.get("main"), ...list].map((r) => ({
       slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking, video: !!r.video,
       persistent: r.persistent, creator: r.creator, created: r.created,
@@ -9696,7 +9931,7 @@
     // announces tolerate several holders). The old single-holder rule read a
     // cached list that still showed our own just-cancelled ember, took the
     // clear() branch, and the room's passcode silently vanished.
-    if (chan !== "main") {
+    if (chan !== "main" && !isPersonalSlug(chan)) {   // 0.21.75: My room holds no registry record (nobody learns it exists)
       const mine = myChannels().find((r) => r.slug === chan);
       // 0.12.0: the remembered record carries the roomKey (heartbeats, Close room);
       // the listed one carries the live lock/kept flags -- take both.
@@ -10153,6 +10388,7 @@
       const rp = boardPinned(CHANNEL + "/" + hangName(ref.name));
       items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
     }
+    if (personalCanPin(CHANNEL + "/" + hangName(ref.name))) items.push({ value: "mypin", label: "Pin to My room" });   // 0.21.75
     if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     const ownLit = window.__spotIs?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.30: already spotlit -> offer to remove it
     const spotItem = viewLockedForMe() ? null : ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };   // 0.21.65 (m): none in a locked view
@@ -10190,6 +10426,8 @@
         openXsPicker(CHANNEL + "/" + hangName(ref.name), anchor);
       } else if (v === "rpin" || v === "rpinoff") {   // 0.21.63
         boardPin(CHANNEL + "/" + hangName(ref.name), v === "rpin");
+      } else if (v === "mypin") {   // 0.21.75
+        personalPin(CHANNEL + "/" + hangName(ref.name));
       } else if (v === "unspot") {   // 0.21.30; 0.21.32: this one only
         window.__spotRemove?.(CHANNEL + "/" + hangName(ref.name));
       } else if (v === "pt") {   // 0.21.17: per-camera passthrough, live
@@ -11248,6 +11486,7 @@
   document.getElementById("optRec").addEventListener("click", () => { closeAllPops(); recBtn.click(); });
   document.getElementById("optRoom").addEventListener("click", () => { paintRoomInfo(); openFromOptions(roomInfoPop); });
   document.getElementById("optGrid").addEventListener("click", () => { closeAllPops(); cgNew(); });   // 0.21.66 (e)
+  document.getElementById("optMyRoom").addEventListener("click", () => personalDialog());   // 0.21.75
   document.getElementById("optFiles").addEventListener("click", () => { closeAllPops(); filesPop.hidden = false; paintFilesPop(); placePop(filesPop, filesBtn); filesBtn.classList.add("grid-on"); });
   document.getElementById("optProfile").addEventListener("click", () => openProfile(false));
 
@@ -12433,6 +12672,7 @@
   let authCodes = false;    // 0.10.0: the relay has viewer/publisher access codes
   let authLegacy = false;   // 0.10.0: secured, but no access codes yet (room codes only)
   let authRole = "";        // 0.10.0: "publisher" | "viewer" from the last mint ("" = open relay)
+  let authPersonal = false; // 0.21.75: the last mint was for My room (its owner arranges it whatever the role)
   let authTokens = null;    // { member, registry }
   let authExp = 0;
   let authRoomCode = "";    // kept for silent re-mint on heal/refresh
@@ -12485,6 +12725,7 @@
           authRoomCode = saved.code ?? "";
           authAccessCode = saved.access ?? "";      // 0.10.0
           authRole = saved.role || "publisher";
+          authPersonal = !!saved.personal;   // 0.21.75
           authNs = saved.ns;   // 0.21.17
         }
       } catch {}
@@ -12520,11 +12761,12 @@
     authNs = d.ns || "~";   // 0.21.17: the control namespace (every minter in the fleet grants '~')
     authExp = d.exp;
     authRole = d.role || "publisher";
+    authPersonal = !!d.personal;   // 0.21.75
     authAccessCode = access ?? "";
     authRoomCode = roomCode ?? "";
     try {
       sessionStorage.setItem(authStoreKey(),
-        JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState, ns: authNs }));
+        JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState, ns: authNs, personal: authPersonal }));
     } catch {}
     // the publish half re-posts its native feeds with the fresh token and follows the role
     try { window.dispatchEvent(new CustomEvent("kastr:auth", { detail: { role: authRole, room } })); } catch {}
@@ -12936,7 +13178,8 @@
     // presence-class kinds; the relay would drop anything else, so the page
     // never tries (0.10.0).
     canPublish: () => !authSecured || authRole !== "viewer",
-    canAnnounce: (kind) => !authSecured || authRole !== "viewer" || VIEWER_KINDS.includes(kind),
+    canAnnounce: (kind) => (!authSecured || authRole !== "viewer" || VIEWER_KINDS.includes(kind))
+      && !(isPersonalSlug(CHANNEL) && ["~presence", "~talking", "~chat"].includes(kind)),   // 0.21.75: My room says nothing in public
     refresh: async () => {
       if (!authSecured || !authTokens) return;
       try { await authMint(readChannel(), authAccessCode, authRoomCode); } catch {}
@@ -13042,7 +13285,7 @@
                      kv: KASTR_VER };   // 0.21.49: which KASTR this page runs (absent = older than 0.21.49)
   if (HC_RE.test(profile?.color || "")) pubModel.hc = profile.color;   // 0.21.61
   const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
-  const pubState = stateProducer(() => "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer(), ["state.json"]);
+  const pubState = stateProducer(() => (isPersonalSlug(CHANNEL) ? "" : "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer()), ["state.json"]);   // 0.21.75: no public state in My room
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
   function stateCommit() {
@@ -13846,7 +14089,7 @@
       vl.title = viewBoss() ? "The view is locked \u2014 only you (the room\u2019s creator or an admin) can spotlight, pin or arrange for everyone" : "The view is locked by the room\u2019s creator or an admin";
       b.appendChild(vl);
     }
-    b.title = (c === LOBBY ? "The Lobby" : "Room " + c) + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
+    b.title = (c === LOBBY ? "The Lobby" : isPersonalSlug(c) ? "My room (only you see it)" : "Room " + c) + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
       + (roomSince ? ", occupied for " + fmtHms(Date.now() - roomSince) : "") + (rec?.locked ? ", locked" : "") + (rec?.persistent ? ", kept" : "")
       + (role ? ", " + role : "") + "\nClick for room info";
   }
@@ -14477,6 +14720,7 @@
   setInterval(() => { try { paintLobby(); } catch {} }, 1000);
   function paintSidebar() {
     if (!sbRoomsEl) return;
+    try { personalCardPaint(); } catch {}   // 0.21.75: My room, above the list
     let host = urlInput.value.trim();
     try { host = new URL(host).host; } catch {}
     if (sbHostEl) sbHostEl.textContent = host;
@@ -22231,6 +22475,7 @@
         const rp = window.__board.pinned(chanPath(ensureHang(g.entry.name)));
         items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
       }
+      if (window.__personal?.canPin?.(chanPath(ensureHang(g.entry.name)))) items.push({ value: "mypin", label: "Pin to My room" });   // 0.21.75
       items.push({ hint: "On the stage: click a feed to open it (click it again for the grid); drag a feed onto another to swap them; wheel zooms the grid. Edit layout: drag cells, resize from the corner, set the gap." });
       const open = window.__openMenu;
       if (!open) return;
@@ -22252,6 +22497,7 @@
         else if (v === "all") window.__spot?.set?.(chanPath(ensureHang(g.entry.name)));   // 0.21.32: the set puts it on my stage too
         else if (v === "unspot") window.__spotRemove?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30; 0.21.32: this one only
         else if (v === "rpin" || v === "rpinoff") window.__board?.pin?.(chanPath(ensureHang(g.entry.name)), v === "rpin");   // 0.21.63
+        else if (v === "mypin") window.__personal?.pin?.(chanPath(ensureHang(g.entry.name)));   // 0.21.75
       });
     });
     g.pane.appendChild(chev);
@@ -23848,7 +24094,7 @@
   }
   function chanRegSet(rec) {
     chanRegClear();
-    if (!rec || !rec.slug || rec.slug === "main") return;
+    if (!rec || !rec.slug || rec.slug === "main" || window.__isPersonalSlug?.(rec.slug)) return;   // 0.21.75: My room is never announced
     emberClear(rec.slug);          // holding for real replaces the ember
     const secured = !!window.__auth?.secured;
     // Secured relays announce only the LOCKED marker: the minter is the
@@ -23892,7 +24138,7 @@
     embers.delete(slug);
   }
   function chanEmber(rec) {
-    if (!rec || !rec.slug || rec.slug === "main") return;
+    if (!rec || !rec.slug || rec.slug === "main" || window.__isPersonalSlug?.(rec.slug)) return;   // 0.21.75
     emberClear(rec.slug);
     try {
       const path = (rec.hash || rec.locked)   // 0.8.6: see chanRegSet
@@ -24200,7 +24446,7 @@
       if (opts.state && window.__state?.enabled) { clear(key, true); try { opts.state(key, String(payload), ts); } catch {} return; }   // 0.13.0: the kind rides the state track (an announce outside the token's put list is dropped by the relay anyway)
       let relay = "";
       try { relay = authUrl(urlInput.value.trim()); } catch { return; }
-      if (window.__auth?.canAnnounce && !window.__auth.canAnnounce(kind)) return;   // 0.10.0: a viewer token has no claim on this kind
+      if (window.__auth?.canAnnounce && !window.__auth.canAnnounce(kind)) { clear(key, true); return; }   // 0.10.0: a viewer token has no claim on this kind; 0.21.75: and the previous room's copy goes (My room announces none)
       const cur = regs.get(key), text = String(payload), channel = currentChannel();
       // 0.9.4: an announce is identified by its CONTENT, not its connection.
       // Re-dialling an unchanged payload made every viewer see it go inactive

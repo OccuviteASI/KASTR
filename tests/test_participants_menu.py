@@ -89,7 +89,10 @@ class Participants(unittest.TestCase):
         p = self.page
         self.assertIn('"/moq-watch-lite.html?room=" + encodeURIComponent(CHANNEL)', p)
         self.assertIn('new URLSearchParams(location.search).get("room")', p)
-        self.assertIn("they still need the access code", p)
+        # 0.21.75: on a secured relay the link carries an invite (no code needed -- tests/test_release_0_21_75_invites.py);
+        # an open relay's link is the room's address alone
+        self.assertIn('window.__toast?.("Invite link copied \\u2014 it opens this room"', p)
+        self.assertIn('return base + "/join#i=" + encodeURIComponent(token)', p)
 
     def test_row_menu_reuses_the_tile_menu(self):
         self.assertIn("pane.__openMenu = openTileMenu;", self.page)

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" class="dark">
+
+<head>
+	<meta charset="utf-8">
+	<script>/* 0.21.61: the theme before the first paint (default ASI Navy); 0.21.72: + the named palettes and Custom */try{var d=document.documentElement,t=localStorage.getItem("kastr.theme")||"dark",P={dark:"navy",light:"light",midnight:"midnight",slate:"slate",warm:"warm",contrast:"contrast",custom:"custom"};if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";var p=P[t]||"navy",b=p==="light"||p==="warm"?"light":"dark";if(p==="custom"){var v=JSON.parse(localStorage.getItem("kastr.theme.vars")||"null");if(v&&v.vars){b=v.base==="light"?"light":"dark";for(var k in v.vars)d.style.setProperty(k,v.vars[k]);}else p="navy";}d.dataset.theme=b;d.dataset.palette=p;}catch(e){document.documentElement.dataset.theme="dark";}</script>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="referrer" content="no-referrer">
+	<title>Join a room — KASTR</title>
+	<link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+	<link rel="stylesheet" href="/assets/asi-brand.css">
+	<!-- 0.21.75 (Kenton: room invite links -- "the link opens the installed KASTR app if present, otherwise the host's web
+	     page"): /join#i=<invite>&room=<slug>&relay=<relay>. A computer tries kastr://join?... (the app registers the scheme);
+	     if this page is still in front 1.5 s later it offers the web page. A phone goes straight to the web page. The
+	     invite never leaves the address fragment (it is not sent to any server) and is wiped from the address bar at once. -->
+	<style>
+		body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg, #06070d);
+			color: var(--text, #e6ecf3); font-family: var(--font-ui, system-ui, sans-serif); }
+		.card { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; background: var(--surface, #0e141d);
+			border: 1px solid var(--line, #1e2735); border-radius: 12px; padding: 28px 24px 22px;
+			box-shadow: 0 12px 40px rgba(0, 0, 0, .35); }
+		.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; color: var(--text-dim, #8ea0b5);
+			font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+		.brand i { width: 10px; height: 10px; border-radius: 3px; background: var(--asi-blue, #009FDA); display: inline-block; }
+		h1 { font-size: 21px; line-height: 1.3; margin: 0 0 6px; font-weight: 600; }
+		.room { color: var(--asi-blue, #009FDA); word-break: break-all; }
+		p { margin: 8px 0; color: var(--text-dim, #8ea0b5); line-height: 1.5; font-size: 14px; }
+		.btns { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+		.btn { display: block; text-align: center; padding: 11px 14px; border-radius: 8px; font: 600 15px var(--font-ui, system-ui);
+			text-decoration: none; cursor: pointer; border: 1px solid transparent; }
+		.primary { background: var(--asi-blue, #009FDA); color: #fff; }
+		.primary:hover { filter: brightness(1.08); }
+		.ghost { background: transparent; color: var(--text, #e6ecf3); border-color: var(--line, #1e2735); }
+		.ghost:hover { border-color: var(--asi-blue, #009FDA); }
+		.hint { font-size: 12.5px; color: var(--text-mute, #5f7186); margin-top: 18px; }
+		.hint a { color: var(--asi-blue, #009FDA); }
+		.bad { color: var(--asi-red, #D9534F); }
+		[hidden] { display: none !important; }
+	</style>
+</head>
+
+<body>
+	<main class="card" id="card">
+		<div class="brand"><i></i>KASTR</div>
+		<h1 id="title">You&rsquo;re invited to <span class="room" id="room">a room</span></h1>
+		<p id="msg">Opening KASTR&hellip;</p>
+		<div class="btns">
+			<a class="btn primary" id="app" href="#" hidden>Open in the KASTR app</a>
+			<a class="btn ghost" id="web" href="#" hidden>Open in this browser</a>
+		</div>
+		<p class="hint" id="dl" hidden>Don&rsquo;t have KASTR on this computer? <a href="/" id="dlLink">Download it</a> &mdash; or open the room in this browser.</p>
+		<p class="hint" id="note">No access code or room code is needed &mdash; the link is the key. Keep it to the people you mean to invite.</p>
+	</main>
+	<script>
+	(function () {
+		var q = function (id) { return document.getElementById(id); };
+		var h = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+		var tok = h.get("i") || h.get("invite") || "", room = String(h.get("room") || "").toLowerCase(), relay = h.get("relay") || "";
+		var webOn = "__KASTR_WEB_PAGE__" !== "off";
+		try { history.replaceState(null, "", location.pathname); } catch (e) {}   // the secret leaves the address bar and history
+		if (!/^ki-[0-9a-f]{8}-[A-Za-z0-9_-]{32,64}$/.test(tok) || !/^[a-z0-9-]{1,32}$/.test(room) || room === "main") {
+			q("title").textContent = "This invite link is incomplete";
+			q("msg").className = "bad";
+			q("msg").textContent = "Copy it again from KASTR (People ▸ Share invite) — the whole link, including everything after the #.";
+			q("note").hidden = true;
+			return;
+		}
+		q("room").textContent = room;
+		document.title = "Join " + room + " — KASTR";
+		if (!/^https?:[/][/]/.test(relay)) relay = location.origin + "/relay";
+		var web = "/moq-watch-lite.html#invite=" + encodeURIComponent(tok) + "&room=" + encodeURIComponent(room);
+		var app = "kastr://join?i=" + encodeURIComponent(tok) + "&room=" + encodeURIComponent(room) + "&relay=" + encodeURIComponent(relay);
+		q("app").href = app;
+		q("web").href = web;
+		var ua = navigator.userAgent || "";
+		var phone = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+		if (phone) {
+			if (webOn) { q("msg").textContent = "Opening the room…"; location.replace(web); return; }
+			q("msg").className = "bad";
+			q("msg").textContent = "Web clients are off on this KASTR host — open this link on a computer with the KASTR app.";
+			return;
+		}
+		q("app").hidden = false;
+		var tried = false;
+		function tryApp() {   // after the load event: a navigation to an app scheme must not cancel this page's own load
+			if (tried) return;
+			tried = true;
+			try { location.href = app; } catch (e) {}
+			setTimeout(offerWeb, 1500);
+		}
+		if (document.readyState === "complete") setTimeout(tryApp, 50);
+		else window.addEventListener("load", function () { setTimeout(tryApp, 50); });
+		function offerWeb() {
+			if (document.visibilityState !== "visible") return;   // the app took it (this tab went to the back)
+			q("msg").textContent = webOn ? "If KASTR opened, you can close this tab. If nothing happened, open the room in this browser."
+				: "If KASTR opened, you can close this tab. Web clients are off on this host, so the room opens in the KASTR app only.";
+			q("web").hidden = !webOn;
+			q("dl").hidden = !webOn;
+		}
+	})();
+	</script>
+</body>
+
+</html>

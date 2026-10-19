@@ -51,6 +51,12 @@ Token service (its own listener, relay-port+1):
                             "connect","exp","refreshEvery","created"} -- a publish-only token for <room>/<host>; the room
                             is made plain when missing and touched by every call (docs/vehicle-api.md)
     POST /api/session       the relay's per-session auth callback (loopback only)
+    POST /api/invite        0.21.75: {room, ttl: 3600|86400|604800, by?} with Bearer = a member token of that room ->
+                            {ok, id, token, exp} -- a room invite link's secret (made at the hub; only its sha256 is kept)
+    POST /api/invite/revoke 0.21.75: {room, id | all: true, roomKey?} (the room's creator or an admin)
+    GET  /api/invites?room= 0.21.75: the room's live invite links {id, by, created, exp, uses} (never a secret); POST
+                            {room, roomKey?} answers the same for the creator (the roomKey never rides a URL)
+                            /api/token {room, invite, host} redeems one: no access code, no room code, a publisher
     POST /api/xshare        0.21.41: list a room's stream in other rooms (Bearer = member token of the stream's room)
                             {path, to:[slug], tokens:{slug: member token}, label?, kind?, by?, stop?}
     GET  /api/xshare?room=  0.21.41: the live listings into a room (Bearer / ?jwt= member token; loopback page: none)
@@ -283,6 +289,36 @@ VEHICLE_NAME_MAX = 48
 VEHICLE_CACHE_S = 60         # a spoke trusts the hub's "this key is good" this long
 VEHICLE_REFRESH_S = 300      # what the reply tells the vehicle: POST again every 5 min (keeps the room alive)
 VEHICLE_OP = "vehicle"       # the <op> segment of a vehicle's media paths (<room>/<host>/vehicle/<leaf>.hang)
+# 0.21.75 (Kenton: room invite links -- "anyone in the room can copy an invite link", 24 h by default, 1 h / 24 h / 7 days;
+# the room's creator or an admin revokes them; the person joining needs no access code and no room code and joins as a
+# publisher, never an admin). A link carries `ki-<id>-<secret>` (id 8 hex, secret 32 base64url chars = 192 bits) made on
+# the HUB, which keeps only sha256(secret); spokes ask the hub (rooms_fed inviteCheck) and trust a good answer 30 s.
+INVITE_RE = re.compile(r"^ki-([0-9a-f]{8})-([A-Za-z0-9_-]{32,64})$")
+INVITE_TTLS = (3600, 86400, 604800)
+INVITE_DEFAULT_TTL = 86400
+INVITES_PER_ROOM = 50        # live links one room may hold at once
+INVITES_MAX = 2000           # every record this hub keeps (revoked / expired ones go INVITE_KEEP_S after they end)
+INVITE_KEEP_S = 3600
+INVITE_HOSTS_MAX = 64        # the distinct members a link remembers (its `uses`)
+INVITE_CACHE_S = 30          # a spoke trusts the hub's "this invite is good" this long
+INVITE_REFUSED = {"wrong": "this invite link is not valid", "revoked": "this invite link was revoked",
+                  "expired": "this invite link has expired -- ask for a new one"}
+
+
+def invite_ttl(v):
+    """0.21.75: an invite's life in seconds -- only 1 h, 24 h or 7 days (None for anything else; missing = 24 h)."""
+    if v in (None, ""):
+        return INVITE_DEFAULT_TTL
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return None
+    return v if v in INVITE_TTLS else None
+
+
+def invite_digest(token):
+    """0.21.75: what a spoke's cache is keyed on -- never the token itself."""
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
 
 
 def vehicle_name(name):
@@ -1941,6 +1977,7 @@ class AuthStore:
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
         self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
         self.vehicles = {}       # 0.21.63: id -> {id, name, salt, hash, iter, created, lastUsed, lastRoom, revoked} (never a key)
+        self.invites = {}        # 0.21.75: id -> {id, room, digest, by, created, exp, ttl, revoked, revokedAt, uses, hosts} (never a secret)
         self.ver = 0            # 0.21.53: bumped on every save -- the standby's copy follows it
         self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
         self.renamed = {}        # 0.21.65: old slug -> {"to": new slug, "at": ms} (RENAMED_TTL) -- pages in the old name follow
@@ -1990,6 +2027,7 @@ class AuthStore:
             self.codes_at = {k: int(v) for k, v in at.items() if k in self.codes and isinstance(v, (int, float))}
         # 0.21.40: a "lan" block (the 0.16.0 LAN mesh, removed) is ignored here and dropped at the next save
         self.vehicles = self._vehicles_clean(d.get("vehicles"))   # 0.21.63
+        self.invites = self._invites_clean(d.get("invites"))      # 0.21.75
         rooms = d.get("rooms")
         if isinstance(rooms, dict):
             now = time.time()
@@ -2046,6 +2084,7 @@ class AuthStore:
                                  "closed": self.closed,          # 0.12.0: + closed tombstones
                                  "groups": self.groups,          # 0.15.0: + room groups
                                  "vehicles": self.vehicles,      # 0.21.63: + vehicle API keys (hashes only)
+                                 "invites": self.invites,        # 0.21.75: + room invite links (sha256 of the secret only)
                                  "renamed": self.renamed,        # 0.21.65: + old room names -> new
                                  "codesAt": self.codes_at}, self.log)   # 0.21.0
 
@@ -2204,6 +2243,144 @@ class AuthStore:
             if moved or now - saved.get(rec["id"], 0) >= 60:
                 saved[rec["id"]] = now
                 self._save()
+
+    # ---- 0.21.75: room invite links
+
+    @staticmethod
+    def _invites_clean(v):
+        out = {}
+        if not isinstance(v, dict):
+            return out
+        for iid, r in v.items():
+            iid = str(iid)
+            if not (isinstance(r, dict) and re.match(r"^[0-9a-f]{8}$", iid) and SLUG_RE.match(str(r.get("room") or ""))
+                    and re.match(r"^[0-9a-f]{64}$", str(r.get("digest") or ""))):
+                continue
+            try:
+                exp, created, uses = int(r.get("exp") or 0), int(r.get("created") or 0), int(r.get("uses") or 0)
+                ttl = int(r.get("ttl") or 0)
+            except (TypeError, ValueError):
+                continue
+            hosts = [str(h) for h in (r.get("hosts") or []) if HOST_RE.match(str(h))][:INVITE_HOSTS_MAX]
+            out[iid] = {"id": iid, "room": str(r["room"]), "digest": str(r["digest"]), "by": clean_label(r.get("by"), 40),
+                        "created": created, "exp": exp, "ttl": ttl, "revoked": bool(r.get("revoked")),
+                        "revokedAt": r.get("revokedAt"), "uses": max(uses, len(hosts)), "hosts": hosts}
+            if len(out) >= INVITES_MAX:
+                break
+        return out
+
+    @staticmethod
+    def _invite_row(r):
+        return {"id": r["id"], "room": r["room"], "by": r.get("by") or "", "created": r.get("created"), "exp": r.get("exp"),
+                "ttl": r.get("ttl"), "uses": int(r.get("uses") or 0), "revoked": bool(r.get("revoked"))}
+
+    def _invites_prune_locked(self, now):
+        """Lock held: forget links that ended (expired or revoked) over INVITE_KEEP_S ago. -> anything dropped?"""
+        dead = [k for k, r in self.invites.items()
+                if now - float(r.get("exp") or 0) > INVITE_KEEP_S
+                or (r.get("revoked") and now - float(r.get("revokedAt") or 0) > INVITE_KEEP_S and now > float(r.get("exp") or 0))]
+        for k in dead:
+            self.invites.pop(k, None)
+        return bool(dead)
+
+    def invite_create(self, room, ttl, by=""):
+        """-> (row, token, 200) -- the token exists only in this return value; (None, why, http code) when refused."""
+        room = str(room or "")
+        if not SLUG_RE.match(room):
+            return None, "bad room name", 400
+        if room == LOBBY_SLUG:
+            return None, "the Lobby has no invite links", 403
+        if room.startswith("me-"):   # 0.21.75: My room is its owner's alone -- never an invite into it
+            return None, "personal rooms have no invite links", 403
+        ttl = invite_ttl(ttl)
+        if ttl is None:
+            return None, "an invite link works for 1 hour, 24 hours or 7 days", 400
+        import secrets
+        with self.lock:
+            now = time.time()
+            self._invites_prune_locked(now)
+            live = [r for r in self.invites.values() if r["room"] == room and not r.get("revoked") and r["exp"] > now]
+            if len(live) >= INVITES_PER_ROOM:
+                return None, "this room already has %d active invite links -- revoke some in Room settings" % INVITES_PER_ROOM, 409
+            if len(self.invites) >= INVITES_MAX:
+                return None, "this hub holds too many invite links -- try again later", 409
+            iid = secrets.token_hex(4)
+            while iid in self.invites:
+                iid = secrets.token_hex(4)
+            secret = _b64u(secrets.token_bytes(24))   # 32 base64url characters, 192 bits
+            token = "ki-%s-%s" % (iid, secret)
+            rec = {"id": iid, "room": room, "digest": hashlib.sha256(secret.encode("ascii")).hexdigest(),
+                   "by": clean_label(by, 40), "created": int(now), "exp": int(now) + ttl, "ttl": ttl, "revoked": False,
+                   "revokedAt": None, "uses": 0, "hosts": []}
+            self.invites[iid] = rec
+            self._save()
+            return self._invite_row(rec), token, 200
+
+    def invite_holds(self, token):
+        """Is this invite's id one of OUR records (a hub, or a box that once was one)?"""
+        m = INVITE_RE.match(str(token or ""))
+        with self.lock:
+            return bool(m) and m.group(1) in self.invites
+
+    def invite_check(self, token, use=False, host=None):
+        """-> ("ok", row) | ("revoked", row) | ("expired", row) | ("wrong", None). A malformed token is "wrong" (a guess).
+        use=True counts the member (`host`, once per distinct host) on a good answer."""
+        m = INVITE_RE.match(str(token or ""))
+        if not m:
+            return "wrong", None
+        dig = hashlib.sha256(m.group(2).encode("ascii")).hexdigest()
+        with self.lock:
+            rec = self.invites.get(m.group(1))
+            if rec is None or not hmac.compare_digest(str(rec.get("digest") or ""), dig):
+                return "wrong", None
+            now = time.time()
+            if rec.get("revoked"):
+                return "revoked", self._invite_row(rec)
+            if now >= float(rec.get("exp") or 0):
+                return "expired", self._invite_row(rec)
+            if use:
+                h = str(host or "")
+                if not HOST_RE.match(h):
+                    rec["uses"] = int(rec.get("uses") or 0) + 1
+                    self._save()
+                elif h not in rec["hosts"]:
+                    if len(rec["hosts"]) < INVITE_HOSTS_MAX:
+                        rec["hosts"].append(h)
+                    rec["uses"] = int(rec.get("uses") or 0) + 1
+                    self._save()
+            return "ok", self._invite_row(rec)
+
+    def invite_revoke(self, room, iid=None):
+        """Revoke one link of `room` (iid) or every live one (iid None). -> (revoked count, found)."""
+        with self.lock:
+            now = int(time.time())
+            n, found = 0, False
+            for r in self.invites.values():
+                if r["room"] != room or (iid is not None and r["id"] != iid):
+                    continue
+                found = True
+                if not r.get("revoked") and r["exp"] > now:
+                    r["revoked"], r["revokedAt"] = True, now
+                    n += 1
+            if n:
+                self._save()
+            return n, found
+
+    def invites_public(self, room):
+        """A room's LIVE links (newest first) -- never the digest, never a host list."""
+        with self.lock:
+            now = time.time()
+            if self._invites_prune_locked(now):
+                self._save()
+            rows = [self._invite_row(r) for r in self.invites.values()
+                    if r["room"] == room and not r.get("revoked") and now < float(r.get("exp") or 0)]
+        return sorted(rows, key=lambda r: (-(r.get("created") or 0), r["id"]))
+
+    def invites_revoked_ids(self):
+        """Links revoked while they would still work -- spokes drop them from their 30 s caches (bans long-poll)."""
+        with self.lock:
+            now = time.time()
+            return sorted(k for k, r in self.invites.items() if r.get("revoked") and now < float(r.get("exp") or 0))[:500]
 
     # ---- rooms
 
@@ -2394,7 +2571,8 @@ class AuthStore:
         with self.lock:
             return json.loads(json.dumps({"codes": self.codes, "codesAt": self.codes_at, "rooms": self.rooms,
                                           "closed": self.closed, "groups": self.groups,
-                                          "vehicles": self.vehicles}))   # 0.21.63: vehicle keys (hashes) go with the hub
+                                          "vehicles": self.vehicles,     # 0.21.63: vehicle keys (hashes) go with the hub
+                                          "invites": self.invites}))     # 0.21.75: invite links (digests) go with the hub
 
     def merge_bundle(self, b):
         """0.21.53: a hand-BACK -- what the standby changed while it was the hub. Per room the newer `at` wins, a newer
@@ -2441,6 +2619,18 @@ class AuthStore:
                     mine["revoked"], mine["revokedAt"] = True, rec.get("revokedAt")
                 if float(rec.get("lastUsed") or 0) > float(mine.get("lastUsed") or 0):
                     mine["lastUsed"], mine["lastRoom"] = rec.get("lastUsed"), rec.get("lastRoom") or ""
+            for iid, rec in self._invites_clean(b.get("invites")).items():   # 0.21.75: links made there are kept; a revoke sticks
+                mine = self.invites.get(iid)
+                if mine is None:
+                    if len(self.invites) < INVITES_MAX:
+                        self.invites[iid] = rec
+                    continue
+                if rec.get("revoked") and not mine.get("revoked"):
+                    mine["revoked"], mine["revokedAt"] = True, rec.get("revokedAt")
+                for h in rec.get("hosts") or []:
+                    if h not in mine["hosts"] and len(mine["hosts"]) < INVITE_HOSTS_MAX:
+                        mine["hosts"].append(h)
+                mine["uses"] = max(int(mine.get("uses") or 0), int(rec.get("uses") or 0), len(mine["hosts"]))
             self._save()
         return n
 
@@ -2472,6 +2662,8 @@ class AuthStore:
                 n["groups"] = len(self.groups)
             if isinstance(b.get("vehicles"), dict):   # 0.21.63: the hub's vehicle keys keep working on the new hub
                 self.vehicles.update(self._vehicles_clean(b["vehicles"]))
+            if isinstance(b.get("invites"), dict):    # 0.21.75: so do its invite links
+                self.invites.update(self._invites_clean(b["invites"]))
             self._save()
         return n
 
@@ -2535,6 +2727,9 @@ class AuthStore:
                 if r.get("to") == old:
                     r["to"] = new
             self.renamed[old] = {"to": new, "at": int(now * 1000)}
+            for r in self.invites.values():   # 0.21.75: the room's invite links open it under its new name
+                if r.get("room") == old:
+                    r["room"] = new
             for g in self.groups.values():
                 if old in g["rooms"]:
                     g["rooms"] = [new if s == old else s for s in g["rooms"] if s != new]
@@ -2554,6 +2749,9 @@ class AuthStore:
             rec = self.rooms.pop(slug, None)
             self.closed[slug] = int(time.time() * 1000)
             self._prune_closed()
+            for r in self.invites.values():   # 0.21.75: a closed room's invite links stop working
+                if r.get("room") == slug and not r.get("revoked"):
+                    r["revoked"], r["revokedAt"] = True, int(time.time())
             self._group_forget(slug)         # 0.15.0: a closed room leaves its group
             if rec is not None and rec.get("board"):
                 self.board_ver += 1          # 0.21.63: its board goes with it
@@ -3399,6 +3597,8 @@ class AuthService:
         self._hub_locks = {}                  # 0.21.17: slug -> when the hub last said it is locked (fail closed while the hub is dark)
         self._hub_open = {}                   # 0.21.17: slug -> when the hub last said it is open (30 s: a join does not wait on the hub each time)
         self._veh_cache = {}                  # 0.21.63: sha256(vehicle key) -> (at, row) -- the hub said "good" (VEHICLE_CACHE_S)
+        self._inv_cache = {}                  # 0.21.75: sha256(invite)|host -> (at, row) -- the hub said "good" (INVITE_CACHE_S)
+        self._inv_said = {}                   # 0.21.75: (invite id, host) -> when its join was last logged
         self._board_mirror = {}               # 0.21.63: spoke side -- the hub's room boards {slug: board} (bans long-poll)
         self._board_mirror_at = 0.0
         self._board_mirror_ver = None
@@ -3522,6 +3722,11 @@ class AuthService:
                     # 0.15.0: + the relay-defined room groups
                     self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
                                  "renamed": svc.store.renamed_public()})   # 0.21.65
+                elif path == "/api/invites":           # 0.21.75: a room's live invite links (its creator or an admin)
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, code = svc.invite_manage_api("list", {"room": (qs.get("room") or [""])[0]},
+                                                      self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
                 elif path == "/api/xshare":            # 0.21.41: the cross-room listings into one room
                     qs = parse_qs(urlparse(self.path).query)
                     obj, code = svc.xshare_get((qs.get("room") or [""])[0], self.headers.get("Authorization"),
@@ -3570,6 +3775,13 @@ class AuthService:
                     obj, code = svc.vehicle(p, self._peer(), svc.vehicle_relay_url(self))
                     hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                     self._reply(obj, code, hdrs)
+                elif path == "/api/invite":            # 0.21.75: any member of a room makes an invite link for it
+                    obj, code = svc.invite_create_api(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
+                elif path in ("/api/invite/revoke", "/api/invites"):   # 0.21.75: the room's creator or an admin
+                    obj, code = svc.invite_manage_api("revoke" if path == "/api/invite/revoke" else "list", p,
+                                                      self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
                 elif path in ("/api/session", "/"):
                     # 0.16.0: the relay's session events. The PEER must be loopback itself
                     # (never X-Forwarded-For -- the relay runs beside us).
@@ -3791,6 +4003,25 @@ class AuthService:
             if verdict == "revoked":
                 return {"ok": False, "revoked": True, "error": "this vehicle key was revoked"}, 403
             return {"ok": False, "error": "wrong vehicle key"}, 403   # counted by the spoke's lockout (the vehicle's address is there)
+        if op == "invite":   # 0.21.75: a spoke verified a member token of the room (vouch "member"); the hub keeps the links
+            if p.get("vouch") != "member":
+                return {"ok": False, "error": "a member of the room must ask"}, 403
+            ttl = invite_ttl(p.get("ttl"))
+            if ttl is None:
+                return {"ok": False, "error": "an invite link works for 1 hour, 24 hours or 7 days"}, 400
+            return self._invite_make(str(p.get("room") or ""), ttl, clean_label(p.get("by"), 40))
+        if op == "inviteCheck":   # 0.21.75: is this one of the fleet's invite links? (the token is never logged)
+            h = str(p.get("host") or "")
+            verdict, row = self.store.invite_check(str(p.get("token") or ""), use=True, host=h if HOST_RE.match(h) else None)
+            if verdict == "ok":
+                return {"ok": True, "invite": {"id": row["id"], "room": row["room"], "exp": row["exp"], "by": row["by"]}}, 200
+            return {"ok": False, "verdict": verdict, "error": INVITE_REFUSED.get(verdict, "refused")}, 403   # counted by the spoke
+        if op in ("inviteList", "inviteRevoke"):   # 0.21.75: vouch "admin" -- the spoke checked an admin token; else the roomKey
+            body = {"room": str(p.get("room") or ""), "roomKey": p.get("roomKey"), "id": str(p.get("id") or ""),
+                    "all": p.get("all") is True}
+            if not SLUG_RE.match(body["room"]) or body["room"] == LOBBY_SLUG:
+                return {"ok": False, "error": "bad room name"}, 400
+            return self._invite_manage("list" if op == "inviteList" else "revoke", body, p.get("vouch") == "admin")
         slug = str(p.get("slug") or "")
         if not SLUG_RE.match(slug) or slug == "main":
             return {"ok": False, "error": "bad room"}, 400
@@ -3962,7 +4193,26 @@ class AuthService:
         # The room's own code is what old pages (and the second gate row) send
         # in `code`; with access codes on it travels in `roomCode`.
         rc = room_code if room_code is not None else access
-        if self.store.configured():
+        inv_row = None
+        invite = p.get("invite")
+        if invite not in (None, ""):
+            # 0.21.75 (Kenton: invite links -- "the person joining needs no access code and no room code"): a good link for
+            # THIS room is the credential. A publisher, never an admin; bans still apply (checked above); a wrong link is a
+            # guess (the lockout counts it); an expired or revoked one is not. A spoke asks the hub and fails closed.
+            verdict, inv_row = self._invite_verify(str(invite), slug, host)
+            if verdict == "down":
+                return {"ok": False, "hubDown": True,
+                        "error": "the hub could not be asked about this invite link -- try again shortly"}, 503
+            if verdict == "wrong" or (verdict == "ok" and not inv_row):
+                out, code = self._fail(peer, "wrong invite link", slug, what="invite")
+                out.update(ok=False, invite="wrong")
+                return out, code
+            if verdict != "ok":
+                return {"ok": False, "invite": verdict, "error": INVITE_REFUSED.get(verdict, "refused")}, 403
+            if inv_row.get("room") != slug:
+                return {"ok": False, "invite": "room", "error": "this invite link is for room %s" % inv_row.get("room")}, 403
+            role = "publisher"
+        elif self.store.configured():
             if self.store.check("publisher", access):
                 role = "publisher"
             elif self.store.check("viewer", access):
@@ -3983,7 +4233,7 @@ class AuthService:
                 return self._fail(peer, "wrong room code", slug)
         if personal and rec is None and not self._hub_base():
             return {"ok": False, "error": "no such personal room"}, 404   # 0.21.75: only POST /api/rooms/personal makes one
-        if rec is None and slug != "main" and self._hub_base():
+        if inv_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code
             # 0.21.17 (B1): the lock may live at the hub (it was registered there, or mirrored from another spoke)
             hv = self.hub_room(slug, rc if rc is not None else "")
             if hv == "wrong":
@@ -4003,6 +4253,7 @@ class AuthService:
         self._ok(peer)
         now = int(time.time())
         ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with ~admin
+        inv_claim = {"inv": inv_row["id"]} if inv_row else {}   # 0.21.75: the member token names the link it came by
         exp = now + ttl
         if personal:
             # 0.21.75 (Kenton: a personal room "no other user sees"): the owner's own page only -- NO public ~presence / ~state /
@@ -4040,14 +4291,14 @@ class AuthService:
             else:
                 puts = [STATE_PREFIX + "/" + slug + "/" + host, slug + "/" + host + "/" + MEMBER_SEG,
                         slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug]
-            member = _mint(self.key, {"root": "", "get": slug, "put": puts, "iat": now, "exp": exp})
+            member = _mint(self.key, dict({"root": "", "get": slug, "put": puts, "iat": now, "exp": exp}, **inv_claim))
         elif role in ("publisher", "admin"):
             # 0.11.0: `~presence/<slug>` is the public room-occupancy announce (arrays are fine)
             # 0.12.0: + ~talking/<slug> and ~chat/<slug> (speaking + chat nudges)
             self._wide_once(peer)
             member = _mint(self.key, {"root": "", "put": [slug] + [k + "/" + slug for k in MEMBER_KINDS]
                                                         + ([slug + "/" + ADMIN_KIND] if role == "admin" else []),   # 0.16.0
-                                      "get": slug, "iat": now, "exp": exp})
+                                      "get": slug, "iat": now, "exp": exp, **inv_claim})
         else:
             # Measured against the bundled relay (2026-09-18): `put` may be a
             # list, matching is per path segment, and an announce outside the
@@ -4059,8 +4310,186 @@ class AuthService:
                                       "iat": now, "exp": exp})
         # Every member holds the room's registry record (0.8.6).
         registry = _mint(self.key, {"root": "", "put": CHANNELS_KIND + "/" + slug, "iat": now, "exp": exp})
-        return {"ok": True, "exp": exp, "role": role, "ns": NS,     # 0.21.17: pages re-mint a token cached without it
-                "tokens": {"member": member, "registry": registry}}, 200
+        out = {"ok": True, "exp": exp, "role": role, "ns": NS,     # 0.21.17: pages re-mint a token cached without it
+               "tokens": {"member": member, "registry": registry}}
+        if inv_row:
+            out["invite"] = {"id": inv_row["id"], "room": inv_row["room"], "exp": inv_row.get("exp")}   # 0.21.75: re-mints until then
+            said = (inv_row["id"], host or peer or "?")
+            with self.lock:
+                say = now - self._inv_said.get(said, 0) > 3600
+                if say:
+                    self._inv_said[said] = now
+                    if len(self._inv_said) > 512:
+                        self._inv_said = dict(sorted(self._inv_said.items(), key=lambda kv: kv[1])[-256:])
+            if say:   # one line per link and member an hour; never the link itself
+                self.log("relay auth: %s joined room %s with invite link %s (from %s)" % (host or "a member", slug, inv_row["id"], peer or "?"))
+        return out, 200
+
+    # ---- 0.21.75: room invite links -----------------------------------------------------------------------------------
+    # Kenton: "ANYONE in the room can copy an invite link; it works 24 h by default (1 h / 24 h / 7 days); the room's creator
+    # or an admin can revoke links; the person joining needs NO access code and NO room code." Links live at the hub (like
+    # rooms and vehicle keys); a spoke vouches for the member who asks and checks redemptions with the hub.
+
+    def _invite_spoke(self):
+        return self._vehicle_spoke()
+
+    def _member_claims(self, bearer):
+        """The claims of a MEMBER token this minter signed (Authorization: Bearer ...), else None."""
+        tok = str(bearer or "")
+        tok = tok[7:].strip() if tok.lower().startswith("bearer ") else ""
+        claims = verify_token(tok, self.key) if tok else None
+        if not claims or is_relay_claims(claims):
+            return None
+        return claims
+
+    def _invite_admin(self, bearer, peer=""):
+        """May this caller manage ANY room's links as an admin? The relay operator's own page (a loopback caller -- as for
+        Room settings) or an admin code's member token for any room (the Lobby's too)."""
+        if peer in LOOPBACK_PEERS:
+            return True
+        c = self._member_claims(bearer)
+        return bool(c) and claims_admin_any(c)
+
+    def _invite_verify(self, token, room, host=None):
+        """-> (verdict, row): "ok" | "revoked" | "expired" | "wrong" | "down". The hub (or a box holding the link) checks its
+        store; a spoke asks the hub and caches a good answer INVITE_CACHE_S per member. Never logs the token."""
+        if not INVITE_RE.match(str(token or "")):
+            return "wrong", None             # a malformed link never bothers the hub (still a guess)
+        h = host if host and HOST_RE.match(str(host)) else None
+        if self.store.invite_holds(token) or not self._invite_spoke():
+            return self.store.invite_check(token, use=True, host=h)
+        ck, now = invite_digest(token) + "|" + str(h or ""), time.time()
+        with self.lock:
+            hit = self._inv_cache.get(ck)
+        if hit and now - hit[0] < INVITE_CACHE_S and now < float(hit[1].get("exp") or 0):
+            return "ok", dict(hit[1])
+        out = self._hub_fed({"op": "inviteCheck", "token": str(token), "room": room, "host": h or ""}, timeout=5)
+        if out is None:
+            return "down", None
+        d, code = out
+        v = d.get("invite") if isinstance(d.get("invite"), dict) else {}
+        if code == 200 and d.get("ok") and re.match(r"^[0-9a-f]{8}$", str(v.get("id") or "")) and SLUG_RE.match(str(v.get("room") or "")):
+            try:
+                exp = int(v.get("exp") or 0)
+            except (TypeError, ValueError):
+                exp = 0
+            row = {"id": str(v["id"]), "room": str(v["room"]), "exp": exp, "by": clean_label(v.get("by"), 40)}
+            with self.lock:
+                self._inv_cache[ck] = (now, row)
+                if len(self._inv_cache) > 512:
+                    for k in sorted(self._inv_cache, key=lambda k: self._inv_cache[k][0])[:256]:
+                        self._inv_cache.pop(k, None)
+            return "ok", dict(row)
+        with self.lock:
+            self._inv_cache.pop(ck, None)
+        if code == 403 and d.get("verdict") in ("revoked", "expired", "wrong"):
+            return d["verdict"], None
+        return "down", None                  # an older hub (no invite ops) or a hub error: fail closed, not the member's fault
+
+    def invite_revoked_apply(self, d):
+        """Spoke side: the hub's long-poll names the links revoked while they would still work -> out of the cache now."""
+        ids = d.get("invRevoked") if isinstance(d, dict) else None
+        if not isinstance(ids, list) or not ids:
+            return 0
+        drop = {str(i) for i in ids}
+        with self.lock:
+            gone = [k for k, v in self._inv_cache.items() if v[1].get("id") in drop]
+            for k in gone:
+                self._inv_cache.pop(k, None)
+        return len(gone)
+
+    def _invite_make(self, slug, ttl, by=""):
+        row, tok, code = self.store.invite_create(slug, ttl, by)
+        if row is None:
+            return {"ok": False, "error": tok}, code
+        self.log("relay auth: invite link %s for room %s made by %s (works %s)"
+                 % (row["id"], slug, by or "a member", {3600: "1 hour", 86400: "24 hours", 604800: "7 days"}.get(ttl, "%d s" % ttl)))
+        return {"ok": True, "id": row["id"], "token": tok, "exp": row["exp"], "ttl": ttl, "room": slug}, 200
+
+    OLD_HUB_TEXT = "the hub runs an older KASTR without invite links -- update the hub first"
+
+    def invite_create_api(self, p, bearer, peer=""):
+        """POST /api/invite {room, ttl, by?} with Bearer = a member token of that room (any role: anyone in the room)."""
+        p = p if isinstance(p, dict) else {}
+        claims = self._member_claims(bearer)
+        if claims is None:
+            return {"ok": False, "error": "join the room first (a member token is required)"}, 403
+        room, host = claims_identity(claims)
+        slug = str(p.get("room") or room or "")
+        if not SLUG_RE.match(slug):
+            return {"ok": False, "error": "bad room name"}, 400
+        if slug == LOBBY_SLUG or claims.get("lobby"):
+            return {"ok": False, "error": "the Lobby has no invite links"}, 403
+        if room != slug:
+            return {"ok": False, "error": "this token is for another room"}, 403
+        if self.bans and self.bans.hit(slug, host, peer):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        ttl = invite_ttl(p.get("ttl"))
+        if ttl is None:
+            return {"ok": False, "error": "an invite link works for 1 hour, 24 hours or 7 days"}, 400
+        by = clean_label(p.get("by"), 40) or (host or "")
+        if not self._invite_spoke():
+            return self._invite_make(slug, ttl, by)
+        out = self._hub_fed({"op": "invite", "vouch": "member", "by": by, "room": slug, "ttl": ttl}, timeout=6)
+        if out is None:
+            return {"ok": False, "hubDown": True,
+                    "error": "the hub is unreachable -- invite links are made on the hub; try again shortly"}, 503
+        d, code = out
+        if code == 200 and d.get("ok") and INVITE_RE.match(str(d.get("token") or "")):
+            self.log("relay auth: invite link %s for room %s made at the hub for %s" % (d.get("id"), slug, by or "a member"))
+            return {"ok": True, "id": d.get("id"), "token": d["token"], "exp": d.get("exp"), "ttl": ttl, "room": slug}, 200
+        if code == 400 and d.get("error") == "bad room":
+            return {"ok": False, "error": self.OLD_HUB_TEXT}, 503
+        if code in (400, 403, 409):
+            return {"ok": False, "error": d.get("error") or "the hub refused"}, code
+        return {"ok": False, "hubDown": True, "error": "the hub could not make the invite link (%s)" % (d.get("error") or code)}, 503
+
+    def invite_manage_api(self, op, p, bearer, peer=""):
+        """GET|POST /api/invites (op "list") and POST /api/invite/revoke (op "revoke") -- the room's creator (its roomKey) or
+        an admin. A spoke checks the admin token here and asks the hub, which owns the links (and checks a roomKey itself)."""
+        p = p if isinstance(p, dict) else {}
+        slug = str(p.get("room") or "")
+        if not SLUG_RE.match(slug) or slug == LOBBY_SLUG:
+            return {"ok": False, "error": "bad room name"}, 400
+        admin = self._invite_admin(bearer, peer)
+        body = {"room": slug, "roomKey": (str(p.get("roomKey")) if p.get("roomKey") else None), "id": str(p.get("id") or ""),
+                "all": p.get("all") is True}
+        if not self._invite_spoke():
+            return self._invite_manage(op, body, admin)
+        out = self._hub_fed(dict(body, op="inviteList" if op == "list" else "inviteRevoke", vouch="admin" if admin else None),
+                            timeout=6)
+        if out is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- invite links live on the hub; try again shortly"}, 503
+        d, code = out
+        if code == 400 and d.get("error") == "bad room":
+            return {"ok": False, "error": self.OLD_HUB_TEXT}, 503
+        return d, code
+
+    def _invite_manage(self, op, body, admin):
+        slug = body["room"]
+        if not admin:
+            rec = self.store.room(slug)
+            rk = str(body.get("roomKey") or "")
+            if not (rk and rec and hmac.compare_digest(str(rec.get("roomKey") or ""), rk)):
+                return {"ok": False, "error": "only the room's creator or an admin can manage its invite links"}, 403
+        if op == "list":
+            return {"ok": True, "room": slug, "invites": self.store.invites_public(slug)}, 200
+        if body.get("all"):
+            n, _found = self.store.invite_revoke(slug, None)
+        else:
+            iid = str(body.get("id") or "")
+            if not re.match(r"^[0-9a-f]{8}$", iid):
+                return {"ok": False, "error": "which invite link? (id or all)"}, 400
+            n, found = self.store.invite_revoke(slug, iid)
+            if not found:
+                return {"ok": False, "error": "no such invite link in this room"}, 404
+        if n:
+            self.log("relay auth: %d invite link(s) of room %s revoked by %s" % (n, slug, "an admin" if admin else "its creator"))
+            try:
+                self.bans.nudge()   # spokes hold the bans long-poll -- they drop the revoked links from their caches at once
+            except Exception:
+                pass
+        return {"ok": True, "room": slug, "revoked": n, "invites": self.store.invites_public(slug)}, 200
 
     # ---- 0.21.63: the vehicle API -----------------------------------------------------------------------------------
     # Kenton: "I now need to have a vehicle ... be able to connect via POST to the relay to share the cameras on the vehicle.
@@ -5562,8 +5991,12 @@ class AuthService:
             boards, bver = (st.boards_public(), int(getattr(st, "board_ver", 0) or 0)) if hasattr(st, "boards_public") else ({}, 0)
         except Exception:
             boards, bver = {}, 0
+        try:   # 0.21.75: invite links revoked while they would still work (spokes drop them from their 30 s caches)
+            inv_rev = st.invites_revoked_ids() if hasattr(st, "invites_revoked_ids") else []
+        except Exception:
+            inv_rev = []
         return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver,   # 0.21.0: + the hub's command channel
-                "boards": boards, "boardsVer": "%d.%d" % (BOOT_AT, bver),
+                "boards": boards, "boardsVer": "%d.%d" % (BOOT_AT, bver), "invRevoked": inv_rev,
                 "standby": self.standby_public()}, 200                                       # 0.21.53: as STATE (a baseline never hides it)
 
     # ---- 0.21.53 (Kenton: "the standby hub") -- the hub side -------------------------------------------------------------
@@ -5721,6 +6154,7 @@ class AuthService:
                 pass
         self.xshare_mirror_apply(d)   # 0.21.41
         self.board_mirror_apply(d)    # 0.21.63
+        self.invite_revoked_apply(d)  # 0.21.75
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed
         cmd = d.get("cmd") if isinstance(d.get("cmd"), dict) else None

@@ -3060,6 +3060,79 @@ class GuiArgumentParser(argparse.ArgumentParser):
         sys.exit(status)
 
 
+# ---- 0.21.75: room invite links open the app (Kenton: "the link opens the installed KASTR app if present, otherwise the
+# host's web page") -- the kastr:// scheme, registered per user on every launch of an installed Windows build
+URL_SCHEME = "kastr"
+
+
+def register_url_protocol():
+    """HKCU\\Software\\Classes\\kastr -> "<this exe>" --invite "%1" (the /join page's kastr://join?... link starts KASTR).
+    Frozen Windows builds only (a source checkout has no stable exe); never fails the launch. -> True when registered."""
+    if not (WINDOWS and FROZEN):
+        return False
+    try:
+        import winreg
+        exe = sys.executable
+        cmd = '"%s" --invite "%%1"' % exe
+        base = "Software\\Classes\\" + URL_SCHEME
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base + "\\shell\\open\\command") as k:
+                if str(winreg.QueryValueEx(k, "")[0]) == cmd:
+                    return True        # already this exe (the common case: nothing written)
+        except OSError:
+            pass
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:KASTR invite link")
+            winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + "\\DefaultIcon") as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, '"%s",0' % exe)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + "\\shell\\open\\command") as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)
+        note("invite links: the kastr:// scheme now opens " + exe)
+        return True
+    except Exception as e:
+        note("invite links: could not register the kastr:// scheme (%s)" % e)
+        return False
+
+
+def split_invite_argv(argv):
+    """-> (invite URL or None, the rest of argv). Takes `--invite URL`, `--invite=URL` and a bare kastr://... argument
+    (what a browser hands a registered scheme), so argparse never sees -- or aborts on -- a link, and a relaunch (which
+    re-runs argv) never replays it."""
+    out, inv, skip = [], None, False
+    argv = list(argv or [])
+    for i, a in enumerate(argv):
+        if skip:
+            skip = False
+            continue
+        s = str(a)
+        if s == "--invite":
+            if i + 1 < len(argv):
+                inv = str(argv[i + 1])
+            skip = True
+            continue
+        if s.startswith("--invite="):
+            inv = s.split("=", 1)[1]
+            continue
+        if s.lower().startswith(URL_SCHEME + ":"):
+            inv = s
+            continue
+        out.append(a)
+    return (inv.strip() or None) if inv else None, out
+
+
+def hand_invite_to(base, url):
+    """A second launch hands its invite link to the KASTR already running here (loopback). -> accepted?"""
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/api/invite/pending", method="POST",
+                                     data=json.dumps({"url": url}).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return bool(json.loads(r.read().decode("utf-8", "replace") or "{}").get("ok"))
+    except Exception as e:
+        note("invite: the running KASTR did not take the invite link (%s)" % e)
+        return False
+
+
 def build_parser(ini):
     """0.12.0: the launcher's command line, factored out of main() so a test can
     build it against a given ini dict (the defaults come from the ini)."""
@@ -3088,12 +3161,22 @@ def build_parser(ini):
     ap.add_argument("--mode", choices=kastr_serve.MODES, default=None,
                     help="operating mode: full (default) | viewer | publisher | relay | "
                          "publisher-relay (also: mode = ... in kastr.ini)")
+    # 0.21.75: a room invite link (kastr://join?i=..&room=..&relay=..) -- the page opens that room with no codes
+    ap.add_argument("--invite", metavar="URL", default=None,
+                    help="open a room invite link (kastr://join?... -- also accepted as a bare argument)")
     return ap
 
 
 def main():
     ini, ini_path = read_ini()
-    args = build_parser(ini).parse_args()   # 0.12.0: parser factored out (testable)
+    # 0.21.75: an invite link rides the command line once -- taken out of argv, so an update relaunch never replays it
+    invite_url, _rest = split_invite_argv(sys.argv[1:])
+    sys.argv[1:] = _rest
+    args = build_parser(ini).parse_args(_rest)   # 0.12.0: parser factored out (testable)
+    args.invite = invite_url
+    register_url_protocol()                       # 0.21.75: every launch (the exe may have moved); never fails
+    if invite_url and not kastr_serve.invite_pending_set(invite_url):
+        note("invite: the link on the command line is not a KASTR invite link -- ignored")
 
     # 0.8.3: the relay the user last pointed the app at wins over the ini
     # default -- "set it to the last used address on relaunch". An explicit
@@ -3311,6 +3394,9 @@ def main():
         browser = find_browser()
         note("KASTR %s already on port %d (pid %s): handing the window over"
              % (squatter.get("version"), args.port, squatter.get("pid")))
+        if args.invite:   # 0.21.75: the running KASTR opens the invite (its page takes it once)
+            note("invite: handing the invite link to the running KASTR (%s)"
+                 % ("taken" if hand_invite_to(squatter["url"], args.invite) else "NOT taken"))
         if browser:
             launch(browser, squatter["url"], args.page)
         else:

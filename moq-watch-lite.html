@@ -1078,6 +1078,23 @@
   #kRoomSet .rsf button { flex:none; }
   #kRoomSet .rshint { margin:0; font-size:11.5px; line-height:1.45; color:var(--text-mute); }
   #kRoomSet .rsnote { margin:0; font-size:12px; line-height:1.45; color:var(--asi-amber); }
+  /* 0.21.75: Room settings > Invite links */
+  #kRoomSet .rsinv[hidden], #kRoomSet .rsinvall[hidden] { display:none; }
+  #kRoomSet .rsinvlist { display:flex; flex-direction:column; gap:4px; }
+  #kRoomSet .rsinvrow { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text); background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:5px 6px 5px 10px; }
+  #kRoomSet .rsinvrow .meta { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  #kRoomSet .rsinvrow .meta span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #kRoomSet .rsinvrow .sub { color:var(--text-mute); font-size:11.5px; }
+  #kRoomSet .rsinvempty { margin:0; font-size:12px; color:var(--text-mute); }
+  /* 0.21.75: the join gate in invite mode -- only the name (no relay, room, access code or room code) */
+  #joinGate:not(.inv) #joinInvHead, #joinGate:not(.inv) #joinInvOut { display:none; }
+  #joinGate.inv #joinGateH, #joinGate.inv #joinRelayRow, #joinGate.inv #joinRoomRow, #joinGate.inv #joinNewChanRow,
+  #joinGate.inv #joinAccessRow, #joinGate.inv #joinPwdRow, #joinGate.inv #joinKeepRow { display:none !important; }
+  #joinInvHead h2 { margin-bottom:4px; }
+  #joinInvHead p { margin:0 0 12px; font-size:12px; color:var(--text-dim); }
+  #joinInvRoom { color:var(--asi-blue); }
+  #joinInvOut { margin:6px 0 0; font-size:11.5px; }
+  #joinInvOut a { color:var(--text-mute); }
   #kRoomSet .rsmsg { margin:0; min-height:16px; font-size:12px; color:var(--text-dim); }
   #kRoomSet .rsmsg.err { color:var(--asi-red); }
   #kRoomSet .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
@@ -1606,6 +1623,17 @@
     background:transparent; border:1px solid var(--line); color:var(--text); font-size:13px; font-weight:600; cursor:pointer; }
   .pplinvite:hover { background:var(--surface-2); border-color:var(--text-mute); }
   .pplinvite .icon { width:16px; height:16px; }
+  /* 0.21.75: Share invite -- how long the link works, then copy it */
+  .pplinvpop { margin-top:8px; padding:10px; border:1px solid var(--asi-blue-dim); border-radius:8px; background:var(--surface-2); display:flex; flex-direction:column; gap:8px; }
+  .pplinvpop[hidden] { display:none; }
+  .pplinvpop .ipt { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
+  .pplinvpop .iseg { display:flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .pplinvpop .iseg button { flex:1; background:transparent; border:0; color:var(--text-dim); padding:6px 4px; font-size:12px; cursor:pointer; }
+  .pplinvpop .iseg button + button { border-left:1px solid var(--line); }
+  .pplinvpop .iseg button.on { background:var(--asi-blue); color:var(--on-accent); }
+  .pplinvcopy { background:var(--asi-blue); color:var(--on-accent); border:0; border-radius:6px; padding:8px; font-weight:600; font-size:13px; cursor:pointer; }
+  .pplinvcopy:disabled { opacity:.6; cursor:default; }
+  .pplinvpop .ihint { margin:0; font-size:11px; line-height:1.45; color:var(--text-mute); }
   .pplsec { display:flex; align-items:center; gap:8px; margin:4px 0 4px; }
   .pplsechead { display:flex; align-items:center; gap:6px; background:none; border:0; color:var(--text-mute); font-size:12px; padding:4px 2px; cursor:pointer; }
   .pplsechead:hover { color:var(--text); }
@@ -1857,7 +1885,14 @@
   <!-- 0.21.23 (Kenton, Teams screenshot): one row per person -->
   <div id="pplTop">
     <label class="pplsearch"><input id="pplSearch" type="search" placeholder="Search participants" autocomplete="off" spellcheck="false"><span class="sic" id="pplSic"></span></label>
-    <button id="pplInvite" type="button" class="pplinvite" title="Copy a link that opens this room (the access code is still needed)"></button>
+    <button id="pplInvite" type="button" class="pplinvite" title="Copy a link that opens this room &mdash; the person joining needs no code"></button>
+    <!-- 0.21.75 (Kenton: invite links work 24 h by default, or 1 h / 7 days) -->
+    <div id="pplInvPop" class="pplinvpop" hidden role="group" aria-label="Share invite">
+      <div class="ipt">The link works for</div>
+      <div class="iseg" role="radiogroup"><button type="button" role="radio" data-ttl="3600">1 hour</button><button type="button" role="radio" data-ttl="86400" class="on">24 hours</button><button type="button" role="radio" data-ttl="604800">7 days</button></div>
+      <button type="button" id="pplInvCopy" class="pplinvcopy">Copy invite link</button>
+      <p class="ihint">Anyone with the link joins this room &mdash; no access code or room code. The room&rsquo;s creator or an admin can revoke it in Room settings.</p>
+    </div>
   </div>
   <div class="pplsec">
     <button id="pplSecHead" type="button" class="pplsechead" aria-expanded="true"><span class="chev" id="pplChev"></span><span>In this room (<span id="pplCount">0</span>)</span></button>
@@ -2173,7 +2208,7 @@
         <li><b>Share</b> &#9656; a <b>screen</b>, a <b>window</b> or a <b>browser tab</b>; or an <b>IP camera</b> (RTSP), a <b>camera on this computer</b>, a <b>media file</b>, or an <b>RTMP</b> feed (for example a GoPro).</li>
         <li>Several cameras can share one tile: <b>Put in a grid&hellip;</b> on a camera&rsquo;s row.</li>
         <li>Stop a share from the Share menu or the share&rsquo;s own tile.</li>
-        <li><b>People &#9656; Share invite</b> copies a link that opens this room.</li>
+        <li><b>People &#9656; Share invite</b> copies a link that opens this room for 1 hour, 24 hours or 7 days &mdash; the person joining needs no access code or room code (it opens the KASTR app when they have it, else this host&rsquo;s web page). The room&rsquo;s creator or an admin revokes links in <b>Room settings</b>.</li>
       </ul>
     </details>
     <details><summary>Rooms</summary>
@@ -2565,7 +2600,10 @@
 
 <div id="joinGate">
   <div class="card">
-    <h2>Join room &mdash; <span id="joinChannelCur">&mdash;</span></h2>
+    <h2 id="joinGateH">Join room &mdash; <span id="joinChannelCur">&mdash;</span></h2>
+    <!-- 0.21.75: an invite link -- only the name is asked -->
+    <div id="joinInvHead"><h2>You&rsquo;re invited to <span id="joinInvRoom"></span></h2>
+      <p>No access code or room code needed &mdash; the invite link is your key.</p></div>
     <button id="joinGateClose" type="button"
             title="Close &mdash; join later from the room chip. The relay works without joining.">&#10005;</button>
     <!-- Live self-preview (gate-local capture, released on join/leave-gate).
@@ -2610,6 +2648,7 @@
       <button id="joinBtn" type="button" class="join">Join now</button>
     </div>
     <div class="hint" id="joinMsg"></div>
+    <p id="joinInvOut"><a href="#" id="joinInvNo">Join another room instead</a></p>
   </div>
 </div>
 </div>
@@ -2657,6 +2696,31 @@
   // opened this relay host's web port. `secure`/`webcodecs` say what the browser can do.
   const CLIENT = window.__kastrClient ?? { class: "app", secure: true, media: true, webcodecs: true, displayCapture: true, host: null, browser: "chromium", mobile: false };
   const IS_WEB = CLIENT.class === "web";
+  // 0.21.75 (Kenton: room invite links -- "the person joining needs NO access code and NO room code"): the invite rides in
+  // the address FRAGMENT (/join -> /moq-watch-lite.html#invite=<token>&room=<slug>, never sent to a server). It is read
+  // once into this tab's sessionStorage (kastr.invite = {token, room}) and wiped from the address bar and history; the
+  // gate then asks only for a name, and every mint for that room carries it until it expires. It never goes into
+  // kastr.lastjoin (the codes there stay this machine's own).
+  const INVITE_KEY = "kastr.invite";
+  const INVITE_TOKEN_RE = /^ki-[0-9a-f]{8}-[A-Za-z0-9_-]{32,64}$/;
+  function inviteGet() {
+    try {
+      const v = JSON.parse(sessionStorage.getItem(INVITE_KEY) || "null");
+      if (!v || !INVITE_TOKEN_RE.test(String(v.token || "")) || !/^[a-z0-9-]{1,32}$/.test(String(v.room || ""))) return null;
+      if (v.exp && v.exp * 1000 < Date.now()) { sessionStorage.removeItem(INVITE_KEY); return null; }
+      return v;
+    } catch { return null; }
+  }
+  function inviteSet(v) { try { if (v) sessionStorage.setItem(INVITE_KEY, JSON.stringify(v)); else sessionStorage.removeItem(INVITE_KEY); } catch {} }
+  try {
+    const hp = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const it = hp.get("invite");
+    if (it !== null) {
+      const ir = String(hp.get("room") || "").toLowerCase();
+      if (INVITE_TOKEN_RE.test(it) && /^[a-z0-9-]{1,32}$/.test(ir) && ir !== "main") inviteSet({ token: it, room: ir, at: Date.now() });
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+  } catch {}
   // 0.18.0: renditions + on-demand cameras (module-scoped, used by applyState)
   const lowAvail = new Set();        // full broadcast names whose -low.hang sibling is announced
   let odOn = false;                  // 0.21.10: the host's switch (kastr.ini ondemand / KASTR_ONDEMAND) -- false until /api/instance says ondemand: true
@@ -5926,8 +5990,9 @@
     window.__toast?.("Asked " + targets.length + (targets.length === 1 ? " microphone" : " microphones") + " to mute", 3000, { level: "info" });
   });
   // Share invite: a link that opens THIS room where it lives -- the tunnel / web relay, else the address this page was
-  // reached by, else (the desktop window, on loopback) this host's network address; the access code is still needed
-  async function inviteLink() {
+  // reached by, else (the desktop window, on loopback) this host's network address. 0.21.75: on a secured relay the link
+  // carries an invite (no code needed); an open relay's link is the room's address alone (nobody needs a code there).
+  async function inviteBase() {
     let base = "";
     try { const wu = new URL(urlInput.value.trim()); if (isWebRelay(wu.href)) base = wu.origin; } catch {}
     if (!base && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) base = location.origin;
@@ -5939,17 +6004,85 @@
       } catch {}
     }
     if (!base) { const rb = relayHostBase(); if (rb && !/\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(rb)) base = rb; }
-    return base ? base.replace(/\/+$/, "") + "/moq-watch-lite.html?room=" + encodeURIComponent(CHANNEL) : "";
+    return base ? base.replace(/[/]moq-watch-lite[.]html.*$/, "").replace(/[/]+$/, "") : "";
   }
+  async function inviteLink() {
+    const base = await inviteBase();
+    return base ? base + "/moq-watch-lite.html?room=" + encodeURIComponent(CHANNEL) : "";
+  }
+  // 0.21.75 (Kenton: "ANYONE in the room can copy an invite link; it works 24 h by default (1 h / 24 h / 7 days)"; the
+  // person joining needs no access code and no room code): on a secured relay Share invite opens a small card -- how long
+  // the link works, then Copy invite link (POST /api/invite with my member token; the hub keeps only a hash of the
+  // secret). The link lands on the host's /join page, which opens the KASTR app when it is installed, else the web page.
+  const invPop = document.getElementById("pplInvPop");
+  const INVITE_TTL_TEXT = { 3600: "1 hour", 86400: "24 hours", 604800: "7 days" };
+  let invTtl = 86400;
+  function invPaintTtl() {
+    for (const b of invPop.querySelectorAll("[data-ttl]")) {
+      const on = Number(b.dataset.ttl) === invTtl;
+      b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false");
+    }
+  }
+  for (const b of invPop.querySelectorAll("[data-ttl]")) b.addEventListener("click", (e) => { e.stopPropagation(); invTtl = Number(b.dataset.ttl) || 86400; invPaintTtl(); });
+  invPop.addEventListener("click", (e) => e.stopPropagation());
+  function inviteRelayFor(base) {   // the relay the invited app dials: this page's relay, by a name others can reach
+    const cur = urlInput.value.trim();
+    try {
+      const u = new URL(cur);
+      if (!/^(localhost|127[.]0[.]0[.]1|[[]::1[]])$/.test(u.hostname)) return cur;
+      const b = new URL(base);
+      if (isWebRelay(cur)) return b.origin + "/relay";
+      return u.protocol + "//" + b.hostname + (u.port ? ":" + u.port : "");
+    } catch { return ""; }
+  }
+  async function inviteMake(ttl) {
+    const base = authBase();
+    if (!base || !authTokens?.member) throw new Error("join the room first");
+    const by = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim().slice(0, 40);
+    const r = await fetch(base + "/api/invite", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + authTokens.member },
+      body: JSON.stringify({ room: CHANNEL, ttl, by }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 404 && !d.error) throw new Error("this relay\u2019s KASTR is older than 0.21.75 (no invite links) \u2014 update it first");
+    if (!r.ok || !d.ok) throw new Error(String(d.error || ("HTTP " + r.status)).replace(" -- ", " \u2014 "));
+    return d;
+  }
+  async function inviteJoinLink(token, slug) {
+    const base = await inviteBase();
+    if (!base) return "";
+    return base + "/join#i=" + encodeURIComponent(token) + "&room=" + encodeURIComponent(slug) + "&relay=" + encodeURIComponent(inviteRelayFor(base));
+  }
+  async function inviteCopy() {
+    const btn = document.getElementById("pplInvCopy");
+    const ttl = invTtl, slug = CHANNEL;
+    btn.disabled = true; btn.textContent = "Making the link\u2026";
+    try {
+      const d = await inviteMake(ttl);
+      const link = await inviteJoinLink(d.token, slug);
+      if (!link) { window.__toast?.("No address others can reach yet \u2014 turn on 'Allow other machines to connect' on the Relay page", 6000, { level: "warn" }); return; }
+      const say = "works for " + (INVITE_TTL_TEXT[ttl] || Math.round(ttl / 3600) + " hours") + ", no code needed";
+      let copied = false;
+      try { await navigator.clipboard.writeText(link); copied = true; } catch {}
+      if (copied) window.__toast?.("Invite link copied \u2014 " + say, 5000, { level: "event" });   // shown by default (info toasts are opt-in)
+      else window.prompt("Copy this invite link (" + say + "):", link);
+      invPop.hidden = true;
+      log("Invite link made for " + slug + " (" + say + ").");
+    } catch (e) {
+      window.__toast?.("Could not make an invite link \u2014 " + (e?.message || e), 6000, { level: "warn" });
+    } finally { btn.disabled = false; btn.textContent = "Copy invite link"; }
+  }
+  document.getElementById("pplInvCopy").addEventListener("click", (e) => { e.stopPropagation(); inviteCopy(); });
   ppl.invite.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const link = await inviteLink();
+    if (authSecured && joinState === "joined" && CHANNEL === LOBBY) { window.__toast?.("The Lobby has no invite links \u2014 invite people from a room", 4000, { level: "event" }); return; }
+    if (authSecured && joinState === "joined") { invPop.hidden = !invPop.hidden; if (!invPop.hidden) invPaintTtl(); return; }   // 0.21.75
+    const link = await inviteLink();   // an open relay: the room's address (nobody needs a code there)
     if (!link) { window.__toast?.("No address others can reach yet \u2014 turn on 'Allow other machines to connect' on the Relay page", 6000, { level: "warn" }); return; }
     let copied = false;
     try { await navigator.clipboard.writeText(link); copied = true; } catch {}
-    if (copied) window.__toast?.("Invite link copied \u2014 they still need the access code", 4000, { level: "info" });
-    else window.prompt("Copy this invite link (they still need the access code):", link);
+    if (copied) window.__toast?.("Invite link copied \u2014 it opens this room", 4000, { level: "info" });
+    else window.prompt("Copy this invite link:", link);
   });
+  window.__invite = { make: inviteMake, link: inviteJoinLink, copy: inviteCopy, get: () => inviteGet(), set: (v) => inviteSet(v), ttl: (t) => { invTtl = t; invPaintTtl(); } };   // rig
   window.__participants = () => participantList().map((p) => ({ key: p.key, name: p.name, role: p.role, mic: p.mic, talk: p.talk, me: p.me, deaf: !!p.deaf, menu: !!(p.cam || p.content.length) }));   // rig
   window.__inviteLink = inviteLink;   // rig
 
@@ -12495,6 +12628,8 @@
   async function authMint(room, access, roomCode) {
     const base = authBase();
     if (!base) throw new Error("no relay url");
+    const inv = inviteGet();   // 0.21.75: an invite link for THIS room rides every mint (the join and the re-mints) until it ends
+    const invTok = inv && inv.room === room ? inv.token : undefined;
     // 0.21.68 (Kenton: "Could not join aoz-6: Failed to fetch" -- it joined on a later try): a NETWORK failure (the relay host's KASTR
     // restarting for an update, a dropped connection) is tried again twice, 1.5 s then 3 s later; a refusal (bad code, locked) is not
     let r = null;
@@ -12505,7 +12640,8 @@
           // 0.11.0: a minter without access codes (0.9.x, or legacy) reads only `code`
           // -- give it the room code there so locked rooms still open.
           body: JSON.stringify({ room, code: authCodes ? (access ?? "") : ((access ?? "") || (roomCode ?? "")), roomCode: roomCode ?? "",
-                                 host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }),   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
+                                 host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined,   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
+                                 invite: invTok }),   // 0.21.75
         });
         break;
       } catch (e) {
@@ -12515,7 +12651,9 @@
       }
     }
     const d = await r.json().catch(() => ({}));
+    if (invTok && !(r.ok && d.ok) && /^(expired|revoked|wrong)$/.test(String(d.invite || ""))) inviteSet(null);   // 0.21.75: a dead link is dropped
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
+    if (invTok && d.invite?.id) inviteSet({ ...inv, id: d.invite.id, exp: Number(d.invite.exp) || 0 });   // 0.21.75
     authTokens = d.tokens;
     authNs = d.ns || "~";   // 0.21.17: the control namespace (every minter in the fleet grants '~')
     authExp = d.exp;
@@ -14023,6 +14161,9 @@
       + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rsview"><i></i></span><span>Lock the view</span></label>'
       + '<p class="rshint">Only the room\u2019s creator or an admin can spotlight, pin or arrange things for everyone. Everyone can still pin, arrange, mute and zoom for themselves.</p></div>'
       + '<div class="rsrow"><span class="lbl">Group</span><div class="rsf"><select class="rsgroup" aria-label="Room group"></select></div></div>'
+      + '<div class="rsrow rsinv" hidden><span class="lbl">Invite links</span><div class="rsinvlist"></div>'   // 0.21.75
+      + '<div class="rsf"><button type="button" class="rsinvall" hidden>Revoke all</button></div>'
+      + '<p class="rshint">Links people in this room made with Share invite. Revoking one stops it letting anyone else in; people already here stay.</p></div>'
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost rsclose">Close</button></div></div>';
     document.body.appendChild(el);
@@ -14092,7 +14233,78 @@
         q(".rsgroup").value = gid;
       }
       const g = q(".rsgroup").value || null; run({ op: "group", group: g }, g ? "Moved to " + (roomsGroups?.[g]?.name || g) + "." : "Out of its group.", (d) => { if (d.groups) { roomsGroups = d.groups; roomsGroupsAt = Date.now(); roomsChanged(); } }); };
+    q(".rsinvall").onclick = async () => {   // 0.21.75
+      const slug = rsSlug;
+      if (!slug) return;
+      if (!(await kastrConfirm({ title: "Revoke invite links", message: "Revoke every invite link of \u201c" + slug + "\u201d?", detail: "Nobody else can join with them. People already in the room stay.", ok: "Revoke all", danger: true }))) return;
+      await rsInvRevoke({ all: true });
+    };
+    q(".rsinvlist").addEventListener("click", async (e) => {
+      const b = e.target.closest?.("button[data-inv]");
+      if (b) await rsInvRevoke({ id: b.dataset.inv });
+    });
     return el;
+  }
+  // 0.21.75 (Kenton: "the room's creator or an admin can revoke links"): Room settings > Invite links -- the room's live links
+  // (who made each, when it ends, how many joined with it) at the minter of this page's relay (a spoke asks the hub)
+  async function rsInvCall(path, body) {
+    const base = authBase();
+    if (!base || !authSecured) return { ok: false, error: "Invite links need a relay with access codes." };
+    const headers = { "content-type": "application/json" };
+    if (authTokens?.member) headers.authorization = "Bearer " + authTokens.member;   // an admin proves it with the member token
+    const roomKey = myChannels().find((r) => r.slug === body.room)?.roomKey || undefined;   // the creator with the roomKey
+    try {
+      const r = await fetch(base + path, { method: "POST", headers, body: JSON.stringify({ ...body, roomKey }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 && !d.error) return { ok: false, error: "This relay\u2019s KASTR is older than 0.21.75 (no invite links)." };
+      return r.ok ? { ...d, ok: true } : { ok: false, error: String(d.error || ("HTTP " + r.status)).replace(" -- ", " \u2014 ") };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  function invLeft(exp) {
+    const s = Math.max(0, Math.round(Number(exp) - Date.now() / 1000));
+    return s >= 172800 ? Math.round(s / 86400) + " days" : s >= 5400 ? Math.round(s / 3600) + " h" : Math.max(1, Math.round(s / 60)) + " min";
+  }
+  function rsInvPaint(d) {
+    if (!rsEl) return;
+    const box = rsEl.querySelector(".rsinvlist"), all = rsEl.querySelector(".rsinvall");
+    box.replaceChildren();
+    const rows = d.ok && Array.isArray(d.invites) ? d.invites : [];
+    all.hidden = !rows.length;
+    if (!rows.length) {
+      const p = document.createElement("p"); p.className = "rsinvempty";
+      p.textContent = d.ok ? "No active invite links." : (d.error || "Could not load the invite links.");
+      box.appendChild(p);
+      return;
+    }
+    for (const v of rows) {
+      const row = document.createElement("div"); row.className = "rsinvrow";
+      const meta = document.createElement("div"); meta.className = "meta";
+      const a = document.createElement("span"); a.textContent = "By " + (v.by || "someone in the room");
+      const b = document.createElement("span"); b.className = "sub";
+      b.textContent = "Ends in " + invLeft(v.exp) + " \u00b7 " + (v.uses || 0) + (v.uses === 1 ? " person joined" : " people joined");
+      meta.append(a, b);
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "ghost"; btn.dataset.inv = v.id; btn.textContent = "Revoke";
+      row.append(meta, btn);
+      box.appendChild(row);
+    }
+  }
+  async function rsInvLoad() {
+    if (!rsEl || !rsSlug) return;
+    const sec = rsEl.querySelector(".rsinv");
+    const r = roomsMinter.get(rsSlug) || lastChannelList.find((x) => x.slug === rsSlug) || { slug: rsSlug };
+    sec.hidden = !authSecured || rsSlug === LOBBY || roomSettingsRole(r) === "named";
+    if (sec.hidden) return;
+    const slug = rsSlug;
+    const d = await rsInvCall("/api/invites", { room: slug });
+    if (slug === rsSlug) rsInvPaint(d);
+  }
+  async function rsInvRevoke(body) {
+    const slug = rsSlug;
+    if (!slug) return;
+    const d = await rsInvCall("/api/invite/revoke", { room: slug, ...body });
+    if (!d.ok) { rsEl.__say(d.error, true); return; }
+    rsEl.__say(d.revoked ? (d.revoked === 1 ? "Invite link revoked." : d.revoked + " invite links revoked.") : "Nothing to revoke.");
+    if (slug === rsSlug) rsInvPaint(d);
   }
   function rsPaint() {
     if (!rsEl || !rsSlug) return;
@@ -14126,12 +14338,14 @@
     rsEl.querySelector(".rscode").value = "";
     rsEl.__say("");
     rsPaint();
+    rsInvLoad();   // 0.21.75
     rsEl.hidden = false;
     document.addEventListener("keydown", rsEl.__key, true);
     try { rsEl.querySelector(".rsname").focus(); } catch {}
     roomsMinterPoll().then(() => rsPaint()).catch(() => {});
   }
-  window.__roomSettings = { open: (slug) => openRoomSettings(lastChannelList.find((r) => r.slug === slug) || roomsMinter.get(slug) || { slug }), role: (slug) => roomSettingsRole(lastChannelList.find((r) => r.slug === slug) || { slug }), post: rsPost };   // rig
+  window.__roomSettings = { open: (slug) => openRoomSettings(lastChannelList.find((r) => r.slug === slug) || roomsMinter.get(slug) || { slug }), role: (slug) => roomSettingsRole(lastChannelList.find((r) => r.slug === slug) || { slug }), post: rsPost,
+    invites: (slug) => rsInvCall("/api/invites", { room: slug }), revoke: (slug, body) => rsInvCall("/api/invite/revoke", { room: slug, ...body }) };   // rig
   function sbCloseRoom(rec) {
     if (!canCloseRoom(rec)) return;
     const key = myChannels().find((r) => r.slug === rec.slug)?.roomKey || null;
@@ -15662,6 +15876,48 @@
   }
 
   function gateMsg(m) { joinEls.joinMsg.textContent = m || ""; }
+  // 0.21.75: the gate in invite mode -- "You're invited to <room>", only the name (no relay, room, access code or room code)
+  function gateInvitePaint() {
+    const inv = inviteGet();
+    const on = !!inv && joinState !== "joined";
+    joinEls.joinGate.classList.toggle("inv", on);
+    const t = document.getElementById("joinInvRoom");
+    if (t) t.textContent = on ? roomTitle(inv.room) : "";
+    return on;
+  }
+  // 0.21.75: an invite link handed to this KASTR -- kastr://join?... started the app (or reached the one already running);
+  // kastr_serve holds it for this machine's page, which takes it once (GET /api/invite/pending, loopback)
+  let invPendBusy = false;
+  async function invitePendingPoll() {
+    if (invPendBusy) return;
+    invPendBusy = true;
+    try {
+      const d = await fetch("/api/invite/pending", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const inv = d?.invite;
+      if (inv && INVITE_TOKEN_RE.test(String(inv.token || "")) && /^[a-z0-9-]{1,32}$/.test(String(inv.room || ""))) await inviteArrive(inv);
+    } finally { invPendBusy = false; }
+  }
+  async function inviteArrive(inv) {
+    const room = String(inv.room);
+    if (joinState === "joined" && CHANNEL === room) { window.__toast?.("You are already in " + roomTitle(room), 4000, { level: "event" }); return; }
+    if (joinState === "joined") {
+      const ok = await kastrConfirm({ title: "Room invite", message: "You\u2019re invited to \u201c" + room + "\u201d. Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and join it?",
+        detail: "Your microphone will be muted and your camera turned off.", ok: "Join " + room, cancel: "Stay in " + roomTitle(CHANNEL) });
+      if (!ok) return;
+    }
+    inviteSet({ token: inv.token, room, at: Date.now() });
+    if (joinState === "joined") leaveMeeting();   // -> the gate, in invite mode
+    const cur = urlInput.value.trim();
+    const key = (u) => { try { const x = new URL(relayAddr(u)); return x.protocol + "//" + x.host + x.pathname.replace(/[/]+$/, ""); } catch { return String(u || ""); } };
+    if (inv.relay && key(inv.relay) !== key(cur)) {
+      const name = relayNameOf(inv.relay) || relayLabel(inv.relay), here = relayNameOf(cur) || relayLabel(cur);
+      const sw = await kastrConfirm({ title: "Room invite", message: "This invite is for a room on " + name + ". Switch to " + name + "?",
+        detail: "You are connected to " + here + ". Relays of the same fleet open each other\u2019s rooms, so staying may work too.", ok: "Switch", cancel: "Stay on " + here });
+      if (sw) await gateRelayApply(inv.relay, { keepCodes: true });
+    }
+    if (joinState === "prejoin") gateShow();
+  }
+  window.__inviteArrive = (inv) => inviteArrive(inv);   // rig
 
   function gateButtons(enabled) {
     for (const k of ["joinBtn", "joinMicBtn", "joinVidBtn"]) {
@@ -16132,6 +16388,7 @@
     gateButtons(true);
     gateMsg("");
     armPubWait();
+    gateInvitePaint();   // 0.21.75
     // A rejoin ticket means this gate is a formality: restore the saved
     // name/toggles and join the saved room as soon as the publish module
     // is up. Failure clears the ticket and leaves the normal gate.
@@ -16196,6 +16453,7 @@
     joinEls.joinPrevOff.querySelector(".ji").innerHTML = icon("camOff");
     joinEls.joinGate.hidden = false;
     gateMsg(isViewerMode() ? "Pick a room to watch." : lastJoin()?.room ? "Pick a room and press Join." : "");   // 0.11.0 / 0.12.0
+    if (gateInvitePaint()) gateMsg("Enter your name and press Join.");   // 0.21.75
     // 0.12.0: camera feeds the server kept publishing (or republished at launch)
     if (!isViewerMode() && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) {
       fetch("/api/rtsp/persist", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => {
@@ -16289,7 +16547,14 @@
 
     // Channel + advisory password first: the relay commits read the slug.
     let slug, rec = null;
-    if (rejoinRec) {
+    const inv = inviteGet();   // 0.21.75: an invite link -- its room; the minter checks the link (no code checks here)
+    if (inv && (!rejoinRec || channelSlug(rejoinRec.room) === inv.room)) {
+      slug = inv.room;
+      rec = lastChannelList.find((r) => r.slug === slug) ?? null;
+      joinEls.joinPwd.value = "";   // a room code typed for another room never rides along (nor into kastr.lastjoin)
+      if (!profile && !joinEls.joinName.value.trim()) { joinEls.joinName.classList.add("bad"); return joinFail("Enter your name first."); }
+      joinEls.joinName.classList.remove("bad");
+    } else if (rejoinRec) {
       // Silent rejoin: the saved room wins over whatever the picker shows.
       slug = channelSlug(rejoinRec.room);
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
@@ -16336,6 +16601,14 @@
           throw new Error("the relay's token service did not answer in 15 s");   // 0.21.18
       } catch (e) {
         const msg = String(e?.message || e);
+        if (inv && /invite link/i.test(msg)) {   // 0.21.75
+          if (/hub|try again/i.test(msg)) return joinFail("The invite could not be checked right now \u2014 try again in a moment.");
+          inviteSet(null); gateInvitePaint();
+          return joinFail(/expired/i.test(msg) ? "This invite link has expired \u2014 ask for a new one."
+            : /revoked/i.test(msg) ? "This invite link was revoked \u2014 ask for a new one."
+            : /is for room/i.test(msg) ? "This invite link is for another room."
+            : "This invite link is not valid \u2014 ask for a new one.");
+        }
         return joinFail(/removed from this room/i.test(msg) ? "You were removed from this room by an admin \u2014 try again later."   // 0.17.0
           : /wrong access code/i.test(msg) ? "Wrong access code for this relay."
           : /wrong room code/i.test(msg) ? "Wrong room code."
@@ -16531,8 +16804,14 @@
     let ticket = null;
     try { ticket = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
     // 0.12.0: a publisher box with a remembered room never waits on the profile modal
-    if (!profile && !(ticket && ticket.room) && !(isPublisherMode() && lastJoin()?.room)) openProfile(true, gateShow);
+    if (!profile && !(ticket && ticket.room) && !(isPublisherMode() && lastJoin()?.room) && !inviteGet()) openProfile(true, gateShow);   // 0.21.75: an invited guest gives a name at the gate
     else gateShow();
+    document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); });   // 0.21.75
+    if (!IS_WEB && gateIsLoopback()) {   // 0.21.75: an invite link handed to this KASTR (kastr:// started the app, or a second launch)
+      invitePendingPoll();
+      setInterval(invitePendingPoll, 4000);
+      window.addEventListener("focus", invitePendingPoll);
+    }
   }
   // 0.12.0: the mode shapes the gate, so the gate waits for it (one local fetch, capped at 1.5 s)
   pageModeReady.then(() => { try { applyPageMode(); } catch {} initJoinGate(); });

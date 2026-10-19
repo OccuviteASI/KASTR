@@ -59,6 +59,7 @@ PAGES = [
     "stats.html", "relay.html",
     "watch.html", "manifest.webmanifest",   # 0.17.0: the fMP4 fallback player + the PWA manifest
     "sw.js",                                 # 0.20.0: the service worker (offline shell for browser clients)
+    "join.html",                             # 0.21.75: where a room invite link lands (opens the app, else the web page)
 ]
 HELPERS = [
     ("ffmpeg", "RTSP ingest"),

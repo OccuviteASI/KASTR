@@ -117,6 +117,58 @@ def version_stamp():
 
 
 
+# ---- 0.21.75: room invite links -- the app hand-off ------------------------------------------------------------------
+# Kenton: "the link opens the installed KASTR app if present, otherwise the host's web page". The /join page tries
+# kastr://join?i=<token>&room=<slug>&relay=<relay>; Windows starts KASTR.exe --invite "<that URL>" (kastr.py registers the
+# scheme). A fresh start sets it here before the window opens; a second launch POSTs it to the running instance
+# (/api/invite/pending, loopback). The page takes it ONCE (GET, loopback) within INVITE_PENDING_S -- an update relaunch
+# re-runs argv, and kastr.py strips the invite from argv so it is never replayed.
+INVITE_PENDING = [None]
+INVITE_PENDING_S = 120
+_INVITE_TOKEN_RE = re.compile(r"^ki-[0-9a-f]{8}-[A-Za-z0-9_-]{32,64}$")
+
+
+def invite_parse(url):
+    """kastr://join?i=..&room=..&relay=.. (or a /join#i=.. link, or ?invite=) -> {token, room, relay} or None."""
+    s = str(url or "").strip()[:2048]
+    if not s:
+        return None
+    q = ""
+    for sep in ("#", "?"):
+        if sep in s:
+            q = s.split(sep, 1)[1]
+            break
+    try:
+        d = parse_qs(q.replace("#", "&"))
+    except Exception:
+        return None
+    tok = ((d.get("i") or d.get("invite") or [""])[0]).strip()
+    room = ((d.get("room") or [""])[0]).strip().lower()
+    relay = ((d.get("relay") or [""])[0]).strip()
+    if not _INVITE_TOKEN_RE.match(tok) or not kastr_relay.SLUG_RE.match(room) or room == kastr_relay.LOBBY_SLUG:
+        return None
+    if relay and not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]{1,260}(/[A-Za-z0-9._~/-]{0,64})?$", relay):
+        relay = ""
+    return {"token": tok, "room": room, "relay": relay}
+
+
+def invite_pending_set(url):
+    """-> True when the URL was a usable invite (kept for the page to take within INVITE_PENDING_S)."""
+    inv = invite_parse(url)
+    if inv is None:
+        return False
+    INVITE_PENDING[0] = dict(inv, at=time.time())
+    return True
+
+
+def invite_pending_take():
+    """The pending invite, once (None when there is none or it is older than INVITE_PENDING_S)."""
+    inv, INVITE_PENDING[0] = INVITE_PENDING[0], None
+    if not inv or time.time() - float(inv.get("at") or 0) > INVITE_PENDING_S:
+        return None
+    return {k: inv[k] for k in ("token", "room", "relay")}
+
+
 def autorun_state():
     """Is KASTR registered to start with this machine? Per-user, no admin.
     Windows: HKCU Run key; Linux: ~/.config/autostart. Frozen builds only
@@ -3621,8 +3673,30 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
 
+        def _invite_pending(self, method):
+            """0.21.75: the app hand-off of an invite link -- this machine only, never another site's page (Origin /
+            Sec-Fetch-Site), and taken once."""
+            if not self._local():
+                return self._deny("invite hand-off")
+            origin = str(self.headers.get("Origin") or "")
+            site = str(self.headers.get("Sec-Fetch-Site") or "")
+            if (origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin)) or site not in ("", "same-origin", "none"):
+                return self._json_plain(403, {"error": "this machine's own KASTR pages only"})
+            if method == "POST":
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    url = str(json.loads(self.rfile.read(min(n, 8192)) or b"{}").get("url") or "")
+                except Exception:
+                    url = ""
+                ok = invite_pending_set(url)
+                _note("invite: an invite link was handed to this KASTR (%s)" % ("kept for the page" if ok else "not usable"))
+                return self._json_plain(200 if ok else 400, {"ok": ok})
+            return self._json_plain(200, {"invite": invite_pending_take()})
+
         def do_POST(self):
             path0 = self.path.split("?", 1)[0]
+            if path0 == "/api/invite/pending":      # 0.21.75: a second launch hands its invite link to this one
+                return self._invite_pending("POST")
             if path0 in ("/api/rooms/fed", "/api/ondemand/forward", "/api/hub/handover"):   # 0.21.25: federation calls reach the
                 return self._auth_proxy("POST")                                            # minter (the chat branch 404ed them)
             if path0 == "/api/rooms/board":         # 0.21.63: the room board lives at the minter (token-checked there)
@@ -3658,6 +3732,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/clients/checkin",                              # 0.21.50: an app says who it is to the relay it uses
                          "/api/clients/logs", "/api/logs/upload",             # 0.21.51: logs collected at the hub
                          "/api/vehicle",                                      # 0.21.63: a vehicle's key -> a publish token
+                         "/api/invite", "/api/invite/revoke", "/api/invites",  # 0.21.75: room invite links (the minter keeps them)
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
@@ -4526,8 +4601,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/mobile":
                 return self._mobile()
             if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans", "/api/spokes/link",   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans; 0.21.25: + spokes/link
-                        "/api/xshare"):                                                         # 0.21.41: the cross-room listings into a room
+                        "/api/xshare",                                                          # 0.21.41: the cross-room listings into a room
+                        "/api/invites"):                                                        # 0.21.75: a room's live invite links
                 return self._auth_proxy("GET")
+            if path == "/api/invite/pending":                                 # 0.21.75: the app hand-off (this machine only)
+                return self._invite_pending("GET")
             if path == "/api/files":
                 return self._file_list(parse_qs(urlparse(self.path).query))
             if path.startswith("/api/files/"):
@@ -4704,12 +4782,25 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return
                 if kastr_rtsp.handle_stream(self, bridge, path):
                     return
+            if path in ("/join", "/join.html"):
+                return self._join_page()                                      # 0.21.75: an invite link lands here
             if self._web_page_refused():   # 0.21.32
                 return
             body = self._rewritten()
             if body is None:
                 return super().do_GET()
             self._serve_rewritten(body, include_body=True)
+
+        def _join_page(self, head=False):
+            """0.21.75: /join#i=<token>&room=<slug> -- opens the KASTR app (kastr://) when it is installed, else this host's
+            web page. Served even when web clients are off (the app hand-off still works; the browser button hides)."""
+            q = self.path.split("?", 1)[1] if "?" in self.path else ""
+            self.path = "/join.html" + ("?" + q if q else "")
+            body = self._rewritten()
+            if body is None:
+                return self.send_error(404, "join page missing")
+            body = body.replace(b"__KASTR_WEB_PAGE__", b"off" if web_page_off() else b"on")
+            self._serve_rewritten(body, include_body=not head)
 
         def do_HEAD(self):
             if self.path.split("?", 1)[0].startswith("/api/chat/"):   # 0.12.0: attachments
@@ -4718,6 +4809,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._file_get(self.path.split("?", 1)[0][len("/api/files/"):], head=True)
             if self.path.split("?", 1)[0].startswith("/api/media/"):   # 0.8.13
                 return self._media_get(self.path.split("?", 1)[0][len("/api/media/"):], head=True)
+            if self.path.split("?", 1)[0] in ("/join", "/join.html"):   # 0.21.75
+                return self._join_page(head=True)
             if self._web_page_refused(head=True):   # 0.21.32
                 return
             body = self._rewritten()

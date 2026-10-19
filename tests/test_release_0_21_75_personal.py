@@ -336,7 +336,7 @@ class Page(unittest.TestCase):
         self.assertIn("switchRoom({ slug: p.slug, personal: true }, p.code);", p)
         self.assertIn("try { personalCardPaint(); } catch {}   // 0.21.75", p)
         # other people's personal rooms never reach the rail
-        self.assertIn('.filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug))', p)
+        self.assertIn('.filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug)   // 0.21.75: never a personal room', p)
         self.assertIn('slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75', p)
         # nothing announced in My room: no registry, no ember, no public presence / state
         self.assertIn('if (chan !== "main" && !isPersonalSlug(chan)) {', p)

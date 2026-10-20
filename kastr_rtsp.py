@@ -81,6 +81,26 @@ PROBE_RETRY_S = 30.0
 # each camera's cross-room listings (POST /api/xshare at its relay's minter, the 0.21.41 registry) -- so they hold with no
 # window open and come back after a restart (rtsp-feeds.json `xs` / `xsCodes` per feed record).
 XS_TICK_S = 60           # every listing is re-POSTed this often (the relay keeps one XSHARE_TTL = 180 s)
+XS_AIR_CHECK_S = 10      # 0.21.76: how often the loop looks for a camera that started or stopped streaming
+XS_DARK_S = 20           # 0.21.76: a camera with no data this long is withdrawn from its other rooms
+XS_START_GRACE_S = 30    # ... except in its first seconds (no byte yet is not "dark" yet)
+
+
+def xs_on_air(pub, now=None):
+    """0.21.76 (Kenton: streams that "only run sometimes ... never go away when nothing is streamed, they always show
+    connecting" in the rooms they are also shown in): a camera is listed in its other rooms only while it really streams --
+    or while it sleeps because nobody watches (0.21.73), since a viewer's click there wakes it. A pair that runs against a
+    dark camera, an RTMP ingest with no device pushing, a stopped share: withdrawn until data flows again."""
+    now = time.time() if now is None else now
+    if getattr(pub, "standby", False) and getattr(pub, "sleepy", False):
+        return True
+    if not getattr(pub, "running", False):
+        return False
+    fa = getattr(pub, "flowingAt", None)
+    if fa and now - fa < XS_DARK_S:
+        return True
+    since = getattr(pub, "since", None)
+    return bool(not fa and since and now - since < XS_START_GRACE_S)
 XS_ROOMS_MAX = 16        # rooms one camera may show in (kastr_relay XSHARE_TARGETS_MAX)
 XS_TOKEN_MIN_S = 600     # a cached member token is re-minted once it ends within this
 HOME_PREFIX = "box-"     # a box's hidden home room: box-<host slug> (pages leave box-* rooms out of every list)
@@ -3232,18 +3252,28 @@ class Bridge:
             self._xs_ensure()
         self._xs_evt.set()
 
+    def _xs_air(self, now):
+        """0.21.76: which listed cameras are on the air right now (a change runs a listing round at once)."""
+        return frozenset(p.broadcast for p in list(self._pubs.values())
+                         if getattr(p.feed, "xs", None) and p.role == "main" and xs_on_air(p, now))
+
     def _xs_loop(self):
+        last, air = 0.0, None
         while True:
             if not self._xs_wanted():
                 with self._lock:
                     self._xs_thread = None
                 return
-            try:
-                self.xs_tick()
-            except Exception as e:
-                self.log("rtsp: cross-room listing round failed: %s" % e)
-            self._xs_evt.wait(XS_TICK_S)
-            self._xs_evt.clear()
+            now = time.time()
+            cur = self._xs_air(now)
+            if self._xs_evt.is_set() or cur != air or now - last >= XS_TICK_S:   # 0.21.76: a camera started / stopped streaming
+                self._xs_evt.clear()
+                air, last = cur, now
+                try:
+                    self.xs_tick()
+                except Exception as e:
+                    self.log("rtsp: cross-room listing round failed: %s" % e)
+            self._xs_evt.wait(XS_AIR_CHECK_S)
 
     def _xs_token(self, base, room, access, code, mint, now):
         """-> (status, member token or "" (an open relay), why). Cached until XS_TOKEN_MIN_S before it ends; a mint the
@@ -3303,7 +3333,10 @@ class Bridge:
                     rooms = getattr(pub.feed, "xs", None)
                     rooms = list(rooms) if isinstance(rooms, list) else []
                     if rooms and not pub.stopping and not pub.suspended and pub.role == "main":
-                        want[pub.broadcast] = (pub, rooms)
+                        if xs_on_air(pub, now):
+                            want[pub.broadcast] = (pub, rooms)
+                        else:   # 0.21.76: not streaming -- withdrawn below, shown again as soon as data flows
+                            pub.feed.xs_state = {r: "not streaming now \u2014 shown when it is" for r in rooms}
             out = {}
             for path, rec in list(self._xs_listed.items()):   # withdrawals first: a dropped room, a camera gone or off
                 drop = sorted(rec["rooms"] - (set(want[path][1]) if path in want else set()))

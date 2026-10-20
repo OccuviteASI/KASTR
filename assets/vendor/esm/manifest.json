@@ -37,7 +37,7 @@
   "@moq/publish@0.5.2.target-es2022.mjs": "126603cf834df003bc0084336bafed0030ad7f8988014a3302c63ef9a83368ff",
   "@moq/publish@0.5.2/element.target-es2022.mjs": "e3640f2f41e5987212e10787aec93cab773b3cae1dcc603f64f20ea438d9783b",
   "@moq/publish@0.5.2/es2022/element.mjs": "b2b160cbff6c481e9802edf74038d89e4e86688b4b9996da78829a729cd405d0",
-  "@moq/publish@0.5.2/es2022/encoder-CjcsUSCu.mjs": "94c613ed8e2402e60a59b6093156f18ae63e5c12985c4a78d49d29b3dcd0ae45",
+  "@moq/publish@0.5.2/es2022/encoder-CjcsUSCu.mjs": "9f285922e8247f7f6f91dff16b91a4760c636334a447b51c51f2f6f3c6acfd7a",
   "@moq/publish@0.5.2/es2022/microphone-g3R3T8__.mjs": "62c47439a070177ebfe24f253e6750fff1d9dd2a83997f58ad1863acd1c901c8",
   "@moq/publish@0.5.2/es2022/publish.mjs": "b82a11fb6935116ad8be506f1a40c8135b19dbc5b5b31be92f944b1902bb7907",
   "@moq/publish@0.5.2/es2022/video-B0t1PcDc.mjs": "89e0c352dafb6f1650ba797be3cef6957a93a50c3136a0e63ef14361223866df",
@@ -47,8 +47,8 @@
   "@moq/signals@^0.2.5.target-es2022.mjs": "ba65041a20a8f1388c7c2d750f5d8a2b8e137ebfe8838af1ae0a237a19dc76c5",
   "@moq/watch@0.6.2.target-es2022.mjs": "7c8352d9ec6d6aed025ab3c76366ba8f354855d0617258b5e024f58c78ee7a04",
   "@moq/watch@0.6.2/element.target-es2022.mjs": "cf1052e65bcf9ca29bb110e8c6475792e2e4cb92fd46f3e124b1164bb62adbad",
-  "@moq/watch@0.6.2/es2022/element.mjs": "3e254a586c6ae4baa6e2abcf069d9d4997e1dbf597b8aeff7101eeb233af4168",
-  "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs": "ffcfca9b86578bc2973342e1cb47e302804f2443749609659b3adeef910215fb",
+  "@moq/watch@0.6.2/es2022/element.mjs": "4b17601f4487f8f04405b8111ca3e1d7d45903d0aac23f18a512b7126c45f25e",
+  "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs": "49d20e9fcad6f8a10b572507c82f83e041a3c267d1eb8081d5e4500a61ca5ac8",
   "@moq/watch@0.6.2/es2022/watch.mjs": "bcfd182fa8a6ef90b02b46cb5277f702416f97e546ab2c815841b1933fc6e067",
   "@moq/web-socket-stream@0.1.1/es2022/web-socket-stream.mjs": "612847a55b590836d4e156aea64e7ed8dddc93542f8e68b17e8540e04415a6b0",
   "@moq/web-socket-stream@^0.1.1.target-es2022.mjs": "65b7590adb1b51bec802d1efbd170af90c0cbe3e24e145e05366a56243d816e0",
@@ -82,7 +82,10 @@
  "patches": [
   "audio-maxage-floor",
   "catalog-delay-cap",
-  "hevc-square-dar"
+  "hevc-square-dar",
+  "watch-priority-element",
+  "watch-priority",
+  "publish-bitrate-floor"
  ],
  "pins": {
   "https://esm.sh/@moq/json": "/@moq/json@^0.4.2",

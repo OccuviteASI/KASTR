@@ -147,6 +147,41 @@ PATCHES = [
          'i.configure({codec:this.config.codec,description:this.config.description?w.Hex.toBytes(this.config.description):void 0,/* KASTR-PATCH: hevc-square-dar */displayAspectWidth:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectWidth),displayAspectHeight:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectHeight)'),
         ('i.configure({codec:this.config.codec,description:r,displayAspectWidth:this.config.displayAspectWidth,displayAspectHeight:this.config.displayAspectHeight',
          'i.configure({codec:this.config.codec,description:r,/* KASTR-PATCH: hevc-square-dar */displayAspectWidth:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectWidth),displayAspectHeight:(this.config.displayAspectWidth===this.config.displayAspectHeight&&this.config.codedWidth!==this.config.codedHeight?void 0:this.config.displayAspectHeight)'),
+     ]},    # 0.21.76 (lab 2026-10-20: moq-relay 0.17 honours SUBSCRIBER priority on both legs -- the relay -> viewer leg and the
+    # spoke -> hub cluster leg, updated live; with equal priorities the FIRST subscription wins a thin link). The page ranks
+    # every tile (spotlit > grid > share > person) through a `priority` attribute on <moq-watch>.
+    {"id": "watch-priority-element",
+     "file": "@moq/watch@0.6.2/es2022/element.mjs",
+     "why": "a `priority` attribute (0-250) on <moq-watch>, passed to the player as a Signal (the element throws on an attribute it lists but does not handle)",
+     "edits": [
+        ('"catalog-format","captions"]', '"catalog-format","captions","priority"]'),
+        ('captions:new o(void 0)}', 'captions:new o(void 0),priority:new o(void 0)}'),
+        ('else if(t==="captions")this.controls.captions.set(e||void 0);else throw',
+         'else if(t==="captions")this.controls.captions.set(e||void 0);else if(t==="priority"){/* KASTR-PATCH: watch-priority-element */let p=e==null||String(e).trim()===""?void 0:Math.round(Number(e));this.controls.priority.set(Number.isFinite(p)?Math.max(0,Math.min(250,p)):void 0)}else throw'),
+     ]},
+    {"id": "watch-priority",
+     "file": "@moq/watch@0.6.2/es2022/player-DqpNnBDT.mjs",
+     "why": ("the element's priority reaches the video and audio SUBSCRIBEs (audio +5 above its own video) and a change is "
+             "sent live as a SUBSCRIBE_UPDATE (the subscribe helper reads it inside its effect); the catalog goes first at 255 "
+             "(the library's 100 sat below every ranked video)"),
+     "edits": [
+        ('captions:m(t.captions)}),this.broadcast=new ee(this.in)', 'captions:m(t.captions),priority:m(t.priority)}),this.broadcast=new ee(this.in)'),
+        ('catalog:m(t?.catalog)},this.#s.run(', 'catalog:m(t?.catalog),priority:m(t?.priority)},this.#s.run('),
+        ('function $(t,e){if(t.get(e.broadcast.closed)!==void 0)return;let i=e.broadcast.track(e.track).subscribe({priority:e.priority,maxAge:e.maxAge.peek()});return t.cleanup(()=>i.close()),t.run(n=>{i.update({priority:e.priority,maxAge:n.get(e.maxAge)})}),i}',
+         'function $(t,e){if(t.get(e.broadcast.closed)!==void 0)return;/* KASTR-PATCH: watch-priority */let K=n=>{let p=e.kastrPriority?(n?n.get(e.kastrPriority):e.kastrPriority.peek()):void 0;return typeof p=="number"&&Number.isFinite(p)?Math.max(0,Math.min(255,Math.round(p+(e.kastrBias??0)))):e.priority};let i=e.broadcast.track(e.track).subscribe({priority:K(),maxAge:e.maxAge.peek()});return t.cleanup(()=>i.close()),t.run(n=>{i.update({priority:K(n),maxAge:n.get(e.maxAge)})}),i}'),
+        ('new ke({sync:this.sync,broadcast:r,track:s,config:a.decoder,stats:this.#t.stats,catalog:n.out.catalog})',
+         'new ke({sync:this.sync,broadcast:r,track:s,config:a.decoder,stats:this.#t.stats,catalog:n.out.catalog,kastrPriority:n.in.priority})'),
+        ('this.stats=t.stats,this.#i.run(this.#n.bind(this))', 'this.stats=t.stats,this.kastrPriority=t.kastrPriority,this.#i.run(this.#n.bind(this))'),
+        ('$(t,{broadcast:this.broadcast,track:this.track,priority:b.PRIORITY.video', '$(t,{broadcast:this.broadcast,track:this.track,kastrPriority:this.kastrPriority,priority:b.PRIORITY.video'),
+        ('$(t,{broadcast:a,track:i,priority:b.PRIORITY.audio', '$(t,{broadcast:a,track:i,kastrPriority:e.in.priority,kastrBias:5,priority:b.PRIORITY.audio'),
+        ('subscribe({priority:b.PRIORITY.catalog})', 'subscribe({priority:255})'),
+     ]},    {"id": "publish-bitrate-floor",
+     "file": "@moq/publish@0.5.2/es2022/encoder-CjcsUSCu.mjs",
+     "why": ("0.21.76: the grid composite joins the library's bandwidth allocator (the send-rate estimate clamps each encoder's "
+             "bitrate) -- with a floor: an encoder given `kastrMinBitrate` never drops below it (Kenton's grids: 600 kbps), so a "
+             "weak uplink sheds people's cameras before the picture of every camera at once"),
+     "edits": [
+        ('n!=null&&(i=Math.min(i,n))', '/* KASTR-PATCH: publish-bitrate-floor */n!=null&&(i=Math.max(Math.min(i,n),Math.min(i,this.kastrMinBitrate||0)))'),
      ]},
 ]
 

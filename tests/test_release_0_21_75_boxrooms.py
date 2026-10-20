@@ -90,6 +90,9 @@ class FakeHandler:
         return json.loads(self.wfile.getvalue().decode() or "null")
 
 
+SAVED_ON_AIR = kastr_rtsp.xs_on_air   # 0.21.76: the real rule (Sandbox stubs it)
+
+
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self._saved = [(kastr_rtsp.subprocess, "Popen", kastr_rtsp.subprocess.Popen),
@@ -97,7 +100,8 @@ class Sandbox(unittest.TestCase):
                        (kastr_rtsp.Bridge, "sweep_orphans", kastr_rtsp.Bridge.sweep_orphans),
                        (kastr_rtsp.Publisher, "start", kastr_rtsp.Publisher.start),
                        (kastr_rtsp, "mint_member", kastr_rtsp.mint_member),
-                       (kastr_relay, "is_local", kastr_relay.is_local)]
+                       (kastr_relay, "is_local", kastr_relay.is_local),
+                       (kastr_rtsp, "xs_on_air", kastr_rtsp.xs_on_air)]
 
         def no_spawn(*a, **k):
             raise AssertionError("a process was spawned")
@@ -106,6 +110,7 @@ class Sandbox(unittest.TestCase):
         kastr_rtsp.Bridge.sweep_orphans = lambda self: 0
         kastr_rtsp.Publisher.start = lambda self: None
         kastr_relay.is_local = lambda h: True
+        kastr_rtsp.xs_on_air = lambda pub, now=None: getattr(self, "on_air", True)   # 0.21.76: these pairs never start (on air unless a test says not)
         self.relay = FakeRelay(locked={"rl": "1234"}, banned={"rbn"})
         kastr_rtsp.mint_member = self.relay.mint      # set_xs ticks with the module's minter
         self.tmp = tempfile.TemporaryDirectory()
@@ -332,6 +337,51 @@ class SleepingListedCameras(unittest.TestCase):   # 0.21.75 integration lab: a b
         self.assertIn('(t.watch.getAttribute("visible") !== "never" || t.noCatalog)) t.watch.setAttribute("url", tileUrl(name)); }, 400);', p)   # resubscribe restores a parked tile
         self.assertIn('if (!t.odResub && now - t.odAt > 6000) { t.odResub = true; resubscribe(name, "a camera shown here from another room was asleep"); }', p)
         self.assertIn("if (isHomeRoom(r.slug)) continue;   // 0.21.75: the box's own home room is the \"No room\" choice above", p)
+
+
+class OnAirOnly(Sandbox):   # 0.21.76 (Kenton: streams that "only run sometimes ... always show connecting" in their other rooms)
+    def test_a_dark_camera_is_withdrawn_and_comes_back(self):
+        b = self.bridge()
+        f1 = self.camera(b)
+        f1.xs = ["ra", "rb"]
+        self.tick(b)
+        self.assertEqual(len(self.relay.lists()), 1)
+        self.on_air = False                                                    # the camera went dark / the device stopped pushing
+        self.tick(b)
+        self.assertEqual([(s[1]["path"], s[1]["to"]) for s in self.relay.stops()], [(PATH1, ["ra", "rb"])])
+        self.assertTrue(all("not streaming" in v for v in f1.xs_state.values()))
+        n = len(self.relay.lists())
+        self.tick(b)
+        self.assertEqual(len(self.relay.lists()), n)                           # nothing listed while dark
+        self.on_air = True
+        self.tick(b)
+        self.assertEqual(len(self.relay.lists()), n + 1)                       # listed again once data flows
+        self.assertEqual(f1.xs_state, {"ra": "ok", "rb": "ok"})
+
+
+class OnAirRule(unittest.TestCase):
+    def test_rule(self):
+        class P:
+            running, standby, sleepy, flowingAt, since = True, False, False, None, None
+        p, now = P(), 1000.0
+        p.flowingAt = 995.0
+        self.assertTrue(SAVED_ON_AIR(p, now))                                  # data in the last 20 s
+        p.flowingAt = 970.0
+        self.assertFalse(SAVED_ON_AIR(p, now))                                 # dark for 30 s
+        p.flowingAt, p.since = None, 990.0
+        self.assertTrue(SAVED_ON_AIR(p, now))                                  # just started: its first bytes may still come
+        p.since = 900.0
+        self.assertFalse(SAVED_ON_AIR(p, now))                                 # an RTMP ingest nobody pushes to
+        p.running, p.standby, p.sleepy = False, True, True
+        self.assertTrue(SAVED_ON_AIR(p, now))                                  # asleep (0.21.73) -- a click there wakes it
+        p.sleepy = False
+        self.assertFalse(SAVED_ON_AIR(p, now))
+
+    def test_page(self):
+        with open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
+            pg = f.read()
+        self.assertIn("if (x.listed !== false && now - x.offSince > 20000) { x.listed = false; xsPost(p, { stop: true, to: [...x.rooms] }); }", pg)
+        self.assertIn("if (suppressed.has(p)) {", pg)
 
 
 if __name__ == "__main__":

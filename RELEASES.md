@@ -2,6 +2,15 @@
 
 What changed in each build, newest first.
 
+## v0.21.76 — what matters wins on a thin link, and streams in other rooms only while they stream
+
+**What matters wins on a thin link (Kenton 2026-10-20: streaming quality ahead of 0.22).** A lab measurement showed the relay gives a higher-priority stream its full frame rate on a link too thin for everything, both from the relay to a viewer and from a spoke to the hub, while the lower one drops frames. With everything at the same priority, whichever stream was opened first won. KASTR now ranks every tile:
+- **On the stage (spotlit, opened, pinned): highest. Then grids, then shared screens and camera feeds, then people's cameras in the rail.** Each tile's sound sits just above its own picture, and room information (catalogs) always goes first.
+- The rank follows the stage live: open a camera and it moves to the top at once (the relays are told mid-stream).
+- **A grid's picture adapts to the uplink, with a floor:** the box's grid now steps its bitrate down when the upload can't keep up, but never below 600 kbps, so a weak uplink sheds detail before it loses the picture.
+
+**Streams shown in other rooms appear only while they stream (Kenton: "streams that are only running sometimes ... never go away when nothing is streamed, they always show connecting").** A camera, share or grid shown in other rooms (Show in rooms…, Also show in) is now listed there only while it is really on the air: it disappears about 20 seconds after it stops and comes back within about 10 seconds of starting again. Its room choices are kept. A box camera that is only asleep because nobody watched it (0.21.73) stays listed, since opening it wakes it.
+
 ## v0.21.75 — invite links, My room, boxes that share without a room, hide a camera in my grid view
 
 **Room invite links (Kenton: anyone in the room can copy one; 24 hours by default; the room's creator or an admin revokes them).** **Share invite** (People) now asks how long the link should work — 1 hour, 24 hours or 7 days — and copies it. Whoever opens the link joins that room with just their name: no access code, no room code.

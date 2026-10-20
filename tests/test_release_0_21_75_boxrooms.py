@@ -323,5 +323,16 @@ class Page(unittest.TestCase):
         self.assertIn("!xsServerPath(p)", mine)                                # the Share table never posts a box camera itself
 
 
+class SleepingListedCameras(unittest.TestCase):   # 0.21.75 integration lab: a box camera listed into another room wakes for viewers there
+    def test_wiring(self):
+        with open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
+            p = f.read()
+        self.assertIn("!inGrid.has(name) && !xsTiles.has(name)) || parkedStreams.has(name)) continue;", p)
+        self.assertIn("function odQuick() {", p)
+        self.assertIn('(t.watch.getAttribute("visible") !== "never" || t.noCatalog)) t.watch.setAttribute("url", tileUrl(name)); }, 400);', p)   # resubscribe restores a parked tile
+        self.assertIn('if (!t.odResub && now - t.odAt > 6000) { t.odResub = true; resubscribe(name, "a camera shown here from another room was asleep"); }', p)
+        self.assertIn("if (isHomeRoom(r.slug)) continue;   // 0.21.75: the box's own home room is the \"No room\" choice above", p)
+
+
 if __name__ == "__main__":
     unittest.main()

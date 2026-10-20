@@ -3062,7 +3062,9 @@
     log(why + " \u2014 re-subscribing: " + shortLabel(name));
     try {
       t.watch.removeAttribute("url");
-      setTimeout(() => { if (tiles.has(name) && !parkedStreams.has(name) && t.watch.getAttribute("visible") !== "never") t.watch.setAttribute("url", tileUrl(name)); }, 400);
+      // 0.21.75 (integration lab): ... or a tile that shows its face only because no catalog came yet (noCatalog parks the video at
+      // "never") -- it needs its url back, or a camera that was asleep when the tile opened never comes (the catalog arrives while parked)
+      setTimeout(() => { if (tiles.has(name) && !parkedStreams.has(name) && (t.watch.getAttribute("visible") !== "never" || t.noCatalog)) t.watch.setAttribute("url", tileUrl(name)); }, 400);
     } catch {}
     t.lastFrames = 0; t.framesSince = undefined; t.pictureStopped = false;
   }
@@ -13152,7 +13154,7 @@
       // 0.21.7: a camera registered on ANOTHER site is not in this relay host's list -- its low copy on the air with no
       // full copy says "on demand" just as well (the demand travels the federation from the relay host)
       const lowOnly = lowAvail.has(name) && !fullLive.has(name);
-      if ((!known.has(name) && !lowOnly && !inGrid.has(name)) || parkedStreams.has(name)) continue;
+      if ((!known.has(name) && !lowOnly && !inGrid.has(name) && !xsTiles.has(name)) || parkedStreams.has(name)) continue;   // 0.21.75: + a camera shown here from another room
       if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
       // 0.21.7: a rail thumbnail on the low copy asks for nothing (every viewer's rail would keep every camera awake);
       // the spotlit tile, a tile with no low copy, or the fallback player keeps the full pair alive
@@ -13162,6 +13164,21 @@
   }
   setInterval(odPoll, 10000);
   setInterval(odPulse, 15000);
+  // 0.21.75 (integration lab): a camera shown here from another room (a box's "Show in rooms", a pin in My room) may be asleep
+  // on its box (0.21.73: encode only while watched) -- a visible tile with no picture asks for it at once, and re-subscribes once
+  // when the camera has had time to start (the subscription made while it slept never delivers)
+  function odQuick() {
+    if (!window.__joinedChannel?.()) return;
+    const now = Date.now();
+    for (const [name, t] of tiles) {
+      if (!xsTiles.has(name) || parkedStreams.has(name) || t.cg) continue;
+      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none")) continue;   // watched -- NOT `visible` (noCatalog parks it)
+      if (hasPicture(t)) { t.odAt = 0; t.odResub = false; continue; }
+      if (!t.odAt) { t.odAt = now; odWake(name); continue; }
+      if (!t.odResub && now - t.odAt > 6000) { t.odResub = true; resubscribe(name, "a camera shown here from another room was asleep"); }
+    }
+  }
+  setInterval(odQuick, 3000);
   window.__ondemand = () => ({ feeds: odFeeds, wanted: [...odWanted.keys()], enabled: odOn });   // rig
 
   // ---- 0.18.0: the page's clock offset (per-stream latency reads it) -----------------------
@@ -16711,6 +16728,7 @@
     // picked on its row ("Show in rooms\u2026")
     if (isPublisherMode()) sel.appendChild(new Option("No room \u2014 this box only shares its cameras into the rooms I pick", "__home"));
     for (const r of list) {
+      if (isHomeRoom(r.slug)) continue;   // 0.21.75: the box's own home room is the "No room" choice above
       const n = r.count > 0 ? " \u2014 " + r.count + " here" : "";
       sel.appendChild(new Option(r.slug === LOBBY ? "Lobby" : r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));   // 0.21.60: the Lobby says nothing of who is there
     }

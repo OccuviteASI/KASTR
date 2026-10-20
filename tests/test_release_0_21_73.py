@@ -120,7 +120,7 @@ class SleepUnwatched(unittest.TestCase):
         p = read("moq-watch-lite.html")
         self.assertIn("const idle = !!slot.inGrid;", p)
         self.assertIn("const asleep = !tiles.has(fp) && !down && !!meta;", p)
-        self.assertIn("if ((!known.has(name) && !lowOnly && !inGrid.has(name)) || parkedStreams.has(name)) continue;", p)
+        self.assertIn("if ((!known.has(name) && !lowOnly && !inGrid.has(name) && !xsTiles.has(name)) || parkedStreams.has(name)) continue;", p)   # 0.21.75: + cross-room tiles
         self.assertIn("pi.running === false && !pi.standby && attempts >= GRID_EVICT_AFTER", p)
         self.assertNotIn("if (!odOn) return;   // 0.21.10: no demand leaves this page", p)
 

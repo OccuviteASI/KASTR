@@ -2,6 +2,32 @@
 
 What changed in each build, newest first.
 
+## v0.21.75 — invite links, My room, boxes that share without a room, hide a camera in my grid view
+
+**Room invite links (Kenton: anyone in the room can copy one; 24 hours by default; the room's creator or an admin revokes them).** **Share invite** (People) now asks how long the link should work — 1 hour, 24 hours or 7 days — and copies it. Whoever opens the link joins that room with just their name: no access code, no room code.
+- The link opens KASTR if it is installed on that computer (KASTR registers itself for kastr:// links each time it starts), otherwise the host's web page; phones go straight to the web page. If KASTR is set to another relay it asks "Switch to <relay>?" first.
+- **Room settings ▸ Invite links** (right-click the room, creator or admin) lists the links — who made each, when it ends, how many people joined — with **Revoke** and **Revoke all**. A revoked or expired link is refused at once on every relay of the fleet; people already in the room stay.
+- Invited people join as members who can share, never as admins; kicks and bans still apply; a wrong link counts towards the wrong-code lockout. Links are made and checked on the hub (a spoke refuses new joins by link while the hub is unreachable). The Lobby and personal rooms have no invite links.
+- **Lab check:** a link made on the hub and one made on a spoke each let a second browser join with only a name; Revoke turned a third browser away; an expired link was refused; with the hub stopped the spoke said so, and worked again when the hub came back.
+
+**My room (Kenton: "everyone gets a personal room no other user sees, where they set up their own views of feeds from other rooms"; kept on the hub so it follows you; your name + a personal code).** **More ▸ My room…** makes yours (pick a personal code, entered twice) or opens it on another device (name + code, entered once — the device remembers). It is the first card in your rooms list.
+- Nobody else sees it: it is in no list, and while you are in it KASTR announces nothing (no presence, no room entry). Getting in needs your personal code; an admin can reset a forgotten one.
+- Pin cameras from other rooms into it (**Pin to My room** on any tile or grid), spotlight them, arrange its grids and build cross-room grids there — all of it is stored on the hub, so it looks the same on every device you open it on.
+- **Lab check:** pins and a spotlight set on the hub showed up on a second device on a spoke after name + code; a third person never saw the room and could not get in; with the hub stopped, the spoke refused entry rather than guess.
+
+**Boxes that share without being in a room (Kenton chose: "Show in rooms…" per camera).** A Publisher or Publisher + relay box's join page has **No room — this box only shares its cameras into the rooms I pick**. The box then sits in a hidden room of its own (in no one's list, and nobody can make a room with such a name) and each camera row has **Show in rooms…** — pick any rooms (several per camera, a code for a locked room).
+- The cameras show in exactly those rooms — no box tile, labelled with the camera's name — and can be spotlit, pinned and used in grids like any shared camera.
+- The box's KASTR keeps them listed itself: they stay with the window closed and come back after a restart. A room that refuses (a wrong code, a kick) says why on the camera's row. A box already in a real room keeps working as before and gets the same per-camera rooms on top.
+- A grid composite can be shown in other rooms from its header the same way (while the box's window is open).
+- **Lab check:** camera 1 into rooms A and B, camera 2 into B — viewers saw exactly those, with no box tile and no hidden room in their lists; they stayed listed 200 s after the box window closed, and came back after the box restarted.
+
+**Hide a camera in my grid view (Kenton: "hide individual cameras in my grid view").** Right-click a grid cell ▸ **Hide <camera> for me**: the rest of the grid closes up around the gap, only for you, on this device. **Show hidden cameras (n)…** brings them back. It works on box grids (also in **Arrange this grid for me**, which can now remove and add back) and on cross-room grids; the hidden camera's own tile also leaves your rail.
+- **Lab check:** a viewer hid one of four cameras — the other three reflowed and clicks opened the right cameras; the other viewer still saw all four; it stayed hidden after a reload.
+
+**Fixed on the way:**
+- A camera that a box shows in another room (or one pinned in My room) wakes up when someone opens it there, even after it went to sleep with nobody watching (0.21.73 stops a converted camera's encode a minute after its last viewer). **Lab check:** with the box's cameras asleep and its window closed, opening one showed a picture within 5–13 s in 15 of 15 tries, on the hub and on a spoke.
+- A tile stuck on "connecting…" because no picture had arrived yet never got its re-subscribe (it was skipped while the tile showed the person's face). It now does — this could also leave a grid camera stuck after a slow start.
+
 ## v0.21.74 — a box keeps its window drawing and in its room
 
 **A box looks after its own window (Kenton: Mendon's grid "split into separate streams" and its room lost the play icon after a weekend alone; relaunching KASTR on Mendon fixed it).** A camera box's cameras are published by KASTR itself, so they stayed on the air — but the grid and the room's "on air" marks come from the box's window, and that window had stopped doing its job. Now, on a box (Publisher or Publisher + relay mode), KASTR watches its own window and reopens it when:

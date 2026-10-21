@@ -314,14 +314,16 @@ class SpokeConfig(unittest.TestCase):
     def test_spoke_relay_toml(self):
         r, d = self.relay({"hubCost": 40, "links": [{"url": "http://10.1.1.2:4443/", "cost": 3, "token": "l.t.k", "peer": "b-2", "name": "logan", "kind": "mesh"}]})
         cfg = rd(r._write_config(4443, True, True))
-        self.assertIn('connect = [{ url = "http://127.0.0.1:1/", cost = 40, token = "fed.tok.en" }]', cfg)   # no ?jwt= / ?cost= in the URL
+        # 0.21.78: the hub link moved from the static connect into relay-peers.json (a live cost) -- test_release_0_21_78_mesh
+        self.assertNotIn("connect = [", cfg)
         self.assertIn('connect_api = "relay-peers.json"', cfg)
         self.assertIn('tier = "cluster"', cfg)
         self.assertIn("id = %d" % kr.mesh_cluster_id(kr._machine_node(), 4443), cfg)
         self.assertNotEqual(kr.mesh_cluster_id("m", 4443), kr.mesh_cluster_id("m", 4453))   # two relays on one machine
         self.assertNotIn("tls.fingerprint", cfg)                          # a pin would turn every http:// peer into plain WebSocket
         self.assertNotIn("tls.insecure", cfg)
-        self.assertEqual(json.loads(rd(os.path.join(d, "relay-peers.json"))), [{"url": "http://10.1.1.2:4443/", "cost": 3, "token": "l.t.k"}])
+        self.assertEqual(json.loads(rd(os.path.join(d, "relay-peers.json"))), [{"url": "http://127.0.0.1:1/", "cost": 40, "token": "fed.tok.en"},   # no ?jwt= / ?cost=
+                                                                              {"url": "http://10.1.1.2:4443/", "cost": 3, "token": "l.t.k"}])
         self.assertEqual(r.federation["tls"], "per-dial")
         self.assertTrue(0 < kr.mesh_cluster_id("x") < 2 ** 52)
 
@@ -360,14 +362,15 @@ class SpokeConfig(unittest.TestCase):
                                 {"url": "http://127.0.0.1:1/", "cost": 50, "token": "t", "peer": "hub", "name": "the hub itself"},
                                 {"url": "ftp://nope/", "cost": 1}]})
         peers = json.loads(rd(os.path.join(d, "relay-peers.json")))
-        self.assertEqual(peers, [{"url": "http://10.0.0.2:4443/", "cost": 3, "token": "t.b.a"}])   # one per peer, never the hub's own address
+        self.assertEqual(peers[1:], [{"url": "http://10.0.0.2:4443/", "cost": 3, "token": "t.b.a"}])   # one per peer, the hub's address once
         self.assertEqual(r._mesh_load()["candidates"][0]["addrs"], ["10.0.0.2"])
         self.assertEqual(json.loads(rd(os.path.join(d, "relay-mesh.json")))["hubCost"], 50)
         time.sleep(0.2)
         self.assertEqual(restarted, [])
         r._mesh_seen({"hubCost": 70})
         time.sleep(0.3)
-        self.assertEqual(restarted, [1])                                  # the hub link's cost rides the static connect
+        self.assertEqual(restarted, [])                                   # 0.21.78: the hub link rides relay-peers.json -- live
+        self.assertEqual(json.loads(rd(os.path.join(d, "relay-peers.json")))[0]["cost"], 70)
 
     def test_link_tokens_minted_per_dialer_and_kept(self):
         r, d = self.relay()

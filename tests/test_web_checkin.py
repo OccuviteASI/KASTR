@@ -71,7 +71,7 @@ class Pages(unittest.TestCase):
         with io.open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
             page = f.read()
         self.assertIn('if (joinState === "joined" && /^web-/.test(HOSTNAME1)) {', page)
-        self.assertIn('body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser() })', page)
+        self.assertIn('body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser(), net: window.__netRate?.() ?? null })', page)   # 0.21.78: + its own rates
         with io.open(os.path.join(HERE, "relay.html"), encoding="utf-8") as f:
             rel = f.read()
         self.assertIn('const machineText = (r) => r.nick || (r.kind === "web" && r.platform ? r.platform : (r.hostname || r.node || ""));', rel)   # 0.21.69: nickname / hostname first

@@ -931,6 +931,7 @@ setInterval(() => {
       visibility: document.visibilityState,
       publisher: window.__publisher?.state?.() ?? null,
       watcher: window.__switcher?.state?.() ?? null,
+      net: window.__netRate?.() ?? null,   // 0.21.78 (C): what this window receives / sends -- kastr.py's check-in carries it to the relay
     };
     if (!snap.publisher && !snap.watcher) return;   // nothing to say
     fetch("/api/diag", {

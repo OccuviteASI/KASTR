@@ -41,6 +41,7 @@ Endpoints (wired up by kastr_serve; the main ones):
     GET  /api/relay/vehicles -> {"vehicles":[{id,name,host,created,lastUsed,lastRoom,revoked}], "spoke"}  (hub; never a key)
     POST /api/relay/vehicles {"op":"create","name"} -> {"ok","vehicle","key"} (the key ONCE); {"op":"revoke|delete","id"}
     GET  /api/relay/links   0.21.77: the relay mesh (hub) -- {nodes, links, hubCost}; POST {a, b, mode, cost, addr} | {hubCost}
+                            0.21.78: + POST {node, kind: hub|standby, cost} (one spoke's link); links carry bps {fwd, back}
 Token service (its own listener, relay-port+1):
     GET  /api/auth          -> {"app":"KASTR","secured":true,"codes","legacy","federation","kid","ns","web","https",...}
     GET  /api/rooms         -> {"rooms":[...],"groups":{...}}
@@ -295,6 +296,7 @@ LINK_DOWN_RE = re.compile(r"cluster peer error|WebSocket connection failed|remot
 # hub (and every peer) by http:// with no global pin: the fingerprint is fetched over plain HTTP per dial (it was learned
 # over plain HTTP before too -- the same trust, refreshed per dial; a hub restart no longer restarts its spokes).
 MESH_MIN_VERSION = "0.21.77"      # relays older than this neither probe nor link ("needs update" on the Links card)
+MESH_LIVE_VERSION = "0.21.78"     # 0.21.78: from here a spoke dials the hub from relay-peers.json -- a hub link cost needs no restart
 MESH_PROBE_EVERY = 300            # a spoke re-probes every 5 minutes, and when the candidate list changes
 MESH_PROBE_TIMEOUT = 1.5          # the reachability check
 MESH_PROBE_WORKERS = 4            # probes at once
@@ -439,6 +441,23 @@ def mesh_slug(v, n=48):
     return re.sub(r"[^a-z0-9-]+", "-", str(v or "").lower()).strip("-")[:n]
 
 
+def fed_link_node(claims):
+    """0.21.78: the spoke a federation token was minted for (its `node` claim) -- '' for an older token or any other kind."""
+    if not (is_relay_claims(claims) and isinstance(claims.get("node"), str)):
+        return ""
+    return mesh_slug(claims["node"], 64) if MESH_NODE_RE.match(claims["node"]) else ""
+
+
+def jwt_claims_unverified(tok):
+    """0.21.78: a token's claims WITHOUT checking the signature -- only to see what a cached token of ours says."""
+    try:
+        import base64
+        p = str(tok or "").split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)).decode("utf-8")) or {}
+    except Exception:
+        return {}
+
+
 def mesh_link_claims(dialer, now=None, ttl=MESH_LINK_TTL):
     """The claims of the token THIS relay mints for one dialer (`link` = the dialer's machine id)."""
     now = int(time.time() if now is None else now)
@@ -564,17 +583,39 @@ def _mesh_good(p, now, keep=MESH_LINK_KEEP_S):
     return bool(p.get("okAt")) and now - float(p.get("okAt") or 0) < keep
 
 
-def mesh_links(rows, overrides=None, hub_cost=MESH_HUB_COST_DEFAULT, standby=None, now=None, keep=MESH_LINK_KEEP_S):
+def _mesh_bw(cross):
+    """0.21.78: a crossing record (the accepting end's report for one dialer) -> {fwd: dialer -> acceptor bits/s, back:
+    acceptor -> dialer, at} or None when nothing was measured."""
+    if not isinstance(cross, dict) or (cross.get("inBps") is None and cross.get("outBps") is None):
+        return None
+    return {"fwd": cross.get("inBps"), "back": cross.get("outBps"), "at": cross.get("at")}
+
+
+def mesh_link_cost(costs, node, kind, default):
+    """0.21.78: one spoke's hub / standby link cost -- its own override, else the default every spoke uses."""
+    c = ((costs or {}).get(node) or {}).get(kind) if isinstance((costs or {}).get(node), dict) else None
+    try:
+        return max(1, min(MESH_COST_MAX, int(c))) if c else default
+    except (TypeError, ValueError):
+        return default
+
+
+def mesh_links(rows, overrides=None, hub_cost=MESH_HUB_COST_DEFAULT, standby=None, now=None, keep=MESH_LINK_KEEP_S,
+               link_costs=None, hub_crossing=None):
     """0.21.77, hub side: the spokes table (rows: {node, name, version, at, port, mesh: {probes, addrs, linkTokens, links,
     accepted, crossing, hubLink, port}}) + the operator's overrides ({"a|b": {mode, cost, addr}}) -> (links, state).
     links: one row per pair of relays (mesh / standby / hub kinds) for the Links card. state: {node: what that spoke's
-    long-poll carries -- candidates to probe, the dialers it mints link tokens for, the links it dials, the hub cost}."""
+    long-poll carries -- candidates to probe, the dialers it mints link tokens for, the links it dials, the hub cost}.
+    0.21.78: link_costs {node: {hub, standby}} -- one spoke's hub / standby link priced on its own (the Links card);
+    hub_crossing {node: crossing record} -- what the hub itself measured on each spoke's hub link (rows get `bps`)."""
     now = time.time() if now is None else now
     overrides = overrides or {}
     try:
         hub_cost = max(1, min(MESH_COST_MAX, int(hub_cost)))
     except (TypeError, ValueError):
         hub_cost = MESH_HUB_COST_DEFAULT
+    link_costs = link_costs if isinstance(link_costs, dict) else {}
+    hub_crossing = hub_crossing if isinstance(hub_crossing, dict) else {}
     by = {}
     for r in rows or []:
         n = r.get("node")
@@ -588,7 +629,7 @@ def mesh_links(rows, overrides=None, hub_cost=MESH_HUB_COST_DEFAULT, standby=Non
     links, state = [], {}
     for n in cap:
         m = by[n]["mesh"]
-        state[n] = {"v": 1, "hubCost": hub_cost, "links": [],
+        state[n] = {"v": 1, "hubCost": mesh_link_cost(link_costs, n, "hub", hub_cost), "links": [],
                     "candidates": [{"node": o, "name": name(o), "port": int((by[o]["mesh"].get("port") or by[o].get("port") or 0)),
                                     "addrs": [a for a in (by[o]["mesh"].get("addrs") or []) if mesh_private(a)][:4]}
                                    for o in cap if o != n and by[o]["mesh"].get("addrs")],
@@ -645,7 +686,8 @@ def mesh_links(rows, overrides=None, hub_cost=MESH_HUB_COST_DEFAULT, standby=Non
                        rttMs=(p or {}).get("rttMs"), hops=(p or {}).get("hops"), private=bool((p or {}).get("private")),
                        path=(p or {}).get("path") or [], tool=(p or {}).get("tool"),
                        up=(st or {}).get("up"), since=(st or {}).get("since"), drops=(st or {}).get("drops"),
-                       accepted=bool(acc_seen), streams={"fwd": list(cross.get("in") or [])[:32], "back": list(cross.get("out") or [])[:32]})
+                       accepted=bool(acc_seen), streams={"fwd": list(cross.get("in") or [])[:32], "back": list(cross.get("out") or [])[:32]},
+                       bps=_mesh_bw(cross))   # 0.21.78: measured by the accepting end
             if not url:
                 row["why"] = "no address to dial"
             elif not tok:
@@ -660,8 +702,11 @@ def mesh_links(rows, overrides=None, hub_cost=MESH_HUB_COST_DEFAULT, standby=Non
     for n in cap:
         if not sb or n == sb or sb not in by:
             continue
+        sb_cost = mesh_link_cost(link_costs, n, "standby", hub_cost)   # 0.21.78: per spoke (the Links card), else the default
         row = {"id": n + "|" + sb, "kind": "standby", "a": n, "b": sb, "aName": name(n), "bName": name(sb), "mode": "auto", "how": "standby",
-               "dialer": n, "acceptor": sb, "cost": hub_cost, "url": sb_addr, "addr": sb_addr, "active": False, "why": ""}
+               "dialer": n, "acceptor": sb, "cost": sb_cost, "costDefault": hub_cost, "liveCost": True,
+               "overrideCost": ((link_costs.get(n) or {}).get("standby") if isinstance(link_costs.get(n), dict) else None) or None,
+               "url": sb_addr, "addr": sb_addr, "active": False, "why": ""}
         tok = ((by[sb].get("mesh") or {}).get("linkTokens") or {}).get(n) if isinstance(by[sb].get("mesh"), dict) else None
         if frozenset((n, sb)) in linked:
             row["why"] = "a direct link joins them"
@@ -676,15 +721,20 @@ def mesh_links(rows, overrides=None, hub_cost=MESH_HUB_COST_DEFAULT, standby=Non
             st = report_link(by[n], mesh_peer_key(sb_addr))
             cross = ((by[sb]["mesh"].get("crossing") or {}).get(n)) or {}
             row.update(up=(st or {}).get("up"), since=(st or {}).get("since"), drops=(st or {}).get("drops"),
-                       streams={"fwd": list(cross.get("in") or [])[:32], "back": list(cross.get("out") or [])[:32]})
-            state[n]["links"].append({"url": sb_addr, "cost": hub_cost, "token": tok, "peer": sb, "name": name(sb), "kind": "standby"})
+                       streams={"fwd": list(cross.get("in") or [])[:32], "back": list(cross.get("out") or [])[:32]}, bps=_mesh_bw(cross))
+            state[n]["links"].append({"url": sb_addr, "cost": sb_cost, "token": tok, "peer": sb, "name": name(sb), "kind": "standby"})
         links.append(row)
-    # the hub links (each spoke dials the hub; the cost rides its static connect)
+    # the hub links (each spoke dials the hub; 0.21.77 priced it in its static connect, 0.21.78 in relay-peers.json: live)
     for n, r in sorted(by.items()):
         hl = ((r.get("mesh") or {}).get("hubLink") or {}) if isinstance(r.get("mesh"), dict) else {}
+        hc = hub_crossing.get(n) if isinstance(hub_crossing.get(n), dict) else {}
+        ov = (link_costs.get(n) or {}).get("hub") if isinstance(link_costs.get(n), dict) else None
         links.append({"id": n + "|hub", "kind": "hub", "a": n, "b": "hub", "aName": name(n), "bName": "hub", "how": "hub", "mode": "auto",
-                      "dialer": n, "acceptor": "hub", "cost": hub_cost if n in cap else None, "active": True,
-                      "up": hl.get("up"), "since": hl.get("since"), "drops": hl.get("drops"),
+                      "dialer": n, "acceptor": "hub", "cost": mesh_link_cost(link_costs, n, "hub", hub_cost) if n in cap else None,
+                      "costDefault": hub_cost, "overrideCost": ov or None,
+                      "liveCost": bool(version_tuple(by[n].get("version")) >= version_tuple(MESH_LIVE_VERSION)),   # else: a relay restart
+                      "active": True, "up": hl.get("up"), "since": hl.get("since"), "drops": hl.get("drops"),
+                      "streams": {"fwd": list(hc.get("in") or [])[:32], "back": list(hc.get("out") or [])[:32]}, "bps": _mesh_bw(hc),
                       "needsUpdate": [name(n)] if n in old else []})
     for x in old:
         for y in [o for o in by if o != x]:
@@ -749,14 +799,27 @@ def mesh_report_clean(m, now=None):
     for k, v in (m.get("crossing") or {}).items() if isinstance(m.get("crossing"), dict) else []:
         if MESH_NODE_RE.match(str(k)) and isinstance(v, dict) and len(cross) < 64:
             cross[str(k)] = {d: [str(x) for x in (v.get(d) or []) if isinstance(x, str) and MESH_PATH_RE.match(x)][:32] for d in ("in", "out")}
+            for d in ("inBps", "outBps"):   # 0.21.78: the rate each way (bits/s; None = not measured yet)
+                r = _num(v.get(d), 0, 1e11)
+                cross[str(k)][d] = int(r) if r is not None else None
+            cross[str(k)]["at"] = int(_num(v.get("at"), 0, 1e11) or 0) or None
     hl = m.get("hubLink") if isinstance(m.get("hubLink"), dict) else {}
     return {"v": 1, "port": int(port) if port else 0,
             "addrs": [a for a in (m.get("addrs") or []) if isinstance(a, str) and mesh_private(a)][:8] if isinstance(m.get("addrs"), list) else [],
             "probes": probes, "hubProbe": _mesh_probe_clean(m.get("hubProbe")), "linkTokens": toks, "links": links,
-            "accepted": acc, "crossing": cross,
+            "accepted": acc, "crossing": cross, "load": mesh_load_clean(m.get("load")),   # 0.21.78: its bandwidth, local / link
             "hubLink": {"up": hl.get("up") if isinstance(hl.get("up"), bool) else None, "since": int(_num(hl.get("since"), 0, 1e11) or 0) or None,
                         "drops": int(_num(hl.get("drops"), 0, 1e9) or 0)},
             "at": int(time.time() if now is None else now)}
+
+
+def _stat_open(c, what):
+    """0.21.78: open = started - ended. moq-relay 0.17.0 writes each counter under BOTH names (lab v02178/C stats dump:
+    subscriptions == subscriptions_started, subscriptions_closed == subscriptions_ended; the page and the stats bundle read
+    the short pair) -- either pair counts, so a relay that keeps only one of them still reads right."""
+    a = c.get(what + "_started", c.get(what))
+    b = c.get(what + "_ended", c.get(what + "_closed"))
+    return int(a or 0) - int(b or 0)
 
 
 def mesh_open_paths(j, role="subscriber.json"):
@@ -767,13 +830,194 @@ def mesh_open_paths(j, role="subscriber.json"):
         if not isinstance(c, dict) or str(p).startswith(("~", ".")) or not MESH_PATH_RE.match(str(p)):
             continue
         try:
-            subs = int(c.get("subscriptions_started") or 0) - int(c.get("subscriptions_ended") or 0)
-            bcs = int(c.get("broadcasts_started") or 0) - int(c.get("broadcasts_ended") or 0)
+            subs, bcs = _stat_open(c, "subscriptions"), _stat_open(c, "broadcasts")
         except (TypeError, ValueError):
             continue
         if subs > 0 or (role.startswith("publisher") and bcs > 0):
             out.append(str(p))
     return sorted(out)[:32]
+
+
+# 0.21.78 (Kenton: "On the site relay mesh map, when hovering over a line, show the bandwidth going through that path."): the
+# accepting end of every link reads its link-<dialer> stats tier (the hub reads the one each spoke's hub link records under);
+# `bytes` per broadcast is cumulative, so the rate is the growth between two samples ~30 s apart.
+MESH_RATE_WINDOW_S = 40           # the oldest sample a rate is taken against (two 15 s ticks back)
+
+
+def mesh_tier_bytes(j):
+    """A link tier's stats track -> {path: cumulative payload bytes} (every broadcast, control paths too: it all crosses)."""
+    out = {}
+    for p, c in (j.items() if isinstance(j, dict) else []):
+        if isinstance(c, dict):
+            try:
+                out[str(p)[:200]] = max(0, int(c.get("bytes") or 0))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def mesh_rate(prev, cur, dt):
+    """bits/s between two mesh_tier_bytes samples `dt` s apart. A broadcast new since `prev` counts from zero, one whose
+    counter went backwards (re-created) counts its new total, one that left counts nothing more. None without a window."""
+    try:
+        dt = float(dt)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(prev, dict) or not isinstance(cur, dict) or dt <= 0.5:
+        return None
+    n = 0
+    for p, b in cur.items():
+        a = prev.get(p, 0)
+        n += b - a if b >= a else b
+    return int(round(n * 8.0 / dt))
+
+
+MESH_LOAD_TRACKS = ("subscriber.json", "publisher.json", "sessions.json")   # the default tier: this relay's own clients
+MESH_DIAL_TRACKS = ("cluster/subscriber.json", "cluster/publisher.json")   # what this relay dials (hub, direct, standby links)
+
+
+def _sum_rates(vals):
+    vals = [v for v in vals if v is not None]
+    return sum(vals) if vals else None
+
+
+def mesh_relay_load(rates, local_pub=None, local_sub=None, sessions=None, crossing=None):
+    """0.21.78 (Kenton: "When hovering over the relay in the map, show the local bandwidth being used on that relay."): one
+    relay's bandwidth, split. moq-relay's stats tiers PARTITION the traffic (lab v02177 A4: a link-<dialer> session's bytes
+    are not in the untiered tracks), so LOCAL = the default tier -- in = subscriber.json (its publishers and cameras sending
+    in), out = publisher.json (its viewers pulling out) -- and LINK = its dialled tier (cluster/*) + every accepted link tier
+    (crossing[d] inBps = dialer -> here, outBps = here -> dialer). rates {track: bits/s | None}; local_pub / local_sub /
+    sessions = the default tier's tracks (counts: streams out to viewers, streams published here, sessions connected).
+    -> {local: {in, out}, link: {in, out}, total: {in, out}, viewers, streams, sessions} (None = not measured yet)."""
+    rates = rates if isinstance(rates, dict) else {}
+    cross = [c for c in (crossing or {}).values() if isinstance(c, dict)]
+    loc = {"in": rates.get("subscriber.json"), "out": rates.get("publisher.json")}
+    link = {"in": _sum_rates([rates.get("cluster/subscriber.json")] + [c.get("inBps") for c in cross]),
+            "out": _sum_rates([rates.get("cluster/publisher.json")] + [c.get("outBps") for c in cross])}
+    total = {k: _sum_rates([loc[k], link[k]]) for k in ("in", "out")}
+
+    def count(j, what):
+        if not isinstance(j, dict):
+            return None
+        n = 0
+        for p, c in j.items():
+            if isinstance(c, dict) and not str(p).startswith(("~", ".")):
+                try:
+                    n += max(0, _stat_open(c, what) if what != "announces" else
+                             int(c.get("announces_started", c.get("announced")) or 0) - int(c.get("announces_ended", c.get("announced_closed")) or 0))
+                except (TypeError, ValueError):
+                    continue
+        return n
+    ses = None
+    if isinstance(sessions, dict):
+        s = sessions.get("") if isinstance(sessions.get(""), dict) else {}
+        try:
+            ses = max(0, _stat_open(s, "sessions")) if s else None
+        except (TypeError, ValueError):
+            ses = None
+    return {"local": loc, "link": link, "total": total, "viewers": count(local_pub, "broadcasts"),
+            "streams": count(local_sub, "announces"), "sessions": ses}
+
+
+def mesh_path_rates(prev, cur, dt):
+    """0.21.78: per broadcast bits/s between two mesh_tier_bytes samples (the zoomed relay view's per-stream figures)."""
+    try:
+        dt = float(dt)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(prev, dict) or not isinstance(cur, dict) or dt <= 0.5:
+        return {}
+    return {p: int(round(((b - prev.get(p, 0)) if b >= prev.get(p, 0) else b) * 8.0 / dt)) for p, b in cur.items()}
+
+
+MESH_ZOOM_PATHS = 40
+
+
+def mesh_local_paths(local_sub, local_pub, rin=None, rout=None, n=MESH_ZOOM_PATHS):
+    """0.21.78 (Kenton: "If I click on a relay, have it go to a mesh map of that relay and all of the downstream clients
+    connected"): the streams this relay's own clients publish (default-tier subscriber.json: announced here and open) and the
+    ones they watch (publisher.json: open egress broadcasts = viewers) -> {in: [{path, bps}], out: [{path, bps, viewers}]}
+    (control paths left out; the busiest first). moq-relay 0.17 counts per broadcast and per tier, never per session, so a
+    client's own download is not measurable -- only what each stream carries and how many watch it here."""
+    rin, rout = rin or {}, rout or {}
+    ins, outs = [], []
+    for p, c in (local_sub.items() if isinstance(local_sub, dict) else []):
+        if isinstance(c, dict) and not str(p).startswith(("~", ".")) and MESH_PATH_RE.match(str(p)):
+            try:
+                live = int(c.get("announces_started", c.get("announced")) or 0) - int(c.get("announces_ended", c.get("announced_closed")) or 0)
+            except (TypeError, ValueError):
+                continue
+            if live > 0:
+                ins.append({"path": str(p), "bps": rin.get(p)})
+    for p, c in (local_pub.items() if isinstance(local_pub, dict) else []):
+        if isinstance(c, dict) and not str(p).startswith(("~", ".")) and MESH_PATH_RE.match(str(p)):
+            try:
+                v = _stat_open(c, "broadcasts")
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                outs.append({"path": str(p), "bps": rout.get(p), "viewers": v})
+    key = lambda r: (-(r.get("bps") or 0), r["path"])
+    return {"in": sorted(ins, key=key)[:n], "out": sorted(outs, key=key)[:n]}
+
+
+def mesh_load_clean(v):
+    """A spoke's reported load (registration) -> the known fields, bounded."""
+    if not isinstance(v, dict):
+        return None
+    r = lambda x: (int(_num(x, 0, 1e12)) if _num(x, 0, 1e12) is not None else None)
+    out = {k: {d: r((v.get(k) or {}).get(d)) if isinstance(v.get(k), dict) else None for d in ("in", "out")} for k in ("local", "link", "total")}
+    for k in ("viewers", "streams", "sessions"):
+        out[k] = r(v.get(k))
+    out["at"] = r(v.get("at"))
+    ps = v.get("paths") if isinstance(v.get("paths"), dict) else {}
+    out["paths"] = {d: [dict({"path": str(x["path"]), "bps": r(x.get("bps"))}, **({"viewers": r(x.get("viewers"))} if d == "out" else {}))
+                        for x in (ps.get(d) if isinstance(ps.get(d), list) else [])[:MESH_ZOOM_PATHS]
+                        if isinstance(x, dict) and MESH_PATH_RE.match(str(x.get("path") or ""))] for d in ("in", "out")}
+    return out
+
+
+ZOOM_KIND = {"app": "person", "box": "box", "web": "viewer"}
+
+
+def mesh_zoom(relay, clients, load, nicks=None, needs_update=False):
+    """0.21.78: one relay's zoomed view -- its clients (people's KASTR apps, boxes, web viewers: name / hub nickname /
+    hostname / OS user, rooms) each with the streams it publishes here and their bitrates (a stream's path is
+    <room>/<client node>/..., so it is matched to its publisher), plus the streams watched here (viewers per stream).
+    perClient False: moq-relay 0.17 has no per-session byte counters, so a client's download is never invented -- a 0.21.78
+    client reports its own (`net`, from its check-in); an older one has none."""
+    nicks = nicks or {}
+    paths = (load or {}).get("paths") if isinstance((load or {}).get("paths"), dict) else {"in": [], "out": []}
+    by_host = {}
+    for s in paths.get("in") or []:
+        seg = str(s.get("path") or "").split("/")
+        if len(seg) > 2:
+            by_host.setdefault(seg[1], []).append(s)
+    out, mine = [], set()
+    for c in clients or []:
+        if not isinstance(c, dict) or not c.get("node"):
+            continue
+        pubs = by_host.get(c["node"], [])
+        mine.update(id(s) for s in pubs)
+        out.append({"node": c["node"], "name": c.get("name") or "", "nick": nicks.get(c["node"], "") or c.get("nick") or "",
+                    "hostname": c.get("hostname") or "", "user": c.get("user") or "", "kind": ZOOM_KIND.get(c.get("kind"), "person"),
+                    "version": c.get("version") or "", "platform": c.get("platform") or "", "rooms": list(c.get("rooms") or [])[:16],
+                    "since": c.get("since") or None, "at": c.get("at") or None, "checkin": bool(c.get("checkin")),
+                    "publishes": pubs, "bps": _sum_rates([s.get("bps") for s in pubs]) if pubs else None,
+                    "net": c.get("net") if isinstance(c.get("net"), dict) else None})   # 0.21.78 (C): what it says it receives / sends
+    return {"relay": relay, "clients": out[:300], "other": [s for s in (paths.get("in") or []) if id(s) not in mine],
+            "watched": list(paths.get("out") or []), "perClient": False, "needsUpdate": bool(needs_update),
+            "at": (load or {}).get("at")}
+
+
+def mesh_rate_moved(old, new, rel=0.10, floor=32000):
+    """Has a link's rate moved enough to tell the hub again (more than 10 % and 32 kbit/s, or appeared / went)?"""
+    if (old is None) != (new is None):
+        return True
+    if old is None:
+        return False
+    d = abs(int(new) - int(old))
+    return d > floor and d > rel * max(int(old), int(new))
 
 
 def forward_wake(minter, tok, room, broadcast, hops):
@@ -1133,6 +1377,10 @@ def claims_to_grant(claims, now=None):
         # under the tier link-<dialer> so this relay's ~stats tracks say which streams cross that link (lab A4)
         grant["peer"] = True
         grant["tier"] = mesh_link_tier(claims)
+    elif fed_link_node(claims):
+        # 0.21.78: a spoke's HUB link (a federation token naming the spoke) records under link-<spoke> on the hub too, so the
+        # hub's Links card says what crosses each hub link and how fast; the grant is otherwise the federation one (no `peer`)
+        grant["tier"] = mesh_link_tier({"link": claims.get("node")})
     root = str(claims.get("root") or "")
     if root:
         grant["root"] = root
@@ -1405,6 +1653,21 @@ def clean_label(v, n):
     return "".join(ch for ch in str(v or "") if ch.isprintable() and ch not in LABEL_DROP).strip()[:n]
 
 
+def clean_net(v, at=None):
+    """0.21.78 (C) (Kenton: "on the zoomed map, show each clients bandwidth on hover"): what a client said it receives and
+    sends (its own page measures it -- moq-relay 0.17 has no per-session byte counters) -> {down, up, streams, at, win} in
+    bits/s, bounded; None for an older client that does not say. `at` = when the relay heard it (never the client's clock)."""
+    if not isinstance(v, dict):
+        return None
+    r = lambda x: (int(_num(x, 0, 1e11)) if _num(x, 0, 1e11) is not None else None)
+    if r(v.get("down")) is None and r(v.get("up")) is None:
+        return None
+    st = [{"path": str(s["path"])[:200], "bps": r(s.get("bps"))} for s in (v.get("streams") if isinstance(v.get("streams"), list) else [])[:5]
+          if isinstance(s, dict) and MESH_PATH_RE.match(str(s.get("path") or ""))]
+    at = _num(v.get("at"), 0, 1e11) if at is None else at
+    return {"down": r(v.get("down")), "up": r(v.get("up")), "streams": st, "at": int(at) if at else None, "win": r(v.get("win"))}
+
+
 def clean_clients(rows):
     """0.21.50: a spoke's user list as the hub keeps it -- known fields only, bounded."""
     out = []
@@ -1420,7 +1683,8 @@ def clean_clients(rows):
                     "hostname": clean_label(r.get("hostname"), 64), "user": clean_label(r.get("user"), 32),   # 0.21.69
                     "started": int(r.get("started") or 0) if str(r.get("started") or "0").isdigit() else 0,   # 0.21.73: its KASTR started at
                     "cmd": r.get("cmd") if r.get("cmd") in ("restart", "move") else "",                   # 0.21.73: an admin command waiting
-                    "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16]})
+                    "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16],
+                    "net": clean_net(r.get("net"))})                                                      # 0.21.78 (C): its own down / up
     return out
 
 
@@ -3261,8 +3525,13 @@ class AuthStore:
                 if int(rec.get("at") or 0) > int((self.links.get(k) or {}).get("at") or 0):
                     self.links[k] = rec
             m = self._mesh_clean(b.get("mesh"))
+            costs = dict(self.mesh.get("costs") or {})   # 0.21.78: per spoke, the cost set later wins (a clear there too)
             if int(m.get("at") or 0) > int(self.mesh.get("at") or 0):
-                self.mesh = m
+                self.mesh = dict(self.mesh, hubCost=m["hubCost"], at=m["at"])
+            for node, rec in m["costs"].items():
+                if int(rec.get("at") or 0) > int((costs.get(node) or {}).get("at") or 0):
+                    costs[node] = rec
+            self.mesh = dict(self.mesh, costs=costs)
             self._save()
         return n
 
@@ -3326,7 +3595,15 @@ class AuthStore:
     def _mesh_clean(v):
         v = v if isinstance(v, dict) else {}
         hc = _num(v.get("hubCost"), 1, MESH_COST_MAX)
-        return {"hubCost": int(hc) if hc else MESH_HUB_COST_DEFAULT, "at": int(_num(v.get("at"), 0, 1e11) or 0)}
+        costs = {}   # 0.21.78: {node: {hub, standby, at}} -- one spoke's hub / standby link priced on its own
+        for n, r in (v.get("costs").items() if isinstance(v.get("costs"), dict) else []):
+            if not MESH_NODE_RE.match(str(n)) or not isinstance(r, dict) or len(costs) >= 256:
+                continue
+            rec = {k: int(_num(r.get(k), 1, MESH_COST_MAX)) if _num(r.get(k), 1, MESH_COST_MAX) else None for k in ("hub", "standby")}
+            rec["at"] = int(_num(r.get("at"), 0, 1e11) or 0)
+            if rec["hub"] or rec["standby"] or rec["at"]:   # an all-default record with its time: a clear (for a hand-back)
+                costs[str(n)] = rec
+        return {"hubCost": int(hc) if hc else MESH_HUB_COST_DEFAULT, "at": int(_num(v.get("at"), 0, 1e11) or 0), "costs": costs}
 
     def links_public(self):
         with self.lock:
@@ -3375,9 +3652,41 @@ class AuthStore:
         if c is None or int(c) != c:
             return None, "the hub link cost is a whole number from 1 to %d" % MESH_COST_MAX
         with self.lock:
-            self.mesh = {"hubCost": int(c), "at": int(time.time())}
+            self.mesh = dict(self.mesh, hubCost=int(c), at=int(time.time()))   # 0.21.78: the per-spoke costs stay
             self._save()
         return int(c), None
+
+    def link_costs_public(self):
+        """0.21.78: {node: {hub, standby}} -- the per-spoke hub / standby link costs."""
+        with self.lock:
+            return {n: {"hub": r.get("hub"), "standby": r.get("standby")} for n, r in (self.mesh.get("costs") or {}).items()}
+
+    def set_link_cost(self, node, kind, cost):
+        """0.21.78 (Kenton: "Allow for setting cost manually on links between relays."): one spoke's hub or standby link
+        cost; None / "" = back to the default every spoke uses. -> (record | None, error)."""
+        node = str(node or "")
+        if not MESH_NODE_RE.match(node):
+            return None, "pick a relay"
+        if kind not in ("hub", "standby"):
+            return None, "the link is the hub link or the standby link"
+        if cost not in (None, ""):
+            c = _num(cost, 1, MESH_COST_MAX)
+            if c is None or int(c) != c:
+                return None, "cost is a whole number from 1 to %d" % MESH_COST_MAX
+            cost = int(c)
+        else:
+            cost = None
+        with self.lock:
+            costs = dict(self.mesh.get("costs") or {})
+            rec = dict(costs.get(node) or {"hub": None, "standby": None})
+            rec[kind] = cost
+            rec["at"] = int(time.time())
+            costs[node] = rec                            # an all-default record stays: its time carries the clear to a hand-back
+            if not (rec.get("hub") or rec.get("standby")):
+                rec = None
+            self.mesh = dict(self.mesh, costs=costs)
+            self._save()
+        return rec, None
 
     def closed_public(self):
         with self.lock:
@@ -4450,6 +4759,7 @@ class AuthService:
                                  "adminCode": svc.store.codes_status()["admin"],
                                  # 0.21.33 (Kenton: relay pickers show names, "this should help people with finding
                                  # the correct relay for their location")
+                                 "linkNode": True,   # 0.21.78: federation tokens name the spoke (per hub link stats)
                                  "name": svc.relay_name() or None})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
@@ -4883,10 +5193,11 @@ class AuthService:
         return {"ok": True, "store": self.store.export_bundle(), "bans": bans, "chat": chat, "chatSkipped": skipped,
                 "spokes": [r["name"] or r["key"] for r in self.spokes_public(stale=True)]}, 200
 
-    def _federation_token(self, code, peer=""):
+    def _federation_token(self, code, peer="", node=""):
         """0.11.0: a relay joining this one presents the FEDERATION code and gets a
         whole-namespace token (put + get on everything) for 30 days. Not counted
-        as a failure when no federation code exists here (nothing to guess)."""
+        as a failure when no federation code exists here (nothing to guess).
+        0.21.78: the token names the spoke's machine id (`node`) -- its hub link then records under link-<node> here."""
         wait = self.locked_for(peer)
         if wait:
             return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
@@ -4901,13 +5212,14 @@ class AuthService:
         self._ok(peer)
         now = int(time.time())
         exp = now + FEDERATION_TTL
-        tok = _mint(self.key, dict(FEDERATION_CLAIMS, iat=now, exp=exp))
+        node = mesh_slug(node, 64) if MESH_NODE_RE.match(str(node or "")) else ""
+        tok = _mint(self.key, dict(FEDERATION_CLAIMS, iat=now, exp=exp, **({"node": node} if node else {})))
         self.log("relay auth: federation token minted for %s (valid %d days)" % (peer or "?", FEDERATION_TTL // 86400))
         return {"ok": True, "role": "relay", "exp": exp, "kid": self.kid, "token": tok}, 200
 
     def token(self, p, peer=""):
         if p.get("federation") is not None and not p.get("room"):   # 0.11.0: a relay, not a person
-            return self._federation_token(str(p.get("federation") or ""), peer)
+            return self._federation_token(str(p.get("federation") or ""), peer, str(p.get("node") or ""))
         if p.get("verify") and p.get("admin") is not None:          # 0.16.0: a spoke asks "is this OUR admin code?"
             return self._admin_verify(str(p.get("admin") or ""), peer)
         slug = str(p.get("room") or "")
@@ -6083,7 +6395,7 @@ class AuthService:
         pg = False   # 0.21.78: a personal room's guest
         if status == "grant":
             claims = verify_token(session_jwt(req), self.key, vnow) or {}
-            link = mesh_slug(claims.get("link")) if is_link_claims(claims) else None   # 0.21.77: a relay dialling us directly
+            link = mesh_slug(claims.get("link")) if is_link_claims(claims) else (fed_link_node(claims) or None)   # 0.21.77: a relay dialling us directly; 0.21.78: or a spoke's hub link
             room, host = claims_identity(claims)
             if not room and claims.get("vehicle"):   # 0.21.63: a vehicle token has no `get`; a kick still finds it
                 room, host = vehicle_identity(claims)
@@ -6936,7 +7248,7 @@ class AuthService:
         except (TypeError, ValueError):
             first = row["at"]
         row["first"] = min(first, row["at"])
-        row.pop("offer", None); row.pop("pending", None)   # live-only state
+        row.pop("offer", None); row.pop("pending", None); row.pop("net", None)   # live-only state (0.21.78: + its rates)
         return row
 
     def _hist_note(self, rows, relay="", relay_version=""):
@@ -7034,7 +7346,8 @@ class AuthService:
             rec.update({"version": str(p.get("version") or "")[:24], "mode": str(p.get("mode") or "")[:24],
                         "platform": str(p.get("platform") or "")[:32], "name": str(p.get("name") or "")[:60],   # 0.21.55: 32 ("Chrome on Windows")
                         "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now,
-                        "hostname": clean_label(p.get("hostname"), 64), "user": clean_label(p.get("user"), 32)})   # 0.21.69
+                        "hostname": clean_label(p.get("hostname"), 64), "user": clean_label(p.get("user"), 32),   # 0.21.69
+                        "net": clean_net(p.get("net"), now)})   # 0.21.78 (C): what it receives / sends (its zoomed-map hover)
             try:
                 rec["started"] = max(0, int(float(p.get("started") or 0)))   # 0.21.73: a Restart is done when this moves
             except (TypeError, ValueError):
@@ -7191,7 +7504,8 @@ class AuthService:
                               "hostname": c.get("hostname") or "", "user": c.get("user") or "",   # 0.21.69
                               "platform": c.get("platform") or "", "ip": c.get("ip") or "", "at": c.get("at"), "offer": c.get("offer") or "",
                               "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": [],
-                              "started": int(c.get("started") or 0), "cmd": (c.get("cmd") or {}).get("kind") or ""}   # 0.21.73
+                              "started": int(c.get("started") or 0), "cmd": (c.get("cmd") or {}).get("kind") or "",   # 0.21.73
+                              "net": c.get("net")}   # 0.21.78 (C)
             sess = [dict(v) for v in self._sessions.values()]
             bnames = dict(self._pl().names)   # 0.21.78: the name a page says in its beats
         for v in sess:
@@ -7359,14 +7673,16 @@ class AuthService:
         return {k: sb.get(k) for k in ("name", "node", "address", "web")}
 
     # ---- 0.21.77: the relay mesh -- hub side (links from the spokes' probes + the Links card's overrides) ---------------
-    def mesh_compute(self, now=None):
-        """-> (links, state) for the whole federation (see mesh_links)."""
+    def mesh_compute(self, now=None, hub_crossing=None):
+        """-> (links, state) for the whole federation (see mesh_links). 0.21.78: + the per-spoke hub / standby link costs, and
+        what this hub measured on each spoke's hub link (the Links card only)."""
         with self.lock:
             rows = [dict(v, key=k) for k, v in self.spokes.items()]
         st = self.store
         overrides = st.links_public() if hasattr(st, "links_public") else {}
         hub_cost = st.mesh_hub_cost() if hasattr(st, "mesh_hub_cost") else MESH_HUB_COST_DEFAULT
-        return mesh_links(rows, overrides, hub_cost, self.standby_public(), now)
+        costs = st.link_costs_public() if hasattr(st, "link_costs_public") else {}
+        return mesh_links(rows, overrides, hub_cost, self.standby_public(), now, link_costs=costs, hub_crossing=hub_crossing)
 
     def mesh_for(self, node):
         """What one spoke's long-poll carries: the relays to probe, the dialers to mint link tokens for, the links to dial and
@@ -7382,7 +7698,8 @@ class AuthService:
         st = state.get(node)
         if st is None:
             hc = self.store.mesh_hub_cost() if hasattr(self.store, "mesh_hub_cost") else MESH_HUB_COST_DEFAULT
-            return {"v": 1, "hubCost": hc}
+            costs = self.store.link_costs_public() if hasattr(self.store, "link_costs_public") else {}
+            return {"v": 1, "hubCost": mesh_link_cost(costs, node, "hub", hc)}   # 0.21.78: its own hub link cost, if set
         return st
 
     def link_sessions(self):
@@ -8085,6 +8402,11 @@ class Relay:
         self._mesh_hub_probe = None
         self._mesh_crossing = {}                        # 0.21.77: accepting side -- dialer -> {in: [paths], out: [paths]}
         self._hub_dial = ""                             # 0.21.77: the hub URL as relay.toml dials it
+        self._hub_in_peers = False                      # 0.21.78: ... from relay-peers.json (live cost / token)
+        self._mesh_samples = {}                         # 0.21.78: (dialer, track) -> [(t, {path: bytes}), ...] for the rates
+        self._mesh_rates_said = {}                      # 0.21.78: dialer -> (inBps, outBps) the hub last heard
+        self._mesh_load_rec = None                      # 0.21.78: this relay's bandwidth {local, link, total, viewers, ...}
+        self._mesh_load_said = None
         self.proc = None
         self.port = 4443
         self.bind_all = False
@@ -8137,6 +8459,7 @@ class Relay:
         hub = _normalize_hub(fed["connect"])
         self.federation = None
         self._hub_dial = ""
+        self._hub_in_peers = False   # 0.21.78: the hub link rides relay-peers.json (live cost / token)
         # 0.21.77: a stable hop id from the machine id (moq-relay picks a random one per start otherwise)
         cluster = ["[cluster]", "id = %d" % mesh_cluster_id(_machine_node(), port), ""]
         if hub:
@@ -8161,16 +8484,24 @@ class Relay:
             self.federation["hubCost"] = hub_cost
             entry = "{ url = %s, cost = %d%s }" % (json.dumps(dial), hub_cost, (", token = %s" % json.dumps(tok)) if tok else "")   # TOML basic strings share JSON's escapes
             own = [ip for ip in self._mesh_addrs(bind_all)]
+            # 0.21.78 (Kenton: "Allow for setting cost manually on links between relays."): the hub link moves into
+            # relay-peers.json with the others -- connect_api re-prices (and re-tokens) a listed peer live, while a peer in
+            # the static connect wins over the API's copy of it (moq-relay DialMap: Static stays the active source), so a
+            # cost there needed a relay restart. The static entry stays only when the file cannot be written.
+            self._hub_in_peers = True
+            live = self._mesh_write_peers(force=True)
+            if not live:
+                self._hub_in_peers = False
+                self._mesh_write_peers(force=True)
             cluster = [
                 "[cluster]",
                 "id = %d" % mesh_cluster_id(_machine_node(), port),
                 *(["node = %s" % json.dumps(mesh_dial_url(own[0], port))] if own else []),   # 0.21.77: this relay's own address
                 'tier = "cluster"',                    # 0.21.77: this relay's dialled traffic records under ~stats cluster/...
-                "connect = [%s]" % entry,
+                *([] if live else ["connect = [%s]" % entry]),
                 'connect_api = "%s"' % MESH_PEERS_FILE,
                 "",
             ]
-            self._mesh_write_peers(force=True)
 
         # The stats NODE NAME is load-bearing twice over (0.8.1): without it
         # the relay publishes its one stats broadcast at exactly ~stats/node,
@@ -8550,7 +8881,10 @@ class Relay:
             why = "hub is open (no access codes) -- connecting without a token"
             self._fed_say(why)
             return None, why, info
-        if (cached_ok and not force and float(cache["exp"]) - now > FEDERATION_RENEW
+        # 0.21.78: a hub that names its spokes in federation tokens (linkNode) gets asked again for a cached token that does
+        # not name this one -- once, at the first start on 0.21.78 (the hub's Links card then measures this hub link)
+        named = not auth.get("linkNode") or jwt_claims_unverified(cache.get("token")).get("node") == _machine_node() or not _machine_node()
+        if (cached_ok and not force and float(cache["exp"]) - now > FEDERATION_RENEW and named
                 and (not auth.get("kid") or cache.get("kid") in (None, auth.get("kid")))):
             return cache["token"], "hub token cached", info
         if not auth.get("federation"):
@@ -8563,7 +8897,7 @@ class Relay:
             return None, why, info
         try:
             req = urllib.request.Request(minter + "/api/token",
-                                         data=json.dumps({"federation": code}).encode(),
+                                         data=json.dumps({"federation": code, "node": _machine_node()}).encode(),   # 0.21.78: + node
                                          headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=5) as r:
                 d = json.loads(r.read().decode("utf-8", "replace") or "{}")
@@ -9217,16 +9551,22 @@ class Relay:
                 return
             self._mesh = new
             save_json(self._mesh_file(), new, None, backup=False)
-        if new.get("links") != cur.get("links"):
-            self._mesh_write_peers()
+        hub_moved = int(new.get("hubCost") or MESH_HUB_COST_DEFAULT) != int(cur.get("hubCost") or MESH_HUB_COST_DEFAULT)
+        if hub_moved and isinstance(self.federation, dict):
+            self.federation["hubCost"] = self._mesh_hub_cost()
+        if new.get("links") != cur.get("links") or (hub_moved and getattr(self, "_hub_in_peers", False)):
+            self._mesh_write_peers()   # 0.21.78: a hub link cost rides this file too -- re-priced live, no restart
         if new.get("candidates") != cur.get("candidates"):
             self._mesh_evt.set()
         if new.get("mint") != cur.get("mint"):
             self._mesh_tokens()
             self._clients_changed()   # re-register soon: the hub hands the new tokens to their dialers
-        if int(new.get("hubCost") or MESH_HUB_COST_DEFAULT) != int(cur.get("hubCost") or MESH_HUB_COST_DEFAULT) and self.running():
-            self.log("relay mesh: the hub set the hub / standby link cost to %s -- restarting the relay with it" % new.get("hubCost"))
-            threading.Thread(target=self._restart, daemon=True).start()
+        if hub_moved and self.running():
+            if getattr(self, "_hub_in_peers", False):
+                self.log("relay mesh: the hub set this relay's hub link cost to %s -- re-priced live (relay-peers.json)" % new.get("hubCost"))
+            else:
+                self.log("relay mesh: the hub set the hub link cost to %s -- restarting the relay with it" % new.get("hubCost"))
+                threading.Thread(target=self._restart, daemon=True).start()
 
     def _mesh_write_peers(self, force=False):
         """relay-peers.json (connect_api): this spoke's direct links + its standby link, written atomically. A link to the
@@ -9234,6 +9574,12 @@ class Relay:
         links = self._mesh_load().get("links") or []
         hub_key = mesh_peer_key(self._hub_dial) if self._hub_dial else ""
         out, seen, names = [], set(), {}
+        hub = []
+        if hub_key and getattr(self, "_hub_in_peers", False):   # 0.21.78: the hub link first, at this spoke's hub link cost
+            e = {"url": self._hub_dial, "cost": self._mesh_hub_cost()}
+            if self._fed_active:
+                e["token"] = self._fed_active
+            hub = [e]
         for l in links:
             key = mesh_peer_key(l.get("url"))
             if not key or key in seen or key == hub_key:
@@ -9244,7 +9590,7 @@ class Relay:
                 e["token"] = l["token"]
             out.append(e)
             names[key] = l.get("name") or l.get("peer") or key
-        text = json.dumps(out, indent=1)
+        text = json.dumps(hub + out, indent=1)
         path = os.path.join(self.state_dir, MESH_PEERS_FILE)
         self._mesh_peer_urls, self._mesh_peer_names = set(seen), names
         self._mesh_peers_at = time.time()
@@ -9266,7 +9612,8 @@ class Relay:
             for k in [k for k in self._mesh_peers if k not in seen]:
                 self._mesh_peers.pop(k, None)
         if not force or out:
-            self.log("relay mesh: %d link(s) to dial%s" % (len(out), (" -- " + ", ".join("%s (cost %d)" % (names[mesh_peer_key(e["url"])], e["cost"]) for e in out)) if out else ""))
+            self.log("relay mesh: %d link(s) to dial%s%s" % (len(out), (" -- " + ", ".join("%s (cost %d)" % (names[mesh_peer_key(e["url"])], e["cost"]) for e in out)) if out else "",
+                                                           ("; the hub at cost %d" % hub[0]["cost"]) if hub else ""))
         return True
 
     def _mesh_peer_event(self, key, up, why):
@@ -9319,6 +9666,7 @@ class Relay:
                     "linkTokens": self._mesh_tokens(), "links": peers,
                     "accepted": auth.link_sessions() if auth is not None else {},
                     "crossing": dict(self._mesh_crossing),
+                    "load": self._mesh_load_rec,   # 0.21.78: this relay's bandwidth (local clients / relay links)
                     "hubLink": {"up": lk.get("up"), "since": lk.get("since"), "drops": lk.get("drops") or 0}}
         except Exception as e:
             self.log("relay mesh: report failed: %s" % str(e)[:120])
@@ -9329,21 +9677,41 @@ class Relay:
         MESH_PROBE_EVERY s, and when the hub sends new candidates: a probe round, then a re-registration."""
         last_probe, tick, said = 0.0, 0, None
         while not evt.is_set():
-            woke = self._mesh_evt.wait(MESH_TICK_S if last_probe else 2)
+            woke = self._mesh_evt.wait(MESH_TICK_S if (last_probe or not self._hub_dial) else 2)
             if evt.is_set():
                 return
+            if self.running() and self.auth is not None and not self._hub_dial and self._acts_as_hub():
+                try:   # 0.21.78: the hub measures each spoke's hub link (its link-<spoke> tiers); the Links card reads it here
+                    self._mesh_cross_tick()
+                except Exception as e:
+                    if str(e) != said:
+                        said = str(e)
+                        self.log("relay mesh: %s" % said[:160])
+                continue
             if not (self.running() and self.auth is not None and self._hub_dial):
                 continue
             try:
                 self._mesh_nodes_tick()
                 tick += 1
-                if tick % 2 == 0:
-                    self._mesh_cross_tick()
-                    auth = self.auth
-                    sig = json.dumps([sorted((auth.link_sessions() if auth is not None else {}).keys()), self._mesh_crossing], sort_keys=True)
-                    if sig != getattr(self, "_mesh_acc_sig", None):
-                        self._mesh_acc_sig = sig
-                        self._clients_changed()   # accepting side: the hub's Links card learns who dials in and what crosses
+                self._mesh_cross_tick()   # 0.21.78: every tick (was every other) -- the rates need two samples ~30 s apart
+                auth = self.auth
+                cross = self._mesh_crossing
+                sig = json.dumps([sorted((auth.link_sessions() if auth is not None else {}).keys()),
+                                  {d: [c.get("in"), c.get("out")] for d, c in cross.items()}], sort_keys=True)
+                said_r = self._mesh_rates_said
+                moved = any(mesh_rate_moved((said_r.get(d) or (None, None))[i], c.get(k))
+                            for d, c in cross.items() for i, k in ((0, "inBps"), (1, "outBps")))
+                ld, ls = self._mesh_load_rec or {}, self._mesh_load_said or {}
+                moved = moved or any(mesh_rate_moved((ls.get(g) or {}).get(k), (ld.get(g) or {}).get(k))
+                                     for g in ("local", "link") for k in ("in", "out"))
+                busy = any((ld.get("total") or {}).get(k) for k in ("in", "out"))   # traffic: the hub's figure stays at most ~1 min old
+                moved = moved or (busy and time.time() - float(getattr(self, "_mesh_said_at", 0)) > 60)
+                if sig != getattr(self, "_mesh_acc_sig", None) or moved:
+                    self._mesh_said_at = time.time()
+                    self._mesh_acc_sig = sig
+                    self._mesh_rates_said = {d: (c.get("inBps"), c.get("outBps")) for d, c in cross.items()}
+                    self._mesh_load_said = ld
+                    self._clients_changed()   # accepting side: the hub's Links card learns who dials in, what crosses, how fast
                 if woke or time.time() - last_probe >= MESH_PROBE_EVERY:
                     self._mesh_evt.clear()
                     last_probe = time.time()
@@ -9409,41 +9777,61 @@ class Relay:
 
     def _mesh_cross_tick(self):
         """Accepting side: which streams cross each live link now -- this relay's ~stats tracks link-<dialer>/subscriber.json
-        (dialer -> here) and link-<dialer>/publisher.json (here -> dialer), read with the bundled moq tool (lab A4)."""
+        (dialer -> here) and link-<dialer>/publisher.json (here -> dialer), read with the bundled moq tool (lab A4).
+        0.21.78: + the rate each way, and this relay's own load (its default tier = local clients, its cluster tier = what it
+        dials) -- the hub's map shows both on hover."""
         auth = self.auth
         acc = auth.link_sessions() if auth is not None else {}
-        if not acc:
-            self._mesh_crossing = {}
-            return
         try:
             moq = kastr_rtsp.find_moq()
         except Exception:
             moq = None
         node = getattr(self, "_stats_node", "") or ""
-        if not moq or not node:
+        if auth is None or not moq or not node:
             return
         now = int(time.time())
         url = "http://127.0.0.1:%d/" % int(self.port)
         if self.secured:
             url += "?jwt=" + _mint(auth.key, dict(FEDERATION_CLAIMS, iat=now, exp=now + 120))
+        samples, per_path = {}, {}
+
+        def fetch(key, track):
+            """-> (json | None, bits/s | None): one ~stats track, and its rate against the oldest sample of the last ~40 s."""
+            try:
+                p = subprocess.run([moq, "--log-level", "error", "--connect", url, "--broadcast", STATS_KIND + "/node/" + node,
+                                    "fetch", track], capture_output=True, timeout=6, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                t = time.time()
+                j = json.loads(p.stdout.decode("utf-8", "replace") or "{}")
+            except Exception:
+                return None, None
+            hist = [s for s in (self._mesh_samples.get((key, track)) or []) if t - s[0] <= MESH_RATE_WINDOW_S]
+            cur = mesh_tier_bytes(j)
+            samples[(key, track)] = (hist + [(t, cur)])[-3:]
+            if hist and key == "":
+                per_path[track] = mesh_path_rates(hist[0][1], cur, t - hist[0][0])   # the zoomed relay view's per-stream figures
+            return j, (mesh_rate(hist[0][1], cur, t - hist[0][0]) if hist else None)
         out = {}
-        for d in sorted(acc)[:16]:
-            res = {}
+        for d in sorted(acc)[:32]:
+            res = {"in": [], "out": [], "inBps": None, "outBps": None, "at": now}
             for track, k in (("subscriber.json", "in"), ("publisher.json", "out")):
-                try:
-                    p = subprocess.run([moq, "--log-level", "error", "--connect", url, "--broadcast", STATS_KIND + "/node/" + node,
-                                        "fetch", "link-%s/%s" % (mesh_slug(d), track)], capture_output=True, timeout=6,
-                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                    res[k] = mesh_open_paths(json.loads(p.stdout.decode("utf-8", "replace") or "{}"), track)
-                except Exception:
-                    res[k] = []
+                j, r = fetch(d, "link-%s/%s" % (mesh_slug(d), track))
+                if j is not None:
+                    res[k], res[k + "Bps"] = mesh_open_paths(j, track), r
             out[d] = res
+        js, rates = {}, {}
+        for track in MESH_LOAD_TRACKS + (MESH_DIAL_TRACKS if self._hub_dial else ()):
+            js[track], rates[track] = fetch("", track)
+        self._mesh_samples = samples
         self._mesh_crossing = out
+        load = mesh_relay_load(rates, js.get("publisher.json"), js.get("subscriber.json"), js.get("sessions.json"), out)
+        load["at"] = now
+        load["paths"] = mesh_local_paths(js.get("subscriber.json"), js.get("publisher.json"), per_path.get("subscriber.json"), per_path.get("publisher.json"))
+        self._mesh_load_rec = load
 
     # ---- 0.21.77: the relay mesh -- the hub's Links card -------------------------------------------------------------
-    def mesh_view(self):
+    def mesh_view(self, zoom=""):
         """GET /api/relay/links: every relay (the hub, the standby, the spokes) and every link with its state -- never a
-        token."""
+        token. 0.21.78: ?zoom=<relay id> adds that relay's clients and streams (the zoomed map)."""
         auth = self.auth
         if auth is None:
             return {"ok": False, "error": "the relay is not running secured on this machine", "nodes": [], "links": []}
@@ -9452,7 +9840,7 @@ class Relay:
             ver, me_name = _ks.read_version(), self.relay_name() or _ks.host_slug()
         except Exception:
             ver, me_name = "", self.relay_name() or "relay"
-        links, _state = auth.mesh_compute()
+        links, _state = auth.mesh_compute(hub_crossing=dict(self._mesh_crossing) if not self._hub_dial else None)   # 0.21.78
         sb = auth.standby_public() or {}
         now = time.time()
         with auth.lock:
@@ -9461,23 +9849,41 @@ class Relay:
                 n = v.get("node")
                 if n and (n not in rows or (v.get("at") or 0) > (rows[n].get("at") or 0)):
                     rows[n] = v
-        nodes = [{"id": "hub", "node": _machine_node(), "name": me_name, "version": ver, "role": "hub", "needsUpdate": False, "stale": False}]
+        bare = lambda ld: {k: v for k, v in ld.items() if k != "paths"} if isinstance(ld, dict) else None   # the streams go with ?zoom only
+        nodes = [{"id": "hub", "node": _machine_node(), "name": me_name, "version": ver, "role": "hub", "needsUpdate": False, "stale": False,
+                  "liveCost": True, "load": bare(self._mesh_load_rec)}]   # 0.21.78: the hub's own bandwidth (local clients / spokes' hub links)
         for n, v in sorted(rows.items(), key=lambda kv: kv[1].get("name") or kv[0]):
             m = v.get("mesh") if isinstance(v.get("mesh"), dict) else {}
             nodes.append({"id": n, "node": n, "name": v.get("name") or n, "version": v.get("version") or "",
                           "role": "standby" if sb.get("node") == n else "spoke",
                           "needsUpdate": not mesh_capable(v.get("version")), "stale": now - float(v.get("at") or 0) > auth.SPOKE_STALE_S,
+                          "liveCost": version_tuple(v.get("version")) >= version_tuple(MESH_LIVE_VERSION),   # 0.21.78: no restart for a hub link cost
                           "at": v.get("at"), "addrs": m.get("addrs") or [], "port": m.get("port") or v.get("port") or 0,
-                          "probes": m.get("probes") or [], "hubProbe": m.get("hubProbe")})
+                          "probes": m.get("probes") or [], "hubProbe": m.get("hubProbe"), "load": bare(m.get("load"))})
         for l in links:
             if l.get("kind") == "hub":
                 hp = (rows.get(l["a"]) or {}).get("mesh") or {}
                 hp = hp.get("hubProbe") if isinstance(hp, dict) else None
                 if isinstance(hp, dict):
                     l.update(rttMs=hp.get("rttMs"), hops=hp.get("hops"), private=hp.get("private"), path=hp.get("path") or [])
+        z = None
+        if zoom:   # 0.21.78: the zoomed relay -- the hub's own users, or what that spoke last registered
+            with auth.lock:
+                nicks = dict(getattr(auth, "user_nick", {}) or {})
+            if zoom == "hub":
+                try:
+                    cl = auth.clients_view(ver, _machine_node())
+                except Exception:
+                    cl = []
+                z = mesh_zoom("hub", cl, self._mesh_load_rec, nicks)
+            elif zoom in rows:
+                v = rows[zoom]
+                m = v.get("mesh") if isinstance(v.get("mesh"), dict) else {}
+                z = mesh_zoom(zoom, v.get("clients") or [], m.get("load"), nicks,
+                              needs_update=version_tuple(v.get("version")) < version_tuple(MESH_LIVE_VERSION))
         return {"ok": True, "hubCost": auth.store.mesh_hub_cost() if hasattr(auth.store, "mesh_hub_cost") else MESH_HUB_COST_DEFAULT,
-                "minVersion": MESH_MIN_VERSION, "notHub": bool(auth.not_hub()), "standby": sb.get("node"),
-                "nodes": nodes, "links": links, "at": int(now)}
+                "minVersion": MESH_MIN_VERSION, "liveVersion": MESH_LIVE_VERSION, "notHub": bool(auth.not_hub()), "standby": sb.get("node"),
+                "nodes": nodes, "links": links, "zoom": z, "at": int(now)}
 
     def mesh_set(self, p):
         """POST /api/relay/links (this machine only): {a, b, mode, cost, addr} -- one pair's override; {hubCost} -- the cost
@@ -9493,6 +9899,20 @@ class Relay:
             self.log("relay mesh: hub / standby link cost set to %d" % c)
             auth.bans.poke()   # every spoke's long-poll answers now
             return {"ok": True, "hubCost": c}, 200
+        if p.get("kind") in ("hub", "standby"):
+            # 0.21.78 (Kenton: "Allow for setting cost manually on links between relays."): {node, kind, cost} -- ONE spoke's
+            # hub or standby link; a 0.21.78 spoke re-prices it live, an older one restarts its relay for a hub link cost
+            rec, err = auth.store.set_link_cost(p.get("node"), p.get("kind"), p.get("cost"))
+            if err:
+                return {"ok": False, "error": err}, 400
+            node = str(p.get("node"))
+            with auth.lock:
+                ver = next((v.get("version") for v in auth.spokes.values() if v.get("node") == node), "")
+            live = p.get("kind") == "standby" or version_tuple(ver) >= version_tuple(MESH_LIVE_VERSION)
+            self.log("relay mesh: %s link of %s set to %s%s" % (p.get("kind"), node, (rec or {}).get(p.get("kind")) or "the default",
+                                                             "" if live else " (it runs %s: its relay restarts once to take it)" % (ver or "an older KASTR")))
+            auth.bans.poke()
+            return {"ok": True, "costs": rec, "live": live}, 200
         rec, err = auth.store.link_override(p.get("a"), p.get("b"), p.get("mode"), p.get("cost"), p.get("addr"))
         if err:
             return {"ok": False, "error": err}, 400
@@ -10032,7 +10452,14 @@ class Relay:
             return False
         threading.Thread(target=self._spoke_sync, daemon=True).start()   # 0.18.0
         tok, why, info = self.federation_token(hub, fed["code"])
-        if tok and tok != self._fed_active:
+        if tok and tok != self._fed_active and getattr(self, "_hub_in_peers", False) and self.running() and self._hub_dial:
+            # 0.21.78: the hub link rides relay-peers.json -- the fresh token goes there (the relay re-dials the hub with it)
+            self._fed_active = tok
+            if isinstance(self.federation, dict):
+                self.federation.update(token=True, reason=why, exp=self._fed_cache().get("exp"))
+            self._mesh_write_peers()
+            self.log("relay federation: %s -- the hub link re-dials with the fresh token (no relay restart)" % why)
+        elif tok and tok != self._fed_active:
             self.log("relay federation: %s -- restarting the relay with the fresh hub token" % why)
             self._restart()
             return True
@@ -10277,6 +10704,12 @@ class Relay:
             if self._cluster_raw()["connect"]:
                 self._federation_watch_start()   # 0.11.0: renew the hub token in time
                 threading.Thread(target=self._spoke_sync, daemon=True).start()   # 0.18.0: ban fan-out registration
+            elif secured:
+                # 0.21.78: a hub (or a relay that may become one) measures its spokes' hub links -- the mesh loop's hub half
+                if self._fed_stop:
+                    self._fed_stop.set()
+                self._fed_stop = threading.Event()
+                threading.Thread(target=self._mesh_loop, args=(self._fed_stop,), daemon=True).start()
             for cb in list(getattr(self, "on_start", [])):   # 0.18.0: the archiver resumes its recordings
                 try:
                     cb(self)
@@ -11100,7 +11533,8 @@ def handle_api(handler, relay, path, set_relay_url=None):
         if handler.command == "POST":
             reply(*relay.mesh_set(_payload_of(handler) or {}))
         else:
-            reply(relay.mesh_view())
+            zq = parse_qs(urlparse(handler.path).query)
+            reply(relay.mesh_view(zoom=re.sub(r"[^a-z0-9-]", "", (zq.get("zoom") or [""])[0].lower())[:64]))   # 0.21.78: + one relay's clients
         return True
     if path == "/api/relay/standby":   # 0.21.53 (Kenton: "Make standby" on a spoke's row) {name, address?} | {clear: true}
         reply(*relay.make_standby(_payload_of(handler) or {}))

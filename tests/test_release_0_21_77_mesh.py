@@ -332,6 +332,21 @@ class SpokeConfig(unittest.TestCase):
         self.assertNotIn("connect", cfg)
         self.assertFalse(os.path.exists(os.path.join(d, "relay-peers.json")))
 
+    def test_collapse_fix_on_every_relay(self):
+        # 0.21.77 (lab 2026-10-21, both 0.17.0 and 0.17.7): a stream window smaller than a group + a 2 s cache keep a thin
+        # link between relays live (two 1080p tracks over 4 Mbit/s held 29.9 fps for 445 s) -- hub, spoke and standalone
+        r, _ = self.relay()
+        for cfg in (rd(r._write_config(4443, True, True)), rd(kr.Relay(tempfile.mkdtemp(), lambda m: None)._write_config(4999, False, False))):
+            self.assertIn("[quic]\nstream_receive_window = 262144\nsend_window = 67108864\n", cfg)
+            self.assertIn('[cache]\nduration = "2s"\n', cfg)
+            try:
+                import tomllib
+            except ImportError:
+                continue
+            t = tomllib.loads(cfg)
+            self.assertEqual(t["quic"], {"stream_receive_window": 262144, "send_window": 67108864})
+            self.assertEqual(t["cache"], {"duration": "2s"})
+
     def test_mesh_state_writes_peers_and_restarts_only_for_the_hub_cost(self):
         r, d = self.relay()
         r._write_config(4443, True, True)

@@ -7479,6 +7479,18 @@ class Relay:
                'cert = "%s"' % str(self.tls["chain"]).replace("\\", "/"),
                'key = "%s"' % str(self.tls["key"]).replace("\\", "/"),
                ""] if getattr(self, "tls", None) else []),
+            # 0.21.77 (lab 2026-10-20/21, Southridge / Mendon field stalls): a relay never drops stale groups it FORWARDS
+            # (moq-net hands relayed groups out with no expiry), so when a link between relays is too thin for what is
+            # asked of it the losing track's old groups fill the sender's QUIC buffer and after ~40 s EVERY track on that
+            # link stalls (0.17.7 too). A per-stream receive window smaller than a group keeps the backlog in the relay's
+            # cache, the short cache evicts it, the stream is reset: both legs stay live (lab: 30 / ~9 fps for 155 s+).
+            "[quic]",
+            "stream_receive_window = 262144",
+            "send_window = 67108864",
+            "",
+            "[cache]",
+            'duration = "2s"',
+            "",
             "[stats]",
             "enabled = true",      # publishes ~stats/<node> for the stats page
             f'prefix = "{STATS_KIND}"',   # 0.21.17: the relay's default '.stats' is hidden from browsers on relay >= 0.15.3

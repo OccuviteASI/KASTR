@@ -2,6 +2,24 @@
 
 What changed in each build, newest first.
 
+## v0.21.77 — relays link directly over private paths, a live mesh map, steady links between relays, Docker images on GitHub
+
+**Relays link directly when they can reach each other privately (Kenton: "I don't want everything to necessarily go through the hub except the tracks that actually do get seen through it" and "have the relays do a traceroute ... if they can reach each other without going to a public IP, they could just mesh").** Every relay now tests the other relays' private addresses every few minutes: can it reach the relay there, how fast, and does the route (traceroute) stay on private addresses the whole way — the same LAN or a site-to-site VPN. Two relays with a private path link directly, and each stream takes the cheapest path by round-trip time.
+- **The hub and the backup hub stay connected to every relay**, as last-resort paths (cost 50 by default, set on the Relay page): a stream crosses them only when someone watches through the hub or the backup itself, or when no direct path exists. Before, a relay connected to the backup only after a failover.
+- **If a direct link drops, streams fall back through the hub within seconds**, and move back to the direct link when it returns.
+- Changing links restarts nothing; changing the hub / backup cost restarts each relay once.
+- **Lab check:** a stream from one spoke to another took the direct link and the hub carried nothing for it; cutting the link moved it through the hub after a 13 s gap; restoring it moved it back in about 10 s with no gap; viewers on the hub and the backup pulled over their own links.
+
+**A live mesh map on the hub's Relay page (Kenton: "a visual mesh view that is dynamic, rather than just text").** Each relay is a circle (the hub in the middle, the backup beside it), each link a line — green up, amber slow or flapping, red down, dotted off, dashed for the hub / backup paths — animated while streams cross it (still when reduced motion is on). Hover a link for its round trip, hops, whether the route stays private, its cost and the streams crossing it now; click it to turn it on or off, set its cost or address, or go back to automatic; click a relay for its probe results. Relays can be dragged and keep their places. A links table sits underneath. A link a probe could not reach says what to open ("blocked? open UDP and TCP <port> on <relay>"); a relay older than 0.21.77 shows "needs update".
+- **The relays no longer pin the hub's certificate** (Kenton approved): every link between relays fetches the other relay's certificate fingerprint when it connects, as the first connection to the hub always did. A hub restart no longer restarts every spoke.
+
+**Steady links between relays when a link is too thin (the Southridge / Mendon stalls).** When more video was asked of a link between two relays than it could carry, the relay kept queueing the stream that was losing out, and after about 40 s every stream on that link dropped to 0–3 fps until people re-joined (moq-relay 0.17.7 does the same). Every relay KASTR starts now holds back at most one short window per stream and keeps only about 2 s of history besides the live picture, so the stream that loses out skips ahead instead of choking the link.
+- **Lab check:** two 1080p streams over a 4 Mbit/s link between relays — the important one held 29.9 fps for 7½ minutes (before: 1.7 fps after 95 s), the other kept about 9 fps; a 10.7 Mbit/s 4K stream still arrived in full at 60 ms round trip, and 120 ms was no worse than without the change. Relay memory stayed at 30–40 MB.
+- Applies to the hub, the backup and every relay once each restarts on 0.21.77.
+
+**KASTR's Docker image is published to GitHub's registry (Kenton: "Lets use the Git Repo").** Each release is pushed privately as `ghcr.io/occuviteasi/kastr:<version>` and `:latest`; `docker-compose.yml` uses it by default, with optional automatic image updates (`docker compose --profile autoupdate up -d` adds Watchtower). DOCKER.md has the one-time login for each Docker host.
+- **Fixed:** the container's startup script tried to run `docker compose pull` on its first start (a comment it writes into kastr.ini held backticks), and printed a harmless error on a fresh volume.
+
 ## v0.21.76 — what matters wins on a thin link, and streams in other rooms only while they stream
 
 **What matters wins on a thin link (Kenton 2026-10-20: streaming quality ahead of 0.22).** A lab measurement showed the relay gives a higher-priority stream its full frame rate on a link too thin for everything, both from the relay to a viewer and from a spoke to the hub, while the lower one drops frames. With everything at the same priority, whichever stream was opened first won. KASTR now ranks every tile:

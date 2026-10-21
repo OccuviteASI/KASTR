@@ -96,7 +96,7 @@ class Participants(unittest.TestCase):
 
     def test_row_menu_reuses_the_tile_menu(self):
         self.assertIn("pane.__openMenu = openTileMenu;", self.page)
-        self.assertIn("if (pane?.__openMenu) { pane.__openMenu(anchor); return true; }", self.page)
+        self.assertIn("if (pane?.__openMenu) { pane.__openMenu(anchor, inv); return true; }", self.page)   # 0.21.78: + the invite items
 
     def test_repainted_when_open(self):
         self.assertIn("try { paintParticipants(); } catch {}   // 0.21.23", self.page)

@@ -327,7 +327,7 @@ class Page(unittest.TestCase):
     def test_wiring(self):
         p = self.p
         self.assertIn("const PERSONAL_RE = /^me-[0-9a-f]{12}$/;", p)
-        self.assertIn('const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? "My room" : String(slug || ""));', p)
+        self.assertIn('const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug) : String(slug || ""));', p)   # 0.21.78: someone else's reads "<owner>'s room"
         self.assertIn('<div id="sbMine" class="sbmine" hidden></div>', p)
         self.assertIn('id="optMyRoom"', p)
         self.assertIn('document.getElementById("optMyRoom").addEventListener("click", () => personalDialog());', p)

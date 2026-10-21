@@ -51,7 +51,7 @@ class Pages(unittest.TestCase):
     def test_page(self):
         with io.open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
             p = f.read()
-        self.assertIn('const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? "My room" : String(slug || ""));', p)   # 0.21.75: + My room
+        self.assertIn('const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug) : String(slug || ""));', p)   # 0.21.75: + My room; 0.21.78: someone else's reads "<owner>'s room"
         self.assertIn("if (rec.slug === LOBBY || inLobby()) { ul.replaceChildren(); ul.hidden = true; return; }", p)
         self.assertIn("const want = show && !inLobby() ? viewerOps() : new Map();", p)
         self.assertIn("body.inlobby #topCamBtn", p)

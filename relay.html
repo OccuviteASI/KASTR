@@ -2213,7 +2213,7 @@
           + "<div class='hint'>Per-client down / up is what each KASTR (0.21.78 or newer) reports with its check-in; moq-relay counts per stream, not per client.</div>"
           + "<details style='margin-top:6px'><summary class='hint' style='cursor:pointer'>Probes</summary>" + probes + "</details>";
       }
-      if (mesh.formSig) { form.innerHTML = ""; mesh.formSig = ""; }
+      if (mesh.formSig || form.firstChild) { form.innerHTML = ""; mesh.formSig = ""; }   // a link's editor never lingers under a relay
       return;
     }
     const l = (d.links || []).find((x) => meshEdgeId(x) === mesh.sel.edge);

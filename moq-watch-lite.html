@@ -24400,6 +24400,7 @@
       if (m2?.stream) { m2.dur = j.duration; try { if (m2.ms?.readyState === "open" && !m2.sb?.updating && j.duration > (m2.ms.duration || 0)) m2.ms.duration = j.duration; } catch {} }
     });
     log("Added file: " + f.name + (running ? "" : " \u2014 click Start to play it."));
+    window.__shareChosen?.();   // 0.21.78: a media file chosen in Share closes it
   });
 
   for (const el of Object.values(enc)) {
@@ -24724,6 +24725,11 @@
   window.__shareOpened = () => { shTick++; shLoad(); webcamLoad(true); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); webcamLoad(false); }, 3000); };   // 0.21.65: + the Webcam section
   window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; if (shSwap != null) { shSwap = null; shSwapPaint(); } };   // 0.21.73: closing ends "Share something else"
   window.__shareIdle = () => { clearInterval(shTimer); shTimer = null; };   // 0.21.78: a pinned Share refreshes its pictures only while the pointer is over it
+  // 0.21.78 (Kenton: "Close the share tab after choosing something, except for RTSP shares, as I usually want to rename them
+  // first"): a screen / window / tab, presenter, "Share something else" or a media file closes Share; the RTSP section's feeds
+  // (cameras, devices, GoPro, webcams) leave it open. A pinned Share stays (closeShare ignores it).
+  const shareChosen = () => { const sp = document.getElementById("sharePop"); if (sp && !sp.hidden) try { sp.querySelector(".close")?.click(); } catch {} };
+  window.__shareChosen = shareChosen;
   async function shareNative(src) {
     if (!src) return;
     const url = shareKey(src);
@@ -24732,13 +24738,14 @@
     if (shSwap != null) {   // 0.21.73: "Share something else" -- this replaces that share in place
       const a = added.find((x) => x.id === shSwap);
       shSwap = null; shSwapPaint();
-      if (a) await retargetShare(a, url, label);   // 0.21.78 (Kenton): Share stays open until a click outside it, another toolbar button or Share again
+      if (a && await retargetShare(a, url, label)) shareChosen();   // 0.21.78 (Kenton): Share closes once something is chosen -- not after an RTSP feed
       return;
     }
     if (presenterMode() !== "content") return sharePresenter(url, label);   // 0.21.20: composited with my camera
     const e = await addRtsp(url, { label });
     if (!e) return;
-    window.__toast?.("Sharing " + label + (e.audio ? " with sound" : "") + ".", 4000);   // 0.21.78: Share stays open (was: closed here)
+    window.__toast?.("Sharing " + label + (e.audio ? " with sound" : "") + ".", 4000);
+    shareChosen();
   }
   window.__shareNative = shareNative;   // rig
   // ---- 0.21.20: presenter mode ------------------------------------------------------------------------------------
@@ -24768,7 +24775,8 @@
       if (!r.ok || data?.error) throw new Error(data?.error || r.status);
     } catch (e) { window.__toast?.("Could not start the share: " + (e?.message || e), 6000, { level: "error" }); return; }
     addSource(SCREEN, null, label, { native: { feedId: data.id, url }, presenter: presenterMode(), label });
-    window.__toast?.("Presenting " + label + ".", 4000);   // 0.21.78: Share stays open (was: closed here)
+    window.__toast?.("Presenting " + label + ".", 4000);
+    shareChosen();
   }
   window.__sharePresenter = sharePresenter;   // rig
   $("srcWindowBtn").addEventListener("click", () => shareSurface("window"));

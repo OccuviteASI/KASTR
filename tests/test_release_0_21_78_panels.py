@@ -152,5 +152,26 @@ class PeopleTimers(unittest.TestCase):
         self.assertNotIn('"\\u23F1 \\u2014"', self.p)
 
 
+class ShareClosesOnChoice(unittest.TestCase):
+    # Kenton (2026-10-21): "Close the share tab after choosing something, except for RTSP shares, as I usually want to rename
+    # them first."
+    p = page()
+
+    def test_closes_after_a_screen_window_tab_presenter_swap_or_file(self):
+        fn = between(self.p, "  async function shareNative(src) {", "  window.__shareNative = shareNative;")
+        self.assertIn("if (a && await retargetShare(a, url, label)) shareChosen();", fn)   # Share something else
+        self.assertIn("4000);\r\n    shareChosen();", fn)                                 # a screen / window / tab
+        pres = between(self.p, '"Presenting " + label', "window.__sharePresenter = sharePresenter;")
+        self.assertIn("shareChosen();", pres)
+        self.assertIn('window.__shareChosen?.();   // 0.21.78: a media file chosen in Share closes it', self.p)
+        self.assertIn('if (sp && !sp.hidden) try { sp.querySelector(".close")?.click(); } catch {} };', self.p)   # never opens it; a pinned Share ignores the close
+
+    def test_rtsp_feeds_leave_it_open(self):
+        i = self.p.index("  async function addRtsp(url, opts) {")
+        body = self.p[i:self.p.index("\n  }\r\n", i)]
+        self.assertNotIn("shareChosen", body)
+        self.assertNotIn("#sharePop .close", body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -205,6 +205,49 @@
   .mvgrp { font-size:12px; font-weight:600; margin:8px 0 2px; color:var(--text-dim); }
   .updok { color:var(--asi-green, #3fb950); }
   .updbad { color:var(--asi-amber); }
+  /* 0.21.77 (Kenton: "a dynamic visual mesh view on the hub's Relay page"): the relay mesh -- relays as nodes, links as edges */
+  .meshwrap { position:relative; margin:6px 0 4px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); overflow:hidden; touch-action:none; }
+  .meshwrap svg { display:block; width:100%; user-select:none; }
+  .meshwrap .medge { fill:none; stroke-linecap:round; transition:stroke .4s, stroke-width .4s, opacity .4s; }
+  .meshwrap .medge.st-up { stroke:var(--asi-green, #3fb950); }
+  .meshwrap .medge.st-warn { stroke:var(--asi-amber, #f0ad00); }
+  .meshwrap .medge.st-down { stroke:var(--asi-red, #dc5050); }
+  .meshwrap .medge.st-off, .meshwrap .medge.st-wait { stroke:var(--text-mute, #8b98a8); opacity:.7; }
+  .meshwrap .medge.k-hub, .meshwrap .medge.k-standby { stroke-dasharray:7 5; opacity:.75; }
+  .meshwrap .medge.st-off { stroke-dasharray:2 5; }
+  .meshwrap .mflow { fill:none; stroke:var(--text, #e6edf3); stroke-linecap:round; stroke-dasharray:2 12; opacity:.75; pointer-events:none; animation:meshflow 1.1s linear infinite; }
+  .meshwrap .mflow.rev { animation-direction:reverse; }
+  @keyframes meshflow { to { stroke-dashoffset:-14; } }
+  .meshwrap .mhit { fill:none; stroke:transparent; stroke-width:16; cursor:pointer; }
+  .meshwrap .mnode circle.body { stroke-width:2; transition:r .3s; }
+  .meshwrap .mnode.r-hub circle.body { fill:color-mix(in srgb, var(--asi-blue, #009fda) 30%, var(--surface, #0c141c)); stroke:var(--asi-blue, #009fda); }
+  .meshwrap .mnode.r-standby circle.body { fill:color-mix(in srgb, #a371f7 26%, var(--surface, #0c141c)); stroke:#a371f7; }
+  .meshwrap .mnode.r-spoke circle.body { fill:var(--surface, #0c141c); stroke:var(--text-dim, #b4c0cc); }
+  .meshwrap .mnode.stale circle.body { opacity:.5; }
+  .meshwrap .mnode { cursor:grab; }
+  .meshwrap .mnode text { fill:var(--text, #e6edf3); font-size:11px; text-anchor:middle; pointer-events:none;
+    paint-order:stroke; stroke:var(--surface-2, #111a24); stroke-width:3px; stroke-linejoin:round; }   /* a label stays readable over an edge */
+  .meshwrap .mnode text.ver { fill:var(--text-mute, #8b98a8); font-size:9.5px; }
+  .meshwrap .mnode text.ic { font-size:10px; font-weight:700; fill:var(--text, #e6edf3); stroke:none; }
+  .meshwrap .mnode .badge { fill:var(--asi-amber, #f0ad00); }
+  .meshwrap .mnode text.bang { fill:#111; font-size:10px; font-weight:800; stroke:none; }
+  .meshwrap .mnode.sel circle.body, .meshwrap .medge.sel { filter:drop-shadow(0 0 4px var(--asi-blue, #009fda)); }
+  .meshtip { position:absolute; z-index:5; pointer-events:none; max-width:320px; padding:7px 9px; border-radius:6px; font-size:11.5px; line-height:1.45;
+    background:var(--surface, #0c141c); color:var(--text, #e6edf3); border:1px solid var(--line); box-shadow:0 6px 20px rgba(0,0,0,.35); white-space:normal; }
+  .meshtip b { font-weight:600; }
+  .meshtip .dim { color:var(--text-mute, #8b98a8); }
+  .meshlegend { display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:var(--text-mute, #8b98a8); margin:2px 0 6px; }
+  .meshlegend i { display:inline-block; width:18px; height:0; border-top:3px solid; vertical-align:middle; margin-right:4px; }
+  .meshpanel { margin:6px 0; padding:9px 11px; border:1px solid var(--line); border-radius:7px; background:var(--surface-2); font-size:12px; }
+  .meshpanel h4 { margin:0 0 6px; font-size:13px; }
+  .meshpanel .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:5px 0; }
+  .meshpanel label { display:flex; gap:6px; align-items:center; margin:0; font-size:12px; }
+  .meshpanel input[type=number] { width:90px; }
+  .meshpanel input[type=text] { width:170px; }
+  .meshhub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12px; margin:6px 0; }
+  .meshhub input { width:80px; }
+  table.rooms td .lkst { font-weight:600; }
+  @media (prefers-reduced-motion: reduce) { .meshwrap .mflow { animation:none; } .meshwrap .medge { transition:none; } .meshwrap .mnode circle.body { transition:none; } }
 </style>
 </head>
 <body class="asi">
@@ -440,6 +483,18 @@
         <div id="spokesList" class="hint" style="margin:4px 0 6px"></div>
         <div class="btnrow"><button id="spokesUpdate" type="button">Update spokes now</button></div>
         <span id="spokesMsg" class="hint blk gap">Each spoke keeps a request held at this hub; the command reaches it within a second and it relaunches only when its version differs.</span>
+      </div>
+      <!-- 0.21.77 (Kenton: "customize the next hop of relays" + "a dynamic visual mesh view"): the relay mesh -- which relays link
+           directly over a private path, the hub and standby links behind them, and what crosses each link now -->
+      <div id="linksBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
+        <b style="font-size:13px">Relay mesh</b> <span id="meshCount" class="hint"></span>
+        <div class="meshlegend"><span><i style="border-color:var(--asi-green,#3fb950)"></i>up</span><span><i style="border-color:var(--asi-amber,#f0ad00)"></i>slow or flapping</span><span><i style="border-color:var(--asi-red,#dc5050)"></i>down</span><span><i style="border-color:var(--text-mute,#8b98a8);border-top-style:dotted"></i>off / waiting</span><span><i style="border-color:var(--text-dim,#b4c0cc);border-top-style:dashed"></i>hub / standby (last resort)</span></div>
+        <div class="meshwrap" id="meshWrap"><svg id="meshSvg" role="img" aria-label="Relay mesh: relays and the links between them"></svg><div class="meshtip" id="meshTip" hidden></div></div>
+        <div id="meshPanel" class="meshpanel" hidden></div>
+        <div class="meshhub"><span>Hub and standby link cost</span><input type="number" id="meshHubCost" min="1" max="1000" step="1"><button type="button" id="meshHubSave" class="ghost">Set</button>
+          <span class="hint">Direct links cost 1 + RTT/10 ms; a stream takes the cheapest path, so the hub and standby links carry it only when a viewer pulls it there or no direct path exists. Changing it restarts every spoke's relay once.</span></div>
+        <details id="meshTblBox"><summary class="hint" style="cursor:pointer">Links table</summary><div id="linksList" class="hint" style="margin:4px 0 6px"></div></details>
+        <span id="linksMsg" class="hint blk gap">Each spoke probes the other relays' private addresses every 5 minutes (a traceroute: every hop that answers must be a private address) and the hub links the pairs that reach each other. Click a link to switch it on or off, set its cost or the address to dial; click a relay for its probes.</span>
       </div>
       <!-- 0.21.50 (Kenton): every user in the federation, the KASTR each runs, and an Update that comes from the relay they use -->
       <div id="usersBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
@@ -715,7 +770,7 @@
       else if (!running) { fs.textContent = "Hub " + s.cluster.connect + (s.cluster.hasCode ? " \u2014 federation code saved." : " \u2014 no federation code saved."); fs.style.color = ""; }
       else if (f && f.token) {
         fs.textContent = "Hub token OK" + (f.exp ? " \u2014 renews before " + new Date((f.exp - 7 * 86400) * 1000).toLocaleDateString() : "") + "."
-          + (f.tls === "pinned" ? " Certificate pinned." : f.tls === "pinned-cached" ? " Certificate pinned (cached)." : f.tls === "insecure" ? " Certificate NOT verified." : "");   // 0.16.0
+          + (f.tls === "pinned" ? " Certificate pinned." : f.tls === "pinned-cached" ? " Certificate pinned (cached)." : f.tls === "insecure" ? " Certificate NOT verified." : f.tls === "per-dial" ? " Certificate fetched on each dial." : "");   // 0.16.0; 0.21.77: per-dial
         if (f.spoke) fs.textContent += f.spoke.registered ? " Registered with the hub." : " Not registered with the hub: " + f.spoke.why + ".";   // 0.21.5
         fs.style.color = f.tls === "insecure" || (f.spoke && !f.spoke.registered) ? "var(--asi-amber)" : "var(--asi-green)";
       } else if (f) {
@@ -1699,6 +1754,222 @@
   $("logsFind").addEventListener("keydown", (e) => { if (e.key === "Enter") $("logsSearch").click(); });
   window.__logRun = () => logRun;   // rig
   paintSpokes(); setInterval(paintSpokes, 20000);
+  // 0.21.77 (Kenton: "customize the next hop of relays ... I don't want everything to necessarily go through the hub" and "a
+  // dynamic visual mesh view on the hub's Relay page"): GET /api/relay/links every 5 s -> an SVG graph (the hub in the centre,
+  // the standby beside it, spokes on a ring; drag a relay to move it -- positions are remembered), edges coloured by state and
+  // drawn thicker / animated while streams cross; hover = details, click an edge = its override, click a relay = its probes.
+  const mesh = { data: null, sel: null, pos: {}, shown: {}, drag: null, anim: null };
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  try { mesh.pos = JSON.parse(localStorage.getItem("kastr.mesh.pos") || "{}") || {}; } catch { mesh.pos = {}; }
+  const meshSavePos = () => { try { localStorage.setItem("kastr.mesh.pos", JSON.stringify(mesh.pos)); } catch {} };
+  const meshName = (id) => { const n = (mesh.data?.nodes || []).find((x) => x.id === id); return n ? n.name : id; };
+  const meshEdgeId = (l) => l.kind === "hub" ? l.a + "|hub" : l.id;
+  function meshState(l) {
+    if (l.kind === "mesh" && l.mode === "off") return "off";
+    if (!l.active) return "wait";
+    if (l.up === false) return "down";
+    if (l.up !== true) return "wait";
+    return (l.rttMs != null && l.rttMs > 50) || (l.drops || 0) >= 3 ? "warn" : "up";
+  }
+  const meshStreams = (l) => ((l.streams?.fwd || []).length + (l.streams?.back || []).length);
+  const shortPath = (p) => String(p).replace(/\.hang$/, "").split("/").filter(Boolean).slice(-2).join("/");
+  function meshTipHtml(l) {
+    const a = meshName(l.a === "hub" ? "hub" : l.a), b = l.kind === "hub" ? meshName("hub") : meshName(l.b);
+    const how = l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "direct (set by hand)" : "direct (private path found)";
+    const st = meshState(l);
+    const lines = ["<b>" + esc(a) + " ⇄ " + esc(b) + "</b> <span class=\"dim\">" + esc(how) + "</span>"];
+    if (l.dialer) lines.push("dialer: " + esc(meshName(l.dialer)) + (l.addr ? " → " + esc(l.addr) + (l.port && !String(l.addr).includes("://") ? ":" + l.port : "") : ""));
+    if (l.rttMs != null) lines.push("RTT " + l.rttMs + " ms" + (l.hops != null ? ", " + l.hops + " hop" + (l.hops === 1 ? "" : "s") : "") + (l.private != null ? ", private path: " + (l.private ? "yes" : "no") : ""));
+    if (l.path && l.path.length) lines.push("<span class=\"dim\">route: " + esc(l.path.join(" → ")) + "</span>");
+    if (l.cost != null) lines.push("cost " + l.cost + (l.costAuto != null && l.costAuto !== l.cost ? " (measured " + l.costAuto + ")" : ""));
+    lines.push("state: " + ({ up: "up", warn: "up (slow or flapping)", down: "down", off: "switched off", wait: l.active ? "connecting…" : (l.why || "not linked") }[st])
+      + (l.since ? " since " + agoText(Date.now() / 1000 - l.since).replace(/ ago$/, "") : "") + (l.drops ? ", " + l.drops + " drop" + (l.drops === 1 ? "" : "s") : ""));
+    const f = l.streams?.fwd || [], k = l.streams?.back || [];
+    if (f.length) lines.push("crossing " + esc(meshName(l.dialer)) + " → " + esc(meshName(l.acceptor)) + ": " + esc(f.map(shortPath).join(", ")));
+    if (k.length) lines.push("crossing " + esc(meshName(l.acceptor)) + " → " + esc(meshName(l.dialer)) + ": " + esc(k.map(shortPath).join(", ")));
+    if (l.hint) lines.push("<span style=\"color:var(--asi-amber)\">" + esc(l.hint) + "</span>");
+    if (l.needsUpdate && l.needsUpdate.length) lines.push("<span style=\"color:var(--asi-amber)\">needs update: " + esc(l.needsUpdate.join(", ")) + "</span>");
+    return lines.join("<br>");
+  }
+  function meshLayout(d, w, h) {
+    const cx = w / 2, cy = h / 2, R = Math.max(70, Math.min(w, h) / 2 - 46);
+    const spokes = d.nodes.filter((n) => n.role === "spoke");
+    const want = {};
+    want.hub = [cx, cy];
+    for (const n of d.nodes.filter((n) => n.role === "standby")) want[n.id] = [cx + Math.min(110, R * 0.55), cy - Math.min(40, R * 0.25)];
+    spokes.forEach((n, i) => { const t = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, spokes.length); want[n.id] = [cx + R * Math.cos(t), cy + R * Math.sin(t)]; });
+    for (const id in want) { const p = mesh.pos[id]; if (Array.isArray(p) && p.length === 2) want[id] = [Math.min(w - 24, Math.max(24, p[0] * w)), Math.min(h - 30, Math.max(22, p[1] * h))]; }
+    return want;
+  }
+  function el(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function drawMesh(d) {
+    const svg = $("meshSvg"), wrap = $("meshWrap");
+    const w = Math.max(280, wrap.clientWidth || 600), h = Math.round(Math.min(440, Math.max(260, w * 0.58)));
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h); svg.style.height = h + "px";
+    const target = meshLayout(d, w, h);
+    const from = {};
+    for (const id in target) from[id] = mesh.shown[id] || target[id];
+    const t0 = performance.now(), dur = reduceMotion() || document.hidden ? 0 : 450;   // a hidden tab runs no animation frames
+    cancelAnimationFrame(mesh.anim || 0);
+    const frame = (now) => {
+      const k = dur ? Math.min(1, Math.max(0, (now - t0) / dur)) : 1, e = 1 - Math.pow(1 - k, 3);
+      for (const id in target) mesh.shown[id] = [from[id][0] + (target[id][0] - from[id][0]) * e, from[id][1] + (target[id][1] - from[id][1]) * e];
+      renderMesh(d, svg);
+      if (k < 1) mesh.anim = requestAnimationFrame(frame);
+    };
+    frame(t0);   // the first frame now (a changed graph is never left blank), the rest animated
+  }
+  function renderMesh(d, svg) {
+    svg.replaceChildren();
+    const P = (id) => mesh.shown[id === "hub" ? "hub" : id];
+    const edges = (d.links || []).filter((l) => (l.kind === "hub" || l.active || (l.kind === "mesh" && l.mode === "off")) && P(l.a) && P(l.kind === "hub" ? "hub" : l.b));
+    const gE = el("g", {}, svg), gN = el("g", {}, svg);
+    for (const l of edges) {
+      const [x1, y1] = P(l.a), [x2, y2] = P(l.kind === "hub" ? "hub" : l.b);
+      const n = meshStreams(l), st = meshState(l);
+      const dd = "M" + x1.toFixed(1) + " " + y1.toFixed(1) + " L" + x2.toFixed(1) + " " + y2.toFixed(1);
+      const id = meshEdgeId(l);
+      el("path", { d: dd, class: "medge st-" + st + " k-" + l.kind + (mesh.sel?.edge === id ? " sel" : ""), "stroke-width": (l.kind === "mesh" ? 3 : 2) + Math.min(4, n) * 1.5 }, gE);
+      if (st !== "down" && st !== "off") {
+        if ((l.streams?.fwd || []).length) { const s1 = l.dialer === l.a; el("path", { d: dd, class: "mflow" + (s1 ? "" : " rev"), "stroke-width": 2 }, gE); }
+        if ((l.streams?.back || []).length) { const s2 = l.dialer === l.a; el("path", { d: dd, class: "mflow" + (s2 ? " rev" : ""), "stroke-width": 2 }, gE); }
+      }
+      const hit = el("path", { d: dd, class: "mhit" }, gE);
+      hit.addEventListener("pointerenter", (ev) => meshTip(ev, meshTipHtml(l)));
+      hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
+      hit.addEventListener("pointerleave", () => { $("meshTip").hidden = true; });
+      hit.addEventListener("click", () => { mesh.sel = { edge: id }; paintMeshPanel(); renderMesh(d, svg); });
+    }
+    for (const n of d.nodes) {
+      const p = P(n.id); if (!p) continue;
+      const r = n.role === "hub" ? 22 : n.role === "standby" ? 18 : 14;
+      const g = el("g", { class: "mnode r-" + n.role + (n.stale ? " stale" : "") + (mesh.sel?.node === n.id ? " sel" : ""), transform: "translate(" + p[0].toFixed(1) + " " + p[1].toFixed(1) + ")" }, gN);
+      el("circle", { class: "body", r }, g);
+      if (n.role !== "spoke") { const ic = el("text", { class: "ic", y: 4 }, g); ic.textContent = n.role === "hub" ? "HUB" : "SB"; }
+      const t1 = el("text", { y: r + 13 }, g); t1.textContent = n.name;
+      const t2 = el("text", { class: "ver", y: r + 25 }, g); t2.textContent = n.version ? "v" + n.version : "";
+      if (n.needsUpdate || n.stale) { el("circle", { class: "badge", cx: r * 0.75, cy: -r * 0.75, r: 6 }, g); const b = el("text", { class: "bang", x: r * 0.75, y: -r * 0.75 + 3.5 }, g); b.textContent = "!"; }
+      const tip = "<b>" + esc(n.name) + "</b> <span class=\"dim\">" + esc(n.role === "hub" ? "hub (this relay)" : n.role === "standby" ? "standby hub" : "spoke") + "</span><br>KASTR " + esc(n.version || "?")
+        + (n.needsUpdate ? "<br><span style=\"color:var(--asi-amber)\">needs update to " + esc(d.minVersion) + " for direct links</span>" : "")
+        + (n.stale ? "<br><span style=\"color:var(--asi-amber)\">not seen for " + esc(agoText(Date.now() / 1000 - (n.at || 0))) + "</span>" : "")
+        + (n.addrs && n.addrs.length ? "<br><span class=\"dim\">" + esc(n.addrs.join(", ")) + (n.port ? " (port " + n.port + ")" : "") + "</span>" : "")
+        + (n.hubProbe && n.hubProbe.rttMs != null ? "<br>hub RTT " + n.hubProbe.rttMs + " ms" : "");
+      g.addEventListener("pointerenter", (ev) => meshTip(ev, tip));
+      g.addEventListener("pointermove", (ev) => meshTipMove(ev));
+      g.addEventListener("pointerleave", () => { $("meshTip").hidden = true; });
+      g.addEventListener("pointerdown", (ev) => { mesh.drag = { id: n.id, moved: false, x: ev.clientX, y: ev.clientY }; svg.setPointerCapture?.(ev.pointerId); ev.preventDefault(); });
+    }
+  }
+  // dragging a relay: the svg keeps the pointer (the node elements are redrawn while it moves)
+  $("meshSvg").addEventListener("pointermove", (ev) => {
+    const dr = mesh.drag, svg = $("meshSvg");
+    if (!dr || !mesh.data) return;
+    if (Math.abs(ev.clientX - dr.x) + Math.abs(ev.clientY - dr.y) > 4) dr.moved = true;
+    if (!dr.moved) return;
+    const box = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
+    const x = (ev.clientX - box.left) * vb.width / box.width, y = (ev.clientY - box.top) * vb.height / box.height;
+    mesh.shown[dr.id] = [Math.min(vb.width - 24, Math.max(24, x)), Math.min(vb.height - 30, Math.max(22, y))];
+    $("meshTip").hidden = true;
+    renderMesh(mesh.data, svg);
+  });
+  const meshDrop = () => {
+    const dr = mesh.drag, svg = $("meshSvg");
+    mesh.drag = null;
+    if (!dr || !mesh.data) return;
+    if (dr.moved) { const vb = svg.viewBox.baseVal, p2 = mesh.shown[dr.id]; mesh.pos[dr.id] = [p2[0] / vb.width, p2[1] / vb.height]; meshSavePos(); return; }
+    mesh.sel = { node: dr.id }; paintMeshPanel(); renderMesh(mesh.data, svg);
+  };
+  $("meshSvg").addEventListener("pointerup", meshDrop);
+  $("meshSvg").addEventListener("pointercancel", () => { mesh.drag = null; });
+  function meshTip(ev, html) { const t = $("meshTip"); t.innerHTML = html; t.hidden = false; meshTipMove(ev); }
+  function meshTipMove(ev) {
+    const t = $("meshTip"), box = $("meshWrap").getBoundingClientRect();
+    let x = ev.clientX - box.left + 14, y = ev.clientY - box.top + 12;
+    if (x + t.offsetWidth > box.width - 4) x = Math.max(4, ev.clientX - box.left - t.offsetWidth - 10);
+    if (y + t.offsetHeight > box.height - 4) y = Math.max(4, ev.clientY - box.top - t.offsetHeight - 10);
+    t.style.left = x + "px"; t.style.top = y + "px";
+  }
+  function paintMeshPanel() {
+    const box = $("meshPanel"), d = mesh.data;
+    if (!mesh.sel || !d) { box.hidden = true; return; }
+    box.hidden = false;
+    const close = "<button type=\"button\" class=\"ghost\" id=\"meshClose\" style=\"float:right;padding:1px 8px\">Close</button>";
+    if (mesh.sel.node) {
+      const n = d.nodes.find((x) => x.id === mesh.sel.node);
+      if (!n) { mesh.sel = null; box.hidden = true; return; }
+      const pr = (n.probes || []).slice().sort((a, b) => meshName(a.node).localeCompare(meshName(b.node)));
+      const row = (p, label) => "<tr><td>" + esc(label) + "</td><td class=\"mono\">" + esc(p.addr) + (p.port ? ":" + p.port : "") + "</td><td>" + (p.ok ? "<span class=\"updok\">yes</span>" : "<span class=\"updbad\">" + esc(p.err || "no") + "</span>") + "</td><td>" + (p.rttMs != null ? p.rttMs + " ms" : "—") + "</td><td>" + (p.hops != null ? p.hops : "—") + "</td><td>" + (p.ok ? (p.private ? "yes" : "<span class=\"updbad\">no" + (p.public && p.public.length ? " (" + esc(p.public.join(", ")) + ")" : "") + "</span>") : "—") + "</td><td class=\"mono\" title=\"" + esc((p.path || []).join(" → ")) + "\">" + esc(p.tool || "") + "</td><td class=\"mono\">" + (p.at ? agoText(Date.now() / 1000 - p.at) : "") + "</td></tr>";
+      box.innerHTML = close + "<h4>" + esc(n.name) + " — " + (n.role === "hub" ? "the hub (spokes probe it)" : "what it probed") + "</h4>"
+        + (n.role === "hub" ? "<div class=\"hint\">The hub does not probe; each spoke measures its own hub RTT (hover the hub links).</div>"
+          : (pr.length || n.hubProbe ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Relay</th><th>Address</th><th>Reached</th><th>RTT</th><th>Hops</th><th>Private path</th><th>Tool</th><th>When</th></tr>"
+            + (n.hubProbe ? row(n.hubProbe, meshName("hub") + " (hub)") : "") + pr.map((p) => row(p, meshName(p.node))).join("") + "</table></div>"
+            : "<div class=\"hint\">" + (n.needsUpdate ? "Runs a KASTR older than " + esc(d.minVersion) + " — it does not probe. Update it from the spokes table." : "No probe reported yet (spokes probe every 5 minutes).") + "</div>"));
+    } else {
+      const l = (d.links || []).find((x) => meshEdgeId(x) === mesh.sel.edge);
+      if (!l) { mesh.sel = null; box.hidden = true; return; }
+      let html = close + "<h4>" + esc(meshName(l.a)) + " ⇄ " + esc(l.kind === "hub" ? meshName("hub") : meshName(l.b)) + "</h4><div>" + meshTipHtml(l) + "</div>";
+      if (l.kind === "mesh") {
+        html += "<div class=\"row\"><label>Mode <select id=\"meshMode\"><option value=\"auto\">auto (private path)</option><option value=\"on\">on</option><option value=\"off\">off</option></select></label>"
+          + "<label>Cost <input type=\"number\" id=\"meshCost\" min=\"1\" max=\"1000\" step=\"1\" placeholder=\"" + esc(l.costAuto ?? "auto") + "\"></label>"
+          + "<label>Address <input type=\"text\" id=\"meshAddr\" placeholder=\"" + esc(l.addr || "as probed") + "\" spellcheck=\"false\"></label>"
+          + "<button type=\"button\" id=\"meshSave\">Save</button><button type=\"button\" id=\"meshAuto\" class=\"ghost\">Back to automatic</button></div><span id=\"meshMsg\" class=\"hint\"></span>";
+      } else {
+        html += "<div class=\"hint\" style=\"margin-top:6px\">" + (l.kind === "hub" ? "Every spoke keeps this link to the hub" : "Every spoke keeps a link to the standby hub") + " at the hub link cost (below), so it carries a stream only when a viewer pulls it there or no direct path exists.</div>";
+      }
+      box.innerHTML = html;
+      if (l.kind === "mesh") {
+        $("meshMode").value = l.mode || "auto"; $("meshCost").value = l.overrideCost ?? ""; $("meshAddr").value = l.overrideAddr || "";
+        const send = async (body) => {
+          $("meshMsg").textContent = "Saving…";
+          try { const r = await api("/api/relay/links", body); $("meshMsg").textContent = r.error ? r.error : "Saved — the spokes pick it up within a second."; } catch (e) { $("meshMsg").textContent = "Failed: " + (e?.message || e); }
+          setTimeout(paintMesh, 800);
+        };
+        $("meshSave").addEventListener("click", () => send({ a: l.a, b: l.b, mode: $("meshMode").value, cost: $("meshCost").value.trim() || null, addr: $("meshAddr").value.trim() }));
+        $("meshAuto").addEventListener("click", () => send({ a: l.a, b: l.b, mode: "auto", cost: null, addr: "" }));
+      }
+    }
+    $("meshClose")?.addEventListener("click", () => { mesh.sel = null; paintMeshPanel(); if (mesh.data) renderMesh(mesh.data, $("meshSvg")); });
+  }
+  function paintLinksTable(d) {
+    const rows = (d.links || []).slice().sort((a, b) => ({ mesh: 0, standby: 1, hub: 2 }[a.kind] - { mesh: 0, standby: 1, hub: 2 }[b.kind]) || String(a.aName).localeCompare(String(b.aName)));
+    const stTxt = (l) => { const s = meshState(l); return "<span class=\"lkst\" style=\"color:" + ({ up: "var(--asi-green)", warn: "var(--asi-amber)", down: "var(--asi-red)" }[s] || "var(--text-mute)") + "\">"
+      + ({ up: "up", warn: "up (slow)", down: "down", off: "off", wait: l.active ? "connecting" : "not linked" }[s]) + "</span>" + (l.accepted ? " <span class=\"hint\" title=\"the accepting relay sees the session\">✓ both ends</span>" : ""); };
+    $("linksList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Link</th><th>Found by</th><th>Address</th><th>RTT</th><th>Hops</th><th>Private</th><th>Cost</th><th>Mode</th><th>State</th><th>Streams crossing now</th><th></th></tr>"
+      + rows.map((l) => "<tr><td>" + esc(l.aName || meshName(l.a)) + " ⇄ " + esc(l.kind === "hub" ? meshName("hub") : (l.bName || meshName(l.b))) + "</td><td>" + esc(l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "manual" : "auto private path") + "</td>"
+        + "<td class=\"mono\">" + esc(l.addr || "") + "</td><td>" + (l.rttMs != null ? l.rttMs + " ms" : "—") + "</td><td>" + (l.hops ?? "—") + "</td>"
+        + "<td title=\"" + esc((l.path || []).join(" → ")) + "\">" + (l.private == null ? "—" : l.private ? "yes" : "no") + "</td><td>" + (l.cost ?? "—") + "</td><td>" + esc(l.kind === "mesh" ? l.mode : "—") + "</td>"
+        + "<td>" + stTxt(l) + (l.why && !l.active ? "<div class=\"hint\">" + esc(l.why) + "</div>" : "") + (l.hint ? "<div class=\"hint\" style=\"color:var(--asi-amber)\">" + esc(l.hint) + "</div>" : "") + (l.needsUpdate && l.needsUpdate.length ? "<div class=\"hint\" style=\"color:var(--asi-amber)\">needs update: " + esc(l.needsUpdate.join(", ")) + "</div>" : "") + "</td>"
+        + "<td>" + esc([...(l.streams?.fwd || []), ...(l.streams?.back || [])].map(shortPath).join(", ") || "—") + "</td>"
+        + "<td>" + (l.kind === "mesh" && !(l.needsUpdate && l.needsUpdate.length) ? "<button type=\"button\" class=\"ghost lkedit\" data-id=\"" + esc(meshEdgeId(l)) + "\">Edit</button>" : "") + "</td></tr>").join("") + "</table></div>"
+      : "No links yet.";
+    for (const b of $("linksList").querySelectorAll(".lkedit")) b.addEventListener("click", () => { mesh.sel = { edge: b.dataset.id }; paintMeshPanel(); if (mesh.data) renderMesh(mesh.data, $("meshSvg")); $("meshPanel").scrollIntoView({ block: "nearest" }); });
+  }
+  async function paintMesh() {
+    if (!LOCAL) return;
+    let d;
+    try { d = await api("/api/relay/links"); } catch { return; }
+    const box = $("linksBox");
+    const show = !!(d && d.ok && !d.notHub && (d.nodes || []).length > 1);
+    box.hidden = !show;
+    if (!show) return;
+    mesh.data = d;
+    const direct = (d.links || []).filter((l) => l.kind === "mesh" && l.active);
+    $("meshCount").textContent = (d.nodes.length - 1) + (d.nodes.length === 2 ? " spoke" : " spokes") + ", " + direct.length + " direct link" + (direct.length === 1 ? "" : "s")
+      + ", " + direct.filter((l) => l.up === true).length + " up";
+    if (document.activeElement !== $("meshHubCost")) $("meshHubCost").value = d.hubCost;
+    if (!mesh.drag) drawMesh(d);
+    paintLinksTable(d);
+    if (mesh.sel && !box.contains(document.activeElement)) paintMeshPanel();
+  }
+  $("meshHubSave").addEventListener("click", async () => {
+    const v = $("meshHubCost").value.trim();
+    if (!confirm("Set the hub and standby link cost to " + v + "? Every spoke's relay restarts once to take it (viewers there reconnect within seconds).")) return;
+    try { const r = await api("/api/relay/links", { hubCost: Number(v) }); $("linksMsg").textContent = r.error ? r.error : "Hub and standby link cost set to " + r.hubCost + "."; } catch (e) { $("linksMsg").textContent = "Failed: " + (e?.message || e); }
+    paintMesh();
+  });
+  new ResizeObserver(() => { if (mesh.data && !$("linksBox").hidden) drawMesh(mesh.data); }).observe($("meshWrap"));
+  paintMesh(); setInterval(paintMesh, 5000);
 
   // 0.8.0: relay autostart + one-click firewall rules.
   api("/api/relay/autostart").then((c) => { $("autostart").checked = !!c.enabled; }).catch(() => {});
@@ -1770,7 +2041,7 @@
     else { ha.textContent = "up \u2014 " + (a.sessions ?? 0) + " sessions (" + (a.publishers ?? 0) + " publishing), " + (a.grants ?? 0) + " grants, " + (a.refusals ?? 0) + " refusals"
       + (a.lastRefusal ? " \u2014 last: " + a.lastRefusal.remote + " (" + a.lastRefusal.why + ")" : "")
       + (a.churn && a.churn.opens >= 6 ? " \u2014 " + a.churn.remote + " opened " + a.churn.opens + " sessions in a minute (a browser reconnecting in a loop?)" : ""); ha.style.color = (a.refusals || (a.churn && a.churn.opens >= 6)) ? "var(--asi-amber)" : "var(--asi-green)"; }   // 0.21.8: churn
-    $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : "NOT verified")
+    $("hHub").textContent = f ? (f.hub + " \u2014 token " + (f.token ? "OK" : "none") + ", certificate " + (f.tls === "pinned" ? "pinned" : f.tls === "pinned-cached" ? "pinned (cached)" : f.tls === "per-dial" ? "fetched per dial" : f.tls === "public" ? "public" : "NOT verified")
       + (f.spoke ? (f.spoke.registered ? ", registered" : ", not registered (" + String(f.spoke.why || "").split(" -- ")[0] + ")") : "")
       + (f.link ? (", link " + (f.link.up ? "up" : "DOWN") + " " + Math.max(0, Math.round((Date.now() / 1000 - (f.link.since || 0)) / 60)) + " m, " + (f.link.drops || 0) + " drop" + (f.link.drops === 1 ? "" : "s") + ", " + (f.link.repins || 0) + " re-pin" + (f.link.repins === 1 ? "" : "s")) : "")   // 0.21.7: the cluster link
       + (f.hubSees && f.hubSees.nodes != null ? (", hub sees " + f.hubSees.nodes + " node" + (f.hubSees.nodes === 1 ? "" : "s") + (f.hubSees.seesYou === true ? " incl. this one" : f.hubSees.seesYou === false ? " (NOT this one)" : "")) : "")) : "standalone";   // 0.21.5: registered with the hub?

@@ -247,6 +247,23 @@
   .meshhub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12px; margin:6px 0; }
   .meshhub input { width:80px; }
   table.rooms td .lkst { font-weight:600; }
+  /* 0.21.78: unlinked pairs (faint, dotted -- click for why), bandwidth on the line, the hub's halo, a pinned relay, the zoomed relay's clients */
+  .meshwrap .medge.st-none { stroke:var(--text-mute, #8b98a8); stroke-dasharray:1 6; opacity:.42; }
+  .meshwrap .mrate { fill:var(--text-dim, #b4c0cc); font-size:10px; text-anchor:middle; pointer-events:none; paint-order:stroke; stroke:var(--surface-2, #111a24); stroke-width:3px; stroke-linejoin:round; }
+  .meshwrap .mnode .halo { fill:none; stroke:var(--asi-blue, #009fda); stroke-opacity:.28; stroke-width:5; }
+  .meshwrap .mnode.pinned circle.body { stroke-dasharray:4 2; }
+  .meshwrap .medge.zc { stroke:var(--text-dim, #b4c0cc); opacity:.8; }
+  .meshwrap .medge.zc.zidle { stroke-dasharray:3 5; opacity:.5; }
+  .meshwrap .mnode.zk-person circle.body { fill:color-mix(in srgb, var(--asi-green, #3fb950) 24%, var(--surface, #0c141c)); stroke:var(--asi-green, #3fb950); }
+  .meshwrap .mnode.zk-box circle.body { fill:color-mix(in srgb, var(--asi-amber, #f0ad00) 24%, var(--surface, #0c141c)); stroke:var(--asi-amber, #f0ad00); }
+  .meshwrap .mnode.zk-viewer circle.body { fill:var(--surface, #0c141c); stroke:var(--text-mute, #8b98a8); }
+  .meshwrap .mnode.z-client text.ic { font-size:9px; }
+  .meshwrap .mnode.z-relay { opacity:.85; }
+  .meshwrap .mnode.z-relay text.ic { font-size:7.5px; }
+  .meshwrap .meshbtn { position:absolute; top:6px; z-index:4; padding:2px 9px; font-size:11.5px; }
+  .meshwrap .meshbtn.l { left:6px; }
+  .meshwrap .meshbtn.r { right:6px; }
+  .meshpanel tr.zsel td { background:color-mix(in srgb, var(--asi-blue, #009fda) 16%, transparent); }
   @media (prefers-reduced-motion: reduce) { .meshwrap .mflow { animation:none; } .meshwrap .medge { transition:none; } .meshwrap .mnode circle.body { transition:none; } }
 </style>
 </head>
@@ -488,13 +505,13 @@
            directly over a private path, the hub and standby links behind them, and what crosses each link now -->
       <div id="linksBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
         <b style="font-size:13px">Relay mesh</b> <span id="meshCount" class="hint"></span>
-        <div class="meshlegend"><span><i style="border-color:var(--asi-green,#3fb950)"></i>up</span><span><i style="border-color:var(--asi-amber,#f0ad00)"></i>slow or flapping</span><span><i style="border-color:var(--asi-red,#dc5050)"></i>down</span><span><i style="border-color:var(--text-mute,#8b98a8);border-top-style:dotted"></i>off / waiting</span><span><i style="border-color:var(--text-dim,#b4c0cc);border-top-style:dashed"></i>hub / standby (last resort)</span></div>
-        <div class="meshwrap" id="meshWrap"><svg id="meshSvg" role="img" aria-label="Relay mesh: relays and the links between them"></svg><div class="meshtip" id="meshTip" hidden></div></div>
+        <div class="meshlegend"><span><i style="border-color:var(--asi-green,#3fb950)"></i>up</span><span><i style="border-color:var(--asi-amber,#f0ad00)"></i>slow or flapping</span><span><i style="border-color:var(--asi-red,#dc5050)"></i>down</span><span><i style="border-color:var(--text-mute,#8b98a8);border-top-style:dotted"></i>off / waiting</span><span><i style="border-color:var(--text-dim,#b4c0cc);border-top-style:dashed"></i>hub / standby (last resort)</span><span><i style="border-color:var(--text-mute,#8b98a8);border-top-style:dotted;opacity:.55"></i>not linked (click for why)</span><span>thicker = more bandwidth</span></div>
+        <div class="meshwrap" id="meshWrap"><button type="button" id="meshBack" class="ghost meshbtn l" hidden title="Back to the whole mesh (Escape)">← Full mesh</button><button type="button" id="meshArrange" class="ghost meshbtn r" title="Let go of the relays you moved and lay the map out again">Re-arrange</button><svg id="meshSvg" role="img" aria-label="Relay mesh: relays and the links between them"></svg><div class="meshtip" id="meshTip" hidden></div></div>
         <div id="meshPanel" class="meshpanel" hidden></div>
-        <div class="meshhub"><span>Hub and standby link cost</span><input type="number" id="meshHubCost" min="1" max="1000" step="1"><button type="button" id="meshHubSave" class="ghost">Set</button>
-          <span class="hint">Direct links cost 1 + RTT/10 ms; a stream takes the cheapest path, so the hub and standby links carry it only when a viewer pulls it there or no direct path exists. Changing it restarts every spoke's relay once.</span></div>
+        <div class="meshhub"><span>Default hub and standby link cost</span><input type="number" id="meshHubCost" min="1" max="1000" step="1"><button type="button" id="meshHubSave" class="ghost">Set</button>
+          <span class="hint">Direct links cost 1 + RTT/10 ms; a stream takes the cheapest path, so the hub and standby links carry it only when a viewer pulls it there or no direct path exists. Click one spoke's hub or standby link to price it on its own. Spokes on 0.21.78 or newer take a change live; an older spoke restarts its relay once.</span></div>
         <details id="meshTblBox"><summary class="hint" style="cursor:pointer">Links table</summary><div id="linksList" class="hint" style="margin:4px 0 6px"></div></details>
-        <span id="linksMsg" class="hint blk gap">Each spoke probes the other relays' private addresses every 5 minutes (a traceroute: every hop that answers must be a private address) and the hub links the pairs that reach each other. Click a link to switch it on or off, set its cost or the address to dial; click a relay for its probes.</span>
+        <span id="linksMsg" class="hint blk gap">Each spoke probes the other relays' private addresses every 5 minutes (a traceroute: every hop that answers must be a private address) and the hub links the pairs that reach each other. Hover a link for the bandwidth each way, a relay for its own (local clients / relay links). Click a link to switch it on or off, set its cost or the address to dial; click a relay to zoom into it and its clients (Escape or ← Full mesh goes back); drag a relay to place it.</span>
       </div>
       <!-- 0.21.50 (Kenton): every user in the federation, the KASTR each runs, and an Update that comes from the relay they use -->
       <div id="usersBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
@@ -1755,133 +1772,403 @@
   window.__logRun = () => logRun;   // rig
   paintSpokes(); setInterval(paintSpokes, 20000);
   // 0.21.77 (Kenton: "customize the next hop of relays ... I don't want everything to necessarily go through the hub" and "a
-  // dynamic visual mesh view on the hub's Relay page"): GET /api/relay/links every 5 s -> an SVG graph (the hub in the centre,
-  // the standby beside it, spokes on a ring; drag a relay to move it -- positions are remembered), edges coloured by state and
-  // drawn thicker / animated while streams cross; hover = details, click an edge = its override, click a relay = its probes.
-  const mesh = { data: null, sel: null, pos: {}, shown: {}, drag: null, anim: null };
+  // dynamic visual mesh view on the hub's Relay page"): GET /api/relay/links every 5 s -> an SVG graph, edges coloured by state;
+  // hover = details, click an edge = its settings, click a relay = its probes.
+  // 0.21.78 (Kenton: "On the site relay mesh map, when hovering over a line, show the bandwidth going through that path.",
+  // "Allow for setting cost manually on links between relays.", "Have the site relay mesh map move more dynamically to make it
+  // the most viewable depending on relays." and "When hovering over the relay in the map, show the local bandwidth being used
+  // on that relay."): a force-directed layout that fits the box (relays push apart, linked relays pull together, labels keep
+  // clear of each other; it settles again on a resize and when relays come or go -- at once under prefers-reduced-motion); a
+  // dragged relay stays where it was dropped (kastr.mesh.pos) until Re-arrange; every pair is drawn (an unlinked one faint and
+  // dotted -- click it for why); a line is as thick as its bandwidth; every link's cost is editable (the hub and standby links
+  // per spoke); the 5 s refresh never wipes a half-typed value; a relay's hover splits its bandwidth into local / links.
+  // 0.21.78 (Kenton: "If I click on a relay, have it go to a mesh map of that relay and all of the downstream clients
+  // connected, like a zoom in. Then a button to go back to the full mesh view."): click a relay = zoom into it (#mesh=<id>
+  // keeps it over a refresh): its clients round it (people's apps, boxes, web viewers -- each with what it publishes here
+  // and the bitrate), its other relays small at the edge; "← Full mesh" or Escape zooms back out.
+  const mesh = { data: null, sel: null, pos: {}, fsim: {}, zsim: {}, sim: null, w: 0, h: 0, alpha: 0, raf: 0, drag: null, els: null, topo: "", tip: null, draft: {}, formSig: "",
+    zoom: null, zd: null, zoomFx: null, ztopo: "" };
+  mesh.sim = mesh.fsim;
+  { const m = /mesh=([a-z0-9-]+)/.exec(location.hash || ""); if (m) { mesh.zoom = m[1]; mesh.sel = { zoom: m[1] }; } }
   const SVGNS = "http://www.w3.org/2000/svg";
   const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
   try { mesh.pos = JSON.parse(localStorage.getItem("kastr.mesh.pos") || "{}") || {}; } catch { mesh.pos = {}; }
   const meshSavePos = () => { try { localStorage.setItem("kastr.mesh.pos", JSON.stringify(mesh.pos)); } catch {} };
   const meshName = (id) => { const n = (mesh.data?.nodes || []).find((x) => x.id === id); return n ? n.name : id; };
-  const meshEdgeId = (l) => l.kind === "hub" ? l.a + "|hub" : l.id;
+  const meshNode = (id) => (mesh.data?.nodes || []).find((x) => x.id === id);
+  const meshEdgeId = (l) => l.kind === "hub" ? "h:" + l.a : l.kind === "standby" ? "s:" + l.a : "m:" + l.id;
+  const meshB = (l) => l.kind === "hub" ? "hub" : l.b;
   function meshState(l) {
     if (l.kind === "mesh" && l.mode === "off") return "off";
-    if (!l.active) return "wait";
+    if (!l.active) return l.kind === "hub" ? "wait" : "none";
     if (l.up === false) return "down";
     if (l.up !== true) return "wait";
     return (l.rttMs != null && l.rttMs > 50) || (l.drops || 0) >= 3 ? "warn" : "up";
   }
-  const meshStreams = (l) => ((l.streams?.fwd || []).length + (l.streams?.back || []).length);
-  const shortPath = (p) => String(p).replace(/\.hang$/, "").split("/").filter(Boolean).slice(-2).join("/");
+  const fmtBps = (b) => b == null ? "—" : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + " Mbit/s" : b >= 1e3 ? Math.round(b / 1e3) + " kbit/s" : Math.round(b) + " bit/s";
+  const meshBw = (l) => (l.bps ? (l.bps.fwd || 0) + (l.bps.back || 0) : 0);
+  const shortPath = (p) => String(p).replace(/[.]hang$/, "").split("/").filter(Boolean).slice(-2).join("/");
   function meshTipHtml(l) {
-    const a = meshName(l.a === "hub" ? "hub" : l.a), b = l.kind === "hub" ? meshName("hub") : meshName(l.b);
+    const a = meshName(l.a), b = meshName(meshB(l));
     const how = l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "direct (set by hand)" : "direct (private path found)";
     const st = meshState(l);
-    const lines = ["<b>" + esc(a) + " ⇄ " + esc(b) + "</b> <span class=\"dim\">" + esc(how) + "</span>"];
+    const lines = ["<b>" + esc(a) + " ⇄ " + esc(b) + "</b> <span class='dim'>" + esc(how) + "</span>"];
+    if (l.active && l.dialer) {   // 0.21.78: the bandwidth each way, measured where the link is accepted
+      const dir = (from, to, bps, list) => esc(meshName(from)) + " → " + esc(meshName(to)) + ": <b>" + (l.bps ? fmtBps(bps || 0) : "…") + "</b>"
+        + (list.length ? " · " + list.length + " stream" + (list.length === 1 ? "" : "s") + " <span class='dim'>(" + esc(list.slice(0, 4).map(shortPath).join(", ")) + (list.length > 4 ? ", …" : "") + ")</span>" : "");
+      lines.push(dir(l.dialer, l.acceptor, l.bps?.fwd, l.streams?.fwd || []), dir(l.acceptor, l.dialer, l.bps?.back, l.streams?.back || []));
+      const old = l.kind === "hub" && meshNode(l.a) && meshNode(l.a).liveCost === false;
+      lines.push("<span class='dim'>" + (l.bps ? "measured by " + esc(meshName(l.acceptor)) + (l.bps.at ? ", " + agoText(Date.now() / 1000 - l.bps.at) : "")
+        : old ? "bandwidth: " + esc(a) + " needs KASTR 0.21.78 for it" : "bandwidth: measuring (sampled every 15 s)") + "</span>");
+    }
     if (l.dialer) lines.push("dialer: " + esc(meshName(l.dialer)) + (l.addr ? " → " + esc(l.addr) + (l.port && !String(l.addr).includes("://") ? ":" + l.port : "") : ""));
     if (l.rttMs != null) lines.push("RTT " + l.rttMs + " ms" + (l.hops != null ? ", " + l.hops + " hop" + (l.hops === 1 ? "" : "s") : "") + (l.private != null ? ", private path: " + (l.private ? "yes" : "no") : ""));
-    if (l.path && l.path.length) lines.push("<span class=\"dim\">route: " + esc(l.path.join(" → ")) + "</span>");
-    if (l.cost != null) lines.push("cost " + l.cost + (l.costAuto != null && l.costAuto !== l.cost ? " (measured " + l.costAuto + ")" : ""));
-    lines.push("state: " + ({ up: "up", warn: "up (slow or flapping)", down: "down", off: "switched off", wait: l.active ? "connecting…" : (l.why || "not linked") }[st])
+    if (l.path && l.path.length) lines.push("<span class='dim'>route: " + esc(l.path.join(" → ")) + "</span>");
+    if (l.cost != null) lines.push("cost " + l.cost + (l.costAuto != null && l.costAuto !== l.cost ? " (measured " + l.costAuto + ")" : "") + (l.overrideCost && l.costDefault != null ? " (set by hand; default " + l.costDefault + ")" : ""));
+    lines.push("state: " + ({ up: "up", warn: "up (slow or flapping)", down: "down", off: "switched off", wait: l.active ? "connecting…" : (l.why || "not linked"), none: "not linked — " + (l.why || "no private path yet") }[st])
       + (l.since ? " since " + agoText(Date.now() / 1000 - l.since).replace(/ ago$/, "") : "") + (l.drops ? ", " + l.drops + " drop" + (l.drops === 1 ? "" : "s") : ""));
-    const f = l.streams?.fwd || [], k = l.streams?.back || [];
-    if (f.length) lines.push("crossing " + esc(meshName(l.dialer)) + " → " + esc(meshName(l.acceptor)) + ": " + esc(f.map(shortPath).join(", ")));
-    if (k.length) lines.push("crossing " + esc(meshName(l.acceptor)) + " → " + esc(meshName(l.dialer)) + ": " + esc(k.map(shortPath).join(", ")));
-    if (l.hint) lines.push("<span style=\"color:var(--asi-amber)\">" + esc(l.hint) + "</span>");
-    if (l.needsUpdate && l.needsUpdate.length) lines.push("<span style=\"color:var(--asi-amber)\">needs update: " + esc(l.needsUpdate.join(", ")) + "</span>");
+    if (l.hint) lines.push("<span style='color:var(--asi-amber)'>" + esc(l.hint) + "</span>");
+    if (l.needsUpdate && l.needsUpdate.length) lines.push("<span style='color:var(--asi-amber)'>needs update: " + esc(l.needsUpdate.join(", ")) + "</span>");
+    if (st === "none" || st === "off") lines.push("<span class='dim'>click for its settings</span>");
     return lines.join("<br>");
   }
-  function meshLayout(d, w, h) {
-    const cx = w / 2, cy = h / 2, R = Math.max(70, Math.min(w, h) / 2 - 46);
-    const spokes = d.nodes.filter((n) => n.role === "spoke");
-    const want = {};
-    want.hub = [cx, cy];
-    for (const n of d.nodes.filter((n) => n.role === "standby")) want[n.id] = [cx + Math.min(110, R * 0.55), cy - Math.min(40, R * 0.25)];
-    spokes.forEach((n, i) => { const t = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, spokes.length); want[n.id] = [cx + R * Math.cos(t), cy + R * Math.sin(t)]; });
-    for (const id in want) { const p = mesh.pos[id]; if (Array.isArray(p) && p.length === 2) want[id] = [Math.min(w - 24, Math.max(24, p[0] * w)), Math.min(h - 30, Math.max(22, p[1] * h))]; }
-    return want;
+  function meshLoadHtml(n) {   // 0.21.78: a relay's bandwidth -- its own clients (local) and its relay links
+    const L = n.load;
+    if (!L) return "<br><span class='dim'>bandwidth: " + (n.role !== "hub" && (n.needsUpdate || n.liveCost === false) ? "needs KASTR 0.21.78" : "measuring (sampled every 15 s)") + "</span>";
+    const io = (o) => "in <b>" + fmtBps(o?.in) + "</b> · out <b>" + fmtBps(o?.out) + "</b>";
+    const cnt = [L.streams != null ? L.streams + " stream" + (L.streams === 1 ? "" : "s") + " published here" : "", L.viewers != null ? L.viewers + " viewer stream" + (L.viewers === 1 ? "" : "s") : "",
+      L.sessions != null ? L.sessions + " session" + (L.sessions === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+    return "<br>Local " + io(L.local) + (cnt ? "<br><span class='dim'>" + esc(cnt) + "</span>" : "") + "<br>Relay links " + io(L.link) + "<br>Total " + io(L.total)
+      + (L.at ? "<br><span class='dim'>measured " + agoText(Date.now() / 1000 - L.at) + "</span>" : "");
+  }
+  function meshNodeTip(n) {
+    const d = mesh.data || {};
+    return "<b>" + esc(n.name) + "</b> <span class='dim'>" + esc(n.role === "hub" ? "hub (this relay)" : n.role === "standby" ? "standby hub" : "spoke") + "</span><br>KASTR " + esc(n.version || "?")
+      + (n.needsUpdate ? "<br><span style='color:var(--asi-amber)'>needs update to " + esc(d.minVersion) + " for direct links</span>" : "")
+      + (n.stale ? "<br><span style='color:var(--asi-amber)'>not seen for " + esc(agoText(Date.now() / 1000 - (n.at || 0))) + "</span>" : "")
+      + meshLoadHtml(n)
+      + (n.addrs && n.addrs.length ? "<br><span class='dim'>" + esc(n.addrs.join(", ")) + (n.port ? " (port " + n.port + ")" : "") + "</span>" : "")
+      + (n.hubProbe && n.hubProbe.rttMs != null ? "<br>hub RTT " + n.hubProbe.rttMs + " ms" : "");
   }
   function el(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
-  function drawMesh(d) {
-    const svg = $("meshSvg"), wrap = $("meshWrap");
-    const w = Math.max(280, wrap.clientWidth || 600), h = Math.round(Math.min(440, Math.max(260, w * 0.58)));
+  // ---- the force-directed layout (0.21.78) ----
+  const meshEdges = (d) => { const ids = new Set((d.nodes || []).map((n) => n.id)); return (d.links || []).filter((l) => ids.has(l.a) && ids.has(meshB(l))); };
+  const meshR = (n) => n.zrole === "client" ? 10 : n.zrole === "relay" ? 11 : n.role === "hub" ? 22 : n.role === "standby" ? 18 : 14;
+  const meshHalfW = (n) => Math.max(meshR(n) + 4, String(n.name || "").length * 3.3 + 6, (n.version ? n.version.length + 1 : 0) * 2.9 + 6);
+  const meshHash = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 100003; return h / 100003; };
+  const meshTopo = (d) => JSON.stringify([(d.nodes || []).map((n) => n.id + ":" + n.role), meshEdges(d).filter((l) => l.active).map(meshEdgeId)]);
+  function meshSize() {
+    const wrap = $("meshWrap"), svg = $("meshSvg"), n = Math.max((mesh.data?.nodes || []).length, Math.ceil(((mesh.data?.zoom?.clients || []).length + 1) / 2));
+    const w = Math.max(280, Math.round(wrap.clientWidth || 600)), h = Math.round(Math.min(560, Math.max(260, w * 0.5, 170 + n * 36)));
+    if (w === mesh.w && h === mesh.h) return false;
+    if (mesh.w) for (const S of [mesh.fsim, mesh.zsim]) for (const id in S) { S[id].x *= w / mesh.w; S[id].y *= h / mesh.h; }
+    mesh.w = w; mesh.h = h;
     svg.setAttribute("viewBox", "0 0 " + w + " " + h); svg.style.height = h + "px";
-    const target = meshLayout(d, w, h);
-    const from = {};
-    for (const id in target) from[id] = mesh.shown[id] || target[id];
-    const t0 = performance.now(), dur = reduceMotion() || document.hidden ? 0 : 450;   // a hidden tab runs no animation frames
-    cancelAnimationFrame(mesh.anim || 0);
-    const frame = (now) => {
-      const k = dur ? Math.min(1, Math.max(0, (now - t0) / dur)) : 1, e = 1 - Math.pow(1 - k, 3);
-      for (const id in target) mesh.shown[id] = [from[id][0] + (target[id][0] - from[id][0]) * e, from[id][1] + (target[id][1] - from[id][1]) * e];
-      renderMesh(d, svg);
-      if (k < 1) mesh.anim = requestAnimationFrame(frame);
-    };
-    frame(t0);   // the first frame now (a changed graph is never left blank), the rest animated
+    return true;
   }
-  function renderMesh(d, svg) {
-    svg.replaceChildren();
-    const P = (id) => mesh.shown[id === "hub" ? "hub" : id];
-    const edges = (d.links || []).filter((l) => (l.kind === "hub" || l.active || (l.kind === "mesh" && l.mode === "off")) && P(l.a) && P(l.kind === "hub" ? "hub" : l.b));
-    const gE = el("g", {}, svg), gN = el("g", {}, svg);
+  function meshSeed(d) {   // a new relay starts beside a relay it links to, else on a ring round the hub
+    const cx = mesh.w / 2, cy = mesh.h / 2, R = Math.min(mesh.w, mesh.h) * 0.36, others = d.nodes.filter((n) => n.role !== "hub");
+    for (const n of d.nodes) {
+      if (mesh.sim[n.id]) continue;
+      const t = -Math.PI / 2 + 2 * Math.PI * (Math.max(0, others.indexOf(n)) + meshHash(n.id) * 0.3) / Math.max(1, others.length);
+      const nb = meshEdges(d).filter((l) => l.active && l.kind === "mesh" && (l.a === n.id || l.b === n.id)).map((l) => mesh.sim[l.a === n.id ? l.b : l.a]).find(Boolean);
+      const [x, y] = n.role === "hub" ? [cx, cy] : nb ? [nb.x + 50 * Math.cos(t), nb.y + 50 * Math.sin(t)] : [cx + R * Math.cos(t), cy + R * Math.sin(t)];
+      mesh.sim[n.id] = { x, y, vx: 0, vy: 0 };
+    }
+    for (const id in mesh.sim) if (!d.nodes.some((n) => n.id === id)) delete mesh.sim[id];
+  }
+  function meshTick(d) {
+    const W = mesh.w, H = mesh.h, a = mesh.alpha, S = mesh.sim, cx = W / 2, cy = H / 2;
+    const ns = d.nodes.filter((n) => S[n.id]), base = Math.max(90, Math.min(W, H) * 0.44);
+    const fixed = (id) => (mesh.drag && mesh.drag.moved && mesh.drag.id === id) || Array.isArray(mesh.pos[id]);
+    for (const l of meshEdges(d)) {   // springs: a direct link pulls hardest, the hub links hold the spokes round the hub, the standby links barely
+      if (!l.active) continue;
+      const p = S[l.a], q = S[meshB(l)]; if (!p || !q) continue;
+      const len = l.kind === "mesh" ? base * 0.55 : l.kind === "standby" ? base : base * 0.8, k = l.kind === "mesh" ? 0.06 : l.kind === "standby" ? 0.006 : 0.025;
+      const dx = q.x - p.x, dy = q.y - p.y, dist = Math.hypot(dx, dy) || 0.01, f = (dist - len) / dist * k * a;
+      p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f;
+    }
+    for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {   // every relay pushes the others away
+      const p = S[ns[i].id], q = S[ns[j].id];
+      let dx = q.x - p.x, dy = q.y - p.y; if (!dx && !dy) { dx = meshHash(ns[j].id) - 0.5; dy = 0.5 - meshHash(ns[i].id); }
+      const d2 = Math.max(dx * dx + dy * dy, 400), dist = Math.sqrt(d2), f = 12000 * a / d2;
+      p.vx -= dx / dist * f; p.vy -= dy / dist * f; q.vx += dx / dist * f; q.vy += dy / dist * f;
+    }
+    for (const n of ns) {   // gravity: the hub (or the zoomed relay) to the middle, the rest gently inwards, the zoomed relay's other relays out
+      const s = S[n.id], g = n.role === "hub" ? 0.08 : n.role === "edge" ? -0.006 : 0.012;
+      s.vx += (cx - s.x) * g * a; s.vy += (cy - s.y) * g * a;
+      if (fixed(n.id)) { s.vx = s.vy = 0; if (Array.isArray(mesh.pos[n.id]) && !(mesh.drag && mesh.drag.id === n.id)) { s.x = mesh.pos[n.id][0] * W; s.y = mesh.pos[n.id][1] * H; } continue; }
+      s.vx *= 0.55; s.vy *= 0.55; s.x += Math.max(-30, Math.min(30, s.vx)); s.y += Math.max(-30, Math.min(30, s.vy));
+    }
+    for (let pass = 0; pass < 3; pass++) for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {   // labels never overlap
+      const A = ns[i], B = ns[j], p = S[A.id], q = S[B.id];
+      const ox = meshHalfW(A) + meshHalfW(B) + 6 - Math.abs(q.x - p.x);
+      const top = (n, s) => s.y - meshR(n) - 4, bot = (n, s) => s.y + meshR(n) + 30;
+      const oy = Math.min(bot(A, p), bot(B, q)) - Math.max(top(A, p), top(B, q)) + 4;
+      if (ox <= 0 || oy <= 0) continue;
+      const fa = fixed(A.id) ? 0 : fixed(B.id) ? 1 : 0.5, fb = 1 - fa;
+      if (fixed(A.id) && fixed(B.id)) continue;
+      if (ox < oy) { const sx = q.x >= p.x ? 1 : -1; p.x -= sx * ox * fa; q.x += sx * ox * fb; } else { const sy = q.y >= p.y ? 1 : -1; p.y -= sy * oy * fa; q.y += sy * oy * fb; }
+    }
+    for (const n of ns) {   // inside the box, label and all
+      const s = S[n.id], hw = meshHalfW(n), r = meshR(n);
+      s.x = Math.min(W - hw - 4, Math.max(hw + 4, s.x)); s.y = Math.min(H - r - 30, Math.max(r + 8, s.y));
+    }
+    mesh.alpha = a * 0.982;
+  }
+  const meshCur = () => mesh.zoom && mesh.zd ? mesh.zd : mesh.data;   // the graph on screen: the full mesh or one relay zoomed
+  function meshRun(heat) {
+    const d = meshCur();
+    if (!d) return;
+    mesh.alpha = Math.max(mesh.alpha, heat || 0);
+    if (reduceMotion() || document.hidden) {   // no animation: settle now, draw once (a hidden tab runs no animation frames)
+      for (let i = 0; i < 500 && mesh.alpha > 0.015; i++) meshTick(d);
+      mesh.alpha = 0; meshPlace(); return;
+    }
+    if (!mesh.raf) mesh.raf = requestAnimationFrame(meshFrame);
+  }
+  function meshFrame() {
+    mesh.raf = 0;
+    const d = meshCur();
+    if (!d) return;
+    meshTick(d); meshTick(d); meshPlace();
+    if (mesh.alpha > 0.015 || (mesh.drag && mesh.drag.moved)) mesh.raf = requestAnimationFrame(meshFrame); else mesh.alpha = 0;
+  }
+  function meshRoot(svg) {   // one root group for the life of the page: a refresh mid-zoom keeps the zoom animation running on it
+    if (!mesh.root || mesh.root.parentNode !== svg) { svg.replaceChildren(); mesh.root = el("g", { class: "mroot" }, svg); } else mesh.root.replaceChildren();
+    return mesh.root;
+  }
+  function meshBuild(d) {   // the elements, once per refresh; meshPlace() moves them every frame
+    const svg = $("meshSvg");
+    const root = meshRoot(svg), gE = el("g", {}, root), gL = el("g", {}, root), gN = el("g", {}, root);
+    const edges = meshEdges(d), pairs = {};
+    for (const l of edges) { const k = [l.a, meshB(l)].sort().join("|"); (pairs[k] = pairs[k] || []).push(l); }
+    const els = { edges: [], nodes: [], root };
     for (const l of edges) {
-      const [x1, y1] = P(l.a), [x2, y2] = P(l.kind === "hub" ? "hub" : l.b);
-      const n = meshStreams(l), st = meshState(l);
-      const dd = "M" + x1.toFixed(1) + " " + y1.toFixed(1) + " L" + x2.toFixed(1) + " " + y2.toFixed(1);
-      const id = meshEdgeId(l);
-      el("path", { d: dd, class: "medge st-" + st + " k-" + l.kind + (mesh.sel?.edge === id ? " sel" : ""), "stroke-width": (l.kind === "mesh" ? 3 : 2) + Math.min(4, n) * 1.5 }, gE);
-      if (st !== "down" && st !== "off") {
-        if ((l.streams?.fwd || []).length) { const s1 = l.dialer === l.a; el("path", { d: dd, class: "mflow" + (s1 ? "" : " rev"), "stroke-width": 2 }, gE); }
-        if ((l.streams?.back || []).length) { const s2 = l.dialer === l.a; el("path", { d: dd, class: "mflow" + (s2 ? " rev" : ""), "stroke-width": 2 }, gE); }
-      }
-      const hit = el("path", { d: dd, class: "mhit" }, gE);
-      hit.addEventListener("pointerenter", (ev) => meshTip(ev, meshTipHtml(l)));
-      hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
-      hit.addEventListener("pointerleave", () => { $("meshTip").hidden = true; });
-      hit.addEventListener("click", () => { mesh.sel = { edge: id }; paintMeshPanel(); renderMesh(d, svg); });
+      const grp = pairs[[l.a, meshB(l)].sort().join("|")], i = grp.indexOf(l), off = (i - (grp.length - 1) / 2) * 20 * ([l.a, meshB(l)].sort()[0] === l.a ? 1 : -1);
+      const id = meshEdgeId(l), st = meshState(l), bw = meshBw(l), live = st !== "down" && st !== "off" && st !== "none";
+      const wdt = (st === "none" ? 1.5 : l.kind === "mesh" ? 2.5 : 2) + (bw > 0 ? Math.min(8, 1.8 * Math.log2(1 + bw / 250000)) : 0);
+      const e = { l, id, off, flows: [] };
+      e.path = el("path", { class: "medge st-" + st + " k-" + l.kind + (mesh.sel?.edge === id ? " sel" : ""), "stroke-width": wdt.toFixed(1) }, gE);
+      const fw = l.bps ? (l.bps.fwd || 0) > 20000 : (l.streams?.fwd || []).length > 0, bk = l.bps ? (l.bps.back || 0) > 20000 : (l.streams?.back || []).length > 0;
+      if (live && fw) e.flows.push(el("path", { class: "mflow" + (l.dialer === l.a ? "" : " rev"), "stroke-width": 2 }, gE));
+      if (live && bk) e.flows.push(el("path", { class: "mflow" + (l.dialer === l.a ? " rev" : ""), "stroke-width": 2 }, gE));
+      if (bw >= 50000 && live) { e.label = el("text", { class: "mrate" }, gL); e.label.textContent = fmtBps(bw); }
+      e.hit = el("path", { class: "mhit", "data-id": id }, gE);
+      e.hit.addEventListener("pointerenter", (ev) => { mesh.tip = { edge: id }; meshTip(ev, meshTipHtml(l)); });
+      e.hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
+      e.hit.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
+      e.hit.addEventListener("click", () => { mesh.sel = { edge: id }; paintMeshPanel(); meshBuild(mesh.data); meshPlace(); });
+      els.edges.push(e);
     }
     for (const n of d.nodes) {
-      const p = P(n.id); if (!p) continue;
-      const r = n.role === "hub" ? 22 : n.role === "standby" ? 18 : 14;
-      const g = el("g", { class: "mnode r-" + n.role + (n.stale ? " stale" : "") + (mesh.sel?.node === n.id ? " sel" : ""), transform: "translate(" + p[0].toFixed(1) + " " + p[1].toFixed(1) + ")" }, gN);
+      if (!mesh.sim[n.id]) continue;
+      const r = meshR(n), pinned = Array.isArray(mesh.pos[n.id]);
+      const g = el("g", { class: "mnode r-" + n.role + (n.stale ? " stale" : "") + (mesh.sel?.node === n.id ? " sel" : "") + (pinned ? " pinned" : ""), "data-id": n.id }, gN);
+      if (n.role === "hub") el("circle", { class: "halo", r: r + 6 }, g);
       el("circle", { class: "body", r }, g);
       if (n.role !== "spoke") { const ic = el("text", { class: "ic", y: 4 }, g); ic.textContent = n.role === "hub" ? "HUB" : "SB"; }
       const t1 = el("text", { y: r + 13 }, g); t1.textContent = n.name;
       const t2 = el("text", { class: "ver", y: r + 25 }, g); t2.textContent = n.version ? "v" + n.version : "";
       if (n.needsUpdate || n.stale) { el("circle", { class: "badge", cx: r * 0.75, cy: -r * 0.75, r: 6 }, g); const b = el("text", { class: "bang", x: r * 0.75, y: -r * 0.75 + 3.5 }, g); b.textContent = "!"; }
-      const tip = "<b>" + esc(n.name) + "</b> <span class=\"dim\">" + esc(n.role === "hub" ? "hub (this relay)" : n.role === "standby" ? "standby hub" : "spoke") + "</span><br>KASTR " + esc(n.version || "?")
-        + (n.needsUpdate ? "<br><span style=\"color:var(--asi-amber)\">needs update to " + esc(d.minVersion) + " for direct links</span>" : "")
-        + (n.stale ? "<br><span style=\"color:var(--asi-amber)\">not seen for " + esc(agoText(Date.now() / 1000 - (n.at || 0))) + "</span>" : "")
-        + (n.addrs && n.addrs.length ? "<br><span class=\"dim\">" + esc(n.addrs.join(", ")) + (n.port ? " (port " + n.port + ")" : "") + "</span>" : "")
-        + (n.hubProbe && n.hubProbe.rttMs != null ? "<br>hub RTT " + n.hubProbe.rttMs + " ms" : "");
-      g.addEventListener("pointerenter", (ev) => meshTip(ev, tip));
+      g.addEventListener("pointerenter", (ev) => { mesh.tip = { node: n.id }; meshTip(ev, meshNodeTip(n)); });
       g.addEventListener("pointermove", (ev) => meshTipMove(ev));
-      g.addEventListener("pointerleave", () => { $("meshTip").hidden = true; });
+      g.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
       g.addEventListener("pointerdown", (ev) => { mesh.drag = { id: n.id, moved: false, x: ev.clientX, y: ev.clientY }; svg.setPointerCapture?.(ev.pointerId); ev.preventDefault(); });
+      els.nodes.push({ n, g });
+    }
+    mesh.els = els;
+    if (mesh.tip) {   // the hovered link or relay keeps its tooltip, with the fresh numbers
+      const t = $("meshTip"), l = mesh.tip.edge && edges.find((x) => meshEdgeId(x) === mesh.tip.edge), n = mesh.tip.node && meshNode(mesh.tip.node);
+      if (l) t.innerHTML = meshTipHtml(l); else if (n) t.innerHTML = meshNodeTip(n); else { mesh.tip = null; t.hidden = true; }
     }
   }
-  // dragging a relay: the svg keeps the pointer (the node elements are redrawn while it moves)
+  function meshPlace() {
+    const els = mesh.els, S = mesh.sim;
+    if (!els) return;
+    for (const e of els.edges) {
+      const p = S[e.l.a], q = S[meshB(e.l)]; if (!p || !q) continue;
+      const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2, len = Math.hypot(q.x - p.x, q.y - p.y) || 1, nx = -(q.y - p.y) / len, ny = (q.x - p.x) / len;
+      const dd = "M" + p.x.toFixed(1) + " " + p.y.toFixed(1) + " Q" + (mx + nx * e.off * 2).toFixed(1) + " " + (my + ny * e.off * 2).toFixed(1) + " " + q.x.toFixed(1) + " " + q.y.toFixed(1);
+      e.path.setAttribute("d", dd); e.hit.setAttribute("d", dd);
+      for (const f of e.flows) f.setAttribute("d", dd);
+      if (e.label) { e.label.setAttribute("x", (mx + nx * e.off).toFixed(1)); e.label.setAttribute("y", (my + ny * e.off - 5).toFixed(1)); }
+    }
+    for (const v of els.nodes) { const s = S[v.n.id]; if (s) v.g.setAttribute("transform", "translate(" + s.x.toFixed(1) + " " + s.y.toFixed(1) + ")"); }
+  }
+  function meshDraw(d) {
+    const resized = meshSize();
+    if (mesh.zoom && d.zoom) {   // one relay zoomed: it in the middle, its clients round it, its other relays out at the edge
+      const zd = mesh.zd = meshZoomData(d);
+      mesh.sim = mesh.zsim;
+      for (const n of zd.nodes) if (!mesh.zsim[n.id]) {   // a client arrives out of its relay (the zoom-in grows them outwards)
+        const c = mesh.zsim[zd.nodes[0].id] || { x: mesh.w / 2, y: mesh.h / 2 }, t = meshHash(n.id) * 2 * Math.PI;
+        mesh.zsim[n.id] = n === zd.nodes[0] ? { x: mesh.w / 2, y: mesh.h / 2, vx: 0, vy: 0 } : { x: c.x + 24 * Math.cos(t), y: c.y + 24 * Math.sin(t), vx: 0, vy: 0 };
+      }
+      for (const id in mesh.zsim) if (!zd.nodes.some((n) => n.id === id)) delete mesh.zsim[id];
+      const topo = meshTopo(zd), changed = topo !== mesh.ztopo;
+      mesh.ztopo = topo;
+      meshBuildZoom(zd);
+      if (changed) meshRun(1); else if (resized) meshRun(0.35); else meshPlace();
+      return;
+    }
+    mesh.zd = null; mesh.sim = mesh.fsim;
+    meshSeed(d);
+    const topo = meshTopo(d), changed = topo !== mesh.topo, first = !mesh.topo;
+    mesh.topo = topo;
+    meshBuild(d);
+    if (changed) meshRun(first ? 1 : 0.6); else if (resized) meshRun(0.35); else meshPlace();
+  }
+  // ---- 0.21.78: the zoomed relay ----
+  const ZKIND = { person: "person (KASTR app)", box: "camera / relay box", viewer: "web viewer" };
+  function meshZoomData(d) {
+    const z = d.zoom, me = meshNode(z.relay) || { id: z.relay, name: z.relay, role: "spoke", version: "" };
+    const nodes = [{ id: "r:" + me.id, rid: me.id, role: "hub", zrole: "center", name: me.name, version: me.version ? "v" + me.version : "", src: me }], links = [];
+    for (const l of meshEdges(d)) {
+      if (!l.active) continue;
+      const o = l.a === me.id ? meshB(l) : meshB(l) === me.id ? l.a : null;
+      if (!o) continue;
+      if (!nodes.some((n) => n.id === "r:" + o)) { const on = meshNode(o); nodes.push({ id: "r:" + o, rid: o, role: "edge", zrole: "relay", name: on ? on.name : o, version: "", src: on || { id: o, role: "spoke" } }); }
+      links.push({ id: "r:" + me.id + "|r:" + o + "|" + l.kind, kind: "relay", a: "r:" + me.id, b: "r:" + o, active: true, l });
+    }
+    for (const c of z.clients || []) {
+      const id = "c:" + c.node, nm = c.nick || c.name || c.hostname || c.node;
+      const up = c.net?.up ?? c.bps, down = c.net?.down;
+      nodes.push({ id, role: "spoke", zrole: "client", name: nm, version: c.kind + (down != null ? " ↓" + fmtBps(down) : "") + (up ? " ↑" + fmtBps(up) : ""), c });
+      links.push({ id: "r:" + me.id + "|" + id, kind: "client", a: "r:" + me.id, b: id, active: true, c });
+    }
+    return { nodes, links, zoom: z, me };
+  }
+  function meshClientTip(c) {
+    const nm = c.nick || c.name || c.hostname || c.node, n = c.net, ago = (t) => t ? agoText(Date.now() / 1000 - t) : "";
+    return "<b>" + esc(nm) + "</b> <span class='dim'>" + esc(ZKIND[c.kind] || c.kind) + "</span>"
+      + (c.nick && c.name && c.nick !== c.name ? "<br>name: " + esc(c.name) : "")
+      + (c.hostname || c.user ? "<br><span class='dim'>" + esc([c.hostname, c.user].filter(Boolean).join(" · ")) + "</span>" : "")
+      + (c.version ? "<br>KASTR " + esc(c.version) + (c.platform ? " · " + esc(c.platform) : "") : "")
+      + (c.rooms && c.rooms.length ? "<br>in " + esc(c.rooms.join(", ")) : "")
+      + (n ? "<br>down <b>" + fmtBps(n.down) + "</b> · up <b>" + fmtBps(n.up) + "</b> <span class='dim'>(it says, " + esc(ago(n.at)) + ")</span>"
+          + (n.streams && n.streams.length ? "<br><span class='dim'>watching: " + n.streams.slice(0, 4).map((s) => esc(shortPath(s.path)) + " " + fmtBps(s.bps)).join(", ") + "</span>" : "")
+        : "<br><span class='dim'>down / up: " + (c.kind === "viewer" ? "not reported" : "no figure (older KASTR)") + "</span>")
+      + (c.publishes && c.publishes.length ? "<br>publishes here: " + c.publishes.slice(0, 4).map((s) => esc(shortPath(s.path)) + " <b>" + fmtBps(s.bps) + "</b>").join(", ") + " <span class='dim'>(the relay measures)</span>"
+        : "<br><span class='dim'>publishes nothing here</span>")
+      + (c.since ? "<br><span class='dim'>connected since " + esc(ago(c.since).replace(/ ago$/, "")) + "</span>" : "");
+  }
+  function meshCenterTip(zd) {
+    const z = zd.zoom, w = (z.watched || []).slice(0, 5);
+    return meshNodeTip(zd.me) + (w.length ? "<br>watched here: " + w.map((s) => esc(shortPath(s.path)) + " ×" + (s.viewers || 0) + " " + fmtBps(s.bps)).join(", ") : "")
+      + (z.needsUpdate ? "<br><span style='color:var(--asi-amber)'>per-stream figures need KASTR " + esc(mesh.data?.liveVersion || "0.21.78") + " on this relay</span>" : "");
+  }
+  function meshBuildZoom(zd) {
+    const svg = $("meshSvg");
+    const root = meshRoot(svg), gE = el("g", {}, root), gL = el("g", {}, root), gN = el("g", {}, root);
+    const els = { edges: [], nodes: [], root };
+    for (const z of zd.links) {
+      const e = { l: z, id: z.id, off: 0, flows: [] };
+      if (z.kind === "relay") {   // to its other relays: the link's own state, width and flow
+        const l = z.l, st = meshState(l), bw = meshBw(l), fwdOut = (l.dialer === zd.me.id);
+        e.path = el("path", { class: "medge st-" + st + " k-" + l.kind, "stroke-width": ((l.kind === "mesh" ? 2.5 : 2) + (bw > 0 ? Math.min(8, 1.8 * Math.log2(1 + bw / 250000)) : 0)).toFixed(1) }, gE);
+        if (l.bps && (l.bps.fwd || 0) > 20000) e.flows.push(el("path", { class: "mflow" + (fwdOut ? "" : " rev"), "stroke-width": 2 }, gE));
+        if (l.bps && (l.bps.back || 0) > 20000) e.flows.push(el("path", { class: "mflow" + (fwdOut ? " rev" : ""), "stroke-width": 2 }, gE));
+        if (bw >= 50000) { e.label = el("text", { class: "mrate" }, gL); e.label.textContent = fmtBps(bw); }
+        e.tip = () => meshTipHtml(l);
+      } else {                    // to a client: as thick as what it sends and receives
+        const c = z.c, up = c.net?.up ?? c.bps ?? 0, down = c.net?.down ?? 0, bw = up + down;
+        e.path = el("path", { class: "medge zc zk-" + c.kind + (bw ? "" : " zidle"), "stroke-width": (1.5 + (bw > 0 ? Math.min(7, 1.6 * Math.log2(1 + bw / 250000)) : 0)).toFixed(1) }, gE);
+        if (up > 20000) e.flows.push(el("path", { class: "mflow rev", "stroke-width": 2 }, gE));
+        if (down > 20000) e.flows.push(el("path", { class: "mflow", "stroke-width": 2 }, gE));
+        e.tip = () => meshClientTip(c);
+      }
+      e.hit = el("path", { class: "mhit", "data-id": z.id }, gE);
+      e.hit.addEventListener("pointerenter", (ev) => { mesh.tip = { zedge: z.id }; meshTip(ev, e.tip()); });
+      e.hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
+      e.hit.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
+      els.edges.push(e);
+    }
+    for (const n of zd.nodes) {
+      const r = meshR(n), cls = n.zrole === "client" ? "zk-" + n.c.kind : "r-" + (n.src?.role || "spoke");
+      const g = el("g", { class: "mnode z-" + n.zrole + " " + cls + (mesh.sel?.client === n.id ? " sel" : ""), "data-id": n.id }, gN);
+      if (n.zrole === "center") el("circle", { class: "halo", r: r + 6 }, g);
+      el("circle", { class: "body", r }, g);
+      const ic = el("text", { class: "ic", y: n.zrole === "center" ? 4 : 3.5 }, g);
+      ic.textContent = n.zrole === "client" ? ({ person: "P", box: "B", viewer: "W" }[n.c.kind] || "?") : n.src?.role === "hub" ? "HUB" : n.src?.role === "standby" ? "SB" : "";
+      const t1 = el("text", { y: r + 13 }, g); t1.textContent = n.name;
+      const t2 = el("text", { class: "ver", y: r + 25 }, g); t2.textContent = n.version || "";
+      const tip = () => n.zrole === "client" ? meshClientTip(n.c) : n.zrole === "center" ? meshCenterTip(zd) : (n.src ? meshNodeTip(n.src) : esc(n.name)) + "<br><span class='dim'>click to zoom to it</span>";
+      g.addEventListener("pointerenter", (ev) => { mesh.tip = { znode: n.id }; meshTip(ev, tip()); });
+      g.addEventListener("pointermove", (ev) => meshTipMove(ev));
+      g.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
+      g.addEventListener("pointerdown", (ev) => { mesh.drag = { id: n.id, moved: false, x: ev.clientX, y: ev.clientY }; svg.setPointerCapture?.(ev.pointerId); ev.preventDefault(); });
+      els.nodes.push({ n, g, tip });
+    }
+    mesh.els = els;
+    if (mesh.tip) {   // the hovered client / link keeps its tooltip, with the fresh numbers
+      const t = $("meshTip"), e = mesh.tip.zedge && els.edges.find((x) => x.id === mesh.tip.zedge), v = mesh.tip.znode && els.nodes.find((x) => x.n.id === mesh.tip.znode);
+      if (e) t.innerHTML = e.tip(); else if (v) t.innerHTML = v.tip(); else if (mesh.tip.zedge || mesh.tip.znode || mesh.tip.edge || mesh.tip.node) { mesh.tip = null; t.hidden = true; }
+    }
+    meshZoomFx(root);
+  }
+  function meshZoomFx(root) {   // the zoom itself: in = the relay's spot grows to fill the box; out = the box shrinks back to it
+    const fx = mesh.zoomFx;
+    mesh.zoomFx = null;
+    if (!fx || !root || reduceMotion() || !root.animate) return;
+    const cx = mesh.w / 2, cy = mesh.h / 2, [px, py] = fx.p0;
+    const from = fx.dir === "in" ? "translate(" + px + "px," + py + "px) scale(0.3) translate(" + (-cx) + "px," + (-cy) + "px)"
+      : "translate(" + cx + "px," + cy + "px) scale(2.6) translate(" + (-px) + "px," + (-py) + "px)";
+    root.style.transformOrigin = "0 0";
+    root.animate([{ transform: from, opacity: 0.2 }, { transform: "translate(0px,0px) scale(1)", opacity: 1 }], { duration: 520, easing: "cubic-bezier(.2,.7,.2,1)" });
+  }
+  function meshZoomIn(id) {
+    const p = mesh.fsim[id] || (mesh.zoom && mesh.zsim["r:" + id]) || { x: mesh.w / 2, y: mesh.h / 2 };
+    mesh.zoomFx = { dir: "in", p0: [p.x, p.y] };
+    mesh.zoom = id; mesh.zsim = {}; mesh.ztopo = ""; mesh.zd = null; mesh.sel = { zoom: id }; mesh.formSig = ""; mesh.tip = null; $("meshTip").hidden = true;
+    try { history.replaceState(null, "", location.pathname + location.search + "#mesh=" + id); } catch {}
+    $("meshBack").hidden = false;
+    paintMesh();
+  }
+  function meshZoomOut() {
+    if (!mesh.zoom) return;
+    const p = mesh.fsim[mesh.zoom] || { x: mesh.w / 2, y: mesh.h / 2 };
+    mesh.zoomFx = { dir: "out", p0: [p.x, p.y] };
+    mesh.zoom = null; mesh.zd = null; mesh.sel = null; mesh.formSig = ""; mesh.tip = null; $("meshTip").hidden = true; $("meshPanel").hidden = true;
+    try { history.replaceState(null, "", location.pathname + location.search); } catch {}
+    $("meshBack").hidden = true;
+    if (mesh.data) { mesh.sim = mesh.fsim; meshBuild(mesh.data); meshPlace(); meshZoomFx(mesh.els?.root); }
+    paintMesh();
+  }
+  $("meshBack").addEventListener("click", meshZoomOut);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && mesh.zoom && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || "")) meshZoomOut(); });
+  // dragging a relay: the svg keeps the pointer; the others make room; where it is dropped it stays (until Re-arrange)
   $("meshSvg").addEventListener("pointermove", (ev) => {
     const dr = mesh.drag, svg = $("meshSvg");
     if (!dr || !mesh.data) return;
     if (Math.abs(ev.clientX - dr.x) + Math.abs(ev.clientY - dr.y) > 4) dr.moved = true;
     if (!dr.moved) return;
-    const box = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
-    const x = (ev.clientX - box.left) * vb.width / box.width, y = (ev.clientY - box.top) * vb.height / box.height;
-    mesh.shown[dr.id] = [Math.min(vb.width - 24, Math.max(24, x)), Math.min(vb.height - 30, Math.max(22, y))];
-    $("meshTip").hidden = true;
-    renderMesh(mesh.data, svg);
+    const box = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal, s = mesh.sim[dr.id];
+    if (!s) return;
+    s.x = Math.min(vb.width - 24, Math.max(24, (ev.clientX - box.left) * vb.width / box.width)); s.y = Math.min(vb.height - 30, Math.max(22, (ev.clientY - box.top) * vb.height / box.height));
+    $("meshTip").hidden = true; mesh.tip = null;
+    if (reduceMotion()) meshPlace(); else meshRun(0.25);
   });
   const meshDrop = () => {
-    const dr = mesh.drag, svg = $("meshSvg");
+    const dr = mesh.drag;
     mesh.drag = null;
     if (!dr || !mesh.data) return;
-    if (dr.moved) { const vb = svg.viewBox.baseVal, p2 = mesh.shown[dr.id]; mesh.pos[dr.id] = [p2[0] / vb.width, p2[1] / vb.height]; meshSavePos(); return; }
-    mesh.sel = { node: dr.id }; paintMeshPanel(); renderMesh(mesh.data, svg);
+    if (mesh.zoom) {   // zoomed: a client = its row in the side panel; another relay = zoom to it; drags are not remembered
+      if (dr.moved) { meshRun(0.3); return; }
+      if (dr.id.startsWith("r:") && dr.id.slice(2) !== mesh.zoom) { meshZoomIn(dr.id.slice(2)); return; }
+      if (dr.id.startsWith("c:")) { mesh.sel = { zoom: mesh.zoom, client: dr.id }; paintMeshPanel(); if (mesh.zd) { meshBuildZoom(mesh.zd); meshPlace(); } $("meshPanel").querySelector(".zsel")?.scrollIntoView({ block: "nearest" }); }
+      return;
+    }
+    if (dr.moved) { const s = mesh.sim[dr.id]; if (s) { mesh.pos[dr.id] = [s.x / mesh.w, s.y / mesh.h]; meshSavePos(); } meshBuild(mesh.data); meshRun(0.3); return; }
+    meshZoomIn(dr.id);   // 0.21.78: a click on a relay zooms into it (its probes moved into the zoomed view's side panel)
   };
   $("meshSvg").addEventListener("pointerup", meshDrop);
   $("meshSvg").addEventListener("pointercancel", () => { mesh.drag = null; });
+  $("meshArrange").addEventListener("click", () => {
+    if (mesh.zoom) { mesh.zsim = {}; mesh.ztopo = ""; if (mesh.data) meshDraw(mesh.data); return; }
+    mesh.pos = {}; meshSavePos(); mesh.fsim = mesh.sim = {}; mesh.topo = "";
+    if (mesh.data) meshDraw(mesh.data);
+  });
   function meshTip(ev, html) { const t = $("meshTip"); t.innerHTML = html; t.hidden = false; meshTipMove(ev); }
   function meshTipMove(ev) {
     const t = $("meshTip"), box = $("meshWrap").getBoundingClientRect();
@@ -1890,85 +2177,134 @@
     if (y + t.offsetHeight > box.height - 4) y = Math.max(4, ev.clientY - box.top - t.offsetHeight - 10);
     t.style.left = x + "px"; t.style.top = y + "px";
   }
+  function meshPanelClose() { mesh.sel = null; mesh.formSig = ""; $("meshPanel").hidden = true; if (mesh.zoom && mesh.zd) { meshBuildZoom(mesh.zd); meshPlace(); } else if (mesh.data) { meshBuild(mesh.data); meshPlace(); } }
   function paintMeshPanel() {
     const box = $("meshPanel"), d = mesh.data;
-    if (!mesh.sel || !d) { box.hidden = true; return; }
+    if (!mesh.sel || !d) { box.hidden = true; mesh.formSig = ""; return; }
     box.hidden = false;
-    const close = "<button type=\"button\" class=\"ghost\" id=\"meshClose\" style=\"float:right;padding:1px 8px\">Close</button>";
-    if (mesh.sel.node) {
-      const n = d.nodes.find((x) => x.id === mesh.sel.node);
-      if (!n) { mesh.sel = null; box.hidden = true; return; }
-      const pr = (n.probes || []).slice().sort((a, b) => meshName(a.node).localeCompare(meshName(b.node)));
-      const row = (p, label) => "<tr><td>" + esc(label) + "</td><td class=\"mono\">" + esc(p.addr) + (p.port ? ":" + p.port : "") + "</td><td>" + (p.ok ? "<span class=\"updok\">yes</span>" : "<span class=\"updbad\">" + esc(p.err || "no") + "</span>") + "</td><td>" + (p.rttMs != null ? p.rttMs + " ms" : "—") + "</td><td>" + (p.hops != null ? p.hops : "—") + "</td><td>" + (p.ok ? (p.private ? "yes" : "<span class=\"updbad\">no" + (p.public && p.public.length ? " (" + esc(p.public.join(", ")) + ")" : "") + "</span>") : "—") + "</td><td class=\"mono\" title=\"" + esc((p.path || []).join(" → ")) + "\">" + esc(p.tool || "") + "</td><td class=\"mono\">" + (p.at ? agoText(Date.now() / 1000 - p.at) : "") + "</td></tr>";
-      box.innerHTML = close + "<h4>" + esc(n.name) + " — " + (n.role === "hub" ? "the hub (spokes probe it)" : "what it probed") + "</h4>"
-        + (n.role === "hub" ? "<div class=\"hint\">The hub does not probe; each spoke measures its own hub RTT (hover the hub links).</div>"
-          : (pr.length || n.hubProbe ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Relay</th><th>Address</th><th>Reached</th><th>RTT</th><th>Hops</th><th>Private path</th><th>Tool</th><th>When</th></tr>"
-            + (n.hubProbe ? row(n.hubProbe, meshName("hub") + " (hub)") : "") + pr.map((p) => row(p, meshName(p.node))).join("") + "</table></div>"
-            : "<div class=\"hint\">" + (n.needsUpdate ? "Runs a KASTR older than " + esc(d.minVersion) + " — it does not probe. Update it from the spokes table." : "No probe reported yet (spokes probe every 5 minutes).") + "</div>"));
-    } else {
-      const l = (d.links || []).find((x) => meshEdgeId(x) === mesh.sel.edge);
-      if (!l) { mesh.sel = null; box.hidden = true; return; }
-      let html = close + "<h4>" + esc(meshName(l.a)) + " ⇄ " + esc(l.kind === "hub" ? meshName("hub") : meshName(l.b)) + "</h4><div>" + meshTipHtml(l) + "</div>";
-      if (l.kind === "mesh") {
-        html += "<div class=\"row\"><label>Mode <select id=\"meshMode\"><option value=\"auto\">auto (private path)</option><option value=\"on\">on</option><option value=\"off\">off</option></select></label>"
-          + "<label>Cost <input type=\"number\" id=\"meshCost\" min=\"1\" max=\"1000\" step=\"1\" placeholder=\"" + esc(l.costAuto ?? "auto") + "\"></label>"
-          + "<label>Address <input type=\"text\" id=\"meshAddr\" placeholder=\"" + esc(l.addr || "as probed") + "\" spellcheck=\"false\"></label>"
-          + "<button type=\"button\" id=\"meshSave\">Save</button><button type=\"button\" id=\"meshAuto\" class=\"ghost\">Back to automatic</button></div><span id=\"meshMsg\" class=\"hint\"></span>";
-      } else {
-        html += "<div class=\"hint\" style=\"margin-top:6px\">" + (l.kind === "hub" ? "Every spoke keeps this link to the hub" : "Every spoke keeps a link to the standby hub") + " at the hub link cost (below), so it carries a stream only when a viewer pulls it there or no direct path exists.</div>";
-      }
-      box.innerHTML = html;
-      if (l.kind === "mesh") {
-        $("meshMode").value = l.mode || "auto"; $("meshCost").value = l.overrideCost ?? ""; $("meshAddr").value = l.overrideAddr || "";
-        const send = async (body) => {
-          $("meshMsg").textContent = "Saving…";
-          try { const r = await api("/api/relay/links", body); $("meshMsg").textContent = r.error ? r.error : "Saved — the spokes pick it up within a second."; } catch (e) { $("meshMsg").textContent = "Failed: " + (e?.message || e); }
-          setTimeout(paintMesh, 800);
-        };
-        $("meshSave").addEventListener("click", () => send({ a: l.a, b: l.b, mode: $("meshMode").value, cost: $("meshCost").value.trim() || null, addr: $("meshAddr").value.trim() }));
-        $("meshAuto").addEventListener("click", () => send({ a: l.a, b: l.b, mode: "auto", cost: null, addr: "" }));
-      }
+    if (!$("meshInfo")) {   // 0.21.78: the info part refreshes every 5 s; the form only when that link's settings change (typing survives)
+      box.innerHTML = "<button type='button' class='ghost' id='meshClose' style='float:right;padding:1px 8px'>Close</button><div id='meshInfo'></div><div id='meshForm'></div>";
+      $("meshClose").addEventListener("click", meshPanelClose);
     }
-    $("meshClose")?.addEventListener("click", () => { mesh.sel = null; paintMeshPanel(); if (mesh.data) renderMesh(mesh.data, $("meshSvg")); });
+    const info = $("meshInfo"), form = $("meshForm");
+    if (mesh.zoom || mesh.sel.node) {   // 0.21.78: a relay's panel = the zoomed view's side panel (its clients, streams, probes)
+      const n = d.nodes.find((x) => x.id === (mesh.zoom || mesh.sel.node));
+      if (!n) { meshPanelClose(); return; }
+      const pr = (n.probes || []).slice().sort((a, b) => meshName(a.node).localeCompare(meshName(b.node)));
+      const row = (p, label) => "<tr><td>" + esc(label) + "</td><td class='mono'>" + esc(p.addr) + (p.port ? ":" + p.port : "") + "</td><td>" + (p.ok ? "<span class='updok'>yes</span>" : "<span class='updbad'>" + esc(p.err || "no") + "</span>") + "</td><td>" + (p.rttMs != null ? p.rttMs + " ms" : "—") + "</td><td>" + (p.hops != null ? p.hops : "—") + "</td><td>" + (p.ok ? (p.private ? "yes" : "<span class='updbad'>no" + (p.public && p.public.length ? " (" + esc(p.public.join(", ")) + ")" : "") + "</span>") : "—") + "</td><td class='mono' title='" + esc((p.path || []).join(" → ")) + "'>" + esc(p.tool || "") + "</td><td class='mono'>" + (p.at ? agoText(Date.now() / 1000 - p.at) : "") + "</td></tr>";
+      const probes = (n.role === "hub" ? "<div class='hint'>The hub does not probe; each spoke measures its own hub RTT (hover the hub links).</div>"
+          : (pr.length || n.hubProbe ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Relay</th><th>Address</th><th>Reached</th><th>RTT</th><th>Hops</th><th>Private path</th><th>Tool</th><th>When</th></tr>"
+            + (n.hubProbe ? row(n.hubProbe, meshName("hub") + " (hub)") : "") + pr.map((p) => row(p, meshName(p.node))).join("") + "</table></div>"
+            : "<div class='hint'>" + (n.needsUpdate ? "Runs a KASTR older than " + esc(d.minVersion) + " — it does not probe. Update it from the spokes table." : "No probe reported yet (spokes probe every 5 minutes).") + "</div>"));
+      const z = mesh.zoom ? d.zoom : null;
+      if (!z) info.innerHTML = "<h4>" + esc(n.name) + " — " + (n.role === "hub" ? "the hub (spokes probe it)" : "what it probed") + "</h4><div>" + meshLoadHtml(n).replace(/^<br>/, "") + "</div>" + probes;
+      else {
+        const cl = z.clients || [], cn = (c) => c.nick || c.name || c.hostname || c.node;
+        const crow = (c) => "<tr" + (mesh.sel?.client === "c:" + c.node ? " class='zsel'" : "") + "><td><b>" + esc(cn(c)) + "</b>" + (c.nick && c.name && c.nick !== c.name ? "<div class='hint'>" + esc(c.name) + "</div>" : "") + "</td><td>" + esc(c.kind) + "</td>"
+          + "<td class='mono'>" + esc([c.hostname, c.user].filter(Boolean).join(" · ")) + "</td><td>" + esc((c.rooms || []).join(", ")) + "</td>"
+          + "<td style='white-space:nowrap'>" + (c.net ? "↓ " + fmtBps(c.net.down) + "<br>↑ " + fmtBps(c.net.up) + "<div class='hint'>" + esc(c.net.at ? agoText(Date.now() / 1000 - c.net.at) : "") + "</div>" : "<span class='hint'>" + (c.kind === "viewer" ? "not reported" : "no figure (older KASTR)") + "</span>") + "</td>"
+          + "<td>" + ((c.publishes || []).map((s) => esc(shortPath(s.path)) + " " + fmtBps(s.bps)).join("<br>") || "—") + "</td></tr>";
+        const srow = (s) => "<tr><td class='mono'>" + esc(s.path) + "</td><td>" + (s.viewers ?? "—") + "</td><td>" + fmtBps(s.bps) + "</td></tr>";
+        info.innerHTML = "<h4>" + esc(n.name) + " — " + cl.length + " client" + (cl.length === 1 ? "" : "s") + "</h4><div>" + meshLoadHtml(n).replace(/^<br>/, "") + "</div>"
+          + (z.needsUpdate ? "<div class='hint' style='color:var(--asi-amber)'>This relay runs KASTR " + esc(n.version || "?") + " — the per-stream bitrates need " + esc(d.liveVersion || "0.21.78") + " there (update it from the spokes table).</div>" : "")
+          + (cl.length ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Client</th><th>Kind</th><th>Machine</th><th>In rooms</th><th title='what the client says it receives / sends'>Down / up</th><th title='measured by the relay'>Publishes here</th></tr>" + cl.map(crow).join("") + "</table></div>" : "<div class='hint'>No clients connected to it.</div>")
+          + ((z.watched || []).length ? "<div style='margin-top:6px'><b>Watched here</b></div><div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Stream</th><th>Viewers</th><th>Out</th></tr>" + z.watched.map(srow).join("") + "</table></div>" : "")
+          + ((z.other || []).length ? "<div style='margin-top:6px'><b>Other streams published here</b></div><div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Stream</th><th></th><th>In</th></tr>" + z.other.map(srow).join("") + "</table></div>" : "")
+          + "<div class='hint'>Per-client down / up is what each KASTR (0.21.78 or newer) reports with its check-in; moq-relay counts per stream, not per client.</div>"
+          + "<details style='margin-top:6px'><summary class='hint' style='cursor:pointer'>Probes</summary>" + probes + "</details>";
+      }
+      if (mesh.formSig) { form.innerHTML = ""; mesh.formSig = ""; }
+      return;
+    }
+    const l = (d.links || []).find((x) => meshEdgeId(x) === mesh.sel.edge);
+    if (!l) { meshPanelClose(); return; }
+    const id = meshEdgeId(l), st = meshState(l), old = !!(l.needsUpdate && l.needsUpdate.length);
+    info.innerHTML = "<h4>" + esc(meshName(l.a)) + " ⇄ " + esc(meshName(meshB(l))) + "</h4><div>" + meshTipHtml(l).replace("<br><span class='dim'>click for its settings</span>", "") + "</div>"
+      + (st === "none" && l.kind === "mesh" && !old ? "<div class='hint' style='margin-top:6px'>Not linked: " + esc(l.why || "no private path found yet") + ". Set Mode to <b>on</b> to link this pair anyway (the side that reached the other dials)" + (l.hint ? "; " + esc(l.hint) : "") + ".</div>" : "");
+    const sig = JSON.stringify([id, l.kind, l.mode, l.overrideCost, l.overrideAddr, l.costDefault, l.costAuto, l.liveCost, old, l.cost == null]);
+    if (sig === mesh.formSig || form.contains(document.activeElement)) return;
+    mesh.formSig = sig;
+    const dr = mesh.draft[id] || {};
+    if (old || (l.kind === "hub" && l.cost == null)) {
+      form.innerHTML = "<div class='hint' style='margin-top:6px'>" + (old ? "Update " + esc(l.needsUpdate.join(", ")) + " to " + esc(d.minVersion) + " or newer to set this link." : "This spoke has not reported to the hub yet.") + "</div>";
+    } else if (l.kind === "mesh") {
+      form.innerHTML = "<div class='row'><label>Mode <select id='meshMode' data-k='mode'><option value='auto'>auto (private path)</option><option value='on'>on</option><option value='off'>off</option></select></label>"
+        + "<label>Cost <input type='number' id='meshCost' data-k='cost' min='1' max='1000' step='1' placeholder='" + esc(l.costAuto ?? "auto") + "'></label>"
+        + "<label>Address <input type='text' id='meshAddr' data-k='addr' placeholder='" + esc(l.addr || "as probed") + "' spellcheck='false'></label>"
+        + "<button type='button' id='meshSave'>Save</button><button type='button' id='meshAuto' class='ghost'>Back to automatic</button></div><span id='meshMsg' class='hint'></span>";
+      $("meshMode").value = dr.mode ?? (l.mode || "auto"); $("meshCost").value = dr.cost ?? (l.overrideCost ?? ""); $("meshAddr").value = dr.addr ?? (l.overrideAddr || "");
+      $("meshSave").addEventListener("click", () => meshSend(id, { a: l.a, b: l.b, mode: $("meshMode").value, cost: $("meshCost").value.trim() || null, addr: $("meshAddr").value.trim() }, "Saved — the spokes pick it up within a second (no relay restart)."));
+      $("meshAuto").addEventListener("click", () => meshSend(id, { a: l.a, b: l.b, mode: "auto", cost: null, addr: "" }, "Back to automatic."));
+    } else {   // 0.21.78: one spoke's hub or standby link
+      const live = l.kind === "standby" || l.liveCost !== false, nm = meshName(l.a);
+      form.innerHTML = "<div class='row'><label>Cost <input type='number' id='meshCost' data-k='cost' min='1' max='1000' step='1' placeholder='" + esc(l.costDefault ?? "") + "'></label>"
+        + "<button type='button' id='meshSave'>Save</button><button type='button' id='meshAuto' class='ghost'>Use the default (" + esc(l.costDefault ?? "") + ")</button></div>"
+        + "<div class='hint'>" + (l.kind === "hub" ? "What " + esc(nm) + " pays to send a stream through the hub" : "What " + esc(nm) + " pays to send a stream through the standby hub") + "; a stream takes the cheapest path. "
+        + (live ? "It applies live — no relay restart." : esc(nm) + " runs KASTR " + esc(meshNode(l.a)?.version || "older than 0.21.78") + ": its relay restarts once to take a new hub link cost (viewers there reconnect within seconds). 0.21.78 takes it live.") + "</div><span id='meshMsg' class='hint'></span>";
+      $("meshCost").value = dr.cost ?? (l.overrideCost ?? "");
+      const said = (r) => r.live ? "Saved — " + nm + " re-prices it live." : "Saved — " + nm + "'s relay restarts once to take it.";
+      $("meshSave").addEventListener("click", () => meshSend(id, { node: l.a, kind: l.kind, cost: $("meshCost").value.trim() || null }, said));
+      $("meshAuto").addEventListener("click", () => meshSend(id, { node: l.a, kind: l.kind, cost: null }, said));
+    }
+    for (const x of form.querySelectorAll("[data-k]")) x.addEventListener("input", () => { (mesh.draft[id] = mesh.draft[id] || {})[x.dataset.k] = x.value; });
+    for (const x of form.querySelectorAll("select[data-k]")) x.addEventListener("change", () => { (mesh.draft[id] = mesh.draft[id] || {})[x.dataset.k] = x.value; });
+  }
+  async function meshSend(id, body, ok) {
+    $("meshMsg").textContent = "Saving…";
+    try {
+      const r = await api("/api/relay/links", body);
+      if (r.error) $("meshMsg").textContent = r.error;
+      else { delete mesh.draft[id]; mesh.formSig = ""; $("meshMsg").textContent = typeof ok === "function" ? ok(r) : ok; }
+    } catch (e) { $("meshMsg").textContent = "Failed: " + (e?.message || e); }
+    const msg = $("meshMsg").textContent;
+    setTimeout(async () => { await paintMesh(); if ($("meshMsg") && !$("meshMsg").textContent) $("meshMsg").textContent = msg; }, 800);
   }
   function paintLinksTable(d) {
-    const rows = (d.links || []).slice().sort((a, b) => ({ mesh: 0, standby: 1, hub: 2 }[a.kind] - { mesh: 0, standby: 1, hub: 2 }[b.kind]) || String(a.aName).localeCompare(String(b.aName)));
-    const stTxt = (l) => { const s = meshState(l); return "<span class=\"lkst\" style=\"color:" + ({ up: "var(--asi-green)", warn: "var(--asi-amber)", down: "var(--asi-red)" }[s] || "var(--text-mute)") + "\">"
-      + ({ up: "up", warn: "up (slow)", down: "down", off: "off", wait: l.active ? "connecting" : "not linked" }[s]) + "</span>" + (l.accepted ? " <span class=\"hint\" title=\"the accepting relay sees the session\">✓ both ends</span>" : ""); };
-    $("linksList").innerHTML = rows.length ? "<div class=\"tblwrap\"><table class=\"rooms\" style=\"font-size:12px\"><tr><th>Link</th><th>Found by</th><th>Address</th><th>RTT</th><th>Hops</th><th>Private</th><th>Cost</th><th>Mode</th><th>State</th><th>Streams crossing now</th><th></th></tr>"
+    const order = { mesh: 0, standby: 1, hub: 2 };
+    const rows = (d.links || []).slice().sort((a, b) => (order[a.kind] - order[b.kind]) || String(a.aName).localeCompare(String(b.aName)));
+    const stTxt = (l) => { const s = meshState(l); return "<span class='lkst' style='color:" + ({ up: "var(--asi-green)", warn: "var(--asi-amber)", down: "var(--asi-red)" }[s] || "var(--text-mute)") + "'>"
+      + ({ up: "up", warn: "up (slow)", down: "down", off: "off", wait: l.active ? "connecting" : "not linked", none: "not linked" }[s]) + "</span>" + (l.accepted ? " <span class='hint' title='the accepting relay sees the session'>✓ both ends</span>" : ""); };
+    const bwTxt = (l) => l.active && l.bps ? "→ " + fmtBps(l.bps.fwd || 0) + "<br>← " + fmtBps(l.bps.back || 0) : "—";
+    const editable = (l) => !(l.needsUpdate && l.needsUpdate.length) && !(l.kind === "hub" && l.cost == null);
+    $("linksList").innerHTML = rows.length ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Link</th><th>Found by</th><th>Address</th><th>RTT</th><th>Hops</th><th>Private</th><th>Cost</th><th>Mode</th><th>State</th><th title='dialer → acceptor / back'>Bandwidth</th><th>Streams crossing now</th><th></th></tr>"
       + rows.map((l) => "<tr><td>" + esc(l.aName || meshName(l.a)) + " ⇄ " + esc(l.kind === "hub" ? meshName("hub") : (l.bName || meshName(l.b))) + "</td><td>" + esc(l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "manual" : "auto private path") + "</td>"
-        + "<td class=\"mono\">" + esc(l.addr || "") + "</td><td>" + (l.rttMs != null ? l.rttMs + " ms" : "—") + "</td><td>" + (l.hops ?? "—") + "</td>"
-        + "<td title=\"" + esc((l.path || []).join(" → ")) + "\">" + (l.private == null ? "—" : l.private ? "yes" : "no") + "</td><td>" + (l.cost ?? "—") + "</td><td>" + esc(l.kind === "mesh" ? l.mode : "—") + "</td>"
-        + "<td>" + stTxt(l) + (l.why && !l.active ? "<div class=\"hint\">" + esc(l.why) + "</div>" : "") + (l.hint ? "<div class=\"hint\" style=\"color:var(--asi-amber)\">" + esc(l.hint) + "</div>" : "") + (l.needsUpdate && l.needsUpdate.length ? "<div class=\"hint\" style=\"color:var(--asi-amber)\">needs update: " + esc(l.needsUpdate.join(", ")) + "</div>" : "") + "</td>"
-        + "<td>" + esc([...(l.streams?.fwd || []), ...(l.streams?.back || [])].map(shortPath).join(", ") || "—") + "</td>"
-        + "<td>" + (l.kind === "mesh" && !(l.needsUpdate && l.needsUpdate.length) ? "<button type=\"button\" class=\"ghost lkedit\" data-id=\"" + esc(meshEdgeId(l)) + "\">Edit</button>" : "") + "</td></tr>").join("") + "</table></div>"
+        + "<td class='mono'>" + esc(l.addr || "") + "</td><td>" + (l.rttMs != null ? l.rttMs + " ms" : "—") + "</td><td>" + (l.hops ?? "—") + "</td>"
+        + "<td title='" + esc((l.path || []).join(" → ")) + "'>" + (l.private == null ? "—" : l.private ? "yes" : "no") + "</td><td>" + (l.cost ?? "—") + (l.overrideCost && l.kind !== "mesh" ? " <span class='hint'>(by hand)</span>" : "") + "</td><td>" + esc(l.kind === "mesh" ? l.mode : "—") + "</td>"
+        + "<td>" + stTxt(l) + (l.why && !l.active ? "<div class='hint'>" + esc(l.why) + "</div>" : "") + (l.hint ? "<div class='hint' style='color:var(--asi-amber)'>" + esc(l.hint) + "</div>" : "") + (l.needsUpdate && l.needsUpdate.length ? "<div class='hint' style='color:var(--asi-amber)'>needs update: " + esc(l.needsUpdate.join(", ")) + "</div>" : "") + "</td>"
+        + "<td style='white-space:nowrap'>" + bwTxt(l) + "</td><td>" + esc([...(l.streams?.fwd || []), ...(l.streams?.back || [])].map(shortPath).join(", ") || "—") + "</td>"
+        + "<td>" + (editable(l) ? "<button type='button' class='ghost lkedit' data-id='" + esc(meshEdgeId(l)) + "'>Edit</button>" : "") + "</td></tr>").join("") + "</table></div>"
       : "No links yet.";
-    for (const b of $("linksList").querySelectorAll(".lkedit")) b.addEventListener("click", () => { mesh.sel = { edge: b.dataset.id }; paintMeshPanel(); if (mesh.data) renderMesh(mesh.data, $("meshSvg")); $("meshPanel").scrollIntoView({ block: "nearest" }); });
+    for (const b of $("linksList").querySelectorAll(".lkedit")) b.addEventListener("click", () => { mesh.sel = { edge: b.dataset.id }; mesh.formSig = ""; paintMeshPanel(); if (mesh.data) { meshBuild(mesh.data); meshPlace(); } $("meshPanel").scrollIntoView({ block: "nearest" }); });
   }
   async function paintMesh() {
     if (!LOCAL) return;
     let d;
-    try { d = await api("/api/relay/links"); } catch { return; }
+    const want = mesh.zoom;
+    try { d = await api("/api/relay/links" + (want ? "?zoom=" + encodeURIComponent(want) : "")); } catch { return; }
+    if (want !== mesh.zoom) return;   // zoomed in or out while it was on its way
     const box = $("linksBox");
     const show = !!(d && d.ok && !d.notHub && (d.nodes || []).length > 1);
     box.hidden = !show;
     if (!show) return;
     mesh.data = d;
-    const direct = (d.links || []).filter((l) => l.kind === "mesh" && l.active);
+    if (mesh.zoom && !d.zoom) { mesh.data = d; meshZoomOut(); return; }   // that relay is gone
+    $("meshBack").hidden = !mesh.zoom;
+    const direct = (d.links || []).filter((l) => l.kind === "mesh" && l.active), crossing = (d.links || []).reduce((s, l) => s + (l.active ? meshBw(l) : 0), 0);
     $("meshCount").textContent = (d.nodes.length - 1) + (d.nodes.length === 2 ? " spoke" : " spokes") + ", " + direct.length + " direct link" + (direct.length === 1 ? "" : "s")
-      + ", " + direct.filter((l) => l.up === true).length + " up";
+      + ", " + direct.filter((l) => l.up === true).length + " up" + (crossing ? ", " + fmtBps(crossing) + " between relays" : "");
     if (document.activeElement !== $("meshHubCost")) $("meshHubCost").value = d.hubCost;
-    if (!mesh.drag) drawMesh(d);
+    if (!mesh.drag) meshDraw(d);
     paintLinksTable(d);
-    if (mesh.sel && !box.contains(document.activeElement)) paintMeshPanel();
+    if (mesh.sel) paintMeshPanel();
   }
   $("meshHubSave").addEventListener("click", async () => {
     const v = $("meshHubCost").value.trim();
-    if (!confirm("Set the hub and standby link cost to " + v + "? Every spoke's relay restarts once to take it (viewers there reconnect within seconds).")) return;
-    try { const r = await api("/api/relay/links", { hubCost: Number(v) }); $("linksMsg").textContent = r.error ? r.error : "Hub and standby link cost set to " + r.hubCost + "."; } catch (e) { $("linksMsg").textContent = "Failed: " + (e?.message || e); }
+    if (!confirm("Set the default hub and standby link cost to " + v + "? Spokes on KASTR 0.21.78 or newer re-price it live; an older spoke restarts its relay once (viewers there reconnect within seconds). A link set by hand keeps its own cost.")) return;
+    try { const r = await api("/api/relay/links", { hubCost: Number(v) }); $("linksMsg").textContent = r.error ? r.error : "Default hub and standby link cost set to " + r.hubCost + "."; } catch (e) { $("linksMsg").textContent = "Failed: " + (e?.message || e); }
     paintMesh();
   });
-  new ResizeObserver(() => { if (mesh.data && !$("linksBox").hidden) drawMesh(mesh.data); }).observe($("meshWrap"));
+  new ResizeObserver(() => { if (mesh.data && !$("linksBox").hidden && meshSize()) meshRun(0.35); }).observe($("meshWrap"));
+  window.__mesh = () => ({ alpha: mesh.alpha, sim: JSON.parse(JSON.stringify(mesh.sim)), pos: mesh.pos, w: mesh.w, h: mesh.h });   // rig
   paintMesh(); setInterval(paintMesh, 5000);
 
   // 0.8.0: relay autostart + one-click firewall rules.

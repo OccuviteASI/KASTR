@@ -1640,6 +1640,23 @@ def _checkin_user():
         return ""
 
 
+def _checkin_net(port):
+    """0.21.78 (C) (Kenton: "on the zoomed map, show each clients bandwidth on hover"): what this app's window receives and
+    sends right now -- its page measures it (window.__netRate, every tile's bytes and its encoders' output) and posts it with
+    the diagnostics every 3 s; the freshest window's figure rides the check-in. None when no window says (an older page)."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/diag" % int(port), timeout=3) as r:
+            snaps = json.loads(r.read().decode("utf-8", "replace") or "{}")
+    except Exception:
+        return None
+    best = None
+    for s in (snaps.values() if isinstance(snaps, dict) else []):
+        if isinstance(s, dict) and isinstance(s.get("net"), dict) and time.time() - float(s.get("_at") or 0) < 30:
+            if best is None or float(s.get("_at") or 0) > float(best.get("_at") or 0):
+                best = s
+    return best["net"] if best else None
+
+
 def client_checkin_loop(get_relay, ini, port, mode):
     """0.21.50 (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the
     client and see what version it is. The update push should come from the connected relay"): tell the relay this app
@@ -1671,7 +1688,8 @@ def client_checkin_loop(get_relay, ini, port, mode):
         body = {"node": node, "version": kastr_serve.read_version(), "mode": mode, "platform": sys.platform,
                 "name": str(inst.get("operator") or "")[:60], "offer": off.get("state") or "",
                 "hostname": _checkin_hostname(), "user": _checkin_user(),   # 0.21.69: the Relay page's Machine column
-                "started": int(kastr_serve._SERVE_T0)}                     # 0.21.73: an admin's Restart is done when this changes
+                "started": int(kastr_serve._SERVE_T0),                     # 0.21.73: an admin's Restart is done when this changes
+                "net": _checkin_net(port)}                                 # 0.21.78 (C): its own down / up (the hub's zoomed map)
         base = authority_base(host, ini, relay)
         err = None
         for attempt in (1, 2):

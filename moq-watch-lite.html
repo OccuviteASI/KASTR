@@ -15443,7 +15443,7 @@
       try {
         if (joinState === "joined" && /^web-/.test(HOSTNAME1)) {
           const r = await fetch("/api/clients/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
-            body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser() }) });
+            body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser(), net: window.__netRate?.() ?? null }) });   // 0.21.78 (C): + net
           next = r.ok ? 60000 : 20000;
         }
       } catch { next = 20000; }
@@ -15451,6 +15451,30 @@
     };
     setTimeout(webCheckin, 3000);
   }
+  // 0.21.78 (C) (Kenton: "on the zoomed map, show each clients bandwidth on hover"): what this page receives (every tile's video +
+  // audio bytes) and sends (its encoders' output), sampled every 5 s -> __netRate() = {down, up, streams, at, win} in bits/s over
+  // the last ~15 s. The check-in carries it to the relay: a web page's above, the app's through its diag snapshot (kastr.py).
+  const netHist = [];
+  setInterval(() => {
+    const per = {};
+    for (const [n, t] of tiles) {
+      let b = 0;
+      try { b += Number(t.watch.video?.out?.stats?.peek?.()?.bytesReceived || 0); } catch {}
+      try { b += Number(t.watch.audio?.out?.stats?.peek?.()?.bytesReceived || 0); } catch {}
+      if (b) per[n] = b;
+    }
+    let up = 0;
+    try { for (const s of window.__publisher?.state?.()?.slots || []) up += Number(s.encoded?.bytes || 0); } catch {}
+    netHist.push({ t: Date.now(), per, up });
+    if (netHist.length > 4) netHist.shift();
+  }, 5000);
+  window.__netRate = () => {
+    if (netHist.length < 2) return null;
+    const a = netHist[0], b = netHist[netHist.length - 1], dt = (b.t - a.t) / 1000, grow = (x, y) => (y >= x ? y - x : y);
+    if (dt < 4) return null;
+    const st = Object.entries(b.per).map(([path, v]) => ({ path, bps: Math.round(grow(a.per[path] || 0, v) * 8 / dt) })).sort((x, y) => y.bps - x.bps);
+    return { down: st.reduce((s, x) => s + x.bps, 0), up: Math.round(grow(a.up, b.up) * 8 / dt), streams: st.slice(0, 5), at: Math.round(b.t / 1000), win: Math.round(dt) };
+  };
   const chatVisible = () => chatOpen && document.visibilityState === "visible";
   function chatHint(text, bad) { chatMsgEl.textContent = text || ""; chatMsgEl.style.color = bad ? "var(--asi-red)" : ""; }
   function chatPlace() {

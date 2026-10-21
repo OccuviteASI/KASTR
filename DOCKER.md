@@ -30,6 +30,20 @@ Environment baked in: `KASTR_CONTAINER=1` (a requested relaunch exits with
 code 75 instead of spawning a child), `KASTR_STATE_DIR=/data/state` (the
 launcher's state directory), `KASTR_PORT=8000`.
 
+## ASI's published image (0.21.77)
+
+Every release is also pushed (privately) to GitHub's registry as `ghcr.io/occuviteasi/kastr:<version>` and `:latest`,
+and `docker-compose.yml` uses `ghcr.io/occuviteasi/kastr:latest` by default. On each Docker host, once:
+
+```bash
+docker login ghcr.io -u <github user>   # password: a classic GitHub token with read:packages, SSO-authorized for OccuviteASI
+docker compose pull && docker compose up -d
+```
+
+Optional automatic image updates: `docker compose --profile autoupdate up -d` adds Watchtower, which checks the
+registry hourly and restarts KASTR on a new image (KASTR also updates itself from its hub without it).
+`KASTR_IMAGE=kastr:local docker compose up -d` still runs a locally built image.
+
 ## Prerequisites
 
 - **A Linux host** with Docker Engine (or Podman with the compose plugin).

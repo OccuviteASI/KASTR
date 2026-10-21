@@ -1,9 +1,13 @@
 # KASTR headless box (0.13.1): a relay (default) or publisher that follows
 # its hub's version.                                         (see DOCKER.md)
 #
-#   docker compose up -d                 run the locally built kastr:local
-#   KASTR_IMAGE=ghcr.io/<you>/kastr:0.13.1 docker compose up -d
+#   docker compose up -d                 run ASI's published image (ghcr.io/occuviteasi/kastr:latest)
+#   KASTR_IMAGE=kastr:local docker compose up -d      run a locally built image instead
 #   docker compose pull && docker compose up -d      registry-side update
+#   docker compose --profile autoupdate up -d        + Watchtower: pulls a new image within the hour and restarts KASTR
+#
+# 0.21.77: the image is private on GitHub's registry -- once per machine:
+#   docker login ghcr.io -u <github user>   (password = a classic token with read:packages, SSO-authorized for OccuviteASI)
 #
 # network_mode: host is deliberate and Linux-only: QUIC on UDP 4443 must
 # reach the relay unmangled, moq-relay advertises the box's real LAN IPs,
@@ -11,7 +15,7 @@
 # Desktop on Windows/macOS puts "host" inside its VM -- use a Linux host.
 services:
   kastr:
-    image: ${KASTR_IMAGE:-kastr:local}
+    image: ${KASTR_IMAGE:-ghcr.io/occuviteasi/kastr:latest}
     container_name: kastr
     # a stable hostname = a stable host_slug in the relay's presence/rooms
     hostname: kastr-relay
@@ -28,6 +32,19 @@ services:
       KASTR_PORT: ${KASTR_PORT:-8000}
       KASTR_UPDATE: ${KASTR_UPDATE:-on}
       TZ: ${TZ:-UTC}
+
+  # 0.21.77: optional automatic image updates (only with --profile autoupdate). Watchtower reads the same
+  # docker login (config.json) to pull the private image. KASTR also updates itself from its hub -- this is for
+  # boxes that should follow the registry.
+  watchtower:
+    image: containrrr/watchtower
+    profiles: ["autoupdate"]
+    container_name: kastr-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_CONFIG:-/root/.docker}/config.json:/config.json:ro
+    command: --interval 3600 --cleanup kastr
 
 volumes:
   kastr-data:

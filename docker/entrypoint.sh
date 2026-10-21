@@ -43,8 +43,8 @@ newer() {
     [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
 }
 
-img_ver="$(tr -d '\r\n ' < "$IMG/BUILT_VERSION" 2>/dev/null || true)"
-had_ver="$(tr -d '\r\n ' < "$APP/IMAGE_VERSION" 2>/dev/null || true)"
+img_ver="$(tr -d '\r\n ' 2>/dev/null < "$IMG/BUILT_VERSION" || true)"
+had_ver="$(tr -d '\r\n ' 2>/dev/null < "$APP/IMAGE_VERSION" || true)"
 
 if [ ! -x "$APP/KASTR" ] || [ -z "$had_ver" ] || newer "$img_ver" "$had_ver"; then
   log "seeding $APP from the image (v${img_ver:-?}; volume had v${had_ver:-none})"
@@ -85,7 +85,7 @@ relay = ${KASTR_RELAY:-http://127.0.0.1:4443}
 host = 0.0.0.0
 
 ; on: follow the hub's KASTR version (in-app update -> exit 75 -> restart
-; here on the new binary). off: only `docker compose pull` updates this box.
+; here on the new binary). off: only 'docker compose pull' updates this box.
 update = ${KASTR_UPDATE:-on}
 EOF
 fi

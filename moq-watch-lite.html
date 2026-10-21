@@ -1119,6 +1119,31 @@
   #kMyRoom .pmtabs { display:flex; gap:6px; }
   #kMyRoom .pmtab { flex:1; background:transparent; border:1px solid var(--line); color:var(--text-dim); }
   #kMyRoom .pmtab.on { border-color:var(--asi-blue); color:var(--text); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }
+  /* 0.21.78: what My room does (the dialog's list) + Share My room (people with access, invite links) */
+  #kMyRoom .pmcaps { margin:0; padding:0 0 0 16px; display:flex; flex-direction:column; gap:3px; font-size:12px; line-height:1.4; color:var(--text-dim); }
+  #kMyShare { position:fixed; inset:0; z-index:139; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kMyShare[hidden] { display:none; }
+  #kMyShare .popcard.rsdlg { position:static; width:min(460px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; animation:kcIn .14s ease-out; }
+  #kMyShare .rsdlg .body { padding:12px 16px 4px; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
+  #kMyShare .rsrow { display:flex; flex-direction:column; gap:6px; }
+  #kMyShare .rsrow > .lbl { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
+  #kMyShare .rshint { margin:0; font-size:11.5px; line-height:1.45; color:var(--text-mute); }
+  #kMyShare .rsmsg { margin:0; min-height:16px; font-size:12px; color:var(--text-dim); }
+  #kMyShare .rsmsg.err { color:var(--asi-red); }
+  #kMyShare .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
+  #kMyShare .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  #kMyShare .msplist { display:flex; flex-direction:column; gap:4px; }
+  #kMyShare .msprow { display:flex; align-items:center; gap:8px; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--surface-2); font-size:13px; }
+  #kMyShare .msprow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #kMyShare .msprow .sub { color:var(--text-mute); font-size:11px; }
+  #kMyShare .msprow label { display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--text-dim); cursor:pointer; white-space:nowrap; }
+  #kMyShare .msprow button { padding:2px 8px; font-size:12px; }
+  #kMyShare .mspadd { display:flex; gap:6px; }
+  #kMyShare .mspadd select { flex:1; min-width:0; background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:6px; padding:5px 6px; font:inherit; font-size:13px; }
+  #kMyShare .msttl { display:flex; gap:6px; flex-wrap:wrap; }
+  #kMyShare .msttl button { background:transparent; border:1px solid var(--line); color:var(--text-dim); padding:3px 9px; font-size:12px; }
+  #kMyShare .msttl button.on { border-color:var(--asi-blue); color:var(--text); background:color-mix(in srgb, var(--asi-blue) 16%, var(--surface)); }
+  #kMyShare .mspnone { color:var(--text-mute); font-size:12px; }
   /* 0.21.65 (m): the room's view is locked -- a small badge after the room's name */
   #roomBanner .rbvl { display:inline-flex; align-items:center; gap:3px; flex:none; margin-left:2px; padding:1px 6px 1px 4px; border-radius:9px;
     border:1px solid var(--asi-amber); color:var(--asi-amber); font-size:10px; font-weight:600; letter-spacing:.02em; }
@@ -1322,6 +1347,9 @@
   .sbmine { flex:none; display:flex; flex-direction:column; gap:4px; margin-bottom:6px; padding-bottom:6px; border-bottom:1px dashed var(--line); }
   .sbmine[hidden] { display:none; }
   .sbcard.mine .rb { font-size:10px; }
+  .sbcard.mine.setup .sbcnt { color:var(--asi-blue); }   /* 0.21.78: not set up yet on this device -- "Set up" */
+  .sbcard.mine.shared .rb { background:color-mix(in srgb, var(--asi-blue) 30%, var(--surface-2)); }   /* 0.21.78: shared with me */
+  .sbcard.mine.shared.away { opacity:.72; }
   .sbcard { border:1px solid var(--line); border-radius:8px; background:var(--surface); padding:6px 7px; cursor:pointer; }
   .sbcard:hover { border-color:var(--asi-blue-dim); }
   .sbcard.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue-glow); }
@@ -2222,7 +2250,9 @@
         <li><b>Camera grids</b> show several cameras in one tile; click a camera in a grid to open it at full quality.</li>
         <li><b>Back to spotlight</b> (top-left of the stage, or <kbd>S</kbd>) returns to what the room spotlighted, from the gallery or anything you opened.</li>
         <li>Several things spotlit share the stage: <b>drag one onto another</b> to swap their places &mdash; everyone in the room sees the new order.</li>
-        <li><b>My room</b> (More &#9656; My room&hellip;) is a room only you see: pin feeds from any room into it (<b>Pin to My room</b> in a tile&rsquo;s menu), spotlight and arrange them. It is kept on the hub under your name and a personal code, so it opens on any device; it is the first card in your rooms list. An admin can reset a forgotten code.</li>
+        <li><b>My room</b> (More &#9656; My room&hellip;) is a room only you see: pin feeds from any room into it (<b>Pin to My room</b> in a tile&rsquo;s menu), spotlight and arrange them. It is kept on the hub under your name and a passcode (personal code), so it opens on any device; it is the first card in your rooms list. An admin can reset a forgotten code.</li>
+        <li><b>Share My room</b> (right-click its card): give people access (they see <i>&lt;your name&gt;&rsquo;s room</i> in their rooms list) or copy an invite link. Guests watch what you arrange and talk; only you arrange it, unless you tick <b>Can arrange</b> for one person. Guests are let in only while you are in My room &mdash; when you leave, everyone goes to the Lobby.</li>
+        <li><b>Right-click a person</b> (the rooms list or People) &#9656; <b>Invite to</b> the room you are in, or to My room: they get a prompt to <b>Join</b> or <b>Ignore</b>.</li>
         <li><b>More &#9656; Build a grid&hellip;</b> makes a grid of cameras from any room you can see (rooms you watch too): drag cameras onto spots, several on one spot take turns on motion or on time. It is yours on this device, or <b>Share with this room</b> puts it on the room for everyone. Its &#8943; menu edits, renames or deletes it.</li>
         <li>A <b>coloured ring</b> around someone means you are hearing them; a mic with a line through it means they are muted; an eye means they only watch.</li>
       </ul>
@@ -2841,7 +2871,15 @@
   const PERSONAL_RE = /^me-[0-9a-f]{12}$/;
   const isPersonalSlug = (s) => PERSONAL_RE.test(String(s || ""));
   window.__isPersonalSlug = isPersonalSlug;   // module 2
-  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? "My room" : String(slug || ""));
+  // 0.21.78: someone else's personal room (shared with me, an invite to it) reads "<owner>'s room"; mine stays "My room"
+  const personalOwners = new Map();   // slug -> its owner's name (my beats' `shared`, a guest mint, an invite)
+  const personalTitle = (slug) => {
+    let mine = false;
+    try { mine = window.__personal?.get?.()?.slug === slug; } catch {}
+    const o = personalOwners.get(slug);
+    return mine || (!o && !window.__personal) ? "My room" : o ? o + "\u2019s room" : "Private room";
+  };
+  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug) : String(slug || ""));
   // 0.21.75 (Kenton: a Publisher box that "only shares its cameras into the rooms I pick"): such a box sits in its own hidden
   // HOME room box-<host slug> (kastr_rtsp.home_room is the same rule) -- it joins it like any room (its auto-join, restore and
   // the box keeper keep working); no list shows a box-* room and nobody can create one.
@@ -3812,11 +3850,13 @@
   function viewLocked() {
     try {   // (spotSetNow runs while the module is still loading -- joinState / roomsMinter may not exist yet)
       if (joinState !== "joined" || CHANNEL === LOBBY) return false;
+      if (isPersonalSlug(CHANNEL)) return true;   // 0.21.78: a personal room -- its owner (or the co-arranger) arranges it, guests watch + talk
       if (board.room === CHANNEL) return !!board.lock;
       return !!roomsMinter.get(CHANNEL)?.viewLock;
     } catch { return false; }
   }
   function viewBoss() {
+    try { if (isPersonalSlug(CHANNEL)) return !authSecured || (authPersonal && !authGuest) || authCo; } catch {}   // 0.21.78: My room's owner / co-arranger
     if (authSecured && authRole === "admin") return true;
     try { if (isRelayOperator()) return true; } catch {}
     return !!myChannels().find((r) => r.slug === CHANNEL)?.roomKey;
@@ -4154,27 +4194,53 @@
       return false;
     }
   }
-  // the card at the top of the rooms rail (#sbMine)
+  // the card at the top of the rooms rail (#sbMine). 0.21.78 (Kenton: "Put a 'My room' option in the room rail at the top, when
+  // clicking on it, let the user set the passcode and give information about the my room capabilities"): it is there before
+  // My room exists on this device too ("Set up" -> the dialog); below it, the personal rooms people shared with me.
   function personalCardPaint() {
     const host = document.getElementById("sbMine");
     if (!host) return;
     const p = personalGet();
-    host.hidden = !p;
-    if (!p) { host.replaceChildren(); return; }
-    let card = host.querySelector(".sbcard");
+    host.hidden = false;
+    let card = host.querySelector(".sbcard.mine:not(.shared)");
     if (!card) {
       card = document.createElement("div"); card.className = "sbcard mine"; card.tabIndex = 0;
       card.innerHTML = '<div class="sbrow"><span class="rb">ME</span><span class="sbhd"><span class="sbname">My room</span>'
         + '<span class="sbmeta"><span class="sbtag here">You&rsquo;re here</span><span class="sbcnt">only you</span></span></span></div>';
       card.addEventListener("click", (e) => { e.stopPropagation(); if (isPhone()) document.body.classList.remove("sb-open"); personalEnter(); });
       card.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === card) { e.preventDefault(); personalEnter(); } });
-      card.addEventListener("contextmenu", (e) => { if (e.shiftKey) return; e.preventDefault(); e.stopPropagation(); personalDialog(); });
-      host.appendChild(card);
+      card.addEventListener("contextmenu", (e) => { if (e.shiftKey) return; e.preventDefault(); e.stopPropagation(); personalCardMenu(pointAnchor(e.clientX, e.clientY)); });
+      host.prepend(card);
     }
-    card.dataset.slug = p.slug;
-    card.classList.toggle("cur", joinState === "joined" && CHANNEL === p.slug);
-    card.title = "My room \u2014 your own views of feeds from any room; only you see it" + (p.name ? " (" + p.name + ")" : "") + ". Right-click for options.";
+    card.dataset.slug = p ? p.slug : "";
+    card.classList.toggle("setup", !p);
+    card.classList.toggle("cur", !!p && joinState === "joined" && CHANNEL === p.slug);
+    card.querySelector(".sbcnt").textContent = !p ? "Set up" : personalPeopleN > 0 ? "shared with " + personalPeopleN : "only you";
+    card.title = p ? "My room \u2014 your own views of feeds from any room" + (p.name ? " (" + p.name + ")" : "") + ". Right-click to share it or for options."
+      : "My room \u2014 a room of your own: pin feeds from any room, arrange them, share it with people you pick. Click to set it up.";
     card.querySelector(".rb").setAttribute("aria-label", "My room");
+    // 0.21.78: the personal rooms shared with me ("<owner>'s room") -- open while their owner is in
+    const want = personalShared.filter((r) => !p || r.slug !== p.slug);
+    for (const c of [...host.querySelectorAll(".sbcard.shared")]) if (!want.some((r) => r.slug === c.dataset.slug)) c.remove();
+    for (const r of want) {
+      let c = host.querySelector('.sbcard.shared[data-slug="' + r.slug + '"]');
+      if (!c) {
+        c = document.createElement("div"); c.className = "sbcard mine shared"; c.tabIndex = 0; c.dataset.slug = r.slug;
+        c.innerHTML = '<div class="sbrow"><span class="rb"></span><span class="sbhd"><span class="sbname"></span>'
+          + '<span class="sbmeta"><span class="sbtag here">You&rsquo;re here</span><span class="sbcnt"></span></span></span></div>';
+        c.addEventListener("click", (e) => { e.stopPropagation(); if (isPhone()) document.body.classList.remove("sb-open"); personalGuestEnter(c.dataset.slug); });
+        c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) { e.preventDefault(); personalGuestEnter(c.dataset.slug); } });
+        host.appendChild(c);
+      }
+      const t = (r.owner || "Someone") + "\u2019s room";
+      c.querySelector(".rb").textContent = bubbleLabel(r.owner || "?").slice(0, 2);
+      c.querySelector(".rb").setAttribute("aria-label", t);
+      c.querySelector(".sbname").textContent = t;
+      c.querySelector(".sbcnt").textContent = r.open ? "open" : (r.owner || "its owner") + " is away";
+      c.classList.toggle("away", !r.open);
+      c.classList.toggle("cur", joinState === "joined" && CHANNEL === r.slug);
+      c.title = t + " \u2014 shared with you. " + (r.open ? "Join to watch and talk." : "You can join while " + (r.owner || "its owner") + " is in it.");
+    }
   }
   // More > My room... -- make it (name from the profile, the personal code twice), open it on this device (name + code), or, on a
   // device that holds it, go there / forget it here
@@ -4184,15 +4250,18 @@
     el.innerHTML = '<div class="popcard rsdlg" role="dialog" aria-modal="true" aria-labelledby="pmTitle">'
       + '<div class="head"><span id="pmTitle">My room</span><span class="sp"></span><button type="button" class="close" title="Close">&#10005;</button></div>'
       + '<div class="body">'
-      + '<p class="rshint pmintro">A room only you see: pin feeds from any room into it, spotlight and arrange them. It is kept on the hub under your name and a personal code, so it opens on any device.</p>'
+      + '<p class="rshint pmintro">A room of your own, kept on the hub under your name and a passcode you pick (your personal code), so it opens on any device.</p>'
+      + '<ul class="pmcaps"><li>Pin feeds from any room into it (<b>Pin to My room</b> in a tile&rsquo;s menu), spotlight and arrange them.</li>'
+      + '<li>Nobody else sees it in their rooms list. Share it with people you pick, or with an invite link &mdash; they watch what you arrange and talk (camera, mic, chat); only you arrange it, unless you let one person help.</li>'
+      + '<li>Guests are only let in while you are in it. When you leave, everyone else goes to the Lobby.</li></ul>'
       + '<div class="pmtabs"><button type="button" class="pmtab" data-m="make">Make my room</button><button type="button" class="pmtab" data-m="open">I already have one</button></div>'
       + '<div class="rsrow pmf"><span class="lbl">Your name</span><div class="rsf"><input class="pmname" type="text" maxlength="48" autocomplete="off" spellcheck="false" aria-label="Your name"></div></div>'
-      + '<div class="rsrow pmf"><span class="lbl">Personal code</span><div class="rsf"><input class="pmcode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Personal code"></div></div>'
-      + '<div class="rsrow pmf pmmake"><span class="lbl">Personal code again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Personal code again"></div>'
-      + '<p class="rshint">Pick a code only you know (4 characters or more). On another device, enter your name and this code once.</p></div>'
+      + '<div class="rsrow pmf"><span class="lbl">Passcode</span><div class="rsf"><input class="pmcode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode (personal code)"></div></div>'
+      + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
+      + '<p class="rshint">Pick a passcode only you know (4 characters or more). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
       + '<p class="rsmsg" role="status"></p></div>'
-      + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
+      + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmshare" hidden>Share My room\u2026</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
     document.body.appendChild(el);
     const q = (s) => el.querySelector(s);
     const close = () => { el.hidden = true; document.removeEventListener("keydown", el.__key, true); };
@@ -4203,6 +4272,7 @@
       else if (e.key !== "Tab") e.stopPropagation();   // the page's shortcuts stay quiet while typing here
     };
     q(".close").onclick = close; q(".pmclose").onclick = close;
+    q(".pmshare").onclick = () => { close(); personalShareOpen(); };   // 0.21.78
     el.addEventListener("click", (e) => { if (e.target === el) close(); });
     const say = (t, bad) => { const m = q(".rsmsg"); m.textContent = t || ""; m.classList.toggle("err", !!bad); };
     el.__say = say;
@@ -4226,7 +4296,7 @@
       personalSave({ slug: d.slug, name: d.name || name, code });
       q(".pmcode").value = ""; q(".pmcode2").value = "";
       close();
-      window.__toast?.((mode === "make" && d.created ? "My room is ready" : "My room is set up on this device") + " \u2014 it is the first card in your rooms list (only you see it).", 5000, { level: "event" });
+      window.__toast?.((mode === "make" && d.created ? "My room is ready" : "My room is set up on this device") + " \u2014 it is the first card in your rooms list (nobody else sees it unless you share it).", 5000, { level: "event" });
       if (joinState === "joined") personalEnter();
     };
     return el;
@@ -4243,8 +4313,12 @@
     q(".pmmake").hidden = mode !== "make";
     q(".pmhave").hidden = mode !== "have";
     q(".pmforget").hidden = mode !== "have";
-    q(".pmok").textContent = mode === "have" ? (joinState === "joined" && p && CHANNEL === p.slug ? "Close" : "Go to My room") : mode === "make" ? "Make my room" : "Open my room";
-    if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". Only you see it \u2014 it is the first card in your rooms list.";
+    // 0.21.78 (Kenton: two Close buttons when already in My room): there is one Close; in My room the main button goes
+    q(".pmshare").hidden = mode !== "have";
+    const inMine = mode === "have" && joinState === "joined" && !!p && CHANNEL === p.slug;
+    q(".pmok").hidden = inMine;
+    q(".pmok").textContent = mode === "have" ? "Go to My room" : mode === "make" ? "Make my room" : "Open my room";
+    if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". It is the first card in your rooms list; nobody else sees it there unless you share it.";
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
     if (note) pmEl.__say(note, true);
   }
@@ -4255,10 +4329,338 @@
     pmPaint(mode, note);
     pmEl.hidden = false;
     document.addEventListener("keydown", pmEl.__key, true);
-    try { (pmEl.__mode === "have" ? pmEl.querySelector(".pmok") : (pmEl.querySelector(".pmname").value ? pmEl.querySelector(".pmcode") : pmEl.querySelector(".pmname"))).focus(); } catch {}
+    try { (pmEl.__mode === "have" ? pmEl.querySelector(pmEl.querySelector(".pmok").hidden ? ".pmshare" : ".pmok") : (pmEl.querySelector(".pmname").value ? pmEl.querySelector(".pmcode") : pmEl.querySelector(".pmname"))).focus(); } catch {}
   }
   window.__personal = { get: personalGet, save: personalSave, enter: personalEnter, dialog: personalDialog, pin: personalPin, canPin: personalCanPin,
     api: personalApi, card: personalCardPaint };   // module 2 + rig
+  // ---- 0.21.78 MY ROOM SHARED (Kenton: "I need to be able to share out access to 'my room' as wanted"; "Only allow people in
+  // 'My room' if the owner is in it. If the owner leaves the room, it should kick everyone to the lobby"; "Allow right clicking on
+  // a person ... inviting to the room you're in, or my room and have it display for that user to join or ignore"). Every page
+  // BEATS its relay host (POST /api/people {op: "beat"}, every 4 s from a worker tick so a hidden tab keeps time): the owner's
+  // beat from My room keeps it open at the hub; a guest's learns whether it still is (and goes to the Lobby with a note when
+  // not); every beat brings the person invites waiting for this device and the personal rooms shared with it (the rail).
+  let personalShared = [];      // [{slug, owner, open}] -- shared with this device (my beats)
+  let personalPeopleN = 0;      // how many people My room is shared with (the card says so; Share My room refreshes it)
+  try { personalPeopleN = Number(localStorage.getItem("kastr.personal.people") || 0) || 0; } catch {}
+  const myOpName = () => String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
+  let pbBusy = false, pbOwner = null, pbOld = false;   // pbOwner = { slug, token } while my page is in My room as its owner
+  async function peopleBeat() {
+    if (pbBusy || pbOld || joinState !== "joined" || !authSecured || !authTokens?.member) return;
+    const base = authBase();
+    if (!base) return;
+    pbBusy = true;
+    const tok = authTokens.member, room = CHANNEL;
+    try {
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
+        body: JSON.stringify({ op: "beat", name: myOpName() }) });
+      if (r.status === 404) { pbOld = true; setTimeout(() => { pbOld = false; }, 300000); return; }   // a relay host older than 0.21.78
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) return;
+      personalSharedApply(d.shared);
+      for (const it of Array.isArray(d.inbox) ? d.inbox : []) personInviteArrive(it);
+      if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
+    } catch {} finally { pbBusy = false; }
+  }
+  {   // a worker's tick is not throttled in a hidden tab the way a page timer is (the owner's room stays open)
+    let tick = null;
+    try {
+      const u = URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 4000);"], { type: "text/javascript" }));
+      tick = new Worker(u);
+      tick.onmessage = () => peopleBeat();
+    } catch { tick = null; }
+    if (!tick) setInterval(peopleBeat, 4000);
+  }
+  window.addEventListener("kastr:auth", (e) => {   // a new token: the room may have changed -- left My room as its owner?
+    if (pbOwner && e?.detail?.room !== pbOwner.slug) personalLeaveSend(false);
+    setTimeout(peopleBeat, 300);
+  });
+  window.addEventListener("pagehide", () => personalLeaveSend(true));   // KASTR closing / the tab going: guests go at once
+  function personalLeaveSend(beacon) {
+    const o = pbOwner;
+    pbOwner = null;
+    const base = authBase();
+    if (!o || !base) return;
+    const body = JSON.stringify({ op: "leave", token: o.token });
+    try {
+      if (beacon && navigator.sendBeacon && navigator.sendBeacon(base + "/api/people", new Blob([body], { type: "text/plain" }))) return;
+      fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+    } catch {}
+  }
+  function personalSharedApply(rows) {
+    if (!Array.isArray(rows)) return;
+    const next = rows.filter((r) => r && isPersonalSlug(r.slug)).map((r) => ({ slug: String(r.slug), owner: String(r.owner || ""), open: !!r.open }));
+    for (const r of next) if (r.owner) personalOwners.set(r.slug, r.owner);
+    if (JSON.stringify(next) === JSON.stringify(personalShared)) return;
+    personalShared = next;
+    try { personalCardPaint(); } catch {}
+  }
+  let pKickSaid = "";
+  function personalStateApply(st, room, tok) {
+    if (!isPersonalSlug(room)) return;
+    if (st.owner === true) { pbOwner = { slug: room, token: tok }; return; }   // my own room: my beats keep it open
+    if (st.owner) personalOwners.set(room, String(st.owner));
+    if (typeof st.co === "boolean" && st.co !== authCo) { authCo = st.co; try { paintRoomInfo(); } catch {} }
+    if (st.open === null || st.open === undefined) return;   // the hub's word is late here -- my session decides
+    if (st.open && st.access !== false) return;
+    const owner = String(st.owner || "") || "The owner";
+    const why = !st.open ? (st.why === "left" ? owner + " left their room" : owner + " is no longer in their room") : owner + " removed your access to their room";
+    personalKicked(room, why);
+  }
+  async function personalKicked(room, why) {
+    if (joinState !== "joined" || CHANNEL !== room || pKickSaid === room + "|" + why) return;
+    pKickSaid = room + "|" + why;
+    log("My room shared: " + why + " \u2014 to the Lobby");
+    await switchRoom(lastChannelList.find((r) => r.slug === LOBBY) || { slug: LOBBY }, "");
+    setTimeout(() => { pKickSaid = ""; }, 5000);
+    kastrConfirm({ title: "Back in the Lobby", message: why + ", so everyone in it was sent to the Lobby.",
+                   detail: "You can join again while they are in it \u2014 it is in your rooms list when it is shared with you.", ok: "OK", noCancel: true });
+  }
+  async function personalGuestEnter(slug) {
+    const r = personalShared.find((x) => x.slug === slug);
+    const t = roomTitle(slug);
+    if (joinState !== "joined") { window.__toast?.("Join a room first \u2014 then " + t + " opens from the top of the rooms list.", 4000, { level: "info" }); return; }
+    if (CHANNEL === slug) return;
+    if (r && !r.open) { window.__toast?.((r.owner || "Its owner") + " isn\u2019t in their room right now \u2014 you can join while they are.", 5000, { level: "info" }); return; }
+    if (!isPublisherMode() && askBeforeRoomSwitch() && CHANNEL !== LOBBY) {
+      const ok = await kastrConfirm({ title: "Change room", message: "Leave \u201c" + roomTitle(CHANNEL) + "\u201d and go to " + t + "?",
+        detail: "Your microphone will be muted and your camera turned off.", ok: "Go to " + t, cancel: "Stay in " + roomTitle(CHANNEL) });
+      if (ok === false) return;
+    }
+    switchRoom({ slug, personal: true }, "");
+  }
+  // the card's right-click: go there, share it, the dialog (passcode, forget on this device)
+  function personalCardMenu(anchor) {
+    const p = personalGet();
+    if (!p) { personalDialog(); return; }
+    const here = joinState === "joined" && CHANNEL === p.slug;
+    const items = [];
+    if (!here) items.push({ value: "go", icon: "play", label: "Go to My room" });
+    items.push({ value: "share", icon: "share", label: "Share My room\u2026", tip: "People with access and invite links" });
+    items.push({ value: "about", icon: "help", label: "My room\u2026", tip: "What it does, your passcode, forget it on this device" });
+    openMineMenu(anchor, items, "", (v) => { if (v === "go") personalEnter(); else if (v === "share") personalShareOpen(); else personalDialog(); });
+  }
+  // ---- Share My room: people with access (picked from the people seen on the hub) + invite links (1 h / 24 h / 7 days)
+  async function personalPeopleCall(body) {
+    const p = personalGet();
+    if (!p) return { ok: false, error: "My room is not set up on this device." };
+    const base = authBase();
+    if (!base) return { ok: false, error: "No relay to talk to." };
+    try {
+      const t = await personalToken(p);
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + t }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 && !d.error) return { ok: false, error: "This relay\u2019s KASTR is older than 0.21.78 (no shared personal rooms) \u2014 update it first." };
+      return r.ok && d.ok ? d : { ...d, ok: false, error: d.error || ("HTTP " + r.status) };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  async function personalInviteCall(path, body) {
+    const p = personalGet();
+    const base = authBase();
+    if (!p || !base) return { ok: false, error: "My room is not set up on this device." };
+    try {
+      const t = await personalToken(p);
+      const r = await fetch(base + path, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + t }, body: JSON.stringify({ room: p.slug, ...body }) });
+      const d = await r.json().catch(() => ({}));
+      return r.ok && d.ok ? d : { ...d, ok: false, error: d.error || ("HTTP " + r.status) };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  let msEl = null, msTtl = 86400, msSeen = [];
+  function msBuild() {
+    const el = document.createElement("div"); el.id = "kMyShare"; el.hidden = true;
+    el.innerHTML = '<div class="popcard rsdlg" role="dialog" aria-modal="true" aria-labelledby="msTitle">'
+      + '<div class="head"><span id="msTitle">Share My room</span><span class="sp"></span><button type="button" class="close" title="Close">&#10005;</button></div>'
+      + '<div class="body">'
+      + '<div class="rsrow"><span class="lbl">People with access</span><div class="msplist mspeople"></div>'
+      + '<div class="mspadd"><select class="mspick" aria-label="Add a person"></select><button type="button" class="msadd">Add</button></div>'
+      + '<p class="rshint">They see My room in their rooms list and can join while you are in it \u2014 to watch what you arrange and talk (camera, mic, chat). Only you arrange it, unless you tick <b>Can arrange</b> for one person. Remove anyone at any time.</p></div>'
+      + '<div class="rsrow"><span class="lbl">Invite links</span><div class="msttl"><button type="button" data-t="3600">1 hour</button><button type="button" data-t="86400">24 hours</button><button type="button" data-t="604800">7 days</button><span class="sp"></span><button type="button" class="mscopy">Copy invite link</button></div>'
+      + '<div class="msplist mslinks"></div>'
+      + '<p class="rshint">Anyone with a link joins while you are in My room, without any code. Revoke a link to stop it letting anyone else in.</p></div>'
+      + '<p class="rsmsg" role="status"></p></div>'
+      + '<div class="kcbtns"><button type="button" class="pmok msclose">Close</button></div></div>';
+    document.body.appendChild(el);
+    const q = (x) => el.querySelector(x);
+    const close = () => { el.hidden = true; document.removeEventListener("keydown", el.__key, true); };
+    el.__close = close;
+    el.__key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } else if (e.key !== "Tab") e.stopPropagation(); };
+    q(".close").onclick = close; q(".msclose").onclick = close;
+    el.addEventListener("click", (e) => { if (e.target === el) close(); });
+    el.__say = (t, bad) => { const m = q(".rsmsg"); m.textContent = t || ""; m.classList.toggle("err", !!bad); };
+    for (const b of el.querySelectorAll(".msttl button[data-t]")) b.onclick = () => { msTtl = Number(b.dataset.t); msPaintTtl(); };
+    q(".msadd").onclick = async () => {
+      const v = q(".mspick").value;
+      if (!v) { el.__say("Pick a person to add.", true); return; }
+      const who = msSeen.find((x) => x.host === v);
+      el.__say("Adding" + (who?.name ? " " + who.name : "") + "\u2026");
+      const d = await personalPeopleCall({ op: "share", to: v, name: who?.name || "", on: true });
+      if (!d.ok) { el.__say(d.error || "Refused.", true); return; }
+      el.__say((who?.name || "They") + " can now join My room while you are in it.");
+      msPaintList(d);
+    };
+    q(".mscopy").onclick = async () => {
+      const btn = q(".mscopy");
+      btn.disabled = true; btn.textContent = "Making a link\u2026";
+      try {
+        const d = await personalInviteCall("/api/invite", { ttl: msTtl, by: myOpName() || undefined });
+        if (!d.ok) throw new Error(d.error);
+        const link = await inviteJoinLink(d.token, personalGet().slug);
+        const say = msTtl === 3600 ? "1 hour" : msTtl === 604800 ? "7 days" : "24 hours";
+        let copied = false;
+        try { await navigator.clipboard.writeText(link); copied = true; } catch {}
+        if (!copied) window.prompt("Copy this invite link (" + say + "):", link);
+        el.__say("Invite link copied \u2014 it works for " + say + ", while you are in My room.");
+        msRefresh();
+      } catch (e) { el.__say("Could not make an invite link \u2014 " + (e?.message || e), true); }
+      finally { btn.disabled = false; btn.textContent = "Copy invite link"; }
+    };
+    return el;
+  }
+  function msPaintTtl() { if (msEl) for (const b of msEl.querySelectorAll(".msttl button[data-t]")) b.classList.toggle("on", Number(b.dataset.t) === msTtl); }
+  function msPaintList(d) {
+    if (!msEl || !d?.ok) return;
+    const q = (x) => msEl.querySelector(x);
+    const rows = Array.isArray(d.people) ? d.people : [];
+    personalPeopleN = rows.length;
+    try { localStorage.setItem("kastr.personal.people", String(rows.length)); } catch {}
+    try { personalCardPaint(); } catch {}
+    const box = q(".mspeople");
+    if (!rows.length) { const n = document.createElement("div"); n.className = "mspnone"; n.textContent = "Nobody yet \u2014 add people below."; box.replaceChildren(n); }
+    else box.replaceChildren(...rows.map((r) => {
+      const row = document.createElement("div"); row.className = "msprow"; row.dataset.host = r.host;
+      const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = r.name || r.host;
+      const sub = document.createElement("span"); sub.className = "sub"; sub.textContent = r.name ? " " + r.host : "";
+      nm.appendChild(sub);
+      const lab = document.createElement("label"); lab.title = "Pin, spotlight and arrange My room with you (one person at a time)";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = d.co === r.host;
+      cb.onchange = async () => { const x = await personalPeopleCall({ op: "co", to: cb.checked ? r.host : "" }); if (!x.ok) { msEl.__say(x.error || "Refused.", true); cb.checked = !cb.checked; return; } msEl.__say(cb.checked ? (r.name || r.host) + " can arrange My room with you." : "Only you arrange My room."); msPaintList(x); };
+      lab.append(cb, document.createTextNode("Can arrange"));
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "ghost"; rm.textContent = "Remove";
+      rm.onclick = async () => {
+        if (!(await kastrConfirm({ title: "Remove access", message: "Stop sharing My room with " + (r.name || r.host) + "?", detail: "If they are in it now, they go to the Lobby.", ok: "Remove", danger: true }))) return;
+        const x = await personalPeopleCall({ op: "share", to: r.host, name: r.name || "", on: false });
+        if (!x.ok) { msEl.__say(x.error || "Refused.", true); return; }
+        msEl.__say((r.name || r.host) + " no longer has access."); msPaintList(x);
+      };
+      row.append(nm, lab, rm);
+      return row;
+    }));
+    const have = new Set(rows.map((r) => r.host));
+    const pick = q(".mspick");
+    const cands = msSeen.filter((x) => !have.has(x.host));
+    pick.replaceChildren(...[{ host: "", name: cands.length ? "Pick a person\u2026" : "Nobody else seen on the hub yet" }, ...cands].map((x) => {
+      const o = document.createElement("option"); o.value = x.host; o.textContent = x.host ? (x.name ? x.name + " (" + x.host + ")" : x.host) : x.name; return o;
+    }));
+    const links = Array.isArray(d.invites) ? d.invites : [];
+    const lb = q(".mslinks");
+    if (!links.length) { const n = document.createElement("div"); n.className = "mspnone"; n.textContent = "No active invite links."; lb.replaceChildren(n); }
+    else lb.replaceChildren(...links.map((iv) => {
+      const row = document.createElement("div"); row.className = "msprow";
+      const left = Math.max(0, Math.round(((Number(iv.exp) || 0) * 1000 - Date.now()) / 60000));
+      const nm = document.createElement("span"); nm.className = "nm";
+      nm.textContent = (iv.person ? "For " + iv.person : "Link by " + (iv.by || "you")) + " \u00b7 " + (left >= 120 ? Math.round(left / 60) + " h" : left + " min") + " left" + (iv.uses ? " \u00b7 used " + iv.uses + "\u00d7" : "");
+      const rv = document.createElement("button"); rv.type = "button"; rv.className = "ghost"; rv.textContent = "Revoke";
+      rv.onclick = async () => { const x = await personalInviteCall("/api/invite/revoke", { id: iv.id }); if (!x.ok) { msEl.__say(x.error || "Refused.", true); return; } msEl.__say("Invite link revoked."); msRefresh(); };
+      row.append(nm, rv);
+      return row;
+    }));
+  }
+  async function msRefresh() {
+    const [d, seen] = await Promise.all([personalPeopleCall({ op: "list" }), personalPeopleCall({ op: "seen" })]);
+    if (seen.ok) {
+      const m = new Map();
+      for (const x of seen.people || []) if (x && x.host) m.set(x.host, { host: String(x.host), name: String(x.name || "") });
+      for (const x of personSeenHere()) if (!m.has(x.host) || !m.get(x.host).name) m.set(x.host, x);   // + the people on my rail now
+      m.delete(HOSTNAME1);
+      msSeen = [...m.values()].sort((a, b) => (a.name || "~" + a.host).localeCompare(b.name || "~" + b.host, undefined, { sensitivity: "base" }));
+    }
+    if (!d.ok) { msEl?.__say(d.error || "Could not load who has access.", true); return; }
+    msPaintList(d);
+  }
+  async function personalShareOpen() {
+    if (!personalGet()) { personalDialog(); return; }
+    if (!authSecured) { window.__toast?.("This relay has no access codes \u2014 there is nothing to share My room with.", 4000, { level: "info" }); return; }
+    closeAllPops();
+    if (!msEl) msEl = msBuild();
+    msEl.__say("Loading\u2026");
+    msPaintTtl();
+    msEl.hidden = false;
+    document.addEventListener("keydown", msEl.__key, true);
+    try { msEl.querySelector(".mspick").focus(); } catch {}
+    await msRefresh();
+    if (!msEl.querySelector(".rsmsg.err")) msEl.__say("");
+  }
+  // the people I can see now (the rooms rail's presence, my room's tiles): host + name
+  function personSeenHere() {
+    const out = new Map();
+    for (const x of roomsPres.values()) {
+      const w = x.who;
+      if (!x.state || x.goneAt || !w || !HOST_RE.test(String(w.host || ""))) continue;
+      if (!out.has(w.host) || !out.get(w.host).name) out.set(w.host, { host: String(w.host), name: String(w.name || w.op || "") });
+    }
+    return [...out.values()];
+  }
+  // ---- right-click a person (the rail, the People panel): Invite to <the room I am in> / Invite to My room
+  function personHostOf(op, slug) {
+    const k = String(op || "").toLowerCase();
+    for (const n of tiles.keys()) {
+      const pp = String(n).split("/");
+      if (pp.length >= 3 && pp[0] === slug && String(pp[2]).toLowerCase() === k && HOST_RE.test(pp[1])) return pp[1];
+    }
+    for (const x of roomsPres.values()) if (x.state && !x.goneAt && x.slug === slug && String(x.who?.op || "").toLowerCase() === k && HOST_RE.test(String(x.who?.host || ""))) return String(x.who.host);
+    for (const m of members.values()) if (String(m.op || "").toLowerCase() === k && HOST_RE.test(String(m.host || ""))) return String(m.host);
+    return "";
+  }
+  function personInviteItems(p) {
+    if (!p || p.me || joinState !== "joined" || !authSecured || !authTokens?.member || pbOld) return null;
+    const host = p.host || personHostOf(p.key, p.room || CHANNEL);
+    if (!host || host === HOSTNAME1) return null;
+    const there = !p.room || p.room === CHANNEL;   // already in the room I am in
+    const mine = personalGet();
+    const items = [];
+    if (!there && CHANNEL !== LOBBY && !(isPersonalSlug(CHANNEL) && (authGuest || !authPersonal)))
+      items.push({ value: "pinv-here", icon: "share", label: "Invite to " + roomTitle(CHANNEL), tip: (p.name || "They") + " gets a prompt to join " + roomTitle(CHANNEL) + " (no code needed)" });
+    if (mine && !(CHANNEL === mine.slug && there) && !(CHANNEL === mine.slug && items.length))
+      items.push({ value: "pinv-mine", icon: "share", label: "Invite to My room", tip: (p.name || "They") + " gets a prompt to join My room (while you are in it)" });
+    if (!items.length) return null;
+    return { items, pick: (v) => personInvite(p, host, v === "pinv-mine" ? mine.slug : CHANNEL) };
+  }
+  async function personInvite(p, host, room) {
+    const base = authBase();
+    if (!base) return;
+    const who = p.name || prettyOperator(p.key) || host;
+    let bearer = authTokens?.member;
+    if (room !== CHANNEL) {   // My room from another room: its own token says I own it
+      try { bearer = await personalToken(personalGet()); } catch (e) { window.__toast?.("Could not invite " + who + ": " + (e?.message || e), 5000, { level: "warn" }); return; }
+    }
+    try {
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + bearer },
+        body: JSON.stringify({ op: "invite", to: host, toName: who, by: myOpName() || undefined }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 && !d.error) throw new Error("this relay\u2019s KASTR is older than 0.21.78 \u2014 update it first");
+      if (!r.ok || !d.ok) throw new Error(d.error || ("HTTP " + r.status));
+      window.__toast?.("Invited " + who + " to " + roomTitle(room) + (d.away ? " \u2014 they can join once you are in My room" : " \u2014 they get a prompt to join"), 5000, { level: "event" });
+    } catch (e) { window.__toast?.("Could not invite " + who + ": " + (e?.message || e), 6000, { level: "warn" }); }
+  }
+  // the invited person's KASTR: "<sender> invites you to <room>" -- Join (a one-device link: no code) / Ignore
+  const piSeen = new Set();
+  async function personInviteArrive(it) {
+    if (!it || it.kind !== "invite" || !it.id || piSeen.has(it.id) || !INVITE_TOKEN_RE.test(String(it.token || "")) || !ROOM_RE.test(String(it.room || ""))) return;
+    piSeen.add(it.id);
+    const room = String(it.room);
+    if (isPersonalSlug(room) && it.title) personalOwners.set(room, String(it.title).replace(/'s room$/, ""));
+    if (joinState !== "joined" || CHANNEL === room) return;
+    const t = roomTitle(room);
+    try { chimeRoom(); } catch {}
+    log("Invite from " + (it.by || "someone") + " to " + room);
+    const go = await kastrConfirm({ title: "Invitation", message: (it.by || "Someone") + " invites you to " + t,
+      detail: "Join now? Your microphone will be muted and your camera turned off. Ignore to stay in " + roomTitle(CHANNEL) + ".", ok: "Join", cancel: "Ignore" });
+    if (!go || joinState !== "joined" || CHANNEL === room) return;
+    inviteSet({ token: String(it.token), room, at: Date.now() });   // rides the mint (and its re-mints) for this room: no code needed
+    switchRoom({ slug: room, personal: isPersonalSlug(room) }, "");
+  }
+  window.__myShare = { open: personalShareOpen, beat: peopleBeat, people: personalPeopleCall, invite: personInvite, items: personInviteItems,
+    arrive: personInviteArrive, shared: () => personalShared.slice(), owner: () => (pbOwner ? pbOwner.slug : ""), menu: personalCardMenu,
+    guest: () => ({ guest: authGuest, co: authCo }), host: () => HOSTNAME1 };   // rig
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
   // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
   // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)
@@ -6259,25 +6661,32 @@
   // a person has a menu when something of theirs is a tile here (its own menu), or I am an admin (Remove ... from the room)
   function participantHasMenu(p) {
     if (!p || p.me) return false;
-    const tileName = p.cam || p.content[0];
+    const tileName = p.cam || (p.content || [])[0];
     if (tileName && tiles.get(tileName)?.pane?.__openMenu) return true;
+    if (personInviteItems(p)) return true;   // 0.21.78: Invite to <this room> / My room
     return !!(p.viewer && authRole === "admin");
   }
+  // 0.21.78 (Kenton: "Allow right clicking on a person in the people menu to have the same options as on the left"): the rail and
+  // the People panel both open THIS menu -- their tile's menu (+ the invite items), else the admin's Remove and the invite items
   function participantMenu(p, anchor) {
-    const tileName = p.cam || p.content[0];
+    const inv = personInviteItems(p);
+    const tileName = p.cam || (p.content || [])[0];
     const pane = tileName ? tiles.get(tileName)?.pane : null;
-    if (pane?.__openMenu) { pane.__openMenu(anchor); return true; }
-    if (p.viewer && authRole === "admin") {   // a watcher has no tile: the admin can still remove them
-      openMineMenu(anchor, [{ value: "akick", icon: "leave", label: "Remove " + p.name + " from the room (admin)" }], "", async () => {
-        if (!(await kastrConfirm({ title: "Remove from the room", message: "Remove " + p.name + " from the room?", ok: "Remove", danger: true }))) return;
-        for (const x of roomsPres.values()) {
-          if (!x.state || x.goneAt || String(x.who?.op || "").toLowerCase() !== p.key || x.who.peer === statePeer()) continue;
-          window.__adminSend?.({ op: "kick", target: x.who.host + "/" + x.who.op + "/" + x.who.peer });
-        }
-      });
-      return true;
-    }
-    return false;
+    if (pane?.__openMenu) { pane.__openMenu(anchor, inv); return true; }
+    const items = [];
+    if (p.viewer && authRole === "admin") items.push({ value: "akick", icon: "leave", label: "Remove " + p.name + " from the room (admin)" });   // a watcher has no tile
+    if (inv) { if (items.length) items.push({ sep: true }); items.push(...inv.items); }
+    if (!items.length) return false;
+    openMineMenu(anchor, items, "", async (v) => {
+      if (inv && String(v).startsWith("pinv")) { inv.pick(v); return; }
+      if (v !== "akick") return;
+      if (!(await kastrConfirm({ title: "Remove from the room", message: "Remove " + p.name + " from the room?", ok: "Remove", danger: true }))) return;
+      for (const x of roomsPres.values()) {
+        if (!x.state || x.goneAt || String(x.who?.op || "").toLowerCase() !== p.key || x.who.peer === statePeer()) continue;
+        window.__adminSend?.({ op: "kick", target: x.who.host + "/" + x.who.op + "/" + x.who.peer });
+      }
+    });
+    return true;
   }
   function paintParticipants(force) {
     if (ppl.panel.hidden && !force) return;
@@ -9381,7 +9790,7 @@
       pchev.className = "pchev";
       pchev.innerHTML = icon("more");   // 0.21.0: options = three dots
       pchev.title = "Options for this stream";
-      const openTileMenu = (anchor) => {   // 0.21.23: the three dots and a right-click open the same menu
+      const openTileMenu = (anchor, extra) => {   // 0.21.23: the three dots and a right-click open the same menu; 0.21.78: + `extra` (a person's invite items)
         if (isCgName(name)) { cgMenu(anchor, name); return; }   // 0.21.66 (e): a grid of cameras from any room
         const content = isContentPath(name);
         const muted = mutedStreams.has(name);
@@ -9467,7 +9876,9 @@
           } catch {}
           if (!hqCell && vgHq(name).size) items.push({ value: "vghqoff", label: "Back to the grid picture for every cell" });
         }
+        if (extra?.items?.length) items.push({ sep: true }, ...extra.items);   // 0.21.78: Invite to <room> / My room (a person's row)
         openMineMenu(anchor, items, "", async (v) => {
+          if (extra?.pick && String(v).startsWith("pinv")) { extra.pick(v); return; }   // 0.21.78
           if (v === "lat") { latencyToggle(name); return; }
           if (v === "wrall") { wrSpotForAll(name); return; }   // 0.21.49: bring it into my room, then spotlight it
           if (v === "wrsound" || v === "wrstop" || v === "wrpick") {   // 0.21.44; 0.21.47: one source / the room's list
@@ -10846,6 +11257,7 @@
       const det = q(".kcdet"); det.textContent = o.detail || ""; det.hidden = !o.detail;
       const yes = q(".kcyes"), no = q(".kcno");
       yes.textContent = o.ok || "OK"; no.textContent = o.cancel || "Cancel";
+      no.hidden = !!o.noCancel;   // 0.21.78: a note (one button)
       yes.classList.toggle("danger", !!o.danger);
       // 0.21.42: an optional field (a locked room's code) -- the popup resolves its value; `check(value)` may answer an error
       // string, which keeps the popup open with the error under the field
@@ -10854,7 +11266,7 @@
       if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
       yes.disabled = no.disabled = false;
       const prev = document.activeElement;
-      const order = () => (o.input ? [inp, no, yes] : [no, yes]);
+      const order = () => (o.input ? [inp, no, yes] : o.noCancel ? [yes] : [no, yes]);
       const onKey = (e) => {
         if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
         else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (document.activeElement === no) done(false); else accept(); }
@@ -12996,6 +13408,7 @@
   let authLegacy = false;   // 0.10.0: secured, but no access codes yet (room codes only)
   let authRole = "";        // 0.10.0: "publisher" | "viewer" from the last mint ("" = open relay)
   let authPersonal = false; // 0.21.75: the last mint was for My room (its owner arranges it whatever the role)
+  let authGuest = false, authCo = false;   // 0.21.78: ... someone else's personal room (a guest; `co` = raised to co-arrange)
   let authTokens = null;    // { member, registry }
   let authExp = 0;
   let authRoomCode = "";    // kept for silent re-mint on heal/refresh
@@ -13049,6 +13462,7 @@
           authAccessCode = saved.access ?? "";      // 0.10.0
           authRole = saved.role || "publisher";
           authPersonal = !!saved.personal;   // 0.21.75
+          authGuest = !!saved.guest; authCo = !!saved.co;   // 0.21.78
           authNs = saved.ns;   // 0.21.17
         }
       } catch {}
@@ -13090,11 +13504,13 @@
     authExp = d.exp;
     authRole = d.role || "publisher";
     authPersonal = !!d.personal;   // 0.21.75
+    authGuest = !!d.guest; authCo = !!d.co;   // 0.21.78
+    if (d.personal && d.guest && d.owner) personalOwners.set(room, String(d.owner));
     authAccessCode = access ?? "";
     authRoomCode = roomCode ?? "";
     try {
       sessionStorage.setItem(authStoreKey(),
-        JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState, ns: authNs, personal: authPersonal }));
+        JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState, ns: authNs, personal: authPersonal, guest: authGuest, co: authCo }));
     } catch {}
     // the publish half re-posts its native feeds with the fresh token and follows the role
     try { window.dispatchEvent(new CustomEvent("kastr:auth", { detail: { role: authRole, room } })); } catch {}
@@ -14428,12 +14844,12 @@
     const role = authSecured ? authRole : "";
     const spk = document.createElement("span"); spk.className = "spk" + (ownRoomTalking() ? " on" : ""); spk.innerHTML = icon("spk"); spk.title = "Someone is speaking";
     b.replaceChildren(el("rbname", isHomeRoom(c) ? "No room \u2014 cameras only" : roomTitle(c)), spk);   // 0.21.75: a box in its hidden home room
-    if (viewLocked()) {   // 0.21.65 (m): the view is locked
+    if (viewLocked() && !isPersonalSlug(c)) {   // 0.21.65 (m): the view is locked (0.21.78: a personal room is its owner's view -- no badge)
       const vl = document.createElement("span"); vl.className = "rbvl"; vl.innerHTML = icon("lock") + "View locked";
       vl.title = viewBoss() ? "The view is locked \u2014 only you (the room\u2019s creator or an admin) can spotlight, pin or arrange for everyone" : "The view is locked by the room\u2019s creator or an admin";
       b.appendChild(vl);
     }
-    b.title = (c === LOBBY ? "The Lobby" : isPersonalSlug(c) ? "My room (only you see it)" : "Room " + c) + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
+    b.title = (c === LOBBY ? "The Lobby" : isPersonalSlug(c) ? roomTitle(c) + (authGuest ? " (shared with you)" : " (yours)") : "Room " + c) + " via " + urlInput.value.trim() + " \u2014 " + n + " here"
       + (roomSince ? ", occupied for " + fmtHms(Date.now() - roomSince) : "") + (rec?.locked ? ", locked" : "") + (rec?.persistent ? ", kept" : "")
       + (role ? ", " + role : "") + "\nClick for room info";
   }
@@ -14813,8 +15229,8 @@
         // 0.21.42: KASTR's own popup; a locked room asks for its code in it (Kenton: a locked room at the bottom of the rail
         // "never pops up the enter code prompt" -- the inline form opened below the visible part of the rail)
         const ans = await kastrConfirm({ title: "Change room",
-          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to " + (ask ? "leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and " : "") + "join it."
-                            : "Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + (rec.slug === LOBBY ? " and go to the Lobby?" : " and join \u201c" + rec.slug + "\u201d?"),   // 0.21.61 (Kenton: it said "join main")
+          message: needCode ? "\u201c" + rec.slug + "\u201d is locked. Enter its code to " + (ask ? "leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + roomTitle(CHANNEL) + "\u201d") + " and " : "") + "join it."
+                            : "Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + roomTitle(CHANNEL) + "\u201d") + (rec.slug === LOBBY ? " and go to the Lobby?" : " and join \u201c" + rec.slug + "\u201d?"),   // 0.21.61 (Kenton: it said "join main")
           detail: "Your microphone will be muted and your camera turned off.",
           ok: rec.slug === LOBBY ? "Go to the Lobby" : "Join " + rec.slug, cancel: "Stay in " + roomTitle(CHANNEL),
           input: needCode ? { placeholder: "Code for " + rec.slug, masked: true } : null,
@@ -14914,7 +15330,7 @@
       li.dataset.ptalk = m.talking ? "1" : "";   // 0.21.41: their presence says they speak (other rooms); sbTalkPaint adds what this window hears
       li.classList.toggle("talk", here ? li.classList.contains("talk") : !!m.talking);   // 0.21.64: my room's rings come from sbTalkPaint (what I hear)
       setPc(li, personColor(m.op));   // 0.21.61: the ring around their name in their colour (0.21.64: or their automatic one)
-      li.classList.toggle("menuable", here && !!sbMemberPerson(m.op));   // 0.21.41: the person's menu, in the room I am in
+      li.classList.toggle("menuable", !!sbMemberPerson(m.op, here ? CHANNEL : rec.slug, m.name));   // 0.21.41: the person's menu, in the room I am in; 0.21.78: + Invite (any room)
       li.querySelector(".nm").textContent = m.name || m.op;
       { const df = li.querySelector(".df"); if (df) df.classList.toggle("on", !!m.deaf); }   // 0.21.48
       li.querySelector(".nm").title = (m.name || m.op) + (m.via ? " via " + m.via : "");
@@ -14947,12 +15363,16 @@
     for (const card of cards) for (const li of card.querySelectorAll(".sbm")) li.classList.toggle("talk", loud.has(String(li.dataset.op || "").toLowerCase()));   // 0.21.64 (Kenton: the ring "sticking around when the user is muted or not making any noise"): what I hear, never a stale flag
   }
   // 0.21.41: the rail's person = the Participants entry for that name (same menu as their tile and their Participants row)
-  function sbMemberPerson(op) {
+  function sbMemberPerson(op, slug, name) {
     const key = String(op || "").toLowerCase();
-    return participantList().find((p) => p.key === key && participantHasMenu(p)) || null;   // 0.21.65: no ⋯ / right-click without a menu
+    if (!slug || slug === CHANNEL) return participantList().find((p) => p.key === key && participantHasMenu(p)) || null;   // 0.21.65: no ⋯ / right-click without a menu
+    // 0.21.78: someone in ANOTHER room -- the same menu (participantMenu), with Invite to the room I am in / My room
+    if (key === String(window.__publisher?.opSlug?.() || "").toLowerCase()) return null;
+    const p = { key, name: String(name || "") || prettyOperator(key), cam: null, content: [], viewer: false, me: false, room: slug, host: personHostOf(key, slug) };
+    return p.host && participantHasMenu(p) ? p : null;
   }
   function sbMemberMenu(li, anchor) {
-    const p = sbMemberPerson(li.dataset.op);
+    const p = sbMemberPerson(li.dataset.op, li.closest(".sbcard")?.__rec?.slug, li.querySelector(".nm")?.textContent);
     if (!p) return;
     li.classList.add("open");
     if (!participantMenu(p, anchor)) window.__toast?.("Nothing to do for " + p.name + " from here.", 2500, { level: "info" });
@@ -16287,7 +16707,7 @@
     if (authSecured) {
       // 0.10.0: the cached relay access code plus the room's own code
       try { await authMint(rec.slug, authAccessCode, code ?? ""); switchMark("mint"); }
-      catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.("Could not join " + rec.slug + ": " + (e?.message || e), 5000, { level: "warn" }); return; }   // 0.21.42: said, and nothing muted
+      catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.("Could not join " + roomTitle(rec.slug) + ": " + (e?.message || e), 5000, { level: "warn" }); return; }   // 0.21.42: said, and nothing muted; 0.21.78: its title
     }
     // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
     if (!isPublisherMode() && !opts?.follow) {   // 0.21.65: following a renamed room is not changing rooms
@@ -16353,8 +16773,8 @@
     const room = String(inv.room);
     if (joinState === "joined" && CHANNEL === room) { window.__toast?.("You are already in " + roomTitle(room), 4000, { level: "event" }); return; }
     if (joinState === "joined") {
-      const ok = await kastrConfirm({ title: "Room invite", message: "You\u2019re invited to \u201c" + room + "\u201d. Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + CHANNEL + "\u201d") + " and join it?",
-        detail: "Your microphone will be muted and your camera turned off.", ok: "Join " + room, cancel: "Stay in " + roomTitle(CHANNEL) });
+      const ok = await kastrConfirm({ title: "Room invite", message: "You\u2019re invited to \u201c" + roomTitle(room) + "\u201d. Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + roomTitle(CHANNEL) + "\u201d") + " and join it?",
+        detail: "Your microphone will be muted and your camera turned off.", ok: "Join " + roomTitle(room), cancel: "Stay in " + roomTitle(CHANNEL) });
       if (!ok) return;
     }
     inviteSet({ token: inv.token, room, at: Date.now() });
@@ -17190,6 +17610,7 @@
   setInterval(() => { liveSave(); hiMine(); }, 5000);   // 0.21.64: + my ring colour once my name is known
   function leaveMeeting() {
     if (joinState !== "joined") return;
+    try { personalLeaveSend(false); } catch {}   // 0.21.78: the owner leaving My room -- its guests go to the Lobby
     try { localStorage.removeItem(LIVE_KEY); } catch {}   // 0.21.61: Leave = nothing to resume
     joinState = "leaving";
     try { sessionStorage.removeItem("kastr.rejoin"); } catch {}

@@ -153,6 +153,20 @@ PERSONAL_MAX = 500          # personal rooms one hub holds (their own cap -- KEP
 PERSONAL_CODE_MIN = 4
 PERSONAL_CODE_MAX = 128
 PERSONAL_RESERVED = 'room names starting with "me-" are reserved for personal rooms (My room) -- pick another name'
+# 0.21.78 (Kenton: "I need to be able to share out access to 'my room' as wanted" / "Only allow people in 'My room' if the
+# owner is in it. If the owner leaves the room, it should kick everyone to the lobby" / right-click a person -> invite): the
+# owner shares My room with PEOPLE (their device's host -- the identity KASTR already keys kicks and the Users list on; 0.22
+# replaces it with the Entra sign-in) or with invite links; guests WATCH + TALK, only the owner (or the one guest raised to
+# co-arrange) changes the board; nobody but the owner gets in while the owner's page is not in the room (its beats, every few
+# seconds, reach the hub), and the hub sends everyone else to the Lobby when the owner leaves.
+PERSONAL_PEOPLE_MAX = 50       # people one personal room is shared with
+PERSONAL_OWNER_GRACE = 15      # s: the owner's page beats every ~4 s while in My room; silent longer = gone
+PERSONAL_MIRROR_FRESH = 45     # s: a spoke trusts the hub's copy (bans long-poll, held up to 30 s) this long
+PERSONAL_LOCAL_OPEN_S = 20     # s: a spoke trusts the hub's "the owner is in" (a guest's mint) until the long-poll says
+PINVITE_TTL = 3600             # a person invite's link (bound to the invited device) -- the shortest invite-link life
+PINVITE_RATE = (6, 60)         # person invites one sender may send per minute
+PINBOX_TTL = 180               # s: an invite waits this long for the invited page's next beat
+PINBOX_KEEP = 64               # invites the hub keeps for its spokes' long-polls
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
@@ -1158,6 +1172,8 @@ def claims_identity(claims):
             if m:
                 host = m.group(1)
                 break
+        if host is None and HOST_RE.match(str(claims.get("ph") or "")):
+            host = str(claims["ph"])   # 0.21.78: a personal room's token has no ~state put -- it names its device in `ph`
         return room, host
     except Exception:
         return None, None
@@ -2782,6 +2798,8 @@ class AuthStore:
             out[iid] = {"id": iid, "room": str(r["room"]), "digest": str(r["digest"]), "by": clean_label(r.get("by"), 40),
                         "created": created, "exp": exp, "ttl": ttl, "revoked": bool(r.get("revoked")),
                         "revokedAt": r.get("revokedAt"), "uses": max(uses, len(hosts)), "hosts": hosts}
+            if HOST_RE.match(str(r.get("for") or "")):   # 0.21.78: a person invite stays bound to its device
+                out[iid]["for"], out[iid]["forName"] = str(r["for"]), clean_label(r.get("forName"), 40)
             if len(out) >= INVITES_MAX:
                 break
         return out
@@ -2789,7 +2807,8 @@ class AuthStore:
     @staticmethod
     def _invite_row(r):
         return {"id": r["id"], "room": r["room"], "by": r.get("by") or "", "created": r.get("created"), "exp": r.get("exp"),
-                "ttl": r.get("ttl"), "uses": int(r.get("uses") or 0), "revoked": bool(r.get("revoked"))}
+                "ttl": r.get("ttl"), "uses": int(r.get("uses") or 0), "revoked": bool(r.get("revoked")),
+                "person": str(r.get("forName") or "") if r.get("for") else None}   # 0.21.78: a person invite (one device)
 
     def _invites_prune_locked(self, now):
         """Lock held: forget links that ended (expired or revoked) over INVITE_KEEP_S ago. -> anything dropped?"""
@@ -2800,15 +2819,19 @@ class AuthStore:
             self.invites.pop(k, None)
         return bool(dead)
 
-    def invite_create(self, room, ttl, by=""):
-        """-> (row, token, 200) -- the token exists only in this return value; (None, why, http code) when refused."""
+    def invite_create(self, room, ttl, by="", personal_ok=False, bound=None, bound_name=""):
+        """-> (row, token, 200) -- the token exists only in this return value; (None, why, http code) when refused.
+        0.21.78: personal_ok -- the room's OWNER asks (the caller checked); bound -- a person invite: only that device's host
+        may use it (a right-click "Invite to ..."), `bound_name` says whom in Room settings."""
         room = str(room or "")
         if not SLUG_RE.match(room):
             return None, "bad room name", 400
         if room == LOBBY_SLUG:
             return None, "the Lobby has no invite links", 403
-        if room.startswith("me-"):   # 0.21.75: My room is its owner's alone -- never an invite into it
-            return None, "personal rooms have no invite links", 403
+        if room.startswith("me-") and not (personal_ok and is_personal(room)):   # 0.21.75: only its owner shares My room (0.21.78)
+            return None, "only the owner of a personal room makes invite links for it", 403
+        if bound is not None and not HOST_RE.match(str(bound)):
+            return None, "bad person", 400
         ttl = invite_ttl(ttl)
         if ttl is None:
             return None, "an invite link works for 1 hour, 24 hours or 7 days", 400
@@ -2829,6 +2852,8 @@ class AuthStore:
             rec = {"id": iid, "room": room, "digest": hashlib.sha256(secret.encode("ascii")).hexdigest(),
                    "by": clean_label(by, 40), "created": int(now), "exp": int(now) + ttl, "ttl": ttl, "revoked": False,
                    "revokedAt": None, "uses": 0, "hosts": []}
+            if bound is not None:   # 0.21.78
+                rec["for"], rec["forName"] = str(bound), clean_label(bound_name, 40)
             self.invites[iid] = rec
             self._save()
             return self._invite_row(rec), token, 200
@@ -2855,6 +2880,8 @@ class AuthStore:
                 return "revoked", self._invite_row(rec)
             if now >= float(rec.get("exp") or 0):
                 return "expired", self._invite_row(rec)
+            if rec.get("for") and str(host or "") != rec["for"]:
+                return "wrong", None   # 0.21.78: a person invite works on the invited device only
             if use:
                 h = str(host or "")
                 if not HOST_RE.match(h):
@@ -3081,6 +3108,87 @@ class AuthStore:
     def personal_public(self):
         """The Relay page's count (never the names' rooms or codes)."""
         return {"count": self.personal_count(), "max": PERSONAL_MAX}
+
+    # ---- 0.21.78: My room shared -- "People with access" (device hosts) and one co-arranger, in the room record ----------
+    def personal_info(self, slug):
+        """-> {owner, people: {host: {name, at}}, co} of a personal room (a copy), or None."""
+        with self.lock:
+            r = self.rooms.get(slug)
+            if not is_personal_rec(r):
+                return None
+            pr = r["personal"]
+            people = pr.get("people") if isinstance(pr.get("people"), dict) else {}
+            co = str(pr.get("co") or "")
+            return {"owner": str(pr.get("owner") or ""),
+                    "people": {str(h): dict(v) for h, v in people.items() if HOST_RE.match(str(h)) and isinstance(v, dict)},
+                    "co": co if HOST_RE.match(co) else ""}
+
+    def personal_share(self, slug, host, name="", on=True):
+        """Add (on) or remove one person -- their device's host -- from a personal room's people. -> (changed, error)."""
+        host = str(host or "")
+        if not HOST_RE.match(host):
+            return False, "pick a person (their device)"
+        with self.lock:
+            r = self.rooms.get(slug)
+            if not is_personal_rec(r):
+                return False, "no such personal room"
+            pr = r["personal"]
+            people = pr.get("people") if isinstance(pr.get("people"), dict) else {}
+            if on:
+                was = people.get(host) if isinstance(people.get(host), dict) else None
+                if was is None and len(people) >= PERSONAL_PEOPLE_MAX:
+                    return False, "a personal room is shared with at most %d people" % PERSONAL_PEOPLE_MAX
+                row = {"name": clean_label(name, 40) or (was or {}).get("name") or "", "at": int((was or {}).get("at") or time.time())}
+                changed = was != row
+                people[host] = row
+            else:
+                changed = people.pop(host, None) is not None
+                if pr.get("co") == host:
+                    pr.pop("co", None)
+                    changed = True
+            pr["people"] = people
+            if changed:
+                self._save()
+            return changed, None
+
+    def personal_co_set(self, slug, host):
+        """The one guest who may arrange the room with its owner ("" = nobody). -> (changed, error)."""
+        host = str(host or "")
+        if host and not HOST_RE.match(host):
+            return False, "pick a person (their device)"
+        with self.lock:
+            r = self.rooms.get(slug)
+            if not is_personal_rec(r):
+                return False, "no such personal room"
+            pr = r["personal"]
+            if str(pr.get("co") or "") == host:
+                return False, None
+            if host:
+                pr["co"] = host
+            else:
+                pr.pop("co", None)
+            self._save()
+            return True, None
+
+    def personal_shared_with(self, host):
+        """[{slug, owner}] -- the personal rooms shared with this device (its rooms rail shows them)."""
+        with self.lock:
+            rows = [{"slug": k, "owner": str(r["personal"].get("owner") or "")} for k, r in self.rooms.items()
+                    if is_personal_rec(r) and isinstance(r["personal"].get("people"), dict) and host in r["personal"]["people"]]
+        return sorted(rows, key=lambda x: (x["owner"].lower(), x["slug"]))
+
+    def personal_all(self):
+        """{slug: {owner, hosts, co}} of every personal room -- the hub's spokes answer guests from a copy of it."""
+        with self.lock:
+            out = {}
+            for k, r in self.rooms.items():
+                if not is_personal_rec(r):
+                    continue
+                pr = r["personal"]
+                people = pr.get("people") if isinstance(pr.get("people"), dict) else {}
+                out[k] = {"owner": str(pr.get("owner") or ""), "hosts": sorted(h for h in people if HOST_RE.match(str(h))),
+                          "co": str(pr.get("co") or "") if HOST_RE.match(str(pr.get("co") or "")) else ""}
+            return out
 
     def export_bundle(self):
         """0.21.25: what a hub hands over -- the access-code records (salted hashes, never a code), the room records with
@@ -4144,6 +4252,29 @@ def group_op(store, p, operator=False, log=None):
     return {"ok": True, "op": op, "gid": gid, "groups": store.groups_public()}, 200
 
 
+P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare", "pco")   # 0.21.78: rooms_fed ops of My room shared
+
+
+class PersonalLive:
+    """0.21.78: what one relay knows LIVE about shared personal rooms -- never saved (a restart forgets who is in; the owner's
+    next beat says so again)."""
+
+    def __init__(self):
+        self.here = {}        # hub: slug -> {owner's device host: its last beat}
+        self.away = {}        # slug -> {at, why ("left" | "gone"), owner} -- the last time its owner left (kept 10 min)
+        self.inbox = {}       # device host -> [person invites waiting for that device's page]
+        self.out = []         # hub: [{seq, at, to, item}] -- person invites on their way to the spokes (bans long-poll)
+        self.seq = 0
+        self.seen = {}        # spoke: invite id -> when it arrived from the hub (taken once)
+        self.rate = {}        # sender host -> [when it invited]
+        self.mirror = None    # spoke: the hub's {open: set, rooms: {slug: {owner, hosts, co}}, away: {...}}
+        self.mirror_at = 0.0
+        self.open_local = {}  # spoke: slug -> when the hub said "its owner is in" (a guest's mint)
+        self.fwd = {}         # spoke: (slug, host) -> when the owner's last beat went to the hub
+        self.names = {}       # host -> (name, at) -- what the page says in its beats (the Users list names web pages)
+        self.thread = None
+
+
 class AuthService:
     """Token minting for a secured relay, on TCP relay-port+1.
 
@@ -4387,6 +4518,9 @@ class AuthService:
                     obj, code = svc.invite_manage_api("revoke" if path == "/api/invite/revoke" else "list", p,
                                                       self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
+                elif path == "/api/people":            # 0.21.78: beats, person invites, My room shared
+                    obj, code = svc.people_api(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
                 elif path in ("/api/session", "/"):
                     # 0.16.0: the relay's session events. The PEER must be loopback itself
                     # (never X-Forwarded-For -- the relay runs beside us).
@@ -4609,12 +4743,13 @@ class AuthService:
                 return {"ok": False, "revoked": True, "error": "this vehicle key was revoked"}, 403
             return {"ok": False, "error": "wrong vehicle key"}, 403   # counted by the spoke's lockout (the vehicle's address is there)
         if op == "invite":   # 0.21.75: a spoke verified a member token of the room (vouch "member"); the hub keeps the links
-            if p.get("vouch") != "member":
+            if p.get("vouch") not in ("member", "owner"):   # 0.21.78: "owner" -- the owner of a personal room
                 return {"ok": False, "error": "a member of the room must ask"}, 403
             ttl = invite_ttl(p.get("ttl"))
             if ttl is None:
                 return {"ok": False, "error": "an invite link works for 1 hour, 24 hours or 7 days"}, 400
-            return self._invite_make(str(p.get("room") or ""), ttl, clean_label(p.get("by"), 40))
+            return self._invite_make(str(p.get("room") or ""), ttl, clean_label(p.get("by"), 40),
+                                     personal_ok=p.get("vouch") == "owner")
         if op == "inviteCheck":   # 0.21.75: is this one of the fleet's invite links? (the token is never logged)
             h = str(p.get("host") or "")
             verdict, row = self.store.invite_check(str(p.get("token") or ""), use=True, host=h if HOST_RE.match(h) else None)
@@ -4626,7 +4761,10 @@ class AuthService:
                     "all": p.get("all") is True}
             if not SLUG_RE.match(body["room"]) or body["room"] == LOBBY_SLUG:
                 return {"ok": False, "error": "bad room name"}, 400
-            return self._invite_manage("list" if op == "inviteList" else "revoke", body, p.get("vouch") == "admin")
+            return self._invite_manage("list" if op == "inviteList" else "revoke", body,
+                                       p.get("vouch") == "admin" or (p.get("vouch") == "owner" and is_personal(body["room"])))   # 0.21.78
+        if op in P_FED_OPS:   # 0.21.78: My room shared -- a spoke checked the member's token with its own key and says so in `vouch`
+            return self._p_fed(op, p)
         slug = str(p.get("slug") or "")
         if not SLUG_RE.match(slug) or slug == "main":
             return {"ok": False, "error": "bad room"}, 400
@@ -4828,25 +4966,21 @@ class AuthService:
                 role, rc = "publisher", access     # the room's creator (a publisher) delegated its code
             else:
                 return self._fail(peer, "wrong access code", slug)
-            if rec is not None and rec.get("hash") and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
+            if rec is not None and rec.get("hash") and not personal and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
                 return self._fail(peer, "wrong room code", slug)
         else:
             # Legacy (secured, no codes yet): today's behaviour, so a fleet
             # update cannot lock a working relay out. Relay.start logs it.
             role = "publisher"
-            if rec is not None and rec.get("hash") and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
+            if rec is not None and rec.get("hash") and not personal and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
                 return self._fail(peer, "wrong room code", slug)
-        if personal and rec is None and not self._hub_base():
-            return {"ok": False, "error": "no such personal room"}, 404   # 0.21.75: only POST /api/rooms/personal makes one
+        if personal:   # 0.21.78: its owner (the personal code), or a guest (people with access / an invite) while the owner is in
+            return self._personal_token(slug, role, rc, host, inv_row, peer)
         if inv_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code
             # 0.21.17 (B1): the lock may live at the hub (it was registered there, or mirrored from another spoke)
             hv = self.hub_room(slug, rc if rc is not None else "")
             if hv == "wrong":
                 return self._fail(peer, "wrong room code", slug)
-            if personal and hv != "ok":   # 0.21.75: FAIL CLOSED -- a personal room is always locked; the hub alone says the code is right
-                if hv is None:
-                    return {"ok": False, "error": "personal rooms live on the hub, which is unreachable -- try again shortly"}, 503
-                return {"ok": False, "error": "no such personal room"}, 404
             if hv is None and self.hub_locked_known(slug):
                 return {"ok": False, "error": "room-code service unreachable -- this room's lock lives on the hub"}, 503
         elif rec is not None and rec.get("hash") and time.time() - float(rec.get("at") or 0) > 300:
@@ -4860,18 +4994,6 @@ class AuthService:
         ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with ~admin
         inv_claim = {"inv": inv_row["id"]} if inv_row else {}   # 0.21.75: the member token names the link it came by
         exp = now + ttl
-        if personal:
-            # 0.21.75 (Kenton: a personal room "no other user sees"): the owner's own page only -- NO public ~presence / ~state /
-            # ~since / ~talking / ~chat puts and no registry (~channels) token, so nothing announces the room; media under the
-            # owner's own host (a publisher) or just its room.json (a viewer). `personal: 1` lets board_post take it as the room's
-            # publisher (the owner arranges their own room whatever their access role).
-            if role in ("publisher", "admin"):
-                puts = [slug + "/" + host] if host else [slug]
-            else:
-                puts = [slug + "/" + host + "/" + MEMBER_SEG] if host else []
-            member = _mint(self.key, {"root": "", "get": slug, "put": puts, "personal": 1, "iat": now, "exp": exp})
-            return {"ok": True, "exp": exp, "role": "publisher" if role == "admin" else role, "ns": NS, "personal": True,
-                    "tokens": {"member": member}}, 200
         if slug == LOBBY_SLUG:   # 0.21.60: the Lobby -- presence only, whatever the code's role
             puts = ([STATE_PREFIX + "/" + slug + "/" + host] if host else []) + [PRESENCE_KIND + "/" + slug]
             lc = {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp}
@@ -5003,8 +5125,8 @@ class AuthService:
                 self._inv_cache.pop(k, None)
         return len(gone)
 
-    def _invite_make(self, slug, ttl, by=""):
-        row, tok, code = self.store.invite_create(slug, ttl, by)
+    def _invite_make(self, slug, ttl, by="", personal_ok=False):
+        row, tok, code = self.store.invite_create(slug, ttl, by, personal_ok=personal_ok)
         if row is None:
             return {"ok": False, "error": tok}, code
         self.log("relay auth: invite link %s for room %s made by %s (works %s)"
@@ -5027,6 +5149,9 @@ class AuthService:
             return {"ok": False, "error": "the Lobby has no invite links"}, 403
         if room != slug:
             return {"ok": False, "error": "this token is for another room"}, 403
+        owner = is_personal(slug) and bool(claims.get("personal"))   # 0.21.78: only its owner shares My room
+        if is_personal(slug) and not owner:
+            return {"ok": False, "error": "only the room's owner makes invite links for a personal room"}, 403
         if self.bans and self.bans.hit(slug, host, peer):
             return {"ok": False, "error": self.REVOKED_TEXT}, 403
         ttl = invite_ttl(p.get("ttl"))
@@ -5034,8 +5159,8 @@ class AuthService:
             return {"ok": False, "error": "an invite link works for 1 hour, 24 hours or 7 days"}, 400
         by = clean_label(p.get("by"), 40) or (host or "")
         if not self._invite_spoke():
-            return self._invite_make(slug, ttl, by)
-        out = self._hub_fed({"op": "invite", "vouch": "member", "by": by, "room": slug, "ttl": ttl}, timeout=6)
+            return self._invite_make(slug, ttl, by, personal_ok=owner)
+        out = self._hub_fed({"op": "invite", "vouch": "owner" if owner else "member", "by": by, "room": slug, "ttl": ttl}, timeout=6)
         if out is None:
             return {"ok": False, "hubDown": True,
                     "error": "the hub is unreachable -- invite links are made on the hub; try again shortly"}, 503
@@ -5057,12 +5182,14 @@ class AuthService:
         if not SLUG_RE.match(slug) or slug == LOBBY_SLUG:
             return {"ok": False, "error": "bad room name"}, 400
         admin = self._invite_admin(bearer, peer)
+        oc = self._member_claims(bearer) if is_personal(slug) else None   # 0.21.78: a personal room's owner manages its links
+        owner = bool(oc) and bool(oc.get("personal")) and oc.get("get") == slug
         body = {"room": slug, "roomKey": (str(p.get("roomKey")) if p.get("roomKey") else None), "id": str(p.get("id") or ""),
                 "all": p.get("all") is True}
         if not self._invite_spoke():
-            return self._invite_manage(op, body, admin)
-        out = self._hub_fed(dict(body, op="inviteList" if op == "list" else "inviteRevoke", vouch="admin" if admin else None),
-                            timeout=6)
+            return self._invite_manage(op, body, admin or owner)
+        out = self._hub_fed(dict(body, op="inviteList" if op == "list" else "inviteRevoke",
+                                 vouch="admin" if admin else ("owner" if owner else None)), timeout=6)
         if out is None:
             return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- invite links live on the hub; try again shortly"}, 503
         d, code = out
@@ -5095,6 +5222,599 @@ class AuthService:
             except Exception:
                 pass
         return {"ok": True, "room": slug, "revoked": n, "invites": self.store.invites_public(slug)}, 200
+
+    # ---- 0.21.78: My room shared ----------------------------------------------------------------------------------------
+    # Kenton: "Put a 'My room' option in the room rail ... let the user set the passcode"; "I need to be able to share out access
+    # to 'my room' as wanted" (people with access + invite links; guests WATCH + TALK, only the owner -- or one guest raised to
+    # co-arrange -- arranges); "Only allow people in 'My room' if the owner is in it. If the owner leaves the room, it should kick
+    # everyone to the lobby"; "Allow right clicking on a person ... inviting to the room you're in, or my room and have it display
+    # for that user to join or ignore". Every page beats POST /api/people {op: "beat"} at its relay host every few seconds: an
+    # owner's beat from My room keeps the room OPEN at the hub (a spoke forwards it), a guest's beat learns whether it still is,
+    # and every beat collects the person invites waiting for that device. Invites travel hub -> spokes on the bans long-poll
+    # (as 0.21.73's remote Restart / Move does), then to the page on its next beat -- not on the app's minute-long check-in,
+    # which also leaves web pages and local relays out. Identity = the device host the member token names (0.22: Entra).
+
+    def _pl(self):
+        pl = self.__dict__.get("_plive")
+        if pl is None:
+            with _XS_INIT_LOCK:
+                pl = self.__dict__.setdefault("_plive", PersonalLive())
+        return pl
+
+    def _p_spoke(self):
+        return self._invite_spoke()
+
+    def personal_open(self, slug, now=None):
+        """Is the owner of this personal room in it (guests may be there)? A hub counts its owner beats; a spoke reads the
+        hub's long-poll copy (fail closed when it is stale) or a fresh "in" from the hub for a guest's mint."""
+        now = time.time() if now is None else now
+        pl = self._pl()
+        if not is_personal(slug):
+            return False
+        if not self._p_spoke():
+            with self.lock:
+                return any(now - t <= PERSONAL_OWNER_GRACE for t in (pl.here.get(slug) or {}).values())
+        with self.lock:
+            if now - pl.open_local.get(slug, 0) <= PERSONAL_LOCAL_OPEN_S:
+                return True
+            m = pl.mirror
+            return m is not None and now - pl.mirror_at <= PERSONAL_MIRROR_FRESH and slug in m["open"]
+
+    def personal_co_is(self, slug, host):
+        """The guest the owner raised to co-arrange (board_post)."""
+        if not host:
+            return False
+        if not self._p_spoke():
+            info = self.store.personal_info(slug) if hasattr(self.store, "personal_info") else None
+            return bool(info) and info.get("co") == host
+        pl = self._pl()
+        with self.lock:
+            m = pl.mirror
+            return m is not None and ((m["rooms"].get(slug) or {}).get("co") or "") == host
+
+    def _p_thread(self):
+        pl = self._pl()
+        with self.lock:
+            if pl.thread is not None:
+                return
+            pl.thread = threading.Thread(target=self._p_loop, daemon=True, name="kastr-personal")
+        pl.thread.start()
+
+    def _p_loop(self):
+        stop = self.__dict__.get("_board_stop") or threading.Event()
+        while not stop.wait(2.0):
+            try:
+                self.personal_sweep()
+            except Exception as e:
+                self.log("relay auth: personal rooms sweep: %s" % str(e)[:120])
+
+    def personal_sweep(self, now=None):
+        """Hub: an owner silent PERSONAL_OWNER_GRACE s has left (KASTR closed, the network went) -- everyone else goes. Also
+        forgets old notes and invites. -> the slugs closed now."""
+        now = time.time() if now is None else now
+        pl = self._pl()
+        gone = []
+        with self.lock:
+            for slug, hosts in list(pl.here.items()):
+                for h in [h for h, t in hosts.items() if now - t > PERSONAL_OWNER_GRACE]:
+                    hosts.pop(h, None)
+                if not hosts:
+                    pl.here.pop(slug, None)
+                    gone.append(slug)
+            for k in [k for k, v in pl.away.items() if now - float(v.get("at") or 0) > 600]:
+                pl.away.pop(k, None)
+            for h in list(pl.inbox):
+                pl.inbox[h] = [x for x in pl.inbox[h] if now - float(x.get("at") or 0) <= PINBOX_TTL]
+                if not pl.inbox[h]:
+                    pl.inbox.pop(h, None)
+            pl.out = [x for x in pl.out if now - float(x.get("at") or 0) <= PINBOX_TTL][-PINBOX_KEEP:]
+            for k in [k for k, t in pl.seen.items() if now - t > 2 * PINBOX_TTL]:
+                pl.seen.pop(k, None)
+            for k in [k for k, ts in pl.rate.items() if not ts or now - ts[-1] > PINVITE_RATE[1]]:
+                pl.rate.pop(k, None)
+            for k in [k for k, v in pl.names.items() if now - v[1] > 86400]:
+                pl.names.pop(k, None)
+        for slug in gone:
+            self._p_close(slug, "gone", now)
+        return gone
+
+    def _p_revoke_guests_locked(self, slug, host=None):
+        n = 0
+        for rec in self._sessions.values():
+            if rec.get("room") == slug and rec.get("pg") and (host is None or rec.get("host") == host) and not rec.get("revoked"):
+                rec["revoked"] = True
+                n += 1
+        return n
+
+    def _p_refused(self, ev, sid, remote, room):
+        with self.lock:
+            self.refusals += 1
+            self._refused.append({"at": int(time.time()), "remote": remote, "path": "", "why": "owner away"})
+            del self._refused[:-20]
+            rec = self._sessions.get(sid)
+            if rec:
+                rec["revoked"] = True
+        return {"error": "the owner of this personal room is not in it"}, 403
+
+    def _p_owner_here(self, slug, host, now=None):
+        """Hub: one beat of the owner's page in My room. -> True when the room just opened (guests may come in)."""
+        now = time.time() if now is None else now
+        pl = self._pl()
+        with self.lock:
+            hosts = pl.here.setdefault(slug, {})
+            opened = not any(now - t <= PERSONAL_OWNER_GRACE for t in hosts.values())
+            hosts[host or "-"] = now
+            pl.away.pop(slug, None)
+        self._p_thread()
+        if opened:
+            self.log("relay auth: personal room %s -- its owner is in (guests may join)" % slug)
+            self.bans.nudge()   # spokes learn it on their long-poll
+        return opened
+
+    def _p_owner_leave(self, slug, host, now=None):
+        """Hub: the owner's page left My room (switched rooms, closed). Another device of the owner may still be in."""
+        now = time.time() if now is None else now
+        pl = self._pl()
+        with self.lock:
+            hosts = pl.here.get(slug) or {}
+            hosts.pop(host or "-", None)
+            still = any(now - t <= PERSONAL_OWNER_GRACE for t in hosts.values())
+            if not still:
+                pl.here.pop(slug, None)
+        if not still:
+            self._p_close(slug, "left", now)
+        return not still
+
+    def _p_close(self, slug, why, now=None):
+        """Hub: the owner is gone -- the guests' sessions here end, every spoke hears it, their pages go to the Lobby."""
+        now = time.time() if now is None else now
+        info = self.store.personal_info(slug) if hasattr(self.store, "personal_info") else None
+        pl = self._pl()
+        with self.lock:
+            pl.here.pop(slug, None)
+            pl.away[slug] = {"at": int(now), "why": why, "owner": (info or {}).get("owner") or ""}
+            n = self._p_revoke_guests_locked(slug)
+        self.log("relay auth: personal room %s closed to guests -- its owner %s (%d guest session(s) here ended)"
+                 % (slug, "left" if why == "left" else "went quiet", n))
+        self.bans.nudge()
+        if n:
+            threading.Thread(target=self.trigger_revalidate, daemon=True).start()
+
+    def _p_judge_local(self, slug, code, host, invited, now=None):
+        """Hub: -> (verdict, info) for a mint into a personal room: "owner" (its personal code), "guest" (people with access or
+        an invite, while the owner is in), "away" (allowed, but the owner is not in), "wrong" (no access -- a guess), "none"."""
+        info = self.store.personal_info(slug) if hasattr(self.store, "personal_info") else None
+        rec = self.store.room(slug)
+        if info is None or rec is None:
+            return "none", {}
+        if code and _room_code_ok(rec, code):
+            return "owner", info
+        if not (invited or (host and host in info["people"])):
+            return "wrong", info
+        if not self.personal_open(slug, now):
+            return "away", info
+        return "guest", dict(info, coMe=bool(host) and info.get("co") == host)
+
+    def _p_judge(self, slug, code, host, invited):
+        """-> (verdict, info) -- here on the hub; a spoke asks the hub ("down" when it cannot: fail closed)."""
+        if not self._p_spoke():
+            return self._p_judge_local(slug, code, host, invited)
+        out = self._hub_fed({"op": "pjudge", "slug": slug, "code": code or "", "host": host or "", "invited": bool(invited)}, timeout=5)
+        if out is None:
+            return "down", {}
+        d, c = out
+        v = d.get("verdict")
+        if v is None:   # a 0.21.75-0.21.77 hub: its plain lock check answers the owner's code only
+            if c == 200 and d.get("locked"):
+                return ("owner" if d.get("ok") else "wrong"), {}
+            return ("none" if c in (200, 400, 404) else "down"), {}
+        if v not in ("owner", "guest", "away", "wrong", "none"):
+            return "down", {}
+        info = {"owner": clean_label(d.get("owner"), 40), "coMe": bool(d.get("co"))}
+        if v == "guest":
+            with self.lock:
+                self._pl().open_local[slug] = time.time()
+        return v, info
+
+    def _personal_token(self, slug, role, rc, host, inv_row, peer):
+        """token() for a personal room (the access code or invite already checked): the owner's token as 0.21.75 made it, or
+        a guest's -- media, room.json and chat under their own host, never a public kind, `pg` + `ph` (their device)."""
+        verdict, info = self._p_judge(slug, rc or "", host or "", inv_row is not None)
+        owner = clean_label(info.get("owner"), 40)
+        if verdict == "down":
+            return {"ok": False, "hubDown": True, "error": "personal rooms live on the hub, which is unreachable -- try again shortly"}, 503
+        if verdict == "none":
+            return {"ok": False, "error": "no such personal room"}, 404
+        if verdict == "wrong":
+            return self._fail(peer, "wrong room code", slug)
+        if verdict == "away":
+            return {"ok": False, "ownerAway": True, "owner": owner,
+                    "error": "%s isn't in their room right now" % (owner or "The owner")}, 403
+        if verdict == "guest" and not host:
+            return {"ok": False, "error": "a guest's page must name its device (update KASTR)"}, 400
+        self._ok(peer)
+        now = int(time.time())
+        if verdict == "owner":
+            # 0.21.75 (Kenton: a personal room "no other user sees"): NO public ~presence / ~state / ~since / ~talking / ~chat
+            # puts and no registry (~channels) token, so nothing announces the room; media under the owner's own host (a
+            # publisher) or just its room.json (a viewer). `personal: 1` lets board_post take it as the room's publisher.
+            exp = now + (TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL)
+            if role in ("publisher", "admin"):
+                puts = [slug + "/" + host] if host else [slug]
+            else:
+                puts = [slug + "/" + host + "/" + MEMBER_SEG] if host else []
+            cl = {"root": "", "get": slug, "put": puts, "personal": 1, "iat": now, "exp": exp}
+            if host:
+                cl["ph"] = host   # 0.21.78: its device (claims_identity) -- beats, invites, kicks
+            member = _mint(self.key, cl)
+            return {"ok": True, "exp": exp, "role": "publisher" if role == "admin" else role, "ns": NS, "personal": True,
+                    "owner": owner, "tokens": {"member": member}}, 200
+        # a guest: WATCH + TALK (camera, mic, chat) under their own host whatever their access role -- the owner chose them
+        exp = now + TOKEN_TTL
+        cl = {"root": "", "get": slug, "put": [slug + "/" + host], "pg": 1, "ph": host, "iat": now, "exp": exp}
+        if inv_row:
+            cl["inv"] = inv_row["id"]
+        member = _mint(self.key, cl)
+        out = {"ok": True, "exp": exp, "role": "publisher", "ns": NS, "personal": True, "guest": True, "owner": owner,
+               "co": bool(info.get("coMe")), "tokens": {"member": member}}
+        if inv_row:
+            out["invite"] = {"id": inv_row["id"], "room": inv_row["room"], "exp": inv_row.get("exp")}
+        self.log("relay auth: %s joined %s's personal room %s as a guest%s (from %s)"
+                 % (host, owner or "?", slug, " (invite %s)" % inv_row["id"] if inv_row else "", peer or "?"))
+        return out, 200
+
+    def _p_guest_state(self, slug, host, claims, now):
+        """A guest's beat: is the owner in, may I still be here, may I arrange?"""
+        pl = self._pl()
+        if not self._p_spoke():
+            info = self.store.personal_info(slug) if hasattr(self.store, "personal_info") else None
+            if info is None:
+                return {"open": False, "why": "gone", "owner": "", "access": False}
+            owner, hosts, co = info["owner"], set(info["people"]), info["co"]
+            with self.lock:
+                away = dict(pl.away.get(slug) or {})
+        else:
+            with self.lock:
+                m = pl.mirror
+                fresh = m is not None and now - pl.mirror_at <= PERSONAL_MIRROR_FRESH
+                r = dict((m or {}).get("rooms", {}).get(slug) or {})
+                away = dict((m or {}).get("away", {}).get(slug) or {})
+            if not fresh:
+                return {"open": None, "owner": ""}   # the hub's copy is late: the page waits (its session decides)
+            owner, hosts, co = str(r.get("owner") or ""), set(r.get("hosts") or []), str(r.get("co") or "")
+            if not r:   # the copy predates this room's first guest (a fresh mint): say nothing about access yet
+                return {"open": self.personal_open(slug, now) or None, "owner": owner, "access": None, "co": False}
+        out = {"open": self.personal_open(slug, now), "owner": owner, "access": host in hosts or bool(claims.get("inv")),
+               "co": bool(host) and co == host}
+        if not out["open"]:
+            out["why"] = away.get("why") or "gone"
+        return out
+
+    def _p_shared(self, host, now):
+        """The personal rooms shared with this device -> [{slug, owner, open}] (its rooms rail)."""
+        if not self._p_spoke():
+            rows = self.store.personal_shared_with(host) if hasattr(self.store, "personal_shared_with") else []
+        else:
+            pl = self._pl()
+            with self.lock:
+                m = pl.mirror
+                fresh = m is not None and now - pl.mirror_at <= PERSONAL_MIRROR_FRESH
+                rows = [{"slug": s, "owner": str(r.get("owner") or "")} for s, r in ((m or {}).get("rooms") or {}).items()
+                        if host in (r.get("hosts") or [])] if fresh else []
+            rows.sort(key=lambda x: (x["owner"].lower(), x["slug"]))
+        return [dict(r, open=self.personal_open(r["slug"], now)) for r in rows]
+
+    def _p_inbox_take(self, host, now):
+        pl = self._pl()
+        with self.lock:
+            items = [x for x in pl.inbox.pop(host, []) if now - float(x.get("at") or 0) <= PINBOX_TTL]
+        return items
+
+    def _p_inbox_put_locked(self, host, item):
+        pl = self._pl()
+        box = [x for x in pl.inbox.get(host, []) if x.get("id") != item.get("id")]
+        box.append(dict(item))
+        pl.inbox[host] = box[-8:]
+
+    def personal_feed(self, now=None):
+        """Hub: the bans long-poll's `personal` -- the open rooms, who may come in (rooms open or shared), who just left, and
+        the person invites on their way."""
+        if not hasattr(self.store, "personal_all"):
+            return None
+        now = time.time() if now is None else now
+        pl = self._pl()
+        rooms = self.store.personal_all()
+        with self.lock:
+            opened = sorted(s for s, hosts in pl.here.items() if any(now - t <= PERSONAL_OWNER_GRACE for t in hosts.values()))
+            away = {k: dict(v) for k, v in pl.away.items()}
+            box = [{"seq": x["seq"], "to": x["to"], "item": dict(x["item"])} for x in pl.out if now - float(x.get("at") or 0) <= PINBOX_TTL]
+        keep = {s: r for s, r in rooms.items() if s in opened or r["hosts"] or r["co"] or s in away}
+        return {"open": opened, "rooms": keep, "away": away, "inbox": box}
+
+    def personal_mirror_apply(self, d):
+        """Spoke: the hub's `personal` from the long-poll. A room whose owner just left ends its guests' sessions here."""
+        pf = d.get("personal") if isinstance(d, dict) else None
+        if not isinstance(pf, dict):
+            return 0
+        now = time.time()
+        opened = {str(s) for s in (pf.get("open") or []) if is_personal(str(s))}
+        rooms = {}
+        for s, r in (pf.get("rooms") or {}).items() if isinstance(pf.get("rooms"), dict) else []:
+            if is_personal(str(s)) and isinstance(r, dict):
+                rooms[str(s)] = {"owner": clean_label(r.get("owner"), 40),
+                                 "hosts": [str(h) for h in (r.get("hosts") or []) if HOST_RE.match(str(h))][:PERSONAL_PEOPLE_MAX],
+                                 "co": str(r.get("co") or "") if HOST_RE.match(str(r.get("co") or "")) else ""}
+        away = {str(s): {"at": int(v.get("at") or 0), "why": "left" if v.get("why") == "left" else "gone", "owner": clean_label(v.get("owner"), 40)}
+                for s, v in ((pf.get("away") or {}).items() if isinstance(pf.get("away"), dict) else []) if is_personal(str(s)) and isinstance(v, dict)}
+        pl = self._pl()
+        n = 0
+        with self.lock:
+            prev = pl.mirror["open"] if pl.mirror else set()
+            closed = (prev - opened) | {s for s in away if s not in opened and s in pl.open_local}
+            for s in closed:
+                pl.open_local.pop(s, None)
+                n += self._p_revoke_guests_locked(s)
+            pl.mirror, pl.mirror_at = {"open": opened, "rooms": rooms, "away": away}, now
+            for x in pf.get("inbox") or []:
+                item = x.get("item") if isinstance(x, dict) else None
+                to = str((x or {}).get("to") or "")
+                if not isinstance(item, dict) or not HOST_RE.match(to) or not INVITE_RE.match(str(item.get("token") or "")):
+                    continue
+                iid = str(item.get("id") or "")
+                if iid in pl.seen:
+                    continue
+                pl.seen[iid] = now
+                self._p_inbox_put_locked(to, dict(item, at=now))
+        if n:
+            self.log("relay auth: %d guest session(s) in personal rooms ended here -- their owner left" % n)
+            threading.Thread(target=self.trigger_revalidate, daemon=True).start()
+        return n
+
+    def _p_rate_ok(self, host, now):
+        pl = self._pl()
+        n, win = PINVITE_RATE
+        with self.lock:
+            ts = [t for t in pl.rate.get(host, []) if now - t < win]
+            if len(ts) >= n:
+                pl.rate[host] = ts
+                return False
+            ts.append(now)
+            pl.rate[host] = ts
+            return True
+
+    def _p_invite_make(self, room, frm, by, to, to_name, now=None):
+        """Hub: a person invite -- a link bound to the invited device, then a note for that device's page (here, and on every
+        spoke through the long-poll). -> (reply, code)."""
+        now = time.time() if now is None else now
+        title = room
+        away = False
+        if is_personal(room):
+            info = self.store.personal_info(room) if hasattr(self.store, "personal_info") else None
+            if info is None:
+                return {"ok": False, "error": "no such personal room"}, 404
+            title = (info["owner"] or "Someone") + "'s room"
+            away = not self.personal_open(room, now)
+        row, tok, code = self.store.invite_create(room, PINVITE_TTL, by, personal_ok=is_personal(room), bound=to, bound_name=to_name)
+        if row is None:
+            return {"ok": False, "error": tok}, code
+        item = {"id": row["id"], "kind": "invite", "room": room, "title": title, "from": frm, "by": clean_label(by, 40),
+                "token": tok, "exp": row["exp"], "at": now}
+        pl = self._pl()
+        with self.lock:
+            self._p_inbox_put_locked(to, item)
+            pl.seq += 1
+            pl.out.append({"seq": pl.seq, "at": now, "to": to, "item": item})
+            pl.out = pl.out[-PINBOX_KEEP:]
+        self._p_thread()
+        self.bans.nudge()
+        self.log("relay auth: %s invited %s to %s (link %s, one device)" % (by or frm, to_name or to, room, row["id"]))
+        return {"ok": True, "to": to, "room": room, "id": row["id"], "away": away}, 200
+
+    def _p_seen_local(self, now=None):
+        """The people this relay knows -- its apps' check-ins, its live sessions, the names pages say in their beats, and on
+        the hub its spokes' users and the 30-day history -> [{host, name}] (never an address or a machine's user)."""
+        now = time.time() if now is None else now
+        rows = {}
+        with self.lock:
+            for node, c in self.clients.items():
+                rows[node] = [str(c.get("name") or ""), float(c.get("at") or 0)]
+            for v in self._sessions.values():
+                h = str(v.get("host") or "")
+                if HOST_RE.match(h) and not v.get("revoked"):
+                    rows.setdefault(h, ["", now])[1] = now
+            for v in self.spokes.values():
+                for c in v.get("clients") or []:
+                    if isinstance(c, dict) and HOST_RE.match(str(c.get("node") or "")):
+                        r = rows.setdefault(str(c["node"]), ["", 0])
+                        r[0] = r[0] or str(c.get("name") or "")
+                        r[1] = max(r[1], float(c.get("at") or 0))
+            for k, v in (getattr(self, "user_hist", {}) or {}).items():
+                r = rows.setdefault(k, ["", 0])
+                r[0] = r[0] or str(v.get("name") or "")
+                r[1] = max(r[1], float(v.get("at") or 0))
+            for k, (nm, at) in self._pl().names.items():
+                r = rows.setdefault(k, ["", 0])
+                r[0] = nm or r[0]
+                r[1] = max(r[1], float(at))
+            nicks = dict(getattr(self, "user_nick", {}) or {})
+        out = [{"host": h, "name": clean_label(nicks.get(h) or r[0], 40), "at": int(r[1])} for h, r in rows.items() if HOST_RE.match(h)]
+        out.sort(key=lambda x: -x["at"])
+        return out[:300]
+
+    def _p_list(self, slug):
+        info = self.store.personal_info(slug) if hasattr(self.store, "personal_info") else None
+        if info is None:
+            return {"ok": False, "error": "no such personal room"}, 404
+        people = sorted(({"host": h, "name": v.get("name") or "", "at": v.get("at")} for h, v in info["people"].items()),
+                        key=lambda x: (x["name"].lower(), x["host"]))
+        return {"ok": True, "slug": slug, "owner": info["owner"], "people": people, "co": info["co"],
+                "open": self.personal_open(slug), "invites": self.store.invites_public(slug)}, 200
+
+    def _p_share(self, slug, to, name, on):
+        """Hub: give / take one person's access. Taking it ends their session in the room now (a minute's kick, which the
+        bans long-poll carries to every spoke; giving it back lifts it)."""
+        to = str(to or "")
+        changed, err = self.store.personal_share(slug, to, name, on)
+        if err:
+            return {"ok": False, "error": err}, 404 if err == "no such personal room" else 400
+        if on:
+            if self.bans.clear(slug, to):
+                threading.Thread(target=self.fanout_bans, daemon=True).start()
+        else:
+            now = int(time.time())
+            with self.lock:
+                self._p_revoke_guests_locked(slug, to)
+            self.bans.add({"room": slug, "host": to, "remotes": [], "target": to, "by": "owner", "at": now, "until": now + 60, "via": "personal"})
+            threading.Thread(target=self.trigger_revalidate, daemon=True).start()
+            threading.Thread(target=self.fanout_bans, daemon=True).start()
+        if changed:
+            self.log("relay auth: personal room %s %s %s" % (slug, "shared with" if on else "no longer shared with", clean_label(name, 40) or to))
+        self.bans.nudge()
+        return self._p_list(slug)
+
+    def _p_co(self, slug, to):
+        changed, err = self.store.personal_co_set(slug, str(to or ""))
+        if err:
+            return {"ok": False, "error": err}, 404 if err == "no such personal room" else 400
+        if changed:
+            self.log("relay auth: personal room %s -- %s" % (slug, ("%s may arrange it too" % to) if to else "only its owner arranges it"))
+            self.bans.nudge()
+        return self._p_list(slug)
+
+    def _p_fed(self, op, p):
+        """Hub side of a spoke's My room calls (rooms_fed checked the federation bearer)."""
+        slug, host = str(p.get("slug") or ""), str(p.get("host") or "")
+        host = host if HOST_RE.match(host) else ""
+        if op == "pseen":
+            return {"ok": True, "people": self._p_seen_local()}, 200
+        if op == "pinvite":
+            room, to = str(p.get("room") or ""), str(p.get("to") or "")
+            if not SLUG_RE.match(room) or room == LOBBY_SLUG or not HOST_RE.match(to):
+                return {"ok": False, "error": "bad invite"}, 400
+            if p.get("vouch") != ("owner" if is_personal(room) else "member"):
+                return {"ok": False, "error": "the spoke must vouch for a member of the room (its owner, for a personal room)"}, 403
+            return self._p_invite_make(room, host, clean_label(p.get("by"), 40), to, clean_label(p.get("toName"), 40))
+        if not is_personal(slug):
+            return {"ok": False, "error": "bad room"}, 400
+        if op == "pjudge":
+            v, info = self._p_judge_local(slug, str(p.get("code") or ""), host, bool(p.get("invited")))
+            return {"ok": True, "verdict": v, "owner": info.get("owner", "") if v != "wrong" else "", "co": bool(info.get("coMe"))}, 200
+        if p.get("vouch") != "owner":
+            return {"ok": False, "error": "the spoke must vouch for the room's owner"}, 403
+        if op == "pbeat":
+            self._p_owner_here(slug, host)
+            return {"ok": True, "open": True}, 200
+        if op == "pleave":
+            self._p_owner_leave(slug, host)
+            return {"ok": True}, 200
+        if op == "plist":
+            return self._p_list(slug)
+        if op == "pshare":
+            return self._p_share(slug, p.get("to"), p.get("name"), p.get("on") is not False)
+        return self._p_co(slug, p.get("to"))
+
+    def _p_hub_call(self, body, timeout=6):
+        out = self._hub_fed(body, timeout=timeout)
+        if out is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- personal rooms live on the hub; try again shortly"}, 503
+        d, code = out
+        if code == 400 and d.get("error") == "bad room":
+            return {"ok": False, "error": "the hub runs an older KASTR without shared personal rooms -- update the hub first"}, 501
+        return d, code
+
+    def people_api(self, p, bearer, peer=""):
+        """0.21.78: POST /api/people {op, ...} with Bearer = this page's member token (a closing page's beacon puts it in
+        `token`). op "beat" {name?}: inbox + shared rooms + (in a personal room) the owner keeps it open / a guest learns if
+        it still is; "leave": the owner left My room; "invite" {to, toName?, by?}: invite a person to the token's room;
+        the owner of a personal room (its personal token): "list", "share" {to, name, on}, "co" {to}, "seen"."""
+        p = p if isinstance(p, dict) else {}
+        if not bearer and p.get("token"):
+            bearer = "Bearer " + str(p.get("token"))[:4096]
+        claims = self._member_claims(bearer)
+        if claims is None:
+            return {"ok": False, "error": "join a room first (a member token is required)"}, 403
+        room, host = claims_identity(claims)
+        if not room or not host or not SLUG_RE.match(room):
+            return {"ok": False, "error": "this page's token names no device -- rejoin the room"}, 403
+        now = time.time()
+        op = str(p.get("op") or "")
+        owner = bool(claims.get("personal")) and is_personal(room)
+        if self.bans and self.bans.hit(room, host, peer, now) and op != "beat":
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        pl = self._pl()
+        if op == "beat":
+            name = clean_label(p.get("name"), 40)
+            if name:
+                with self.lock:
+                    pl.names[host] = (name, now)
+            out = {"ok": True, "inbox": self._p_inbox_take(host, now), "shared": self._p_shared(host, now)}
+            if owner:
+                ok = True
+                if not self._p_spoke():
+                    self._p_owner_here(room, host, now)
+                else:
+                    key = (room, host)
+                    with self.lock:
+                        due = now - pl.fwd.get(key, 0) >= 3
+                        if due:
+                            pl.fwd[key] = now
+                    if due:
+                        r = self._hub_fed({"op": "pbeat", "vouch": "owner", "slug": room, "host": host}, timeout=4)
+                        ok = r is not None and r[1] == 200
+                        if ok:
+                            with self.lock:
+                                pl.open_local[room] = now
+                out["personal"] = {"owner": True, "open": ok}
+            elif claims.get("pg") and is_personal(room):
+                out["personal"] = self._p_guest_state(room, host, claims, now)
+            return out, 200
+        if op == "leave":
+            if not owner:
+                return {"ok": True, "ignored": True}, 200
+            if not self._p_spoke():
+                self._p_owner_leave(room, host, now)
+                return {"ok": True}, 200
+            with self.lock:
+                pl.fwd.pop((room, host), None)
+                pl.open_local.pop(room, None)
+            return self._p_hub_call({"op": "pleave", "vouch": "owner", "slug": room, "host": host}, timeout=4)
+        if op == "invite":
+            to = str(p.get("to") or "")
+            if not HOST_RE.match(to):
+                return {"ok": False, "error": "who? (their device)"}, 400
+            if to == host:
+                return {"ok": False, "error": "that is you"}, 400
+            if room == LOBBY_SLUG or claims.get("lobby"):
+                return {"ok": False, "error": "invite people from a room (not the Lobby)"}, 403
+            if is_personal(room) and not owner:
+                return {"ok": False, "error": "only the room's owner invites people into a personal room"}, 403
+            if not self._p_rate_ok(host, now):
+                return {"ok": False, "error": "too many invites -- wait a minute", "retryAfter": PINVITE_RATE[1]}, 429
+            by, to_name = clean_label(p.get("by"), 40) or host, clean_label(p.get("toName"), 40)
+            if not self._p_spoke():
+                return self._p_invite_make(room, host, by, to, to_name, now)
+            return self._p_hub_call({"op": "pinvite", "vouch": "owner" if owner else "member", "room": room, "host": host,
+                                     "by": by, "to": to, "toName": to_name})
+        if op in ("list", "share", "co", "seen"):
+            if not owner:
+                return {"ok": False, "error": "only the room's owner shares a personal room"}, 403
+            if op == "seen":
+                mine = self._p_seen_local(now)
+                if self._p_spoke():
+                    d, code = self._p_hub_call({"op": "pseen", "vouch": "owner", "slug": room})
+                    if code == 200:
+                        have = {x["host"] for x in mine}
+                        mine += [x for x in (d.get("people") or []) if isinstance(x, dict) and HOST_RE.match(str(x.get("host") or "")) and x["host"] not in have]
+                return {"ok": True, "people": [x for x in mine if x["host"] != host][:300]}, 200
+            body = {"op": "p" + op, "vouch": "owner", "slug": room, "host": host}
+            if op == "share":
+                body.update(to=str(p.get("to") or ""), name=clean_label(p.get("name"), 40), on=p.get("on") is not False)
+            elif op == "co":
+                body["to"] = str(p.get("to") or "")
+            if not self._p_spoke():
+                return self._p_fed(body["op"], body)
+            return self._p_hub_call(body)
+        return {"ok": False, "error": "unknown op (beat | leave | invite | list | share | co | seen)"}, 400
 
     # ---- 0.21.63: the vehicle API -----------------------------------------------------------------------------------
     # Kenton: "I now need to have a vehicle ... be able to connect via POST to the relay to share the cameras on the vehicle.
@@ -5332,6 +6052,8 @@ class AuthService:
             # lasts (never a downgrade to the public grant -- that would end a publisher's session)
             with self.lock:
                 rec = self._sessions.get(sid)
+            if rec and rec.get("pg") and not self.personal_open(rec.get("room"), now):
+                return self._p_refused(ev, sid, remote, rec.get("room"))   # 0.21.78: the owner left their room
             if rec and (rec.get("revoked") or (self.bans and self.bans.hit(rec.get("room"), rec.get("host"), rec.get("remote"), now))):
                 return self._revoked_answer(ev, sid, remote, now)   # 0.17.0: an admin removed this identity
             if rec and float(rec.get("expires") or 0) > now:
@@ -5358,6 +6080,7 @@ class AuthService:
         room = host = None
         is_vehicle = False
         link = None
+        pg = False   # 0.21.78: a personal room's guest
         if status == "grant":
             claims = verify_token(session_jwt(req), self.key, vnow) or {}
             link = mesh_slug(claims.get("link")) if is_link_claims(claims) else None   # 0.21.77: a relay dialling us directly
@@ -5367,6 +6090,9 @@ class AuthService:
                 is_vehicle = True
             if self.bans and self.bans.hit(room, host, remote, now):   # 0.17.0
                 return self._revoked_answer(ev, sid, remote, now)
+            pg = bool(claims.get("pg")) and is_personal(room)   # 0.21.78: a guest's session lasts while the owner is in
+            if pg and not self.personal_open(room, now):
+                return self._p_refused(ev, sid, remote, room)
         if status == "refuse":
             with self.lock:
                 self.refusals += 1
@@ -5392,6 +6118,7 @@ class AuthService:
                                        "publisher": bool(grant.get("publish")),
                                        "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False,   # 0.17.0: the identity a kick keys on
+                                       "pg": pg,                                        # 0.21.78: a personal room's guest
                                        "link": link}                                    # 0.21.77: the dialer of a link session
         return grant, 200
 
@@ -5843,6 +6570,10 @@ class AuthService:
         if bans and bans.hit(room, h0, peer, now):
             return {"ok": False, "error": self.REVOKED_TEXT}, 403
         mine = bool(claims.get("personal")) and is_personal(room)   # 0.21.75: My room -- its owner arranges it, whatever their role
+        if is_personal(room) and not mine:   # 0.21.78: guests watch + talk; the owner (or the one guest raised to co-arrange) arranges
+            if not (claims.get("pg") and h0 and self.personal_co_is(room, h0)):
+                return {"ok": False, "error": "only the room's owner arranges a personal room"}, 403
+            mine = True
         if claims_role(claims) != "publisher" and not mine:
             return {"ok": False, "error": "viewers cannot change the room board -- join with the publisher code"}, 403
         item, why = board_item(op, p, now)
@@ -6462,6 +7193,7 @@ class AuthService:
                               "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": [],
                               "started": int(c.get("started") or 0), "cmd": (c.get("cmd") or {}).get("kind") or ""}   # 0.21.73
             sess = [dict(v) for v in self._sessions.values()]
+            bnames = dict(self._pl().names)   # 0.21.78: the name a page says in its beats
         for v in sess:
             host = str(v.get("host") or "")
             if not host or v.get("revoked") or not HOST_RE.match(host):
@@ -6469,7 +7201,7 @@ class AuthService:
             r = rows.get(host)
             if r is None:
                 web = host.startswith("web-")
-                r = rows[host] = {"node": host, "name": "", "version": my_version if web else "", "mode": "", "platform": "",
+                r = rows[host] = {"node": host, "name": (bnames.get(host) or ("",))[0], "version": my_version if web else "", "mode": "", "platform": "",
                                   "ip": str(v.get("remote") or ""), "at": int(now), "offer": "", "pending": "",
                                   "checkin": False, "rooms": []}
             # 0.21.55: an open session = connected NOW (its start used to show as "last seen": a box connected for two days
@@ -6609,8 +7341,13 @@ class AuthService:
             inv_rev = st.invites_revoked_ids() if hasattr(st, "invites_revoked_ids") else []
         except Exception:
             inv_rev = []
+        try:   # 0.21.78: who is in their personal room, who may come in, who just left, person invites on their way
+            pfeed = self.personal_feed()
+        except Exception:
+            pfeed = None
         return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver,   # 0.21.0: + the hub's command channel
                 "boards": boards, "boardsVer": "%d.%d" % (BOOT_AT, bver), "invRevoked": inv_rev,
+                "personal": pfeed,                                                           # 0.21.78: My room shared
                 "standby": self.standby_public(),                                            # 0.21.53: as STATE (a baseline never hides it)
                 "mesh": self.mesh_for(me_node)}, 200                                          # 0.21.77: the relay mesh, as state too
 
@@ -6814,6 +7551,7 @@ class AuthService:
         self.xshare_mirror_apply(d)   # 0.21.41
         self.board_mirror_apply(d)    # 0.21.63
         self.invite_revoked_apply(d)  # 0.21.75
+        self.personal_mirror_apply(d)  # 0.21.78
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed
         cmd = d.get("cmd") if isinstance(d.get("cmd"), dict) else None

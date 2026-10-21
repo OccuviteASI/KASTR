@@ -3774,6 +3774,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/clients/logs", "/api/logs/upload",             # 0.21.51: logs collected at the hub
                          "/api/vehicle",                                      # 0.21.63: a vehicle's key -> a publish token
                          "/api/invite", "/api/invite/revoke", "/api/invites",  # 0.21.75: room invite links (the minter keeps them)
+                         "/api/people",                                       # 0.21.78: beats, person invites, My room shared
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":

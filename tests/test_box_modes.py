@@ -153,7 +153,7 @@ class JoinGate(unittest.TestCase):
         p = _read("moq-watch-lite.html")
         self.assertIn('return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");', p)
         self.assertIn('"\\u23F1 " + fmtHm(now - card.__since)', p)
-        self.assertIn('(roomSince ? fmtHm(now - roomSince) : "0:00")', p)
+        self.assertIn('t.textContent = roomSince ? "\\u23F1 " + fmtHm(now - roomSince) : "";', p)   # 0.21.78: no timer until a person is in
 
     def test_chat_new_only_recent_and_unseen(self):
         # 0.21.35 (Kenton: "Chats should show new chat until seen or for a certain amount of time, not for everyone new to the room")

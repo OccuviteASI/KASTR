@@ -1604,6 +1604,32 @@
   #stage .pubpane .meta { display:none; }
 
   #stagewrap { flex:1; min-height:0; overflow-y:auto; position:relative; }
+  /* 0.21.78 (Kenton: "Allow user to pin people, view, files, chat, share to the right side of the right rail instead of always being a
+     drop down menu item"): the PINNED column, right of the stage and its tile rail -- one section per pinned panel (its own head
+     carries Unpin and collapse), dividers between sections and the column's left edge resize, and the stage shrinks to make room
+     (never covered). Never on phones: the bottom sheets stay. */
+  #stagerow { flex:1; min-height:0; display:flex; flex-direction:row; }
+  #stagerow > #stagewrap { flex:1; min-width:0; }
+  #kDock { flex:none; width:var(--dockw, 360px); margin-left:12px; position:relative; display:flex; flex-direction:column; min-height:0; }
+  #kDock[hidden], body.inlobby #kDock, body.fillwin #kDock { display:none; }
+  #kDockGrip { position:absolute; top:0; bottom:0; left:-10px; width:8px; cursor:col-resize; border-radius:4px; z-index:3; touch-action:none; }
+  .kdsplit { flex:none; height:8px; cursor:row-resize; border-radius:4px; touch-action:none; }
+  #kDockGrip:hover, #kDockGrip.dragging, .kdsplit:hover, .kdsplit.dragging { background:var(--asi-blue-glow); }
+  #kDockGrip:focus-visible, .kdsplit:focus-visible { outline:2px solid var(--asi-blue); outline-offset:-2px; background:var(--asi-blue-glow); }
+  #kDock > .docked { position:relative !important; inset:auto !important; z-index:auto; width:auto !important; height:auto !important;
+    max-height:none !important; transform:none !important; flex:var(--fl, 1) 1 0px; min-height:0; box-shadow:none !important; border-color:var(--line); }
+  #kDock > .docked.folded { flex:none; }
+  #kDock > .docked.folded > :not(.head) { display:none !important; }
+  #kDock > .docked > .head > .close { display:none !important; }
+  .head > .kpin, .head > .kfold { display:inline-flex !important; align-items:center; justify-content:center; flex:none; width:24px; height:22px !important;
+    padding:0 !important; background:transparent !important; border:1px solid transparent !important; border-radius:4px !important; color:var(--text-mute) !important; cursor:pointer; }
+  .head > .kpin .icon, .head > .kfold .icon { width:14px; height:14px; transition:transform .12s ease; }
+  .head > .kpin:hover, .head > .kfold:hover { color:var(--text) !important; border-color:var(--line) !important; background:var(--surface) !important; }
+  .head > .kpin:focus-visible, .head > .kfold:focus-visible { outline:2px solid var(--asi-blue); outline-offset:1px; }
+  .head > .kpin[aria-pressed="true"] { color:var(--asi-blue) !important; }
+  :not(.docked) > .head > .kfold { display:none !important; }
+  .docked.folded > .head > .kfold .icon { transform:rotate(-90deg); }
+  #topbar .tb.pinned { box-shadow:inset 0 -2px 0 var(--asi-blue); }   /* its panel lives in the pinned column */
 
   /* 0.21.65 (Kenton: "Always show the no camera/mic on the left when not mousing over, on hover put the name in the same row as
      the camera/mic icons but before the icons. This is on the preview rail and the gallery, or any other view."): ONE row,
@@ -1826,6 +1852,7 @@
     #stage.collage { height:auto; min-height:100%; align-content:start; }
     #stage.collage .pane { touch-action:pan-y; }
     #railGrip, #railPager { display:none !important; }
+    .head > .kpin, #kDock { display:none !important; }   /* 0.21.78: no pinned column on a phone */
     #stage .pubpane.screenkind { display:none !important; }   /* 0.8.12: phones cannot share a screen */
     .pchev { --pw:32px; }   /* 0.21.37: the offsets follow the size (was width/height only -> the three overlapped) */
     #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
@@ -1894,6 +1921,8 @@
   <button id="leaveBtn" class="tb" type="button" title="Leave &mdash; stop publishing and disconnect"></button>
 </div>
 
+<!-- 0.21.78: the stage and, right of it, the pinned panels (#kDock; the panels move in while pinned) -->
+<div id="stagerow">
 <div id="stagewrap" class="asi-dark">
   <div id="odRow" hidden title="Cameras that start only when someone watches (0.18.0)"></div>
   <div id="stage">
@@ -1906,6 +1935,8 @@
     </section>
   </div>
   <div id="stage-empty">Not connected yet.</div>
+</div>
+<aside id="kDock" hidden aria-label="Pinned panels"><div id="kDockGrip" role="separator" aria-orientation="vertical" aria-label="Resize the pinned panels" tabindex="0" title="Drag to resize the pinned panels (arrow keys too)"></div></aside>
 </div>
 
 <aside id="peoplePanel" class="popcard" hidden>
@@ -2921,6 +2952,7 @@
     search: '<circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 17 17"/>',   // 0.21.23: Participants
     // 0.21.23: the tile menu -- Pin for me / Spotlight for everyone (Teams)
     pin: '<path d="M11.5 2.5 17.5 8.5 15 9.5 12 12.5 12.5 16 11 17.5 2.5 9 4 7.5 7.5 8 10.5 5z"/><path d="M6.8 13.2 2.5 17.5"/>',
+    unpin: '<path d="M11.5 2.5 17.5 8.5 15 9.5 12 12.5 12.5 16 11 17.5 2.5 9 4 7.5 7.5 8 10.5 5z"/><path d="M6.8 13.2 2.5 17.5"/><path d="M2.5 2.5l15 15"/>',   // 0.21.78: Unpin (the pinned column)
     spotlight: '<rect x="2.5" y="3.5" width="15" height="13" rx="1.5"/><circle cx="8.5" cy="8.3" r="2"/>'
       + '<path d="M5 14c0-1.9 1.6-3.2 3.5-3.2S12 12.1 12 14"/><path d="M14.6 6v3.2M13 7.6h3.2"/>',
     // 0.21.19: the tile's own view buttons -- full screen (corners out / in) and fill window (a window with arrows out / in)
@@ -3237,10 +3269,23 @@
   // bottom: the self-view controls sit at the BOTTOM of the preview
   // card since 0.7.0, where always-below meant off-screen (field
   // report: the chevron “gives nothing”).
+  // 0.21.78 (Kenton: "When clicking a drop down menu, if there is room below it, there shouldn't be a scroll bar, it should just show
+  // the whole list"): ONE sizing rule for every dropdown -- under its button at its FULL height when that fits; else on the side
+  // with more room, capped to that room (only then does it scroll). Sets top + max-height, returns the top.
+  function dropFit(el, r, gap = 6, pad = 8) {
+    el.style.maxHeight = "none";
+    const h = el.offsetHeight || 120;
+    const below = innerHeight - r.bottom - gap - pad, above = r.top - gap - pad;
+    const down = h <= below || below >= above;
+    const room = Math.max(120, Math.floor(down ? below : above));
+    el.style.maxHeight = room + "px";
+    const top = Math.round(down ? r.bottom + gap : Math.max(pad, r.top - gap - Math.min(h, room)));
+    el.style.top = top + "px";
+    return top;
+  }
+  window.__dropFit = dropFit;
   function menuTopFor(menu, r) {
-    const h = menu.offsetHeight || 120;
-    const below = r.bottom + 4;
-    return below + h > innerHeight - 8 ? Math.max(8, r.top - h - 4) : below;
+    return dropFit(menu, r, 4);   // 0.21.78: was below-or-above at the CSS cap
   }
   function openMineMenu(anchor, items, current, pick) {
     const menu = ensureMineMenu();
@@ -3285,7 +3330,7 @@
   function placeMineMenu() {
     const menu = mineMenu, anchor = mineMenuAnchor;
     if (!menu || !anchor) return;
-    if (isPhone()) { menu.style.left = ""; menu.style.top = ""; return; }   // 0.21.0: the CSS bottom sheet
+    if (isPhone()) { menu.style.left = ""; menu.style.top = ""; menu.style.maxHeight = ""; return; }   // 0.21.0: the CSS bottom sheet
     const r = anchor.getBoundingClientRect();
     const w = menu.offsetWidth || 200;
     menu.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
@@ -3659,7 +3704,7 @@
     if (!prompt) {
       const a = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2 - 140, bottom: 120, top: 120 };
       pop.style.left = Math.max(8, Math.min(innerWidth - 296, a.left)) + "px";
-      pop.style.top = Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, a.bottom + 6)) + "px";
+      dropFit(pop, a);   // 0.21.78: the whole list when it fits below
     }
     setTimeout(() => {
       (pop.querySelector(".xsrow:not(.here) input") || pop.querySelector(".xsok"))?.focus?.();
@@ -4974,7 +5019,7 @@
     wrPickerPaint(w);
     const a = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2 - 150, bottom: 120, top: 120 };
     pop.style.left = Math.max(8, Math.min(innerWidth - 316, a.left)) + "px";
-    pop.style.top = Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, a.bottom + 6)) + "px";
+    dropFit(pop, a);   // 0.21.78: the whole list when it fits below
     try { paintSidebar(); } catch {}
     setTimeout(() => {
       const off = (e) => {
@@ -10181,7 +10226,8 @@
       if (p.who.home) homeOnly.add(p.slug);   // 0.21.75
       if (presenceHidden(p.who)) {   // 0.15.0 (D1)
         hiddenOps.add(p.slug + "/" + op);
-        if (p.ts && (!r.since || p.ts < r.since)) r.since = p.ts;
+        // 0.21.78 (Kenton: "We don't need to show the time counting up on a room until a person is in the room, not just camera
+        // boxes"): a box's join (its presence carries one too) starts no timer -- the first PERSON's does (below)
         continue;
       }
       let m = r.members.get(op);
@@ -10838,6 +10884,9 @@
         el.innerHTML = '<div class="popcard kconfirm" role="dialog" aria-modal="true" aria-labelledby="kcTitle" aria-describedby="kcMsg"><div class="head"><span id="kcTitle"></span></div>'
           + '<div class="body"><p class="kcmsg" id="kcMsg"></p><p class="kcdet"></p><input class="kcin" type="text" autocomplete="off" spellcheck="false" hidden><p class="kcerr" hidden></p></div>'
           + '<div class="kcbtns"><button type="button" class="ghost kcno"></button><button type="button" class="kcyes"></button></div></div>';
+        // 0.21.78: a click on the question (OK, Cancel, or beside the card) never reaches the page -- it closed the panel that asked
+        // (People > Mute all)
+        el.addEventListener("click", (e) => e.stopPropagation());
         document.body.appendChild(el);
       }
       const q = (sel) => el.querySelector(sel);
@@ -11140,8 +11189,7 @@
         paintPop(); pop.hidden = false;
         const r = lay.getBoundingClientRect();   // fixed: a pane clips what overflows it
         pop.style.left = Math.max(4, Math.min(r.left, innerWidth - 400)) + "px";
-        pop.style.top = (r.bottom + 6) + "px";
-        pop.style.maxHeight = Math.max(160, innerHeight - r.bottom - 16) + "px";
+        dropFit(pop, r);   // 0.21.78: one sizing rule for every dropdown
       });
       function applyPreset(n) {   // that many spots; the cameras keep their order (a spot's group stays together), the rest wait in the list
         const units = gb.preset(n);
@@ -11578,6 +11626,7 @@
   const shareLive = document.getElementById("shareLive");
 
   function placeShare() {
+    if (sharePop.classList.contains("docked")) return;   // 0.21.78: the pinned column owns its box
     if (isPhone()) { sharePop.style.top = sharePop.style.left = sharePop.style.height = ""; return; }   // 0.21.0: the inline height beat the sheet's CSS
     // Anchor under the button, but keep the panel on screen.
     const b = shareBtn.getBoundingClientRect();
@@ -11599,6 +11648,7 @@
       log("Publishing is unavailable (the publish module failed to load) \u2014 "
         + "reload the page; watching still works.");
     }
+    if (sharePop.classList.contains("docked")) { dockReveal(sharePop); return; }   // 0.21.78
     closeAllPops();          // four popovers now; two open is never meant
     sharePop.hidden = false;
     try { window.__probeRtsp?.(); } catch {}   // 0.8.9: the Add button is only as live as the last probe
@@ -11609,6 +11659,7 @@
 
   function closeShare() {
     // Only hides. Slots live in #pubPanes and keep publishing.
+    if (sharePop.classList.contains("docked")) return;   // 0.21.78: a pinned Share stays (its toolbar button collapses it)
     sharePop.hidden = true;
     shareBtn.classList.remove("grid-on");
     try { window.__shareClosed?.(); } catch {}   // 0.21.20
@@ -11617,11 +11668,12 @@
 
   shareBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (sharePop.classList.contains("docked")) { dockBtnClick(sharePop); return; }   // 0.21.78: pinned -- collapse / expand its section
     sharePop.hidden ? openShare() : closeShare();
   });
   sharePop.addEventListener("click", (e) => {
     if (e.target.classList.contains("close")) closeShare();
-    else e.stopPropagation();
+    else { if (sharePop.classList.contains("docked")) closeAllPops(); e.stopPropagation(); }   // 0.21.78: a click in the pinned Share still closes an open dropdown
   });
   // Clicking anywhere off the panel closes it -- the X is no longer the only
   // way out. Publishing is unaffected: closeShare only hides the panel; the
@@ -11631,10 +11683,14 @@
   // A click that lands in ANOTHER document (the shell's masthead, an
   // embedded stats iframe) never bubbles here -- but it does move focus,
   // and blur is the one signal that crosses the boundary.
+  // 0.21.78 (Kenton: "don't collapse them until clicking outside of them or clicking on another menu item, or clicking on the same
+  // menu item"): focus leaving the WINDOW is not a click outside -- a native colour or file dialog, a system prompt, alt-tab. Only
+  // a click into a frame of this page closes (focus lands on that <iframe>); the shell around this page reports its own presses.
   window.addEventListener("blur", () => {
     if (window.__pickingFile) return;   // 0.8.9: a native file picker took focus, not another document
-    closeAllPops(); closeMineMenu();
+    setTimeout(() => { if (document.activeElement?.tagName !== "IFRAME") return; closeAllPops(); closeMineMenu(); }, 0);
   });
+  try { if (window.top !== window && window.top.document) window.top.document.addEventListener("pointerdown", () => { closeAllPops(); closeMineMenu(); }, true); } catch {}
   // 0.8.9: open a file picker WITHOUT the blur handler closing the popover
   // that asked for it (profile picture, backgrounds, media, uploads).
   window.__pickFile = (input) => {
@@ -11657,6 +11713,7 @@
     queueRelayout();
     // 0.21.0: an orientation flip re-places every open sheet/popover instead of leaving it mid-air
     try { for (const p of pagePops) if (p.isOpen?.()) p.place?.(); } catch {}
+    try { dockApply(); } catch {}   // 0.21.78: a phone-sized window has no pinned column (the panels go back to sheets)
     if (mineMenu && !mineMenu.hidden) closeMineMenu();
   });
   // ---- small popovers (relay / audio / help) --------------------------------
@@ -11671,23 +11728,25 @@
     for (const p of pagePops) if (p !== except && p.isOpen()) p.close();
   }
   function placePop(pop, btn) {
-    if (isPhone()) { pop.style.top = ""; pop.style.left = ""; return; }   // 0.8.9: bottom sheet, CSS owns the box
-    // placeShare's anchoring minus the fit-the-rest-of-the-screen height:
-    // these panels hug their content.
+    if (pop.classList.contains("docked")) return;   // 0.21.78: the pinned column owns its box
+    if (isPhone()) { pop.style.top = ""; pop.style.left = ""; pop.style.maxHeight = ""; return; }   // 0.8.9: bottom sheet, CSS owns the box
+    // placeShare's anchoring; these panels hug their content -- 0.21.78: up to all the room below the button (dropFit), so a
+    // long menu shows whole instead of scrolling at a fixed cap
     const b = btn.getBoundingClientRect();
     const w = pop.offsetWidth || 400;
-    pop.style.top = Math.round(b.bottom + 6) + "px";
     pop.style.left = Math.round(
       Math.max(12, Math.min(b.left, window.innerWidth - w - 12))) + "px";
+    dropFit(pop, b);
   }
   function registerPop(pop, btn, onOpen) {
     const entry = {
-      isOpen: () => !pop.hidden,
-      close: () => { pop.hidden = true; btn.classList.remove("grid-on"); },
+      isOpen: () => !pop.hidden && !pop.classList.contains("docked"),   // 0.21.78: a pinned panel is no dropdown
+      close: () => { if (pop.classList.contains("docked")) return; pop.hidden = true; btn.classList.remove("grid-on"); },
       place: () => placePop(pop, btn),
     };
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (pop.classList.contains("docked")) { dockBtnClick(pop); return; }   // 0.21.78: pinned -- collapse / expand its section
       if (!pop.hidden) { entry.close(); return; }
       closeAllPops(entry);
       pop.hidden = false;
@@ -11697,7 +11756,7 @@
     });
     pop.addEventListener("click", (e) => {
       if (e.target.classList.contains("close")) entry.close();
-      else e.stopPropagation();
+      else { if (pop.classList.contains("docked")) closeAllPops(); e.stopPropagation(); }   // 0.21.78: a click in a pinned panel still closes an open dropdown
     });
     pagePops.push(entry);
     return entry;
@@ -11895,22 +11954,22 @@
   }
   document.getElementById("viewGridLock")?.addEventListener("click", () => { window.__gridFeeds?.setLock?.(!window.__gridFeeds?.lock?.()); paintViewPop(); });
   document.getElementById("viewGridNames")?.addEventListener("click", () => { window.__gridFeeds?.setNames?.(!window.__gridFeeds?.names?.()); paintViewPop(); });   // 0.15.0
-  document.getElementById("viewGallery").addEventListener("click", () => { closeAllPops(); goGallery(); });   // 0.21.40: the full way back (cell open, zoom, my own spotlit pane, fill/full screen)
-  document.getElementById("viewSpeaker").addEventListener("click", () => { focusMode = false; closeAllPops(); enterSpotlight(); });
-  document.getElementById("viewSpot")?.addEventListener("click", () => { closeAllPops(); focusMode = false; if (!spotBack()) window.__toast?.("Nothing the room spotlighted is on this page yet.", 3500); });   // 0.21.54
+  // 0.21.78 (Kenton: "don't collapse them until clicking outside of them or clicking on another menu item, or clicking on the same
+  // menu item"): a pick in View keeps View open and shows the new state; only Full screen (it leaves the page) still closes it
+  document.getElementById("viewGallery").addEventListener("click", () => { goGallery(); paintViewPop(); });   // 0.21.40: the full way back (cell open, zoom, my own spotlit pane, fill/full screen)
+  document.getElementById("viewSpeaker").addEventListener("click", () => { focusMode = false; enterSpotlight(); paintViewPop(); });
+  document.getElementById("viewSpot")?.addEventListener("click", () => { focusMode = false; if (!spotBack()) window.__toast?.("Nothing the room spotlighted is on this page yet.", 3500); paintViewPop(); });   // 0.21.54
   document.getElementById("viewFocus").addEventListener("click", () => {
     focusMode = !focusMode;
-    closeAllPops();
     if (focusMode) { if (gridMode) enterSpotlight(); else applyState(); window.__toast?.("Focus on content \u2014 only the main stage downloads. View \u25b8 Gallery to return.", 4000, { level: hintOnce("kastr.hint.focus") ? "event" : "info" }); }
     else applyState();
+    paintViewPop();
   });
   document.getElementById("viewRtspOff")?.addEventListener("click", () => {   // 0.21.16: the box's RTSP switch -- module 2 does the work and the toast
-    closeAllPops();
     window.__rtspSuspend?.set?.(!window.__rtspSuspend?.get?.());
     paintViewPop();
   });
   document.getElementById("viewPublishOnly")?.addEventListener("click", () => {   // 0.9.10
-    closeAllPops();
     setPublishOnly(!publishOnly);
     paintViewPop();
     window.__toast?.(publishOnly ? "Publish only \u2014 this device keeps publishing but shows nobody else. View \u25b8 Publish only to turn off." : "Watching other people\u2019s streams again.", 4500, { level: publishOnly && hintOnce("kastr.hint.publishonly") ? "event" : "info" });
@@ -11938,8 +11997,8 @@
   document.getElementById("viewHideMe").addEventListener("click", () => {
     hideMe = !hideMe;
     for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.toggle("hideme", hideMe);
-    closeAllPops();
     applyState();
+    paintViewPop();   // 0.21.78: View stays open
   });
   document.getElementById("viewFull").addEventListener("click", () => {
     closeAllPops();
@@ -12648,7 +12707,7 @@
     b.hidden = n === 0;
     b.textContent = String(n);
   }
-  document.getElementById("filesUpload").addEventListener("click", () => { closeAllPops(); window.__pickFile(document.getElementById("shareFile")); });
+  document.getElementById("filesUpload").addEventListener("click", () => { window.__pickFile(document.getElementById("shareFile")); });   // 0.21.78: Files stays open (the upload shows in it)
   // 0.8.6: on-demand fleet update from About (the brand script owns the logic).
   document.getElementById("aboutUpd")?.addEventListener("click", async () => {
     const st = document.getElementById("aboutUpdSt");
@@ -12706,7 +12765,7 @@
     paintTheme();
   }
   registerPop(helpPop, helpBtn);
-  pagePops.push({ isOpen: () => !sharePop.hidden, close: closeShare,
+  pagePops.push({ isOpen: () => !sharePop.hidden && !sharePop.classList.contains("docked"), close: closeShare,   // 0.21.78: a pinned Share is no dropdown
                   place: placeShare });
   // Connect rebuilds the world behind the panel; get out of the way so the
   // rebuild is visible.
@@ -13861,7 +13920,7 @@
                     typing: !!w.typing, speaking: !!w.speaking, avatar: w.avatar || "", publishing: w.publishing || [], state: true, mode: String(w.mode || ""), clk: w.clk ?? null, deaf: !!w.deaf, kv: w.kv || "" };   // 0.21.22: + clk; 0.21.48: + deaf
       const cur = members.get(key);
       if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) { members.set(key, rec); changed = true; }
-      if (p.ts) sinceTs.set(key, p.ts);
+      if (p.ts && !presenceHidden(w)) sinceTs.set(key, p.ts); else sinceTs.delete(key);   // 0.21.78: people only -- a camera box starts no timer
       if (rec.avatar && rec.op) { const ak = String(rec.op).toLowerCase(); if (avatarUrls.get(ak) !== rec.avatar) { avatarUrls.set(ak, rec.avatar); changed = true; } }
     }
     for (const [key, m] of members) if (m.state && !live.has(key)) { members.delete(key); sinceTs.delete(key); changed = true; }
@@ -14874,7 +14933,7 @@
     card.querySelector(".sbrow .spk").classList.toggle("on", !!rec.talking);
     card.querySelector(".sbcnt").textContent = rec.slug === LOBBY ? "pick a room to join" : rec.count > 0 ? rec.count + (rec.count === 1 ? " person" : " people") : "empty";
     card.__since = rec.since || 0;
-    card.querySelector(".sbtime").textContent = rec.since ? "\u23F1 " + fmtHm(Date.now() - rec.since) : "\u23F1 \u2014";
+    { const t = card.querySelector(".sbtime"); t.hidden = !rec.since; t.textContent = rec.since ? "\u23F1 " + fmtHm(Date.now() - rec.since) : ""; }   // 0.21.78: no timer until a person is in
     // 0.21.35 (Kenton: "remove the symbol after the time to denote locked or keep. The symbol on the circle should be
     // indicator enough"): the lock / infinity badges on the round bubble say it; nothing after the time
     card.querySelector(".sbflags").innerHTML = "";
@@ -15325,12 +15384,12 @@
     const now = Date.now();
     for (const card of sbRoomsEl?.querySelectorAll(":scope > .sbcard") || []) {
       const t = card.querySelector(".sbtime");
-      if (t) t.textContent = card.__since ? "\u23F1 " + fmtHm(now - card.__since) : "\u23F1 \u2014";
+      if (t) { t.hidden = !card.__since; t.textContent = card.__since ? "\u23F1 " + fmtHm(now - card.__since) : ""; }   // 0.21.78: none until a person is in
     }
     try { sbPeekPaint(); } catch {}   // 0.21.66: the hover card's timer too
     if (joinState === "joined") {
       const t = joinEls.roomBanner?.querySelector(".rbtime");
-      if (t) t.textContent = "\u23F1 " + (roomSince ? fmtHm(now - roomSince) : "0:00");
+      if (t) { t.hidden = !roomSince; t.textContent = roomSince ? "\u23F1 " + fmtHm(now - roomSince) : ""; }   // 0.21.78: none until a person is in
       joinEls.roomBanner?.querySelector(".spk")?.classList.toggle("on", ownRoomTalking());
     }
   }, 1000);
@@ -15454,11 +15513,12 @@
   const chatVisible = () => chatOpen && document.visibilityState === "visible";
   function chatHint(text, bad) { chatMsgEl.textContent = text || ""; chatMsgEl.style.color = bad ? "var(--asi-red)" : ""; }
   function chatPlace() {
-    if (isPhone()) { chatPanel.style.top = ""; chatPanel.style.left = ""; return; }
+    if (chatPanel.classList.contains("docked")) return;   // 0.21.78: the pinned column owns its box
+    if (isPhone()) { chatPanel.style.top = ""; chatPanel.style.left = ""; chatPanel.style.maxHeight = ""; return; }
     const bar = document.getElementById("topbar").getBoundingClientRect();
     const w = chatPanel.offsetWidth || 380;
-    chatPanel.style.top = Math.round(bar.bottom + 6) + "px";
     chatPanel.style.left = Math.round(Math.max(12, window.innerWidth - w - 12)) + "px";
+    dropFit(chatPanel, bar);   // 0.21.78: its full height when the window has room, else what is left under the toolbar
   }
   window.addEventListener("resize", () => { if (!chatPanel.hidden) chatPlace(); });
   // 0.21.35 (Kenton: "Chats should show new chat until seen or for a certain amount of time, not for everyone new to the
@@ -15782,8 +15842,9 @@
   }
   window.__chatProbe = chatProbe;   // rig hook
   const chatEntry = registerPop(chatPanel, chatBtn, () => { chatOpened(); });
-  { const orig = chatEntry.close; chatEntry.close = () => { orig(); chatOpen = false; chatPollArm(); chatProbeArm(); chatEmojiEl.hidden = true; }; }
-  function chatOpened() {
+  { const orig = chatEntry.close; chatEntry.close = () => { if (chatPanel.classList.contains("docked")) return; orig(); chatClosedHooks(); }; }   // 0.21.78: a pinned Chat stays
+  function chatClosedHooks() { chatOpen = false; chatPollArm(); chatProbeArm(); chatEmojiEl.hidden = true; }
+  function chatOpened(quiet) {   // 0.21.78: quiet = shown by the pinned column on its own (no focus taken from the page's shortcuts)
     chatOpen = true;
     chatSeenAtOpen = chatSeenId;
     chatPlace();
@@ -15792,9 +15853,171 @@
     chatPollArm();
     chatProbeArm();   // 0.13.0 (F1)
     chatFetch();
-    setTimeout(() => { try { chatInput.focus(); chatLog.scrollTop = chatLog.scrollHeight; } catch {} }, 50);
+    setTimeout(() => { try { if (!quiet) chatInput.focus(); chatLog.scrollTop = chatLog.scrollHeight; } catch {} }, 50);
   }
   window.__chatOpen = () => { if (chatPanel.hidden) chatBtn.click(); };   // rig
+
+  // ---- 0.21.78 (Kenton: "Allow user to pin people, view, files, chat, share to the right side of the right rail instead of always
+  // being a drop down menu item"): the PINNED column right of the stage (and its tile rail) -- one section per pinned panel, all
+  // visible at once; dividers between sections and the column's left edge resize; the stage shrinks to make room (never covered).
+  // The panel itself moves into the column (its own head: collapse + Unpin); unpinned it goes home and is a dropdown again. Its
+  // toolbar button collapses / expands the section. Per device (kastr.dock); never on phones -- the bottom sheets stay.
+  const DOCK_KEY = "kastr.dock", DOCK_ORDER = ["people", "view", "files", "chat", "share"];
+  const dockEl = document.getElementById("kDock"), dockGrip = document.getElementById("kDockGrip");
+  const dockPanels = {
+    people: { pop: document.getElementById("peoplePanel"), btn: document.getElementById("peopleBtn"), name: "People", fl: 1, show: () => paintParticipants(true) },
+    view: { pop: viewPop, btn: gridBtn, name: "View", fl: 0.7, show: () => paintViewPop() },
+    files: { pop: filesPop, btn: filesBtn, name: "Files", fl: 0.8, show: () => paintFilesPop() },
+    chat: { pop: chatPanel, btn: chatBtn, name: "Chat", fl: 1.4, show: (user) => chatOpened(!user), hide: () => chatClosedHooks() },
+    share: { pop: sharePop, btn: shareBtn, name: "Share", fl: 1.4, show: () => { dockShareLive(true); setTimeout(() => { if (!sharePop.matches(":hover")) dockShareLive(false); }, 3500); },
+             hide: () => { try { window.__shareClosed?.(); } catch {} } },
+  };
+  let dockSt = { pins: [], w: 360, fl: {}, fold: {} };
+  try {
+    const o = JSON.parse(localStorage.getItem(DOCK_KEY) || "null");
+    if (o && typeof o === "object") dockSt = { pins: Array.isArray(o.pins) ? o.pins.filter((k) => DOCK_ORDER.includes(k)) : [], w: Number(o.w) || 360,
+      fl: o.fl && typeof o.fl === "object" ? o.fl : {}, fold: o.fold && typeof o.fold === "object" ? o.fold : {} };
+  } catch {}
+  const dockSave = () => { try { localStorage.setItem(DOCK_KEY, JSON.stringify(dockSt)); } catch {} };
+  const isDocked = (pop) => !!pop?.classList.contains("docked");
+  const dockKeyOf = (pop) => DOCK_ORDER.find((k) => dockPanels[k].pop === pop) || "";
+  const dockFl = (k) => Math.max(0.1, Number(dockSt.fl[k]) || dockPanels[k].fl);
+  const dockWMax = () => Math.max(260, Math.min(720, Math.round(innerWidth * 0.6)));
+  const dockW = () => Math.max(260, Math.min(dockWMax(), Math.round(Number(dockSt.w) || 360)));
+  // a pinned Share refreshes its screen / window pictures when it shows, then only while the pointer is over it
+  function dockShareLive(on) { try { if (on) window.__shareOpened?.(); else window.__shareIdle?.(); } catch {} }
+  sharePop.addEventListener("pointerenter", () => { if (isDocked(sharePop) && !dockSt.fold.share) dockShareLive(true); });
+  sharePop.addEventListener("pointerleave", () => { if (isDocked(sharePop)) dockShareLive(false); });
+  for (const k of DOCK_ORDER) {   // a collapse and a pin button in each panel's head, before its X
+    const d = dockPanels[k];
+    d.home = document.createComment(" 0.21.78: " + k + " lives here while not pinned ");
+    d.pop.before(d.home);
+    d.pop.dataset.dock = k;
+    const head = d.pop.querySelector(":scope > .head"), x = head?.querySelector(":scope > .close");
+    d.fold = document.createElement("button"); d.fold.type = "button"; d.fold.className = "kfold"; d.fold.innerHTML = icon("chevron");
+    d.pin = document.createElement("button"); d.pin.type = "button"; d.pin.className = "kpin";
+    d.fold.addEventListener("click", () => dockFold(k));
+    d.pin.addEventListener("click", () => dockPin(k, !isDocked(d.pop)));
+    if (x) x.before(d.fold, d.pin); else head?.append(d.fold, d.pin);
+  }
+  function dockPaintBtns(k) {
+    const d = dockPanels[k], on = isDocked(d.pop), folded = on && !!dockSt.fold[k];
+    d.pin.innerHTML = icon(on ? "unpin" : "pin");
+    d.pin.title = on ? "Unpin " + d.name + " \u2014 back to a menu" : "Pin " + d.name + " to the side";
+    d.pin.setAttribute("aria-label", d.pin.title); d.pin.setAttribute("aria-pressed", String(on));
+    d.fold.title = (folded ? "Expand " : "Collapse ") + d.name;
+    d.fold.setAttribute("aria-label", d.fold.title); d.fold.setAttribute("aria-expanded", String(!folded));
+    d.btn.classList.toggle("pinned", on);
+    if (on) d.btn.classList.remove("grid-on");
+  }
+  function dockApply() {
+    const want = isPhone() ? [] : DOCK_ORDER.filter((k) => dockSt.pins.includes(k));
+    for (const k of DOCK_ORDER) {   // unpinned (or a phone): home, a dropdown again
+      const d = dockPanels[k];
+      if (want.includes(k) || !isDocked(d.pop)) continue;
+      d.pop.classList.remove("docked", "folded"); d.pop.style.removeProperty("--fl");
+      d.pop.hidden = true; d.home.after(d.pop);
+      try { d.hide?.(); } catch {}
+    }
+    for (const s of [...dockEl.querySelectorAll(":scope > .kdsplit")]) s.remove();
+    want.forEach((k, i) => {
+      const d = dockPanels[k], was = isDocked(d.pop);
+      if (!was) {
+        if (!d.pop.hidden) closeAllPops();   // open as a dropdown: it closes, then lands in the column
+        d.pop.classList.add("docked");
+        for (const p of ["top", "left", "height", "maxHeight"]) d.pop.style[p] = "";
+      }
+      if (i) dockEl.appendChild(dockSplitter());
+      dockEl.appendChild(d.pop);
+      d.pop.hidden = false;
+      d.pop.classList.toggle("folded", !!dockSt.fold[k]);
+      d.pop.style.setProperty("--fl", String(dockFl(k)));
+      if (!was && !dockSt.fold[k]) { try { d.show?.(false); } catch {} }
+    });
+    dockEl.hidden = !want.length;
+    dockEl.style.setProperty("--dockw", dockW() + "px");
+    document.body.classList.toggle("kdocked", want.length > 0);
+    for (const k of DOCK_ORDER) dockPaintBtns(k);
+    try { queueRelayout(); } catch {}
+  }
+  function dockPin(k, on) {
+    if (on && isPhone()) return;
+    dockSt.pins = on ? [...new Set([...dockSt.pins, k])] : dockSt.pins.filter((x) => x !== k);
+    if (on) delete dockSt.fold[k];
+    dockSave();
+    dockApply();
+    try { dockPanels[k].pin.focus({ preventScroll: true }); } catch {}   // the keyboard stays on the button it pressed
+  }
+  function dockFold(k, fold) {
+    const d = dockPanels[k];
+    if (!isDocked(d.pop)) return;
+    fold = fold ?? !dockSt.fold[k];
+    if (fold) dockSt.fold[k] = true; else delete dockSt.fold[k];
+    dockSave();
+    d.pop.classList.toggle("folded", fold);
+    dockPaintBtns(k);
+    try { fold ? d.hide?.() : d.show?.(true); } catch {}
+  }
+  function dockReveal(pop) { const k = dockKeyOf(pop); if (k && isDocked(pop) && dockSt.fold[k]) dockFold(k, false); }
+  window.__dockReveal = dockReveal;
+  function dockBtnClick(pop) {   // the toolbar button of a pinned panel
+    const k = dockKeyOf(pop);
+    if (!k) return;
+    closeAllPops();
+    dockFold(k);
+  }
+  function dockSplitter() {
+    const s = document.createElement("div"); s.className = "kdsplit"; s.tabIndex = 0;
+    s.setAttribute("role", "separator"); s.setAttribute("aria-orientation", "horizontal"); s.setAttribute("aria-label", "Resize the pinned panels");
+    s.title = "Drag to resize (arrow keys too)";
+    const open = (el) => el && el.classList.contains("docked") && !el.classList.contains("folded");
+    const pair = () => {   // the nearest expanded section above and below
+      let a = s.previousElementSibling, b = s.nextElementSibling;
+      while (a && !open(a)) a = a.previousElementSibling;
+      while (b && !open(b)) b = b.nextElementSibling;
+      return a && b ? [a, b, a.getBoundingClientRect().height, b.getBoundingClientRect().height, dockFl(a.dataset.dock), dockFl(b.dataset.dock)] : null;
+    };
+    const size = ([a, b, hA, hB, wA, wB], nA) => {   // heights follow the flex weights (flex-basis 0): split the pair's weight like its pixels
+      nA = Math.min(hA + hB - 64, Math.max(64, nA));
+      const fa = +((wA + wB) * nA / (hA + hB)).toFixed(4), fb = +((wA + wB) - fa).toFixed(4);
+      dockSt.fl[a.dataset.dock] = fa; dockSt.fl[b.dataset.dock] = fb;
+      a.style.setProperty("--fl", String(fa)); b.style.setProperty("--fl", String(fb));
+    };
+    s.addEventListener("pointerdown", (e) => {
+      const pr = pair();
+      if (!pr) return;
+      e.preventDefault(); s.setPointerCapture(e.pointerId); s.classList.add("dragging");
+      const y0 = e.clientY;
+      const move = (ev) => size(pr, pr[2] + ev.clientY - y0);
+      const up = () => { s.classList.remove("dragging"); s.removeEventListener("pointermove", move); s.removeEventListener("pointerup", up); s.removeEventListener("pointercancel", up); dockSave(); };
+      s.addEventListener("pointermove", move); s.addEventListener("pointerup", up); s.addEventListener("pointercancel", up);
+    });
+    s.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault(); e.stopPropagation();   // not the page's tile stepping
+      const pr = pair();
+      if (pr) { size(pr, pr[2] + (e.key === "ArrowUp" ? -24 : 24)); dockSave(); }
+    });
+    return s;
+  }
+  dockGrip.addEventListener("pointerdown", (e) => {   // the column's width: its left edge
+    e.preventDefault(); dockGrip.setPointerCapture(e.pointerId); dockGrip.classList.add("dragging");
+    const x0 = e.clientX, w0 = dockW();
+    const move = (ev) => { dockSt.w = Math.max(260, Math.min(dockWMax(), w0 + x0 - ev.clientX)); dockEl.style.setProperty("--dockw", dockSt.w + "px"); };
+    const up = () => { dockGrip.classList.remove("dragging"); dockGrip.removeEventListener("pointermove", move); dockGrip.removeEventListener("pointerup", up); dockGrip.removeEventListener("pointercancel", up); dockSave(); };
+    dockGrip.addEventListener("pointermove", move); dockGrip.addEventListener("pointerup", up); dockGrip.addEventListener("pointercancel", up);
+  });
+  dockGrip.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault(); e.stopPropagation();
+    dockSt.w = Math.max(260, Math.min(dockWMax(), dockW() + (e.key === "ArrowLeft" ? 24 : -24)));
+    dockEl.style.setProperty("--dockw", dockSt.w + "px"); dockSave();
+  });
+  window.addEventListener("resize", () => { if (!dockEl.hidden) dockEl.style.setProperty("--dockw", dockW() + "px"); });
+  // a pinned View keeps its ticks current (G, a spotlight, the room's view lock change it without a click in it)
+  setInterval(() => { if (isDocked(viewPop) && !dockSt.fold.view && document.visibilityState === "visible") { try { paintViewPop(); } catch {} } }, 1500);
+  window.__dock = { state: () => JSON.parse(JSON.stringify(dockSt)), pin: dockPin, fold: dockFold, apply: dockApply };   // rig
+  setTimeout(dockApply, 0);   // once the whole module has run (the panels' painters read state declared further down)
   function chatRoomClosed(why) {
     const room = chatRoom;
     if (!room) return;
@@ -15856,14 +16079,14 @@
   chatInput.addEventListener("input", chatGrow);
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
-    if (e.key === "Escape") { if (!chatEmojiEl.hidden) chatEmojiEl.hidden = true; else chatEntry.close(); }
+    if (e.key === "Escape") { if (!chatEmojiEl.hidden) chatEmojiEl.hidden = true; else chatEntry.close(); }   // (a pinned Chat stays: chatEntry.close)
   });
   chatInput.addEventListener("paste", (e) => {
     const files = [...(e.clipboardData?.files || [])];
     if (files.length) { e.preventDefault(); chatAttach(files); }
   });
   chatSendBtn.addEventListener("click", chatSend);
-  document.getElementById("chatFileBtn").addEventListener("click", () => chatFileInp.click());
+  document.getElementById("chatFileBtn").addEventListener("click", () => window.__pickFile(chatFileInp));   // 0.21.78: the native picker never closes Chat
   chatFileInp.addEventListener("change", () => { chatAttach(chatFileInp.files); chatFileInp.value = ""; });
   for (const ev of ["dragenter", "dragover"]) chatPanel.addEventListener(ev, (e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); chatPanel.classList.add("dragover"); } });
   for (const ev of ["dragleave", "drop"]) chatPanel.addEventListener(ev, (e) => { if (ev === "drop") { e.preventDefault(); chatAttach(e.dataTransfer?.files); } chatPanel.classList.remove("dragover"); });
@@ -17199,7 +17422,7 @@
     focusMode = false;
     closeAllPops();
     joinEls.peopleBtn.classList.remove("grid-on");
-    document.getElementById("peoplePanel").hidden = true;
+    { const pp = document.getElementById("peoplePanel"); if (!pp.classList.contains("docked")) pp.hidden = true; }   // 0.21.78: a pinned People stays in its column
     try {
       const pub = window.__publisher;
       if (pub && (pub.state().running || pub.state().live)) {
@@ -19289,6 +19512,7 @@
     if (a.kind === SCREEN && !a.native) return displaySwap(slots.get(a.id));
     shSwap = a.id;
     if (document.getElementById("sharePop")?.hidden) document.getElementById("shareBtn")?.click();
+    else window.__dockReveal?.(document.getElementById("sharePop"));   // 0.21.78: a pinned, collapsed Share opens up
     shSwapPaint();
   }
   window.__shareSwap = shareSwap;
@@ -24499,6 +24723,7 @@
   }
   window.__shareOpened = () => { shTick++; shLoad(); webcamLoad(true); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); webcamLoad(false); }, 3000); };   // 0.21.65: + the Webcam section
   window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; if (shSwap != null) { shSwap = null; shSwapPaint(); } };   // 0.21.73: closing ends "Share something else"
+  window.__shareIdle = () => { clearInterval(shTimer); shTimer = null; };   // 0.21.78: a pinned Share refreshes its pictures only while the pointer is over it
   async function shareNative(src) {
     if (!src) return;
     const url = shareKey(src);
@@ -24507,14 +24732,13 @@
     if (shSwap != null) {   // 0.21.73: "Share something else" -- this replaces that share in place
       const a = added.find((x) => x.id === shSwap);
       shSwap = null; shSwapPaint();
-      if (a && await retargetShare(a, url, label)) { try { document.querySelector("#sharePop .close")?.click(); } catch {} }
+      if (a) await retargetShare(a, url, label);   // 0.21.78 (Kenton): Share stays open until a click outside it, another toolbar button or Share again
       return;
     }
     if (presenterMode() !== "content") return sharePresenter(url, label);   // 0.21.20: composited with my camera
     const e = await addRtsp(url, { label });
     if (!e) return;
-    window.__toast?.("Sharing " + label + (e.audio ? " with sound" : "") + ".", 4000);
-    try { document.querySelector("#sharePop .close")?.click(); } catch {}
+    window.__toast?.("Sharing " + label + (e.audio ? " with sound" : "") + ".", 4000);   // 0.21.78: Share stays open (was: closed here)
   }
   window.__shareNative = shareNative;   // rig
   // ---- 0.21.20: presenter mode ------------------------------------------------------------------------------------
@@ -24544,8 +24768,7 @@
       if (!r.ok || data?.error) throw new Error(data?.error || r.status);
     } catch (e) { window.__toast?.("Could not start the share: " + (e?.message || e), 6000, { level: "error" }); return; }
     addSource(SCREEN, null, label, { native: { feedId: data.id, url }, presenter: presenterMode(), label });
-    window.__toast?.("Presenting " + label + ".", 4000);
-    try { document.querySelector("#sharePop .close")?.click(); } catch {}
+    window.__toast?.("Presenting " + label + ".", 4000);   // 0.21.78: Share stays open (was: closed here)
   }
   window.__sharePresenter = sharePresenter;   // rig
   $("srcWindowBtn").addEventListener("click", () => shareSurface("window"));

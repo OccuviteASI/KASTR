@@ -17,7 +17,7 @@ def _page():
 class Gallery(unittest.TestCase):
     def test_every_way_back_uses_one_reset(self):
         p = _page()
-        self.assertIn('document.getElementById("viewGallery").addEventListener("click", () => { closeAllPops(); goGallery(); });', p)
+        self.assertIn('document.getElementById("viewGallery").addEventListener("click", () => { goGallery(); paintViewPop(); });', p)   # 0.21.78: View stays open
         self.assertIn('stageBack.addEventListener("click", (e) => { e.stopPropagation(); goGallery(); });', p)
         self.assertIn('if (v === "unpin") { pinToggle(name); return; }', p)   # 0.21.45: one pin; the last one -> pinsGone -> goGallery
         self.assertIn("else goGallery();", p[p.index("  function pinsGone() {"):p.index("  function pinToggle(name) {")])

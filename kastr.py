@@ -1657,6 +1657,43 @@ def _checkin_net(port):
     return best["net"] if best else None
 
 
+CHECKIN_NET_POLL = 5   # 0.21.78 (E): how often the loop looks at this app's own figure between check-ins
+CHECKIN_NET_GAP = 10   # ... and the soonest an early check-in follows the one before
+NET_IDLE_BPS = 2000    # = kastr_relay.MESH_IDLE_BPS: only catalog / keep-alive bytes
+
+
+def net_moved(a, b):
+    """0.21.78 (E) (lab: a camera read ~16 bit/s at the relay while the zoomed map said its app sent ~500 kbit/s -- the
+    camera had stopped, unwatched, but the check-in carrying the figure was a minute old): has this app's own down / up figure
+    moved since the last check-in carried it -- idle <-> sending, or > 30 % and > 64 kbit/s? Then the check-in goes now."""
+    if not isinstance(b, dict):
+        return False
+    if not isinstance(a, dict):
+        return True
+    for k in ("up", "down"):
+        try:
+            x, y = float(a.get(k) or 0), float(b.get(k) or 0)
+        except (TypeError, ValueError):
+            continue
+        if (x >= NET_IDLE_BPS) != (y >= NET_IDLE_BPS) or abs(x - y) > max(64000, 0.3 * max(x, y)):
+            return True
+    return False
+
+
+def _checkin_wait(delay, port, last):
+    """0.21.78 (E): wait `delay` s for the next check-in -- sooner (but >= CHECKIN_NET_GAP s after the last) when this app's
+    figure moved since `last` went (net_moved). Only an app whose last check-in carried a figure looks. -> True = stopping."""
+    t0 = time.time()
+    while True:
+        left = delay - (time.time() - t0)
+        if left <= 0:
+            return False
+        if STOP.wait(min(CHECKIN_NET_POLL, left)):
+            return True
+        if last is not None and time.time() - t0 >= CHECKIN_NET_GAP and net_moved(last, _checkin_net(port)):
+            return False
+
+
 def client_checkin_loop(get_relay, ini, port, mode):
     """0.21.50 (Kenton: "see all of the users in the hub relay server page. With the ability to push an update to the
     client and see what version it is. The update push should come from the connected relay"): tell the relay this app
@@ -1667,7 +1704,8 @@ def client_checkin_loop(get_relay, ini, port, mode):
     from urllib.parse import urlparse
     node = kastr_serve.host_slug()
     delay = 20   # the first check-in soon after launch
-    while not STOP.wait(delay):
+    sent_net = None   # 0.21.78 (E): the figure the last check-in carried
+    while not _checkin_wait(delay, port, sent_net):
         off = kastr_serve.UPDATE_OFFER
         delay = CHECKIN_FAST if off.get("version") else CHECKIN_EVERY
         relay = ""
@@ -1716,6 +1754,7 @@ def client_checkin_loop(get_relay, ini, port, mode):
                     except Exception:
                         pass
                 break
+        sent_net = body.get("net") if err is None else None   # 0.21.78 (E)
         if err is not None and time.time() - _CHECKIN_SAID.get(host, 0) > 1800:
             _CHECKIN_SAID[host] = time.time()
             note("check-in with the relay %s failed (%s): %s -- the hub's Users list shows this app without its name and version"

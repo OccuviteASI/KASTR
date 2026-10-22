@@ -324,11 +324,11 @@ class LinksView(unittest.TestCase):
             z = r.mesh_view(zoom="a-1")["zoom"]
             pat = next(c for c in z["clients"] if c["node"] == "pat-1a2b")
             self.assertEqual((pat["kind"], pat["nick"], pat["hostname"], pat["bps"]), ("person", "Front desk", "PAT-PC", 800000))
-            self.assertEqual(pat["publishes"], [{"path": "lab/pat-1a2b/op/cam.hang", "bps": 800000}])
+            self.assertEqual(pat["publishes"], [{"path": "lab/pat-1a2b/op/cam.hang", "bps": 800000, "idle": False}])   # 0.21.78 (E): + idle
             self.assertEqual((pat["net"]["down"], pat["net"]["up"]), (2900000, 820000))
             web = next(c for c in z["clients"] if c["node"] == "web-7c7c")
             self.assertEqual((web["kind"], web["net"]), ("viewer", None))                     # "not reported", never invented
-            self.assertEqual(z["other"], [{"path": "lab/yard-box/op/c9.hang", "bps": 600000}])
+            self.assertEqual(z["other"], [{"path": "lab/yard-box/op/c9.hang", "bps": 600000, "idle": False}])
             self.assertFalse(z["perClient"])
             self.assertFalse(r.mesh_view(zoom="a-1")["zoom"]["needsUpdate"])
             self.assertTrue(r.mesh_view(zoom="c-3")["zoom"]["needsUpdate"])
@@ -408,7 +408,8 @@ class Wiring(unittest.TestCase):
         self.assertNotIn(chr(92), page[page.index("const mesh = {"):page.index("paintMesh(); setInterval(paintMesh, 5000);")])   # written without escapes
         w = rd(os.path.join(HERE, "moq-watch-lite.html"))
         self.assertIn("window.__netRate = () =>", w)
-        self.assertIn("net: window.__netRate?.() ?? null }) });   // 0.21.78 (C)", w)
+        self.assertIn("const net = window.__netRate?.() ?? null;", w)   # 0.21.78 (E): the figure it sends is kept (an early check-in when it moves)
+        self.assertIn("platform: webBrowser(), net }) });   // 0.21.78 (C)", w)
         self.assertIn("net: window.__netRate?.() ?? null", rd(os.path.join(HERE, "assets", "asi-brand.js")))
         src = rd(os.path.join(HERE, "kastr_relay.py"))
         self.assertIn('"linkNode": True', src)

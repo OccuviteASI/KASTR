@@ -173,5 +173,16 @@ class ShareClosesOnChoice(unittest.TestCase):
         self.assertNotIn("#sharePop .close", body)
 
 
+
+class ZoomButtonsOnlyWithTheLabel(unittest.TestCase):
+    # 0.21.83 (Kenton: "hide the + and - buttons for zoom except when the zoom label is showing also")
+    p = page()
+
+    def test_hidden_unless_zoomed(self):
+        rule = "#stage .pane:not(.zoomed):not(.feedview) .zoomctl, #stage .pubpane:not(.zoomed) .zoomctl { display:none; }"
+        self.assertIn(rule, self.p)
+        self.assertGreater(self.p.index(rule), self.p.index("#stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl"))   # after the show rule
+        self.assertIn("#stage .pane.zoomed .zoomlbl, #stage .pane.feedview .zoomlbl, #stage .pubpane.zoomed .zoomlbl { display:block;", self.p)   # the same states as the label
+
 if __name__ == "__main__":
     unittest.main()

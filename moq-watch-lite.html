@@ -666,6 +666,9 @@
   .zoomctl { position:absolute; right:8px; bottom:8px; z-index:8; display:none; gap:4px; opacity:0; transition:opacity .15s ease; }
   #stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl, #stage .pubpane.mainstage[data-zoom] .zoomctl { display:flex; }
   #stage .pane:hover .zoomctl, #stage .pubpane:hover .zoomctl, #stage .zoomed .zoomctl { opacity:1; }
+  /* 0.21.83 (Kenton: "hide the + and - buttons for zoom except when the zoom label is showing also"): the corner + / - only while the
+     top zoom label shows (a zoomed tile, a grid camera opened from its grid); at normal size the wheel / pinch / a double-click zooms */
+  #stage .pane:not(.zoomed):not(.feedview) .zoomctl, #stage .pubpane:not(.zoomed) .zoomctl { display:none; }
   /* 0.13.3: a visible media bar owns the bottom row -- zoom controls step above it
      (the three zoom buttons used to sit exactly on the shared file's mute button and volume slider).
      0.21.65: the mic/video marks ride the name row now, under the media bar (bottom:36px) where the name always sat */

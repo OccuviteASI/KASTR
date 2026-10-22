@@ -206,38 +206,99 @@
   .updok { color:var(--asi-green, #3fb950); }
   .updbad { color:var(--asi-amber); }
   /* 0.21.77 (Kenton: "a dynamic visual mesh view on the hub's Relay page"): the relay mesh -- relays as nodes, links as edges */
-  .meshwrap { position:relative; margin:6px 0 4px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); overflow:hidden; touch-action:none; }
+  /* 0.21.79 (Kenton: "more colorful and expressive"): the map's own tokens. A relay's colour is OKLCH at these lightness /
+     chroma values with its own hue (--h, set per relay by the page), so one hue reads right on the navy ground and on white;
+     the ground follows the palette (surface-2 tinted navy in the dark themes, near-white in the light ones). */
+  #linksBox { --mesh-l:.76; --mesh-c:.15; --mesh-fl:.31; --mesh-fc:.085; --mesh-pl:.93; --mesh-pc:.09; --mesh-ml:.9; --mesh-mc:.06; --mesh-cl:.27; --mesh-cc:.06;
+    --mesh-down:#ff5c57; --mesh-warn:#ffb21a; --mesh-off:var(--text-mute, #5f7186); --mesh-ink:var(--text, #e6ecf3);
+    --mesh-ground:color-mix(in srgb, var(--surface-2, #121824) 80%, #03203f); --mesh-grid:rgba(130,180,235,.11); --mesh-glow:rgba(0,159,218,.17); --mesh-track:rgba(160,190,225,.15); }
+  :root[data-theme="light"] #linksBox { --mesh-l:.58; --mesh-c:.17; --mesh-fl:.955; --mesh-fc:.045; --mesh-pl:.33; --mesh-pc:.12; --mesh-ml:.79; --mesh-mc:.09; --mesh-cl:.965; --mesh-cc:.035;
+    --mesh-down:#d0342f; --mesh-warn:#c27c00; --mesh-ground:color-mix(in srgb, var(--surface-2, #f2f5f8) 55%, #ffffff); --mesh-grid:rgba(15,45,85,.10); --mesh-glow:rgba(0,159,218,.10); --mesh-track:rgba(15,45,85,.11); }
+  :root[data-palette="contrast"] #linksBox { --mesh-l:.84; --mesh-c:.17; --mesh-ground:#000; --mesh-grid:rgba(255,255,255,.16); --mesh-track:rgba(255,255,255,.3); }
+  .meshwrap { position:relative; margin:6px 0 4px; border:1px solid var(--line); border-radius:10px; overflow:hidden; touch-action:none;
+    background:radial-gradient(ellipse 65% 60% at 50% 46%, var(--mesh-glow), transparent 72%), radial-gradient(circle, var(--mesh-grid) 1px, transparent 1.6px) 0 0 / 24px 24px, var(--mesh-ground); }
   .meshwrap svg { display:block; width:100%; user-select:none; }
-  .meshwrap .medge { fill:none; stroke-linecap:round; transition:stroke .4s, stroke-width .4s, opacity .4s; }
-  .meshwrap .medge.st-up { stroke:var(--asi-green, #3fb950); }
-  .meshwrap .medge.st-warn { stroke:var(--asi-amber, #f0ad00); }
-  .meshwrap .medge.st-down { stroke:var(--asi-red, #dc5050); }
-  .meshwrap .medge.st-off, .meshwrap .medge.st-wait { stroke:var(--text-mute, #8b98a8); opacity:.7; }
-  .meshwrap .medge.k-hub, .meshwrap .medge.k-standby { stroke-dasharray:7 5; opacity:.75; }
-  .meshwrap .medge.st-off { stroke-dasharray:2 5; }
-  .meshwrap .mflow { fill:none; stroke:var(--text, #e6edf3); stroke-linecap:round; stroke-dasharray:2 12; opacity:.75; pointer-events:none; animation:meshflow 1.1s linear infinite; }
-  .meshwrap .mflow.rev { animation-direction:reverse; }
-  @keyframes meshflow { to { stroke-dashoffset:-14; } }
+  /* three layers: the links (an SVG under), the traffic dots (a canvas -- the loop writes no DOM), the relays, labels and hit areas (#meshSvg on top) */
+  .meshwrap #meshSvg { position:relative; z-index:1; }
+  .meshwrap .meshbg, .meshwrap .meshflow { position:absolute; left:0; top:0; z-index:0; pointer-events:none; }
+  /* a link: its body in its two relays' colours (a gradient, each relay's half its own), a state overlay on top (colour AND pattern), the
+     hub / standby links hollow like a pipe, one lane of dots each way */
+  .meshwrap .medge { fill:none; stroke-linecap:round; opacity:.9; transition:stroke-width .8s ease, opacity .6s ease; }
+  .meshwrap .medge.idle { opacity:.5; }
+  .meshwrap .medge.st-warn, .meshwrap .medge.st-down { opacity:.16; }
+  .meshwrap .medge.st-off, .meshwrap .medge.st-wait, .meshwrap .medge.st-none { opacity:0; }
+  .meshwrap .mst { stop-color:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); }
+  .meshwrap .mrail { fill:none; stroke:var(--mesh-ground); stroke-width:1.3px; stroke-linecap:round; opacity:0; pointer-events:none; transition:opacity .6s; }
+  .meshwrap .mrail.on { opacity:.95; }
+  .meshwrap .mstat { fill:none; stroke-linecap:round; opacity:0; pointer-events:none; transition:opacity .6s ease, stroke-width .8s ease; }
+  .meshwrap .mstat.st-warn { stroke:var(--mesh-warn); stroke-dasharray:14 4 2 4; opacity:.95; animation:meshshimmer 1.6s steps(8) infinite, meshflicker 2.2s steps(6) infinite; }
+  .meshwrap .mstat.st-down { stroke:var(--mesh-down); stroke-dasharray:6 7; stroke-linecap:butt; opacity:1; animation:meshpulse 1.3s steps(6) infinite; }
+  .meshwrap .mstat.st-off { stroke:var(--mesh-off); stroke-dasharray:1.5 6; opacity:.85; }
+  .meshwrap .mstat.st-wait { stroke:var(--mesh-off); stroke-dasharray:6 6; opacity:.8; animation:meshshimmer 2.4s steps(8) infinite; }
+  .meshwrap .mstat.st-none { stroke:var(--mesh-off); stroke-dasharray:1 7; opacity:.5; }
+  @keyframes meshshimmer { to { stroke-dashoffset:-24; } }
+  @keyframes meshflicker { 0%, 100% { opacity:.95; } 50% { opacity:.55; } }
+  @keyframes meshpulse { 0%, 100% { opacity:1; } 50% { opacity:.3; } }
+  /* (stepped: an SVG repaints whole for any change, so the health marks change a few times a second, not 60) */
+  .meshwrap .marrow { display:none; fill:oklch(var(--mesh-pl) var(--mesh-pc) var(--h, 237)); stroke:var(--mesh-ground); stroke-width:.8px; pointer-events:none; }
+  .meshwrap .mbadge { display:none; pointer-events:none; }
+  .meshwrap .mbadge.warn, .meshwrap .mbadge.down { display:inline; }
+  .meshwrap .mbadge path { stroke:var(--mesh-ground); stroke-width:2px; stroke-linejoin:round; }
+  .meshwrap .mbadge.warn path { fill:var(--mesh-warn); }
+  .meshwrap .mbadge.down path { fill:var(--mesh-down); }
+  .meshwrap .mbadge.down { animation:meshpulse 1.3s steps(6) infinite; }
+  .meshwrap .mbadge text { font-size:11px; font-weight:800; text-anchor:middle; fill:#fff; }
+  .meshwrap .mbadge.warn text { fill:#241900; }
   .meshwrap .mhit { fill:none; stroke:transparent; stroke-width:16; cursor:pointer; }
-  .meshwrap .mnode circle.body { stroke-width:2; transition:r .3s; }
-  .meshwrap .mnode.r-hub circle.body { fill:color-mix(in srgb, var(--asi-blue, #009fda) 30%, var(--surface, #0c141c)); stroke:var(--asi-blue, #009fda); }
-  .meshwrap .mnode.r-standby circle.body { fill:color-mix(in srgb, #a371f7 26%, var(--surface, #0c141c)); stroke:#a371f7; }
-  .meshwrap .mnode.r-spoke circle.body { fill:var(--surface, #0c141c); stroke:var(--text-dim, #b4c0cc); }
-  .meshwrap .mnode.stale circle.body { opacity:.5; }
-  .meshwrap .mnode { cursor:grab; }
-  .meshwrap .mnode text { fill:var(--text, #e6edf3); font-size:11px; text-anchor:middle; pointer-events:none;
-    paint-order:stroke; stroke:var(--surface-2, #111a24); stroke-width:3px; stroke-linejoin:round; }   /* a label stays readable over an edge */
-  .meshwrap .mnode text.ver { fill:var(--text-mute, #8b98a8); font-size:9.5px; }
-  .meshwrap .mnode text.ic { font-size:10px; font-weight:700; fill:var(--text, #e6edf3); stroke:none; }
-  .meshwrap .mnode .badge { fill:var(--asi-amber, #f0ad00); }
-  .meshwrap .mnode text.bang { fill:#111; font-size:10px; font-weight:800; stroke:none; }
-  .meshwrap .mnode.sel circle.body, .meshwrap .medge.sel { filter:drop-shadow(0 0 4px var(--asi-blue, #009fda)); }
+  .meshwrap .mrate { fill:var(--mesh-ink); font-size:10px; font-weight:600; text-anchor:middle; pointer-events:none; paint-order:stroke; stroke:var(--mesh-ground); stroke-width:3.5px; stroke-linejoin:round; }
+  .meshwrap .medge.sel { filter:drop-shadow(0 0 5px var(--asi-blue, #009fda)); }
+  /* a relay: its colour on the body and the name chip, two rings that fill like meters (inner = in, outer = out; deep = its own
+     clients, light = relay links), a glow as bright as it is busy (breathing when very busy), a badge when it needs an update */
+  .meshwrap .mnode { cursor:grab; transition:opacity .35s; }
+  .meshwrap .mnode .body { fill:oklch(var(--mesh-fl) var(--mesh-fc) var(--h, 237)); stroke:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); stroke-width:2.4px; }
+  .meshwrap .mnode .halo { fill:none; stroke:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); stroke-opacity:.5; stroke-width:1.4px; stroke-dasharray:3 4; }
+  .meshwrap .mnode .mglow { pointer-events:none; transition:opacity 1s ease; }
+  .meshwrap .mgs0 { stop-color:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); stop-opacity:.6; }
+  .meshwrap .mgs1 { stop-color:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); stop-opacity:0; }
+  .meshwrap .mtrack { fill:none; stroke:var(--mesh-track); stroke-width:2.6px; }
+  .meshwrap .marc { fill:none; stroke-width:2.6px; stroke-linecap:butt; transition:stroke-dasharray .9s ease, stroke-dashoffset .9s ease; }
+  .meshwrap .marc.loc { stroke:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); }
+  .meshwrap .marc.lnk { stroke:oklch(var(--mesh-ml) var(--mesh-mc) var(--h, 237)); }
+  .meshwrap .mnode .mchip { fill:oklch(var(--mesh-cl) var(--mesh-cc) var(--h, 237)); stroke:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); stroke-opacity:.6; stroke-width:1px; }
+  .meshwrap .mnode text { fill:var(--mesh-ink); font-size:11px; text-anchor:middle; pointer-events:none; }
+  .meshwrap .mnode text.mname { font-weight:600; }
+  .meshwrap .mnode text.ver { fill:var(--text-mute, #8b98a8); font-size:9.5px; paint-order:stroke; stroke:var(--mesh-ground); stroke-width:3px; stroke-linejoin:round; }
+  .meshwrap .mnode text.ic { font-size:9.5px; font-weight:800; letter-spacing:.03em; fill:oklch(var(--mesh-pl) var(--mesh-pc) var(--h, 237)); }
+  .meshwrap .mnode.r-hub text.ic { font-size:10.5px; }
+  .meshwrap .mnode .mnb { display:none; }
+  .meshwrap .mnode .mnb.upd, .meshwrap .mnode .mnb.stale { display:inline; }
+  .meshwrap .mnode .mnb circle { stroke:var(--mesh-ground); stroke-width:2px; }
+  .meshwrap .mnode .mnb.upd circle { fill:var(--mesh-warn); }
+  .meshwrap .mnode .mnb.stale circle { fill:var(--mesh-off); }
+  .meshwrap .mnode .mnb text { font-size:10px; font-weight:800; fill:#1a1300; }
+  .meshwrap .mnode .mnb.stale text { fill:#fff; }
+  .meshwrap .mnode.stale .body { opacity:.55; stroke-dasharray:3 3; }
+  .meshwrap .mnode.pinned .body { stroke-dasharray:5 2.5; }
+  .meshwrap .mnode.sel .body { filter:drop-shadow(0 0 6px oklch(var(--mesh-l) var(--mesh-c) var(--h, 237))); }
+  /* hovering a relay lights its links and neighbours, a link its two ends; the rest steps back */
+  .meshwrap .mroot.mfocus [data-e]:not([data-hl]) { opacity:.1 !important; }
+  .meshwrap .mroot.mfocus .mnode:not([data-hl]) { opacity:.4; }
   .meshtip { position:absolute; z-index:5; pointer-events:none; max-width:320px; padding:7px 9px; border-radius:6px; font-size:11.5px; line-height:1.45;
-    background:var(--surface, #0c141c); color:var(--text, #e6edf3); border:1px solid var(--line); box-shadow:0 6px 20px rgba(0,0,0,.35); white-space:normal; }
+    background:var(--surface, #0c141c); color:var(--text, #e6edf3); border:1px solid var(--line); border-left:3px solid oklch(var(--mesh-l) var(--mesh-c) var(--h, 237));
+    box-shadow:0 6px 20px rgba(0,0,0,.35); white-space:normal; }
   .meshtip b { font-weight:600; }
   .meshtip .dim { color:var(--text-mute, #8b98a8); }
-  .meshlegend { display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:var(--text-mute, #8b98a8); margin:2px 0 6px; }
-  .meshlegend i { display:inline-block; width:18px; height:0; border-top:3px solid; vertical-align:middle; margin-right:4px; }
+  #linksBox .mdot { display:inline-block; width:8px; height:8px; border-radius:50%; margin:0 4px 0 1px; vertical-align:0; background:oklch(var(--mesh-l) var(--mesh-c) var(--h, 237)); }
+  /* the legend: the same marks, small */
+  .meshlegend { display:flex; flex-wrap:wrap; gap:5px 14px; align-items:center; font-size:11px; color:var(--text-dim, #8ea0b5); margin:4px 0 6px; }
+  .meshlegend > span { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+  .meshlegend svg { flex:none; overflow:visible; }
+  .meshlegend .mlgflow { animation:meshlgflow 1s steps(9) infinite; }
+  @keyframes meshlgflow { to { stroke-dashoffset:-9; } }
+  .meshlegend .mlgwarn { animation:meshshimmer 1.6s steps(8) infinite; }
+  .meshlegend .mlgdown { animation:meshpulse 1.3s steps(6) infinite; }
+  .meshlegend .zonly { display:none; }
+  #linksBox.zoomed .meshlegend .zonly { display:inline-flex; }
   .meshpanel { margin:6px 0; padding:9px 11px; border:1px solid var(--line); border-radius:7px; background:var(--surface-2); font-size:12px; }
   .meshpanel h4 { margin:0 0 6px; font-size:13px; }
   .meshpanel .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:5px 0; }
@@ -247,24 +308,19 @@
   .meshhub { display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12px; margin:6px 0; }
   .meshhub input { width:80px; }
   table.rooms td .lkst { font-weight:600; }
-  /* 0.21.78: unlinked pairs (faint, dotted -- click for why), bandwidth on the line, the hub's halo, a pinned relay, the zoomed relay's clients */
-  .meshwrap .medge.st-none { stroke:var(--text-mute, #8b98a8); stroke-dasharray:1 6; opacity:.42; }
-  .meshwrap .mrate { fill:var(--text-dim, #b4c0cc); font-size:10px; text-anchor:middle; pointer-events:none; paint-order:stroke; stroke:var(--surface-2, #111a24); stroke-width:3px; stroke-linejoin:round; }
-  .meshwrap .mnode .halo { fill:none; stroke:var(--asi-blue, #009fda); stroke-opacity:.28; stroke-width:5; }
-  .meshwrap .mnode.pinned circle.body { stroke-dasharray:4 2; }
-  .meshwrap .medge.zc { stroke:var(--text-dim, #b4c0cc); opacity:.8; }
-  .meshwrap .medge.zc.zidle { stroke-dasharray:3 5; opacity:.5; }
-  .meshwrap .mnode.zk-person circle.body { fill:color-mix(in srgb, var(--asi-green, #3fb950) 24%, var(--surface, #0c141c)); stroke:var(--asi-green, #3fb950); }
-  .meshwrap .mnode.zk-box circle.body { fill:color-mix(in srgb, var(--asi-amber, #f0ad00) 24%, var(--surface, #0c141c)); stroke:var(--asi-amber, #f0ad00); }
-  .meshwrap .mnode.zk-viewer circle.body { fill:var(--surface, #0c141c); stroke:var(--text-mute, #8b98a8); }
+  /* 0.21.78: the zoomed relay's clients; 0.21.79: each kind its own colour and shape (person = circle, box = square, viewer = diamond) */
+  .meshwrap .medge.zc.zidle { opacity:.32; }
   .meshwrap .mnode.z-client text.ic { font-size:9px; }
-  .meshwrap .mnode.z-relay { opacity:.85; }
+  .meshwrap .mnode.z-relay { opacity:.92; }
   .meshwrap .mnode.z-relay text.ic { font-size:7.5px; }
   .meshwrap .meshbtn { position:absolute; top:6px; z-index:4; padding:2px 9px; font-size:11.5px; }
   .meshwrap .meshbtn.l { left:6px; }
   .meshwrap .meshbtn.r { right:6px; }
   .meshpanel tr.zsel td { background:color-mix(in srgb, var(--asi-blue, #009fda) 16%, transparent); }
-  @media (prefers-reduced-motion: reduce) { .meshwrap .mflow { animation:none; } .meshwrap .medge { transition:none; } .meshwrap .mnode circle.body { transition:none; } }
+  /* reduced motion: nothing moves -- the dots stand still with an arrow each way, the rate labels show from 20 kbit/s, the states keep their patterns */
+  @media (prefers-reduced-motion: reduce) { .meshwrap .mstat, .meshwrap .mbadge, .meshwrap .mnode .mglow, .meshwrap .mnode .halo, .meshlegend * { animation:none !important; }
+    .meshwrap .medge, .meshwrap .mstat, .meshwrap .marc, .meshwrap .mnode, .meshwrap .mnode .mglow { transition:none; }
+    .meshwrap .marrow.on { display:inline; } }
 </style>
 </head>
 <body class="asi">
@@ -505,7 +561,8 @@
            directly over a private path, the hub and standby links behind them, and what crosses each link now -->
       <div id="linksBox" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" hidden>
         <b style="font-size:13px">Relay mesh</b> <span id="meshCount" class="hint"></span>
-        <div class="meshlegend"><span><i style="border-color:var(--asi-green,#3fb950)"></i>up</span><span><i style="border-color:var(--asi-amber,#f0ad00)"></i>slow or flapping</span><span><i style="border-color:var(--asi-red,#dc5050)"></i>down</span><span><i style="border-color:var(--text-mute,#8b98a8);border-top-style:dotted"></i>off / waiting</span><span><i style="border-color:var(--text-dim,#b4c0cc);border-top-style:dashed"></i>hub / standby (last resort)</span><span><i style="border-color:var(--text-mute,#8b98a8);border-top-style:dotted;opacity:.55"></i>not linked (click for why)</span><span>thicker = more bandwidth</span></div>
+        <!-- 0.21.79 (Kenton: "more colorful and expressive"): the legend draws the map's own marks -->
+        <div class="meshlegend" id="meshLegend" aria-label="Map legend"><span><svg width="30" height="10" aria-hidden="true"><defs><linearGradient id="mlgGrad" gradientUnits="userSpaceOnUse" x1="2" y1="0" x2="28" y2="0"><stop offset=".42" style="stop-color:oklch(var(--mesh-l) var(--mesh-c) 165)"/><stop offset=".58" style="stop-color:oklch(var(--mesh-l) var(--mesh-c) 330)"/></linearGradient></defs><path d="M2 5H28" stroke="url(#mlgGrad)" stroke-width="4" stroke-linecap="round"/></svg>direct link, in its two relays' colours</span><span><svg width="30" height="10" aria-hidden="true"><path d="M2 5H28" style="stroke:oklch(var(--mesh-l) var(--mesh-c) 237)" stroke-width="4.6" stroke-linecap="round"/><path d="M2 5H28" style="stroke:var(--mesh-ground)" stroke-width="1.3"/></svg>hub / standby link (last resort)</span><span><svg width="30" height="10" aria-hidden="true"><path d="M2 5H28" style="stroke:oklch(var(--mesh-l) var(--mesh-c) 165)" stroke-width="3" stroke-linecap="round" opacity=".55"/><path class="mlgflow" d="M2 5H28" style="stroke:oklch(var(--mesh-pl) var(--mesh-pc) 165)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="2.5 6.5"/></svg>traffic, one lane each way (faster, denser, thicker = more)</span><span><svg width="30" height="12" aria-hidden="true"><path class="mlgwarn" d="M2 6H28" style="stroke:var(--mesh-warn)" stroke-width="3" stroke-dasharray="14 4 2 4" stroke-linecap="round"/><path d="M15 0.5L20 9.5L10 9.5Z" style="fill:var(--mesh-warn);stroke:var(--mesh-ground)" stroke-width="1.2"/><text x="15" y="8.8" text-anchor="middle" font-size="7.5" font-weight="900" fill="#241900">!</text></svg>slow or flapping</span><span><svg width="30" height="12" aria-hidden="true"><path class="mlgdown" d="M2 6H28" style="stroke:var(--mesh-down)" stroke-width="3" stroke-dasharray="6 7"/><circle cx="15" cy="6" r="5" style="fill:var(--mesh-down);stroke:var(--mesh-ground)" stroke-width="1.2"/><text x="15" y="9" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">×</text></svg>down</span><span><svg width="30" height="10" aria-hidden="true"><path d="M2 5H28" style="stroke:var(--mesh-off)" stroke-width="2.4" stroke-dasharray="1.5 6" stroke-linecap="round"/></svg>off / not linked (click for why)</span><span><svg width="20" height="20" viewBox="-10 -10 20 20" aria-hidden="true"><circle r="4.5" style="fill:oklch(var(--mesh-fl) var(--mesh-fc) 237);stroke:oklch(var(--mesh-l) var(--mesh-c) 237)" stroke-width="1.5"/><circle r="6.6" pathLength="100" transform="rotate(-90)" fill="none" style="stroke:oklch(var(--mesh-l) var(--mesh-c) 237)" stroke-width="2" stroke-dasharray="40 100"/><circle r="9" pathLength="100" transform="rotate(-90)" fill="none" style="stroke:oklch(var(--mesh-ml) var(--mesh-mc) 237)" stroke-width="2" stroke-dasharray="65 100"/></svg>rings = load: inner in, outer out (deep = its clients, light = relay links)</span><span><svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><circle r="6" style="fill:var(--mesh-warn)"/><text y="3.5" text-anchor="middle" font-size="10" font-weight="800" fill="#1a1300">↑</text></svg>needs update</span><span class="zonly"><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><circle r="5" style="fill:oklch(var(--mesh-fl) var(--mesh-fc) 158);stroke:oklch(var(--mesh-l) var(--mesh-c) 158)" stroke-width="1.6"/></svg>person</span><span class="zonly"><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><rect x="-5" y="-5" width="10" height="10" rx="2" style="fill:oklch(var(--mesh-fl) var(--mesh-fc) 322);stroke:oklch(var(--mesh-l) var(--mesh-c) 322)" stroke-width="1.6"/></svg>box</span><span class="zonly"><svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><path d="M0 -6L6 0L0 6L-6 0Z" style="fill:oklch(var(--mesh-fl) var(--mesh-fc) 268);stroke:oklch(var(--mesh-l) var(--mesh-c) 268)" stroke-width="1.6"/></svg>web viewer</span></div>
         <div class="meshwrap" id="meshWrap"><button type="button" id="meshBack" class="ghost meshbtn l" hidden title="Back to the whole mesh (Escape)">← Full mesh</button><button type="button" id="meshArrange" class="ghost meshbtn r" title="Let go of the relays you moved and lay the map out again">Re-arrange</button><svg id="meshSvg" role="img" aria-label="Relay mesh: relays and the links between them"></svg><div class="meshtip" id="meshTip" hidden></div></div>
         <div id="meshPanel" class="meshpanel" hidden></div>
         <div class="meshhub"><span>Default hub and standby link cost</span><input type="number" id="meshHubCost" min="1" max="1000" step="1"><button type="button" id="meshHubSave" class="ghost">Set</button>
@@ -1789,6 +1846,7 @@
   const mesh = { data: null, sel: null, pos: {}, fsim: {}, zsim: {}, sim: null, w: 0, h: 0, alpha: 0, raf: 0, drag: null, els: null, topo: "", tip: null, draft: {}, formSig: "",
     zoom: null, zd: null, zoomFx: null, ztopo: "" };
   mesh.sim = mesh.fsim;
+  mesh.gid = 0; mesh.pool = null; mesh.flowT = 0;   // 0.21.79: gradient ids, the kept elements of the view on screen, the dots' clock
   { const m = /mesh=([a-z0-9-]+)/.exec(location.hash || ""); if (m) { mesh.zoom = m[1]; mesh.sel = { zoom: m[1] }; } }
   const SVGNS = "http://www.w3.org/2000/svg";
   const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1814,7 +1872,7 @@
     const a = meshName(l.a), b = meshName(meshB(l));
     const how = l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "direct (set by hand)" : "direct (private path found)";
     const st = meshState(l);
-    const lines = ["<b>" + esc(a) + " ⇄ " + esc(b) + "</b> <span class='dim'>" + esc(how) + "</span>"];
+    const lines = [meshDot(l.a) + "<b>" + esc(a) + "</b> ⇄ " + meshDot(meshB(l)) + "<b>" + esc(b) + "</b> <span class='dim'>" + esc(how) + "</span>"];   // 0.21.79: each relay's colour
     if (l.active && l.dialer) {   // 0.21.78: the bandwidth each way, measured where the link is accepted
       const dir = (from, to, bps, list) => esc(meshName(from)) + " → " + esc(meshName(to)) + ": <b>" + (l.bps ? fmtBps(bps || 0) : "…") + "</b>"
         + (list.length ? " · " + list.length + " stream" + (list.length === 1 ? "" : "s") + " <span class='dim'>(" + esc(list.slice(0, 4).map(shortPath).join(", ")) + (list.length > 4 ? ", …" : "") + ")</span>" : "");
@@ -1845,7 +1903,7 @@
   }
   function meshNodeTip(n) {
     const d = mesh.data || {};
-    return "<b>" + esc(n.name) + "</b> <span class='dim'>" + esc(n.role === "hub" ? "hub (this relay)" : n.role === "standby" ? "standby hub" : "spoke") + "</span><br>KASTR " + esc(n.version || "?")
+    return meshDot(n.id) + "<b>" + esc(n.name) + "</b> <span class='dim'>" + esc(n.role === "hub" ? "hub (this relay)" : n.role === "standby" ? "standby hub" : "spoke") + "</span><br>KASTR " + esc(n.version || "?")
       + (n.needsUpdate ? "<br><span style='color:var(--asi-amber)'>needs update to " + esc(d.minVersion) + " for direct links</span>" : "")
       + (n.stale ? "<br><span style='color:var(--asi-amber)'>not seen for " + esc(agoText(Date.now() / 1000 - (n.at || 0))) + "</span>" : "")
       + meshLoadHtml(n)
@@ -1856,7 +1914,7 @@
   // ---- the force-directed layout (0.21.78) ----
   const meshEdges = (d) => { const ids = new Set((d.nodes || []).map((n) => n.id)); return (d.links || []).filter((l) => ids.has(l.a) && ids.has(meshB(l))); };
   const meshR = (n) => n.zrole === "client" ? 10 : n.zrole === "relay" ? 11 : n.role === "hub" ? 22 : n.role === "standby" ? 18 : 14;
-  const meshHalfW = (n) => Math.max(meshR(n) + 4, String(n.name || "").length * 3.3 + 6, (n.version ? n.version.length + 1 : 0) * 2.9 + 6);
+  const meshHalfW = (n) => Math.max(meshR(n) + 12, String(n.name || "").length * 3.2 + 9, (n.version ? n.version.length + 1 : 0) * 2.9 + 6);   // 0.21.79: + the load rings and the name chip
   const meshHash = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 100003; return h / 100003; };
   const meshTopo = (d) => JSON.stringify([(d.nodes || []).map((n) => n.id + ":" + n.role), meshEdges(d).filter((l) => l.active).map(meshEdgeId)]);
   function meshSize() {
@@ -1865,8 +1923,18 @@
     if (w === mesh.w && h === mesh.h) return false;
     if (mesh.w) for (const S of [mesh.fsim, mesh.zsim]) for (const id in S) { S[id].x *= w / mesh.w; S[id].y *= h / mesh.h; }
     mesh.w = w; mesh.h = h;
-    svg.setAttribute("viewBox", "0 0 " + w + " " + h); svg.style.height = h + "px";
+    for (const s of [svg, meshBg()]) { s.setAttribute("viewBox", "0 0 " + w + " " + h); s.style.height = h + "px"; }
+    const cv = mesh.cv, dpr = mesh.dpr = Math.min(3, window.devicePixelRatio || 1);   // 0.21.79: the dots' canvas, as big as the map
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px";
     return true;
+  }
+  function meshBg() {   // 0.21.79: three layers -- the links (an SVG under), the traffic dots (a canvas), the relays / labels / hit areas (#meshSvg on top)
+    if (!mesh.bg) {
+      mesh.bg = document.createElementNS(SVGNS, "svg"); mesh.bg.setAttribute("class", "meshbg"); mesh.bg.setAttribute("aria-hidden", "true");
+      mesh.cv = document.createElement("canvas"); mesh.cv.className = "meshflow"; mesh.cv.setAttribute("aria-hidden", "true");
+      $("meshWrap").insertBefore(mesh.bg, $("meshSvg")); $("meshWrap").insertBefore(mesh.cv, $("meshSvg"));
+    }
+    return mesh.bg;
   }
   function meshSeed(d) {   // a new relay starts beside a relay it links to, else on a ring round the hub
     const cx = mesh.w / 2, cy = mesh.h / 2, R = Math.min(mesh.w, mesh.h) * 0.36, others = d.nodes.filter((n) => n.role !== "hub");
@@ -1881,7 +1949,8 @@
   }
   function meshTick(d) {
     const W = mesh.w, H = mesh.h, a = mesh.alpha, S = mesh.sim, cx = W / 2, cy = H / 2;
-    const ns = d.nodes.filter((n) => S[n.id]), base = Math.max(90, Math.min(W, H) * 0.44);
+    // 0.21.79: a wide box spreads the relays wider (their rings and name chips take room)
+    const ns = d.nodes.filter((n) => S[n.id]), base = Math.max(90, Math.min(W, H * 1.5) * 0.44), rep = 12000 * Math.min(2.2, Math.max(1, W * H / 260000));
     const fixed = (id) => (mesh.drag && mesh.drag.moved && mesh.drag.id === id) || Array.isArray(mesh.pos[id]);
     for (const l of meshEdges(d)) {   // springs: a direct link pulls hardest, the hub links hold the spokes round the hub, the standby links barely
       if (!l.active) continue;
@@ -1893,7 +1962,7 @@
     for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {   // every relay pushes the others away
       const p = S[ns[i].id], q = S[ns[j].id];
       let dx = q.x - p.x, dy = q.y - p.y; if (!dx && !dy) { dx = meshHash(ns[j].id) - 0.5; dy = 0.5 - meshHash(ns[i].id); }
-      const d2 = Math.max(dx * dx + dy * dy, 400), dist = Math.sqrt(d2), f = 12000 * a / d2;
+      const d2 = Math.max(dx * dx + dy * dy, 400), dist = Math.sqrt(d2), f = rep * a / d2;
       p.vx -= dx / dist * f; p.vy -= dy / dist * f; q.vx += dx / dist * f; q.vy += dy / dist * f;
     }
     for (const n of ns) {   // gravity: the hub (or the zoomed relay) to the middle, the rest gently inwards, the zoomed relay's other relays out
@@ -1905,7 +1974,7 @@
     for (let pass = 0; pass < 3; pass++) for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {   // labels never overlap
       const A = ns[i], B = ns[j], p = S[A.id], q = S[B.id];
       const ox = meshHalfW(A) + meshHalfW(B) + 6 - Math.abs(q.x - p.x);
-      const top = (n, s) => s.y - meshR(n) - 4, bot = (n, s) => s.y + meshR(n) + 30;
+      const top = (n, s) => s.y - meshR(n) - 10, bot = (n, s) => s.y + meshR(n) + 37;   // 0.21.79: the rings above, the name chip and version below
       const oy = Math.min(bot(A, p), bot(B, q)) - Math.max(top(A, p), top(B, q)) + 4;
       if (ox <= 0 || oy <= 0) continue;
       const fa = fixed(A.id) ? 0 : fixed(B.id) ? 1 : 0.5, fb = 1 - fa;
@@ -1914,7 +1983,7 @@
     }
     for (const n of ns) {   // inside the box, label and all
       const s = S[n.id], hw = meshHalfW(n), r = meshR(n);
-      s.x = Math.min(W - hw - 4, Math.max(hw + 4, s.x)); s.y = Math.min(H - r - 30, Math.max(r + 8, s.y));
+      s.x = Math.min(W - hw - 4, Math.max(hw + 4, s.x)); s.y = Math.min(H - r - 38, Math.max(r + 14, s.y));
     }
     mesh.alpha = a * 0.982;
   }
@@ -1929,57 +1998,263 @@
     }
     if (!mesh.raf) mesh.raf = requestAnimationFrame(meshFrame);
   }
-  function meshFrame() {
+  function meshFrame(ts) {   // 0.21.79: ONE loop -- the layout while it settles (or a relay is dragged), and the traffic dots while any link carries some
     mesh.raf = 0;
     const d = meshCur();
     if (!d) return;
-    meshTick(d); meshTick(d); meshPlace();
-    if (mesh.alpha > 0.015 || (mesh.drag && mesh.drag.moved)) mesh.raf = requestAnimationFrame(meshFrame); else mesh.alpha = 0;
+    const settling = mesh.alpha > 0.015 || !!(mesh.drag && mesh.drag.moved);
+    mesh.inFrame = true;
+    if (settling) { meshTick(d); meshTick(d); meshPlace(); if (!(mesh.alpha > 0.015 || (mesh.drag && mesh.drag.moved))) mesh.alpha = 0; }
+    mesh.inFrame = false;
+    const flowing = meshFlow(ts);
+    if (!flowing && settling) meshPaintFlow();
+    if (settling || flowing) mesh.raf = requestAnimationFrame(meshFrame);
   }
-  function meshRoot(svg) {   // one root group for the life of the page: a refresh mid-zoom keeps the zoom animation running on it
-    if (!mesh.root || mesh.root.parentNode !== svg) { svg.replaceChildren(); mesh.root = el("g", { class: "mroot" }, svg); } else mesh.root.replaceChildren();
-    return mesh.root;
+  // 0.21.79 (Kenton: "I want the mesh map to be more colorful and expressive"): every relay has a colour of its own -- the hub ASI
+  // blue, the standby violet, each spoke a steady hue from its name (never the red or amber that mean trouble) -- on its node, its
+  // name chip and its half of each of its links (a gradient between the two relays). Traffic runs along a link as dots in the
+  // sender's colour, one lane each way (right-hand traffic), faster, denser and thicker the more it carries; an idle link is thin
+  // and quiet. A relay's two rings fill like meters (inner = in, outer = out; deep = its own clients, light = relay links) and a
+  // busy relay glows. Health sits on top in colour AND pattern AND a mark: down = red, broken, pulsing, an x; slow / flapping =
+  // amber dash-dot shimmer, a !; off = grey dotted; needs update = an up-arrow badge. The elements are kept from refresh to
+  // refresh (keyed by link / relay), so widths, rings and states ease to their new values; one requestAnimationFrame loop moves
+  // the dots (dash offsets only -- no layout reads); reduced motion = nothing moves (an arrow each way, rate labels instead).
+  const MESH_KIND_HUE = { person: 158, box: 322, viewer: 268 };
+  // the OKLCH hues a spoke may take, each next one far from the last: clear of red and amber (trouble), the hub's blue (237), the standby's violet (300)
+  const MESH_HUES = [168, 262, 130, 330, 196, 282, 148, 345, 212, 182, 318];
+  function meshHues(nodes) {   // each spoke its own hue: the one its name hashes to, else the next free one (names in order) -- a site keeps its colour
+    const out = {}, used = new Set();
+    for (const n of (nodes || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)))) {
+      if (n.role === "hub" || n.role === "standby") continue;
+      let i = Math.floor(meshHash("hue/" + (n.name || n.id)) * MESH_HUES.length);
+      for (let k = 0; k < MESH_HUES.length && used.has(i); k++) i = (i + 1) % MESH_HUES.length;
+      used.add(i); out[n.id] = MESH_HUES[i];
+    }
+    return out;
   }
-  function meshBuild(d) {   // the elements, once per refresh; meshPlace() moves them every frame
-    const svg = $("meshSvg");
-    const root = meshRoot(svg), gE = el("g", {}, root), gL = el("g", {}, root), gN = el("g", {}, root);
-    const edges = meshEdges(d), pairs = {};
+  function meshHue(n) {
+    if (!n) return 220;
+    if (n.zrole === "client") return MESH_KIND_HUE[n.c?.kind] ?? 220;
+    const s = n.src || n;
+    if (s.role === "hub") return 237;
+    if (s.role === "standby") return 300;
+    return mesh.hues && mesh.hues[s.id] != null ? mesh.hues[s.id] : MESH_HUES[Math.floor(meshHash("hue/" + (s.name || s.id)) * MESH_HUES.length)];
+  }
+  const meshDot = (id) => "<i class='mdot' style='--h:" + meshHue(meshNode(id) || { id, name: meshName(id) }) + "'></i>";
+  const meshInitials = (s) => { const w = String(s || "").split(/[^A-Za-z0-9]+/).filter(Boolean); return (w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "").slice(0, 2)).toUpperCase(); };
+  const meshLog = (b) => Math.log2(1 + Math.max(0, b || 0) / 250000);   // 0 idle, 3.3 at 2.3 Mbit/s, 5.7 at 12 Mbit/s
+  const meshMeter = (b) => Math.min(1, Math.log2(1 + Math.max(0, b || 0) / 100000) / 10);   // a ring's fill: 2 Mbit/s = .44, 100 Mbit/s = full
+  const meshW = (st, kind, bw) => st === "none" ? 1.3 : (kind === "mesh" ? 2.4 : kind === "client" ? 1.6 : 3.4) + Math.min(8, 1.7 * meshLog(bw));
+  const meshQ = (x0, y0, cx, cy, x1, y1) => "M" + x0.toFixed(1) + " " + y0.toFixed(1) + " Q" + cx.toFixed(1) + " " + cy.toFixed(1) + " " + x1.toFixed(1) + " " + y1.toFixed(1);
+  function meshPool(key) {   // the layers of one view (the full mesh, or one zoomed relay): kept while it is on screen, started afresh for another
+    const svg = $("meshSvg"), bg = meshBg();
+    if (!mesh.root || mesh.root.parentNode !== svg) {   // one root per layer for the life of the page (the zoom animation runs on them)
+      svg.replaceChildren(); bg.replaceChildren(); mesh.root = el("g", { class: "mroot" }, svg); mesh.rootB = el("g", { class: "mroot" }, bg); mesh.pool = null;
+    }
+    if (!mesh.pool || mesh.pool.key !== key) {
+      for (const r of [mesh.root, mesh.rootB]) { r.replaceChildren(); r.classList.remove("mfocus"); }
+      const A = (c) => el("g", { class: c }, mesh.rootB), B = (c) => el("g", { class: c }, mesh.root);
+      mesh.pool = { key, defsA: el("defs", {}, mesh.rootB), gE: A("ml-e"), gS: A("ml-s"), defs: el("defs", {}, mesh.root), gF: B("ml-f"), gL: B("ml-l"), gH: B("ml-h"), gN: B("ml-n"),
+        edges: new Map(), nodes: new Map() };
+    }
+    return mesh.pool;
+  }
+  function meshEdgeMake(P, id) {
+    const e = { id, lanes: [], off: 0, w: 2 }, gid = "mshg" + (++mesh.gid);
+    e.grad = el("linearGradient", { id: gid, gradientUnits: "userSpaceOnUse" }, P.defsA);
+    e.stops = [0, 0.42, 0.58, 1].map((o) => el("stop", { offset: o, class: "mst" }, e.grad));
+    e.path = el("path", { class: "medge", stroke: "url(#" + gid + ")" }, P.gE);
+    e.stat = el("path", { class: "mstat" }, P.gS);
+    e.rail = el("path", { class: "mrail" }, P.gS);
+    // a lane: drawn on the canvas (no DOM write per frame); its arrow (reduced motion) stays an SVG mark
+    for (const dir of ["fwd", "back"]) e.lanes.push({ dir, o: 0, v: 0, vt: 0, a: 0, per: 20, dash: 2, gap: 18, lw: 2, hue: 237, on: false, g: null, arrow: el("path", { class: "marrow", d: "M-4 -3.4L4 0L-4 3.4Z" }, P.gF) });
+    e.badge = el("g", { class: "mbadge" }, P.gL); e.badgeP = el("path", {}, e.badge); e.badgeT = el("text", { y: 4 }, e.badge);
+    e.label = el("text", { class: "mrate" }, P.gL);
+    e.hit = el("path", { class: "mhit", "data-id": id }, P.gH);
+    e.parts = [e.path, e.stat, e.rail, e.badge, e.label, ...e.lanes.map((L) => L.arrow)];
+    for (const x of e.parts) x.setAttribute("data-e", "");
+    e.hit.addEventListener("pointerenter", (ev) => { mesh.tip = { [e.tipKey]: e.id }; meshTip(ev, e.tip(), e.hue); meshFocus(null, e); });
+    e.hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
+    e.hit.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; meshFocus(); });
+    e.hit.addEventListener("click", () => { if (e.click) e.click(); });
+    return e;
+  }
+  function meshEdgeSet(e, o) {   // o: {a, b, st, kind, bw, ha, hb, live, sel, cls, label, lanes: [{bps, from, hue}] (dialer -> acceptor, then back)}
+    e.a = o.a; e.b = o.b; e.st = o.st; e.hue = o.ha; e.bw = o.bw;
+    const w = e.w = meshW(o.st, o.kind, o.bw);
+    e.path.setAttribute("class", "medge st-" + o.st + " k-" + o.kind + (o.cls ? " " + o.cls : "") + (o.bw > 20000 ? "" : " idle") + (o.sel ? " sel" : ""));
+    e.path.style.strokeWidth = w.toFixed(1) + "px";
+    e.stat.setAttribute("class", "mstat st-" + o.st);
+    e.stat.style.strokeWidth = (o.st === "none" ? 1.3 : Math.max(2.4, w)).toFixed(1) + "px";
+    e.rail.setAttribute("class", "mrail" + ((o.kind === "hub" || o.kind === "standby") && o.st !== "none" ? " on" : ""));
+    e.stops.forEach((s, i) => s.style.setProperty("--h", i < 2 ? o.ha : o.hb));
+    e.ra = o.ra || 14; e.rb = o.rb || 14;
+    e.lanes.forEach((L, i) => {   // speed, dot size and spacing from the bitrate (log scale); a lane that stops fades out on the canvas
+      const f = o.lanes && o.lanes[i], on = !!(o.live && f && f.bps > 20000);
+      L.on = on; L.from = f ? f.from : null;
+      L.arrow.setAttribute("class", "marrow" + (on ? " on" : ""));
+      if (!on) { L.vt = 0; return; }
+      const g = meshLog(f.bps);
+      L.dash = 1 + Math.min(5, g * 0.9); L.per = Math.round(Math.max(11, 30 - 3.2 * g)); L.gap = L.per - L.dash;
+      L.vt = Math.min(140, 16 + 14 * g); if (!L.v) L.v = L.vt;
+      L.lw = 1.7 + Math.min(2.3, 0.45 * g); L.hue = f.hue;
+      L.arrow.style.setProperty("--h", f.hue);
+    });
+    e.badgeOn = o.st === "warn" || o.st === "down";
+    e.badge.setAttribute("class", "mbadge" + (e.badgeOn ? " " + o.st : ""));
+    if (e.badgeOn) { e.badgeP.setAttribute("d", o.st === "warn" ? "M0 -9L8.5 6L-8.5 6Z" : "M-7.5 0A7.5 7.5 0 1 0 7.5 0A7.5 7.5 0 1 0 -7.5 0Z"); e.badgeT.textContent = o.st === "warn" ? "!" : "×"; e.badgeT.setAttribute("y", o.st === "warn" ? 4.6 : 3.9); }
+    e.labelOn = !!o.label; e.label.textContent = o.label || ""; e.labelHW = String(o.label || "").length * 2.9;
+  }
+  function meshEdgeDrop(e) { for (const x of [e.grad, e.hit, ...e.parts]) x.remove(); e.lanes = []; }
+  function meshNodeMake(P, id, shape) {
+    const v = { id, shape };
+    v.g = el("g", { class: "mnode", "data-id": id }, P.gN);
+    v.rg = el("radialGradient", { id: "mshr" + (++mesh.gid) }, P.defs);
+    el("stop", { offset: 0, class: "mgs0" }, v.rg); el("stop", { offset: 1, class: "mgs1" }, v.rg);
+    v.glow = el("circle", { class: "mglow", fill: "url(#" + v.rg.id + ")" }, v.g);
+    v.halo = el("circle", { class: "halo" }, v.g);
+    v.rings = [0, 1].map(() => ({ track: el("circle", { class: "mtrack" }, v.g), loc: el("circle", { class: "marc loc", pathLength: 100, transform: "rotate(-90)" }, v.g),
+      lnk: el("circle", { class: "marc lnk", pathLength: 100, transform: "rotate(-90)" }, v.g) }));
+    v.body = el(shape === "rect" ? "rect" : shape === "diamond" ? "path" : "circle", { class: "body" }, v.g);
+    v.ic = el("text", { class: "ic", y: 3.6 }, v.g);
+    v.chip = el("rect", { class: "mchip", rx: 7.5, height: 15 }, v.g);
+    v.t1 = el("text", { class: "mname" }, v.g);
+    v.t2 = el("text", { class: "ver" }, v.g);
+    v.badge = el("g", { class: "mnb" }, v.g); el("circle", { r: 6.5 }, v.badge); v.badgeT = el("text", { y: 3.5 }, v.badge);
+    v.g.addEventListener("pointerenter", (ev) => { mesh.tip = { [v.tipKey]: v.id }; meshTip(ev, v.tip(), v.hue); meshFocus(v.id); });
+    v.g.addEventListener("pointermove", (ev) => meshTipMove(ev));
+    v.g.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; meshFocus(); });
+    v.g.addEventListener("pointerdown", (ev) => { mesh.drag = { id: v.id, moved: false, x: ev.clientX, y: ev.clientY }; meshFocus(); $("meshSvg").setPointerCapture?.(ev.pointerId); ev.preventDefault(); });
+    return v;
+  }
+  function meshNodeGet(P, id, shape) {
+    let v = P.nodes.get(id);
+    if (v && v.shape !== shape) { v.g.remove(); v.rg.remove(); v = null; }
+    if (!v) { v = meshNodeMake(P, id, shape); P.nodes.set(id, v); }
+    return v;
+  }
+  function meshNodeSet(v, o) {   // o: {r, hue, cls, ic, name, ver, load, halo, badge}
+    const r = o.r, L = o.load;
+    v.hue = o.hue; v.g.style.setProperty("--h", o.hue); v.rg.style.setProperty("--h", o.hue);
+    if (v.shape === "rect") { for (const [k, x] of [["x", -r], ["y", -r], ["width", 2 * r], ["height", 2 * r], ["rx", 3.5]]) v.body.setAttribute(k, x); }
+    else if (v.shape === "diamond") { const k = (r * 1.25).toFixed(1); v.body.setAttribute("d", "M0 -" + k + "L" + k + " 0L0 " + k + "L-" + k + " 0Z"); }
+    else v.body.setAttribute("r", r);
+    v.halo.setAttribute("r", r + 13); v.halo.style.display = o.halo ? "" : "none";
+    const f = L ? meshMeter((L.total?.in || 0) + (L.total?.out || 0)) : 0;
+    v.g.setAttribute("class", "mnode " + o.cls + (f > 0.5 ? " busy" : ""));
+    v.glow.setAttribute("r", r + 26); v.glow.style.opacity = L ? (0.1 + 0.8 * f).toFixed(2) : "0";
+    [[L?.total?.in, L?.local?.in], [L?.total?.out, L?.local?.out]].forEach(([t, loc], i) => {
+      const R = v.rings[i], fr = meshMeter(t) * 100, sl = t > 0 ? Math.min(1, Math.max(0, (loc || 0) / t)) : 0;
+      for (const c of [R.track, R.loc, R.lnk]) { c.setAttribute("r", r + 4 + i * 4); c.style.display = L ? "" : "none"; }
+      R.loc.style.strokeDasharray = (fr * sl).toFixed(1) + " 100";
+      R.lnk.style.strokeDasharray = (fr * (1 - sl)).toFixed(1) + " 100";
+      R.lnk.style.strokeDashoffset = (-fr * sl).toFixed(1);
+    });
+    v.ic.textContent = o.ic || "";
+    const nm = String(o.name || ""), cw = Math.max(26, nm.length * 6.4 + 14);
+    for (const [k, x] of [["x", (-cw / 2).toFixed(1)], ["y", r + 11], ["width", cw.toFixed(1)]]) v.chip.setAttribute(k, x);
+    v.t1.textContent = nm; v.t1.setAttribute("y", r + 22);
+    v.t2.textContent = o.ver || ""; v.t2.setAttribute("y", r + 34);
+    v.badge.setAttribute("class", "mnb" + (o.badge ? " " + o.badge : ""));
+    v.badge.setAttribute("transform", "translate(" + (r * 0.8).toFixed(1) + " " + (-r * 0.8).toFixed(1) + ")");
+    v.badgeT.textContent = o.badge === "upd" ? "↑" : o.badge === "stale" ? "!" : "";
+  }
+  function meshPrune(P, seenE, seenN) {
+    for (const [id, e] of P.edges) if (!seenE.has(id)) { meshEdgeDrop(e); P.edges.delete(id); }
+    for (const [id, v] of P.nodes) if (!seenN.has(id)) { v.g.remove(); v.rg.remove(); P.nodes.delete(id); }
+    mesh.els = { edges: [...P.edges.values()], nodes: [...P.nodes.values()], root: mesh.root };
+  }
+  function meshFocus(id, edge) {   // hovering a relay lights its links and neighbours, a link its two ends; the rest steps back
+    const P = mesh.pool;
+    if (!P || !mesh.root) return;
+    const on = !!(id || edge) && !(mesh.drag && mesh.drag.moved), keep = new Set(on ? [id, edge && edge.a, edge && edge.b].filter(Boolean) : []);
+    mesh.focus = on;
+    for (const r of [mesh.root, mesh.rootB]) r.classList.toggle("mfocus", on);
+    for (const e of P.edges.values()) {
+      const h = e.hl = on && (edge ? e === edge : (e.a === id || e.b === id) && e.st !== "none");
+      if (h && !edge) { keep.add(e.a); keep.add(e.b); }
+      for (const x of e.parts) x.toggleAttribute("data-hl", h);
+    }
+    for (const v of P.nodes.values()) v.g.toggleAttribute("data-hl", keep.has(v.id));
+    if (!mesh.raf) meshPaintFlow();
+  }
+  function meshFlow(ts) {   // the dots: each lane's dash offset moves at its own speed, eased toward the newest bitrate; a lane fades in and out
+    const els = mesh.els;
+    if (!els || reduceMotion() || document.hidden) { mesh.flowT = 0; return false; }
+    const dt = mesh.flowT && ts ? Math.min(0.1, (ts - mesh.flowT) / 1000) : 0;
+    mesh.flowT = ts || 0;
+    let any = false;
+    for (const e of els.edges) for (const L of e.lanes) {
+      const want = L.on ? 0.95 : 0;
+      if (!L.on && L.a < 0.01) { L.a = 0; continue; }
+      any = true;
+      L.a += (want - L.a) * Math.min(1, dt * 2.5);
+      L.v += (L.vt - L.v) * Math.min(1, dt * 1.5);
+      L.o = (L.o - L.v * dt) % L.per;   // whole dash periods dropped: no jump
+    }
+    if (!any || !mesh.paintT || ts - mesh.paintT > 30) { mesh.paintT = ts; meshPaintFlow(); }   // the dots repaint at up to ~30 a second (plenty at these speeds; half the work)
+    if (!any) mesh.flowT = 0;
+    return any;
+  }
+  function meshTokens() {   // the dots' colour tokens (the canvas cannot read CSS variables): read again on a refresh and on a theme change
+    const cs = getComputedStyle($("linksBox"));
+    mesh.tok = { pl: cs.getPropertyValue("--mesh-pl").trim() || ".93", pc: cs.getPropertyValue("--mesh-pc").trim() || ".09" };
+  }
+  new MutationObserver(() => { meshTokens(); if (!mesh.raf) meshPaintFlow(); }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-palette", "style"] });
+  function meshPaintFlow() {   // one canvas pass: every lane a dashed curve (dots, round caps) at its offset
+    const cv = mesh.cv, els = mesh.els;
+    if (!cv) return;
+    const ctx = cv.getContext("2d"), dpr = mesh.dpr || 1, T = mesh.tok || {}, rm = reduceMotion();
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!els) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.lineCap = "round";
+    for (const e of els.edges) for (const L of e.lanes) {
+      if (rm) { L.a = L.on ? 0.95 : 0; L.o = 0; }   // reduced motion: the dots stand still (an arrow shows the way)
+      if (L.a < 0.01 || !L.g) continue;
+      const g = L.g, len = Math.hypot(g[4] - g[0], g[5] - g[1]) * 1.02 + 1;   // ~ its length (a link bends little, so t is ~ proportional to distance)
+      const at = (s) => { const t = Math.max(0, Math.min(1, s / len)), u = 1 - t; return [u * u * g[0] + 2 * u * t * g[2] + t * t * g[4], u * u * g[1] + 2 * u * t * g[3] + t * t * g[5]]; };
+      let s = (-L.o) % L.per; if (s < 0) s += L.per;
+      if (s - L.per + L.dash > 0) s -= L.per;   // the dot just leaving the start
+      ctx.globalAlpha = L.a * (mesh.focus && !e.hl ? 0.1 : 1);
+      ctx.strokeStyle = "oklch(" + T.pl + " " + T.pc + " " + L.hue + ")";
+      ctx.lineWidth = L.lw;
+      ctx.beginPath();   // every dot of a lane in one stroke (short round-capped segments -- no dash pattern to compute)
+      for (; s < len; s += L.per) { const p = at(s), q = at(s + L.dash); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  function meshKick() { if (!mesh.raf && !reduceMotion() && !document.hidden && mesh.els && mesh.els.edges.some((e) => e.lanes.some((L) => L.on || L.a > 0.01))) mesh.raf = requestAnimationFrame(meshFrame); }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) meshKick(); });
+  function meshBuild(d) {   // the elements, kept from refresh to refresh (0.21.79); meshPlace() moves them
+    const P = meshPool("full"), edges = meshEdges(d), pairs = {}, seenE = new Set(), seenN = new Set(), rm = reduceMotion();
+    meshTokens();
     for (const l of edges) { const k = [l.a, meshB(l)].sort().join("|"); (pairs[k] = pairs[k] || []).push(l); }
-    const els = { edges: [], nodes: [], root };
     for (const l of edges) {
       const grp = pairs[[l.a, meshB(l)].sort().join("|")], i = grp.indexOf(l), off = (i - (grp.length - 1) / 2) * 20 * ([l.a, meshB(l)].sort()[0] === l.a ? 1 : -1);
       const id = meshEdgeId(l), st = meshState(l), bw = meshBw(l), live = st !== "down" && st !== "off" && st !== "none";
-      const wdt = (st === "none" ? 1.5 : l.kind === "mesh" ? 2.5 : 2) + (bw > 0 ? Math.min(8, 1.8 * Math.log2(1 + bw / 250000)) : 0);
-      const e = { l, id, off, flows: [] };
-      e.path = el("path", { class: "medge st-" + st + " k-" + l.kind + (mesh.sel?.edge === id ? " sel" : ""), "stroke-width": wdt.toFixed(1) }, gE);
-      const fw = l.bps ? (l.bps.fwd || 0) > 20000 : (l.streams?.fwd || []).length > 0, bk = l.bps ? (l.bps.back || 0) > 20000 : (l.streams?.back || []).length > 0;
-      if (live && fw) e.flows.push(el("path", { class: "mflow" + (l.dialer === l.a ? "" : " rev"), "stroke-width": 2 }, gE));
-      if (live && bk) e.flows.push(el("path", { class: "mflow" + (l.dialer === l.a ? " rev" : ""), "stroke-width": 2 }, gE));
-      if (bw >= 50000 && live) { e.label = el("text", { class: "mrate" }, gL); e.label.textContent = fmtBps(bw); }
-      e.hit = el("path", { class: "mhit", "data-id": id }, gE);
-      e.hit.addEventListener("pointerenter", (ev) => { mesh.tip = { edge: id }; meshTip(ev, meshTipHtml(l)); });
-      e.hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
-      e.hit.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
-      e.hit.addEventListener("click", () => { mesh.sel = { edge: id }; paintMeshPanel(); meshBuild(mesh.data); meshPlace(); });
-      els.edges.push(e);
+      const b = meshB(l), ha = meshHue(meshNode(l.a)), hb = meshHue(meshNode(b));
+      const from = l.dialer === b ? b : l.a, to = from === l.a ? b : l.a;   // fwd = dialer -> acceptor
+      const dir = (k) => l.bps ? (l.bps[k] || 0) : (l.streams?.[k] || []).length ? 300000 : 0;
+      let e = P.edges.get(id);
+      if (!e) { e = meshEdgeMake(P, id); P.edges.set(id, e); }
+      seenE.add(id);
+      e.l = l; e.off = off; e.tipKey = "edge"; e.tip = () => meshTipHtml(e.l);
+      e.click = () => { mesh.sel = { edge: id }; paintMeshPanel(); meshBuild(mesh.data); meshPlace(); };
+      meshEdgeSet(e, { a: l.a, b, st, kind: l.kind, bw, ha, hb, live, sel: mesh.sel?.edge === id, ra: meshR(meshNode(l.a)), rb: meshR(meshNode(b)),
+        lanes: [{ bps: dir("fwd"), from, hue: from === l.a ? ha : hb }, { bps: dir("back"), from: to, hue: to === l.a ? ha : hb }],
+        label: live && bw >= (rm ? 20000 : 50000) ? fmtBps(bw) : "" });
     }
     for (const n of d.nodes) {
       if (!mesh.sim[n.id]) continue;
-      const r = meshR(n), pinned = Array.isArray(mesh.pos[n.id]);
-      const g = el("g", { class: "mnode r-" + n.role + (n.stale ? " stale" : "") + (mesh.sel?.node === n.id ? " sel" : "") + (pinned ? " pinned" : ""), "data-id": n.id }, gN);
-      if (n.role === "hub") el("circle", { class: "halo", r: r + 6 }, g);
-      el("circle", { class: "body", r }, g);
-      if (n.role !== "spoke") { const ic = el("text", { class: "ic", y: 4 }, g); ic.textContent = n.role === "hub" ? "HUB" : "SB"; }
-      const t1 = el("text", { y: r + 13 }, g); t1.textContent = n.name;
-      const t2 = el("text", { class: "ver", y: r + 25 }, g); t2.textContent = n.version ? "v" + n.version : "";
-      if (n.needsUpdate || n.stale) { el("circle", { class: "badge", cx: r * 0.75, cy: -r * 0.75, r: 6 }, g); const b = el("text", { class: "bang", x: r * 0.75, y: -r * 0.75 + 3.5 }, g); b.textContent = "!"; }
-      g.addEventListener("pointerenter", (ev) => { mesh.tip = { node: n.id }; meshTip(ev, meshNodeTip(n)); });
-      g.addEventListener("pointermove", (ev) => meshTipMove(ev));
-      g.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
-      g.addEventListener("pointerdown", (ev) => { mesh.drag = { id: n.id, moved: false, x: ev.clientX, y: ev.clientY }; svg.setPointerCapture?.(ev.pointerId); ev.preventDefault(); });
-      els.nodes.push({ n, g });
+      const v = meshNodeGet(P, n.id, "circle");
+      seenN.add(n.id);
+      v.n = n; v.tipKey = "node"; v.tip = () => meshNodeTip(v.n);
+      meshNodeSet(v, { r: meshR(n), hue: meshHue(n), load: n.load, halo: n.role === "hub", name: n.name, ver: n.version ? "v" + n.version : "",
+        ic: n.role === "hub" ? "HUB" : n.role === "standby" ? "SB" : meshInitials(n.name), badge: n.needsUpdate ? "upd" : n.stale ? "stale" : "",
+        cls: "r-" + n.role + (n.stale ? " stale" : "") + (mesh.sel?.node === n.id ? " sel" : "") + (Array.isArray(mesh.pos[n.id]) ? " pinned" : "") });
     }
-    mesh.els = els;
+    meshPrune(P, seenE, seenN);
     if (mesh.tip) {   // the hovered link or relay keeps its tooltip, with the fresh numbers
       const t = $("meshTip"), l = mesh.tip.edge && edges.find((x) => meshEdgeId(x) === mesh.tip.edge), n = mesh.tip.node && meshNode(mesh.tip.node);
       if (l) t.innerHTML = meshTipHtml(l); else if (n) t.innerHTML = meshNodeTip(n); else { mesh.tip = null; t.hidden = true; }
@@ -1989,17 +2264,50 @@
     const els = mesh.els, S = mesh.sim;
     if (!els) return;
     for (const e of els.edges) {
-      const p = S[e.l.a], q = S[meshB(e.l)]; if (!p || !q) continue;
-      const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2, len = Math.hypot(q.x - p.x, q.y - p.y) || 1, nx = -(q.y - p.y) / len, ny = (q.x - p.x) / len;
-      const dd = "M" + p.x.toFixed(1) + " " + p.y.toFixed(1) + " Q" + (mx + nx * e.off * 2).toFixed(1) + " " + (my + ny * e.off * 2).toFixed(1) + " " + q.x.toFixed(1) + " " + q.y.toFixed(1);
-      e.path.setAttribute("d", dd); e.hit.setAttribute("d", dd);
-      for (const f of e.flows) f.setAttribute("d", dd);
-      if (e.label) { e.label.setAttribute("x", (mx + nx * e.off).toFixed(1)); e.label.setAttribute("y", (my + ny * e.off - 5).toFixed(1)); }
+      const p = S[e.a], q = S[e.b]; if (!p || !q) continue;
+      const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+      const cx = (p.x + q.x) / 2 + nx * e.off * 2, cy = (p.y + q.y) / 2 + ny * e.off * 2, dd = meshQ(p.x, p.y, cx, cy, q.x, q.y);
+      e.path.setAttribute("d", dd); e.stat.setAttribute("d", dd); e.rail.setAttribute("d", dd); e.hit.setAttribute("d", dd);
+      e.grad.setAttribute("x1", p.x.toFixed(1)); e.grad.setAttribute("y1", p.y.toFixed(1)); e.grad.setAttribute("x2", q.x.toFixed(1)); e.grad.setAttribute("y2", q.y.toFixed(1));
+      const k = e.w * 0.3 + 1.2;
+      for (const L of e.lanes) {   // each way its own lane, on the right of its direction of travel, from the edge of one relay's rings to the other's
+        if (!L.on && L.a < 0.01) continue;
+        const fwd = L.from !== e.b, s = fwd ? k : -k, A = fwd ? p : q, B = fwd ? q : p;
+        const ax = A.x + nx * s, ay = A.y + ny * s, bx = B.x + nx * s, by = B.y + ny * s, kx = cx + nx * s, ky = cy + ny * s;
+        const t0 = Math.min(0.45, ((fwd ? e.ra : e.rb) + 10) / len), t1 = 1 - Math.min(0.45, ((fwd ? e.rb : e.ra) + 10) / len);
+        const at = (t) => { const u = 1 - t; return [u * u * ax + 2 * u * t * kx + t * t * bx, u * u * ay + 2 * u * t * ky + t * t * by]; };
+        const [x0, y0] = at(t0), [x1, y1] = at(t1), w0 = (1 - t0) * (1 - t1), w1 = (1 - t0) * t1 + t0 * (1 - t1), w2 = t0 * t1;
+        L.g = [x0, y0, w0 * ax + w1 * kx + w2 * bx, w0 * ay + w1 * ky + w2 * by, x1, y1];   // the part of the curve between t0 and t1
+        const t = 0.3, u = 1 - t, [px, py] = at(t), tx = 2 * u * (kx - ax) + 2 * t * (bx - kx), ty = 2 * u * (ky - ay) + 2 * t * (by - ky);
+        L.arrow.setAttribute("transform", "translate(" + px.toFixed(1) + " " + py.toFixed(1) + ") rotate(" + (Math.atan2(ty, tx) * 180 / Math.PI).toFixed(0) + ")");
+      }
+      const mx = (p.x + q.x) / 2 + nx * e.off, my = (p.y + q.y) / 2 + ny * e.off;
+      e.mx = mx; e.my = my;
+      if (e.badgeOn) e.badge.setAttribute("transform", "translate(" + mx.toFixed(1) + " " + my.toFixed(1) + ")");
+      if (e.labelOn) {   // beside the line (above it), clear of the lanes and the badge
+        const sg = ny > 0 ? -1 : 1, g = e.w / 2 + (e.badgeOn ? 14 : 8) + Math.abs(nx) * e.labelHW;
+        e.lx = mx + nx * sg * g; e.ly = my + ny * sg * g + 3.5;
+        e.label.setAttribute("x", e.lx.toFixed(1)); e.label.setAttribute("y", e.ly.toFixed(1));
+      }
     }
-    for (const v of els.nodes) { const s = S[v.n.id]; if (s) v.g.setAttribute("transform", "translate(" + s.x.toFixed(1) + " " + s.y.toFixed(1) + ")"); }
+    const boxes = [];   // 0.21.79: a rate label that would sit on a relay or on a busier link's label is left out (the tooltip has it)
+    for (const v of els.nodes) {
+      const s = S[v.id]; if (!s) continue;
+      v.g.setAttribute("transform", "translate(" + s.x.toFixed(1) + " " + s.y.toFixed(1) + ")");
+      const r = meshR(v.n), hw = Math.max(r + 9, String(v.n.name || "").length * 3.2 + 7);
+      boxes.push([s.x - hw, s.y - r - 9, s.x + hw, s.y + r + 27]);
+    }
+    for (const e of els.edges) if (e.badgeOn && e.mx != null) boxes.push([e.mx - 10, e.my - 10, e.mx + 10, e.my + 10]);   // and never on a link's ! or x
+    for (const e of els.edges.filter((x) => x.labelOn && x.lx != null).sort((x, y) => (y.bw || 0) - (x.bw || 0))) {
+      const b = [e.lx - e.labelHW - 2, e.ly - 9, e.lx + e.labelHW + 2, e.ly + 2], hit = boxes.some((o) => b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3]);
+      e.label.setAttribute("visibility", hit ? "hidden" : "visible");
+      if (!hit) boxes.push(b);
+    }
+    if (!mesh.inFrame) meshPaintFlow();   // (inside the loop the dots are painted once, after)
   }
   function meshDraw(d) {
     const resized = meshSize();
+    $("linksBox").classList.toggle("zoomed", !!(mesh.zoom && d.zoom));   // 0.21.79: the legend adds the client kinds
     if (mesh.zoom && d.zoom) {   // one relay zoomed: it in the middle, its clients round it, its other relays out at the edge
       const zd = mesh.zd = meshZoomData(d);
       mesh.sim = mesh.zsim;
@@ -2012,6 +2320,7 @@
       mesh.ztopo = topo;
       meshBuildZoom(zd);
       if (changed) meshRun(1); else if (resized) meshRun(0.35); else meshPlace();
+      meshKick();
       return;
     }
     mesh.zd = null; mesh.sim = mesh.fsim;
@@ -2020,6 +2329,7 @@
     mesh.topo = topo;
     meshBuild(d);
     if (changed) meshRun(first ? 1 : 0.6); else if (resized) meshRun(0.35); else meshPlace();
+    meshKick();
   }
   // ---- 0.21.78: the zoomed relay ----
   const ZKIND = { person: "person (KASTR app)", box: "camera / relay box", viewer: "web viewer" };
@@ -2053,7 +2363,7 @@
   }
   function meshClientTip(c) {
     const nm = c.nick || c.name || c.hostname || c.node, n = c.net, ago = (t) => t ? agoText(Date.now() / 1000 - t) : "";
-    return "<b>" + esc(nm) + "</b> <span class='dim'>" + esc(ZKIND[c.kind] || c.kind) + "</span>"
+    return "<i class='mdot' style='--h:" + (MESH_KIND_HUE[c.kind] ?? 220) + "'></i><b>" + esc(nm) + "</b> <span class='dim'>" + esc(ZKIND[c.kind] || c.kind) + "</span>"
       + (c.nick && c.name && c.nick !== c.name ? "<br>name: " + esc(c.name) : "")
       + (c.hostname || c.user ? "<br><span class='dim'>" + esc([c.hostname, c.user].filter(Boolean).join(" · ")) + "</span>" : "")
       + (c.version ? "<br>KASTR " + esc(c.version) + (c.platform ? " · " + esc(c.platform) : "") : "")
@@ -2071,54 +2381,46 @@
       + (z.needsUpdate ? "<br><span style='color:var(--asi-amber)'>per-stream figures need KASTR " + esc(mesh.data?.liveVersion || "0.21.78") + " on this relay</span>" : "");
   }
   function meshBuildZoom(zd) {
-    const svg = $("meshSvg");
-    const root = meshRoot(svg), gE = el("g", {}, root), gL = el("g", {}, root), gN = el("g", {}, root);
-    const els = { edges: [], nodes: [], root };
+    const P = meshPool("zoom:" + zd.me.id), seenE = new Set(), seenN = new Set(), rm = reduceMotion(), hc = meshHue(zd.nodes[0]);
+    meshTokens();
+    const hueOf = (id) => meshHue(zd.nodes.find((n) => n.id === id));
     for (const z of zd.links) {
-      const e = { l: z, id: z.id, off: 0, flows: [] };
+      let e = P.edges.get(z.id);
+      if (!e) { e = meshEdgeMake(P, z.id); P.edges.set(z.id, e); }
+      seenE.add(z.id);
+      e.z = z; e.off = 0; e.tipKey = "zedge"; e.click = null;
       if (z.kind === "relay") {   // to its other relays: the link's own state, width and flow
-        const l = z.l, st = meshState(l), bw = meshBw(l), fwdOut = (l.dialer === zd.me.id);
-        e.path = el("path", { class: "medge st-" + st + " k-" + l.kind, "stroke-width": ((l.kind === "mesh" ? 2.5 : 2) + (bw > 0 ? Math.min(8, 1.8 * Math.log2(1 + bw / 250000)) : 0)).toFixed(1) }, gE);
-        if (l.bps && (l.bps.fwd || 0) > 20000) e.flows.push(el("path", { class: "mflow" + (fwdOut ? "" : " rev"), "stroke-width": 2 }, gE));
-        if (l.bps && (l.bps.back || 0) > 20000) e.flows.push(el("path", { class: "mflow" + (fwdOut ? " rev" : ""), "stroke-width": 2 }, gE));
-        if (bw >= 50000) { e.label = el("text", { class: "mrate" }, gL); e.label.textContent = fmtBps(bw); }
-        e.tip = () => meshTipHtml(l);
-      } else {                    // to a client: as thick as what it sends and receives
-        const c = z.c, up = (c.upBps !== undefined ? c.upBps : (c.net?.up ?? c.bps)) ?? 0, down = (c.downBps !== undefined ? c.downBps : c.net?.down) ?? 0, bw = up + down;   // 0.21.78 (E): upBps / downBps
-        e.path = el("path", { class: "medge zc zk-" + c.kind + (bw ? "" : " zidle"), "stroke-width": (1.5 + (bw > 0 ? Math.min(7, 1.6 * Math.log2(1 + bw / 250000)) : 0)).toFixed(1) }, gE);
-        if (up > 20000) e.flows.push(el("path", { class: "mflow rev", "stroke-width": 2 }, gE));
-        if (down > 20000) e.flows.push(el("path", { class: "mflow", "stroke-width": 2 }, gE));
-        e.tip = () => meshClientTip(c);
+        const l = z.l, st = meshState(l), bw = meshBw(l), ho = hueOf(z.b), out = l.dialer === zd.me.id, live = st !== "down" && st !== "off" && st !== "none";
+        const dir = (k) => l.bps ? (l.bps[k] || 0) : 0;
+        e.tip = () => meshTipHtml(e.z.l);
+        meshEdgeSet(e, { a: z.a, b: z.b, st, kind: l.kind, bw, ha: hc, hb: ho, live, ra: 22, rb: 11,
+          lanes: [{ bps: dir("fwd"), from: out ? z.a : z.b, hue: out ? hc : ho }, { bps: dir("back"), from: out ? z.b : z.a, hue: out ? ho : hc }],
+          label: live && bw >= (rm ? 20000 : 50000) ? fmtBps(bw) : "" });
+      } else {                    // to a client: as thick as what it sends and receives; down in the relay's colour, up in the client's
+        const c = z.c, up = (c.upBps !== undefined ? c.upBps : (c.net?.up ?? c.bps)) ?? 0, down = (c.downBps !== undefined ? c.downBps : c.net?.down) ?? 0, hk = MESH_KIND_HUE[c.kind] ?? 220;
+        e.tip = () => meshClientTip(e.z.c);
+        meshEdgeSet(e, { a: z.a, b: z.b, st: "up", kind: "client", bw: up + down, ha: hc, hb: hk, live: true, ra: 22, rb: 4, cls: "zc zk-" + c.kind + (up + down ? "" : " zidle"),
+          lanes: [{ bps: down, from: z.a, hue: hc }, { bps: up, from: z.b, hue: hk }], label: rm && up + down >= 20000 ? fmtBps(up + down) : "" });
       }
-      e.hit = el("path", { class: "mhit", "data-id": z.id }, gE);
-      e.hit.addEventListener("pointerenter", (ev) => { mesh.tip = { zedge: z.id }; meshTip(ev, e.tip()); });
-      e.hit.addEventListener("pointermove", (ev) => meshTipMove(ev));
-      e.hit.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
-      els.edges.push(e);
     }
     for (const n of zd.nodes) {
-      const r = meshR(n), cls = n.zrole === "client" ? "zk-" + n.c.kind : "r-" + (n.src?.role || "spoke");
-      const g = el("g", { class: "mnode z-" + n.zrole + " " + cls + (mesh.sel?.client === n.id ? " sel" : ""), "data-id": n.id }, gN);
-      if (n.zrole === "center") el("circle", { class: "halo", r: r + 6 }, g);
-      el("circle", { class: "body", r }, g);
-      const ic = el("text", { class: "ic", y: n.zrole === "center" ? 4 : 3.5 }, g);
-      ic.textContent = n.zrole === "client" ? ({ person: "P", box: "B", viewer: "W" }[n.c.kind] || "?") : n.src?.role === "hub" ? "HUB" : n.src?.role === "standby" ? "SB" : "";
-      const t1 = el("text", { y: r + 13 }, g); t1.textContent = n.name;
-      const t2 = el("text", { class: "ver", y: r + 25 }, g); t2.textContent = n.version || "";
-      const tip = () => n.zrole === "client" ? meshClientTip(n.c) : n.zrole === "center" ? meshCenterTip(zd) : (n.src ? meshNodeTip(n.src) : esc(n.name)) + "<br><span class='dim'>click to zoom to it</span>";
-      g.addEventListener("pointerenter", (ev) => { mesh.tip = { znode: n.id }; meshTip(ev, tip()); });
-      g.addEventListener("pointermove", (ev) => meshTipMove(ev));
-      g.addEventListener("pointerleave", () => { mesh.tip = null; $("meshTip").hidden = true; });
-      g.addEventListener("pointerdown", (ev) => { mesh.drag = { id: n.id, moved: false, x: ev.clientX, y: ev.clientY }; svg.setPointerCapture?.(ev.pointerId); ev.preventDefault(); });
-      els.nodes.push({ n, g, tip });
+      const cl = n.zrole === "client", v = meshNodeGet(P, n.id, cl ? ({ box: "rect", viewer: "diamond" }[n.c.kind] || "circle") : "circle");
+      seenN.add(n.id);
+      v.n = n; v.tipKey = "znode";
+      v.tip = () => v.n.zrole === "client" ? meshClientTip(v.n.c) : v.n.zrole === "center" ? meshCenterTip(mesh.zd || zd) : (v.n.src ? meshNodeTip(v.n.src) : esc(v.n.name)) + "<br><span class='dim'>click to zoom to it</span>";
+      meshNodeSet(v, { r: meshR(n), hue: meshHue(n), load: n.zrole === "center" ? n.src?.load : null, halo: n.zrole === "center", name: n.name, ver: n.version || "",
+        ic: cl ? ({ person: "P", box: "B", viewer: "W" }[n.c.kind] || "?") : n.src?.role === "hub" ? "HUB" : n.src?.role === "standby" ? "SB" : meshInitials(n.name),
+        badge: !cl && n.src?.needsUpdate ? "upd" : "", cls: "z-" + n.zrole + " " + (cl ? "zk-" + n.c.kind : "r-" + (n.src?.role || "spoke")) + (mesh.sel?.client === n.id ? " sel" : "") });
     }
-    mesh.els = els;
+    meshPrune(P, seenE, seenN);
+    const els = mesh.els;
     if (mesh.tip) {   // the hovered client / link keeps its tooltip, with the fresh numbers
       const t = $("meshTip"), e = mesh.tip.zedge && els.edges.find((x) => x.id === mesh.tip.zedge), v = mesh.tip.znode && els.nodes.find((x) => x.n.id === mesh.tip.znode);
       if (e) t.innerHTML = e.tip(); else if (v) t.innerHTML = v.tip(); else if (mesh.tip.zedge || mesh.tip.znode || mesh.tip.edge || mesh.tip.node) { mesh.tip = null; t.hidden = true; }
     }
-    meshZoomFx(root);
+    meshZoomFx(mesh.root);
   }
+  window.__meshFlow = () => (mesh.els ? mesh.els.edges : []).flatMap((e) => e.lanes.filter((L) => L.on).map((L) => ({ edge: e.id, from: L.from, v: +L.v.toFixed(1), o: +L.o.toFixed(1), a: +L.a.toFixed(2), hue: L.hue })));   // rig (0.21.79)
   function meshZoomFx(root) {   // the zoom itself: in = the relay's spot grows to fill the box; out = the box shrinks back to it
     const fx = mesh.zoomFx;
     mesh.zoomFx = null;
@@ -2126,8 +2428,12 @@
     const cx = mesh.w / 2, cy = mesh.h / 2, [px, py] = fx.p0;
     const from = fx.dir === "in" ? "translate(" + px + "px," + py + "px) scale(0.3) translate(" + (-cx) + "px," + (-cy) + "px)"
       : "translate(" + cx + "px," + cy + "px) scale(2.6) translate(" + (-px) + "px," + (-py) + "px)";
-    root.style.transformOrigin = "0 0";
-    root.animate([{ transform: from, opacity: 0.2 }, { transform: "translate(0px,0px) scale(1)", opacity: 1 }], { duration: 520, easing: "cubic-bezier(.2,.7,.2,1)" });
+    for (const r of [root, mesh.rootB]) {   // 0.21.79: both SVG layers move together; the dots' canvas waits for the view to land
+      if (!r) continue;
+      r.style.transformOrigin = "0 0";
+      r.animate([{ transform: from, opacity: 0.2 }, { transform: "translate(0px,0px) scale(1)", opacity: 1 }], { duration: 520, easing: "cubic-bezier(.2,.7,.2,1)" });
+    }
+    mesh.cv?.animate([{ opacity: 0 }, { opacity: 0, offset: 0.75 }, { opacity: 1 }], { duration: 640 });
   }
   function meshZoomIn(id) {
     const p = mesh.fsim[id] || (mesh.zoom && mesh.zsim["r:" + id]) || { x: mesh.w / 2, y: mesh.h / 2 };
@@ -2181,7 +2487,7 @@
     mesh.pos = {}; meshSavePos(); mesh.fsim = mesh.sim = {}; mesh.topo = "";
     if (mesh.data) meshDraw(mesh.data);
   });
-  function meshTip(ev, html) { const t = $("meshTip"); t.innerHTML = html; t.hidden = false; meshTipMove(ev); }
+  function meshTip(ev, html, hue) { const t = $("meshTip"); t.innerHTML = html; t.style.setProperty("--h", hue ?? 237); t.hidden = false; meshTipMove(ev); }   // 0.21.79: edged in the relay's colour
   function meshTipMove(ev) {
     const t = $("meshTip"), box = $("meshWrap").getBoundingClientRect();
     let x = ev.clientX - box.left + 14, y = ev.clientY - box.top + 12;
@@ -2279,7 +2585,7 @@
     const bwTxt = (l) => l.active && l.bps ? "→ " + fmtBps(l.bps.fwd || 0) + "<br>← " + fmtBps(l.bps.back || 0) : "—";
     const editable = (l) => !(l.needsUpdate && l.needsUpdate.length) && !(l.kind === "hub" && l.cost == null);
     $("linksList").innerHTML = rows.length ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Link</th><th>Found by</th><th>Address</th><th>RTT</th><th>Hops</th><th>Private</th><th>Cost</th><th>Mode</th><th>State</th><th title='dialer → acceptor / back'>Bandwidth</th><th>Streams crossing now</th><th></th></tr>"
-      + rows.map((l) => "<tr><td>" + esc(l.aName || meshName(l.a)) + " ⇄ " + esc(l.kind === "hub" ? meshName("hub") : (l.bName || meshName(l.b))) + "</td><td>" + esc(l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "manual" : "auto private path") + "</td>"
+      + rows.map((l) => "<tr><td style='white-space:nowrap'>" + meshDot(l.a) + esc(l.aName || meshName(l.a)) + " ⇄ " + meshDot(meshB(l)) + esc(l.kind === "hub" ? meshName("hub") : (l.bName || meshName(l.b))) + "</td><td>" + esc(l.kind === "hub" ? "hub link" : l.kind === "standby" ? "standby link" : l.how === "manual" ? "manual" : "auto private path") + "</td>"
         + "<td class='mono'>" + esc(l.addr || "") + "</td><td>" + (l.rttMs != null ? l.rttMs + " ms" : "—") + "</td><td>" + (l.hops ?? "—") + "</td>"
         + "<td title='" + esc((l.path || []).join(" → ")) + "'>" + (l.private == null ? "—" : l.private ? "yes" : "no") + "</td><td>" + (l.cost ?? "—") + (l.overrideCost && l.kind !== "mesh" ? " <span class='hint'>(by hand)</span>" : "") + "</td><td>" + esc(l.kind === "mesh" ? l.mode : "—") + "</td>"
         + "<td>" + stTxt(l) + (l.why && !l.active ? "<div class='hint'>" + esc(l.why) + "</div>" : "") + (l.hint ? "<div class='hint' style='color:var(--asi-amber)'>" + esc(l.hint) + "</div>" : "") + (l.needsUpdate && l.needsUpdate.length ? "<div class='hint' style='color:var(--asi-amber)'>needs update: " + esc(l.needsUpdate.join(", ")) + "</div>" : "") + "</td>"
@@ -2299,6 +2605,7 @@
     box.hidden = !show;
     if (!show) return;
     mesh.data = d;
+    mesh.hues = meshHues(d.nodes);   // 0.21.79: each spoke's colour, the same in the full map and zoomed
     if (mesh.zoom && !d.zoom) { mesh.data = d; meshZoomOut(); return; }   // that relay is gone
     $("meshBack").hidden = !mesh.zoom;
     const direct = (d.links || []).filter((l) => l.kind === "mesh" && l.active), crossing = (d.links || []).reduce((s, l) => s + (l.active ? meshBw(l) : 0), 0);

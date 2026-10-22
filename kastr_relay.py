@@ -979,6 +979,27 @@ def mesh_load_clean(v):
 
 ZOOM_KIND = {"app": "person", "box": "box", "web": "viewer"}
 
+# 0.21.78 (E) (lab: a page's camera read ~16 bit/s at the relay while the zoomed map said the page sent ~500 kbit/s): an
+# unwatched camera stops encoding (@moq/publish runs the encoder only while the relay asks for the track), so its broadcast
+# carries only catalog / keep-alive bytes -- idle, on both sides. The two figures were each right at their own moment: the
+# client's came from a check-in a minute old. They are reconciled here, never shown as two contradicting numbers.
+MESH_IDLE_BPS = 2000              # under this a stream (or a client's upload) is idle: nothing but its catalog / keep-alives
+
+
+def mesh_net_check(net, relay_up, relay_at):
+    """0.21.78 (E): what a client SAYS it sends (its check-in, `net.up` heard at `net.at`) vs what the relay MEASURES of the
+    streams it publishes here (`relay_up`, rate over the ~30 s before `relay_at`) -> "" when they agree (both idle, or within
+    25 % / 64 kbit/s) or there is nothing to compare; "client-older" when the client's figure predates the relay's sample (the
+    relay's is the one to believe); "relay-older" when the relay has not sampled since the client said it; "differs"."""
+    if not isinstance(net, dict) or net.get("up") is None or relay_up is None:
+        return ""
+    s, m = max(0, int(net["up"])), max(0, int(relay_up))
+    if (s < MESH_IDLE_BPS and m < MESH_IDLE_BPS) or abs(s - m) <= max(64000, 0.25 * max(s, m)):
+        return ""
+    if not net.get("at") or not relay_at:
+        return "differs"
+    return "client-older" if float(net["at"]) < float(relay_at) else "relay-older"
+
 
 def mesh_zoom(relay, clients, load, nicks=None, needs_update=False):
     """0.21.78: one relay's zoomed view -- its clients (people's KASTR apps, boxes, web viewers: name / hub nickname /
@@ -993,13 +1014,35 @@ def mesh_zoom(relay, clients, load, nicks=None, needs_update=False):
         seg = str(s.get("path") or "").split("/")
         if len(seg) > 2:
             by_host.setdefault(seg[1], []).append(s)
+    sampled = isinstance((load or {}).get("paths"), dict) and bool((load or {}).get("at"))   # 0.21.78 (E): its streams were measured
+    lout = ((load or {}).get("local") or {}).get("out") if sampled and isinstance((load or {}).get("local"), dict) else None
+    for d in ("in", "out"):   # 0.21.78 (E): a stream with only catalog / keep-alive bytes reads "idle", never "16 bit/s"
+        for s in paths.get(d) or []:
+            if isinstance(s, dict):
+                s["idle"] = s.get("bps") is not None and s["bps"] < MESH_IDLE_BPS
     out, mine = [], set()
     for c in clients or []:
         if not isinstance(c, dict) or not c.get("node"):
             continue
         pubs = by_host.get(c["node"], [])
         mine.update(id(s) for s in pubs)
+        net = c.get("net") if isinstance(c.get("net"), dict) else None
+        # what the relay measures of it: nothing published here (once the relay has sampled its streams) is idle HERE
+        rup = _sum_rates([s.get("bps") for s in pubs]) if pubs else (0 if sampled else None)
+        note = mesh_net_check(net, rup, (load or {}).get("at"))
+        if note and not pubs:
+            note = "not-here"   # it says it sends, but none of it reaches this relay (it left / stopped since, or sends elsewhere)
+        # the upload the map draws: the relay's measure when the client's figure is the older one (or it has none)
+        by_relay = note in ("client-older", "not-here") or not net or net.get("up") is None
+        up = rup if by_relay else net.get("up")
+        # its download comes from this relay: an older figure above all this relay now sends its own clients is out of date
+        dnote = "client-older" if (net and lout is not None and net.get("down") is not None and net.get("at") and (load or {}).get("at")
+                                   and float(net["at"]) < float(load["at"]) and int(net["down"]) >= MESH_IDLE_BPS
+                                   and int(net["down"]) > max(lout + 64000, 1.25 * lout)) else ""
+        down = lout if dnote else (net.get("down") if net else None)
         out.append({"node": c["node"], "name": c.get("name") or "", "nick": nicks.get(c["node"], "") or c.get("nick") or "",
+                    "upBps": up, "upFrom": ("relay" if by_relay else "client") if up is not None else "",
+                    "upNote": note, "downBps": down, "downNote": dnote,
                     "hostname": c.get("hostname") or "", "user": c.get("user") or "", "kind": ZOOM_KIND.get(c.get("kind"), "person"),
                     "version": c.get("version") or "", "platform": c.get("platform") or "", "rooms": list(c.get("rooms") or [])[:16],
                     "since": c.get("since") or None, "at": c.get("at") or None, "checkin": bool(c.get("checkin")),

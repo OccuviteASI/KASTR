@@ -15917,23 +15917,31 @@
         : /Linux/.test(ua) ? "Linux" : "";
       return b + (os ? " on " + os : "");
     };
+    let ciTimer = 0, ciAt = 0, ciNet = null;   // 0.21.78 (E): when the last check-in went and the figure it carried
     const webCheckin = async () => {
+      clearTimeout(ciTimer);
       let next = 5000;
       try {
         if (joinState === "joined" && /^web-/.test(HOSTNAME1)) {
+          const net = window.__netRate?.() ?? null;
+          ciAt = Date.now();
           const r = await fetch("/api/clients/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
-            body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser(), net: window.__netRate?.() ?? null }) });   // 0.21.78 (C): + net
+            body: JSON.stringify({ node: HOSTNAME1, name: chatName(), version: KASTR_VER, mode: "web", platform: webBrowser(), net }) });   // 0.21.78 (C): + net
           next = r.ok ? 60000 : 20000;
+          if (r.ok) ciNet = net;
         }
       } catch { next = 20000; }
-      setTimeout(webCheckin, next);
+      ciTimer = setTimeout(webCheckin, next);
     };
-    setTimeout(webCheckin, 3000);
+    ciTimer = setTimeout(webCheckin, 3000);
+    setInterval(() => { if (ciAt && Date.now() - ciAt >= 10000 && netMoved(ciNet, window.__netRate?.())) webCheckin(); }, 5000);   // 0.21.78 (E): + the first figure (the join's check-in had none yet)
   }
   // 0.21.78 (C) (Kenton: "on the zoomed map, show each clients bandwidth on hover"): what this page receives (every tile's video +
   // audio bytes) and sends (its encoders' output), sampled every 5 s -> __netRate() = {down, up, streams, at, win} in bits/s over
   // the last ~15 s. The check-in carries it to the relay: a web page's above, the app's through its diag snapshot (kastr.py).
   const netHist = [];
+  const netAudio = new Map();   // 0.21.78 (E): slot -> its mic encoder's last {bytes, active}
+  let netAudioSent = 0;
   setInterval(() => {
     const per = {};
     for (const [n, t] of tiles) {
@@ -15942,9 +15950,20 @@
       try { b += Number(t.watch.audio?.out?.stats?.peek?.()?.bytesReceived || 0); } catch {}
       if (b) per[n] = b;
     }
+    // 0.21.78 (E) (lab: a camera read ~16 bit/s at the relay while the map said this page sent ~500 kbit/s): `up` is what LEFT
+    // this machine. @moq/publish runs a camera's video encoder only while the relay asks for its track, so an unwatched camera
+    // adds nothing; its mic encoder runs either way, so mic bytes count only between two samples that both find its track live.
     let up = 0;
-    try { for (const s of window.__publisher?.state?.()?.slots || []) up += Number(s.encoded?.bytes || 0); } catch {}
-    netHist.push({ t: Date.now(), per, up });
+    try {
+      for (const s of window.__publisher?.state?.()?.slots || []) {
+        up += Number(s.encoded?.bytes || 0);
+        const a = s.sentAudio, was = a ? netAudio.get(s.name || "") : null;
+        if (!a) continue;
+        if (was && a.active && was.active && a.bytes >= was.bytes) netAudioSent += a.bytes - was.bytes;
+        netAudio.set(s.name || "", a);
+      }
+    } catch {}
+    netHist.push({ t: Date.now(), per, up: up + netAudioSent });
     if (netHist.length > 4) netHist.shift();
   }, 5000);
   window.__netRate = () => {
@@ -15954,6 +15973,18 @@
     const st = Object.entries(b.per).map(([path, v]) => ({ path, bps: Math.round(grow(a.per[path] || 0, v) * 8 / dt) })).sort((x, y) => y.bps - x.bps);
     return { down: st.reduce((s, x) => s + x.bps, 0), up: Math.round(grow(a.up, b.up) * 8 / dt), streams: st.slice(0, 5), at: Math.round(b.t / 1000), win: Math.round(dt) };
   };
+  // 0.21.78 (E): a check-in carries the page's figure; the next one is a minute away, so it goes early (at most every 10 s)
+  // when the figure moved -- idle <-> sending (a camera nobody watches any more stops at once), or > 30 % and > 64 kbit/s.
+  const NET_IDLE_BPS = 2000;   // = kastr_relay.MESH_IDLE_BPS: only catalog / keep-alive bytes
+  function netMoved(a, b) {
+    if (!b) return false;
+    if (!a) return true;
+    for (const k of ["up", "down"]) {
+      const x = Number(a[k]) || 0, y = Number(b[k]) || 0;
+      if ((x >= NET_IDLE_BPS) !== (y >= NET_IDLE_BPS) || Math.abs(x - y) > Math.max(64000, 0.3 * Math.max(x, y))) return true;
+    }
+    return false;
+  }
   const chatVisible = () => chatOpen && document.visibilityState === "visible";
   function chatHint(text, bad) { chatMsgEl.textContent = text || ""; chatMsgEl.style.color = bad ? "var(--asi-red)" : ""; }
   function chatPlace() {
@@ -26276,6 +26307,7 @@
         // 0.8.13: the encoder's own facts for camera/screen/file slots too
         resolved: (() => { try { const r = s.publish.video.out.resolved.peek(); return r ? { codec: r.codec, hw: r.hardwareAcceleration, w: r.width, h: r.height, fps: r.framerate, bitrate: r.bitrate } : null; } catch { return null; } })(),
         encoded: (() => { try { return s.publish.video.out.stats?.peek?.() ?? null; } catch { return null; } })(),
+        sentAudio: (() => { try { const a = s.publish.audio?.out; return a ? { bytes: Number(a.stats?.peek?.()?.bytes || 0), active: !!a.active?.peek?.() } : null; } catch { return null; } })(),   // 0.21.78 (E): the mic encodes even unwatched -- only a live track leaves the machine
         trackFps: (() => { try { return pubCap(s.publish)?.in?.source.peek()?.getSettings?.().frameRate ?? null; } catch { return null; } })(),
       }),
       rtspSuspended,   // 0.21.16: the box's RTSP switch (off = nothing published, records kept) -> /api/diag publisher.rtspSuspended

@@ -1806,6 +1806,8 @@
     return (l.rttMs != null && l.rttMs > 50) || (l.drops || 0) >= 3 ? "warn" : "up";
   }
   const fmtBps = (b) => b == null ? "—" : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + " Mbit/s" : b >= 1e3 ? Math.round(b / 1e3) + " kbit/s" : Math.round(b) + " bit/s";
+  // 0.21.78 (E): a stream / client below MESH_IDLE_BPS carries only catalog / keep-alive bytes (an unwatched camera) -- "idle"
+  const fmtRate = (b) => b != null && b < 2000 ? "idle" : fmtBps(b);
   const meshBw = (l) => (l.bps ? (l.bps.fwd || 0) + (l.bps.back || 0) : 0);
   const shortPath = (p) => String(p).replace(/[.]hang$/, "").split("/").filter(Boolean).slice(-2).join("/");
   function meshTipHtml(l) {
@@ -2033,11 +2035,21 @@
     }
     for (const c of z.clients || []) {
       const id = "c:" + c.node, nm = c.nick || c.name || c.hostname || c.node;
-      const up = c.net?.up ?? c.bps, down = c.net?.down;
-      nodes.push({ id, role: "spoke", zrole: "client", name: nm, version: c.kind + (down != null ? " ↓" + fmtBps(down) : "") + (up ? " ↑" + fmtBps(up) : ""), c });
+      const up = c.upBps !== undefined ? c.upBps : (c.net?.up ?? c.bps), down = c.downBps !== undefined ? c.downBps : c.net?.down;   // 0.21.78 (E): upBps / downBps
+      nodes.push({ id, role: "spoke", zrole: "client", name: nm, version: c.kind + (down != null ? " ↓" + fmtRate(down) : "") + (up >= 2000 ? " ↑" + fmtBps(up) : ""), c });
       links.push({ id: "r:" + me.id + "|" + id, kind: "client", a: "r:" + me.id, b: id, active: true, c });
     }
     return { nodes, links, zoom: z, me };
+  }
+  // 0.21.78 (E): why a client's own up figure and the relay's measure of its streams differ (kastr_relay.mesh_net_check)
+  function meshUpNote(c) {
+    return meshUpOnly(c) + (c.downNote ? "<br><span style='color:var(--asi-amber)'>its down figure is more than this relay now sends all its clients (<b>" + fmtRate(c.downBps) + "</b>) — it predates a change</span>" : "");
+  }
+  function meshUpOnly(c) {
+    if (c.upNote === "client-older") return "<br><span style='color:var(--asi-amber)'>its up figure is older than the relay's measure (<b>" + fmtRate(c.upBps) + "</b> now) — its streams changed since it last checked in</span>";
+    if (c.upNote === "not-here") return "<br><span style='color:var(--asi-amber)'>none of its up figure reaches this relay now (it left or stopped since it checked in, or it sends elsewhere)</span>";
+    if (c.upNote === "relay-older") return "<br><span class='dim'>the relay's measure below predates its figure (the relay re-measures every 15 s)</span>";
+    return c.upNote ? "<br><span style='color:var(--asi-amber)'>its up figure and the relay's measure differ</span>" : "";
   }
   function meshClientTip(c) {
     const nm = c.nick || c.name || c.hostname || c.node, n = c.net, ago = (t) => t ? agoText(Date.now() / 1000 - t) : "";
@@ -2046,16 +2058,16 @@
       + (c.hostname || c.user ? "<br><span class='dim'>" + esc([c.hostname, c.user].filter(Boolean).join(" · ")) + "</span>" : "")
       + (c.version ? "<br>KASTR " + esc(c.version) + (c.platform ? " · " + esc(c.platform) : "") : "")
       + (c.rooms && c.rooms.length ? "<br>in " + esc(c.rooms.join(", ")) : "")
-      + (n ? "<br>down <b>" + fmtBps(n.down) + "</b> · up <b>" + fmtBps(n.up) + "</b> <span class='dim'>(it says, " + esc(ago(n.at)) + ")</span>"
-          + (n.streams && n.streams.length ? "<br><span class='dim'>watching: " + n.streams.slice(0, 4).map((s) => esc(shortPath(s.path)) + " " + fmtBps(s.bps)).join(", ") + "</span>" : "")
+      + (n ? "<br>down <b>" + fmtRate(n.down) + "</b> · up <b>" + fmtRate(n.up) + "</b> <span class='dim'>(it says, " + esc(ago(n.at)) + ")</span>" + meshUpNote(c)
+          + (n.streams && n.streams.length ? "<br><span class='dim'>watching: " + n.streams.slice(0, 4).map((s) => esc(shortPath(s.path)) + " " + fmtRate(s.bps)).join(", ") + "</span>" : "")
         : "<br><span class='dim'>down / up: " + (c.kind === "viewer" ? "not reported" : "no figure (older KASTR)") + "</span>")
-      + (c.publishes && c.publishes.length ? "<br>publishes here: " + c.publishes.slice(0, 4).map((s) => esc(shortPath(s.path)) + " <b>" + fmtBps(s.bps) + "</b>").join(", ") + " <span class='dim'>(the relay measures)</span>"
+      + (c.publishes && c.publishes.length ? "<br>publishes here: " + c.publishes.slice(0, 4).map((s) => esc(shortPath(s.path)) + " <b>" + fmtRate(s.bps) + "</b>").join(", ") + " <span class='dim'>(the relay measures)</span>"
         : "<br><span class='dim'>publishes nothing here</span>")
       + (c.since ? "<br><span class='dim'>connected since " + esc(ago(c.since).replace(/ ago$/, "")) + "</span>" : "");
   }
   function meshCenterTip(zd) {
     const z = zd.zoom, w = (z.watched || []).slice(0, 5);
-    return meshNodeTip(zd.me) + (w.length ? "<br>watched here: " + w.map((s) => esc(shortPath(s.path)) + " ×" + (s.viewers || 0) + " " + fmtBps(s.bps)).join(", ") : "")
+    return meshNodeTip(zd.me) + (w.length ? "<br>watched here: " + w.map((s) => esc(shortPath(s.path)) + " ×" + (s.viewers || 0) + " " + fmtRate(s.bps)).join(", ") : "")
       + (z.needsUpdate ? "<br><span style='color:var(--asi-amber)'>per-stream figures need KASTR " + esc(mesh.data?.liveVersion || "0.21.78") + " on this relay</span>" : "");
   }
   function meshBuildZoom(zd) {
@@ -2072,7 +2084,7 @@
         if (bw >= 50000) { e.label = el("text", { class: "mrate" }, gL); e.label.textContent = fmtBps(bw); }
         e.tip = () => meshTipHtml(l);
       } else {                    // to a client: as thick as what it sends and receives
-        const c = z.c, up = c.net?.up ?? c.bps ?? 0, down = c.net?.down ?? 0, bw = up + down;
+        const c = z.c, up = (c.upBps !== undefined ? c.upBps : (c.net?.up ?? c.bps)) ?? 0, down = (c.downBps !== undefined ? c.downBps : c.net?.down) ?? 0, bw = up + down;   // 0.21.78 (E): upBps / downBps
         e.path = el("path", { class: "medge zc zk-" + c.kind + (bw ? "" : " zidle"), "stroke-width": (1.5 + (bw > 0 ? Math.min(7, 1.6 * Math.log2(1 + bw / 250000)) : 0)).toFixed(1) }, gE);
         if (up > 20000) e.flows.push(el("path", { class: "mflow rev", "stroke-width": 2 }, gE));
         if (down > 20000) e.flows.push(el("path", { class: "mflow", "stroke-width": 2 }, gE));
@@ -2202,9 +2214,9 @@
         const cl = z.clients || [], cn = (c) => c.nick || c.name || c.hostname || c.node;
         const crow = (c) => "<tr" + (mesh.sel?.client === "c:" + c.node ? " class='zsel'" : "") + "><td><b>" + esc(cn(c)) + "</b>" + (c.nick && c.name && c.nick !== c.name ? "<div class='hint'>" + esc(c.name) + "</div>" : "") + "</td><td>" + esc(c.kind) + "</td>"
           + "<td class='mono'>" + esc([c.hostname, c.user].filter(Boolean).join(" · ")) + "</td><td>" + esc((c.rooms || []).join(", ")) + "</td>"
-          + "<td style='white-space:nowrap'>" + (c.net ? "↓ " + fmtBps(c.net.down) + "<br>↑ " + fmtBps(c.net.up) + "<div class='hint'>" + esc(c.net.at ? agoText(Date.now() / 1000 - c.net.at) : "") + "</div>" : "<span class='hint'>" + (c.kind === "viewer" ? "not reported" : "no figure (older KASTR)") + "</span>") + "</td>"
-          + "<td>" + ((c.publishes || []).map((s) => esc(shortPath(s.path)) + " " + fmtBps(s.bps)).join("<br>") || "—") + "</td></tr>";
-        const srow = (s) => "<tr><td class='mono'>" + esc(s.path) + "</td><td>" + (s.viewers ?? "—") + "</td><td>" + fmtBps(s.bps) + "</td></tr>";
+          + "<td style='white-space:nowrap'>" + (c.net ? "↓ " + fmtRate(c.net.down) + "<br>↑ " + fmtRate(c.net.up) + "<div class='hint'>" + esc(c.net.at ? agoText(Date.now() / 1000 - c.net.at) : "") + "</div>" + (meshUpNote(c) ? "<div class='hint' style='white-space:normal;min-width:200px'>" + meshUpNote(c).replace(/^<br>/, "") + "</div>" : "") : "<span class='hint'>" + (c.kind === "viewer" ? "not reported" : "no figure (older KASTR)") + "</span>") + "</td>"
+          + "<td>" + ((c.publishes || []).map((s) => esc(shortPath(s.path)) + " " + fmtRate(s.bps)).join("<br>") || "—") + "</td></tr>";
+        const srow = (s) => "<tr><td class='mono'>" + esc(s.path) + "</td><td>" + (s.viewers ?? "—") + "</td><td>" + fmtRate(s.bps) + "</td></tr>";
         info.innerHTML = "<h4>" + esc(n.name) + " — " + cl.length + " client" + (cl.length === 1 ? "" : "s") + "</h4><div>" + meshLoadHtml(n).replace(/^<br>/, "") + "</div>"
           + (z.needsUpdate ? "<div class='hint' style='color:var(--asi-amber)'>This relay runs KASTR " + esc(n.version || "?") + " — the per-stream bitrates need " + esc(d.liveVersion || "0.21.78") + " there (update it from the spokes table).</div>" : "")
           + (cl.length ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Client</th><th>Kind</th><th>Machine</th><th>In rooms</th><th title='what the client says it receives / sends'>Down / up</th><th title='measured by the relay'>Publishes here</th></tr>" + cl.map(crow).join("") + "</table></div>" : "<div class='hint'>No clients connected to it.</div>")

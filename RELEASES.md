@@ -2,6 +2,22 @@
 
 What changed in each build, newest first.
 
+## v0.21.80 — two pointers in remote control, much less delay, grid cameras that open
+
+**Each person gets their own pointer (Kenton: "I would like to have a mouse with a name of the person controlling it, rather than them controlling my own mouse. Allow both mice at the same time").** The person in control now moves their own arrow, tagged with their name in their colour, on your screen — your cursor stays where you left it, and you can both work at once.
+- **Clicks without taking your cursor:** in classic Windows windows (Notepad, dialogs, settings, forms) their clicks go straight to the window, even when it is covered. Browsers, Electron apps, Office documents, Explorer and games only accept a real cursor, so there your cursor jumps to their spot for the click and straight back — never while you are holding a mouse button (their click waits until you let go), and if you press during their drag, yours wins.
+- **Both type at once.** Their keys reach the shared window; when it isn't in front, typing goes to its text box where the app allows it, otherwise they are told to click inside first.
+- **Your mouse no longer pauses theirs.** Stop control, Ctrl+Alt+Space, stopping the share or leaving still end it.
+- **Viewers see both pointers with names while someone has control** (Kenton chose: only during remote control): the controller's arrow and name, and your name beside your cursor, lined up with the video.
+- On Linux the controller gets a real second pointer and keyboard.
+
+**Remote control is much faster (Kenton: "There is a bit of delay").** From a click to seeing the result on the controller's screen: about 0.7 s before, about 0.15 s now (lab). The controller's view of the shared screen now plays with no extra buffer and at top priority while they have control, the input goes out at once, and the sharer's KASTR takes it over a direct local connection.
+
+**A camera clicked in a grid opens instead of snapping back (Kenton: "It expands the view like it's going full and then closes immediately and goes back to the grid").** The cause on Mendon was the double-click: the first click started opening a camera that wasn't playing yet, and the double-click that followed un-zoomed the cell, which cancelled the open. Cameras already playing elsewhere opened at once, which is why two of Mendon's always worked. A double-click is now ignored while a cell is opening (lab: 11 of 11 double-clicks open, before 5 of 11).
+- **A camera you had parked, asleep when clicked** (transcoded box cameras sleep while unwatched) was sent back to the grid as "not watched"; the click now counts as watching it, wakes it and waits on the cell (lab: 19 of 19).
+- **Grids pulled from another room:** a camera listed into the room but not yet loaded now loads on the click, an asleep one opens in 1–2 s instead of 9–15 s, and one not shown in this room at full quality stays on its cell and says so (the box can add it with Share ▸ Show in rooms) instead of waiting 90 s.
+- A camera that really went away still returns you to its grid. Every time the stage goes back to a grid, the reason is now kept in the app's diagnostics.
+
 ## v0.21.79 — remote control of a shared screen, a colourful mesh map, native screen sharing on Linux
 
 **Ask to control someone's shared screen (Kenton: "request remote control when someone is sharing their desktop and a prompt to allow that user to take control of your machine. Local input always overrides remote input").** On a screen or window shared from the KASTR app, **Request control** sits in the share's menu and on a spotlit share.

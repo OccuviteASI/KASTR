@@ -23,6 +23,7 @@ WINDOWS = sys.platform == "win32"
 LINUX = sys.platform.startswith("linux")
 _x11grab = None   # 0.21.79: does this ffmpeg have x11grab (asked once)
 MAX_W, MAX_H, FPS = 1920, 1080, 30
+RC_FPS = int(os.environ.get("KASTR_RC_FPS") or 30)   # 0.21.80: the frame rate while someone controls the share (kastr_rtsp.rc_screen_opts)
 # the computer's sound: s16le PCM on ffmpeg's stdin. kastr_loopback writes it in real time and pads silence, so the
 # sample count IS the clock -- timestamps from 0 like the capture's (wall-clock stamps put the audio ~50 years ahead)
 LOOPBACK_INPUT = ["-thread_queue_size", "1024", "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
@@ -266,13 +267,13 @@ def capture_size(url):
     return _fit(w, h)
 
 
-def _clocked(cap, w, h):
+def _clocked(cap, w, h, fps=FPS):
     """A steady 30 fps whatever the capture does: Windows Graphics Capture sends a frame only when the window repaints,
     and fps= releases frames only as newer ones arrive -- a still page sent nothing at all (lab 2026-10-06). A black
     clock at 30 fps carries the capture on top and repeats its last frame, so a still screen, window or tab keeps
     sending frames (and keyframes to late joiners) once its first frame is in."""
     return ("color=c=black:s=%dx%d:r=%d[kbg];%s,format=yuv420p[kfg];[kbg][kfg]overlay=eof_action=repeat:repeatlast=1:shortest=0,setsar=1"
-            % (w, h, FPS, cap))
+            % (w, h, fps, cap))
 
 
 def kick(url):
@@ -314,32 +315,37 @@ def _kick_soon(url):
         t.start()
 
 
-def capture_input(url):
+def capture_input(url, cursor=True, fps=None):
     """ffmpeg input args for a screen:// url: gfxcapture scaled at capture (aspect kept), CPU frames, a steady 30 fps
-    (see _clocked), plus two repaint kicks so the first frame arrives even on a still page."""
+    (see _clocked), plus two repaint kicks so the first frame arrives even on a still page.
+    0.21.80 (Kenton: "show my mouse with my name for the viewers"): cursor=False while someone remote-controls the share --
+    the real cursor is left out of the picture (gfxcapture capture_cursor=0, x11grab -draw_mouse 0) because every viewer draws
+    both people's pointers with their names from the share's ptr.json; fps = RC_FPS then."""
     kind, n = parse_url(url)
+    fps = int(fps or FPS)
+    cur = 1 if cursor else 0
     if LINUX:   # 0.21.79: x11grab -- a screen by its rectangle, a window by its id (followed as it moves)
         disp = os.environ.get("DISPLAY") or ":0"
         if kind == "window":
-            return ["-f", "x11grab", "-framerate", str(FPS), "-draw_mouse", "1", "-window_id", str(n), "-i", disp]
+            return ["-f", "x11grab", "-framerate", str(fps), "-draw_mouse", str(cur), "-window_id", str(n), "-i", disp]
         r = (_resolve(kind, n) or {}).get("rect") or {"x": 0, "y": 0, "w": MAX_W, "h": MAX_H}
-        return ["-f", "x11grab", "-framerate", str(FPS), "-draw_mouse", "1", "-video_size",
+        return ["-f", "x11grab", "-framerate", str(fps), "-draw_mouse", str(cur), "-video_size",
                 "%dx%d" % (max(2, int(r["w"]) // 2 * 2), max(2, int(r["h"]) // 2 * 2)), "-i", "%s+%d,%d" % (disp, int(r["x"]), int(r["y"]))]
     _kick_soon(url)
     if kind == "tab":   # crop on the GPU side of the capture, then scale on the CPU (a crop + resize_mode order is not documented)
         import kastr_tabs
         crop, cw, ch = _tab_crop(n)
         w, h = _fit(cw, ch)
-        cap = (kastr_tabs.gfxcapture_args(n, crop) + ":max_framerate=%d:capture_cursor=1,hwdownload,format=bgra,"
-               "scale=%d:%d:flags=bilinear" % (FPS, w, h))
-        return ["-f", "lavfi", "-i", _clocked(cap, w, h)]
+        cap = (kastr_tabs.gfxcapture_args(n, crop) + ":max_framerate=%d:capture_cursor=%d,hwdownload,format=bgra,"
+               "scale=%d:%d:flags=bilinear" % (fps, cur, w, h))
+        return ["-f", "lavfi", "-i", _clocked(cap, w, h, fps)]
     src = _resolve(kind, n) or {}
     w, h = capture_size(url)
     target = ("hmonitor=%d" % int(src.get("hmonitor") or 0)) if kind == "monitor" and src.get("hmonitor") \
         else ("monitor_idx=%d" % n) if kind == "monitor" else ("hwnd=%d" % n)
-    cap = ("gfxcapture=%s:max_framerate=%d:width=%d:height=%d:resize_mode=scale_aspect:capture_cursor=1,"
-           "hwdownload,format=bgra,scale=%d:%d" % (target, FPS, w, h, w, h))
-    return ["-f", "lavfi", "-i", _clocked(cap, w, h)]
+    cap = ("gfxcapture=%s:max_framerate=%d:width=%d:height=%d:resize_mode=scale_aspect:capture_cursor=%d,"
+           "hwdownload,format=bgra,scale=%d:%d" % (target, fps, w, h, cur, w, h))
+    return ["-f", "lavfi", "-i", _clocked(cap, w, h, fps)]
 
 
 def feed_loopback(ff, exclude_pid=None, log=None):

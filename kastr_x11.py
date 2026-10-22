@@ -11,6 +11,7 @@ Wayland: X11 clients there run under XWayland and XTest reaches only XWayland wi
 """
 import ctypes
 import ctypes.util
+import math
 import os
 import select
 import shutil
@@ -112,6 +113,7 @@ XEvent = c_long * 24
 GENERIC_EVENT, BUTTON_PRESS, EXPOSE = 35, 4, 12
 XI_RAW_KEY_PRESS, XI_RAW_KEY_RELEASE, XI_RAW_BUTTON_PRESS, XI_RAW_BUTTON_RELEASE, XI_RAW_MOTION = 13, 14, 15, 16, 17
 XI_ALL_MASTER_DEVICES = 1
+X11_TO_BROWSER = {1: 0, 2: 1, 3: 2, 8: 3, 9: 4}   # 0.21.80: X button -> browser MouseEvent.button (4-7 are the wheel)
 _ERR_HANDLER = None
 
 
@@ -395,7 +397,7 @@ def list_windows(exclude_pids=()):
             wins = [k for k in kids if d.title(k)]
         for w in reversed(wins):
             title = d.title(w)
-            if not title.strip() or title.startswith("KASTR control"):
+            if not title.strip() or title.startswith(("KASTR control", "KASTR pointer")):   # 0.21.80: + the controller's arrow
                 continue
             pid = d.pid(w)
             if pid and pid in skip:
@@ -462,13 +464,30 @@ class Injector:
         self.t.XTestFakeKeyEvent(self.d.dpy, k, 1 if down else 0, 0)
         return True
 
-    def raise_window(self, xid):
+    def raise_window(self, xid, focus=True):
         try:
             top = self.d.top_level(int(xid))
             self.d.x.XRaiseWindow(self.d.dpy, top)
-            self.d.x.XSetInputFocus(self.d.dpy, int(xid), 2, 0)   # RevertToParent, CurrentTime
+            if focus:   # 0.21.80: not with a second master keyboard (it has its own focus -- the sharer keeps theirs)
+                self.d.x.XSetInputFocus(self.d.dpy, int(xid), 2, 0)   # RevertToParent, CurrentTime
         except Exception:
             pass
+
+    def query_pointer(self):
+        """0.21.80: the core (the sharer's own) pointer in root coordinates, or None."""
+        x = self.d.x
+        if not getattr(x, "_kastr_qp", False):
+            x.XQueryPointer.argtypes = [c_void_p, Window, ctypes.POINTER(Window), ctypes.POINTER(Window), ctypes.POINTER(c_int),
+                                        ctypes.POINTER(c_int), ctypes.POINTER(c_int), ctypes.POINTER(c_int), ctypes.POINTER(c_uint)]
+            x._kastr_qp = True
+        r, c, rx, ry, wx, wy, m = Window(), Window(), c_int(), c_int(), c_int(), c_int(), c_uint()
+        try:
+            if x.XQueryPointer(self.d.dpy, self.d.root, ctypes.byref(r), ctypes.byref(c), ctypes.byref(rx), ctypes.byref(ry),
+                               ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(m)):
+                return rx.value, ry.value
+        except Exception:
+            pass
+        return None
 
     def top_at(self, x, y):
         return self.d.top_at(x, y)
@@ -587,8 +606,11 @@ class RawMonitor:
                         except Exception:
                             pass
                         continue
-                try:
-                    self.on_local({XI_RAW_MOTION: "move", XI_RAW_BUTTON_PRESS: "button", XI_RAW_BUTTON_RELEASE: "button"}.get(kind, "key"))
+                try:   # 0.21.80: presses / releases with their button (a warp-click waits while the sharer holds one)
+                    if kind in (XI_RAW_BUTTON_PRESS, XI_RAW_BUTTON_RELEASE) and detail in X11_TO_BROWSER:
+                        self.on_local("down" if kind == XI_RAW_BUTTON_PRESS else "up", X11_TO_BROWSER[detail])
+                    elif kind not in (XI_RAW_BUTTON_PRESS, XI_RAW_BUTTON_RELEASE):
+                        self.on_local("move" if kind == XI_RAW_MOTION else "key")
                 except Exception:
                     pass
         finally:
@@ -731,6 +753,361 @@ class Bar:
             self.on_button(key)
         except Exception:
             pass
+
+
+# ---- 0.21.80: the controller's OWN pointer ---------------------------------------------------------------------------
+# Kenton (2026-10-22): "I would like to have a mouse with a name of the person controlling it, rather than them controlling my
+# own mouse. Allow both mice at the same time." On X11 that can be real: XInput2 multi-pointer (MPX) adds a second MASTER
+# pointer + keyboard pair ("KASTR remote pointer" / "... keyboard", each with its own XTEST slave). The controller's moves warp
+# that pointer, their clicks come from its XTEST slave (the server delivers them where THAT pointer is), their keys from the
+# second keyboard, whose focus is the shared window (or follows that pointer on a shared screen) -- the sharer's own pointer,
+# keyboard focus and typing never move. Its sprite is blanked; PointerWin draws the arrow with the person's name instead.
+class XIAddMasterInfo(ctypes.Structure):
+    _fields_ = [("type", c_int), ("name", c_char_p), ("send_core", c_int), ("enable", c_int)]
+
+
+class XIRemoveMasterInfo(ctypes.Structure):
+    _fields_ = [("type", c_int), ("deviceid", c_int), ("return_mode", c_int), ("return_pointer", c_int), ("return_keyboard", c_int)]
+
+
+class XIAnyHierarchyChangeInfo(ctypes.Union):
+    _fields_ = [("type", c_int), ("add", XIAddMasterInfo), ("remove", XIRemoveMasterInfo)]
+
+
+class XColor(ctypes.Structure):
+    _fields_ = [("pixel", c_ulong), ("red", ctypes.c_ushort), ("green", ctypes.c_ushort), ("blue", ctypes.c_ushort),
+                ("flags", ctypes.c_char), ("pad", ctypes.c_char)]
+
+
+class XPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short)]
+
+
+class XRectangle(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short), ("width", ctypes.c_ushort), ("height", ctypes.c_ushort)]
+
+
+XI_ADD_MASTER, XI_REMOVE_MASTER, XI_ATTACH_TO_MASTER = 1, 2, 1
+VCP, VCK = 2, 3   # the virtual core pointer / keyboard (where a removed master's slaves go back)
+
+
+class Mpx:
+    """A second master pointer + keyboard for the controller. ok=False when the server refuses (no XInput 2.0 hierarchy
+    changes, no XTest device events): the caller falls back to warp-clicks. close() removes the pair (and is safe twice)."""
+
+    def __init__(self, name="KASTR remote", display=None):
+        self.name = str(name)
+        self.ok = False
+        self.err = ""
+        self.ptr = self.kbd = self.xptr = self.xkbd = 0
+        self._pdev = self._kdev = None
+        self._codes = {}
+        self.d = Display(display)
+        self.xi, self.t = _xi(), _xtst()
+        try:
+            self._create()
+        except Exception as e:
+            self.err = str(e)
+            self.ok = False
+            self._remove_quiet()
+
+    def _bind(self):
+        xi, t, x = self.xi, self.t, self.d.x
+        if xi is None or t is None:
+            raise OSError("libXi / libXtst missing")
+        xi.XIChangeHierarchy.argtypes = [c_void_p, ctypes.POINTER(XIAnyHierarchyChangeInfo), c_int]
+        xi.XOpenDevice.restype, xi.XOpenDevice.argtypes = c_void_p, [c_void_p, c_ulong]
+        xi.XCloseDevice.argtypes = [c_void_p, c_void_p]
+        xi.XIWarpPointer.argtypes = [c_void_p, c_int, Window, Window, ctypes.c_double, ctypes.c_double, c_uint, c_uint,
+                                     ctypes.c_double, ctypes.c_double]
+        xi.XISetFocus.argtypes = [c_void_p, c_int, Window, c_ulong]
+        xi.XIDefineCursor.argtypes = [c_void_p, c_int, Window, c_ulong]
+        t.XTestFakeDeviceButtonEvent.argtypes = [c_void_p, c_void_p, c_uint, c_int, ctypes.POINTER(c_int), c_int, c_ulong]
+        t.XTestFakeDeviceKeyEvent.argtypes = [c_void_p, c_void_p, c_uint, c_int, ctypes.POINTER(c_int), c_int, c_ulong]
+        x.XCreateBitmapFromData.restype, x.XCreateBitmapFromData.argtypes = c_ulong, [c_void_p, Window, c_char_p, c_uint, c_uint]
+        x.XCreatePixmapCursor.restype = c_ulong
+        x.XCreatePixmapCursor.argtypes = [c_void_p, c_ulong, c_ulong, ctypes.POINTER(XColor), ctypes.POINTER(XColor), c_uint, c_uint]
+
+    def devices(self):
+        """{name: (deviceid, use, attachment)} of every input device."""
+        n = c_int()
+        devs = self.xi.XIQueryDevice(self.d.dpy, 0, ctypes.byref(n))
+        out = {}
+        try:
+            for i in range(n.value):
+                out[(devs[i].name or b"").decode("utf-8", "replace")] = (devs[i].deviceid, devs[i].use, devs[i].attachment)
+        finally:
+            self.xi.XIFreeDeviceInfo(devs)
+        return out
+
+    def _change(self, info):
+        r = self.xi.XIChangeHierarchy(self.d.dpy, ctypes.byref(info), 1)
+        self.d.x.XSync(self.d.dpy, 0)
+        return r == 0
+
+    def _remove(self, master_ptr):
+        info = XIAnyHierarchyChangeInfo()
+        info.remove = XIRemoveMasterInfo(XI_REMOVE_MASTER, int(master_ptr), XI_ATTACH_TO_MASTER, VCP, VCK)
+        return self._change(info)
+
+    def _create(self):
+        self._bind()
+        maj, mnr = c_int(2), c_int(0)
+        if self.xi.XIQueryVersion(self.d.dpy, ctypes.byref(maj), ctypes.byref(mnr)) != 0:
+            raise OSError("XInput 2 is not available")
+        old = self.devices().get(self.name + " pointer")
+        if old:   # a pair left behind by a KASTR that did not get to close it
+            self._remove(old[0])
+        info = XIAnyHierarchyChangeInfo()
+        info.add = XIAddMasterInfo(XI_ADD_MASTER, self.name.encode(), 1, 1)
+        if not self._change(info):
+            raise OSError("XIChangeHierarchy refused")
+        devs = self.devices()
+        try:
+            self.ptr, self.kbd = devs[self.name + " pointer"][0], devs[self.name + " keyboard"][0]
+            self.xptr, self.xkbd = devs[self.name + " XTEST pointer"][0], devs[self.name + " XTEST keyboard"][0]
+        except KeyError:
+            raise OSError("the new master pointer has no XTEST devices")
+        self._pdev = self.xi.XOpenDevice(self.d.dpy, self.xptr)
+        self._kdev = self.xi.XOpenDevice(self.d.dpy, self.xkbd)
+        if not self._pdev or not self._kdev:
+            raise OSError("XOpenDevice failed")
+        try:   # blank sprite: PointerWin draws the arrow with the name
+            bm = self.d.x.XCreateBitmapFromData(self.d.dpy, self.d.root, b"\x00", 1, 1)
+            black = XColor()
+            cur = self.d.x.XCreatePixmapCursor(self.d.dpy, bm, bm, ctypes.byref(black), ctypes.byref(black), 0, 0)
+            self.xi.XIDefineCursor(self.d.dpy, self.ptr, self.d.root, cur)
+        except Exception:
+            pass
+        self.d.flush()
+        self.ok = True
+
+    def move(self, x, y):
+        if self.ok:
+            self.xi.XIWarpPointer(self.d.dpy, self.ptr, 0, self.d.root, 0.0, 0.0, 0, 0, float(x), float(y))
+            self.d.flush()
+
+    def button(self, n, down):
+        if self.ok:
+            self.t.XTestFakeDeviceButtonEvent(self.d.dpy, self._pdev, int(n), 1 if down else 0, None, 0, 0)
+            self.d.flush()
+
+    def keycode(self, keysym_name):
+        k = self._codes.get(keysym_name)
+        if k is None:
+            ks = self.d.x.XStringToKeysym(keysym_name.encode())
+            k = self._codes[keysym_name] = int(self.d.x.XKeysymToKeycode(self.d.dpy, ks)) if ks else 0
+        return k
+
+    def key(self, keysym_name, down):
+        k = self.keycode(keysym_name)
+        if not self.ok or not k:
+            return False
+        self.t.XTestFakeDeviceKeyEvent(self.d.dpy, self._kdev, k, 1 if down else 0, None, 0, 0)
+        self.d.flush()
+        return True
+
+    def focus(self, xid=None):
+        """The second keyboard's focus: the shared window, or PointerRoot (keys go where the controller's pointer is)."""
+        if self.ok:
+            self.xi.XISetFocus(self.d.dpy, self.kbd, int(xid) if xid else 1, 0)
+            self.d.flush()
+
+    def flush(self):
+        if self.d.dpy:
+            self.d.flush()
+
+    def _remove_quiet(self):
+        try:
+            for dev in (self._pdev, self._kdev):
+                if dev:
+                    self.xi.XCloseDevice(self.d.dpy, dev)
+            self._pdev = self._kdev = None
+            if self.ptr:
+                self._remove(self.ptr)
+                self.ptr = 0
+        except Exception:
+            pass
+
+    def close(self):
+        self.ok = False
+        self._remove_quiet()
+        self.d.close()
+
+
+# The arrow (hotspot at 0, 0) both pointer windows draw -- kastr_overlay.POINTER_ARROW is the same shape
+ARROW = ((0, 0), (0, 20), (5, 15), (9, 23), (12, 22), (8, 14), (14, 14))
+
+
+def polygon_spans(pts):
+    """[(y, x0, x1)] -- the polygon's pixel rows (pixel centres inside, even-odd), x1 exclusive: the window's shape."""
+    ys = [p[1] for p in pts]
+    out = []
+    n = len(pts)
+    for y in range(min(ys), max(ys) + 1):
+        cy = y + 0.5
+        xs = []
+        for i in range(n):
+            (x0, y0), (x1, y1) = pts[i], pts[(i + 1) % n]
+            if (y0 <= cy < y1) or (y1 <= cy < y0):
+                xs.append(x0 + (cy - y0) * (x1 - x0) / float(y1 - y0))
+        xs.sort()
+        for a, b in zip(xs[0::2], xs[1::2]):
+            l, r = int(math.floor(a + 0.5)), int(math.floor(b + 0.5))
+            if r > l:
+                out.append((y, l, r))
+    return out
+
+
+def ink_for(rgb):
+    """Black or white text on a colour (WCAG-ish luminance)."""
+    r, g, b = (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255
+    return 0x000000 if (0.2126 * r + 0.7152 * g + 0.0722 * b) > 150 else 0xFFFFFF
+
+
+def pointer_layout(name, cw=7):
+    """-> (W, H, tag rect (x, y, w, h)): the arrow at the top left, the name tag under its tail."""
+    name = str(name or "")[:28]
+    tw = cw * len(name) + 12
+    tx, ty, th = 12, 20, 17
+    return max(16, tx + tw) + 1, ty + th + 1, (tx, ty, tw, th)
+
+
+class PointerWin:
+    """The controller's arrow + name tag on an X11 desktop: an override-redirect window shaped to the arrow and the tag, with
+    an EMPTY input shape (clicks fall through to what is under it). move(x, y, on) places its tip; stop() ends it. X11 cannot
+    keep it out of x11grab -- it is in the shared picture (kastr_rc.X11Backend.pointer_in_capture)."""
+
+    def __init__(self, name, color="#009fda", display=None, parent=None):
+        # parent: the SHARED WINDOW for a window share -- the arrow is then the window's own child, so x11grab -window_id
+        # (which reads that window's pixels) captures it as drawn; as a top-level over it, the capture showed a black
+        # silhouette where it covered the window (lab v02180). A screen share keeps it on the root (captured as drawn there).
+        self.parent = int(parent) if parent else 0
+        self.name = str(name or "")[:28].translate({0x2014: "-", 0x2013: "-", 0x2019: "'", 0x2018: "'"})
+        try:
+            self.rgb = int(str(color).lstrip("#"), 16) & 0xFFFFFF
+        except ValueError:
+            self.rgb = 0x009FDA
+        self.display = display
+        self._want = None
+        self._stop = threading.Event()
+        self._r, self._w = os.pipe()
+        self._th = None
+        self.err = None
+        self.shown = False
+
+    def start(self):
+        self._th = threading.Thread(target=self._run, name="kastr-rc-x11-pointer", daemon=True)
+        self._th.start()
+
+    def move(self, x, y, on=True):
+        self._want = (int(x), int(y)) if on else None
+        try:
+            os.write(self._w, b"m")
+        except OSError:
+            pass
+
+    def stop(self):
+        self._stop.set()
+        try:
+            os.write(self._w, b"q")
+        except OSError:
+            pass
+        if self._th and self._th is not threading.current_thread():
+            self._th.join(2.0)
+        for fd in (self._r, self._w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _run(self):
+        try:
+            d = Display(self.display)
+        except OSError as e:
+            self.err = str(e)
+            return
+        x = d.x
+        ext = _load("Xext")
+        W, H, (tx, ty, tw, th) = pointer_layout(self.name)
+        sa = XSetWindowAttributes()
+        sa.override_redirect = 1
+        sa.background_pixel = self.rgb
+        sa.event_mask = 1 << 15   # Exposure
+        parent = self.parent or d.root
+        win = x.XCreateWindow(d.dpy, parent, -100, -100, W, H, 0, 0, 1, None, (1 << 1) | (1 << 9) | (1 << 11), ctypes.byref(sa))
+        x.XStoreName(d.dpy, win, b"KASTR pointer")
+        gc = x.XCreateGC(d.dpy, win, 0, None)
+        if ext is not None:
+            ext.XShapeCombineRectangles.argtypes = [c_void_p, Window, c_int, c_int, c_int, ctypes.POINTER(XRectangle), c_int, c_int, c_int]
+            spans = polygon_spans(ARROW)
+            rects = [XRectangle(l, y, r - l, 1) for y, l, r in spans] + [XRectangle(tx, ty, tw, th)]
+            arr = (XRectangle * len(rects))(*rects)
+            ext.XShapeCombineRectangles(d.dpy, win, 0, 0, 0, arr, len(rects), 0, 0)   # ShapeBounding, ShapeSet, Unsorted
+            ext.XShapeCombineRectangles(d.dpy, win, 2, 0, 0, None, 0, 0, 0)          # ShapeInput: nothing -- clicks fall through
+        x.XFillPolygon.argtypes = [c_void_p, Window, c_void_p, ctypes.POINTER(XPoint), c_int, c_int, c_int]
+        x.XDrawLines.argtypes = [c_void_p, Window, c_void_p, ctypes.POINTER(XPoint), c_int, c_int]
+        pts = (XPoint * (len(ARROW) + 1))(*[XPoint(px, py) for px, py in ARROW + (ARROW[0],)])
+        label = self.name.encode("latin-1", "replace")
+        ink = ink_for(self.rgb)
+
+        def paint():
+            x.XSetForeground(d.dpy, gc, self.rgb)
+            x.XFillPolygon(d.dpy, win, gc, pts, len(ARROW), 0, 0)
+            x.XSetForeground(d.dpy, gc, 0xFFFFFF)
+            x.XDrawLines(d.dpy, win, gc, pts, len(ARROW) + 1, 0)
+            x.XSetForeground(d.dpy, gc, self.rgb)
+            x.XFillRectangle(d.dpy, win, gc, tx, ty, tw, th)
+            x.XSetForeground(d.dpy, gc, ink)
+            x.XDrawString(d.dpy, win, gc, tx + 6, ty + 13, label, len(label))
+            x.XFlush(d.dpy)
+
+        fd = x.XConnectionNumber(d.dpy)
+        xev = XEvent()
+        last_raise = 0.0
+        at = None
+        try:
+            while not self._stop.is_set():
+                r, _, _ = select.select([fd, self._r], [], [], 0.5)
+                if self._r in r:
+                    try:
+                        os.read(self._r, 4096)
+                    except OSError:
+                        pass
+                want = self._want
+                if want is None and self.shown:
+                    x.XUnmapWindow(d.dpy, win)
+                    self.shown = False
+                elif want is not None and want != at:
+                    x.XMoveWindow.argtypes = [c_void_p, Window, c_int, c_int]
+                    px, py = want
+                    if parent != d.root:   # root coordinates -> the shared window's
+                        cx, cy, ch = c_int(), c_int(), Window()
+                        if x.XTranslateCoordinates(d.dpy, d.root, parent, px, py, ctypes.byref(cx), ctypes.byref(cy), ctypes.byref(ch)):
+                            px, py = cx.value, cy.value
+                    x.XMoveWindow(d.dpy, win, px, py)
+                    if not self.shown:
+                        x.XMapRaised(d.dpy, win)
+                        self.shown = True
+                        paint()
+                at = want
+                now = time.time()
+                if self.shown and now - last_raise > 1.0:   # stays above anything mapped since
+                    x.XRaiseWindow(d.dpy, win)
+                    last_raise = now
+                while x.XPending(d.dpy):
+                    x.XNextEvent(d.dpy, ctypes.byref(xev))
+                    if (xev[0] & 0xFFFFFFFF) == EXPOSE:
+                        paint()
+                x.XFlush(d.dpy)
+        finally:
+            try:
+                x.XFreeGC(d.dpy, gc)
+                x.XDestroyWindow(d.dpy, win)
+                x.XFlush(d.dpy)
+            except Exception:
+                pass
+            d.close()
 
 
 # ---- clipboard (xclip / xsel) ----------------------------------------------------------------------------------------

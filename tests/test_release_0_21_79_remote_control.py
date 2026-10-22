@@ -4,7 +4,8 @@ sharing their desktop and a prompt to allow that user to take control of your ma
 input." Decided: mouse + keyboard + clipboard text on a NATIVE screen / window / tab share of the KASTR app; only publishers
 and admins of that room may ask (the relay enforces it); the sharer clicks Allow every time; a grant lasts until it is stopped
 (Stop control, Ctrl+Alt+Space, the share stopping or pausing, either side leaving or going quiet ~10 s); physical input on the
-sharer's computer holds remote input off for ~3 s.
+sharer's computer held remote input off for ~3 s -- until 0.21.80 (two pointers: the controller's moves move only their own
+arrow, local input never pauses remote input -- tests/test_release_0_21_80_two_pointers.py; the expectations below follow).
 
 What is proven here (loopback, no network, NO real input anywhere):
   * the relay's notes (kastr_relay.rc_send): role check, sender in the share's room, ask -> the share's owner, only the sharer
@@ -314,7 +315,7 @@ class Injector(unittest.TestCase):
         self.assertEqual((c, st["error"]), (403, "not the controller this grant is for"))
         self.assertEqual(self.b.events, [])
         self.assertEqual(self.put([{"t": "m", "x": 0.5, "y": 0.5}])[1], 200)
-        self.assertEqual(self.b.events, [("move", 420, 250)])
+        self.assertEqual(self.b.events, [("pointer", 420, 250, True)])   # 0.21.80: the controller's own arrow
 
     def test_grant_needs_a_live_native_share(self):
         o, c = self.r.start(self.RCID, B, "Bob", 99)
@@ -397,21 +398,21 @@ class Injector(unittest.TestCase):
     def test_coordinates_clip_and_drop(self):
         self.grant()
         self.put([{"t": "m", "x": 0, "y": 0}, {"t": "m", "x": 1, "y": 1}, {"t": "m", "x": 1.7, "y": -3}, {"t": "m", "x": "nan", "y": 0.5}])
-        self.assertEqual(self.ev("move"), [("move", 100, 50), ("move", 739, 449), ("move", 739, 50)])
+        self.assertEqual(self.ev("pointer"), [("pointer", 100, 50, True), ("pointer", 739, 449, True), ("pointer", 739, 50, True)])
         self.put([{"t": "d", "b": 0, "x": 1.2, "y": 0.5}, {"t": "w", "n": 1, "x": -0.1, "y": 0.5}])   # outside the window: dropped
         self.assertEqual((self.ev("button"), self.ev("wheel")), ([], []))
         self.assertEqual(self.r.stats["outside"], 2)
         self.put([{"t": "d", "b": 2, "x": 0.25, "y": 0.75}, {"t": "u", "b": 2, "x": 1.4, "y": 0.75}])   # a release always lets go
-        self.assertEqual(self.ev("button"), [("button", 2, True, 260, 350), ("button", 2, False, 739, 350)])
+        self.assertEqual(self.ev("button"), [("button", 2, True, 260, 350, "post"), ("button", 2, False, 739, 350, "post")])
         self.put([{"t": "u", "b": 0, "x": 0.5, "y": 0.5}, {"t": "d", "b": 9, "x": 0.5, "y": 0.5}])     # never pressed / no such button
         self.assertEqual(len(self.ev("button")), 2)
         self.put([{"t": "w", "n": 2.4, "h": -1, "x": 0.5, "y": 0.5}])
-        self.assertEqual(self.ev("wheel"), [("wheel", 2.4, False), ("wheel", -1.0, True)])
+        self.assertEqual(self.ev("wheel"), [("wheel", 2.4, False, "post"), ("wheel", -1.0, True, "post")])
 
     def test_monitor_with_a_negative_origin(self):
         self.grant(feed=8)
         self.put([{"t": "m", "x": 0.5, "y": 0.5}, {"t": "d", "b": 0, "x": 0, "y": 1}])
-        self.assertEqual(self.b.events[:2], [("move", -960, 540), ("button", 0, True, -1920, 1079)])
+        self.assertEqual((self.ev("pointer")[0], self.ev("button")[0]), (("pointer", -960, 540, True), ("button", 0, True, -1920, 1079, "post")))
 
     def test_never_clicks_kastr_bar(self):
         self.ui.bar = {"x": 300, "y": 56, "w": 200, "h": 30}
@@ -422,6 +423,10 @@ class Injector(unittest.TestCase):
     def test_covered_window_is_raised_or_the_click_dropped(self):
         self.grant()
         self.b.on_top = False
+        self.put([{"t": "d", "b": 0, "x": 0.5, "y": 0.5}, {"t": "u", "b": 0, "x": 0.5, "y": 0.5}])   # 0.21.80: a POSTED click reaches a covered window as it is
+        self.assertEqual((self.b.raised, len(self.ev("button"))), ([], 2))
+        self.b.events.clear()
+        self.b.mode = "warp"                           # a warp-click needs the window in front
         self.put([{"t": "d", "b": 0, "x": 0.5, "y": 0.5}])
         self.assertEqual((self.b.raised, self.ev("button")), ([WIN_URL], []))
         self.b.on_top = True
@@ -435,7 +440,7 @@ class Injector(unittest.TestCase):
         self.assertEqual((self.ev("key"), st["blocked"]), ([], "focus"))
         self.b.focus = True
         self.put([{"t": "k", "c": "KeyA", "d": 1}, {"t": "k", "c": "KeyA", "d": 0}, {"t": "k", "c": "KeyB", "d": 0}, {"t": "k", "c": "Hyper", "d": 1}])
-        self.assertEqual(self.ev("key"), [("key", "KeyA", True), ("key", "KeyA", False)])
+        self.assertEqual(self.ev("key"), [("key", "KeyA", True, "send"), ("key", "KeyA", False, "send")])
 
     def test_elevated_and_secure_are_reported(self):
         self.grant()
@@ -449,33 +454,28 @@ class Injector(unittest.TestCase):
         self.assertEqual(st["blocked"], "")
 
     def test_local_input_holds_remote_off(self):
+        # 0.21.80 (Kenton: "Allow both mice at the same time ... Instead of my mouse taking over their remote control"): the
+        # 0.21.79 3 s hold is gone -- the person at the keyboard and the controller work at once
         self.grant()
         self.r.local_input("mouse")
         self.clock.t += 1.0
         st, _ = self.put([{"t": "d", "b": 0, "x": 0.5, "y": 0.5}, {"t": "k", "c": "KeyA", "d": 1}])
-        self.assertEqual((st["paused"], st["pauseLeft"]), (True, 2000))
-        self.assertEqual(self.b.events, [])
-        self.clock.t += 1.9
-        self.assertTrue(self.put([{"t": "m", "x": 0.5, "y": 0.5}])[0]["paused"])
-        self.assertEqual(self.b.events, [])
-        self.clock.t += 0.2                            # 3.1 s after the last local input
-        st, _ = self.put([{"t": "m", "x": 0.5, "y": 0.5}])
-        self.assertFalse(st["paused"])
-        self.assertEqual(self.b.events, [("move", 420, 250)])
-        self.assertEqual(self.r.stats["paused"], 3)
+        self.assertEqual((st["paused"], st["pauseLeft"]), (False, 0))
+        self.assertEqual([e[0] for e in self.b.events], ["pointer", "button", "key"])
+        self.assertEqual(self.r.stats["paused"], 0)
 
     def test_local_input_lets_go_of_held_keys(self):
         self.grant()
         self.put([{"t": "k", "c": "ShiftLeft", "d": 1}, {"t": "d", "b": 0, "x": 0.5, "y": 0.5}])
-        self.r._release_locked()                       # what local_input() runs on its own thread
-        self.assertEqual(self.b.events[-2:], [("key", "ShiftLeft", False), ("button", 0, False, None, None)])
-        self.assertEqual((self.r.held_keys, self.r.held_buttons), (set(), set()))
+        self.r._release_locked()                       # (0.21.80: local input no longer lets go of them -- control ending does)
+        self.assertEqual(self.b.events[-2:], [("key", "ShiftLeft", False, "send"), ("button", 0, False, None, None, "post")])
+        self.assertEqual((self.r.held_keys, self.r.held_buttons), ({}, {}))
 
     def test_end_lets_go_of_held_keys(self):
         self.grant()
         self.put([{"t": "k", "c": "ControlLeft", "d": 1}, {"t": "d", "b": 2, "x": 0.5, "y": 0.5}])
         self.r.end(self.RCID, "released")
-        self.assertEqual(self.b.events[-2:], [("key", "ControlLeft", False), ("button", 2, False, None, None)])
+        self.assertEqual(self.b.events[-2:], [("key", "ControlLeft", False, "send"), ("button", 2, False, None, None, "post")])
 
     def test_clipboard_caps_and_grant_only(self):
         st, c = self.put([{"t": "clip", "text": "before"}])
@@ -694,7 +694,7 @@ class Api(unittest.TestCase):
         self.assertEqual((code, d["ok"], d["status"]["active"]), (200, True, True))
         code, d = self.call("POST", {"op": "input", "rcid": "abcdefgh1234", "src": B, "ev": [{"t": "m", "x": 0.5, "y": 0.5}]}, H)
         self.assertEqual((code, d["active"]), (200, True))
-        self.assertEqual(rc._RC.backend.events, [("move", 420, 250)])
+        self.assertEqual(rc._RC.backend.events, [("pointer", 420, 250, True)])   # 0.21.80: the controller's own arrow
         code, d = self.call("POST", {"op": "end", "rcid": "abcdefgh1234", "why": "stopped"}, H)
         self.assertEqual((code, d["ended"]), (200, "stopped"))
         code, d = self.call("POST", {"op": "input", "rcid": "abcdefgh1234", "src": B, "ev": [{"t": "m", "x": 0.5, "y": 0.5}]}, H)
@@ -768,7 +768,7 @@ class Wiring(unittest.TestCase):
         self.assertIn('JSON.stringify({ op: "rc", ...body })', p)
         self.assertIn('"x-kastr-rc": "1"', p)
         # Kenton's words
-        self.assertIn('" asks to control " + what + ". They\\u2019ll be able to use your mouse, keyboard and clipboard."', p)
+        self.assertIn('" asks to control " + what + ". They\\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there."', p)   # 0.21.80
         self.assertIn('c.name + " is using their mouse \\u2014 paused"', p)
         self.assertIn('" \\u2014 Stop control (Ctrl+Alt+Space)"', p)
         # hold Esc for a second; Keyboard Lock in full screen; never an old click twice

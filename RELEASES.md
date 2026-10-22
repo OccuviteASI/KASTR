@@ -2,6 +2,10 @@
 
 What changed in each build, newest first.
 
+## v0.21.82 — click the zoomed relay to go back
+
+**On the mesh map, clicking the relay you zoomed into takes you back to the full mesh (Kenton: "when you click on that same relay again it should go back a level")** — like ← Full mesh or Escape; its tooltip says so. Dragging it still just moves it.
+
 ## v0.21.81 — save a recording as MP4, WebM, MKV, MOV, M4A or MP3
 
 **Recordings save in the format you pick (Kenton: "allow for saving in multiple different formats. Default to MP4").** When a recording stops, the save dialog lists **MP4** (picked every time — plays everywhere), **WebM**, **MKV**, **MOV** (QuickTime / editing apps), and audio only **M4A** and **MP3**; the file name, Save as… and Download follow the choice.

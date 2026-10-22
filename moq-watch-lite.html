@@ -2858,6 +2858,26 @@
   const odWanted = new Map();        // broadcast -> ms this page asked for it (chip click)
   let gridWake = null;               // 0.21.2: {gp, idx, path, at} -- a quadrant click waiting for its feed
   let gridOpen = null;               // 0.21.15 (7b): {gp, idx, path, at, bytes, frames, retried, timer} -- a cell click waiting for the camera's first frame
+  // 0.21.80 (Kenton: "It expands the view like it's going full and then closes immediately and goes back to the grid"): every time
+  // the stage hands a grid camera back to its grid, or a cell's open is abandoned, is remembered with its reason -- the last 20 ride
+  // /api/diag (watcher.gridBacks), so a field report says which guard fired, for which camera, and how long after the click
+  const gridBackLog = [];
+  let cellClick = null;              // {gp, idx, path, at}: the last deliberate click on a grid cell (or a camera spot of a room grid)
+  function gridBackNote(kind, path, gp, why) {
+    const now = Date.now(), p = String(path || "");
+    const e = { at: now, kind, path: p, gp: String(gp || ""), why: String(why || ""), clickAgoMs: cellClick && cellClick.path === p ? now - cellClick.at : null };
+    gridBackLog.push(e);
+    if (gridBackLog.length > 20) gridBackLog.shift();
+    return e;
+  }
+  window.__gridBacks = () => gridBackLog.slice();   // rig
+  // 0.21.80: a grid camera put on the stage BY A CLICK (its cell, its cold open's swap, a woken camera) is held there for
+  // GRID_PICK_GRACE_MS whatever its grid's owner says about it a moment later (a `down` flag that flaps while a camera starts);
+  // after that the 0.21.66 guard judges it again, so a camera that really went away still hands the stage back to its grid
+  const GRID_PICK_GRACE_MS = 10000;
+  let gridPick = null;               // {path, at}
+  function gridPickNote(path) { gridPick = { path: String(path), at: Date.now() }; }
+  const gridPickHeld = (path) => !!gridPick && gridPick.path === String(path) && Date.now() - gridPick.at < GRID_PICK_GRACE_MS;
 
   // ---- 0.16.0: @moq/net 0.4.0 adapters ---------------------------------------------
   // announced() takes a PATTERN now (nothing = everything) and yields route entries
@@ -6683,7 +6703,7 @@
   // cert fetch, announce interest, catalog, video AND audio to zero. Watch =
   // put the attribute back. The element reflects connection.url, so the
   // attribute round-trips.
-  function watchStream(name) {
+  function watchStream(name, quiet) {
     const t = tiles.get(name);
     if (!t) return;
     enabledStreams.delete(name);           // re-add: newest slot under the cap
@@ -6692,6 +6712,7 @@
     saveParked();
     saveEnabled();
     if (!t.watch.getAttribute("url") && !t.cg) t.watch.setAttribute("url", tileUrl(name));
+    if (quiet) return;   // 0.21.80: the caller lays the stage out itself (a grid cell's open, applyState's own guard)
     if (selectedName === undefined) selectedName = name;
     applyState();
   }
@@ -7503,6 +7524,7 @@
     if (autoContent && isGridChild(autoContent)) autoContent = null;   // a child is never an arrival
     if (manualPick || gridMode || !selectedName || !isGridChild(selectedName)) return;
     const gp = gridChildOf.get(selectedName);
+    gridBackNote("selfix", selectedName, gp, "an automatic pick of a grid camera");
     gridZoom = null;
     gridMode = true;
     selectedName = tiles.has(gp) ? gp : (orderedNames().find((n) => isWatched(n) && !isGridChild(n)) ?? undefined);
@@ -7540,7 +7562,7 @@
   const gridParked = (name) => !gridMode && !selfSpotEl && gridMeta.has(name) && gridOwnerOf(selectedName) === name;   // 0.21.65: a split camera on the stage leaves its grid alone
   const deadMember = (name) => { for (const m of gridMeta.values()) if (m.dead?.has(name)) return true; return false; };   // 0.21.0
   const leavingExMember = (name) => { if (!pendingRemovals.has(name)) return false; const now = Date.now(); for (const f of gridForgot.values()) if (f.known.includes(name) && now - f.at <= GRID_FORGOT_HOLD_MS) return true; return false; };   // 0.21.16: an ex-member of a just-withdrawn grid whose own broadcast already went inactive stays hidden while its removal debounce runs (owner switched its cameras off: no loose dead tiles)
-  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || deadMember(name) || leavingExMember(name) || roomHid.has(name)
+  const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || (deadMember(name) && !(name === selectedName && !gridMode && gridPickHeld(name))) || leavingExMember(name) || roomHid.has(name)   // 0.21.80: a clicked camera held through a `down` flap stays shown
     || (cgHide(name) && (gridMode || name !== selectedName))   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
     || gridDark(name);
   // 0.21.66 (Kenton: an RTMP grid sat on "cameras offline -- reconnecting (3)" -- "It should hide it"): a grid whose every camera is
@@ -8446,6 +8468,7 @@
     pane.addEventListener("dblclick", (e) => {
       const c = canvasOf();
       clearTimeout(pane.__clickT); pane.__clickT = null;   // 0.21.65: the click that began this double-click does nothing
+      if (gridDblIsCellOpen(pane)) { e.preventDefault(); return; }   // 0.21.80: the double-click that opened a grid's camera is one gesture
       if (!c || !allow() || e.target.closest("button, input")) return;
       e.preventDefault();
       if (viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); } else viewZoomAt(c, 2, e.clientX, e.clientY);   // 0.21.15: un-zooming abandons a cold open
@@ -8469,6 +8492,24 @@
   // 0.21.2: the quadrant IS the play button. A cell whose feed is on demand (or down) asks the relay host to wake
   // it, shows "starting..." over the cell and opens the feed the moment its tile exists (createTile -> gridWakeCheck).
   const gridMemberSet = () => { const s2 = new Set(); for (const m of gridMeta.values()) for (const x of (m.members || [])) if (x) s2.add(String(x)); return s2; };
+  // 0.21.80: can this page subscribe to a grid's camera at all? My room's own, one listed into my room (xshare / a board pin), or
+  // one of a room I watch. A grid shown here from another room whose cameras are not listed here never gets a tile (the relay
+  // grants this page that grid's path alone): a click on its cell waited 90 s for nothing -- it stays on the cell instead.
+  // 0.21.80 (Kenton, Mendon: "It expands the view like it's going full and then closes immediately and goes back to the grid" --
+  // on every camera but two): a DOUBLE-click on a cell. Its first click opens the camera (a cold open zooms the cell while the
+  // camera's first frame comes -- "expands like it's going full"); the second click was already ignored (0.21.20), but the
+  // dblclick that follows read the zoomed cell as "zoomed in" and un-zoomed it (0.21.15: un-zooming abandons a cold open) -- back
+  // to the grid. A camera already decoding (split out, a full-quality cell, shown elsewhere) opened at once and survived: Mendon's
+  // two. The double-click that opens a cell is ONE gesture: while that grid's cell opens / wakes, or for GRID_DBL_MS after a cell
+  // click on this pane (or on the camera it put on the stage), a dblclick does nothing.
+  const GRID_DBL_MS = 800;
+  function gridDblIsCellOpen(pane) {
+    const on = (n) => !!n && tiles.get(n)?.pane === pane;
+    if ((gridOpen && on(gridOpen.gp)) || (gridWake && on(gridWake.gp))) return true;
+    return !!cellClick && Date.now() - cellClick.at < GRID_DBL_MS && (on(cellClick.gp) || on(cellClick.path));
+  }
+  window.__gridDblIsCellOpen = (name) => { const t = tiles.get(name); return t ? gridDblIsCellOpen(t.pane) : null; };   // rig
+  const gridCamReachable = (fp) => { const r = String(fp).split("/", 1)[0]; return r === CHANNEL || xsTiles.has(String(fp)) || watchRooms.has(r) || tiles.has(String(fp)); };
   function gridWakeStart(gp, idx, fp) {
     const meta = gridMeta.get(gp);
     const od = odFeeds.some((f) => f.broadcast === fp);
@@ -8483,7 +8524,7 @@
     // at the grid's quality, while the camera starts -- the feed's own tile takes over the moment it exists
     if (!gridMode && selectedName === gp && !selfSpotEl) { gridZoom = { name: gp, idx }; fitMainstage(lastRail.rows); paintGridZoom(); }
     paintGridWait();
-    setTimeout(() => { if (gridWake && gridWake.path === fp && Date.now() - gridWake.at >= 89000) { gridWake = null; paintGridWait(); if (gridZoom?.name === gp) clearGridZoom(); window.__toast?.("That camera did not start.", 5000, { level: "warn" }); } }, 90000);
+    setTimeout(() => { if (gridWake && gridWake.path === fp && Date.now() - gridWake.at >= 89000) { gridBackNote("wake-gave-up", fp, gp, "no tile for the camera after 90 s"); gridWake = null; paintGridWait(); if (gridZoom?.name === gp) clearGridZoom(); window.__toast?.("That camera did not start.", 5000, { level: "warn" }); } }, 90000);
     return true;
   }
   function paintGridWait() {
@@ -8510,9 +8551,26 @@
     const gp = gridWake.gp, idx = gridWake.idx;
     gridWake = null; paintGridWait();
     if (gridZoom?.name === gp) { const t = tiles.get(gp); gridZoom = null; if (t) viewReset(t.canvas); }   // 0.21.7: the composite cell hands the stage to the feed's own tile
-    setTimeout(() => { if (tiles.has(name) && !gridOpenStart(gp, idx, name)) select(name); }, 0);   // 0.21.15: a fresh tile has no picture yet -- the cold-open path keeps the cell on the stage
+    // 0.21.80 (Kenton: "It expands the view like it's going full and then closes immediately and goes back to the grid" -- on
+    // Mendon every camera but the two copied ones): a camera ASLEEP when its cell was clicked (0.21.73: encode only while
+    // watched) has no tile; it gets one the moment it wakes, and a camera this device once parked (kastr.watch.parked -- "a
+    // re-announce never re-arms it") was re-created PARKED: gridOpenStart refused it, select() put it on the stage and
+    // applyState's 0.21.66 guard sent the stage straight back ("not watched"). The click is the ask: watch it first.
+    if (tiles.has(name) && !isWatched(name)) watchStream(name, true);
+    setTimeout(() => { if (tiles.has(name) && !gridOpenStart(gp, idx, name)) { gridPickNote(name); select(name); } }, 0);   // 0.21.15: a fresh tile has no picture yet -- the cold-open path keeps the cell on the stage
   }
   window.__gridWake = () => gridWake;   // rig
+  window.__gridCellPoint = (gp, idx) => {   // rig (0.21.80): the client point at the centre of a grid tile's cell, as gridCellAtW maps it
+    const t = tiles.get(gp), meta = gridMeta.get(gp);
+    if (!t || !meta || !t.canvas.isConnected) return null;
+    const f = viewFitBox(t.canvas);
+    if (!f) return null;
+    const rs = meta.path && vgLaidOut(meta.path) ? vgDstRects(meta.path, meta, f.cw, f.ch) : gridRectsOf(meta, f.cw, f.ch);
+    const r = rs[idx];
+    if (!r) return null;
+    const wb = t.canvas.parentElement.getBoundingClientRect();
+    return { x: wb.left + f.ox + (r.x + r.w / 2) * f.sc, y: wb.top + f.oy + (r.y + r.h / 2) * f.sc, path: meta.feeds?.[idx] || meta.members?.[idx] || null };
+  };
   // 0.21.15 (Part 39 item 7b): a cell click on a REMOTE grid whose camera tile exists but has no picture yet. A cold pull
   // delivers nothing until the camera's next keyframe (measured 1-45 s on UniFi; Southridge never), so the stage never shows
   // the camera's black pane: the composite's cell fills the stage at once (the 0.9.8 seeded view), the camera tile subscribes
@@ -8522,8 +8580,11 @@
   const GRID_OPEN_POLL_MS = 200, GRID_OPEN_NODATA_MS = 15000, GRID_OPEN_GIVEUP_MS = 90000;
   function gridOpenStart(gp, idx, fp) {
     const t = tiles.get(fp);
-    if (!t || t.fb || !CLIENT.webcodecs || !isWatched(fp)) return false;   // a fallback player or an unwatched tile takes the 0.21.7 path
+    if (!t || t.fb || !CLIENT.webcodecs) return false;   // a fallback player takes the 0.21.7 path
     if (gridMode || selfSpotEl || selectedName !== gp || !gridMeta.has(gp)) return false;   // only from the composite on the stage
+    // 0.21.80: a PARKED camera is no reason to refuse -- refusing sent it down the instant path onto the stage unwatched, and the
+    // 0.21.66 guard bounced it straight back to the grid. The click is the ask: watch it, then open it the cold way.
+    if (!isWatched(fp)) watchStream(fp, true);
     if (hasPicture(t) && (t.watch.getAttribute("visible") || "never") !== "never") return false;   // a warm SUBSCRIBED tile opens at once (the 0.21.7 path); a parked child's frame is stale -- the library re-creates the decoder on never -> always, so the instant path showed a black pane until the next keyframe (rig 2026-10-02)
     gridOpenEnd(false);
     gridOpen = { gp, idx, path: fp, at: Date.now(), bytes: 0, frames: 0, retried: false, timer: null };
@@ -8549,18 +8610,29 @@
   function gridOpenTick() {
     const o = gridOpen; if (!o) return;
     const t = tiles.get(o.path);
-    if (!t || gridMode || selfSpotEl || selectedName !== o.gp || !gridMeta.has(o.gp)) { gridOpenEnd(false); return; }   // the viewer moved on
+    if (!t && !gridMode && !selfSpotEl && selectedName === o.gp && gridMeta.has(o.gp)) {   // 0.21.80: the camera's tile left while it opened (it went to sleep at the click)
+      const { gp, idx, path } = o;
+      gridOpenEnd(false);
+      if (gridWakeStart(gp, idx, path)) { gridBackNote("open-wait", path, gp, "the camera left while it opened -- woken, waiting for it"); return; }   // the cell stays; its tile reopens it (gridWakeCheck)
+      gridBackNote("open-end", path, gp, "the camera's tile left (its grid lists it down)");
+      return;
+    }
+    if (!t || gridMode || selfSpotEl || selectedName !== o.gp || !gridMeta.has(o.gp)) {   // the viewer moved on
+      gridBackNote("open-end", o.path, o.gp, !t ? "the camera's tile left" : gridMode ? "gallery" : selfSpotEl ? "my own pane took the stage" : selectedName !== o.gp ? "the stage moved to " + (selectedName || "nothing") : "the grid's layout left");
+      gridOpenEnd(false); return;
+    }
     if (document.hidden && !window.__rigVisible) { o.at += GRID_OPEN_POLL_MS; return; }   // a hidden window subscribes nothing (applyState): hold the clock, never time out on it
     gridOpenBytes(o);
     const now = Date.now();
     if (hasPicture(t) && o.frames !== o.frames0) {   // (3) swap on the first decoded frame -- of a chunk received since the click (a stale frame the library has not dropped yet must not pass)
       log("Opened " + shortLabel(o.path) + " after " + ((now - o.at) / 1000).toFixed(1) + " s" + (o.retried ? " (one re-subscribe)" : ""));
-      gridOpenEnd(true); select(o.path); return;
+      gridOpenEnd(true); gridPickNote(o.path); select(o.path); return;
     }
     if (o.bytes <= 0 && !o.retried && now - o.at > GRID_OPEN_NODATA_MS) { o.retried = true; resubscribe(o.path, "No data from the relay"); }   // (5) one retry, never a loop
     if (now - o.at > GRID_OPEN_GIVEUP_MS) {
       const why = o.bytes <= 0 ? "no data from the relay" : "no keyframe arrived";
       log("Could not open " + shortLabel(o.path) + " \u2014 " + why);
+      gridBackNote("open-gave-up", o.path, o.gp, why);
       window.__toast?.("That camera did not start \u2014 " + why + ".", 6000, { level: "warn" });
       gridOpenEnd(false); return;
     }
@@ -9199,8 +9271,26 @@
         // the grid "disappears" until a reload. Hand the stage back to the grid instead.
       const gp = selectedName && gridOwnerOf(selectedName);
       if (gp && !gridMode && !selfSpotEl && tiles.has(gp) && (!tiles.has(selectedName) || !isWatched(selectedName) || deadMember(selectedName) || roomHid.has(selectedName))) {
-        console.warn("KASTR: " + selectedName + " cannot be shown (" + (!tiles.has(selectedName) ? "no tile" : !isWatched(selectedName) ? "not watched" : deadMember(selectedName) ? "down" : "removed here") + ") -- back to its grid");
-        gridZoom = null; selectedName = gp;
+        const why = !tiles.has(selectedName) ? "no tile" : !isWatched(selectedName) ? "not watched" : deadMember(selectedName) ? "down" : "removed here";
+        // 0.21.80 (Kenton: "It expands the view like it's going full and then closes immediately and goes back to the grid"): a
+        // camera a CLICK just put here (gridPickNote) is the viewer's ask -- a parked one is watched instead of sent back, and a
+        // `down` from its grid's owner is held for the click's grace (it flaps while a camera starts), then judged again. A
+        // camera removed here, without a tile, or still down after the grace goes back to its grid as in 0.21.66.
+        const held = manualPick && gridPickHeld(selectedName);
+        if (held && why === "not watched") {
+          watchStream(selectedName, true);
+          gridBackNote("watched", selectedName, gp, "parked on this device -- the click watches it");
+        } else if (held && why === "down") {
+          if (!gridPick.held) {
+            gridPick.held = true;
+            gridBackNote("held", selectedName, gp, "its grid lists it down -- held for the click's " + GRID_PICK_GRACE_MS / 1000 + " s");
+            setTimeout(() => { try { applyState(); } catch {} }, Math.max(0, GRID_PICK_GRACE_MS - (Date.now() - gridPick.at)) + 50);
+          }
+        } else {
+          console.warn("KASTR: " + selectedName + " cannot be shown (" + why + ") -- back to its grid");
+          gridBackNote("guard", selectedName, gp, why);
+          gridZoom = null; selectedName = gp;
+        }
       }
     }
     for (const lit of [...spotLits.values()]) {   // 0.21.0: my spotlit share ended (8 s grace for a self-heal that re-announces)
@@ -10613,7 +10703,8 @@
         if (viewZoomed(tile.canvas)) { gridOpenEnd(false); gridZoom = null; viewReset(tile.canvas); fitMainstage(lastRail.rows); return; }   // 0.9.8: back to the mosaic's shape (0.21.15: a click on the waiting cell abandons the open)
         if (tile.cg) {   // 0.21.66 (e): a spot of a grid of cameras opens that camera at full quality (a click on it comes back)
           const k = cgCamAt(tile, e);
-          if (k && tiles.has(k)) { cgOpened = { cam: k, grid: name }; select(k); return; }
+          if (k) cellClick = { gp: name, idx: -1, path: String(k), at: Date.now() };   // 0.21.80: the diag ring's clock
+          if (k && tiles.has(k)) { if (!isWatched(k)) watchStream(k, true); cgOpened = { cam: k, grid: name }; gridPickNote(k); select(k); return; }   // 0.21.80: the click is the ask (a parked camera is watched)
           gridMode = true; applyState(); return;
         }
         if (cgOpened && cgOpened.cam === name && tiles.has(cgOpened.grid)) { const g = cgOpened.grid; cgOpened = null; select(g); return; }
@@ -10628,11 +10719,20 @@
           const idx = gridCellAtW(tile, meta, e);
           if (idx >= 0) {
             const fp = meta.feeds?.[idx] || meta.members?.[idx];   // 0.21.2: members in every grid mode
+            if (fp) cellClick = { gp: name, idx, path: String(fp), at: Date.now() };   // 0.21.80: the diag ring's clock
+            // 0.21.80: a camera listed into my room from another room (a pulled grid's camera) whose tile is not made yet -- the
+            // 8 s listing poll, or its removal while it slept -- gets it now and takes the cold-open path below
+            if (fp && !tiles.has(fp) && xsTiles.has(fp) && !publishOnly) { cancelPendingRemoval(fp); createTile(fp); }
             if (fp && tiles.has(fp) && !isWatched(fp)) watchStream(fp);   // 0.21.66 (Kenton, Mendon: "the grid window disappears"): a click on a PARKED camera's cell watches it -- the click is the ask
             if (fp && tiles.has(fp)) {   // 0.21.7: a tile on the low copy opens at once; the full pair is asked for right now
-              if (!fullLive.has(fp) && (odFeeds.some((f) => f.broadcast === fp) || lowAvail.has(fp))) odWake(fp);
+              odWake(fp);   // 0.21.80: the click IS a viewer -- a camera that encodes only while watched (0.21.73) may be asleep, or about to sleep, with its tile still here (another room's listing, the removal debounce); was only for on-demand / low-copy cameras
               if (gridOpenStart(name, idx, fp)) return;   // 0.21.15 (7b): no picture yet -> the composite cell zoomed, the camera decodes off-stage, swap on its first frame
-              select(fp); return;
+              gridPickNote(fp); select(fp); return;
+            }
+            if (fp && !gridCamReachable(fp)) {   // 0.21.80: a pulled grid whose camera is not shown in this room -- this page can never subscribe to it
+              gridBackNote("cell-only", fp, name, "the camera is not shown in this room -- the grid's own picture");
+              window.__toast?.(shortLabel(fp) + " is not shown in this room at full quality \u2014 this is the grid\u2019s picture (its box can add the camera: Share \u25b8 Show in rooms)", 6000, { level: "warn" });
+              gridZoom = { name, idx }; fitMainstage(lastRail.rows); paintGridZoom(); return;   // stays on the cell (0.9.8)
             }
             if (fp && gridWakeStart(name, idx, fp)) return;   // 0.21.2: an on-demand or down feed: wake it, open it when it is up
             gridZoom = { name, idx }; fitMainstage(lastRail.rows); paintGridZoom(); return;   // 0.9.8: the stage takes the cell's shape
@@ -11464,6 +11564,7 @@
         cancelPendingRemoval(path);
         if (!tiles.has(path)) createTile(path);
         else if (tiles.get(path)?.rendition === "low") { try { applyState(); } catch {} }   // 0.21.7: the full copy is up -- the spotlit tile re-points to it
+        else if (gridOpen && gridOpen.path === path && !(gridOpen.bytes > 0)) resubscribe(path, "The camera came back while it was opening");   // 0.21.80: it slept at the click and woke -- the subscription made while it slept never delivers
         spotApplyWinner();   // a vote may have arrived before its tile
       } else if (lowAvail.has(path) && tiles.has(path)) {
         try { applyState(); } catch {}   // 0.21.7: back to standby -- the tile stays on the low copy
@@ -14221,6 +14322,7 @@
     const inGrid = gridMemberSet();   // 0.21.73: a grid camera I watch keeps its box encoding it (it sleeps a minute after the last viewer)
     for (const [b, at] of [...odWanted]) {
       if (fullLive.has(b)) { odWanted.delete(b); continue; }        // 0.21.7: the FULL pair came up (a tile may live on the low copy alone)
+      if (!b.startsWith(CHANNEL + "/") && tiles.has(b) && hasPicture(tiles.get(b))) { odWanted.delete(b); continue; }   // 0.21.80: another room's camera (never in fullLive here) is up -- its picture says so; a watched tile keeps its own pulse below
       if (Date.now() - at > 90000) { odWanted.delete(b); continue; }
       odDemand(b);
     }
@@ -15363,6 +15465,7 @@
       gridOf: Object.fromEntries([...gridChildOf]),   // 0.9.5: feed -> grid it is heard through
       gridOut: Object.fromEntries([...gridMeta].map(([k, m]) => [k, [...(m.out || [])]])),   // 0.14.0: grid -> members its owner evicted (still hidden)
       gridForgot: Object.fromEntries([...gridForgot].map(([k, f]) => [k, { agoS: Math.round((Date.now() - f.at) / 1000), known: f.known }])),   // 0.21.15: grids forgotten in the last 60 s and the members they listed
+      gridBacks: gridBackLog.map((e) => ({ ...e, agoS: Math.round((Date.now() - e.at) / 1000) })),   // 0.21.80: the last 20 "back to its grid" events (guard, reason, camera, ms since the click)
       warmAudio,
       audioMode,
       channel: CHANNEL,

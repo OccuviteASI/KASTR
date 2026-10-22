@@ -766,6 +766,21 @@
   /* 0.8.7: recording save dialog + RTSP grid layout menu + People files */
   #recSave { position:fixed; left:50%; top:22%; transform:translateX(-50%); z-index:80; width:min(440px, 92vw); }
   #recSave .btnrow { display:flex; gap:8px; margin-top:10px; }
+  /* 0.21.81 (Kenton: "...Default to MP4."): the save formats + the conversion's progress */
+  #recFmts { display:grid; grid-template-columns:1fr; gap:4px; margin-top:10px; }
+  #recFmts .rfmt { display:flex; flex-direction:row; align-items:baseline; gap:8px; padding:4px 10px; border:1px solid var(--line); border-radius:6px; cursor:pointer; font-size:12px; color:var(--text); min-width:0; }
+  #recFmts .rfmt input { accent-color:var(--asi-blue); margin:0; flex:none; align-self:center; }
+  #recFmts .rfmt b { font-weight:600; flex:none; min-width:38px; }
+  #recFmts .rfmt span { color:var(--text-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  #recFmts .rfmt:has(input:checked) { border-color:var(--asi-blue); background:var(--asi-blue-glow); }
+  #recFmts .rfmt.off { cursor:not-allowed; opacity:.5; }
+  #recFmts .rfmt.off span { font-style:italic; }
+  #recProg { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:12px; color:var(--text); }
+  #recProg[hidden] { display:none; }
+  #recProg .rpbar { flex:1; height:6px; border-radius:3px; background:var(--line); overflow:hidden; }
+  #recProg .rpbar i { display:block; height:100%; width:0; background:var(--asi-blue); transition:width .3s; }
+  #recProg #recProgTxt { flex:none; min-width:118px; font-variant-numeric:tabular-nums; }
+  #recSave.busy .btnrow button, #recSave.busy #recFmts .rfmt { pointer-events:none; opacity:.5; }
   .gmenu { position:absolute; top:34px; right:6px; z-index:7; background:var(--surface-2); border:1px solid var(--line);
     border-radius:6px; padding:4px; display:flex; flex-direction:column; gap:2px; min-width:150px; }
   .gmenu button { text-align:left; font-size:11px; padding:5px 8px; background:transparent; border:0; color:var(--text);
@@ -2706,6 +2721,9 @@
   <div class="body">
     <label class="f"><span>File name</span><input type="text" id="recName" spellcheck="false"></label>
     <p class="hint" id="recSaveInfo" style="margin:4px 0 0"></p>
+    <!-- 0.21.81 (Kenton: "...Default to MP4."): the format, MP4 picked every time the dialog opens -->
+    <div id="recFmts" role="radiogroup" aria-label="Format"></div>
+    <div id="recProg" hidden><div class="rpbar"><i></i></div><span id="recProgTxt"></span><button type="button" id="recCancel" class="toggle">Cancel</button></div>
     <div class="btnrow">
       <button type="button" id="recSaveAs" class="toggle">Save as&hellip;</button>
       <button type="button" id="recDownload" class="toggle">Download</button>
@@ -15464,10 +15482,18 @@
     const stream = cv.captureStream(30);
     for (const a of dest.stream.getAudioTracks()) stream.addTrack(a);
     // 0.17.0: the container the browser can write -- Chromium/Firefox WebM (vp9 or vp8), Safari MP4
-    const mimes = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4"];
+    // 0.21.81 (Kenton: "...Default to MP4."): MP4 = H.264 High + AAC first. Measured in the bundled Chrome for Testing
+    // 153: MediaRecorder writes it at 720p and 1080p, so the default MP4 is a quick remux (real duration + index, no
+    // re-encode) and MOV / MKV / M4A are stream copies too. 5 Mbit/s H.264 for the 4 Mbit/s VP9 it replaces (H.264
+    // needs about a quarter more for the same picture). A Chromium without an AAC encoder (Linux) records MP4 with
+    // Opus -- the save then re-encodes only the sound. WebM stays the fallback (Firefox), then Safari's plain MP4.
+    const mimes = ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4;codecs=avc1.640028,opus",
+      "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
     const mime = mimes.find((m) => { try { return MediaRecorder.isTypeSupported(m); } catch { return false; } }) || "";
-    const mr = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 4000000 } : { videoBitsPerSecond: 4000000 });
+    const vbps = /^video\/mp4/i.test(mime) ? 5000000 : 4000000;
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: vbps } : { videoBitsPerSecond: vbps });
     recExt = /mp4/i.test(mime || mr.mimeType || "") ? ".mp4" : ".webm";
+    recLoadServer().then((s) => { recServer = s; });   // 0.21.81: what this KASTR can convert, ready for the save dialog
     const chunks = [];
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     rec = { mr, cv, cx, actx, mix, dest, taps, tapAll, chunks, t0: Date.now(), raf: 0, timer: 0, stream };
@@ -15535,6 +15561,7 @@
     const r = rec;
     if (!r) return;
     rec = null;
+    r.tEnd = Date.now();   // 0.21.81: the recording's length (the conversion's progress runs against it)
     cancelAnimationFrame(r.raf);
     clearInterval(r.timer);
     try { window.__recAnnounce?.clear?.(); } catch {}
@@ -15544,72 +15571,240 @@
       for (const tp of r.taps.values()) { try { tp.src?.disconnect?.(); } catch {} try { tp.root?.disconnect?.(tp.d); } catch {} }
       try { r.actx.close(); } catch {}
       for (const tr of r.stream.getTracks()) { try { tr.stop(); } catch {} }
-      const blob = new Blob(r.chunks, { type: r.mr.mimeType || "video/webm" });
+      const blob = new Blob(r.chunks, { type: r.mr.mimeType || (recExt === ".mp4" ? "video/mp4" : "video/webm") });
       const d = new Date(r.t0);
       const pad = (n) => String(n).padStart(2, "0");
       const name = "KASTR-" + (readChannel() || "room") + "-" + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
-        + "_" + pad(d.getHours()) + "-" + pad(d.getMinutes()) + ".webm";
-      recOfferSave(blob, name);   // 0.8.7: rename + choose where it goes
+        + "_" + pad(d.getHours()) + "-" + pad(d.getMinutes()) + ".mp4";   // 0.21.81: the dialog swaps the ending for the format
+      recOfferSave(blob, name, (r.tEnd || Date.now()) - r.t0);   // 0.8.7: rename + choose where it goes; 0.21.81: + its length
     });
     paintRec();
   }
   // 0.8.7: save dialog -- rename, "Save as" (File System Access picker,
   // remembers the folder per id) or plain Download to the Downloads folder.
-  let recPending = null;
+  // 0.21.81 (Kenton: "When recording is used, allow for saving in multiple different formats. Default to MP4."): a
+  // format choice, MP4 picked every time the dialog opens. The KASTR app converts on this computer (kastr_record.py:
+  // the recording streams to the local server, the bundled ffmpeg copies the streams wherever they fit the container,
+  // and the result streams back into the picked file or arrives as a download -- this page never holds a second full
+  // copy). A web viewer (no local server) gets what the browser recorded; the rest is greyed "needs the KASTR app".
+  const REC_FORMATS = [
+    { id: "mp4", label: "MP4", hint: "plays everywhere", ext: ".mp4", mime: "video/mp4", desc: "MP4 video" },
+    { id: "webm", label: "WebM", hint: "as recorded, fastest", ext: ".webm", mime: "video/webm", desc: "WebM video" },
+    { id: "mkv", label: "MKV", hint: "Matroska, keeps every stream", ext: ".mkv", mime: "video/x-matroska", desc: "Matroska video" },
+    { id: "mov", label: "MOV", hint: "QuickTime / editing apps", ext: ".mov", mime: "video/quicktime", desc: "QuickTime movie" },
+    { id: "m4a", label: "M4A", hint: "audio only", ext: ".m4a", mime: "audio/mp4", desc: "M4A audio" },
+    { id: "mp3", label: "MP3", hint: "audio only", ext: ".mp3", mime: "audio/mpeg", desc: "MP3 audio" },
+  ];
+  const REC_DEFAULT = "mp4";
+  const REC_EXT_RE = /\.(webm|mp4|mkv|mov|m4a|mp3)$/i;
+  let recPending = null;     // { blob, name, durMs, src: "mp4" | "webm" }
+  let recServer = null;      // 0.21.81: GET /api/record/formats, or { ffmpeg: false } where there is no local KASTR
+  let recBusy = null;        // 0.21.81: { xhr, job, cancelled } while a save converts
   const recSaveEl = document.getElementById("recSave");
-  function recOfferSave(blob, name) {
-    recPending = { blob, name };
-    document.getElementById("recName").value = name;
-    document.getElementById("recSaveInfo").textContent = Math.max(1, Math.round(blob.size / 1048576)) + " MB \u00b7 webm";
-    recSaveEl.hidden = false;
-  }
+  const recFmtsEl = document.getElementById("recFmts");
   let recExt = ".webm";   // 0.17.0: follows the recorder's container
-  function recSaveName() {
-    let n = (document.getElementById("recName").value || recPending?.name || ("recording" + recExt)).trim();
-    n = n.replace(/[\\/:*?"<>|]+/g, "-");
-    if (!/\.(webm|mp4)$/i.test(n)) n += recExt;
-    return n;
+  const recAbort = () => Object.assign(new Error("cancelled"), { name: "AbortError" });
+  const recSrcOf = (blob) => (/mp4/i.test(blob?.type || "") ? "mp4" : /webm/i.test(blob?.type || "") ? "webm" : recExt.slice(1));
+  async function recLoadServer() {
+    if ((window.__kastrClient?.class || "app") === "web") return { ffmpeg: false, web: true };   // another device on this relay host
+    try {
+      const r = await fetch("/api/record/formats", { cache: "no-store" });
+      if (!r.ok) return { ffmpeg: false };
+      return await r.json();
+    } catch { return { ffmpeg: false }; }
   }
-  function recDownloadNow() {
-    if (!recPending) return;
-    const name = recSaveName();
+  // what a format means for THIS recording: can it be saved here, and its hint
+  function recFmtState(f) {
+    const src = recPending ? recPending.src : recExt.slice(1);
+    const asIs = f.id === src;
+    const opusMp4 = src === "mp4" && /opus/i.test(recPending?.blob?.type || "");   // Linux Chromium: no AAC encoder
+    if (recServer?.ffmpeg) {
+      const why = recServer.formats?.[f.id];
+      if (why && why.ok === false) return { ok: false, hint: why.why || "not available here", asIs };
+      let hint = f.hint;
+      if (asIs) hint = f.id === "mp4" ? (opusMp4 ? "plays everywhere, sound made AAC" : "plays everywhere, as recorded") : "as recorded, fastest";
+      else if (f.id === "webm") hint = "converted to VP9, slower";
+      return { ok: true, hint, asIs };
+    }
+    if (asIs) return { ok: true, hint: f.id === "mp4" ? (opusMp4 ? "as recorded (Opus sound)" : "plays everywhere, as recorded") : "as recorded", asIs };
+    return { ok: false, hint: "needs the KASTR app", asIs };
+  }
+  const recFmtSel = () => REC_FORMATS.find((f) => f.id === recFmtsEl.querySelector("input:checked")?.value) || REC_FORMATS[0];
+  function recPaintFormats(pick) {
+    const st = new Map(REC_FORMATS.map((f) => [f.id, recFmtState(f)]));
+    let chosen = pick;
+    if (!st.get(chosen)?.ok) chosen = st.get(REC_DEFAULT).ok ? REC_DEFAULT : (REC_FORMATS.find((f) => st.get(f.id).ok)?.id || REC_DEFAULT);
+    recFmtsEl.textContent = "";
+    for (const f of REC_FORMATS) {
+      const s = st.get(f.id);
+      const lab = document.createElement("label");
+      lab.className = "rfmt" + (s.ok ? "" : " off");
+      lab.dataset.fmt = f.id;
+      lab.title = s.ok ? f.desc + " (" + f.ext + ")" : f.label + ": " + s.hint;
+      const inp = document.createElement("input");
+      inp.type = "radio"; inp.name = "recFmt"; inp.value = f.id; inp.disabled = !s.ok; inp.checked = f.id === chosen;
+      const b = document.createElement("b");
+      b.textContent = f.label;
+      const sp = document.createElement("span");
+      sp.textContent = "\u2014 " + s.hint;
+      lab.append(inp, b, sp);
+      recFmtsEl.appendChild(lab);
+    }
+    recRenameExt();
+  }
+  function recRenameExt() {   // the file name's ending follows the format
+    const el = document.getElementById("recName");
+    const n = (el.value || "").trim();
+    el.value = (REC_EXT_RE.test(n) ? n.replace(REC_EXT_RE, "") : n) + recFmtSel().ext;
+  }
+  recFmtsEl.addEventListener("change", recRenameExt);
+  function recProgress(text, pct) {
+    const el = document.getElementById("recProg");
+    recSaveEl.classList.toggle("busy", text != null);
+    if (text == null) { el.hidden = true; return; }
+    el.hidden = false;
+    document.getElementById("recProgTxt").textContent = text;
+    el.querySelector(".rpbar i").style.width = Math.max(0, Math.min(100, pct || 0)) + "%";
+  }
+  function recOfferSave(blob, name, durMs) {
+    recPending = { blob, name, durMs: durMs || 0, src: recSrcOf(blob) };
+    document.getElementById("recName").value = name;
+    document.getElementById("recSaveInfo").textContent = Math.max(1, Math.round(blob.size / 1048576)) + " MB \u00b7 recorded as "
+      + (recPending.src === "mp4" ? "MP4" : "WebM") + (durMs ? " \u00b7 " + recFmt(durMs) : "");
+    if (!recBusy) recProgress(null);
+    recPaintFormats(REC_DEFAULT);   // MP4 every time
+    recSaveEl.hidden = false;
+    recLoadServer().then((s) => { recServer = s; if (recPending && !recBusy) recPaintFormats(recFmtSel().id); });
+  }
+  function recSaveName() {
+    let n = (document.getElementById("recName").value || recPending?.name || "recording").trim();
+    n = n.replace(/[\\/:*?"<>|]+/g, "-");
+    n = (REC_EXT_RE.test(n) ? n.replace(REC_EXT_RE, "") : n) || "recording";
+    return n + recFmtSel().ext;
+  }
+  // the recording -> POST /api/record/convert (XHR: upload progress; a Blob body streams from the browser's blob store)
+  function recUpload(f) {
+    return new Promise((res, rej) => {
+      const xhr = new XMLHttpRequest();
+      recBusy.xhr = xhr;
+      xhr.open("POST", "/api/record/convert?fmt=" + f.id + "&dur=" + ((recPending.durMs || 0) / 1000).toFixed(2));
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable && e.total) recProgress("Preparing\u2026 " + Math.floor(100 * e.loaded / e.total) + " %", 100 * e.loaded / e.total); };
+      xhr.onload = () => {
+        let d = null;
+        try { d = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status === 200 && d?.job) res(d); else rej(new Error(d?.error || ("HTTP " + xhr.status)));
+      };
+      xhr.onerror = () => rej(new Error("this computer's KASTR did not answer"));
+      xhr.onabort = () => rej(recAbort());
+      xhr.send(recPending.blob);
+    });
+  }
+  async function recConvert(f) {
+    recProgress("Preparing\u2026 0 %", 0);
+    const d = await recUpload(f);
+    recBusy.job = d.job;
+    if (recBusy.cancelled) { recCancelJob(d.job); throw recAbort(); }
+    for (;;) {
+      const r = await fetch("/api/record/job/" + d.job, { cache: "no-store" });
+      const j = await r.json().catch(() => ({}));
+      if (recBusy.cancelled || j.state === "cancelled") throw recAbort();
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      if (j.state === "done") return j;
+      if (j.state === "error") throw new Error(j.error || "the conversion failed");
+      recProgress("Converting\u2026 " + Math.floor(j.percent || 0) + " %", j.percent || 0);
+      await new Promise((ok) => setTimeout(ok, 400));
+    }
+  }
+  function recCancelJob(job, beacon) {
+    const u = "/api/record/job/" + job + "/cancel";
+    if (beacon && navigator.sendBeacon) { try { navigator.sendBeacon(u); return; } catch {} }
+    fetch(u, { method: "POST", keepalive: true }).catch(() => {});
+  }
+  function recCancelBusy(beacon) {
+    const b = recBusy;
+    if (!b) return;
+    b.cancelled = true;
+    try { b.xhr?.abort(); } catch {}
+    if (b.job) recCancelJob(b.job, beacon);
+  }
+  // into the picked file (streamed: a Blob, or the server's result piped straight to disk) or as a download
+  async function recWrite(handle, blob, url, name) {
+    recProgress("Saving\u2026", 100);
+    if (handle) {
+      const w = await handle.createWritable();
+      try {
+        if (blob) { await w.write(blob); await w.close(); }
+        else {
+          const r = await fetch(url, { cache: "no-store" });
+          if (!r.ok || !r.body) throw new Error("HTTP " + r.status);
+          await r.body.pipeTo(w);   // closes the file when the last byte is in
+        }
+      } catch (e) { try { await w.abort(); } catch {} throw e; }
+      return handle.name || name;
+    }
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(recPending.blob);
+    a.href = blob ? URL.createObjectURL(blob) : url;
     a.download = name;
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-    window.__toast?.("Recording saved to Downloads \u2014 " + name, 6000);
-    recPending = null;
-    recSaveEl.hidden = true;
+    setTimeout(() => { if (blob) URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    return null;
   }
-  document.getElementById("recSaveAs").addEventListener("click", async () => {
-    if (!recPending) return;
-    if (typeof window.showSaveFilePicker !== "function") { recDownloadNow(); return; }
+  async function recSave(how) {
+    if (!recPending || recBusy) return;
+    const f = recFmtSel();
+    const st = recFmtState(f);
+    if (!st.ok) return;
     const name = recSaveName();
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: name, id: "kastr-recordings",
-        types: [recExt === ".mp4" ? { description: "MP4 video", accept: { "video/mp4": [".mp4"] } } : { description: "WebM video", accept: { "video/webm": [".webm"] } }],   // 0.17.0
-      });
-      const w = await handle.createWritable();
-      await w.write(recPending.blob);
-      await w.close();
-      window.__toast?.("Recording saved \u2014 " + (handle.name || name), 6000);
-      recPending = null;
-      recSaveEl.hidden = true;
-    } catch (e) {
-      if (e && e.name === "AbortError") return;   // user cancelled the picker: keep the dialog
-      window.__toast?.("Save failed (" + (e?.message || e) + ") \u2014 falling back to Download", 6000, { level: "warn" });
-      recDownloadNow();
+    let handle = null;
+    if (how === "pick" && typeof window.showSaveFilePicker === "function") {
+      try {
+        handle = await window.showSaveFilePicker({ suggestedName: name, id: "kastr-recordings", types: [{ description: f.desc, accept: { [f.mime]: [f.ext] } }] });
+      } catch (e) {
+        if (e && e.name === "AbortError") return;   // user cancelled the picker: keep the dialog
+        window.__toast?.("Save as is not available here (" + (e?.message || e) + ") \u2014 downloading instead", 6000, { level: "warn" });
+      }
     }
-  });
-  document.getElementById("recDownload").addEventListener("click", recDownloadNow);
-  document.getElementById("recDiscard").addEventListener("click", () => { recPending = null; recSaveEl.hidden = true; });
-  recSaveEl.querySelector(".close").addEventListener("click", () => { recSaveEl.hidden = true; });   // keeps the blob until Discard
+    recBusy = { xhr: null, job: null, cancelled: false };
+    const pending = recPending;
+    try {
+      let saved;
+      if (!recServer?.ffmpeg) saved = await recWrite(handle, pending.blob, null, name);   // a web viewer: as the browser wrote it
+      else {
+        let job = null;
+        try { job = await recConvert(f); } catch (e) {
+          if (e?.name === "AbortError" || !st.asIs) throw e;
+          window.__toast?.("Conversion failed (" + (e?.message || e) + ") \u2014 saving it as recorded", 6000, { level: "warn" });
+        }
+        saved = job ? await recWrite(handle, null, "/api/record/job/" + job.job + "/file?name=" + encodeURIComponent(name), name)
+          : await recWrite(handle, pending.blob, null, name);
+      }
+      window.__toast?.(saved ? "Recording saved \u2014 " + saved : "Recording saved to Downloads \u2014 " + name, 6000);
+      if (recPending === pending) { recPending = null; recSaveEl.hidden = true; }
+    } catch (e) {
+      if (e?.name === "AbortError") window.__toast?.("Save cancelled \u2014 the recording is still here", 5000);
+      else window.__toast?.("Save failed (" + (e?.message || e) + ") \u2014 the recording is still here", 8000, { level: "warn" });
+      if (recPending === pending) recSaveEl.hidden = false;
+    } finally {
+      recBusy = null;
+      recProgress(null);
+    }
+  }
+  document.getElementById("recSaveAs").addEventListener("click", () => recSave("pick"));
+  document.getElementById("recDownload").addEventListener("click", () => recSave("download"));
+  document.getElementById("recCancel").addEventListener("click", () => recCancelBusy());
+  document.getElementById("recDiscard").addEventListener("click", () => { if (recBusy) return; recPending = null; recSaveEl.hidden = true; });
+  recSaveEl.querySelector(".close").addEventListener("click", () => { recSaveEl.hidden = true; });   // keeps the blob until Discard (a conversion carries on)
   recBtn.addEventListener("click", () => (rec ? recStop() : recStart()));
-  window.addEventListener("pagehide", () => { if (rec) { try { rec.mr.stop(); } catch {} try { window.__recAnnounce?.clear?.(); } catch {} } });
-  window.__rec = { start: recStart, stop: recStop, state: () => ({ recording: !!rec, votes: [...recVotes.values()] }) };
+  window.addEventListener("pagehide", () => {
+    if (rec) { try { rec.mr.stop(); } catch {} try { window.__recAnnounce?.clear?.(); } catch {} }
+    recCancelBusy(true);   // 0.21.81: a conversion nobody will collect -- ffmpeg stops, its files go
+  });
+  window.__rec = { start: recStart, stop: recStop, offer: recOfferSave, save: recSave, blob: () => recPending?.blob || null,
+    formats: () => ({ server: recServer, pick: recFmtSel().id, list: REC_FORMATS.map((f) => Object.assign({ id: f.id }, recFmtState(f))) }),
+    state: () => ({ recording: !!rec, votes: [...recVotes.values()], mime: rec?.mr?.mimeType || null, chunks: rec?.chunks?.length || 0,
+      pending: recPending ? { size: recPending.blob.size, src: recPending.src, durMs: recPending.durMs } : null,
+      busy: recBusy ? { job: recBusy.job, cancelled: recBusy.cancelled } : null }) };
 
   // ---- relay health (0.6.7) ------------------------------------------------
   // Raw states straight off the library's Connection.Reload status signal:

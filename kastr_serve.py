@@ -3761,6 +3761,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 == "/api/rc":                  # 0.21.79: remote control -- the prompt, the grant, the controller's input
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
+            if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
+                import kastr_record
+                return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4823,6 +4826,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/rc":                   # 0.21.79: remote control -- what this computer can do + the grant's state
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
+            if path.startswith("/api/record/"):     # 0.21.81: Record's save formats -- what ffmpeg can write, progress, the result
+                import kastr_record
+                return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the
                 # static file handler turns the path into a 404.

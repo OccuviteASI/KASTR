@@ -20,6 +20,8 @@ import threading
 import time
 
 WINDOWS = sys.platform == "win32"
+LINUX = sys.platform.startswith("linux")
+_x11grab = None   # 0.21.79: does this ffmpeg have x11grab (asked once)
 MAX_W, MAX_H, FPS = 1920, 1080, 30
 # the computer's sound: s16le PCM on ffmpeg's stdin. kastr_loopback writes it in real time and pads silence, so the
 # sample count IS the clock -- timestamps from 0 like the capture's (wall-clock stamps put the audio ~50 years ahead)
@@ -45,8 +47,43 @@ def _sources_mod():
     return _src
 
 
+def _ffmpeg():
+    try:
+        import kastr_rtsp
+        return kastr_rtsp.find_ffmpeg() or "ffmpeg"
+    except Exception:
+        return "ffmpeg"
+
+
+def linux_available():
+    """0.21.79 (Kenton: remote control on "Linux X11"): native screen / window sharing on an X11 desktop -- ffmpeg's x11grab
+    (the bundled static Linux ffmpeg has it). Never on Wayland (kastr_x11.session_kind), never without a display;
+    KASTR_NATIVE_SCREEN=0 keeps the browser's picker."""
+    global _x11grab
+    if not LINUX or os.environ.get("KASTR_NATIVE_SCREEN") == "0":
+        return False
+    try:
+        import kastr_x11
+        if kastr_x11.session_kind() != "x11":
+            return False
+        with kastr_x11.Display():
+            pass
+    except Exception:
+        return False
+    if _x11grab is None:
+        import subprocess
+        try:
+            r = subprocess.run([_ffmpeg(), "-hide_banner", "-devices"], capture_output=True, text=True, timeout=10)
+            _x11grab = "x11grab" in (r.stdout or "")
+        except Exception:
+            _x11grab = False
+    return bool(_x11grab)
+
+
 def available():
-    """Native capture works on Windows 10 1903+ with the bundled ffmpeg (gfxcapture)."""
+    """Native capture works on Windows 10 1903+ with the bundled ffmpeg (gfxcapture); 0.21.79: and on Linux X11 (x11grab)."""
+    if LINUX:
+        return linux_available()
     if not WINDOWS:
         return False
     try:
@@ -99,6 +136,13 @@ def _tab_ready(hwnd, index):
 
 
 def check_url(url):
+    if LINUX and linux_available():   # 0.21.79
+        kind, n = parse_url(url)
+        if kind == "tab":
+            raise ValueError("sharing one browser tab natively needs Windows -- share its window instead")
+        if not _resolve(kind, n):
+            raise ValueError("that %s is no longer there" % ("screen" if kind == "monitor" else "window"))
+        return
     if not WINDOWS:
         raise ValueError("native screen sharing needs Windows on this computer -- use Share content in a browser instead")
     kind, n = parse_url(url)
@@ -113,6 +157,12 @@ def check_url(url):
 
 def _resolve(kind, n):
     """The live source dict behind a url (monitor by index, window by handle) or None."""
+    if LINUX:   # 0.21.79: X11 -- screens by index (RandR), windows by X window id
+        import kastr_x11
+        if kind == "monitor":
+            return next((s for s in kastr_x11.list_monitors() if s.get("index") == n), None)
+        r = kastr_x11.window_rect(n)
+        return {"hwnd": n, "rect": {"x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"]}, "width": r["w"], "height": r["h"]} if r else None
     m = _sources_mod()
     if kind == "monitor":
         for s in m.list_monitors():
@@ -268,6 +318,13 @@ def capture_input(url):
     """ffmpeg input args for a screen:// url: gfxcapture scaled at capture (aspect kept), CPU frames, a steady 30 fps
     (see _clocked), plus two repaint kicks so the first frame arrives even on a still page."""
     kind, n = parse_url(url)
+    if LINUX:   # 0.21.79: x11grab -- a screen by its rectangle, a window by its id (followed as it moves)
+        disp = os.environ.get("DISPLAY") or ":0"
+        if kind == "window":
+            return ["-f", "x11grab", "-framerate", str(FPS), "-draw_mouse", "1", "-window_id", str(n), "-i", disp]
+        r = (_resolve(kind, n) or {}).get("rect") or {"x": 0, "y": 0, "w": MAX_W, "h": MAX_H}
+        return ["-f", "x11grab", "-framerate", str(FPS), "-draw_mouse", "1", "-video_size",
+                "%dx%d" % (max(2, int(r["w"]) // 2 * 2), max(2, int(r["h"]) // 2 * 2)), "-i", "%s+%d,%d" % (disp, int(r["x"]), int(r["y"]))]
     _kick_soon(url)
     if kind == "tab":   # crop on the GPU side of the capture, then scale on the CPU (a crop + resize_mode order is not documented)
         import kastr_tabs
@@ -328,7 +385,15 @@ THUMB_TTL = 1.2
 def sources(exclude_pids=(), tabs=False):
     """JSON for /api/screen/sources: screens first (primary, then left to right), then windows in Z-order."""
     if not available():
-        return {"ok": False, "reason": "native screen sharing needs Windows"}
+        return {"ok": False, "reason": "native screen sharing needs Windows (or a Linux X11 desktop)"}
+    if LINUX:   # 0.21.79
+        import kastr_x11
+        own = {os.getpid()} | set(int(p) for p in exclude_pids or ())
+        screens = [{"id": "monitor:%d" % s["index"], "kind": "screen", "index": s["index"], "name": s["name"], "primary": bool(s.get("primary")),
+                    "width": s["width"], "height": s["height"]} for s in kastr_x11.list_monitors()]
+        windows = [{"id": w["id"], "kind": "window", "hwnd": w["hwnd"], "title": w["title"], "exe": w.get("exe") or "",
+                    "minimized": bool(w.get("minimized"))} for w in kastr_x11.list_windows(exclude_pids=tuple(own))]
+        return {"ok": True, "screens": screens, "windows": windows, "x11": True}
     m = _sources_mod()
     own = {os.getpid()} | set(int(p) for p in exclude_pids or ())
     screens, windows = [], []
@@ -372,6 +437,14 @@ def thumb(source_id, width=320):
     src = _resolve(kind, int(n))
     if not src:
         return None
+    if LINUX:   # 0.21.79: one x11grab frame
+        import kastr_x11
+        data = kastr_x11.grab_jpeg(src.get("rect") or {}, width=width, ffmpeg=_ffmpeg())
+        out = (data, "image/jpeg") if data else None
+        if out:
+            with _thumb_lock:
+                _thumb_cache[key] = (now, out[0], out[1])
+        return out
     m = _sources_mod()
     out = None
     try:
@@ -418,6 +491,29 @@ def overlay_start(feed_id, url, on_stop):
             _overlays[feed_id] = ov
     except Exception:
         pass
+
+
+def overlay_mode(feed_id, mode="share", label=None, buttons=None, on_button=None):
+    """0.21.79: the share's bar turns into the remote-control prompt ("prompt": Deny / Allow) or the red control bar
+    ("control": Stop control), and back ("share"). -> True when the share has a bar to do it with."""
+    with _ov_lock:
+        ov = _overlays.get(feed_id)
+    if ov is None:
+        return False
+    try:
+        return bool(ov.set_mode(mode, label, buttons, on_button))
+    except Exception:
+        return False
+
+
+def overlay_bar_rect(feed_id):
+    """0.21.79: where the share's bar is (the controller's clicks never land on it)."""
+    with _ov_lock:
+        ov = _overlays.get(feed_id)
+    try:
+        return ov.bar_rect() if ov is not None else None
+    except Exception:
+        return None
 
 
 def overlay_stop(feed_id):

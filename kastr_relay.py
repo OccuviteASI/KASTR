@@ -168,6 +168,19 @@ PINVITE_TTL = 3600             # a person invite's link (bound to the invited de
 PINVITE_RATE = (6, 60)         # person invites one sender may send per minute
 PINBOX_TTL = 180               # s: an invite waits this long for the invited page's next beat
 PINBOX_KEEP = 64               # invites the hub keeps for its spokes' long-polls
+# 0.21.79 (Kenton: "request remote control when someone is sharing their desktop and a prompt to allow that user to take
+# control of your machine"): the asks, answers and stops ride the same per-device inbox as person invites (beats + the
+# hub's bans long-poll). Only publishers and admins of the share's room may ask; the sharer answers every ask.
+RC_KINDS = ("ask", "allow", "deny", "stop")
+RC_ASK_RATE = (3, 60)          # control requests one asker may send ONE sharer per minute
+RC_ASK_RATE_ALL = (10, 60)     # ... and to everyone together
+RC_DENY_COOL = 30              # s: after a "no" the asker waits this long before asking that person again
+RC_INBOX_TTL = 45              # s: a control note older than this is stale (an ask nobody saw is not shown late)
+RC_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
+RC_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
+RC_SHARE_RE = re.compile(r"^[a-z0-9-]{1,32}/[a-z0-9-]{1,32}-[0-9a-f]{4}/[A-Za-z0-9._~/-]{1,200}\.hang$")
+RC_WHY = ("", "busy", "wayland", "unsupported", "paused", "stopped", "left", "released", "bar", "hotkey", "timeout",
+          "share", "elevated", "closed", "no", "gone", "secure")
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
@@ -4561,7 +4574,38 @@ def group_op(store, p, operator=False, log=None):
     return {"ok": True, "op": op, "gid": gid, "groups": store.groups_public()}, 200
 
 
-P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare", "pco")   # 0.21.78: rooms_fed ops of My room shared
+P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare", "pco",   # 0.21.78: rooms_fed ops of My room shared
+             "prc")                                                                         # 0.21.79: a remote-control note
+
+
+def rc_item_clean(item):
+    """0.21.79: a remote-control note as it travels (spoke -> hub -> spokes -> the page's beat) -> a cleaned copy, or None
+    when anything about it is off. The share is <room>/<sharer's host>/.../<leaf>.hang and the note's room is its room."""
+    if not isinstance(item, dict) or item.get("kind") != "rc" or item.get("rc") not in RC_KINDS:
+        return None
+    rcid, room, share, frm = str(item.get("rcid") or ""), str(item.get("room") or ""), str(item.get("share") or ""), str(item.get("from") or "")
+    peer = str(item.get("peer") or "")
+    if not RC_ID_RE.match(rcid) or not SLUG_RE.match(room) or not RC_SHARE_RE.match(share) or share.split("/")[0] != room:
+        return None
+    if not HOST_RE.match(frm) or (peer and not RC_PEER_RE.match(peer)):
+        return None
+    why = str(item.get("why") or "")
+    return {"id": "rc-%s-%s-%s" % (item["rc"], rcid, frm), "kind": "rc", "rc": item["rc"], "rcid": rcid, "room": room,
+            "share": share, "from": frm, "peer": peer, "by": clean_label(item.get("by"), 40) or frm,
+            "label": clean_label(item.get("label"), 80), "surface": "window" if item.get("surface") == "window" else "screen",
+            "why": why if why in RC_WHY else ""}
+
+
+def rc_can_ask(claims, room, host):
+    """0.21.79 (Kenton: "publishers and admins of that room only"): may this member token ask to control a screen in
+    `room`? A publisher's token puts media under its own host (<room>/<host>); an admin's also carries <room>/~admin. A
+    viewer's puts only <room>/<host>/~member; the Lobby never."""
+    if not isinstance(claims, dict) or claims.get("lobby") or room == LOBBY_SLUG or not host:
+        return False
+    if claims_admin(claims, room):
+        return True
+    puts = [str(x) for x in (_patterns(claims.get("put")) if claims.get("put") is not None else [])]
+    return (room + "/" + host) in puts
 
 
 class PersonalLive:
@@ -4581,6 +4625,8 @@ class PersonalLive:
         self.open_local = {}  # spoke: slug -> when the hub said "its owner is in" (a guest's mint)
         self.fwd = {}         # spoke: (slug, host) -> when the owner's last beat went to the hub
         self.names = {}       # host -> (name, at) -- what the page says in its beats (the Users list names web pages)
+        self.rcrate = {}      # 0.21.79: (asker, sharer) -> [when it asked to control] ("*" = to anyone)
+        self.rcdeny = {}      # 0.21.79: (asker, sharer) -> when the sharer last said no (RC_DENY_COOL)
         self.thread = None
 
 
@@ -5624,6 +5670,10 @@ class AuthService:
                 pl.seen.pop(k, None)
             for k in [k for k, ts in pl.rate.items() if not ts or now - ts[-1] > PINVITE_RATE[1]]:
                 pl.rate.pop(k, None)
+            for k in [k for k, ts in pl.rcrate.items() if not ts or now - ts[-1] > RC_ASK_RATE[1]]:   # 0.21.79
+                pl.rcrate.pop(k, None)
+            for k in [k for k, t in pl.rcdeny.items() if now - t > RC_DENY_COOL]:
+                pl.rcdeny.pop(k, None)
             for k in [k for k, v in pl.names.items() if now - v[1] > 86400]:
                 pl.names.pop(k, None)
         for slug in gone:
@@ -5819,7 +5869,8 @@ class AuthService:
     def _p_inbox_take(self, host, now):
         pl = self._pl()
         with self.lock:
-            items = [x for x in pl.inbox.pop(host, []) if now - float(x.get("at") or 0) <= PINBOX_TTL]
+            items = [x for x in pl.inbox.pop(host, [])
+                     if now - float(x.get("at") or 0) <= (RC_INBOX_TTL if x.get("kind") == "rc" else PINBOX_TTL)]   # 0.21.79
         return items
 
     def _p_inbox_put_locked(self, host, item):
@@ -5870,6 +5921,13 @@ class AuthService:
             for x in pf.get("inbox") or []:
                 item = x.get("item") if isinstance(x, dict) else None
                 to = str((x or {}).get("to") or "")
+                if isinstance(item, dict) and item.get("kind") == "rc":   # 0.21.79: a remote-control note
+                    rc = rc_item_clean(item)
+                    if rc is None or not HOST_RE.match(to) or rc["id"] in pl.seen:
+                        continue
+                    pl.seen[rc["id"]] = now
+                    self._rc_put_locked(to, rc, now)
+                    continue
                 if not isinstance(item, dict) or not HOST_RE.match(to) or not INVITE_RE.match(str(item.get("token") or "")):
                     continue
                 iid = str(item.get("id") or "")
@@ -5893,6 +5951,106 @@ class AuthService:
             ts.append(now)
             pl.rate[host] = ts
             return True
+
+    # ---- 0.21.79: remote control -- the notes between the asker and the sharer -------------------------------------
+    # Kenton: "I want to add the capability to request remote control when someone is sharing their desktop and a prompt to
+    # allow that user to take control of your machine. Local input always overrides remote input." The relay only carries
+    # the NOTES (ask / allow / deny / stop) and checks who may send them: the sender's member token is for the share's room
+    # (the sender is in that room), an ask comes from a publisher or an admin of that room (never a viewer) and goes to the
+    # person whose share it is, only that person answers it, and a stop comes from either side. Asks are rate-limited per
+    # pair, and a "no" holds the asker off RC_DENY_COOL s. The input itself never touches this API: the controller's page
+    # publishes it as a MoQ track under its OWN host path (<room>/<host>/~rc/<peer>), and the sharer's page subscribes to
+    # that one path only while its local injector holds a grant for that controller and that share (kastr_rc).
+
+    def _rc_put_locked(self, to, item, now):
+        pl = self._pl()
+        self._p_inbox_put_locked(to, dict(item, at=now))
+        if item.get("rc") == "deny":
+            pl.rcdeny[(to, item.get("from") or "")] = now   # `to` is the asker: a "no" holds them off a while
+
+    def _rc_put(self, to, item, now, out=True):
+        """Into this relay's inbox for `to` (its page takes it on its next beat) and, on the hub, onto the long-poll for
+        every spoke (`out`)."""
+        pl = self._pl()
+        with self.lock:
+            self._rc_put_locked(to, item, now)
+            if out:
+                pl.seq += 1
+                pl.out.append({"seq": pl.seq, "at": now, "to": to, "item": dict(item)})
+                pl.out = pl.out[-PINBOX_KEEP:]
+        self._p_thread()
+        try:
+            self.bans.nudge()
+        except Exception:
+            pass
+
+    def _rc_rate_ok(self, host, to, now):
+        """-> (ok, error, retry s): RC_ASK_RATE per (asker, sharer), RC_ASK_RATE_ALL per asker, RC_DENY_COOL after a no."""
+        pl = self._pl()
+        with self.lock:
+            t = pl.rcdeny.get((host, to))
+            if t is not None and now - t < RC_DENY_COOL:
+                return False, "they said no -- wait a little before asking again", int(RC_DENY_COOL - (now - t)) + 1
+            for key, (n, win) in (((host, to), RC_ASK_RATE), ((host, "*"), RC_ASK_RATE_ALL)):
+                ts = [x for x in pl.rcrate.get(key, []) if now - x < win]
+                if len(ts) >= n:
+                    pl.rcrate[key] = ts
+                    return False, "too many control requests -- wait a minute", int(win - (now - ts[0])) + 1
+            for key in ((host, to), (host, "*")):
+                pl.rcrate[key] = [x for x in pl.rcrate.get(key, []) if now - x < RC_ASK_RATE[1]] + [now]
+        return True, "", 0
+
+    def rc_send(self, p, claims, room, host, now=None):
+        """people_api op "rc" {kind: ask|allow|deny|stop, to, share, id, peer?, by?, label?, surface?, why?}. -> (reply, code)."""
+        now = time.time() if now is None else now
+        kind = str(p.get("kind") or "")
+        if kind not in RC_KINDS:
+            return {"ok": False, "error": "kind is ask, allow, deny or stop"}, 400
+        if room == LOBBY_SLUG or claims.get("lobby"):
+            return {"ok": False, "error": "remote control works in a room (not the Lobby)"}, 403
+        to, share, rcid = str(p.get("to") or ""), str(p.get("share") or ""), str(p.get("id") or "")
+        if not HOST_RE.match(to) or to == host:
+            return {"ok": False, "error": "who? (their device)"}, 400
+        if not RC_ID_RE.match(rcid):
+            return {"ok": False, "error": "bad request id"}, 400
+        if not RC_SHARE_RE.match(share):
+            return {"ok": False, "error": "that is not a share"}, 400
+        sroom, owner = share.split("/")[:2]
+        if sroom != room:   # the sender must be in the share's room (its member token is for that room)
+            return {"ok": False, "error": "that share is not in your room"}, 403
+        if kind == "ask":
+            if owner != to:
+                return {"ok": False, "error": "ask the person whose share it is"}, 400
+            if not rc_can_ask(claims, room, host):
+                return {"ok": False, "error": "only publishers and admins of this room may ask to control a screen"}, 403
+            ok, err, wait = self._rc_rate_ok(host, to, now)
+            if not ok:
+                return {"ok": False, "error": err, "retryAfter": wait}, 429
+        elif kind in ("allow", "deny"):
+            if owner != host:
+                return {"ok": False, "error": "only the person sharing answers"}, 403
+        elif host != owner and to != owner:
+            return {"ok": False, "error": "only the sharer or the controller stops control"}, 403
+        peer = str(p.get("peer") or "")
+        item = rc_item_clean({"kind": "rc", "rc": kind, "rcid": rcid, "room": room, "share": share, "from": host,
+                              "peer": peer if RC_PEER_RE.match(peer) else "", "by": p.get("by"), "label": p.get("label"),
+                              "surface": p.get("surface"), "why": p.get("why")})
+        if item is None:
+            return {"ok": False, "error": "bad control note"}, 400
+        if kind == "ask":
+            self.log("relay auth: %s asks %s to control %s (%s)" % (host, to, share, rcid))
+        elif kind != "stop" or p.get("why") not in ("timeout",):
+            self.log("relay auth: remote control %s %s -> %s (%s%s)" % (kind, host, to, rcid, (", " + item["why"]) if item["why"] else ""))
+        if not self._p_spoke():
+            self._rc_put(to, item, now)
+            return {"ok": True, "id": rcid}, 200
+        out = self._hub_fed({"op": "prc", "vouch": "member", "to": to, "item": item}, timeout=5)
+        if out is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+        d, code = out
+        if code == 400 and d.get("error") == "bad room":
+            return {"ok": False, "error": "the hub runs an older KASTR without remote control -- update the hub first"}, 501
+        return (dict(d, id=rcid) if code == 200 else d), code
 
     def _p_invite_make(self, room, frm, by, to, to_name, now=None):
         """Hub: a person invite -- a link bound to the invited device, then a note for that device's page (here, and on every
@@ -5999,6 +6157,14 @@ class AuthService:
         host = host if HOST_RE.match(host) else ""
         if op == "pseen":
             return {"ok": True, "people": self._p_seen_local()}, 200
+        if op == "prc":   # 0.21.79: a spoke checked the sender's member token (room, role, rate) -- deliver the note fleet-wide
+            if p.get("vouch") != "member":
+                return {"ok": False, "error": "the spoke must vouch for a member of the room"}, 403
+            item, to = rc_item_clean(p.get("item")), str(p.get("to") or "")
+            if item is None or not HOST_RE.match(to):
+                return {"ok": False, "error": "bad control note"}, 400
+            self._rc_put(to, item, time.time())
+            return {"ok": True}, 200
         if op == "pinvite":
             room, to = str(p.get("room") or ""), str(p.get("to") or "")
             if not SLUG_RE.match(room) or room == LOBBY_SLUG or not HOST_RE.match(to):
@@ -6038,7 +6204,8 @@ class AuthService:
         """0.21.78: POST /api/people {op, ...} with Bearer = this page's member token (a closing page's beacon puts it in
         `token`). op "beat" {name?}: inbox + shared rooms + (in a personal room) the owner keeps it open / a guest learns if
         it still is; "leave": the owner left My room; "invite" {to, toName?, by?}: invite a person to the token's room;
-        the owner of a personal room (its personal token): "list", "share" {to, name, on}, "co" {to}, "seen"."""
+        the owner of a personal room (its personal token): "list", "share" {to, name, on}, "co" {to}, "seen".
+        0.21.79: "rc" {kind, to, share, id, ...} -- a remote-control note (rc_send)."""
         p = p if isinstance(p, dict) else {}
         if not bearer and p.get("token"):
             bearer = "Bearer " + str(p.get("token"))[:4096]
@@ -6107,6 +6274,8 @@ class AuthService:
                 return self._p_invite_make(room, host, by, to, to_name, now)
             return self._p_hub_call({"op": "pinvite", "vouch": "owner" if owner else "member", "room": room, "host": host,
                                      "by": by, "to": to, "toName": to_name})
+        if op == "rc":   # 0.21.79: remote control notes
+            return self.rc_send(p, claims, room, host, now)
         if op in ("list", "share", "co", "seen"):
             if not owner:
                 return {"ok": False, "error": "only the room's owner shares a personal room"}, 403
@@ -6126,7 +6295,7 @@ class AuthService:
             if not self._p_spoke():
                 return self._p_fed(body["op"], body)
             return self._p_hub_call(body)
-        return {"ok": False, "error": "unknown op (beat | leave | invite | list | share | co | seen)"}, 400
+        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | list | share | co | seen)"}, 400
 
     # ---- 0.21.63: the vehicle API -----------------------------------------------------------------------------------
     # Kenton: "I now need to have a vehicle ... be able to connect via POST to the relay to share the cameras on the vehicle.

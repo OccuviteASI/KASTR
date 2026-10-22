@@ -52,6 +52,13 @@ BTN_HOVER = _rgb(0xEE, 0x63, 0x67)
 BTN_DOWN = _rgb(0xC4, 0x37, 0x3C)
 LABELS = {"window": "You're sharing a window", "screen": "You're sharing your screen", "tab": "You're sharing a tab"}
 BTN_TEXT = "Stop sharing"
+# 0.21.79 (remote control): the bar also ASKS ("<name> asks to control your screen" -- Deny / Allow) and, while someone
+# controls this computer, turns red ("<name> is controlling your screen -- Stop control (Ctrl+Alt+Space)").
+CTL_BG = _rgb(0xB4, 0x23, 0x18)
+OK_RGB = _rgb(0x1F, 0x7A, 0x4D)
+GHOST_RGB = _rgb(0x3A, 0x3F, 0x47)
+WHITE_RGB = _rgb(0xFF, 0xFF, 0xFF)
+INJECT_MAGIC = 0x4B525443        # kastr_rc.MAGIC: input KASTR injected never presses these buttons
 
 if AVAILABLE:
     from ctypes import wintypes as wt
@@ -159,6 +166,7 @@ if AVAILABLE:
                                   wt.DWORD, ctypes.c_void_p, wt.DWORD)
     GetModuleHandleW = _bind(kernel32, "GetModuleHandleW", wt.HMODULE, wt.LPCWSTR)
     GetCurrentThreadId = _bind(kernel32, "GetCurrentThreadId", wt.DWORD)
+    GetMessageExtraInfo = _bind(user32, "GetMessageExtraInfo", wt.LPARAM)   # 0.21.79
 
     CreateRectRgn = _bind(gdi32, "CreateRectRgn", wt.HRGN, I, I, I, I)
     CreateRoundRectRgn = _bind(gdi32, "CreateRoundRectRgn", wt.HRGN, I, I, I, I, I, I)
@@ -205,7 +213,7 @@ if AVAILABLE:
     WM_TIMER, WM_SYSCOMMAND, WM_QUIT = 0x113, 0x112, 0x12
     WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x200, 0x201, 0x202
     WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOUSELEAVE, WM_DPICHANGED = 0x231, 0x232, 0x2A3, 0x2E0
-    WM_APP_STOP, WM_APP_RETARGET = 0x8001, 0x8002
+    WM_APP_STOP, WM_APP_RETARGET, WM_APP_MODE = 0x8001, 0x8002, 0x8003   # 0.21.79: + MODE
     TIMER_ID, TICK_MS = 1, 100
     CLASS_NAME = "KastrShareOverlay"
 
@@ -375,6 +383,9 @@ class ShareOverlay:
         self._tid = 0
         self._pending = None
         self._stopping = False
+        self._mode = ("share", None, None)   # 0.21.79: (mode, label, [(key, text)]) -- "share" | "prompt" | "control"
+        self._mode_next = None
+        self.on_button = None                # 0.21.79: on_button(key) for a prompt / control button
         self._reset_state()
 
     # ---------------------------------------------------------- public API
@@ -431,6 +442,24 @@ class ShareOverlay:
                 if self._thread is th and not th.is_alive():
                     self._thread = None
 
+    def set_mode(self, mode="share", label=None, buttons=None, on_button=None) -> bool:
+        """0.21.79: "share" (the plain bar), "prompt" or "control" with its own label and buttons [(key, text)];
+        on_button(key) runs on a short-lived thread. A click KASTR injected itself never presses a button."""
+        if not AVAILABLE:
+            return False
+        with self._lock:
+            self._mode_next = (mode if mode in ("share", "prompt", "control") else "share", label, list(buttons or []) or None)
+            self.on_button = on_button if mode != "share" else None
+            ok = bool(self._bar and PostMessageW(self._bar, WM_APP_MODE, 0, 0))
+        return ok
+
+    def bar_rect(self):
+        """0.21.79: where the bar is on the screen {x, y, w, h} (physical pixels), or None while hidden."""
+        p = self._bar_pos
+        if not self._shown or not p:
+            return None
+        return {"x": p[0], "y": p[1], "w": p[2], "h": p[3]}
+
     @property
     def running(self) -> bool:
         th = self._thread
@@ -467,7 +496,8 @@ class ShareOverlay:
         self._drag = False
         self._drag_off = (0, 0)
         self._bar_default = (0, 0)
-        self._hover = self._pressed = False
+        self._hover = self._pressed = None   # 0.21.79: the key of the button under the pointer / held down
+        self._btns = []
         self._tracking = False
         self._clicked = False
         self._gone_fired = False
@@ -528,7 +558,8 @@ class ShareOverlay:
             self._affinity[name[1:]] = ok
         b = self._brushes
         for key, col in (("border", BORDER_RGB), ("bg", BAR_BG), ("grip", GRIP_RGB),
-                         ("btn", BTN_RGB), ("hover", BTN_HOVER), ("down", BTN_DOWN)):
+                         ("btn", BTN_RGB), ("hover", BTN_HOVER), ("down", BTN_DOWN),
+                         ("ctlbg", CTL_BG), ("ok", OK_RGB), ("ghost", GHOST_RGB), ("white", WHITE_RGB)):   # 0.21.79
             b[key] = CreateSolidBrush(col)
         self._hand = LoadCursorW(None, ctypes.c_void_p(IDC_HAND))
         with self._lock:
@@ -658,25 +689,34 @@ class ShareOverlay:
         f_label = CreateFontW(px, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
         f_btn = CreateFontW(px, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
         self._fonts = [f_label, f_btn]
-        label = LABELS[self._target.label if self._target else "screen"]
+        mode, mlabel, mbtns = self._mode   # 0.21.79: a prompt / the control bar bring their own label and buttons
+        label = mlabel if mode != "share" and mlabel else LABELS[self._target.label if self._target else "screen"]
+        buttons = mbtns if mode != "share" and mbtns else [("share-stop", BTN_TEXT)]
         hdc = GetDC(None)
         sz = wt.SIZE()
         old = SelectObject(hdc, f_label)
         GetTextExtentPoint32W(hdc, label, len(label), ctypes.byref(sz))
         label_w = sz.cx
         SelectObject(hdc, f_btn)
-        GetTextExtentPoint32W(hdc, BTN_TEXT, len(BTN_TEXT), ctypes.byref(sz))
-        btn_tw = sz.cx
+        widths = []
+        for _k, text in buttons:
+            GetTextExtentPoint32W(hdc, text, len(text), ctypes.byref(sz))
+            widths.append(sz.cx + 2 * round(14 * s))
         SelectObject(hdc, old)
         ReleaseDC(None, hdc)
         H = round(40 * s)
         pad_l, grip_w, gap, gap2 = round(16 * s), round(8 * s), round(10 * s), round(18 * s)
         btn_h = round(28 * s)
         pad_r = (H - btn_h) // 2
-        btn_w = btn_tw + 2 * round(14 * s)
-        W = pad_l + grip_w + gap + label_w + gap2 + btn_w + pad_r
+        gapb = round(8 * s)
+        W = pad_l + grip_w + gap + label_w + gap2 + sum(widths) + gapb * (len(widths) - 1) + pad_r
         by = (H - btn_h) // 2
-        self._btn = (W - pad_r - btn_w, by, W - pad_r, by + btn_h)
+        bx = W - pad_r - sum(widths) - gapb * (len(widths) - 1)
+        self._btns = []
+        for (key, text), bw in zip(buttons, widths):
+            self._btns.append((key, text, (bx, by, bx + bw, by + btn_h)))
+            bx += bw + gapb
+        self._btn = self._btns[-1][2]
         self._grip = (pad_l, H // 2, max(2, round(3 * s)), round(5 * s))
         x0 = pad_l + grip_w + gap
         self._text_rc = (x0, 0, x0 + label_w + 2, H)
@@ -707,7 +747,7 @@ class ShareOverlay:
             mem = CreateCompatibleDC(hdc)
             bmp = CreateCompatibleBitmap(hdc, W, H)
             old_bmp = SelectObject(mem, bmp)
-            FillRect(mem, ctypes.byref(wt.RECT(0, 0, W, H)), self._brushes["bg"])
+            FillRect(mem, ctypes.byref(wt.RECT(0, 0, W, H)), self._brushes["ctlbg" if self._mode[0] == "control" else "bg"])   # 0.21.79
             old_pen = SelectObject(mem, GetStockObject(NULL_PEN))
             old_br = SelectObject(mem, self._brushes["grip"])
             gx, gy, d, step = self._grip                  # 2 x 3 dot grip
@@ -720,14 +760,18 @@ class ShareOverlay:
             old_font = SelectObject(mem, self._fonts[0])
             DrawTextW(mem, self._label, -1, ctypes.byref(wt.RECT(*self._text_rc)),
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
-            key = "down" if self._pressed and self._hover else "hover" if self._hover else "btn"
-            SelectObject(mem, self._brushes[key])
-            bx0, by0, bx1, by1 = self._btn
-            bh = by1 - by0
-            RoundRect(mem, bx0, by0, bx1 + 1, by1 + 1, bh, bh)
             SelectObject(mem, self._fonts[1])
-            DrawTextW(mem, BTN_TEXT, -1, ctypes.byref(wt.RECT(*self._btn)),
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
+            for bkey, btext, brc in self._btns:   # 0.21.79: one or more buttons
+                base = {"allow": "ok", "deny": "ghost", "stop": "white"}.get(bkey, "btn")
+                key = base if base != "btn" else ("down" if self._pressed == bkey and self._hover == bkey
+                                                  else "hover" if self._hover == bkey else "btn")
+                SelectObject(mem, self._brushes[key])
+                bx0, by0, bx1, by1 = brc
+                bh = by1 - by0
+                RoundRect(mem, bx0, by0, bx1 + 1, by1 + 1, bh, bh)
+                SetTextColor(mem, CTL_BG if base == "white" else BAR_TEXT)
+                DrawTextW(mem, btext, -1, ctypes.byref(wt.RECT(*brc)),
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
             BitBlt(hdc, 0, 0, W, H, mem, 0, 0, SRCCOPY)
             SelectObject(mem, old_font)
             SelectObject(mem, old_br)
@@ -740,8 +784,11 @@ class ShareOverlay:
 
     # ---------------------------------------------------------- messages
     def _in_btn(self, x, y):
-        b = getattr(self, "_btn", None)
-        return bool(b) and b[0] <= x < b[2] and b[1] <= y < b[3]
+        """0.21.79: the key of the button at (x, y), or None."""
+        for key, _t, b in getattr(self, "_btns", None) or []:
+            if b[0] <= x < b[2] and b[1] <= y < b[3]:
+                return key
+        return None
 
     def _set_hover(self, v):
         if v != self._hover:
@@ -798,22 +845,28 @@ class ShareOverlay:
             self._set_hover(False)
             return 0
         if msg == WM_LBUTTONDOWN:
-            if self._in_btn(*_lp_xy(lp)):
-                self._pressed = True
-                self._hover = True
+            k = self._in_btn(*_lp_xy(lp))
+            injected = GetMessageExtraInfo is not None and (int(GetMessageExtraInfo() or 0) & 0xFFFFFFFF) == INJECT_MAGIC
+            if k and not injected:                  # 0.21.79: the controller cannot press KASTR's own buttons
+                self._pressed = k
+                self._hover = k
                 SetCapture(hwnd)
                 InvalidateRect(hwnd, None, False)
             return 0
         if msg == WM_LBUTTONUP:
             if self._pressed:
-                self._pressed = False
+                k, self._pressed = self._pressed, None
                 ReleaseCapture()
-                inside = self._in_btn(*_lp_xy(lp))
-                self._set_hover(inside)
+                at = self._in_btn(*_lp_xy(lp))
+                self._set_hover(at)
                 InvalidateRect(hwnd, None, False)
-                if inside and not self._clicked:
-                    self._clicked = True            # one stop per share
-                    self._fire(self.on_stop)
+                if at == k and k == "share-stop":
+                    if not self._clicked:
+                        self._clicked = True        # one stop per share
+                        self._fire(self.on_stop)
+                elif at == k and self.on_button is not None:   # 0.21.79: Allow / Deny / Stop control
+                    cb = self.on_button
+                    self._fire(lambda: cb(k))
             return 0
         if msg == WM_ENTERSIZEMOVE:
             self._drag = True
@@ -840,6 +893,17 @@ class ShareOverlay:
                 self._border_geom = None
                 self._hide()
                 self._tick()
+            return 0
+        if msg == WM_APP_MODE:   # 0.21.79: the prompt / control bar / back to the plain bar
+            with self._lock:
+                nxt, self._mode_next = self._mode_next, None
+            if nxt is not None:
+                self._mode = nxt
+                self._hover = self._pressed = None
+                self._bar_dpi = 0                   # relayout: the label and buttons changed
+                self._bar_pos = None
+                self._tick()
+                InvalidateRect(hwnd, None, False)
             return 0
         if msg == WM_APP_STOP:
             KillTimer(hwnd, TIMER_ID)

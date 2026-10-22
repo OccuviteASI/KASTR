@@ -45,6 +45,17 @@ SCREEN_PREFIX = "screen://"      # 0.21.20: screen://monitor/<n> | screen://wind
 def is_screen(url):
     return str(url or "").strip().lower().startswith(SCREEN_PREFIX)
 
+
+def _rc_gone(feed_id, why):
+    """0.21.79: remote control of this share ends (it stopped, paused or now shows something else) -- only when kastr_rc
+    was ever loaded (a box nobody controls never imports it)."""
+    m = sys.modules.get("kastr_rc")
+    if m is not None:
+        try:
+            m.share_gone(int(feed_id), why)
+        except Exception:
+            pass
+
 # Longest we will wait for ffmpeg to name a stream's codec.
 PROBE_TIMEOUT = 20.0
 # 0.21.10: on-demand pairs (0.18.0 standby) and low copies (0.18.0 / 0.21.7 `-low.hang`) are OFF unless this is
@@ -1425,7 +1436,7 @@ def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=No
     if copy_video:
         args += ["-c:v", "copy"]
     else:
-        scale = "scale=%s:-2:in_range=pc:out_range=tv" % (width or "iw")
+        scale = "scale=%s:-2:in_range=pc:out_range=tv" % (width or ("trunc(iw/2)*2" if screen else "iw"))   # 0.21.79: an X11 window may be odd-wide
         enc = encoder or "libx264"
         args += ["-vf", encoder_vf(enc, SQUARE_PIXELS + "," + scale + ",format=yuv420p"), "-color_range", "tv", "-colorspace", "bt709"]   # 0.9.8: square pixels first
         args += ["-c:v", enc]
@@ -1622,6 +1633,8 @@ class Publisher:
         self.passthrough = bool(passthrough if passthrough is not None else hevc)
         self.hevc = self.passthrough
         self.audio = bool(audio)    # 0.9.5: carry the camera's audio (operator's call, per feed)
+        if self.audio and is_screen(getattr(feed, "url", "")) and sys.platform != "win32":
+            self.audio = False      # 0.21.79: a Linux screen share (x11grab) has no computer-sound capture
         self.codec = None
         self.procs = ()
         self.running = False
@@ -2836,6 +2849,7 @@ class Bridge:
             if pub.broadcast in getattr(self, "_xs_listed", {}):   # 0.21.75: off the air -> out of the other rooms now
                 self.xs_poke()
         if is_screen(getattr(pub.feed, "url", "") if pub else ""):   # 0.21.20: the red border goes with the share
+            _rc_gone(feed_id, "share")   # 0.21.79: and remote control of it
             import kastr_screen
             kastr_screen.overlay_stop(int(feed_id))
         return bool(pub)
@@ -3403,6 +3417,8 @@ class Bridge:
         pub = self._pubs.get(int(feed_id))
         if pub is None or not is_screen(pub.feed.url):
             return None
+        if on:
+            _rc_gone(feed_id, "paused")   # 0.21.79: a paused share is nobody's to control
         if bool(on) != pub.paused:
             pub.paused = bool(on)
             self.log("screen: share %s %s" % (pub.broadcast, "paused" if on else "resumed"))
@@ -3428,6 +3444,7 @@ class Bridge:
             feed.screen_ident = None
             feed.width = feed.height = None
         fid = feed.id
+        _rc_gone(fid, "retarget")   # 0.21.79: control was granted for what it showed before
         kastr_screen.overlay_stop(fid)
         kastr_screen.overlay_start(fid, url, on_stop=lambda: (self.log("screen: Stop sharing on the bar"), self.remove(fid)))
         for p in list(feed.procs):   # the old monitor (the page's thumbnail) -- the page reopens it

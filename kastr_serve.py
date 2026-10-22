@@ -3758,6 +3758,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._lan_api(path0, "POST")
             if path0 == "/api/screen/rtmp/firewall":   # 0.21.31: open the RTMP ingest ports (this computer only)
                 return self._screen_api(path0)
+            if path0 == "/api/rc":                  # 0.21.79: remote control -- the prompt, the grant, the controller's input
+                import kastr_rc
+                return kastr_rc.handle_api(self, bridge, _note)
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4817,6 +4820,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._lan_api(path, "GET")
             if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp", "/api/screen/rtmp/firewall"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
+            if path == "/api/rc":                   # 0.21.79: remote control -- what this computer can do + the grant's state
+                import kastr_rc
+                return kastr_rc.handle_api(self, bridge, _note)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the
                 # static file handler turns the path into a 404.

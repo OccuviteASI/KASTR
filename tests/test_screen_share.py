@@ -144,6 +144,7 @@ class Ffmpeg(unittest.TestCase):
         self.assertIn("0:a:0?", cam)
         self.assertIn("3M", cam)
 
+    @mock.patch.object(kastr_screen, "LINUX", False)   # 0.21.79: the Windows capture, on any OS (Linux X11 has its own: x11grab)
     def test_capture_input(self):
         with mock.patch.object(kastr_screen, "_resolve", return_value={"hmonitor": 77, "width": 2880, "height": 1800}),                 mock.patch.object(kastr_screen, "_kick_soon"):
             args = kastr_screen.capture_input("screen://monitor/2")

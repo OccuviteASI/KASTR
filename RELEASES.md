@@ -2,6 +2,13 @@
 
 What changed in each build, newest first.
 
+## v0.21.81 — save a recording as MP4, WebM, MKV, MOV, M4A or MP3
+
+**Recordings save in the format you pick (Kenton: "allow for saving in multiple different formats. Default to MP4").** When a recording stops, the save dialog lists **MP4** (picked every time — plays everywhere), **WebM**, **MKV**, **MOV** (QuickTime / editing apps), and audio only **M4A** and **MP3**; the file name, Save as… and Download follow the choice.
+- **MP4 needs no conversion on Windows:** KASTR now records H.264 + AAC straight away (5 Mbit/s, was VP9 at 4), so MP4 saves in under a second and MKV, MOV and M4A are quick copies; WebM and MP3 are converted by the app's own ffmpeg ("Converting… 42 %", with Cancel — the recording is kept).
+- **Long recordings are fine:** a 1.6 GB, 5-minute recording saved without the page's memory growing; nothing is left behind on disk after saving.
+- **Web viewers** (no KASTR app) save what the browser recorded (MP4 in Chrome); the other formats show "needs the KASTR app".
+
 ## v0.21.80 — two pointers in remote control, much less delay, grid cameras that open
 
 **Each person gets their own pointer (Kenton: "I would like to have a mouse with a name of the person controlling it, rather than them controlling my own mouse. Allow both mice at the same time").** The person in control now moves their own arrow, tagged with their name in their colour, on your screen — your cursor stays where you left it, and you can both work at once.

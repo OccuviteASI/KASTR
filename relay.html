@@ -2378,7 +2378,8 @@
   function meshCenterTip(zd) {
     const z = zd.zoom, w = (z.watched || []).slice(0, 5);
     return meshNodeTip(zd.me) + (w.length ? "<br>watched here: " + w.map((s) => esc(shortPath(s.path)) + " ×" + (s.viewers || 0) + " " + fmtRate(s.bps)).join(", ") : "")
-      + (z.needsUpdate ? "<br><span style='color:var(--asi-amber)'>per-stream figures need KASTR " + esc(mesh.data?.liveVersion || "0.21.78") + " on this relay</span>" : "");
+      + (z.needsUpdate ? "<br><span style='color:var(--asi-amber)'>per-stream figures need KASTR " + esc(mesh.data?.liveVersion || "0.21.78") + " on this relay</span>" : "")
+      + "<br><span class='dim'>click it to go back to the full mesh</span>";   // 0.21.82
   }
   function meshBuildZoom(zd) {
     const P = meshPool("zoom:" + zd.me.id), seenE = new Set(), seenN = new Set(), rm = reduceMotion(), hc = meshHue(zd.nodes[0]);
@@ -2471,9 +2472,10 @@
     const dr = mesh.drag;
     mesh.drag = null;
     if (!dr || !mesh.data) return;
-    if (mesh.zoom) {   // zoomed: a client = its row in the side panel; another relay = zoom to it; drags are not remembered
+    if (mesh.zoom) {   // zoomed: a client = its row in the side panel; another relay = zoom to it; the zoomed relay itself = back out; drags are not remembered
       if (dr.moved) { meshRun(0.3); return; }
       if (dr.id.startsWith("r:") && dr.id.slice(2) !== mesh.zoom) { meshZoomIn(dr.id.slice(2)); return; }
+      if (dr.id === "r:" + mesh.zoom) { meshZoomOut(); return; }   // 0.21.82 (Kenton: "when you click on that same relay again it should go back a level")
       if (dr.id.startsWith("c:")) { mesh.sel = { zoom: mesh.zoom, client: dr.id }; paintMeshPanel(); if (mesh.zd) { meshBuildZoom(mesh.zd); meshPlace(); } $("meshPanel").querySelector(".zsel")?.scrollIntoView({ block: "nearest" }); }
       return;
     }

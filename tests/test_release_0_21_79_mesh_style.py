@@ -160,5 +160,17 @@ class MeshStyle(unittest.TestCase):
         self.assertIn(".meshwrap #meshSvg { position:relative; z-index:1; }", self.css)
 
 
+
+class ZoomedRelayClickGoesBack(unittest.TestCase):
+    # 0.21.82 (Kenton: "when you click on that same relay again it should go back a level")
+    def test_center_click_zooms_out(self):
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay.html"), encoding="utf-8", newline="") as f:
+            p = f.read()
+        i = p.index("const meshDrop = () => {")
+        body = p[i:p.index("$(\"meshSvg\").addEventListener(\"pointerup\", meshDrop);", i)]
+        self.assertIn('if (dr.id === "r:" + mesh.zoom) { meshZoomOut(); return; }', body)
+        self.assertLess(body.index("if (dr.moved) { meshRun(0.3); return; }"), body.index('if (dr.id === "r:" + mesh.zoom)'))   # a drag of it never zooms out
+        self.assertIn("click it to go back to the full mesh", p)
+
 if __name__ == "__main__":
     unittest.main()

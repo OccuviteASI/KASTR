@@ -720,5 +720,16 @@ class ShareMode(unittest.TestCase):
         self.assertIn('"st.json", "snapshot", (v) => rcStArrive(c, v), RC_PRIO)', p)
 
 
+
+class NoTooltipWhileControlling(unittest.TestCase):
+    # 0.21.83 (Kenton: hovering the screen he controls popped up a grey box explaining it)
+    def test_capture_layer_has_no_title(self):
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "moq-watch-lite.html"), encoding="utf-8", newline="") as f:
+            p = f.read()
+        i = p.index("  function rcCapAttach(c, t) {")
+        body = p[i:p.index("t.pane.appendChild(cap);", i)]
+        self.assertNotIn(".title", body)
+        self.assertIn('cap.setAttribute("aria-label", "Controlling "', body)
+
 if __name__ == "__main__":
     unittest.main()

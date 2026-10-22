@@ -5061,7 +5061,7 @@
   function rcCapAttach(c, t) {
     const cap = document.createElement("div");
     cap.className = "rccap"; cap.tabIndex = 0;
-    cap.title = "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 hold Esc for a second or click Release to give it back";
+    cap.setAttribute("aria-label", "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 hold Esc for a second or click Release to give it back");   // 0.21.83 (Kenton: a grey tooltip popped up when the pointer rested on the controlled screen): no title -- the banner says it
     t.pane.appendChild(cap); t.pane.classList.add("rcon");
     c.cap = cap; c.pane = t.pane;
     const stop = (e) => { e.stopPropagation(); };

@@ -73,7 +73,9 @@ class CellOpen(unittest.TestCase):
 
     def test_fallback_clients_take_the_old_path(self):
         # no WebCodecs = a <video> fallback tile with no video.out.frame: neither the cold open nor the notice may wait on it
-        self.once("if (!t || t.fb || !CLIENT.webcodecs || !isWatched(fp)) return false;")
+        # 0.21.80: a PARKED camera no longer takes the old path (it bounced off the 0.21.66 guard) -- the click watches it
+        self.once("if (!t || t.fb || !CLIENT.webcodecs) return false;")
+        self.once("if (!isWatched(fp)) watchStream(fp, true);")
         self.once("const never = shown && !t.fb && CLIENT.webcodecs && since !== undefined")
 
     def test_never_predicate_has_no_frame_count_clause(self):
@@ -93,7 +95,7 @@ class CellOpen(unittest.TestCase):
         self.assertLess(i, j)
         self.assertLess(j - i, 400)   # the very next statement in the 0.21.7 block
         # the on-demand wake path joins it too
-        self.once("setTimeout(() => { if (tiles.has(name) && !gridOpenStart(gp, idx, name)) select(name); }, 0);")
+        self.once("setTimeout(() => { if (tiles.has(name) && !gridOpenStart(gp, idx, name)) { gridPickNote(name); select(name); } }, 0);")   # 0.21.80: + the pick's grace
         self.once("const gp = gridWake.gp, idx = gridWake.idx;")
 
     def test_keep_warm_governs_visible(self):
@@ -162,7 +164,7 @@ class CellOpen(unittest.TestCase):
     def test_cold_open_is_abandoned_on_every_exit(self):
         p = self.page
         # start, tick (moved on), tick (give-up), Gallery pill, cell click, zoom label, dblclick, Esc (0.21.20)
-        self.assertEqual(p.count("gridOpenEnd(false);"), 10)   # 0.21.66: + Back to spotlight (S)
+        self.assertEqual(p.count("gridOpenEnd(false);"), 11)   # 0.21.66: + Back to spotlight (S); 0.21.80: + the camera left mid-open (handed to the wake)
         # 0.21.23: + the tile menu's Unpin; 0.21.40: Unpin + the Gallery button share goGallery(); 0.21.54: + spotBack (View > Spotlight)
         # 0.21.20: a click while the camera starts never cancels it (an impatient second click restarted the cold open)
         self.once("if (gridOpen && gridOpen.gp === name) { gridOpen.clicks = (gridOpen.clicks || 0) + 1; paintGridWait(); return; }")
@@ -172,7 +174,7 @@ class CellOpen(unittest.TestCase):
         self.once("if (c && viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); fitMainstage(lastRail.rows); }")
         self.once("if (viewZoomed(c)) { gridOpenEnd(false); gridZoom = null; viewReset(c); } else viewZoomAt(c, 2, e.clientX, e.clientY);")
         # the swap path ends it too, then selects the camera
-        self.once("gridOpenEnd(true); select(o.path); return;")
+        self.once("gridOpenEnd(true); gridPickNote(o.path); select(o.path); return;")   # 0.21.80: + the pick's grace
         # a room change kills the poll before the per-room facts are reset
         self.once("if (gridOpen) { clearInterval(gridOpen.timer); gridOpen = null; }")
         i = p.index("if (gridOpen) { clearInterval(gridOpen.timer); gridOpen = null; }")

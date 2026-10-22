@@ -2,6 +2,27 @@
 
 What changed in each build, newest first.
 
+## v0.21.79 — remote control of a shared screen, a colourful mesh map, native screen sharing on Linux
+
+**Ask to control someone's shared screen (Kenton: "request remote control when someone is sharing their desktop and a prompt to allow that user to take control of your machine. Local input always overrides remote input").** On a screen or window shared from the KASTR app, **Request control** sits in the share's menu and on a spotlit share.
+- **Only publishers and admins of that room can ask**; viewers never see it, and the relay refuses a forged ask.
+- **The sharer clicks Allow every time** ("<name> asks to control your window 'Title'. They'll be able to use your mouse, keyboard and clipboard."), in KASTR and on the share's own bar. A "no" holds further asks back for 30 s.
+- **Mouse, keyboard and clipboard** (text, up to 64 KB, both ways while control lasts). Clicks land on the shared screen or window only; a covered window is brought to the front.
+- **Your own mouse and keyboard always win:** any local input pauses remote input at once and for 3 s after you stop, and releases anything the other person was holding; they see "<name> is using their mouse — paused".
+- **It lasts until you stop it:** a red always-on-top bar says who is in control, with **Stop control** — or press **Ctrl+Alt+Space**. Stopping or pausing the share, either person leaving or closing KASTR, or the controller going quiet for 10 s also ends it.
+- The controller sees "Controlling <name>'s window" with **Release** (or holds Esc for 1 s); in full screen their system keys go through too.
+- Not on browser shares, cameras or Wayland desktops (the asker is told why). Windows with admin rights and the Windows sign-in / UAC screens can't be controlled; the controller is told.
+
+**Native screen sharing on Linux (X11).** Linux desktops now get the same list of screens and windows as Windows (no browser prompt), which is also what makes them controllable. Linux screen shares carry no sound, so **Use the browser's picker instead (shares sound)** stays one click away. Wayland keeps the browser's picker. `KASTR_NATIVE_SCREEN=0` turns it off.
+
+**A more colourful, expressive mesh map (Kenton: "I want the mesh map to be more colorful and expressive").**
+- **Every relay has its own colour** (the hub ASI blue, the backup violet; red and amber stay reserved for trouble), on its node, name chip, tooltips and its half of each link — a link blends between its two relays' colours. Hub and backup links are drawn as hollow pipes.
+- **Traffic flows:** dots run along each link, one lane each way in the sender's colour — faster, denser and bigger with more bitrate; idle links are thin and still.
+- **Load rings:** two rings round each relay fill like meters (inner in, outer out; deep = its own clients, light = relay links) and the relay glows with its load.
+- **Trouble reads at a glance, by pattern as well as colour:** down = red broken line with ✕, slow / flapping = amber with ⚠, not linked = grey dots, needs update = ↑ badge. A legend shows each mark.
+- **Zoomed view:** people are green circles, camera boxes magenta squares, web viewers blue diamonds.
+- Values ease between refreshes; hovering a relay or link dims the rest. With reduced motion nothing moves (arrows show direction).
+
 ## v0.21.78 — My room for others, panels that stay open or pin to the side, a mesh map that shows the traffic
 
 **My room can be shared (Kenton: "I need to be able to share out access to 'my room' as wanted").** My room is now always the first card on the rooms rail; before you have one it opens a setup that explains what My room does and asks for a passcode. Once it exists, **Share My room** has two ways in:

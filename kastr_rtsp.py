@@ -46,6 +46,22 @@ def is_screen(url):
     return str(url or "").strip().lower().startswith(SCREEN_PREFIX)
 
 
+# 0.21.80 (Kenton: "I would like remote control to be faster if possible. There is a bit of delay."): while someone CONTROLS a
+# native share its encode turns low-latency (the share restarts once into it and once back -- Bridge.rc_mode). Per encoder,
+# each list validated once by a short test encode before it is used (Bridge.rc_lowlat; a hardware encoder that refuses an
+# option keeps its normal arguments rather than failing the share). libx264 already runs -tune zerolatency (no B-frames, no
+# lookahead): a VBV of ~200 ms caps a screen-wide change's frame so it leaves in one frame time instead of a burst.
+RC_LOWLAT = {
+    "libx264": ["-maxrate", "5M", "-bufsize", "1M"],
+    "h264_nvenc": ["-preset", "p1", "-tune", "ull", "-zerolatency", "1", "-delay", "0", "-bf", "0", "-rc", "cbr"],
+    "h264_qsv": ["-bf", "0", "-async_depth", "1", "-look_ahead", "0"],
+    "h264_amf": ["-usage", "ultralowlatency", "-bf", "0"],
+    "h264_mf": ["-scenario", "display_remoting"],
+    "h264_vaapi": ["-bf", "0"],
+}
+RC_MUX = ["-flush_packets", "1"]   # every frame to moq-cli as it is muxed (measured per frame already on Linux; insurance elsewhere)
+
+
 def _rc_gone(feed_id, why):
     """0.21.79: remote control of this share ends (it stopped, paused or now shows something else) -- only when kastr_rc
     was ever loaded (a box nobody controls never imports it)."""
@@ -1228,7 +1244,7 @@ class DeviceCapture:
                 pass
 
 
-def input_args(url, role="pub", claim=None):
+def input_args(url, role="pub", claim=None, screen_opts=None):
     if is_device(url) or is_rtmp_in(url):   # 0.21.26: the bridge's one capture of this camera, on this reader's own loopback port; 0.21.29: + RTMP ingest
         cap = DEVICES.get(url)
         if cap and role == "mon":   # 0.21.30: a free monitor slot (several monitors may read one capture)
@@ -1249,7 +1265,7 @@ def input_args(url, role="pub", claim=None):
         return ["-re", "-stream_loop", "-1", "-i", hostmedia_path(url) or "missing-media-file"]
     if is_screen(url):   # 0.21.20: Windows Graphics Capture, scaled on the GPU side of the capture, constant 30 fps
         import kastr_screen
-        return kastr_screen.capture_input(url)
+        return kastr_screen.capture_input(url, **(screen_opts or {}))   # 0.21.80: + cursor / fps while remote-controlled
     if url == TEST_URL:
         return [
             "-re",                                  # emit at real time, not as fast as possible
@@ -1425,7 +1441,7 @@ def find_moq():
     return _darwin_fallback(exe) or shutil.which("moq")
 
 
-def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=None, audio_input=0, screen=False):
+def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=None, audio_input=0, screen=False, lowlat=None):
     """0.9.1: ffmpeg output for the native publisher -- MPEG-TS on stdout with
     audio carried (AAC) unless the operator turned it off for this feed (0.9.5:
     audio=False -> video only, -an), video copied when the camera is already
@@ -1445,7 +1461,11 @@ def publish_output_args(copy_video, encoder=None, width=None, audio=True, mux=No
         else:
             args += ["-b:v", "6M" if screen else "4M"]
         args += ["-g", "60"]
+        if lowlat:   # 0.21.80: a remote-controlled share (RC_LOWLAT, validated by Bridge.rc_lowlat)
+            args += list(lowlat)
     args += (["-c:a", "aac", "-b:a", "128k", "-ac", "2"] if audio else ["-an"])
+    if lowlat is not None:
+        args += RC_MUX
     if (mux or PUBLISH_MUX) == "fmp4":
         args += ["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-"]
     else:
@@ -1565,6 +1585,13 @@ def pause_card_input(url):
     return ["-f", "lavfi", "-i", vf]
 
 
+def rc_screen_opts():
+    """0.21.80: kastr_screen.capture_input options while a share is remote-controlled: no cursor drawn into the picture (the
+    sharer's own pointer travels in ptr.json and every viewer draws it with the sharer's name), the remote-control frame rate."""
+    import kastr_screen
+    return {"cursor": False, "fps": kastr_screen.RC_FPS}
+
+
 def nudge_bucket(why):
     """0.13.1: which counter a nudge reason lands in -- the page's viewer
     stall ("viewer", "stall*"), the page's no-echo heal ("no-echo"), or a
@@ -1603,6 +1630,7 @@ class Publisher:
         self.suspended = False      # 0.21.16: the box's RTSP switch is off -- recorded, nothing runs (Publisher.suspend / resume)
         self.wokeAt = None
         self.paused = False                              # 0.21.73: a paused share sends a "paused" card (Bridge.pause)
+        self.rcmode = False                              # 0.21.80: someone controls this share -- no cursor in the capture, low-latency encode
         self.wantIdle = bool(idle) and role == "main"   # 0.21.73: the page says this camera is a grid member (asleep while unwatched)
         self.sleepy = False                              # ... and it takes effect once this pair is known to ENCODE (_sleepy_eval)
         self.lowPub = None
@@ -1708,8 +1736,12 @@ class Publisher:
         # 0.21.31: -progress on stderr -> flowingAt (a pair can RUN for a long time against a dark camera without one byte)
         scr = is_screen(self.feed.url)
         card = scr and self.paused and self.role != "low"   # 0.21.73: a paused share -- the card, and silence
+        # 0.21.80: under remote control the capture leaves the real cursor out (viewers draw both people's pointers, tagged,
+        # from the share's ptr.json) and the encode turns low-latency
+        rc = bool(scr and self.rcmode and not card and self.role != "low")
+        sopts = rc_screen_opts() if rc else None
         args = ([ff, "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "2"] + encoder_pre_args(enc)
-                + (pause_card_input(self.feed.url) if card else input_args(self.feed.url, role="low" if self.role == "low" else "pub")))
+                + (pause_card_input(self.feed.url) if card else input_args(self.feed.url, role="low" if self.role == "low" else "pub", screen_opts=sopts)))
         if card and self.audio:
             args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
         elif scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
@@ -1719,7 +1751,8 @@ class Publisher:
             args += low_output_args(encoder=enc)
         else:
             args += publish_output_args(self.copy, encoder=enc, width=MAX_WIDTH if wide else None, audio=self.audio,
-                                        audio_input=1 if scr else 0, screen=scr)
+                                        audio_input=1 if scr else 0, screen=scr,
+                                        lowlat=(self.bridge.rc_lowlat(enc or "libx264") if rc and hasattr(self.bridge, "rc_lowlat") else None))
         # 0.12.0: `warn` is where moq's reconnect/refusal lines live (the
         # classifier in _drain reads them); --backoff-timeout 10s is moq's
         # measured default made explicit (it exits 1 after that -> _watch);
@@ -3424,6 +3457,44 @@ class Bridge:
             self.log("screen: share %s %s" % (pub.broadcast, "paused" if on else "resumed"))
             pub.nudge("pause" if on else "resume")
         return pub.info()
+
+    def rc_mode(self, feed_id, on):
+        """0.21.80: someone controls this native share (on) / control ended (off): the same broadcast restarts once into the
+        remote-control capture + low-latency encode (rc_screen_opts, RC_LOWLAT) and once back. -> True when it changed."""
+        pub = self._pubs.get(int(feed_id))
+        if pub is None or not is_screen(pub.feed.url) or bool(on) == bool(pub.rcmode):
+            return False
+        if on:
+            try:
+                self.rc_lowlat(self.usable_encoder() if not pub.copy else "libx264")   # validated before the restart, not during it
+            except Exception:
+                pass
+        pub.rcmode = bool(on)
+        self.log("screen: share %s %s remote control (%s)" % (pub.broadcast, "under" if on else "out of", "no cursor, low latency" if on else "as before"))
+        pub.nudge("rc-on" if on else "rc-off")
+        return True
+
+    def rc_lowlat(self, enc):
+        """0.21.80: RC_LOWLAT[enc] when a 0.3 s test encode with it works here (asked once per encoder), else [] -- a hardware
+        encoder that refuses an option keeps its normal arguments instead of failing the share."""
+        cache = self.__dict__.setdefault("_rc_ll", {})
+        enc = enc or "libx264"
+        if enc in cache:
+            return cache[enc]
+        want = list(RC_LOWLAT.get(enc, []))
+        ok = not want
+        if want:
+            cmd = ([self.ffmpeg, "-hide_banner", "-loglevel", "error"] + encoder_pre_args(enc)
+                   + ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=0.3", "-vf", encoder_vf(enc, "format=yuv420p"),
+                      "-c:v", enc] + (["-b:v", "4M"] if enc != "libx264" else ["-b:v", "5M"]) + want + ["-f", "null", "-"])
+            try:
+                ok = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode == 0
+            except Exception:
+                ok = False
+            self.log("screen: low-latency %s arguments %s" % (enc, "work" if ok else "refused -- the normal encode stays"))
+        cache[enc] = want if ok else []
+        return cache[enc]
 
     def retarget(self, feed_id, url):
         """0.21.73 (Kenton chose: "Share something else" swaps in place): point a running screen share at another screen,

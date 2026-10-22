@@ -4823,6 +4823,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/rc":                   # 0.21.79: remote control -- what this computer can do + the grant's state
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
+            if path == "/api/rc/ws":                # 0.21.80: the sharer page's WebSocket to it while a grant lasts (input in, pointers out)
+                import kastr_rc
+                return kastr_rc.handle_ws(self, bridge, _note)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the
                 # static file handler turns the path into a 404.

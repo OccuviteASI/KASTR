@@ -1085,6 +1085,16 @@
   #kRcCtl button { background:var(--asi-amber); color:#111; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
   .pane .rccap { position:absolute; inset:0; z-index:5; cursor:default !important; outline:none; }
   .pane.rcon { outline:2px solid var(--asi-amber); outline-offset:-2px; }
+  /* 0.21.80 (Kenton: "show my mouse with my name for the viewers"): both people's pointers over a remote-controlled share, each
+     with the person's name in their colour (drawn by every viewer from the share's ptr.json, lined up with the picture) */
+  .pane .rcptrs { position:absolute; inset:0; z-index:6; pointer-events:none; overflow:hidden; }
+  .pane .rcptr { position:absolute; left:0; top:0; display:flex; align-items:flex-start; will-change:transform; }
+  .pane .rcptr[hidden] { display:none; }
+  .pane .rcptr.tagonly svg { visibility:hidden; }   /* the sharer's own cursor is in the picture: the name sits where it would */
+  .pane .rcptr svg { width:15px; height:24px; flex:none; overflow:visible; filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.55)); }
+  .pane .rcptr svg path { fill:var(--c, #009fda); stroke:#fff; stroke-width:1.4; stroke-linejoin:round; }
+  .pane .rcptr .nm { margin:17px 0 0 -3px; padding:1px 7px; border-radius:9px; background:var(--c, #009fda); color:var(--ink, #fff);
+    font-size:11px; font-weight:600; line-height:16px; white-space:nowrap; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .pane .prcbtn { display:none; position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:6; align-items:center; gap:6px;
     padding:5px 12px; border-radius:16px; background:rgba(10,14,18,.78); color:#fff; border:1px solid rgba(255,255,255,.3); font-size:12px; cursor:pointer; }
   .pane .prcbtn:hover { background:rgba(10,14,18,.92); }
@@ -4748,15 +4758,35 @@
   // bar, Ctrl+Alt+Space), the share stopping or pausing, either side leaving, closing KASTR or going quiet 10 s. The
   // controller's input is a MoQ track under its OWN host (<room>/<host>/~rc/<peer>: in.json -- a snapshot carrying the last
   // RC_KEEP_MS of events with sequence numbers, so a skipped group loses nothing); the sharer's state comes back the same way
-  // (st.json: paused, blocked, clipboard). The sharer's page hands the input to its own KASTR (/api/rc, kastr_rc), which
-  // injects it -- and holds it off for 3 s whenever the person at that computer touches their own mouse or keyboard.
+  // (st.json: blocked, clipboard, the latency echo). The sharer's page hands the input to its own KASTR (/api/rc, kastr_rc).
+  // 0.21.80 (Kenton: "I would like to have a mouse with a name of the person controlling it, rather than them controlling my own
+  // mouse. Allow both mice at the same time and show my mouse with my name for the viewers."): TWO POINTERS -- the controller's
+  // moves move only THEIR arrow (with their name) on the sharer's screen, their clicks land there (kastr_rc: posted to classic
+  // controls, a one-frame warp-click elsewhere, a second X pointer on Linux), both people type at once, and local input no
+  // longer pauses anything. The sharer's KASTR samples both pointers (~30 a second while one moves) over a loopback WebSocket
+  // (/api/rc/ws -- also the input's way in: no HTTP request per batch); this page publishes them as ptr.json and EVERY viewer of
+  // the share (only while it is controlled) draws both tagged over its tile, delayed to line up with the picture: the
+  // controller's arrow + name, and the sharer's NAME beside their real cursor (it stays in the capture: leaving it out means
+  // restarting the capture, which froze the controller's picture 14 s+ in the lab -- kastr_rc.bridge_mode). The controller's own
+  // tile plays without a jitter buffer (RC_TUNE) at the top priority. (Kenton: "I would like remote control to be faster if possible.")
   const RC_ASK_MS = 60000, RC_QUIET_MS = 10000, RC_KEEP_MS = 600, RC_KEEP_N = 64, RC_CLIP_MAX = 65536;
+  // 0.21.80: the controller's player for the share it controls ("instant" = frames painted as they decode, for a picture-only
+  // share; one with sound keeps a small buffer so its audio does not crackle) -- lab v02180: click-to-pixels 677 ms with the
+  // spotlight budget (150 + 400 ms), 146 ms instant. RC_PTR_V0: what a pointer sample waits for on a viewer on top of that
+  // tile's own player budget -- the share's capture -> encode -> relay -> decode time, measured in the lab (~100 ms with an
+  // instant player). The catalog clock is not used for it: moq-cli stamps frames when it IMPORTS them, after ffmpeg's capture
+  // and encode (it read ~60 ms where glass-to-glass was ~650).
+  const RC_TUNE = { video: { delay: "instant", buffer: "0ms" }, audio: { delay: "30ms", buffer: "60ms" } };
+  const RC_PRIO = 255, RC_PTR_V0 = 100, RC_PTR_KEEP_MS = 3000;
   const rcNewId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
   let rcCaps = null;            // this computer's KASTR: {available, why, platform} (GET /api/rc); null = a web page or an older KASTR
   const rcShares = new Map();   // member path (<room>/<host>/~member/<peer>) -> [{p, s, l, no?}]: the controllable shares that page lists
   let rcAsk = null, rcCtl = null, rcGrant = null, rcPrompt = null;   // my ask / I control someone / someone controls me / an ask to answer
   let rcStateP = null;
-  const rcState = () => rcStateP || (rcStateP = stateProducer(() => ((rcCtl || rcGrant) && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rc/" + statePeer() : ""), ["in.json", "st.json"]));
+  // 0.21.80: + ptr.json (the sharer's two pointers); every rc track at the top priority with a short retention -- the newest
+  // value is all that matters (moves never queue behind each other; clicks and keys ride every snapshot of the last RC_KEEP_MS)
+  const rcState = () => rcStateP || (rcStateP = stateProducer(() => ((rcCtl || rcGrant) && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rc/" + statePeer() : ""), ["in.json", "st.json", "ptr.json"], { priority: RC_PRIO, maxAge: 2000 }));
+  window.__rcCtlShare = () => (rcCtl ? rcCtl.share : "");   // applyState: the tile I control (RC_TUNE, priority)
   const rcSeen = new Set();
   const rcToast = (m, ms, level) => window.__toast?.(m, ms || 5000, { level: level || "event" });
   const rcWho = (name) => { const pp = String(name).split("/"); return (pp.length >= 4 ? prettyOperator(pp[2]) : "") || pp[1] || "Someone"; };
@@ -4779,7 +4809,8 @@
     let mine = [];
     try { mine = window.__rcMine?.() || []; } catch {}
     return mine.filter((s) => s.onair && !s.paused && String(s.path).startsWith(CHANNEL + "/")).slice(0, 16)
-      .map((s) => Object.assign({ p: s.path, s: s.surface, l: String(s.label || "").slice(0, 60) }, rcCaps.available ? {} : { no: rcCaps.why === "wayland" ? "wayland" : "unsupported" }));
+      .map((s) => Object.assign({ p: s.path, s: s.surface, l: String(s.label || "").slice(0, 60) }, rcCaps.available ? {} : { no: rcCaps.why === "wayland" ? "wayland" : "unsupported" },
+                                rcGrant && rcGrant.share === s.path ? { c: 1 } : {}));   // 0.21.80: c = controlled now (viewers read its ptr.json)
   }
   function rcSharesApply(path, list) {
     const host = String(path).split("/")[1] || "";
@@ -4895,9 +4926,11 @@
     if (!t) { rcSend({ kind: "stop", to: it.from, share: it.share, id: it.rcid, why: "share" }, a.tok); return; }
     const c = rcCtl = { rcid: a.rcid, share: a.share, to: a.to, toPeer: String(it.peer || ""), name: a.name, surface: a.surface,   // what they listed (a screen or a window)
                         tok: a.tok, room: CHANNEL, seq: 0, buf: [], lastSt: Date.now() + 5000, st: {}, clipN: 0, clipLast: null, down: new Set(), btn: new Set(),
-                        hold: null, mv: null, mvT: 0, wv: 0, wh: 0, sentAt: 0, goneAt: 0 };
+                        hold: null, mv: null, mvT: 0, mvAt: 0, wv: 0, wh: 0, sentAt: 0, goneAt: 0, sent: new Map(), ackS: 0, lat: null };   // 0.21.80: + the latency echo
     rcState().sync();
     rcCtlSub(c);
+    try { applyState(); } catch {}   // 0.21.80: my tile of their share -- RC_TUNE, top priority
+    rcPtrSync();
     c.tick = setInterval(() => rcCtlTick(c), 1000);
     try { if (selectedName !== a.share) select(a.share); } catch {}
     rcCapAttach(c, t);
@@ -4910,13 +4943,23 @@
   function rcCtlSub(c) {
     try { c.sub?.close(); } catch {}
     c.conn = connection;
-    c.sub = connection && c.toPeer ? stateSubscribe(connection, c.room + "/" + c.to + "/~rc/" + c.toPeer, "st.json", "snapshot", (v) => rcStArrive(c, v)) : null;
+    c.sub = connection && c.toPeer ? stateSubscribe(connection, c.room + "/" + c.to + "/~rc/" + c.toPeer, "st.json", "snapshot", (v) => rcStArrive(c, v), RC_PRIO) : null;
   }
   function rcStArrive(c, v) {
     if (rcCtl !== c || !v || v.rcid !== c.rcid) return;
     c.lastSt = Date.now();
     if (v.active === false) { rcCtlEnd(v.ended || "stopped", true); return; }
     c.st = v;
+    if (v.ack && Number(v.ack.s) > c.ackS) {   // 0.21.80: the latency echo -- my event's round trip, split by the sharer's own part
+      c.ackS = Number(v.ack.s);
+      const sentAt = c.sent.get(c.ackS);
+      if (sentAt) {
+        const rtt = Date.now() - sentAt, sh = Math.max(0, (Number(v.ack.inj) || 0) - (Number(v.ack.rx) || 0)), one = Math.max(0, (rtt - sh) / 2) + sh;
+        const L = c.lat;
+        c.lat = L ? { rtt: Math.round(L.rtt * 0.8 + rtt * 0.2), sharer: Math.round(L.sharer * 0.8 + sh * 0.2), oneWay: Math.round(L.oneWay * 0.8 + one * 0.2), last: rtt, n: L.n + 1 }
+                  : { rtt, sharer: sh, oneWay: Math.round(one), last: rtt, n: 1 };
+      }
+    }
     if (v.clip && Number(v.clip.n) > c.clipN && typeof v.clip.text === "string") {   // their clipboard changed during control
       c.clipN = Number(v.clip.n);
       c.clipLast = v.clip.text;
@@ -4946,7 +4989,7 @@
     if (rcCtl !== c) return;
     if (c.hold && ev.t !== "hb") { c.hold.push(ev); return; }
     const now = Date.now();
-    if (ev.t !== "hb") { ev.s = ++c.seq; ev.a = now; c.buf.push(ev); }
+    if (ev.t !== "hb") { ev.s = ++c.seq; ev.a = now; c.buf.push(ev); c.sent.set(ev.s, now); if (c.sent.size > 400) c.sent.delete(c.sent.keys().next().value); }
     c.buf = c.buf.filter((e) => now - e.a <= RC_KEEP_MS);
     while (c.buf.length > RC_KEEP_N) { const i = c.buf.findIndex((e) => e.t === "m"); c.buf.splice(i >= 0 ? i : 0, 1); }
     rcState().set("in.json", { rcid: c.rcid, seq: c.seq, t: now, ev: c.buf });
@@ -4954,7 +4997,7 @@
   }
   function rcFlushMove(c) {
     if (c.mvT) { clearTimeout(c.mvT); c.mvT = 0; }
-    if (c.mv) { const m = c.mv; c.mv = null; rcEmit(c, { t: "m", x: m.x, y: m.y }); }
+    if (c.mv) { const m = c.mv; c.mv = null; c.mvAt = performance.now(); rcEmit(c, { t: "m", x: m.x, y: m.y }); }
   }
   // a client point -> (x, y) 0..1 on the picture: through object-fit (contain on the stage, cover in the rail -- letterbox and
   // crop) and the element's own transform (zoom, pan, aspect correction), all of which getBoundingClientRect carries
@@ -4988,8 +5031,11 @@
       const p = rcPoint(t, e.clientX, e.clientY);
       if (!p || rcCtl !== c) return;
       c.mv = p;
-      if (!c.mvT) c.mvT = setTimeout(() => { c.mvT = 0; rcFlushMove(c); }, 16);   // moves at most ~60 a second
+      // 0.21.80: leading edge -- a move goes at once unless one went in the last 16 ms (then the newest goes at the 16 ms mark):
+      // ~60 a second at most, and never a 16 ms wait for the first one
+      if (!c.mvT) { const w = 16 - (performance.now() - c.mvAt); if (w <= 0) rcFlushMove(c); else c.mvT = setTimeout(() => { c.mvT = 0; rcFlushMove(c); }, w); }
     });
+    cap.addEventListener("mouseleave", () => { if (rcCtl !== c) return; rcFlushMove(c); rcEmit(c, { t: "m", o: 1 }); });   // 0.21.80: my arrow leaves their screen too
     cap.addEventListener("mousedown", (e) => {
       stop(e); e.preventDefault();
       cap.focus({ preventScroll: true });
@@ -5073,8 +5119,9 @@
       document.body.appendChild(el);
     }
     const st = c.st || {};
-    let t = "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 click on it to use it; hold Esc to give it back";
+    let t = "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 your own pointer is on their screen; hold Esc to give it back";   // 0.21.80
     if (st.paused) t = c.name + " is using their mouse \u2014 paused";
+    else if (st.blocked === "drag") t = c.name + " is dragging with their own mouse \u2014 your click goes as soon as they let go";   // 0.21.80
     else if (st.blocked === "elevated") t = "That window runs as administrator on " + c.name + "\u2019s computer \u2014 Windows doesn\u2019t let KASTR control it";
     else if (st.blocked === "secure") t = c.name + "\u2019s computer shows a secure screen (sign-in or an administrator prompt) \u2014 KASTR can\u2019t control it";
     else if (st.blocked === "focus") t = "Click inside " + c.name + "\u2019s shared window first \u2014 keys go to the window in front";
@@ -5094,6 +5141,8 @@
     if (c.up) window.removeEventListener("mouseup", c.up, true);
     c.cap?.remove(); c.pane?.classList.remove("rcon");
     try { navigator.keyboard?.unlock?.(); } catch {}
+    try { applyState(); } catch {}   // 0.21.80: back to the tile's normal player budget and priority
+    rcPtrSync();
     try { rcState().set("in.json", { rcid: c.rcid, seq: c.seq + 1, t: Date.now(), ev: [], end: why }); } catch {}
     setTimeout(() => { try { rcState().sync(); } catch {} }, 1500);   // the path goes once nothing is live (the last word first)
     if (!fromThem) rcSend({ kind: "stop", to: c.to, share: c.share, id: c.rcid, why }, c.tok);
@@ -5130,8 +5179,8 @@
       document.body.appendChild(el);
     }
     const what = rcSurfaceText(mine);
-    el.querySelector(".kcmsg").textContent = name + " asks to control " + what + ". They\u2019ll be able to use your mouse, keyboard and clipboard.";
-    el.querySelector(".kcdet").textContent = "Your own mouse and keyboard always come first. Stop it at any time: Stop control on the red bar, or Ctrl+Alt+Space.";
+    el.querySelector(".kcmsg").textContent = name + " asks to control " + what + ". They\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there.";   // 0.21.80
+    el.querySelector(".kcdet").textContent = "Your mouse and keyboard keep working at the same time. Stop it at any time: Stop control on the red bar, or Ctrl+Alt+Space.";
     el.hidden = false;
     try { el.querySelector(".rcno").focus(); } catch {}
     const p = rcPrompt = { rcid: it.rcid, share: it.share, feed: mine.feed, from: it.from, peer: String(it.peer || ""), name, what, room: CHANNEL, tok: authTokens?.member, el, at: Date.now() };
@@ -5157,18 +5206,30 @@
       rcSend({ kind: "deny", to: p.from, share: p.share, id: p.rcid, why: answer === "deny" ? "no" : answer }, p.tok);
     }
   }
+  // 0.21.80: a person's colour (their chosen one, else the automatic one) by their page's peer, from the room's presence
+  function rcColorOfPeer(peer, name) {
+    let op = "";
+    try { for (const x of roomsPres.values()) if (x.slug === CHANNEL && x.who && String(x.who.peer) === String(peer)) { op = String(x.who.op || ""); break; } } catch {}
+    return personColor(op || String(name || "").toLowerCase());
+  }
+  const rcMyColor = () => personColor(String(window.__publisher?.opSlug?.() || myOpName() || "").toLowerCase());
+  const rcInk = (c) => { const n = parseInt(String(c).slice(1), 16) || 0; return (0.2126 * (n >> 16 & 255) + 0.7152 * (n >> 8 & 255) + 0.0722 * (n & 255)) > 150 ? "#111" : "#fff"; };
   async function rcGrantStart(p) {
-    const d = await rcLocal({ op: "grant", rcid: p.rcid, controller: p.from, name: p.name, feed: p.feed, share: p.share });
+    const ctlColor = rcColorOfPeer(p.peer, p.name);
+    const d = await rcLocal({ op: "grant", rcid: p.rcid, controller: p.from, name: p.name, feed: p.feed, share: p.share, color: ctlColor });
     if (!d.ok) {
       rcSend({ kind: "deny", to: p.from, share: p.share, id: p.rcid, why: d.why || "unsupported" }, p.tok);
       rcToast("Remote control could not start: " + (d.error || "no answer from KASTR"), 6000, "warn");
       return;
     }
-    const g = rcGrant = { ...p, lastIn: Date.now() + 5000, lastSeq: 0, first: true, q: [], busy: false, stJson: "", stAt: 0 };
+    const g = rcGrant = { ...p, lastIn: Date.now() + 5000, lastSeq: 0, first: true, q: [], busy: false, stJson: "", stAt: 0,
+                          ctlColor, ws: null, rxAt: new Map(), qS: 0, qRx: 0, ack: null, ackSent: 0, ackSentAt: 0, ptr: null, ptrAt: 0 };   // 0.21.80
     const a = await rcSend({ kind: "allow", to: p.from, share: p.share, id: p.rcid, peer: statePeer(), by: myOpName() || undefined }, p.tok);
     if (!a.ok) { rcGrantEnd("stopped", false); rcToast("Could not tell " + p.name + " \u2014 " + a.error, 6000, "warn"); return; }
     rcState().sync();
     rcGrantSub(g);
+    rcWsOpen(g);   // 0.21.80: input in and both pointers out over one loopback WebSocket
+    try { window.__state?.set?.("rc", rcMineList()); } catch {}   // 0.21.80: viewers learn now that it is controlled (c)
     g.tick = setInterval(() => rcGrantTick(g), 1000);
     rcBarShow(g);
     log("Remote control: " + p.name + " may control " + p.what + " (" + p.share + ")");
@@ -5178,7 +5239,7 @@
   function rcGrantSub(g) {
     try { g.sub?.close(); } catch {}
     g.conn = connection;
-    g.sub = connection && g.peer ? stateSubscribe(connection, g.room + "/" + g.from + "/~rc/" + g.peer, "in.json", "snapshot", (v) => rcInArrive(g, v)) : null;
+    g.sub = connection && g.peer ? stateSubscribe(connection, g.room + "/" + g.from + "/~rc/" + g.peer, "in.json", "snapshot", (v) => rcInArrive(g, v), RC_PRIO) : null;
   }
   function rcInArrive(g, v) {   // the controller's events: only those newer than the last applied (never an old click twice)
     if (rcGrant !== g || !v || v.rcid !== g.rcid || !Array.isArray(v.ev)) return;
@@ -5188,19 +5249,56 @@
     if (g.first) { g.first = false; const t0 = Number(v.t) || 0; evs = evs.filter((e) => t0 - (Number(e.a) || 0) <= 1000); }
     g.lastSeq = Math.max(g.lastSeq, Number(v.seq) || 0, ...evs.map((e) => Number(e.s) || 0));
     if (!evs.length) return;
-    for (const e of evs) { const { s, a, ...rest } = e; g.q.push(rest); }
+    for (const e of evs) { const { s, a, ...rest } = e; g.q.push(rest); g.qS = Math.max(g.qS, Number(s) || 0); }
+    g.qRx = Date.now();   // 0.21.80: the latency echo -- when the newest of these reached me
     rcFlushIn(g);
   }
   async function rcFlushIn(g) {
-    if (g.busy || !g.q.length || rcGrant !== g) return;
+    if (!g.q.length || rcGrant !== g) return;
+    const n = g.qS, rx = g.qRx;
+    if (g.ws && g.ws.readyState === 1 && !g.busy) {   // 0.21.80: the WebSocket -- no waiting for the previous batch's answer
+      const ev = g.q.splice(0, 256);
+      try { g.rxAt.set(n, rx); if (g.rxAt.size > 200) g.rxAt.delete(g.rxAt.keys().next().value); g.ws.send(JSON.stringify({ op: "input", rcid: g.rcid, src: g.from, ev, n })); return; }
+      catch { g.q.unshift(...ev); }
+    }
+    if (g.busy) return;
     g.busy = true;
     const ev = g.q.splice(0, 256);
     const d = await rcLocal({ op: "input", rcid: g.rcid, src: g.from, ev });
     g.busy = false;
     if (rcGrant !== g) return;
-    if (d.http === 403 || d.http === 409 || d.ended) { rcGrantEnd(d.ended || "stopped", true); return; }
-    if (d.http === 200) rcStatePush(g, d);
+    rcInputDone(g, d, d.http, n, rx);
     if (g.q.length) rcFlushIn(g);
+  }
+  function rcInputDone(g, d, code, n, rx) {   // 0.21.80: an input batch's answer (HTTP or the WebSocket)
+    if (rcGrant !== g) return;
+    if (code === 403 || code === 409 || d.ended) { rcGrantEnd(d.ended || "stopped", true); return; }
+    if (n && rx) g.ack = { s: n, rx, inj: Date.now() };
+    if (code === 200) rcStatePush(g, d);
+  }
+  function rcWsOpen(g) {   // 0.21.80: one WebSocket to my own KASTR for the whole grant (input in, both pointers out)
+    if (rcGrant !== g || !rcCaps?.ws) return;
+    let ws;
+    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/rc/ws"); } catch { return; }
+    g.ws = ws;
+    ws.onopen = () => { if (rcGrant === g && g.q.length) rcFlushIn(g); };
+    ws.onmessage = (m) => {
+      let d = null; try { d = JSON.parse(m.data); } catch { return; }
+      if (rcGrant !== g || !d) return;
+      if (d.ptr) { if (!d.rcid || d.rcid === g.rcid) rcPtrPush(g, d.ptr); return; }
+      if (d.re === "input") { const rx = g.rxAt.get(d.n); g.rxAt.delete(d.n); rcInputDone(g, d, d.code, d.n, rx); }
+    };
+    ws.onclose = () => {
+      if (g.ws === ws) g.ws = null;
+      if (rcGrant === g && (g.wsTries = (g.wsTries || 0) + 1) <= 3) setTimeout(() => rcWsOpen(g), 1000);   // a KASTR restart: back on HTTP meanwhile
+    };
+  }
+  function rcPtrPush(g, ptr) {   // 0.21.80: both pointers -> ptr.json (every viewer of the share draws them, tagged)
+    if (rcGrant !== g || !ptr || !Array.isArray(ptr.s) || !Array.isArray(ptr.c)) return;
+    g.ptr = ptr; g.ptrAt = Date.now(); g.ptrN = (g.ptrN || 0) + 1;
+    rcState().set("ptr.json", { rcid: g.rcid, share: g.share, t: Date.now() + (window.__clockOffset || 0),
+      p: [{ k: "s", n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: ptr.s[0], y: ptr.s[1], on: ptr.s[2] ? 1 : 0, cap: ptr.scap ? 1 : 0 },
+          { k: "c", n: String(g.name).slice(0, 28), c: g.ctlColor, x: ptr.c[0], y: ptr.c[1], on: ptr.c[2] ? 1 : 0, cap: ptr.cap ? 1 : 0 }] });
   }
   async function rcGrantTick(g) {
     if (rcGrant !== g) { clearInterval(g.tick); return; }
@@ -5212,11 +5310,20 @@
     if (rcGrant !== g) return;
     if (d.ended || d.active === false) { rcGrantEnd(d.ended || "stopped", true); return; }
     if (d.http === 200) rcStatePush(g, d);
+    if (d.ptr && (!g.ws || Date.now() - g.ptrAt > 900)) rcPtrPush(g, d.ptr);   // 0.21.80: no WebSocket -- a slower stream; and a heartbeat
   }
   function rcStatePush(g, d) {   // st.json for the controller: paused / blocked / my clipboard's change -- and a heartbeat
     const st = { rcid: g.rcid, active: true, paused: !!d.paused, pauseLeft: Number(d.pauseLeft) || 0, blocked: String(d.blocked || ""), clip: d.clip || null };
     const j = JSON.stringify([st.paused, st.blocked, st.clip?.n]);
-    if (j !== g.stJson || Date.now() - g.stAt > 900) { g.stJson = j; g.stAt = Date.now(); rcState().set("st.json", { ...st, t: Date.now() }); }
+    const ackWait = !!g.ack && g.ack.s !== g.ackSent ? 100 - (Date.now() - g.ackSentAt) : -1;   // 0.21.80: the latency echo, 10 a second at most
+    const ackNew = ackWait !== -1 && ackWait <= 0;
+    if (ackWait > 0 && !g.ackT) g.ackT = setTimeout(() => { g.ackT = 0; if (rcGrant === g) rcStatePush(g, g.lastD || {}); }, ackWait);   // the newest one, at the 100 ms mark
+    g.lastD = d;
+    if (j !== g.stJson || Date.now() - g.stAt > 900 || ackNew) {
+      g.stJson = j; g.stAt = Date.now();
+      if (g.ack) { st.ack = g.ack; g.ackSent = g.ack.s; g.ackSentAt = Date.now(); }
+      rcState().set("st.json", { ...st, t: Date.now() });
+    }
     rcBarPaint(g, st);
   }
   function rcGrantEnd(why, tellThem) {
@@ -5225,6 +5332,8 @@
     rcGrant = null;
     clearInterval(g.tick);
     try { g.sub?.close(); } catch {}
+    try { g.ws?.close(); } catch {}   // 0.21.80
+    try { rcState().set("ptr.json", { rcid: g.rcid, share: g.share, end: 1, t: Date.now() }); window.__state?.set?.("rc", rcMineList()); } catch {}   // 0.21.80: viewers drop the pointers
     rcLocal({ op: "end", rcid: g.rcid, why }, true);
     try { rcState().set("st.json", { rcid: g.rcid, active: false, ended: why, t: Date.now() }); } catch {}
     setTimeout(() => { try { rcState().sync(); } catch {} }, 1500);
@@ -5248,7 +5357,7 @@
   function rcBarPaint(g, st) {
     const el = document.getElementById("kRcBar");
     if (!el || rcGrant !== g) return;
-    el.querySelector(".t").textContent = g.name + " is controlling " + g.what + (st.paused ? " \u2014 paused while you use your mouse or keyboard" : " \u2014 Stop control (Ctrl+Alt+Space)");
+    el.querySelector(".t").textContent = g.name + " is controlling " + g.what + " \u2014 Stop control (Ctrl+Alt+Space)";   // 0.21.80: never paused -- two pointers
   }
   function rcBarHide() { const el = document.getElementById("kRcBar"); if (el) el.hidden = true; }
   // the spotlit share's button + the room's list of my shares + a quicker beat while anything is going on
@@ -5260,9 +5369,117 @@
       if (it) { t.prc.dataset.v = it.value; t.prc.title = it.tip || it.label; const s = t.prc.querySelector("span"); if (s && s.textContent !== it.label) s.textContent = it.label; }
     }
   }
+  // ---- 0.21.80 BOTH POINTERS OVER A CONTROLLED SHARE (Kenton chose: viewers see name-tagged pointers ONLY during remote
+  // control). The sharer's room.json marks the share c:1; every viewer then subscribes to its ptr.json (<room>/<sharer>/~rc/
+  // <peer>) and draws the sharer's arrow and the controller's, each with the person's name in their colour, mapped through the
+  // tile's letterbox / crop / zoom (the inverse of rcPoint), hidden off the picture (a cursor that is IN the picture -- cap --
+  // gets only its name: the sharer's, or nothing for an X11 controller's arrow, which carries its own). A sample shows when the picture shows that
+  // moment: RC_PTR_V0 + this tile's own player budget after the sharer took it (its time is on the fleet clock); when the
+  // clocks disagree, the same delay after it arrived. The controller sees only the sharer's arrow (theirs is their own mouse);
+  // an arrow the capture already shows (cap: X11 cannot leave KASTR's arrow out of x11grab) is not drawn twice.
+  const rcPtrs = new Map();   // share path -> { path, conn, sub, q: [{t, at, p}], box, els: Map(k -> el) }
+  function rcPtrSync() {
+    const want = new Map();
+    for (const [mp, list] of rcShares) { const pp = mp.split("/"); if (!pp[3]) continue; for (const x of list) if (x.c && tiles.has(x.p)) want.set(x.p, pp[0] + "/" + pp[1] + "/~rc/" + pp[3]); }
+    if (rcCtl && rcCtl.toPeer && tiles.has(rcCtl.share)) want.set(rcCtl.share, rcCtl.room + "/" + rcCtl.to + "/~rc/" + rcCtl.toPeer);
+    for (const [share, h] of [...rcPtrs]) if (want.get(share) !== h.path || (connection && h.conn !== connection)) rcPtrDrop(share);
+    if (!connection) return;
+    for (const [share, path] of want) {
+      if (rcPtrs.has(share)) continue;
+      const h = { path, conn: connection, q: [], box: null, els: new Map() };
+      h.sub = stateSubscribe(connection, path, "ptr.json", "snapshot", (v) => rcPtrArrive(share, h, v), RC_PRIO);
+      rcPtrs.set(share, h);
+    }
+  }
+  function rcPtrDrop(share) {
+    const h = rcPtrs.get(share);
+    if (!h) return;
+    rcPtrs.delete(share);
+    try { h.sub?.close(); } catch {}
+    h.box?.remove();
+  }
+  function rcPtrArrive(share, h, v) {
+    if (rcPtrs.get(share) !== h || !v) return;
+    if (v.end) { h.q = []; rcPtrPaint(); return; }
+    if (!Array.isArray(v.p) || (v.share && v.share !== share)) return;
+    const now = Date.now();
+    h.q.push({ t: Number(v.t) || 0, at: now, p: v.p.slice(0, 4) });
+    while (h.q.length > 2 && now - h.q[0].at > RC_PTR_KEEP_MS) h.q.shift();
+    rcPtrLoop();
+  }
+  function rcPtrDelay(t) {   // ms between the sharer taking a sample and this tile showing that moment
+    const d = String(t.watch.getAttribute("delay") || ""), b = String(t.watch.getAttribute("buffer") || "");
+    return RC_PTR_V0 + (d === "instant" ? 0 : (parseInt(d, 10) || 0) + (parseInt(b, 10) || 0));
+  }
+  function rcPtrPick(h, L) {
+    const q = h.q;
+    if (!q.length) return null;
+    const fleet = Date.now() + (window.__clockOffset || 0), last = q[q.length - 1];
+    const clockOk = last.t > 0 && fleet - last.t > -1500 && fleet - last.t < 15000;   // the sharer's stamp is on my (fleet) clock
+    const want = clockOk ? fleet - L : Date.now() - Math.max(0, L - 30);
+    let pick = q[0];
+    for (const s of q) { if ((clockOk ? s.t : s.at) <= want) pick = s; else break; }
+    return pick;
+  }
+  function rcClientOf(t, u, v) {   // (u, v) on the picture -> a point in the tile's pane (the inverse of rcPoint), null off the picture / out of sight
+    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return null;
+    const fbOn = !!(t.fb && t.fb.dataset.src && t.fb.videoWidth && getComputedStyle(t.fb).display !== "none");
+    const el = fbOn ? t.fb : t.canvas;
+    const cw = fbOn ? el.videoWidth : el.width, ch = fbOn ? el.videoHeight : el.height, Bw = el.clientWidth, Bh = el.clientHeight;
+    if (!cw || !ch || !Bw || !Bh) return null;
+    let cover = false;
+    try { cover = getComputedStyle(el).objectFit === "cover"; } catch {}
+    const sc = (cover ? Math.max : Math.min)(Bw / cw, Bh / ch), ox = (Bw - cw * sc) / 2, oy = (Bh - ch * sc) / 2;
+    const r = el.getBoundingClientRect(), pr = t.pane.getBoundingClientRect();
+    const x = r.left + (ox + u * cw * sc) * r.width / Bw - pr.left, y = r.top + (oy + v * ch * sc) * r.height / Bh - pr.top;
+    return x < 0 || y < 0 || x > pr.width || y > pr.height ? null : [x, y];
+  }
+  function rcPtrPaint() {   // -> true while samples are still on their way into view (keep painting every frame)
+    if (window.__rcPtrOff) return false;   // rig: the latency lab's A/B
+    let busy = false;
+    const now = Date.now();
+    for (const [share, h] of rcPtrs) {
+      const t = tiles.get(share);
+      if (!t) continue;
+      const L = rcPtrDelay(t), pk = rcPtrPick(h, L);
+      if (pk && now - h.q[h.q.length - 1].at < L + 400) busy = true;
+      if (!h.box || h.box.parentNode !== t.pane) { h.box?.remove(); h.box = document.createElement("div"); h.box.className = "rcptrs"; t.pane.appendChild(h.box); h.els.clear(); }
+      const seen = new Set();
+      for (const p of (pk ? pk.p : [])) {
+        const k = p && p.k === "c" ? "c" : "s";
+        if (!p || !p.on || (k === "c" && (p.cap || rcCtl?.share === share))) continue;   // in the picture already (tag and all) / it is my own mouse
+        const xy = rcClientOf(t, Number(p.x), Number(p.y));
+        if (!xy) continue;
+        let el = h.els.get(k);
+        if (!el) {
+          el = document.createElement("div"); el.className = "rcptr"; el.dataset.k = k;
+          el.innerHTML = '<svg viewBox="0 0 15 24" aria-hidden="true"><path d="M.5 .5V20.5L5.5 15.5L9.5 23.5L12.5 22.5L8.5 14.5H14.5Z"/></svg><span class="nm"></span>';
+          h.box.appendChild(el); h.els.set(k, el);
+        }
+        const nm = String(p.n || "").slice(0, 28), nmEl = el.querySelector(".nm");
+        if (nmEl.textContent !== nm) nmEl.textContent = nm;
+        const c = /^#[0-9a-f]{6}$/i.test(String(p.c || "")) ? String(p.c) : "#009fda";
+        if (el.dataset.c !== c) { el.dataset.c = c; el.style.setProperty("--c", c); el.style.setProperty("--ink", rcInk(c)); }
+        el.classList.toggle("tagonly", k === "s" && !!p.cap);   // the sharer's real cursor is in the picture: only their name beside it
+        el.style.transform = "translate(" + Math.round(xy[0]) + "px," + Math.round(xy[1]) + "px)";
+        el.hidden = false; seen.add(k);
+      }
+      for (const [k, el] of h.els) if (!seen.has(k)) el.hidden = true;
+    }
+    return busy;
+  }
+  let rcPtrOn = false;
+  function rcPtrLoop() {
+    if (rcPtrOn) return;
+    rcPtrOn = true;
+    const go = () => { rcPtrOn = false; if (rcPtrPaint()) rcPtrLoop(); };
+    if (document.hidden) setTimeout(go, 33); else requestAnimationFrame(go);
+  }
+  setInterval(() => { if (rcPtrs.size) rcPtrPaint(); }, 250);   // the tile moved / zoomed while the pointers stood still
   setInterval(() => {
     try { window.__state?.set?.("rc", rcMineList()); } catch {}
     rcPaint();
+    rcPtrSync();   // 0.21.80
     if (rcCtl) rcCtlPaint(rcCtl);
   }, 2000);
   setInterval(() => { if (rcAsk || rcCtl || rcGrant || rcPrompt) peopleBeat(); }, 1000);   // notes in ~1 s instead of 4 while it matters
@@ -5272,8 +5489,10 @@
     if (g) { rcBeacon({ kind: "stop", to: g.from, share: g.share, id: g.rcid, why: "closed" }, g.tok); rcLocal({ op: "end", rcid: g.rcid, why: "closed" }, true); }
   });
   window.__rc = { state: () => ({ caps: rcCaps, ask: rcAsk && { rcid: rcAsk.rcid, share: rcAsk.share }, ctl: rcCtl && { rcid: rcCtl.rcid, share: rcCtl.share, st: rcCtl.st, seq: rcCtl.seq },
-                                  grant: rcGrant && { rcid: rcGrant.rcid, share: rcGrant.share, from: rcGrant.from, lastSeq: rcGrant.lastSeq }, prompt: rcPrompt && { rcid: rcPrompt.rcid, from: rcPrompt.from },
-                                  shares: [...rcShares].map(([k, v]) => [k, v]), mine: rcMineList() }),
+                                  grant: rcGrant && { rcid: rcGrant.rcid, share: rcGrant.share, from: rcGrant.from, lastSeq: rcGrant.lastSeq, ptr: rcGrant.ptr, color: rcGrant.ctlColor, ptrN: rcGrant.ptrN || 0 }, prompt: rcPrompt && { rcid: rcPrompt.rcid, from: rcPrompt.from },
+                                  shares: [...rcShares].map(([k, v]) => [k, v]), mine: rcMineList(),
+                                  lat: rcCtl?.lat || null, ws: !!(rcGrant?.ws && rcGrant.ws.readyState === 1),   // 0.21.80: the latency echo; the loopback WebSocket
+                                  ptrs: [...rcPtrs].map(([k, h]) => [k, h.q.length ? h.q[h.q.length - 1] : null, [...h.els].filter(([, e]) => !e.hidden).map(([kk, e]) => [kk, e.style.transform, e.querySelector(".nm").textContent]), h.sub?.n || 0]) }),
                   request: rcRequest, item: rcMenuItem, release: () => rcCtlEnd("released", false), stop: () => rcGrantEnd("stopped", true),
                   answer: (yes) => rcPromptClose(yes ? "allow" : "deny"), map: rcMapPoint, point: (name, x, y) => { const t = tiles.get(name); return t ? rcPoint(t, x, y) : null; } };   // rig
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
@@ -9659,16 +9878,20 @@
         // 0.21.7: composites are a class of their own (`grid`, rail budgets -- `instant` never subscribed their audio
         // at all, so a composite with sound played silent); `cell` only for an audio-less feed behind a grid; a feed
         // whose audio is not known yet lands on `rail`, never on silence
-        const cls = (isSelected && !gridMode && !selfSpotEl) ? "main"
+        // 0.21.80 (Kenton: "I would like remote control to be faster if possible"): the share I control plays with no jitter buffer
+        // (RC_TUNE: "instant" for a picture-only share, a small buffer when it carries sound) at the top priority, while I control it
+        const rcSh = window.__rcCtlShare?.() || "";
+        const cls = rcSh && rcSh === name ? "rc"
+                  : (isSelected && !gridMode && !selfSpotEl) ? "main"
                   : gridMeta.has(name) ? "grid"
                   : (isGridChild(name) && t.hasAudio === false) ? "cell" : "rail";
-        const tuneKey = cls + (WEB_RELAY_PAGE ? "@web" : "") + (audioDelayExtra ? "+" + audioDelayExtra : "");   // 0.21.9: re-tune on a step
-        if (t.tune !== tuneKey) { const tn = tuningFor(cls); t.tune = tuneKey; t.watch.setAttribute("delay", tn.delay); t.watch.setAttribute("buffer", tn.buffer); }
+        const tuneKey = cls + (cls === "rc" ? (t.hasAudio === false ? "-v" : "-a") : "") + (WEB_RELAY_PAGE ? "@web" : "") + (audioDelayExtra ? "+" + audioDelayExtra : "");   // 0.21.9: re-tune on a step
+        if (t.tune !== tuneKey) { const tn = cls === "rc" ? (t.hasAudio === false ? RC_TUNE.video : RC_TUNE.audio) : tuningFor(cls); t.tune = tuneKey; t.watch.setAttribute("delay", tn.delay); t.watch.setAttribute("buffer", tn.buffer); }
         t.tune_cls = cls;
         // 0.21.76 (lab 2026-10-20: moq-relay 0.17 honours SUBSCRIBER priority on the viewer leg AND the spoke -> hub leg; with
         // equal priorities the FIRST subscription wins a thin link): what matters wins -- on stage 190, a grid 180, a share or
         // camera feed 150, a person 120 (the library adds +5 for each tile's own audio; catalogs go first at 255, state 200)
-        const prio = isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120;
+        const prio = cls === "rc" ? 250 : isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120;   // 0.21.80: + the share I control
         if (t.prio !== prio) { t.prio = prio; t.watch.setAttribute("priority", String(prio)); }
         // 0.18.0: thumbnails pull the -low.hang sibling when the publisher offers one; the spotlit tile the full stream
         // 0.21.7: ... and so does a spotlit tile whose FULL copy is not on the air yet (an on-demand camera waking:
@@ -14607,7 +14830,7 @@
   const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
   const stateFallbackPeer = "P-" + Math.random().toString(36).slice(2, 8);
   const statePeer = () => String(window.__publisher?.peer || stateFallbackPeer);
-  function stateProducer(pathFn, trackNames) {
+  function stateProducer(pathFn, trackNames, opts) {   // 0.21.80: opts {priority, maxAge} (remote control: 255, 2 s)
     let conn = null, effects = null, tracks = {}, path = "", relay = "", chatWin = null, hbT = null, writes = 0, gens = 0;
     const events = [];   // rig: [t, what]
     const latest = {};      // track -> latest value; rewritten on every connection and every heartbeat
@@ -14643,7 +14866,7 @@
         let bp;
         try { bp = org.createBroadcast(Net.Path.from(myPath)); } catch { return; }
         e.cleanup(() => { try { bp.close(); } catch {} tracks = {}; chatWin = null; });
-        for (const name of trackNames) { try { tracks[name] = bp.createTrack(name, { priority: STATE_PRIORITY, maxAge: STATE_LAT_MS }); } catch {} }
+        for (const name of trackNames) { try { tracks[name] = bp.createTrack(name, { priority: opts?.priority ?? STATE_PRIORITY, maxAge: opts?.maxAge ?? STATE_LAT_MS }); } catch {} }
         // Group sequences must never go backwards on a resumed broadcast: a fresh Track.Producer
         // starts at 0, and a relay that resumed the same path (linger) keeps existing subscribers
         // who then drop every group below the old high-water mark -- values vanish until the
@@ -14823,7 +15046,7 @@
   // pull was cancelled, a resumed broadcast, a lost stream) and is re-consumed.
   const STATE_STALE_MS = STATE_HB_MS * 2.5;
   const stateSubStats = { resubs: 0, last: "" };
-  function stateSubscribe(connRef, path, track, mode, onValue) {
+  function stateSubscribe(connRef, path, track, mode, onValue, prio) {   // 0.21.80: + prio (remote control: 255)
     const h = { closed: false, sub: null, at: 0, n: 0 };
     (async () => {
       let backoff = 1000, why = "start";
@@ -14837,7 +15060,7 @@
           // the chat Window must not skip groups, so it keeps the producer's retention
           req = await requestBroadcast(org, path, 8000);   // 0.16.0: request(path) -> a consumer once the relay routes it
           if (!req) throw new Error("broadcast not routable");
-          sub = req.bc.track(track).subscribe({ priority: STATE_PRIORITY, maxAge: mode === "window" ? STATE_LAT_MS : 0 });
+          sub = req.bc.track(track).subscribe({ priority: prio || STATE_PRIORITY, maxAge: mode === "window" ? STATE_LAT_MS : 0 });
           h.sub = sub;
           let lastAt = Date.now();
           // a Window (chat) is legitimately empty until someone posts: no first-value or staleness

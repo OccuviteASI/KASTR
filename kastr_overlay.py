@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 
-__all__ = ["ShareOverlay", "list_monitors", "list_windows", "set_process_dpi_awareness"]
+__all__ = ["ShareOverlay", "PointerOverlay", "list_monitors", "list_windows", "set_process_dpi_awareness"]
 
 log = logging.getLogger("kastr.overlay")
 AVAILABLE = sys.platform == "win32"
@@ -59,6 +59,55 @@ OK_RGB = _rgb(0x1F, 0x7A, 0x4D)
 GHOST_RGB = _rgb(0x3A, 0x3F, 0x47)
 WHITE_RGB = _rgb(0xFF, 0xFF, 0xFF)
 INJECT_MAGIC = 0x4B525443        # kastr_rc.MAGIC: input KASTR injected never presses these buttons
+
+# 0.21.80 (Kenton: "I would like to have a mouse with a name of the person controlling it, rather than them controlling my own
+# mouse. Allow both mice at the same time"): the arrow + name tag of whoever controls this computer, in their colour. A popup
+# that is LAYERED (colour-keyed: only the arrow and the tag show), TRANSPARENT (clicks fall through to what is under it),
+# TOPMOST, a TOOLWINDOW (no taskbar button) and NOACTIVATE (never takes focus) -- and left out of every screen capture
+# (WDA_EXCLUDEFROMCAPTURE): viewers draw both people's pointers themselves, tagged, from the share's ptr.json.
+POINTER_EX = 0x80000 | 0x20 | 0x8 | 0x80 | 0x08000000   # WS_EX_LAYERED | TRANSPARENT | TOPMOST | TOOLWINDOW | NOACTIVATE
+POINTER_STYLE = 0x80000000                              # WS_POPUP
+POINTER_AFFINITY = 0x11                                 # WDA_EXCLUDEFROMCAPTURE
+POINTER_LWA = 0x1                                       # LWA_COLORKEY
+POINTER_KEY = _rgb(0xFF, 0x00, 0xFF)                    # the key colour (never drawn)
+POINTER_ARROW = ((0, 0), (0, 20), (5, 15), (9, 23), (12, 22), (8, 14), (14, 14))   # = kastr_x11.ARROW; the tip is the hotspot
+
+
+def pointer_spec():
+    """The pointer window's styles, exactly as PointerOverlay creates it (tested without creating it)."""
+    return {"ex": POINTER_EX, "style": POINTER_STYLE, "affinity": POINTER_AFFINITY, "lwa": POINTER_LWA, "key": POINTER_KEY}
+
+
+def pointer_geometry(name, dpi=96, char_w=7):
+    """-> {w, h, arrow [(x, y)], tag (x, y, w, h), hot (x, y)} in physical pixels: the arrow (1 px in, for its white edge)
+    at the top left, the name tag under its tail."""
+    s = max(1.0, dpi / 96.0)
+    arrow = [(int(round(x * s)) + 1, int(round(y * s)) + 1) for x, y in POINTER_ARROW]
+    name = str(name or "")[:28]
+    tx, ty = int(round(12 * s)) + 1, int(round(20 * s)) + 1
+    tw, th = int(round((char_w * len(name) + 14) * s)), int(round(18 * s))
+    w = max(max(x for x, _ in arrow) + 2, tx + tw + 1)
+    return {"w": w, "h": ty + th + 1, "arrow": arrow, "tag": (tx, ty, tw, th), "hot": (1, 1)}
+
+
+def hex_colorref(c, default=(0x00, 0x9F, 0xDA)):
+    """"#rrggbb" -> a COLORREF (0x00BBGGRR)."""
+    s = str(c or "").lstrip("#")
+    try:
+        if len(s) != 6:
+            raise ValueError(s)
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except (ValueError, TypeError):
+        r, g, b = default
+    if (r, g, b) == (0xFF, 0x00, 0xFF):
+        r, g, b = 0xFE, 0x00, 0xFF   # never the key colour itself
+    return _rgb(r, g, b)
+
+
+def ink_colorref(cr):
+    """Black or white text on a COLORREF background."""
+    r, g, b = cr & 0xFF, (cr >> 8) & 0xFF, (cr >> 16) & 0xFF
+    return _rgb(0, 0, 0) if (0.2126 * r + 0.7152 * g + 0.0722 * b) > 150 else _rgb(0xFF, 0xFF, 0xFF)
 
 if AVAILABLE:
     from ctypes import wintypes as wt
@@ -167,6 +216,7 @@ if AVAILABLE:
     GetModuleHandleW = _bind(kernel32, "GetModuleHandleW", wt.HMODULE, wt.LPCWSTR)
     GetCurrentThreadId = _bind(kernel32, "GetCurrentThreadId", wt.DWORD)
     GetMessageExtraInfo = _bind(user32, "GetMessageExtraInfo", wt.LPARAM)   # 0.21.79
+    MonitorFromPoint = _bind(user32, "MonitorFromPoint", wt.HMONITOR, wt.POINT, wt.DWORD)   # 0.21.80
 
     CreateRectRgn = _bind(gdi32, "CreateRectRgn", wt.HRGN, I, I, I, I)
     CreateRoundRectRgn = _bind(gdi32, "CreateRoundRectRgn", wt.HRGN, I, I, I, I, I, I)
@@ -187,6 +237,8 @@ if AVAILABLE:
                                   P(wt.SIZE))
     RoundRect = _bind(gdi32, "RoundRect", wt.BOOL, wt.HDC, I, I, I, I, I, I)
     Ellipse = _bind(gdi32, "Ellipse", wt.BOOL, wt.HDC, I, I, I, I)
+    Polygon = _bind(gdi32, "Polygon", wt.BOOL, wt.HDC, P(wt.POINT), I)          # 0.21.80
+    CreatePen = _bind(gdi32, "CreatePen", wt.HPEN, I, I, wt.DWORD)              # 0.21.80
 
     # ------------------------------------------------------------ constants
     WS_POPUP = 0x80000000
@@ -214,6 +266,7 @@ if AVAILABLE:
     WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x200, 0x201, 0x202
     WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOUSELEAVE, WM_DPICHANGED = 0x231, 0x232, 0x2A3, 0x2E0
     WM_APP_STOP, WM_APP_RETARGET, WM_APP_MODE = 0x8001, 0x8002, 0x8003   # 0.21.79: + MODE
+    WM_APP_PMOVE = 0x8004                                                # 0.21.80: PointerOverlay.move
     TIMER_ID, TICK_MS = 1, 100
     CLASS_NAME = "KastrShareOverlay"
 
@@ -907,6 +960,144 @@ class ShareOverlay:
             return 0
         if msg == WM_APP_STOP:
             KillTimer(hwnd, TIMER_ID)
+            PostQuitMessage(0)
+            return 0
+        return None
+
+
+# ---------------------------------------------------------------- 0.21.80: the controller's pointer
+class PointerOverlay:
+    """The controller's own arrow + name tag on the sharer's screen (see POINTER_EX). start() -> True when the window is up;
+    move(x, y, on) puts the arrow's tip at a screen pixel (on=False hides it); stop() ends it. Its own thread and message
+    loop, like ShareOverlay; move() only posts a message, so the injector never waits on painting."""
+
+    def __init__(self, name, color="#009fda", exclude_from_capture=True):
+        self.name = str(name or "Someone")[:28]
+        self.color = hex_colorref(color)
+        self.exclude_from_capture = exclude_from_capture
+        self.affinity_ok = False
+        self._hwnd = None
+        self._thread = None
+        self._ready = threading.Event()
+        self._pos = None
+        self._geo = None
+        self._gdi = []
+        self._err = None
+
+    def start(self) -> bool:
+        if not AVAILABLE:
+            return False
+        self._thread = threading.Thread(target=self._run, name="kastr-rc-pointer", daemon=True)
+        self._thread.start()
+        self._ready.wait(5.0)
+        return self._hwnd is not None
+
+    def move(self, x, y, on=True):
+        self._pos = (int(x), int(y)) if on else None
+        h = self._hwnd
+        if h:
+            PostMessageW(h, WM_APP_PMOVE, 0, 0)
+
+    def stop(self, timeout=3.0):
+        h = self._hwnd
+        if h:
+            PostMessageW(h, WM_APP_STOP, 0, 0)
+        th = self._thread
+        if th is not None and th is not threading.current_thread():
+            th.join(timeout)
+
+    def _run(self):
+        h = None
+        try:
+            _thread_pmv2()
+            if not _ensure_class():
+                raise OSError("RegisterClassExW failed: %d" % ctypes.get_last_error())
+            hmon = MonitorFromPoint(wt.POINT(0, 0), 1) if MonitorFromPoint is not None else None   # MONITOR_DEFAULTTOPRIMARY
+            s = _dpi_of(hmon) / 96.0
+            g = self._geo = pointer_geometry(self.name, _dpi_of(hmon))
+            spec = pointer_spec()
+            h = CreateWindowExW(spec["ex"], CLASS_NAME, "KASTR pointer", spec["style"], -32000, -32000, g["w"], g["h"],
+                                None, None, GetModuleHandleW(None), None)
+            if not h:
+                raise OSError("CreateWindowExW failed: %d" % ctypes.get_last_error())
+            _INSTANCES[h] = (self, "pointer")
+            SetLayeredWindowAttributes(h, spec["key"], 0, spec["lwa"])
+            if self.exclude_from_capture and SetWindowDisplayAffinity is not None:
+                self.affinity_ok = bool(SetWindowDisplayAffinity(h, spec["affinity"]))
+            font = CreateFontW(-max(9, round(12 * s)), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI")   # ANTIALIASED, never ClearType (key fringes)
+            self._gdi = [CreateSolidBrush(POINTER_KEY), CreateSolidBrush(self.color), CreatePen(0, max(1, round(1.5 * s)), _rgb(0xFF, 0xFF, 0xFF)), font]
+            self._hwnd = h
+        except Exception as e:
+            self._err = e
+            log.exception("pointer overlay: could not create the window")
+            if h:
+                DestroyWindow(h)
+                _INSTANCES.pop(h, None)
+            self._ready.set()
+            return
+        self._ready.set()
+        msg = wt.MSG()
+        try:
+            while True:
+                r = GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if r == 0 or r == -1:
+                    break
+                TranslateMessage(ctypes.byref(msg))
+                DispatchMessageW(ctypes.byref(msg))
+        finally:
+            hh, self._hwnd = self._hwnd, None
+            if hh:
+                DestroyWindow(hh)
+                _INSTANCES.pop(hh, None)
+            for o in self._gdi:
+                DeleteObject(o)
+            self._gdi = []
+
+    def _paint(self, hwnd):
+        ps = PAINTSTRUCT()
+        hdc = BeginPaint(hwnd, ctypes.byref(ps))
+        try:
+            g = self._geo
+            key, fill, pen, font = self._gdi
+            FillRect(hdc, ctypes.byref(wt.RECT(0, 0, g["w"], g["h"])), key)
+            old_pen, old_br = SelectObject(hdc, pen), SelectObject(hdc, fill)
+            pts = (wt.POINT * len(g["arrow"]))(*[wt.POINT(x, y) for x, y in g["arrow"]])
+            Polygon(hdc, pts, len(g["arrow"]))
+            SelectObject(hdc, GetStockObject(NULL_PEN))
+            tx, ty, tw, th = g["tag"]
+            RoundRect(hdc, tx, ty, tx + tw + 1, ty + th + 1, th // 2, th // 2)
+            SetBkMode(hdc, TRANSPARENT_BK)
+            SetTextColor(hdc, ink_colorref(self.color))
+            old_font = SelectObject(hdc, font)
+            DrawTextW(hdc, self.name, -1, ctypes.byref(wt.RECT(tx, ty, tx + tw, ty + th)), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
+            SelectObject(hdc, old_font)
+            SelectObject(hdc, old_br)
+            SelectObject(hdc, old_pen)
+        finally:
+            EndPaint(hwnd, ctypes.byref(ps))
+
+    def _handle(self, role, hwnd, msg, wp, lp):
+        if msg == WM_PAINT:
+            self._paint(hwnd)
+            return 0
+        if msg == WM_ERASEBKGND:
+            return 1
+        if msg == WM_NCHITTEST:
+            return HTTRANSPARENT
+        if msg == WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE
+        if msg == WM_CLOSE:
+            return 0
+        if msg == WM_APP_PMOVE:
+            p = self._pos
+            if p is None:
+                ShowWindow(hwnd, SW_HIDE)
+            else:
+                hx, hy = self._geo["hot"]
+                SetWindowPos(hwnd, HWND_TOPMOST, p[0] - hx, p[1] - hy, 0, 0,
+                             SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER)
+            return 0
+        if msg == WM_APP_STOP:
             PostQuitMessage(0)
             return 0
         return None

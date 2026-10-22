@@ -846,5 +846,16 @@ class XLab(unittest.TestCase):
         self.assertTrue(any(w["title"] == "RC Test App" for w in wins), wins)
 
 
+
+class LinuxBrowserPicker(unittest.TestCase):
+    # 0.21.79 (Kenton chose Linux native X11 sharing ON by default; its shares carry no sound): the browser's picker stays one
+    # click away on Linux, where the native list replaces the Screen / Window tiles
+    def test_link(self):
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "moq-watch-lite.html"), encoding="utf-8", newline="") as f:
+            p = f.read()
+        self.assertIn('id="shBrowserPick" hidden', p)
+        self.assertIn('$("shBrowserPick").hidden = !(native && /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent));', p)
+        self.assertIn('$("shBrowserPick").addEventListener("click", () => { shareSurface("monitor"); window.__shareChosen?.(); });', p)
+
 if __name__ == "__main__":
     unittest.main()

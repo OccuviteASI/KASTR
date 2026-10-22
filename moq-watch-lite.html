@@ -578,6 +578,9 @@
   .pubui .srcgrid.two { grid-template-columns:repeat(2, 1fr); }
   .pubui .srcgrid.two button { aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; }
   .pubui .srcgrid .ico { font-size:22px; line-height:1; }
+  .pubui .shbrowser { margin:6px 0 0; padding:0; border:0; background:none; color:var(--asi-blue); font:inherit; font-size:12px; cursor:pointer; text-align:left; }   /* 0.21.79 */
+  .pubui .shbrowser:hover { text-decoration:underline; }
+  .pubui .shbrowser[hidden] { display:none; }
   .pubui .shsound { padding:0 0 6px; }
   /* 0.21.20: Teams-style share picker */
   #sharePop .head .hsnd { text-transform:none; letter-spacing:0; font-size:12px; font-weight:500; color:var(--text); gap:8px; }
@@ -2096,6 +2099,7 @@
       </div>
       <h2>Screen</h2>
       <div class="thgrid" id="shScreens" hidden></div>
+      <button type="button" class="shbrowser" id="shBrowserPick" hidden title="Pick a screen, window or browser tab in the browser's own prompt -- a tab can share its sound">Use the browser&rsquo;s picker instead (shares sound)</button>   <!-- 0.21.79: Linux native shares carry no sound -->
       <div class="srcgrid two" id="shPickerTiles">
         <button id="srcScreenBtn" type="button" title="Share a whole screen">
           <span class="ico">&#128421;</span>Screen</button>
@@ -25702,6 +25706,7 @@
     log(running ? "Pick the " + surface + " to share in the browser prompt." : "Screen share added. The picker appears when you click Start.");
   };
   $("srcScreenBtn").addEventListener("click", () => shareSurface("monitor"));
+  $("shBrowserPick").addEventListener("click", () => { shareSurface("monitor"); window.__shareChosen?.(); });   // 0.21.79
   // ---- 0.21.20: native screen / window share (Teams-style picker) --------------------------------------------------
   // The host lists every screen and window and serves small JPEG thumbnails; one click publishes it natively as a
   // screen:// feed on the RTSP machinery (hardware encode, no Chrome picker). Hosts without native capture (web
@@ -25774,6 +25779,7 @@
     shBusy = false;
     const native = !!(d && d.ok);
     $("shPickerTiles").hidden = native;
+    $("shBrowserPick").hidden = !(native && /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent));   // 0.21.79: Linux native shares (x11grab) carry no sound -- keep the browser's picker one click away
     $("shScreens").hidden = !native; $("shWindows").hidden = !native || !shWinOpen; $("shWinHead").hidden = !native;   // 0.21.22: windows collapsed until clicked
     $("shTabHead").hidden = !native; $("shTabs").hidden = !native || !shTabOpen;
     if (native && shTabOpen && Array.isArray(d.tabs)) { shPaintTabs(d.tabs); $("shTabCount").textContent = String(d.tabs.length); }

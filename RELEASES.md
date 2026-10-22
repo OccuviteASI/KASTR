@@ -2,6 +2,34 @@
 
 What changed in each build, newest first.
 
+## v0.21.78 — My room for others, panels that stay open or pin to the side, a mesh map that shows the traffic
+
+**My room can be shared (Kenton: "I need to be able to share out access to 'my room' as wanted").** My room is now always the first card on the rooms rail; before you have one it opens a setup that explains what My room does and asks for a passcode. Once it exists, **Share My room** has two ways in:
+- **People with access** — pick people seen on the hub; they see "<your name>'s room" in their rooms list (marked "away" while you are not in it). Tick **Can arrange** for one person to help you arrange; remove anyone at any time.
+- **Invite links** — 1 hour, 24 hours or 7 days, revocable, like a regular room's.
+- **Guests watch and talk** (camera, mic, chat); only you (and the one helper) pin, spotlight and arrange. The hub enforces it.
+- **Only while you are in it (Kenton: "Only allow people in 'My room' if the owner is in it").** Nobody else gets in while you are away ("Kenton isn't in their room right now"); when you leave, switch rooms, close KASTR or drop off for 15 s, everyone else is sent to the Lobby with a note saying why, and the hub stops their access.
+- The My room dialog no longer shows two Close buttons.
+
+**Invite someone with a right-click (Kenton: "Allow right clicking on a person on the left and inviting to the room you're in, or my room").** Right-click a person on the rooms rail or in People (the same menu in both places) → **Invite to <this room>** or **Invite to My room**. Their KASTR shows "<name> invites you to <room>" with **Join** / **Ignore**; Join needs no room code. Anyone in a room can invite to it (6 a minute at most).
+
+**Panels stay open, and can be pinned (Kenton: "don't collapse them until clicking outside of them or clicking on another menu item, or clicking on the same menu item").**
+- People, View, Files, Chat and Share close only on a click outside, another toolbar button or their own button — no longer when a file or colour picker opens, when you switch windows, or when a confirm prompt (e.g. Mute all) is answered. View stays open while you switch layouts (Full screen still closes it).
+- Share closes once you choose a screen, window, tab, presenter mode, "Share something else" or a media file; adding an RTSP camera, device, GoPro or webcam leaves it open so you can rename the feed first.
+- **Pin to the right (Kenton: "Allow user to pin people, view, files, chat, share to the right side").** A pin in each panel's header docks it into a column right of the video: pinned panels stack, the dividers and the column's edge resize them, the video shrinks rather than being covered, the toolbar button folds a pinned panel, and Unpin returns it to a dropdown. Kept per device; not on phones.
+- **Dropdowns show their whole list** when there is room below (Kenton: "there shouldn't be a scroll bar") and only scroll in a short window.
+
+**Room timers start with the first person (Kenton: "We don't need to show the time counting up on a room until a person is in the room, not just camera boxes").** A room holding only camera boxes shows no timer.
+
+**The mesh map shows the traffic (Kenton's requests on the hub's Relay page).**
+- **Hover a link** for its bandwidth each way — direct, hub and backup links alike (lab: within 1–4 % of what was received). Line thickness follows the bitrate.
+- **Hover a relay** for its own load: local traffic (its users and cameras), relay-link traffic and the total, plus streams and sessions.
+- **Click a relay to zoom in:** that relay with every client connected to it — people's KASTR apps, camera boxes, web viewers — with names, what each publishes and watches, and **each client's own download and upload on hover** (each KASTR reports its own figures; an older KASTR shows "no figure"). "← Full mesh" or Escape zooms back out; a refresh keeps the zoom.
+- **Set a cost on every link,** including each relay's own hub and backup link — applied live, without restarting the relay (a 0.21.77 relay restarts once). Pairs that are not linked are drawn faint and clickable, with the reason.
+- **A layout that fits itself:** relays spread out, linked relays sit closer, it re-fits as relays come and go; drag a relay to pin it, **Re-arrange** releases it. A half-typed cost survives the 5 s refresh.
+- **Figures stay current:** a camera nobody watches is not encoded, so it reads **idle** at both ends; each KASTR re-reports within ~10 s when its own figure changes (not once a minute), and where the relay and a client briefly disagree the map says which is newer.
+- The hub link moved into the relay's live peer list, so a renewed hub token or a cost change no longer restarts the relay.
+
 ## v0.21.77 — relays link directly over private paths, a live mesh map, steady links between relays, Docker images on GitHub
 
 **Relays link directly when they can reach each other privately (Kenton: "I don't want everything to necessarily go through the hub except the tracks that actually do get seen through it" and "have the relays do a traceroute ... if they can reach each other without going to a public IP, they could just mesh").** Every relay now tests the other relays' private addresses every few minutes: can it reach the relay there, how fast, and does the route (traceroute) stay on private addresses the whole way — the same LAN or a site-to-site VPN. Two relays with a private path link directly, and each stream takes the cheapest path by round-trip time.

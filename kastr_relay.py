@@ -71,6 +71,14 @@ Token service (its own listener, relay-port+1):
                             0.21.65: op grid may carry `slots` [{rect, cams: [member path], cycle: {mode, every, hold}}]
                             + `sens` (the grid builder: several cameras per spot, cycling); op split | unsplit {path} --
                             a grid's camera shown on its own in this room (`split` in the reply)
+    0.21.84 -- the stream library (lib/<host>/<op>/<leaf>.hang; scratchpad API.md has the bodies):
+    POST /api/token         {library: true, code, host} -> a library publisher token (publishes under lib/<host>)
+    POST /api/library       a publisher's heartbeat {rows, stop?, moved?, stills?, box?, site?} (Bearer = that token)
+    GET  /api/library       ?since=<ver>&paths=<a,b> -> the catalogue (member / library viewer token; loopback page: none)
+    GET  /api/library/still ?path=&v= -> image/jpeg
+    POST /api/library/token Bearer = a member token -> a library viewer token (the page's library connection)
+    POST /api/library/admin {op: hide|unhide|label|site|remove, ...} (admins; the hub keeps it; fail closed when dark)
+    GET|POST /api/relay/library  the Relay page: the fleet switch {on}, pre-flight, sites, entries (this machine only)
 """
 import base64
 import hashlib
@@ -270,6 +278,41 @@ BOARD_CGRID_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 BOARD_META_OPS = ("gridMeta",)
 BOARD_METAS_MAX = 16
 BOARD_META_BYTES = 16000
+# 0.21.84 (Kenton: "Library first." -- the STREAM LIBRARY): one fleet-wide namespace outside every room. A library stream
+# publishes at lib/<host>/<op>/<leaf>.hang (the reserved root `lib` where a room would be; the site is catalogue metadata,
+# never in the path). Each publisher heartbeats its OWN relay (POST /api/library with a library publisher token), every
+# relay keeps a LibraryRegistry of its publishers, spokes push their rows to the hub (rooms_fed op "library"), the hub keeps
+# the fleet catalogue (LibraryBook in library.json: entries, admin hides and labels, aliases, site names, the first-seen
+# host -> node binding and the fleet switch) and every spoke mirrors it through the bans long-poll (`libSince` ->
+# `library` / `libraryVer`, kept in hub-library.json). A room ADDS a library stream with an ordinary board entry whose
+# `from` is "lib" -- no proof token: everyone on the fleet may read the library (pages open one "library connection" with a
+# library viewer token, POST /api/library/token).
+LIB_ROOT = "lib"
+LIB_MIN_VERSION = "0.21.84"
+LIB_KINDS = ("camera", "rtsp", "grid", "screen", "webcam", "phone", "vehicle", "media", "other")
+LIB_STATES = ("live", "asleep", "dark")
+LIB_PER_HOST = 32            # streams one publisher host may keep in the library
+LIB_MAX = 2000               # entries the hub keeps
+LIB_BEAT_MIN_S = 10          # heartbeats one host may send (a stop-only body is never held back)
+LIB_TTL = 180                # a row is "online" this long after its publisher's last heartbeat (it beats every 60 s)
+LIB_LOCAL_KEEP_S = 900       # a relay forgets a silent publisher's row after this (the hub keeps the entry, offline)
+LIB_NODE_SILENT_S = 90       # hub: a spoke silent this long -> its rows say "site unreachable" (kept, not deleted)
+LIB_PUSH_KEEPALIVE_S = 30    # spoke -> hub: a full push when its rows change, else a keepalive this often
+LIB_OFFLINE_KEEP_S = 7 * 86400   # an offline entry is dropped after this unless a room board still references it
+LIB_TOMBSTONE_S = 3600       # a withdrawn entry says "no longer in the library" this long
+LIB_AKA_KEEP_S = 90 * 86400  # how long an old path (aka) keeps resolving to its library entry
+LIB_AKA_MAX = 4
+LIB_STILL_MAX = 12 * 1024    # one still: a 160x90 JPEG
+LIB_STILL_EVERY_S = 300      # ... at most one per stream this often (a state change may send one sooner)
+LIB_STILL_CACHE_S = 60       # a spoke keeps a still fetched from the hub this long
+LIB_META_BYTES = 16000
+LIB_COMPAT_MAX = 1024        # compatibility listings (library pins / cgrid cameras for pre-0.21.84 pages), outside XSHARE_MAX
+LIB_MIRROR_FRESH = 90        # a spoke trusts the hub's catalogue copy this long after a long-poll reply
+LIB_NUDGE_S = 3              # library-only changes wake the spokes' long-polls at most this often
+LIB_OFF_TEXT = "the stream library is switched off on this fleet"
+LIB_RESERVED = 'the name "lib" is reserved for the stream library -- pick another name'
+BOX_RESERVED = 'names starting with "box-" are kept for camera boxes -- pick another name'
+LIB_HUB_DOWN = "the hub is unreachable -- the stream library's catalogue lives on the hub; try again shortly"
 # 0.12.0: root-prefixed announce kinds every member may put beside ~presence:
 # ~talking/<room> (who is speaking) and ~chat/<room> (a new-message nudge).
 MEMBER_KINDS = (NS + "presence", NS + "talking", NS + "chat")
@@ -1506,6 +1549,8 @@ def claims_identity(claims):
                 break
         if host is None and HOST_RE.match(str(claims.get("ph") or "")):
             host = str(claims["ph"])   # 0.21.78: a personal room's token has no ~state put -- it names its device in `ph`
+        if host is None and room == LIB_ROOT and HOST_RE.match(str(claims.get("lib") or "")):
+            host = str(claims["lib"])   # 0.21.84: a library publisher token names its host in `lib` (bans, on-demand, xshare)
         return room, host
     except Exception:
         return None, None
@@ -1989,7 +2034,7 @@ def board_meta_clean(gp, m):
 
     def one(x):
         x = str(x or "")[:300]
-        return x if board_stream_ok(x) and x.split("/", 1)[0] == room else None
+        return x if board_stream_ok(x) and board_same_room(gp, x) else None   # 0.21.84: + its cameras moved to the library
 
     def paths(v):
         return [one(x) for x in (v if isinstance(v, list) else [])[:BOARD_GRID_MEMBERS_MAX]]
@@ -2088,8 +2133,12 @@ def board_gap(v):
 
 
 def board_same_room(gp, mp):
-    """A grid's camera lives in the grid's own room (its path's first segment)."""
-    return str(mp).split("/", 1)[0] == str(gp).split("/", 1)[0]
+    """A grid's camera lives in the grid's own room (its path's first segment). 0.21.84: or in the stream library under the
+    grid's own host (lib/<host>/... -- a box's camera that moved there is still that box's grid camera)."""
+    a, b = str(mp).split("/"), str(gp).split("/")
+    if a[0] == b[0]:
+        return True
+    return a[0] == LIB_ROOT and len(a) > 1 and len(b) > 1 and a[1] == b[1]
 
 
 def board_cycle(c, strict=False):
@@ -2296,11 +2345,13 @@ def board_listings(boards):
     for slug, b in (boards or {}).items():
         for p in (b or {}).get("pins") or []:
             if p.get("from") and p["from"] != slug and p.get("path"):
-                out[(p["path"], slug)] = p
+                # 0.21.84: a library pin needs no listing on a 0.21.84 page (it reads the library connection) -- it is listed
+                # flagged `lib` for pre-0.21.84 pages only (they open it as a cross-room pin from room "lib"); remove in 0.22
+                out[(p["path"], slug)] = dict(p, lib=True) if p["from"] == LIB_ROOT else p
         for mp in (b or {}).get("split") or []:   # 0.21.66: a camera of another room's grid, split out here -- a tile for everyone
             frm = str(mp).split("/", 1)[0]
             if frm != slug and (mp, slug) not in out:
-                out[(mp, slug)] = {"path": mp, "from": frm, "label": "", "kind": "camera", "by": ""}
+                out[(mp, slug)] = {"path": mp, "from": frm, "label": "", "kind": "camera", "by": "", "lib": frm == LIB_ROOT}
         # 0.21.66 (e): a camera of another room in this room's own grid -- listed the same way, flagged `cg` (shown in the
         # grid, not as a tile of its own) unless it is pinned here as well
         for gid, g in ((b or {}).get("customGrids") or {}).items():
@@ -2308,7 +2359,8 @@ def board_listings(boards):
                 for mp in s.get("cams") or []:
                     frm = str(mp).split("/", 1)[0]
                     if frm != slug and (mp, slug) not in out:
-                        out[(mp, slug)] = {"path": mp, "from": frm, "label": "", "kind": "other", "by": g.get("by") or "", "cg": True}
+                        out[(mp, slug)] = {"path": mp, "from": frm, "label": "", "kind": "other", "by": g.get("by") or "", "cg": True,
+                                           "lib": frm == LIB_ROOT}   # 0.21.84: a library camera -- a compatibility listing
     return out
 
 
@@ -2321,10 +2373,11 @@ def board_sync_registry(reg, boards, now=None):
     for (path, to), p in want.items():
         cur = reg.items.get((path, to))
         if (cur is not None and cur.get("pinned") and cur["exp"] - now > BOARD_XS_TTL / 2
-                and bool(cur.get("cg")) == bool(p.get("cg") and not int(cur.get("sexp") or 0) > now)):
+                and bool(cur.get("cg")) == bool(p.get("cg") and not int(cur.get("sexp") or 0) > now)
+                and bool(cur.get("lib")) == bool(p.get("lib") and not int(cur.get("sexp") or 0) > now)):   # 0.21.84
             continue
         _acc, _ref, _new, ch = reg.apply(path, p["from"], [to], p.get("label") or "", p.get("kind") or "other", p.get("by") or "",
-                                         now, ttl=BOARD_XS_TTL, pinned=True, cg=bool(p.get("cg")))
+                                         now, ttl=BOARD_XS_TTL, pinned=True, cg=bool(p.get("cg")), lib=bool(p.get("lib")))
         changed = changed or ch
     return changed
 
@@ -2335,7 +2388,7 @@ class XShareRegistry:
     every change a reader must see (new, removed, relabelled, or an expiry pushed out by >= 60 s -- spokes judge
     liveness by `exp`, so a refresh must reach them before the copy they hold runs out)."""
 
-    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp", "pinned", "cg")   # 0.21.63: + pinned (a room board's pin); 0.21.66: + cg (only a room grid's camera)
+    PUBLIC = ("path", "from", "to", "label", "kind", "by", "exp", "pinned", "cg", "lib")   # 0.21.84: + lib (a compatibility listing)   # 0.21.63: + pinned (a room board's pin); 0.21.66: + cg (only a room grid's camera)
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -2346,7 +2399,7 @@ class XShareRegistry:
         for k in [k for k, e in self.items.items() if e["exp"] <= now]:
             self.items.pop(k, None)
 
-    def apply(self, path, frm, to, label="", kind="other", by="", now=None, ttl=XSHARE_TTL, pinned=False, cg=False):
+    def apply(self, path, frm, to, label="", kind="other", by="", now=None, ttl=XSHARE_TTL, pinned=False, cg=False, lib=False):
         """List `path` (a stream of room `frm`) in each room of `to` -> (accepted, refused {slug: why}, new, changed).
         0.21.63: `pinned` = a room board's pin (BOARD_XS_TTL, re-applied by the board); `sexp` is the sharer's own expiry,
         so an unpin leaves a listing its sharer still heartbeats, and a sharer's stop leaves a pinned one."""
@@ -2359,15 +2412,20 @@ class XShareRegistry:
                 k = (path, b)
                 cur = self.items.get(k)
                 if cur is None:
-                    if len(self.items) >= XSHARE_MAX:
+                    compat = bool(pinned and lib)   # 0.21.84: a library pin's compatibility listing -- counted apart
+                    if compat:
+                        if sum(1 for e in self.items.values() if e.get("lib")) >= LIB_COMPAT_MAX:
+                            ref[b] = "too many library listings on this relay"
+                            continue
+                    elif sum(1 for e in self.items.values() if not e.get("lib")) >= XSHARE_MAX:
                         ref[b] = "too many listings on this relay"
                         continue
-                    if sum(1 for (p, _b) in self.items if p == path) >= XSHARE_TARGETS_MAX:
+                    elif sum(1 for (p, _b), e in self.items.items() if p == path and not e.get("lib")) >= XSHARE_TARGETS_MAX:
                         ref[b] = "listed in too many rooms"
                         continue
                     self.items[k] = {"path": path, "from": frm, "to": b, "label": label, "kind": kind, "by": by,
                                      "exp": exp, "dist": exp, "pinned": bool(pinned), "sexp": 0 if pinned else exp,
-                                     "cg": bool(pinned and cg)}   # 0.21.66: listed only for a room grid
+                                     "cg": bool(pinned and cg), "lib": compat}   # 0.21.66: listed only for a room grid
                     new.append(b)
                     changed = True
                 else:
@@ -2379,6 +2437,10 @@ class XShareRegistry:
                         if bool(cur.get("cg")) != want_cg:
                             cur["cg"] = want_cg
                             changed = True
+                        want_lib = bool(lib) and not int(cur.get("sexp") or 0) > now   # 0.21.84: ... and no compatibility row
+                        if bool(cur.get("lib")) != want_lib:
+                            cur["lib"] = want_lib
+                            changed = True
                         cur["exp"] = max(cur["exp"], exp)
                     else:
                         if (cur["from"], cur["label"], cur["kind"], cur["by"]) != (frm, label, kind, by):
@@ -2387,6 +2449,9 @@ class XShareRegistry:
                         cur["sexp"] = max(int(cur.get("sexp") or 0), exp)
                         if cur.get("cg"):
                             cur["cg"] = False   # 0.21.66: its sharer lists it here too -- a tile of its own
+                            changed = True
+                        if cur.get("lib"):
+                            cur["lib"] = False   # 0.21.84: a real listing (Show in rooms from the library), not a compatibility row
                             changed = True
                     if cur["exp"] - cur["dist"] >= 60:
                         changed = True
@@ -2471,13 +2536,15 @@ class XShareRegistry:
     def snapshot(self, now=None):
         now = time.time() if now is None else now
         with self.lock:
-            return self.ver, [{k: e.get(k) for k in self.PUBLIC} for e in self.items.values() if e["exp"] > now]
+            rows = [{k: e.get(k) for k in self.PUBLIC} for e in self.items.values() if e["exp"] > now]
+        rows.sort(key=lambda r: bool(r.get("lib")))   # 0.21.84: compatibility rows last (an older spoke keeps the first XSHARE_MAX)
+        return self.ver, rows
 
     def replace(self, rows, ver=None, now=None):
         """A spoke's copy of the hub's registry (the long-poll's `xshare`)."""
         now = time.time() if now is None else now
         items = {}
-        for e in (rows if isinstance(rows, list) else [])[:XSHARE_MAX]:
+        for e in (rows if isinstance(rows, list) else [])[:XSHARE_MAX + LIB_COMPAT_MAX]:   # 0.21.84: + compatibility rows
             if not isinstance(e, dict):
                 continue
             path, frm, to = str(e.get("path") or ""), str(e.get("from") or ""), str(e.get("to") or "")
@@ -2490,7 +2557,8 @@ class XShareRegistry:
             kind = str(e.get("kind") or "other")
             items[(path, to)] = {"path": path, "from": frm, "to": to, "label": _xs_text(e.get("label"), 80),
                                  "kind": kind if kind in XSHARE_KINDS else "other", "by": _xs_text(e.get("by"), 64),
-                                 "exp": exp, "dist": exp, "pinned": bool(e.get("pinned")), "sexp": 0, "cg": bool(e.get("cg"))}   # 0.21.63; 0.21.66: + cg
+                                 "exp": exp, "dist": exp, "pinned": bool(e.get("pinned")), "sexp": 0, "cg": bool(e.get("cg")),
+                                 "lib": bool(e.get("lib"))}   # 0.21.63; 0.21.66: + cg; 0.21.84: + lib
         with self.lock:
             self.items = items
             try:
@@ -2536,6 +2604,8 @@ def xshare_open(method, p=None, room=None, now=None, store=None):
             refused[b] = "bad room name"
         elif b == frm:
             refused[b] = "the stream's own room"
+        elif reserved_slug(b):
+            refused[b] = reserved_slug(b)   # 0.21.84
         else:
             ok_to.append(b)
     acc, ref, _new, _ch = reg.apply(path, frm, ok_to, label, kind, by, now) if ok_to else ([], {}, [], False)
@@ -2572,6 +2642,8 @@ def board_open(method, store, p=None, room=None, now=None):
     item, why = board_item(op, p, now)
     if why:
         return {"ok": False, "error": why}, 400
+    if (op == "pin" and item.get("from") == LIB_ROOT) or (op == "cgrid" and any(lib_is(mp) for s in item["grid"]["slots"] for mp in s["cams"])):
+        return {"ok": False, "error": "the stream library needs a relay with access codes", "open": True}, 403   # 0.21.84
     if op in BOARD_GRID_OPS + BOARD_SPLIT_OPS:   # 0.21.66: another room's grid -- only one this room sees
         why = board_foreign_ok(room, op, item, store.board(room), store.boards_public(), XSHARE_OPEN.into(room, now))
         if why:
@@ -2587,6 +2659,822 @@ def board_open(method, store, p=None, room=None, now=None):
             "spotOrder": b.get("spotOrder") or [], "customGrids": b.get("customGrids") or {},   # 0.21.66
             "gridMetas": board_metas_for(room, b, store.boards_public(), XSHARE_OPEN.into(room, now)),
             "ver": store.board_ver, "open": True}, 200
+
+
+# ---- 0.21.84 (Kenton: "Library first."): the stream library -- names, paths, the publisher's relay, the hub's catalogue ----
+
+def reserved_slug(slug, host=None):
+    """0.21.84: why a room name may not be taken (None = free to use). "lib" is the stream library's root -- never a room;
+    "box-..." is a camera box's hidden home room -- only that box (its host) uses it (until 0.21.84 only the page said so)."""
+    s = str(slug or "")
+    if s == LIB_ROOT:
+        return LIB_RESERVED
+    if s.startswith(kastr_rtsp.HOME_PREFIX):
+        if host and HOST_RE.match(str(host)) and kastr_rtsp.home_room(str(host)) == s:
+            return None
+        return BOX_RESERVED
+    return None
+
+
+def lib_is(path):
+    """0.21.84: a path under the library root."""
+    return str(path or "").startswith(LIB_ROOT + "/")
+
+
+def lib_path_ok(path, host=None):
+    """0.21.84: a library stream's main path -- lib/<host>/.../<name>.hang (never its -low.hang copy: `low` says it has one)."""
+    p = str(path or "")
+    return xshare_path_ok(p, LIB_ROOT, host) and not p.endswith("-low.hang")
+
+
+def lib_low(path):
+    """0.21.84: the -low.hang copy's path of a stream path (idempotent)."""
+    p = str(path or "")
+    return (p[:-5] + "-low.hang") if p.endswith(".hang") and not p.endswith("-low.hang") else p
+
+
+def lib_alias_ok(old, new, host=None):
+    """0.21.84: is `old` an earlier path of the library stream `new` -- a room's path of the SAME host with the same tail
+    (<room>/<host>/<op>/<leaf>.hang -> lib/<host>/<op>/<leaf>.hang)? A publisher can alias (and move) only its own streams."""
+    o, n = str(old or "").split("/"), str(new or "").split("/")
+    if len(o) != len(n) or len(o) < 3 or o[1:] != n[1:] or n[0] != LIB_ROOT or o[0] == LIB_ROOT:
+        return False
+    if host is not None and o[1] != host:
+        return False
+    return bool(SLUG_RE.match(o[0])) and xshare_path_ok(old, o[0], o[1])
+
+
+def lib_site_default(name, node=""):
+    """0.21.84: a node's site name when the hub's Links card set none -- the relay's display name without "-relay"."""
+    s = str(name or "").strip()
+    for suf in ("-relay", " relay", "_relay"):
+        if s.lower().endswith(suf):
+            s = s[:-len(suf)].strip()
+    return s[:48] or str(node or "")[:48]
+
+
+LIB_RES_RE = re.compile(r"^[0-9]{2,5}x[0-9]{2,5}$")
+LIB_ADMIN_OPS = ("hide", "unhide", "label", "site", "remove")
+JPEG_SOI = bytes((0xFF, 0xD8))
+
+
+def lib_row_clean(r, host=None):
+    """0.21.84: one heartbeat row {path, label, kind, state, low?, audio?, res?, meta?, aka?, box?, site?} -> (row, None) |
+    (None, why). The path must be the host's own (lib/<host>/...); labels are cleaned to 80, kinds and states are enums."""
+    if not isinstance(r, dict):
+        return None, "a row is {path, label, kind, state}"
+    path = str(r.get("path") or "")[:300]
+    if not lib_path_ok(path, host):
+        return None, "not a library path of this host (lib/<host>/.../<name>.hang)"
+    kind = str(r.get("kind") or "camera")
+    if kind not in LIB_KINDS:
+        return None, "unknown kind (%s)" % "|".join(LIB_KINDS)
+    state = str(r.get("state") or "live")
+    if state not in LIB_STATES:
+        return None, "unknown state (%s)" % "|".join(LIB_STATES)
+    segs = path.split("/")
+    res = str(r.get("res") or "")
+    out = {"path": path, "host": segs[1], "label": _xs_text(r.get("label"), 80) or segs[-1][:-5], "kind": kind,
+           "state": state, "by": segs[2] if len(segs) > 3 else "", "low": bool(r.get("low")), "audio": bool(r.get("audio")),
+           "res": res if LIB_RES_RE.match(res) else "", "box": _xs_text(r.get("box"), 48), "site": _xs_text(r.get("site"), 48)}
+    meta = r.get("meta")
+    if meta is not None:   # 0.21.85: a box composite grid's geometry (accepted now, drawn later)
+        try:
+            ok = isinstance(meta, dict) and len(json.dumps(meta)) <= LIB_META_BYTES
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            return None, "`meta` is an object of at most %d bytes" % LIB_META_BYTES
+        out["meta"] = meta
+    aka = []
+    for a in (r.get("aka") if isinstance(r.get("aka"), list) else [])[:LIB_AKA_MAX * 2]:
+        a = str(a or "")[:300]
+        if lib_alias_ok(a, path, segs[1]) and a not in aka:
+            aka.append(a)
+        if len(aka) >= LIB_AKA_MAX:
+            break
+    if aka:
+        out["aka"] = aka
+    return out, None
+
+
+def lib_still_clean(v):
+    """0.21.84: a still from a heartbeat (base64 of a JPEG) -> its bytes, or None (not a JPEG, or over LIB_STILL_MAX)."""
+    try:
+        b = base64.b64decode(str(v or "").encode("ascii", "ignore"))
+    except Exception:
+        return None
+    return b if 0 < len(b) <= LIB_STILL_MAX and b[:2] == JPEG_SOI else None
+
+
+def library_board_paths(b, listed=()):
+    """0.21.84: the library paths a room's board (pins, spotlights and their order, layouts, split cameras, room grids'
+    cameras) and its listings name -- each with its -low.hang copy. What an invite-link or personal-room guest may read."""
+    out = set()
+
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                walk(k)
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+        elif isinstance(v, str) and lib_is(v) and xshare_path_ok(v, LIB_ROOT):
+            out.add(v)
+    walk(b or {})
+    for e in listed or []:
+        if isinstance(e, dict) and lib_is(e.get("path")) and xshare_path_ok(e.get("path"), LIB_ROOT):
+            out.add(str(e["path"]))
+    for p in list(out):
+        out.add(lib_low(p))
+    return sorted(out)
+
+
+def library_scope(claims, room=None, boards=None, listed=None):
+    """0.21.84 (the scope seam): what a member token's holder may read of the stream library -> "lib" (all of it: fleet
+    members, viewers included), [paths] (an invite-link guest `inv` or a personal-room guest `pg`: only the library streams
+    their room's board and listings reference) or None (the Lobby, vehicles, relays, the library's own tokens).
+    0.22: lib/<host> prefixes for the hosts at the sites the signed-in user may see (why the host, not the site, is in the path)."""
+    if not isinstance(claims, dict) or is_relay_claims(claims) or claims.get("lobby") or claims.get("vehicle"):
+        return None
+    if claims.get("lib") or claims.get("libv"):
+        return None
+    room = room or claims_identity(claims)[0]
+    if not room or room in (LOBBY_SLUG, LIB_ROOT):
+        return None
+    if claims.get("inv") or claims.get("pg"):
+        return library_board_paths((boards or {}).get(room), listed)
+    return LIB_ROOT
+
+
+def board_rewrite_paths(b, mapping):
+    """0.21.84: a board whose stream paths appear in `mapping` (old -> new: pins, spotlights, the spotlight order, grid
+    layouts keyed by path and their cameras, split cameras, room grids' cameras, grid geometry) -> (new board, changed?).
+    Exact paths only (a deep copy; a pin's `from` follows its path)."""
+    if not mapping or not isinstance(b, dict):
+        return b, False
+    hit = [False]
+
+    def fix(s):
+        if isinstance(s, str) and s in mapping:
+            hit[0] = True
+            return mapping[s]
+        return s
+
+    def walk(v):
+        if isinstance(v, dict):
+            return {fix(k): walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return fix(v)
+    out = walk(b)
+    if hit[0]:
+        for p in out.get("pins") or []:
+            if isinstance(p, dict) and p.get("path"):
+                p["from"] = str(p["path"]).split("/", 1)[0]
+    return out, hit[0]
+
+
+def lib_used_in(boards):
+    """0.21.84: {library path: rooms whose board references it} from a {slug: board} view (the panel's "Used in N rooms")."""
+    out = {}
+    for slug, b in (boards or {}).items():
+        for p in library_board_paths(b):
+            if not p.endswith("-low.hang"):
+                out[p] = out.get(p, 0) + 1
+    return out
+
+
+class LibraryRegistry:
+    """0.21.84: one relay's library publishers, in memory -- every row is refreshed by its publisher's heartbeat, so a restart
+    loses nothing a minute of heartbeats does not restore. `ver` moves on every change a reader must see (a new row, a stop,
+    a label / kind / state / alias / low / meta change) and NOT on a heartbeat that only refreshes `seen` (contrast
+    XShareRegistry, which pushes expiries: liveness here is `seen` against LIB_TTL, judged by whoever reads)."""
+
+    CMP = ("label", "kind", "state", "by", "low", "audio", "res", "meta", "aka", "box", "site")
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.rows = {}       # path -> row + seen, since, stillV
+        self.gone = {}       # path -> {at, moved?} (a stop -- the hub learns it with the next push; LIB_TOMBSTONE_S)
+        self.stills = {}     # path -> (v, jpeg bytes, at)
+        self.beats = {}      # host -> its last heartbeat (LIB_BEAT_MIN_S)
+        self.ver = 0
+
+    def too_soon(self, host, now=None):
+        now = time.time() if now is None else now
+        t = self.beats.get(host)
+        return t is not None and now - t < LIB_BEAT_MIN_S
+
+    def beat(self, host, rows=(), stop=(), moved=None, stills=None, box="", site="", now=None):
+        """One publisher heartbeat -> {accepted, refused {path: why}, stopped, changed}. `stop` takes streams out (a stop that
+        moved a stream back to a room names its new path in `moved`); `stills` = {path: base64 JPEG}."""
+        now = time.time() if now is None else now
+        acc, ref, stopped, changed = [], {}, [], False
+        moved = moved if isinstance(moved, dict) else {}
+        with self.lock:
+            if rows:
+                self.beats[host] = now
+            for p in (stop if isinstance(stop, list) else [])[:LIB_PER_HOST * 2]:
+                p = str(p or "")[:300]
+                if not lib_path_ok(p, host):
+                    ref[p[:120] or "?"] = "not a library path of this host"
+                    continue
+                had = self.rows.pop(p, None)
+                self.stills.pop(p, None)
+                g = {"at": now}
+                mv = str(moved.get(p) or "")
+                if mv and lib_alias_ok(mv, p, host):
+                    g["moved"] = mv
+                if had is not None or self.gone.get(p, {}).get("moved") != g.get("moved") or p not in self.gone:
+                    changed = True
+                self.gone[p] = g
+                stopped.append(p)
+            mine = {p for p, r in self.rows.items() if r.get("host") == host}
+            for r in (rows if isinstance(rows, list) else [])[:LIB_PER_HOST * 2]:
+                row, why = lib_row_clean(dict(r, box=box, site=site) if isinstance(r, dict) else r, host)
+                if why:
+                    ref[(str(r.get("path") or "") if isinstance(r, dict) else "")[:120] or "?"] = why
+                    continue
+                p = row["path"]
+                if p in stopped:
+                    continue
+                cur = self.rows.get(p)
+                if cur is None and len(mine) >= LIB_PER_HOST:
+                    ref[p] = "this publisher already keeps %d streams in the library" % LIB_PER_HOST
+                    continue
+                if self.gone.pop(p, None) is not None:
+                    changed = True
+                if cur is None:
+                    row.update(seen=now, since=now, stillV=0)
+                    mine.add(p)
+                    changed = True
+                else:
+                    if any(cur.get(k) != row.get(k) for k in self.CMP):
+                        changed = True
+                    row["since"] = now if cur.get("state") != row["state"] else (cur.get("since") or now)
+                    row.update(seen=now, stillV=cur.get("stillV") or 0)
+                self.rows[p] = row
+                acc.append(p)
+            for p, b64 in (stills.items() if isinstance(stills, dict) else []):
+                cur = self.rows.get(str(p))
+                if cur is None or cur.get("host") != host:
+                    continue
+                data = lib_still_clean(b64)
+                if data is None:
+                    ref.setdefault(str(p)[:120], "a still is a JPEG of at most %d bytes" % LIB_STILL_MAX)
+                    continue
+                last = self.stills.get(p)
+                if last and now - last[2] < LIB_STILL_EVERY_S and (cur.get("since") or 0) <= last[2]:
+                    continue   # one a stream per 5 minutes -- sooner only when its state changed since the last one
+                v = int(now * 1000)
+                self.stills[p] = (v, data, now)
+                cur["stillV"] = v
+            if changed:
+                self.ver += 1
+        return {"accepted": acc, "refused": ref, "stopped": stopped, "changed": changed}
+
+    def prune(self, now=None):
+        """Forget silent publishers' rows (LIB_LOCAL_KEEP_S) and old tombstones -> changed?"""
+        now = time.time() if now is None else now
+        changed = False
+        with self.lock:
+            for p in [p for p, r in self.rows.items() if now - float(r.get("seen") or 0) > LIB_LOCAL_KEEP_S]:
+                self.rows.pop(p, None)
+                self.stills.pop(p, None)
+                changed = True
+            for p in [p for p, g in self.gone.items() if now - float(g.get("at") or 0) > LIB_TOMBSTONE_S]:
+                self.gone.pop(p, None)
+                changed = True
+            for h in [h for h, t in self.beats.items() if now - t > 3600]:
+                self.beats.pop(h, None)
+            if changed:
+                self.ver += 1
+        return changed
+
+    def snapshot(self, now=None):
+        """-> (ver, rows [+ age, sinceAge: seconds, so the hub needs no shared clock], gone [{path, age, moved?}])."""
+        now = time.time() if now is None else now
+        with self.lock:
+            rows = []
+            for r in self.rows.values():
+                x = {k: v for k, v in r.items() if k not in ("seen", "since")}
+                x["age"] = round(max(0.0, now - float(r.get("seen") or now)), 1)
+                x["sinceAge"] = round(max(0.0, now - float(r.get("since") or now)), 1)
+                rows.append(x)
+            gone = [dict({"path": p, "age": round(max(0.0, now - float(g.get("at") or now)), 1)},
+                         **({"moved": g["moved"]} if g.get("moved") else {})) for p, g in self.gone.items()]
+            return self.ver, rows, gone
+
+    def ages(self, now=None):
+        now = time.time() if now is None else now
+        with self.lock:
+            return {p: round(max(0.0, now - float(r.get("seen") or now)), 1) for p, r in self.rows.items()}
+
+    def stills_since(self, sent):
+        """{path: {v, b64}} of the stills newer than what `sent` ({path: v}) says went out already."""
+        with self.lock:
+            return {p: {"v": v, "b64": base64.b64encode(data).decode("ascii")} for p, (v, data, _at) in self.stills.items()
+                    if sent.get(p) != v}
+
+    def still(self, path):
+        with self.lock:
+            s = self.stills.get(path)
+            return (s[0], s[1]) if s else None
+
+
+class LibraryBook:
+    """0.21.84: the hub's fleet catalogue. Persisted in <state>/library.json: the entries (metadata -- offline ones too),
+    admin hides and labels, aliases (aka, LIB_AKA_KEEP_S), site names per node, the first-seen host -> node binding and the
+    fleet switch. The live part (state, seen, stills, which node reports what) is memory only and rebuilds from the
+    publishers' heartbeats within a minute. `ver` ("<boot>.<n>") moves on every change a reader must see."""
+
+    ENTRY_KEYS = ("path", "host", "node", "label", "kind", "by", "box", "site", "low", "audio", "res", "meta", "first", "last",
+                  "aka", "hidden", "hiddenBy", "hiddenAt", "adminLabel", "labelAt", "gone", "moved", "conflict", "v")
+
+    def __init__(self, state_dir=None, log=None):
+        self.state_dir = state_dir
+        self.log = log or (lambda m: None)
+        self.lock = threading.RLock()
+        self.entries = {}
+        self.hosts = {}       # host -> {node, at, other?, otherAt?} (the first node seen publishing it)
+        self.sites = {}       # node -> {name, at} (the hub's Links card; "" = the default)
+        self.names = {}       # node -> that relay's display name (the site's default)
+        self.on = True        # the fleet switch (the hub's Relay page)
+        self.switch_at = 0
+        self.live = {}        # path -> {state, since, seen, node, stillV}
+        self.node_at = {}     # node -> its last push or keepalive
+        self.node_ver = {}    # node -> the version of its last full push
+        self.stills = {}      # path -> (v, bytes, at)
+        self.n = 0
+        self.on_save = None   # AuthStore: a save moves its version (the standby's replica copies the book with the store)
+        self._silent = set()
+        self._lazy = False    # `last` moved in memory -- saved by tick() every 10 minutes
+        self._lazy_at = time.time()
+        self._said = {}
+        self._load()
+
+    @property
+    def ver(self):
+        return "%d.%d" % (BOOT_AT, self.n)
+
+    def _path(self):
+        return os.path.join(self.state_dir, "library.json") if self.state_dir else None
+
+    def _clean_entry(self, e):
+        if not isinstance(e, dict) or not lib_path_ok(e.get("path")):
+            return None
+        p = str(e["path"])
+        out = {k: e.get(k) for k in self.ENTRY_KEYS if e.get(k) is not None}
+        out["path"], out["host"] = p, p.split("/")[1]
+        out["label"] = _xs_text(e.get("label"), 80) or p.rsplit("/", 1)[-1][:-5]
+        out["kind"] = e.get("kind") if e.get("kind") in LIB_KINDS else "camera"
+        out["hidden"] = bool(e.get("hidden"))
+        aka = e.get("aka") if isinstance(e.get("aka"), dict) else {}
+        out["aka"] = {str(a): _int0(t) for a, t in aka.items() if lib_alias_ok(a, p)}
+        if out.get("adminLabel") is not None:
+            out["adminLabel"] = _xs_text(out["adminLabel"], 80)
+        return out
+
+    def _load(self):
+        path = self._path()
+        if not path:
+            return
+        d, why = load_json(path, self.log, "library.json")
+        if not isinstance(d, dict):
+            return
+        self._import_locked(d, replace=True)
+
+    def _import_locked(self, d, replace=False):
+        ents = {}
+        for p, e in (d.get("entries") if isinstance(d.get("entries"), dict) else {}).items():
+            c = self._clean_entry(e)
+            if c is not None and len(ents) < LIB_MAX:
+                ents[c["path"]] = c
+        hosts = {str(h): {k: v for k, v in r.items() if k in ("node", "at", "other", "otherAt")}
+                 for h, r in (d.get("hosts") if isinstance(d.get("hosts"), dict) else {}).items() if HOST_RE.match(str(h)) and isinstance(r, dict)}
+        sites = {str(n): {"name": _xs_text(r.get("name"), 48), "at": _int0(r.get("at"))}
+                 for n, r in (d.get("sites") if isinstance(d.get("sites"), dict) else {}).items() if MESH_NODE_RE.match(str(n)) and isinstance(r, dict)}
+        names = {str(n): _xs_text(v, 48) for n, v in (d.get("names") if isinstance(d.get("names"), dict) else {}).items() if MESH_NODE_RE.match(str(n))}
+        if replace:
+            self.entries, self.hosts, self.sites, self.names = ents, hosts, sites, names
+        else:
+            self.entries.update(ents)
+            self.hosts.update(hosts)
+            self.sites.update(sites)
+            self.names.update(names)
+        if "on" in d:
+            self.on = d.get("on") is not False
+            self.switch_at = _int0(d.get("switchAt"))
+
+    def _save_locked(self):
+        self.n += 1
+        path = self._path()
+        if path:
+            save_json(path, self.export_locked(), self.log, backup=True)
+        self._lazy = False
+        self._lazy_at = time.time()
+        cb = self.on_save
+        if callable(cb):
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def export_locked(self):
+        return json.loads(json.dumps({"entries": self.entries, "hosts": self.hosts, "sites": self.sites, "names": self.names,
+                                      "on": self.on, "switchAt": self.switch_at, "at": int(time.time())}))
+
+    def export(self):
+        with self.lock:
+            return self.export_locked()
+
+    def import_(self, b):
+        """A new hub takes the old hub's catalogue (its entries win a clash; ours it never had stay; its fleet switch)."""
+        if not isinstance(b, dict):
+            return 0
+        with self.lock:
+            self._import_locked(b, replace=False)
+            self._save_locked()
+            return len(self.entries)
+
+    def merge(self, b):
+        """A hand-BACK: what the standby changed while it was the hub -- entries it learned, a hide / unhide or label set
+        there later, aliases, site names set later, the switch flipped later."""
+        if not isinstance(b, dict):
+            return 0
+        n = 0
+        with self.lock:
+            for p, e in (b.get("entries") if isinstance(b.get("entries"), dict) else {}).items():
+                c = self._clean_entry(e)
+                if c is None:
+                    continue
+                mine = self.entries.get(c["path"])
+                if mine is None:
+                    if len(self.entries) < LIB_MAX:
+                        self.entries[c["path"]] = c
+                        n += 1
+                    continue
+                if _int0(c.get("hiddenAt")) > _int0(mine.get("hiddenAt")):
+                    mine.update(hidden=c["hidden"], hiddenBy=c.get("hiddenBy"), hiddenAt=c.get("hiddenAt"))
+                    n += 1
+                if _int0(c.get("labelAt")) > _int0(mine.get("labelAt")):
+                    mine.update(adminLabel=c.get("adminLabel"), labelAt=c.get("labelAt"))
+                    n += 1
+                for a, t in c.get("aka", {}).items():
+                    if a not in mine.setdefault("aka", {}):
+                        mine["aka"][a] = t
+                        n += 1
+                mine["last"] = max(_int0(mine.get("last")), _int0(c.get("last")))
+            for node, r in (b.get("sites") if isinstance(b.get("sites"), dict) else {}).items():
+                if MESH_NODE_RE.match(str(node)) and isinstance(r, dict) and _int0(r.get("at")) > _int0((self.sites.get(node) or {}).get("at")):
+                    self.sites[str(node)] = {"name": _xs_text(r.get("name"), 48), "at": _int0(r.get("at"))}
+                    n += 1
+            if _int0(b.get("switchAt")) > _int0(self.switch_at):
+                self.on, self.switch_at = b.get("on") is not False, _int0(b.get("switchAt"))
+                n += 1
+            self._save_locked()
+        return n
+
+    # ---- what the spokes (and the hub's own relay) report ----------------------------------------------------------
+    def node_push(self, node, name="", ver=None, rows=(), gone=(), stills=None, now=None, full=True):
+        """A node's rows (a FULL snapshot of its publishers: rows + tombstones) -> {changed, rewrites {old path: new path},
+        ver}. New aliases (aka) and moves back to a room come out as `rewrites` -- the caller rewrites every room board."""
+        now = time.time() if now is None else now
+        node = mesh_slug(node, 64) or "relay"
+        rewrites, changed, dirty = {}, False, False
+        with self.lock:
+            if name and self.names.get(node) != _xs_text(name, 48):
+                self.names[node] = _xs_text(name, 48)
+                dirty = changed = True
+            self.node_at[node] = now
+            if full:
+                self.node_ver[node] = ver
+            if node in self._silent:
+                self._silent.discard(node)
+                changed = True
+            seen = set()
+            for r in (rows if isinstance(rows, (list, tuple)) else [])[:LIB_MAX]:
+                row, why = lib_row_clean(r)
+                if why:
+                    continue
+                p, host = row["path"], row["host"]
+                seen.add(p)
+                hb = self.hosts.get(host)
+                if hb is None:
+                    self.hosts[host] = {"node": node, "at": int(now)}
+                    dirty = True
+                elif hb.get("node") != node and hb.get("other") != node:
+                    hb["other"], hb["otherAt"] = node, int(now)   # 0.21.84: the hub flags a host claimed from a second node
+                    dirty = changed = True
+                    self.log("relay library: host %s publishes from %s, first seen from %s -- the same name on two machines?"
+                             % (host, node, hb.get("node")))
+                e = self.entries.get(p)
+                if e is None:
+                    if len(self.entries) >= LIB_MAX:
+                        if now - self._said.get("max", 0) > 600:
+                            self._said["max"] = now
+                            self.log("relay library: the catalogue holds %d entries -- %s not added" % (LIB_MAX, p))
+                        continue
+                    e = self.entries[p] = {"path": p, "host": host, "first": int(now), "aka": {}, "hidden": False, "v": 0}
+                    dirty = changed = True
+                if e.get("gone"):
+                    # back after a stop (switched on again, the fleet switch back on): the boards that followed it out to a
+                    # room path (`moved`) -- or still name an old path -- follow it back in (the walker is idempotent)
+                    for a in list(e.get("aka") or {}) + ([e["moved"]] if e.get("moved") else []):
+                        if a != p:
+                            rewrites[a], rewrites[lib_low(a)] = p, lib_low(p)
+                    e.pop("gone", None)
+                    e.pop("moved", None)
+                    dirty = changed = True
+                touched = False
+                for k in ("label", "kind", "by", "low", "audio", "res", "meta", "box", "site"):
+                    v = row.get(k)
+                    if k == "meta" and v is None:
+                        continue
+                    if e.get(k) != v:
+                        e[k] = v
+                        touched = True
+                if e.get("node") != node:
+                    e["node"] = node
+                    touched = True
+                hb2 = self.hosts.get(host) or {}
+                conflict = hb2.get("other") if hb2.get("node") != node else None
+                if (e.get("conflict") or None) != conflict:
+                    e["conflict"] = conflict
+                    touched = True
+                if touched:
+                    e["v"] = _int0(e.get("v")) + 1
+                    dirty = changed = True
+                if now - _int0(e.get("last")) > 3600:
+                    e["last"] = int(now)
+                    self._lazy = True
+                age, sage = _num(r.get("age"), 0, 1e7), _num(r.get("sinceAge"), 0, 1e9)
+                lv = self.live.get(p)
+                st = row["state"]
+                since = (lv["since"] if lv and lv.get("state") == st else now - sage)
+                self.live[p] = {"state": st, "since": since, "seen": now - age, "node": node,
+                                "stillV": (lv or {}).get("stillV") or 0}
+                if lv is None or lv.get("state") != st or lv.get("node") != node:
+                    changed = True
+                for a in row.get("aka") or []:
+                    if a not in e.setdefault("aka", {}) and a not in self.entries:
+                        e["aka"][a] = int(now)
+                        rewrites[a], rewrites[lib_low(a)] = p, lib_low(p)
+                        dirty = changed = True
+            if full:
+                for p in [p for p, lv in self.live.items() if lv.get("node") == node and p not in seen]:
+                    self.live.pop(p, None)   # no longer reported by its relay: an offline entry (kept LIB_OFFLINE_KEEP_S)
+                    if p in self.entries:
+                        self.entries[p]["last"] = int(now)
+                    dirty = changed = True
+            for g in (gone if isinstance(gone, (list, tuple)) else [])[:LIB_MAX]:
+                p = str((g or {}).get("path") or "") if isinstance(g, dict) else ""
+                e = self.entries.get(p)
+                if e is None or e.get("gone"):
+                    continue
+                if e.get("node") not in (None, node) and (self.hosts.get(e["host"]) or {}).get("node") != node:
+                    continue   # only the relay that hosts it takes it out
+                e["gone"], e["last"] = int(now), int(now)
+                e["v"] = _int0(e.get("v")) + 1
+                self.live.pop(p, None)
+                self.stills.pop(p, None)
+                mv = str(g.get("moved") or "")
+                if mv and lib_alias_ok(mv, p, e["host"]):
+                    e["moved"] = mv
+                    rewrites[p], rewrites[lib_low(p)] = mv, lib_low(mv)
+                dirty = changed = True
+            self._stills_locked(node, stills, now)
+            if dirty:
+                self._save_locked()
+            elif changed:
+                self.n += 1
+        return {"changed": changed, "rewrites": rewrites, "ver": self.ver}
+
+    def _stills_locked(self, node, stills, now):
+        for p, s in (stills.items() if isinstance(stills, dict) else []):
+            lv = self.live.get(str(p))
+            if lv is None or lv.get("node") != node or not isinstance(s, dict):
+                continue
+            data = lib_still_clean(s.get("b64"))
+            if data is None:
+                continue
+            v = _int0(s.get("v")) or int(now * 1000)
+            self.stills[str(p)] = (v, data, now)
+            lv["stillV"] = v
+
+    def node_keepalive(self, node, ver=None, ages=None, stills=None, now=None):
+        """A node's keepalive {path: age} -> {need: a full push is wanted (this hub does not hold that node's version), changed}."""
+        now = time.time() if now is None else now
+        node = mesh_slug(node, 64) or "relay"
+        with self.lock:
+            if node not in self.node_at or self.node_ver.get(node) != ver:
+                return {"need": True, "changed": False, "ver": self.ver}
+            self.node_at[node] = now
+            changed = False
+            if node in self._silent:
+                self._silent.discard(node)
+                changed = True
+            for p, age in (ages.items() if isinstance(ages, dict) else []):
+                lv = self.live.get(str(p))
+                if lv is not None and lv.get("node") == node:
+                    lv["seen"] = now - _num(age, 0, 1e7)
+                    e = self.entries.get(str(p))
+                    if e is not None and now - _int0(e.get("last")) > 3600:
+                        e["last"] = int(now)
+                        self._lazy = True
+            self._stills_locked(node, stills, now)
+            if changed:
+                self.n += 1
+            return {"need": False, "changed": changed, "ver": self.ver}
+
+    def tick(self, now=None, referenced=()):
+        """Every ~30 s at the hub: silent nodes (their rows say "site unreachable"), long-silent nodes' rows offline, old
+        tombstones and offline entries (LIB_OFFLINE_KEEP_S unless a board references them) and old aliases go -> changed?"""
+        now = time.time() if now is None else now
+        refs = set(referenced or ())
+        changed = dirty = False
+        with self.lock:
+            for node, t in list(self.node_at.items()):
+                if now - t > LIB_NODE_SILENT_S and node not in self._silent:
+                    self._silent.add(node)
+                    changed = True
+                if now - t > LIB_LOCAL_KEEP_S:
+                    for p in [p for p, lv in self.live.items() if lv.get("node") == node]:
+                        self.live.pop(p, None)
+                        if p in self.entries:
+                            self.entries[p]["last"] = int(now)
+                        changed = dirty = True
+            for p, e in list(self.entries.items()):
+                if e.get("gone") and now - _int0(e["gone"]) > LIB_TOMBSTONE_S:
+                    self.entries.pop(p, None)
+                    self.stills.pop(p, None)
+                    dirty = changed = True
+                    continue
+                if (p not in self.live and now - _int0(e.get("last") or e.get("first")) > LIB_OFFLINE_KEEP_S
+                        and p not in refs and not (set(e.get("aka") or {}) & refs)):
+                    self.entries.pop(p, None)
+                    self.stills.pop(p, None)
+                    dirty = changed = True
+                    continue
+                for a in [a for a, t in (e.get("aka") or {}).items() if now - _int0(t) > LIB_AKA_KEEP_S]:
+                    e["aka"].pop(a, None)
+                    dirty = changed = True
+            if dirty or (self._lazy and now - self._lazy_at > 600):
+                self._save_locked()
+            elif changed:
+                self.n += 1
+        return changed
+
+    # ---- reads ---------------------------------------------------------------------------------------------------------
+    def site_of(self, node, e=None):
+        if e is not None and e.get("site"):
+            return e["site"]
+        s = (self.sites.get(node) or {}).get("name")
+        return s or lib_site_default(self.names.get(node), node)
+
+    def public_rows(self, now=None, admin=False):
+        """The catalogue as readers see it (hidden entries only for admins / spokes' mirrors -- flagged `hidden`)."""
+        now = time.time() if now is None else now
+        out = []
+        with self.lock:
+            for p, e in self.entries.items():
+                if e.get("hidden") and not admin:
+                    continue
+                lv = self.live.get(p)
+                node = (lv or {}).get("node") or e.get("node") or ""
+                silent = node in self._silent or (node in self.node_at and now - self.node_at[node] > LIB_NODE_SILENT_S)
+                row = {"path": p, "host": e.get("host"), "node": node, "site": self.site_of(node, e),
+                       "label": e.get("adminLabel") or e.get("label") or p.rsplit("/", 1)[-1][:-5],
+                       "kind": e.get("kind") or "camera", "by": e.get("by") or "", "box": e.get("box") or "",
+                       "low": bool(e.get("low")), "audio": bool(e.get("audio")), "res": e.get("res") or "",
+                       "state": (lv or {}).get("state") or "dark", "since": int(lv["since"]) if lv else None,
+                       "seen": int(lv["seen"]) if lv else _int0(e.get("last")), "online": bool(lv and now - lv["seen"] < LIB_TTL),
+                       "reach": not silent, "stillV": (lv or {}).get("stillV") or (self.stills.get(p) or (0,))[0],
+                       "aka": sorted(e.get("aka") or {}), "first": _int0(e.get("first")), "v": _int0(e.get("v"))}
+                if e.get("meta"):
+                    row["meta"] = e["meta"]
+                if e.get("adminLabel"):
+                    row["edited"] = True
+                if e.get("hidden"):
+                    row["hidden"] = True
+                if e.get("gone"):
+                    row["gone"] = True
+                    row["online"] = False
+                    if e.get("moved"):
+                        row["moved"] = e["moved"]
+                if e.get("conflict"):
+                    row["conflict"] = e["conflict"]
+                out.append(row)
+        return out
+
+    def resolve(self, path):
+        """A path -> the entry it names: itself, or the entry that lists it as an old path (aka). None when unknown."""
+        p = str(path or "")
+        with self.lock:
+            if p in self.entries:
+                return p
+            for q, e in self.entries.items():
+                if p in (e.get("aka") or {}):
+                    return q
+        return None
+
+    def known(self, path):
+        """-> (entry path, None) for a stream a room may add, or (None, why)."""
+        q = self.resolve(path)
+        with self.lock:
+            e = self.entries.get(q) if q else None
+            if e is None:
+                return None, "that stream is not in the stream library"
+            if e.get("hidden"):
+                return None, "an admin hid that stream from the stream library"
+            if e.get("gone"):
+                return None, "that stream is no longer in the stream library"
+            return q, None
+
+    def still(self, path):
+        with self.lock:
+            s = self.stills.get(path)
+            return (s[0], s[1]) if s else None
+
+    def aka_map(self):
+        """{old path: entry path} (+ the -low pair) for every entry in the library now -- the hub's tick rewrites any board that
+        still (or again: a pin from an older page) names an old path. A withdrawn entry maps nothing (its boards follow `moved`)."""
+        out = {}
+        with self.lock:
+            for p, e in self.entries.items():
+                if e.get("gone"):
+                    continue
+                for a in e.get("aka") or {}:
+                    out[a], out[lib_low(a)] = p, lib_low(p)
+        return out
+
+    def conflicts(self):
+        with self.lock:
+            return [dict(r, host=h) for h, r in self.hosts.items() if r.get("other")]
+
+    def sites_public(self):
+        with self.lock:
+            nodes = set(self.names) | set(self.sites) | {e.get("node") for e in self.entries.values() if e.get("node")}
+            return {n: {"site": self.site_of(n), "set": bool((self.sites.get(n) or {}).get("name")),
+                        "name": self.names.get(n) or "", "default": lib_site_default(self.names.get(n), n)} for n in sorted(nodes)}
+
+    # ---- the hub's admins and operator ---------------------------------------------------------------------------------
+    def admin(self, op, path=None, node=None, label=None, site=None, by="", now=None):
+        """hide | unhide | label {path, label} | site {node, site} -> (None, 200) or (why, http code). Saved at once."""
+        now = time.time() if now is None else now
+        by = _xs_text(by, 40) or "admin"
+        with self.lock:
+            if op == "site":
+                node = mesh_slug(node, 64)
+                if not node or not MESH_NODE_RE.match(node):
+                    return "`node` names a relay", 400
+                name = _xs_text(site, 48)
+                if (self.sites.get(node) or {}).get("name", "") == name:
+                    return None, 200
+                self.sites[node] = {"name": name, "at": int(now * 1000)}   # (ms: a hand-back compares them)
+                self._save_locked()
+                return None, 200
+            q = self.resolve(path)
+            e = self.entries.get(q) if q else None
+            if e is None:
+                return "that stream is not in the stream library", 404
+            if op in ("hide", "unhide"):
+                want = op == "hide"
+                e.update(hidden=want, hiddenBy=by, hiddenAt=int(now * 1000))
+            elif op == "label":
+                lab = _xs_text(label, 80)
+                e.update(adminLabel=lab or None, labelAt=int(now * 1000))
+            else:
+                return "unknown op (%s)" % "|".join(LIB_ADMIN_OPS), 400
+            e["v"] = _int0(e.get("v")) + 1
+            self._save_locked()
+            return None, 200
+
+    def set_on(self, on, now=None):
+        now = time.time() if now is None else now
+        with self.lock:
+            if self.on == bool(on):
+                return False
+            self.on, self.switch_at = bool(on), int(now * 1000)
+            self._save_locked()
+            return True
+
+
+def lib_mirror_row(r):
+    """0.21.84: a spoke's copy of one hub catalogue row (shape checked; hidden ones kept, flagged -- never fail open)."""
+    if not isinstance(r, dict) or not lib_path_ok(r.get("path")):
+        return None
+    out = dict(r)
+    out["path"] = str(r["path"])
+    out["host"] = out["path"].split("/")[1]
+    out["label"] = _xs_text(r.get("label"), 80)
+    out["hidden"] = bool(r.get("hidden"))
+    out["aka"] = [str(a) for a in (r.get("aka") if isinstance(r.get("aka"), list) else []) if lib_alias_ok(a, out["path"])][:LIB_AKA_MAX * 4]
+    if not out["hidden"]:
+        out.pop("hidden", None)
+    return out
 
 
 class Lockout:
@@ -2863,6 +3751,8 @@ class AuthStore:
         self.recovered = None    # 0.21.0: epoch when the .bak copy was used
         self.frozen = None       # 0.21.0: the read error when the file could not be OPENED -- saves refuse until a restart
         self._load()
+        self.libbook = LibraryBook(state_dir, log)   # 0.21.84: the stream library's fleet catalogue (library.json; the hub's)
+        self.libbook.on_save = self._lib_saved
 
     def _path(self):
         return os.path.join(self.state_dir, "relay-auth.json")
@@ -3176,6 +4066,8 @@ class AuthStore:
             return None, "bad room name", 400
         if room == LOBBY_SLUG:
             return None, "the Lobby has no invite links", 403
+        if reserved_slug(room):
+            return None, reserved_slug(room), 403   # 0.21.84: no invite into the library or a box's home room
         if room.startswith("me-") and not (personal_ok and is_personal(room)):   # 0.21.75: only its owner shares My room (0.21.78)
             return None, "only the owner of a personal room makes invite links for it", 403
         if bound is not None and not HOST_RE.match(str(bound)):
@@ -3374,6 +4266,8 @@ class AuthStore:
                 return False
             elif personal_reserved(slug):
                 return False                 # 0.21.75: a "me-" name is never made by a page or a vehicle using it
+            elif slug == LIB_ROOT:
+                return False                 # 0.21.84: "lib" is the stream library's root, never a room
             else:
                 self.closed.pop(slug, None)
                 self.rooms[slug] = {"salt": "", "hash": "", "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
@@ -3538,6 +4432,10 @@ class AuthStore:
                           "co": str(pr.get("co") or "") if HOST_RE.match(str(pr.get("co") or "")) else ""}
             return out
 
+    def _lib_saved(self):
+        """0.21.84: library.json changed -- the store's version moves, so the standby's replica copies the bundle again."""
+        self.ver += 1
+
     def export_bundle(self):
         """0.21.25: what a hub hands over -- the access-code records (salted hashes, never a code), the room records with
         their roomKeys (the creators keep closing and heartbeating), close tombstones and room groups."""
@@ -3546,7 +4444,8 @@ class AuthStore:
                                           "closed": self.closed, "groups": self.groups,
                                           "vehicles": self.vehicles,     # 0.21.63: vehicle keys (hashes) go with the hub
                                           "invites": self.invites,       # 0.21.75: invite links (digests) go with the hub
-                                          "links": self.links, "mesh": self.mesh}))   # 0.21.77: the mesh overrides go with the hub
+                                          "links": self.links, "mesh": self.mesh,       # 0.21.77: the mesh overrides go with the hub
+                                          "library": self.libbook.export()}))           # 0.21.84: the stream library's catalogue too
 
     def merge_bundle(self, b):
         """0.21.53: a hand-BACK -- what the standby changed while it was the hub. Per room the newer `at` wins, a newer
@@ -3616,6 +4515,8 @@ class AuthStore:
                 if int(rec.get("at") or 0) > int((costs.get(node) or {}).get("at") or 0):
                     costs[node] = rec
             self.mesh = dict(self.mesh, costs=costs)
+            if isinstance(b.get("library"), dict):   # 0.21.84: hides, labels, aliases and site names set on the standby
+                n["library"] = self.libbook.merge(b["library"])
             self._save()
         return n
 
@@ -3653,6 +4554,8 @@ class AuthStore:
                 self.links.update(self._links_clean(b["links"]))
             if isinstance(b.get("mesh"), dict):
                 self.mesh = self._mesh_clean(b["mesh"])
+            if isinstance(b.get("library"), dict):   # 0.21.84: the stream library's catalogue (hides never fail open)
+                n["library"] = self.libbook.import_(b["library"])
             self._save()
         return n
 
@@ -3808,6 +4711,8 @@ class AuthStore:
             return "pick a different name (lowercase letters, digits and dashes, at most 32)", 400
         if personal_reserved(new) or is_personal(old):
             return PERSONAL_RESERVED if personal_reserved(new) else "a personal room cannot be renamed", 403   # 0.21.75
+        if reserved_slug(new):
+            return reserved_slug(new), 403   # 0.21.84: never "lib", never a box's home room
         if new == old:
             return "that is already the room's name", 400
         with self.lock:
@@ -3926,6 +4831,26 @@ class AuthStore:
                     out[k] = {"pins": [], "spots": [], "grids": {}, "split": [], "renamed": to}
             return out
 
+    def boards_rewrite(self, mapping):
+        """0.21.84: streams that MOVED (a box's cameras into the stream library on update, a camera switched back to its room):
+        every room board naming an old path names the new one (pins, spotlights and their order, grid layouts and their
+        cameras, split cameras, room grids) -> how many rooms changed. board_ver moves once; spokes re-pull."""
+        n = 0
+        with self.lock:
+            for slug, rec in self.rooms.items():
+                if not isinstance(rec, dict) or not rec.get("board"):
+                    continue
+                nb, hit = board_rewrite_paths(rec["board"], mapping)
+                if hit:
+                    rec["board"] = board_clean(nb)
+                    n += 1
+            if n:
+                self.board_ver += 1
+                self._save()
+        if n:
+            self._board_fire()
+        return n
+
     def board_apply(self, slug, op, item, now=None, boss=False, room_key=None):
         """One board change -> (board, http code, error). pin {path, from, label, kind, by} / unpin {path} / spot {target,
         by, ts} / unspot {target}. A room with no record gets a plain one; the first item KEEPS the room open (refused when
@@ -3937,6 +4862,8 @@ class AuthStore:
             return None, 400, "bad room"
         if slug == LOBBY_SLUG:
             return None, 403, "the Lobby has no room board"
+        if slug == LIB_ROOT:
+            return None, 403, LIB_RESERVED   # 0.21.84
         if op not in BOARD_OPS or not isinstance(item, dict):
             return None, 400, "unknown board op (" + "|".join(BOARD_OPS) + ")"
         with self.lock:
@@ -4361,6 +5288,8 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
         return {"error": "bad room record"}, 400
     if personal_reserved(slug):
         return {"error": PERSONAL_RESERVED}, 403   # 0.21.75: only POST /api/rooms/personal makes a "me-" room
+    if reserved_slug(slug):
+        return {"error": reserved_slug(slug)}, 403   # 0.21.84: "lib" (the stream library) and "box-..." (a box's home) are no rooms
     if lockout is not None:
         wait = lockout.locked_for(peer)
         if wait:
@@ -4885,6 +5814,7 @@ class AuthService:
                                  # 0.21.33 (Kenton: relay pickers show names, "this should help people with finding
                                  # the correct relay for their location")
                                  "linkNode": True,   # 0.21.78: federation tokens name the spoke (per hub link stats)
+                                 **svc.library_auth_fields(),   # 0.21.84: + library (1 | 0), libRoot, libraryWhy
                                  "name": svc.relay_name() or None})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
@@ -4908,6 +5838,28 @@ class AuthService:
                     obj, code = svc.board_get((qs.get("room") or [""])[0], self.headers.get("Authorization"),
                                               (qs.get("jwt") or [""])[0], self._peer())
                     self._reply(obj, code)
+                elif path == "/api/library":           # 0.21.84: the stream library's catalogue (since / paths)
+                    qs = parse_qs(urlparse(self.path).query)
+                    q = {k: (v or [""])[0] for k, v in qs.items()}
+                    obj, code = svc.library_get(q, self.headers.get("Authorization"), q.get("jwt"), self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/library/still":     # 0.21.84: one library stream's still (image/jpeg)
+                    qs = parse_qs(urlparse(self.path).query)
+                    q = {k: (v or [""])[0] for k, v in qs.items()}
+                    obj, code = svc.library_still(q, self.headers.get("Authorization"), q.get("jwt"), self._peer())
+                    if isinstance(obj, (bytes, bytearray)):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "image/jpeg")
+                        self.send_header("Content-Length", str(len(obj)))
+                        self.send_header("Cache-Control", "private, max-age=60")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        try:
+                            self.wfile.write(obj)
+                        except OSError:
+                            pass
+                    else:
+                        self._reply(obj, code)
                 elif path == "/api/spokes/link":       # 0.21.7: what the hub's relay sees of its cluster (a spoke's grid-gate evidence)
                     obj, code = svc.spoke_link(self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
@@ -4915,7 +5867,8 @@ class AuthService:
                     qs = parse_qs(urlparse(self.path).query)   # 0.20.0: ?since=<ver>&wait=<s> holds until they change
                     obj, code = svc.bans_for_spoke(self.headers.get("Authorization"),
                                                    since=(qs.get("since") or [None])[0], wait=(qs.get("wait") or [0])[0],
-                                                   peer=self._peer(), node=(qs.get("node") or [""])[0])   # 0.21.27: a targeted update reaches its spoke only; 0.21.39: + node
+                                                   peer=self._peer(), node=(qs.get("node") or [""])[0],   # 0.21.27: a targeted update reaches its spoke only; 0.21.39: + node
+                                                   lib_since=(qs.get("libSince") or [None])[0])           # 0.21.84: the library mirror
                     self._reply(obj, code)
                 else:
                     self._reply({"error": "unknown endpoint"}, 404)
@@ -4989,6 +5942,16 @@ class AuthService:
                 elif path == "/api/bans/notify":       # 0.18.0: the hub says "bans changed" -- no data, we pull
                     obj, code = svc.bans_notified(self._peer())
                     self._reply(obj, code)
+                elif path == "/api/library":           # 0.21.84: a library publisher's heartbeat
+                    obj, code = svc.library_post(p, self.headers.get("Authorization"), self._peer())
+                    hdrs = {"Retry-After": obj.get("retryAfter", 10)} if code == 429 else None
+                    self._reply(obj, code, hdrs)
+                elif path == "/api/library/token":     # 0.21.84: a library viewer token for the page's library connection
+                    obj, code = svc.library_token_api(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/library/admin":     # 0.21.84: hide / unhide / label / site / remove (admins; the hub keeps them)
+                    obj, code = svc.library_admin_api(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
                 elif path == "/api/xshare":            # 0.21.41: list a stream in other rooms (or stop)
                     obj, code = svc.xshare_post(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
@@ -5026,10 +5989,12 @@ class AuthService:
             self.store.on_board = self._board_changed
         self._board_mirror_load()
         threading.Thread(target=self._board_loop, daemon=True).start()
+        threading.Thread(target=self._lib_loop, daemon=True).start()   # 0.21.84: the stream library (push / age the catalogue)
 
     def close(self):
         try:
             self._board_stop.set()   # 0.21.63
+            self._lib_wake().set()   # 0.21.84
         except Exception:
             pass
         try:
@@ -5172,6 +6137,8 @@ class AuthService:
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
                                vouched=p.get("vouch") in ("member", "admin"), admin=p.get("vouch") == "admin")
+        if op in ("library", "libraryAdmin", "libraryStill"):   # 0.21.84: a spoke's library rows, an admin it verified, a still
+            return self._lib_fed(op, p)
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
             return self._xs_fed(p)
         if op == "board":    # 0.21.63: a spoke verified a publisher member (vouch "publisher"); the hub keeps the boards
@@ -5356,6 +6323,8 @@ class AuthService:
             return self._federation_token(str(p.get("federation") or ""), peer, str(p.get("node") or ""))
         if p.get("verify") and p.get("admin") is not None:          # 0.16.0: a spoke asks "is this OUR admin code?"
             return self._admin_verify(str(p.get("admin") or ""), peer)
+        if p.get("library") is True and not p.get("room"):   # 0.21.84: a library publisher token (no room)
+            return self._library_token(p, peer)
         slug = str(p.get("room") or "")
         access = str(p.get("code") or "")
         room_code = p.get("roomCode")
@@ -5369,6 +6338,10 @@ class AuthService:
             return {"error": "bad room name"}, 400
         if host is not None and not HOST_RE.match(host):
             return {"ok": False, "error": "bad host"}, 400
+        rs = reserved_slug(slug, host)   # 0.21.84: "lib" is never a room; a box's home room (box-<host>) is that box's alone
+        if rs and not slug.startswith(kastr_rtsp.HOME_PREFIX):
+            return {"ok": False, "error": rs}, 403
+        box_guest = bool(rs)   # ... anyone else gets a viewer's token there at most (it may watch -- a pin's proof -- never publish)
         b = self.bans.hit(slug, host, peer) if self.bans else None   # 0.17.0: removed by an admin -- not a wrong code, no lockout
         if b:
             return {"ok": False, "error": "removed from this room by an admin", "until": int(b.get("until") or 0),
@@ -5420,6 +6393,8 @@ class AuthService:
             role = "publisher"
             if rec is not None and rec.get("hash") and not personal and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
                 return self._fail(peer, "wrong room code", slug)
+        if box_guest and role in ("publisher", "admin"):
+            role = "viewer"   # 0.21.84: until now only the page kept people out of a box's home room
         if personal:   # 0.21.78: its owner (the personal code), or a guest (people with access / an invite) while the owner is in
             return self._personal_token(slug, role, rc, host, inv_row, peer)
         if inv_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code
@@ -6749,6 +7724,8 @@ class AuthService:
             return {"ok": False, "error": "the Lobby takes no publishers"}, 403
         if personal_reserved(slug):
             return {"ok": False, "error": PERSONAL_RESERVED}, 403   # 0.21.75
+        if reserved_slug(slug):
+            return {"ok": False, "error": reserved_slug(slug)}, 403   # 0.21.84: a vehicle never publishes into "lib" or a box's home
         wait = self.locked_for(peer)
         if wait:
             return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
@@ -6939,7 +7916,7 @@ class AuthService:
                 self.log("relay session: refused %s from %s (%s)" % (ev, remote, why))
             return {"error": why}, 403
         base = grant
-        if status == "grant" and room and not is_vehicle:   # 0.21.63: vehicles do not watch (no listings either)
+        if status == "grant" and room and not is_vehicle and room != LIB_ROOT:   # 0.21.63: vehicles do not watch; 0.21.84: nor a library session
             grant = self._xs_grant(grant, room, now)   # 0.21.41: + the streams listed into this room from other rooms
         with self.lock:
             self.grants += 1
@@ -6956,6 +7933,736 @@ class AuthService:
                                        "link": link,                                    # 0.21.77: the dialer of a link session
                                        "rcx": (claims.get("rcx") if status == "grant" and isinstance(claims.get("rcx"), str) else None)}   # 0.21.83 (D)
         return grant, 200
+
+    # ---- 0.21.84 (Kenton: "Library first."): the stream library -------------------------------------------------------
+    # The publisher's own relay keeps its rows (LibraryRegistry, POST /api/library); a spoke pushes them to the hub
+    # (rooms_fed op "library", full on change, a keepalive every 30 s) and mirrors the hub's catalogue from the bans
+    # long-poll; the hub (or a lone relay) keeps the fleet catalogue (store.libbook -> library.json, handed over with the
+    # store bundle). Pages read GET /api/library on their own relay and watch with a library viewer token.
+
+    def _lib_reg(self):
+        r = self.__dict__.get("_libreg_local")
+        if r is None:
+            with _XS_INIT_LOCK:
+                r = self.__dict__.setdefault("_libreg_local", LibraryRegistry())
+        return r
+
+    def _lib_book(self):
+        b = getattr(getattr(self, "store", None), "libbook", None)
+        if b is None:
+            with _XS_INIT_LOCK:
+                b = self.__dict__.get("_libbook_mem")
+                if b is None:
+                    b = self.__dict__["_libbook_mem"] = LibraryBook(None, self.log)
+        return b
+
+    def _lib_mirror_path(self):
+        return os.path.join(getattr(getattr(self, "store", None), "state_dir", None) or os.getcwd(), "hub-library.json")
+
+    def _lib_mirror(self):
+        """Spoke side: the hub's catalogue as last heard (hub-library.json -- a spoke restarted while its hub is dark keeps
+        it, hidden entries included)."""
+        m = self.__dict__.get("_libmirror")
+        if m is None:
+            m = {"ver": None, "on": None, "why": "", "rows": {}, "at": 0, "heard": 0.0}
+            try:
+                d, _why = load_json(self._lib_mirror_path(), None, None, retries=1)
+            except Exception:
+                d = None
+            if isinstance(d, dict):
+                rows = {}
+                for r in d.get("rows") if isinstance(d.get("rows"), list) else []:
+                    x = lib_mirror_row(r)
+                    if x is not None:
+                        rows[x["path"]] = x
+                m.update(ver=d.get("ver"), on=(None if d.get("on") is None else bool(d.get("on"))), why=str(d.get("why") or "")[:200],
+                         rows=rows, at=_int0(d.get("at")))
+            self.__dict__["_libmirror"] = m
+        return m
+
+    def _lib_node(self):
+        return _machine_node() or "relay"
+
+    def _lib_name(self):
+        try:
+            return self.relay_name() or self._lib_node()
+        except Exception:
+            return self._lib_node()
+
+    def library_state(self, now=None):
+        """-> (on, why): may this relay's pages and publishers use the stream library now? The hub (or a lone relay): its
+        fleet switch and the pre-flight (no room named "lib" may exist). A spoke: what its hub said last (kept on disk -- a dark
+        hub keeps its last word; a hub that never said is older than 0.21.84: off)."""
+        if not self._xs_spoke():
+            if not self._lib_book().on:
+                return False, LIB_OFF_TEXT
+            try:
+                rec = self.store.room(LIB_ROOT) if hasattr(self.store, "room") else None
+            except Exception:
+                rec = None
+            if rec is not None:
+                return False, ('a room named "lib" exists -- rename it (Room settings) to switch the stream library on: '
+                               '"lib" is the reserved name of the stream library')
+            return True, ""
+        m = self._lib_mirror()
+        if m.get("on") is None:
+            return False, "the hub runs an older KASTR without the stream library -- update the hub first"
+        return bool(m["on"]), (str(m.get("why") or "") or ("" if m["on"] else LIB_OFF_TEXT))
+
+    def _lib_changed(self):
+        """The hub's catalogue changed: wake the spokes' long-polls -- at most every LIB_NUDGE_S (a burst of state changes is
+        one reply)."""
+        if self._xs_spoke():
+            return
+        now = time.time()
+        with _XS_INIT_LOCK:
+            last = float(self.__dict__.get("_lib_nudged") or 0)
+            if now - last >= LIB_NUDGE_S:
+                self._lib_nudged = now
+                late = None
+            elif not self.__dict__.get("_lib_nudge_due"):
+                self._lib_nudge_due = True
+                late = LIB_NUDGE_S - (now - last)
+            else:
+                return
+        if late is None:
+            self._xs_changed()
+            return
+
+        def fire():
+            with _XS_INIT_LOCK:
+                self._lib_nudge_due = False
+                self._lib_nudged = time.time()
+            self._xs_changed()
+        t = threading.Timer(max(0.05, late), fire)
+        t.daemon = True
+        t.start()
+
+    def _lib_rewrite(self, mapping):
+        """Streams that moved (a box's cameras into the library, or one back to its room): every room board follows."""
+        st = getattr(self, "store", None)
+        if not mapping or not hasattr(st, "boards_rewrite"):
+            return 0
+        try:
+            n = st.boards_rewrite(mapping)
+        except Exception as e:
+            self.log("relay library: room boards not rewritten: %s" % e)
+            return 0
+        if n:
+            moved = sorted(k for k in mapping if not k.endswith("-low.hang"))
+            self.log("relay library: %d room board(s) follow %d moved stream(s): %s" % (n, len(moved), ", ".join(
+                "%s -> %s" % (k, mapping[k]) for k in moved[:4]) + (" ..." if len(moved) > 4 else "")))
+        return n
+
+    def _lib_ingest_local(self, now=None):
+        """Hub / lone relay: its own publishers' rows go straight into the fleet catalogue (as this node)."""
+        now = time.time() if now is None else now
+        reg = self._lib_reg()
+        ver, rows, gone = reg.snapshot(now)
+        sent = self.__dict__.setdefault("_lib_stills_in", {})
+        stills = reg.stills_since(sent)
+        res = self._lib_book().node_push(self._lib_node(), self._lib_name(), ver, rows, gone, stills, now, full=True)
+        for p, s in stills.items():
+            sent[p] = s["v"]
+        if res.get("rewrites"):
+            self._lib_rewrite(res["rewrites"])
+        if res.get("changed"):
+            self._lib_changed()
+        return res
+
+    def _lib_push(self, now=None, force=False):
+        """Spoke side: this relay's publishers' rows to the hub -- the full snapshot when they changed (or the hub asks), else a
+        keepalive of ages every LIB_PUSH_KEEPALIVE_S. -> True (sent), False (the hub did not take it), None (nothing to do)."""
+        now = time.time() if now is None else now
+        reg = self._lib_reg()
+        ver, rows, gone = reg.snapshot(now)
+        st = self.__dict__.setdefault("_lib_pushed", {"ver": None, "at": 0.0, "stills": {}, "need": True, "ever": False})
+        if not rows and not gone and not st["ever"]:
+            return None
+        stills = reg.stills_since(st["stills"])
+        full = force or st["need"] or ver != st["ver"]
+        if not full and not stills and now - st["at"] < LIB_PUSH_KEEPALIVE_S:
+            return None
+        body = {"op": "library", "node": self._lib_node(), "name": self._lib_name(), "ver": ver}
+        if full:
+            body.update(rows=rows, gone=gone, full=True)
+        else:
+            body["ages"] = reg.ages(now)
+        if stills:
+            body["stills"] = stills
+        out = self._hub_fed(body, timeout=6)
+        st["at"] = now
+        if out is None:
+            st["need"] = True
+            return False
+        d, code = out
+        if code != 200:
+            st["need"] = True
+            if now - float(self.__dict__.get("_lib_push_said") or 0) > 600:
+                self._lib_push_said = now
+                self.log("relay library: the hub did not take this relay's library rows (%s %s)" % (code, str(d.get("error") or "")[:80]))
+            return False
+        st.update(ver=ver, need=bool(d.get("need")), ever=True)
+        for p, s in stills.items():
+            st["stills"][p] = s["v"]
+        if d.get("need") and not full:
+            return self._lib_push(now, force=True)
+        return True
+
+    def _lib_wake(self):
+        ev = self.__dict__.get("_lib_wake_ev")
+        if ev is None:
+            with _XS_INIT_LOCK:
+                ev = self.__dict__.setdefault("_lib_wake_ev", threading.Event())
+        return ev
+
+    def _lib_loop(self):
+        """Every 5 s (and at once when a heartbeat changed something): forget silent publishers; a spoke pushes its rows to the
+        hub (never inside a publisher's request -- a dark hub must not hold its heartbeat); the hub ages its catalogue."""
+        last_tick = 0.0
+        ev = self._lib_wake()
+        while not self._board_stop.is_set():
+            ev.wait(5.0)
+            ev.clear()
+            if self._board_stop.is_set():
+                return
+            now = time.time()
+            try:
+                reg = self._lib_reg()
+                if reg.prune(now) and not self._xs_spoke():
+                    self._lib_ingest_local(now)
+                if self._xs_spoke():
+                    self._lib_push(now)
+                elif now - last_tick >= 30:
+                    last_tick = now
+                    boards, _d = self._board_view(now)
+                    if self._lib_book().tick(now, set(lib_used_in(boards))):
+                        self._lib_changed()
+                    self._lib_rewrite(self._lib_book().aka_map())   # a board naming an old path again follows (idempotent)
+            except Exception as e:
+                if now - float(self.__dict__.get("_lib_loop_said") or 0) > 600:
+                    self._lib_loop_said = now
+                    self.log("relay library: round failed: %s" % str(e)[:160])
+
+    def _lib_view(self, now=None):
+        """-> (ver, {path: row}, hubDown, listAt). The hub / a lone relay: its catalogue. A spoke: the hub's copy overlaid with
+        its OWN publishers' rows (seen here at once, even while the hub is dark); a path the copy says is hidden stays hidden."""
+        now = time.time() if now is None else now
+        if not self._xs_spoke():
+            b = self._lib_book()
+            return b.ver, {r["path"]: r for r in b.public_rows(now, admin=True)}, False, None
+        m = self._lib_mirror()
+        rows = {p: dict(r) for p, r in (m.get("rows") or {}).items()}
+        reg = self._lib_reg()
+        lver, local, gone = reg.snapshot(now)
+        me, name = self._lib_node(), self._lib_name()
+        for r in local:
+            p = r["path"]
+            cur = rows.get(p) or {}
+            seen = now - float(r.get("age") or 0)
+            row = dict(cur, path=p, host=r["host"], node=me, kind=r.get("kind"), by=r.get("by") or "", box=r.get("box") or "",
+                       low=bool(r.get("low")), audio=bool(r.get("audio")), res=r.get("res") or "", state=r.get("state"),
+                       since=int(now - float(r.get("sinceAge") or 0)), seen=int(seen), online=now - seen < LIB_TTL, reach=True,
+                       stillV=r.get("stillV") or cur.get("stillV") or 0, aka=sorted(set(cur.get("aka") or []) | set(r.get("aka") or [])))
+            if not cur.get("edited"):
+                row["label"] = r.get("label")
+            row["site"] = cur.get("site") or r.get("site") or lib_site_default(name, me)
+            row.pop("gone", None)
+            rows[p] = row
+        for g in gone:
+            if g["path"] in rows:
+                rows[g["path"]] = dict(rows[g["path"]], gone=True, online=False, **({"moved": g["moved"]} if g.get("moved") else {}))
+        down = now - float(m.get("heard") or 0) > LIB_MIRROR_FRESH
+        return "%s~%d" % (m.get("ver"), lver), rows, down, _int0(m.get("at"))
+
+    def library_known(self, path, now=None):
+        """-> (entry path, None) for a library stream a room may add (an old path resolves through its aka), or (None, why)."""
+        if not self._xs_spoke():
+            return self._lib_book().known(path)
+        _v, rows, _down, _at = self._lib_view(now)
+        r = rows.get(path) or next((x for x in rows.values() if path in (x.get("aka") or [])), None)
+        if r is None:
+            return None, "that stream is not in the stream library"
+        if r.get("hidden"):
+            return None, "an admin hid that stream from the stream library"
+        if r.get("gone"):
+            return None, "that stream is no longer in the stream library"
+        return r["path"], None
+
+    def _lib_reader(self, bearer=None, jwt=None, peer="", now=None):
+        """Who reads the catalogue -> ({scope: "lib" | [paths], admin}, None) or (None, (reply, code)). A member token of any
+        room (not the Lobby), a library viewer or publisher token, a federation token, or the relay box's own page."""
+        now = time.time() if now is None else now
+        tok = str(bearer or "")
+        tok = tok[7:].strip() if tok.lower().startswith("bearer ") else ""
+        tok = tok or str(jwt or "")
+        if not tok:
+            if is_loopback_addr(peer):
+                return {"scope": LIB_ROOT, "admin": True}, None
+            return None, ({"ok": False, "error": "a member token is required"}, 403)
+        claims = verify_token(tok, self.key, now)
+        if not claims:
+            return None, ({"ok": False, "error": "token refused"}, 403)
+        if is_relay_claims(claims):
+            return {"scope": LIB_ROOT, "admin": False}, None
+        bans = getattr(self, "bans", None)
+        if claims.get("libv"):
+            g = claims.get("get")
+            return {"scope": g if isinstance(g, (str, list)) else [], "admin": False}, None
+        if claims.get("lib"):
+            if bans and bans.hit(LIB_ROOT, str(claims["lib"]), peer, now):
+                return None, ({"ok": False, "error": "removed from the stream library by an admin"}, 403)
+            return {"scope": LIB_ROOT, "admin": False}, None
+        room, host = claims_identity(claims)
+        if room and bans and bans.hit(room, host, peer, now):
+            return None, ({"ok": False, "error": self.REVOKED_TEXT}, 403)
+        boards = listed = None
+        if claims.get("inv") or claims.get("pg"):
+            boards, _d = self._board_view(now)
+            listed = self._xs_view(now)[0].into(room, now) if room else []
+        scope = library_scope(claims, room, boards, listed)
+        if scope is None:
+            return None, ({"ok": False, "error": "the Lobby has no stream library -- join a room first"}, 403)
+        return {"scope": scope, "admin": claims_admin_any(claims)}, None
+
+    def library_get(self, q, bearer=None, jwt=None, peer=""):
+        """GET /api/library?since=<ver>&paths=<a,b> -> {ok, root, on, ver, rows | same, hubDown?, listAt?, admin?, missing?}.
+        `since` == ver answers {same: true} (the panel polls every 15 s while open); `paths` answers just those (an old path
+        resolves through its aka -- the row carries `alias`). Hidden rows only for admins (flagged)."""
+        now = time.time()
+        q = q if isinstance(q, dict) else {}
+        who, err = self._lib_reader(bearer, jwt, peer, now)
+        if err:
+            return err
+        on, why = self.library_state(now)
+        ver, rows, down, at = self._lib_view(now)
+        out = {"ok": True, "root": LIB_ROOT, "on": on, "ver": ver}
+        if why:
+            out["why"] = why
+        if down:
+            out["hubDown"], out["listAt"] = True, at
+        if who["admin"]:
+            out["admin"] = True
+        if not on:
+            out["rows"] = []
+            return out, 200
+        paths = [x for x in str(q.get("paths") or "").split(",") if x][:256]
+        since = str(q.get("since") or "")
+        if since and since == ver and not paths:
+            out["same"] = True
+            return out, 200
+        scope = who["scope"]
+        allow = None if scope == LIB_ROOT else set(scope if isinstance(scope, list) else [])
+        try:
+            used = lib_used_in(self._board_view(now)[0])
+        except Exception:
+            used = {}
+
+        def vis(r):
+            return (who["admin"] or not r.get("hidden")) and (allow is None or r["path"] in allow)
+        if paths:
+            sel, missing = [], []
+            for x in paths:
+                r = rows.get(x) or next((y for y in rows.values() if x in (y.get("aka") or [])), None)
+                if r is None or not vis(r) or (allow is not None and x not in allow and r["path"] not in allow):
+                    missing.append(x)
+                    continue
+                sel.append(dict(r, usedIn=used.get(r["path"], 0), **({"alias": x} if x != r["path"] else {})))
+            out["rows"] = sel
+            if missing:
+                out["missing"] = missing
+            return out, 200
+        out["rows"] = [dict(r, usedIn=used.get(r["path"], 0)) for r in rows.values() if vis(r)]
+        return out, 200
+
+    def library_still(self, q, bearer=None, jwt=None, peer=""):
+        """GET /api/library/still?path=&v= -> (jpeg bytes, 200) or (reply, code). A spoke serves its own publishers' stills and
+        fetches the rest from the hub lazily (kept LIB_STILL_CACHE_S)."""
+        now = time.time()
+        q = q if isinstance(q, dict) else {}
+        who, err = self._lib_reader(bearer, jwt, peer, now)
+        if err:
+            return err
+        path = str(q.get("path") or "")
+        if not lib_path_ok(path):
+            return {"ok": False, "error": "path required (lib/<host>/.../<name>.hang)"}, 400
+        scope = who["scope"]
+        if scope != LIB_ROOT and path not in (scope if isinstance(scope, list) else []):
+            return {"ok": False, "error": "not a stream this token reads"}, 403
+        on, why = self.library_state(now)
+        if not on:
+            return {"ok": False, "off": True, "error": why}, 403
+        _v, rows, _d, _a = self._lib_view(now)
+        r = rows.get(path)
+        if r is None or (r.get("hidden") and not who["admin"]):
+            return {"ok": False, "error": "no such stream in the library"}, 404
+        s = self._lib_reg().still(path)
+        if s is None and not self._xs_spoke():
+            s = self._lib_book().still(path)
+        if s is None and self._xs_spoke():
+            cache = self.__dict__.setdefault("_lib_still_cache", {})
+            hit = cache.get(path)
+            if hit and now - hit[0] < LIB_STILL_CACHE_S:
+                s = hit[1]
+            else:
+                out = self._hub_fed({"op": "libraryStill", "path": path}, timeout=4)
+                data = lib_still_clean((out[0] or {}).get("b64")) if out and out[1] == 200 else None
+                s = (_int0(out[0].get("v")), data) if data else None
+                cache[path] = (now, s)
+                if len(cache) > 512:
+                    for k in sorted(cache, key=lambda k: cache[k][0])[:256]:
+                        cache.pop(k, None)
+        if not s:
+            return {"ok": False, "error": "no still yet"}, 404
+        return s[1], 200
+
+    def library_post(self, p, bearer, peer=""):
+        """POST /api/library -- a publisher's heartbeat. Bearer = a library publisher token (POST /api/token {library: true});
+        body {rows: [{path, label, kind, state, low?, audio?, res?, meta?, aka?}], stop?: [path], moved?: {path: room path},
+        stills?: {path: base64 JPEG}, box?, site?} -> {ok, accepted, refused, stopped, ver, every, expires} (+ hubDown)."""
+        now = time.time()
+        p = p if isinstance(p, dict) else {}
+        tok = str(bearer or "")
+        tok = tok[7:].strip() if tok.lower().startswith("bearer ") else ""
+        claims = verify_token(tok, self.key, now) if tok else None
+        host = str((claims or {}).get("lib") or "")
+        if not claims or not HOST_RE.match(host):
+            return {"ok": False, "error": "a library publisher token is required (POST /api/token {library: true, code, host})"}, 403
+        bans = getattr(self, "bans", None)
+        if bans and bans.hit(LIB_ROOT, host, peer, now):
+            return {"ok": False, "error": "removed from the stream library by an admin"}, 403
+        rows = p.get("rows") if isinstance(p.get("rows"), list) else []
+        stop = p.get("stop") if isinstance(p.get("stop"), list) else []
+        on, why = self.library_state(now)
+        reg = self._lib_reg()
+        if rows and on and reg.too_soon(host, now):
+            return {"ok": False, "error": "at most one heartbeat every %d s" % LIB_BEAT_MIN_S, "retryAfter": LIB_BEAT_MIN_S}, 429
+        res = reg.beat(host, rows if on else [], stop, p.get("moved"), p.get("stills") if on else None,
+                       p.get("box") or "", p.get("site") or "", now)
+        if res["changed"] or p.get("stills"):
+            if self._xs_spoke():
+                self._lib_wake().set()   # the push loop takes it to the hub now
+            else:
+                self._lib_ingest_local(now)
+        elif not self._xs_spoke() and res["accepted"]:   # nothing new: the catalogue's `seen` follows (no version change)
+            kr = self._lib_book().node_keepalive(self._lib_node(), reg.ver, reg.ages(now), None, now)
+            if kr.get("need"):
+                self._lib_ingest_local(now)
+        out = {"ok": True, "accepted": res["accepted"], "refused": res["refused"], "stopped": res["stopped"],
+               "ver": reg.ver, "every": 60, "expires": int(now + LIB_TTL)}
+        if res["accepted"] and (res["changed"] or now - float(self.__dict__.get("_lib_said", {}).get(host, 0)) > 3600):
+            said = self.__dict__.setdefault("_lib_said", {})
+            if now - said.get(host, 0) > 3600 or res["changed"]:
+                said[host] = now
+                self.log("relay library: %s keeps %d stream(s) in the library%s" % (host, len(res["accepted"]),
+                         (" (%d refused)" % len(res["refused"])) if res["refused"] else ""))
+        if self._xs_spoke() and now - float(self._lib_mirror().get("heard") or 0) > LIB_MIRROR_FRESH:
+            out["hubDown"] = True
+        if not on:
+            out.update(ok=False, off=True, error=why)
+            return out, 403
+        return out, 200
+
+    def library_token_api(self, p, bearer, peer=""):
+        """POST /api/library/token, Bearer = a member token of any room of this relay (not the Lobby) -> a LIBRARY VIEWER token
+        {root: "", get: <scope>, put: [], libv: 1} for the page's one library connection. Scope (library_scope): the whole
+        library for members (viewers too); for invite-link and personal-room guests only the lib/ paths their room's board and
+        listings reference (re-mint when `boardVer` moves). Never longer than the member token."""
+        now = int(time.time())
+        claims = self._member_claims(bearer)
+        if claims is None:
+            return {"ok": False, "error": "a member token of a room on this relay is required"}, 403
+        if claims.get("lib") or claims.get("libv") or claims.get("vehicle"):
+            return {"ok": False, "error": "a member token of a room is required"}, 403
+        room, host = claims_identity(claims)
+        if claims.get("lobby") or not room or room == LOBBY_SLUG:
+            return {"ok": False, "error": "the Lobby has no stream library -- join a room first"}, 403
+        if self.bans and self.bans.hit(room, host, peer):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        on, why = self.library_state(now)
+        if not on:
+            return {"ok": False, "off": True, "error": why}, 403
+        boards, _d = self._board_view(now)
+        listed = self._xs_view(now)[0].into(room, now)
+        scope = library_scope(claims, room, boards, listed)
+        if scope is None:
+            return {"ok": False, "error": "this token reads no stream library"}, 403
+        try:
+            exp = min(int(float(claims.get("exp"))), now + VIEWER_TTL)
+        except (TypeError, ValueError):
+            exp = now + VIEWER_TTL
+        tok = _mint(self.key, {"root": "", "get": scope, "put": [], "libv": 1, "room": room, "iat": now, "exp": exp})
+        out = {"ok": True, "token": tok, "exp": exp, "root": LIB_ROOT, "scope": "all" if scope == LIB_ROOT else "room",
+               "room": room, "boardVer": self._board_ver()}
+        if scope != LIB_ROOT:
+            out["paths"] = scope
+        return out, 200
+
+    def _library_token(self, p, peer=""):
+        """0.21.84: POST /api/token {library: true, code, host} -> a LIBRARY PUBLISHER token: publishes under lib/<host> only,
+        reads the library ({root: "", get: "lib", put: ["lib/<host>"], lib: <host>}). The publisher or admin access code (here,
+        or the hub's admin code); a legacy secured relay (no codes yet) mints as today. Never for a viewer code or an invite."""
+        host = str(p.get("host") or "")
+        if not HOST_RE.match(host):
+            return {"ok": False, "error": "a library publisher token names its host (<name>-<4 hex>)"}, 400
+        if p.get("invite") not in (None, ""):
+            return {"ok": False, "error": "an invite link never publishes to the stream library"}, 403
+        b = self.bans.hit(LIB_ROOT, host, peer) if self.bans else None
+        if b:
+            return {"ok": False, "error": "removed from the stream library by an admin", "until": int(b.get("until") or 0)}, 403
+        wait = self.locked_for(peer)
+        if wait:
+            return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        on, why = self.library_state()
+        if not on:
+            return {"ok": False, "library": "off", "error": why}, 403
+        access = str(p.get("code") or "")
+        if self.store.configured():
+            if self.store.check("publisher", access):
+                role = "publisher"
+            elif self.store.check("admin", access) or self._hub_admin_ok(access):
+                role = "admin"
+            elif self.store.check("viewer", access):
+                return {"ok": False, "error": "viewers cannot publish to the stream library -- the publisher code is needed"}, 403
+            else:
+                return self._fail(peer, "wrong access code", LIB_ROOT)
+        else:
+            role = "publisher"
+        self._ok(peer)
+        now = int(time.time())
+        exp = now + TOKEN_TTL
+        tok = _mint(self.key, {"root": "", "get": LIB_ROOT, "put": [LIB_ROOT + "/" + host], "lib": host, "iat": now, "exp": exp})
+        return {"ok": True, "exp": exp, "role": role, "ns": NS, "library": True, "root": LIB_ROOT,
+                "tokens": {"member": tok}}, 200
+
+    def library_admin_api(self, p, bearer, peer=""):
+        """POST /api/library/admin {op: hide|unhide|label|site|remove, path?, label?, node?, site?, host?, until?, by?} -- an
+        admin (an admin code's member token, any room) or the relay box's own page. The hub keeps the result (fleet-wide); a
+        spoke vouches for the admin and forwards; a dark hub refuses (fail closed). `remove` bans (lib, host) like a kick."""
+        p = p if isinstance(p, dict) else {}
+        op = str(p.get("op") or "")
+        if op not in LIB_ADMIN_OPS:
+            return {"ok": False, "error": "unknown op (%s)" % "|".join(LIB_ADMIN_OPS)}, 400
+        claims = self._member_claims(bearer)
+        admin = is_loopback_addr(peer) or (claims is not None and claims_admin_any(claims))
+        if not admin:
+            return {"ok": False, "error": "only an admin can change the stream library"}, 403
+        by = clean_label(p.get("by"), 40) or (claims_identity(claims)[1] if claims else "") or "operator"
+        body = {k: p.get(k) for k in ("op", "path", "label", "node", "site", "host", "until") if p.get(k) is not None}
+        body["by"] = by
+        if self._xs_spoke():
+            out = self._hub_fed({"op": "libraryAdmin", "vouch": "admin", "body": body}, timeout=6)
+            if out is None:
+                return {"ok": False, "hubDown": True, "error": LIB_HUB_DOWN}, 503
+            d, code = out
+            if code == 400 and d.get("error") == "bad room":
+                return {"ok": False, "error": "the hub runs an older KASTR without the stream library -- update the hub first"}, 501
+            if code == 200 and op in ("hide", "unhide", "label"):   # seen here at once; the next long-poll brings the hub's own
+                m = self._lib_mirror()
+                r = m["rows"].get(str(d.get("path") or p.get("path") or ""))
+                if r is not None:
+                    if op == "label":
+                        r["label"] = _xs_text(p.get("label"), 80) or r.get("label")
+                    elif op == "hide":
+                        r["hidden"] = True
+                    else:
+                        r.pop("hidden", None)
+            return d, code
+        return self._lib_admin_local(body)
+
+    def _lib_admin_local(self, body):
+        """Hub side of an admin op (the caller checked the admin)."""
+        body = body if isinstance(body, dict) else {}
+        op, by = str(body.get("op") or ""), clean_label(body.get("by"), 40) or "admin"
+        b = self._lib_book()
+        if op == "remove":
+            host = str(body.get("host") or "")
+            if not HOST_RE.match(host):
+                return {"ok": False, "error": "`host` names the publisher (<name>-<4 hex>)"}, 400
+            now = int(time.time())
+            until = now + min(86400, max(60, _int0(body.get("until")) or 86400))
+            ids, remotes = self.revoke_sessions(LIB_ROOT, host)
+            ban = {"room": LIB_ROOT, "host": host, "remotes": remotes[:16], "target": host + "/library", "by": by,
+                   "at": now, "until": until, "via": "local"}
+            self.bans.add(ban)
+            how = self.trigger_revalidate()
+            threading.Thread(target=self.fanout_bans, daemon=True).start()
+            self.log("relay library: %s removed publisher %s from the stream library until %s (%d session(s))"
+                     % (by, host, time.strftime("%H:%M:%S", time.localtime(until)), len(ids)))
+            return {"ok": True, "op": op, "host": host, "until": until, "revalidate": how}, 200
+        if op not in LIB_ADMIN_OPS:
+            return {"ok": False, "error": "unknown op (%s)" % "|".join(LIB_ADMIN_OPS)}, 400
+        path = b.resolve(body.get("path")) if op != "site" else None
+        why, code = b.admin(op, path=path or body.get("path"), node=body.get("node"), label=body.get("label"),
+                            site=body.get("site"), by=by)
+        if why:
+            return {"ok": False, "error": why}, code
+        self.log("relay library: %s %s %s" % (by, op, path or body.get("node") or ""))
+        self._lib_changed()
+        return {"ok": True, "op": op, "path": path, "node": body.get("node"), "ver": b.ver}, 200
+
+    def _lib_fed(self, op, p):
+        """Hub side of rooms_fed ops "library" (a spoke's rows), "libraryAdmin" (vouch "admin"), "libraryStill"."""
+        p = p if isinstance(p, dict) else {}
+        b = self._lib_book()
+        if op == "libraryStill":
+            s = b.still(str(p.get("path") or ""))
+            if not s:
+                return {"ok": False, "error": "no still yet"}, 404
+            return {"ok": True, "v": s[0], "b64": base64.b64encode(s[1]).decode("ascii")}, 200
+        if op == "libraryAdmin":
+            if p.get("vouch") != "admin":
+                return {"ok": False, "error": "the spoke must vouch for an admin"}, 403
+            return self._lib_admin_local(p.get("body"))
+        node = mesh_slug(p.get("node"), 64)
+        if not node:
+            return {"ok": False, "error": "`node` names the relay"}, 400
+        now = time.time()
+        if p.get("full") or isinstance(p.get("rows"), list):
+            res = b.node_push(node, p.get("name") or "", p.get("ver"), p.get("rows") or [], p.get("gone") or [], p.get("stills"), now, full=True)
+            if res.get("rewrites"):
+                self._lib_rewrite(res["rewrites"])
+            if res.get("changed"):
+                self._lib_changed()
+            return {"ok": True, "ver": res["ver"]}, 200
+        res = b.node_keepalive(node, p.get("ver"), p.get("ages"), p.get("stills"), now)
+        if res.get("changed"):
+            self._lib_changed()
+        return {"ok": True, "need": bool(res.get("need")), "ver": res["ver"]}, 200
+
+    def library_poll_fields(self, since):
+        """The bans long-poll's library part for a spoke that sent `libSince`: the version and switch always; the rows (hidden
+        ones flagged) only when its copy is older (older spokes never send libSince, so their reply never grows)."""
+        on, why = self.library_state()
+        b = self._lib_book()
+        out = {"libraryVer": b.ver, "libraryOn": on, "libraryWhy": why}
+        if str(since) != b.ver:
+            out["library"] = {"ver": b.ver, "on": on, "why": why, "rows": b.public_rows(admin=True), "at": int(time.time())}
+        return out
+
+    def library_mirror_apply(self, d):
+        """Spoke side: the hub's long-poll reply (to a request with libSince) -> our copy of its catalogue + switch, kept in
+        hub-library.json. A reply without `libraryVer` = a hub older than 0.21.84 (the library stays off here)."""
+        if not isinstance(d, dict):
+            return
+        m = self._lib_mirror()
+        now = time.time()
+        if "libraryVer" not in d:
+            if m.get("on") is not None:
+                m.update(on=None, why="", heard=now)
+                self._lib_mirror_save(m)
+            return
+        m["heard"] = now
+        changed = False
+        on, why = bool(d.get("libraryOn")), str(d.get("libraryWhy") or "")[:200]
+        if m.get("on") != on or m.get("why") != why:
+            m.update(on=on, why=why)
+            changed = True
+        lib = d.get("library")
+        if isinstance(lib, dict) and isinstance(lib.get("rows"), list):
+            rows = {}
+            for r in lib["rows"][:LIB_MAX]:
+                x = lib_mirror_row(r)
+                if x is not None:
+                    rows[x["path"]] = x
+            m.update(rows=rows, ver=lib.get("ver"), at=_int0(lib.get("at")) or int(now))
+            changed = True
+        if changed:
+            self._lib_mirror_save(m)
+
+    def _lib_mirror_save(self, m):
+        try:
+            save_json(self._lib_mirror_path(), {"ver": m.get("ver"), "on": m.get("on"), "why": m.get("why"),
+                                                "rows": list((m.get("rows") or {}).values()), "at": m.get("at")}, None, backup=False)
+        except Exception:
+            pass
+
+    def library_operator_view(self):
+        """GET /api/relay/library (the Relay page, this machine only): the switch, the pre-flight, sites, conflicts, counts and
+        every entry (hidden ones flagged)."""
+        now = time.time()
+        on, why = self.library_state(now)
+        spoke = self._xs_spoke()
+        ver, rows, down, at = self._lib_view(now)
+        out = {"ok": True, "hub": not spoke, "on": on, "why": why, "root": LIB_ROOT, "minVersion": LIB_MIN_VERSION, "ver": ver,
+               "entries": sorted(rows.values(), key=lambda r: (r.get("site") or "", r.get("box") or "", r.get("label") or "")),
+               "local": len(self._lib_reg().rows)}
+        out["counts"] = {"entries": len(rows), "live": sum(1 for r in rows.values() if r.get("online") and r.get("state") == "live"),
+                         "hidden": sum(1 for r in rows.values() if r.get("hidden")),
+                         "offline": sum(1 for r in rows.values() if not r.get("online"))}
+        if spoke:
+            out.update(hubDown=down, listAt=at)
+            return out, 200
+        b = self._lib_book()
+        try:
+            room = self.store.room(LIB_ROOT) if hasattr(self.store, "room") else None
+        except Exception:
+            room = None
+        out.update(switch=bool(b.on), switchAt=b.switch_at, sites=b.sites_public(), conflicts=b.conflicts(),
+                   preflight={"ok": room is None, "why": "" if room is None else 'a room named "lib" exists -- rename it'})
+        return out, 200
+
+    def library_operator(self, p):
+        """POST /api/relay/library (this machine only): {on: bool} -- the fleet switch (the hub only); {op, ...} -- an admin op
+        as the relay operator."""
+        p = p if isinstance(p, dict) else {}
+        if "on" in p and not p.get("op"):
+            if self._xs_spoke():
+                return {"ok": False, "error": "the stream library's fleet switch is on the hub's Relay page"}, 409
+            if self._lib_book().set_on(p.get("on") is True):
+                self.log("relay library: the operator switched the stream library %s for the fleet" % ("ON" if p.get("on") is True else "OFF"))
+                self._lib_changed()
+            out, _c = self.library_operator_view()
+            return out, 200
+        return self.library_admin_api(p, None, "127.0.0.1")
+
+    def library_auth_fields(self):
+        """GET /api/auth's capability flag: `library` 1 when pages and publishers here may use the stream library now (this
+        relay and its hub both run 0.21.84+, the fleet switch is on, no room is named "lib"), `libRoot`, and why not."""
+        try:
+            on, why = self.library_state()
+        except Exception as e:
+            on, why = False, str(e)[:120]
+        out = {"library": 1 if on else 0, "libRoot": LIB_ROOT, "libMin": LIB_MIN_VERSION}
+        if why:
+            out["libraryWhy"] = why
+        return out
+
+    def _lib_add_ok(self, path, now=None):
+        """A room adds a library stream (pin, room grid camera) -> (entry path, None) or (None, (reply, code)): the library
+        must be on and the stream a known entry no admin hid (an old path resolves to its entry)."""
+        on, why = self.library_state(now)
+        if not on:
+            return None, ({"ok": False, "off": True, "error": why}, 403)
+        np, why = self.library_known(path, now)
+        if why:
+            return None, ({"ok": False, "error": why}, 404 if "not in" in why else 403)
+        return np, None
+
+    def _lib_board_check(self, room, op, item, now=None):
+        """Board ops naming library streams: a pin from "lib", a room grid's NEW library cameras -> None, or (reply, code).
+        Rewrites an old path (aka) to its entry's path in `item`."""
+        if op == "pin" and item.get("from") == LIB_ROOT:
+            np, err = self._lib_add_ok(item.get("path"), now)
+            if err:
+                return err
+            item["path"] = np
+            return None
+        if op == "cgrid":
+            try:
+                old = ((self._board_view(now)[0].get(room) or {}).get("customGrids") or {}).get(item.get("id")) or {}
+            except Exception:
+                old = {}
+            had = {mp for s in old.get("slots") or [] for mp in s.get("cams") or []}
+            slots = (item.get("grid") or {}).get("slots") or []
+            for mp in sorted({mp for s in slots for mp in s.get("cams") or [] if lib_is(mp) and mp not in had}):
+                np, err = self._lib_add_ok(mp, now)
+                if err:
+                    return err
+                if np != mp:
+                    for s in slots:
+                        s["cams"] = [np if x == mp else x for x in s.get("cams") or []]
+        return None
 
     # ---- 0.21.41: cross-room listings ("share to several rooms") ------------------------------------------
     # POST /api/xshare (Bearer = a member token of the stream's room A, `tokens` = one member token per target room)
@@ -7143,6 +8850,9 @@ class AuthService:
             if b == room:
                 refused[b] = "the stream's own room"
                 continue
+            if reserved_slug(b):
+                refused[b] = reserved_slug(b)   # 0.21.84: never into the library or a box's home room
+                continue
             c = verify_token(str(toks.get(b) or ""), self.key, now)
             if not c or is_relay_claims(c):
                 refused[b] = "no valid member token for that room"
@@ -7226,6 +8936,8 @@ class AuthService:
                 refused[b] = "bad room name"
             elif b == frm:
                 refused[b] = "the stream's own room"
+            elif reserved_slug(b):
+                refused[b] = reserved_slug(b)   # 0.21.84
             else:
                 ok_to.append(b)
         acc, ref = self._xs_local(path, frm, ok_to, label, kind, by, now, via="via a spoke") if ok_to else ([], {})
@@ -7255,7 +8967,7 @@ class AuthService:
             return {"ok": False, "error": "a member token for this room is required"}, 403
         reg, down = self._xs_view(now)
         items = [dict({k: e.get(k) for k in ("path", "from", "label", "kind", "by", "exp")},
-                      pinned=bool(e.get("pinned")), cg=bool(e.get("cg"))) for e in reg.into(room, now)]   # 0.21.63: + pinned to this room's board; 0.21.66: + cg (only in a room grid)
+                      pinned=bool(e.get("pinned")), cg=bool(e.get("cg")), lib=bool(e.get("lib"))) for e in reg.into(room, now)]   # 0.21.84: + lib (a 0.21.84 page skips those rows)   # 0.21.63: + pinned to this room's board; 0.21.66: + cg (only in a room grid)
         out = {"ok": True, "room": room, "items": items, "ver": reg.ver}
         if down:
             out["hubDown"] = True
@@ -7404,6 +9116,8 @@ class AuthService:
         bans = getattr(self, "bans", None)
         if bans and bans.hit(room, h0, peer, now):
             return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        if reserved_slug(room, h0):
+            return {"ok": False, "error": reserved_slug(room, h0)}, 403   # 0.21.84
         mine = bool(claims.get("personal")) and is_personal(room)   # 0.21.75: My room -- its owner arranges it, whatever their role
         if is_personal(room) and not mine:   # 0.21.78: guests watch + talk; the owner (or the one guest raised to co-arrange) arranges
             if not (claims.get("pg") and h0 and self.personal_co_is(room, h0)):
@@ -7418,7 +9132,13 @@ class AuthService:
             item["by"] = h0 or ""
         boss = claims_admin(claims, room)   # 0.21.65 (m): an admin changes a room whose view is locked (so does its roomKey)
         room_key = str(p.get("roomKey") or "")[:64] or None
-        if op == "pin" and item["from"] != room:
+        if op == "pin" and item["from"] == LIB_ROOT:
+            # 0.21.84: a stream from the library -- no proof token (everyone on the fleet may read it), but a known entry no
+            # admin hid (an old path resolves to its entry); a dark hub refuses below (boards live there)
+            err = self._lib_board_check(room, op, item, now)
+            if err:
+                return err
+        elif op == "pin" and item["from"] != room:
             frm = item["from"]
             c = verify_token(str((p.get("tokens") if isinstance(p.get("tokens"), dict) else {}).get(frm) or ""), self.key, now)
             if not c or is_relay_claims(c) or c.get("lobby") or not claims_cover(c, frm):
@@ -7440,7 +9160,10 @@ class AuthService:
             old = ((self._board_view(now)[0].get(room) or {}).get("customGrids") or {}).get(item["id"]) or {}
             had = {mp for s in old.get("slots") or [] for mp in s.get("cams") or []}
             toks = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
-            for frm in sorted({mp.split("/", 1)[0] for s in item["grid"]["slots"] for mp in s["cams"] if mp not in had} - {room}):
+            err = self._lib_board_check(room, op, item, now)   # 0.21.84: library cameras need no proof, only a known entry
+            if err:
+                return err
+            for frm in sorted({mp.split("/", 1)[0] for s in item["grid"]["slots"] for mp in s["cams"] if mp not in had} - {room, LIB_ROOT}):
                 c = verify_token(str(toks.get(frm) or ""), self.key, now)
                 if not c or is_relay_claims(c) or c.get("lobby") or not claims_cover(c, frm):
                     return {"ok": False, "error": "a camera from %s needs your member token for %s" % (frm, frm)}, 403
@@ -7486,6 +9209,10 @@ class AuthService:
         st = getattr(self, "store", None)
         if not hasattr(st, "board_apply"):
             return {"ok": False, "error": "no room store here"}, 503
+        if not self._xs_spoke():   # 0.21.84: the hub (or a lone relay) has the library's last word -- a spoke's copy may be old
+            err = self._lib_board_check(room, op, item, now)
+            if err:
+                return err
         b, code, err = st.board_apply(room, op, item, now, boss=boss, room_key=room_key)
         if err:
             return {"ok": False, "error": err}, code
@@ -8113,7 +9840,7 @@ class AuthService:
 
     BANS_WAIT_MAX = 30   # 0.20.0: the longest a spoke's long-poll is held (the web-relay proxy allows 40)
 
-    def bans_for_spoke(self, bearer, since=None, wait=0, peer="", node=""):
+    def bans_for_spoke(self, bearer, since=None, wait=0, peer="", node="", lib_since=None):
         """0.18.0: the hub's active bans for a spoke. 0.20.0: with `since` == the current version
         the request is HELD up to `wait` s (max 30) until a ban is added or cleared -- a spoke
         behind a tunnel or NAT, which the hub cannot nudge, learns of a kick within a second."""
@@ -8182,11 +9909,17 @@ class AuthService:
             pfeed = self.personal_feed()
         except Exception:
             pfeed = None
-        return {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver,   # 0.21.0: + the hub's command channel
+        out = {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver,   # 0.21.0: + the hub's command channel
                 "boards": boards, "boardsVer": "%d.%d" % (BOOT_AT, bver), "invRevoked": inv_rev,
                 "personal": pfeed,                                                           # 0.21.78: My room shared
                 "standby": self.standby_public(),                                            # 0.21.53: as STATE (a baseline never hides it)
-                "mesh": self.mesh_for(me_node)}, 200                                          # 0.21.77: the relay mesh, as state too
+                "mesh": self.mesh_for(me_node)}                                               # 0.21.77: the relay mesh, as state too
+        if lib_since is not None:   # 0.21.84: the stream library -- version + switch always, the rows only when the copy is old
+            try:
+                out.update(self.library_poll_fields(lib_since))
+            except Exception as e:
+                self.log("relay library: long-poll part failed: %s" % str(e)[:120])
+        return out, 200
 
     # ---- 0.21.53 (Kenton: "the standby hub") -- the hub side -------------------------------------------------------------
     def standby_public(self):
@@ -8353,6 +10086,7 @@ class AuthService:
             return 0
         q = ("?since=%d&wait=%d" % (int(since), int(wait))) if (since is not None and wait) else ""
         q += ("&" if q else "?") + "node=" + _machine_node()   # 0.21.39: the keep-alive names the machine
+        q += "&libSince=" + re.sub(r"[^0-9.~a-zA-Z-]", "", str(self._lib_mirror().get("ver") or "0"))[:40]   # 0.21.84
         try:
             req = urllib.request.Request(minter + "/api/bans" + q, headers={"Authorization": "Bearer " + tok})
             with urllib.request.urlopen(req, timeout=(float(wait) + 10) if wait else 4) as r:
@@ -8392,6 +10126,7 @@ class AuthService:
         self.board_mirror_apply(d)    # 0.21.63
         self.invite_revoked_apply(d)  # 0.21.75
         self.personal_mirror_apply(d)  # 0.21.78
+        self.library_mirror_apply(d)   # 0.21.84: the stream library's catalogue + the fleet switch
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed
         cmd = d.get("cmd") if isinstance(d.get("cmd"), dict) else None
@@ -11922,6 +13657,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/vehicles",        # 0.21.63: vehicle API keys
                  "/api/relay/pulltest",        # 0.21.63: fetch one stream cold, time the first byte
                  "/api/relay/links",           # 0.21.77: the Links card's overrides and the hub link cost
+                 "/api/relay/library",         # 0.21.84: the stream library's fleet switch / admin ops (the hub's operator)
                  "/api/relay/standby")         # 0.21.53
 
 
@@ -12059,6 +13795,16 @@ def handle_api(handler, relay, path, set_relay_url=None):
         else:
             zq = parse_qs(urlparse(handler.path).query)
             reply(relay.mesh_view(zoom=re.sub(r"[^a-z0-9-]", "", (zq.get("zoom") or [""])[0].lower())[:64]))   # 0.21.78: + one relay's clients
+        return True
+    if path == "/api/relay/library":   # 0.21.84: GET the library card (switch, pre-flight, sites, entries); POST {on} | {op, ...}
+        auth = getattr(relay, "auth", None)
+        if auth is None:
+            reply({"ok": False, "error": "the relay is not running secured on this machine"}, 400)
+            return True
+        if handler.command == "POST":
+            reply(*auth.library_operator(_payload_of(handler) or {}))
+        else:
+            reply(*auth.library_operator_view())
         return True
     if path == "/api/relay/standby":   # 0.21.53 (Kenton: "Make standby" on a spoke's row) {name, address?} | {clear: true}
         reply(*relay.make_standby(_payload_of(handler) or {}))

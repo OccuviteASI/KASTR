@@ -3502,6 +3502,13 @@ def main():
     kastr_rtsp.ONDEMAND_ENABLED = kastr_rtsp.ONDEMAND_ENABLED or str(ini.get("ondemand") or "").strip().lower() in ("1", "true", "yes", "on")
     if str(ini.get("sleep_unwatched") or "").strip().lower() in ("0", "false", "no", "off"):   # 0.21.73: encode only while watched (default on)
         kastr_rtsp.SLEEP_UNWATCHED = False
+    # 0.21.84 (Kenton: the stream library): kastr.ini `library = off` keeps this box's cameras out of the fleet's stream library
+    # (they stay in their rooms / its home room); `library_site = <name>` names its site in the catalogue (default: its relay's)
+    if str(ini.get("library") or "").strip().lower() in ("0", "false", "no", "off"):
+        kastr_rtsp.LIBRARY_ENABLED = False
+        note("library: off (kastr.ini library = off) -- this box's cameras stay out of the stream library")
+    if str(ini.get("library_site") or "").strip():
+        kastr_rtsp.LIBRARY_SITE = " ".join(str(ini.get("library_site")).split())[:48]
     note("ondemand: %s" % ("ON (kastr.ini ondemand / KASTR_ONDEMAND) -- standby pairs and low copies enabled; the same setting must be on at the relay host and every viewer box"
                            if kastr_rtsp.ONDEMAND_ENABLED else
                            "off -- every camera publishes its full pair always (kastr.ini ondemand = on or KASTR_ONDEMAND=1 re-enables)"))

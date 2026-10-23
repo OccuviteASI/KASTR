@@ -15,6 +15,8 @@ Endpoints (wired up by kastr_serve):
     POST /api/rtsp/remove  {"id": 1}              -> {"ok": true}
     GET  /api/rtsp/list                           -> {"feeds": [...], "ffmpeg": bool}
     GET  /rtsp/<id>                               -> endless fragmented MP4
+    GET  /api/rtsp/library                        -> 0.21.84: the box's stream library switches (see Bridge.lib_public)
+    POST /api/rtsp/library {"id", "on": bool|null} | {"master": bool}
 
 Transcoding costs latency -- expect a few hundred ms on top of the sub-100ms
 WebCodecs path. Video is re-encoded to H.264 baseline because that is what
@@ -171,6 +173,120 @@ def _xs_fields(feed):
     if codes:
         out["xsCodes"] = codes
     return out
+
+# ---- 0.21.84 (Kenton: "No-room box cameras join the library automatically on update, with the alias rewrite. New cameras added
+# to a no-room box default to on." and "Boxes in a real room stay off by default; switching a camera on moves it to lib/ with
+# the same alias rewrite, and the box lists it back into its own room."): the box side of the STREAM LIBRARY. A camera in the
+# library publishes at lib/<host>/<op>/<leaf>.hang (the tail of its room path) on a library publisher token, and the box server
+# heartbeats it to its relay (POST /api/library: every 60 s and at once when a camera starts / stops streaming; a 160x90 still
+# every 5 minutes while it is live and on every state change). A camera moves only once its relay reports the library
+# (/api/auth `library: 1` -- that relay's hub agrees); its old path rides the heartbeat as `aka` (the hub rewrites every room
+# board naming it). kastr.ini `library = off` (or KASTR_LIBRARY=0) keeps this box out; `library_site` names its site.
+LIBRARY_ENABLED = str(os.environ.get("KASTR_LIBRARY") or "on").strip().lower() not in ("0", "false", "no", "off")
+LIBRARY_SITE = ""            # kastr.ini library_site: this box's own site name in the catalogue ("" = its relay's)
+LIB_ROOT = "lib"
+LIB_BEAT_S = 60              # every library camera is heartbeaten this often (the relay keeps a row LIB_TTL = 180 s)
+LIB_BEAT_MIN_S = 10          # ... never more often (the relay refuses faster heartbeats; stops are never held back)
+LIB_AIR_CHECK_S = 10         # how often the loop looks for a camera that started / stopped streaming
+LIB_CAP_S = 60               # the relay's "library: 1" is asked again this often
+LIB_STILL_EVERY_S = 300      # a still per live camera this often (and on each state change)
+LIB_STILL_MAX = 12 * 1024
+LIB_AKA_KEEP_S = 90 * 86400  # an old path rides the heartbeat this long
+LIB_TOKEN_MIN_S = 600        # a cached library token is re-minted once it ends within this
+LIB_STILL_VF = "scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2"
+
+
+def lib_path_of(broadcast):
+    """0.21.84: a camera's room path -> its library path (the same tail): <room>/<host>/<op>/<leaf>.hang -> lib/<host>/<op>/<leaf>.hang."""
+    segs = str(broadcast or "").split("/")
+    if len(segs) < 3 or not segs[-1].endswith(".hang"):
+        return None
+    return "/".join([LIB_ROOT] + segs[1:])
+
+
+def is_lib(path):
+    """0.21.84: a path in the stream library."""
+    return str(path or "").startswith(LIB_ROOT + "/")
+
+
+def lib_kind(url):
+    """0.21.84: the catalogue's kind of a box feed."""
+    u = str(url or "").lower()
+    if is_device(u):
+        return "camera"
+    if is_hostmedia(u) or u.startswith(("http://", "https://")):
+        return "media"
+    return "rtsp"
+
+
+def lib_state(pub, now=None):
+    """0.21.84: what the catalogue says of a camera -- "asleep" (encodes only while watched, or on demand: a viewer's click wakes
+    it), "live" (streaming), "dark" (switched off, or running against a camera that sends nothing)."""
+    if getattr(pub, "suspended", False) or getattr(pub, "stopping", False):
+        return "dark"
+    if getattr(pub, "standby", False) and (getattr(pub, "sleepy", False) or getattr(pub, "ondemand", False)):
+        return "asleep"
+    return "live" if xs_on_air(pub, now) else "dark"
+
+
+def _lib_fields(feed):
+    """0.21.84: a feed's library switch, old paths and auto-listed room for its rtsp-feeds.json record -- {} when it has none."""
+    out = {}
+    v = getattr(feed, "lib", None)
+    if v is not None:
+        out["lib"] = bool(v)
+    aka = getattr(feed, "lib_aka", None)
+    if isinstance(aka, dict) and aka:
+        out["libAka"] = {str(k): int(t) for k, t in aka.items()}
+    if getattr(feed, "xs_auto", None):
+        out["xsAuto"] = str(feed.xs_auto)
+    return out
+
+
+def mint_library(relay_url, access, host, timeout=5):
+    """0.21.84: a LIBRARY PUBLISHER token from the relay's minter (POST /api/token {library: true, code, host}) -> (status, url,
+    detail) like mint_member: "token" (url carries ?jwt=), "off" (the library is switched off there), "refused", "down"."""
+    parts, why = _relay_base(relay_url)
+    if not parts:
+        return "down", None, why
+    base, minter = parts
+    body = {"library": True, "code": str(access or ""), "host": str(host or "")}
+    req = urllib.request.Request(minter + "/api/token", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.loads(e.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            d = {}
+        err = str(d.get("error") or "") if isinstance(d, dict) else ""
+        if e.code == 403 and isinstance(d, dict) and d.get("library") == "off":
+            return "off", None, err or "the stream library is switched off"
+        if e.code in (400, 403):
+            return "refused", None, err or "refused"
+        return "down", None, "minter answered %d%s" % (e.code, (" (%s)" % err) if err else "")
+    except Exception as e:
+        return "down", None, str(e)
+    tok = (d.get("tokens") or {}).get("member") if isinstance(d, dict) else None
+    if not tok or not d.get("library"):
+        return "down", None, "the minter answered without a library token (an older relay?)"
+    return "token", base + ("" if base.endswith("/relay") else "/") + "?jwt=" + str(tok), str(d.get("role") or "publisher")
+
+
+def relay_library(relay_url, timeout=3):
+    """0.21.84: does this relay serve the stream library now (GET /api/auth `library`: 1 -- it and its hub run 0.21.84+, the fleet
+    switch is on, no room is named "lib")? -> True / False / None (it did not answer)."""
+    parts, _why = _relay_base(relay_url)
+    if not parts:
+        return None
+    try:
+        with urllib.request.urlopen(parts[1] + "/api/auth", timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+    except Exception:
+        return None
+    return bool(isinstance(d, dict) and d.get("secured") and d.get("library") == 1)
 
 # Longest a write to a stream reader may block. A browser that stops reading
 # (frozen demuxer, wedged tab, abandoned socket) used to block wfile.write()
@@ -1718,7 +1834,16 @@ class Publisher:
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
                 "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
                 "flowingAt": self.flowingAt,                                         # 0.21.31
+                "library": self._library_info(),                                     # 0.21.84: the stream library (main pairs)
                 "error": self.error, "since": self.since}
+
+    def _library_info(self):
+        if self.role != "main" or not hasattr(self.bridge, "_lib_info"):
+            return None
+        try:
+            return self.bridge._lib_info(self.feed, self)
+        except Exception:
+            return None
 
     def low_info(self):
         return {"broadcast": self.broadcast, "running": self.running, "restarts": self.restarts,
@@ -2367,6 +2492,11 @@ class Feed:
         self.xs = []                  # 0.21.75: the OTHER rooms this camera shows in (the bridge's xs loop lists it there)
         self.xs_codes = {}            # 0.21.75: room -> code of a locked target room (rtsp-feeds.json only; never sent to a page)
         self.xs_state = {}            # 0.21.75: room -> "ok" | why that room refused it (the page's row shows the reason)
+        self.lib = None               # 0.21.84: this camera's stream library switch (None = the box's default: on in no room)
+        self.lib_aka = {}             # 0.21.84: its old paths (the room paths it had before the library) -> when it left them
+        self.xs_auto = None           # 0.21.84: the room it was listed back into when it joined the library from that room
+        self.base_broadcast = None    # 0.21.84: its ROOM path (what the page asks for; a library camera publishes at lib/...)
+        self.lib_status = None        # 0.21.84: the relay's last word on its heartbeat ("ok" | why)
 
     def info(self):
         return {
@@ -2378,6 +2508,7 @@ class Feed:
             "acodec": self.acodec,        # 0.9.5
             "sar": ("%d:%d" % tuple(self.sar)) if self.sar else None,   # 0.9.8
             "xs": list(self.xs), "xsState": dict(self.xs_state), "xsLocked": sorted(self.xs_codes),   # 0.21.75 (never the codes)
+            "lib": self.lib,              # 0.21.84: its stream library switch (null = the box's default)
         }
 
 
@@ -2430,6 +2561,7 @@ class Bridge:
         self._xs_thread = None
         self._xs_evt = threading.Event()
         self._xs_said = {}
+        self.lib_master = True    # 0.21.84: the box's stream library switch (rtsp-feeds.json "library": "off" turns it off)
         self._load_session()
         if self.suspended:   # 0.21.16
             self.log("rtsp: publishing is SUSPENDED on this box (rtsp-feeds.json suspended=true) -- cameras are recorded, none starts until the switch is turned on")
@@ -2774,6 +2906,18 @@ class Bridge:
             raise ValueError("relay must be an http(s) or ws(s) url")
         if not re.match(r"^[A-Za-z0-9._~:@+\-]+(/[A-Za-z0-9._~:@+\-]+)*$", broadcast or ""):
             raise ValueError("bad broadcast name")
+        # 0.21.84: the stream library -- the page asks for a camera's ROOM path; a camera in the library publishes at
+        # lib/<host>/<op>/<leaf>.hang on a library publisher token instead (/api/rtsp/list says which: publish.broadcast,
+        # publish.library). The relay's word is the one heard last (the library loop and restore ask it; never inline here).
+        base = self._lib_base(feed, broadcast)
+        lib_on = False
+        if self._lib_effective(feed, base, relay, fetch=False):
+            lurl = self._lib_url(relay)
+            if lurl:
+                lib_on, broadcast, relay = True, lib_path_of(base), lurl
+        if not lib_on and is_lib(broadcast) and not is_lib(base):
+            broadcast = base
+        feed.base_broadcast = base
         # 0.9.8: the same request twice is one publisher, not a restart. A page
         # that reloads (or adopts feeds the server already runs) asks for what
         # is already on air; answering with the running pair keeps viewers'
@@ -2809,15 +2953,20 @@ class Bridge:
                 self.persist_feeds()
             cur.reused += 1
             return cur
-        self.unpublish(feed_id, persist=False)   # 0.12.0: the new pair is persisted below
+        old_b, old_relay = (cur.broadcast, cur.relay) if cur is not None else (None, None)   # 0.21.84
+        self.unpublish(feed_id, persist=False, lib_stop=False)   # 0.12.0: the new pair is persisted below
         pub = Publisher(self, feed, broadcast, relay.strip(), hevc=bool(hevc), audio=bool(audio),
                         passthrough=passthrough,
-                        minter=self._minter_for(feed, broadcast, relay),        # 0.12.0
+                        minter=(self._lib_minter(feed) if lib_on else self._minter_for(feed, broadcast, relay)),   # 0.12.0; 0.21.84
                         keep=(True if keep is None else bool(keep)),
                         ondemand=bool(ondemand), low=bool(low), label=label,    # 0.18.0
                         idle=bool(idle))                                         # 0.21.73
         with self._lock:
             self._pubs[int(feed_id)] = pub
+        try:
+            self._lib_after_publish(feed, old_b, old_relay, broadcast, lib_on, base)   # 0.21.84
+        except Exception as e:
+            self.log("rtsp: stream library bookkeeping for %s failed: %s" % (broadcast, e))
         if (pub.wantOndemand or pub.wantLow) and not ONDEMAND_ENABLED:   # 0.21.10
             self.log("rtsp: %s asked for on demand/low -- ignored (ondemand = off; kastr.ini ondemand = on or KASTR_ONDEMAND=1 allows it)" % broadcast)
         self._pending_drop(feed.source_url)   # 0.21.61: on the air again
@@ -2887,9 +3036,9 @@ class Bridge:
         now = now or time.time()
         post = post or self._od_post
         groups = {}
-        for p in pubs:
-            groups.setdefault(_relay_key(p.relay), []).append(p)
-        for key, ps in groups.items():
+        for p in pubs:   # 0.21.84: per relay AND room -- ondemand_sync takes the room from the token
+            groups.setdefault((_relay_key(p.relay), str(p.broadcast).split("/", 1)[0]), []).append(p)
+        for (key, _room), ps in groups.items():
             base = None
             try:
                 base = self.web_base_for(key) if callable(self.web_base_for) else None
@@ -2931,11 +3080,14 @@ class Bridge:
                 self.log("rtsp: on-demand sync with %s failed: %s" % (re.sub(r"\?.*", "", url), str(e)[:120]))
             return None
 
-    def unpublish(self, feed_id, persist=True):   # 0.12.0: persist
+    def unpublish(self, feed_id, persist=True, lib_stop=True):   # 0.12.0: persist; 0.21.84: lib_stop
         with self._lock:
             pub = self._pubs.pop(int(feed_id), None)
         if pub:
             pub.stop()
+            if lib_stop and is_lib(pub.broadcast) and pub.role == "main" and not getattr(self, "_shutting", False):
+                self._lib()["stop"].setdefault(pub.broadcast, ("", _relay_key(pub.relay)))   # 0.21.84: out of the library
+                self.lib_poke()
             if persist:
                 self.persist_feeds()
             if pub.broadcast in getattr(self, "_xs_listed", {}):   # 0.21.75: off the air -> out of the other rooms now
@@ -2971,6 +3123,7 @@ class Bridge:
             if self._session["room"]:
                 self._last_session = dict(self._session)   # 0.21.58
             self.suspended = d.get("suspended") is True   # 0.21.16: the switch survives a relaunch
+            self.lib_master = d.get("library") != "off"   # 0.21.84: the box's stream library switch
             rem = d.get("removed")   # 0.21.0
             self._removed = [{"url": str(r.get("url")), "at": int(r.get("at") or 0)} for r in (rem or [])
                              if isinstance(r, dict) and r.get("url")][-50:]
@@ -2996,12 +3149,13 @@ class Bridge:
                             "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})
                 out[-1].update(_xs_fields(pub.feed))   # 0.21.75
                 continue
-            out.append({"url": pub.feed.source_url, "broadcast": pub.broadcast,
+            out.append({"url": pub.feed.source_url, "broadcast": getattr(pub.feed, "base_broadcast", None) or pub.broadcast,   # 0.21.84: the ROOM path
                         "audio": bool(pub.audio), "passthrough": bool(pub.passthrough), "keep": bool(pub.keep),
                         "ondemand": bool(pub.wantOndemand), "low": bool(pub.wantLow), "label": pub.label,   # 0.18.0; 0.21.10: what was ASKED -- preserved while the switch is off
                         "idle": bool(pub.wantIdle),                                                          # 0.21.73
                         "addedBy": getattr(pub.feed, "added_by", "") or "", "room": getattr(pub.feed, "room", "") or ""})   # 0.21.2: a web client's feed
             out[-1].update(_xs_fields(pub.feed))   # 0.21.75: the other rooms it shows in (+ locked rooms' codes; the file is owner-only)
+            out[-1].update(_lib_fields(pub.feed))  # 0.21.84: its stream library switch, old paths, the room it was listed back into
         # 0.21.61: what has not come back yet stays on file (a failed or unfinished restore, a Join mid-restore)
         live = {r["url"] for r in out}
         gone = {r.get("url") for r in getattr(self, "_removed", [])}
@@ -3071,7 +3225,8 @@ class Bridge:
         doc = {"room": s.get("room", ""), "access": s.get("access", ""), "roomCode": s.get("roomCode", ""),
                "relay": relay, "feeds": self._feed_records(), "at": time.time(),
                "removed": self._removed[-50:],   # 0.21.0: closed URLs stay closed across relaunches
-               "suspended": bool(self.suspended)}   # 0.21.16: the box's RTSP switch -- a relaunch honours it
+               "suspended": bool(self.suspended),   # 0.21.16: the box's RTSP switch -- a relaunch honours it
+               "library": "on" if getattr(self, "lib_master", True) else "off"}   # 0.21.84: the box's stream library switch
         with self._persist_lock:
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -3240,6 +3395,11 @@ class Bridge:
         if not url:
             log("rtsp restore: no relay url for room %s -- %d feed(s) not republished" % (room, len(feeds)))
             return 0
+        if LIBRARY_ENABLED and getattr(self, "lib_master", True):   # 0.21.84: ask the relay about the library ONCE, before the
+            try:                                                   # cameras start (a no-room box's go straight to lib/)
+                self._lib_cap(url)
+            except Exception:
+                pass
         done = [0]
         lock = threading.Lock()
 
@@ -3261,6 +3421,12 @@ class Bridge:
                     feed.xs = [str(r) for r in rec["xs"] if _XS_ROOM_RE.match(str(r)) and not is_home_room(r)][:XS_ROOMS_MAX]
                     codes = rec.get("xsCodes") if isinstance(rec.get("xsCodes"), dict) else {}
                     feed.xs_codes = {str(r): str(c) for r, c in codes.items() if str(r) in feed.xs and c}
+                if rec.get("lib") in (True, False) and getattr(feed, "lib", None) is None:   # 0.21.84: its library switch, old paths
+                    feed.lib = rec["lib"]
+                if isinstance(rec.get("libAka"), dict) and not getattr(feed, "lib_aka", None):
+                    feed.lib_aka = {str(k): int(v) for k, v in rec["libAka"].items() if isinstance(v, (int, float))}
+                if rec.get("xsAuto") and not getattr(feed, "xs_auto", None):
+                    feed.xs_auto = str(rec["xsAuto"])
                 rurl = url
                 if rec.get("room") and rec.get("room") != room:   # 0.21.2: a web client's feed in another room
                     feed.added_by = str(rec.get("addedBy") or ""); feed.room = str(rec.get("room"))
@@ -3284,6 +3450,8 @@ class Bridge:
             t.join(max(0.1, deadline - time.time()))
         log("rtsp: %s %d persisted feed(s) into room %s" % ("recorded (publishing suspended)" if self.suspended else "republished", done[0], room))   # 0.21.16
         self.persist_feeds()
+        if self._lib_wanted():   # 0.21.84: the library heartbeat (and the move of cameras its relay now serves)
+            self.lib_poke()
         if self._xs_wanted():   # 0.21.75: the cameras' other rooms come back with them (the loop lists them now and every minute)
             self._xs_ensure()
             self.xs_poke()
@@ -3312,6 +3480,8 @@ class Bridge:
             r = str(r or "").strip().lower()
             if not _XS_ROOM_RE.match(r):
                 raise ValueError("bad room name")
+            if r == LIB_ROOT:
+                raise ValueError("lib is the stream library, not a room")   # 0.21.84
             if r == own or r in out:   # its own room (the box's home too) and doubles drop out
                 continue
             if is_home_room(r):
@@ -3448,7 +3618,7 @@ class Bridge:
                 drop = sorted(rec["rooms"] - (set(want[path][1]) if path in want else set()))
                 if drop:
                     room = rec["room"]
-                    st, tok, _w = self._xs_token(rec["base"], room, access, ses.get("roomCode", "") if room == ses.get("room") else "", mint, now)
+                    st, tok, _w = self._xs_htok(rec["base"], room, access, ses.get("roomCode", "") if room == ses.get("room") else "", mint, now)   # 0.21.84
                     if st in ("token", "open"):
                         post(rec["minter"] + "/api/xshare", {"path": path, "to": drop, "stop": True}, tok)
                     rec["rooms"] -= set(drop)   # (a stop that did not land runs out with the listing's ttl)
@@ -3464,7 +3634,7 @@ class Bridge:
                     state = {r: "no relay (%s)" % why for r in rooms}
                 else:
                     minter = parts[1]
-                    st, htok, hwhy = self._xs_token(base, room, access, ses.get("roomCode", "") if room == ses.get("room") else "", mint, now)
+                    st, htok, hwhy = self._xs_htok(base, room, access, ses.get("roomCode", "") if room == ses.get("room") else "", mint, now)   # 0.21.84: lib -> the library token
                     if st not in ("token", "open"):
                         state = {r: "no token for %s (%s)" % (room, hwhy) for r in rooms}
                     else:
@@ -3502,6 +3672,506 @@ class Bridge:
                 pub.feed.xs_state = state
                 out[path] = state
             return out
+
+    # ---- 0.21.84: the stream library (box side) -------------------------------------------------------------------------
+    def _lib(self):
+        """The bridge's library bookkeeping (made on first use -- a bridge built without __init__, in tests, too)."""
+        d = self.__dict__.get("_libst")
+        if d is None:
+            d = self.__dict__["_libst"] = {"caps": {}, "toks": {}, "bad": {}, "beaten": {}, "stop": {}, "stills": {},
+                                           "stillAt": {}, "beatAt": {}, "thread": None, "evt": threading.Event(),
+                                           "grabbing": set(), "said": {}}
+        return d
+
+    def _lib_say(self, key, text, every=600):
+        st = self._lib()
+        if time.time() - st["said"].get(key, 0) > every:
+            st["said"][key] = time.time()
+            self.log(text)
+
+    def _lib_ses(self):
+        ses = self._session if self._session.get("room") else (getattr(self, "_last_session", None) or self._session)
+        return ses or {}
+
+    def _lib_base(self, feed, broadcast):
+        """A camera's ROOM path -- what the page asks for (it may post the library path as well)."""
+        b = str(broadcast or "")
+        if not is_lib(b):
+            return b
+        cur = getattr(feed, "base_broadcast", None)
+        if cur and lib_path_of(cur) == b:
+            return cur
+        room = getattr(feed, "room", "") or self._lib_ses().get("room") or ""
+        return (room + b[len(LIB_ROOT):]) if room else b
+
+    def _lib_want(self, feed, base):
+        """Does this camera belong in the library? Its own switch; else the box's default: ON for a box in no room (its hidden
+        home room), OFF in a real room. Never a screen share or a private capture (0.21.85: shares get their own switch)."""
+        if not LIBRARY_ENABLED or not getattr(self, "lib_master", True) or feed is None:
+            return False
+        if is_screen(getattr(feed, "url", "")) or is_private(feed):
+            return False
+        v = getattr(feed, "lib", None)
+        if v is not None:
+            return bool(v)
+        room = str(base or "").split("/", 1)[0]
+        if room == LIB_ROOT:
+            return True
+        if getattr(feed, "room", "") and feed.room != (self._lib_ses().get("room") or ""):
+            return False   # a web client's camera, in its own room
+        return is_home_room(room)
+
+    def _lib_cap_cached(self, relay):
+        parts, _w = _relay_base(_relay_key(relay))
+        hit = self._lib()["caps"].get(parts[1]) if parts else None
+        return bool(hit and hit[1])
+
+    def _lib_cap(self, relay, now=None, fetch=True):
+        """Does the relay this camera publishes on serve the library now? Asked every LIB_CAP_S; a relay that does not answer
+        keeps its last word (a dark relay never moves cameras back and forth). fetch=False: what was heard last only."""
+        now = time.time() if now is None else now
+        parts, _w = _relay_base(_relay_key(relay))
+        if not parts:
+            return False
+        st, key = self._lib(), parts[1]
+        hit = st["caps"].get(key)
+        ask = getattr(self, "lib_cap_fetch", None)   # kastr_serve.make_bridge sets relay_library (a bare bridge never asks)
+        if (hit and now - hit[0] < LIB_CAP_S) or not fetch or not callable(ask):
+            return bool(hit and hit[1])
+        on = ask(_relay_key(relay))
+        if on is None:
+            on = bool(hit and hit[1])
+            st["caps"][key] = (now - LIB_CAP_S + 15, on)   # asked again in 15 s
+        else:
+            if bool(on) != bool(hit and hit[1]):
+                self.log("rtsp: relay %s %s the stream library" % (key, "serves" if on else "does not serve"))
+            st["caps"][key] = (now, bool(on))
+        return bool(on)
+
+    def _lib_token(self, relay, now=None):
+        """-> (status, token, why): the library publisher token for this relay -- cached until LIB_TOKEN_MIN_S before it ends; a
+        refused mint is not retried with the same code; an "off" answer turns the relay's library off here at once."""
+        now = time.time() if now is None else now
+        st, key = self._lib(), _relay_key(relay)
+        hit = st["toks"].get(key)
+        if hit and hit[1] - now > LIB_TOKEN_MIN_S:
+            return "token", hit[0], ""
+        access = str(self._lib_ses().get("access") or "")
+        bad = st["bad"].get(key)
+        if bad and bad[0] == access and (bad[1] == "refused" or now - bad[3] < 60):
+            return bad[1], None, bad[2]
+        mint = getattr(self, "lib_mint", None) or mint_library
+        s, url, det = mint(key, access, self.host_slug)
+        if s == "token":
+            tok = _relay_token(url)
+            st["toks"][key] = (tok, _jwt_exp(tok) or (now + 3600))
+            st["bad"].pop(key, None)
+            return "token", tok, ""
+        if s == "off":
+            parts, _w = _relay_base(key)
+            if parts:
+                st["caps"][parts[1]] = (now, False)
+        st["bad"][key] = (access, s, str(det or s)[:120], now)
+        self._lib_say("tok:" + key, "rtsp: no library token from %s: %s (%s)" % (key, s, str(det or "")[:120]))
+        return s, None, str(det or s)[:120]
+
+    def _lib_url(self, relay, now=None):
+        """The relay URL a library camera publishes on (?jwt= = the library publisher token), or None."""
+        s, tok, _why = self._lib_token(relay, now)
+        parts, _w = _relay_base(_relay_key(relay))
+        if s != "token" or not parts:
+            return None
+        return parts[0] + ("" if parts[0].endswith("/relay") else "/") + "?jwt=" + tok
+
+    def _lib_minter(self, feed):
+        """A library camera's minter (Publisher.minter): a FRESH library URL for its relay (renewals, a refused token), or None."""
+        fid = feed.id
+
+        def mint():
+            cur = self._pubs.get(fid)
+            relay = cur.relay if cur is not None else (self._lib_ses().get("relay") or "")
+            st = self._lib()
+            hit = st["toks"].get(_relay_key(relay))
+            if hit and hit[1] - time.time() < 3600:
+                st["toks"].pop(_relay_key(relay), None)
+            return self._lib_url(relay)
+        return mint
+
+    def _lib_effective(self, feed, base, relay, now=None, fetch=True):
+        return self._lib_want(feed, base) and self._lib_cap(relay, now, fetch=fetch)
+
+    def _lib_note(self, feed, base, now=None):
+        """A camera went into the library from `base`: its old path is kept (aka, LIB_AKA_KEEP_S -- the hub rewrites every board
+        naming it, pages their own grids), its switch is ON from now on (it stays when the box later joins a room), and a box
+        in a real room lists it back into that room (Show in rooms)."""
+        now = time.time() if now is None else now
+        aka = getattr(feed, "lib_aka", None)
+        if not isinstance(aka, dict):
+            aka = feed.lib_aka = {}
+        if base and not is_lib(base) and base not in aka:
+            aka[base] = int(now)
+        for k in [k for k, t in aka.items() if now - t > LIB_AKA_KEEP_S]:
+            aka.pop(k, None)
+        if getattr(feed, "lib", None) is None:
+            feed.lib = True
+        room = str(base or "").split("/", 1)[0]
+        if room and room != LIB_ROOT and not is_home_room(room):
+            xs = [str(r) for r in (getattr(feed, "xs", None) or [])]
+            if room not in xs and len(xs) < XS_ROOMS_MAX:
+                feed.xs = xs + [room]
+                feed.xs_auto = room
+                self.log("rtsp: %s shows in its own room %s again (from the stream library)" % (lib_path_of(base), room))
+
+    def _lib_unnote(self, feed):
+        auto = getattr(feed, "xs_auto", None)
+        if auto:
+            feed.xs = [r for r in (getattr(feed, "xs", None) or []) if r != auto]
+            feed.xs_auto = None
+
+    def _lib_after_publish(self, feed, old_b, old_relay, broadcast, lib_on, base):
+        """_publish's bookkeeping: a camera that left the library is stopped there (with where it went); one that joined is noted."""
+        st = self._lib()
+        if old_b and is_lib(old_b) and old_b != broadcast:
+            st["stop"][old_b] = ("" if is_lib(broadcast) else broadcast, _relay_key(old_relay))
+        if lib_on:
+            st["stop"].pop(broadcast, None)
+            if not old_b or old_b != broadcast:
+                st["stillAt"].pop(broadcast, None)   # a still at once (the relay forgot the last one when it left)
+                self._lib_note(feed, base)
+                self.log("rtsp: %s is in the stream library as %s" % (base, broadcast))
+                if old_b or getattr(feed, "xs", None):
+                    self.xs_poke()   # its other rooms: listed again from the new path (the old listings withdrawn)
+            self.lib_poke()
+        elif old_b and is_lib(old_b):
+            self._lib_unnote(feed)
+            self.log("rtsp: %s left the stream library (back at %s)" % (old_b, broadcast))
+            self.xs_poke()
+            self.lib_poke()
+        elif self._lib_want(feed, base):
+            self._lib_ensure()   # in the library once its relay serves it (the loop asks every minute)
+
+    def _lib_move(self, pub, want, base):
+        """Re-publish one camera at its library path (want) or back at its room path -- the same options; one gap of a few seconds
+        while it reconnects. -> moved?"""
+        feed = pub.feed
+        if want:
+            if not self._lib_url(pub.relay):
+                feed.lib_status = "no library token from the relay"
+                return False
+            relay = pub.relay
+        else:
+            mint = self._minter_for(feed, base, pub.relay)
+            relay = mint() if mint else None
+            if not relay:
+                feed.lib_status = "no room token for %s" % str(base).split("/", 1)[0]
+                self._lib_say("back:" + base, "rtsp: %s cannot leave the stream library yet -- no token for its room" % base)
+                return False
+        try:
+            self.publish(feed.id, base, relay, passthrough=pub.passthrough, audio=pub.audio, keep=pub.keep,
+                         ondemand=pub.wantOndemand, low=pub.wantLow, label=pub.label, idle=pub.wantIdle)
+            return True
+        except Exception as e:
+            self._lib_say("move:" + base, "rtsp: %s did not move %s the stream library: %s" % (base, "into" if want else "out of", e))
+            return False
+
+    def _lib_moves(self, now=None, fetch=True):
+        moved = 0
+        for pub in list(self._pubs.values()):
+            if pub.role != "main" or pub.stopping or is_private(pub.feed) or is_screen(getattr(pub.feed, "url", "")):
+                continue
+            base = getattr(pub.feed, "base_broadcast", None) or pub.broadcast
+            want = self._lib_effective(pub.feed, base, pub.relay, now, fetch=fetch)
+            if want != is_lib(pub.broadcast) and self._lib_move(pub, want, base):
+                moved += 1
+        return moved
+
+    def _lib_row(self, pub, now=None):
+        feed, b = pub.feed, pub.broadcast
+        row = {"path": b, "label": pub.label or b.rsplit("/", 1)[-1][:-5], "kind": lib_kind(getattr(feed, "url", "")),
+               "state": lib_state(pub, now), "low": pub.lowPub is not None,
+               "audio": bool(pub.audio and getattr(feed, "acodec", None) != "")}
+        if getattr(feed, "width", None) and getattr(feed, "height", None):
+            row["res"] = "%dx%d" % (int(feed.width), int(feed.height))
+        aka = sorted(a for a in (getattr(feed, "lib_aka", None) or {}) if lib_path_of(a) == b)
+        if aka:
+            row["aka"] = aka[-4:]
+        return row
+
+    def _lib_box_name(self):
+        return re.sub(r"-[0-9a-f]{4}$", "", str(self.host_slug or "")) or "box"
+
+    def _lib_pubs(self):
+        return [p for p in list(self._pubs.values()) if p.role == "main" and not p.stopping and is_lib(p.broadcast)]
+
+    def _lib_air(self, now):
+        return frozenset((p.broadcast, lib_state(p, now)) for p in self._lib_pubs())
+
+    def _lib_wanted(self):
+        if not LIBRARY_ENABLED:
+            return False
+        st = self._lib()
+        if st["stop"] or st["stills"]:
+            return True
+        return any(p.role == "main" and not p.stopping and (is_lib(p.broadcast) or self._lib_want(
+            p.feed, getattr(p.feed, "base_broadcast", None) or p.broadcast)) for p in list(self._pubs.values()))
+
+    def _lib_ensure(self):
+        st = self._lib()
+        if not callable(getattr(self, "lib_cap_fetch", None)):
+            return   # a bare bridge (tests): no relay to ask, no loop -- lib_tick runs only when called
+        with self._lock:
+            t = st.get("thread")
+            if t is not None and t.is_alive():
+                return
+            t = threading.Thread(target=self._lib_loop, daemon=True, name="kastr-library")
+            st["thread"] = t
+        t.start()
+
+    def lib_poke(self):
+        """Run the library round now (a camera moved, stopped, switched) -- the loop starts if it is not running."""
+        self._lib()["evt"].set()
+        if self._lib_wanted():
+            self._lib_ensure()
+
+    def _lib_loop(self):
+        st = self._lib()
+        last, air = 0.0, None
+        while True:
+            if not self._lib_wanted():
+                with self._lock:
+                    st["thread"] = None
+                return
+            now = time.time()
+            cur = self._lib_air(now)
+            if st["evt"].is_set() or cur != air or now - last >= LIB_BEAT_S or st["stills"] or st.get("due"):
+                st["evt"].clear()
+                try:
+                    self.lib_tick(now)
+                    air, last = self._lib_air(time.time()), now
+                except Exception as e:
+                    self._lib_say("loop", "rtsp: stream library round failed: %s" % e)
+            st["evt"].wait(LIB_AIR_CHECK_S)
+
+    def lib_tick(self, now=None, post=None):
+        """One library round: move cameras in / out of the library (their switch, the box's default, the relay's word), then ONE
+        heartbeat per relay -- every library camera's row (+ its old paths, + a still when one is ready) and the stops. `post(url,
+        body, bearer) -> (dict | None, code)` is injectable (tests). -> {relay: (code, reply)}."""
+        now = time.time() if now is None else now
+        post = post or self._xs_post
+        st = self._lib()
+        st["due"] = False   # set again below when a heartbeat had to wait (the 10 s limit, a 429)
+        if not self.suspended:
+            self._lib_moves(now)
+        groups = {}
+        for pub in self._lib_pubs():
+            groups.setdefault(_relay_key(pub.relay), []).append(pub)
+        for _p, (_mv, rk) in list(st["stop"].items()):
+            groups.setdefault(rk, [])
+        out = {}
+        for rk, pubs in groups.items():
+            stops = {p: mv for p, (mv, k) in list(st["stop"].items()) if k == rk}
+            if not pubs and not stops:
+                continue
+            if pubs and now - st["beatAt"].get(rk, 0) < LIB_BEAT_MIN_S:
+                st["due"] = True   # a change within 10 s of the last heartbeat goes out on the next check
+                continue
+            parts, _why = _relay_base(rk)
+            if not parts:
+                continue
+            s, tok, twhy = self._lib_token(rk, now)
+            if s != "token":
+                for pub in pubs:
+                    pub.feed.lib_status = "no library token (%s)" % twhy
+                continue
+            body = {"rows": [self._lib_row(p, now) for p in pubs], "box": self._lib_box_name()}
+            if LIBRARY_SITE:
+                body["site"] = LIBRARY_SITE
+            stills = {p.broadcast: st["stills"].pop(p.broadcast) for p in pubs if p.broadcast in st["stills"]}
+            if stills:
+                body["stills"] = stills
+            if stops:
+                body["stop"] = sorted(stops)
+                mv = {p: m for p, m in stops.items() if m}
+                if mv:
+                    body["moved"] = mv
+            d, code = post(parts[1] + "/api/library", body, tok)
+            out[rk] = (code, d)
+            if pubs:
+                st["beatAt"][rk] = now
+            if isinstance(d, dict):
+                for p in d.get("stopped") or []:
+                    st["stop"].pop(p, None)
+            if isinstance(d, dict) and code == 200:
+                acc, ref = set(d.get("accepted") or []), d.get("refused") if isinstance(d.get("refused"), dict) else {}
+                for pub in pubs:
+                    ok = pub.broadcast in acc
+                    pub.feed.lib_status = "ok" if ok else str(ref.get(pub.broadcast) or "refused")[:80]
+                    if ok:
+                        st["beaten"][pub.broadcast] = now
+            elif isinstance(d, dict) and code == 403 and d.get("off"):
+                st["caps"][parts[1]] = (now, False)   # switched off at the hub: back at the room paths on the next round
+                self.log("rtsp: the relay says the stream library is off (%s) -- cameras go back to their rooms" % str(d.get("error") or "")[:120])
+                st["evt"].set()
+            elif code == 403:
+                st["toks"].pop(rk, None)   # a refused token: a fresh one next round
+                for pub in pubs:
+                    pub.feed.lib_status = str((d or {}).get("error") or "refused")[:80]
+            elif code == 429:
+                st["beatAt"][rk] = now   # too soon: the next round
+                st["due"] = True
+                st["stills"].update(stills)
+            else:
+                st["stills"].update(stills)   # the relay did not answer: the still goes with the next try
+                for pub in pubs:
+                    pub.feed.lib_status = "the relay did not answer"
+        self._lib_stills_due(now)
+        return out
+
+    def _lib_still_ok(self, feed):
+        """Stills are taken from the camera itself (one short ffmpeg on the monitor's input): RTSP cameras, the test pattern and
+        media URLs. A local camera or an RTMP ingest is read through the bridge's one capture -- no still from those yet."""
+        u = str(getattr(feed, "url", "") or "").lower()
+        return bool(self.ffmpeg) and not (is_device(u) or is_rtmp_in(u) or is_screen(u))
+
+    def _lib_grab(self, pub):
+        """One still of a camera for the library: a 160x90 JPEG of at most LIB_STILL_MAX bytes (asked again more coarsely when the
+        first is bigger), or None (no ffmpeg, the camera said nothing within 15 s)."""
+        feed = pub.feed
+        try:
+            inp = input_args(feed.url, role="mon")
+        except Exception:
+            return None
+        for q in (8, 16, 28):
+            argv = [self.ffmpeg, "-hide_banner", "-loglevel", "error"] + inp + [
+                "-frames:v", "1", "-an", "-vf", LIB_STILL_VF, "-q:v", str(q), "-f", "mjpeg", "pipe:1"]
+            proc = None
+            try:
+                proc = self.spawn_media(argv, tag="still", nice=True)
+                data, _e = proc.communicate(timeout=15)
+            except Exception:
+                data = b""
+            finally:
+                self.release_media(proc)
+            if data[:2] == bytes((0xFF, 0xD8)) and len(data) <= LIB_STILL_MAX:
+                return data
+            if not data:
+                return None
+        return None
+
+    def _lib_stills_due(self, now):
+        """Stills that are due start in the background (the next round carries them): every LIB_STILL_EVERY_S while a camera is
+        live, and on each state change (an asleep camera shows its last picture)."""
+        st = self._lib()
+        grab = getattr(self, "lib_grab", None) or self._lib_grab
+        for pub in self._lib_pubs():
+            b, state = pub.broadcast, lib_state(pub, now)
+            last = st["stillAt"].get(b)
+            if (last and now - last[0] < LIB_STILL_EVERY_S and last[1] == state) or b in st["grabbing"]:
+                continue
+            if (last and last[1] == state and state != "live") or state == "dark":
+                st["stillAt"][b] = (now, state)
+                continue
+            st["stillAt"][b] = (now, state)
+            if not self._lib_still_ok(pub.feed) and not getattr(self, "lib_grab", None):
+                continue
+            st["grabbing"].add(b)
+
+            def run(pub=pub, b=b):
+                try:
+                    data = grab(pub)
+                    if data and data[:2] == bytes((0xFF, 0xD8)) and len(data) <= LIB_STILL_MAX:
+                        st["stills"][b] = base64.b64encode(data).decode("ascii")
+                finally:
+                    st["grabbing"].discard(b)
+            if getattr(self, "lib_grab_sync", False):
+                run()
+            else:
+                threading.Thread(target=run, daemon=True, name="kastr-library-still").start()
+
+    def _lib_info(self, feed, pub=None):
+        """/api/rtsp/list (publish.library) and /api/rtsp/library: one camera's library state for the page."""
+        pub = pub if pub is not None else self._pubs.get(int(feed.id))
+        base = getattr(feed, "base_broadcast", None) or (pub.broadcast if pub is not None else "")
+        relay = pub.relay if pub is not None else (self._lib_ses().get("relay") or "")
+        on = bool(pub is not None and is_lib(pub.broadcast))
+        want = self._lib_want(feed, base)
+        out = {"on": on, "want": want, "switch": getattr(feed, "lib", None), "base": base, "path": lib_path_of(base) if base else None,
+               "available": self._lib_cap_cached(relay) if relay else False, "status": getattr(feed, "lib_status", None),
+               "aka": sorted(getattr(feed, "lib_aka", None) or {}), "auto": getattr(feed, "xs_auto", None)}
+        if on:
+            out["state"] = lib_state(pub)
+        if not LIBRARY_ENABLED:
+            out["why"] = "kastr.ini library = off on this box"
+        elif not getattr(self, "lib_master", True):
+            out["why"] = "the box's stream library switch is off"
+        elif want and not on and not out["available"]:
+            out["why"] = "the relay does not serve the stream library (yet)"
+        return out
+
+    def set_lib(self, feed_id, on):
+        """POST /api/rtsp/library {id, on: true | false | null}: one camera in / out of the stream library (null = the box's
+        default: on in no room, off in a room). Moves at once when the relay serves the library. -> {ok, id, moved, library}."""
+        try:
+            feed = self.get(feed_id)
+        except (TypeError, ValueError):
+            feed = None
+        if feed is None:
+            raise ValueError("no such feed")
+        if is_screen(feed.url) or is_private(feed):
+            raise ValueError("screen shares join the stream library from 0.21.85")
+        if on is not None and not isinstance(on, bool):
+            raise ValueError("`on` is true, false or null")
+        feed.lib = on
+        moved = False
+        pub = self._pubs.get(int(feed.id))
+        if pub is not None and pub.role == "main" and not pub.stopping and not self.suspended:
+            base = getattr(feed, "base_broadcast", None) or pub.broadcast
+            want = self._lib_effective(feed, base, pub.relay)
+            if want != is_lib(pub.broadcast):
+                moved = self._lib_move(pub, want, base)
+        self.persist_feeds()
+        self.lib_poke()
+        return {"ok": True, "id": feed.id, "moved": moved, "library": self._lib_info(feed)}
+
+    def set_lib_master(self, on):
+        """POST /api/rtsp/library {master: bool}: the box's own stream library switch (every camera; kept in rtsp-feeds.json)."""
+        if not isinstance(on, bool):
+            raise ValueError("`master` is true or false")
+        if getattr(self, "lib_master", True) != on:
+            self.lib_master = on
+            self.log("rtsp: the box's stream library switch is %s" % ("on" if on else "off"))
+            self.persist_feeds()
+            if not self.suspended:
+                self._lib_moves()
+            self.lib_poke()
+        return self.lib_public()
+
+    def lib_public(self):
+        """GET /api/rtsp/library -> {ok, enabled (kastr.ini), master (the box's switch), available (its relay's word), why?,
+        noRoom (the box sits in its hidden home room: cameras default on), feeds: [{id, broadcast, label, library}]}."""
+        ses = self._lib_ses()
+        relay = ses.get("relay") or next((p.relay for p in list(self._pubs.values()) if not p.stopping), "")
+        feeds = []
+        for f in list(self._feeds.values()):
+            if is_private(f):
+                continue
+            pub = self._pubs.get(int(f.id))
+            feeds.append({"id": f.id, "broadcast": pub.broadcast if pub is not None else None,
+                          "label": pub.label if pub is not None else "", "library": self._lib_info(f, pub)})
+        out = {"ok": True, "enabled": bool(LIBRARY_ENABLED), "master": bool(getattr(self, "lib_master", True)),
+               "available": self._lib_cap_cached(relay) if relay else False, "noRoom": is_home_room(ses.get("room") or ""),
+               "root": LIB_ROOT, "feeds": feeds}
+        if not LIBRARY_ENABLED:
+            out["why"] = "kastr.ini library = off on this box"
+        return out
+
+    def _xs_htok(self, base, room, access, code, mint, now):
+        """0.21.84: the token that proves a listing's own stream -- a member token of its room, or (a library camera) the
+        library publisher token."""
+        if room == LIB_ROOT:
+            s, tok, why = self._lib_token(base, now)
+            return s, tok, why
+        return self._xs_token(base, room, access, code, mint, now)
 
     def pause(self, feed_id, on):
         """0.21.73: pause / resume a screen share -- the same broadcast restarts on the "paused" card (and back), so viewers
@@ -3714,6 +4384,7 @@ class Bridge:
         # 0.9.8: explicit kills as before; the job (shared with the relay, which
         # gets its own graceful stop right after this) closes with the process
         # and reaps anything these loops missed.
+        self._shutting = True   # 0.21.84: a shutdown leaves the library entries (offline -- they come back), never withdraws them
         for fid in list(self._pubs):
             self.unpublish(fid, persist=False)   # 0.12.0: rtsp-feeds.json stays as it is -- restore() reads it next launch
         for feed in list(self._feeds.values()):
@@ -4109,13 +4780,17 @@ def handle_api(handler, bridge, path):
     if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge", "/api/rtsp/suspend",   # 0.21.16: suspend
                 "/api/rtsp/pause", "/api/rtsp/retarget",                                             # 0.21.73: a share paused / swapped
                 "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note",    # 0.12.0: keep, persist; 0.21.5: note
-                "/api/rtsp/xs"):                                            # 0.21.75: the other rooms a camera shows in
+                "/api/rtsp/xs",                                             # 0.21.75: the other rooms a camera shows in
+                "/api/rtsp/library"):                                       # 0.21.84: the stream library switches
         # 0.9.1: local pages only -- these start processes and name relays
         if not from_loopback():
             reply({"error": "publishing is controlled from the machine itself"}, 403)
             return True
         if path == "/api/rtsp/persist" and getattr(handler, "command", "POST") != "POST":   # 0.12.0: GET = read-back
             reply(bridge.session_public())
+            return True
+        if path == "/api/rtsp/library" and getattr(handler, "command", "POST") != "POST":   # 0.21.84: GET = read-back
+            reply(bridge.lib_public())
             return True
         try:
             n = int(handler.headers.get("Content-Length") or 0)
@@ -4178,6 +4853,13 @@ def handle_api(handler, bridge, path):
                 reply(bridge.retarget(payload.get("id"), payload.get("url")))
             elif path == "/api/rtsp/xs":                                  # 0.21.75: {id, rooms: [slug], codes?: {slug: code}}
                 reply(bridge.set_xs(payload.get("id"), payload.get("rooms"), payload.get("codes")))
+            elif path == "/api/rtsp/library":                             # 0.21.84: {id, on: true|false|null} | {master: bool} | {}
+                if "master" in payload:
+                    reply(bridge.set_lib_master(payload.get("master")))
+                elif "id" in payload:
+                    reply(bridge.set_lib(payload.get("id"), payload.get("on")))
+                else:
+                    reply(bridge.lib_public())
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
                 text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:240]
                 if text:

@@ -91,6 +91,7 @@ LIVE_CONFIG = frozenset({"kastr.ini"})
 VENDORED = (
     (os.path.join(HERE, "assets", "npu", "manifest.json"), "vendor-npu.py"),
     (os.path.join(HERE, "assets", "mediapipe", "manifest.json"), "vendor-mediapipe.py"),
+    (os.path.join(HERE, "assets", "vendor", "pdfjs", "manifest.json"), "vendor-pdfjs.py"),   # 0.21.84: pdf.js for PDF presentations
 )
 
 # Platform folders that make up a release, in the order they go into the zip.

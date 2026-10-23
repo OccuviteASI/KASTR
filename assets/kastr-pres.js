@@ -126,16 +126,16 @@
     while (stillCache.size > 14) { const [k0, p0] = stillCache.entries().next().value; stillCache.delete(k0); p0.then((b) => { try { b.close(); } catch {} }).catch(() => {}); }
     return p;
   }
-  async function fetchBlob(base, id, name, tries) {
+  async function fetchBlob(base, id, name, tries, rt) {   // rt: the deck's read token (presenter + backstage only)
     for (let a = 0; ; a++) {
-      const r = await fetch(base + "/api/pres/" + id + "/" + name, { cache: name === "notes.bin" ? "no-store" : "default" });
+      const r = await fetch(base + "/api/pres/" + id + "/" + name + (rt ? "?rt=" + encodeURIComponent(rt) : ""), { cache: name === "notes.bin" || !rt ? "no-store" : "default" });
       if (r.ok) return await r.arrayBuffer();
       if (r.status !== 404 || a >= (tries || 0)) throw new Error("slide " + name + ": " + r.status);
       await sleep(600);
     }
   }
-  async function bitmapFromCipher(base, id, i, key) {
-    const buf = await fetchBlob(base, id, "s" + i + ".bin", 25);
+  async function bitmapFromCipher(base, id, i, key, rt) {
+    const buf = await fetchBlob(base, id, "s" + i + ".bin", 25, rt);
     const plain = await unseal(key, buf);
     return await createImageBitmap(new Blob([plain], { type: "image/webp" }));
   }
@@ -428,9 +428,9 @@
   let pdfjsMod = null;
   async function pdfjs() {
     if (pdfjsMod) return pdfjsMod;
-    try { pdfjsMod = await import("/assets/vendor/pdfjs/pdf.mjs"); }
-    catch { throw new Error("PDF decks need pdf.js in this KASTR (not vendored yet -- vendor-pdfjs.py); save the deck as .pptx, or ask for the PDF step"); }
-    pdfjsMod.GlobalWorkerOptions.workerSrc = "/assets/vendor/pdfjs/pdf.worker.mjs";
+    try { pdfjsMod = await import("/assets/vendor/pdfjs/pdf.min.mjs"); }
+    catch { throw new Error("PDF decks need pdf.js, which is missing from this KASTR (run vendor-pdfjs.py) -- save the deck as .pptx meanwhile"); }
+    pdfjsMod.GlobalWorkerOptions.workerSrc = "/assets/vendor/pdfjs/pdf.worker.min.mjs";
     return pdfjsMod;
   }
   async function openSource(file, onStep) {
@@ -462,9 +462,23 @@
       const sc = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(sc.error || ("conversion failed (" + r.status + ")"));
       const shown = sc.slides.filter((s) => !s.hidden);
+      if (sc.kind === "images") {   // PowerPoint drew them (this computer has PowerPoint): exact slides
+        let released = false;
+        const release = () => { if (released) return; released = true; fetch("/api/pres/conv/" + sc.job + "/done", { method: "POST" }).catch(() => {}); };
+        return {
+          kind: "pptx", via: "powerpoint", name, n: shown.length, ar: sc.w / sc.h, notes: shown.map((s) => s.notes || ""), warnings: sc.warnings || [],
+          async render(i) {
+            const im = new Image(); im.src = shown[i].img; await im.decode();
+            const cv = document.createElement("canvas"); cv.width = STILL_W; cv.height = Math.round(STILL_W * sc.h / sc.w);
+            cv.getContext("2d", { alpha: false }).drawImage(im, 0, 0, cv.width, cv.height);
+            return cv;
+          },
+          release, close: release,
+        };
+      }
       const imgs = await loadSceneImages(sc);
       return {
-        kind: "pptx", name, n: shown.length, ar: sc.w / sc.h, notes: shown.map((s) => s.notes || ""), warnings: sc.warnings || [],
+        kind: "pptx", via: "kastr", name, n: shown.length, ar: sc.w / sc.h, notes: shown.map((s) => s.notes || ""), warnings: sc.warnings || [],
         async render(i) {
           const cv = document.createElement("canvas"); cv.width = STILL_W; cv.height = Math.round(STILL_W * sc.h / sc.w);
           drawSlide(cv.getContext("2d", { alpha: false }), sc, shown[i], cv.width, cv.height, imgs);
@@ -502,12 +516,13 @@
     const K = crypto.getRandomValues(new Uint8Array(32));
     const keys = await Promise.all(Array.from({ length: src.n }, (_, i) => hkdf(K, "slide/" + i)));
     const me = await myKeys();
+    const rtEnc = deck.rtoken ? b64(await seal(await hkdf(K, "read"), enc.encode(deck.rtoken))) : "";
     mine = {
-      id: deck.id, token: deck.token, base, room: c.channel, name: src.name, kind: src.kind, n: src.n, ar: src.ar, src, K, keys,
+      id: deck.id, token: deck.token, rtEnc, liveIdx: 0, liveChain: Promise.resolve(), via: src.via || src.kind, base, room: c.channel, name: src.name, kind: src.kind, n: src.n, ar: src.ar, src, K, keys,
       notesKey: await hkdf(K, "notes"), notes: src.notes.slice(), nv: 1,
       blobs: new Array(src.n).fill(null), up: new Array(src.n).fill(false), rendering: null, want: [],
       idx: 0, ver: 1, by: myPerson(), blank: null, t0: Date.now(), bs: new Map(), lastSeq: new Map(), share: null, pk: me.pub,
-      warnings: src.warnings || [], startedMs: 0,
+      warnings: src.warnings || [], startedMs: 0, pubSeq: 0,
     };
     T("start", { id: mine.id, n: mine.n, kind: mine.kind });
     view.prep("Preparing slide 1 of " + mine.n + "…");
@@ -547,6 +562,7 @@
       await sleep(0);
     }
     T("allup", { id: m.id, n: m.n });
+    try { m.src.release?.(); } catch {}   // every slide is in memory: PowerPoint's pictures can go
   }
   async function uploadNotes() {
     if (!mine) return;
@@ -562,7 +578,7 @@
       });
     }
     const bk = backstage.get(deckId);
-    if (bk && bk.keys) return cacheGet(deckId + "/" + i, () => bitmapFromCipher(baseFor(bk.rec), deckId, i, bk.keys[i]));
+    if (bk && bk.keys) return cacheGet(deckId + "/" + i, () => bitmapFromCipher(baseFor(bk.rec), deckId, i, bk.keys[i], bk.rt));
     throw new Error("no key for slide " + (i + 1));
   }
   function publish() {
@@ -571,7 +587,7 @@
     stateSet("pres", {
       v: 1, id: mine.id, base: mine.base, name: mine.name, kind: mine.kind, n: mine.n, ar: +mine.ar.toFixed(4),
       idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank || "", k: b64(kIdx), t0: mine.t0, pk: mine.pk,
-      share: mine.share?.path || "", nv: mine.nv,
+      share: mine.share?.path || "", nv: mine.nv, rt: mine.rtEnc,
       bs: [...mine.bs.entries()].map(([p, b]) => ({ p, n: b.name || "", w: b.w || "" })),
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
@@ -584,9 +600,21 @@
     mine.idx = ni; mine.blank = nb; mine.ver++; mine.by = by || myPerson();
     if (!mine.up[ni]) mine.want.unshift(ni);
     drawShare();
-    publish();
     view.paint();
+    // 0.21.84 (Kenton: "Viewers: LIVE SLIDE ONLY"): the store learns the live slide first (it serves viewers nothing
+    // else), then the room hears of the move; moves are told to the store in order, the room gets the newest
+    const m = mine, seq = ++m.pubSeq;
+    const tell = () => { if (mine === m && seq === m.pubSeq) publish(); };
+    if (ni === m.liveIdx) tell();
+    else m.liveChain = m.liveChain.then(() => postLive(m, ni)).then(tell, tell);
     for (const k of [ni + 1, ni + 2]) if (k < mine.n && !mine.up[k]) mine.want.push(k);
+  }
+  async function postLive(m, i) {
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), 1500);   // a slow store must not hold the room back long
+    try {
+      const r = await fetch(m.base + "/api/pres/" + m.id + "/live?token=" + m.token + "&i=" + i, { method: "POST", signal: ac.signal });
+      if (r.ok) m.liveIdx = i;
+    } catch {} finally { clearTimeout(t); }
   }
   function applyIntent(path, ctl) {
     const who = personOfPath(path);
@@ -688,6 +716,7 @@
           bk.K = await unseal(wk, unb64(mineB.w));
           bk.keys = await Promise.all(Array.from({ length: rec.n }, (_, i) => hkdf(bk.K, "slide/" + i)));
           bk.notesKey = await hkdf(bk.K, "notes");
+          bk.rt = rec.rt ? dec.decode(await unseal(await hkdf(bk.K, "read"), unb64(rec.rt))) : "";
           bk.w = mineB.w;
           T("bs-key", { id: rec.id });
           if (!bk.toasted) { bk.toasted = true; toast(nameOfPerson(personOfPath(path)) + " made you backstage for “" + rec.name + "”. Open the presenter view from the pill at the top.", 9000); }
@@ -696,7 +725,7 @@
       }
       if (bk.K && rec.nv !== bk.nv) {
         bk.nv = rec.nv;
-        fetchBlob(baseFor(rec), rec.id, "notes.bin", 10).then((buf) => unseal(bk.notesKey, buf)).then((u8) => { bk.notes = JSON.parse(dec.decode(u8)).notes || []; T("bs-notes", { id: rec.id }); view.paint(); }).catch((e) => console.warn("KASTR pres: notes", e));
+        fetchBlob(baseFor(rec), rec.id, "notes.bin", 10, bk.rt).then((buf) => unseal(bk.notesKey, buf)).then((u8) => { bk.notes = JSON.parse(dec.decode(u8)).notes || []; T("bs-notes", { id: rec.id }); view.paint(); }).catch((e) => console.warn("KASTR pres: notes", e));
       }
     }
     for (const id of [...backstage.keys()]) if (!live.has(id)) { backstage.delete(id); T("bs-gone", { id }); }
@@ -722,7 +751,7 @@
     for (const r of remote.values()) if (r.pres && r.pres.share) want.set(r.pres.share, r.pres);
     for (const [path, o] of overlays) {
       const t = tiles && tiles.get(path);
-      if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); } catch {} overlays.delete(path); }
+      if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); } catch {} try { o.vBmp?.close(); } catch {} overlays.delete(path); }
     }
     if (!tiles) return;
     for (const [path, rec] of want) {
@@ -745,12 +774,22 @@
     const rec = o.rec, key = o.key;
     let bmp = null;
     if (!rec.blank) {
+      const bk = backstage.get(rec.id);
       try {
-        bmp = await cacheGet(rec.id + "/" + rec.idx, async () => {
-          if (backstage.get(rec.id)?.keys) return bitmapFromCipher(baseFor(rec), rec.id, rec.idx, backstage.get(rec.id).keys[rec.idx]);
-          viewerFetches.push(rec.idx);
-          return bitmapFromCipher(baseFor(rec), rec.id, rec.idx, unb64(rec.k));
-        });
+        if (bk?.keys) bmp = await stillFor(rec.id, rec.idx);
+        else {
+          // 0.21.84 (Kenton: "Viewers: LIVE SLIDE ONLY"): a viewer holds the live slide and nothing else -- the store
+          // serves it only the live slide (uncacheable), and the bitmap of the slide before is dropped right here
+          const want = rec.id + "/" + rec.idx;
+          if (o.vKey !== want) {
+            viewerFetches.push(rec.idx);
+            const b = await bitmapFromCipher(baseFor(rec), rec.id, rec.idx, unb64(rec.k));
+            if (o.rec.id + "/" + o.rec.idx !== want) { try { b.close(); } catch {} return; }
+            try { o.vBmp?.close(); } catch {}
+            o.vBmp = b; o.vKey = want;
+          }
+          bmp = o.vBmp;
+        }
       } catch (e) { console.warn("KASTR pres: live slide", e); }
     }
     if (o.key !== key) return;
@@ -1095,19 +1134,20 @@
   window.__pres = {
     startFromFile,
     end: () => endMine("api"),
-    go: (i) => { const v = view.deck(); if (!v) return; if (v.role === "presenter") goTo(i, myPerson(), null); else sendIntent(v.id, i, null); },
+    go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson(), null); else sendIntent(v.id, i, null); return true; },   // a viewer has no deck here: false
     next: () => { const v = view.deck(); if (v) window.__pres.go(v.idx + 1); },
     back: () => { const v = view.deck(); if (v) window.__pres.go(v.idx - 1); },
     setBackstage,
-    open: () => view.open({ deck: mine ? mine.id : [...backstage.keys()][0] }),
+    open: () => { const id = mine ? mine.id : [...backstage.values()].find((b) => b.keys)?.rec.id; if (!id) return false; view.open({ deck: id }); return true; },
     close: () => view.close(),
     trace,
     state: () => ({
       me: myPerson(),
-      mine: mine ? { id: mine.id, name: mine.name, kind: mine.kind, n: mine.n, idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank,
+      mine: mine ? { id: mine.id, name: mine.name, kind: mine.kind, via: mine.via, n: mine.n, idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank,
                      up: mine.up.filter(Boolean).length, share: mine.share?.path || "", shareId: mine.share ? mine.share.id : null, bs: [...mine.bs.entries()].map(([p, b]) => ({ p, ready: !!b.w })),
                      startedMs: mine.startedMs, warnings: mine.warnings } : null,
-      backstage: [...backstage.values()].map((b) => ({ id: b.rec.id, idx: b.rec.idx, ver: b.rec.ver, key: !!b.keys, notes: b.notes ? b.notes.length : null })),
+      backstage: [...backstage.values()].map((b) => ({ id: b.rec.id, idx: b.rec.idx, ver: b.rec.ver, key: !!b.keys, rt: !!b.rt, notes: b.notes ? b.notes.length : null })),
+      viewerHeld: [...overlays.values()].filter((o) => o.vKey).map((o) => o.vKey),   // what a viewer keeps: the live slide only
       seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p) })),
       overlays: [...overlays.entries()].map(([p, o]) => ({ path: p, key: o.key, w: o.cv.width, h: o.cv.height })),
       viewerFetches: viewerFetches.slice(),

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v0.21.84 PROTOTYPE (Kenton: "start exploring using powerpoints, or other documents, directly inside of KASTR ... only
+"""v0.21.84 (Kenton: "start exploring using powerpoints, or other documents, directly inside of KASTR ... only
 show the preview for those being casted to ... The person presenting and the 'backstage' person controlling need to see
 the notes/slides upcoming as well as what is live while others only see the presentation.").
 
@@ -15,7 +15,13 @@ Share > Presentation (mode 1, KASTR renders the deck). Covered here:
     memberClear hooks, the people hook, no share PiP for a presentation) and assets/kastr-pres.js's guarantees
     (notes never in the public record, viewers open slides only with the live key, ECDH-wrapped backstage keys, the
     collision rule, no CDN, pdf.js only from /assets/vendor/pdfjs)
-  * build.py hidden import, .gitignore keeps a lab pdf.js out of git, vendor-pdfjs.py refuses an unpinned fetch"""
+  * LIVE SLIDE ONLY for viewers (Kenton 2026-10-23): the store serves a reader without the deck's read token the live
+    slide only (uncacheable), never the notes; the page keeps no earlier slide for a viewer; the API moves nothing
+  * PowerPoint COM ON WHENEVER POWERPOINT IS INSTALLED (Kenton 2026-10-23) -- with a FAKE PowerShell only: this module
+    sets KASTR_PRES_POWERPOINT=0 at import, so nothing here can start the real PowerPoint on a developer's desk
+  * pdf.js: pdfjs-dist 6.4.299 pinned (sha256 + size) in vendor-pdfjs.py and assets/vendor/pdfjs/manifest.json,
+    verified by build.py like assets/npu and assets/mediapipe; the two files git-ignored, the manifest tracked
+  * build.py hidden import"""
 import base64
 import http.client
 import io
@@ -33,8 +39,19 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+# never the real PowerPoint from a test (this desk has it): the COM path below runs a fake PowerShell
+_PP_ENV = os.environ.get("KASTR_PRES_POWERPOINT")
+os.environ["KASTR_PRES_POWERPOINT"] = "0"
 import kastr_pres as kp  # noqa: E402
 import kastr_serve  # noqa: E402
+import build  # noqa: E402
+
+
+def tearDownModule():
+    if _PP_ENV is None:
+        os.environ.pop("KASTR_PRES_POWERPOINT", None)
+    else:
+        os.environ["KASTR_PRES_POWERPOINT"] = _PP_ENV
 
 
 def read(name):
@@ -232,8 +249,9 @@ class StoreTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_round_trip_and_token(self):
-        did, tok = self.st.create("room1", "deck", 3)
+        did, tok, rtok = self.st.create("room1", "deck", 3)
         self.assertRegex(did, r"^[0-9a-f]{32}$")
+        self.assertNotEqual(tok, rtok)
         self.assertEqual(self.st.put(did, "wrong", "s0.bin", io.BytesIO(b"x" * 10), 10)[0], 403)
         self.assertEqual(self.st.put(did, tok, "s0.bin", io.BytesIO(b"x" * 10), 10), (200, "ok"))
         with open(self.st.path(did, "s0.bin"), "rb") as f:
@@ -248,7 +266,7 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(self.st.path(did, "s0.bin"))
 
     def test_limits(self):
-        did, tok = self.st.create("r", "d", 1)
+        did, tok, rtok = self.st.create("r", "d", 1)
         with mock.patch.object(kp, "STORE_BLOB_MAX", 5):
             self.assertEqual(self.st.put(did, tok, "s0.bin", io.BytesIO(b"x" * 6), 6)[0], 413)
         with mock.patch.object(kp, "STORE_DECK_MAX", 8):
@@ -259,9 +277,24 @@ class StoreTests(unittest.TestCase):
                 self.st.create("r", "d", 1)
 
     def test_sweep_after_a_day(self):
-        did, tok = self.st.create("r", "d", 1, now=time.time() - kp.STORE_TTL_S - 5)
+        did, tok, rtok = self.st.create("r", "d", 1, now=time.time() - kp.STORE_TTL_S - 5)
         self.assertEqual(self.st.sweep(), 1)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "pres", did)))
+
+    def test_live_slide_only_without_the_read_token(self):
+        did, tok, rtok = self.st.create("r", "d", 5)
+        self.assertEqual(self.st.readable(did, "s0.bin", ""), (True, False))   # slide 1 is live from the start
+        self.assertEqual(self.st.readable(did, "s1.bin", ""), (False, False))
+        self.assertEqual(self.st.readable(did, "notes.bin", ""), (False, False))
+        self.assertEqual(self.st.readable(did, "s3.bin", "wrong"), (False, False))
+        self.assertEqual(self.st.readable(did, "s3.bin", rtok), (True, True))
+        self.assertEqual(self.st.readable(did, "notes.bin", rtok), (True, True))
+        self.assertEqual(self.st.set_live(did, "wrong", 3), 403)
+        self.assertEqual(self.st.set_live(did, rtok, 3), 403)   # the read token cannot move the slides
+        self.assertEqual(self.st.set_live(did, tok, 3), 200)
+        self.assertEqual(self.st.readable(did, "s3.bin", ""), (True, False))
+        self.assertEqual(self.st.readable(did, "s0.bin", ""), (False, False))   # no paging back
+        self.assertEqual(self.st.set_live("0" * 32, tok, 1), 404)
 
 
 class Endpoints(unittest.TestCase):
@@ -298,6 +331,7 @@ class Endpoints(unittest.TestCase):
         st, d, h = self.req("POST", "/api/pres/new", json.dumps({"room": "r1", "name": "Deck", "n": 2}), {"Content-Type": "application/json"})
         self.assertEqual(st, 200, d)
         j = json.loads(d)
+        self.assertIn("rtoken", j)
         st, d, h = self.req("POST", "/api/pres/%s/s0.bin?token=%s" % (j["id"], j["token"]), b"\x01\x02\x03")
         self.assertEqual(st, 200, d)
         st, d, h = self.req("POST", "/api/pres/%s/s1.bin?token=nope" % j["id"], b"\x01")
@@ -306,9 +340,22 @@ class Endpoints(unittest.TestCase):
         self.assertEqual((st, d), (200, b"\x01\x02\x03"))
         self.assertEqual(h.get("access-control-allow-origin"), "*")
         self.assertEqual(h.get("cross-origin-resource-policy"), "cross-origin")
+        self.assertEqual(h.get("cache-control"), "no-store")   # a viewer's copy of the live slide is not kept
+        st, d, h = self.req("POST", "/api/pres/%s/s1.bin?token=%s" % (j["id"], j["token"]), bytes([4, 5]))
+        self.assertEqual(st, 200)
+        st, d, h = self.req("POST", "/api/pres/%s/notes.bin?token=%s" % (j["id"], j["token"]), bytes([9]))
+        self.assertEqual(st, 200)
+        self.assertEqual(self.req("GET", "/api/pres/%s/s1.bin" % j["id"])[0], 403)   # not live
+        self.assertEqual(self.req("GET", "/api/pres/%s/notes.bin" % j["id"])[0], 403)   # never for a viewer
+        st, d, h = self.req("GET", "/api/pres/%s/s1.bin?rt=%s" % (j["id"], j["rtoken"]))   # backstage
+        self.assertEqual((st, d), (200, bytes([4, 5])))
         self.assertIn("immutable", h.get("cache-control", ""))
-        st, d, h = self.req("GET", "/api/pres/%s/s1.bin" % j["id"])
-        self.assertEqual(st, 404)
+        self.assertEqual(self.req("GET", "/api/pres/%s/notes.bin?rt=%s" % (j["id"], j["rtoken"]))[2].get("cache-control"), "no-store")
+        self.assertEqual(self.req("POST", "/api/pres/%s/live?token=%s&i=1" % (j["id"], j["rtoken"]), b"")[0], 403)
+        self.assertEqual(self.req("POST", "/api/pres/%s/live?token=%s&i=1" % (j["id"], j["token"]), b"")[0], 200)
+        self.assertEqual(self.req("GET", "/api/pres/%s/s1.bin" % j["id"])[0], 200)
+        self.assertEqual(self.req("GET", "/api/pres/%s/s0.bin" % j["id"])[0], 403)   # the slide before: gone for viewers
+        self.assertEqual(self.req("GET", "/api/pres/%s/s7.bin?rt=%s" % (j["id"], j["rtoken"]))[0], 404)
         st, d, h = self.req("POST", "/api/pres/%s/end?token=%s" % (j["id"], j["token"]), b"")
         self.assertEqual(st, 200)
         st, d, h = self.req("GET", "/api/pres/%s/s0.bin" % j["id"])
@@ -316,6 +363,7 @@ class Endpoints(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/pres/zzz/s0.bin")[0], 404)
 
     def test_convert(self):
+        self.assertFalse(kp.powerpoint_enabled())   # KASTR_PRES_POWERPOINT=0 here: the built-in drawing
         st, d, h = self.req("POST", "/api/pres/convert", make_deck(), {"X-Kastr-Name": "my%20deck.pptx"})
         self.assertEqual(st, 200, d[:300])
         j = json.loads(d)
@@ -324,12 +372,115 @@ class Endpoints(unittest.TestCase):
         self.assertEqual(st, 422)
         self.assertIn("error", json.loads(d))
 
+    def test_convert_through_powerpoint_fake(self):
+        runs = []
+        with mock.patch.object(kp, "powerpoint_enabled", return_value=True), mock.patch.object(kp, "run_powershell", side_effect=lambda sc, t, run=None: runs.append(sc) or fake_export(sc)):
+            st, d, h = self.req("POST", "/api/pres/convert", make_deck(), {"X-Kastr-Name": "deck.pptx"})
+        self.assertEqual(st, 200, d[:300])
+        j = json.loads(d)
+        self.assertEqual((j["kind"], j["via"], len(runs)), ("images", "powerpoint", 1))
+        self.assertEqual([x.get("hidden") for x in j["slides"]], [False, False, True])
+        self.assertEqual(j["slides"][0]["notes"], "Say SECRET one" + chr(10) + "line" + chr(10) + "two")
+        st, d, h = self.req("GET", j["slides"][1]["img"])
+        self.assertEqual((st, h.get("content-type")), (200, "image/png"))
+        self.assertEqual(self.req("GET", j["slides"][1]["img"], headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.req("POST", "/api/pres/conv/%s/done" % j["job"], b"")[0], 200)
+        self.assertEqual(self.req("GET", j["slides"][1]["img"])[0], 404)
+
+    def test_convert_falls_back_when_powerpoint_fails(self):
+        with mock.patch.object(kp, "powerpoint_enabled", return_value=True), mock.patch.object(kp, "run_powershell", return_value=mock.Mock(stderr=b"boom")):
+            st, d, h = self.req("POST", "/api/pres/convert", make_deck())
+        j = json.loads(d)
+        self.assertEqual((st, j["kind"]), (200, "scene"))
+        self.assertIn("PowerPoint could not export", j["warnings"][0])
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "pres-conv")), [])   # its job folder is gone
+
     def test_office_is_this_computer_only(self):
         st, d, h = self.req("GET", "/api/pres/office")
         self.assertEqual(st, 200)
         self.assertEqual(set(json.loads(d)), {"powerpoint", "word", "libreoffice", "powerpointExport"})
         st, d, h = self.req("GET", "/api/pres/office", headers={"Origin": "https://evil.example"})
         self.assertEqual(st, 403)
+
+
+def fake_export(script):
+    """A stand-in for PowerShell + PowerPoint: writes s<i>.png where the script would (slides 1 and 2; 3 is hidden)."""
+    m = re.search(r"Join-Path '([^']+)'", script)
+    for i in (1, 2):
+        with open(os.path.join(m.group(1).replace("''", "'"), "s%d.png" % i), "wb") as f:
+            f.write(PNG1)
+    return mock.Mock(stderr=b"", returncode=0)
+
+
+class PowerPointCom(unittest.TestCase):
+    """Kenton: "ON WHENEVER POWERPOINT IS INSTALLED (fall back to the built-in converter)" -- never the real one here."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="kastr-pres-pp-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_enabled_rule(self):
+        self.assertEqual(os.environ.get("KASTR_PRES_POWERPOINT"), "0")
+        self.assertFalse(kp.powerpoint_enabled({"powerpoint": True}))   # switched off (lab, tests)
+        with mock.patch.dict(os.environ, {"KASTR_PRES_POWERPOINT": ""}), mock.patch.object(kp.os, "name", "nt"):
+            self.assertTrue(kp.powerpoint_enabled({"powerpoint": True}))   # on whenever installed
+            self.assertFalse(kp.powerpoint_enabled({"powerpoint": False}))
+        with mock.patch.dict(os.environ, {"KASTR_PRES_POWERPOINT": ""}), mock.patch.object(kp.os, "name", "posix"):
+            self.assertFalse(kp.powerpoint_enabled({"powerpoint": True}))
+
+    def test_powershell_is_hidden_and_encoded(self):
+        seen = {}
+
+        def run(cmd, **kw):
+            seen["cmd"], seen["kw"] = cmd, kw
+            return mock.Mock(stderr=b"")
+        kp.run_powershell("Write-Output 'x'", 77, run)
+        cmd = seen["cmd"]
+        self.assertEqual(cmd[:6], ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"])
+        self.assertEqual(base64.b64decode(cmd[6]).decode("utf-16-le"), "Write-Output 'x'")
+        self.assertEqual(seen["kw"]["timeout"], 77)
+        if os.name == "nt":
+            self.assertEqual(seen["kw"]["creationflags"], 0x08000000)   # CREATE_NO_WINDOW
+
+    def test_export_maps_pictures_to_shown_slides(self):
+        deck = make_deck()
+        scene = kp.convert_pptx(deck)
+        scripts = []
+        out = kp.convert_with_powerpoint(deck, self.tmp, scene, run=lambda cmd, **kw: scripts.append(cmd) or fake_export(base64.b64decode(cmd[6]).decode("utf-16-le")))
+        script = base64.b64decode(scripts[0][6]).decode("utf-16-le")
+        self.assertIn("'PNG', 2560, 2560", script)   # the lab deck is square (4000 x 4000 EMU)
+        self.assertIn("Presentations.Open(", script)
+        self.assertEqual([x.get("img", "").rsplit("/", 1)[-1] for x in out["slides"]], ["s1.png", "s2.png", ""])
+        job = os.path.join(self.tmp, "pres-conv", out["job"])
+        self.assertEqual(sorted(os.listdir(job)), ["s1.png", "s2.png"])   # the copy of the deck is gone
+
+    def test_failures_raise_and_clean_up(self):
+        deck = make_deck()
+        scene = kp.convert_pptx(deck)
+        import subprocess
+
+        def slow(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        with self.assertRaises(kp.ConvertError):
+            kp.convert_with_powerpoint(deck, self.tmp, scene, run=slow, timeout=1)
+        with self.assertRaises(kp.ConvertError):
+            kp.convert_with_powerpoint(deck, self.tmp, scene, run=lambda cmd, **kw: mock.Mock(stderr=b"COM error"))
+        with self.assertRaises(kp.ConvertError):
+            kp.convert_with_powerpoint(deck, self.tmp, scene, run=mock.Mock(side_effect=OSError("no powershell")))
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "pres-conv")), [])
+
+    def test_a_web_clients_deck_never_opens_powerpoint(self):
+        h = mock.Mock()
+        h.path, h.command = "/api/pres/convert", "POST"
+        deck = make_deck()
+        h.headers = {"Content-Length": str(len(deck)), "X-Kastr-Name": "x.pptx"}
+        h.rfile = io.BytesIO(deck)
+        with mock.patch.object(kp, "powerpoint_enabled", return_value=True), mock.patch.object(kp, "_own_page", return_value=False), \
+                mock.patch.object(kp, "convert_with_powerpoint") as cw:
+            kp.handle_api(h, self.tmp)
+        cw.assert_not_called()
 
 
 class PowerPointScript(unittest.TestCase):
@@ -398,8 +549,8 @@ class PageSeams(unittest.TestCase):
     def test_module_guarantees(self):
         j = self.js
         self.hasnt("https://", j, "no CDN")
-        self.has('import("/assets/vendor/pdfjs/pdf.mjs")', j)
-        self.has('GlobalWorkerOptions.workerSrc = "/assets/vendor/pdfjs/pdf.worker.mjs"', j)
+        self.has('import("/assets/vendor/pdfjs/pdf.min.mjs")', j)
+        self.has('GlobalWorkerOptions.workerSrc = "/assets/vendor/pdfjs/pdf.worker.min.mjs"', j)
         pub = j[j.index("  function publish() {"):j.index("  function goTo(")]
         self.hasnt("notes:", pub, "the public record never carries a note")
         self.has("k: b64(kIdx)", pub)   # only the LIVE slide's key
@@ -407,7 +558,7 @@ class PageSeams(unittest.TestCase):
         self.has('hkdf(K, "notes")', j)
         self.has('namedCurve: "P-256"', j)
         self.has('"AES-GCM"', j)
-        self.has("return bitmapFromCipher(baseFor(rec), rec.id, rec.idx, unb64(rec.k));", j)   # a viewer opens only the live slide
+        self.has("const b = await bitmapFromCipher(baseFor(rec), rec.id, rec.idx, unb64(rec.k));", j)   # a viewer opens only the live slide, without the read token
         self.has("if (ctl.bv !== mine.ver && mine.by !== who)", j)   # the collision rule
         self.has("if (!b) return;   // only the backstage people the presenter picked", j)
         self.has('stateSet("presPk", k.pub)', j)
@@ -415,26 +566,81 @@ class PageSeams(unittest.TestCase):
         self.assertEqual(j.count('"notes.bin"'), 2)   # fetchBlob's no-store rule + the backstage fetch (uploadNotes posts /notes.bin)
         ov = j[j.index("  async function paintOverlay("):j.index("  // ---- the presenter view")]
         self.hasnt("notes", ov)
-        self.has('fetchBlob(baseFor(rec), rec.id, "notes.bin", 10)', j)
+        self.has('fetchBlob(baseFor(rec), rec.id, "notes.bin", 10, bk.rt)', j)
+
+    def test_viewers_live_slide_only(self):
+        j = self.js
+        ov = j[j.index("  async function paintOverlay("):j.index("  // ---- the presenter view")]
+        self.hasnt("cacheGet(", ov)   # a viewer's slides never enter the LRU
+        self.has("try { o.vBmp?.close(); } catch {}", ov)   # the slide before is dropped
+        go = j[j.index("  function goTo("):j.index("  function applyIntent(")]
+        self.assertLess(go.index("postLive(m, ni)"), go.index("then(tell, tell)"))   # the store hears first, then the room
+        self.has("rt: mine.rtEnc", j)   # the read token rides inside K
+        self.has('hkdf(K, "read")', j)
+        self.has('go: (i) => { const v = view.deck(); if (!v) return false;', j)
+        self.has("if (!id) return false; view.open", j)
 
     def test_server_and_build(self):
         s = read("kastr_serve.py")
         self.has('if path0 == "/api/pres" or path0.startswith("/api/pres/"):', s)
         self.has('if path.startswith("/api/pres/"):', s)
         self.has('"--hidden-import", "kastr_pres"', read("build.py"))
-        self.has("/assets/vendor/pdfjs/", read(".gitignore"))
+        self.has('"/assets/kastr-pres.js"]', s)   # the service worker caches the module with the shell
 
-    def test_vendor_pdfjs_refuses_unpinned(self):
+
+class PdfJs(unittest.TestCase):
+    """Kenton: pdf.js APPROVED -- pdfjs-dist 6.4.299, the two minified build files kept, vendored like npu/mediapipe."""
+
+    @classmethod
+    def setUpClass(cls):
         import importlib.util
         spec = importlib.util.spec_from_file_location("vendor_pdfjs", os.path.join(HERE, "vendor-pdfjs.py"))
-        vp = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(vp)
-        self.assertEqual(vp.PINNED_VERSION, "")
-        self.assertTrue(all(v is None for v in vp.FILES.values()))
-        with mock.patch("urllib.request.urlopen") as uo:
+        cls.vp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vp)
+        cls.man_path = os.path.join(HERE, "assets", "vendor", "pdfjs", "manifest.json")
+
+    def test_pins(self):
+        vp = self.vp
+        self.assertEqual((vp.PKG["package"], vp.PKG["version"], vp.PKG["license"]), ("pdfjs-dist", "6.4.299", "Apache-2.0"))
+        self.assertEqual(vp.PKG["url"], "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.4.299.tgz")
+        self.assertTrue(vp.PKG["integrity"].startswith("sha512-"))
+        self.assertEqual({k: (v[0], v[2]) for k, v in vp.FILES.items()},
+                         {"build/pdf.min.mjs": ("pdf.min.mjs", 458904), "build/pdf.worker.min.mjs": ("pdf.worker.min.mjs", 1264342)})
+
+    def test_manifest_matches_the_script_and_build_checks_it(self):
+        with open(self.man_path, encoding="utf-8") as f:
+            man = json.load(f)
+        self.assertEqual(man["runtime"], {n: {"sha256": h, "bytes": b} for (n, h, b) in self.vp.FILES.values()})
+        self.assertEqual(man["runtime_source"]["version"], "6.4.299")
+        self.assertIn((self.man_path, "vendor-pdfjs.py"), build.VENDORED)
+        self.assertEqual(sorted(os.path.basename(p) for p, _, _ in build.vendored_files(self.man_path)), ["pdf.min.mjs", "pdf.worker.min.mjs"])
+        self.assertTrue(os.path.isfile(os.path.join(HERE, "assets", "vendor", "pdfjs", "LICENSE.txt")))
+
+    def test_the_two_files_are_git_ignored_and_pinned(self):
+        ignored = [ln.strip().lstrip("/") for ln in read(".gitignore").splitlines() if ln.strip().lstrip("/").startswith("assets/vendor/pdfjs/")]
+        self.assertEqual(sorted(ignored), ["assets/vendor/pdfjs/pdf.min.mjs", "assets/vendor/pdfjs/pdf.worker.min.mjs"])
+        pinned = {os.path.relpath(p, HERE).replace(os.sep, "/") for p, _, _ in build.vendored_files(self.man_path)}
+        self.assertEqual(set(ignored), pinned)
+
+    def test_present_files_verify(self):
+        if not all(os.path.isfile(os.path.join(HERE, "assets", "vendor", "pdfjs", n)) for (n, _, _) in self.vp.FILES.values()):
+            self.skipTest("pdf.js not fetched in this checkout (python vendor-pdfjs.py; build.py fetches it before a build)")
+        self.assertEqual(build.verify_vendored(self.man_path), [])
+        self.assertEqual(self.vp.stale(), [])
+
+    def test_a_bad_tarball_writes_nothing(self):
+        class R(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        with mock.patch.object(self.vp, "DEST", tempfile.mkdtemp(prefix="kastr-pdfjs-")) as d, \
+                mock.patch("urllib.request.urlopen", return_value=R(b"not the tarball")):
             with self.assertRaises(SystemExit):
-                vp.from_npm(False)
-        uo.assert_not_called()
+                self.vp.fetch(list(self.vp.FILES))
+            self.assertEqual(os.listdir(d), [])
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

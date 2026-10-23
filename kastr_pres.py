@@ -13,22 +13,28 @@ Two jobs, no state shared between them:
    the master, theme colours / fonts resolve, pictures (cropped), round rects / ellipses / arrows / custom paths,
    tables, groups, backgrounds, bullets and autofit are drawn; charts, SmartArt and EMF/WMF pictures are not (a note
    on the slide says so). PDFs need no conversion: the page draws them with pdf.js.
-   Optional full fidelity on Windows with PowerPoint installed (KASTR_PRES_POWERPOINT=1, NOT run in the lab -- it
-   would open PowerPoint on the desktop): powerpoint_export_script() exports every slide as PNG through COM.
+   Full fidelity whenever PowerPoint is installed (Kenton, 2026-10-23: "ON WHENEVER POWERPOINT IS INSTALLED"): a
+   conversion asked by this computer's own page exports every shown slide as a 2560-px PNG through PowerPoint's COM
+   server (no window, read-only), falling back to the built-in drawing when that fails. KASTR_PRES_POWERPOINT=0 turns
+   it off (the lab and the unit tests: it would start PowerPoint on a developer's desktop).
 
 2. STORE (the relay host's KASTR): a dumb blob store for ENCRYPTED slide pictures + notes. The presenter's page
    encrypts slide i with its own key k_i (HKDF of a master key K that never leaves the presenter / backstage pages) and
-   the notes with another; the live slide's k_i rides the presenter's room.json, so viewers can open exactly the
-   slides that went live and nothing else; backstage people get K wrapped to their own ECDH key. This server only
-   ever holds ciphertext -- it cannot read a slide or a note, and needs no token check (capability ids, like
-   /api/files). A deck goes when its presenter ends it, or 24 h after it was made.
+   the notes with another; the live slide's k_i rides the presenter's room.json; backstage people get K wrapped to
+   their own ECDH key. This server only ever holds ciphertext. LIVE SLIDE ONLY for viewers (Kenton, 2026-10-23): the
+   presenter tells the store which slide is live (POST .../live) before it tells the room, and without the deck's read
+   token (presenter + backstage get it inside K) only that slide's file is served, uncacheable -- a viewer that kept
+   the keys of earlier slides still cannot page back. A deck goes when its presenter ends it, or 24 h after it was made.
 
 Routes (kastr_serve dispatches /api/pres*):
-  POST /api/pres/convert          body = the .pptx (X-Kastr-Name)  -> {kind:'scene', w, h, slides:[...], media:{...}}
+  POST /api/pres/convert          body = the .pptx (X-Kastr-Name) -> {kind:'scene', w, h, slides, media} or, through
+                                  PowerPoint, {kind:'images', via:'powerpoint', job, w, h, slides:[{img, notes, hidden}]}
+  GET  /api/pres/conv/<job>/s<i>.png   PowerPoint's picture (this computer only); POST .../done drops the job
   GET  /api/pres/office           this computer only: {powerpoint, word, libreoffice, powerpointExport}
-  POST /api/pres/new              {room, name, n} -> {id, token}
+  POST /api/pres/new              {room, name, n} -> {id, token, rtoken}
   POST /api/pres/<id>/<file>?token=   body = one encrypted blob (s<i>.bin | notes.bin)
-  GET  /api/pres/<id>/<file>      the blob (CORS + CORP cross-origin: other machines' pages fetch it)
+  POST /api/pres/<id>/live?token=&i=  the slide that is live now
+  GET  /api/pres/<id>/<file>[?rt=]    the blob (CORS + CORP cross-origin); without rt only the live s<i>.bin
   POST /api/pres/<id>/end?token=  remove the deck (also the presenter page's pagehide beacon)
 """
 import base64
@@ -38,6 +44,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -1136,13 +1143,19 @@ def notes_only(data):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# office programs on this computer (design + the opt-in fidelity path; nothing here starts a program)
+# office programs on this computer -- detection never starts a program; the COM export runs only on a conversion asked
+# by this computer's own page, when PowerPoint is installed (0.21.84, Kenton: "ON WHENEVER POWERPOINT IS INSTALLED")
+
+_OFFICE = [None, 0.0]
+POWERPOINT_TIMEOUT_S = 300          # a big deck on a slow laptop; then the built-in drawing is used
+CONV_TTL_S = 2 * 3600               # exported pictures nobody collected
 
 
-def office_status():
-    """What could convert here at full fidelity. Detection only: a registry key / a file, never a launched program."""
-    out = {"powerpoint": False, "word": False, "libreoffice": None,
-           "powerpointExport": os.environ.get("KASTR_PRES_POWERPOINT") == "1"}
+def office_status(fresh=False):
+    """What could convert here at full fidelity (cached 60 s). Detection only: a registry key / a file."""
+    if not fresh and _OFFICE[0] is not None and time.time() - _OFFICE[1] < 60:
+        return dict(_OFFICE[0])
+    out = {"powerpoint": False, "word": False, "libreoffice": None}
     if os.name == "nt":
         try:
             import winreg
@@ -1160,18 +1173,29 @@ def office_status():
             out["libreoffice"] = p
             break
     if not out["libreoffice"] and os.name == "nt":
-        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+        for base in (os.environ.get("ProgramFiles", "C:/Program Files"), os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")):
             p = os.path.join(base, "LibreOffice", "program", "soffice.exe")
             if os.path.exists(p):
                 out["libreoffice"] = p
                 break
+    out["powerpointExport"] = powerpoint_enabled(out)
+    _OFFICE[0], _OFFICE[1] = dict(out), time.time()
     return out
+
+
+def powerpoint_enabled(status=None):
+    """Windows with PowerPoint's COM server registered -- unless KASTR_PRES_POWERPOINT=0 (the lab and the tests set it:
+    on a developer's desk it would start PowerPoint)."""
+    if os.environ.get("KASTR_PRES_POWERPOINT") == "0" or os.name != "nt":
+        return False
+    st = status if status is not None else office_status()
+    return bool(st.get("powerpoint"))
 
 
 def powerpoint_export_script(src, outdir, width=2560, height=1440):
     """The PowerShell that exports every slide of `src` as s<i>.png through PowerPoint's COM server (WithWindow =
-    msoFalse: no window; ReadOnly; quits PowerPoint only when it started it). Returned, not run -- the caller decides
-    (0.21.84 prototype: only with KASTR_PRES_POWERPOINT=1, never in the lab)."""
+    msoFalse: no window; ReadOnly; hidden slides skipped; quits PowerPoint only when it started it). i = the slide's
+    position in the deck (1-based), the scene's order."""
     q = lambda s: "'" + str(s).replace("'", "''") + "'"
     return "\n".join([
         "$ErrorActionPreference = 'Stop'",
@@ -1184,6 +1208,83 @@ def powerpoint_export_script(src, outdir, width=2560, height=1440):
         "    $s.Export((Join-Path %s ('s' + $i + '.png')), 'PNG', %d, %d) }" % (q(outdir), int(width), int(height)),
         "} finally { $pres.Close(); if (-not $had -and $pp.Presentations.Count -eq 0) { $pp.Quit() } }",
     ])
+
+
+def _conv_root(state_dir):
+    return os.path.join(state_dir, "pres-conv")
+
+
+def sweep_conversions(state_dir, now=None):
+    now = now or time.time()
+    root = _conv_root(state_dir)
+    try:
+        jobs = [j for j in os.listdir(root) if ID_RE.match(j)]
+    except OSError:
+        return 0
+    gone = 0
+    for j in jobs:
+        d = os.path.join(root, j)
+        try:
+            if now - os.path.getmtime(d) > CONV_TTL_S:
+                shutil.rmtree(d, ignore_errors=True)
+                gone += 1
+        except OSError:
+            pass
+    return gone
+
+
+def run_powershell(script, timeout, run=None):
+    """One hidden PowerShell (no window, no profile), the script as -EncodedCommand (no quoting games)."""
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc]
+    kw = {"capture_output": True, "timeout": timeout}
+    if os.name == "nt":
+        kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return (run or subprocess.run)(cmd, **kw)
+
+
+def convert_with_powerpoint(data, state_dir, scene, note=None, run=None, timeout=None, width=2560):
+    """PowerPoint exports every shown slide as a 2560-px PNG into <state>/pres-conv/<job>/ -> the 'images' result
+    (notes, hidden flags and the slide size come from `scene`, the built-in parse). Raises ConvertError -- the caller
+    then keeps the scene."""
+    note = note or (lambda *a: None)
+    sweep_conversions(state_dir)
+    job = uuid.uuid4().hex
+    d = os.path.join(_conv_root(state_dir), job)
+    os.makedirs(d)
+    src = os.path.join(d, "deck.pptx")
+    with open(src, "wb") as f:
+        f.write(data)
+    h = int(round(width * scene["h"] / float(scene["w"] or 1) / 2)) * 2
+    t0 = time.time()
+
+    def fail(msg):
+        shutil.rmtree(d, ignore_errors=True)
+        raise ConvertError(msg)
+    try:
+        r = run_powershell(powerpoint_export_script(src, d, width, h), timeout or POWERPOINT_TIMEOUT_S, run)
+    except subprocess.TimeoutExpired:
+        fail("PowerPoint did not finish in %d s" % (timeout or POWERPOINT_TIMEOUT_S))
+    except OSError as e:
+        fail("PowerPoint could not be started (%s)" % e)
+    finally:
+        try:
+            os.remove(src)
+        except OSError:
+            pass
+    slides = []
+    for i, sl in enumerate(scene["slides"], 1):
+        if sl.get("hidden"):
+            slides.append({"hidden": True, "notes": sl.get("notes", "")})
+            continue
+        f = os.path.join(d, "s%d.png" % i)
+        if not os.path.isfile(f) or os.path.getsize(f) == 0:
+            err = (getattr(r, "stderr", b"") or b"")
+            err = err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)
+            fail("PowerPoint made no picture of slide %d%s" % (i, (": " + err.strip().splitlines()[-1][:160]) if err.strip() else ""))
+        slides.append({"img": "/api/pres/conv/%s/s%d.png" % (job, i), "notes": sl.get("notes", ""), "hidden": False})
+    note("pres: PowerPoint exported %d slides in %d ms" % (sum(1 for x in slides if not x.get("hidden")), int((time.time() - t0) * 1000)))
+    return {"kind": "images", "via": "powerpoint", "job": job, "w": scene["w"], "h": scene["h"], "slides": slides, "warnings": []}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1240,13 +1341,42 @@ class Store:
                 raise ValueError("this relay host holds too many presentations -- try again later")
             if sum(self._size(d) for d in decks) > STORE_TOTAL_MAX:
                 raise ValueError("this relay host's presentation space is full")
-            did, tok = uuid.uuid4().hex, uuid.uuid4().hex
+            did, tok, rtok = uuid.uuid4().hex, uuid.uuid4().hex, uuid.uuid4().hex
             os.makedirs(os.path.join(self.root, did))
-            meta = {"id": did, "token": tok, "room": str(room or "")[:64], "name": str(name or "")[:120],
+            meta = {"id": did, "token": tok, "rtoken": rtok, "live": 0, "room": str(room or "")[:64], "name": str(name or "")[:120],
                     "n": max(0, min(SLIDES_MAX, _int(n))), "at": int(now or time.time())}
-            with open(os.path.join(self.root, did, "meta.json"), "w", encoding="utf-8") as f:
-                json.dump(meta, f)
-            return did, tok
+            self._write_meta(did, meta)
+            return did, tok, rtok
+
+    def _write_meta(self, did, meta):
+        p = os.path.join(self.root, did, "meta.json")
+        with open(p + ".part", "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        os.replace(p + ".part", p)
+
+    def set_live(self, did, token, i):
+        """0.21.84 (Kenton: "Viewers: LIVE SLIDE ONLY"): the presenter says which slide is live before it tells the room."""
+        if not ID_RE.match(did or ""):
+            return 404
+        with STORE_LOCK:
+            m = self._meta(did)
+            if m is None:
+                return 404
+            if not token or token != m.get("token"):
+                return 403
+            m["live"] = max(0, min(SLIDES_MAX, _int(i)))
+            self._write_meta(did, m)
+        return 200
+
+    def readable(self, did, fname, rtoken):
+        """-> (ok, full): the read token (presenter + backstage, it rides inside K) opens every file; without it only
+        the LIVE slide's picture is served -- never another slide, never the notes."""
+        m = self._meta(did) if ID_RE.match(did or "") else None
+        if m is None:
+            return False, False
+        if rtoken and rtoken == m.get("rtoken"):
+            return True, True
+        return fname == "s%d.bin" % _int(m.get("live")), False
 
     def put(self, did, token, fname, rfile, length):
         if not ID_RE.match(did or "") or not BLOB_RE.match(fname or ""):
@@ -1379,9 +1509,17 @@ def handle_api(handler, state_dir, note=None):
         try:
             t0 = time.time()
             out = convert_pptx(data)
+            # PowerPoint, when installed, draws the slides exactly -- only for this computer's own page (a web client's
+            # deck must never open PowerPoint on the relay host's desktop); the built-in drawing is the fallback
+            if state_dir and _own_page(handler) and powerpoint_enabled():
+                try:
+                    out = convert_with_powerpoint(data, state_dir, out, note)
+                except ConvertError as e:
+                    note("pres: PowerPoint export failed (%s) -- the built-in drawing is used" % e)
+                    out.setdefault("warnings", []).insert(0, "PowerPoint could not export this deck (%s) -- KASTR drew it itself" % e)
             out["name"] = name
             out["ms"] = int((time.time() - t0) * 1000)
-            note("pres: converted %s (%d slides, %d pictures) in %d ms" % (name, len(out["slides"]), len(out["media"]), out["ms"]))
+            note("pres: converted %s (%d slides, %s) in %d ms" % (name, len(out["slides"]), out.get("via") or "built-in", out["ms"]))
             return _reply(handler, 200, out)
         except ConvertError as e:
             return _reply(handler, 422, {"error": str(e)})
@@ -1393,6 +1531,27 @@ def handle_api(handler, state_dir, note=None):
     if not state_dir:
         _drain(handler)
         return _reply(handler, 503, {"error": "no storage here"})
+    mc = re.match(r"^/api/pres/conv/([0-9a-f]{32})/(s[0-9]{1,4}[.]png|done)$", path)
+    if mc or path.startswith("/api/pres/conv/"):   # PowerPoint's pictures, for this computer's own page only
+        _drain(handler)
+        if not mc or not _own_page(handler):
+            return _reply(handler, 404 if not mc else 403, {"error": "no such conversion"})
+        d = os.path.join(_conv_root(state_dir), mc.group(1))
+        if mc.group(2) == "done":
+            shutil.rmtree(d, ignore_errors=True)
+            return _reply(handler, 200, {"ok": True})
+        p = os.path.join(d, mc.group(2))
+        if not os.path.isfile(p):
+            return _reply(handler, 404, {"error": "no such picture"})
+        with open(p, "rb") as f:
+            raw = f.read()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "image/png")
+        handler.send_header("Content-Length", str(len(raw)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(raw)
+        return True
     store = Store(state_dir)
     if path == "/api/pres/new":
         if method != "POST":
@@ -1403,11 +1562,11 @@ def handle_api(handler, state_dir, note=None):
         except ValueError:
             body = {}
         try:
-            did, tok = store.create(body.get("room"), body.get("name"), body.get("n"))
+            did, tok, rtok = store.create(body.get("room"), body.get("name"), body.get("n"))
         except ValueError as e:
             return _reply(handler, 507, {"error": str(e)})
         note("pres: new deck %s (%s slides) for room %s" % (did[:8], body.get("n"), str(body.get("room") or "")[:40]))
-        return _reply(handler, 200, {"id": did, "token": tok})
+        return _reply(handler, 200, {"id": did, "token": tok, "rtoken": rtok})
     m = re.match(r"^/api/pres/([0-9a-f]{32})/([A-Za-z0-9._-]{1,48})$", path)
     if not m:
         _drain(handler)
@@ -1418,6 +1577,12 @@ def handle_api(handler, state_dir, note=None):
         _drain(handler)
         code = store.end(did, token)
         return _reply(handler, code, {"ok": code == 200})
+    if fname == "live":
+        _drain(handler)
+        if method != "POST":
+            return _reply(handler, 405, {"error": "POST"})
+        code = store.set_live(did, token, (qs.get("i") or ["0"])[0])
+        return _reply(handler, code, {"ok": code == 200})
     if method == "POST":
         code, msg = store.put(did, token, fname, handler.rfile, _length(handler))
         if code != 200:
@@ -1425,6 +1590,11 @@ def handle_api(handler, state_dir, note=None):
         return _reply(handler, code, {"ok": code == 200} if code == 200 else {"error": msg})
     if method not in ("GET", "HEAD"):
         return _reply(handler, 405, {"error": "GET"})
+    if not BLOB_RE.match(fname):
+        return _reply(handler, 404, {"error": "no such presentation file"})
+    ok, full = store.readable(did, fname, (qs.get("rt") or [""])[0])
+    if not ok:   # a viewer asking for a slide that is not live (or the notes): nothing, whatever keys it kept
+        return _reply(handler, 403 if store._meta(did) else 404, {"error": "only the live slide" if store._meta(did) else "no such presentation"})
     p = store.path(did, fname)
     if not p:
         return _reply(handler, 404, {"error": "not there (yet)"})
@@ -1432,8 +1602,9 @@ def handle_api(handler, state_dir, note=None):
     handler.send_response(200)
     handler.send_header("Content-Type", "application/octet-stream")
     handler.send_header("Content-Length", str(size))
-    # a slide picture never changes under its name (a new deck = a new id); the notes are rewritten when edited
-    handler.send_header("Cache-Control", "no-store" if fname == "notes.bin" else "private, max-age=86400, immutable")
+    # backstage may keep a slide (it never changes under its name); a viewer's copy is not kept -- no paging back
+    # through the browser's cache; the notes are rewritten when edited
+    handler.send_header("Cache-Control", "private, max-age=86400, immutable" if full and fname != "notes.bin" else "no-store")
     _cors(handler)
     handler.end_headers()
     if method == "HEAD":

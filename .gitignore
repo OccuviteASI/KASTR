@@ -23,5 +23,7 @@ browser.old-*
 /assets/npu/modnet_fp16.onnx
 /assets/mediapipe/wasm/vision_wasm_internal.wasm
 
-# 0.21.84 (prototype): pdf.js is not vendored until Kenton approves it (vendor-pdfjs.py); a lab copy must never be committed
-/assets/vendor/pdfjs/
+# 0.21.84: pdf.js (pdfjs-dist 6.4.299, approved) -- the two build files are pinned in assets/vendor/pdfjs/manifest.json and
+# fetched by vendor-pdfjs.py (build.py verifies them); manifest.json + LICENSE.txt are tracked
+/assets/vendor/pdfjs/pdf.min.mjs
+/assets/vendor/pdfjs/pdf.worker.min.mjs

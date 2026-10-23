@@ -71,7 +71,8 @@ def precache_list(root):
         return _PRECACHE[0]
     out = ["/moq-watch-lite.html", "/index.html", "/watch.html", "/manifest.webmanifest",
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
-           "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg"]
+           "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
+           "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)
         for dp, _dn, fns in os.walk(base):

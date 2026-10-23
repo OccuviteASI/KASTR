@@ -316,6 +316,13 @@ MESH_PROBE_WORKERS = 4            # probes at once
 MESH_PROBE_MAX = 16               # candidate addresses per round
 MESH_TRACE_TIMEOUT = 40           # one traceroute, at most
 MESH_TICK_S = 15                  # the spoke's mesh loop: link state from /nodes, streams crossing (every other tick)
+# 0.21.83 (lab v02183/E: the "relay-role cluster sessions timing out every ~10 s" in the 0.21.80 grid lab were NOT the hub
+# link -- they were these ~stats reads): `moq fetch` reads its one group in ~0.1 s and exits without a QUIC CONNECTION_CLOSE,
+# so the relay kept each session (announcing every stream to a dead peer) until its 10 s idle timeout -- five per relay per
+# tick, each a "relay session: end ... role=relay 10 s ... timed out" line. A short idle timeout advertised by the fetch
+# (QUIC uses the smaller of the two sides') ends them in ~2 s; the token's `probe` claim keeps them out of the log.
+MESH_FETCH_QUIC = ("--quic-idle-timeout", "2s", "--quic-keep-alive", "500ms")
+STATS_PROBE_CLAIMS = dict({"root": "", "put": "", "get": ""}, probe="stats")   # = FEDERATION_CLAIMS + probe
 MESH_LINK_TTL = 30 * 86400        # a link token (re-minted with 7 days left, like the federation token)
 MESH_LINK_RENEW = 7 * 86400
 MESH_LINK_KEEP_S = 24 * 3600      # an AUTO link stays while a private-path probe succeeded this recently (an outage never flaps it)
@@ -833,6 +840,16 @@ def _stat_open(c, what):
     a = c.get(what + "_started", c.get(what))
     b = c.get(what + "_ended", c.get(what + "_closed"))
     return int(a or 0) - int(b or 0)
+
+
+def mesh_fetch_args(moq, url, broadcast, track):
+    """0.21.83: the bundled moq tool reading one ~stats track -- root options (the short QUIC idle timeout) before `fetch`."""
+    return [moq, "--log-level", "error", *MESH_FETCH_QUIC, "--connect", url, "--broadcast", broadcast, "fetch", track]
+
+
+def is_probe_claims(claims):
+    """0.21.83: KASTR's own ~stats read (a relay-shaped token marked `probe`) -- counted at its end, never logged."""
+    return is_relay_claims(claims) and claims.get("probe") == "stats"
 
 
 def mesh_open_paths(j, role="subscriber.json"):
@@ -6562,7 +6579,7 @@ class AuthService:
                 dur = float(req.get("duration") or 0)
             except (TypeError, ValueError):
                 dur = 0.0
-            probe = bool(rec) and rec.get("role") == "relay" and is_loopback_addr(rec.get("remote")) and dur < 5
+            probe = bool(rec) and rec.get("role") == "relay" and is_loopback_addr(rec.get("remote")) and (dur < 5 or bool(rec.get("probe")))   # 0.21.83: + the mesh's ~stats reads, however long
             if probe:
                 with self.lock:
                     self.probe_ends += 1
@@ -6605,8 +6622,10 @@ class AuthService:
         is_vehicle = False
         link = None
         pg = False   # 0.21.78: a personal room's guest
+        probe = False   # 0.21.83: KASTR's own ~stats read
         if status == "grant":
             claims = verify_token(session_jwt(req), self.key, vnow) or {}
+            probe = is_probe_claims(claims)
             link = mesh_slug(claims.get("link")) if is_link_claims(claims) else (fed_link_node(claims) or None)   # 0.21.77: a relay dialling us directly; 0.21.78: or a spoke's hub link
             room, host = claims_identity(claims)
             if not room and claims.get("vehicle"):   # 0.21.63: a vehicle token has no `get`; a kick still finds it
@@ -6643,6 +6662,7 @@ class AuthService:
                                        "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False,   # 0.17.0: the identity a kick keys on
                                        "pg": pg,                                        # 0.21.78: a personal room's guest
+                                       "probe": probe,                                  # 0.21.83: a ~stats read (not logged at its end)
                                        "link": link}                                    # 0.21.77: the dialer of a link session
         return grant, 200
 
@@ -10004,14 +10024,14 @@ class Relay:
         now = int(time.time())
         url = "http://127.0.0.1:%d/" % int(self.port)
         if self.secured:
-            url += "?jwt=" + _mint(auth.key, dict(FEDERATION_CLAIMS, iat=now, exp=now + 120))
+            url += "?jwt=" + _mint(auth.key, dict(STATS_PROBE_CLAIMS, iat=now, exp=now + 120))   # 0.21.83: marked a probe
         samples, per_path = {}, {}
 
         def fetch(key, track):
             """-> (json | None, bits/s | None): one ~stats track, and its rate against the oldest sample of the last ~40 s."""
             try:
-                p = subprocess.run([moq, "--log-level", "error", "--connect", url, "--broadcast", STATS_KIND + "/node/" + node,
-                                    "fetch", track], capture_output=True, timeout=6, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                p = subprocess.run(mesh_fetch_args(moq, url, STATS_KIND + "/node/" + node, track),
+                                   capture_output=True, timeout=6, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 t = time.time()
                 j = json.loads(p.stdout.decode("utf-8", "replace") or "{}")
             except Exception:

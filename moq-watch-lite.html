@@ -2162,13 +2162,14 @@
   #xsPop .xsrow.libsw .lbt small { color:var(--text-mute); font-size:10px; }
   #xsPop .xsrow.libsw .lerr { color:var(--asi-red); font-size:10px; }
   /* an empty room: the way in */
-  #libEmptyCta { position:absolute; left:50%; top:45%; transform:translate(-50%, -50%); z-index:4; height:auto; padding:16px 26px; display:flex; flex-direction:column; align-items:center; gap:5px;
+  #libEmptyCta { position:absolute; left:50%; bottom:28px; transform:translateX(-50%); z-index:4; height:auto; padding:16px 26px; display:flex; flex-direction:column; align-items:center; gap:5px;
     border-radius:10px; background:var(--surface); border:1px dashed var(--asi-blue-dim); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.35); }
   #libEmptyCta:hover { background:var(--surface-2); border-color:var(--asi-blue); }
   #libEmptyCta:focus-visible { outline:2px solid var(--asi-blue); outline-offset:3px; }
   #libEmptyCta .t { font-size:14px; font-weight:600; color:var(--asi-blue); }
   #libEmptyCta .d { font-size:11px; font-weight:400; color:var(--text-mute); }
   #libEmptyCta[hidden] { display:none; }
+  /* 0.21.85: at the bottom of the stage -- the middle is where your own picture sits when you are alone */
   #stagewrap.libdrop { outline:2px dashed var(--asi-blue); outline-offset:-6px; }
   @media (max-width: 720px), (max-height: 500px) {
     #libPanel, #libPanel.popcard { top:0 !important; bottom:0 !important; left:0 !important; right:0; width:100vw; height:100dvh !important; max-height:100dvh !important; border-radius:0; border:0;

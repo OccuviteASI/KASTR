@@ -65,7 +65,7 @@ class Tabs(unittest.TestCase):
         self.assertIn("let shTabOpen = false;", page)
 
     def test_overlay_names_a_tab(self):
-        self.assertIn('"tab": "You\'re sharing a tab"', _read("kastr_overlay.py"))
+        self.assertIn('"tab": "Sharing a tab"', _read("kastr_overlay.py"))   # 0.21.83: shorter (was "You're sharing a tab")
 
 
 class Security(unittest.TestCase):

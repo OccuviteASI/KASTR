@@ -339,7 +339,8 @@ class Injector(unittest.TestCase):
 
     def test_lifecycle_bar_and_end(self):
         self.grant()
-        self.assertEqual(self.ui.shown[-1][1:], ("control", "Bob is controlling your window \u2014 Stop control (Ctrl+Alt+Space)", ["stop"]))
+        # 0.21.83: a shorter label, and Stop sharing beside Stop control (tests/test_release_0_21_83_pill_admin.py)
+        self.assertEqual(self.ui.shown[-1][1:], ("control", "Bob has control (Ctrl+Alt+Space)", ["stop", "share-stop"]))
         st = self.r.status(self.RCID)
         self.assertEqual((st["active"], st["controller"], st["paused"]), (True, B, False))
         self.ui.on_button("stop")                      # the share's bar
@@ -415,10 +416,14 @@ class Injector(unittest.TestCase):
         self.assertEqual((self.ev("pointer")[0], self.ev("button")[0]), (("pointer", -960, 540, True), ("button", 0, True, -1920, 1079, "post")))
 
     def test_never_clicks_kastr_bar(self):
+        # 0.21.83 (Kenton: "... when I try to click in that space it doesn't work to click on the things behind the pill"): a
+        # press on the pill's rect is no longer dropped -- it goes to the window BEHIND the pill (the pill turns click-through
+        # first; KASTR's own buttons still ignore injected presses: kastr_overlay)
         self.ui.bar = {"x": 300, "y": 56, "w": 200, "h": 30}
         self.grant()
         self.put([{"t": "d", "b": 0, "x": (350 - 100) / 640, "y": (60 - 50) / 400}])
-        self.assertEqual(self.ev("button"), [])
+        self.assertEqual(self.ev("button"), [("button", 0, True, 350, 60, "post")])
+        self.assertEqual(self.r.stats["bar"], 1)
 
     def test_covered_window_is_raised_or_the_click_dropped(self):
         self.grant()

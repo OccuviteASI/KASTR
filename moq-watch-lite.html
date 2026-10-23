@@ -1099,6 +1099,16 @@
   #kRcBar button { background:#fff; color:#B42318; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
   #kRcCtl button { background:var(--asi-amber); color:#111; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
   .pane .rccap { position:absolute; inset:0; z-index:5; cursor:default !important; outline:none; }
+  /* 0.21.83: the controller's notice pinned on an administrator window (while their pointer is over it), its outline, and a faint
+     outline where the sharer's KASTR pill sits (left out of the picture) */
+  #kRcCtl.amber { background:#4a3000; border-color:var(--asi-amber, #F5A623); }
+  .pane .rcadmbox { position:absolute; z-index:6; pointer-events:none; border:2px dashed var(--asi-amber, #F5A623); border-radius:6px; background:rgba(245,166,35,.07); box-sizing:border-box; }
+  .pane .rcadmin { position:absolute; z-index:7; pointer-events:none; transform:translateX(-50%); display:flex; gap:8px; align-items:flex-start;
+    padding:8px 12px; border-radius:10px; background:var(--asi-amber, #F5A623); color:#111; font-size:12px; font-weight:600; line-height:1.4; box-shadow:0 6px 18px rgba(0,0,0,.45); }
+  .pane .rcadmin .ic { flex:none; width:18px; height:18px; border-radius:50%; background:#111; color:var(--asi-amber, #F5A623); display:grid; place-items:center; font-weight:800; font-size:12px; }
+  .pane .rcbarghost { position:absolute; z-index:6; pointer-events:none; border:1px dashed rgba(255,255,255,.6); border-radius:999px; box-sizing:border-box; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+  .pane .rcbarghost span { position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:2px; font-size:10px; color:rgba(255,255,255,.85); white-space:nowrap; text-shadow:0 1px 2px #000; }
+  .pane .rcadmin[hidden], .pane .rcadmbox[hidden], .pane .rcbarghost[hidden] { display:none; }
   .pane.rcon { outline:2px solid var(--asi-amber); outline-offset:-2px; }
   /* 0.21.80 (Kenton: "show my mouse with my name for the viewers"): both people's pointers over a remote-controlled share, each
      with the person's name in their colour (drawn by every viewer from the share's ptr.json, lined up with the picture) */
@@ -5003,6 +5013,7 @@
       c.clipLast = v.clip.text;
       try { navigator.clipboard?.writeText?.(v.clip.text)?.catch?.(() => { c.clipPend = v.clip.text; }); } catch { c.clipPend = v.clip.text; }
     }
+    rcAdminPaint(c);   // 0.21.83
     rcCtlPaint(c);
   }
   function rcCtlTick(c) {
@@ -5021,6 +5032,7 @@
         if (new Blob([tx]).size <= RC_CLIP_MAX) rcEmit(c, { t: "clip", text: tx });
       }, () => {});
     }
+    rcAdminPaint(c);   // 0.21.83: the tile may have moved / zoomed
     rcCtlPaint(c);
   }
   function rcEmit(c, ev) {   // into my in.json: the last RC_KEEP_MS of events (moves go first when it is too long)
@@ -5068,12 +5080,13 @@
       stop(e);
       const p = rcPoint(t, e.clientX, e.clientY);
       if (!p || rcCtl !== c) return;
+      c.lastP = p; rcAdminPaint(c);   // 0.21.83: the administrator-window notice follows my pointer
       c.mv = p;
       // 0.21.80: leading edge -- a move goes at once unless one went in the last 16 ms (then the newest goes at the 16 ms mark):
       // ~60 a second at most, and never a 16 ms wait for the first one
       if (!c.mvT) { const w = 16 - (performance.now() - c.mvAt); if (w <= 0) rcFlushMove(c); else c.mvT = setTimeout(() => { c.mvT = 0; rcFlushMove(c); }, w); }
     });
-    cap.addEventListener("mouseleave", () => { if (rcCtl !== c) return; rcFlushMove(c); rcEmit(c, { t: "m", o: 1 }); });   // 0.21.80: my arrow leaves their screen too
+    cap.addEventListener("mouseleave", () => { if (rcCtl !== c) return; rcFlushMove(c); rcEmit(c, { t: "m", o: 1 }); c.lastP = null; rcAdminPaint(c); });   // 0.21.80: my arrow leaves their screen too
     cap.addEventListener("mousedown", (e) => {
       stop(e); e.preventDefault();
       cap.focus({ preventScroll: true });
@@ -5160,13 +5173,53 @@
     let t = "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 your own pointer is on their screen; hold Esc to give it back";   // 0.21.80
     if (st.paused) t = c.name + " is using their mouse \u2014 paused";
     else if (st.blocked === "drag") t = c.name + " is dragging with their own mouse \u2014 your click goes as soon as they let go";   // 0.21.80
-    else if (st.blocked === "elevated") t = "That window runs as administrator on " + c.name + "\u2019s computer \u2014 Windows doesn\u2019t let KASTR control it";
+    else if (st.blocked === "elevated" || c.overAdmin) t = "That window runs as administrator on " + c.name + "\u2019s computer \u2014 Windows blocks KASTR\u2019s clicks and typing there";   // 0.21.83: + while my pointer is over it
     else if (st.blocked === "secure") t = c.name + "\u2019s computer shows a secure screen (sign-in or an administrator prompt) \u2014 KASTR can\u2019t control it";
     else if (st.blocked === "focus") t = "Click inside " + c.name + "\u2019s shared window first \u2014 keys go to the window in front";
     else if (st.blocked === "hidden") t = c.name + "\u2019s shared window is minimized";
     el.querySelector(".t").textContent = t;
     el.classList.toggle("paused", !!st.paused);
+    el.classList.toggle("amber", !st.paused && (st.blocked === "elevated" || !!c.overAdmin));   // 0.21.83: the reason stands out
     el.hidden = false;
+  }
+  // 0.21.83 (Kenton: "The pop-up saying it was admin wasn't easy to notice why it wasn't working for me and it didn't stay very
+  // long."): an amber badge PINNED on the administrator window in my view of their screen (st.json's admin.r, normalised to the
+  // picture -- kastr_rc._shapes), shown while my pointer is over that window (not a timed toast), with a dashed outline on it;
+  // the banner turns amber with the reason. And a faint outline where their KASTR pill sits (Kenton: "I am unable to see the red
+  // sharing pill at the top"): it is left out of the picture -- my clicks there now reach what is behind it.
+  function rcRectBox(t, r) {   // [u0, v0, u1, v1] on the picture -> {l, t, w, h} in the pane, or null
+    if (!t || !Array.isArray(r) || r.length !== 4) return null;
+    const a = rcClientOf(t, Math.max(0, +r[0]), Math.max(0, +r[1])), b = rcClientOf(t, Math.min(1, +r[2]), Math.min(1, +r[3]));
+    if (!a || !b || b[0] - a[0] < 2 || b[1] - a[1] < 2) return null;
+    return { l: a[0], t: a[1], w: b[0] - a[0], h: b[1] - a[1] };
+  }
+  const rcInR = (p, r) => !!p && Array.isArray(r) && p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+  function rcShape(c, cls, html) {
+    let el = c.pane.querySelector("." + cls);
+    if (!el) { el = document.createElement("div"); el.className = cls; el.hidden = true; if (html) el.innerHTML = html; c.pane.appendChild(el); }
+    return el;
+  }
+  const rcPlace = (el, bx) => { el.style.left = Math.round(bx.l) + "px"; el.style.top = Math.round(bx.t) + "px"; el.style.width = Math.round(bx.w) + "px"; el.style.height = Math.round(bx.h) + "px"; };
+  function rcAdminPaint(c) {
+    if (rcCtl !== c || !c.pane) return;
+    const t = tiles.get(c.share), st = c.st || {};
+    const ar = st.admin && Array.isArray(st.admin.r) ? st.admin.r : null;
+    const box = ar ? rcRectBox(t, ar) : null, over = !!box && rcInR(c.lastP, ar);
+    const ol = rcShape(c, "rcadmbox"), bd = rcShape(c, "rcadmin", '<span class="ic" aria-hidden="true">!</span><span class="tx"></span>');
+    if (over) {
+      rcPlace(ol, box);
+      const tx = "Admin window \u2014 clicks and typing are blocked by Windows. Minimize, move, resize and close need KASTR to run as administrator on " + c.name + "\u2019s computer.";
+      const tEl = bd.querySelector(".tx");
+      if (tEl.textContent !== tx) tEl.textContent = tx;
+      bd.style.left = Math.round(box.l + box.w / 2) + "px"; bd.style.top = Math.round(box.t + Math.min(44, Math.max(6, box.h / 4))) + "px";
+      bd.style.maxWidth = Math.max(180, Math.min(420, Math.round(box.w - 16))) + "px";
+      bd.setAttribute("role", "status");
+    }
+    ol.hidden = bd.hidden = !over;
+    const bb = !st.barCap && Array.isArray(st.bar) ? rcRectBox(t, st.bar) : null, gh = rcShape(c, "rcbarghost", "<span>their KASTR bar</span>");
+    if (bb) rcPlace(gh, bb);
+    gh.hidden = !bb;
+    if (over !== !!c.overAdmin) { c.overAdmin = over; rcCtlPaint(c); }
   }
   function rcCtlEnd(why, fromThem) {
     const c = rcCtl;
@@ -5178,6 +5231,7 @@
     try { c.sub?.close(); } catch {}
     if (c.up) window.removeEventListener("mouseup", c.up, true);
     c.cap?.remove(); c.pane?.classList.remove("rcon");
+    try { c.pane?.querySelectorAll(".rcadmin, .rcadmbox, .rcbarghost").forEach((e) => e.remove()); } catch {}   // 0.21.83
     try { navigator.keyboard?.unlock?.(); } catch {}
     try { applyState(); } catch {}   // 0.21.80: back to the tile's normal player budget and priority
     rcPtrSync();
@@ -5351,8 +5405,9 @@
     if (d.ptr && (!g.ws || Date.now() - g.ptrAt > 900)) rcPtrPush(g, d.ptr);   // 0.21.80: no WebSocket -- a slower stream; and a heartbeat
   }
   function rcStatePush(g, d) {   // st.json for the controller: paused / blocked / my clipboard's change -- and a heartbeat
-    const st = { rcid: g.rcid, active: true, paused: !!d.paused, pauseLeft: Number(d.pauseLeft) || 0, blocked: String(d.blocked || ""), clip: d.clip || null };
-    const j = JSON.stringify([st.paused, st.blocked, st.clip?.n]);
+    const st = { rcid: g.rcid, active: true, paused: !!d.paused, pauseLeft: Number(d.pauseLeft) || 0, blocked: String(d.blocked || ""), clip: d.clip || null,
+                 admin: d.admin || null, bar: d.bar || null, barCap: d.barCap ? 1 : 0 };   // 0.21.83: the administrator window + my KASTR pill (kastr_rc._shapes)
+    const j = JSON.stringify([st.paused, st.blocked, st.clip?.n, st.admin, st.bar]);
     const ackWait = !!g.ack && g.ack.s !== g.ackSent ? 100 - (Date.now() - g.ackSentAt) : -1;   // 0.21.80: the latency echo, 10 a second at most
     const ackNew = ackWait !== -1 && ackWait <= 0;
     if (ackWait > 0 && !g.ackT) g.ackT = setTimeout(() => { g.ackT = 0; if (rcGrant === g) rcStatePush(g, g.lastD || {}); }, ackWait);   // the newest one, at the 100 ms mark
@@ -5532,7 +5587,10 @@
                                   lat: rcCtl?.lat || null, ws: !!(rcGrant?.ws && rcGrant.ws.readyState === 1),   // 0.21.80: the latency echo; the loopback WebSocket
                                   ptrs: [...rcPtrs].map(([k, h]) => [k, h.q.length ? h.q[h.q.length - 1] : null, [...h.els].filter(([, e]) => !e.hidden).map(([kk, e]) => [kk, e.style.transform, e.querySelector(".nm").textContent]), h.sub?.n || 0]) }),
                   request: rcRequest, item: rcMenuItem, release: () => rcCtlEnd("released", false), stop: () => rcGrantEnd("stopped", true),
-                  answer: (yes) => rcPromptClose(yes ? "allow" : "deny"), map: rcMapPoint, point: (name, x, y) => { const t = tiles.get(name); return t ? rcPoint(t, x, y) : null; } };   // rig
+                  answer: (yes) => rcPromptClose(yes ? "allow" : "deny"), map: rcMapPoint, point: (name, x, y) => { const t = tiles.get(name); return t ? rcPoint(t, x, y) : null; },
+                  st: (v) => { if (rcCtl && v) rcStArrive(rcCtl, { ...rcCtl.st, ...v, rcid: rcCtl.rcid, active: true }); },   // 0.21.83 rig: a state note as if from the sharer
+                  admin: () => (rcCtl ? { over: !!rcCtl.overAdmin, badge: !rcCtl.pane?.querySelector(".rcadmin")?.hidden, ghost: !rcCtl.pane?.querySelector(".rcbarghost")?.hidden,
+                                          banner: document.getElementById("kRcCtl")?.className || "" } : null) };   // rig
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
   // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
   // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)

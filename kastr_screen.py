@@ -522,6 +522,28 @@ def overlay_bar_rect(feed_id):
         return None
 
 
+def overlay_passthrough(feed_id, on):
+    """0.21.83: the share's pill click-through (on) while the controller's injected input lands on its area, or clickable
+    again (off). -> True when the share has a pill to do it with."""
+    with _ov_lock:
+        ov = _overlays.get(feed_id)
+    try:
+        return bool(ov.set_passthrough(on)) if ov is not None else False
+    except Exception:
+        return False
+
+
+def overlay_request_stop(feed_id):
+    """0.21.83: the control pill's "Stop sharing" (after kastr_rc ended control): the share stops as if its own Stop sharing
+    was clicked. -> True when it was asked."""
+    with _ov_lock:
+        ov = _overlays.get(feed_id)
+    try:
+        return bool(ov.request_stop()) if ov is not None else False
+    except Exception:
+        return False
+
+
 def overlay_stop(feed_id):
     with _ov_lock:
         ov = _overlays.pop(feed_id, None)

@@ -3764,6 +3764,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
+            if path0 == "/api/pres" or path0.startswith("/api/pres/"):   # 0.21.84 (prototype): presentations -- convert + the encrypted slide store
+                import kastr_pres
+                return kastr_pres.handle_api(self, self._state_dir(), _note)
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4832,6 +4835,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path.startswith("/api/record/"):     # 0.21.81: Record's save formats -- what ffmpeg can write, progress, the result
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
+            if path.startswith("/api/pres/"):       # 0.21.84 (prototype): an encrypted slide / the notes, Office detection
+                import kastr_pres
+                return kastr_pres.handle_api(self, self._state_dir(), _note)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the
                 # static file handler turns the path into a 404.

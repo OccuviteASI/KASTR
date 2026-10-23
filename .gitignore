@@ -22,3 +22,6 @@ browser.old-*
 /assets/npu/ort-wasm-simd-threaded.jsep.wasm
 /assets/npu/modnet_fp16.onnx
 /assets/mediapipe/wasm/vision_wasm_internal.wasm
+
+# 0.21.84 (prototype): pdf.js is not vendored until Kenton approves it (vendor-pdfjs.py); a lab copy must never be committed
+/assets/vendor/pdfjs/

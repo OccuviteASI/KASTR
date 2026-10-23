@@ -91,6 +91,7 @@ LIVE_CONFIG = frozenset({"kastr.ini"})
 VENDORED = (
     (os.path.join(HERE, "assets", "npu", "manifest.json"), "vendor-npu.py"),
     (os.path.join(HERE, "assets", "mediapipe", "manifest.json"), "vendor-mediapipe.py"),
+    (os.path.join(HERE, "assets", "vendor", "pdfjs", "manifest.json"), "vendor-pdfjs.py"),   # 0.21.84: pdf.js for PDF presentations
 )
 
 # Platform folders that make up a release, in the order they go into the zip.
@@ -946,6 +947,7 @@ def main():
         "--hidden-import", "kastr_rcadmin",   # 0.21.83 (D): unattended remote control for fleet admins (lazy import)
         "--hidden-import", "kastr_record",   # 0.21.81: Record's save formats (lazy import)
         "--hidden-import", "kastr_point",   # 0.21.83: pointer mode -- pointers + sonar clicks on the sharer's screen (lazy import)
+        "--hidden-import", "kastr_pres",   # 0.21.84 (prototype): Share > Presentation -- .pptx scenes + the encrypted slide store (lazy import)
         "--hidden-import", "kastr_mdns", "--hidden-import", "kastr_tabs", "--hidden-import", "kastr_micmute", "--hidden-import", "kastr_lock",   # 0.21.41: mic mute, session lock   # 0.21.22: relay discovery, browser tabs (lazy imports)
         "--noconfirm", "--clean", "--onefile", "--noconsole",
         "--name", NAME,

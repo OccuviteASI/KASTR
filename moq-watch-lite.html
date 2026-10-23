@@ -2229,6 +2229,11 @@
           <button type="button" class="info" id="fileInfo" title="Supported formats">i</button>
           <div class="tipbubble" id="fileInfoTip" hidden>Video: MP4, WebM, MKV, MOV &middot; Audio: MP3, WAV, OGG, FLAC, M4A &mdash; anything this browser can play.</div>
         </div>
+        <!-- 0.21.84 (prototype): a PowerPoint (.pptx) or PDF deck -- viewers see only the live slide; the presenter and the
+             backstage people they pick see the notes and what comes next (assets/kastr-pres.js) -->
+        <button id="srcPresBtn" type="button" class="shrow"><b>Presentation&hellip;</b>
+          <span>PowerPoint or PDF &mdash; the room sees the live slide; you and your backstage see notes and what&rsquo;s next</span></button>
+        <input type="file" id="presFile" accept=".pptx,.ppsx,.potx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.ppt,.key,.odp,.docx,.doc" hidden>
         <button id="srcUploadBtn" type="button" class="shrow"><b>Upload File</b>
           <span>Share a file for others to download (up to 500 MB)</span></button>
       </div>
@@ -16763,6 +16768,13 @@
           if (list.length) roomModel.pt = list; else delete roomModel.pt;
           break;
         }
+        // 0.21.84 (Kenton: "the person presenting and the 'backstage' person controlling need to see the notes/slides upcoming
+        // as well as what is live while others only see the presentation") -- prototype, assets/kastr-pres.js: `pres` = my
+        // presentation's PUBLIC state (deck, live slide + its key, backstage people with their wrapped keys -- never a note),
+        // `presCtl` = my Next/Back as backstage, `presPk` = my public ECDH key (backstage keys are wrapped to it)
+        case "pres": if (value && typeof value === "object" && value.id) roomModel.pres = value; else delete roomModel.pres; break;
+        case "presCtl": if (value && typeof value === "object" && value.id) roomModel.presCtl = value; else delete roomModel.presCtl; break;
+        case "presPk": if (typeof value === "string" && value.length < 200) roomModel.presPk = value; else delete roomModel.presPk; break;
         default: return;
       }
       stateCommit();
@@ -16771,6 +16783,14 @@
                     pres: [...roomsPres].filter(([k, p]) => p.state).map(([k, p]) => ({ k, typing: p.who.typing, speaking: p.who.speaking, seen: Date.now() - p.seen, gone: p.goneAt || 0, values: p.n || 0 })),
                     mem: [...members.values()].map((m) => ({ peer: m.peer, op: m.op, state: !!m.state, typing: !!m.typing })) }),
   };
+  // 0.21.84 (prototype): the presentation module's view of my room -- who is in it (the backstage picker) and each page's
+  // ~member path (where its room.json, with `presPk` / `presCtl`, is read)
+  window.__presPeople = () => ({
+    channel: CHANNEL, joined: joinState === "joined", me: statePeer(), host: HOSTNAME1, room: roomState.path,
+    people: [...members.values()].filter((m) => m.state && m.host && m.peer)
+      .map((m) => ({ peer: String(m.peer), host: String(m.host), op: String(m.op || ""), name: String(m.name || ""), mode: String(m.mode || ""), kv: String(m.kv || ""),
+                     path: CHANNEL + "/" + m.host + "/~member/" + m.peer })),
+  });
   window.addEventListener("kastr:auth", () => setTimeout(stateSync, 0));   // fresh token: re-dial the state broadcasts
   // 0.21.64 (Kenton: "Viewer code users are able to see the share, camera, and mic buttons. But they can't use those. I would
   // like this hidden or grayed out"): a viewer-code token greys Share / Camera / Mic (and their menus) and says why on click
@@ -16960,6 +16980,7 @@
     const prev = h.prev;
     rcSharesApply(path, v.rc);   // 0.21.79: their shares that can be remote-controlled
     ptWantApply(path, v.pt);     // 0.21.83: the shares they point on
+    try { window.__presMember?.(path, v); } catch {}   // 0.21.84 (prototype): presentations -- their pres / presCtl / presPk
     // spotlight / recording: the announce maps keyed by the member path
     // 0.21.32: `spots` (several)
     const vs = Array.isArray(v.spots) ? v.spots : [];
@@ -17010,6 +17031,7 @@
   function memberClear(path, h) {
     rcShares.delete(path);   // 0.21.79
     ptWant.delete(path);     // 0.21.83
+    try { window.__presMember?.(path, null); } catch {}   // 0.21.84 (prototype)
     const hadLit = spotVotes.delete(path + "#lit");   // 0.21.0
     const hadOff = spotOffs.delete(path);             // 0.21.32
     if (spotVotes.delete(path) || hadLit || hadOff) spotApplyWinner();
@@ -22921,6 +22943,10 @@
     // of a 720p30 composite dropped frames and every viewer saw a choppy share. H.264 encodes in
     // hardware nearly everywhere and decodes in hardware on every viewer.
     if (slot.entry.kind === FILE && !vcfg.codec) vcfg.codec = avc1Ok ? "avc1" : "vp09";   // 0.17.0: vp09 where the browser cannot encode H.264 (Firefox on some platforms)
+    if (slot.entry.presCanvas) {   // 0.21.84 (prototype): a slide changes rarely and all at once -- room for the change frame (a still slide costs next to nothing), H.264 like a shared file
+      if (!enc.bitrate?.value) vcfg.maxBitrate = 3000 * 1000;
+      if (!vcfg.codec) vcfg.codec = avc1Ok ? "avc1" : "vp09";
+    }
 
     try { slot.publish.video.config.set(vcfg); } catch {}
     try { slot.publish.audio.codec.set(audioConfig()); } catch {}
@@ -24889,7 +24915,7 @@
     publish.invisible = !!entry.videoPaused;
 
     if (entry.kind === SCREEN) {
-      openSharePip(slot);   // mini always-on-top controls (0.8.1)
+      if (!entry.presCanvas) openSharePip(slot);   // mini always-on-top controls (0.8.1); 0.21.84: a presentation has its presenter view
       // Deliberately NOT publish.source = "screen".
       //
       // The element builds its Screen source as `new Screen({enabled})` with no
@@ -24902,7 +24928,7 @@
       // hand the resulting tracks straight to the element. capture.in.source and
       // audio.in.source ARE the element's own track signals, so everything
       // downstream (encoder, catalog, announce, preview) behaves identically.
-      if (entry.native) capturePresenter(slot); else captureDisplay(slot);   // 0.21.20: presenter mode composites the host's capture
+      if (entry.native) capturePresenter(slot); else if (entry.presCanvas) presAttach(slot); else captureDisplay(slot);   // 0.21.20: presenter mode composites the host's capture; 0.21.84: a presentation's slide canvas
     } else if (entry.kind === FILE) {
       // 0.8.10: KASTR-owned media player. The library's file source plays a
       // detached, muxed <video> whose captureStream() yields no frames (the
@@ -27881,6 +27907,49 @@
   };
   $("srcScreenBtn").addEventListener("click", () => shareSurface("monitor"));
   $("shBrowserPick").addEventListener("click", () => { shareSurface("monitor"); window.__shareChosen?.(); });   // 0.21.79
+  // ---- 0.21.84 (Kenton: "start exploring using powerpoints, or other documents, directly inside of KASTR"; decided: KASTR
+  // renders the deck, deck first) -- PROTOTYPE. assets/kastr-pres.js draws the live slide into a canvas; it goes out as a
+  // content share like a screen (tile, spotlight, grids, the recorder, phones, web viewers and older KASTRs all see it), and
+  // newer pages draw a sharp copy of the live slide over that tile. Notes and upcoming slides never travel in the share.
+  window.__presShare = {
+    start(canvas, label, fps) {
+      const op = operatorSlug();
+      const base = op ? `${HOSTNAME}/${op}/presentation.hang` : `${HOSTNAME}/presentation.hang`;
+      const e = addSource(SCREEN, null, "Presentation", { presCanvas: canvas, presFps: fps || 5, name: uniqueName(base) });
+      e.label = "Presentation \u00b7 " + String(label || "slides").slice(0, 60);
+      renderSources();
+      return { id: e.id, path: window.__presShare.path(e.id), push: () => { const sl = slots.get(e.id); if (sl?.presTrack) pushCaptureFrame(sl.presTrack); } };
+    },
+    path(id) { return slots.get(id)?.publish?.getAttribute("name") || ""; },
+    alive(id) { return added.some((a) => a.id === id); },   // the source row is there (a slot restarting for a moment still counts)
+    stop(id) { if (added.some((a) => a.id === id)) removeSource(id); },
+  };
+  async function presAttach(slot) {
+    const fps = slot.entry.presFps || 5;
+    const track = restampCaptureTrack(slot.entry.presCanvas.captureStream(fps).getVideoTracks()[0], fps);
+    slot.presTrack = track;
+    // the publish element builds its capture after it connects (the browser's picker hid that delay from captureDisplay)
+    for (let i = 0; i < 80 && !pubCap(slot.publish)?.in?.source && slots.has(slot.entry.id); i++) await new Promise((r) => setTimeout(r, 100));
+    if (!slots.has(slot.entry.id)) { try { track.stop(); } catch {} return; }
+    displayAttach(slot, new MediaStream([track]));
+    const id = slot.entry.id;
+    const assert = setInterval(() => {   // the element resets its sources while it starts up -- keep the slide canvas in place
+      const sl = slots.get(id);
+      if (sl !== slot) { clearInterval(assert); return; }
+      try { const c = pubCap(slot.publish)?.in?.source; if (c && !slot.entry.sharePaused && c.peek?.() !== track) c.set(track); } catch {}
+    }, 1000);
+    const cap = slot.pane.querySelector(".thumbcap");
+    if (cap) cap.textContent = "You\u2019re presenting \u00b7 " + (slot.entry.label || "slides");
+  }
+  $("srcPresBtn").addEventListener("click", () => $("presFile").click());
+  $("presFile").addEventListener("change", () => {
+    const f = $("presFile").files?.[0];
+    $("presFile").value = "";
+    if (!f) return;
+    window.__shareChosen?.();
+    if (!window.__pres) { window.__toast?.("Presentations are still loading \u2014 try again in a moment.", 4000); return; }
+    window.__pres.startFromFile(f);
+  });
   // ---- 0.21.20: native screen / window share (Teams-style picker) --------------------------------------------------
   // The host lists every screen and window and serves small JPEG thumbnails; one click publishes it natively as a
   // screen:// feed on the RTSP machinery (hardware encode, no Chrome picker). Hosts without native capture (web
@@ -29219,5 +29288,7 @@
   refreshUi();
   log("Idle. Add sources, start them, then go live.");
 </script>
+<!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
+<script type="module" src="/assets/kastr-pres.js"></script>
 </body>
 </html>

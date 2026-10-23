@@ -71,7 +71,8 @@ def precache_list(root):
         return _PRECACHE[0]
     out = ["/moq-watch-lite.html", "/index.html", "/watch.html", "/manifest.webmanifest",
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
-           "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg"]
+           "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
+           "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)
         for dp, _dn, fns in os.walk(base):
@@ -3798,6 +3799,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
+            if path0 == "/api/pres" or path0.startswith("/api/pres/"):   # 0.21.84 (prototype): presentations -- convert + the encrypted slide store
+                import kastr_pres
+                return kastr_pres.handle_api(self, self._state_dir(), _note)
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4873,6 +4877,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path.startswith("/api/record/"):     # 0.21.81: Record's save formats -- what ffmpeg can write, progress, the result
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
+            if path.startswith("/api/pres/"):       # 0.21.84 (prototype): an encrypted slide / the notes, Office detection
+                import kastr_pres
+                return kastr_pres.handle_api(self, self._state_dir(), _note)
             if bridge:
                 # RTSP endpoints are dynamic, so they must be checked before the
                 # static file handler turns the path into a 404.

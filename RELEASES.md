@@ -2,6 +2,27 @@
 
 What changed in each build, newest first.
 
+## v0.21.84 — the stream library, presentations in KASTR, the window stays where you left it
+
+**The stream library: streams that belong to no room, which any room can pull in (Kenton: "stream to an 'available streams' section ... accessible inside of each room for adding to a grid or view in that room").**
+- **Streams** (a new toolbar panel, like People / View) lists every stream on the fleet, grouped Site ▸ box ▸ stream, with stills, search, and filters for Live now, kind and Site. Show offline lists cameras that aren't streaming. Everyone on the fleet sees it, viewers too; it can be pinned to the right-hand column like the other panels.
+- **Camera boxes publish into the library.** A box that wasn't in a real room moves its cameras there **automatically** when it updates (about 10 s). Pins, spotlights, room grids and My room pins that showed those cameras follow them, with no duplicates. A box in a real room stays as it is until a camera's **In the stream library** switch (in its rooms picker) is turned on. **Show in rooms…** keeps working.
+- **Using a stream:** a publisher's row menu offers **Add to this room**, **Spotlight for everyone**, **Add to a grid**, **Add to My room** and **Watch here, just me** (viewers see these greyed, with the reason). Rows can also be dragged onto the stage, and the grid builder has a Library group with **Build a grid from these**.
+- **Browsing never wakes a camera.** Hovering a live row shows a peek; an asleep camera offers **Preview**. An asleep camera added to a room opens in about 2 s ("Starting…" then the picture).
+- **Across sites,** a library stream is fetched the cheapest way through the relay mesh — in the lab, a stream from one site to another over a direct link put nothing through the hub.
+- **Invite-link and My room guests** see only the library streams added to their room.
+- **Admins** on the hub's Relay page get a Stream library card: the fleet switch, and Hide / Unhide / Rename per stream. A hidden stream disappears from every site within seconds and its pins say "No longer in the library". The Links card shows each relay's site name.
+- **If the hub goes down,** library streams keep playing and the panel says the list is from when it was last reachable; adding to rooms waits for the hub, and hidden streams stay hidden.
+- Older KASTR apps (0.21.83) in a room still play library streams added to it.
+
+**Presentations in KASTR (Kenton: "using powerpoints, or other documents, directly inside of KASTR ... The person presenting and the 'backstage' person controlling need to see the notes/slides upcoming as well as what is live while others only see the presentation").**
+- **Share ▸ Presentation…** opens a **PowerPoint (.pptx) or PDF** deck. When PowerPoint is installed on your computer, KASTR uses it to draw the slides exactly; otherwise KASTR draws them itself. (A deck shared from a web browser never starts PowerPoint on the relay's machine.)
+- **The presenter view** shows the live slide, the next two, your notes (editable), a timer, the slide strip, Black / White screen, and works with clicker keys. Pick **backstage** people — anyone in the room — and they get the same view and can move the slides; two people pressing Next together move one slide.
+- **Everyone else sees only the live slide**, sharp, about 0.1 s after Next. They never get the notes, upcoming slides or earlier ones — KASTR refuses to hand them over. Slides are encrypted end to end.
+- Library tiles and the rest of the room keep playing while you present.
+
+**KASTR comes back in the same window after an update (Kenton: "after an upgrade while launching KASTR, it doesn't hold my same window state").** The Relay and stats windows were saving their own size and position over the main window's, and a minimized or hidden window could save a position off the screen. Now only the main window is remembered, and only while it's visible on screen.
+
 ## v0.21.83 — admins control relays and boxes without asking, files across remote control, pointers with sonar, a smaller share pill
 
 **Fleet admins can control relays, hubs and camera boxes without asking — only where that machine opted in (Kenton: "allow remote control with the admin permissions on a relay/hub/camera box. This should be opt-in only and a check box in the relay server page").**

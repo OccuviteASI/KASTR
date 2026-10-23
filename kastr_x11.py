@@ -124,6 +124,14 @@ def _x11():
     x = _load("X11")
     if x is None or getattr(x, "_kastr_ready", False):
         return x
+    # 0.21.83 (D) (lab v02183: the machine's KASTR died with "unaligned tcache chunk" -- request threads probing the display
+    # while the injector, the bar and the raw-input monitor ran theirs): Xlib is thread-safe only after XInitThreads, called
+    # once, before any other Xlib call of this process (this loader is the only way in)
+    try:
+        x.XInitThreads.restype, x.XInitThreads.argtypes = c_int, []
+        x.XInitThreads()
+    except Exception:
+        pass
     x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = c_void_p, [c_char_p]
     x.XCloseDisplay.argtypes = [c_void_p]
     x.XDefaultRootWindow.restype, x.XDefaultRootWindow.argtypes = Window, [c_void_p]

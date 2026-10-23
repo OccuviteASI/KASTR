@@ -585,7 +585,7 @@ class ViewerPointers(unittest.TestCase):
         self.assertIn('color: ctlColor });', p)
         self.assertIn('["in.json", "st.json", "ptr.json", "pts.json"], { priority: RC_PRIO, maxAge: 2000 }', p)   # 0.21.83: + pts.json (pointer mode)
         # Kenton's words on the prompt
-        self.assertIn("They\\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there.", p)
+        self.assertIn("with their own pointer and their name on your screen.", p)   # 0.21.83: the prompt also names file transfer
         self.assertIn("Your mouse and keyboard keep working at the same time.", p)
 
 

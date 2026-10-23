@@ -2,6 +2,32 @@
 
 What changed in each build, newest first.
 
+## v0.21.83 — admins control relays and boxes without asking, files across remote control, pointers with sonar, a smaller share pill
+
+**Fleet admins can control relays, hubs and camera boxes without asking — only where that machine opted in (Kenton: "allow remote control with the admin permissions on a relay/hub/camera box. This should be opt-in only and a check box in the relay server page").**
+- **Opt-in on the machine itself:** the machine's own Relay page has a Remote control card with "Let fleet admins control this machine without asking", off by default. Only that machine's own page can switch it on; the hub sees the setting but can never turn it on.
+- **Fleet admins only** (the admin access code): **More ▸ Machines…** (and the Relay menu) lists every opted-in machine — name, site, role, online, version, screens, who is connected. **Control** opens its desktop in a private window with control already granted, never shown in any room. The hub's Relay page has Control buttons too, also in the mesh map's zoomed relay.
+- **Switch screens and windows (Kenton: "allow for switching to different windows/monitors on the device"):** each monitor, all monitors, any open window (with thumbnails), previous / next monitor (Ctrl+Alt+PgUp/PgDn) and Bring to front; each switch comes back in about 0.5–1.5 s, control kept.
+- **On the machine:** the red pill names the admin, Ctrl+Alt+Space or Stop control ends it, and every session (who, from where, how long) is logged on the machine and in the hub's Remote sessions table. A locked screen or nobody signed in is shown in Machines….
+- Administrator windows on that machine work only if KASTR there runs as administrator; otherwise the session says so.
+
+**Copy files and pictures across remote control (Kenton: "Am I able to copy a file on my machine or the remote machine and paste it on the other side?").** Files, folders and pictures copied on either side paste on the other (Explorer, Paint, Word…); a file dragged onto the shared screen lands where it is dropped (a folder, the desktop, else Downloads\KASTR). Up to 100 MB comes over at once, bigger copies wait for "Get them" or the controller's Ctrl+V. Progress with Cancel; the sharer sees "Bob copied report.docx from your computer". Encrypted end to end — others in the room can't read it. Limits in kastr.ini (2 GB a file, 8 GB a session); received files are cleaned up 10 minutes after control ends. The Allow prompt now mentions file copying.
+
+**Point on a shared screen without controlling it (Kenton: "a view-only mode ... when they click it makes a little sonar thing around the mouse click to show everyone where it was clicked").** Anyone watching a screen or window shared from the KASTR app can ask **Point on this screen**, or the sharer switches on **Let everyone point**. Each person gets an arrow with their name in their colour — the sharer's own pointer too — and a click makes a **sonar** ripple shown on the sharer's real screen and on everyone's view. Pointing never clicks or types on the sharer's computer. Up to 12 pointers; the sharer removes anyone, and "Show my clicks" shows their own clicks as sonars. Phones point with a tap.
+
+**The share pill (Kenton: "when I try to click in that space it doesn't work ... The pill should be smaller also").**
+- The person in control can click, drag and scroll on whatever is under the pill; the sharer's own clicks still reach its buttons. In their view a faint outline shows where it sits.
+- Smaller (28 px tall instead of 40), shorter labels, and above the shared window when there is room.
+- While controlled it offers **Stop control** and **Stop sharing** (ends both at once).
+- **Administrator windows are obvious now (Kenton: "The pop-up saying it was admin wasn't easy to notice"):** an amber badge and outline stay on the admin window in the controller's view while their pointer is over it; Windows blocks clicks, typing, and moving or closing such a window unless KASTR on that computer runs as administrator.
+- Hovering the screen you control no longer pops up a grey tooltip.
+- **"Share something else" and screen switches no longer freeze:** the old capture now ends cleanly first, so the new one appears in about a second (it could freeze for 14 s or more).
+
+**Smaller things**
+- **The rooms toggle moved next to the room name (Kenton: "make the expand/collapse icon more like this and up in the bar next to the room name")** — a panel icon that fills in on hover; the arrow points left to collapse, right to expand.
+- **Zoom + and − show only while zoomed** (Kenton: "hide the + and - buttons for zoom except when the zoom label is showing also").
+- **No more false "relay link dropped" log lines:** what looked like the spoke-to-hub link timing out every 10 s was KASTR's own bandwidth meter reading the relay's stats; those reads now close after 2 s and are not logged. The real hub link was never dropping.
+
 ## v0.21.82 — click the zoomed relay to go back
 
 **On the mesh map, clicking the relay you zoomed into takes you back to the full mesh (Kenton: "when you click on that same relay again it should go back a level")** — like ← Full mesh or Escape; its tooltip says so. Dragging it still just moves it.

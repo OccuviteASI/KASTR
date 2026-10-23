@@ -254,6 +254,12 @@ function build() {
     // Hidden by paintMode on viewer and publisher boxes (no relay of their
     // own to configure) and on the Relay page itself. Styled inline: the
     // stylesheet has no rule for it and the look is the .rhost line's.
+    // 0.21.83 (D) (Kenton: "how would I access this from my own KASTR?"): Machines... for fleet admins -- the Go Live page
+    // (this document or the shell's frame) says whether this person is one and opens the list (window.__kastrMachines)
+    '<div class="rmach" style="flex:none;padding:4px 10px 4px;border-top:1px solid var(--line);display:none">' +
+    '<button type="button" class="rmachbtn" style="background:transparent;border:1px solid var(--line);' +
+    'color:var(--text-dim);border-radius:4px;padding:4px 9px;font-size:11px;cursor:pointer;height:auto"' +
+    ' title="Relays, hubs and camera boxes that let fleet admins control them without asking">Machines\u2026</button></div>' +
     '<div class="rset" style="flex:none;padding:4px 10px 8px;border-top:1px solid var(--line)">' +
     '<button type="button" class="rsetbtn" style="background:transparent;border:1px solid var(--line);' +
     'color:var(--text-dim);border-radius:4px;padding:4px 9px;font-size:11px;cursor:pointer;height:auto"' +
@@ -377,6 +383,7 @@ function build() {
       loaded = true;
     }
     pop.querySelector(".rurl").value = currentRelay;
+    { const rm = pop.querySelector(".rmach"); if (rm) rm.style.display = machinesApi()?.avail?.() ? "" : "none"; }   // 0.21.83 (D)
     paintRelayHist();   // fresh MRU list every open (0.8.3)
     paintRelayHost();   // 0.8.6
     pop.hidden = false;
@@ -415,6 +422,17 @@ function build() {
   };
   modeHooks.push(paintMode);
   paintMode(MODE);
+  function machinesApi() {   // 0.21.83 (D): the Go Live page's Machines... (here, or in the shell's frame)
+    try { return window.__kastrMachines || window.top.__kastrMachines || null; } catch { return window.__kastrMachines || null; }
+  }
+  pop.querySelector(".rmachbtn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closePop();
+    const api = machinesApi();
+    if (!api) return;
+    if (typeof window.__app?.show === "function") { try { window.__app.show("switcher"); } catch {} }   // the shell: to the Go Live tab first
+    api.open();
+  });
   pop.querySelector(".rsetbtn")?.addEventListener("click", (e) => {
     e.stopPropagation();
     closePop();
@@ -945,10 +963,17 @@ setInterval(() => {
 
 // Remember where this window is, because the browser does not restore an
 // app window's bounds. Reported on change so the launcher can put it back.
-if (window.top === window && !IS_WEB) {   // 0.17.0: a phone's geometry is not the host window's
+// 0.21.84 (Kenton: "sometimes after an upgrade while launching KASTR, it doesn't hold my same window state"): only the MAIN
+// KASTR window reports -- the Relay page and the stats page load this script too, and their windows' bounds overwrote the main
+// window's -- and never while minimized or hidden (Windows reports a minimized window at about -32000 with a tiny size, which an
+// update closing a background KASTR then saved, and the launcher threw away, opening maximized).
+const KASTR_GEOM_PAGE = !/\/(relay|stats|rcx|rcx-agent|join)\.html$/i.test(location.pathname);
+if (window.top === window && !IS_WEB && KASTR_GEOM_PAGE) {   // 0.17.0: a phone's geometry is not the host window's
   let lastGeom = "";
   const reportGeometry = () => {
     try {
+      if (document.visibilityState === "hidden") return;   // 0.21.84: minimized / covered-and-throttled -- keep the last real bounds
+      if (window.screenX <= -30000 || window.screenY <= -30000 || window.outerWidth < 320 || window.outerHeight < 240) return;
       // Maximized is a state, not a size: restoring the literal bounds of a
       // maximized window gives you an almost-maximized one.
       const maximized =

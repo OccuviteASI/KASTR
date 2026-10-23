@@ -1129,6 +1129,45 @@
   .pane .prcbtn .icon { width:13px; height:13px; }
   #stage .pane.rcable.mainstage .prcbtn { display:inline-flex; }
   #stage .pane.rcable.mainstage.rcon .prcbtn { display:none; }   /* controlling: the banner has Release; nothing covers their screen */
+  /* 0.21.83 (Kenton: "a view-only mode ... lets them move their mouse around with their name and when they click it makes a little
+     sonar thing around the mouse click"): pointing people's pointers reuse .rcptr; a click is a SONAR (three rings, a dot, the name) */
+  .pane .ptsonar { position:absolute; left:0; top:0; width:0; height:0; pointer-events:none; }
+  .pane .ptsonar i { position:absolute; left:0; top:0; width:60px; height:60px; border-radius:50%; box-sizing:border-box; transform:translate(-50%,-50%);
+    border:3px solid var(--c, #009fda); box-shadow:0 0 0 1px rgba(255,255,255,.85), inset 0 0 0 1px rgba(255,255,255,.85); animation:ptRing .48s cubic-bezier(.25,.7,.35,1) both; }
+  .pane .ptsonar i:nth-child(2) { animation-delay:.16s; }
+  .pane .ptsonar i:nth-child(3) { animation-delay:.32s; }
+  .pane .ptsonar b { position:absolute; left:-4px; top:-4px; width:8px; height:8px; border-radius:50%; background:var(--c, #009fda); box-shadow:0 0 0 1.5px #fff; animation:ptDot .3s ease-out both; }
+  .pane .ptsonar .nm { position:absolute; left:0; top:-52px; transform:translateX(-50%); padding:1px 7px; border-radius:9px; background:var(--c, #009fda); color:var(--ink, #fff);
+    font-size:11px; font-weight:600; line-height:16px; white-space:nowrap; box-shadow:0 1px 3px rgba(0,0,0,.4); animation:ptName .8s linear both; }
+  @keyframes ptRing { from { width:8px; height:8px; border-width:3px; opacity:.95; } to { width:60px; height:60px; border-width:1px; opacity:.05; } }
+  @keyframes ptDot { from { opacity:1; transform:scale(1); } to { opacity:0; transform:scale(.5); } }
+  @keyframes ptName { 0%, 80% { opacity:1; } 100% { opacity:0; } }
+  .pane .pptbtn { display:none; position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:6; align-items:center; gap:6px;
+    padding:5px 12px; border-radius:16px; background:rgba(10,14,18,.78); color:#fff; border:1px solid rgba(255,255,255,.3); font-size:12px; cursor:pointer; }
+  .pane .pptbtn:hover { background:rgba(10,14,18,.92); }
+  .pane .pptbtn.on { border-color:var(--asi-blue); }
+  .pane .pptbtn .icon { width:13px; height:13px; }
+  #stage .pane.ptable.mainstage .pptbtn { display:inline-flex; }
+  #stage .pane.ptable.rcable.mainstage .pptbtn { transform:translateX(calc(-100% - 4px)); }   /* beside Request control */
+  #stage .pane.ptable.rcable.mainstage .prcbtn { transform:translateX(4px); }
+  #kPtAsk { position:fixed; inset:0; z-index:141; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kPtAsk[hidden] { display:none; }
+  #kPtAsk .popcard { position:static; width:min(460px, calc(100vw - 32px)); max-height:none; animation:kcIn .14s ease-out; }
+  #kPtAsk .body { padding:16px 16px 2px; flex:none; overflow:visible; }
+  #kPtAsk .kcmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
+  #kPtAsk .kcdet { margin:8px 0 0; font-size:12px; line-height:1.5; color:var(--text-dim); overflow-wrap:break-word; }
+  #kPtAsk .kcbtns { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; padding:14px 16px 16px; }
+  #kPtAsk .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kPtAsk .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  #kPtBar { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); z-index:149; display:flex; flex-direction:column; gap:4px; padding:6px 8px 6px 14px;
+    border-radius:18px; background:#0f2235; border:1px solid var(--asi-blue); color:#fff; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
+  #kPtBar[hidden] { display:none; }
+  #kPtBar .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  #kPtBar button { border:0; border-radius:12px; padding:3px 10px; font-size:12px; cursor:pointer; background:rgba(255,255,255,.12); color:#fff; }
+  #kPtBar button:hover { background:rgba(255,255,255,.22); }
+  #kPtBar .chip { background:rgba(255,255,255,.18); font-weight:600; }
+  #kPtBar .tog.on { background:var(--asi-blue); color:var(--on-accent, #fff); }
+  #kPtBar .stop { background:#fff; color:#0f2235; font-weight:600; }
   /* 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): KASTR's own yes/no question */
   #kConfirm { position:fixed; inset:0; z-index:140; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
   #kConfirm[hidden] { display:none; }
@@ -4835,7 +4874,8 @@
   let rcStateP = null;
   // 0.21.80: + ptr.json (the sharer's two pointers); every rc track at the top priority with a short retention -- the newest
   // value is all that matters (moves never queue behind each other; clicks and keys ride every snapshot of the last RC_KEEP_MS)
-  const rcState = () => rcStateP || (rcStateP = stateProducer(() => ((rcCtl || rcGrant) && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rc/" + statePeer() : ""), ["in.json", "st.json", "ptr.json"], { priority: RC_PRIO, maxAge: 2000 }));
+  // 0.21.83: + pts.json (pointer mode: every pointer and sonar on my shares, for the viewers) -- live while anything needs it
+  const rcState = () => rcStateP || (rcStateP = stateProducer(() => ((rcCtl || rcGrant || ptAnyOn()) && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rc/" + statePeer() : ""), ["in.json", "st.json", "ptr.json", "pts.json"], { priority: RC_PRIO, maxAge: 2000 }));
   window.__rcCtlShare = () => (rcCtl ? rcCtl.share : "");   // applyState: the tile I control (RC_TUNE, priority)
   const rcSeen = new Set();
   const rcToast = (m, ms, level) => window.__toast?.(m, ms || 5000, { level: level || "event" });
@@ -4860,7 +4900,7 @@
     try { mine = window.__rcMine?.() || []; } catch {}
     return mine.filter((s) => s.onair && !s.paused && String(s.path).startsWith(CHANNEL + "/")).slice(0, 16)
       .map((s) => Object.assign({ p: s.path, s: s.surface, l: String(s.label || "").slice(0, 60) }, rcCaps.available ? {} : { no: rcCaps.why === "wayland" ? "wayland" : "unsupported" },
-                                rcGrant && rcGrant.share === s.path ? { c: 1 } : {}));   // 0.21.80: c = controlled now (viewers read its ptr.json)
+                                rcGrant && rcGrant.share === s.path ? { c: 1 } : {}, ptListFields(s.path)));   // 0.21.80: c = controlled now (viewers read its ptr.json); 0.21.83: + pv / pt / pe / pa / pb (pointer mode)
   }
   function rcSharesApply(path, list) {
     const host = String(path).split("/")[1] || "";
@@ -4944,6 +4984,7 @@
     if (!it || it.kind !== "rc" || !it.id || rcSeen.has(it.id)) return;
     rcSeen.add(it.id);
     if (rcSeen.size > 300) for (const k of [...rcSeen].slice(0, 100)) rcSeen.delete(k);
+    if (/^p(ask|allow|deny|stop)$/.test(String(it.rc))) { ptArrive(it); return; }   // 0.21.83: pointer mode
     if (it.rc === "ask") { rcAskArrive(it); return; }
     if (it.rc === "allow") { rcAllowArrive(it); return; }
     if (it.rc === "deny") {
@@ -5593,6 +5634,716 @@
                   st: (v) => { if (rcCtl && v) rcStArrive(rcCtl, { ...rcCtl.st, ...v, rcid: rcCtl.rcid, active: true }); },   // 0.21.83 rig: a state note as if from the sharer
                   admin: () => (rcCtl ? { over: !!rcCtl.overAdmin, badge: !rcCtl.pane?.querySelector(".rcadmin")?.hidden, ghost: !rcCtl.pane?.querySelector(".rcbarghost")?.hidden,
                                           banner: document.getElementById("kRcCtl")?.className || "" } : null) };   // rig
+  // ---- 0.21.83 POINTER MODE (Kenton: "On the remote control, I would like to make it so there is a view-only mode where the user
+  // is able to see my mouse, as well as whoever else they allow to share, and lets them move their mouse around with their name and
+  // when they click it makes a little sonar thing around the mouse click to show everyone where it was clicked. This will help with
+  // sharing a screen and collaborating on a document, etc."). Anyone watching a NATIVE screen / window share may ask "Point on
+  // this screen" (the tile menu, the spotlit share's Point button) and the sharer allows it -- a lighter prompt than control:
+  // pointing never clicks or types on their computer -- or the sharer switches on "Let everyone point" (the share's menu, the
+  // pointer bar, the prompt). A pointing person's mouse over the share's tile is THEIR pointer (name + colour) and a click (or a
+  // tap on a phone) a SONAR, shown everywhere: on the sharer's real screen (kastr_point: click-through overlays, left out of the
+  // capture on Windows; X11 draws them into the picture) and on every viewer's tile. How it travels (fewest subscriptions, one
+  // clock): the pointing person -> pt.json on their OWN member broadcast (<room>/<host>/~member/<peer>, ~30 a second while it
+  // moves + the last PT_KEEP_MS of clicks) -> the SHARER's page (one subscription per allowed person, PT_MAX at most) -> its
+  // KASTR draws them (pt-draw) AND it republishes everything as ONE pts.json on its ~rc broadcast, stamped with the moment each
+  // pointer / click reached the sharer's screen -> every viewer subscribes to the sharer alone and shows each one when its
+  // picture shows that moment (rcPtrDelay / rcPtrPick, as 0.21.80's pointers). The sharer's own pointer carries their name
+  // beside their real cursor, and their own clicks are sonars too ("Show my clicks", on by default: a shared document needs
+  // both). The sharer removes anyone's pointer and switches "everyone" off from the pointer bar or the share's menu; the room's
+  // list (room.json rc: pv / pt / pe / pa / pb) is what every page trusts -- the notes are the fast path.
+  const PT_MAX = 12, PT_HZ_MS = 33, PT_ASK_MS = 60000, PT_KEEP_MS = 1500, PT_IDLE_MS = 10000, PT_SONAR_MS = 800, PT_ON_MS = 2000, PT_GRACE_MS = 8000, PT_USED_MS = 120000, PT_CLICK_KEEP_MS = 4000, PT_TOUCH_MS = 3000;
+  const ptMine = new Map();    // my share path -> { share, feed, surface, everyone, own, allowed: Map(key -> {name, at}), block: Set, subs: Map(key -> h), live: Map(key -> ptr), self, rips, seq, on, cap, okAt }
+  const ptWant = new Map();    // member path -> [share paths that member points on] (their room.json `pt`)
+  const ptAsks = new Map();    // share -> my ask { rcid, to, name, at, tok }
+  const ptNote = new Map();    // share -> when its sharer's allow note reached me (until their room.json says so too)
+  const ptUsed = new Map();    // share -> when I last pointed on it (only those are in my room.json `pt`)
+  const ptOptOut = new Set();  // "everyone" shares I stopped pointing on myself
+  const ptTold = new Set();    // "everyone" shares I was told about
+  let ptPromptQ = [], ptPrompt = null, ptWs = null, ptWsTries = 0, ptMe = null, ptSonarN = 0, ptPubT = 0, ptPubAt = 0, ptSendT = 0, ptSendAt = 0;
+  const ptKey = (host, peer) => host + "/" + peer;
+  const ptMeKey = () => ptKey(HOSTNAME1, statePeer());
+  const ptFleet = () => Date.now() + (window.__clockOffset || 0);
+  const ptOwnPref = () => { try { return localStorage.getItem("kastr.pt.own") !== "0"; } catch { return true; } };
+  const ptCanAsk = () => joinState === "joined" && CHANNEL !== LOBBY && authSecured && !!authTokens?.member && !pbOld;   // anyone in the room (viewers too)
+  const ptAnyOn = () => { for (const m of ptMine.values()) if (m.on) return true; return false; };
+  // my shares' pointer fields in the room's list: pv = this KASTR takes pointers, pt = pointer mode on (viewers read pts.json),
+  // pe = everyone may point, pa = who I allowed, pb = who I took off while everyone may point
+  function ptListFields(path) {
+    if (!rcCaps?.point) return {};
+    const m = ptMine.get(path);
+    return Object.assign({ pv: 1 }, m && m.on ? { pt: 1 } : {}, m && m.everyone ? { pe: 1 } : {},
+                         m && m.allowed.size ? { pa: [...m.allowed.keys()].slice(0, PT_MAX) } : {}, m && m.block.size ? { pb: [...m.block].slice(-32) } : {});
+  }
+  function ptWantApply(path, list) {
+    const ok = Array.isArray(list) ? list.filter((s) => typeof s === "string" && /\.hang$/.test(s)).slice(0, 8) : [];
+    const was = JSON.stringify(ptWant.get(path) || []);
+    if (ok.length) ptWant.set(path, ok); else ptWant.delete(path);
+    if (was !== JSON.stringify(ok)) setTimeout(() => { for (const m of ptMine.values()) if (m.on) ptSyncSubs(m); }, 0);   // someone starts pointing: their pointer now, not at the next tick
+  }
+  // ---- the pointing person
+  function ptMayPoint(name) {   // may I point on this (someone else's) share now?
+    const x = rcShareOf(name);
+    if (!x || !x.pv || x.host === HOSTNAME1 || ptOptOut.has(name)) return false;
+    const me = ptMeKey();
+    if (Array.isArray(x.pb) && x.pb.includes(me)) return false;
+    return !!x.pe || (Array.isArray(x.pa) && x.pa.includes(me)) || (ptNote.has(name) && Date.now() - ptNote.get(name) < PT_GRACE_MS);
+  }
+  function ptMenuItem(name) {   // the tile menu's item (and the spotlit share's Point button) -- null when pointing is not offered
+    if (!ptCanAsk() || mineNames.has(name) || wrRoomOf(name) || !String(name).startsWith(CHANNEL + "/")) return null;
+    const x = rcShareOf(name);
+    if (!x || !x.pv || x.host === HOSTNAME1 || rcCtl?.share === name) return null;   // controlling it: my own pointer is already there
+    const who = rcWho(name), what = x.s === "screen" ? "screen" : "window";
+    if (ptMayPoint(name)) return { value: "pntstop", icon: "mouse", label: "Stop pointing", tip: "Take your pointer off " + who + "\u2019s " + what };
+    const a = ptAsks.get(name);
+    if (a) return { value: "pntwait", icon: "mouse", label: "Waiting for " + who + "\u2026", tip: "You asked " + Math.round((Date.now() - a.at) / 1000) + " s ago" };
+    if (x.pe && ptOptOut.has(name)) return { value: "pntgo", icon: "mouse", label: "Point on this screen", tip: who + " lets everyone point \u2014 your pointer shows with your name, a click as a ripple" };
+    return { value: "pntask", icon: "mouse", label: "Point on this screen",
+             tip: "Ask " + who + " to let you point on their " + what + " \u2014 your pointer and clicks show for everyone; nothing is clicked or typed on their computer" };
+  }
+  function ptMenuPick(name, v) {
+    if (v === "pntask") ptRequest(name);
+    else if (v === "pntgo") { ptOptOut.delete(name); ptUsed.set(name, Date.now()); ptTick(); rcToast("Your pointer shows on " + rcWho(name) + "\u2019s screen \u2014 a click shows as a ripple for everyone.", 5000); }
+    else if (v === "pntstop") ptStopMine(name, true);
+  }
+  async function ptRequest(name) {
+    const x = rcShareOf(name);
+    if (!x) return;
+    const who = rcWho(name);
+    const a0 = ptAsks.get(name);
+    if (a0 && Date.now() - a0.at < PT_ASK_MS) { rcToast("Still waiting for " + who + " to answer.", 4000); return; }
+    const rcid = rcNewId();
+    const d = await rcSend({ kind: "pask", to: x.host, share: name, id: rcid, peer: statePeer(), by: myOpName() || undefined, label: x.l, surface: x.s === "screen" ? "screen" : "window" });
+    if (!d.ok) { rcToast("Could not ask " + who + " to point: " + d.error, 6000, "warn"); return; }
+    ptAsks.set(name, { rcid, share: name, to: x.host, name: who, at: Date.now(), tok: authTokens.member });
+    log("Pointer: asked " + who + " to point on " + name);
+    rcToast("Asked " + who + " to let you point on their screen.", 5000);
+    ptPaintPills();
+    setTimeout(() => {   // no answer: say so here, and take the ask back there
+      const a = ptAsks.get(name);
+      if (a?.rcid !== rcid) return;
+      ptAsks.delete(name);
+      rcSend({ kind: "pstop", to: a.to, share: name, id: rcid, why: "timeout" }, a.tok);
+      rcToast(who + " didn\u2019t answer your pointer request.", 5000); ptPaintPills();
+    }, PT_ASK_MS);
+  }
+  function ptStopMine(name, tell) {   // I take my own pointer off
+    const x = rcShareOf(name);
+    if (ptMe?.share === name) { ptMe.on = 0; ptSendNow(); }
+    ptNote.delete(name); ptUsed.delete(name);
+    if (x?.pe) ptOptOut.add(name);
+    if (tell && x && Array.isArray(x.pa) && x.pa.includes(ptMeKey())) rcSend({ kind: "pstop", to: x.host, share: name, id: rcNewId(), peer: statePeer(), why: "released" });
+    ptTick();
+  }
+  function ptArrive(it) {   // a pointer note (rcArrive routes pask / pallow / pdeny / pstop here)
+    const k = it.rc;
+    if (k === "pask") { ptAskArrive(it); return; }
+    if (k === "pallow" || k === "pdeny") {
+      const a = ptAsks.get(it.share);
+      if (!a || a.rcid !== it.rcid || it.from !== a.to) return;
+      ptAsks.delete(it.share);
+      if (k === "pdeny") {
+        const msg = { timeout: " didn\u2019t answer your pointer request", share: "\u2019s share stopped", paused: "\u2019s share is paused", full: " already has " + PT_MAX + " pointers on that screen" }[it.why] || " said no to your pointer request";
+        rcToast(a.name + msg + ".", 6000); ptPaintPills(); return;
+      }
+      ptNote.set(it.share, Date.now()); ptUsed.set(it.share, Date.now()); ptOptOut.delete(it.share);
+      log("Pointer: " + a.name + " lets me point on " + it.share);
+      rcToast(a.name + " lets you point on their screen \u2014 move your mouse over it; a click shows as a ripple for everyone. Nothing is clicked on their computer.", 7000);
+      try { if (selectedName !== it.share && tiles.has(it.share)) select(it.share); } catch {}
+      ptTick();
+      return;
+    }
+    if (k === "pstop") {
+      const pp = String(it.share).split("/");
+      if (pp[1] === HOSTNAME1) {   // to me, the sharer: the asker withdrew, or a pointing person stopped
+        if (ptPrompt?.it.rcid === it.rcid) ptPromptClose(null);
+        ptPromptQ = ptPromptQ.filter((q) => q.it.rcid !== it.rcid);
+        const m = ptMine.get(it.share);
+        if (m && it.why === "released" && it.peer) { m.allowed.delete(ptKey(it.from, it.peer)); ptApply(m); }
+        return;
+      }
+      if (it.from !== pp[1]) return;   // only the sharer takes my pointer off
+      // a device's notes reach ONE of its pages: the room's list says whose pointer it was -- once it caught up, only that page says so
+      const share = it.share, why = it.why, had = ptMayPoint(share) || ptNote.has(share);
+      ptNote.delete(share);
+      setTimeout(() => {
+        if (had && !ptMayPoint(share) && why !== "timeout") { ptUsed.delete(share); rcToast(rcWho(share) + (why === "everyone" ? " switched pointers off." : " took your pointer off their screen."), 5000); }
+        ptTick();
+      }, 1500);
+      ptTick();
+    }
+  }
+  // my pointer over the share's tile -> pt.json (leading edge, PT_HZ_MS apart); a click / tap -> a sonar (mine at once, here)
+  function ptAttach(name, t) {
+    if (!t?.pane || t.pane.__pt) return;
+    const pane = t.pane;
+    pane.__pt = 1;
+    const at = (e) => { const tt = tiles.get(name); return tt && tt.pane === pane ? rcPoint(tt, e.clientX, e.clientY) : null; };
+    const may = () => ptMayPoint(name) && rcCtl?.share !== name;
+    pane.addEventListener("pointermove", (e) => { if (!may()) return; const p = at(e); ptMove(name, rcIn(p) ? p : null); }, { passive: true });
+    pane.addEventListener("pointerleave", () => { if (ptMe?.share === name && ptMe.on) ptMove(name, null); });
+    pane.addEventListener("pointerdown", (e) => {
+      if (!may() || (e.pointerType === "mouse" && e.button !== 0)) return;
+      if (e.target?.closest?.("button, a, input, select, textarea, .pchev, .prcbtn, .pptbtn, .menu, .popcard")) return;
+      const p = at(e);
+      if (rcIn(p)) ptClick(name, p);
+    }, true);
+    pane.addEventListener("pointerup", (e) => {   // a phone: the pointer stays a moment after the finger lifts
+      if (e.pointerType !== "touch" || ptMe?.share !== name) return;
+      const n0 = ptMe.mvN;
+      setTimeout(() => { if (ptMe?.share === name && ptMe.mvN === n0) ptMove(name, null); }, PT_TOUCH_MS);
+    });
+  }
+  function ptMove(name, p) {
+    if (!ptMe || ptMe.share !== name) { if (ptMe?.on) { ptMe.on = 0; ptSendNow(); } ptMe = { share: name, seq: ptMe?.seq || 0, k: [], on: 0, x: 0, y: 0, mvN: 0 }; }
+    if (p) { ptMe.x = p.x; ptMe.y = p.y; ptMe.on = 1; } else ptMe.on = 0;
+    ptMe.mvN++;
+    if (p && !ptUsed.has(name)) { ptUsed.set(name, Date.now()); ptTick(); } else if (p) ptUsed.set(name, Date.now());
+    ptSendSoon();
+  }
+  function ptClick(name, p) {
+    ptMove(name, p);
+    ptMe.k.push({ s: ++ptMe.seq, x: p.x, y: p.y, a: ptFleet() });
+    ptSendNow();
+    const t = tiles.get(name), xy = t && rcClientOf(t, p.x, p.y);
+    if (xy) ptSonar(ptBox(t), xy, myOpName() || "You", rcMyColor());   // mine shows at once, here; everyone else's at the picture's moment
+  }
+  function ptBox(t) {
+    let b = t.pane.querySelector(":scope > .ptmine");
+    if (!b) { b = document.createElement("div"); b.className = "rcptrs ptmine"; t.pane.appendChild(b); }
+    return b;
+  }
+  function ptSendSoon() {
+    if (ptSendT) return;
+    const w = PT_HZ_MS - (Date.now() - ptSendAt);
+    if (w <= 0) ptSendNow(); else ptSendT = setTimeout(() => { ptSendT = 0; ptSendNow(); }, w);
+  }
+  function ptSendNow() {
+    if (ptSendT) { clearTimeout(ptSendT); ptSendT = 0; }
+    if (!ptMe) return;
+    ptSendAt = Date.now();
+    const f = ptFleet();
+    ptMe.k = ptMe.k.filter((c) => f - c.a <= PT_CLICK_KEEP_MS);   // a click stays this long: a sharer who subscribes a moment late (my first tap) still gets it
+    try { roomState.set("pt.json", { v: 1, s: ptMe.share, t: f, x: ptMe.x, y: ptMe.y, on: ptMe.on && ptMayPoint(ptMe.share) ? 1 : 0, k: ptMe.k, n: (myOpName() || "").slice(0, 28), c: rcMyColor() }); } catch {}
+  }
+  // ---- the sharer
+  function ptWho(host, peer, n) {   // a pointing person's name + colour, from the room's presence (their own word as the fallback)
+    let w = null;
+    try { for (const x of roomsPres.values()) if (x.slug === CHANNEL && x.who && String(x.who.peer) === String(peer) && (!x.who.host || x.who.host === host)) { w = x.who; break; } } catch {}
+    const name = String((w && (w.name || (w.op ? prettyOperator(w.op) : ""))) || n || host || "Someone").slice(0, 28);
+    return { name, color: rcColorOfPeer(peer, name) };
+  }
+  function ptEnsure(share, mine) {
+    let m = ptMine.get(share);
+    if (!m) {
+      m = { share, feed: mine.feed, surface: mine.surface, everyone: false, own: ptOwnPref(), allowed: new Map(), block: new Set(), subs: new Map(), live: new Map(),
+            self: null, rips: [], seq: 0, on: false, cap: 0, okAt: 0, drawT: 0 };
+      ptMine.set(share, m);
+    }
+    m.feed = mine.feed;
+    return m;
+  }
+  function ptMineOf(share) { try { return (window.__rcMine?.() || []).find((s) => s.path === share && s.onair && !s.paused) || null; } catch { return null; } }
+  function ptAskArrive(it) {
+    if (it.room !== CHANNEL || joinState !== "joined") return;
+    const mine = ptMineOf(it.share);
+    const no = (why) => { log("Pointer: " + (it.by || it.from) + " asked; answered no (" + why + ")"); rcSend({ kind: "pdeny", to: it.from, share: it.share, id: it.rcid, why }); };
+    if (!mine) { no("share"); return; }
+    if (!rcCaps?.point) { no("unsupported"); return; }
+    const m = ptMine.get(it.share), key = ptKey(it.from, String(it.peer || ""));
+    if (m && (m.allowed.has(key) || (m.everyone && !m.block.has(key)))) { ptAllow(it, mine); return; }   // already may: say so again
+    if (m && m.allowed.size >= PT_MAX) { no("full"); return; }
+    if (ptPrompt?.it.from === it.from && ptPrompt?.it.share === it.share) return;
+    ptPromptQ = ptPromptQ.filter((q) => !(q.it.from === it.from && q.it.share === it.share));
+    ptPromptQ.push({ it, mine });
+    if (!ptPrompt) ptPromptNext();
+  }
+  function ptPromptNext() {
+    const nx = ptPromptQ.shift();
+    if (!nx) { ptPrompt = null; return; }
+    const { it, mine } = nx;
+    let el = document.getElementById("kPtAsk");
+    if (!el) {
+      el = document.createElement("div"); el.id = "kPtAsk"; el.hidden = true;
+      el.innerHTML = '<div class="popcard" role="dialog" aria-modal="true" aria-labelledby="ptaTitle"><div class="head"><span id="ptaTitle">Pointer</span></div>'
+        + '<div class="body"><p class="kcmsg"></p><p class="kcdet"></p></div>'
+        + '<div class="kcbtns"><button type="button" class="ghost ptno">Deny</button><button type="button" class="ghost ptall">Let everyone point</button><button type="button" class="ptyes">Allow</button></div></div>';
+      el.addEventListener("click", (e) => e.stopPropagation());
+      el.querySelector(".ptno").addEventListener("click", () => ptPromptClose("deny"));
+      el.querySelector(".ptall").addEventListener("click", () => ptPromptClose("all"));
+      el.querySelector(".ptyes").addEventListener("click", () => ptPromptClose("allow"));
+      el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ptPromptClose("deny"); } else e.stopPropagation(); });
+      document.body.appendChild(el);
+    }
+    const name = String(it.by || "Someone").slice(0, 40);
+    el.querySelector(".kcmsg").textContent = name + " asks to point on " + (mine.surface === "screen" ? "your screen" : "your window") + ". They can\u2019t click or type on your computer.";   // Kenton's words
+    el.querySelector(".kcdet").textContent = "Their pointer shows with their name for everyone watching, and their clicks show as ripples. Take it off any time from the pointer bar.";
+    el.hidden = false;
+    try { el.querySelector(".ptyes").focus(); } catch {}
+    const p = ptPrompt = { it, mine, name, el, at: Date.now(), room: CHANNEL };
+    try { chimeRoom(); } catch {}
+    log("Pointer: " + name + " asks to point on " + it.share);
+    p.t = setTimeout(() => { if (ptPrompt === p) ptPromptClose(p.room !== CHANNEL ? "left" : "timeout"); }, PT_ASK_MS - 2000);
+  }
+  function ptPromptClose(answer) {   // "allow" | "all" | "deny" | "timeout" | "left" | null (they withdrew)
+    const p = ptPrompt;
+    if (!p) return;
+    ptPrompt = null;
+    clearTimeout(p.t);
+    p.el.hidden = true;
+    if (answer === "allow" || answer === "all") {
+      const mine = ptMineOf(p.it.share);
+      if (!mine) rcSend({ kind: "pdeny", to: p.it.from, share: p.it.share, id: p.it.rcid, why: "share" });
+      else { if (answer === "all") ptEveryone(p.it.share, true); ptAllow(p.it, mine); }
+    } else if (answer) {
+      log("Pointer: " + (answer === "deny" ? "said no to " : "no answer for ") + p.name);
+      rcSend({ kind: "pdeny", to: p.it.from, share: p.it.share, id: p.it.rcid, why: answer === "deny" ? "no" : answer });
+    }
+    setTimeout(ptPromptNext, 0);
+  }
+  function ptAllow(it, mine) {
+    const m = ptEnsure(it.share, mine), key = ptKey(it.from, String(it.peer || ""));
+    const who = ptWho(it.from, it.peer, it.by);
+    m.block.delete(key);
+    if (!m.everyone || m.allowed.has(key)) m.allowed.set(key, { name: who.name, at: Date.now() });
+    rcSend({ kind: "pallow", to: it.from, share: it.share, id: it.rcid, peer: statePeer(), by: myOpName() || undefined });
+    log("Pointer: " + who.name + " may point on " + it.share);
+    rcToast(who.name + " can point on " + (m.surface === "screen" ? "your screen" : "your window") + " \u2014 they can\u2019t click or type on it.", 5000);
+    ptApply(m);
+  }
+  function ptRemove(share, key, why) {   // the sharer takes one pointer off (and keeps it off while everyone may point)
+    const m = ptMine.get(share);
+    if (!m) return;
+    const name = m.allowed.get(key)?.name || m.live.get(key)?.n || "";
+    m.allowed.delete(key);
+    if (m.everyone) m.block.add(key);
+    const h = m.subs.get(key);
+    if (h) { try { h.sub?.close(); } catch {} m.subs.delete(key); }
+    m.live.delete(key);
+    const [host, peer] = key.split("/");
+    if (host && host !== HOSTNAME1) rcSend({ kind: "pstop", to: host, share, id: rcNewId(), peer: statePeer(), why: why || "removed" });
+    log("Pointer: took " + (name || key) + "\u2019s pointer off " + share);
+    ptApply(m);
+  }
+  function ptEveryone(share, on) {
+    const mine = ptMineOf(share);
+    if (!mine) return;
+    const m = ptEnsure(share, mine);
+    if (m.everyone === !!on) return;
+    m.everyone = !!on;
+    if (!on) {   // everyone who was only pointing because of it goes (those I allowed one by one stay)
+      for (const key of [...m.subs.keys()]) if (!m.allowed.has(key)) {
+        const h = m.subs.get(key); try { h.sub?.close(); } catch {} m.subs.delete(key); m.live.delete(key);
+        const host = key.split("/")[0]; if (host !== HOSTNAME1) rcSend({ kind: "pstop", to: host, share, id: rcNewId(), peer: statePeer(), why: "everyone" });
+      }
+      m.block.clear();
+    }
+    log("Pointer: everyone may point on " + share + ": " + (on ? "on" : "off"));
+    rcToast(on ? "Everyone watching can point on " + (m.surface === "screen" ? "your screen" : "your window") + " \u2014 they can\u2019t click or type on it." : "Only the people you allowed can point now.", 5000);
+    ptApply(m);
+  }
+  function ptOwn(on) {
+    try { localStorage.setItem("kastr.pt.own", on ? "1" : "0"); } catch {}
+    for (const m of ptMine.values()) { m.own = !!on; if (m.on) ptLocalOn(m); }
+    ptBarPaint();
+  }
+  function ptApply(m) {   // pointer mode on while anyone may point; off (and gone from the list) when nobody may
+    const want = m.everyone || m.allowed.size > 0;
+    if (want && !m.on) { m.on = true; m.okAt = 0; ptWsOpen(); ptLocalOn(m); log("Pointer: pointer mode on for " + m.share); }
+    else if (!want && m.on) ptOff(m, "stopped");
+    try { window.__state?.set?.("rc", rcMineList()); } catch {}
+    try { rcState().sync(); } catch {}
+    ptSyncSubs(m);
+    ptPublishSoon();
+    ptBarPaint();
+  }
+  function ptOff(m, why) {
+    if (!m.on) return;
+    m.on = false;
+    for (const h of m.subs.values()) { try { h.sub?.close(); } catch {} }
+    m.subs.clear(); m.live.clear(); m.rips = []; m.self = null;
+    clearTimeout(m.drawT); m.drawT = 0;
+    ptLocal({ op: "pt-off", feed: m.feed, why });
+    ptPublishNow();
+    setTimeout(() => { try { rcState().sync(); } catch {} }, 1500);   // the path goes once nothing is live (the last word first)
+    log("Pointer: pointer mode off for " + m.share + " (" + why + ")");
+  }
+  function ptLocalOn(m) {
+    m.okAt = Date.now();
+    ptLocal({ op: "pt-on", feed: m.feed, share: m.share, own: m.own, name: (myOpName() || "Sharer").slice(0, 28), color: rcMyColor() });
+  }
+  function ptLocal(body) {   // my own KASTR (kastr_point): the WebSocket when it is open, else POST /api/rc
+    if (ptWs && ptWs.readyState === 1) { try { ptWs.send(JSON.stringify(body)); return; } catch {} }
+    rcLocal(body).then((d) => ptLocalReply(body.op, d, d.http, body.feed));
+  }
+  function ptLocalReply(op, d, code, feed) {
+    const f = String(d?.feed ?? feed ?? "");
+    const m = [...ptMine.values()].find((x) => String(x.feed) === f);
+    if (op === "pt-on" && m) {
+      if (code === 200) { m.cap = d.cap ? 1 : 0; m.err = ""; if (d.sample) ptSelfArrive({ [m.feed]: d.sample }); }
+      else m.err = d.why || d.error || "no answer from KASTR";
+    }
+    if (op === "pt-draw" && code === 409) for (const x of ptMine.values()) if (x.on) x.okAt = 0;   // KASTR forgot it (a restart): on again next tick
+  }
+  function ptWsOpen() {
+    if (ptWs || !rcCaps?.ws || !rcCaps?.point) return;
+    let ws;
+    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/rc/ws"); } catch { return; }
+    ptWs = ws;
+    ws.onopen = () => { ptWsTries = 0; for (const m of ptMine.values()) if (m.on) ptLocalOn(m); };
+    ws.onmessage = (ev) => {
+      let d = null; try { d = JSON.parse(ev.data); } catch { return; }
+      if (!d) return;
+      if (d.pt) { ptSelfArrive(d.pt); return; }
+      if (d.re === "pt-on" || d.re === "pt-draw") ptLocalReply(d.re, d, d.code);
+    };
+    ws.onclose = () => { if (ptWs === ws) ptWs = null; if (ptAnyOn() && ++ptWsTries <= 5) setTimeout(ptWsOpen, 1000); };
+  }
+  function ptSelfArrive(pt) {   // my own pointer + clicks on my shared surface (kastr_point samples them; nothing is moved)
+    const now = Date.now();
+    let any = false;
+    for (const [feed, smp] of Object.entries(pt || {})) {
+      const m = [...ptMine.values()].find((x) => x.on && String(x.feed) === String(feed));
+      if (!m || !smp || !Array.isArray(smp.s)) continue;
+      m.self = { x: Number(smp.s[0]) || 0, y: Number(smp.s[1]) || 0, on: smp.s[2] ? 1 : 0, at: now };
+      if (m.own) for (const k of (Array.isArray(smp.k) ? smp.k : []).slice(-8)) {
+        m.rips.push({ id: "s:" + (++m.seq), k: "s", h: HOSTNAME1, pe: statePeer(), n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: Number(k[0]) || 0, y: Number(k[1]) || 0, t: ptFleet() });
+      }
+      any = true;
+    }
+    if (any) ptPublishSoon();
+  }
+  function ptSyncSubs(m) {   // one subscription per allowed pointing person who says they point here (PT_MAX)
+    const want = new Map();
+    if (m.on && connection) {
+      const rows = [];
+      for (const [mp, list] of ptWant) {
+        if (!list.includes(m.share)) continue;
+        const pp = mp.split("/");
+        if (pp[0] !== CHANNEL || !pp[3] || pp[1] === HOSTNAME1) continue;
+        const key = ptKey(pp[1], pp[3]);
+        if (m.allowed.has(key) || (m.everyone && !m.block.has(key))) rows.push([m.allowed.has(key) ? 0 : 1, key, mp]);
+      }
+      rows.sort((a, b) => a[0] - b[0]);
+      for (const [, key, mp] of rows.slice(0, PT_MAX)) want.set(key, mp);
+    }
+    let changed = false;
+    for (const [key, h] of [...m.subs]) if (want.get(key) !== h.mp || h.conn !== connection) { try { h.sub?.close(); } catch {} m.subs.delete(key); m.live.delete(key); changed = true; }
+    for (const [key, mp] of want) {
+      if (m.subs.has(key)) continue;
+      const h = { key, mp, conn: connection, lastK: -1, first: true };
+      h.sub = stateSubscribe(connection, mp, "pt.json", "snapshot", (v) => ptPtrArrive(m, h, v), RC_PRIO);
+      m.subs.set(key, h);
+    }
+    if (changed) ptDrawSoon(m, []);
+  }
+  function ptPtrArrive(m, h, v) {   // a pointing person's pt.json: their pointer, and clicks newer than the last one drawn
+    if (m.subs.get(h.key) !== h || !m.on || !v || typeof v !== "object") return;
+    const [host, peer] = h.key.split("/"), who = ptWho(host, peer, v.n), now = Date.now();
+    const x = Number(v.x), y = Number(v.y), here = v.s === m.share;
+    const on = !!v.on && here && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+    const cur = m.live.get(h.key);
+    const moved = !cur || !cur.on || cur.x !== x || cur.y !== y;
+    m.live.set(h.key, { key: h.key, h: host, pe: peer, n: who.name, c: who.color, x: on ? x : 0, y: on ? y : 0, on, at: now, mv: on && moved ? now : (cur?.mv || 0) });
+    const rips = [];
+    const ks = here && Array.isArray(v.k) ? v.k.slice(-16) : [];
+    for (const k of ks) {
+      const s = Number(k?.s), kx = Number(k?.x), ky = Number(k?.y);
+      if (!(s > h.lastK) || !(kx >= 0 && kx <= 1 && ky >= 0 && ky <= 1)) continue;
+      if (h.first && Number(v.t) - (Number(k.a) || 0) > PT_CLICK_KEEP_MS) continue;   // an old click in the first value: not again
+      const r = { id: h.key + ":" + s, k: "p", h: host, pe: peer, n: who.name, c: who.color, x: kx, y: ky, t: ptFleet() };
+      m.rips.push(r); rips.push(r);
+    }
+    h.lastK = Math.max(h.lastK, ...ks.map((k) => Number(k?.s) || 0));
+    h.first = false;
+    ptDrawSoon(m, rips);
+    ptPublishSoon();
+  }
+  function ptDrawSoon(m, rips) {   // -> my KASTR: the pointers PT_HZ_MS apart at most, a click at once
+    if (rips.length) { ptDrawNow(m, rips); return; }
+    if (!m.drawT) m.drawT = setTimeout(() => { m.drawT = 0; ptDrawNow(m, []); }, PT_HZ_MS);
+  }
+  function ptDrawNow(m, rips) {
+    if (!m.on) return;
+    if (m.drawT) { clearTimeout(m.drawT); m.drawT = 0; }
+    const now = Date.now();
+    ptLocal({ op: "pt-draw", feed: m.feed,
+              p: [...m.live.values()].map((x) => ({ id: x.key, n: x.n, c: x.c, x: x.x, y: x.y, on: x.on && now - x.mv < PT_IDLE_MS ? 1 : 0 })),
+              r: rips.map((r) => ({ id: r.id, n: r.n, c: r.c, x: r.x, y: r.y })) });
+  }
+  function ptPublishSoon() {   // -> pts.json for every viewer, PT_HZ_MS apart at most
+    if (ptPubT) return;
+    const w = PT_HZ_MS - (Date.now() - ptPubAt);
+    if (w <= 0) ptPublishNow(); else ptPubT = setTimeout(() => { ptPubT = 0; ptPublishNow(); }, w);
+  }
+  function ptPublishNow() {
+    if (ptPubT) { clearTimeout(ptPubT); ptPubT = 0; }
+    ptPubAt = Date.now();
+    const now = Date.now(), f = ptFleet(), s = [];
+    for (const m of ptMine.values()) {
+      if (!m.on) continue;
+      const p = [];
+      if (m.self) p.push({ id: "s", k: "s", h: HOSTNAME1, pe: statePeer(), n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: m.self.x, y: m.self.y, on: m.self.on, cap: 1 });   // my real cursor is in the picture: my name beside it
+      for (const x of m.live.values()) p.push({ id: x.key, k: "p", h: x.h, pe: x.pe, n: x.n, c: x.c, x: x.x, y: x.y, on: x.on && now - x.mv < PT_IDLE_MS ? 1 : 0 });
+      m.rips = m.rips.filter((r) => f - r.t < PT_KEEP_MS + 500).slice(-24);
+      s.push({ share: m.share, cap: window.__ptCapOff ? 0 : m.cap, p, r: m.rips });   // rig: the lab's X11 sharer drawn like a Windows one
+    }
+    if (!s.length && !ptAnyOn() && !rcState().path) return;
+    try { rcState().set("pts.json", { v: 1, t: f, s }); } catch {}
+  }
+  function ptBarPaint() {   // the sharer's pointer bar: who points, Let everyone point, Show my clicks, Stop pointers
+    const ms = [...ptMine.values()].filter((m) => m.on || m.everyone);
+    let el = document.getElementById("kPtBar");
+    if (!ms.length) { if (el) el.hidden = true; return; }
+    if (!el) {
+      el = document.createElement("div"); el.id = "kPtBar"; el.hidden = true;
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const b = e.target.closest?.("[data-act]");
+        if (!b) return;
+        const share = b.dataset.share, act = b.dataset.act;
+        if (act === "rm") ptRemove(share, b.dataset.key, "removed");
+        else if (act === "all") ptEveryone(share, !ptMine.get(share)?.everyone);
+        else if (act === "own") ptOwn(!ptOwnPref());
+        else if (act === "off") ptStopAll(share);
+      });
+      document.body.appendChild(el);
+    }
+    el.textContent = "";
+    for (const m of ms) {
+      const row = document.createElement("span"); row.className = "row";
+      const t = document.createElement("span"); t.className = "t";
+      const people = new Map();
+      for (const [k, a] of m.allowed) people.set(k, a.name);
+      for (const [k, x] of m.live) if (!people.has(k)) people.set(k, x.n);
+      t.textContent = (m.surface === "screen" ? "Pointers on your screen" : "Pointers on your window") + (people.size ? ":" : " \u2014 nobody is pointing yet");
+      row.appendChild(t);
+      for (const [k, n] of people) {
+        const c = document.createElement("button"); c.type = "button"; c.className = "chip"; c.dataset.act = "rm"; c.dataset.share = m.share; c.dataset.key = k;
+        c.title = "Take " + n + "\u2019s pointer off"; c.textContent = n + " \u00d7";
+        row.appendChild(c);
+      }
+      const all = document.createElement("button"); all.type = "button"; all.className = "tog" + (m.everyone ? " on" : ""); all.dataset.act = "all"; all.dataset.share = m.share;
+      all.textContent = (m.everyone ? "\u2611 " : "\u2610 ") + "Let everyone point"; all.title = "Everyone watching gets a pointer without asking";
+      const own = document.createElement("button"); own.type = "button"; own.className = "tog" + (m.own ? " on" : ""); own.dataset.act = "own"; own.dataset.share = m.share;
+      own.textContent = (m.own ? "\u2611 " : "\u2610 ") + "Show my clicks"; own.title = "Your own clicks show as ripples for everyone watching";
+      const off = document.createElement("button"); off.type = "button"; off.className = "stop"; off.dataset.act = "off"; off.dataset.share = m.share; off.textContent = "Stop pointers";
+      row.append(all, own, off);
+      el.appendChild(row);
+    }
+    el.hidden = false;
+  }
+  function ptStopAll(share) {
+    const m = ptMine.get(share);
+    if (!m) return;
+    for (const key of new Set([...m.allowed.keys(), ...m.subs.keys()])) {
+      const host = key.split("/")[0];
+      if (host !== HOSTNAME1) rcSend({ kind: "pstop", to: host, share, id: rcNewId(), peer: statePeer(), why: "removed" });
+    }
+    m.allowed.clear(); m.block.clear(); m.everyone = false;
+    ptApply(m);
+    ptBarPaint();
+  }
+  function ptShareItems(share) {   // the share's own menu (my tile's chevron)
+    if (!rcCaps?.point || !ptMineOf(share)) return [];
+    const m = ptMine.get(share);
+    const out = [{ value: "pnteveryone", icon: "mouse", label: (m?.everyone ? "\u2611 " : "\u2610 ") + "Let everyone point", tip: "Everyone watching gets a pointer with their name; a click shows as a ripple \u2014 nobody can click or type on your computer" },
+                 { value: "pntown", label: (ptOwnPref() ? "\u2611 " : "\u2610 ") + "Show my clicks", tip: "Your own clicks show as ripples for everyone watching (while pointers are on)" }];
+    if (m) {
+      const people = new Map();
+      for (const [k, a] of m.allowed) people.set(k, a.name);
+      for (const [k, x] of m.live) if (!people.has(k)) people.set(k, x.n);
+      for (const [k, n] of people) out.push({ value: "pntrm:" + k, label: "Take " + n + "\u2019s pointer off" });
+      if (m.on) out.push({ value: "pntoff", label: "Stop all pointers" });
+    }
+    return out;
+  }
+  function ptShareMenuPick(share, v) {
+    if (v === "pnteveryone") ptEveryone(share, !ptMine.get(share)?.everyone);
+    else if (v === "pntown") ptOwn(!ptOwnPref());
+    else if (v === "pntoff") ptStopAll(share);
+    else if (v.startsWith("pntrm:")) ptRemove(share, v.slice(6), "removed");
+  }
+  // ---- every viewer: the sharer's pts.json over the share's tile, lined up with the picture
+  const ptViews = new Map();   // the sharer's ~rc path -> { path, conn, sub, q: [{t, at, s: Map(share -> entry)}], shown: Set(ripple ids), boxes: Map(share -> {box, els}) }
+  function ptViewSync() {
+    const want = new Set();
+    for (const [mp, list] of rcShares) {
+      const pp = mp.split("/");
+      if (!pp[3] || pp[1] === HOSTNAME1) continue;
+      if (list.some((x) => x.pt && tiles.has(x.p))) want.add(pp[0] + "/" + pp[1] + "/~rc/" + pp[3]);
+    }
+    for (const [path, h] of [...ptViews]) if (!want.has(path) || (connection && h.conn !== connection)) ptViewDrop(path);
+    if (!connection) return;
+    for (const path of want) {
+      if (ptViews.has(path)) continue;
+      const h = { path, conn: connection, q: [], shown: new Set(), boxes: new Map() };
+      h.sub = stateSubscribe(connection, path, "pts.json", "snapshot", (v) => ptViewArrive(h, v), RC_PRIO);
+      ptViews.set(path, h);
+    }
+  }
+  function ptViewDrop(path) {
+    const h = ptViews.get(path);
+    if (!h) return;
+    ptViews.delete(path);
+    try { h.sub?.close(); } catch {}
+    for (const b of h.boxes.values()) b.box?.remove();
+  }
+  function ptViewArrive(h, v) {
+    if (ptViews.get(h.path) !== h || !v || !Array.isArray(v.s)) return;
+    const now = Date.now(), host = h.path.split("/")[1], s = new Map();
+    for (const e of v.s.slice(0, 16)) if (e && typeof e.share === "string" && e.share.split("/")[1] === host) s.set(e.share, e);
+    if (!h.q.length) for (const e of s.values()) for (const r of (Array.isArray(e.r) ? e.r : [])) if (r?.id) h.shown.add(String(r.id));   // joined late: old clicks are not new
+    h.q.push({ t: Number(v.t) || 0, at: now, s });
+    while (h.q.length > 2 && now - h.q[0].at > RC_PTR_KEEP_MS) h.q.shift();
+    ptLoop();
+  }
+  function ptSonar(box, xy, n, c) {   // three rings + a dot + the name, PT_SONAR_MS (CSS)
+    if (!box || !xy) return;
+    const el = document.createElement("div"); el.className = "ptsonar";
+    const col = /^#[0-9a-f]{6}$/i.test(String(c || "")) ? String(c) : "#009fda";
+    el.style.setProperty("--c", col); el.style.setProperty("--ink", rcInk(col));
+    el.style.transform = "translate(" + Math.round(xy[0]) + "px," + Math.round(xy[1]) + "px)";
+    el.innerHTML = '<i></i><i></i><i></i><b></b><span class="nm"></span>';
+    el.querySelector(".nm").textContent = String(n || "").slice(0, 28);
+    box.appendChild(el);
+    ptSonarN++;
+    setTimeout(() => el.remove(), PT_SONAR_MS + 150);
+  }
+  function ptPaint() {   // -> true while something is still on its way into view (keep painting every frame)
+    let busy = false;
+    const now = Date.now(), fleet = ptFleet(), me = statePeer();
+    for (const h of ptViews.values()) {
+      if (!h.q.length) continue;
+      const last = h.q[h.q.length - 1];
+      const onClock = last.t > 0 && fleet - last.t > -1500 && fleet - last.t < 15000;   // the sharer's stamps are on my (fleet) clock
+      const shares = new Set(h.boxes.keys());
+      for (const smp of h.q) for (const k of smp.s.keys()) shares.add(k);
+      for (const share of shares) {
+        const t = tiles.get(share);
+        let b = h.boxes.get(share);
+        if (!t) { if (b) { b.box?.remove(); h.boxes.delete(share); } continue; }
+        const L = rcPtrDelay(t), pk = rcPtrPick(h, L);
+        if (pk && now - last.at < L + 400) busy = true;
+        if (!b || b.box.parentNode !== t.pane) { b?.box?.remove(); b = { box: document.createElement("div"), els: new Map() }; b.box.className = "rcptrs ptptrs"; t.pane.appendChild(b.box); h.boxes.set(share, b); }
+        const e = pk ? pk.s.get(share) : null, cap = !!(e && e.cap), seen = new Set();
+        for (const p of (e && Array.isArray(e.p) ? e.p.slice(0, PT_MAX + 1) : [])) {
+          if (!p || !p.on) continue;
+          const self = p.k === "s";
+          if (!self && (cap || (p.h === HOSTNAME1 && p.pe === me))) continue;   // in the picture already (X11) / my own mouse
+          if (self && rcPtrs.has(share)) continue;   // remote control draws the sharer's pointer itself (ptr.json)
+          const xy = rcClientOf(t, Number(p.x), Number(p.y));
+          if (!xy) continue;
+          const id = String(p.id || "").slice(0, 100);
+          let el = b.els.get(id);
+          if (!el) {
+            el = document.createElement("div"); el.className = "rcptr"; el.dataset.k = self ? "s" : "p";
+            el.innerHTML = '<svg viewBox="0 0 15 24" aria-hidden="true"><path d="M.5 .5V20.5L5.5 15.5L9.5 23.5L12.5 22.5L8.5 14.5H14.5Z"/></svg><span class="nm"></span>';
+            b.box.appendChild(el); b.els.set(id, el);
+          }
+          const nm = String(p.n || "").slice(0, 28), nmEl = el.querySelector(".nm");
+          if (nmEl.textContent !== nm) nmEl.textContent = nm;
+          const c = /^#[0-9a-f]{6}$/i.test(String(p.c || "")) ? String(p.c) : "#009fda";
+          if (el.dataset.c !== c) { el.dataset.c = c; el.style.setProperty("--c", c); el.style.setProperty("--ink", rcInk(c)); }
+          el.classList.toggle("tagonly", self && !!p.cap);   // the sharer's real cursor is in the picture: only their name beside it
+          el.style.transform = "translate(" + Math.round(xy[0]) + "px," + Math.round(xy[1]) + "px)";
+          el.hidden = false; seen.add(id);
+        }
+        for (const [k, el] of [...b.els]) if (!seen.has(k)) { el.remove(); b.els.delete(k); }
+        for (const smp of h.q) {   // the clicks: each one when the picture shows its moment, once
+          const se = smp.s.get(share);
+          if (!se || !Array.isArray(se.r)) continue;
+          for (const r of se.r.slice(-24)) {
+            const id = String(r?.id || "");
+            if (!id || h.shown.has(id)) continue;
+            if ((r.h === HOSTNAME1 && r.pe === me) || se.cap) { h.shown.add(id); continue; }   // mine showed at once / in the picture already
+            const due = onClock ? Number(r.t) + L <= fleet : smp.at + Math.max(0, L - 30) <= now;
+            if (!due) { busy = true; continue; }
+            h.shown.add(id);
+            if (onClock && fleet - Number(r.t) - L > PT_SONAR_MS) continue;   // too late to mean anything
+            ptSonar(b.box, rcClientOf(t, Number(r.x), Number(r.y)), r.n, r.c);
+          }
+        }
+      }
+      if (h.shown.size > 600) h.shown = new Set([...h.shown].slice(-300));
+    }
+    return busy;
+  }
+  let ptLoopOn = false;
+  function ptLoop() {
+    if (ptLoopOn) return;
+    ptLoopOn = true;
+    const go = () => { ptLoopOn = false; if (ptPaint()) ptLoop(); };
+    if (document.hidden) setTimeout(go, 33); else requestAnimationFrame(go);
+  }
+  function ptPaintPills() {   // the spotlit share's Point button
+    for (const [name, t] of tiles) {
+      const b = t.pane.querySelector(":scope > .pptbtn");
+      if (!b) continue;
+      const it = ptMenuItem(name);
+      t.pane.classList.toggle("ptable", !!it);
+      if (!it) continue;
+      const lbl = it.value === "pntstop" ? "Stop pointing" : it.value === "pntwait" ? "Waiting\u2026" : "Point";
+      b.dataset.v = it.value; b.title = it.tip || it.label; b.classList.toggle("on", it.value === "pntstop");
+      const s = b.querySelector("span"); if (s && s.textContent !== lbl) s.textContent = lbl;
+    }
+  }
+  function ptTick() {   // once a second (and on every change): leases, subscriptions, my list, the viewers' side
+    try {
+      for (const [share, m] of [...ptMine]) {
+        let mine = null;
+        try { mine = (window.__rcMine?.() || []).find((s) => s.path === share && s.onair) || null; } catch {}
+        if (!mine || joinState !== "joined" || !String(share).startsWith(CHANNEL + "/")) {   // the share stopped, or I left the room
+          ptOff(m, mine ? "left" : "share");
+          ptMine.delete(share);
+          ptBarPaint();
+          continue;
+        }
+        if (mine.paused) { ptOff(m, "paused"); continue; }   // a pause card takes no pointers; Resume brings them back
+        m.feed = mine.feed;
+        if (!m.on && (m.everyone || m.allowed.size)) ptApply(m);
+        if (m.on) {
+          if (Date.now() - m.okAt > PT_ON_MS) ptLocalOn(m);   // the lease (kastr_point.PT_LEASE_S)
+          ptSyncSubs(m);
+          ptDrawSoon(m, []);
+        }
+      }
+      if (ptAnyOn()) { try { rcState().sync(); } catch {} ptPublishSoon(); }
+      // the pointing person: my room.json says where I point (only shares I may point on and pointed on lately)
+      for (const [share, a] of [...ptAsks]) if (ptMayPoint(share)) {   // allowed (the room's list) while the note went to another page of this device
+        ptAsks.delete(share); ptUsed.set(share, Date.now());
+        rcToast(a.name + " lets you point on their screen — move your mouse over it; a click shows as a ripple for everyone.", 6000);
+      }
+      const mineList = [];
+      for (const [share, at] of [...ptUsed]) {
+        if (!ptMayPoint(share) || !tiles.has(share)) { if (!ptAsks.has(share) && Date.now() - at > PT_GRACE_MS) ptUsed.delete(share); continue; }
+        if (Date.now() - at > PT_USED_MS) { ptUsed.delete(share); continue; }
+        mineList.push(share);
+      }
+      window.__state?.set?.("pt", mineList);
+      if (ptMe && ptMe.on && !ptMayPoint(ptMe.share)) { ptMe.on = 0; ptSendNow(); }
+      for (const [name, t] of tiles) {
+        const x = rcShareOf(name);
+        if (!x || !x.pv || x.host === HOSTNAME1) continue;
+        ptAttach(name, t);
+        if (x.pe && !ptTold.has(name) && !ptOptOut.has(name) && ptCanAsk()) {
+          ptTold.add(name);
+          rcToast(rcWho(name) + " lets everyone point on their " + (x.s === "screen" ? "screen" : "window") + " \u2014 move your mouse over it; a click shows as a ripple. (Stop pointing: the tile\u2019s menu)", 7000);
+        }
+      }
+      ptViewSync();
+      ptPaintPills();
+      ptBarPaint();
+    } catch (e) { log("Pointer: tick: " + (e?.message || e)); }
+  }
+  setInterval(ptTick, 1000);
+  setInterval(() => { if (ptViews.size) ptPaint(); }, 250);   // the tile moved / zoomed while the pointers stood still
+  window.__pt = { state: () => ({ mine: [...ptMine].map(([k, m]) => [k, { on: m.on, everyone: m.everyone, own: m.own, cap: m.cap, err: m.err || "", allowed: [...m.allowed.keys()], block: [...m.block],
+                                                                         subs: [...m.subs.keys()], live: [...m.live.values()].map((x) => [x.key, x.n, x.on, x.x, x.y]), self: m.self, rips: m.rips.length }]),
+                                  want: [...ptWant], asks: [...ptAsks.keys()], used: [...ptUsed.keys()], prompt: ptPrompt && { from: ptPrompt.it.from, share: ptPrompt.it.share }, me: ptMe && { share: ptMe.share, on: ptMe.on, x: ptMe.x, y: ptMe.y, k: ptMe.k.length },
+                                  ws: !!(ptWs && ptWs.readyState === 1), sonars: ptSonarN,
+                                  views: [...ptViews].map(([k, h]) => [k, h.q.length, h.sub?.n || 0, [...h.boxes].map(([s, b]) => [s, [...b.els].map(([id, el]) => [id, el.style.transform, el.querySelector(".nm").textContent, el.classList.contains("tagonly")])])]) }),
+                  may: ptMayPoint, item: ptMenuItem, request: ptRequest, pick: ptMenuPick, answer: (a) => ptPromptClose(a), everyone: ptEveryone, own: ptOwn, remove: ptRemove, stopAll: ptStopAll,
+                  move: (name, x, y) => ptMove(name, x == null ? null : { x, y }), click: (name, x, y) => ptClick(name, { x, y }) };   // rig
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
   // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
   // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)
@@ -10839,6 +11590,7 @@
             tip: sp ? "Its own tile goes again for everyone in " + roomTitle(CHANNEL) + " (its grid cell stays)" : "A tile of its own for everyone in " + roomTitle(CHANNEL) + " \u2014 pin or spotlight it; its grid cell stays, other rooms are untouched" });
         }
         { const ri = rcMenuItem(name); if (ri) items.push(ri); }   // 0.21.79: Request control (publishers and admins; a native share)
+        { const pi = ptMenuItem(name); if (pi) items.push(pi); }   // 0.21.83: Point on this screen (anyone in the room)
         items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
           items.push({ value: "astop", label: "Stop this share (admin)" });
@@ -10888,6 +11640,7 @@
           if (extra?.pick && String(v).startsWith("pinv")) { extra.pick(v); return; }   // 0.21.78
           if (v === "lat") { latencyToggle(name); return; }
           if (String(v).startsWith("rc")) { rcMenuPick(name, v); return; }   // 0.21.79: remote control
+          if (String(v).startsWith("pnt")) { ptMenuPick(name, v); return; }   // 0.21.83: pointer mode
           if (v === "wrall") { wrSpotForAll(name); return; }   // 0.21.49: bring it into my room, then spotlight it
           if (v === "wrsound" || v === "wrstop" || v === "wrpick") {   // 0.21.44; 0.21.47: one source / the room's list
             const r0 = wrRoomOf(name), w0 = r0 && watchRooms.get(r0);
@@ -10960,6 +11713,15 @@
         b.type = "button"; b.className = "prcbtn";
         b.innerHTML = icon("mouse") + "<span>Request control</span>";
         b.addEventListener("click", (e) => { e.stopPropagation(); rcMenuPick(name, b.dataset.v || "rcask"); });
+        b.addEventListener("dblclick", (e) => e.stopPropagation());
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        pane.appendChild(b);
+      }
+      {   // 0.21.83: a spotlit native share of someone else -- Point (anyone in the room; ptPaintPills shows it when the menu would offer it)
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "pptbtn";
+        b.innerHTML = icon("mouse") + "<span>Point</span>";
+        b.addEventListener("click", (e) => { e.stopPropagation(); ptMenuPick(name, b.dataset.v || "pntask"); });
         b.addEventListener("dblclick", (e) => e.stopPropagation());
         b.addEventListener("pointerdown", (e) => e.stopPropagation());
         pane.appendChild(b);
@@ -12127,6 +12889,7 @@
     if (src?.share) {   // 0.21.73 (Kenton: "a pause share button ... before resharing")
       items.push({ value: "spause", label: src.sharePaused ? "Resume sharing" : "Pause sharing" });
       if (ref.peer === window.__publisher?.peer) items.push({ value: "swap", label: "Share something else\u2026" });
+      for (const it of ptShareItems(CHANNEL + "/" + hangName(ref.name))) items.push(it);   // 0.21.83: pointer mode -- Let everyone point, Show my clicks, take a pointer off
     } else if (src?.pausable) items.push({ value: "pause", label: src.videoPaused ? "Resume video" : "Pause video" });
     if (ref.kind === "rtsp" && !src?.share) {   // 0.8.12 composite menu; 0.9.2: feeds mode on EVERY feed's menu (a lone feed has no composite); 0.21.73: not on a screen share
       const gf = window.__gridFeeds?.get?.() || "both";
@@ -12176,6 +12939,8 @@
         if (c) sendControl(ref.peer, ref.id, { sharePaused: !c.sharePaused });
       } else if (v === "swap") {      // 0.21.73
         window.__shareSwap?.(ref.id);
+      } else if (String(v).startsWith("pnt")) {   // 0.21.83: pointer mode
+        ptShareMenuPick(CHANNEL + "/" + hangName(ref.name), v);
       } else if (v.startsWith("gf-")) {
         window.__gridFeeds?.set?.(v.slice(3));   // 0.8.12
       } else if (v === "lock") {
@@ -15046,7 +15811,7 @@
         let bp;
         try { bp = org.createBroadcast(Net.Path.from(myPath)); } catch { return; }
         e.cleanup(() => { try { bp.close(); } catch {} tracks = {}; chatWin = null; });
-        for (const name of trackNames) { try { tracks[name] = bp.createTrack(name, { priority: opts?.priority ?? STATE_PRIORITY, maxAge: opts?.maxAge ?? STATE_LAT_MS }); } catch {} }
+        for (const name of trackNames) { const o = opts?.tracks?.[name] || opts; try { tracks[name] = bp.createTrack(name, { priority: o?.priority ?? STATE_PRIORITY, maxAge: o?.maxAge ?? STATE_LAT_MS }); } catch {} }   // 0.21.83: + per-track opts
         // Group sequences must never go backwards on a resumed broadcast: a fresh Track.Producer
         // starts at 0, and a relay that resumed the same path (linger) keeps existing subscribers
         // who then drop every group below the old high-water mark -- values vanish until the
@@ -15088,7 +15853,8 @@
   if (HC_RE.test(profile?.color || "")) pubModel.hc = profile.color;   // 0.21.61
   const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
   const pubState = stateProducer(() => (isPersonalSlug(CHANNEL) ? "" : "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer()), ["state.json"]);   // 0.21.75: no public state in My room
-  const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
+  // 0.21.83: + pt.json -- my pointer on someone's share (pointer mode): the newest value is all that matters (255, 2 s)
+  const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json", "pt.json"], { tracks: { "pt.json": { priority: 255, maxAge: 2000 } } });
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
   function stateCommit() {
     pubModel.peer = statePeer(); roomModel.peer = pubModel.peer;
@@ -15179,6 +15945,11 @@
         case "rc": {       // 0.21.79: my native shares that can be remote-controlled [{p, s, l, no?}]
           const list = (Array.isArray(value) ? value : []).filter((x) => x && x.p).slice(0, 16);
           if (list.length) roomModel.rc = list; else delete roomModel.rc;
+          break;
+        }
+        case "pt": {       // 0.21.83: the shares I point on (their sharer subscribes to my pt.json)
+          const list = (Array.isArray(value) ? value : []).filter((x) => typeof x === "string").slice(0, 8);
+          if (list.length) roomModel.pt = list; else delete roomModel.pt;
           break;
         }
         default: return;
@@ -15377,6 +16148,7 @@
     if (!v || typeof v !== "object") return;
     const prev = h.prev;
     rcSharesApply(path, v.rc);   // 0.21.79: their shares that can be remote-controlled
+    ptWantApply(path, v.pt);     // 0.21.83: the shares they point on
     // spotlight / recording: the announce maps keyed by the member path
     // 0.21.32: `spots` (several)
     const vs = Array.isArray(v.spots) ? v.spots : [];
@@ -15426,6 +16198,7 @@
   }
   function memberClear(path, h) {
     rcShares.delete(path);   // 0.21.79
+    ptWant.delete(path);     // 0.21.83
     const hadLit = spotVotes.delete(path + "#lit");   // 0.21.0
     const hadOff = spotOffs.delete(path);             // 0.21.32
     if (spotVotes.delete(path) || hadLit || hadOff) spotApplyWinner();

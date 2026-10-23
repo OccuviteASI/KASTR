@@ -1521,7 +1521,8 @@ class RemoteControl:
     def caps(self):
         ok, why, kind = self._caps if self._caps is not None else platform_caps()
         return {"ok": True, "available": bool(ok), "why": why, "platform": kind, "clipMax": CLIP_MAX, "hold": LOCAL_HOLD, "lease": LEASE_S,
-                "pointers": True, "ws": True}   # 0.21.80: two pointers; the loopback WebSocket
+                "pointers": True, "ws": True,   # 0.21.80: two pointers; the loopback WebSocket
+                "point": True}   # 0.21.83: pointer mode (kastr_point) -- other people's pointers + sonar clicks, never input
 
     def _backend(self):
         if self.backend is None:
@@ -2235,6 +2236,9 @@ def share_gone(feed_id, why):
             rc.share_gone(feed_id, why)
         except Exception:
             pass
+    pm = sys.modules.get("kastr_point")   # 0.21.83: its pointer mode ends with it
+    if pm is not None:
+        pm.share_gone(feed_id, why)
 
 
 def bridge_info(bridge):
@@ -2291,6 +2295,9 @@ def _dispatch(rc, p):
     """One request from the page (HTTP body or WebSocket message) -> (reply, code)."""
     p = p if isinstance(p, dict) else {}
     op, rcid = str(p.get("op") or ""), str(p.get("rcid") or "")
+    if op.startswith("pt-"):   # 0.21.83 (Kenton: "a view-only mode ... when they click it makes a little sonar"): pointer mode
+        import kastr_point     # draws pointers and ripples -- nothing it handles reaches inject()
+        return kastr_point.dispatch(rc, p, rc.log)
     if op == "input":
         return rc.inject(rcid, str(p.get("src") or ""), p.get("ev"))
     if op == "renew":
@@ -2421,6 +2428,7 @@ def handle_ws(handler, bridge, log=None):
     sock.settimeout(None)
     buf, msg = b"", b""
     last_ptr = 0.0
+    want_pt = False   # 0.21.83: this socket asked for pointer mode (a pt-* op): it gets the sharer's own pointer samples
     try:
         while True:
             r, _, _ = select.select([sock], [], [], 1.0 / PTR_HZ)
@@ -2449,6 +2457,7 @@ def handle_ws(handler, bridge, log=None):
                         except ValueError:
                             continue
                         out, code = _dispatch(rc, p)
+                        want_pt = want_pt or str(p.get("op") or "").startswith("pt-")
                         rep = dict(out, re=str(p.get("op") or "")[:12], code=code)
                         if p.get("n") is not None:
                             rep["n"] = p.get("n")   # the page's own request number (its latency echo)
@@ -2459,5 +2468,10 @@ def handle_ws(handler, bridge, log=None):
                 s = rc.ptr_sample()
                 if s:
                     sock.sendall(ws_frame(json.dumps({"ptr": s, "rcid": rc.grant["rcid"] if rc.grant else ""})))
+            pm = sys.modules.get("kastr_point") if want_pt else None
+            if pm is not None and pm.current() is not None:   # 0.21.83: the sharer's own pointer + clicks, PT_HZ at most
+                s = pm.current().take()
+                if s:
+                    sock.sendall(ws_frame(json.dumps({"pt": s})))
     except (OSError, ValueError):
         pass

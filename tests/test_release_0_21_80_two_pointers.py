@@ -575,7 +575,7 @@ class ViewerPointers(unittest.TestCase):
         p = read("moq-watch-lite.html")
         # only while the share is controlled (c), the sharer's arrow + the controller's -- never the controller's own on their own
         # screen, never one the capture already shows (cap)
-        self.assertIn("rcGrant && rcGrant.share === s.path ? { c: 1 } : {}));", p)
+        self.assertIn("rcGrant && rcGrant.share === s.path ? { c: 1 } : {}, ptListFields(s.path)));", p)   # 0.21.83: + the pointer fields
         self.assertIn("for (const x of list) if (x.c && tiles.has(x.p)) want.set(x.p, pp[0] + \"/\" + pp[1] + \"/~rc/\" + pp[3]);", p)
         self.assertIn("if (!p || !p.on || (k === \"c\" && (p.cap || rcCtl?.share === share))) continue;", p)
         self.assertIn('h.sub = stateSubscribe(connection, path, "ptr.json", "snapshot", (v) => rcPtrArrive(share, h, v), RC_PRIO);', p)
@@ -583,7 +583,7 @@ class ViewerPointers(unittest.TestCase):
         self.assertIn('p: [{ k: "s", n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: ptr.s[0], y: ptr.s[1], on: ptr.s[2] ? 1 : 0, cap: ptr.scap ? 1 : 0 },', p)
         self.assertIn('{ k: "c", n: String(g.name).slice(0, 28), c: g.ctlColor, x: ptr.c[0], y: ptr.c[1], on: ptr.c[2] ? 1 : 0, cap: ptr.cap ? 1 : 0 }] });', p)
         self.assertIn('color: ctlColor });', p)
-        self.assertIn('["in.json", "st.json", "ptr.json"], { priority: RC_PRIO, maxAge: 2000 }', p)
+        self.assertIn('["in.json", "st.json", "ptr.json", "pts.json"], { priority: RC_PRIO, maxAge: 2000 }', p)   # 0.21.83: + pts.json (pointer mode)
         # Kenton's words on the prompt
         self.assertIn("They\\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there.", p)
         self.assertIn("Your mouse and keyboard keep working at the same time.", p)

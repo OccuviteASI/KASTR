@@ -128,6 +128,21 @@ INVITE_PENDING_S = 120
 _INVITE_TOKEN_RE = re.compile(r"^ki-[0-9a-f]{8}-[A-Za-z0-9_-]{32,64}$")
 
 
+def window_geom_ok(geom):
+    """0.21.84 (Kenton: after an upgrade KASTR sometimes didn't come back in the same window state): only a real window's bounds
+    are kept. Windows reports a minimized window at about -32000 with a tiny size; saved, the launcher refused it and opened
+    maximized. Maximized is a state and is always kept."""
+    if not isinstance(geom, dict):
+        return False
+    if geom.get("maximized") is True:
+        return True
+    try:
+        x, y, w, h = int(geom["x"]), int(geom["y"]), int(geom["w"]), int(geom["h"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return x > -30000 and y > -30000 and 320 <= w <= 20000 and 240 <= h <= 20000
+
+
 def invite_parse(url):
     """kastr://join?i=..&room=..&relay=.. (or a /join#i=.. link, or ?invite=) -> {token, room, relay} or None."""
     s = str(url or "").strip()[:2048]
@@ -1898,6 +1913,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 geom = json.loads(body.decode("utf-8", "replace"))
             except Exception:
                 self.send_response(400)
+                self.end_headers()
+                return
+            if not window_geom_ok(geom):   # 0.21.84: a minimized / hidden window's report never replaces the last real bounds
+                self.send_response(204)
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
             if window_file:

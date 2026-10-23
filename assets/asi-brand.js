@@ -963,10 +963,17 @@ setInterval(() => {
 
 // Remember where this window is, because the browser does not restore an
 // app window's bounds. Reported on change so the launcher can put it back.
-if (window.top === window && !IS_WEB) {   // 0.17.0: a phone's geometry is not the host window's
+// 0.21.84 (Kenton: "sometimes after an upgrade while launching KASTR, it doesn't hold my same window state"): only the MAIN
+// KASTR window reports -- the Relay page and the stats page load this script too, and their windows' bounds overwrote the main
+// window's -- and never while minimized or hidden (Windows reports a minimized window at about -32000 with a tiny size, which an
+// update closing a background KASTR then saved, and the launcher threw away, opening maximized).
+const KASTR_GEOM_PAGE = !/\/(relay|stats|rcx|rcx-agent|join)\.html$/i.test(location.pathname);
+if (window.top === window && !IS_WEB && KASTR_GEOM_PAGE) {   // 0.17.0: a phone's geometry is not the host window's
   let lastGeom = "";
   const reportGeometry = () => {
     try {
+      if (document.visibilityState === "hidden") return;   // 0.21.84: minimized / covered-and-throttled -- keep the last real bounds
+      if (window.screenX <= -30000 || window.screenY <= -30000 || window.outerWidth < 320 || window.outerHeight < 240) return;
       // Maximized is a state, not a size: restoring the literal bounds of a
       // maximized window gives you an almost-maximized one.
       const maximized =

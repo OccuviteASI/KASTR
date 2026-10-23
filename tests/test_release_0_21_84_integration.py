@@ -225,6 +225,17 @@ class LabFixes(unittest.TestCase):
         fn = lib_block().split("async function libSync() {", 1)[1].split("\n  }\n", 1)[0]
         self.assertIn('if (why !== "grid") setTimeout(() => { const t = tiles.get(p); if (t && libTiles.has(p) && !hasPicture(t) && !parkedStreams.has(p) && libWakeable(p)) { t.odAt = Date.now(); odWake(p); } }, 250);', fn)
 
+    # lab (d): a dark hub leaves a spoke only its own listings -- a library stream listed from another site keeps its tile
+    def test_hub_dark_keeps_library_listings(self):
+        fn = PAGE.split("  async function xsPoll() {", 1)[1].split("\n  }\n", 1)[0]
+        self.assertIn("const hubDark = d.hubDown === true;", fn)
+        self.assertIn("if (!live.has(p)) { if (hubDark && isLibPath(p)) continue; xsTiles.delete(p);", fn)
+
+    # lab (h): the pacer's writer.close() rejects asynchronously when the stream is already closing
+    def test_pacer_close_never_rejects_unhandled(self):
+        self.assertIn("try { writer.close().catch(() => {}); } catch {} stop0(); };", PAGE)
+        self.assertNotIn("try { writer.close(); } catch {}", PAGE)
+
     # lab (a): the hub names its own site before its first publisher, and its Links card lists it
     def test_hub_site_before_publishing(self):
         s = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, store())

@@ -4189,7 +4189,10 @@
       xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || ""), cg: !!it.cg });   // 0.21.66: cg = listed only for a room grid (no tile of its own)
       if (!tiles.has(p)) { if (isLibPath(p) && authSecured && !libConn.token) await libTokenEnsure(); cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }   // 0.21.84: a library path rides the library connection
     }
-    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p) && !libTiles.has(p)) scheduleRemoveTile(p); }   // 0.21.84: a library pin keeps its tile
+    // 0.21.84 (integration lab d): a dark hub leaves a spoke only the listings posted to it -- a LIBRARY stream listed here from
+    // another site keeps its tile meanwhile (it plays on the library connection, which needs no listing); others go as before
+    const hubDark = d.hubDown === true;
+    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { if (hubDark && isLibPath(p)) continue; xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p) && !libTiles.has(p)) scheduleRemoveTile(p); }   // 0.21.84: a library pin keeps its tile
   }
   setInterval(() => { xsPoll(); xsTick(); }, 8000);   // 0.21.62
   window.__xsPoll = xsPoll;   // rig
@@ -28157,7 +28160,7 @@
       const timer = setInterval(tick, stepMs);   // the app window runs without timer throttling
       gen.getSettings = () => { try { const s0 = track0.getSettings(); return s0.frameRate ? s0 : { ...s0, frameRate: fps }; } catch { return {}; } };   // 0.21.16: the pacer's rate when the capture has none (captureStream(0))
       const stop0 = gen.stop.bind(gen);
-      gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close(); } catch {} stop0(); };
+      gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close().catch(() => {}); } catch {} stop0(); };   // 0.21.84 (integration lab h): close() REJECTS (async) when the stream is already closing -- a page error when a presentation ended
       gen.__restamped = true; gen.__source = track0;   // 0.21.14: requestFrame() must reach the CAPTURE track -- a generator has none
       return gen;
     } catch { return track0; }

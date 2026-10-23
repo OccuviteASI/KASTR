@@ -7996,7 +7996,10 @@ class AuthService:
         else its display name without "-relay". A spoke knows the hub's names from the long-poll (kept in hub-library.json)."""
         node = node or self._lib_node()
         if not self._xs_spoke():
-            return self._lib_book().site_of(node)
+            b = self._lib_book()
+            if node == self._lib_node() and not b.names.get(node):   # the hub's own relay before its first publisher: its own name
+                return (b.sites.get(node) or {}).get("name") or lib_site_default(self._lib_name(), node)
+            return b.site_of(node)
         s = (self._lib_mirror().get("sites") or {}).get(node)
         return s or lib_site_default(self._lib_name() if node == self._lib_node() else node, node)
 
@@ -8614,7 +8617,12 @@ class AuthService:
             room = self.store.room(LIB_ROOT) if hasattr(self.store, "room") else None
         except Exception:
             room = None
-        out.update(switch=bool(b.on), switchAt=b.switch_at, sites=b.sites_public(), conflicts=b.conflicts(),
+        sites = b.sites_public()
+        me = self._lib_node()
+        if me not in sites:   # 0.21.84 (integration): the hub's own relay is a site on its Links card before it publishes
+            sites[me] = {"site": self._lib_site(me), "set": bool((b.sites.get(me) or {}).get("name")), "name": self._lib_name(),
+                         "default": lib_site_default(self._lib_name(), me)}
+        out.update(switch=bool(b.on), switchAt=b.switch_at, sites=sites, conflicts=b.conflicts(),
                    preflight={"ok": room is None, "why": "" if room is None else 'a room named "lib" exists -- rename it'})
         return out, 200
 

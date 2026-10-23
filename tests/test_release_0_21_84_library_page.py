@@ -225,7 +225,9 @@ class NeverWakeOnBrowse(unittest.TestCase):
 
     def test_one_demand_only_from_preview(self):
         self.assertEqual(LIB.count("odDemand("), 1)
-        self.assertEqual(LIB.count("odWake("), 0)
+        self.assertEqual(LIB.count("odWake("), 1)   # 0.21.84 integration: only an OPENED pin / "just me" tile (libSync), never browsing
+        self.assertIn("odWake(p)", _fn(LIB, "  async function libSync() {"))
+        self.assertIn('if (why !== "grid") setTimeout(', _fn(LIB, "  async function libSync() {"))
         pv = _fn(LIB, "  function libPreview(e, row) {")
         self.assertIn("odDemand(e.path);", pv)
         self.assertIn("libPeekShow(e, row, true);", pv)

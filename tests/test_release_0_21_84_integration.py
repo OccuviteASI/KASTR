@@ -208,6 +208,37 @@ class LoneRelay(unittest.TestCase):
         self.assertIn('"node": _machine_node(), "name": me_name', _read("kastr_relay.py"))
 
 
+class LabFixes(unittest.TestCase):
+    # lab (a): a device-local grid / pin with a camera's OLD path follows its alias without the panel ever opening
+    def test_old_local_paths_asked_by_name(self):
+        blk = lib_block()
+        self.assertIn("const old = full ? [] : libOldRefs();", blk)
+        self.assertIn("const ask = [...used, ...old];", blk)
+        fn = blk.split("function libOldRefs() {", 1)[1].split("\n  }\n", 1)[0]
+        self.assertIn("cgMine()", fn)
+        self.assertIn('"kastr.pins." + sbRelayHost()', fn)
+        self.assertIn("if (now - (libOldAsked.get(p) || 0) < 600000) continue;", fn)   # each at most every 10 minutes
+        self.assertIn("isLibPath(p)", fn)
+
+    # lab (c): an opened pin wakes its camera at once (not on odQuick's next 3 s round)
+    def test_opened_pin_wakes_at_once(self):
+        fn = lib_block().split("async function libSync() {", 1)[1].split("\n  }\n", 1)[0]
+        self.assertIn('if (why !== "grid") setTimeout(() => { const t = tiles.get(p); if (t && libTiles.has(p) && !hasPicture(t) && !parkedStreams.has(p) && libWakeable(p)) { t.odAt = Date.now(); odWake(p); } }, 250);', fn)
+
+    # lab (a): the hub names its own site before its first publisher, and its Links card lists it
+    def test_hub_site_before_publishing(self):
+        s = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, store())
+        try:
+            s.relay_name = lambda: "yard-relay"
+            node = kr._machine_node() or "relay"
+            self.assertEqual(s._lib_site(), "yard")
+            out, _c = s.library_operator_view()
+            self.assertEqual(out["sites"][node]["site"], "yard")
+            self.assertFalse(out["sites"][node]["set"])
+        finally:
+            s.close()
+
+
 class HubAndSpokeSites(unittest.TestCase):
     def setUp(self):
         self.hub_key = os.urandom(32)

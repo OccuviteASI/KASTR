@@ -75,6 +75,10 @@ START_RATE_ADMIN = (6, 60)     # Controls one admin may start a minute
 START_RATE_MACHINE = (10, 60)  # ... and one machine may be asked for
 POLL_RATE = (40, 60)           # polls one machine may make a minute (a held poll is one)
 MONITORS_MAX = 16
+# A source switch answers at once: with the old capture ending ffmpeg-first (Publisher.quiet) the admin's player finds the new
+# broadcast by itself -- lab v02183, 8 switches: picture back in 0.6-1.6 s, none re-subscribed. Waiting for the new capture's
+# first output (KASTR_RCX_SWITCH_WAIT=<s>) measured 4.7-5.2 s (ffmpeg's -progress reports every 2 s, then a fresh session).
+SWITCH_WAIT_S = float(os.environ.get("KASTR_RCX_SWITCH_WAIT") or 0)
 SID_RE = re.compile(r"^[0-9a-f]{32}$")
 RCID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 HOST_RE = re.compile(r"^[a-z0-9-]{1,32}-[0-9a-f]{4}$")
@@ -1268,7 +1272,8 @@ class Agent:
             return {"ok": False, "error": "no session"}, 409
         if url == sess.get("url"):
             return {"ok": True, "url": url, "same": True}, 200
-        t0 = time.monotonic()
+        t0, t_wall = time.monotonic(), time.time()
+        pub = (getattr(self.bridge, "_pubs", None) or {}).get(sess["feed"])
         with self.lock:
             sess["switching"] = True
         try:
@@ -1285,9 +1290,19 @@ class Agent:
         finally:
             with self.lock:
                 sess["switching"] = False
+        # optionally (KASTR_RCX_SWITCH_WAIT) the answer waits for the NEW capture's first output (its ffmpeg's -progress)
+        live = None
+        if pub is not None and hasattr(pub, "flowingAt") and SWITCH_WAIT_S > 0:
+            live = False
+            while time.monotonic() - t0 < SWITCH_WAIT_S:
+                fa = getattr(pub, "flowingAt", None)
+                if fa and fa >= t_wall:
+                    live = True
+                    break
+                time.sleep(0.05)
         ms = int((time.monotonic() - t0) * 1000)
-        self.log("rcx: session %s now shows %s (%d ms)" % (sess["sid"][:8], url, ms))
-        return {"ok": True, "url": url, "ms": ms}, 200
+        self.log("rcx: session %s now shows %s (%d ms%s)" % (sess["sid"][:8], url, ms, "" if live is None else (", capture live" if live else ", no output yet")))
+        return {"ok": True, "url": url, "ms": ms, "live": live}, 200
 
     def _private_overlay(self, sess):
         """Windows: the share's bar of a private capture ends the SESSION (retarget put back the plain share bar)."""

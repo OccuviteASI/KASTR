@@ -103,7 +103,8 @@
   const c = { seq: 0, buf: [], sentAt: 0, mv: null, mvT: 0, mvAt: 0, wv: 0, wh: 0, down: new Set(), btn: new Set(), hold: null, escT: 0,
               sent: new Map(), ackS: 0, lat: null, clipN: 0, clipLast: null, clipPend: null, st: null, stAt: 0, ended: "", live: false,
               ctlN: 0, src: null, url: "", sw: null, frames0: 0, switches: [], firstFrameAt: 0, t0: Date.now() };
-  window.__rcxView = { c, get S() { return S; }, pick: (u) => pick(u), stop: () => stop("admin") };   // rig
+  window.__rcxView = { c, get S() { return S; }, pick: (u) => pick(u), stop: () => stop("admin"),   // rig
+                       subs: () => Object.fromEntries(Object.entries(c.subs || {}).map(([k, h]) => [k, { n: h.n, at: h.at, err: h.err, resubs: h.resubs }])) };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   let toastT = 0;
   function toast(t, warn, ms) { const el = $("toast"); el.textContent = t; el.className = warn ? "warn" : ""; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, ms || 4500); }
@@ -147,9 +148,9 @@
     w.setAttribute("name", S.paths.screen);
     c.wurl = url; c.rs = 1;
     w.setAttribute("url", playerUrl());
-    subscribe(conn, S.paths.machine, "st.json", stArrive, { priority: 255, staleMs: 6000 });
-    subscribe(conn, S.paths.machine, "ptr.json", ptrArrive, { priority: 255, staleMs: 8000 });
-    subscribe(conn, S.paths.machine, "src.json", srcArrive, { priority: 250, staleMs: 30000 });
+    c.subs = { st: subscribe(conn, S.paths.machine, "st.json", stArrive, { priority: 255, staleMs: 6000 }),
+               ptr: subscribe(conn, S.paths.machine, "ptr.json", ptrArrive, { priority: 255, staleMs: 8000 }),
+               src: subscribe(conn, S.paths.machine, "src.json", srcArrive, { priority: 250, staleMs: 30000 }) };
     capAttach();
     emit({ t: "hb" });
     c.tick = setInterval(tick, 900);
@@ -221,7 +222,7 @@
     if (last && c.sw && last.n === c.sw.n && last.op === "src" && last.state !== "switching" && !c.sw.ack) {
       c.sw.ack = Date.now(); c.sw.serverMs = last.ms || 0; c.sw.ok = !!last.ok;
       if (!last.ok) { swDone(false); toast("Could not switch: " + (last.error || "refused"), true, 6000); }
-      else { c.sw.frames0 = frames(); c.sw.resubAt = Date.now() + SW_RESUB_MS; }
+      else { c.sw.frames0 = frames(); c.sw.live = last.live; c.sw.resubAt = Date.now() + (last.live === true ? SW_RESUB_MS : last.live === false ? SW_RESUB_LATE_MS : SW_SELF_MS); }
     }
     if (last && c.front && last.n === c.front && last.op === "front" && last.state !== "switching") {
       c.front = 0;
@@ -451,11 +452,13 @@
     $("swText").textContent = "Switching to " + srcLabel(url) + "…";
     $("sw").hidden = false;
   }
-  // The switch restarts the capture under the same path (Bridge.retarget). Lab v02183: a player left on the old broadcast waits
-  // for the relay to give up on its killed publisher (the 0.21.80 "14 s freeze"); a FRESH subscription goes to the new one. So the
-  // player re-subscribes SW_RESUB_MS after the machine says the new capture runs (and again if frames still do not come), and
-  // "Switching…" covers the picture until the new capture's frames play -- never a frozen picture.
-  const SW_RESUB_MS = 350, SW_RETRY_MS = 2500;
+  // The switch restarts the capture under the same path (Bridge.retarget; the old pair now ends ffmpeg-first and leaves the
+  // relay at once -- Publisher.quiet -- so this player picks the new broadcast up by itself: lab v02183, 0.6-1.6 s). Only when no
+  // new frames come within SW_SELF_MS (or SW_RESUB_MS after a machine that waited for its new capture's output, `live`) does the
+  // player re-subscribe on a fresh session, again every SW_RETRY_MS; "Switching…" covers the picture until the new capture's
+  // frames play -- never a frozen picture. Before Publisher.quiet a player left on the killed broadcast waited 4-20 s.
+  // SW_SELF_MS: an answer that did not wait for the new capture (live null) -- the player usually finds the new broadcast by itself
+  const SW_RESUB_MS = 100, SW_RESUB_LATE_MS = 800, SW_SELF_MS = 1200, SW_RETRY_MS = 1500;
   // the player dials its OWN session (`rs`, ignored by the relay): a re-subscribe is a fresh session, and the JSON tracks'
   // session (st / ptr / src / in / ctl) is never touched by it
   function playerUrl() { return c.wurl + "&rs=" + c.rs; }
@@ -469,8 +472,8 @@
     const s = c.sw;
     if (!s) return;
     const now = Date.now();
-    if (s.ack && s.resub && fr > s.frames0 + 1 && now - s.resub > 150) { swDone(true); return; }
-    if (s.ack && s.resubAt && now >= s.resubAt && (!s.resub || (now - s.resub > SW_RETRY_MS && fr <= s.frames0 + 1 && s.tries < 4))) {
+    if (s.ack && fr > s.frames0 + 1 && now - (s.resub || s.ack) > 120) { swDone(true); return; }
+    if (s.ack && s.resubAt && now >= s.resubAt && (!s.resub || (now - s.resub > SW_RETRY_MS && fr <= s.frames0 + 1 && s.tries < 8))) {
       s.resub = now; s.tries = (s.tries || 0) + 1; s.frames0 = frames(); resub();
     }
     if (now - s.at > 20000) { swDone(false); toast("The switch took too long — try again.", true); }
@@ -479,7 +482,7 @@
     const s = c.sw; if (!s) return;
     c.sw = null;
     $("sw").hidden = true;
-    const rec = { url: s.url, ok, ackMs: s.ack ? s.ack - s.at : null, serverMs: s.serverMs || 0, pictureMs: ok ? Date.now() - s.at : null, resubs: s.tries || 0 };
+    const rec = { url: s.url, ok, ackMs: s.ack ? s.ack - s.at : null, serverMs: s.serverMs || 0, pictureMs: ok ? Date.now() - s.at : null, resubs: s.tries || 0, live: s.live ?? null };
     c.switches.push(rec); if (c.switches.length > 20) c.switches.shift();
     if (ok) { c.url = s.url; paintSrc(); }
   }

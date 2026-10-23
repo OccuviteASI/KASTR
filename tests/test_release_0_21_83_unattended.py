@@ -806,6 +806,154 @@ class AllMonitors(unittest.TestCase):
             self.assertNotIn(name, src)
 
 
+class LateAdditions(HubBase):
+    """What the WSL lab found (v02183): the switch freeze, the st.json heartbeat, the off notice, the Xlib crash."""
+
+    def test_retarget_ends_the_old_pair_ffmpeg_first_without_a_ladder_restart(self):
+        import kastr_rtsp
+        order = []
+
+        class P:
+            def __init__(self, name, on_kill=None):
+                self.name, self.alive, self.pid, self.on_kill = name, True, 100 + len(order), on_kill
+
+            def poll(self):
+                return None if self.alive else 0
+
+            def kill(self):
+                order.append("kill " + self.name)
+                self.alive = False
+                if self.on_kill:
+                    self.on_kill()
+
+            def wait(self, timeout=None):
+                order.append("wait " + self.name + (" (exited)" if not self.alive else ""))
+                return 0
+        mq = P("moq")
+        ff = P("ffmpeg", on_kill=lambda: setattr(mq, "alive", False))   # moq sees EOF and closes its session
+        bridge = types.SimpleNamespace(_child_ended=lambda pid: None, log=lambda m: None)
+        pub = kastr_rtsp.Publisher(bridge, types.SimpleNamespace(url="screen://monitor/1", sar=None, id=1), "~rcx/x/s.hang", "http://r/", audio=False)
+        pub.procs, gen = (ff, mq), pub._gen
+        pub._timer = types.SimpleNamespace(cancel=lambda: order.append("timer cancelled"))
+        self.assertTrue(pub.quiet())
+        self.assertIn("timer cancelled", order)   # a queued ladder tick never starts the old target again
+        self.assertEqual([o for o in order if o.startswith("kill")][0], "kill ffmpeg")
+        self.assertNotIn("kill moq", order)   # it ended by itself -- the relay withdrew the broadcast at once
+        self.assertGreater(pub._gen, gen)    # the old pair's watcher returns without a ladder restart
+        self.assertIsNone(pub._timer)
+        # Bridge.retarget: quiet first, then the new pair
+        import kastr_screen
+        saved = (kastr_screen.check_url, kastr_screen.overlay_start, kastr_screen.overlay_stop)
+        kastr_screen.check_url = lambda u: None
+        kastr_screen.overlay_start = lambda *a, **k: None
+        kastr_screen.overlay_stop = lambda *a, **k: None
+        try:
+            b = kastr_rtsp.Bridge(state_dir=tempfile.mkdtemp())
+            f = b.add_private("screen://monitor/1", "ab" * 16)
+            calls = []
+            b._pubs[f.id] = types.SimpleNamespace(feed=f, broadcast="~rcx/x/s.hang", paused=False, stopping=False, relay="http://r/?jwt=x",
+                                                 quiet=lambda: calls.append("quiet"), nudge=lambda why: calls.append("nudge " + why))
+            b.retarget(f.id, "screen://monitor/2")
+            self.assertEqual(calls, ["quiet", "nudge retarget"])
+        finally:
+            kastr_screen.check_url, kastr_screen.overlay_start, kastr_screen.overlay_stop = saved
+
+    def test_the_switch_answers_at_once_or_after_the_new_captures_output(self):
+        self.assertEqual(ra.SWITCH_WAIT_S, 0)   # the measured default: the player finds the new broadcast by itself
+        sd = tempfile.mkdtemp()
+        ra.set_optin(sd, True)
+        bridge = FakeBridge()
+        r = rc.RemoteControl(backend=rc.MockBackend(rects={"screen://monitor/1": {"x": 0, "y": 0, "w": 10, "h": 10},
+                                                           "screen://monitor/2": {"x": 10, "y": 0, "w": 10, "h": 10}}),
+                             share_info=lambda fid: {"url": bridge.feeds[fid].url, "live": True, "paused": False} if fid in bridge.feeds else None,
+                             caps=(True, "", "mock"), ui=None, monitor=False)
+        bridge.rc = r
+        f = bridge.add_private("screen://monitor/1", "s" * 32)
+        pub = bridge.publish(f.id, "~rcx/s/s.hang", "http://r/?jwt=x")
+        pub.flowingAt = None
+        bridge._pubs = bridge.pubs
+        a = ra.Agent(sd, bridge=bridge, rc=r, node=BOX, log=lambda m: None)
+        a.session = {"sid": "s" * 32, "state": "live", "feed": f.id, "url": "screen://monitor/1", "rcid": "abcdefgh1234", "adminHost": ADM,
+                     "admin": "Kenton", "color": "#009fda", "paths": ra.paths("s" * 32)}
+        o, c = a.switch("screen://monitor/2")
+        self.assertEqual((c, o["live"]), (200, None))
+        saved = ra.SWITCH_WAIT_S
+        ra.SWITCH_WAIT_S = 0.6
+        try:
+            threading.Timer(0.15, lambda: setattr(pub, "flowingAt", time.time())).start()
+            o, c = a.switch("screen://monitor/1")
+            self.assertEqual((c, o["live"]), (200, True))
+            self.assertGreaterEqual(o["ms"], 100)
+            o, c = a.switch("screen://monitor/2")   # no output this time: it says so after the wait
+            self.assertEqual((c, o["live"]), (200, False))
+        finally:
+            ra.SWITCH_WAIT_S = saved
+        self.assertEqual(r.grant["rcid"], "abcdefgh1234")
+
+    def test_unticking_tells_the_hub_at_once(self):
+        sd = tempfile.mkdtemp()
+        ra.set_optin(sd, True)
+        key = ra.load_settings(sd)["key"]
+        self.svc.rcx_machine("poll", poll_body(key, enroll=True), "x")
+        self.assertTrue(self.svc._rcx().machines[BOX]["on"])
+        a = ra.Agent(sd, relay_url=lambda: "http://hub.lan:4443", node=BOX, log=lambda m: None,
+                     http=lambda url, body, t: self.svc.rcx_machine(url.rsplit("/", 1)[1], json.loads(json.dumps(body)), "x"))
+        saved = (ra.desktop_state, ra.list_monitors, ra.is_elevated)
+        ra.desktop_state, ra.list_monitors, ra.is_elevated = (lambda: {"ok": True, "why": ""}), (lambda: []), (lambda: False)
+        try:
+            ra.set_optin(sd, False)
+            a.tell_off()
+            t0 = time.monotonic()
+            while self.svc._rcx().machines[BOX]["on"] and time.monotonic() - t0 < 3:
+                time.sleep(0.05)
+        finally:
+            ra.desktop_state, ra.list_monitors, ra.is_elevated = saved
+        self.assertFalse(self.svc._rcx().machines[BOX]["on"])
+        self.assertEqual(a.last["state"], "off")
+        self.assertEqual(self.admin("machines")[0]["machines"], [])
+
+    def test_a_new_or_freshly_ticked_machine_hears_listed_at_once(self):
+        t0 = time.monotonic()
+        o, c = self.svc.rcx_machine("poll", dict(poll_body(self.key, enroll=True), wait=20), "x")
+        self.assertEqual(c, 200)
+        self.assertLess(time.monotonic() - t0, 2.0)   # never held on the first poll
+
+    def test_display_probes_are_cached_and_one_at_a_time(self):
+        n = []
+
+        def slow():
+            n.append(threading.get_ident())
+            time.sleep(0.05)
+            return {"ok": True}
+        ra._PROBE.pop("t", None)
+        ts = [threading.Thread(target=lambda: ra._cached("t", 5.0, slow)) for _ in range(6)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(len(n), 1)
+        self.assertEqual(ra._cached("t", 5.0, slow), {"ok": True})
+        self.assertIsNone(ra._cached("boom", 5.0, lambda: 1 / 0))   # a failing probe answers None, never raises
+
+    def test_xlib_is_made_thread_safe_before_its_first_call(self):
+        src = read("kastr_x11.py")
+        i = src.index("def _x11():")
+        body = src[i:src.index("def _xtst():")]
+        self.assertLess(body.index("XInitThreads()"), body.index("x.XOpenDisplay.restype"))
+
+    def test_the_helper_page_and_the_view(self):
+        a = read("rcx-agent.html")
+        self.assertIn("if (!d.re && d.ptr)", a)   # a renew's answer (it carries ptr) reaches stPush -- st.json is the admin's heartbeat
+        self.assertLess(a.index("if (!d.re && d.ptr)"), a.index('d.re === "renew"'))
+        self.assertIn("ctlQ = ctlQ.then(() => ctlRun(v, n))", a)   # switcher requests one at a time, each answered with its own number
+        self.assertIn("srcWrite();   // the switch's answer first", a)
+        v = read("rcx.html")
+        self.assertIn('c.wurl + "&rs=" + c.rs', v)   # the player's own session: a re-subscribe never touches the JSON tracks
+        self.assertIn("[hidden] { display:none !important; }", v)
+        self.assertIn('last.op === "src"', v)
+        self.assertIn("SW_SELF_MS = 1200", v)
+
+
 class Wiring(unittest.TestCase):
     def test_page(self):
         p = read("moq-watch-lite.html")

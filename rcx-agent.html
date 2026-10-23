@@ -84,7 +84,8 @@
     ws.onmessage = (m) => {
       let d = null; try { d = JSON.parse(m.data); } catch { return; }
       if (!d || g.ended) return;
-      if (d.ptr) { if (!d.rcid || d.rcid === RCID) ptrPush(d.ptr); return; }
+      // a reply first (a renew's answer carries `ptr` too -- it must reach stPush, the admin's st.json heartbeat)
+      if (!d.re && d.ptr) { if (!d.rcid || d.rcid === RCID) ptrPush(d.ptr); return; }
       if (d.re === "input") { const rx = g.rxAt.get(d.n); g.rxAt.delete(d.n); inputDone(d, d.code, d.n, rx); }
       else if (d.re === "renew") { if ((d.ended || d.active === false) && (switching() || d.ended === "retarget")) return; if (d.ended || d.active === false) finish(d.ended || "stopped", true); else { stPush(d); if (d.ptr && Date.now() - g.ptrAt > 900) ptrPush(d.ptr); } }
     };
@@ -150,7 +151,7 @@
       const d = await ctl({ op: "src", url: v.url });
       if (d.ok) g.url = String(d.url || v.url);
       if (d.ended) { finish(d.ended, true); return; }
-      g.last = { n, op, url: v.url, state: d.ok ? "done" : "failed", ok: !!d.ok, error: d.ok ? "" : String(d.error || ""), ms: d.ms || 0, at: Date.now() };
+      g.last = { n, op, url: v.url, state: d.ok ? "done" : "failed", ok: !!d.ok, error: d.ok ? "" : String(d.error || ""), ms: d.ms || 0, live: d.live ?? null, at: Date.now() };
       srcWrite();   // the switch's answer first: the admin's player re-subscribes on it
       stPush(g.lastD || {}, true);
       srcPush();

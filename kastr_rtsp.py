@@ -2092,6 +2092,22 @@ class Publisher:
         self._timer = t
         t.start()
 
+    def quiet(self):
+        """0.21.83 (D) (lab v02183: after a source switch the admin's player waited 4-20 s, sometimes for good): end the running
+        pair ffmpeg FIRST (_end_pair: moq sees EOF, closes its session, the relay withdraws the broadcast at once) without the
+        ladder restarting it -- the caller starts the next pair (nudge). A nudge alone kills moq outright and the relay keeps
+        the dead publisher's broadcast announced until its idle timeout, which is where new subscribers kept landing."""
+        with self._lock:
+            if self.stopping:
+                return False
+            self._gen += 1            # the old pair's watcher returns without a ladder restart
+            t, self._timer = self._timer, None
+            procs = self.procs
+        if t:
+            t.cancel()
+        _end_pair(procs, self.bridge._child_ended, grace=0.8)
+        return True
+
     def nudge(self, why="api"):
         """A viewer says the stream is frozen: restart the pair now.
         0.13.1: `why` (viewer / stall* / no-echo / api) is counted and kept."""
@@ -3568,6 +3584,8 @@ class Bridge:
         if pub is not None:
             pub.paused = False   # what was picked shows at once
             self.log("screen: share %s now shows %s" % (pub.broadcast, url))
+            if callable(getattr(pub, "quiet", None)):
+                pub.quiet()      # 0.21.83 (D): the old capture leaves the relay at once -- viewers move to the new one quickly
             pub.nudge("retarget")
         self.persist_feeds()
         return feed.info()

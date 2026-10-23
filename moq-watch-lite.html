@@ -1439,14 +1439,13 @@
   #sbGrip:hover, #sbGrip.dragging { background:var(--asi-blue-glow); }
   #sidebar.resizing { transition:none; }
   body.sb-collapsed #sbGrip { display:none; }
-  /* 0.21.65: the expand / collapse tab, straddling the rail's right edge (above the resize grip) */
-  .sbedge { position:absolute; top:50%; right:-9px; transform:translateY(-50%); z-index:68; width:17px; height:42px; padding:0; margin:0;
-    display:flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:8px; background:var(--surface);
-    color:var(--text-mute); cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.25); }
-  .sbedge:hover { color:var(--text); border-color:var(--asi-blue-dim); background:var(--surface-2); }
+  /* 0.21.83 (Kenton): the rooms toggle sits in the topbar left of the room name -- a panel icon, outlined, filled on hover */
+  .sbedge { flex:none; width:32px; height:32px; padding:0; margin:0 6px 0 0; display:inline-flex; align-items:center; justify-content:center;
+    border:0; border-radius:7px; background:none; color:var(--text-mute); cursor:pointer; }
+  .sbedge:hover { color:var(--text); background:var(--surface-2); }
   .sbedge:focus-visible { outline:2px solid var(--asi-blue); outline-offset:1px; }
-  .sbedge .icon { width:14px; height:14px; transition:transform .15s ease; }
-  .sbedge.closed .icon { transform:rotate(180deg); }
+  .sbedge svg { width:22px; height:22px; display:block; }
+  .sbedge .sbf { display:none; } .sbedge:hover .sbf, .sbedge:focus-visible .sbf { display:inline; } .sbedge:hover .sbo, .sbedge:focus-visible .sbo { display:none; }
   @media (max-width: 720px), (max-height: 500px) { #sbGrip { display:none; } }   /* 0.21.5: landscape phones too (it was visible but dead there) */
   .sbcard .sbrow { display:flex; align-items:center; gap:7px; min-width:0; }
   .sbcard .sbx { margin-left:auto; flex:none; background:transparent; border:0; color:var(--text-mute); cursor:pointer; font-size:11px; padding:0 4px; height:auto; visibility:hidden; }   /* 0.21.2 */
@@ -1924,7 +1923,7 @@
       background:var(--surface); border-right:1px solid var(--line); z-index:82; transform:translateX(calc(-100% - 2px)); transition:transform .18s ease; }
     body.sb-open #sidebar { transform:none; }
     /* 0.21.65: the edge tab is the drawer's handle -- it sticks out at the screen's left edge while the drawer is shut */
-    .sbedge { right:-27px; width:26px; height:52px; border-radius:0 10px 10px 0; border-left:0; opacity:.92; }
+    .sbedge { width:36px; height:36px; }   /* 0.21.83: a bigger target on a phone (it opens the rooms drawer) */
     body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
     body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
     body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
@@ -1970,8 +1969,8 @@
 <body class="asi">
 <main class="asi-page">
 <!-- 0.12.0: Discord-style rooms sidebar (rooms with members, speaking icons,
-     occupancy timers); the tab on its edge (#sbEdge, 0.21.65) expands/collapses it. Above the gate scrim so
-     it works before joining. -->
+     occupancy timers); the topbar's rooms toggle (#sbEdge -- on the rail's edge 0.21.65-0.21.82, next to the room name since
+     0.21.83) expands/collapses it. -->
 <div id="sbScrim"></div>
 <aside id="sidebar">
   <div class="sbhead"><span class="sbtitle">Rooms</span><span class="sbhost" id="sbHost"></span><span class="sbtools"><button type="button" id="sbPeopleTog" class="sbppl" title="Hide the people in each room"></button><button type="button" id="sbCreateHd" class="sbppl sbnew" title="Create a room"></button></span></div>
@@ -1981,13 +1980,13 @@
   <div id="sbGrip" title="Drag to resize"></div>
   <!-- 0.21.65 (Kenton: "update the hamburger menu icon to be a expand/collapse icon and put it on the edge of the room
        sidebar window"): the tab on the rail's right edge; on phones it is the drawer's handle at the screen's left edge -->
-  <button type="button" id="sbEdge" class="sbedge" title="Collapse rooms" aria-label="Collapse rooms" aria-controls="sidebar" aria-expanded="true"></button>
   <div class="sbfoot"><button id="sbCreate" type="button" class="sbbtn" title="Create a room"><span class="pl">+</span><span class="txt"> Create room</span></button></div>
 </aside>
 <div id="pagecol">
 <div id="topbar">
-  <!-- 0.21.65: the rooms list opens and closes from the tab on its own edge (#sbEdge); the topbar's ☰ is gone -->
   <!-- 0.12.0: the current room is a BANNER (name, people, occupancy timer, lock, kept, role) -->
+  <!-- 0.21.83 (Kenton: "make the expand/collapse icon more like this and up in the bar next to the room name"): the rooms toggle -->
+  <button type="button" id="sbEdge" class="sbedge" title="Collapse rooms" aria-label="Collapse rooms" aria-controls="sidebar" aria-expanded="true"></button>
   <button id="roomBanner" class="free" type="button" title="Join a room">Join a room&hellip;</button>
   <span class="sp"></span>
   <!-- hidden controls driven from the menus (Record, Stop sharing) -->
@@ -16111,16 +16110,25 @@
     try { queueRelayout(); } catch {}
   }
   try { if (isPhone() || localStorage.getItem("kastr.sidebar") !== "1") document.body.classList.add("sb-collapsed"); } catch {}   // 0.13.0 (F3): collapsed by default (the boot script already did this; idempotent); 0.21.5: phones always
+  // 0.21.83 (Kenton's picture: a panel outline with a chevron, filled on hover): left chevron = collapse, right = expand
+  function sbToggleSvg(open) {
+    const ch = open ? "M14 7.2 11.2 10l2.8 2.8" : "M11.2 7.2 14 10l-2.8 2.8";
+    return '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke-linecap="round" stroke-linejoin="round">'
+      + '<g class="sbo" stroke="currentColor" stroke-width="1.6"><rect x="2.3" y="3.3" width="15.4" height="13.4" rx="3"/><path d="M7.4 3.3v13.4"/><path d="' + ch + '"/></g>'
+      + '<g class="sbf"><path fill="currentColor" d="M5.3 3.3h1.3v13.4H5.3a3 3 0 0 1-3-3V6.3a3 3 0 0 1 3-3z"/><path fill="currentColor" d="M8.2 3.3h6.5a3 3 0 0 1 3 3v7.4a3 3 0 0 1-3 3H8.2z"/>'
+      + '<path d="' + ch + '" stroke="var(--surface-2)" stroke-width="1.8"/></g></svg>';
+  }
   // 0.21.65: the edge tab -- a chevron pointing left while the list is open (collapse), right while it is shut (expand).
   // It follows every way the list opens or shuts (the tab, the scrim, a card click on a phone, a form opening the rail).
   {
     const edge = document.getElementById("sbEdge");
     if (edge) {
-      edge.innerHTML = icon("sbChev");
       const paint = () => {
         const open = isPhone() ? document.body.classList.contains("sb-open") : !sbCollapsed();
         const t = open ? "Collapse rooms" : "Expand rooms";
         edge.classList.toggle("closed", !open);
+        const want = open ? "c" : "e";
+        if (edge.dataset.ic !== want) { edge.dataset.ic = want; edge.innerHTML = sbToggleSvg(open); }   // 0.21.83
         edge.title = t; edge.setAttribute("aria-label", t); edge.setAttribute("aria-expanded", open ? "true" : "false");
       };
       edge.addEventListener("click", (e) => { e.stopPropagation(); sbToggle(); paint(); });

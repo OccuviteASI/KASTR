@@ -2527,6 +2527,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if not m:
                 return self._chat_reply(404, {"error": "no such chat endpoint"})
             room, files, fid, msgid = m.group(1), m.group(2), m.group(3), m.group(4)
+            if room == kastr_relay.LIB_ROOT:   # 0.21.84: "lib" is the stream library -- no chat, no files (a library token covers it)
+                return self._chat_reply(403, {"error": kastr_relay.LIB_RESERVED})
             store = chat_store(relay_srv=relay_srv)
             if store is None:
                 return self._chat_reply(503, {"error": "no storage here"})
@@ -3258,16 +3260,19 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 45
                 elif path0.startswith("/api/rcx"):
                     to = 15
+                ctype = None
                 with urllib.request.urlopen(req, timeout=to) as r:
                     data = r.read()
                     code = r.status
+                    ctype = r.headers.get("Content-Type") if r.headers else None   # 0.21.84: a library still is image/jpeg
             except urllib.error.HTTPError as e:
                 data = e.read(); code = e.code
                 retry_after = e.headers.get("Retry-After") if e.headers else None   # 0.10.0: lockouts travel through
             except Exception as e:
                 return self._json_cors(503, {"error": "room-code service unreachable: %s" % e})   # 0.20.0: 503, never 502 (Cloudflare swaps 502s)
             self.send_response(code)
-            self.send_header("Content-Type", "application/json")
+            _ct = locals().get("ctype")
+            self.send_header("Content-Type", _ct if (code == 200 and str(_ct or "").startswith("image/")) else "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             if retry_after:
@@ -3820,6 +3825,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/invite", "/api/invite/revoke", "/api/invites",  # 0.21.75: room invite links (the minter keeps them)
                          "/api/people",                                       # 0.21.78: beats, person invites, My room shared
                          "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
+                         "/api/library", "/api/library/token", "/api/library/admin",   # 0.21.84: the stream library
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
@@ -4055,8 +4061,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             claims = kastr_relay.verify_token(jwt, key) if (key and jwt) else None
             if claims is None:
                 return (401, "token required")
-            if room and not kastr_relay.claims_cover(claims, room):
-                return (403, "token does not cover this room")
+            if room and not kastr_relay.claims_cover(claims, room) and not (
+                    room == kastr_relay.LIB_ROOT and claims.get("libv") and isinstance(claims.get("get"), list)):
+                return (403, "token does not cover this room")   # 0.21.84: a guest's library viewer token reads named lib/ paths
             self._claims = claims
             if self._banned(room, claims):
                 return (403, "removed from this room by an admin")
@@ -4689,6 +4696,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._mobile()
             if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans", "/api/spokes/link",   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans; 0.21.25: + spokes/link
                         "/api/xshare",                                                          # 0.21.41: the cross-room listings into a room
+                        "/api/library", "/api/library/still",                                   # 0.21.84: the stream library's catalogue, a still
                         "/api/invites"):                                                        # 0.21.75: a room's live invite links
                 return self._auth_proxy("GET")
             if path == "/api/invite/pending":                                 # 0.21.75: the app hand-off (this machine only)
@@ -5220,6 +5228,7 @@ def make_bridge(state_dir=None, log=None, hostname=None):
         STATE_DIR = state_dir   # 0.21.46: the kept host id lives there -- the bridge is made before the launcher sets it
     b = kastr_rtsp.Bridge(state_dir=state_dir, log=log, host_slug=host_slug(hostname))
     b.web_base_for = _od_web_base      # 0.18.0: where the on-demand loop syncs
+    b.lib_cap_fetch = kastr_rtsp.relay_library   # 0.21.84: the box asks its relay whether it serves the stream library
     global ONDEMAND_POKE
     ONDEMAND_POKE = b.od_poke          # 0.21.73
     return b

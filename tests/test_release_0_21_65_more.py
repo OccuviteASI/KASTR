@@ -353,7 +353,7 @@ class Page(unittest.TestCase):
         self.assertNotIn('id="roomsBtn"', p)
         self.assertIn('const t = open ? "Collapse rooms" : "Expand rooms";', p)
         self.assertIn("new MutationObserver(paint).observe(document.body, { attributes: true, attributeFilter: [\"class\"] })", p)
-        self.assertIn(".sbedge { right:-27px; width:26px;", p)   # phones: the drawer's handle
+        self.assertIn(".sbedge { width:36px; height:36px; }", p)   # 0.21.83: the toggle moved into the topbar; a bigger target on phones
 
     def test_h_room_settings_wiring(self):
         p = self.p

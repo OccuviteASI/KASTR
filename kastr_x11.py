@@ -629,9 +629,12 @@ class RawMonitor:
 class Bar:
     """A small override-redirect window at the top centre of a root rectangle: a coloured strip, a label and buttons.
     set(label, buttons=[(key, text)], color) repaints it; on_button(key) runs on its thread. rect_fn() -> {x,y,w,h} of
-    what it sits on (followed once a second)."""
+    what it sits on (followed once a second).
+    0.21.83 (Kenton: "The pill should be smaller also"): 24 px tall (was 30); passthrough(on) gives it an EMPTY input shape
+    while the controller's injected input lands on it (it reaches the window behind -- Kenton: "when I try to click in that
+    space it doesn't work to click on the things behind the pill"), its normal input shape again after."""
 
-    H = 30
+    H = 24
 
     def __init__(self, rect_fn, on_button, name=None):
         self.rect_fn, self.on_button, self.name = rect_fn, on_button, name
@@ -642,6 +645,25 @@ class Bar:
         self._th = None
         self.geom = None
         self.err = None
+        self._pass_want = self._pass_now = False   # 0.21.83
+        self._pass_evt = threading.Event()
+        self._r, self._w = os.pipe()               # 0.21.83: wakes the bar's thread at once
+
+    def passthrough(self, on, timeout=0.3):
+        """0.21.83: click-through (on) / clickable (off). The bar's own thread applies it on its X connection and XSyncs
+        before this returns -- so input injected on another connection right after already passes (or hits) it."""
+        on = bool(on)
+        if self._th is None or not self._th.is_alive():
+            return False
+        if on == self._pass_now:
+            return True
+        self._pass_evt.clear()
+        self._pass_want = on
+        try:
+            os.write(self._w, b"p")
+        except OSError:
+            return False
+        return self._pass_evt.wait(timeout) and self._pass_now == on
 
     def set(self, label, buttons, color=0xB42318):
         # the core "fixed" font is Latin-1: dashes and curly quotes go plain
@@ -655,18 +677,28 @@ class Bar:
 
     def stop(self):
         self._stop.set()
+        try:
+            os.write(self._w, b"q")
+        except OSError:
+            pass
         if self._th and self._th is not threading.current_thread():
             self._th.join(2.0)
+            if not self._th.is_alive():
+                for fd in (self._r, self._w):
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
 
     def _layout(self):
-        cw = 7   # the server's "fixed" font is 6-7 px a character
-        x = 12 + cw * len(self.label) + 16
+        cw = 6   # the server's "fixed" font is 6 px a character
+        x = 10 + cw * len(self.label) + 10   # 0.21.83: tighter (was 12 + 7 a character + 16)
         hits = []
         for key, text in self.buttons:
-            w = cw * len(text) + 20
-            hits.append((key, text, x, 4, w, self.H - 8))
-            x += w + 8
-        return x + 4, hits
+            w = cw * len(text) + 14
+            hits.append((key, text, x, 3, w, self.H - 6))
+            x += w + 5
+        return x - 5 + 3, hits
 
     def _run(self):
         try:
@@ -696,18 +728,31 @@ class Bar:
             x.XFillRectangle(d.dpy, win, gc, 0, 0, W, self.H)
             x.XSetForeground(d.dpy, gc, 0xFFFFFF)
             lb = self.label.encode("latin-1", "replace")
-            x.XDrawString(d.dpy, win, gc, 12, 19, lb, len(lb))
+            x.XDrawString(d.dpy, win, gc, 10, 16, lb, len(lb))
             for key, text, bx, by, bw, bh in hits:
                 x.XSetForeground(d.dpy, gc, 0xFFFFFF if key in ("stop", "allow") else 0x3A3F47)
                 x.XFillRectangle(d.dpy, win, gc, bx, by, bw, bh)
                 x.XSetForeground(d.dpy, gc, 0xB42318 if key in ("stop", "allow") else 0xFFFFFF)
                 tb = text.encode("latin-1", "replace")
-                x.XDrawString(d.dpy, win, gc, bx + 10, by + 15, tb, len(tb))
+                x.XDrawString(d.dpy, win, gc, bx + 7, by + 13, tb, len(tb))
             x.XFlush(d.dpy)
             return W
 
+        ext = _load("Xext")   # 0.21.83: the input shape (passthrough)
+        if ext is not None:
+            ext.XShapeCombineRectangles.argtypes = [c_void_p, Window, c_int, c_int, c_int, ctypes.POINTER(XRectangle), c_int, c_int, c_int]
+            ext.XShapeCombineMask.argtypes = [c_void_p, Window, c_int, c_int, c_int, c_ulong, c_int]
         try:
             while not self._stop.is_set():
+                if self._pass_want != self._pass_now:
+                    if ext is not None:
+                        if self._pass_want:   # ShapeInput, ShapeSet, no rectangles: nothing takes input -- it falls through
+                            ext.XShapeCombineRectangles(d.dpy, win, 2, 0, 0, None, 0, 0, 0)
+                        else:                 # ShapeInput back to the window's own shape (mask None)
+                            ext.XShapeCombineMask(d.dpy, win, 2, 0, 0, 0, 0)
+                        x.XSync(d.dpy, 0)
+                        self._pass_now = self._pass_want
+                    self._pass_evt.set()
                 now = time.time()
                 if self._dirty.is_set() or now - last_place > 1.0:
                     self._dirty.clear()
@@ -735,13 +780,18 @@ class Bar:
                         self.geom = None
                     x.XFlush(d.dpy)
                 if not x.XPending(d.dpy):
-                    select.select([fd], [], [], 0.1)
+                    r, _, _ = select.select([fd, self._r], [], [], 0.1)
+                    if self._r in r:
+                        try:
+                            os.read(self._r, 4096)
+                        except OSError:
+                            pass
                     continue
                 x.XNextEvent(d.dpy, ctypes.byref(xev))
                 t = xev[0] & 0xFFFFFFFF
                 if t == EXPOSE:
                     paint()
-                elif t == BUTTON_PRESS:
+                elif t == BUTTON_PRESS and not self._pass_now:
                     be = ctypes.cast(ctypes.byref(xev), ctypes.POINTER(XButtonEvent)).contents
                     for key, _t, bx, by, bw, bh in self._hits:
                         if bx <= be.x < bx + bw and by <= be.y < by + bh:

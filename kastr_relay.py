@@ -178,9 +178,20 @@ RC_DENY_COOL = 30              # s: after a "no" the asker waits this long befor
 RC_INBOX_TTL = 45              # s: a control note older than this is stale (an ask nobody saw is not shown late)
 RC_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 RC_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
+RC_FK_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")   # 0.21.83: the grant's file-transfer key on an "allow" note (32 bytes, base64url)
 RC_SHARE_RE = re.compile(r"^[a-z0-9-]{1,32}/[a-z0-9-]{1,32}-[0-9a-f]{4}/[A-Za-z0-9._~/-]{1,200}\.hang$")
 RC_WHY = ("", "busy", "wayland", "unsupported", "paused", "stopped", "left", "released", "bar", "hotkey", "timeout",
-          "share", "elevated", "closed", "no", "gone", "secure")
+          "share", "elevated", "closed", "no", "gone", "secure", "removed", "everyone", "full")
+# 0.21.83 (Kenton: "a view-only mode where the user is able to see my mouse, as well as whoever else they allow to share, and lets
+# them move their mouse around with their name and when they click it makes a little sonar thing"): POINTER notes ride the same
+# inbox -- "Point on this screen" (pask) / the sharer's answer (pallow / pdeny) / a pointer taken off or given back (pstop).
+# ANYONE in the share's room may ask (pointing is harmless: it draws an arrow and a ripple, nothing else); only the sharer
+# answers. A pointer grant never carries input rights: its id can never be answered as a control "allow" (nor asked as a
+# control "ask") on this relay, and the input track is only read for a control grant (kastr_rc) -- pointing has no input path.
+PT_KINDS = ("pask", "pallow", "pdeny", "pstop")
+PT_ASK_RATE = (4, 60)          # pointer requests one asker may send ONE sharer per minute
+PT_ASK_RATE_ALL = (12, 60)     # ... and to everyone together
+PT_IDS_KEEP = 3600             # s: pointer request ids this relay remembers (a control answer to one is refused)
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
@@ -316,6 +327,13 @@ MESH_PROBE_WORKERS = 4            # probes at once
 MESH_PROBE_MAX = 16               # candidate addresses per round
 MESH_TRACE_TIMEOUT = 40           # one traceroute, at most
 MESH_TICK_S = 15                  # the spoke's mesh loop: link state from /nodes, streams crossing (every other tick)
+# 0.21.83 (lab v02183/E: the "relay-role cluster sessions timing out every ~10 s" in the 0.21.80 grid lab were NOT the hub
+# link -- they were these ~stats reads): `moq fetch` reads its one group in ~0.1 s and exits without a QUIC CONNECTION_CLOSE,
+# so the relay kept each session (announcing every stream to a dead peer) until its 10 s idle timeout -- five per relay per
+# tick, each a "relay session: end ... role=relay 10 s ... timed out" line. A short idle timeout advertised by the fetch
+# (QUIC uses the smaller of the two sides') ends them in ~2 s; the token's `probe` claim keeps them out of the log.
+MESH_FETCH_QUIC = ("--quic-idle-timeout", "2s", "--quic-keep-alive", "500ms")
+STATS_PROBE_CLAIMS = dict({"root": "", "put": "", "get": ""}, probe="stats")   # = FEDERATION_CLAIMS + probe
 MESH_LINK_TTL = 30 * 86400        # a link token (re-minted with 7 days left, like the federation token)
 MESH_LINK_RENEW = 7 * 86400
 MESH_LINK_KEEP_S = 24 * 3600      # an AUTO link stays while a private-path probe succeeded this recently (an outage never flaps it)
@@ -833,6 +851,16 @@ def _stat_open(c, what):
     a = c.get(what + "_started", c.get(what))
     b = c.get(what + "_ended", c.get(what + "_closed"))
     return int(a or 0) - int(b or 0)
+
+
+def mesh_fetch_args(moq, url, broadcast, track):
+    """0.21.83: the bundled moq tool reading one ~stats track -- root options (the short QUIC idle timeout) before `fetch`."""
+    return [moq, "--log-level", "error", *MESH_FETCH_QUIC, "--connect", url, "--broadcast", broadcast, "fetch", track]
+
+
+def is_probe_claims(claims):
+    """0.21.83: KASTR's own ~stats read (a relay-shaped token marked `probe`) -- counted at its end, never logged."""
+    return is_relay_claims(claims) and claims.get("probe") == "stats"
 
 
 def mesh_open_paths(j, role="subscriber.json"):
@@ -4624,7 +4652,7 @@ P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare",
 def rc_item_clean(item):
     """0.21.79: a remote-control note as it travels (spoke -> hub -> spokes -> the page's beat) -> a cleaned copy, or None
     when anything about it is off. The share is <room>/<sharer's host>/.../<leaf>.hang and the note's room is its room."""
-    if not isinstance(item, dict) or item.get("kind") != "rc" or item.get("rc") not in RC_KINDS:
+    if not isinstance(item, dict) or item.get("kind") != "rc" or item.get("rc") not in RC_KINDS + PT_KINDS:   # 0.21.83: + pointer notes
         return None
     rcid, room, share, frm = str(item.get("rcid") or ""), str(item.get("room") or ""), str(item.get("share") or ""), str(item.get("from") or "")
     peer = str(item.get("peer") or "")
@@ -4633,10 +4661,17 @@ def rc_item_clean(item):
     if not HOST_RE.match(frm) or (peer and not RC_PEER_RE.match(peer)):
         return None
     why = str(item.get("why") or "")
-    return {"id": "rc-%s-%s-%s" % (item["rc"], rcid, frm), "kind": "rc", "rc": item["rc"], "rcid": rcid, "room": room,
-            "share": share, "from": frm, "peer": peer, "by": clean_label(item.get("by"), 40) or frm,
-            "label": clean_label(item.get("label"), 80), "surface": "window" if item.get("surface") == "window" else "screen",
-            "why": why if why in RC_WHY else ""}
+    out = {"id": "rc-%s-%s-%s" % (item["rc"], rcid, frm), "kind": "rc", "rc": item["rc"], "rcid": rcid, "room": room,
+           "share": share, "from": frm, "peer": peer, "by": clean_label(item.get("by"), 40) or frm,
+           "label": clean_label(item.get("label"), 80), "surface": "window" if item.get("surface") == "window" else "screen",
+           "why": why if why in RC_WHY else ""}
+    # 0.21.83 (Kenton: "Am I able to copy a file on my machine or the remote machine and paste it on the other side?"): the
+    # sharer's "allow" carries the grant's file-transfer key (32 random bytes, base64url) -- the chunks on the ~rcd tracks are
+    # AES-GCM under it, so another member of the room who subscribes reads nothing. Only on an allow, only that shape.
+    fk = str(item.get("fk") or "")
+    if item["rc"] == "allow" and RC_FK_RE.match(fk):
+        out["fk"] = fk
+    return out
 
 
 def rc_can_ask(claims, room, host):
@@ -4669,7 +4704,8 @@ class PersonalLive:
         self.fwd = {}         # spoke: (slug, host) -> when the owner's last beat went to the hub
         self.names = {}       # host -> (name, at) -- what the page says in its beats (the Users list names web pages)
         self.rcrate = {}      # 0.21.79: (asker, sharer) -> [when it asked to control] ("*" = to anyone)
-        self.rcdeny = {}      # 0.21.79: (asker, sharer) -> when the sharer last said no (RC_DENY_COOL)
+        self.rcdeny = {}      # 0.21.79: (asker, sharer) -> when the sharer last said no (RC_DENY_COOL); 0.21.83: ("pt", asker, sharer) too
+        self.ptids = {}       # 0.21.83: pointer request id -> when it passed (never a control grant's id)
         self.thread = None
 
 
@@ -5726,6 +5762,8 @@ class AuthService:
                 pl.rcrate.pop(k, None)
             for k in [k for k, t in pl.rcdeny.items() if now - t > RC_DENY_COOL]:
                 pl.rcdeny.pop(k, None)
+            for k in [k for k, t in pl.ptids.items() if now - t > PT_IDS_KEEP]:   # 0.21.83
+                pl.ptids.pop(k, None)
             for k in [k for k, v in pl.names.items() if now - v[1] > 86400]:
                 pl.names.pop(k, None)
         for slug in gone:
@@ -6019,6 +6057,10 @@ class AuthService:
         self._p_inbox_put_locked(to, dict(item, at=now))
         if item.get("rc") == "deny":
             pl.rcdeny[(to, item.get("from") or "")] = now   # `to` is the asker: a "no" holds them off a while
+        if item.get("rc") == "pdeny" and item.get("why") in ("", "no"):   # 0.21.83: a pointer "no" holds that asker off too
+            pl.rcdeny[("pt", to, item.get("from") or "")] = now
+        if item.get("rc") in PT_KINDS:
+            pl.ptids[item.get("rcid") or ""] = now
 
     def _rc_put(self, to, item, now, out=True):
         """Into this relay's inbox for `to` (its page takes it on its next beat) and, on the hub, onto the long-poll for
@@ -6052,12 +6094,29 @@ class AuthService:
                 pl.rcrate[key] = [x for x in pl.rcrate.get(key, []) if now - x < RC_ASK_RATE[1]] + [now]
         return True, "", 0
 
+    def _pt_rate_ok(self, host, to, now):
+        """0.21.83: pointer asks -- PT_ASK_RATE per (asker, sharer), PT_ASK_RATE_ALL per asker, RC_DENY_COOL after a no."""
+        pl = self._pl()
+        with self.lock:
+            t = pl.rcdeny.get(("pt", host, to))
+            if t is not None and now - t < RC_DENY_COOL:
+                return False, "they said no -- wait a little before asking again", int(RC_DENY_COOL - (now - t)) + 1
+            for key, (n, win) in ((("pt", host, to), PT_ASK_RATE), (("pt", host, "*"), PT_ASK_RATE_ALL)):
+                ts = [x for x in pl.rcrate.get(key, []) if now - x < win]
+                if len(ts) >= n:
+                    pl.rcrate[key] = ts
+                    return False, "too many pointer requests -- wait a minute", int(win - (now - ts[0])) + 1
+            for key in (("pt", host, to), ("pt", host, "*")):
+                pl.rcrate[key] = [x for x in pl.rcrate.get(key, []) if now - x < PT_ASK_RATE[1]] + [now]
+        return True, "", 0
+
     def rc_send(self, p, claims, room, host, now=None):
-        """people_api op "rc" {kind: ask|allow|deny|stop, to, share, id, peer?, by?, label?, surface?, why?}. -> (reply, code)."""
+        """people_api op "rc" {kind: ask|allow|deny|stop (0.21.83: | pask|pallow|pdeny|pstop), to, share, id, peer?, by?, label?,
+        surface?, why?}. -> (reply, code)."""
         now = time.time() if now is None else now
         kind = str(p.get("kind") or "")
-        if kind not in RC_KINDS:
-            return {"ok": False, "error": "kind is ask, allow, deny or stop"}, 400
+        if kind not in RC_KINDS + PT_KINDS:
+            return {"ok": False, "error": "kind is ask, allow, deny, stop, pask, pallow, pdeny or pstop"}, 400
         if room == LOBBY_SLUG or claims.get("lobby"):
             return {"ok": False, "error": "remote control works in a room (not the Lobby)"}, 403
         to, share, rcid = str(p.get("to") or ""), str(p.get("share") or ""), str(p.get("id") or "")
@@ -6070,7 +6129,23 @@ class AuthService:
         sroom, owner = share.split("/")[:2]
         if sroom != room:   # the sender must be in the share's room (its member token is for that room)
             return {"ok": False, "error": "that share is not in your room"}, 403
-        if kind == "ask":
+        if kind in ("ask", "allow"):   # 0.21.83: a pointer request's id is never a control grant's
+            with self.lock:
+                if rcid in self._pl().ptids:
+                    return {"ok": False, "error": "that is a pointer request -- control needs its own ask and its own Allow"}, 409
+        if kind == "pask":   # 0.21.83: anyone in the room (viewers too) may ask to point; the sharer answers
+            if owner != to:
+                return {"ok": False, "error": "ask the person whose share it is"}, 400
+            ok, err, wait = self._pt_rate_ok(host, to, now)
+            if not ok:
+                return {"ok": False, "error": err, "retryAfter": wait}, 429
+        elif kind in ("pallow", "pdeny"):
+            if owner != host:
+                return {"ok": False, "error": "only the person sharing answers"}, 403
+        elif kind == "pstop":
+            if host != owner and to != owner:
+                return {"ok": False, "error": "only the sharer or the pointing person stops a pointer"}, 403
+        elif kind == "ask":
             if owner != to:
                 return {"ok": False, "error": "ask the person whose share it is"}, 400
             if not rc_can_ask(claims, room, host):
@@ -6086,12 +6161,14 @@ class AuthService:
         peer = str(p.get("peer") or "")
         item = rc_item_clean({"kind": "rc", "rc": kind, "rcid": rcid, "room": room, "share": share, "from": host,
                               "peer": peer if RC_PEER_RE.match(peer) else "", "by": p.get("by"), "label": p.get("label"),
-                              "surface": p.get("surface"), "why": p.get("why")})
+                              "surface": p.get("surface"), "why": p.get("why"), "fk": p.get("fk")})   # 0.21.83: + fk
         if item is None:
             return {"ok": False, "error": "bad control note"}, 400
         if kind == "ask":
             self.log("relay auth: %s asks %s to control %s (%s)" % (host, to, share, rcid))
-        elif kind != "stop" or p.get("why") not in ("timeout",):
+        elif kind == "pask":
+            self.log("relay auth: %s asks %s to point on %s (%s)" % (host, to, share, rcid))
+        elif kind not in ("stop", "pstop") or p.get("why") not in ("timeout",):
             self.log("relay auth: remote control %s %s -> %s (%s%s)" % (kind, host, to, rcid, (", " + item["why"]) if item["why"] else ""))
         if not self._p_spoke():
             self._rc_put(to, item, now)
@@ -6788,7 +6865,7 @@ class AuthService:
                 dur = float(req.get("duration") or 0)
             except (TypeError, ValueError):
                 dur = 0.0
-            probe = bool(rec) and rec.get("role") == "relay" and is_loopback_addr(rec.get("remote")) and dur < 5
+            probe = bool(rec) and rec.get("role") == "relay" and is_loopback_addr(rec.get("remote")) and (dur < 5 or bool(rec.get("probe")))   # 0.21.83: + the mesh's ~stats reads, however long
             if probe:
                 with self.lock:
                     self.probe_ends += 1
@@ -6833,8 +6910,10 @@ class AuthService:
         is_vehicle = False
         link = None
         pg = False   # 0.21.78: a personal room's guest
+        probe = False   # 0.21.83: KASTR's own ~stats read
         if status == "grant":
             claims = verify_token(session_jwt(req), self.key, vnow) or {}
+            probe = is_probe_claims(claims)
             link = mesh_slug(claims.get("link")) if is_link_claims(claims) else (fed_link_node(claims) or None)   # 0.21.77: a relay dialling us directly; 0.21.78: or a spoke's hub link
             room, host = claims_identity(claims)
             if not room and claims.get("vehicle"):   # 0.21.63: a vehicle token has no `get`; a kick still finds it
@@ -6873,6 +6952,7 @@ class AuthService:
                                        "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False,   # 0.17.0: the identity a kick keys on
                                        "pg": pg,                                        # 0.21.78: a personal room's guest
+                                       "probe": probe,                                  # 0.21.83: a ~stats read (not logged at its end)
                                        "link": link,                                    # 0.21.77: the dialer of a link session
                                        "rcx": (claims.get("rcx") if status == "grant" and isinstance(claims.get("rcx"), str) else None)}   # 0.21.83 (D)
         return grant, 200
@@ -10235,14 +10315,14 @@ class Relay:
         now = int(time.time())
         url = "http://127.0.0.1:%d/" % int(self.port)
         if self.secured:
-            url += "?jwt=" + _mint(auth.key, dict(FEDERATION_CLAIMS, iat=now, exp=now + 120))
+            url += "?jwt=" + _mint(auth.key, dict(STATS_PROBE_CLAIMS, iat=now, exp=now + 120))   # 0.21.83: marked a probe
         samples, per_path = {}, {}
 
         def fetch(key, track):
             """-> (json | None, bits/s | None): one ~stats track, and its rate against the oldest sample of the last ~40 s."""
             try:
-                p = subprocess.run([moq, "--log-level", "error", "--connect", url, "--broadcast", STATS_KIND + "/node/" + node,
-                                    "fetch", track], capture_output=True, timeout=6, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                p = subprocess.run(mesh_fetch_args(moq, url, STATS_KIND + "/node/" + node, track),
+                                   capture_output=True, timeout=6, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 t = time.time()
                 j = json.loads(p.stdout.decode("utf-8", "replace") or "{}")
             except Exception:

@@ -941,6 +941,33 @@ class LateAdditions(HubBase):
         body = src[i:src.index("def _xtst():")]
         self.assertLess(body.index("XInitThreads()"), body.index("x.XOpenDisplay.restype"))
 
+    def test_stop_sharing_on_a_private_capture_and_the_pill_wording(self):
+        import kastr_rtsp
+        import kastr_screen
+        saved = (kastr_screen.check_url, kastr_screen.overlay_start, kastr_screen.overlay_stop)
+        kastr_screen.check_url = lambda u: None
+        kastr_screen.overlay_start = lambda *a, **k: None
+        kastr_screen.overlay_stop = lambda *a, **k: None
+        try:
+            b = kastr_rtsp.Bridge(state_dir=tempfile.mkdtemp())
+            f = b.add_private("screen://monitor/1", "ab" * 16)
+            self.assertTrue(b.remove(f.id))   # the pill's Stop sharing (share_stop -> Bridge.remove)
+            self.assertIsNone(b.get(f.id))
+            self.assertEqual(b._removed, [])
+        finally:
+            kastr_screen.check_url, kastr_screen.overlay_start, kastr_screen.overlay_stop = saved
+        shown = []
+        ui = types.SimpleNamespace(show=lambda *a, **k: shown.append(a[3]), clear=lambda f: None, rect=lambda f: None)
+        r = rc.RemoteControl(backend=rc.MockBackend(rects={"screen://monitor/1": {"x": 0, "y": 0, "w": 10, "h": 10}}),
+                             share_info=lambda fid: {"url": "screen://monitor/1", "live": True, "paused": False},
+                             caps=(True, "", "mock"), ui=ui, monitor=False)
+        o, c = r.start("abcdefgh1234", ADM, "Kenton", 5, "~rcx/x/s.hang", bar=ra.pill_text("Kenton"))
+        self.assertEqual(c, 200, o)
+        self.assertEqual(shown[-1], "Kenton (fleet admin) is controlling this machine — Stop control (Ctrl+Alt+Space)")
+        r.end(None, "bar")
+        o, c = r.start("abcdefgh5678", ADM, "Kenton", 5, "alpha/x/s.hang")   # a room grant keeps the A' pill
+        self.assertEqual(shown[-1], rc.bar_label("Kenton", False))
+
     def test_the_helper_page_and_the_view(self):
         a = read("rcx-agent.html")
         self.assertIn("if (!d.re && d.ptr)", a)   # a renew's answer (it carries ptr) reaches stPush -- st.json is the admin's heartbeat

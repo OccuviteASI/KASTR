@@ -682,6 +682,9 @@
   .zoomctl { position:absolute; right:8px; bottom:8px; z-index:8; display:none; gap:4px; opacity:0; transition:opacity .15s ease; }
   #stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl, #stage .pubpane.mainstage[data-zoom] .zoomctl { display:flex; }
   #stage .pane:hover .zoomctl, #stage .pubpane:hover .zoomctl, #stage .zoomed .zoomctl { opacity:1; }
+  /* 0.21.83 (Kenton: "hide the + and - buttons for zoom except when the zoom label is showing also"): the corner + / - only while the
+     top zoom label shows (a zoomed tile, a grid camera opened from its grid); at normal size the wheel / pinch / a double-click zooms */
+  #stage .pane:not(.zoomed):not(.feedview) .zoomctl, #stage .pubpane:not(.zoomed) .zoomctl { display:none; }
   /* 0.13.3: a visible media bar owns the bottom row -- zoom controls step above it
      (the three zoom buttons used to sit exactly on the shared file's mute button and volume slider).
      0.21.65: the mic/video marks ride the name row now, under the media bar (bottom:36px) where the name always sat */
@@ -1115,7 +1118,31 @@
   #kRcBar button { background:#fff; color:#B42318; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
   #kRcCtl button { background:var(--asi-amber); color:#111; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
   .pane .rccap { position:absolute; inset:0; z-index:5; cursor:default !important; outline:none; }
+  /* 0.21.83: the controller's notice pinned on an administrator window (while their pointer is over it), its outline, and a faint
+     outline where the sharer's KASTR pill sits (left out of the picture) */
+  #kRcCtl.amber { background:#4a3000; border-color:var(--asi-amber, #F5A623); }
+  .pane .rcadmbox { position:absolute; z-index:6; pointer-events:none; border:2px dashed var(--asi-amber, #F5A623); border-radius:6px; background:rgba(245,166,35,.07); box-sizing:border-box; }
+  .pane .rcadmin { position:absolute; z-index:7; pointer-events:none; transform:translateX(-50%); display:flex; gap:8px; align-items:flex-start;
+    padding:8px 12px; border-radius:10px; background:var(--asi-amber, #F5A623); color:#111; font-size:12px; font-weight:600; line-height:1.4; box-shadow:0 6px 18px rgba(0,0,0,.45); }
+  .pane .rcadmin .ic { flex:none; width:18px; height:18px; border-radius:50%; background:#111; color:var(--asi-amber, #F5A623); display:grid; place-items:center; font-weight:800; font-size:12px; }
+  .pane .rcbarghost { position:absolute; z-index:6; pointer-events:none; border:1px dashed rgba(255,255,255,.6); border-radius:999px; box-sizing:border-box; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+  .pane .rcbarghost span { position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:2px; font-size:10px; color:rgba(255,255,255,.85); white-space:nowrap; text-shadow:0 1px 2px #000; }
+  .pane .rcadmin[hidden], .pane .rcadmbox[hidden], .pane .rcbarghost[hidden] { display:none; }
   .pane.rcon { outline:2px solid var(--asi-amber); outline-offset:-2px; }
+  /* 0.21.83 (Kenton: "Am I able to copy a file on my machine or the remote machine and paste it on the other side?"): files and
+     pictures over remote control -- what is on its way, "Get them", what arrived (bottom centre: the self-view sits bottom right) */
+  #kRcFiles { position:fixed; left:50%; transform:translateX(-50%); bottom:14px; z-index:149; display:flex; flex-direction:column; gap:6px; width:min(460px, calc(100vw - 28px)); }
+  #kRcFiles[hidden] { display:none; }
+  #kRcFiles .rcfrow { display:flex; align-items:center; gap:6px 10px; flex-wrap:wrap; padding:8px 8px 8px 12px; border-radius:12px; background:#0f2235;
+    border:1px solid var(--asi-amber); color:#fff; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #kRcFiles .rcfrow.ok { border-color:#2BB673; }
+  #kRcFiles .rcfrow.warn { border-color:#E5484D; background:#3a1414; }
+  #kRcFiles .rcfrow.info { border-color:#5b6472; }
+  #kRcFiles .t { flex:1 1 220px; min-width:0; overflow-wrap:anywhere; line-height:1.35; }
+  #kRcFiles .bar { order:3; flex:1 0 100%; height:4px; border-radius:2px; background:rgba(255,255,255,.15); overflow:hidden; }
+  #kRcFiles .bar i { display:block; height:100%; background:var(--asi-amber); transition:width .2s; }
+  #kRcFiles button { background:var(--asi-amber); color:#111; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
+  .pane .rccap.rcfdrag { outline:3px dashed var(--asi-amber); outline-offset:-6px; background:rgba(255,170,0,.08); }
   /* 0.21.80 (Kenton: "show my mouse with my name for the viewers"): both people's pointers over a remote-controlled share, each
      with the person's name in their colour (drawn by every viewer from the share's ptr.json, lined up with the picture) */
   .pane .rcptrs { position:absolute; inset:0; z-index:6; pointer-events:none; overflow:hidden; }
@@ -1132,6 +1159,45 @@
   .pane .prcbtn .icon { width:13px; height:13px; }
   #stage .pane.rcable.mainstage .prcbtn { display:inline-flex; }
   #stage .pane.rcable.mainstage.rcon .prcbtn { display:none; }   /* controlling: the banner has Release; nothing covers their screen */
+  /* 0.21.83 (Kenton: "a view-only mode ... lets them move their mouse around with their name and when they click it makes a little
+     sonar thing around the mouse click"): pointing people's pointers reuse .rcptr; a click is a SONAR (three rings, a dot, the name) */
+  .pane .ptsonar { position:absolute; left:0; top:0; width:0; height:0; pointer-events:none; }
+  .pane .ptsonar i { position:absolute; left:0; top:0; width:60px; height:60px; border-radius:50%; box-sizing:border-box; transform:translate(-50%,-50%);
+    border:3px solid var(--c, #009fda); box-shadow:0 0 0 1px rgba(255,255,255,.85), inset 0 0 0 1px rgba(255,255,255,.85); animation:ptRing .48s cubic-bezier(.25,.7,.35,1) both; }
+  .pane .ptsonar i:nth-child(2) { animation-delay:.16s; }
+  .pane .ptsonar i:nth-child(3) { animation-delay:.32s; }
+  .pane .ptsonar b { position:absolute; left:-4px; top:-4px; width:8px; height:8px; border-radius:50%; background:var(--c, #009fda); box-shadow:0 0 0 1.5px #fff; animation:ptDot .3s ease-out both; }
+  .pane .ptsonar .nm { position:absolute; left:0; top:-52px; transform:translateX(-50%); padding:1px 7px; border-radius:9px; background:var(--c, #009fda); color:var(--ink, #fff);
+    font-size:11px; font-weight:600; line-height:16px; white-space:nowrap; box-shadow:0 1px 3px rgba(0,0,0,.4); animation:ptName .8s linear both; }
+  @keyframes ptRing { from { width:8px; height:8px; border-width:3px; opacity:.95; } to { width:60px; height:60px; border-width:1px; opacity:.05; } }
+  @keyframes ptDot { from { opacity:1; transform:scale(1); } to { opacity:0; transform:scale(.5); } }
+  @keyframes ptName { 0%, 80% { opacity:1; } 100% { opacity:0; } }
+  .pane .pptbtn { display:none; position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:6; align-items:center; gap:6px;
+    padding:5px 12px; border-radius:16px; background:rgba(10,14,18,.78); color:#fff; border:1px solid rgba(255,255,255,.3); font-size:12px; cursor:pointer; }
+  .pane .pptbtn:hover { background:rgba(10,14,18,.92); }
+  .pane .pptbtn.on { border-color:var(--asi-blue); }
+  .pane .pptbtn .icon { width:13px; height:13px; }
+  #stage .pane.ptable.mainstage .pptbtn { display:inline-flex; }
+  #stage .pane.ptable.rcable.mainstage .pptbtn { transform:translateX(calc(-100% - 4px)); }   /* beside Request control */
+  #stage .pane.ptable.rcable.mainstage .prcbtn { transform:translateX(4px); }
+  #kPtAsk { position:fixed; inset:0; z-index:141; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kPtAsk[hidden] { display:none; }
+  #kPtAsk .popcard { position:static; width:min(460px, calc(100vw - 32px)); max-height:none; animation:kcIn .14s ease-out; }
+  #kPtAsk .body { padding:16px 16px 2px; flex:none; overflow:visible; }
+  #kPtAsk .kcmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
+  #kPtAsk .kcdet { margin:8px 0 0; font-size:12px; line-height:1.5; color:var(--text-dim); overflow-wrap:break-word; }
+  #kPtAsk .kcbtns { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; padding:14px 16px 16px; }
+  #kPtAsk .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kPtAsk .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  #kPtBar { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); z-index:149; display:flex; flex-direction:column; gap:4px; padding:6px 8px 6px 14px;
+    border-radius:18px; background:#0f2235; border:1px solid var(--asi-blue); color:#fff; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
+  #kPtBar[hidden] { display:none; }
+  #kPtBar .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  #kPtBar button { border:0; border-radius:12px; padding:3px 10px; font-size:12px; cursor:pointer; background:rgba(255,255,255,.12); color:#fff; }
+  #kPtBar button:hover { background:rgba(255,255,255,.22); }
+  #kPtBar .chip { background:rgba(255,255,255,.18); font-weight:600; }
+  #kPtBar .tog.on { background:var(--asi-blue); color:var(--on-accent, #fff); }
+  #kPtBar .stop { background:#fff; color:#0f2235; font-weight:600; }
   /* 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): KASTR's own yes/no question */
   #kConfirm { position:fixed; inset:0; z-index:140; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
   #kConfirm[hidden] { display:none; }
@@ -1442,14 +1508,13 @@
   #sbGrip:hover, #sbGrip.dragging { background:var(--asi-blue-glow); }
   #sidebar.resizing { transition:none; }
   body.sb-collapsed #sbGrip { display:none; }
-  /* 0.21.65: the expand / collapse tab, straddling the rail's right edge (above the resize grip) */
-  .sbedge { position:absolute; top:50%; right:-9px; transform:translateY(-50%); z-index:68; width:17px; height:42px; padding:0; margin:0;
-    display:flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:8px; background:var(--surface);
-    color:var(--text-mute); cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.25); }
-  .sbedge:hover { color:var(--text); border-color:var(--asi-blue-dim); background:var(--surface-2); }
+  /* 0.21.83 (Kenton): the rooms toggle sits in the topbar left of the room name -- a panel icon, outlined, filled on hover */
+  .sbedge { flex:none; width:32px; height:32px; padding:0; margin:0 6px 0 0; display:inline-flex; align-items:center; justify-content:center;
+    border:0; border-radius:7px; background:none; color:var(--text-mute); cursor:pointer; }
+  .sbedge:hover { color:var(--text); background:var(--surface-2); }
   .sbedge:focus-visible { outline:2px solid var(--asi-blue); outline-offset:1px; }
-  .sbedge .icon { width:14px; height:14px; transition:transform .15s ease; }
-  .sbedge.closed .icon { transform:rotate(180deg); }
+  .sbedge svg { width:22px; height:22px; display:block; }
+  .sbedge .sbf { display:none; } .sbedge:hover .sbf, .sbedge:focus-visible .sbf { display:inline; } .sbedge:hover .sbo, .sbedge:focus-visible .sbo { display:none; }
   @media (max-width: 720px), (max-height: 500px) { #sbGrip { display:none; } }   /* 0.21.5: landscape phones too (it was visible but dead there) */
   .sbcard .sbrow { display:flex; align-items:center; gap:7px; min-width:0; }
   .sbcard .sbx { margin-left:auto; flex:none; background:transparent; border:0; color:var(--text-mute); cursor:pointer; font-size:11px; padding:0 4px; height:auto; visibility:hidden; }   /* 0.21.2 */
@@ -1927,7 +1992,7 @@
       background:var(--surface); border-right:1px solid var(--line); z-index:82; transform:translateX(calc(-100% - 2px)); transition:transform .18s ease; }
     body.sb-open #sidebar { transform:none; }
     /* 0.21.65: the edge tab is the drawer's handle -- it sticks out at the screen's left edge while the drawer is shut */
-    .sbedge { right:-27px; width:26px; height:52px; border-radius:0 10px 10px 0; border-left:0; opacity:.92; }
+    .sbedge { width:36px; height:36px; }   /* 0.21.83: a bigger target on a phone (it opens the rooms drawer) */
     body.sb-open #sbScrim { display:block; position:fixed; inset:0; z-index:81; background:rgba(3,5,10,.55); }
     body.sb-collapsed .sbhead, body.sb-collapsed .sbcard .sbname, body.sb-collapsed .sbcard .sbmeta, body.sb-collapsed .sbcard .sbmembers,
     body.sb-collapsed .sbcard .sbrow .spk, body.sb-collapsed #sbFormHome, body.sb-collapsed .sbbtn .txt { display:revert; }
@@ -1973,8 +2038,8 @@
 <body class="asi">
 <main class="asi-page">
 <!-- 0.12.0: Discord-style rooms sidebar (rooms with members, speaking icons,
-     occupancy timers); the tab on its edge (#sbEdge, 0.21.65) expands/collapses it. Above the gate scrim so
-     it works before joining. -->
+     occupancy timers); the topbar's rooms toggle (#sbEdge -- on the rail's edge 0.21.65-0.21.82, next to the room name since
+     0.21.83) expands/collapses it. -->
 <div id="sbScrim"></div>
 <aside id="sidebar">
   <div class="sbhead"><span class="sbtitle">Rooms</span><span class="sbhost" id="sbHost"></span><span class="sbtools"><button type="button" id="sbPeopleTog" class="sbppl" title="Hide the people in each room"></button><button type="button" id="sbCreateHd" class="sbppl sbnew" title="Create a room"></button></span></div>
@@ -1984,13 +2049,13 @@
   <div id="sbGrip" title="Drag to resize"></div>
   <!-- 0.21.65 (Kenton: "update the hamburger menu icon to be a expand/collapse icon and put it on the edge of the room
        sidebar window"): the tab on the rail's right edge; on phones it is the drawer's handle at the screen's left edge -->
-  <button type="button" id="sbEdge" class="sbedge" title="Collapse rooms" aria-label="Collapse rooms" aria-controls="sidebar" aria-expanded="true"></button>
   <div class="sbfoot"><button id="sbCreate" type="button" class="sbbtn" title="Create a room"><span class="pl">+</span><span class="txt"> Create room</span></button></div>
 </aside>
 <div id="pagecol">
 <div id="topbar">
-  <!-- 0.21.65: the rooms list opens and closes from the tab on its own edge (#sbEdge); the topbar's ☰ is gone -->
   <!-- 0.12.0: the current room is a BANNER (name, people, occupancy timer, lock, kept, role) -->
+  <!-- 0.21.83 (Kenton: "make the expand/collapse icon more like this and up in the bar next to the room name"): the rooms toggle -->
+  <button type="button" id="sbEdge" class="sbedge" title="Collapse rooms" aria-label="Collapse rooms" aria-controls="sidebar" aria-expanded="true"></button>
   <button id="roomBanner" class="free" type="button" title="Join a room">Join a room&hellip;</button>
   <span class="sp"></span>
   <!-- hidden controls driven from the menus (Record, Stop sharing) -->
@@ -4856,7 +4921,8 @@
   let rcStateP = null;
   // 0.21.80: + ptr.json (the sharer's two pointers); every rc track at the top priority with a short retention -- the newest
   // value is all that matters (moves never queue behind each other; clicks and keys ride every snapshot of the last RC_KEEP_MS)
-  const rcState = () => rcStateP || (rcStateP = stateProducer(() => ((rcCtl || rcGrant) && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rc/" + statePeer() : ""), ["in.json", "st.json", "ptr.json"], { priority: RC_PRIO, maxAge: 2000 }));
+  // 0.21.83: + pts.json (pointer mode: every pointer and sonar on my shares, for the viewers) -- live while anything needs it
+  const rcState = () => rcStateP || (rcStateP = stateProducer(() => ((rcCtl || rcGrant || ptAnyOn()) && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rc/" + statePeer() : ""), ["in.json", "st.json", "ptr.json", "pts.json"], { priority: RC_PRIO, maxAge: 2000 }));
   window.__rcCtlShare = () => (rcCtl ? rcCtl.share : "");   // applyState: the tile I control (RC_TUNE, priority)
   const rcSeen = new Set();
   const rcToast = (m, ms, level) => window.__toast?.(m, ms || 5000, { level: level || "event" });
@@ -4881,7 +4947,7 @@
     try { mine = window.__rcMine?.() || []; } catch {}
     return mine.filter((s) => s.onair && !s.paused && String(s.path).startsWith(CHANNEL + "/")).slice(0, 16)
       .map((s) => Object.assign({ p: s.path, s: s.surface, l: String(s.label || "").slice(0, 60) }, rcCaps.available ? {} : { no: rcCaps.why === "wayland" ? "wayland" : "unsupported" },
-                                rcGrant && rcGrant.share === s.path ? { c: 1 } : {}));   // 0.21.80: c = controlled now (viewers read its ptr.json)
+                                rcGrant && rcGrant.share === s.path ? { c: 1 } : {}, ptListFields(s.path)));   // 0.21.80: c = controlled now (viewers read its ptr.json); 0.21.83: + pv / pt / pe / pa / pb (pointer mode)
   }
   function rcSharesApply(path, list) {
     const host = String(path).split("/")[1] || "";
@@ -4904,7 +4970,7 @@
     if (rcCtl?.share === name) return { value: "rcrel", icon: "mouse", label: "Release control", tip: "Give " + who + " their mouse and keyboard back (or hold Esc for a second)" };
     if (rcAsk?.share === name) return { value: "rcwait", icon: "mouse", label: "Waiting for " + who + "\u2026", tip: "You asked " + Math.round((Date.now() - rcAsk.at) / 1000) + " s ago" };
     return { value: x.no ? "rcno" : "rcask", icon: "mouse", label: "Request control",
-             tip: x.no === "wayland" ? "Remote control isn\u2019t available on Wayland" : x.no ? "Remote control isn\u2019t available on " + who + "\u2019s computer" : "Ask " + who + " to let you use their mouse, keyboard and clipboard" };
+             tip: x.no === "wayland" ? "Remote control isn\u2019t available on Wayland" : x.no ? "Remote control isn\u2019t available on " + who + "\u2019s computer" : "Ask " + who + " to let you use their mouse, keyboard and clipboard, and copy files to and from their computer" };   // 0.21.83: + files
   }
   function rcMenuPick(name, v) {
     if (v === "rcask") rcRequest(name);
@@ -4965,6 +5031,7 @@
     if (!it || it.kind !== "rc" || !it.id || rcSeen.has(it.id)) return;
     rcSeen.add(it.id);
     if (rcSeen.size > 300) for (const k of [...rcSeen].slice(0, 100)) rcSeen.delete(k);
+    if (/^p(ask|allow|deny|stop)$/.test(String(it.rc))) { ptArrive(it); return; }   // 0.21.83: pointer mode
     if (it.rc === "ask") { rcAskArrive(it); return; }
     if (it.rc === "allow") { rcAllowArrive(it); return; }
     if (it.rc === "deny") {
@@ -5005,6 +5072,8 @@
     c.tick = setInterval(() => rcCtlTick(c), 1000);
     try { if (selectedName !== a.share) select(a.share); } catch {}
     rcCapAttach(c, t);
+    c.fk = RCF_FK_RE.test(String(it.fk || "")) ? String(it.fk) : "";   // 0.21.83: the grant's file-transfer key (the relay's allow note)
+    rcfStart("ctl", c);   // 0.21.83: files + pictures both ways while I control them
     rcCtlPaint(c);
     try { if (document.fullscreenElement) navigator.keyboard?.lock?.().catch(() => {}); } catch {}
     log("Remote control: controlling " + a.name + " (" + a.share + ")");
@@ -5036,6 +5105,7 @@
       c.clipLast = v.clip.text;
       try { navigator.clipboard?.writeText?.(v.clip.text)?.catch?.(() => { c.clipPend = v.clip.text; }); } catch { c.clipPend = v.clip.text; }
     }
+    rcAdminPaint(c);   // 0.21.83
     rcCtlPaint(c);
   }
   function rcCtlTick(c) {
@@ -5054,6 +5124,7 @@
         if (new Blob([tx]).size <= RC_CLIP_MAX) rcEmit(c, { t: "clip", text: tx });
       }, () => {});
     }
+    rcAdminPaint(c);   // 0.21.83: the tile may have moved / zoomed
     rcCtlPaint(c);
   }
   function rcEmit(c, ev) {   // into my in.json: the last RC_KEEP_MS of events (moves go first when it is too long)
@@ -5091,7 +5162,7 @@
   function rcCapAttach(c, t) {
     const cap = document.createElement("div");
     cap.className = "rccap"; cap.tabIndex = 0;
-    cap.title = "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 hold Esc for a second or click Release to give it back";
+    cap.setAttribute("aria-label", "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 hold Esc for a second or click Release to give it back");   // 0.21.83 (Kenton: a grey tooltip popped up when the pointer rested on the controlled screen): no title -- the banner says it
     t.pane.appendChild(cap); t.pane.classList.add("rcon");
     c.cap = cap; c.pane = t.pane;
     const stop = (e) => { e.stopPropagation(); };
@@ -5101,12 +5172,13 @@
       stop(e);
       const p = rcPoint(t, e.clientX, e.clientY);
       if (!p || rcCtl !== c) return;
+      c.lastP = p; rcAdminPaint(c);   // 0.21.83: the administrator-window notice follows my pointer
       c.mv = p;
       // 0.21.80: leading edge -- a move goes at once unless one went in the last 16 ms (then the newest goes at the 16 ms mark):
       // ~60 a second at most, and never a 16 ms wait for the first one
       if (!c.mvT) { const w = 16 - (performance.now() - c.mvAt); if (w <= 0) rcFlushMove(c); else c.mvT = setTimeout(() => { c.mvT = 0; rcFlushMove(c); }, w); }
     });
-    cap.addEventListener("mouseleave", () => { if (rcCtl !== c) return; rcFlushMove(c); rcEmit(c, { t: "m", o: 1 }); });   // 0.21.80: my arrow leaves their screen too
+    cap.addEventListener("mouseleave", () => { if (rcCtl !== c) return; rcFlushMove(c); rcEmit(c, { t: "m", o: 1 }); c.lastP = null; rcAdminPaint(c); });   // 0.21.80: my arrow leaves their screen too
     cap.addEventListener("mousedown", (e) => {
       stop(e); e.preventDefault();
       cap.focus({ preventScroll: true });
@@ -5139,6 +5211,10 @@
       rcEmit(c, { t: "w", n, h, x: p.x, y: p.y });
     }, { passive: false });
     cap.addEventListener("blur", () => rcLetGo(c));
+    cap.addEventListener("dragenter", (e) => rcfDragOver(c, e));   // 0.21.83: a file from my desktop onto their screen
+    cap.addEventListener("dragover", (e) => rcfDragOver(c, e));
+    cap.addEventListener("dragleave", () => cap.classList.remove("rcfdrag"));
+    cap.addEventListener("drop", (e) => rcfDropOn(c, t, e));
   }
   function rcLetGo(c) {   // focus went elsewhere: nothing stays pressed on their side
     if (rcCtl !== c) return;
@@ -5153,16 +5229,20 @@
     e.preventDefault(); e.stopImmediatePropagation();
     if (e.code === "Escape" && !e.repeat) { clearTimeout(c.escT); c.escT = setTimeout(() => { if (rcCtl === c) rcCtlEnd("released", false); }, 1000); }   // hold Esc 1 s
     if (e.repeat || !e.code || c.down.has(e.code)) return;   // their computer repeats a held key itself
-    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && navigator.clipboard?.readText && !c.hold) {   // paste: my clipboard first, then the keys
+    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && (navigator.clipboard?.readText || rcf) && !c.hold) {   // paste: my clipboard first, then the keys
       c.hold = [];
-      const done = (tx) => {
-        if (!c.hold) return;
+      // 0.21.83: + files / a picture I copied: theirs once they have them (the keys wait; "Paste without them" lets them go)
+      let tx0 = null, txDone = !navigator.clipboard?.readText, fDone = false;
+      const go = () => {
+        if (!c.hold || !txDone || !fDone) return;
         const q = c.hold; c.hold = null;
+        const tx = tx0;
         if (typeof tx === "string" && tx && tx !== c.clipLast && new Blob([tx]).size <= RC_CLIP_MAX) { c.clipLast = tx; rcEmit(c, { t: "clip", text: tx }); }
         for (const ev of q) rcEmit(c, ev);
       };
-      navigator.clipboard.readText().then(done, () => done(null));
-      setTimeout(() => done(null), 1000);
+      const done = (tx) => { if (txDone) return; txDone = true; tx0 = tx; go(); };
+      if (navigator.clipboard?.readText) { navigator.clipboard.readText().then(done, () => done(null)); setTimeout(() => done(null), 1000); }
+      rcfPaste(c).then(() => { fDone = true; go(); }, () => { fDone = true; go(); });
     }
     c.down.add(e.code);
     rcFlushMove(c);
@@ -5193,13 +5273,53 @@
     let t = "Controlling " + c.name + "\u2019s " + c.surface + " \u2014 your own pointer is on their screen; hold Esc to give it back";   // 0.21.80
     if (st.paused) t = c.name + " is using their mouse \u2014 paused";
     else if (st.blocked === "drag") t = c.name + " is dragging with their own mouse \u2014 your click goes as soon as they let go";   // 0.21.80
-    else if (st.blocked === "elevated") t = "That window runs as administrator on " + c.name + "\u2019s computer \u2014 Windows doesn\u2019t let KASTR control it";
+    else if (st.blocked === "elevated" || c.overAdmin) t = "That window runs as administrator on " + c.name + "\u2019s computer \u2014 Windows blocks KASTR\u2019s clicks and typing there";   // 0.21.83: + while my pointer is over it
     else if (st.blocked === "secure") t = c.name + "\u2019s computer shows a secure screen (sign-in or an administrator prompt) \u2014 KASTR can\u2019t control it";
     else if (st.blocked === "focus") t = "Click inside " + c.name + "\u2019s shared window first \u2014 keys go to the window in front";
     else if (st.blocked === "hidden") t = c.name + "\u2019s shared window is minimized";
     el.querySelector(".t").textContent = t;
     el.classList.toggle("paused", !!st.paused);
+    el.classList.toggle("amber", !st.paused && (st.blocked === "elevated" || !!c.overAdmin));   // 0.21.83: the reason stands out
     el.hidden = false;
+  }
+  // 0.21.83 (Kenton: "The pop-up saying it was admin wasn't easy to notice why it wasn't working for me and it didn't stay very
+  // long."): an amber badge PINNED on the administrator window in my view of their screen (st.json's admin.r, normalised to the
+  // picture -- kastr_rc._shapes), shown while my pointer is over that window (not a timed toast), with a dashed outline on it;
+  // the banner turns amber with the reason. And a faint outline where their KASTR pill sits (Kenton: "I am unable to see the red
+  // sharing pill at the top"): it is left out of the picture -- my clicks there now reach what is behind it.
+  function rcRectBox(t, r) {   // [u0, v0, u1, v1] on the picture -> {l, t, w, h} in the pane, or null
+    if (!t || !Array.isArray(r) || r.length !== 4) return null;
+    const a = rcClientOf(t, Math.max(0, +r[0]), Math.max(0, +r[1])), b = rcClientOf(t, Math.min(1, +r[2]), Math.min(1, +r[3]));
+    if (!a || !b || b[0] - a[0] < 2 || b[1] - a[1] < 2) return null;
+    return { l: a[0], t: a[1], w: b[0] - a[0], h: b[1] - a[1] };
+  }
+  const rcInR = (p, r) => !!p && Array.isArray(r) && p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+  function rcShape(c, cls, html) {
+    let el = c.pane.querySelector("." + cls);
+    if (!el) { el = document.createElement("div"); el.className = cls; el.hidden = true; if (html) el.innerHTML = html; c.pane.appendChild(el); }
+    return el;
+  }
+  const rcPlace = (el, bx) => { el.style.left = Math.round(bx.l) + "px"; el.style.top = Math.round(bx.t) + "px"; el.style.width = Math.round(bx.w) + "px"; el.style.height = Math.round(bx.h) + "px"; };
+  function rcAdminPaint(c) {
+    if (rcCtl !== c || !c.pane) return;
+    const t = tiles.get(c.share), st = c.st || {};
+    const ar = st.admin && Array.isArray(st.admin.r) ? st.admin.r : null;
+    const box = ar ? rcRectBox(t, ar) : null, over = !!box && rcInR(c.lastP, ar);
+    const ol = rcShape(c, "rcadmbox"), bd = rcShape(c, "rcadmin", '<span class="ic" aria-hidden="true">!</span><span class="tx"></span>');
+    if (over) {
+      rcPlace(ol, box);
+      const tx = "Admin window \u2014 clicks and typing are blocked by Windows. Minimize, move, resize and close need KASTR to run as administrator on " + c.name + "\u2019s computer.";
+      const tEl = bd.querySelector(".tx");
+      if (tEl.textContent !== tx) tEl.textContent = tx;
+      bd.style.left = Math.round(box.l + box.w / 2) + "px"; bd.style.top = Math.round(box.t + Math.min(44, Math.max(6, box.h / 4))) + "px";
+      bd.style.maxWidth = Math.max(180, Math.min(420, Math.round(box.w - 16))) + "px";
+      bd.setAttribute("role", "status");
+    }
+    ol.hidden = bd.hidden = !over;
+    const bb = !st.barCap && Array.isArray(st.bar) ? rcRectBox(t, st.bar) : null, gh = rcShape(c, "rcbarghost", "<span>their KASTR bar</span>");
+    if (bb) rcPlace(gh, bb);
+    gh.hidden = !bb;
+    if (over !== !!c.overAdmin) { c.overAdmin = over; rcCtlPaint(c); }
   }
   function rcCtlEnd(why, fromThem) {
     const c = rcCtl;
@@ -5207,10 +5327,12 @@
     rcLetGo(c);
     for (const b of [...c.btn]) rcEmit(c, { t: "u", b, x: 0.5, y: 0.5 });
     rcCtl = null;
+    rcfStop(why);   // 0.21.83: unfinished transfers are deleted; what arrived stays on the clipboard a while
     clearInterval(c.tick); clearTimeout(c.escT); clearTimeout(c.mvT);
     try { c.sub?.close(); } catch {}
     if (c.up) window.removeEventListener("mouseup", c.up, true);
     c.cap?.remove(); c.pane?.classList.remove("rcon");
+    try { c.pane?.querySelectorAll(".rcadmin, .rcadmbox, .rcbarghost").forEach((e) => e.remove()); } catch {}   // 0.21.83
     try { navigator.keyboard?.unlock?.(); } catch {}
     try { applyState(); } catch {}   // 0.21.80: back to the tile's normal player budget and priority
     rcPtrSync();
@@ -5250,7 +5372,7 @@
       document.body.appendChild(el);
     }
     const what = rcSurfaceText(mine);
-    el.querySelector(".kcmsg").textContent = name + " asks to control " + what + ". They\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there.";   // 0.21.80
+    el.querySelector(".kcmsg").textContent = name + " asks to control " + what + ". They\u2019ll be able to use your mouse, keyboard and clipboard, and copy files to and from your computer \u2014 with their own pointer and their name on your screen.";   // 0.21.80; 0.21.83: + files
     el.querySelector(".kcdet").textContent = "Your mouse and keyboard keep working at the same time. Stop it at any time: Stop control on the red bar, or Ctrl+Alt+Space.";
     el.hidden = false;
     try { el.querySelector(".rcno").focus(); } catch {}
@@ -5295,7 +5417,8 @@
     }
     const g = rcGrant = { ...p, lastIn: Date.now() + 5000, lastSeq: 0, first: true, q: [], busy: false, stJson: "", stAt: 0,
                           ctlColor, ws: null, rxAt: new Map(), qS: 0, qRx: 0, ack: null, ackSent: 0, ackSentAt: 0, ptr: null, ptrAt: 0 };   // 0.21.80
-    const a = await rcSend({ kind: "allow", to: p.from, share: p.share, id: p.rcid, peer: statePeer(), by: myOpName() || undefined }, p.tok);
+    g.fk = rcfNewKey();   // 0.21.83: 32 random bytes -- the chunks of every file / picture of this grant are AES-GCM under it
+    const a = await rcSend({ kind: "allow", to: p.from, share: p.share, id: p.rcid, peer: statePeer(), by: myOpName() || undefined, fk: g.fk }, p.tok);
     if (!a.ok) { rcGrantEnd("stopped", false); rcToast("Could not tell " + p.name + " \u2014 " + a.error, 6000, "warn"); return; }
     rcState().sync();
     rcGrantSub(g);
@@ -5303,6 +5426,7 @@
     try { window.__state?.set?.("rc", rcMineList()); } catch {}   // 0.21.80: viewers learn now that it is controlled (c)
     g.tick = setInterval(() => rcGrantTick(g), 1000);
     rcBarShow(g);
+    rcfStart("sharer", g);   // 0.21.83: files + pictures both ways while they control me
     log("Remote control: " + p.name + " may control " + p.what + " (" + p.share + ")");
     rcToast(p.name + " is controlling " + p.what + " \u2014 Stop control (or Ctrl+Alt+Space) ends it.", 6000);
     rcStatePush(g, d.status || {});
@@ -5384,8 +5508,9 @@
     if (d.ptr && (!g.ws || Date.now() - g.ptrAt > 900)) rcPtrPush(g, d.ptr);   // 0.21.80: no WebSocket -- a slower stream; and a heartbeat
   }
   function rcStatePush(g, d) {   // st.json for the controller: paused / blocked / my clipboard's change -- and a heartbeat
-    const st = { rcid: g.rcid, active: true, paused: !!d.paused, pauseLeft: Number(d.pauseLeft) || 0, blocked: String(d.blocked || ""), clip: d.clip || null };
-    const j = JSON.stringify([st.paused, st.blocked, st.clip?.n]);
+    const st = { rcid: g.rcid, active: true, paused: !!d.paused, pauseLeft: Number(d.pauseLeft) || 0, blocked: String(d.blocked || ""), clip: d.clip || null,
+                 admin: d.admin || null, bar: d.bar || null, barCap: d.barCap ? 1 : 0 };   // 0.21.83: the administrator window + my KASTR pill (kastr_rc._shapes)
+    const j = JSON.stringify([st.paused, st.blocked, st.clip?.n, st.admin, st.bar]);
     const ackWait = !!g.ack && g.ack.s !== g.ackSent ? 100 - (Date.now() - g.ackSentAt) : -1;   // 0.21.80: the latency echo, 10 a second at most
     const ackNew = ackWait !== -1 && ackWait <= 0;
     if (ackWait > 0 && !g.ackT) g.ackT = setTimeout(() => { g.ackT = 0; if (rcGrant === g) rcStatePush(g, g.lastD || {}); }, ackWait);   // the newest one, at the 100 ms mark
@@ -5401,6 +5526,7 @@
     const g = rcGrant;
     if (!g) return;
     rcGrant = null;
+    rcfStop(why);   // 0.21.83
     clearInterval(g.tick);
     try { g.sub?.close(); } catch {}
     try { g.ws?.close(); } catch {}   // 0.21.80
@@ -5565,7 +5691,1345 @@
                                   lat: rcCtl?.lat || null, ws: !!(rcGrant?.ws && rcGrant.ws.readyState === 1),   // 0.21.80: the latency echo; the loopback WebSocket
                                   ptrs: [...rcPtrs].map(([k, h]) => [k, h.q.length ? h.q[h.q.length - 1] : null, [...h.els].filter(([, e]) => !e.hidden).map(([kk, e]) => [kk, e.style.transform, e.querySelector(".nm").textContent]), h.sub?.n || 0]) }),
                   request: rcRequest, item: rcMenuItem, release: () => rcCtlEnd("released", false), stop: () => rcGrantEnd("stopped", true),
-                  answer: (yes) => rcPromptClose(yes ? "allow" : "deny"), map: rcMapPoint, point: (name, x, y) => { const t = tiles.get(name); return t ? rcPoint(t, x, y) : null; } };   // rig
+                  answer: (yes) => rcPromptClose(yes ? "allow" : "deny"), map: rcMapPoint, point: (name, x, y) => { const t = tiles.get(name); return t ? rcPoint(t, x, y) : null; },
+                  st: (v) => { if (rcCtl && v) rcStArrive(rcCtl, { ...rcCtl.st, ...v, rcid: rcCtl.rcid, active: true }); },   // 0.21.83 rig: a state note as if from the sharer
+                  admin: () => (rcCtl ? { over: !!rcCtl.overAdmin, badge: !rcCtl.pane?.querySelector(".rcadmin")?.hidden, ghost: !rcCtl.pane?.querySelector(".rcbarghost")?.hidden,
+                                          banner: document.getElementById("kRcCtl")?.className || "" } : null) };   // rig
+  // ---- 0.21.83 POINTER MODE (Kenton: "On the remote control, I would like to make it so there is a view-only mode where the user
+  // is able to see my mouse, as well as whoever else they allow to share, and lets them move their mouse around with their name and
+  // when they click it makes a little sonar thing around the mouse click to show everyone where it was clicked. This will help with
+  // sharing a screen and collaborating on a document, etc."). Anyone watching a NATIVE screen / window share may ask "Point on
+  // this screen" (the tile menu, the spotlit share's Point button) and the sharer allows it -- a lighter prompt than control:
+  // pointing never clicks or types on their computer -- or the sharer switches on "Let everyone point" (the share's menu, the
+  // pointer bar, the prompt). A pointing person's mouse over the share's tile is THEIR pointer (name + colour) and a click (or a
+  // tap on a phone) a SONAR, shown everywhere: on the sharer's real screen (kastr_point: click-through overlays, left out of the
+  // capture on Windows; X11 draws them into the picture) and on every viewer's tile. How it travels (fewest subscriptions, one
+  // clock): the pointing person -> pt.json on their OWN member broadcast (<room>/<host>/~member/<peer>, ~30 a second while it
+  // moves + the last PT_KEEP_MS of clicks) -> the SHARER's page (one subscription per allowed person, PT_MAX at most) -> its
+  // KASTR draws them (pt-draw) AND it republishes everything as ONE pts.json on its ~rc broadcast, stamped with the moment each
+  // pointer / click reached the sharer's screen -> every viewer subscribes to the sharer alone and shows each one when its
+  // picture shows that moment (rcPtrDelay / rcPtrPick, as 0.21.80's pointers). The sharer's own pointer carries their name
+  // beside their real cursor, and their own clicks are sonars too ("Show my clicks", on by default: a shared document needs
+  // both). The sharer removes anyone's pointer and switches "everyone" off from the pointer bar or the share's menu; the room's
+  // list (room.json rc: pv / pt / pe / pa / pb) is what every page trusts -- the notes are the fast path.
+  const PT_MAX = 12, PT_HZ_MS = 33, PT_ASK_MS = 60000, PT_KEEP_MS = 1500, PT_IDLE_MS = 10000, PT_SONAR_MS = 800, PT_ON_MS = 2000, PT_GRACE_MS = 8000, PT_USED_MS = 120000, PT_CLICK_KEEP_MS = 4000, PT_TOUCH_MS = 3000;
+  const ptMine = new Map();    // my share path -> { share, feed, surface, everyone, own, allowed: Map(key -> {name, at}), block: Set, subs: Map(key -> h), live: Map(key -> ptr), self, rips, seq, on, cap, okAt }
+  const ptWant = new Map();    // member path -> [share paths that member points on] (their room.json `pt`)
+  const ptAsks = new Map();    // share -> my ask { rcid, to, name, at, tok }
+  const ptNote = new Map();    // share -> when its sharer's allow note reached me (until their room.json says so too)
+  const ptUsed = new Map();    // share -> when I last pointed on it (only those are in my room.json `pt`)
+  const ptOptOut = new Set();  // "everyone" shares I stopped pointing on myself
+  const ptTold = new Set();    // "everyone" shares I was told about
+  let ptPromptQ = [], ptPrompt = null, ptWs = null, ptWsTries = 0, ptMe = null, ptSonarN = 0, ptPubT = 0, ptPubAt = 0, ptSendT = 0, ptSendAt = 0;
+  const ptKey = (host, peer) => host + "/" + peer;
+  const ptMeKey = () => ptKey(HOSTNAME1, statePeer());
+  const ptFleet = () => Date.now() + (window.__clockOffset || 0);
+  const ptOwnPref = () => { try { return localStorage.getItem("kastr.pt.own") !== "0"; } catch { return true; } };
+  const ptCanAsk = () => joinState === "joined" && CHANNEL !== LOBBY && authSecured && !!authTokens?.member && !pbOld;   // anyone in the room (viewers too)
+  const ptAnyOn = () => { for (const m of ptMine.values()) if (m.on) return true; return false; };
+  // my shares' pointer fields in the room's list: pv = this KASTR takes pointers, pt = pointer mode on (viewers read pts.json),
+  // pe = everyone may point, pa = who I allowed, pb = who I took off while everyone may point
+  function ptListFields(path) {
+    if (!rcCaps?.point) return {};
+    const m = ptMine.get(path);
+    return Object.assign({ pv: 1 }, m && m.on ? { pt: 1 } : {}, m && m.everyone ? { pe: 1 } : {},
+                         m && m.allowed.size ? { pa: [...m.allowed.keys()].slice(0, PT_MAX) } : {}, m && m.block.size ? { pb: [...m.block].slice(-32) } : {});
+  }
+  function ptWantApply(path, list) {
+    const ok = Array.isArray(list) ? list.filter((s) => typeof s === "string" && /\.hang$/.test(s)).slice(0, 8) : [];
+    const was = JSON.stringify(ptWant.get(path) || []);
+    if (ok.length) ptWant.set(path, ok); else ptWant.delete(path);
+    if (was !== JSON.stringify(ok)) setTimeout(() => { for (const m of ptMine.values()) if (m.on) ptSyncSubs(m); }, 0);   // someone starts pointing: their pointer now, not at the next tick
+  }
+  // ---- the pointing person
+  function ptMayPoint(name) {   // may I point on this (someone else's) share now?
+    const x = rcShareOf(name);
+    if (!x || !x.pv || x.host === HOSTNAME1 || ptOptOut.has(name)) return false;
+    const me = ptMeKey();
+    if (Array.isArray(x.pb) && x.pb.includes(me)) return false;
+    return !!x.pe || (Array.isArray(x.pa) && x.pa.includes(me)) || (ptNote.has(name) && Date.now() - ptNote.get(name) < PT_GRACE_MS);
+  }
+  function ptMenuItem(name) {   // the tile menu's item (and the spotlit share's Point button) -- null when pointing is not offered
+    if (!ptCanAsk() || mineNames.has(name) || wrRoomOf(name) || !String(name).startsWith(CHANNEL + "/")) return null;
+    const x = rcShareOf(name);
+    if (!x || !x.pv || x.host === HOSTNAME1 || rcCtl?.share === name) return null;   // controlling it: my own pointer is already there
+    const who = rcWho(name), what = x.s === "screen" ? "screen" : "window";
+    if (ptMayPoint(name)) return { value: "pntstop", icon: "mouse", label: "Stop pointing", tip: "Take your pointer off " + who + "\u2019s " + what };
+    const a = ptAsks.get(name);
+    if (a) return { value: "pntwait", icon: "mouse", label: "Waiting for " + who + "\u2026", tip: "You asked " + Math.round((Date.now() - a.at) / 1000) + " s ago" };
+    if (x.pe && ptOptOut.has(name)) return { value: "pntgo", icon: "mouse", label: "Point on this screen", tip: who + " lets everyone point \u2014 your pointer shows with your name, a click as a ripple" };
+    return { value: "pntask", icon: "mouse", label: "Point on this screen",
+             tip: "Ask " + who + " to let you point on their " + what + " \u2014 your pointer and clicks show for everyone; nothing is clicked or typed on their computer" };
+  }
+  function ptMenuPick(name, v) {
+    if (v === "pntask") ptRequest(name);
+    else if (v === "pntgo") { ptOptOut.delete(name); ptUsed.set(name, Date.now()); ptTick(); rcToast("Your pointer shows on " + rcWho(name) + "\u2019s screen \u2014 a click shows as a ripple for everyone.", 5000); }
+    else if (v === "pntstop") ptStopMine(name, true);
+  }
+  async function ptRequest(name) {
+    const x = rcShareOf(name);
+    if (!x) return;
+    const who = rcWho(name);
+    const a0 = ptAsks.get(name);
+    if (a0 && Date.now() - a0.at < PT_ASK_MS) { rcToast("Still waiting for " + who + " to answer.", 4000); return; }
+    const rcid = rcNewId();
+    const d = await rcSend({ kind: "pask", to: x.host, share: name, id: rcid, peer: statePeer(), by: myOpName() || undefined, label: x.l, surface: x.s === "screen" ? "screen" : "window" });
+    if (!d.ok) { rcToast("Could not ask " + who + " to point: " + d.error, 6000, "warn"); return; }
+    ptAsks.set(name, { rcid, share: name, to: x.host, name: who, at: Date.now(), tok: authTokens.member });
+    log("Pointer: asked " + who + " to point on " + name);
+    rcToast("Asked " + who + " to let you point on their screen.", 5000);
+    ptPaintPills();
+    setTimeout(() => {   // no answer: say so here, and take the ask back there
+      const a = ptAsks.get(name);
+      if (a?.rcid !== rcid) return;
+      ptAsks.delete(name);
+      rcSend({ kind: "pstop", to: a.to, share: name, id: rcid, why: "timeout" }, a.tok);
+      rcToast(who + " didn\u2019t answer your pointer request.", 5000); ptPaintPills();
+    }, PT_ASK_MS);
+  }
+  function ptStopMine(name, tell) {   // I take my own pointer off
+    const x = rcShareOf(name);
+    if (ptMe?.share === name) { ptMe.on = 0; ptSendNow(); }
+    ptNote.delete(name); ptUsed.delete(name);
+    if (x?.pe) ptOptOut.add(name);
+    if (tell && x && Array.isArray(x.pa) && x.pa.includes(ptMeKey())) rcSend({ kind: "pstop", to: x.host, share: name, id: rcNewId(), peer: statePeer(), why: "released" });
+    ptTick();
+  }
+  function ptArrive(it) {   // a pointer note (rcArrive routes pask / pallow / pdeny / pstop here)
+    const k = it.rc;
+    if (k === "pask") { ptAskArrive(it); return; }
+    if (k === "pallow" || k === "pdeny") {
+      const a = ptAsks.get(it.share);
+      if (!a || a.rcid !== it.rcid || it.from !== a.to) return;
+      ptAsks.delete(it.share);
+      if (k === "pdeny") {
+        const msg = { timeout: " didn\u2019t answer your pointer request", share: "\u2019s share stopped", paused: "\u2019s share is paused", full: " already has " + PT_MAX + " pointers on that screen" }[it.why] || " said no to your pointer request";
+        rcToast(a.name + msg + ".", 6000); ptPaintPills(); return;
+      }
+      ptNote.set(it.share, Date.now()); ptUsed.set(it.share, Date.now()); ptOptOut.delete(it.share);
+      log("Pointer: " + a.name + " lets me point on " + it.share);
+      rcToast(a.name + " lets you point on their screen \u2014 move your mouse over it; a click shows as a ripple for everyone. Nothing is clicked on their computer.", 7000);
+      try { if (selectedName !== it.share && tiles.has(it.share)) select(it.share); } catch {}
+      ptTick();
+      return;
+    }
+    if (k === "pstop") {
+      const pp = String(it.share).split("/");
+      if (pp[1] === HOSTNAME1) {   // to me, the sharer: the asker withdrew, or a pointing person stopped
+        if (ptPrompt?.it.rcid === it.rcid) ptPromptClose(null);
+        ptPromptQ = ptPromptQ.filter((q) => q.it.rcid !== it.rcid);
+        const m = ptMine.get(it.share);
+        if (m && it.why === "released" && it.peer) { m.allowed.delete(ptKey(it.from, it.peer)); ptApply(m); }
+        return;
+      }
+      if (it.from !== pp[1]) return;   // only the sharer takes my pointer off
+      // a device's notes reach ONE of its pages: the room's list says whose pointer it was -- once it caught up, only that page says so
+      const share = it.share, why = it.why, had = ptMayPoint(share) || ptNote.has(share);
+      ptNote.delete(share);
+      setTimeout(() => {
+        if (had && !ptMayPoint(share) && why !== "timeout") { ptUsed.delete(share); rcToast(rcWho(share) + (why === "everyone" ? " switched pointers off." : " took your pointer off their screen."), 5000); }
+        ptTick();
+      }, 1500);
+      ptTick();
+    }
+  }
+  // my pointer over the share's tile -> pt.json (leading edge, PT_HZ_MS apart); a click / tap -> a sonar (mine at once, here)
+  function ptAttach(name, t) {
+    if (!t?.pane || t.pane.__pt) return;
+    const pane = t.pane;
+    pane.__pt = 1;
+    const at = (e) => { const tt = tiles.get(name); return tt && tt.pane === pane ? rcPoint(tt, e.clientX, e.clientY) : null; };
+    const may = () => ptMayPoint(name) && rcCtl?.share !== name;
+    pane.addEventListener("pointermove", (e) => { if (!may()) return; const p = at(e); ptMove(name, rcIn(p) ? p : null); }, { passive: true });
+    pane.addEventListener("pointerleave", () => { if (ptMe?.share === name && ptMe.on) ptMove(name, null); });
+    pane.addEventListener("pointerdown", (e) => {
+      if (!may() || (e.pointerType === "mouse" && e.button !== 0)) return;
+      if (e.target?.closest?.("button, a, input, select, textarea, .pchev, .prcbtn, .pptbtn, .menu, .popcard")) return;
+      const p = at(e);
+      if (rcIn(p)) ptClick(name, p);
+    }, true);
+    pane.addEventListener("pointerup", (e) => {   // a phone: the pointer stays a moment after the finger lifts
+      if (e.pointerType !== "touch" || ptMe?.share !== name) return;
+      const n0 = ptMe.mvN;
+      setTimeout(() => { if (ptMe?.share === name && ptMe.mvN === n0) ptMove(name, null); }, PT_TOUCH_MS);
+    });
+  }
+  function ptMove(name, p) {
+    if (!ptMe || ptMe.share !== name) { if (ptMe?.on) { ptMe.on = 0; ptSendNow(); } ptMe = { share: name, seq: ptMe?.seq || 0, k: [], on: 0, x: 0, y: 0, mvN: 0 }; }
+    if (p) { ptMe.x = p.x; ptMe.y = p.y; ptMe.on = 1; } else ptMe.on = 0;
+    ptMe.mvN++;
+    if (p && !ptUsed.has(name)) { ptUsed.set(name, Date.now()); ptTick(); } else if (p) ptUsed.set(name, Date.now());
+    ptSendSoon();
+  }
+  function ptClick(name, p) {
+    ptMove(name, p);
+    ptMe.k.push({ s: ++ptMe.seq, x: p.x, y: p.y, a: ptFleet() });
+    ptSendNow();
+    const t = tiles.get(name), xy = t && rcClientOf(t, p.x, p.y);
+    if (xy) ptSonar(ptBox(t), xy, myOpName() || "You", rcMyColor());   // mine shows at once, here; everyone else's at the picture's moment
+  }
+  function ptBox(t) {
+    let b = t.pane.querySelector(":scope > .ptmine");
+    if (!b) { b = document.createElement("div"); b.className = "rcptrs ptmine"; t.pane.appendChild(b); }
+    return b;
+  }
+  function ptSendSoon() {
+    if (ptSendT) return;
+    const w = PT_HZ_MS - (Date.now() - ptSendAt);
+    if (w <= 0) ptSendNow(); else ptSendT = setTimeout(() => { ptSendT = 0; ptSendNow(); }, w);
+  }
+  function ptSendNow() {
+    if (ptSendT) { clearTimeout(ptSendT); ptSendT = 0; }
+    if (!ptMe) return;
+    ptSendAt = Date.now();
+    const f = ptFleet();
+    ptMe.k = ptMe.k.filter((c) => f - c.a <= PT_CLICK_KEEP_MS);   // a click stays this long: a sharer who subscribes a moment late (my first tap) still gets it
+    try { roomState.set("pt.json", { v: 1, s: ptMe.share, t: f, x: ptMe.x, y: ptMe.y, on: ptMe.on && ptMayPoint(ptMe.share) ? 1 : 0, k: ptMe.k, n: (myOpName() || "").slice(0, 28), c: rcMyColor() }); } catch {}
+  }
+  // ---- the sharer
+  function ptWho(host, peer, n) {   // a pointing person's name + colour, from the room's presence (their own word as the fallback)
+    let w = null;
+    try { for (const x of roomsPres.values()) if (x.slug === CHANNEL && x.who && String(x.who.peer) === String(peer) && (!x.who.host || x.who.host === host)) { w = x.who; break; } } catch {}
+    const name = String((w && (w.name || (w.op ? prettyOperator(w.op) : ""))) || n || host || "Someone").slice(0, 28);
+    return { name, color: rcColorOfPeer(peer, name) };
+  }
+  function ptEnsure(share, mine) {
+    let m = ptMine.get(share);
+    if (!m) {
+      m = { share, feed: mine.feed, surface: mine.surface, everyone: false, own: ptOwnPref(), allowed: new Map(), block: new Set(), subs: new Map(), live: new Map(),
+            self: null, rips: [], seq: 0, on: false, cap: 0, okAt: 0, drawT: 0 };
+      ptMine.set(share, m);
+    }
+    m.feed = mine.feed;
+    return m;
+  }
+  function ptMineOf(share) { try { return (window.__rcMine?.() || []).find((s) => s.path === share && s.onair && !s.paused) || null; } catch { return null; } }
+  function ptAskArrive(it) {
+    if (it.room !== CHANNEL || joinState !== "joined") return;
+    const mine = ptMineOf(it.share);
+    const no = (why) => { log("Pointer: " + (it.by || it.from) + " asked; answered no (" + why + ")"); rcSend({ kind: "pdeny", to: it.from, share: it.share, id: it.rcid, why }); };
+    if (!mine) { no("share"); return; }
+    if (!rcCaps?.point) { no("unsupported"); return; }
+    const m = ptMine.get(it.share), key = ptKey(it.from, String(it.peer || ""));
+    if (m && (m.allowed.has(key) || (m.everyone && !m.block.has(key)))) { ptAllow(it, mine); return; }   // already may: say so again
+    if (m && m.allowed.size >= PT_MAX) { no("full"); return; }
+    if (ptPrompt?.it.from === it.from && ptPrompt?.it.share === it.share) return;
+    ptPromptQ = ptPromptQ.filter((q) => !(q.it.from === it.from && q.it.share === it.share));
+    ptPromptQ.push({ it, mine });
+    if (!ptPrompt) ptPromptNext();
+  }
+  function ptPromptNext() {
+    const nx = ptPromptQ.shift();
+    if (!nx) { ptPrompt = null; return; }
+    const { it, mine } = nx;
+    let el = document.getElementById("kPtAsk");
+    if (!el) {
+      el = document.createElement("div"); el.id = "kPtAsk"; el.hidden = true;
+      el.innerHTML = '<div class="popcard" role="dialog" aria-modal="true" aria-labelledby="ptaTitle"><div class="head"><span id="ptaTitle">Pointer</span></div>'
+        + '<div class="body"><p class="kcmsg"></p><p class="kcdet"></p></div>'
+        + '<div class="kcbtns"><button type="button" class="ghost ptno">Deny</button><button type="button" class="ghost ptall">Let everyone point</button><button type="button" class="ptyes">Allow</button></div></div>';
+      el.addEventListener("click", (e) => e.stopPropagation());
+      el.querySelector(".ptno").addEventListener("click", () => ptPromptClose("deny"));
+      el.querySelector(".ptall").addEventListener("click", () => ptPromptClose("all"));
+      el.querySelector(".ptyes").addEventListener("click", () => ptPromptClose("allow"));
+      el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ptPromptClose("deny"); } else e.stopPropagation(); });
+      document.body.appendChild(el);
+    }
+    const name = String(it.by || "Someone").slice(0, 40);
+    el.querySelector(".kcmsg").textContent = name + " asks to point on " + (mine.surface === "screen" ? "your screen" : "your window") + ". They can\u2019t click or type on your computer.";   // Kenton's words
+    el.querySelector(".kcdet").textContent = "Their pointer shows with their name for everyone watching, and their clicks show as ripples. Take it off any time from the pointer bar.";
+    el.hidden = false;
+    try { el.querySelector(".ptyes").focus(); } catch {}
+    const p = ptPrompt = { it, mine, name, el, at: Date.now(), room: CHANNEL };
+    try { chimeRoom(); } catch {}
+    log("Pointer: " + name + " asks to point on " + it.share);
+    p.t = setTimeout(() => { if (ptPrompt === p) ptPromptClose(p.room !== CHANNEL ? "left" : "timeout"); }, PT_ASK_MS - 2000);
+  }
+  function ptPromptClose(answer) {   // "allow" | "all" | "deny" | "timeout" | "left" | null (they withdrew)
+    const p = ptPrompt;
+    if (!p) return;
+    ptPrompt = null;
+    clearTimeout(p.t);
+    p.el.hidden = true;
+    if (answer === "allow" || answer === "all") {
+      const mine = ptMineOf(p.it.share);
+      if (!mine) rcSend({ kind: "pdeny", to: p.it.from, share: p.it.share, id: p.it.rcid, why: "share" });
+      else { if (answer === "all") ptEveryone(p.it.share, true); ptAllow(p.it, mine); }
+    } else if (answer) {
+      log("Pointer: " + (answer === "deny" ? "said no to " : "no answer for ") + p.name);
+      rcSend({ kind: "pdeny", to: p.it.from, share: p.it.share, id: p.it.rcid, why: answer === "deny" ? "no" : answer });
+    }
+    setTimeout(ptPromptNext, 0);
+  }
+  function ptAllow(it, mine) {
+    const m = ptEnsure(it.share, mine), key = ptKey(it.from, String(it.peer || ""));
+    const who = ptWho(it.from, it.peer, it.by);
+    m.block.delete(key);
+    if (!m.everyone || m.allowed.has(key)) m.allowed.set(key, { name: who.name, at: Date.now() });
+    rcSend({ kind: "pallow", to: it.from, share: it.share, id: it.rcid, peer: statePeer(), by: myOpName() || undefined });
+    log("Pointer: " + who.name + " may point on " + it.share);
+    rcToast(who.name + " can point on " + (m.surface === "screen" ? "your screen" : "your window") + " \u2014 they can\u2019t click or type on it.", 5000);
+    ptApply(m);
+  }
+  function ptRemove(share, key, why) {   // the sharer takes one pointer off (and keeps it off while everyone may point)
+    const m = ptMine.get(share);
+    if (!m) return;
+    const name = m.allowed.get(key)?.name || m.live.get(key)?.n || "";
+    m.allowed.delete(key);
+    if (m.everyone) m.block.add(key);
+    const h = m.subs.get(key);
+    if (h) { try { h.sub?.close(); } catch {} m.subs.delete(key); }
+    m.live.delete(key);
+    const [host, peer] = key.split("/");
+    if (host && host !== HOSTNAME1) rcSend({ kind: "pstop", to: host, share, id: rcNewId(), peer: statePeer(), why: why || "removed" });
+    log("Pointer: took " + (name || key) + "\u2019s pointer off " + share);
+    ptApply(m);
+  }
+  function ptEveryone(share, on) {
+    const mine = ptMineOf(share);
+    if (!mine) return;
+    const m = ptEnsure(share, mine);
+    if (m.everyone === !!on) return;
+    m.everyone = !!on;
+    if (!on) {   // everyone who was only pointing because of it goes (those I allowed one by one stay)
+      for (const key of [...m.subs.keys()]) if (!m.allowed.has(key)) {
+        const h = m.subs.get(key); try { h.sub?.close(); } catch {} m.subs.delete(key); m.live.delete(key);
+        const host = key.split("/")[0]; if (host !== HOSTNAME1) rcSend({ kind: "pstop", to: host, share, id: rcNewId(), peer: statePeer(), why: "everyone" });
+      }
+      m.block.clear();
+    }
+    log("Pointer: everyone may point on " + share + ": " + (on ? "on" : "off"));
+    rcToast(on ? "Everyone watching can point on " + (m.surface === "screen" ? "your screen" : "your window") + " \u2014 they can\u2019t click or type on it." : "Only the people you allowed can point now.", 5000);
+    ptApply(m);
+  }
+  function ptOwn(on) {
+    try { localStorage.setItem("kastr.pt.own", on ? "1" : "0"); } catch {}
+    for (const m of ptMine.values()) { m.own = !!on; if (m.on) ptLocalOn(m); }
+    ptBarPaint();
+  }
+  function ptApply(m) {   // pointer mode on while anyone may point; off (and gone from the list) when nobody may
+    const want = m.everyone || m.allowed.size > 0;
+    if (want && !m.on) { m.on = true; m.okAt = 0; ptWsOpen(); ptLocalOn(m); log("Pointer: pointer mode on for " + m.share); }
+    else if (!want && m.on) ptOff(m, "stopped");
+    try { window.__state?.set?.("rc", rcMineList()); } catch {}
+    try { rcState().sync(); } catch {}
+    ptSyncSubs(m);
+    ptPublishSoon();
+    ptBarPaint();
+  }
+  function ptOff(m, why) {
+    if (!m.on) return;
+    m.on = false;
+    for (const h of m.subs.values()) { try { h.sub?.close(); } catch {} }
+    m.subs.clear(); m.live.clear(); m.rips = []; m.self = null;
+    clearTimeout(m.drawT); m.drawT = 0;
+    ptLocal({ op: "pt-off", feed: m.feed, why });
+    ptPublishNow();
+    setTimeout(() => { try { rcState().sync(); } catch {} }, 1500);   // the path goes once nothing is live (the last word first)
+    log("Pointer: pointer mode off for " + m.share + " (" + why + ")");
+  }
+  function ptLocalOn(m) {
+    m.okAt = Date.now();
+    ptLocal({ op: "pt-on", feed: m.feed, share: m.share, own: m.own, name: (myOpName() || "Sharer").slice(0, 28), color: rcMyColor() });
+  }
+  function ptLocal(body) {   // my own KASTR (kastr_point): the WebSocket when it is open, else POST /api/rc
+    if (ptWs && ptWs.readyState === 1) { try { ptWs.send(JSON.stringify(body)); return; } catch {} }
+    rcLocal(body).then((d) => ptLocalReply(body.op, d, d.http, body.feed));
+  }
+  function ptLocalReply(op, d, code, feed) {
+    const f = String(d?.feed ?? feed ?? "");
+    const m = [...ptMine.values()].find((x) => String(x.feed) === f);
+    if (op === "pt-on" && m) {
+      if (code === 200) { m.cap = d.cap ? 1 : 0; m.err = ""; if (d.sample) ptSelfArrive({ [m.feed]: d.sample }); }
+      else m.err = d.why || d.error || "no answer from KASTR";
+    }
+    if (op === "pt-draw" && code === 409) for (const x of ptMine.values()) if (x.on) x.okAt = 0;   // KASTR forgot it (a restart): on again next tick
+  }
+  function ptWsOpen() {
+    if (ptWs || !rcCaps?.ws || !rcCaps?.point) return;
+    let ws;
+    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/rc/ws"); } catch { return; }
+    ptWs = ws;
+    ws.onopen = () => { ptWsTries = 0; for (const m of ptMine.values()) if (m.on) ptLocalOn(m); };
+    ws.onmessage = (ev) => {
+      let d = null; try { d = JSON.parse(ev.data); } catch { return; }
+      if (!d) return;
+      if (d.pt) { ptSelfArrive(d.pt); return; }
+      if (d.re === "pt-on" || d.re === "pt-draw") ptLocalReply(d.re, d, d.code);
+    };
+    ws.onclose = () => { if (ptWs === ws) ptWs = null; if (ptAnyOn() && ++ptWsTries <= 5) setTimeout(ptWsOpen, 1000); };
+  }
+  function ptSelfArrive(pt) {   // my own pointer + clicks on my shared surface (kastr_point samples them; nothing is moved)
+    const now = Date.now();
+    let any = false;
+    for (const [feed, smp] of Object.entries(pt || {})) {
+      const m = [...ptMine.values()].find((x) => x.on && String(x.feed) === String(feed));
+      if (!m || !smp || !Array.isArray(smp.s)) continue;
+      m.self = { x: Number(smp.s[0]) || 0, y: Number(smp.s[1]) || 0, on: smp.s[2] ? 1 : 0, at: now };
+      if (m.own) for (const k of (Array.isArray(smp.k) ? smp.k : []).slice(-8)) {
+        m.rips.push({ id: "s:" + (++m.seq), k: "s", h: HOSTNAME1, pe: statePeer(), n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: Number(k[0]) || 0, y: Number(k[1]) || 0, t: ptFleet() });
+      }
+      any = true;
+    }
+    if (any) ptPublishSoon();
+  }
+  function ptSyncSubs(m) {   // one subscription per allowed pointing person who says they point here (PT_MAX)
+    const want = new Map();
+    if (m.on && connection) {
+      const rows = [];
+      for (const [mp, list] of ptWant) {
+        if (!list.includes(m.share)) continue;
+        const pp = mp.split("/");
+        if (pp[0] !== CHANNEL || !pp[3] || pp[1] === HOSTNAME1) continue;
+        const key = ptKey(pp[1], pp[3]);
+        if (m.allowed.has(key) || (m.everyone && !m.block.has(key))) rows.push([m.allowed.has(key) ? 0 : 1, key, mp]);
+      }
+      rows.sort((a, b) => a[0] - b[0]);
+      for (const [, key, mp] of rows.slice(0, PT_MAX)) want.set(key, mp);
+    }
+    let changed = false;
+    for (const [key, h] of [...m.subs]) if (want.get(key) !== h.mp || h.conn !== connection) { try { h.sub?.close(); } catch {} m.subs.delete(key); m.live.delete(key); changed = true; }
+    for (const [key, mp] of want) {
+      if (m.subs.has(key)) continue;
+      const h = { key, mp, conn: connection, lastK: -1, first: true };
+      h.sub = stateSubscribe(connection, mp, "pt.json", "snapshot", (v) => ptPtrArrive(m, h, v), RC_PRIO);
+      m.subs.set(key, h);
+    }
+    if (changed) ptDrawSoon(m, []);
+  }
+  function ptPtrArrive(m, h, v) {   // a pointing person's pt.json: their pointer, and clicks newer than the last one drawn
+    if (m.subs.get(h.key) !== h || !m.on || !v || typeof v !== "object") return;
+    const [host, peer] = h.key.split("/"), who = ptWho(host, peer, v.n), now = Date.now();
+    const x = Number(v.x), y = Number(v.y), here = v.s === m.share;
+    const on = !!v.on && here && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+    const cur = m.live.get(h.key);
+    const moved = !cur || !cur.on || cur.x !== x || cur.y !== y;
+    m.live.set(h.key, { key: h.key, h: host, pe: peer, n: who.name, c: who.color, x: on ? x : 0, y: on ? y : 0, on, at: now, mv: on && moved ? now : (cur?.mv || 0) });
+    const rips = [];
+    const ks = here && Array.isArray(v.k) ? v.k.slice(-16) : [];
+    for (const k of ks) {
+      const s = Number(k?.s), kx = Number(k?.x), ky = Number(k?.y);
+      if (!(s > h.lastK) || !(kx >= 0 && kx <= 1 && ky >= 0 && ky <= 1)) continue;
+      if (h.first && Number(v.t) - (Number(k.a) || 0) > PT_CLICK_KEEP_MS) continue;   // an old click in the first value: not again
+      const r = { id: h.key + ":" + s, k: "p", h: host, pe: peer, n: who.name, c: who.color, x: kx, y: ky, t: ptFleet() };
+      m.rips.push(r); rips.push(r);
+    }
+    h.lastK = Math.max(h.lastK, ...ks.map((k) => Number(k?.s) || 0));
+    h.first = false;
+    ptDrawSoon(m, rips);
+    ptPublishSoon();
+  }
+  function ptDrawSoon(m, rips) {   // -> my KASTR: the pointers PT_HZ_MS apart at most, a click at once
+    if (rips.length) { ptDrawNow(m, rips); return; }
+    if (!m.drawT) m.drawT = setTimeout(() => { m.drawT = 0; ptDrawNow(m, []); }, PT_HZ_MS);
+  }
+  function ptDrawNow(m, rips) {
+    if (!m.on) return;
+    if (m.drawT) { clearTimeout(m.drawT); m.drawT = 0; }
+    const now = Date.now();
+    ptLocal({ op: "pt-draw", feed: m.feed,
+              p: [...m.live.values()].map((x) => ({ id: x.key, n: x.n, c: x.c, x: x.x, y: x.y, on: x.on && now - x.mv < PT_IDLE_MS ? 1 : 0 })),
+              r: rips.map((r) => ({ id: r.id, n: r.n, c: r.c, x: r.x, y: r.y })) });
+  }
+  function ptPublishSoon() {   // -> pts.json for every viewer, PT_HZ_MS apart at most
+    if (ptPubT) return;
+    const w = PT_HZ_MS - (Date.now() - ptPubAt);
+    if (w <= 0) ptPublishNow(); else ptPubT = setTimeout(() => { ptPubT = 0; ptPublishNow(); }, w);
+  }
+  function ptPublishNow() {
+    if (ptPubT) { clearTimeout(ptPubT); ptPubT = 0; }
+    ptPubAt = Date.now();
+    const now = Date.now(), f = ptFleet(), s = [];
+    for (const m of ptMine.values()) {
+      if (!m.on) continue;
+      const p = [];
+      if (m.self) p.push({ id: "s", k: "s", h: HOSTNAME1, pe: statePeer(), n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: m.self.x, y: m.self.y, on: m.self.on, cap: 1 });   // my real cursor is in the picture: my name beside it
+      for (const x of m.live.values()) p.push({ id: x.key, k: "p", h: x.h, pe: x.pe, n: x.n, c: x.c, x: x.x, y: x.y, on: x.on && now - x.mv < PT_IDLE_MS ? 1 : 0 });
+      m.rips = m.rips.filter((r) => f - r.t < PT_KEEP_MS + 500).slice(-24);
+      s.push({ share: m.share, cap: window.__ptCapOff ? 0 : m.cap, p, r: m.rips });   // rig: the lab's X11 sharer drawn like a Windows one
+    }
+    if (!s.length && !ptAnyOn() && !rcState().path) return;
+    try { rcState().set("pts.json", { v: 1, t: f, s }); } catch {}
+  }
+  function ptBarPaint() {   // the sharer's pointer bar: who points, Let everyone point, Show my clicks, Stop pointers
+    const ms = [...ptMine.values()].filter((m) => m.on || m.everyone);
+    let el = document.getElementById("kPtBar");
+    if (!ms.length) { if (el) el.hidden = true; return; }
+    if (!el) {
+      el = document.createElement("div"); el.id = "kPtBar"; el.hidden = true;
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const b = e.target.closest?.("[data-act]");
+        if (!b) return;
+        const share = b.dataset.share, act = b.dataset.act;
+        if (act === "rm") ptRemove(share, b.dataset.key, "removed");
+        else if (act === "all") ptEveryone(share, !ptMine.get(share)?.everyone);
+        else if (act === "own") ptOwn(!ptOwnPref());
+        else if (act === "off") ptStopAll(share);
+      });
+      document.body.appendChild(el);
+    }
+    el.textContent = "";
+    for (const m of ms) {
+      const row = document.createElement("span"); row.className = "row";
+      const t = document.createElement("span"); t.className = "t";
+      const people = new Map();
+      for (const [k, a] of m.allowed) people.set(k, a.name);
+      for (const [k, x] of m.live) if (!people.has(k)) people.set(k, x.n);
+      t.textContent = (m.surface === "screen" ? "Pointers on your screen" : "Pointers on your window") + (people.size ? ":" : " \u2014 nobody is pointing yet");
+      row.appendChild(t);
+      for (const [k, n] of people) {
+        const c = document.createElement("button"); c.type = "button"; c.className = "chip"; c.dataset.act = "rm"; c.dataset.share = m.share; c.dataset.key = k;
+        c.title = "Take " + n + "\u2019s pointer off"; c.textContent = n + " \u00d7";
+        row.appendChild(c);
+      }
+      const all = document.createElement("button"); all.type = "button"; all.className = "tog" + (m.everyone ? " on" : ""); all.dataset.act = "all"; all.dataset.share = m.share;
+      all.textContent = (m.everyone ? "\u2611 " : "\u2610 ") + "Let everyone point"; all.title = "Everyone watching gets a pointer without asking";
+      const own = document.createElement("button"); own.type = "button"; own.className = "tog" + (m.own ? " on" : ""); own.dataset.act = "own"; own.dataset.share = m.share;
+      own.textContent = (m.own ? "\u2611 " : "\u2610 ") + "Show my clicks"; own.title = "Your own clicks show as ripples for everyone watching";
+      const off = document.createElement("button"); off.type = "button"; off.className = "stop"; off.dataset.act = "off"; off.dataset.share = m.share; off.textContent = "Stop pointers";
+      row.append(all, own, off);
+      el.appendChild(row);
+    }
+    el.hidden = false;
+  }
+  function ptStopAll(share) {
+    const m = ptMine.get(share);
+    if (!m) return;
+    for (const key of new Set([...m.allowed.keys(), ...m.subs.keys()])) {
+      const host = key.split("/")[0];
+      if (host !== HOSTNAME1) rcSend({ kind: "pstop", to: host, share, id: rcNewId(), peer: statePeer(), why: "removed" });
+    }
+    m.allowed.clear(); m.block.clear(); m.everyone = false;
+    ptApply(m);
+    ptBarPaint();
+  }
+  function ptShareItems(share) {   // the share's own menu (my tile's chevron)
+    if (!rcCaps?.point || !ptMineOf(share)) return [];
+    const m = ptMine.get(share);
+    const out = [{ value: "pnteveryone", icon: "mouse", label: (m?.everyone ? "\u2611 " : "\u2610 ") + "Let everyone point", tip: "Everyone watching gets a pointer with their name; a click shows as a ripple \u2014 nobody can click or type on your computer" },
+                 { value: "pntown", label: (ptOwnPref() ? "\u2611 " : "\u2610 ") + "Show my clicks", tip: "Your own clicks show as ripples for everyone watching (while pointers are on)" }];
+    if (m) {
+      const people = new Map();
+      for (const [k, a] of m.allowed) people.set(k, a.name);
+      for (const [k, x] of m.live) if (!people.has(k)) people.set(k, x.n);
+      for (const [k, n] of people) out.push({ value: "pntrm:" + k, label: "Take " + n + "\u2019s pointer off" });
+      if (m.on) out.push({ value: "pntoff", label: "Stop all pointers" });
+    }
+    return out;
+  }
+  function ptShareMenuPick(share, v) {
+    if (v === "pnteveryone") ptEveryone(share, !ptMine.get(share)?.everyone);
+    else if (v === "pntown") ptOwn(!ptOwnPref());
+    else if (v === "pntoff") ptStopAll(share);
+    else if (v.startsWith("pntrm:")) ptRemove(share, v.slice(6), "removed");
+  }
+  // ---- every viewer: the sharer's pts.json over the share's tile, lined up with the picture
+  const ptViews = new Map();   // the sharer's ~rc path -> { path, conn, sub, q: [{t, at, s: Map(share -> entry)}], shown: Set(ripple ids), boxes: Map(share -> {box, els}) }
+  function ptViewSync() {
+    const want = new Set();
+    for (const [mp, list] of rcShares) {
+      const pp = mp.split("/");
+      if (!pp[3] || pp[1] === HOSTNAME1) continue;
+      if (list.some((x) => x.pt && tiles.has(x.p))) want.add(pp[0] + "/" + pp[1] + "/~rc/" + pp[3]);
+    }
+    for (const [path, h] of [...ptViews]) if (!want.has(path) || (connection && h.conn !== connection)) ptViewDrop(path);
+    if (!connection) return;
+    for (const path of want) {
+      if (ptViews.has(path)) continue;
+      const h = { path, conn: connection, q: [], shown: new Set(), boxes: new Map() };
+      h.sub = stateSubscribe(connection, path, "pts.json", "snapshot", (v) => ptViewArrive(h, v), RC_PRIO);
+      ptViews.set(path, h);
+    }
+  }
+  function ptViewDrop(path) {
+    const h = ptViews.get(path);
+    if (!h) return;
+    ptViews.delete(path);
+    try { h.sub?.close(); } catch {}
+    for (const b of h.boxes.values()) b.box?.remove();
+  }
+  function ptViewArrive(h, v) {
+    if (ptViews.get(h.path) !== h || !v || !Array.isArray(v.s)) return;
+    const now = Date.now(), host = h.path.split("/")[1], s = new Map();
+    for (const e of v.s.slice(0, 16)) if (e && typeof e.share === "string" && e.share.split("/")[1] === host) s.set(e.share, e);
+    if (!h.q.length) for (const e of s.values()) for (const r of (Array.isArray(e.r) ? e.r : [])) if (r?.id) h.shown.add(String(r.id));   // joined late: old clicks are not new
+    h.q.push({ t: Number(v.t) || 0, at: now, s });
+    while (h.q.length > 2 && now - h.q[0].at > RC_PTR_KEEP_MS) h.q.shift();
+    ptLoop();
+  }
+  function ptSonar(box, xy, n, c) {   // three rings + a dot + the name, PT_SONAR_MS (CSS)
+    if (!box || !xy) return;
+    const el = document.createElement("div"); el.className = "ptsonar";
+    const col = /^#[0-9a-f]{6}$/i.test(String(c || "")) ? String(c) : "#009fda";
+    el.style.setProperty("--c", col); el.style.setProperty("--ink", rcInk(col));
+    el.style.transform = "translate(" + Math.round(xy[0]) + "px," + Math.round(xy[1]) + "px)";
+    el.innerHTML = '<i></i><i></i><i></i><b></b><span class="nm"></span>';
+    el.querySelector(".nm").textContent = String(n || "").slice(0, 28);
+    box.appendChild(el);
+    ptSonarN++;
+    setTimeout(() => el.remove(), PT_SONAR_MS + 150);
+  }
+  function ptPaint() {   // -> true while something is still on its way into view (keep painting every frame)
+    let busy = false;
+    const now = Date.now(), fleet = ptFleet(), me = statePeer();
+    for (const h of ptViews.values()) {
+      if (!h.q.length) continue;
+      const last = h.q[h.q.length - 1];
+      const onClock = last.t > 0 && fleet - last.t > -1500 && fleet - last.t < 15000;   // the sharer's stamps are on my (fleet) clock
+      const shares = new Set(h.boxes.keys());
+      for (const smp of h.q) for (const k of smp.s.keys()) shares.add(k);
+      for (const share of shares) {
+        const t = tiles.get(share);
+        let b = h.boxes.get(share);
+        if (!t) { if (b) { b.box?.remove(); h.boxes.delete(share); } continue; }
+        const L = rcPtrDelay(t), pk = rcPtrPick(h, L);
+        if (pk && now - last.at < L + 400) busy = true;
+        if (!b || b.box.parentNode !== t.pane) { b?.box?.remove(); b = { box: document.createElement("div"), els: new Map() }; b.box.className = "rcptrs ptptrs"; t.pane.appendChild(b.box); h.boxes.set(share, b); }
+        const e = pk ? pk.s.get(share) : null, cap = !!(e && e.cap), seen = new Set();
+        for (const p of (e && Array.isArray(e.p) ? e.p.slice(0, PT_MAX + 1) : [])) {
+          if (!p || !p.on) continue;
+          const self = p.k === "s";
+          if (!self && (cap || (p.h === HOSTNAME1 && p.pe === me))) continue;   // in the picture already (X11) / my own mouse
+          if (self && rcPtrs.has(share)) continue;   // remote control draws the sharer's pointer itself (ptr.json)
+          const xy = rcClientOf(t, Number(p.x), Number(p.y));
+          if (!xy) continue;
+          const id = String(p.id || "").slice(0, 100);
+          let el = b.els.get(id);
+          if (!el) {
+            el = document.createElement("div"); el.className = "rcptr"; el.dataset.k = self ? "s" : "p";
+            el.innerHTML = '<svg viewBox="0 0 15 24" aria-hidden="true"><path d="M.5 .5V20.5L5.5 15.5L9.5 23.5L12.5 22.5L8.5 14.5H14.5Z"/></svg><span class="nm"></span>';
+            b.box.appendChild(el); b.els.set(id, el);
+          }
+          const nm = String(p.n || "").slice(0, 28), nmEl = el.querySelector(".nm");
+          if (nmEl.textContent !== nm) nmEl.textContent = nm;
+          const c = /^#[0-9a-f]{6}$/i.test(String(p.c || "")) ? String(p.c) : "#009fda";
+          if (el.dataset.c !== c) { el.dataset.c = c; el.style.setProperty("--c", c); el.style.setProperty("--ink", rcInk(c)); }
+          el.classList.toggle("tagonly", self && !!p.cap);   // the sharer's real cursor is in the picture: only their name beside it
+          el.style.transform = "translate(" + Math.round(xy[0]) + "px," + Math.round(xy[1]) + "px)";
+          el.hidden = false; seen.add(id);
+        }
+        for (const [k, el] of [...b.els]) if (!seen.has(k)) { el.remove(); b.els.delete(k); }
+        for (const smp of h.q) {   // the clicks: each one when the picture shows its moment, once
+          const se = smp.s.get(share);
+          if (!se || !Array.isArray(se.r)) continue;
+          for (const r of se.r.slice(-24)) {
+            const id = String(r?.id || "");
+            if (!id || h.shown.has(id)) continue;
+            if ((r.h === HOSTNAME1 && r.pe === me) || se.cap) { h.shown.add(id); continue; }   // mine showed at once / in the picture already
+            const due = onClock ? Number(r.t) + L <= fleet : smp.at + Math.max(0, L - 30) <= now;
+            if (!due) { busy = true; continue; }
+            h.shown.add(id);
+            if (onClock && fleet - Number(r.t) - L > PT_SONAR_MS) continue;   // too late to mean anything
+            ptSonar(b.box, rcClientOf(t, Number(r.x), Number(r.y)), r.n, r.c);
+          }
+        }
+      }
+      if (h.shown.size > 600) h.shown = new Set([...h.shown].slice(-300));
+    }
+    return busy;
+  }
+  let ptLoopOn = false;
+  function ptLoop() {
+    if (ptLoopOn) return;
+    ptLoopOn = true;
+    const go = () => { ptLoopOn = false; if (ptPaint()) ptLoop(); };
+    if (document.hidden) setTimeout(go, 33); else requestAnimationFrame(go);
+  }
+  function ptPaintPills() {   // the spotlit share's Point button
+    for (const [name, t] of tiles) {
+      const b = t.pane.querySelector(":scope > .pptbtn");
+      if (!b) continue;
+      const it = ptMenuItem(name);
+      t.pane.classList.toggle("ptable", !!it);
+      if (!it) continue;
+      const lbl = it.value === "pntstop" ? "Stop pointing" : it.value === "pntwait" ? "Waiting\u2026" : "Point";
+      b.dataset.v = it.value; b.title = it.tip || it.label; b.classList.toggle("on", it.value === "pntstop");
+      const s = b.querySelector("span"); if (s && s.textContent !== lbl) s.textContent = lbl;
+    }
+  }
+  function ptTick() {   // once a second (and on every change): leases, subscriptions, my list, the viewers' side
+    try {
+      for (const [share, m] of [...ptMine]) {
+        let mine = null;
+        try { mine = (window.__rcMine?.() || []).find((s) => s.path === share && s.onair) || null; } catch {}
+        if (!mine || joinState !== "joined" || !String(share).startsWith(CHANNEL + "/")) {   // the share stopped, or I left the room
+          ptOff(m, mine ? "left" : "share");
+          ptMine.delete(share);
+          ptBarPaint();
+          continue;
+        }
+        if (mine.paused) { ptOff(m, "paused"); continue; }   // a pause card takes no pointers; Resume brings them back
+        m.feed = mine.feed;
+        if (!m.on && (m.everyone || m.allowed.size)) ptApply(m);
+        if (m.on) {
+          if (Date.now() - m.okAt > PT_ON_MS) ptLocalOn(m);   // the lease (kastr_point.PT_LEASE_S)
+          ptSyncSubs(m);
+          ptDrawSoon(m, []);
+        }
+      }
+      if (ptAnyOn()) { try { rcState().sync(); } catch {} ptPublishSoon(); }
+      // the pointing person: my room.json says where I point (only shares I may point on and pointed on lately)
+      for (const [share, a] of [...ptAsks]) if (ptMayPoint(share)) {   // allowed (the room's list) while the note went to another page of this device
+        ptAsks.delete(share); ptUsed.set(share, Date.now());
+        rcToast(a.name + " lets you point on their screen — move your mouse over it; a click shows as a ripple for everyone.", 6000);
+      }
+      const mineList = [];
+      for (const [share, at] of [...ptUsed]) {
+        if (!ptMayPoint(share) || !tiles.has(share)) { if (!ptAsks.has(share) && Date.now() - at > PT_GRACE_MS) ptUsed.delete(share); continue; }
+        if (Date.now() - at > PT_USED_MS) { ptUsed.delete(share); continue; }
+        mineList.push(share);
+      }
+      window.__state?.set?.("pt", mineList);
+      if (ptMe && ptMe.on && !ptMayPoint(ptMe.share)) { ptMe.on = 0; ptSendNow(); }
+      for (const [name, t] of tiles) {
+        const x = rcShareOf(name);
+        if (!x || !x.pv || x.host === HOSTNAME1) continue;
+        ptAttach(name, t);
+        if (x.pe && !ptTold.has(name) && !ptOptOut.has(name) && ptCanAsk()) {
+          ptTold.add(name);
+          rcToast(rcWho(name) + " lets everyone point on their " + (x.s === "screen" ? "screen" : "window") + " \u2014 move your mouse over it; a click shows as a ripple. (Stop pointing: the tile\u2019s menu)", 7000);
+        }
+      }
+      ptViewSync();
+      ptPaintPills();
+      ptBarPaint();
+    } catch (e) { log("Pointer: tick: " + (e?.message || e)); }
+  }
+  setInterval(ptTick, 1000);
+  setInterval(() => { if (ptViews.size) ptPaint(); }, 250);   // the tile moved / zoomed while the pointers stood still
+  window.__pt = { state: () => ({ mine: [...ptMine].map(([k, m]) => [k, { on: m.on, everyone: m.everyone, own: m.own, cap: m.cap, err: m.err || "", allowed: [...m.allowed.keys()], block: [...m.block],
+                                                                         subs: [...m.subs.keys()], live: [...m.live.values()].map((x) => [x.key, x.n, x.on, x.x, x.y]), self: m.self, rips: m.rips.length }]),
+                                  want: [...ptWant], asks: [...ptAsks.keys()], used: [...ptUsed.keys()], prompt: ptPrompt && { from: ptPrompt.it.from, share: ptPrompt.it.share }, me: ptMe && { share: ptMe.share, on: ptMe.on, x: ptMe.x, y: ptMe.y, k: ptMe.k.length },
+                                  ws: !!(ptWs && ptWs.readyState === 1), sonars: ptSonarN,
+                                  views: [...ptViews].map(([k, h]) => [k, h.q.length, h.sub?.n || 0, [...h.boxes].map(([s, b]) => [s, [...b.els].map(([id, el]) => [id, el.style.transform, el.querySelector(".nm").textContent, el.classList.contains("tagonly")])])]) }),
+                  may: ptMayPoint, item: ptMenuItem, request: ptRequest, pick: ptMenuPick, answer: (a) => ptPromptClose(a), everyone: ptEveryone, own: ptOwn, remove: ptRemove, stopAll: ptStopAll,
+                  move: (name, x, y) => ptMove(name, x == null ? null : { x, y }), click: (name, x, y) => ptClick(name, { x, y }) };   // rig
+  // ---- 0.21.83 FILES AND PICTURES OVER REMOTE CONTROL (Kenton: "Am I able to copy a file on my machine or the remote machine
+  // and paste it on the other side?" -- decided yes, both ways). While a grant lives BOTH pages run one files session (rcf): my
+  // KASTR watches my clipboard (kastr_rcfiles -- never what was on it before) and hands me an OFFER when files, a folder or a
+  // picture is copied here; I publish my offers on <room>/<me>/~rcf/<peer> (fo.json) and what I want of theirs + my progress
+  // on the same broadcast (fq.json); the chunks go one MoQ group each on <room>/<me>/~rcd/<peer> (fd, below the share's video
+  // in priority), AES-GCM under the key the sharer sent in the relay's "allow" note. The receiver PULLS a window of RCF_WIN
+  // chunks; a chunk that does not arrive is simply sent again (RCF_RESEND_MS), and each one goes to the receiver's own KASTR,
+  // which writes it into a temp folder and, once all are in, puts the files (or the picture) on ITS clipboard -- Ctrl+V /
+  // Paste there copies them where that person is. A copy up to the auto size (kastr.ini rc_files_auto_mb, 100 MB) comes at
+  // once; a bigger one waits for a "Get them" click -- or, from the controller, for their Ctrl+V on the shared screen (the keys
+  // wait until the files are there). A file dragged from the controller's desktop onto the shared screen is sent and dropped
+  // where it was let go (kastr_rcfiles: an Explorer folder / the desktop / an XDND target, else Downloads/KASTR).
+  // in flight: 8 MB of chunks (lab v02183: 24 MB in flight swamped the relay link and the page; 8 MB ran 12 MB/s, stalls < 0.1 s)
+  const RCF_WIN_BYTES = 8 * 1048576, RCF_RESEND_MS = 2500, RCF_PRIO = 30, RCF_TICK_MS = 600, RCF_Q_MS = 60, RCF_STALL_MS = 45000, RCF_NOTE_MS = 15000;
+  const RCF_CS = 524288, RCF_AUTO = 100 * 1048576, RCF_MAGIC = 0x4B524631;   // "KRF1"; a dropped file's chunks: 512 KB (kastr_rcfiles.CHUNK)
+  const RCF_FK_RE = /^[A-Za-z0-9_-]{43}$/, RCF_OID_RE = /^[0-9a-f]{16}$/;
+  let rcf = null;
+  const rcfNotes = [];   // [{k, t, level, at}] -- they outlive the session (the "received" note stays a while)
+  const rcfHex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
+  const rcfB64 = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const rcfUnB64 = (s) => Uint8Array.from(atob(String(s).replace(/-/g, "+").replace(/_/g, "/") + "="), (ch) => ch.charCodeAt(0));
+  const rcfNewKey = () => rcfB64(crypto.getRandomValues(new Uint8Array(32)));
+  function rcfSize(n) {
+    n = Number(n) || 0;
+    const u = ["bytes", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (n >= 1024 && i < 4) { n /= 1024; i++; }
+    return i ? (n < 10 ? n.toFixed(1) : String(Math.round(n))) + " " + u[i] : n + (n === 1 ? " byte" : " bytes");
+  }
+  function rcfDescribe(pub) {   // "report.docx" / "the folder Photos" / "3 files" / "a picture"
+    if (pub.kind === "image") return "a picture";
+    if (pub.name) return String(pub.name).slice(0, 120);
+    const tops = (pub.items || []).filter((it) => !String(it.p).includes("/"));
+    const nf = (pub.items || []).filter((it) => !it.d).length;
+    if (tops.length === 1) return (tops[0].d ? "the folder " : "") + tops[0].p;
+    return nf + " file" + (nf === 1 ? "" : "s");
+  }
+  function rcfIv(oid, c) {   // 8 bytes of the offer's id + the chunk number: never twice under one key
+    const iv = new Uint8Array(12);
+    for (let i = 0; i < 8; i++) iv[i] = parseInt(oid.substr(i * 2, 2), 16) || 0;
+    new DataView(iv.buffer).setUint32(8, c >>> 0);
+    return iv;
+  }
+  function rcfPlan(o) {   // the chunk layout of an offer (kastr_rcfiles.chunk_plan, the same numbering on both sides)
+    const cs = Number(o.pub.cs) || RCF_CS;
+    o.starts = []; let n = 0;
+    for (const it of o.pub.items) { o.starts.push(n); if (!it.d) n += Math.ceil((Number(it.n) || 0) / cs); }
+    o.N = n; o.cs = cs;
+  }
+  function rcfChunkAt(o, c) {
+    let lo = 0, hi = o.starts.length - 1, i = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (o.starts[m] <= c) { i = m; lo = m + 1; } else hi = m - 1; }
+    while (i >= 0 && (o.pub.items[i].d || !Number(o.pub.items[i].n))) i--;
+    if (i < 0) return null;
+    const n = Number(o.pub.items[i].n), off = (c - o.starts[i]) * o.cs;
+    return off >= 0 && off < n ? [i, off, Math.min(o.cs, n - off)] : null;
+  }
+  async function rcfLocal(body) {   // this computer's KASTR (kastr_rcfiles)
+    try {
+      const r = await fetch("/api/rcfiles", { method: "POST", headers: { "content-type": "application/json", "x-kastr-rc": "1" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      return { ...d, http: r.status, ok: r.ok && d.ok !== false };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  function rcfNote(k, t, level) {
+    const i = rcfNotes.findIndex((n) => n.k === k);
+    if (i >= 0) rcfNotes.splice(i, 1);
+    rcfNotes.push({ k, t, level: level || "ok", at: Date.now() });
+    while (rcfNotes.length > 4) rcfNotes.shift();
+    rcfPaint();
+  }
+  // ---- the session
+  function rcfStart(role, x) {
+    if (IS_WEB || !rcCaps) return;
+    rcfStop("restart");
+    const s = rcf = { role, rcid: x.rcid, room: x.room, peerHost: role === "ctl" ? x.to : x.from, peerPeer: role === "ctl" ? x.toPeer : x.peer,
+                      name: String(x.name || "Someone"), fk: RCF_FK_RE.test(String(x.fk || "")) ? String(x.fk) : "", key: null, caps: null, on: false,
+                      offers: new Map(), clipOid: "", theirs: new Map(), getQ: [], rx: null, rxDone: [], cancelled: [], errs: [],
+                      peerFo: null, peerFq: null, peerFqAt: 0, peerEnc: false, pump: [], pumping: false, conn: null, fqAt: 0, beginAt: 0, at: Date.now() };
+    s.st = stateProducer(() => (rcf === s && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rcf/" + statePeer() : ""), ["fo.json", "fq.json"], { priority: STATE_PRIORITY, maxAge: STATE_LAT_MS });
+    s.data = stateProducer(() => (rcf === s && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rcd/" + statePeer() : ""), ["fd"], { priority: RCF_PRIO, maxAge: 3000 });
+    rcfFo(s); rcfFq(s);
+    s.st.sync(); s.data.sync();
+    rcfSubs(s);
+    (async () => {
+      if (s.fk) { try { s.key = await crypto.subtle.importKey("raw", rcfUnB64(s.fk), "AES-GCM", false, ["encrypt", "decrypt"]); } catch { s.key = null; } }
+      await rcfBegin(s);
+    })();
+    s.tick = setInterval(() => rcfTick(s), RCF_TICK_MS);
+  }
+  async function rcfBegin(s) {
+    if (rcf !== s || s.beginBusy) return;
+    s.beginBusy = true; s.beginAt = Date.now();
+    const d = await rcfLocal({ op: "begin", rcid: s.rcid, role: s.role, name: s.name });
+    s.beginBusy = false;
+    if (rcf !== s) return;
+    s.caps = d.caps || s.caps; s.on = !!d.ok;
+    if (d.http === 404) s.old = true;   // a KASTR without kastr_rcfiles: never asked again
+    if (!d.ok) log("Remote control files: " + (d.error || "not available here"));
+    rcfFo(s); rcfFq(s); rcfPaint();
+  }
+  function rcfStop(why) {
+    const s = rcf;
+    if (!s) return;
+    rcf = null;
+    clearInterval(s.tick); clearTimeout(s.fqT);
+    for (const k of ["subFo", "subFq", "subFd"]) { try { s[k]?.close(); } catch {} }
+    try { s.st.set("fo.json", { rcid: s.rcid, v: 1, on: false, offers: [], end: 1, t: Date.now() }); } catch {}
+    setTimeout(() => { try { s.st.stop(); s.data.stop(); } catch {} }, 1200);
+    if (s.pasteRes) { try { s.pasteRes(); } catch {} }
+    if (s.rx) rcfNote("rx-" + s.rx.oid, "Stopped receiving " + rcfDescribe(s.rx.e.pub) + " \u2014 remote control ended", "warn");
+    rcfLocal({ op: "end", rcid: s.rcid, why: String(why || "stopped").slice(0, 20) });
+    rcfPaint();
+  }
+  function rcfSubs(s) {
+    for (const k of ["subFo", "subFq", "subFd"]) { try { s[k]?.close(); } catch {} s[k] = null; }
+    s.conn = connection;
+    if (!connection || !s.peerPeer || !s.peerHost) return;
+    const base = s.room + "/" + s.peerHost;
+    s.subFo = stateSubscribe(connection, base + "/~rcf/" + s.peerPeer, "fo.json", "snapshot", (v) => rcfPeerFo(s, v), STATE_PRIORITY);
+    s.subFq = stateSubscribe(connection, base + "/~rcf/" + s.peerPeer, "fq.json", "snapshot", (v) => rcfPeerFq(s, v), STATE_PRIORITY);
+    s.subFd = rcfDataSub(s, connection, base + "/~rcd/" + s.peerPeer);
+  }
+  function rcfDataSub(s, conn, path) {   // their chunks: every group, in the order they come
+    const h = { closed: false, sub: null, n: 0 };
+    (async () => {
+      let backoff = 500;
+      while (!h.closed && rcf === s) {
+        let req = null;
+        try {
+          const org = conn.origin?.peek?.();
+          if (!org) throw new Error("not connected");
+          req = await requestBroadcast(org, path, 8000);
+          if (!req) throw new Error("not routable");
+          const sub = h.sub = req.bc.track("fd").subscribe({ priority: RCF_PRIO, maxAge: 3000 });
+          backoff = 500;
+          for (;;) {
+            const g = await sub.recvGroup();
+            if (!g || h.closed) break;
+            g.readFrame().then((f) => { if (f && f.payload) { h.n++; rcfData(s, f.payload); } }, () => {}).finally(() => { try { g.close(); } catch {} });
+          }
+        } catch {}
+        try { h.sub?.close(); } catch {}
+        try { req?.close(); } catch {}
+        if (h.closed || rcf !== s) break;
+        await sleepMs(backoff);
+        backoff = Math.min(4000, backoff * 2);
+      }
+    })();
+    return { close() { h.closed = true; try { h.sub?.close(); } catch {} }, get n() { return h.n; } };
+  }
+  function rcfFo(s) {   // fo.json: what I offer now (my clipboard's copy, a drop), what I cancelled, what I could not read
+    const offers = [...s.offers.values()].filter((o) => o.live && !o.final).slice(-3).map((o) => o.pub);
+    s.st.set("fo.json", { rcid: s.rcid, v: 1, on: s.on, enc: !!s.key, caps: s.caps ? { max: s.caps.max, auto: s.caps.auto } : null,
+                          offers, cancel: s.cancelled.slice(-8), errs: s.errs.slice(-4), t: Date.now() });
+  }
+  function rcfFq(s) {   // fq.json: the chunks I want of theirs (a window) + my progress + how my last transfers ended
+    const x = s.rx;
+    s.st.set("fq.json", { rcid: s.rcid, v: 1, on: s.on, enc: !!s.key,
+                          x: x ? { oid: x.oid, want: [...x.want].sort((a, b) => a - b), got: x.ngot, N: x.N, bytes: x.bytes, total: x.total, files: x.files, nfiles: x.nfiles } : null,
+                          done: s.rxDone.slice(-6), t: Date.now() });
+    s.fqAt = Date.now();
+  }
+  function rcfFqSoon(s) {
+    if (s.fqT) return;
+    s.fqT = setTimeout(() => { s.fqT = 0; if (rcf === s) rcfFq(s); }, Math.max(0, RCF_Q_MS - (Date.now() - s.fqAt)));
+  }
+  async function rcfTick(s) {
+    if (rcf !== s) { clearInterval(s.tick); return; }
+    if (connection && s.conn !== connection) rcfSubs(s);
+    s.st.sync(); s.data.sync();
+    if (!s.on && !s.old && !s.beginBusy && Date.now() - s.beginAt > 4000) rcfBegin(s);
+    if (s.rx && Date.now() - s.fqAt > 500) rcfFq(s);   // the want list again: whatever got lost is asked for again
+    if (s.rx && Date.now() - s.rx.last > RCF_STALL_MS) rcfRxEnd(s, "fail", "nothing arrived for " + Math.round(RCF_STALL_MS / 1000) + " s");
+    if (s.pasteWait && Date.now() - s.pasteWait.at > 8000 && !(s.peerFq?.x?.oid === s.pasteWait.oid)) {   // they never started on it
+      const r = s.pasteRes; s.pasteWait = null; s.pasteRes = null; r?.();
+    }
+    if (s.on && !s.ticking) {
+      s.ticking = true;
+      try {
+        const d = await rcfLocal({ op: "renew", rcid: s.rcid });
+        if (rcf === s && d.ok) rcfMine(s, d);
+        else if (rcf === s && d.http === 409) { s.on = false; rcfFo(s); }
+      } finally { s.ticking = false; }
+    }
+    rcfPaint();
+  }
+  // ---- what I copied (my KASTR's offer) -> fo.json
+  function rcfMine(s, d) {
+    const off = d.offer;
+    if (off && RCF_OID_RE.test(String(off.oid || "")) && off.oid !== s.clipOid) {
+      s.clipOid = off.oid;
+      for (const o of s.offers.values()) if (o.src === "kastr" && o.live && !o.prog) o.live = false;   // an older copy nobody is taking
+      const o = { pub: off, src: "kastr", sent: new Map(), queued: new Set(), bytes: 0, live: true, at: Date.now() };
+      rcfPlan(o);
+      s.offers.set(off.oid, o);
+      while (s.offers.size > 8) s.offers.delete(s.offers.keys().next().value);
+      rcfFo(s);
+      log("Remote control files: offering " + rcfDescribe(off) + " (" + rcfSize(off.total) + ")");
+      if (off.over) rcfNote("of-" + off.oid, rcfDescribe(off) + " (" + rcfSize(off.total) + ") is over the " + rcfSize(s.caps?.max) + " limit for one transfer \u2014 it stays here", "warn");
+      else if (off.skipped?.links) rcfNote("of-" + off.oid, "Left out " + off.skipped.links + " shortcut link" + (off.skipped.links === 1 ? "" : "s") + " (links are never followed)", "info");
+    } else if (!off && s.clipOid) {
+      const o = s.offers.get(s.clipOid);
+      if (o && !o.prog) o.live = false;
+      s.clipOid = "";
+      rcfFo(s);
+    }
+  }
+  // ---- their offers -> fetch (at once, on "Get them", or on the controller's paste)
+  function rcfPeerFo(s, v) {
+    if (rcf !== s || !v || v.rcid !== s.rcid) return;
+    s.peerFo = v;
+    const x = s.rx;
+    if (x && Array.isArray(v.cancel) && v.cancel.includes(x.oid)) rcfRxEnd(s, "cancel", s.name + " cancelled it");
+    const er = x && Array.isArray(v.errs) ? v.errs.find((e) => e && e.oid === x?.oid) : null;
+    if (er && s.rx) rcfRxEnd(s, "fail", String(er.why || "their side could not read it"));
+    const listed = new Set();
+    for (const pub of (Array.isArray(v.offers) ? v.offers : []).slice(0, 4)) {
+      if (!pub || !RCF_OID_RE.test(String(pub.oid || "")) || !Array.isArray(pub.items)) continue;
+      listed.add(pub.oid);
+      let e = s.theirs.get(pub.oid);
+      if (!e) {
+        e = { pub, state: "new", at: Date.now() };
+        s.theirs.set(pub.oid, e);
+        if (pub.kind === "drop" && s.role !== "sharer") { e.state = "skip"; continue; }
+        const auto = Number(s.caps?.auto ?? RCF_AUTO);
+        if (pub.over) { e.state = "over"; rcfNote("th-" + pub.oid, s.name + " copied " + rcfDescribe(pub) + " (" + rcfSize(pub.total) + ") \u2014 over the limit for one transfer", "warn"); }
+        else if (pub.kind === "drop" || pub.kind === "image" || pub.total <= auto || pub.get) rcfQueue(s, pub.oid);
+        else { e.state = "wait"; log("Remote control files: " + s.name + " copied " + rcfDescribe(pub) + " (" + rcfSize(pub.total) + ") -- waits for Get them / a paste"); }
+      } else if (pub.get && e.state === "wait") rcfQueue(s, pub.oid);   // the controller pasted on my screen: take it now
+    }
+    for (const [oid, e] of s.theirs) if ((e.state === "wait" || e.state === "over") && !listed.has(oid)) s.theirs.delete(oid);   // copied over since
+    while (s.theirs.size > 12) s.theirs.delete(s.theirs.keys().next().value);
+    rcfPaint();
+  }
+  function rcfQueue(s, oid) {
+    const e = s.theirs.get(oid);
+    if (!e || e.state === "get" || e.state === "queued" || e.state === "done") return;
+    e.state = "queued";
+    s.getQ.push(oid);
+    rcfNextGet(s);
+  }
+  function rcfNextGet(s) {
+    if (rcf !== s || s.rx || s.getBusy) return;
+    while (s.getQ.length) {
+      const oid = s.getQ.shift(), e = s.theirs.get(oid);
+      if (e && e.state === "queued") { rcfGet(s, oid); return; }
+    }
+  }
+  async function rcfGet(s, oid) {
+    const e = s.theirs.get(oid);
+    if (!e) return;
+    if (!s.on) { e.state = "fail"; rcfNote("rx-" + oid, "This KASTR can\u2019t take files from " + s.name + (s.old ? " (it is older than 0.21.83)" : ""), "warn"); return; }
+    e.state = "get"; s.getBusy = true;
+    const d = await rcfLocal({ op: "recv", rcid: s.rcid, offer: { ...e.pub, by: s.name }, pt: e.pub.kind === "drop" ? e.pub.pt : undefined });
+    s.getBusy = false;
+    if (rcf !== s) return;
+    if (!d.ok) {
+      e.state = "fail";
+      s.rxDone.push({ oid, state: "fail", why: String(d.error || "").slice(0, 160) });
+      rcfFq(s);
+      rcfNote("rx-" + oid, "Couldn\u2019t take " + rcfDescribe(e.pub) + " from " + s.name + ": " + (d.error || "no answer from KASTR"), "warn");
+      rcfNextGet(s);
+      return;
+    }
+    const need = [];
+    for (const [a, b] of (Array.isArray(d.need) ? d.need : [])) for (let c = a; c < b; c++) need.push(c);
+    const p = d.progress || {};
+    const x = s.rx = { oid, e, need, ni: 0, want: new Set(), got: new Set(), inflight: new Set(), ngot: 0, N: need.length, bytes: 0, total: Number(p.total) || Number(e.pub.total) || 0,
+                       files: 0, nfiles: Number(p.nfiles) || Number(e.pub.files) || 0, t0: Date.now(), last: Date.now(), posts: 0, q: [], win: Math.max(4, Math.min(64, Math.ceil((Number(window.__rcfWinBytes) || RCF_WIN_BYTES) / (Number(e.pub.cs) || RCF_CS)))) };
+    log("Remote control files: receiving " + rcfDescribe(e.pub) + " (" + rcfSize(x.total) + ") from " + s.name);
+    if (p.state === "done" || !need.length) { if (p.state === "done") rcfRxFinish(s, x, p); else rcfRxDone(s, x); return; }
+    rcfFill(s);
+    rcfFq(s);
+    rcfPaint();
+  }
+  function rcfFill(s) {
+    const x = s.rx;
+    if (!x) return;
+    while (x.want.size < x.win && x.ni < x.need.length) { const c = x.need[x.ni++]; if (!x.got.has(c)) x.want.add(c); }
+  }
+  async function rcfData(s, u8) {   // one chunk of theirs
+    if (rcf !== s || !(u8 instanceof Uint8Array) || u8.length < 8) return;
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (dv.getUint32(0) !== RCF_MAGIC) return;
+    const hl = dv.getUint32(4);
+    if (hl > 512 || 8 + hl > u8.length) return;
+    let h;
+    try { h = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
+    const x = s.rx;
+    if (!x || !h || h.o !== x.oid || !Number.isInteger(h.c) || x.got.has(h.c) || x.inflight.has(h.c) || !x.want.has(h.c)) return;
+    let body = u8.subarray(8 + hl);
+    x.inflight.add(h.c);
+    if (h.e) {
+      if (!s.key) { x.inflight.delete(h.c); rcfRxEnd(s, "fail", "it came encrypted and this side has no key"); return; }
+      try { body = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: rcfIv(h.o, h.c), additionalData: new TextEncoder().encode(h.o + ":" + h.c) }, s.key, body)); }
+      catch { x.inflight.delete(h.c); return; }   // damaged: it is asked for again
+    }
+    if (s.rx !== x) return;
+    x.q.push([h.c, body]);
+    rcfPost(s, x);
+  }
+  function rcfPost(s, x) {   // into my KASTR, three at a time
+    while (x.posts < 3 && x.q.length) {
+      const [c, body] = x.q.shift();
+      x.posts++;
+      fetch("/api/rcfiles/put?rcid=" + s.rcid + "&oid=" + x.oid + "&c=" + c, { method: "POST", headers: { "x-kastr-rc": "1", "content-type": "application/octet-stream" }, body })
+        .then((r) => r.json().catch(() => ({})).then((d) => [r.status, d]))
+        .then(([code, d]) => {
+          x.posts--; x.inflight.delete(c);
+          if (s.rx !== x) return;
+          if (code === 200 && d.ok) {
+            if (!x.got.has(c)) { x.got.add(c); x.ngot++; x.bytes += body.length; }
+            x.want.delete(c);
+            x.files = Number(d.progress?.files) || x.files;
+            x.last = Date.now();
+            rcfFill(s); rcfFqSoon(s); rcfPaintSoon();
+            if (x.ngot >= x.N) rcfRxDone(s, x);
+          } else if (code === 404 || code === 409 || code === 422) { rcfRxEnd(s, "fail", d.error || ("HTTP " + code)); return; }
+          rcfPost(s, x);
+        }, () => { x.posts--; x.inflight.delete(c); if (s.rx === x) rcfPost(s, x); });
+    }
+  }
+  async function rcfRxDone(s, x) {
+    if (x.finishing) return;
+    x.finishing = true;
+    const d = await rcfLocal({ op: "done", rcid: s.rcid, oid: x.oid });
+    if (rcf !== s || s.rx !== x) return;
+    if (!d.ok) { rcfRxEnd(s, "fail", d.error || "it could not be finished"); return; }
+    rcfRxFinish(s, x, d.progress || {});
+  }
+  function rcfRxFinish(s, x, p) {
+    const r = p.result || {}, e = x.e;
+    s.rx = null; e.state = "done";
+    const ms = Math.max(1, Date.now() - x.t0);
+    s.rxDone.push({ oid: x.oid, state: "done", n: Number(r.n) || 0, bytes: Number(r.bytes) || 0, placed: String(r.placed || ""), ms });
+    rcfFq(s);
+    const n = Number(r.n) || 0, what = e.pub.kind === "image" ? "a picture" : (n === 1 && e.pub.files === 1 ? rcfDescribe(e.pub) : n + " file" + (n === 1 ? "" : "s"));
+    const txt = (e.pub.kind === "drop" ? "Received " + what + " (" + rcfSize(r.bytes) + ") " + s.name + " dropped \u2014 " : "Received " + what + " (" + rcfSize(r.bytes) + ") from " + s.name + " \u2014 ") + (r.note || "done");
+    rcfNote("rx-" + x.oid, txt, r.placed === "failed" ? "warn" : "ok");
+    rcToast(txt, 7000, r.placed === "failed" ? "warn" : "event");
+    log("Remote control files: " + txt + " [" + (Math.round((Number(r.bytes) || 0) / ms / 1048.576 * 10) / 10) + " MB/s, " + (ms / 1000).toFixed(1) + " s]");
+    rcfNextGet(s);
+    rcfPaint();
+  }
+  function rcfRxEnd(s, state, why) {   // cancel / fail: the partial copy goes (kastr_rcfiles deletes it)
+    const x = s.rx;
+    if (!x) return;
+    s.rx = null; x.e.state = state;
+    rcfLocal({ op: "cancel", rcid: s.rcid, oid: x.oid });
+    s.rxDone.push({ oid: x.oid, state, why: String(why || "").slice(0, 160) });
+    rcfFq(s);
+    rcfNote("rx-" + x.oid, (state === "cancel" ? "Cancelled " : "Couldn\u2019t receive ") + rcfDescribe(x.e.pub) + " from " + s.name + (why ? " \u2014 " + why : ""), state === "cancel" ? "info" : "warn");
+    log("Remote control files: " + state + " receiving " + rcfDescribe(x.e.pub) + (why ? " (" + why + ")" : ""));
+    rcfNextGet(s);
+    rcfPaint();
+  }
+  // ---- their requests for MY offers -> chunks
+  function rcfPeerFq(s, v) {
+    if (rcf !== s || !v || v.rcid !== s.rcid) return;
+    s.peerFq = v; s.peerFqAt = Date.now(); s.peerEnc = !!v.enc;
+    const x = v.x, now = Date.now();
+    if (x && s.offers.has(x.oid)) {
+      const o = s.offers.get(x.oid);
+      if (!o.final) {
+        if (!o.prog) log("Remote control files: " + s.name + " is taking " + rcfDescribe(o.pub) + " (" + rcfSize(o.pub.total) + ")");
+        o.prog = x;
+        for (const c of (Array.isArray(x.want) ? x.want : []).slice(0, 64)) {
+          if (!Number.isInteger(c) || c < 0 || c >= o.N || o.queued.has(c)) continue;
+          const at = o.sent.get(c);
+          if (at && now - at < RCF_RESEND_MS) continue;
+          o.queued.add(c);
+          s.pump.push([o, c]);
+        }
+        rcfPump(s);
+      }
+    }
+    for (const dn of (Array.isArray(v.done) ? v.done : [])) {
+      const o = dn && s.offers.get(dn.oid);
+      if (!o || o.final) continue;
+      o.final = String(dn.state || "done"); o.prog = null;
+      rcfLocal({ op: "sent", rcid: s.rcid, oid: dn.oid, state: o.final, who: s.name });
+      const what = rcfDescribe(o.pub) + " (" + rcfSize(o.pub.total) + ")";
+      if (o.final === "done") {
+        const t = s.role === "sharer" ? s.name + " copied " + what + " from your computer" : s.name + " has " + what + (o.src === "drop" ? " \u2014 dropped on their screen" : "");
+        rcfNote("tx-" + dn.oid, t, "ok");
+        rcToast(t + ".", 7000);
+      } else rcfNote("tx-" + dn.oid, s.name + (o.final === "cancel" ? " cancelled " : " couldn\u2019t take ") + what + (dn.why ? " \u2014 " + dn.why : ""), o.final === "cancel" ? "info" : "warn");
+      if (o.src === "drop") o.files = null;   // let go of the dropped files
+      rcfFo(s);
+      if (s.pasteWait?.oid === dn.oid) { const r = s.pasteRes; s.pasteWait = null; s.pasteRes = null; r?.(); }
+    }
+    rcfPaint();
+  }
+  async function rcfPump(s) {   // one chunk at a time: read (my KASTR, or the dropped File), seal, publish
+    if (s.pumping) return;
+    s.pumping = true;
+    try {
+      while (rcf === s && s.pump.length) {
+        const [o, c] = s.pump.shift();
+        o.queued.delete(c);
+        if (o.final) continue;
+        let data;
+        try { data = await rcfRead(s, o, c); }
+        catch (err) {
+          const why = String(err?.message || err).slice(0, 160);
+          if (!s.errs.some((x) => x.oid === o.pub.oid)) { s.errs.push({ oid: o.pub.oid, why }); rcfFo(s); }
+          o.final = "fail";
+          rcfNote("tx-" + o.pub.oid, "Couldn\u2019t send " + rcfDescribe(o.pub) + ": " + why, "warn");
+          continue;
+        }
+        if (rcf !== s) break;
+        const hdr = { o: o.pub.oid, c, n: data.length };
+        let body = data;
+        if (s.key && s.peerEnc) {
+          body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: rcfIv(o.pub.oid, c), additionalData: new TextEncoder().encode(o.pub.oid + ":" + c) }, s.key, data));
+          hdr.e = 1;
+        }
+        const hb = new TextEncoder().encode(JSON.stringify(hdr));
+        const fr = new Uint8Array(8 + hb.length + body.length);
+        const dv = new DataView(fr.buffer);
+        dv.setUint32(0, RCF_MAGIC); dv.setUint32(4, hb.length);
+        fr.set(hb, 8); fr.set(body, 8 + hb.length);
+        s.data.sync();
+        if (!s.data.bytes("fd", fr)) continue;   // not connected yet: their next want list asks again
+        if (!o.sent.has(c)) o.bytes += data.length;
+        o.sent.set(c, Date.now());
+      }
+    } finally { s.pumping = false; }
+  }
+  async function rcfRead(s, o, c) {
+    if (o.src === "drop") {
+      const at = rcfChunkAt(o, c), f = at && o.files ? o.files[at[0]] : null;
+      if (!f) throw new Error("that file is gone");
+      return new Uint8Array(await f.slice(at[1], at[1] + at[2]).arrayBuffer());
+    }
+    const r = await fetch("/api/rcfiles/chunk?rcid=" + s.rcid + "&oid=" + o.pub.oid + "&c=" + c, { headers: { "x-kastr-rc": "1" }, cache: "no-store" });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || ("HTTP " + r.status)); }
+    return new Uint8Array(await r.arrayBuffer());
+  }
+  function rcfTxCancel(s, oid) {
+    const o = s.offers.get(oid);
+    if (!o || o.final) return;
+    o.final = "cancel"; o.prog = null;
+    s.cancelled.push(oid);
+    s.pump = s.pump.filter(([oo]) => oo !== o);
+    rcfFo(s);
+    rcfNote("tx-" + oid, "Stopped sending " + rcfDescribe(o.pub), "info");
+  }
+  // ---- the controller's Ctrl+V on the shared screen: my copied files / picture get there first (the keys wait)
+  function rcfPaste(c) {
+    const s = rcf;
+    if (!s || s.role !== "ctl" || !s.on || rcCtl !== c) return Promise.resolve();
+    return (async () => {
+      const d = await rcfLocal({ op: "renew", rcid: s.rcid, now: true });   // a copy made a moment ago counts
+      if (rcf !== s) return;
+      if (d.ok) rcfMine(s, d);
+      const o = s.clipOid ? s.offers.get(s.clipOid) : null;
+      if (!o || o.pub.over || o.final === "done") return;
+      for (let i = 0; i < 30 && !s.peerFqAt && rcf === s; i++) await sleepMs(100);   // their side's files session (an older KASTR has none)
+      if (rcf !== s || !s.peerFq?.on) return;
+      if ((s.peerFq.done || []).some((x) => x && x.oid === o.pub.oid && x.state === "done")) return;
+      o.pub = { ...o.pub, get: 1 };
+      rcfFo(s);
+      s.pasteWait = { oid: o.pub.oid, at: Date.now() };
+      rcfPaint();
+      await new Promise((res) => { s.pasteRes = res; });
+    })();
+  }
+  // ---- a drop from my desktop onto the shared screen
+  function rcfDragOver(c, e) {
+    if (!rcf || rcf.role !== "ctl" || rcCtl !== c || !e.dataTransfer || ![...(e.dataTransfer.types || [])].includes("Files")) return;
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    c.cap.classList.add("rcfdrag");
+    clearTimeout(c.dragT);
+    c.dragT = setTimeout(() => c.cap?.classList.remove("rcfdrag"), 400);
+  }
+  async function rcfCollect(dt) {   // files + folders (webkitGetAsEntry) -> [{p, f} | {p, d: 1}]; read before the event ends
+    const out = [];
+    const entries = [...(dt.items || [])].filter((i) => i.kind === "file").map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null));
+    const plain = [...(dt.files || [])];
+    if (entries.length && entries.every(Boolean)) {
+      const walk = async (en, base, depth) => {
+        if (out.length >= 10000 || depth > 32) return;
+        const rel = base ? base + "/" + en.name : en.name;
+        if (en.isFile) { const f = await new Promise((res) => en.file(res, () => res(null))); if (f) out.push({ p: rel, f }); return; }
+        if (!en.isDirectory) return;
+        out.push({ p: rel, d: 1 });
+        const rd = en.createReader();
+        for (;;) {
+          const batch = await new Promise((res) => rd.readEntries(res, () => res([])));
+          if (!batch.length) break;
+          for (const k of batch) await walk(k, rel, depth + 1);
+        }
+      };
+      for (const en of entries) await walk(en, "", 0);
+      return out;
+    }
+    for (const f of plain) out.push({ p: f.name, f });
+    return out;
+  }
+  async function rcfDropOn(c, t, e) {
+    const s = rcf;
+    if (!s || s.role !== "ctl" || rcCtl !== c || !e.dataTransfer) return;
+    e.preventDefault(); e.stopPropagation();
+    c.cap.classList.remove("rcfdrag");
+    const p = rcPoint(t, e.clientX, e.clientY);
+    const got = rcfCollect(e.dataTransfer);   // synchronously first: the DataTransfer empties when the event ends
+    if (!rcIn(p)) { rcToast("Drop it on " + c.name + "\u2019s screen.", 4000); return; }
+    if (!s.on || !s.peerFq?.on) { rcToast(c.name + "\u2019s KASTR can\u2019t take files (it needs 0.21.83 or newer).", 6000, "warn"); return; }
+    const list = await got;
+    if (!list.length || rcf !== s) return;
+    const items = [], files = [];
+    for (const it of list) {
+      items.push(it.d ? { p: it.p, n: 0, d: 1, t: 0 } : { p: it.p, n: it.f.size, d: 0, t: Math.floor((it.f.lastModified || Date.now()) / 1000) });
+      files.push(it.d ? null : it.f);
+    }
+    const total = items.reduce((a, it) => a + (it.d ? 0 : it.n), 0), nf = items.filter((it) => !it.d).length;
+    const max = Number(s.peerFo?.caps?.max) || Number(s.caps?.max) || 2048 * 1048576;
+    if (total > max) { rcToast("That is " + rcfSize(total) + " \u2014 over the " + rcfSize(max) + " limit for one transfer.", 6000, "warn"); return; }
+    const pub = { oid: rcfHex(8), kind: "drop", cs: RCF_CS, items, total, files: nf, dirs: items.length - nf, pt: [p.x, p.y], at: Date.now() };
+    pub.name = rcfDescribe({ ...pub, name: "" });
+    const o = { pub, src: "drop", files, sent: new Map(), queued: new Set(), bytes: 0, live: true, at: Date.now() };
+    rcfPlan(o);
+    s.offers.set(pub.oid, o);
+    rcfFo(s);
+    log("Remote control files: dropped " + pub.name + " (" + rcfSize(total) + ") on " + c.name + "\u2019s screen at " + p.x.toFixed(3) + ", " + p.y.toFixed(3));
+    rcToast("Sending " + pub.name + " (" + rcfSize(total) + ") to " + c.name + "\u2026", 4000);
+    rcfPaint();
+  }
+  // ---- the card: transfers going on, "Get them", the notes
+  let rcfPaintT = 0;
+  const rcfPaintSoon = () => { if (!rcfPaintT) rcfPaintT = setTimeout(() => { rcfPaintT = 0; rcfPaint(); }, 150); };
+  function rcfRows() {
+    const s = rcf, rows = [], now = Date.now();
+    if (s) {
+      const x = s.rx;
+      if (x) {
+        const pct = x.total ? Math.min(100, Math.floor(x.bytes * 100 / x.total)) : (x.N ? Math.floor(x.ngot * 100 / x.N) : 0);
+        rows.push({ k: "rx", pct, b: ["rxcancel", "Cancel"],
+                    t: "Receiving " + rcfDescribe(x.e.pub) + " from " + s.name + " \u2014 " + (x.nfiles > 1 ? x.files + " of " + x.nfiles + " files, " : "") + rcfSize(x.bytes) + " of " + rcfSize(x.total) + " (" + pct + "%)" });
+      }
+      for (const [oid, e] of s.theirs) if (e.state === "wait") rows.push({ k: "get-" + oid, b: ["get:" + oid, "Get " + (e.pub.files === 1 && !e.pub.dirs ? "it" : "them")], t: s.name + " copied " + rcfDescribe(e.pub) + " (" + rcfSize(e.pub.total) + ")" });
+      for (const o of s.offers.values()) {
+        if (!o.prog || o.final) continue;
+        const pr = o.prog, pct = pr.total ? Math.min(100, Math.floor((Number(pr.bytes) || 0) * 100 / pr.total)) : 0;
+        const who = s.role === "sharer" ? s.name + " is copying " + rcfDescribe(o.pub) + " from your computer" : "Sending " + rcfDescribe(o.pub) + " to " + s.name;
+        rows.push({ k: "tx-" + o.pub.oid, pct, b: ["txcancel:" + o.pub.oid, "Cancel"],
+                    t: who + " \u2014 " + (pr.nfiles > 1 ? (Number(pr.files) || 0) + " of " + pr.nfiles + " files, " : "") + rcfSize(pr.bytes) + " of " + rcfSize(pr.total) + " (" + pct + "%)" });
+      }
+      if (s.pasteWait && !rows.some((r) => r.k === "tx-" + s.pasteWait.oid)) rows.push({ k: "paste", t: "Your paste goes as soon as " + s.name + " has the files\u2026", b: ["pastego", "Paste without them"] });
+    }
+    for (const n of rcfNotes) if (now - n.at < RCF_NOTE_MS && !rows.some((r) => r.k === n.k)) rows.push({ k: n.k, t: n.t, level: n.level, b: ["close:" + n.k, "\u00d7"] });
+    return rows;
+  }
+  function rcfPaint() {
+    const rows = rcfRows();
+    let el = document.getElementById("kRcFiles");
+    if (!rows.length) { if (el) el.hidden = true; return; }
+    if (!el) {
+      el = document.createElement("div"); el.id = "kRcFiles"; el.hidden = true;
+      el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite");
+      el.addEventListener("click", (ev) => {
+        const b = ev.target.closest("button[data-a]");
+        if (!b) return;
+        ev.stopPropagation();
+        rcfAction(b.dataset.a);
+      });
+      document.body.appendChild(el);
+    }
+    // rows are kept by key and updated in place: a progress repaint (several a second) never replaces the Cancel button
+    // under the pointer (lab v02183: a click on a rebuilt row landed on a detached button)
+    const keep = new Map([...el.children].map((n) => [n.dataset.k, n]));
+    let prev = null;
+    for (const r of rows) {
+      let row = keep.get(r.k);
+      keep.delete(r.k);
+      if (!row) { row = document.createElement("div"); row.dataset.k = r.k; const t0 = document.createElement("span"); t0.className = "t"; row.appendChild(t0); }
+      const cls = "rcfrow" + (r.level ? " " + r.level : "");
+      if (row.className !== cls) row.className = cls;
+      const t = row.querySelector(".t");
+      if (t.textContent !== r.t) t.textContent = r.t;
+      let bar = row.querySelector(".bar");
+      if (r.pct !== undefined) {
+        if (!bar) { bar = document.createElement("span"); bar.className = "bar"; bar.appendChild(document.createElement("i")); row.insertBefore(bar, t.nextSibling); }
+        bar.firstChild.style.width = r.pct + "%";
+      } else if (bar) bar.remove();
+      let btn = row.querySelector("button");
+      if (r.b) {
+        if (!btn) { btn = document.createElement("button"); btn.type = "button"; row.appendChild(btn); }
+        if (btn.dataset.a !== r.b[0]) btn.dataset.a = r.b[0];
+        if (btn.textContent !== r.b[1]) btn.textContent = r.b[1];
+        btn.title = r.b[1] === "\u00d7" ? "Close" : "";
+      } else if (btn) btn.remove();
+      const at = prev ? prev.nextSibling : el.firstChild;
+      if (row !== at) el.insertBefore(row, at);
+      prev = row;
+    }
+    for (const n of keep.values()) n.remove();
+    el.hidden = false;
+  }
+  function rcfAction(a) {
+    const s = rcf;
+    if (a.startsWith("close:")) { const i = rcfNotes.findIndex((n) => n.k === a.slice(6)); if (i >= 0) rcfNotes.splice(i, 1); rcfPaint(); return; }
+    if (!s) return;
+    if (a === "rxcancel") rcfRxEnd(s, "cancel", "");
+    else if (a.startsWith("get:")) rcfQueue(s, a.slice(4));
+    else if (a.startsWith("txcancel:")) rcfTxCancel(s, a.slice(9));
+    else if (a === "pastego" && s.pasteRes) { const r = s.pasteRes; s.pasteWait = null; s.pasteRes = null; r(); }
+    rcfPaint();
+  }
+  setInterval(() => { if (rcfNotes.length || rcf) rcfPaint(); }, 1000);   // notes fade out
+  window.__rcf = {   // rig (the lab) -- never the bytes, never the key
+    state: () => {
+      const s = rcf;
+      return { notes: rcfNotes.map((n) => [n.k, n.t, n.level]), rows: rcfRows().map((r) => [r.k, r.t, r.pct ?? null]),
+               s: s && { role: s.role, rcid: s.rcid, on: s.on, enc: !!s.key, peerEnc: s.peerEnc, peerOn: !!s.peerFq?.on, clipOid: s.clipOid,
+                         offers: [...s.offers.values()].map((o) => ({ oid: o.pub.oid, kind: o.pub.kind, name: o.pub.name, total: o.pub.total, live: !!o.live, final: o.final || "", sentBytes: o.bytes, prog: o.prog ? { bytes: o.prog.bytes, got: o.prog.got, N: o.prog.N } : null })),
+                         theirs: [...s.theirs].map(([k, e]) => [k, e.state, e.pub.kind, e.pub.name, e.pub.total]),
+                         rx: s.rx && { oid: s.rx.oid, ngot: s.rx.ngot, N: s.rx.N, bytes: s.rx.bytes, total: s.rx.total, files: s.rx.files, nfiles: s.rx.nfiles, ms: Date.now() - s.rx.t0 },
+                         rxDone: s.rxDone.slice(), pasteWait: s.pasteWait, fd: s.subFd?.n || 0 } };
+    },
+    get: (oid) => { if (rcf) rcfQueue(rcf, oid); }, cancel: () => { if (rcf) rcfRxEnd(rcf, "cancel", ""); }, action: rcfAction, size: rcfSize,
+  };
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
   // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
   // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)
@@ -10812,6 +12276,7 @@
             tip: sp ? "Its own tile goes again for everyone in " + roomTitle(CHANNEL) + " (its grid cell stays)" : "A tile of its own for everyone in " + roomTitle(CHANNEL) + " \u2014 pin or spotlight it; its grid cell stays, other rooms are untouched" });
         }
         { const ri = rcMenuItem(name); if (ri) items.push(ri); }   // 0.21.79: Request control (publishers and admins; a native share)
+        { const pi = ptMenuItem(name); if (pi) items.push(pi); }   // 0.21.83: Point on this screen (anyone in the room)
         items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
           items.push({ value: "astop", label: "Stop this share (admin)" });
@@ -10861,6 +12326,7 @@
           if (extra?.pick && String(v).startsWith("pinv")) { extra.pick(v); return; }   // 0.21.78
           if (v === "lat") { latencyToggle(name); return; }
           if (String(v).startsWith("rc")) { rcMenuPick(name, v); return; }   // 0.21.79: remote control
+          if (String(v).startsWith("pnt")) { ptMenuPick(name, v); return; }   // 0.21.83: pointer mode
           if (v === "wrall") { wrSpotForAll(name); return; }   // 0.21.49: bring it into my room, then spotlight it
           if (v === "wrsound" || v === "wrstop" || v === "wrpick") {   // 0.21.44; 0.21.47: one source / the room's list
             const r0 = wrRoomOf(name), w0 = r0 && watchRooms.get(r0);
@@ -10933,6 +12399,15 @@
         b.type = "button"; b.className = "prcbtn";
         b.innerHTML = icon("mouse") + "<span>Request control</span>";
         b.addEventListener("click", (e) => { e.stopPropagation(); rcMenuPick(name, b.dataset.v || "rcask"); });
+        b.addEventListener("dblclick", (e) => e.stopPropagation());
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        pane.appendChild(b);
+      }
+      {   // 0.21.83: a spotlit native share of someone else -- Point (anyone in the room; ptPaintPills shows it when the menu would offer it)
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "pptbtn";
+        b.innerHTML = icon("mouse") + "<span>Point</span>";
+        b.addEventListener("click", (e) => { e.stopPropagation(); ptMenuPick(name, b.dataset.v || "pntask"); });
         b.addEventListener("dblclick", (e) => e.stopPropagation());
         b.addEventListener("pointerdown", (e) => e.stopPropagation());
         pane.appendChild(b);
@@ -12100,6 +13575,7 @@
     if (src?.share) {   // 0.21.73 (Kenton: "a pause share button ... before resharing")
       items.push({ value: "spause", label: src.sharePaused ? "Resume sharing" : "Pause sharing" });
       if (ref.peer === window.__publisher?.peer) items.push({ value: "swap", label: "Share something else\u2026" });
+      for (const it of ptShareItems(CHANNEL + "/" + hangName(ref.name))) items.push(it);   // 0.21.83: pointer mode -- Let everyone point, Show my clicks, take a pointer off
     } else if (src?.pausable) items.push({ value: "pause", label: src.videoPaused ? "Resume video" : "Pause video" });
     if (ref.kind === "rtsp" && !src?.share) {   // 0.8.12 composite menu; 0.9.2: feeds mode on EVERY feed's menu (a lone feed has no composite); 0.21.73: not on a screen share
       const gf = window.__gridFeeds?.get?.() || "both";
@@ -12149,6 +13625,8 @@
         if (c) sendControl(ref.peer, ref.id, { sharePaused: !c.sharePaused });
       } else if (v === "swap") {      // 0.21.73
         window.__shareSwap?.(ref.id);
+      } else if (String(v).startsWith("pnt")) {   // 0.21.83: pointer mode
+        ptShareMenuPick(CHANNEL + "/" + hangName(ref.name), v);
       } else if (v.startsWith("gf-")) {
         window.__gridFeeds?.set?.(v.slice(3));   // 0.8.12
       } else if (v === "lock") {
@@ -15144,7 +16622,7 @@
         let bp;
         try { bp = org.createBroadcast(Net.Path.from(myPath)); } catch { return; }
         e.cleanup(() => { try { bp.close(); } catch {} tracks = {}; chatWin = null; });
-        for (const name of trackNames) { try { tracks[name] = bp.createTrack(name, { priority: opts?.priority ?? STATE_PRIORITY, maxAge: opts?.maxAge ?? STATE_LAT_MS }); } catch {} }
+        for (const name of trackNames) { const o = opts?.tracks?.[name] || opts; try { tracks[name] = bp.createTrack(name, { priority: o?.priority ?? STATE_PRIORITY, maxAge: o?.maxAge ?? STATE_LAT_MS }); } catch {} }   // 0.21.83: + per-track opts
         // Group sequences must never go backwards on a resumed broadcast: a fresh Track.Producer
         // starts at 0, and a relay that resumed the same path (linger) keeps existing subscribers
         // who then drop every group below the old high-water mark -- values vanish until the
@@ -15186,7 +16664,8 @@
   if (HC_RE.test(profile?.color || "")) pubModel.hc = profile.color;   // 0.21.61
   const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
   const pubState = stateProducer(() => (isPersonalSlug(CHANNEL) ? "" : "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer()), ["state.json"]);   // 0.21.75: no public state in My room
-  const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json"]);
+  // 0.21.83: + pt.json -- my pointer on someone's share (pointer mode): the newest value is all that matters (255, 2 s)
+  const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json", "pt.json"], { tracks: { "pt.json": { priority: 255, maxAge: 2000 } } });
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
   function stateCommit() {
     pubModel.peer = statePeer(); roomModel.peer = pubModel.peer;
@@ -15277,6 +16756,11 @@
         case "rc": {       // 0.21.79: my native shares that can be remote-controlled [{p, s, l, no?}]
           const list = (Array.isArray(value) ? value : []).filter((x) => x && x.p).slice(0, 16);
           if (list.length) roomModel.rc = list; else delete roomModel.rc;
+          break;
+        }
+        case "pt": {       // 0.21.83: the shares I point on (their sharer subscribes to my pt.json)
+          const list = (Array.isArray(value) ? value : []).filter((x) => typeof x === "string").slice(0, 8);
+          if (list.length) roomModel.pt = list; else delete roomModel.pt;
           break;
         }
         default: return;
@@ -15475,6 +16959,7 @@
     if (!v || typeof v !== "object") return;
     const prev = h.prev;
     rcSharesApply(path, v.rc);   // 0.21.79: their shares that can be remote-controlled
+    ptWantApply(path, v.pt);     // 0.21.83: the shares they point on
     // spotlight / recording: the announce maps keyed by the member path
     // 0.21.32: `spots` (several)
     const vs = Array.isArray(v.spots) ? v.spots : [];
@@ -15524,6 +17009,7 @@
   }
   function memberClear(path, h) {
     rcShares.delete(path);   // 0.21.79
+    ptWant.delete(path);     // 0.21.83
     const hadLit = spotVotes.delete(path + "#lit");   // 0.21.0
     const hadOff = spotOffs.delete(path);             // 0.21.32
     if (spotVotes.delete(path) || hadLit || hadOff) spotApplyWinner();
@@ -16208,16 +17694,25 @@
     try { queueRelayout(); } catch {}
   }
   try { if (isPhone() || localStorage.getItem("kastr.sidebar") !== "1") document.body.classList.add("sb-collapsed"); } catch {}   // 0.13.0 (F3): collapsed by default (the boot script already did this; idempotent); 0.21.5: phones always
+  // 0.21.83 (Kenton's picture: a panel outline with a chevron, filled on hover): left chevron = collapse, right = expand
+  function sbToggleSvg(open) {
+    const ch = open ? "M14 7.2 11.2 10l2.8 2.8" : "M11.2 7.2 14 10l-2.8 2.8";
+    return '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke-linecap="round" stroke-linejoin="round">'
+      + '<g class="sbo" stroke="currentColor" stroke-width="1.6"><rect x="2.3" y="3.3" width="15.4" height="13.4" rx="3"/><path d="M7.4 3.3v13.4"/><path d="' + ch + '"/></g>'
+      + '<g class="sbf"><path fill="currentColor" d="M5.3 3.3h1.3v13.4H5.3a3 3 0 0 1-3-3V6.3a3 3 0 0 1 3-3z"/><path fill="currentColor" d="M8.2 3.3h6.5a3 3 0 0 1 3 3v7.4a3 3 0 0 1-3 3H8.2z"/>'
+      + '<path d="' + ch + '" stroke="var(--surface-2)" stroke-width="1.8"/></g></svg>';
+  }
   // 0.21.65: the edge tab -- a chevron pointing left while the list is open (collapse), right while it is shut (expand).
   // It follows every way the list opens or shuts (the tab, the scrim, a card click on a phone, a form opening the rail).
   {
     const edge = document.getElementById("sbEdge");
     if (edge) {
-      edge.innerHTML = icon("sbChev");
       const paint = () => {
         const open = isPhone() ? document.body.classList.contains("sb-open") : !sbCollapsed();
         const t = open ? "Collapse rooms" : "Expand rooms";
         edge.classList.toggle("closed", !open);
+        const want = open ? "c" : "e";
+        if (edge.dataset.ic !== want) { edge.dataset.ic = want; edge.innerHTML = sbToggleSvg(open); }   // 0.21.83
         edge.title = t; edge.setAttribute("aria-label", t); edge.setAttribute("aria-expanded", open ? "true" : "false");
       };
       edge.addEventListener("click", (e) => { e.stopPropagation(); sbToggle(); paint(); });

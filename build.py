@@ -942,8 +942,10 @@ def main():
         "--hidden-import", "kastr_screen", "--hidden-import", "kastr_screen_sources",   # 0.21.20: native screen share (lazy imports)
         "--hidden-import", "kastr_loopback", "--hidden-import", "kastr_overlay",
         "--hidden-import", "kastr_rc", "--hidden-import", "kastr_x11",   # 0.21.79: remote control (lazy imports)
+        "--hidden-import", "kastr_rcfiles", "--hidden-import", "kastr_rcfiles_x11",   # 0.21.83: files + pictures over remote control (lazy imports)
         "--hidden-import", "kastr_rcadmin",   # 0.21.83 (D): unattended remote control for fleet admins (lazy import)
         "--hidden-import", "kastr_record",   # 0.21.81: Record's save formats (lazy import)
+        "--hidden-import", "kastr_point",   # 0.21.83: pointer mode -- pointers + sonar clicks on the sharer's screen (lazy import)
         "--hidden-import", "kastr_mdns", "--hidden-import", "kastr_tabs", "--hidden-import", "kastr_micmute", "--hidden-import", "kastr_lock",   # 0.21.41: mic mute, session lock   # 0.21.22: relay discovery, browser tabs (lazy imports)
         "--noconfirm", "--clean", "--onefile", "--noconsole",
         "--name", NAME,

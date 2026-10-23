@@ -575,7 +575,7 @@ class ViewerPointers(unittest.TestCase):
         p = read("moq-watch-lite.html")
         # only while the share is controlled (c), the sharer's arrow + the controller's -- never the controller's own on their own
         # screen, never one the capture already shows (cap)
-        self.assertIn("rcGrant && rcGrant.share === s.path ? { c: 1 } : {}));", p)
+        self.assertIn("rcGrant && rcGrant.share === s.path ? { c: 1 } : {}, ptListFields(s.path)));", p)   # 0.21.83: + the pointer fields
         self.assertIn("for (const x of list) if (x.c && tiles.has(x.p)) want.set(x.p, pp[0] + \"/\" + pp[1] + \"/~rc/\" + pp[3]);", p)
         self.assertIn("if (!p || !p.on || (k === \"c\" && (p.cap || rcCtl?.share === share))) continue;", p)
         self.assertIn('h.sub = stateSubscribe(connection, path, "ptr.json", "snapshot", (v) => rcPtrArrive(share, h, v), RC_PRIO);', p)
@@ -583,9 +583,9 @@ class ViewerPointers(unittest.TestCase):
         self.assertIn('p: [{ k: "s", n: (myOpName() || "Sharer").slice(0, 28), c: rcMyColor(), x: ptr.s[0], y: ptr.s[1], on: ptr.s[2] ? 1 : 0, cap: ptr.scap ? 1 : 0 },', p)
         self.assertIn('{ k: "c", n: String(g.name).slice(0, 28), c: g.ctlColor, x: ptr.c[0], y: ptr.c[1], on: ptr.c[2] ? 1 : 0, cap: ptr.cap ? 1 : 0 }] });', p)
         self.assertIn('color: ctlColor });', p)
-        self.assertIn('["in.json", "st.json", "ptr.json"], { priority: RC_PRIO, maxAge: 2000 }', p)
+        self.assertIn('["in.json", "st.json", "ptr.json", "pts.json"], { priority: RC_PRIO, maxAge: 2000 }', p)   # 0.21.83: + pts.json (pointer mode)
         # Kenton's words on the prompt
-        self.assertIn("They\\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there.", p)
+        self.assertIn("with their own pointer and their name on your screen.", p)   # 0.21.83: the prompt also names file transfer
         self.assertIn("Your mouse and keyboard keep working at the same time.", p)
 
 
@@ -719,6 +719,17 @@ class ShareMode(unittest.TestCase):
         self.assertIn('"in.json", "snapshot", (v) => rcInArrive(g, v), RC_PRIO)', p)
         self.assertIn('"st.json", "snapshot", (v) => rcStArrive(c, v), RC_PRIO)', p)
 
+
+
+class NoTooltipWhileControlling(unittest.TestCase):
+    # 0.21.83 (Kenton: hovering the screen he controls popped up a grey box explaining it)
+    def test_capture_layer_has_no_title(self):
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "moq-watch-lite.html"), encoding="utf-8", newline="") as f:
+            p = f.read()
+        i = p.index("  function rcCapAttach(c, t) {")
+        body = p[i:p.index("t.pane.appendChild(cap);", i)]
+        self.assertNotIn(".title", body)
+        self.assertIn('cap.setAttribute("aria-label", "Controlling "', body)
 
 if __name__ == "__main__":
     unittest.main()

@@ -173,5 +173,30 @@ class ShareClosesOnChoice(unittest.TestCase):
         self.assertNotIn("#sharePop .close", body)
 
 
+
+class ZoomButtonsOnlyWithTheLabel(unittest.TestCase):
+    # 0.21.83 (Kenton: "hide the + and - buttons for zoom except when the zoom label is showing also")
+    p = page()
+
+    def test_hidden_unless_zoomed(self):
+        rule = "#stage .pane:not(.zoomed):not(.feedview) .zoomctl, #stage .pubpane:not(.zoomed) .zoomctl { display:none; }"
+        self.assertIn(rule, self.p)
+        self.assertGreater(self.p.index(rule), self.p.index("#stage .pane.zoomable .zoomctl, #stage .pubpane.mainstage[data-grid] .zoomctl"))   # after the show rule
+        self.assertIn("#stage .pane.zoomed .zoomlbl, #stage .pane.feedview .zoomlbl, #stage .pubpane.zoomed .zoomlbl { display:block;", self.p)   # the same states as the label
+
+
+class RoomsToggleInTheTopbar(unittest.TestCase):
+    # 0.21.83 (Kenton: "make the expand/collapse icon more like this and up in the bar next to the room name. Expand would not
+    # point the same way on the arrow.")
+    p = page()
+
+    def test_toggle(self):
+        tb = between(self.p, '<div id="topbar">', 'id="roomBanner"')
+        self.assertIn('id="sbEdge" class="sbedge"', tb)                       # in the topbar, just before the room name
+        self.assertNotIn('id="sbEdge"', between(self.p, '<aside id="sidebar">', '</aside>'))
+        self.assertIn('const ch = open ? "M14 7.2 11.2 10l2.8 2.8" : "M11.2 7.2 14 10l-2.8 2.8";', self.p)   # left = collapse, right = expand
+        self.assertNotIn(".sbedge.closed .icon { transform:rotate(180deg); }", self.p)   # the panel never mirrors
+        self.assertIn(".sbedge:hover .sbf, .sbedge:focus-visible .sbf { display:inline; }", self.p)   # filled on hover
+
 if __name__ == "__main__":
     unittest.main()

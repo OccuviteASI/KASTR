@@ -383,6 +383,40 @@ class WarpState:
             return out
 
 
+# ---- 0.21.83: the share's pill on the controller's path ------------------------------------------------------------------
+# Kenton: "When remote controlling, I am unable to see the red sharing pill at the top, so when I try to click in that space it
+# doesn't work to click on the things behind the pill." 0.21.79-0.21.82 DROPPED a press / wheel on the pill's rect (the
+# controller cannot see it: it is left out of the capture). Now it goes to the window behind: a POSTED click needs nothing (it
+# is sent to the child window under the point); a warp-click / drag / wheel / second-X-pointer click would land on the pill, so
+# the pill turns click-through (Windows: WS_EX_TRANSPARENT on the layered pill; X11: an empty input shape) from just before the
+# controller's input until PASS_HOLD_S after their last event on it. KASTR's own buttons are still never pressed by the
+# controller (kastr_overlay ignores injected presses; on X11 the input passes through the pill).
+PASS_HOLD_S = 0.4
+ADMIN_KEEP_S = 2.0      # 0.21.83: s the administrator window's rect stays published after the controller's pointer left it
+ADMIN_NOTE_S = 6.0      # 0.21.83: s the sharer's pill keeps its note after the last click Windows blocked
+ADMIN_HZ = 7            # 0.21.83: administrator-window checks a second at most (only while the controller's pointer moves)
+CTL_BUTTONS = [("stop", "Stop control"), ("share-stop", "Stop sharing")]   # Kenton: "have that as well as stop sharing"
+
+
+def bar_label(name, note=False):
+    """0.21.83: the control pill's (shorter) label; note = the controller's pointer is on an administrator window."""
+    n = str(name or "Someone")[:40]
+    return n + (" has control \u00b7 admin window blocks clicks" if note else " has control (Ctrl+Alt+Space)")
+
+
+def norm_rect(r, surf):
+    """0.21.83: a screen rect {x, y, w, h} -> [u0, v0, u1, v1] on the shared surface (clipped, 4 decimals), None when it misses."""
+    if not r or not surf or surf.get("w", 0) <= 0 or surf.get("h", 0) <= 0:
+        return None
+    u0 = max(0.0, (r["x"] - surf["x"]) / surf["w"])
+    v0 = max(0.0, (r["y"] - surf["y"]) / surf["h"])
+    u1 = min(1.0, (r["x"] + r["w"] - surf["x"]) / surf["w"])
+    v1 = min(1.0, (r["y"] + r["h"] - surf["y"]) / surf["h"])
+    if u1 <= u0 or v1 <= v0:
+        return None
+    return [round(u0, 4), round(v0, 4), round(u1, 4), round(v1, 4)]
+
+
 # ---- Windows: SendInput ----------------------------------------------------------------------------------------------
 import ctypes  # noqa: E402
 
@@ -476,6 +510,7 @@ class MockBackend:
         self.cursor = (0, 0)
         self.ptr_shown = None
         self.ctl = []
+        self.admin = None
 
     def surface_rect(self, url):
         return self.rects.get(url)
@@ -526,6 +561,9 @@ class MockBackend:
 
     def blocked(self, url, px=None, py=None):
         return self.blocked_why
+
+    def admin_rect(self, url, px, py):   # 0.21.83: `admin` = the rect of an administrator window under every point, or None
+        return self.admin
 
     def clip_get(self):
         return self.clip
@@ -980,6 +1018,29 @@ class WinBackend:
             return "elevated"
         return ""
 
+    def admin_rect(self, url, px, py):
+        """0.21.83: where the administrator window under the controller's pointer is ({x, y, w, h}, its visible frame), or
+        None -- so the controller's view can pin a notice on it. Queries only (the same integrity check as blocked())."""
+        s = surface_of(url)
+        h = s[1] if s and s[0] != "monitor" else self._root_at(px, py)
+        if not h:
+            return None
+        mine, theirs = self._integrity(os.getpid()), self._integrity(self._pid_of(h))
+        if mine is None or not (theirs is None or theirs > mine):
+            return None
+
+        class RC(ctypes.Structure):
+            _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long), ("r", ctypes.c_long), ("b", ctypes.c_long)]
+        r = RC()
+        try:
+            dwm = ctypes.WinDLL("dwmapi")
+            ok = dwm.DwmGetWindowAttribute(ctypes.c_void_p(h), 9, ctypes.byref(r), ctypes.sizeof(r)) == 0   # DWMWA_EXTENDED_FRAME_BOUNDS
+        except OSError:
+            ok = False
+        if not ok and not self.u32.GetWindowRect(ctypes.c_void_p(h), ctypes.byref(r)):
+            return None
+        return {"x": r.l, "y": r.t, "w": r.r - r.l, "h": r.b - r.t} if r.r > r.l and r.b > r.t else None
+
     def clip_seq(self):
         return int(self.u32.GetClipboardSequenceNumber())
 
@@ -1113,7 +1174,22 @@ class WinHooks:
 
 
 class WinUI:
-    """The share's own red-border bar (kastr_overlay through kastr_screen) turns into the prompt or the control bar."""
+    """The share's own red-border bar (kastr_overlay through kastr_screen) turns into the prompt or the control bar.
+    0.21.83: + passthrough (the pill click-through for the controller's input on it) and stop_share (its Stop sharing)."""
+
+    def passthrough(self, feed, on):
+        try:
+            import kastr_screen
+            return kastr_screen.overlay_passthrough(int(feed), bool(on))
+        except Exception:
+            return False
+
+    def stop_share(self, feed):
+        try:
+            import kastr_screen
+            return kastr_screen.overlay_request_stop(int(feed))
+        except Exception:
+            return False
 
     def show(self, feed, url, mode, label, buttons, on_button, rect_fn=None):
         import kastr_screen
@@ -1160,6 +1236,13 @@ class X11UI:
         if b and b.geom:
             return {"x": b.geom[0], "y": b.geom[1], "w": b.geom[2], "h": b.H}
         return None
+
+    def passthrough(self, feed, on):   # 0.21.83: an empty input shape while the controller's input lands on the bar
+        b = self.bars.get(feed)
+        return bool(b and b.passthrough(on))
+
+    def stop_share(self, feed):   # 0.21.83: X11 has no share pill of its own -- RemoteControl.share_stop does it
+        return False
 
 
 class X11Backend:
@@ -1355,6 +1438,9 @@ class X11Backend:
     def blocked(self, url, px=None, py=None):
         return ""
 
+    def admin_rect(self, url, px, py):   # 0.21.83: no administrator windows to tell about on X11
+        return None
+
     def flush(self):
         self.inj.flush()
         if self.mpx is not None:
@@ -1437,13 +1523,22 @@ class RemoteControl:
         self._clip_out = None
         self._clip_n = 0
         self.ctl_info = {}
-        self.stats = {"in": 0, "dropped": 0, "paused": 0, "outside": 0, "blocked": 0, "queued": 0, "post": 0, "warp": 0, "mpx": 0}
+        self.stats = {"in": 0, "dropped": 0, "paused": 0, "outside": 0, "blocked": 0, "queued": 0, "post": 0, "warp": 0, "mpx": 0,
+                      "bar": 0}   # 0.21.83: + presses / wheels that went THROUGH the pill
+        self.share_stop = None        # 0.21.83: share_stop(feed id) ends the share (kastr_rtsp Bridge.remove; bridge_stop)
+        self._pass_on = False         # 0.21.83: the pill is click-through right now
+        self._pass_until = 0.0
+        self.admin = None             # 0.21.83: {"rect", "at"}: the administrator window under the controller's pointer
+        self._admin_t = 0.0
+        self._admin_blk = -1e9        # 0.21.83: when Windows last blocked a click there
+        self._note = False            # 0.21.83: the control pill shows its administrator-window note
 
     # ---- capabilities
     def caps(self):
         ok, why, kind = self._caps if self._caps is not None else platform_caps()
         return {"ok": True, "available": bool(ok), "why": why, "platform": kind, "clipMax": CLIP_MAX, "hold": LOCAL_HOLD, "lease": LEASE_S,
-                "pointers": True, "ws": True}   # 0.21.80: two pointers; the loopback WebSocket
+                "pointers": True, "ws": True,   # 0.21.80: two pointers; the loopback WebSocket
+                "point": True}   # 0.21.83: pointer mode (kastr_point) -- other people's pointers + sonar clicks, never input
 
     def _backend(self):
         if self.backend is None:
@@ -1532,6 +1627,7 @@ class RemoteControl:
             self.held_keys, self.held_buttons = {}, {}
             self.phys, self.wq = {}, deque()
             self.ptr, self._ptr_last = None, None
+            self.admin, self._admin_blk, self._note, self._pass_on = None, -1e9, False, False   # 0.21.83
             self.last_local = -1e9
             self._clip_out, self._clip_mine = None, None
             try:
@@ -1575,9 +1671,14 @@ class RemoteControl:
         ui = self.ui()
         if not g or ui is None:
             return
-        text = g.get("bar") or ("%s is controlling your %s — Stop control (Ctrl+Alt+Space)" % (g["name"], "window" if surface_of(g["url"])[0] != "monitor" else "screen"))   # 0.21.83 (D): a fleet admin's own text
+        # 0.21.83 (Kenton: "In the top pill on the side being controlled, instead of only having stop control while being
+        # controlled, have that as well as stop sharing, to close out the share and control at the same time."): two buttons, a
+        # shorter label, and a short note while the controller's pointer is on an administrator window
+        text = bar_label(g["name"], self._note)
+        if g.get("bar") and not self._note:   # 0.21.83 (D): a fleet admin's unattended session names them ("... (fleet admin) is controlling this machine")
+            text = g["bar"]
         try:
-            ui.show(g["feed"], g["url"], "control", text, [("stop", "Stop control")], self._bar_button,
+            ui.show(g["feed"], g["url"], "control", text, list(CTL_BUTTONS), self._bar_button,
                     rect_fn=lambda u=g["url"]: self._bar_rect(u))
         except Exception as e:
             self.log("rc: control bar: %s" % e)
@@ -1588,8 +1689,90 @@ class RemoteControl:
         return dict(r, screen=surface_of(url)[0] == "monitor") if r else None
 
     def _bar_button(self, key):
-        if key in ("stop", "share-stop"):
+        if key == "stop":
             self.end(None, "bar")
+        elif key == "share-stop":   # 0.21.83: control ends first, then the share
+            self.stop_both()
+
+    def stop_both(self):
+        """0.21.83: the control pill's "Stop sharing": control ends (every held key / button let go), then the share stops
+        -- through the pill's own Stop sharing (Windows) or share_stop (Bridge.remove)."""
+        g = self.grant
+        if g is None:
+            return False
+        feed = g["feed"]
+        self.log("rc: Stop sharing on the control bar -- control ends, then the share")
+        self.end(g["rcid"], "share")
+        ui = self.ui()
+        fn = getattr(ui, "stop_share", None) if ui is not None else None
+        try:
+            if fn is not None and fn(feed):
+                return True
+        except Exception as e:
+            self.log("rc: stop sharing: %s" % e)
+        if self.share_stop is not None:
+            try:
+                self.share_stop(feed)
+                return True
+            except Exception as e:
+                self.log("rc: stop sharing: %s" % e)
+        return False
+
+    # ---- 0.21.83: the pill click-through for the controller's input on it
+    def _bar_pass(self, feed):
+        self._pass_until = self.clock() + PASS_HOLD_S
+        if self._pass_on:
+            return True
+        ui = self.ui()
+        fn = getattr(ui, "passthrough", None) if ui is not None else None
+        try:
+            self._pass_on = bool(fn and fn(feed, True))
+        except Exception:
+            self._pass_on = False
+        return self._pass_on
+
+    def _bar_unpass(self, feed, force=False):
+        if not self._pass_on:
+            return
+        if not force and (self.clock() < self._pass_until or any(m in ("warp", "mpx") for m in self.held_buttons.values())):
+            return
+        self._pass_on = False
+        ui = self.ui()
+        fn = getattr(ui, "passthrough", None) if ui is not None else None
+        try:
+            if fn:
+                fn(feed, False)
+        except Exception:
+            pass
+
+    # ---- 0.21.83: the administrator window under the controller's pointer (where the controller's notice goes)
+    def _admin_check(self, b, url, p, force=False):
+        now = self.clock()
+        if not force and now - self._admin_t < 1.0 / ADMIN_HZ:
+            return
+        self._admin_t = now
+        fn = getattr(b, "admin_rect", None)
+        try:
+            r = fn(url, p[0], p[1]) if fn is not None and p else None
+        except Exception:
+            r = None
+        if r:
+            self.admin = {"rect": dict(r), "at": now}
+        elif self.admin and now - self.admin["at"] > ADMIN_KEEP_S:
+            self.admin = None
+
+    def _note_sync(self):
+        """The control pill's note follows the administrator window (checked every 0.25 s by the watch thread)."""
+        g = self.grant
+        if g is None:
+            return
+        now = self.clock()
+        if self.admin and now - self.admin["at"] > ADMIN_KEEP_S:
+            self.admin = None
+        want = bool(self.admin) or now - self._admin_blk < ADMIN_NOTE_S
+        if want != self._note:
+            self._note = want
+            self._bar()
 
     def renew(self, rcid):
         with self.lock:
@@ -1620,6 +1803,8 @@ class RemoteControl:
                 mon.stop()
             except Exception:
                 pass
+        self._bar_unpass(g["feed"], force=True)   # 0.21.83: the pill is clickable again
+        self.admin, self._note = None, False
         ui = self.ui()
         if ui is not None:
             try:
@@ -1666,6 +1851,8 @@ class RemoteControl:
             with self.lock:
                 if self.wq:
                     self._drain()   # a warp that waited too long goes, or one whose drag ended runs
+                self._bar_unpass(g["feed"])   # 0.21.83: PASS_HOLD_S after the controller's last input on the pill
+            self._note_sync()                 # 0.21.83
         return why
 
     # ---- the person at the keyboard (0.21.80: tracked, never a pause)
@@ -1881,6 +2068,9 @@ class RemoteControl:
                     if not p:
                         continue
                     self._ptr_set(p)
+                    self._admin_check(b, g["url"], p)   # 0.21.83: an administrator window under it? (the controller's notice)
+                    if self.held_buttons and bar and in_rect(p[0], p[1], bar):
+                        self._bar_pass(g["feed"])   # 0.21.83: a drag across the pill goes through it
                     if self.held_buttons:   # a drag: the held buttons' window follows (posted moves, or the warped cursor)
                         modes = set(self.held_buttons.values())
                         mode = "warp" if "warp" in modes else ("mpx" if "mpx" in modes else "post")
@@ -1897,8 +2087,11 @@ class RemoteControl:
                     if t == "u" and btn not in self.held_buttons and not self.wq:
                         continue   # a release of a press we never sent (it began outside)
                     if bar and in_rect(p[0], p[1], bar):
-                        self.stats["outside"] += 1   # KASTR's own bar is not the controller's to click
-                        continue
+                        # 0.21.83 (Kenton: "... when I try to click in that space it doesn't work to click on the things
+                        # behind the pill"): no longer dropped -- the pill turns click-through first, so the press / wheel
+                        # reaches the window behind it (a posted click is sent to that window anyway)
+                        self._bar_pass(g["feed"])
+                        self.stats["bar"] += 1
                     if t != "u":
                         self._ptr_set(p)
                     mode = self.held_buttons.get(btn) if t == "u" else b.click_mode(g["url"], *p)
@@ -1914,6 +2107,9 @@ class RemoteControl:
                     if why:
                         g["blocked"] = why
                         self.stats["blocked"] += 1
+                        if why == "elevated":   # 0.21.83: the controller's notice is pinned on that window
+                            self._admin_blk = self.clock()
+                            self._admin_check(b, g["url"], p, force=True)
                         continue
                     if t == "w":
                         try:
@@ -1976,6 +2172,36 @@ class RemoteControl:
                 self.log("rc: inject: %s" % e)
         return self.status(rcid), 200
 
+    def _shapes(self, g):
+        """0.21.83: {admin: {r: [u0, v0, u1, v1], why: "elevated"} | None, bar: [u0, v0, u1, v1] | None} on the shared surface
+        -- the sharer's page puts them in st.json: the controller pins its notice on the administrator window (while their
+        pointer is over it) and outlines where the sharer's KASTR pill sits (it is left out of the picture)."""
+        b = self.backend
+        out = {"admin": None, "bar": None}
+        if b is None:
+            return out
+        try:
+            with self.lock:
+                surf = b.surface_rect(g["url"])
+        except Exception:
+            surf = None
+        if not surf:
+            return out
+        a = self.admin
+        if a and self.clock() - a["at"] <= ADMIN_KEEP_S:
+            r = norm_rect(a["rect"], surf)
+            if r:
+                out["admin"] = {"r": r, "why": "elevated"}
+        try:
+            ui = self.ui()
+            bar = ui.rect(g["feed"]) if ui is not None else None
+        except Exception:
+            bar = None
+        out["bar"] = norm_rect(bar, surf) if bar else None
+        if out["bar"] and getattr(b, "pointer_in_capture", False):
+            out["barCap"] = 1   # X11 cannot leave the bar out of the picture: the controller sees it already
+        return out
+
     def _down(self, b, btn, p, mode):
         b.button(btn, True, p[0], p[1], mode)
         self.held_buttons[btn] = mode
@@ -1995,6 +2221,7 @@ class RemoteControl:
             out.update(active=True, rcid=g["rcid"], controller=g["controller"], feed=g["feed"], paused=False, pauseLeft=0,
                        blocked=g.get("blocked") or "", clip=self._clip_out, monitor=self._mon is not None,
                        queued=len(self.wq), pointer=bool(self.ctl_info.get("pointer")), mpx=bool(self.ctl_info.get("mpx")))
+            out.update(self._shapes(g))   # 0.21.83: admin (the administrator window's rect) + bar (the pill's), normalised
             if ptr:
                 out["ptr"] = self.ptr_sample(force=True)
         elif self.last_end and (rcid is None or self.last_end["rcid"] == rcid):
@@ -2027,6 +2254,9 @@ def share_gone(feed_id, why):
             rc.share_gone(feed_id, why)
         except Exception:
             pass
+    pm = sys.modules.get("kastr_point")   # 0.21.83: its pointer mode ends with it
+    if pm is not None:
+        pm.share_gone(feed_id, why)
 
 
 def bridge_info(bridge):
@@ -2057,6 +2287,19 @@ def bridge_mode(bridge):
     return (lambda fid, on: fn(int(fid), bool(on))) if fn else None
 
 
+def bridge_stop(bridge):
+    """0.21.83: share_stop for kastr_serve's Bridge -- the control pill's "Stop sharing" where the share has no pill of its
+    own to do it (X11): Bridge.remove(feed id), as the page's own Stop does."""
+    fn = getattr(bridge, "remove", None) if bridge else None
+    return (lambda fid: fn(int(fid))) if fn else None
+
+
+def _wire(rc, bridge):
+    if rc.share_stop is None:
+        rc.share_stop = bridge_stop(bridge)
+    return rc
+
+
 def _guard(handler):
     """This computer's own KASTR pages only: loopback, a loopback Origin (when there is one), same-origin fetch metadata."""
     import kastr_relay
@@ -2070,6 +2313,9 @@ def _dispatch(rc, p):
     """One request from the page (HTTP body or WebSocket message) -> (reply, code)."""
     p = p if isinstance(p, dict) else {}
     op, rcid = str(p.get("op") or ""), str(p.get("rcid") or "")
+    if op.startswith("pt-"):   # 0.21.83 (Kenton: "a view-only mode ... when they click it makes a little sonar"): pointer mode
+        import kastr_point     # draws pointers and ripples -- nothing it handles reaches inject()
+        return kastr_point.dispatch(rc, p, rc.log)
     if op == "input":
         return rc.inject(rcid, str(p.get("src") or ""), p.get("ev"))
     if op == "renew":
@@ -2102,7 +2348,7 @@ def handle_api(handler, bridge, log=None):
 
     if not _guard(handler):
         return send(403, {"ok": False, "error": "only on the computer itself"})
-    rc = get(bridge_info(bridge), log, bridge_mode(bridge))
+    rc = _wire(get(bridge_info(bridge), log, bridge_mode(bridge)), bridge)   # 0.21.83: + share_stop
     if handler.command == "GET":
         q = parse_qs(urlparse(handler.path).query)
         rcid = (q.get("rcid") or [""])[0] or None
@@ -2192,7 +2438,7 @@ def handle_ws(handler, bridge, log=None):
     if str(handler.headers.get("Upgrade") or "").lower() != "websocket" or not key:
         handler.send_error(400)
         return
-    rc = get(bridge_info(bridge), log, bridge_mode(bridge))
+    rc = _wire(get(bridge_info(bridge), log, bridge_mode(bridge)), bridge)   # 0.21.83: + share_stop
     handler.close_connection = True
     sock = handler.connection
     sock.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n"
@@ -2200,6 +2446,7 @@ def handle_ws(handler, bridge, log=None):
     sock.settimeout(None)
     buf, msg = b"", b""
     last_ptr = 0.0
+    want_pt = False   # 0.21.83: this socket asked for pointer mode (a pt-* op): it gets the sharer's own pointer samples
     try:
         while True:
             r, _, _ = select.select([sock], [], [], 1.0 / PTR_HZ)
@@ -2228,6 +2475,7 @@ def handle_ws(handler, bridge, log=None):
                         except ValueError:
                             continue
                         out, code = _dispatch(rc, p)
+                        want_pt = want_pt or str(p.get("op") or "").startswith("pt-")
                         rep = dict(out, re=str(p.get("op") or "")[:12], code=code)
                         if p.get("n") is not None:
                             rep["n"] = p.get("n")   # the page's own request number (its latency echo)
@@ -2238,5 +2486,10 @@ def handle_ws(handler, bridge, log=None):
                 s = rc.ptr_sample()
                 if s:
                     sock.sendall(ws_frame(json.dumps({"ptr": s, "rcid": rc.grant["rcid"] if rc.grant else ""})))
+            pm = sys.modules.get("kastr_point") if want_pt else None
+            if pm is not None and pm.current() is not None:   # 0.21.83: the sharer's own pointer + clicks, PT_HZ at most
+                s = pm.current().take()
+                if s:
+                    sock.sendall(ws_frame(json.dumps({"pt": s})))
     except (OSError, ValueError):
         pass

@@ -2685,6 +2685,8 @@ class Bridge:
         return feed
 
     def remove(self, feed_id):
+        if is_private(self.get(feed_id)):   # 0.21.83 (D): the pill's Stop sharing on a fleet admin's private capture
+            return self.remove_private(feed_id)
         self.unpublish(feed_id, persist=False)   # 0.12.0: one write, below
         with self._lock:
             feed = self._feeds.pop(int(feed_id), None)

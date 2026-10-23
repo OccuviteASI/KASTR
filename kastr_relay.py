@@ -180,7 +180,17 @@ RC_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 RC_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
 RC_SHARE_RE = re.compile(r"^[a-z0-9-]{1,32}/[a-z0-9-]{1,32}-[0-9a-f]{4}/[A-Za-z0-9._~/-]{1,200}\.hang$")
 RC_WHY = ("", "busy", "wayland", "unsupported", "paused", "stopped", "left", "released", "bar", "hotkey", "timeout",
-          "share", "elevated", "closed", "no", "gone", "secure")
+          "share", "elevated", "closed", "no", "gone", "secure", "removed", "everyone", "full")
+# 0.21.83 (Kenton: "a view-only mode where the user is able to see my mouse, as well as whoever else they allow to share, and lets
+# them move their mouse around with their name and when they click it makes a little sonar thing"): POINTER notes ride the same
+# inbox -- "Point on this screen" (pask) / the sharer's answer (pallow / pdeny) / a pointer taken off or given back (pstop).
+# ANYONE in the share's room may ask (pointing is harmless: it draws an arrow and a ripple, nothing else); only the sharer
+# answers. A pointer grant never carries input rights: its id can never be answered as a control "allow" (nor asked as a
+# control "ask") on this relay, and the input track is only read for a control grant (kastr_rc) -- pointing has no input path.
+PT_KINDS = ("pask", "pallow", "pdeny", "pstop")
+PT_ASK_RATE = (4, 60)          # pointer requests one asker may send ONE sharer per minute
+PT_ASK_RATE_ALL = (12, 60)     # ... and to everyone together
+PT_IDS_KEEP = 3600             # s: pointer request ids this relay remembers (a control answer to one is refused)
 GROUPS_MAX = 32            # 0.15.0: room groups a relay defines (shared by every page dialled in)
 GROUP_ROOMS_MAX = 64       # 0.15.0: rooms in one group
 CLOSED_TTL = 3600
@@ -4624,7 +4634,7 @@ P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare",
 def rc_item_clean(item):
     """0.21.79: a remote-control note as it travels (spoke -> hub -> spokes -> the page's beat) -> a cleaned copy, or None
     when anything about it is off. The share is <room>/<sharer's host>/.../<leaf>.hang and the note's room is its room."""
-    if not isinstance(item, dict) or item.get("kind") != "rc" or item.get("rc") not in RC_KINDS:
+    if not isinstance(item, dict) or item.get("kind") != "rc" or item.get("rc") not in RC_KINDS + PT_KINDS:   # 0.21.83: + pointer notes
         return None
     rcid, room, share, frm = str(item.get("rcid") or ""), str(item.get("room") or ""), str(item.get("share") or ""), str(item.get("from") or "")
     peer = str(item.get("peer") or "")
@@ -4669,7 +4679,8 @@ class PersonalLive:
         self.fwd = {}         # spoke: (slug, host) -> when the owner's last beat went to the hub
         self.names = {}       # host -> (name, at) -- what the page says in its beats (the Users list names web pages)
         self.rcrate = {}      # 0.21.79: (asker, sharer) -> [when it asked to control] ("*" = to anyone)
-        self.rcdeny = {}      # 0.21.79: (asker, sharer) -> when the sharer last said no (RC_DENY_COOL)
+        self.rcdeny = {}      # 0.21.79: (asker, sharer) -> when the sharer last said no (RC_DENY_COOL); 0.21.83: ("pt", asker, sharer) too
+        self.ptids = {}       # 0.21.83: pointer request id -> when it passed (never a control grant's id)
         self.thread = None
 
 
@@ -5717,6 +5728,8 @@ class AuthService:
                 pl.rcrate.pop(k, None)
             for k in [k for k, t in pl.rcdeny.items() if now - t > RC_DENY_COOL]:
                 pl.rcdeny.pop(k, None)
+            for k in [k for k, t in pl.ptids.items() if now - t > PT_IDS_KEEP]:   # 0.21.83
+                pl.ptids.pop(k, None)
             for k in [k for k, v in pl.names.items() if now - v[1] > 86400]:
                 pl.names.pop(k, None)
         for slug in gone:
@@ -6010,6 +6023,10 @@ class AuthService:
         self._p_inbox_put_locked(to, dict(item, at=now))
         if item.get("rc") == "deny":
             pl.rcdeny[(to, item.get("from") or "")] = now   # `to` is the asker: a "no" holds them off a while
+        if item.get("rc") == "pdeny" and item.get("why") in ("", "no"):   # 0.21.83: a pointer "no" holds that asker off too
+            pl.rcdeny[("pt", to, item.get("from") or "")] = now
+        if item.get("rc") in PT_KINDS:
+            pl.ptids[item.get("rcid") or ""] = now
 
     def _rc_put(self, to, item, now, out=True):
         """Into this relay's inbox for `to` (its page takes it on its next beat) and, on the hub, onto the long-poll for
@@ -6043,12 +6060,29 @@ class AuthService:
                 pl.rcrate[key] = [x for x in pl.rcrate.get(key, []) if now - x < RC_ASK_RATE[1]] + [now]
         return True, "", 0
 
+    def _pt_rate_ok(self, host, to, now):
+        """0.21.83: pointer asks -- PT_ASK_RATE per (asker, sharer), PT_ASK_RATE_ALL per asker, RC_DENY_COOL after a no."""
+        pl = self._pl()
+        with self.lock:
+            t = pl.rcdeny.get(("pt", host, to))
+            if t is not None and now - t < RC_DENY_COOL:
+                return False, "they said no -- wait a little before asking again", int(RC_DENY_COOL - (now - t)) + 1
+            for key, (n, win) in ((("pt", host, to), PT_ASK_RATE), (("pt", host, "*"), PT_ASK_RATE_ALL)):
+                ts = [x for x in pl.rcrate.get(key, []) if now - x < win]
+                if len(ts) >= n:
+                    pl.rcrate[key] = ts
+                    return False, "too many pointer requests -- wait a minute", int(win - (now - ts[0])) + 1
+            for key in (("pt", host, to), ("pt", host, "*")):
+                pl.rcrate[key] = [x for x in pl.rcrate.get(key, []) if now - x < PT_ASK_RATE[1]] + [now]
+        return True, "", 0
+
     def rc_send(self, p, claims, room, host, now=None):
-        """people_api op "rc" {kind: ask|allow|deny|stop, to, share, id, peer?, by?, label?, surface?, why?}. -> (reply, code)."""
+        """people_api op "rc" {kind: ask|allow|deny|stop (0.21.83: | pask|pallow|pdeny|pstop), to, share, id, peer?, by?, label?,
+        surface?, why?}. -> (reply, code)."""
         now = time.time() if now is None else now
         kind = str(p.get("kind") or "")
-        if kind not in RC_KINDS:
-            return {"ok": False, "error": "kind is ask, allow, deny or stop"}, 400
+        if kind not in RC_KINDS + PT_KINDS:
+            return {"ok": False, "error": "kind is ask, allow, deny, stop, pask, pallow, pdeny or pstop"}, 400
         if room == LOBBY_SLUG or claims.get("lobby"):
             return {"ok": False, "error": "remote control works in a room (not the Lobby)"}, 403
         to, share, rcid = str(p.get("to") or ""), str(p.get("share") or ""), str(p.get("id") or "")
@@ -6061,7 +6095,23 @@ class AuthService:
         sroom, owner = share.split("/")[:2]
         if sroom != room:   # the sender must be in the share's room (its member token is for that room)
             return {"ok": False, "error": "that share is not in your room"}, 403
-        if kind == "ask":
+        if kind in ("ask", "allow"):   # 0.21.83: a pointer request's id is never a control grant's
+            with self.lock:
+                if rcid in self._pl().ptids:
+                    return {"ok": False, "error": "that is a pointer request -- control needs its own ask and its own Allow"}, 409
+        if kind == "pask":   # 0.21.83: anyone in the room (viewers too) may ask to point; the sharer answers
+            if owner != to:
+                return {"ok": False, "error": "ask the person whose share it is"}, 400
+            ok, err, wait = self._pt_rate_ok(host, to, now)
+            if not ok:
+                return {"ok": False, "error": err, "retryAfter": wait}, 429
+        elif kind in ("pallow", "pdeny"):
+            if owner != host:
+                return {"ok": False, "error": "only the person sharing answers"}, 403
+        elif kind == "pstop":
+            if host != owner and to != owner:
+                return {"ok": False, "error": "only the sharer or the pointing person stops a pointer"}, 403
+        elif kind == "ask":
             if owner != to:
                 return {"ok": False, "error": "ask the person whose share it is"}, 400
             if not rc_can_ask(claims, room, host):
@@ -6082,7 +6132,9 @@ class AuthService:
             return {"ok": False, "error": "bad control note"}, 400
         if kind == "ask":
             self.log("relay auth: %s asks %s to control %s (%s)" % (host, to, share, rcid))
-        elif kind != "stop" or p.get("why") not in ("timeout",):
+        elif kind == "pask":
+            self.log("relay auth: %s asks %s to point on %s (%s)" % (host, to, share, rcid))
+        elif kind not in ("stop", "pstop") or p.get("why") not in ("timeout",):
             self.log("relay auth: remote control %s %s -> %s (%s%s)" % (kind, host, to, rcid, (", " + item["why"]) if item["why"] else ""))
         if not self._p_spoke():
             self._rc_put(to, item, now)

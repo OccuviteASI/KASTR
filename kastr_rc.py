@@ -199,6 +199,19 @@ def clip_ok(text):
     return n <= CLIP_MAX, n
 
 
+ALL_MONITORS = 99   # 0.21.83 (D): screen://monitor/99 = every monitor at once (kastr_screen.ALL_MONITORS)
+
+
+def union_rect(rects):
+    """0.21.83 (D): the rectangle {x, y, w, h} that holds every one of `rects`."""
+    rs = [r for r in rects if r and r.get("w") and r.get("h")]
+    if not rs:
+        return None
+    x0, y0 = min(r["x"] for r in rs), min(r["y"] for r in rs)
+    x1, y1 = max(r["x"] + r["w"] for r in rs), max(r["y"] + r["h"] for r in rs)
+    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+
 def surface_of(url):
     """screen://monitor/<n> | screen://window/<id> | screen://tab/<id>/<i> -> ("monitor"|"window"|"tab", n) or None."""
     m = re.match(r"^screen://(monitor|window|tab)/(\d{1,20})(?:/\d{1,4})?$", str(url or ""), re.I)
@@ -1261,7 +1274,10 @@ class X11Backend:
         r = None
         try:
             if s and s[0] == "monitor":
-                m = next((m for m in self.x.list_monitors() if m["index"] == s[1]), None)
+                mons = self.x.list_monitors()
+                m = next((m for m in mons if m["index"] == s[1]), None)
+                if m is None and s[1] == ALL_MONITORS and mons:   # 0.21.83 (D): every monitor at once -- their union
+                    m = {"rect": union_rect([x["rect"] for x in mons])}
                 r = dict(m["rect"]) if m else None
             elif s:
                 rr = self.inj.d.rect(s[1])
@@ -1580,7 +1596,7 @@ class RemoteControl:
         return {"ok": True}, 200
 
     # ---- grant lifecycle
-    def start(self, rcid, controller, name, feed, share="", color=None):
+    def start(self, rcid, controller, name, feed, share="", color=None, bar=None):   # 0.21.83 (D): + bar (a fleet admin's pill)
         if not RCID_RE.match(str(rcid or "")) or not HOST_RE.match(str(controller or "")):
             return {"ok": False, "error": "bad grant"}, 400
         c = self.caps()
@@ -1606,7 +1622,7 @@ class RemoteControl:
             now = self.clock()
             self.grant = {"rcid": rcid, "controller": controller, "name": str(name or controller)[:40], "feed": int(feed),
                           "url": info["url"], "share": str(share or "")[:240], "at": now, "lease": now + LEASE_S, "blocked": "",
-                          "color": clean_color(color)}
+                          "color": clean_color(color), "bar": str(bar or "")[:160]}
             self.prompts.pop(rcid, None)
             self.held_keys, self.held_buttons = {}, {}
             self.phys, self.wq = {}, deque()
@@ -1659,6 +1675,8 @@ class RemoteControl:
         # controlled, have that as well as stop sharing, to close out the share and control at the same time."): two buttons, a
         # shorter label, and a short note while the controller's pointer is on an administrator window
         text = bar_label(g["name"], self._note)
+        if g.get("bar") and not self._note:   # 0.21.83 (D): a fleet admin's unattended session names them ("... (fleet admin) is controlling this machine")
+            text = g["bar"]
         try:
             ui.show(g["feed"], g["url"], "control", text, list(CTL_BUTTONS), self._bar_button,
                     rect_fn=lambda u=g["url"]: self._bar_rect(u))

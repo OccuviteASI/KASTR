@@ -3146,6 +3146,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             threading.Timer(0.3, QUIT_HOOK).start()       # let this reply land first
             return self._json_cors(200, {"status": "quitting", "pid": os.getpid()})
 
+        def _rcadmin_dir(self):
+            """0.21.83 (D): where this machine's opt-in (rcadmin.json) and its session log live -- the state folder."""
+            return STATE_DIR or (relay_srv.state_dir if relay_srv is not None else None) or getattr(bridge, "state_dir", None) or "."
+
         def _auth_proxy(self, method):
             """0.8.9: the room-code service (relay host, port+1) is plain http;
             an https page reaches it through its own origin. 0.10.0: the real
@@ -3229,6 +3233,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 retry_after = None
                 # 0.20.0: a spoke's ban long-poll (GET /api/bans?since=&wait=) may hold for 30 s
                 to = 40 if (method == "GET" and path0 == "/api/bans" and "wait=" in self.path) else 5
+                if path0 in ("/api/rcx/poll", "/api/rcx/fed"):   # 0.21.83 (D): a machine's poll is held up to 25 s at the hub
+                    to = 45
+                elif path0.startswith("/api/rcx"):
+                    to = 15
                 with urllib.request.urlopen(req, timeout=to) as r:
                     data = r.read()
                     code = r.status
@@ -3764,6 +3772,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 == "/api/rc":                  # 0.21.79: remote control -- the prompt, the grant, the controller's input
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
+            if path0 in ("/api/rcadmin", "/api/rcadmin/ctl"):   # 0.21.83 (D): the opt-in checkbox (THIS machine only) + the source switcher
+                import kastr_rcadmin
+                return kastr_rcadmin.handle_api(self, self._rcadmin_dir(), _note)
             if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
@@ -3784,6 +3795,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/vehicle",                                      # 0.21.63: a vehicle's key -> a publish token
                          "/api/invite", "/api/invite/revoke", "/api/invites",  # 0.21.75: room invite links (the minter keeps them)
                          "/api/people",                                       # 0.21.78: beats, person invites, My room shared
+                         "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
                 return self._auth_proxy("POST")
             if path0 == "/api/files":
@@ -4829,6 +4841,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._lan_api(path, "GET")
             if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp", "/api/screen/rtmp/firewall"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
+            if path in ("/api/rcadmin", "/api/rcadmin/session"):   # 0.21.83 (D): this machine's opt-in, its sessions; the helper page's session
+                import kastr_rcadmin
+                return kastr_rcadmin.handle_api(self, self._rcadmin_dir(), _note)
             if path == "/api/rc":                   # 0.21.79: remote control -- what this computer can do + the grant's state
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
@@ -5133,7 +5148,38 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
     srv.relay_ref = relay_ref
     srv.alive_ref = alive_ref
     srv.diag_ref = DIAG_REF   # 0.21.74: the box keeper reads the box page's own reports (kastr.box_keeper)
+    if bridge is not None and not getattr(srv, "is_tls", False):
+        _rcadmin_start(srv, bridge, relay_srv, relay_ref, hostname)   # 0.21.83 (D)
     return srv
+
+
+def _rcadmin_start(srv, bridge, relay_srv, relay_ref, hostname=None):
+    """0.21.83 (D) (Kenton: "allow remote control with the admin permissions on a relay/hub/camera box ... opt-in only"):
+    the machine's agent (kastr_rcadmin.Agent) -- it does nothing until this machine's own Relay page ticks "Let fleet admins
+    control this machine without asking"; then it polls the hub through the relay this KASTR uses."""
+    try:
+        import kastr_rcadmin
+    except Exception as e:
+        _note("rcx: not available: %s" % e)
+        return None
+    sd = STATE_DIR or (relay_srv.state_dir if relay_srv is not None else None) or getattr(bridge, "state_dir", None)
+    if not sd:
+        return None
+
+    def info():
+        name = ""
+        if relay_srv is not None:
+            try:
+                with open(os.path.join(relay_srv.state_dir, "operator.json"), encoding="utf-8") as f:
+                    name = str(json.load(f).get("name") or "")[:30]
+            except Exception:
+                name = ""
+        return {"operator": name, "mode": MODE}
+    agent = kastr_rcadmin.start_agent(sd, bridge, lambda: relay_ref[0] or BUILTIN_RELAY, relay_srv, _note,
+                                      web_port=lambda: HTTP_PORT or srv.server_address[1], info=info)
+    if agent is not None and hostname and agent.node is None:
+        agent.node = host_slug(hostname)   # the identity this KASTR's pages and bridge use (a lab harness names it)
+    return agent
 
 
 def make_bridge(state_dir=None, log=None, hostname=None):

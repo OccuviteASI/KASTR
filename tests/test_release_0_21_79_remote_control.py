@@ -768,7 +768,7 @@ class Wiring(unittest.TestCase):
         self.assertIn('JSON.stringify({ op: "rc", ...body })', p)
         self.assertIn('"x-kastr-rc": "1"', p)
         # Kenton's words
-        self.assertIn('" asks to control " + what + ". They\\u2019ll get their own pointer with their name on your screen, and can click, type and use your clipboard there."', p)   # 0.21.80
+        self.assertIn('" asks to control " + what + ". They\\u2019ll be able to use your mouse, keyboard and clipboard, and copy files to and from your computer \\u2014 with their own pointer and their name on your screen."', p)   # 0.21.80; 0.21.83: + files
         self.assertIn('c.name + " is using their mouse \\u2014 paused"', p)
         self.assertIn('" \\u2014 Stop control (Ctrl+Alt+Space)"', p)
         # hold Esc for a second; Keyboard Lock in full screen; never an old click twice

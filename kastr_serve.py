@@ -3752,6 +3752,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 qs = parse_qs(urlparse(self.path).query)
                 if (qs.get("_method") or [""])[0].upper() == "DELETE":
                     return self._media_delete(path0[len("/api/media/"):])
+            if path0.startswith("/api/rcfiles"):    # 0.21.83: files + pictures over remote control (kastr_rcfiles)
+                import kastr_rcfiles
+                return kastr_rcfiles.handle_api(self, _note, ini_get)
             if path0 == "/api/prefs":               # 0.14.0
                 return self._prefs_post()
             if path0.startswith("/api/lan/"):       # 0.21.22
@@ -4819,6 +4822,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._chat_purge()
             if relay_srv and kastr_relay.handle_api(self, relay_srv, path, self._set_relay):
                 return
+            if path.startswith("/api/rcfiles"):     # 0.21.83: files + pictures over remote control -- caps, status, a chunk
+                import kastr_rcfiles
+                return kastr_rcfiles.handle_api(self, _note, ini_get)
             if path.startswith("/api/lan/"):   # 0.21.22: relay discovery + probe (this machine only)
                 return self._lan_api(path, "GET")
             if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp", "/api/screen/rtmp/firewall"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras

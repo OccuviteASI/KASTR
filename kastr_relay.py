@@ -178,6 +178,7 @@ RC_DENY_COOL = 30              # s: after a "no" the asker waits this long befor
 RC_INBOX_TTL = 45              # s: a control note older than this is stale (an ask nobody saw is not shown late)
 RC_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 RC_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
+RC_FK_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")   # 0.21.83: the grant's file-transfer key on an "allow" note (32 bytes, base64url)
 RC_SHARE_RE = re.compile(r"^[a-z0-9-]{1,32}/[a-z0-9-]{1,32}-[0-9a-f]{4}/[A-Za-z0-9._~/-]{1,200}\.hang$")
 RC_WHY = ("", "busy", "wayland", "unsupported", "paused", "stopped", "left", "released", "bar", "hotkey", "timeout",
           "share", "elevated", "closed", "no", "gone", "secure")
@@ -4633,10 +4634,17 @@ def rc_item_clean(item):
     if not HOST_RE.match(frm) or (peer and not RC_PEER_RE.match(peer)):
         return None
     why = str(item.get("why") or "")
-    return {"id": "rc-%s-%s-%s" % (item["rc"], rcid, frm), "kind": "rc", "rc": item["rc"], "rcid": rcid, "room": room,
-            "share": share, "from": frm, "peer": peer, "by": clean_label(item.get("by"), 40) or frm,
-            "label": clean_label(item.get("label"), 80), "surface": "window" if item.get("surface") == "window" else "screen",
-            "why": why if why in RC_WHY else ""}
+    out = {"id": "rc-%s-%s-%s" % (item["rc"], rcid, frm), "kind": "rc", "rc": item["rc"], "rcid": rcid, "room": room,
+           "share": share, "from": frm, "peer": peer, "by": clean_label(item.get("by"), 40) or frm,
+           "label": clean_label(item.get("label"), 80), "surface": "window" if item.get("surface") == "window" else "screen",
+           "why": why if why in RC_WHY else ""}
+    # 0.21.83 (Kenton: "Am I able to copy a file on my machine or the remote machine and paste it on the other side?"): the
+    # sharer's "allow" carries the grant's file-transfer key (32 random bytes, base64url) -- the chunks on the ~rcd tracks are
+    # AES-GCM under it, so another member of the room who subscribes reads nothing. Only on an allow, only that shape.
+    fk = str(item.get("fk") or "")
+    if item["rc"] == "allow" and RC_FK_RE.match(fk):
+        out["fk"] = fk
+    return out
 
 
 def rc_can_ask(claims, room, host):
@@ -6077,7 +6085,7 @@ class AuthService:
         peer = str(p.get("peer") or "")
         item = rc_item_clean({"kind": "rc", "rc": kind, "rcid": rcid, "room": room, "share": share, "from": host,
                               "peer": peer if RC_PEER_RE.match(peer) else "", "by": p.get("by"), "label": p.get("label"),
-                              "surface": p.get("surface"), "why": p.get("why")})
+                              "surface": p.get("surface"), "why": p.get("why"), "fk": p.get("fk")})   # 0.21.83: + fk
         if item is None:
             return {"ok": False, "error": "bad control note"}, 400
         if kind == "ask":

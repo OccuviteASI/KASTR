@@ -2033,6 +2033,153 @@
     #joinGate .card { max-height:100dvh; overflow-y:auto; }
     #topbar .sp { flex:1; height:auto; }   /* 0.21.5: one toolbar row in landscape (the phone block above forces a second row for portrait) */
   }
+  /* ==== 0.21.84 (Kenton: "a fleet-wide library of available streams"): the Streams panel, its row actions and peek, the
+     library tiles' honest state cards, the builder's Library group, the empty room's call to action. Last in the sheet on
+     purpose (after the phone blocks): its own phone rules below must win over the generic sheet rules. */
+  #libBtn[hidden] { display:none !important; }
+  body.inlobby #libBtn { opacity:.3; pointer-events:none; }
+  #libPanel { width:min(440px, calc(100vw - 24px)); height:min(78vh, 720px); max-height:min(78vh, 720px); }
+  #libPanel { height:min(78dvh, 720px); max-height:min(78dvh, 720px); }
+  #libPanel.libgone { display:none !important; }
+  #libPanel .head .libhd { color:var(--text-mute); text-transform:none; letter-spacing:0; font-weight:400; font-family:var(--font-mono); }
+  #libPanel .libtop { padding:10px 12px 6px; display:flex; flex-direction:column; gap:8px; border-bottom:1px solid var(--line); }
+  #libPanel .libchips { display:flex; flex-wrap:wrap; gap:6px; }
+  #libPanel .libchip { height:26px; padding:0 10px; border-radius:13px; font-size:11px; font-weight:500; background:transparent; border:1px solid var(--line); color:var(--text-dim); display:inline-flex; align-items:center; gap:5px; }
+  #libPanel .libchip:hover { border-color:var(--asi-blue-dim); color:var(--text); background:var(--asi-blue-glow); }
+  #libPanel .libchip[aria-pressed="true"] { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
+  #libPanel .libchip .n { font-family:var(--font-mono); opacity:.8; }
+  #libPanel .librow2 { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+  #libPanel label.libsel { flex-direction:row; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); }
+  #libPanel label.libsel select { background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:5px; font-size:12px; padding:3px 6px; max-width:180px; }
+  #libPanel label.libsw { flex-direction:row; align-items:center; gap:8px; font-size:11px; color:var(--text-dim); margin-left:auto; cursor:pointer; }
+  #libPanel .libbanner { margin:8px 12px 0; padding:7px 10px; border-radius:6px; font-size:11px; color:var(--text); background:color-mix(in srgb, var(--asi-amber) 16%, transparent); border:1px solid color-mix(in srgb, var(--asi-amber) 55%, transparent); }
+  #libPanel .libbanner[hidden] { display:none; }
+  #libPanel .liblist { flex:1 1 auto; min-height:120px; overflow-y:auto; position:relative; outline:none; overscroll-behavior:contain; }
+  #libPanel .libspace { position:relative; width:100%; }
+  #libPanel .libempty { padding:28px 18px; text-align:center; color:var(--text-mute); font-size:12px; }
+  #libPanel .libempty[hidden] { display:none; }
+  #libPanel .libfoot { display:flex; align-items:center; gap:8px; padding:8px 12px; border-top:1px solid var(--line); background:var(--surface-2); }
+  #libPanel .libfoot .sp { flex:1; }
+  #libPanel .libfoot .libseln { font-size:11px; color:var(--text-dim); }
+  #libPanel button.ghost, #libAct button.ghost, .libcard button.ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; height:28px; padding:0 10px; }
+  #libPanel button.ghost:hover:not(:disabled), #libAct button.ghost:hover:not(:disabled), .libcard button.ghost:hover { border-color:var(--asi-blue-dim); color:var(--text); background:var(--asi-blue-glow); }
+  #libPanel button.primary { height:28px; padding:0 12px; }
+  #libPanel button:disabled { opacity:.45; cursor:not-allowed; }
+  /* the virtualized rows: absolutely placed in the spacer; only the visible ones exist */
+  .libit { position:absolute; left:0; right:0; }
+  .libsite { display:flex; align-items:center; gap:8px; padding:0 12px; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-dim);
+    background:var(--surface-2); border-bottom:1px solid var(--line); cursor:pointer; width:100%; height:100%; border-radius:0; text-align:left; }
+  .libsite:hover { color:var(--text); background:var(--surface-2); }
+  .libsite .chev { display:inline-flex; transition:transform .12s; }
+  .libsite .chev .icon { width:14px; height:14px; }
+  .libsite[aria-expanded="false"] .chev { transform:rotate(-90deg); }
+  .libsite .n { margin-left:auto; font-family:var(--font-mono); font-weight:400; letter-spacing:0; color:var(--text-mute); }
+  .libsite .warn { color:var(--asi-amber); text-transform:none; letter-spacing:0; font-weight:500; }
+  .libbox { display:flex; align-items:flex-end; gap:6px; padding:0 12px 3px; font-size:11px; color:var(--text-mute); }
+  .libbox b { color:var(--text-dim); font-weight:600; }
+  .librow { display:flex; align-items:center; gap:10px; padding:4px 10px 4px 12px; height:100%; cursor:pointer; border-radius:6px; margin:0 4px; outline:none; }
+  .librow:hover { background:var(--surface-2); }
+  .librow:focus-visible { box-shadow:inset 0 0 0 2px var(--asi-blue); background:var(--surface-2); }
+  .librow.flash { animation:libFlash 1.6s ease-out; }
+  @keyframes libFlash { 0%, 40% { background:var(--asi-blue-glow); box-shadow:inset 0 0 0 2px var(--asi-blue); } 100% { background:transparent; box-shadow:none; } }
+  .librow .libchk { flex:none; width:18px; height:18px; border:1.5px solid var(--text-mute); border-radius:4px; display:inline-flex; align-items:center; justify-content:center; }
+  .librow .libchk[hidden] { display:none; }
+  .librow.sel .libchk { background:var(--asi-blue); border-color:var(--asi-blue); }
+  .librow.sel .libchk::after { content:""; width:9px; height:5px; border:2px solid var(--on-accent); border-top:0; border-right:0; transform:rotate(-45deg) translate(1px, -1px); }
+  .librow .libth { position:relative; flex:none; width:80px; height:45px; border-radius:4px; overflow:hidden; background:var(--surface-3, #0b1116); border:1px solid var(--line); }
+  .librow .libth img { width:100%; height:100%; object-fit:cover; display:block; }
+  .librow .libth img:not([src]) { visibility:hidden; }
+  .librow .libth .libst { white-space:nowrap; max-width:calc(100% - 6px); overflow:hidden; text-overflow:ellipsis; position:absolute; left:3px; bottom:3px; font-size:9px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:1px 4px; border-radius:3px; color:#fff; background:rgba(10,14,18,.72); }
+  .librow[data-st="live"] .libth .libst { background:var(--asi-red); }
+  .librow[data-st="asleep"] .libth .libst { background:var(--asi-blue-dim); }
+  .librow[data-st="dark"] .libth, .librow[data-st="offline"] .libth, .librow[data-st="site"] .libth { opacity:.55; }
+  .librow .libtx { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .librow .libnm { font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .librow .libnm .ed { color:var(--text-mute); font-size:11px; margin-left:4px; }
+  .librow .libsub { font-size:11px; color:var(--text-mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .librow .libtags { display:flex; gap:4px; flex-wrap:nowrap; overflow:hidden; }
+  .librow .libtag { font-size:10px; padding:0 6px; height:16px; line-height:16px; border-radius:8px; border:1px solid var(--line); color:var(--text-dim); white-space:nowrap; }
+  .librow .libtag.here { border-color:var(--asi-blue); color:var(--asi-blue); }
+  .librow .libtag.warn { border-color:color-mix(in srgb, var(--asi-amber) 60%, transparent); color:var(--asi-amber); }
+  .librow .libbtns { flex:none; display:flex; align-items:center; gap:4px; }
+  .librow .libprev[hidden] { display:none; }
+  .librow .libmore { width:28px; height:28px; padding:0; background:transparent; border:1px solid transparent; color:var(--text-dim); display:inline-flex; align-items:center; justify-content:center; }
+  .librow .libmore:hover, .librow .libmore:focus-visible { border-color:var(--line); color:var(--text); background:var(--surface); }
+  .librow .libmore .icon { width:16px; height:16px; }
+  /* a row's actions (grey with the reason when not allowed) */
+  #libAct { position:fixed; z-index:140; min-width:240px; max-width:min(320px, calc(100vw - 16px)); background:var(--surface); border:1px solid var(--asi-blue-dim); border-radius:8px;
+    box-shadow:var(--shadow-pop, 0 12px 32px rgba(0,0,0,.5)); padding:6px; display:flex; flex-direction:column; gap:1px; }
+  #libAct[hidden] { display:none; }
+  #libAct .lacap { font-size:11px; color:var(--text-mute); padding:4px 8px 6px; border-bottom:1px solid var(--line); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #libAct .lacap b { color:var(--text); font-weight:600; }
+  #libAct button.lai { display:flex; align-items:flex-start; gap:9px; width:100%; height:auto; min-height:32px; padding:7px 8px; background:transparent; color:var(--text); font-weight:500; text-align:left; border-radius:5px; }
+  #libAct button.lai:hover:not(:disabled), #libAct button.lai:focus-visible { background:var(--surface-2); outline:none; box-shadow:inset 0 0 0 1px var(--asi-blue-dim); }
+  #libAct button.lai .icon { width:16px; height:16px; flex:none; margin-top:1px; color:var(--text-dim); }
+  #libAct button.lai .lat { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  #libAct button.lai .law { font-size:10px; font-weight:400; color:var(--text-mute); white-space:normal; }
+  #libAct button.lai:disabled { cursor:not-allowed; color:var(--text-mute); }
+  #libAct button.lai:disabled .law { color:var(--asi-amber); }
+  #libAct .lasep { height:1px; background:var(--line); margin:4px 2px; }
+  #libAct .laback { font-size:11px; }
+  /* the peek: a live row's small picture on the library connection */
+  #libPeek { position:fixed; z-index:139; width:288px; background:#000; border:1px solid var(--asi-blue-dim); border-radius:8px; overflow:hidden; box-shadow:var(--shadow-pop, 0 12px 32px rgba(0,0,0,.5)); pointer-events:none; }
+  #libPeek[hidden] { display:none; }
+  #libPeek .pkv { position:relative; aspect-ratio:16 / 9; background:#05080c; }
+  #libPeek .pkv moq-watch, #libPeek .pkv canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  #libPeek .pkv img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:.5; }
+  #libPeek .pkt { position:absolute; left:6px; bottom:6px; right:6px; font-size:11px; color:#fff; text-shadow:0 1px 2px #000; }
+  #libPeek .pkt b { display:block; font-size:12px; }
+  /* in-room library tiles: the honest state card (never "connecting" for a dark pin) */
+  .pane.libtile .libcard { position:absolute; inset:0; z-index:3; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; text-align:center; padding:12px;
+    background:radial-gradient(ellipse at center, rgba(14,22,32,.92), rgba(6,10,14,.97)); color:#e6eef6; pointer-events:none; }
+  .pane.libtile .libcard[hidden] { display:none; }
+  .pane.libtile .libcard .lcic { width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; background:rgba(255,255,255,.08); color:#9fb3c8; }
+  .pane.libtile .libcard .lcic .icon { width:18px; height:18px; }
+  .pane.libtile .libcard b { font-size:14px; font-weight:600; }
+  .pane.libtile .libcard .lcd { font-size:11px; color:#9fb3c8; max-width:90%; }
+  .pane.libtile .libcard .lcf { font-size:10px; color:#7f93a8; }
+  .pane.libtile .libcard[data-st="live"] .lcic, .pane.libtile .libcard[data-st="wait"] .lcic { color:#ff5a5a; }
+  .pane.libtile .libcard[data-st="asleep"] .lcic { color:#3cc3f0; }
+  .pane.libtile .libcard[data-st="site"] .lcic, .pane.libtile .libcard[data-st="offline"] .lcic { color:#f2b45a; }
+  /* the grid builder's Library group */
+  .gedit .geside .gelib { margin-top:8px; border-top:1px solid var(--line); padding-top:6px; }
+  .gedit .geside .gelibh { display:flex; align-items:center; gap:6px; width:100%; height:26px; padding:0 4px; background:transparent; color:var(--text); font-size:12px; font-weight:600; border-radius:4px; text-align:left; }
+  .gedit .geside .gelibh:hover, .gedit .geside .gelibh:focus-visible { background:var(--surface-2); }
+  .gedit .geside .gelibh .chev { display:inline-flex; transition:transform .12s; }
+  .gedit .geside .gelibh .chev .icon { width:13px; height:13px; }
+  .gedit .geside .gelibh[aria-expanded="false"] .chev { transform:rotate(-90deg); }
+  .gedit .geside .gelibh .n { margin-left:auto; font-family:var(--font-mono); font-weight:400; color:var(--text-mute); }
+  .gedit .geside .gelibs { width:100%; margin:4px 0; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:4px; font-size:11px; padding:2px 4px; }
+  .gedit .geside .gesi .gelst { font-size:9px; text-transform:uppercase; color:var(--text-mute); margin-left:auto; flex:none; }
+  .gedit .geside .gesi[data-st="live"] .gelst { color:var(--asi-red); }
+  .gedit .geside .gelibmore { font-size:10px; color:var(--text-mute); padding:4px; }
+  .gedit .geside .gecost { margin-top:6px; padding:6px 7px; border-radius:5px; font-size:10px; line-height:1.4; color:var(--text); background:color-mix(in srgb, var(--asi-amber) 14%, transparent); border:1px solid color-mix(in srgb, var(--asi-amber) 45%, transparent); }
+  .gedit .geside .gecost[hidden] { display:none; }
+  /* the box picker's library switch */
+  #xsPop .xsrow.libsw { border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:4px; }
+  #xsPop .xsrow.libsw .lbt { display:flex; flex-direction:column; gap:2px; }
+  #xsPop .xsrow.libsw .lbt small { color:var(--text-mute); font-size:10px; }
+  #xsPop .xsrow.libsw .lerr { color:var(--asi-red); font-size:10px; }
+  /* an empty room: the way in */
+  #libEmptyCta { position:absolute; left:50%; top:45%; transform:translate(-50%, -50%); z-index:4; height:auto; padding:16px 26px; display:flex; flex-direction:column; align-items:center; gap:5px;
+    border-radius:10px; background:var(--surface); border:1px dashed var(--asi-blue-dim); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  #libEmptyCta:hover { background:var(--surface-2); border-color:var(--asi-blue); }
+  #libEmptyCta:focus-visible { outline:2px solid var(--asi-blue); outline-offset:3px; }
+  #libEmptyCta .t { font-size:14px; font-weight:600; color:var(--asi-blue); }
+  #libEmptyCta .d { font-size:11px; font-weight:400; color:var(--text-mute); }
+  #libEmptyCta[hidden] { display:none; }
+  #stagewrap.libdrop { outline:2px dashed var(--asi-blue); outline-offset:-6px; }
+  @media (max-width: 720px), (max-height: 500px) {
+    #libPanel, #libPanel.popcard { top:0 !important; bottom:0 !important; left:0 !important; right:0; width:100vw; height:100dvh !important; max-height:100dvh !important; border-radius:0; border:0;
+      padding-top:env(safe-area-inset-top); }
+    #libPanel .libfoot { padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
+    #libPanel .head .close { min-width:44px; height:36px; }
+    .librow { gap:8px; }
+    .librow .libmore { width:40px; height:40px; }
+    #libAct { left:0 !important; right:0; bottom:0; top:auto !important; max-width:none; width:100vw; border-radius:12px 12px 0 0; padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
+    #libAct button.lai { min-height:44px; }
+    #libPeek { left:8px !important; right:8px; width:auto; top:calc(env(safe-area-inset-top) + 56px) !important; }
+  }
 </style>
 </head>
 <body class="asi">
@@ -2070,6 +2217,7 @@
   <button id="gridBtn" class="toggle tb" type="button" title="View"></button>
   <button id="filesBtn" class="toggle tb" type="button" title="Files shared with the room"></button>
   <button id="chatBtn" class="toggle tb" type="button" title="Room chat"></button>
+  <button id="libBtn" class="toggle tb" type="button" title="Streams &mdash; the fleet's stream library: cameras from any site, for this room" hidden></button>   <!-- 0.21.84 -->
   <button id="optBtn" class="toggle tb" type="button" title="More"></button>
   <span class="tbdiv"></span>
   <span class="tbgrp">
@@ -2100,10 +2248,35 @@
     </section>
   </div>
   <div id="stage-empty">Not connected yet.</div>
+  <button id="libEmptyCta" type="button" hidden title="The Streams panel: cameras from any site on the fleet"><span class="t">Add streams from the library</span><span class="d">Cameras from any site on the fleet</span></button>   <!-- 0.21.84: an empty room -->
 </div>
 <aside id="kDock" hidden aria-label="Pinned panels"><div id="kDockGrip" role="separator" aria-orientation="vertical" aria-label="Resize the pinned panels" tabindex="0" title="Drag to resize the pinned panels (arrow keys too)"></div></aside>
 </div>
 
+<!-- 0.21.84 (Kenton: "a fleet-wide library of available streams ... anyone in any room browses it and pulls streams in as tiles,
+     spotlights or grids"): the Streams panel -- every stream in the fleet's library, Site > box > streams (a 0.21.78 panel:
+     stays open, pins to the right column, a full-screen sheet on a phone). Shown only when this relay AND the hub offer it. -->
+<aside id="libPanel" class="popcard" hidden aria-label="Streams: the stream library">
+  <div class="head"><span>Streams</span><span class="libhd" id="libHdCount"></span><span class="sp"></span>
+    <button type="button" class="close" title="Close">&#10005;</button></div>
+  <div class="libtop">
+    <label class="pplsearch"><input id="libSearch" type="search" placeholder="Search streams, boxes, sites, people" autocomplete="off" spellcheck="false" aria-label="Search the stream library"><span class="sic" id="libSic"></span></label>
+    <div class="libchips" id="libChips" role="group" aria-label="Filters"></div>
+    <div class="librow2">
+      <label class="libsel"><span>Site</span><select id="libSite" aria-label="Site"></select></label>
+      <label class="libsel"><span>Sort</span><select id="libSort" aria-label="Sort"><option value="name">Name</option><option value="recent">Most recently live</option></select></label>
+      <label class="libsw"><span class="switch sm"><input type="checkbox" id="libOffline"><i></i></span><span>Show offline</span></label>
+    </div>
+  </div>
+  <div id="libBanner" class="libbanner" hidden role="status"></div>
+  <div id="libList" class="liblist" role="listbox" aria-label="Library streams" aria-multiselectable="false" tabindex="-1"><div id="libSpace" class="libspace"></div></div>
+  <div id="libEmpty" class="libempty" hidden></div>
+  <div class="libfoot">
+    <button type="button" id="libSelBtn" class="ghost" title="Pick several streams, then build a grid from them">Select</button>
+    <span id="libSelN" class="libseln"></span><span class="sp"></span>
+    <button type="button" id="libBuild" class="primary" hidden title="A new grid of yours with these streams on its spots (this device; share it with the room from the builder)">Build a grid from these</button>
+  </div>
+</aside>
 <aside id="peoplePanel" class="popcard" hidden>
   <div class="head"><span>Participants</span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
@@ -3660,9 +3833,21 @@
   const xsMine = new Map();   // my own source path -> { rooms: Set<slug>, tokens: {slug: jwt}, label, kind }
   const xsTiles = new Map();  // a foreign path listed into my room -> { from, label, by, kind }
   window.__xs = { mine: xsMine, tiles: xsTiles };   // rig
+  // ---- 0.21.84 (Kenton: "a fleet-wide library of available streams"): the stream library's STATE, declared early -- tileUrl,
+  // shortLabel, cgHide, the on-demand loops and the tile painter read it. Everything else (the Streams panel, the library
+  // connection, room adds, the builder's Library group) is at the end of this module, "THE STREAM LIBRARY".
+  const LIB_ROOT = "lib";   // the reserved root: library streams publish at lib/<host>/<op>/<leaf>.hang, outside every room
+  const isLibPath = (p) => String(p || "").startsWith(LIB_ROOT + "/");
+  const libTiles = new Map();   // lib path -> { why: "pin" | "me" | "grid" } -- a library stream with a tile in this room
+  const libCat = new Map();     // lib path -> its catalogue entry (libNorm)
+  const libAsked = new Set();   // paths a catalogue answer covered (an absent one is "No longer in the library")
+  const libCaps = { relay: false, hub: false, root: LIB_ROOT, off: "", killed: false, killedAt: 0, why: "", at: 0 };
+  const libConn = { token: "", exp: 0, mintKey: "", busy: null, err: "", conn: null, ann: null, gen: 0, announced: new Set() };
+  const libMeta = { ver: null, loaded: false, fullAt: 0, at: 0, err: "", site: "", node: "", hubOk: true, listAt: 0, links: {}, polledAt: 0 };
   // a stream listed from another room rides its OWN relay connection: tiles with one URL share one connection, and that
   // session was granted before the listing existed -- a distinct URL opens a new session, which the relay grants the path
   function tileUrl(name) {
+    if (isLibPath(name)) return libUrl();   // 0.21.84: a library stream rides the ONE library connection (its static lib/** grant -- no per-listing session)
     const wr = wrRoomOf(name);   // 0.21.44: a watched room's tile rides that room's own token
     if (wr) return wrUrl(watchRooms.get(wr));
     const u = withToken(urlInput.value.trim());
@@ -3873,6 +4058,7 @@
     here.append(hsw, hn);
     if (home) { here.replaceChildren(); here.textContent = "This box is in no room people see \u2014 its cameras show only in the rooms you tick."; }   // 0.21.75
     list.appendChild(here);
+    if (srv && libOn()) list.prepend(libPickerRow(srv, label));   // 0.21.84: a box camera -- into the stream library (the rooms below are unchanged)
     if (!rooms.length) { const p = document.createElement("p"); p.className = "xshint"; p.textContent = "No other rooms on this relay yet."; list.appendChild(p); }
     const rows = [];
     for (const r of rooms) {
@@ -3986,18 +4172,18 @@
     const live = new Set();
     const me = String(window.__publisher?.opSlug?.() || "").toLowerCase();
     { const fresh = new Set();   // 0.21.66: rooms with a listing new to this page -- its tiles open a session that is granted it
-      for (const it of d.items || []) { const p = String(it.path || ""); if (p && !xsTiles.has(p) && !tiles.has(p)) fresh.add(String(it.from || p.split("/", 1)[0])); }
+      for (const it of d.items || []) { const p = String(it.path || ""); if (p && !isLibPath(p) && !xsTiles.has(p) && !tiles.has(p)) fresh.add(String(it.from || p.split("/", 1)[0])); }
       for (const r of fresh) xsVer.set(r, (xsVer.get(r) || 0) + 1); }
     for (const it of d.items || []) {
       const p = String(it.path || "");
       const parts = p.split("/");
-      if (!p.endsWith(".hang") || parts.length < 4 || p.startsWith(CHANNEL + "/")) continue;
+      if (!p.endsWith(".hang") || parts.length < 4 || p.startsWith(CHANNEL + "/") || it.lib === true) continue;   // 0.21.84: a compatibility row of a library pin (lib: true, for pages before 0.21.84) -- this page plays it from the board + the library; a box's Show-in-rooms listing FROM the library (from "lib", no flag) is a real tile
       if (parts[1] === HOSTNAME1 && String(parts[2]).toLowerCase() === me) continue;   // my own share, listed back into my room
       live.add(p);
       xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || ""), cg: !!it.cg });   // 0.21.66: cg = listed only for a room grid (no tile of its own)
-      if (!tiles.has(p)) { cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }
+      if (!tiles.has(p)) { if (isLibPath(p) && authSecured && !libConn.token) await libTokenEnsure(); cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }   // 0.21.84: a library path rides the library connection
     }
-    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p)) scheduleRemoveTile(p); }
+    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p) && !libTiles.has(p)) scheduleRemoveTile(p); }   // 0.21.84: a library pin keeps its tile
   }
   setInterval(() => { xsPoll(); xsTick(); }, 8000);   // 0.21.62
   window.__xsPoll = xsPoll;   // rig
@@ -4123,6 +4309,7 @@
     if (JSON.stringify([grids, split]) !== gridsWas) { try { roomGridChanged(); } catch {} }   // 0.21.64: someone changed the room's grid layout -- live (0.21.65: or split a camera out)
     for (const t of gone) { try { if ((window.__spot?.mineList?.() || []).some((v) => v.target === t)) window.__spot.forget(t); } catch {} }
     if (boardSig(pins, spots, grids, split, order, cgs) !== was) { try { spotApplyWinner(); applyState(); } catch {} }
+    try { libBoardChanged(); } catch {}   // 0.21.84: the board's library pins -> tiles (a guest's library token follows its board)
   }
   let boardBusy = false;
   async function boardPoll() {
@@ -4171,6 +4358,7 @@
   // "Pin to this room" / "Unpin from this room" -- a feed of this room or of another room (a watched room, or one listed in)
   async function boardPin(path, on, quiet) {
     path = String(path);
+    if (isLibPath(path)) return libBoardPin(path, on, quiet);   // 0.21.84: from the library -- everyone may read it, no proof token
     const from = path.split("/", 1)[0];
     const label = shortLabel(path).replace(/ \(from [^)]*\)$/, "").replace(" (" + from + ")", "");
     if (!on) {
@@ -4261,7 +4449,7 @@
   // token for that room as proof that I can see it (a watched room's own token first), as for a pin.
   async function boardCgrid(id, g, quiet) {
     const body = { id, name: g.name, slots: g.slots, gap: g.gap, sens: g.sens };
-    const rooms = [...new Set(g.slots.flatMap((s) => s.cams).map((k) => String(k).split("/", 1)[0]))].filter((r) => r !== CHANNEL);
+    const rooms = [...new Set(g.slots.flatMap((s) => s.cams).map((k) => String(k).split("/", 1)[0]))].filter((r) => r !== CHANNEL && r !== LIB_ROOT);   // 0.21.84: a library camera on a room grid needs no proof
     const tokens = {};
     if (authSecured) for (const r of rooms) {
       try { tokens[r] = await boardFromToken(r); }
@@ -4396,6 +4584,7 @@
     } catch { return false; }
   }
   async function personalPin(path) {
+    if (isLibPath(path)) return libPersonalPin(path);   // 0.21.84
     const p = personalGet();
     if (!p) { personalDialog(); return false; }
     path = String(path);
@@ -7111,9 +7300,11 @@
     for (const w of watchRooms.values()) { try { wrSync(w); } catch {} }   // a watched room's camera a grid draws gets its (hidden) tile
     if (changed) { try { applyState(); } catch {} }
     cgLoop();
+    try { libSync(); } catch {}   // 0.21.84: a library camera a grid draws gets its (hidden) tile now
   }
   setInterval(() => { try { cgSync(); } catch {} }, 3000);
   function cgHide(n) {   // a camera here only for a grid: no tile in the gallery / rail, silent
+    if (isLibPath(n)) return libTiles.get(n)?.why === "grid";   // 0.21.84: a library camera here only for a grid
     const x = xsTiles.get(n);
     if (x) return !!x.cg;
     if (!cgCams.has(n)) return false;
@@ -7173,7 +7364,7 @@
     let l = "";
     try { l = gridLabel(k) || shortLabel(k); } catch { l = String(k); }
     const r = String(k).split("/", 1)[0];
-    if (r !== CHANNEL && !l.includes(r)) l += " (" + r + ")";
+    if (r !== CHANNEL && r !== LIB_ROOT && !l.includes(r)) l += " (" + r + ")";   // 0.21.84: a library camera wears its box and site already
     return l;
   }
   function cgDraw(n, t) {   // every spot: its camera's own latest frame (contain), its name, its turn
@@ -7199,7 +7390,7 @@
       }
       if (!drawn) {
         cx.fillStyle = "rgba(255,255,255,.5)"; cx.font = "500 15px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "middle";
-        cx.fillText(!k ? (all.length ? "Hidden for you" : "Empty spot") : mt ? "Connecting…" : "Not available here", r.x + r.w / 2, r.y + r.h / 2);   // 0.21.75
+        cx.fillText(!k ? (all.length ? "Hidden for you" : "Empty spot") : mt ? (isLibPath(k) ? libSpotText(k) : "Connecting\u2026") : isLibPath(k) ? libSpotText(k) : "Not available here", r.x + r.w / 2, r.y + r.h / 2);   // 0.21.75
         cx.textAlign = "left"; cx.textBaseline = "alphabetic";
       }
       if (k) {
@@ -7296,7 +7487,7 @@
     t.cgDraft = { slots: JSON.parse(snap), gap: Number(g0.gap ?? 2), sens: g0.sens || "medium" };
     t.cgCyc = [];
     setTimeout(() => ed.open({
-      pane: t.pane, layout: isNew ? "n4" : "custom", gap: t.cgDraft.gap, sens: t.cgDraft.sens,
+      pane: t.pane, layout: isNew ? "n" + Math.max(1, t.cgDraft.slots.length) : "custom", gap: t.cgDraft.gap, sens: t.cgDraft.sens,
       title: isNew ? "New grid — drag cameras from any room onto the spots" : "Edit grid",
       name: nm, onName: (v) => { nm = v; },
       share: boardCan() ? { on: share, label: "Share with this room", tip: "On: everyone in " + roomTitle(CHANNEL) + " sees it, and it stays when you leave. Off: only you, on this device, in any room." } : null,
@@ -7308,6 +7499,7 @@
         return { x: b.left - pb.left + f.ox, y: b.top - pb.top + f.oy, w: f.cw * f.sc, h: f.ch * f.sc };
       },
       streams: cgStreams(), slots: t.cgDraft.slots,
+      library: libBuilderSrc(),   // 0.21.84: the stream library's own group in the builder (search, a site filter, the cross-site cost)
       onChange: (slots) => { if (t.cgDraft) t.cgDraft.slots = slots; },
       onGap: (gap) => { if (t.cgDraft) t.cgDraft.gap = gap; },
       onSens: (sens) => { if (t.cgDraft) t.cgDraft.sens = sens; },
@@ -7319,6 +7511,7 @@
       onClose: () => { t.cgDraft = null; t.cgCyc = []; cgSync(); },
     }), 300);
   }
+  let cgNewSeed = null;   // 0.21.84: "Build a grid from these" -- the streams for a new grid's spots (cgNewFrom)
   function cgNew() {
     if (joinState !== "joined" || CHANNEL === LOBBY) { window.__toast?.("Join a room first — then build a grid from any room you can see.", 4500, { level: "warn" }); return; }
     const gb = window.__gb;
@@ -7332,7 +7525,7 @@
     let nm = base;
     for (let i = 2; taken.has(nm); i++) nm = base + " " + i;
     const name = cgNameOf("me", id);
-    cgPending.set(name, { kind: "me", id, g: { name: nm, slots: gb.preset(4).map((u) => ({ rect: u, cams: [], cycle: gb.cycle() })), gap: 2, sens: "medium" } });
+    cgPending.set(name, { kind: "me", id, g: { name: nm, slots: (cgNewSeed?.length ? gb.preset(Math.min(gb.PRESET_MAX, cgNewSeed.length)) : gb.preset(4)).map((u, i) => ({ rect: u, cams: cgNewSeed?.[i] ? [cgNewSeed[i]] : [], cycle: gb.cycle() })), gap: 2, sens: "medium" } });
     cgSync();
     setTimeout(() => cgEdit(name, true), 60);
   }
@@ -8479,6 +8672,7 @@
     // One entry per NAME ("tie each name as 1 person") -- the same person
     // on two machines is still one person in the People list.
     const parts = String(path).replace(/\.hang$/, "").split("/").filter(Boolean);
+    if (isLibPath(path)) return "lib:" + String(parts[1] || "?").toLowerCase();   // 0.21.84: a library stream belongs to its box, never to a person of my room
     if (parts.length >= 4) { const wr = wrRoomOf(path); return parts[2].toLowerCase() + (wr ? "@" + wr : ""); }   // 0.21.44: "alex@southridge" is not my room's Alex
     if (parts.length === 3) return parts[1].toLowerCase();
     return "?";
@@ -8769,6 +8963,7 @@
   }
   window.__chimeLog = chimeLog;   // rig
   function personChime(path, joined) {
+    if (isLibPath(path)) return;   // 0.21.84: a library stream is nobody arriving
     if (manualMute || chimeMuted) return;            // master mute covers chimes (0.9.10: publish-only sweeps too)
     if (wrRoomOf(path)) return;                      // 0.21.44: a room I only watch comes and goes silently
     if (!connection) return;                         // leave/teardown sweeps are not departures
@@ -10606,6 +10801,7 @@
     return leaf.slice(0, 2).toUpperCase();
   }
   function shortLabel(path, hover) {
+    if (isLibPath(path)) { const ll = libLabel(path); if (ll) return ll; }   // 0.21.84: a library stream: "Label - Box - Site"
     const base = path.replace(/\.hang$/, "");
     const parts = base.split("/").filter(Boolean);
     const leaf = parts[parts.length - 1] || base || path;
@@ -11381,7 +11577,8 @@
       if (t.faceCap) {
         // 0.8.2: no "audio only" caption -- the face is identity (initials
         // + swoosh) and the chip row tells the audio/video story.
-        t.faceCap.textContent = t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it"
+        // 0.21.84: a library tile's caption is its honest state (libTilePaint) -- never "connecting" for a dark library stream
+        t.faceCap.textContent = t.libCap ? t.libCap : t.noDecode ? t.noDecode + " \u2014 this viewer cannot decode it"
           : t.noCatalog ? ((t.catResubs || 0) >= 2 ? "waiting on relay " + (memberVia(personKeyOf(name)) || "?") + "\u2026" : "connecting\u2026")   // 0.21.26: say which relay is not delivering; 0.21.37 (Kenton read "mendon-rtsp" as an RTSP camera): "relay" said out loud
           : t.shed && t.hasVideo !== false ? "video paused \u2014 weak connection" : "";   // 0.21.23   // 0.21.22   // 0.9.2
         t.faceCap.title = t.noCatalog && (t.catResubs || 0) >= 2
@@ -11572,6 +11769,7 @@
     // Streams found but none playing is not "empty" -- point at the toggles.
     // With no tiles at all, connect() owns the text ("Searching...").
     stageEmpty.hidden = watching > 0 || inLobby();   // 0.21.72 (Kenton: "On the lobby page I don't need to be searching for broadcasts"): the Lobby lists rooms, nothing plays there
+    try { libEmptyPaint(); } catch {}   // 0.21.84: an empty room offers the library
     if (any && !watching) {
       stageEmpty.textContent = "Nothing playing. Streams are listed in the People panel \u2014 "
         + "click a row or its \u25cb toggle to start one.";
@@ -12322,8 +12520,10 @@
           if (!hqCell && vgHq(name).size) items.push({ value: "vghqoff", label: "Back to the grid picture for every cell" });
         }
         if (extra?.items?.length) items.push({ sep: true }, ...extra.items);   // 0.21.78: Invite to <room> / My room (a person's row)
+        if (isLibPath(name)) libTileItems(name, items);   // 0.21.84: "From the library - Box - Site", Remove from this room, Open in the library
         openMineMenu(anchor, items, "", async (v) => {
           if (extra?.pick && String(v).startsWith("pinv")) { extra.pick(v); return; }   // 0.21.78
+          if (String(v).startsWith("lib:")) { libTileMenuPick(name, v); return; }   // 0.21.84: the library rows
           if (v === "lat") { latencyToggle(name); return; }
           if (String(v).startsWith("rc")) { rcMenuPick(name, v); return; }   // 0.21.79: remote control
           if (String(v).startsWith("pnt")) { ptMenuPick(name, v); return; }   // 0.21.83: pointer mode
@@ -13973,7 +14173,7 @@
       const c = cur = { o, root, frameEl, slots: gb.slotsClean(slots0 || []), layout: o.layout || "", sens: ["low", "medium", "high"].includes(o.sens) ? o.sens : "medium" };
       c.inset = { pane: o.pane, top: 0, right: 0, applied: false };   // 0.21.66: the room the editor keeps for itself on the stage
       geInset = c.inset;
-      const labelOf = (k) => streams.find((s) => s.key === k)?.label || "Camera (offline)";
+      const labelOf = (k) => streams.find((s) => s.key === k)?.label || o.library?.label?.(k) || "Camera (offline)";   // 0.21.84: + a library camera
       const slotOf = (k) => c.slots.findIndex((s) => s.cams.includes(k));
       const snap = () => c.slots.map((s) => ({ rect: s.rect.slice(), cams: s.cams.slice(), cycle: { ...s.cycle } }));
       const changed = (layout) => { c.layout = layout || "custom"; paint(); try { o.onChange?.(snap()); } catch {} };
@@ -14095,6 +14295,9 @@
       const hint = mkEl("div", "geshint", "Drag a camera onto a spot. A spot that has one already asks: add it (they take turns) or replace. Shift while dropping adds straight away.");
       sh.append(sct);
       side.append(sh, q, list, hint);
+      const cost = mkEl("div", "gecost"); cost.hidden = true; cost.setAttribute("role", "status");   // 0.21.84: cameras from other sites cost their links
+      if (o.library) side.appendChild(cost);
+      c.paintCost = () => { const tx = o.library?.cost?.(snap()) || ""; if (cost.textContent !== tx) cost.textContent = tx; cost.hidden = !tx; };
       q.addEventListener("input", () => paintList());
       q.addEventListener("keydown", (e) => e.stopPropagation());
       function paintList() {
@@ -14124,6 +14327,44 @@
           drawThumb(th);
           return it;
         }));
+        if (o.library) { try { list.appendChild(paintLib(f)); } catch (e) { console.warn("KASTR builder library:", e); } }   // 0.21.84
+      }
+      // 0.21.84 (Kenton: the grid builder takes cameras from the stream library): its own collapsible group under the streams I can
+      // see -- the same search, a site filter, the first 60 matches (search to narrow); one dropped onto a spot joins the grid
+      function paintLib(f) {
+        const L = o.library, rows = L.rows() || [];
+        if (c.libOpen == null) c.libOpen = true;   // open at first (its header folds it)
+        const g = mkEl("div", "gelib");
+        const h = mkEl("button", "gelibh"); h.type = "button"; h.setAttribute("aria-expanded", String(!!c.libOpen));
+        h.title = "Streams from the fleet's stream library, any site";
+        const cv = mkEl("span", "chev"); cv.innerHTML = icon("chevron");
+        h.append(cv, mkEl("span", "", "Library"), mkEl("span", "n", String(rows.length)));
+        h.addEventListener("click", () => { c.libOpen = !c.libOpen; paintList(); });
+        g.appendChild(h);
+        if (!c.libOpen) return g;
+        const sites = L.sites() || [];
+        const sel = mkEl("select", "gelibs"); sel.setAttribute("aria-label", "Library site");
+        sel.appendChild(new Option("All sites", ""));
+        for (const s of sites) sel.appendChild(new Option(s, s));
+        sel.value = sites.includes(c.libSite) ? c.libSite : "";
+        sel.addEventListener("change", () => { c.libSite = sel.value; paintList(); });
+        sel.addEventListener("keydown", (e) => e.stopPropagation());
+        g.appendChild(sel);
+        const m = rows.filter((s) => (!sel.value || s.site === sel.value) && (!f || (s.label + " " + s.site).toLowerCase().includes(f)));
+        for (const s of m.slice(0, 60)) {
+          const it = mkEl("div", "gesi"); it.dataset.key = s.key; it.dataset.st = s.state || "";
+          it.title = s.label + " \u00b7 " + s.site + " \u2014 drag onto a spot (Shift: add it to that spot's turns)";
+          const th = mkEl("canvas", "gethumb"); th.width = 64; th.height = 36; th.__draw = s.draw;
+          const at = slotOf(s.key);
+          const ok = mkEl("span", "geok", at >= 0 ? "\u2713" : ""); ok.title = at >= 0 ? "In spot " + (at + 1) : "Not in the grid";
+          it.append(th, mkEl("span", "gesn", s.label), mkEl("span", "gelst", s.state || ""), ok);
+          it.addEventListener("pointerdown", (e) => camDrag(e, { kind: "cam", key: s.key, from: slotOf(s.key) }, s.label));
+          drawThumb(th);
+          g.appendChild(it);
+        }
+        if (m.length > 60) g.appendChild(mkEl("div", "gelibmore", (m.length - 60) + " more \u2014 search to narrow"));
+        if (!m.length) g.appendChild(mkEl("div", "gelibmore", rows.length ? "No library stream matches." : "The library is loading, or it is empty."));
+        return g;
       }
       function drawThumb(th) {
         const cx = th.getContext("2d");
@@ -14232,6 +14473,7 @@
           return el;
         }));
         paintList();
+        try { c.paintCost?.(); } catch {}   // 0.21.84
       }
       function setPos(el, u) { Object.assign(el.style, { left: (u[0] / GEU * 100) + "%", top: (u[1] / GEU * 100) + "%", width: (u[2] / GEU * 100) + "%", height: (u[3] / GEU * 100) + "%" }); }
       function slotAt(x, y) {   // the spot under a viewport point, or -1
@@ -16067,6 +16309,7 @@
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
       authHttps = Number(d.https) || 0;                 // 0.15.0
+      libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
     } catch {}
     if (!authSecured) { authTokens = null; authExp = 0; authRole = ""; authCodes = false; authLegacy = false; authTalking = true; authChat = true; authState = true; return; }
     // A token for this relay origin survives reloads within the tab.
@@ -16187,8 +16430,8 @@
     // 0.21.73: demand always leaves the page (a grid camera may sleep while unwatched on any box); the room is the camera's
     // own (a watched room's or a cross-room grid's camera) with that room's token when this page holds one
     const base = relayHostBase(); if (!base) return;
-    const room = String(broadcast).split("/")[0] || CHANNEL;
-    const jwt = (room !== CHANNEL && watchRooms.get(room)?.token) || authTokens?.member || "";
+    const room = isLibPath(broadcast) ? LIB_ROOT : (String(broadcast).split("/")[0] || CHANNEL);   // 0.21.84: a library stream's demand names room lib
+    const jwt = (isLibPath(broadcast) && libConn.token) || (room !== CHANNEL && watchRooms.get(room)?.token) || authTokens?.member || "";
     fetch(base + "/api/ondemand/demand", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ room, broadcast, jwt }) })
       .catch(() => {});   // 0.21.7: a camera on another site -- the relay host forwards the demand to its hub
@@ -16207,6 +16450,10 @@
       // 0.21.7: a camera registered on ANOTHER site is not in this relay host's list -- its low copy on the air with no
       // full copy says "on demand" just as well (the demand travels the federation from the relay host)
       const lowOnly = lowAvail.has(name) && !fullLive.has(name);
+      if (libTiles.has(name) && !parkedStreams.has(name)) {   // 0.21.84: a library stream watched here keeps its camera awake (room lib); not a box that is offline / gone
+        if (libWakeable(name) && ((t.watch.getAttribute("visible") || "never") !== "never" || t.fb?.dataset.src)) odDemand(name);
+        continue;
+      }
       if ((!known.has(name) && !lowOnly && !inGrid.has(name) && !xsTiles.has(name)) || parkedStreams.has(name)) continue;   // 0.21.75: + a camera shown here from another room
       if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
       // 0.21.7: a rail thumbnail on the low copy asks for nothing (every viewer's rail would keep every camera awake);
@@ -16224,8 +16471,9 @@
     if (!window.__joinedChannel?.()) return;
     const now = Date.now();
     for (const [name, t] of tiles) {
-      if (!xsTiles.has(name) || parkedStreams.has(name) || t.cg) continue;
-      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none")) continue;   // watched -- NOT `visible` (noCatalog parks it)
+      if (!(xsTiles.has(name) || libTiles.has(name)) || parkedStreams.has(name) || t.cg) continue;   // 0.21.84: + a library stream in this room (room lib)
+      if (libTiles.has(name) && !libWakeable(name)) continue;   // 0.21.84: no demand to a box that is offline, a site that is unreachable, a stream that is gone
+      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none") && !(libTiles.has(name) && cgWarm.has(name))) continue;   // 0.21.84: + a library camera my grid draws now   // watched -- NOT `visible` (noCatalog parks it)
       if (hasPicture(t)) { t.odAt = 0; t.odResub = false; continue; }
       if (!t.odAt) { t.odAt = now; odWake(name); continue; }
       if (!t.odResub && now - t.odAt > 6000) { t.odResub = true; resubscribe(name, "a camera shown here from another room was asleep"); }
@@ -19100,12 +19348,14 @@
   // The panel itself moves into the column (its own head: collapse + Unpin); unpinned it goes home and is a dropdown again. Its
   // toolbar button collapses / expands the section. Per device (kastr.dock); never on phones -- the bottom sheets stay.
   const DOCK_KEY = "kastr.dock", DOCK_ORDER = ["people", "view", "files", "chat", "share"];
+  DOCK_ORDER.splice(DOCK_ORDER.indexOf("share"), 0, "streams");   // 0.21.84: the Streams panel pins like the others (after Chat)
   const dockEl = document.getElementById("kDock"), dockGrip = document.getElementById("kDockGrip");
   const dockPanels = {
     people: { pop: document.getElementById("peoplePanel"), btn: document.getElementById("peopleBtn"), name: "People", fl: 1, show: () => paintParticipants(true) },
     view: { pop: viewPop, btn: gridBtn, name: "View", fl: 0.7, show: () => paintViewPop() },
     files: { pop: filesPop, btn: filesBtn, name: "Files", fl: 0.8, show: () => paintFilesPop() },
     chat: { pop: chatPanel, btn: chatBtn, name: "Chat", fl: 1.4, show: (user) => chatOpened(!user), hide: () => chatClosedHooks() },
+    streams: { pop: document.getElementById("libPanel"), btn: document.getElementById("libBtn"), name: "Streams", fl: 1.3, show: (user) => { try { libOpened(!user); } catch {} }, hide: () => { try { libClosed(); } catch {} } },   // 0.21.84
     share: { pop: sharePop, btn: shareBtn, name: "Share", fl: 1.4, show: () => { dockShareLive(true); setTimeout(() => { if (!sharePop.matches(":hover")) dockShareLive(false); }, 3500); },
              hide: () => { try { window.__shareClosed?.(); } catch {} } },
   };
@@ -20197,7 +20447,7 @@
     const cur = readChannel();
     const sel = joinEls.joinChanSel;
     const list = lastChannelList;
-    const key = (isPublisherMode() ? "box:" : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
+    const key = (isPublisherMode() ? "box:" + (libOn() ? "lib:" : "") : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
     if (sel.options.length && (key === gateKey || document.activeElement === sel)) return;
     gateKey = key;
     const keep = sel.options.length ? sel.value : null;
@@ -20205,6 +20455,7 @@
     // 0.21.75 (Kenton): a Publisher box may join NO room -- it sits in its hidden home room and each camera shows in the rooms
     // picked on its row ("Show in rooms\u2026")
     if (isPublisherMode()) sel.appendChild(new Option("No room \u2014 this box only shares its cameras into the rooms I pick", "__home"));
+    if (isPublisherMode() && libOn()) sel.options[sel.options.length - 1].text = "No room: share cameras to the stream library (and any rooms I pick)";   // 0.21.84: the library's words where the relay offers it
     for (const r of list) {
       if (isHomeRoom(r.slug)) continue;   // 0.21.75: the box's own home room is the "No room" choice above
       const n = r.count > 0 ? " \u2014 " + r.count + " here" : "";
@@ -20774,6 +21025,1184 @@
       }
     }
   }, 2000);
+
+  // ==== 0.21.84 (Kenton: "a fleet-wide library of available streams: every camera box ... can publish once to one shared library;
+  // anyone in any room browses it and pulls streams in as tiles, spotlights or grids"; approved 2026-10-23) -- THE STREAM LIBRARY,
+  // the page side. Library streams live at lib/<host>/<op>/<leaf>.hang, outside every room (state at the top: LIB_ROOT, libCat).
+  //  * The Streams panel (toolbar, beside People / View / Files / Chat / Share; the 0.21.78 rules: stays open until a click outside,
+  //    pins to the right column, a full-screen sheet on a phone): Site > box > streams, virtualized, search, filter chips (Live now
+  //    -- with the asleep cameras -- and kinds), a Site dropdown with counts, Show offline, sort; stills for the visible rows only.
+  //  * ONE library connection: the library viewer token (POST /api/library/token); tileUrl() hands it to every lib/ tile (its static
+  //    lib/** grant plays a newly added stream at once); its announce watch (pattern "lib") runs ONLY while the panel is open. The
+  //    room connections never see a library announce.
+  //  * Room adds are ordinary board entries with from:"lib" (pin, spotlight, a room grid's spots); "Watch here, just me" is a tile
+  //    on this device only. The rules are the board's: a publisher of the room or My room's owner adds; a locked view needs its
+  //    creator or an admin; viewers browse, watch, "just me" and build their own grids -- a greyed action says why.
+  //  * Browsing NEVER wakes a camera: a peek is only for a LIVE row (its -low copy when offered); an asleep row has an explicit
+  //    Preview, which sends one demand. A library tile that is dark shows its honest state card -- never "connecting".
+  // The network calls are all in libApi (one place; DESIGN 2.7 names until the server's API.md settles them).
+
+  // ---- the network layer ------------------------------------------------------------------------------------------------
+  const libApi = {
+    base: () => authBase(),
+    auth(tok) {   // a header, never the URL (logs)
+      const t = tok !== undefined ? tok : (authSecured ? (authTokens?.member || "") : "");
+      return t ? { authorization: "Bearer " + t } : {};
+    },
+    caps(d) {   // GET /api/auth -> { library: 1 | 0 (1 = this relay AND its hub serve it), libRoot: "lib", libMin, libraryWhy (only when off) }
+      const on = d?.library === 1 || d?.library === true;
+      return { relay: on, hub: on, root: String(d?.libRoot || LIB_ROOT), off: "", why: on ? "" : String(d?.libraryWhy || "") };
+    },
+    async token() {   // POST /api/library/token, Bearer = my member token -> { ok, token, exp, root, scope: "all" | "room", room, boardVer, paths? }
+      const r = await fetch(this.base() + "/api/library/token", { method: "POST", headers: { "content-type": "application/json", ...this.auth() }, body: "{}" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok || !d.token) { const e = new Error(d.error || ("HTTP " + r.status)); e.off = !!d.off; throw e; }
+      return { token: String(d.token), exp: Number(d.exp) || jwtExp(d.token), scope: String(d.scope || "all"), boardVer: d.boardVer ?? null };
+    },
+    async list(since, paths) {   // GET /api/library?since=<ver>[&paths=a,b] -> { ok, root, on, ver (opaque), why?, hubDown?, listAt?, admin?, same?, rows, missing? }
+      let q = "?since=" + encodeURIComponent(since ?? 0);
+      if (paths?.length) q += "&paths=" + paths.map(encodeURIComponent).join(",");
+      const r = await fetch(this.base() + "/api/library" + q, { cache: "no-store", headers: this.auth() });
+      if (r.status === 304) return { ok: true, same: true };
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d) throw new Error((d && d.error) || ("HTTP " + r.status));
+      return d;
+    },
+    async still(path, v) {   // GET /api/library/still?path=&v= -> a 160 x 90 JPEG (404: no still yet); `v` is only a cache key
+      const r = await fetch(this.base() + "/api/library/still?path=" + encodeURIComponent(path) + "&v=" + encodeURIComponent(v ?? ""), { headers: this.auth() });
+      return r.ok ? await r.blob() : null;
+    },
+    async boxSet(id, on) {   // THIS box's own server (beside /api/rtsp/xs): POST /api/rtsp/library {id, on: true | false | null} -> { ok, id, moved, library: L } | { error }
+      try {
+        const r = await fetch("/api/rtsp/library", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, on: !!on }) });
+        return await r.json().catch(() => ({ error: "HTTP " + r.status }));
+      } catch (e) { return { error: String(e?.message || e) }; }
+    },
+  };
+
+  // ---- capability: the relay's /api/auth AND the hub (the flag rides the hub's long-poll to this relay) ------------------------
+  function libCapsTake(d) {
+    try {
+      Object.assign(libCaps, libApi.caps(d));
+      libCaps.at = Date.now();
+      if (libCaps.killed && Date.now() - libCaps.killedAt > 300000) libCaps.killed = false;   // the catalogue says it again if still off
+    } catch {}
+    try { libGate(); } catch {}
+  }
+  function libOn() { return !!(libCaps.relay && libCaps.hub && !libCaps.off && !libCaps.killed); }
+  function libRoomOk() {   // a room where library tiles may show -- also while the fleet switch is off (API: "existing tiles keep playing"; the boards follow the cameras back)
+    try { return joinState === "joined" && CHANNEL !== LOBBY && !publishOnly && !isPublisherMode(); } catch { return false; }
+  }
+  setInterval(async () => {   // the hub's flag (and its kill switch) can change while a page sits in a room
+    if (document.hidden || !authBase() || joinState !== "joined") return;
+    try {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 3000);
+      const d = await fetch(authBase() + "/api/auth", { cache: "no-store", signal: ctl.signal }).then((r) => r.json());
+      clearTimeout(t);
+      libCapsTake(d);
+    } catch {}
+  }, 60000);
+
+  // ---- the library connection --------------------------------------------------------------------------------------------
+  function libUrl() {
+    const u = urlInput.value.trim();
+    return u + (u.includes("?") ? "&" : "?") + "lib=1" + (libConn.token ? "&jwt=" + encodeURIComponent(libConn.token) : "");
+  }
+  // an invite-link or My room guest's token covers only the library streams of its room's board -> minted again when it changes
+  const libGuest = () => { try { return !!authGuest || inviteGet()?.room === CHANNEL; } catch { return false; } };
+  const libMintKey = () => (libGuest() || libConn.scope === "room" ? CHANNEL + "@" + (board.room === CHANNEL ? String(board.ver ?? "") : "") : "fleet");
+  async function libTokenEnsure(force) {
+    if (!authSecured) { libConn.token = ""; return ""; }
+    if (!authTokens?.member) return "";
+    const key = libMintKey();
+    if (!force && libConn.token && libConn.mintKey === key && libConn.exp * 1000 - Date.now() > 120000) return libConn.token;
+    if (libConn.busy) return libConn.busy;
+    libConn.busy = (async () => {
+      try {
+        const t = await libApi.token();
+        const was = libConn.token;
+        libConn.token = t.token; libConn.exp = t.exp; libConn.err = ""; libConn.scope = t.scope; libConn.boardVer = t.boardVer;
+        libConn.mintKey = t.scope === "room" ? CHANNEL + "@" + (board.room === CHANNEL ? String(board.ver ?? "") : "") : key;
+        if (was !== t.token) libRetoken();
+        return t.token;
+      } catch (e) {
+        libConn.err = String(e?.message || e).slice(0, 160);
+        if (e?.off && !libCaps.killed) { libCaps.killed = true; libCaps.killedAt = Date.now(); libCaps.why = libConn.err; try { libGate(); } catch {} }   // 403 {off: true}
+        return "";
+      }
+      finally { libConn.busy = null; }
+    })();
+    return libConn.busy;
+  }
+  function libRetoken() {   // a fresh library token: every library tile (and the announce watch) moves onto it
+    const u = libUrl();
+    for (const p of libTiles.keys()) {
+      const t = tiles.get(p);
+      if (t && t.watch.getAttribute("url") && t.watch.getAttribute("url") !== u) t.watch.setAttribute("url", u);
+    }
+    if (libConn.conn) { libAnnStop(); if (libUi.open) libAnnStart(); }
+  }
+  setInterval(() => { if (libConn.token && (libTiles.size || libUi.open)) libTokenEnsure(); }, 60000);
+  // the announce watch: the library connection, pattern "lib", ONLY while the panel is open (the panel's "live" marks follow it)
+  function libAnnStart() {
+    if (libConn.conn || !libOn() || (authSecured && !libConn.token)) return;
+    let url;
+    try { url = new URL(libUrl()); } catch { return; }
+    const my = ++libConn.gen;
+    const conn = libConn.conn = new Net.Connection({ url: new Signals.Signal(url), enabled: true });
+    let it, pat = null;
+    try { pat = Net.Path.Pattern?.subtree?.(Net.Path.from(LIB_ROOT)) || null; } catch { pat = null; }   // the pattern: library paths only (lib/**)
+    try { it = pat ? conn.announced(pat) : conn.announced(); } catch { it = conn.announced(); }
+    libConn.ann = it;
+    (async () => {
+      for (;;) {
+        let e = null;
+        try { e = await it.next(); } catch { e = null; }
+        if (libConn.gen !== my) return;
+        if (!e) break;
+        if (e.kind === "updated") continue;
+        const full = String(e.prefix ?? e.path ?? "").split("/").filter(Boolean).join("/");
+        if (!isLibPath(full) || !full.endsWith(".hang") || LOW_RE.test(full)) continue;
+        if (e.kind === "retracted") libConn.announced.delete(full); else libConn.announced.add(full);
+        libChangedSoon();
+      }
+      if (libConn.gen !== my) return;
+      libConn.conn = null; libConn.ann = null;
+      setTimeout(() => { if (libConn.gen === my && libUi.open) libAnnStart(); }, 3000);
+    })();
+  }
+  function libAnnStop() {
+    libConn.gen++;
+    try { libConn.conn?.close(); } catch {}   // (its announce stream ends with it; closing the stream first made the library log "announcements are closed")
+    libConn.conn = null; libConn.ann = null; libConn.announced.clear();
+  }
+
+  // ---- the catalogue ------------------------------------------------------------------------------------------------------
+  const LIB_KINDS = ["camera", "rtsp", "grid", "screen", "webcam", "phone", "vehicle", "media", "other"];
+  const LIB_STALE_MS = 180000;   // no heartbeat for 3 minutes (a box beats every 60 s): the box is offline
+  const libMs = (v) => { const n = Number(v) || 0; return n && n < 1e12 ? n * 1000 : n; };
+  const libHm = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "?");
+  function libNorm(x) {
+    if (!x || typeof x !== "object") return null;
+    const path = String(x.path || "");
+    if (!isLibPath(path) || !path.endsWith(".hang") || LOW_RE.test(path)) return null;
+    const parts = path.split("/");
+    const leaf = parts[parts.length - 1].slice(0, -5);
+    const host = String(x.host || parts[1] || "");
+    return {
+      path, host, node: String(x.node || ""), site: String(x.site || x.node || "Unknown site").slice(0, 64),
+      label: String(x.label || prettyOperator(leaf)).slice(0, 80), kind: LIB_KINDS.includes(x.kind) ? x.kind : "other",
+      by: String(x.by || ""), box: String(x.box || host).slice(0, 64),
+      low: x.low === true ? lowOf(path) : (typeof x.low === "string" && isLibPath(x.low) ? x.low : ""),
+      audio: !!x.audio, res: String(x.res || ""), state: ["live", "asleep", "dark"].includes(x.state) ? x.state : "dark",
+      since: libMs(x.since), seen: libMs(x.seen), stillV: x.stillV ? x.stillV : null,   // 0 = no still
+      aka: [...(Array.isArray(x.aka) ? x.aka : []), ...(x.alias ? [x.alias] : [])].map(String).filter((a) => a && a !== path && a.endsWith(".hang") && !isLibPath(a)),
+      hidden: !!x.hidden, usedIn: Number(x.usedIn) || 0, unreachable: x.reach === false, offline: x.online === false, gone: !!x.gone,
+      kbps: Number(x.kbps || x.bitrate) || 0, edited: !!x.edited, conflict: String(x.conflict || ""),
+    };
+  }
+  // live | asleep | dark ("Not streaming", box online) | offline (box offline) | site (site unreachable) | gone
+  function libStateOf(e) {
+    if (!e || e.gone) return "gone";   // withdrawn (kept 1 h), hidden by an admin, or unknown
+    if (e.unreachable) return "site";   // reach: false
+    if (e.offline) return "offline";   // online: false (no heartbeat within 180 s)
+    if (libConn.announced.has(e.path)) return "live";
+    return e.state === "live" ? "live" : e.state === "asleep" ? "asleep" : "dark";
+  }
+  let libBusy = false;
+  async function libPoll(full) {
+    if (libBusy || !libOn() || !authBase()) return;
+    const used = [...libTiles.keys()];
+    full = !!full || libUi.open;
+    if (!full && !used.length) return;
+    if (!full && Date.now() - libMeta.polledAt < 3000) return;
+    libBusy = true;
+    libMeta.polledAt = Date.now();
+    try {
+      const since = full && libMeta.fullAt ? libMeta.ver ?? 0 : 0;   // the whole list once, then by version
+      const d = full ? await libApi.list(since) : await libApi.list(0, used);
+      libTake(d, full, full ? null : used, since);
+      libMeta.err = "";
+    } catch (e) { libMeta.err = String(e?.message || e).slice(0, 160); libChangedSoon(); }
+    finally { libBusy = false; }
+  }
+  setInterval(() => { if (!document.hidden) libPoll(false); }, 15000);   // open panel: the whole list (by version); else only this room's
+  function libTake(d, full, asked, since) {
+    if (!d) return;
+    const off = d.on === false || d.enabled === false;   // the fleet switch is off (rows: []): the panel goes, the tiles keep playing
+    if (off) { if (!libCaps.killed) { libCaps.killed = true; libCaps.killedAt = Date.now(); libCaps.why = String(d.why || ""); libGate(); } return; }
+    if (libCaps.killed && (d.on === true || d.enabled === true)) { libCaps.killed = false; libGate(); }
+    if (d.same) return;
+    const list = Array.isArray(d.rows) ? d.rows : Array.isArray(d.entries) ? d.entries : [];
+    if (d.ver != null && d.ver === libMeta.ver && !list.length && !(d.removed || []).length && libMeta.loaded) return;   // nothing new (ver is opaque: equality only)
+    // a since= answer is the WHOLE list (only a paths= answer is partial), unless a server says delta
+    const whole = !!full && !asked && d.delta !== true && d.full !== false;
+    if (whole) libCat.clear();
+    for (const raw of list) { const e = libNorm(raw); if (e) libCat.set(e.path, e); }
+    for (const p of Array.isArray(d.removed) ? d.removed : []) libCat.delete(String(p));
+    if (asked) {   // a paths= answer: `missing` (and an asked path it does not carry) is no longer in the library; an old path comes back as a row with `alias`
+      const got = new Set(list.flatMap((x) => [String(x?.path || ""), String(x?.alias || "")]));
+      for (const p of asked) { libAsked.add(p); if (!got.has(p)) libCat.delete(p); }
+      for (const p of Array.isArray(d.missing) ? d.missing : []) libCat.delete(String(p));
+    }
+    if (whole) libMeta.fullAt = Date.now();
+    libMeta.ver = d.ver ?? libMeta.ver;
+    libMeta.loaded = true; libMeta.at = Date.now();
+    if (d.site) libMeta.site = String(d.site);
+    if (d.node) libMeta.node = String(d.node);
+    libMeta.hubOk = !d.hubDown && !(d.hub && d.hub.ok === false);   // hubDown: a spoke serving its last copy (listAt) + its own rows
+    libMeta.listAt = libMs(d.listAt || d.hub?.at || 0);
+    if (!libMeta.site) libMeta.site = libMySite();
+    if (d.links && typeof d.links === "object") libMeta.links = d.links;
+    try { libAkaTake(); } catch (e) { console.warn("KASTR library: alias rewrite", e); }
+    libChangedSoon();
+  }
+  function libMySite() {
+    let n = "";
+    try { n = String(relayNameOf(urlInput.value.trim()) || "").toLowerCase(); } catch {}
+    if (!n) return "";
+    const base = n.endsWith("-relay") ? n.slice(0, -6) : n;
+    for (const e of libCat.values()) if (e.node.toLowerCase() === n || e.node.toLowerCase() === base || e.site.toLowerCase() === base) return e.site;
+    return "";
+  }
+  let libChangedT = 0;
+  function libChangedSoon() {
+    if (libChangedT) return;
+    libChangedT = setTimeout(() => { libChangedT = 0; try { libPaint(); } catch (e) { console.warn("KASTR library:", e); } try { libTilePaint(); } catch {} }, 60);
+  }
+  // display: "Label - Box - Site" (two cameras of one name told apart by their box)
+  function libLabel(path) {
+    const e = libCat.get(String(path));
+    if (e) return e.label + " \u00b7 " + e.box + " \u00b7 " + e.site;
+    try { return String(board.pins.find((p) => p.path === String(path))?.label || ""); } catch { return ""; }
+  }
+
+  // ---- 0.21.84 migration on the page: device-local references to a camera's OLD path (box-<host>/... before it moved into the
+  // library) follow its catalogue `aka` -- my grids, my hidden grid cameras, my pins, my shares' saved rooms, watch / park memory
+  let libAkaSig = "";
+  function libAkaTake() {
+    const map = new Map();
+    for (const e of libCat.values()) for (const a of e.aka) if (a !== e.path) map.set(a, e.path);
+    if (!map.size) return;
+    const sig = [...map].map(([a, b]) => a + ">" + b).sort().join("|");
+    if (sig === libAkaSig) return;
+    libAkaSig = sig;
+    libAkaRewrite(map);
+  }
+  function libAkaRewrite(map) {
+    const rel = sbRelayHost();
+    let n = 0;
+    const sw = (s) => { s = String(s); if (map.has(s)) { n++; return map.get(s); } return s; };
+    const edit = (key, fn) => {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return;
+        const out = JSON.stringify(fn(JSON.parse(raw)));
+        if (out !== raw) localStorage.setItem(key, out);
+      } catch {}
+    };
+    edit("kastr.mygrids." + rel, (o) => { if (o && typeof o === "object") for (const g of Object.values(o)) for (const s of (g && Array.isArray(g.slots)) ? g.slots : []) if (Array.isArray(s.cams)) s.cams = s.cams.map(sw); return o; });
+    edit("kastr.cghide." + rel, (a) => (Array.isArray(a) ? a.map((x) => { x = String(x); const i = x.indexOf("|"); return i < 0 ? x : x.slice(0, i + 1) + sw(x.slice(i + 1)); }) : a));
+    edit("kastr.pins." + rel, (a) => (Array.isArray(a) ? a.map(sw) : a));
+    edit(ENABLED_KEY, (a) => (Array.isArray(a) ? a.map(sw) : a));
+    edit(PARKED_KEY, (a) => (Array.isArray(a) ? a.map(sw) : a));
+    edit(XS_PATHS_KEY(), (o) => {   // keyed by room + the share's own name
+      if (!o || typeof o !== "object") return o;
+      for (const [a, b] of map) { const ka = xsKey(a), kb = xsKey(b); if (ka in o && !(kb in o)) { o[kb] = o[ka]; delete o[ka]; n++; } }
+      return o;
+    });
+    edit("kastr.libme." + rel, (o) => { if (o && typeof o === "object") for (const k of Object.keys(o)) if (Array.isArray(o[k])) o[k] = o[k].map(sw); return o; });
+    // the in-memory copies follow
+    for (const [a, b] of map) {
+      if (enabledStreams.has(a)) { enabledStreams.delete(a); enabledStreams.add(b); }
+      if (parkedStreams.has(a)) { parkedStreams.delete(a); parkedStreams.add(b); }
+    }
+    cghMem = null; pinsKeyLoaded = "";
+    if (n) {
+      console.log("KASTR library: " + n + " local reference(s) moved to the library paths (" + map.size + " alias(es))");
+      try { cgSync(); } catch {}
+      try { applyState(); } catch {}
+    }
+  }
+
+  // ---- the library tiles in this room: the board's library pins, my "just me" ones, and the cameras my grids draw --------------
+  const libMeKey = () => "kastr.libme." + sbRelayHost();
+  function libMeAll() { try { const o = JSON.parse(localStorage.getItem(libMeKey()) || "{}"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch { return {}; } }
+  function libMeList() { const a = libMeAll()[CHANNEL]; return Array.isArray(a) ? a.filter(isLibPath) : []; }
+  const libMeHas = (p) => libMeList().includes(String(p));
+  function libMeSet(p, on) {
+    const o = libMeAll(), cur = new Set(Array.isArray(o[CHANNEL]) ? o[CHANNEL] : []);
+    if (on) cur.add(String(p)); else cur.delete(String(p));
+    if (cur.size) o[CHANNEL] = [...cur].slice(-32); else delete o[CHANNEL];
+    try { localStorage.setItem(libMeKey(), JSON.stringify(o)); } catch {}
+    libSync().then(() => { if (on && tiles.has(p)) { try { select(p); } catch {} } });
+    window.__toast?.(on ? libLabel(p) + " is on your screen only \u2014 nothing was added to " + roomTitle(CHANNEL) : libLabel(p) + " is off your screen", 3500, { level: "event" });
+    libChangedSoon();
+  }
+  function libHere(path) {   // how this stream is in the room I am in: pin | grid | mygrid | me | ""
+    path = String(path);
+    if (board.room === CHANNEL && board.pins.some((p) => p.path === path)) return "pin";
+    if (board.room === CHANNEL && Object.values(board.customGrids || {}).some((g) => (g?.slots || []).some((s) => (s.cams || []).includes(path)))) return "grid";
+    if (Object.values(cgMine()).some((g) => (g?.slots || []).some((s) => (s.cams || []).includes(path)))) return "mygrid";
+    if (libMeHas(path)) return "me";
+    return "";
+  }
+  let libSyncBusy = false, libSyncAgain = false;
+  async function libSync() {
+    if (libSyncBusy) { libSyncAgain = true; return; }
+    libSyncBusy = true;
+    try {
+      do {
+        libSyncAgain = false;
+        const want = new Map();
+        if (libRoomOk()) {
+          if (board.room === CHANNEL) for (const p of board.pins || []) if (isLibPath(p?.path)) want.set(String(p.path), "pin");
+          for (const p of libMeList()) if (!want.has(p)) want.set(p, "me");
+          for (const k of cgCams) if (isLibPath(k) && !want.has(k)) want.set(k, "grid");
+          for (const t of tiles.values()) for (const s of (t.cgDraft?.slots || [])) for (const k of s.cams || []) if (isLibPath(k) && !want.has(String(k))) want.set(String(k), "grid");   // a grid being built
+        }
+        if (want.size && authSecured && !libConn.token) await libTokenEnsure();
+        let changed = false;
+        for (const [p, why] of want) {
+          const was = libTiles.get(p);
+          libTiles.set(p, { why });
+          if (!tiles.has(p)) { cancelPendingRemoval(p); createTile(p); changed = true; }
+          else if (!was || was.why !== why) changed = true;
+        }
+        for (const p of [...libTiles.keys()]) if (!want.has(p)) { libTiles.delete(p); if (tiles.has(p)) { removeTile(p); changed = true; } }
+        if (changed) { try { applyState(); } catch {} libTilePaint(); }
+        if (want.size && [...want.keys()].some((p) => !libCat.has(p) && !libAsked.has(p))) libPoll(false);
+      } while (libSyncAgain);
+    } finally { libSyncBusy = false; }
+  }
+  setInterval(() => { try { libSync(); } catch {} }, 3000);
+  function libBoardChanged() {   // boardTake: a library pin added / removed by anyone here; a guest's token follows its room's board
+    libSync();
+    if (libConn.token && (libGuest() || libConn.scope === "room")) libTokenEnsure();
+    libChangedSoon();
+  }
+  // the room board: "Add to this room" -- a pin whose `from` is lib (no proof token: everyone may read the library)
+  function libAddWhy() {
+    try {
+      if (joinState !== "joined" || CHANNEL === LOBBY) return "Join a room first";
+      if (publishOnly) return "This device is set to Publish only (View \u25b8 Publish only)";
+      if (viewLockedForMe()) return "The view is locked \u2014 only its creator or an admin changes it";
+      if (authSecured && authRole === "viewer" && !(authPersonal && isPersonalSlug(CHANNEL))) return "Viewers browse and watch \u2014 a publisher of this room adds streams for everyone";
+      if (authGuest && !authCo) return "Guests watch \u2014 the room's owner adds streams";
+      if (!boardCan()) return "Only a publisher of this room adds streams for everyone";
+      return "";
+    } catch { return "Not available here"; }
+  }
+  function libMyWhy() {
+    try {
+      if (joinState !== "joined") return "Join a room first";
+      if (libGuest()) return "Guests can't add streams to a room";
+      if (publishOnly) return "This device is set to Publish only";
+      const p = personalGet();
+      if (p && CHANNEL === p.slug) return "You're in My room \u2014 use Add to this room";
+      return "";
+    } catch { return "Not available here"; }
+  }
+  async function libBoardPin(path, on, quiet) {
+    path = String(path);
+    const e = libCat.get(path), label = e?.label || shortLabel(path);
+    if (!boardCan()) { if (!quiet) window.__toast?.(libAddWhy() || "Not allowed here", 5000, { level: "warn" }); return false; }
+    if (!on) {
+      const d = await boardPost("unpin", { path }, quiet);
+      if (d?.ok) { libSync(); if (!quiet) window.__toast?.(label + " is no longer in " + roomTitle(CHANNEL), 3000, { level: "event" }); }
+      libChangedSoon();
+      return !!d?.ok;
+    }
+    const d = await boardPost("pin", { path, from: LIB_ROOT, label, kind: e?.kind || xsKindOf(path) }, quiet);
+    if (!d?.ok) return false;
+    await libSync();
+    try { applyState(); } catch {}
+    libChangedSoon();
+    if (!quiet) window.__toast?.(label + " is in " + roomTitle(CHANNEL) + " for everyone, from the library" + (e?.site ? " (" + e.site + ")" : "") + " \u2014 it stays until someone removes it", 4500, { level: "event" });
+    return true;
+  }
+  async function libSpotAll(path) {
+    if (!boardPinned(path) && !(await libBoardPin(path, true, true))) { window.__toast?.("Not spotlit: " + (libAddWhy() || "the room board refused it"), 5000, { level: "warn" }); return false; }
+    window.__spot?.set?.(path);   // spotAdd -> the board's spotlight too (the pin is there)
+    window.__toast?.(libLabel(path) + " is spotlit for everyone in " + roomTitle(CHANNEL), 3500, { level: "event" });
+    return true;
+  }
+  async function libPersonalPin(path) {   // My room (it may hold library streams: only feeds FROM personal rooms are refused there)
+    const p = personalGet();
+    if (!p) { personalDialog(); return false; }
+    path = String(path);
+    const e = libCat.get(path);
+    const body = { room: p.slug, op: "pin", path, from: LIB_ROOT, label: e?.label || shortLabel(path), kind: e?.kind || xsKindOf(path), by: window.__publisher?.state?.()?.operator || "" };
+    const headers = { "content-type": "application/json" };
+    try {
+      if (authSecured) headers.authorization = "Bearer " + await personalToken(p);
+      const r = await fetch(authBase() + "/api/rooms/board", { method: "POST", headers, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || ("HTTP " + r.status));
+      window.__toast?.(libLabel(path) + " is in My room \u2014 there whenever you open My room, on any device", 4000, { level: "event" });
+      return true;
+    } catch (err) {
+      window.__toast?.("Could not add it to My room: " + (err?.message || err), 6000, { level: "warn" });
+      return false;
+    }
+  }
+  function libIntoGrid(kind, id, path) {   // "Add to a grid >": that grid's builder opens with the stream on its first empty spot
+    const name = cgNameOf(kind, id);
+    if (!tiles.has(name)) { try { cgSync(); } catch {} }
+    if (!tiles.has(name)) { window.__toast?.("That grid is not here any more.", 4000, { level: "warn" }); return; }
+    cgEdit(name);
+    setTimeout(() => {
+      const ed = window.__gridEditor, st = ed?.state?.();
+      if (!st) return;
+      const idx = st.slots.findIndex((s) => !s.cams.length);
+      ed.place(path, idx >= 0 ? idx : 0, idx >= 0 ? "replace" : "add");
+      window.__toast?.(libLabel(path) + " is on spot " + ((idx >= 0 ? idx : 0) + 1) + " \u2014 drag it anywhere, then Done", 4000, { level: "event" });
+    }, 700);
+  }
+  function cgNewFrom(keys) {   // "Build a grid from these": cgNew with its spots filled (an auto preset for that many)
+    cgNewSeed = (keys || []).map(String).filter(Boolean).slice(0, 26);
+    try { cgNew(); } finally { cgNewSeed = null; }
+  }
+  // the tile's own menu: "From the library - Box - Site", Remove from this room, Open in the library (the board / admin rows that
+  // do not apply to a library stream go)
+  function libTileItems(name, items) {
+    const e = libCat.get(name), why = libAddWhy(), here = libHere(name);
+    for (let i = items.length - 1; i >= 0; i--) if (["rpin", "rpinoff", "astop", "amute", "akick", "mypin"].includes(items[i].value)) items.splice(i, 1);
+    const head = [{ cap: "From the library \u00b7 " + (e?.box || String(name).split("/")[1] || "?") + " \u00b7 " + (e?.site || "?") }];
+    if (here === "pin") head.push(why ? { hint: "Remove from this room: " + why } : { value: "lib:remove", icon: "eye", label: "Remove from this room", tip: "Its tile goes for everyone in " + roomTitle(CHANNEL) + " (the stream stays in the library)" });
+    else if (libMeHas(name)) head.push({ value: "lib:meoff", icon: "eye", label: "Remove from this room (just me)", tip: "It was on your screen only" });
+    else if (!why) head.push({ value: "lib:add", icon: "pin", label: "Add to this room", tip: "A tile for everyone here, until someone removes it" });
+    if (!libMyWhy()) head.push({ value: "lib:my", icon: "pin", label: "Add to My room", tip: "Your own room, on any device" });
+    head.push({ value: "lib:open", icon: "search", label: "Open in the library", tip: "The Streams panel, at this stream" }, { sep: true });
+    items.unshift(...head);
+  }
+  function libTileMenuPick(name, v) {
+    if (v === "lib:remove") libBoardPin(name, false);
+    else if (v === "lib:meoff") libMeSet(name, false);
+    else if (v === "lib:add") libBoardPin(name, true);
+    else if (v === "lib:my") libPersonalPin(name);
+    else if (v === "lib:open") setTimeout(() => libOpen(name), 0);   // after this click (it would close the panel it opened)
+  }
+  // ---- the honest state card on a library tile (and the face's caption): never "connecting" for a dark library stream ----------
+  const LIB_ICONS = { live: "play", wait: "play", asleep: "libsleep", dark: "camOff", offline: "camOff", site: "bcast", gone: "eye" };
+  function libTileCard(p, t, pic) {
+    const e = libCat.get(p);
+    let st = e ? libStateOf(e) : (libMeta.fullAt || libAsked.has(p)) ? "gone" : "wait";
+    if (pic && st !== "gone") return null;   // a picture: the stream speaks for itself
+    const foot = "From the library \u00b7 " + (e?.box || String(p).split("/")[1] || "?") + (e?.site ? " \u00b7 " + e.site : "");
+    const woke = Date.now() - (odWakeAt.get(p) || 0) < 20000;
+    if (st === "live" || st === "wait") return { st, title: "Opening\u2026", detail: st === "live" ? "Live in the library \u2014 its picture is on its way" : "Asking the library about this stream", foot };
+    if (st === "asleep") return woke ? { st, title: "Starting\u2026", detail: "An asleep camera starts when it is opened, 1\u20132 s", foot } : { st, title: "Asleep", detail: "Starts when opened, 1\u20132 s", foot };
+    if (st === "dark") return { st, title: "Not streaming", detail: (e?.since ? "No picture since " + libHm(e.since) : "No picture right now") + " \u00b7 the box is online", foot };
+    if (st === "offline") return { st, title: "Box offline", detail: e?.seen ? "Last heard from at " + libHm(e.seen) : "Its box is not answering", foot };
+    if (st === "site") return { st, title: "Site unreachable", detail: "List from " + libHm(libMeta.listAt || e?.seen) + " \u2014 " + (e?.site || "its site") + " is not answering", foot };
+    return { st: "gone", title: "No longer in the library", detail: "Its box took it out, or an admin hid it", foot };
+  }
+  function libTilePaint() {
+    try { libGate(); } catch {}
+    for (const p of libTiles.keys()) {
+      const t = tiles.get(p);
+      if (!t || t.cg) continue;
+      if (!t.libCard) {
+        const c = document.createElement("div");
+        c.className = "libcard"; c.setAttribute("role", "status");
+        c.innerHTML = '<span class="lcic"></span><b></b><span class="lcd"></span><span class="lcf"></span>';
+        t.pane.appendChild(c); t.pane.classList.add("libtile"); t.libCard = c;
+      }
+      const s = libTileCard(p, t, hasPicture(t));
+      t.libCap = s ? s.title : "";
+      t.libCard.hidden = !s;
+      if (!s) continue;
+      const sig = s.st + "|" + s.title + "|" + s.detail + "|" + s.foot;
+      if (t.libCard.dataset.sig === sig) continue;
+      t.libCard.dataset.sig = sig; t.libCard.dataset.st = s.st;
+      t.libCard.querySelector(".lcic").innerHTML = icon(LIB_ICONS[s.st] || "eye");
+      t.libCard.querySelector("b").textContent = s.title;
+      t.libCard.querySelector(".lcd").textContent = s.detail;
+      t.libCard.querySelector(".lcf").textContent = s.foot;
+    }
+  }
+  setInterval(() => { try { libTilePaint(); } catch {} }, 1000);
+  function libWakeable(p) {   // odQuick: a library tile with no picture asks its camera to start only when that can help
+    const e = libCat.get(String(p));
+    if (!e) return !(libMeta.fullAt || libAsked.has(String(p)));   // not known yet: ask (a pin made a moment ago)
+    const st = libStateOf(e);
+    return st === "asleep" || st === "live" || st === "dark";
+  }
+  function libSpotText(k) {   // a grid spot drawing a library camera with no picture yet (cgDraw)
+    const s = libTileCard(String(k), tiles.get(String(k)), false);
+    return s ? s.title : "Opening\u2026";
+  }
+
+  // ---- the panel ------------------------------------------------------------------------------------------------------------
+  ICONS.library = '<rect x="2.5" y="6.5" width="11" height="9" rx="1.5"/><path d="M5.5 4h9.5a2 2 0 0 1 2 2v7"/><path d="M6.6 9v3.6l3-1.8z" fill="currentColor"/>';
+  ICONS.libsleep = '<path d="M15.8 12.4A6.6 6.6 0 0 1 7.6 4.2a6.6 6.6 0 1 0 8.2 8.2z"/>';
+  const libPanel = document.getElementById("libPanel"), libBtn = document.getElementById("libBtn");
+  const libListEl = document.getElementById("libList"), libSpace = document.getElementById("libSpace");
+  const libSearch = document.getElementById("libSearch"), libSiteSel = document.getElementById("libSite"), libSortSel = document.getElementById("libSort");
+  const libOffSw = document.getElementById("libOffline"), libChipsEl = document.getElementById("libChips");
+  const libBanner = document.getElementById("libBanner"), libEmptyEl = document.getElementById("libEmpty");
+  const libSelBtn = document.getElementById("libSelBtn"), libSelN = document.getElementById("libSelN"), libBuildBtn = document.getElementById("libBuild");
+  libBtn.innerHTML = tbHtml("library", "Streams");
+  document.getElementById("libSic").innerHTML = icon("search");
+  const LIB_UI_KEY = "kastr.lib.ui";   // this viewer's filters (a convenience: the page works without it)
+  const libUi = { open: false, q: "", live: true, kinds: new Set(), site: "", offline: false, sort: "name", sel: null, fold: new Set(), items: [], tops: [], total: 0, els: new Map(), raf: 0, count: 0, liveN: 0, flash: "" };
+  try {
+    const o = JSON.parse(localStorage.getItem(LIB_UI_KEY) || "null");
+    if (o && typeof o === "object") {
+      libUi.live = o.live !== false; libUi.kinds = new Set(Array.isArray(o.kinds) ? o.kinds.map(String) : []);
+      libUi.offline = !!o.offline; libUi.sort = o.sort === "recent" ? "recent" : "name"; libUi.site = String(o.site || "");
+    }
+  } catch {}
+  const libUiSave = () => { try { localStorage.setItem(LIB_UI_KEY, JSON.stringify({ live: libUi.live, kinds: [...libUi.kinds], offline: libUi.offline, sort: libUi.sort, site: libUi.site })); } catch {} };
+  const LIB_CHIPS = [["live", "Live now", "Live streams and asleep cameras (an asleep one starts when you open it)"], ["camera", "Cameras", "Box cameras"], ["grid", "Grids", "Camera grids"],
+    ["screen", "Screens", "Shared screens"], ["phone", "Phones", "Phones and webcams"], ["vehicle", "Vehicles", "Vehicle cameras"], ["media", "Media", "Shared files and media"]];
+  const libKindOf = (k) => (k === "rtsp" ? "camera" : k === "webcam" ? "phone" : k);
+  for (const [k, label, tip] of LIB_CHIPS) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "libchip"; b.dataset.k = k; b.title = tip;
+    b.append(document.createTextNode(label));
+    const n = document.createElement("span"); n.className = "n"; b.appendChild(n);
+    b.addEventListener("click", () => {
+      if (k === "live") libUi.live = !libUi.live;
+      else if (libUi.kinds.has(k)) libUi.kinds.delete(k); else libUi.kinds.add(k);
+      libUiSave(); libPaint(true);
+    });
+    libChipsEl.appendChild(b);
+  }
+  libSortSel.value = libUi.sort; libOffSw.checked = libUi.offline;
+  let libQT = 0;
+  libSearch.addEventListener("input", () => { clearTimeout(libQT); libQT = setTimeout(() => { libUi.q = libSearch.value.trim().toLowerCase().replace(/ +/g, " "); libPaint(true); }, 120); });
+  libSearch.addEventListener("keydown", (e) => {
+    e.stopPropagation();   // not the page's shortcuts
+    if (e.key === "ArrowDown") { e.preventDefault(); libFocusRow(0); }
+    if (e.key === "Escape" && libSearch.value) { e.preventDefault(); libSearch.value = ""; libUi.q = ""; libPaint(true); }
+  });
+  libSiteSel.addEventListener("change", () => { libUi.site = libSiteSel.value; libUiSave(); libPaint(true); });
+  libSortSel.addEventListener("change", () => { libUi.sort = libSortSel.value === "recent" ? "recent" : "name"; libUiSave(); libPaint(true); });
+  libOffSw.addEventListener("change", () => { libUi.offline = libOffSw.checked; libUiSave(); libPaint(true); });
+  libSelBtn.addEventListener("click", () => { libUi.sel = libUi.sel ? null : new Set(); libPaint(); });
+  libBuildBtn.addEventListener("click", () => {
+    const keys = [...(libUi.sel || [])];
+    if (!keys.length) return;
+    libUi.sel = null; libPaint();
+    setTimeout(() => cgNewFrom(keys), 0);
+  });
+  const libEntry = registerPop(libPanel, libBtn, () => libOpened());
+  { const orig = libEntry.close; libEntry.close = () => { if (libPanel.classList.contains("docked")) return; orig(); libClosed(); }; }   // a pinned Streams stays
+  function libOpened(quiet) {
+    libUi.open = true;
+    libTokenEnsure().then(() => { if (libUi.open) libAnnStart(); });
+    libPoll(true);
+    libPaint(true);
+    if (!quiet) setTimeout(() => { try { libSearch.focus({ preventScroll: true }); } catch {} }, 40);
+  }
+  function libClosed() {
+    libUi.open = false;
+    libAnnStop();
+    libActClose(); libPeekStop();
+  }
+  function libOpen(path) {   // the empty room's button, a tile's "Open in the library"
+    if (!libOn()) return;
+    if (libPanel.classList.contains("docked")) { dockReveal(libPanel); if (!libUi.open) libOpened(true); }
+    else if (libPanel.hidden) libBtn.click();
+    if (path) libFocusPath(String(path));
+  }
+  function libGate() {   // the panel exists only where the relay AND the hub offer the library (and not on a box / publish-only page)
+    let on = false;
+    try { on = libOn() && !isPublisherMode() && !publishOnly; } catch {}
+    libBtn.hidden = !on;
+    libPanel.classList.toggle("libgone", !on);
+    if (!on && libUi.open && !libPanel.classList.contains("docked")) { libPanel.hidden = true; libBtn.classList.remove("grid-on"); libClosed(); }
+    if (!on && libUi.open && libPanel.classList.contains("docked")) libClosed();
+    if (libGate.was !== on) {
+      libGate.was = on;
+      try { gateKey = ""; gatePaintChannels(); } catch {}
+      libSync();
+      if (on && libPanel.classList.contains("docked") && !libPanel.classList.contains("folded") && !libUi.open) libOpened(true);
+    }
+  }
+  // the rows: Site > box > streams, flattened for the virtual list (fixed heights per kind)
+  const LIB_H = { site: 34, box: 24, row: 60 };
+  const libCmpName = (a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base", numeric: true }) || a.path.localeCompare(b.path);
+  const libRecent = (e) => (libStateOf(e) === "live" ? Date.now() : e.since || e.seen || 0);
+  function libStatePass(e, ui) {
+    const st = libStateOf(e);
+    if (st === "gone" || e.hidden) return false;
+    if (st === "offline" || st === "site") return !!ui.offline;
+    return !(ui.live && st === "dark");
+  }
+  function libQueryPass(e, q) {
+    if (!q) return true;
+    const h = (e.label + " " + e.box + " " + e.site + " " + e.by + " " + e.host).toLowerCase();
+    return q.split(" ").every((w) => !w || h.includes(w));
+  }
+  function libBuildItems() {
+    const bySite = new Map(), siteN = new Map(), kindN = new Map();
+    let n = 0, liveN = 0, liveNow = 0;
+    for (const e of libCat.values()) {
+      if (!libStatePass(e, libUi) || !libQueryPass(e, libUi.q)) continue;
+      const kOk = !libUi.kinds.size || libUi.kinds.has(libKindOf(e.kind));
+      if (kOk) siteN.set(e.site, (siteN.get(e.site) || 0) + 1);
+      if (!libUi.site || e.site === libUi.site) kindN.set(libKindOf(e.kind), (kindN.get(libKindOf(e.kind)) || 0) + 1);
+      if (!kOk || (libUi.site && e.site !== libUi.site)) continue;
+      n++;
+      const st = libStateOf(e);
+      if (st === "live" || st === "asleep") liveN++;
+      if (st === "live") liveNow++;
+      let s = bySite.get(e.site);
+      if (!s) bySite.set(e.site, (s = new Map()));
+      let b = s.get(e.box);
+      if (!b) s.set(e.box, (b = []));
+      b.push(e);
+    }
+    const recentCmp = (a, b) => libRecent(b) - libRecent(a) || libCmpName(a, b);
+    const cmp = libUi.sort === "recent" ? recentCmp : libCmpName;
+    const items = [];
+    const sites = [...bySite.keys()].sort((a, b) => (a === libMeta.site ? -1 : b === libMeta.site ? 1 : a.localeCompare(b)));
+    for (const site of sites) {
+      const boxes = bySite.get(site);
+      const all = [...boxes.values()].flat();
+      const open = !libUi.fold.has(site) || !!libUi.q;
+      items.push({ t: "site", key: "s|" + site, site, n: all.length, open, down: all.some((e) => libStateOf(e) === "site"), live: all.filter((e) => libStateOf(e) === "live").length });
+      if (!open) continue;
+      const order = [...boxes.keys()].sort((a, b) => (libUi.sort === "recent" ? Math.max(...boxes.get(b).map(libRecent)) - Math.max(...boxes.get(a).map(libRecent)) : 0) || a.localeCompare(b, undefined, { numeric: true }));
+      for (const box of order) {
+        const rows = boxes.get(box).sort(cmp);
+        items.push({ t: "box", key: "b|" + site + "|" + box, site, box, n: rows.length, by: rows[0]?.by || "" });
+        for (const e of rows) items.push({ t: "row", key: "r|" + e.path, e });
+      }
+    }
+    const tops = new Array(items.length);
+    let y = 0;
+    for (let i = 0; i < items.length; i++) { tops[i] = y; y += LIB_H[items[i].t]; }
+    Object.assign(libUi, { items, tops, total: y + 8, count: n, liveN, liveNow, siteN, kindN });
+  }
+  function libPaint(rebuild) {
+    libBuildItems();
+    // the filters' own paint
+    for (const b of libChipsEl.querySelectorAll(".libchip")) {
+      const k = b.dataset.k, on = k === "live" ? libUi.live : libUi.kinds.has(k);
+      b.setAttribute("aria-pressed", String(on));
+      b.querySelector(".n").textContent = k === "live" ? (libUi.liveN ? String(libUi.liveN) : "") : (libUi.kindN.get(k) ? String(libUi.kindN.get(k)) : "");
+    }
+    const sites = [...new Set([...libCat.values()].filter((e) => !e.hidden).map((e) => e.site))].sort();
+    const ssig = sites.map((s) => s + ":" + (libUi.siteN.get(s) || 0)).join("|") + "@" + libUi.site;
+    if (libSiteSel.dataset.sig !== ssig && document.activeElement !== libSiteSel) {
+      libSiteSel.dataset.sig = ssig;
+      const total = [...libUi.siteN.values()].reduce((a, b) => a + b, 0);
+      libSiteSel.replaceChildren(new Option("All sites (" + total + ")", ""), ...sites.map((s) => new Option(s + " (" + (libUi.siteN.get(s) || 0) + ")", s)));
+      if (libUi.site && !sites.includes(libUi.site)) libUi.site = "";
+      libSiteSel.value = libUi.site;
+    }
+    document.getElementById("libHdCount").textContent = libMeta.loaded ? libUi.count + (libUi.count === 1 ? " stream" : " streams") + (libUi.liveNow ? " \u00b7 " + libUi.liveNow + " live" : "") : "";
+    // the banner: the honest state of the LIST itself
+    const ban = !libOn() ? (libCaps.killed ? "The stream library is switched off for the fleet" + (libCaps.why ? ": " + libCaps.why : "") : "")
+      : !libMeta.hubOk ? "List from " + libHm(libMeta.listAt || libMeta.at) + ": the hub is unreachable \u2014 streams here keep playing; adding them to rooms waits until it is back"
+      : libMeta.err ? "The library did not answer (" + libMeta.err + ") \u2014 showing what this page last had" : libConn.err ? "Library connection: " + libConn.err : "";
+    libBanner.hidden = !ban; libBanner.textContent = ban;
+    // selection
+    libSelBtn.textContent = libUi.sel ? "Done" : "Select";
+    libSelBtn.setAttribute("aria-pressed", String(!!libUi.sel));
+    libSelN.textContent = libUi.sel ? (libUi.sel.size ? libUi.sel.size + " selected" : "Pick streams to build a grid") : "";
+    libBuildBtn.hidden = !libUi.sel || !libUi.sel.size;
+    libBuildBtn.textContent = "Build a grid from these" + (libUi.sel?.size ? " (" + libUi.sel.size + ")" : "");
+    // the empty states
+    let empty = "";
+    if (!libMeta.loaded) empty = libMeta.err ? "The library is not answering right now." : "Loading the library\u2026";
+    else if (!libCat.size) empty = "Nothing in the library yet. A camera box shares its cameras here (on the box: a camera's rooms \u25b8 In the stream library).";
+    else if (!libUi.items.length) empty = "No stream matches these filters.";
+    libEmptyEl.hidden = !empty;
+    if (empty) {
+      libEmptyEl.textContent = empty;
+      if (libMeta.loaded && libCat.size) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "ghost"; b.textContent = "Show everything"; b.style.marginTop = "10px"; b.style.display = "block"; b.style.marginInline = "auto";
+        b.addEventListener("click", () => { libUi.q = ""; libSearch.value = ""; libUi.kinds.clear(); libUi.site = ""; libUi.live = false; libUi.offline = true; libOffSw.checked = true; libUiSave(); libPaint(true); });
+        libEmptyEl.appendChild(b);
+      }
+    }
+    if (rebuild) for (const el of libUi.els.values()) el.__sig = "";
+    libRenderSoon();
+  }
+  function libRenderSoon() { if (!libUi.raf) libUi.raf = requestAnimationFrame(libRender); }
+  function libRender() {
+    libUi.raf = 0;
+    if (!libUi.open && libPanel.hidden) return;
+    const t0 = performance.now();
+    const H = libListEl.clientHeight || 480, top = libListEl.scrollTop;
+    const lo = top - 240, hi = top + H + 240, items = libUi.items, tops = libUi.tops;
+    let a = 0, b = items.length;   // the first item that ends below `lo`
+    while (a < b) { const m = (a + b) >> 1; if (tops[m] + LIB_H[items[m].t] < lo) a = m + 1; else b = m; }
+    const keep = new Set();
+    for (let i = a; i < items.length && tops[i] < hi; i++) {
+      const it = items[i];
+      keep.add(it.key);
+      let el = libUi.els.get(it.key);
+      if (!el) { el = libItemEl(it); libUi.els.set(it.key, el); libSpace.appendChild(el); }
+      libItemFill(el, it);
+      const tp = tops[i] + "px";
+      if (el.style.top !== tp) el.style.top = tp;
+    }
+    const at = new Map(items.map((it, i) => [it.key, i]));
+    for (const [k, el] of libUi.els) {
+      if (keep.has(k)) continue;
+      if (el.contains(document.activeElement) && at.has(k)) { el.style.top = tops[at.get(k)] + "px"; continue; }   // the focused row stays (off screen)
+      el.remove(); libUi.els.delete(k);
+    }
+    libSpace.style.height = libUi.total + "px";
+    libUi.renderMs = performance.now() - t0;
+    libStillsSoon();
+    if (libUi.flash) {
+      const el = libUi.els.get("r|" + libUi.flash);
+      if (el) { libUi.flash = ""; el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); try { el.focus({ preventScroll: true }); } catch {} }
+    }
+  }
+  libListEl.addEventListener("scroll", () => {   // a real scroll (not the nudge of a click or a focus) puts the peek and the actions away
+    libRenderSoon();
+    const top = libListEl.scrollTop;
+    if (libActCtx && Math.abs(top - libActCtx.top) > 24) libActClose();
+    if (libPeekFor && Math.abs(top - libPeekTop) > 24) libPeekStop();
+  }, { passive: true });
+  new ResizeObserver(() => { if (libUi.open) libRenderSoon(); }).observe(libListEl);
+  function libItemEl(it) {
+    const el = document.createElement("div");
+    el.className = "libit"; el.style.height = LIB_H[it.t] + "px"; el.dataset.key = it.key;
+    if (it.t === "site") {
+      const b = document.createElement("button"); b.type = "button"; b.className = "libsite";
+      b.innerHTML = '<span class="chev">' + icon("chevron") + '</span><span class="nm"></span><span class="warn"></span><span class="n"></span>';
+      b.addEventListener("click", () => { if (libUi.fold.has(it.site)) libUi.fold.delete(it.site); else libUi.fold.add(it.site); libPaint(); });
+      b.addEventListener("keydown", libRowKey);
+      el.appendChild(b);
+    } else if (it.t === "box") {
+      el.innerHTML = '<div class="libbox"><b></b><span class="by"></span></div>';
+      el.firstChild.style.height = "100%";
+    } else {
+      el.innerHTML = '<div class="librow" tabindex="0" role="option" aria-selected="false" draggable="true"><span class="libchk" hidden></span><span class="libth"><img alt="" decoding="async"><span class="libst"></span></span>'
+        + '<span class="libtx"><span class="libnm"></span><span class="libsub"></span><span class="libtags"></span></span>'
+        + '<span class="libbtns"><button type="button" class="ghost libprev" hidden title="Starts this asleep camera once to look (one demand; it sleeps again a minute later)">Preview</button>'
+        + '<button type="button" class="libmore" aria-haspopup="menu">' + icon("more") + "</button></span></div>";
+      const row = el.firstChild;
+      row.addEventListener("keydown", libRowKey);
+      row.addEventListener("dragstart", (ev) => {
+        const e = libCat.get(el.dataset.path);
+        if (!e || !ev.dataTransfer) return;
+        ev.dataTransfer.setData(LIB_DND, e.path); ev.dataTransfer.setData("text/plain", libLabel(e.path)); ev.dataTransfer.effectAllowed = "copy";
+        libPeekStop();
+      });
+      row.addEventListener("mouseenter", () => { const e = libCat.get(el.dataset.path); if (e && !libUi.sel) libPeekArm(e, row); });
+      row.addEventListener("mouseleave", () => libPeekStop());
+      let holdT = 0;
+      row.addEventListener("pointerdown", (ev) => {   // press and hold (a phone): the peek
+        if (ev.pointerType !== "touch" || ev.target.closest("button")) return;
+        clearTimeout(holdT);
+        holdT = setTimeout(() => { const e = libCat.get(el.dataset.path); if (e) { row.__held = true; libPeekShow(e, row); } }, 450);
+      });
+      for (const evn of ["pointerup", "pointercancel", "pointerleave"]) row.addEventListener(evn, () => { clearTimeout(holdT); if (row.__held) setTimeout(() => { row.__held = false; libPeekStop(); }, 50); });
+      row.addEventListener("click", (ev) => {
+        const e = libCat.get(el.dataset.path);
+        if (!e || row.__held) return;
+        if (ev.target.closest(".libprev")) { libPreview(e, row); return; }
+        if (libUi.sel) { if (libUi.sel.has(e.path)) libUi.sel.delete(e.path); else libUi.sel.add(e.path); libPaint(); return; }
+        libActOpen(e, ev.target.closest(".libmore") || row);
+      });
+    }
+    return el;
+  }
+  function libItemFill(el, it) {
+    if (it.t === "site") {
+      const sig = it.site + "|" + it.n + "|" + it.open + "|" + it.down + "|" + it.live;
+      if (el.__sig === sig) return;
+      el.__sig = sig;
+      const b = el.firstChild;
+      b.setAttribute("aria-expanded", String(it.open));
+      b.title = (it.open ? "Collapse " : "Expand ") + it.site;
+      b.querySelector(".nm").textContent = it.site + (it.site === libMeta.site ? " (this site)" : "");
+      b.querySelector(".warn").textContent = it.down ? "\u00b7 unreachable" : "";
+      b.querySelector(".n").textContent = it.n + (it.live ? " \u00b7 " + it.live + " live" : "");
+      return;
+    }
+    if (it.t === "box") {
+      const sig = it.box + "|" + it.n + "|" + it.by;
+      if (el.__sig === sig) return;
+      el.__sig = sig;
+      el.querySelector("b").textContent = it.box;
+      el.querySelector(".by").textContent = (it.by && it.by !== it.box ? "\u00b7 " + it.by + " " : "") + "\u00b7 " + it.n + (it.n === 1 ? " stream" : " streams");
+      return;
+    }
+    const e = it.e, st = libStateOf(e), here = libHere(e.path), sel = !!libUi.sel?.has(e.path);
+    const sig = [e.path, e.label, e.box, e.site, e.by, st, e.since, e.seen, here, e.usedIn, sel, !!libUi.sel, e.kind, e.edited].join("|");
+    if (el.__sig === sig) return;
+    el.__sig = sig; el.dataset.path = e.path;
+    const row = el.firstChild;
+    row.dataset.st = st;
+    row.classList.toggle("sel", sel);
+    row.setAttribute("aria-selected", String(sel));
+    row.querySelector(".libchk").hidden = !libUi.sel;
+    row.querySelector(".libst").textContent = { live: "Live", asleep: "Asleep", dark: "Not streaming", offline: "Offline", site: "Unreachable" }[st] || "";
+    const nm = row.querySelector(".libnm");
+    nm.textContent = e.label;
+    if (e.edited) { const s = document.createElement("span"); s.className = "ed"; s.textContent = "\u270e"; s.title = "Named by an admin"; nm.appendChild(s); }
+    row.querySelector(".libsub").textContent = e.box + " \u00b7 " + e.site + (e.by && e.by !== e.box ? " \u00b7 " + e.by : "");
+    const tags = row.querySelector(".libtags");
+    tags.replaceChildren();
+    const tag = (txt, cls, tip) => { const s = document.createElement("span"); s.className = "libtag" + (cls ? " " + cls : ""); s.textContent = txt; if (tip) s.title = tip; tags.appendChild(s); };
+    if (here === "pin" || here === "grid") tag("In this room", "here", here === "grid" ? "On one of this room's grids" : "Everyone in this room sees it");
+    else if (here === "me") tag("Just you, here", "here", "On your screen in this room only");
+    else if (here === "mygrid") tag("In your grid", "", "On one of your own grids");
+    if (e.usedIn > 0) tag("Used in " + e.usedIn + (e.usedIn === 1 ? " room" : " rooms"), "", "");
+    if (st === "asleep") tag("starts when opened, 1\u20132 s", "", "Encodes only while someone watches");
+    if (st === "dark") tag(e.since ? "no picture since " + libHm(e.since) : "no picture", "warn", "Its box is online");
+    if (st === "offline") tag(e.seen ? "last heard " + libHm(e.seen) : "box offline", "warn", "");
+    if (st === "site") tag("list from " + libHm(libMeta.listAt || e.seen), "warn", e.site + " is not answering");
+    if (libKindOf(e.kind) !== "camera") tag({ grid: "Grid", screen: "Screen", phone: "Phone", vehicle: "Vehicle", media: "Media" }[libKindOf(e.kind)] || "Stream", "", "");
+    row.querySelector(".libprev").hidden = st !== "asleep" || !!libUi.sel;
+    const more = row.querySelector(".libmore");
+    more.title = "Add to this room, spotlight, a grid, My room, or just you";
+    more.setAttribute("aria-label", "Actions for " + e.label);
+    row.setAttribute("aria-label", e.label + ", " + e.box + ", " + e.site + ", " + (row.querySelector(".libst").textContent || st));
+    row.title = libLabel(e.path) + (st === "live" ? " \u2014 hover to peek" : "");
+    const c = libStills.get(e.path);
+    if (c?.url) libStillPut(el, c.url); else row.querySelector("img").removeAttribute("src");
+  }
+  function libRowKey(ev) {   // the list's keyboard: Up / Down move, Enter opens the actions, Space selects (in Select)
+    const rowEls = () => [...libSpace.querySelectorAll(".libsite, .librow")].sort((a, b) => parseFloat(a.closest(".libit").style.top) - parseFloat(b.closest(".libit").style.top));
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault(); ev.stopPropagation();
+      const list = rowEls(), i = list.indexOf(ev.currentTarget), j = i + (ev.key === "ArrowDown" ? 1 : -1);
+      if (j < 0) { libSearch.focus(); return; }
+      const nx = list[j];
+      if (nx) { nx.focus({ preventScroll: true }); nx.scrollIntoView({ block: "nearest" }); libRenderSoon(); }
+      return;
+    }
+    if (ev.currentTarget.classList.contains("librow") && (ev.key === "Enter" || (ev.key === " " && libUi.sel) || (ev.key === "F10" && ev.shiftKey) || ev.key === "ContextMenu")) {
+      ev.preventDefault(); ev.stopPropagation();
+      const e = libCat.get(ev.currentTarget.parentElement.dataset.path);
+      if (!e) return;
+      if (libUi.sel) { if (libUi.sel.has(e.path)) libUi.sel.delete(e.path); else libUi.sel.add(e.path); libPaint(); return; }
+      libActOpen(e, ev.currentTarget.querySelector(".libmore"));
+      return;
+    }
+    if (ev.key === "Escape") { ev.stopPropagation(); }
+  }
+  function libFocusRow(i) {
+    const first = [...libSpace.querySelectorAll(".librow")].sort((a, b) => parseFloat(a.closest(".libit").style.top) - parseFloat(b.closest(".libit").style.top))[i];
+    if (first) first.focus();
+  }
+  function libFocusPath(path) {   // "Open in the library": the filters that hide it give way, its site opens, the row flashes
+    const e = libCat.get(path);
+    if (!e) { libPoll(true); window.__toast?.("That stream is no longer in the library.", 4000, { level: "warn" }); return; }
+    if (!libQueryPass(e, libUi.q)) { libUi.q = ""; libSearch.value = ""; }
+    if (libUi.kinds.size && !libUi.kinds.has(libKindOf(e.kind))) libUi.kinds.clear();
+    if (libUi.site && libUi.site !== e.site) libUi.site = "";
+    const st = libStateOf(e);
+    if (st === "dark") libUi.live = false;
+    if (st === "offline" || st === "site") { libUi.offline = true; libOffSw.checked = true; }
+    libUi.fold.delete(e.site);
+    libPaint(true);
+    libSpace.style.height = libUi.total + "px";   // the list's new height first (a scroll past the old one is clamped)
+    const i = libUi.items.findIndex((it) => it.key === "r|" + path);
+    if (i >= 0) libListEl.scrollTop = Math.max(0, libUi.tops[i] - libListEl.clientHeight / 3);
+    libUi.flash = path;
+    libRenderSoon();
+  }
+  // the stills: only for rows on screen, at most 6 at a time, kept per version (160 x 90 JPEGs; object URLs, freed past 400)
+  const libStills = new Map();   // path -> { v, url, busy, img }
+  let libStillT = 0, libStillN = 0;
+  function libStillsSoon() { clearTimeout(libStillT); libStillT = setTimeout(libStillsLoad, 140); }
+  function libStillPut(el, url) { const img = el.querySelector("img"); if (img && img.getAttribute("src") !== url) img.src = url; }
+  function libStillsLoad() {
+    for (const [k, el] of libUi.els) {
+      if (!k.startsWith("r|")) continue;
+      const e = libCat.get(k.slice(2));
+      if (!e || e.stillV == null) continue;
+      const c = libStills.get(e.path);
+      if (c && (c.busy || (c.v === e.stillV && Date.now() - (c.at || 0) < 300000))) { if (c.url) libStillPut(el, c.url); continue; }
+      if (libStillN >= 6) { libStillsSoon(); break; }
+      libStillFetch(e).then(() => { const el2 = libUi.els.get("r|" + e.path), c2 = libStills.get(e.path); if (el2 && c2?.url) libStillPut(el2, c2.url); });
+    }
+  }
+  async function libStillFetch(e) {
+    const c = libStills.get(e.path) || {};
+    c.busy = true; libStills.delete(e.path); libStills.set(e.path, c);   // the newest at the end (the eviction order)
+    libStillN++;
+    try {
+      const b = await libApi.still(e.path, e.stillV);
+      if (b) { if (c.url) URL.revokeObjectURL(c.url); c.url = URL.createObjectURL(b); c.img = null; }
+      c.v = e.stillV; c.at = Date.now();
+    } catch { c.v = e.stillV; c.at = Date.now(); }
+    finally { c.busy = false; libStillN--; }
+    while (libStills.size > 400) { const [k, old] = libStills.entries().next().value; if (old?.url) URL.revokeObjectURL(old.url); libStills.delete(k); }
+  }
+  function libStillDraw(e, cx, w, h) {   // the builder's thumbnails: the camera's own tile when it has one, else its still
+    const t = tiles.get(e.path), f = t && vgFrameOf(t);
+    if (f) { const sw = f.displayWidth || f.codedWidth, sh = f.displayHeight || f.codedHeight, sc = Math.min(w / sw, h / sh); cx.drawImage(f, (w - sw * sc) / 2, (h - sh * sc) / 2, sw * sc, sh * sc); return true; }
+    const c = libStills.get(e.path);
+    if (!c && e.stillV != null && libStillN < 6) { libStillFetch(e); return false; }
+    if (!c?.url) return false;
+    if (!c.img) { c.img = new Image(); c.img.src = c.url; }
+    if (!c.img.complete || !c.img.naturalWidth) return false;
+    cx.drawImage(c.img, 0, 0, w, h);
+    return true;
+  }
+  // ---- a row's actions: the allowed ones, and the rest greyed with the reason -------------------------------------------------
+  let libActEl = null, libActCtx = null;
+  function libActClose() { if (libActEl) { libActEl.hidden = true; libActEl.replaceChildren(); } libActCtx = null; }
+  function libActItems(e) {
+    const why = libAddWhy(), here = libHere(e.path), st = libStateOf(e), joined = joinState === "joined" && CHANNEL !== LOBBY;
+    const out = [];
+    if (here === "pin") out.push({ v: "unpin", ic: "eye", t: "Remove from this room", d: "Its tile goes for everyone in " + roomTitle(CHANNEL), why });
+    else out.push({ v: "add", ic: "pin", t: "Add to this room", d: "A tile for everyone here; it stays until someone removes it", why });
+    out.push({ v: "spot", ic: "spotlight", t: "Spotlight for everyone", d: "Adds it to the room, then puts it on everyone's stage", why });
+    out.push({ v: "grid", ic: "view", t: "Add to a grid \u203a", d: "One of your grids, or one of this room's", why: joined ? "" : "Join a room first" });
+    out.push({ v: "my", ic: "pin", t: "Add to My room", d: "Your own room, on any device", why: libMyWhy() });
+    if (libMeHas(e.path)) out.push({ v: "meoff", ic: "eye", t: "Stop watching here (just me)", d: "Off your screen; nothing changes for the room" });
+    else out.push({ v: "me", ic: "eye", t: "Watch here, just me", d: "On this device only; nothing is added to the room", why: joined ? "" : "Join a room first" });
+    if (st === "asleep") out.push({ sep: true }, { v: "preview", ic: "play", t: "Preview", d: "Starts the camera once to look (it sleeps again a minute later)" });
+    return out;
+  }
+  function libGridItems() {
+    const out = [{ v: "back", ic: "sbChev", t: "Back" }, { sep: true }];
+    const my = Object.entries(cgMine());
+    for (const [id, g] of my) out.push({ v: "g:me:" + id, ic: "view", t: String(g?.name || "Grid"), d: "Yours (this device)" });
+    if (board.room === CHANNEL) for (const [id, g] of Object.entries(board.customGrids || {})) out.push({ v: "g:room:" + id, ic: "view", t: String(g?.name || "Grid"), d: "This room's grid", why: libAddWhy() });
+    if (!my.length && !(board.room === CHANNEL && Object.keys(board.customGrids || {}).length)) out.push({ hint: "No grids yet \u2014 start one:" });
+    out.push({ v: "g:new", ic: "plusc", t: "New grid with this\u2026", d: "A grid of yours, starting with this stream", why: Object.keys(cgMine()).length >= CG_MAX ? "Up to " + CG_MAX + " grids of your own \u2014 delete one first" : "" });
+    return out;
+  }
+  function libActOpen(e, anchor, page) {
+    libPeekStop();
+    if (!libActEl) {
+      libActEl = document.createElement("div");
+      libActEl.id = "libAct"; libActEl.setAttribute("role", "menu"); libActEl.hidden = true;
+      libActEl.addEventListener("click", (ev) => ev.stopPropagation());
+      libActEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      libActEl.addEventListener("keydown", (ev) => {
+        const bs = [...libActEl.querySelectorAll("button.lai")];
+        const i = bs.indexOf(document.activeElement);
+        if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); const a = libActCtx?.anchor; libActClose(); try { a?.focus(); } catch {} return; }
+        if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); ev.stopPropagation(); const n = bs.length; if (n) bs[(i + (ev.key === "ArrowDown" ? 1 : n - 1) + n) % n].focus(); return; }
+        if (ev.key === "ArrowLeft" && libActCtx?.page === "grid") { ev.preventDefault(); libActOpen(libActCtx.e, libActCtx.anchor, "main"); return; }
+        if (ev.key === "Tab") { ev.preventDefault(); const n = bs.length; if (n) bs[(i + (ev.shiftKey ? n - 1 : 1) + n) % n].focus(); }
+        ev.stopPropagation();
+      });
+      document.addEventListener("pointerdown", (ev) => { if (libActEl && !libActEl.hidden && !libActEl.contains(ev.target)) libActClose(); }, true);
+      document.body.appendChild(libActEl);
+    }
+    page = page || "main";
+    libActCtx = { e, anchor, page, top: libListEl.scrollTop };
+    const el = libActEl;
+    el.replaceChildren();
+    const cap = document.createElement("div"); cap.className = "lacap";
+    const b0 = document.createElement("b"); b0.textContent = e.label;
+    cap.append(b0, document.createTextNode(" \u00b7 " + e.box + " \u00b7 " + e.site));
+    cap.title = libLabel(e.path);
+    el.appendChild(cap);
+    for (const it of page === "grid" ? libGridItems() : libActItems(e)) {
+      if (it.sep) { const s = document.createElement("div"); s.className = "lasep"; el.appendChild(s); continue; }
+      if (it.hint) { const s = document.createElement("div"); s.className = "lacap"; s.style.border = "0"; s.textContent = it.hint; el.appendChild(s); continue; }
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "lai" + (it.v === "back" ? " laback" : ""); b.setAttribute("role", "menuitem"); b.dataset.v = it.v;
+      b.innerHTML = icon(it.ic || "eye");
+      const tx = document.createElement("span"); tx.className = "lat";
+      const t1 = document.createElement("span"); t1.textContent = it.t; tx.appendChild(t1);
+      const sub = it.why || it.d;
+      if (sub) { const w = document.createElement("span"); w.className = "law"; w.textContent = sub; tx.appendChild(w); }
+      b.appendChild(tx);
+      if (it.why) { b.disabled = true; b.title = it.t + ": " + it.why; b.setAttribute("aria-disabled", "true"); }
+      else b.title = it.d || it.t;
+      b.addEventListener("click", () => libActRun(e, it.v, anchor));
+      el.appendChild(b);
+    }
+    el.hidden = false;
+    if (!isPhone()) {
+      const r = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2, right: innerWidth / 2, top: 120, bottom: 120 };
+      const w = el.offsetWidth || 260, h = el.offsetHeight || 300;
+      el.style.left = Math.round(Math.max(8, Math.min(r.right - w, innerWidth - w - 8))) + "px";
+      el.style.top = Math.round(r.bottom + 4 + h > innerHeight - 8 ? Math.max(8, r.top - h - 4) : r.bottom + 4) + "px";
+    } else { el.style.left = ""; el.style.top = ""; }
+    (el.querySelector("button.lai:not(:disabled)") || el.querySelector("button.lai"))?.focus({ preventScroll: true });
+  }
+  function libActRun(e, v, anchor) {
+    if (v === "grid") { libActOpen(e, anchor, "grid"); return; }
+    if (v === "back") { libActOpen(e, anchor, "main"); return; }
+    libActClose();
+    if (v === "add") libBoardPin(e.path, true);
+    else if (v === "unpin") libBoardPin(e.path, false);
+    else if (v === "spot") libSpotAll(e.path);
+    else if (v === "my") libPersonalPin(e.path);
+    else if (v === "me") libMeSet(e.path, true);
+    else if (v === "meoff") libMeSet(e.path, false);
+    else if (v === "preview") libPreview(e, anchor?.closest?.(".librow") || anchor);
+    else if (v === "g:new") setTimeout(() => cgNewFrom([e.path]), 0);
+    else if (v.startsWith("g:")) { const [, kind, id] = v.split(":"); setTimeout(() => libIntoGrid(kind, id, e.path), 0); }
+    try { anchor?.focus?.({ preventScroll: true }); } catch {}
+  }
+  // ---- the peek: hover / press-and-hold on a LIVE row (its -low copy when offered), on the library connection --------------
+  let libPeekEl = null, libPeekT = 0, libPeekFor = "", libPeekRetry = [], libPeekTop = 0;
+  function libPeekArm(e, row) { clearTimeout(libPeekT); libPeekT = setTimeout(() => libPeekShow(e, row), 420); }
+  function libPeekShow(e, row, woke) {
+    // NEVER a sleeping camera: a peek is a viewer, and a viewer would wake it (browsing wakes nothing; Preview is the explicit ask)
+    if (!woke && libStateOf(e) !== "live") return;
+    if (!CLIENT.webcodecs || !libOn() || (authSecured && !libConn.token)) return;
+    libPeekStop();
+    if (!libPeekEl) { libPeekEl = document.createElement("div"); libPeekEl.id = "libPeek"; libPeekEl.hidden = true; libPeekEl.setAttribute("aria-hidden", "true"); document.body.appendChild(libPeekEl); }
+    const box = libPeekEl;
+    box.replaceChildren();
+    const v = document.createElement("div"); v.className = "pkv";
+    const c = libStills.get(e.path);
+    if (c?.url) { const im = document.createElement("img"); im.src = c.url; im.alt = ""; v.appendChild(im); }
+    const cap = document.createElement("div"); cap.className = "pkt";
+    const b = document.createElement("b"); b.textContent = e.label;
+    const s = document.createElement("span"); s.textContent = woke ? "Starting\u2026 1\u20132 s" : e.box + " \u00b7 " + e.site + (e.low ? " \u00b7 small copy" : "");
+    cap.append(b, s);
+    box.append(v, cap);
+    const mount = () => {
+      v.querySelector("moq-watch")?.remove();
+      const w = document.createElement("moq-watch");
+      w.setAttribute("url", libUrl());
+      w.setAttribute("name", e.low || e.path);
+      const tn = tuningFor("rail"); w.setAttribute("delay", tn.delay); w.setAttribute("buffer", tn.buffer);
+      w.setAttribute("visible", "always");
+      w.appendChild(document.createElement("canvas"));
+      v.appendChild(w);
+      try { w.volume = 0; } catch {}
+      return w;
+    };
+    mount();
+    libPeekFor = e.path; libPeekTop = libListEl.scrollTop;
+    if (woke) libPeekRetry = [2500, 5500].map((ms) => setTimeout(() => {   // a subscription made while the camera slept never delivers
+      if (libPeekFor !== e.path) return;
+      const w = v.querySelector("moq-watch");
+      let pic = false;
+      try { pic = w?.video?.out?.frame?.peek?.() !== undefined || w?.renderer?.out?.frame?.peek?.() !== undefined; } catch {}
+      if (!pic) mount(); else s.textContent = e.box + " \u00b7 " + e.site;
+    }, ms));
+    const pr = libPanel.getBoundingClientRect(), rr = (row || libPanel).getBoundingClientRect();
+    box.hidden = false;
+    const W = 288, H = 162 + 2;
+    const left = pr.left - W - 10 >= 8 ? pr.left - W - 10 : pr.right + 10 + W <= innerWidth - 8 ? pr.right + 10 : Math.max(8, rr.left);
+    box.style.left = Math.round(left) + "px";
+    box.style.top = Math.round(Math.max(8, Math.min(rr.top + rr.height / 2 - H / 2, innerHeight - H - 8))) + "px";
+  }
+  function libPeekStop() {
+    clearTimeout(libPeekT);
+    for (const t of libPeekRetry) clearTimeout(t);
+    libPeekRetry = [];
+    if (libPeekEl) { libPeekEl.hidden = true; libPeekEl.querySelector("moq-watch")?.remove(); libPeekEl.replaceChildren(); }
+    libPeekFor = "";
+  }
+  const libDemands = [];   // rig: every demand this panel sent (Preview only -- browsing sends none)
+  function libPreview(e, row) {   // an asleep row: ONE demand (the camera starts, and sleeps again a minute after nobody asks)
+    libDemands.push({ path: e.path, at: Date.now() });
+    if (libDemands.length > 50) libDemands.shift();
+    odDemand(e.path);
+    libPeekShow(e, row, true);
+    setTimeout(() => { if (libPeekFor === e.path && !(row && row.matches?.(":hover"))) libPeekStop(); }, 20000);
+  }
+  // ---- drag a row onto the stage: added to the room (or, where I may not add, on my screen only) --------------------------------
+  const LIB_DND = "application/x-kastr-lib";
+  stageWrap.addEventListener("dragover", (ev) => {
+    if (![...(ev.dataTransfer?.types || [])].includes(LIB_DND)) return;
+    ev.preventDefault(); ev.dataTransfer.dropEffect = "copy"; stageWrap.classList.add("libdrop");
+  });
+  stageWrap.addEventListener("dragleave", (ev) => { if (!stageWrap.contains(ev.relatedTarget)) stageWrap.classList.remove("libdrop"); });
+  stageWrap.addEventListener("drop", (ev) => {
+    stageWrap.classList.remove("libdrop");
+    const p = ev.dataTransfer?.getData(LIB_DND);
+    if (!p || !isLibPath(p)) return;
+    ev.preventDefault();
+    libDropOnStage(p);
+  });
+  function libDropOnStage(p) {
+    const why = libAddWhy();
+    if (!why) { libBoardPin(p, true); return; }
+    if (joinState === "joined" && CHANNEL !== LOBBY) { libMeSet(p, true); window.__toast?.("On your screen only \u2014 " + why, 5000, { level: "event" }); }
+  }
+  // ---- an empty room: "Add streams from the library" -------------------------------------------------------------------------
+  function libEmptyPaint() {   // applyState calls it
+    const b = document.getElementById("libEmptyCta");
+    if (!b) return;
+    let show = false;
+    try { show = libOn() && !stageEmpty.hidden && joinState === "joined" && CHANNEL !== LOBBY && !publishOnly && !isPublisherMode() && ![...tiles.keys()].some(isWatched); } catch {}
+    if (b.hidden === !show) return;
+    b.hidden = !show;
+  }
+  document.getElementById("libEmptyCta")?.addEventListener("click", (e) => { e.stopPropagation(); libOpen(); });
+  // ---- the grid builder's Library group (the same search, a site filter) and the cross-site cost hint ----------------------------
+  function libKbps(e) {   // a grid cell takes the camera's small copy when it offers one
+    if (e.low) return Number(e.lowKbps) || 400;
+    if (e.kbps) return e.kbps;
+    const h = parseInt(String(e.res).split("x")[1] || String(e.res), 10) || 0;
+    return h >= 2000 ? 12000 : h >= 1000 ? 4000 : h >= 700 ? 2000 : 1500;
+  }
+  function libCostHint(slots) {
+    const mine = libMeta.site || "", by = new Map();
+    for (const s of slots || []) for (const k of s.cams || []) {
+      const e = libCat.get(String(k));
+      if (!e || (mine && e.site === mine)) continue;
+      const x = by.get(e.site) || { n: 0, kbps: 0 };
+      x.n++; x.kbps += libKbps(e);
+      by.set(e.site, x);
+    }
+    if (!by.size) return "";
+    const mbps = (k) => (k >= 10000 ? Math.round(k / 1000) : Math.round(k / 100) / 10) + " Mbit/s";
+    return [...by].map(([site, x]) => {
+      const l = libMeta.links?.[site];
+      const link = l && (l.mbps || l.cap) ? " (the link measured about " + Math.round(Number(l.mbps || l.cap)) + " Mbit/s" + (l.rttMs != null ? ", " + l.rttMs + " ms" : "") + ")" : "";
+      return x.n + (x.n === 1 ? " camera" : " cameras") + " from " + site + ", about " + mbps(x.kbps) + (mine ? " over the " + site + " link" + link : "");
+    }).join("; ") + ". Each viewer of this grid pulls them.";
+  }
+  function libBuilderSrc() {   // cgEdit hands it to the builder (null = no library here)
+    if (!libOn()) return null;
+    if (!libMeta.fullAt || Date.now() - libMeta.at > 60000) libPoll(true);
+    return {
+      rows: () => [...libCat.values()].filter((e) => !e.hidden && libStateOf(e) !== "gone")
+        .sort((a, b) => a.site.localeCompare(b.site) || libCmpName(a, b))
+        .map((e) => ({ key: e.path, label: (e.label + " \u00b7 " + e.box).slice(0, 40), site: e.site, state: libStateOf(e), draw: (cx, w, h) => libStillDraw(e, cx, w, h) })),
+      sites: () => [...new Set([...libCat.values()].filter((e) => !e.hidden).map((e) => e.site))].sort(),
+      label: (k) => { const e = libCat.get(String(k)); return e ? (e.label + " \u00b7 " + e.box).slice(0, 40) : null; },
+      cost: (slots) => libCostHint(slots),
+    };
+  }
+  // ---- the box: "In the stream library" in a camera's rooms picker (openXsPicker) -------------------------------------------------
+  function libPickerRow(srv, label) {
+    const row = document.createElement("label"); row.className = "xsrow libsw";
+    const sw = document.createElement("span"); sw.className = "switch sm";
+    const cb = document.createElement("input"); cb.type = "checkbox";
+    // L = {on (publishing at lib/ now), want, switch (true | false | null = the box's default), available, status, why}
+    const L0 = window.__xsServer?.get?.(srv.id)?.library ?? srv.library ?? null;
+    const Lobj = (L) => (L && typeof L === "object" ? L : { on: !!L, want: !!L });
+    cb.checked = !!(Lobj(L0).want ?? Lobj(L0).on);
+    cb.setAttribute("aria-label", "In the stream library: everyone on the fleet can add " + label);
+    sw.append(cb, document.createElement("i"));
+    const tx = document.createElement("span"); tx.className = "lbt";
+    const t1 = document.createElement("span"); t1.textContent = "In the stream library: everyone on the fleet can add it";
+    const t2 = document.createElement("small"); t2.textContent = "Uploaded once; any room on any site can add it. The rooms below still list it as now.";
+    const err = document.createElement("span"); err.className = "lerr";
+    tx.append(t1, t2, err);
+    row.append(sw, tx);
+    { const L = Lobj(L0); if (L.available === false) { cb.disabled = true; err.textContent = L.why || "This box's relay does not offer the library yet"; } else if (L.status && L.status !== "ok") err.textContent = String(L.why || L.status); }
+    cb.addEventListener("change", async () => {
+      cb.disabled = true; err.textContent = "";
+      const d = await libApi.boxSet(srv.id, cb.checked);
+      cb.disabled = false;
+      if (d?.error || d?.ok === false) { err.textContent = String(d.error || "refused"); cb.checked = !cb.checked; return; }
+      try { const cur = window.__xsServer?.get?.(srv.id); if (cur) { cur.library = d.library ?? cb.checked; cur.lib = cb.checked; } } catch {}
+      { const L = Lobj(d.library); if (L.status && L.status !== "ok") err.textContent = String(L.why || L.status); }
+      window.__toast?.(cb.checked ? label + " is in the stream library \u2014 any room on the fleet can add it" : label + " is out of the stream library (its rooms keep it)", 4000, { level: "event" });
+    });
+    return row;
+  }
+  window.__lib = {   // rig (never a token)
+    state: () => ({ caps: { ...libCaps }, on: libOn(), n: libCat.size, tiles: [...libTiles].map(([p, x]) => [p, x.why]), open: libUi.open, items: libUi.items.length, rendered: libUi.els.size, renderMs: libUi.renderMs,
+      token: !!libConn.token, ann: !!libConn.conn, announced: libConn.announced.size, meta: { ...libMeta, links: undefined }, ui: { q: libUi.q, live: libUi.live, kinds: [...libUi.kinds], site: libUi.site, offline: libUi.offline, sort: libUi.sort, sel: libUi.sel ? [...libUi.sel] : null } }),
+    take: (d, full) => libTake(d, full !== false), poll: libPoll, sync: libSync, open: libOpen, url: (p) => tileUrl(String(p)), stateOf: (p) => libStateOf(libCat.get(String(p))),
+    card: (p) => { const t = tiles.get(String(p)); return t ? { hidden: !!t.libCard?.hidden, st: t.libCard?.dataset.st || "", text: t.libCard?.textContent || "", cap: t.libCap || "" } : null; },
+    act: (p) => { const e = libCat.get(String(p)); return e ? libActItems(e).filter((x) => x.v).map((x) => ({ v: x.v, t: x.t, why: x.why || "" })) : null; },
+    peek: (p) => { const e = libCat.get(String(p)); if (e) libPeekShow(e, null); return libPeekFor; }, peekFor: () => libPeekFor, demands: () => libDemands.slice(),
+    paintMs: () => { const t0 = performance.now(); libPaint(true); libRender(); return performance.now() - t0; },
+    rel: () => sbRelayHost(), here: libHere, me: libMeSet, pin: libBoardPin, cost: libCostHint, aka: (m) => libAkaRewrite(new Map(Object.entries(m || {}))), why: libAddWhy, gate: libGate, build: cgNewFrom,
+  };
 </script>
 
 <script type="module">
@@ -22075,7 +23504,7 @@
   window.__xsServer = {
     owned: (path) => { const a = added.find((x) => xsSrvId(x) != null && chanPath(ensureHang(x.name)) === path); return a ? a.feedId : null; },
     rooms: (path) => { const id = window.__xsServer.owned(path); return id == null ? [] : [...(xsSrv.get(id)?.xs || [])]; },
-    update: (id, d) => { xsSrv.set(id, { xs: Array.isArray(d?.xs) ? d.xs : [], xsState: d?.xsState || {}, xsLocked: d?.xsLocked || [] }); xsSrvSig = ""; try { renderSources(); } catch {} },
+    update: (id, d) => { xsSrv.set(id, { xs: Array.isArray(d?.xs) ? d.xs : [], xsState: d?.xsState || {}, xsLocked: d?.xsLocked || [], library: d?.library ?? xsSrv.get(id)?.library ?? null, lib: d?.lib ?? xsSrv.get(id)?.lib ?? null }); xsSrvSig = ""; try { renderSources(); } catch {} },
     get: (id) => xsSrv.get(id) || null,
   };
   function xsSrvBtn(name, sid) {
@@ -27287,7 +28716,7 @@
         const byId = new Map((d.feeds ?? []).map((f) => [f.id, f]));
         {   // 0.21.75: the rooms each camera shows in (kept by this box's server) -> its row
           let sig = "";
-          for (const f of d.feeds ?? []) { const v = { xs: Array.isArray(f.xs) ? f.xs : [], xsState: f.xsState || {}, xsLocked: f.xsLocked || [] }; xsSrv.set(f.id, v); sig += f.id + ":" + JSON.stringify(v) + ";"; }
+          for (const f of d.feeds ?? []) { const v = { xs: Array.isArray(f.xs) ? f.xs : [], xsState: f.xsState || {}, xsLocked: f.xsLocked || [], library: f.publish?.library ?? null, lib: f.lib ?? null }; xsSrv.set(f.id, v); sig += f.id + ":" + JSON.stringify(v) + ";"; }
           for (const id of [...xsSrv.keys()]) if (!byId.has(id)) xsSrv.delete(id);
           if (sig !== xsSrvSig) { xsSrvSig = sig; try { renderSources(); } catch {} }
         }

@@ -4965,6 +4965,15 @@ class AuthService:
                 elif path == "/api/hub/handover":      # 0.21.25: a new hub takes this hub's duties (federation token + admin code)
                     obj, code = svc.hub_handover(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
+                elif path in ("/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end"):   # 0.21.83 (D): an opted-in machine
+                    obj, code = svc.rcx_machine(path.rsplit("/", 1)[1], p, self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/rcx":               # 0.21.83 (D): a fleet admin's Machines... (member token, admin grant)
+                    obj, code = svc.rcx_admin_api(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
+                elif path == "/api/rcx/fed":           # 0.21.83 (D): a spoke forwards a machine's / an admin's call to the hub
+                    obj, code = svc.rcx_fed(p, self.headers.get("Authorization"), self._peer())
+                    self._reply(obj, code)
                 elif path == "/api/ondemand/forward":  # 0.21.7: a spoke relays a viewer's demand for a camera on another site
                     obj, code = svc.wake_route(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
@@ -6095,6 +6104,223 @@ class AuthService:
             return {"ok": False, "error": "the hub runs an older KASTR without remote control -- update the hub first"}, 501
         return (dict(d, id=rcid) if code == 200 else d), code
 
+    # ---- 0.21.83 (D): unattended remote control for FLEET ADMINS (kastr_rcadmin) ----------------------------------------
+    # Kenton: "allow remote control with the admin permissions on a relay/hub/camera box. This should be opt-in only and a
+    # check box in the relay server page allowing remote control without having to ask." The HUB keeps the registry (which
+    # machines opted in -- they say so in their polls; nothing here can switch a machine on), the sessions and the audit
+    # table. Every relay takes its machines' polls / claims / ends (a spoke forwards them to the hub over its federation
+    # token) and its fleet admins' Machines... calls (verified here: a member token with the admin grant -- the admin access
+    # code, which a spoke without an admin code of its own checks with the hub; 0.22 maps it to the Entra KASTR-Fleet-Admins
+    # group), and mints the session tokens for the two ends it serves: the machine's (put ~rcx/<sid>/{m, s.hang}, get
+    # ~rcx/<sid>/a) and the admin's (put ~rcx/<sid>/a, get ~rcx/<sid>/{m, s.hang}) -- no room token covers ~rcx, so the
+    # private capture is never announced in any room. A session this relay knows is over is refused at the next re-check.
+
+    def _rcx(self):
+        r = self.__dict__.get("_rcxreg")
+        if r is None:
+            import kastr_rcadmin
+            with _XS_INIT_LOCK:
+                r = self.__dict__.get("_rcxreg")
+                if r is None:
+                    r = self.__dict__["_rcxreg"] = kastr_rcadmin.HubRegistry(getattr(self.store, "state_dir", None), self.log)
+        return r
+
+    def _rcx_spoke(self):
+        return self._vehicle_spoke()
+
+    def _rcx_name(self):
+        n = self.relay_name()
+        if n:
+            return n
+        try:
+            import kastr_serve
+            return kastr_serve.host_slug()
+        except Exception:
+            return "relay"
+
+    def _hub_post(self, path, body, timeout=8):
+        """Spoke side: one POST at the hub's minter (federation bearer) -> (reply, code), or None (no hub / no answer)."""
+        base, bearer = self._hub_base(), self._hub_bearer()
+        if not base or not bearer:
+            return None
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": bearer})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+                return (d if isinstance(d, dict) else {}), (getattr(r, "status", None) or 200)
+        except urllib.error.HTTPError as e:
+            try:
+                d = json.loads(e.read().decode("utf-8", "replace") or "{}")
+            except Exception:
+                d = {}
+            return (d if isinstance(d, dict) else {}), e.code
+        except Exception:
+            return None
+
+    def _rcx_note(self, sid, exp):
+        with self.lock:
+            m = self.__dict__.setdefault("_rcx_mine", {})
+            m[str(sid)] = float(exp)
+            now = time.time()
+            for k in [k for k, v in m.items() if v < now - 3600]:
+                m.pop(k, None)
+
+    def _rcx_dead_add(self, sid):
+        sid = str(sid or "")
+        with self.lock:
+            d = self.__dict__.setdefault("_rcx_dead", {})
+            fresh = sid not in d
+            d[sid] = time.time()
+            for k in [k for k, v in d.items() if time.time() - v > 86400]:
+                d.pop(k, None)
+            live = any(rec.get("rcx") == sid and not rec.get("revoked") for rec in self._sessions.values())
+        if fresh and live:
+            self.trigger_revalidate()   # its sessions here are re-checked now (and refused)
+
+    def _rcx_is_dead(self, sid):
+        sid = str(sid or "")
+        if not sid:
+            return False
+        if sid in self.__dict__.get("_rcx_dead", {}):
+            return True
+        reg = self.__dict__.get("_rcxreg")
+        return bool(reg is not None and not self._rcx_spoke() and reg.dead(sid))
+
+    def _rcx_refused(self, ev, sid, remote, now):
+        with self.lock:
+            self.refusals += 1
+            self._refused.append({"at": int(now), "remote": remote, "path": "", "why": "remote session over"})
+            del self._refused[:-20]
+            rec = self._sessions.get(sid)
+            if rec:
+                rec["revoked"] = True
+        self.log("relay session: refused %s from %s (its remote session is over)" % (ev, remote))
+        return {"error": "that remote session is over"}, 403
+
+    def rcx_machine(self, op, p, peer=""):
+        """POST /api/rcx/poll | /api/rcx/claim | /api/rcx/end from a machine whose KASTR uses this relay."""
+        import kastr_rcadmin
+        p = p if isinstance(p, dict) else {}
+        if op not in ("poll", "claim", "end"):
+            return {"ok": False, "error": "unknown endpoint"}, 404
+        if self._rcx_spoke():
+            out = self._hub_post("/api/rcx/fed", {"op": op, "body": p, "via": self._rcx_name(), "ip": peer},
+                                 timeout=(kastr_rcadmin.POLL_WAIT_S + 10) if op == "poll" else 10)
+            if out is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- trying again shortly"}, 503
+            d, code = out
+            if code == 404 and not d.get("error"):
+                return {"ok": False, "error": "the hub runs a KASTR older than 0.21.83 -- update the hub first"}, 404
+        else:
+            reg = self._rcx()
+            if op == "poll":
+                d, code = reg.poll(p, via=self._rcx_name(), ip=peer)
+            elif op == "claim":
+                d, code = reg.claim(p)
+            else:
+                d, code = reg.machine_end(p)
+        if op == "claim" and code == 200 and d.get("ok") and kastr_rcadmin.SID_RE.match(str(d.get("sid") or "")):
+            # the machine publishes on THIS relay: this relay mints its session token (exactly the session's paths)
+            d = dict(d, token=_mint(self.key, kastr_rcadmin.machine_claims(d["sid"], d["exp"])))
+            self._rcx_note(d["sid"], d["exp"])
+        if op == "end" and code == 200:
+            self._rcx_dead_add(p.get("sid"))
+        return d, code
+
+    def rcx_fed(self, p, bearer, peer=""):
+        """POST /api/rcx/fed (hub side, a spoke's federation token): a machine's poll / claim / end, or a fleet admin's call
+        that spoke vouches for (`who` -- the spoke verified the admin's member token)."""
+        if not self._bearer_relay(bearer):
+            return {"ok": False, "error": "federation token required"}, 403
+        if self._rcx_spoke():
+            return {"ok": False, "error": "this relay is not the hub"}, 409
+        p = p if isinstance(p, dict) else {}
+        op = str(p.get("op") or "")
+        reg = self._rcx()
+        via = clean_label(p.get("via"), 40)
+        ip = clean_label(p.get("ip"), 64)
+        if op == "poll":
+            return reg.poll(p.get("body"), via=via, ip=ip)
+        if op == "claim":
+            return reg.claim(p.get("body"))
+        if op == "end":
+            return reg.machine_end(p.get("body"))
+        if op == "admin":
+            who = p.get("who") if isinstance(p.get("who"), dict) else {}
+            if who.get("kind") == "operator":
+                who = dict(who, kind="admin")   # a spoke's own operator is not the hub's
+            return self._rcx_admin_hub(p.get("req") if isinstance(p.get("req"), dict) else {}, who)
+        return {"ok": False, "error": "op is poll | claim | end | admin"}, 400
+
+    def _rcx_admin_hub(self, req, who):
+        reg = self._rcx()
+        op = str(req.get("op") or "")
+        if op == "machines":
+            return {"ok": True, "machines": reg.machines_view(dict(getattr(self, "user_nick", {}))), "hub": self._rcx_name()}, 200
+        if op == "start":
+            return reg.start(req.get("node"), req.get("monitor"), who)
+        if op == "stop":
+            return reg.stop(req.get("sid"), who, "operator" if who.get("kind") == "operator" else "admin")
+        if op == "status":
+            return reg.status(req.get("sid"))
+        if op == "sessions":
+            return {"ok": True, "sessions": reg.audit_view(), "hub": self._rcx_name()}, 200
+        return {"ok": False, "error": "op is machines | start | stop | status | sessions"}, 400
+
+    def _rcx_admin(self, p, who):
+        """A fleet admin's (or the hub operator's) call, answered by the hub (forwarded from a spoke); a start's answer gets
+        the admin's session token for THIS relay (the one the admin's page dials)."""
+        import kastr_rcadmin
+        req = {k: p.get(k) for k in ("op", "node", "monitor", "sid")}
+        op = str(req.get("op") or "")
+        if self._rcx_spoke():
+            out = self._hub_post("/api/rcx/fed", {"op": "admin", "req": req, "who": who}, timeout=10)
+            if out is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+            d, code = out
+            if code == 404 and not d.get("error"):
+                return {"ok": False, "error": "the hub runs a KASTR older than 0.21.83 -- update the hub first"}, 501
+        else:
+            d, code = self._rcx_admin_hub(req, who)
+        if op == "start" and code == 200 and d.get("ok") and kastr_rcadmin.SID_RE.match(str(d.get("sid") or "")):
+            d = dict(d, token=_mint(self.key, kastr_rcadmin.admin_claims(d["sid"], d["exp"])), paths=kastr_rcadmin.paths(d["sid"]),
+                     relayPort=self.relay_port, adminHost=who.get("host") or "")
+            self._rcx_note(d["sid"], d["exp"])
+            self.log("relay auth: %s (fleet admin) controls %s -- session %s" % (who.get("name") or who.get("host"), req.get("node"), d["sid"][:8]))
+        if (op == "stop" and code == 200) or (op == "status" and code == 200 and d.get("state") == "ended"):
+            self._rcx_dead_add(req.get("sid"))
+        return d, code
+
+    def rcx_admin_api(self, p, bearer, peer=""):
+        """POST /api/rcx {op: machines | start | stop | status | sessions, node?, monitor?, sid?, by?, color?} -- FLEET ADMINS
+        only: a member token THIS relay minted with the admin grant (the admin access code)."""
+        p = p if isinstance(p, dict) else {}
+        claims = self._member_claims(bearer)
+        if not claims or not claims_admin_any(claims):
+            return {"ok": False, "error": "fleet admins only (join with the admin access code)"}, 403
+        room, host = claims_identity(claims)
+        who = {"name": clean_label(p.get("by"), 40) or (host or "an admin"), "host": host or "", "relay": self._rcx_name(),
+               "ip": peer or "", "kind": "admin", "color": str(p.get("color") or "")[:7]}
+        return self._rcx_admin(p, who)
+
+    def rcx_operator(self, p, me=""):
+        """The Relay page on this machine (kastr_relay.handle_api /api/relay/rcx, loopback only): the hub's operator."""
+        p = p if isinstance(p, dict) else {}
+        op = str(p.get("op") or "")
+        if op == "start" and self._rcx_spoke():
+            return {"ok": False, "error": "Control from the hub's Relay page, or from Machines... in KASTR (the admin access code)"}, 403
+        host = me if HOST_RE.match(str(me or "")) else ""
+        if not host:
+            try:
+                import kastr_serve
+                host = kastr_serve.host_slug()
+            except Exception:
+                host = ""
+        who = {"name": clean_label(p.get("by"), 40) or "Hub operator", "host": host, "relay": self._rcx_name(), "ip": "the hub's Relay page",
+               "kind": "operator", "color": str(p.get("color") or "")[:7]}
+        return self._rcx_admin(p, who)
+
     def _p_invite_make(self, room, frm, by, to, to_name, now=None):
         """Hub: a person invite -- a link bound to the invited device, then a note for that device's page (here, and on every
         spoke through the long-poll). -> (reply, code)."""
@@ -6580,6 +6806,8 @@ class AuthService:
                 return self._p_refused(ev, sid, remote, rec.get("room"))   # 0.21.78: the owner left their room
             if rec and (rec.get("revoked") or (self.bans and self.bans.hit(rec.get("room"), rec.get("host"), rec.get("remote"), now))):
                 return self._revoked_answer(ev, sid, remote, now)   # 0.17.0: an admin removed this identity
+            if rec and rec.get("rcx") and self._rcx_is_dead(rec.get("rcx")):
+                return self._rcx_refused(ev, sid, remote, now)      # 0.21.83 (D): its remote session is over
             if rec and float(rec.get("expires") or 0) > now:
                 return self._xs_grant(rec.get("base") or rec["grant"], rec.get("room"), now), 200   # 0.21.41: listings recomputed
         status, grant, why = session_grant(req, self.key, now)
@@ -6614,6 +6842,8 @@ class AuthService:
                 is_vehicle = True
             if self.bans and self.bans.hit(room, host, remote, now):   # 0.17.0
                 return self._revoked_answer(ev, sid, remote, now)
+            if claims.get("rcx") and self._rcx_is_dead(claims.get("rcx")):   # 0.21.83 (D): a remote session that is over
+                return self._rcx_refused(ev, sid, remote, now)
             pg = bool(claims.get("pg")) and is_personal(room)   # 0.21.78: a guest's session lasts while the owner is in
             if pg and not self.personal_open(room, now):
                 return self._p_refused(ev, sid, remote, room)
@@ -6643,7 +6873,8 @@ class AuthService:
                                        "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False,   # 0.17.0: the identity a kick keys on
                                        "pg": pg,                                        # 0.21.78: a personal room's guest
-                                       "link": link}                                    # 0.21.77: the dialer of a link session
+                                       "link": link,                                    # 0.21.77: the dialer of a link session
+                                       "rcx": (claims.get("rcx") if status == "grant" and isinstance(claims.get("rcx"), str) else None)}   # 0.21.83 (D)
         return grant, 200
 
     # ---- 0.21.41: cross-room listings ("share to several rooms") ------------------------------------------
@@ -11604,6 +11835,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/spokes/update",   # 0.21.0
                  "/api/relay/clients/update",  # 0.21.50
                  "/api/relay/clients/cmd",     # 0.21.73: Restart / Move a user's KASTR
+                 "/api/relay/rcx",             # 0.21.83 (D): the hub operator's Control / Stop (unattended remote control)
                  "/api/relay/users/nick",      # 0.21.69: a machine's nickname on the hub's Users table
                  "/api/relay/logs/collect",    # 0.21.51
                  "/api/relay/spokes/restart",  # 0.21.52
@@ -11803,6 +12035,29 @@ def handle_api(handler, relay, path, set_relay_url=None):
             return True
         p = _payload_of(handler) or {}
         obj, code = auth.set_nick(p.get("node"), p.get("nick"))
+        reply(obj, code)
+        return True
+    if path == "/api/relay/rcx":   # 0.21.83 (D): opted-in machines, Remote sessions, and the hub operator's Control / Stop
+        auth = getattr(relay, "auth", None)
+        if not auth or not relay.running():
+            if handler.command == "POST":
+                _payload_of(handler)
+            reply({"ok": False, "error": "unattended remote control needs this relay running secured", "machines": [], "sessions": []},
+                  200 if handler.command == "GET" else 400)
+            return True
+        if handler.command == "GET":
+            m, mc = auth.rcx_operator({"op": "machines"})
+            s, sc = auth.rcx_operator({"op": "sessions"})
+            reply({"ok": mc == 200 and sc == 200, "hub": not auth._rcx_spoke(), "machines": m.get("machines") or [],
+                   "sessions": s.get("sessions") or [], "error": m.get("error") or s.get("error") or ""})
+            return True
+        p = _payload_of(handler) or {}
+        if p.get("op") not in ("start", "stop", "status"):
+            reply({"ok": False, "error": "op is start | stop | status"}, 400)
+            return True
+        obj, code = auth.rcx_operator(p)
+        if p.get("op") == "start" and code == 200 and obj.get("ok"):
+            obj = dict(obj, relay="http://127.0.0.1:%d/" % int(relay.port))   # the page on this machine dials its own relay
         reply(obj, code)
         return True
     if path == "/api/relay/clients/cmd":   # 0.21.73: Restart / Move one user -- through the relay it uses (here, or a spoke via the hub)

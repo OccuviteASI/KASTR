@@ -23,6 +23,10 @@ WINDOWS = sys.platform == "win32"
 LINUX = sys.platform.startswith("linux")
 _x11grab = None   # 0.21.79: does this ffmpeg have x11grab (asked once)
 MAX_W, MAX_H, FPS = 1920, 1080, 30
+# 0.21.83 (D) (Kenton: "allow for switching to different windows/monitors on the device"): screen://monitor/99 = EVERY monitor
+# at once (a fleet admin's private capture of an unattended machine) -- their union: x11grab of that rectangle on Linux, GDI's
+# whole virtual desktop on Windows (Windows Graphics Capture takes one monitor or one window), scaled to MAX_W by the publisher
+ALL_MONITORS = 99
 RC_FPS = int(os.environ.get("KASTR_RC_FPS") or 30)   # 0.21.80: the frame rate while someone controls the share (kastr_rtsp.rc_screen_opts)
 # the computer's sound: s16le PCM on ffmpeg's stdin. kastr_loopback writes it in real time and pads silence, so the
 # sample count IS the clock -- timestamps from 0 like the capture's (wall-clock stamps put the audio ~50 years ahead)
@@ -158,6 +162,8 @@ def check_url(url):
 
 def _resolve(kind, n):
     """The live source dict behind a url (monitor by index, window by handle) or None."""
+    if kind == "monitor" and n == ALL_MONITORS:   # 0.21.83 (D)
+        return all_monitors()
     if LINUX:   # 0.21.79: X11 -- screens by index (RandR), windows by X window id
         import kastr_x11
         if kind == "monitor":
@@ -174,6 +180,25 @@ def _resolve(kind, n):
         if int(s.get("hwnd") or 0) == n:
             return s
     return None
+
+
+def all_monitors():
+    """0.21.83 (D): every monitor at once as one source {index: ALL_MONITORS, name, rect {x, y, w, h}, width, height}, or None."""
+    try:
+        if LINUX:
+            import kastr_x11
+            mons = kastr_x11.list_monitors()
+        else:
+            mons = _sources_mod().list_monitors()
+    except Exception:
+        return None
+    rs = [m.get("rect") for m in mons if isinstance(m.get("rect"), dict) and m["rect"].get("w") and m["rect"].get("h")]
+    if not rs:
+        return None
+    x0, y0 = min(r["x"] for r in rs), min(r["y"] for r in rs)
+    x1, y1 = max(r["x"] + r["w"] for r in rs), max(r["y"] + r["h"] for r in rs)
+    return {"index": ALL_MONITORS, "name": "All monitors", "rect": {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0},
+            "width": x1 - x0, "height": y1 - y0, "all": True, "count": len(rs)}
 
 
 def identity(url):
@@ -257,6 +282,9 @@ def _tab_crop(hwnd):
 
 def capture_size(url):
     kind, n = parse_url(url)
+    if kind == "monitor" and n == ALL_MONITORS:   # 0.21.83 (D): the raw union -- the publisher scales it to MAX_W (Publisher `wide`)
+        src = all_monitors() or {}
+        return max(2, int(src.get("width") or MAX_W) // 2 * 2), max(2, int(src.get("height") or MAX_H) // 2 * 2)
     if kind == "tab":
         _, w, h = _tab_crop(n)
         return _fit(w, h)
@@ -331,6 +359,8 @@ def capture_input(url, cursor=True, fps=None):
         r = (_resolve(kind, n) or {}).get("rect") or {"x": 0, "y": 0, "w": MAX_W, "h": MAX_H}
         return ["-f", "x11grab", "-framerate", str(fps), "-draw_mouse", str(cur), "-video_size",
                 "%dx%d" % (max(2, int(r["w"]) // 2 * 2), max(2, int(r["h"]) // 2 * 2)), "-i", "%s+%d,%d" % (disp, int(r["x"]), int(r["y"]))]
+    if kind == "monitor" and n == ALL_MONITORS:   # 0.21.83 (D): GDI's whole virtual desktop (gfxcapture takes one monitor)
+        return ["-f", "gdigrab", "-framerate", str(fps), "-draw_mouse", str(cur), "-i", "desktop"]
     _kick_soon(url)
     if kind == "tab":   # crop on the GPU side of the capture, then scale on the CPU (a crop + resize_mode order is not documented)
         import kastr_tabs
@@ -492,7 +522,11 @@ def overlay_start(feed_id, url, on_stop):
         if kind in ("window", "tab"):
             ov.start(hwnd=n, label=kind)
         else:
-            ov.start(hmonitor=int(src.get("hmonitor") or 0) or None, label="screen")
+            r = src.get("rect") if isinstance(src.get("rect"), dict) else None
+            if not src.get("hmonitor") and r and r.get("w"):   # 0.21.83 (D): All monitors -- a border around their union
+                ov.start(monitor_rect=(r["x"], r["y"], r["x"] + r["w"], r["y"] + r["h"]), label="screen")
+            else:
+                ov.start(hmonitor=int(src.get("hmonitor") or 0) or None, label="screen")
         with _ov_lock:
             _overlays[feed_id] = ov
     except Exception:

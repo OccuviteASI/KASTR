@@ -62,6 +62,12 @@ RC_LOWLAT = {
 RC_MUX = ["-flush_packets", "1"]   # every frame to moq-cli as it is muxed (measured per frame already on Linux; insurance elsewhere)
 
 
+def is_private(feed):
+    """0.21.83 (D): a fleet admin's private capture (Bridge.add_private) -- its `private` tag is the session id."""
+    tag = getattr(feed, "private", None)
+    return isinstance(tag, str) and bool(tag)
+
+
 def _rc_gone(feed_id, why):
     """0.21.79: remote control of this share ends (it stopped, paused or now shows something else) -- only when kastr_rc
     was ever loaded (a box nobody controls never imports it)."""
@@ -2694,6 +2700,41 @@ class Bridge:
             self.xs_poke()
         return bool(feed)
 
+    # ---- 0.21.83 (D) (Kenton: "allow remote control with the admin permissions on a relay/hub/camera box ... opt-in
+    # only"): a fleet admin's PRIVATE capture of this machine (kastr_rcadmin). A screen feed like any other -- the bridge
+    # publishes it, Bridge.retarget re-points it (the source switcher), kastr_rc grants control of it -- but it is never
+    # listed (/api/rtsp/list: the box's own page never adopts or shows it), never written to rtsp-feeds.json and never
+    # remembered as "closed" when it ends (a later share of the same screen in a room is not blocked).
+    def add_private(self, url, tag):
+        url = str(url or "")
+        if not is_screen(url):
+            raise ValueError("a private capture is a screen or a window")
+        import kastr_screen
+        kastr_screen.check_url(url)
+        with self._lock:
+            feed = Feed(self._next, url, source_url=url)
+            feed.private = str(tag or "private")
+            self._feeds[feed.id] = feed
+            self._next += 1
+        kastr_screen.overlay_start(feed.id, url, on_stop=lambda fid=feed.id: (self.log("screen: Stop sharing on the bar of a private capture"),
+                                                                                _rc_gone(fid, "bar")))
+        self.log("rtsp: private capture %d of %s (%s)" % (feed.id, url, feed.private[:8]))
+        return feed
+
+    def remove_private(self, feed_id):
+        with self._lock:
+            feed = self._feeds.get(int(feed_id))
+        if feed is None or not is_private(feed):
+            return False
+        self.unpublish(feed_id, persist=False)
+        with self._lock:
+            self._feeds.pop(int(feed_id), None)
+        import kastr_screen
+        kastr_screen.overlay_stop(int(feed_id))
+        self.kill(feed)
+        self.log("rtsp: private capture %d ended" % int(feed_id))
+        return True
+
     # ---- native publishing (0.9.1) --------------------------------------
     def publish(self, feed_id, broadcast, relay, hevc=False, audio=True, passthrough=None, force=False, keep=None,
                 ondemand=False, low=False, label="", idle=False):   # 0.12.0: keep; 0.18.0: ondemand, low, label; 0.21.73: idle
@@ -2922,7 +2963,7 @@ class Bridge:
     def _feed_records(self):
         out = []
         for pub in list(self._pubs.values()):
-            if pub.stopping:
+            if pub.stopping or is_private(pub.feed):   # 0.21.83 (D): a private capture never comes back after a relaunch
                 continue
             if is_screen(pub.feed.source_url):   # 0.21.26 (Kenton): a screen / window / tab share comes back after a relaunch
                 ident = getattr(pub.feed, "screen_ident", None)
@@ -3556,6 +3597,8 @@ class Bridge:
         per-URL settings by."""
         out = []
         for f in self._feeds.values():
+            if is_private(f):   # 0.21.83 (D): a fleet admin's private capture is nobody's feed to list or adopt
+                continue
             d = f.info()
             d["publish"] = self.publication(f.id)   # 0.9.1
             d["addedBy"] = getattr(f, "added_by", "") or ""   # 0.21.2: a web client's camera (empty = the box's own)
@@ -3600,8 +3643,8 @@ class Bridge:
             if self.suspended:
                 return {"ok": True, "suspended": True, "stopped": 0, "monitors": 0, "records": len(self._pubs)}
             self.suspended = True
-            pubs = list(self._pubs.values())
-            feeds = list(self._feeds.values())
+            pubs = [p for p in self._pubs.values() if not is_private(p.feed)]   # 0.21.83 (D): not a fleet admin's session
+            feeds = [f for f in self._feeds.values() if not is_private(f)]
         stopped = sum(1 for p in pubs if p.suspend(who))
         mons = 0
         for f in feeds:

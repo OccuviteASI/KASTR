@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>/* 0.21.61: the theme before the first paint (default ASI Navy); 0.21.72: + the named palettes and Custom */try{var d=document.documentElement,t=localStorage.getItem("kastr.theme")||"dark",P={dark:"navy",light:"light",midnight:"midnight",slate:"slate",warm:"warm",contrast:"contrast",custom:"custom"};if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";var p=P[t]||"navy",b=p==="light"||p==="warm"?"light":"dark";if(p==="custom"){var v=JSON.parse(localStorage.getItem("kastr.theme.vars")||"null");if(v&&v.vars){b=v.base==="light"?"light":"dark";for(var k in v.vars)d.style.setProperty(k,v.vars[k]);}else p="navy";}d.dataset.theme=b;d.dataset.palette=p;}catch(e){document.documentElement.dataset.theme="dark";}</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote session — KASTR</title>
+<link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
+<link rel="stylesheet" href="/assets/asi-brand.css">
+<!-- 0.21.83 (D) (Kenton: "allow remote control with the admin permissions on a relay/hub/camera box. This should be opt-in
+     only" -- "how would I access this from my own KASTR?" -- "allow for switching to different windows/monitors on the
+     device"): a fleet admin's PRIVATE session with an opted-in machine. Opened by Machines... (the app page) or the hub's
+     Relay page, which hands it the session over postMessage: the session token (this relay only, ~rcx/<sid> only), the paths,
+     the machine. Control is already granted -- no prompt on the machine; its red pill names the admin. The picture plays with
+     no jitter buffer at the top priority (the 0.21.80 low-latency path); the input is the 0.21.80 in.json (the machine's
+     headless helper hands it to its injector); the source switcher re-points the capture in place (Bridge.retarget). -->
+<script type="importmap">{
+ "imports": {
+  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.2.target-es2022.mjs",
+  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs",
+  "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.2/element.target-es2022.mjs"
+ }
+}</script>
+<style>
+  [hidden] { display:none !important; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:14px var(--font-ui); display:flex; flex-direction:column; overflow:hidden; }
+  #bar { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--asi-navy); color:#fff; flex-wrap:wrap; min-height:40px; box-sizing:border-box; }
+  #bar .who { display:flex; flex-direction:column; line-height:1.15; min-width:0; }
+  #bar .who b { font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:36vw; }
+  #bar .dim { color:#b8c7d6; font-size:12px; }
+  #bar .sp { flex:1 1 auto; }
+  .chip { font-size:12px; padding:2px 8px; border-radius:10px; background:#33475b; color:#fff; white-space:nowrap; }
+  .chip.live { background:#2f7d3b; } .chip.end { background:var(--asi-red); } .chip.wait { background:#7a5b00; }
+  .note { font-size:12px; color:#ffd479; max-width:34vw; }
+  #bar button { font:inherit; font-size:13px; padding:4px 10px; border-radius:6px; border:1px solid #3b5a75; background:#0c3b5c; color:#fff; cursor:pointer; white-space:nowrap; }
+  #bar button:hover { background:#0f4a73; }
+  #bar button:disabled { opacity:.45; cursor:default; }
+  #bar button.stop { background:var(--asi-red); border-color:var(--asi-red); }
+  #bar button.stop:hover { filter:brightness(1.1); }
+  #srcBtn { max-width:28vw; overflow:hidden; text-overflow:ellipsis; }
+  #stage { position:relative; flex:1 1 auto; background:#000; overflow:hidden; }
+  #stage moq-watch, #stage canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #stage canvas { object-fit:contain; }
+  #cap { position:absolute; inset:0; outline:none; cursor:none; }
+  #cap:focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--asi-blue) 70%, transparent); }
+  #msg { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:rgba(0,20,35,.86); color:#fff; padding:14px 18px; border-radius:10px; max-width:70%; text-align:center; font-size:15px; }
+  #msg .sub { display:block; color:#b8c7d6; font-size:12px; margin-top:6px; }
+  #msg button { margin-top:10px; font:inherit; padding:5px 12px; border-radius:6px; border:0; background:var(--asi-blue); color:#fff; cursor:pointer; }
+  #sw { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,10,20,.55); pointer-events:none; }
+  #sw span { background:rgba(0,43,69,.92); color:#fff; padding:10px 16px; border-radius:8px; font-size:15px; }
+  #sw span::before { content:""; display:inline-block; width:12px; height:12px; margin-right:9px; border:2px solid #fff; border-right-color:transparent; border-radius:50%; vertical-align:-2px; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #sw span::before { animation:none; } }
+  #blk { position:absolute; left:50%; top:10px; transform:translateX(-50%); background:rgba(122,91,0,.94); color:#fff; padding:6px 12px; border-radius:6px; font-size:13px; pointer-events:none; }
+  .rptr { position:absolute; pointer-events:none; transform:translate(-1px,-1px); }
+  .rptr svg { width:18px; height:18px; display:block; filter:drop-shadow(0 0 1px #000); }
+  .rptr i { position:absolute; left:16px; top:14px; font:600 11px var(--font-ui); font-style:normal; padding:1px 6px; border-radius:8px; white-space:nowrap; }
+  #srcPop { position:absolute; right:10px; top:46px; width:min(460px, 94vw); max-height:72vh; overflow:auto; background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.5); z-index:5; padding:8px 10px 10px; }
+  #srcPop h4 { margin:8px 2px 6px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); }
+  #srcPop .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:8px; }
+  #srcPop .it { display:flex; flex-direction:column; gap:4px; text-align:left; font:inherit; font-size:12px; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--surface-2); color:var(--text); cursor:pointer; min-width:0; }
+  #srcPop .it:hover { border-color:var(--asi-blue); }
+  #srcPop .it.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue) inset; }
+  #srcPop .it .th { width:100%; aspect-ratio:16/9; background:#0a0f17 center/contain no-repeat; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#5f7186; font-size:22px; }
+  #srcPop .it .t { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+  #srcPop .it .a { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-dim); }
+  #srcPop .hint { color:var(--text-dim); font-size:12px; margin:4px 2px; }
+  #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:rgba(0,43,69,.95); color:#fff; padding:8px 14px; border-radius:8px; font-size:13px; z-index:9; max-width:80vw; }
+  #toast.warn { background:rgba(160,60,50,.95); }
+</style>
+</head>
+<body>
+<header id="bar">
+  <div class="who"><b id="mName">Remote session</b><span id="mMeta" class="dim"></span></div>
+  <span id="chip" class="chip wait">Connecting&hellip;</span>
+  <span id="note" class="note" hidden></span>
+  <span class="sp"></span>
+  <button type="button" id="prevMon" title="Previous monitor (Ctrl+Alt+Page Up)" disabled>&#9664;</button>
+  <button type="button" id="srcBtn" title="Show another monitor or window of this machine" disabled>Screen &#9662;</button>
+  <button type="button" id="nextMon" title="Next monitor (Ctrl+Alt+Page Down)" disabled>&#9654;</button>
+  <button type="button" id="frontBtn" title="Bring this window to the front on the machine" hidden>Bring to front</button>
+  <span id="lat" class="dim"></span>
+  <button type="button" id="stopBtn" class="stop" title="End the session (or hold Esc for a second)">Stop control</button>
+</header>
+<main id="stage">
+  <moq-watch id="w" visible="always" priority="255" delay="instant" buffer="0ms"><canvas id="cv"></canvas></moq-watch>
+  <div id="cap" tabindex="0" title="Click to control. Hold Esc for a second to stop."></div>
+  <div id="ptrs"></div>
+  <div id="blk" hidden></div>
+  <div id="sw" hidden><span id="swText">Switching&hellip;</span></div>
+  <div id="msg">Waiting for the session&hellip;</div>
+</main>
+<div id="srcPop" hidden></div>
+<div id="toast" hidden></div>
+<script type="module">
+  import "https://esm.sh/@moq/watch/element";
+  import { connect, producer, subscribe, withJwt } from "/assets/rcx-lib.js";
+
+  const $ = (id) => document.getElementById(id);
+  const KEEP_MS = 600, KEEP_N = 64, CLIP_MAX = 65536, QUIET_MS = 10000;
+  let S = null, conn = null, prod = null;
+  const c = { seq: 0, buf: [], sentAt: 0, mv: null, mvT: 0, mvAt: 0, wv: 0, wh: 0, down: new Set(), btn: new Set(), hold: null, escT: 0,
+              sent: new Map(), ackS: 0, lat: null, clipN: 0, clipLast: null, clipPend: null, st: null, stAt: 0, ended: "", live: false,
+              ctlN: 0, src: null, url: "", sw: null, frames0: 0, switches: [], firstFrameAt: 0, t0: Date.now() };
+  window.__rcxView = { c, get S() { return S; }, pick: (u) => pick(u), stop: () => stop("admin") };   // rig
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  let toastT = 0;
+  function toast(t, warn, ms) { const el = $("toast"); el.textContent = t; el.className = warn ? "warn" : ""; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, ms || 4500); }
+  function msg(html) { const el = $("msg"); if (html == null) { el.hidden = true; return; } el.innerHTML = html; el.hidden = false; }
+  function chip(t, cls) { const el = $("chip"); el.textContent = t; el.className = "chip " + (cls || ""); }
+
+  // ---- the session from the page that opened this window (never in the address)
+  const ready = () => { try { window.opener?.postMessage({ type: "kastr-rcx-ready", name: window.name }, location.origin); } catch {} };
+  window.addEventListener("message", (e) => {
+    if (e.origin !== location.origin || !e.data || S) return;
+    if (e.data.type === "kastr-rcx-session" && e.data.s && e.data.s.sid) begin(e.data.s);
+    else if (e.data.type === "kastr-rcx-error") { msg(esc(e.data.error || "The session could not start.") + "<span class='sub'>You can close this window.</span>"); chip("Not started", "end"); }
+  });
+  ready();
+  const readyT = setInterval(() => { if (S) clearInterval(readyT); else ready(); }, 500);
+  setTimeout(() => { if (!S) { clearInterval(readyT); msg("This window opens from <b>Machines…</b> in KASTR (or the hub's Relay page).<span class='sub'>Nothing to show here on its own.</span>"); } }, 15000);
+
+  async function api(body) {   // the session's own calls (status, stop) -- through the relay that started it
+    const a = S.api || {};
+    try {
+      const r = a.kind === "operator"
+        ? await fetch("/api/relay/rcx", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+        : await fetch(a.base + "/api/rcx", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + a.bearer }, body: JSON.stringify({ ...body, by: S.admin?.name }) });
+      const d = await r.json().catch(() => ({}));
+      return { ...d, http: r.status };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  const mName = () => S?.machine?.nick || S?.machine?.hostname || S?.machine?.name || S?.machine?.node || "the machine";
+
+  function begin(s) {
+    S = s;
+    document.title = mName() + " — remote session — KASTR";
+    $("mName").textContent = mName();
+    $("mMeta").textContent = [S.machine?.role, S.machine?.site ? "via " + S.machine.site : "", "session " + String(S.sid).slice(0, 8)].filter(Boolean).join(" · ");
+    if (S.machine?.adminWindows === "limited") { const n = $("note"); n.textContent = "Minimize, move, resize and close need KASTR to run as administrator on " + mName() + "’s computer"; n.title = "Administrator windows: Windows keeps a normal process out of them"; n.hidden = false; }
+    msg("Connecting to " + esc(mName()) + "…<span class='sub'>Control is already granted — " + esc(mName()) + " shows a red bar with your name while you are connected.</span>");
+    const url = withJwt(S.relay, S.token);
+    conn = connect(url);
+    prod = producer(conn, S.paths.admin, ["in.json", "ctl.json"], { priority: 255, maxAge: 2000 });
+    const w = $("w");
+    w.setAttribute("name", S.paths.screen);
+    c.wurl = url; c.rs = 1;
+    w.setAttribute("url", playerUrl());
+    subscribe(conn, S.paths.machine, "st.json", stArrive, { priority: 255, staleMs: 6000 });
+    subscribe(conn, S.paths.machine, "ptr.json", ptrArrive, { priority: 255, staleMs: 8000 });
+    subscribe(conn, S.paths.machine, "src.json", srcArrive, { priority: 250, staleMs: 30000 });
+    capAttach();
+    emit({ t: "hb" });
+    c.tick = setInterval(tick, 900);
+    c.stT = setInterval(statusPoll, 3000);
+    statusPoll();
+  }
+
+  // ---- what the machine says
+  function stArrive(v) {
+    if (!v || v.rcid !== S.rcid || c.ended) return;
+    c.stAt = Date.now();
+    if (v.active === false) { ended(v.ended || "stopped"); return; }
+    c.st = v;
+    if (!c.live || $("chip").textContent !== "Controlling") { c.live = true; chip("Controlling", "live"); }
+    if (v.url && v.url !== c.url) { c.url = v.url; paintSrc(); }
+    if (v.ack && Number(v.ack.s) > c.ackS) {
+      c.ackS = Number(v.ack.s);
+      const at = c.sent.get(c.ackS);
+      if (at) {
+        const rtt = Date.now() - at, sh = Math.max(0, (Number(v.ack.inj) || 0) - (Number(v.ack.rx) || 0)), one = Math.max(0, (rtt - sh) / 2) + sh;
+        const L = c.lat;
+        c.lat = L ? { rtt: Math.round(L.rtt * 0.8 + rtt * 0.2), oneWay: Math.round(L.oneWay * 0.8 + one * 0.2), last: rtt, n: L.n + 1 } : { rtt, oneWay: Math.round(one), last: rtt, n: 1 };
+        $("lat").textContent = "input " + c.lat.oneWay + " ms";
+      }
+    }
+    if (v.clip && Number(v.clip.n) > c.clipN && typeof v.clip.text === "string") {   // the machine's clipboard changed during the session
+      c.clipN = Number(v.clip.n); c.clipLast = v.clip.text;
+      try { navigator.clipboard?.writeText?.(v.clip.text)?.catch?.(() => { c.clipPend = v.clip.text; }); } catch { c.clipPend = v.clip.text; }
+    }
+    const b = String(v.blocked || ""), el = $("blk");
+    const bt = { elevated: "That window runs as administrator on " + mName() + " — Windows keeps KASTR's input out of it (minimize, move, resize and close need KASTR to run as administrator on " + mName() + "’s computer)",
+                 secure: mName() + " shows a secure screen (sign-in or an administrator prompt) — KASTR can't control it",
+                 focus: "Click inside the window first — keys go to the window in front", hidden: "The window is minimized on " + mName(),
+                 drag: "Someone at " + mName() + " is dragging with their own mouse — your click goes as soon as they let go" }[b];
+    el.textContent = bt || ""; el.hidden = !bt;
+  }
+  const ptrEls = new Map();
+  function ptrArrive(v) {
+    if (!v || v.rcid !== S.rcid) return;
+    if (v.end) { for (const el of ptrEls.values()) el.hidden = true; return; }
+    c.ptr = v;
+    paintPtrs();
+  }
+  function paintPtrs() {
+    const v = c.ptr, box = $("ptrs");
+    for (const p of (v?.p || [])) {
+      if (p.k !== "s") continue;   // the admin's own arrow is their own mouse; the person at the machine gets theirs, named
+      let el = ptrEls.get(p.k);
+      if (!el) {
+        el = document.createElement("div"); el.className = "rptr";
+        el.innerHTML = '<svg viewBox="0 0 20 20"><path d="M2 1 17 11l-6.4 1 3.5 6.6-2.6 1.3-3.4-6.6L2 18z" fill="#fff" stroke="#000" stroke-width="1"/></svg><i></i>';
+        box.appendChild(el); ptrEls.set(p.k, el);
+      }
+      const pt = toClient(p.x, p.y);
+      const show = !!p.on && !!pt;
+      el.hidden = !show;
+      if (!show) continue;
+      el.style.left = pt[0] + "px"; el.style.top = pt[1] + "px";
+      el.querySelector("svg").style.display = p.cap ? "none" : "";   // the capture already shows that cursor
+      const t = el.querySelector("i"); t.textContent = p.n || ""; t.style.background = p.c || "#f5a623"; t.style.color = "#111";
+    }
+  }
+  function srcArrive(v) {
+    if (!v || v.rcid !== S.rcid) return;
+    if (v.list) c.src = v.list;
+    if (v.thumbs) c.thumbs = v.thumbs;
+    if (v.url && v.url !== c.url) c.url = v.url;
+    const last = v.last;
+    if (last && c.sw && last.n === c.sw.n && last.op === "src" && last.state !== "switching" && !c.sw.ack) {
+      c.sw.ack = Date.now(); c.sw.serverMs = last.ms || 0; c.sw.ok = !!last.ok;
+      if (!last.ok) { swDone(false); toast("Could not switch: " + (last.error || "refused"), true, 6000); }
+      else { c.sw.frames0 = frames(); c.sw.resubAt = Date.now() + SW_RESUB_MS; }
+    }
+    if (last && c.front && last.n === c.front && last.op === "front" && last.state !== "switching") {
+      c.front = 0;
+      toast(last.ok ? "Brought to the front on " + mName() + "." : (last.error || "It did not come to the front."), !last.ok, 6000);
+    }
+    paintSrc();
+  }
+
+  // ---- the session's life
+  async function statusPoll() {
+    if (!S || c.ended) return;
+    const d = await api({ op: "status", sid: S.sid });
+    if (c.ended) return;
+    if (d.ok && d.state === "ended") { ended(d.why || "stopped", d.whyText); return; }
+    if (d.ok && d.state === "pending" && !c.live) chip("Waiting for " + mName() + "…", "wait");
+    if (d.http === 404 && !c.live) ended("noanswer");
+  }
+  const WHY = { admin: "you ended it", operator: "the hub's operator ended it", hotkey: "someone at the machine pressed Ctrl+Alt+Space", bar: "someone at the machine clicked Stop control",
+                stopped: "it was stopped on the machine", timeout: "the connection went quiet for 10 s", share: "the capture stopped on the machine", noanswer: "the machine did not answer",
+                lost: "the machine went quiet", limit: "the 8-hour limit", off: "the machine's owner switched unattended control off", busy: "someone else controls that machine",
+                desktop: "nobody is signed in on the machine", error: "it could not start", closed: "KASTR closed on the machine", released: "you gave it back", restart: "the hub restarted" };
+  function ended(why, text) {
+    if (c.ended) return;
+    c.ended = why || "stopped";
+    clearInterval(c.tick); clearInterval(c.stT);
+    letGo();
+    chip("Ended", "end");
+    $("sw").hidden = true; $("blk").hidden = true; $("srcPop").hidden = true;
+    for (const id of ["prevMon", "nextMon", "srcBtn", "frontBtn", "stopBtn"]) $(id).disabled = true;
+    try { $("w").removeAttribute("url"); } catch {}
+    msg("The session with " + esc(mName()) + " ended — " + esc(WHY[c.ended] || text || c.ended) + ".<span class='sub'>Everything was logged on the machine and on the hub.</span><button type='button' id='closeWin'>Close window</button>");
+    $("closeWin")?.addEventListener("click", () => window.close());
+    setTimeout(() => { try { prod?.close(); } catch {} }, 2500);
+  }
+  async function stop(why) {
+    if (!S || c.ended) return;
+    emit({ t: "hb" });
+    try { prod.set("in.json", { rcid: S.rcid, seq: c.seq + 1, t: Date.now(), ev: [], end: why === "released" ? "released" : "stopped" }); } catch {}
+    const d = await api({ op: "stop", sid: S.sid });
+    ended(why === "released" ? "released" : "admin");
+    if (!d.ok) toast("The hub did not confirm the stop (" + (d.error || "no answer") + ") — the machine ends it within 10 s anyway.", true, 7000);
+  }
+  $("stopBtn").addEventListener("click", () => stop("admin"));
+  window.addEventListener("pagehide", () => { if (S && !c.ended) { try { prod.set("in.json", { rcid: S.rcid, seq: c.seq + 1, t: Date.now(), ev: [], end: "released" }); } catch {} } });
+  function tick() {
+    if (c.ended) return;
+    if (c.live && Date.now() - c.stAt > QUIET_MS) { chip("No answer…", "wait"); }
+    if (Date.now() - c.sentAt > 800) emit({ t: "hb" });
+    const fr = frames();
+    if (fr > 0 && !c.firstFrameAt) { c.firstFrameAt = Date.now(); msg(null); $("cap").focus({ preventScroll: true }); }
+    if (!fr && c.live && !c.firstFrameAt) msg("Waiting for " + esc(mName()) + "'s picture…<span class='sub'>Control is granted; the capture is starting.</span>");
+    swTick(fr);
+    if ($("cap") === document.activeElement && document.hasFocus()) {   // my clipboard changed: theirs follows (text, up to 64 KB)
+      if (c.clipPend) { const p0 = c.clipPend; c.clipPend = null; navigator.clipboard?.writeText?.(p0)?.catch?.(() => {}); }
+      navigator.clipboard?.readText?.().then((tx) => {
+        if (c.ended || typeof tx !== "string" || !tx || tx === c.clipLast) return;
+        c.clipLast = tx;
+        if (new Blob([tx]).size <= CLIP_MAX) emit({ t: "clip", text: tx });
+      }, () => {});
+    }
+    if ($("srcPop").hidden === false && Date.now() - (c.thumbAsk || 0) > 20000) { c.thumbAsk = Date.now(); ctl({ op: "thumbs" }); }
+    paintPtrs();
+  }
+  function frames() {
+    try { const st = $("w").video?.out?.stats?.peek?.(); return Number(st?.frameCount || st?.frames || 0) || ($("cv").width > 0 && c.firstFrameAt ? 1 : 0); } catch { return 0; }
+  }
+
+  // ---- the input (the 0.21.80 controller's in.json: the last KEEP_MS of events, sequence-numbered)
+  function emit(ev) {
+    if (!S || c.ended || !prod) return;
+    if (c.hold && ev.t !== "hb") { c.hold.push(ev); return; }
+    const now = Date.now();
+    if (ev.t !== "hb") { ev.s = ++c.seq; ev.a = now; c.buf.push(ev); c.sent.set(ev.s, now); if (c.sent.size > 400) c.sent.delete(c.sent.keys().next().value); }
+    c.buf = c.buf.filter((e) => now - e.a <= KEEP_MS);
+    while (c.buf.length > KEEP_N) { const i = c.buf.findIndex((e) => e.t === "m"); c.buf.splice(i >= 0 ? i : 0, 1); }
+    prod.set("in.json", { rcid: S.rcid, seq: c.seq, t: now, ev: c.buf });
+    c.sentAt = now;
+  }
+  function ctl(body) { if (!prod || c.ended) return 0; const n = ++c.ctlN; prod.set("ctl.json", { rcid: S.rcid, n, t: Date.now(), ...body }); return n; }
+  function flushMove() { if (c.mvT) { clearTimeout(c.mvT); c.mvT = 0; } if (c.mv) { const m = c.mv; c.mv = null; c.mvAt = performance.now(); emit({ t: "m", x: m.x, y: m.y }); } }
+  function geom() {
+    const el = $("cv"), cw = el.width, ch = el.height, Bw = el.clientWidth, Bh = el.clientHeight;
+    if (!cw || !ch || !Bw || !Bh) return null;
+    const sc = Math.min(Bw / cw, Bh / ch);
+    return { r: el.getBoundingClientRect(), cw, ch, Bw, Bh, sc, ox: (Bw - cw * sc) / 2, oy: (Bh - ch * sc) / 2 };
+  }
+  function toPic(cx, cy) {
+    const g = geom(); if (!g) return null;
+    const lx = (cx - g.r.left) * g.Bw / g.r.width, ly = (cy - g.r.top) * g.Bh / g.r.height;
+    return { x: Math.round((lx - g.ox) / (g.cw * g.sc) * 1e5) / 1e5, y: Math.round((ly - g.oy) / (g.ch * g.sc) * 1e5) / 1e5 };
+  }
+  function toClient(x, y) {
+    const g = geom(); if (!g || !(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return null;
+    const box = $("stage").getBoundingClientRect();
+    return [g.r.left - box.left + (g.ox + x * g.cw * g.sc) * g.r.width / g.Bw, g.r.top - box.top + (g.oy + y * g.ch * g.sc) * g.r.height / g.Bh];
+  }
+  const inPic = (p) => !!p && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+  function capAttach() {
+    const cap = $("cap");
+    const stopE = (e) => e.stopPropagation();
+    for (const k of ["click", "dblclick", "auxclick"]) cap.addEventListener(k, stopE);
+    cap.addEventListener("contextmenu", (e) => { e.preventDefault(); });
+    cap.addEventListener("mousemove", (e) => {
+      const p = toPic(e.clientX, e.clientY);
+      if (!p || c.ended) return;
+      c.mv = p;
+      if (!c.mvT) { const w = 16 - (performance.now() - c.mvAt); if (w <= 0) flushMove(); else c.mvT = setTimeout(() => { c.mvT = 0; flushMove(); }, w); }
+    });
+    cap.addEventListener("mouseleave", () => { if (c.ended) return; flushMove(); emit({ t: "m", o: 1 }); });
+    cap.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      cap.focus({ preventScroll: true });
+      $("srcPop").hidden = true;
+      const p = toPic(e.clientX, e.clientY);
+      if (!inPic(p) || e.button > 4) return;
+      flushMove(); c.btn.add(e.button);
+      emit({ t: "d", b: e.button, x: p.x, y: p.y });
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (!c.btn.has(e.button) || c.ended) return;
+      e.preventDefault();
+      const p = toPic(e.clientX, e.clientY) || { x: 0.5, y: 0.5 };
+      c.btn.delete(e.button); flushMove();
+      emit({ t: "u", b: e.button, x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) });
+    }, true);
+    cap.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const p = toPic(e.clientX, e.clientY);
+      if (!inPic(p)) return;
+      const k = e.deltaMode === 1 ? 1 / 3 : e.deltaMode === 2 ? 1 : 1 / 100;
+      c.wv += e.deltaY * k; c.wh += e.deltaX * k;
+      const n = Math.trunc(c.wv), h = Math.trunc(c.wh);
+      if (!n && !h) return;
+      c.wv -= n; c.wh -= h; flushMove();
+      emit({ t: "w", n, h, x: p.x, y: p.y });
+    }, { passive: false });
+    cap.addEventListener("blur", letGo);
+  }
+  function letGo() {
+    for (const code of [...c.down]) emit({ t: "k", c: code, d: 0 });
+    c.down.clear(); clearTimeout(c.escT);
+  }
+  window.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.altKey && (e.code === "PageUp" || e.code === "PageDown")) { e.preventDefault(); stepMon(e.code === "PageDown" ? 1 : -1); return; }   // never sent to the machine
+    if (!S || c.ended || document.activeElement !== $("cap")) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (e.code === "Escape" && !e.repeat) { clearTimeout(c.escT); c.escT = setTimeout(() => stop("released"), 1000); }
+    if (e.repeat || !e.code || c.down.has(e.code)) return;
+    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && navigator.clipboard?.readText && !c.hold) {   // paste: my clipboard first, then the keys
+      c.hold = [];
+      const done = (tx) => { if (!c.hold) return; const q = c.hold; c.hold = null;
+        if (typeof tx === "string" && tx && tx !== c.clipLast && new Blob([tx]).size <= CLIP_MAX) { c.clipLast = tx; emit({ t: "clip", text: tx }); }
+        for (const ev of q) emit(ev); };
+      navigator.clipboard.readText().then(done, () => done(null));
+      setTimeout(() => done(null), 1000);
+    }
+    c.down.add(e.code); flushMove();
+    emit({ t: "k", c: e.code, d: 1 });
+  }, true);
+  window.addEventListener("keyup", (e) => {
+    if (!S || c.ended || document.activeElement !== $("cap")) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (e.code === "Escape") clearTimeout(c.escT);
+    if (!c.down.has(e.code)) return;
+    c.down.delete(e.code);
+    emit({ t: "k", c: e.code, d: 0 });
+  }, true);
+  window.addEventListener("resize", paintPtrs);
+
+  // ---- the source switcher (Kenton: "allow for switching to different windows/monitors on the device")
+  const monIdx = (u) => { const m = /^screen:\/\/monitor\/([0-9]+)$/.exec(String(u || "")); return m ? Number(m[1]) : null; };
+  const winId = (u) => { const m = /^screen:\/\/window\/([0-9]+)$/.exec(String(u || "")); return m ? m[1] : null; };
+  function srcLabel(u) {
+    const L = c.src || {}, mi = monIdx(u);
+    if (mi === 99) return "All monitors";
+    if (mi != null) { const m = (L.monitors || []).find((x) => x.index === mi); return m ? m.name : "Screen " + (mi + 1); }
+    const w = (L.windows || []).find((x) => x.url === u);
+    return w ? (w.title || w.app || "Window") : "Window";
+  }
+  function paintSrc() {
+    const L = c.src;
+    const mons = (L?.monitors || []).map((m) => m.index);
+    $("srcBtn").disabled = !L || c.ended;
+    $("srcBtn").textContent = srcLabel(c.url) + " ▾";
+    const many = mons.length > 1;
+    $("prevMon").disabled = $("nextMon").disabled = !many || c.ended;
+    $("frontBtn").hidden = !winId(c.url);
+    if (!$("srcPop").hidden) paintPop();
+  }
+  function paintPop() {
+    const L = c.src, pop = $("srcPop"), th = c.thumbs || {};
+    if (!L) { pop.innerHTML = "<div class='hint'>Asking " + esc(mName()) + " for its monitors and windows…</div>"; return; }
+    const item = (url, id, title, sub, icon) => "<button type='button' class='it" + (url === c.url ? " on" : "") + "' data-url='" + esc(url) + "'>"
+      + "<span class='th' style=\"" + (th[id] ? "background-image:url(" + th[id] + ")" : "") + "\">" + (th[id] ? "" : icon) + "</span>"
+      + "<span class='t' title='" + esc(title) + "'>" + esc(title) + "</span><span class='a'>" + esc(sub) + "</span></button>";
+    let h = "<h4>Monitors</h4><div class='grid'>";
+    for (const m of L.monitors || []) h += item(m.url, m.id, m.name, (m.width && m.height ? m.width + "×" + m.height : "") + (m.primary ? " · main" : ""), "▭");
+    if (L.all) h += item("screen://monitor/99", "", "All monitors", (L.monitors || []).length + " screens side by side", "▭▭");
+    h += "</div><h4>Windows</h4>";
+    if (!(L.windows || []).length) h += "<div class='hint'>No windows open.</div>";
+    else { h += "<div class='grid'>"; for (const w of L.windows) h += item(w.url, w.id, w.title || w.app || "Window", (w.app || "") + (w.minimized ? " · minimized" : ""), "▢"); h += "</div>"; }
+    h += "<div class='hint'>A window share follows the window. Picking a minimized window restores it on " + esc(mName()) + ".</div>";
+    pop.innerHTML = h;
+    for (const b of pop.querySelectorAll(".it")) b.addEventListener("click", () => { pop.hidden = true; pick(b.dataset.url); });
+  }
+  $("srcBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("srcPop");
+    pop.hidden = !pop.hidden;
+    if (!pop.hidden) { c.thumbAsk = Date.now(); ctl({ op: "thumbs" }); paintPop(); }
+  });
+  document.addEventListener("click", (e) => { if (!$("srcPop").contains(e.target)) $("srcPop").hidden = true; });
+  $("prevMon").addEventListener("click", () => stepMon(-1));
+  $("nextMon").addEventListener("click", () => stepMon(1));
+  $("frontBtn").addEventListener("click", () => { if (winId(c.url)) c.front = ctl({ op: "front", url: c.url }); });
+  function stepMon(dir) {
+    const mons = (c.src?.monitors || []).map((m) => m.index);
+    if (mons.length < 2 || c.ended) return;
+    const cur = monIdx(c.url);
+    const i = mons.indexOf(cur);
+    const next = i < 0 ? mons[dir > 0 ? 0 : mons.length - 1] : mons[(i + dir + mons.length) % mons.length];
+    pick("screen://monitor/" + next);
+  }
+  function pick(url) {
+    if (!S || c.ended || !url || url === c.url || c.sw) return;
+    c.sw = { n: ctl({ op: "src", url }), url, at: Date.now(), ack: 0, frames0: 0, resub: 0 };
+    $("swText").textContent = "Switching to " + srcLabel(url) + "…";
+    $("sw").hidden = false;
+  }
+  // The switch restarts the capture under the same path (Bridge.retarget). Lab v02183: a player left on the old broadcast waits
+  // for the relay to give up on its killed publisher (the 0.21.80 "14 s freeze"); a FRESH subscription goes to the new one. So the
+  // player re-subscribes SW_RESUB_MS after the machine says the new capture runs (and again if frames still do not come), and
+  // "Switching…" covers the picture until the new capture's frames play -- never a frozen picture.
+  const SW_RESUB_MS = 350, SW_RETRY_MS = 2500;
+  // the player dials its OWN session (`rs`, ignored by the relay): a re-subscribe is a fresh session, and the JSON tracks'
+  // session (st / ptr / src / in / ctl) is never touched by it
+  function playerUrl() { return c.wurl + "&rs=" + c.rs; }
+  function resub() {
+    const w = $("w");
+    c.rs++;
+    w.removeAttribute("url");
+    setTimeout(() => { if (!c.ended) w.setAttribute("url", playerUrl()); }, 40);
+  }
+  function swTick(fr) {
+    const s = c.sw;
+    if (!s) return;
+    const now = Date.now();
+    if (s.ack && s.resub && fr > s.frames0 + 1 && now - s.resub > 150) { swDone(true); return; }
+    if (s.ack && s.resubAt && now >= s.resubAt && (!s.resub || (now - s.resub > SW_RETRY_MS && fr <= s.frames0 + 1 && s.tries < 4))) {
+      s.resub = now; s.tries = (s.tries || 0) + 1; s.frames0 = frames(); resub();
+    }
+    if (now - s.at > 20000) { swDone(false); toast("The switch took too long — try again.", true); }
+  }
+  function swDone(ok) {
+    const s = c.sw; if (!s) return;
+    c.sw = null;
+    $("sw").hidden = true;
+    const rec = { url: s.url, ok, ackMs: s.ack ? s.ack - s.at : null, serverMs: s.serverMs || 0, pictureMs: ok ? Date.now() - s.at : null, resubs: s.tries || 0 };
+    c.switches.push(rec); if (c.switches.length > 20) c.switches.shift();
+    if (ok) { c.url = s.url; paintSrc(); }
+  }
+</script>
+</body>
+</html>

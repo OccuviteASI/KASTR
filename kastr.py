@@ -2597,6 +2597,12 @@ def teardown(server, proc=None, code=0):
             os.remove(os.path.join(state_dir(), "http-port"))   # 0.13.3: nobody is on that port any more
         except OSError:
             pass
+        try:   # 0.21.83 (D): a fleet admin's session here ends now ("KASTR closed"), logged here and told to the hub
+            m = sys.modules.get("kastr_rcadmin")
+            if m is not None and m.get_agent() is not None:
+                m.get_agent().stop()
+        except Exception:
+            pass
         for stop in ("rtsp", "relay"):
             target = getattr(server, stop, None)
             try:
@@ -3702,6 +3708,11 @@ def main():
             note("federation master: version match now (%s)" % (why or "hub command"))
             _federation_update()
         kastr_serve.FEDERATION_UPDATE_HOOK = _fed_update_now
+    try:   # 0.21.83 (D): the Chromium a fleet admin's session runs its headless helper page in (the bundled one first)
+        import kastr_rcadmin
+        kastr_rcadmin.BROWSER[0] = lambda: bundled_browser() or find_browser(system_only=True)
+    except Exception:
+        pass
     # 0.15.0: re-learn the hub's web port every 5 minutes (a hub relaunched on
     # another port is followed without a restart here)
     start_update_sweeper(lambda: learn_hub_web(_current_relay(), ini), every=300, label="hub web port: learner")   # 0.16.0: the CURRENT relay

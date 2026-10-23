@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KASTR remote session helper</title>
+<!-- 0.21.83 (D) (Kenton: "allow remote control with the admin permissions on a relay/hub/camera box ... opt-in only"): the
+     machine's side of a fleet admin's private remote session. KASTR opens this page HEADLESS on the controlled machine for the
+     length of one session (kastr_rcadmin.Agent): it carries what the 0.21.80 sharer page carries for a room share -- the
+     admin's input (~rcx/<sid>/a in.json) to this machine's injector over the loopback WebSocket /api/rc/ws, both pointers and
+     the injector's state back (~rcx/<sid>/m ptr.json / st.json), and the source switcher (ctl.json -> /api/rcadmin/ctl ->
+     src.json). It ends the session when the admin goes quiet for 10 s, says it is over, or the grant ends here. -->
+<script type="importmap">{
+ "imports": {
+  "https://esm.sh/@moq/json": "/assets/vendor/esm/@moq/json@^0.4.2.target-es2022.mjs",
+  "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs"
+ }
+}</script>
+</head>
+<body>
+<p id="st">Starting&hellip;</p>
+<script type="module">
+  import { connect, producer, subscribe } from "/assets/rcx-lib.js";
+
+  const hp = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+  const SID = hp.get("s") || "", PK = hp.get("k") || "";
+  try { history.replaceState(null, "", location.pathname); } catch {}   // the page key leaves the address bar
+  const say = (t) => { document.getElementById("st").textContent = t; };
+  const H = { "content-type": "application/json", "x-kastr-rc": "1" };
+  async function post(path, body) {
+    try {
+      const r = await fetch(path, { method: "POST", headers: H, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      return { ...d, http: r.status };
+    } catch (e) { return { ok: false, error: String(e?.message || e), http: 0 }; }
+  }
+  const ctl = (body) => post("/api/rcadmin/ctl", { sid: SID, k: PK, ...body });
+
+  const s = await fetch("/api/rcadmin/session?sid=" + encodeURIComponent(SID) + "&k=" + encodeURIComponent(PK), { cache: "no-store" })
+    .then((r) => r.json()).catch(() => ({ ok: false }));
+  if (!s.ok) { say("No such session."); setTimeout(() => window.close(), 500); throw new Error("no session"); }
+  const RCID = s.rcid, QUIET = (Number(s.quiet) || 10) * 1000;
+  const conn = connect(s.relay);
+  const out = producer(conn, s.paths.machine, ["st.json", "ptr.json", "src.json"], { priority: 255, maxAge: 2000 });
+  const g = { lastIn: Date.now() + 20000, lastSeq: 0, first: true, q: [], busy: false, ws: null, wsTries: 0, rxAt: new Map(), qS: 0, qRx: 0,
+              ack: null, ackSent: 0, ackSentAt: 0, stJson: "", stAt: 0, lastD: {}, ended: "", ctlN: 0, url: s.url, thumbsUntil: 0, srcAt: 0, ptrAt: 0 };
+  window.__rcxAgent = { s, g, out, get conn() { return conn; } };   // rig
+  say("Session " + SID.slice(0, 8) + " for " + s.admin);
+
+  function stPush(d, force) {   // st.json for the admin: blocked / my clipboard's change / the latency echo -- and a heartbeat
+    if (g.ended) return;
+    const st = { rcid: RCID, active: true, paused: false, blocked: String(d.blocked || ""), clip: d.clip || null, url: g.url, machine: s.machine };
+    const j = JSON.stringify([st.blocked, st.clip?.n, st.url]);
+    const ackWait = !!g.ack && g.ack.s !== g.ackSent ? 100 - (Date.now() - g.ackSentAt) : -1;
+    const ackNew = ackWait !== -1 && ackWait <= 0;
+    if (ackWait > 0 && !g.ackT) g.ackT = setTimeout(() => { g.ackT = 0; stPush(g.lastD || {}); }, ackWait);
+    g.lastD = d;
+    if (force || j !== g.stJson || Date.now() - g.stAt > 900 || ackNew) {
+      g.stJson = j; g.stAt = Date.now();
+      if (g.ack) { st.ack = g.ack; g.ackSent = g.ack.s; g.ackSentAt = Date.now(); }
+      out.set("st.json", { ...st, t: Date.now() });
+    }
+  }
+  function ptrPush(ptr) {   // both pointers: the person at this machine (s) and the admin (c)
+    if (!ptr || !Array.isArray(ptr.s) || !Array.isArray(ptr.c) || g.ended) return;
+    g.ptrAt = Date.now();
+    out.set("ptr.json", { rcid: RCID, t: Date.now(), p: [{ k: "s", n: "On " + String(s.machine || "the machine").slice(0, 24), c: "#f5a623", x: ptr.s[0], y: ptr.s[1], on: ptr.s[2] ? 1 : 0, cap: ptr.scap ? 1 : 0 },
+                                                     { k: "c", n: String(s.admin).slice(0, 28), c: s.color, x: ptr.c[0], y: ptr.c[1], on: ptr.c[2] ? 1 : 0, cap: ptr.cap ? 1 : 0 }] });
+  }
+  // a source switch re-makes the grant (Bridge.retarget ends it for the old target): its moment without one is not the end
+  const switching = () => g.last?.state === "switching" && Date.now() - g.last.at < 15000;
+  function inputDone(d, code, n, rx) {
+    if (g.ended) return;
+    if ((code === 403 || code === 409 || d.ended) && (switching() || d.ended === "retarget")) return;
+    if (code === 403 || code === 409 || d.ended) { finish(d.ended || "stopped", true); return; }
+    if (n && rx) g.ack = { s: n, rx, inj: Date.now() };
+    if (code === 200) stPush(d);
+  }
+  function wsOpen() {
+    if (g.ended) return;
+    let ws;
+    try { ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/rc/ws"); } catch { return; }
+    g.ws = ws;
+    ws.onopen = () => { g.wsTries = 0; if (g.q.length) flushIn(); };
+    ws.onmessage = (m) => {
+      let d = null; try { d = JSON.parse(m.data); } catch { return; }
+      if (!d || g.ended) return;
+      if (d.ptr) { if (!d.rcid || d.rcid === RCID) ptrPush(d.ptr); return; }
+      if (d.re === "input") { const rx = g.rxAt.get(d.n); g.rxAt.delete(d.n); inputDone(d, d.code, d.n, rx); }
+      else if (d.re === "renew") { if ((d.ended || d.active === false) && (switching() || d.ended === "retarget")) return; if (d.ended || d.active === false) finish(d.ended || "stopped", true); else { stPush(d); if (d.ptr && Date.now() - g.ptrAt > 900) ptrPush(d.ptr); } }
+    };
+    ws.onclose = () => { if (g.ws === ws) g.ws = null; if (!g.ended && ++g.wsTries <= 5) setTimeout(wsOpen, 1000); };
+  }
+  async function flushIn() {
+    if (!g.q.length || g.ended) return;
+    const n = g.qS, rx = g.qRx;
+    if (g.ws && g.ws.readyState === 1) {
+      const ev = g.q.splice(0, 256);
+      try { g.rxAt.set(n, rx); if (g.rxAt.size > 200) g.rxAt.delete(g.rxAt.keys().next().value); g.ws.send(JSON.stringify({ op: "input", rcid: RCID, src: s.adminHost, ev, n })); return; }
+      catch { g.q.unshift(...ev); }
+    }
+    if (g.busy) return;
+    g.busy = true;
+    const ev = g.q.splice(0, 256);
+    const d = await post("/api/rc", { op: "input", rcid: RCID, src: s.adminHost, ev });
+    g.busy = false;
+    inputDone(d, d.http, n, rx);
+    if (g.q.length) flushIn();
+  }
+  function inArrive(v) {   // the admin's events: only those newer than the last applied (never an old click twice)
+    if (g.ended || !v || v.rcid !== RCID || !Array.isArray(v.ev)) return;
+    g.lastIn = Date.now();
+    if (v.end) { finish(v.end === "timeout" ? "timeout" : "released", true); return; }
+    let evs = v.ev.filter((e) => e && Number(e.s) > g.lastSeq);
+    if (g.first) { g.first = false; const t0 = Number(v.t) || 0; evs = evs.filter((e) => t0 - (Number(e.a) || 0) <= 1000); }
+    g.lastSeq = Math.max(g.lastSeq, Number(v.seq) || 0, ...evs.map((e) => Number(e.s) || 0));
+    if (!evs.length) return;
+    for (const e of evs) { const { s: seq, a, ...rest } = e; g.q.push(rest); g.qS = Math.max(g.qS, Number(seq) || 0); }
+    g.qRx = Date.now();
+    flushIn();
+  }
+  let srcLast = { list: null, thumbs: null, error: "" };
+  function srcWrite() {   // the newest answer to the switcher at once (the lists ride along as they last were)
+    out.set("src.json", { rcid: RCID, t: Date.now(), url: g.url, list: srcLast.list, thumbs: srcLast.thumbs, error: srcLast.error, last: g.last || null });
+  }
+  async function srcPush() {
+    const thumbs = Date.now() < g.thumbsUntil;
+    const d = await ctl({ op: thumbs ? "thumbs" : "sources" });
+    g.srcAt = Date.now();
+    if (g.ended) return;
+    srcLast = { list: d.ok ? { monitors: d.monitors || [], windows: d.windows || [], all: !!d.all } : srcLast.list,
+                thumbs: d.thumbs || (thumbs ? null : srcLast.thumbs), error: d.ok ? "" : String(d.error || "") };
+    srcWrite();
+  }
+  let ctlQ = Promise.resolve();
+  function ctlArrive(v) {   // the admin's source switcher: numbered requests, one at a time, in order
+    if (g.ended || !v || v.rcid !== RCID || !(Number(v.n) > g.ctlN)) return;
+    g.lastIn = Date.now();
+    g.ctlN = Number(v.n);
+    const n = g.ctlN;
+    ctlQ = ctlQ.then(() => ctlRun(v, n)).catch(() => {});
+  }
+  async function ctlRun(v, n) {
+    if (g.ended) return;
+    const op = String(v.op || "");
+    if (op === "thumbs") { g.thumbsUntil = Date.now() + 30000; srcPush(); return; }
+    if (op === "sources") { srcPush(); return; }
+    if (op === "src") {
+      g.last = { n, op, url: v.url, state: "switching", at: Date.now() };
+      srcWrite();
+      const d = await ctl({ op: "src", url: v.url });
+      if (d.ok) g.url = String(d.url || v.url);
+      if (d.ended) { finish(d.ended, true); return; }
+      g.last = { n, op, url: v.url, state: d.ok ? "done" : "failed", ok: !!d.ok, error: d.ok ? "" : String(d.error || ""), ms: d.ms || 0, at: Date.now() };
+      srcWrite();   // the switch's answer first: the admin's player re-subscribes on it
+      stPush(g.lastD || {}, true);
+      srcPush();
+      return;
+    }
+    if (op === "front") {
+      const d = await ctl({ op: "front", url: v.url || g.url });
+      g.last = { n, op, url: v.url || g.url, state: d.ok ? "done" : "failed", ok: !!d.ok, error: d.ok ? "" : String(d.error || ""), at: Date.now() };
+      srcWrite();
+    }
+  }
+  let finishing = false;
+  async function finish(why, tellServer) {
+    if (g.ended || finishing) return;
+    finishing = true;
+    g.ended = why || "stopped";
+    say("Ended: " + g.ended);
+    try { out.set("st.json", { rcid: RCID, active: false, ended: g.ended, t: Date.now() }); } catch {}
+    try { out.set("ptr.json", { rcid: RCID, end: 1, t: Date.now() }); } catch {}
+    try { g.ws?.close(); } catch {}
+    if (tellServer) await ctl({ op: "end", why: g.ended });
+    setTimeout(() => { try { out.close(); } catch {} try { window.close(); } catch {} }, 1500);
+  }
+  window.__rcxAgent.finish = finish;
+
+  subscribe(conn, s.paths.admin, "in.json", inArrive, { priority: 255, staleMs: 5000 });
+  subscribe(conn, s.paths.admin, "ctl.json", ctlArrive, { priority: 250, staleMs: 30000 });
+  wsOpen();
+  stPush({}, true);
+  srcPush();
+  setInterval(async () => {   // the lease (kastr_rc LEASE_S) and the admin's heartbeat
+    if (g.ended) return;
+    if (Date.now() - g.lastIn > QUIET) { finish("timeout", true); return; }
+    if (g.ws && g.ws.readyState === 1) { try { g.ws.send(JSON.stringify({ op: "renew", rcid: RCID })); } catch {} }
+    else {
+      const d = await post("/api/rc", { op: "renew", rcid: RCID });
+      if ((d.ended || d.active === false) && (switching() || d.ended === "retarget")) return;
+      if (d.ended || d.active === false) { finish(d.ended || "stopped", false); return; }
+      if (d.http === 200) { stPush(d); if (d.ptr) ptrPush(d.ptr); }
+    }
+    if (Date.now() - g.srcAt > (Date.now() < g.thumbsUntil ? 5000 : 10000)) srcPush();
+  }, 1000);
+</script>
+</body>
+</html>

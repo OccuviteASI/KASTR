@@ -425,6 +425,25 @@
       <span id="webPortMsg" class="hint blk">Loading&hellip;</span>
     </section>
 
+    <!-- 0.21.83 (D) (Kenton: "I would like to set it up to allow remote control with the admin permissions on a relay/hub/camera
+         box. This should be opt-in only and a check box in the relay server page allowing remote control without having to
+         ask."): THIS machine's opt-in -- changed only here, on the machine itself; the hub sees it but can never switch it on -->
+    <section class="panel" id="rcxPanel">
+      <h2>Remote control <span id="rcxBadge" class="sbbadge" hidden></span></h2>
+      <label class="f asi-sw"><span class="switch"><input type="checkbox" id="rcxOn"><i></i></span><span>Let fleet admins control this machine without asking</span></label>
+      <span id="rcxHint" class="hint blk">Fleet admins (the admin access code) can then open this machine&rsquo;s desktop from <b>Machines&hellip;</b> in their
+        KASTR with control granted at once &mdash; no prompt here. While one is connected a red bar names them; anyone at this machine ends it with
+        <b>Stop control</b> or <b>Ctrl+Alt+Space</b>. Every session is logged here and on the hub. Off by default; only this machine can switch it on.</span>
+      <span id="rcxState" class="hint blk"></span>
+      <div id="rcxLocal"></div>
+      <div id="rcxHub" hidden>
+        <div style="margin-top:8px"><b>Machines that allow it</b> <span class="hint">(the whole fleet, as the hub sees them)</span></div>
+        <div id="rcxMachines" class="tblwrap"></div>
+        <div style="margin-top:8px"><b>Remote sessions</b> <span class="hint">(the last 200, fleet-wide)</span></div>
+        <div id="rcxSessions" class="tblwrap"></div>
+      </div>
+    </section>
+
     <section class="panel" id="networkPanel">
       <h2>Network</h2>
       <!-- 0.17.0: browser clients on other devices -- the host switch plus https + the URLs to open -->
@@ -2497,6 +2516,13 @@
     if (y + t.offsetHeight > box.height - 4) y = Math.max(4, ev.clientY - box.top - t.offsetHeight - 10);
     t.style.left = x + "px"; t.style.top = y + "px";
   }
+  function meshRcxBtn(node) {   // 0.21.83 (D): an opted-in machine (the Remote control card's list) gets Control here too
+    const m = window.__rcxMachine?.(node);
+    if (!m) return "";
+    const can = m.online && m.desktop?.ok && !m.session && !m.busy;
+    return "<button type='button' class='rcxmesh' data-node='" + esc(node) + "'" + (can ? "" : " disabled") + " title='" + esc(can ? "Open its desktop with control (it allows fleet admins without asking)" : (m.session ? m.session.admin + " is connected" : !m.online ? "offline" : "not available now")) + "' style='margin-left:6px;font-size:11px;padding:2px 8px'>Control</button>";
+  }
+  document.addEventListener("click", (e) => { const b = e.target.closest?.(".rcxmesh"); if (b && !b.disabled) { e.stopPropagation(); window.__rcxControl?.(b.dataset.node); } }, true);
   function meshPanelClose() { mesh.sel = null; mesh.formSig = ""; $("meshPanel").hidden = true; if (mesh.zoom && mesh.zd) { meshBuildZoom(mesh.zd); meshPlace(); } else if (mesh.data) { meshBuild(mesh.data); meshPlace(); } }
   function paintMeshPanel() {
     const box = $("meshPanel"), d = mesh.data;
@@ -2523,11 +2549,12 @@
         const crow = (c) => "<tr" + (mesh.sel?.client === "c:" + c.node ? " class='zsel'" : "") + "><td><b>" + esc(cn(c)) + "</b>" + (c.nick && c.name && c.nick !== c.name ? "<div class='hint'>" + esc(c.name) + "</div>" : "") + "</td><td>" + esc(c.kind) + "</td>"
           + "<td class='mono'>" + esc([c.hostname, c.user].filter(Boolean).join(" · ")) + "</td><td>" + esc((c.rooms || []).join(", ")) + "</td>"
           + "<td style='white-space:nowrap'>" + (c.net ? "↓ " + fmtRate(c.net.down) + "<br>↑ " + fmtRate(c.net.up) + "<div class='hint'>" + esc(c.net.at ? agoText(Date.now() / 1000 - c.net.at) : "") + "</div>" + (meshUpNote(c) ? "<div class='hint' style='white-space:normal;min-width:200px'>" + meshUpNote(c).replace(/^<br>/, "") + "</div>" : "") : "<span class='hint'>" + (c.kind === "viewer" ? "not reported" : "no figure (older KASTR)") + "</span>") + "</td>"
-          + "<td>" + ((c.publishes || []).map((s) => esc(shortPath(s.path)) + " " + fmtRate(s.bps)).join("<br>") || "—") + "</td></tr>";
+          + "<td>" + ((c.publishes || []).map((s) => esc(shortPath(s.path)) + " " + fmtRate(s.bps)).join("<br>") || "—") + "</td>"
+          + "<td>" + meshRcxBtn(c.node) + "</td></tr>";   // 0.21.83 (D)
         const srow = (s) => "<tr><td class='mono'>" + esc(s.path) + "</td><td>" + (s.viewers ?? "—") + "</td><td>" + fmtRate(s.bps) + "</td></tr>";
-        info.innerHTML = "<h4>" + esc(n.name) + " — " + cl.length + " client" + (cl.length === 1 ? "" : "s") + "</h4><div>" + meshLoadHtml(n).replace(/^<br>/, "") + "</div>"
+        info.innerHTML = "<h4>" + esc(n.name) + " — " + cl.length + " client" + (cl.length === 1 ? "" : "s") + " " + meshRcxBtn(n.node) + "</h4><div>" + meshLoadHtml(n).replace(/^<br>/, "") + "</div>"
           + (z.needsUpdate ? "<div class='hint' style='color:var(--asi-amber)'>This relay runs KASTR " + esc(n.version || "?") + " — the per-stream bitrates need " + esc(d.liveVersion || "0.21.78") + " there (update it from the spokes table).</div>" : "")
-          + (cl.length ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Client</th><th>Kind</th><th>Machine</th><th>In rooms</th><th title='what the client says it receives / sends'>Down / up</th><th title='measured by the relay'>Publishes here</th></tr>" + cl.map(crow).join("") + "</table></div>" : "<div class='hint'>No clients connected to it.</div>")
+          + (cl.length ? "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Client</th><th>Kind</th><th>Machine</th><th>In rooms</th><th title='what the client says it receives / sends'>Down / up</th><th title='measured by the relay'>Publishes here</th><th></th></tr>" + cl.map(crow).join("") + "</table></div>" : "<div class='hint'>No clients connected to it.</div>")
           + ((z.watched || []).length ? "<div style='margin-top:6px'><b>Watched here</b></div><div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Stream</th><th>Viewers</th><th>Out</th></tr>" + z.watched.map(srow).join("") + "</table></div>" : "")
           + ((z.other || []).length ? "<div style='margin-top:6px'><b>Other streams published here</b></div><div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Stream</th><th></th><th>In</th></tr>" + z.other.map(srow).join("") + "</table></div>" : "")
           + "<div class='hint'>Per-client down / up is what each KASTR (0.21.78 or newer) reports with its check-in; moq-relay counts per stream, not per client.</div>"
@@ -3063,6 +3090,121 @@
   updateFwHint();
   refresh();
   setInterval(refresh, 2000);
+
+  // ---- 0.21.83 (D) REMOTE CONTROL card: this machine's opt-in (loopback only -- the server refuses anyone else), its own
+  // session log, and -- on the hub -- every opted-in machine (with Control) and the fleet's Remote sessions.
+  const rcxDur = (s) => s == null ? "—" : s < 60 ? s + " s" : s < 3600 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
+  const rcxWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "—";
+  const RCX_WHY = { admin: "the admin ended it", operator: "the hub's operator ended it", hotkey: "Ctrl+Alt+Space here", bar: "Stop control here", stopped: "stopped here",
+                    timeout: "lost touch (10 s)", share: "the capture stopped", noanswer: "no answer from the machine", lost: "the machine went quiet", limit: "8-hour limit",
+                    off: "unattended control switched off", busy: "busy", desktop: "nobody signed in", error: "could not start", closed: "KASTR closed", released: "the admin gave it back",
+                    restart: "the hub restarted" };
+  let rcxMach = new Map();   // node -> the hub's row (the mesh map's Control buttons read it)
+  const rcxName = (m) => m.nick || m.hostname || m.name || m.node;
+  function rcxSessTable(rows, fleet) {
+    if (!rows.length) return "<div class='hint'>" + (fleet ? "No remote sessions yet." : "No fleet admin has controlled this machine.") + "</div>";
+    return "<table class='rooms'><tr>" + (fleet ? "<th>Machine</th>" : "") + "<th>Who</th><th>From</th><th>Start</th><th>End</th><th>Duration</th><th>How it ended</th></tr>"
+      + rows.map((r) => "<tr>" + (fleet ? "<td>" + esc(r.machine || r.node) + (r.site ? "<div class='hint'>" + esc(r.site) + "</div>" : "") + "</td>" : "")
+        + "<td>" + esc(r.admin || "?") + (r.kind === "operator" ? " <span class='hint'>(hub operator)</span>" : " <span class='hint'>(fleet admin)</span>") + "</td>"
+        + "<td>" + esc(r.from || "—") + "</td><td>" + rcxWhen(r.start || r.at) + "</td>"
+        + "<td>" + (r.state === "live" ? "<span class='updok'>connected now</span>" : rcxWhen(r.end)) + "</td><td>" + (r.state === "live" ? rcxDur(Math.round(Date.now() / 1000 - (r.start || r.at))) : rcxDur(r.dur)) + "</td>"
+        + "<td>" + esc(r.state === "live" ? "" : (RCX_WHY[r.why] || r.why || (r.state === "pending" ? "starting" : ""))) + "</td></tr>").join("") + "</table>";
+  }
+  async function rcxLocalPaint() {
+    let d = null;
+    try { const r = await fetch("/api/rcadmin", { cache: "no-store" }); d = r.ok ? await r.json() : null; } catch {}
+    const box = $("rcxOn");
+    if (!d) {
+      box.disabled = true;
+      $("rcxState").textContent = LOCAL ? "Not available on this KASTR." : "Set on the machine itself — open KASTR on that computer to see or change it.";
+      $("rcxLocal").innerHTML = "";
+      return;
+    }
+    box.disabled = !LOCAL;
+    if (document.activeElement !== box) box.checked = !!d.on;
+    const hub = d.hub || {}, dk = d.desktop || {};
+    const bits = [];
+    if (d.on) {
+      bits.push(hub.state === "ok" ? "<span class='updok'>Listed for fleet admins</span>" + (hub.via ? " (via " + esc(hub.via) + ")" : "")
+        : hub.state === "old" ? "<span class='updbad'>The relay this KASTR uses is older than 0.21.83 — update it</span>"
+        : hub.state === "key" ? "<span class='updbad'>" + esc(hub.error) + "</span>"
+        : hub.state ? "<span class='updbad'>Not reaching the hub yet: " + esc(hub.error || hub.state) + "</span>" : "Telling the hub…");
+      if (!dk.ok) bits.push("<span class='updbad'>" + (dk.why === "locked" ? "The screen is locked — nothing can be shown until someone unlocks it" : dk.why === "wayland" ? "This desktop runs Wayland — remote control needs X11" : "Nobody is signed in on this machine — fleet admins see that in Machines…") + "</span>");
+    }
+    if (d.adminWindows === "limited") bits.push("Administrator windows: minimize, move, resize and close need KASTR to run as administrator on this computer");
+    if (d.session) bits.push("<span class='updok'>" + esc(d.session.admin) + " (fleet admin) is connected now</span> — from " + esc(d.session.from || "?") + ", since " + new Date(d.session.since * 1000).toLocaleTimeString());
+    $("rcxState").innerHTML = bits.join("<br>");
+    $("rcxBadge").hidden = !d.on; $("rcxBadge").textContent = d.session ? "in use" : "on";
+    $("rcxLocal").innerHTML = "<div style='margin-top:6px'><b>This machine's sessions</b></div><div class='tblwrap'>" + rcxSessTable(d.audit || [], false) + "</div>";
+  }
+  $("rcxOn").addEventListener("change", async () => {
+    const box = $("rcxOn"), on = box.checked;
+    if (!LOCAL) { box.checked = !on; return; }
+    box.disabled = true;
+    try {
+      const r = await fetch("/api/rcadmin", { method: "POST", headers: { "Content-Type": "application/json", "X-KASTR-RC": "1" }, body: JSON.stringify({ on }) });
+      if (!r.ok) { box.checked = !on; const d = await r.json().catch(() => ({})); $("rcxState").textContent = "Not changed: " + (d.error || r.status); }
+    } catch (e) { box.checked = !on; }
+    box.disabled = false;
+    rcxLocalPaint();
+  });
+  async function rcxHubPaint() {
+    if (!LOCAL) return;
+    let d = null;
+    try { d = await fetch("/api/relay/rcx", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    const show = !!(d && d.ok && (d.hub || (d.machines || []).length || (d.sessions || []).length));
+    $("rcxHub").hidden = !show;
+    if (!show) { rcxMach = new Map(); return; }
+    rcxMach = new Map((d.machines || []).map((m) => [m.node, m]));
+    const ms = d.machines || [];
+    $("rcxMachines").innerHTML = ms.length ? "<table class='rooms'><tr><th>Machine</th><th>Site</th><th>Role</th><th>Status</th><th>KASTR</th><th></th></tr>" + ms.map((m) => {
+      const st = !m.online ? "offline" : m.session ? esc(m.session.admin) + " is connected" : m.busy ? "controlled by " + esc(m.busy) : !m.desktop?.ok ? (m.desktop?.why === "locked" ? "screen locked" : "nobody is signed in on " + esc(rcxName(m))) : "<span class='updok'>online</span>";
+      const can = d.hub && m.online && m.desktop?.ok && !m.session && !m.busy;
+      return "<tr><td><b>" + esc(rcxName(m)) + "</b><div class='hint'>" + esc([m.hostname !== rcxName(m) ? m.hostname : "", m.node].filter(Boolean).join(" · ")) + "</div>"
+        + (m.adminWindows === "limited" ? "<div class='hint' style='color:var(--asi-amber)'>Minimize, move, resize and close need KASTR to run as administrator on " + esc(rcxName(m)) + "’s computer</div>" : "") + "</td>"
+        + "<td>" + esc(m.site || "—") + "</td><td>" + esc(m.role || "") + "</td><td>" + st + "</td><td>" + esc(m.version || "?") + "</td>"
+        + "<td>" + (d.hub ? "<button type='button' class='rcxctl' data-node='" + esc(m.node) + "'" + (can ? "" : " disabled") + ">Control</button>" : "") + "</td></tr>";
+    }).join("") + "</table>" : "<div class='hint'>No machine allows it yet.</div>";
+    for (const b of $("rcxMachines").querySelectorAll(".rcxctl")) b.addEventListener("click", () => rcxControl(b.dataset.node));
+    $("rcxSessions").innerHTML = rcxSessTable(d.sessions || [], true);
+  }
+  const rcxWins = new Map();
+  window.addEventListener("message", (e) => {
+    if (e.origin !== location.origin || e.data?.type !== "kastr-rcx-ready") return;
+    const rec = rcxWins.get(String(e.data.name || ""));
+    if (rec && e.source === rec.win) rcxSend(String(e.data.name));
+  });
+  function rcxSend(name) {
+    const rec = rcxWins.get(name);
+    if (!rec || rec.win.closed) return;
+    if (rec.s) rec.win.postMessage({ type: "kastr-rcx-session", s: rec.s }, location.origin);
+    else if (rec.error) rec.win.postMessage({ type: "kastr-rcx-error", error: rec.error }, location.origin);
+  }
+  async function rcxControl(node) {   // the hub's operator (this page on the hub machine): the same private session window
+    const m = rcxMach.get(node);
+    if (!m) return;
+    const name = "kastr-rcx-" + node;
+    const old = rcxWins.get(name);
+    if (old && !old.win.closed && old.s) { try { old.win.focus(); } catch {} return; }
+    const win = window.open("/rcx.html", name, "popup,width=1440,height=900");
+    if (!win) { alert("The session window was blocked — allow pop-up windows for this page."); return; }
+    const rec = { win, s: null, error: null };
+    rcxWins.set(name, rec);
+    const mons = m.monitors || [];
+    const mon = mons.find((x) => x.primary)?.index ?? mons[0]?.index ?? 0;
+    let d = null;
+    try { d = await api("/api/relay/rcx", { op: "start", node, monitor: mon }); } catch (e) { d = { ok: false, error: String(e) }; }
+    if (!d || !d.ok || !d.token) { rec.error = (d && d.error) || "the hub did not start the session"; rcxSend(name); rcxHubPaint(); return; }
+    rec.s = { sid: d.sid, rcid: d.rcid, token: d.token, paths: d.paths, relay: d.relay, exp: d.exp, machine: { ...(d.machine || m), nick: m.nick || "" },
+              admin: { name: "Hub operator", color: "#009fda" }, api: { kind: "operator" } };
+    rcxSend(name);
+    rcxHubPaint();
+  }
+  window.__rcxMachine = (node) => rcxMach.get(node) || null;   // the mesh map's zoomed side panel
+  window.__rcxControl = rcxControl;
+  rcxLocalPaint(); rcxHubPaint();
+  setInterval(rcxLocalPaint, 5000);
+  setInterval(rcxHubPaint, 8000);
 </script>
 <script type="module">
   // Streams on this relay (0.7.7): a fresh anonymous probe every 5s lists

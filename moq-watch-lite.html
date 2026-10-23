@@ -2098,7 +2098,8 @@
   .librow .libnm .ed { color:var(--text-mute); font-size:11px; margin-left:4px; }
   .librow .libsub { font-size:11px; color:var(--text-mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .librow .libtags { display:flex; gap:4px; flex-wrap:nowrap; overflow:hidden; }
-  .librow .libtag { font-size:10px; padding:0 6px; height:16px; line-height:16px; border-radius:8px; border:1px solid var(--line); color:var(--text-dim); white-space:nowrap; }
+  .librow .libtag { font-size:10px; padding:0 6px; height:16px; line-height:16px; border-radius:8px; border:1px solid var(--line); color:var(--text-dim); white-space:nowrap; flex:0 0 auto; }
+  .librow .libtag:last-child { flex:0 1 auto; min-width:24px; overflow:hidden; text-overflow:ellipsis; }   /* 0.21.84 (integration): the last tag ends in an ellipsis, never clipped mid-word */
   .librow .libtag.here { border-color:var(--asi-blue); color:var(--asi-blue); }
   .librow .libtag.warn { border-color:color-mix(in srgb, var(--asi-amber) 60%, transparent); color:var(--asi-amber); }
   .librow .libbtns { flex:none; display:flex; align-items:center; gap:4px; }
@@ -4188,7 +4189,10 @@
       xsTiles.set(p, { from: String(it.from || parts[0]), label: String(it.label || ""), by: String(it.by || ""), kind: String(it.kind || ""), cg: !!it.cg });   // 0.21.66: cg = listed only for a room grid (no tile of its own)
       if (!tiles.has(p)) { if (isLibPath(p) && authSecured && !libConn.token) await libTokenEnsure(); cancelPendingRemoval(p); createTile(p); try { applyState(); } catch {} }   // 0.21.84: a library path rides the library connection
     }
-    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p) && !libTiles.has(p)) scheduleRemoveTile(p); }   // 0.21.84: a library pin keeps its tile
+    // 0.21.84 (integration lab d): a dark hub leaves a spoke only the listings posted to it -- a LIBRARY stream listed here from
+    // another site keeps its tile meanwhile (it plays on the library connection, which needs no listing); others go as before
+    const hubDark = d.hubDown === true;
+    for (const p of [...xsTiles.keys()]) if (!live.has(p)) { if (hubDark && isLibPath(p)) continue; xsTiles.delete(p); if (tiles.has(p) && !wrRoomOf(p) && !libTiles.has(p)) scheduleRemoveTile(p); }   // 0.21.84: a library pin keeps its tile
   }
   setInterval(() => { xsPoll(); xsTick(); }, 8000);   // 0.21.62
   window.__xsPoll = xsPoll;   // rig
@@ -21236,19 +21240,39 @@
     if (libBusy || !libOn() || !authBase()) return;
     const used = [...libTiles.keys()];
     full = !!full || libUi.open;
-    if (!full && !used.length) return;
     if (!full && Date.now() - libMeta.polledAt < 3000) return;
+    const old = full ? [] : libOldRefs();   // 0.21.84 (integration): my grids' / pins' OLD paths, asked by name (each at most every 10 min)
+    if (!full && !used.length && !old.length) return;
     libBusy = true;
     libMeta.polledAt = Date.now();
     try {
-      const since = full && libMeta.fullAt ? libMeta.ver ?? 0 : 0;   // the whole list once, then by version
-      const d = full ? await libApi.list(since) : await libApi.list(0, used);
-      libTake(d, full, full ? null : used, since);
+      const since = full && libMeta.fullAt ? libMeta.fullVer ?? 0 : 0;   // the whole list once, then by version (0.21.84 integration: the version of the last WHOLE list -- a paths= answer's never stands for it)
+      const ask = [...used, ...old];
+      const d = full ? await libApi.list(since) : await libApi.list(0, ask);
+      libTake(d, full, full ? null : ask, since);
       libMeta.err = "";
     } catch (e) { libMeta.err = String(e?.message || e).slice(0, 160); libChangedSoon(); }
     finally { libBusy = false; }
   }
   setInterval(() => { if (!document.hidden) libPoll(false); }, 15000);   // open panel: the whole list (by version); else only this room's
+  // 0.21.84 (integration lab a): a device-local grid or pin saved with a camera's OLD path (box-<host>/... before the camera moved
+  // into the library) followed its catalogue `aka` only once the Streams panel loaded the whole list. Those paths are asked by
+  // name now (paths= resolves an old path: its row comes back with `alias`), so they follow on the first poll after joining.
+  const libOldAsked = new Map();   // old path -> when it was last asked
+  function libOldRefs() {
+    const refs = new Set();
+    try { for (const g of Object.values(cgMine())) for (const s of (g && Array.isArray(g.slots)) ? g.slots : []) for (const k of Array.isArray(s.cams) ? s.cams : []) refs.add(String(k)); } catch {}
+    try { const a = JSON.parse(localStorage.getItem("kastr.pins." + sbRelayHost()) || "[]"); if (Array.isArray(a)) for (const k of a) refs.add(String(k)); } catch {}
+    const now = Date.now(), pick = [];
+    for (const p of refs) {
+      if (isLibPath(p) || !p.endsWith(".hang") || LOW_RE.test(p) || p.startsWith("~") || p.split("/").length < 4) continue;
+      if (now - (libOldAsked.get(p) || 0) < 600000) continue;
+      pick.push(p);
+      if (pick.length >= 32) break;
+    }
+    for (const p of pick) libOldAsked.set(p, now);
+    return pick;
+  }
   function libTake(d, full, asked, since) {
     if (!d) return;
     const off = d.on === false || d.enabled === false;   // the fleet switch is off (rows: []): the panel goes, the tiles keep playing
@@ -21256,7 +21280,7 @@
     if (libCaps.killed && (d.on === true || d.enabled === true)) { libCaps.killed = false; libGate(); }
     if (d.same) return;
     const list = Array.isArray(d.rows) ? d.rows : Array.isArray(d.entries) ? d.entries : [];
-    if (d.ver != null && d.ver === libMeta.ver && !list.length && !(d.removed || []).length && libMeta.loaded) return;   // nothing new (ver is opaque: equality only)
+    if (!asked && d.ver != null && d.ver === libMeta.ver && !list.length && !(d.removed || []).length && libMeta.loaded) return;   // nothing new (ver is opaque: equality only); a paths= answer always counts (its `missing`)
     // a since= answer is the WHOLE list (only a paths= answer is partial), unless a server says delta
     const whole = !!full && !asked && d.delta !== true && d.full !== false;
     if (whole) libCat.clear();
@@ -21267,7 +21291,7 @@
       for (const p of asked) { libAsked.add(p); if (!got.has(p)) libCat.delete(p); }
       for (const p of Array.isArray(d.missing) ? d.missing : []) libCat.delete(String(p));
     }
-    if (whole) libMeta.fullAt = Date.now();
+    if (whole) { libMeta.fullAt = Date.now(); libMeta.fullVer = d.ver ?? null; }
     libMeta.ver = d.ver ?? libMeta.ver;
     libMeta.loaded = true; libMeta.at = Date.now();
     if (d.site) libMeta.site = String(d.site);
@@ -21388,7 +21412,12 @@
         for (const [p, why] of want) {
           const was = libTiles.get(p);
           libTiles.set(p, { why });
-          if (!tiles.has(p)) { cancelPendingRemoval(p); createTile(p); changed = true; }
+          if (!tiles.has(p)) {
+            cancelPendingRemoval(p); createTile(p); changed = true;
+            // 0.21.84 (integration lab c): an opened library pin asks its camera to start NOW -- odQuick's 3 s round made an asleep
+            // camera's picture arrive ~5 s after the tile instead of ~2.5 s (a grid camera waits for the grid to draw it)
+            if (why !== "grid") setTimeout(() => { const t = tiles.get(p); if (t && libTiles.has(p) && !hasPicture(t) && !parkedStreams.has(p) && libWakeable(p)) { t.odAt = Date.now(); odWake(p); } }, 250);
+          }
           else if (!was || was.why !== why) changed = true;
         }
         for (const p of [...libTiles.keys()]) if (!want.has(p)) { libTiles.delete(p); if (tiles.has(p)) { removeTile(p); changed = true; } }
@@ -28131,7 +28160,7 @@
       const timer = setInterval(tick, stepMs);   // the app window runs without timer throttling
       gen.getSettings = () => { try { const s0 = track0.getSettings(); return s0.frameRate ? s0 : { ...s0, frameRate: fps }; } catch { return {}; } };   // 0.21.16: the pacer's rate when the capture has none (captureStream(0))
       const stop0 = gen.stop.bind(gen);
-      gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close(); } catch {} stop0(); };
+      gen.stop = () => { alive = false; clearInterval(timer); try { reader.cancel(); } catch {} for (const fr of q.splice(0)) { try { fr.close(); } catch {} } try { track0.stop(); } catch {} try { writer.close().catch(() => {}); } catch {} stop0(); };   // 0.21.84 (integration lab h): close() REJECTS (async) when the stream is already closing -- a page error when a presentation ended
       gen.__restamped = true; gen.__source = track0;   // 0.21.14: requestFrame() must reach the CAPTURE track -- a generator has none
       return gen;
     } catch { return track0; }

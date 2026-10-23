@@ -321,6 +321,15 @@
   @media (prefers-reduced-motion: reduce) { .meshwrap .mstat, .meshwrap .mbadge, .meshwrap .mnode .mglow, .meshwrap .mnode .halo, .meshlegend * { animation:none !important; }
     .meshwrap .medge, .meshwrap .mstat, .meshwrap .marc, .meshwrap .mnode, .meshwrap .mnode .mglow { transition:none; }
     .meshwrap .marrow.on { display:inline; } }
+  /* 0.21.84: the Stream library card (hub) and its site names on the Links card */
+  @media (min-width: 900px) { #libAdmPanel { grid-column:span 2; } }
+  .libadmtools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0 6px; }
+  .libadmtools input[type=search] { flex:1; min-width:180px; }
+  label.libadmhid { display:flex; flex-direction:row; align-items:center; gap:8px; margin:0; font-size:12px; }
+  #libSitesList input.libsite { width:100%; min-width:120px; }
+  .sbbadge.libwarn { background:color-mix(in srgb, var(--asi-amber, #f0a020) 24%, transparent); }
+  #libPre { margin:6px 0; }
+  #libPre[hidden], #libAdmBox[hidden], #libAdmSpoke[hidden], #libSitesBox[hidden], #libBoxRow[hidden] { display:none; }
 </style>
 </head>
 <body class="asi">
@@ -587,6 +596,12 @@
         <div class="meshhub"><span>Default hub and standby link cost</span><input type="number" id="meshHubCost" min="1" max="1000" step="1"><button type="button" id="meshHubSave" class="ghost">Set</button>
           <span class="hint">Direct links cost 1 + RTT/10 ms; a stream takes the cheapest path, so the hub and standby links carry it only when a viewer pulls it there or no direct path exists. Click one spoke's hub or standby link to price it on its own. Spokes on 0.21.78 or newer take a change live; an older spoke restarts its relay once.</span></div>
         <details id="meshTblBox"><summary class="hint" style="cursor:pointer">Links table</summary><div id="linksList" class="hint" style="margin:4px 0 6px"></div></details>
+        <!-- 0.21.84: the stream library's site names, one per relay (default: the relay's name without "-relay"); a relay older than the
+             library's minimum version shows "needs update" and publishes nothing to the library until it updates -->
+        <details id="libSitesBox" hidden><summary class="hint" style="cursor:pointer">Stream library sites</summary>
+          <div id="libSitesList" class="hint" style="margin:4px 0 6px"></div>
+          <span id="libSitesMsg" class="hint blk"></span>
+        </details>
         <span id="linksMsg" class="hint blk gap">Each spoke probes the other relays' private addresses every 5 minutes (a traceroute: every hop that answers must be a private address) and the hub links the pairs that reach each other. Hover a link for the bandwidth each way, a relay for its own (local clients / relay links). Click a link to switch it on or off, set its cost or the address to dial; click a relay to zoom into it and its clients (Escape or ← Full mesh goes back); drag a relay to place it.</span>
       </div>
       <!-- 0.21.50 (Kenton): every user in the federation, the KASTR each runs, and an Update that comes from the relay they use -->
@@ -645,6 +660,8 @@
     <section class="panel" id="camerasPanel" hidden>
       <h2>This box&rsquo;s cameras</h2>
       <label class="f asi-sw"><span class="switch"><input type="checkbox" id="rtspOn"><i></i></span><span>Publish this box&rsquo;s RTSP cameras (off = nothing published, CPU/GPU spared; feeds, grids and settings are kept)</span></label>
+      <!-- 0.21.84: the box's master switch for the stream library (each camera can still be switched in its rooms picker) -->
+      <label class="f asi-sw" id="libBoxRow" hidden><span class="switch"><input type="checkbox" id="libBoxOn"><i></i></span><span>Share this box&rsquo;s cameras to the stream library (everyone on the fleet can add them to their rooms)</span></label>
       <div id="rtspNote" class="hint" style="margin-top:4px"></div>
       <div id="rtspList" style="font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8"></div>
     </section>
@@ -696,6 +713,30 @@
           <thead><tr><th>Vehicle</th><th>Created</th><th>Last used</th><th>Last room</th><th></th></tr></thead>
           <tbody></tbody>
         </table></div>
+      </div>
+    </section>
+
+    <!-- 0.21.84 (Kenton: "a fleet-wide library of available streams"): the hub's Stream library card -- the fleet's switch (and why it
+         stays off), every library stream with an admin's Hide / Unhide and fleet-wide label. Hidden until GET /api/relay/library answers. -->
+    <section class="panel" id="libAdmPanel" hidden>
+      <h2>Stream library <span id="libAdmBadge" class="sbbadge" hidden></span></h2>
+      <p class="hint" style="margin-top:0">One shared place outside every room: camera boxes publish each camera once, and anyone in any room on the fleet
+        can add it as a tile, a spotlight or a grid spot (a publisher of that room adds it for everyone; viewers watch it just for themselves).</p>
+      <div id="libAdmSpoke" class="hint" hidden>The stream library is run by the hub &mdash; switch it, hide streams and name sites on the hub's Relay page.</div>
+      <div id="libAdmBox">
+        <label class="f asi-sw"><span class="switch"><input type="checkbox" id="libFleetOn"><i></i></span><span>Stream library for the fleet (off = no library anywhere: its tiles go, boxes keep publishing to their rooms)</span></label>
+        <div class="warn" id="libPre" hidden></div>
+        <span id="libAdmMsg" class="hint blk"></span>
+        <div class="libadmtools">
+          <input type="search" id="libAdmQ" placeholder="Find a stream, box or site" autocomplete="off" spellcheck="false" aria-label="Find a library stream">
+          <label class="asi-sw libadmhid"><span class="switch"><input type="checkbox" id="libAdmHidden"><i></i></span><span>Hidden only</span></label>
+          <span id="libAdmCount" class="hint"></span>
+        </div>
+        <div class="tblwrap"><table class="rooms" id="libAdmTable">
+          <thead><tr><th>Stream</th><th>Box &middot; Site</th><th>State</th><th title="Used in this many rooms' boards">Rooms</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="libAdmNote" class="hint">No library streams yet.</div>
       </div>
     </section>
 
@@ -3087,6 +3128,162 @@
   paintVehicles();
   setInterval(paintVehicles, 10000);
 
+  // 0.21.84 (Kenton: "a fleet-wide library of available streams"): the hub's Stream library card + the site names on the Links card.
+  // GET /api/relay/library every 10 s -> {ok, hub, on, why, root, minVersion, ver, entries: [Row + hidden], local, counts: {entries, live,
+  // hidden, offline}, hubDown?, listAt? and on the hub: switch, switchAt, preflight: {ok, why}, sites: {node: {site, set, name, default}},
+  // conflicts: [{host, node, other, otherAt}]}. POST {on: true | false} = the FLEET SWITCH (hub only; a spoke answers 409) -> the GET
+  // reply; POST {op: "hide" | "unhide" | "label" | "site", path | node, label | site} = an admin op as the operator. This machine only.
+  const LIB_MIN_VERSION = "0.21.84";
+  const libVerLt = (a, b) => {
+    const pa = String(a || "0").split(/[.-]/).map((x) => parseInt(x, 10) || 0), pb = String(b || "0").split(/[.-]/).map((x) => parseInt(x, 10) || 0);
+    for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+    return false;
+  };
+  const libAdm = { last: null, rows: new Map(), busy: false, edit: "" };
+  async function libAdmOp(body) {
+    try {
+      const res = await fetch("/api/relay/library", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return await res.json().catch(() => ({ ok: false, error: "HTTP " + res.status }));
+    } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+  }
+  $("libFleetOn").addEventListener("change", async () => {
+    const sw = $("libFleetOn"), on = sw.checked;
+    if (!on && !confirm("Switch the stream library off for the whole fleet? Library tiles leave every room; boxes keep publishing to the rooms they show in.")) { sw.checked = true; return; }
+    sw.disabled = true;
+    $("libAdmMsg").textContent = on ? "Switching the library on\u2026" : "Switching the library off\u2026";
+    const r = await libAdmOp({ on });
+    sw.disabled = !LOCAL;
+    $("libAdmMsg").textContent = r.ok !== false && !r.error ? (on ? (r.on === false ? "Switched on, but the library stays off: " + (r.why || r.preflight?.why || "see below") : "The stream library is on for the fleet.") : "The stream library is off for the fleet.") : "Not changed: " + (r.why || r.error || "no answer");
+    if (!r.ok) sw.checked = !on;
+    paintLibAdm();
+  });
+  $("libAdmQ").addEventListener("input", () => libAdmPaintRows());
+  $("libAdmHidden").addEventListener("change", () => libAdmPaintRows());
+  function libAdmRow(path) {
+    const tr = document.createElement("tr");
+    tr.dataset.path = path;
+    tr.innerHTML = "<td class='slug'><span class='nm'></span><span class='vflag'></span></td><td class='where'></td><td class='st mono'></td><td class='used mono'></td><td class='act'></td>";
+    const mk = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "ghost"; b.textContent = label; b.title = title; b.dataset.label = label; b.style.marginLeft = "4px";
+      b.addEventListener("click", fn);
+      tr.querySelector(".act").appendChild(b);
+      return b;
+    };
+    mk("Rename", "Give this stream a fleet-wide label (kept at the hub, shown with an edit mark)", async () => {
+      const cur = tr.__e?.label || "";
+      const v = prompt("A fleet-wide label for this stream (empty = its box's own name)", cur);
+      if (v === null) return;
+      const r = await libAdmOp({ op: "label", path, label: v.trim().slice(0, 80) });
+      $("libAdmMsg").textContent = r.ok ? "Renamed." : "Not renamed: " + (r.error || "no answer");
+      paintLibAdm();
+    });
+    mk("Hide", "Hide it from the library everywhere (rooms that use it show \u201cNo longer in the library\u201d); Unhide brings it back", async (e) => {
+      const hidden = !!tr.__e?.hidden, b = e.currentTarget;
+      if (!hidden && !confirm("Hide " + (tr.__e?.label || path) + " from the library for the whole fleet?")) return;
+      b.disabled = true;
+      const r = await libAdmOp({ op: hidden ? "unhide" : "hide", path });
+      $("libAdmMsg").textContent = r.ok ? (hidden ? "Back in the library." : "Hidden from the library everywhere.") : "Not changed: " + (r.error || "no answer");
+      paintLibAdm();
+    });
+    return tr;
+  }
+  function libAdmFill(tr, e) {
+    tr.__e = e;
+    const set = (sel, txt) => { const el = tr.querySelector(sel); if (el.textContent !== txt) el.textContent = txt; };
+    set(".nm", (e.label || e.path) + (e.edited ? " \u270e" : "") + (e.conflict ? " \u26a0" : ""));
+    if (e.conflict) tr.querySelector(".slug").title = e.path + " \u2014 the same box name is also seen from the relay " + e.conflict;
+    set(".vflag", e.hidden ? "hidden" : "");
+    if (!e.conflict) tr.querySelector(".slug").title = e.path;
+    set(".where", (e.box || "?") + " \u00b7 " + (e.site || "?"));
+    set(".st", e.hidden ? "hidden" : e.gone ? "gone" : e.reach === false ? "unreachable" : e.online === false ? "offline" : String(e.state || "?"));
+    set(".used", String(e.usedIn || 0));
+    tr.classList.toggle("revoked", !!e.hidden);
+    const [rn, hd] = tr.querySelectorAll(".act button");
+    hd.textContent = e.hidden ? "Unhide" : "Hide"; hd.className = e.hidden ? "ghost" : "stop";
+    rn.disabled = hd.disabled = !LOCAL || libAdm.busy;
+  }
+  function libAdmPaintRows() {
+    const d = libAdm.last;
+    if (!d) return;
+    const q = $("libAdmQ").value.trim().toLowerCase(), hidOnly = $("libAdmHidden").checked;
+    const list = (d.entries || []).filter((e) => e && e.path && (!hidOnly || e.hidden) && (!q || [e.label, e.box, e.site, e.path].join(" ").toLowerCase().includes(q)))
+      .sort((a, b) => String(a.site).localeCompare(String(b.site)) || String(a.label).localeCompare(String(b.label)));
+    const body = $("libAdmTable").querySelector("tbody"), seen = new Set();
+    for (const e of list.slice(0, 400)) {
+      seen.add(e.path);
+      let tr = libAdm.rows.get(e.path);
+      if (!tr) { tr = libAdmRow(e.path); libAdm.rows.set(e.path, tr); }
+      libAdmFill(tr, e);
+      body.appendChild(tr);   // in order
+    }
+    for (const [p, tr] of libAdm.rows) if (!seen.has(p)) { tr.remove(); libAdm.rows.delete(p); }
+    const all = (d.entries || []).length, hid = (d.entries || []).filter((e) => e?.hidden).length;
+    $("libAdmCount").textContent = all + (all === 1 ? " stream" : " streams") + (hid ? ", " + hid + " hidden" : "") + (list.length > 400 ? " (first 400 shown \u2014 search to narrow)" : "");
+    $("libAdmNote").hidden = !!list.length;
+    $("libAdmNote").textContent = all ? "Nothing matches." : "No library streams yet \u2014 a camera box puts its cameras here (its cameras' rooms \u25b8 In the stream library).";
+  }
+  function libSitesPaint(d) {   // sites: {node: {site, set, name, default}}; each relay's KASTR version from the mesh (the Links card's own data)
+    const box = $("libSitesBox");
+    const mn = (mesh.data && Array.isArray(mesh.data.nodes)) ? mesh.data.nodes : [];
+    const nodes = Array.isArray(d?.nodes) ? d.nodes : Object.entries(d?.sites && typeof d.sites === "object" ? d.sites : {}).map(([node, s]) => {
+      const m = mn.find((x) => x.id === node || x.name === node || x.name === s?.name) || {};
+      return { node, name: s?.name || m.name || node, site: s?.set ? s.site : "", placeholder: s?.default || s?.site || "", version: m.version || "" };
+    });
+    box.hidden = !(d && d.hub && nodes.length);
+    if (box.hidden) return;
+    if ($("libSitesList").contains(document.activeElement)) return;   // never under the operator's hand
+    const min = d.minVersion || LIB_MIN_VERSION;
+    $("libSitesList").innerHTML = "<div class='tblwrap'><table class='rooms' style='font-size:12px'><tr><th>Relay</th><th>Site name in the library</th><th>KASTR</th><th></th></tr>"
+      + nodes.map((n, i) => "<tr><td>" + esc(n.name || n.node) + "</td><td><input type='text' class='libsite' data-i='" + i + "' maxlength='48' value='" + esc(n.site || "") + "' placeholder='" + esc(n.placeholder || String(n.name || n.node || "").replace(/-relay$/i, "")) + "' aria-label='Site name for " + esc(n.name || n.node) + "'></td>"
+        + "<td class='mono'>" + esc(n.version || "?") + ((n.needsUpdate || libVerLt(n.version, min)) ? " <span class='sbbadge libwarn' title='Relays older than " + esc(min) + " do not publish to the library'>needs update</span>" : "") + "</td>"
+        + "<td><button type='button' class='ghost libsiteset' data-i='" + i + "'>Set</button></td></tr>").join("") + "</table></div>";
+    for (const b of $("libSitesList").querySelectorAll(".libsiteset")) b.addEventListener("click", async () => {
+      const n = nodes[Number(b.dataset.i)], inp = $("libSitesList").querySelector(".libsite[data-i='" + b.dataset.i + "']");
+      if (!n || !inp) return;
+      b.disabled = true;
+      const r = await libAdmOp({ op: "site", node: n.node, site: inp.value.trim().slice(0, 48) });
+      $("libSitesMsg").textContent = r.ok ? "Site name saved \u2014 every room's library shows it within a minute." : "Not saved: " + (r.error || "no answer");
+      inp.blur();
+      paintLibAdm();
+    });
+  }
+  async function paintLibAdm() {
+    if (!LOCAL) return;
+    let d = null;
+    try {
+      const res = await fetch("/api/relay/library", { cache: "no-store" });
+      if (!res.ok) { $("libAdmPanel").hidden = true; $("libSitesBox").hidden = true; return; }
+      d = await res.json();
+    } catch { $("libAdmPanel").hidden = true; return; }
+    if (!d || d.error || d.ok === false) { $("libAdmPanel").hidden = true; return; }
+    libAdm.last = d;
+    $("libAdmPanel").hidden = false;
+    $("libAdmSpoke").hidden = !!d.hub;
+    $("libAdmBox").hidden = !d.hub;
+    const pre = d.preflight || {};
+    const badge = $("libAdmBadge");
+    badge.hidden = false;
+    const on = d.on ?? d.enabled;
+    badge.textContent = on ? "on" : pre.ok === false ? "off: rename a room" : "off";
+    badge.classList.toggle("libwarn", !on);
+    badge.title = on ? "" : String(d.why || pre.why || "");
+    libSitesPaint(d);
+    if (!d.hub) return;
+    const sw = $("libFleetOn");
+    if (document.activeElement !== sw) sw.checked = !!(d.switch ?? on);   // the switch as set (the library may still be off: the pre-flight)
+    sw.disabled = !LOCAL;
+    const conf = Array.isArray(d.conflicts) ? d.conflicts : [];
+    $("libAdmMsg").dataset.conf = conf.length ? "1" : "";
+    if (conf.length && !$("libAdmMsg").textContent) $("libAdmMsg").textContent = conf.length + " box name" + (conf.length === 1 ? " is" : "s are") + " seen from two relays (\u26a0 on its streams): " + conf.slice(0, 3).map((c) => c.host + " (" + c.node + " / " + c.other + ")").join(", ");
+    // pre-flight: while a room is named "lib" the library stays off (that name is the library's own root)
+    $("libPre").hidden = pre.ok !== false;
+    $("libPre").textContent = pre.ok === false ? (pre.why || ("The library stays off: a room is named \u201c" + ((pre.rooms || ["lib"])[0]) + "\u201d, the library's reserved name. Rename that room (Rooms on this relay), then switch the library on.")) : "";
+    libAdmPaintRows();
+  }
+  paintLibAdm();
+  setInterval(paintLibAdm, 10000);
+
   updateFwHint();
   refresh();
   setInterval(refresh, 2000);
@@ -3382,6 +3579,13 @@
     const feeds = (d && d.feeds) || [];
     if (!d || d.remote || (!feeds.length && !d.suspended)) { panel.hidden = true; return; }
     document.getElementById("rtspOn").checked = !d.suspended;
+    fetch("/api/rtsp/library", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((L) => {   // 0.21.84: the box's library switch (GET /api/rtsp/library)
+      const lr = document.getElementById("libBoxRow"), lb = document.getElementById("libBoxOn");
+      lr.hidden = !L || !L.ok || L.enabled === false;   // kastr.ini library = off: this box stays out
+      if (lr.hidden) return;
+      if (document.activeElement !== lb) lb.checked = !!L.master;
+      lr.title = L.available === false ? (L.why || "This box's relay does not offer the stream library yet") : L.noRoom ? "This box is in no room: its cameras join the library by default" : "";
+    }).catch(() => {});
     const list = document.getElementById("rtspList");
     list.replaceChildren();
     for (const f of feeds) {
@@ -3406,6 +3610,17 @@
       const r = await fetch("/api/rtsp/suspend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ suspend: !sw.checked, who: "relay page" }) }).then((x) => x.json());
       if (r.error) { document.getElementById("rtspNote").textContent = r.error; sw.checked = !sw.checked; }
     } catch (e) { document.getElementById("rtspNote").textContent = "Failed: " + (e?.message || e); }
+    rtspBusy = false;
+    paintCameras();
+  });
+  document.getElementById("libBoxOn").addEventListener("change", async () => {   // 0.21.84: every camera of this box into / out of the library
+    const sw = document.getElementById("libBoxOn");
+    rtspBusy = true;
+    document.getElementById("rtspNote").textContent = sw.checked ? "Sharing this box's cameras to the stream library\u2026" : "Taking this box's cameras out of the stream library\u2026";
+    try {
+      const r = await fetch("/api/rtsp/library", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ master: sw.checked }) }).then((x) => x.json());
+      if (r.error) { document.getElementById("rtspNote").textContent = r.error; sw.checked = !sw.checked; }
+    } catch (e) { document.getElementById("rtspNote").textContent = "Failed: " + (e?.message || e); sw.checked = !sw.checked; }
     rtspBusy = false;
     paintCameras();
   });
@@ -3526,7 +3741,7 @@
   if (!main) return;
   const KEY = "kastr.relay.grid", OLD_KEY = "kastr.relay.layout";
   const COLS = 12, ROW = 8, GAP = 14, MINW = 3, MINROWS = 11, NARROW = 760;   // 11 rows: the title + a couple of lines
-  const DEFAULT_W = { fedPanel: 8, roomsPanel: 8, streamsPanel: 8, vehPanel: 8, logPanel: 12 };
+  const DEFAULT_W = { fedPanel: 8, roomsPanel: 8, streamsPanel: 8, vehPanel: 8, libAdmPanel: 8, logPanel: 12 };   // 0.21.84: + the Stream library card
   const all = [...main.querySelectorAll("section.panel")];
   all.forEach((p, i) => { if (!p.id) p.id = "panel" + i; p.dataset.home = String(i); });
   for (const p of all) main.appendChild(p);   // every card a direct child (the old column wrappers stay, empty)

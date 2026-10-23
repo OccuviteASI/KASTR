@@ -3227,7 +3227,7 @@
     const box = $("libSitesBox");
     const mn = (mesh.data && Array.isArray(mesh.data.nodes)) ? mesh.data.nodes : [];
     const nodes = Array.isArray(d?.nodes) ? d.nodes : Object.entries(d?.sites && typeof d.sites === "object" ? d.sites : {}).map(([node, s]) => {
-      const m = mn.find((x) => x.id === node || x.name === node || x.name === s?.name) || {};
+      const m = mn.find((x) => x.id === node || x.node === node) || mn.find((x) => x.name === node || x.name === s?.name) || {};   // 0.21.84 (integration): the hub's own row is id "hub", node = its machine id
       return { node, name: s?.name || m.name || node, site: s?.set ? s.site : "", placeholder: s?.default || s?.site || "", version: m.version || "" };
     });
     box.hidden = !(d && d.hub && nodes.length);

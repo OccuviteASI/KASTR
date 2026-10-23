@@ -21241,7 +21241,7 @@
     libBusy = true;
     libMeta.polledAt = Date.now();
     try {
-      const since = full && libMeta.fullAt ? libMeta.ver ?? 0 : 0;   // the whole list once, then by version
+      const since = full && libMeta.fullAt ? libMeta.fullVer ?? 0 : 0;   // the whole list once, then by version (0.21.84 integration: the version of the last WHOLE list -- a paths= answer's never stands for it)
       const d = full ? await libApi.list(since) : await libApi.list(0, used);
       libTake(d, full, full ? null : used, since);
       libMeta.err = "";
@@ -21256,7 +21256,7 @@
     if (libCaps.killed && (d.on === true || d.enabled === true)) { libCaps.killed = false; libGate(); }
     if (d.same) return;
     const list = Array.isArray(d.rows) ? d.rows : Array.isArray(d.entries) ? d.entries : [];
-    if (d.ver != null && d.ver === libMeta.ver && !list.length && !(d.removed || []).length && libMeta.loaded) return;   // nothing new (ver is opaque: equality only)
+    if (!asked && d.ver != null && d.ver === libMeta.ver && !list.length && !(d.removed || []).length && libMeta.loaded) return;   // nothing new (ver is opaque: equality only); a paths= answer always counts (its `missing`)
     // a since= answer is the WHOLE list (only a paths= answer is partial), unless a server says delta
     const whole = !!full && !asked && d.delta !== true && d.full !== false;
     if (whole) libCat.clear();
@@ -21267,7 +21267,7 @@
       for (const p of asked) { libAsked.add(p); if (!got.has(p)) libCat.delete(p); }
       for (const p of Array.isArray(d.missing) ? d.missing : []) libCat.delete(String(p));
     }
-    if (whole) libMeta.fullAt = Date.now();
+    if (whole) { libMeta.fullAt = Date.now(); libMeta.fullVer = d.ver ?? null; }
     libMeta.ver = d.ver ?? libMeta.ver;
     libMeta.loaded = true; libMeta.at = Date.now();
     if (d.site) libMeta.site = String(d.site);

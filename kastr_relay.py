@@ -7964,7 +7964,7 @@ class AuthService:
         it, hidden entries included)."""
         m = self.__dict__.get("_libmirror")
         if m is None:
-            m = {"ver": None, "on": None, "why": "", "rows": {}, "at": 0, "heard": 0.0}
+            m = {"ver": None, "on": None, "why": "", "rows": {}, "at": 0, "heard": 0.0, "sites": {}}
             try:
                 d, _why = load_json(self._lib_mirror_path(), None, None, retries=1)
             except Exception:
@@ -7976,7 +7976,9 @@ class AuthService:
                     if x is not None:
                         rows[x["path"]] = x
                 m.update(ver=d.get("ver"), on=(None if d.get("on") is None else bool(d.get("on"))), why=str(d.get("why") or "")[:200],
-                         rows=rows, at=_int0(d.get("at")))
+                         rows=rows, at=_int0(d.get("at")),
+                         sites={str(n): _xs_text(s, 48) for n, s in (d.get("sites") if isinstance(d.get("sites"), dict) else {}).items()
+                                if MESH_NODE_RE.match(str(n))})   # 0.21.84 (integration)
             self.__dict__["_libmirror"] = m
         return m
 
@@ -7988,6 +7990,15 @@ class AuthService:
             return self.relay_name() or self._lib_node()
         except Exception:
             return self._lib_node()
+
+    def _lib_site(self, node=None):
+        """0.21.84 (integration): a relay's site name in the library (this relay's by default) -- the hub's Links card name,
+        else its display name without "-relay". A spoke knows the hub's names from the long-poll (kept in hub-library.json)."""
+        node = node or self._lib_node()
+        if not self._xs_spoke():
+            return self._lib_book().site_of(node)
+        s = (self._lib_mirror().get("sites") or {}).get(node)
+        return s or lib_site_default(self._lib_name() if node == self._lib_node() else node, node)
 
     def library_state(self, now=None):
         """-> (on, why): may this relay's pages and publishers use the stream library now? The hub (or a lone relay): its
@@ -8166,7 +8177,7 @@ class AuthService:
                        stillV=r.get("stillV") or cur.get("stillV") or 0, aka=sorted(set(cur.get("aka") or []) | set(r.get("aka") or [])))
             if not cur.get("edited"):
                 row["label"] = r.get("label")
-            row["site"] = cur.get("site") or r.get("site") or lib_site_default(name, me)
+            row["site"] = r.get("site") or cur.get("site") or self._lib_site(me)   # 0.21.84 (integration): a box override, else the hub's name for this relay
             row.pop("gone", None)
             rows[p] = row
         for g in gone:
@@ -8236,7 +8247,8 @@ class AuthService:
             return err
         on, why = self.library_state(now)
         ver, rows, down, at = self._lib_view(now)
-        out = {"ok": True, "root": LIB_ROOT, "on": on, "ver": ver}
+        out = {"ok": True, "root": LIB_ROOT, "on": on, "ver": ver,
+               "node": self._lib_node(), "site": self._lib_site()}   # 0.21.84 (integration): the answering relay (the page's own site)
         if why:
             out["why"] = why
         if down:
@@ -8537,7 +8549,8 @@ class AuthService:
         b = self._lib_book()
         out = {"libraryVer": b.ver, "libraryOn": on, "libraryWhy": why}
         if str(since) != b.ver:
-            out["library"] = {"ver": b.ver, "on": on, "why": why, "rows": b.public_rows(admin=True), "at": int(time.time())}
+            out["library"] = {"ver": b.ver, "on": on, "why": why, "rows": b.public_rows(admin=True), "at": int(time.time()),
+                              "sites": {n: s["site"] for n, s in b.sites_public().items()}}   # 0.21.84 (integration): each relay's site name
         return out
 
     def library_mirror_apply(self, d):
@@ -8566,6 +8579,8 @@ class AuthService:
                 if x is not None:
                     rows[x["path"]] = x
             m.update(rows=rows, ver=lib.get("ver"), at=_int0(lib.get("at")) or int(now))
+            if isinstance(lib.get("sites"), dict):   # 0.21.84 (integration): the hub's site names (GET /api/library says ours)
+                m["sites"] = {str(n)[:64]: _xs_text(s, 48) for n, s in list(lib["sites"].items())[:256] if MESH_NODE_RE.match(str(n))}
             changed = True
         if changed:
             self._lib_mirror_save(m)
@@ -8573,7 +8588,8 @@ class AuthService:
     def _lib_mirror_save(self, m):
         try:
             save_json(self._lib_mirror_path(), {"ver": m.get("ver"), "on": m.get("on"), "why": m.get("why"),
-                                                "rows": list((m.get("rows") or {}).values()), "at": m.get("at")}, None, backup=False)
+                                                "rows": list((m.get("rows") or {}).values()), "at": m.get("at"),
+                                                "sites": m.get("sites") or {}}, None, backup=False)
         except Exception:
             pass
 

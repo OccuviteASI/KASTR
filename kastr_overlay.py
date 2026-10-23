@@ -50,8 +50,89 @@ GRIP_RGB = _rgb(0x8B, 0x90, 0x98)
 BTN_RGB = _rgb(0xE5, 0x48, 0x4D)
 BTN_HOVER = _rgb(0xEE, 0x63, 0x67)
 BTN_DOWN = _rgb(0xC4, 0x37, 0x3C)
-LABELS = {"window": "You're sharing a window", "screen": "You're sharing your screen", "tab": "You're sharing a tab"}
+# 0.21.83 (Kenton: "The pill should be smaller also"): shorter labels (were "You're sharing a window" ...)
+LABELS = {"window": "Sharing a window", "screen": "Sharing your screen", "tab": "Sharing a tab"}
 BTN_TEXT = "Stop sharing"
+# 0.21.83: the pill's size at 96 dpi (scaled by the monitor's DPI): 28 px tall (was 40), 11 px text (was 13), 20 px buttons (was
+# 28), tighter padding. pill_metrics / pill_layout / pill_place are pure (tested without a window).
+PILL = {"h": 28, "font": 11, "btn_h": 20, "pad_l": 10, "grip_w": 6, "gap": 6, "gap2": 10, "btn_pad": 9, "gapb": 5,
+        "inset": 4, "above": 4}
+# 0.21.83 (Kenton: "When remote controlling, I am unable to see the red sharing pill at the top, so when I try to click in that
+# space it doesn't work to click on the things behind the pill"): the pill is LAYERED (alpha 255: it looks the same) so that
+# WS_EX_TRANSPARENT can make it click-through for a moment -- while the controller's injected press / drag / wheel lands on its
+# area (kastr_rc: RemoteControl._bar_pass). The sharer's own clicks reach its buttons at every other time.
+PILL_EX = 0x80000 | 0x8 | 0x80 | 0x08000000   # WS_EX_LAYERED | TOPMOST | TOOLWINDOW | NOACTIVATE
+PASS_BIT = 0x20                               # WS_EX_TRANSPARENT
+
+
+def pill_metrics(dpi=96):
+    """0.21.83: the pill's sizes in physical pixels at `dpi`."""
+    s = max(0.5, float(dpi or 96) / 96.0)
+    m = {k: round(v * s) for k, v in PILL.items()}
+    m["font"] = max(8, m["font"])
+    m["s"] = s
+    return m
+
+
+def pill_layout(label_w, btn_ws, dpi=96):
+    """0.21.83: -> {W, H, btns [(x0, y0, x1, y1)], grip (x, cy, d, step), text (x0, 0, x1, H)} for a label `label_w` px wide
+    and buttons whose TEXT is `btn_ws` px wide (each gets btn_pad either side)."""
+    m = pill_metrics(dpi)
+    H, bh = m["h"], m["btn_h"]
+    widths = [int(w) + 2 * m["btn_pad"] for w in btn_ws]
+    pad_r = (H - bh) // 2
+    W = m["pad_l"] + m["grip_w"] + m["gap"] + int(label_w) + m["gap2"] + sum(widths) + m["gapb"] * max(0, len(widths) - 1) + pad_r
+    by = (H - bh) // 2
+    bx = W - pad_r - sum(widths) - m["gapb"] * max(0, len(widths) - 1)
+    btns = []
+    for bw in widths:
+        btns.append((bx, by, bx + bw, by + bh))
+        bx += bw + m["gapb"]
+    x0 = m["pad_l"] + m["grip_w"] + m["gap"]
+    return {"W": W, "H": H, "btns": btns, "grip": (m["pad_l"], H // 2, max(3, round(3 * m["s"])), max(4, round(4 * m["s"]))),
+            "text": (x0, 0, x0 + int(label_w) + 2, H)}
+
+
+def pill_place(outer, t, size, work, dpi=96, kind="window", drag=(0, 0)):
+    """0.21.83: where the pill goes -> (x, y, "above" | "inside"). Centred on the target; JUST ABOVE a shared window's top edge
+    (its red border) when the monitor's work area has room there -- like kastr_x11.Bar -- so it covers nothing that is shared;
+    else (a screen, or a window at the top of the screen) inside the top edge. Then the sharer's own drag offset, kept on the
+    work area."""
+    m = pill_metrics(dpi)
+    w, h = size
+    x = (outer[0] + outer[2]) // 2 - w // 2
+    ya = outer[1] - h - m["above"]
+    if kind == "window" and ya >= work[1]:
+        y, where = ya, "above"
+    else:
+        y, where = outer[1] + t + m["inset"], "inside"
+    x, y = x + int(drag[0]), y + int(drag[1])
+    x = max(work[0], min(x, work[2] - w))
+    y = max(work[1], min(y, work[3] - h))
+    return x, y, where
+
+
+def pill_button_style(key, control=False):
+    """A button's brush: Allow green, Deny grey, Stop control white (red text); 0.21.83: Stop sharing on the RED control pill is
+    grey (red on red would vanish), red on the plain pill."""
+    if key == "share-stop" and control:
+        return "ghost"
+    return {"allow": "ok", "deny": "ghost", "stop": "white"}.get(key, "btn")
+
+
+def pill_route(key, mode, has_on_button):
+    """0.21.83: what a press on the pill's button does -> "stop" (on_stop: the share ends) | "button" (on_button(key)) | None.
+    While someone controls this computer, "Stop sharing" goes to on_button: kastr_rc ends control FIRST, then the share
+    (Kenton: "have that as well as stop sharing, to close out the share and control at the same time")."""
+    if key == "share-stop":
+        return "button" if mode == "control" and has_on_button else "stop"
+    return "button" if has_on_button else None
+
+
+def passthrough_exstyle(ex, on):
+    """0.21.83: the pill's extended style with WS_EX_TRANSPARENT on (click-through) or off."""
+    ex = int(ex) & 0xFFFFFFFF
+    return (ex | PASS_BIT) if on else (ex & ~PASS_BIT & 0xFFFFFFFF)
 # 0.21.79 (remote control): the bar also ASKS ("<name> asks to control your screen" -- Deny / Allow) and, while someone
 # controls this computer, turns red ("<name> is controlling your screen -- Stop control (Ctrl+Alt+Space)").
 CTL_BG = _rgb(0xB4, 0x23, 0x18)
@@ -217,6 +298,7 @@ if AVAILABLE:
     GetCurrentThreadId = _bind(kernel32, "GetCurrentThreadId", wt.DWORD)
     GetMessageExtraInfo = _bind(user32, "GetMessageExtraInfo", wt.LPARAM)   # 0.21.79
     MonitorFromPoint = _bind(user32, "MonitorFromPoint", wt.HMONITOR, wt.POINT, wt.DWORD)   # 0.21.80
+    SetWindowLongPtrW = _bind(user32, "SetWindowLongPtrW", ctypes.c_ssize_t, wt.HWND, I, ctypes.c_ssize_t)   # 0.21.83
 
     CreateRectRgn = _bind(gdi32, "CreateRectRgn", wt.HRGN, I, I, I, I)
     CreateRoundRectRgn = _bind(gdi32, "CreateRoundRectRgn", wt.HRGN, I, I, I, I, I, I)
@@ -245,7 +327,7 @@ if AVAILABLE:
     WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOPMOST = 0x80000, 0x20, 0x8
     WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80, 0x08000000
     BORDER_EX = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-    BAR_EX = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+    BAR_EX = PILL_EX   # 0.21.83: + WS_EX_LAYERED (was TOPMOST | TOOLWINDOW | NOACTIVATE): click-through on demand
     HWND_TOPMOST = wt.HWND(-1)
     SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x1, 0x2, 0x10
     SWP_SHOWWINDOW, SWP_NOOWNERZORDER = 0x40, 0x200
@@ -439,6 +521,8 @@ class ShareOverlay:
         self._mode = ("share", None, None)   # 0.21.79: (mode, label, [(key, text)]) -- "share" | "prompt" | "control"
         self._mode_next = None
         self.on_button = None                # 0.21.79: on_button(key) for a prompt / control button
+        self._pass = False                   # 0.21.83: click-through right now (set_passthrough)
+        self._bar_where = ""                 # 0.21.83: "above" the shared window | "inside" its top edge
         self._reset_state()
 
     # ---------------------------------------------------------- public API
@@ -504,6 +588,8 @@ class ShareOverlay:
             self._mode_next = (mode if mode in ("share", "prompt", "control") else "share", label, list(buttons or []) or None)
             self.on_button = on_button if mode != "share" else None
             ok = bool(self._bar and PostMessageW(self._bar, WM_APP_MODE, 0, 0))
+        if mode != "control" and self._pass:   # 0.21.83: never left click-through once control is over
+            self.set_passthrough(False)
         return ok
 
     def bar_rect(self):
@@ -511,7 +597,34 @@ class ShareOverlay:
         p = self._bar_pos
         if not self._shown or not p:
             return None
-        return {"x": p[0], "y": p[1], "w": p[2], "h": p[3]}
+        return {"x": p[0], "y": p[1], "w": p[2], "h": p[3], "where": self._bar_where}   # 0.21.83: + where
+
+    def set_passthrough(self, on) -> bool:
+        """0.21.83: the pill click-through (on) or clickable again (off): WS_EX_TRANSPARENT on the layered pill, so the
+        controller's injected press / drag / wheel on its area reaches the window behind it. Immediate (SetWindowLongPtr is
+        synchronous); any thread. -> True when the style is as asked."""
+        h = self._bar
+        if not AVAILABLE or not h or SetWindowLongPtrW is None:
+            return False
+        ex = GetWindowLongPtrW(h, -20) & 0xFFFFFFFF
+        new = passthrough_exstyle(ex, bool(on))
+        if new != ex:
+            SetWindowLongPtrW(h, -20, new)
+        self._pass = bool(on)
+        return True
+
+    @property
+    def passthrough(self) -> bool:
+        return bool(getattr(self, "_pass", False))
+
+    def request_stop(self) -> bool:
+        """0.21.83: Stop sharing, as if the sharer clicked the pill's own Stop sharing (once per share; on its own thread).
+        kastr_rc calls it for the control bar's "Stop sharing" AFTER control has ended."""
+        if self._clicked or self.on_stop is None:
+            return False
+        self._clicked = True
+        self._fire(self.on_stop)
+        return True
 
     @property
     def running(self) -> bool:
@@ -601,8 +714,7 @@ class ShareOverlay:
                 raise OSError("CreateWindowExW failed: %d" % ctypes.get_last_error())
             _INSTANCES[h] = (self, name[1:])
             setattr(self, name, h)
-            if name == "_border":
-                SetLayeredWindowAttributes(h, 0, 255, LWA_ALPHA)
+            SetLayeredWindowAttributes(h, 0, 255, LWA_ALPHA)   # 0.21.83: the pill is layered too (fully opaque)
             ok = False
             if self.exclude_from_capture and SetWindowDisplayAffinity is not None:
                 ok = bool(SetWindowDisplayAffinity(h, WDA_EXCLUDEFROMCAPTURE))
@@ -703,20 +815,21 @@ class ShareOverlay:
                 DeleteObject(rgn)
             self._border_geom = geom
         if not self._drag:
-            self._place_bar(outer, t, dpi, force=not was_shown)
+            self._place_bar(outer, t, dpi, force=not was_shown, work=mon["work"])
         self._shown = True
         if self._ticks % 10 == 0:                             # stay above new topmost windows
             for h in (self._border, self._bar):
                 SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
 
-    def _place_bar(self, outer, t, dpi, force=False):
+    def _place_bar(self, outer, t, dpi, force=False, work=None):
         if dpi != self._bar_dpi:
             self._layout(dpi)
         w, h = self._bar_size
-        s = self._bar_dpi / 96
-        dx = (outer[0] + outer[2]) // 2 - w // 2
-        dy = outer[1] + t + round(8 * s)
+        kind = self._target.kind if self._target is not None else "monitor"
+        work = work or outer
+        # 0.21.83: just ABOVE a shared window when its monitor has room there (pill_place), else inside its top edge
+        dx, dy, _w0 = pill_place(outer, t, (w, h), work, self._bar_dpi, kind)
         self._bar_default = (dx, dy)
         x, y = dx + self._drag_off[0], dy + self._drag_off[1]
         rc = wt.RECT(x, y, x + w, y + h)
@@ -725,20 +838,22 @@ class ShareOverlay:
         if nd != self._bar_dpi:                               # bar lands on a different-DPI monitor
             self._layout(nd)
             w, h = self._bar_size
-        work = (_monitor_info(hmon) or {"work": outer})["work"]
-        x = max(work[0], min(x, work[2] - w))
-        y = max(work[1], min(y, work[3] - h))
+        work2 = (_monitor_info(hmon) or {"work": work})["work"]
+        x, y, where = pill_place(outer, t, (w, h), work2, self._bar_dpi, kind, self._drag_off)
+        self._bar_where = where
         pos = (x, y, w, h)
         if pos != self._bar_pos or force:
             SetWindowPos(self._bar, HWND_TOPMOST, x, y, w, h,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER)
             self._bar_pos = pos
 
-    def _layout(self, dpi):
-        s = dpi / 96
+    def _measure(self, dpi):
+        """0.21.83: fonts + the pill's layout (pill_layout) for the current mode at `dpi` -- no window needed (an offscreen
+        render uses it too)."""
+        m = pill_metrics(dpi)
         for f in self._fonts:
             DeleteObject(f)
-        px = -max(9, round(13 * s))
+        px = -m["font"]
         f_label = CreateFontW(px, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
         f_btn = CreateFontW(px, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
         self._fonts = [f_label, f_btn]
@@ -751,31 +866,25 @@ class ShareOverlay:
         GetTextExtentPoint32W(hdc, label, len(label), ctypes.byref(sz))
         label_w = sz.cx
         SelectObject(hdc, f_btn)
-        widths = []
+        tws = []
         for _k, text in buttons:
             GetTextExtentPoint32W(hdc, text, len(text), ctypes.byref(sz))
-            widths.append(sz.cx + 2 * round(14 * s))
+            tws.append(sz.cx)
         SelectObject(hdc, old)
         ReleaseDC(None, hdc)
-        H = round(40 * s)
-        pad_l, grip_w, gap, gap2 = round(16 * s), round(8 * s), round(10 * s), round(18 * s)
-        btn_h = round(28 * s)
-        pad_r = (H - btn_h) // 2
-        gapb = round(8 * s)
-        W = pad_l + grip_w + gap + label_w + gap2 + sum(widths) + gapb * (len(widths) - 1) + pad_r
-        by = (H - btn_h) // 2
-        bx = W - pad_r - sum(widths) - gapb * (len(widths) - 1)
-        self._btns = []
-        for (key, text), bw in zip(buttons, widths):
-            self._btns.append((key, text, (bx, by, bx + bw, by + btn_h)))
-            bx += bw + gapb
+        lay = pill_layout(label_w, tws, dpi)
+        W, H = lay["W"], lay["H"]
+        self._btns = [(key, text, rc) for (key, text), rc in zip(buttons, lay["btns"])]
         self._btn = self._btns[-1][2]
-        self._grip = (pad_l, H // 2, max(2, round(3 * s)), round(5 * s))
-        x0 = pad_l + grip_w + gap
-        self._text_rc = (x0, 0, x0 + label_w + 2, H)
+        self._grip = lay["grip"]
+        self._text_rc = lay["text"]
         self._label = label
         self._bar_size = (W, H)
         self._bar_dpi = dpi
+        return W, H
+
+    def _layout(self, dpi):
+        W, H = self._measure(dpi)
         SetWindowPos(self._bar, None, 0, 0, W, H, SWP_NOMOVE | SWP_NOACTIVATE | 0x4)  # NOZORDER
         rgn = CreateRoundRectRgn(0, 0, W + 1, H + 1, H, H)
         if not SetWindowRgn(self._bar, rgn, True):
@@ -800,40 +909,45 @@ class ShareOverlay:
             mem = CreateCompatibleDC(hdc)
             bmp = CreateCompatibleBitmap(hdc, W, H)
             old_bmp = SelectObject(mem, bmp)
-            FillRect(mem, ctypes.byref(wt.RECT(0, 0, W, H)), self._brushes["ctlbg" if self._mode[0] == "control" else "bg"])   # 0.21.79
-            old_pen = SelectObject(mem, GetStockObject(NULL_PEN))
-            old_br = SelectObject(mem, self._brushes["grip"])
-            gx, gy, d, step = self._grip                  # 2 x 3 dot grip
-            for col in range(2):
-                for row in (-1, 0, 1):
-                    cx, cy = gx + col * step, gy + row * step
-                    Ellipse(mem, cx, cy - d // 2, cx + d + 1, cy - d // 2 + d + 1)
-            SetBkMode(mem, TRANSPARENT_BK)
-            SetTextColor(mem, BAR_TEXT)
-            old_font = SelectObject(mem, self._fonts[0])
-            DrawTextW(mem, self._label, -1, ctypes.byref(wt.RECT(*self._text_rc)),
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
-            SelectObject(mem, self._fonts[1])
-            for bkey, btext, brc in self._btns:   # 0.21.79: one or more buttons
-                base = {"allow": "ok", "deny": "ghost", "stop": "white"}.get(bkey, "btn")
-                key = base if base != "btn" else ("down" if self._pressed == bkey and self._hover == bkey
-                                                  else "hover" if self._hover == bkey else "btn")
-                SelectObject(mem, self._brushes[key])
-                bx0, by0, bx1, by1 = brc
-                bh = by1 - by0
-                RoundRect(mem, bx0, by0, bx1 + 1, by1 + 1, bh, bh)
-                SetTextColor(mem, CTL_BG if base == "white" else BAR_TEXT)
-                DrawTextW(mem, btext, -1, ctypes.byref(wt.RECT(*brc)),
-                          DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
+            self._draw(mem, W, H)
             BitBlt(hdc, 0, 0, W, H, mem, 0, 0, SRCCOPY)
-            SelectObject(mem, old_font)
-            SelectObject(mem, old_br)
-            SelectObject(mem, old_pen)
             SelectObject(mem, old_bmp)
             DeleteObject(bmp)
             DeleteDC(mem)
         finally:
             EndPaint(hwnd, ctypes.byref(ps))
+
+    def _draw(self, mem, W, H):
+        """The pill's pixels into a memory DC (0.21.83: split out of _paint_bar -- an offscreen render draws the same)."""
+        FillRect(mem, ctypes.byref(wt.RECT(0, 0, W, H)), self._brushes["ctlbg" if self._mode[0] == "control" else "bg"])   # 0.21.79
+        old_pen = SelectObject(mem, GetStockObject(NULL_PEN))
+        old_br = SelectObject(mem, self._brushes["grip"])
+        gx, gy, d, step = self._grip                  # 2 x 3 dot grip
+        for col in range(2):
+            for row in (-1, 0, 1):
+                cx, cy = gx + col * step, gy + row * step
+                Ellipse(mem, cx, cy - d // 2, cx + d + 1, cy - d // 2 + d + 1)
+        SetBkMode(mem, TRANSPARENT_BK)
+        SetTextColor(mem, BAR_TEXT)
+        old_font = SelectObject(mem, self._fonts[0])
+        DrawTextW(mem, self._label, -1, ctypes.byref(wt.RECT(*self._text_rc)),
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
+        SelectObject(mem, self._fonts[1])
+        control = self._mode[0] == "control"
+        for bkey, btext, brc in self._btns:   # 0.21.79: one or more buttons
+            base = pill_button_style(bkey, control)
+            key = base if base != "btn" else ("down" if self._pressed == bkey and self._hover == bkey
+                                              else "hover" if self._hover == bkey else "btn")
+            SelectObject(mem, self._brushes[key])
+            bx0, by0, bx1, by1 = brc
+            bh = by1 - by0
+            RoundRect(mem, bx0, by0, bx1 + 1, by1 + 1, bh, bh)
+            SetTextColor(mem, CTL_BG if base == "white" else BAR_TEXT)
+            DrawTextW(mem, btext, -1, ctypes.byref(wt.RECT(*brc)),
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
+        SelectObject(mem, old_font)
+        SelectObject(mem, old_br)
+        SelectObject(mem, old_pen)
 
     # ---------------------------------------------------------- messages
     def _in_btn(self, x, y):
@@ -913,11 +1027,12 @@ class ShareOverlay:
                 at = self._in_btn(*_lp_xy(lp))
                 self._set_hover(at)
                 InvalidateRect(hwnd, None, False)
-                if at == k and k == "share-stop":
+                route = pill_route(k, self._mode[0], self.on_button is not None) if at == k else None   # 0.21.83
+                if route == "stop":
                     if not self._clicked:
                         self._clicked = True        # one stop per share
                         self._fire(self.on_stop)
-                elif at == k and self.on_button is not None:   # 0.21.79: Allow / Deny / Stop control
+                elif route == "button":             # 0.21.79: Allow / Deny / Stop control; 0.21.83: + Stop sharing
                     cb = self.on_button
                     self._fire(lambda: cb(k))
             return 0
@@ -963,6 +1078,47 @@ class ShareOverlay:
             PostQuitMessage(0)
             return 0
         return None
+
+
+def render_pill(mode="share", label=None, buttons=None, target="window", dpi=96):
+    """0.21.83: the pill's pixels WITHOUT any window (a memory bitmap, never on a screen) -> (W, H, BGRA bytes top-down):
+    the same _measure + _draw the live pill paints with (screenshots, tests), plus [(button key, rect)]. The live pill is
+    clipped to a round-ended region (SetWindowRgn); this bitmap is the full rectangle. Windows only; None elsewhere."""
+    if not AVAILABLE:
+        return None
+    ov = ShareOverlay()
+    ov._target = _Target(monitor_rect=(0, 0, 100, 100), label=target)
+    ov._mode = (mode, label, list(buttons or []) or None)
+    b = ov._brushes
+    for key, col in (("border", BORDER_RGB), ("bg", BAR_BG), ("grip", GRIP_RGB), ("btn", BTN_RGB), ("hover", BTN_HOVER),
+                     ("down", BTN_DOWN), ("ctlbg", CTL_BG), ("ok", OK_RGB), ("ghost", GHOST_RGB), ("white", WHITE_RGB)):
+        b[key] = CreateSolidBrush(col)
+    sdc = GetDC(None)
+    mem = CreateCompatibleDC(sdc)
+    try:
+        W, H = ov._measure(dpi)
+        bmp = CreateCompatibleBitmap(sdc, W, H)
+        old = SelectObject(mem, bmp)
+        ov._draw(mem, W, H)
+        SelectObject(mem, old)
+
+        class BIH(ctypes.Structure):
+            _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG), ("biPlanes", wt.WORD),
+                        ("biBitCount", wt.WORD), ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                        ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+        bi = BIH(ctypes.sizeof(BIH), W, -H, 1, 32, 0, 0, 0, 0, 0, 0)
+        buf = ctypes.create_string_buffer(W * H * 4)
+        gdi32.GetDIBits.argtypes = [wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
+        gdi32.GetDIBits(mem, bmp, 0, H, buf, ctypes.byref(bi), 0)
+        DeleteObject(bmp)
+        return W, H, buf.raw, [(k, rc) for k, _t, rc in ov._btns]
+    finally:
+        DeleteDC(mem)
+        ReleaseDC(None, sdc)
+        for f in ov._fonts:
+            DeleteObject(f)
+        for br in b.values():
+            DeleteObject(br)
 
 
 # ---------------------------------------------------------------- 0.21.80: the controller's pointer

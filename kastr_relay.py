@@ -176,6 +176,18 @@ PINVITE_TTL = 3600             # a person invite's link (bound to the invited de
 PINVITE_RATE = (6, 60)         # person invites one sender may send per minute
 PINBOX_TTL = 180               # s: an invite waits this long for the invited page's next beat
 PINBOX_KEEP = 64               # invites the hub keeps for its spokes' long-polls
+# 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): public rooms announce their people on the
+# public ~presence / ~state prefixes (the page's rooms rail reads them fleet-wide); a personal room says nothing in public
+# (0.21.75), so its pages' BEATS say where they are: the hub keeps the fleet's table (its own pages' beats, its spokes'
+# pwhere / pbeat), and POST /api/people {op: "online"} answers who is in a personal room -- naming the room only to someone
+# allowed in it (in it, shared with their device, its owner's device in it), "a private room" to everyone else.
+PWHERE_KEEP = 15               # s: a page in a personal room counts as there this long after its last beat (pages beat every 4 s)
+PWHERE_FWD = 3                 # s: a spoke forwards one guest page's beats to the hub at most this often
+PWHERE_MAX = 2000              # pages the table keeps
+PONLINE_CACHE = 2.0            # s: a spoke reuses the hub's answer for one caller this long (a panel polls every 4 s)
+PONLINE_MAX = 500              # rows one answer carries
+PEOPLE_MODES = ("full", "viewer", "publisher", "relay", "publisher-relay")   # the page's PAGE_MODES
+HIDDEN_PEOPLE_MODES = ("publisher", "publisher-relay", "relay")             # unattended boxes and relays are not people (the page's PRESENCE_HIDDEN_MODES)
 # 0.21.79 (Kenton: "request remote control when someone is sharing their desktop and a prompt to allow that user to take
 # control of your machine"): the asks, answers and stops ride the same per-device inbox as person invites (beats + the
 # hub's bans long-poll). Only publishers and admins of the share's room may ask; the sharer answers every ask.
@@ -5575,7 +5587,41 @@ def group_op(store, p, operator=False, log=None):
 
 
 P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare", "pco",   # 0.21.78: rooms_fed ops of My room shared
-             "prc")                                                                         # 0.21.79: a remote-control note
+             "prc",                                                                         # 0.21.79: a remote-control note
+             "pwhere", "ponline", "pcmd")                                                   # 0.21.85: Everyone online, an admin's Restart / Move
+
+
+def online_rows_clean(rows):
+    """0.21.85: the hub's Everyone-online rows as a spoke hands them on -- known fields only, a room only when it is a
+    personal room's name (else the row stays "a private room")."""
+    out = []
+    for r in (rows if isinstance(rows, list) else [])[:PONLINE_MAX]:
+        if not isinstance(r, dict) or not HOST_RE.match(str(r.get("host") or "")):
+            continue
+        try:
+            since = int(float(r.get("since") or 0))
+        except (TypeError, ValueError):
+            since = 0
+        x = {"host": str(r["host"]), "name": clean_label(r.get("name"), 40), "since": since, "via": clean_label(r.get("via"), 40)}
+        slug = str(r.get("room") or "")
+        if is_personal(slug) and not r.get("private"):
+            x.update(room=slug, owner=clean_label(r.get("owner"), 40), guest=bool(r.get("guest")))
+        else:
+            x["private"] = True
+        out.append(x)
+    return out
+
+
+def online_relays_clean(rows):
+    """0.21.85: the Move choices the hub hands an admin's page -- [{name, addrs: [{address, why}]}]."""
+    out = []
+    for r in (rows if isinstance(rows, list) else [])[:65]:
+        if not isinstance(r, dict) or not clean_label(r.get("name"), 40):
+            continue
+        addrs = [{"address": str(a.get("address")), "why": clean_label(a.get("why"), 80)} for a in (r.get("addrs") or [])[:8]
+                 if isinstance(a, dict) and RELAY_URL_RE.match(str(a.get("address") or ""))]
+        out.append({"name": clean_label(r.get("name"), 40), "addrs": addrs})
+    return out
 
 
 def rc_item_clean(item):
@@ -5635,6 +5681,9 @@ class PersonalLive:
         self.rcrate = {}      # 0.21.79: (asker, sharer) -> [when it asked to control] ("*" = to anyone)
         self.rcdeny = {}      # 0.21.79: (asker, sharer) -> when the sharer last said no (RC_DENY_COOL); 0.21.83: ("pt", asker, sharer) too
         self.ptids = {}       # 0.21.83: pointer request id -> when it passed (never a control grant's id)
+        self.where = {}       # 0.21.85: device host -> {room, name, since, at, guest, mode, via} -- pages in a personal room (beats; a hub also its spokes')
+        self.wfwd = {}        # 0.21.85: spoke: device host -> when that guest page's beat last went to the hub
+        self.oncache = {}     # 0.21.85: spoke: (host, room, admin) -> (at, the hub's answer)
         self.thread = None
 
 
@@ -6741,6 +6790,12 @@ class AuthService:
                 pl.ptids.pop(k, None)
             for k in [k for k, v in pl.names.items() if now - v[1] > 86400]:
                 pl.names.pop(k, None)
+            for k in [k for k, w in pl.where.items() if now - float(w.get("at") or 0) > 4 * PWHERE_KEEP]:   # 0.21.85
+                pl.where.pop(k, None)
+            for k in [k for k, t in pl.wfwd.items() if now - t > 4 * PWHERE_KEEP]:
+                pl.wfwd.pop(k, None)
+            for k in [k for k, v in pl.oncache.items() if now - v[0] > 60]:
+                pl.oncache.pop(k, None)
         for slug in gone:
             self._p_close(slug, "gone", now)
         return gone
@@ -6785,6 +6840,8 @@ class AuthService:
         with self.lock:
             hosts = pl.here.get(slug) or {}
             hosts.pop(host or "-", None)
+            if (pl.where.get(host) or {}).get("room") == slug:   # 0.21.85: no longer in it (Everyone online)
+                pl.where.pop(host, None)
             still = any(now - t <= PERSONAL_OWNER_GRACE for t in hosts.values())
             if not still:
                 pl.here.pop(slug, None)
@@ -6800,6 +6857,8 @@ class AuthService:
         with self.lock:
             pl.here.pop(slug, None)
             pl.away[slug] = {"at": int(now), "why": why, "owner": (info or {}).get("owner") or ""}
+            for h in [h for h, w in pl.where.items() if w.get("room") == slug]:   # 0.21.85: everyone in it goes to the Lobby
+                pl.where.pop(h, None)
             n = self._p_revoke_guests_locked(slug)
         self.log("relay auth: personal room %s closed to guests -- its owner %s (%d guest session(s) here ended)"
                  % (slug, "left" if why == "left" else "went quiet", n))
@@ -7478,6 +7537,32 @@ class AuthService:
         host = host if HOST_RE.match(host) else ""
         if op == "pseen":
             return {"ok": True, "people": self._p_seen_local()}, 200
+        if op == "ponline":   # 0.21.85: a spoke's page asks who is in personal rooms (the spoke vouches for its device + room)
+            croom = str(p.get("room") or "")
+            out = {"ok": True, "rows": self._p_online_rows(host, croom if SLUG_RE.match(croom) else ""), "at": int(time.time())}
+            if p.get("vouch") == "admin":
+                out.update(relays=self._p_relays(), apps=self._p_apps())
+            return out, 200
+        if op == "pwhere":    # 0.21.85: a guest's page in a personal room on a spoke (slug "" = it left)
+            if not host:
+                return {"ok": False, "error": "who?"}, 400
+            pl, now = self._pl(), time.time()
+            with self.lock:
+                if not slug:
+                    pl.where.pop(host, None)
+                elif is_personal(slug):
+                    self._p_where_set_locked(slug, host, clean_label(p.get("name"), 40), True, p.get("mode"), clean_label(p.get("via"), 40), now)
+                else:
+                    return {"ok": False, "error": "bad room"}, 400
+            return {"ok": True}, 200
+        if op == "pcmd":      # 0.21.85: an admin's Restart / Move from a spoke's page (the spoke checked the admin token)
+            if p.get("vouch") != "admin":
+                return {"ok": False, "error": "the spoke must vouch for an admin"}, 403
+            to, kind = str(p.get("to") or ""), str(p.get("kind") or "")
+            dest = client_move_target(p.get("dest")) if kind == "move" else ""
+            if not HOST_RE.match(to) or kind not in CLIENT_CMDS or (kind == "move" and not dest):
+                return {"ok": False, "error": "bad command"}, 400
+            return self._p_cmd_route(to, kind, dest, clean_label(p.get("by"), 40))
         if op == "prc":   # 0.21.79: a spoke checked the sender's member token (room, role, rate) -- deliver the note fleet-wide
             if p.get("vouch") != "member":
                 return {"ok": False, "error": "the spoke must vouch for a member of the room"}, 403
@@ -7502,6 +7587,9 @@ class AuthService:
             return {"ok": False, "error": "the spoke must vouch for the room's owner"}, 403
         if op == "pbeat":
             self._p_owner_here(slug, host)
+            if host:   # 0.21.85: + who, for Everyone online
+                with self.lock:
+                    self._p_where_set_locked(slug, host, clean_label(p.get("name"), 40), False, p.get("mode"), clean_label(p.get("via"), 40), time.time())
             return {"ok": True, "open": True}, 200
         if op == "pleave":
             self._p_owner_leave(slug, host)
@@ -7547,6 +7635,7 @@ class AuthService:
             if name:
                 with self.lock:
                     pl.names[host] = (name, now)
+            self._p_where_beat(room, host, name, owner, p.get("mode"), now)   # 0.21.85: Everyone online (personal rooms)
             out = {"ok": True, "inbox": self._p_inbox_take(host, now), "shared": self._p_shared(host, now)}
             if owner:
                 ok = True
@@ -7559,7 +7648,8 @@ class AuthService:
                         if due:
                             pl.fwd[key] = now
                     if due:
-                        r = self._hub_fed({"op": "pbeat", "vouch": "owner", "slug": room, "host": host}, timeout=4)
+                        r = self._hub_fed({"op": "pbeat", "vouch": "owner", "slug": room, "host": host,
+                                           "name": name, "mode": str(p.get("mode") or "")[:24], "via": self.relay_name()}, timeout=4)   # 0.21.85: + who, for Everyone online
                         ok = r is not None and r[1] == 200
                         if ok:
                             with self.lock:
@@ -7577,6 +7667,8 @@ class AuthService:
             with self.lock:
                 pl.fwd.pop((room, host), None)
                 pl.open_local.pop(room, None)
+                if (pl.where.get(host) or {}).get("room") == room:   # 0.21.85
+                    pl.where.pop(host, None)
             return self._p_hub_call({"op": "pleave", "vouch": "owner", "slug": room, "host": host}, timeout=4)
         if op == "invite":
             to = str(p.get("to") or "")
@@ -7597,6 +7689,10 @@ class AuthService:
                                      "by": by, "to": to, "toName": to_name})
         if op == "rc":   # 0.21.79: remote control notes
             return self.rc_send(p, claims, room, host, now)
+        if op == "online":   # 0.21.85: Everyone online -- who is in a personal room (public rooms: the page's own presence)
+            return self._p_online(host, room, claims_admin_any(claims), now)
+        if op == "cmd":      # 0.21.85: an admin's Restart / Move from the People panel (the Relay page's Users actions)
+            return self._p_cmd(p, claims, host, now)
         if op in ("list", "share", "co", "seen"):
             if not owner:
                 return {"ok": False, "error": "only the room's owner shares a personal room"}, 403
@@ -7616,7 +7712,197 @@ class AuthService:
             if not self._p_spoke():
                 return self._p_fed(body["op"], body)
             return self._p_hub_call(body)
-        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | list | share | co | seen)"}, 400
+        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | online | cmd | list | share | co | seen)"}, 400
+
+    # ---- 0.21.85: Everyone online (the People panel) ------------------------------------------------------------------
+    def _p_where_set_locked(self, slug, host, name, guest, mode, via, now):
+        pl = self._pl()
+        w = pl.where.get(host)
+        mode = str(mode or "")
+        pl.where[host] = {"room": slug, "name": name or (w or {}).get("name") or (pl.names.get(host) or ("",))[0],
+                          "since": w["since"] if w and w.get("room") == slug else now, "at": now, "guest": bool(guest),
+                          "mode": mode if mode in PEOPLE_MODES else "", "via": via or ""}
+        if len(pl.where) > PWHERE_MAX:
+            for k in sorted(pl.where, key=lambda k: pl.where[k]["at"])[:len(pl.where) - PWHERE_MAX]:
+                pl.where.pop(k, None)
+
+    def _p_where_beat(self, room, host, name, owner, mode, now):
+        """A beat says where its page is. Only personal rooms are kept (public rooms announce their people themselves); a page
+        that beats from anywhere else has left the one it was in. A spoke tells the hub: a guest's beats at most every
+        PWHERE_FWD s, a move out once (an owner's beats already go there as pbeat, with the name)."""
+        pl = self._pl()
+        mode = str(mode or "")[:24]
+        personal = is_personal(room)
+        spoke = self._p_spoke()
+        via = self.relay_name() if personal else ""
+        body = None
+        with self.lock:
+            had = host in pl.where
+            if personal:
+                self._p_where_set_locked(room, host, name, not owner, mode, via, now)
+            else:
+                pl.where.pop(host, None)
+                pl.wfwd.pop(host, None)
+            if spoke and personal and not owner and now - pl.wfwd.get(host, 0) >= PWHERE_FWD:
+                pl.wfwd[host] = now
+                body = {"op": "pwhere", "slug": room, "host": host, "name": name, "mode": mode, "via": via}
+            elif spoke and not personal and had:
+                body = {"op": "pwhere", "slug": "", "host": host}
+        if body is not None:
+            threading.Thread(target=self._hub_fed, args=(body,), kwargs={"timeout": 4}, daemon=True).start()
+
+    def _p_online_rows(self, caller, croom, now=None):
+        """The pages in personal rooms -> [{host, name, since, via, room?, owner?, guest?, private?}] for one caller: the room
+        (and its owner's name) only when the caller may go there -- they are in it, it is shared with their device, or one of
+        its owner's devices is the caller -- else `private`. A hub answers for the fleet, a spoke (dark hub) for its own pages
+        with the hub's last copy of who may come in. Boxes and relays are not people."""
+        now = time.time() if now is None else now
+        pl = self._pl()
+        spoke = self._p_spoke()
+        with self.lock:
+            rows = [(h, dict(w)) for h, w in pl.where.items() if now - float(w.get("at") or 0) <= PWHERE_KEEP]
+            owners = {s: {h for h, t in hs.items() if now - t <= PERSONAL_OWNER_GRACE} for s, hs in pl.here.items()}
+            m = pl.mirror if spoke else None
+        infos = {}
+
+        def info(slug):
+            if slug not in infos:
+                if not spoke:
+                    i = self.store.personal_info(slug) if hasattr(self.store, "personal_info") else None
+                    infos[slug] = {"owner": (i or {}).get("owner") or "", "people": set((i or {}).get("people") or ())}
+                else:
+                    r = ((m or {}).get("rooms") or {}).get(slug) or {}
+                    infos[slug] = {"owner": str(r.get("owner") or ""), "people": set(r.get("hosts") or ())}
+            return infos[slug]
+        out = []
+        for h, w in rows:
+            slug = str(w.get("room") or "")
+            if not is_personal(slug) or w.get("mode") in HIDDEN_PEOPLE_MODES:
+                continue
+            i = info(slug)
+            ok = bool(caller) and (croom == slug or caller in i["people"] or caller in owners.get(slug, ()))
+            row = {"host": h, "name": clean_label(w.get("name"), 40), "since": int(float(w.get("since") or now)), "via": clean_label(w.get("via"), 40)}
+            if ok:
+                row.update(room=slug, owner=clean_label(i["owner"], 40), guest=bool(w.get("guest")))
+            else:
+                row["private"] = True
+            out.append(row)
+        out.sort(key=lambda r: (r["name"].lower(), r["host"]))
+        return out[:PONLINE_MAX]
+
+    def _p_apps(self, now=None):
+        """The KASTR apps of the fleet that check in (an admin's Restart / Move reaches only those) -> sorted device hosts."""
+        now = time.time() if now is None else now
+        out = set()
+        with self.lock:
+            for n, c in self.clients.items():
+                if now - (c.get("at") or 0) <= self.CLIENT_FORGET_S:
+                    out.add(str(n))
+            for v in self.spokes.values():
+                for c in v.get("clients") or []:
+                    if isinstance(c, dict) and c.get("checkin") and c.get("kind") != "web" and now - int(c.get("at") or 0) <= self.CLIENT_FORGET_S + 120:
+                        out.add(str(c.get("node") or ""))
+        return sorted(x for x in out if HOST_RE.match(x) and not x.startswith("web-"))[:1000]
+
+    def _p_relays(self):
+        """An admin's Move choices: this relay and every spoke with the addresses the Relay page's Move dialog offers."""
+        now = time.time()
+        c = self.__dict__.get("_p_relays_c")
+        if c and now - c[0] < 60:
+            return c[1]
+        try:
+            port = int(self.relay_port or 4443)
+        except (TypeError, ValueError):
+            port = 4443
+        try:
+            ips = local_ips() or []
+        except Exception:
+            ips = []
+        out = [{"name": self.relay_name() or "hub", "addrs": [{"address": "http://%s:%d" % (ip, port), "why": "one of its network addresses"} for ip in ips][:8]}]
+        with self.lock:
+            sp = [dict(v) for v in self.spokes.values()]
+        for v in sorted(sp, key=lambda v: str(v.get("name") or "")):
+            if v.get("name"):
+                out.append({"name": str(v["name"]), "addrs": standby_candidates(v)[:8]})
+        self.__dict__["_p_relays_c"] = (now, out)
+        return out
+
+    def _p_online(self, host, room, admin, now):
+        """POST /api/people {op: "online"} -> {ok, rows, at, hubDown?, hubOld?, relays?, apps?} (admins: + the Move choices
+        and which devices check in). A spoke asks the hub (one answer per caller reused PONLINE_CACHE s); a dark or older hub
+        leaves it its own pages."""
+        if not self._p_spoke():
+            out = {"ok": True, "rows": self._p_online_rows(host, room, now), "at": int(now)}
+            if admin:
+                out.update(relays=self._p_relays(), apps=self._p_apps(now))
+            return out, 200
+        pl = self._pl()
+        key = (host, room, bool(admin))
+        with self.lock:
+            hit = pl.oncache.get(key)
+        if hit and now - hit[0] < PONLINE_CACHE:
+            return hit[1], 200
+        r = self._hub_fed({"op": "ponline", "host": host, "room": room, "vouch": "admin" if admin else "member"}, timeout=4)
+        if r is not None and r[1] == 200 and isinstance(r[0].get("rows"), list):
+            d = r[0]
+            out = {"ok": True, "rows": online_rows_clean(d["rows"]), "at": int(now)}
+            if admin:
+                out.update(relays=online_relays_clean(d.get("relays")), apps=[str(x) for x in (d.get("apps") or []) if HOST_RE.match(str(x))][:1000])
+        else:
+            out = {"ok": True, "rows": self._p_online_rows(host, room, now), "at": int(now)}
+            out["hubDown" if r is None else "hubOld"] = True
+            if admin:
+                out.update(relays=[], apps=self._p_apps(now))
+        with self.lock:
+            pl.oncache[key] = (now, out)
+            if len(pl.oncache) > 512:
+                for k in sorted(pl.oncache, key=lambda k: pl.oncache[k][0])[:256]:
+                    pl.oncache.pop(k, None)
+        return out, 200
+
+    def _p_cmd(self, p, claims, host, now):
+        """POST /api/people {op: "cmd", to, kind: restart | move, dest?, by?} with an ADMIN member token: the 0.21.73 Restart /
+        Move for one person's KASTR, handed to the relay their app checks in to (here, a spoke through the hub's command
+        list, or -- from a spoke -- the hub decides). Their window shows the 10-second notice, then KASTR restarts."""
+        if not claims_admin_any(claims):
+            return {"ok": False, "error": "only an admin can restart or move someone's KASTR"}, 403
+        to, kind = str(p.get("to") or ""), str(p.get("kind") or "")
+        if not HOST_RE.match(to) or kind not in CLIENT_CMDS:
+            return {"ok": False, "error": "who (their device) and what (restart or move)?"}, 400
+        if to == host:
+            return {"ok": False, "error": "that is you"}, 400
+        dest = ""
+        if kind == "move":
+            dest = client_move_target(p.get("dest"))
+            if not dest:
+                return {"ok": False, "error": "a relay address to move to is required (for example 10.0.2.14 or https://10.0.2.14:4443)"}, 400
+        if not self._p_rate_ok("cmd:" + host, now):
+            return {"ok": False, "error": "too many requests -- wait a minute", "retryAfter": PINVITE_RATE[1]}, 429
+        by = clean_label(p.get("by"), 40) or host
+        if self._p_spoke():
+            if self.client_cmd(to, kind, dest):
+                self.log("relay auth: admin %s asked %s to %s (People panel)" % (by, to, kind))
+                return {"ok": True, "to": to, "kind": kind, "dest": dest, "relay": self.relay_name() or "this relay"}, 200
+            return self._p_hub_call({"op": "pcmd", "vouch": "admin", "to": to, "kind": kind, "dest": dest, "by": by})
+        return self._p_cmd_route(to, kind, dest, by)
+
+    def _p_cmd_route(self, to, kind, dest, by):
+        """Hub (or a lone relay): an app checked in here takes it on its next check-in; one on a spoke through the command
+        list (clientCmd, as the Relay page's Users table does)."""
+        if self.client_cmd(to, kind, dest):
+            self.log("relay auth: admin %s asked %s to %s (People panel)" % (by or "?", to, kind))
+            return {"ok": True, "to": to, "kind": kind, "dest": dest, "relay": self.relay_name() or "this relay"}, 200
+        now = time.time()
+        with self.lock:
+            via = next((str(v.get("name")) for v in self.spokes.values() if v.get("name") and any(
+                isinstance(c, dict) and c.get("node") == to and c.get("checkin") and now - int(c.get("at") or 0) <= self.CLIENT_FORGET_S + 120
+                for c in v.get("clients") or [])), None)
+        if not via:
+            return {"ok": False, "error": "their KASTR has not checked in to any relay of this fleet in the last few minutes "
+                                          "(a web page, or a KASTR older than 0.21.73, cannot be restarted or moved)"}, 409
+        rec = self.raise_cmd("clientCmd", {"spoke": via, "node": to, "kind": kind, "to": dest})
+        self.log("relay auth: admin %s asked %s to %s through spoke %s (People panel)" % (by or "?", to, kind, via))
+        return {"ok": True, "to": to, "kind": kind, "dest": dest, "relay": via, "seq": rec["seq"]}, 200
 
     # ---- 0.21.63: the vehicle API -----------------------------------------------------------------------------------
     # Kenton: "I now need to have a vehicle ... be able to connect via POST to the relay to share the cameras on the vehicle.

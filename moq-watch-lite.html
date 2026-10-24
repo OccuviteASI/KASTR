@@ -1233,6 +1233,10 @@
   #joinInvRoom { color:var(--asi-blue); }
   #joinInvOut { margin:6px 0 0; font-size:11.5px; }
   #joinInvOut a { color:var(--text-mute); }
+  /* 0.21.85: an invite-only guest's session in My room ended (the owner left / went quiet / took the link back) */
+  #joinGate:not(.ended) #joinEndHead, #joinGate.ended #joinInvHead { display:none !important; }
+  #joinEndHead h2 { margin-bottom:4px; }
+  #joinEndHead p { margin:0 0 12px; font-size:12px; color:var(--text-dim); }
   #kRoomSet .rsmsg { margin:0; min-height:16px; font-size:12px; color:var(--text-dim); }
   #kRoomSet .rsmsg.err { color:var(--asi-red); }
   #kRoomSet .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
@@ -1885,6 +1889,36 @@
   .pprow:hover .ppmore ~ .ppmic, .pprow.menu .ppmore ~ .ppmic { display:none; }
   .pprow .ppmore:hover { background:var(--surface-3, rgba(255,255,255,.08)); color:var(--text); }
   #pplEmpty { padding:14px 8px; color:var(--text-mute); font-size:12px; text-align:center; }
+  /* 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): This room | Everyone online */
+  .ppltabs { display:flex; gap:2px; padding:2px; margin-bottom:10px; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; }
+  .ppltabs button { flex:1; min-width:0; background:none; border:0; border-radius:6px; color:var(--text-mute); font-size:12px; padding:6px 8px;
+    cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ppltabs button:hover { color:var(--text); }
+  .ppltabs button.on { background:var(--surface); color:var(--text); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.22); }
+  .ppltabs button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:-2px; }
+  .ppltabs .n { color:var(--text-mute); font-weight:400; }
+  #peoplePanel.allview .pplsec, #peoplePanel.allview #pplRows, #peoplePanel.allview #pplEmpty, #peoplePanel.allview #pplStreams,
+  #peoplePanel.allview #pplInvite, #peoplePanel.allview #pplInvPop { display:none !important; }
+  #pplAll[hidden] { display:none; }
+  .pplallsum { font-size:11px; color:var(--text-mute); padding:0 2px 4px; }
+  .pplallsum .warn { color:var(--asi-amber); }
+  .eogrp { display:flex; align-items:center; gap:6px; padding:12px 4px 4px; font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.08em; }
+  .eogrp:first-child { padding-top:4px; }
+  .eogrp .eot { min-width:0; display:inline-flex; align-items:center; gap:4px; overflow:hidden; white-space:nowrap; }
+  .eogrp .eot .icon { flex:none; width:10px; height:10px; }
+  .eogrp .eot .tx { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .eogrp .eon { flex:none; }
+  .eogrp .sp { flex:1; }
+  .eogrp .eogo { flex:none; text-transform:none; letter-spacing:0; font-size:11px; background:none; border:1px solid var(--line); border-radius:5px;
+    color:var(--text); padding:2px 9px; cursor:pointer; }
+  .eogrp .eogo:hover:not(:disabled) { border-color:var(--asi-blue); color:var(--asi-blue); }
+  .eogrp .eogo:disabled { opacity:.5; cursor:default; color:var(--text-mute); }
+  .eogrp .eohere { flex:none; text-transform:none; letter-spacing:0; font-size:11px; color:var(--asi-blue); }
+  #pplAllRows .pprow { cursor:pointer; }
+  #pplAllRows .pprow.nogo, #pplAllRows .pprow.here { cursor:default; }
+  #pplAllRows .pprow.nogo .pn { color:var(--text-mute); }
+  .pplallempty { padding:14px 8px; color:var(--text-mute); font-size:12px; text-align:center; }
+  .pplallempty[hidden] { display:none; }
   #pplStreams > summary { cursor:pointer; font-size:12px; color:var(--text-mute); padding:4px 2px; }
   #pplStreams > summary:hover { color:var(--text); }
   /* person groups in the People list */
@@ -2283,6 +2317,11 @@
   <div class="head"><span>Participants</span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div class="pbody">
+  <!-- 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): This room (the default) | Everyone online -->
+  <div id="pplTabs" class="ppltabs" role="tablist" aria-label="Whom to list">
+    <button type="button" role="tab" id="pplTabRoom" class="on" aria-selected="true" aria-controls="pplRows">This room</button>
+    <button type="button" role="tab" id="pplTabAll" aria-selected="false" aria-controls="pplAll" title="Everyone in any room of this relay's fleet, guests and viewers too">Everyone online <span id="pplAllN" class="n"></span></button>
+  </div>
   <!-- 0.21.23 (Kenton, Teams screenshot): one row per person -->
   <div id="pplTop">
     <label class="pplsearch"><input id="pplSearch" type="search" placeholder="Search participants" autocomplete="off" spellcheck="false"><span class="sic" id="pplSic"></span></label>
@@ -2301,6 +2340,11 @@
   </div>
   <div id="pplRows"></div>
   <div id="pplEmpty" hidden></div>
+  <div id="pplAll" hidden role="tabpanel" aria-labelledby="pplTabAll">
+    <div id="pplAllSum" class="pplallsum" aria-live="polite"></div>
+    <div id="pplAllRows"></div>
+    <div id="pplAllEmpty" class="pplallempty" hidden></div>
+  </div>
   <details id="pplStreams">
   <summary>Streams and volume</summary>
   <section id="list">
@@ -3036,6 +3080,8 @@
     <!-- 0.21.75: an invite link -- only the name is asked -->
     <div id="joinInvHead"><h2>You&rsquo;re invited to <span id="joinInvRoom"></span></h2>
       <p>No access code or room code needed &mdash; the invite link is your key.</p></div>
+    <!-- 0.21.85: the session ended (an invite-only guest of someone's My room) -- why, and Join again on the same link -->
+    <div id="joinEndHead" role="status"><h2 id="joinEndTitle"></h2><p id="joinEndDetail"></p></div>
     <button id="joinGateClose" type="button"
             title="Close &mdash; join later from the room chip. The relay works without joining.">&#10005;</button>
     <!-- Live self-preview (gate-local capture, released on join/leave-gate).
@@ -4301,6 +4347,7 @@
       try { paintChannelChip(); spotApplyWinner(); applyState(); } catch {}
     }
     boardTaken = gen;
+    if (!d) return;   // 0.21.85 (lab: a dark hub): a poll that got no answer keeps what we have (it threw on d.pins every 8 s)
     const pins = (Array.isArray(d.pins) ? d.pins : []).filter((p) => p && p.path);
     const spots = (Array.isArray(d.spots) ? d.spots : []).filter((s) => s && s.target);
     const grids = (d.grids && typeof d.grids === "object" && !Array.isArray(d.grids)) ? d.grids : {};   // 0.21.64
@@ -4776,7 +4823,7 @@
     const tok = authTokens.member, room = CHANNEL;
     try {
       const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
-        body: JSON.stringify({ op: "beat", name: myOpName() }) });
+        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })() }) });   // 0.21.85: + mode (Everyone online leaves boxes out)
       if (r.status === 404) { pbOld = true; setTimeout(() => { pbOld = false; }, 300000); return; }   // a relay host older than 0.21.78
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
@@ -4828,17 +4875,49 @@
     if (st.open && st.access !== false) return;
     const owner = String(st.owner || "") || "The owner";
     const why = !st.open ? (st.why === "left" ? owner + " left their room" : owner + " is no longer in their room") : owner + " removed your access to their room";
-    personalKicked(room, why);
+    personalKicked(room, why, { owner: String(st.owner || ""), kind: !st.open ? (st.why === "left" ? "left" : "gone") : st.revoked ? "revoked" : "access" });
   }
-  async function personalKicked(room, why) {
+  async function personalKicked(room, why, info) {
     if (joinState !== "joined" || CHANNEL !== room || pKickSaid === room + "|" + why) return;
     pKickSaid = room + "|" + why;
+    // 0.21.85 (Kenton: "End their session"): a guest who came only by an invite link has no access code -- the Lobby would
+    // refuse them (switchRoom's mint), so the session ends cleanly at the gate instead, which says why and offers Join again
+    if (authSecured && !authAccessCode) { setTimeout(() => { pKickSaid = ""; }, 5000); personalEnded(room, info || { kind: "left" }); return; }
     log("My room shared: " + why + " \u2014 to the Lobby");
     await switchRoom(lastChannelList.find((r) => r.slug === LOBBY) || { slug: LOBBY }, "");
+    if (joinState === "joined" && CHANNEL === room) { setTimeout(() => { pKickSaid = ""; }, 5000); personalEnded(room, info || { kind: "left" }); return; }   // the Lobby refused me after all
     setTimeout(() => { pKickSaid = ""; }, 5000);
     kastrConfirm({ title: "Back in the Lobby", message: why + ", so everyone in it was sent to the Lobby.",
                    detail: "You can join again while they are in it \u2014 it is in your rooms list when it is shared with you.", ok: "OK", noCancel: true });
   }
+  // 0.21.85: the ended session -- the gate (invite mode: only the name) with the reason and "Join again" on the same link; the
+  // link works again once the owner is back (while it lasts); until then the mint's own refusal shows ("<owner> isn't in
+  // their room right now"). A link the owner took back says so (Join again then shows "this invite link was revoked").
+  let pEnded = null;   // { room, owner, kind }
+  function personalEnded(room, info) {
+    const owner = String(info?.owner || "") || personalOwners.get(room) || "";
+    const who = owner || "The owner", kind = String(info?.kind || "left");
+    const title = kind === "revoked" ? who + " took back your invite link"
+      : kind === "access" ? who + " removed your access to their room"
+      : kind === "gone" ? who + " is no longer in their room \u2014 the room closed"
+      : who + " left their room \u2014 the room closed";
+    const detail = kind === "revoked" || kind === "access" ? "Ask " + (owner || "them") + " for a new invite link to come back."
+      : "Join again with the same invite link once " + (owner || "they") + " " + (owner ? "is" : "are") + " back in it (while the link still works).";
+    pEnded = { room, owner, kind };
+    log("My room: session ended \u2014 " + title);
+    try { leaveMeeting(); } catch {}
+    personalEndedPaint(title, detail);
+  }
+  function personalEndedPaint(title, detail) {
+    const g = joinEls.joinGate;
+    if (!g) return;
+    g.classList.toggle("ended", !!pEnded);
+    document.getElementById("joinEndTitle").textContent = pEnded ? title : "";
+    document.getElementById("joinEndDetail").textContent = pEnded ? detail : "";
+    joinEls.joinBtn.textContent = pEnded ? "Join again" : "Join now";
+  }
+  window.addEventListener("kastr:auth", () => { if (pEnded) { pEnded = null; personalEndedPaint(); } });   // joined again (a good mint)
+  window.__personalEnded = { state: () => (pEnded ? { ...pEnded } : null), end: personalEnded, clear: () => { pEnded = null; personalEndedPaint(); } };   // rig + the gate's "Join another room instead"
   async function personalGuestEnter(slug) {
     const r = personalShared.find((x) => x.slug === slug);
     const t = roomTitle(slug);
@@ -5045,8 +5124,11 @@
       items.push({ value: "pinv-here", icon: "share", label: "Invite to " + roomTitle(CHANNEL), tip: (p.name || "They") + " gets a prompt to join " + roomTitle(CHANNEL) + " (no code needed)" });
     if (mine && !(CHANNEL === mine.slug && there) && !(CHANNEL === mine.slug && items.length))
       items.push({ value: "pinv-mine", icon: "share", label: "Invite to My room", tip: (p.name || "They") + " gets a prompt to join My room (while you are in it)" });
+    // 0.21.85: + `p.more` (Everyone online: an admin's Restart / Move) -- its values start "pinv-eo", so the tile's menu and
+    // participantMenu hand them back here like the invite items
+    if (p.more?.items?.length) items.push(...(items.length ? [{ sep: true }] : []), ...p.more.items);
     if (!items.length) return null;
-    return { items, pick: (v) => personInvite(p, host, v === "pinv-mine" ? mine.slug : CHANNEL) };
+    return { items, pick: (v) => (String(v).startsWith("pinv-eo") ? p.more?.pick?.(v) : personInvite(p, host, v === "pinv-mine" ? mine.slug : CHANNEL)) };
   }
   async function personInvite(p, host, room) {
     const base = authBase();
@@ -9265,6 +9347,7 @@
     return true;
   }
   function paintParticipants(force) {
+    try { eoPaint(force); } catch (e) { console.warn("KASTR: Everyone online:", e); }   // 0.21.85
     if (ppl.panel.hidden && !force) return;
     const list = participantList();
     const q = ppl.search.value.trim().toLowerCase();
@@ -9420,6 +9503,304 @@
   window.__invite = { make: inviteMake, link: inviteJoinLink, copy: inviteCopy, get: () => inviteGet(), set: (v) => inviteSet(v), ttl: (t) => { invTtl = t; invPaintTtl(); } };   // rig
   window.__participants = () => participantList().map((p) => ({ key: p.key, name: p.name, role: p.role, mic: p.mic, talk: p.talk, me: p.me, deaf: !!p.deaf, menu: !!(p.cam || p.content.length) }));   // rig
   window.__inviteLink = inviteLink;   // rig
+  // ---- 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down") -- EVERYONE ONLINE ------------------
+  // The People panel's second view, next to "This room" (the default, every launch): every person and guest in ANY room of the
+  // fleet, viewers included -- never a camera box or a relay (presenceHidden, as the rail). Public rooms come from the rail's own
+  // presence (roomsPres: ~presence / ~state, fleet-wide and live); a personal room says nothing in public (0.21.75), so its people
+  // come from the relay host (POST /api/people {op: "online"}, every 4 s while this view is open), which names the room only to
+  // someone allowed in it -- everyone else reads "a private room" (a box's own home room too). Grouped by room (mine first, then
+  // the rail's order, My rooms, the Lobby, private rooms); a click goes there by the rail's own path (sbCardClick: "Leave X?",
+  // a locked room's code) or says why not; the menu is the rail's (Invite to <this room> / My room) plus, for an admin, the
+  // 0.21.73 Restart / Move of the Relay page's Users table. In the Lobby nobody sees names (0.21.60), here neither.
+  var EO_READY = false;   // paintParticipants may run before this block has (TDZ)
+  const eo = { view: "room", rows: [], at: 0, hubDown: false, hubOld: false, old: false, relays: [], apps: null, busy: false, sig: "" };
+  const eoEls = { tabRoom: document.getElementById("pplTabRoom"), tabAll: document.getElementById("pplTabAll"), n: document.getElementById("pplAllN"),
+    box: document.getElementById("pplAll"), sum: document.getElementById("pplAllSum"), rows: document.getElementById("pplAllRows"), empty: document.getElementById("pplAllEmpty") };
+  const EO_POLL_MS = 4000, EO_STALE_MS = 15000;
+  const eoOn = () => eo.view === "all";
+  EO_READY = true;
+  function eoSetView(v) {
+    eo.view = v === "all" ? "all" : "room";
+    ppl.panel.classList.toggle("allview", eoOn());
+    for (const [b, on] of [[eoEls.tabRoom, !eoOn()], [eoEls.tabAll, eoOn()]]) { b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }
+    eoEls.box.hidden = !eoOn();
+    invPop.hidden = true;
+    ppl.search.placeholder = eoOn() ? "Search everyone online" : "Search participants";
+    eo.sig = "";
+    if (eoOn()) eoFetch();
+    paintParticipants(true);
+  }
+  eoEls.tabRoom.addEventListener("click", (e) => { e.stopPropagation(); eoSetView("room"); });
+  eoEls.tabAll.addEventListener("click", (e) => { e.stopPropagation(); eoSetView("all"); });
+  document.getElementById("pplTabs").addEventListener("keydown", (e) => {   // arrow keys move between the two tabs
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    eoSetView(eoOn() ? "room" : "all");
+    (eoOn() ? eoEls.tabAll : eoEls.tabRoom).focus();
+  });
+  async function eoFetch() {
+    if (eo.busy || !eoOn() || joinState !== "joined" || !authSecured || !authTokens?.member || inLobby()) return;
+    const base = authBase();
+    if (!base) return;
+    eo.busy = true;
+    const ctl = new AbortController(), tmo = setTimeout(() => ctl.abort(), 8000);   // a hung answer never stops the polls
+    try {
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + authTokens.member },
+        body: JSON.stringify({ op: "online" }), signal: ctl.signal });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 || (r.status === 400 && /unknown op/.test(String(d.error || "")))) { eo.old = true; eo.rows = []; eo.apps = null; }   // a relay host before 0.21.85
+      else if (r.ok && d.ok) {
+        eo.old = false; eo.hubDown = !!d.hubDown; eo.hubOld = !!d.hubOld;
+        eo.rows = Array.isArray(d.rows) ? d.rows.filter((x) => x && HOST_RE.test(String(x.host || ""))) : [];
+        eo.relays = Array.isArray(d.relays) ? d.relays : [];
+        eo.apps = Array.isArray(d.apps) ? new Set(d.apps.map(String)) : null;
+        const mine = personalGet()?.slug;
+        for (const x of eo.rows) if (x.room && x.owner && isPersonalSlug(x.room) && x.room !== mine) personalOwners.set(String(x.room), String(x.owner));
+      }
+      eo.at = Date.now();
+    } catch {} finally { clearTimeout(tmo); eo.busy = false; }
+    eoPaint();
+  }
+  setInterval(() => { if (eoOn() && !ppl.panel.hidden) eoFetch(); }, EO_POLL_MS);
+  window.addEventListener("kastr:auth", () => setTimeout(eoFetch, 500));   // another room (or a fresh token): the relay answers for it now
+  // where a click on a room's people goes -> {can, why, here?}
+  function eoGoState(g) {
+    if (joinState !== "joined") return { can: false, why: "Join a room first" };
+    if (g.priv) return { can: false, why: "A private room \u2014 only the people it is shared with can go in" };
+    if (g.slug === CHANNEL) return { can: false, here: true, why: "You\u2019re in this room" };
+    // an invite link's guest has no access code: the link opens its own room only (switchRoom's mint would be refused)
+    if (authSecured && !authAccessCode && inviteGet()?.room !== g.slug && !(isPersonalSlug(g.slug) && personalGet()?.slug === g.slug))
+      return { can: false, why: "You came in with an invite link \u2014 it opens " + roomTitle(CHANNEL) + " only" };
+    if (isPersonalSlug(g.slug)) {
+      if (personalGet()?.slug === g.slug) return { can: true };
+      if (personalShared.some((r) => r.slug === g.slug)) return { can: true };
+      return { can: false, why: roomTitle(g.slug) + " isn\u2019t shared with you" };
+    }
+    if (!(lastChannelList || []).some((r) => r.slug === g.slug)) return { can: false, why: "“" + roomTitle(g.slug) + "” isn\u2019t in your rooms list" };
+    return { can: true };
+  }
+  function eoGoTo(g) {
+    const st = g.go || eoGoState(g);
+    if (!st.can) { if (!st.here) window.__toast?.(st.why, 4000, { level: "info" }); return; }
+    if (isPersonalSlug(g.slug)) { if (personalGet()?.slug === g.slug) personalEnter(); else personalGuestEnter(g.slug); return; }
+    const rec = (lastChannelList || []).find((r) => r.slug === g.slug);
+    const card = sbRoomsEl?.querySelector('.sbcard[data-slug="' + cssq(g.slug) + '"]');
+    if (!rec || !card) { window.__toast?.("“" + roomTitle(g.slug) + "” isn\u2019t in your rooms list right now", 4000, { level: "info" }); return; }
+    sbCardClick(card, rec);   // the rail's own path: "Leave X and join Y?", a locked room's code
+  }
+  // everyone online -> [{key, slug, title, priv, locked, go, people: [...]}] in display order
+  function eoBuild() {
+    const now = Date.now();
+    const meKey = String(window.__publisher?.opSlug?.() || "").toLowerCase();
+    const people = new Map();   // "<room>|<op>" -> a person in that room
+    const alive = (p) => roomsFrozen || !p.goneAt || now - p.goneAt <= ROOMS_GRACE_MS;
+    const joined = joinState === "joined";
+    for (const p of roomsPres.values()) {
+      const w = p.who;
+      if (!w || !alive(p) || presenceHidden(w) || !ROOM_RE.test(p.slug) || isPersonalSlug(p.slug)) continue;
+      const op = String(w.op || "").toLowerCase() || ("peer:" + w.peer);
+      const key = p.slug + "|" + op;
+      let x = people.get(key);
+      if (!x) people.set(key, x = { key, op, name: "", room: p.slug, host: "", since: 0, pub: false, talk: false, deaf: false, priv: false, guest: false, me: false, via: "" });
+      if (!x.name && (w.name || w.op)) x.name = String(w.name || w.op);
+      if (!x.host && HOST_RE.test(String(w.host || ""))) x.host = String(w.host);
+      if (p.ts && (!x.since || p.ts < x.since)) x.since = p.ts;
+      if (p.state) { if (w.publishing?.length) x.pub = true; if (w.speaking) x.talk = true; if (w.deaf) x.deaf = true; }
+      if (!x.via) x.via = String(w.relayName || w.relay || "");
+      if (isHomeRoom(p.slug) && !(joined && p.slug === CHANNEL)) x.priv = true;   // a camera box's own room is in no list
+    }
+    if (joined) {   // me, where I am (My room included -- I announce nothing in public there)
+      const k = CHANNEL + "|" + (meKey || "me");
+      const x = people.get(k) || { key: k, op: meKey || "me", name: "", room: CHANNEL, host: HOSTNAME1, since: 0, pub: false, talk: false, deaf: false, priv: false, guest: false, via: "" };
+      x.me = true; x.name = myOpName() || x.name || "You"; x.pub = x.pub || !!document.querySelector("#pubPanes .pubpane");
+      people.set(k, x);
+    }
+    const fresh = now - eo.at <= EO_STALE_MS;
+    for (const s of fresh ? eo.rows : []) {   // personal rooms, from the relay host (it decides what I may know)
+      const host = String(s.host);
+      if (host === HOSTNAME1) continue;
+      const room = !s.private && isPersonalSlug(String(s.room || "")) ? String(s.room) : "";
+      const since = (Number(s.since) || 0) * 1000;
+      // one device is in one room: a public entry for the same device that is older loses (it moved into the personal room)
+      const pub = [...people.values()].find((x) => x.host === host && !x.me);
+      if (pub) { if ((pub.since || 0) > since) continue; people.delete(pub.key); }
+      const name = String(s.name || "") || prettyOperator(host);
+      const key = (room || "~private") + "|h:" + host;
+      people.set(key, { key, op: opKeyOf(name) || host, name, room, host, since, pub: false, talk: false, deaf: false, priv: !room, guest: !!s.guest, me: false, via: String(s.via || ""), srv: true });
+    }
+    const recs = lastChannelList || [];
+    const groups = new Map();
+    for (const x of people.values()) {
+      const gk = x.priv ? "~private" : x.room;
+      let g = groups.get(gk);
+      if (!g) {
+        const rec = x.priv ? null : recs.find((r) => r.slug === x.room);
+        g = { key: gk, slug: x.priv ? "" : x.room, priv: x.priv, locked: !!rec?.locked, people: [],
+              title: x.priv ? "In a private room" : roomTitle(x.room) };
+        g.go = eoGoState(g);
+        groups.set(gk, g);
+      }
+      g.people.push(x);
+    }
+    const rank = (g) => {
+      if (g.slug && g.slug === CHANNEL) return [0, 0];
+      if (g.priv) return [5, 0];
+      if (g.slug === LOBBY) return [4, 0];
+      if (isPersonalSlug(g.slug)) return [2, 0];
+      const i = recs.findIndex((r) => r.slug === g.slug);
+      return i >= 0 ? [1, i] : [3, 0];
+    };
+    const byName = (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }) || String(a.key).localeCompare(String(b.key));
+    const out = [...groups.values()];
+    for (const g of out) g.people.sort((a, b) => (b.me - a.me) || byName(a, b));
+    out.sort((a, b) => { const ra = rank(a), rb = rank(b); return (ra[0] - rb[0]) || (ra[1] - rb[1]) || a.title.localeCompare(b.title); });
+    return out;
+  }
+  window.__everyone = { build: () => eoBuild().map((g) => ({ key: g.key, slug: g.slug, title: g.title, priv: g.priv, locked: g.locked, go: g.go,
+    people: g.people.map((x) => ({ name: x.name, host: x.host, room: x.room, priv: x.priv, guest: x.guest, me: x.me, pub: x.pub })) })),
+    view: (v) => (v ? eoSetView(v) : eo.view), fetch: eoFetch, state: () => ({ view: eo.view, at: eo.at, hubDown: eo.hubDown, hubOld: eo.hubOld, old: eo.old, n: eo.rows.length,
+    relays: eo.relays.map((r) => r.name), apps: eo.apps ? eo.apps.size : null }) };   // rig
+  function eoPerson(x) {
+    if (!x.priv && x.room === CHANNEL && !x.me) { const p = sbMemberPerson(x.op, CHANNEL, x.name); if (p) return p; }   // my room: the People row's own entry (their tile's menu)
+    return { key: x.op, name: x.name || prettyOperator(x.op), cam: null, content: [], viewer: !x.priv && x.room === CHANNEL && !x.pub, me: !!x.me, room: x.priv ? "~private" : x.room, host: x.host };
+  }
+  function eoAdminItems(x) {
+    if (!authSecured || authRole !== "admin" || x.me || !x.host || x.host === HOSTNAME1 || x.host.startsWith("web-")) return [];
+    if (eo.apps && !eo.apps.has(x.host)) return [{ hint: "Restart / Move: their KASTR does not check in to this fleet (a web page, or older than 0.21.73)" }];
+    return [{ value: "pinv-eo-restart", label: "Restart their KASTR (admin)", tip: "Their window shows a 10-second notice, then KASTR closes and reopens in the same room" },
+            { value: "pinv-eo-move", label: "Move to another relay… (admin)", tip: "For this session; their window shows a 10-second notice" }];
+  }
+  function eoMenu(x, anchor) {
+    const adm = eoAdminItems(x), p = eoPerson(x);
+    if (adm.length) p.more = { items: adm, pick: (v) => (v === "pinv-eo-restart" ? eoRestart(x) : v === "pinv-eo-move" ? eoMovePick(x, anchor) : null) };
+    return participantMenu(p, anchor);
+  }
+  async function eoRestart(x) {
+    const who = x.name || x.host;
+    if (!(await kastrConfirm({ title: "Restart KASTR", message: "Restart KASTR on " + who + "\u2019s computer?",
+      detail: "Their window shows a 10-second notice, then KASTR closes and reopens and rejoins the room it was in.", ok: "Restart", danger: true }))) return;
+    eoCmd(x, "restart", "");
+  }
+  function eoMovePick(x, anchor) {
+    const items = [{ cap: "Move " + (x.name || x.host) + " to" }];
+    const via = String(x.via || "").toLowerCase();
+    for (const r of eo.relays) {
+      const a = String(r?.addrs?.[0]?.address || "").replace(/^https:/, "http:");   // an app dials a relay as http://ip:port (the Relay page's Move)
+      if (!a) continue;
+      const theirs = via && String(r.name || "").toLowerCase() === via.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      items.push({ value: "mv|" + a, label: String(r.name || a) + (theirs ? " (their relay now)" : ""), tip: a });
+    }
+    items.push({ value: "mv|", label: "Another address…" });
+    setTimeout(() => openMineMenu(anchor, items, "", async (v) => {
+      const pre = String(v).slice(3);
+      const to = await kastrConfirm({ title: "Move to another relay", message: "Move " + (x.name || x.host) + " to this relay for this session?",
+        detail: "Their window shows a 10-second notice, then KASTR restarts on that relay and rejoins the room it was in.", ok: "Move",
+        input: { placeholder: "Relay address, e.g. 10.0.2.14 or https://10.0.2.14:4443", value: pre },
+        check: (s) => (String(s || "").trim() ? "" : "Type the relay’s address.") });
+      if (to === false || to === null || to === undefined) return;
+      eoCmd(x, "move", String(to).trim());
+    }), 0);
+  }
+  async function eoCmd(x, kind, dest) {
+    const base = authBase(), who = x.name || x.host;
+    if (!base || !authTokens?.member) return;
+    try {
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + authTokens.member },
+        body: JSON.stringify({ op: "cmd", to: x.host, kind, dest: dest || undefined, by: myOpName() || undefined }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 404 || (r.status === 400 && /unknown op/.test(String(d.error || "")))) throw new Error("this relay\u2019s KASTR is older than 0.21.85 \u2014 use the Relay page\u2019s Users table");
+      if (!r.ok || !d.ok) throw new Error(String(d.error || ("HTTP " + r.status)).replace(" -- ", " \u2014 "));
+      window.__toast?.((kind === "move" ? "Moving " + who + " to " + (d.dest || dest) : "Restarting " + who + "\u2019s KASTR")
+        + " \u2014 it takes the request at its next check-in (within a minute), shows a 10-second notice, then restarts", 7000, { level: "event" });
+      log("Admin " + kind + " for " + x.host + (d.dest ? " to " + d.dest : "") + " via " + (d.relay || "?"));
+    } catch (e) { window.__toast?.("Could not " + kind + " " + who + ": " + (e?.message || e), 6000, { level: "warn" }); }
+  }
+  function eoPaint(force) {
+    if (!EO_READY || (ppl.panel.hidden && !force)) return;
+    const joined = joinState === "joined", lobby = inLobby();
+    const groups = joined && !lobby ? eoBuild() : [];
+    const all = groups.flatMap((g) => g.people);
+    eoEls.n.textContent = all.length ? "(" + all.length + ")" : "";
+    if (!eoOn()) return;
+    if (force && Date.now() - eo.at > 2000) eoFetch();
+    const q = ppl.search.value.trim().toLowerCase();
+    const hit = (x, g) => !q || String(x.name).toLowerCase().includes(q) || (!g.priv && g.title.toLowerCase().includes(q));
+    const shown = groups.map((g) => ({ g, people: g.people.filter((x) => hit(x, g)) })).filter((s) => s.people.length);
+    const nRooms = groups.filter((g) => !g.priv).length, nPriv = groups.find((g) => g.priv)?.people.length || 0;
+    let sum = !joined ? "" : lobby ? "" : all.length + (all.length === 1 ? " person" : " people") + " online in " + nRooms + (nRooms === 1 ? " room" : " rooms")
+      + (nPriv ? " \u00b7 " + nPriv + " in a private room" : "");
+    const warn = !joined || lobby ? "" : eo.hubDown ? "The hub is unreachable \u2014 people in private rooms on other relays may be missing"
+      : (eo.old || eo.hubOld) ? "This relay\u2019s KASTR is older than 0.21.85 \u2014 people in private rooms aren\u2019t listed" : "";
+    eoEls.empty.hidden = shown.length > 0;
+    eoEls.empty.textContent = !joined ? "Join a room to see who is online."
+      : lobby ? "Nobody sees names in the Lobby \u2014 join a room to see everyone online."
+      : q ? "No one online matches “" + ppl.search.value.trim() + "”" : "No one else is online.";
+    const sig = JSON.stringify([sum, warn, q, shown.map((s) => [s.g.key, s.g.title, s.g.locked, s.g.go.can, s.g.go.why,
+      s.people.map((x) => [x.key, x.name, x.pub, x.talk, x.deaf, x.me, x.guest, personColor(x.op), avatarUrls.get(x.op) || ""])])]);
+    if (sig === eo.sig && !force) return;
+    if (eoEls.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
+    eo.sig = sig;
+    eoEls.sum.textContent = sum;
+    if (warn) { const w = document.createElement("div"); w.className = "warn"; w.textContent = warn; eoEls.sum.appendChild(w); }
+    const els = [];
+    for (const { g, people } of shown) {
+      const h = document.createElement("div"); h.className = "eogrp"; h.dataset.room = g.slug || "~private";
+      const t = document.createElement("span"); t.className = "eot";
+      if (g.locked || g.priv) t.innerHTML = icon("lock");
+      { const tx = document.createElement("span"); tx.className = "tx"; tx.textContent = g.title; t.appendChild(tx); }
+      t.title = g.priv ? g.go.why : g.title + (g.locked ? " (locked)" : "");
+      const n = document.createElement("span"); n.className = "eon"; n.textContent = "· " + people.length;
+      const sp = document.createElement("span"); sp.className = "sp";
+      h.append(t, n, sp);
+      if (g.go.here) { const y = document.createElement("span"); y.className = "eohere"; y.textContent = "You\u2019re here"; h.appendChild(y); }
+      else if (!g.priv) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "eogo"; b.textContent = g.slug === LOBBY ? "Go to the Lobby" : "Go";
+        b.disabled = !g.go.can; b.title = g.go.can ? (g.slug === LOBBY ? "Go to the Lobby" : "Go to " + g.title + (g.locked ? " (it asks for its code)" : "")) : g.go.why;
+        b.addEventListener("click", (e) => { e.stopPropagation(); eoGoTo(g); });
+        h.appendChild(b);
+      }
+      els.push(h);
+      for (const x of people) {
+        const row = document.createElement("div");
+        row.className = "pprow" + (x.talk ? " talk" : "") + (x.me ? " me" : "") + (g.go.can || g.go.here ? "" : " nogo") + (g.go.here ? " here" : "");
+        row.dataset.key = x.key; row.dataset.room = g.slug || "~private";
+        row.tabIndex = 0;
+        const av = document.createElement("div"); av.className = "ppav";
+        av.style.setProperty("--ring", personColor(x.op));
+        setPc(row, personColor(x.op));
+        av.textContent = viewerInitials(x.name);
+        paintAvatar(av, avatarUrls.get(x.op));
+        const nm = document.createElement("div"); nm.className = "ppname";
+        const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = x.name;
+        if (x.me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (You)"; pn.appendChild(y); }
+        const role = [];
+        if (x.guest) role.push("Guest");
+        if (!x.srv && !x.pub && !x.me) role.push("View only");
+        if (x.deaf) role.push("Deafened");
+        const ps = document.createElement("div"); ps.className = "ps"; ps.textContent = role.join(" \u00b7 ");
+        nm.append(pn, ps);
+        row.append(av, nm);
+        row.title = x.name + " \u2014 " + (g.priv ? "in a private room" : g.slug === LOBBY ? "in the Lobby" : "in " + g.title) + (g.go.can ? " (click to go there)" : g.go.here ? "" : " (" + g.go.why + ")");
+        const go = () => { if (!x.me) eoGoTo(g); };
+        row.addEventListener("click", go);
+        row.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === row) { e.preventDefault(); go(); } });
+        if (!x.me && (participantHasMenu(eoPerson(x)) || eoAdminItems(x).length)) {
+          const more = document.createElement("button"); more.type = "button"; more.className = "ppmore"; more.title = "More options";
+          more.innerHTML = icon("more");
+          const open = (anchor) => { if (eoMenu(x, anchor)) { row.classList.add("menu"); watchMenuClose(row); } };
+          more.addEventListener("click", (e) => { e.stopPropagation(); open(more); });
+          row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); open(pointAnchor(e.clientX, e.clientY)); });
+          row.appendChild(more);
+        }
+        const ic = document.createElement("span"); ic.className = "ppmic";
+        if (x.deaf) { ic.innerHTML = icon("earOff"); ic.title = "Deafened"; }
+        else if (!x.srv) { ic.innerHTML = icon(x.pub ? "bcast" : "eye"); ic.title = x.pub ? "Publishing (camera, microphone or shares)" : "View only"; }
+        row.appendChild(ic);
+        els.push(row);
+      }
+    }
+    eoEls.rows.replaceChildren(...els);
+  }
 
   // ---- remote RTSP grid: expand one cell (0.8.8) ------------------------------
   // The owner announces <room>/~grid/<ts>/<b64 {path,n,layout,cells}>; the
@@ -13014,6 +13395,7 @@
       try { paintChannelChip(); } catch {}
       try { gatePaintChannels(); } catch {}
       try { window.__roomsChanged?.(); } catch {}
+      try { eoPaint(); } catch {}   // 0.21.85: Everyone online is live
     }, 50);
   }
   function roomsConsume(ann, gen, handle) {
@@ -20655,7 +21037,7 @@
     joinEls.joinPrevOff.querySelector(".ji").innerHTML = icon("camOff");
     joinEls.joinGate.hidden = false;
     gateMsg(isViewerMode() ? "Pick a room to watch." : lastJoin()?.room ? "Pick a room and press Join." : "");   // 0.11.0 / 0.12.0
-    if (gateInvitePaint()) gateMsg("Enter your name and press Join.");   // 0.21.75
+    if (gateInvitePaint() && !window.__personalEnded?.state?.()) gateMsg("Enter your name and press Join.");   // 0.21.75; 0.21.85: the ended screen says it all
     // 0.12.0: camera feeds the server kept publishing (or republished at launch)
     if (!isViewerMode() && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) {
       fetch("/api/rtsp/persist", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => {
@@ -20809,7 +21191,7 @@
         const msg = String(e?.message || e);
         if (inv && /invite link/i.test(msg)) {   // 0.21.75
           if (/hub|try again/i.test(msg)) return joinFail("The invite could not be checked right now \u2014 try again in a moment.");
-          inviteSet(null); gateInvitePaint();
+          inviteSet(null); gateInvitePaint(); try { window.__personalEnded?.clear?.(); } catch {}   // 0.21.85: no Join again on a dead link
           return joinFail(/expired/i.test(msg) ? "This invite link has expired \u2014 ask for a new one."
             : /revoked/i.test(msg) ? "This invite link was revoked \u2014 ask for a new one."
             : /is for room/i.test(msg) ? "This invite link is for another room."
@@ -20820,6 +21202,7 @@
           : /wrong room code/i.test(msg) ? "Wrong room code."
           : /too many attempts/i.test(msg) ? msg.replace(" -- ", " \u2014 ")
           : /bad room name/i.test(msg) ? "Room names: lowercase letters, digits and dashes (up to 32)."
+          : /in their room right now/i.test(msg) ? msg + " \u2014 try again once they are back."   // 0.21.85: a My room's owner gate (the guest's Join again)
           : "Room-code service unreachable \u2014 " + msg);
       }
     }
@@ -21013,7 +21396,7 @@
     // 0.12.0: a publisher box with a remembered room never waits on the profile modal
     if (!profile && !(ticket && ticket.room) && !(isPublisherMode() && lastJoin()?.room) && !inviteGet()) openProfile(true, gateShow);   // 0.21.75: an invited guest gives a name at the gate
     else gateShow();
-    document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); });   // 0.21.75
+    document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); try { window.__personalEnded?.clear?.(); } catch {} });   // 0.21.75; 0.21.85: + the ended screen goes
     if (!IS_WEB && gateIsLoopback()) {   // 0.21.75: an invite link handed to this KASTR (kastr:// started the app, or a second launch)
       invitePendingPoll();
       setInterval(invitePendingPoll, 4000);

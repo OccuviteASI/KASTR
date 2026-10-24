@@ -477,7 +477,7 @@ class Page(unittest.TestCase):
     def test_beats_leave_and_kick(self):
         p = self.p
         self.assertIn('fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },', p)
-        self.assertIn('body: JSON.stringify({ op: "beat", name: myOpName() }) });', p)
+        self.assertIn('body: JSON.stringify({ op: "beat", name: myOpName(), mode: ', p)   # 0.21.85: + the page's mode (Everyone online)
         self.assertIn('new Blob(["setInterval(() => postMessage(0), 4000);"], { type: "text/javascript" })', p)   # a worker tick
         self.assertIn('window.addEventListener("pagehide", () => personalLeaveSend(true));', p)
         self.assertIn("if (pbOwner && e?.detail?.room !== pbOwner.slug) personalLeaveSend(false);", p)

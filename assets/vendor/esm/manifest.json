@@ -37,7 +37,7 @@
   "@moq/publish@0.5.2.target-es2022.mjs": "126603cf834df003bc0084336bafed0030ad7f8988014a3302c63ef9a83368ff",
   "@moq/publish@0.5.2/element.target-es2022.mjs": "e3640f2f41e5987212e10787aec93cab773b3cae1dcc603f64f20ea438d9783b",
   "@moq/publish@0.5.2/es2022/element.mjs": "b2b160cbff6c481e9802edf74038d89e4e86688b4b9996da78829a729cd405d0",
-  "@moq/publish@0.5.2/es2022/encoder-CjcsUSCu.mjs": "9f285922e8247f7f6f91dff16b91a4760c636334a447b51c51f2f6f3c6acfd7a",
+  "@moq/publish@0.5.2/es2022/encoder-CjcsUSCu.mjs": "66697cebadbc6604b3e44f5380f7e2e6c6fe48afc951cbea2b70e9c9984bf729",
   "@moq/publish@0.5.2/es2022/microphone-g3R3T8__.mjs": "62c47439a070177ebfe24f253e6750fff1d9dd2a83997f58ad1863acd1c901c8",
   "@moq/publish@0.5.2/es2022/publish.mjs": "b82a11fb6935116ad8be506f1a40c8135b19dbc5b5b31be92f944b1902bb7907",
   "@moq/publish@0.5.2/es2022/video-B0t1PcDc.mjs": "89e0c352dafb6f1650ba797be3cef6957a93a50c3136a0e63ef14361223866df",
@@ -85,7 +85,8 @@
   "hevc-square-dar",
   "watch-priority-element",
   "watch-priority",
-  "publish-bitrate-floor"
+  "publish-bitrate-floor",
+  "library-mirror"
  ],
  "pins": {
   "https://esm.sh/@moq/json": "/@moq/json@^0.4.2",

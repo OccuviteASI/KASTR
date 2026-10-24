@@ -5112,6 +5112,10 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
                      relay_ref, alive_ref, window_file))
     srv.rtsp = bridge
     RTSP_BRIDGE[0] = bridge   # 0.21.16
+    if bridge is not None and relay_srv is not None:
+        # 0.21.85 (Kenton: a relay / hub machine's shares are listed in the stream library automatically): the bridge asks
+        # whether THIS machine runs the relay -- its shares (native and the page's own) are then listed by default
+        bridge.relay_here = lambda rs=relay_srv: bool(rs.running())
     if relay_srv is not None and MDNS_ADV[0] is None:   # 0.21.22: discovery-only mDNS advertisement of this relay
         try:
             import kastr_mdns

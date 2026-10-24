@@ -183,6 +183,22 @@ PATCHES = [
      "edits": [
         ('n!=null&&(i=Math.min(i,n))', '/* KASTR-PATCH: publish-bitrate-floor */n!=null&&(i=Math.max(Math.min(i,n),Math.min(i,this.kastrMinBitrate||0)))'),
      ]},
+    {"id": "library-mirror",
+     "file": "@moq/publish@0.5.2/es2022/encoder-CjcsUSCu.mjs",
+     "why": ("0.21.85 (Kenton: shares of a relay machine, and a person's share with its \"In the stream library\" switch on, are "
+             "LISTED in the stream library while they stay in their room): a Broadcast takes `mirrorOrigin` (an Origin, or a "
+             "Signal of one -- the library publisher connection's origin) and `mirrorName` (lib/<host>/<op>/<leaf>.hang) and "
+             "publishes a SECOND net broadcast there with the same catalog; each rendition's encoder writes every group into "
+             "both tracks (a tee, one encode, the payloads shared) and runs while EITHER path is subscribed, so "
+             "encode-only-while-watched holds for the pair. No mirror set = the library's own behaviour."),
+     "edits": [
+        ('baseline=new Aa;#e=new L({});#t=new Map;#i=new Ee;constructor(t){this.in={origin:j(t?.origin),enabled:j(t?.enabled??!0),announce:j(t?.announce??!0),name:j(t?.name??li.Path.empty()),display:j(t?.display),flip:j(t?.flip??!1),maxAge:j(t?.maxAge)},this.#i.run(this.#s.bind(this)),this.#i.run(this.#n.bind(this))}',
+         'baseline=new Aa;kastrMirrorTracks=new L({});kastrTees=new WeakMap;#e=new L({});#t=new Map;#i=new Ee;constructor(t){this.in={origin:j(t?.origin),enabled:j(t?.enabled??!0),announce:j(t?.announce??!0),name:j(t?.name??li.Path.empty()),display:j(t?.display),flip:j(t?.flip??!1),maxAge:j(t?.maxAge),/* KASTR-PATCH: library-mirror */mirrorOrigin:j(t?.mirrorOrigin),mirrorName:j(t?.mirrorName)},this.#i.run(this.#s.bind(this)),this.#i.run(this.#n.bind(this)),this.#i.run(e=>this.kastrMirror(e))}'),
+        ('o.run(f=>{f.set(d,f.get(h.used)?h:void 0)})',
+         'o.run(f=>{let M=f.get(this.kastrMirrorTracks)[u.name],U=f.get(h.used)||!!(M&&f.get(M.used));if(!U){f.set(d,void 0);return}if(!M){f.set(d,h);return}let T=this.kastrTees.get(h);if(!T||T.b!==M){T=new Wi.KastrTee(h,M);this.kastrTees.set(h,T)}f.set(d,T)})'),
+        ('close(){this.#i.close()}},su=on({Renderer:',
+         'kastrMirror(t){let s=t.get(this.in.mirrorOrigin);if(s&&typeof s.peek=="function")s=t.get(s);let n=t.get(this.in.mirrorName);if(!s||!n||!t.get(this.in.enabled))return;let a=s.createBroadcast(n);t.cleanup(()=>a.close()),t.run(o=>{if(!o.get(this.in.announce)){a.unannounce();return}for(let[c,l]of[[Wi.CATALOG_TRACK,!1],[Wi.CATALOG_TRACK_COMPRESSED,!0]]){let u=a.createTrack(c,{maxAge:li.Time.Milli(9007199254740991),priority:K.PRIORITY.catalog});o.cleanup(()=>u.close()),this.catalog.serve(u,o,{compression:l})}a.announce()}),t.run(o=>{let c=o.get(this.#e),l=o.get(this.in.maxAge),m={};for(let u of Object.values(c)){let h=a.createTrack(u.name,Je.trackInfo({maxAge:l,priority:K.PRIORITY[u.kind]}));o.cleanup(()=>h.close()),m[u.name]=h}o.set(this.kastrMirrorTracks,m,{})})}static KastrTee=class{constructor(a,b){this.a=a,this.b=b,this.name=a.name}get closed(){return this.a.closed}get used(){return this.a.used}appendGroup(){let g=[];for(let t of[this.a,this.b])try{t.closed.peek()===void 0&&g.push(t.appendGroup())}catch{}return new Wi.KastrTeeGroup(g)}writeFrame(f){let x=this.appendGroup();x.writeFrame(f),x.close()}close(e){for(let t of[this.a,this.b])try{t.close(e)}catch{}}};static KastrTeeGroup=class{constructor(g){this.g=g,this.sequence=g.length?g[0].sequence:0}get closed(){return this.g.length?this.g[0].closed:this.kastrNone??=new L(null)}writeFrame(f){for(let x of this.g)try{x.writeFrame(f)}catch{}}close(e){for(let x of this.g)try{x.close(e)}catch{}}};close(){this.#i.close()}/* /library-mirror */},su=on({Renderer:'),
+     ]},
 ]
 
 

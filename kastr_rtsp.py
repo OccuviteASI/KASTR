@@ -17,6 +17,8 @@ Endpoints (wired up by kastr_serve):
     GET  /rtsp/<id>                               -> endless fragmented MP4
     GET  /api/rtsp/library                        -> 0.21.84: the box's stream library switches (see Bridge.lib_public)
     POST /api/rtsp/library {"id", "on": bool|null} | {"master": bool}
+                           | {"id", "list": bool|null}                   0.21.85: a native share LISTED in the library (kept in its room)
+                           | {"shares": [...], "relay"}                  0.21.85: the page's own listed shares (rows for the heartbeat)
 
 Transcoding costs latency -- expect a few hundred ms on top of the sub-100ms
 WebCodecs path. Video is re-encoded to H.264 baseline because that is what
@@ -194,6 +196,47 @@ LIB_STILL_MAX = 12 * 1024
 LIB_AKA_KEEP_S = 90 * 86400  # an old path rides the heartbeat this long
 LIB_TOKEN_MIN_S = 600        # a cached library token is re-minted once it ends within this
 LIB_STILL_VF = "scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2"
+# ---- 0.21.85 (Kenton: "Publisher+relay boxes with shared streams should also show up under streams drop-down." He chose: every
+# share of a KASTR app on a relay / hub machine is in the library AUTOMATICALLY; a person's own app gives each share an "In the
+# stream library" switch, OFF by default): LISTED shares. A listed share stays in its room exactly as before (its room path, its
+# tile, remote control, pointers -- nothing moves) and is ALSO published at lib/<host>/<op>/<leaf>.hang. A native share (this
+# bridge's pairs: RTSP, a camera on this computer, a media file, an RTMP ingest, a screen / window) pumps its MPEG-TS to the
+# room's moq AND to a second moq at the library path (LibMirror, a library publisher token): one capture, one encode, the
+# upload only while someone watches it there. The page's own shares (a webcam, a browser screen, a media file, a grid) mirror
+# inside the page (the vendored publish library's library-mirror patch) and hand their rows to this bridge (POST
+# /api/rtsp/library {shares}). Every listed row rides this bridge's ONE heartbeat per relay (POST /api/library), beside the
+# moved box cameras of 0.21.84 (a 0.21.84 relay takes them as they are). A share that stops is stopped in the library.
+LIB_SHARE_TTL_S = 180         # a page's share row it has not repeated this long leaves the library (a closing page says so at once)
+LIB_SHARE_MAX = 16            # page shares one page may list
+LIB_SHARE_KINDS = ("webcam", "screen", "media", "grid", "camera", "other")
+LIB_MIRROR_QMAX = 8 << 20     # bytes a library copy may fall behind the room's before it is restarted (at the next PAT)
+LIB_MIRROR_RETRY_S = (2, 5, 10, 30, 60)
+TS_PACKET = 188
+_ANSI_RE = re.compile(chr(27) + r"\[[0-9;]*m")   # moq colours its log lines
+
+
+def lib_share_kind(url):
+    """0.21.85: the catalogue's kind of a LISTED native share."""
+    return "screen" if is_screen(url) else lib_kind(url)
+
+
+def _lib_mirror_of(pub):
+    """0.21.85: a listed share's (lib path, library URL) -- what its pump publishes -- or None."""
+    m = getattr(pub, "libMirror", None)
+    return m if isinstance(m, tuple) and len(m) == 2 else None
+
+
+def ts_pat_start(b, off):
+    """0.21.85: where in this chunk of an MPEG-TS stream (its first byte is byte `off` of the stream) a library copy may start --
+    the first 188-byte packet that begins a PAT (PID 0, payload start), so its moq reads the tables first. None = not in this
+    chunk (ffmpeg repeats the PAT every 100 ms)."""
+    i = (-int(off)) % TS_PACKET
+    n = len(b)
+    while i + 3 <= n:
+        if b[i] == 0x47 and (b[i + 1] & 0x40) and ((b[i + 1] & 0x1F) << 8 | b[i + 2]) == 0:
+            return i
+        i += TS_PACKET
+    return None
 
 
 def lib_path_of(broadcast):
@@ -240,6 +283,9 @@ def _lib_fields(feed):
         out["libAka"] = {str(k): int(t) for k, t in aka.items()}
     if getattr(feed, "xs_auto", None):
         out["xsAuto"] = str(feed.xs_auto)
+    v = getattr(feed, "lib_list", None)   # 0.21.85: a kept camera's "In the stream library" switch (never a screen's)
+    if v is not None and not is_screen(getattr(feed, "url", "")):
+        out["libList"] = bool(v)
     return out
 
 
@@ -1726,6 +1772,193 @@ def nudge_bucket(why):
     return "api"
 
 
+class LibMirror:
+    """0.21.85: a LISTED native share's library copy -- a second moq that publishes the pair's MPEG-TS at its lib/ path on a
+    library publisher token. Fed by the pair's pump (Publisher._pump) it never slows the room's moq: a queue between them
+    (LIB_MIRROR_QMAX), its own writer thread and its own restarts (a refused or dead moq comes back on LIB_MIRROR_RETRY_S; a copy
+    that falls behind starts again at the next PAT). It runs while the share is listed (`pub.libMirror` = (path, url), set by
+    the bridge's library round) and ends with the pair's generation (EOF: the relay withdraws the library path at once)."""
+
+    def __init__(self, pub, gen):
+        self.pub, self.gen = pub, gen
+        self.proc = None
+        self.key = None
+        self.sync = True
+        self.q = []
+        self.qn = 0
+        self.busy = 0
+        self.cv = threading.Condition()
+        self.closed = False
+        self.fails = 0
+        self.next_at = 0.0
+        self.started = None
+        self.error = None
+        self.hard = False
+
+    def want(self):
+        m = _lib_mirror_of(self.pub)
+        if not m or self.closed or self.pub.stopping or self.gen != self.pub._gen:
+            return None
+        return m
+
+    def feed(self, b, off):
+        """One chunk the room's moq already has (byte `off` onwards of the stream)."""
+        if self.closed:
+            return
+        m = self.want()
+        p = self.proc
+        if p is not None and (m != self.key or p.poll() is not None):
+            self._end("exited" if p.poll() is not None else "changed")
+            p = None
+        if m is None:
+            return
+        if p is None and (time.time() < self.next_at or not self._spawn(m)):
+            return
+        if self.sync:
+            i = ts_pat_start(b, off)
+            if i is None:
+                return
+            b = b[i:]
+            self.sync = False
+        behind = False
+        with self.cv:
+            if self.proc is None:
+                return
+            if self.qn + len(b) > LIB_MIRROR_QMAX:
+                behind = True
+            else:
+                self.q.append(b)
+                self.qn += len(b)
+                self.cv.notify()
+        if behind:
+            self._end("behind")
+
+    def _spawn(self, m):
+        path, url = m
+        bridge = self.pub.bridge
+        if not getattr(bridge, "moq", None):
+            return False
+        argv = [bridge.moq, "--log-level", "warn", "--backoff-timeout", "10s", "--quic-idle-timeout", "15s",
+                "--connect", url, "--broadcast", path, "import", "--max-age", "5s", PUBLISH_MUX]
+        try:
+            p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, bufsize=0,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as e:
+            self.error = "could not start: %s" % e
+            self._backoff(True)
+            return False
+        bridge._child_started(p, argv, [path], "moq-lib")
+        with self.cv:
+            self.proc, self.key, self.sync, self.started, self.hard, self.error = p, m, True, time.time(), False, None
+            self.q, self.qn = [], 0
+        threading.Thread(target=self._write, args=(p,), daemon=True, name="kastr-lib-copy").start()
+        threading.Thread(target=self._drain, args=(p,), daemon=True, name="kastr-lib-copy-err").start()
+        bridge.log("rtsp: %s listed in the stream library as %s (gen %d)" % (self.pub.broadcast, path, self.gen))
+        return True
+
+    def _write(self, p):
+        while True:
+            with self.cv:
+                while not self.q and self.proc is p and not self.closed:
+                    self.cv.wait(1.0)
+                if self.proc is not p or not self.q:
+                    return
+                b = self.q.pop(0)
+                self.qn -= len(b)
+                self.busy += 1
+            try:
+                mv = memoryview(b)
+                while mv:
+                    n = p.stdin.write(mv)
+                    if not n:
+                        raise OSError("short write")
+                    mv = mv[n:]
+            except (OSError, ValueError):
+                return   # its exit is seen by the next feed()
+            finally:
+                with self.cv:
+                    self.busy -= 1
+
+    def _drain(self, p):
+        try:
+            for line in p.stderr:
+                text = _redact(_ANSI_RE.sub("", line.decode("utf-8", "replace")).strip())
+                if text:
+                    self.error = text[-160:]
+                    if HARD_RE.search(text):
+                        self.hard = True
+        except Exception:
+            pass
+
+    def _backoff(self, failed):
+        self.fails = self.fails + 1 if failed else 0
+        wait = LIB_MIRROR_RETRY_S[min(max(self.fails - 1, 0), len(LIB_MIRROR_RETRY_S) - 1)]
+        self.next_at = (time.time() + wait) if failed else 0.0
+
+    def _end(self, why):
+        with self.cv:
+            p, self.proc, self.key = self.proc, None, None
+            self.q, self.qn = [], 0
+            self.sync = True
+            self.cv.notify_all()
+        if p is None:
+            return
+        lived = time.time() - (self.started or time.time())
+        failed = why in ("exited", "behind") and lived < 60
+        self._backoff(failed)
+        bridge = self.pub.bridge
+        if why == "exited" and self.hard:   # the relay refused its token: a fresh one is minted for the next try
+            try:
+                bridge._lib()["toks"].pop(_relay_key(self.pub.relay), None)
+            except Exception:
+                pass
+        if why not in ("pair ended", "changed") or failed:
+            bridge.log("rtsp: library copy of %s ended (%s after %.0f s%s)" % (self.pub.broadcast, why, lived,
+                                                                            (": " + self.error) if (self.error and failed) else ""))
+
+        def finish():
+            try:
+                p.stdin.close()   # EOF: moq ends its session, the relay withdraws the library path at once
+            except Exception:
+                pass
+            try:
+                p.wait(timeout=1.5)
+            except Exception:
+                pass
+            if p.poll() is None:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+            bridge._child_ended(p.pid)
+        threading.Thread(target=finish, daemon=True).start()
+
+    def close(self):
+        """The pair's generation ended: what is queued still goes out (up to 2 s), then EOF."""
+        with self.cv:
+            self.closed = True
+            p = self.proc
+            self.cv.notify_all()
+        if p is None:
+            return
+
+        def drain():
+            t0 = time.time()
+            while time.time() - t0 < 2.0:
+                with self.cv:
+                    if (not self.q and not self.busy) or self.proc is not p:
+                        break
+                time.sleep(0.02)
+            if self.proc is p:
+                self._end("pair ended")
+        threading.Thread(target=drain, daemon=True).start()
+
+    def info(self):
+        p = self.proc
+        return {"path": (self.key or (None, None))[0], "running": bool(p is not None and p.poll() is None), "since": self.started,
+                "fails": self.fails, "error": self.error}
+
+
 class Publisher:
     """0.9.1: one camera on the relay without the browser -- ffmpeg | moq.
 
@@ -1809,6 +2042,9 @@ class Publisher:
         self._timer = None
         self._lock = threading.Lock()
         self._gen = 0
+        self.pumped = False         # 0.21.85: this generation's MPEG-TS passes a pump (a listed share's library copy rides on it)
+        self.libMirror = None       # 0.21.85: (lib path, library URL) while this share is LISTED in the stream library
+        self.libPipe = None         # 0.21.85: the running generation's LibMirror
 
     def info(self):
         return {"broadcast": self.broadcast,
@@ -1835,6 +2071,7 @@ class Publisher:
                 "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
                 "flowingAt": self.flowingAt,                                         # 0.21.31
                 "library": self._library_info(),                                     # 0.21.84: the stream library (main pairs)
+                "listed": self._listed_info(),                                       # 0.21.85: listed there too (its room path kept)
                 "error": self.error, "since": self.since}
 
     def _library_info(self):
@@ -1844,6 +2081,16 @@ class Publisher:
             return self.bridge._lib_info(self.feed, self)
         except Exception:
             return None
+
+    def _listed_info(self):
+        """0.21.85: this share's library copy (never its URL -- the token is in it)."""
+        if self.role != "main":
+            return None
+        out = {"pumped": bool(self.pumped), "path": (self.libMirror or (None, None))[0], "running": False}
+        lp = self.libPipe
+        if lp is not None and lp.gen == self._gen:
+            out.update({k: v for k, v in lp.info().items() if k != "path"})
+        return out
 
     def low_info(self):
         return {"broadcast": self.broadcast, "running": self.running, "restarts": self.restarts,
@@ -1924,13 +2171,18 @@ class Publisher:
             ff_args, moq_args = self._args()
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             ff = None
+            pump = False   # 0.21.85: a listed share's output passes a pump (its library copy rides on it)
+            try:
+                pump = self.role == "main" and bool(self.bridge._lib_list_pump(self))
+            except Exception:
+                pump = False
             try:
                 snd = is_screen(self.feed.url) and self.audio and self.role != "low" and not self.paused   # 0.21.20; 0.21.73: a paused share is silent
                 ff = subprocess.Popen(ff_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                       stdin=subprocess.PIPE if snd else subprocess.DEVNULL,
                                       bufsize=0, creationflags=flags)
-                mq = subprocess.Popen(moq_args, stdin=ff.stdout, stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.PIPE, creationflags=flags)
+                mq = subprocess.Popen(moq_args, stdin=(subprocess.PIPE if pump else ff.stdout), stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.PIPE, creationflags=flags, **({"bufsize": 0} if pump else {}))
                 if snd:
                     import kastr_screen
                     kastr_screen.feed_loopback(ff, exclude_pid=self.bridge.own_pid(), log=self.bridge.log)
@@ -1944,8 +2196,10 @@ class Publisher:
                 self.running = False
                 self._schedule_restart_locked()                          # 0.13.3: lock held
                 return
-            ff.stdout.close()           # moq owns the read end now
+            if not pump:
+                ff.stdout.close()       # moq owns the read end now
             self.procs = (ff, mq)
+            self.pumped = pump
             # 0.9.8: into the job and the registry -- they die with KASTR now
             self.bridge._child_started(ff, ff_args, [self.feed.url], "ffmpeg")
             self.bridge._child_started(mq, moq_args, [self.broadcast], "moq")
@@ -1966,6 +2220,8 @@ class Publisher:
         self.bridge.log(start_line)                                      # 0.13.3
         for t in drains:
             t.start()
+        if pump:   # 0.21.85
+            threading.Thread(target=self._pump, args=(gen, ff, mq), daemon=True, name="kastr-pair-pump").start()
         threading.Thread(target=self._watch, args=(gen, ff, mq, drains), daemon=True).start()
         self._arm_renew()                                                # 0.12.0
         if self.role == "main":                                          # 0.18.0: the ready hook after 5 s alive
@@ -1977,6 +2233,43 @@ class Publisher:
             low.relay = self.relay
             low.standby = False
             low.start()
+
+    def _pump(self, gen, ff, mq):
+        """0.21.85: a LISTED share's pair -- ffmpeg's MPEG-TS to the room's moq (every byte written before the next is read: the
+        back-pressure of the direct pipe it replaces) and a copy to the library's (LibMirror, never in the room's way)."""
+        src, dst = ff.stdout, mq.stdin
+        lm = LibMirror(self, gen)
+        self.libPipe = lm
+        off = 0
+        try:
+            while True:
+                try:
+                    b = src.read(65536)
+                except (OSError, ValueError):
+                    break
+                if not b:
+                    break
+                try:
+                    mv = memoryview(b)
+                    while mv:
+                        n = dst.write(mv)
+                        if not n:
+                            raise OSError("short write")
+                        mv = mv[n:]
+                except (OSError, ValueError):
+                    break
+                try:
+                    lm.feed(b, off)
+                except Exception as e:
+                    self.bridge.log("rtsp: library copy of %s: %s" % (self.broadcast, e))
+                off += len(b)
+        finally:
+            for f in (dst, src):
+                try:
+                    f.close()
+                except Exception:
+                    pass
+            lm.close()
 
     def _hooks(self):
         return getattr(self.bridge, "hooks", None)
@@ -2497,6 +2790,7 @@ class Feed:
         self.xs_auto = None           # 0.21.84: the room it was listed back into when it joined the library from that room
         self.base_broadcast = None    # 0.21.84: its ROOM path (what the page asks for; a library camera publishes at lib/...)
         self.lib_status = None        # 0.21.84: the relay's last word on its heartbeat ("ok" | why)
+        self.lib_list = None          # 0.21.85: "In the stream library" -- LISTED there, kept in its room (None = this machine's default)
 
     def info(self):
         return {
@@ -2509,6 +2803,7 @@ class Feed:
             "sar": ("%d:%d" % tuple(self.sar)) if self.sar else None,   # 0.9.8
             "xs": list(self.xs), "xsState": dict(self.xs_state), "xsLocked": sorted(self.xs_codes),   # 0.21.75 (never the codes)
             "lib": self.lib,              # 0.21.84: its stream library switch (null = the box's default)
+            "libList": self.lib_list,     # 0.21.85: listed in the library (null = on when this machine runs the relay)
         }
 
 
@@ -3032,12 +3327,16 @@ class Bridge:
 
     def od_tick(self, pubs, now=None, post=None):
         """One demand round: tell each relay host which on-demand feeds exist, learn which are
-        wanted, wake/sleep accordingly. `post(url, body) -> dict|None` is injectable (tests)."""
+        wanted, wake/sleep accordingly. `post(url, body) -> dict|None` is injectable (tests).
+        0.21.85: a LISTED share is synced at its library path too (with the library token) -- a viewer in the library wakes it."""
         now = now or time.time()
         post = post or self._od_post
         groups = {}
         for p in pubs:   # 0.21.84: per relay AND room -- ondemand_sync takes the room from the token
-            groups.setdefault((_relay_key(p.relay), str(p.broadcast).split("/", 1)[0]), []).append(p)
+            groups.setdefault((_relay_key(p.relay), str(p.broadcast).split("/", 1)[0]), []).append((p, p.broadcast, p.relay))
+            lm = _lib_mirror_of(p)
+            if lm and not is_lib(p.broadcast):
+                groups.setdefault((_relay_key(p.relay), LIB_ROOT), []).append((p, lm[0], lm[1]))
         for (key, _room), ps in groups.items():
             base = None
             try:
@@ -3046,26 +3345,27 @@ class Bridge:
                 base = None
             wanted = None
             if base:
-                body = {"token": _relay_token(ps[0].relay) or "",
-                        "feeds": [{"broadcast": p.broadcast, "label": p.label or p.broadcast.rsplit("/", 1)[-1][:-5],
-                                   "live": bool(p.running), "low": (p.lowPub.broadcast if p.lowPub else None),
-                                   "idle": bool(p.sleepy)} for p in ps]}   # 0.21.73: asleep only while unwatched, whatever the host's ondemand switch
+                body = {"token": _relay_token(ps[0][2]) or "",
+                        "feeds": [{"broadcast": b, "label": p.label or b.rsplit("/", 1)[-1][:-5],
+                                   "live": bool(p.running), "low": (p.lowPub.broadcast if (p.lowPub and b == p.broadcast) else None),
+                                   "idle": bool(p.sleepy)} for p, b, _r in ps]}   # 0.21.73: asleep only while unwatched, whatever the host's ondemand switch
                 d = post(base.rstrip("/") + "/api/ondemand/sync", body)
                 if isinstance(d, dict) and isinstance(d.get("wanted"), dict):
                     wanted = d["wanted"]
-            for p in ps:
-                if wanted is not None and p.broadcast in wanted:
+            for p, b, _r in ps:
+                if wanted is not None and b in wanted:
                     try:
-                        age = max(0.0, float(wanted[p.broadcast]))
+                        age = max(0.0, float(wanted[b]))
                     except (TypeError, ValueError):
                         age = None
                     if age is not None:
                         p.wantedAt = max(p.wantedAt or 0, now - age)
-                recent = p.wantedAt is not None and now - p.wantedAt < self.OD_IDLE_S
-                if p.standby and recent:
-                    p.wake("viewer demand")
-                elif not p.standby and not recent and now - (p.wokeAt or 0) >= self.OD_IDLE_S:
-                    p.sleep("no viewer for %d s" % self.OD_IDLE_S)
+        for p in pubs:
+            recent = p.wantedAt is not None and now - p.wantedAt < self.OD_IDLE_S
+            if p.standby and recent:
+                p.wake("viewer demand")
+            elif not p.standby and not recent and now - (p.wokeAt or 0) >= self.OD_IDLE_S:
+                p.sleep("no viewer for %d s" % self.OD_IDLE_S)
 
     def _od_post(self, url, body):
         try:
@@ -3085,6 +3385,8 @@ class Bridge:
             pub = self._pubs.pop(int(feed_id), None)
         if pub:
             pub.stop()
+            if lib_stop and _lib_mirror_of(pub) and not getattr(self, "_shutting", False):
+                self.lib_poke()   # 0.21.85: a listed share is stopped in the library on the next round (now)
             if lib_stop and is_lib(pub.broadcast) and pub.role == "main" and not getattr(self, "_shutting", False):
                 self._lib()["stop"].setdefault(pub.broadcast, ("", _relay_key(pub.relay)))   # 0.21.84: out of the library
                 self.lib_poke()
@@ -3427,6 +3729,8 @@ class Bridge:
                     feed.lib_aka = {str(k): int(v) for k, v in rec["libAka"].items() if isinstance(v, (int, float))}
                 if rec.get("xsAuto") and not getattr(feed, "xs_auto", None):
                     feed.xs_auto = str(rec["xsAuto"])
+                if rec.get("libList") in (True, False) and getattr(feed, "lib_list", None) is None:   # 0.21.85: listed in the library
+                    feed.lib_list = rec["libList"]
                 rurl = url
                 if rec.get("room") and rec.get("room") != room:   # 0.21.2: a web client's feed in another room
                     feed.added_by = str(rec.get("addedBy") or ""); feed.room = str(rec.get("room"))
@@ -3904,16 +4208,22 @@ class Bridge:
         return [p for p in list(self._pubs.values()) if p.role == "main" and not p.stopping and is_lib(p.broadcast)]
 
     def _lib_air(self, now):
-        return frozenset((p.broadcast, lib_state(p, now)) for p in self._lib_pubs())
+        air = {(p.broadcast, lib_state(p, now)) for p in self._lib_pubs()}
+        for p in list(self._pubs.values()):   # 0.21.85: a listed share that starts / stops streaming, pauses or is switched
+            if self._lib_list_want(p):
+                air.add((lib_path_of(p.broadcast), "dark" if p.paused else lib_state(p, now), bool(_lib_mirror_of(p))))
+        for path, r in list((self._lib().get("shares") or {}).items()):
+            air.add((path, r.get("state"), r.get("label")))
+        return frozenset(air)
 
     def _lib_wanted(self):
         if not LIBRARY_ENABLED:
             return False
         st = self._lib()
-        if st["stop"] or st["stills"]:
+        if st["stop"] or st["stills"] or st.get("shares") or st.get("listed"):   # 0.21.85: + listed shares
             return True
         return any(p.role == "main" and not p.stopping and (is_lib(p.broadcast) or self._lib_want(
-            p.feed, getattr(p.feed, "base_broadcast", None) or p.broadcast)) for p in list(self._pubs.values()))
+            p.feed, getattr(p.feed, "base_broadcast", None) or p.broadcast) or self._lib_list_want(p)) for p in list(self._pubs.values()))
 
     def _lib_ensure(self):
         st = self._lib()
@@ -3965,14 +4275,18 @@ class Bridge:
         groups = {}
         for pub in self._lib_pubs():
             groups.setdefault(_relay_key(pub.relay), []).append(pub)
+        lrows = self._lib_list_round(now)   # 0.21.85: the LISTED shares' rows (and stops for the ones that went)
+        for rk in lrows:
+            groups.setdefault(rk, [])
         for _p, (_mv, rk) in list(st["stop"].items()):
             groups.setdefault(rk, [])
         out = {}
         for rk, pubs in groups.items():
             stops = {p: mv for p, (mv, k) in list(st["stop"].items()) if k == rk}
-            if not pubs and not stops:
+            lr = lrows.get(rk, [])
+            if not pubs and not stops and not lr:
                 continue
-            if pubs and now - st["beatAt"].get(rk, 0) < LIB_BEAT_MIN_S:
+            if (pubs or lr) and now - st["beatAt"].get(rk, 0) < LIB_BEAT_MIN_S:
                 st["due"] = True   # a change within 10 s of the last heartbeat goes out on the next check
                 continue
             parts, _why = _relay_base(rk)
@@ -3983,10 +4297,11 @@ class Bridge:
                 for pub in pubs:
                     pub.feed.lib_status = "no library token (%s)" % twhy
                 continue
-            body = {"rows": [self._lib_row(p, now) for p in pubs], "box": self._lib_box_name()}
+            body = {"rows": [self._lib_row(p, now) for p in pubs] + [dict(r) for r in lr], "box": self._lib_box_name()}
             if LIBRARY_SITE:
                 body["site"] = LIBRARY_SITE
             stills = {p.broadcast: st["stills"].pop(p.broadcast) for p in pubs if p.broadcast in st["stills"]}
+            stills.update({r["path"]: st["stills"].pop(r["path"]) for r in lr if r["path"] in st["stills"]})   # 0.21.85
             if stills:
                 body["stills"] = stills
             if stops:
@@ -3996,7 +4311,7 @@ class Bridge:
                     body["moved"] = mv
             d, code = post(parts[1] + "/api/library", body, tok)
             out[rk] = (code, d)
-            if pubs:
+            if pubs or lr:
                 st["beatAt"][rk] = now
             if isinstance(d, dict):
                 for p in d.get("stopped") or []:
@@ -4008,6 +4323,12 @@ class Bridge:
                     pub.feed.lib_status = "ok" if ok else str(ref.get(pub.broadcast) or "refused")[:80]
                     if ok:
                         st["beaten"][pub.broadcast] = now
+                ls = st.setdefault("listStatus", {})
+                for r in lr:   # 0.21.85: the relay's word on each listed share
+                    ok = r["path"] in acc
+                    ls[r["path"]] = "ok" if ok else str(ref.get(r["path"]) or "refused")[:80]
+                    if ok:
+                        st.setdefault("listed", {})[r["path"]] = rk
             elif isinstance(d, dict) and code == 403 and d.get("off"):
                 st["caps"][parts[1]] = (now, False)   # switched off at the hub: back at the room paths on the next round
                 self.log("rtsp: the relay says the stream library is off (%s) -- cameras go back to their rooms" % str(d.get("error") or "")[:120])
@@ -4063,8 +4384,11 @@ class Bridge:
         live, and on each state change (an asleep camera shows its last picture)."""
         st = self._lib()
         grab = getattr(self, "lib_grab", None) or self._lib_grab
-        for pub in self._lib_pubs():
-            b, state = pub.broadcast, lib_state(pub, now)
+        targets = [(p, p.broadcast) for p in self._lib_pubs()]
+        targets += [(p, _lib_mirror_of(p)[0]) for p in list(self._pubs.values())          # 0.21.85: listed shares (RTSP, media)
+                    if _lib_mirror_of(p) and self._lib_list_want(p)]
+        for pub, b in targets:
+            state = lib_state(pub, now)
             last = st["stillAt"].get(b)
             if (last and now - last[0] < LIB_STILL_EVERY_S and last[1] == state) or b in st["grabbing"]:
                 continue
@@ -4100,6 +4424,10 @@ class Bridge:
                "aka": sorted(getattr(feed, "lib_aka", None) or {}), "auto": getattr(feed, "xs_auto", None)}
         if on:
             out["state"] = lib_state(pub)
+        try:
+            out["listed"] = self._lib_list_info(feed, pub)   # 0.21.85
+        except Exception:
+            out["listed"] = None
         if not LIBRARY_ENABLED:
             out["why"] = "kastr.ini library = off on this box"
         elif not getattr(self, "lib_master", True):
@@ -4160,7 +4488,8 @@ class Bridge:
                           "label": pub.label if pub is not None else "", "library": self._lib_info(f, pub)})
         out = {"ok": True, "enabled": bool(LIBRARY_ENABLED), "master": bool(getattr(self, "lib_master", True)),
                "available": self._lib_cap_cached(relay) if relay else False, "noRoom": is_home_room(ses.get("room") or ""),
-               "root": LIB_ROOT, "feeds": feeds}
+               "root": LIB_ROOT, "feeds": feeds,
+               "relayHere": self._relay_here()}   # 0.21.85: this machine runs the relay -- its shares are listed by default
         if not LIBRARY_ENABLED:
             out["why"] = "kastr.ini library = off on this box"
         return out
@@ -4172,6 +4501,204 @@ class Bridge:
             s, tok, why = self._lib_token(base, now)
             return s, tok, why
         return self._xs_token(base, room, access, code, mint, now)
+
+    # ---- 0.21.85: LISTED shares (see LIB_SHARE_TTL_S) ----------------------------------------------------------------------
+    def _relay_here(self):
+        """Does this machine run the relay (kastr_serve sets `relay_here`)? Its shares are listed in the library by default."""
+        f = getattr(self, "relay_here", None)
+        try:
+            return bool(f()) if callable(f) else False
+        except Exception:
+            return False
+
+    def _lib_list_want(self, pub):
+        """Is this share LISTED in the stream library (published at its lib/ path too, kept in its room)? Its own switch (the
+        page's "In the stream library", feed.lib_list); without one, ON when this machine runs the relay (Kenton: a relay / hub
+        machine's shares are listed automatically) and OFF in a person's app. Never a camera that MOVED into the library (0.21.84
+        boxes), one switched out of it, a private capture, a box's home room or the Lobby, nor with the library off here."""
+        if not LIBRARY_ENABLED or not getattr(self, "lib_master", True) or pub is None:
+            return False
+        if getattr(pub, "role", "main") != "main" or getattr(pub, "stopping", False):
+            return False
+        feed = pub.feed
+        b = str(getattr(pub, "broadcast", "") or "")
+        if feed is None or is_private(feed) or is_lib(b) or getattr(feed, "lib", None) is False:
+            return False
+        room = b.split("/", 1)[0]
+        if not room or room == "main" or is_home_room(room) or not lib_path_of(b):
+            return False
+        v = getattr(feed, "lib_list", None)
+        if v is not None:
+            return bool(v)
+        return self._relay_here()
+
+    def _lib_list_pump(self, pub):
+        """Publisher.start: does this generation's output pass a pump (so the library copy can ride on it)? A listed share on
+        the MPEG-TS mux with moq here. Decided without a network call (the library round mints the token)."""
+        return PUBLISH_MUX == "ts" and bool(getattr(self, "moq", None)) and self._lib_list_want(pub)
+
+    def _lib_list_row(self, pub, now=None):
+        feed = pub.feed
+        path = lib_path_of(pub.broadcast)
+        url = getattr(feed, "url", "")
+        row = {"path": path, "label": pub.label or path.rsplit("/", 1)[-1][:-5], "kind": lib_share_kind(url),
+               "state": "dark" if getattr(pub, "paused", False) else lib_state(pub, now), "low": False,
+               "audio": bool(pub.audio and getattr(feed, "acodec", None) != "")}
+        if getattr(feed, "width", None) and getattr(feed, "height", None):
+            row["res"] = "%dx%d" % (int(feed.width), int(feed.height))
+        return row
+
+    def _lib_list_round(self, now):
+        """The library round's listed shares -> {relay key: [rows]}: this machine's native shares (each one's libMirror -- what
+        its pump publishes -- is set here: the relay serves the library and a library token is at hand) and the page's own
+        (POST /api/rtsp/library {shares}, dropped after LIB_SHARE_TTL_S unrepeated). A row that was listed and is no longer gets
+        a stop (the relay keeps "No longer in the library" for an hour)."""
+        st = self._lib()
+        out, cur = {}, {}
+        for pub in list(self._pubs.values()):
+            if not self._lib_list_want(pub):
+                if getattr(pub, "libMirror", None) is not None:
+                    pub.libMirror = None
+                continue
+            path, rk = lib_path_of(pub.broadcast), _relay_key(pub.relay)
+            if not self._lib_cap(pub.relay, now):
+                pub.libMirror = None
+                st.setdefault("listStatus", {})[path] = "the relay does not serve the stream library (yet)"
+                continue
+            url = self._lib_url(pub.relay, now)
+            if not url:
+                pub.libMirror = None
+                st.setdefault("listStatus", {})[path] = "no library token from the relay"
+                continue
+            pub.libMirror = (path, url)
+            if pub.running and not pub.pumped and not pub.standby and not self.suspended:
+                self.log("rtsp: %s restarts once to be listed in the stream library" % pub.broadcast)
+                pub.retoken(pub.relay)   # switched on while it ran without a pump (another page, a restore): one restart
+            out.setdefault(rk, []).append(self._lib_list_row(pub, now))
+            cur[path] = rk
+        shares = st.setdefault("shares", {})
+        for p in [p for p, r in list(shares.items()) if now - float(r.get("at") or 0) > LIB_SHARE_TTL_S]:
+            shares.pop(p, None)
+        for p, r in list(shares.items()):
+            if p in cur or not self._lib_cap(r["relay"], now):
+                continue
+            out.setdefault(r["relay"], []).append({k: r[k] for k in ("path", "label", "kind", "state", "audio", "res") if k in r})
+            cur[p] = r["relay"]
+        listed = st.setdefault("listed", {})
+        for p, rk in list(listed.items()):
+            if p not in cur:
+                listed.pop(p, None)
+                st["stop"].setdefault(p, ("", rk))
+                self.log("rtsp: %s is no longer listed in the stream library" % p)
+        return out
+
+    def _lib_list_info(self, feed, pub=None):
+        """/api/rtsp/list (publish.library.listed): a native share's "In the stream library" state for the page."""
+        pub = pub if pub is not None else self._pubs.get(int(feed.id))
+        want = bool(pub is not None and self._lib_list_want(pub))
+        path = lib_path_of(pub.broadcast) if (pub is not None and not is_lib(pub.broadcast)) else None
+        lp = getattr(pub, "libPipe", None) if pub is not None else None
+        on = bool(want and lp is not None and lp.gen == pub._gen and lp.proc is not None and lp.proc.poll() is None)
+        out = {"want": want, "on": on, "switch": getattr(feed, "lib_list", None), "default": self._relay_here(), "path": path,
+               "status": (self._lib().get("listStatus") or {}).get(path) if path else None}
+        if is_private(feed):
+            out["why"] = "a private capture is never listed"
+        elif pub is not None and is_lib(pub.broadcast):
+            out["why"] = "this camera moved into the library (its box switch)"
+        elif pub is not None and is_home_room(str(pub.broadcast).split("/", 1)[0]):
+            out["why"] = "a box in no room puts its cameras in the library itself (its box switch)"
+        elif not LIBRARY_ENABLED or not getattr(self, "lib_master", True):
+            out["why"] = "the stream library is off on this machine"
+        return out
+
+    def set_lib_list(self, feed_id, on):
+        """POST /api/rtsp/library {id, list: true | false | null}: list one native share in the stream library (kept in its room;
+        null = this machine's default). A share running without a pump restarts once (a few seconds); turning it off ends its
+        library copy at once. -> {ok, id, repiped, library}."""
+        try:
+            feed = self.get(feed_id)
+        except (TypeError, ValueError):
+            feed = None
+        if feed is None:
+            raise ValueError("no such feed")
+        if on is not None and not isinstance(on, bool):
+            raise ValueError("`list` is true, false or null")
+        if is_private(feed):
+            raise ValueError("a private capture is never listed in the stream library")
+        feed.lib_list = on
+        repiped = False
+        pub = self._pubs.get(int(feed.id))
+        if pub is not None:
+            if not self._lib_list_want(pub):
+                pub.libMirror = None
+            elif pub.running and not pub.pumped and not pub.standby and not self.suspended:
+                pub.retoken(pub.relay)   # its output now passes the pump the library copy rides on
+                repiped = True
+        self.persist_feeds()
+        self.lib_poke()
+        return {"ok": True, "id": feed.id, "repiped": repiped, "library": self._lib_info(feed)}
+
+    def lib_shares(self, payload):
+        """POST /api/rtsp/library {shares: [{path, label, kind, state, audio?, res?}], relay, stills?: {path: base64 JPEG}, token?}:
+        the page's own LISTED shares (a webcam, a browser screen, a media file, a grid -- mirrored inside the page), heartbeaten
+        with this machine's native shares. The page sends its whole list (every 30 s and on each change); a row it stops sending
+        leaves the library. -> {ok, token (the library publisher token for the page's mirror connection) | null, why?, status}."""
+        st = self._lib()
+        now = time.time()
+        rk = _relay_key(str(payload.get("relay") or ""))
+        parts, _why = _relay_base(rk)
+        if not parts:
+            raise ValueError("relay must be the page's relay url")
+        shares = st.setdefault("shares", {})
+        keep, refused = {}, {}
+        rows = payload.get("shares") if isinstance(payload.get("shares"), list) else []
+        for r in rows[:LIB_SHARE_MAX]:
+            if not isinstance(r, dict):
+                continue
+            p = str(r.get("path") or "")[:300]
+            segs = p.split("/")
+            if (not is_lib(p) or len(segs) < 3 or not p.endswith(".hang") or p.endswith("-low.hang")
+                    or (self.host_slug and segs[1] != self.host_slug)):
+                refused[p[:120] or "?"] = "not a library path of this computer"
+                continue
+            kind = str(r.get("kind") or "other")
+            row = {"path": p, "label": str(r.get("label") or "")[:80].strip() or segs[-1][:-5],
+                   "kind": kind if kind in LIB_SHARE_KINDS else "other", "state": "dark" if r.get("state") == "dark" else "live",
+                   "audio": bool(r.get("audio")), "relay": rk, "at": now}
+            res = str(r.get("res") or "")
+            if re.match(r"^[0-9]{2,5}x[0-9]{2,5}$", res):
+                row["res"] = res
+            keep[p] = row
+        before = {p: (x.get("state"), x.get("label"), x.get("kind")) for p, x in shares.items() if x.get("relay") == rk}
+        for p in [p for p, x in list(shares.items()) if x.get("relay") == rk and p not in keep]:
+            shares.pop(p, None)
+        shares.update(keep)
+        changed = before != {p: (x["state"], x["label"], x["kind"]) for p, x in keep.items()}
+        got = 0
+        stills = payload.get("stills") if isinstance(payload.get("stills"), dict) else {}
+        for p, b64 in list(stills.items())[:LIB_SHARE_MAX]:
+            if p not in keep:
+                continue
+            try:
+                data = base64.b64decode(str(b64 or "").encode("ascii", "ignore"))
+            except Exception:
+                continue
+            if 0 < len(data) <= LIB_STILL_MAX and data[:2] == bytes((0xFF, 0xD8)):
+                st["stills"][p] = base64.b64encode(data).decode("ascii")
+                got += 1
+        if changed or got:
+            self.lib_poke()
+        elif keep and self._lib_wanted():
+            self._lib_ensure()
+        out = {"ok": True, "token": None, "available": self._lib_cap_cached(rk), "refused": refused,
+               "status": {p: (st.get("listStatus") or {}).get(p) or "waiting" for p in keep}}
+        if keep or payload.get("token"):
+            s, tok, why = self._lib_token(rk, now)
+            if s == "token":
+                out["token"] = tok
+            else:
+                out["why"] = why or s
+        return out
 
     def pause(self, feed_id, on):
         """0.21.73: pause / resume a screen share -- the same broadcast restarts on the "paused" card (and back), so viewers
@@ -4856,8 +5383,12 @@ def handle_api(handler, bridge, path):
             elif path == "/api/rtsp/library":                             # 0.21.84: {id, on: true|false|null} | {master: bool} | {}
                 if "master" in payload:
                     reply(bridge.set_lib_master(payload.get("master")))
+                elif "id" in payload and "list" in payload:              # 0.21.85: a native share LISTED (kept in its room)
+                    reply(bridge.set_lib_list(payload.get("id"), payload.get("list")))
                 elif "id" in payload:
                     reply(bridge.set_lib(payload.get("id"), payload.get("on")))
+                elif "shares" in payload:                                 # 0.21.85: the page's own listed shares
+                    reply(bridge.lib_shares(payload))
                 else:
                     reply(bridge.lib_public())
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log

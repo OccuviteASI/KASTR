@@ -4066,6 +4066,7 @@
     if (home) { here.replaceChildren(); here.textContent = "This box is in no room people see \u2014 its cameras show only in the rooms you tick."; }   // 0.21.75
     list.appendChild(here);
     if (srv && libOn()) list.prepend(libPickerRow(srv, label));   // 0.21.84: a box camera -- into the stream library (the rooms below are unchanged)
+    else if (!srv && libOn() && window.__libShares?.get?.(path)) list.prepend(libSharePickerRow(path, label));   // 0.21.85: my own share, LISTED (it stays here)
     if (!rooms.length) { const p = document.createElement("p"); p.className = "xshint"; p.textContent = "No other rooms on this relay yet."; list.appendChild(p); }
     const rows = [];
     for (const r of rooms) {
@@ -13806,6 +13807,10 @@
       if (pt !== undefined) items.push({ value: "pt", label: (pt ? "Pass through: on" : "Pass through: off") + (md ? " (" + md + ")" : "") });
     }
     if (CHANNEL !== LOBBY && !publishOnly) items.push({ value: "xshare", label: "Show in other rooms\u2026" });   // 0.21.41; 0.21.62: always, my camera too
+    if (CHANNEL !== LOBBY && !publishOnly && ref.peer === window.__publisher?.peer) {   // 0.21.85: LISTED in the stream library (it stays in this room)
+      const ls = window.__libShares?.get?.(CHANNEL + "/" + hangName(ref.name));
+      if (ls && !(ls.why && !ls.want)) items.push({ value: "libsh", label: (ls.want ? "\u2611 " : "\u2610 ") + "In the stream library" });   // (not where it cannot be listed)
+    }
     if (boardCan()) {   // 0.21.63: the room board -- my share stays listed here (it shows whenever it is on the air)
       const rp = boardPinned(CHANNEL + "/" + hangName(ref.name));
       items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
@@ -13848,6 +13853,8 @@
         window.__toast?.(window.__rtspPersist?.get?.(ref.id) ? "This feed comes back after a KASTR restart" : "This feed will not be restored after a restart", 3500, { level: "info" });
       } else if (v === "xshare") {   // 0.21.41
         openXsPicker(CHANNEL + "/" + hangName(ref.name), anchor);
+      } else if (v === "libsh") {   // 0.21.85
+        libShareToggle(CHANNEL + "/" + hangName(ref.name), xsLabel(CHANNEL + "/" + hangName(ref.name)));
       } else if (v === "rpin" || v === "rpinoff") {   // 0.21.63
         boardPin(CHANNEL + "/" + hangName(ref.name), v === "rpin");
       } else if (v === "mypin") {   // 0.21.75
@@ -21105,6 +21112,12 @@
         return await r.json().catch(() => ({ error: "HTTP " + r.status }));
       } catch (e) { return { error: String(e?.message || e) }; }
     },
+    async boxList(id, on) {   // 0.21.85: POST /api/rtsp/library {id, list} -- a camera LISTED in the library (it stays in its room) -> { ok, id, repiped, library: L } | { error }
+      try {
+        const r = await fetch("/api/rtsp/library", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, list: !!on }) });
+        return await r.json().catch(() => ({ error: "HTTP " + r.status }));
+      } catch (e) { return { error: String(e?.message || e) }; }
+    },
   };
 
   // ---- capability: the relay's /api/auth AND the hub (the flag rides the hub's long-poll to this relay) ------------------------
@@ -21607,9 +21620,9 @@
     }
   } catch {}
   const libUiSave = () => { try { localStorage.setItem(LIB_UI_KEY, JSON.stringify({ live: libUi.live, kinds: [...libUi.kinds], offline: libUi.offline, sort: libUi.sort, site: libUi.site })); } catch {} };
-  const LIB_CHIPS = [["live", "Live now", "Live streams and asleep cameras (an asleep one starts when you open it)"], ["camera", "Cameras", "Box cameras"], ["grid", "Grids", "Camera grids"],
-    ["screen", "Screens", "Shared screens"], ["phone", "Phones", "Phones and webcams"], ["vehicle", "Vehicles", "Vehicle cameras"], ["media", "Media", "Shared files and media"]];
-  const libKindOf = (k) => (k === "rtsp" ? "camera" : k === "webcam" ? "phone" : k);
+  const LIB_CHIPS = [["live", "Live now", "Live streams and asleep cameras (an asleep one starts when you open it)"], ["camera", "Cameras", "Cameras and webcams"], ["grid", "Grids", "Camera grids"],
+    ["screen", "Screens", "Shared screens"], ["phone", "Phones", "Phones"], ["vehicle", "Vehicles", "Vehicle cameras"], ["media", "Media", "Shared files and media"]];
+  const libKindOf = (k) => (k === "rtsp" || k === "webcam" ? "camera" : k);   // 0.21.85: a webcam is a camera (was Phones)
   for (const [k, label, tip] of LIB_CHIPS) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "libchip"; b.dataset.k = k; b.title = tip;
@@ -21881,8 +21894,8 @@
       el.querySelector(".by").textContent = (it.by && it.by !== it.box ? "\u00b7 " + it.by + " " : "") + "\u00b7 " + it.n + (it.n === 1 ? " stream" : " streams");
       return;
     }
-    const e = it.e, st = libStateOf(e), here = libHere(e.path), sel = !!libUi.sel?.has(e.path);
-    const sig = [e.path, e.label, e.box, e.site, e.by, st, e.since, e.seen, here, e.usedIn, sel, !!libUi.sel, e.kind, e.edited].join("|");
+    const e = it.e, st = libStateOf(e), here = libHere(e.path), sel = !!libUi.sel?.has(e.path), twin = !here && libTwinHere(e.path);
+    const sig = [e.path, e.label, e.box, e.site, e.by, st, e.since, e.seen, here, e.usedIn, sel, !!libUi.sel, e.kind, e.edited, twin].join("|");
     if (el.__sig === sig) return;
     el.__sig = sig; el.dataset.path = e.path;
     const row = el.firstChild;
@@ -21901,6 +21914,7 @@
     if (here === "pin" || here === "grid") tag("In this room", "here", here === "grid" ? "On one of this room's grids" : "Everyone in this room sees it");
     else if (here === "me") tag("Just you, here", "here", "On your screen in this room only");
     else if (here === "mygrid") tag("In your grid", "", "On one of your own grids");
+    if (twin) tag("Shared in this room", "here", "This share is in this room already, as its own tile");   // 0.21.85
     if (e.usedIn > 0) tag("Used in " + e.usedIn + (e.usedIn === 1 ? " room" : " rooms"), "", "");
     if (st === "asleep") tag("starts when opened, 1\u20132 s", "", "Encodes only while someone watches");
     if (st === "dark") tag(e.since ? "no picture since " + libHm(e.since) : "no picture", "warn", "Its box is online");
@@ -22001,10 +22015,11 @@
   function libActClose() { if (libActEl) { libActEl.hidden = true; libActEl.replaceChildren(); } libActCtx = null; }
   function libActItems(e) {
     const why = libAddWhy(), here = libHere(e.path), st = libStateOf(e), joined = joinState === "joined" && CHANNEL !== LOBBY;
+    const twinWhy = !here && libTwinHere(e.path) ? "It is shared in this room already (its own tile)" : "";   // 0.21.85: a listed share of this room
     const out = [];
     if (here === "pin") out.push({ v: "unpin", ic: "eye", t: "Remove from this room", d: "Its tile goes for everyone in " + roomTitle(CHANNEL), why });
-    else out.push({ v: "add", ic: "pin", t: "Add to this room", d: "A tile for everyone here; it stays until someone removes it", why });
-    out.push({ v: "spot", ic: "spotlight", t: "Spotlight for everyone", d: "Adds it to the room, then puts it on everyone's stage", why });
+    else out.push({ v: "add", ic: "pin", t: "Add to this room", d: "A tile for everyone here; it stays until someone removes it", why: why || twinWhy });
+    out.push({ v: "spot", ic: "spotlight", t: "Spotlight for everyone", d: "Adds it to the room, then puts it on everyone's stage", why: why || twinWhy });
     out.push({ v: "grid", ic: "view", t: "Add to a grid \u203a", d: "One of your grids, or one of this room's", why: joined ? "" : "Join a room first" });
     out.push({ v: "my", ic: "pin", t: "Add to My room", d: "Your own room, on any device", why: libMyWhy() });
     if (libMeHas(e.path)) out.push({ v: "meoff", ic: "eye", t: "Stop watching here (just me)", d: "Off your screen; nothing changes for the room" });
@@ -22221,31 +22236,85 @@
     const row = document.createElement("label"); row.className = "xsrow libsw";
     const sw = document.createElement("span"); sw.className = "switch sm";
     const cb = document.createElement("input"); cb.type = "checkbox";
-    // L = {on (publishing at lib/ now), want, switch (true | false | null = the box's default), available, status, why}
+    // L = {on (publishing at lib/ now), want, switch (true | false | null = the box's default), available, status, why, listed (0.21.85)}
     const L0 = window.__xsServer?.get?.(srv.id)?.library ?? srv.library ?? null;
     const Lobj = (L) => (L && typeof L === "object" ? L : { on: !!L, want: !!L });
-    cb.checked = !!(Lobj(L0).want ?? Lobj(L0).on);
+    // 0.21.85: a camera of a box in a REAL room that has not moved into the library is LISTED by this switch instead -- it
+    // keeps its room path (and tile) and is published at lib/ too; a box in no room still moves its cameras (0.21.84)
+    const LM = !!(Lobj(L0).listed && !Lobj(L0).on && !isHomeRoom(CHANNEL));
+    cb.checked = LM ? !!Lobj(L0).listed.want : !!(Lobj(L0).want ?? Lobj(L0).on);
     cb.setAttribute("aria-label", "In the stream library: everyone on the fleet can add " + label);
     sw.append(cb, document.createElement("i"));
     const tx = document.createElement("span"); tx.className = "lbt";
     const t1 = document.createElement("span"); t1.textContent = "In the stream library: everyone on the fleet can add it";
-    const t2 = document.createElement("small"); t2.textContent = "Uploaded once; any room on any site can add it. The rooms below still list it as now.";
+    const t2 = document.createElement("small");
+    t2.textContent = LM ? "It stays in this room as it is; a second copy is uploaded only while someone watches it from the library." + (Lobj(L0).listed.default ? " This box runs the relay, so its cameras are listed automatically." : "")
+                        : "Uploaded once; any room on any site can add it. The rooms below still list it as now.";
     const err = document.createElement("span"); err.className = "lerr";
     tx.append(t1, t2, err);
     row.append(sw, tx);
-    { const L = Lobj(L0); if (L.available === false) { cb.disabled = true; err.textContent = L.why || "This box's relay does not offer the library yet"; } else if (L.status && L.status !== "ok") err.textContent = String(L.why || L.status); }
+    { const L = Lobj(L0); if (L.available === false) { cb.disabled = true; err.textContent = L.why || "This box's relay does not offer the library yet"; } else if (LM && L.listed.why) err.textContent = String(L.listed.why); else if (L.status && L.status !== "ok") err.textContent = String(L.why || L.status); }
     cb.addEventListener("change", async () => {
       cb.disabled = true; err.textContent = "";
-      const d = await libApi.boxSet(srv.id, cb.checked);
+      const d = LM ? await libApi.boxList(srv.id, cb.checked) : await libApi.boxSet(srv.id, cb.checked);
       cb.disabled = false;
       if (d?.error || d?.ok === false) { err.textContent = String(d.error || "refused"); cb.checked = !cb.checked; return; }
-      try { const cur = window.__xsServer?.get?.(srv.id); if (cur) { cur.library = d.library ?? cb.checked; cur.lib = cb.checked; } } catch {}
+      try { const cur = window.__xsServer?.get?.(srv.id); if (cur) { cur.library = d.library ?? (LM ? cur.library : cb.checked); if (!LM) cur.lib = cb.checked; } } catch {}
       { const L = Lobj(d.library); if (L.status && L.status !== "ok") err.textContent = String(L.why || L.status); }
-      window.__toast?.(cb.checked ? label + " is in the stream library \u2014 any room on the fleet can add it" : label + " is out of the stream library (its rooms keep it)", 4000, { level: "event" });
+      window.__toast?.(cb.checked ? label + " is in the stream library \u2014 any room on the fleet can add it" + (LM ? " (it stays in " + roomTitle(CHANNEL) + ")" : "") : label + " is out of the stream library (its rooms keep it)", 4000, { level: "event" });
     });
     return row;
   }
+  // ---- 0.21.85 (Kenton: "Publisher+relay boxes with shared streams should also show up under streams drop-down."): MY OWN shares
+  // in the stream library -- LISTED, never moved: each stays in its room as it is (tile, remote control, pointers) and is published
+  // at lib/<host>/<op>/<leaf>.hang too. On a relay / hub machine every share is listed automatically; in a person's app each one has
+  // this switch, OFF by default (the publish half keeps it: window.__libShares). Remote control is never offered from the library:
+  // a library tile is not a tile of the share's room (rcMenuItem), and the relay refuses an ask for a share outside the asker's room.
+  function libSharePickerRow(path, label) {
+    const ls = window.__libShares?.get?.(path) || {};
+    const row = document.createElement("label"); row.className = "xsrow libsw";
+    const sw = document.createElement("span"); sw.className = "switch sm";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!ls.want;
+    cb.setAttribute("aria-label", "In the stream library: everyone on the fleet can add " + label);
+    sw.append(cb, document.createElement("i"));
+    const tx = document.createElement("span"); tx.className = "lbt";
+    const t1 = document.createElement("span"); t1.textContent = "In the stream library: everyone on the fleet can add it";
+    const t2 = document.createElement("small");
+    t2.textContent = (ls.here ? "This computer runs the relay, so its shares are listed automatically. " : "Off unless you turn it on. ")
+      + "It stays in this room as it is; a second copy is uploaded only while someone watches it from the library.";
+    const err = document.createElement("span"); err.className = "lerr";
+    if (ls.why) { err.textContent = String(ls.why); if (!ls.want) cb.disabled = true; }
+    else if (ls.status && ls.status !== "ok" && ls.status !== "waiting") err.textContent = String(ls.status);
+    tx.append(t1, t2, err);
+    row.append(sw, tx);
+    cb.addEventListener("change", async () => {
+      cb.disabled = true; err.textContent = "";
+      await libShareToggle(path, label, cb.checked);
+      const now = window.__libShares?.get?.(path);
+      cb.checked = !!now?.want; cb.disabled = false;
+    });
+    return row;
+  }
+  async function libShareToggle(path, label, on) {
+    const ls = window.__libShares?.get?.(path);
+    if (!ls) return;
+    if (on === undefined) on = !ls.want;
+    if (on && ls.why) { window.__toast?.("Not in the stream library: " + ls.why, 5000, { level: "warn" }); return; }
+    const d = await window.__libShares.set(path, on);
+    if (d?.error) { window.__toast?.("Stream library: " + d.error, 5000, { level: "warn" }); return; }
+    window.__toast?.(on ? label + " is in the stream library \u2014 any room on the fleet can add it (it stays in " + roomTitle(CHANNEL) + ")" + (d?.repiped ? "; its picture restarted once" : "")
+                        : label + " is out of the stream library (it stays in " + roomTitle(CHANNEL) + ")", 4500, { level: "event" });
+    try { libChangedSoon(); } catch {}
+  }
+  // a LISTED share of the room I am in: lib/<host>/<op>/<leaf>.hang beside <room>/<host>/<op>/<leaf>.hang (the same stream)
+  const libTwinOf = (path) => CHANNEL + String(path).slice(LIB_ROOT.length);
+  function libTwinHere(path) {
+    if (joinState !== "joined" || CHANNEL === LOBBY || !isLibPath(path)) return false;
+    const t = libTwinOf(path);
+    return tiles.has(t) || mineNames.has(t);
+  }
   window.__lib = {   // rig (never a token)
+    on: libOn,   // 0.21.85: the publish half's listed shares ask
     state: () => ({ caps: { ...libCaps }, on: libOn(), n: libCat.size, tiles: [...libTiles].map(([p, x]) => [p, x.why]), open: libUi.open, items: libUi.items.length, rendered: libUi.els.size, renderMs: libUi.renderMs,
       token: !!libConn.token, ann: !!libConn.conn, announced: libConn.announced.size, meta: { ...libMeta, links: undefined }, ui: { q: libUi.q, live: libUi.live, kinds: [...libUi.kinds], site: libUi.site, offline: libUi.offline, sort: libUi.sort, sel: libUi.sel ? [...libUi.sel] : null } }),
     take: (d, full) => libTake(d, full !== false), poll: libPoll, sync: libSync, open: libOpen, url: (p) => tileUrl(String(p)), stateOf: (p) => libStateOf(libCat.get(String(p))),
@@ -30506,6 +30575,172 @@
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,
       upload: up ? { loaded: up.loaded, total: up.total, done: up.done, failed: up.failed } : null, ...bufInfo, ...audInfo };
   });
+  // ---- 0.21.85 (Kenton: "Publisher+relay boxes with shared streams should also show up under streams drop-down." He chose:
+  // every share of a KASTR app on a relay / hub machine is in the stream library automatically; a person's own app gives each
+  // share an "In the stream library" switch, OFF by default): LISTED SHARES. A listed share stays in its room as it is (its room
+  // path, tile, remote control, pointers) and is ALSO published at lib/<host>/<op>/<leaf>.hang. This page's own shares (webcam,
+  // browser screen, media file, grid) are mirrored here: their Broadcast publishes a second copy on ONE library publisher
+  // connection (the vendored library's library-mirror patch: one encode, which runs while either copy is watched -- encode only
+  // while watched holds); their rows go to this computer's KASTR (POST /api/rtsp/library {shares}), which heartbeats them with its
+  // native shares -- RTSP, cameras on this computer, media, RTMP, native screens -- that it mirrors itself (POST {id, list}).
+  const LIBSH = { here: null, enabled: true, hereAt: 0, token: "", conn: null, connKey: "", sw: new Map(), stillAt: new Map(), sig: "", postAt: 0, busy: false, status: {}, why: "", posted: false, trace: [] };
+  const libShTrace = (ev) => { LIBSH.trace.push(Math.round(performance.now()) + " " + ev); if (LIBSH.trace.length > 40) LIBSH.trace.shift(); };   // rig: the last syncs
+  const LIBSH_POST_MS = 30000, LIBSH_STILL_MS = 300000, LIBSH_STILL_MAX = 12 * 1024;
+  const libShRoom = () => { try { return String(window.__joinedChannel?.() || ""); } catch { return ""; } };
+  const libShOk = () => !IS_WEB2 && LIBSH.here !== null && LIBSH.enabled && !!window.__lib?.on?.() && !!libShRoom() && libShRoom() !== "main";
+  const libShPathOf = (key) => "lib/" + key;
+  function libShItems() {   // my page-published shares: { key (HOST/op/leaf.hang), bc (its Broadcast), kind, label, e, slot | grid }
+    const out = [];
+    for (const sl of slots.values()) {
+      if (sl.rtsp || !sl.publish?.broadcast || !sl.entry?.name) continue;
+      const k = sl.entry.kind;
+      out.push({ key: ensureHang(sl.entry.name), slot: sl, bc: sl.publish.broadcast, e: sl.entry, label: sl.entry.label || "",
+                 kind: k === "camera" ? "webcam" : k === SCREEN ? "screen" : k === FILE ? "media" : "other" });
+    }
+    for (const g of gridsSorted()) if (g.entry?.name && g.moq?.broadcast) out.push({ key: ensureHang(g.entry.name), grid: g, bc: g.moq.broadcast, e: g.entry, label: g.name || "Grid", kind: "grid" });
+    return out;
+  }
+  const libShWant = (key) => (LIBSH.sw.has(key) ? !!LIBSH.sw.get(key) : !!LIBSH.here);
+  function libShConn() {   // the ONE library publisher connection (re-dialled when its token or the relay changes)
+    if (!LIBSH.token) return null;
+    const u = urlInput.value.trim();
+    const key = u + "|" + LIBSH.token;
+    if (LIBSH.conn && LIBSH.connKey === key) return LIBSH.conn;
+    const old = LIBSH.conn;
+    try {
+      const url = u + (u.includes("?") ? "&" : "?") + "libpub=1&jwt=" + encodeURIComponent(LIBSH.token);
+      LIBSH.conn = new Net.Connection({ url: new Signals.Signal(new URL(url)), enabled: true });
+      LIBSH.connKey = key;
+    } catch (e) { LIBSH.conn = null; LIBSH.connKey = ""; LIBSH.why = "library connection: " + (e?.message || e); }
+    if (old) setTimeout(() => { try { old.close(); } catch {} }, 4000);   // the mirrors move to the new one first
+    return LIBSH.conn;
+  }
+  function libShMirror(it, on, conn) {   // one share's library copy on / off (idempotent)
+    const bc = it.bc;
+    if (!bc?.in?.mirrorName || !bc.in.mirrorOrigin) return false;   // a library without the library-mirror patch
+    const want = on && conn ? libShPathOf(it.key) : "";
+    try {
+      if (want && bc.in.mirrorOrigin.peek() !== conn.origin) bc.in.mirrorOrigin.set(conn.origin);
+      if (String(bc.in.mirrorName.peek() || "") !== want) bc.in.mirrorName.set(want ? Net.Path.from(want) : undefined);
+      if (!want && bc.in.mirrorOrigin.peek()) bc.in.mirrorOrigin.set(undefined);
+    } catch { return false; }
+    return !!want;
+  }
+  function libShStill(it) {   // a 160x90 JPEG (base64) of the share's own picture: its preview canvas, the grid's canvas; "" when none
+    try {
+      const src = it.grid ? it.grid.canvas : it.e.presCanvas || (it.slot.canvas?.width && it.slot.canvas.isConnected ? it.slot.canvas : it.slot.pane?.querySelector("video"));   // a presentation: its slide
+      const w0 = src?.videoWidth || src?.width || 0, h0 = src?.videoHeight || src?.height || 0;
+      if (!w0 || !h0) return "";
+      const c = document.createElement("canvas"); c.width = 160; c.height = 90;
+      const cx = c.getContext("2d"); cx.fillStyle = "#000"; cx.fillRect(0, 0, 160, 90);
+      const sc = Math.min(160 / w0, 90 / h0);
+      cx.drawImage(src, (160 - w0 * sc) / 2, (90 - h0 * sc) / 2, w0 * sc, h0 * sc);
+      for (const q of [0.7, 0.5, 0.3]) {
+        const d = c.toDataURL("image/jpeg", q), b64 = d.slice(d.indexOf(",") + 1);
+        if (b64.length * 3 / 4 <= LIBSH_STILL_MAX) return b64;
+      }
+    } catch {}
+    return "";
+  }
+  async function libShHere() {   // this computer's KASTR: does it run the relay (its shares are then listed by default)?
+    try {
+      const r = await fetch("/api/rtsp/library", { cache: "no-store", signal: AbortSignal.timeout(15000) });
+      const d = r.ok ? await r.json() : null;
+      if (d && typeof d.relayHere === "boolean") { LIBSH.here = d.relayHere; LIBSH.enabled = d.enabled !== false && d.master !== false; }
+      else if (r.status === 404) LIBSH.here = null;   // an older KASTR here: no listed shares
+    } catch {}   // a slow answer (a busy page) keeps what was known -- it never takes my shares out of the library
+    LIBSH.hereAt = Date.now();
+  }
+  async function libShSync(force) {
+    if (LIBSH.busy || IS_WEB2) return;
+    LIBSH.busy = true;
+    try {
+      if (LIBSH.here === null ? Date.now() - LIBSH.hereAt > 15000 : Date.now() - LIBSH.hereAt > 60000) { libShTrace("here"); await libShHere(); libShTrace("here done"); }
+      const ok = libShOk(), items = libShItems(), now = Date.now();
+      const conn = ok ? libShConn() : null;
+      const rows = [], stills = {};
+      for (const it of items) {
+        // a camera that is OFF is not a share (joining makes one, paused): it is listed once it is turned on
+        const on = ok && libShWant(it.key) && live && it.e.enabled !== false && !(it.e.kind === "camera" && it.e.videoPaused);
+        libShMirror(it, on, conn);
+        if (!on) continue;
+        const p = libShPathOf(it.key), dark = !!(it.e.videoPaused || it.e.sharePaused || it.slot?.autoPaused);
+        const label = it.kind === "webcam" && operator ? operator : (it.label || shortName(it.key));   // a webcam is listed by its person's name
+        rows.push({ path: p, label: String(label).slice(0, 80), kind: it.kind, state: dark ? "dark" : "live",
+                    audio: !!(it.slot?.publish && !it.slot.publish.muted) });
+        if (!dark && now - (LIBSH.stillAt.get(p) || 0) > LIBSH_STILL_MS) { const b = libShStill(it); if (b) { stills[p] = b; LIBSH.stillAt.set(p, now); } }
+      }
+      if (!rows.length && !LIBSH.posted) return;
+      const sig = JSON.stringify(rows);
+      if (!force && sig === LIBSH.sig && !Object.keys(stills).length && now - LIBSH.postAt < LIBSH_POST_MS && (LIBSH.token || !rows.length)) return;
+      LIBSH.sig = sig; LIBSH.postAt = now;
+      libShTrace("post " + rows.length + (Object.keys(stills).length ? " +stills" : ""));
+      const r = await fetch("/api/rtsp/library", { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(20000),   // a stuck call never stops the listing
+        body: JSON.stringify({ shares: rows, relay: urlInput.value.trim(), stills, token: rows.length > 0 }) });
+      const d = await r.json().catch(() => null);
+      libShTrace("posted " + r.status);
+      LIBSH.posted = rows.length > 0;
+      if (!d?.ok) { for (const p of Object.keys(stills)) LIBSH.stillAt.delete(p); LIBSH.why = String(d?.error || ("HTTP " + r.status)); LIBSH.sig = ""; LIBSH.postAt = 0; return; }   // the next tick tries again
+      LIBSH.status = d.status || {}; LIBSH.why = d.why ? String(d.why) : "";
+      if (d.token && d.token !== LIBSH.token) {
+        LIBSH.token = d.token;
+        const c2 = libShConn();
+        for (const it of items) if (rows.some((x) => x.path === libShPathOf(it.key))) libShMirror(it, true, c2);
+      }
+    } catch (e) { LIBSH.why = String(e?.message || e); LIBSH.sig = ""; LIBSH.postAt = 0; libShTrace("err " + LIBSH.why.slice(0, 60)); }   // a call that timed out (a busy page) goes again on the next tick
+    finally { LIBSH.busy = false; }
+  }
+  // a closing window takes its listed shares out at once (this computer's KASTR would wait LIB_SHARE_TTL_S)
+  window.addEventListener("pagehide", () => {
+    if (!LIBSH.posted || IS_WEB2) return;
+    try { navigator.sendBeacon?.("/api/rtsp/library", new Blob([JSON.stringify({ shares: [], relay: urlInput.value.trim() })], { type: "application/json" })); } catch {}
+  });
+  function libShNative(path) {   // a native share of mine at this room path -> { a, slot, L (its listed state, from this computer's KASTR) }
+    for (const a of added) {
+      if (a.kind !== RTSP || !a.name || a.feedId == null || chanPath(ensureHang(a.name)) !== path) continue;
+      const slot = slots.get(a.id);
+      return { a, slot, L: slot?.pub?.library?.listed || null };
+    }
+    return null;
+  }
+  window.__libShares = {
+    // -> { want, on, page, here, why, status, sw } | null (not a share of this window, or no library here)
+    get(path) {
+      if (IS_WEB2 || LIBSH.here === null || !LIBSH.enabled || !window.__lib?.on?.()) return null;
+      path = String(path);
+      const n = libShNative(path);
+      if (n) {
+        const L = n.L;
+        if (!L) return { want: false, on: false, page: false, here: !!LIBSH.here, why: "this computer's KASTR has not answered yet", status: "", sw: null };
+        return { want: !!L.want, on: !!L.on, page: false, here: !!L.default, why: L.why || "", status: L.status || "", sw: L.switch ?? null };
+      }
+      const it = libShItems().find((x) => chanPath(x.key) === path);
+      if (!it) return null;
+      const p = libShPathOf(it.key), w = libShWant(it.key);
+      return { want: w, on: w && live && !!LIBSH.token && LIBSH.status[p] === "ok", page: true, here: !!LIBSH.here, why: "", status: LIBSH.status[p] || "", sw: LIBSH.sw.has(it.key) ? LIBSH.sw.get(it.key) : null };
+    },
+    async set(path, on) {
+      path = String(path);
+      const n = libShNative(path);
+      if (n) {
+        const d = await fetch("/api/rtsp/library", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: n.a.feedId, list: !!on }) })
+          .then((r) => r.json()).catch((e) => ({ error: String(e?.message || e) }));
+        if (d?.library && n.slot?.pub) n.slot.pub.library = d.library;
+        try { pollFeeds(); } catch {}
+        return d?.error ? { error: String(d.error) } : { ok: true, repiped: !!d?.repiped };
+      }
+      const it = libShItems().find((x) => chanPath(x.key) === path);
+      if (!it) return { error: "that is not a share of this window" };
+      LIBSH.sw.set(it.key, !!on);
+      await libShSync(true);
+      return LIBSH.why && on ? { ok: true, note: LIBSH.why } : { ok: true };
+    },
+    state: () => ({ here: LIBSH.here, enabled: LIBSH.enabled, token: !!LIBSH.token, conn: !!LIBSH.conn, sw: Object.fromEntries(LIBSH.sw), status: { ...LIBSH.status }, why: LIBSH.why, posted: LIBSH.posted,
+                    busy: LIBSH.busy, postAgo: LIBSH.postAt ? Date.now() - LIBSH.postAt : null, rows: LIBSH.sig ? JSON.parse(LIBSH.sig).map((r) => r.path) : [], trace: LIBSH.trace.slice(),
+                    mirrors: libShItems().map((it) => ({ key: it.key, kind: it.kind, mirror: String(it.bc?.in?.mirrorName?.peek?.() || "") })) }),   // rig (never the token)
+    sync: (f) => libShSync(f !== false),
+  };
+  setInterval(() => { libShSync(false); }, 5000);
   window.__publisher = {
     peer: PEER,   // lets the watch half of this page recognise its own rows
     talking: () => talkOn,                                   // 0.12.0: the room-wide speaking announce is on

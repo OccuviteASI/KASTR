@@ -904,7 +904,8 @@ class LateAdditions(HubBase):
             ra.set_optin(sd, False)
             a.tell_off()
             t0 = time.monotonic()
-            while self.svc._rcx().machines[BOX]["on"] and time.monotonic() - t0 < 3:
+            # tell_off records a.last in its own thread only after the hub answers -- wait for both
+            while (self.svc._rcx().machines[BOX]["on"] or (a.last or {}).get("state") != "off") and time.monotonic() - t0 < 3:
                 time.sleep(0.05)
         finally:
             ra.desktop_state, ra.list_monitors, ra.is_elevated = saved

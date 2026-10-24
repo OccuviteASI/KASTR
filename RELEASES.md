@@ -2,6 +2,30 @@
 
 What changed in each build, newest first.
 
+## v0.21.85 — everyone online in People, shares in the stream library, a clean end for My room guests
+
+**Everyone online (Kenton: "Add an option to see all people online in the people drop-down").** The People panel has two tabs: **This room** (the default) and **Everyone online**.
+- Everyone online lists everyone on the fleet, guests included, grouped by the room they're in or the Lobby. It has search and updates within about a second when someone moves. Camera boxes and relays aren't listed.
+- **Go** takes you to that person's room, and asks for the code if the room is locked.
+- Right-click or ⋯ on a person offers the same invites as the rail: Invite to this room, and Invite to My room.
+- **Admins** (the admin access code) also get **Restart their KASTR** and **Move to another relay…**, which until now were only on a relay machine's own Relay page. The person still sees the 10-second notice first.
+- People in someone's My room show as **In a private room**, with no room name, unless you're allowed in that room. In the Lobby nobody sees names, as before.
+- If the hub can't be reached, you still see the people on your own relay, with a note saying so.
+
+**Shares in the stream library (Kenton: "Publisher+relay boxes with shared streams should also show up under streams drop-down").**
+- **On a relay or hub machine,** everything its KASTR app shares (screen, webcam, RTSP feed, media file, GoPro, presentation) appears in **Streams** automatically, under that machine and its site. Each share has its own **In the stream library** switch, so a private screen can be kept out.
+- **On anyone else's KASTR,** each share has the same switch, **off by default**. Find it in the share's ⋯ menu or at the top of "Show in other rooms…".
+- A listed share **stays in its own room exactly as before**. Remote control, pointers and presentations keep working there. People watching it from Streams in another room get the picture only: no Request control and no pointers.
+- **Camera boxes in a real room** (Kenton: "stay in room + listed"): a camera's library switch now keeps it in its room and also lists it. Boxes in no room still move into the library as in 0.21.84.
+- An unwatched listed share costs nothing extra. Upload rises only while someone watches it from Streams.
+- Turning the switch on for a share from this computer (an RTSP feed, camera, media or screen share) restarts it once, with a short gap.
+
+**My room guests who came in by link only.** When the owner leaves, goes quiet, closes KASTR or takes back the link, a guest without an access code used to be stuck in the closed room. Their session now ends with a screen that says why, for example "Owen left their room — the room closed". **Join again** reuses the same link: it says "isn't in their room right now" until the owner is back, then lets them in. Guests who have Lobby access still move to the Lobby.
+
+**Smaller things**
+- In an empty room, the **Add streams from the library** card sits at the bottom of the stage instead of over your own picture.
+- A page whose relay can't be reached no longer logs an error every 8 seconds.
+
 ## v0.21.84 — the stream library, presentations in KASTR, the window stays where you left it
 
 **The stream library: streams that belong to no room, which any room can pull in (Kenton: "stream to an 'available streams' section ... accessible inside of each room for adding to a grid or view in that room").**

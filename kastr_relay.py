@@ -6586,6 +6586,8 @@ class AuthService:
     def invite_revoked_apply(self, d):
         """Spoke side: the hub's long-poll names the links revoked while they would still work -> out of the cache now."""
         ids = d.get("invRevoked") if isinstance(d, dict) else None
+        if isinstance(ids, list):
+            self.__dict__["_inv_revoked"] = {str(i) for i in ids[:500]}   # 0.21.85: a My room guest's beat asks (access)
         if not isinstance(ids, list) or not ids:
             return 0
         drop = {str(i) for i in ids}
@@ -6593,7 +6595,30 @@ class AuthService:
             gone = [k for k, v in self._inv_cache.items() if v[1].get("id") in drop]
             for k in gone:
                 self._inv_cache.pop(k, None)
+        if self._p_inv_end(drop):   # 0.21.85: a My room guest who came by a revoked link is out now
+            threading.Thread(target=self.trigger_revalidate, daemon=True).start()
         return len(gone)
+
+    def _p_inv_revoked(self, iid):
+        """0.21.85: is this invite link revoked? The hub's store, or (a spoke) the hub's last long-poll list."""
+        if not iid:
+            return False
+        if not self._p_spoke():
+            rec = (getattr(self.store, "invites", None) or {}).get(str(iid))
+            return bool(rec) and bool(rec.get("revoked"))
+        return str(iid) in (self.__dict__.get("_inv_revoked") or set())
+
+    def _p_inv_end(self, ids):
+        """0.21.85: end the personal-room guest sessions here that came by one of these (revoked) links -> how many."""
+        n = 0
+        with self.lock:
+            for rec in self._sessions.values():
+                if rec.get("pg") and rec.get("inv") in ids and not rec.get("revoked"):
+                    rec["revoked"] = True
+                    n += 1
+        if n:
+            self.log("relay auth: %d personal-room guest session(s) ended here -- their invite link was revoked" % n)
+        return n
 
     def _invite_make(self, slug, ttl, by="", personal_ok=False):
         row, tok, code = self.store.invite_create(slug, ttl, by, personal_ok=personal_ok)
@@ -6691,6 +6716,8 @@ class AuthService:
                 self.bans.nudge()   # spokes hold the bans long-poll -- they drop the revoked links from their caches at once
             except Exception:
                 pass
+            if is_personal(slug) and self._p_inv_end(set(self.store.invites_revoked_ids())):   # 0.21.85: its guests who came by it are out
+                threading.Thread(target=self.trigger_revalidate, daemon=True).start()
         return {"ok": True, "room": slug, "revoked": n, "invites": self.store.invites_public(slug)}, 200
 
     # ---- 0.21.78: My room shared ----------------------------------------------------------------------------------------
@@ -6970,8 +6997,12 @@ class AuthService:
             owner, hosts, co = str(r.get("owner") or ""), set(r.get("hosts") or []), str(r.get("co") or "")
             if not r:   # the copy predates this room's first guest (a fresh mint): say nothing about access yet
                 return {"open": self.personal_open(slug, now) or None, "owner": owner, "access": None, "co": False}
-        out = {"open": self.personal_open(slug, now), "owner": owner, "access": host in hosts or bool(claims.get("inv")),
+        inv = str(claims.get("inv") or "")
+        out = {"open": self.personal_open(slug, now), "owner": owner,
+               "access": host in hosts or (bool(inv) and not self._p_inv_revoked(inv)),   # 0.21.85: a revoked link is no access
                "co": bool(host) and co == host}
+        if not out["access"] and inv and host not in hosts:
+            out["revoked"] = True   # 0.21.85: the page says why (the link, not the owner)
         if not out["open"]:
             out["why"] = away.get("why") or "gone"
         return out
@@ -8215,6 +8246,7 @@ class AuthService:
                                        "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False,   # 0.17.0: the identity a kick keys on
                                        "pg": pg,                                        # 0.21.78: a personal room's guest
+                                       "inv": (str(claims.get("inv") or "") or None) if pg else None,   # 0.21.85: the link a guest came by (a revoke ends it)
                                        "probe": probe,                                  # 0.21.83: a ~stats read (not logged at its end)
                                        "link": link,                                    # 0.21.77: the dialer of a link session
                                        "rcx": (claims.get("rcx") if status == "grant" and isinstance(claims.get("rcx"), str) else None)}   # 0.21.83 (D)

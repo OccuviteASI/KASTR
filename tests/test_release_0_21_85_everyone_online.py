@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import kastr_relay as kr  # noqa: E402
 
+BS = chr(92)
 OWNER, GUEST, CAROL, EVE, BOXH, ADM = "kenton-ab12", "bob-cd34", "carol-1f2e", "eve-ef56", "box-9a8b", "admin-7c6d"
 
 
@@ -261,6 +262,82 @@ class Federation(unittest.TestCase):
         self.assertNotIn("relays", o)
 
 
+def connect(svc, t, sid, remote="10.0.0.9:5000"):
+    return svc.session({"event": "connect", "id": sid, "remote": remote, "path": "/", "query": "jwt=" + t}, "127.0.0.1")
+
+
+def revalidate(svc, sid, remote="10.0.0.9:5000"):
+    return svc.session({"event": "revalidate", "id": sid, "remote": remote, "path": "/"}, "127.0.0.1")
+
+
+class InviteGuestEnds(unittest.TestCase):
+    """Kenton: an invite-only My room guest (no access code) -- "End their session" when the owner leaves, goes quiet, or takes
+    the link back; "Join again" reuses the same link (good again once the owner is back, while the link lasts)."""
+
+    def setUp(self):
+        self.svc = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, store())
+        o, c = kr.personal_op(self.svc.store, {"op": "create", "name": "Kenton", "code": "abcd1234", "access": "pub-1"}, "10.0.0.5")
+        assert c == 200, o
+        self.slug = o["slug"]
+        self.own = tok(self.svc, self.slug, room_code="abcd1234")
+        beat(self.svc, self.own, "Kenton")
+        o, c = self.svc.invite_create_api({"room": self.slug, "ttl": 3600}, "Bearer " + self.own, "10.0.0.7")
+        assert c == 200, o
+        self.inv, self.iid = o["token"], o["id"]
+        self.g = tok(self.svc, self.slug, host=GUEST, code="", invite=self.inv)   # no access code: the link alone
+        self.assertEqual(connect(self.svc, self.g, "g1")[1], 200)
+
+    def tearDown(self):
+        self.svc.close()
+
+    def state(self):
+        return beat(self.svc, self.g, "Bob")["personal"]
+
+    def test_owner_leaves_then_join_again_on_the_same_link(self):
+        self.assertEqual((self.state()["open"], self.state()["access"]), (True, True))
+        people(self.svc, self.own, {"op": "leave"})
+        st = self.state()
+        self.assertEqual((st["open"], st["why"], st["owner"]), (False, "left", "Kenton"))
+        self.assertEqual(revalidate(self.svc, "g1")[1], 403)                  # the relay ended the session
+        o, c = self.svc.token({"room": self.slug, "code": "", "host": GUEST, "invite": self.inv}, "10.0.0.7")
+        self.assertEqual((c, o.get("ownerAway"), o.get("owner")), (403, True, "Kenton"))   # Join again while away: the owner gate
+        beat(self.svc, self.own, "Kenton")                                    # the owner is back
+        self.assertEqual(self.svc.token({"room": self.slug, "code": "", "host": GUEST, "invite": self.inv}, "10.0.0.7")[1], 200)
+        self.assertEqual(self.svc.token({"room": "main", "code": "", "host": GUEST}, "10.0.0.7")[1], 403)   # and no Lobby without a code
+
+    def test_owner_goes_quiet(self):
+        self.svc.personal_sweep(time.time() + kr.PERSONAL_OWNER_GRACE + 1)
+        st = self.state()
+        self.assertEqual((st["open"], st["why"]), (False, "gone"))
+        self.assertEqual(revalidate(self.svc, "g1")[1], 403)
+
+    def test_owner_takes_the_link_back(self):
+        o, c = self.svc.invite_manage_api("revoke", {"room": self.slug, "id": self.iid}, "Bearer " + self.own, "10.0.0.7")
+        self.assertEqual((c, o["revoked"]), (200, 1), o)
+        st = self.state()
+        self.assertEqual((st["open"], st["access"], st.get("revoked")), (True, False, True))
+        self.assertEqual(revalidate(self.svc, "g1")[1], 403)                  # out at once, not at the token's end
+        o, c = self.svc.token({"room": self.slug, "code": "", "host": GUEST, "invite": self.inv}, "10.0.0.7")
+        self.assertEqual((c, o.get("error")), (403, "this invite link was revoked"))
+        # a device the owner shared My room with keeps its access whatever happened to a link
+        people(self.svc, self.own, {"op": "share", "to": GUEST, "name": "Bob", "on": True})
+        st = self.state()
+        self.assertTrue(st["access"])
+        self.assertNotIn("revoked", st)
+
+    def test_a_spoke_learns_the_revoke_from_the_long_poll(self):
+        sp = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4453, store(), hub=lambda: "http://127.0.0.1:9", fed_token=lambda: "x")
+        try:
+            sp._sessions["s1"] = {"at": time.time(), "pg": True, "inv": self.iid, "room": self.slug, "host": GUEST, "revoked": False}
+            sp._sessions["s2"] = {"at": time.time(), "pg": True, "inv": "0badf00d", "room": self.slug, "host": CAROL, "revoked": False}
+            self.assertFalse(sp._p_inv_revoked(self.iid))
+            sp.invite_revoked_apply({"invRevoked": [self.iid]})
+            self.assertTrue(sp._p_inv_revoked(self.iid))
+            self.assertEqual((sp._sessions["s1"]["revoked"], sp._sessions["s2"]["revoked"]), (True, False))
+        finally:
+            sp.close()
+
+
 class Page(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -317,6 +394,22 @@ class Page(unittest.TestCase):
         self.assertIn('body: JSON.stringify({ op: "cmd", to: x.host, kind, dest: dest || undefined, by: myOpName() || undefined }) });', e)
         # another room's watcher is never "Remove from the room" (that is my room's admin kick)
         self.assertIn("viewer: !x.priv && x.room === CHANNEL && !x.pub", e)
+
+    def test_an_invite_only_guest_session_ends_at_the_gate(self):
+        p = self.p
+        self.assertIn("if (authSecured && !authAccessCode) { setTimeout(() => { pKickSaid = \"\"; }, 5000); personalEnded(room, info || { kind: \"left\" }); return; }", p)
+        self.assertIn("if (joinState === \"joined\" && CHANNEL === room) { setTimeout(() => { pKickSaid = \"\"; }, 5000); personalEnded(room, info || { kind: \"left\" }); return; }   // the Lobby refused me after all", p)
+        self.assertIn("kind: !st.open ? (st.why === \"left\" ? \"left\" : \"gone\") : st.revoked ? \"revoked\" : \"access\"", p)
+        body = p[p.index("  function personalEnded(room, info) {"):p.index("  async function personalGuestEnter(slug) {")]
+        self.assertIn("try { leaveMeeting(); } catch {}", body)                 # the gate, in invite mode (the link is kept)
+        self.assertNotIn("inviteSet(null)", body)
+        self.assertIn('" left their room ' + BS + 'u2014 the room closed"', body)
+        self.assertIn('joinEls.joinBtn.textContent = pEnded ? "Join again" : "Join now";', body)
+        self.assertIn('<div id="joinEndHead" role="status"><h2 id="joinEndTitle"></h2><p id="joinEndDetail"></p></div>', p)
+        self.assertIn("#joinGate:not(.ended) #joinEndHead, #joinGate.ended #joinInvHead { display:none !important; }", p)
+        # Join again while the owner is away: the owner gate says so (never "Room-code service unreachable"); a dead link ends it
+        self.assertIn(': /in their room right now/i.test(msg) ? msg + " ' + BS + 'u2014 try again once they are back."', p)
+        self.assertIn("inviteSet(null); gateInvitePaint(); try { window.__personalEnded?.clear?.(); } catch {}", p)
 
     def test_a_failed_board_poll_keeps_the_board(self):
         self.assertIn("    if (!d) return;   // 0.21.85 (lab: a dark hub)", self.p)

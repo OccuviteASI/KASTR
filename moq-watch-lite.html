@@ -1233,6 +1233,10 @@
   #joinInvRoom { color:var(--asi-blue); }
   #joinInvOut { margin:6px 0 0; font-size:11.5px; }
   #joinInvOut a { color:var(--text-mute); }
+  /* 0.21.85: an invite-only guest's session in My room ended (the owner left / went quiet / took the link back) */
+  #joinGate:not(.ended) #joinEndHead, #joinGate.ended #joinInvHead { display:none !important; }
+  #joinEndHead h2 { margin-bottom:4px; }
+  #joinEndHead p { margin:0 0 12px; font-size:12px; color:var(--text-dim); }
   #kRoomSet .rsmsg { margin:0; min-height:16px; font-size:12px; color:var(--text-dim); }
   #kRoomSet .rsmsg.err { color:var(--asi-red); }
   #kRoomSet .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px 14px; }
@@ -3076,6 +3080,8 @@
     <!-- 0.21.75: an invite link -- only the name is asked -->
     <div id="joinInvHead"><h2>You&rsquo;re invited to <span id="joinInvRoom"></span></h2>
       <p>No access code or room code needed &mdash; the invite link is your key.</p></div>
+    <!-- 0.21.85: the session ended (an invite-only guest of someone's My room) -- why, and Join again on the same link -->
+    <div id="joinEndHead" role="status"><h2 id="joinEndTitle"></h2><p id="joinEndDetail"></p></div>
     <button id="joinGateClose" type="button"
             title="Close &mdash; join later from the room chip. The relay works without joining.">&#10005;</button>
     <!-- Live self-preview (gate-local capture, released on join/leave-gate).
@@ -4868,17 +4874,49 @@
     if (st.open && st.access !== false) return;
     const owner = String(st.owner || "") || "The owner";
     const why = !st.open ? (st.why === "left" ? owner + " left their room" : owner + " is no longer in their room") : owner + " removed your access to their room";
-    personalKicked(room, why);
+    personalKicked(room, why, { owner: String(st.owner || ""), kind: !st.open ? (st.why === "left" ? "left" : "gone") : st.revoked ? "revoked" : "access" });
   }
-  async function personalKicked(room, why) {
+  async function personalKicked(room, why, info) {
     if (joinState !== "joined" || CHANNEL !== room || pKickSaid === room + "|" + why) return;
     pKickSaid = room + "|" + why;
+    // 0.21.85 (Kenton: "End their session"): a guest who came only by an invite link has no access code -- the Lobby would
+    // refuse them (switchRoom's mint), so the session ends cleanly at the gate instead, which says why and offers Join again
+    if (authSecured && !authAccessCode) { setTimeout(() => { pKickSaid = ""; }, 5000); personalEnded(room, info || { kind: "left" }); return; }
     log("My room shared: " + why + " \u2014 to the Lobby");
     await switchRoom(lastChannelList.find((r) => r.slug === LOBBY) || { slug: LOBBY }, "");
+    if (joinState === "joined" && CHANNEL === room) { setTimeout(() => { pKickSaid = ""; }, 5000); personalEnded(room, info || { kind: "left" }); return; }   // the Lobby refused me after all
     setTimeout(() => { pKickSaid = ""; }, 5000);
     kastrConfirm({ title: "Back in the Lobby", message: why + ", so everyone in it was sent to the Lobby.",
                    detail: "You can join again while they are in it \u2014 it is in your rooms list when it is shared with you.", ok: "OK", noCancel: true });
   }
+  // 0.21.85: the ended session -- the gate (invite mode: only the name) with the reason and "Join again" on the same link; the
+  // link works again once the owner is back (while it lasts); until then the mint's own refusal shows ("<owner> isn't in
+  // their room right now"). A link the owner took back says so (Join again then shows "this invite link was revoked").
+  let pEnded = null;   // { room, owner, kind }
+  function personalEnded(room, info) {
+    const owner = String(info?.owner || "") || personalOwners.get(room) || "";
+    const who = owner || "The owner", kind = String(info?.kind || "left");
+    const title = kind === "revoked" ? who + " took back your invite link"
+      : kind === "access" ? who + " removed your access to their room"
+      : kind === "gone" ? who + " is no longer in their room \u2014 the room closed"
+      : who + " left their room \u2014 the room closed";
+    const detail = kind === "revoked" || kind === "access" ? "Ask " + (owner || "them") + " for a new invite link to come back."
+      : "Join again with the same invite link once " + (owner || "they") + " " + (owner ? "is" : "are") + " back in it (while the link still works).";
+    pEnded = { room, owner, kind };
+    log("My room: session ended \u2014 " + title);
+    try { leaveMeeting(); } catch {}
+    personalEndedPaint(title, detail);
+  }
+  function personalEndedPaint(title, detail) {
+    const g = joinEls.joinGate;
+    if (!g) return;
+    g.classList.toggle("ended", !!pEnded);
+    document.getElementById("joinEndTitle").textContent = pEnded ? title : "";
+    document.getElementById("joinEndDetail").textContent = pEnded ? detail : "";
+    joinEls.joinBtn.textContent = pEnded ? "Join again" : "Join now";
+  }
+  window.addEventListener("kastr:auth", () => { if (pEnded) { pEnded = null; personalEndedPaint(); } });   // joined again (a good mint)
+  window.__personalEnded = { state: () => (pEnded ? { ...pEnded } : null), end: personalEnded, clear: () => { pEnded = null; personalEndedPaint(); } };   // rig + the gate's "Join another room instead"
   async function personalGuestEnter(slug) {
     const r = personalShared.find((x) => x.slug === slug);
     const t = roomTitle(slug);
@@ -20992,7 +21030,7 @@
     joinEls.joinPrevOff.querySelector(".ji").innerHTML = icon("camOff");
     joinEls.joinGate.hidden = false;
     gateMsg(isViewerMode() ? "Pick a room to watch." : lastJoin()?.room ? "Pick a room and press Join." : "");   // 0.11.0 / 0.12.0
-    if (gateInvitePaint()) gateMsg("Enter your name and press Join.");   // 0.21.75
+    if (gateInvitePaint() && !window.__personalEnded?.state?.()) gateMsg("Enter your name and press Join.");   // 0.21.75; 0.21.85: the ended screen says it all
     // 0.12.0: camera feeds the server kept publishing (or republished at launch)
     if (!isViewerMode() && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) {
       fetch("/api/rtsp/persist", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => {
@@ -21146,7 +21184,7 @@
         const msg = String(e?.message || e);
         if (inv && /invite link/i.test(msg)) {   // 0.21.75
           if (/hub|try again/i.test(msg)) return joinFail("The invite could not be checked right now \u2014 try again in a moment.");
-          inviteSet(null); gateInvitePaint();
+          inviteSet(null); gateInvitePaint(); try { window.__personalEnded?.clear?.(); } catch {}   // 0.21.85: no Join again on a dead link
           return joinFail(/expired/i.test(msg) ? "This invite link has expired \u2014 ask for a new one."
             : /revoked/i.test(msg) ? "This invite link was revoked \u2014 ask for a new one."
             : /is for room/i.test(msg) ? "This invite link is for another room."
@@ -21157,6 +21195,7 @@
           : /wrong room code/i.test(msg) ? "Wrong room code."
           : /too many attempts/i.test(msg) ? msg.replace(" -- ", " \u2014 ")
           : /bad room name/i.test(msg) ? "Room names: lowercase letters, digits and dashes (up to 32)."
+          : /in their room right now/i.test(msg) ? msg + " \u2014 try again once they are back."   // 0.21.85: a My room's owner gate (the guest's Join again)
           : "Room-code service unreachable \u2014 " + msg);
       }
     }
@@ -21350,7 +21389,7 @@
     // 0.12.0: a publisher box with a remembered room never waits on the profile modal
     if (!profile && !(ticket && ticket.room) && !(isPublisherMode() && lastJoin()?.room) && !inviteGet()) openProfile(true, gateShow);   // 0.21.75: an invited guest gives a name at the gate
     else gateShow();
-    document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); });   // 0.21.75
+    document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); try { window.__personalEnded?.clear?.(); } catch {} });   // 0.21.75; 0.21.85: + the ended screen goes
     if (!IS_WEB && gateIsLoopback()) {   // 0.21.75: an invite link handed to this KASTR (kastr:// started the app, or a second launch)
       invitePendingPoll();
       setInterval(invitePendingPoll, 4000);

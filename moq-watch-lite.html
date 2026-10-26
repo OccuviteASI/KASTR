@@ -23745,7 +23745,7 @@
     applySettingsAll();
     for (const s2 of slots.values()) {
       if (s2.rtsp || s2.entry.kind !== "camera") continue;
-      if (mode === "rnnoise") applyDenoise(s2); else stopDenoise(s2);
+      if (mode === "rnnoise") applyDenoise(s2); else { stopDenoise(s2); micFollow(s2); }   // 0.21.86: + follow the re-opened mic
     }
   }
 
@@ -26751,17 +26751,43 @@
     const v = slot.dn;
     if (!v) return;
     slot.dn = null;
-    try { v.src.disconnect(); } catch {}
-    try { v.node.disconnect(); } catch {}
-    try { v.node.destroy?.(); } catch {}
-    try { v.processed.stop(); } catch {}
-    if (!restore) return;
+    // 0.21.86 (Kenton: "When switching between noise isolation options it will stop my mic from working and I have to mute and
+    // unmute"): the filtered track was stopped while it still fed the encoder, then the mic was put back -- an encoder whose
+    // input ended stays silent. Now the mic goes in first and the filter is taken apart a moment later.
+    const dismantle = () => {
+      try { v.src.disconnect(); } catch {}
+      try { v.node.disconnect(); } catch {}
+      try { v.node.destroy?.(); } catch {}
+      try { v.processed.stop(); } catch {}
+    };
+    if (!restore) { dismantle(); return; }
     let live = null;
     try { live = unwrapAudio(slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()); } catch {}
-    if (!live) { try { const c = unwrapAudio(pubAud(slot.publish)?.source?.peek?.()); if (c && c !== v.processed) live = c; } catch {} }   // 0.21.9
+    if (live && live.readyState !== "live") live = null;
+    if (!live) { try { const c = unwrapAudio(pubAud(slot.publish)?.source?.peek?.()); if (c && c !== v.processed && c.readyState === "live") live = c; } catch {} }   // 0.21.9
     if (!live && v.raw.readyState === "live") live = v.raw;
     if (live) { try { pubAud(slot.publish)?.source.set({ track: live, kind: "voice" }); } catch {} }
+    setTimeout(dismantle, 400);
     rearmSlotAudio(slot);
+    micFollow(slot);
+  }
+  // 0.21.86: for a few seconds after a mode switch (the browser may re-open the mic with the new settings), the encoder's input
+  // follows the live microphone track -- never left on a track that ended. RNNoise has its own watch (armDenoiseWatch).
+  function micFollow(slot, ms = 6000) {
+    const until = Date.now() + ms;
+    clearInterval(slot.micFollowT);
+    slot.micFollowT = setInterval(() => {
+      if (Date.now() > until || !slots.has(slot.entry.id)) { clearInterval(slot.micFollowT); slot.micFollowT = null; return; }
+      if (micMode === "rnnoise" && !denoiseBroken) return;
+      let dev = null, cur = null;
+      try { dev = unwrapAudio(slot.publish.sources?.audio?.peek?.()?.out?.source?.peek?.()); } catch {}
+      try { cur = unwrapAudio(pubAud(slot.publish)?.source?.peek?.()); } catch {}
+      if (!dev || dev.readyState !== "live") return;   // the mic is re-opening
+      if (cur === dev) return;
+      try { pubAud(slot.publish)?.source.set({ track: dev, kind: "voice" }); } catch {}
+      rearmSlotAudio(slot);
+      log("Microphone: back on the live track after the noise setting changed");
+    }, 250);
   }
   function armDenoiseWatch(slot) {
     if (slot.dnWatch || !pubAud(slot.publish)?.source?.subscribe) return;   // 0.21.9: the capture's source signal (was the dead 0.4 field)

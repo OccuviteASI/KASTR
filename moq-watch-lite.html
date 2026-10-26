@@ -8315,6 +8315,42 @@
     sendControl(window.__publisher.peer, src.id, { videoPaused: src.videoPaused });
     renderMine();
   });
+  // 0.21.89 (Kenton: "I want 'Backstage' to have the ability to mute/unmute and to share/pause video for presenter"): kastr-pres.js,
+  // on the PRESENTER's page, applies a backstage person's Mute / Unmute / Pause video / Resume video through exactly the path the
+  // toolbar's Mic and Camera buttons take (the camera source's micMuted / videoPaused + sendControl + renderMine), so the toolbar,
+  // the People icons, the speaking light and the headset LED all agree. The library's `muted` is never written here. Unmuting
+  // never fights the microphone's own mute (a muted headset / mic key) and undeafens like the Mic button.
+  window.__presAV = {
+    state() {
+      const { src } = localCamSrc();
+      const hw = hwFollowOn() && typeof hwMuteSeen === "string" && hwMuteSeen.endsWith("|1");
+      if (!src) return { mic: "none", cam: "off", hw, deaf: !!deafened };
+      const ci = window.__presCut?.camInfo?.() || null;
+      return { mic: ci && ci.mic === false ? "none" : src.micMuted ? "muted" : "on", cam: src.videoPaused ? "paused" : "on", hw, deaf: !!deafened, id: src.id };
+    },
+    mic(mute) {
+      const { src } = localCamSrc();
+      if (!src) return { ok: false, why: "no microphone is on" };
+      const ci = window.__presCut?.camInfo?.() || null;
+      if (ci && ci.mic === false) return { ok: false, why: "no microphone is available" };
+      if (!mute && hwFollowOn() && typeof hwMuteSeen === "string" && hwMuteSeen.endsWith("|1")) return { ok: false, why: "the microphone is muted on the device itself" };
+      if (!mute && deafened) setDeafen(false);   // as the Mic button: unmuting undeafens
+      if (!!src.micMuted === !!mute) return { ok: true, noop: true };
+      src.micMuted = !!mute;
+      sendControl(window.__publisher.peer, src.id, { micMuted: src.micMuted });
+      renderMine();
+      return { ok: true };
+    },
+    cam(pause) {
+      const { src } = localCamSrc();
+      if (!src) return { ok: false, why: "the camera is off" };
+      if (!!src.videoPaused === !!pause) return { ok: true, noop: true };
+      src.videoPaused = !!pause;
+      sendControl(window.__publisher.peer, src.id, { videoPaused: src.videoPaused });
+      renderMine();
+      return { ok: true };
+    },
+  };
   // the chevrons open the Camera / Audio popovers (registered with the other pops)
 
   function renderMine() {

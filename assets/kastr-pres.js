@@ -20,7 +20,8 @@
 //              the stream over the still; Play / Pause / seek from the presenter or backstage (presCtl.vid), viewers watch.
 // PRESENTER MODES (0.21.89): Content only / Standout / Side-by-side / Reporter -- the presenter's camera drawn into the tile (the
 //              cut-out for Standout and Reporter comes from the presenter's page, window.__presCut), picked by the presenter or
-//              backstage (presCtl.cm). See "PRESENTER MODES" below.
+//              backstage (presCtl.cm); backstage can also mute / unmute the presenter's mic and pause / resume their video
+//              (presCtl.av) while the presenter's switch allows it. See "PRESENTER MODES" below.
 // Collisions: an intent carries the version it saw (`bv`); the presenter applies it when nobody else moved since
 // (bv == ver) or when the last move was the same person's (a fast double Next from one clicker) -- two people pressing
 // Next on slide 3 at once land on 4, not 5.
@@ -634,7 +635,7 @@
       // 0.21.87: the live slide's videos -- their stream, their spot (fractions of the slide) and how far they are
       vids: [...mine.vids.values()].filter((e) => e.path && e.i === mine.idx).map((e) => ({ v: e.v, p: e.path, i: e.i, x: +e.sv.x.toFixed(5), y: +e.sv.y.toFixed(5),
         w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto })),
-      ...modeFields(),   // 0.21.89: the presenter mode, my camera / cut-out
+      ...modeFields(),   // 0.21.89: the presenter mode, my camera / cut-out, backstage's mic + camera control
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
@@ -670,7 +671,7 @@
     const last = mine.lastSeq.get(who) || 0;
     if (!(ctl.seq > last)) return;
     mine.lastSeq.set(who, ctl.seq);
-    if (ctl.cm !== undefined) { applyModeAv(ctl, who); return; }   // 0.21.89: a presenter mode
+    if (ctl.cm !== undefined || (ctl.av && typeof ctl.av === "object")) { applyModeAv(ctl, who); return; }   // 0.21.89: a mode, or my mic / camera
     if (ctl.vid && typeof ctl.vid === "object") { applyVidOp(ctl.vid, who); return; }   // 0.21.87: Play / Pause / seek of the live slide's video
     if (ctl.bv !== mine.ver && mine.by !== who) { T("drop", { id: mine.id, idx: ctl.to, ver: mine.ver, who }); return; }   // somebody else moved first
     T("apply", { id: mine.id, idx: ctl.to, ver: mine.ver + 1, who });
@@ -1050,7 +1051,7 @@
         </div>
         <div class="strip"></div>`;
       document.body.appendChild(root);
-      modeUiBuild(root);   // 0.21.89: the presenter-mode picker + preview
+      modeUiBuild(root);   // 0.21.89: the presenter-mode picker + preview (+ backstage's mic / camera)
       pill = document.createElement("div"); pill.id = "presPill";
       pill.innerHTML = `<span class="pt"></span><button type="button">Presenter view</button>`;
       document.body.appendChild(pill);
@@ -1423,7 +1424,9 @@
   // in WebGL. The presenter's camera tile is not shown a second time beside it (window.__presCamHide). The record (`pres`):
   //   cm   the chosen mode           cme  the mode the room shows (cm, or "content" while the camera is off / paused)
   //   cam  the camera's stream path  cut  the cut-out's path ("" while there is none)   nocut  why there cannot be one
-  //   cwhy why the slide shows alone ("off")
+  //   cwhy why the slide shows alone ("off" | "bs": paused by backstage)
+  //   av   {m: mic on|muted|none, c: camera on|paused|off, bp: paused by backstage, ok: backstage may control, n / na / nb: the
+  //        last backstage change, its time and who}       ack  {p, s, ok, why}: the answer to a backstage request
   // Older KASTRs read none of it: the slide + the presenter's own tile, as before.
   const MODES = ["content", "standout", "sbs", "reporter"];
   const MODE_NAME = { content: "Content only", standout: "Standout", sbs: "Side-by-side", reporter: "Reporter" };
@@ -1633,7 +1636,8 @@
   function modeInit(m) {
     const ci = camNow();
     m.cm = ci && ci.live ? "standout" : "content";   // Kenton: Standout when the camera is on, else Content only
-    m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", cutOn: false, sig: "", by: "" };
+    m.avOk = true; m.avBp = false; m.avNote = null; m.ack = null;
+    m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", mic: "none", camSt: "off", cutOn: false, sig: "", by: "" };
     T("mode", { id: m.id, who: m.cm, why: "start" });
     modeTick();
   }
@@ -1641,13 +1645,17 @@
     const m = mine;
     if (!m || !m.ms) return {};
     const s = m.ms;
-    return { cm: m.cm, cme: s.eff, cam: s.cam, cut: s.cut, nocut: s.nocut, cwhy: s.why };
+    return { cm: m.cm, cme: s.eff, cam: s.cam, cut: s.cut, nocut: s.nocut, cwhy: s.why,
+             av: { m: s.mic, c: s.camSt, bp: !!m.avBp, ok: !!m.avOk, n: m.avNote ? m.avNote.t : "", na: m.avNote ? m.avNote.at : 0, nb: m.avNote ? m.avNote.by : "" },
+             ack: m.ack || null };
   }
   function modeTick() {
     const m = mine;
     if (!m || !m.ms) return;
     const s = m.ms, ci = camNow(), C = window.__presCut;
+    let av = null; try { av = window.__presAV?.state?.() || null; } catch {}
     const live = !!(ci && ci.live);
+    if (m.avBp && (!ci || (live && Date.now() - (m.avBpAt || 0) > 4000))) m.avBp = false;   // the camera is back (whoever resumed it), or gone (the pause takes a moment to land)
     const eff = live ? m.cm : "content";
     const wantCut = live && cutMode(eff) && !!C && ci.canCut !== false;
     if (wantCut && !s.cutOn) { s.cutOn = true; try { C.start(); } catch (e) { console.warn("KASTR pres: cut-out", e); } T("cut-start", { id: m.id }); }
@@ -1657,8 +1665,11 @@
     s.cam = live ? ci.path : "";
     s.cut = cs && cs.ready ? cs.path : "";
     s.nocut = ci && ci.canCut === false ? (ci.why || "this computer cannot cut you out of your background") : !C ? "this KASTR cannot" : "";
-    s.why = live ? "" : "off";
-    const sig = JSON.stringify([m.cm, s.eff, s.cam, s.cut, s.nocut, s.why]);
+    s.why = live ? "" : m.avBp ? "bs" : "off";
+    s.mic = av ? av.mic : "none";
+    s.camSt = !ci ? "off" : ci.live ? "on" : m.avBp ? "paused" : "off";
+    s.hw = !!(av && av.hw);
+    const sig = JSON.stringify([m.cm, s.eff, s.cam, s.cut, s.nocut, s.why, s.mic, s.camSt, m.avBp, m.avOk, m.avNote && m.avNote.at, m.ack && m.ack.s]);
     if (sig !== s.sig) {
       const first = !s.sig;
       s.sig = sig;
@@ -1682,13 +1693,49 @@
     modeTick();
     return true;
   }
-  function applyModeAv(ctl, who) {   // a backstage person's mode request (applyIntent checked: backstage, newer seq)
+  function avNotice(m, text, by) {
+    m.avNote = { t: text, at: Date.now(), by };
+    toast(text, 6000, "event");   // the main page too (the presenter may be in the room, not the presenter view)
+  }
+  function applyModeAv(ctl, who) {   // a backstage person's mode or mic / camera request (applyIntent checked: backstage, newer seq)
     const m = mine;
+    const name = nameOfPerson(who);
     if (ctl.cm !== undefined) {
       if (!modeOk(ctl.cm)) { T("drop", { id: m.id, who }); return; }
       T("mode-apply", { id: m.id, who: ctl.cm, by: who });
       setMode(ctl.cm, who);
+      return;
     }
+    const op = ctl.av && ctl.av.op;
+    const answer = (ok, why) => { m.ack = { p: who, s: ctl.seq, ok, why: why || "" }; T(ok ? "av-apply" : "av-deny", { id: m.id, who: op, by: who, why }); modeTick(); };
+    if (!["mute", "unmute", "pause", "resume"].includes(op)) return answer(false, "not a mic or camera request");
+    if (!m.avOk) return answer(false, nameOfPerson(myPerson()) + " turned off backstage control of their mic and camera");
+    const AV = window.__presAV;
+    if (!AV) return answer(false, "this KASTR cannot");
+    if (op === "mute" || op === "unmute") {
+      const r = AV.mic(op === "mute");
+      if (!r || !r.ok) return answer(false, (r && r.why) || "the microphone is not available");
+      if (!r.noop) avNotice(m, (op === "mute" ? "Muted by " : "Unmuted by ") + name, who);
+      return answer(true);
+    }
+    const ci = camNow();
+    const me = nameOfPerson(myPerson());
+    if (!ci) return answer(false, me + "'s camera is off");
+    if (op === "pause") {
+      if (!ci.live) return answer(true);   // already not sending a picture: nothing to do
+      const r = AV.cam(true);
+      if (!r || !r.ok) return answer(false, (r && r.why) || "the camera did not pause");
+      m.avBp = true; m.avBpAt = Date.now();
+      if (!r.noop) avNotice(m, "Video paused by " + name, who);
+      return answer(true);
+    }
+    if (ci.live) return answer(true);   // resume: already on
+    if (!m.avBp) return answer(false, me + "'s camera is off");   // backstage resumes only what backstage paused
+    const r = AV.cam(false);
+    if (!r || !r.ok) return answer(false, (r && r.why) || "the camera did not resume");
+    m.avBp = false;
+    if (!r.noop) avNotice(m, "Video resumed by " + name, who);
+    return answer(true);
   }
   // backstage: the requests (presCtl, like Next / Back)
   function sendModeIntent(deckId, cm) {
@@ -1700,8 +1747,17 @@
     T("mode-intent", { id: deckId, who: cm });
     return true;
   }
+  function sendAvIntent(deckId, op) {
+    const bk = backstage.get(deckId);
+    if (!bk || !bk.rec.av || !["mute", "unmute", "pause", "resume"].includes(op)) return false;
+    ctlSeq++;
+    stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), av: { op } });
+    bk.avAsk = { op, seq: ctlSeq, at: Date.now() };
+    T("av-intent", { id: deckId, who: op });
+    return true;
+  }
 
-  // ---- the presenter view: the mode picker, a live preview of what the room sees -----------------------------------------
+  // ---- the presenter view: the mode picker, a live preview of what the room sees, backstage's mic / camera ---------------
   const ICON = {
     content: '<rect x="1" y="1" width="30" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="4" width="22" height="12" rx="1" fill="currentColor" opacity=".55"/>',
     standout: '<rect x="1" y="1" width="30" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="4" y="4" width="18" height="11" rx="1" fill="currentColor" opacity=".45"/><circle cx="25" cy="11" r="2.6" fill="currentColor"/><path d="M20 19c0-3.4 2.2-5.2 5-5.2s5 1.8 5 5.2z" fill="currentColor"/>',
@@ -1725,6 +1781,15 @@
     background:rgba(0,0,0,.55); padding:1px 6px; border-radius:3px; pointer-events:none; }
   #presView .modebox .mwhy { grid-column:1 / -1; font-size:13px; color:#ffcf7a; min-height:0; }
   #presView .modebox .mwhy:empty { display:none; }
+  #presView .modebox .avrow { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; }
+  #presView .modebox .avrow:empty { display:none; }
+  #presView .modebox .avsw { display:inline-flex; flex-direction:row; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-size:13px; color:#e6edf3; margin:0; }
+  #presView .modebox .avsw input { display:inline-block; width:auto; height:auto; margin:0; flex:none; }
+  #presView .modebox .avnote { color:#8fd3ff; }
+  #presView .modebox .avwhy { color:#ffcf7a; flex-basis:100%; }
+  #presView .modebox .avwhy:empty { display:none; }
+  #presView .modebox .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
+  #presView .modebox .avrow button:disabled { opacity:.5; cursor:not-allowed; }
   @media (max-width: 760px) { #presView .modebox { grid-template-columns: 1fr; } #presView .modebox .modes { grid-template-columns:repeat(4, minmax(0, 1fr)); } }`;
   (() => { const st = document.createElement("style"); st.id = "presModeCss"; st.textContent = MODE_CSS; document.head.appendChild(st); })();
   let mui = null;   // the picker's elements (built into the presenter view once)
@@ -1734,11 +1799,11 @@
     box.innerHTML = `<div class="mhead cap">Presenter mode — everyone sees the same</div>
       <div class="modes">${MODES.map((k) => `<button type="button" data-mode="${k}" title="${MODE_TIP[k]}"><svg viewBox="0 0 32 20" aria-hidden="true">${ICON[k]}</svg><span>${MODE_NAME[k]}</span></button>`).join("")}</div>
       <div class="pvwrap"><canvas class="pvcv"></canvas><span class="pvtag">What the room sees</span></div>
-      <div class="mwhy"></div>`;
+      <div class="mwhy"></div><div class="avrow"></div>`;
     const side = root.querySelector(".side");
     if (!side) return;
     side.insertBefore(box, side.firstChild);
-    mui = { box, pv: box.querySelector(".pvcv"), why: box.querySelector(".mwhy"), btns: [...box.querySelectorAll(".modes button")], pvAt: 0, still: { key: "", bmp: null } };
+    mui = { box, pv: box.querySelector(".pvcv"), why: box.querySelector(".mwhy"), av: box.querySelector(".avrow"), btns: [...box.querySelectorAll(".modes button")], avSig: "", pvAt: 0, still: { key: "", bmp: null } };
     for (const b of mui.btns) b.addEventListener("click", () => window.__pres.mode(b.dataset.mode));
   }
   // what the presenter view's deck shows in modes: {role, rec-like, chosen, eff}
@@ -1747,13 +1812,13 @@
     if (!v) return null;
     if (v.role === "presenter") {
       const s = mine.ms || {};
-      return { v, role: "presenter", cm: mine.cm, eff: s.eff || "content", why: s.why, nocut: s.nocut, cutOn: !!s.cut, rec: null };
+      return { v, role: "presenter", cm: mine.cm, eff: s.eff || "content", why: s.why, nocut: s.nocut, av: modeFields().av, cutOn: !!s.cut, rec: null };
     }
     const bk = backstage.get(v.id);
     const rec = bk && bk.rec;
     if (!rec) return null;
     const opt = bk.optCm && Date.now() - bk.optCmAt < 1500 && rec.cm !== bk.optCm ? bk.optCm : null;
-    return { v, role: "backstage", cm: opt || rec.cm || "content", eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", cutOn: !!rec.cut, rec, bk, has: !!rec.cm };
+    return { v, role: "backstage", cm: opt || rec.cm || "content", eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", av: rec.av || null, cutOn: !!rec.cut, rec, bk, has: !!rec.cm };
   }
   function modeUiPaint() {
     if (!mui) return;
@@ -1764,11 +1829,65 @@
     const who = mv.role === "presenter" ? "" : nameOfPerson(personOfPath(mv.bk.path));
     let why = "";
     if (mv.cm !== "content" && mv.eff === "content") {
-      why = (mv.role === "presenter" ? "Camera off" : who + "'s camera is off") + " — showing the slide only";
+      if (mv.why === "bs") why = (mv.av && mv.av.nb ? "Video paused by " + nameOfPerson(mv.av.nb) : "Video paused by backstage") + " — showing the slide only";
+      else why = (mv.role === "presenter" ? "Camera off" : who + "'s camera is off") + " — showing the slide only";
     } else if (cutMode(mv.eff) && mv.nocut) {
       why = (mv.role === "presenter" ? "Your camera cannot be cut out here (" + mv.nocut + ")" : who + "'s camera cannot be cut out") + " — the room sees it in a box";
     }
     if (mui.why.textContent !== why) mui.why.textContent = why;
+    paintAvRow(mv, who);
+  }
+  const ago = (at) => { const s = Math.max(0, Math.round((Date.now() - at) / 1000)); return s < 60 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
+  function paintAvRow(mv, who) {
+    const row = mui.av, av = mv.av || {};
+    if (mv.role === "presenter") {
+      const sig = "p|" + (mine.avOk ? 1 : 0) + "|" + (av.n || "") + "|" + Math.floor((Date.now() - (av.na || 0)) / 10000) + "|" + av.m + "|" + av.c;
+      if (sig === mui.avSig) return;
+      mui.avSig = sig;
+      row.replaceChildren();
+      // my own mic + camera, here too (the presenter view covers the room's toolbar): they press the toolbar's own buttons
+      const tb = (id) => () => { try { document.getElementById(id)?.click(); } catch {} setTimeout(modeTick, 50); };
+      const pm = document.createElement("button"); pm.type = "button"; pm.className = "pmic" + (av.m === "on" ? "" : " off");
+      pm.textContent = av.m === "on" ? "Mic on" : av.m === "muted" ? "Mic muted" : "No mic"; pm.title = "Your microphone (the same as Mic in the room's toolbar)";
+      pm.addEventListener("click", tb("topMicBtn"));
+      const pc = document.createElement("button"); pc.type = "button"; pc.className = "pcam" + (av.c === "on" ? "" : " off");
+      pc.textContent = av.c === "on" ? "Camera on" : "Camera off"; pc.title = "Your camera (the same as Camera in the room's toolbar)";
+      pc.addEventListener("click", tb("topCamBtn"));
+      row.append(pm, pc);
+      const lab = document.createElement("label"); lab.className = "avsw"; lab.title = "Your backstage people can mute / unmute your mic and pause / resume your video (this presentation only)";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "avok"; cb.checked = !!mine.avOk;
+      cb.addEventListener("change", () => window.__pres.avSwitch(cb.checked));
+      lab.append(cb, document.createTextNode("Backstage can control my mic and camera"));
+      row.append(lab);
+      if (av.n) { const n = document.createElement("span"); n.className = "avnote"; n.textContent = av.n + " · " + ago(av.na); row.append(n); }
+      return;
+    }
+    if (!mv.av) { if (mui.avSig !== "none") { mui.avSig = "none"; row.replaceChildren(); } return; }
+    const ask = mv.bk.avAsk && Date.now() - mv.bk.avAsk.at < 4000 ? mv.bk.avAsk : null;
+    const ack = mv.rec.ack && mv.rec.ack.p === myPerson() ? mv.rec.ack : null;
+    const lastAck = ack && mv.bk.avAsk && ack.s === mv.bk.avAsk.seq ? ack : null;
+    const sig = "b|" + JSON.stringify([av, ask && ask.seq, lastAck && [lastAck.s, lastAck.ok, lastAck.why], who]);
+    if (sig === mui.avSig) return;
+    mui.avSig = sig;
+    row.replaceChildren();
+    const off = !av.ok, offWhy = who + " turned off backstage control of their mic and camera";
+    const mic = document.createElement("button"); mic.type = "button"; mic.className = "avmic";
+    const micOn = av.m === "on";
+    mic.textContent = av.m === "none" ? "No microphone" : micOn ? "Mic on · Mute" : "Mic muted · Unmute";
+    mic.classList.toggle("off", av.m === "muted");
+    mic.disabled = off || av.m === "none" || (ask && /mute/.test(ask.op) && !lastAck);
+    mic.title = off ? offWhy : av.m === "none" ? who + " has no microphone on" : micOn ? "Mute " + who + "'s microphone (straight away)" : "Unmute " + who + "'s microphone (straight away)";
+    mic.addEventListener("click", () => window.__pres.av(micOn ? "mute" : "unmute"));
+    const cam = document.createElement("button"); cam.type = "button"; cam.className = "avcam";
+    cam.textContent = av.c === "on" ? "Video on · Pause" : av.c === "paused" ? "Video paused · Resume" : "Camera off";
+    cam.classList.toggle("off", av.c !== "on");
+    cam.disabled = off || av.c === "off" || (ask && /pause|resume/.test(ask.op) && !lastAck);
+    cam.title = off ? offWhy : av.c === "off" ? who + "'s camera is off" : av.c === "on" ? "Pause " + who + "'s video (the room sees the slide only)" : "Resume " + who + "'s video";
+    cam.addEventListener("click", () => window.__pres.av(av.c === "on" ? "pause" : "resume"));
+    row.append(mic, cam);
+    const why = document.createElement("span"); why.className = "avwhy";
+    why.textContent = off ? offWhy : lastAck && !lastAck.ok ? "Not done: " + lastAck.why : av.c === "off" ? who + "'s camera is off" : "";
+    row.append(why);
   }
   // the preview: the same composition the room's tiles draw, small, ~12 a second, while the presenter view is open
   function modeUiFrame() {
@@ -1776,6 +1895,7 @@
     const mv = modeView();
     if (!mv || mui.box.style.display === "none") return false;
     const now = performance.now();
+    if (now - (mui.paintAt || 0) > 1000) { mui.paintAt = now; modeUiPaint(); }   // the notice's age, backstage's buttons
     if (now - mui.pvAt < 80) return true;
     mui.pvAt = now;
     const cv = mui.pv;
@@ -1811,11 +1931,13 @@
   function modeState() {
     const m = mine;
     return {
-      mine: m && m.ms ? { cm: m.cm, eff: m.ms.eff, cam: m.ms.cam, cut: m.ms.cut, nocut: m.ms.nocut, why: m.ms.why,
-                          cutState: (() => { try { return window.__presCut?.state?.() || null; } catch { return null; } })() } : null,
-      tiles: [...overlays.entries()].map(([p, o]) => ({ path: p, mode: modeOf(o.rec), cm: o.rec.cm || null, cam: o.rec.cam || "", cut: o.rec.cut || "", kind: o.camKind || "", n: o.camN || 0 })),
+      mine: m && m.ms ? { cm: m.cm, eff: m.ms.eff, cam: m.ms.cam, cut: m.ms.cut, nocut: m.ms.nocut, why: m.ms.why, mic: m.ms.mic, camSt: m.ms.camSt, avOk: m.avOk, avBp: m.avBp,
+                          note: m.avNote, ack: m.ack, cutState: (() => { try { return window.__presCut?.state?.() || null; } catch { return null; } })() } : null,
+      tiles: [...overlays.entries()].map(([p, o]) => ({ path: p, mode: modeOf(o.rec), cm: o.rec.cm || null, cam: o.rec.cam || "", cut: o.rec.cut || "", kind: o.camKind || "", n: o.camN || 0,
+                                                        av: o.rec.av || null, ack: o.rec.ack || null })),
       hide: hideSig ? hideSig.split("|") : [], cuts: cutSig ? cutSig.split("|") : [], unpacked: unp && !unp.failed ? unp.n : 0,
-      ui: mui ? { shown: mui.box.style.display !== "none", on: (mui.btns.find((b) => b.classList.contains("on")) || {}).dataset?.mode || "", why: mui.why.textContent } : null,
+      ui: mui ? { shown: mui.box.style.display !== "none", on: (mui.btns.find((b) => b.classList.contains("on")) || {}).dataset?.mode || "", why: mui.why.textContent,
+                  av: mui.av.textContent, buttons: [...mui.av.querySelectorAll("button")].map((b) => ({ c: b.className, t: b.textContent, d: b.disabled, title: b.title })) } : null,
     };
   }
 
@@ -1861,13 +1983,15 @@
       sendVidIntent(bk.rec.id, r, op || (r.pl ? "pause" : "play"), t);
       return true;
     },
-    // 0.21.89: presenter modes (the presenter sets it; backstage asks; a viewer: false)
+    // 0.21.89: presenter modes (the presenter sets it; backstage asks; a viewer: false) + backstage's mic / camera requests
     mode: (cm) => {
       if (!modeOk(cm)) return false;
       if (mine) return setMode(cm, myPerson());
       const bk = [...backstage.values()].find((b) => b.keys);
       return bk ? sendModeIntent(bk.rec.id, cm) : false;
     },
+    av: (op) => { if (mine) return false; const bk = [...backstage.values()].find((b) => b.keys); return bk ? sendAvIntent(bk.rec.id, op) : false; },
+    avSwitch: (on) => { if (!mine || !mine.ms) return false; mine.avOk = !!on; T("av-switch", { id: mine.id, who: on ? "on" : "off" }); modeTick(); return true; },
     modes: () => modeState(),
     layout: presLayout,   // rig: the geometry alone
     trace,

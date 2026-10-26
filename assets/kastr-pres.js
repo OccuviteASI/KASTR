@@ -458,7 +458,12 @@
     }
     if (["pptx", "ppsx", "potx", "pptm", "ppsm"].includes(ext)) {
       onStep("Reading the slides…");
-      const r = await fetch("/api/pres/convert", { method: "POST", headers: { "X-Kastr-Name": encodeURIComponent(name) }, body: file });
+      let r;
+      try { r = await fetch("/api/pres/convert", { method: "POST", headers: { "X-Kastr-Name": encodeURIComponent(name) }, body: file }); }
+      catch (e) {   // 0.21.86: was a bare "Failed to fetch" (Kenton) -- the connection to this computer's KASTR broke mid-send
+        console.warn("KASTR pres: convert upload failed", e);
+        throw new Error("Lost the connection to KASTR while sending " + name + " — if KASTR just updated or restarted, try again");
+      }
       const sc = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(sc.error || ("conversion failed (" + r.status + ")"));
       const shown = sc.slides.filter((s) => !s.hidden);
@@ -520,7 +525,7 @@
     mine = {
       id: deck.id, token: deck.token, rtEnc, liveIdx: 0, liveChain: Promise.resolve(), via: src.via || src.kind, base, room: c.channel, name: src.name, kind: src.kind, n: src.n, ar: src.ar, src, K, keys,
       notesKey: await hkdf(K, "notes"), notes: src.notes.slice(), nv: 1,
-      blobs: new Array(src.n).fill(null), up: new Array(src.n).fill(false), rendering: null, want: [],
+      blobs: new Array(src.n).fill(null), up: new Array(src.n).fill(false), busy: [], rendering: null, want: [],
       idx: 0, ver: 1, by: myPerson(), blank: null, t0: Date.now(), bs: new Map(), lastSeq: new Map(), share: null, pk: me.pub,
       warnings: src.warnings || [], startedMs: 0, pubSeq: 0,
     };
@@ -536,7 +541,13 @@
     if (mine.warnings.length) toast("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 9000, "warn");
     renderRest();
   }
-  async function ensureSlide(i) {   // render + encrypt + upload slide i (once)
+  function ensureSlide(i) {   // render + encrypt + upload slide i (once; callers at the same time share one try)
+    const m = mine;
+    if (!m || m.up[i]) return Promise.resolve();
+    if (!m.busy[i]) m.busy[i] = doSlide(i).finally(() => { m.busy[i] = null; });
+    return m.busy[i];
+  }
+  async function doSlide(i) {
     if (!mine) return;
     if (mine.up[i]) return;
     if (!mine.blobs[i]) {

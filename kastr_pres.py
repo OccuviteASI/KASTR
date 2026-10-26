@@ -1291,6 +1291,20 @@ def convert_with_powerpoint(data, state_dir, scene, note=None, run=None, timeout
 # the blob store (relay host)
 
 
+def _replace(src, dst, tries=40):
+    """os.replace that waits out Windows sharing errors: the target may be open for a moment (a viewer reading the slide,
+    another upload of the same slide landing) -> PermissionError. Same bytes either way, so a short wait is enough."""
+    for k in range(tries):
+        try:
+            os.replace(src, dst)
+            return True
+        except PermissionError:
+            if k == tries - 1:
+                return False
+            time.sleep(0.05)
+    return False
+
+
 class Store:
     def __init__(self, base):
         self.root = os.path.join(base, "pres")
@@ -1393,21 +1407,27 @@ class Store:
         if self._size(did) + length > STORE_DECK_MAX:
             return 413, "this presentation is too large"
         path = os.path.join(self.root, did, fname)
+        # 0.21.86: each upload writes its own part file -- two uploads of the same slide at once used to share one, and on
+        # Windows the second crashed with PermissionError
+        part = "%s.%s.part" % (path, uuid.uuid4().hex[:12])
         got = 0
-        with open(path + ".part", "wb") as f:
-            while got < length:
-                chunk = rfile.read(min(1 << 20, length - got))
-                if not chunk:
-                    break
-                f.write(chunk)
-                got += len(chunk)
-        if got != length:
+        try:
+            with open(part, "wb") as f:
+                while got < length:
+                    chunk = rfile.read(min(1 << 20, length - got))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+            if got != length:
+                return 400, "short upload"
+            if not _replace(part, path):
+                return 503, "the slide is busy -- try again"
+        finally:
             try:
-                os.remove(path + ".part")
+                os.remove(part)
             except OSError:
                 pass
-            return 400, "short upload"
-        os.replace(path + ".part", path)
         return 200, "ok"
 
     def path(self, did, fname):

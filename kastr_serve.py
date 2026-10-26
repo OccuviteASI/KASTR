@@ -73,6 +73,7 @@ def precache_list(root):
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
            "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
+    out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)
         for dp, _dn, fns in os.walk(base):
@@ -3315,6 +3316,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 45
                 elif path0.startswith("/api/rcx"):
                     to = 15
+                elif path0 == "/api/msg/file":   # 0.21.88: up to 25 MB through a spoke to the hub
+                    to = 150
+                elif path0 == "/api/msg":        # 0.21.88: a spoke asks the hub (PBKDF2 happens in the browser, not here)
+                    to = 30
                 ctype = None
                 with urllib.request.urlopen(req, timeout=to) as r:
                     data = r.read()
@@ -3327,7 +3332,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._json_cors(503, {"error": "room-code service unreachable: %s" % e})   # 0.20.0: 503, never 502 (Cloudflare swaps 502s)
             self.send_response(code)
             _ct = locals().get("ctype")
-            self.send_header("Content-Type", _ct if (code == 200 and str(_ct or "").startswith("image/")) else "application/json")
+            self.send_header("Content-Type", _ct if (code == 200 and (str(_ct or "").startswith("image/") or str(_ct or "") == "application/octet-stream")) else "application/json")   # 0.21.88: + an attachment's ciphertext
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             if retry_after:
@@ -3881,6 +3886,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/vehicle",                                      # 0.21.63: a vehicle's key -> a publish token
                          "/api/invite", "/api/invite/revoke", "/api/invites",  # 0.21.75: room invite links (the minter keeps them)
                          "/api/people",                                       # 0.21.78: beats, person invites, My room shared
+                         "/api/msg", "/api/msg/file",                         # 0.21.88: private messages (+ an attachment's ciphertext)
                          "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
                          "/api/library", "/api/library/token", "/api/library/admin",   # 0.21.84: the stream library
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
@@ -4775,6 +4781,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         "/api/xshare",                                                          # 0.21.41: the cross-room listings into a room
                         "/api/library", "/api/library/still",                                   # 0.21.84: the stream library's catalogue, a still
                         "/api/invites"):                                                        # 0.21.75: a room's live invite links
+                return self._auth_proxy("GET")
+            if path == "/api/msg/file":                                         # 0.21.88: a message attachment's ciphertext
                 return self._auth_proxy("GET")
             if path == "/api/invite/pending":                                 # 0.21.75: the app hand-off (this machine only)
                 return self._invite_pending("GET")

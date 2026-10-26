@@ -194,6 +194,7 @@
   /* 0.21.60: the Lobby -- the toolbar's sharing, people, chat and files are off; the stage shows the rooms to join */
   body.inlobby #topCamBtn, body.inlobby #topCamChev, body.inlobby #topMicBtn, body.inlobby #topMicChev, body.inlobby #shareBtn,
   body.inlobby #peopleBtn, body.inlobby #chatBtn, body.inlobby #filesBtn, body.inlobby #gridBtn { opacity:.3; pointer-events:none; }
+  body.inlobby #msgBtn { display:none !important; }   /* 0.21.88: no messages from the Lobby (no access code there) */
   body.inlobby #stage { visibility:hidden; }
   #lobbyCard { position:absolute; left:50%; top:max(24px, 12%); transform:translateX(-50%); width:min(520px, calc(100% - 32px)); z-index:5;
     padding:20px 22px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 18px 48px rgba(0,0,0,.45); }
@@ -1919,6 +1920,148 @@
   #pplAllRows .pprow.nogo .pn { color:var(--text-mute); }
   .pplallempty { padding:14px 8px; color:var(--text-mute); font-size:12px; text-align:center; }
   .pplallempty[hidden] { display:none; }
+  /* ==== 0.21.88 (Kenton: "add 'all people' in the people page, then a toggle to show online only"): All people -- offline people
+     greyed with "last seen", a Message button on every row ==== */
+  .pplonly { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim); padding:0 2px 8px; cursor:pointer; user-select:none; }
+  .pprow .ppmsg { flex:none; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; background:none; border:0;
+    border-radius:5px; color:var(--text-mute); cursor:pointer; padding:0; }
+  .pprow .ppmsg .icon { width:17px; height:17px; }
+  .pprow .ppmsg:hover { background:var(--surface-3, rgba(255,255,255,.08)); color:var(--asi-blue); }
+  #pplAllRows .pprow.off { cursor:pointer; }
+  .pprow.off .ppav { filter:grayscale(1); opacity:.5; }
+  .pprow.off .pn { color:var(--text-mute); }
+  .pprow.off .ppmore { display:inline-flex; visibility:hidden; }
+  .pprow.off:hover .ppmore { visibility:visible; }
+  /* ==== 0.21.88: Messages (assets/kastr-msg.js) -- a conversation list + the open conversation; one pane at a time when narrow ==== */
+  #msgPanel { width:min(720px, calc(100vw - 24px)); height:min(78dvh, 720px); max-height:min(78dvh, 720px); }
+  #msgPanel .head .sub { color:var(--text-mute); text-transform:none; letter-spacing:0; font-weight:400; font-size:11px; }
+  #msgBody { flex:1; min-height:0; display:flex; position:relative; }
+  #msgBody .mlist { flex:none; width:100%; display:flex; flex-direction:column; min-width:0; min-height:0; }
+  #msgPanel.mwide #msgBody .mlist { width:270px; border-right:1px solid var(--line); }
+  #msgBody .mconvpane { flex:1; min-width:0; min-height:0; display:none; flex-direction:column; position:relative; }
+  #msgPanel.mwide #msgBody .mconvpane { display:flex; }
+  #msgPanel:not(.mwide).mconv #msgBody .mlist { display:none; }
+  #msgPanel:not(.mwide).mconv #msgBody .mconvpane { display:flex; }
+  #msgPanel.mwide .mchead .mback { display:none; }
+  .mlhead { flex:none; display:flex; gap:6px; align-items:center; padding:10px 10px 6px; }
+  .msearch { flex:1; min-width:0; display:block; }
+  .msearch input, .mpicker .mgname, .msetup input, .msettings input[type=password] { width:100%; box-sizing:border-box; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:6px; color:var(--text); font-size:13px; padding:7px 9px; }
+  .msearch input:focus, .mpicker .mgname:focus, .msetup input:focus, .msettings input:focus { outline:none; border-color:var(--asi-blue); }
+  .mnew, .mgear { flex:none; white-space:nowrap; display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 9px; border-radius:6px; border:1px solid var(--line);
+    background:transparent; color:var(--text); font-size:12px; font-weight:600; cursor:pointer; }
+  .mgear { width:32px; justify-content:center; padding:0; }
+  .mnew:hover, .mgear:hover { background:var(--surface-2); }
+  .mnew .icon, .mgear .icon { width:16px; height:16px; }
+  .mbanner { flex:none; padding:0 10px 6px; display:flex; flex-direction:column; gap:6px; }
+  .mbanner[hidden] { display:none; }
+  .mwarn { font-size:11.5px; color:var(--asi-amber); line-height:1.4; }
+  .mnote { font-size:11.5px; color:var(--text-dim); line-height:1.4; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  .mrow2 { display:flex; gap:6px; margin-top:6px; }
+  .mrows { flex:1; min-height:0; overflow-y:auto; padding:0 6px 8px; }
+  .mrow, .mprow { display:flex; align-items:center; gap:10px; padding:8px 6px; border-radius:8px; cursor:pointer; min-height:44px; }
+  .mrow:hover, .mprow:hover { background:var(--surface-2); }
+  .mrow.on { background:color-mix(in srgb, var(--asi-blue) 16%, transparent); }
+  .mav { position:relative; flex:none; width:38px; height:38px; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:13px; font-weight:600;
+    background:color-mix(in srgb, var(--ring, var(--asi-blue)) 30%, var(--surface-2)); }
+  .mav.sm { width:30px; height:30px; font-size:11px; }
+  .mav.grp { border-radius:10px; }
+  :root[data-theme="light"] .mav { background:color-mix(in srgb, var(--ring, var(--asi-blue)) 70%, #24384a); }
+  .mmid { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .mt, .mp { display:flex; align-items:baseline; gap:6px; min-width:0; }
+  .mn { flex:1; min-width:0; font-size:13.5px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mrow.unread .mn { font-weight:700; }
+  .mtime { flex:none; font-size:10.5px; color:var(--text-mute); }
+  .mprev { flex:1; min-width:0; font-size:12px; color:var(--text-mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mrow.unread .mprev { color:var(--text); }
+  .mun { flex:none; min-width:18px; height:18px; padding:0 5px; box-sizing:border-box; border-radius:9px; background:var(--asi-blue); color:var(--on-accent);
+    font-size:10.5px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .mun[hidden] { display:none; }
+  .mempty { color:var(--text-mute); font-size:12px; text-align:center; padding:22px 12px; line-height:1.5; }
+  .mempty.mbig { margin:auto; display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .mempty.mbig .icon { width:34px; height:34px; opacity:.5; }
+  .mchead { flex:none; display:flex; align-items:center; gap:8px; padding:9px 10px; border-bottom:1px solid var(--line); }
+  .mback, .mcmenu { flex:none; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:6px;
+    background:transparent; color:var(--text-dim); cursor:pointer; padding:0; }
+  .mback:hover, .mcmenu:hover { background:var(--surface-2); color:var(--text); }
+  .mback .icon, .mcmenu .icon { width:16px; height:16px; }
+  .mcmenu[hidden] { display:none; }
+  .mctitle { flex:1; min-width:0; }
+  .mctitle .mn { font-weight:600; }
+  .mctitle .mprev { display:block; }
+  .mlog { flex:1; min-height:0; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:2px; }
+  .mday { align-self:center; font-size:10px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.08em; padding:10px 0 4px; }
+  .mnewmark { border-top:1px solid var(--asi-red); color:var(--asi-red); font-size:10px; text-align:right; padding:1px 0 3px; margin-top:4px; }
+  .msys { align-self:center; font-size:11px; color:var(--text-mute); padding:6px 8px; text-align:center; }
+  .mb { display:flex; flex-direction:column; align-items:flex-start; max-width:78%; margin-top:6px; }
+  .mb.cont { margin-top:1px; }
+  .mb.mine { align-self:flex-end; align-items:flex-end; }
+  .mwho { font-size:11px; font-weight:600; padding:0 10px 2px; color:color-mix(in srgb, var(--pc, var(--asi-blue)) 70%, var(--text)); }
+  .mbub { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:14px; padding:7px 10px 4px; min-width:60px; max-width:100%; box-sizing:border-box; }
+  .mb:not(.mine) .mbub { border-top-left-radius:5px; }
+  .mb.mine .mbub { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); border-top-right-radius:5px; }
+  .mb.cont:not(.mine) .mbub { border-top-left-radius:14px; }
+  .mb.cont.mine .mbub { border-top-right-radius:14px; }
+  .mbub.mlock { font-style:italic; opacity:.75; }
+  .mtxt { font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
+  .mtxt a { color:inherit; text-decoration:underline; }
+  .mmeta { font-size:10px; opacity:.7; text-align:right; margin-top:2px; white-space:nowrap; }
+  .mst.read { color:#7fe3ff; opacity:1; }
+  :root[data-theme="light"] .mst.read { color:#fff; font-weight:700; }
+  .mst.bad { color:var(--asi-red); white-space:normal; }
+  .mb.mine .mst.bad { color:#ffd0d0; }
+  .mimg { margin:2px 0 4px; border-radius:10px; overflow:hidden; max-width:280px; min-height:40px; min-width:80px; background:rgba(0,0,0,.15); }
+  .mimg img { display:block; max-width:100%; max-height:260px; cursor:zoom-in; }
+  .mimg.loading { min-height:120px; }
+  .mimg.mfail { font-size:11px; padding:8px; }
+  .mfile { display:flex; align-items:center; gap:8px; margin:2px 0 4px; padding:7px 9px; border-radius:8px; background:rgba(0,0,0,.12); cursor:pointer; font-size:12px; max-width:280px; }
+  .mfile .icon { flex:none; width:18px; height:18px; }
+  .mfile .mfn { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; }
+  .mfile .mfs { flex:none; opacity:.75; font-size:11px; }
+  .mnokey { flex:none; font-size:11.5px; color:var(--asi-amber); padding:6px 12px; }
+  .mnokey[hidden], .matt[hidden] { display:none; }
+  .matt { flex:none; display:flex; flex-wrap:wrap; gap:6px; padding:6px 10px 0; }
+  .mca { display:flex; align-items:center; gap:5px; font-size:11px; border:1px solid var(--line); border-radius:6px; padding:3px 6px; max-width:100%; color:var(--text-dim); }
+  .mca img { width:30px; height:30px; object-fit:cover; border-radius:4px; }
+  .mca span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+  .mca button { background:transparent; border:0; color:var(--text-mute); cursor:pointer; padding:0 2px; }
+  .mcomp { flex:none; display:flex; align-items:flex-end; gap:6px; padding:8px 10px; border-top:1px solid var(--line); background:var(--surface-2); }
+  .mcomp.off { opacity:.5; pointer-events:none; }
+  .mcomp textarea { flex:1; min-width:0; resize:none; max-height:120px; background:var(--surface); border:1px solid var(--line); color:var(--text);
+    border-radius:8px; padding:7px 9px; font-family:var(--font-ui); font-size:13px; line-height:1.35; }
+  .mcomp textarea:focus { outline:none; border-color:var(--asi-blue); }
+  .mattach, .msend { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+  .mattach .icon, .msend .icon { width:17px; height:17px; }
+  .mattach:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
+  .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
+    display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
+  .msetup { margin:auto; max-width:340px; padding:24px 18px; display:flex; flex-direction:column; gap:10px; text-align:center; align-items:stretch; }
+  .msetup .mico { display:flex; justify-content:center; color:var(--asi-blue); }
+  .msetup .mico .icon { width:40px; height:40px; }
+  .msetup h3 { margin:0; font-size:15px; color:var(--text); }
+  .msetup .mtxt { margin:0; font-size:12.5px; color:var(--text-dim); line-height:1.5; white-space:normal; }
+  .merr { margin:0; font-size:12px; color:var(--asi-amber); min-height:0; }
+  .merr:empty { display:none; }
+  .mprim, .mghost { border-radius:6px; padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer; }
+  .mprim { background:var(--asi-blue); color:var(--on-accent); border:1px solid var(--asi-blue); }
+  .mprim:disabled { opacity:.5; cursor:default; }
+  .mghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .mghost:hover { background:var(--surface-2); }
+  .mghost .icon { width:15px; height:15px; vertical-align:-3px; }
+  .mpicker, .msettings { display:flex; flex-direction:column; gap:8px; padding:0 4px 8px; }
+  .mshead { display:flex; align-items:center; gap:6px; font-weight:600; font-size:13px; color:var(--text); }
+  .mshead .mback .icon, .mchead .mback .icon { transform:none; }
+  .mppl { display:flex; flex-direction:column; }
+  .mprow.nokey { cursor:default; opacity:.55; }
+  .mprow.nokey .mprev { font-style:italic; }
+  .mprow.sel { background:color-mix(in srgb, var(--asi-blue) 16%, transparent); }
+  .mtick { flex:none; width:20px; height:20px; border-radius:50%; border:1px solid var(--line); display:grid; place-items:center; font-size:12px; color:var(--on-accent); }
+  .mprow.sel .mtick { background:var(--asi-blue); border-color:var(--asi-blue); }
+  .msettings h4 { margin:8px 0 0; font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
+  .msettings .mhint { margin:0; font-size:12px; color:var(--text-dim); line-height:1.45; }
+  .mchk { display:flex; gap:8px; align-items:center; font-size:12.5px; color:var(--text); }
   #pplStreams > summary { cursor:pointer; font-size:12px; color:var(--text-mute); padding:4px 2px; }
   #pplStreams > summary:hover { color:var(--text); }
   /* person groups in the People list */
@@ -2039,8 +2182,8 @@
       width:100vw; max-width:none; max-height:80dvh; border-radius:12px 12px 0 0; border-bottom:0; transform:none; }
     #mineMenu { min-width:0; padding-bottom:calc(6px + env(safe-area-inset-bottom)); }   /* 0.21.0: the chevron/room menus are sheets too */
     #sharePop { height:min(760px, 80dvh); }
-    #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #profilePop, #chatPanel { width:100vw; }
-    #chatPanel { height:min(78dvh, 720px); }
+    #camPop, #audioPop.teams, #viewPop, #optPop.teams, #filesPop, #encPop, #audOutPop, #profilePop, #chatPanel, #msgPanel { width:100vw; }
+    #chatPanel, #msgPanel { height:min(78dvh, 720px); }   /* 0.21.88: + Messages */
     #profilePop.modal { top:auto !important; left:0 !important; transform:none; }
     .popcard .body, #sharePop .body, #peoplePanel .pbody { padding-bottom:calc(12px + env(safe-area-inset-bottom)); }
     .popcard .head .close { min-width:36px; height:32px; }
@@ -2063,7 +2206,7 @@
     #stage.spot #railPager.show { display:flex !important; }   /* 0.21.72: the sideways phone keeps the desktop rail -- and its pages */
     .popcard, #sharePop, #peoplePanel, #mineMenu { max-height:calc(100dvh - 48px) !important; }
     #sharePop { height:calc(100dvh - 48px) !important; }
-    #chatPanel { height:calc(100dvh - 48px) !important; max-height:none; }
+    #chatPanel, #msgPanel { height:calc(100dvh - 48px) !important; max-height:none; }
     #joinGate .card { max-height:100dvh; overflow-y:auto; }
     #topbar .sp { flex:1; height:auto; }   /* 0.21.5: one toolbar row in landscape (the phone block above forces a second row for portrait) */
   }
@@ -2253,6 +2396,7 @@
   <button id="gridBtn" class="toggle tb" type="button" title="View"></button>
   <button id="filesBtn" class="toggle tb" type="button" title="Files shared with the room"></button>
   <button id="chatBtn" class="toggle tb" type="button" title="Room chat"></button>
+  <button id="msgBtn" class="toggle tb" type="button" title="Messages" hidden></button>   <!-- 0.21.88: private messages (not tied to rooms) -->
   <button id="libBtn" class="toggle tb" type="button" title="Streams &mdash; the fleet's stream library: cameras from any site, for this room" hidden></button>   <!-- 0.21.84 -->
   <button id="optBtn" class="toggle tb" type="button" title="More"></button>
   <span class="tbdiv"></span>
@@ -2320,7 +2464,7 @@
   <!-- 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): This room (the default) | Everyone online -->
   <div id="pplTabs" class="ppltabs" role="tablist" aria-label="Whom to list">
     <button type="button" role="tab" id="pplTabRoom" class="on" aria-selected="true" aria-controls="pplRows">This room</button>
-    <button type="button" role="tab" id="pplTabAll" aria-selected="false" aria-controls="pplAll" title="Everyone in any room of this relay's fleet, guests and viewers too">Everyone online <span id="pplAllN" class="n"></span></button>
+    <button type="button" role="tab" id="pplTabAll" aria-selected="false" aria-controls="pplAll" title="Everyone online in any room of this relay's fleet -- and, with Online only off, everyone seen in the last 30 days">All people <span id="pplAllN" class="n"></span></button>
   </div>
   <!-- 0.21.23 (Kenton, Teams screenshot): one row per person -->
   <div id="pplTop">
@@ -2341,6 +2485,8 @@
   <div id="pplRows"></div>
   <div id="pplEmpty" hidden></div>
   <div id="pplAll" hidden role="tabpanel" aria-labelledby="pplTabAll">
+    <!-- 0.21.88: Online only (on by default, remembered on this device); off adds everyone seen with KASTR or a web page in 30 days -->
+    <label class="pplonly" title="Off: also everyone this fleet has seen with KASTR or a web page in the last 30 days"><span class="switch sm"><input type="checkbox" id="pplOnline" checked><i></i></span><span>Online only</span></label>
     <div id="pplAllSum" class="pplallsum" aria-live="polite"></div>
     <div id="pplAllRows"></div>
     <div id="pplAllEmpty" class="pplallempty" hidden></div>
@@ -2938,6 +3084,13 @@
   <div id="chatMsg" class="chint"></div>
 </div>
 
+<!-- 0.21.88: private messages -- assets/kastr-msg.js builds the inside (a conversation list + the open conversation) -->
+<aside id="msgPanel" class="popcard" hidden aria-label="Messages">
+  <div class="head"><span>Messages</span><span class="sub">end-to-end encrypted</span><span class="sp"></span>
+    <button type="button" class="close" title="Close">&#10005;</button></div>
+  <div id="msgBody"></div>
+</aside>
+
 <div id="roomInfoPop" class="popcard teams" hidden>
   <div class="head"><span>Room info</span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
@@ -3446,6 +3599,10 @@
     chat: '<path d="M3.5 4.5h13a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H9l-4 3v-3H3.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>'   // 0.12.0
        + '<path d="M6.5 8.5h7M6.5 11h4.5"/>',
     mouse: '<path d="M5 2.5 15 11l-4.3.7 2.6 5.1-2 1-2.6-5.1L5 15.6z"/>',   // 0.21.79: remote control
+    // 0.21.88: private messages -- two speech bubbles; a paper clip; send
+    msg: '<path d="M2.5 4.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1H7.5l-3 2.5v-2.5h-1a1 1 0 0 1-1-1z"/><path d="M15.5 7h1a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-1v2.3l-3-2.3H9.5a1 1 0 0 1-1-1V13"/>',
+    clip: '<path d="M14.5 9.5 9 15a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3L7.5 13a1.1 1.1 0 0 1-1.6-1.6L11 6.3"/>',
+    send: '<path d="M3 10 17 3l-4.5 14-3-5.5z" /><path d="M9.5 11.5 17 3"/>',
   };
   function icon(name, cls) {
     return '<svg class="icon ' + name + (cls ? " " + cls : "")
@@ -3479,6 +3636,7 @@
   document.getElementById("gridBtn").innerHTML = tbHtml("view", "View");
   document.getElementById("filesBtn").innerHTML = tbHtml("files", "Files") + '<span class="bdg" hidden></span>';
   document.getElementById("chatBtn").innerHTML = tbHtml("chat", "Chat") + '<span class="bdg" hidden></span>';   // 0.12.0
+  document.getElementById("msgBtn").innerHTML = tbHtml("msg", "Messages") + '<span class="bdg" hidden></span>';   // 0.21.88
   document.getElementById("optBtn").innerHTML = tbHtml("more", "More");
   document.getElementById("shareBtn").innerHTML = tbHtml("share", "Share");
   document.getElementById("leaveBtn").innerHTML = tbHtml("leave", "Leave");
@@ -4765,7 +4923,8 @@
       if (mode === "have") { close(); if (!(joinState === "joined" && CHANNEL === personalGet()?.slug)) personalEnter(); return; }
       const name = q(".pmname").value.trim().replace(/\s+/g, " "), code = q(".pmcode").value;
       if (!name) { say("Enter your name.", true); q(".pmname").focus(); return; }
-      if (code.length < 4) { say("A personal code has at least 4 characters.", true); q(".pmcode").focus(); return; }
+      const cmin = mode === "make" ? Math.max(4, Number(el.__opts?.min) || 4) : 4;   // 0.21.88: messages ask for a longer one
+      if (code.length < cmin) { say("A personal code has at least " + cmin + " characters" + (cmin > 4 ? " (it also protects your messages)" : "") + ".", true); q(".pmcode").focus(); return; }
       if (mode === "make" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
       say(mode === "make" ? "Making your room\u2026" : "Opening your room\u2026");
       q(".pmok").disabled = true;
@@ -4775,6 +4934,8 @@
       personalSave({ slug: d.slug, name: d.name || name, code });
       q(".pmcode").value = ""; q(".pmcode2").value = "";
       close();
+      try { window.dispatchEvent(new Event("kastr:personal")); } catch {}   // 0.21.88: Messages unlock with it
+      if (el.__opts?.stay) { el.__opts = {}; window.__toast?.("My room is set up — opening your messages", 4000, { level: "event" }); return; }
       window.__toast?.((mode === "make" && d.created ? "My room is ready" : "My room is set up on this device") + " \u2014 it is the first card in your rooms list (nobody else sees it unless you share it).", 5000, { level: "event" });
       if (joinState === "joined") personalEnter();
     };
@@ -4801,9 +4962,10 @@
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
     if (note) pmEl.__say(note, true);
   }
-  function personalDialog(mode, note) {
+  function personalDialog(mode, note, opts) {
     closeAllPops();
     if (!pmEl) pmEl = pmBuild();
+    pmEl.__opts = opts || {};   // 0.21.88: from Messages -- {stay: true (no move into My room), min: the code length messages need}
     pmEl.__say("");
     pmPaint(mode, note);
     pmEl.hidden = false;
@@ -4837,6 +4999,7 @@
       if (!d?.ok) return;
       personalSharedApply(d.shared);
       for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes
+      if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
     } catch {} finally { pbBusy = false; }
   }
@@ -5121,7 +5284,20 @@
     for (const m of members.values()) if (String(m.op || "").toLowerCase() === k && HOST_RE.test(String(m.host || ""))) return String(m.host);
     return "";
   }
+  // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
   function personInviteItems(p) {
+    const r = personInviteItems0(p);
+    const ok = !!p && !p.me && !!p.name && !!window.__kmsg?.allowed?.();
+    if (!ok) return r;
+    const m = { value: "pinv-msg", icon: "msg", label: "Message " + p.name, tip: "A private message, end-to-end encrypted — they get it even when they are offline" };
+    const open = () => { try { window.__msg?.openWith(p.name); } catch {} };
+    if (!r) {
+      const more = p.more?.items?.length ? [{ sep: true }, ...p.more.items] : [];
+      return { items: [m, ...more], pick: (v) => (v === "pinv-msg" ? open() : String(v).startsWith("pinv-eo") ? p.more?.pick?.(v) : null) };
+    }
+    return { items: [m, { sep: true }, ...r.items], pick: (v) => (v === "pinv-msg" ? open() : r.pick(v)) };
+  }
+  function personInviteItems0(p) {
     if (!p || p.me || joinState !== "joined" || !authSecured || !authTokens?.member || pbOld) return null;
     const host = p.host || personHostOf(p.key, p.room || CHANNEL);
     if (!host || host === HOSTNAME1) return null;
@@ -9550,6 +9726,48 @@
     box: document.getElementById("pplAll"), sum: document.getElementById("pplAllSum"), rows: document.getElementById("pplAllRows"), empty: document.getElementById("pplAllEmpty") };
   const EO_POLL_MS = 4000, EO_STALE_MS = 15000;
   const eoOn = () => eo.view === "all";
+  // 0.21.88 (Kenton: "add 'all people' in the people page, then a toggle to show online only"): the tab is All people; Online only
+  // (on by default, per device) shows today's grouping by room; off adds everyone the hub has seen with KASTR or a web page in the
+  // last 30 days (POST /api/people {op: "all"}), greyed with "last seen". Every row has Message.
+  const EO_ONLY_KEY = "kastr.people.onlineOnly";
+  eo.onlineOnly = true;   // this device's choice is read below (eoOnlyLoad)
+  eo.all = []; eo.allAt = 0; eo.allBusy = false; eo.allOld = false; eo.allDown = false;
+  const eoNameKey = (s) => String(s || "").trim().split(/\s+/).join(" ").slice(0, 48).toLowerCase();
+  const eoAgo = (sec) => { const d = Math.max(0, Date.now() / 1000 - Number(sec || 0)); return !sec ? "" : d < 90 ? "just now" : d < 3600 ? Math.round(d / 60) + " min ago"
+    : d < 86400 ? Math.round(d / 3600) + " h ago" : d < 2 * 86400 ? "yesterday" : Math.round(d / 86400) + " days ago"; };
+  async function eoFetchAll(force) {
+    if (eo.allBusy || joinState !== "joined" || !authSecured || !authTokens?.member || inLobby()) return eo.all;
+    if (!force && Date.now() - eo.allAt < 20000) return eo.all;
+    const base = authBase();
+    if (!base) return eo.all;
+    eo.allBusy = true;
+    const ctl = new AbortController(), tmo = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + authTokens.member },
+        body: JSON.stringify({ op: "all" }), signal: ctl.signal });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 400 && /unknown op/.test(String(d.error || ""))) { eo.allOld = true; eo.all = []; }   // a relay host before 0.21.88
+      else if (r.ok && d.ok && Array.isArray(d.rows)) { eo.allOld = false; eo.allDown = !!d.hubDown; eo.all = d.rows.filter((x) => x && x.name); }
+      eo.allAt = Date.now();
+    } catch {} finally { clearTimeout(tmo); eo.allBusy = false; }
+    eo.sig = "";
+    eoPaint();
+    return eo.all;
+  }
+  function eoOffline(groups) {   // everyone in All people who is not online right now (by name), never me
+    const on = new Set(groups.flatMap((g) => g.people).map((x) => eoNameKey(x.name)));
+    const me = eoNameKey(myOpName());
+    const seen = new Set();
+    return eo.all.filter((r) => { const k = eoNameKey(r.name); if (!k || on.has(k) || k === me || seen.has(k)) return false; seen.add(k); return true; })
+      .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }));
+  }
+  async function eoPeopleForMsg() {   // Messages' people picker: who is online + everyone in All people
+    await eoFetchAll(false);
+    const rows = new Map();
+    try { for (const g of eoBuild()) for (const x of g.people) if (!x.me && x.name) { const k = eoNameKey(x.name); if (!rows.has(k)) rows.set(k, { name: x.name, online: true, at: Math.floor(Date.now() / 1000) }); } } catch {}
+    for (const r of eo.all) { const k = eoNameKey(r.name); if (k && !rows.has(k)) rows.set(k, { name: r.name, online: false, at: Number(r.at) || 0, msg: !!r.msg }); }
+    return [...rows.values()].sort((a, b) => (b.online - a.online) || String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }));
+  }
   EO_READY = true;
   function eoSetView(v) {
     eo.view = v === "all" ? "all" : "room";
@@ -9557,9 +9775,9 @@
     for (const [b, on] of [[eoEls.tabRoom, !eoOn()], [eoEls.tabAll, eoOn()]]) { b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }
     eoEls.box.hidden = !eoOn();
     invPop.hidden = true;
-    ppl.search.placeholder = eoOn() ? "Search everyone online" : "Search participants";
+    ppl.search.placeholder = eoOn() ? "Search all people" : "Search participants";
     eo.sig = "";
-    if (eoOn()) eoFetch();
+    if (eoOn()) { eoFetch(); if (!eo.onlineOnly) eoFetchAll(true); }
     paintParticipants(true);
   }
   eoEls.tabRoom.addEventListener("click", (e) => { e.stopPropagation(); eoSetView("room"); });
@@ -9594,6 +9812,7 @@
     eoPaint();
   }
   setInterval(() => { if (eoOn() && !ppl.panel.hidden) eoFetch(); }, EO_POLL_MS);
+  setInterval(() => { if (eoOn() && !ppl.panel.hidden && !eo.onlineOnly) eoFetchAll(false); }, EO_POLL_MS);   // 0.21.88: All people (every 20 s at most)
   window.addEventListener("kastr:auth", () => setTimeout(eoFetch, 500));   // another room (or a fresh token): the relay answers for it now
   // where a click on a room's people goes -> {can, why, here?}
   function eoGoState(g) {
@@ -9694,9 +9913,24 @@
     out.sort((a, b) => { const ra = rank(a), rb = rank(b); return (ra[0] - rb[0]) || (ra[1] - rb[1]) || a.title.localeCompare(b.title); });
     return out;
   }
+  {   // 0.21.88: Online only -- on by default, remembered on this device
+    const el = document.getElementById("pplOnline");
+    try { eo.onlineOnly = localStorage.getItem(EO_ONLY_KEY) !== "0"; } catch { eo.onlineOnly = true; }
+    el.checked = eo.onlineOnly;
+    el.addEventListener("change", () => {
+      eo.onlineOnly = el.checked;
+      try { localStorage.setItem(EO_ONLY_KEY, eo.onlineOnly ? "1" : "0"); } catch {}
+      eo.sig = "";
+      if (!eo.onlineOnly) eoFetchAll(true);
+      eoPaint(true);
+    });
+    el.closest("label").addEventListener("click", (e) => e.stopPropagation());
+  }
   window.__everyone = { build: () => eoBuild().map((g) => ({ key: g.key, slug: g.slug, title: g.title, priv: g.priv, locked: g.locked, go: g.go,
     people: g.people.map((x) => ({ name: x.name, host: x.host, room: x.room, priv: x.priv, guest: x.guest, me: x.me, pub: x.pub })) })),
-    view: (v) => (v ? eoSetView(v) : eo.view), fetch: eoFetch, state: () => ({ view: eo.view, at: eo.at, hubDown: eo.hubDown, hubOld: eo.hubOld, old: eo.old, n: eo.rows.length,
+    view: (v) => (v ? eoSetView(v) : eo.view), fetch: eoFetch, fetchAll: eoFetchAll, onlineOnly: (on) => { if (on !== undefined) { const el = document.getElementById("pplOnline"); el.checked = !!on; el.dispatchEvent(new Event("change")); } return eo.onlineOnly; },
+    offline: () => eoOffline(eoBuild()).map((r) => ({ name: r.name, at: r.at, msg: !!r.msg })), all: () => eo.all.map((r) => ({ name: r.name, at: r.at, msg: !!r.msg, web: !!r.web, app: !!r.app })),   // 0.21.88 rig
+    state: () => ({ view: eo.view, at: eo.at, hubDown: eo.hubDown, hubOld: eo.hubOld, old: eo.old, n: eo.rows.length,
     relays: eo.relays.map((r) => r.name), apps: eo.apps ? eo.apps.size : null }) };   // rig
   function eoPerson(x) {
     if (!x.priv && x.room === CHANNEL && !x.me) { const p = sbMemberPerson(x.op, CHANNEL, x.name); if (p) return p; }   // my room: the People row's own entry (their tile's menu)
@@ -9708,9 +9942,14 @@
     return [{ value: "pinv-eo-restart", label: "Restart their KASTR (admin)", tip: "Their window shows a 10-second notice, then KASTR closes and reopens in the same room" },
             { value: "pinv-eo-move", label: "Move to another relay… (admin)", tip: "For this session; their window shows a 10-second notice" }];
   }
+  function eoMsgAdmin(x) {   // 0.21.88: an admin manages the person's messaging devices
+    return authSecured && authRole === "admin" && !x.me && x.name && window.__kmsg?.allowed?.()
+      ? [{ value: "pinv-eo-msgdev", label: "Messaging devices… (admin)", tip: "Remove a device from " + x.name + "’s messages" }] : [];
+  }
   function eoMenu(x, anchor) {
-    const adm = eoAdminItems(x), p = eoPerson(x);
-    if (adm.length) p.more = { items: adm, pick: (v) => (v === "pinv-eo-restart" ? eoRestart(x) : v === "pinv-eo-move" ? eoMovePick(x, anchor) : null) };
+    const adm = [...eoAdminItems(x), ...eoMsgAdmin(x)], p = eoPerson(x);
+    if (adm.length) p.more = { items: adm, pick: (v) => (v === "pinv-eo-restart" ? eoRestart(x) : v === "pinv-eo-move" ? eoMovePick(x, anchor)
+      : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null) };
     return participantMenu(p, anchor);
   }
   async function eoRestart(x) {
@@ -9765,15 +10004,19 @@
     const hit = (x, g) => !q || String(x.name).toLowerCase().includes(q) || (!g.priv && g.title.toLowerCase().includes(q));
     const shown = groups.map((g) => ({ g, people: g.people.filter((x) => hit(x, g)) })).filter((s) => s.people.length);
     const nRooms = groups.filter((g) => !g.priv).length, nPriv = groups.find((g) => g.priv)?.people.length || 0;
+    const offAll = joined && !lobby && !eo.onlineOnly ? eoOffline(groups) : [];   // 0.21.88: Online only off
+    const off = offAll.filter((r) => !q || String(r.name).toLowerCase().includes(q));
+    const msgOk = !!window.__kmsg?.allowed?.();
     let sum = !joined ? "" : lobby ? "" : all.length + (all.length === 1 ? " person" : " people") + " online in " + nRooms + (nRooms === 1 ? " room" : " rooms")
-      + (nPriv ? " \u00b7 " + nPriv + " in a private room" : "");
+      + (nPriv ? " \u00b7 " + nPriv + " in a private room" : "") + (!eo.onlineOnly ? " \u00b7 " + offAll.length + " offline (seen in the last 30 days)" : "");
     const warn = !joined || lobby ? "" : eo.hubDown ? "The hub is unreachable \u2014 people in private rooms on other relays may be missing"
-      : (eo.old || eo.hubOld) ? "This relay\u2019s KASTR is older than 0.21.85 \u2014 people in private rooms aren\u2019t listed" : "";
-    eoEls.empty.hidden = shown.length > 0;
+      : (eo.old || eo.hubOld) ? "This relay\u2019s KASTR is older than 0.21.85 \u2014 people in private rooms aren\u2019t listed"
+      : !eo.onlineOnly && eo.allOld ? "This relay\u2019s KASTR is older than 0.21.88 \u2014 only people online are listed" : "";
+    eoEls.empty.hidden = shown.length > 0 || off.length > 0;
     eoEls.empty.textContent = !joined ? "Join a room to see who is online."
       : lobby ? "Nobody sees names in the Lobby \u2014 join a room to see everyone online."
       : q ? "No one online matches “" + ppl.search.value.trim() + "”" : "No one else is online.";
-    const sig = JSON.stringify([sum, warn, q, shown.map((s) => [s.g.key, s.g.title, s.g.locked, s.g.go.can, s.g.go.why,
+    const sig = JSON.stringify([sum, warn, q, msgOk, off.map((r) => [r.name, eoAgo(r.at)]), shown.map((s) => [s.g.key, s.g.title, s.g.locked, s.g.go.can, s.g.go.why,
       s.people.map((x) => [x.key, x.name, x.pub, x.talk, x.deaf, x.me, x.guest, personColor(x.op), x.me ? String(eoAvatar(x)).length : eoAvatar(x)])])]);   // (my photo is a data URL: its length will do)
     if (sig === eo.sig && !force) return;
     if (eoEls.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
@@ -9822,7 +10065,13 @@
         const go = () => { if (!x.me) eoGoTo(g); };
         row.addEventListener("click", go);
         row.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === row) { e.preventDefault(); go(); } });
-        if (!x.me && (participantHasMenu(eoPerson(x)) || eoAdminItems(x).length)) {
+        if (!x.me && msgOk && eoNameKey(x.name) !== eoNameKey(myOpName())) {   // 0.21.88: Message (not on my own other devices)
+          const mb = document.createElement("button"); mb.type = "button"; mb.className = "ppmsg"; mb.title = "Message " + x.name + " (private, end-to-end encrypted)";
+          mb.innerHTML = icon("msg");
+          mb.addEventListener("click", (e) => { e.stopPropagation(); window.__msg?.openWith(x.name); });
+          row.appendChild(mb);
+        }
+        if (!x.me && (participantHasMenu(eoPerson(x)) || eoAdminItems(x).length || eoMsgAdmin(x).length)) {
           const more = document.createElement("button"); more.type = "button"; more.className = "ppmore"; more.title = "More options";
           more.innerHTML = icon("more");
           const open = (anchor) => { if (eoMenu(x, anchor)) { row.classList.add("menu"); watchMenuClose(row); } };
@@ -9837,8 +10086,67 @@
         els.push(row);
       }
     }
+    if (off.length) {   // 0.21.88: offline -- greyed, last seen, Message
+      const h = document.createElement("div"); h.className = "eogrp"; h.dataset.room = "~offline";
+      const t = document.createElement("span"); t.className = "eot";
+      { const tx = document.createElement("span"); tx.className = "tx"; tx.textContent = "Offline"; t.appendChild(tx); }
+      t.title = "Seen with KASTR or a web page in the last 30 days";
+      const n = document.createElement("span"); n.className = "eon"; n.textContent = "\u00b7 " + off.length;
+      h.append(t, n);
+      els.push(h);
+      for (const r of off) {
+        const x = { key: "~off|" + eoNameKey(r.name), op: eoNameKey(r.name), name: String(r.name), me: false, host: "" };
+        const row = document.createElement("div");
+        row.className = "pprow off"; row.dataset.key = x.key; row.dataset.room = "~offline"; row.tabIndex = 0;
+        const av = document.createElement("div"); av.className = "ppav";
+        av.style.setProperty("--ring", personColor(opKeyOf(x.name)));
+        av.textContent = viewerInitials(x.name);
+        const nm = document.createElement("div"); nm.className = "ppname";
+        const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = x.name;
+        const ps = document.createElement("div"); ps.className = "ps"; ps.textContent = r.at ? "Last seen " + eoAgo(r.at) : "Offline";
+        nm.append(pn, ps);
+        row.append(av, nm);
+        row.title = x.name + " \u2014 offline" + (r.at ? ", last seen " + eoAgo(r.at) : "") + (msgOk ? " (click to send a message; they get it when they are back)" : "");
+        const go = () => { if (msgOk) window.__msg?.openWith(x.name); };
+        row.addEventListener("click", go);
+        row.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === row) { e.preventDefault(); go(); } });
+        if (msgOk) {
+          const mb = document.createElement("button"); mb.type = "button"; mb.className = "ppmsg"; mb.title = "Message " + x.name + " \u2014 they get it when they are back online";
+          mb.innerHTML = icon("msg");
+          mb.addEventListener("click", (e) => { e.stopPropagation(); go(); });
+          row.appendChild(mb);
+          const adm = eoMsgAdmin(x);
+          const open = (anchor) => {
+            const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm];
+            openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
+            row.classList.add("menu"); watchMenuClose(row);
+          };
+          row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); open(pointAnchor(e.clientX, e.clientY)); });
+          if (adm.length) {
+            const more = document.createElement("button"); more.type = "button"; more.className = "ppmore"; more.title = "More options"; more.innerHTML = icon("more");
+            more.addEventListener("click", (e) => { e.stopPropagation(); open(more); });
+            row.appendChild(more);
+          }
+        }
+        els.push(row);
+      }
+    }
     eoEls.rows.replaceChildren(...els);
   }
+  // 0.21.88: the bridge assets/kastr-msg.js (private messages) talks to the page through. Messages need a room's member token
+  // from an access code: never the Lobby, never an invite-link guest (a My room guest neither).
+  const msgAllowed = () => { try { return joinState === "joined" && !inLobby() && authSecured && !!authTokens?.member && !authGuest && !(inviteGet() && !authAccessCode); } catch { return false; } };
+  window.__kmsg = {
+    base: () => authBase(), token: () => authTokens?.member || "", allowed: msgAllowed, me: () => myOpName(), host: () => HOSTNAME1,
+    personal: () => { const p = personalGet(); return p ? { name: p.name || myOpName(), code: p.code } : null; },
+    savePersonalCode: (code) => { const p = personalGet(); if (p && code) personalSave({ ...p, code }); },
+    personalDialog: (mode, note) => personalDialog(mode, note, { stay: true, min: 8 }),
+    confirm: (o) => kastrConfirm(o), icon: (n) => icon(n), color: (k) => personColor(opKeyOf(k) || k), initials: (n) => viewerInitials(n),
+    menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
+    panel: () => document.getElementById("msgPanel"), btn: () => document.getElementById("msgBtn"),
+    openPanel: () => { const p = document.getElementById("msgPanel"); if (p.classList.contains("docked")) { if (p.classList.contains("folded")) dockBtnClick(p); } else if (p.hidden) document.getElementById("msgBtn").click(); },
+    people: () => eoPeopleForMsg(),
+  };
 
   // ---- remote RTSP grid: expand one cell (0.8.8) ------------------------------
   // The owner announces <room>/~grid/<ts>/<b64 {path,n,layout,cells}>; the
@@ -15319,6 +15627,7 @@
   const roomInfoPop = document.getElementById("roomInfoPop");
   registerPop(optPop, optBtn);
   registerPop(document.getElementById("peoplePanel"), document.getElementById("peopleBtn"), () => paintParticipants(true));   // 0.21.23
+  registerPop(document.getElementById("msgPanel"), document.getElementById("msgBtn"), () => { try { window.__msg?.opened(); } catch {} });   // 0.21.88
   const audOutPop = document.getElementById("audOutPop");   // 0.8.9
   for (const p of [encPop, aboutPop, profilePop, roomInfoPop, audOutPop]) {
     // 0.8.9: the profile card closes through closeProfile (runs the
@@ -19839,12 +20148,14 @@
   // toolbar button collapses / expands the section. Per device (kastr.dock); never on phones -- the bottom sheets stay.
   const DOCK_KEY = "kastr.dock", DOCK_ORDER = ["people", "view", "files", "chat", "share"];
   DOCK_ORDER.splice(DOCK_ORDER.indexOf("share"), 0, "streams");   // 0.21.84: the Streams panel pins like the others (after Chat)
+  DOCK_ORDER.splice(DOCK_ORDER.indexOf("chat") + 1, 0, "msg");   // 0.21.88: Messages pin too (after Chat)
   const dockEl = document.getElementById("kDock"), dockGrip = document.getElementById("kDockGrip");
   const dockPanels = {
     people: { pop: document.getElementById("peoplePanel"), btn: document.getElementById("peopleBtn"), name: "People", fl: 1, show: () => paintParticipants(true) },
     view: { pop: viewPop, btn: gridBtn, name: "View", fl: 0.7, show: () => paintViewPop() },
     files: { pop: filesPop, btn: filesBtn, name: "Files", fl: 0.8, show: () => paintFilesPop() },
     chat: { pop: chatPanel, btn: chatBtn, name: "Chat", fl: 1.4, show: (user) => chatOpened(!user), hide: () => chatClosedHooks() },
+    msg: { pop: document.getElementById("msgPanel"), btn: document.getElementById("msgBtn"), name: "Messages", fl: 1.4, show: (user) => { try { window.__msg?.opened(!user); } catch {} } },   // 0.21.88
     streams: { pop: document.getElementById("libPanel"), btn: document.getElementById("libBtn"), name: "Streams", fl: 1.3, show: (user) => { try { libOpened(!user); } catch {} }, hide: () => { try { libClosed(); } catch {} } },   // 0.21.84
     share: { pop: sharePop, btn: shareBtn, name: "Share", fl: 1.4, show: () => { dockShareLive(true); setTimeout(() => { if (!sharePop.matches(":hover")) dockShareLive(false); }, 3500); },
              hide: () => { try { window.__shareClosed?.(); } catch {} } },
@@ -31528,6 +31839,7 @@
   log("Idle. Add sources, start them, then go live.");
 </script>
 <!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
+<script type="module" src="/assets/kastr-msg.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>
 </body>
 </html>

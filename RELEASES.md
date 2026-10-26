@@ -2,6 +2,53 @@
 
 What changed in each build, newest first.
 
+## v0.21.89 — Presenter modes, backstage mic and camera control, Ask for access, and My room + messages set up for everyone
+
+**Present a deck with your camera: four presenter modes (Kenton: "present a power point and also share my video, with options to switch between the different presenter modes").**
+- **Content only:** the slide alone.
+- **Standout:** you, cut out of your background, in front of the bottom-right of the slide.
+- **Side-by-side:** the slide on the left, your camera on the right.
+- **Reporter:** you in front of an ASI background, with the slide over your shoulder. The presenter picks the background in the presenter view.
+
+How it works:
+- The presenter and backstage people switch modes from a picker in the presenter view, which shows a live preview of what the room sees. Everyone sees the same mode, and recordings follow it.
+- A presentation starts in Standout when your camera is on. If the camera is off or paused, the room sees the slide only, and the mode comes back with the camera.
+- Your KASTR cuts you out once and sends only you, never the room behind you. The cut-out runs only in Standout or Reporter while someone watches, at up to 900 kbps. If your computer can't make it, you appear in a rounded camera box instead.
+- While a camera mode is on, your separate camera tile is hidden for viewers, because you are already in the slide.
+- Slide videos keep playing in their spot in every mode.
+- Older KASTRs see the slide and your normal tile.
+
+**Backstage controls the presenter's mic and camera (Kenton: "I want 'Backstage' to have the ability to mute/unmute and to share/pause video for presenter").**
+- Backstage people can mute and unmute the presenter and pause and resume their video, straight away, while that presentation is live. The presenter sees who did it ("Unmuted by Ada").
+- A switch in the presenter view, "Backstage can control my mic and camera", is on by default and applies to this presentation only.
+- Backstage can resume a camera but never turn on a camera the presenter turned off.
+- Muting works exactly like the presenter pressing Mic.
+
+**Ask for access to a locked room (Kenton: "let someone with permissions in the room already to allow them in without a code"; "an 'Ask for access' in the same pop-up as the code entry").**
+- An **Ask for access** button sits next to the Room code field on the Join room page and on the Change room pop-up. For someone's My room, it is in People.
+- The room's admins and creator who are in the room get an "<name> is asking to join" card with Let in and Decline. The first answer counts. For a My room, only its owner gets the card, while they are in it.
+- Let in gives exactly what the room code would have given, never admin, for this visit only.
+- The person asking is told if they were let in, declined, got no answer after 2 minutes, or if nobody who can let them in is in the room.
+- Asks are rate-limited, and only an admin who is present can approve.
+
+**Set up My room and messages when KASTR opens (Kenton: "have people set their 'my room' and messages up if they haven't already").**
+- Anyone without a My room, with a code shorter than 8 characters, or whose messages aren't unlocked on this device gets a setup card they can't skip.
+- If the name already has a My room, they enter its code or change their name.
+- Camera boxes, relay-only and viewer machines, and guests are never asked.
+- If the hub can't be reached, nobody is blocked; KASTR asks again when it is back.
+- New and changed My room codes now need at least 8 characters everywhere. Existing shorter codes still open.
+
+**Videos and sound on slides**
+- Sound clips embedded in slides now play like slide videos. They follow the deck's start setting, delay, loop and volume, and the presenter and backstage get Play, Pause and seek.
+- A sound linked to a file outside the deck gets a warning naming it. WMA is converted as it plays; MIDI doesn't play.
+
+**Media file picture no longer freezes.** A shared media file's picture sometimes froze for 5–7 seconds shortly after it started, while the sound carried on. It no longer does: no freezes in 26 test starts, where 3 of 12 froze before.
+
+**Join room page**
+- There is no close X and Escape no longer hides it (Kenton).
+- Its heading names the room picked in the list.
+- A room link to a locked room now selects that room.
+
 ## v0.21.88 — Private messages, All people, videos on slides, and KASTR back maximized in your own browser
 
 **Private messages, end-to-end encrypted (Kenton: "Ability to message people privately whether online/offline ... Ability to setup group messages. These messages are not tied to any rooms").** A new Messages panel next to Chat.

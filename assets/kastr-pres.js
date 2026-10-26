@@ -1353,24 +1353,6 @@
     }
     return n;
   }
-  // a picture that stops while the presenter says the video plays: ask for the stream afresh (after 1.5 s, at most every 5 s). Lab
-  // 2026-10-26: the player sometimes drops a new file share's video track right after it starts ("group timestamp is below
-  // the live edge") and the picture froze ~6 s while the sound went on -- an ordinary Share > Media file does the same.
-  function vidWatchdog(o, items) {
-    const now = performance.now();
-    o.vSeen = o.vSeen || new Map();
-    for (const it of items) {
-      const ts = it.src ? it.src.timestamp : null;
-      let s = o.vSeen.get(it.p);
-      if (!s) { s = { ts, at: now, kickAt: 0, kicks: 0 }; o.vSeen.set(it.p, s); }
-      if (ts !== s.ts) { s.ts = ts; s.at = now; continue; }
-      if (it.pl && now - s.at > 1500 && now - s.kickAt > 5000 && window.__presVidKick?.(it.p)) {
-        s.kickAt = now; s.kicks++; s.at = now;
-        T("vid-kick", { id: o.rec.id, idx: o.rec.idx, who: "overlay" });
-      }
-    }
-    for (const p of [...o.vSeen.keys()]) if (!items.some((it) => it.p === p)) o.vSeen.delete(p);
-  }
   function vidFrame() {
     vidRaf = 0;
     let more = false;
@@ -1378,8 +1360,7 @@
       const rec = o.rec, all = rec.vids || [];
       if (all.length) more = true;
       const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank && x.k !== "a");   // a sound clip is heard, not drawn
-      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, p: x.p, pl: x.pl, src: window.__presVidFrame?.(x.p) || null }));
-      vidWatchdog(o, items);
+      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
       const n = drawVids(o.vcv, rec.ar || 16 / 9, items);
       if (n) {
         o.vDrawn++; o.vLast = Date.now();

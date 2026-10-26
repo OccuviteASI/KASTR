@@ -10140,17 +10140,6 @@
   const vgFrameOf = (t) => { try { return t.watch.video?.out?.frame?.peek?.() || t.watch.renderer?.out?.frame?.peek?.() || null; } catch { return null; } };
   // 0.21.87: kastr-pres.js draws a slide's video from its (hidden) tile's newest frame, in the video's spot on the slide
   window.__presVidFrame = (path) => { if (!isPresVid(path)) return null; const t = tiles.get(String(path)); return t ? vgFrameOf(t) : null; };
-  // ... and asks for it afresh when its picture stops while the presenter says it plays (lab 2026-10-26: a new file share's
-  // video track is sometimes dropped by the player right after it starts -- "group timestamp is below the live edge" -- and
-  // came back only ~6 s later; an ordinary Share > Media file does the same). A new subscription starts at the live edge.
-  window.__presVidKick = (path) => {
-    const t = isPresVid(path) && tiles.get(String(path));
-    const u = t && t.watch.getAttribute("url");
-    if (!u) return false;
-    t.watch.removeAttribute("url");
-    setTimeout(() => { if (tiles.get(String(path)) === t && !t.watch.getAttribute("url") && isWatched(String(path))) t.watch.setAttribute("url", u); }, 60);
-    return true;
-  };
   let vgRaf = 0, vgLast = 0;
   function vgSync() {
     for (const [name, t] of tiles) {

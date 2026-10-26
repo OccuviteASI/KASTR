@@ -432,9 +432,7 @@ class PageSeams(unittest.TestCase):
         self.has("if (isPresVid(name)) return !(manualMute || mutedStreams.has(name));", p)
         self.has("&& !isPresVid(name)) ? \"never\"", p)
         self.has("window.__presVidFrame = (path) =>", p)
-        kick = p[p.index("  window.__presVidKick = (path) => {"):p.index("  let vgRaf = 0, vgLast = 0;")]
-        self.has("isPresVid(path) && tiles.get(String(path))", kick)   # only a slide's video stream is ever re-asked
-        self.has('t.watch.removeAttribute("url");', kick)
+        self.hasnt("__presVidKick", p)   # 0.21.88: the re-subscribe guard went with the root fix (group-end-no-guess)
         rx = re.compile(r"/presentation_(?:video|audio)(?:_[a-z0-9]+)?(?:-\d+)?\.hang$")
         self.assertTrue(rx.search("room/HOST/kenton-j/presentation_video.hang"))
         self.assertTrue(rx.search("room/HOST/kenton-j/presentation_video_1k3x9.hang"))
@@ -460,8 +458,7 @@ class PageSeams(unittest.TestCase):
         frame = j[j.index("  function vidFrame() {"):j.index("  // ---- the loop")]
         self.has("x.i === rec.idx && x.st && x.p && !rec.blank", frame)
         self.has("window.__presVidFrame?.(x.p)", frame)
-        wd = j[j.index("  function vidWatchdog("):j.index("  function vidFrame() {")]
-        self.has("it.pl && now - s.at > 1500 && now - s.kickAt > 5000 && window.__presVidKick?.(it.p)", wd)   # a stopped picture while it plays: re-asked, rate-limited
+        self.hasnt("vidWatchdog", j)   # 0.21.88: not needed after the root fix (tests/test_release_0_21_88_media_freeze.py)
         self.assertEqual(j.count("/api/pres/conv/"), 2)   # the job's done (PowerPoint + built-in) and nothing else: the video urls come from the server
         st = j[j.index("  async function startVid("):j.index("  function stopVid(")]
         self.has("const now = sv.auto && !(sv.delay > 0);", st)   # Start: Automatically with a delay -> played when the delay is up

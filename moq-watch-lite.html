@@ -4463,6 +4463,11 @@
   const PRES_VID_RE = /\/presentation_(?:video|audio)(?:_[a-z0-9]+)?(?:-\d+)?\.hang$/;   // 0.21.88: + a slide's sound clip (presentation_audio_<n>)
   const isPresVid = (n) => PRES_VID_RE.test(String(n));
   const roomHid = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room (0.21.87: + a slide's video)
+  // 0.21.89 (Kenton: "present a power point and also share my video, with options to switch between the different presenter
+  // modes"): while a presentation shows its presenter's camera INSIDE its tile (Standout / Side-by-side / Reporter), that camera
+  // is not also a tile of its own here (gallery, rail) -- unless I put it on my stage myself -- yet it keeps decoding (cgWarm),
+  // because kastr-pres.js draws its frames. Fed by kastr-pres.js (window.__presCamHide); empty while every deck is Content only.
+  const presCamHide = new Set();
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
   // 0.21.75 (Kenton: "hide individual cameras in my grid view"): roomHid also holds the cameras I hid in MY view of a grid (myHid,
   // this device only) so their own tiles leave my gallery / rail / stage too; roomHidBoard = the room's own removals alone.
@@ -7551,7 +7556,8 @@
   }
   const cgPending = new Map();   // a new grid while its builder is open: tile name -> def (kept on Done, gone on Cancel)
   const cgCams = new Set();      // every camera a grid of mine / of my room draws
-  const cgWarm = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
+  const cgWarm = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();
+  { const has0 = cgWarm.has.bind(cgWarm); cgWarm.has = (n) => has0(n) || presCamHide.has(n); }   // 0.21.89: + a presenter's camera drawn inside its presentation tile   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
   let cgDefsNow = new Map();     // tile name -> {kind: "me" | "room", id, g: {name, slots, gap, sens}}
   let cgOpened = null;           // {cam, grid}: a camera opened from a grid's spot (a click on it goes back)
   let cgWarmSig = "", cgTickT = 0, cgRaf = 0, cgLastDraw = 0;
@@ -8479,6 +8485,42 @@
     sendControl(window.__publisher.peer, src.id, { videoPaused: src.videoPaused });
     renderMine();
   });
+  // 0.21.89 (Kenton: "I want 'Backstage' to have the ability to mute/unmute and to share/pause video for presenter"): kastr-pres.js,
+  // on the PRESENTER's page, applies a backstage person's Mute / Unmute / Pause video / Resume video through exactly the path the
+  // toolbar's Mic and Camera buttons take (the camera source's micMuted / videoPaused + sendControl + renderMine), so the toolbar,
+  // the People icons, the speaking light and the headset LED all agree. The library's `muted` is never written here. Unmuting
+  // never fights the microphone's own mute (a muted headset / mic key) and undeafens like the Mic button.
+  window.__presAV = {
+    state() {
+      const { src } = localCamSrc();
+      const hw = hwFollowOn() && typeof hwMuteSeen === "string" && hwMuteSeen.endsWith("|1");
+      if (!src) return { mic: "none", cam: "off", hw, deaf: !!deafened };
+      const ci = window.__presCut?.camInfo?.() || null;
+      return { mic: ci && ci.mic === false ? "none" : src.micMuted ? "muted" : "on", cam: src.videoPaused ? "paused" : "on", hw, deaf: !!deafened, id: src.id };
+    },
+    mic(mute) {
+      const { src } = localCamSrc();
+      if (!src) return { ok: false, why: "no microphone is on" };
+      const ci = window.__presCut?.camInfo?.() || null;
+      if (ci && ci.mic === false) return { ok: false, why: "no microphone is available" };
+      if (!mute && hwFollowOn() && typeof hwMuteSeen === "string" && hwMuteSeen.endsWith("|1")) return { ok: false, why: "the microphone is muted on the device itself" };
+      if (!mute && deafened) setDeafen(false);   // as the Mic button: unmuting undeafens
+      if (!!src.micMuted === !!mute) return { ok: true, noop: true };
+      src.micMuted = !!mute;
+      sendControl(window.__publisher.peer, src.id, { micMuted: src.micMuted });
+      renderMine();
+      return { ok: true };
+    },
+    cam(pause) {
+      const { src } = localCamSrc();
+      if (!src) return { ok: false, why: "the camera is off" };
+      if (!!src.videoPaused === !!pause) return { ok: true, noop: true };
+      src.videoPaused = !!pause;
+      sendControl(window.__publisher.peer, src.id, { videoPaused: src.videoPaused });
+      renderMine();
+      return { ok: true };
+    },
+  };
   // the chevrons open the Camera / Audio popovers (registered with the other pops)
 
   function renderMine() {
@@ -10225,6 +10267,7 @@
   const leavingExMember = (name) => { if (!pendingRemovals.has(name)) return false; const now = Date.now(); for (const f of gridForgot.values()) if (f.known.includes(name) && now - f.at <= GRID_FORGOT_HOLD_MS) return true; return false; };   // 0.21.16: an ex-member of a just-withdrawn grid whose own broadcast already went inactive stays hidden while its removal debounce runs (owner switched its cameras off: no loose dead tiles)
   const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || (deadMember(name) && !(name === selectedName && !gridMode && gridPickHeld(name))) || leavingExMember(name) || roomHid.has(name)   // 0.21.80: a clicked camera held through a `down` flap stays shown
     || (cgHide(name) && (gridMode || name !== selectedName))   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
+    || (presCamHide.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))   // 0.21.89: drawn inside its presentation tile
     || gridDark(name);
   // 0.21.66 (Kenton: an RTMP grid sat on "cameras offline -- reconnecting (3)" -- "It should hide it"): a grid whose every camera is
   // offline is hidden here like a camera behind its grid (gallery, rail, stage, spotlight, pins); the owner box keeps it running and
@@ -10442,6 +10485,60 @@
   const vgFrameOf = (t) => { try { return t.watch.video?.out?.frame?.peek?.() || t.watch.renderer?.out?.frame?.peek?.() || null; } catch { return null; } };
   // 0.21.87: kastr-pres.js draws a slide's video from its (hidden) tile's newest frame, in the video's spot on the slide
   window.__presVidFrame = (path) => { if (!isPresVid(path)) return null; const t = tiles.get(String(path)); return t ? vgFrameOf(t) : null; };
+  // 0.21.89: presenter modes -- kastr-pres.js draws the presenter's camera (its ordinary camera tile's newest frame) and, for
+  // Standout / Reporter, the presenter's CUT-OUT: <room>/<host>/<op>/presentation_cutout_<id>.cut, the person alone (colour on the
+  // left half, the mask as grey on the right half). Deliberately NOT a .hang: every KASTR skips an announce that is not a .hang
+  // (older ones included -- never a tile, never subscribed there), so it is subscribed here by its own hidden <moq-watch>,
+  // only while a presentation in this room shows it.
+  window.__presCamFrame = (path) => { const t = tiles.get(String(path)); return t ? vgFrameOf(t) : null; };
+  window.__presCamHide = (paths) => {
+    const next = new Set((Array.isArray(paths) ? paths : []).map(String).filter((p) => /\.hang$/.test(p)));
+    if (next.size === presCamHide.size && [...next].every((p) => presCamHide.has(p))) return false;
+    presCamHide.clear();
+    for (const p of next) presCamHide.add(p);
+    try { applyState(); } catch {}
+    return true;
+  };
+  const PRES_CUT_RE = /^[a-z0-9-]+\/[a-z0-9-]+\/(?:[a-z0-9-]+\/)?presentation_cutout_[a-z0-9]+\.cut$/;
+  const presCuts = new Map();   // cut-out path -> {w: <moq-watch>, ts, at, kicks}
+  function presCutHold() {
+    let h = document.getElementById("presCutHold");
+    if (!h) { h = document.createElement("div"); h.id = "presCutHold"; h.style.cssText = "position:fixed;left:-8px;top:-8px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none"; document.body.appendChild(h); }
+    return h;
+  }
+  window.__presCutWant = (paths) => {
+    const want = new Set((Array.isArray(paths) ? paths : []).map(String).filter((p) => PRES_CUT_RE.test(p)));
+    for (const [p, c] of presCuts) if (!want.has(p)) { try { c.w.removeAttribute("url"); c.w.remove(); } catch {} presCuts.delete(p); }
+    if (!CLIENT.webcodecs) return [...presCuts.keys()];
+    for (const p of want) {
+      if (presCuts.has(p)) continue;
+      const w = document.createElement("moq-watch");
+      w.setAttribute("priority", "150");
+      const tn = tuningFor("rail"); w.setAttribute("delay", tn.delay); w.setAttribute("buffer", tn.buffer);   // the same budget as the presenter's camera tile (lip sync)
+      w.setAttribute("name", p);
+      w.setAttribute("visible", "always");   // decodes without a canvas (the library's renderer gate) -- the frames are drawn by kastr-pres.js
+      w.setAttribute("url", tileUrl(p));
+      presCutHold().appendChild(w);
+      presCuts.set(p, { w, ts: null, at: performance.now(), kicks: 0, t0: performance.now() });
+    }
+    return [...presCuts.keys()];
+  };
+  window.__presCutFrame = (path) => {
+    const c = presCuts.get(String(path));
+    if (!c) return null;
+    let f = null;
+    try { f = c.w.video?.out?.frame?.peek?.() || c.w.renderer?.out?.frame?.peek?.() || null; } catch {}
+    const now = performance.now(), ts = f ? f.timestamp : null;
+    if (ts !== c.ts) { c.ts = ts; c.at = now; }
+    else if (now - c.at > 3000) {   // nothing new for 3 s: a fresh subscription (starts at the live edge)
+      c.at = now; c.kicks++;
+      const u = c.w.getAttribute("url") || tileUrl(String(path));
+      c.w.removeAttribute("url");
+      setTimeout(() => { if (presCuts.get(String(path)) === c) c.w.setAttribute("url", tileUrl(String(path)) || u); }, 60);
+    }
+    return f;
+  };
+  window.__presCutStats = () => [...presCuts.entries()].map(([p, c]) => ({ path: p, kicks: c.kicks, age: Math.round(performance.now() - c.t0) }));   // rig
   let vgRaf = 0, vgLast = 0;
   function vgSync() {
     for (const [name, t] of tiles) {
@@ -18209,6 +18306,11 @@
           cx.textAlign = "center"; cx.textBaseline = "middle";
           cx.fillText(init, x + w / 2, y + h / 2);
           cx.textAlign = "left";
+        }
+        {   // 0.21.89: a presentation tile records as it is seen -- the sharp slide, its video and the presenter's camera in the room's
+          // presenter mode (kastr-pres.js's layers over the share's own picture; each is the pane's size)
+          const layers = [...el.querySelectorAll("canvas.presov, canvas.presvid, canvas.prescam")].filter((c) => c.width > 2 && c.isConnected);
+          if (layers.length) { try { for (const c of layers) cx.drawImage(c, x, y, w, h); } catch {} }
         }
         const label = el.querySelector(".l, .nm")?.textContent || "";
         if (label) {
@@ -26704,6 +26806,7 @@
                 segN: 0, drawN: 0, segFps: 0, drawFps: 0, fpsAt: performance.now() };
     loadFxBg(b, b.fx);
     slot.blur = b;
+    b.maskCv = maskCv;   // 0.21.89: the presentation cut-out reuses this camera's matte (window.__presCut)
     b.proc = fx0.proc || "auto"; b.matGen = 0; b.engine = seg ? "standard" : "";   // 0.21.21
     if (fxNeedsMask(fx0)) { b.matTried = true; pickMatte(b); }
     const drawCover = (ctx, el, ew, eh, w, h) => {
@@ -30281,6 +30384,185 @@
     frame(id) { const v = slots.get(id)?.media?.video; return v && v.readyState >= 2 && v.videoWidth ? v : null; },   // the presenter's own picture
     alive(id) { return added.some((a) => a.id === id); },
     stop(id) { if (added.some((a) => a.id === id)) removeSource(id); },
+  };
+  // ---- 0.21.89 (Kenton: "present a power point and also share my video, with options to switch between the different presenter
+  // modes (content only, standout, side-by-side, and reporter)"): THE PRESENTER'S CUT-OUT. Standout and Reporter show the presenter
+  // cut out of their background over the slide. Viewers never segment: this page (which already runs the person segmenter for
+  // backgrounds) packs the person into ONE frame -- the person's colour over black on the left half, the mask as grey on the right
+  // half (both 640 px wide, the camera's own shape) -- and publishes it as <room>/<host>/<op>/presentation_cutout_<id>.cut, only
+  // while kastr-pres.js asks for it (Standout / Reporter with the camera on). Not a .hang: no KASTR makes a tile of it (older ones
+  // never see it at all); 0.21.89 pages subscribe it themselves (window.__presCutWant) and turn it back into a transparent person.
+  // The person's ordinary camera (with whatever background they chose) is untouched. The matte is this camera's own effects
+  // matte when a background effect runs (no second segmentation), else this loop runs the "balanced" segmenter itself
+  // (<= 15 a second). Only the person travels: the real room never leaves in the cut-out. A bare <moq-publish> (not a source row:
+  // nothing in Share, never an arrival); it encodes only while somebody subscribes (the library's demand).
+  const PCUT = { W: 640, FPS: 24, KBPS: 900, SEG_MS: 66 };
+  let pcut = null, pcutFail = "", pcutPv = null;
+  const pcutCam = () => { const e = added.find((a) => a.kind === "camera"); return e ? { e, slot: slots.get(e.id) || null } : null; };
+  function pcutHold() {
+    let h = document.getElementById("presCutPubHold");
+    if (!h) { h = document.createElement("div"); h.id = "presCutPubHold"; h.style.cssText = "position:fixed;left:-8px;top:-8px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none"; document.body.appendChild(h); }
+    return h;
+  }
+  function pcutMask(c, mask) {   // a MediaPipe confidence mask -> the matte canvas (EMA'd, the main person only, soft edge)
+    const mw = mask.width, mh = mask.height, n = mw * mh, cur = mask.getAsFloat32Array();
+    if (!c.conf || c.mw !== mw || c.mh !== mh) {
+      c.conf = new Float32Array(cur); c.mw = mw; c.mh = mh;
+      c.mask.width = mw; c.mask.height = mh; c.img = c.mx.createImageData(mw, mh);
+    } else for (let i = 0; i < n; i++) c.conf[i] = c.conf[i] * 0.5 + cur[i] * 0.5;
+    const keep = mainSubjectMask(c.conf, mw, mh), d = c.img.data;
+    for (let i = 0; i < n; i++) { const v = c.conf[i]; d[i * 4 + 3] = keep[i] ? (v <= 0.15 ? 0 : v >= 0.85 ? 255 : (v - 0.15) * 364) : 0; }
+    c.mx.putImageData(c.img, 0, 0);
+    c.haveMask = true;
+  }
+  function pcutStep(c) {
+    if (!c.alive) return;
+    const t0 = performance.now();
+    const cam = pcutCam(), slot = cam && cam.slot;
+    if (!slot) return;
+    const b = slot.blur && slot.blur.alive ? slot.blur : null;
+    let vid = null, maskCv = null;
+    const rig = window.__presCutRig?.mask || null;   // rig: a stand-in matte (a test picture the segmenter cannot see as a person)
+    if (b && b.haveMask && b.maskCv && b.video && b.video.videoWidth && !rig) { vid = b.video; maskCv = b.maskCv; c.src = "fx"; }
+    else {
+      const raw = b ? b.raw : unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.());
+      if (raw && raw !== c.raw) { c.raw = raw; try { c.video.srcObject = new MediaStream([raw]); c.video.play().catch(() => {}); } catch {} }
+      vid = c.video;
+      if (!vid.videoWidth) return;
+      if (rig) { maskCv = rig; c.src = "rig"; c.haveMask = true; }
+      else {
+        c.src = "own";
+        if (!c.seg && !c.segAsked) {
+          c.segAsked = true;
+          ensureSegmenter("balanced").then((s) => { if (s) c.seg = s; else pcutFail = "the person segmenter cannot start on this computer"; }).catch(() => { pcutFail = "the person segmenter cannot start on this computer"; });
+        }
+        if (c.seg && t0 - c.lastSeg >= PCUT.SEG_MS) {
+          c.lastSeg = t0;
+          let res = null;
+          const s0 = performance.now();
+          try {
+            res = c.seg.segmentForVideo(vid, Math.max(t0, c.lastTs + 0.01)); c.lastTs = Math.max(t0, c.lastTs + 0.01);
+            const ms = res?.confidenceMasks ?? [];
+            const mk = ms[ms.length - 1] ?? null;
+            if (mk) { pcutMask(c, mk); c.segN++; }
+          } catch {}
+          try { for (const m of res?.confidenceMasks ?? []) m.close?.(); } catch {}
+          const sm = performance.now() - s0; c.segMs = c.segMs ? c.segMs * 0.9 + sm * 0.1 : sm;
+        }
+        maskCv = c.mask;
+      }
+    }
+    if (!c.haveMask && c.src !== "fx") return;
+    const vw = vid.videoWidth, vh = vid.videoHeight;
+    if (!vw || !vh) return;
+    const w = PCUT.W, h = Math.max(2, Math.round(w * vh / vw / 2) * 2);
+    if (c.pack.width !== 2 * w || c.pack.height !== h) { c.pack.width = 2 * w; c.pack.height = h; }
+    if (c.white.width !== w || c.white.height !== h) { c.white.width = w; c.white.height = h; }
+    let person = null;
+    if (!c.glFailed) {
+      try { if (!c.gl || c.gl.lost()) { c.gl = createFxGL(); if (!c.gl) c.glFailed = true; } } catch { c.glFailed = true; }
+      if (c.gl) { try { person = c.gl.render(vid, maskCv, w, h, "person"); } catch { c.glFailed = true; try { c.gl.dispose(); } catch {} c.gl = null; } }
+    }
+    if (!person) {   // no WebGL2 here: the 2D path (a feathered matte, no guided edge)
+      if (!c.p2) { c.p2 = document.createElement("canvas"); c.p2x = c.p2.getContext("2d"); }
+      if (c.p2.width !== w || c.p2.height !== h) { c.p2.width = w; c.p2.height = h; }
+      const g = c.p2x;
+      g.globalCompositeOperation = "source-over"; g.clearRect(0, 0, w, h); g.drawImage(vid, 0, 0, w, h);
+      g.globalCompositeOperation = "destination-in"; g.filter = "blur(1.5px)"; g.drawImage(maskCv, 0, 0, w, h); g.filter = "none";
+      g.globalCompositeOperation = "source-over";
+      person = c.p2;
+    }
+    c.person = person;
+    const mir = !!(b && b.mirror);   // the room sees this camera mirrored: so is the cut-out
+    const put = (g, x) => { g.save(); if (mir) { g.translate(x + w, 0); g.scale(-1, 1); g.drawImage(person, 0, 0, w, h); } else g.drawImage(person, x, 0, w, h); g.restore(); };
+    const px = c.px, wx = c.wx;
+    px.globalCompositeOperation = "source-over"; px.fillStyle = "#000"; px.fillRect(0, 0, 2 * w, h);
+    put(px, 0);                                                                     // left: the person's colour over black
+    wx.globalCompositeOperation = "source-over"; wx.clearRect(0, 0, w, h); wx.fillStyle = "#fff"; wx.fillRect(0, 0, w, h);
+    wx.globalCompositeOperation = "destination-in"; put(wx, 0); wx.globalCompositeOperation = "source-over";
+    px.drawImage(c.white, w, 0);                                                    // right: the mask as grey (white = person)
+    c.w = w; c.h = h; c.frames++; c.drawN++;
+    if (document.visibilityState !== "visible" && c.track) { try { pushCaptureFrame(c.track); } catch {} }
+    const now = performance.now(), ms = now - t0;
+    c.stepMs = c.stepMs ? c.stepMs * 0.9 + ms * 0.1 : ms;
+    if (now - c.fpsAt >= 1000) { const dt = (now - c.fpsAt) / 1000; c.fps = Math.round(c.drawN / dt); c.segFps = Math.round(c.segN / dt); c.drawN = 0; c.segN = 0; c.fpsAt = now; }
+  }
+  function pcutStart() {
+    if (pcut) return pcut.path;
+    const cam = pcutCam();
+    if (!cam || !cam.slot) return "";
+    const op = operatorSlug();
+    const leaf = "presentation_cutout_" + Date.now().toString(36) + ".cut";
+    const path = chanPath(op ? `${HOSTNAME}/${op}/${leaf}` : `${HOSTNAME}/${leaf}`);
+    const c = { path, alive: true, attached: false, video: document.createElement("video"), pack: document.createElement("canvas"), white: document.createElement("canvas"),
+                mask: document.createElement("canvas"), raw: null, gl: null, glFailed: false, seg: null, segAsked: false, conf: null, img: null, haveMask: false,
+                lastSeg: 0, lastTs: 0, frames: 0, drawN: 0, segN: 0, fps: 0, segFps: 0, stepMs: 0, segMs: 0, fpsAt: performance.now(), src: "", w: 0, h: 0,
+                pub: null, track: null, tickT: 0, assertT: 0, t0: performance.now() };
+    pcut = c;
+    c.video.muted = true; c.video.playsInline = true;
+    c.px = c.pack.getContext("2d", { alpha: false }); c.wx = c.white.getContext("2d"); c.mx = c.mask.getContext("2d");
+    c.pack.width = 2 * PCUT.W; c.pack.height = 360; c.px.fillStyle = "#000"; c.px.fillRect(0, 0, c.pack.width, c.pack.height);
+    c.track = restampCaptureTrack(c.pack.captureStream(PCUT.FPS).getVideoTracks()[0], PCUT.FPS);
+    const pub = document.createElement("moq-publish");
+    try { pub.broadcast?.in?.maxAge?.set?.(5000); } catch {}
+    pub.setAttribute("url", authUrl(urlInput.value.trim()));
+    pub.setAttribute("name", path);
+    pub.setAttribute("announce", "always");
+    pub.setAttribute("preview", "none");
+    pcutHold().appendChild(pub);
+    c.pub = pub;
+    try { pub.video.config.set({ codec: avc1Ok ? "avc1" : "vp09", maxPixels: 2 * PCUT.W * 480, maxBitrate: PCUT.KBPS * 1000, frameRate: PCUT.FPS }); } catch {}
+    c.tickT = setInterval(() => { try { pcutStep(c); } catch (e) { console.warn("KASTR pres: cut-out", e); } }, 1000 / PCUT.FPS);
+    (async () => {   // the element builds its capture after it connects (as presAttach)
+      for (let i = 0; i < 100 && c.alive && !pubCap(pub)?.in?.source; i++) await new Promise((r) => setTimeout(r, 100));
+      if (!c.alive) return;
+      try { pubCap(pub).in.source.set(c.track); c.attached = true; } catch (e) { console.warn("KASTR pres: cut-out publish", e); }
+      c.assertT = setInterval(() => { try { const s = pubCap(pub)?.in?.source; if (s && s.peek?.() !== c.track) s.set(c.track); } catch {} }, 1000);
+    })();
+    return path;
+  }
+  function pcutStop() {
+    const c = pcut;
+    if (!c) return;
+    pcut = null;
+    c.alive = false;
+    clearInterval(c.tickT); clearInterval(c.assertT);
+    try { c.pub.remove(); } catch {}
+    try { c.track.stop(); } catch {}
+    try { c.video.srcObject = null; } catch {}
+    try { c.gl?.dispose(); } catch {}
+  }
+  window.addEventListener("kastr:auth", () => { const c = pcut; if (c && c.pub) { const u = authUrl(urlInput.value.trim()); if (c.pub.getAttribute("url") !== u) c.pub.setAttribute("url", u); } });
+  window.__presCut = {
+    camInfo() {   // my main camera, as presenter modes need it -> null without one
+      const cam = pcutCam();
+      if (!cam) return null;
+      const { e, slot } = cam;
+      const paused = !!e.videoPaused || !!slot?.autoPaused;
+      return { id: e.id, path: chanPath(ensureHang(e.name)), paused, live: !!slot && !paused, mic: !!audioFor(e) && mics.length > 0,
+               fx: !!slot?.blur?.haveMask, canCut: !pcutFail, why: pcutFail };
+    },
+    start: pcutStart,
+    stop: pcutStop,
+    state() {
+      const c = pcut;
+      if (!c) return null;
+      let enc = null;
+      try { const s = c.pub?.video?.out?.stats?.peek?.(); if (s) enc = { frames: Number(s.frames || 0), bytes: Number(s.bytes || 0) }; } catch {}
+      return { path: c.path, ready: c.attached && c.frames > 0, attached: c.attached, src: c.src, w: c.w, h: c.h, frames: c.frames, fps: c.fps, segFps: c.segFps,
+               stepMs: +c.stepMs.toFixed(2), segMs: +c.segMs.toFixed(2), gl: !!c.gl, enc, age: Math.round(performance.now() - c.t0), fail: pcutFail };
+    },
+    person() { const c = pcut; return c && c.frames > 0 && c.person ? { img: c.person, ar: c.w / c.h, mirror: !!pcutCam()?.slot?.blur?.mirror } : null; },
+    packed() { return pcut && pcut.frames > 0 ? pcut.pack : null; },   // rig
+    camVideo() {   // the camera as the room gets it (its background effect included) -- the presenter's own preview of a box
+      const cam = pcutCam();
+      const tr = cam && cam.slot ? unwrapTrack(pubCap(cam.slot.publish)?.in?.source?.peek?.()) : null;
+      if (!tr || tr.readyState !== "live" || cam.e.videoPaused) return null;
+      if (!pcutPv) { pcutPv = document.createElement("video"); pcutPv.muted = true; pcutPv.playsInline = true; }
+      if (pcutPv.kastrTrack !== tr) { pcutPv.kastrTrack = tr; pcutPv.srcObject = new MediaStream([tr]); pcutPv.play().catch(() => {}); }
+      return pcutPv.readyState >= 2 && pcutPv.videoWidth ? pcutPv : null;
+    },
+    camVideoStop() { if (pcutPv) { try { pcutPv.srcObject = null; } catch {} pcutPv.kastrTrack = null; } },
   };
   async function presAttach(slot) {
     const fps = slot.entry.presFps || 5;

@@ -216,8 +216,8 @@ class Timing(unittest.TestCase):
         # Kenton's own deck (2026-10-26): Start: Automatically with a 1 s delay -- <p:cond delay="1000"/> on the effect
         xml = timing(6, "auto").replace('nodeType="afterEffect"><p:stCondLst><p:cond delay="0"/>', 'nodeType="afterEffect"><p:stCondLst><p:cond delay="1000"/>')
         self.assertEqual(self.t(xml)[0], {"6": 1000})
-        self.assertEqual(self.t(timing(9, "auto", loop=True)), ({"9": 0}, {"9": {"loop": True, "vol": 0.8}}))
-        self.assertEqual(self.t(timing(9, "click"))[1], {"9": {"loop": False, "vol": 0.8}})
+        self.assertEqual(self.t(timing(9, "auto", loop=True)), ({"9": 0}, {"9": {"loop": True, "vol": 0.8, "hide": False}}))   # 0.21.88: + hide
+        self.assertEqual(self.t(timing(9, "click"))[1], {"9": {"loop": False, "vol": 0.8, "hide": False}})
         self.assertEqual(self.t(timing(9, "click").replace(' vol="80000"', ' vol="80000" mute="1"'))[1]["9"]["vol"], 0.0)
         self.assertEqual(self.t(timing(9, "click").replace(' vol="80000"', ""))[1]["9"]["vol"], 1.0)
 
@@ -250,7 +250,7 @@ class VideoScene(unittest.TestCase):
 
     def test_deck_files(self):
         self.assertEqual(self.sc["videos"], {"v0": {"part": "ppt/media/media1.mp4", "ext": ".mp4", "type": "video/mp4",
-                                                    "size": len(b"\x00\x00\x00\x18ftypmp42not-a-real-video"), "name": "media1.mp4"}})
+                                                    "size": len(b"\x00\x00\x00\x18ftypmp42not-a-real-video"), "name": "media1.mp4", "kind": "video"}})   # 0.21.88: + kind
         self.assertNotIn("data:video", json.dumps(self.sc))   # never inline
 
     def test_linked_video_warns(self):
@@ -409,8 +409,8 @@ class PageSeams(unittest.TestCase):
     def test_media_file_pipeline_for_slide_videos(self):
         p = self.page
         hook = p[p.index("  window.__presVideo = {"):p.index("  async function presAttach(slot) {")]
-        self.has("await prepareMediaFile(file, { noPicker: true })", hook)   # the same upload / convert-as-it-plays path, no size picker
-        self.has("addSource(FILE, null, \"Presentation video\"", hook)
+        self.has("await prepareMediaFile(file, { noPicker: true, probe: !!o.audio })", hook)   # the same upload / convert-as-it-plays path, no size picker
+        self.has("addSource(FILE, null, o.audio ? \"Presentation sound\" : \"Presentation video\"", hook)
         self.has('"presentation_video_"', hook)
         self.has("presVideo: true", hook)
         self.has("resume: { t: 0, paused: !o.auto }", hook)   # waits on its first frame unless the deck autoplays it
@@ -425,17 +425,15 @@ class PageSeams(unittest.TestCase):
 
     def test_hidden_tile_decoded_and_heard(self):
         p = self.page
-        self.has(r"const PRES_VID_RE = /\/presentation_video(?:_[a-z0-9]+)?(?:-\d+)?\.hang$/;", p)
-        self.has('const leaf = "presentation_video_" + (++presVidSeq).toString(36)', p)   # a fresh stream per visit: never an earlier visit's frame
+        self.has(r"const PRES_VID_RE = /\/presentation_(?:video|audio)(?:_[a-z0-9]+)?(?:-\d+)?\.hang$/;", p)   # 0.21.88: + audio
+        self.has('const leaf = (o.audio ? "presentation_audio_" : "presentation_video_") + (++presVidSeq).toString(36)', p)   # a fresh stream per visit: never an earlier visit's frame
         self.has("const roomHid = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();", p)
         self.has("const cgWarm = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();", p)   # keepWarm + never shed
         self.has("if (isPresVid(name)) return !(manualMute || mutedStreams.has(name));", p)
         self.has("&& !isPresVid(name)) ? \"never\"", p)
         self.has("window.__presVidFrame = (path) =>", p)
-        kick = p[p.index("  window.__presVidKick = (path) => {"):p.index("  let vgRaf = 0, vgLast = 0;")]
-        self.has("isPresVid(path) && tiles.get(String(path))", kick)   # only a slide's video stream is ever re-asked
-        self.has('t.watch.removeAttribute("url");', kick)
-        rx = re.compile(r"/presentation_video(?:_[a-z0-9]+)?(?:-\d+)?\.hang$")
+        self.hasnt("__presVidKick", p)   # 0.21.88: the re-subscribe guard went with the root fix (group-end-no-guess)
+        rx = re.compile(r"/presentation_(?:video|audio)(?:_[a-z0-9]+)?(?:-\d+)?\.hang$")
         self.assertTrue(rx.search("room/HOST/kenton-j/presentation_video.hang"))
         self.assertTrue(rx.search("room/HOST/kenton-j/presentation_video_1k3x9.hang"))
         self.assertTrue(rx.search("room/HOST/kenton-j/presentation_video-2.hang"))
@@ -460,13 +458,12 @@ class PageSeams(unittest.TestCase):
         frame = j[j.index("  function vidFrame() {"):j.index("  // ---- the loop")]
         self.has("x.i === rec.idx && x.st && x.p && !rec.blank", frame)
         self.has("window.__presVidFrame?.(x.p)", frame)
-        wd = j[j.index("  function vidWatchdog("):j.index("  function vidFrame() {")]
-        self.has("it.pl && now - s.at > 1500 && now - s.kickAt > 5000 && window.__presVidKick?.(it.p)", wd)   # a stopped picture while it plays: re-asked, rate-limited
+        self.hasnt("vidWatchdog", j)   # 0.21.88: not needed after the root fix (tests/test_release_0_21_88_media_freeze.py)
         self.assertEqual(j.count("/api/pres/conv/"), 2)   # the job's done (PowerPoint + built-in) and nothing else: the video urls come from the server
         st = j[j.index("  async function startVid("):j.index("  function stopVid(")]
         self.has("const now = sv.auto && !(sv.delay > 0);", st)   # Start: Automatically with a delay -> played when the delay is up
         self.has('if (!e.gone && mine === m && !e.st) vidCtl(e, "play");', st)
-        self.has("loop: !!sv.loop, vol: sv.vol }", st)
+        self.has("loop: !!sv.loop, vol: sv.vol, audio: sv.kind === \"audio\" }", st)
         self.has("gain: o.vol == null ? 1 : Math.max(0, Math.min(1, Number(o.vol)))", self.page)   # the player starts at the deck's volume
         sv = j[j.index("  function stopVid("):j.index("  function publishVid(")]
         self.hasnt("publish()", sv)   # a move publishes after the store heard of it, not before

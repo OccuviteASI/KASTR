@@ -512,9 +512,9 @@
   function deckVideos(sc, shown) {
     const files = sc.videos || {}, got = new Map(), ids = Object.keys(files);
     const per = shown.map((s) => (s.videos || []).map((v) => (v.id
-      ? { id: v.id, x: v.x / sc.w, y: v.y / sc.h, w: v.w / sc.w, h: v.h / sc.h, auto: !!v.auto, delay: Math.max(0, Math.min(60000, Number(v.delay) || 0)),
+      ? { id: v.id, kind: v.kind === "audio" ? "audio" : "video", x: v.x / sc.w, y: v.y / sc.h, w: v.w / sc.w, h: v.h / sc.h, auto: !!v.auto, delay: Math.max(0, Math.min(60000, Number(v.delay) || 0)),
           loop: !!v.loop, vol: v.vol == null ? 1 : Math.max(0, Math.min(1, Number(v.vol))), name: String(v.name || "") }
-      : { linked: String(v.linked || "video") })));
+      : { linked: String(v.linked || "video"), kind: v.kind === "audio" ? "audio" : "video" })));
     const ready = Promise.all(ids.map(async (id) => {
       const f = files[id];
       try {
@@ -634,7 +634,7 @@
       bs: [...mine.bs.entries()].map(([p, b]) => ({ p, n: b.name || "", w: b.w || "" })),
       // 0.21.87: the live slide's videos -- their stream, their spot (fractions of the slide) and how far they are
       vids: [...mine.vids.values()].filter((e) => e.path && e.i === mine.idx).map((e) => ({ v: e.v, p: e.path, i: e.i, x: +e.sv.x.toFixed(5), y: +e.sv.y.toFixed(5),
-        w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto })),
+        w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto, k: e.sv.kind === "audio" ? "a" : "v" })),   // 0.21.88: k = "a" -- a sound clip: heard, never drawn
       ...modeFields(),   // 0.21.89: the presenter mode, my camera / cut-out, backstage's mic + camera control
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
@@ -772,7 +772,7 @@
     if (!file || !window.__presVideo) { e.err = file ? "this KASTR cannot share videos" : "the video could not be read from the deck"; view.paint(); return; }
     let h = null;
     const now = sv.auto && !(sv.delay > 0);   // "Start: Automatically" with a delay starts paused and is played when the delay is up
-    try { h = await window.__presVideo.start(file, { label: sv.name || m.name, auto: now, loop: !!sv.loop, vol: sv.vol }); }   // + the deck's own volume (PowerPoint's default is 80 %)
+    try { h = await window.__presVideo.start(file, { label: sv.name || m.name, auto: now, loop: !!sv.loop, vol: sv.vol, audio: sv.kind === "audio" }); }   // + the deck's own volume (PowerPoint's default is 80 %)
     catch (err) { e.err = String(err?.message || err); console.warn("KASTR pres: video", err); }
     if (!h) { view.paint(); return; }
     if (e.gone || mine !== m) { try { window.__presVideo.stop(h.id); } catch {} return; }
@@ -1149,15 +1149,15 @@
       if (v.role === "presenter") {
         const e = [...mine.vids.values()].find((x) => x.i === mine.idx);
         const linked = ((mine.src.videos || [])[mine.idx] || []).find((x) => x.linked);
-        if (!e) return linked ? { role: v.role, linked: linked.linked } : null;
+        if (!e) return linked ? { role: v.role, linked: linked.linked, audio: linked.kind === "audio" } : null;
         const s = e.shareId != null ? window.__presVideo?.state(e.shareId) : null;
-        return { role: v.role, e, playing: !!s?.playing, t: s ? s.t : 0, dur: s ? s.dur : 0, err: e.err, ready: !!s };
+        return { role: v.role, e, playing: !!s?.playing, t: s ? s.t : 0, dur: s ? s.dur : 0, err: e.err, ready: !!s, audio: e.sv.kind === "audio" };
       }
       const rec = backstage.get(v.id)?.rec;
       const r = rec && rec.idx === v.idx && (rec.vids || []).find((x) => x.i === rec.idx);
       if (!r) return null;
       const t = Math.min(r.d || 1e9, r.t + (r.pl ? Math.max(0, Date.now() - r.at) / 1000 : 0));
-      return { role: v.role, r, playing: !!r.pl, t, dur: r.d || 0, ready: true };
+      return { role: v.role, r, playing: !!r.pl, t, dur: r.d || 0, ready: true, audio: r.k === "a" };
     }
     function vidPress(op, t) {
       const lv = liveVid();
@@ -1175,12 +1175,12 @@
       const ctlEls = [$(".vplay"), $(".vseek"), $(".vtime")];
       if (lv.linked) {
         for (const el of ctlEls) el.style.display = "none";
-        $(".vnote").textContent = "This slide's video (" + lv.linked + ") is linked to a file, not embedded in the deck — it cannot play here";
+        $(".vnote").textContent = "This slide's " + (lv.audio ? "sound" : "video") + " (" + lv.linked + ") is linked to a file, not embedded in the deck — it cannot play here";
         return;
       }
       for (const el of ctlEls) el.style.display = "";
       $(".vnote").textContent = lv.err ? "Video: " + lv.err : !lv.ready ? "Video: getting ready…" : "";
-      $(".vplay").textContent = lv.playing ? "⏸ Pause video" : "▶ Play video";
+      $(".vplay").textContent = (lv.playing ? "⏸ Pause " : "▶ Play ") + (lv.audio ? "sound" : "video");   // 0.21.88: + a sound clip
       $(".vplay").disabled = !lv.ready;
       if (!bar.dataset.scrub) $(".vseek").value = lv.dur ? String(Math.round(Math.min(1, lv.t / lv.dur) * 1000)) : "0";
       $(".vtime").textContent = fmtT(lv.t) + " / " + fmtT(lv.dur);
@@ -1197,12 +1197,12 @@
       if (v.role === "presenter") {
         const es = [...mine.vids.values()].filter((e) => e.i === mine.idx);
         any = es.length > 0;
-        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null).map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
       } else {
         const rec = backstage.get(v.id)?.rec;
         const rs = rec && rec.idx === v.idx ? (rec.vids || []).filter((x) => x.i === rec.idx) : [];
         any = rs.length > 0;
-        if (!v.blank) items = rs.filter((x) => x.st).map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+        if (!v.blank) items = rs.filter((x) => x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
       }
       const n = drawVids(vc, v.ar || 16 / 9, items);
       if (n && vidViewPainted !== v.id + "/" + v.idx) { vidViewPainted = v.id + "/" + v.idx; T("vid-paint", { id: v.id, idx: v.idx, who: "view" }); }
@@ -1368,34 +1368,15 @@
     }
     return n;
   }
-  // a picture that stops while the presenter says the video plays: ask for the stream afresh (after 1.5 s, at most every 5 s). Lab
-  // 2026-10-26: the player sometimes drops a new file share's video track right after it starts ("group timestamp is below
-  // the live edge") and the picture froze ~6 s while the sound went on -- an ordinary Share > Media file does the same.
-  function vidWatchdog(o, items) {
-    const now = performance.now();
-    o.vSeen = o.vSeen || new Map();
-    for (const it of items) {
-      const ts = it.src ? it.src.timestamp : null;
-      let s = o.vSeen.get(it.p);
-      if (!s) { s = { ts, at: now, kickAt: 0, kicks: 0 }; o.vSeen.set(it.p, s); }
-      if (ts !== s.ts) { s.ts = ts; s.at = now; continue; }
-      if (it.pl && now - s.at > 1500 && now - s.kickAt > 5000 && window.__presVidKick?.(it.p)) {
-        s.kickAt = now; s.kicks++; s.at = now;
-        T("vid-kick", { id: o.rec.id, idx: o.rec.idx, who: "overlay" });
-      }
-    }
-    for (const p of [...o.vSeen.keys()]) if (!items.some((it) => it.p === p)) o.vSeen.delete(p);
-  }
   function vidFrame() {
     vidRaf = 0;
     let more = false;
     for (const o of overlays.values()) {
       const rec = o.rec, all = rec.vids || [];
       if (all.length) more = true;
-      const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank);
-      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, p: x.p, pl: x.pl, src: window.__presVidFrame?.(x.p) || null }));
-      vidWatchdog(o, items);
-      const n = drawVids(o.vcv, rec.ar || 16 / 9, items, slideRectFn(rec));
+      const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank && x.k !== "a");   // a sound clip is heard, not drawn
+      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+      const n = drawVids(o.vcv, rec.ar || 16 / 9, items, slideRectFn(rec));   // 0.21.89: the slide's place in the mode
       if (n) {
         o.vDrawn++; o.vLast = Date.now();
         if (o.vPainted !== rec.id + "/" + rec.idx) { o.vPainted = rec.id + "/" + rec.idx; T("vid-paint", { id: rec.id, idx: rec.idx, who: "overlay" }); }
@@ -1993,8 +1974,8 @@
     // the slide's video in its spot (moved with the slide)
     let items = [];
     if (!v.blank) {
-      if (mv.role === "presenter") items = [...mine.vids.values()].filter((e) => e.i === mine.idx && e.st && e.shareId != null).map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
-      else if (mv.rec.idx === v.idx) items = (mv.rec.vids || []).filter((x) => x.i === mv.rec.idx && x.st).map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+      if (mv.role === "presenter") items = [...mine.vids.values()].filter((e) => e.i === mine.idx && e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+      else if (mv.rec.idx === v.idx) items = (mv.rec.vids || []).filter((x) => x.i === mv.rec.idx && x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
     }
     if (items.length) { const R = presLayout(mv.eff, W, H, ar, 16 / 9, true).slide; for (const it of items) if (it.src) { try { g.drawImage(it.src, R.x + it.x * R.w, R.y + it.y * R.h, it.w * R.w, it.h * R.h); } catch {} } }
     if (mv.eff !== "content") {
@@ -2094,7 +2075,7 @@
       pk: !!pkPublished,
       // 0.21.87: the presenter's slide videos; what each tile drew of a slide's video
       vids: mine ? [...mine.vids.values()].map((e) => ({ k: e.k, i: e.i, v: e.v, auto: !!e.sv.auto, shareId: e.shareId, path: e.path, pl: e.pl, st: e.st, t: e.t, err: e.err })) : [],
-      deckVideos: mine ? (mine.src.videos || []).map((l) => l.map((v) => (v.id ? v.id : "linked:" + v.linked))) : null,
+      deckVideos: mine ? (mine.src.videos || []).map((l) => l.map((v) => (v.id ? v.id + (v.kind === "audio" ? ":audio" : "") : "linked:" + v.linked))) : null,
       vidDrawn: [...overlays.entries()].map(([p, o]) => ({ path: p, drawn: o.vDrawn || 0, last: o.vLast || 0, painted: o.vPainted || null })),
     }),
     __drawSlide: drawSlide,   // rig: render a scene slide without a room

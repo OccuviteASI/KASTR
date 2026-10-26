@@ -16,7 +16,7 @@
   "@moq/flate@0.1.3/es2022/flate.mjs": "49624f7d10531a0d9899f9989c7b77ac6164e89d1011c5eab411093405da46c9",
   "@moq/flate@^0.1.3.target-es2022.mjs": "a3ac24f65eb98b454bc33ab72609cd07d7b33d716a9491d6c76d246c0507a7ff",
   "@moq/hang@0.5.2/es2022/catalog.mjs": "150cb38c91d35f9ca6ba17621f1d95e46ea132fbe7be35e3db51b12de2a5f235",
-  "@moq/hang@0.5.2/es2022/container.mjs": "edc9d808268c070f9ae8e32538790fa728a5716a433adb21cfe690cb4c4da085",
+  "@moq/hang@0.5.2/es2022/container.mjs": "6ac14e97b89874bf6d0532db4dedbc973a2b47be664cac4e618e6e583c07f386",
   "@moq/hang@0.5.2/es2022/container/cmaf.mjs": "153cd75d50bd3e50c2de36b96f24b1192bae1d58323db846e7ae7b4bdf7ce2f9",
   "@moq/hang@0.5.2/es2022/hang.mjs": "ab307c244fa62538b25d48300465df1a64fb2c744d4e32469783ac880381d767",
   "@moq/hang@0.5.2/es2022/util.mjs": "9c3e3fbe7f11ddc56569684b8846c8ed24f9a8648640cef1766a9773458cf24b",
@@ -86,7 +86,8 @@
   "watch-priority-element",
   "watch-priority",
   "publish-bitrate-floor",
-  "library-mirror"
+  "library-mirror",
+  "group-end-no-guess"
  ],
  "pins": {
   "https://esm.sh/@moq/json": "/@moq/json@^0.4.2",

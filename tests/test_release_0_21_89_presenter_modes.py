@@ -145,7 +145,7 @@ class Drawing(unittest.TestCase):
         self.assertIn("drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, \"\", rec.rbg);", po)
 
     def test_slide_video_moves_with_the_slide(self):
-        dv = block(JS, "  function drawVids(cv, ar, items, rectFn) {", "  // a picture that stops")
+        dv = block(JS, "  function drawVids(cv, ar, items, rectFn) {", "  function vidFrame() {")
         self.assertIn("const R = rectFn ? rectFn(W, H) : null;", dv)
         self.assertIn("drawVids(o.vcv, rec.ar || 16 / 9, items, slideRectFn(rec));", JS)
         self.assertIn("const slideRectFn = (rec) => (W, H) => presLayout(modeOf(rec), W, H, rec.ar, 16 / 9, true).slide;", JS)

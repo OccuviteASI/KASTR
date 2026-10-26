@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 import time
+import types
 import unittest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -506,6 +507,195 @@ class Federation(Base):
         self.base[0] = "http://127.0.0.1:9"
         o, c = kris.api({"op": "pull", "as": ["Kris Price"], "since": 0})
         self.assertEqual((c, o.get("hubDown")), (503, True))
+
+
+class HandOver(Base):
+    """Kenton: "Yes, carry them" -- a hub hand-over, the standby's copy and the hand-back carry the messages store: wrapped person
+    keys, public keys, devices, groups, messages + attachments' ciphertext, cursors / read marks; 90 days / 1 hour kept; a merge is
+    idempotent and never takes an older person key over a newer one."""
+
+    def setUp(self):
+        self.d1, self.d2 = tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.old = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, store(self.d1))
+        for n, c in (("Kris Price", KRIS_CODE), ("Ada", ADA_CODE), ("Bob", BOB_CODE)):
+            self.mkroom(self.old, n, c)
+        self.kris = Device(self.old, "kris-desk-1a2b")
+        self.ada = Device(self.old, "ada-laptop-3c4d", room="beta")
+        self.bob = Device(self.old, "web-b0b0b0b0-5e6f", room="gamma")
+        self.kris.unlock("Kris Price", KRIS_CODE)
+        self.ada.unlock("Ada", ADA_CODE)
+        self.bob.unlock("Bob", BOB_CODE)
+        self.pic = os.urandom(70000)
+        self.fk, self.fiv = os.urandom(32), os.urandom(12)
+        o, c = self.old.msg_file_post(AESGCM(self.fk).encrypt(self.fiv, self.pic, None), {"as": ["Kris Price"]}, "Bearer " + self.kris.tok)
+        self.fid = o["fid"]
+        self.kris.send("Kris Price", {"t": "before the move", "files": [{"fid": self.fid, "k": b64(self.fk), "iv": b64(self.fiv)}]},
+                       to="Ada", files=[self.fid])
+        o, c = self.kris.api({"op": "gcreate", "as": "Kris Price", "name": "Crew", "members": ["Ada", "Bob"]})
+        self.gid = o["gid"]
+        self.kris.pull(["Kris Price"])
+        self.kris.send("Kris Price", {"t": "crew note"}, gid=self.gid)
+        self.ada.pull(["Ada"])
+        self.ada.pull(["Ada"])                                   # acked
+        self.ada.api({"op": "read", "as": "Ada", "conv": "p:kris price", "seq": 1})
+        self.new = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4453, store(self.d2))
+
+    def tearDown(self):
+        for s in (self.old, self.new):
+            s.close()
+
+    def move(self):
+        self.new.store.import_bundle(self.old.store.export_bundle())       # the records (My room codes) move as before
+        m1, m2 = self.old._msgr(), self.new._msgr()
+        return km.catch_up(m2, m1.export, m1.file_raw, deadline=30, sleep=lambda s: None)
+
+    def test_everything_moves_and_a_device_reads_it_on_the_new_hub(self):
+        _s, _v, tot = self.move()
+        m1, m2 = self.old._msgr(), self.new._msgr()
+        self.assertEqual(tot["missing"], 0)
+        self.assertEqual(m2.fleet, m1.fleet)                                  # pages keep their history and cursors
+        self.assertEqual(sorted(m2.msgs), sorted(m1.msgs))                    # the same numbers
+        for nk in ("kris price", "ada", "bob"):
+            for k in ("kid", "pub", "wrapped", "iv", "salt", "iter"):
+                self.assertEqual(m2.persons[nk][k], m1.persons[nk][k])
+            self.assertEqual(set(m2.persons[nk]["devices"]), set(m1.persons[nk]["devices"]))
+        self.assertEqual(m2.groups[self.gid]["members"], m1.groups[self.gid]["members"])
+        self.assertEqual(m2.reads["ada"], m1.reads["ada"])
+        self.assertEqual(m2.cursors["ada-laptop-3c4d"]["ada"], m1.cursors["ada-laptop-3c4d"]["ada"])
+        with open(os.path.join(self.d2, "messages", "f", self.fid + ".bin"), "rb") as f:
+            self.assertEqual(f.read(), m1.file_raw(self.fid))
+        # the hub still never holds plaintext
+        blob = self.all_bytes(os.path.join(self.d2, "messages"))
+        self.assertNotIn(b"before the move", blob)
+        self.assertNotIn(KRIS_CODE.encode(), blob)
+        # Ada's existing device carries on against the new hub (same identity, same cursor)
+        ada2 = Device(self.new, "ada-laptop-3c4d", room="beta")
+        ada2.keys, ada2.cur = self.ada.keys, self.ada.cur
+        self.assertEqual(ada2.pull(["Ada"])[0], [])                          # nothing again
+        # a NEW device of Ada's (name + My room code) on the new hub reads the history, picture included
+        tab = Device(self.new, "web-ada00000-1234", room="beta")
+        self.assertEqual(tab.unlock("Ada", ADA_CODE)[1], 200)
+        got = [g for g in tab.pull(["Ada"])[0] if g.get("body")]
+        self.assertEqual([g["body"]["t"] for g in got], ["before the move", "crew note"])
+        data, code = self.new.msg_file_get({"id": [self.fid]}, "Bearer " + tab.tok)
+        self.assertEqual(AESGCM(self.fk).decrypt(self.fiv, data, None), self.pic)
+        # and new messages there take new numbers
+        o, c = self.kris.__class__(self.new, "kris-desk-1a2b").api({"op": "status", "name": "Kris Price"})
+        self.assertTrue(o["unlocked"])
+
+    def test_idempotent_newer_key_wins_deletions_stick(self):
+        self.move()
+        m1, m2 = self.old._msgr(), self.new._msgr()
+        _s, _v, again = km.catch_up(m2, m1.export, m1.file_raw, sleep=lambda s: None)
+        self.assertEqual((again["msgs"], again["persons"], again["groups"], again["bytes"]), (0, 0, 0, 0))
+        # Kris changes his code on the NEW hub (a newer wrap); the old hub's older copy never comes back over it
+        k = self.kris.keys["kris price"]
+        new = "kris-new-code-77"
+        salt, iv = os.urandom(16), os.urandom(12)
+        wrapped = AESGCM(wrap_key(new, salt, ITER)).encrypt(iv, k["pk8"], b"kastr-msg-id-v1|kris price")
+        kn = Device(self.new, "kris-desk-1a2b")
+        time.sleep(1.1)
+        o, c = kn.api({"op": "recode", "name": "Kris Price", "code": KRIS_CODE, "newCode": new, "wrapped": b64(wrapped),
+                       "iv": b64(iv), "salt": b64(salt), "iter": ITER})
+        self.assertEqual(c, 200, o)
+        m2.merge(m1.export(0))                                              # a hand-back of the stale copy
+        self.assertEqual(m2.persons["kris price"]["wrapped"], b64(wrapped))
+        m1.merge(m2.export(0))                                              # ... while the old side takes the newer one
+        self.assertEqual(m1.persons["kris price"]["wrapped"], b64(wrapped))
+        # a group deleted on one side: its messages go on the other at the next copy, and never come back
+        o, c = kn.api({"op": "gdelete", "as": "Kris Price", "gid": self.gid})
+        self.assertEqual(c, 200, o)
+        m1.merge(m2.export(0))
+        self.assertFalse(any(e.get("gid") == self.gid for e in m1.msgs.values()))
+        m2.merge(m1.export(0))
+        self.assertFalse(any(e.get("gid") == self.gid for e in m2.msgs.values()))
+        # a removal of a device on one side sticks; an allow after it wins
+        adm = Device(self.new, "admin-pc-7c6d", code="adm-1")
+        adm.api({"op": "devremove", "name": "Ada", "host": "ada-laptop-3c4d"})
+        m1.merge(m2.export(0))
+        self.assertIn("ada-laptop-3c4d", m1.persons["ada"]["blocked"])
+        self.assertNotIn("ada-laptop-3c4d", m1.persons["ada"]["devices"])
+        m2.merge(m1.export(0))
+        self.assertNotIn("ada-laptop-3c4d", m2.persons["ada"]["devices"])
+        time.sleep(1.1)
+        adm.api({"op": "devallow", "name": "Ada", "host": "ada-laptop-3c4d"})
+        m1.merge(m2.export(0))
+        self.assertNotIn("ada-laptop-3c4d", m1.persons["ada"]["blocked"])
+
+    def test_split_brain_numbers_and_retention(self):
+        self.move()
+        m1, m2 = self.old._msgr(), self.new._msgr()
+        # both sides take a message while apart: the same next number on each
+        self.kris.send("Kris Price", {"t": "on the old box"}, to="Ada")
+        Device(self.new, "bob-pc-2222", room="gamma")   # (a token on the new hub)
+        b2 = Device(self.new, "web-b0b0b0b0-5e6f", room="gamma")
+        b2.keys = self.bob.keys
+        b2.send("Bob", {"t": "on the new box"}, to="Ada")
+        top1, top2 = max(m1.msgs), max(m2.msgs)
+        self.assertEqual(top1, top2)
+        n = m2.merge(m1.export(0))
+        self.assertEqual((n["msgs"], n["renumbered"]), (1, 1))             # kept, under a new number
+        self.assertEqual(m2.merge(m1.export(0))["msgs"], 0)                 # known by its uid the second time
+        # 90 days: an old message in a page is not taken; an upload no message took is gone after an hour
+        page = m1.export(0)
+        old = dict(page["msgs"][0], seq=99999, uid="m:x:old", at=int(time.time()) - km.MSG_KEEP_S - 60)
+        stray = {"f-" + "a" * 32: {"at": int(time.time()) - 7200, "size": 3, "by": "kris price", "who": None}}
+        page = dict(page, msgs=[old], meta=dict(page.get("meta") or m1.export(0, None)["meta"], files=stray))
+        m2.merge(page)
+        self.assertNotIn(99999, m2.msgs)
+        self.assertNotIn("f-" + "a" * 32, m2.files)
+
+    def test_the_sync_endpoint_and_the_standby_over_loopback(self):
+        fed_key = self.old.key
+        fed = kr._mint(fed_key, dict(kr.FEDERATION_CLAIMS, iat=int(time.time()), exp=int(time.time()) + 3600))
+        base = "http://127.0.0.1:%d" % self.old.httpd.server_address[1]
+        # any spoke's federation token is not enough
+        self.assertEqual(self.old.msg_sync_api({"since": 0}, "Bearer " + fed)[1], 403)
+        self.assertEqual(self.old.msg_file_get({"id": [self.fid], "fed": ["1"]}, "Bearer " + fed)[1], 403)
+        # the named standby is
+        self.old.standby_info = lambda: {"node": "sb-node-01", "name": "standby", "address": "https://10.0.0.9:4443", "secret": "x"}
+        fake = types.SimpleNamespace(_fed_post=kr.Relay._fed_post, _fed_get_raw=kr.Relay._fed_get_raw)
+        export, fetch = kr.Relay._msg_fed_fns(fake, base, fed, "sb-node-01")
+        _s, _v, tot = km.catch_up(self.new._msgr(), export, fetch, deadline=60, sleep=lambda s: None)
+        self.assertEqual((tot["msgs"], tot["missing"]), (len(self.old._msgr().msgs), 0))
+        self.assertEqual(self.new._msgr().file_raw(self.fid), self.old._msgr().file_raw(self.fid))
+        # a wrong node name: refused
+        export2, _f = kr.Relay._msg_fed_fns(fake, base, fed, "someone-else")
+        self.assertIsNone(export2(0, None))
+
+    def test_the_hand_back_from_a_standby_that_acted_as_the_hub(self):
+        sb = types.SimpleNamespace(auth=self.old, _cluster_raw=lambda: {"hub": True, "promoted": {"at": 1, "epoch": 1},
+                                                                       "standbyOf": {"secret": "lab-secret-0188"}})
+
+        def call(op, extra=None, secret="lab-secret-0188"):
+            ts = int(time.time())
+            return kr.Relay._standby_api(sb, op, dict(extra or {}, ts=ts, sig=kr.standby_sig(secret, ts)))
+        self.assertEqual(call("handback/msgs", {"since": 0}, secret="wrong")[1], 403)   # signed by the main hub only
+        d, c = call("handback/msgs", {"since": 0})
+        self.assertEqual(c, 200)
+        mexport = lambda since, mv: call("handback/msgs", {"since": since, "metaVer": mv})[0].get("page")   # noqa: E731
+        mfetch = lambda fid: base64.b64decode(call("handback/msgfile", {"fid": fid})[0]["data"])         # noqa: E731
+        _s, _v, tot = km.catch_up(self.new._msgr(), mexport, mfetch, sleep=lambda s: None)
+        self.assertEqual((tot["msgs"], tot["missing"]), (len(self.old._msgr().msgs), 0))
+        self.assertEqual(self.new._msgr().file_raw(self.fid), self.old._msgr().file_raw(self.fid))
+
+    def test_the_hand_over_reply_carries_the_first_page(self):
+        fed = kr._mint(self.old.key, dict(kr.FEDERATION_CLAIMS, iat=int(time.time()), exp=int(time.time()) + 3600))
+        o, c = self.old.hub_handover({"admin": "adm-1", "hub": "https://10.0.0.9:4443", "web": 8000}, "Bearer " + fed, "10.0.0.2")
+        self.assertEqual(c, 200, o.get("error"))
+        self.assertEqual(len(o["messages"]["msgs"]), len(self.old._msgr().msgs))
+        self.assertIn("kris price", o["messages"]["meta"]["persons"])
+        self.assertEqual(self.old.msg_sync_api({"since": 0}, "Bearer " + fed)[1], 200)   # the taker may copy the rest (an hour)
+        fake = types.SimpleNamespace(_messenger=lambda: self.new._msgr(), log=lambda m: None,
+                                     _msg_fed_fns=lambda b, t, node="": kr.Relay._msg_fed_fns(
+                                         types.SimpleNamespace(_fed_post=kr.Relay._fed_post, _fed_get_raw=kr.Relay._fed_get_raw), b, t, node))
+        n = kr.Relay._msg_takeover(fake, o["messages"], "http://127.0.0.1:%d" % self.old.httpd.server_address[1], fed)
+        self.assertEqual(n["msgs"], len(self.old._msgr().msgs))
+        for _ in range(100):                                                 # the attachments follow in the background
+            if not self.new._msgr().missing_files():
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.new._msgr().missing_files(), [])
 
 
 class Page(unittest.TestCase):

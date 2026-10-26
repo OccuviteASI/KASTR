@@ -139,6 +139,8 @@ class Messenger:
         self.files = m.get("files") if isinstance(m.get("files"), dict) else {}        # fid -> {at, size, by, who: [nk] | None}
         self.msgs = {}                                                                   # seq -> envelope
         self.rate = {}
+        self.ver = 0                     # moves with every change (a standby's copy asks for the store again when it moved)
+        self.boot = os.urandom(4).hex()  # ... and a restarted hub counts from 0 again
         self._dirty = False
         self._saved = 0.0
         self._timer = None
@@ -167,6 +169,7 @@ class Messenger:
     def _touch(self, now=False):
         """Meta changed: written at once (`now`: identities, groups) or within two seconds (cursors, reads)."""
         self._dirty = True
+        self.ver += 1
         if now:
             self.flush()
             return
@@ -291,7 +294,7 @@ class Messenger:
         self.seq += 1
         g = self.groups[gid]
         who = sorted(set(g.get("members") or []) | set(kw.pop("extra", []) or []))
-        env = {"seq": self.seq, "at": int(now), "kind": "sys", "gid": gid, "from": by, "fromName": (self.persons.get(by) or {}).get("name") or by,
+        env = {"seq": self.seq, "uid": "s:" + os.urandom(8).hex(), "at": int(now), "kind": "sys", "gid": gid, "from": by, "fromName": (self.persons.get(by) or {}).get("name") or by,
                "who": who, "sys": dict(kw, ev=ev)}
         self.msgs[env["seq"]] = env
         self._store_msg(env)
@@ -411,6 +414,7 @@ class Messenger:
         self.persons[nk] = {"name": name, "kid": kid, "pub": p["pub"], "wrapped": p["wrapped"], "iv": p["iv"], "salt": p["salt"], "iter": it,
                             "at": int(now), "created": int(now), "by": host, "devices": {host: {"at": int(now), "first": int(now)}},
                             "blocked": dict((per or {}).get("blocked") or {}), "old": old[-8:],
+                            "keyAt": int(now),               # when the key material last changed (merges keep the newer)
                             "sub": (per or {}).get("sub")}   # 0.22: the Entra object id this identity is re-bound to
         if per:
             self._device_note(nk, host, now, kind="replaced")
@@ -437,7 +441,7 @@ class Messenger:
         if not self.set_code(name, new):
             return {"ok": False, "error": "could not change the My room code"}, 500
         if per:
-            per.update(wrapped=p["wrapped"], iv=p["iv"], salt=p["salt"], iter=it, at=int(now))
+            per.update(wrapped=p["wrapped"], iv=p["iv"], salt=p["salt"], iter=it, at=int(now), keyAt=int(now))
             self._touch(now=True)
         self.log("messages: %s changed %s's My room code%s" % (host, name, " and re-wrapped the messaging key" if per else ""))
         return {"ok": True, "rewrapped": bool(per)}, 200
@@ -501,7 +505,7 @@ class Messenger:
                 return {"ok": False, "error": "an attachment is missing (upload it again)"}, 400
             files.append(str(fid))
         self.seq += 1
-        env = {"seq": self.seq, "at": int(now), "cid": cid, "kind": "msg", "from": nk, "fromName": self.persons[nk].get("name") or nk,
+        env = {"seq": self.seq, "uid": "m:%s:%s" % (nk, cid), "at": int(now), "cid": cid, "kind": "msg", "from": nk, "fromName": self.persons[nk].get("name") or nk,
                "fromKid": self.persons[nk]["kid"], "iv": iv, "ct": ct, "wraps": clean, "who": readers}
         if gid:
             env["gid"] = gid
@@ -804,6 +808,7 @@ class Messenger:
         if not per or dev not in (per.get("blocked") or {}):
             return {"ok": False, "error": "that device is not blocked"}, 404
         per["blocked"].pop(dev, None)
+        per.setdefault("allowed", {})[dev] = int(now)   # a merge knows the allow came after the removal
         self._touch(now=True)
         return {"ok": True}, 200
 
@@ -848,9 +853,306 @@ class Messenger:
         except OSError:
             return None, ({"ok": False, "error": "attachment missing on the hub"}, 404)
 
+    # ---- 0.21.88 (Kenton: "Yes, carry them"): hub hand-over, the standby's copy, the hand-back ------------------------
+    # export() pages the store (meta + messages after a seq); merge() takes a page into this store -- idempotent (a message
+    # is known by its uid, whatever its number there), never an older person key over a newer one, deletions kept (a deleted
+    # group's messages never come back), the 90-day / 1-hour retention applied. Attachments travel apart: missing_files()
+    # names the ones whose ciphertext this box lacks, file_raw() / file_store() move the bytes (catch_up() below).
+    SYNC_MSGS = 2000
+    SYNC_BYTES = 8 * 1024 * 1024
+
+    @staticmethod
+    def uid_of(e):
+        if e.get("uid"):
+            return str(e["uid"])[:120]
+        if e.get("kind") == "msg" and e.get("cid"):
+            return "m:%s:%s" % (e.get("from"), e.get("cid"))
+        return "s:%s:%s:%s" % (e.get("seq"), e.get("at"), e.get("gid") or "")
+
+    def export(self, since=0, meta_ver=None):
+        """-> a page: {v, fleet, seq, metaVer, meta? (when meta_ver differs), msgs (seq > since, capped), more, top}."""
+        try:
+            since = max(0, int(since or 0))
+        except (TypeError, ValueError):
+            since = 0
+        with self.lock:
+            mv = "%s.%d" % (self.boot, self.ver)
+            out = {"v": 1, "fleet": self.fleet, "seq": self.seq, "metaVer": mv}
+            if meta_ver != mv:
+                out["meta"] = json.loads(json.dumps({"persons": self.persons, "groups": self.groups, "reads": self.reads,
+                                                     "cursors": self.cursors, "notes": self.notes, "files": self.files}))
+            msgs, size, more = [], 0, False
+            for q in sorted(x for x in self.msgs if x > since):
+                if len(msgs) >= self.SYNC_MSGS or size > self.SYNC_BYTES:
+                    more = True
+                    break
+                e = dict(self.msgs[q])
+                e["uid"] = self.uid_of(e)
+                msgs.append(e)
+                size += len(e.get("ct") or "") + 400
+            out.update(msgs=msgs, more=more, top=msgs[-1]["seq"] if msgs else since)
+        return out
+
+    @staticmethod
+    def _key_at(p):
+        try:
+            return int(p.get("keyAt") or p.get("created") or p.get("at") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _ts_map(v, keyok=HOST_RE.match):
+        out = {}
+        for k, t in (v.items() if isinstance(v, dict) else []):
+            try:
+                if keyok(str(k)):
+                    out[str(k)] = int(t)
+            except (TypeError, ValueError):
+                pass
+        return out
+
+    def _person_clean(self, p):
+        if not isinstance(p, dict) or not KID_RE.match(str(p.get("kid") or "")) or not pub_ok(p.get("pub")):
+            return None
+        if not (b64ok(p.get("wrapped"), 64, 1024) and b64ok(p.get("iv"), 16, 16) and b64ok(p.get("salt"), 24, 44)):
+            return None
+        devs = {}
+        for h, d in (p.get("devices") or {}).items() if isinstance(p.get("devices"), dict) else []:
+            if HOST_RE.match(str(h)) and isinstance(d, dict):
+                devs[str(h)] = {"at": int(d.get("at") or 0), "first": int(d.get("first") or d.get("at") or 0)}
+        old = [{"kid": str(o["kid"]), "pub": str(o["pub"]), "until": int(o.get("until") or 0)} for o in (p.get("old") or [])
+               if isinstance(o, dict) and KID_RE.match(str(o.get("kid") or "")) and pub_ok(o.get("pub"))][-8:]
+        try:
+            it = int(p.get("iter") or 0)
+        except (TypeError, ValueError):
+            it = 0
+        return {"name": name_disp(p.get("name")), "kid": str(p["kid"]), "pub": str(p["pub"]), "wrapped": str(p["wrapped"]),
+                "iv": str(p["iv"]), "salt": str(p["salt"]), "iter": it, "at": int(p.get("at") or 0), "created": int(p.get("created") or 0),
+                "keyAt": self._key_at(p), "by": str(p.get("by") or "")[:40], "devices": devs, "blocked": self._ts_map(p.get("blocked")),
+                "allowed": self._ts_map(p.get("allowed")), "old": old, "sub": p.get("sub") if isinstance(p.get("sub"), str) else None}
+
+    def merge(self, b, now=None):
+        """Take one export() page into this store. -> counts."""
+        now = time.time() if now is None else now
+        cut = now - MSG_KEEP_S
+        n = {"persons": 0, "groups": 0, "msgs": 0, "renumbered": 0, "files": 0}
+        if not isinstance(b, dict):
+            return n
+        with self.lock:
+            if not self.persons and not self.msgs and re.match(r"^[0-9a-f]{16}$", str(b.get("fleet") or "")):
+                self.fleet = str(b["fleet"])   # an empty store takes the fleet's id (the pages keep their history and cursors)
+            meta = b.get("meta") if isinstance(b.get("meta"), dict) else {}
+            for nk, p in (meta.get("persons") or {}).items() if isinstance(meta.get("persons"), dict) else []:
+                nk = name_key(nk)
+                inc = self._person_clean(p)
+                if not nk or inc is None:
+                    continue
+                mine = self.persons.get(nk)
+                if mine is None:
+                    self.persons[nk] = inc
+                    n["persons"] += 1
+                    continue
+                before = json.dumps(mine, sort_keys=True)
+                if self._key_at(inc) > self._key_at(mine):   # a newer key (set up again / a new code) wins; never an older one
+                    if inc["kid"] != mine.get("kid"):
+                        inc["old"] = inc["old"] + [{"kid": mine["kid"], "pub": mine["pub"], "until": self._key_at(inc)}]
+                    for k in ("name", "kid", "pub", "wrapped", "iv", "salt", "iter", "keyAt", "created", "by", "sub"):
+                        mine[k] = inc[k]
+                olds = {o["kid"]: o for o in list(mine.get("old") or []) + inc["old"] if o["kid"] != mine["kid"]}
+                mine["old"] = sorted(olds.values(), key=lambda o: o.get("until") or 0)[-8:]
+                devs = mine.setdefault("devices", {})
+                for h, d in inc["devices"].items():
+                    o = devs.get(h)
+                    devs[h] = {"at": max(d["at"], int((o or {}).get("at") or 0)), "first": min(d["first"], int((o or {}).get("first") or d["first"]))}
+                for k in ("blocked", "allowed"):
+                    cur = self._ts_map(mine.get(k))
+                    for h, t in inc[k].items():
+                        cur[h] = max(t, cur.get(h, 0))
+                    mine[k] = cur
+                for h in [h for h, t in mine["blocked"].items() if mine["allowed"].get(h, 0) >= t]:
+                    mine["blocked"].pop(h, None)
+                for h in mine["blocked"]:
+                    devs.pop(h, None)
+                mine["at"] = max(int(mine.get("at") or 0), inc["at"])
+                if json.dumps(mine, sort_keys=True) != before:
+                    n["persons"] += 1
+            for gid, g in (meta.get("groups") or {}).items() if isinstance(meta.get("groups"), dict) else []:
+                if not GID_RE.match(str(gid)) or not isinstance(g, dict):
+                    continue
+                mine = self.groups.get(gid)
+                if mine is None or int(g.get("ver") or 0) > int(mine.get("ver") or 0):
+                    self.groups[gid] = {"gid": gid, "name": name_disp(g.get("name"))[:40], "creator": name_key(g.get("creator")),
+                                        "members": [name_key(m) for m in (g.get("members") or []) if name_key(m)][:MSG_GROUP_MAX],
+                                        "names": {name_key(k): name_disp(v) for k, v in (g.get("names") or {}).items() if name_key(k)} if isinstance(g.get("names"), dict) else {},
+                                        "at": int(g.get("at") or 0), "ver": int(g.get("ver") or 0)}
+                    if g.get("deleted"):
+                        self.groups[gid].update(deleted=int(g["deleted"]), was=[name_key(m) for m in (g.get("was") or []) if name_key(m)])
+                    n["groups"] += 1
+            dead = {gid for gid, g in self.groups.items() if g.get("deleted")}
+            for q in [q for q, e in self.msgs.items() if e.get("gid") in dead]:   # a group deleted there: its messages go here too
+                self.msgs.pop(q, None)
+                try:
+                    os.remove(self._msg_path(q))
+                except OSError:
+                    pass
+            for nk, r in (meta.get("reads") or {}).items() if isinstance(meta.get("reads"), dict) else []:
+                if not isinstance(r, dict):
+                    continue
+                mine = self.reads.setdefault(name_key(nk), {})
+                for conv, q in r.items():
+                    try:
+                        mine[str(conv)[:60]] = max(int(q), int(mine.get(str(conv)[:60]) or 0))
+                    except (TypeError, ValueError):
+                        pass
+            for h, c in (meta.get("cursors") or {}).items() if isinstance(meta.get("cursors"), dict) else []:
+                if not HOST_RE.match(str(h)) or not isinstance(c, dict):
+                    continue
+                mine = self.cursors.setdefault(str(h), {})
+                for k, q in c.items():
+                    try:
+                        mine[str(k)[:60]] = max(int(q), int(mine.get(str(k)[:60]) or 0))
+                    except (TypeError, ValueError):
+                        pass
+            for nk, lst in (meta.get("notes") or {}).items() if isinstance(meta.get("notes"), dict) else []:
+                have = {x.get("id") for x in self.notes.get(name_key(nk)) or []}
+                add = [dict(x) for x in (lst if isinstance(lst, list) else []) if isinstance(x, dict) and x.get("id") and x.get("id") not in have]
+                if add:
+                    self.notes[name_key(nk)] = sorted((self.notes.get(name_key(nk)) or []) + add, key=lambda x: int(x.get("at") or 0))[-20:]
+            for fid, f in (meta.get("files") or {}).items() if isinstance(meta.get("files"), dict) else []:
+                if not FID_RE.match(str(fid)) or not isinstance(f, dict) or float(f.get("at") or 0) < cut:
+                    continue
+                mine = self.files.get(fid)
+                who = f.get("who") if isinstance(f.get("who"), list) else None
+                if mine is None:
+                    self.files[fid] = {"at": int(f.get("at") or 0), "size": int(f.get("size") or 0), "by": name_key(f.get("by")),
+                                       "who": [name_key(x) for x in who if name_key(x)] if who is not None else None}
+                    n["files"] += 1
+                elif who is not None:
+                    mine["who"] = sorted(set(mine.get("who") or []) | {name_key(x) for x in who if name_key(x)})
+            have = {self.uid_of(e): q for q, e in self.msgs.items()}
+            for e in b.get("msgs") or []:
+                if not isinstance(e, dict) or not isinstance(e.get("seq"), int) or float(e.get("at") or 0) < cut:
+                    continue
+                if e.get("gid") in dead:
+                    continue
+                uid = self.uid_of(e)
+                if uid in have:
+                    continue
+                q = e["seq"]
+                if q <= 0 or q in self.msgs:   # that number is taken here by another message: the next free one
+                    q = max(self.seq, max(self.msgs or [0])) + 1
+                    n["renumbered"] += 1
+                env = dict(e, seq=q, uid=uid)
+                self.msgs[q] = env
+                have[uid] = q
+                self.seq = max(self.seq, q)
+                self._store_msg(env)
+                n["msgs"] += 1
+            seq0 = self.seq
+            try:
+                self.seq = max(self.seq, int(b.get("seq") or 0))   # new messages here never take a number the source used
+            except (TypeError, ValueError):
+                pass
+            if meta or n["msgs"] or self.seq != seq0:
+                self._touch(now=True)
+        if n["msgs"] or n["files"]:
+            self.sweep(now)
+        return n
+
+    def missing_files(self):
+        with self.lock:
+            return [fid for fid, f in sorted(self.files.items(), key=lambda kv: -int(kv[1].get("at") or 0))
+                    if not os.path.isfile(self._file_path(fid))]
+
+    def file_raw(self, fid):
+        with self.lock:
+            if not FID_RE.match(str(fid or "")) or fid not in self.files:
+                return None
+        try:
+            with open(self._file_path(fid), "rb") as fh:
+                return fh.read()
+        except OSError:
+            return None
+
+    def file_store(self, fid, data):
+        """The ciphertext of an attachment this store knows (from a merge) -> kept when its size matches."""
+        with self.lock:
+            f = self.files.get(str(fid)) if FID_RE.match(str(fid or "")) else None
+            if not f or not isinstance(data, (bytes, bytearray)) or (f.get("size") and len(data) != int(f["size"])):
+                return False
+        os.makedirs(os.path.join(self.dir, "f"), exist_ok=True)
+        tmp = self._file_path(fid) + ".tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, self._file_path(fid))
+        return True
+
     # ---- the People panel ----------------------------------------------------------------------------------------------
     def identities(self):
         """{nk: {name, at, devices}} -- who has a messaging identity (All people lists them even when not seen lately)."""
         with self.lock:
             return {nk: {"name": p.get("name") or nk, "at": int(max([int(d.get("at") or 0) for d in (p.get("devices") or {}).values()] or [p.get("at") or 0])),
                          "devices": len(p.get("devices") or {})} for nk, p in self.persons.items()}
+
+
+def fetch_files(m, fetch, log=None, deadline=3600.0, sleep=time.sleep, quiet=False):
+    """0.21.88: the attachments `m` knows (from a merge) but lacks -> fetched one by one (`fetch(fid)` -> ciphertext or None),
+    three tries each, for `deadline` s at most. -> (bytes copied, still missing)."""
+    log = log or (lambda x: None)
+    t0, got = time.time(), 0
+    for fid in m.missing_files():
+        if time.time() - t0 >= deadline:
+            break
+        for attempt in range(3):
+            try:
+                data = fetch(fid)
+            except Exception:
+                data = None
+            if data is not None and m.file_store(fid, data):
+                got += len(data)
+                break
+            sleep(1.0 + attempt)
+    left = len(m.missing_files())
+    if (got or left) and not quiet:
+        log("messages: %d attachment byte(s) copied%s" % (got, (" -- %d attachment(s) still missing" % left) if left else ""))
+    return got, left
+
+
+def catch_up(m, export, fetch, log=None, deadline=1800.0, since=0, meta_ver=None, sleep=time.sleep, files=True, retries=60):
+    """0.21.88: copy a store into `m` page by page (then, with `files`, the attachments it lacks). `export(since, meta_ver)` ->
+    a page (None: the other side did not answer -- tried `retries` times), `fetch(fid)` -> its ciphertext (or None).
+    -> (since, meta_ver, counts) for the next round (a standby keeps asking from there)."""
+    log = log or (lambda x: None)
+    t0 = time.time()
+    tot = {"persons": 0, "groups": 0, "msgs": 0, "renumbered": 0, "files": 0, "bytes": 0, "pages": 0}
+    tries = 0
+    while time.time() - t0 < deadline:
+        try:
+            page = export(since, meta_ver)
+        except Exception:
+            page = None
+        if not isinstance(page, dict):
+            tries += 1
+            if tries >= retries:
+                break
+            sleep(min(30.0, 2.0 * tries))
+            continue
+        tries = 0
+        c = m.merge(page)
+        for k in ("persons", "groups", "msgs", "renumbered", "files"):
+            tot[k] += c.get(k, 0)
+        tot["pages"] += 1
+        meta_ver = page.get("metaVer") or meta_ver
+        try:
+            since = max(since, int(page.get("top") or 0))
+        except (TypeError, ValueError):
+            pass
+        if not page.get("more"):
+            break
+    if files and fetch is not None:
+        tot["bytes"], tot["missing"] = fetch_files(m, fetch, log, max(1.0, deadline - (time.time() - t0)), sleep, quiet=True)
+    if tot["msgs"] or tot["persons"] or tot["groups"] or tot["bytes"]:
+        log("messages: copied %d message(s), %d person key(s), %d group(s), %d attachment byte(s) in %d page(s)%s"
+            % (tot["msgs"], tot["persons"], tot["groups"], tot["bytes"], tot["pages"],
+               (" -- %d attachment(s) still missing" % tot["missing"]) if tot.get("missing") else ""))
+    return since, meta_ver, tot

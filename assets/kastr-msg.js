@@ -278,6 +278,7 @@
         for (const m of d.msgs || []) {
           const r = await openMsg(m, d.keys || {});
           if (r) {
+            if (r.cid) for (const [k, x] of S.recs) if (x.seq && x.seq !== r.seq && x.cid === r.cid && x.from === r.from) { S.recs.delete(k); idbDel("msgs", x.k).catch(() => {}); }   // renumbered by a hub hand-back
             S.recs.set("seq:" + r.seq, r);
             if (r.mine && r.cid && S.recs.has("cid:" + r.cid)) { S.recs.delete("cid:" + r.cid); idbDel("outbox", r.cid).catch(() => {}); }
             idbPut("msgs", r).catch(() => {});

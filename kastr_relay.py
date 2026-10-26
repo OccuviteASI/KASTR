@@ -6012,6 +6012,9 @@ class AuthService:
                 elif path == "/api/people":            # 0.21.78: beats, person invites, My room shared
                     obj, code = svc.people_api(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
+                elif path == "/api/msg/sync":          # 0.21.88: a page of the messages store (hand-over / standby copy)
+                    obj, code = svc.msg_sync_api(p, self.headers.get("Authorization"))
+                    self._reply(obj, code)
                 elif path == "/api/msg":               # 0.21.88: private messages (end-to-end encrypted; the hub keeps them)
                     obj, code = svc.msg_api(p, self.headers.get("Authorization"), self._peer())
                     hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
@@ -6411,7 +6414,14 @@ class AuthService:
                  % (hub, peer or "?", len(self.store.rooms_public()), len(chat), len(bans)))
         if callable(self.on_handover):
             threading.Timer(4.0, self.on_handover, args=(info,)).start()   # after the reply and the spokes' next poll
+        self.__dict__["_msg_handover"] = {"at": time.time(), "peer": peer}   # 0.21.88: the new hub copies the messages from here
+        try:
+            msgs = self._msgr().export(0)
+        except Exception as e:
+            self.log("relay auth: hand-over -- messages not exported: %s" % e)
+            msgs = None
         return {"ok": True, "store": self.store.export_bundle(), "bans": bans, "chat": chat, "chatSkipped": skipped,
+                "messages": msgs,                                                            # 0.21.88: the first page of the messages store
                 "spokes": [r["name"] or r["key"] for r in self.spokes_public(stale=True)]}, 200
 
     def _federation_token(self, code, peer="", node=""):
@@ -8245,11 +8255,36 @@ class AuthService:
         except ValueError:
             return {"ok": False, "error": "the hub answered oddly"}, 502
 
+    MSG_HANDOVER_SYNC_S = 3600   # after a hand-over the new hub copies the messages (and attachments) from here this long
+
+    def _msg_sync_ok(self, bearer, node=""):
+        """0.21.88: may this relay copy the messages store from here? The hub's named standby (as for the records' replica), or
+        -- within an hour of a hub hand-over -- the box that took over (it showed the fleet's admin code to get it)."""
+        if not self._bearer_relay(bearer):
+            return False
+        sb = self.standby_info() if callable(getattr(self, "standby_info", None)) else None
+        if isinstance(sb, dict) and sb.get("node") and str(node or "") == sb.get("node"):
+            return True
+        ho = self.__dict__.get("_msg_handover") or {}
+        return time.time() - float(ho.get("at") or 0) <= self.MSG_HANDOVER_SYNC_S
+
+    def msg_sync_api(self, p, bearer):
+        """POST /api/msg/sync {since, metaVer, node} (federation token) -> {ok, page} -- see kastr_msg.Messenger.export."""
+        p = p if isinstance(p, dict) else {}
+        if not self._msg_sync_ok(bearer, p.get("node")):
+            return {"ok": False, "error": "only the hub's standby (or the box a hub was just handed to) copies the messages"}, 403
+        return {"ok": True, "page": self._msgr().export(p.get("since") or 0, p.get("metaVer"))}, 200
+
     def msg_file_get(self, q, bearer, jwt=None, peer=""):
         """GET /api/msg/file?id=<fid> -> (bytes | reply, code)."""
         fid = str((q.get("id") or [""])[0])
         if not bearer and jwt:
             bearer = "Bearer " + str(jwt)
+        if (q.get("fed") or [""])[0] == "1":   # 0.21.88: a relay copying the store (hand-over / standby) -- the ciphertext as kept
+            if not self._msg_sync_ok(bearer, (q.get("node") or [""])[0]):
+                return {"ok": False, "error": "not allowed"}, 403
+            data = self._msgr().file_raw(fid)
+            return (data, 200) if data is not None else ({"ok": False, "error": "no such attachment"}, 404)
         if self._bearer_relay(bearer):
             host = str((q.get("host") or [""])[0])
             if not HOST_RE.match(host):
@@ -12118,6 +12153,7 @@ class Relay:
                     cs._last_id.clear()
         except Exception:
             pass
+        msgs = self._msg_takeover(d.get("messages"), base, tok)   # 0.21.88: the messages store comes too
         cur = self._cluster_raw()
         cur["hub"] = True
         cur["connect"] = ""
@@ -12129,7 +12165,106 @@ class Relay:
         restarted = self._restart()
         return {"ok": True, "from": old, "rooms": counts["rooms"], "codes": counts["codes"], "groups": counts["groups"],
                 "chats": chats, "chatSkipped": d.get("chatSkipped") or [], "kicks": bans, "spokes": d.get("spokes") or [],
-                "restarted": restarted}
+                "messages": msgs, "restarted": restarted}
+
+    # ---- 0.21.88 (Kenton: "Yes, carry them"): the messages store moves with the hub ------------------------------------
+    # Hand-over: the reply carries the first page; the rest of the pages are copied from the old hub (POST /api/msg/sync, its
+    # federation token) BEFORE this relay restarts as the hub; the attachments' ciphertext (up to 25 MB each) afterwards, one
+    # GET /api/msg/file?fed=1 at a time, in the background (an hour at most; the old hub keeps them -- it stays a spoke).
+    # Standby: a second loop beside the records' replica keeps its messages store in step with the main hub (every 10 s,
+    # only what moved). Hand-back: the main hub copies the standby's store (signed like the hand-back) before it ends it.
+    def _messenger(self):
+        auth = getattr(self, "auth", None)
+        if auth is not None:
+            return auth._msgr()
+        return kastr_msg.Messenger(self.state_dir, self.log)
+
+    @staticmethod
+    def _fed_post(base, tok, path, body, timeout=60):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fed_get_raw(base, tok, path, timeout=300):
+        req = urllib.request.Request(base + path, method="GET", headers={"Authorization": "Bearer " + tok})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read() if (getattr(r, "status", 200) or 200) == 200 else None
+        except Exception:
+            return None
+
+    def _msg_fed_fns(self, base, tok, node=""):
+        def export(since, mv):
+            d = self._fed_post(base, tok, "/api/msg/sync", {"since": since, "metaVer": mv, "node": node}, timeout=90)
+            return d.get("page") if isinstance(d, dict) and d.get("ok") else None
+
+        def fetch(fid):
+            from urllib.parse import quote
+            return self._fed_get_raw(base, tok, "/api/msg/file?fed=1&id=%s&node=%s" % (quote(fid), quote(node)))
+        return export, fetch
+
+    def _msg_takeover(self, first, base, tok):
+        """The box taking over: the old hub's messages now, its attachments in the background. -> counts (or None)."""
+        try:
+            m = self._messenger()
+            since, mv = 0, None
+            tot = {}
+            if isinstance(first, dict):
+                tot = m.merge(first)
+                since, mv = int(first.get("top") or 0), first.get("metaVer")
+                if not first.get("more"):
+                    first = None
+            if first is not None:   # more pages (or an older hub that sent none -- it answers 404: nothing to copy)
+                export, _f = self._msg_fed_fns(base, tok)
+                since, mv, t2 = kastr_msg.catch_up(m, export, None, self.log, deadline=120, since=since, meta_ver=mv, files=False)
+                for k, v in t2.items():
+                    tot[k] = tot.get(k, 0) + v if isinstance(v, int) else v
+            _e, fetch = self._msg_fed_fns(base, tok)
+            if m.missing_files():
+                threading.Thread(target=kastr_msg.fetch_files, args=(m, fetch, self.log, 3600.0), daemon=True,
+                                 name="kastr-msg-files").start()
+            self.log("relay federation: hand-over -- messages store taken (%s); %d attachment(s) to copy" % (tot, len(m.missing_files())))
+            return {k: v for k, v in tot.items() if isinstance(v, int)}
+        except Exception as e:
+            self.log("relay federation: hand-over -- messages not taken: %s" % e)
+            return None
+
+    def _msg_replica_start(self):
+        if getattr(self, "_msg_replica_thread", None) and self._msg_replica_thread.is_alive():
+            return
+        self._msg_replica_thread = threading.Thread(target=self._msg_replica_loop, daemon=True, name="kastr-msg-replica")
+        self._msg_replica_thread.start()
+
+    MSG_REPLICA_EVERY = 10
+
+    def _msg_replica_loop(self):
+        """The standby's copy of the main hub's messages store -- straight into this relay's own store (a spoke keeps none
+        of its own), so a take-over has it in place."""
+        since, mv, fails = 0, None, 0
+        while True:
+            cur = self._cluster_raw()
+            st = cur.get("standby") if isinstance(cur.get("standby"), dict) else None
+            if not st or st.get("node") != _machine_node() or cur.get("hub") is True:
+                return
+            minter, tok = self._hub_minter_url(), self._fed_active
+            if not minter or not tok:
+                time.sleep(15)
+                continue
+            try:
+                export, fetch = self._msg_fed_fns(minter, tok, _machine_node())
+                since, mv, tot = kastr_msg.catch_up(self._messenger(), export, fetch, self.log, deadline=600, since=since, meta_ver=mv,
+                                                    retries=1)
+                fails = 0 if tot.get("pages") else fails + 1
+            except Exception as e:
+                fails += 1
+                if fails in (1, 10):
+                    self.log("relay federation: standby copy of the messages -- %s" % str(e)[:120])
+            time.sleep(self.MSG_REPLICA_EVERY if not fails else min(60, 10 * fails))
 
     def _hub_cmd(self, name, info):
         """0.21.0: a command from the hub (through the bans long-poll). "update" = match the
@@ -13051,6 +13186,7 @@ class Relay:
         return d if isinstance(d, dict) else {}
 
     def _replica_start(self):
+        self._msg_replica_start()   # 0.21.88: the messages store too
         if getattr(self, "_replica_thread", None) and self._replica_thread.is_alive():
             return
         self._replica_thread = threading.Thread(target=self._replica_loop, daemon=True)
@@ -13275,7 +13411,7 @@ class Relay:
             self.log("relay federation: spoke %s reports the main hub down for %s s -- vote counted" % (p.get("spoke") or peer, p.get("downFor")))
             threading.Thread(target=self._failover_tick, daemon=True).start()
             return {"ok": True, "promoting": True}, 202
-        if op in ("handback", "handback/done"):
+        if op in ("handback", "handback/done", "handback/msgs", "handback/msgfile"):   # 0.21.88: + the messages store
             so = cur.get("standbyOf") if isinstance(cur.get("standbyOf"), dict) else {}
             try:
                 ts = int(p.get("ts") or 0)
@@ -13285,6 +13421,13 @@ class Relay:
                 return {"ok": False, "error": "not the main hub"}, 403
             if not promoted:
                 return {"ok": False, "error": "this standby is not acting as the hub"}, 409
+            if op == "handback/msgs" and self.auth is not None:   # 0.21.88: a page of the messages store
+                return {"ok": True, "page": self.auth._msgr().export(p.get("since") or 0, p.get("metaVer"))}, 200
+            if op == "handback/msgfile" and self.auth is not None:   # 0.21.88: one attachment's ciphertext (base64)
+                data = self.auth._msgr().file_raw(str(p.get("fid") or ""))
+                if data is None:
+                    return {"ok": False, "error": "no such attachment"}, 404
+                return {"ok": True, "data": base64.b64encode(data).decode()}, 200
             if op == "handback":
                 auth = self.auth
                 base = (cur.get("promoted") or {}).get("chat") or {}
@@ -13346,9 +13489,9 @@ class Relay:
             return
         self.log("relay federation: the standby %s is acting as the hub -- taking the hub duties back" % st.get("name"))
 
-        def call(op):
+        def call(op, extra=None):
             ts = int(time.time())
-            body = json.dumps({"ts": ts, "sig": standby_sig(st["secret"], ts)}).encode()
+            body = json.dumps(dict(extra or {}, ts=ts, sig=standby_sig(st["secret"], ts))).encode()
             req = urllib.request.Request(sminter + "/api/hub/" + op, data=body, method="POST", headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 return json.loads(r.read().decode("utf-8", "replace") or "{}")
@@ -13373,6 +13516,18 @@ class Relay:
             self.log("relay federation: hand-back chat -- %d line(s) added" % added)
         except Exception as e:
             self.log("relay federation: hand-back chat not merged: %s" % e)
+        try:   # 0.21.88: the messages written while the standby was the hub (and their attachments) -- before it stops being it
+            def mexport(since, mv):
+                d2 = call("handback/msgs", {"since": since, "metaVer": mv})
+                return d2.get("page") if isinstance(d2, dict) and d2.get("ok") else None
+
+            def mfetch(fid):
+                d2 = call("handback/msgfile", {"fid": fid})
+                return base64.b64decode(d2["data"]) if isinstance(d2, dict) and d2.get("ok") and d2.get("data") else None
+            _s, _v, tot = kastr_msg.catch_up(self._messenger(), mexport, mfetch, self.log, deadline=600, retries=3)
+            self.log("relay federation: hand-back messages -- %s" % {k: v for k, v in tot.items() if isinstance(v, int)})
+        except Exception as e:
+            self.log("relay federation: hand-back messages not copied: %s" % e)
         try:
             call("handback/done")
         except Exception as e:

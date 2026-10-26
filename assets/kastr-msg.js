@@ -548,6 +548,7 @@
     d.className = "mav" + (small ? " sm" : "");
     d.style.setProperty("--ring", K.color(key || nameKey(name)));
     d.textContent = K.initials(name);
+    if (!String(key || "").startsWith("g:")) { try { K.photo?.(d, name); } catch {} }   // 0.21.90: their photo over the initials
     return d;
   }
   function preview(r) {
@@ -1312,6 +1313,7 @@
     auth: () => setTimeout(() => init(), 300),
     openWith: (name) => { if (!K.allowed()) { toast("Join a room (with an access code) to send messages", 4000, "info"); return; } init().then(() => openConv("p:" + nameKey(name))); },
     adminDevices,
+    photos: () => { if (!panel.hidden && S.state === "ready") { paintList(); } },   // 0.21.90: the photo index moved
     unread: () => (S.state === "ready" ? totalUnread() : 0),
     // rig hooks
     state: () => ({ state: S.state, why: S.why, fleet: S.fleet, name: S.name, kid: S.kid, cur: S.cur, open: S.open, hubDown: S.hubDown, n: S.recs.size,

@@ -1805,6 +1805,34 @@ def clean_avatar(v):
     return v if len(v) <= 300 and AVATAR_URL_RE.match(v) else ""
 
 
+# 0.21.90 (Kenton: "users that have uploaded a photo showing as a broken link instead of the photo they uploaded"): a photo URL
+# named the uploader's relay host as THEIR page saw it -- http://localhost:8000 on the relay machine itself, a site's private
+# address another site cannot reach, http under an https page -- and the copy was deleted when the page closed. Now the HUB keeps
+# one photo per person (kastr_msg.Messenger.photo_*), every relay serves it to its own pages at /api/avatar/<id>?v=<hash> (a spoke
+# from a cache it fills from the hub), and beats carry the index {key, name, hash, id} -- never a host.
+PHOTO_REFRESH_S = 2.5      # a spoke asks the hub's photo index at most this often (only while its pages beat)
+PHOTO_ROSTER_S = 90        # a name a room's beats said this recently is "in the room" (what an invite-link guest may see)
+PHOTO_GUEST_CACHE_S = 15   # a spoke reuses the hub's "who is in this room" answer for a guest this long
+PHOTO_CACHE_MAX = 4000     # photo files a spoke keeps
+
+
+def photo_rows_clean(rows):
+    """0.21.90: the hub's photo index as a spoke passes it on -> [{k, n, h, id, at}]."""
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        k, h, pid = personal_key(r.get("k")), str(r.get("h") or ""), str(r.get("id") or "")
+        if not k or (h and not kastr_msg.PH_RE.match(h)) or not kastr_msg.PID_RE.match(pid) or pid != kastr_msg.photo_pid(k):
+            continue
+        try:
+            at = int(r.get("at") or 0)
+        except (TypeError, ValueError):
+            at = 0
+        out.append({"k": k, "n": clean_label(r.get("n"), 48) or k, "h": h, "id": pid, "at": at})
+    return out[:kastr_msg.PHOTO_MAX_PEOPLE]
+
+
 def clean_label(v, n):
     """0.21.69: a hostname / OS user / nickname as shown on the Relay page -- printable, no markup characters, bounded."""
     return "".join(ch for ch in str(v or "") if ch.isprintable() and ch not in LABEL_DROP).strip()[:n]
@@ -5719,6 +5747,13 @@ class PersonalLive:
         self.guests = {}      # 0.21.88: device host -> when it last beat with an invite-link / personal-room guest token
         self.bmode = {}       # 0.21.88: device host -> the page mode its beats say (boxes are not people)
         self.allcache = {}    # 0.21.88: spoke: "all" -> (at, the hub's All people rows)
+        self.rnames = {}      # 0.21.90: room -> {name key: when a page in it last beat here} (whose photo a guest there may see)
+        self.rosters = {}     # 0.21.90: hub: spoke -> (at, {room: set(name keys)}) -- the same, from each spoke
+        self.photos = None    # 0.21.90: spoke: the hub's photo index {pv, list}
+        self.photo_at = 0.0
+        self.photo_busy = False
+        self.photo_old = False   # 0.21.90: spoke: the hub keeps no photos (older than 0.21.90)
+        self.pq = {}          # 0.21.90: spoke: room -> (at, the hub's set of name keys in it)
         self.thread = None
 
 
@@ -5937,6 +5972,23 @@ class AuthService:
                         self.send_header("Content-Length", str(len(obj)))
                         self.send_header("Cache-Control", "private, max-age=60")
                         self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        try:
+                            self.wfile.write(obj)
+                        except OSError:
+                            pass
+                    else:
+                        self._reply(obj, code)
+                elif path.startswith("/api/avatar/"):   # 0.21.90: a person's profile photo (fleet members; a guest: their room's people)
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, hdrs, code = svc.avatar_get(path[len("/api/avatar/"):], qs, self.headers.get("Authorization"), self._peer())
+                    if isinstance(obj, (bytes, bytearray)):
+                        self.send_response(200)
+                        for k, v in (hdrs or {}).items():
+                            self.send_header(k, str(v))
+                        self.send_header("Content-Length", str(len(obj)))
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.send_header("X-Content-Type-Options", "nosniff")
                         self.end_headers()
                         try:
                             self.wfile.write(obj)
@@ -6268,6 +6320,8 @@ class AuthService:
             return self._msgr().api(body, str(p["host"]), admin=p.get("vouch") == "admin")
         if op == "pall":       # 0.21.88: All people for a spoke's page
             return self._p_all(time.time())
+        if op in ("pphoto", "pphotos", "pphotoq"):   # 0.21.90: profile photos (set / the index + the spoke's rooms / a guest's room)
+            return self._photo_fed(op, p)
         if op == "personal":   # 0.21.75: My room -- the spoke checked the member's access code (vouch "member") or an admin
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
@@ -7171,7 +7225,11 @@ class AuthService:
             box = [{"seq": x["seq"], "to": x["to"], "item": dict(x["item"])} for x in pl.out if now - float(x.get("at") or 0) <= PINBOX_TTL]
             mping = {h: v[0] for h, v in pl.mping.items() if now - v[1] <= kastr_msg.MSG_PING_KEEP_S}   # 0.21.88: "pull your messages"
         keep = {s: r for s, r in rooms.items() if s in opened or r["hosts"] or r["co"] or s in away}
-        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping}
+        try:
+            ppv = self._msgr().photo_index()["pv"]   # 0.21.90: the photo index's version -- a spoke re-reads it when it moves
+        except Exception:
+            ppv = None
+        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping, "ppv": ppv}
 
     def personal_mirror_apply(self, d):
         """Spoke: the hub's `personal` from the long-poll. A room whose owner just left ends its guests' sessions here."""
@@ -7220,6 +7278,12 @@ class AuthService:
                     pl.mping[str(h)] = (sq, now)
             for h in [h for h, v in pl.mping.items() if now - v[1] > kastr_msg.MSG_PING_KEEP_S]:
                 pl.mping.pop(h, None)
+            ppv = pf.get("ppv")   # 0.21.90: the hub's photo index moved -- read it now (the next beat here carries it)
+            photo_due = isinstance(ppv, str) and pl.photos is not None and ppv != pl.photos.get("pv")
+            if photo_due:
+                pl.photo_at = 0.0
+        if photo_due:
+            self._photo_index(now)
         if n:
             self.log("relay auth: %d guest session(s) in personal rooms ended here -- their owner left" % n)
             threading.Thread(target=self.trigger_revalidate, daemon=True).start()
@@ -7804,9 +7868,19 @@ class AuthService:
                 elif host in pl.guests and not is_personal(room):
                     pl.guests.pop(host, None)
                 mp = pl.mping.get(host)
-            av = clean_avatar(p.get("avatar"))   # 0.21.86: + the profile photo
+            av = clean_avatar(p.get("avatar"))   # 0.21.86: + the profile photo (a 0.21.89 page's URL -- 0.21.90 pages send none)
             self._p_where_beat(room, host, name, owner, p.get("mode"), now, av)   # 0.21.85: Everyone online (personal rooms)
             out = {"ok": True, "inbox": self._p_inbox_take(host, now), "shared": self._p_shared(host, now)}
+            if name and pl.bmode.get(host) not in HIDDEN_PEOPLE_MODES:
+                self._photo_roster_note(room, name, now)   # 0.21.90: who is in this room (an invite-link guest sees their photos)
+            if "pv" in p:   # 0.21.90: the fleet's photo index ({pv} alone when the page has it already)
+                try:
+                    ph = self._photo_beat(p, claims, room, now)
+                except Exception as e:
+                    ph = None
+                    self.log("relay auth: photo index: %s" % str(e)[:120])
+                if ph is not None:
+                    out["photos"] = ph
             if p.get("acc") or claims.get("acc"):   # 0.21.89: Ask for access -- asks for those who may let people in; an admitted page stays in
                 acc = self._acc_beat(p, claims, room, host, name, owner, now)
                 if acc is not None:
@@ -7865,6 +7939,13 @@ class AuthService:
                                      "by": by, "to": to, "toName": to_name})
         if op == "rc":   # 0.21.79: remote control notes
             return self.rc_send(p, claims, room, host, now)
+        if op == "photo":    # 0.21.90: set / remove my profile photo (the hub keeps it)
+            if claims.get("inv") or claims.get("pg") or claims.get("lobby") or room == LOBBY_SLUG or claims.get("vehicle"):
+                return {"ok": False, "error": "a profile photo needs a room's access code (not the Lobby or an invite link)"}, 403
+            return self._photo_set(p, host, claims_admin_any(claims), now)
+        if op == "photos":   # 0.21.90: the photo index (a guest: the people in their room only)
+            ph = self._photo_beat({"pv": ""}, claims, room, now)
+            return dict({"ok": True, "pv": "", "list": []}, **(ph or {})), 200
         if op == "all":      # 0.21.88: All people -- everyone the fleet has seen with KASTR or a web page in 30 days
             if claims.get("inv") or claims.get("pg") or claims.get("lobby") or room == LOBBY_SLUG:
                 return {"ok": False, "error": "join a room to see all people"}, 403
@@ -7892,7 +7973,7 @@ class AuthService:
             if not self._p_spoke():
                 return self._p_fed(body["op"], body)
             return self._p_hub_call(body)
-        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | all | online | cmd | list | share | co | seen)"}, 400
+        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | photo | photos | all | online | cmd | list | share | co | seen)"}, 400
 
     # ---- 0.21.89: Ask for access ---------------------------------------------------------------------------------------
     # Kenton: "let someone prompt people in a locked room that lets someone with permissions in the room already to allow them
@@ -8557,6 +8638,316 @@ class AuthService:
         with self.lock:
             pl.allcache["all"] = (now, out)
         return out, 200
+
+    # ---- 0.21.90: profile photos --------------------------------------------------------------------------------------
+    # The hub keeps them (kastr_msg.Messenger.photo_*: one per person by name key, a content hash as its version). Every relay
+    # answers its own pages: the beat reply carries the index (`photos: {pv, list?}` -- the list only when the page's pv is
+    # old), GET /api/avatar/<id>?v=<hash> the bytes (a spoke from its cache, filled from the hub with the federation token).
+    # Who sees them: a member token of a room (never the Lobby); an invite-link guest only the people beating in their room
+    # (here, at the hub, or on any spoke -- each spoke reports its rooms' names with its index refresh); the relay machine's own
+    # loopback pages (kastr_serve calls avatar_get(trusted=True)). Setting one needs a member token (not a guest); the hub
+    # checks who may change whose (kastr_msg._photo_may).
+    def _photo_roster_note(self, room, name, now):
+        nk = personal_key(name)
+        if not nk or not SLUG_RE.match(str(room or "")) or room == LOBBY_SLUG:
+            return
+        pl = self._pl()
+        with self.lock:
+            pl.rnames.setdefault(room, {})[nk] = now
+            if len(pl.rnames) > 4000:
+                for r in sorted(pl.rnames, key=lambda r: max(pl.rnames[r].values() or [0]))[:1000]:
+                    pl.rnames.pop(r, None)
+
+    def _photo_roster(self, now):
+        """{room: [name keys]} -- who beat in which room here lately (a spoke sends it to the hub with its index refresh)."""
+        pl = self._pl()
+        out = {}
+        with self.lock:
+            for room, d in list(pl.rnames.items()):
+                ks = [k for k, t in d.items() if now - t <= PHOTO_ROSTER_S]
+                if ks:
+                    out[room] = sorted(ks)[:500]
+                elif not ks and all(now - t > PHOTO_ROSTER_S for t in d.values()):
+                    pl.rnames.pop(room, None)
+        return out
+
+    def _photo_seen_in(self, room, nks, now):
+        """The name keys of `nks` known to be in `room` right now: its beats here; at the hub also its spokes' reports and the
+        personal rooms' pages; a personal room's owner."""
+        pl, nks = self._pl(), set(nks)
+        out = set()
+        spoke = self._p_spoke()
+        with self.lock:
+            loc = pl.rnames.get(room) or {}
+            out |= {k for k in nks if now - loc.get(k, 0) <= PHOTO_ROSTER_S}
+            if not spoke:
+                for at, rs in list(pl.rosters.values()):
+                    if now - at <= PHOTO_ROSTER_S:
+                        out |= nks & set(rs.get(room) or ())
+                for w in list(pl.where.values()):
+                    if w.get("room") == room and now - float(w.get("at") or 0) <= PWHERE_KEEP:
+                        k = personal_key(w.get("name"))
+                        if k in nks:
+                            out.add(k)
+            m = pl.mirror if spoke else None
+        if is_personal(room):
+            try:
+                owner = (self.store.personal_info(room) or {}).get("owner") if not spoke and hasattr(self.store, "personal_info") \
+                    else (((m or {}).get("rooms") or {}).get(room) or {}).get("owner")
+            except Exception:
+                owner = ""
+            if personal_key(owner) in nks:
+                out.add(personal_key(owner))
+        return out
+
+    def _photo_guest_ok(self, room, nks, now):
+        """An invite-link guest in `room` may see these people's photos (a subset of `nks`)."""
+        nks = set(nks)
+        ok = self._photo_seen_in(room, nks, now)
+        if not self._p_spoke() or ok >= nks:
+            return ok
+        pl = self._pl()
+        with self.lock:
+            hit = pl.pq.get(room)
+        if hit is None or now - hit[0] > PHOTO_GUEST_CACHE_S:
+            r = self._hub_fed({"op": "pphotoq", "room": room, "keys": sorted(nks)[:2000]}, timeout=4)
+            got = set(personal_key(k) for k in (r[0].get("keys") or [])) if (r is not None and r[1] == 200 and isinstance(r[0].get("keys"), list)) else set()
+            with self.lock:
+                pl.pq[room] = hit = (now, got)
+                if len(pl.pq) > 512:
+                    for k in sorted(pl.pq, key=lambda k: pl.pq[k][0])[:256]:
+                        pl.pq.pop(k, None)
+        return ok | (hit[1] & nks)
+
+    def _photo_index(self, now=None):
+        """-> the fleet's photo index {pv, list} (None: not known yet / no hub store). A spoke refreshes its copy in the
+        background at most every PHOTO_REFRESH_S (the first time inline)."""
+        now = time.time() if now is None else now
+        if not self._p_spoke():
+            return self._msgr().photo_index()
+        pl = self._pl()
+        with self.lock:
+            due = not pl.photo_busy and now - pl.photo_at >= (60 if pl.photo_old else PHOTO_REFRESH_S)
+            if due:
+                pl.photo_busy = True
+            first = due and pl.photos is None
+        if first:
+            self._photo_refresh()
+        elif due:
+            threading.Thread(target=self._photo_refresh, daemon=True, name="kastr-photos").start()
+        with self.lock:
+            return pl.photos
+
+    def _photo_refresh(self):
+        pl = self._pl()
+        try:
+            now = time.time()
+            with self.lock:
+                cur = (pl.photos or {}).get("pv") or ""
+            r = self._hub_fed({"op": "pphotos", "pv": cur, "roster": self._photo_roster(now), "node": self.relay_name() or ""}, timeout=5)
+            with self.lock:
+                pl.photo_at = time.time()
+                if r is None:
+                    return   # the hub did not answer: the last copy stays
+                d, code = r
+                if code == 400 and d.get("error") == "bad room":
+                    pl.photo_old = True   # a hub before 0.21.90 keeps no photos
+                    return
+                if code == 200 and d.get("ok"):
+                    pl.photo_old = False
+                    if isinstance(d.get("list"), list):
+                        pl.photos = {"pv": str(d.get("pv") or "")[:16], "list": photo_rows_clean(d["list"])}
+                    elif pl.photos is None:
+                        pl.photos = {"pv": str(d.get("pv") or "")[:16], "list": []}
+        except Exception as e:
+            self.log("relay auth: photo index from the hub: %s" % str(e)[:120])
+        finally:
+            with self.lock:
+                pl.photo_busy = False
+
+    def _photo_beat(self, p, claims, room, now):
+        """The beat reply's `photos`: {pv} or {pv, list} (a guest's list: the people in their room)."""
+        idx = self._photo_index(now)
+        if not idx:
+            return None
+        rows, pv = idx.get("list") or [], str(idx.get("pv") or "")
+        if claims.get("inv") or claims.get("pg"):
+            ok = self._photo_guest_ok(room, [r["k"] for r in rows if r.get("h")], now)
+            rows = [r for r in rows if r["k"] in ok]
+            pv = "g" + hashlib.sha256(json.dumps([[r["k"], r["h"]] for r in rows]).encode()).hexdigest()[:11]
+        out = {"pv": pv}
+        if str(p.get("pv") or "") != pv:
+            out["list"] = rows
+        return out
+
+    def _photo_set(self, p, host, admin, now):
+        """POST /api/people {op: "photo", name, data: base64 | remove: true} -> the hub's answer ({ok, h, id, at, key})."""
+        name = kastr_msg.name_disp(clean_label(p.get("name"), 48))
+        if not name:
+            return {"ok": False, "error": "your name is required (set it in Profile)"}, 400
+        remove = p.get("remove") is True
+        data = b""
+        if not remove:
+            raw = str(p.get("data") or "")
+            if len(raw) > (kastr_msg.PHOTO_MAX * 4) // 3 + 8:
+                return {"ok": False, "error": "a profile photo is at most 256 KB"}, 413
+            try:
+                data = base64.b64decode(raw, validate=True)
+            except Exception:
+                return {"ok": False, "error": "the photo did not arrive whole"}, 400
+        if not self._p_spoke():
+            m = self._msgr()
+            out = m.photo_remove(name, host, admin, now) if remove else m.photo_set(name, data, host, admin, now)
+            self._photo_nudge(out)
+            return out
+        r = self._hub_fed({"op": "pphoto", "vouch": "admin" if admin else "member", "host": host, "name": name, "remove": remove,
+                           "data": "" if remove else str(p.get("data") or "")}, timeout=15)
+        if r is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- your photo is kept there; try again shortly"}, 503
+        d, code = r
+        if code == 400 and d.get("error") == "bad room":
+            return {"ok": False, "hubOld": True, "error": "the hub runs an older KASTR without profile photos -- update the hub first"}, 501
+        if code == 200 and d.get("ok"):
+            if not remove and kastr_msg.PH_RE.match(str(d.get("h") or "")) and kastr_msg.photo_hash(data) == d["h"]:
+                self._photo_cache_put(d["h"], data)   # the hub has it -- so does this spoke (no fetch back)
+            pl = self._pl()
+            with self.lock:
+                pl.photo_at = 0.0   # every page here hears the new index on its next beat
+            self._photo_index(now)
+        return d, code
+
+    def _photo_fed(self, op, p):
+        """Hub side of a spoke's photo calls (rooms_fed checked the federation bearer)."""
+        now = time.time()
+        if op == "pphoto":
+            host = str(p.get("host") or "")
+            if p.get("vouch") not in ("member", "admin") or not HOST_RE.match(host):
+                return {"ok": False, "error": "the spoke must vouch for a member's device"}, 403
+            admin = p.get("vouch") == "admin"
+            if p.get("remove") is True:
+                return self._photo_nudge(self._msgr().photo_remove(p.get("name"), host, admin, now))
+            try:
+                data = base64.b64decode(str(p.get("data") or ""), validate=True)
+            except Exception:
+                return {"ok": False, "error": "the photo did not arrive whole"}, 400
+            return self._photo_nudge(self._msgr().photo_set(p.get("name"), data, host, admin, now))
+        if op == "pphotos":
+            ro = p.get("roster")
+            if isinstance(ro, dict):
+                rs = {}
+                for room, ks in list(ro.items())[:2000]:
+                    if SLUG_RE.match(str(room)) and isinstance(ks, list):
+                        rs[str(room)] = {personal_key(k) for k in ks[:500] if personal_key(k)}
+                node = clean_label(p.get("node"), 64) or "?"
+                pl = self._pl()
+                with self.lock:
+                    pl.rosters[node] = (now, rs)
+                    for n in [n for n, v in pl.rosters.items() if now - v[0] > 3600]:
+                        pl.rosters.pop(n, None)
+            idx = self._msgr().photo_index()
+            out = {"ok": True, "pv": idx["pv"]}
+            if str(p.get("pv") or "") != idx["pv"]:
+                out["list"] = idx["list"]
+            return out, 200
+        room = str(p.get("room") or "")
+        if not SLUG_RE.match(room):
+            return {"ok": False, "error": "which room?"}, 400
+        keys = {personal_key(k) for k in (p.get("keys") or [])[:2000] if personal_key(k)} if isinstance(p.get("keys"), list) else set()
+        return {"ok": True, "keys": sorted(self._photo_seen_in(room, keys, now))}, 200
+
+    def _photo_nudge(self, out):
+        """A photo changed at the hub: every spoke's long-poll answers now (its `personal.ppv` moved)."""
+        try:
+            if out[1] == 200 and self.bans:
+                self.bans.nudge()
+        except Exception:
+            pass
+        return out
+
+    def _photo_cache_dir(self):
+        return os.path.join(getattr(self.store, "state_dir", os.getcwd()), "photo-cache")
+
+    def _photo_cache_put(self, h, data):
+        d = self._photo_cache_dir()
+        try:
+            os.makedirs(d, exist_ok=True)
+            tmp = os.path.join(d, "%s.%d.%d.tmp" % (h, os.getpid(), threading.get_ident()))
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, os.path.join(d, h + ".bin"))
+            names = [n for n in os.listdir(d) if n.endswith(".bin")]
+            if len(names) > PHOTO_CACHE_MAX:
+                for n in sorted(names, key=lambda n: os.path.getmtime(os.path.join(d, n)))[:len(names) - PHOTO_CACHE_MAX]:
+                    os.remove(os.path.join(d, n))
+        except OSError as e:
+            self.log("relay auth: photo cache: %s" % str(e)[:120])
+
+    def _photo_cache_get(self, h):
+        try:
+            with open(os.path.join(self._photo_cache_dir(), h + ".bin"), "rb") as f:
+                data = f.read()
+        except OSError:
+            return None
+        return data if kastr_msg.photo_hash(data) == h else None
+
+    def _photo_bytes(self, pid, now):
+        """-> (bytes, content type, hash) of the person's photo now, or None. A spoke: its cache, else the hub (then cached)."""
+        if not self._p_spoke():
+            return self._msgr().photo_get(pid=pid)
+        idx = self._photo_index(now) or {}
+        ent = next((r for r in idx.get("list") or [] if r.get("id") == pid), None)
+        h = (ent or {}).get("h") or ""
+        if ent is not None and not h:
+            return None   # removed
+        if h:
+            data = self._photo_cache_get(h)
+            if data is not None:
+                return data, kastr_msg.photo_sniff(data)[0] or "image/jpeg", h
+        r = self._hub_raw("GET", "/api/avatar/%s" % pid, None, timeout=10)
+        if r is None or r[0] != 200 or not r[1] or len(r[1]) > kastr_msg.PHOTO_MAX:
+            return None
+        data = r[1]
+        ctype = kastr_msg.photo_sniff(data)[0]
+        if not ctype:
+            return None
+        hh = kastr_msg.photo_hash(data)
+        self._photo_cache_put(hh, data)
+        return data, ctype, hh
+
+    def _photo_nk_of(self, pid, now):
+        idx = self._photo_index(now) or {}
+        return next((r["k"] for r in idx.get("list") or [] if r.get("id") == pid), "")
+
+    def avatar_get(self, pid, q, bearer, peer="", trusted=False):
+        """GET /api/avatar/<id>?v=<hash> -> (bytes, headers, 200) | (reply, None, code). Who may: a member token of a room
+        (never the Lobby), an invite-link guest for the people in their room, a relay (federation token: a spoke filling its
+        cache), the relay machine's own pages (`trusted`: kastr_serve checked the loopback caller)."""
+        pid = str(pid or "")
+        q = q if isinstance(q, dict) else {}
+        if not kastr_msg.PID_RE.match(pid):
+            return {"ok": False, "error": "no such photo"}, None, 404
+        v = str((q.get("v") or [""])[0])
+        v = v if kastr_msg.PH_RE.match(v) else ""
+        now = time.time()
+        if not trusted and not self._bearer_relay(bearer):
+            claims = self._member_claims(bearer)
+            if claims is None:
+                return {"ok": False, "error": "join a room first (a member token is required)"}, None, 403
+            room, host = claims_identity(claims)
+            if claims.get("lobby") or room == LOBBY_SLUG or not room:
+                return {"ok": False, "error": "photos are shown in rooms, not the Lobby"}, None, 403
+            if self.bans and self.bans.hit(room, host, peer, now):
+                return {"ok": False, "error": self.REVOKED_TEXT}, None, 403
+            if claims.get("inv") or claims.get("pg"):
+                nk = self._photo_nk_of(pid, now)
+                if not nk or nk not in self._photo_guest_ok(room, [nk], now):
+                    return {"ok": False, "error": "a guest sees the photos of the people in their room only"}, None, 403
+        got = self._photo_bytes(pid, now)
+        if got is None:
+            return {"ok": False, "error": "no photo"}, None, 404
+        data, ctype, h = got
+        return data, {"Content-Type": ctype, "X-Kastr-Photo": h,
+                      "Cache-Control": "private, max-age=31536000, immutable" if v and v == h else "private, no-cache"}, 200
 
     # ---- 0.21.88 (Kenton: "a private messaging feature ... whether online/offline. If offline, send it when back online.
     # Ability to setup group messages. These messages are not tied to any rooms."): PRIVATE MESSAGES. The hub keeps them

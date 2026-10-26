@@ -49,11 +49,11 @@ class PhotosOnline(Hub):
 class Page(unittest.TestCase):
     def test_everyone_online_paints_photos(self):
         p = _read("moq-watch-lite.html")
-        self.assertIn('const eoAvatar = (x) => (x.me && window.__avatarLocal) || avatarUrls.get(x.op) || x.avatar || "";', p)
+        # 0.21.90: the hub's copy by name -- never the record's host URL (test_release_0_21_90_avatars)
+        self.assertIn('const eoAvatar = (x) => (x.me && window.__avatarLocal) || avatarUrls.get(x.op, x.name) || "";', p)
         self.assertIn("paintAvatar(av, eoAvatar(x));", p)
-        self.assertIn("if (!x.avatar && w.avatar) x.avatar = String(w.avatar);", p)
-        self.assertIn('avatar: window.__avatarUrl?.() || "" }) });', p)
-        self.assertIn('window.__avatarUrl = () => avatarRemote?.url || "";', p)
+        self.assertIn('avatar: "", pv: window.__photos?.pv?.() ?? "" }) });', p)
+        self.assertIn('window.__avatarUrl = () => "";', p)
 
 
 if __name__ == "__main__":

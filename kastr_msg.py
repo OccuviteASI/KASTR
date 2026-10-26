@@ -20,6 +20,13 @@ AES-GCM. The hub keeps only {iv, ciphertext, wraps by key id} (+ who may read it
 with their own key (inside the message body) and uploaded as ciphertext. Devices pull (since a cursor) and ack; a ping rides
 the 4 s people beat so a device pulls at once. Groups: hub-visible membership (names only); bodies stay end to end.
 
+0.21.90 PROFILE PHOTOS (Kenton: "users that have uploaded a photo showing as a broken link"): the hub keeps ONE photo per person
+(the same name identity: name_key), here beside the messages so the hub hand-over, the standby's copy and the hand-back move it
+too (export / merge carry `photos`, the bytes travel like attachments as "p-<hash>"). JPEG, PNG or WebP only, at most 256 KB and
+512 x 512 (the page re-encodes before it uploads; the hub checks the type and the size from the bytes). A removal is kept as a
+tombstone (h "") so a device with a stale copy follows instead of putting it back. Pages never see a host URL: they get
+{key, hash} and load /api/avatar/<id>?v=<hash> from their own KASTR.
+
 Everything here runs on the HUB (or a lone relay). A spoke checks the page's member token and forwards the call
 (rooms_fed op "msg", the federation token vouching for the device) -- see AuthService.msg_api in kastr_relay.py."""
 import base64
@@ -44,6 +51,11 @@ MSG_FILE_RATE = (40, 600)           # attachments one device may upload per 10 m
 MSG_TOTAL_MAX = 200000              # messages one hub keeps (the oldest go first)
 MSG_NOTE_KEEP_S = 30 * 86400        # "a new device unlocked your messages" notes
 MSG_PING_KEEP_S = 600
+PHOTO_MAX = 256 * 1024              # 0.21.90: one profile photo (bytes)
+PHOTO_DIM_MAX = 512                 # ... and pixels a side
+PHOTO_RATE = (30, 600)              # photos one device may set per 10 minutes
+PHOTO_KEEP_GONE_S = MSG_KEEP_S      # a removal (tombstone) is remembered this long
+PHOTO_MAX_PEOPLE = 5000
 
 KID_RE = re.compile(r"^[0-9a-f]{16}$")
 GID_RE = re.compile(r"^g-[0-9a-f]{16}$")
@@ -52,6 +64,9 @@ CID_RE = re.compile(r"^[A-Za-z0-9_-]{8,48}$")
 B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 HOST_RE = re.compile(r"^[a-z0-9-]{1,32}-[0-9a-f]{4}$")
 NAME_MAX = 48
+PH_RE = re.compile(r"^[0-9a-f]{16}$")          # 0.21.90: a photo's content hash
+PID_RE = re.compile(r"^[0-9a-f]{20}$")         # ... a person's photo id (from the name key)
+PFID_RE = re.compile(r"^p-[0-9a-f]{16}$")      # ... a photo as a store "file" (hand-over / standby copy)
 
 
 def name_disp(name):
@@ -62,6 +77,61 @@ def name_disp(name):
 def name_key(name):
     """The lookup key of a name (case-insensitive) -- kastr_relay.personal_key: the same person My room knows."""
     return name_disp(name).lower()
+
+
+def photo_hash(data):
+    """0.21.90: a photo's version -- the first 16 hex of sha256 over its bytes."""
+    return hashlib.sha256(bytes(data)).hexdigest()[:16]
+
+
+def photo_pid(nk):
+    """0.21.90: a person's photo id in URLs (/api/avatar/<pid>) -- from the name key, never the name itself."""
+    return hashlib.sha256(("kastr-photo:" + str(nk or "")).encode("utf-8")).hexdigest()[:20]
+
+
+def _be16(b, i):
+    return (b[i] << 8) | b[i + 1]
+
+
+def _le16(b, i):
+    return b[i] | (b[i + 1] << 8)
+
+
+def photo_sniff(data):
+    """0.21.90: (content type, width, height) from the bytes -- JPEG, PNG or WebP -- or (None, 0, 0)."""
+    b = bytes(data or b"")
+    try:
+        if b[:8] == b"\x89PNG\r\n\x1a\n" and b[12:16] == b"IHDR":
+            return "image/png", int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big")
+        if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+            kind = b[12:16]
+            if kind == b"VP8X":
+                return "image/webp", 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), 1 + (b[27] | (b[28] << 8) | (b[29] << 16))
+            if kind == b"VP8L" and b[20] == 0x2F:
+                v = int.from_bytes(b[21:25], "little")
+                return "image/webp", (v & 0x3FFF) + 1, ((v >> 14) & 0x3FFF) + 1
+            if kind == b"VP8 " and b[23:26] == b"\x9d\x01\x2a":
+                return "image/webp", _le16(b, 26) & 0x3FFF, _le16(b, 28) & 0x3FFF
+            return None, 0, 0
+        if b[:3] == b"\xff\xd8\xff":
+            i = 2
+            while i + 9 < len(b):
+                if b[i] != 0xFF:
+                    i += 1
+                    continue
+                m = b[i + 1]
+                if m in (0xD8, 0x01) or 0xD0 <= m <= 0xD7 or m == 0xFF:
+                    i += 1 if m == 0xFF else 2
+                    continue
+                if m in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    return "image/jpeg", _be16(b, i + 7), _be16(b, i + 5)
+                if m == 0xD9 or m == 0xDA:
+                    break
+                i += 2 + _be16(b, i + 2)
+            return None, 0, 0
+    except (IndexError, ValueError):
+        pass
+    return None, 0, 0
 
 
 def b64ok(s, lo, hi):
@@ -137,6 +207,7 @@ class Messenger:
         self.cursors = m.get("cursors") if isinstance(m.get("cursors"), dict) else {}  # device host -> {nk: seq, "at": t}
         self.notes = m.get("notes") if isinstance(m.get("notes"), dict) else {}        # nk -> [{id, at, host, kind}]
         self.files = m.get("files") if isinstance(m.get("files"), dict) else {}        # fid -> {at, size, by, who: [nk] | None}
+        self.photos = m.get("photos") if isinstance(m.get("photos"), dict) else {}     # 0.21.90: nk -> {h, at, type, size, by, name} (h "": removed)
         self.msgs = {}                                                                   # seq -> envelope
         self.rate = {}
         self.ver = 0                     # moves with every change (a standby's copy asks for the store again when it moved)
@@ -164,7 +235,7 @@ class Messenger:
     # ---- persistence ----------------------------------------------------------------------------------------------
     def _meta(self):
         return {"fleet": self.fleet, "seq": self.seq, "persons": self.persons, "groups": self.groups, "reads": self.reads,
-                "cursors": self.cursors, "notes": self.notes, "files": self.files}
+                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos}
 
     def _touch(self, now=False):
         """Meta changed: written at once (`now`: identities, groups) or within two seconds (cursors, reads)."""
@@ -201,6 +272,9 @@ class Messenger:
     def _file_path(self, fid):
         return os.path.join(self.dir, "f", fid + ".bin")
 
+    def _photo_path(self, h):
+        return os.path.join(self.dir, "p", h + ".bin")
+
     def sweep(self, now=None):
         """Forget what is older than 90 days: messages, attachments (and uploads no message took within an hour), notes,
         cursors of devices gone 90 days, deleted groups' tombstones."""
@@ -228,6 +302,11 @@ class Messenger:
                 self.cursors.pop(h, None)
             for gid in [g for g, r in self.groups.items() if r.get("deleted") and now - float(r.get("deleted") or 0) > MSG_KEEP_S]:
                 self.groups.pop(gid, None)
+            for nk in [k for k, ph in self.photos.items() if not ph.get("h") and now - float(ph.get("at") or 0) > PHOTO_KEEP_GONE_S]:
+                self.photos.pop(nk, None)   # 0.21.90: a removal is remembered 90 days
+                self._photo_cache = None
+                self._dirty = True
+            live = {ph.get("h") for ph in self.photos.values() if ph.get("h")}
             if gone_m or gone_f:
                 self._dirty = True
         for s in gone_m:
@@ -240,6 +319,12 @@ class Messenger:
                 os.remove(self._file_path(fid))
             except OSError:
                 pass
+        try:   # 0.21.90: photo bytes nobody's photo points at any more (replaced, removed)
+            for fn in os.listdir(os.path.join(self.dir, "p")):
+                if fn.endswith(".bin") and fn[:-4] not in live and now - os.path.getmtime(os.path.join(self.dir, "p", fn)) > 600:
+                    os.remove(os.path.join(self.dir, "p", fn))
+        except OSError:
+            pass
         if gone_m or gone_f:
             self.log("messages: %d message(s), %d attachment(s) older than 90 days deleted" % (len(gone_m), len(gone_f)))
             self.flush()
@@ -880,7 +965,8 @@ class Messenger:
             out = {"v": 1, "fleet": self.fleet, "seq": self.seq, "metaVer": mv}
             if meta_ver != mv:
                 out["meta"] = json.loads(json.dumps({"persons": self.persons, "groups": self.groups, "reads": self.reads,
-                                                     "cursors": self.cursors, "notes": self.notes, "files": self.files}))
+                                                     "cursors": self.cursors, "notes": self.notes, "files": self.files,
+                                                     "photos": self.photos}))   # 0.21.90: + the profile photos (their bytes: missing_files)
             msgs, size, more = [], 0, False
             for q in sorted(x for x in self.msgs if x > since):
                 if len(msgs) >= self.SYNC_MSGS or size > self.SYNC_BYTES:
@@ -935,7 +1021,7 @@ class Messenger:
         """Take one export() page into this store. -> counts."""
         now = time.time() if now is None else now
         cut = now - MSG_KEEP_S
-        n = {"persons": 0, "groups": 0, "msgs": 0, "renumbered": 0, "files": 0}
+        n = {"persons": 0, "groups": 0, "msgs": 0, "renumbered": 0, "files": 0, "photos": 0}
         if not isinstance(b, dict):
             return n
         with self.lock:
@@ -1029,6 +1115,17 @@ class Messenger:
                     n["files"] += 1
                 elif who is not None:
                     mine["who"] = sorted(set(mine.get("who") or []) | {name_key(x) for x in who if name_key(x)})
+            for nk, ph in (meta.get("photos") or {}).items() if isinstance(meta.get("photos"), dict) else []:   # 0.21.90
+                nk, inc = name_key(nk), self._photo_clean(ph)
+                if not nk or inc is None:
+                    continue
+                mine = self.photos.get(nk)
+                if mine is None or inc["at"] > int(mine.get("at") or 0) or (inc["at"] == int(mine.get("at") or 0) and inc["h"] > str(mine.get("h") or "")):
+                    if mine is None and not inc["h"] and float(inc["at"]) < now - PHOTO_KEEP_GONE_S:
+                        continue
+                    self.photos[nk] = inc
+                    self._photo_cache = None
+                    n["photos"] += 1
             have = {self.uid_of(e): q for q, e in self.msgs.items()}
             for e in b.get("msgs") or []:
                 if not isinstance(e, dict) or not isinstance(e.get("seq"), int) or float(e.get("at") or 0) < cut:
@@ -1061,12 +1158,24 @@ class Messenger:
 
     def missing_files(self):
         with self.lock:
-            return [fid for fid, f in sorted(self.files.items(), key=lambda kv: -int(kv[1].get("at") or 0))
-                    if not os.path.isfile(self._file_path(fid))]
+            out = ["p-" + h for h in sorted({ph.get("h") for ph in self.photos.values() if ph.get("h")})
+                   if PH_RE.match(h) and not os.path.isfile(self._photo_path(h))]   # 0.21.90: photos first (small, seen at once)
+            return out + [fid for fid, f in sorted(self.files.items(), key=lambda kv: -int(kv[1].get("at") or 0))
+                          if not os.path.isfile(self._file_path(fid))]
 
     def file_raw(self, fid):
+        fid = str(fid or "")
+        if PFID_RE.match(fid):   # 0.21.90: a profile photo's bytes (one somebody's photo is)
+            with self.lock:
+                if not any(ph.get("h") == fid[2:] for ph in self.photos.values()):
+                    return None
+            try:
+                with open(self._photo_path(fid[2:]), "rb") as fh:
+                    return fh.read()
+            except OSError:
+                return None
         with self.lock:
-            if not FID_RE.match(str(fid or "")) or fid not in self.files:
+            if not FID_RE.match(fid) or fid not in self.files:
                 return None
         try:
             with open(self._file_path(fid), "rb") as fh:
@@ -1075,7 +1184,16 @@ class Messenger:
             return None
 
     def file_store(self, fid, data):
-        """The ciphertext of an attachment this store knows (from a merge) -> kept when its size matches."""
+        """The ciphertext of an attachment this store knows (from a merge) -> kept when its size matches.
+        0.21.90: "p-<hash>" -- a profile photo's bytes, kept when they hash to it."""
+        if PFID_RE.match(str(fid or "")):
+            if not isinstance(data, (bytes, bytearray)) or not data or len(data) > PHOTO_MAX or photo_hash(data) != fid[2:]:
+                return False
+            with self.lock:
+                if not any(ph.get("h") == fid[2:] for ph in self.photos.values()):
+                    return False
+            self._photo_write(fid[2:], data)
+            return True
         with self.lock:
             f = self.files.get(str(fid)) if FID_RE.match(str(fid or "")) else None
             if not f or not isinstance(data, (bytes, bytearray)) or (f.get("size") and len(data) != int(f["size"])):
@@ -1086,6 +1204,130 @@ class Messenger:
             fh.write(data)
         os.replace(tmp, self._file_path(fid))
         return True
+
+    # ---- 0.21.90: profile photos ---------------------------------------------------------------------------------------
+    _photo_cache = None
+
+    @staticmethod
+    def _photo_clean(ph):
+        if not isinstance(ph, dict):
+            return None
+        h = str(ph.get("h") or "")
+        if h and not PH_RE.match(h):
+            return None
+        try:
+            at, size = int(ph.get("at") or 0), int(ph.get("size") or 0)
+        except (TypeError, ValueError):
+            return None
+        t = str(ph.get("type") or "")
+        if h and t not in ("image/jpeg", "image/png", "image/webp"):
+            return None
+        out = {"h": h, "at": at, "by": str(ph.get("by") or "")[:40] if HOST_RE.match(str(ph.get("by") or "")) else "",
+               "name": name_disp(ph.get("name"))}
+        if h:
+            out.update(type=t, size=max(0, min(size, PHOTO_MAX)))
+        return out
+
+    def _photo_write(self, h, data):
+        os.makedirs(os.path.join(self.dir, "p"), exist_ok=True)
+        tmp = "%s.%d.%d.tmp" % (self._photo_path(h), os.getpid(), threading.get_ident())
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, self._photo_path(h))
+
+    def _photo_may(self, nk, host, admin):
+        """Who may change a person's photo: an admin; else, once the person has a messaging identity, only a device that
+        unlocked it (or the device that set the photo there now); before that, any member device under that name."""
+        if admin:
+            return True
+        per = self.persons.get(nk)
+        if not per or not per.get("devices"):
+            return True
+        if host in (per.get("blocked") or {}):
+            return False
+        return self._unlocked(nk, host) or (self.photos.get(nk) or {}).get("by") == host
+
+    def photo_set(self, name, data, host, admin=False, now=None):
+        """A person's photo from one of their devices -> ({ok, h, id, at}, 200) | (error, code)."""
+        now = time.time() if now is None else now
+        nm, nk = name_disp(name), name_key(name)
+        if not nk:
+            return {"ok": False, "error": "your name is required"}, 400
+        if not HOST_RE.match(str(host or "")):
+            return {"ok": False, "error": "which device?"}, 400
+        data = bytes(data or b"")
+        if not data or len(data) > PHOTO_MAX:
+            return {"ok": False, "error": "a profile photo is at most 256 KB"}, 413
+        ctype, w, hgt = photo_sniff(data)
+        if not ctype:
+            return {"ok": False, "error": "a profile photo is a JPEG, PNG or WebP picture"}, 415
+        if not (0 < w <= PHOTO_DIM_MAX and 0 < hgt <= PHOTO_DIM_MAX):
+            return {"ok": False, "error": "a profile photo is at most 512 x 512 pixels"}, 413
+        h = photo_hash(data)
+        with self.lock:
+            if not self._photo_may(nk, host, admin):
+                return {"ok": False, "locked": True, "error": "%s's photo is kept with their messages -- unlock Messages on this device "
+                                                              "to change it" % nm}, 403
+            if not self._rate_ok(("photo", host), PHOTO_RATE, now):
+                return {"ok": False, "error": "too many photo changes -- wait a few minutes", "retryAfter": 60}, 429
+            if nk not in self.photos and len(self.photos) >= PHOTO_MAX_PEOPLE:
+                return {"ok": False, "error": "the hub keeps no more photos"}, 507
+        self._photo_write(h, data)
+        with self.lock:
+            cur = self.photos.get(nk) or {}
+            at = max(int(now), int(cur.get("at") or 0) + 1)
+            self.photos[nk] = {"h": h, "at": at, "type": ctype, "size": len(data), "by": host, "name": nm}
+            self._photo_cache = None
+            self._touch(now=True)
+        self.log("messages: %s set %s's profile photo (%d bytes, %s)" % (host, nm, len(data), h))
+        return {"ok": True, "h": h, "id": photo_pid(nk), "at": at, "key": nk}, 200
+
+    def photo_remove(self, name, host, admin=False, now=None):
+        """The person removed their photo (Profile) -> a tombstone (every copy follows)."""
+        now = time.time() if now is None else now
+        nm, nk = name_disp(name), name_key(name)
+        if not nk:
+            return {"ok": False, "error": "your name is required"}, 400
+        with self.lock:
+            if not self._photo_may(nk, host, admin):
+                return {"ok": False, "locked": True, "error": "%s's photo is kept with their messages -- unlock Messages on this device "
+                                                              "to change it" % nm}, 403
+            cur = self.photos.get(nk) or {}
+            at = max(int(now), int(cur.get("at") or 0) + 1)
+            self.photos[nk] = {"h": "", "at": at, "by": host if HOST_RE.match(str(host or "")) else "", "name": nm}
+            self._photo_cache = None
+            self._touch(now=True)
+        self.log("messages: %s removed %s's profile photo" % (host, nm))
+        return {"ok": True, "h": "", "id": photo_pid(nk), "at": at, "key": nk}, 200
+
+    def photo_index(self):
+        """-> {pv, list: [{k, n, h, id, at}]} -- every person's photo (h "" = removed), with a version that moves when it does."""
+        with self.lock:
+            c = self._photo_cache
+            if c is not None:
+                return c
+            rows = [{"k": nk, "n": ph.get("name") or nk, "h": ph.get("h") or "", "id": photo_pid(nk), "at": int(ph.get("at") or 0)}
+                    for nk, ph in sorted(self.photos.items())]
+            pv = hashlib.sha256(json.dumps([[r["k"], r["h"], r["at"]] for r in rows]).encode()).hexdigest()[:12] if rows else "0"
+            self._photo_cache = {"pv": pv, "list": rows}
+            return self._photo_cache
+
+    def photo_get(self, pid=None, h=None):
+        """One photo by person id (or by hash) -> (bytes, content type, hash) or None."""
+        with self.lock:
+            hit = None
+            for nk, ph in self.photos.items():
+                if ph.get("h") and ((pid and photo_pid(nk) == pid) or (h and ph.get("h") == h)):
+                    hit = dict(ph)
+                    break
+        if not hit:
+            return None
+        try:
+            with open(self._photo_path(hit["h"]), "rb") as fh:
+                data = fh.read()
+        except OSError:
+            return None
+        return data, hit.get("type") or "image/jpeg", hit["h"]
 
     # ---- the People panel ----------------------------------------------------------------------------------------------
     def identities(self):
@@ -1139,8 +1381,8 @@ def catch_up(m, export, fetch, log=None, deadline=1800.0, since=0, meta_ver=None
             continue
         tries = 0
         c = m.merge(page)
-        for k in ("persons", "groups", "msgs", "renumbered", "files"):
-            tot[k] += c.get(k, 0)
+        for k in ("persons", "groups", "msgs", "renumbered", "files", "photos"):
+            tot[k] = tot.get(k, 0) + c.get(k, 0)
         tot["pages"] += 1
         meta_ver = page.get("metaVer") or meta_ver
         try:
@@ -1151,8 +1393,8 @@ def catch_up(m, export, fetch, log=None, deadline=1800.0, since=0, meta_ver=None
             break
     if files and fetch is not None:
         tot["bytes"], tot["missing"] = fetch_files(m, fetch, log, max(1.0, deadline - (time.time() - t0)), sleep, quiet=True)
-    if tot["msgs"] or tot["persons"] or tot["groups"] or tot["bytes"]:
-        log("messages: copied %d message(s), %d person key(s), %d group(s), %d attachment byte(s) in %d page(s)%s"
-            % (tot["msgs"], tot["persons"], tot["groups"], tot["bytes"], tot["pages"],
+    if tot["msgs"] or tot["persons"] or tot["groups"] or tot["bytes"] or tot.get("photos"):
+        log("messages: copied %d message(s), %d person key(s), %d group(s), %d photo(s), %d attachment byte(s) in %d page(s)%s"
+            % (tot["msgs"], tot["persons"], tot["groups"], tot.get("photos", 0), tot["bytes"], tot["pages"],
                (" -- %d attachment(s) still missing" % tot["missing"]) if tot.get("missing") else ""))
     return since, meta_ver, tot

@@ -3320,11 +3320,17 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 150
                 elif path0 == "/api/msg":        # 0.21.88: a spoke asks the hub (PBKDF2 happens in the browser, not here)
                     to = 30
+                elif path0 == "/api/people":     # 0.21.90: a profile photo goes on to the hub through a spoke
+                    to = 20
+                elif path0.startswith("/api/avatar/"):   # 0.21.90: a spoke may fetch the photo from the hub first
+                    to = 15
                 ctype = None
+                ccache = None
                 with urllib.request.urlopen(req, timeout=to) as r:
                     data = r.read()
                     code = r.status
                     ctype = r.headers.get("Content-Type") if r.headers else None   # 0.21.84: a library still is image/jpeg
+                    ccache = r.headers.get("Cache-Control") if r.headers else None   # 0.21.90: a photo of one version keeps
             except urllib.error.HTTPError as e:
                 data = e.read(); code = e.code
                 retry_after = e.headers.get("Retry-After") if e.headers else None   # 0.10.0: lockouts travel through
@@ -3334,13 +3340,40 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             _ct = locals().get("ctype")
             self.send_header("Content-Type", _ct if (code == 200 and (str(_ct or "").startswith("image/") or str(_ct or "") == "application/octet-stream")) else "application/json")   # 0.21.88: + an attachment's ciphertext
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
+            _cc = locals().get("ccache")
+            _p0 = self.path.split("?", 1)[0]
+            self.send_header("Cache-Control", _cc if (code == 200 and _cc and _p0.startswith("/api/avatar/")) else "no-store")
             if retry_after:
                 self.send_header("Retry-After", str(retry_after))
             self._cors()
             self._corp_cross = True
             self.end_headers()
             self.wfile.write(data)
+
+        def _avatar_get(self):
+            """0.21.90: a profile photo for this machine's pages, from the fleet's store (never a host URL another site may not
+            reach). The relay machine's own loopback pages are answered here (the relay's photo service, in process); every
+            other caller goes through the room-code proxy with its member token (the minter checks it)."""
+            path0 = self.path.split("?", 1)[0]
+            auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
+            if auth is not None and relay_srv.running() and kastr_relay._local_only(self):
+                try:
+                    obj, hdrs, code = auth.avatar_get(path0[len("/api/avatar/"):], parse_qs(urlparse(self.path).query),
+                                                      self.headers.get("Authorization"), "127.0.0.1", trusted=True)
+                except Exception as e:
+                    return self._json_cors(500, {"ok": False, "error": "photo service: %s" % str(e)[:120]})
+                if not isinstance(obj, (bytes, bytearray)):
+                    return self._json_cors(code, obj)
+                self.send_response(200)
+                for k, v in (hdrs or {}).items():
+                    self.send_header(k, str(v))
+                self.send_header("Content-Length", str(len(obj)))
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self._cors()
+                self.end_headers()
+                self.wfile.write(obj)
+                return
+            return self._auth_proxy("GET")
 
         def _probe_codecs(self, path):
             """ffmpeg -i on a (partial) file -> ('h264', 'ac3', 6.0, 29.97, 1920, 1080): codec names, the
@@ -4785,6 +4818,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._auth_proxy("GET")
             if path == "/api/msg/file":                                         # 0.21.88: a message attachment's ciphertext
                 return self._auth_proxy("GET")
+            if path.startswith("/api/avatar/"):                                 # 0.21.90: a person's profile photo (the hub's copy)
+                return self._avatar_get()
             if path == "/api/invite/pending":                                 # 0.21.75: the app hand-off (this machine only)
                 return self._invite_pending("GET")
             if path == "/api/files":

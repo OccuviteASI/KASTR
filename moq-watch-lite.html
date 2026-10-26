@@ -1995,6 +1995,7 @@
     background:color-mix(in srgb, var(--ring, var(--asi-blue)) 30%, var(--surface-2)); }
   .mav.sm { width:30px; height:30px; font-size:11px; }
   .mav.grp { border-radius:10px; }
+  .mav img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:inherit; }   /* 0.21.90: their photo */
   :root[data-theme="light"] .mav { background:color-mix(in srgb, var(--ring, var(--asi-blue)) 70%, #24384a); }
   .mmid { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
   .mt, .mp { display:flex; align-items:baseline; gap:6px; min-width:0; }
@@ -5093,7 +5094,7 @@
     const tok = authTokens.member, room = CHANNEL;
     try {
       const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
-        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), acc: 1, roomKey: accRoomKey(room), avatar: window.__avatarUrl?.() || "" }) });   // 0.21.85: + mode (Everyone online leaves boxes out); 0.21.86: + my photo; 0.21.89: + acc (this page answers asks to join), my room's key when I made it
+        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), acc: 1, roomKey: accRoomKey(room), avatar: "", pv: window.__photos?.pv?.() ?? "" }) });   // 0.21.90: no photo URL (the hub keeps the photo) -- pv: the photo index I have   // 0.21.85: + mode (Everyone online leaves boxes out); 0.21.86: + my photo; 0.21.89: + acc (this page answers asks to join), my room's key when I made it
       if (r.status === 404) { pbOld = true; setTimeout(() => { pbOld = false; }, 300000); return; }   // a relay host older than 0.21.78
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
@@ -5102,6 +5103,7 @@
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
       accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)
+      if (d.photos) { try { window.__photos?.take(d.photos); } catch (e) { console.warn("KASTR: photos:", e); } }   // 0.21.90: the fleet's photo index
     } catch {} finally { pbBusy = false; }
   }
   {   // a worker's tick is not throttled in a hidden tab the way a page timer is (the owner's room stays open)
@@ -9761,7 +9763,7 @@
       init.textContent = viewerInitials(nm);
       init.className = "init n" + Math.min(3, Math.max(1, init.textContent.length));
       const av = el.__av;
-      paintAvatar(av, avatarUrls.get(key));
+      paintAvatar(av, avatarUrls.get(key, m.name));   // 0.21.90: the hub's copy (by name)
       av.style.setProperty("--ring", personColor(key));
       setPc(el, personColor(key));   // 0.21.61; 0.21.64: chosen or automatic -- the same colour as their picture ring
       el.querySelector(".vn").textContent = nm;
@@ -9933,7 +9935,7 @@
     ppl.rows.hidden = !pplOpen;
     ppl.empty.hidden = !pplOpen || shown.length > 0;
     ppl.empty.textContent = q ? "No one here matches \u201c" + ppl.search.value.trim() + "\u201d" : "No one has joined yet.";
-    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, (p.me ? String(window.__avatarLocal || "").length : 0) + (avatarUrls.get(p.key) || ""), p.cam || p.content[0] || "", personColor(p.key)].join("|")).join("\n");   // 0.21.61: + colour
+    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, (p.me ? String(window.__avatarLocal || "").length : 0) + (avatarUrls.get(p.key, p.name) || ""), p.cam || p.content[0] || "", personColor(p.key)].join("|")).join("\n");   // 0.21.61: + colour
     if (sig === pplSig && !force) return;
     if (ppl.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
     pplSig = sig;
@@ -9945,7 +9947,7 @@
       av.style.setProperty("--ring", personColor(p.key));
       setPc(row, personColor(p.key));   // 0.21.61: the talking ring in their colour (0.21.64: or their automatic one)
       av.textContent = viewerInitials(p.name);
-      paintAvatar(av, (p.me && window.__avatarLocal) || avatarUrls.get(p.key));   // 0.21.86: my own photo straight from my profile
+      paintAvatar(av, (p.me && window.__avatarLocal) || avatarUrls.get(p.key, p.name));   // 0.21.86: my own photo straight from my profile; 0.21.90: others' from the hub
       const nm = document.createElement("div"); nm.className = "ppname";
       const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = p.name;
       if (p.me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (You)"; pn.appendChild(y); }
@@ -10223,7 +10225,7 @@
   }
   // 0.21.86 (Kenton: initials, not the uploaded photo): mine from my profile, my room's from its ~avatar, others' from
   // their room's state / presence or the relay host's list
-  const eoAvatar = (x) => (x.me && window.__avatarLocal) || avatarUrls.get(x.op) || x.avatar || "";
+  const eoAvatar = (x) => (x.me && window.__avatarLocal) || avatarUrls.get(x.op, x.name) || "";   // 0.21.90: the hub's copy -- never x.avatar (a host URL)
   // everyone online -> [{key, slug, title, priv, locked, go, people: [...]}] in display order
   function eoBuild() {
     const now = Date.now();
@@ -10398,7 +10400,7 @@
     eoEls.empty.textContent = !joined ? "Join a room to see who is online."
       : lobby ? "Nobody sees names in the Lobby \u2014 join a room to see everyone online."
       : q ? "No one online matches “" + ppl.search.value.trim() + "”" : "No one else is online.";
-    const sig = JSON.stringify([sum, warn, q, msgOk, off.map((r) => [r.name, eoAgo(r.at)]), shown.map((s) => [s.g.key, s.g.title, s.g.locked, s.g.go.can, s.g.go.why,
+    const sig = JSON.stringify([sum, warn, q, msgOk, off.map((r) => [r.name, eoAgo(r.at), avatarUrls.get("", r.name)]), shown.map((s) => [s.g.key, s.g.title, s.g.locked, s.g.go.can, s.g.go.why,
       s.people.map((x) => [x.key, x.name, x.pub, x.talk, x.deaf, x.me, x.guest, personColor(x.op), x.me ? String(eoAvatar(x)).length : eoAvatar(x)])])]);   // (my photo is a data URL: its length will do)
     if (sig === eo.sig && !force) return;
     if (eoEls.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
@@ -10484,6 +10486,7 @@
         const av = document.createElement("div"); av.className = "ppav";
         av.style.setProperty("--ring", personColor(opKeyOf(x.name)));
         av.textContent = viewerInitials(x.name);
+        paintAvatar(av, avatarUrls.get("", x.name));   // 0.21.90: offline people keep their photo (the hub has it)
         const nm = document.createElement("div"); nm.className = "ppname";
         const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = x.name;
         const ps = document.createElement("div"); ps.className = "ps"; ps.textContent = r.at ? "Last seen " + eoAgo(r.at) : "Offline";
@@ -10527,6 +10530,7 @@
     savePersonalCode: (code) => { const p = personalGet(); if (p && code) personalSave({ ...p, code }); },
     personalDialog: (mode, note) => personalDialog(mode, note, { stay: true, min: 8 }),
     confirm: (o) => kastrConfirm(o), icon: (n) => icon(n), color: (k) => personColor(opKeyOf(k) || k), initials: (n) => viewerInitials(n),
+    photo: (el, name) => { try { paintAvatar(el, String(name || "").trim().toLowerCase() === myOpName().toLowerCase() && window.__avatarLocal ? window.__avatarLocal : avatarUrls.get("", name)); } catch {} },   // 0.21.90
     menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
     panel: () => document.getElementById("msgPanel"), btn: () => document.getElementById("msgBtn"),
     openPanel: () => { const p = document.getElementById("msgPanel"); if (p.classList.contains("docked")) { if (p.classList.contains("folded")) dockBtnClick(p); } else if (p.hidden) document.getElementById("msgBtn").click(); },
@@ -11961,18 +11965,222 @@
     for (const ch of String(key || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return ASI_PALETTE[h % ASI_PALETTE.length];
   }
-  const avatarUrls = new Map();   // person key -> photo url
+  // 0.21.90 (Kenton: "users that have uploaded a photo showing as a broken link instead of the photo they uploaded"): the photo
+  // URL each page announced named ITS relay host as it saw it -- http://localhost / 127.0.0.1 on the relay machine, a site's
+  // private address another site cannot reach, http under an https page -- and the copy went when its page closed. Now the HUB
+  // keeps one photo per person; every beat brings the index {k: name key, n: name, h: version hash, id} (photos.list when it
+  // moved), and a photo loads from THIS page's own KASTR (/api/avatar/<id>?v=<h>, my member token), kept as a blob for the
+  // page's life. A host URL is never drawn. A photo that cannot load leaves the coloured initials -- never the broken-image icon.
+  const photoIdx = { pv: "", byKey: new Map(), bySlug: new Map(), at: 0 };
+  const photoBlobs = new Map();   // "kastr-photo:<id>:<h>" -> blob URL | Promise
+  const photoBad = new Set();     // photos that failed to draw: never tried again this page's life
+  const photoWait = new Map();    // ref -> when a fetch that could not be answered (no token yet, the hub away) may be tried again
+  const photoNk = (s) => String(s || "").trim().split(/\s+/).join(" ").slice(0, 48).toLowerCase();
+  const photoSlug = (s) => String(s || "").replace(/\([^)]*\)/g, " ").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);   // = slug(): the op key of paths and presence
+  let photoRepaintT = null;
+  function photoRepaint() {
+    clearTimeout(photoRepaintT);
+    photoRepaintT = setTimeout(() => {
+      try { applyState(); } catch {}
+      try { paintPersonGroups(); } catch {}
+      try { paintParticipants(true); } catch {}
+      try { window.__msg?.photos?.(); } catch {}
+    }, 60);
+  }
+  function photoTake(ph) {
+    if (!ph || typeof ph !== "object" || !Array.isArray(ph.list)) return;
+    const byKey = new Map(), bySlug = new Map();
+    for (const r of ph.list) {
+      if (!r || !r.k || !/^[0-9a-f]{20}$/.test(String(r.id || ""))) continue;
+      const e = { k: photoNk(r.k), n: String(r.n || r.k), h: /^[0-9a-f]{16}$/.test(String(r.h || "")) ? String(r.h) : "", id: String(r.id), at: Number(r.at) || 0 };
+      byKey.set(e.k, e);
+      const sl = photoSlug(e.n);
+      if (e.h && sl && !bySlug.has(sl)) bySlug.set(sl, e);
+    }
+    const sig = (m) => [...m.values()].map((e) => e.k + ":" + e.h).sort().join("|");
+    const changed = sig(byKey) !== sig(photoIdx.byKey);
+    photoIdx.byKey = byKey; photoIdx.bySlug = bySlug; photoIdx.pv = String(ph.pv || ""); photoIdx.at = Date.now();
+    if (changed) photoRepaint();
+  }
+  function photoEntry(key, name) {
+    const k = String(key || "").toLowerCase().replace(/@.*$/, "");
+    return (name && photoIdx.byKey.get(photoNk(name))) || (k && (photoIdx.bySlug.get(k) || photoIdx.byKey.get(photoNk(k)))) || null;
+  }
+  function photoRef(key, name) { const e = photoEntry(key, name); return e && e.h ? "kastr-photo:" + e.id + ":" + e.h : ""; }
+  // the 0.8.7 map's shape, for its callers: a person's photo by their op key (+ name); legacy announces and records are ignored
+  const avatarUrls = { get: (k, n) => photoRef(k, n), set() {}, delete() {}, clear() {}, has: (k) => !!photoRef(k) };
+  function photoLoad(ref) {
+    const got = photoBlobs.get(ref);
+    if (got) return typeof got === "string" ? Promise.resolve(got) : got;
+    if (photoBad.has(ref) || Date.now() < (photoWait.get(ref) || 0)) return Promise.resolve("");
+    const [, id, h] = ref.split(":");
+    const p = (async () => {
+      try {
+        const hd = {};
+        const t = authTokens?.member;
+        if (t) hd.authorization = "Bearer " + t;
+        const r = await fetch(location.origin + "/api/avatar/" + id + "?v=" + h, { headers: hd });
+        if (r.status === 404) { photoBad.add(ref); return ""; }   // removed, or never reached the hub
+        if (!r.ok) { photoWait.set(ref, Date.now() + (r.status === 403 ? 60000 : 15000)); return ""; }   // no token yet / not mine to see / the hub away
+        const b = await r.blob();
+        if (!/^image\/(jpeg|png|webp)$/.test(b.type) || !b.size) { photoBad.add(ref); return ""; }
+        const u = URL.createObjectURL(b);
+        photoBlobs.set(ref, u);
+        return u;
+      } catch { photoWait.set(ref, Date.now() + 15000); return ""; }
+      finally { if (typeof photoBlobs.get(ref) !== "string") photoBlobs.delete(ref); }
+    })();
+    photoBlobs.set(ref, p);
+    return p;
+  }
+  function photoImg(av, src, ref) {
+    let img = av.querySelector("img");
+    if (!img) {
+      img = document.createElement("img"); img.alt = ""; img.decoding = "async"; img.draggable = false;
+      img.addEventListener("load", () => { img.style.visibility = ""; });
+      img.addEventListener("error", () => { photoBad.add(img.dataset.ref || img.getAttribute("src") || ""); img.remove(); });   // the initials show, never a broken icon
+      av.appendChild(img);
+    }
+    img.dataset.ref = ref;
+    if (img.getAttribute("src") !== src) { img.style.visibility = "hidden"; img.src = src; }
+  }
   function paintAvatar(av, url) {
     if (!av) return;
-    let img = av.querySelector("img");
-    if (url) {
-      if (!img) { img = document.createElement("img"); img.alt = ""; img.decoding = "async"; av.appendChild(img); }
-      if (img.getAttribute("src") !== url) img.src = url;
-    } else if (img) {
-      img.remove();
+    url = String(url || "");
+    if (url && !/^(data:image\/|blob:|kastr-photo:)/.test(url)) url = "";   // 0.21.90: never a relay host's URL
+    if (url && photoBad.has(url)) url = "";
+    av.__photo = url;
+    if (!url) { const img = av.querySelector("img"); if (img) img.remove(); return; }
+    if (url.startsWith("kastr-photo:")) {
+      const got = photoBlobs.get(url);
+      if (typeof got === "string") { photoImg(av, got, url); return; }
+      photoLoad(url).then((u) => {   // what shows now (an older version, or the initials) stays until it is here
+        if (av.__photo !== url) return;
+        if (u) photoImg(av, u, url);
+        else if (photoBad.has(url)) { const img = av.querySelector("img"); if (img) img.remove(); }   // gone for good: the initials
+      });
+      return;
     }
+    photoImg(av, url, url);
   }
   window.__avatarPaint = paintAvatar;
+  window.__photoRef = photoRef;
+  // 0.21.90: MY PHOTO lives at the hub -- one per person, every room, every site. This device keeps in step with it through
+  // kastr.photo.sync {<name key>: {h, l}}: h = the hub's version when this device last agreed with it, l = a digest of my local
+  // copy then. A local photo the hub does not have yet goes up (the first 0.21.90 launch migrates it); a change made on my
+  // other device comes down into this profile; Profile's Save (explicit) sends mine or removes it. The page re-encodes it to
+  // at most 512 x 512 JPEG under 256 KB first. Nothing is announced per room and nothing is deleted when the page closes.
+  const PHOTO_SYNC_KEY = "kastr.photo.sync";
+  const photoSyncGet = () => { try { const o = JSON.parse(localStorage.getItem(PHOTO_SYNC_KEY) || "{}"); return o && typeof o === "object" ? o : {}; } catch { return {}; } };
+  const photoSyncPut = (nk, rec) => { try { const s = photoSyncGet(); s[nk] = rec; localStorage.setItem(PHOTO_SYNC_KEY, JSON.stringify(s)); } catch {} };
+  const photoDigest = (s) => { s = String(s || ""); if (!s) return ""; let a = 0x811c9dc5, b = 0x01000193 ^ s.length;   // two FNV-1a lanes over the data URL
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 16777619) >>> 0; b = Math.imul(b ^ (c + i), 16777619) >>> 0; }
+    return a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0") + "." + s.length; };
+  let photoCanon = null;   // { local, b64 } -- my local photo, re-encoded for the hub
+  async function photoCanonical(dataUrl) {
+    if (photoCanon && photoCanon.local === dataUrl) return photoCanon;
+    const bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
+    const side = Math.max(64, Math.min(512, bmp.width, bmp.height));
+    const cv = document.createElement("canvas"); cv.width = side; cv.height = side;
+    const g = cv.getContext("2d");
+    const s = Math.max(side / bmp.width, side / bmp.height);
+    g.drawImage(bmp, (side - bmp.width * s) / 2, (side - bmp.height * s) / 2, bmp.width * s, bmp.height * s);
+    let q = 0.86, blob = null;
+    for (;;) { blob = await new Promise((ok) => cv.toBlob(ok, "image/jpeg", q)); if (!blob || blob.size <= 240 * 1024 || q < 0.35) break; q -= 0.12; }
+    if (!blob || blob.size > 256 * 1024) throw new Error("the picture could not be made small enough");
+    const b64 = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result).split(",")[1] || ""); fr.onerror = () => no(fr.error); fr.readAsDataURL(blob); });
+    photoCanon = { local: dataUrl, b64, size: blob.size };
+    return photoCanon;
+  }
+  async function photoSend(body) {
+    const base = authBase(), tok = authTokens?.member;
+    if (!base || !tok) throw Object.assign(new Error("join a room first"), { code: 0 });
+    const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
+      body: JSON.stringify({ op: "photo", name: myOpName(), ...body }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw Object.assign(new Error(String(d.error || ("HTTP " + r.status)).replace(" -- ", " \u2014 ")), { code: r.status, d });
+    const nk = photoNk(myOpName());   // the index knows it at once (the next beat brings the hub's)
+    const e = { k: nk, n: myOpName(), h: /^[0-9a-f]{16}$/.test(String(d.h || "")) ? String(d.h) : "", id: String(d.id || ""), at: Number(d.at) || 0 };
+    if (/^[0-9a-f]{20}$/.test(e.id)) {
+      photoIdx.byKey.set(nk, e);
+      for (const [sl, x] of [...photoIdx.bySlug]) if (x.k === nk) photoIdx.bySlug.delete(sl);
+      if (e.h) photoIdx.bySlug.set(photoSlug(e.n), e);
+      photoIdx.pv = "";
+      photoRepaint();
+    }
+    return d;
+  }
+  async function photoAdopt(e) {   // the hub has a newer photo of me (set on my other device): this profile takes it
+    if (!profile?.first) return false;   // no profile on this device: the hub's copy shows, nothing is saved here
+    const ref = "kastr-photo:" + e.id + ":" + e.h;
+    const u = await photoLoad(ref);
+    if (!u) return false;
+    const blob = await (await fetch(u)).blob();
+    const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result)); fr.onerror = () => no(fr.error); fr.readAsDataURL(blob); });
+    saveProfile({ ...(profile || {}), avatar: dataUrl });
+    photoSyncPut(e.k, { h: e.h, l: photoDigest(dataUrl) });
+    console.info("KASTR: profile photo -- took the newer one from the hub (set on another device)");
+    try { paintPersonGroups(); } catch {}
+    applyState(); photoRepaint();
+    return true;
+  }
+  let photoDue = true, photoExplicit = false, photoBusy = false, photoAfter = 0;
+  const photoMay = () => { try { return joinState === "joined" && !inLobby() && authSecured && !!authTokens?.member && !authGuest && !(inviteGet() && !authAccessCode) && !!myOpName() && !!photoIdx.pv; } catch { return false; } };
+  async function photoSync() {
+    if (photoBusy || !photoDue || Date.now() < photoAfter || !photoMay()) return;
+    photoBusy = true;
+    const explicit = photoExplicit;
+    try {
+      const nk = photoNk(myOpName()), L = window.__avatarLocal || "", l = photoDigest(L);
+      const E = photoIdx.byKey.get(nk) || null, rec = photoSyncGet()[nk] || null;
+      let act = "";
+      if (explicit) act = L ? "up" : (E?.h ? "remove" : "forget");
+      else if (rec && rec.l === l) {   // my copy is what this device last agreed with the hub on
+        if (E?.h && E.h !== rec.h) act = "adopt";
+        else if (E && !E.h && rec.h) act = "drop";
+        else if (!E && rec.h && L) act = "up";   // the hub lost it (a new hub without the store): mine goes back
+      } else if (L) act = "up";                  // never agreed (the first 0.21.90 launch), or changed here since
+      else if (E?.h) act = "adopt";              // a device without a photo: mine, from the hub
+      if (act === "up") {
+        const c = await photoCanonical(L);
+        const d = await photoSend({ data: c.b64, type: "image/jpeg" });
+        photoSyncPut(nk, { h: String(d.h || ""), l });
+        console.info("KASTR: profile photo -- the hub keeps it now (" + Math.round(c.size / 1024) + " KB)");
+      } else if (act === "remove") {
+        await photoSend({ remove: true });
+        photoSyncPut(nk, { h: "", l: "" });
+      } else if (act === "forget") {
+        photoSyncPut(nk, { h: "", l: "" });
+      } else if (act === "adopt") {
+        await photoAdopt(E);
+      } else if (act === "drop" && profile?.first) {
+        saveProfile({ ...profile, avatar: "" });
+        photoSyncPut(nk, { h: "", l: "" });
+        try { paintPersonGroups(); } catch {}
+        applyState(); photoRepaint();
+      } else if (E?.h && !rec) photoSyncPut(nk, { h: E.h, l });
+      photoDue = false; photoExplicit = false;
+    } catch (e) {
+      const code = e?.code || 0;
+      if (code === 503 || code === 429 || code === 0) photoAfter = Date.now() + 30000;   // the hub away / too fast / not joined yet: again later
+      else { photoDue = false; photoExplicit = false; }
+      console.warn("KASTR: profile photo:", e);
+      if (explicit || code === 413 || code === 415) window.__toast?.("Your photo was not saved for others \u2014 " + (e?.message || e), 8000, { level: "warn" });
+    } finally { photoBusy = false; }
+  }
+  window.__avatarPublish = (o) => {
+    if (o?.explicit) { photoDue = true; photoExplicit = true; photoAfter = 0; }
+    photoSync();
+  };
+  window.__photos = {
+    pv: () => photoIdx.pv,
+    take: (ph) => { photoTake(ph); photoSync(); },
+    // rig
+    state: () => ({ pv: photoIdx.pv, n: photoIdx.byKey.size, due: photoDue, busy: photoBusy, bad: photoBad.size, blobs: [...photoBlobs.values()].filter((v) => typeof v === "string").length,
+      list: [...photoIdx.byKey.values()].map((e) => ({ k: e.k, h: e.h })), sync: photoSyncGet() }),
+    ref: (key, name) => photoRef(key, name),
+    bad: () => [...photoBad],
+  };
   window.__personColor = personColor;
   function avatarAccept(path, active) {
     const parts = String(path).split("/").filter(Boolean);
@@ -14603,7 +14811,7 @@
     chimeConnectAt = Date.now();   // chime suppression window (0.8.2)
     railPage = 0;                  // fresh room, first rail page
     relayOf.clear(); avatarUrls.clear(); files.clear(); paintFiles();   // 0.8.7: per-room facts
-    setTimeout(() => { try { window.__avatarPublish?.(); } catch {} }, 1500);   // 0.8.7: share my picture
+    setTimeout(() => { try { window.__avatarPublish?.(); } catch {} }, 1500);   // 0.8.7: share my picture (0.21.90: the hub's copy -- checked once, never per room)
     if (gridOpen) { clearInterval(gridOpen.timer); gridOpen = null; }   // 0.21.15: a cold open does not survive the room
     sinceTs.clear(); members.clear(); roomSince = 0; gridMeta.clear(); gridChildOf.clear(); gridZoom = null; listedFiles.clear(); mediaMeta.clear();   // 0.8.8: per-room facts
     setTimeout(() => { try { window.__sinceAnnounce?.set?.(); } catch {} }, 1200);   // 0.8.8: I am here since now
@@ -17132,7 +17340,7 @@
     const jn = document.getElementById("joinName"); if (jn) jn.value = name;
     try { syncOperator(name); } catch {}
     fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => {});
-    try { window.__avatarPublish?.(); } catch {}
+    try { window.__avatarPublish?.({ explicit: true }); } catch {}   // 0.21.90: my photo (or its removal) goes to the hub
     try { window.__state?.set?.("hc", p.color || ""); } catch {}   // 0.21.61
     hiMine();
     try { paintPersonGroups(); } catch {}
@@ -31628,7 +31836,7 @@
   window.__stallAnnounce = { set: (path) => stallAnn.set(path, path), clear: (path) => stallAnn.clear(path) };
   const fileAnn = keyedAnnouncer("~files", { state: (id, p) => window.__state.set("files", { id, meta: p ? JSON.parse(p) : null }) });
   window.__fileAnnounce = { set: (id, meta) => fileAnn.set(id, JSON.stringify(meta)), clear: (id) => fileAnn.clear(id) };
-  const avatarAnn = keyedAnnouncer("~avatar", { state: (k, p) => window.__state.set("avatar", p ? (JSON.parse(p).url || "") : "") });
+  // 0.21.90: no ~avatar announce and no `avatar` in room.json any more -- the hub keeps the photo (a 0.21.89 page shows initials)
   // 0.8.8: composite geometry for viewers (expand one cell) and presence
   // time for the room up-time.
   const gridAnn = keyedAnnouncer("~grid", { dedupe: true, state: (k, p) => { window.__state.set("grid", { id: String(k).replace(/^grid:/, ""), meta: p ? JSON.parse(p) : null }); try { if (p) window.__gridMetaOut?.(JSON.parse(p)); } catch {} } });   // 0.21.66: + the room board's copy   // 0.9.4: same geometry, same announce; 0.13.0: on room.json (the identity-scoped token has no claim on <room>/~grid, so an announce would be dropped); 0.15.0: keyed "grid:<id>" -> room.json grids
@@ -31782,39 +31990,8 @@
   }
   window.addEventListener("pagehide", talkClear);
   window.addEventListener("kastr:auth", () => { try { talkClear(); } catch {} });   // re-aim with the fresh token on the next loud tick
-  // Profile picture: upload the local data URL to the relay host's file
-  // service and announce {op, url}; a relay host without KASTR web = local only.
-  let avatarUploadedFor = "";
-  let avatarRemote = null;   // { url, token } of the copy on the relay host
-  const avatarDrop = () => {
-    if (!avatarRemote) return;
-    try { navigator.sendBeacon?.(avatarRemote.url + "?token=" + encodeURIComponent(avatarRemote.token) + "&_method=DELETE"); } catch {}
-    avatarRemote = null;
-  };
-  window.addEventListener("pagehide", avatarDrop);
-  window.__avatarUrl = () => avatarRemote?.url || "";   // 0.21.86: the beat carries it (Everyone online in personal rooms)
-  window.__avatarPublish = async () => {
-    const data = window.__avatarLocal || "";
-    if (!data) { avatarAnn.clear("me"); avatarUploadedFor = ""; avatarDrop(); return; }
-    const base = window.__relayHostBase?.();
-    if (!base) return;
-    const sig = base + "|" + data.length + "|" + currentChannel();
-    if (avatarUploadedFor === sig) return;
-    try {
-      const blob = await (await fetch(data)).blob();
-      const r = await fetch(base + "/api/files", { method: "POST", body: blob,
-        headers: { "X-Kastr-Name": "avatar.jpg", "X-Kastr-Room": currentChannel(), "X-Kastr-Owner": encodeURIComponent(operator || ""), "X-Kastr-Kind": "avatar" } });
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      const j = await r.json();
-      avatarUploadedFor = sig;
-      if (avatarRemote) { try { fetch(avatarRemote.url + "?token=" + encodeURIComponent(avatarRemote.token), { method: "DELETE" }); } catch {} }
-      avatarRemote = { url: base + "/api/files/" + j.id, token: j.token };
-      avatarAnn.set("me", JSON.stringify({ op: operatorSlug(), url: base + "/api/files/" + j.id }));
-    } catch (e) {
-      console.warn("KASTR: profile picture upload to " + base + " failed", e);
-      if (!window.__avatarWarned) { window.__avatarWarned = true; window.__toast?.("Others see your initials, not your photo \u2014 the relay host\u2019s KASTR (" + base.replace(/^https?:\/\//, "") + ") did not take the picture: " + (e?.message || e), 9000, { level: "warn" }); }   // 0.21.86: was an info toast (hidden by default)
-    }
-  };
+  // 0.21.90: my photo goes to the HUB once (the photo module, window.__avatarPublish) -- no copy on the relay host, no announce
+  window.__avatarUrl = () => "";   // 0.21.86's beat field: a 0.21.90 page names no host
   // Viewer stall reports (0.8.7): a viewer starving on MY path asked for
   // help. First report -> the pause/unpause nudge; a second within 60s (or an
   // RTSP/grid slot) -> rebuild the slot, i.e. the owner's rejoin, automated.

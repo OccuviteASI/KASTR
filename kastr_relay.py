@@ -163,7 +163,8 @@ KEPT_MAX = 64
 PERSONAL_PREFIX = "me-"
 PERSONAL_RE = re.compile(r"^me-[0-9a-f]{12}$")
 PERSONAL_MAX = 500          # personal rooms one hub holds (their own cap -- KEPT_MAX counts shared rooms only)
-PERSONAL_CODE_MIN = 4
+PERSONAL_CODE_MIN = 4          # what an EXISTING personal code may be (0.21.75 allowed 4): it still opens My room
+PERSONAL_CODE_NEW_MIN = 8      # 0.21.89 (Kenton: "8 everywhere"): a NEW or CHANGED personal code (it also guards the messages key)
 PERSONAL_CODE_MAX = 128
 PERSONAL_RESERVED = 'room names starting with "me-" are reserved for personal rooms (My room) -- pick another name'
 # 0.21.78 (Kenton: "I need to be able to share out access to 'my room' as wanted" / "Only allow people in 'My room' if the
@@ -4342,6 +4343,8 @@ class AuthStore:
             slug = self._personal_find(key)
             if slug:
                 return (slug, "exists") if _room_code_ok(self.rooms[slug], code) else (None, "wrong")
+            if len(code) < PERSONAL_CODE_NEW_MIN:   # 0.21.89: a new room takes a code of 8 or more (an existing one still opens)
+                return None, "short"
             if sum(1 for r in self.rooms.values() if is_personal_rec(r)) >= PERSONAL_MAX:
                 return None, "full"
             for _ in range(16):
@@ -5471,8 +5474,9 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
     if op == "reset":
         if not admin:
             return {"ok": False, "error": "only an admin (the admin code) or the relay's operator resets a personal room"}, 403
-        if code and len(code) < PERSONAL_CODE_MIN:
-            return {"ok": False, "error": "a personal code has at least %d characters" % PERSONAL_CODE_MIN}, 400
+        if code and len(code) < PERSONAL_CODE_NEW_MIN:   # 0.21.89: "8 everywhere"
+            return {"ok": False, "short": True, "codeMin": PERSONAL_CODE_NEW_MIN,
+                    "error": "a personal code has at least %d characters" % PERSONAL_CODE_NEW_MIN}, 400
         slug = store.personal_reset(name, code or None)
         if not slug:
             return {"ok": False, "error": "%s has no personal room" % name}, 404
@@ -5518,6 +5522,9 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         return wrong("%s already has a personal room -- enter its personal code (an admin can reset a forgotten one)" % name)
     if verdict == "full":
         return {"ok": False, "error": "this relay already holds %d personal rooms" % PERSONAL_MAX}, 409
+    if verdict == "short":   # 0.21.89: "8 everywhere"
+        return {"ok": False, "short": True, "codeMin": PERSONAL_CODE_NEW_MIN,
+                "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_NEW_MIN}, 400
     if verdict == "bad":
         return {"ok": False, "error": "a name and a personal code of at least %d characters are required" % PERSONAL_CODE_MIN}, 400
     if lockout is not None:

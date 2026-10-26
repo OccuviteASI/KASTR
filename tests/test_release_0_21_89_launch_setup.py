@@ -110,5 +110,59 @@ class Server(unittest.TestCase):
         self.assertEqual((c, o.get("created")), (200, False))           # it's them: the same code opens it
 
 
+class EightEverywhere(unittest.TestCase):
+    """Kenton: "8 everywhere" -- the hub refuses a NEW or CHANGED My room code shorter than 8 on every path (create, a spoke's
+    forwarded create, an admin's reset with a code; messages' setup / recode were 8 already); an existing shorter code still
+    opens My room, so nobody is locked out until the card asks for a longer one."""
+
+    def setUp(self):
+        self.st = kr.AuthStore(tempfile.mkdtemp())
+        self.st.set_codes(viewer="view-1", publisher="pub-1", admin="adm-1")
+
+    def op(self, body, **kw):
+        return kr.personal_op(self.st, dict(body, access="pub-1"), "10.0.0.5", **kw)
+
+    def test_create_and_reset(self):
+        self.assertEqual(kr.PERSONAL_CODE_NEW_MIN, 8)
+        o, c = self.op({"op": "create", "name": "Nina New", "code": "seven77"})
+        self.assertEqual((c, o.get("short"), o.get("codeMin")), (400, True, 8))
+        self.assertIsNone(self.st.personal_check("Nina New", "seven77")[0])
+        o, c = self.op({"op": "create", "name": "Nina New", "code": "eight888"})
+        self.assertEqual((c, o.get("created")), (200, True))
+        o, c = kr.personal_op(self.st, {"op": "reset", "name": "Nina New", "code": "short"}, "10.0.0.5", admin=True)
+        self.assertEqual((c, o.get("short")), (400, True))
+        self.assertIsNotNone(self.st.personal_check("Nina New", "eight888")[0])   # unchanged
+        o, c = kr.personal_op(self.st, {"op": "reset", "name": "Nina New", "code": "a-new-code"}, "10.0.0.5", admin=True)
+        self.assertEqual(c, 200)
+        o, c = kr.personal_op(self.st, {"op": "reset", "name": "Nina New"}, "10.0.0.5", admin=True)   # clear (no code): allowed
+        self.assertEqual(c, 200)
+
+    def test_an_existing_short_code_still_opens(self):
+        self.op({"op": "create", "name": "Sam Short", "code": "sam-long-01"})
+        self.st.personal_reset("Sam Short", "abcd")                          # as made before 0.21.89
+        o, c = self.op({"op": "open", "name": "Sam Short", "code": "abcd"})
+        self.assertEqual(c, 200)
+        o, c = self.op({"op": "create", "name": "Sam Short", "code": "abcd"})   # the dialog's Make with its own code: it opens
+        self.assertEqual((c, o.get("created")), (200, False))
+
+    def test_a_spoke_forwards_and_the_hub_refuses(self):
+        import os
+        hub = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, self.st)
+        try:
+            fed = kr._mint(hub.key, dict(kr.FEDERATION_CLAIMS, iat=1, exp=4102444800))
+            o, c = hub.rooms_fed({"op": "personal", "body": {"op": "create", "name": "Spoke Person", "code": "1234567"}, "vouch": "member"}, "Bearer " + fed)
+            self.assertEqual((c, o.get("short")), (400, True))
+            o, c = hub.rooms_fed({"op": "personal", "body": {"op": "create", "name": "Spoke Person", "code": "12345678"}, "vouch": "member"}, "Bearer " + fed)
+            self.assertEqual(c, 200)
+        finally:
+            hub.close()
+
+    def test_the_old_dialog_says_the_same(self):
+        p = _read("moq-watch-lite.html")
+        self.assertIn('const cmin = mode === "make" ? 8 : 4;', p)
+        self.assertIn("Pick a passcode only you know (8 characters or more).", p)
+        self.assertNotIn("(4 characters or more)", p)
+
+
 if __name__ == "__main__":
     unittest.main()

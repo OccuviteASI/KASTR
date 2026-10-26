@@ -2,6 +2,23 @@
 
 What changed in each build, newest first.
 
+## v0.21.87 — KASTR stays maximized, invite links survive an update, photos and backstage in My room, a steady mic
+
+**The window comes back maximized (Kenton: "It still isn't saving position after upgrade. Or restart.").** When KASTR relaunched after an update or a restart while the old browser was still closing, Chrome opened the new window inside that old browser, which ignores the "maximized" instruction, so it came back at a default size. KASTR now finds its window after every launch, even inside the old browser, and maximizes it if it was maximized before. Windows and Linux (X11).
+
+**Invite links that open the app (Kenton: a coworker's link "opened the app and then took him straight to the lobby").**
+- An invite you open now survives KASTR updating or restarting straight away. It is kept for 2 minutes and offered again after the relaunch.
+- An invite you have just opened always wins over KASTR's automatic rejoin of the room you were in before.
+
+**My room: People, photos and backstage (Kenton: initials instead of photos; "It is not showing another person so I can choose a backstage person").** My room is never listed, so its people did not publish the records that People, profile photos and the presentation's backstage list read. Each person's KASTR now gives its name and photo to the people in the room only. Your own row always shows your own photo. If your photo cannot be shared through the relay host, a warning now says why (it used to be a hidden note). People can announce their photo to the room again on secured relays.
+
+**Switching noise suppression keeps the mic working (Kenton: "it will stop my mic from working and I have to mute and unmute").** Leaving background noise removal (RNNoise) used to cut the filtered sound while it still fed the stream. Now the microphone goes back in first, and for a few seconds after any switch the stream follows the live microphone.
+
+**Pointing on a shared screen (Kenton: clicks were "doing the normal zoom in/out instead of just showing me the clicks").** On the stage, a pointing click shows the click ring and nothing else. It no longer zooms or sends the view back to the gallery. A click on a small rail tile still brings the share to the stage.
+
+**Smaller things**
+- Share menu rows keep their dark background on hover, with a blue outline, instead of turning bright blue with unreadable text.
+
 ## v0.21.86 — invite links anyone can open, profile photos in Everyone online, a steadier presentation upload
 
 **Invite links on the public web address (Kenton: "Invite link is using the internal IP of the relay I'm connected to, and not a web address that anyone can access").**

@@ -4466,7 +4466,7 @@
   // and can never be named so). It is never a tile of its own here -- kastr-pres.js draws it in its spot
   // on the slide -- so it rides roomHid (not shown anywhere in this room, never an arrival, never picked), yet it decodes
   // off-stage (keepWarm) and is heard (isAudible). Older KASTRs show it as an ordinary tile.
-  const PRES_VID_RE = /\/presentation_video(?:_[a-z0-9]+)?(?:-\d+)?\.hang$/;
+  const PRES_VID_RE = /\/presentation_(?:video|audio)(?:_[a-z0-9]+)?(?:-\d+)?\.hang$/;   // 0.21.88: + a slide's sound clip (presentation_audio_<n>)
   const isPresVid = (n) => PRES_VID_RE.test(String(n));
   const roomHid = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room (0.21.87: + a slide's video)
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
@@ -10448,17 +10448,6 @@
   const vgFrameOf = (t) => { try { return t.watch.video?.out?.frame?.peek?.() || t.watch.renderer?.out?.frame?.peek?.() || null; } catch { return null; } };
   // 0.21.87: kastr-pres.js draws a slide's video from its (hidden) tile's newest frame, in the video's spot on the slide
   window.__presVidFrame = (path) => { if (!isPresVid(path)) return null; const t = tiles.get(String(path)); return t ? vgFrameOf(t) : null; };
-  // ... and asks for it afresh when its picture stops while the presenter says it plays (lab 2026-10-26: a new file share's
-  // video track is sometimes dropped by the player right after it starts -- "group timestamp is below the live edge" -- and
-  // came back only ~6 s later; an ordinary Share > Media file does the same). A new subscription starts at the live edge.
-  window.__presVidKick = (path) => {
-    const t = isPresVid(path) && tiles.get(String(path));
-    const u = t && t.watch.getAttribute("url");
-    if (!u) return false;
-    t.watch.removeAttribute("url");
-    setTimeout(() => { if (tiles.get(String(path)) === t && !t.watch.getAttribute("url") && isWatched(String(path))) t.watch.setAttribute("url", u); }, 60);
-    return true;
-  };
   let vgRaf = 0, vgLast = 0;
   function vgSync() {
     for (const [name, t] of tiles) {
@@ -27521,7 +27510,7 @@
         monitorAttach(slot, m.atrack);   // 0.21.0: the sharer hears the file (the mic tap below never saw this track)
       } catch (e) { log("File audio: " + (e?.message || e)); }
       if (mediaSwEncodeOn()) { fileSwProbeUntil = performance.now() + 4000; m.swEncode = true; }   // 0.21.16: this composite's encoder probe -> software
-      try { pubCap(slot.publish)?.in?.source.set(vtrack); } catch {}
+      if (!entry.audioOnly) { try { pubCap(slot.publish)?.in?.source.set(vtrack); } catch {} }   // 0.21.88: a slide's sound clip publishes sound only
       // a still frame before play so viewers get a picture immediately
       try { if (v.videoWidth) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); pushCaptureFrame(vtrack); } } catch {}
       if (rs.paused) {   // 0.16.0: rebuilt while paused -> stay paused, right where it was (a heal used to restart from 0, playing)
@@ -29888,7 +29877,7 @@
     // what needs converting -- video the browser cannot decode (HEVC, MPEG-4,
     // VP8 in MKV...) as well as AC-3/DTS audio. Anything already web-safe is
     // used as is.
-    if (!/\.(mkv|mka|webm|mp4|m4v|mov|avi|ts|m2ts|wmv|flv|mpg|mpeg)$/i.test(f.name) && !/^video\//.test(f.type)) return f;
+    if (!opt?.probe && !/\.(mkv|mka|webm|mp4|m4v|mov|avi|ts|m2ts|wmv|flv|mpg|mpeg)$/i.test(f.name) && !/^video\//.test(f.type)) return f;   // 0.21.88: opt.probe -- a slide's sound (WMA needs converting)
     let probe = null;
     try {
       const res = await fetch("/api/media/probe", { method: "POST", body: f.slice(0, 16 * 1024 * 1024),
@@ -30270,17 +30259,17 @@
     async start(file, opts) {
       const o = opts || {};
       let f = file, extra = {};
-      const r = await prepareMediaFile(file, { noPicker: true });
+      const r = await prepareMediaFile(file, { noPicker: true, probe: !!o.audio });
       if (r && r.mediaUrl) {   // converted by this KASTR as it plays (a WMV / AVI / HEVC video)
         f = new File([], r.name, { type: "video/mp4" });
         extra = { mediaUrl: r.mediaUrl, mediaId: r.mediaId, duration: r.duration || 0, plan: r.plan, hasVideo: r.hasVideo, upload: r.upload, fps: r.fps || 0, shareH: 0, srcH: r.srcH || 0 };
       } else if (r) { f = r; extra = { shareH: 0, srcH: Number(r.kastrSrcH) || 0 }; }
       const op = operatorSlug();
-      const leaf = "presentation_video_" + (++presVidSeq).toString(36) + Date.now().toString(36).slice(-4) + ".hang";   // a fresh stream per visit of its slide
+      const leaf = (o.audio ? "presentation_audio_" : "presentation_video_") + (++presVidSeq).toString(36) + Date.now().toString(36).slice(-4) + ".hang";   // a fresh stream per visit of its slide
       const base = op ? `${HOSTNAME}/${op}/${leaf}` : `${HOSTNAME}/${leaf}`;
-      const e = addSource(FILE, null, "Presentation video", { file: f, mediaUrl: null, ...extra, name: uniqueName(base), presVideo: true,
+      const e = addSource(FILE, null, o.audio ? "Presentation sound" : "Presentation video", { file: f, mediaUrl: null, ...extra, name: uniqueName(base), presVideo: true, audioOnly: !!o.audio,
                                                               loop: !!o.loop, resume: { t: 0, paused: !o.auto }, gain: o.vol == null ? 1 : Math.max(0, Math.min(1, Number(o.vol))) });   // the deck's own volume
-      e.label = "Presentation video \u00b7 " + String(o.label || file.name || "video").slice(0, 60);
+      e.label = (o.audio ? "Presentation sound \u00b7 " : "Presentation video \u00b7 ") + String(o.label || file.name || "video").slice(0, 60);
       renderSources();
       return { id: e.id, path: chanPath(ensureHang(e.name)) };
     },

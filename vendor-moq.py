@@ -199,6 +199,19 @@ PATCHES = [
         ('close(){this.#i.close()}},su=on({Renderer:',
          'kastrMirror(t){let s=t.get(this.in.mirrorOrigin);if(s&&typeof s.peek=="function")s=t.get(s);let n=t.get(this.in.mirrorName);if(!s||!n||!t.get(this.in.enabled))return;let a=s.createBroadcast(n);t.cleanup(()=>a.close()),t.run(o=>{if(!o.get(this.in.announce)){a.unannounce();return}for(let[c,l]of[[Wi.CATALOG_TRACK,!1],[Wi.CATALOG_TRACK_COMPRESSED,!0]]){let u=a.createTrack(c,{maxAge:li.Time.Milli(9007199254740991),priority:K.PRIORITY.catalog});o.cleanup(()=>u.close()),this.catalog.serve(u,o,{compression:l})}a.announce()}),t.run(o=>{let c=o.get(this.#e),l=o.get(this.in.maxAge),m={};for(let u of Object.values(c)){let h=a.createTrack(u.name,Je.trackInfo({maxAge:l,priority:K.PRIORITY[u.kind]}));o.cleanup(()=>h.close()),m[u.name]=h}o.set(this.kastrMirrorTracks,m,{})})}static KastrTee=class{constructor(a,b){this.a=a,this.b=b,this.name=a.name}get closed(){return this.a.closed}get used(){return this.a.used}appendGroup(){let g=[];for(let t of[this.a,this.b])try{t.closed.peek()===void 0&&g.push(t.appendGroup())}catch{}return new Wi.KastrTeeGroup(g)}writeFrame(f){let x=this.appendGroup();x.writeFrame(f),x.close()}close(e){for(let t of[this.a,this.b])try{t.close(e)}catch{}}};static KastrTeeGroup=class{constructor(g){this.g=g,this.sequence=g.length?g[0].sequence:0}get closed(){return this.g.length?this.g[0].closed:this.kastrNone??=new L(null)}writeFrame(f){for(let x of this.g)try{x.writeFrame(f)}catch{}}close(e){for(let x of this.g)try{x.close(e)}catch{}}};close(){this.#i.close()}/* /library-mirror */},su=on({Renderer:'),
      ]},
+    {"id": "group-end-no-guess",
+     "file": "@moq/hang@0.5.2/es2022/container.mjs",
+     "why": ("0.21.88 (Kenton: a shared media file's picture froze 5-7 s right after it started, sound going on -- 3 of 12 "
+             "lab starts): when the publisher's encoder closes (a demand flap, a reconfigure) the producer finishes the open "
+             "group with a GUESSED end -- the last frame + the last frame interval -- and writes it as the video group's end "
+             "marker. The next encoder's first keyframe can be earlier than that guess (the interval before it was long: the "
+             "first still frame, a paused second, timer jitter); the player then sees a newer group below its live edge, "
+             "closes the video track for good ('group timestamp is below the live edge') and the publisher, with no demand, "
+             "reopens the encoder only when the catalog next changes, ~6 s later. A group finished without a known end now "
+             "ends at its last frame -- never past a frame that can still come."),
+     "edits": [
+        ('e??=this.#i!==void 0&&this.#o!==void 0?this.#i+this.#o:void 0', '/* KASTR-PATCH: group-end-no-guess */e??=this.#i'),
+     ]},
 ]
 
 

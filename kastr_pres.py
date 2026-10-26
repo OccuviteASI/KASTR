@@ -71,7 +71,12 @@ MEDIA_EXT_URI = "{DAA4B4D4-6D71-4841-9C94-3DA1FA4D0E7F}"
 VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".wmv": "video/x-ms-wmv",
                ".avi": "video/x-msvideo", ".mkv": "video/x-matroska", ".webm": "video/webm", ".mpg": "video/mpeg",
                ".mpeg": "video/mpeg", ".ts": "video/mp2t", ".m2ts": "video/mp2t", ".flv": "video/x-flv", ".3gp": "video/3gpp"}
-VIDEO_FILE_RE = r"v[0-9]{1,3}[.](?:%s)" % "|".join(sorted(e.lstrip(".") for e in VIDEO_TYPES))
+# 0.21.88 (Kenton: embedded AUDIO clips "play the same way as videos"): a sound shape is a p:pic with a:audioFile (+ the same
+# p14:media extension); PowerPoint's speaker icon is its picture
+AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav", ".wma": "audio/x-ms-wma", ".aac": "audio/aac",
+               ".ogg": "audio/ogg", ".oga": "audio/ogg", ".flac": "audio/flac", ".aif": "audio/aiff", ".aiff": "audio/aiff"}
+MEDIA_TYPES_AV = dict(VIDEO_TYPES, **AUDIO_TYPES)
+VIDEO_FILE_RE = r"v[0-9]{1,3}[.](?:%s)" % "|".join(sorted(e.lstrip(".") for e in MEDIA_TYPES_AV))
 REL_SLIDE = "/slide"
 EMU_PT = 12700
 
@@ -571,7 +576,7 @@ class Converter:
             raise ConvertError("this presentation has no slides")
         out = {"kind": "scene", "w": self.cx, "h": self.cy, "slides": slides, "media": self.media_out, "warnings": self.warn}
         if self.videos:   # 0.21.87: the files (no bytes here -- stash_videos copies them out of the zip)
-            out["videos"] = {v["id"]: {k: v[k] for k in ("part", "ext", "type", "size", "name")} for v in self.videos.values()}
+            out["videos"] = {v["id"]: {k: v[k] for k in ("part", "ext", "type", "size", "name", "kind")} for v in self.videos.values()}
         return out
 
     def slide(self, part, num):
@@ -953,14 +958,14 @@ class Converter:
         box = self._apply(box, xf)
         bf = el.find(P + "blipFill")
         mid = self.blip(bf, ctx) if bf is not None else None
-        vid = self.video(el, ctx, box) if not deco else None   # 0.21.87: a video plays in its own spot when its slide is live
+        vid = self.video(el, ctx, box) if not deco else None   # 0.21.87: a video plays in its own spot when its slide is live (0.21.88: + sound)
+        if vid is not None and vid.get("kind") == "audio" and vid.get("hideIcon"):
+            return None   # PowerPoint's "Hide during show": the speaker icon is not on the slide in the show
         if not mid:
-            if vid is not None:   # no poster picture: a black box where the video will play
+            if vid is not None and vid.get("kind") != "audio":   # no poster picture: a black box where the video will play
                 item = {"t": "sp", "geom": {"prst": "rect"}, "fill": {"c": "#000000"}, "ln": None}
                 item.update(box)
                 return item
-            if el.find(".//" + P + "nvPr/" + A + "audioFile") is not None:
-                self._warn("sound in slides does not play here (present it with PowerPoint)")
             return None
         item = {"t": "pic", "m": mid, "crop": self.crop(bf), "geom": self.geometry(el.find(P + "spPr")),
                 "ln": self.line(el.find(P + "spPr"), ctx, el.find(P + "style"))}
@@ -975,6 +980,10 @@ class Converter:
         if nv is None:
             return None
         vf = nv.find(A + "videoFile")
+        kind = "video"
+        if vf is None and nv.find(A + "audioFile") is not None:   # 0.21.88: a sound clip
+            vf, kind = nv.find(A + "audioFile"), "audio"
+        what = "sound" if kind == "audio" else "video"
         media = None
         for ext in nv.findall(P + "extLst/" + P + "ext"):
             if ext.get("uri") == MEDIA_EXT_URI and ext.find(P14 + "media") is not None:
@@ -986,29 +995,33 @@ class Converter:
         part = next((rels[r_][1] for r_ in rids if r_ in rels and rels[r_][1] and rels[r_][1] in self.pkg.names), None)
         cnv = el.find(P + "nvPicPr/" + P + "cNvPr")
         spid = cnv.get("id") if cnv is not None else None
-        title = (cnv.get("name") if cnv is not None else "") or "video"
+        title = (cnv.get("name") if cnv is not None else "") or what
         if not part:
             linked = next((self.pkg._ext[(ctx.part, r_)] for r_ in rids if self.pkg._ext.get((ctx.part, r_))), "")
             nm = posixpath.basename(unquote(linked).replace("\\", "/")) if linked else ""
-            self._warn("the video%s on slide %s is linked to a file, not embedded, so it cannot play here -- in PowerPoint use "
-                       "Insert > Video > This Device (or File > Info > Embed media) and present the deck again"
-                       % ((" " + nm) if nm else "", self.cur.get("num")))
-            self.cur["videos"].append({"linked": (nm or title)[:80]})
-            return {"linked": True}
+            self._warn("the %s%s on slide %s is linked to a file, not embedded, so it cannot play here -- in PowerPoint use "
+                       "Insert > %s > This Device (or File > Info > Embed media) and present the deck again"
+                       % (what, (" " + nm) if nm else "", self.cur.get("num"), "Audio > Audio on My PC" if kind == "audio" else "Video"))
+            self.cur["videos"].append(dict({"linked": (nm or title)[:80]}, **({"kind": "audio"} if kind == "audio" else {})))
+            return {"linked": True, "kind": kind}
         ext = posixpath.splitext(part)[1].lower()
-        if ext not in VIDEO_TYPES:
-            self._warn("a %s video cannot be played here (save it as MP4 in PowerPoint)" % (ext.lstrip(".").upper() or "media"))
+        if ext not in (MEDIA_TYPES_AV if kind == "audio" else VIDEO_TYPES):
+            self._warn("a %s %s cannot be played here (save it as %s in PowerPoint)"
+                       % (ext.lstrip(".").upper() or "media", what, "MP3 or M4A" if kind == "audio" else "MP4"))
             return None
         v = self.videos.get(part)
         if v is None:
-            v = {"id": "v%d" % len(self.videos), "part": part, "ext": ext, "type": VIDEO_TYPES[ext],
-                 "size": self.pkg.sizes.get(part, 0), "name": posixpath.basename(part)}
+            v = {"id": "v%d" % len(self.videos), "part": part, "ext": ext, "type": MEDIA_TYPES_AV[ext],
+                 "size": self.pkg.sizes.get(part, 0), "name": posixpath.basename(part), "kind": kind}
             self.videos[part] = v
         media = self.cur["media"].get(spid) or {}
-        self.cur["videos"].append({"id": v["id"], "x": box["x"], "y": box["y"], "w": box["w"], "h": box["h"],
-                                   "auto": spid in self.cur["auto"], "delay": self.cur["auto"].get(spid, 0),
-                                   "loop": bool(media.get("loop")), "vol": media.get("vol", 1.0), "name": title[:80]})
-        return v
+        entry = {"id": v["id"], "x": box["x"], "y": box["y"], "w": box["w"], "h": box["h"],
+                 "auto": spid in self.cur["auto"], "delay": self.cur["auto"].get(spid, 0),
+                 "loop": bool(media.get("loop")), "vol": media.get("vol", 1.0), "name": title[:80]}
+        if kind == "audio":
+            entry["kind"] = "audio"
+        self.cur["videos"].append(entry)
+        return dict(v, kind=kind, hideIcon=kind == "audio" and bool(media.get("hide")))
 
     def frame(self, el, ctx, deco, xf):
         box = self._xfrm(el.find(P + "xfrm"))
@@ -1217,7 +1230,8 @@ def media_timing(sld):
         vol = _int(cm.get("vol"), 100000) / 100000.0 if cm.get("vol") is not None else 1.0
         if cm.get("mute") in ("1", "true"):
             vol = 0.0
-        media[tgt.get("spid")] = {"loop": ctn is not None and ctn.get("repeatCount") == "indefinite", "vol": round(_clamp(vol), 3)}
+        media[tgt.get("spid")] = {"loop": ctn is not None and ctn.get("repeatCount") == "indefinite", "vol": round(_clamp(vol), 3),
+                                  "hide": cm.get("showWhenStopped") in ("0", "false")}   # 0.21.88: "Hide during show" (a sound's icon)
 
     def delay_of(ctn):   # the numeric start delay of a time node (ms); "indefinite" = waits for something else
         st = ctn.find(P + "stCondLst")
@@ -1735,7 +1749,7 @@ def handle_api(handler, state_dir, note=None):
             if not os.path.isfile(p):
                 return _reply(handler, 404, {"error": "no such video"})
             handler.send_response(200)
-            handler.send_header("Content-Type", VIDEO_TYPES.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
+            handler.send_header("Content-Type", MEDIA_TYPES_AV.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
             handler.send_header("Content-Length", str(os.path.getsize(p)))
             handler.send_header("Cache-Control", "no-store")
             handler.end_headers()

@@ -18,6 +18,10 @@
 // VIDEOS ON SLIDES (0.21.87): an embedded video plays in its spot on the slide while that slide is live -- the presenter
 //              streams it like Share > Media file (window.__presVideo), `pres.vids` says where and how far, every page draws
 //              the stream over the still; Play / Pause / seek from the presenter or backstage (presCtl.vid), viewers watch.
+// PRESENTER MODES (0.21.89): Content only / Standout / Side-by-side / Reporter -- the presenter's camera drawn into the tile (the
+//              cut-out for Standout and Reporter comes from the presenter's page, window.__presCut), picked by the presenter or
+//              backstage (presCtl.cm); backstage can also mute / unmute the presenter's mic and pause / resume their video
+//              (presCtl.av) while the presenter's switch allows it. See "PRESENTER MODES" below.
 // Collisions: an intent carries the version it saw (`bv`); the presenter applies it when nobody else moved since
 // (bv == ver) or when the last move was the same person's (a fast double Next from one clicker) -- two people pressing
 // Next on slide 3 at once land on 4, not 5.
@@ -508,9 +512,9 @@
   function deckVideos(sc, shown) {
     const files = sc.videos || {}, got = new Map(), ids = Object.keys(files);
     const per = shown.map((s) => (s.videos || []).map((v) => (v.id
-      ? { id: v.id, x: v.x / sc.w, y: v.y / sc.h, w: v.w / sc.w, h: v.h / sc.h, auto: !!v.auto, delay: Math.max(0, Math.min(60000, Number(v.delay) || 0)),
+      ? { id: v.id, kind: v.kind === "audio" ? "audio" : "video", x: v.x / sc.w, y: v.y / sc.h, w: v.w / sc.w, h: v.h / sc.h, auto: !!v.auto, delay: Math.max(0, Math.min(60000, Number(v.delay) || 0)),
           loop: !!v.loop, vol: v.vol == null ? 1 : Math.max(0, Math.min(1, Number(v.vol))), name: String(v.name || "") }
-      : { linked: String(v.linked || "video") })));
+      : { linked: String(v.linked || "video"), kind: v.kind === "audio" ? "audio" : "video" })));
     const ready = Promise.all(ids.map(async (id) => {
       const f = files[id];
       try {
@@ -556,6 +560,7 @@
       warnings: src.warnings || [], startedMs: 0, pubSeq: 0, told: 0, vids: new Map(),   // 0.21.87: + the videos playing on the live slide
     };
     T("start", { id: mine.id, n: mine.n, kind: mine.kind });
+    modeInit(mine);   // 0.21.89: Standout when my camera is on, else Content only
     view.prep("Preparing slide 1 of " + mine.n + "…");
     try { await ensureSlide(0); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
     await uploadNotes();
@@ -565,7 +570,7 @@
     syncVideos();   // 0.21.87: slide 1 may have a video
     ensurePk();
     view.open({ deck: mine.id });
-    if (mine.warnings.length) toast("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 9000, "warn");
+    if (mine.warnings.length) presNote("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 20000, "warn");   // 0.21.89: never over the picker
     renderRest();
   }
   function ensureSlide(i) {   // render + encrypt + upload slide i (once; callers at the same time share one try)
@@ -629,7 +634,8 @@
       bs: [...mine.bs.entries()].map(([p, b]) => ({ p, n: b.name || "", w: b.w || "" })),
       // 0.21.87: the live slide's videos -- their stream, their spot (fractions of the slide) and how far they are
       vids: [...mine.vids.values()].filter((e) => e.path && e.i === mine.idx).map((e) => ({ v: e.v, p: e.path, i: e.i, x: +e.sv.x.toFixed(5), y: +e.sv.y.toFixed(5),
-        w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto })),
+        w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto, k: e.sv.kind === "audio" ? "a" : "v" })),   // 0.21.88: k = "a" -- a sound clip: heard, never drawn
+      ...modeFields(),   // 0.21.89: the presenter mode, my camera / cut-out, backstage's mic + camera control
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
@@ -665,6 +671,7 @@
     const last = mine.lastSeq.get(who) || 0;
     if (!(ctl.seq > last)) return;
     mine.lastSeq.set(who, ctl.seq);
+    if (ctl.cm !== undefined || (ctl.av && typeof ctl.av === "object")) { applyModeAv(ctl, who); return; }   // 0.21.89: a mode, or my mic / camera
     if (ctl.vid && typeof ctl.vid === "object") { applyVidOp(ctl.vid, who); return; }   // 0.21.87: Play / Pause / seek of the live slide's video
     if (ctl.bv !== mine.ver && mine.by !== who) { T("drop", { id: mine.id, idx: ctl.to, ver: mine.ver, who }); return; }   // somebody else moved first
     T("apply", { id: mine.id, idx: ctl.to, ver: mine.ver + 1, who });
@@ -727,6 +734,7 @@
     const m = mine;
     if (!m) return;
     for (const k of [...m.vids.keys()]) stopVid(m, k, "end");   // 0.21.87
+    modeEnd(m);   // 0.21.89: the cut-out stops with the presentation
     mine = null;
     clearInterval(m.keep);
     try { if (m.share) window.__presShare.stop(m.share.id); } catch {}
@@ -764,7 +772,7 @@
     if (!file || !window.__presVideo) { e.err = file ? "this KASTR cannot share videos" : "the video could not be read from the deck"; view.paint(); return; }
     let h = null;
     const now = sv.auto && !(sv.delay > 0);   // "Start: Automatically" with a delay starts paused and is played when the delay is up
-    try { h = await window.__presVideo.start(file, { label: sv.name || m.name, auto: now, loop: !!sv.loop, vol: sv.vol }); }   // + the deck's own volume (PowerPoint's default is 80 %)
+    try { h = await window.__presVideo.start(file, { label: sv.name || m.name, auto: now, loop: !!sv.loop, vol: sv.vol, audio: sv.kind === "audio" }); }   // + the deck's own volume (PowerPoint's default is 80 %)
     catch (err) { e.err = String(err?.message || err); console.warn("KASTR pres: video", err); }
     if (!h) { view.paint(); return; }
     if (e.gone || mine !== m) { try { window.__presVideo.stop(h.id); } catch {} return; }
@@ -888,7 +896,7 @@
     for (const r of remote.values()) if (r.pres && r.pres.share) want.set(r.pres.share, r.pres);
     for (const [path, o] of overlays) {
       const t = tiles && tiles.get(path);
-      if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); o.vcv.remove(); } catch {} try { o.vBmp?.close(); } catch {} overlays.delete(path); }
+      if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); o.vcv.remove(); o.ccv?.remove(); } catch {} try { o.vBmp?.close(); } catch {} overlays.delete(path); }
     }
     if (!tiles) return;
     for (const [path, rec] of want) {
@@ -902,14 +910,18 @@
         const vcv = document.createElement("canvas");   // 0.21.87: the slide's video, drawn in its spot over the still
         vcv.className = "presvid";
         t.pane.appendChild(vcv);
-        o = { cv, vcv, key: "", rec, vDrawn: 0 };
+        const ccv = document.createElement("canvas");   // 0.21.89: the presenter's camera in the room's presenter mode
+        ccv.className = "prescam";
+        t.pane.appendChild(ccv);
+        o = { cv, vcv, ccv, key: "", rec, vDrawn: 0 };
         overlays.set(path, o);
       }
       o.rec = rec;
-      if ((rec.vids || []).length) vidLoop();
-      const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width);
+      if ((rec.vids || []).length || modeOf(rec) !== "content" || o.ccvOn) vidLoop();   // 0.21.89: + a camera mode
+      const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width) + "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "");
       if (key !== o.key) { o.key = key; paintOverlay(path, o); }
     }
+    presCamSync();   // 0.21.89
   }
   async function paintOverlay(path, o) {
     const rec = o.rec, key = o.key;
@@ -934,8 +946,8 @@
       } catch (e) { console.warn("KASTR pres: live slide", e); }
     }
     if (o.key !== key) return;
-    drawContain(o.cv, bmp, rec.blank, "");
-    T("paint", { id: rec.id, idx: rec.idx, ver: rec.ver, who: "overlay" });
+    drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, "", rec.rbg);   // 0.21.89: placed by the room's presenter mode (Content only: as before)
+    T("paint", { id: rec.id, idx: rec.idx, ver: rec.ver, who: "overlay", mode: modeOf(rec) });
   }
 
   // ---- the presenter view (presenter + backstage) ----------------------------------------------------------------------
@@ -1039,6 +1051,7 @@
         </div>
         <div class="strip"></div>`;
       document.body.appendChild(root);
+      modeUiBuild(root);   // 0.21.89: the presenter-mode picker + preview (+ backstage's mic / camera)
       pill = document.createElement("div"); pill.id = "presPill";
       pill.innerHTML = `<span class="pt"></span><button type="button">Presenter view</button>`;
       document.body.appendChild(pill);
@@ -1136,15 +1149,15 @@
       if (v.role === "presenter") {
         const e = [...mine.vids.values()].find((x) => x.i === mine.idx);
         const linked = ((mine.src.videos || [])[mine.idx] || []).find((x) => x.linked);
-        if (!e) return linked ? { role: v.role, linked: linked.linked } : null;
+        if (!e) return linked ? { role: v.role, linked: linked.linked, audio: linked.kind === "audio" } : null;
         const s = e.shareId != null ? window.__presVideo?.state(e.shareId) : null;
-        return { role: v.role, e, playing: !!s?.playing, t: s ? s.t : 0, dur: s ? s.dur : 0, err: e.err, ready: !!s };
+        return { role: v.role, e, playing: !!s?.playing, t: s ? s.t : 0, dur: s ? s.dur : 0, err: e.err, ready: !!s, audio: e.sv.kind === "audio" };
       }
       const rec = backstage.get(v.id)?.rec;
       const r = rec && rec.idx === v.idx && (rec.vids || []).find((x) => x.i === rec.idx);
       if (!r) return null;
       const t = Math.min(r.d || 1e9, r.t + (r.pl ? Math.max(0, Date.now() - r.at) / 1000 : 0));
-      return { role: v.role, r, playing: !!r.pl, t, dur: r.d || 0, ready: true };
+      return { role: v.role, r, playing: !!r.pl, t, dur: r.d || 0, ready: true, audio: r.k === "a" };
     }
     function vidPress(op, t) {
       const lv = liveVid();
@@ -1162,12 +1175,12 @@
       const ctlEls = [$(".vplay"), $(".vseek"), $(".vtime")];
       if (lv.linked) {
         for (const el of ctlEls) el.style.display = "none";
-        $(".vnote").textContent = "This slide's video (" + lv.linked + ") is linked to a file, not embedded in the deck — it cannot play here";
+        $(".vnote").textContent = "This slide's " + (lv.audio ? "sound" : "video") + " (" + lv.linked + ") is linked to a file, not embedded in the deck — it cannot play here";
         return;
       }
       for (const el of ctlEls) el.style.display = "";
       $(".vnote").textContent = lv.err ? "Video: " + lv.err : !lv.ready ? "Video: getting ready…" : "";
-      $(".vplay").textContent = lv.playing ? "⏸ Pause video" : "▶ Play video";
+      $(".vplay").textContent = (lv.playing ? "⏸ Pause " : "▶ Play ") + (lv.audio ? "sound" : "video");   // 0.21.88: + a sound clip
       $(".vplay").disabled = !lv.ready;
       if (!bar.dataset.scrub) $(".vseek").value = lv.dur ? String(Math.round(Math.min(1, lv.t / lv.dur) * 1000)) : "0";
       $(".vtime").textContent = fmtT(lv.t) + " / " + fmtT(lv.dur);
@@ -1184,12 +1197,12 @@
       if (v.role === "presenter") {
         const es = [...mine.vids.values()].filter((e) => e.i === mine.idx);
         any = es.length > 0;
-        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null).map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
       } else {
         const rec = backstage.get(v.id)?.rec;
         const rs = rec && rec.idx === v.idx ? (rec.vids || []).filter((x) => x.i === rec.idx) : [];
         any = rs.length > 0;
-        if (!v.blank) items = rs.filter((x) => x.st).map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+        if (!v.blank) items = rs.filter((x) => x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
       }
       const n = drawVids(vc, v.ar || 16 / 9, items);
       if (n && vidViewPainted !== v.id + "/" + v.idx) { vidViewPainted = v.id + "/" + v.idx; T("vid-paint", { id: v.id, idx: v.idx, who: "view" }); }
@@ -1248,6 +1261,7 @@
       }
       paintStrip();
       paintVid();   // 0.21.87
+      modeUiPaint();   // 0.21.89
       vidLoop();
     }
     function paintAll() { paint(); }
@@ -1340,12 +1354,13 @@
   // the presenter view's live slide; drawn only once it has started (before that the slide's own poster shows) ------------
   let vidRaf = 0;
   function vidLoop() { if (!vidRaf) vidRaf = requestAnimationFrame(vidFrame); }
-  function drawVids(cv, ar, items) {   // items: {x, y, w, h (fractions of the slide), src} -> how many were drawn
+  function drawVids(cv, ar, items, rectFn) {   // items: {x, y, w, h (fractions of the slide), src} -> how many were drawn
     fitCanvas(cv);
     const g = cv.getContext("2d"), W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
     if (!items.length) return 0;
-    const sw = Math.min(W, H * ar), sh = sw / ar, ox = (W - sw) / 2, oy = (H - sh) / 2;
+    const R = rectFn ? rectFn(W, H) : null;   // 0.21.89: the slide's place in the tile's presenter mode
+    const sw = R ? R.w : Math.min(W, H * ar), sh = R ? R.h : sw / ar, ox = R ? R.x : (W - sw) / 2, oy = R ? R.y : (H - sh) / 2;
     let n = 0;
     for (const it of items) {
       if (!it.src) continue;
@@ -1353,42 +1368,640 @@
     }
     return n;
   }
-  // a picture that stops while the presenter says the video plays: ask for the stream afresh (after 1.5 s, at most every 5 s). Lab
-  // 2026-10-26: the player sometimes drops a new file share's video track right after it starts ("group timestamp is below
-  // the live edge") and the picture froze ~6 s while the sound went on -- an ordinary Share > Media file does the same.
-  function vidWatchdog(o, items) {
-    const now = performance.now();
-    o.vSeen = o.vSeen || new Map();
-    for (const it of items) {
-      const ts = it.src ? it.src.timestamp : null;
-      let s = o.vSeen.get(it.p);
-      if (!s) { s = { ts, at: now, kickAt: 0, kicks: 0 }; o.vSeen.set(it.p, s); }
-      if (ts !== s.ts) { s.ts = ts; s.at = now; continue; }
-      if (it.pl && now - s.at > 1500 && now - s.kickAt > 5000 && window.__presVidKick?.(it.p)) {
-        s.kickAt = now; s.kicks++; s.at = now;
-        T("vid-kick", { id: o.rec.id, idx: o.rec.idx, who: "overlay" });
-      }
-    }
-    for (const p of [...o.vSeen.keys()]) if (!items.some((it) => it.p === p)) o.vSeen.delete(p);
-  }
   function vidFrame() {
     vidRaf = 0;
     let more = false;
     for (const o of overlays.values()) {
       const rec = o.rec, all = rec.vids || [];
       if (all.length) more = true;
-      const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank);
-      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, p: x.p, pl: x.pl, src: window.__presVidFrame?.(x.p) || null }));
-      vidWatchdog(o, items);
-      const n = drawVids(o.vcv, rec.ar || 16 / 9, items);
+      const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank && x.k !== "a");   // a sound clip is heard, not drawn
+      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+      const n = drawVids(o.vcv, rec.ar || 16 / 9, items, slideRectFn(rec));   // 0.21.89: the slide's place in the mode
       if (n) {
         o.vDrawn++; o.vLast = Date.now();
         if (o.vPainted !== rec.id + "/" + rec.idx) { o.vPainted = rec.id + "/" + rec.idx; T("vid-paint", { id: rec.id, idx: rec.idx, who: "overlay" }); }
       } else if (!live.length) o.vPainted = null;
+      try { if (camLayer(o)) more = true; } catch (e) { console.warn("KASTR pres: camera layer", e); }   // 0.21.89
     }
     try { if (view.drawVid()) more = true; } catch {}
+    try { if (modeUiFrame()) more = true; } catch (e) { console.warn("KASTR pres: mode preview", e); }   // 0.21.89
     if (mine && mine.vids.size) more = true;
     if (more) vidLoop();
+  }
+
+  // ---- 0.21.89: PRESENTER MODES -----------------------------------------------------------------------------------------------
+  // Kenton: "I would like to add the option to present a power point and also share my video, with options to switch between the
+  // different presenter modes. (content only, standout, side-by-side, and reporter)". Decided: the presenter and their backstage
+  // people switch (backstage through presCtl, applied only from the people the presenter made backstage); everyone sees the same
+  // mode; decks only for now (the layout below is plain geometry, ready for shares later); a deck starts in Standout when the
+  // camera is on, else Content only; camera off (or paused) -> Content only until it is back, then the chosen mode again.
+  //   Content only  the slide alone (as before)
+  //   Standout      the presenter, cut out of their background, in front of the slide's bottom-right corner
+  //   Side-by-side  the slide left, the presenter's camera right (a tall tile stacks them)
+  //   Reporter      the presenter, cut out, in front of a backdrop; the slide floats over their shoulder, top-left (~58 %)
+  // Every page composes its own tile: the sharp still from the store (as before), the slide's video in its spot (moved and scaled
+  // with the slide), and the presenter's camera -- their ordinary camera stream (a box), or for Standout / Reporter the cut-out
+  // the presenter's page publishes (window.__presCut: colour | mask in one frame), turned back into a transparent person here
+  // in WebGL. The presenter's camera tile is not shown a second time beside it (window.__presCamHide). The record (`pres`):
+  //   cm   the chosen mode           cme  the mode the room shows (cm, or "content" while the camera is off / paused)
+  //   cam  the camera's stream path  cut  the cut-out's path ("" while there is none)   nocut  why there cannot be one
+  //   cwhy why the slide shows alone ("off" | "bs": paused by backstage)
+  //   av   {m: mic on|muted|none, c: camera on|paused|off, bp: paused by backstage, ok: backstage may control, n / na / nb: the
+  //        last backstage change, its time and who}       ack  {p, s, ok, why}: the answer to a backstage request
+  // Older KASTRs read none of it: the slide + the presenter's own tile, as before.
+  const MODES = ["content", "standout", "sbs", "reporter"];
+  const MODE_NAME = { content: "Content only", standout: "Standout", sbs: "Side-by-side", reporter: "Reporter" };
+  const MODE_TIP = { content: "The slide alone", standout: "You, cut out of your background, in front of the slide",
+                     sbs: "The slide and your camera next to each other", reporter: "You in front of a backdrop, the slide over your shoulder" };
+  const modeOk = (m) => MODES.includes(m);
+  const modeOf = (rec) => (rec && modeOk(rec.cme) ? rec.cme : "content");   // what the room shows (an older presenter: the slide alone)
+  const cutMode = (m) => m === "standout" || m === "reporter";
+
+  // ---- the layout: pure geometry (a tile of W x H px, the slide's shape, the camera picture's shape, a cut-out or a box) -------
+  function presLayout(mode, W, H, ar, camAr, cut) {
+    ar = ar > 0 ? ar : 16 / 9; camAr = camAr > 0 ? camAr : 16 / 9;
+    const contain = (x, y, w, h, a) => { const ww = Math.min(w, h * a), hh = ww / a; return { x: x + (w - ww) / 2, y: y + (h - hh) / 2, w: ww, h: hh }; };
+    const L = { mode, slide: contain(0, 0, W, H, ar), cam: null, kind: "", bg: false, under: false, clip: null, radius: 0, stacked: false };
+    if (mode === "standout") {
+      const s = L.slide;
+      if (cut) { const fh = s.h * 0.38, fw = fh * camAr; L.cam = { x: s.x + s.w - fw * 0.78, y: s.y + s.h - fh, w: fw, h: fh }; L.kind = "cut"; L.clip = s; }   // a head-and-shoulders framing -> the person ~25-30 % of the slide's height
+      else { const bh = s.h * 0.28, bw = bh * 16 / 9, m = s.h * 0.03; L.cam = { x: s.x + s.w - bw - m, y: s.y + s.h - bh - m, w: bw, h: bh }; L.kind = "box"; L.radius = bh * 0.08; }
+    } else if (mode === "sbs") {
+      const p = Math.min(W, H) * 0.03, g = p, cA = 3 / 4;
+      const side = Math.max(1, Math.min((W - 2 * p - g) / (1 + cA / ar), (H - 2 * p) * ar));
+      const stack = Math.max(1, Math.min(W - 2 * p, (H - 2 * p - g) * ar / 1.6));
+      if (stack * stack > side * side * 1.25) {   // a tall tile (a phone): the slide on top, the presenter under it
+        const sh = stack / ar, ch = sh * 0.6, cw = Math.min(stack, ch * 16 / 9), y0 = (H - (sh + g + ch)) / 2;
+        L.slide = { x: (W - stack) / 2, y: y0, w: stack, h: sh };
+        L.cam = { x: (W - cw) / 2, y: y0 + sh + g, w: cw, h: ch };
+        L.stacked = true;
+      } else {
+        const sh = side / ar, cw = sh * cA, x0 = (W - (side + g + cw)) / 2, y0 = (H - sh) / 2;
+        L.slide = { x: x0, y: y0, w: side, h: sh };
+        L.cam = { x: x0 + side + g, y: y0, w: cw, h: sh };
+      }
+      L.kind = "box"; L.radius = Math.min(L.cam.w, L.cam.h) * 0.05;
+    } else if (mode === "reporter") {
+      L.bg = true; L.under = true;
+      if (H > W * 1.1) {   // a tall tile: the slide across the top, the presenter below it
+        const sw = W * 0.9, sh = sw / ar;
+        L.slide = { x: (W - sw) / 2, y: H * 0.05, w: sw, h: sh };
+        if (cut) { const top = L.slide.y + sh * 0.72, fh = Math.max(1, H - top), fw = fh * camAr; L.cam = { x: (W - fw) / 2, y: H - fh, w: fw, h: fh }; L.kind = "cut"; }
+        else { const bw = W * 0.84, bh = bw * 9 / 16; L.cam = { x: (W - bw) / 2, y: Math.min(H - bh - H * 0.04, L.slide.y + sh + H * 0.03), w: bw, h: bh }; L.kind = "box"; L.radius = bh * 0.06; L.under = false; }
+      } else {
+        const st = contain(0, 0, W, H, 16 / 9), sw = Math.min(st.w * 0.58, st.h * 0.62 * ar);
+        L.slide = { x: st.x + st.w * 0.045, y: st.y + st.h * 0.07, w: sw, h: sw / ar };
+        if (cut) { const fh = st.h * 0.86, fw = fh * camAr, cx = st.x + st.w * 0.7; L.cam = { x: cx - fw / 2, y: st.y + st.h - fh, w: fw, h: fh }; L.kind = "cut"; }
+        else { const bw = st.w * 0.4, bh = bw * 9 / 16; L.cam = { x: st.x + st.w * 0.955 - bw, y: st.y + st.h * 0.93 - bh, w: bw, h: bh }; L.kind = "box"; L.radius = bh * 0.06; }
+      }
+    }
+    return L;
+  }
+  // Kenton (review of 0.21.89): "Reporter backdrop = an ASI background instead of the navy wall" -- the fourteen built-in ASI
+  // backgrounds (assets/bg, as the camera background picker lists them: seven pictures, then seven moving ones drawn by their
+  // still). The presenter picks one (`pres.rbg`, an id from this list -- never a URL); every page draws it from its OWN
+  // assets. The first is the default. Until the picture has loaded (or for an id this page does not know) the navy wall.
+  const REPORTER_BGS = [
+    ["elgato-lights", "Elgato lights", "elgato-lights-bg.jpg", "elgato-lights.jpg"],
+    ["gray-home-office", "Gray home office", "gray-home-office-bg.jpg", "gray-home-office.jpg"],
+    ["light-blue-home-office", "Light blue home office", "light-blue-home-office-bg.jpg", "light-blue-home-office.jpg"],
+    ["livingroom-night", "Living room at night", "livingroom-night-bg.jpg", "livingroom-night.jpg"],
+    ["office-space", "Office space", "office-space-bg.jpg", "office-space.jpg"],
+    ["porch-sunset", "Porch sunset", "porch-sunset-bg.jpg", "porch-sunset.jpg"],
+    ["room-morning", "Room in the morning", "room-morning-bg.jpg", "room-morning.jpg"],
+    ["clock", "Clock", "clock.jpg", "clock.jpg"],
+    ["coffee-shop", "Coffee shop", "coffee-shop.jpg", "coffee-shop.jpg"],
+    ["lofi-bedroom", "Lo-fi bedroom", "lofi-bedroom.jpg", "lofi-bedroom.jpg"],
+    ["news-room", "News room", "news-room.jpg", "news-room.jpg"],
+    ["office", "Office", "office.jpg", "office.jpg"],
+    ["rainy-window", "Rainy window", "rainy-window.jpg", "rainy-window.jpg"],
+    ["view", "The view", "view.jpg", "view.jpg"],
+  ];
+  const RBG_DEFAULT = REPORTER_BGS[0][0];
+  const rbgOk = (id) => REPORTER_BGS.some((b) => b[0] === id);
+  const rbgImgs = new Map();   // id -> {img, ok}
+  function rbgImage(id) {
+    const b = REPORTER_BGS.find((x) => x[0] === id) || REPORTER_BGS[0];
+    let e = rbgImgs.get(b[0]);
+    if (!e) {
+      e = { img: new Image(), ok: false };
+      e.img.decoding = "async";
+      e.img.onload = () => { e.ok = true; for (const o of overlays.values()) o.key = ""; T("rbg-loaded", { who: b[0] }); schedule(); };
+      e.img.src = "/assets/bg/" + b[2];   // this page's own copy -- never fetched from the presenter
+      rbgImgs.set(b[0], e);
+    }
+    return e.ok && e.img.naturalWidth ? e.img : null;
+  }
+  function drawBackdrop(g, W, H, rbg) {
+    const img = rbgImage(rbg || RBG_DEFAULT);
+    if (img) {
+      const sc = Math.max(W / img.naturalWidth, H / img.naturalHeight), dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
+      g.imageSmoothingQuality = "high";
+      g.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      const sh = g.createLinearGradient(0, 0, 0, H);   // a touch of depth so the slide and the presenter stand off it
+      sh.addColorStop(0, "rgba(0,0,0,0.10)"); sh.addColorStop(1, "rgba(0,0,0,0.28)");
+      g.fillStyle = sh; g.fillRect(0, 0, W, H);
+      return;
+    }
+    navyBackdrop(g, W, H);
+  }
+  function navyBackdrop(g, W, H) {   // the stand-in while the picture loads: a deep navy wall with soft light
+    const gr = g.createLinearGradient(0, 0, 0, H);
+    gr.addColorStop(0, "#13355a"); gr.addColorStop(0.55, "#0b2240"); gr.addColorStop(1, "#06111f");
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    const rg = g.createRadialGradient(W * 0.7, H * 0.45, 0, W * 0.7, H * 0.45, Math.max(W, H) * 0.55);
+    rg.addColorStop(0, "rgba(64,150,220,0.38)"); rg.addColorStop(1, "rgba(64,150,220,0)");
+    g.fillStyle = rg; g.fillRect(0, 0, W, H);
+    g.save(); g.globalAlpha = 0.07; g.fillStyle = "#9fd4ff";
+    for (let i = 0; i < 6; i++) { const x = W * (0.08 + i * 0.17); g.beginPath(); g.moveTo(x, 0); g.lineTo(x + W * 0.05, 0); g.lineTo(x - W * 0.1, H); g.lineTo(x - W * 0.15, H); g.closePath(); g.fill(); }
+    g.restore();
+    g.fillStyle = "rgba(0,0,0,0.28)"; g.fillRect(0, H * 0.86, W, H * 0.14);   // the desk line
+  }
+  // the still (and backdrop) layer of a tile in a mode; Content only is exactly the old drawing
+  function drawLaid(cv, bmp, blank, mode, ar, label, rbg) {
+    if (mode === "content") return drawContain(cv, bmp, blank, label || "");
+    const g = cv.getContext("2d"), W = cv.width, H = cv.height, L = presLayout(mode, W, H, ar, 16 / 9, true), s = L.slide;
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
+    g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+    if (L.bg) drawBackdrop(g, W, H, rbg);
+    g.save();
+    if (L.bg) { g.shadowColor = "rgba(0,0,0,0.55)"; g.shadowBlur = Math.max(6, W * 0.02); g.shadowOffsetY = Math.max(2, W * 0.004); }
+    g.fillStyle = blank === "white" ? "#fff" : "#000"; g.fillRect(s.x, s.y, s.w, s.h);
+    g.restore();
+    if (bmp && !blank) { g.imageSmoothingQuality = "high"; g.drawImage(bmp, s.x, s.y, s.w, s.h); }
+    else if (!bmp && !blank && label) { g.fillStyle = "#9aa7b4"; g.font = Math.max(11, Math.round(s.h * 0.06)) + "px 'Segoe UI', system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(label, s.x + s.w / 2, s.y + s.h / 2); }
+    g.restore();
+  }
+  function drawBoxCam(g, img, iw, ih, r, rad, mirror) {   // a camera picture cover-cropped into a rounded box
+    const a = r.w / r.h, ia = iw / ih;
+    let sx = 0, sy = 0, sw = iw, sh = ih;
+    if (ia > a) { sw = ih * a; sx = (iw - sw) / 2; } else { sh = iw / a; sy = (ih - sh) / 2; }
+    const path = () => { g.beginPath(); if (g.roundRect) g.roundRect(r.x, r.y, r.w, r.h, rad); else g.rect(r.x, r.y, r.w, r.h); };
+    g.save(); g.shadowColor = "rgba(0,0,0,0.5)"; g.shadowBlur = Math.max(4, r.h * 0.06); path(); g.fillStyle = "#000"; g.fill(); g.restore();
+    g.save(); path(); g.clip();
+    if (mirror) { g.translate(r.x * 2 + r.w, 0); g.scale(-1, 1); }
+    g.drawImage(img, sx, sy, sw, sh, r.x, r.y, r.w, r.h);
+    g.restore();
+    g.save(); path(); g.strokeStyle = "rgba(255,255,255,0.75)"; g.lineWidth = Math.max(1, r.h * 0.01); g.stroke(); g.restore();
+  }
+  // the presenter's picture into a tile's camera layer: src = {kind: "cut" | "box", img, ar, iw, ih} or null (still starting)
+  function drawCam(g, L, src, W, H, label) {
+    if (!L.cam) return 0;
+    g.save();
+    if (L.under) { const s = L.slide; g.beginPath(); g.rect(0, 0, W, H); g.rect(s.x, s.y, s.w, s.h); g.clip("evenodd"); }   // the slide floats in front
+    if (L.clip) { g.beginPath(); g.rect(L.clip.x, L.clip.y, L.clip.w, L.clip.h); g.clip(); }
+    let n = 0;
+    if (src && src.kind === "cut" && L.kind === "cut") {
+      if (src.mirror) { g.translate(L.cam.x * 2 + L.cam.w, 0); g.scale(-1, 1); }
+      g.drawImage(src.img, L.cam.x, L.cam.y, L.cam.w, L.cam.h); n = 1;
+    } else if (src && src.kind === "box") { drawBoxCam(g, src.img, src.iw, src.ih, L.cam, L.radius || Math.min(L.cam.w, L.cam.h) * 0.06, !!src.mirror); n = 1; }
+    else if (L.kind === "box") {   // the camera is on its way: a quiet placeholder where it will be
+      const r = L.cam;
+      g.beginPath(); if (g.roundRect) g.roundRect(r.x, r.y, r.w, r.h, L.radius || 8); else g.rect(r.x, r.y, r.w, r.h);
+      g.fillStyle = "rgba(20,30,42,0.85)"; g.fill();
+      if (label) { g.fillStyle = "#9aa7b4"; g.font = Math.max(10, Math.round(r.h * 0.09)) + "px 'Segoe UI', system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(label, r.x + r.w / 2, r.y + r.h / 2); }
+    }
+    g.restore();
+    return n;
+  }
+  // ---- the cut-out back into a transparent person (WebGL2: colour = the left half, alpha = the right half's grey) ------------
+  function makeUnpacker() {
+    const cv = document.createElement("canvas");
+    const gl = cv.getContext("webgl2", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: true, antialias: false });
+    if (!gl) return null;
+    const VS = "#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0., 1.); }";
+    const FS = "#version 300 es\nprecision highp float; in vec2 uv; out vec4 o; uniform sampler2D F; uniform float ex;\n"
+      + "void main(){ float x = clamp(uv.x * 0.5, ex, 0.5 - ex); float y = 1. - uv.y;\n"
+      + "  vec3 c = texture(F, vec2(x, y)).rgb; float a = dot(texture(F, vec2(x + 0.5, y)).rgb, vec3(.299, .587, .114));\n"
+      + "  a = smoothstep(0.1, 0.9, a); o = vec4(min(c, vec3(a)), a); }";   // premultiplied (the colour was sent over black)
+    const mk = (t, s) => { const sh = gl.createShader(t); gl.shaderSource(sh, s); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+    let pr;
+    try { pr = gl.createProgram(); gl.attachShader(pr, mk(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr); if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr)); }
+    catch (e) { console.warn("KASTR pres: cut-out renderer", e); return null; }
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    const loc = gl.getAttribLocation(pr, "p"), uF = gl.getUniformLocation(pr, "F"), uE = gl.getUniformLocation(pr, "ex");
+    return {
+      cv, last: null, n: 0,
+      draw(f, fw, fh) {
+        const w = Math.max(1, fw >> 1);
+        if (cv.width !== w || cv.height !== fh) { cv.width = w; cv.height = fh; }
+        gl.viewport(0, 0, w, fh); gl.useProgram(pr);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+        try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, f); } catch { return false; }
+        gl.uniform1i(uF, 0); gl.uniform1f(uE, 0.5 / fw);
+        gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        this.n++;
+        return true;
+      },
+    };
+  }
+  let unp = null;
+  function unpackCut(f) {
+    if (!unp) unp = makeUnpacker() || { failed: true };
+    if (unp.failed) return null;
+    const fw = f.displayWidth || f.codedWidth || f.width, fh = f.displayHeight || f.codedHeight || f.height;
+    if (!fw || !fh) return null;
+    if (unp.last !== f) { if (!unp.draw(f, fw, fh)) return null; unp.last = f; }   // one unpack per frame, for every tile that shows it
+    return { kind: "cut", img: unp.cv, ar: (fw / 2) / fh };
+  }
+  // the presenter's picture as this page has it (viewers / backstage): the cut-out for Standout / Reporter while it is coming,
+  // else their ordinary camera (a box in the same place -- never nothing while the cut-out starts)
+  function camSourceFor(rec, mode) {
+    if (cutMode(mode) && rec.cut) {
+      let f = null; try { f = window.__presCutFrame?.(rec.cut) || null; } catch {}
+      const u = f ? unpackCut(f) : null;
+      if (u) return u;
+    }
+    let f2 = null; try { f2 = rec.cam ? window.__presCamFrame?.(rec.cam) || null : null; } catch {}
+    if (!f2) return null;
+    const iw = f2.displayWidth || f2.codedWidth || f2.videoWidth || f2.width, ih = f2.displayHeight || f2.codedHeight || f2.videoHeight || f2.height;
+    return iw && ih ? { kind: "box", img: f2, iw, ih, ar: iw / ih } : null;
+  }
+  const camLabel = (rec) => (rec && rec.cme && rec.cme !== "content" ? "Camera starting…" : "");
+  // a tile's camera layer, once per animation frame -> true while it shows a camera mode
+  function camLayer(o) {
+    const rec = o.rec, mode = modeOf(rec);
+    if (!o.ccv) return false;
+    if (mode === "content") { if (o.ccvOn) { o.ccvOn = false; fitCanvas(o.ccv); o.ccv.getContext("2d").clearRect(0, 0, o.ccv.width, o.ccv.height); o.camPainted = null; } return false; }
+    o.ccvOn = true;
+    const resized = fitCanvas(o.ccv);
+    const g = o.ccv.getContext("2d"), W = o.ccv.width, H = o.ccv.height;
+    const src = camSourceFor(rec, mode);
+    // a new picture (or a new size / mode) is drawn; the same frame again is not (the loop runs at the display's rate)
+    const fk = mode + "/" + rec.ar + "/" + (src ? (src.kind === "cut" ? "c" + (unp ? unp.n : 0) : "b" + (src.img.timestamp ?? Math.random())) : "none/" + (rec.cam || ""));
+    if (!resized && fk === o.camFk) return true;
+    o.camFk = fk;
+    g.clearRect(0, 0, W, H);
+    const L = presLayout(mode, W, H, rec.ar, src ? src.ar : 16 / 9, !!(src && src.kind === "cut"));
+    const n = drawCam(g, L, src, W, H, camLabel(rec));
+    const key = rec.id + "/" + mode + "/" + (src ? src.kind : "");
+    if (n && o.camPainted !== key) { o.camPainted = key; T("cam-paint", { id: rec.id, idx: rec.idx, who: "overlay", mode, kind: src.kind }); }
+    o.camKind = src ? src.kind : ""; o.camN = (o.camN || 0) + n;
+    return true;
+  }
+  const slideRectFn = (rec) => (W, H) => presLayout(modeOf(rec), W, H, rec.ar, 16 / 9, true).slide;
+  // which presenter cameras this page draws inside a presentation tile (not a tile of their own meanwhile) and which cut-outs
+  // it subscribes -- only presentations whose tile is here
+  let hideSig = "", cutSig = "";
+  function presCamSync() {
+    const hide = [], cuts = [];
+    for (const o of overlays.values()) {
+      const r = o.rec, m = modeOf(r);
+      if (m === "content" || !r) continue;
+      if (r.cam) hide.push(r.cam);
+      if (cutMode(m) && r.cut) cuts.push(r.cut);
+    }
+    // backstage: the preview in my presenter view draws the same pictures
+    const hs = hide.sort().join("|"), cs = cuts.sort().join("|");
+    if (hs !== hideSig) { hideSig = hs; try { window.__presCamHide?.(hide); } catch {} T("cam-hide", { who: hs }); }
+    if (cs !== cutSig) { cutSig = cs; try { window.__presCutWant?.(cuts); } catch {} T("cut-want", { who: cs }); }
+  }
+
+  // ---- the presenter: the chosen mode, the camera, the cut-out, backstage's mic / camera control ------------------------------
+  function camNow() { try { return window.__presCut?.camInfo?.() || null; } catch { return null; } }
+  function modeInit(m) {
+    const ci = camNow();
+    m.cm = ci && ci.live ? "standout" : "content";   // Kenton: Standout when the camera is on, else Content only
+    m.avOk = true; m.avBp = false; m.avNote = null; m.ack = null;
+    m.rbg = RBG_DEFAULT;   // Reporter's backdrop: the first ASI background
+    m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", mic: "none", camSt: "off", cutOn: false, sig: "", by: "" };
+    T("mode", { id: m.id, who: m.cm, why: "start" });
+    modeTick();
+  }
+  function modeFields() {
+    const m = mine;
+    if (!m || !m.ms) return {};
+    const s = m.ms;
+    return { cm: m.cm, cme: s.eff, cam: s.cam, cut: s.cut, nocut: s.nocut, cwhy: s.why, rbg: m.rbg || RBG_DEFAULT,
+             av: { m: s.mic, c: s.camSt, bp: !!m.avBp, ok: !!m.avOk, n: m.avNote ? m.avNote.t : "", na: m.avNote ? m.avNote.at : 0, nb: m.avNote ? m.avNote.by : "" },
+             ack: m.ack || null };
+  }
+  function modeTick() {
+    const m = mine;
+    if (!m || !m.ms) return;
+    const s = m.ms, ci = camNow(), C = window.__presCut;
+    let av = null; try { av = window.__presAV?.state?.() || null; } catch {}
+    const live = !!(ci && ci.live);
+    if (m.avBp && (!ci || (live && Date.now() - (m.avBpAt || 0) > 4000))) m.avBp = false;   // the camera is back (whoever resumed it), or gone (the pause takes a moment to land)
+    const eff = live ? m.cm : "content";
+    const wantCut = live && cutMode(eff) && !!C && ci.canCut !== false;
+    if (wantCut && !s.cutOn) { s.cutOn = true; try { C.start(); } catch (e) { console.warn("KASTR pres: cut-out", e); } T("cut-start", { id: m.id }); }
+    if (!wantCut && s.cutOn) { s.cutOn = false; try { C.stop(); } catch {} T("cut-stop", { id: m.id }); }
+    let cs = null; try { cs = s.cutOn ? C.state() : null; } catch {}
+    s.eff = eff;
+    s.cam = live ? ci.path : "";
+    s.cut = cs && cs.ready ? cs.path : "";
+    s.nocut = ci && ci.canCut === false ? (ci.why || "this computer cannot cut you out of your background") : !C ? "this KASTR cannot" : "";
+    s.why = live ? "" : m.avBp ? "bs" : "off";
+    s.mic = av ? av.mic : "none";
+    s.camSt = !ci ? "off" : ci.live ? "on" : m.avBp ? "paused" : "off";
+    s.hw = !!(av && av.hw);
+    const sig = JSON.stringify([m.cm, m.rbg, s.eff, s.cam, s.cut, s.nocut, s.why, s.mic, s.camSt, m.avBp, m.avOk, m.avNote && m.avNote.at, m.ack && m.ack.s]);
+    if (sig !== s.sig) {
+      const first = !s.sig;
+      s.sig = sig;
+      if (!first) { T("mode-pub", { id: m.id, who: s.eff }); publishVid(); }
+      try { view.paint(); } catch {}
+    }
+  }
+  setInterval(() => { try { modeTick(); } catch (e) { console.warn("KASTR pres: modes", e); } }, 300);
+  function modeEnd(m) {
+    if (!m || !m.ms) return;
+    if (m.ms.cutOn) { m.ms.cutOn = false; try { window.__presCut?.stop(); } catch {} }
+    try { window.__presCut?.camVideoStop?.(); } catch {}
+  }
+  function setMode(cm, by) {   // the presenter's own choice, or an accepted backstage one
+    const m = mine;
+    if (!m || !modeOk(cm) || !m.ms) return false;
+    m.modeBy = by || myPerson();
+    if (m.cm === cm) return true;
+    m.cm = cm;
+    T("mode", { id: m.id, who: cm, by: m.modeBy });
+    modeTick();
+    return true;
+  }
+  function avNotice(m, text, by) {
+    m.avNote = { t: text, at: Date.now(), by };
+    presNote(text, 6000, "event");   // the presenter view's notice line -- or a toast on the main page when the view is closed
+  }
+  function applyModeAv(ctl, who) {   // a backstage person's mode or mic / camera request (applyIntent checked: backstage, newer seq)
+    const m = mine;
+    const name = nameOfPerson(who);
+    if (ctl.cm !== undefined) {
+      if (!modeOk(ctl.cm)) { T("drop", { id: m.id, who }); return; }
+      T("mode-apply", { id: m.id, who: ctl.cm, by: who });
+      setMode(ctl.cm, who);
+      return;
+    }
+    const op = ctl.av && ctl.av.op;
+    const answer = (ok, why) => { m.ack = { p: who, s: ctl.seq, ok, why: why || "" }; T(ok ? "av-apply" : "av-deny", { id: m.id, who: op, by: who, why }); modeTick(); };
+    if (!["mute", "unmute", "pause", "resume"].includes(op)) return answer(false, "not a mic or camera request");
+    if (!m.avOk) return answer(false, nameOfPerson(myPerson()) + " turned off backstage control of their mic and camera");
+    const AV = window.__presAV;
+    if (!AV) return answer(false, "this KASTR cannot");
+    if (op === "mute" || op === "unmute") {
+      const r = AV.mic(op === "mute");
+      if (!r || !r.ok) return answer(false, (r && r.why) || "the microphone is not available");
+      if (!r.noop) avNotice(m, (op === "mute" ? "Muted by " : "Unmuted by ") + name, who);
+      return answer(true);
+    }
+    const ci = camNow();
+    const me = nameOfPerson(myPerson());
+    if (!ci) return answer(false, me + "'s camera is off");
+    if (op === "pause") {
+      if (!ci.live) return answer(true);   // already not sending a picture: nothing to do
+      const r = AV.cam(true);
+      if (!r || !r.ok) return answer(false, (r && r.why) || "the camera did not pause");
+      m.avBp = true; m.avBpAt = Date.now();
+      if (!r.noop) avNotice(m, "Video paused by " + name, who);
+      return answer(true);
+    }
+    if (ci.live) return answer(true);   // resume: already on
+    if (!m.avBp) return answer(false, me + "'s camera is off");   // backstage resumes only what backstage paused
+    const r = AV.cam(false);
+    if (!r || !r.ok) return answer(false, (r && r.why) || "the camera did not resume");
+    m.avBp = false;
+    if (!r.noop) avNotice(m, "Video resumed by " + name, who);
+    return answer(true);
+  }
+  // backstage: the requests (presCtl, like Next / Back)
+  function sendModeIntent(deckId, cm) {
+    const bk = backstage.get(deckId);
+    if (!bk || !modeOk(cm) || !bk.rec.cm) return false;   // a presenter without modes (older KASTR): never asked
+    ctlSeq++;
+    stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), cm });
+    bk.optCm = cm; bk.optCmAt = Date.now();
+    T("mode-intent", { id: deckId, who: cm });
+    return true;
+  }
+  function sendAvIntent(deckId, op) {
+    const bk = backstage.get(deckId);
+    if (!bk || !bk.rec.av || !["mute", "unmute", "pause", "resume"].includes(op)) return false;
+    ctlSeq++;
+    stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), av: { op } });
+    bk.avAsk = { op, seq: ctlSeq, at: Date.now() };
+    T("av-intent", { id: deckId, who: op });
+    return true;
+  }
+
+  // ---- the presenter view: the mode picker, a live preview of what the room sees, backstage's mic / camera ---------------
+  const ICON = {
+    content: '<rect x="1" y="1" width="30" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="5" y="4" width="22" height="12" rx="1" fill="currentColor" opacity=".55"/>',
+    standout: '<rect x="1" y="1" width="30" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="4" y="4" width="18" height="11" rx="1" fill="currentColor" opacity=".45"/><circle cx="25" cy="11" r="2.6" fill="currentColor"/><path d="M20 19c0-3.4 2.2-5.2 5-5.2s5 1.8 5 5.2z" fill="currentColor"/>',
+    sbs: '<rect x="1" y="1" width="30" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="3.5" y="5" width="16" height="10" rx="1" fill="currentColor" opacity=".45"/><rect x="21" y="5" width="7.5" height="10" rx="1.2" fill="currentColor" opacity=".25"/><circle cx="24.75" cy="9" r="1.7" fill="currentColor"/><path d="M21.6 15c0-2.3 1.4-3.4 3.15-3.4s3.15 1.1 3.15 3.4z" fill="currentColor"/>',
+    reporter: '<rect x="1" y="1" width="30" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="3" y="3" width="14" height="8.5" rx="1" fill="currentColor" opacity=".55"/><circle cx="22" cy="9.5" r="3.2" fill="currentColor"/><path d="M15 19c0-4.6 3.1-6.8 7-6.8s7 2.2 7 6.8z" fill="currentColor"/>',
+  };
+  const MODE_CSS = `
+  .pane canvas.prescam { position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none; }
+  #presView .modebox { border:1px solid #1f2a36; border-radius:6px; padding:8px 10px; background:#0f1722; display:grid; gap:8px;
+    grid-template-columns: minmax(0, 1fr) minmax(130px, 220px); align-items:start; }
+  #presView .modebox .mhead { grid-column:1 / -1; display:flex; gap:8px; align-items:center; }
+  #presView .modebox .modes { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px; }
+  #presView .modebox .modes button { flex-direction:column; gap:3px; padding:6px 4px; font-size:12px; min-width:0; }
+  #presView .modebox .modes button svg { width:40px; height:25px; display:block; color:#8fd3ff; }
+  #presView .modebox .modes button.on { background:#0b5c86; border-color:#1592d1; }
+  #presView .modebox .modes button.on svg { color:#fff; }
+  #presView .modebox .modes button.eff { box-shadow: inset 0 0 0 1px #ffcf7a; }
+  #presView .modebox .pvwrap { position:relative; }
+  #presView .modebox canvas.pvcv { width:100%; aspect-ratio:16/9; display:block; background:#000; border-radius:4px; box-shadow:0 0 0 1px #2c3b4b; }
+  #presView .modebox .pvtag { position:absolute; left:6px; bottom:5px; font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:#cfe3f3;
+    background:rgba(0,0,0,.55); padding:1px 6px; border-radius:3px; pointer-events:none; }
+  #presView .modebox .mwhy { grid-column:1 / -1; font-size:13px; color:#ffcf7a; min-height:0; }
+  #presView .modebox .mwhy:empty { display:none; }
+  #presView .modebox .avrow { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; }
+  #presView .modebox .avrow:empty { display:none; }
+  #presView .modebox .avsw { display:inline-flex; flex-direction:row; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-size:13px; color:#e6edf3; margin:0; }
+  #presView .modebox .avsw input { display:inline-block; width:auto; height:auto; margin:0; flex:none; }
+  #presView .modebox .avnote { color:#8fd3ff; }
+  #presView .modebox .avwhy { color:#ffcf7a; flex-basis:100%; }
+  #presView .modebox .avwhy:empty { display:none; }
+  #presView .modebox .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
+  #presView .modebox .avrow button:disabled { opacity:.5; cursor:not-allowed; }
+  #presView .modebox .rbgs { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; }
+  #presView .modebox .rbgs button { padding:0; width:52px; height:30px; border-radius:4px; overflow:hidden; border:2px solid transparent; background:#000; }
+  #presView .modebox .rbgs button img { width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; }
+  #presView .modebox .rbgs button.on { border-color:#1592d1; }
+  #presView .pvnote { display:flex; gap:10px; align-items:center; padding:6px 14px; font-size:13px; background:#2a2110; color:#ffcf7a; border-bottom:1px solid #4a3a18; }
+  #presView .pvnote[hidden] { display:none; }
+  #presView .pvnote[data-level="event"] { background:#0f2333; color:#8fd3ff; border-bottom-color:#1d3a52; }
+  #presView .pvnote .t { flex:1; }
+  #presView .pvnote button { padding:2px 8px; font-size:12px; }
+  body:has(#presView.show) #kToast { top:56px; bottom:auto; left:14px; transform:none; max-width:min(52vw, 560px); }   /* the room's other toasts: over the live slide's corner, clear of the picker, preview and controls */
+  body:has(#presView.show) #kToast.show { transform:none; }
+  @media (max-width: 760px) { #presView .modebox { grid-template-columns: 1fr; } #presView .modebox .modes { grid-template-columns:repeat(4, minmax(0, 1fr)); } }`;
+  (() => { const st = document.createElement("style"); st.id = "presModeCss"; st.textContent = MODE_CSS; document.head.appendChild(st); })();
+  let mui = null;   // the picker's elements (built into the presenter view once)
+  function modeUiBuild(root) {
+    if (mui || !root) return;
+    const box = document.createElement("div"); box.className = "modebox";
+    box.innerHTML = `<div class="mhead cap">Presenter mode — everyone sees the same</div>
+      <div class="modes">${MODES.map((k) => `<button type="button" data-mode="${k}" title="${MODE_TIP[k]}"><svg viewBox="0 0 32 20" aria-hidden="true">${ICON[k]}</svg><span>${MODE_NAME[k]}</span></button>`).join("")}</div>
+      <div class="pvwrap"><canvas class="pvcv"></canvas><span class="pvtag">What the room sees</span></div>
+      <div class="rbgs" title="Reporter's backdrop -- everyone sees the same">${REPORTER_BGS.map((b) => `<button type="button" data-rbg="${b[0]}" title="${b[1]}"><img alt="" src="/assets/bg/${b[3]}" loading="lazy"></button>`).join("")}</div>
+      <div class="mwhy"></div><div class="avrow"></div>`;
+    const side = root.querySelector(".side");
+    if (!side) return;
+    side.insertBefore(box, side.firstChild);
+    mui = { box, pv: box.querySelector(".pvcv"), why: box.querySelector(".mwhy"), av: box.querySelector(".avrow"), btns: [...box.querySelectorAll(".modes button")], avSig: "", pvAt: 0, still: { key: "", bmp: null } };
+    for (const b of mui.btns) b.addEventListener("click", () => window.__pres.mode(b.dataset.mode));
+    mui.rbgs = box.querySelector(".rbgs");
+    for (const b of mui.rbgs.querySelectorAll("button")) b.addEventListener("click", () => window.__pres.reporterBg(b.dataset.rbg));
+    // the presenter view's own notice line, under its top bar (deck warnings, backstage's changes): it never covers the picker
+    mui.note = document.createElement("div"); mui.note.className = "pvnote"; mui.note.hidden = true;
+    const ph = root.querySelector(".ph");
+    if (ph) ph.after(mui.note);
+  }
+  // what the presenter view's deck shows in modes: {role, rec-like, chosen, eff}
+  function modeView() {
+    const v = view.deck();
+    if (!v) return null;
+    if (v.role === "presenter") {
+      const s = mine.ms || {};
+      return { v, role: "presenter", cm: mine.cm, rbg: mine.rbg, eff: s.eff || "content", why: s.why, nocut: s.nocut, av: modeFields().av, cutOn: !!s.cut, rec: null };
+    }
+    const bk = backstage.get(v.id);
+    const rec = bk && bk.rec;
+    if (!rec) return null;
+    const opt = bk.optCm && Date.now() - bk.optCmAt < 1500 && rec.cm !== bk.optCm ? bk.optCm : null;
+    return { v, role: "backstage", cm: opt || rec.cm || "content", rbg: rec.rbg, eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", av: rec.av || null, cutOn: !!rec.cut, rec, bk, has: !!rec.cm };
+  }
+  function modeUiPaint() {
+    if (!mui) return;
+    const mv = modeView();
+    mui.box.style.display = mv && (mv.role === "presenter" || mv.has) ? "" : "none";
+    if (!mv) return;
+    mui.rbgs.style.display = mv.role === "presenter" && mv.cm === "reporter" ? "" : "none";   // Kenton: the presenter picks, shown in Reporter
+    for (const b of mui.rbgs.children) b.classList.toggle("on", b.dataset.rbg === (mv.rbg || RBG_DEFAULT));
+    for (const b of mui.btns) { b.classList.toggle("on", b.dataset.mode === mv.cm); b.classList.toggle("eff", b.dataset.mode === mv.eff && mv.eff !== mv.cm); }
+    const who = mv.role === "presenter" ? "" : nameOfPerson(personOfPath(mv.bk.path));
+    let why = "";
+    if (mv.cm !== "content" && mv.eff === "content") {
+      if (mv.why === "bs") why = (mv.av && mv.av.nb ? "Video paused by " + nameOfPerson(mv.av.nb) : "Video paused by backstage") + " — showing the slide only";
+      else why = (mv.role === "presenter" ? "Camera off" : who + "'s camera is off") + " — showing the slide only";
+    } else if (cutMode(mv.eff) && mv.nocut) {
+      why = (mv.role === "presenter" ? "Your camera cannot be cut out here (" + mv.nocut + ")" : who + "'s camera cannot be cut out") + " — the room sees it in a box";
+    }
+    if (mui.why.textContent !== why) mui.why.textContent = why;
+    paintAvRow(mv, who);
+  }
+  let noteT = 0;
+  function presNote(msg, ms, level) {   // the presenter view's notice line while it is open (never on top of its controls), else a toast
+    if (!(mui && mui.note && view.isOpen())) { toast(msg, ms, level); return; }
+    const n = mui.note;
+    n.dataset.level = level || "event";
+    n.replaceChildren();
+    const t = document.createElement("span"); t.className = "t"; t.textContent = msg;
+    const x = document.createElement("button"); x.type = "button"; x.textContent = "OK"; x.title = "Hide this notice";
+    x.addEventListener("click", () => { n.hidden = true; });
+    n.append(t, x); n.hidden = false;
+    clearTimeout(noteT); noteT = setTimeout(() => { n.hidden = true; }, ms || 8000);
+    T("note", { who: level || "event" });
+  }
+  const ago = (at) => { const s = Math.max(0, Math.round((Date.now() - at) / 1000)); return s < 60 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
+  function paintAvRow(mv, who) {
+    const row = mui.av, av = mv.av || {};
+    if (mv.role === "presenter") {
+      const sig = "p|" + (mine.avOk ? 1 : 0) + "|" + (av.n || "") + "|" + Math.floor((Date.now() - (av.na || 0)) / 10000) + "|" + av.m + "|" + av.c;
+      if (sig === mui.avSig) return;
+      mui.avSig = sig;
+      row.replaceChildren();
+      // my own mic + camera, here too (the presenter view covers the room's toolbar): they press the toolbar's own buttons
+      const tb = (id) => () => { try { document.getElementById(id)?.click(); } catch {} setTimeout(modeTick, 50); };
+      const pm = document.createElement("button"); pm.type = "button"; pm.className = "pmic" + (av.m === "on" ? "" : " off");
+      pm.textContent = av.m === "on" ? "Mic on" : av.m === "muted" ? "Mic muted" : "No mic"; pm.title = "Your microphone (the same as Mic in the room's toolbar)";
+      pm.addEventListener("click", tb("topMicBtn"));
+      const pc = document.createElement("button"); pc.type = "button"; pc.className = "pcam" + (av.c === "on" ? "" : " off");
+      pc.textContent = av.c === "on" ? "Camera on" : "Camera off"; pc.title = "Your camera (the same as Camera in the room's toolbar)";
+      pc.addEventListener("click", tb("topCamBtn"));
+      row.append(pm, pc);
+      const lab = document.createElement("label"); lab.className = "avsw"; lab.title = "Your backstage people can mute / unmute your mic and pause / resume your video (this presentation only)";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "avok"; cb.checked = !!mine.avOk;
+      cb.addEventListener("change", () => window.__pres.avSwitch(cb.checked));
+      lab.append(cb, document.createTextNode("Backstage can control my mic and camera"));
+      row.append(lab);
+      if (av.n) { const n = document.createElement("span"); n.className = "avnote"; n.textContent = av.n + " · " + ago(av.na); row.append(n); }
+      return;
+    }
+    if (!mv.av) { if (mui.avSig !== "none") { mui.avSig = "none"; row.replaceChildren(); } return; }
+    const ask = mv.bk.avAsk && Date.now() - mv.bk.avAsk.at < 4000 ? mv.bk.avAsk : null;
+    const ack = mv.rec.ack && mv.rec.ack.p === myPerson() ? mv.rec.ack : null;
+    const lastAck = ack && mv.bk.avAsk && ack.s === mv.bk.avAsk.seq ? ack : null;
+    const sig = "b|" + JSON.stringify([av, ask && ask.seq, lastAck && [lastAck.s, lastAck.ok, lastAck.why], who]);
+    if (sig === mui.avSig) return;
+    mui.avSig = sig;
+    row.replaceChildren();
+    const off = !av.ok, offWhy = who + " turned off backstage control of their mic and camera";
+    const mic = document.createElement("button"); mic.type = "button"; mic.className = "avmic";
+    const micOn = av.m === "on";
+    mic.textContent = av.m === "none" ? "No microphone" : micOn ? "Mic on · Mute" : "Mic muted · Unmute";
+    mic.classList.toggle("off", av.m === "muted");
+    mic.disabled = off || av.m === "none" || (ask && /mute/.test(ask.op) && !lastAck);
+    mic.title = off ? offWhy : av.m === "none" ? who + " has no microphone on" : micOn ? "Mute " + who + "'s microphone (straight away)" : "Unmute " + who + "'s microphone (straight away)";
+    mic.addEventListener("click", () => window.__pres.av(micOn ? "mute" : "unmute"));
+    const cam = document.createElement("button"); cam.type = "button"; cam.className = "avcam";
+    cam.textContent = av.c === "on" ? "Video on · Pause" : av.c === "paused" ? "Video paused · Resume" : "Camera off";
+    cam.classList.toggle("off", av.c !== "on");
+    cam.disabled = off || av.c === "off" || (ask && /pause|resume/.test(ask.op) && !lastAck);
+    cam.title = off ? offWhy : av.c === "off" ? who + "'s camera is off" : av.c === "on" ? "Pause " + who + "'s video (the room sees the slide only)" : "Resume " + who + "'s video";
+    cam.addEventListener("click", () => window.__pres.av(av.c === "on" ? "pause" : "resume"));
+    row.append(mic, cam);
+    const why = document.createElement("span"); why.className = "avwhy";
+    why.textContent = off ? offWhy : lastAck && !lastAck.ok ? "Not done: " + lastAck.why : av.c === "off" ? who + "'s camera is off" : "";
+    row.append(why);
+  }
+  // the preview: the same composition the room's tiles draw, small, ~12 a second, while the presenter view is open
+  function modeUiFrame() {
+    if (!mui || !view.isOpen()) return false;
+    const mv = modeView();
+    if (!mv || mui.box.style.display === "none") return false;
+    const now = performance.now();
+    if (now - (mui.paintAt || 0) > 1000) { mui.paintAt = now; modeUiPaint(); }   // the notice's age, backstage's buttons
+    if (now - mui.pvAt < 80) return true;
+    mui.pvAt = now;
+    const cv = mui.pv;
+    fitCanvas(cv);
+    const W = cv.width, H = cv.height, v = mv.v, ar = v.ar || 16 / 9;
+    const key = v.id + "/" + v.idx;
+    if (mui.still.key !== key) {
+      mui.still.key = key; mui.still.bmp = null;
+      stillFor(v.id, v.idx).then((b) => { if (mui.still.key === key) mui.still.bmp = b; }).catch(() => {});
+    }
+    drawLaid(cv, mui.still.bmp, v.blank, mv.eff, ar, "", mv.rbg);
+    const g = cv.getContext("2d");
+    // the slide's video in its spot (moved with the slide)
+    let items = [];
+    if (!v.blank) {
+      if (mv.role === "presenter") items = [...mine.vids.values()].filter((e) => e.i === mine.idx && e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+      else if (mv.rec.idx === v.idx) items = (mv.rec.vids || []).filter((x) => x.i === mv.rec.idx && x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+    }
+    if (items.length) { const R = presLayout(mv.eff, W, H, ar, 16 / 9, true).slide; for (const it of items) if (it.src) { try { g.drawImage(it.src, R.x + it.x * R.w, R.y + it.y * R.h, it.w * R.w, it.h * R.h); } catch {} } }
+    if (mv.eff !== "content") {
+      let src = null;
+      if (mv.role === "presenter") {
+        const P = window.__presCut;
+        const p = cutMode(mv.eff) && mv.cutOn ? P?.person?.() : null;
+        if (p) src = { kind: "cut", img: p.img, ar: p.ar, mirror: p.mirror };
+        else { const vid = P?.camVideo?.(); if (vid) src = { kind: "box", img: vid, iw: vid.videoWidth, ih: vid.videoHeight, ar: vid.videoWidth / vid.videoHeight }; }
+      } else src = camSourceFor(mv.rec, mv.eff);
+      const L = presLayout(mv.eff, W, H, ar, src ? src.ar : 16 / 9, !!(src && src.kind === "cut"));
+      if (drawCam(g, L, src, W, H, "Camera starting…") && mui.pvKey !== key + "/" + mv.eff) { mui.pvKey = key + "/" + mv.eff; T("pv-paint", { id: v.id, who: mv.role, mode: mv.eff, kind: src && src.kind }); }
+    }
+    return true;
+  }
+  function modeState() {
+    const m = mine;
+    return {
+      mine: m && m.ms ? { cm: m.cm, eff: m.ms.eff, cam: m.ms.cam, cut: m.ms.cut, nocut: m.ms.nocut, why: m.ms.why, mic: m.ms.mic, camSt: m.ms.camSt, avOk: m.avOk, avBp: m.avBp,
+                          note: m.avNote, ack: m.ack, cutState: (() => { try { return window.__presCut?.state?.() || null; } catch { return null; } })() } : null,
+      tiles: [...overlays.entries()].map(([p, o]) => ({ path: p, mode: modeOf(o.rec), cm: o.rec.cm || null, rbg: o.rec.rbg || null, rbgLoaded: !!(o.rec.rbg && rbgImgs.get(o.rec.rbg)?.ok), cam: o.rec.cam || "", cut: o.rec.cut || "", kind: o.camKind || "", n: o.camN || 0,
+                                                        av: o.rec.av || null, ack: o.rec.ack || null })),
+      hide: hideSig ? hideSig.split("|") : [], cuts: cutSig ? cutSig.split("|") : [], unpacked: unp && !unp.failed ? unp.n : 0,
+      ui: mui ? { shown: mui.box.style.display !== "none", on: (mui.btns.find((b) => b.classList.contains("on")) || {}).dataset?.mode || "", why: mui.why.textContent,
+                  av: mui.av.textContent, buttons: [...mui.av.querySelectorAll("button")].map((b) => ({ c: b.className, t: b.textContent, d: b.disabled, title: b.title })) } : null,
+    };
   }
 
   // ---- the loop ----------------------------------------------------------------------------------------------------------
@@ -1433,6 +2046,19 @@
       sendVidIntent(bk.rec.id, r, op || (r.pl ? "pause" : "play"), t);
       return true;
     },
+    // 0.21.89: presenter modes (the presenter sets it; backstage asks; a viewer: false) + backstage's mic / camera requests
+    mode: (cm) => {
+      if (!modeOk(cm)) return false;
+      if (mine) return setMode(cm, myPerson());
+      const bk = [...backstage.values()].find((b) => b.keys);
+      return bk ? sendModeIntent(bk.rec.id, cm) : false;
+    },
+    av: (op) => { if (mine) return false; const bk = [...backstage.values()].find((b) => b.keys); return bk ? sendAvIntent(bk.rec.id, op) : false; },
+    avSwitch: (on) => { if (!mine || !mine.ms) return false; mine.avOk = !!on; T("av-switch", { id: mine.id, who: on ? "on" : "off" }); modeTick(); return true; },
+    reporterBg: (id) => { if (!mine || !mine.ms || !rbgOk(id)) return false; mine.rbg = id; T("rbg", { id: mine.id, who: id }); modeTick(); return true; },   // the presenter only
+    reporterBgs: () => REPORTER_BGS.map((b) => b[0]),
+    modes: () => modeState(),
+    layout: presLayout,   // rig: the geometry alone
     trace,
     state: () => ({
       me: myPerson(),
@@ -1449,7 +2075,7 @@
       pk: !!pkPublished,
       // 0.21.87: the presenter's slide videos; what each tile drew of a slide's video
       vids: mine ? [...mine.vids.values()].map((e) => ({ k: e.k, i: e.i, v: e.v, auto: !!e.sv.auto, shareId: e.shareId, path: e.path, pl: e.pl, st: e.st, t: e.t, err: e.err })) : [],
-      deckVideos: mine ? (mine.src.videos || []).map((l) => l.map((v) => (v.id ? v.id : "linked:" + v.linked))) : null,
+      deckVideos: mine ? (mine.src.videos || []).map((l) => l.map((v) => (v.id ? v.id + (v.kind === "audio" ? ":audio" : "") : "linked:" + v.linked))) : null,
       vidDrawn: [...overlays.entries()].map(([p, o]) => ({ path: p, drawn: o.vDrawn || 0, last: o.vLast || 0, painted: o.vPainted || null })),
     }),
     __drawSlide: drawSlide,   // rig: render a scene slide without a room

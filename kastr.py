@@ -2445,6 +2445,11 @@ def launch(browser, url, page):
     cannot run KASTR, and opening it there only made a failure look like success.
     """
     LAUNCH_ERROR[0] = None
+    if USER_BROWSER[0] and not MACOS:   # 0.21.88: the KASTR windows already open, so the new one can be told apart
+        try:
+            _PRE_WINDOWS[0] = set(kastr_windows_now(any_size=True))   # a minimized KASTR window is an old one too
+        except Exception:
+            _PRE_WINDOWS[0] = None
     attempts = [(browser, False, None)]
     if _is_bundled(browser):
         bad, why = sandbox_unusable(browser)
@@ -2488,8 +2493,137 @@ def launch(browser, url, page):
 
 
 def _maximize_later(proc):
-    if saved_maximized() and not MACOS and not USER_BROWSER[0]:   # the person's own browser: never touch their windows
+    if MACOS:
+        return
+    if USER_BROWSER[0]:   # 0.21.88: the person's own browser -- only the ONE new KASTR window, never their other windows
+        before = _PRE_WINDOWS[0]
+        if before is not None:
+            threading.Thread(target=place_user_window, args=(before,), daemon=True, name="kastr-place").start()
+        return
+    if saved_maximized():
         threading.Thread(target=maximize_when_shown, args=(proc,), kwargs={"profile": _ACTIVE_PROFILE}, daemon=True, name="kastr-maximize").start()
+
+
+# 0.21.88 (Kenton: "The window still isn't staying maximized." -- his KASTR opens in his own default browser, Brave): in that
+# mode the launcher gives the browser no window flags at all (they would apply to the whole browser, and a running one ignores
+# them), so nothing ever put the window back. Now the launcher notes the KASTR windows already open, and once the NEW one
+# shows it maximizes it, or puts it back where it was -- only that window, found by its title within 30 s of the launch.
+_PRE_WINDOWS = [None]
+
+
+def _saved_geom():
+    try:
+        with open(window_file(), encoding="utf-8") as f:
+            g = json.load(f)
+        return g if isinstance(g, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _win_kastr_windows(any_size=False):
+    """Windows: visible top-level Chromium windows whose title names KASTR -> {hwnd: title} (any_size: minimized ones too)."""
+    import ctypes
+    from ctypes import wintypes as wt
+    user32 = ctypes.windll.user32
+    out = {}
+    proc_t = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def cb(hwnd, _):
+        try:
+            if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4):
+                return True
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, cls, 64)
+            if not cls.value.startswith("Chrome_WidgetWin"):
+                return True
+            t = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, t, 256)
+            r = wt.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            if "KASTR" in t.value and (any_size or (r.right - r.left >= 200 and r.bottom - r.top >= 150 and not user32.IsIconic(hwnd))):
+                out[int(hwnd or 0)] = t.value
+        except Exception:
+            pass
+        return True
+    user32.EnumWindows(proc_t(cb), 0)
+    return out
+
+
+def kastr_windows_now(any_size=False):
+    if WINDOWS:
+        return _win_kastr_windows(any_size)
+    if sys.platform.startswith("linux"):
+        import kastr_x11
+        if kastr_x11.session_kind() != "x11":
+            return {}
+        return kastr_x11.kastr_windows(any_size)
+    return {}
+
+
+def _win_place(hwnd, geom):
+    """Maximize, or put back the saved bounds (the page reports CSS pixels: scaled by the window's DPI)."""
+    import ctypes
+    user32 = ctypes.windll.user32
+    if geom.get("maximized") is True:
+        if not user32.IsZoomed(hwnd):
+            user32.ShowWindow(hwnd, 3)   # SW_MAXIMIZE
+        return "maximized"
+    try:
+        x, y, w, h = int(geom["x"]), int(geom["y"]), int(geom["w"]), int(geom["h"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    if w < 320 or h < 240 or w > 20000 or h > 20000 or x <= -30000 or y <= -30000:
+        return ""
+    try:
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))   # per-monitor v2 on this thread: physical pixels
+        s = (user32.GetDpiForWindow(hwnd) or 96) / 96.0
+    except Exception:
+        s = 1.0
+    if user32.IsZoomed(hwnd) or user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+    user32.SetWindowPos(hwnd, 0, int(x * s), int(y * s), int(w * s), int(h * s), 0x0004 | 0x0010)   # NOZORDER | NOACTIVATE
+    return "placed"
+
+
+def place_user_window(before, limit=30.0):
+    geom = _saved_geom()
+    if not geom or not window_geom_ok_launcher(geom):
+        return
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < limit:
+        try:
+            new = [h for h in kastr_windows_now() if h not in before]
+        except Exception as e:
+            note("window: could not look for the KASTR window (%s)" % e)
+            return
+        if new:
+            try:
+                if WINDOWS:
+                    done = _win_place(new[0], geom)
+                elif geom.get("maximized") is True:
+                    import kastr_x11
+                    kastr_x11.maximize_xid(new[0])
+                    done = "maximized"
+                else:
+                    done = ""
+            except Exception as e:
+                note("window: could not place the KASTR window (%s)" % e)
+                return
+            if done:
+                note("window: the KASTR window in your browser %s" % ("maximized again, as it was" if done == "maximized" else "put back where it was"))
+            return
+        time.sleep(0.5)
+    note("window: no new KASTR window in your browser within %d s -- left as it opened" % int(limit))
+
+
+def window_geom_ok_launcher(geom):
+    if geom.get("maximized") is True:
+        return True
+    try:
+        x, y, w, h = int(geom["x"]), int(geom["y"]), int(geom["w"]), int(geom["h"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return x > -30000 and y > -30000 and 320 <= w <= 20000 and 240 <= h <= 20000
 
 
 def no_window_message(url, reason):

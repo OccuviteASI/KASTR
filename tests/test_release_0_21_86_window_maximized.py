@@ -54,12 +54,16 @@ class Launcher(unittest.TestCase):
             kastr._maximize_later(Proc())
             self.assertEqual(started, [])
             self.save({"maximized": True})
-            with mock.patch.object(kastr, "USER_BROWSER", [True]):
-                kastr._maximize_later(Proc())   # the person's own browser: never
+            with mock.patch.object(kastr, "USER_BROWSER", [True]), mock.patch.object(kastr, "_PRE_WINDOWS", [None]):
+                kastr._maximize_later(Proc())   # the person's own browser without a snapshot: nothing
             self.assertEqual(started, [])
             kastr._maximize_later(Proc())
             self.assertEqual(len(started), 1)
             self.assertIs(started[0]["target"], kastr.maximize_when_shown)
+            with mock.patch.object(kastr, "USER_BROWSER", [True]), mock.patch.object(kastr, "_PRE_WINDOWS", [{5}]):
+                kastr._maximize_later(Proc())   # 0.21.88: their browser -- only the new KASTR window is placed
+            self.assertIs(started[1]["target"], kastr.place_user_window)
+            self.assertEqual(started[1]["args"], ({5},))
 
     def test_waits_for_the_window_then_maximizes_once(self):
         calls = []
@@ -183,3 +187,28 @@ class X11(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnBrowser(unittest.TestCase):
+    """0.21.88 (Kenton: "The window still isn't staying maximized." -- KASTR opens in his own default browser, Brave)."""
+
+    def test_only_the_new_kastr_window_is_placed(self):
+        placed = []
+        seq = [{1: "KASTR"}, {1: "KASTR", 2: "KASTR"}]
+        with mock.patch.object(kastr, "_saved_geom", return_value={"maximized": True}),                 mock.patch.object(kastr, "kastr_windows_now", side_effect=lambda any_size=False: seq.pop(0) if seq else {}),                 mock.patch.object(kastr, "WINDOWS", True), mock.patch.object(kastr, "_win_place", side_effect=lambda h, g: placed.append(h) or "maximized"),                 mock.patch.object(kastr.time, "sleep"), mock.patch.object(kastr, "note"):
+            kastr.place_user_window({1}, limit=5)
+        self.assertEqual(placed, [2])
+
+    def test_nothing_saved_nothing_touched(self):
+        with mock.patch.object(kastr, "_saved_geom", return_value=None), mock.patch.object(kastr, "kastr_windows_now") as kw:
+            kastr.place_user_window(set(), limit=1)
+        kw.assert_not_called()
+        self.assertFalse(kastr.window_geom_ok_launcher({"x": -32000, "y": -32000, "w": 160, "h": 28}))
+        self.assertTrue(kastr.window_geom_ok_launcher({"x": 6, "y": 0, "w": 1442, "h": 835}))
+
+    def test_the_snapshot_is_taken_before_the_launch(self):
+        with open(os.path.join(HERE, "kastr.py"), encoding="utf-8") as f:
+            src = f.read()
+        i_snap = src.index("_PRE_WINDOWS[0] = set(kastr_windows_now(any_size=True))")
+        i_loop = src.index("    for cand, no_sandbox, label in attempts:")
+        self.assertLess(i_snap, i_loop)

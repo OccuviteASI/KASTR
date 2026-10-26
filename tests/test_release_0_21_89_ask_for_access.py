@@ -577,6 +577,29 @@ class Wiring(unittest.TestCase):
         self.assertNotIn(".focus(", m.group(0))                              # the card never takes the keyboard
         self.assertIn('kastr.access', pg)                                    # the grant survives a reload in this window only
 
+    def test_join_room_page(self):
+        """Kenton: "an 'Ask for access' in the same pop-up as the code entry" -- the Join room page's Room code field too."""
+        pg = read("moq-watch-lite.html")
+        row = pg[pg.index('<label class="f" id="joinPwdRow"'):pg.index('<label class="f asi-sw" id="joinKeepRow"')]
+        self.assertIn('id="joinPwd"', row)
+        self.assertIn('<button type="button" id="joinAskBtn" class="ghost" hidden', row)     # beside the field, hidden until it applies
+        self.assertIn('<div id="joinAskWait" role="status" hidden>', row)                     # the waiting state, with Cancel
+        self.assertIn('id="joinAskCancel">Cancel</button>', row)
+        # shown only for a listed LOCKED room (never a new room) when asking is possible on this relay
+        self.assertIn('ab.hidden = isNew || !rec?.locked || !accCanAsk(rec.slug, true);', pg)
+        # a let-in visit has no code: both join paths of a listed room skip the page's own code check (the mint checks the grant)
+        self.assertEqual(pg.count("if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value);"), 2)
+        m = re.search(r"let accGateAsk = null;.*?\r?\n  // Everyone online:", pg, re.S)
+        self.assertTrue(m)
+        gate = m.group(0)
+        self.assertIn("await accAskRun(accGateApi(slug), { room: slug, title: roomTitle(slug), code: access, name: name || undefined });", gate)
+        self.assertIn("joinNow();", gate)                                   # Let in -> the gate's own join goes on
+        self.assertNotIn("Escape", gate)                                    # the Join room page has no Escape (0.21.89) -- Cancel only
+        self.assertIn('gateMsg("Enter this relay\\u2019s access code first.")', gate)   # never a guess that the lockout counts
+        self.assertIn('code: t.code ?? (authAccessCode || "")', pg)         # the gate's typed access code rides the ask
+        # a room link (?room=<locked room>) picks its room once the list has it (the first list may come without it)
+        self.assertIn("if (invited && !gateLinkUsed && list.some((r) => r.slug === invited)) { want = invited; gateLinkUsed = true; }", pg)
+
 
 if __name__ == "__main__":
     unittest.main()

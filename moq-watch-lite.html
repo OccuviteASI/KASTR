@@ -2126,6 +2126,18 @@
   #joinGate button.join { background:var(--asi-blue); color:var(--on-accent); font-weight:600; }
   #joinGate button.ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
   #joinGate .hint { font-size:11px; color:var(--text-mute); line-height:1.6; margin-top:10px; min-height:14px; }
+  /* 0.21.89: Ask for access on the Join room page -- beside the Room code field; its waiting state replaces the field */
+  #joinGate .jprow { display:flex; gap:8px; align-items:center; }
+  #joinGate .jprow input { flex:1; }
+  #joinGate #joinAskBtn { flex:none; height:31px; padding:4px 12px; border-color:var(--asi-blue-dim); color:var(--asi-blue); font-weight:600; white-space:nowrap; }
+  #joinGate #joinAskBtn:hover { background:var(--surface-2); color:var(--text); }
+  #joinGate #joinAskBtn[hidden], #joinGate .jprow[hidden], #joinAskWait[hidden] { display:none; }
+  #joinAskWait { display:flex; align-items:center; gap:10px; margin:0 0 11px; padding:9px 10px; border:1px solid var(--asi-blue-dim); border-radius:5px;
+    background:var(--surface-2); font-size:12px; color:var(--text); }
+  #joinAskWait .dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--asi-blue); animation:kcPulse 1.2s ease-in-out infinite; }
+  #joinAskWait .txt { flex:1; min-width:0; overflow-wrap:anywhere; }
+  #joinAskWait button { flex:none; height:28px; padding:4px 12px; }
+  #joinGate .hint.soft { color:var(--asi-amber); }   /* an answer, not an error: didn't let you in / nobody there / no answer */
 
   /* ---- 0.7.0 ---- */
   .popcard .opt { display:block; width:100%; text-align:left; background:transparent;
@@ -3299,7 +3311,9 @@
     <label class="f" id="joinAccessRow" hidden><span id="joinAccessLabel">Access code for this relay</span>
       <input type="text" id="joinAccess" class="masked" autocomplete="off" spellcheck="false"></label>   <!-- 0.21.33 (Kenton): no list of code kinds -->
     <label class="f" id="joinPwdRow" hidden><span id="joinPwdLabel">Room code</span>
-      <input type="text" id="joinPwd" class="masked" autocomplete="off" spellcheck="false"></label>
+      <div class="jprow" id="joinPwdLine"><input type="text" id="joinPwd" class="masked" autocomplete="off" spellcheck="false"><button type="button" id="joinAskBtn" class="ghost" hidden title="Someone in the room who can let people in gets a prompt &mdash; no code needed">Ask for access</button></div></label>
+    <!-- 0.21.89: Ask for access -- waiting for someone in the room (replaces the Room code field until it ends) -->
+    <div id="joinAskWait" role="status" hidden><span class="dot"></span><span class="txt"></span><button type="button" class="ghost" id="joinAskCancel">Cancel</button></div>
     <!-- 0.12.0: persistent rooms -- kept on the relay (with their chat) until closed -->
     <label class="f asi-sw" id="joinKeepRow" hidden>
       <span class="switch sm"><input type="checkbox" id="joinKeep"><i></i></span><span style="margin:0">Keep room open &mdash; it stays, with its chat, after everyone leaves, until its creator or an admin closes it. Otherwise it goes about 10 minutes after the last person leaves.</span></label>
@@ -5409,8 +5423,8 @@
   // code gives (never admin). I never learn who is in the room -- only Let in / Declined (with who answered) / no answer.
   const ACC_POLL_MS = 1500, ACC_WAIT_MS = 125000;
   const accDevice = () => String(HOSTNAME1 || "").replace(/-[0-9a-f]{4}$/, "");
-  function accCanAsk(slug) {
-    return authSecured && !!authBase() && (!authCodes || !!authAccessCode) && HOST_RE.test(HOSTNAME1) && slug !== LOBBY && !isHomeRoom(slug || "");
+  function accCanAsk(slug, gate) {   // gate: the Join room page (its access code is typed there -- asked for on the click)
+    return authSecured && !!authBase() && (gate || !authCodes || !!authAccessCode) && HOST_RE.test(HOSTNAME1) && slug !== LOBBY && !isHomeRoom(slug || "");
   }
   // Kenton: "Maybe an 'Ask for access' in the same pop-up as the code entry" -- the rail's "Change room" pop-up of a locked room
   function accExtra(rec) {
@@ -5442,7 +5456,7 @@
     const ask = accAsking = { id: "", key: "", title, at: Date.now(), stop: false };
     const cancel = () => { ask.stop = true; if (ask.id) accCall({ op: "cancel", id: ask.id, key: ask.key }); log("Ask for access: stopped asking to join " + title); };
     api.wait(asking, cancel);
-    const body = { op: "ask", code: authAccessCode || "", host: HOSTNAME1, name: myOpName() || undefined, device: accDevice() || undefined };
+    const body = { op: "ask", code: t.code ?? (authAccessCode || ""), host: HOSTNAME1, name: t.name || myOpName() || undefined, device: accDevice() || undefined };
     if (t.via) body.via = t.via; else body.room = t.room;
     const { status, d } = await accCall(body);
     if (ask.stop || !api.isOpen()) { if (d?.ok && d.id) accCall({ op: "cancel", id: d.id, key: d.key }); return; }
@@ -5479,6 +5493,47 @@
       if (st === "cancelled" || st === "ended" || s.status === 404) { ask.stop = true; return api.restore("That request ended \u2014 ask again, or enter the room\u2019s code."); }
     }
   }
+  // THE JOIN ROOM PAGE (Kenton: "an 'Ask for access' in the same pop-up as the code entry" -- where most people meet a room's
+  // code): the button beside the Room code field of a listed locked room. The same flow as the rail's pop-up: the field gives way
+  // to "Asking <room>... someone in the room will let you in" with Cancel; the answer shows under the Join button; Let in goes
+  // on with the gate's own join (name, devices, the room) with no code. The gate has no close X and no Escape: Cancel only.
+  let accGateAsk = null;   // {stop, cancel}
+  function accGateApi(slug) {
+    const row = document.getElementById("joinPwdLine"), wait = document.getElementById("joinAskWait");
+    const me = { stop: false, cancel: null };
+    const off = () => { wait.hidden = true; row.hidden = false; if (accGateAsk === me) accGateAsk = null; };
+    return accGateAsk = Object.assign(me, {
+      wait(msg, onCancel) { me.cancel = onCancel || null; row.hidden = true; wait.hidden = false; wait.querySelector(".txt").textContent = msg; gateMsg(""); joinEls.joinMsg.classList.remove("soft"); gateButtons(false); },
+      restore(why, soft) { off(); gateButtons(true); gateMsg(why || ""); joinEls.joinMsg.classList.toggle("soft", !!soft && !!why); },
+      done(v) { off(); gateButtons(true); me.stop = true; accGateDone(slug, v); },
+      isOpen: () => !me.stop && joinState === "prejoin" && !joinEls.joinGate.hidden && joinEls.joinChanSel.value === slug,
+      waiting: () => !wait.hidden,
+    });
+  }
+  function accGateDone(slug, v) {
+    if (!v || typeof v !== "object" || joinState !== "prejoin") return;
+    if (v.admitted && v.room !== slug) return;
+    joinEls.joinPwd.value = "";   // a let-in visit carries no code (the grant rides the mint)
+    log("Ask for access: joining " + slug + (v.admitted ? " \u2014 let in" : ""));
+    joinNow();
+  }
+  async function accGateClick() {
+    const slug = joinEls.joinChanSel.value;
+    const rec = lastChannelList.find((r) => r.slug === slug);
+    if (accGateAsk || joinState !== "prejoin" || !rec?.locked || !accCanAsk(slug, true)) return;
+    if (!profile && !joinEls.joinName.value.trim()) { joinEls.joinName.classList.add("bad"); gateMsg("Enter your name first \u2014 the people in the room see it."); return; }
+    joinEls.joinName.classList.remove("bad");
+    const access = authCodes ? String(joinEls.joinAccess.value || authAccessCode || "") : "";
+    if (authCodes && !access) { gateMsg("Enter this relay\u2019s access code first."); try { joinEls.joinAccess.focus(); } catch {} return; }
+    const name = ((profile && profileName(profile)) || joinEls.joinName.value || "").trim();
+    await accAskRun(accGateApi(slug), { room: slug, title: roomTitle(slug), code: access, name: name || undefined });
+  }
+  document.getElementById("joinAskBtn")?.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); accGateClick(); });
+  document.getElementById("joinAskCancel")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const g = accGateAsk; if (!g) return;
+    g.stop = true; const c = g.cancel; g.restore(""); try { c?.(); } catch {}
+  });
   // Everyone online: a person in a private room (someone's My room) -- "Ask for access" asks its OWNER (only while the owner is in it)
   async function accAskPrivate(x) {
     if (joinState !== "joined") return;
@@ -21224,7 +21279,7 @@
     sessionPersist(rec.slug, authAccessCode, code ?? "");   // 0.12.0
   }
 
-  function gateMsg(m) { joinEls.joinMsg.textContent = m || ""; }
+  function gateMsg(m) { joinEls.joinMsg.textContent = m || ""; joinEls.joinMsg.classList.remove("soft"); }   // 0.21.89: an Ask-for-access answer is amber until the next message
   // 0.21.75: the gate in invite mode -- "You're invited to <room>", only the name (no relay, room, access code or room code)
   function gateInvitePaint() {
     const inv = inviteGet();
@@ -21366,6 +21421,7 @@
     const rec = lastChannelList.find((r) => r.slug === joinEls.joinChanSel.value);
     const need = isNew || !!rec?.locked;
     joinEls.joinPwdRow.hidden = !need;
+    { const ab = document.getElementById("joinAskBtn"); if (ab) ab.hidden = isNew || !rec?.locked || !accCanAsk(rec.slug, true); }   // 0.21.89: Ask for access
     joinEls.joinPwdLabel.textContent = isNew
       ? "Room code (optional \u2014 locks the room" + (authCodes ? "; locking needs the publisher or admin access code" : "") + ")"
       : "Room code";
@@ -21642,6 +21698,7 @@
   // only when the rooms/locks/counts actually changed -- and never under the
   // user's hand (a focused select keeps its options).
   let gateKey = "";
+  let gateLinkUsed = false;   // 0.21.89: a room link (?room=) is picked once its room is listed, even when the first list came without it
   function gatePaintChannels() {
     const cur = readChannel();
     const sel = joinEls.joinChanSel;
@@ -21665,6 +21722,7 @@
     let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
     try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
     let want = keep ?? (invited && list.some((r) => r.slug === invited) ? invited : lj && lj.room ? channelSlug(lj.room) : "main");   // 0.21.34: main the first time
+    if (invited && !gateLinkUsed && list.some((r) => r.slug === invited)) { want = invited; gateLinkUsed = true; }   // 0.21.89: the link's room, once it is listed (a locked one offers Ask for access)
     if (isHomeRoom(want)) want = isPublisherMode() ? "__home" : "main";   // 0.21.75
     // 0.21.34: the last room, unless it is gone, or locked without its code saved here -> main (no room question on the card)
     const wantRec = list.find((r) => r.slug === want);
@@ -21960,7 +22018,7 @@
     } else {
       slug = channelSlug(joinEls.joinChanSel.value);
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
-      { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: hash-less locks fail closed on open relays
+      if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: hash-less locks fail closed on open relays; 0.21.89: a let-in visit has no code
     }
     try { localStorage.setItem(CHANNEL_KEY, slug); } catch {}
 

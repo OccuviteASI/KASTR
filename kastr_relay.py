@@ -1789,6 +1789,16 @@ def standby_sig(secret, ts):
 LABEL_DROP = "<>" + chr(34) + chr(39) + chr(96)   # 0.21.69: never in a label shown on the Relay page
 
 
+AVATAR_URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]{1,200}/api/files/[A-Za-z0-9_\-]{6,64}$")
+
+
+def clean_avatar(v):
+    """0.21.86 (Kenton: Everyone online showed initials, not the profile photo): a person's photo is a file on a relay
+    host's KASTR (/api/files/<id>) -- nothing else is passed on."""
+    v = str(v or "").strip()
+    return v if len(v) <= 300 and AVATAR_URL_RE.match(v) else ""
+
+
 def clean_label(v, n):
     """0.21.69: a hostname / OS user / nickname as shown on the Relay page -- printable, no markup characters, bounded."""
     return "".join(ch for ch in str(v or "") if ch.isprintable() and ch not in LABEL_DROP).strip()[:n]
@@ -7582,7 +7592,8 @@ class AuthService:
                 if not slug:
                     pl.where.pop(host, None)
                 elif is_personal(slug):
-                    self._p_where_set_locked(slug, host, clean_label(p.get("name"), 40), True, p.get("mode"), clean_label(p.get("via"), 40), now)
+                    self._p_where_set_locked(slug, host, clean_label(p.get("name"), 40), True, p.get("mode"), clean_label(p.get("via"), 40), now,
+                                             clean_avatar(p.get("avatar")))
                 else:
                     return {"ok": False, "error": "bad room"}, 400
             return {"ok": True}, 200
@@ -7620,7 +7631,8 @@ class AuthService:
             self._p_owner_here(slug, host)
             if host:   # 0.21.85: + who, for Everyone online
                 with self.lock:
-                    self._p_where_set_locked(slug, host, clean_label(p.get("name"), 40), False, p.get("mode"), clean_label(p.get("via"), 40), time.time())
+                    self._p_where_set_locked(slug, host, clean_label(p.get("name"), 40), False, p.get("mode"), clean_label(p.get("via"), 40), time.time(),
+                                             clean_avatar(p.get("avatar")))
             return {"ok": True, "open": True}, 200
         if op == "pleave":
             self._p_owner_leave(slug, host)
@@ -7666,7 +7678,8 @@ class AuthService:
             if name:
                 with self.lock:
                     pl.names[host] = (name, now)
-            self._p_where_beat(room, host, name, owner, p.get("mode"), now)   # 0.21.85: Everyone online (personal rooms)
+            av = clean_avatar(p.get("avatar"))   # 0.21.86: + the profile photo
+            self._p_where_beat(room, host, name, owner, p.get("mode"), now, av)   # 0.21.85: Everyone online (personal rooms)
             out = {"ok": True, "inbox": self._p_inbox_take(host, now), "shared": self._p_shared(host, now)}
             if owner:
                 ok = True
@@ -7680,7 +7693,7 @@ class AuthService:
                             pl.fwd[key] = now
                     if due:
                         r = self._hub_fed({"op": "pbeat", "vouch": "owner", "slug": room, "host": host,
-                                           "name": name, "mode": str(p.get("mode") or "")[:24], "via": self.relay_name()}, timeout=4)   # 0.21.85: + who, for Everyone online
+                                           "name": name, "mode": str(p.get("mode") or "")[:24], "via": self.relay_name(), "avatar": av}, timeout=4)   # 0.21.85: + who, for Everyone online
                         ok = r is not None and r[1] == 200
                         if ok:
                             with self.lock:
@@ -7746,18 +7759,18 @@ class AuthService:
         return {"ok": False, "error": "unknown op (beat | leave | invite | rc | online | cmd | list | share | co | seen)"}, 400
 
     # ---- 0.21.85: Everyone online (the People panel) ------------------------------------------------------------------
-    def _p_where_set_locked(self, slug, host, name, guest, mode, via, now):
+    def _p_where_set_locked(self, slug, host, name, guest, mode, via, now, avatar=""):
         pl = self._pl()
         w = pl.where.get(host)
         mode = str(mode or "")
         pl.where[host] = {"room": slug, "name": name or (w or {}).get("name") or (pl.names.get(host) or ("",))[0],
                           "since": w["since"] if w and w.get("room") == slug else now, "at": now, "guest": bool(guest),
-                          "mode": mode if mode in PEOPLE_MODES else "", "via": via or ""}
+                          "mode": mode if mode in PEOPLE_MODES else "", "via": via or "", "avatar": avatar or ""}
         if len(pl.where) > PWHERE_MAX:
             for k in sorted(pl.where, key=lambda k: pl.where[k]["at"])[:len(pl.where) - PWHERE_MAX]:
                 pl.where.pop(k, None)
 
-    def _p_where_beat(self, room, host, name, owner, mode, now):
+    def _p_where_beat(self, room, host, name, owner, mode, now, avatar=""):
         """A beat says where its page is. Only personal rooms are kept (public rooms announce their people themselves); a page
         that beats from anywhere else has left the one it was in. A spoke tells the hub: a guest's beats at most every
         PWHERE_FWD s, a move out once (an owner's beats already go there as pbeat, with the name)."""
@@ -7770,13 +7783,13 @@ class AuthService:
         with self.lock:
             had = host in pl.where
             if personal:
-                self._p_where_set_locked(room, host, name, not owner, mode, via, now)
+                self._p_where_set_locked(room, host, name, not owner, mode, via, now, avatar)
             else:
                 pl.where.pop(host, None)
                 pl.wfwd.pop(host, None)
             if spoke and personal and not owner and now - pl.wfwd.get(host, 0) >= PWHERE_FWD:
                 pl.wfwd[host] = now
-                body = {"op": "pwhere", "slug": room, "host": host, "name": name, "mode": mode, "via": via}
+                body = {"op": "pwhere", "slug": room, "host": host, "name": name, "mode": mode, "via": via, "avatar": avatar}
             elif spoke and not personal and had:
                 body = {"op": "pwhere", "slug": "", "host": host}
         if body is not None:
@@ -7813,6 +7826,8 @@ class AuthService:
             i = info(slug)
             ok = bool(caller) and (croom == slug or caller in i["people"] or caller in owners.get(slug, ()))
             row = {"host": h, "name": clean_label(w.get("name"), 40), "since": int(float(w.get("since") or now)), "via": clean_label(w.get("via"), 40)}
+            if clean_avatar(w.get("avatar")):
+                row["avatar"] = clean_avatar(w.get("avatar"))   # 0.21.86: the profile photo
             if ok:
                 row.update(room=slug, owner=clean_label(i["owner"], 40), guest=bool(w.get("guest")))
             else:

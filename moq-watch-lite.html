@@ -4823,7 +4823,7 @@
     const tok = authTokens.member, room = CHANNEL;
     try {
       const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
-        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })() }) });   // 0.21.85: + mode (Everyone online leaves boxes out)
+        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), avatar: window.__avatarUrl?.() || "" }) });   // 0.21.85: + mode (Everyone online leaves boxes out); 0.21.86: + my photo
       if (r.status === 404) { pbOld = true; setTimeout(() => { pbOld = false; }, 300000); return; }   // a relay host older than 0.21.78
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
@@ -9602,6 +9602,9 @@
     if (!rec || !card) { window.__toast?.("“" + roomTitle(g.slug) + "” isn\u2019t in your rooms list right now", 4000, { level: "info" }); return; }
     sbCardClick(card, rec);   // the rail's own path: "Leave X and join Y?", a locked room's code
   }
+  // 0.21.86 (Kenton: initials, not the uploaded photo): mine from my profile, my room's from its ~avatar, others' from
+  // their room's state / presence or the relay host's list
+  const eoAvatar = (x) => (x.me && window.__avatarLocal) || avatarUrls.get(x.op) || x.avatar || "";
   // everyone online -> [{key, slug, title, priv, locked, go, people: [...]}] in display order
   function eoBuild() {
     const now = Date.now();
@@ -9617,6 +9620,7 @@
       let x = people.get(key);
       if (!x) people.set(key, x = { key, op, name: "", room: p.slug, host: "", since: 0, pub: false, talk: false, deaf: false, priv: false, guest: false, me: false, via: "" });
       if (!x.name && (w.name || w.op)) x.name = String(w.name || w.op);
+      if (!x.avatar && w.avatar) x.avatar = String(w.avatar);   // 0.21.86: their photo (state / presence record)
       if (!x.host && HOST_RE.test(String(w.host || ""))) x.host = String(w.host);
       if (p.ts && (!x.since || p.ts < x.since)) x.since = p.ts;
       if (p.state) { if (w.publishing?.length) x.pub = true; if (w.speaking) x.talk = true; if (w.deaf) x.deaf = true; }
@@ -9627,6 +9631,7 @@
       const k = CHANNEL + "|" + (meKey || "me");
       const x = people.get(k) || { key: k, op: meKey || "me", name: "", room: CHANNEL, host: HOSTNAME1, since: 0, pub: false, talk: false, deaf: false, priv: false, guest: false, via: "" };
       x.me = true; x.name = myOpName() || x.name || "You"; x.pub = x.pub || !!document.querySelector("#pubPanes .pubpane");
+      x.avatar = window.__avatarLocal || x.avatar || "";   // 0.21.86: my own photo, straight from my profile
       people.set(k, x);
     }
     const fresh = now - eo.at <= EO_STALE_MS;
@@ -9640,7 +9645,8 @@
       if (pub) { if ((pub.since || 0) > since) continue; people.delete(pub.key); }
       const name = String(s.name || "") || prettyOperator(host);
       const key = (room || "~private") + "|h:" + host;
-      people.set(key, { key, op: opKeyOf(name) || host, name, room, host, since, pub: false, talk: false, deaf: false, priv: !room, guest: !!s.guest, me: false, via: String(s.via || ""), srv: true });
+      people.set(key, { key, op: opKeyOf(name) || host, name, room, host, since, pub: false, talk: false, deaf: false, priv: !room, guest: !!s.guest, me: false, via: String(s.via || ""), srv: true,
+                        avatar: /^https?:\/\/[^\s"']+\/api\/files\/[\w-]+$/.test(String(s.avatar || "")) ? String(s.avatar) : "" });   // 0.21.86: + photo
     }
     const recs = lastChannelList || [];
     const groups = new Map();
@@ -9750,7 +9756,7 @@
       : lobby ? "Nobody sees names in the Lobby \u2014 join a room to see everyone online."
       : q ? "No one online matches “" + ppl.search.value.trim() + "”" : "No one else is online.";
     const sig = JSON.stringify([sum, warn, q, shown.map((s) => [s.g.key, s.g.title, s.g.locked, s.g.go.can, s.g.go.why,
-      s.people.map((x) => [x.key, x.name, x.pub, x.talk, x.deaf, x.me, x.guest, personColor(x.op), avatarUrls.get(x.op) || ""])])]);
+      s.people.map((x) => [x.key, x.name, x.pub, x.talk, x.deaf, x.me, x.guest, personColor(x.op), x.me ? String(eoAvatar(x)).length : eoAvatar(x)])])]);   // (my photo is a data URL: its length will do)
     if (sig === eo.sig && !force) return;
     if (eoEls.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
     eo.sig = sig;
@@ -9783,7 +9789,7 @@
         av.style.setProperty("--ring", personColor(x.op));
         setPc(row, personColor(x.op));
         av.textContent = viewerInitials(x.name);
-        paintAvatar(av, avatarUrls.get(x.op));
+        paintAvatar(av, eoAvatar(x));
         const nm = document.createElement("div"); nm.className = "ppname";
         const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = x.name;
         if (x.me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (You)"; pn.appendChild(y); }
@@ -30650,6 +30656,7 @@
     avatarRemote = null;
   };
   window.addEventListener("pagehide", avatarDrop);
+  window.__avatarUrl = () => avatarRemote?.url || "";   // 0.21.86: the beat carries it (Everyone online in personal rooms)
   window.__avatarPublish = async () => {
     const data = window.__avatarLocal || "";
     if (!data) { avatarAnn.clear("me"); avatarUploadedFor = ""; avatarDrop(); return; }

@@ -35,8 +35,8 @@ class AvatarAnnounce(unittest.TestCase):
 class Page(unittest.TestCase):
     def test_my_own_row_and_a_visible_upload_failure(self):
         p = read("moq-watch-lite.html")
-        self.assertIn("paintAvatar(av, (p.me && window.__avatarLocal) || avatarUrls.get(p.key));", p)
-        self.assertIn('Others see your initials, not your photo', p)
+        self.assertIn("paintAvatar(av, (p.me && window.__avatarLocal) || avatarUrls.get(p.key, p.name));", p)
+        self.assertIn('Your photo was not saved for others', p)   # 0.21.90: the hub refused it (an explicit Save says why)
         self.assertNotIn("Profile picture stays local", p)
 
     def test_my_room_members_name_themselves_in_room_json(self):

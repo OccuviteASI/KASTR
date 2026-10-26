@@ -2,6 +2,23 @@
 
 What changed in each build, newest first.
 
+## v0.21.86 — invite links anyone can open, profile photos in Everyone online, a steadier presentation upload
+
+**Invite links on the public web address (Kenton: "Invite link is using the internal IP of the relay I'm connected to, and not a web address that anyone can access").**
+- The hub's Relay page has a **Public web address** field in the One port (Cloudflare Tunnel) card. Once a visitor has come in through the tunnel, a **Use <name>** button fills it in with one click.
+- Every relay picks the hub's address up within about 3 minutes. Invite links then open that address and connect through the tunnel, so people outside your network can join.
+- The address must be https and a name, never an IP address. KASTR never takes it from what a visitor's request claims, because an invite link carries a secret.
+- Until it's set, links use the old address, and copying one that only works inside your network shows a warning that says so.
+- **After updating:** set `https://kastr.madlabs.app` on the hub's Relay page.
+
+**Profile photos in Everyone online (Kenton: "showing a circle with a color and initials, not the uploaded photo").** Your own row uses your profile picture. People in other rooms and the Lobby show the photo from their room's records, and people in My room and other private rooms show the photo their KASTR sends with its regular updates. Only the address of a picture stored on a relay is passed on.
+
+**Presentations**
+- The same slide uploaded twice at once no longer crashes the slide store on Windows. Each upload writes its own temporary file, and the page now renders and uploads each slide once.
+- If sending a deck to KASTR breaks off (for example while KASTR restarts for an update), the message says what happened instead of "Failed to fetch".
+
+**Remote control of Linux machines.** A Linux relay or box that can't be controlled used to say "nobody is signed in" whatever the cause. The hub's Machines list and the machine's own Relay page now give the real reason: KASTR runs without a desktop display (started from a service or SSH), the X11 libraries are missing, or XTest is missing.
+
 ## v0.21.85 — everyone online in People, shares in the stream library, a clean end for My room guests
 
 **Everyone online (Kenton: "Add an option to see all people online in the people drop-down").** The People panel has two tabs: **This room** (the default) and **Everyone online**.

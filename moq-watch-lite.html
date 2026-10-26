@@ -6128,8 +6128,17 @@
       if (!may() || (e.pointerType === "mouse" && e.button !== 0)) return;
       if (e.target?.closest?.("button, a, input, select, textarea, .pchev, .prcbtn, .pptbtn, .menu, .popcard")) return;
       const p = at(e);
-      if (rcIn(p)) ptClick(name, p);
+      if (rcIn(p)) { ptClick(name, p); if (name === selectedName) pane.__ptAt = Date.now(); }
     }, true);
+    // 0.21.86 (Kenton: "they are clicking on my screen and it is doing the normal zoom in/out instead of just showing me the
+    // clicks"): on the stage, a pointing click is a sonar and nothing else -- never the tile's click (back to the gallery) or
+    // double-click (2x zoom). On a small rail tile a click still brings the share to the stage.
+    const ptSwallow = (e) => {
+      if (!pane.__ptAt || Date.now() - pane.__ptAt > 700 || !may()) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+    };
+    pane.addEventListener("click", ptSwallow, true);
+    pane.addEventListener("dblclick", ptSwallow, true);
     pane.addEventListener("pointerup", (e) => {   // a phone: the pointer stays a moment after the finger lifts
       if (e.pointerType !== "touch" || ptMe?.share !== name) return;
       const n0 = ptMe.mvN;

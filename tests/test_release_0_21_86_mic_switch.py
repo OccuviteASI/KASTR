@@ -31,3 +31,16 @@ class MicSwitch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PointingClicks(unittest.TestCase):
+    """0.21.86 (Kenton: people pointing on his shared screen "are clicking on my screen and it is doing the normal zoom in/out
+    instead of just showing me the clicks")."""
+
+    def test_a_pointing_click_on_the_stage_is_only_a_sonar(self):
+        with open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
+            p = f.read()
+        self.assertIn("if (rcIn(p)) { ptClick(name, p); if (name === selectedName) pane.__ptAt = Date.now(); }", p)
+        self.assertIn('pane.addEventListener("click", ptSwallow, true);', p)
+        self.assertIn('pane.addEventListener("dblclick", ptSwallow, true);', p)
+        self.assertIn("e.stopImmediatePropagation(); e.preventDefault();", p[p.index("const ptSwallow"):p.index("const ptSwallow") + 300])

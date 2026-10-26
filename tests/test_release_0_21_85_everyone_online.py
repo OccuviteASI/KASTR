@@ -373,7 +373,7 @@ class Page(unittest.TestCase):
         self.assertIn("const groups = joined && !lobby ? eoBuild() : [];", e)
         self.assertIn("Nobody sees names in the Lobby", e)
         # the beat says the page's mode, so a box in a personal room is no person either
-        self.assertIn('body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), avatar: window.__avatarUrl?.() || "" }) });', self.p)   # 0.21.86: + the photo
+        self.assertIn('body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), acc: 1, roomKey: accRoomKey(room), avatar: window.__avatarUrl?.() || "" }) });', self.p)   # 0.21.86: + the photo; 0.21.89: + acc, roomKey (Ask for access)
 
     def test_go_by_the_rails_path(self):
         e = self.eo

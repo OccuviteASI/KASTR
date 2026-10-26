@@ -1308,6 +1308,39 @@
   #kConfirm .kcbtns .danger:hover { filter:brightness(1.1); }
   #kConfirm .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
   @keyframes kcIn { from { opacity:0; transform:scale(.97); } to { opacity:1; transform:none; } }
+  /* 0.21.89: Ask for access -- the code pop-up's second button and its waiting state */
+  #kConfirm .kcrow { display:flex; gap:8px; align-items:center; margin:12px 0 0; }
+  #kConfirm .kcrow[hidden], #kConfirm .kcx[hidden], #kConfirm .kcyes[hidden] { display:none; }
+  #kConfirm .kcrow .kcin { margin:0; flex:1; min-width:0; }
+  #kConfirm .kcerr.soft { color:var(--asi-amber); }   /* an answer, not an error: "<name> didn't let you in", nobody there, no answer */
+  #kConfirm .kcx { flex:none; height:35px; background:transparent; border:1px solid var(--asi-blue-dim); color:var(--asi-blue); font-weight:600; white-space:nowrap; }
+  #kConfirm .kcx:hover { background:var(--surface-2); color:var(--text); }
+  #kConfirm .kcx:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  #kConfirm .kconfirm.kcwait .kcmsg { display:flex; align-items:center; gap:10px; }
+  #kConfirm .kconfirm.kcwait .kcmsg::before { content:""; flex:none; width:10px; height:10px; border-radius:50%; background:var(--asi-blue); animation:kcPulse 1.2s ease-in-out infinite; }
+  @keyframes kcPulse { 0%, 100% { opacity:.25; transform:scale(.8); } 50% { opacity:1; transform:scale(1); } }
+  /* 0.21.89: "<name> is asking to join" -- cards in the corner for the room's admins / creator / My room's owner. Never modal,
+     never focused (someone may be typing or presenting): a click answers without taking the focus. */
+  #kAccAsks { position:fixed; top:142px; right:16px; z-index:130; width:min(340px, calc(100vw - 32px)); display:flex; flex-direction:column;
+    gap:8px; pointer-events:none; max-height:calc(100vh - 160px); overflow-y:auto; }   /* below the toolbar row, above the stage and panels */
+  #kAccAsks[hidden] { display:none; }
+  #kAccAsks .acchead { pointer-events:auto; align-self:flex-end; font-size:11px; font-weight:600; color:var(--text-dim); background:var(--surface-2);
+    border:1px solid var(--line); border-radius:10px; padding:2px 10px; }
+  #kAccAsks .acccard { pointer-events:auto; background:var(--surface); color:var(--text); border:1px solid var(--asi-blue-dim); border-radius:var(--radius);
+    box-shadow:0 12px 32px rgba(0,0,0,.45), inset 3px 0 0 var(--asi-blue); padding:12px 12px 10px 15px; animation:kcIn .14s ease-out; }
+  #kAccAsks .acct { font-size:13px; line-height:1.35; overflow-wrap:anywhere; }
+  #kAccAsks .acct b { font-weight:600; }
+  #kAccAsks .accs { margin-top:2px; font-size:11px; color:var(--text-dim); }
+  #kAccAsks .accn { margin-top:6px; font-size:12px; color:var(--text-dim); }
+  #kAccAsks .accn.err { color:var(--asi-red); }
+  #kAccAsks .accn[hidden] { display:none; }
+  #kAccAsks .accb { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+  #kAccAsks .accb button { height:28px; padding:4px 12px; }
+  #kAccAsks .accb .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kAccAsks .accb .ghost:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  #kAccAsks .accb button:disabled { opacity:.55; cursor:default; }
+  #kAccAsks .acccard.done { box-shadow:0 12px 32px rgba(0,0,0,.45), inset 3px 0 0 var(--text-mute); }
+  #kAccAsks .acccard.done .accb { display:none; }
   /* 0.21.43: MY view of a grid -- a canvas over the grid tile's own picture (same box, same fit) */
   .pane canvas.vgcv { position:absolute; pointer-events:none; z-index:1; background:#000; }
   /* 0.21.43: the grid layout editor -- boxes over the grid picture on a 24 x 24 snap grid */
@@ -2198,6 +2231,7 @@
     #stage .pubpane.screenkind { display:none !important; }   /* 0.8.12: phones cannot share a screen */
     .pchev { --pw:32px; }   /* 0.21.37: the offsets follow the size (was width/height only -> the three overlapped) */
     #kToast { top:auto; bottom:calc(72px + env(safe-area-inset-bottom)); max-width:92vw; }
+    #kAccAsks { top:auto; bottom:calc(12px + env(safe-area-inset-bottom)); left:12px; right:12px; width:auto; max-height:55vh; }   /* 0.21.89: full width, at the bottom */
     #stageBack { top:auto; bottom:8px; }
     #stagewrap, .sbrooms, .popcard .body, #sharePop .body, #peoplePanel .pbody { overscroll-behavior:contain; }   /* 0.21.5: no rubber-band reveal of the page behind a sheet */
   }
@@ -3343,6 +3377,21 @@
     } catch { return null; }
   }
   function inviteSet(v) { try { if (v) sessionStorage.setItem(INVITE_KEY, JSON.stringify(v)); else sessionStorage.removeItem(INVITE_KEY); } catch {} }
+  // 0.21.89 (Kenton: Ask for access -- "allow them in without a code", THIS VISIT ONLY): the grant someone in the room gave this
+  // device -- {room, id, key, at}. It rides every mint for that room (admit: ka-<id>-<key>) while I stay there; this window's
+  // sessionStorage keeps it across a reload (the silent rejoin) and an update relaunch takes it along in kastr.live (resumeCheck).
+  // Leaving the room (Leave, another room) drops it: coming back means asking again or typing the code. The relay checks it too
+  // (this device, that room, the visit still going).
+  const ACC_KEY = "kastr.access";
+  const ACC_RE = /^[0-9a-f]{12}$/, ACC_KEY_RE = /^[A-Za-z0-9_-]{32}$/;
+  function accGrantGet() {
+    try {
+      const v = JSON.parse(sessionStorage.getItem(ACC_KEY) || "null");
+      return v && ACC_RE.test(String(v.id || "")) && ACC_KEY_RE.test(String(v.key || "")) && /^[a-z0-9-]{1,32}$/.test(String(v.room || "")) ? v : null;
+    } catch { return null; }
+  }
+  function accGrantSet(v) { try { if (v) sessionStorage.setItem(ACC_KEY, JSON.stringify(v)); else sessionStorage.removeItem(ACC_KEY); } catch {} }
+  const accGrantFor = (room) => { const g = accGrantGet(); return g && g.room === room ? g : null; };
   try {
     const hp = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
     const it = hp.get("invite");
@@ -4993,7 +5042,7 @@
     const tok = authTokens.member, room = CHANNEL;
     try {
       const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
-        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), avatar: window.__avatarUrl?.() || "" }) });   // 0.21.85: + mode (Everyone online leaves boxes out); 0.21.86: + my photo
+        body: JSON.stringify({ op: "beat", name: myOpName(), mode: (() => { try { return String(window.__pageMode?.() || ""); } catch { return ""; } })(), acc: 1, roomKey: accRoomKey(room), avatar: window.__avatarUrl?.() || "" }) });   // 0.21.85: + mode (Everyone online leaves boxes out); 0.21.86: + my photo; 0.21.89: + acc (this page answers asks to join), my room's key when I made it
       if (r.status === 404) { pbOld = true; setTimeout(() => { pbOld = false; }, 300000); return; }   // a relay host older than 0.21.78
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
@@ -5001,6 +5050,7 @@
       for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
+      accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)
     } catch {} finally { pbBusy = false; }
   }
   {   // a worker's tick is not throttled in a hidden tab the way a page timer is (the owner's room stays open)
@@ -5351,6 +5401,187 @@
   window.__myShare = { open: personalShareOpen, beat: peopleBeat, people: personalPeopleCall, invite: personInvite, items: personInviteItems,
     arrive: personInviteArrive, shared: () => personalShared.slice(), owner: () => (pbOwner ? pbOwner.slug : ""), menu: personalCardMenu,
     guest: () => ({ guest: authGuest, co: authCo }), host: () => HOSTNAME1 };   // rig
+  // ---- 0.21.89 ASK FOR ACCESS (Kenton: "let someone prompt people in a locked room that lets someone with permissions in the
+  // room already to allow them in without a code"; "Maybe an 'Ask for access' in the same pop-up as the code entry"). THE ASKER:
+  // POST /api/access {op: "ask"} at MY relay host with my access code; the hub tells the room's admins and its creator who are
+  // in it now (My room: its owner) -- or says at once that nobody who can let me in is there. The pop-up waits ("Asking
+  // <room>... someone in the room will let you in", Cancel) and polls MY relay (never the hub) until someone answers, I cancel,
+  // or ~2 minutes pass. Let in -> the grant rides this room's mints (accGrantSet): no code, this visit only, the role my access
+  // code gives (never admin). I never learn who is in the room -- only Let in / Declined (with who answered) / no answer.
+  const ACC_POLL_MS = 1500, ACC_WAIT_MS = 125000;
+  const accDevice = () => String(HOSTNAME1 || "").replace(/-[0-9a-f]{4}$/, "");
+  function accCanAsk(slug) {
+    return authSecured && !!authBase() && (!authCodes || !!authAccessCode) && HOST_RE.test(HOSTNAME1) && slug !== LOBBY && !isHomeRoom(slug || "");
+  }
+  // Kenton: "Maybe an 'Ask for access' in the same pop-up as the code entry" -- the rail's "Change room" pop-up of a locked room
+  function accExtra(rec) {
+    return accCanAsk(rec.slug) ? { label: "Ask for access", run: (api) => accAskRun(api, { room: rec.slug, title: roomTitle(rec.slug) }) } : null;
+  }
+  function accRoomKey(room) {   // the room I made: its key proves it (the creator lets people in too)
+    try { return (room && room !== LOBBY && !isPersonalSlug(room) && myChannels().find((r) => r.slug === room)?.roomKey) || undefined; } catch { return undefined; }
+  }
+  async function accCall(body, bearer) {
+    const base = authBase();
+    if (!base) return { status: 0, d: { error: "No relay host to ask." } };
+    try {
+      const r = await fetch(base + "/api/access", { method: "POST", headers: { "content-type": "application/json", ...(bearer ? { authorization: "Bearer " + bearer } : {}) },
+        body: JSON.stringify(body) });
+      return { status: r.status, d: await r.json().catch(() => ({})) };
+    } catch (e) { return { status: 0, d: { error: String(e?.message || e) } }; }
+  }
+  function accWhy(d, status) {
+    if (status === 404 && !d?.error) return "This relay\u2019s KASTR is older than 0.21.89 \u2014 enter the room\u2019s code.";
+    if (status === 0) return "The relay host did not answer \u2014 try again, or enter the room\u2019s code.";
+    const m = String(d?.error || ("refused (" + status + ")")).replace(/ -- /g, " \u2014 ");
+    return m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? "" : ".");
+  }
+  let accAsking = null;   // my ask in flight: {id, key, title, at, stop}
+  async function accAskRun(api, t) {
+    const title = t.title || roomTitle(t.room);
+    const nobody = "Nobody who can let you in is in " + title + " right now \u2014 ask for the code or an invite link.";
+    const asking = "Asking " + title + "\u2026 someone in the room will let you in";
+    const ask = accAsking = { id: "", key: "", title, at: Date.now(), stop: false };
+    const cancel = () => { ask.stop = true; if (ask.id) accCall({ op: "cancel", id: ask.id, key: ask.key }); log("Ask for access: stopped asking to join " + title); };
+    api.wait(asking, cancel);
+    const body = { op: "ask", code: authAccessCode || "", host: HOSTNAME1, name: myOpName() || undefined, device: accDevice() || undefined };
+    if (t.via) body.via = t.via; else body.room = t.room;
+    const { status, d } = await accCall(body);
+    if (ask.stop || !api.isOpen()) { if (d?.ok && d.id) accCall({ op: "cancel", id: d.id, key: d.key }); return; }
+    if (!d?.ok) {
+      ask.stop = true;
+      if (d?.nobody) { log("Ask for access: nobody who can let me in is in " + title); return api.restore(nobody, true); }
+      if ((d?.open || d?.shared) && ROOM_RE.test(String(d.room || t.room || ""))) { api.done({ admitted: false, open: true, room: String(d.room || t.room) }); return; }
+      return api.restore(accWhy(d, status));
+    }
+    ask.id = String(d.id); ask.key = String(d.key);
+    log("Ask for access: asked to join " + title);
+    while (!ask.stop && api.isOpen()) {
+      await new Promise((r) => setTimeout(r, ACC_POLL_MS));
+      if (ask.stop || !api.isOpen()) return;
+      const s = await accCall({ op: "status", id: ask.id, key: ask.key });
+      if (ask.stop || !api.isOpen()) return;
+      const st = String(s.d?.state || "");
+      if (st === "let" && ROOM_RE.test(String(s.d.room || ""))) {
+        ask.stop = true;
+        accGrantSet({ room: String(s.d.room), id: ask.id, key: ask.key, at: Date.now() });
+        log("Ask for access: " + (s.d.by || "someone") + " let me into " + title);
+        window.__toast?.((s.d.by || "Someone") + " let you in", 4000, { level: "event" });
+        api.done({ admitted: true, room: String(s.d.room), by: String(s.d.by || ""), personal: !!s.d.personal });
+        return;
+      }
+      if (st === "declined") { ask.stop = true; log("Ask for access: " + (s.d.by || "someone") + " declined"); return api.restore((s.d.by || "Someone") + " didn\u2019t let you in.", true); }
+      if (st === "nobody") { ask.stop = true; return api.restore(nobody, true); }
+      if (st === "timeout" || Date.now() - ask.at > ACC_WAIT_MS) {
+        ask.stop = true;
+        if (st !== "timeout") accCall({ op: "cancel", id: ask.id, key: ask.key });
+        log("Ask for access: no answer from " + title);
+        return api.restore("No answer \u2014 try again or ask for the code.", true);
+      }
+      if (st === "cancelled" || st === "ended" || s.status === 404) { ask.stop = true; return api.restore("That request ended \u2014 ask again, or enter the room\u2019s code."); }
+    }
+  }
+  // Everyone online: a person in a private room (someone's My room) -- "Ask for access" asks its OWNER (only while the owner is in it)
+  async function accAskPrivate(x) {
+    if (joinState !== "joined") return;
+    const title = "the room " + x.name + " is in";
+    const ans = await kastrConfirm({ title: "Ask for access", message: x.name + " is in a private room.",
+      detail: "Ask to join \u2014 its owner gets a prompt and can let you in for this visit. Your microphone will be muted and your camera turned off.",
+      ok: "Ask for access", cancel: "Close", extra: { primary: true, label: "Ask for access", run: (api) => accAskRun(api, { via: x.host, title }) } });
+    if (!ans || typeof ans !== "object" || !ROOM_RE.test(String(ans.room || "")) || joinState !== "joined") return;
+    switchRoom({ slug: ans.room, personal: isPersonalSlug(ans.room) }, "");
+  }
+  // THE ANSWERERS: the room's admins and its creator (My room: its owner) who are in it get "<name> is asking to join" on their
+  // beat -- a card in the corner that never takes the keyboard or the focus (someone may be typing or presenting): Let in /
+  // Decline. The first answer anywhere wins; the other cards then say who answered and close. Several askers stack.
+  const accCards = new Map();   // ask id -> {id, name, device, at, room, state: "open" | "busy" | "done", note, err, el, t}
+  let accRoomNow = "", accHead = null;
+  function accBox() {
+    let box = document.getElementById("kAccAsks");
+    if (!box) {
+      box = document.createElement("div"); box.id = "kAccAsks"; box.hidden = true;
+      box.setAttribute("role", "region"); box.setAttribute("aria-label", "People asking to join this room"); box.setAttribute("aria-live", "polite");
+      box.addEventListener("click", (e) => e.stopPropagation());   // a click here never closes the panel I had open
+      document.body.appendChild(box);
+    }
+    return box;
+  }
+  function accClosedText(x) {
+    const by = String(x?.by || "Someone"), nm = String(x?.name || "They");
+    return x?.state === "let" ? by + " let them in" : x?.state === "declined" ? by + " declined" : x?.state === "cancelled" ? nm + " stopped asking"
+      : x?.state === "timeout" ? "Nobody answered in time" : "";
+  }
+  function accDone(c, note) {
+    c.state = "done"; c.note = note || ""; c.err = "";
+    clearTimeout(c.t);
+    c.t = setTimeout(() => { accCards.delete(c.id); accCardsPaint(); }, note ? 5000 : 0);
+  }
+  function accClear() { for (const c of accCards.values()) clearTimeout(c.t); accCards.clear(); accCardsPaint(); }
+  function accApply(acc, room) {
+    if (joinState !== "joined" || room !== CHANNEL) return;
+    if (accRoomNow !== room) { accRoomNow = room; accClear(); }
+    if (!acc || typeof acc !== "object") { if (accCards.size) accClear(); return; }   // a relay before 0.21.89, or I may not let people in
+    const asks = (Array.isArray(acc.asks) ? acc.asks : []).filter((a) => ACC_RE.test(String(a?.id || "")));
+    const closed = new Map((Array.isArray(acc.closed) ? acc.closed : []).map((x) => [String(x?.id || ""), x]));
+    let fresh = false;
+    for (const a of asks) {
+      if (accCards.has(a.id)) continue;
+      accCards.set(a.id, { id: a.id, name: String(a.name || "Someone").slice(0, 40), device: String(a.device || "").slice(0, 40), at: (Number(a.at) || 0) * 1000 || Date.now(),
+                           room, state: "open", note: "", err: "", el: null, t: 0 });
+      fresh = true;
+      log("Ask for access: " + (a.name || "someone") + " is asking to join " + roomTitle(room));
+    }
+    const live = new Set(asks.map((a) => a.id));
+    for (const c of accCards.values()) if (c.state === "open" && !live.has(c.id)) accDone(c, accClosedText(closed.get(c.id)));   // answered elsewhere / withdrawn / over
+    if (fresh) chimeKnock();
+    accCardsPaint();
+  }
+  async function accAnswer(c, allow) {
+    if (c.state !== "open") return;
+    c.state = "busy"; c.err = ""; accCardsPaint();
+    const { status, d } = await accCall({ op: "answer", id: c.id, allow, by: myOpName() || undefined, roomKey: accRoomKey(c.room) }, authTokens?.member || "");
+    if (d?.ok) { log("Ask for access: " + (allow ? "let " + c.name + " in" : "declined " + c.name)); accDone(c, allow ? "You let " + c.name + " in" : "You declined"); }
+    else if (status === 409 && d?.already) accDone(c, accClosedText({ state: d.already, by: d.by, name: c.name }) || "Already answered");
+    else if (status === 404) accDone(c, "That request is over");
+    else { c.state = "open"; c.err = accWhy(d, status); }
+    accCardsPaint();
+  }
+  const accAgo = (ms) => { const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 10 ? "just now" : s < 60 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
+  function accCardsPaint() {
+    const box = accBox();
+    const cards = [...accCards.values()].sort((a, b) => a.at - b.at);
+    box.hidden = !cards.length;
+    const open = cards.filter((c) => c.state !== "done").length;
+    const kids = [];
+    if (open > 1) {
+      if (!accHead) { accHead = document.createElement("div"); accHead.className = "acchead"; }
+      accHead.textContent = open + " people are asking to join"; kids.push(accHead);
+    }
+    for (const c of cards) {
+      if (!c.el) {
+        const el = c.el = document.createElement("div"); el.className = "acccard"; el.dataset.id = c.id;
+        el.innerHTML = '<div class="acct"></div><div class="accs"></div><div class="accn" hidden></div>'
+          + '<div class="accb"><button type="button" class="ghost accno" tabindex="-1">Decline</button><button type="button" class="accyes" tabindex="-1">Let in</button></div>';
+        const b = document.createElement("b"); b.textContent = c.name;
+        el.querySelector(".acct").append(b, " is asking to join");
+        el.addEventListener("mousedown", (e) => e.preventDefault());   // a click answers -- the focus stays where I was typing
+        el.querySelector(".accno").addEventListener("click", () => accAnswer(c, false));
+        el.querySelector(".accyes").addEventListener("click", () => accAnswer(c, true));
+      }
+      const el = c.el;
+      el.classList.toggle("done", c.state === "done");
+      el.querySelector(".accs").textContent = (c.device ? "on " + c.device + " \u00b7 " : "") + accAgo(c.at);
+      const n = el.querySelector(".accn"); n.textContent = c.state === "done" ? c.note : c.err; n.hidden = !n.textContent; n.classList.toggle("err", c.state !== "done" && !!c.err);
+      for (const bt of el.querySelectorAll(".accb button")) bt.disabled = c.state !== "open";
+      kids.push(el);
+    }
+    // the same cards in the same order stay where they are: re-inserting one would replay its entrance (a flicker every beat)
+    if (kids.length !== box.children.length || kids.some((k, i) => box.children[i] !== k)) box.replaceChildren(...kids);
+  }
+  setInterval(() => { if (accCards.size) accCardsPaint(); }, 5000);   // "just now" -> "20 s ago"
+  window.addEventListener("kastr:auth", (e) => { if (e?.detail?.room !== accRoomNow) { accRoomNow = String(e?.detail?.room || ""); accClear(); } });
+  window.__access = { cards: () => [...accCards.values()].map((c) => ({ id: c.id, name: c.name, device: c.device, state: c.state, note: c.note, err: c.err })),
+    apply: accApply, answer: (id, allow) => { const c = accCards.get(id); return c ? accAnswer(c, allow) : null; }, grant: () => { const g = accGrantGet(); return g ? { room: g.room, id: g.id } : null; },
+    asking: () => (accAsking ? { title: accAsking.title, stop: accAsking.stop, id: accAsking.id } : null), askPrivate: accAskPrivate };   // rig (never the key)
   // ---- 0.21.79 REMOTE CONTROL (Kenton: "I want to add the capability to request remote control when someone is sharing their
   // desktop and a prompt to allow that user to take control of your machine. Local input always overrides remote input.")
   // Publishers and admins of a room see "Request control" on a NATIVE screen / window / tab share of the KASTR app (never a
@@ -9237,6 +9468,28 @@
     } catch {}
   }
   window.__chimeRoom = chimeRoom;   // rig
+  // 0.21.89: someone asks to join my room -- one soft note (quieter and shorter than the room tone), the same mute rules
+  function chimeKnock() {
+    if (manualMute || chimeMuted) return;
+    try {
+      chimeCtx = chimeCtx || new AudioContext();
+      const ctx = chimeCtx;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const at = ctx.currentTime + 0.01;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.linearRampToValueAtTime(0.045, at + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.38);
+      g.connect(ctx.destination);
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.setValueAtTime(659.25, at);
+      o.connect(g);
+      o.start(at);
+      o.stop(at + 0.4);
+      o.onended = () => { try { o.disconnect(); g.disconnect(); } catch {} };
+    } catch {}
+  }
   // 0.21.15 (Part 39 item 5): chimes are for PEOPLE only. pathClass() decides; a JOIN waits CHIME_SETTLE_MS so a
   // box's presence (mode) that lands after its camera tile (the 0.21.2 race) is known before the tone is judged,
   // and a tile that flaps away inside the window is no arrival. A LEAVE already sits behind the 4 s / 8 s removal
@@ -10061,8 +10314,9 @@
         const ps = document.createElement("div"); ps.className = "ps"; ps.textContent = role.join(" \u00b7 ");
         nm.append(pn, ps);
         row.append(av, nm);
-        row.title = x.name + " \u2014 " + (g.priv ? "in a private room" : g.slug === LOBBY ? "in the Lobby" : "in " + g.title) + (g.go.can ? " (click to go there)" : g.go.here ? "" : " (" + g.go.why + ")");
-        const go = () => { if (!x.me) eoGoTo(g); };
+        const knock = g.priv && x.srv && accCanAsk("");   // 0.21.89: a person in someone's My room -- ask its owner to let me in
+        row.title = x.name + " \u2014 " + (g.priv ? "in a private room" : g.slug === LOBBY ? "in the Lobby" : "in " + g.title) + (g.go.can ? " (click to go there)" : g.go.here ? "" : knock ? " (click to ask to join)" : " (" + g.go.why + ")");
+        const go = () => { if (x.me) return; if (knock) accAskPrivate(x); else eoGoTo(g); };
         row.addEventListener("click", go);
         row.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === row) { e.preventDefault(); go(); } });
         if (!x.me && msgOk && eoNameKey(x.name) !== eoNameKey(myOpName())) {   // 0.21.88: Message (not on my own other devices)
@@ -14678,6 +14932,7 @@
   // 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): every yes/no question KASTR
   // asks. Resolves true on OK; Esc, Cancel or a click beside the card resolve false. One question at a time.
   let kcBusy = Promise.resolve();
+  let kcRunning = null;   // 0.21.89: the question on screen now (an Ask for access waits only while its own question is open)
   function kastrConfirm(o) {
     o = o || {};
     const run = () => new Promise((resolve) => {
@@ -14685,7 +14940,7 @@
       if (!el) {
         el = document.createElement("div"); el.id = "kConfirm"; el.hidden = true;
         el.innerHTML = '<div class="popcard kconfirm" role="dialog" aria-modal="true" aria-labelledby="kcTitle" aria-describedby="kcMsg"><div class="head"><span id="kcTitle"></span></div>'
-          + '<div class="body"><p class="kcmsg" id="kcMsg"></p><p class="kcdet"></p><input class="kcin" type="text" autocomplete="off" spellcheck="false" hidden><p class="kcerr" hidden></p></div>'
+          + '<div class="body"><p class="kcmsg" id="kcMsg"></p><p class="kcdet"></p><div class="kcrow"><input class="kcin" type="text" autocomplete="off" spellcheck="false" hidden><button type="button" class="kcx" hidden></button></div><p class="kcerr" hidden></p></div>'
           + '<div class="kcbtns"><button type="button" class="ghost kcno"></button><button type="button" class="kcyes"></button></div></div>';
         // 0.21.78: a click on the question (OK, Cancel, or beside the card) never reaches the page -- it closed the panel that asked
         // (People > Mute all)
@@ -14705,12 +14960,43 @@
       const inp = q(".kcin"), err = q(".kcerr");
       inp.hidden = !o.input; inp.value = String(o.input?.value || ""); err.hidden = true; err.textContent = "";   // 0.21.66: + a starting value
       if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
+      // 0.21.89: an optional second action beside the field (`extra`: {label, run(api), primary?} -- Ask for access). run() may
+      // turn the popup into a waiting state (api.wait(message, onCancel): the message alone, only Cancel left), put the form
+      // back (api.restore(error)) or answer the popup itself (api.done(value)). Cancel / Esc while waiting stops the waiting
+      // and shows the form again; closing the popup while waiting cancels it too. `primary`: the main button runs it instead.
+      const xb = q(".kcx"), row = q(".kcrow"), card = q(".kconfirm"), extra = o.extra || null;
+      xb.hidden = !extra || !!extra.primary; xb.textContent = extra ? String(extra.label || "") : "";
+      row.hidden = !o.input && xb.hidden;
+      yes.hidden = false; card.classList.remove("kcwait");
+      let waiting = null;
+      const waitOn = (msg, onCancel) => {
+        waiting = { onCancel };
+        card.classList.add("kcwait");
+        q(".kcmsg").textContent = msg || "";
+        det.hidden = true; row.hidden = true; err.hidden = true; yes.hidden = true;
+        no.textContent = "Cancel"; no.disabled = false;
+        try { no.focus(); } catch {}
+      };
+      const waitOff = (why, soft) => {
+        waiting = null;
+        err.classList.toggle("soft", !!soft);
+        card.classList.remove("kcwait");
+        q(".kcmsg").textContent = o.message || "";
+        det.textContent = o.detail || ""; det.hidden = !o.detail;
+        row.hidden = !o.input && xb.hidden; yes.hidden = false; yes.disabled = no.disabled = false;
+        no.textContent = o.cancel || "Cancel";
+        err.textContent = why || ""; err.hidden = !why;
+        try { (o.input ? inp : yes).focus(); } catch {}
+      };
+      const stopWaiting = () => { const w = waiting; if (!w) return false; waitOff(""); try { w.onCancel?.(); } catch {} return true; };
+      const api = { wait: waitOn, restore: waitOff, done: (v) => done(v, true), isOpen: () => !el.hidden && kcRunning === run, waiting: () => !!waiting };
       yes.disabled = no.disabled = false;
       const prev = document.activeElement;
-      const order = () => (o.input ? [inp, no, yes] : o.noCancel ? [yes] : [no, yes]);
+      const order = () => (waiting ? [no] : o.input ? [inp, ...(xb.hidden ? [] : [xb]), no, yes] : o.noCancel ? [yes] : [no, yes]);
       const onKey = (e) => {
-        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
-        else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (document.activeElement === no) done(false); else accept(); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (!stopWaiting()) done(false); }
+        else if (e.key === "Enter" && waiting) { e.preventDefault(); e.stopPropagation(); }
+        else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (document.activeElement === no) done(false); else if (document.activeElement === xb && !xb.hidden) xb.click(); else accept(); }
         else if (e.key === "Tab") {
           e.preventDefault(); e.stopPropagation();
           const f = order(), i = f.indexOf(document.activeElement);
@@ -14728,21 +15014,26 @@
           try { why = await o.check(v); } catch (e2) { why = e2?.message || String(e2); }
           yes.disabled = no.disabled = false;
           if (el.hidden) return;
-          if (why) { err.textContent = why; err.hidden = false; inp.select(); inp.focus(); return; }
+          if (why) { err.classList.remove("soft"); err.textContent = why; err.hidden = false; inp.select(); inp.focus(); return; }
         }
         done(v);
       }
-      function done(v) {
+      function done(v, fromApi) {
+        if (waiting && !fromApi) { const w = waiting; waiting = null; try { w.onCancel?.(); } catch {} }   // 0.21.89: closing stops the waiting
+        waiting = null; card.classList.remove("kcwait"); yes.hidden = false;
         el.hidden = true;
+        kcRunning = null;
         document.removeEventListener("keydown", onKey, true);
-        el.onclick = null; yes.onclick = null; no.onclick = null;
+        el.onclick = null; yes.onclick = null; no.onclick = null; xb.onclick = null;
         try { prev?.focus?.(); } catch {}
         resolve(v);
       }
-      yes.onclick = () => accept();
-      no.onclick = () => done(false);
+      yes.onclick = () => { if (extra?.primary) { if (!waiting) extra.run(api); } else accept(); };
+      no.onclick = () => { if (!stopWaiting()) done(false); };
+      xb.onclick = () => { if (!waiting && extra) extra.run(api); };   // 0.21.89
       el.onclick = (e) => { if (e.target === el) done(false); };
       document.addEventListener("keydown", onKey, true);
+      kcRunning = run;
       el.hidden = false;
       (o.input ? inp : yes).focus();
     });
@@ -17097,6 +17388,8 @@
     if (!base) throw new Error("no relay url");
     const inv = inviteGet();   // 0.21.75: an invite link for THIS room rides every mint (the join and the re-mints) until it ends
     const invTok = inv && inv.room === room ? inv.token : undefined;
+    const adm = invTok ? null : accGrantFor(room);   // 0.21.89: let in by someone in the room -- the grant rides this room's mints (this visit)
+    const admTok = adm ? "ka-" + adm.id + "-" + adm.key : undefined;
     // 0.21.68 (Kenton: "Could not join aoz-6: Failed to fetch" -- it joined on a later try): a NETWORK failure (the relay host's KASTR
     // restarting for an update, a dropped connection) is tried again twice, 1.5 s then 3 s later; a refusal (bad code, locked) is not
     let r = null;
@@ -17108,6 +17401,7 @@
           // -- give it the room code there so locked rooms still open.
           body: JSON.stringify({ room, code: authCodes ? (access ?? "") : ((access ?? "") || (roomCode ?? "")), roomCode: roomCode ?? "",
                                  host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined,   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
+                                 admit: admTok,   // 0.21.89: let in by someone in the room (this visit)
                                  invite: invTok }),   // 0.21.75
         });
         break;
@@ -17119,8 +17413,10 @@
     }
     const d = await r.json().catch(() => ({}));
     if (invTok && !(r.ok && d.ok) && /^(expired|revoked|wrong)$/.test(String(d.invite || ""))) inviteSet(null);   // 0.21.75: a dead link is dropped
+    if (admTok && !(r.ok && d.ok) && /^(expired|wrong|room)$/.test(String(d.admit || ""))) accGrantSet(null);   // 0.21.89: that visit is over
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
     if (invTok && d.invite?.id) inviteSet({ ...inv, id: d.invite.id, exp: Number(d.invite.exp) || 0 });   // 0.21.75
+    { const g = accGrantGet(); if (g && g.room !== room) accGrantSet(null); }   // 0.21.89: in another room now -- that visit is over (asking again next time)
     authTokens = d.tokens;
     authNs = d.ns || "~";   // 0.21.17: the control namespace (every minter in the fleet grants '~')
     authExp = d.exp;
@@ -19102,6 +19398,7 @@
           detail: "Your microphone will be muted and your camera turned off.",
           ok: rec.slug === LOBBY ? "Go to the Lobby" : "Join " + rec.slug, cancel: "Stay in " + roomTitle(CHANNEL),
           input: needCode ? { placeholder: "Code for " + rec.slug, masked: true } : null,
+          extra: needCode ? accExtra(rec) : null,   // 0.21.89: Ask for access
           check: needCode ? async (v) => {
             if (!String(v || "").trim()) return "Enter the room\u2019s code.";
             const why = await lockedRoomRefusal(rec, v);
@@ -19111,6 +19408,10 @@
             catch (e) { const m = String(e?.message || e); return /too many|locked out|try again in/i.test(m) ? m : "Wrong room code."; }
           } : null });
         if (ans === false) return;
+        if (ans && typeof ans === "object") {   // 0.21.89: let in (no code) -- or the room turned out to be open / shared with me
+          if (joinState !== "joined") return;
+          sbFormClose(); switchRoom(rec, ""); return;
+        }
         if (needCode) { sbFormClose(); switchRoom(rec, ans); return; }
       } else if (needCode) { sbFormOpen(card, "password", rec); return; }
       sbFormClose();
@@ -21325,6 +21626,7 @@
                   name: (profile && profileName(profile)) || joinEls.joinName.value || "", micOn: !!live.micOn, vidOn: !!live.vidOn,
                   spots: Array.isArray(live.spots) ? live.spots.slice(0, 16) : [], hadShare: !!live.hadShare };
       try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
+      if (live.acc && live.acc.room === live.room) accGrantSet(live.acc);   // 0.21.89: the visit someone let me in for goes on (if it still lives at the relay)
       gateShow();
     }).catch(() => {});
   }
@@ -21542,7 +21844,7 @@
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
       joinEls.joinPwd.value = rejoinRec.code ?? "";
       joinEls.joinAccess.value = rejoinRec.access ?? "";   // 0.10.0
-      { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: a rejoin ticket is checked too
+      if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: a rejoin ticket is checked too; 0.21.89: a let-in visit has no code (the mint checks the grant)
     } else if (joinEls.joinChanSel.value === "__home") {   // 0.21.75: a box in no room -- its own hidden room (no lock, not registered)
       slug = homeRoomOf(HOSTNAME1);
       rec = null;
@@ -21710,7 +22012,7 @@
       let spots = [];
       try { spots = (window.__spot?.mineList?.() || []).map((v) => ({ target: String(v.target), ts: Number(v.ts) || 0 })); } catch {}
       localStorage.setItem(LIVE_KEY, JSON.stringify({ room: CHANNEL, at: Date.now(), micOn: !!src && !src.micMuted, vidOn: !!src && !src.videoPaused,
-        spots, hadShare: !!rec?.sources?.some((x) => x.kind === "screen") }));
+        spots, hadShare: !!rec?.sources?.some((x) => x.kind === "screen"), acc: accGrantFor(CHANNEL) || undefined }));   // 0.21.89: + a let-in visit (an update relaunch keeps it)
     } catch {}
   }
   setInterval(() => { liveSave(); hiMine(); }, 5000);   // 0.21.64: + my ring colour once my name is known
@@ -21718,6 +22020,7 @@
     if (joinState !== "joined") return;
     try { personalLeaveSend(false); } catch {}   // 0.21.78: the owner leaving My room -- its guests go to the Lobby
     try { localStorage.removeItem(LIVE_KEY); } catch {}   // 0.21.61: Leave = nothing to resume
+    accGrantSet(null);   // 0.21.89: Leave ends a visit someone let me in for
     joinState = "leaving";
     try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
     try { localStorage.removeItem("kastr.lastjoin"); } catch {}   // 0.8.8: Leave = pick a room next time

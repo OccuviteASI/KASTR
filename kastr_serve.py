@@ -3886,6 +3886,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/vehicle",                                      # 0.21.63: a vehicle's key -> a publish token
                          "/api/invite", "/api/invite/revoke", "/api/invites",  # 0.21.75: room invite links (the minter keeps them)
                          "/api/people",                                       # 0.21.78: beats, person invites, My room shared
+                         "/api/access",                                       # 0.21.89: Ask for access (ask, status, cancel, answer)
                          "/api/msg", "/api/msg/file",                         # 0.21.88: private messages (+ an attachment's ciphertext)
                          "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
                          "/api/library", "/api/library/token", "/api/library/admin",   # 0.21.84: the stream library

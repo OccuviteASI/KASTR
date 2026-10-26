@@ -100,6 +100,7 @@ from urllib.parse import urlparse, parse_qs   # 0.20.0: + parse_qs (the bans lon
 
 import kastr_rtsp
 import kastr_msg   # 0.21.88: private messages (the hub's end-to-end encrypted store)
+import kastr_access   # 0.21.89: Ask for access (the hub's desk of asks, answers and one-visit grants)
 
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
@@ -6012,6 +6013,10 @@ class AuthService:
                 elif path == "/api/people":            # 0.21.78: beats, person invites, My room shared
                     obj, code = svc.people_api(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
+                elif path == "/api/access":            # 0.21.89: Ask for access -- ask, status, cancel (the asker); answer (in the room)
+                    obj, code = svc.access_api(p, self.headers.get("Authorization"), self._peer())
+                    hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                    self._reply(obj, code, hdrs)
                 elif path == "/api/msg/sync":          # 0.21.88: a page of the messages store (hand-over / standby copy)
                     obj, code = svc.msg_sync_api(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
@@ -6297,6 +6302,8 @@ class AuthService:
                 return {"ok": False, "error": "bad room name"}, 400
             return self._invite_manage("list" if op == "inviteList" else "revoke", body,
                                        p.get("vouch") == "admin" or (p.get("vouch") == "owner" and is_personal(body["room"])))   # 0.21.78
+        if op == "access":    # 0.21.89: Ask for access from a spoke (it checked the asker's access code / the member token: `vouch`)
+            return self._acc_fed(p)
         if op in P_FED_OPS:   # 0.21.78: My room shared -- a spoke checked the member's token with its own key and says so in `vouch`
             return self._p_fed(op, p)
         slug = str(p.get("slug") or "")
@@ -6485,6 +6492,20 @@ class AuthService:
         # The room's own code is what old pages (and the second gate row) send
         # in `code`; with access codes on it travels in `roomCode`.
         rc = room_code if room_code is not None else access
+        adm_row = None
+        admit = p.get("admit")
+        if admit not in (None, "") and p.get("invite") in (None, ""):
+            # 0.21.89 (Kenton: Ask for access -- "allow them in without a code"): someone in the room let this device in. The
+            # grant (ka-<id>-<key>) works for THIS device and THIS room while its visit lasts; a spoke asks the hub, fail closed.
+            verdict, adm_row = self._acc_verify(str(admit), slug, host)
+            if verdict == "down":
+                return {"ok": False, "hubDown": True, "error": "the hub could not be asked about your access -- try again shortly"}, 503
+            if verdict == "wrong":
+                out, code = self._fail(peer, "wrong access grant", slug, what="access grant")
+                out.update(ok=False, admit="wrong")
+                return out, code
+            if verdict != "ok":
+                return {"ok": False, "admit": verdict, "error": kastr_access.REFUSED.get(verdict, "refused")}, 403
         inv_row = None
         invite = p.get("invite")
         if invite not in (None, ""):
@@ -6515,19 +6536,21 @@ class AuthService:
                 role, rc = "publisher", access     # the room's creator (a publisher) delegated its code
             else:
                 return self._fail(peer, "wrong access code", slug)
-            if rec is not None and rec.get("hash") and not personal and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
+            if rec is not None and rec.get("hash") and not personal and adm_row is None and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked; 0.21.89: let in
                 return self._fail(peer, "wrong room code", slug)
         else:
             # Legacy (secured, no codes yet): today's behaviour, so a fleet
             # update cannot lock a working relay out. Relay.start logs it.
             role = "publisher"
-            if rec is not None and rec.get("hash") and not personal and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked
+            if rec is not None and rec.get("hash") and not personal and adm_row is None and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked; 0.21.89: let in
                 return self._fail(peer, "wrong room code", slug)
         if box_guest and role in ("publisher", "admin"):
             role = "viewer"   # 0.21.84: until now only the page kept people out of a box's home room
+        if adm_row is not None:   # 0.21.89: what typing the room code would have given -- never admin (a viewer stays a viewer)
+            role = "viewer" if "viewer" in (role, adm_row.get("role")) else "publisher"
         if personal:   # 0.21.78: its owner (the personal code), or a guest (people with access / an invite) while the owner is in
-            return self._personal_token(slug, role, rc, host, inv_row, peer)
-        if inv_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code
+            return self._personal_token(slug, role, rc, host, inv_row, peer, admit=adm_row)
+        if inv_row is None and adm_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code; 0.21.89: nor a grant
             # 0.21.17 (B1): the lock may live at the hub (it was registered there, or mirrored from another spoke)
             hv = self.hub_room(slug, rc if rc is not None else "")
             if hv == "wrong":
@@ -6545,6 +6568,9 @@ class AuthService:
         ttl = TOKEN_TTL if role in ("publisher", "admin") else VIEWER_TTL   # 0.16.0: admin = a publisher with ~admin
         inv_claim = {"inv": inv_row["id"]} if inv_row else {}   # 0.21.75: the member token names the link it came by
         exp = now + ttl
+        if adm_row is not None:   # 0.21.89: a grant's token is short -- the page re-mints while the grant lives (this visit)
+            inv_claim = dict(inv_claim, acc=adm_row["id"])
+            exp = min(exp, now + kastr_access.TOKEN_TTL)
         if slug == LOBBY_SLUG:   # 0.21.60: the Lobby -- presence only, whatever the code's role
             puts = ([STATE_PREFIX + "/" + slug + "/" + host] if host else []) + [PRESENCE_KIND + "/" + slug]
             lc = {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp}
@@ -6601,6 +6627,9 @@ class AuthService:
                         self._inv_said = dict(sorted(self._inv_said.items(), key=lambda kv: kv[1])[-256:])
             if say:   # one line per link and member an hour; never the link itself
                 self.log("relay auth: %s joined room %s with invite link %s (from %s)" % (host or "a member", slug, inv_row["id"], peer or "?"))
+        if adm_row is not None:   # 0.21.89
+            out["admit"] = {"id": adm_row["id"], "room": slug, "exp": exp}
+            self._acc_joined_log(adm_row["id"], host, slug, peer)
         return out, 200
 
     # ---- 0.21.75: room invite links -----------------------------------------------------------------------------------
@@ -6906,6 +6935,7 @@ class AuthService:
                 pl.oncache.pop(k, None)
         for slug in gone:
             self._p_close(slug, "gone", now)
+        self._acc_sweep(now)   # 0.21.89: asks that timed out / lost everyone who could answer; grants whose visit ended
         return gone
 
     def _p_revoke_guests_locked(self, slug, host=None):
@@ -7010,10 +7040,10 @@ class AuthService:
                 self._pl().open_local[slug] = time.time()
         return v, info
 
-    def _personal_token(self, slug, role, rc, host, inv_row, peer):
+    def _personal_token(self, slug, role, rc, host, inv_row, peer, admit=None):
         """token() for a personal room (the access code or invite already checked): the owner's token as 0.21.75 made it, or
         a guest's -- media, room.json and chat under their own host, never a public kind, `pg` + `ph` (their device)."""
-        verdict, info = self._p_judge(slug, rc or "", host or "", inv_row is not None)
+        verdict, info = self._p_judge(slug, rc or "", host or "", inv_row is not None or admit is not None)   # 0.21.89: + let in by the owner
         owner = clean_label(info.get("owner"), 40)
         if verdict == "down":
             return {"ok": False, "hubDown": True, "error": "personal rooms live on the hub, which is unreachable -- try again shortly"}, 503
@@ -7048,11 +7078,16 @@ class AuthService:
         cl = {"root": "", "get": slug, "put": [slug + "/" + host], "pg": 1, "ph": host, "iat": now, "exp": exp}
         if inv_row:
             cl["inv"] = inv_row["id"]
+        if admit is not None:   # 0.21.89: let in by the owner -- this visit only (a short token; re-mints while the grant lives)
+            exp = min(exp, now + kastr_access.TOKEN_TTL)
+            cl.update(acc=admit["id"], exp=exp)
         member = _mint(self.key, cl)
         out = {"ok": True, "exp": exp, "role": "publisher", "ns": NS, "personal": True, "guest": True, "owner": owner,
                "co": bool(info.get("coMe")), "tokens": {"member": member}}
         if inv_row:
             out["invite"] = {"id": inv_row["id"], "room": inv_row["room"], "exp": inv_row.get("exp")}
+        if admit is not None:   # 0.21.89
+            out["admit"] = {"id": admit["id"], "room": slug, "exp": exp}
         self.log("relay auth: %s joined %s's personal room %s as a guest%s (from %s)"
                  % (host, owner or "?", slug, " (invite %s)" % inv_row["id"] if inv_row else "", peer or "?"))
         return out, 200
@@ -7080,7 +7115,7 @@ class AuthService:
                 return {"open": self.personal_open(slug, now) or None, "owner": owner, "access": None, "co": False}
         inv = str(claims.get("inv") or "")
         out = {"open": self.personal_open(slug, now), "owner": owner,
-               "access": host in hosts or (bool(inv) and not self._p_inv_revoked(inv)),   # 0.21.85: a revoked link is no access
+               "access": host in hosts or (bool(inv) and not self._p_inv_revoked(inv)) or bool(claims.get("acc")),   # 0.21.85: a revoked link is no access; 0.21.89: let in (the grant ends at the re-mint)
                "co": bool(host) and co == host}
         if not out["access"] and inv and host not in hosts:
             out["revoked"] = True   # 0.21.85: the page says why (the link, not the owner)
@@ -7765,6 +7800,10 @@ class AuthService:
             av = clean_avatar(p.get("avatar"))   # 0.21.86: + the profile photo
             self._p_where_beat(room, host, name, owner, p.get("mode"), now, av)   # 0.21.85: Everyone online (personal rooms)
             out = {"ok": True, "inbox": self._p_inbox_take(host, now), "shared": self._p_shared(host, now)}
+            if p.get("acc") or claims.get("acc"):   # 0.21.89: Ask for access -- asks for those who may let people in; an admitted page stays in
+                acc = self._acc_beat(p, claims, room, host, name, owner, now)
+                if acc is not None:
+                    out["access"] = acc
             if mp:
                 out["msg"] = mp[0]   # 0.21.88: a message (or a read mark, a group change) waits -- the page pulls
             if owner:
@@ -7847,6 +7886,378 @@ class AuthService:
                 return self._p_fed(body["op"], body)
             return self._p_hub_call(body)
         return {"ok": False, "error": "unknown op (beat | leave | invite | rc | all | online | cmd | list | share | co | seen)"}, 400
+
+    # ---- 0.21.89: Ask for access ---------------------------------------------------------------------------------------
+    # Kenton: "let someone prompt people in a locked room that lets someone with permissions in the room already to allow them
+    # in without a code" / "an 'Ask for access' in the same pop-up as the code entry". The HUB keeps the desk (kastr_access):
+    # who may let people in and is in their room now (their pages' beats; a spoke forwards them, vouched), the asks, the
+    # answers, the one-visit grants. An asker asks at its OWN relay with its access code (checked there: a wrong code and too
+    # many asks count toward the lockout; a banned device is refused); a spoke forwards it with the role it checked. The pages
+    # that may answer learn of asks on their beat (the hub's from the desk, a spoke's from the long-poll copy); the asker polls
+    # its own relay, never the hub. An answer is checked at the hub: only a page in THAT room, in it now, whose own token (an
+    # admin's, the owner's) or the room's key (its creator) says it may. "Let in" = the asker's page mints with
+    # admit: ka-<id>-<key> -- its own device, that room, this visit; never admin.
+
+    def _acc(self):
+        d = self.__dict__.get("_accdesk")
+        if d is None:
+            with _XS_INIT_LOCK:
+                d = self.__dict__.setdefault("_accdesk", kastr_access.AccessDesk(self.log))
+        return d
+
+    def _acc_m(self):
+        m = self.__dict__.get("_accmirror")
+        if m is None:
+            with _XS_INIT_LOCK:
+                m = self.__dict__.setdefault("_accmirror", kastr_access.AccessMirror())
+        return m
+
+    def _acc_fw(self):
+        f = self.__dict__.get("_accfw")
+        if f is None:
+            with _XS_INIT_LOCK:
+                f = self.__dict__.setdefault("_accfw", {"beat": {}, "keep": {}, "said": {}})
+        return f
+
+    def _acc_spoke(self):
+        return self._p_spoke()
+
+    def _acc_nudge(self):
+        try:
+            self.bans.nudge()   # the spokes' long-polls carry the change at once
+        except Exception:
+            pass
+
+    @staticmethod
+    def _acc_vouch(claims, room, owner):
+        """What a member token says about letting people into its room: "owner" (My room's), "admin", else "member"."""
+        if owner:
+            return "owner"
+        if claims_admin(claims, room) and not claims.get("pg"):
+            return "admin"
+        return "member"
+
+    def _acc_kind_local(self, room, vouch, room_key):
+        """Hub: who is this page in `room`? "owner" / "admin" as its relay vouched (it checked the member token with its own
+        key), "creator" when it holds the room's key; "" = nobody who lets people in."""
+        if not SLUG_RE.match(str(room or "")) or room == LOBBY_SLUG:
+            return ""
+        if is_personal(room):
+            return "owner" if vouch == "owner" else ""
+        if vouch == "admin":
+            return "admin"
+        rk = str(room_key or "")
+        if rk:
+            rec = self.store.room(room)
+            if rec and rec.get("roomKey") and hmac.compare_digest(str(rec.get("roomKey")), rk):
+                return "creator"
+        return ""
+
+    def _acc_sweep(self, now=None):
+        d = self.__dict__.get("_accdesk")
+        if d is not None and d.sweep(now):
+            self._acc_nudge()
+
+    def access_feed(self):
+        """Hub: the long-poll's `access` (None on a spoke)."""
+        if self._acc_spoke():
+            return None
+        try:
+            return self._acc().feed()
+        except Exception as e:
+            self.log("relay auth: access feed: %s" % str(e)[:120])
+            return None
+
+    def access_mirror_apply(self, d):
+        """Spoke: the hub's `access` from the long-poll."""
+        f = d.get("access") if isinstance(d, dict) else None
+        return self._acc_m().apply(f) if isinstance(f, dict) else False
+
+    def _acc_joined_log(self, aid, host, slug, peer):
+        said = ("acc:" + str(aid), host or peer or "?")
+        now = int(time.time())
+        with self.lock:
+            say = now - self._inv_said.get(said, 0) > 3600
+            if say:
+                self._inv_said[said] = now
+        if say:
+            self.log("relay auth: %s joined room %s -- let in (request %s, this visit) (from %s)" % (host or "a member", slug, aid, peer or "?"))
+
+    def _acc_verify(self, token, slug, host):
+        """A mint's `admit` -> (verdict, row): "ok" | "wrong" | "room" | "pending" | "expired" | "down". The hub checks its desk;
+        a spoke asks the hub every time (a mint on a grant is rare: the token lives TOKEN_TTL) and fails closed."""
+        h = str(host or "")
+        if not kastr_access.GRANT_RE.match(str(token or "")) or not HOST_RE.match(h):
+            return "wrong", None
+        if not self._acc_spoke():
+            return self._acc().check(token, h, slug)
+        out = self._hub_fed({"op": "access", "aop": "check", "token": str(token), "room": slug, "host": h}, timeout=5)
+        if out is None:
+            return "down", None
+        d, code = out
+        g = d.get("grant") if isinstance(d.get("grant"), dict) else {}
+        if code == 200 and d.get("ok") and kastr_access.ID_RE.match(str(g.get("id") or "")) and g.get("room") == slug:
+            return "ok", {"id": str(g["id"]), "room": slug, "role": kastr_access.role_cap(g.get("role")), "personal": bool(g.get("personal"))}
+        if code == 403 and d.get("verdict") in ("wrong", "room", "pending", "expired"):
+            return d["verdict"], None
+        if code == 400 and d.get("error") == "bad room":
+            return "wrong", None   # a hub older than 0.21.89 never let anyone in
+        return "down", None
+
+    def _acc_ask_local(self, body, now):
+        """Hub: one ask (the asker's relay checked its access code -> body["role"])."""
+        room, via, host = str(body.get("room") or ""), str(body.get("via") or ""), str(body.get("host") or "")
+        if not HOST_RE.match(host):
+            return {"ok": False, "error": "this page names no device -- update KASTR"}, 400
+        if via:   # My room from Everyone online: the room the person `via` is in (only a personal room's)
+            if not HOST_RE.match(via):
+                return {"ok": False, "error": "who?"}, 400
+            with self.lock:
+                w = dict(self._pl().where.get(via) or {})
+            room = str(w.get("room") or "") if w and now - float(w.get("at") or 0) <= PWHERE_KEEP else ""
+            if not is_personal(room):
+                return {"ok": False, "error": "they are not in a room you can ask to join right now"}, 404
+        if not SLUG_RE.match(room) or room == LOBBY_SLUG or reserved_slug(room):
+            return {"ok": False, "error": "ask to join a locked room (never the Lobby)"}, 400
+        personal = is_personal(room)
+        if personal:
+            info = self.store.personal_info(room) if hasattr(self.store, "personal_info") else None
+            if info is None:
+                return {"ok": False, "error": "no such personal room"}, 404
+            if host in info["people"]:
+                return {"ok": False, "shared": True, "room": room, "error": "this room is shared with you -- join it from your rooms list"}, 409
+        else:
+            rec = self.store.room(room)
+            if not (rec and rec.get("hash")):
+                return {"ok": False, "open": True, "error": "this room is not locked -- just join it"}, 409
+        if self.bans and self.bans.hit(room, host, None, now):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        out, code = self._acc().ask(room, host, body.get("name"), body.get("role"), personal, body.get("device"), now)
+        what = "a personal room" if personal else "room " + room
+        if code == 200:
+            self._p_thread()
+            self._acc_nudge()
+            self.log("relay auth: %s asks to join %s (request %s)" % (host, what, out["id"]))
+        elif out.get("nobody"):
+            self.log("relay auth: %s asked to join %s -- nobody who can let them in is there" % (host, what))
+        elif code == 429:
+            self.log("relay auth: %s asked to join %s too often (%s)" % (host, what, out.get("error")))
+        return out, code
+
+    def _acc_answer_local(self, aid, room, host, kind, allow, by, now):
+        out, code = self._acc().answer(aid, room, host, kind, allow, by, now)
+        if code == 200:
+            self._acc_nudge()
+            self.log("relay auth: %s %s request %s to join %s" % (host, "let in" if allow else "declined", aid, room))
+        elif code == 403:
+            self.log("relay auth: an answer to request %s from %s in %s was refused (%s)" % (aid, host or "?", room or "?", out.get("error")))
+        return out, code
+
+    def _acc_fed(self, p):
+        """Hub side of a spoke's Ask-for-access calls (rooms_fed checked the federation bearer)."""
+        aop = str(p.get("aop") or "")
+        host = str(p.get("host") or "")
+        host = host if HOST_RE.match(host) else ""
+        room = str(p.get("room") or "")
+        now = time.time()
+        if aop == "ask":
+            if p.get("vouch") not in kastr_access.ROLES or not host:
+                return {"ok": False, "error": "the spoke must vouch for the asker's access code"}, 403
+            return self._acc_ask_local({"room": room, "via": str(p.get("via") or ""), "host": host, "name": p.get("name"),
+                                        "device": p.get("device"), "role": p.get("vouch")}, now)
+        if aop == "status":
+            return self._acc().status(str(p.get("id") or ""), str(p.get("key") or ""), now)
+        if aop == "cancel":
+            out = self._acc().cancel(str(p.get("id") or ""), str(p.get("key") or ""), now)
+            self._acc_nudge()
+            return out
+        if aop == "check":
+            verdict, row = self._acc().check(str(p.get("token") or ""), host, room, now)
+            if verdict == "ok":
+                return {"ok": True, "grant": row}, 200
+            return {"ok": False, "verdict": verdict, "error": kastr_access.REFUSED.get(verdict, "refused")}, 403
+        if aop == "keep":
+            if p.get("vouch") != "member" or not host:
+                return {"ok": False, "error": "the spoke must vouch for the member"}, 403
+            return {"ok": True, "kept": self._acc().keep(str(p.get("id") or ""), host, room, now)}, 200
+        if aop == "gone":
+            if host:
+                self._acc().gone(host, room if SLUG_RE.match(room) else None)
+            return {"ok": True}, 200
+        kind = self._acc_kind_local(room, p.get("vouch"), p.get("roomKey"))
+        if aop == "beat":
+            if not kind or not host:
+                return {"ok": False, "error": "not someone who lets people into this room"}, 403
+            if self._acc().beat(room, host, clean_label(p.get("name"), 40), kind, is_personal(room), now):
+                self._p_thread()
+                self._acc_nudge()
+            return {"ok": True, "kind": kind}, 200
+        if aop == "answer":
+            if not host:
+                return {"ok": False, "error": "who?"}, 400
+            return self._acc_answer_local(str(p.get("id") or ""), room, host, kind, p.get("allow") is True, clean_label(p.get("by"), 40), now)
+        return {"ok": False, "error": "unknown access op"}, 400
+
+    def _acc_beat(self, p, claims, room, host, name, owner, now):
+        """The beat's part: an admitted page keeps its grant alive; a page that may let people in says it is in the room and
+        gets the asks (cards) -- None when the page is neither."""
+        spoke = self._acc_spoke()
+        fw = self._acc_fw()
+        aid = str(claims.get("acc") or "")
+        if aid and kastr_access.ID_RE.match(aid):
+            if not spoke:
+                self._acc().keep(aid, host, room, now)
+            else:
+                with self.lock:
+                    due = now - fw["keep"].get(aid, 0) >= kastr_access.KEEP_FWD_S
+                    if due:
+                        fw["keep"][aid] = now
+                        if len(fw["keep"]) > 512:
+                            for k in sorted(fw["keep"], key=fw["keep"].get)[:256]:
+                                fw["keep"].pop(k, None)
+                if due:
+                    self._acc_send({"op": "access", "aop": "keep", "vouch": "member", "id": aid, "host": host, "room": room})
+        if not p.get("acc"):
+            return None
+        vouch = self._acc_vouch(claims, room, owner)
+        rk = str(p.get("roomKey") or "")[:128] if vouch == "member" and not is_personal(room) else ""
+        can = room != LOBBY_SLUG and not claims.get("lobby") and (vouch != "member" or bool(rk))
+        if not spoke:
+            kind = self._acc_kind_local(room, vouch, rk) if can else ""
+            if not kind:
+                self._acc().gone(host)
+                return {"asks": [], "closed": []}
+            if self._acc().beat(room, host, name, kind, is_personal(room), now):
+                self._p_thread()
+                self._acc_nudge()
+            return self._acc().cards(host, room, now)
+        body = None
+        with self.lock:
+            last = fw["beat"].get(host)
+            if can and (last is None or last[0] != room or now - last[1] >= kastr_access.FWD_S):
+                fw["beat"][host] = (room, now)
+                body = {"op": "access", "aop": "beat", "vouch": vouch, "room": room, "host": host, "name": name, "roomKey": rk}
+            elif not can and last is not None:
+                fw["beat"].pop(host, None)
+                body = {"op": "access", "aop": "gone", "host": host}
+        if body is not None:
+            self._acc_send(body)
+        return self._acc_m().cards(host, room, now) if can else {"asks": [], "closed": []}
+
+    def _acc_send(self, body):
+        """Spoke: a beat's note to the hub, off the beat's own thread (the page's beat never waits on the hub)."""
+        threading.Thread(target=self._hub_fed, args=(body,), kwargs={"timeout": 4}, daemon=True).start()
+
+    def _acc_ask(self, p, peer, now):
+        """POST /api/access {op: "ask", room | via, code, host, name?, device?} -- no member token (the asker is not in that
+        room): the access code is the credential, as for /api/token."""
+        room, via, host = str(p.get("room") or ""), str(p.get("via") or ""), str(p.get("host") or "")
+        if not HOST_RE.match(host):
+            return {"ok": False, "error": "this page names no device -- update KASTR"}, 400
+        if via:
+            if not HOST_RE.match(via) or via == host:
+                return {"ok": False, "error": "who?"}, 400
+            room = ""
+        else:
+            if not SLUG_RE.match(room):
+                return {"ok": False, "error": "bad room name"}, 400
+            if room == LOBBY_SLUG:
+                return {"ok": False, "error": "the Lobby is open to everyone -- no need to ask"}, 403
+            if reserved_slug(room):
+                return {"ok": False, "error": reserved_slug(room)}, 403
+            if self.bans and self.bans.hit(room, host, peer, now):
+                return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        wait = self.locked_for(peer)
+        if wait:
+            return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        access = str(p.get("code") or "")
+        where = room or "a private room"
+        if self.store.configured():
+            if self.store.check("publisher", access):
+                role = "publisher"
+            elif self.store.check("viewer", access):
+                role = "viewer"
+            elif self.store.check("admin", access) or self._hub_admin_ok(access):
+                role = "publisher"   # what the code gives in a room, never admin
+            else:
+                out, code = self._fail(peer, "wrong access code", where, what="access request")
+                out["ok"] = False
+                return out, code
+        else:
+            role = "publisher"
+        body = {"room": room, "via": via, "host": host, "name": clean_label(p.get("name"), 40), "device": clean_label(p.get("device"), 40),
+                "role": role}
+        if not self._acc_spoke():
+            out, code = self._acc_ask_local(body, now)
+        else:
+            r = self._hub_fed(dict(body, op="access", aop="ask", vouch=role), timeout=6)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly, or enter the room's code"}, 503
+            out, code = r
+            if code == 400 and out.get("error") == "bad room":
+                return {"ok": False, "old": True, "error": "the hub runs an older KASTR without Ask for access -- enter the room's code"}, 501
+        if code == 429 and out.get("abuse"):   # too many asks: abuse counts toward this relay's lockout (the asker's address is here)
+            o2, c2 = self._fail(peer, "too many requests to join", where, what="access request")
+            if c2 == 429:
+                o2["ok"] = False
+                return o2, c2
+        out = dict(out)
+        out.pop("abuse", None)
+        return out, code
+
+    def access_api(self, p, bearer, peer=""):
+        """0.21.89: POST /api/access. The asker (no member token): "ask" {room | via, code, host, name?, device?} -> {id, key,
+        exp} | {nobody} | 429; "status" {id, key} -> {state: pending | let (+ room, role, by) | declined (+ by) | timeout |
+        cancelled | nobody | ended}; "cancel" {id, key}. In the room (Bearer = its member token): "answer" {id, allow, by?,
+        roomKey?} -> {state} | 409 {already, by} | 403 (not someone who lets people in, not in that room, not there now)."""
+        p = p if isinstance(p, dict) else {}
+        op = str(p.get("op") or "")
+        now = time.time()
+        if op == "ask":
+            return self._acc_ask(p, peer, now)
+        if op in ("status", "cancel"):
+            aid, key = str(p.get("id") or ""), str(p.get("key") or "")
+            if not (kastr_access.ID_RE.match(aid) and kastr_access.KEY_RE.match(key)):
+                return {"ok": False, "error": "no such request"}, 400
+            if not self._acc_spoke():
+                if op == "status":
+                    return self._acc().status(aid, key, now)
+                out = self._acc().cancel(aid, key, now)
+                self._acc_nudge()
+                return out
+            if op == "status":
+                return self._acc_m().status(aid, key, now)
+            r = self._hub_fed({"op": "access", "aop": "cancel", "id": aid, "key": key}, timeout=5)
+            return r if r is not None else ({"ok": False, "hubDown": True, "error": "the hub is unreachable"}, 503)
+        if op == "answer":
+            claims = self._member_claims(bearer)
+            if claims is None:
+                return {"ok": False, "error": "join the room first (a member token is required)"}, 403
+            room, host = claims_identity(claims)
+            if not room or not host or room == LOBBY_SLUG or claims.get("lobby"):
+                return {"ok": False, "error": "answer from the room you are in"}, 403
+            aid = str(p.get("id") or "")
+            if not kastr_access.ID_RE.match(aid):
+                return {"ok": False, "error": "which request?"}, 400
+            owner = bool(claims.get("personal")) and is_personal(room)
+            vouch = self._acc_vouch(claims, room, owner)
+            rk = str(p.get("roomKey") or "")[:128] if vouch == "member" and not is_personal(room) else ""
+            if vouch == "member" and not rk:
+                self.log("relay auth: an answer to request %s from %s in %s was refused (not someone who lets people in)" % (aid, host, room))
+                return {"ok": False, "error": ("only the owner lets people into their room" if is_personal(room)
+                                               else "only the room's admins or its creator can let people in")}, 403
+            allow, by = p.get("allow") is True, clean_label(p.get("by"), 40)
+            if not self._acc_spoke():
+                return self._acc_answer_local(aid, room, host, self._acc_kind_local(room, vouch, rk), allow, by, now)
+            r = self._hub_fed({"op": "access", "aop": "answer", "vouch": vouch, "roomKey": rk, "id": aid, "room": room, "host": host,
+                               "allow": allow, "by": by}, timeout=5)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+            d, code = r
+            if code == 400 and d.get("error") == "bad room":
+                return {"ok": False, "error": "the hub runs an older KASTR without Ask for access"}, 501
+            return d, code
+        return {"ok": False, "error": "unknown op (ask | status | cancel | answer)"}, 400
 
     # ---- 0.21.85: Everyone online (the People panel) ------------------------------------------------------------------
     def _p_where_set_locked(self, slug, host, name, guest, mode, via, now, avatar=""):
@@ -10647,6 +11058,7 @@ class AuthService:
         out = {"bans": rows, "ver": ver, "cmd": cmd, "xshare": xs_rows, "xshareVer": xs_ver,   # 0.21.0: + the hub's command channel
                 "boards": boards, "boardsVer": "%d.%d" % (BOOT_AT, bver), "invRevoked": inv_rev,
                 "personal": pfeed,                                                           # 0.21.78: My room shared
+                "access": self.access_feed(),                                                # 0.21.89: Ask for access (asks, answers, states)
                 "standby": self.standby_public(),                                            # 0.21.53: as STATE (a baseline never hides it)
                 "mesh": self.mesh_for(me_node)}                                               # 0.21.77: the relay mesh, as state too
         if lib_since is not None:   # 0.21.84: the stream library -- version + switch always, the rows only when the copy is old
@@ -10861,6 +11273,7 @@ class AuthService:
         self.board_mirror_apply(d)    # 0.21.63
         self.invite_revoked_apply(d)  # 0.21.75
         self.personal_mirror_apply(d)  # 0.21.78
+        self.access_mirror_apply(d)    # 0.21.89: Ask for access -- the cards and the askers' states
         self.library_mirror_apply(d)   # 0.21.84: the stream library's catalogue + the fleet switch
         # 0.21.0: the hub's command channel -- act once per new seq; the first reply is the baseline
         # and a lower seq (a hub reset) re-baselines, so history is never replayed

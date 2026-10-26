@@ -1,5 +1,5 @@
-"""0.21.89 (Kenton: "remove the x in the corner of the Join room page"): the Join room gate has no close button any more;
-Escape still puts it away on a relay-only machine."""
+"""0.21.89 (Kenton: "remove the x in the corner of the Join room page", then "remove escape too"): the Join room gate
+has no close button and Escape no longer puts it away."""
 import os
 import unittest
 
@@ -11,14 +11,14 @@ def page():
         return f.read()
 
 
-class GateHasNoCloseX(unittest.TestCase):
+class GateIsNotDismissible(unittest.TestCase):
     def test_no_close_button_style_or_handler(self):
         self.assertNotIn("joinGateClose", page())
 
-    def test_escape_still_puts_the_gate_away(self):
+    def test_escape_no_longer_hides_the_gate(self):
         s = page()
-        self.assertIn('e.key === "Escape" && !joinEls.joinGate.hidden', s)
-        self.assertIn('joinState === "prejoin" && !rejoinRec) gateHide();', s)
+        self.assertNotIn('e.key === "Escape" && !joinEls.joinGate.hidden', s)
+        self.assertIn("the gate is no\n    // longer dismissible", s.replace("\r\n", "\n"))
 
 
 if __name__ == "__main__":

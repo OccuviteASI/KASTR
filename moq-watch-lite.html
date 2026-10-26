@@ -916,7 +916,7 @@
     border:1px solid transparent; border-radius:4px; background:var(--asi-blue); color:var(--on-accent); cursor:pointer; pointer-events:auto; }
   #kToast .tact:hover { filter:brightness(1.1); }
   #kToast[data-level="error"] .tact { background:rgba(255,255,255,.94); color:var(--asi-red); }
-  /* 0.7.7: the gate is dismissible -- relay-only machines never join (0.21.89: Escape only; Kenton: no close X) */
+  /* 0.21.89: the gate is not dismissible (Kenton: no close X, no Escape) */
   #joinGate .card { position:relative; }
   .noaud .icon { width:11px; height:11px; vertical-align:-2px; }
   .face .cap .icon { width:12px; height:12px; vertical-align:-2px; }
@@ -21754,13 +21754,8 @@
       });
     }
     joinEls.leaveBtn.addEventListener("click", leaveMeeting);
-    // 0.7.7: the gate is dismissible -- some machines only ever host the
-    // relay. Way back in: the room chip or the rooms button. 0.21.89 (Kenton: "remove the x in the corner of the
-    // Join room page"): no close button any more -- Escape still lets a relay-only machine put the gate away.
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !joinEls.joinGate.hidden
-          && joinState === "prejoin" && !rejoinRec) gateHide();
-    });
+    // 0.21.89 (Kenton: "remove the x in the corner of the Join room page", then "remove escape too"): the gate is no
+    // longer dismissible -- no close button, no Escape (0.7.7 let relay-only machines put it away).
     joinEls.roomBanner.addEventListener("click", (e) => {
       e.stopPropagation();
       if (joinState !== "joined") gateShow();   // 0.12.0: joined -> the banner opens Room info

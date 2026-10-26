@@ -219,7 +219,7 @@
     const per = u.person;
     let pk8 = null;
     try { pk8 = await openWrap(per, code); }
-    catch { S.rekey = per; setState("rekey"); return false; }   // My room's code changed without a re-wrap (an admin reset it)
+    catch { S.rekey = per; S.rekeyCode = code; setState("rekey"); return false; }   // My room's code changed without a re-wrap (an admin reset it)
     const priv = await subtle.importKey("pkcs8", pk8, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
     pk8.fill(0);
     const rec = { k: by(), fleet: S.fleet, nk: S.nk, name: per.name || S.name, kid: per.kid, pub: per.pub, priv, at: Date.now() };
@@ -715,7 +715,7 @@
     for (const i of body.querySelectorAll("input")) i.addEventListener("keydown", (e) => e.stopPropagation());
   }
   async function rekeyWith(oldCode) {
-    const cur = K.personal()?.code || "";
+    const cur = K.personal()?.code || S.rekeyCode || "";
     try {
       const pk8 = await openWrap(S.rekey, oldCode);
       if (!cur) throw new Error("enter your current My room code in My room first");
@@ -1109,6 +1109,201 @@
     });
   }
 
+  // ---- 0.21.89 (Kenton: "On launch, have people set their 'my room' and messages up if they haven't already" -- REQUIRED) ----
+  // One card over the whole page once a PERSON has joined a room with an access code (never a camera box, a relay-only machine,
+  // a viewer-only display, the Lobby, an invite-link or My room guest -- K.allowed() + K.person()) and Messages need a step
+  // here: no My room yet (make it: name + code twice), a My room under this name but not unlocked here (it is them on another
+  // device -- or someone else's name: enter its code or change the name), a code shorter than 8 (pick a longer one), a key
+  // locked with an earlier code. No "Not now". It waits for the join gate, a question, the Profile, My room's own dialog. It
+  // NEVER blocks when Messages cannot be reached (the hub away, a relay older than 0.21.88, no WebCrypto here, an admin removed
+  // this device): a quiet line says so, and the card comes when the hub answers again (the 30 s check). The code is never kept
+  // anywhere new -- My room remembers it on this device exactly as the My room dialog does (kastr.personal.<relay host>).
+  const GATE_STATES = new Set(["noroom", "needcode", "short", "rekey"]);
+  const QUIET = { down: "My room and messages will be set up when the hub is reachable",
+                  error: "My room and messages will be set up when the hub is reachable",
+                  old: "My room and messages will be set up when this relay runs KASTR 0.21.88 or later" };
+  let gateEl = null, gateKey = "", gateBusy = false, gateShownAt = 0;
+  const gateOn = () => !!gateEl && !gateEl.hidden;
+  function gateWanted() {
+    if (!K.allowed() || !(K.person?.() ?? false)) return false;
+    return GATE_STATES.has(S.state) || (gateOn() && (S.state === "unlocking" || gateBusy));
+  }
+  function gateBar() {
+    let bar = document.getElementById("kSetupBar");
+    const why = K.allowed() && (K.person?.() ?? false) ? QUIET[S.state] || "" : "";
+    if (!why) { if (bar) bar.hidden = true; return; }
+    if (!bar) { bar = document.createElement("div"); bar.id = "kSetupBar"; bar.setAttribute("role", "status"); document.body.appendChild(bar); }
+    bar.textContent = why;
+    bar.title = why + (S.why ? " (" + S.why + ")" : "");
+    bar.hidden = gateOn();
+  }
+  function gateTick() {
+    gateBar();
+    if (!gateWanted()) { if (gateOn()) gateClose(); return; }
+    if (!gateOn() && K.busyUI?.()) return;   // the join gate, a question, the Profile, My room's dialog first
+    gatePaint();
+  }
+  function gateClose() {
+    if (!gateEl) return;
+    gateEl.hidden = true; gateKey = "";
+    T("gate-close", { st: S.state });
+    if (S.state === "ready") toast("My room and messages are set up \u2014 My room is the first card in your rooms list", 6000, "event");
+    gateBar();
+  }
+  function gateBuild() {
+    const el = document.createElement("div");
+    el.id = "kSetup"; el.hidden = true;
+    el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true"); el.setAttribute("aria-labelledby", "ksTitle");
+    el.innerHTML = '<div class="popcard ksetup"><div class="body">'
+      + '<div class="ksico">' + K.icon("msg") + '</div><h3 id="ksTitle"></h3><p class="kslead"></p>'
+      + '<div class="ksname"><span class="lbl">Name</span><b class="ksn"></b><button type="button" class="kslink" data-a="name">Change name</button></div>'
+      + '<label class="ksf" data-f="old"><span>Current My room code</span><input type="password" class="kso" autocomplete="current-password"></label>'
+      + '<label class="ksf" data-f="c1"><span class="ksc1l">My room code</span><input type="password" class="ksc1" autocomplete="new-password"></label>'
+      + '<label class="ksf" data-f="c2"><span>The same code again</span><input type="password" class="ksc2" autocomplete="new-password"></label>'
+      + '<p class="kshint"></p><p class="kserr" role="alert"></p>'
+      + '<div class="ksbtns"><button type="button" class="mghost" data-a="fresh" hidden>Start fresh</button><button type="button" class="mprim" data-a="go"></button></div>'
+      + '<p class="ksforgot">Forgot your code? A fleet admin can reset your My room \u2014 your message history would be lost.</p>'
+      + '<div class="ksmic" hidden><span>Your microphone is on</span><button type="button" class="mghost" data-a="mute">Mute</button></div>'
+      + "</div></div>";
+    el.addEventListener("click", (e) => e.stopPropagation());   // a click on the card never reaches the page (or closes a panel)
+    el.addEventListener("keydown", (e) => {
+      e.stopPropagation();   // the page's shortcuts stay quiet while it asks
+      if (e.key === "Enter" && e.target?.tagName === "INPUT") { e.preventDefault(); gateGo(); }
+      if (e.key === "Escape") e.preventDefault();   // required: Esc does not dismiss it
+    });
+    el.querySelector('[data-a="go"]').addEventListener("click", () => gateGo());
+    el.querySelector('[data-a="fresh"]').addEventListener("click", () => gateFresh());
+    el.querySelector('[data-a="mute"]').addEventListener("click", () => { try { K.mic?.().mute?.(); } catch {} setTimeout(gateMic, 300); });
+    el.querySelector('[data-a="name"]').addEventListener("click", () => {
+      el.hidden = true; gateKey = "";
+      T("gate-name", {});
+      K.profile?.(() => { S.state = "init"; setTimeout(() => init(true).then(gateTick), 50); });   // a new name: asked again from the start
+    });
+    document.body.appendChild(el);
+    return el;
+  }
+  function gateMic() {
+    if (!gateEl) return;
+    const m = K.mic?.() || {};
+    gateEl.querySelector(".ksmic").hidden = !m.live;
+  }
+  function gatePaint() {
+    if (!gateEl) gateEl = gateBuild();
+    const st = gateBusy || S.state === "unlocking" ? (gateEl.dataset.st || S.state) : S.state;
+    const key = st + "|" + S.name;
+    const q = (sel) => gateEl.querySelector(sel);
+    const err = q(".kserr");
+    if (gateKey !== key) {
+      gateKey = key;
+      gateEl.dataset.st = st;
+      const min = S.codeMin || 8;
+      const t = {
+        noroom: ["Set up My room and messages", "KASTR keeps your own room (My room) and your private messages under your name and a code only you know. Pick it once \u2014 the same name and code open both on any device.", "Set up"],
+        needcode: ["Unlock your messages", "\u201c" + S.name + "\u201d already has a My room on this hub. If it\u2019s yours, enter your My room code to unlock your messages on this device. If it isn\u2019t you, change your name.", "Unlock"],
+        short: ["Pick a longer My room code", "Pick a longer My room code to turn on messages. It becomes your My room code everywhere \u2014 your other devices ask for it once.", "Use this code"],
+        rekey: ["Enter your earlier My room code", "Your messages key was locked with an earlier My room code (an admin may have reset it). Enter that earlier code to keep your history \u2014 or start fresh (older messages cannot be read again).", "Unlock"],
+      }[st] || ["Set up My room and messages", "", "Continue"];
+      q("#ksTitle").textContent = t[0];
+      q(".kslead").textContent = t[1];
+      q('[data-a="go"]').textContent = t[2];
+      q(".ksn").textContent = S.name || "\u2014";
+      const needOld = st === "short" && !(S.pendingCode || K.personal()?.code);
+      q('[data-f="old"]').hidden = !needOld;
+      q('[data-f="c1"]').hidden = false;
+      q('[data-f="c2"]').hidden = !(st === "noroom" || st === "short");
+      q(".ksc1l").textContent = st === "short" ? "New My room code" : st === "rekey" ? "Earlier My room code" : "My room code";
+      q(".ksc1").autocomplete = st === "noroom" || st === "short" ? "new-password" : "current-password";
+      q(".kshint").textContent = st === "noroom" || st === "short" ? "At least " + min + " characters \u2014 it opens My room and your messages on any device, so pick one only you know." : "";
+      q(".kshint").hidden = !q(".kshint").textContent;
+      q('[data-a="fresh"]').hidden = st !== "rekey";
+      q(".ksforgot").hidden = st === "noroom";
+      for (const i of gateEl.querySelectorAll("input")) { i.value = ""; i.classList.remove("bad"); }
+      err.textContent = S.why && st !== "noroom" ? S.why : "";
+      gateEl.hidden = false;
+      gateShownAt = Date.now();
+      T("gate-show", { st });
+      const first = [...gateEl.querySelectorAll("label.ksf:not([hidden]) input")].find((i) => !i.value);
+      setTimeout(() => { try { first?.focus(); } catch {} }, 30);
+    }
+    gateEl.hidden = false;
+    q('[data-a="go"]').disabled = gateBusy;
+    gateMic();
+    gateBar();
+  }
+  function gateSay(msg, bad) {
+    if (!gateEl) return;
+    gateEl.querySelector(".kserr").textContent = msg || "";
+    for (const i of gateEl.querySelectorAll("input")) i.classList.toggle("bad", !!bad && bad.includes(i.className.split(" ")[0]));
+    const b = bad && gateEl.querySelector("input." + bad[0]);
+    if (b) { try { b.focus(); b.select(); } catch {} }
+  }
+  async function gateGo() {
+    if (!gateEl || gateBusy) return;
+    const st = gateEl.dataset.st, min = S.codeMin || 8;
+    const q = (sel) => gateEl.querySelector(sel);
+    const c1 = q(".ksc1").value, c2 = q(".ksc2").value, old = q(".kso").value;
+    if (!c1) return gateSay("Enter " + (st === "short" ? "a new" : st === "rekey" ? "your earlier" : "your") + " My room code.", ["ksc1"]);
+    if ((st === "noroom" || st === "short") && c1.length < min) return gateSay("Too short \u2014 a My room code has at least " + min + " characters.", ["ksc1"]);
+    if ((st === "noroom" || st === "short") && c1 !== c2) return gateSay("The two codes don\u2019t match.", ["ksc2"]);
+    if (st === "short" && !q('[data-f="old"]').hidden && !old) return gateSay("Enter your current My room code.", ["kso"]);
+    gateBusy = true; gateSay(st === "noroom" ? "Setting up\u2026" : "Opening\u2026");
+    q('[data-a="go"]').disabled = true;
+    const t0 = Date.now();
+    try {
+      if (st === "noroom") {
+        const d = await K.roomMake(S.name, c1);
+        if (!d.ok) {
+          if (d.wrong) { S.state = "needcode"; S.why = ""; gateKey = ""; gateBusy = false; gatePaint(); gateSay("\u201c" + S.name + "\u201d already has a My room with another code \u2014 enter its code if it\u2019s yours, or change your name.", ["ksc1"]); return; }
+          gateSay(d.status === 429 || /too many/i.test(d.error || "") ? (d.error || "Too many attempts \u2014 wait a little.") : "My room could not be made: " + (d.error || "refused"));
+          return;
+        }
+        const ok = await unlock(c1, false);
+        if (!ok) { gateSay(S.why || "Messages could not be set up."); return; }
+      } else if (st === "needcode") {
+        const ok = await unlock(c1, false);
+        if (!ok) {
+          if (S.state === "short") return;   // their code works, but messages need a longer one: the next card
+          gateSay(/Wrong/.test(S.why) ? "That isn\u2019t the My room code of \u201c" + S.name + "\u201d. If this name isn\u2019t yours, change your name." : (S.why || "Could not unlock."), ["ksc1"]);
+          return;
+        }
+        if (!K.personal()) await K.roomOpen(S.name, c1);   // My room on this device's rail too (as the My room dialog would)
+      } else if (st === "short") {
+        const cur = S.pendingCode || K.personal()?.code || old;
+        const ok = await unlock(cur, false, c1);
+        if (!ok) { gateSay(S.state === "needcode" ? "The current code is wrong." : (S.why || "Could not change the code."), ["kso"]); return; }
+        if (!K.personal()) await K.roomOpen(S.name, c1);
+      } else if (st === "rekey") {
+        S.why = "";
+        await rekeyWith(c1);
+        if (S.state !== "ready") { gateSay(S.why || "That code does not open your key.", ["ksc1"]); return; }
+      }
+      T("gate-done", { st, ms: Date.now() - t0 });
+    } catch (e) {
+      gateSay("Something went wrong: " + (e?.message || e));
+    } finally {
+      gateBusy = false;
+      if (gateEl) q('[data-a="go"]').disabled = false;
+      setTimeout(gateTick, 0);
+    }
+  }
+  async function gateFresh() {
+    if (!(await K.confirm({ title: "Start fresh", message: "Make a new messages key for " + S.name + "?",
+      detail: "Messages sent to you before cannot be read again on any device. Your other devices must unlock again.", ok: "Start fresh", danger: true }))) return;
+    const code = K.personal()?.code || S.rekeyCode || "";
+    if (!code) { gateSay("Enter your current My room code in My room first."); return; }
+    gateBusy = true;
+    try {
+      const id = await makeIdentity(S.nk, code);
+      const d = await api({ op: "setup", replace: true, name: S.name, code, pub: id.pub, wrapped: id.wrapped, iv: id.iv, salt: id.salt, iter: id.iter });
+      if (!d.ok) { gateSay(d.error || "Refused."); return; }
+      const rec = { k: by(), fleet: S.fleet, nk: S.nk, name: S.name, kid: id.kid, pub: id.pub, priv: id.priv, at: Date.now() };
+      await idbPut("ids", rec);
+      await ready(rec);
+    } finally { gateBusy = false; setTimeout(gateTick, 0); }
+  }
+  setInterval(gateTick, 1000);
+  window.addEventListener("kastr:auth", () => setTimeout(gateTick, 1500));
+
   // ---- wiring -----------------------------------------------------------------------------------------------------------------
   window.__msg = {
     opened: (quiet) => { body.dataset.view = ""; if (S.state === "off" || S.state === "error" || S.state === "down") init(true); else init(); paint(); pull(); if (!S.peopleAt || Date.now() - S.peopleAt > 60000) loadPeople(); if (S.open) { markRead(S.open); ticks(); } },
@@ -1127,6 +1322,8 @@
     fileUrl: (seq, i) => { const r = S.recs.get("seq:" + seq); return r && r.files?.[i] ? fileUrl(r.files[i]) : null; },
     people: () => S.people,
     keys: (names, force) => keysFor(names, force),
+    gate: () => ({ shown: gateOn(), st: gateEl?.dataset.st || "", busy: gateBusy, wanted: gateWanted(), bar: (() => { const b = document.getElementById("kSetupBar"); return b && !b.hidden ? b.textContent : ""; })(),
+      err: gateEl?.querySelector(".kserr")?.textContent || "", shownAt: gateShownAt }),   // 0.21.89 rig
   };
   setInterval(() => { if (S.state === "ready") { pull(); ticks(); } else if (K.allowed() && ["off", "down", "noroom"].includes(S.state)) init(); else paintBtn(); }, POLL_MS);
   setInterval(() => { if (panelShown() && S.open) ticks(); paintBtn(); }, 8000);

@@ -2058,6 +2058,44 @@
   .msettings h4 { margin:8px 0 0; font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.06em; }
   .msettings .mhint { margin:0; font-size:12px; color:var(--text-dim); line-height:1.45; }
   .mchk { display:flex; gap:8px; align-items:center; font-size:12.5px; color:var(--text); }
+  /* ==== 0.21.89 (Kenton: "On launch, have people set their 'my room' and messages up if they haven't already" -- required):
+     the set-up card (assets/kastr-msg.js) over the whole page, below the yes/no questions; the quiet line when the hub is away */
+  #kSetup { position:fixed; inset:0; z-index:130; background:rgba(3,5,10,.72); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kSetup[hidden], #kSetupBar[hidden] { display:none; }
+  #kSetup .ksetup { position:relative; width:min(440px, 100%); max-height:calc(100dvh - 32px); overflow:auto; display:flex; flex-direction:column; }
+  #kSetup .ksetup .body { padding:16px 18px 18px; display:flex; flex-direction:column; gap:10px; }
+  #kSetup .ksico { display:flex; justify-content:center; color:var(--asi-blue); }
+  #kSetup .ksico .icon { width:38px; height:38px; }
+  #kSetup h3 { margin:0; text-align:center; font-size:16px; color:var(--text); }
+  #kSetup .kslead { margin:0; font-size:12.5px; line-height:1.5; color:var(--text-dim); text-align:center; }
+  #kSetup .ksname { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); }
+  #kSetup .ksname .lbl { font-size:11px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.06em; }
+  #kSetup .ksname b { flex:1; min-width:0; font-size:14px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #kSetup .kslink { background:none; border:0; padding:0; color:var(--asi-blue); font:inherit; font-size:12px; cursor:pointer; }
+  #kSetup .kslink:hover { text-decoration:underline; }
+  #kSetup label.ksf { display:flex; flex-direction:column; gap:4px; font-size:11.5px; color:var(--text-dim); }
+  #kSetup label.ksf[hidden] { display:none; }
+  #kSetup input { width:100%; box-sizing:border-box; background:var(--surface-2); border:1px solid var(--line); border-radius:6px; color:var(--text); font-size:14px; padding:9px 10px; }
+  #kSetup input:focus { outline:none; border-color:var(--asi-blue); box-shadow:inset 0 -2px 0 var(--asi-blue); }
+  #kSetup input.bad { border-color:var(--asi-amber); }
+  #kSetup .kshint { margin:0; font-size:11.5px; color:var(--text-mute); line-height:1.45; }
+  #kSetup .kserr { margin:0; font-size:12.5px; color:var(--asi-amber); line-height:1.45; }
+  #kSetup .kserr:empty { display:none; }
+  #kSetup .ksbtns { display:flex; gap:8px; }
+  #kSetup .ksbtns .mprim { flex:1; }
+  #kSetup .ksbtns .mghost[hidden] { display:none; }
+  #kSetup .ksforgot { margin:0; font-size:11.5px; color:var(--text-mute); line-height:1.45; text-align:center; }
+  #kSetup .ksforgot[hidden], #kSetup .ksmic[hidden] { display:none; }
+  #kSetup .ksmic { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--asi-amber); }
+  #kSetup .ksmic button { margin-left:auto; }
+  #kSetupBar { position:fixed; left:50%; bottom:14px; transform:translateX(-50%); z-index:88; max-width:calc(100vw - 28px); padding:6px 12px; border-radius:999px;
+    background:var(--surface); border:1px solid var(--line); color:var(--text-dim); font-size:12px; box-shadow:0 4px 16px rgba(0,0,0,.25); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width: 720px) {
+    #kSetup { padding:0; align-items:flex-end; }
+    #kSetup .ksetup { width:100vw; max-height:92dvh; border-radius:12px 12px 0 0; }
+    #kSetup .ksetup .body { padding-bottom:calc(18px + env(safe-area-inset-bottom)); }
+    #kSetupBar { bottom:calc(76px + env(safe-area-inset-bottom)); white-space:normal; text-align:center; border-radius:10px; }
+  }
   #pplStreams > summary { cursor:pointer; font-size:12px; color:var(--text-mute); padding:4px 2px; }
   #pplStreams > summary:hover { color:var(--text); }
   /* person groups in the People list */
@@ -4894,7 +4932,7 @@
       + '<div class="rsrow pmf"><span class="lbl">Your name</span><div class="rsf"><input class="pmname" type="text" maxlength="48" autocomplete="off" spellcheck="false" aria-label="Your name"></div></div>'
       + '<div class="rsrow pmf"><span class="lbl">Passcode</span><div class="rsf"><input class="pmcode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode (personal code)"></div></div>'
       + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
-      + '<p class="rshint">Pick a passcode only you know (4 characters or more). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
+      + '<p class="rshint">Pick a passcode only you know (8 characters or more). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmshare" hidden>Share My room\u2026</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
@@ -4922,7 +4960,7 @@
       if (mode === "have") { close(); if (!(joinState === "joined" && CHANNEL === personalGet()?.slug)) personalEnter(); return; }
       const name = q(".pmname").value.trim().replace(/\s+/g, " "), code = q(".pmcode").value;
       if (!name) { say("Enter your name.", true); q(".pmname").focus(); return; }
-      const cmin = mode === "make" ? Math.max(4, Number(el.__opts?.min) || 4) : 4;   // 0.21.88: messages ask for a longer one
+      const cmin = mode === "make" ? 8 : 4;   // 0.21.89 (Kenton: "8 everywhere"): a NEW code has 8 or more; an existing shorter one still opens
       if (code.length < cmin) { say("A personal code has at least " + cmin + " characters" + (cmin > 4 ? " (it also protects your messages)" : "") + ".", true); q(".pmcode").focus(); return; }
       if (mode === "make" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
       say(mode === "make" ? "Making your room\u2026" : "Opening your room\u2026");
@@ -10171,6 +10209,8 @@
   }
   // 0.21.88: the bridge assets/kastr-msg.js (private messages) talks to the page through. Messages need a room's member token
   // from an access code: never the Lobby, never an invite-link guest (a My room guest neither).
+  let kmsgModeKnown = false;   // 0.21.89: a box is known as one before the set-up card may ask anything
+  pageModeReady.then(() => { kmsgModeKnown = true; });
   const msgAllowed = () => { try { return joinState === "joined" && !inLobby() && authSecured && !!authTokens?.member && !authGuest && !(inviteGet() && !authAccessCode); } catch { return false; } };
   window.__kmsg = {
     base: () => authBase(), token: () => authTokens?.member || "", allowed: msgAllowed, me: () => myOpName(), host: () => HOSTNAME1,
@@ -10182,6 +10222,27 @@
     panel: () => document.getElementById("msgPanel"), btn: () => document.getElementById("msgBtn"),
     openPanel: () => { const p = document.getElementById("msgPanel"); if (p.classList.contains("docked")) { if (p.classList.contains("folded")) dockBtnClick(p); } else if (p.hidden) document.getElementById("msgBtn").click(); },
     people: () => eoPeopleForMsg(),
+    // 0.21.89: the set-up card -- who is a PERSON here (never a camera box, a relay-only machine or a viewer-only display), My
+    // room through its own create / open (the device remembers My room exactly as the My room dialog does), the Profile for a
+    // name change, the other cards it waits for, my microphone (it can be muted while the card is up)
+    person: () => { try { return kmsgModeKnown && !isPublisherMode() && PAGE_MODE !== "relay" && !isViewerMode(); } catch { return false; } },
+    roomMake: async (name, code) => {
+      const d = await personalApi({ op: "create", name, code, access: authAccessCode || undefined });
+      if (d.ok) { personalSave({ slug: d.slug, name: d.name || name, code }); try { personalCardPaint(); } catch {} }
+      return d;
+    },
+    roomOpen: async (name, code) => {
+      const d = await personalApi({ op: "open", name, code });
+      if (d.ok) { personalSave({ slug: d.slug, name: d.name || name, code }); try { personalCardPaint(); } catch {} }
+      return d;
+    },
+    profile: (done) => openProfile(false, done),
+    busyUI: () => {
+      const shown = (id) => { const e = document.getElementById(id); return !!e && !e.hidden; };
+      return joinState !== "joined" || shown("joinGate") || shown("kConfirm") || shown("profilePop")
+        || shown("kMyRoom") || shown("kRoomSet") || shown("kRcAsk") || shown("kPtAsk");
+    },
+    mic: () => { try { return { live: joinState === "joined" && !topMicBtn.hidden && !topMicBtn.disabled && !topMicBtn.classList.contains("on"), mute: () => topMicBtn.click() }; } catch { return { live: false }; } },
   };
 
   // ---- remote RTSP grid: expand one cell (0.8.8) ------------------------------

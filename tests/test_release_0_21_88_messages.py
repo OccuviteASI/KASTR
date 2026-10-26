@@ -183,8 +183,9 @@ class Hub(Base):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.svc = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4443, store(self.dir))
-        for n, c in (("Kris Price", KRIS_CODE), ("Ada", ADA_CODE), ("Bob", BOB_CODE), ("Short Code", "abcd")):
+        for n, c in (("Kris Price", KRIS_CODE), ("Ada", ADA_CODE), ("Bob", BOB_CODE), ("Short Code", "abcd-made-long")):
             self.mkroom(self.svc, n, c)
+        self.svc.store.personal_reset("Short Code", "abcd")   # a My room from before 0.21.89 (4 characters were allowed then)
         self.kris = Device(self.svc, "kris-desk-1a2b")
         self.ada = Device(self.svc, "ada-laptop-3c4d", room="beta")
         self.bob = Device(self.svc, "web-b0b0b0b0-5e6f", room="gamma")

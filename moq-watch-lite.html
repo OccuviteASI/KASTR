@@ -19179,12 +19179,18 @@
     for (const t of tiles.values()) if (now < (t.talkUntil ?? 0)) return true;
     try { return !!window.__publisher?.talking?.(); } catch { return false; }
   }
+  // 0.21.89: before joining, the Join room page's heading names the room picked in its list (it kept naming the last room
+  // joined, e.g. "Join room — Lobby" with vault picked); a new room keeps the current name until it is made
+  function gateHeadingSlug(cur, joined) {
+    const sel = joinEls.joinChanSel?.value;
+    return (!joined && sel && sel !== "__new" && lastChannelList.some((r) => r.slug === sel)) ? sel : cur;
+  }
   function paintChannelChip() {
     const c = readChannel();
     const joined = joinState === "joined";
     const b = joinEls.roomBanner;
     if (!b) return;
-    joinEls.joinChannelCur.textContent = roomTitle(c);   // 0.21.61
+    joinEls.joinChannelCur.textContent = roomTitle(gateHeadingSlug(c, joined));   // 0.21.61; 0.21.89: the room picked on the gate
     if (!joined) {
       b.replaceChildren();
       b.textContent = "Join a room\u2026";
@@ -21481,6 +21487,7 @@
     if (joinEls.joinKeepRow) joinEls.joinKeepRow.hidden = !isNew;   // 0.12.0
     const rec = lastChannelList.find((r) => r.slug === joinEls.joinChanSel.value);
     const need = isNew || !!rec?.locked;
+    joinEls.joinChannelCur.textContent = roomTitle(gateHeadingSlug(readChannel(), joinState === "joined"));   // 0.21.89
     joinEls.joinPwdRow.hidden = !need;
     { const ab = document.getElementById("joinAskBtn"); if (ab) ab.hidden = isNew || !rec?.locked || !accCanAsk(rec.slug, true); }   // 0.21.89: Ask for access
     joinEls.joinPwdLabel.textContent = isNew

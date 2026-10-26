@@ -21,5 +21,14 @@ class GateIsNotDismissible(unittest.TestCase):
         self.assertIn("the gate is no\n    // longer dismissible", s.replace("\r\n", "\n"))
 
 
+class GateHeadingNamesThePickedRoom(unittest.TestCase):
+    def test_heading_follows_the_list_before_joining(self):
+        s = page()
+        self.assertIn("function gateHeadingSlug(cur, joined)", s)
+        self.assertIn('sel !== "__new" && lastChannelList.some((r) => r.slug === sel)) ? sel : cur', s)
+        self.assertIn("roomTitle(gateHeadingSlug(c, joined))", s)
+        self.assertIn('roomTitle(gateHeadingSlug(readChannel(), joinState === "joined"))', s)
+
+
 if __name__ == "__main__":
     unittest.main()

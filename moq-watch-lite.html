@@ -4460,7 +4460,15 @@
   // join. A pinned feed from another room arrives as an xshare listing (xsPoll makes it a tile); the board's spotlights count
   // as votes of their own in spotSetNow (spotVotes key "~board", by "room") and go only when removed from the board.
   const board = { room: "", pins: [], spots: [], grids: {}, split: [], spotOrder: [], customGrids: {}, gridMetas: {}, ver: null, at: 0, lock: false };   // 0.21.66: + spotOrder, customGrids, gridMetas   // 0.21.64: + grids -- the room's own camera-grid layouts; 0.21.65: + split, + lock (the view is locked)
-  const roomHid = new Set();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room
+  // 0.21.87 (Kenton: "This powerpoint has a video in it ... I need that to be able to function inside of KASTR"): a video on a
+  // presentation slide streams as its own share, <host>/<op>/presentation_video_<n>.hang -- a new name each time its slide goes
+  // live, so no page ever shows the frame of an earlier visit (an underscore: a person's own file share is slugged to [a-z0-9-]
+  // and can never be named so). It is never a tile of its own here -- kastr-pres.js draws it in its spot
+  // on the slide -- so it rides roomHid (not shown anywhere in this room, never an arrival, never picked), yet it decodes
+  // off-stage (keepWarm) and is heard (isAudible). Older KASTRs show it as an ordinary tile.
+  const PRES_VID_RE = /\/presentation_video(?:_[a-z0-9]+)?(?:-\d+)?\.hang$/;
+  const isPresVid = (n) => PRES_VID_RE.test(String(n));
+  const roomHid = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();   // 0.21.64: cameras the room removed from its grids (by stream path) -- not shown anywhere in this room (0.21.87: + a slide's video)
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
   // 0.21.75 (Kenton: "hide individual cameras in my grid view"): roomHid also holds the cameras I hid in MY view of a grid (myHid,
   // this device only) so their own tiles leave my gallery / rail / stage too; roomHidBoard = the room's own removals alone.
@@ -7549,7 +7557,7 @@
   }
   const cgPending = new Map();   // a new grid while its builder is open: tile name -> def (kept on Done, gone on Cancel)
   const cgCams = new Set();      // every camera a grid of mine / of my room draws
-  const cgWarm = new Set();      // ... of those, the ones to keep decoding off-stage now
+  const cgWarm = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
   let cgDefsNow = new Map();     // tile name -> {kind: "me" | "room", id, g: {name, slots, gap, sens}}
   let cgOpened = null;           // {cam, grid}: a camera opened from a grid's spot (a click on it goes back)
   let cgWarmSig = "", cgTickT = 0, cgRaf = 0, cgLastDraw = 0;
@@ -8874,6 +8882,7 @@
 
   function isAudible(name) {
     if (!enabledStreams.has(name)) return false;   // parked: never audible
+    if (isPresVid(name)) return !(manualMute || mutedStreams.has(name));   // 0.21.87: a slide's video is heard with its slide
     if (cgHide(name) && name !== selectedName) return false;   // 0.21.66 (e)
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return false;   // 0.9.5
     if (audioMode === "all") return true;
@@ -10437,6 +10446,19 @@
   }
   const roomGridCan = (gp) => boardCan() && gridMeta.has(gp) && !wrRoomOf(gp);   // publishers of my room (not the Lobby, a box or a viewer)
   const vgFrameOf = (t) => { try { return t.watch.video?.out?.frame?.peek?.() || t.watch.renderer?.out?.frame?.peek?.() || null; } catch { return null; } };
+  // 0.21.87: kastr-pres.js draws a slide's video from its (hidden) tile's newest frame, in the video's spot on the slide
+  window.__presVidFrame = (path) => { if (!isPresVid(path)) return null; const t = tiles.get(String(path)); return t ? vgFrameOf(t) : null; };
+  // ... and asks for it afresh when its picture stops while the presenter says it plays (lab 2026-10-26: a new file share's
+  // video track is sometimes dropped by the player right after it starts -- "group timestamp is below the live edge" -- and
+  // came back only ~6 s later; an ordinary Share > Media file does the same). A new subscription starts at the live edge.
+  window.__presVidKick = (path) => {
+    const t = isPresVid(path) && tiles.get(String(path));
+    const u = t && t.watch.getAttribute("url");
+    if (!u) return false;
+    t.watch.removeAttribute("url");
+    setTimeout(() => { if (tiles.get(String(path)) === t && !t.watch.getAttribute("url") && isWatched(String(path))) t.watch.setAttribute("url", u); }, 60);
+    return true;
+  };
   let vgRaf = 0, vgLast = 0;
   function vgSync() {
     for (const [name, t] of tiles) {
@@ -12387,7 +12409,7 @@
         // behind another tile's full screen downloads nothing -- audio is
         // volume-driven and unaffected.
         : (document.hidden && !window.__rigVisible) ? "never"   // 0.16.0: __rigVisible = the rig's hidden browser pane still decodes
-        : (document.fullscreenElement && !document.fullscreenElement.contains(t.pane)) ? "never"   // 0.21.0: the stage in full screen CONTAINS every pane
+        : (document.fullscreenElement && !document.fullscreenElement.contains(t.pane) && !isPresVid(name)) ? "never"   // 0.21.0: the stage in full screen CONTAINS every pane (0.21.87: a slide's video plays on the slide shown full screen)
         : (isSelected || keepWarm) ? "always"   // 0.21.15: "always" needs no canvas -- the library gates the subscription on the renderer's visible signal, which "always" sets without one
         : GRID_PREFETCH;   // ladder tiles are on-screen; the margin resolves them
 
@@ -27885,6 +27907,7 @@
   // leaves; "Play again" re-adds the same file (the server copy is kept for that long).
   function mediaFinished(slot) {
     const m = slot.media; if (!m || !m.alive || m.finished) return;
+    if (slot.entry.presVideo) { announceMedia(slot, true); return; }   // 0.21.87: a slide's video stays on its slide at its last frame (Play starts it again); the slide change ends the share
     m.finished = true;
     announceMedia(slot, true);
     const entry = slot.entry, label = String(entry.label || entry.name || "file");
@@ -29851,11 +29874,11 @@
       v.src = url;
     });
   }
-  async function prepareMediaFile(f) {
+  async function prepareMediaFile(f, opt) {   // 0.21.87: opt.noPicker -- a slide's video is shared as it is (no size picker)
     if (IS_WEB2) {   // 0.17.0: a web client has no media store here -- the browser plays what it can decode
       // 0.21.0: ...and still gets the resolution picker (canvas downscale in the composite)
       const wp = await webProbe(f);
-      const pickedH = await pickFileRes(f, wp);
+      const pickedH = opt?.noPicker ? 0 : await pickFileRes(f, wp);
       if (pickedH === null) return null;
       const srcH = Number(wp.height) || 0;
       try { f.kastrShareH = pickedH && srcH && pickedH < srcH ? pickedH : 0; f.kastrSrcH = srcH; } catch {}
@@ -29874,7 +29897,7 @@
     } catch {}
     if (!probe) return f;
     // 0.21.0: the resolution picker -- every probed file gets it (default "same as source")
-    const pickedH = await pickFileRes(f, probe);
+    const pickedH = opt?.noPicker ? 0 : await pickFileRes(f, probe);
     if (pickedH === null) return null;   // cancelled
     const srcH = Number(probe.height) || 0;
     const shareH = pickedH && srcH && pickedH < srcH ? pickedH : 0;   // 0 = as the source
@@ -30235,6 +30258,50 @@
     },
     path(id) { return slots.get(id)?.publish?.getAttribute("name") || ""; },
     alive(id) { return added.some((a) => a.id === id); },   // the source row is there (a slot restarting for a moment still counts)
+    stop(id) { if (added.some((a) => a.id === id)) removeSource(id); },
+  };
+  // 0.21.87 (Kenton: "This powerpoint has a video in it ... I need that to be able to function inside of KASTR"; decided "Play it
+  // on the slide"): while a slide with an embedded video is live, kastr-pres.js streams that video into the room exactly like
+  // Share > Media file (the same player, upload/convert path, encoder and room announce), as <host>/<op>/presentation_video_<n>.hang.
+  // It starts playing only when the deck says "Start: Automatically" (opts.auto), else it waits paused on its first frame;
+  // the slide change removes it. Only this page (the presenter) and its backstage people (through presCtl) control it.
+  let presVidSeq = 0;
+  window.__presVideo = {
+    async start(file, opts) {
+      const o = opts || {};
+      let f = file, extra = {};
+      const r = await prepareMediaFile(file, { noPicker: true });
+      if (r && r.mediaUrl) {   // converted by this KASTR as it plays (a WMV / AVI / HEVC video)
+        f = new File([], r.name, { type: "video/mp4" });
+        extra = { mediaUrl: r.mediaUrl, mediaId: r.mediaId, duration: r.duration || 0, plan: r.plan, hasVideo: r.hasVideo, upload: r.upload, fps: r.fps || 0, shareH: 0, srcH: r.srcH || 0 };
+      } else if (r) { f = r; extra = { shareH: 0, srcH: Number(r.kastrSrcH) || 0 }; }
+      const op = operatorSlug();
+      const leaf = "presentation_video_" + (++presVidSeq).toString(36) + Date.now().toString(36).slice(-4) + ".hang";   // a fresh stream per visit of its slide
+      const base = op ? `${HOSTNAME}/${op}/${leaf}` : `${HOSTNAME}/${leaf}`;
+      const e = addSource(FILE, null, "Presentation video", { file: f, mediaUrl: null, ...extra, name: uniqueName(base), presVideo: true,
+                                                              loop: !!o.loop, resume: { t: 0, paused: !o.auto }, gain: o.vol == null ? 1 : Math.max(0, Math.min(1, Number(o.vol))) });   // the deck's own volume
+      e.label = "Presentation video \u00b7 " + String(o.label || file.name || "video").slice(0, 60);
+      renderSources();
+      return { id: e.id, path: chanPath(ensureHang(e.name)) };
+    },
+    state(id) {   // {path, playing, t, dur, ended, ready} -- null while the player is not up
+      const slot = slots.get(id), m = slot?.media;
+      if (!m || !m.alive) return null;
+      const v = m.video;
+      return { path: chanPath(ensureHang(slot.entry.name)), playing: (!v.paused || (!!m.rebuffering && !m.userPaused)) && !v.ended, t: mediaPos(m),
+               dur: mediaDur(slot), ended: !!v.ended, ready: v.readyState >= 2, vol: v.volume,
+               enc: (() => { try { const s2 = slot.publish?.video?.out?.stats?.peek?.(); return s2 ? { frames: Number(s2.frames || 0), bytes: Number(s2.bytes || 0) } : null; } catch { return null; } })(),   // rig: the encoder's own output
+               capOk: (() => { try { return pubCap(slot.publish)?.in?.source?.peek?.() === m.vtrack; } catch { return null; } })(), vtrack: m.vtrack?.readyState || null };
+    },
+    ctl(id, op, value) {   // play | pause | seek(seconds)
+      const slot = slots.get(id);
+      if (!slot?.media) return false;
+      const path = chanPath(ensureHang(slot.entry.name)), v = slot.media.video, dur = mediaDur(slot);
+      if (op === "play" && (v.ended || (dur && mediaPos(slot.media) >= dur - 0.25))) mediaCtl({ path, op: "seek", value: 0 });   // at the end: from the start again
+      return mediaCtl({ path, op, value });
+    },
+    frame(id) { const v = slots.get(id)?.media?.video; return v && v.readyState >= 2 && v.videoWidth ? v : null; },   // the presenter's own picture
+    alive(id) { return added.some((a) => a.id === id); },
     stop(id) { if (added.some((a) => a.id === id)) removeSource(id); },
   };
   async function presAttach(slot) {
@@ -31541,7 +31608,9 @@
       const cam = [...slots.values()].find((s2) => s2.entry.kind === "camera" && !s2.rtsp);
       try { return cam ? unwrapTrack(pubCap(cam.publish)?.in?.source?.peek?.()) : null; } catch { return null; }
     },
-    mediaCtl,   // 0.8.10: the watch half hands .mediactl pulses for my files here
+    // 0.8.10: the watch half hands .mediactl pulses for my files here. 0.21.87: never for a slide's video -- the presenter
+    // and the backstage people drive it (kastr-pres.js, through presCtl); viewers just see and hear it
+    mediaCtl: (meta) => ([...slots.values()].some((s2) => s2.entry.presVideo && chanPath(ensureHang(s2.entry.name)) === meta?.path) ? false : mediaCtl(meta)),
     denoiseTaps: () => {   // 0.13.1 rig: raw + processed tracks of the denoised camera slot
       const cam = [...slots.values()].find((s2) => s2.dn);
       return cam ? { raw: cam.dn.raw, processed: cam.dn.processed, ctx: denoiseCtx } : null;

@@ -15,6 +15,9 @@
 //              Their Next / Back is an intent in their own room.json `presCtl` that the presenter applies.
 //   VIEWERS    -- the share tile, plus a sharp still of the live slide drawn over it: they fetch s<idx>.bin and open it
 //              with k_idx. They never fetch the notes and cannot open any slide that has not been live.
+// VIDEOS ON SLIDES (0.21.87): an embedded video plays in its spot on the slide while that slide is live -- the presenter
+//              streams it like Share > Media file (window.__presVideo), `pres.vids` says where and how far, every page draws
+//              the stream over the still; Play / Pause / seek from the presenter or backstage (presCtl.vid), viewers watch.
 // Collisions: an intent carries the version it saw (`bv`); the presenter applies it when nobody else moved since
 // (bv == ver) or when the last move was the same person's (a fast double Next from one clicker) -- two people pressing
 // Next on slide 3 at once land on 4, not 5.
@@ -467,11 +470,13 @@
       const sc = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(sc.error || ("conversion failed (" + r.status + ")"));
       const shown = sc.slides.filter((s) => !s.hidden);
+      const vids = deckVideos(sc, shown);   // 0.21.87
       if (sc.kind === "images") {   // PowerPoint drew them (this computer has PowerPoint): exact slides
         let released = false;
-        const release = () => { if (released) return; released = true; fetch("/api/pres/conv/" + sc.job + "/done", { method: "POST" }).catch(() => {}); };
+        const release = () => { if (released) return; released = true; vids.ready.finally(() => fetch("/api/pres/conv/" + sc.job + "/done", { method: "POST" }).catch(() => {})); };
         return {
           kind: "pptx", via: "powerpoint", name, n: shown.length, ar: sc.w / sc.h, notes: shown.map((s) => s.notes || ""), warnings: sc.warnings || [],
+          videos: vids.per, videoFile: vids.file,
           async render(i) {
             const im = new Image(); im.src = shown[i].img; await im.decode();
             const cv = document.createElement("canvas"); cv.width = STILL_W; cv.height = Math.round(STILL_W * sc.h / sc.w);
@@ -482,8 +487,10 @@
         };
       }
       const imgs = await loadSceneImages(sc);
+      if (sc.job) vids.ready.finally(() => fetch("/api/pres/conv/" + sc.job + "/done", { method: "POST" }).catch(() => {}));   // 0.21.87: the videos are in this page now
       return {
         kind: "pptx", via: "kastr", name, n: shown.length, ar: sc.w / sc.h, notes: shown.map((s) => s.notes || ""), warnings: sc.warnings || [],
+        videos: vids.per, videoFile: vids.file,
         async render(i) {
           const cv = document.createElement("canvas"); cv.width = STILL_W; cv.height = Math.round(STILL_W * sc.h / sc.w);
           drawSlide(cv.getContext("2d", { alpha: false }), sc, shown[i], cv.width, cv.height, imgs);
@@ -495,6 +502,25 @@
     if (["ppt", "pps", "key", "odp"].includes(ext)) throw new Error("Save this deck as PowerPoint (.pptx) or PDF first — KASTR reads .pptx and PDF");
     if (["doc", "docx", "odt", "rtf"].includes(ext)) throw new Error("Documents: save it as PDF (File › Save as › PDF) and present the PDF — pages show one at a time");
     throw new Error("KASTR presents PowerPoint (.pptx) and PDF files");
+  }
+  // 0.21.87: the deck's embedded videos -- pulled into this page right after the conversion (never to the relay host's
+  // slide store; the converting KASTR drops its copy once they are here). Boxes become fractions of the slide.
+  function deckVideos(sc, shown) {
+    const files = sc.videos || {}, got = new Map(), ids = Object.keys(files);
+    const per = shown.map((s) => (s.videos || []).map((v) => (v.id
+      ? { id: v.id, x: v.x / sc.w, y: v.y / sc.h, w: v.w / sc.w, h: v.h / sc.h, auto: !!v.auto, delay: Math.max(0, Math.min(60000, Number(v.delay) || 0)),
+          loop: !!v.loop, vol: v.vol == null ? 1 : Math.max(0, Math.min(1, Number(v.vol))), name: String(v.name || "") }
+      : { linked: String(v.linked || "video") })));
+    const ready = Promise.all(ids.map(async (id) => {
+      const f = files[id];
+      try {
+        const r = await fetch(f.url, { cache: "no-store" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const b = await r.blob();
+        got.set(id, new File([b], f.name || id + (f.ext || ".mp4"), { type: f.type || b.type || "video/mp4" }));
+      } catch (e) { console.warn("KASTR pres: video " + id, e); got.set(id, null); }
+    }));
+    return { per, ready, file: async (id) => { await ready; return got.get(id) || null; } };
   }
   const toWebp = (cv) => new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error("encode"))), "image/webp", 0.92));
 
@@ -527,7 +553,7 @@
       notesKey: await hkdf(K, "notes"), notes: src.notes.slice(), nv: 1,
       blobs: new Array(src.n).fill(null), up: new Array(src.n).fill(false), busy: [], rendering: null, want: [],
       idx: 0, ver: 1, by: myPerson(), blank: null, t0: Date.now(), bs: new Map(), lastSeq: new Map(), share: null, pk: me.pub,
-      warnings: src.warnings || [], startedMs: 0, pubSeq: 0,
+      warnings: src.warnings || [], startedMs: 0, pubSeq: 0, told: 0, vids: new Map(),   // 0.21.87: + the videos playing on the live slide
     };
     T("start", { id: mine.id, n: mine.n, kind: mine.kind });
     view.prep("Preparing slide 1 of " + mine.n + "…");
@@ -536,6 +562,7 @@
     startShare();
     mine.startedMs = Math.round(performance.now() - t0);
     publish();
+    syncVideos();   // 0.21.87: slide 1 may have a video
     ensurePk();
     view.open({ deck: mine.id });
     if (mine.warnings.length) toast("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 9000, "warn");
@@ -600,6 +627,9 @@
       idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank || "", k: b64(kIdx), t0: mine.t0, pk: mine.pk,
       share: mine.share?.path || "", nv: mine.nv, rt: mine.rtEnc,
       bs: [...mine.bs.entries()].map(([p, b]) => ({ p, n: b.name || "", w: b.w || "" })),
+      // 0.21.87: the live slide's videos -- their stream, their spot (fractions of the slide) and how far they are
+      vids: [...mine.vids.values()].filter((e) => e.path && e.i === mine.idx).map((e) => ({ v: e.v, p: e.path, i: e.i, x: +e.sv.x.toFixed(5), y: +e.sv.y.toFixed(5),
+        w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto })),
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
@@ -615,10 +645,11 @@
     // 0.21.84 (Kenton: "Viewers: LIVE SLIDE ONLY"): the store learns the live slide first (it serves viewers nothing
     // else), then the room hears of the move; moves are told to the store in order, the room gets the newest
     const m = mine, seq = ++m.pubSeq;
-    const tell = () => { if (mine === m && seq === m.pubSeq) publish(); };
+    const tell = () => { m.told = Math.max(m.told, seq); if (mine === m && seq === m.pubSeq) publish(); };
     if (ni === m.liveIdx) tell();
     else m.liveChain = m.liveChain.then(() => postLive(m, ni)).then(tell, tell);
     for (const k of [ni + 1, ni + 2]) if (k < mine.n && !mine.up[k]) mine.want.push(k);
+    syncVideos();   // 0.21.87: the slide before's video stops; this slide's starts (or waits for Play)
   }
   async function postLive(m, i) {
     const ac = new AbortController(), t = setTimeout(() => ac.abort(), 1500);   // a slow store must not hold the room back long
@@ -634,6 +665,7 @@
     const last = mine.lastSeq.get(who) || 0;
     if (!(ctl.seq > last)) return;
     mine.lastSeq.set(who, ctl.seq);
+    if (ctl.vid && typeof ctl.vid === "object") { applyVidOp(ctl.vid, who); return; }   // 0.21.87: Play / Pause / seek of the live slide's video
     if (ctl.bv !== mine.ver && mine.by !== who) { T("drop", { id: mine.id, idx: ctl.to, ver: mine.ver, who }); return; }   // somebody else moved first
     T("apply", { id: mine.id, idx: ctl.to, ver: mine.ver + 1, who });
     goTo(ctl.to, who, ctl.blank === undefined ? null : ctl.blank);
@@ -694,6 +726,7 @@
   function endMine(why) {
     const m = mine;
     if (!m) return;
+    for (const k of [...m.vids.keys()]) stopVid(m, k, "end");   // 0.21.87
     mine = null;
     clearInterval(m.keep);
     try { if (m.share) window.__presShare.stop(m.share.id); } catch {}
@@ -705,6 +738,90 @@
     view.paint();
   }
   window.addEventListener("pagehide", () => { if (mine) endMine("pagehide"); });
+
+  // ---- 0.21.87: videos on slides (the presenter) --------------------------------------------------------------------------
+  // Kenton: "This powerpoint has a video in it, it doesn't appear to be working and I need that to be able to function inside
+  // of KASTR." Decided "Play it on the slide" + "Follow the deck": while a slide with an embedded video is live, this page
+  // streams the video into the room exactly like Share > Media file (window.__presVideo: the same player, converter, encoder
+  // and announce) and every page draws that stream in the video's spot on the slide, with its sound. It starts by itself when
+  // the deck says "Start: Automatically", otherwise it waits for Play from the presenter or a backstage person. The slide
+  // change stops it; back on the slide it waits again on its poster. Nothing of it is published before its slide is live.
+  function vidList(m, i) { return ((m.src.videos || [])[i] || []).filter((v) => v.id); }
+  function syncVideos() {
+    const m = mine;
+    if (!m) return;
+    for (const [k, e] of [...m.vids]) if (e.i !== m.idx) stopVid(m, k, "slide changed");
+    vidList(m, m.idx).forEach((sv, n) => { const k = m.idx + "/" + n; if (!m.vids.has(k)) startVid(m, k, m.idx, sv); });
+  }
+  async function startVid(m, k, i, sv) {
+    const e = { k, i, v: sv.id, sv, shareId: null, path: "", pl: false, t: 0, at: Date.now(), d: 0, st: false, gone: false, err: "", live0: performance.now() };
+    m.vids.set(k, e);
+    T("vid-start", { id: m.id, idx: i, who: sv.id, auto: !!sv.auto });
+    let file = null;
+    try { file = await m.src.videoFile(sv.id); } catch {}
+    T("vid-file", { id: m.id, idx: i, who: sv.id, ok: !!file });
+    if (e.gone || mine !== m) return;
+    if (!file || !window.__presVideo) { e.err = file ? "this KASTR cannot share videos" : "the video could not be read from the deck"; view.paint(); return; }
+    let h = null;
+    const now = sv.auto && !(sv.delay > 0);   // "Start: Automatically" with a delay starts paused and is played when the delay is up
+    try { h = await window.__presVideo.start(file, { label: sv.name || m.name, auto: now, loop: !!sv.loop, vol: sv.vol }); }   // + the deck's own volume (PowerPoint's default is 80 %)
+    catch (err) { e.err = String(err?.message || err); console.warn("KASTR pres: video", err); }
+    if (!h) { view.paint(); return; }
+    if (e.gone || mine !== m) { try { window.__presVideo.stop(h.id); } catch {} return; }
+    e.shareId = h.id;
+    T("vid-share", { id: m.id, idx: i, who: sv.id });
+    if (sv.auto && sv.delay > 0) {
+      setTimeout(() => { if (!e.gone && mine === m && !e.st) vidCtl(e, "play"); }, Math.max(0, sv.delay - (performance.now() - e.live0)));
+    }
+    pollVids();
+    vidLoop();
+  }
+  function stopVid(m, k, why) {   // no publish here: the move that stopped it publishes (after the store heard of it)
+    const e = m.vids.get(k);
+    if (!e) return;
+    e.gone = true;
+    m.vids.delete(k);
+    if (e.shareId != null) { try { window.__presVideo.stop(e.shareId); } catch {} }
+    T("vid-stop", { id: m.id, idx: e.i, who: e.v, why });
+  }
+  function publishVid() {   // a video's state changed: tell the room -- unless a move is still on its way to the store (it publishes then)
+    const m = mine;
+    if (m && m.told >= m.pubSeq) publish();
+  }
+  let vidPollT = null;
+  function pollVids() { if (!vidPollT) vidPollT = setInterval(vidPoll, 200); }
+  function vidPoll() {
+    const m = mine;
+    if (!m || !m.vids.size) { clearInterval(vidPollT); vidPollT = null; return; }
+    let changed = false;
+    const now = Date.now();
+    for (const e of m.vids.values()) {
+      if (e.shareId == null) continue;
+      const s = window.__presVideo?.state(e.shareId);
+      if (!s) {
+        if (!window.__presVideo?.alive(e.shareId)) { e.shareId = null; e.path = ""; e.err = "its share was stopped"; changed = true; }   // removed from its row
+        continue;
+      }
+      if (s.path !== e.path) { e.path = s.path; changed = true; }
+      const exp = e.t + (e.pl ? (now - e.at) / 1000 : 0);
+      if (s.playing !== e.pl || Math.abs(s.t - exp) > 1 || Math.abs((s.dur || 0) - e.d) > 0.5) { e.pl = s.playing; e.t = s.t; e.at = now; e.d = s.dur || 0; changed = true; }
+      if (!e.st && (s.playing || s.t > 0.05)) { e.st = true; changed = true; T("vid-playing", { id: m.id, idx: e.i, who: e.v }); }
+    }
+    if (changed) { publishVid(); view.paintVid(); }
+  }
+  function vidCtl(e, op, t) {
+    if (!e || e.shareId == null || !window.__presVideo) return false;
+    const ok = window.__presVideo.ctl(e.shareId, op, t);
+    T("vid-" + op, { id: mine?.id, idx: e.i, who: e.v });
+    setTimeout(vidPoll, 60);
+    return ok;
+  }
+  function applyVidOp(op, who) {   // a backstage person's Play / Pause / seek -- only for the video of the slide live NOW
+    const e = [...mine.vids.values()].find((x) => x.v === op.v && x.i === op.i && x.i === mine.idx);
+    if (!e || !["play", "pause", "seek"].includes(op.op)) { T("drop", { id: mine.id, idx: op.i, ver: mine.ver, who }); return; }
+    T("vid-apply", { id: mine.id, idx: e.i, who });
+    vidCtl(e, op.op, op.op === "seek" ? Math.max(0, Number(op.t) || 0) : undefined);
+  }
 
   // ---- backstage + viewers -------------------------------------------------------------------------------------------
   const backstage = new Map();   // deck id -> {rec, path, K, keys, notes, nv, seq, opt, optAt}
@@ -752,6 +869,15 @@
     T("intent", { id: deckId, idx: ctl.to, ver: ctl.bv });
     view.paint();
   }
+  function sendVidIntent(deckId, vr, op, t) {   // 0.21.87: backstage Play / Pause / seek of the live slide's video (vr = its entry in pres.vids)
+    const bk = backstage.get(deckId);
+    if (!bk || !vr) return;
+    ctlSeq++;
+    const ctl = { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), vid: { v: vr.v, i: vr.i, op } };
+    if (t != null) ctl.vid.t = +Number(t).toFixed(2);
+    stateSet("presCtl", ctl);
+    T("vid-intent", { id: deckId, idx: vr.i, ver: ctl.bv, who: op });
+  }
 
   // viewers (and backstage): the sharp live slide over the share's tile
   const overlays = new Map();   // share path -> {cv, key, rec}
@@ -762,7 +888,7 @@
     for (const r of remote.values()) if (r.pres && r.pres.share) want.set(r.pres.share, r.pres);
     for (const [path, o] of overlays) {
       const t = tiles && tiles.get(path);
-      if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); } catch {} try { o.vBmp?.close(); } catch {} overlays.delete(path); }
+      if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); o.vcv.remove(); } catch {} try { o.vBmp?.close(); } catch {} overlays.delete(path); }
     }
     if (!tiles) return;
     for (const [path, rec] of want) {
@@ -773,10 +899,14 @@
         const cv = document.createElement("canvas");
         cv.className = "presov";
         t.pane.appendChild(cv);
-        o = { cv, key: "", rec };
+        const vcv = document.createElement("canvas");   // 0.21.87: the slide's video, drawn in its spot over the still
+        vcv.className = "presvid";
+        t.pane.appendChild(vcv);
+        o = { cv, vcv, key: "", rec, vDrawn: 0 };
         overlays.set(path, o);
       }
       o.rec = rec;
+      if ((rec.vids || []).length) vidLoop();
       const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width);
       if (key !== o.key) { o.key = key; paintOverlay(path, o); }
     }
@@ -862,6 +992,13 @@
   #presPill.show { display:flex; }
   #presPill button { background:#0b5c86; color:#fff; border:0; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; }
   .pane canvas.presov { position:absolute; inset:0; width:100%; height:100%; z-index:2; pointer-events:none; background:#000; }
+  .pane canvas.presvid { position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none; }
+  #presView .cur canvas.vidcv { position:absolute; pointer-events:none; background:transparent; box-shadow:none; border-radius:0; }
+  #presView .vbar { display:none; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; }
+  #presView .vbar.show { display:flex; }
+  #presView .vbar input[type=range] { width:min(420px, 40vw); }
+  #presView .vbar .vtime { font-variant-numeric:tabular-nums; color:#8aa0b5; min-width:96px; }
+  #presView .vbar .vnote { color:#ffcf7a; font-size:13px; }
   @media (max-width: 760px) {
     #presView .pb { grid-template-columns: 1fr; overflow:auto; }
     #presView .curwrap { flex:none; }
@@ -887,10 +1024,12 @@
           <button type="button" class="end" title="End the presentation for everyone">End</button></div>
         <div class="prep"></div>
         <div class="pb">
-          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas></div>
+          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas></div>
             <div class="ctl"><button type="button" class="big back" title="Previous slide (Left, PageUp, Backspace)">◀ Back</button>
               <span class="num"></span><button type="button" class="big next" title="Next slide (Right, PageDown, Space)">Next ▶</button>
-              <button type="button" class="blk" title="Black screen for everyone (B or .)">Black</button><button type="button" class="wht" title="White screen for everyone (W or ,)">White</button></div></div>
+              <button type="button" class="blk" title="Black screen for everyone (B or .)">Black</button><button type="button" class="wht" title="White screen for everyone (W or ,)">White</button></div>
+            <div class="vbar"><button type="button" class="vplay" title="Play or pause the video on this slide for everyone">▶ Play video</button>
+              <input type="range" class="vseek" min="0" max="1000" value="0" title="The video's position (everyone)"><span class="vtime"></span><span class="vnote"></span></div></div>
           <div class="side"><div class="cap">Next</div><div class="nexts"><canvas class="n1"></canvas><canvas class="n2"></canvas></div>
             <div class="nrow"><span class="cap ncap">Notes — only you<span class="bsn"></span> can see these</span>
               <button type="button" class="fsm" title="Smaller notes">A−</button><button type="button" class="fsp" title="Larger notes">A+</button>
@@ -913,6 +1052,9 @@
       $(".fsm").addEventListener("click", () => setFs(fs - 2));
       $(".fsp").addEventListener("click", () => setFs(fs + 2));
       $(".edit").addEventListener("click", toggleEdit);
+      $(".vplay").addEventListener("click", () => vidPress(null));   // 0.21.87: the live slide's video
+      $(".vseek").addEventListener("input", () => { $(".vbar").dataset.scrub = "1"; });
+      $(".vseek").addEventListener("change", () => { delete $(".vbar").dataset.scrub; const lv = liveVid(); if (lv?.dur) vidPress("seek", Number($(".vseek").value) / 1000 * lv.dur); });
       root.style.setProperty("--pnfs", fs + "px");
       new ResizeObserver(() => paint()).observe(root);
     }
@@ -984,6 +1126,75 @@
       const s = Math.max(0, Math.floor((Date.now() - v.t0) / 1000));
       $(".timer").textContent = (s >= 3600 ? Math.floor(s / 3600) + ":" : "") + String(Math.floor(s / 60) % 60).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
       $(".clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      paintVid();
+    }
+    // ---- 0.21.87: the live slide's video -- Play / Pause / seek for the presenter and backstage, drawn on the live slide
+    const fmtT = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+    function liveVid() {   // the live slide's video as this page knows it
+      const v = deck();
+      if (!v) return null;
+      if (v.role === "presenter") {
+        const e = [...mine.vids.values()].find((x) => x.i === mine.idx);
+        const linked = ((mine.src.videos || [])[mine.idx] || []).find((x) => x.linked);
+        if (!e) return linked ? { role: v.role, linked: linked.linked } : null;
+        const s = e.shareId != null ? window.__presVideo?.state(e.shareId) : null;
+        return { role: v.role, e, playing: !!s?.playing, t: s ? s.t : 0, dur: s ? s.dur : 0, err: e.err, ready: !!s };
+      }
+      const rec = backstage.get(v.id)?.rec;
+      const r = rec && rec.idx === v.idx && (rec.vids || []).find((x) => x.i === rec.idx);
+      if (!r) return null;
+      const t = Math.min(r.d || 1e9, r.t + (r.pl ? Math.max(0, Date.now() - r.at) / 1000 : 0));
+      return { role: v.role, r, playing: !!r.pl, t, dur: r.d || 0, ready: true };
+    }
+    function vidPress(op, t) {
+      const lv = liveVid();
+      if (!lv || lv.linked) return false;
+      const o = op || (lv.playing ? "pause" : "play");
+      if (lv.role === "presenter") return vidCtl(lv.e, o, t);
+      sendVidIntent(deck().id, lv.r, o, t);
+      return true;
+    }
+    function paintVid() {
+      if (!root || !isOpen()) return;
+      const bar = $(".vbar"), lv = liveVid();
+      bar.classList.toggle("show", !!lv);
+      if (!lv) return;
+      const ctlEls = [$(".vplay"), $(".vseek"), $(".vtime")];
+      if (lv.linked) {
+        for (const el of ctlEls) el.style.display = "none";
+        $(".vnote").textContent = "This slide's video (" + lv.linked + ") is linked to a file, not embedded in the deck — it cannot play here";
+        return;
+      }
+      for (const el of ctlEls) el.style.display = "";
+      $(".vnote").textContent = lv.err ? "Video: " + lv.err : !lv.ready ? "Video: getting ready…" : "";
+      $(".vplay").textContent = lv.playing ? "⏸ Pause video" : "▶ Play video";
+      $(".vplay").disabled = !lv.ready;
+      if (!bar.dataset.scrub) $(".vseek").value = lv.dur ? String(Math.round(Math.min(1, lv.t / lv.dur) * 1000)) : "0";
+      $(".vtime").textContent = fmtT(lv.t) + " / " + fmtT(lv.dur);
+    }
+    let vidViewPainted = null;
+    function drawVid() {   // the rAF loop's turn for the presenter view's live slide -> true while a video is on it
+      if (!root || !isOpen()) return false;
+      const v = deck();
+      const vc = $(".vidcv"), base = $(".curcv");
+      if (!v) { vc.width = vc.width; return false; }
+      vc.style.left = base.offsetLeft + "px"; vc.style.top = base.offsetTop + "px";
+      vc.style.width = base.offsetWidth + "px"; vc.style.height = base.offsetHeight + "px";
+      let items = [], any = false;
+      if (v.role === "presenter") {
+        const es = [...mine.vids.values()].filter((e) => e.i === mine.idx);
+        any = es.length > 0;
+        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null).map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+      } else {
+        const rec = backstage.get(v.id)?.rec;
+        const rs = rec && rec.idx === v.idx ? (rec.vids || []).filter((x) => x.i === rec.idx) : [];
+        any = rs.length > 0;
+        if (!v.blank) items = rs.filter((x) => x.st).map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+      }
+      const n = drawVids(vc, v.ar || 16 / 9, items);
+      if (n && vidViewPainted !== v.id + "/" + v.idx) { vidViewPainted = v.id + "/" + v.idx; T("vid-paint", { id: v.id, idx: v.idx, who: "view" }); }
+      if (!n && !items.length) vidViewPainted = null;
+      return any;
     }
     let paintSeq = 0;
     async function paint() {
@@ -1036,6 +1247,8 @@
           .catch(() => drawContain(cv, null, null, "Slide " + (i + 1) + "…"));
       }
       paintStrip();
+      paintVid();   // 0.21.87
+      vidLoop();
     }
     function paintAll() { paint(); }
     function paintBackstage() {
@@ -1119,8 +1332,64 @@
       if (used) { e.preventDefault(); e.stopImmediatePropagation(); }
     }
     window.addEventListener("keydown", onKey, true);
-    return { open, close, prep, paint: () => paint(), paintStrip: () => paintStrip(), offer: () => offer(), isOpen, deck: () => deck() };
+    return { open, close, prep, paint: () => paint(), paintStrip: () => paintStrip(), offer: () => offer(), isOpen, deck: () => deck(),
+             paintVid: () => paintVid(), drawVid: () => drawVid(), vidPress: (op, t) => vidPress(op, t) };   // 0.21.87
   })();
+
+  // ---- 0.21.87: a slide's video drawn in its spot -- viewers' and backstage's tiles (the hidden stream's newest frame) and
+  // the presenter view's live slide; drawn only once it has started (before that the slide's own poster shows) ------------
+  let vidRaf = 0;
+  function vidLoop() { if (!vidRaf) vidRaf = requestAnimationFrame(vidFrame); }
+  function drawVids(cv, ar, items) {   // items: {x, y, w, h (fractions of the slide), src} -> how many were drawn
+    fitCanvas(cv);
+    const g = cv.getContext("2d"), W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    if (!items.length) return 0;
+    const sw = Math.min(W, H * ar), sh = sw / ar, ox = (W - sw) / 2, oy = (H - sh) / 2;
+    let n = 0;
+    for (const it of items) {
+      if (!it.src) continue;
+      try { g.drawImage(it.src, ox + it.x * sw, oy + it.y * sh, it.w * sw, it.h * sh); n++; } catch {}
+    }
+    return n;
+  }
+  // a picture that stops while the presenter says the video plays: ask for the stream afresh (after 1.5 s, at most every 5 s). Lab
+  // 2026-10-26: the player sometimes drops a new file share's video track right after it starts ("group timestamp is below
+  // the live edge") and the picture froze ~6 s while the sound went on -- an ordinary Share > Media file does the same.
+  function vidWatchdog(o, items) {
+    const now = performance.now();
+    o.vSeen = o.vSeen || new Map();
+    for (const it of items) {
+      const ts = it.src ? it.src.timestamp : null;
+      let s = o.vSeen.get(it.p);
+      if (!s) { s = { ts, at: now, kickAt: 0, kicks: 0 }; o.vSeen.set(it.p, s); }
+      if (ts !== s.ts) { s.ts = ts; s.at = now; continue; }
+      if (it.pl && now - s.at > 1500 && now - s.kickAt > 5000 && window.__presVidKick?.(it.p)) {
+        s.kickAt = now; s.kicks++; s.at = now;
+        T("vid-kick", { id: o.rec.id, idx: o.rec.idx, who: "overlay" });
+      }
+    }
+    for (const p of [...o.vSeen.keys()]) if (!items.some((it) => it.p === p)) o.vSeen.delete(p);
+  }
+  function vidFrame() {
+    vidRaf = 0;
+    let more = false;
+    for (const o of overlays.values()) {
+      const rec = o.rec, all = rec.vids || [];
+      if (all.length) more = true;
+      const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank);
+      const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, p: x.p, pl: x.pl, src: window.__presVidFrame?.(x.p) || null }));
+      vidWatchdog(o, items);
+      const n = drawVids(o.vcv, rec.ar || 16 / 9, items);
+      if (n) {
+        o.vDrawn++; o.vLast = Date.now();
+        if (o.vPainted !== rec.id + "/" + rec.idx) { o.vPainted = rec.id + "/" + rec.idx; T("vid-paint", { id: rec.id, idx: rec.idx, who: "overlay" }); }
+      } else if (!live.length) o.vPainted = null;
+    }
+    try { if (view.drawVid()) more = true; } catch {}
+    if (mine && mine.vids.size) more = true;
+    if (more) vidLoop();
+  }
 
   // ---- the loop ----------------------------------------------------------------------------------------------------------
   let schedT = null;
@@ -1151,6 +1420,19 @@
     setBackstage,
     open: () => { const id = mine ? mine.id : [...backstage.values()].find((b) => b.keys)?.rec.id; if (!id) return false; view.open({ deck: id }); return true; },
     close: () => view.close(),
+    // 0.21.87 rig: what the video bar's Play / Pause / seek do (presenter: directly; backstage: an intent); a viewer: false
+    video: (op, t) => {
+      if (mine) {
+        const e = [...mine.vids.values()].find((x) => x.i === mine.idx);
+        if (!e) return false;
+        return vidCtl(e, op || (window.__presVideo?.state(e.shareId)?.playing ? "pause" : "play"), t);
+      }
+      const bk = [...backstage.values()].find((b) => b.keys);
+      const r = bk && (bk.rec.vids || []).find((x) => x.i === bk.rec.idx);
+      if (!r) return false;
+      sendVidIntent(bk.rec.id, r, op || (r.pl ? "pause" : "play"), t);
+      return true;
+    },
     trace,
     state: () => ({
       me: myPerson(),
@@ -1159,11 +1441,16 @@
                      startedMs: mine.startedMs, warnings: mine.warnings } : null,
       backstage: [...backstage.values()].map((b) => ({ id: b.rec.id, idx: b.rec.idx, ver: b.rec.ver, key: !!b.keys, rt: !!b.rt, notes: b.notes ? b.notes.length : null })),
       viewerHeld: [...overlays.values()].filter((o) => o.vKey).map((o) => o.vKey),   // what a viewer keeps: the live slide only
-      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p) })),
+      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p),
+                                                                                vids: (r.pres.vids || []).map((x) => ({ i: x.i, p: x.p, pl: x.pl, st: x.st, t: x.t })) })),
       overlays: [...overlays.entries()].map(([p, o]) => ({ path: p, key: o.key, w: o.cv.width, h: o.cv.height })),
       viewerFetches: viewerFetches.slice(),
       view: view.isOpen() ? (view.deck() || {}).role || "preparing" : "",
       pk: !!pkPublished,
+      // 0.21.87: the presenter's slide videos; what each tile drew of a slide's video
+      vids: mine ? [...mine.vids.values()].map((e) => ({ k: e.k, i: e.i, v: e.v, auto: !!e.sv.auto, shareId: e.shareId, path: e.path, pl: e.pl, st: e.st, t: e.t, err: e.err })) : [],
+      deckVideos: mine ? (mine.src.videos || []).map((l) => l.map((v) => (v.id ? v.id : "linked:" + v.linked))) : null,
+      vidDrawn: [...overlays.entries()].map(([p, o]) => ({ path: p, drawn: o.vDrawn || 0, last: o.vLast || 0, painted: o.vPainted || null })),
     }),
     __drawSlide: drawSlide,   // rig: render a scene slide without a room
   };

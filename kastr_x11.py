@@ -427,6 +427,34 @@ class XEvent(ctypes.Union):
     _fields_ = [("xclient", XClientMessageEvent), ("pad", c_long * 24)]
 
 
+def kastr_windows(any_size=False):
+    """0.21.88: the mapped top-level windows whose title names KASTR -> {xid: title} (the app window in the person's own
+    browser, which belongs to whatever browser process was already running)."""
+    out = {}
+    with Display() as d:
+        for w in d.windows_prop(d.root, "_NET_CLIENT_LIST"):
+            t = d.title(w)
+            r = d.rect(w) or {}
+            if "KASTR" in t and (any_size or (r.get("viewable") and r.get("w", 0) >= 200)):
+                out[int(w)] = t
+    return out
+
+
+def maximize_xid(xid):
+    """0.21.88: ask the window manager to maximize one window (EWMH _NET_WM_STATE)."""
+    with Display() as d:
+        d.x.XSendEvent.restype = c_int
+        d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XEvent)]
+        ev = XEvent()
+        c = ev.xclient
+        c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, int(xid), 32
+        c.message_type = d.atom("_NET_WM_STATE")
+        c.l[0], c.l[1], c.l[2], c.l[3] = 1, d.atom("_NET_WM_STATE_MAXIMIZED_VERT"), d.atom("_NET_WM_STATE_MAXIMIZED_HORZ"), 1
+        d.x.XSendEvent(d.dpy, d.root, 0, (1 << 19) | (1 << 20), ctypes.byref(ev))
+        d.x.XFlush(d.dpy)
+    return True
+
+
 def maximize_pid(pid):
     """0.21.86 (Kenton: KASTR came back at a default size after an update / restart): Chromium ignores --start-maximized for
     an --app window, so the launcher asks the window manager to maximize the window of `pid` itself (EWMH _NET_WM_STATE).

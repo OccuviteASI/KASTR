@@ -312,7 +312,7 @@
   :root[data-theme="light"] #topbar .tb:hover, :root[data-theme="light"] #topbar .tb.grid-on,
   :root[data-theme="light"] #topbar .tchev:hover, :root[data-theme="light"] #topbar .tchev.grid-on,
   :root[data-theme="light"] .cbtn:hover, :root[data-theme="light"] .pubui .prmodes .prm:hover, :root[data-theme="light"] .pubui .thgrid .th:hover,
-  :root[data-theme="light"] #joinGateClose:hover, :root[data-theme="light"] #sharePop .head a:hover, :root[data-theme="light"] #sharePop .head button:hover,
+  :root[data-theme="light"] #sharePop .head a:hover, :root[data-theme="light"] #sharePop .head button:hover,
   :root[data-theme="light"] .sbbtn:hover, :root[data-theme="light"] .sbgroup .sbgmenu:hover, :root[data-theme="light"] #roomBanner.free:hover,
   :root[data-theme="light"] #mineMenu .pwacts .pwcancel:hover, :root[data-theme="light"] #sbForm .pwacts .pwcancel:hover { color:var(--text); }
   :root[data-theme="light"] .pubui .prmodes .prm.on { color:var(--asi-blue); border-color:var(--asi-blue); }
@@ -916,12 +916,8 @@
     border:1px solid transparent; border-radius:4px; background:var(--asi-blue); color:var(--on-accent); cursor:pointer; pointer-events:auto; }
   #kToast .tact:hover { filter:brightness(1.1); }
   #kToast[data-level="error"] .tact { background:rgba(255,255,255,.94); color:var(--asi-red); }
-  /* 0.7.7: the gate is dismissible -- relay-only machines never join */
+  /* 0.7.7: the gate is dismissible -- relay-only machines never join (0.21.89: Escape only; Kenton: no close X) */
   #joinGate .card { position:relative; }
-  #joinGateClose { position:absolute; top:10px; right:10px; width:26px; height:26px;
-    display:flex; align-items:center; justify-content:center; padding:0; font-size:12px;
-    background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:5px; }
-  #joinGateClose:hover { color:#fff; background:var(--surface-2); }
   .noaud .icon { width:11px; height:11px; vertical-align:-2px; }
   .face .cap .icon { width:12px; height:12px; vertical-align:-2px; }
 
@@ -3235,8 +3231,6 @@
       <p>No access code or room code needed &mdash; the invite link is your key.</p></div>
     <!-- 0.21.85: the session ended (an invite-only guest of someone's My room) -- why, and Join again on the same link -->
     <div id="joinEndHead" role="status"><h2 id="joinEndTitle"></h2><p id="joinEndDetail"></p></div>
-    <button id="joinGateClose" type="button"
-            title="Close &mdash; join later from the room chip. The relay works without joining.">&#10005;</button>
     <!-- Live self-preview (gate-local capture, released on join/leave-gate).
          Mic and camera toggle BEFORE joining; both default off. -->
     <div id="joinPreview">
@@ -21761,8 +21755,8 @@
     }
     joinEls.leaveBtn.addEventListener("click", leaveMeeting);
     // 0.7.7: the gate is dismissible -- some machines only ever host the
-    // relay. Way back in: the room chip or the rooms button.
-    document.getElementById("joinGateClose").addEventListener("click", () => gateHide());
+    // relay. Way back in: the room chip or the rooms button. 0.21.89 (Kenton: "remove the x in the corner of the
+    // Join room page"): no close button any more -- Escape still lets a relay-only machine put the gate away.
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !joinEls.joinGate.hidden
           && joinState === "prejoin" && !rejoinRec) gateHide();

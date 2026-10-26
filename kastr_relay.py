@@ -99,6 +99,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs   # 0.20.0: + parse_qs (the bans long-poll query)
 
 import kastr_rtsp
+import kastr_msg   # 0.21.88: private messages (the hub's end-to-end encrypted store)
 
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
@@ -1838,7 +1839,8 @@ def clean_clients(rows):
                     "started": int(r.get("started") or 0) if str(r.get("started") or "0").isdigit() else 0,   # 0.21.73: its KASTR started at
                     "cmd": r.get("cmd") if r.get("cmd") in ("restart", "move") else "",                   # 0.21.73: an admin command waiting
                     "rooms": [str(x) for x in (r.get("rooms") or []) if isinstance(x, str) and SLUG_RE.match(x)][:16],
-                    "net": clean_net(r.get("net"))})                                                      # 0.21.78 (C): its own down / up
+                    "net": clean_net(r.get("net")),                                                       # 0.21.78 (C): its own down / up
+                    "guest": bool(r.get("guest"))})                                                       # 0.21.88: an invite-link guest
     return out
 
 
@@ -4325,6 +4327,11 @@ class AuthStore:
                 return None, None
             return slug, str(rec["personal"].get("owner") or "")
 
+    def personal_has(self, name):
+        """0.21.88: does `name` have a personal room (My room)? (Messages: who can set up a messaging key.)"""
+        with self.lock:
+            return bool(self._personal_find(personal_key(name)))
+
     def personal_create(self, name, code):
         """-> (slug, verdict): "created", "exists" (that name has one and the code is its code -- it opens), "wrong" (that
         name has one with another code), "full" (PERSONAL_MAX) or "bad" (no name / a code too short or long)."""
@@ -5470,7 +5477,10 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         if not slug:
             return {"ok": False, "error": "%s has no personal room" % name}, 404
         log("relay: personal room of %s %s by an admin" % (name, "given a new code" if code else "cleared"))
-        return {"ok": True, "op": "reset", "name": name, "cleared": not code}, 200
+        # 0.21.88: the person's messaging key stays wrapped under the OLD code -- Messages asks them for it ("keep your
+        # history") or lets them start fresh (older messages then cannot be read). A code changed from Messages re-wraps it.
+        return {"ok": True, "op": "reset", "name": name, "cleared": not code,
+                "messages": "their messages key still opens only with the old code (Messages asks for it, or they start fresh and lose older messages)"}, 200
     if lockout is not None:
         wait = lockout.locked_for(peer)
         if wait:
@@ -5697,6 +5707,10 @@ class PersonalLive:
         self.where = {}       # 0.21.85: device host -> {room, name, since, at, guest, mode, via} -- pages in a personal room (beats; a hub also its spokes')
         self.wfwd = {}        # 0.21.85: spoke: device host -> when that guest page's beat last went to the hub
         self.oncache = {}     # 0.21.85: spoke: (host, room, admin) -> (at, the hub's answer)
+        self.mping = {}       # 0.21.88: device host -> (message seq, at) -- "pull your messages" (the beat says it; spokes mirror it)
+        self.guests = {}      # 0.21.88: device host -> when it last beat with an invite-link / personal-room guest token
+        self.bmode = {}       # 0.21.88: device host -> the page mode its beats say (boxes are not people)
+        self.allcache = {}    # 0.21.88: spoke: "all" -> (at, the hub's All people rows)
         self.thread = None
 
 
@@ -5922,6 +5936,22 @@ class AuthService:
                             pass
                     else:
                         self._reply(obj, code)
+                elif path == "/api/msg/file":          # 0.21.88: a message attachment's ciphertext
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, code = svc.msg_file_get(qs, self.headers.get("Authorization"), (qs.get("jwt") or [""])[0], self._peer())
+                    if isinstance(obj, (bytes, bytearray)):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Length", str(len(obj)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        try:
+                            self.wfile.write(obj)
+                        except OSError:
+                            pass
+                    else:
+                        self._reply(obj, code)
                 elif path == "/api/spokes/link":       # 0.21.7: what the hub's relay sees of its cluster (a spoke's grid-gate evidence)
                     obj, code = svc.spoke_link(self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
@@ -5949,6 +5979,17 @@ class AuthService:
 
             def do_POST(self):
                 path = self.path.split("?")[0]
+                if path == "/api/msg/file":            # 0.21.88: a message attachment's ciphertext (raw body, up to 25 MB)
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        n = -1
+                    if n <= 0 or n > kastr_msg.MSG_FILE_MAX:
+                        self.rfile.read(max(0, min(n, 1 << 20)))
+                        return self._reply({"ok": False, "error": "an attachment is at most 25 MB"}, 413)
+                    data = self.rfile.read(n)
+                    obj, code = svc.msg_file_post(data, parse_qs(urlparse(self.path).query), self.headers.get("Authorization"), self._peer())
+                    return self._reply(obj, code)
                 p = self._payload()
                 if path == "/api/room":
                     obj, code = svc.register(p, self._peer())
@@ -5971,6 +6012,10 @@ class AuthService:
                 elif path == "/api/people":            # 0.21.78: beats, person invites, My room shared
                     obj, code = svc.people_api(p, self.headers.get("Authorization"), self._peer())
                     self._reply(obj, code)
+                elif path == "/api/msg":               # 0.21.88: private messages (end-to-end encrypted; the hub keeps them)
+                    obj, code = svc.msg_api(p, self.headers.get("Authorization"), self._peer())
+                    hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                    self._reply(obj, code, hdrs)
                 elif path in ("/api/session", "/"):
                     # 0.16.0: the relay's session events. The PEER must be loopback itself
                     # (never X-Forwarded-For -- the relay runs beside us).
@@ -6061,6 +6106,12 @@ class AuthService:
             pass
         try:
             self._hist_flush()   # 0.21.68: the Users history as it stands
+        except Exception:
+            pass
+        try:
+            m = self.__dict__.get("_messenger")   # 0.21.88: read marks / cursors written within two seconds -- now
+            if m is not None:
+                m.flush()
         except Exception:
             pass
         try:
@@ -6195,6 +6246,13 @@ class AuthService:
         if op == "group":   # 0.21.68: vouch "admin" -- the spoke checked an admin token (create / rename / delete groups)
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return group_op(self.store, body, operator=p.get("vouch") == "admin", log=self.log)
+        if op == "msg":        # 0.21.88: a page's message call on a spoke (the spoke checked its member token: vouch + host)
+            if p.get("vouch") not in ("member", "admin") or not HOST_RE.match(str(p.get("host") or "")):
+                return {"ok": False, "error": "the spoke must vouch for a member's device"}, 403
+            body = p.get("body") if isinstance(p.get("body"), dict) else {}
+            return self._msgr().api(body, str(p["host"]), admin=p.get("vouch") == "admin")
+        if op == "pall":       # 0.21.88: All people for a spoke's page
+            return self._p_all(time.time())
         if op == "personal":   # 0.21.75: My room -- the spoke checked the member's access code (vouch "member") or an admin
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
@@ -7059,8 +7117,9 @@ class AuthService:
             opened = sorted(s for s, hosts in pl.here.items() if any(now - t <= PERSONAL_OWNER_GRACE for t in hosts.values()))
             away = {k: dict(v) for k, v in pl.away.items()}
             box = [{"seq": x["seq"], "to": x["to"], "item": dict(x["item"])} for x in pl.out if now - float(x.get("at") or 0) <= PINBOX_TTL]
+            mping = {h: v[0] for h, v in pl.mping.items() if now - v[1] <= kastr_msg.MSG_PING_KEEP_S}   # 0.21.88: "pull your messages"
         keep = {s: r for s, r in rooms.items() if s in opened or r["hosts"] or r["co"] or s in away}
-        return {"open": opened, "rooms": keep, "away": away, "inbox": box}
+        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping}
 
     def personal_mirror_apply(self, d):
         """Spoke: the hub's `personal` from the long-poll. A room whose owner just left ends its guests' sessions here."""
@@ -7103,6 +7162,12 @@ class AuthService:
                     continue
                 pl.seen[iid] = now
                 self._p_inbox_put_locked(to, dict(item, at=now))
+            mp = pf.get("mping")   # 0.21.88: the hub's message pings -- a page on this spoke pulls when its beat says so
+            for h, sq in (mp.items() if isinstance(mp, dict) else []):
+                if HOST_RE.match(str(h)) and isinstance(sq, int) and sq > (pl.mping.get(h) or (0,))[0]:
+                    pl.mping[str(h)] = (sq, now)
+            for h in [h for h, v in pl.mping.items() if now - v[1] > kastr_msg.MSG_PING_KEEP_S]:
+                pl.mping.pop(h, None)
         if n:
             self.log("relay auth: %d guest session(s) in personal rooms ended here -- their owner left" % n)
             threading.Thread(target=self.trigger_revalidate, daemon=True).start()
@@ -7678,12 +7743,20 @@ class AuthService:
         pl = self._pl()
         if op == "beat":
             name = clean_label(p.get("name"), 40)
-            if name:
-                with self.lock:
+            with self.lock:   # 0.21.88: what All people needs -- boxes and guests are not people
+                if name:
                     pl.names[host] = (name, now)
+                pl.bmode[host] = str(p.get("mode") or "")[:24]
+                if claims.get("inv") or claims.get("pg"):
+                    pl.guests[host] = now
+                elif host in pl.guests and not is_personal(room):
+                    pl.guests.pop(host, None)
+                mp = pl.mping.get(host)
             av = clean_avatar(p.get("avatar"))   # 0.21.86: + the profile photo
             self._p_where_beat(room, host, name, owner, p.get("mode"), now, av)   # 0.21.85: Everyone online (personal rooms)
             out = {"ok": True, "inbox": self._p_inbox_take(host, now), "shared": self._p_shared(host, now)}
+            if mp:
+                out["msg"] = mp[0]   # 0.21.88: a message (or a read mark, a group change) waits -- the page pulls
             if owner:
                 ok = True
                 if not self._p_spoke():
@@ -7736,6 +7809,10 @@ class AuthService:
                                      "by": by, "to": to, "toName": to_name})
         if op == "rc":   # 0.21.79: remote control notes
             return self.rc_send(p, claims, room, host, now)
+        if op == "all":      # 0.21.88: All people -- everyone the fleet has seen with KASTR or a web page in 30 days
+            if claims.get("inv") or claims.get("pg") or claims.get("lobby") or room == LOBBY_SLUG:
+                return {"ok": False, "error": "join a room to see all people"}, 403
+            return self._p_all(now)
         if op == "online":   # 0.21.85: Everyone online -- who is in a personal room (public rooms: the page's own presence)
             return self._p_online(host, room, claims_admin_any(claims), now)
         if op == "cmd":      # 0.21.85: an admin's Restart / Move from the People panel (the Relay page's Users actions)
@@ -7759,7 +7836,7 @@ class AuthService:
             if not self._p_spoke():
                 return self._p_fed(body["op"], body)
             return self._p_hub_call(body)
-        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | online | cmd | list | share | co | seen)"}, 400
+        return {"ok": False, "error": "unknown op (beat | leave | invite | rc | all | online | cmd | list | share | co | seen)"}, 400
 
     # ---- 0.21.85: Everyone online (the People panel) ------------------------------------------------------------------
     def _p_where_set_locked(self, slug, host, name, guest, mode, via, now, avatar=""):
@@ -7952,6 +8029,263 @@ class AuthService:
         rec = self.raise_cmd("clientCmd", {"spoke": via, "node": to, "kind": kind, "to": dest})
         self.log("relay auth: admin %s asked %s to %s through spoke %s (People panel)" % (by or "?", to, kind, via))
         return {"ok": True, "to": to, "kind": kind, "dest": dest, "relay": via, "seq": rec["seq"]}, 200
+
+    # ---- 0.21.88 (Kenton: "add 'all people' in the people page, then a toggle to show online only"): All people ---------
+    # Everyone the hub has seen with a KASTR app or a web page in the last 30 days (the 0.21.68 Users history, its live
+    # check-ins and its spokes' users, the names pages say in their beats), BY NAME -- one row per person, whatever devices
+    # they used. Camera boxes, relays and invite-link guests are left out. People with a messaging key are listed too (0.22:
+    # people from ASI's directory who never logged in will join them -- a row needs no device).
+    PALL_CACHE = 20
+    PALL_MAX = 1000
+
+    def _p_all_rows(self, now=None):
+        now = time.time() if now is None else now
+        pl = self._pl()
+        rows = {}
+
+        def put(h, name, at, kind, guest):
+            if not HOST_RE.match(str(h or "")):
+                return
+            r = rows.setdefault(h, {"name": "", "at": 0, "kind": "", "guest": False})
+            try:
+                at = float(at or 0)
+            except (TypeError, ValueError):
+                at = 0
+            if name and (at >= r["at"] or not r["name"]):
+                r["name"] = str(name)
+            if guest is not None and at >= r["at"]:
+                r["guest"] = bool(guest)   # what its latest sighting says
+            r["at"] = max(r["at"], at)
+            if kind == "box" or not r["kind"]:
+                r["kind"] = kind or r["kind"]
+        with self.lock:
+            for k, v in (getattr(self, "user_hist", {}) or {}).items():
+                put(k, v.get("name"), v.get("at"), v.get("kind") or self._user_kind(k, v.get("mode")), v.get("guest"))
+            for node, c in self.clients.items():
+                put(node, c.get("name"), c.get("at"), self._user_kind(node, c.get("mode")), c.get("guest"))
+            for v in self.spokes.values():
+                for c in v.get("clients") or []:
+                    if isinstance(c, dict):
+                        put(c.get("node"), c.get("name"), c.get("at"), c.get("kind") or self._user_kind(c.get("node"), c.get("mode")), c.get("guest"))
+            for h, (nm, at) in pl.names.items():
+                put(h, nm, at, "box" if pl.bmode.get(h) in HIDDEN_PEOPLE_MODES else ("web" if h.startswith("web-") else "app"), None)
+            guests = dict(pl.guests)
+        cut = now - self.USER_HIST_S
+        by = {}
+        for h, r in rows.items():
+            if r["kind"] == "box" or r["guest"] or h in guests or r["at"] < cut:
+                continue
+            name = personal_name(clean_label(r["name"], 40))
+            nk = personal_key(name)
+            if not nk:
+                continue
+            x = by.setdefault(nk, {"name": name, "key": nk, "at": 0, "hosts": [], "web": False, "app": False, "msg": False})
+            if r["at"] >= x["at"]:
+                x["name"] = name   # the spelling of their latest sighting
+            x["at"] = max(x["at"], int(r["at"]))
+            x["hosts"].append(h)
+            x["web" if r["kind"] == "web" else "app"] = True
+        if not self._p_spoke():
+            try:
+                for nk, i in self._msgr().identities().items():
+                    x = by.setdefault(nk, {"name": clean_label(i["name"], 40), "key": nk, "at": int(i.get("at") or 0), "hosts": [],
+                                           "web": False, "app": False, "msg": False})
+                    x["msg"] = True
+                    x["at"] = max(x["at"], int(i.get("at") or 0))
+            except Exception as e:
+                self.log("relay auth: All people -- messaging keys unreadable: %s" % str(e)[:120])
+        out = sorted(by.values(), key=lambda x: (x["name"].lower(), x["key"]))[:self.PALL_MAX]
+        for x in out:
+            x["hosts"] = sorted(x["hosts"])[:12]
+        return out
+
+    def _p_all(self, now):
+        """POST /api/people {op: "all"} -> {ok, rows: [{name, key, at, hosts, web, app, msg}], at, hubDown?}. A spoke asks the
+        hub (cached PALL_CACHE s); a dark hub leaves it its own users."""
+        if not self._p_spoke():
+            return {"ok": True, "rows": self._p_all_rows(now), "at": int(now)}, 200
+        pl = self._pl()
+        with self.lock:
+            hit = pl.allcache.get("all")
+        if hit and now - hit[0] < self.PALL_CACHE:
+            return hit[1], 200
+        r = self._hub_fed({"op": "pall"}, timeout=5)
+        if r is not None and r[1] == 200 and isinstance(r[0].get("rows"), list):
+            rows = []
+            for x in r[0]["rows"][:self.PALL_MAX]:
+                if not isinstance(x, dict) or not clean_label(x.get("name"), 40):
+                    continue
+                try:
+                    at = int(x.get("at") or 0)
+                except (TypeError, ValueError):
+                    at = 0
+                rows.append({"name": clean_label(x.get("name"), 40), "key": personal_key(x.get("name")), "at": at,
+                             "hosts": [str(h) for h in (x.get("hosts") or []) if HOST_RE.match(str(h))][:12],
+                             "web": bool(x.get("web")), "app": bool(x.get("app")), "msg": bool(x.get("msg"))})
+            out = {"ok": True, "rows": rows, "at": int(now)}
+        else:
+            out = {"ok": True, "rows": self._p_all_rows(now), "at": int(now)}
+            out["hubDown" if r is None else "hubOld"] = True
+        with self.lock:
+            pl.allcache["all"] = (now, out)
+        return out, 200
+
+    # ---- 0.21.88 (Kenton: "a private messaging feature ... whether online/offline. If offline, send it when back online.
+    # Ability to setup group messages. These messages are not tied to any rooms."): PRIVATE MESSAGES. The hub keeps them
+    # (kastr_msg.Messenger -- ciphertext only); every relay takes its pages' calls (a member token of a room: never the
+    # Lobby, never an invite-link guest) and a spoke forwards them to the hub (rooms_fed op "msg"). Wrong My room codes count
+    # toward the lockout of the relay the person called.
+    def _msgr(self):
+        m = self.__dict__.get("_messenger")
+        if m is None:
+            with _XS_INIT_LOCK:
+                m = self.__dict__.get("_messenger")
+                if m is None:
+                    st = self.store
+                    m = kastr_msg.Messenger(
+                        getattr(st, "state_dir", os.getcwd()), self.log,
+                        check_code=lambda n, c: bool(hasattr(st, "personal_check") and st.personal_check(n, c)[0]),
+                        has_room=lambda n: bool(hasattr(st, "personal_has") and st.personal_has(n)),
+                        set_code=lambda n, c: bool(hasattr(st, "personal_reset") and st.personal_reset(n, c)),
+                        ping=self._msg_ping)
+                    self.__dict__["_messenger"] = m
+                    threading.Thread(target=self._msg_loop, daemon=True, name="kastr-messages").start()
+        return m
+
+    def _msg_loop(self):
+        stop = self.__dict__.get("_board_stop") or threading.Event()
+        while not stop.wait(3600):
+            try:
+                self._msgr().sweep()
+            except Exception as e:
+                self.log("relay auth: messages sweep: %s" % str(e)[:120])
+
+    def _msg_ping(self, hosts, seq):
+        """Hub: these devices pull their messages -- the beat of the page on this relay says so at once, and a spoke's pages
+        hear it through the long-poll (personal_feed `mping`)."""
+        pl, now = self._pl(), time.time()
+        with self.lock:
+            for h in hosts:
+                if HOST_RE.match(str(h)):
+                    pl.mping[str(h)] = (max(int(seq), (pl.mping.get(h) or (0,))[0] + 1), now)
+            for h in [h for h, v in pl.mping.items() if now - v[1] > kastr_msg.MSG_PING_KEEP_S]:
+                pl.mping.pop(h, None)
+        try:
+            self.bans.nudge()
+        except Exception:
+            pass
+
+    MSG_CODE_OPS = ("unlock", "setup", "recode")
+
+    def _msg_member(self, bearer):
+        """-> (claims, room, host, error reply): a member token of a room (not the Lobby, not an invite-link guest)."""
+        claims = self._member_claims(bearer)
+        if claims is None:
+            return None, None, None, ({"ok": False, "error": "join a room first (a member token is required)"}, 403)
+        room, host = claims_identity(claims)
+        if not room or not host:
+            return None, None, None, ({"ok": False, "error": "this page's token names no device -- rejoin the room"}, 403)
+        if claims.get("lobby") or room == LOBBY_SLUG or claims.get("inv") or claims.get("pg") or claims.get("vehicle"):
+            return None, None, None, ({"ok": False, "error": "messages need a room's access code (not the Lobby or an invite link)"}, 403)
+        return claims, room, host, None
+
+    def msg_api(self, p, bearer, peer=""):
+        """POST /api/msg {op, ...} with Bearer = this page's member token -> (reply, code). See kastr_msg.Messenger.api."""
+        p = p if isinstance(p, dict) else {}
+        claims, room, host, err = self._msg_member(bearer)
+        if err:
+            return err
+        now = time.time()
+        if self.bans and self.bans.hit(room, host, peer, now):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        op = str(p.get("op") or "")
+        coded = op in self.MSG_CODE_OPS
+        if coded:
+            wait = self.lockout.locked_for(peer)
+            if wait:
+                return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        admin = claims_admin_any(claims)
+        if not self._p_spoke():
+            out, code = self._msgr().api(p, host, admin=admin, now=now)
+        else:
+            r = self._hub_fed({"op": "msg", "vouch": "admin" if admin else "member", "host": host, "body": p},
+                              timeout=20 if coded else 10)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- messages wait there; trying again shortly"}, 503
+            out, code = r
+        if coded:
+            if code == 403 and out.get("wrong"):
+                o2, c2 = self.lockout.fail(peer, "wrong name or My room code", personal_name(p.get("name")), what="messages of")
+                out = dict(out, error=o2.get("error") or out.get("error"))
+                if c2 == 429:
+                    return dict(o2, ok=False, wrong=True), 429
+            elif code == 200:
+                self.lockout.ok(peer)
+        return out, code
+
+    def msg_file_post(self, data, q, bearer, peer=""):
+        """POST /api/msg/file?as=<name> (the attachment's ciphertext as the body). From a page: its member token; from a spoke:
+        the federation token + the device it vouches for (`host`)."""
+        as_name = str((q.get("as") or [""])[0])[:60]
+        if self._bearer_relay(bearer):
+            host = str((q.get("host") or [""])[0])
+            if not HOST_RE.match(host):
+                return {"ok": False, "error": "which device?"}, 400
+            return self._msgr().file_put(data, host, as_name)
+        claims, room, host, err = self._msg_member(bearer)
+        if err:
+            return err
+        if not self._p_spoke():
+            return self._msgr().file_put(data, host, as_name)
+        r = self._hub_raw("POST", "/api/msg/file?as=%s&host=%s" % (urllib.parse.quote(as_name), host), data, timeout=120)
+        if r is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+        try:
+            return json.loads(r[1].decode("utf-8", "replace") or "{}"), r[0]
+        except ValueError:
+            return {"ok": False, "error": "the hub answered oddly"}, 502
+
+    def msg_file_get(self, q, bearer, jwt=None, peer=""):
+        """GET /api/msg/file?id=<fid> -> (bytes | reply, code)."""
+        fid = str((q.get("id") or [""])[0])
+        if not bearer and jwt:
+            bearer = "Bearer " + str(jwt)
+        if self._bearer_relay(bearer):
+            host = str((q.get("host") or [""])[0])
+            if not HOST_RE.match(host):
+                return {"ok": False, "error": "which device?"}, 400
+            data, err = self._msgr().file_get(fid, host)
+            return (data, 200) if err is None else err
+        claims, room, host, err = self._msg_member(bearer)
+        if err:
+            return err
+        if not self._p_spoke():
+            data, err = self._msgr().file_get(fid, host)
+            return (data, 200) if err is None else err
+        r = self._hub_raw("GET", "/api/msg/file?id=%s&host=%s" % (urllib.parse.quote(fid), host), None, timeout=120)
+        if r is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+        if r[0] == 200:
+            return r[1], 200
+        try:
+            return json.loads(r[1].decode("utf-8", "replace") or "{}"), r[0]
+        except ValueError:
+            return {"ok": False, "error": "the hub answered oddly"}, 502
+
+    def _hub_raw(self, method, path, data, timeout=60):
+        """Spoke side: one raw request at the hub's minter with the federation token -> (code, bytes) or None."""
+        base, bearer = self._hub_base(), self._hub_bearer()
+        if not base or not bearer:
+            return None
+        req = urllib.request.Request(base + path, data=data, method=method,
+                                     headers={"Content-Type": "application/octet-stream", "Authorization": bearer})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return (getattr(r, "status", None) or 200), r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+        except Exception:
+            return None
 
     # ---- 0.21.63: the vehicle API -----------------------------------------------------------------------------------
     # Kenton: "I now need to have a vehicle ... be able to connect via POST to the relay to share the cameras on the vehicle.
@@ -8222,6 +8556,7 @@ class AuthService:
         is_vehicle = False
         link = None
         pg = False   # 0.21.78: a personal room's guest
+        guest = False   # 0.21.88: an invite-link or personal-room guest (All people leaves them out)
         probe = False   # 0.21.83: KASTR's own ~stats read
         if status == "grant":
             claims = verify_token(session_jwt(req), self.key, vnow) or {}
@@ -8236,6 +8571,7 @@ class AuthService:
             if claims.get("rcx") and self._rcx_is_dead(claims.get("rcx")):   # 0.21.83 (D): a remote session that is over
                 return self._rcx_refused(ev, sid, remote, now)
             pg = bool(claims.get("pg")) and is_personal(room)   # 0.21.78: a guest's session lasts while the owner is in
+            guest = bool(claims.get("inv") or claims.get("pg"))   # 0.21.88
             if pg and not self.personal_open(room, now):
                 return self._p_refused(ev, sid, remote, room)
         if status == "refuse":
@@ -8264,6 +8600,7 @@ class AuthService:
                                        "expires": grant.get("expires") or (now + 86400), "grant": grant, "base": base,
                                        "room": room, "host": host, "revoked": False,   # 0.17.0: the identity a kick keys on
                                        "pg": pg,                                        # 0.21.78: a personal room's guest
+                                       "guest": guest,                                  # 0.21.88: All people leaves guests out
                                        "inv": (str(claims.get("inv") or "") or None) if pg else None,   # 0.21.85: the link a guest came by (a revoke ends it)
                                        "probe": probe,                                  # 0.21.83: a ~stats read (not logged at its end)
                                        "link": link,                                    # 0.21.77: the dialer of a link session
@@ -9957,7 +10294,8 @@ class AuthService:
                         "platform": str(p.get("platform") or "")[:32], "name": str(p.get("name") or "")[:60],   # 0.21.55: 32 ("Chrome on Windows")
                         "offer": str(p.get("offer") or "")[:20], "ip": peer, "at": now,
                         "hostname": clean_label(p.get("hostname"), 64), "user": clean_label(p.get("user"), 32),   # 0.21.69
-                        "net": clean_net(p.get("net"), now)})   # 0.21.78 (C): what it receives / sends (its zoomed-map hover)
+                        "net": clean_net(p.get("net"), now),    # 0.21.78 (C): what it receives / sends (its zoomed-map hover)
+                        "guest": bool(p.get("guest"))})           # 0.21.88: an invite-link guest's page (All people leaves it out)
             try:
                 rec["started"] = max(0, int(float(p.get("started") or 0)))   # 0.21.73: a Restart is done when this moves
             except (TypeError, ValueError):
@@ -10115,7 +10453,7 @@ class AuthService:
                               "platform": c.get("platform") or "", "ip": c.get("ip") or "", "at": c.get("at"), "offer": c.get("offer") or "",
                               "pending": (c.get("pending") or {}).get("version") or "", "checkin": True, "rooms": [],
                               "started": int(c.get("started") or 0), "cmd": (c.get("cmd") or {}).get("kind") or "",   # 0.21.73
-                              "net": c.get("net")}   # 0.21.78 (C)
+                              "net": c.get("net"), "guest": bool(c.get("guest"))}   # 0.21.78 (C); 0.21.88: + guest
             sess = [dict(v) for v in self._sessions.values()]
             bnames = dict(self._pl().names)   # 0.21.78: the name a page says in its beats
         for v in sess:
@@ -10138,6 +10476,8 @@ class AuthService:
             room = str(v.get("room") or "")
             if room and room not in r["rooms"]:
                 r["rooms"].append(room)
+            if v.get("guest"):
+                r["guest"] = True   # 0.21.88
         for r in rows.values():
             n = r["node"]
             r["kind"] = "web" if n.startswith("web-") else ("box" if r["mode"] in ("publisher", "publisher-relay", "relay") else "app")

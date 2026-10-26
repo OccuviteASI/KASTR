@@ -354,7 +354,7 @@ class Page(unittest.TestCase):
         self.assertNotIn("localStorage", self.eo.split("function eoBuild")[0])
         # the room view's parts go while Everyone online is on; the search box is shared
         self.assertIn("#peoplePanel.allview .pplsec, #peoplePanel.allview #pplRows, #peoplePanel.allview #pplEmpty, #peoplePanel.allview #pplStreams,", p)
-        self.assertIn('ppl.search.placeholder = eoOn() ? "Search everyone online" : "Search participants";', self.eo)
+        self.assertIn('ppl.search.placeholder = eoOn() ? "Search all people" : "Search participants";', self.eo)   # 0.21.88: the tab is All people
         self.assertIn("try { eoPaint(force); } catch (e) { console.warn(\"KASTR: Everyone online:\", e); }   // 0.21.85", p)   # paintParticipants
         self.assertIn("try { eoPaint(); } catch {}   // 0.21.85: Everyone online is live", p)                          # roomsChanged
 

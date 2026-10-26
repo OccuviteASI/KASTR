@@ -406,6 +406,83 @@ def window_file():
     return os.path.join(state_dir(), "window.json")
 
 
+def saved_maximized():
+    """0.21.86: was the window maximized when it was last seen?"""
+    try:
+        with open(window_file(), encoding="utf-8") as f:
+            return json.load(f).get("maximized") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _maximize_windows(pid):
+    """Windows: ShowWindow(SW_MAXIMIZE) on the visible Chromium top-level windows of `pid` -> how many."""
+    import ctypes
+    from ctypes import wintypes as wt
+    user32 = ctypes.windll.user32
+    found = []
+    proc_t = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def cb(hwnd, _):
+        try:
+            if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4):   # GW_OWNER: no owned pop-ups
+                return True
+            owner = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value != pid:
+                return True
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, cls, 64)
+            r = wt.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            if cls.value.startswith("Chrome_WidgetWin") and r.right - r.left >= 200 and r.bottom - r.top >= 150:
+                found.append(hwnd)
+        except Exception:
+            pass
+        return True
+    user32.EnumWindows(proc_t(cb), 0)
+    for hwnd in found:
+        if not user32.IsZoomed(hwnd):
+            user32.ShowWindow(hwnd, 3)   # SW_MAXIMIZE
+    return len(found)
+
+
+def maximize_when_shown(proc, limit=30.0, profile=None):
+    """0.21.86 (Kenton: "It still isn't saving position after upgrade. Or restart." -- maximized on the main monitor, it came
+    back at a default size): when an update / restart launches while the OLD browser still holds the profile, Chrome hands
+    the launch to it and the new window copies that browser's first window, ignoring --start-maximized (seen on a hidden
+    desktop lab). So after every launch of a window that was maximized, the launcher finds it -- in the process it started,
+    or in whichever browser holds our profile -- and maximizes it if it is not."""
+    t0 = time.monotonic()
+    pid = getattr(proc, "pid", None)
+    while time.monotonic() - t0 < limit:
+        try:
+            if proc.poll() is None:
+                pids = [pid]
+            else:   # handed off (or gone): the browser that holds our profile owns the window now
+                pids = _browser_pids_for(profile) if profile else []
+                if not pids:
+                    time.sleep(1.0)
+                    continue
+            if WINDOWS:
+                n = sum(_maximize_windows(p) for p in pids)
+            elif sys.platform.startswith("linux"):
+                import kastr_x11
+                if kastr_x11.session_kind() != "x11":
+                    return   # Wayland: no window manager request a client may make
+                n = sum(kastr_x11.maximize_pid(p) for p in pids)
+            else:
+                return
+        except Exception as e:
+            note("window: could not maximize (%s)" % e)
+            return
+        if n:
+            note("window: maximized, as it was (%d s after launch%s)" % (int(time.monotonic() - t0), "" if proc.poll() is None else ", in the browser that was already running"))
+            return
+        time.sleep(0.25)
+    note("window: the window did not show within %d s -- left as it opened" % int(limit))
+
+
 def window_args():
     """Chrome flags to put the window back where it was.
 
@@ -2391,6 +2468,7 @@ def launch(browser, url, page):
             note("browser: could not start %s (%s)" % (cand, e))
             continue
         if not _is_bundled(cand):
+            _maximize_later(proc)
             return proc                  # system browsers keep the old contract: supervise judges them
         code = None
         t0 = time.monotonic()
@@ -2400,12 +2478,18 @@ def launch(browser, url, page):
                 break
             time.sleep(0.2)
         if code is None or code == 0:
+            _maximize_later(proc)
             return proc
         tail = _stderr_tail(errlog)
         reasons.append("%s exited with code %s%s" % (os.path.basename(cand), code, (" -- " + tail) if tail else ""))
         note("browser: " + reasons[-1])
     LAUNCH_ERROR[0] = "; ".join(reasons) or "no browser could be started"
     return None
+
+
+def _maximize_later(proc):
+    if saved_maximized() and not MACOS and not USER_BROWSER[0]:   # the person's own browser: never touch their windows
+        threading.Thread(target=maximize_when_shown, args=(proc,), kwargs={"profile": _ACTIVE_PROFILE}, daemon=True, name="kastr-maximize").start()
 
 
 def no_window_message(url, reason):
@@ -3238,6 +3322,9 @@ def main():
     args = build_parser(ini).parse_args(_rest)   # 0.12.0: parser factored out (testable)
     args.invite = invite_url
     register_url_protocol()                       # 0.21.75: every launch (the exe may have moved); never fails
+    # 0.21.86: an invite opened just before an update / restart relaunch is offered again (the file lives INVITE_PENDING_S)
+    if kastr_serve.invite_pending_restore(os.path.join(state_dir(), "invite-pending.json")) and not invite_url:
+        note("invite: offering again the invite link opened before this relaunch")
     if invite_url and not kastr_serve.invite_pending_set(invite_url):
         note("invite: the link on the command line is not a KASTR invite link -- ignored")
 

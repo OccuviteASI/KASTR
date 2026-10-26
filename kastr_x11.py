@@ -418,6 +418,39 @@ def list_windows(exclude_pids=()):
     return out
 
 
+class XClientMessageEvent(ctypes.Structure):
+    _fields_ = [("type", c_int), ("serial", c_ulong), ("send_event", c_int), ("display", c_void_p), ("window", Window),
+                ("message_type", Atom), ("format", c_int), ("l", c_long * 5)]
+
+
+class XEvent(ctypes.Union):
+    _fields_ = [("xclient", XClientMessageEvent), ("pad", c_long * 24)]
+
+
+def maximize_pid(pid):
+    """0.21.86 (Kenton: KASTR came back at a default size after an update / restart): Chromium ignores --start-maximized for
+    an --app window, so the launcher asks the window manager to maximize the window of `pid` itself (EWMH _NET_WM_STATE).
+    -> how many windows were asked (0 = none of that process is mapped yet)."""
+    n = 0
+    with Display() as d:
+        wins = d.windows_prop(d.root, "_NET_CLIENT_LIST")
+        mine = [w for w in wins if d.pid(w) == int(pid) and (d.rect(w) or {}).get("viewable") and (d.rect(w) or {}).get("w", 0) >= 200]
+        if not mine:
+            return 0
+        d.x.XSendEvent.restype = c_int
+        d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XEvent)]
+        for w in mine:
+            ev = XEvent()
+            c = ev.xclient
+            c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, w, 32   # ClientMessage
+            c.message_type = d.atom("_NET_WM_STATE")
+            c.l[0], c.l[1], c.l[2], c.l[3] = 1, d.atom("_NET_WM_STATE_MAXIMIZED_VERT"), d.atom("_NET_WM_STATE_MAXIMIZED_HORZ"), 1   # add, ..., an app asks
+            d.x.XSendEvent(d.dpy, d.root, 0, (1 << 19) | (1 << 20), ctypes.byref(ev))   # SubstructureNotify | SubstructureRedirect
+            n += 1
+        d.x.XFlush(d.dpy)
+    return n
+
+
 def window_rect(xid):
     try:
         with Display() as d:

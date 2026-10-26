@@ -648,7 +648,7 @@
   .pubui .shlist { display:flex; flex-direction:column; gap:4px; margin-top:10px; }
   .pubui .shrow { display:flex; flex-direction:column; align-items:flex-start; gap:2px; text-align:left; height:auto; padding:8px 10px;
     background:var(--surface-2); border:1px solid var(--line); border-radius:6px; color:var(--text); }
-  .pubui .shrow:hover { border-color:var(--asi-blue); }
+  .pubui .shrow:hover, .pubui .shrow:hover:not(:disabled) { background:var(--surface-2); color:var(--text); border-color:var(--asi-blue); }   /* 0.21.86 (Kenton: hovering a Share row filled it accent blue, its grey line unreadable): beats .pubui button:hover */
   .pubui .shrow b { font-size:13px; }
   .pubui .shrow span { font-size:11px; color:var(--text-dim); }
   .pubui .shrow .info { display:inline-flex; width:14px; height:14px; border-radius:50%; border:1px solid var(--text-dim); color:var(--text-dim);
@@ -9357,7 +9357,7 @@
     ppl.rows.hidden = !pplOpen;
     ppl.empty.hidden = !pplOpen || shown.length > 0;
     ppl.empty.textContent = q ? "No one here matches \u201c" + ppl.search.value.trim() + "\u201d" : "No one has joined yet.";
-    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, avatarUrls.get(p.key) || "", p.cam || p.content[0] || "", personColor(p.key)].join("|")).join("\n");   // 0.21.61: + colour
+    const sig = shown.map((p) => [p.key, p.name, p.role, p.mic, p.talk ? 1 : 0, p.me ? 1 : 0, (p.me ? String(window.__avatarLocal || "").length : 0) + (avatarUrls.get(p.key) || ""), p.cam || p.content[0] || "", personColor(p.key)].join("|")).join("\n");   // 0.21.61: + colour
     if (sig === pplSig && !force) return;
     if (ppl.rows.querySelector(".pprow.menu") && mineMenu && !mineMenu.hidden) return;   // never repaint under an open menu
     pplSig = sig;
@@ -9369,7 +9369,7 @@
       av.style.setProperty("--ring", personColor(p.key));
       setPc(row, personColor(p.key));   // 0.21.61: the talking ring in their colour (0.21.64: or their automatic one)
       av.textContent = viewerInitials(p.name);
-      paintAvatar(av, avatarUrls.get(p.key));
+      paintAvatar(av, (p.me && window.__avatarLocal) || avatarUrls.get(p.key));   // 0.21.86: my own photo straight from my profile
       const nm = document.createElement("div"); nm.className = "ppname";
       const pn = document.createElement("div"); pn.className = "pn"; pn.textContent = p.name;
       if (p.me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (You)"; pn.appendChild(y); }
@@ -17340,6 +17340,10 @@
     pubModel.peer = statePeer(); roomModel.peer = pubModel.peer;
     pubModel.clk = Math.round((window.__clockOffset || 0) / 10) * 10;   // 0.21.22: viewers' latency readout corrects for my clock
     const pj = JSON.stringify(pubModel); if (pj !== pubJson) { pubJson = pj; pubState.set("state.json", pubModel); }
+    // 0.21.86 (Kenton: in My room the presentation found nobody to make backstage, and People showed initials): My room has no
+    // public state records, so each page names itself in room.json -- read by the room's members only, never listed
+    roomModel.who = isPersonalSlug(CHANNEL) ? { op: pubModel.op || "", name: pubModel.name || "", avatar: pubModel.avatar || "", mode: pubModel.mode || "",
+                                                 joinedAt: pubModel.joinedAt || 0, publishing: (pubModel.publishing || []).slice(0, 32) } : null;
     const rj = JSON.stringify(roomModel); if (rj !== roomJson) { roomJson = rj; roomState.set("room.json", roomModel); }
   }
   function stateSync() {
@@ -17594,7 +17598,7 @@
       if (p.ts && !presenceHidden(w)) sinceTs.set(key, p.ts); else sinceTs.delete(key);   // 0.21.78: people only -- a camera box starts no timer
       if (rec.avatar && rec.op) { const ak = String(rec.op).toLowerCase(); if (avatarUrls.get(ak) !== rec.avatar) { avatarUrls.set(ak, rec.avatar); changed = true; } }
     }
-    for (const [key, m] of members) if (m.state && !live.has(key)) { members.delete(key); sinceTs.delete(key); changed = true; }
+    for (const [key, m] of members) if (m.state && !m.rj && !live.has(key)) { members.delete(key); sinceTs.delete(key); changed = true; }   // 0.21.86: My room's (rj) go with their room.json
     if (changed) {
       roomSince = sinceTs.size ? Math.min(...sinceTs.values()) : 0;
       try { paintChannelChip(); paintPersonGroups(); queueRelayout(); paintTyping(); } catch {}
@@ -17645,6 +17649,22 @@
     rcSharesApply(path, v.rc);   // 0.21.79: their shares that can be remote-controlled
     ptWantApply(path, v.pt);     // 0.21.83: the shares they point on
     try { window.__presMember?.(path, v); } catch {}   // 0.21.84 (prototype): presentations -- their pres / presCtl / presPk
+    {   // 0.21.86: My room -- the member record its pages give in room.json (elsewhere it comes from their public state record)
+      const pp = String(path).split("/"), w = v.who;
+      if (isPersonalSlug(CHANNEL) && w && typeof w === "object" && pp[0] === CHANNEL && pp[2] === "~member" && pp[3]) {
+        const av = String(w.avatar || "");
+        const rec = { peer: pp[3], op: String(w.op || "").slice(0, 64), name: String(w.name || "").slice(0, 60), relay: "", relayName: "", ts: Number(w.joinedAt) || 0, host: pp[1],
+                      typing: false, speaking: false, avatar: /^https?:\/\/[^\s"'<>]+\/api\/files\/[\w-]+$/.test(av) ? av : "",
+                      publishing: Array.isArray(w.publishing) ? w.publishing.slice(0, 32).map(String) : [], state: true, rj: true,
+                      mode: String(w.mode || "").slice(0, 24), clk: null, deaf: false, kv: "" };
+        const key = "rj:" + path, cur = members.get(key);
+        if (!cur || JSON.stringify(cur) !== JSON.stringify(rec)) {
+          members.set(key, rec);
+          if (rec.avatar && rec.op) avatarUrls.set(rec.op.toLowerCase(), rec.avatar);
+          try { paintChannelChip(); paintPersonGroups(); queueRelayout(); } catch {}
+        }
+      }
+    }
     // spotlight / recording: the announce maps keyed by the member path
     // 0.21.32: `spots` (several)
     const vs = Array.isArray(v.spots) ? v.spots : [];
@@ -17696,6 +17716,7 @@
     rcShares.delete(path);   // 0.21.79
     ptWant.delete(path);     // 0.21.83
     try { window.__presMember?.(path, null); } catch {}   // 0.21.84 (prototype)
+    if (members.delete("rj:" + path)) { try { paintChannelChip(); paintPersonGroups(); queueRelayout(); } catch {} }   // 0.21.86: My room
     const hadLit = spotVotes.delete(path + "#lit");   // 0.21.0
     const hadOff = spotOffs.delete(path);             // 0.21.32
     if (spotVotes.delete(path) || hadLit || hadOff) spotApplyWinner();
@@ -20499,7 +20520,19 @@
   }
   async function inviteArrive(inv) {
     const room = String(inv.room);
-    if (joinState === "joined" && CHANNEL === room) { window.__toast?.("You are already in " + roomTitle(room), 4000, { level: "event" }); return; }
+    // 0.21.86 (Kenton: an invite link "opened the app and then took him straight to the lobby"): a SILENT rejoin -- after an
+    // update, a restart or a reload, back to the room I was in -- never beats a link the person has just opened. The ticket
+    // goes; a rejoin still on its way is waited out and left without asking.
+    let silent = !!rejoinRec;
+    try { if (JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null")?.room) silent = true; } catch {}
+    if (silent) {
+      rejoinRec = null;
+      try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
+      inviteSet({ token: inv.token, room, at: Date.now() });   // a rejoin that has not called joinNow yet now joins THIS room
+      for (let i = 0; i < 100 && joinState === "joining"; i++) await new Promise((r) => setTimeout(r, 200));
+      if (joinState === "joined" && CHANNEL !== room) leaveMeeting();
+    }
+    if (joinState === "joined" && CHANNEL === room) { if (!silent) window.__toast?.("You are already in " + roomTitle(room), 4000, { level: "event" }); return; }
     if (joinState === "joined") {
       const ok = await kastrConfirm({ title: "Room invite", message: "You\u2019re invited to \u201c" + roomTitle(room) + "\u201d. Leave " + (CHANNEL === LOBBY ? "the Lobby" : "\u201c" + roomTitle(CHANNEL) + "\u201d") + " and join it?",
         detail: "Your microphone will be muted and your camera turned off.", ok: "Join " + roomTitle(room), cancel: "Stay in " + roomTitle(CHANNEL) });
@@ -20954,6 +20987,7 @@
     }).catch(() => {});
   }
   function resumeAfterJoin(t) {
+    if (CHANNEL !== channelSlug(t.room)) return;   // 0.21.86: an invite link took this rejoin elsewhere
     window.__toast?.((t.moved ? "An admin moved you to the relay " + (relayNameOf(t.moved) || relayLabel(t.moved)) : t.restarted ? "KASTR restarted by an admin" : "Updated to v" + KASTR_VER)   // 0.21.73
       + " \u2014 back in " + roomTitle(CHANNEL) + (t.hadShare ? ". Share your screen again if you need it." : "."), 8000, { level: "info" });
     setTimeout(() => {   // the room's votes and my shares are back by now
@@ -30675,7 +30709,8 @@
       avatarRemote = { url: base + "/api/files/" + j.id, token: j.token };
       avatarAnn.set("me", JSON.stringify({ op: operatorSlug(), url: base + "/api/files/" + j.id }));
     } catch (e) {
-      if (!window.__avatarWarned) { window.__avatarWarned = true; window.__toast?.("Profile picture stays local \u2014 the relay host has no reachable KASTR to share it through.", 6000, { level: "info" }); }
+      console.warn("KASTR: profile picture upload to " + base + " failed", e);
+      if (!window.__avatarWarned) { window.__avatarWarned = true; window.__toast?.("Others see your initials, not your photo \u2014 the relay host\u2019s KASTR (" + base.replace(/^https?:\/\//, "") + ") did not take the picture: " + (e?.message || e), 9000, { level: "warn" }); }   // 0.21.86: was an info toast (hidden by default)
     }
   };
   // Viewer stall reports (0.8.7): a viewer starving on MY path asked for

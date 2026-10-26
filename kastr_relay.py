@@ -129,6 +129,9 @@ NS = "~"
 # The announce kinds a viewer legitimately publishes (presence, stall reports, spotlight votes, recording notice,
 # media control pulses, avatar). ~grid, ~files and ~media stay publisher-only.
 SINCE_KIND = NS + "since"
+# 0.21.86 (Kenton: People showed initials, not the profile photo): <room>/~avatar was dropped from the identity-scoped tokens
+# in 0.13.0, so a photo reached the room only inside the state record -- the announce is allowed again
+AVATAR_KIND = NS + "avatar"
 MEMBER_SEG = NS + "member"
 VIEWER_KINDS = tuple(NS + k for k in ("since", "stalled", "spotlight", "recording", "mediactl", "avatar"))
 LOOPBACK_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
@@ -6492,12 +6495,12 @@ class AuthService:
             # a viewer token off media.
             if role in ("publisher", "admin"):
                 puts = [slug + "/" + host, STATE_PREFIX + "/" + slug + "/" + host,
-                        slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug]
+                        slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug, slug + "/" + AVATAR_KIND]   # 0.21.86: + the photo announce
                 if role == "admin":
                     puts.append(slug + "/" + ADMIN_KIND)   # 0.16.0: stop / mute / kick commands
             else:
                 puts = [STATE_PREFIX + "/" + slug + "/" + host, slug + "/" + host + "/" + MEMBER_SEG,
-                        slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug]
+                        slug + "/" + SINCE_KIND, PRESENCE_KIND + "/" + slug, slug + "/" + AVATAR_KIND]   # 0.21.86: + the photo announce
             member = _mint(self.key, dict({"root": "", "get": slug, "put": puts, "iat": now, "exp": exp}, **inv_claim))
         elif role in ("publisher", "admin"):
             # 0.11.0: `~presence/<slug>` is the public room-occupancy announce (arrays are fine)

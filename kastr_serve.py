@@ -126,6 +126,10 @@ def version_stamp():
 # re-runs argv, and kastr.py strips the invite from argv so it is never replayed.
 INVITE_PENDING = [None]
 INVITE_PENDING_S = 120
+# 0.21.86 (Kenton: a coworker's invite link "opened the app and then took him straight to the lobby" -- the app updated itself
+# right after the click, the relaunch had no invite and the update's resume put him back where he was): the invite is also
+# kept on disk for INVITE_PENDING_S, and a NEW KASTR process (the update / restart relaunch) offers it to its page once more.
+INVITE_FILE = [None]
 _INVITE_TOKEN_RE = re.compile(r"^ki-[0-9a-f]{8}-[A-Za-z0-9_-]{32,64}$")
 
 
@@ -174,6 +178,38 @@ def invite_pending_set(url):
     if inv is None:
         return False
     INVITE_PENDING[0] = dict(inv, at=time.time())
+    if INVITE_FILE[0]:
+        try:
+            tmp = INVITE_FILE[0] + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(INVITE_PENDING[0], f)
+            os.replace(tmp, INVITE_FILE[0])
+        except OSError:
+            pass
+    return True
+
+
+def invite_pending_restore(path, now=None):
+    """0.21.86: at start -- an invite opened less than INVITE_PENDING_S ago (before an update / restart relaunch) is pending
+    again. The file goes once it is older."""
+    INVITE_FILE[0] = path
+    now = time.time() if now is None else now
+    try:
+        with open(path, encoding="utf-8") as f:
+            inv = json.load(f)
+    except (OSError, ValueError):
+        return False
+    at = float((inv or {}).get("at") or 0) if isinstance(inv, dict) else 0
+    if not at or now - at > INVITE_PENDING_S:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return False
+    ok = invite_parse("kastr://join?i=%s&room=%s&relay=%s" % (inv.get("token") or "", inv.get("room") or "", quote(str(inv.get("relay") or ""), safe="")))
+    if not ok:
+        return False
+    INVITE_PENDING[0] = dict(ok, at=at)
     return True
 
 

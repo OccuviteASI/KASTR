@@ -30,6 +30,7 @@ Routes (kastr_serve dispatches /api/pres*):
   POST /api/pres/convert          body = the .pptx (X-Kastr-Name) -> {kind:'scene', w, h, slides, media} or, through
                                   PowerPoint, {kind:'images', via:'powerpoint', job, w, h, slides:[{img, notes, hidden}]}
   GET  /api/pres/conv/<job>/s<i>.png   PowerPoint's picture (this computer only); POST .../done drops the job
+  GET  /api/pres/conv/<job>/v<k>.<ext>  0.21.87: a video pulled out of the deck (the converting page holds the job id)
   GET  /api/pres/office           this computer only: {powerpoint, word, libreoffice, powerpointExport}
   POST /api/pres/new              {room, name, n} -> {id, token, rtoken}
   POST /api/pres/<id>/<file>?token=   body = one encrypted blob (s<i>.bin | notes.bin)
@@ -59,9 +60,18 @@ NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
     "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
+    "p14": "http://schemas.microsoft.com/office/powerpoint/2010/main",
 }
 A, P, R = "{%s}" % NS["a"], "{%s}" % NS["p"], "{%s}" % NS["r"]
 MC = "{%s}" % NS["mc"]
+P14 = "{%s}" % NS["p14"]
+# 0.21.87 (Kenton: "This powerpoint has a video in it ... I need that to be able to function inside of KASTR"): a video
+# shape is a p:pic whose nvPr carries a:videoFile r:link and/or (PowerPoint 2010+) the p14:media r:embed extension
+MEDIA_EXT_URI = "{DAA4B4D4-6D71-4841-9C94-3DA1FA4D0E7F}"
+VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".wmv": "video/x-ms-wmv",
+               ".avi": "video/x-msvideo", ".mkv": "video/x-matroska", ".webm": "video/webm", ".mpg": "video/mpeg",
+               ".mpeg": "video/mpeg", ".ts": "video/mp2t", ".m2ts": "video/mp2t", ".flv": "video/x-flv", ".3gp": "video/3gpp"}
+VIDEO_FILE_RE = r"v[0-9]{1,3}[.](?:%s)" % "|".join(sorted(e.lstrip(".") for e in VIDEO_TYPES))
 REL_SLIDE = "/slide"
 EMU_PT = 12700
 
@@ -201,6 +211,7 @@ class Package:
         self.sizes = {i.filename: i.file_size for i in infos}
         self._xml = {}
         self._rels = {}
+        self._ext = {}   # (part, rId) -> the Target of an External relationship (a linked video's file name)
 
     def read(self, name, limit):
         if name not in self.names:
@@ -237,6 +248,7 @@ class Package:
                 rid, typ, tgt = rel.get("Id"), rel.get("Type") or "", rel.get("Target") or ""
                 if rel.get("TargetMode") == "External":
                     out[rid] = (typ, None)
+                    self._ext[(part, rid)] = tgt
                     continue
                 full = posixpath.normpath(posixpath.join(d, tgt)) if not tgt.startswith("/") else tgt.lstrip("/")
                 out[rid] = (typ, full)
@@ -486,6 +498,7 @@ class Converter:
         self.media_bytes = 0
         self.warn = []
         self.themes = {}
+        self.videos = {}         # 0.21.87: part name -> {id, part, ext, type, size, name}
 
     # ---- media -----------------------------------------------------------------------------------------------------
     def media_id(self, part):
@@ -556,7 +569,10 @@ class Converter:
                 slides.append({"bg": {"c": "#ffffff"}, "items": [], "notes": "", "hidden": False, "broken": True})
         if not slides:
             raise ConvertError("this presentation has no slides")
-        return {"kind": "scene", "w": self.cx, "h": self.cy, "slides": slides, "media": self.media_out, "warnings": self.warn}
+        out = {"kind": "scene", "w": self.cx, "h": self.cy, "slides": slides, "media": self.media_out, "warnings": self.warn}
+        if self.videos:   # 0.21.87: the files (no bytes here -- stash_videos copies them out of the zip)
+            out["videos"] = {v["id"]: {k: v[k] for k in ("part", "ext", "type", "size", "name")} for v in self.videos.values()}
+        return out
 
     def slide(self, part, num):
         root = self.pkg.xml(part)
@@ -574,8 +590,10 @@ class Converter:
             if ov is not None:
                 clrmap.update(ov.attrib)
         ctx = Ctx(self, part, theme, clrmap)
+        auto, media = media_timing(root)
         self.cur = {"layout": lroot, "master": mroot, "lpart": layout, "mpart": master, "num": num,
-                    "txstyles": mroot.find(P + "txStyles") if mroot is not None else None}
+                    "txstyles": mroot.find(P + "txStyles") if mroot is not None else None,
+                    "auto": auto, "media": media, "videos": []}
         # background: slide -> layout -> master
         bg = None
         for r_, p_ in ((root, part), (lroot, layout), (mroot, master)):
@@ -597,7 +615,10 @@ class Converter:
         np_ = self.pkg.rel_of_type(part, "/notesSlide")
         if np_:
             notes = self.notes_text(self.pkg.xml(np_))
-        return {"bg": bg or {"c": "#ffffff"}, "items": items, "notes": notes, "hidden": root.get("show") == "0"}
+        out = {"bg": bg or {"c": "#ffffff"}, "items": items, "notes": notes, "hidden": root.get("show") == "0"}
+        if self.cur["videos"]:   # 0.21.87: where each video plays on this slide, and how it starts
+            out["videos"] = self.cur["videos"]
+        return out
 
     def background(self, b, ctx):
         pr = b.find(P + "bgPr")
@@ -932,14 +953,62 @@ class Converter:
         box = self._apply(box, xf)
         bf = el.find(P + "blipFill")
         mid = self.blip(bf, ctx) if bf is not None else None
+        vid = self.video(el, ctx, box) if not deco else None   # 0.21.87: a video plays in its own spot when its slide is live
         if not mid:
-            if el.find(".//" + P + "nvPr/" + A + "videoFile") is not None or el.find(".//" + P + "nvPr/" + A + "audioFile") is not None:
-                self._warn("video and sound in slides do not play here (present them with PowerPoint)")
+            if vid is not None:   # no poster picture: a black box where the video will play
+                item = {"t": "sp", "geom": {"prst": "rect"}, "fill": {"c": "#000000"}, "ln": None}
+                item.update(box)
+                return item
+            if el.find(".//" + P + "nvPr/" + A + "audioFile") is not None:
+                self._warn("sound in slides does not play here (present it with PowerPoint)")
             return None
         item = {"t": "pic", "m": mid, "crop": self.crop(bf), "geom": self.geometry(el.find(P + "spPr")),
                 "ln": self.line(el.find(P + "spPr"), ctx, el.find(P + "style"))}
         item.update(box)
         return item
+
+    def video(self, el, ctx, box):
+        """0.21.87: an embedded video on this slide -> registered (the poster is the pic's own picture) and listed on the
+        slide with its box and how it starts; a LINKED video (a file beside the deck, TargetMode External) cannot be
+        played -- the presenter's warnings say so. None when the picture is no video."""
+        nv = el.find(P + "nvPicPr/" + P + "nvPr")
+        if nv is None:
+            return None
+        vf = nv.find(A + "videoFile")
+        media = None
+        for ext in nv.findall(P + "extLst/" + P + "ext"):
+            if ext.get("uri") == MEDIA_EXT_URI and ext.find(P14 + "media") is not None:
+                media = ext.find(P14 + "media")
+        if vf is None and media is None:
+            return None
+        rels = self.pkg.rels(ctx.part)
+        rids = [r_ for r_ in (x.get(R + k) for x in (media, vf) if x is not None for k in ("embed", "link")) if r_]
+        part = next((rels[r_][1] for r_ in rids if r_ in rels and rels[r_][1] and rels[r_][1] in self.pkg.names), None)
+        cnv = el.find(P + "nvPicPr/" + P + "cNvPr")
+        spid = cnv.get("id") if cnv is not None else None
+        title = (cnv.get("name") if cnv is not None else "") or "video"
+        if not part:
+            linked = next((self.pkg._ext[(ctx.part, r_)] for r_ in rids if self.pkg._ext.get((ctx.part, r_))), "")
+            nm = posixpath.basename(unquote(linked).replace("\\", "/")) if linked else ""
+            self._warn("the video%s on slide %s is linked to a file, not embedded, so it cannot play here -- in PowerPoint use "
+                       "Insert > Video > This Device (or File > Info > Embed media) and present the deck again"
+                       % ((" " + nm) if nm else "", self.cur.get("num")))
+            self.cur["videos"].append({"linked": (nm or title)[:80]})
+            return {"linked": True}
+        ext = posixpath.splitext(part)[1].lower()
+        if ext not in VIDEO_TYPES:
+            self._warn("a %s video cannot be played here (save it as MP4 in PowerPoint)" % (ext.lstrip(".").upper() or "media"))
+            return None
+        v = self.videos.get(part)
+        if v is None:
+            v = {"id": "v%d" % len(self.videos), "part": part, "ext": ext, "type": VIDEO_TYPES[ext],
+                 "size": self.pkg.sizes.get(part, 0), "name": posixpath.basename(part)}
+            self.videos[part] = v
+        media = self.cur["media"].get(spid) or {}
+        self.cur["videos"].append({"id": v["id"], "x": box["x"], "y": box["y"], "w": box["w"], "h": box["h"],
+                                   "auto": spid in self.cur["auto"], "delay": self.cur["auto"].get(spid, 0),
+                                   "loop": bool(media.get("loop")), "vol": media.get("vol", 1.0), "name": title[:80]})
+        return v
 
     def frame(self, el, ctx, deco, xf):
         box = self._xfrm(el.find(P + "xfrm"))
@@ -1130,6 +1199,62 @@ class Converter:
         return "\n".join(out).strip("\n")
 
 
+def media_timing(sld):
+    """0.21.87 (Kenton: "Follow the deck"): the slide's p:timing -> ({spid: start delay in ms} of the videos that start BY
+    THEMSELVES when the slide appears, {spid: {loop, vol}}). PowerPoint's "Start: Automatically" is a media "call" command
+    (playFrom) in the MAIN sequence, in a click group that begins with the slide (its cTn starts on evt="onBegin", not on
+    a click), as a withEffect / afterEffect -- its delay (Kenton's deck: 1 s) is kept; "In click sequence" / "When clicked
+    on" (a click group, or the interactive sequence) wait for the presenter or backstage to press Play. Loop until
+    stopped = the media node's repeatCount="indefinite"; its vol (80000 = 80 %, PowerPoint's default) is kept."""
+    auto, media = {}, {}
+    tm = sld.find(P + "timing") if sld is not None else None
+    if tm is None:
+        return auto, media
+    for cm in tm.iter(P + "cMediaNode"):
+        tgt, ctn = cm.find(P + "tgtEl/" + P + "spTgt"), cm.find(P + "cTn")
+        if tgt is None or not tgt.get("spid"):
+            continue
+        vol = _int(cm.get("vol"), 100000) / 100000.0 if cm.get("vol") is not None else 1.0
+        if cm.get("mute") in ("1", "true"):
+            vol = 0.0
+        media[tgt.get("spid")] = {"loop": ctn is not None and ctn.get("repeatCount") == "indefinite", "vol": round(_clamp(vol), 3)}
+
+    def delay_of(ctn):   # the numeric start delay of a time node (ms); "indefinite" = waits for something else
+        st = ctn.find(P + "stCondLst")
+        ds = [_int(c.get("delay")) for c in (st.findall(P + "cond") if st is not None else []) if (c.get("delay") or "").isdigit()]
+        return max(ds) if ds else 0
+
+    def effects(ctn, acc):   # every with/after effect under a time node, with the delay accumulated on the way down
+        acc += delay_of(ctn)
+        if ctn.get("nodeType") in ("withEffect", "afterEffect"):
+            yield ctn, acc
+        kids = ctn.find(P + "childTnLst")
+        for par in (kids.findall(P + "par") if kids is not None else []):
+            c = par.find(P + "cTn")
+            if c is not None:
+                yield from effects(c, acc)
+
+    for seq in tm.iter(P + "seq"):
+        sc = seq.find(P + "cTn")
+        if sc is None or sc.get("nodeType") != "mainSeq":
+            continue
+        groups = sc.find(P + "childTnLst")
+        for grp in (groups.findall(P + "par") if groups is not None else []):
+            gc = grp.find(P + "cTn")
+            st = gc.find(P + "stCondLst") if gc is not None else None
+            if st is None or not any(c.get("evt") == "onBegin" for c in st.findall(P + "cond")):
+                continue   # this click group waits for a click
+            for eff, ms in effects(gc, -delay_of(gc)):   # the group's own "indefinite"/onBegin delay is the slide's start
+                for cmd in eff.iter(P + "cmd"):
+                    c = (cmd.get("cmd") or "").strip()
+                    if cmd.get("type") == "call" and (c.startswith("playFrom") or c == "play"):
+                        t = cmd.find(".//" + P + "spTgt")
+                        if t is not None and t.get("spid"):
+                            sp = t.get("spid")
+                            auto[sp] = min(auto.get(sp, ms), max(0, ms))
+    return auto, media
+
+
 def convert_pptx(data, note=None):
     """bytes of a .pptx -> the scene dict (see the module doc). Raises ConvertError with a sentence for the person."""
     return Converter(data, note).run()
@@ -1283,8 +1408,47 @@ def convert_with_powerpoint(data, state_dir, scene, note=None, run=None, timeout
             err = err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)
             fail("PowerPoint made no picture of slide %d%s" % (i, (": " + err.strip().splitlines()[-1][:160]) if err.strip() else ""))
         slides.append({"img": "/api/pres/conv/%s/s%d.png" % (job, i), "notes": sl.get("notes", ""), "hidden": False})
+        if sl.get("videos"):   # 0.21.87: PowerPoint drew the poster; the video plays over it
+            slides[-1]["videos"] = sl["videos"]
     note("pres: PowerPoint exported %d slides in %d ms" % (sum(1 for x in slides if not x.get("hidden")), int((time.time() - t0) * 1000)))
     return {"kind": "images", "via": "powerpoint", "job": job, "w": scene["w"], "h": scene["h"], "slides": slides, "warnings": []}
+
+
+def stash_videos(data, state_dir, out, note=None):
+    """0.21.87: copy every embedded video out of the deck into <state>/pres-conv/<job>/v<k>.<ext> (the PowerPoint job's
+    folder when there is one) -> out["videos"][id]["url"]. Only the page that converted the deck learns the job id; it
+    pulls the files into memory at once and drops the job (POST .../done). The relay host's slide store never sees a
+    video: it is streamed into the room like Share > Media file, and only while its slide is live."""
+    vids = out.get("videos") or {}
+    if not vids:
+        return out
+    if not state_dir:
+        out.pop("videos", None)
+        out.setdefault("warnings", []).append("the videos in this deck cannot play here (no storage on this KASTR)")
+        return out
+    sweep_conversions(state_dir)
+    job = out.get("job") or uuid.uuid4().hex
+    d = os.path.join(_conv_root(state_dir), job)
+    os.makedirs(d, exist_ok=True)
+    z = zipfile.ZipFile(io.BytesIO(data))
+    t0, total = time.time(), 0
+    for vid, v in list(vids.items()):
+        fn = "%s%s" % (vid, v["ext"])
+        dst = os.path.join(d, fn)
+        try:
+            with z.open(v["part"]) as src, open(dst + ".part", "wb") as f:
+                shutil.copyfileobj(src, f, 1 << 20)
+            os.replace(dst + ".part", dst)
+            total += os.path.getsize(dst)
+        except (OSError, KeyError, zipfile.BadZipFile, RuntimeError) as e:
+            vids.pop(vid, None)
+            out.setdefault("warnings", []).append("a video in this deck could not be read (%s)" % type(e).__name__)
+            continue
+        v.pop("part", None)
+        v["url"] = "/api/pres/conv/%s/%s" % (job, fn)
+    out["job"] = job
+    (note or (lambda *a: None))("pres: %d video(s), %d KB, pulled out of the deck in %d ms" % (len(vids), total // 1024, int((time.time() - t0) * 1000)))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1528,7 +1692,7 @@ def handle_api(handler, state_dir, note=None):
             return _reply(handler, 503, {"error": "another presentation is being prepared here -- try again in a minute"})
         try:
             t0 = time.time()
-            out = convert_pptx(data)
+            out = scene = convert_pptx(data)
             # PowerPoint, when installed, draws the slides exactly -- only for this computer's own page (a web client's
             # deck must never open PowerPoint on the relay host's desktop); the built-in drawing is the fallback
             if state_dir and _own_page(handler) and powerpoint_enabled():
@@ -1537,6 +1701,9 @@ def handle_api(handler, state_dir, note=None):
                 except ConvertError as e:
                     note("pres: PowerPoint export failed (%s) -- the built-in drawing is used" % e)
                     out.setdefault("warnings", []).insert(0, "PowerPoint could not export this deck (%s) -- KASTR drew it itself" % e)
+            if scene.get("videos"):   # 0.21.87: the deck's videos, for the converting page only
+                out["videos"] = scene["videos"]
+                stash_videos(data, state_dir, out, note)
             out["name"] = name
             out["ms"] = int((time.time() - t0) * 1000)
             note("pres: converted %s (%d slides, %s) in %d ms" % (name, len(out["slides"]), out.get("via") or "built-in", out["ms"]))
@@ -1551,15 +1718,31 @@ def handle_api(handler, state_dir, note=None):
     if not state_dir:
         _drain(handler)
         return _reply(handler, 503, {"error": "no storage here"})
-    mc = re.match(r"^/api/pres/conv/([0-9a-f]{32})/(s[0-9]{1,4}[.]png|done)$", path)
+    mc = re.match(r"^/api/pres/conv/([0-9a-f]{32})/(s[0-9]{1,4}[.]png|done|%s)$" % VIDEO_FILE_RE, path)
     if mc or path.startswith("/api/pres/conv/"):   # PowerPoint's pictures, for this computer's own page only
         _drain(handler)
-        if not mc or not _own_page(handler):
+        is_vid = bool(mc) and mc.group(2).startswith("v")
+        # 0.21.87: a video (and the job's done) is fetched by the page that converted the deck -- this computer's own
+        # page, or a web client presenting through its relay host; the 128-bit job id only that page was given is the key
+        if not mc or not (_own_page(handler) or is_vid or mc.group(2) == "done"):
             return _reply(handler, 404 if not mc else 403, {"error": "no such conversion"})
         d = os.path.join(_conv_root(state_dir), mc.group(1))
         if mc.group(2) == "done":
             shutil.rmtree(d, ignore_errors=True)
             return _reply(handler, 200, {"ok": True})
+        if is_vid:
+            p = os.path.join(d, mc.group(2))
+            if not os.path.isfile(p):
+                return _reply(handler, 404, {"error": "no such video"})
+            handler.send_response(200)
+            handler.send_header("Content-Type", VIDEO_TYPES.get(os.path.splitext(p)[1].lower(), "application/octet-stream"))
+            handler.send_header("Content-Length", str(os.path.getsize(p)))
+            handler.send_header("Cache-Control", "no-store")
+            handler.end_headers()
+            if method != "HEAD":
+                with open(p, "rb") as f:
+                    shutil.copyfileobj(f, handler.wfile, 1 << 20)
+            return True
         p = os.path.join(d, mc.group(2))
         if not os.path.isfile(p):
             return _reply(handler, 404, {"error": "no such picture"})

@@ -80,7 +80,7 @@ class ThePresentersPage(unittest.TestCase):
         for t in ('"Muted by "', '"Unmuted by "', '"Video paused by " + name', '"Video resumed by " + name'):
             self.assertIn(t, self.ap)
         nt = block(JS, "  function avNotice(m, text, by) {", "  function applyModeAv(")
-        self.assertIn('toast(text, 6000, "event");', nt)   # the main page too
+        self.assertIn('presNote(text, 6000, "event");', nt)   # the presenter view's notice line, or a toast on the main page
         self.assertIn("if (!r.noop) avNotice(", self.ap)    # a no-op says nothing
 
     def test_backstage_cannot_start_a_camera_that_is_off(self):

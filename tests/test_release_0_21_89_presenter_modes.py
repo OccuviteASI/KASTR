@@ -129,7 +129,7 @@ class BackstageAndViewers(unittest.TestCase):
 
 class Drawing(unittest.TestCase):
     def test_layout_is_pure_and_exported(self):
-        lay = block(JS, "  function presLayout(mode, W, H, ar, camAr, cut) {", "  function drawBackdrop(")
+        lay = block(JS, "  function presLayout(mode, W, H, ar, camAr, cut) {", "  // Kenton (review of 0.21.89)")
         self.assertNotIn("document", lay)
         self.assertNotIn("window", lay)
         for m in ('mode === "standout"', 'mode === "sbs"', 'mode === "reporter"'):
@@ -139,10 +139,10 @@ class Drawing(unittest.TestCase):
         self.assertIn("layout: presLayout,", JS)
 
     def test_content_only_draws_exactly_as_before(self):
-        dl = block(JS, "  function drawLaid(cv, bmp, blank, mode, ar, label) {", "  function drawBoxCam(")
+        dl = block(JS, "  function drawLaid(cv, bmp, blank, mode, ar, label, rbg) {", "  function drawBoxCam(")
         self.assertIn('if (mode === "content") return drawContain(cv, bmp, blank, label || "");', dl)
         po = block(JS, "  async function paintOverlay(path, o) {", "  // ---- the presenter view")
-        self.assertIn("drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, \"\");", po)
+        self.assertIn("drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, \"\", rec.rbg);", po)
 
     def test_slide_video_moves_with_the_slide(self):
         dv = block(JS, "  function drawVids(cv, ar, items, rectFn) {", "  // a picture that stops")
@@ -153,7 +153,7 @@ class Drawing(unittest.TestCase):
     def test_camera_layer_per_tile(self):
         so = block(JS, "  function syncOverlays() {", "  async function paintOverlay(")
         self.assertIn('ccv.className = "prescam";', so)
-        self.assertIn('+ "/" + modeOf(rec);', so)   # a new mode repaints the still
+        self.assertIn('+ "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "");', so)   # a new mode (or backdrop) repaints the still
         self.assertIn("presCamSync();", so)
         vf = block(JS, "  function vidFrame() {", "  // ---- the loop")
         self.assertIn("if (camLayer(o)) more = true;", vf)
@@ -242,6 +242,40 @@ class PageSeams(unittest.TestCase):
         for k in ("camInfo()", "start: pcutStart", "stop: pcutStop", "state()", "person()", "camVideo()"):
             self.assertIn(k, cut)
         self.assertIn("live: !!slot && !paused", cut)
+
+
+class ReviewFollowUps(unittest.TestCase):
+    """Kenton's review: Reporter on an ASI background the presenter picks; notices never over the picker."""
+
+    def test_reporter_backdrop_is_an_asi_background_from_this_pages_assets(self):
+        import json
+        bgs = re.findall(r'\["([a-z-]+)", "[^"]+", "([^"]+)", "([^"]+)"\]', block(JS, "  const REPORTER_BGS = [", "  const RBG_DEFAULT"))
+        self.assertEqual(len(bgs), 14)
+        man = json.load(open(os.path.join(HERE, "assets", "bg", "manifest.json"), encoding="utf-8"))
+        self.assertEqual([b[0] for b in bgs], [m["id"] for m in man[:14]])   # the fourteen ASI backgrounds, in the picker's order
+        for _id, pic, poster in bgs:
+            self.assertTrue(os.path.exists(os.path.join(HERE, "assets", "bg", pic)), pic)
+            self.assertTrue(os.path.exists(os.path.join(HERE, "assets", "bg", poster)), poster)
+        self.assertIn("const RBG_DEFAULT = REPORTER_BGS[0][0];", JS)
+        ri = block(JS, "  function rbgImage(id) {", "  function drawBackdrop(")
+        self.assertIn('e.img.src = "/assets/bg/" + b[2];', ri)            # this page's own copy, by id -- never a URL from the record
+        self.assertIn("|| REPORTER_BGS[0]", ri)                           # an unknown id: the default
+        self.assertIn("navyBackdrop(g, W, H);", block(JS, "  function drawBackdrop(", "  function navyBackdrop("))
+
+    def test_backdrop_in_the_record_and_picked_by_the_presenter(self):
+        self.assertIn("cwhy: s.why, rbg: m.rbg || RBG_DEFAULT,", JS)
+        self.assertIn("m.rbg = RBG_DEFAULT;", JS)
+        api = block(JS, "    reporterBg: (id) =>", "    modes: () => modeState(),")
+        self.assertIn("if (!mine || !mine.ms || !rbgOk(id)) return false;", api)
+        self.assertIn('mui.rbgs.style.display = mv.role === "presenter" && mv.cm === "reporter" ? "" : "none";', JS)
+
+    def test_notices_never_cover_the_picker(self):
+        self.assertIn('presNote("Some slide content is simplified: "', JS)
+        self.assertNotIn('toast("Some slide content is simplified', JS)
+        pn = block(JS, "  function presNote(msg, ms, level) {", "  const ago = ")
+        self.assertIn("if (!(mui && mui.note && view.isOpen())) { toast(msg, ms, level); return; }", pn)
+        self.assertIn("if (ph) ph.after(mui.note);", JS)                   # under the top bar, in the flow
+        self.assertIn("body:has(#presView.show) #kToast { top:56px;", JS)
 
 
 if __name__ == "__main__":

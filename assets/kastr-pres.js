@@ -570,7 +570,7 @@
     syncVideos();   // 0.21.87: slide 1 may have a video
     ensurePk();
     view.open({ deck: mine.id });
-    if (mine.warnings.length) toast("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 9000, "warn");
+    if (mine.warnings.length) presNote("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 20000, "warn");   // 0.21.89: never over the picker
     renderRest();
   }
   function ensureSlide(i) {   // render + encrypt + upload slide i (once; callers at the same time share one try)
@@ -918,7 +918,7 @@
       }
       o.rec = rec;
       if ((rec.vids || []).length || modeOf(rec) !== "content" || o.ccvOn) vidLoop();   // 0.21.89: + a camera mode
-      const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width) + "/" + modeOf(rec);
+      const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width) + "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "");
       if (key !== o.key) { o.key = key; paintOverlay(path, o); }
     }
     presCamSync();   // 0.21.89
@@ -946,7 +946,7 @@
       } catch (e) { console.warn("KASTR pres: live slide", e); }
     }
     if (o.key !== key) return;
-    drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, "");   // 0.21.89: placed by the room's presenter mode (Content only: as before)
+    drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, "", rec.rbg);   // 0.21.89: placed by the room's presenter mode (Content only: as before)
     T("paint", { id: rec.id, idx: rec.idx, ver: rec.ver, who: "overlay", mode: modeOf(rec) });
   }
 
@@ -1476,7 +1476,55 @@
     }
     return L;
   }
-  function drawBackdrop(g, W, H) {   // Reporter's studio: a deep navy wall with soft light (content, so one look in every theme)
+  // Kenton (review of 0.21.89): "Reporter backdrop = an ASI background instead of the navy wall" -- the fourteen built-in ASI
+  // backgrounds (assets/bg, as the camera background picker lists them: seven pictures, then seven moving ones drawn by their
+  // still). The presenter picks one (`pres.rbg`, an id from this list -- never a URL); every page draws it from its OWN
+  // assets. The first is the default. Until the picture has loaded (or for an id this page does not know) the navy wall.
+  const REPORTER_BGS = [
+    ["elgato-lights", "Elgato lights", "elgato-lights-bg.jpg", "elgato-lights.jpg"],
+    ["gray-home-office", "Gray home office", "gray-home-office-bg.jpg", "gray-home-office.jpg"],
+    ["light-blue-home-office", "Light blue home office", "light-blue-home-office-bg.jpg", "light-blue-home-office.jpg"],
+    ["livingroom-night", "Living room at night", "livingroom-night-bg.jpg", "livingroom-night.jpg"],
+    ["office-space", "Office space", "office-space-bg.jpg", "office-space.jpg"],
+    ["porch-sunset", "Porch sunset", "porch-sunset-bg.jpg", "porch-sunset.jpg"],
+    ["room-morning", "Room in the morning", "room-morning-bg.jpg", "room-morning.jpg"],
+    ["clock", "Clock", "clock.jpg", "clock.jpg"],
+    ["coffee-shop", "Coffee shop", "coffee-shop.jpg", "coffee-shop.jpg"],
+    ["lofi-bedroom", "Lo-fi bedroom", "lofi-bedroom.jpg", "lofi-bedroom.jpg"],
+    ["news-room", "News room", "news-room.jpg", "news-room.jpg"],
+    ["office", "Office", "office.jpg", "office.jpg"],
+    ["rainy-window", "Rainy window", "rainy-window.jpg", "rainy-window.jpg"],
+    ["view", "The view", "view.jpg", "view.jpg"],
+  ];
+  const RBG_DEFAULT = REPORTER_BGS[0][0];
+  const rbgOk = (id) => REPORTER_BGS.some((b) => b[0] === id);
+  const rbgImgs = new Map();   // id -> {img, ok}
+  function rbgImage(id) {
+    const b = REPORTER_BGS.find((x) => x[0] === id) || REPORTER_BGS[0];
+    let e = rbgImgs.get(b[0]);
+    if (!e) {
+      e = { img: new Image(), ok: false };
+      e.img.decoding = "async";
+      e.img.onload = () => { e.ok = true; for (const o of overlays.values()) o.key = ""; T("rbg-loaded", { who: b[0] }); schedule(); };
+      e.img.src = "/assets/bg/" + b[2];   // this page's own copy -- never fetched from the presenter
+      rbgImgs.set(b[0], e);
+    }
+    return e.ok && e.img.naturalWidth ? e.img : null;
+  }
+  function drawBackdrop(g, W, H, rbg) {
+    const img = rbgImage(rbg || RBG_DEFAULT);
+    if (img) {
+      const sc = Math.max(W / img.naturalWidth, H / img.naturalHeight), dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
+      g.imageSmoothingQuality = "high";
+      g.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      const sh = g.createLinearGradient(0, 0, 0, H);   // a touch of depth so the slide and the presenter stand off it
+      sh.addColorStop(0, "rgba(0,0,0,0.10)"); sh.addColorStop(1, "rgba(0,0,0,0.28)");
+      g.fillStyle = sh; g.fillRect(0, 0, W, H);
+      return;
+    }
+    navyBackdrop(g, W, H);
+  }
+  function navyBackdrop(g, W, H) {   // the stand-in while the picture loads: a deep navy wall with soft light
     const gr = g.createLinearGradient(0, 0, 0, H);
     gr.addColorStop(0, "#13355a"); gr.addColorStop(0.55, "#0b2240"); gr.addColorStop(1, "#06111f");
     g.fillStyle = gr; g.fillRect(0, 0, W, H);
@@ -1489,12 +1537,12 @@
     g.fillStyle = "rgba(0,0,0,0.28)"; g.fillRect(0, H * 0.86, W, H * 0.14);   // the desk line
   }
   // the still (and backdrop) layer of a tile in a mode; Content only is exactly the old drawing
-  function drawLaid(cv, bmp, blank, mode, ar, label) {
+  function drawLaid(cv, bmp, blank, mode, ar, label, rbg) {
     if (mode === "content") return drawContain(cv, bmp, blank, label || "");
     const g = cv.getContext("2d"), W = cv.width, H = cv.height, L = presLayout(mode, W, H, ar, 16 / 9, true), s = L.slide;
     g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
-    if (L.bg) drawBackdrop(g, W, H);
+    if (L.bg) drawBackdrop(g, W, H, rbg);
     g.save();
     if (L.bg) { g.shadowColor = "rgba(0,0,0,0.55)"; g.shadowBlur = Math.max(6, W * 0.02); g.shadowOffsetY = Math.max(2, W * 0.004); }
     g.fillStyle = blank === "white" ? "#fff" : "#000"; g.fillRect(s.x, s.y, s.w, s.h);
@@ -1637,6 +1685,7 @@
     const ci = camNow();
     m.cm = ci && ci.live ? "standout" : "content";   // Kenton: Standout when the camera is on, else Content only
     m.avOk = true; m.avBp = false; m.avNote = null; m.ack = null;
+    m.rbg = RBG_DEFAULT;   // Reporter's backdrop: the first ASI background
     m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", mic: "none", camSt: "off", cutOn: false, sig: "", by: "" };
     T("mode", { id: m.id, who: m.cm, why: "start" });
     modeTick();
@@ -1645,7 +1694,7 @@
     const m = mine;
     if (!m || !m.ms) return {};
     const s = m.ms;
-    return { cm: m.cm, cme: s.eff, cam: s.cam, cut: s.cut, nocut: s.nocut, cwhy: s.why,
+    return { cm: m.cm, cme: s.eff, cam: s.cam, cut: s.cut, nocut: s.nocut, cwhy: s.why, rbg: m.rbg || RBG_DEFAULT,
              av: { m: s.mic, c: s.camSt, bp: !!m.avBp, ok: !!m.avOk, n: m.avNote ? m.avNote.t : "", na: m.avNote ? m.avNote.at : 0, nb: m.avNote ? m.avNote.by : "" },
              ack: m.ack || null };
   }
@@ -1669,7 +1718,7 @@
     s.mic = av ? av.mic : "none";
     s.camSt = !ci ? "off" : ci.live ? "on" : m.avBp ? "paused" : "off";
     s.hw = !!(av && av.hw);
-    const sig = JSON.stringify([m.cm, s.eff, s.cam, s.cut, s.nocut, s.why, s.mic, s.camSt, m.avBp, m.avOk, m.avNote && m.avNote.at, m.ack && m.ack.s]);
+    const sig = JSON.stringify([m.cm, m.rbg, s.eff, s.cam, s.cut, s.nocut, s.why, s.mic, s.camSt, m.avBp, m.avOk, m.avNote && m.avNote.at, m.ack && m.ack.s]);
     if (sig !== s.sig) {
       const first = !s.sig;
       s.sig = sig;
@@ -1695,7 +1744,7 @@
   }
   function avNotice(m, text, by) {
     m.avNote = { t: text, at: Date.now(), by };
-    toast(text, 6000, "event");   // the main page too (the presenter may be in the room, not the presenter view)
+    presNote(text, 6000, "event");   // the presenter view's notice line -- or a toast on the main page when the view is closed
   }
   function applyModeAv(ctl, who) {   // a backstage person's mode or mic / camera request (applyIntent checked: backstage, newer seq)
     const m = mine;
@@ -1790,6 +1839,17 @@
   #presView .modebox .avwhy:empty { display:none; }
   #presView .modebox .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
   #presView .modebox .avrow button:disabled { opacity:.5; cursor:not-allowed; }
+  #presView .modebox .rbgs { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; }
+  #presView .modebox .rbgs button { padding:0; width:52px; height:30px; border-radius:4px; overflow:hidden; border:2px solid transparent; background:#000; }
+  #presView .modebox .rbgs button img { width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; }
+  #presView .modebox .rbgs button.on { border-color:#1592d1; }
+  #presView .pvnote { display:flex; gap:10px; align-items:center; padding:6px 14px; font-size:13px; background:#2a2110; color:#ffcf7a; border-bottom:1px solid #4a3a18; }
+  #presView .pvnote[hidden] { display:none; }
+  #presView .pvnote[data-level="event"] { background:#0f2333; color:#8fd3ff; border-bottom-color:#1d3a52; }
+  #presView .pvnote .t { flex:1; }
+  #presView .pvnote button { padding:2px 8px; font-size:12px; }
+  body:has(#presView.show) #kToast { top:56px; bottom:auto; left:14px; transform:none; max-width:min(52vw, 560px); }   /* the room's other toasts: over the live slide's corner, clear of the picker, preview and controls */
+  body:has(#presView.show) #kToast.show { transform:none; }
   @media (max-width: 760px) { #presView .modebox { grid-template-columns: 1fr; } #presView .modebox .modes { grid-template-columns:repeat(4, minmax(0, 1fr)); } }`;
   (() => { const st = document.createElement("style"); st.id = "presModeCss"; st.textContent = MODE_CSS; document.head.appendChild(st); })();
   let mui = null;   // the picker's elements (built into the presenter view once)
@@ -1799,12 +1859,19 @@
     box.innerHTML = `<div class="mhead cap">Presenter mode — everyone sees the same</div>
       <div class="modes">${MODES.map((k) => `<button type="button" data-mode="${k}" title="${MODE_TIP[k]}"><svg viewBox="0 0 32 20" aria-hidden="true">${ICON[k]}</svg><span>${MODE_NAME[k]}</span></button>`).join("")}</div>
       <div class="pvwrap"><canvas class="pvcv"></canvas><span class="pvtag">What the room sees</span></div>
+      <div class="rbgs" title="Reporter's backdrop -- everyone sees the same">${REPORTER_BGS.map((b) => `<button type="button" data-rbg="${b[0]}" title="${b[1]}"><img alt="" src="/assets/bg/${b[3]}" loading="lazy"></button>`).join("")}</div>
       <div class="mwhy"></div><div class="avrow"></div>`;
     const side = root.querySelector(".side");
     if (!side) return;
     side.insertBefore(box, side.firstChild);
     mui = { box, pv: box.querySelector(".pvcv"), why: box.querySelector(".mwhy"), av: box.querySelector(".avrow"), btns: [...box.querySelectorAll(".modes button")], avSig: "", pvAt: 0, still: { key: "", bmp: null } };
     for (const b of mui.btns) b.addEventListener("click", () => window.__pres.mode(b.dataset.mode));
+    mui.rbgs = box.querySelector(".rbgs");
+    for (const b of mui.rbgs.querySelectorAll("button")) b.addEventListener("click", () => window.__pres.reporterBg(b.dataset.rbg));
+    // the presenter view's own notice line, under its top bar (deck warnings, backstage's changes): it never covers the picker
+    mui.note = document.createElement("div"); mui.note.className = "pvnote"; mui.note.hidden = true;
+    const ph = root.querySelector(".ph");
+    if (ph) ph.after(mui.note);
   }
   // what the presenter view's deck shows in modes: {role, rec-like, chosen, eff}
   function modeView() {
@@ -1812,19 +1879,21 @@
     if (!v) return null;
     if (v.role === "presenter") {
       const s = mine.ms || {};
-      return { v, role: "presenter", cm: mine.cm, eff: s.eff || "content", why: s.why, nocut: s.nocut, av: modeFields().av, cutOn: !!s.cut, rec: null };
+      return { v, role: "presenter", cm: mine.cm, rbg: mine.rbg, eff: s.eff || "content", why: s.why, nocut: s.nocut, av: modeFields().av, cutOn: !!s.cut, rec: null };
     }
     const bk = backstage.get(v.id);
     const rec = bk && bk.rec;
     if (!rec) return null;
     const opt = bk.optCm && Date.now() - bk.optCmAt < 1500 && rec.cm !== bk.optCm ? bk.optCm : null;
-    return { v, role: "backstage", cm: opt || rec.cm || "content", eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", av: rec.av || null, cutOn: !!rec.cut, rec, bk, has: !!rec.cm };
+    return { v, role: "backstage", cm: opt || rec.cm || "content", rbg: rec.rbg, eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", av: rec.av || null, cutOn: !!rec.cut, rec, bk, has: !!rec.cm };
   }
   function modeUiPaint() {
     if (!mui) return;
     const mv = modeView();
     mui.box.style.display = mv && (mv.role === "presenter" || mv.has) ? "" : "none";
     if (!mv) return;
+    mui.rbgs.style.display = mv.role === "presenter" && mv.cm === "reporter" ? "" : "none";   // Kenton: the presenter picks, shown in Reporter
+    for (const b of mui.rbgs.children) b.classList.toggle("on", b.dataset.rbg === (mv.rbg || RBG_DEFAULT));
     for (const b of mui.btns) { b.classList.toggle("on", b.dataset.mode === mv.cm); b.classList.toggle("eff", b.dataset.mode === mv.eff && mv.eff !== mv.cm); }
     const who = mv.role === "presenter" ? "" : nameOfPerson(personOfPath(mv.bk.path));
     let why = "";
@@ -1836,6 +1905,19 @@
     }
     if (mui.why.textContent !== why) mui.why.textContent = why;
     paintAvRow(mv, who);
+  }
+  let noteT = 0;
+  function presNote(msg, ms, level) {   // the presenter view's notice line while it is open (never on top of its controls), else a toast
+    if (!(mui && mui.note && view.isOpen())) { toast(msg, ms, level); return; }
+    const n = mui.note;
+    n.dataset.level = level || "event";
+    n.replaceChildren();
+    const t = document.createElement("span"); t.className = "t"; t.textContent = msg;
+    const x = document.createElement("button"); x.type = "button"; x.textContent = "OK"; x.title = "Hide this notice";
+    x.addEventListener("click", () => { n.hidden = true; });
+    n.append(t, x); n.hidden = false;
+    clearTimeout(noteT); noteT = setTimeout(() => { n.hidden = true; }, ms || 8000);
+    T("note", { who: level || "event" });
   }
   const ago = (at) => { const s = Math.max(0, Math.round((Date.now() - at) / 1000)); return s < 60 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
   function paintAvRow(mv, who) {
@@ -1906,7 +1988,7 @@
       mui.still.key = key; mui.still.bmp = null;
       stillFor(v.id, v.idx).then((b) => { if (mui.still.key === key) mui.still.bmp = b; }).catch(() => {});
     }
-    drawLaid(cv, mui.still.bmp, v.blank, mv.eff, ar, "");
+    drawLaid(cv, mui.still.bmp, v.blank, mv.eff, ar, "", mv.rbg);
     const g = cv.getContext("2d");
     // the slide's video in its spot (moved with the slide)
     let items = [];
@@ -1933,7 +2015,7 @@
     return {
       mine: m && m.ms ? { cm: m.cm, eff: m.ms.eff, cam: m.ms.cam, cut: m.ms.cut, nocut: m.ms.nocut, why: m.ms.why, mic: m.ms.mic, camSt: m.ms.camSt, avOk: m.avOk, avBp: m.avBp,
                           note: m.avNote, ack: m.ack, cutState: (() => { try { return window.__presCut?.state?.() || null; } catch { return null; } })() } : null,
-      tiles: [...overlays.entries()].map(([p, o]) => ({ path: p, mode: modeOf(o.rec), cm: o.rec.cm || null, cam: o.rec.cam || "", cut: o.rec.cut || "", kind: o.camKind || "", n: o.camN || 0,
+      tiles: [...overlays.entries()].map(([p, o]) => ({ path: p, mode: modeOf(o.rec), cm: o.rec.cm || null, rbg: o.rec.rbg || null, rbgLoaded: !!(o.rec.rbg && rbgImgs.get(o.rec.rbg)?.ok), cam: o.rec.cam || "", cut: o.rec.cut || "", kind: o.camKind || "", n: o.camN || 0,
                                                         av: o.rec.av || null, ack: o.rec.ack || null })),
       hide: hideSig ? hideSig.split("|") : [], cuts: cutSig ? cutSig.split("|") : [], unpacked: unp && !unp.failed ? unp.n : 0,
       ui: mui ? { shown: mui.box.style.display !== "none", on: (mui.btns.find((b) => b.classList.contains("on")) || {}).dataset?.mode || "", why: mui.why.textContent,
@@ -1992,6 +2074,8 @@
     },
     av: (op) => { if (mine) return false; const bk = [...backstage.values()].find((b) => b.keys); return bk ? sendAvIntent(bk.rec.id, op) : false; },
     avSwitch: (on) => { if (!mine || !mine.ms) return false; mine.avOk = !!on; T("av-switch", { id: mine.id, who: on ? "on" : "off" }); modeTick(); return true; },
+    reporterBg: (id) => { if (!mine || !mine.ms || !rbgOk(id)) return false; mine.rbg = id; T("rbg", { id: mine.id, who: id }); modeTick(); return true; },   // the presenter only
+    reporterBgs: () => REPORTER_BGS.map((b) => b[0]),
     modes: () => modeState(),
     layout: presLayout,   // rig: the geometry alone
     trace,

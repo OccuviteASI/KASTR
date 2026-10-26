@@ -329,6 +329,7 @@
   #libSitesList input.libsite { width:100%; min-width:120px; }
   .sbbadge.libwarn { background:color-mix(in srgb, var(--asi-amber, #f0a020) 24%, transparent); }
   #libPre { margin:6px 0; }
+  #pubUse[hidden] { display:none; }
   #libPre[hidden], #libAdmBox[hidden], #libAdmSpoke[hidden], #libSitesBox[hidden], #libBoxRow[hidden] { display:none; }
 </style>
 </head>
@@ -463,6 +464,14 @@
       <div id="tunnelCard" style="margin:8px 0 8px;padding:8px 10px;border:1px solid var(--line, #233047);border-radius:6px">
         <b style="font-size:13px">One port (Cloudflare Tunnel)</b>
         <span id="tunnelMsg" class="hint" style="display:block;margin-top:3px">Loading&hellip;</span>
+        <!-- 0.21.86 (Kenton: invite links carried the relay's internal IP): the address invite links open, handed to every spoke -->
+        <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <label for="pubUrl">Public web address</label>
+          <input id="pubUrl" type="url" placeholder="https://kastr.example.com" spellcheck="false" style="flex:1;min-width:200px">
+          <button type="button" id="pubSave">Save</button>
+          <button type="button" id="pubUse" class="ghost" hidden></button>
+        </div>
+        <span id="pubMsg" class="hint" style="display:block;margin-top:3px">Invite links open this address, so people outside your network can join. Set it on the hub; every relay uses the hub&rsquo;s.</span>
       </div>
       <p class="hint" id="fwOk" hidden style="color:var(--asi-green)">Firewall rules are in place.</p>
       <p class="hint" id="fwHint" hidden>
@@ -1212,6 +1221,7 @@
     $("webClientsMsg").textContent = parts.join(" ");
     const box = $("webUrls"); box.innerHTML = "";
     if (w.live) for (const u of (w.urls || [])) box.append(urlRow(u, u === (w.urls || [])[0]));
+    pubPaint(w);
     const t = w.tunnel;
     if (t) {
       const pub = t.seen && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(t.seen) ? t.seen : null;   // a Host-rewriting tunnel shows localhost
@@ -1230,6 +1240,29 @@
                    + "Set the viewer and publisher codes above.</b>" : "");   // 0.20.0: an open relay through a tunnel is public
     }
   }
+  // 0.21.86: the public web address (kastr.ini public_url) -- invite links use it; a spoke shows the hub's
+  let pubTyped = false;
+  function pubPaint(w) {
+    const inp = $("pubUrl"), use = $("pubUse");
+    if (!pubTyped && document.activeElement !== inp) inp.value = w.publicUrl || "";
+    const seen = w.tunnel && w.tunnel.seen && /^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(:\d+)?$/i.test(w.tunnel.seen) ? w.tunnel.seen : "";
+    use.hidden = !seen || seen === w.publicUrl;
+    if (seen) { use.textContent = "Use " + seen.replace(/^https:\/\//, ""); use.dataset.url = seen; }
+    if (!w.publicUrl && w.publicHub) $("pubMsg").textContent = "Invite links use the hub\u2019s address, " + w.publicHub + ". Set one here only to override it for this relay.";
+  }
+  $("pubUrl").addEventListener("input", () => { pubTyped = true; });
+  async function pubSave(url) {
+    const msg = $("pubMsg");
+    try {
+      const r = await fetch("/api/web/public", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { msg.textContent = d.error || ("Not saved (" + r.status + ")"); return; }
+      pubTyped = false; $("pubUrl").value = d.publicUrl || "";
+      msg.textContent = d.publicUrl ? "Saved. Invite links now open " + d.publicUrl + " (other relays pick it up within 3 minutes)." : "Cleared. Invite links use this relay\u2019s own address.";
+    } catch (e) { msg.textContent = "Not saved: " + (e.message || e); }
+  }
+  $("pubSave").addEventListener("click", () => pubSave($("pubUrl").value.trim()));
+  $("pubUse").addEventListener("click", () => pubSave($("pubUse").dataset.url || ""));
   paintWeb();
   $("webClients").addEventListener("change", async () => {
     const on = $("webClients").checked;
@@ -3298,6 +3331,9 @@
                     restart: "the hub restarted" };
   let rcxMach = new Map();   // node -> the hub's row (the mesh map's Control buttons read it)
   const rcxName = (m) => m.nick || m.hostname || m.name || m.node;
+  // 0.21.86 (Kenton: a Linux relay showed "nobody is signed in" for every X11 reason): what keeps its desktop out of reach
+  const RCX_DESK = { locked: "screen locked", wayland: "Wayland desktop (needs X11)", "no-display": "KASTR runs without a desktop display",
+                     "no-x11": "X11 libraries missing", "no-xtest": "XTest missing (libxtst6)", unsupported: "cannot be controlled" };
   function rcxSessTable(rows, fleet) {
     if (!rows.length) return "<div class='hint'>" + (fleet ? "No remote sessions yet." : "No fleet admin has controlled this machine.") + "</div>";
     return "<table class='rooms'><tr>" + (fleet ? "<th>Machine</th>" : "") + "<th>Who</th><th>From</th><th>Start</th><th>End</th><th>Duration</th><th>How it ended</th></tr>"
@@ -3326,7 +3362,10 @@
         : hub.state === "old" ? "<span class='updbad'>The relay this KASTR uses is older than 0.21.83 — update it</span>"
         : hub.state === "key" ? "<span class='updbad'>" + esc(hub.error) + "</span>"
         : hub.state ? "<span class='updbad'>Not reaching the hub yet: " + esc(hub.error || hub.state) + "</span>" : "Telling the hub…");
-      if (!dk.ok) bits.push("<span class='updbad'>" + (dk.why === "locked" ? "The screen is locked — nothing can be shown until someone unlocks it" : dk.why === "wayland" ? "This desktop runs Wayland — remote control needs X11" : "Nobody is signed in on this machine — fleet admins see that in Machines…") + "</span>");
+      if (!dk.ok) bits.push("<span class='updbad'>" + (dk.why === "locked" ? "The screen is locked — nothing can be shown until someone unlocks it" : dk.why === "wayland" ? "This desktop runs Wayland — remote control needs X11"
+        : dk.why === "no-display" ? "KASTR runs without a desktop display here (started from a service or SSH?) — start KASTR from the signed-in desktop session"
+        : dk.why === "no-x11" ? "The X11 libraries are missing — install libx11-6 and libxtst6" : dk.why === "no-xtest" ? "The X server has no XTest extension — install libxtst6"
+        : "Nobody is signed in on this machine — fleet admins see that in Machines…") + "</span>");
     }
     if (d.adminWindows === "limited") bits.push("Administrator windows: minimize, move, resize and close need KASTR to run as administrator on this computer");
     if (d.session) bits.push("<span class='updok'>" + esc(d.session.admin) + " (fleet admin) is connected now</span> — from " + esc(d.session.from || "?") + ", since " + new Date(d.session.since * 1000).toLocaleTimeString());
@@ -3355,7 +3394,7 @@
     rcxMach = new Map((d.machines || []).map((m) => [m.node, m]));
     const ms = d.machines || [];
     $("rcxMachines").innerHTML = ms.length ? "<table class='rooms'><tr><th>Machine</th><th>Site</th><th>Role</th><th>Status</th><th>KASTR</th><th></th></tr>" + ms.map((m) => {
-      const st = !m.online ? "offline" : m.session ? esc(m.session.admin) + " is connected" : m.busy ? "controlled by " + esc(m.busy) : !m.desktop?.ok ? (m.desktop?.why === "locked" ? "screen locked" : "nobody is signed in on " + esc(rcxName(m))) : "<span class='updok'>online</span>";
+      const st = !m.online ? "offline" : m.session ? esc(m.session.admin) + " is connected" : m.busy ? "controlled by " + esc(m.busy) : !m.desktop?.ok ? (RCX_DESK[m.desktop?.why] || "nobody is signed in on " + esc(rcxName(m))) : "<span class='updok'>online</span>";
       const can = d.hub && m.online && m.desktop?.ok && !m.session && !m.busy;
       return "<tr><td><b>" + esc(rcxName(m)) + "</b><div class='hint'>" + esc([m.hostname !== rcxName(m) ? m.hostname : "", m.node].filter(Boolean).join(" · ")) + "</div>"
         + (m.adminWindows === "limited" ? "<div class='hint' style='color:var(--asi-amber)'>Minimize, move, resize and close need KASTR to run as administrator on " + esc(rcxName(m)) + "’s computer</div>" : "") + "</td>"

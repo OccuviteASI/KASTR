@@ -841,6 +841,23 @@ _CHAT_HUB_SAID = set()             # hosts whose "hub is this KASTR on another p
 
 _RELAY_WS = [0]       # 0.19.0: live /relay WebSocket pipes
 TUNNEL_SEEN = {}      # 0.19.0: the last proxied visitor {"base", "at"} (the Relay page's one-port card); 0.20.0: + "open"
+HUB_PUBLIC = [None]   # 0.21.86: the hub's public web address (its /api/client publicWeb) -- spokes learn it with the hub clock
+
+
+def clean_public_url(s):
+    """0.21.86 (Kenton: an invite link carried the relay's internal IP): the public web address invite links use --
+    https://<DNS name>[:port] only. No path, no IP address: a private address is what those links must not carry, and
+    the headers a visitor sends are never trusted for it (an invite link holds a secret)."""
+    s = str(s or "").strip().rstrip("/")
+    m = re.match(r"^https://((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(:[0-9]{1,5})?$", s, re.I)
+    if not m or re.match(r"^[0-9.]+$", m.group(1)):
+        return None
+    return "https://" + m.group(1).lower() + (m.group(2) or "")
+
+
+def public_web_base():
+    """The address anyone can open: kastr.ini public_url on this machine, else the hub's."""
+    return clean_public_url(ini_get("public_url")) or HUB_PUBLIC[0]
 _TUNNEL_OPEN_SAID = [0.0]   # 0.20.0: when the "proxied visitors reach an OPEN relay" line was last logged
 SINGLE_PORT = False   # 0.19.0: kastr.ini single_port -- every remote page gets the /relay web relay
 RTSP_BRIDGE = [None]  # 0.21.16: the running Bridge (make_server sets it) -- kastr_relay's hub `rtsp` command and the spoke registration reach the switch through it
@@ -882,6 +899,7 @@ def hub_clock_tick(relay_srv):
         connect = (relay_srv._cluster_raw() or {}).get("connect")
         if not connect or (relay_srv._cluster_raw() or {}).get("hub") is True:
             HUB_CLOCK.update(off=0.0, rtt=None, at=time.time())
+            HUB_PUBLIC[0] = None
             return
         base = hub_web_base(connect)
         if not base:
@@ -893,6 +911,7 @@ def hub_clock_tick(relay_srv):
             with urllib.request.urlopen(base + "/api/client", timeout=4, context=ctx if base.startswith("https") else None) as r:
                 d = json.loads(r.read(8192) or b"{}")
             t1 = time.time() * 1000.0
+            HUB_PUBLIC[0] = clean_public_url(d.get("publicWeb"))   # 0.21.86: the hub's public address, for invite links
             if not isinstance(d.get("now"), (int, float)):
                 return
             rtt, off = t1 - t0, d["now"] - (t0 + t1) / 2.0
@@ -3807,6 +3826,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 == "/api/pres" or path0.startswith("/api/pres/"):   # 0.21.84 (prototype): presentations -- convert + the encrypted slide store
                 import kastr_pres
                 return kastr_pres.handle_api(self, self._state_dir(), _note)
+            if path0 == "/api/web/public":          # 0.21.86: the public web address invite links use (this machine only)
+                return self._web_public()
             if path0 == "/api/web":                 # 0.17.0: web clients switch
                 return self._web_api("POST")
             if path0 in ("/api/ondemand/sync", "/api/ondemand/demand"):   # 0.18.0
@@ -4013,6 +4034,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "closing": bool(CLOSING[0]),
                 "now": int(time.time() * 1000),   # 0.18.0: the relay host's clock (latency stamps are corrected to it)
                 "hubOff": HUB_CLOCK.get("off") or 0,   # 0.21.37: this host's offset to the hub's clock -- pages add it (one fleet clock)
+                "publicWeb": public_web_base(),   # 0.21.86: invite links open this (kastr.ini public_url here or on the hub)
                 "features": feats,
             })
 
@@ -4556,6 +4578,23 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 self.wfile.write(body)
             return True
 
+        def _web_public(self):
+            """0.21.86: POST /api/web/public {url} -- kastr.ini public_url (empty clears it). Loopback only: the address
+            people outside open (e.g. the Cloudflare Tunnel name); the hub hands it to every spoke for invite links."""
+            if not self._local():
+                return self._deny("web client settings")
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = str(json.loads(self.rfile.read(n) or b"{}").get("url") or "").strip() if 0 <= n <= 4096 else ""
+            except Exception:
+                raw = ""
+            url = clean_public_url(raw)
+            if raw and not url:
+                return self._json_plain(400, {"error": "use https://<name> -- the address people outside your network open (no IP address, no path)"})
+            ini_set("public_url", url)
+            _note("web: public address %s by the operator" % (url or "cleared"))
+            return self._json_plain(200, {"ok": True, "publicUrl": url or ""})
+
         def _web_api(self, method):
             """0.17.0: GET/POST /api/web -- the turnkey switch for browser clients. Loopback only.
             on: kastr.ini host = 0.0.0.0, https on, firewall rules for web/https/relay ports;
@@ -4615,6 +4654,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "hostname": HTTPS_INFO.get("hostname"),
                 "expires": HTTPS_INFO.get("expires"),
                 "urls": self._web_urls(),
+                "publicUrl": clean_public_url(ini_get("public_url")) or "",   # 0.21.86: invite links (One port card)
+                "publicHub": HUB_PUBLIC[0],
                 "lan": ["http://%s:%d" % (ip, HTTP_PORT) for ip in _kr.local_ips()] if (LAN_OK and HTTP_PORT) else [],
                 "relayRunning": relay_running,
                 "relayLan": bool(relay_running and getattr(relay_srv, "bind_all", False)),

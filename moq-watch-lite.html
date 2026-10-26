@@ -9410,7 +9410,18 @@
   // Share invite: a link that opens THIS room where it lives -- the tunnel / web relay, else the address this page was
   // reached by, else (the desktop window, on loopback) this host's network address. 0.21.75: on a secured relay the link
   // carries an invite (no code needed); an open relay's link is the room's address alone (nobody needs a code there).
+  // 0.21.86 (Kenton: the invite link carried the relay's internal IP, not an address anyone can open): the fleet's public
+  // web address -- kastr.ini public_url (the hub's Relay page, One port card), handed to pages on the relay host's /api/client.
+  async function publicWebBase() {
+    try {
+      const d = await fetch((relayHostBase() || location.origin) + "/api/client", { cache: "no-store" }).then((r) => r.json());
+      const u = String(d?.publicWeb || "").replace(/\/+$/, "");
+      return /^https:\/\/[^/]+$/.test(u) ? u : "";
+    } catch { return ""; }
+  }
   async function inviteBase() {
+    const pub = await publicWebBase();
+    if (pub) return pub;
     let base = "";
     try { const wu = new URL(urlInput.value.trim()); if (isWebRelay(wu.href)) base = wu.origin; } catch {}
     if (!base && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) base = location.origin;
@@ -9465,10 +9476,12 @@
     return d;
   }
   async function inviteJoinLink(token, slug) {
-    const base = await inviteBase();
+    const pub = await publicWebBase();   // 0.21.86: the public address and its web relay (the tunnel), else the old ladder
+    const base = pub || await inviteBase();
     if (!base) return "";
-    return base + "/join#i=" + encodeURIComponent(token) + "&room=" + encodeURIComponent(slug) + "&relay=" + encodeURIComponent(inviteRelayFor(base));
+    return base + "/join#i=" + encodeURIComponent(token) + "&room=" + encodeURIComponent(slug) + "&relay=" + encodeURIComponent(pub ? pub + "/relay" : inviteRelayFor(base));
   }
+  const privateLink = (link) => { try { const h = new URL(link).hostname; return /^(10|127)\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^169\.254\.|^localhost$|^\[?(fd|fe80)/i.test(h) || !h.includes("."); } catch { return false; } };
   async function inviteCopy() {
     const btn = document.getElementById("pplInvCopy");
     const ttl = invTtl, slug = CHANNEL;
@@ -9481,6 +9494,7 @@
       let copied = false;
       try { await navigator.clipboard.writeText(link); copied = true; } catch {}
       if (copied) window.__toast?.("Invite link copied \u2014 " + say, 5000, { level: "event" });   // shown by default (info toasts are opt-in)
+      if (privateLink(link)) window.__toast?.("This link uses an address inside your network \u2014 people outside it cannot open it. Set the public web address on the hub\u2019s Relay page (One port card).", 9000, { level: "warn" });   // 0.21.86
       else window.prompt("Copy this invite link (" + say + "):", link);
       invPop.hidden = true;
       log("Invite link made for " + slug + " (" + say + ").");
@@ -15330,7 +15344,9 @@
     if (m.busy) return { cls: "busy", text: "Controlled by " + m.busy, sub: "asked in a room" };
     if (!m.desktop?.ok) {
       const w = m.desktop?.why;
-      return { cls: "", text: w === "locked" ? "The screen is locked on " + rcxName(m) : w === "wayland" ? rcxName(m) + " runs Wayland (needs X11)" : w === "unsupported" ? "Cannot be controlled" : "Nobody is signed in on " + rcxName(m), sub: "" };
+      return { cls: "", text: w === "locked" ? "The screen is locked on " + rcxName(m) : w === "wayland" ? rcxName(m) + " runs Wayland (needs X11)" : w === "unsupported" ? "Cannot be controlled"
+        : w === "no-display" ? "KASTR runs without a desktop display on " + rcxName(m) : w === "no-x11" ? "X11 libraries missing on " + rcxName(m)
+        : w === "no-xtest" ? "XTest missing on " + rcxName(m) + " (libxtst6)" : "Nobody is signed in on " + rcxName(m), sub: "" };   // 0.21.86: the real Linux reason
     }
     return { cls: "on", text: "Online", sub: "" };
   }

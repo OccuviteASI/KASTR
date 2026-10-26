@@ -205,7 +205,7 @@ def clean_monitors(v):
 def clean_desktop(v):
     v = v if isinstance(v, dict) else {}
     why = str(v.get("why") or "")
-    return {"ok": bool(v.get("ok")), "why": why if why in ("", "nosession", "locked", "wayland", "unsupported", "no-display") else "unsupported"}
+    return {"ok": bool(v.get("ok")), "why": why if why in ("", "nosession", "locked", "wayland", "unsupported", "no-display", "no-x11", "no-xtest") else "unsupported"}
 
 
 # ---- the machine's own setting ---------------------------------------------------------------------------------------
@@ -593,6 +593,9 @@ class HubRegistry:
             dk = row.get("desktop") or {}
             if not dk.get("ok"):
                 msg = {"locked": "the screen is locked on %s" % name, "wayland": "%s runs a Wayland desktop -- remote control needs X11" % name,
+                       "no-display": "KASTR on %s runs without a desktop display (no DISPLAY) -- start it from the signed-in desktop" % name,
+                       "no-x11": "the X11 libraries are missing on %s (install libx11-6 and libxtst6)" % name,
+                       "no-xtest": "the X server on %s has no XTest (install libxtst6)" % name,
                        "unsupported": "%s cannot be controlled remotely" % name}.get(dk.get("why"), "nobody is signed in on %s" % name)
                 return {"ok": False, "error": msg, "why": "desktop"}, 409
             cur = self._busy_locked(node)
@@ -736,7 +739,8 @@ def _desktop_state():
             except Exception:
                 return {"ok": False, "why": "unsupported"}
             return {"ok": True, "why": ""}
-        return {"ok": False, "why": "wayland" if why == "wayland" else "nosession"}
+        # 0.21.86 (Kenton: a Linux relay said "nobody is signed in" -- every X11 reason was folded into that): the real reason
+        return {"ok": False, "why": why if why in ("wayland", "no-display", "no-x11", "no-xtest") else "nosession"}
     if WINDOWS:
         try:
             import ctypes

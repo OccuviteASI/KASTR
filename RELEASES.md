@@ -2,6 +2,27 @@
 
 What changed in each build, newest first.
 
+## v0.21.88 — Private messages, All people, videos on slides, and KASTR back maximized in your own browser
+
+**Private messages, end-to-end encrypted (Kenton: "Ability to message people privately whether online/offline ... Ability to setup group messages. These messages are not tied to any rooms").** A new Messages panel next to Chat.
+- One-to-one chats and groups. Text, pictures (pasted or attached) and files up to 25 MB, unread badges, and delivered/read ticks in one-to-one chats. Optional desktop notifications.
+- A message to someone who is offline waits on the hub and reaches all their devices when they come back. Messages you send while the hub is unreachable show "Waiting for the hub" and go out by themselves when it returns.
+- Messages and attachments are encrypted on your device. The hub stores only scrambled data and deletes it after 90 days.
+- **Your name and My room code are the key (Kenton: "If a user connects with the same name and enters the same 'my room' password, then they should be able to access the previous messages").** On any device, the same name and My room code unlock all your messages from the last 90 days. Your other devices get a note when a new device does. Messaging needs a My room with a code of at least 8 characters; the Messages panel walks you through setting one up.
+- If you change your My room code from a device where your messages are unlocked, you keep your history. An admin reset of your My room loses it.
+- When the hub role moves to another machine (hand-over, standby or hand-back), the stored messages and attachments move with it.
+- Admins can see and remove a person's messaging devices.
+
+**All people in People (Kenton: "add 'all people' in the people page, then a toggle to show online only").** The People tab is now All people, with an Online only switch (on by default, remembered on each device). Turn it off to also see everyone the hub has seen in the last 30 days, greyed with "last seen". Every row, and every person's menu, has Message.
+
+**Videos on slides play in KASTR (Kenton: "This powerpoint has a video in it ... I need that to be able to function inside of KASTR").** When a slide with an embedded video goes live, the video plays in its own spot on the slide for everyone, with sound.
+- It follows the deck: start automatically (with its delay) or on click, loop, and volume.
+- The presenter and backstage people get Play / Pause / seek in the presenter view; viewers only watch. Changing slide stops the video; coming back starts it from the beginning.
+- The video is never stored on the relay host, and viewers only ever receive the live slide.
+- A video that is linked to a file instead of embedded gets a warning naming it, with how to embed it in PowerPoint.
+
+**KASTR in your own browser comes back maximized (Kenton: "The window still isn't staying maximized").** When KASTR opens in your own default browser (Brave, Chrome, Edge), it now finds its new window after an update or restart and maximizes it, or puts it back where it was. Only that one window is touched, never your other browser windows. Windows and Linux (X11). If your window was not maximized when KASTR last closed, maximize it once and it will stay that way.
+
 ## v0.21.87 — KASTR stays maximized, invite links survive an update, photos and backstage in My room, a steady mic
 
 **The window comes back maximized (Kenton: "It still isn't saving position after upgrade. Or restart.").** When KASTR relaunched after an update or a restart while the old browser was still closing, Chrome opened the new window inside that old browser, which ignores the "maximized" instruction, so it came back at a default size. KASTR now finds its window after every launch, even inside the old browser, and maximizes it if it was maximized before. Windows and Linux (X11).

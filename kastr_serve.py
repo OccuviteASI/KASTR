@@ -75,6 +75,7 @@ def precache_list(root):
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
+    out.append("/assets/kastr-pmreset.js")   # 0.21.91 passcode reset: the admin's Reset My room passcode dialog (People + Relay page)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)
         for dp, _dn, fns in os.walk(base):
@@ -2741,6 +2742,27 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return False
             return kastr_relay.claims_admin_any(self._claims)
 
+        # ---- 0.21.91 passcode reset: who an admin's My room reset / remove is audited as (never a code) ----
+        def _personal_who(self, p):
+            relay = ""
+            try:
+                relay = relay_srv.auth._rcx_name()
+            except Exception:
+                pass
+            by = kastr_relay.clean_label((p or {}).get("by"), 40)
+            try:
+                if self._local():
+                    return {"name": ("relay operator (%s)" % by) if by else "relay operator", "host": "", "relay": relay}
+            except Exception:
+                pass
+            host = ""
+            try:
+                _r, host = kastr_relay.claims_identity(getattr(self, "_claims", None) or {})
+            except Exception:
+                pass
+            return {"name": by or host or "an admin", "host": host or "", "relay": relay}
+        # ---- end 0.21.91 passcode reset ----
+
         def _admin_for(self, room, qs=None):
             """0.21.2: True when the caller's token carries `<room>/~admin` (the admin access code). On an
             OPEN relay nobody is an admin this way (_room_claims returns None with no claims)."""
@@ -3119,8 +3141,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._chat_reply(413, {"error": "body too large"})
                 _auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
                 _hadm = (lambda c: bool(_auth._hub_admin_ok(c))) if _auth is not None and hasattr(_auth, "_hub_admin_ok") else None
+                _padm = p.get("op") in ("reset", "list") and self._settings_admin()   # 0.21.91 passcode reset: + the admin's list
                 obj, code = kastr_relay.personal_op(store, p, self._chat_peer(), log, CHAT_LOCKOUT,
-                                                    admin=(p.get("op") == "reset" and self._settings_admin()), admin_check=_hadm)
+                                                    admin=_padm, admin_check=_hadm,
+                                                    who=self._personal_who(p) if _padm and p.get("op") == "reset" else None)
                 hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                 return self._chat_reply(code, obj, hdrs)
             if path == "/api/rooms/touch":   # 0.21.25: a room in use (any member) -- plain rooms live while used
@@ -3193,8 +3217,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._chat_reply(429, {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait},
                                             {"Retry-After": wait})
                 vouch = None
-                if p.get("op") == "reset":
+                pwho = None
+                if p.get("op") in ("reset", "list"):   # 0.21.91 passcode reset: + the admin's list; the hub audits `who`
                     vouch = "admin" if self._settings_admin() else None
+                    if vouch and p.get("op") == "reset":
+                        pwho = self._personal_who(p)
                 elif p.get("op") == "create":
                     access = str(p.get("access") or "")
                     _a = getattr(relay_srv, "auth", None)
@@ -3209,6 +3236,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     else:
                         return self._chat_reply(403, {"ok": False, "error": "making your room needs this relay's access code -- join a room first"})
                 body = {"op": "personal", "body": {k: v for k, v in p.items() if k != "access"}, "peer": peer, "vouch": vouch}
+                if pwho:
+                    body["who"] = pwho   # 0.21.91 passcode reset
             else:
                 return self._chat_reply(404, {"error": "no such rooms endpoint"})
             try:
@@ -3231,6 +3260,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     lo, lc = CHAT_LOCKOUT.fail(peer, "wrong personal code", "(personal room)")   # the guess counts here, where the person is
                     if lc == 429:
                         obj, code = dict(lo, ok=False), 429
+                if p.get("op") == "list" and isinstance(obj, dict):
+                    obj = dict(obj, spoke=True)   # 0.21.91 passcode reset: the Relay page says "on the hub"
+                    if code == 400 and "unknown op" in str(obj.get("error") or ""):
+                        obj, code = {"ok": False, "spoke": True, "old": True, "error": "the hub runs an older KASTR -- update the hub first"}, 501
             if path == "/api/rooms/settings" and code == 200:   # 0.21.65: this box asks the hub again (a lock is enforced at once)
                 try:
                     _a = getattr(relay_srv, "auth", None)

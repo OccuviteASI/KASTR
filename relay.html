@@ -1994,6 +1994,20 @@
     return "<br>Local " + io(L.local) + (cnt ? "<br><span class='dim'>" + esc(cnt) + "</span>" : "") + "<br>Relay links " + io(L.link) + "<br>Total " + io(L.total)
       + (L.at ? "<br><span class='dim'>measured " + agoText(Date.now() / 1000 - L.at) + "</span>" : "");
   }
+  // 0.21.91 (Kenton: "When hovering over a relay in the mesh map, I don't need all of this information. I just need the name,
+  // people count, total in/out"): the hover is those three lines; the full detail stays on the zoomed relay (click it)
+  function meshPeopleOn(n) {   // people on this relay now: the live apps and web pages of the hub's user list (boxes are not people)
+    const rows = Array.isArray(lastFleet?.clients) ? lastFleet.clients : null;
+    if (!rows) return null;
+    const names = new Set([n.name, n.id].filter(Boolean).map((x) => String(x).toLowerCase()));
+    return rows.filter((r) => !r.offline && (r.kind === "app" || r.kind === "web") && names.has(String(r.relay || "").toLowerCase())).length;
+  }
+  function meshNodeTipShort(n) {
+    const L = n.load, p = meshPeopleOn(n);
+    return meshDot(n.id) + "<b>" + esc(n.name) + "</b>"
+      + (p != null ? "<br>" + p + (p === 1 ? " person" : " people") : "")
+      + (L && L.total ? "<br>Total in <b>" + fmtBps(L.total.in) + "</b> · out <b>" + fmtBps(L.total.out) + "</b>" : "<br><span class='dim'>bandwidth: measuring</span>");
+  }
   function meshNodeTip(n) {
     const d = mesh.data || {};
     return meshDot(n.id) + "<b>" + esc(n.name) + "</b> <span class='dim'>" + esc(n.role === "hub" ? "hub (this relay)" : n.role === "standby" ? "standby hub" : "spoke") + "</span><br>KASTR " + esc(n.version || "?")
@@ -2342,7 +2356,7 @@
       if (!mesh.sim[n.id]) continue;
       const v = meshNodeGet(P, n.id, "circle");
       seenN.add(n.id);
-      v.n = n; v.tipKey = "node"; v.tip = () => meshNodeTip(v.n);
+      v.n = n; v.tipKey = "node"; v.tip = () => meshNodeTipShort(v.n);   // 0.21.91: name, people, total
       meshNodeSet(v, { r: meshR(n), hue: meshHue(n), load: n.load, halo: n.role === "hub", name: n.name, ver: n.version ? "v" + n.version : "",
         ic: n.role === "hub" ? "HUB" : n.role === "standby" ? "SB" : meshInitials(n.name), badge: n.needsUpdate ? "upd" : n.stale ? "stale" : "",
         cls: "r-" + n.role + (n.stale ? " stale" : "") + (mesh.sel?.node === n.id ? " sel" : "") + (Array.isArray(mesh.pos[n.id]) ? " pinned" : "") });
@@ -2350,7 +2364,7 @@
     meshPrune(P, seenE, seenN);
     if (mesh.tip) {   // the hovered link or relay keeps its tooltip, with the fresh numbers
       const t = $("meshTip"), l = mesh.tip.edge && edges.find((x) => meshEdgeId(x) === mesh.tip.edge), n = mesh.tip.node && meshNode(mesh.tip.node);
-      if (l) t.innerHTML = meshTipHtml(l); else if (n) t.innerHTML = meshNodeTip(n); else { mesh.tip = null; t.hidden = true; }
+      if (l) t.innerHTML = meshTipHtml(l); else if (n) t.innerHTML = meshNodeTipShort(n); else { mesh.tip = null; t.hidden = true; }
     }
   }
   function meshPlace() {
@@ -2501,7 +2515,7 @@
       const cl = n.zrole === "client", v = meshNodeGet(P, n.id, cl ? ({ box: "rect", viewer: "diamond" }[n.c.kind] || "circle") : "circle");
       seenN.add(n.id);
       v.n = n; v.tipKey = "znode";
-      v.tip = () => v.n.zrole === "client" ? meshClientTip(v.n.c) : v.n.zrole === "center" ? meshCenterTip(mesh.zd || zd) : (v.n.src ? meshNodeTip(v.n.src) : esc(v.n.name)) + "<br><span class='dim'>click to zoom to it</span>";
+      v.tip = () => v.n.zrole === "client" ? meshClientTip(v.n.c) : v.n.zrole === "center" ? meshCenterTip(mesh.zd || zd) : (v.n.src ? meshNodeTipShort(v.n.src) : esc(v.n.name)) + "<br><span class='dim'>click to zoom to it</span>";
       meshNodeSet(v, { r: meshR(n), hue: meshHue(n), load: n.zrole === "center" ? n.src?.load : null, halo: n.zrole === "center", name: n.name, ver: n.version || "",
         ic: cl ? ({ person: "P", box: "B", viewer: "W" }[n.c.kind] || "?") : n.src?.role === "hub" ? "HUB" : n.src?.role === "standby" ? "SB" : meshInitials(n.name),
         badge: !cl && n.src?.needsUpdate ? "upd" : "", cls: "z-" + n.zrole + " " + (cl ? "zk-" + n.c.kind : "r-" + (n.src?.role || "spoke")) + (mesh.sel?.client === n.id ? " sel" : "") });

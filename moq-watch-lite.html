@@ -23381,6 +23381,20 @@
         if (libUi.sel) { if (libUi.sel.has(e.path)) libUi.sel.delete(e.path); else libUi.sel.add(e.path); libPaint(); return; }
         libActOpen(e, ev.target.closest(".libmore") || row);
       });
+      // 0.21.91 (Kenton: "In the streams menu, I would like to be able to right-click for the options and not just the
+      // ellipsis"): the same actions, opened at the pointer
+      row.addEventListener("contextmenu", (ev) => {
+        const e = libCat.get(el.dataset.path);
+        if (!e) return;
+        ev.preventDefault();
+        libPeekStop();
+        const x = ev.clientX, y = ev.clientY, w = (libActEl && libActEl.offsetWidth) || 220;
+        libActOpen(e, {
+          getBoundingClientRect: () => ({ left: x, right: x + w, top: y, bottom: y }),   // the menu opens to the right of and below the pointer
+          focus: (o) => { try { row.focus(o); } catch {} },
+          closest: (sel) => row.closest(sel),
+        });
+      });
     }
     return el;
   }

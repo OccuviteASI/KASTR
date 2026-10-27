@@ -30232,12 +30232,14 @@
                     : { text: "publishing\u2026", cls: "", onair: false };
     }
     if (slot.rtsp) {
-      if (slotFailed(slot)) return { text: "failed", cls: "warn", onair: false };
+      // 0.21.91: the alerts went quiet after the 5th try, so the row's status line carries the live detail -- the reason and the try
+      const att = (slot.entry.retries || 0) > 0 ? "retrying (try " + (slot.entry.retries + 1) + ")" : "";
+      if (slotFailed(slot)) { const why = feedAlertReason(slot).replace(/^ffmpeg: /, "").split(" / ")[0].slice(0, 90); return { text: "failed" + (why || att ? " — " + [why, att].filter(Boolean).join("; ") : ""), cls: "warn", onair: false }; }
       if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (" + (slot.entry.evictWhy === "monitor" ? "monitor attempt " : "attempt ") + (slot.entry.evictAttempt ?? slot.entry.retries ?? "?") + "); retrying", cls: "warn", onair: false };   // 0.14.0 / 0.21.5
       if (slot.inGrid) return { text: slot.ownPath && slot.moq?.broadcast ? "in grid \u00b7 full feed" : "in grid", cls: "ready", onair: false };   // 0.8.3 / 0.8.12
       // Neutral, not amber: still starting up is not a warning. Amber is
       // reserved for "failed", so the two are not the same colour at a glance.
-      if (!slot.moq) return { text: "connecting…", cls: "", onair: false };
+      if (!slot.moq) return { text: "connecting…" + (att ? " — " + att : ""), cls: "", onair: false };   // 0.21.91: + which try
       let on = false;
       try { on = slot.moq.broadcast?.in?.enabled?.peek?.() === true; } catch {}
       // 0.8.2: RTSP joins the relay-truth system -- the same 8s echo test
@@ -32426,20 +32428,87 @@
     }
   }, 5000);
 
-  // RTSP faults become a toast the moment they turn true (0.7.8) -- the
-  // pane may not even exist yet, so a badge alone could say nothing.
-  setInterval(() => {
+  // RTSP faults become a toast (0.7.8) -- the pane may not even exist yet, so a badge alone could say nothing.
+  // 0.21.91 (Kenton: "I also don't need an alert every single time an RTSP share isn't connected and retries. I just need it
+  // after 1 try, and maybe again after a few tries, but I don't need it repeating forever"): ONE alert per camera after its
+  // first failed attempt, ONE more at the FEED_ALERT_AGAIN-th ("still failing after 5 tries -- KASTR keeps retrying quietly"),
+  // then nothing while it keeps failing; a camera that comes back starts over. The count lives on the ENTRY: the 0.7.8 toast
+  // lived on the SLOT, and a camera that never came up is rebuilt slot by slot by the retry ladder -- a fresh "RTSP source
+  // failed" on every retry, forever. Attempts: a camera that never came up on this page counts the page's own ladder
+  // (entry.retries -- every monitor that ended without a picture -- and every slot that turned "failed"); a camera the server
+  // publishes counts the server's consecutive failed restarts (publish.restarts) while its pair is down, or it is out of its
+  // grid. Cameras failing together make ONE notice ("3 cameras are offline ..."), never a stack. The Share panel's badge and
+  // status line keep showing the live state all along -- only the pop-ups stop repeating. Not an alert: an RTMP ingest waiting
+  // for its device, a pair parked for a fresh code, the box's cameras switched off.
+  const FEED_ALERT_AGAIN = 5, FEED_ALERT_GROUP_MS = 3000, FEED_ALERT_NAMES = 3;
+  const feedAlertQ = [];
+  const feedAlertLog = [];   // rig: what was said, when
+  function feedAlertReason(slot) {
+    const pi = slot.feed?.publish || slot.pub || null;
+    const r = (!slot.native && faultText(slot)) || slot.feed?.error || (pi && pi.running === false ? (pi.lastExit?.reason || pi.error) : "") || "";
+    return String(r).replace(/\[[^\]]* @ [0-9a-fx]+\]\s*/gi, "").replace(/\?[^ \/]*/g, "").replace(/\s+/g, " ").trim().slice(0, 140);   // ffmpeg's "[tcp @ 0000...]" tags and URL queries are noise here
+  }
+  function feedAlertState(slot) {   // -> { down, tries, ok }
+    const a = slot.entry;
+    const pi = slot.feed?.publish || slot.pub || null;
+    if (slot.native) {
+      if (pi && (pi.parked || pi.needsToken || pi.standby || pi.suspended)) return { down: false, tries: 0, ok: false };   // waiting for a code / asleep / switched off: not a camera fault
+      const down = !!a.evicted || !!(pi && pi.running === false && (pi.restarts || 0) > 0);
+      const tries = Math.max(pi?.restarts || 0, a.evicted ? Number(a.evictAttempt) || 1 : 0);
+      return { down, tries, ok: !down && !!pi?.running && (pi.restarts || 0) === 0 };
+    }
+    if (slot.monitorLoaded) return { down: false, tries: 0, ok: true };
+    const tries = Math.max(a.retries || 0, a.alertSlotFails || 0);
+    return { down: tries > 0, tries, ok: false };
+  }
+  function feedAlertTick() {
+    if (rtspSuspended) { feedAlertQ.length = 0; return; }
+    const now = Date.now();
     for (const slot of slots.values()) {
-      if (!slot.rtsp) continue;
-      const failed = slotFailed(slot);
-      if (failed && !slot.toasted) {
-        slot.toasted = true;
-        window.__toast?.("RTSP source failed \u2014 " + faultText(slot), 6000, { level: "error" });
-      } else if (!failed) {
-        slot.toasted = false;
+      if (!slot.rtsp || slot.feed?.ingest) continue;
+      const a = slot.entry;
+      if (!slot.native && !slot.alertCounted && slotFailed(slot)) { slot.alertCounted = true; a.alertSlotFails = (a.alertSlotFails || 0) + 1; }   // one per slot (the ladder makes a new one per retry)
+      const st = feedAlertState(slot);
+      if (st.ok) {
+        if (a.alertN) log((a.label || shortName(a.name)) + " is back \u2014 alerts for it start over");
+        a.alertN = 0; a.alertSlotFails = 0;
+        continue;
+      }
+      if (!st.down) continue;
+      const label = String(a.label || rtspLabel(a.url) || shortName(a.name));
+      if (st.tries >= FEED_ALERT_AGAIN && (a.alertN || 0) < 2) {
+        a.alertN = 2;
+        feedAlertQ.push({ kind: "still", id: a.id, label, tries: st.tries, at: now, screen: !!a.screen });
+      } else if (st.tries >= 1 && !a.alertN) {
+        a.alertN = 1;
+        feedAlertQ.push({ kind: "first", id: a.id, label, tries: st.tries, at: now, screen: !!a.screen, why: feedAlertReason(slot) });
       }
     }
-  }, 2000);
+    if (feedAlertQ.length && now - feedAlertQ[0].at >= FEED_ALERT_GROUP_MS) feedAlertFlush();
+  }
+  function feedAlertFlush() {
+    const q = feedAlertQ.splice(0);
+    if (!q.length) return;
+    const names = (xs) => xs.slice(0, FEED_ALERT_NAMES).map((x) => "\u201c" + x.label + "\u201d").join(", ") + (xs.length > FEED_ALERT_NAMES ? " and " + (xs.length - FEED_ALERT_NAMES) + " more" : "");
+    const first = q.filter((x) => x.kind === "first"), still = q.filter((x) => x.kind === "still");
+    let msg;
+    if (q.length === 1) {
+      const x = q[0], what = x.screen ? "Share" : "Camera";
+      msg = x.kind === "first"
+        ? what + " \u201c" + x.label + "\u201d is offline" + (x.why ? " \u2014 " + x.why : "") + ". KASTR keeps retrying; its status is in Share."
+        : "\u201c" + x.label + "\u201d is still failing after " + FEED_ALERT_AGAIN + " tries \u2014 KASTR keeps retrying quietly.";
+    } else {
+      const parts = [];
+      if (first.length) parts.push(first.length === 1 ? "1 camera is offline (" + names(first) + ")" : first.length + " cameras are offline (" + names(first) + ")");
+      if (still.length) parts.push(still.length + (still.length === 1 ? " is" : " are") + " still failing after " + FEED_ALERT_AGAIN + " tries (" + names(still) + ")");
+      msg = parts.join("; ") + " \u2014 KASTR keeps retrying" + (still.length ? " quietly" : "") + ". Share shows each one\u2019s status.";
+    }
+    feedAlertLog.push({ at: Date.now(), n: q.length, kinds: q.map((x) => x.kind + ":" + x.id), msg });
+    if (feedAlertLog.length > 50) feedAlertLog.splice(0, feedAlertLog.length - 50);
+    window.__toast?.(msg, 8000, { level: first.length ? "error" : "warn" });
+  }
+  setInterval(feedAlertTick, 1000);
+  window.__feedAlerts = { log: () => feedAlertLog.slice(), state: () => [...slots.values()].filter((s) => s.rtsp).map((s) => ({ id: s.entry.id, native: !!s.native, n: s.entry.alertN || 0, ...feedAlertState(s) })) };   // rig (0.21.91)
 
   const gridStateOf = (g) => ({ name: g.name, layout: g.layout, order: [...g.order], members: g.members.map((m) => m.entry.id), evicted: (g.evicted || []).map((a) => a.id) });   // 0.15.0
   window.__gridState = () => { const g = gridById("1"); return g ? gridStateOf(g) : null; };   // rig hook (0.14.0: evicted; 0.15.0: grid "1" -- see __gridStates)

@@ -1739,6 +1739,13 @@ class Hooks:
 
 
 PUBLISH_RETRY_S = [1, 2, 5, 10, 20, 30]
+# 0.21.91 (Kenton: alerts "after 1 try, and maybe again after a few tries, but I don't need it repeating forever" -- and the
+# log the same): a pair that keeps failing writes its start/exit lines in full for its FIRST try and its LOG_QUIET_AFTER-th
+# (with "still failing ... retrying quietly"), nothing for the tries between or after, and one summary line every
+# LOG_QUIET_SUMMARY_S while it keeps failing; the first time it streams again it says so (after how many failed tries). A
+# generation that lived over a minute exits in full as before (that is news, not a retry).
+LOG_QUIET_AFTER = 5
+LOG_QUIET_SUMMARY_S = 600
 
 
 def pause_card_input(url):
@@ -2213,6 +2220,7 @@ class Publisher:
             # after the lock -- the log may block on I/O)
             start_line = ("rtsp pair %s gen=%d start restarts=%d total=%d copy=%s ffmpeg=%s moq=%s"
                           % (self.broadcast, gen, self.restarts, self.restartsTotal, self.copy, ff.pid, mq.pid))
+            start_r = self.restarts                                       # 0.21.91: this try's place on the ladder
             self.errors.clear()
             self.error = None
             self.parked = False                                          # 0.12.0
@@ -2221,7 +2229,7 @@ class Publisher:
             drains = [threading.Thread(target=self._drain, args=(ff, "ffmpeg", gen), daemon=True),
                       threading.Thread(target=self._drain, args=(mq, "moq", gen), daemon=True)]
             self._drains = drains
-        self.bridge.log(start_line)                                      # 0.13.3
+        self._lq_line(start_line, start_r, "start")                       # 0.13.3; 0.21.91: quiet while it keeps failing
         for t in drains:
             t.start()
         if pump:   # 0.21.85
@@ -2409,6 +2417,8 @@ class Publisher:
                         if n > self._outSize:
                             self._outSize = n
                             self.flowingAt = time.time()
+                            if self.__dict__.get("_lq"):
+                                self._lq_back()   # 0.21.91
                     continue
                 if text:
                     text = _redact(re.sub(r"\x1b\[[0-9;]*m", "", text))   # 0.12.0: never a token
@@ -2480,6 +2490,7 @@ class Publisher:
             exit_line = ("rtsp pair %s gen=%d exit who=%s code=%s%s lived=%.1fs restarts=%d sessionFails=%d sessionKills=%d last=%s"
                          % (self.broadcast, gen, who, code, (" (" + why + ")") if why else "", lived, self.restarts, self.sessionFails, self.sessionKills,
                             ((mine or self.errors)[-1] if (mine or self.errors) else "")[:160]))
+            exit_r = -1 if lived > 60 else self.restarts                  # 0.21.91: -1 = it was working -- always logged
             if lived > 60:
                 self.restarts = 0       # it was working; forget the past
             hard = self._hard.pop(gen, None)                              # 0.12.0
@@ -2495,10 +2506,46 @@ class Publisher:
                 else:
                     decision = "ladder"
                     self._schedule_restart_locked()
-        self.bridge.log(exit_line)
+        self._lq_line(exit_line, exit_r, "exit")                          # 0.21.91
         self._notready("exit %s code %s" % (who, code))                  # 0.18.0
         if decision == "park":
             self._park()                # logs and may mint: never under the lock
+
+    def _lq_line(self, line, r, kind):
+        """0.21.91: launch.log for a pair's start / exit line -- `r` = its try's place on the ladder (restarts; -1 = always)."""
+        q = self.__dict__.get("_lq")
+        if q is None:
+            q = self.__dict__["_lq"] = {"n": 0, "lines": 0, "since": 0.0, "at": 0.0, "last": ""}
+        if r < 0 or r == 0 or r == LOG_QUIET_AFTER - 1:
+            self.bridge.log(line)
+            if kind == "exit" and r == LOG_QUIET_AFTER - 1:
+                self.bridge.log("rtsp pair %s: still failing after %d tries -- KASTR keeps retrying quietly (a summary every %d min)"
+                                % (self.broadcast, LOG_QUIET_AFTER, LOG_QUIET_SUMMARY_S // 60))
+            if kind == "exit" and r > 0:
+                q["n"] += 1
+            return
+        now = time.time()
+        q["lines"] += 1
+        if kind != "exit":
+            return
+        q["n"] += 1
+        q["last"] = line
+        if not q["since"]:
+            q["since"] = q["at"] = now
+        if now - q["at"] >= LOG_QUIET_SUMMARY_S:
+            q["at"] = now
+            self.bridge.log("rtsp pair %s: still failing -- %d failed tries since %s, KASTR keeps retrying quietly (last: %s)"
+                            % (self.broadcast, q["n"], time.strftime("%H:%M", time.localtime(q["since"])), line[-220:]))
+
+    def _lq_back(self):
+        """0.21.91: the pair streams (ffmpeg's output grew): a quiet stretch ends with one line, the count starts over."""
+        q = self.__dict__.get("_lq")
+        if not q or not (q["lines"] or q["n"]):
+            return
+        quiet = q["lines"]
+        self.__dict__["_lq"] = None
+        if quiet:
+            self.bridge.log("rtsp pair %s gen=%d streaming again after %d failed tr%s" % (self.broadcast, self._gen, max(1, self.restarts), "y" if self.restarts == 1 else "ies"))
 
     def _schedule_restart_locked(self):
         """0.13.3: queue the next ladder step. The caller holds self._lock

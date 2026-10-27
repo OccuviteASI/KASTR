@@ -657,6 +657,16 @@
   /* Focus on content (0.8.8): own panes stay painted but out of the way */
   #stage .pubpane.focushide { position:absolute; right:8px; bottom:8px; width:96px; height:54px; opacity:.03; pointer-events:none; z-index:0; }
   #stage .pubpane.camkind.hideme { display:none; }
+  /* 0.21.91: View > Hide my shares -- my own panes leave MY screen (everyone else still sees them); one I deliberately put on
+     my stage is exempt while it holds it (module 1 tags the panes, module 2 stops their previews) */
+  #stage .pubpane.hidemine { display:none !important; }
+  #hideMineNote { position:absolute; z-index:8; left:8px; bottom:8px; display:flex; align-items:center; gap:6px; max-width:calc(100% - 16px);
+    font-size:11px; color:#cfd8e3; background:rgba(10,14,18,.72); border:1px solid var(--line); border-radius:999px; padding:3px 4px 3px 10px; }
+  #hideMineNote[hidden] { display:none; }
+  #hideMineNote span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #hideMineNote button { font-size:11px; padding:2px 9px; border-radius:999px; background:transparent; color:#fff; border:1px solid rgba(255,255,255,.28); cursor:pointer; }
+  #hideMineNote button:hover { border-color:var(--asi-blue); }
+  #hideMineShNote { margin:0 0 10px; font-size:12px; color:var(--text-dim); }
   /* grid cell zoom (0.8.8) -> view engine (0.8.12): zoom/pan state on any stage canvas */
   #stage .pane moq-watch { overflow:hidden; display:block; }
   #stage .pane.zoomed canvas, #stage .pubpane.zoomed canvas, #stage .pubpane.zoomed video { transform-origin:0 0; }
@@ -2521,6 +2531,7 @@
     </section>
   </div>
   <div id="stage-empty">Not connected yet.</div>
+  <div id="hideMineNote" hidden title="View &#9656; Hide my shares is on: your shares stop drawing on this screen to spare CPU. Everyone else still sees them live."><span>Your shares are hidden on this screen &middot; still live for everyone</span><button type="button" id="hideMineShow">Show</button></div>   <!-- 0.21.91 -->
   <button id="libEmptyCta" type="button" hidden title="The Streams panel: cameras from any site on the fleet"><span class="t">Add streams from the library</span><span class="d">Cameras from any site on the fleet</span></button>   <!-- 0.21.84: an empty room -->
 </div>
 <aside id="kDock" hidden aria-label="Pinned panels"><div id="kDockGrip" role="separator" aria-orientation="vertical" aria-label="Resize the pinned panels" tabindex="0" title="Drag to resize the pinned panels (arrow keys too)"></div></aside>
@@ -2612,6 +2623,7 @@
     <!-- 0.21.73: "Share something else" -- the next screen / window / tab picked replaces the share in place -->
     <p id="shSwapNote" hidden><span>Pick what to share instead of <b id="shSwapName"></b> &mdash; it takes its place, nothing stops.</span>
       <button type="button" class="ghost" id="shSwapCancel">Cancel</button></p>
+    <p class="hint" id="hideMineShNote" hidden>Your shares are hidden on this screen (View &#9656; Hide my shares) &mdash; they are still live for everyone else.</p>   <!-- 0.21.91 -->
     <p class="hint" id="viewOnlyNote" hidden style="margin:0 0 10px;color:var(--asi-amber)">View-only access code:
       this relay lets you watch, not publish. Ask the relay's owner for the publisher code to share.</p>
     <!-- Ported panels; every id is unchanged from the legacy page so the
@@ -3078,7 +3090,10 @@
     <div class="sep"></div>
     <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
-    <button class="opt" id="viewRtspOff" type="button" hidden title="Stop publishing this box's own RTSP cameras and their grids to spare CPU/GPU. Nothing is forgotten: rows, grids and settings stay; the same item turns them back on."><span class="oi">&#128247;</span>Cameras off (spare CPU)<span class="chk">&#10003;</span></button>
+    <!-- 0.21.91 (Kenton: "I want this to turn off my own shares from me seeing them, not turn off for everyone"): two items -- Hide my
+         shares (this screen only) and the 0.21.16 switch, renamed so nobody mistakes it for a local one -->
+    <button class="opt" id="viewHideMine" type="button" title="Your own shares (cameras, grids, screen, window and media shares, your webcam) leave THIS screen and stop drawing here to spare CPU. Everyone else still sees them live. Remembered on this device."><span class="oi">&#128065;</span>Hide my shares<span class="chk">&#10003;</span></button>
+    <button class="opt" id="viewRtspOff" type="button" hidden title="Stop publishing this box's own RTSP cameras and their grids to spare CPU/GPU -- NOBODY sees them while this is on. Nothing is forgotten: rows, grids and settings stay; the same item turns them back on."><span class="oi">&#128247;</span>Stop my cameras for everyone (spare CPU)<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFull" type="button"><span class="oi">&#9974;</span>Full screen</button>
     <div class="sep"></div>
     <button class="opt" id="viewVerbose" type="button" title="Also show the quiet confirmations (setting echoes, saved notes); off = events and problems only"><span class="oi">&#128276;</span>Verbose alerts<span class="chk">&#10003;</span></button>
@@ -9062,6 +9077,9 @@
   // 0.8.8: view state -- focus on content (main only, nothing else downloads)
   // and hide-me (own camera pane out of my own view).
   let focusMode = false, hideMe = false;
+  // 0.21.91: View > Hide my shares (kastr.view.hideMine) -- see tagHideMine
+  let hideMine = false, mineShowEl = null;
+  try { hideMine = localStorage.getItem("kastr.view.hideMine") === "1"; } catch {}
   let fillWin = false;   // 0.21.19: one stream fills the app window (not the screen); Esc / W / its icon leaves
   try { if (window.parent !== window) window.parent.postMessage({ kastrFillWin: false }, location.origin); } catch {}   // 0.21.20: a reload never leaves the shell's tab bar hidden
   window.addEventListener("message", (e) => { if (e.origin === location.origin && e.data?.kastrFillWinExit && fillWin) toggleFillWindow(); });   // 0.21.20: Esc pressed in the shell
@@ -9119,7 +9137,7 @@
     document.body.classList.toggle("mode-viewer", isViewerMode());
     document.body.classList.toggle("mode-publisher", isPublisherMode());
     if (isViewerMode()) {
-      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "joinPreview"]) {
+      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "viewHideMine", "joinPreview"]) {
         const el = document.getElementById(id); if (el) el.hidden = true;
       }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
@@ -12292,6 +12310,7 @@
   window.__selfSpotDbg = () => ({ el: selfSpotEl?.dataset?.sid ?? null, connected: !!selfSpotEl?.isConnected, gridMode, selectedName, manualPick });   // rig (0.16.0)
   window.__selfSpot = (pane) => {
     manualPick = true;   // 0.13.3
+    if (hideMine && pane?.classList?.contains("hidemine")) mineShowEl = pane;   // 0.21.91: my own pick -- shown while it holds my stage
     // Clicking my own tile: spotlight it for me; clicking it again in
     // the spotlight returns to the grid (same semantics as remote tiles).
     if (!gridMode && selfSpotEl === pane) { selfSpotEl = null; gridMode = true; }
@@ -12612,6 +12631,7 @@
     stageEl.style.gridTemplateRows = "";   // spot's explicit rows (0.8.2)
   }
   function applyState() {
+    try { tagHideMine(); } catch {}   // 0.21.91: before the cells are counted
     stageWrap.classList.toggle("fsfill", stageFullscreen());   // 0.21.18: the full-screen look (CSS #stagewrap.fsfill) follows the same test as the layout
     try { WEB_RELAY_PAGE = isWebRelay(urlInput.value); } catch { WEB_RELAY_PAGE = false; }   // 0.21.7: budgets by transport
     // Visual order first: grid cells and list rows follow style.order; the
@@ -12665,7 +12685,7 @@
         : [...document.getElementById("pubPanes").children]
             .filter((el) => !el.classList.contains("screenkind")
                          && !(el.classList.contains("ingrid") && !el.classList.contains("gridfeed"))   // 0.9.5: an opened member counts
-                         && !el.classList.contains("hideme")).length;
+                         && !el.classList.contains("hideme") && !el.classList.contains("hidemine")).length;   // 0.21.91
       collageSize(Math.max(1, shownNames.length + ownCells + viewerEls.length));   // 0.21.36: re-run below with the cells actually shown
     } else {
       stageEl.style.gridTemplateColumns = "";
@@ -12676,7 +12696,7 @@
     // and resizable up to two columns (the drag grip; width persisted).
     // Hidden screen panes are not cells (the 0.8.1 railRows overcount).
     const pubEls = mineEl.hidden ? [] : [...document.getElementById("pubPanes").children]
-      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme"));   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
+      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme") && !pe.classList.contains("hidemine"));   // 0.21.91: + Hide my shares   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
     // 0.16.0: a self-heal / republish REPLACES the pane element (stopSlot + startSlot) -- the
     // spotlight used to point at the detached node and fall back to the gallery a second later
     // (Kenton: "I can't spotlight my own camera"). Re-find it by its slot id first.
@@ -16613,6 +16633,7 @@
     { const b = document.getElementById("viewSpot"); if (b) { b.hidden = !spotSetNow().length; b.classList.toggle("on", roomSpotOnStage()); } }   // 0.21.54
     on("viewFocus", focusMode && !gridMode);
     on("viewHideMe", hideMe);
+    on("viewHideMine", hideMine);   // 0.21.91
     on("viewPublishOnly", publishOnly);   // 0.9.10
     { const b = document.getElementById("viewRtspOff"); if (b) { const sus = !!window.__rtspSuspend?.get?.(); b.hidden = IS_WEB || (!(window.__gridFeeds?.count?.() > 0) && !sus); b.classList.toggle("on", sus); } }   // 0.21.16: the box's RTSP switch (module 2 owns it; a web client has no bridge cameras)
     on("viewVerbose", toastPolicy().verbose());   // 0.15.0 (D2)
@@ -16675,6 +16696,53 @@
     paintViewPop();
     window.__toast?.(on ? "Verbose alerts on" : "Verbose alerts off", 3000, { level: "event" });
   });
+  // ---- 0.21.91 (Kenton: "I want this to turn off my own shares from me seeing them, not turn off for everyone. It's still using a
+  // bit of CPU to just show them"): View > Hide my shares. Per device, remembered (kastr.view.hideMine). MY OWN panes -- RTSP
+  // cameras, grids, screen / window / media shares, my webcam -- leave MY stage, gallery and rail (.hidemine), and module 2 stops
+  // their LOCAL previews (__pubPreviewSync: an element share's preview renderer, an RTSP camera's monitor player). Nothing that
+  // publishes stops: a grid's members keep their monitors and the grid keeps drawing (its mosaic is composed on this page from
+  // them), and everyone else sees my shares as before. Overrides: a pane I deliberately put on my stage (__selfSpot -- my own
+  // tile's "Pin for me", a grid cell) shows while it holds my stage and hides again when it leaves; the ROOM's spotlight on one
+  // of my shares does not unhide it (my stage keeps what else it shows). A stream of mine I add as a tile from another room or
+  // the Streams panel is a tile like anyone's, never touched here. Shown: the View item's tick, a small note on the stage and
+  // a line in the Share panel.
+  function tagHideMine() {
+    const pp = document.getElementById("pubPanes");
+    if (!pp) return;
+    if (mineShowEl && (!hideMine || !mineShowEl.isConnected || selfSpotEl !== mineShowEl || gridMode)) mineShowEl = null;
+    let changed = false;
+    for (const pe of pp.children) {
+      const want = hideMine && pe !== mineShowEl;
+      if (pe.classList.contains("hidemine") !== want) { pe.classList.toggle("hidemine", want); changed = true; }
+    }
+    paintHideMineNote();
+    if (changed) { try { window.__pubPreviewSync?.(); } catch {} }
+  }
+  function paintHideMineNote() {
+    const pp = document.getElementById("pubPanes");
+    const hidden = !!pp && [...pp.children].some((pe) => pe.classList.contains("hidemine"));
+    const n = document.getElementById("hideMineNote");
+    if (n && n.hidden === hidden) n.hidden = !hidden;
+    const s = document.getElementById("hideMineShNote");
+    if (s && s.hidden === hideMine) s.hidden = !hideMine;
+  }
+  function setHideMine(on) {
+    hideMine = !!on;
+    try { localStorage.setItem("kastr.view.hideMine", hideMine ? "1" : "0"); } catch {}
+    if (!hideMine) mineShowEl = null;
+    tagHideMine();
+    applyState();
+    paintViewPop();
+  }
+  window.__hideMine = { get: () => hideMine, set: setHideMine, shown: () => mineShowEl?.dataset?.sid ?? (mineShowEl ? "grid" : null) };   // module 2 + rig
+  document.getElementById("viewHideMine")?.addEventListener("click", () => {
+    setHideMine(!hideMine);
+    window.__toast?.(hideMine ? "Your shares are hidden on this screen \u2014 everyone else still sees them. View \u25b8 Hide my shares brings them back."
+      : "Your shares are shown on this screen again.", 4500, { level: "event" });
+  });
+  document.getElementById("hideMineShow")?.addEventListener("click", (e) => { e.stopPropagation(); setHideMine(false); window.__toast?.("Your shares are shown on this screen again.", 3000, { level: "event" }); });
+  new MutationObserver(() => { tagHideMine(); }).observe(document.getElementById("pubPanes"), { childList: true });
+  tagHideMine();
   document.getElementById("viewHideMe").addEventListener("click", () => {
     hideMe = !hideMe;
     for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.toggle("hideme", hideMe);
@@ -25089,7 +25157,7 @@
     }
     // the monitor comes back (a not-yet-native slot turns native on its first frame, begin) -- after the bridge has resumed:
     // a monitor requested before the resume POST lands would only meet the 503 and start the ladder
-    const reattach = () => { for (const s of back) if (!rtspSuspended && slots.get(s.entry.id) === s) restartMonitor(s); };
+    const reattach = () => { for (const s of back) if (!rtspSuspended && slots.get(s.entry.id) === s && !s.monHidden) restartMonitor(s); };   // 0.21.91: not a monitor Hide my shares detached
     if (on) updateRtspGrid();   // seats for members marked native above (drawRtspGrid stays idle)
     for (const g of rtspGrids.values()) {
       try { g.moq?.broadcast?.in?.enabled?.set?.(!on && live); } catch {}
@@ -25106,8 +25174,8 @@
     else reattach();   // the server has resumed already (Relay page, hub)
     announce(); renderSources(); refreshUi(); paintRtspSwitch();
     if (window.__sinceAnnounce?.joinedAt?.()) { try { window.__sinceAnnounce.set(); } catch {} }   // presence + state.json carry rtsp "off" NOW (not at the next heartbeat); only while joined
-    window.__toast?.(seed && on ? "Cameras are off on this box \u2014 none of its RTSP feeds or grids is published. Share content \u25b8 Cameras (or View \u25b8 Cameras off) turns them back on."
-      : (on ? "Cameras off \u2014 this box publishes none of its RTSP feeds or grids until the switch is turned on. Nothing is forgotten."
+    window.__toast?.(seed && on ? "Cameras are off on this box \u2014 none of its RTSP feeds or grids is published. Share content \u25b8 Cameras (or View \u25b8 Stop my cameras for everyone) turns them back on."
+      : (on ? "Cameras stopped for everyone \u2014 this box publishes none of its RTSP feeds or grids until the switch is turned on. Nothing is forgotten. (To stop only drawing them here: View \u25b8 Hide my shares.)"
             : "Cameras on \u2014 publishing this box's RTSP feeds and grids again.") + (fromServer ? " (switched from the Relay page or the hub)" : ""), 6000, { level: "event" });
   }
   function paintRtspSwitch() {
@@ -26297,6 +26365,7 @@
     if (!slots.has(entry.id)) return;          // removed meanwhile
     if (entry.retryTimer) return;              // already queued
     if (rtspSuspended) return;                 // 0.21.16: monitors stay detached while the box's cameras are off (no ladder, no attempt counters, no eviction)
+    if (slots.get(entry.id)?.monHidden) return;   // 0.21.91: Hide my shares detached this monitor on purpose
     if (nativeRtsp) pollFeeds();               // 0.21.16: a monitor that ended may mean the switch was turned off elsewhere (Relay page, hub) -- the list says so at once, even on a page that is not live
 
     const n = entry.retries || 0;
@@ -26310,6 +26379,7 @@
       entry.retryTimer = null;
       const slot = slots.get(entry.id);
       if (!slot) return;
+      if (slot.monHidden) return;   // 0.21.91: hidden on this screen meanwhile
       if (slot.rtsp && slot.native) {
         // 0.9.4: a monitor is not a publisher -- reload only the local <video>.
         // The slot, its pane, its grid seat and its publish state all persist.
@@ -29921,6 +29991,7 @@
         s.pane.classList.remove("ingrid", "ghost", "gridfeed");   // 0.9.5: leaving the grid closes an opened member too
       }
     }
+    try { pubPreviewSync(); } catch {}   // 0.21.91: a camera that joined a grid needs its monitor again (the mosaic); one that left may lose it
     if (anyGrid) {
       announceGrid(true);   // 0.8.8: viewers learn the cell geometry -- 0.9.4: before the members publish
       syncNative();   // 0.9.1
@@ -29939,6 +30010,40 @@
       }
     }
   }
+
+  // 0.21.91: View > Hide my shares (module 1 tags my panes .hidemine and calls this) -- a hidden pane's LOCAL preview stops, and
+  // nothing that publishes does: an element share (camera, screen, media file) draws no preview (preview="none" -- the encoder
+  // reads the capture itself), an RTSP camera / native share outside a grid detaches its monitor player (the bridge's monitor
+  // ffmpeg ends with it; the server's pair keeps publishing and its badge reads the server's state). A GRID MEMBER keeps its
+  // monitor (the mosaic is drawn from it on this page) and a grid keeps drawing its canvas (the encoder reads it). While a
+  // share's mini window (Document PiP) is open it keeps its preview, and the webcam's (that window shows both).
+  function pubPreviewSync() {
+    const pip = [...slots.values()].some((s) => s.pip);
+    for (const slot of slots.values()) {
+      const hid = !!slot.pane?.classList?.contains("hidemine") && !slot.pip && !(pip && slot.entry.kind === "camera");
+      if (slot.rtsp) {
+        const off = hid && !!slot.native && !slot.inGrid && slot.entry.feedId != null;
+        if (off && !slot.monHidden) {
+          slot.monHidden = true;
+          if (slot.entry.retryTimer) { clearTimeout(slot.entry.retryTimer); slot.entry.retryTimer = null; }
+          detachMonitor(slot);
+          try { slot.video.pause(); } catch {}
+          try { slot.video.removeAttribute("src"); slot.video.load(); } catch {}
+          slot.monitorDown = false;
+        } else if (!off && slot.monHidden) {
+          slot.monHidden = false;
+          if (!rtspSuspended && slots.get(slot.entry.id) === slot) restartMonitor(slot);
+        }
+        continue;
+      }
+      if (!slot.publish) continue;
+      const want = previewOff.checked || hid ? "none" : "source";
+      if (slot.publish.getAttribute("preview") !== want) slot.publish.setAttribute("preview", want);
+    }
+  }
+  window.__pubPreviewSync = pubPreviewSync;
+  window.__previewState = () => [...slots.values()].map((s) => ({ id: s.entry.id, kind: s.entry.kind, rtsp: !!s.rtsp, inGrid: !!s.inGrid, hidden: !!s.pane?.classList?.contains("hidemine"),   // rig (0.21.91)
+    preview: s.publish ? s.publish.getAttribute("preview") : null, monitor: s.rtsp ? !!s.mon : null, monHidden: !!s.monHidden }));
 
   function stopSlot(id) {
     const slot = slots.get(id);

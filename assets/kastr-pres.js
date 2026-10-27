@@ -567,7 +567,8 @@
 
   // ---- the presenter (authority) ------------------------------------------------------------------------------------
   let mine = null;
-  async function startFromFile(file, opts) {   // 0.21.92: opts -- a meeting template's start (tplPreset)
+  async function startFromFile(file) {
+    const opts = arguments[1];   // 0.21.92: a meeting template's start (tplPreset) -- startFromFile(file, opts)
     if (!subtle) { toast("Presentations need a secure page (https or this computer's KASTR).", 6000, "warn"); return; }
     if (mine) { toast("You are already presenting " + mine.name + " — end it first.", 5000, "warn"); return; }
     const c = ctx();

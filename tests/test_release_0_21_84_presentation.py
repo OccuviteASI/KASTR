@@ -560,7 +560,7 @@ class PageSeams(unittest.TestCase):
         self.has('"AES-GCM"', j)
         self.has("const b = await bitmapFromCipher(baseFor(rec), rec.id, rec.idx, unb64(rec.k));", j)   # a viewer opens only the live slide, without the read token
         self.has("if (ctl.bv !== mine.ver && mine.by !== who)", j)   # the collision rule
-        self.has("if (!b) return;   // only the backstage people the presenter picked", j)
+        self.has("if (!isB && !isP) return;   // only the backstage people and the presenters", j)   # 0.21.91: + added presenters
         self.has('stateSet("presPk", k.pub)', j)
         # notes are fetched only by backstage (after unwrapping K), never by the viewer path
         self.assertEqual(j.count('"notes.bin"'), 2)   # fetchBlob's no-store rule + the backstage fetch (uploadNotes posts /notes.bin)

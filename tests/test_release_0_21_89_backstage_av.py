@@ -64,66 +64,84 @@ class ThePagesRealPath(unittest.TestCase):
 
 
 class ThePresentersPage(unittest.TestCase):
+    # 0.21.91 (Kenton: "Backstage can control my mic and camera should be an option per backstage person"): the request is
+    # answered on the TARGET presenter's own page (avApply) -- the owner's or an added presenter's -- and the one switch became
+    # each presenter's own per-person allow list (self.al)
     def setUp(self):
-        self.ap = block(JS, "  function applyModeAv(ctl, who) {", "  // backstage: the requests")
+        self.ap = block(JS, "  function avApply(who, op, seq) {", "  // 0.21.91: requests that reach a presenter who is not the owner")
 
     def test_checked_on_the_presenter(self):
         ai = block(JS, "  function applyIntent(path, ctl) {", "  let rewrapT = null;")
-        self.assertLess(ai.index("if (!b) return;"), ai.index("applyModeAv(ctl, who)"))   # backstage only
+        self.assertLess(ai.index("if (!isB && !isP) return;"), ai.index("avApply(who, ctl.av.op, ctl.seq)"))   # backstage (or presenters) only
+        self.assertIn("if (!ctl.av.to || ctl.av.to === myPerson()) avApply(", ai)   # a request for another presenter is theirs
         self.assertIn('if (!["mute", "unmute", "pause", "resume"].includes(op))', self.ap)
-        self.assertIn("if (!m.avOk) return answer(false,", self.ap)
-        self.assertIn("turned off backstage control of their mic and camera", self.ap)
+        self.assertIn("if (!deckBs(pd).includes(who)) return answer(false,", self.ap)   # backstage in this deck
+        self.assertIn("if (!self.al.has(who)) return answer(false, me + \" hasn't allowed you to control their mic and camera\");", self.ap)
+        self.assertIn('if (!pd) return answer(false, "the presentation is over");', self.ap)   # a live presentation only
         mem = block(JS, "  window.__presMember = (path, v) => {", "  async function ensurePk()")
-        self.assertIn("if (mine && next.ctl && next.ctl.id === mine.id) applyIntent(path, next.ctl);", mem)   # a live presentation only
+        self.assertIn("if (next.ctl) ctlArrived(path, next.ctl);", mem)
+        ca = block(JS, "  function ctlArrived(path, ctl) {", "  // backstage / co-presenters: the requests")
+        self.assertIn("if (mine && ctl.id === mine.id) { applyIntent(path, ctl); return; }", ca)
+        self.assertIn("o.av.to === me) avApply(who, o.av.op, o.seq);", ca)   # an added presenter answers what is addressed to them
 
     def test_notices_name_who(self):
         for t in ('"Muted by "', '"Unmuted by "', '"Video paused by " + name', '"Video resumed by " + name'):
             self.assertIn(t, self.ap)
-        nt = block(JS, "  function avNotice(m, text, by) {", "  function applyModeAv(")
+        nt = block(JS, "  function avNotice(text, by) {", "  function avApply(")
         self.assertIn('presNote(text, 6000, "event");', nt)   # the presenter view's notice line, or a toast on the main page
         self.assertIn("if (!r.noop) avNotice(", self.ap)    # a no-op says nothing
 
     def test_backstage_cannot_start_a_camera_that_is_off(self):
-        self.assertIn("if (!m.avBp) return answer(false, me + \"'s camera is off\");", self.ap)
-        self.assertIn("m.avBp = true; m.avBpAt = Date.now();", self.ap)
+        self.assertIn("if (!self.bp) return answer(false, me + \"'s camera is off\");", self.ap)
+        self.assertIn("self.bp = true; self.bpAt = Date.now();", self.ap)
 
-    def test_switch_on_by_default_for_this_presentation(self):
-        mi = block(JS, "  function modeInit(m) {", "  function modeFields() {")
-        self.assertIn("m.avOk = true; m.avBp = false;", mi)
-        self.assertIn("Backstage can control my mic and camera", JS)
-        self.assertIn("avSwitch: (on) =>", JS)
+    def test_allowed_by_default_for_each_newly_added_backstage_person(self):
+        st = block(JS, "  function selfTick() {", "  function modeInit(m) {")
+        self.assertIn("for (const p of bs) if (!self.alSeen.has(p)) { self.alSeen.add(p); self.al.add(p); }", st)
+        self.assertIn("for (const p of [...self.alSeen]) if (!bs.includes(p)) { self.alSeen.delete(p); self.al.delete(p); }", st)
+        self.assertNotIn('createTextNode("Backstage can control my mic and camera")', JS)   # the one global switch is gone
+        self.assertNotIn("avSwitch:", JS)
+        self.assertIn('lab.append(cb, document.createTextNode("Can control my mic and camera"));', JS)   # on each backstage row
 
     def test_state_published_for_backstage(self):
         mf = block(JS, "  function modeFields() {", "  function modeTick() {")
-        self.assertIn("av: { m: s.mic, c: s.camSt, bp: !!m.avBp, ok: !!m.avOk,", mf)
-        self.assertIn("ack: m.ack || null", mf)
-        mt = block(JS, "  function modeTick() {", "  function modeEnd(m) {")
-        self.assertIn("s.mic = av ? av.mic : \"none\";", mt)
+        self.assertIn("av: { m: o.mic, c: o.camSt, bp: !!self.bp, ok: self.al.size > 0,", mf)   # what an older backstage page reads
+        self.assertIn("ack: self.ack || null", mf)
+        cp = block(JS, "  function coPublish() {", "  let coExtra = ")
+        self.assertIn("o.al = [...self.al];", cp)   # each presenter's own allow list, in its own presCo
+        self.assertIn("o.av = { m: s.mic, c: s.camSt,", cp)
+        self.assertIn("if (self.ack) o.ack = self.ack;", cp)
+        st = block(JS, "  function selfTick() {", "  function modeInit(m) {")
+        self.assertIn("s.mic = av ? av.mic : \"none\";", st)
         self.assertIn("setInterval(() => { try { modeTick(); }", JS)   # the presenter's own changes reach backstage within ~1 s
 
     def test_paused_camera_falls_back_to_content(self):
-        mt = block(JS, "  function modeTick() {", "  function modeEnd(m) {")
-        self.assertIn('const eff = live ? m.cm : "content";', mt)
+        mt = block(JS, "  function modeTick() {", "  let modeSigExtra = ")
+        self.assertIn('s.eff = live ? m.cm : "content";', mt)
         ui = block(JS, "  function modeUiPaint() {", "  const ago = ")
         self.assertIn('"Video paused by "', ui)
 
 
 class BackstagesButtons(unittest.TestCase):
     def test_requests_through_presctl_only_to_a_presenter_that_has_them(self):
-        sa = block(JS, "  function sendAvIntent(deckId, op) {", "  // ---- the presenter view: the mode picker")
-        self.assertIn("if (!bk || !bk.rec.av ||", sa)
-        self.assertIn('stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), av: { op } });', sa)
-        api = block(JS, "    av: (op) =>", "    avSwitch:")
-        self.assertIn("if (mine) return false;", api)
+        sa = block(JS, "  function sendAvIntent(deckId, op, to) {", "  // ---- the presenter view: the mode picker")
+        self.assertIn('if (!bk || !["mute", "unmute", "pause", "resume"].includes(op)) return false;', sa)
+        self.assertIn("if (!co && !rec.av) return false;", sa)   # an older presenter without mic / camera control
+        self.assertIn("if (co) av.to = tgt;", sa)   # 0.21.91: the target presenter (an older owner reads {op} as its own)
+        self.assertIn("const ctl = ctlSend({ id: deckId, bv: rec.ver, to: rec.idx, av });", sa)
+        self.assertIn("const tgt = to || rec.cur || rec.own", sa)   # default: the presenter presenting now
+        api = block(JS, "    av: (op, to) =>", "    allow: (who, on) =>")
+        self.assertIn("b.keys && !b.pr", api)   # backstage only
 
     def test_buttons_show_the_presenters_state_and_grey_out(self):
-        pr = block(JS, "  function paintAvRow(mv, who) {", "  // the preview: the same composition")
+        pr = block(JS, "  function paintAvRow(mv) {", "  // the preview: the same composition")
         self.assertIn('mic.className = "avmic"', pr)
         self.assertIn('cam.className = "avcam"', pr)
-        self.assertIn('mic.disabled = off || av.m === "none"', pr)
-        self.assertIn('cam.disabled = off || av.c === "off"', pr)
+        self.assertIn('mic.disabled = off || !t.av || av.m === "none"', pr)
+        self.assertIn('cam.disabled = off || !t.av || av.c === "off"', pr)
         self.assertIn("\"'s camera is off\"", pr)
         self.assertIn('"Not done: " + lastAck.why', pr)
+        self.assertIn("offWhy = who + \" hasn't allowed you to control their mic and camera\"", pr)
 
 
 if __name__ == "__main__":

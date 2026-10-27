@@ -18496,6 +18496,9 @@
         case "pres": if (value && typeof value === "object" && value.id) roomModel.pres = value; else delete roomModel.pres; break;
         case "presCtl": if (value && typeof value === "object" && value.id) roomModel.presCtl = value; else delete roomModel.presCtl; break;
         case "presPk": if (typeof value === "string" && value.length < 200) roomModel.presPk = value; else delete roomModel.presPk; break;
+        // 0.21.91 (co-presenters): `presCo` = this page can co-present (cap) + my own presenter state in a deck: my camera / cut-out
+        // (the owner copies the one presenting now into its `pres`), my mic / camera, which backstage people may control them (al)
+        case "presCo": if (value && typeof value === "object" && JSON.stringify(value).length < 8000) roomModel.presCo = value; else delete roomModel.presCo; break;
         default: return;
       }
       stateCommit();

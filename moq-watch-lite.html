@@ -2961,6 +2961,8 @@
     <button class="opt" id="optGrid" type="button" title="A grid of cameras from any room you can see -- for you, or shared with this room"><span class="oi">&#9638;</span>Build a grid&hellip;</button>
     <!-- 0.21.75 (Kenton: "everyone can have a personal room that no other user sees") -->
     <button class="opt" id="optMyRoom" type="button" title="Your own room: your views of feeds from any room, only you see it, on any device"><span class="oi">&#9733;</span>My room&hellip;</button>
+    <!-- 0.21.92 (Kenton: meeting templates): saved room set-ups -- this room's and my own (assets/kastr-templates.js shows it on a relay with access codes) -->
+    <button class="opt" id="optTpl" type="button" hidden title="Saved set-ups of a room -- pins, spotlights, grids, settings, invites -- to put back or reuse"><span class="oi">&#9636;</span>Templates&hellip;</button>
     <!-- 0.21.83 (D) (Kenton: "how would I access this from my own KASTR?"): fleet admins only -->
     <button class="opt" id="optMachines" type="button" hidden title="Relays, hubs and camera boxes that let fleet admins control them without asking"><span class="oi">&#128421;</span>Machines&hellip;</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
@@ -5011,6 +5013,7 @@
       + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
       + '<p class="rshint">Pick a passcode only you know (8 characters or more). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
+      + '<div class="rsrow pmtpl" hidden><span class="lbl">My templates</span><div class="pmtplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmshare" hidden>Share My room\u2026</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
     document.body.appendChild(el);
@@ -5073,6 +5076,7 @@
     q(".pmok").hidden = inMine;
     q(".pmok").textContent = mode === "have" ? "Go to My room" : mode === "make" ? "Make my room" : "Open my room";
     if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". It is the first card in your rooms list; nobody else sees it there unless you share it.";
+    try { window.__tplUI?.myRoom?.(q(".pmtpl"), mode === "have" && !!p); } catch {}   // 0.21.92: my templates
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
     if (note) pmEl.__say(note, true);
   }
@@ -8608,6 +8612,7 @@
     else if (v === "sound") wrSetSound(rec.slug, !watchRooms.get(rec.slug)?.sound);
     else if (v === "join") sbCardClick(card, rec);
     else if (v === "rsettings") openRoomSettings(rec);   // 0.21.65
+    else if (v === "tplApply") window.__tplUI?.applyTo?.(rec.slug);   // 0.21.92: meeting templates
   }
   setInterval(() => {   // fresh tokens 10 min before expiry (live sessions ride out the old one; re-armed tiles take the new)
     if (!authSecured || joinState !== "joined") return;
@@ -19551,6 +19556,7 @@
       const r = card.__rec || rec;
       const items = wrCardItems(r);
       if (roomSettingsRole(r)) items.push(...(items.length ? [{ sep: true }] : []), { value: "rsettings", icon: "lock", label: "Room settings\u2026", tip: "Lock, keep open, rename, group, lock the view (the room\u2019s creator or an admin)" });   // 0.21.65
+      try { if (window.__tplUI?.canApplyTo?.(r.slug)) items.push(...(items.length ? [{ sep: true }] : []), { value: "tplApply", label: "Apply template\u2026", tip: "Put a saved set-up of a room into " + r.slug + " (pins, spotlights, grids; settings and invites for its admins)" }); } catch {}   // 0.21.92
       if (!items.length) return;
       e.preventDefault(); e.stopPropagation();
       openMineMenu(pointAnchor(e.clientX, e.clientY), items, "", (v) => wrCardPick(card, r, v));
@@ -19618,6 +19624,7 @@
       + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rsview"><i></i></span><span>Lock the view</span></label>'
       + '<p class="rshint">Only the room\u2019s creator or an admin can spotlight, pin or arrange things for everyone. Everyone can still pin, arrange, mute and zoom for themselves.</p></div>'
       + '<div class="rsrow"><span class="lbl">Group</span><div class="rsf"><select class="rsgroup" aria-label="Room group"></select></div></div>'
+      + '<div class="rsrow rstpl" hidden><span class="lbl">Templates</span><div class="rstplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<div class="rsrow rsinv" hidden><span class="lbl">Invite links</span><div class="rsinvlist"></div>'   // 0.21.75
       + '<div class="rsf"><button type="button" class="rsinvall" hidden>Revoke all</button></div>'
       + '<p class="rshint">Links people in this room made with Share invite. Revoking one stops it letting anyone else in; people already here stay.</p></div>'
@@ -19797,6 +19804,7 @@
     rsEl.__say("");
     rsPaint();
     rsInvLoad();   // 0.21.75
+    try { window.__tplUI?.roomSettings?.(rsEl.querySelector(".rstpl"), rsSlug); } catch {}   // 0.21.92: the room's templates
     rsEl.hidden = false;
     document.addEventListener("keydown", rsEl.__key, true);
     try { rsEl.querySelector(".rsname").focus(); } catch {}
@@ -23834,6 +23842,79 @@
     peek: (p) => { const e = libCat.get(String(p)); if (e) libPeekShow(e, null); return libPeekFor; }, peekFor: () => libPeekFor, demands: () => libDemands.slice(),
     paintMs: () => { const t0 = performance.now(); libPaint(true); libRender(); return performance.now() - t0; },
     rel: () => sbRelayHost(), here: libHere, me: libMeSet, pin: libBoardPin, cost: libCostHint, aka: (m) => libAkaRewrite(new Map(Object.entries(m || {}))), why: libAddWhy, gate: libGate, build: cgNewFrom,
+  };
+  // ---- 0.21.92 (Kenton: meeting templates, phase 1 "by hand"): the bridge assets/kastr-templates.js talks to the page through.
+  // Templates live on the hub (POST /api/templates at this page's minter, a spoke forwards); a relay WITHOUT access codes has no
+  // token service and no templates (Kenton: no). My view (a personal template's own section) is this device's arrangement:
+  // my grid layouts (kastr.vgrid.*), my pins, my own grids, the pinned panels and gallery / speaker.
+  function tplViewSnap() {
+    const grids = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(VG_KEY)) continue;
+        const v = JSON.parse(localStorage.getItem(k) || "null");
+        if (v && typeof v === "object") grids[k.slice(VG_KEY.length)] = v;
+      }
+    } catch {}
+    try { pinsLoad(); } catch {}
+    let cg = {}; try { cg = cgMine(); } catch {}
+    return { grids, pins: [...myPins], dock: [...(dockSt.pins || [])], cgrids: cg, mode: galleryChosen ? "gallery" : "speaker" };
+  }
+  function tplViewApply(v) {
+    if (!v || typeof v !== "object") return 0;
+    let n = 0;
+    try { for (const [k, g] of Object.entries(v.grids || {})) { if (g && typeof g === "object") { localStorage.setItem(VG_KEY + k, JSON.stringify(g)); n++; } } } catch {}
+    try { roomGridChanged(); } catch {}
+    if (Array.isArray(v.pins)) { try { pinsLoad(); myPins = v.pins.filter((x) => typeof x === "string").slice(0, PIN_MAX); pinsSave(); n += myPins.length; } catch {} }
+    if (v.cgrids && typeof v.cgrids === "object" && Object.keys(v.cgrids).length) { try { cgMineWrite({ ...cgMine(), ...v.cgrids }); cgSync(); n += Object.keys(v.cgrids).length; } catch {} }
+    if (Array.isArray(v.dock) && !isPhone()) { for (const k of v.dock) { if (DOCK_ORDER.includes(k) && !dockSt.pins.includes(k)) { try { dockPin(k, true); n++; } catch {} } } }
+    if (v.mode === "gallery") { try { goGallery(); } catch {} }
+    else if (v.mode === "speaker") { try { galleryChosen = false; manualPick = false; spotApplyWinner(); } catch {} }
+    try { applyState(); } catch {}
+    return n;
+  }
+  window.__ktpl = {
+    secured: () => !!authSecured,
+    joined: () => joinState === "joined" && CHANNEL !== LOBBY,
+    room: () => CHANNEL, lobby: () => LOBBY,
+    base: () => authBase(),
+    token: () => authTokens?.member || "",
+    role: () => authRole || "",
+    guest: () => !!authGuest || !!(inviteGet() && !authAccessCode),
+    tokenFor: async (slug) => {   // a member token for a room (mine for the room I am in; a side token for another -- never replacing mine)
+      if (slug === CHANNEL) return authTokens?.member || "";
+      const p = personalGet();
+      if (p && slug === p.slug) return personalToken(p);
+      const w = watchRooms.get(slug);
+      if (w?.token && w.exp * 1000 - Date.now() > 60000) return w.token;
+      return xsTokenFor(slug, w?.code || xsCodes[slug] || "");
+    },
+    roomKey: (slug) => myChannels().find((r) => r.slug === slug)?.roomKey || undefined,
+    isPersonal: (s) => isPersonalSlug(s), personal: () => personalGet(), title: (s) => roomTitle(s),
+    me: () => myOpName(), host: () => HOSTNAME1,
+    rooms: () => lastChannelList.filter((r) => r && r.slug && r.slug !== LOBBY && !isHomeRoom(r.slug)).map((r) => ({ slug: r.slug, title: roomTitle(r.slug) })),
+    roomRec: (slug) => {
+      const r = roomsMinter.get(slug) || lastChannelList.find((x) => x.slug === slug) || {};
+      const g = roomGroupOf(slug) || "";
+      return { locked: !!r.locked, keep: !!r.persistent, viewLock: !!r.viewLock, group: g, groupName: (g && roomsGroups?.[g]?.name) || "" };
+    },
+    settingsRole: (slug) => roomSettingsRole(roomsMinter.get(slug) || lastChannelList.find((r) => r.slug === slug) || { slug }),
+    board: () => (board.room === CHANNEL ? JSON.parse(JSON.stringify({ pins: board.pins, spots: board.spots, grids: board.grids, split: board.split, spotOrder: board.spotOrder, customGrids: board.customGrids })) : null),
+    live: () => [...tiles].filter(([n, t]) => String(n).endsWith(".hang") && !t.cg && (t.hasVideo === true || t.hasAudio === true)).map(([n]) => String(n)),   // a catalog was read: really live
+    lib: () => [...libCat.values()].map((e) => ({ path: e.path, label: e.label, site: e.site, live: libStateOf(e) === "live" })).slice(0, 400),
+    label: (p) => { try { return shortLabel(String(p)); } catch { return String(p).split("/").pop().replace(/\.hang$/, ""); } },
+    start: () => (galleryChosen ? "gallery" : "spotlight"),
+    peopleHere: () => { try { const out = []; for (const g of eoBuild()) for (const x of g.people || []) if (x.room === CHANNEL && !x.me && x.name) out.push({ name: x.name, host: x.host || "" }); return out; } catch { return []; } },
+    people: () => eoPeopleForMsg(),
+    inviteLink: (token, slug) => inviteJoinLink(token, slug),
+    refresh: () => { try { boardPoll(); } catch {} try { roomsMinterPoll(); } catch {} },
+    confirm: (o) => kastrConfirm(o), icon: (n) => icon(n),
+    menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
+    closePops: () => { try { closeAllPops(); } catch {} },
+    myRoomDialog: () => personalDialog(),
+    phone: () => { try { return isPhone(); } catch { return false; } },
+    view: { snap: tplViewSnap, apply: tplViewApply },
   };
 </script>
 
@@ -32730,6 +32811,7 @@
 </script>
 <!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
 <script type="module" src="/assets/kastr-msg.js"></script>
+<script type="module" src="/assets/kastr-templates.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>
 </body>
 </html>

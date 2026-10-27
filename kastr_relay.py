@@ -9364,7 +9364,7 @@ class AuthService:
             c, why, code = book.put(t, new=True)
             if c is None:
                 return {"ok": False, "error": why}, code
-            self.log("relay auth: template %s “%s” saved for %s by %s" % (c["id"], c["name"], room if scope == "room" else "a person",
+            self.log("relay auth: template %s '%s' saved for %s by %s" % (c["id"], c["name"], room if scope == "room" else "a person",
                                                                             v.get("by") or v.get("host")))
             return {"ok": True, "template": self._tpl_pub(c, True)}, 200
         if op == "undo":
@@ -9400,7 +9400,7 @@ class AuthService:
                     else "only its owner edits a personal template"}, 403
         if op == "delete":
             book.delete(tid)
-            self.log("relay auth: template %s “%s” deleted by %s" % (tid, t["name"], v.get("by") or v.get("host")))
+            self.log("relay auth: template %s '%s' deleted by %s" % (tid, t["name"], v.get("by") or v.get("host")))
             return {"ok": True, "deleted": tid}, 200
         if op == "update":
             nt = dict(t)
@@ -9778,7 +9778,7 @@ class AuthService:
                                             "links": links, "access": access, "tid": t["id"]})
         out["done"] = {"layout": done, "settings": len(st_undo), "invites": len(sent), "link": bool(out.get("link")),
                        "access": len(access)}
-        self.log("relay auth: template %s “%s” applied to %s (%s) by %s -- %d layout change(s), %d setting(s), %d invite(s), %d skipped"
+        self.log("relay auth: template %s '%s' applied to %s (%s) by %s -- %d layout change(s), %d setting(s), %d invite(s), %d skipped"
                  % (t["id"], t["name"], room, mode, by, done, len(st_undo), len(sent), len(notes)))
         return out, 200
 

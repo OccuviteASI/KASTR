@@ -773,7 +773,7 @@ def op_words(op, it, labels=None):
     if op == "unsplit":
         return "Put %s back in its grid" % L(p)
     if op == "cgrid":
-        return "Room grid “%s”" % ((it.get("grid") or {}).get("name") or it.get("id"))
+        return "Room grid \"%s\"" % ((it.get("grid") or {}).get("name") or it.get("id"))
     if op == "cgridDel":
         return "Remove room grid %s" % it.get("id")
     if op == "spotOrder":

@@ -196,6 +196,33 @@
   body.inlobby #peopleBtn, body.inlobby #chatBtn, body.inlobby #filesBtn, body.inlobby #gridBtn { opacity:.3; pointer-events:none; }
   body.inlobby #msgBtn { display:none !important; }   /* 0.21.88: no messages from the Lobby (no access code there) */
   body.inlobby #stage { visibility:hidden; }
+  /* 0.21.91 (Kenton: "Leave should not be available in the Lobby"): hidden there, and the toolbar reflows (no gap where it was) */
+  #topbar #leaveBtn[hidden] { display:none !important; }
+  #lobbyCard .lbguest { display:flex; flex-direction:column; align-items:flex-start; gap:10px; }
+  #lobbyCard .lbguest .lbinv { font-size:14px; color:var(--text); }
+  #lobbyCard .lbguest .lbinv b { font-weight:600; }
+  #lobbyCard .lbguest button { background:var(--asi-blue); color:var(--on-accent); border:0; border-radius:6px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }
+  #lobbyCard .lbguest button:disabled { opacity:.5; cursor:default; }
+  #lobbyCard .lbguest .lbnote { font-size:12px; color:var(--text-mute); min-height:1em; }
+  #lobbyCard .lbguest[hidden], #lobbyCard .lbrooms[hidden], #lobbyCard .lbjoin[hidden] { display:none; }
+  /* 0.21.91: the launch goes straight to the main room -- a quiet line while it opens (instead of the Join room page) */
+  #mainGo { position:fixed; left:50%; top:42%; transform:translate(-50%, -50%); z-index:60; padding:12px 20px; border-radius:10px;
+    background:var(--surface-2); border:1px solid var(--line); color:var(--text-dim); font-size:14px; box-shadow:0 8px 30px rgba(0,0,0,.25); pointer-events:none; }
+  #mainGo[hidden] { display:none; }
+  /* 0.21.91: "No relays are available right now -- KASTR keeps trying" (over the Join room page too) */
+  #relayNote { position:fixed; left:50%; top:64px; transform:translateX(-50%); z-index:72; max-width:calc(100vw - 32px); box-sizing:border-box;
+    padding:8px 16px; border-radius:8px; background:var(--asi-amber); color:#1a1200; font-size:13px; font-weight:600; text-align:center;
+    box-shadow:0 6px 20px rgba(0,0,0,.3); }
+  #relayNote[hidden] { display:none; }
+  #profilePop .mainrow { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
+  #profilePop .mainrow[hidden] { display:none; }
+  #profilePop .mainrow .hclbl { font-size:11px; color:var(--text-dim); }
+  #profilePop .mainseg { display:inline-flex; align-self:flex-start; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  #profilePop .mainseg label { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:13px; color:var(--text-dim); cursor:pointer; }
+  #profilePop .mainseg label + label { border-left:1px solid var(--line); }
+  #profilePop .mainseg input { position:absolute; opacity:0; pointer-events:none; }
+  #profilePop .mainseg label:has(input:checked) { background:var(--asi-blue); color:var(--on-accent); }
+  #profilePop .mainseg label:has(input:focus-visible) { outline:2px solid var(--asi-blue); outline-offset:-2px; }
   #lobbyCard { position:absolute; left:50%; top:max(24px, 12%); transform:translateX(-50%); width:min(520px, calc(100% - 32px)); z-index:5;
     padding:20px 22px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 18px 48px rgba(0,0,0,.45); }
   #lobbyCard[hidden] { display:none; }
@@ -2992,6 +3019,8 @@
     <button class="opt phoneonly" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
     <div class="sep"></div>
     <button class="opt" id="optProfile" type="button"><span class="oi">&#128100;</span>Profile&hellip;</button>
+    <!-- 0.21.91: Leave never logs out -- signing out (another access code, another fleet's relay) is here -->
+    <button class="opt" id="optSignOut" type="button" hidden title="Back to the Join room page; this computer forgets the access code it keeps for the next launch"><span class="oi">&#8617;</span>Sign out&hellip;</button>
     <!-- 0.21.61 (Kenton: "Let people choose light/dark mode or the system default") -->
     <!-- 0.21.72 (Kenton: "I would like more theme options other than light/dark/system"): named themes, High contrast, Custom -->
     <div class="opt themerow" role="radiogroup" aria-label="Theme"><span class="oi">&#9680;</span><span class="tl">Theme</span>
@@ -3270,6 +3299,12 @@
     <!-- 0.21.61 (Kenton): the colour OTHERS see around me -- separate from my own app's accent (More > Accent colour) -->
     <div class="hcrow"><span class="hclbl">Your colour</span><span class="hcsw" id="profHc" aria-label="Your colour"></span>
       <p class="hint">Everyone sees it on your rings &mdash; around your picture, around your name in the rooms list and around your tile while you talk.</p></div>
+    <!-- 0.21.91 (Kenton: "an option in the profile menu that lets them choose their preferred main room. Either Lobby or My room") -->
+    <div class="mainrow" id="profMainRow"><span class="hclbl">Main room</span>
+      <div class="mainseg" role="radiogroup" aria-label="Main room">
+        <label title="KASTR starts in My room, and Leave takes you there"><input type="radio" name="profMain" value="mine">My room</label>
+        <label title="KASTR starts in the Lobby, and Leave takes you there"><input type="radio" name="profMain" value="lobby">Lobby</label></div>
+      <p class="hint">Where KASTR starts and where <b>Leave</b> takes you. Leaving your main room takes you to the Lobby. Saved on this device.</p></div>
     <div class="btnrow"><button type="button" id="profSave" class="join">Save</button><span id="profMsg" class="hint"></span></div>
   </div>
 </div>
@@ -3379,6 +3414,11 @@
 </div>
 
 <div id="joinGate">
+<script>/* 0.21.91: a launch that knows the name and codes goes straight to the main room -- the Join room page is not even painted
+  (mainLaunch decides; every path that needs the page shows it again). A reload's silent rejoin keeps its "Rejoining..." page. */
+try { var g = document.currentScript.parentElement, l = localStorage, s = sessionStorage;
+  if (l.getItem("kastr.lastjoin") && (l.getItem("kastr.profile") || l.getItem("kastr.operator.name")) && !/[?&]room=/.test(location.search)
+      && !/invite=/.test(location.hash) && !s.getItem("kastr.invite") && !s.getItem("kastr.rejoin")) g.hidden = true; } catch (e) {}</script>
   <div class="card">
     <h2 id="joinGateH">Join room &mdash; <span id="joinChannelCur">&mdash;</span></h2>
     <!-- 0.21.75: an invite link -- only the name is asked -->
@@ -3650,6 +3690,25 @@
   }
   window.__homeRoom = { of: homeRoomOf, is: isHomeRoom };   // module 2 + rig
   const inLobby = () => { try { return joinState === "joined" && CHANNEL === LOBBY; } catch { return false; } };   // (joinState is declared further down: early callers get false)
+  // 0.21.91 (Kenton: "Regular people with the Publisher code should start in their 'My room' instead of the lobby ... There should be
+  // an option in the profile menu that lets them choose their preferred main room. Either Lobby or My room. When joining KASTR or
+  // leaving a room, it should go to that preferred room"): THE MAIN ROOM -- "mine" (the default) or "lobby", this device's choice
+  // (kastr.mainroom). Everyone who is not a guest: publisher, admin and viewer codes alike. Boxes, relay-only machines and viewer
+  // displays keep the Join room page (mainPerson).
+  const MAIN_ROOM_KEY = "kastr.mainroom";
+  const mainPref = () => { try { return localStorage.getItem(MAIN_ROOM_KEY) === "lobby" ? "lobby" : "mine"; } catch { return "mine"; } };
+  function mainPrefSet(v) { try { localStorage.setItem(MAIN_ROOM_KEY, v === "lobby" ? "lobby" : "mine"); } catch {} }
+  // 0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): a GUEST is someone who came by an
+  // invite link with no access code of their own -- in a room or the Lobby: a secured relay's token minted without one; before
+  // joining: an invite on this tab and no access code known here. They see the Lobby and the invited room, nothing else.
+  function inviteGuest() {
+    try {
+      if (isPublisherMode()) return false;
+      if (joinState === "joined") return authSecured && authCodes && !authAccessCode;
+      return !!inviteGet() && !authAccessCode && !lastJoin()?.access;
+    } catch { return false; }
+  }
+  window.__inviteGuest = () => inviteGuest();   // rig
   const watchRooms = new Map();   // 0.21.44: rooms I only WATCH (slug -> state), see "watch extra rooms"
   // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
   // player's target is jitter(delay) + buffer. Per tile class (applyState re-tunes): the
@@ -5127,6 +5186,7 @@
     if (!host) return;
     const p = personalGet();
     host.hidden = false;
+    if (inviteGuest()) { host.hidden = true; return; }   // 0.21.91: a guest has no My room (and sees nothing of the fleet)
     let card = host.querySelector(".sbcard.mine:not(.shared)");
     if (!card) {
       card = document.createElement("div"); card.className = "sbcard mine"; card.tabIndex = 0;
@@ -14619,7 +14679,7 @@
     clearTimeout(roomsChangedT);
     roomsChangedT = setTimeout(() => {
       roomsChangedT = null;
-      lastChannelList = deriveRooms();
+      lastChannelList = guestRooms(deriveRooms());   // 0.21.91: a guest sees the Lobby and the invited room only
       { const ds = [...deafOps()].sort().join(","); if (ds !== deafSeen) { deafSeen = ds; applyState(); try { paintParticipants?.(); } catch {} } }   // 0.21.40
       const slugs = lastChannelList.map((r) => r.slug).join(",");
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
@@ -14791,14 +14851,17 @@
     try {
       const hb = relayHostBase();
       if (hb) {
-        const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store" });
+        // 0.21.91: a guest's page shows its token -- the relay host then answers only the guest's room (nothing of the fleet)
+        const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;
+        const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store", headers: gh });
         if (r.ok) got = await r.json();
       }
     } catch {}
     if (!got && authSecured) {
       try {
         const base = authBase();
-        const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store" }) : null;
+        const gh = inviteGuest() && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;   // 0.21.91
+        const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store", headers: gh }) : null;
         if (r && r.ok) got = await r.json();
       } catch {}
     }
@@ -14954,6 +15017,12 @@
     }));
   }
   function lastJoin() { try { return JSON.parse(localStorage.getItem("kastr.lastjoin") || "null"); } catch { return null; } }
+  // 0.21.91: a guest's rooms -- the Lobby and the room the invite is for (whatever the anonymous room model lists)
+  function guestRooms(list) {
+    if (!inviteGuest()) return list;
+    const inv = inviteGet();
+    return list.filter((r) => r.slug === LOBBY || (!!inv && r.slug === inv.room));
+  }
   // Kept for the __switcher seam and old callers: the list is live now.
   async function listChannels() { return lastChannelList; }
 
@@ -16758,6 +16827,19 @@
   document.getElementById("optMyRoom").addEventListener("click", () => personalDialog());   // 0.21.75
   document.getElementById("optFiles").addEventListener("click", () => { closeAllPops(); filesPop.hidden = false; paintFilesPop(); placePop(filesPop, filesBtn); filesBtn.classList.add("grid-on"); });
   document.getElementById("optProfile").addEventListener("click", () => openProfile(false));
+  // 0.21.91: More > Sign out... (a person's KASTR, while in a room): the Join room page, the access code forgotten here
+  setInterval(() => { const b = document.getElementById("optSignOut"); if (b) { let on = false; try { on = joinState === "joined" && mainPerson(); } catch {} b.hidden = !on; } }, 1000);
+  document.getElementById("optSignOut").addEventListener("click", async () => {
+    closeAllPops();
+    const relay = relayNameOf(urlInput.value.trim()) || relayLabel(urlInput.value.trim());
+    if (!(await kastrConfirm({ title: "Sign out", message: "Sign out of " + relay + "?",
+      detail: "You leave the room and see the Join room page. This computer forgets the access code it keeps for the next launch \u2014 you type it again (or another one).", ok: "Sign out" }))) return;
+    try { leaveMeeting(); } catch {}
+    try { localStorage.removeItem("kastr.lastjoin"); } catch {}
+    authAccessCode = "";
+    try { joinEls.joinAccess.value = ""; joinEls.joinPwd.value = ""; } catch {}
+    log("Signed out of " + relay + " (the access code is forgotten on this computer)");
+  });
 
   function paintRoomInfo() {
     const body = document.getElementById("roomInfoBody");
@@ -17557,8 +17639,21 @@
     if (!modal) placePop(profilePop, optBtn);
     profLoad(profile?.avatar || "");
     profHc.set(profile?.color || "");   // 0.21.61
+    { // 0.21.91: the main room -- for people (never a camera box, relay-only machine, viewer display or an invite-link guest)
+      const row = document.getElementById("profMainRow");
+      let can = true;
+      try { can = !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay" && !inviteGuest(); } catch {}
+      row.hidden = !can;
+      for (const r of row.querySelectorAll('input[name="profMain"]')) r.checked = r.value === mainPref();
+    }
     setTimeout(() => document.getElementById("profFirst").focus(), 50);
   }
+  for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
+    if (!r.checked) return;
+    mainPrefSet(r.value);
+    window.__toast?.(r.value === "lobby" ? "Main room: the Lobby \u2014 KASTR starts there and Leave takes you there" : "Main room: My room \u2014 KASTR starts there and Leave takes you there", 4000, { level: "event" });
+    try { gateKey = ""; gatePaintChannels(); } catch {}
+  });
   const profHc = hcPicker(document.getElementById("profHc"), { value: profile?.color || "", none: "Automatic" });   // 0.21.61
   function closeProfile() {
     profilePop.hidden = true;
@@ -18050,7 +18145,8 @@
     const base = authBase();
     if (!base) throw new Error("no relay url");
     const inv = inviteGet();   // 0.21.75: an invite link for THIS room rides every mint (the join and the re-mints) until it ends
-    const invTok = inv && inv.room === room ? inv.token : undefined;
+    // 0.21.91: ... and a guest's Lobby (no access code of their own): the link lets them wait there for the room it is for
+    const invTok = inv && (inv.room === room || (room === LOBBY && !String(access ?? ""))) ? inv.token : undefined;
     const adm = invTok ? null : accGrantFor(room);   // 0.21.89: let in by someone in the room -- the grant rides this room's mints (this visit)
     const admTok = adm ? "ka-" + adm.id + "-" + adm.key : undefined;
     // 0.21.68 (Kenton: "Could not join aoz-6: Failed to fetch" -- it joined on a later try): a NETWORK failure (the relay host's KASTR
@@ -19477,6 +19573,7 @@
   // publish half through the shared field's change event (slots + registry
   // follow), then reconnects whichever connection this page is running.
   window.__kastrSetRelay = async (u) => {
+    try { if (!relayAutoSwitching && String(u || "").trim() && String(u || "").trim() !== urlInput.value.trim()) relayManualSet(String(u).trim()); } catch {}   // 0.21.91: a switch by hand
     urlInput.value = String(u || "").trim();
     // 0.8.3: remember every relay we've pointed at -- the masthead popover
     // offers the list back as a datalist (same-origin localStorage).
@@ -20376,13 +20473,32 @@
   function paintLobby() {
     const on = inLobby();
     document.body.classList.toggle("inlobby", on);
+    // 0.21.91 (Kenton: "Leave should not be available in the Lobby"): nothing to leave there (a camera box keeps it: its Leave is
+    // the Join room page, where it picks "No room")
+    try { joinEls.leaveBtn.hidden = joinState !== "joined" || (on && !isPublisherMode()); } catch {}
     if (!on) { if (lobbyEl) lobbyEl.hidden = true; return; }
     if (!lobbyEl) {
       lobbyEl = document.createElement("div"); lobbyEl.id = "lobbyCard";
-      lobbyEl.innerHTML = '<h2>Lobby</h2><p>Pick a room to join. Nothing is shared here, and nobody can see who else is waiting; cameras, microphones and chat start once you are in a room.</p><div class="lbrooms"></div>';
+      lobbyEl.innerHTML = '<h2>Lobby</h2><p class="lbtxt"></p><div class="lbrooms"></div><div class="lbguest" hidden><div class="lbinv"></div><button type="button" class="lbjoin">Join again</button><div class="lbnote" role="status"></div></div>';
       document.getElementById("stagewrap")?.appendChild(lobbyEl);
+      lobbyEl.querySelector(".lbjoin").addEventListener("click", () => lobbyGuestJoin());
     }
     lobbyEl.hidden = false;
+    // 0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): a guest's Lobby is that one room
+    const guest = inviteGuest();
+    lobbyEl.classList.toggle("guest", guest);
+    lobbyEl.querySelector(".lbtxt").textContent = guest
+      ? "Nothing is shared here, and nobody can see who else is waiting."
+      : "Pick a room to join. Nothing is shared here, and nobody can see who else is waiting; cameras, microphones and chat start once you are in a room.";
+    lobbyEl.querySelector(".lbguest").hidden = !guest;
+    lobbyEl.querySelector(".lbrooms").hidden = guest;
+    if (guest) {
+      const inv = inviteGet();
+      const t = lobbyEl.querySelector(".lbinv"), b = lobbyEl.querySelector(".lbjoin");
+      if (inv) { t.replaceChildren("You were invited to ", Object.assign(document.createElement("b"), { textContent: roomTitle(inv.room) }), ". Join it again while your invite link works."); b.hidden = false; }
+      else { t.textContent = "Your invite link has ended \u2014 ask the person who invited you for a new one."; b.hidden = true; }
+      return;
+    }
     const box = lobbyEl.querySelector(".lbrooms");
     const rooms = lastChannelList.filter((r) => r.slug !== LOBBY);
     const key = rooms.map((r) => r.slug + ":" + (r.count || 0) + ":" + (r.locked ? 1 : 0)).join(",");
@@ -20405,6 +20521,22 @@
     }
   }
   setInterval(() => { try { paintLobby(); } catch {} }, 1000);
+  // 0.21.91: a guest's "Join again" from the Lobby -- the invited room by the same link (the owner-away / expired refusals say so)
+  let lobbyGuestBusy = false;
+  async function lobbyGuestJoin() {
+    const inv = inviteGet();
+    if (!inv || lobbyGuestBusy || !inLobby()) return;
+    lobbyGuestBusy = true;
+    const b = lobbyEl?.querySelector(".lbjoin"), note = lobbyEl?.querySelector(".lbnote");
+    if (b) b.disabled = true;
+    if (note) note.textContent = "Joining " + roomTitle(inv.room) + "\u2026";
+    try {
+      const rec = lastChannelList.find((r) => r.slug === inv.room) || { slug: inv.room, personal: isPersonalSlug(inv.room) };
+      await switchRoom(rec, "");
+      if (note) note.textContent = CHANNEL === inv.room ? "" : "Could not join " + roomTitle(inv.room) + " \u2014 see the message above.";
+    } finally { lobbyGuestBusy = false; if (b) b.disabled = false; }
+  }
+  window.__lobbyGuestJoin = () => lobbyGuestJoin();   // rig
   function paintSidebar() {
     if (!sbRoomsEl) return;
     try { personalCardPaint(); } catch {}   // 0.21.75: My room, above the list
@@ -21832,6 +21964,7 @@
     if (wasLive) document.getElementById("liveBtn").click();
     switchMark("joined");   // 0.21.70
     paintChannelChip(); paintSidebar();   // 0.12.0: the banner names the new room, its card leaves the list
+    try { paintLobby(); } catch {}   // 0.21.91: no Leave in the Lobby -- at once, not on the next 1 s paint
     try { window.__chatRoomChanged?.(); } catch {}
     try {
       const saved = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null");
@@ -21871,6 +22004,17 @@
   }
   async function inviteArrive(inv) {
     const room = String(inv.room);
+    // 0.21.91: the link's relay is this one (or it names none) -- a person in a room goes straight there, never via the Join room page
+    let sameRelay = !inv.relay;
+    try { const k = (u) => { const x = new URL(relayAddr(u)); return x.protocol + "//" + x.host + x.pathname.replace(/[/]+$/, ""); }; sameRelay = sameRelay || k(inv.relay) === k(urlInput.value.trim()); } catch {}
+    const inviteSwitch = async () => {
+      let prev = null;
+      try { prev = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
+      await switchRoom(lastChannelList.find((r) => r.slug === room) || { slug: room, personal: isPersonalSlug(room) }, "");
+      if (joinState === "joined" && CHANNEL === room && !prev) {   // the silent branch dropped the session ticket: a reload comes back here
+        try { sessionStorage.setItem("kastr.rejoin", JSON.stringify({ room, code: "", access: authAccessCode, name: myOpName(), micOn: false, vidOn: false })); } catch {}
+      }
+    };
     // 0.21.86 (Kenton: an invite link "opened the app and then took him straight to the lobby"): a SILENT rejoin -- after an
     // update, a restart or a reload, back to the room I was in -- never beats a link the person has just opened. The ticket
     // goes; a rejoin still on its way is waited out and left without asking.
@@ -21881,6 +22025,7 @@
       try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
       inviteSet({ token: inv.token, room, at: Date.now() });   // a rejoin that has not called joinNow yet now joins THIS room
       for (let i = 0; i < 100 && joinState === "joining"; i++) await new Promise((r) => setTimeout(r, 200));
+      if (joinState === "joined" && CHANNEL !== room && sameRelay && mainPerson()) await inviteSwitch();   // 0.21.91: Leave never logs out
       if (joinState === "joined" && CHANNEL !== room) leaveMeeting();
     }
     if (joinState === "joined" && CHANNEL === room) { if (!silent) window.__toast?.("You are already in " + roomTitle(room), 4000, { level: "event" }); return; }
@@ -21890,6 +22035,11 @@
       if (!ok) return;
     }
     inviteSet({ token: inv.token, room, at: Date.now() });
+    // 0.21.91: Leave never logs out -- someone in a room of this relay goes straight to the invited room by the link
+    if (joinState === "joined" && !silent && mainPerson() && sameRelay) {
+      await inviteSwitch();
+      if (joinState === "joined" && CHANNEL === room) return;
+    }
     if (joinState === "joined") leaveMeeting();   // -> the gate, in invite mode
     const cur = urlInput.value.trim();
     const key = (u) => { try { const x = new URL(relayAddr(u)); return x.protocol + "//" + x.host + x.pathname.replace(/[/]+$/, ""); } catch { return String(u || ""); } };
@@ -22030,7 +22180,9 @@
     const sel = joinEls.joinRelaySel;   // 0.21.0
     if (sel && document.activeElement !== sel) {
       if (v && ![...sel.options].some((o) => o.value === v)) sel.insertBefore(new Option(v, v), sel.firstChild);
-      if (v) sel.value = v;
+      let auto = false;   // 0.21.91: "Closest automatically" stays picked unless the person picked a relay by hand
+      try { auto = !!relayRank && !relayManual() && [...sel.options].some((o) => o.value === "__auto"); } catch {}
+      if (v) sel.value = auto ? "__auto" : v;
     }
   }
   // ---- 0.21.22 (Kenton): relay failover + LAN discovery (the desktop app; a web client cannot browse mDNS) -------------
@@ -22131,38 +22283,256 @@
       try { inst = await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()); } catch {}
       if (inst?.justRestarted || inst?.adminMoved) return urlInput.value.trim() || null;
     }
+    // 0.21.91 (Kenton: "On launch of KASTR always do a check to find the closest relay and select that"): the fleet's relays (the
+    // hub's registry, cached), this machine's own and the ones found on the network, each measured (3 samples, 1.5 s, in
+    // parallel, from this machine's KASTR); the lowest round trip OF THE FLEET wins -- a relay found on the network that is not
+    // the fleet's is listed, never picked (nor sent this fleet's codes). Nothing online: the note, and KASTR keeps trying.
     const cur = urlInput.value.trim();
-    let hist = [];
-    try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
-    const found = await lanDiscover().catch(() => []);
-    const urls = [...new Set([cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || []), ...found.map((f) => f.urls?.[0]).filter(Boolean)].filter(Boolean))];
-    let d = null;
-    try { d = await fetch("/api/lan/nearest?" + urls.map((u) => "url=" + encodeURIComponent(u)).join("&"), { cache: "no-store" }).then((r) => r.json()); } catch {}
-    const ranked = (d?.relays || []).filter((r) => r.online);
-    for (const r of d?.relays || []) { if (r.name) relayNameSet(r.url, r.name); gateRelayState.set(r.url, { online: !!r.online, at: Date.now() }); }
-    window.__relayRanked = d?.relays || [];   // rig
-    const best = ranked[0];
-    if (!best) return null;
+    window.__lanFound = await lanDiscover().catch(() => []);
+    const rk = await relayRankRun();
+    window.__relayRanked = rk?.list || [];   // rig
+    const best = relayBest(rk);
+    if (!best) { if (rk) { relayNoneStart("launch"); return false; } return null; }
     if (best.url !== cur) {
-      await gateRelayApply(best.url, { keepCodes: true });   // 0.21.38: the saved codes stay
-      window.__toast?.("Connected to the nearest relay: " + (relayNameOf(best.url) || relayLabel(best.url))
-        + (best.hops != null ? " (" + best.hops + " hop" + (best.hops === 1 ? "" : "s") + ")" : ""), 6000, { level: "info" });
+      await relayApplyAuto(best.url);   // 0.21.38: the saved codes stay (fleet-wide)
+      relayAutoMoved = true;   // 0.21.91: a move within the fleet -- the saved codes still open the main room
+      window.__toast?.("Connected to the closest relay: " + relayDisp(best) + " (" + Math.round(best.ms) + " ms)", 6000, { level: "info" });
     }
     try { paintRelayRow(); } catch {}
     return best.url;
   }
   window.__relayAutoPick = relayAutoPick;   // rig
-  setTimeout(() => { relayAutoPick().then((u) => { if (!u) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }); }, 1500);
-  { // a relay down for 15 s during a session -> one offer per outage
+  // 0.21.91: the main-room launch waits for this (it may move this machine to another relay of the fleet)
+  let relayPickDoneRes = null, relayAutoMoved = false;
+  const relayPickDone = new Promise((r) => { relayPickDoneRes = r; });
+  setTimeout(() => { relayAutoPick().then((u) => { if (u === null) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }).finally(() => relayPickDoneRes()); }, 1500);   // 0.21.91: false = nothing online (the note says so)
+  { // a relay down for 15 s during a session: a person's KASTR moves to the next closest relay of the fleet (0.21.91); a box,
+    // a relay-only machine or a web client keeps the one offer per outage
     let downSince = 0, offered = false;
     setInterval(() => {
-      if (joinState !== "joined") { downSince = 0; offered = false; return; }
+      if (joinState !== "joined" || relayMoving) { downSince = 0; offered = false; return; }
       const st = window.__relayHealth?.() || "connected";
       if (st === "connected") { downSince = 0; offered = false; return; }
       if (!downSince) downSince = Date.now();
-      if (!offered && Date.now() - downSince > 15000) { offered = true; relayFailover("session").catch(() => {}); }
-    }, 5000);
+      if (!offered && Date.now() - downSince > RELAY_DEAD_MS) { offered = true; (relayMoveCan() ? relayFailMove() : relayFailover("session")).catch(() => {}); }
+    }, 2000);
   }
+  // ---- 0.21.91 THE CLOSEST RELAY -------------------------------------------------------------------------------------------------
+  // Kenton: "On launch of KASTR always do a check to find the closest relay and select that. Keep the dropdown menu so people can
+  // choose another relay if needed. If none are online and available, put a note for that to let them know that there are no
+  // available relays." + "Also do a check every hour and move to the nearest relay if there is a closer one." + LAN relays (mDNS)
+  // in the list, never picked from another fleet. Decided: lowest measured round trip; a manual pick lasts until KASTR closes (no
+  // automatic moves then); a relay dead for ~15 s -> the next closest, back in the same room by the silent rejoin, and no moving
+  // back this run; the hourly move needs a clear win twice (25 % and 10 ms) and waits while presenting, recording, under / giving
+  // remote control, sending a file or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
+  const RELAY_DEAD_MS = 15000;
+  const FLEET_KEY = "kastr.relays.fleet";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
+  const fleetCache = () => { try { const d = JSON.parse(localStorage.getItem(FLEET_KEY) || "null"); return d && Array.isArray(d.relays) ? d : null; } catch { return null; } };
+  async function fleetFetch() {
+    if (joinState !== "joined" || !authSecured || !authTokens?.member || inviteGuest()) return null;
+    const base = authBase();
+    if (!base) return null;
+    try {
+      const r = await fetch(base + "/api/fleet/relays", { cache: "no-store", headers: { authorization: "Bearer " + authTokens.member } });
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (!Array.isArray(d?.relays)) return null;
+      const rows = d.relays.filter((x) => x && x.name && Array.isArray(x.urls))
+        .map((x) => ({ name: String(x.name).slice(0, 40), urls: x.urls.map(String).filter((u) => /^https?:[/][/]/.test(u)).slice(0, 8) })).filter((x) => x.urls.length).slice(0, 64);
+      if (rows.length || !d.hubDown) localStorage.setItem(FLEET_KEY, JSON.stringify({ at: Date.now(), relays: rows }));
+      return rows;
+    } catch { return null; }
+  }
+  setInterval(() => { const c = fleetCache(); if (!c || Date.now() - c.at > 600000) fleetFetch(); }, 60000);
+  window.addEventListener("kastr:auth", () => setTimeout(() => { const c = fleetCache(); if (!c || Date.now() - c.at > 60000) fleetFetch(); }, 2500));
+  const relayDisp = (r) => (r && (r.name || relayNameOf(r.url) || relayLabel(r.url))) || "";
+  // every relay to measure: the fleet's registry (all its addresses), this machine's own (the current one, the recent ones, the
+  // built-in fleet list), and the ones found on the network -- of the fleet when an address (or a certificate this computer saw
+  // before) matches, else "on this network" (listed, never picked)
+  function relayCands() {
+    const cur = urlInput.value.trim();
+    let hist = [];
+    try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
+    const out = [], fleetUrls = new Set();
+    for (const r of fleetCache()?.relays || []) { out.push({ name: r.name, urls: r.urls.slice(0, 8), fleet: true }); for (const u of r.urls) fleetUrls.add(u); }
+    for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {
+      if (!u || fleetUrls.has(u)) continue;
+      fleetUrls.add(u);
+      out.push({ name: relayNameOf(u) || "", urls: [u], fleet: true });
+    }
+    const fps = new Set(Object.values(relayFps()).filter(Boolean));
+    for (const f of window.__lanFound || []) {
+      const urls = (f.urls || []).filter((u) => /^https?:[/][/]/.test(u)).slice(0, 8);
+      if (!urls.length || urls.some((u) => fleetUrls.has(u))) continue;   // a fleet relay found on the network: already listed
+      const known = !!f.fp && fps.has(String(f.fp).toLowerCase());          // a relay this computer used before, at a new address
+      out.push({ name: f.name || "", urls, fleet: known, lan: !known });
+      for (const u of urls) fleetUrls.add(u);
+    }
+    return out;
+  }
+  let relayRank = null, relayRanking = null;   // {at, list, ms} -- the last measurement
+  async function relayRankRun() {
+    if (relayRanking) return relayRanking;
+    relayRanking = (async () => {
+      let d = null;
+      try {
+        d = await fetch("/api/lan/closest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ relays: relayCands(), samples: 3 }) })
+          .then((r) => (r.ok ? r.json() : null));
+      } catch {}
+      if (!d || !Array.isArray(d.relays)) return relayRank;
+      relayRank = { at: Date.now(), list: d.relays, ms: d.ms };
+      for (const r of d.relays) {
+        if (r.name && !r.lan) for (const a of r.addrs || []) relayNameSet(a.url, r.name);
+        for (const a of r.addrs || []) gateRelayState.set(a.url, { online: !!a.online, at: Date.now(), ms: a.ms });
+        if (r.online && r.fp && r.fleet) relayFpRemember(r.url, r.fp);
+      }
+      try { paintRelayRow(); } catch {}
+      return relayRank;
+    })();
+    try { return await relayRanking; } finally { relayRanking = null; }
+  }
+  const relayBest = (rk) => (rk?.list || []).find((r) => r.online && r.fleet) || null;
+  const relayRankFor = (rk, url) => (rk?.list || []).find((r) => r.url === url || (r.addrs || []).some((a) => a.url === url)) || null;
+  const RELAY_MANUAL = "kastr.relay.manual";   // this run's own pick (sessionStorage: until KASTR closes)
+  const relayManual = () => { try { return sessionStorage.getItem(RELAY_MANUAL) || ""; } catch { return ""; } };
+  function relayManualSet(u) { try { if (u) sessionStorage.setItem(RELAY_MANUAL, u); else sessionStorage.removeItem(RELAY_MANUAL); } catch {} }
+  let relayAutoSwitching = false, relayMoving = false;
+  async function relayApplyAuto(url) {   // a switch KASTR makes (never counted as the person's pick)
+    const fromFleet = fleetFor(relayHostKey());
+    relayAutoSwitching = true;
+    try { await gateRelayApply(url, { keepCodes: true }); } finally { relayAutoSwitching = false; }
+    try {   // within the fleet: the new relay is this device's fleet too (My room and messages are remembered per fleet)
+      const h = relayHostKey(), ours = new Set([...(fleetCache()?.relays || []).flatMap((r) => r.urls || []), ...(window.__KASTR_KNOWN_RELAYS || [])]);
+      if (fromFleet && h && !fleetFor(h) && ours.has(url)) localStorage.setItem("kastr.fleet." + h, fromFleet);
+    } catch {}
+  }
+  const relayMoveCan = () => { try { return mainPerson() && !IS_WEB && gateIsLoopback(); } catch { return false; } };
+  // nothing online: the note (over everything, the Join room page too) and a re-check every 10 s, 20 s, 40 s, then each minute
+  let relayNone = null, relayNoteEl = null;
+  function relayNoteShow(text) {
+    if (!text && !relayNoteEl) return;
+    if (!relayNoteEl) { relayNoteEl = document.createElement("div"); relayNoteEl.id = "relayNote"; relayNoteEl.setAttribute("role", "status"); document.body.appendChild(relayNoteEl); }
+    relayNoteEl.textContent = text || "";
+    relayNoteEl.hidden = !text;
+  }
+  function relayNoneStart(where) {
+    if (relayNone) return;
+    relayNone = { since: Date.now(), tries: 0, where, timer: 0 };
+    log("No relays are available right now \u2014 KASTR keeps trying (" + where + ")");
+    relayNoteShow("No relays are available right now \u2014 KASTR keeps trying");
+    relayNoneNext();
+  }
+  function relayNoneNext() {
+    const n = relayNone;
+    if (!n) return;
+    const wait = Math.min(60000, 10000 * Math.pow(2, n.tries));
+    n.next = Date.now() + wait;
+    clearTimeout(n.timer);
+    n.timer = setTimeout(() => relayNoneCheck(n).catch(() => {}), wait);
+  }
+  async function relayNoneCheck(n) {
+    if (relayNone !== n) return;
+    n.tries++;
+    const rk = await relayRankRun();
+    const cur = urlInput.value.trim();
+    const best = n.where === "session" ? (rk?.list || []).find((r) => r.online && r.fleet) : relayBest(rk);
+    if (!best) { relayNoneNext(); return; }
+    relayNone = null;
+    relayNoteShow("");
+    log("A relay answers again: " + relayDisp(best) + " (" + Math.round(best.ms) + " ms) after " + Math.round((Date.now() - n.since) / 1000) + " s");
+    if (n.where === "session") {
+      if (relayRankFor(rk, cur)?.online) return;   // the same relay is back: the connection heals by itself
+      await relayMove(best, "failover", "Moved to " + relayDisp(best) + " \u2014 " + (relayNameOf(cur) || relayLabel(cur)) + " stopped answering");
+      return;
+    }
+    if (best.url !== cur) { await relayApplyAuto(best.url); relayAutoMoved = true; }   // within the fleet: the saved codes stay
+    window.__toast?.("A relay is available again \u2014 connected to " + relayDisp(best), 6000, { level: "event" });
+    if (joinState === "prejoin" && mainInfo.relayDown) { mainInfo.relayDown = false; mainLaunch(); }   // the main room now
+  }
+  // a move during a session: the room comes back by the silent rejoin (this window's session ticket) after a reload
+  const RELAY_MOVE_KEY = "kastr.relay.move";
+  async function relayMove(best, why, note) {
+    if (relayMoving || !best) return;
+    relayMoving = true;
+    const from = urlInput.value.trim();
+    try { sessionStorage.setItem(RELAY_MOVE_KEY, JSON.stringify({ why, from, to: best.url, note, at: Date.now(), room: joinState === "joined" ? CHANNEL : "" })); } catch {}
+    if (why === "failover") { try { sessionStorage.setItem("kastr.relay.failed", "1"); } catch {} }   // no moving back this run
+    log("Relay: " + note);
+    try { await relayApplyAuto(best.url); } catch {}
+    setTimeout(() => location.reload(), 150);
+  }
+  async function relayFailMove() {
+    const cur = urlInput.value.trim();
+    const rk = await relayRankRun();
+    if (relayRankFor(rk, cur)?.online && window.__relayHealth?.() === "connected") return;   // it came back while we measured
+    const best = (rk?.list || []).find((r) => r.online && r.fleet && r.url !== cur && !(r.addrs || []).some((a) => a.url === cur));
+    if (!best) { relayNoneStart("session"); return; }
+    await relayMove(best, "failover", "Moved to " + relayDisp(best) + " \u2014 " + (relayNameOf(cur) || relayLabel(cur)) + " stopped answering");
+  }
+  // after the reload: say where we are, and how long the room was away
+  let relayMoveLast = null;
+  {
+    let m = null;
+    try { m = JSON.parse(sessionStorage.getItem(RELAY_MOVE_KEY) || "null"); sessionStorage.removeItem(RELAY_MOVE_KEY); } catch {}
+    if (m && Date.now() - (Number(m.at) || 0) < 120000) {
+      relayMoveLast = { ...m };
+      const t = setInterval(() => {
+        if (joinState === "joined") {
+          clearInterval(t);
+          relayMoveLast.blipMs = Date.now() - m.at;
+          relayMoveLast.backIn = CHANNEL;
+          log("Relay move (" + m.why + "): back in " + roomTitle(CHANNEL) + " after " + relayMoveLast.blipMs + " ms");
+          window.__toast?.(m.note, 8000, { level: "event" });
+        } else if (Date.now() - m.at > 90000) clearInterval(t);
+      }, 250);
+    }
+  }
+  // the hourly re-check (with a random lead so a whole site does not probe at once)
+  const relayHr = { period: 3600000, jitter: 300000, confirm: 20000, timer: 0, next: 0, checks: 0, last: null };
+  function relayHourlyArm(ms) {
+    clearTimeout(relayHr.timer);
+    const w = ms ?? (relayHr.period + Math.random() * relayHr.jitter);
+    relayHr.next = Date.now() + w;
+    relayHr.timer = setTimeout(() => relayHourlyCheck().catch(() => {}), w);
+  }
+  function relayBusy() {   // a bad moment for a move -> what it is, else ""
+    try { const ps = window.__pres?.state?.(); if (ps?.mine) return "presenting"; if ((ps?.backstage || []).some((b) => b.key)) return "backstage"; } catch {}
+    try { if (window.__rec?.state?.().recording) return "recording"; } catch {}
+    try { const rs = window.__rc?.state?.(); if (rs?.ctl) return "controlling someone"; if (rs?.grant) return "under remote control"; } catch {}
+    try { if ([...uploading.values()].some((u) => !u.done && !u.err)) return "sending a file"; } catch {}
+    try { if ((window.__publisher?.talkAgo?.() ?? 1e9) < 10000) return "talking"; } catch {}
+    return "";
+  }
+  async function relayHourlyCheck() {
+    relayHourlyArm();
+    relayHr.checks++;
+    const now = Date.now();
+    let failed = false;
+    try { failed = sessionStorage.getItem("kastr.relay.failed") === "1"; } catch {}
+    const skip = !relayMoveCan() ? "not a person's KASTR" : relayManual() ? "a relay picked by hand" : failed ? "moved after a relay failed (this run)"
+      : joinState !== "joined" ? "not in a room" : relayMoving ? "moving" : "";
+    if (skip) { relayHr.last = { at: now, skip }; return; }
+    const judge = (rk) => {
+      const c = relayRankFor(rk, urlInput.value.trim()), b = relayBest(rk);
+      if (!b || !c || !c.online || b.url === c.url) return { win: false, cur: c, best: b };
+      return { win: b.ms <= c.ms * 0.75 && c.ms - b.ms >= 10, cur: c, best: b };
+    };
+    const j1 = judge(await relayRankRun());
+    const said = (j) => ({ cur: j.cur ? { name: relayDisp(j.cur), ms: j.cur.ms } : null, best: j.best ? { name: relayDisp(j.best), ms: j.best.ms } : null });
+    if (!j1.win) { relayHr.last = { at: now, stay: true, ...said(j1) }; return; }
+    await new Promise((r) => setTimeout(r, relayHr.confirm));   // the second probe: noise does not move anyone
+    const j2 = judge(await relayRankRun());
+    if (!j2.win || j2.best.url !== j1.best.url) { relayHr.last = { at: now, stay: true, noise: true, ...said(j2) }; return; }
+    const busy = relayBusy();
+    if (busy) { relayHr.last = { at: now, postponed: busy, ...said(j2) }; log("Closer relay " + relayDisp(j2.best) + " -- the move waits (" + busy + ")"); return; }
+    relayHr.last = { at: now, move: j2.best.url, ...said(j2) };
+    await relayMove(j2.best, "hourly", "Moved to " + relayDisp(j2.best) + " (closer: " + Math.round(j2.best.ms) + " ms vs " + Math.round(j2.cur.ms) + " ms)");
+  }
+  pageModeReady.then(() => { if (relayMoveCan()) relayHourlyArm(); });
+  window.__relayPick = { cands: relayCands, rank: relayRankRun, state: () => ({ rank: relayRank, manual: relayManual(), none: relayNone && { since: relayNone.since, tries: relayNone.tries, where: relayNone.where, next: relayNone.next },
+    move: relayMoveLast, hourly: { ...relayHr, timer: undefined }, moving: relayMoving, fleet: fleetCache() }), fleet: fleetFetch, busy: relayBusy,
+    hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms, confirmMs) => { relayHr.period = ms; relayHr.jitter = 0; if (confirmMs != null) relayHr.confirm = confirmMs; relayHourlyArm(ms); },
+    failNow: () => relayFailMove(), deadMs: () => RELAY_DEAD_MS };   // rig
   function paintRelayRow() {
     const row = joinEls.joinRelayRow;
     if (!row) return;
@@ -22173,21 +22543,43 @@
     const sel = joinEls.joinRelaySel;   // 0.21.0: a real select -- the datalist filtered itself down to the current value and "did nothing"
     if (sel && document.activeElement !== sel) {
       const cur = urlInput.value.trim();
-      const opts = [...new Set([cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])].filter(Boolean))];   // 0.21.34: + the fleet's relays (asi-brand.js)
-      const lan = (window.__lanRelays || []).filter((f) => f.urls?.[0] && !opts.includes(f.urls[0]));   // 0.21.22: found on the network (one click, never automatic)
-      const mark = (u) => { const st = gateRelayState.get(u); return st == null ? "" : (st.online ? "\uD83D\uDFE2 " : "\uD83D\uDD34 "); };   // 0.21.30
-      const word = () => "";   // 0.21.33 (Kenton): the dot's colour says online / offline -- no words
-      for (const f of lan) if (f.name) relayNameSet(f.urls[0], f.name);   // 0.21.33
-      const opt = (label, u) => { const o = new Option(label, u); const st = gateRelayState.get(u); o.title = u + (st == null ? "" : st.online ? " (online)" : " (offline)"); return o; };   // the address (and the state) on hover
-      sel.replaceChildren(...opts.map((u) => opt(mark(u) + (relayNameOf(u) || relayLabel(u)) + word(u), u)),   // 0.21.33: the name, not the address
-        ...lan.map((f) => opt(mark(f.urls[0]) + "Found on your network: " + (f.name || relayLabel(f.urls[0])) + word(f.urls[0]), f.urls[0])),
-        new Option("Other\u2026", "__other"));
-      if (cur) sel.value = cur;
-      sel.title = cur ? (relayNameOf(cur) ? relayNameOf(cur) + " \u2014 " : "") + cur : "";
-      gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);   // 0.21.30 (Kenton): which relays are online, in the picker
+      // 0.21.91 (Kenton: "Keep the dropdown menu so people can choose another relay if needed"): first "Closest automatically (now:
+      // <relay>, 12 ms)", then every relay measured (its ms, or "unreachable"; the network's own relays "On this network"), then
+      // what is not measured yet, then Other... A pick of one lasts until KASTR closes; "Closest automatically" hands it back.
+      const ms = (r) => (r.online ? Math.round(r.ms) + " ms" : "unreachable");
+      const best = relayBest(relayRank), man = relayManual(), listed = new Set(), opts = [];
+      opts.push(new Option("Closest automatically" + (best ? " (now: " + relayDisp(best) + ", " + Math.round(best.ms) + " ms)" : relayRank ? " (none answers now)" : ""), "__auto"));
+      for (const r of relayRank?.list || []) {
+        const o = new Option((r.lan ? "On this network: " : "") + relayDisp(r) + " \u2014 " + ms(r), r.url);
+        o.title = (r.addrs || []).map((a) => a.url + " \u2014 " + (a.online ? Math.round(a.ms) + " ms" : "unreachable")).join("\n") + (r.lan ? "\nNot a relay of this fleet: KASTR never picks it by itself" : "");
+        listed.add(r.url);
+        for (const a of r.addrs || []) listed.add(a.url);
+        opts.push(o);
+      }
+      for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {   // 0.21.34: + the fleet's relays (asi-brand.js) -- not measured yet
+        if (!u || listed.has(u)) continue;
+        listed.add(u);
+        const o = new Option(relayNameOf(u) || relayLabel(u), u); o.title = u; opts.push(o);
+      }
+      if (cur && !listed.has(cur)) opts.push(new Option(relayLabel(cur), cur));
+      opts.push(new Option("Other\u2026", "__other"));
+      sel.replaceChildren(...opts);
+      sel.value = man ? (listed.has(man) ? man : cur) : relayRank ? "__auto" : cur;
+      sel.title = cur ? (relayNameOf(cur) ? relayNameOf(cur) + " \u2014 " : "") + cur + (man ? " (picked by hand until KASTR closes)" : "") : "";
+      if (!relayRank || Date.now() - relayRank.at > 60000) relayRankSoon();   // measured when the page shows the list
       if (joinEls.joinRelay) joinEls.joinRelay.hidden = true;
     }
     gateRelayMirror();
+  }
+  let relayRankSoonT = 0;
+  function relayRankSoon() {   // 0.21.91: a measurement soon (the network browsed again at most every 2 minutes)
+    if (relayRankSoonT || relayRanking) return;
+    relayRankSoonT = setTimeout(async () => {
+      try {
+        if (!window.__lanFoundAt || Date.now() - window.__lanFoundAt > 120000) { window.__lanFound = await lanDiscover().catch(() => window.__lanFound || []); window.__lanFoundAt = Date.now(); }
+        await relayRankRun();
+      } finally { relayRankSoonT = 0; }
+    }, 300);
   }
   // 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not"): every relay in the join
   // card's picker is probed (the same /api/lan/probe the failover uses) and marked online / offline; answers are reused
@@ -22272,8 +22664,9 @@
     const cur = readChannel();
     const sel = joinEls.joinChanSel;
     const list = lastChannelList;
-    const key = (isPublisherMode() ? "box:" + (libOn() ? "lib:" : "") : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
-    if (sel.options.length && (key === gateKey || document.activeElement === sel)) return;
+    let key = (isPublisherMode() ? "box:" + (libOn() ? "lib:" : "") : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
+    const keyMine = mainPerson() && !inviteGuest() && !!personalGet() ? "|mine:" + mainPref() : "";   // 0.21.91
+    if (sel.options.length && (key + keyMine === gateKey || document.activeElement === sel)) return;
     gateKey = key;
     const keep = sel.options.length ? sel.value : null;
     sel.replaceChildren();
@@ -22287,16 +22680,22 @@
       sel.appendChild(new Option(r.slug === LOBBY ? "Lobby" : r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));   // 0.21.60: the Lobby says nothing of who is there
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
+    // 0.21.91: My room (when this device keeps it) heads the list -- a person's main room by default
+    const mineOpt = mainPerson() && !inviteGuest() && !!personalGet();
+    if (mineOpt) sel.insertBefore(new Option("My room", "__mine"), sel.firstChild);
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined
     let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
     try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
     let want = keep ?? (invited && list.some((r) => r.slug === invited) ? invited : lj && lj.room ? channelSlug(lj.room) : "main");   // 0.21.34: main the first time
     if (invited && !gateLinkUsed && list.some((r) => r.slug === invited)) { want = invited; gateLinkUsed = true; }   // 0.21.89: the link's room, once it is listed (a locked one offers Ask for access)
     if (isHomeRoom(want)) want = isPublisherMode() ? "__home" : "main";   // 0.21.75
+    if (keep == null && !(invited && list.some((r) => r.slug === invited)) && mainPerson()) want = mineOpt && mainPref() === "mine" ? "__mine" : mainPref() === "lobby" ? "main" : want;   // 0.21.91: the main room
     // 0.21.34: the last room, unless it is gone, or locked without its code saved here -> main (no room question on the card)
     const wantRec = list.find((r) => r.slug === want);
     if (want !== invited && wantRec?.locked && !(lj && channelSlug(lj.room) === want && lj.code)) want = "main";
     sel.value = [...sel.options].some((o) => o.value === want && o.value !== "__new") ? want : "main";
+    key += mineOpt ? "|mine:" + mainPref() : "";   // 0.21.91: My room set up (or forgotten) here repaints the list
+    gateKey = key;
     paintPwdRow();
   }
 
@@ -22323,15 +22722,15 @@
   // 0.21.61: after an update relaunch (the app says justUpdated) the room this window was in within the last 20 minutes
   // comes back without the gate: the last join's codes, the mic and camera as they were, then the spotlights I had set
   let resumeTried = false;
-  function resumeCheck() {
-    if (resumeTried || IS_WEB || isPublisherMode() || isViewerMode()) return;
+  function resumeCheck() {   // 0.21.91: -> a promise of "it took over" (the main-room launch waits for it)
+    if (resumeTried || IS_WEB || isPublisherMode() || isViewerMode()) return Promise.resolve(false);
     resumeTried = true;
     let live = null;
     try { live = JSON.parse(localStorage.getItem(LIVE_KEY) || "null"); } catch {}
     const lj = lastJoin();
-    if (!live || !live.room || !lj || lj.room !== live.room || Date.now() - (Number(live.at) || 0) > 1200000) return;
-    fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-      if (!(d?.justUpdated || d?.justRestarted) || joinState !== "prejoin" || joinEls.joinGate.hidden) return;   // 0.21.73: + an admin's Restart / Move
+    if (!live || !live.room || !lj || lj.room !== live.room || Date.now() - (Number(live.at) || 0) > 1200000) return Promise.resolve(false);
+    return fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
+      if (!(d?.justUpdated || d?.justRestarted) || joinState !== "prejoin" || (joinEls.joinGate.hidden && !mainCovering())) return false;   // 0.21.73: + an admin's Restart / Move; 0.21.91: + under the main-room launch's note
       try { localStorage.removeItem(LIVE_KEY); } catch {}   // once: a failed rejoin leaves the normal gate
       const t = { room: live.room, code: lj.code || "", access: lj.access || "", synthetic: true, resumed: true,
                   restarted: !d.justUpdated && !!d.justRestarted, moved: String(d.adminMoved || ""),   // 0.21.73
@@ -22340,7 +22739,8 @@
       try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
       if (live.acc && live.acc.room === live.room) accGrantSet(live.acc);   // 0.21.89: the visit someone let me in for goes on (if it still lives at the relay)
       gateShow();
-    }).catch(() => {});
+      return true;
+    }).catch(() => false);
   }
   function resumeAfterJoin(t) {
     if (CHANNEL !== channelSlug(t.room)) return;   // 0.21.86: an invite link took this rejoin elsewhere
@@ -22360,6 +22760,7 @@
   }
   function gateShow() {
     joinState = "prejoin";
+    mainCover("");   // 0.21.91: (a main-room ticket below puts its own line back)
     try { paintCtxBanner(); } catch {}   // 0.17.0
     joinEls.leaveBtn.hidden = true;      // Leave means nothing at the gate
     authDetect().catch(() => {}).then(() => { try { paintPwdRow(); } catch {} });   // 0.10.0: the access-code row follows the relay's answer
@@ -22416,15 +22817,18 @@
       stopGatePreview();
       joinEls.joinPrevOff.querySelector(".ji").innerHTML = icon("camOff");
       gateMsg("Rejoining " + saved.room + "\u2026");
-      joinEls.joinGate.hidden = false;
+      joinEls.joinGate.hidden = !!saved.main;   // 0.21.91: the launch into the main room skips the Join room page
+      if (saved.main) mainCover(isPersonalSlug(saved.room) ? "Opening My room\u2026" : "Opening the Lobby\u2026");
       // authDetect must land first: joining a secured relay without the
       // beacon answer would skip the mint and bounce off the relay.
       const go = () => authDetect().catch(() => {}).then(() => joinNow()).then(() => {
         if (saved.resumed && joinState === "joined") resumeAfterJoin(saved);   // 0.21.61
+        if (saved.main) mainLaunchDone(saved);   // 0.21.91
         if (joinState !== "joined") {
           rejoinRec = null;
           try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
           if (isPublisherMode()) pubRejoinRetry();   // 0.12.0
+          if (saved.main && joinState === "prejoin") mainLaunchFailed(saved);   // 0.21.91: the Join room page, with why
         }
         rejoinRec = null;
       });
@@ -22475,7 +22879,8 @@
   function gateHide() {
     stopGatePreview();
     joinEls.joinGate.hidden = true;
-    joinEls.leaveBtn.hidden = joinState !== "joined";
+    mainCover("");   // 0.21.91
+    joinEls.leaveBtn.hidden = joinState !== "joined" || (readChannel() === LOBBY && !isPublisherMode());   // 0.21.91: no Leave in the Lobby
     paintChannelChip();                  // "Join a room…" vs "Room: x"
   }
 
@@ -22542,7 +22947,7 @@
     gateMsg("Joining\u2026");
 
     // Channel + advisory password first: the relay commits read the slug.
-    let slug, rec = null;
+    let slug, rec = null, pwd = null;   // 0.21.91: pwd -- the room code this join uses (My room's is this device's, never typed)
     const inv = inviteGet();   // 0.21.75: an invite link -- its room; the minter checks the link (no code checks here)
     if (inv && (!rejoinRec || channelSlug(rejoinRec.room) === inv.room)) {
       slug = inv.room;
@@ -22557,6 +22962,12 @@
       joinEls.joinPwd.value = rejoinRec.code ?? "";
       joinEls.joinAccess.value = rejoinRec.access ?? "";   // 0.10.0
       if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: a rejoin ticket is checked too; 0.21.89: a let-in visit has no code (the mint checks the grant)
+    } else if (joinEls.joinChanSel.value === "__mine") {   // 0.21.91: My room, with the code this device keeps for it
+      const p = personalGet();
+      if (!p) return joinFail("My room is not set up on this device \u2014 pick another room.");
+      slug = p.slug;
+      rec = null;
+      pwd = p.code;
     } else if (joinEls.joinChanSel.value === "__home") {   // 0.21.75: a box in no room -- its own hidden room (no lock, not registered)
       slug = homeRoomOf(HOSTNAME1);
       rec = null;
@@ -22589,6 +23000,7 @@
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
       if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: hash-less locks fail closed on open relays; 0.21.89: a let-in visit has no code
     }
+    if (pwd === null) pwd = joinEls.joinPwd.value;
     try { localStorage.setItem(CHANNEL_KEY, slug); } catch {}
 
     // Secured relay: the mint is the authoritative code check (the
@@ -22597,7 +23009,7 @@
     if (authSecured) {
       try {
         gateMsg("Joining\u2026 checking the access code");
-        if (await withinMs(authMint(slug, joinEls.joinAccess.value, joinEls.joinPwd.value), 15000) === JOIN_TIMEOUT)   // 0.10.0: access code + room code
+        if (await withinMs(authMint(slug, joinEls.joinAccess.value, pwd), 15000) === JOIN_TIMEOUT)   // 0.10.0: access code + room code
           throw new Error("the relay's token service did not answer in 15 s");   // 0.21.18
       } catch (e) {
         const msg = String(e?.message || e);
@@ -22608,6 +23020,12 @@
             : /revoked/i.test(msg) ? "This invite link was revoked \u2014 ask for a new one."
             : /is for room/i.test(msg) ? "This invite link is for another room."
             : "This invite link is not valid \u2014 ask for a new one.");
+        }
+        if (isPersonalSlug(slug) && slug === personalGet()?.slug && /wrong room code|no such personal room/i.test(msg)) {   // 0.21.91: My room's saved code is stale
+          personalSave(null);
+          gateKey = "";
+          try { gatePaintChannels(); } catch {}
+          return joinFail("My room did not open with the code this device remembered \u2014 pick a room and join; My room asks for its code again.");
         }
         return joinFail(/removed from this room/i.test(msg) ? "You were removed from this room by an admin \u2014 try again later."   // 0.17.0
           : /wrong access code/i.test(msg) ? "Wrong access code for this relay."
@@ -22703,14 +23121,19 @@
     // Leave or a deliberate disconnect -- exactly the requested rule.
     try {
       sessionStorage.setItem("kastr.rejoin", JSON.stringify({
-        room: slug, code: joinEls.joinPwd.value, access: joinEls.joinAccess.value,   // 0.10.0: access code rides the ticket
+        room: slug, code: pwd, access: joinEls.joinAccess.value,   // 0.10.0: access code rides the ticket
         name: joinEls.joinName.value, micOn: joinMicOn, vidOn: joinVidOn }));
     } catch {}
-    try { localStorage.setItem("kastr.lastjoin", JSON.stringify({ room: slug, code: joinEls.joinPwd.value, access: joinEls.joinAccess.value,
+    try { localStorage.setItem("kastr.lastjoin", JSON.stringify({ room: slug, code: pwd, access: joinEls.joinAccess.value,
                                                                     micOn: joinMicOn, vidOn: joinVidOn,
                                                                     relay: urlInput.value.trim() })); } catch {}   // 0.8.8 / 0.10.0 / 0.12.0: toggles too / 0.13.0: the relay the codes belong to
     gateCodesStale = false;   // 0.13.0 (F7): these codes are the current relay's
-    sessionPersist(slug, joinEls.joinAccess.value, joinEls.joinPwd.value);   // 0.12.0
+    sessionPersist(slug, joinEls.joinAccess.value, pwd);   // 0.12.0
+    // 0.21.91 (Kenton: "the person lands in My room afterwards"): a person whose main room is My room but who has none on this
+    // device yet sets it up (the 0.21.89 card in a room; My room's own dialog in the Lobby) and is then taken there
+    mainLand = mainPerson() && !inv && !inviteGuest() && authSecured && mainPref() === "mine" && !personalGet() && !isPersonalSlug(slug);
+    mainLandAsked = false;
+    try { paintLobby(); } catch {}
     if (!isViewerMode() && !IS_WEB) setTimeout(() => { try { window.__rtspRestore?.(); } catch {} }, 800);   // 0.8.8: persistent RTSP feeds; 0.17.0: not from a web client
     paintTopCam();
   }
@@ -22735,7 +23158,11 @@
     accGrantSet(null);   // 0.21.89: Leave ends a visit someone let me in for
     joinState = "leaving";
     try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
-    try { localStorage.removeItem("kastr.lastjoin"); } catch {}   // 0.8.8: Leave = pick a room next time
+    try {   // 0.8.8: Leave = pick a room next time; 0.21.91: a person's access code stays (the next launch opens the main room with it)
+      const lj = lastJoin();
+      if (lj && lj.access && mainPerson()) localStorage.setItem("kastr.lastjoin", JSON.stringify({ room: "", code: "", access: lj.access, relay: lj.relay || "" }));
+      else localStorage.removeItem("kastr.lastjoin");
+    } catch {}
     pubRejoinStop = true; clearTimeout(pubRejoinT);   // 0.12.0: Leave means stay at the gate, even on a camera box
     sessionPersist("", "", "");                        // 0.12.0: nothing to republish at the next launch
     focusMode = false;
@@ -22757,6 +23184,129 @@
     gateShow();
   }
 
+  // ---- 0.21.91 THE MAIN ROOM: the launch, Leave and the landing in My room -----------------------------------------------------
+  // Kenton: "Regular people with the Publisher code should start in their 'My room' instead of the lobby. The lobby should be for
+  // those that hit leave in a room or guests ... The leave button should leave the room, but not logout of KASTR. It should put
+  // them in the lobby instead ... When joining KASTR or leaving a room, it should go to that preferred room." Decided: the main
+  // room is My room (the default) or the Lobby (Profile); a launch that knows the name and codes skips the Join room page; the
+  // Join room page stays for the first time, a relay switch, a refused / changed code, or a main room that cannot open (no My
+  // room yet). A resume after an update, the silent rejoin, an invite link and a room link (?room=) still win. Leave goes to the
+  // main room -- or to the Lobby when I am already in it. Camera boxes, relay-only machines and viewer displays are unchanged.
+  const mainPerson = () => !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay";
+  function mainTarget(from) {   // -> {slug, code, personal}: where a launch / Leave goes from `from`
+    if (inviteGuest()) return { slug: LOBBY, code: "" };
+    const p = personalGet();
+    if (mainPref() === "mine" && p && from !== p.slug) return { slug: p.slug, code: p.code, personal: true };
+    return { slug: LOBBY, code: "" };
+  }
+  let mainGoEl = null;
+  function mainCover(text) {
+    if (!text && !mainGoEl) return;
+    if (!mainGoEl) { mainGoEl = document.createElement("div"); mainGoEl.id = "mainGo"; mainGoEl.setAttribute("role", "status"); document.body.appendChild(mainGoEl); }
+    mainGoEl.textContent = text || "";
+    mainGoEl.hidden = !text;
+  }
+  const mainCovering = () => !!mainGoEl && !mainGoEl.hidden;
+  let mainInfo = { phase: "", why: "", target: "", t0: 0, ms: null, leave: null };   // rig (__join.main())
+  const mainSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function mainLaunch() {
+    const t0 = performance.now();
+    mainInfo = { phase: "deciding", why: "", target: "", t0: Date.now(), ms: null, leave: mainInfo.leave };
+    const gate = (why) => { mainInfo.phase = "gate"; mainInfo.why = why; mainInfo.ms = Math.round(performance.now() - t0); log("Launch: the Join room page \u2014 " + why); gateShow(); };
+    if (!mainPerson()) return gate("a camera box, relay-only machine or viewer display");
+    let ticket = null;
+    try { ticket = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
+    if (ticket?.room) return gate("a rejoin");   // gateShow rejoins silently (a reload)
+    if (inviteGet()) return gate("an invite link");
+    try { if (new URLSearchParams(location.search).get("room")) return gate("a room link"); } catch {}
+    const lj = lastJoin();
+    if (!lj || !(lj.access || lj.room)) return gate("the first launch here");   // (the camera toggle alone writes {vidOn} there)
+    const name = String((profile && profileName(profile)) || localStorage.getItem("kastr.operator.name") || "").trim();
+    if (!name) return gate("no name yet");
+    mainCover("Starting KASTR\u2026");
+    joinEls.joinGate.hidden = true;   // (the page's own markup shows it until a script hides it; whoever needs it shows it again)
+    await Promise.race([relayPickDone, mainSleep(8000)]);   // the nearest relay first (it may move this machine within the fleet)
+    if (joinState !== "prejoin") { mainCover(""); return; }
+    if (relayNone) { mainInfo.relayDown = true; mainCover(""); return gate("no relays are available (KASTR keeps trying)"); }   // 0.21.91
+    if (await resumeCheck()) { mainInfo.phase = "resume"; mainInfo.ms = Math.round(performance.now() - t0); return; }   // an update / restart: back to the room I was in
+    if (!IS_WEB && gateIsLoopback()) { try { await invitePendingPoll(); } catch {} }   // an invite link that started KASTR wins
+    if (inviteGet() || joinState !== "prejoin" || !joinEls.joinGate.hidden) {
+      mainInfo.phase = "invite"; mainCover("");
+      if (joinState === "prejoin" && joinEls.joinGate.hidden) gateShow();
+      return;
+    }
+    const cur = urlInput.value.trim(), fleet = new Set([...(window.__KASTR_KNOWN_RELAYS || []), ...((fleetCache()?.relays || []).flatMap((r) => r.urls || []))]);   // + the hub's registry
+    if (gateCodesStale || (lj.relay && lj.relay !== cur && !(fleet.has(lj.relay) && fleet.has(cur)) && !relayAutoMoved)) { mainCover(""); return gate("another relay than the last join's"); }
+    await authDetect().catch(() => {});
+    const access = String(lj.access || "");
+    if (authSecured && authCodes && !access) { mainCover(""); return gate("no access code saved for this relay"); }
+    const tgt = mainTarget("");
+    if (mainPref() === "mine" && !tgt.personal) { mainCover(""); return gate("no My room on this device yet"); }
+    if (tgt.personal && !authSecured) { mainCover(""); return gate("My room needs a secured relay"); }
+    mainInfo.phase = "joining"; mainInfo.target = tgt.slug;
+    // a synthetic rejoin ticket: gateShow joins it without the page (an invite link that lands meanwhile still wins -- inviteArrive)
+    const t = { room: tgt.slug, code: tgt.code, access, synthetic: true, main: true, name, micOn: false, vidOn: false };
+    try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
+    mainInfo.ticketMs = Math.round(performance.now() - t0);
+    gateShow();
+  }
+  function mainLaunchDone(t) {
+    if (joinState !== "joined") return;
+    mainInfo.phase = "joined"; mainInfo.ms = Date.now() - mainInfo.t0; mainInfo.room = CHANNEL;
+    log("Launch: straight into " + roomTitle(CHANNEL) + " (" + mainInfo.ms + " ms, no Join room page)");
+  }
+  function mainLaunchFailed(t) {
+    const why = joinEls.joinMsg.textContent || "";
+    mainInfo.phase = "failed"; mainInfo.why = why; mainInfo.ms = Date.now() - mainInfo.t0;
+    joinEls.joinPwd.value = "";   // (My room's code never stays in the page's code field)
+    gateShow();
+    gateMsg(/wrong room code/i.test(why) && isPersonalSlug(t.room) ? "My room did not open with the code this device remembered \u2014 pick a room and join; My room asks for its code again."
+      : why || "Could not open " + roomTitle(t.room) + " \u2014 pick a room and join.");
+  }
+  // Leave -> the main room (the Lobby when I am in it already); a guest -> the Lobby with the invited room; a box -> as before
+  let leaveBusy = false;
+  async function leaveToMain() {
+    if (joinState !== "joined" || leaveBusy) return;
+    if (!mainPerson()) { leaveMeeting(); return; }   // camera boxes / viewer displays: the Join room page, as before
+    if (CHANNEL === LOBBY) return;                   // (no Leave in the Lobby)
+    leaveBusy = true;
+    const from = CHANNEL, t0 = performance.now(), tgt = mainTarget(from);
+    try {
+      closeAllPops();
+      try { window.__publisher?.dropShares?.(); } catch {}   // leaving: my screen / window / file shares end with the room (the camera goes muted and off, as any room change)
+      try { localStorage.removeItem(LIVE_KEY); } catch {}
+      const lobbyRec = () => lastChannelList.find((r) => r.slug === LOBBY) || { slug: LOBBY };
+      await switchRoom(tgt.personal ? { slug: tgt.slug, personal: true } : lobbyRec(), tgt.code);
+      if (joinState === "joined" && CHANNEL === from && tgt.slug !== LOBBY) await switchRoom(lobbyRec(), "");   // My room refused -> the Lobby
+      if (joinState === "joined" && CHANNEL === from) { log("Leave: the main room and the Lobby refused \u2014 the Join room page"); leaveMeeting(); return; }
+      mainInfo.leave = { from, to: CHANNEL, ms: Math.round(performance.now() - t0), at: Date.now() };
+      log("Left " + roomTitle(from) + " \u2014 now in " + roomTitle(CHANNEL) + " (" + mainInfo.leave.ms + " ms)");
+      window.__toast?.("Left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " \u2014 you\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)), 4000, { level: "event" });
+    } finally { leaveBusy = false; }
+  }
+  // the landing in My room after it is set up (the first join of a person whose main room is My room)
+  let mainLand = false, mainLandAsked = false;
+  setInterval(() => {
+    if (!mainLand) return;
+    if (joinState !== "joined") return;
+    if (!mainPerson() || inviteGuest() || mainPref() !== "mine") { mainLand = false; return; }
+    const shown = (id) => { const e = document.getElementById(id); return !!e && !e.hidden; };
+    const p = personalGet();
+    if (!p) {
+      // the Lobby has no Messages, so the 0.21.89 card cannot ask there: My room's own dialog does (once); it opens My room when done
+      if (inLobby() && !mainLandAsked && !shown("kMyRoom") && !shown("kConfirm") && !shown("profilePop") && !shown("kSetup")) {
+        mainLandAsked = true; mainLand = false;
+        personalDialog();
+      }
+      return;
+    }
+    if (CHANNEL === p.slug) { mainLand = false; return; }
+    if (shown("kSetup") || shown("kMyRoom") || shown("kConfirm") || shown("profilePop")) return;   // the set-up finishes first
+    mainLand = false;
+    log("My room is set up \u2014 opening it (the main room)");
+    switchRoom({ slug: p.slug, personal: true }, p.code);
+  }, 1000);
+
   function initJoinGate() {
     joinEls.joinMicBtn.addEventListener("click", () => { joinMicOn = !joinMicOn; paintJoinToggles(); });
     joinEls.joinVidBtn.addEventListener("click", () => { joinVidOn = !joinVidOn; paintJoinToggles(); gatePreview(); });
@@ -22768,10 +23318,19 @@
     if (joinEls.joinRelay) {
       joinEls.joinRelay.addEventListener("change", () => { gateRelayApply(); });
       joinEls.joinRelay.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); gateRelayApply(); } });
-      joinEls.joinRelaySel?.addEventListener("change", () => {   // 0.21.0: picking an entry switches at once
+      joinEls.joinRelaySel?.addEventListener("change", async () => {   // 0.21.0: picking an entry switches at once
         const sel = joinEls.joinRelaySel;
         if (sel.value === "__other") { joinEls.joinRelay.hidden = false; joinEls.joinRelay.value = ""; try { joinEls.joinRelay.focus(); } catch {} return; }
-        gateRelayApply(sel.value);
+        if (sel.value === "__auto") {   // 0.21.91: back to the closest (measured now)
+          relayManualSet("");
+          const best = relayBest(await relayRankRun());
+          if (best && best.url !== urlInput.value.trim()) await relayApplyAuto(best.url);
+          try { paintRelayRow(); } catch {}
+          return;
+        }
+        relayManualSet(sel.value);   // 0.21.91: the person's own pick lasts until KASTR closes (no automatic moves)
+        const picked = relayRankFor(relayRank, sel.value);   // a fleet relay keeps the codes (fleet-wide); another fleet's never gets them
+        gateRelayApply(sel.value, picked && picked.fleet ? { keepCodes: true } : undefined);
       });
       urlInput.addEventListener("change", gateRelayMirror);
     }
@@ -22785,7 +23344,7 @@
         if (!joinEls.joinBtn.disabled && !joinEls.joinBtn.hidden) joinNow();
       });
     }
-    joinEls.leaveBtn.addEventListener("click", leaveMeeting);
+    joinEls.leaveBtn.addEventListener("click", () => { leaveToMain(); });   // 0.21.91: the main room, never the Join room page (a box: as before)
     // 0.21.89 (Kenton: "remove the x in the corner of the Join room page", then "remove escape too"): the gate is no
     // longer dismissible -- no close button, no Escape (0.7.7 let relay-only machines put it away).
     joinEls.roomBanner.addEventListener("click", (e) => {
@@ -22796,14 +23355,16 @@
     // 0.8.1: People is a registered popover -- outside clicks, Esc and
     // the other popovers' mutual exclusion all come with registerPop.
     window.__join = { state: () => joinState, join: joinNow, leave: leaveMeeting,
-      reconnect: () => { if (joinState === "joined") connect(); } };
+      reconnect: () => { if (joinState === "joined") connect(); },
+      leaveToMain, main: () => ({ ...mainInfo, pref: mainPref(), land: mainLand, target: mainTarget(joinState === "joined" ? CHANNEL : "").slug, guest: inviteGuest() }),   // 0.21.91 rig
+      setMain: (v) => { mainPrefSet(v); try { gatePaintChannels(); } catch {} } };
     // 0.8.8: no profile yet (and no live rejoin ticket) -> set it up first;
     // the gate follows.
     let ticket = null;
     try { ticket = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
     // 0.12.0: a publisher box with a remembered room never waits on the profile modal
     if (!profile && !(ticket && ticket.room) && !(isPublisherMode() && lastJoin()?.room) && !inviteGet()) openProfile(true, gateShow);   // 0.21.75: an invited guest gives a name at the gate
-    else gateShow();
+    else mainLaunch();   // 0.21.91: straight into the main room when KASTR knows the name and codes (else the Join room page)
     document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); try { window.__personalEnded?.clear?.(); } catch {} });   // 0.21.75; 0.21.85: + the ended screen goes
     if (!IS_WEB && gateIsLoopback()) {   // 0.21.75: an invite link handed to this KASTR (kastr:// started the app, or a second launch)
       invitePendingPoll();
@@ -32913,6 +33474,7 @@
     talking: () => talkOn,                                   // 0.12.0: the room-wide speaking announce is on
     opSlug: () => operatorSlug(),                            // 0.12.0: chat records carry the same op key as presence
     fakeTalk: (ms) => { talkForceUntil = Date.now() + (Number(ms) || 3000); },   // 0.12.0 (rig): pretend the mic is loud
+    talkAgo: () => (talkLastLoud ? performance.now() - talkLastLoud : 1e9),   // 0.21.91: ms since my mic was last loud (the hourly relay move waits)
     nudge: nudgeFromViewer,   // 0.8.7: viewer stall report -> nudge/rebuild
     refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.5: the upright loop probe settling late
     resumeAudio: () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); } catch {} },   // 0.8.9: phones
@@ -32945,6 +33507,9 @@
     addRtsp,
     removeSource,   // 0.21.20 rig: the Stop path
     screens: () => added.filter((a) => a.screen).map((a) => ({ id: a.id, url: a.url, label: a.label, audio: !!a.audio })),   // 0.21.20 rig
+    // 0.21.91: Leave -- my screen / window / file shares end with the room (the camera stays, muted and off as on any room change;
+    // a box's RTSP feeds and a slide's video are not mine to end here) -> how many ended
+    dropShares: () => { let n = 0; for (const a of [...added]) { if (a.kind === "camera" || a.kind === RTSP || a.presVideo) continue; removeSource(a.id); n++; } return n; },
     state: () => ({
       hostname: HOSTNAME,
       avc1Ok,   // 0.17.0 rig: the browser's H.264 encoder probe

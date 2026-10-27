@@ -27,7 +27,9 @@ class ChatToneGallery(unittest.TestCase):
         self.assertIn('<button class="opt" id="viewGallery"', self.p)   # still in the View options
 
     def test_auto_pick_keeps_codes(self):
-        self.assertIn("await gateRelayApply(best.url, { keepCodes: true });", self.p)
+        # 0.21.91: the closest relay is applied by relayApplyAuto, which keeps the codes (fleet-wide)
+        self.assertIn("await relayApplyAuto(best.url);   // 0.21.38: the saved codes stay (fleet-wide)", self.p)
+        self.assertIn("try { await gateRelayApply(url, { keepCodes: true }); } finally { relayAutoSwitching = false; }", self.p)
         self.assertIn("if (!opts?.keepCodes) {", self.p)
 
 

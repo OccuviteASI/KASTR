@@ -136,8 +136,10 @@ class JoinGate(unittest.TestCase):
     def test_relay_picker_says_online_or_offline(self):
         # 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not")
         p = _read("moq-watch-lite.html")
-        self.assertIn("gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);", p)
-        self.assertIn('o.title = u + (st == null ? "" : st.online ? " (online)" : " (offline)");', p)   # 0.21.33: the dot says it; words on hover
+        # 0.21.91 (Kenton: the closest relay): every relay measured -- its ms, or "unreachable" -- the addresses on hover
+        self.assertIn('const ms = (r) => (r.online ? Math.round(r.ms) + " ms" : "unreachable");', p)
+        self.assertIn('o.title = (r.addrs || []).map((a) => a.url + " \\u2014 " + (a.online ? Math.round(a.ms) + " ms" : "unreachable")).join("\\n")', p)
+        self.assertIn("if (!relayRank || Date.now() - relayRank.at > 60000) relayRankSoon();   // measured when the page shows the list", p)
 
     def test_rail_marks_a_kept_room_with_a_symbol(self):
         # 0.21.31 (Kenton: "don't put the always open in the rooms, just put a symbol ... similar to the lock symbol")

@@ -735,6 +735,7 @@
         <p class="hint" style="margin-top:0">A <b>GIF</b> button in Room Chat and Messages. Searches and pictures go through this hub with one
           GIPHY API key, so GIPHY never sees anyone&rsquo;s address; rated PG-13. A picked GIF is sent as a copy (in Messages, end-to-end encrypted).</p>
         <div class="warn" id="gifOff" hidden></div>
+        <p class="hint" id="gifStandby" hidden></p>
         <div class="vehadd">
           <input type="password" id="gifKey" maxlength="64" placeholder="GIPHY API key" autocomplete="off" spellcheck="false" aria-label="GIPHY API key">
           <button type="button" id="gifSave">Save</button>
@@ -4045,8 +4046,12 @@
     $("gifSave").disabled = !LOCAL;
     $("gifKey").disabled = !LOCAL;
     $("gifRemove").disabled = !LOCAL || !d.set;
+    const sb = $("gifStandby");
+    sb.hidden = !d.standby;
+    sb.textContent = !d.standby ? "" : "This relay is the fleet\u2019s standby hub. Paste the same GIPHY key here: it is kept on this machine only (it never "
+      + "travels with the standby copy) and used only while this relay acts as the hub \u2014 " + (d.acting ? "it does now." : "now the main hub answers GIF searches.");
     const off = $("gifOff");
-    off.hidden = !!d.active && d.secured !== false;
+    off.hidden = (!!d.active && d.secured !== false) || (!!d.standby && !d.acting && d.secured !== false);
     off.textContent = d.secured === false
       ? "GIF search needs a secured relay (Require access codes, in Server): pages ask with their room’s member token."
       : !d.set ? "GIF search is off: paste a GIPHY API key below and press Save — the GIF button then shows in Room Chat and Messages for everyone."

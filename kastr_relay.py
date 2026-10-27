@@ -9477,17 +9477,27 @@ class AuthService:
             return {"ok": False, "error": "too many GIF searches -- try again in %d s" % wait, "retryAfter": wait}, 429
         return self._gifs().search(p.get("q"), p.get("offset"))
 
-    def gif_operator_view(self):
-        """GET /api/relay/gif (the Relay page of this machine) -- never the key."""
-        if self._p_spoke():
+    def gif_operator_view(self, standby=False):
+        """GET /api/relay/gif (the Relay page of this machine) -- never the key. `standby`: this relay is the fleet's
+        standby hub (handle_api asks the cluster) -- it keeps its OWN key, used only while it acts as the hub."""
+        spoke = self._p_spoke()
+        if spoke and not standby:
             return {"ok": True, "spoke": True, "on": self.gif_on()}, 200
-        return dict(self._gifs().view(), ok=True, hub=True, secured=True), 200
+        out = dict(self._gifs().view(), ok=True, hub=not spoke, secured=True)
+        if standby:
+            out.update(standby=True, acting=not spoke)
+        return out, 200
 
-    def gif_operator(self, p):
-        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page)."""
-        if self._p_spoke():
+    def gif_operator(self, p, standby=False):
+        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page, or the standby hub's: its own key,
+        kept on that machine and never sent anywhere -- no key rides the replica or the hand-over)."""
+        spoke = self._p_spoke()
+        if spoke and not standby:
             return {"ok": False, "spoke": True, "error": "GIF search is set on the hub's Relay page"}, 409
-        return self._gifs().configure(p)
+        out, code = self._gifs().configure(p)
+        if code == 200 and standby:
+            out = dict(out, standby=True, acting=not spoke, hub=not spoke)
+        return out, code
 
     # ---- 0.21.88 (Kenton: "a private messaging feature ... whether online/offline. If offline, send it when back online.
     # Ability to setup group messages. These messages are not tied to any rooms."): PRIVATE MESSAGES. The hub keeps them
@@ -16092,8 +16102,12 @@ def handle_api(handler, relay, path, set_relay_url=None):
     if path == "/api/relay/gif":   # 0.21.91: GIF search (GIPHY) -- GET the card (never the key); POST {key} | {remove} | {on}
         auth = getattr(relay, "auth", None)
         post = handler.command == "POST"
+        try:   # the fleet's standby hub keeps its own key for when it acts as the hub
+            standby = (relay.standby_view() or {}).get("role") in ("standby", "promoted") if callable(getattr(relay, "standby_view", None)) else False
+        except Exception:
+            standby = False
         if auth is not None:
-            reply(*(auth.gif_operator(_payload_of(handler) or {}) if post else auth.gif_operator_view()))
+            reply(*(auth.gif_operator(_payload_of(handler) or {}, standby=standby) if post else auth.gif_operator_view(standby=standby)))
         else:
             g = kastr_gif.for_dir(getattr(relay, "state_dir", None) or os.getcwd())
             reply(*(g.configure(_payload_of(handler) or {}) if post else (dict(g.view(), ok=True, hub=True, secured=False), 200)))

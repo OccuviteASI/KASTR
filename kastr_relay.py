@@ -2848,6 +2848,38 @@ def library_board_paths(b, listed=()):
     return sorted(out)
 
 
+def guest_rooms(claims):
+    """0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): the rooms a GUEST token may see
+    listed -> a set of slugs, or None when the token is not a guest's. A guest = an invite-link member (`inv`: in the invited
+    room, or waiting in the Lobby for it -- `ir` names that room) or a personal-room guest (`pg`). A member with an access code
+    (even one who came by a link: `inv` without a guest's Lobby) sees every room, as before; relays and vehicles are not guests."""
+    if not isinstance(claims, dict) or is_relay_claims(claims) or claims.get("vehicle"):
+        return None
+    if not (claims.get("inv") or claims.get("pg")):
+        return None
+    out = set()
+    for k in ("ir", "get"):
+        v = claims.get(k)
+        if isinstance(v, str) and SLUG_RE.match(v) and v != LOBBY_SLUG:
+            out.add(v)
+    return out
+
+
+def rooms_for_guest(obj, allowed):
+    """0.21.91: a /api/rooms(/list) answer cut down to a guest's rooms: their rows (and tombstones) only, none of the fleet's
+    room groups or renames."""
+    obj = obj if isinstance(obj, dict) else {}
+    allowed = set(allowed or ())
+    out = dict(obj)
+    out["rooms"] = [x for x in (obj.get("rooms") or []) if isinstance(x, dict) and x.get("slug") in allowed]
+    closed = obj.get("closed")
+    out["closed"] = {k: v for k, v in closed.items() if k in allowed} if isinstance(closed, dict) else {}
+    out["groups"] = {}
+    out["renamed"] = {}
+    out["guest"] = True
+    return out
+
+
 def library_scope(claims, room=None, boards=None, listed=None):
     """0.21.84 (the scope seam): what a member token's holder may read of the stream library -> "lib" (all of it: fleet
     members, viewers included), [paths] (an invite-link guest `inv` or a personal-room guest `pg`: only the library streams
@@ -5940,8 +5972,10 @@ class AuthService:
                     # gate can list them and take their codes -- names only.
                     # 0.12.0: rows {slug, locked, persistent, creator, created, at} -- old pages read .slug
                     # 0.15.0: + the relay-defined room groups
-                    self._reply({"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
-                                 "renamed": svc.store.renamed_public()})   # 0.21.65
+                    out = {"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
+                           "renamed": svc.store.renamed_public()}   # 0.21.65
+                    g = guest_rooms(svc._member_claims(self.headers.get("Authorization")))   # 0.21.91: a guest sees their room only
+                    self._reply(rooms_for_guest(out, g) if g is not None else out)
                 elif path == "/api/invites":           # 0.21.75: a room's live invite links (its creator or an admin)
                     qs = parse_qs(urlparse(self.path).query)
                     obj, code = svc.invite_manage_api("list", {"room": (qs.get("room") or [""])[0]},
@@ -6583,7 +6617,9 @@ class AuthService:
                 return out, code
             if verdict != "ok":
                 return {"ok": False, "invite": verdict, "error": INVITE_REFUSED.get(verdict, "refused")}, 403
-            if inv_row.get("room") != slug:
+            # 0.21.91 (Kenton: "A guest who leaves their invited room lands in the Lobby showing that one room"): the link also
+            # lets its guest wait in the Lobby (presence only, like everyone there); never any other room
+            if inv_row.get("room") != slug and slug != LOBBY_SLUG:
                 return {"ok": False, "invite": "room", "error": "this invite link is for room %s" % inv_row.get("room")}, 403
             role = "publisher"
         elif self.store.configured():
@@ -6637,10 +6673,15 @@ class AuthService:
             lc = {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp}
             if role == "admin":
                 lc["adm"] = 1   # 0.21.65: an admin in the Lobby still proves it for Room settings (no ~admin put there)
+            if inv_row:   # 0.21.91: a guest waiting for the invited room -- the token says so (guest_rooms: that room alone)
+                lc.update(inv=inv_row["id"], ir=inv_row["room"])
             member = _mint(self.key, lc)
             registry = _mint(self.key, {"root": "", "put": CHANNELS_KIND + "/" + slug, "iat": now, "exp": exp})
-            return {"ok": True, "exp": exp, "role": role, "ns": NS, "lobby": True,
-                    "tokens": {"member": member, "registry": registry}}, 200
+            lout = {"ok": True, "exp": exp, "role": role, "ns": NS, "lobby": True,
+                    "tokens": {"member": member, "registry": registry}}
+            if inv_row:
+                lout["invite"] = {"id": inv_row["id"], "room": inv_row["room"], "exp": inv_row.get("exp")}
+            return lout, 200
         if host:
             # 0.13.0: identity-scoped puts. A token writes only under the host
             # it named (its media / its ~member broadcast, its ~state track) plus

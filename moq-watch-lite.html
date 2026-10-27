@@ -196,6 +196,28 @@
   body.inlobby #peopleBtn, body.inlobby #chatBtn, body.inlobby #filesBtn, body.inlobby #gridBtn { opacity:.3; pointer-events:none; }
   body.inlobby #msgBtn { display:none !important; }   /* 0.21.88: no messages from the Lobby (no access code there) */
   body.inlobby #stage { visibility:hidden; }
+  /* 0.21.91 (Kenton: "Leave should not be available in the Lobby"): hidden there, and the toolbar reflows (no gap where it was) */
+  #topbar #leaveBtn[hidden] { display:none !important; }
+  #lobbyCard .lbguest { display:flex; flex-direction:column; align-items:flex-start; gap:10px; }
+  #lobbyCard .lbguest .lbinv { font-size:14px; color:var(--text); }
+  #lobbyCard .lbguest .lbinv b { font-weight:600; }
+  #lobbyCard .lbguest button { background:var(--asi-blue); color:var(--on-accent); border:0; border-radius:6px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }
+  #lobbyCard .lbguest button:disabled { opacity:.5; cursor:default; }
+  #lobbyCard .lbguest .lbnote { font-size:12px; color:var(--text-mute); min-height:1em; }
+  #lobbyCard .lbguest[hidden], #lobbyCard .lbrooms[hidden], #lobbyCard .lbjoin[hidden] { display:none; }
+  /* 0.21.91: the launch goes straight to the main room -- a quiet line while it opens (instead of the Join room page) */
+  #mainGo { position:fixed; left:50%; top:42%; transform:translate(-50%, -50%); z-index:60; padding:12px 20px; border-radius:10px;
+    background:var(--surface-2); border:1px solid var(--line); color:var(--text-dim); font-size:14px; box-shadow:0 8px 30px rgba(0,0,0,.25); pointer-events:none; }
+  #mainGo[hidden] { display:none; }
+  #profilePop .mainrow { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
+  #profilePop .mainrow[hidden] { display:none; }
+  #profilePop .mainrow .hclbl { font-size:11px; color:var(--text-dim); }
+  #profilePop .mainseg { display:inline-flex; align-self:flex-start; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  #profilePop .mainseg label { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:13px; color:var(--text-dim); cursor:pointer; }
+  #profilePop .mainseg label + label { border-left:1px solid var(--line); }
+  #profilePop .mainseg input { position:absolute; opacity:0; pointer-events:none; }
+  #profilePop .mainseg label:has(input:checked) { background:var(--asi-blue); color:var(--on-accent); }
+  #profilePop .mainseg label:has(input:focus-visible) { outline:2px solid var(--asi-blue); outline-offset:-2px; }
   #lobbyCard { position:absolute; left:50%; top:max(24px, 12%); transform:translateX(-50%); width:min(520px, calc(100% - 32px)); z-index:5;
     padding:20px 22px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 18px 48px rgba(0,0,0,.45); }
   #lobbyCard[hidden] { display:none; }
@@ -3216,6 +3238,12 @@
     <!-- 0.21.61 (Kenton): the colour OTHERS see around me -- separate from my own app's accent (More > Accent colour) -->
     <div class="hcrow"><span class="hclbl">Your colour</span><span class="hcsw" id="profHc" aria-label="Your colour"></span>
       <p class="hint">Everyone sees it on your rings &mdash; around your picture, around your name in the rooms list and around your tile while you talk.</p></div>
+    <!-- 0.21.91 (Kenton: "an option in the profile menu that lets them choose their preferred main room. Either Lobby or My room") -->
+    <div class="mainrow" id="profMainRow"><span class="hclbl">Main room</span>
+      <div class="mainseg" role="radiogroup" aria-label="Main room">
+        <label title="KASTR starts in My room, and Leave takes you there"><input type="radio" name="profMain" value="mine">My room</label>
+        <label title="KASTR starts in the Lobby, and Leave takes you there"><input type="radio" name="profMain" value="lobby">Lobby</label></div>
+      <p class="hint">Where KASTR starts and where <b>Leave</b> takes you. Leaving your main room takes you to the Lobby. Saved on this device.</p></div>
     <div class="btnrow"><button type="button" id="profSave" class="join">Save</button><span id="profMsg" class="hint"></span></div>
   </div>
 </div>
@@ -3325,6 +3353,11 @@
 </div>
 
 <div id="joinGate">
+<script>/* 0.21.91: a launch that knows the name and codes goes straight to the main room -- the Join room page is not even painted
+  (mainLaunch decides; every path that needs the page shows it again). A reload's silent rejoin keeps its "Rejoining..." page. */
+try { var g = document.currentScript.parentElement, l = localStorage, s = sessionStorage;
+  if (l.getItem("kastr.lastjoin") && (l.getItem("kastr.profile") || l.getItem("kastr.operator.name")) && !/[?&]room=/.test(location.search)
+      && !/invite=/.test(location.hash) && !s.getItem("kastr.invite") && !s.getItem("kastr.rejoin")) g.hidden = true; } catch (e) {}</script>
   <div class="card">
     <h2 id="joinGateH">Join room &mdash; <span id="joinChannelCur">&mdash;</span></h2>
     <!-- 0.21.75: an invite link -- only the name is asked -->
@@ -3596,6 +3629,25 @@
   }
   window.__homeRoom = { of: homeRoomOf, is: isHomeRoom };   // module 2 + rig
   const inLobby = () => { try { return joinState === "joined" && CHANNEL === LOBBY; } catch { return false; } };   // (joinState is declared further down: early callers get false)
+  // 0.21.91 (Kenton: "Regular people with the Publisher code should start in their 'My room' instead of the lobby ... There should be
+  // an option in the profile menu that lets them choose their preferred main room. Either Lobby or My room. When joining KASTR or
+  // leaving a room, it should go to that preferred room"): THE MAIN ROOM -- "mine" (the default) or "lobby", this device's choice
+  // (kastr.mainroom). Everyone who is not a guest: publisher, admin and viewer codes alike. Boxes, relay-only machines and viewer
+  // displays keep the Join room page (mainPerson).
+  const MAIN_ROOM_KEY = "kastr.mainroom";
+  const mainPref = () => { try { return localStorage.getItem(MAIN_ROOM_KEY) === "lobby" ? "lobby" : "mine"; } catch { return "mine"; } };
+  function mainPrefSet(v) { try { localStorage.setItem(MAIN_ROOM_KEY, v === "lobby" ? "lobby" : "mine"); } catch {} }
+  // 0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): a GUEST is someone who came by an
+  // invite link with no access code of their own -- in a room or the Lobby: a secured relay's token minted without one; before
+  // joining: an invite on this tab and no access code known here. They see the Lobby and the invited room, nothing else.
+  function inviteGuest() {
+    try {
+      if (isPublisherMode()) return false;
+      if (joinState === "joined") return authSecured && authCodes && !authAccessCode;
+      return !!inviteGet() && !authAccessCode && !lastJoin()?.access;
+    } catch { return false; }
+  }
+  window.__inviteGuest = () => inviteGuest();   // rig
   const watchRooms = new Map();   // 0.21.44: rooms I only WATCH (slug -> state), see "watch extra rooms"
   // 0.16.0: <moq-watch> 0.6.0 -- `latency` is gone (a console warning, then ignored); the
   // player's target is jitter(delay) + buffer. Per tile class (applyState re-tunes): the
@@ -4952,7 +5004,8 @@
     const host = document.getElementById("sbMine");
     if (!host) return;
     const p = personalGet();
-    host.hidden = false;
+    host.hidden = inviteGuest();   // 0.21.91: a guest has no My room (and sees nothing of the fleet)
+    if (host.hidden) return;
     let card = host.querySelector(".sbcard.mine:not(.shared)");
     if (!card) {
       card = document.createElement("div"); card.className = "sbcard mine"; card.tabIndex = 0;
@@ -14414,7 +14467,7 @@
     clearTimeout(roomsChangedT);
     roomsChangedT = setTimeout(() => {
       roomsChangedT = null;
-      lastChannelList = deriveRooms();
+      lastChannelList = guestRooms(deriveRooms());   // 0.21.91: a guest sees the Lobby and the invited room only
       { const ds = [...deafOps()].sort().join(","); if (ds !== deafSeen) { deafSeen = ds; applyState(); try { paintParticipants?.(); } catch {} } }   // 0.21.40
       const slugs = lastChannelList.map((r) => r.slug).join(",");
       if (slugs !== roomsSlugsSeen) { roomsSlugsSeen = slugs; if (Date.now() - roomsMinterAt > 5000) roomsMinterPoll(); }   // a new room: learn its kept/lock flags now, not in 30 s
@@ -14586,14 +14639,17 @@
     try {
       const hb = relayHostBase();
       if (hb) {
-        const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store" });
+        // 0.21.91: a guest's page shows its token -- the relay host then answers only the guest's room (nothing of the fleet)
+        const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;
+        const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store", headers: gh });
         if (r.ok) got = await r.json();
       }
     } catch {}
     if (!got && authSecured) {
       try {
         const base = authBase();
-        const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store" }) : null;
+        const gh = inviteGuest() && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;   // 0.21.91
+        const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store", headers: gh }) : null;
         if (r && r.ok) got = await r.json();
       } catch {}
     }
@@ -14749,6 +14805,12 @@
     }));
   }
   function lastJoin() { try { return JSON.parse(localStorage.getItem("kastr.lastjoin") || "null"); } catch { return null; } }
+  // 0.21.91: a guest's rooms -- the Lobby and the room the invite is for (whatever the anonymous room model lists)
+  function guestRooms(list) {
+    if (!inviteGuest()) return list;
+    const inv = inviteGet();
+    return list.filter((r) => r.slug === LOBBY || (!!inv && r.slug === inv.room));
+  }
   // Kept for the __switcher seam and old callers: the list is live now.
   async function listChannels() { return lastChannelList; }
 
@@ -17314,8 +17376,21 @@
     if (!modal) placePop(profilePop, optBtn);
     profLoad(profile?.avatar || "");
     profHc.set(profile?.color || "");   // 0.21.61
+    { // 0.21.91: the main room -- for people (never a camera box, relay-only machine, viewer display or an invite-link guest)
+      const row = document.getElementById("profMainRow");
+      let can = true;
+      try { can = !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay" && !inviteGuest(); } catch {}
+      row.hidden = !can;
+      for (const r of row.querySelectorAll('input[name="profMain"]')) r.checked = r.value === mainPref();
+    }
     setTimeout(() => document.getElementById("profFirst").focus(), 50);
   }
+  for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
+    if (!r.checked) return;
+    mainPrefSet(r.value);
+    window.__toast?.(r.value === "lobby" ? "Main room: the Lobby \u2014 KASTR starts there and Leave takes you there" : "Main room: My room \u2014 KASTR starts there and Leave takes you there", 4000, { level: "event" });
+    try { gateKey = ""; gatePaintChannels(); } catch {}
+  });
   const profHc = hcPicker(document.getElementById("profHc"), { value: profile?.color || "", none: "Automatic" });   // 0.21.61
   function closeProfile() {
     profilePop.hidden = true;
@@ -17804,7 +17879,8 @@
     const base = authBase();
     if (!base) throw new Error("no relay url");
     const inv = inviteGet();   // 0.21.75: an invite link for THIS room rides every mint (the join and the re-mints) until it ends
-    const invTok = inv && inv.room === room ? inv.token : undefined;
+    // 0.21.91: ... and a guest's Lobby (no access code of their own): the link lets them wait there for the room it is for
+    const invTok = inv && (inv.room === room || (room === LOBBY && !String(access ?? ""))) ? inv.token : undefined;
     const adm = invTok ? null : accGrantFor(room);   // 0.21.89: let in by someone in the room -- the grant rides this room's mints (this visit)
     const admTok = adm ? "ka-" + adm.id + "-" + adm.key : undefined;
     // 0.21.68 (Kenton: "Could not join aoz-6: Failed to fetch" -- it joined on a later try): a NETWORK failure (the relay host's KASTR
@@ -20127,13 +20203,32 @@
   function paintLobby() {
     const on = inLobby();
     document.body.classList.toggle("inlobby", on);
+    // 0.21.91 (Kenton: "Leave should not be available in the Lobby"): nothing to leave there (a camera box keeps it: its Leave is
+    // the Join room page, where it picks "No room")
+    try { joinEls.leaveBtn.hidden = joinState !== "joined" || (on && !isPublisherMode()); } catch {}
     if (!on) { if (lobbyEl) lobbyEl.hidden = true; return; }
     if (!lobbyEl) {
       lobbyEl = document.createElement("div"); lobbyEl.id = "lobbyCard";
-      lobbyEl.innerHTML = '<h2>Lobby</h2><p>Pick a room to join. Nothing is shared here, and nobody can see who else is waiting; cameras, microphones and chat start once you are in a room.</p><div class="lbrooms"></div>';
+      lobbyEl.innerHTML = '<h2>Lobby</h2><p class="lbtxt"></p><div class="lbrooms"></div><div class="lbguest" hidden><div class="lbinv"></div><button type="button" class="lbjoin">Join again</button><div class="lbnote" role="status"></div></div>';
       document.getElementById("stagewrap")?.appendChild(lobbyEl);
+      lobbyEl.querySelector(".lbjoin").addEventListener("click", () => lobbyGuestJoin());
     }
     lobbyEl.hidden = false;
+    // 0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): a guest's Lobby is that one room
+    const guest = inviteGuest();
+    lobbyEl.classList.toggle("guest", guest);
+    lobbyEl.querySelector(".lbtxt").textContent = guest
+      ? "Nothing is shared here, and nobody can see who else is waiting."
+      : "Pick a room to join. Nothing is shared here, and nobody can see who else is waiting; cameras, microphones and chat start once you are in a room.";
+    lobbyEl.querySelector(".lbguest").hidden = !guest;
+    lobbyEl.querySelector(".lbrooms").hidden = guest;
+    if (guest) {
+      const inv = inviteGet();
+      const t = lobbyEl.querySelector(".lbinv"), b = lobbyEl.querySelector(".lbjoin");
+      if (inv) { t.replaceChildren("You were invited to ", Object.assign(document.createElement("b"), { textContent: roomTitle(inv.room) }), ". Join it again while your invite link works."); b.hidden = false; }
+      else { t.textContent = "Your invite link has ended \u2014 ask the person who invited you for a new one."; b.hidden = true; }
+      return;
+    }
     const box = lobbyEl.querySelector(".lbrooms");
     const rooms = lastChannelList.filter((r) => r.slug !== LOBBY);
     const key = rooms.map((r) => r.slug + ":" + (r.count || 0) + ":" + (r.locked ? 1 : 0)).join(",");
@@ -20156,6 +20251,22 @@
     }
   }
   setInterval(() => { try { paintLobby(); } catch {} }, 1000);
+  // 0.21.91: a guest's "Join again" from the Lobby -- the invited room by the same link (the owner-away / expired refusals say so)
+  let lobbyGuestBusy = false;
+  async function lobbyGuestJoin() {
+    const inv = inviteGet();
+    if (!inv || lobbyGuestBusy || !inLobby()) return;
+    lobbyGuestBusy = true;
+    const b = lobbyEl?.querySelector(".lbjoin"), note = lobbyEl?.querySelector(".lbnote");
+    if (b) b.disabled = true;
+    if (note) note.textContent = "Joining " + roomTitle(inv.room) + "\u2026";
+    try {
+      const rec = lastChannelList.find((r) => r.slug === inv.room) || { slug: inv.room, personal: isPersonalSlug(inv.room) };
+      await switchRoom(rec, "");
+      if (note) note.textContent = CHANNEL === inv.room ? "" : "Could not join " + roomTitle(inv.room) + " \u2014 see the message above.";
+    } finally { lobbyGuestBusy = false; if (b) b.disabled = false; }
+  }
+  window.__lobbyGuestJoin = () => lobbyGuestJoin();   // rig
   function paintSidebar() {
     if (!sbRoomsEl) return;
     try { personalCardPaint(); } catch {}   // 0.21.75: My room, above the list
@@ -21552,6 +21663,7 @@
     if (wasLive) document.getElementById("liveBtn").click();
     switchMark("joined");   // 0.21.70
     paintChannelChip(); paintSidebar();   // 0.12.0: the banner names the new room, its card leaves the list
+    try { paintLobby(); } catch {}   // 0.21.91: no Leave in the Lobby -- at once, not on the next 1 s paint
     try { window.__chatRoomChanged?.(); } catch {}
     try {
       const saved = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null");
@@ -21591,6 +21703,17 @@
   }
   async function inviteArrive(inv) {
     const room = String(inv.room);
+    // 0.21.91: the link's relay is this one (or it names none) -- a person in a room goes straight there, never via the Join room page
+    let sameRelay = !inv.relay;
+    try { const k = (u) => { const x = new URL(relayAddr(u)); return x.protocol + "//" + x.host + x.pathname.replace(/[/]+$/, ""); }; sameRelay = sameRelay || k(inv.relay) === k(urlInput.value.trim()); } catch {}
+    const inviteSwitch = async () => {
+      let prev = null;
+      try { prev = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
+      await switchRoom(lastChannelList.find((r) => r.slug === room) || { slug: room, personal: isPersonalSlug(room) }, "");
+      if (joinState === "joined" && CHANNEL === room && !prev) {   // the silent branch dropped the session ticket: a reload comes back here
+        try { sessionStorage.setItem("kastr.rejoin", JSON.stringify({ room, code: "", access: authAccessCode, name: myOpName(), micOn: false, vidOn: false })); } catch {}
+      }
+    };
     // 0.21.86 (Kenton: an invite link "opened the app and then took him straight to the lobby"): a SILENT rejoin -- after an
     // update, a restart or a reload, back to the room I was in -- never beats a link the person has just opened. The ticket
     // goes; a rejoin still on its way is waited out and left without asking.
@@ -21601,6 +21724,7 @@
       try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
       inviteSet({ token: inv.token, room, at: Date.now() });   // a rejoin that has not called joinNow yet now joins THIS room
       for (let i = 0; i < 100 && joinState === "joining"; i++) await new Promise((r) => setTimeout(r, 200));
+      if (joinState === "joined" && CHANNEL !== room && sameRelay && mainPerson()) await inviteSwitch();   // 0.21.91: Leave never logs out
       if (joinState === "joined" && CHANNEL !== room) leaveMeeting();
     }
     if (joinState === "joined" && CHANNEL === room) { if (!silent) window.__toast?.("You are already in " + roomTitle(room), 4000, { level: "event" }); return; }
@@ -21610,6 +21734,11 @@
       if (!ok) return;
     }
     inviteSet({ token: inv.token, room, at: Date.now() });
+    // 0.21.91: Leave never logs out -- someone in a room of this relay goes straight to the invited room by the link
+    if (joinState === "joined" && !silent && mainPerson() && sameRelay) {
+      await inviteSwitch();
+      if (joinState === "joined" && CHANNEL === room) return;
+    }
     if (joinState === "joined") leaveMeeting();   // -> the gate, in invite mode
     const cur = urlInput.value.trim();
     const key = (u) => { try { const x = new URL(relayAddr(u)); return x.protocol + "//" + x.host + x.pathname.replace(/[/]+$/, ""); } catch { return String(u || ""); } };
@@ -21865,6 +21994,7 @@
     if (!best) return null;
     if (best.url !== cur) {
       await gateRelayApply(best.url, { keepCodes: true });   // 0.21.38: the saved codes stay
+      relayAutoMoved = true;   // 0.21.91: a move within the fleet -- the saved codes still open the main room
       window.__toast?.("Connected to the nearest relay: " + (relayNameOf(best.url) || relayLabel(best.url))
         + (best.hops != null ? " (" + best.hops + " hop" + (best.hops === 1 ? "" : "s") + ")" : ""), 6000, { level: "info" });
     }
@@ -21872,7 +22002,10 @@
     return best.url;
   }
   window.__relayAutoPick = relayAutoPick;   // rig
-  setTimeout(() => { relayAutoPick().then((u) => { if (!u) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }); }, 1500);
+  // 0.21.91: the main-room launch waits for this (it may move this machine to another relay of the fleet)
+  let relayPickDoneRes = null, relayAutoMoved = false;
+  const relayPickDone = new Promise((r) => { relayPickDoneRes = r; });
+  setTimeout(() => { relayAutoPick().then((u) => { if (!u) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }).finally(() => relayPickDoneRes()); }, 1500);
   { // a relay down for 15 s during a session -> one offer per outage
     let downSince = 0, offered = false;
     setInterval(() => {
@@ -21992,8 +22125,9 @@
     const cur = readChannel();
     const sel = joinEls.joinChanSel;
     const list = lastChannelList;
-    const key = (isPublisherMode() ? "box:" + (libOn() ? "lib:" : "") : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
-    if (sel.options.length && (key === gateKey || document.activeElement === sel)) return;
+    let key = (isPublisherMode() ? "box:" + (libOn() ? "lib:" : "") : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
+    const keyMine = mainPerson() && !inviteGuest() && !!personalGet() ? "|mine:" + mainPref() : "";   // 0.21.91
+    if (sel.options.length && (key + keyMine === gateKey || document.activeElement === sel)) return;
     gateKey = key;
     const keep = sel.options.length ? sel.value : null;
     sel.replaceChildren();
@@ -22007,16 +22141,22 @@
       sel.appendChild(new Option(r.slug === LOBBY ? "Lobby" : r.slug + (r.locked ? " (locked)" : "") + (r.persistent ? " (always open)" : "") + n, r.slug));   // 0.21.60: the Lobby says nothing of who is there
     }
     sel.appendChild(new Option("New room\u2026", "__new"));
+    // 0.21.91: My room (when this device keeps it) heads the list -- a person's main room by default
+    const mineOpt = mainPerson() && !inviteGuest() && !!personalGet();
+    if (mineOpt) sel.insertBefore(new Option("My room", "__mine"), sel.firstChild);
     const lj = lastJoin();   // 0.11.0: the last room joined is preselected, never auto-joined
     let invited = "";   // 0.21.23: Share invite links carry ?room=<slug>
     try { const r = new URLSearchParams(location.search).get("room"); if (r) invited = channelSlug(r); } catch {}
     let want = keep ?? (invited && list.some((r) => r.slug === invited) ? invited : lj && lj.room ? channelSlug(lj.room) : "main");   // 0.21.34: main the first time
     if (invited && !gateLinkUsed && list.some((r) => r.slug === invited)) { want = invited; gateLinkUsed = true; }   // 0.21.89: the link's room, once it is listed (a locked one offers Ask for access)
     if (isHomeRoom(want)) want = isPublisherMode() ? "__home" : "main";   // 0.21.75
+    if (keep == null && !(invited && list.some((r) => r.slug === invited)) && mainPerson()) want = mineOpt && mainPref() === "mine" ? "__mine" : mainPref() === "lobby" ? "main" : want;   // 0.21.91: the main room
     // 0.21.34: the last room, unless it is gone, or locked without its code saved here -> main (no room question on the card)
     const wantRec = list.find((r) => r.slug === want);
     if (want !== invited && wantRec?.locked && !(lj && channelSlug(lj.room) === want && lj.code)) want = "main";
     sel.value = [...sel.options].some((o) => o.value === want && o.value !== "__new") ? want : "main";
+    key += mineOpt ? "|mine:" + mainPref() : "";   // 0.21.91: My room set up (or forgotten) here repaints the list
+    gateKey = key;
     paintPwdRow();
   }
 
@@ -22043,15 +22183,15 @@
   // 0.21.61: after an update relaunch (the app says justUpdated) the room this window was in within the last 20 minutes
   // comes back without the gate: the last join's codes, the mic and camera as they were, then the spotlights I had set
   let resumeTried = false;
-  function resumeCheck() {
-    if (resumeTried || IS_WEB || isPublisherMode() || isViewerMode()) return;
+  function resumeCheck() {   // 0.21.91: -> a promise of "it took over" (the main-room launch waits for it)
+    if (resumeTried || IS_WEB || isPublisherMode() || isViewerMode()) return Promise.resolve(false);
     resumeTried = true;
     let live = null;
     try { live = JSON.parse(localStorage.getItem(LIVE_KEY) || "null"); } catch {}
     const lj = lastJoin();
-    if (!live || !live.room || !lj || lj.room !== live.room || Date.now() - (Number(live.at) || 0) > 1200000) return;
-    fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-      if (!(d?.justUpdated || d?.justRestarted) || joinState !== "prejoin" || joinEls.joinGate.hidden) return;   // 0.21.73: + an admin's Restart / Move
+    if (!live || !live.room || !lj || lj.room !== live.room || Date.now() - (Number(live.at) || 0) > 1200000) return Promise.resolve(false);
+    return fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()).then((d) => {
+      if (!(d?.justUpdated || d?.justRestarted) || joinState !== "prejoin" || (joinEls.joinGate.hidden && !mainCovering())) return false;   // 0.21.73: + an admin's Restart / Move; 0.21.91: + under the main-room launch's note
       try { localStorage.removeItem(LIVE_KEY); } catch {}   // once: a failed rejoin leaves the normal gate
       const t = { room: live.room, code: lj.code || "", access: lj.access || "", synthetic: true, resumed: true,
                   restarted: !d.justUpdated && !!d.justRestarted, moved: String(d.adminMoved || ""),   // 0.21.73
@@ -22060,7 +22200,8 @@
       try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
       if (live.acc && live.acc.room === live.room) accGrantSet(live.acc);   // 0.21.89: the visit someone let me in for goes on (if it still lives at the relay)
       gateShow();
-    }).catch(() => {});
+      return true;
+    }).catch(() => false);
   }
   function resumeAfterJoin(t) {
     if (CHANNEL !== channelSlug(t.room)) return;   // 0.21.86: an invite link took this rejoin elsewhere
@@ -22080,6 +22221,7 @@
   }
   function gateShow() {
     joinState = "prejoin";
+    mainCover("");   // 0.21.91: (a main-room ticket below puts its own line back)
     try { paintCtxBanner(); } catch {}   // 0.17.0
     joinEls.leaveBtn.hidden = true;      // Leave means nothing at the gate
     authDetect().catch(() => {}).then(() => { try { paintPwdRow(); } catch {} });   // 0.10.0: the access-code row follows the relay's answer
@@ -22136,15 +22278,18 @@
       stopGatePreview();
       joinEls.joinPrevOff.querySelector(".ji").innerHTML = icon("camOff");
       gateMsg("Rejoining " + saved.room + "\u2026");
-      joinEls.joinGate.hidden = false;
+      joinEls.joinGate.hidden = !!saved.main;   // 0.21.91: the launch into the main room skips the Join room page
+      if (saved.main) mainCover(isPersonalSlug(saved.room) ? "Opening My room\u2026" : "Opening the Lobby\u2026");
       // authDetect must land first: joining a secured relay without the
       // beacon answer would skip the mint and bounce off the relay.
       const go = () => authDetect().catch(() => {}).then(() => joinNow()).then(() => {
         if (saved.resumed && joinState === "joined") resumeAfterJoin(saved);   // 0.21.61
+        if (saved.main) mainLaunchDone(saved);   // 0.21.91
         if (joinState !== "joined") {
           rejoinRec = null;
           try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
           if (isPublisherMode()) pubRejoinRetry();   // 0.12.0
+          if (saved.main && joinState === "prejoin") mainLaunchFailed(saved);   // 0.21.91: the Join room page, with why
         }
         rejoinRec = null;
       });
@@ -22195,7 +22340,8 @@
   function gateHide() {
     stopGatePreview();
     joinEls.joinGate.hidden = true;
-    joinEls.leaveBtn.hidden = joinState !== "joined";
+    mainCover("");   // 0.21.91
+    joinEls.leaveBtn.hidden = joinState !== "joined" || (readChannel() === LOBBY && !isPublisherMode());   // 0.21.91: no Leave in the Lobby
     paintChannelChip();                  // "Join a room…" vs "Room: x"
   }
 
@@ -22262,7 +22408,7 @@
     gateMsg("Joining\u2026");
 
     // Channel + advisory password first: the relay commits read the slug.
-    let slug, rec = null;
+    let slug, rec = null, pwd = null;   // 0.21.91: pwd -- the room code this join uses (My room's is this device's, never typed)
     const inv = inviteGet();   // 0.21.75: an invite link -- its room; the minter checks the link (no code checks here)
     if (inv && (!rejoinRec || channelSlug(rejoinRec.room) === inv.room)) {
       slug = inv.room;
@@ -22277,6 +22423,12 @@
       joinEls.joinPwd.value = rejoinRec.code ?? "";
       joinEls.joinAccess.value = rejoinRec.access ?? "";   // 0.10.0
       if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: a rejoin ticket is checked too; 0.21.89: a let-in visit has no code (the mint checks the grant)
+    } else if (joinEls.joinChanSel.value === "__mine") {   // 0.21.91: My room, with the code this device keeps for it
+      const p = personalGet();
+      if (!p) return joinFail("My room is not set up on this device \u2014 pick another room.");
+      slug = p.slug;
+      rec = null;
+      pwd = p.code;
     } else if (joinEls.joinChanSel.value === "__home") {   // 0.21.75: a box in no room -- its own hidden room (no lock, not registered)
       slug = homeRoomOf(HOSTNAME1);
       rec = null;
@@ -22309,6 +22461,7 @@
       rec = lastChannelList.find((r) => r.slug === slug) ?? null;
       if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: hash-less locks fail closed on open relays; 0.21.89: a let-in visit has no code
     }
+    if (pwd === null) pwd = joinEls.joinPwd.value;
     try { localStorage.setItem(CHANNEL_KEY, slug); } catch {}
 
     // Secured relay: the mint is the authoritative code check (the
@@ -22317,7 +22470,7 @@
     if (authSecured) {
       try {
         gateMsg("Joining\u2026 checking the access code");
-        if (await withinMs(authMint(slug, joinEls.joinAccess.value, joinEls.joinPwd.value), 15000) === JOIN_TIMEOUT)   // 0.10.0: access code + room code
+        if (await withinMs(authMint(slug, joinEls.joinAccess.value, pwd), 15000) === JOIN_TIMEOUT)   // 0.10.0: access code + room code
           throw new Error("the relay's token service did not answer in 15 s");   // 0.21.18
       } catch (e) {
         const msg = String(e?.message || e);
@@ -22328,6 +22481,12 @@
             : /revoked/i.test(msg) ? "This invite link was revoked \u2014 ask for a new one."
             : /is for room/i.test(msg) ? "This invite link is for another room."
             : "This invite link is not valid \u2014 ask for a new one.");
+        }
+        if (isPersonalSlug(slug) && slug === personalGet()?.slug && /wrong room code|no such personal room/i.test(msg)) {   // 0.21.91: My room's saved code is stale
+          personalSave(null);
+          gateKey = "";
+          try { gatePaintChannels(); } catch {}
+          return joinFail("My room did not open with the code this device remembered \u2014 pick a room and join; My room asks for its code again.");
         }
         return joinFail(/removed from this room/i.test(msg) ? "You were removed from this room by an admin \u2014 try again later."   // 0.17.0
           : /wrong access code/i.test(msg) ? "Wrong access code for this relay."
@@ -22423,14 +22582,19 @@
     // Leave or a deliberate disconnect -- exactly the requested rule.
     try {
       sessionStorage.setItem("kastr.rejoin", JSON.stringify({
-        room: slug, code: joinEls.joinPwd.value, access: joinEls.joinAccess.value,   // 0.10.0: access code rides the ticket
+        room: slug, code: pwd, access: joinEls.joinAccess.value,   // 0.10.0: access code rides the ticket
         name: joinEls.joinName.value, micOn: joinMicOn, vidOn: joinVidOn }));
     } catch {}
-    try { localStorage.setItem("kastr.lastjoin", JSON.stringify({ room: slug, code: joinEls.joinPwd.value, access: joinEls.joinAccess.value,
+    try { localStorage.setItem("kastr.lastjoin", JSON.stringify({ room: slug, code: pwd, access: joinEls.joinAccess.value,
                                                                     micOn: joinMicOn, vidOn: joinVidOn,
                                                                     relay: urlInput.value.trim() })); } catch {}   // 0.8.8 / 0.10.0 / 0.12.0: toggles too / 0.13.0: the relay the codes belong to
     gateCodesStale = false;   // 0.13.0 (F7): these codes are the current relay's
-    sessionPersist(slug, joinEls.joinAccess.value, joinEls.joinPwd.value);   // 0.12.0
+    sessionPersist(slug, joinEls.joinAccess.value, pwd);   // 0.12.0
+    // 0.21.91 (Kenton: "the person lands in My room afterwards"): a person whose main room is My room but who has none on this
+    // device yet sets it up (the 0.21.89 card in a room; My room's own dialog in the Lobby) and is then taken there
+    mainLand = mainPerson() && !inv && !inviteGuest() && authSecured && mainPref() === "mine" && !personalGet() && !isPersonalSlug(slug);
+    mainLandAsked = false;
+    try { paintLobby(); } catch {}
     if (!isViewerMode() && !IS_WEB) setTimeout(() => { try { window.__rtspRestore?.(); } catch {} }, 800);   // 0.8.8: persistent RTSP feeds; 0.17.0: not from a web client
     paintTopCam();
   }
@@ -22455,7 +22619,11 @@
     accGrantSet(null);   // 0.21.89: Leave ends a visit someone let me in for
     joinState = "leaving";
     try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
-    try { localStorage.removeItem("kastr.lastjoin"); } catch {}   // 0.8.8: Leave = pick a room next time
+    try {   // 0.8.8: Leave = pick a room next time; 0.21.91: a person's access code stays (the next launch opens the main room with it)
+      const lj = lastJoin();
+      if (lj && lj.access && mainPerson()) localStorage.setItem("kastr.lastjoin", JSON.stringify({ room: "", code: "", access: lj.access, relay: lj.relay || "" }));
+      else localStorage.removeItem("kastr.lastjoin");
+    } catch {}
     pubRejoinStop = true; clearTimeout(pubRejoinT);   // 0.12.0: Leave means stay at the gate, even on a camera box
     sessionPersist("", "", "");                        // 0.12.0: nothing to republish at the next launch
     focusMode = false;
@@ -22476,6 +22644,128 @@
     try { window.__chatRoomChanged?.(); } catch {}
     gateShow();
   }
+
+  // ---- 0.21.91 THE MAIN ROOM: the launch, Leave and the landing in My room -----------------------------------------------------
+  // Kenton: "Regular people with the Publisher code should start in their 'My room' instead of the lobby. The lobby should be for
+  // those that hit leave in a room or guests ... The leave button should leave the room, but not logout of KASTR. It should put
+  // them in the lobby instead ... When joining KASTR or leaving a room, it should go to that preferred room." Decided: the main
+  // room is My room (the default) or the Lobby (Profile); a launch that knows the name and codes skips the Join room page; the
+  // Join room page stays for the first time, a relay switch, a refused / changed code, or a main room that cannot open (no My
+  // room yet). A resume after an update, the silent rejoin, an invite link and a room link (?room=) still win. Leave goes to the
+  // main room -- or to the Lobby when I am already in it. Camera boxes, relay-only machines and viewer displays are unchanged.
+  const mainPerson = () => !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay";
+  function mainTarget(from) {   // -> {slug, code, personal}: where a launch / Leave goes from `from`
+    if (inviteGuest()) return { slug: LOBBY, code: "" };
+    const p = personalGet();
+    if (mainPref() === "mine" && p && from !== p.slug) return { slug: p.slug, code: p.code, personal: true };
+    return { slug: LOBBY, code: "" };
+  }
+  let mainGoEl = null;
+  function mainCover(text) {
+    if (!text && !mainGoEl) return;
+    if (!mainGoEl) { mainGoEl = document.createElement("div"); mainGoEl.id = "mainGo"; mainGoEl.setAttribute("role", "status"); document.body.appendChild(mainGoEl); }
+    mainGoEl.textContent = text || "";
+    mainGoEl.hidden = !text;
+  }
+  const mainCovering = () => !!mainGoEl && !mainGoEl.hidden;
+  let mainInfo = { phase: "", why: "", target: "", t0: 0, ms: null, leave: null };   // rig (__join.main())
+  const mainSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function mainLaunch() {
+    const t0 = performance.now();
+    mainInfo = { phase: "deciding", why: "", target: "", t0: Date.now(), ms: null, leave: mainInfo.leave };
+    const gate = (why) => { mainInfo.phase = "gate"; mainInfo.why = why; mainInfo.ms = Math.round(performance.now() - t0); log("Launch: the Join room page \u2014 " + why); gateShow(); };
+    if (!mainPerson()) return gate("a camera box, relay-only machine or viewer display");
+    let ticket = null;
+    try { ticket = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
+    if (ticket?.room) return gate("a rejoin");   // gateShow rejoins silently (a reload)
+    if (inviteGet()) return gate("an invite link");
+    try { if (new URLSearchParams(location.search).get("room")) return gate("a room link"); } catch {}
+    const lj = lastJoin();
+    if (!lj || !(lj.access || lj.room)) return gate("the first launch here");   // (the camera toggle alone writes {vidOn} there)
+    const name = String((profile && profileName(profile)) || localStorage.getItem("kastr.operator.name") || "").trim();
+    if (!name) return gate("no name yet");
+    mainCover("Starting KASTR\u2026");
+    joinEls.joinGate.hidden = true;   // (the page's own markup shows it until a script hides it; whoever needs it shows it again)
+    await Promise.race([relayPickDone, mainSleep(8000)]);   // the nearest relay first (it may move this machine within the fleet)
+    if (joinState !== "prejoin") { mainCover(""); return; }
+    if (await resumeCheck()) { mainInfo.phase = "resume"; mainInfo.ms = Math.round(performance.now() - t0); return; }   // an update / restart: back to the room I was in
+    if (!IS_WEB && gateIsLoopback()) { try { await invitePendingPoll(); } catch {} }   // an invite link that started KASTR wins
+    if (inviteGet() || joinState !== "prejoin" || !joinEls.joinGate.hidden) {
+      mainInfo.phase = "invite"; mainCover("");
+      if (joinState === "prejoin" && joinEls.joinGate.hidden) gateShow();
+      return;
+    }
+    const cur = urlInput.value.trim(), fleet = new Set(window.__KASTR_KNOWN_RELAYS || []);
+    if (gateCodesStale || (lj.relay && lj.relay !== cur && !(fleet.has(lj.relay) && fleet.has(cur)) && !relayAutoMoved)) { mainCover(""); return gate("another relay than the last join's"); }
+    await authDetect().catch(() => {});
+    const access = String(lj.access || "");
+    if (authSecured && authCodes && !access) { mainCover(""); return gate("no access code saved for this relay"); }
+    const tgt = mainTarget("");
+    if (mainPref() === "mine" && !tgt.personal) { mainCover(""); return gate("no My room on this device yet"); }
+    if (tgt.personal && !authSecured) { mainCover(""); return gate("My room needs a secured relay"); }
+    mainInfo.phase = "joining"; mainInfo.target = tgt.slug;
+    // a synthetic rejoin ticket: gateShow joins it without the page (an invite link that lands meanwhile still wins -- inviteArrive)
+    const t = { room: tgt.slug, code: tgt.code, access, synthetic: true, main: true, name, micOn: false, vidOn: false };
+    try { sessionStorage.setItem("kastr.rejoin", JSON.stringify(t)); } catch {}
+    mainInfo.ticketMs = Math.round(performance.now() - t0);
+    gateShow();
+  }
+  function mainLaunchDone(t) {
+    if (joinState !== "joined") return;
+    mainInfo.phase = "joined"; mainInfo.ms = Date.now() - mainInfo.t0; mainInfo.room = CHANNEL;
+    log("Launch: straight into " + roomTitle(CHANNEL) + " (" + mainInfo.ms + " ms, no Join room page)");
+  }
+  function mainLaunchFailed(t) {
+    const why = joinEls.joinMsg.textContent || "";
+    mainInfo.phase = "failed"; mainInfo.why = why; mainInfo.ms = Date.now() - mainInfo.t0;
+    joinEls.joinPwd.value = "";   // (My room's code never stays in the page's code field)
+    gateShow();
+    gateMsg(/wrong room code/i.test(why) && isPersonalSlug(t.room) ? "My room did not open with the code this device remembered \u2014 pick a room and join; My room asks for its code again."
+      : why || "Could not open " + roomTitle(t.room) + " \u2014 pick a room and join.");
+  }
+  // Leave -> the main room (the Lobby when I am in it already); a guest -> the Lobby with the invited room; a box -> as before
+  let leaveBusy = false;
+  async function leaveToMain() {
+    if (joinState !== "joined" || leaveBusy) return;
+    if (!mainPerson()) { leaveMeeting(); return; }   // camera boxes / viewer displays: the Join room page, as before
+    if (CHANNEL === LOBBY) return;                   // (no Leave in the Lobby)
+    leaveBusy = true;
+    const from = CHANNEL, t0 = performance.now(), tgt = mainTarget(from);
+    try {
+      closeAllPops();
+      try { window.__publisher?.dropShares?.(); } catch {}   // leaving: my screen / window / file shares end with the room (the camera goes muted and off, as any room change)
+      try { localStorage.removeItem(LIVE_KEY); } catch {}
+      const lobbyRec = () => lastChannelList.find((r) => r.slug === LOBBY) || { slug: LOBBY };
+      await switchRoom(tgt.personal ? { slug: tgt.slug, personal: true } : lobbyRec(), tgt.code);
+      if (joinState === "joined" && CHANNEL === from && tgt.slug !== LOBBY) await switchRoom(lobbyRec(), "");   // My room refused -> the Lobby
+      if (joinState === "joined" && CHANNEL === from) { log("Leave: the main room and the Lobby refused \u2014 the Join room page"); leaveMeeting(); return; }
+      mainInfo.leave = { from, to: CHANNEL, ms: Math.round(performance.now() - t0), at: Date.now() };
+      log("Left " + roomTitle(from) + " \u2014 now in " + roomTitle(CHANNEL) + " (" + mainInfo.leave.ms + " ms)");
+      window.__toast?.("Left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " \u2014 you\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)), 4000, { level: "event" });
+    } finally { leaveBusy = false; }
+  }
+  // the landing in My room after it is set up (the first join of a person whose main room is My room)
+  let mainLand = false, mainLandAsked = false;
+  setInterval(() => {
+    if (!mainLand) return;
+    if (joinState !== "joined") return;
+    if (!mainPerson() || inviteGuest() || mainPref() !== "mine") { mainLand = false; return; }
+    const shown = (id) => { const e = document.getElementById(id); return !!e && !e.hidden; };
+    const p = personalGet();
+    if (!p) {
+      // the Lobby has no Messages, so the 0.21.89 card cannot ask there: My room's own dialog does (once); it opens My room when done
+      if (inLobby() && !mainLandAsked && !shown("kMyRoom") && !shown("kConfirm") && !shown("profilePop") && !shown("kSetup")) {
+        mainLandAsked = true; mainLand = false;
+        personalDialog();
+      }
+      return;
+    }
+    if (CHANNEL === p.slug) { mainLand = false; return; }
+    if (shown("kSetup") || shown("kMyRoom") || shown("kConfirm") || shown("profilePop")) return;   // the set-up finishes first
+    mainLand = false;
+    log("My room is set up \u2014 opening it (the main room)");
+    switchRoom({ slug: p.slug, personal: true }, p.code);
+  }, 1000);
 
   function initJoinGate() {
     joinEls.joinMicBtn.addEventListener("click", () => { joinMicOn = !joinMicOn; paintJoinToggles(); });
@@ -22505,7 +22795,7 @@
         if (!joinEls.joinBtn.disabled && !joinEls.joinBtn.hidden) joinNow();
       });
     }
-    joinEls.leaveBtn.addEventListener("click", leaveMeeting);
+    joinEls.leaveBtn.addEventListener("click", () => { leaveToMain(); });   // 0.21.91: the main room, never the Join room page (a box: as before)
     // 0.21.89 (Kenton: "remove the x in the corner of the Join room page", then "remove escape too"): the gate is no
     // longer dismissible -- no close button, no Escape (0.7.7 let relay-only machines put it away).
     joinEls.roomBanner.addEventListener("click", (e) => {
@@ -22516,14 +22806,16 @@
     // 0.8.1: People is a registered popover -- outside clicks, Esc and
     // the other popovers' mutual exclusion all come with registerPop.
     window.__join = { state: () => joinState, join: joinNow, leave: leaveMeeting,
-      reconnect: () => { if (joinState === "joined") connect(); } };
+      reconnect: () => { if (joinState === "joined") connect(); },
+      leaveToMain, main: () => ({ ...mainInfo, pref: mainPref(), land: mainLand, target: mainTarget(joinState === "joined" ? CHANNEL : "").slug, guest: inviteGuest() }),   // 0.21.91 rig
+      setMain: (v) => { mainPrefSet(v); try { gatePaintChannels(); } catch {} } };
     // 0.8.8: no profile yet (and no live rejoin ticket) -> set it up first;
     // the gate follows.
     let ticket = null;
     try { ticket = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
     // 0.12.0: a publisher box with a remembered room never waits on the profile modal
     if (!profile && !(ticket && ticket.room) && !(isPublisherMode() && lastJoin()?.room) && !inviteGet()) openProfile(true, gateShow);   // 0.21.75: an invited guest gives a name at the gate
-    else gateShow();
+    else mainLaunch();   // 0.21.91: straight into the main room when KASTR knows the name and codes (else the Join room page)
     document.getElementById("joinInvNo")?.addEventListener("click", (e) => { e.preventDefault(); inviteSet(null); gateInvitePaint(); gateMsg(""); paintPwdRow(); try { window.__personalEnded?.clear?.(); } catch {} });   // 0.21.75; 0.21.85: + the ended screen goes
     if (!IS_WEB && gateIsLoopback()) {   // 0.21.75: an invite link handed to this KASTR (kastr:// started the app, or a second launch)
       invitePendingPoll();
@@ -32536,6 +32828,9 @@
     addRtsp,
     removeSource,   // 0.21.20 rig: the Stop path
     screens: () => added.filter((a) => a.screen).map((a) => ({ id: a.id, url: a.url, label: a.label, audio: !!a.audio })),   // 0.21.20 rig
+    // 0.21.91: Leave -- my screen / window / file shares end with the room (the camera stays, muted and off as on any room change;
+    // a box's RTSP feeds and a slide's video are not mine to end here) -> how many ended
+    dropShares: () => { let n = 0; for (const a of [...added]) { if (a.kind === "camera" || a.kind === RTSP || a.presVideo) continue; removeSource(a.id); n++; } return n; },
     state: () => ({
       hostname: HOSTNAME,
       avc1Ok,   // 0.17.0 rig: the browser's H.264 encoder probe

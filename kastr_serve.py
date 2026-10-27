@@ -2944,6 +2944,20 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     pass
             threading.Thread(target=go, daemon=True).start()
 
+        def _rooms_guest_cut(self, obj):
+            """0.21.91 (Kenton: guests "see ONLY the Lobby and the room(s) they were invited to"): a list asked with a GUEST's token
+            (an invite-link member or a personal-room guest of this relay's minter) answers their room alone -- nothing else of the
+            fleet (rooms, groups, renames). Without a token the list is the public one, as before."""
+            try:
+                auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
+                hdr = self.headers.get("Authorization") or ""
+                if auth is None or not hdr or not hasattr(auth, "_member_claims"):
+                    return obj
+                g = kastr_relay.guest_rooms(auth._member_claims(hdr))
+                return kastr_relay.rooms_for_guest(obj, g) if g is not None else obj
+            except Exception:
+                return obj
+
         def _rooms_api(self, method, path, qs):
             """The relay's room records for pages anywhere (CORS-open)."""
             store = getattr(relay_srv, "store", None) if relay_srv is not None else None
@@ -2959,8 +2973,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if method != "GET":
                     return self._chat_reply(405, {"error": "GET only"})
                 # 0.15.0: + the relay-defined room groups {gid: {name, order, rooms}}; 0.21.65: + renamed {old: new}
-                return self._json_cors(200, {"rooms": store.rooms_public(), "closed": store.closed_public(),
-                                             "groups": store.groups_public(), "renamed": store.renamed_public()})
+                return self._json_cors(200, self._rooms_guest_cut({"rooms": store.rooms_public(), "closed": store.closed_public(),
+                                                                   "groups": store.groups_public(), "renamed": store.renamed_public()}))
+
             if path == "/api/rooms/settings":
                 # 0.21.65 (Kenton: "Ability to change room settings after the fact. Only for admin or creator."): the
                 # creator's roomKey, an admin's member token (Authorization: Bearer) or the relay operator's own page
@@ -3072,12 +3087,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     obj, code = out if out else ({}, 0)
                     if code == 200 and isinstance(obj.get("rooms"), list):
                         hub_rooms_remember(self._state_dir(), obj)   # 0.21.35: kept on disk too
-                        return self._json_cors(200, self._rooms_merge(obj, store, False))
+                        return self._json_cors(200, self._rooms_guest_cut(self._rooms_merge(obj, store, False)))   # 0.21.91
                 except kastr_relay.HubDown:
                     pass
                 hub_rooms_load(self._state_dir())   # 0.21.35: a relay restarted while the hub is dark
                 cached = (_HUB_ROOMS_CACHE[0] or {}).get("obj") or {"rooms": [], "closed": {}, "groups": {}}
-                return self._json_cors(200, self._rooms_merge(cached, store, True))
+                return self._json_cors(200, self._rooms_guest_cut(self._rooms_merge(cached, store, True)))   # 0.21.91
             if method != "POST":
                 return self._chat_reply(405, {"error": "POST only"})
             p = self._chat_body_json()

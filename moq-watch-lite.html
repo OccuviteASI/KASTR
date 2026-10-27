@@ -5243,7 +5243,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow pmf"><span class="lbl">Your name</span><div class="rsf"><input class="pmname" type="text" maxlength="48" autocomplete="off" spellcheck="false" aria-label="Your name"></div></div>'
       + '<div class="rsrow pmf"><span class="lbl">Passcode</span><div class="rsf"><input class="pmcode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode (personal code)"></div></div>'
       + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
-      + '<p class="rshint">Pick a passcode only you know (8 characters or more). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
+      + '<p class="rshint">Pick a passcode only you know (8 characters or more; a shorter one from before still opens your My room). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmshare" hidden>Share My room\u2026</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
@@ -5271,14 +5271,23 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (mode === "have") { close(); if (!(joinState === "joined" && CHANNEL === personalGet()?.slug)) personalEnter(); return; }
       const name = q(".pmname").value.trim().replace(/\s+/g, " "), code = q(".pmcode").value;
       if (!name) { say("Enter your name.", true); q(".pmname").focus(); return; }
-      const cmin = mode === "make" ? 8 : 4;   // 0.21.89 (Kenton: "8 everywhere"): a NEW code has 8 or more; an existing shorter one still opens
-      if (code.length < cmin) { say("A personal code has at least " + cmin + " characters" + (cmin > 4 ? " (it also protects your messages)" : "") + ".", true); q(".pmcode").focus(); return; }
-      if (mode === "make" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
-      say(mode === "make" ? "Making your room\u2026" : "Opening your room\u2026");
+      // 0.21.91 (Kenton: "If a user already has a short password set ... they aren't able to login with the old password and can't
+      // change to the new password"): this dialog opens in "Make" whenever the device has no My room yet -- also for someone whose
+      // My room exists with a passcode from before 0.21.89 (4-7 characters), and Make refused anything under 8 before asking the
+      // hub. A passcode under 8 can only be an EXISTING My room's, so it OPENS it (typed once; the hub still makes new rooms with 8
+      // or more), and Messages then ask for a longer one with the old passcode remembered.
+      if (code.length < 4) { say("A personal code has at least 4 characters.", true); q(".pmcode").focus(); return; }
+      const op = mode === "make" && code.length >= 8 ? "create" : "open";
+      if (op === "create" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
+      say(op === "create" ? "Making your room\u2026" : "Opening your room\u2026");
       q(".pmok").disabled = true;
-      const d = await personalApi({ op: mode === "make" ? "create" : "open", name, code, access: authAccessCode || undefined });
+      const d = await personalApi({ op, name, code, access: authAccessCode || undefined });
       q(".pmok").disabled = false;
-      if (!d.ok) { say(d.error || "Refused.", true); return; }
+      if (!d.ok) {
+        say(mode === "make" && op === "open" && d.wrong ? "A new My room needs a passcode of at least 8 characters (it also protects your messages). If you already have a My room, that isn\u2019t its passcode."
+          : (d.error || "Refused."), true);
+        return;
+      }
       personalSave({ slug: d.slug, name: d.name || name, code });
       q(".pmcode").value = ""; q(".pmcode2").value = "";
       close();

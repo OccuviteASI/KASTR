@@ -160,8 +160,9 @@ class EightEverywhere(unittest.TestCase):
 
     def test_the_old_dialog_says_the_same(self):
         p = _read("moq-watch-lite.html")
-        self.assertIn('const cmin = mode === "make" ? 8 : 4;', p)
-        self.assertIn("Pick a passcode only you know (8 characters or more).", p)
+        # 0.21.91: a NEW room still needs 8 (Make creates only with 8+); a shorter passcode can only be an existing room's -> it opens
+        self.assertIn('const op = mode === "make" && code.length >= 8 ? "create" : "open";', p)
+        self.assertIn("Pick a passcode only you know (8 characters or more;", p)
         self.assertNotIn("(4 characters or more)", p)
 
 

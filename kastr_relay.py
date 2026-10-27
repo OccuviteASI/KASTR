@@ -9750,7 +9750,8 @@ class AuthService:
         if target is not None:
             spots = list(target.get("spots") or []) if mode == "replace" else \
                 [s["target"] for s in board_now.get("spots") or []] + [x for x in target.get("spots") or [] if x not in {s["target"] for s in board_now.get("spots") or []}]
-            out["spotsAfter"] = [labels.get(x) or T.leaf(x) for x in spots]
+            by_origin = {T.origin_of(k): v for k, v in labels.items() if v}   # a feed that followed to this room keeps its label
+            out["spotsAfter"] = [labels.get(x) or by_origin.get(T.origin_of(x)) or T.leaf(x) for x in spots]
             out["start"] = target.get("start") or ""
         # ---- room settings
         st_ops = []

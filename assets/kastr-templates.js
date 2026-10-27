@@ -506,7 +506,8 @@
     if (x.status !== "live" || ch) {
       const sel = document.createElement("select");
       sel.setAttribute("aria-label", "What to do with " + label);
-      const opts = [["keep", x.status === "offline" ? "Keep it (shows when it is back)" : "Keep it"], ["drop", "Leave it out"]];
+      const opts = [["keep", "Keep it"], ["drop", "Leave it out"]];
+      if (x.status === "offline") sel.title = "Kept: it shows again when it is back";
       if (x.found) opts.push(["found", "Use it where it is now"]);
       opts.push(["swap", "Use another stream…"]);
       sel.innerHTML = opts.map(([v, t]) => '<option value="' + v + '">' + esc(t) + '</option>').join("") + (ch?.act === "swap" ? '<option value="cur">' + esc("→ " + K.label(ch.to)) + '</option>' : "");

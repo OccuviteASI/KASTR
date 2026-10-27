@@ -125,7 +125,7 @@ class PinnedColumn(unittest.TestCase):
     def test_pinned_chat_takes_no_focus(self):
         self.assertIn("function chatOpened(quiet) {", self.p)
         self.assertIn("if (!quiet) chatInput.focus();", self.p)
-        self.assertIn('chat: { pop: chatPanel, btn: chatBtn, name: "Chat", fl: 1.4, show: (user) => chatOpened(!user)', self.p)
+        self.assertIn('chat: { pop: chatPanel, btn: chatBtn, name: "Room Chat", fl: 1.4, show: (user) => chatOpened(!user)', self.p)
 
     def test_pinned_share_refreshes_only_while_hovered(self):
         self.assertIn("window.__shareIdle = () => { clearInterval(shTimer); shTimer = null; };", self.p)

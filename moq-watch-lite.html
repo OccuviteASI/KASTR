@@ -3161,7 +3161,7 @@
   .ctyping { font-style: italic; opacity: .8; min-height: 0; }
 </style>
 <div id="chatPanel" class="popcard" hidden>
-  <div class="head"><span>Chat</span><span id="chatRoomLbl" class="sub"></span><span class="sp"></span>
+  <div class="head"><span>Room Chat</span><span id="chatRoomLbl" class="sub"></span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div id="chatLog" class="body" aria-live="polite"></div>
   <div id="chatDrop">Drop files here to attach them</div>
@@ -3743,7 +3743,7 @@
   document.getElementById("peopleBtn").innerHTML = tbHtml("people", "People");
   document.getElementById("gridBtn").innerHTML = tbHtml("view", "View");
   document.getElementById("filesBtn").innerHTML = tbHtml("files", "Files") + '<span class="bdg" hidden></span>';
-  document.getElementById("chatBtn").innerHTML = tbHtml("chat", "Chat") + '<span class="bdg" hidden></span>';   // 0.12.0
+  document.getElementById("chatBtn").innerHTML = tbHtml("chat", "Room Chat") + '<span class="bdg" hidden></span>';   // 0.12.0; 0.21.91 (Kenton): "Room Chat", not to be mistaken for Messages
   document.getElementById("msgBtn").innerHTML = tbHtml("msg", "Messages") + '<span class="bdg" hidden></span>';   // 0.21.88
   document.getElementById("optBtn").innerHTML = tbHtml("more", "More");
   document.getElementById("shareBtn").innerHTML = tbHtml("share", "Share");
@@ -20882,7 +20882,7 @@
     people: { pop: document.getElementById("peoplePanel"), btn: document.getElementById("peopleBtn"), name: "People", fl: 1, show: () => paintParticipants(true) },
     view: { pop: viewPop, btn: gridBtn, name: "View", fl: 0.7, show: () => paintViewPop() },
     files: { pop: filesPop, btn: filesBtn, name: "Files", fl: 0.8, show: () => paintFilesPop() },
-    chat: { pop: chatPanel, btn: chatBtn, name: "Chat", fl: 1.4, show: (user) => chatOpened(!user), hide: () => chatClosedHooks() },
+    chat: { pop: chatPanel, btn: chatBtn, name: "Room Chat", fl: 1.4, show: (user) => chatOpened(!user), hide: () => chatClosedHooks() },
     msg: { pop: document.getElementById("msgPanel"), btn: document.getElementById("msgBtn"), name: "Messages", fl: 1.4, show: (user) => { try { window.__msg?.opened(!user); } catch {} } },   // 0.21.88
     streams: { pop: document.getElementById("libPanel"), btn: document.getElementById("libBtn"), name: "Streams", fl: 1.3, show: (user) => { try { libOpened(!user); } catch {} }, hide: () => { try { libClosed(); } catch {} } },   // 0.21.84
     share: { pop: sharePop, btn: shareBtn, name: "Share", fl: 1.4, show: () => { dockShareLive(true); setTimeout(() => { if (!sharePop.matches(":hover")) dockShareLive(false); }, 3500); },

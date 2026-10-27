@@ -447,7 +447,7 @@ class PageSeams(unittest.TestCase):
         go = j[j.index("  function goTo("):j.index("  async function postLive(")]
         self.has("syncVideos();", go)
         ai = j[j.index("  function applyIntent("):j.index("  let rewrapT = null;")]
-        self.assertLess(ai.index("if (!b) return;"), ai.index("applyVidOp(ctl.vid, who)"))   # only the backstage people the presenter picked
+        self.assertLess(ai.index("if (!isB && !isP) return;"), ai.index("applyVidOp(ctl.vid, who)"))   # only the backstage people (0.21.91: + presenters) the presenter picked
         av = j[j.index("  function applyVidOp("):]
         self.has("x.i === mine.idx", av[:400])   # only the video of the slide live now
         self.has('["play", "pause", "seek"].includes(op.op)', av[:600])

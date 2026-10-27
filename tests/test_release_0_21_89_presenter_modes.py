@@ -73,26 +73,30 @@ class ModesInTheRecord(unittest.TestCase):
         self.assertIn("modeInit(mine);", block(JS, "  async function startFromFile(file) {", "  function ensureSlide(i) {"))
 
     def test_camera_off_falls_back_and_comes_back(self):
-        mt = block(JS, "  function modeTick() {", "  function modeEnd(m) {")
-        self.assertIn('const eff = live ? m.cm : "content";', mt)   # the chosen mode is kept; the room shows the slide alone
-        self.assertIn('s.cam = live ? ci.path : "";', mt)
+        mt = block(JS, "  function modeTick() {", "  let modeSigExtra = ")
+        self.assertIn('s.eff = live ? m.cm : "content";', mt)   # the chosen mode is kept; the room shows the slide alone
+        self.assertIn('s.cam = live ? String(src.cam || "") : "";', mt)   # 0.21.91: of the presenter presenting now
         self.assertIn('s.why = live ? "" : ', mt)
+        st = block(JS, "  function selfTick() {", "  function modeInit(m) {")
+        self.assertIn('s.cam = live ? ci.path : "";', st)   # each presenter's page: its own camera
         ui = block(JS, "  function modeUiPaint() {", "  // the preview: the same composition")
         self.assertIn("Camera off", ui)
         self.assertIn("— showing the slide only", ui)
 
     def test_cut_out_only_for_standout_and_reporter_with_the_camera_on(self):
         self.assertIn('const cutMode = (m) => m === "standout" || m === "reporter";', JS)
-        mt = block(JS, "  function modeTick() {", "  function modeEnd(m) {")
-        self.assertIn("const wantCut = live && cutMode(eff) && !!C && ci.canCut !== false;", mt)
-        self.assertIn("C.start()", mt)
-        self.assertIn("C.stop()", mt)
-        self.assertIn('s.cut = cs && cs.ready ? cs.path : "";', mt)   # announced to the room only once it has a picture
-        self.assertIn("modeEnd(m);", block(JS, "  function endMine(why) {", "  window.addEventListener(\"pagehide\""))
+        st = block(JS, "  function selfTick() {", "  function modeInit(m) {")   # 0.21.91: each presenter's page, on its turn only
+        self.assertIn("const wantCut = s.turn && live && cutMode(cm) && !!C && ci.canCut !== false", st)
+        self.assertIn("C.start()", st)
+        self.assertIn("C.stop()", st)
+        self.assertIn('s.cut = cs && cs.ready ? cs.path : "";', st)   # announced to the room only once it has a picture
+        self.assertIn("modeEnd(m);", block(JS, "  function endMine(why, keep) {", "  window.addEventListener(\"pagehide\""))
 
     def test_no_segmenter_falls_back_to_a_box_and_says_so(self):
-        mt = block(JS, "  function modeTick() {", "  function modeEnd(m) {")
-        self.assertIn("s.nocut = ci && ci.canCut === false", mt)
+        st = block(JS, "  function selfTick() {", "  function modeInit(m) {")
+        self.assertIn("s.nocut = ci && ci.canCut === false", st)
+        mt = block(JS, "  function modeTick() {", "  let modeSigExtra = ")
+        self.assertIn('s.nocut = String(src.nocut || "");', mt)   # 0.21.91: the presenter presenting now's
         ui = block(JS, "  function modeUiPaint() {", "  // the preview: the same composition")
         self.assertIn("the room sees it in a box", ui)
         cs = block(JS, "  function camSourceFor(rec, mode) {", "  const camLabel")
@@ -102,19 +106,20 @@ class ModesInTheRecord(unittest.TestCase):
 class BackstageAndViewers(unittest.TestCase):
     def test_backstage_asks_through_presctl(self):
         sm = block(JS, "  function sendModeIntent(deckId, cm) {", "  // ---- the presenter view: the mode picker")
-        self.assertIn('stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), cm });', sm)
+        self.assertIn("ctlSend({ id: deckId, bv: bk.rec.ver, to: bk.rec.idx, cm });", sm)   # 0.21.91: presCtl through ctlSend (+ q)
+        cs = block(JS, "  function ctlSend(o) {", "  function sendIntent(")
+        self.assertIn('stateSet("presCtl", Object.assign({}, op, { q: ctlQ.filter((x) => x.id === op.id) }));', cs)
         self.assertIn("!bk.rec.cm", sm)   # an older presenter (no modes) is never asked
 
     def test_presenter_applies_only_its_backstage(self):
         ai = block(JS, "  function applyIntent(path, ctl) {", "  let rewrapT = null;")
-        bs = ai.index("if (!b) return;   // only the backstage people the presenter picked")
-        seq = ai.index("if (!(ctl.seq > last)) return;")
-        cm = ai.index("applyModeAv(ctl, who)")
-        self.assertLess(bs, cm)
-        self.assertLess(seq, cm)
+        bs = ai.index("if (!isB && !isP) return;   // only the backstage people and the presenters")
+        seq = ai.index("if (!(o.seq > last) || o.id !== mine.id) continue;")
+        cm = ai.index("setMode(ctl.cm, who)")
+        self.assertLess(bs, seq)
+        self.assertLess(seq, ai.index("applyOp(o, who, isP)"))
         self.assertLess(cm, ai.index("applyVidOp(ctl.vid, who)"))
-        ap = block(JS, "  function applyModeAv(ctl, who) {", "  // backstage: the requests")
-        self.assertIn("if (!modeOk(ctl.cm))", ap)
+        self.assertIn("if (!modeOk(ctl.cm))", ai)
 
     def test_viewer_cannot_switch(self):
         api = block(JS, "    mode: (cm) => {", "    modes: () => modeState(),")
@@ -186,7 +191,7 @@ class Drawing(unittest.TestCase):
         self.assertIn("What the room sees", ub)
         self.assertIn('side.insertBefore(box, side.firstChild);', ub)
         mv = block(JS, "  function modeView() {", "  function modeUiPaint() {")
-        self.assertIn('role: "backstage"', mv)   # backstage gets the same picker
+        self.assertIn("return { v, role: v.role,", mv)   # backstage (and 0.21.91 co-presenters) get the same picker
 
 
 class PageSeams(unittest.TestCase):
@@ -266,8 +271,10 @@ class ReviewFollowUps(unittest.TestCase):
         self.assertIn("cwhy: s.why, rbg: m.rbg || RBG_DEFAULT,", JS)
         self.assertIn("m.rbg = RBG_DEFAULT;", JS)
         api = block(JS, "    reporterBg: (id) =>", "    modes: () => modeState(),")
-        self.assertIn("if (!mine || !mine.ms || !rbgOk(id)) return false;", api)
-        self.assertIn('mui.rbgs.style.display = mv.role === "presenter" && mv.cm === "reporter" ? "" : "none";', JS)
+        self.assertIn("if (!rbgOk(id)) return false;", api)
+        self.assertIn('return bk ? sendPresOp(bk.rec.id, { op: "rbg", v: id }) : false;', api)   # 0.21.91: an added presenter asks the owner
+        self.assertIn('mui.rbgs.style.display = P && mv.cm === "reporter" ? "" : "none";', JS)   # the presenters, not backstage
+        self.assertIn('case "rbg": if (rbgOk(pp.v))', JS)
 
     def test_notices_never_cover_the_picker(self):
         self.assertIn('presNote("Some slide content is simplified: "', JS)

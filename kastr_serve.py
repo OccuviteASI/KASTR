@@ -74,6 +74,7 @@ def precache_list(root):
            "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
+    out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)
         for dp, _dn, fns in os.walk(base):
@@ -3411,6 +3412,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 20
                 elif path0.startswith("/api/avatar/"):   # 0.21.90: a spoke may fetch the photo from the hub first
                     to = 15
+                elif path0.startswith("/api/gif/"):      # 0.21.91: GIF search -- a spoke asks the hub, the hub asks GIPHY
+                    to = 30
                 ctype = None
                 ccache = None
                 with urllib.request.urlopen(req, timeout=to) as r:
@@ -4908,6 +4911,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._auth_proxy("GET")
             if path.startswith("/api/avatar/"):                                 # 0.21.90: a person's profile photo (the hub's copy)
                 return self._avatar_get()
+            if path.startswith("/api/gif/"):                                    # 0.21.91: GIF search (the member token rides along)
+                return self._auth_proxy("GET")
             if path == "/api/invite/pending":                                 # 0.21.75: the app hand-off (this machine only)
                 return self._invite_pending("GET")
             if path == "/api/files":

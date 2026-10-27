@@ -932,8 +932,9 @@
     if (pane.dataset.conv !== conv) {
       pane.dataset.conv = conv;
       pane.innerHTML = '<div class="mchead"><button type="button" class="mback" title="All conversations">' + K.icon("sbChev") + '</button><div class="mctitle"><div class="mn"></div><div class="mprev"></div></div><button type="button" class="mcmenu" title="Group options" hidden>' + K.icon("more") + "</button></div>"
-        + '<div class="mlog" aria-live="polite"></div><div class="mnokey" hidden></div><div class="matt" hidden></div><div class="memogrid" hidden></div>'
+        + '<div class="mlog" aria-live="polite"></div><div class="mnokey" hidden></div><div class="matt" hidden></div><div class="memogrid" hidden></div><div class="mgifgrid kgif" hidden></div>'
         + '<div class="mcomp"><button type="button" class="memo" title="Emoji">\uD83D\uDE42</button>'
+        + '<button type="button" class="mgif" title="GIF" hidden>GIF</button>'   // 0.21.91: GIF search (assets/kastr-gif.js)
         + '<button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
         + '<textarea class="mcin" rows="1" placeholder="Write a message" title="Enter sends, Shift+Enter starts a new line"></textarea><button type="button" class="msend" title="Send">' + K.icon("send") + "</button></div>"
         + '<input type="file" class="mfilein" multiple hidden>';
@@ -979,6 +980,12 @@
       eg.appendChild(eh);
       eb.addEventListener("click", (e) => { e.stopPropagation(); emoShow(eg.hidden); });
       ta.addEventListener("keydown", (e) => { if (e.key === "Escape" && !eg.hidden) { e.preventDefault(); emoShow(false); } });
+      // ---- 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search -- the shared
+      // picker (assets/kastr-gif.js) opens where the emoji grid does (one of the two at a time); a pick is fetched through the hub
+      // and sent as an end-to-end encrypted attachment, exactly like a pasted picture (the recipient never contacts GIPHY)
+      window.__gif?.mount({ root: pane, btn: pane.querySelector(".mgif"), panel: pane.querySelector(".mgifgrid"), input: ta,
+        emoji: { btn: eb, panel: eg }, send: async (file) => { send(conv, "", [file]); } });
+      // ---- end 0.21.91 GIF search
       fi.addEventListener("change", () => { addFiles(pane, [...fi.files]); fi.value = ""; });
       pane.querySelector(".mback").addEventListener("click", (e) => { e.stopPropagation(); S.view = "list"; if (!wide) S.open = ""; paint(); });
       pane.querySelector(".mcmenu").addEventListener("click", (e) => { e.stopPropagation(); groupMenu(e.currentTarget); });

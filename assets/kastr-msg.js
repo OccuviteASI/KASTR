@@ -6,7 +6,7 @@
 // WHO: a person = a name with a My room. Their ONE identity key pair (ECDH P-256) lives on the hub wrapped under
 // PBKDF2-SHA256(My room code, salt, 600000) + AES-GCM; this page fetches the wrap after proving name + code, opens it here and
 // keeps the private key NON-EXTRACTABLE in IndexedDB. The code itself is what this device already remembers for My room
-// (kastr.personal.<relay host>) or what the person types once.
+// (kastr.personal.f.<fleet id> since 0.21.91 -- any relay of the fleet) or what the person types once.
 // WHAT THE HUB SEES: names, group membership, timestamps, sizes -- never a message, a file, the private key or the key the code
 // derives. A message = AES-GCM(K, body) with K wrapped for every reader PERSON (and me: my other devices) under
 // HKDF(ECDH(my key, their key), salt = message id, "kastr-msg-wrap-v1|<sender key id>|<reader key id>").
@@ -163,6 +163,7 @@
     if (!subtle || !window.indexedDB) { setState("nocrypto"); return; }
     if (!K.allowed()) { if (S.state !== "off") { S.state = "off"; S.id = null; } paintBtn(); return; }
     if (initBusy) { initAgain = true; return; }
+    try { await K.personalReady?.(); } catch {}   // 0.21.91: My room's record of this fleet, before anything is asked
     const name = meName(), nk = nameKey(name);
     if (!nk) { setState("noname"); return; }
     if (!force && S.state === "ready" && S.nk === nk) return;

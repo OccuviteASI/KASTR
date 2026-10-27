@@ -5864,6 +5864,7 @@ class PersonalLive:
         self.wfwd = {}        # 0.21.85: spoke: device host -> when that guest page's beat last went to the hub
         self.oncache = {}     # 0.21.85: spoke: (host, room, admin) -> (at, the hub's answer)
         self.mping = {}       # 0.21.88: device host -> (message seq, at) -- "pull your messages" (the beat says it; spokes mirror it)
+        self.fleet = ""       # 0.21.91: spoke: the fleet's id as the hub's long-poll says it (/api/auth hands it to pages)
         self.guests = {}      # 0.21.88: device host -> when it last beat with an invite-link / personal-room guest token
         self.bmode = {}       # 0.21.88: device host -> the page mode its beats say (boxes are not people)
         self.allcache = {}    # 0.21.88: spoke: "all" -> (at, the hub's All people rows)
@@ -6054,6 +6055,7 @@ class AuthService:
                                  # the correct relay for their location")
                                  "linkNode": True,   # 0.21.78: federation tokens name the spoke (per hub link stats)
                                  **svc.library_auth_fields(),   # 0.21.84: + library (1 | 0), libRoot, libraryWhy
+                                 "fleet": svc.fleet_id() or None,   # 0.21.91: the fleet (pages keep My room per fleet, not per address)
                                  "name": svc.relay_name() or None})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
@@ -7349,7 +7351,11 @@ class AuthService:
             ppv = self._msgr().photo_index()["pv"]   # 0.21.90: the photo index's version -- a spoke re-reads it when it moves
         except Exception:
             ppv = None
-        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping, "ppv": ppv}
+        try:
+            fleet = self._msgr().fleet   # 0.21.91: the fleet's id -- every relay of the fleet tells its pages the same one
+        except Exception:
+            fleet = ""
+        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping, "ppv": ppv, "fleet": fleet}
 
     def personal_mirror_apply(self, d):
         """Spoke: the hub's `personal` from the long-poll. A room whose owner just left ends its guests' sessions here."""
@@ -7392,6 +7398,8 @@ class AuthService:
                     continue
                 pl.seen[iid] = now
                 self._p_inbox_put_locked(to, dict(item, at=now))
+            if re.match(r"^[0-9a-f]{16}$", str(pf.get("fleet") or "")):
+                pl.fleet = str(pf["fleet"])   # 0.21.91
             mp = pf.get("mping")   # 0.21.88: the hub's message pings -- a page on this spoke pulls when its beat says so
             for h, sq in (mp.items() if isinstance(mp, dict) else []):
                 if HOST_RE.match(str(h)) and isinstance(sq, int) and sq > (pl.mping.get(h) or (0,))[0]:
@@ -9122,6 +9130,17 @@ class AuthService:
             pass
 
     MSG_CODE_OPS = ("unlock", "setup", "recode", "rename")   # 0.21.91: + a name change
+
+    def fleet_id(self):
+        """0.21.91: this fleet's id -- the hub's messages store id (a random 16 hex made once; a hub hand-over keeps it). A spoke
+        says what the hub's long-poll said ("" until it has heard). Not a secret: pages key My room's record on it, so any
+        address of any relay of the fleet finds it."""
+        if not self._p_spoke():
+            try:
+                return self._msgr().fleet
+            except Exception:
+                return ""
+        return str(getattr(self._pl(), "fleet", "") or "")
 
     def _msg_member(self, bearer):
         """-> (claims, room, host, error reply): a member token of a room (not the Lobby, not an invite-link guest)."""

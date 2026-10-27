@@ -4856,7 +4856,14 @@
   // it with the code. Inside, the page announces nothing (no presence, state or registry -- its token cannot either), and everything
   // the room board does (pins from other rooms, spotlights, layouts, room grids) is stored on the hub. "Pin to My room" in a tile's
   // menu pins a feed there from any room (a side token for My room, never replacing mine).
-  const personalStoreKey = () => { try { return "kastr.personal." + new URL(urlInput.value.trim()).host; } catch { return ""; } };
+  // 0.21.91 (Kenton: "When switching relays I have to setup 'My Room' code again. This should be stored across the fleet relays"):
+  // the record is kept per FLEET -- kastr.personal.f.<fleet id> -- the id every relay of the fleet reports in /api/auth (the hub's
+  // messages store id), remembered per relay address in kastr.fleet.<relay host> for the moments before /api/auth answers. Any
+  // address of any relay of the fleet (192.168.x.x, 127.0.0.1, a spoke, the hub) finds it. A relay with no fleet id (older than
+  // 0.21.91, an open relay) keeps the old per-address record.
+  const relayHostKey = () => { try { return new URL(urlInput.value.trim()).host; } catch { return ""; } };
+  const fleetFor = (h) => { try { const f = h ? localStorage.getItem("kastr.fleet." + h) || "" : ""; return /^[0-9a-f]{16}$/.test(f) ? f : ""; } catch { return ""; } };
+  const personalStoreKey = () => { const h = relayHostKey(), f = fleetFor(h); return f ? "kastr.personal.f." + f : (h ? "kastr.personal." + h : ""); };
   function personalGet() {
     try {
       const k = personalStoreKey(), p = k ? JSON.parse(localStorage.getItem(k) || "null") : null;
@@ -4866,11 +4873,63 @@
   let personalTok = null;   // { slug, token, at } -- a side token for My room (pins from other rooms)
   function personalSave(p) {
     try {
-      const k = personalStoreKey();
-      if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code })); else localStorage.removeItem(k); }
+      const k = personalStoreKey(), f = fleetFor(relayHostKey());
+      if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code, fleet: f || undefined })); else localStorage.removeItem(k); }
+      if (!p && f) { const h = relayHostKey(); if (h) localStorage.removeItem("kastr.personal." + h); }   // forgotten: the old per-address copy too
     } catch {}
     personalTok = null;
     try { paintSidebar(); } catch {}
+  }
+  // A relay told us its fleet: remember it for this address, and take an older per-address record of THIS fleet over (once).
+  // A record is only ever checked on the fleet it came from: one saved with its fleet id must match; one from before 0.21.91 is
+  // taken when it was saved for this very address, or when ITS relay (asked for /api/auth only -- no code) says the same fleet;
+  // then a quiet "open" on this fleet's hub must answer the same room. The per-address copies of this fleet are dropped after
+  // (one copy per fleet -- a later code change can never leave a stale copy behind).
+  let personalAdoptP = Promise.resolve();
+  function personalFleetSet(f) {
+    const h = relayHostKey();
+    if (!h || !/^[0-9a-f]{16}$/.test(String(f || ""))) return;
+    try { if (localStorage.getItem("kastr.fleet." + h) !== f) localStorage.setItem("kastr.fleet." + h, f); } catch {}
+    personalAdoptP = personalAdopt(f, h).catch(() => {});
+  }
+  async function personalFleetOfHost(host) {
+    if (location.protocol === "https:" || IS_WEB) return "";   // (a web page reaches no other relay host)
+    try {
+      const u = new URL("http://" + host);
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 2500);
+      try {
+        const d = await (await fetch("http://" + u.hostname + ":" + (Number(u.port || 443) + 1) + "/api/auth", { signal: ctl.signal, cache: "no-store" })).json();
+        return /^[0-9a-f]{16}$/.test(String(d?.fleet || "")) ? String(d.fleet) : "";
+      } finally { clearTimeout(t); }
+    } catch { return ""; }
+  }
+  async function personalAdopt(f, h) {
+    const fk = "kastr.personal.f." + f;
+    try { if (localStorage.getItem(fk)) return; } catch { return; }
+    const cands = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith("kastr.personal.") || k.startsWith("kastr.personal.f.") || k === "kastr.personal.people") continue;
+        try { const r = JSON.parse(localStorage.getItem(k) || "null"); if (r && isPersonalSlug(r.slug) && typeof r.code === "string") cands.push({ k, host: k.slice(15), r }); } catch {}
+      }
+    } catch {}
+    cands.sort((a, b) => (b.host === h) - (a.host === h));   // this very address first
+    for (const c of cands) {
+      let ours = c.r.fleet ? c.r.fleet === f : c.host === h;
+      if (!ours && !c.r.fleet) ours = (await personalFleetOfHost(c.host)) === f;
+      if (!ours) continue;   // another fleet's record: its code never goes to this fleet
+      const d = await personalApi({ op: "open", name: c.r.name, code: c.r.code });
+      if (!d.ok || d.slug !== c.r.slug) continue;
+      try {
+        localStorage.setItem(fk, JSON.stringify({ slug: d.slug, name: d.name || c.r.name, code: c.r.code, fleet: f }));
+        for (const o of cands) if (o.r.fleet === f || o.r.slug === c.r.slug) localStorage.removeItem(o.k);
+      } catch {}
+      personalTok = null;
+      try { paintSidebar(); } catch {}
+      try { window.dispatchEvent(new Event("kastr:personal")); } catch {}
+      return;
+    }
   }
   async function personalToken(p) {
     if (!authSecured) return "";
@@ -10564,6 +10623,7 @@
     },
     profile: (done) => openProfile(false, done),
     // 0.21.91: a rename moved My room and messages to a new name -- this device's My room record and the name it shows follow
+    personalReady: () => personalAdoptP,   // 0.21.91: an older per-address My room record may be being taken over for this fleet
     savePersonalName: (name) => { const p = personalGet(); if (p && name) { personalSave({ ...p, name }); try { personalCardPaint(); } catch {} } },
     setProfileName: (name) => {
       const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
@@ -17793,6 +17853,7 @@
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
+      try { personalFleetSet(String(d.fleet || "")); } catch {}   // 0.21.91: My room is kept per fleet
       authHttps = Number(d.https) || 0;                 // 0.15.0
       libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
     } catch {}

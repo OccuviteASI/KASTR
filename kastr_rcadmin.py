@@ -417,6 +417,8 @@ class HubRegistry:
     def _sweep_locked(self, now):
         for s in list(self.sessions.values()):
             if s["state"] == "pending" and now - s["at"] > (ASK_S if s.get("ask") else PENDING_S):   # 0.21.92: an ask waits longer
+                if s.get("ask"):
+                    s["row"]["answer"] = "none"
                 self._end_locked(s, "noanswer")
             elif s["state"] == "live":
                 m = self.machines.get(s["node"]) or {}
@@ -592,6 +594,8 @@ class HubRegistry:
                 if s0["node"] != node or abs(now - ts) > MAC_SKEW_S or not mac_ok(s0["ck"], p.get("mac"), "end", sid, node, ts, why):
                     return {"ok": False, "error": "the end does not check"}, 401
                 s0["ack"] = True
+                if s0["state"] == "pending":   # the audit row says the answer (Allow is set by the claim)
+                    s0["row"]["answer"] = "denied" if why == "denied" else "none" if why == "noanswer" else why
                 self._end_locked(s0, why, by=s0.get("person") or node)
                 return {"ok": True, "sid": sid, "state": "ended", "why": s0["why"]}, 200
             row = self.machines.get(node)

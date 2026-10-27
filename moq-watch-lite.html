@@ -14806,7 +14806,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, deaf: v.deaf === 1, rca: v.rca === 1 ? 1 : typeof v.rca === "string" ? String(v.rca).slice(0, 16) : undefined } });   // 0.21.92: + rca (can an admin ask it for remote control?); 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, rca: v.rca === 1 ? 1 : typeof v.rca === "string" ? String(v.rca).slice(0, 16) : undefined, deaf: v.deaf === 1 } });   // 0.21.92: + rca (can an admin ask it for remote control?); 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           hiNote(v.op, v.hc);   // 0.21.61: their colour
           roomsMoved(full, String(v.peer), pp[0]);   // 0.21.61: moved rooms -> gone from the old one now
           roomsChanged();
@@ -17010,6 +17010,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (answer !== "allow") return;
     if (!d.ok) { rcToast("Remote control could not start: " + (d.error || "no answer from KASTR"), 7000, "warn"); return; }
     rcxBarShow(a);
+    rcaProbe();   // admins' menus say "being controlled" now
   }
   function rcxBarShow(a) {   // the page's own "<admin> is controlling this screen -- Stop control" (the screen's red bar and pill say it too)
     let bar = document.getElementById("kRcxBar");
@@ -17037,6 +17038,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const bar = document.getElementById("kRcxBar");
     if (bar) bar.hidden = true;
     rcToast("Remote control by " + c.by + " ended.", 5000);
+    rcaProbe();   // free again: admins may ask
   }
   // my own capability, in my public state (an admin's menu greys the item with the reason -- or asks)
   async function rcaProbe() {

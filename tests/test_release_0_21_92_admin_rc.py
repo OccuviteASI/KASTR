@@ -407,6 +407,7 @@ class PrivateAndTake(PersonBase):
         self.assertEqual([(r["sid"], r["ask"], r["state"], r["why"]) for r in hub[:2]],
                          [(d2["sid"], True, "ended", "bar"), (d["sid"], True, "ended", "denied")])
         self.assertEqual((hub[0]["answer"], hub[0]["admin"], hub[0]["machine"], hub[0]["node"]), ("allowed", "Kenton", "Pat", PERSON))
+        self.assertEqual(hub[1]["answer"], "denied")
         self.assertIsNotNone(hub[0]["start"])
         self.assertGreaterEqual(hub[0]["dur"], 0)
         loc = ra.audit_sessions(self.sd)
@@ -505,6 +506,15 @@ class Wiring(unittest.TestCase):
         r = read("relay.html")
         self.assertIn('denied: "they declined"', r)
         self.assertIn("(admin, asked)", r)
+
+    def test_the_x11_pill_event_buffer_is_an_array_again(self):
+        # lab find: 0.21.87's maximize union was named XEvent and shadowed `XEvent = c_long * 24` -- the X11 control bar's
+        # event loop (xev[0]) raised on its first event, so the Linux red pill never drew
+        import ctypes
+        import kastr_x11
+        self.assertTrue(issubclass(kastr_x11.XEvent, ctypes.Array))
+        self.assertEqual(kastr_x11.XEvent()[0] & 0xFFFFFFFF, 0)
+        self.assertEqual(ctypes.sizeof(kastr_x11.XClientEventU), ctypes.sizeof(kastr_x11.XEvent))
 
     def test_server(self):
         s = read("kastr_serve.py")

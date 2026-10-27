@@ -22229,7 +22229,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // back this run; the hourly move needs a clear win twice (25 % and 10 ms) and waits while presenting, recording, under / giving
   // remote control, sending a file or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
   const RELAY_DEAD_MS = 15000;
-  const FLEET_KEY = "kastr.fleet.relays";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
+  const FLEET_KEY = "kastr.relays.fleet";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
   const fleetCache = () => { try { const d = JSON.parse(localStorage.getItem(FLEET_KEY) || "null"); return d && Array.isArray(d.relays) ? d : null; } catch { return null; } };
   async function fleetFetch() {
     if (joinState !== "joined" || !authSecured || !authTokens?.member || inviteGuest()) return null;
@@ -22301,8 +22301,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function relayManualSet(u) { try { if (u) sessionStorage.setItem(RELAY_MANUAL, u); else sessionStorage.removeItem(RELAY_MANUAL); } catch {} }
   let relayAutoSwitching = false, relayMoving = false;
   async function relayApplyAuto(url) {   // a switch KASTR makes (never counted as the person's pick)
+    const fromFleet = fleetFor(relayHostKey());
     relayAutoSwitching = true;
     try { await gateRelayApply(url, { keepCodes: true }); } finally { relayAutoSwitching = false; }
+    try {   // within the fleet: the new relay is this device's fleet too (My room and messages are remembered per fleet)
+      const h = relayHostKey(), ours = new Set([...(fleetCache()?.relays || []).flatMap((r) => r.urls || []), ...(window.__KASTR_KNOWN_RELAYS || [])]);
+      if (fromFleet && h && !fleetFor(h) && ours.has(url)) localStorage.setItem("kastr.fleet." + h, fromFleet);
+    } catch {}
   }
   const relayMoveCan = () => { try { return mainPerson() && !IS_WEB && gateIsLoopback(); } catch { return false; } };
   // nothing online: the note (over everything, the Join room page too) and a re-check every 10 s, 20 s, 40 s, then each minute

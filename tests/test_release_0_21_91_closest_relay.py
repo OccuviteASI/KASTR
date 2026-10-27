@@ -191,7 +191,8 @@ class Page(unittest.TestCase):
         self.assertIn("if (!urls.length || urls.some((u) => fleetUrls.has(u))) continue;   // a fleet relay found on the network: already listed", c)
         self.assertIn("const known = !!f.fp && fps.has(String(f.fp).toLowerCase());", c)
         self.assertIn("out.push({ name: f.name || \"\", urls, fleet: known, lan: !known });", c)
-        self.assertIn('const FLEET_KEY = "kastr.fleet.relays";', self.p)
+        self.assertIn('const FLEET_KEY = "kastr.relays.fleet";', self.p)   # (kastr.fleet.<host> is the fleet id of a relay)
+        self.assertIn('if (fromFleet && h && !fleetFor(h) && ours.has(url)) localStorage.setItem("kastr.fleet." + h, fromFleet);', self.p)
         self.assertIn('fetch(base + "/api/fleet/relays", { cache: "no-store", headers: { authorization: "Bearer " + authTokens.member } })', self.p)
         self.assertIn('if (joinState !== "joined" || !authSecured || !authTokens?.member || inviteGuest()) return null;', self.p)
 

@@ -3702,6 +3702,26 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const MAIN_ROOM_KEY = "kastr.mainroom";
   const mainPref = () => { try { return localStorage.getItem(MAIN_ROOM_KEY) === "lobby" ? "lobby" : "mine"; } catch { return "mine"; } };
   function mainPrefSet(v) { try { localStorage.setItem(MAIN_ROOM_KEY, v === "lobby" ? "lobby" : "mine"); } catch {} }
+  // 0.21.91 (Kenton: "Main-room choice follows the person"): kept on the hub in their My room record (name + My room code, as
+  // My room opens), so every device that opens My room uses it; this device's value is the fallback until the hub answers.
+  // -> the hub's value ("mine" | "lobby" | "" not chosen there yet), or null (no My room here / the hub did not answer)
+  let mainPrefHub = null;
+  async function mainPrefSync(push) {
+    let pr = null;
+    try { pr = window.__personal?.get?.(); } catch {}
+    if (!pr || !pr.code) return null;
+    const body = { op: "pref", name: pr.name || myOpName(), code: pr.code };
+    if (push) body.main = mainPref();
+    let d = null;
+    try { d = await window.__personal.api(body); } catch {}
+    if (!d?.ok) return null;
+    const v = String(d.main || "");
+    mainPrefHub = v;
+    if (v === "mine" || v === "lobby") mainPrefSet(v);
+    else if (!push) mainPrefSync(true);   // the hub has none yet: this device's choice goes up
+    return v;
+  }
+  window.__mainPrefSync = (push) => mainPrefSync(push);   // rig
   // 0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): a GUEST is someone who came by an
   // invite link with no access code of their own -- in a room or the Lobby: a secured relay's token minted without one; before
   // joining: an invite on this tab and no access code known here. They see the Lobby and the invited room, nothing else.
@@ -5057,6 +5077,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     } catch {}
     personalTok = null;
     try { paintSidebar(); } catch {}
+    if (p) setTimeout(() => { try { mainPrefSync(false); } catch {} }, 300);   // 0.21.91: the person's main room, kept with My room on the hub
   }
   // A relay told us its fleet: remember it for this address, and take an older per-address record of THIS fleet over (once).
   // A record is only ever checked on the fleet it came from: one saved with its fleet id must match; one from before 0.21.91 is
@@ -11538,8 +11559,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const myKey = HOSTNAME1 + "/" + String(window.__publisher?.opSlug?.() || "").toLowerCase();
       if (target !== myKey && target !== myKey + "/" + statePeer()) return;
       log("Removed from the room by " + by + ".");
-      window.__toast?.("Removed from this room by " + prettyOperator(by), 8000, { level: "warn" });
-      try { leaveMeeting(); } catch {}
+      // 0.21.91 (Kenton: removed by an admin -> "land in the main room ... with a note saying what happened")
+      forcedToMain("Removed from a room", "Removed from " + roomTitle(CHANNEL) + " by " + prettyOperator(by) + ".");
       return;
     }
     if (!mineNames.has(target)) return;
@@ -17656,6 +17677,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
     if (!r.checked) return;
     mainPrefSet(r.value);
+    mainPrefSync(true).catch(() => {});   // 0.21.91: to the hub, with My room (every device that opens My room follows it)
     window.__toast?.(r.value === "lobby" ? "Main room: the Lobby \u2014 KASTR starts there and Leave takes you there" : "Main room: My room \u2014 KASTR starts there and Leave takes you there", 4000, { level: "event" });
     try { gateKey = ""; gatePaintChannels(); } catch {}
   });
@@ -18598,9 +18620,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const msg = String(e?.message || e);
         if (/removed from this room/i.test(msg)) {
           log("Removed from the room by an admin (the relay refuses this device for a while).");
-          window.__toast?.("You were removed from this room by an admin.", 8000, { level: "warn" });
-          try { leaveMeeting(); } catch {}
-          try { gateMsg("You were removed from this room by an admin — try again later."); } catch {}
+          forcedToMain("Removed from a room", "You were removed from " + roomTitle(readChannel()) + " by an admin \u2014 you can try that room again later.");   // 0.21.91
         }
       } finally { authHealBusy = false; }
     } catch {}
@@ -21431,8 +21451,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       chatHint(chatDisabled, true); chatRenderAll();
       return;
     }
-    window.__toast?.("Room " + room + " was closed \u2014 " + why + ". Back to the lobby.", 7000);
-    try { leaveMeeting(); } catch {}
+    forcedToMain("Room closed", "Room " + room + " was closed \u2014 " + why + ".");   // 0.21.91: the main room, never the Join room page
     try { window.__channels?.emberCancel?.(room); } catch {}   // a closed room gets no ember
   }
   // the STORE decides a room is closed; the announce (and a 410) only prompt the check
@@ -21475,7 +21494,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       window.__toast?.("Room " + slug + " closed.", 4000, { level: "info" });
       try { const list = myChannels().filter((x) => x.slug !== slug); localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list)); } catch {}
       roomsMinterPoll().catch(() => {});
-      if (joinState === "joined" && CHANNEL === slug) { try { leaveMeeting(); } catch {} }
+      if (joinState === "joined" && CHANNEL === slug) { try { if (mainPerson()) leaveToMain(); else leaveMeeting(); } catch {} }   // 0.21.91: I closed it -- my main room
       try { window.__channels?.emberCancel?.(slug); } catch {}   // no ember for a room that no longer exists
     } catch (e) { window.__toast?.("Could not close the room \u2014 " + (e?.message || e), 6000, { level: "error" }); }
   };
@@ -22493,7 +22512,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
   }
   // the hourly re-check (with a random lead so a whole site does not probe at once)
-  const relayHr = { period: 3600000, jitter: 300000, confirm: 20000, timer: 0, next: 0, checks: 0, last: null };
+  const relayHr = { period: 3600000, jitter: 300000, timer: 0, next: 0, checks: 0, last: null, wins: null };   // wins: {url, n} -- consecutive checks it won
   function relayHourlyArm(ms) {
     clearTimeout(relayHr.timer);
     const w = ms ?? (relayHr.period + Math.random() * relayHr.jitter);
@@ -22522,12 +22541,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!b || !c || !c.online || b.url === c.url) return { win: false, cur: c, best: b };
       return { win: b.ms <= c.ms * 0.75 && c.ms - b.ms >= 10, cur: c, best: b };
     };
-    const j1 = judge(await relayRankRun());
-    const said = (j) => ({ cur: j.cur ? { name: relayDisp(j.cur), ms: j.cur.ms } : null, best: j.best ? { name: relayDisp(j.best), ms: j.best.ms } : null });
-    if (!j1.win) { relayHr.last = { at: now, stay: true, ...said(j1) }; return; }
-    await new Promise((r) => setTimeout(r, relayHr.confirm));   // the second probe: noise does not move anyone
+    // 0.21.91 (Kenton: "only move when the other relay is clearly better in TWO consecutive hourly checks"): a win is counted;
+    // the move comes at the second hourly check in a row that the same relay wins (a check it does not win starts over)
     const j2 = judge(await relayRankRun());
-    if (!j2.win || j2.best.url !== j1.best.url) { relayHr.last = { at: now, stay: true, noise: true, ...said(j2) }; return; }
+    const said = (j) => ({ cur: j.cur ? { name: relayDisp(j.cur), ms: j.cur.ms } : null, best: j.best ? { name: relayDisp(j.best), ms: j.best.ms } : null });
+    if (!j2.win) { relayHr.wins = null; relayHr.last = { at: now, stay: true, ...said(j2) }; return; }
+    relayHr.wins = relayHr.wins && relayHr.wins.url === j2.best.url ? { url: j2.best.url, n: relayHr.wins.n + 1 } : { url: j2.best.url, n: 1 };
+    if (relayHr.wins.n < 2) { relayHr.last = { at: now, win: 1, waits: "the next hourly check", ...said(j2) }; return; }
     const busy = relayBusy();
     if (busy) { relayHr.last = { at: now, postponed: busy, ...said(j2) }; log("Closer relay " + relayDisp(j2.best) + " -- the move waits (" + busy + ")"); return; }
     relayHr.last = { at: now, move: j2.best.url, ...said(j2) };
@@ -22536,7 +22556,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   pageModeReady.then(() => { if (relayMoveCan()) relayHourlyArm(); });
   window.__relayPick = { cands: relayCands, rank: relayRankRun, state: () => ({ rank: relayRank, manual: relayManual(), none: relayNone && { since: relayNone.since, tries: relayNone.tries, where: relayNone.where, next: relayNone.next },
     move: relayMoveLast, hourly: { ...relayHr, timer: undefined }, moving: relayMoving, fleet: fleetCache() }), fleet: fleetFetch, busy: relayBusy,
-    hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms, confirmMs) => { relayHr.period = ms; relayHr.jitter = 0; if (confirmMs != null) relayHr.confirm = confirmMs; relayHourlyArm(ms); },
+    hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms) => { relayHr.period = ms; relayHr.jitter = 0; relayHourlyArm(ms); },
     failNow: () => relayFailMove(), deadMs: () => RELAY_DEAD_MS };   // rig
   function paintRelayRow() {
     const row = joinEls.joinRelayRow;
@@ -23231,7 +23251,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!name) return gate("no name yet");
     mainCover("Starting KASTR\u2026");
     joinEls.joinGate.hidden = true;   // (the page's own markup shows it until a script hides it; whoever needs it shows it again)
+    const prefAsked = mainPrefSync(false).catch(() => null);   // the hub's main-room choice (this device's until it answers)
     await Promise.race([relayPickDone, mainSleep(8000)]);   // the nearest relay first (it may move this machine within the fleet)
+    mainInfo.prefHub = await Promise.race([prefAsked, mainSleep(2000).then(() => null)]);
     if (joinState !== "prejoin") { mainCover(""); return; }
     if (relayNone) { mainInfo.relayDown = true; mainCover(""); return gate("no relays are available (KASTR keeps trying)"); }   // 0.21.91
     if (await resumeCheck()) { mainInfo.phase = "resume"; mainInfo.ms = Math.round(performance.now() - t0); return; }   // an update / restart: back to the room I was in
@@ -23256,6 +23278,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     mainInfo.ticketMs = Math.round(performance.now() - t0);
     gateShow();
   }
+  window.addEventListener("kastr:personal", () => setTimeout(() => mainPrefSync(false).catch(() => {}), 500));   // My room set up here: its choice
   function mainLaunchDone(t) {
     if (joinState !== "joined") return;
     mainInfo.phase = "joined"; mainInfo.ms = Date.now() - mainInfo.t0; mainInfo.room = CHANNEL;
@@ -23270,8 +23293,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       : why || "Could not open " + roomTitle(t.room) + " \u2014 pick a room and join.");
   }
   // Leave -> the main room (the Lobby when I am in it already); a guest -> the Lobby with the invited room; a box -> as before
+  // 0.21.91 (Kenton: removed by an admin or the room closed -> the main room, "with a note saying what happened"); a camera box, a
+  // relay-only machine or a viewer display: the Join room page as before (the reason in its message line)
+  async function forcedToMain(title, message) {
+    if (!mainPerson() || joinState !== "joined") { try { leaveMeeting(); } catch {} try { if (message) gateMsg(message); } catch {} return; }
+    await leaveToMain({ quiet: true });
+    if (joinState !== "joined") { try { if (message) gateMsg(message); } catch {} return; }   // even the Lobby refused: the Join room page
+    mainInfo.forced = { title, message, to: CHANNEL, at: Date.now() };
+    log(title + ": " + message + " \u2014 now in " + roomTitle(CHANNEL));
+    kastrConfirm({ title, message, detail: "You\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)) + " now.", ok: "OK", noCancel: true });
+  }
+  window.__forcedToMain = (t, m) => forcedToMain(t, m);   // rig
   let leaveBusy = false;
-  async function leaveToMain() {
+  async function leaveToMain(opts) {
     if (joinState !== "joined" || leaveBusy) return;
     if (!mainPerson()) { leaveMeeting(); return; }   // camera boxes / viewer displays: the Join room page, as before
     if (CHANNEL === LOBBY) return;                   // (no Leave in the Lobby)
@@ -23287,7 +23321,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (joinState === "joined" && CHANNEL === from) { log("Leave: the main room and the Lobby refused \u2014 the Join room page"); leaveMeeting(); return; }
       mainInfo.leave = { from, to: CHANNEL, ms: Math.round(performance.now() - t0), at: Date.now() };
       log("Left " + roomTitle(from) + " \u2014 now in " + roomTitle(CHANNEL) + " (" + mainInfo.leave.ms + " ms)");
-      window.__toast?.("Left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " \u2014 you\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)), 4000, { level: "event" });
+      if (!opts?.quiet) window.__toast?.("Left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " \u2014 you\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)), 4000, { level: "event" });
     } finally { leaveBusy = false; }
   }
   // the landing in My room after it is set up (the first join of a person whose main room is My room)

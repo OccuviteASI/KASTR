@@ -4576,6 +4576,21 @@ class AuthStore:
         with self.lock:
             return sum(1 for r in self.rooms.values() if is_personal_rec(r))
 
+    def personal_main(self, slug, main=None):
+        """0.21.91 (Kenton: "Main-room choice follows the person"): the owner's main room kept in their My room record --
+        "mine" | "lobby" ("" when not chosen yet); `main` sets it. None when `slug` is not a personal room."""
+        with self.lock:
+            rec = self.rooms.get(slug)
+            if not is_personal_rec(rec):
+                return None
+            cur = str(rec["personal"].get("main") or "")
+            if main not in ("mine", "lobby") or main == cur:
+                return cur
+            new = dict(rec)
+            new["personal"] = dict(rec["personal"], main=main)
+        self.put_room(slug, new)
+        return main
+
     def personal_check(self, name, code):
         """-> (slug, owner) when `name` has a personal room and `code` is its personal code, else (None, None)."""
         with self.lock:
@@ -5831,8 +5846,8 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
     name = personal_name(p.get("name"))
     code = p.get("code")
     code = "" if code is None else str(code)
-    if op not in ("open", "create", "reset"):
-        return {"ok": False, "error": "unknown op (open|create|reset)"}, 400
+    if op not in ("open", "create", "reset", "pref"):
+        return {"ok": False, "error": "unknown op (open|create|reset|pref)"}, 400
     if not name:
         return {"ok": False, "error": "your name is required"}, 400
     if len(code) > PERSONAL_CODE_MAX:
@@ -5868,6 +5883,20 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         out.update(ok=False, wrong=True)
         return out, c
 
+    if op == "pref":   # 0.21.91: the owner's main room (My room | Lobby), kept with My room -- name + personal code, as "open"
+        main = p.get("main")
+        if main not in (None, "", "mine", "lobby"):
+            return {"ok": False, "error": "main is mine or lobby"}, 400
+        slug, owner = store.personal_check(name, code)
+        if not slug and hasattr(store, "personal_alias"):
+            moved = store.personal_alias(personal_key(name))
+            if moved:
+                slug, owner = store.personal_check(moved["name"], code)
+        if not slug or not hasattr(store, "personal_main"):
+            return wrong("wrong name or personal code")
+        if lockout is not None:
+            lockout.ok(peer)
+        return {"ok": True, "op": "pref", "main": store.personal_main(slug, main or None) or ""}, 200
     if op == "open":
         slug, owner = store.personal_check(name, code)
         moved = None

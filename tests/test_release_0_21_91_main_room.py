@@ -117,7 +117,7 @@ class Page(unittest.TestCase):
         p = self.p
         self.assertIn('joinEls.leaveBtn.addEventListener("click", () => { leaveToMain(); });', p)
         self.assertNotIn('joinEls.leaveBtn.addEventListener("click", leaveMeeting);', p)
-        t = body(p, "async function leaveToMain() {", 2200)
+        t = body(p, "async function leaveToMain(opts) {", 2200)
         self.assertIn("if (!mainPerson()) { leaveMeeting(); return; }", t)   # boxes: the Join room page as before
         self.assertIn("if (CHANNEL === LOBBY) return;", t)
         self.assertIn("window.__publisher?.dropShares?.()", t)
@@ -133,6 +133,30 @@ class Page(unittest.TestCase):
         self.assertIn("gateShow();", lm)
         self.assertIn("try { personalLeaveSend(false); } catch {}   // 0.21.78: the owner leaving My room", lm)
         self.assertIn("try { leaveMeeting(); } catch {}", body(p, "function personalEnded(room, info) {", 1200))   # End their session -> the ended screen
+
+    def test_forced_exits_land_in_the_main_room(self):
+        # Kenton: removed by an admin or the room closed -> the main room "with a note saying what happened"
+        p = self.p
+        f = body(p, "async function forcedToMain(title, message) {", 900)
+        self.assertIn("if (!mainPerson() || joinState !== \"joined\") { try { leaveMeeting(); } catch {}", f)   # boxes: as before
+        self.assertIn("await leaveToMain({ quiet: true });", f)
+        self.assertIn("kastrConfirm({ title, message, detail:", f)
+        self.assertIn('forcedToMain("Removed from a room", "Removed from " + roomTitle(CHANNEL) + " by " + prettyOperator(by) + ".");', p)
+        self.assertIn('forcedToMain("Removed from a room", "You were removed from " + roomTitle(readChannel()) + " by an admin', p)
+        self.assertIn('forcedToMain("Room closed", "Room " + room + " was closed \\u2014 " + why + ".");', p)
+        self.assertIn("if (joinState === \"joined\" && CHANNEL === slug) { try { if (mainPerson()) leaveToMain(); else leaveMeeting(); } catch {} }", p)
+        self.assertNotIn("Back to the lobby.", p)
+
+    def test_main_room_choice_follows_the_person(self):
+        p = self.p
+        s = body(p, "async function mainPrefSync(push) {", 1200)
+        self.assertIn('const body = { op: "pref", name: pr.name || myOpName(), code: pr.code };', s)
+        self.assertIn("if (push) body.main = mainPref();", s)
+        self.assertIn('if (v === "mine" || v === "lobby") mainPrefSet(v);', s)
+        self.assertIn("else if (!push) mainPrefSync(true);   // the hub has none yet: this device's choice goes up", s)
+        self.assertIn("const prefAsked = mainPrefSync(false).catch(() => null);", p)
+        self.assertIn("mainInfo.prefHub = await Promise.race([prefAsked, mainSleep(2000).then(() => null)]);", p)
+        self.assertIn("mainPrefSync(true).catch(() => {});   // 0.21.91: to the hub, with My room", p)
 
     def test_sign_out_is_in_more(self):
         p = self.p
@@ -216,6 +240,27 @@ class GuestLobby(unittest.TestCase):
     def test_a_dead_link_opens_nothing(self):
         r, c = self.svc.token({"room": "main", "invite": "ki-0000aaaa-" + "x" * 40, "host": "guest-cd34"}, "10.0.0.9")
         self.assertNotEqual(c, 200)
+
+
+class MainOnTheHub(unittest.TestCase):
+    """Kenton: the main-room choice "follows the person" -- kept in their My room record on the hub (name + My room code)."""
+
+    def test_pref_op(self):
+        st = store()
+        d, c = kr.personal_op(st, {"op": "create", "name": "Pat Lab", "code": "pat-code-0191", "access": "pub-1"})
+        self.assertEqual(c, 200, d)
+        d, c = kr.personal_op(st, {"op": "pref", "name": "Pat Lab", "code": "pat-code-0191"})
+        self.assertEqual((c, d["main"]), (200, ""))                       # not chosen yet
+        d, c = kr.personal_op(st, {"op": "pref", "name": "Pat Lab", "code": "pat-code-0191", "main": "lobby"})
+        self.assertEqual((c, d["main"]), (200, "lobby"))
+        d, c = kr.personal_op(st, {"op": "pref", "name": "pat  lab", "code": "pat-code-0191"})
+        self.assertEqual(d["main"], "lobby")                              # the same person (name key), any device
+        d, c = kr.personal_op(st, {"op": "pref", "name": "Pat Lab", "code": "wrong-code-0191", "main": "mine"})
+        self.assertEqual((c, d.get("wrong")), (403, True))                # a wrong code changes nothing
+        self.assertEqual(kr.personal_op(st, {"op": "pref", "name": "Pat Lab", "code": "pat-code-0191"})[0]["main"], "lobby")
+        self.assertEqual(kr.personal_op(st, {"op": "pref", "name": "Pat Lab", "code": "pat-code-0191", "main": "x"})[1], 400)
+        st2 = kr.AuthStore(st.state_dir)                                  # kept on disk (the hub's record)
+        self.assertEqual(kr.personal_op(st2, {"op": "pref", "name": "Pat Lab", "code": "pat-code-0191"})[0]["main"], "lobby")
 
 
 class GuestList(unittest.TestCase):

@@ -553,7 +553,7 @@ class PageSeams(unittest.TestCase):
         self.has('GlobalWorkerOptions.workerSrc = "/assets/vendor/pdfjs/pdf.worker.min.mjs"', j)
         pub = j[j.index("  function publish() {"):j.index("  function goTo(")]
         self.hasnt("notes:", pub, "the public record never carries a note")
-        self.has("k: b64(kIdx)", pub)   # only the LIVE slide's key
+        self.has('k: mine.blank ? "" : b64(kIdx)', pub)   # only the LIVE slide's key (0.21.91: none while the room sees Black / White)
         self.has('hkdf(K, "slide/" + i)', j)
         self.has('hkdf(K, "notes")', j)
         self.has('namedCurve: "P-256"', j)

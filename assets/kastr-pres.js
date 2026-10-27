@@ -673,7 +673,7 @@
     const kIdx = mine.keys[mine.idx];
     stateSet("pres", {
       v: 1, id: mine.id, base: mine.base, name: mine.name, kind: mine.kind, n: mine.n, ar: +mine.ar.toFixed(4),
-      idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank || "", k: b64(kIdx), t0: mine.t0, pk: mine.pk,
+      idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank || "", k: mine.blank ? "" : b64(kIdx), t0: mine.t0, pk: mine.pk,   // 0.21.91: no key under a blank
       share: mine.share?.path || "", nv: mine.nv, rt: mine.rtEnc,
       bs: [...mine.bs.entries()].map(([p, b]) => ({ p, n: b.name || "", w: b.w || "" })),
       // 0.21.87: the live slide's videos -- their stream, their spot (fractions of the slide) and how far they are
@@ -688,10 +688,14 @@
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
+  // 0.21.91 (Kenton: "If I use the black/white out option, I want to still see the preview myself, and only hide it for the room.
+  // It should stay persistent until I turn it off, not just for that 1 slide."): `blank` undefined = keep the room's Black / White
+  // across moves (Next / Back / a click in the strip); only the Black / White buttons change it. While the room sees a blank, the
+  // store is not told the slide underneath and the record carries no slide key: a viewer cannot open what the room does not see.
   function goTo(i, by, blank) {
     if (!mine) return;
     const ni = clampI(i, mine.n);
-    const nb = blank === undefined ? null : (blank || null);
+    const nb = blank === undefined ? mine.blank : (blank || null);
     if (ni === mine.idx && nb === mine.blank) return;
     mine.idx = ni; mine.blank = nb; mine.ver++; mine.by = by || myPerson();
     if (!mine.up[ni]) mine.want.unshift(ni);
@@ -701,7 +705,7 @@
     // else), then the room hears of the move; moves are told to the store in order, the room gets the newest
     const m = mine, seq = ++m.pubSeq;
     const tell = () => { m.told = Math.max(m.told, seq); if (mine === m && seq === m.pubSeq) publish(); };
-    if (ni === m.liveIdx) tell();
+    if (nb || ni === m.liveIdx) tell();   // blanked: the room sees nothing of the slide (the store keeps the slide it last showed)
     else m.liveChain = m.liveChain.then(() => postLive(m, ni)).then(tell, tell);
     for (const k of [ni + 1, ni + 2]) if (k < mine.n && !mine.up[k]) mine.want.push(k);
     syncVideos();   // 0.21.87: the slide before's video stops; this slide's starts (or waits for Play)
@@ -741,7 +745,7 @@
     if (ctl.to === undefined) return;
     if (ctl.bv !== mine.ver && mine.by !== who) { T("drop", { id: mine.id, idx: ctl.to, ver: mine.ver, who }); return; }   // somebody else moved first
     T("apply", { id: mine.id, idx: ctl.to, ver: mine.ver + 1, who });
-    goTo(ctl.to, who, ctl.blank === undefined ? null : ctl.blank);
+    goTo(ctl.to, who, ctl.blank);   // 0.21.91: undefined = the room's blank stays
   }
   let rewrapT = null;
   function rewrapSoon() { clearTimeout(rewrapT); rewrapT = setTimeout(rewrap, 50); }
@@ -1214,6 +1218,12 @@
   .pane canvas.presov { position:absolute; inset:0; width:100%; height:100%; z-index:2; pointer-events:none; background:#000; }
   .pane canvas.presvid { position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none; }
   #presView .cur canvas.vidcv { position:absolute; pointer-events:none; background:transparent; box-shadow:none; border-radius:0; }
+  #presView .rsee { position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:2; pointer-events:none; font-size:14px; font-weight:600;
+    padding:4px 12px; border-radius:999px; background:#000; color:#fff; border:1px solid #fff; box-shadow:0 2px 10px rgba(0,0,0,.6); }
+  #presView .rsee:empty { display:none; }
+  #presView .rsee[data-k="white"] { background:#fff; color:#000; border-color:#000; }
+  #presView .ctl button.blk.on { background:#000; border-color:#fff; color:#fff; }
+  #presView .ctl button.wht.on { background:#fff; border-color:#000; color:#000; }
   #presView .vbar { display:none; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; }
   #presView .vbar.show { display:flex; }
   #presView .vbar input[type=range] { width:min(420px, 40vw); }
@@ -1244,7 +1254,7 @@
           <button type="button" class="end" title="End the presentation for everyone">End</button></div>
         <div class="prep"></div>
         <div class="pb">
-          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas></div>
+          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas><span class="rsee" title="Black / White hides the slide for the room only -- you still see it. It stays on across slide changes until you turn it off."></span></div>
             <div class="ctl"><button type="button" class="big back" title="Previous slide (Left, PageUp, Backspace)">◀ Back</button>
               <span class="num"></span><button type="button" class="big next" title="Next slide (Right, PageDown, Space)">Next ▶</button>
               <button type="button" class="blk" title="Black screen for everyone (B or .)">Black</button><button type="button" class="wht" title="White screen for everyone (W or ,)">White</button></div>
@@ -1317,15 +1327,15 @@
       pill.classList.toggle("show", show);
       if (show) { const b = backstage.get(id); pill.querySelector(".pt").textContent = mine ? "You are presenting “" + mine.name + "”" : (b?.pr ? "You co-present “" : "Backstage for “") + (b?.rec.name || "") + "”"; }
     }
-    function step(d) {
+    function step(d) {   // 0.21.91: a move keeps the room's Black / White
       const v = deck(); if (!v) return;
       const to = clampI(v.idx + d, v.n);
-      if (v.role === "presenter") goTo(to, myPerson(), null);
-      else sendIntent(v.id, to, null);
+      if (v.role === "presenter") goTo(to, myPerson());
+      else sendIntent(v.id, to);
     }
     function goto(i) {
       const v = deck(); if (!v) return;
-      if (v.role === "presenter") goTo(i, myPerson(), null); else sendIntent(v.id, i, null);
+      if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i);
     }
     function blank(kind) {
       const v = deck(); if (!v) return;
@@ -1437,12 +1447,12 @@
       if (v.role === "presenter") {
         const es = [...mine.vids.values()].filter((e) => e.i === mine.idx);
         any = es.length > 0;
-        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+        items = es.filter((e) => e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
       } else {
         const rec = backstage.get(v.id)?.rec;
         const rs = rec && rec.idx === v.idx ? (rec.vids || []).filter((x) => x.i === rec.idx) : [];
         any = rs.length > 0;
-        if (!v.blank) items = rs.filter((x) => x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+        items = rs.filter((x) => x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
       }
       const n = drawVids(vc, v.ar || 16 / 9, items);
       if (n && vidViewPainted !== v.id + "/" + v.idx) { vidViewPainted = v.id + "/" + v.idx; T("vid-paint", { id: v.id, idx: v.idx, who: "view" }); }
@@ -1495,7 +1505,12 @@
         cv.style.width = Math.floor(w) + "px"; cv.style.height = Math.floor(h) + "px";
         for (const c of root.querySelectorAll(".nexts canvas")) c.style.aspectRatio = String(ar);
       }
-      const cvs = [[$(".curcv"), v.idx, v.blank], [$(".n1"), v.idx + 1, null], [$(".n2"), v.idx + 2, null]];
+      {   // 0.21.91: the room sees Black / White -- this view keeps the slide, marked
+        const rs = $(".rsee");
+        rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : "";
+        rs.dataset.k = v.blank || "";
+      }
+      const cvs = [[$(".curcv"), v.idx, null], [$(".n1"), v.idx + 1, null], [$(".n2"), v.idx + 2, null]];
       for (const [cv, i, bl] of cvs) {
         fitCanvas(cv);
         if (i >= v.n) { drawContain(cv, null, null, i === v.n ? "End of the deck" : ""); continue; }
@@ -2896,7 +2911,8 @@
   window.__pres = {
     startFromFile,
     end: () => endMine("api"),
-    go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson(), null); else sendIntent(v.id, i, null); return true; },   // a viewer has no deck here: false
+    go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i); return true; },   // a viewer has no deck here: false (0.21.91: the blank stays)
+    blank: (kind) => { const v = view.deck(); if (!v) return false; const nb = kind === "black" || kind === "white" ? kind : null; if (v.role === "presenter") goTo(v.idx, myPerson(), nb); else sendIntent(v.id, v.idx, nb); return true; },   // 0.21.91 rig
     next: () => { const v = view.deck(); if (v) window.__pres.go(v.idx + 1); },
     back: () => { const v = view.deck(); if (v) window.__pres.go(v.idx - 1); },
     setBackstage,
@@ -2945,7 +2961,7 @@
                      startedMs: mine.startedMs, warnings: mine.warnings } : null,
       backstage: [...backstage.values()].map((b) => ({ id: b.rec.id, idx: b.rec.idx, ver: b.rec.ver, key: !!b.keys, rt: !!b.rt, notes: b.notes ? b.notes.length : null, pr: !!b.pr, wt: !!b.wt, orphan: !!b.orphan, cur: b.rec.cur || "", og: b.rec.og || 1 })),
       viewerHeld: [...overlays.values()].filter((o) => o.vKey).map((o) => o.vKey),   // what a viewer keeps: the live slide only
-      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p), ps: (r.pres.ps || []).map((b) => b.p), og: r.pres.og || 1, cur: r.pres.cur || "", own: r.pres.own || "",
+      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p), ps: (r.pres.ps || []).map((b) => b.p), og: r.pres.og || 1, cur: r.pres.cur || "", own: r.pres.own || "", blank: r.pres.blank || "", key: !!r.pres.k, am: r.pres.am,
                                                                                 vids: (r.pres.vids || []).map((x) => ({ i: x.i, p: x.p, pl: x.pl, st: x.st, t: x.t })) })),
       overlays: [...overlays.entries()].map(([p, o]) => ({ path: p, key: o.key, w: o.cv.width, h: o.cv.height })),
       viewerFetches: viewerFetches.slice(),

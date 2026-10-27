@@ -2085,7 +2085,15 @@
   .mattach, .msend { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
     cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
   .mattach .icon, .msend .icon { width:17px; height:17px; }
-  .mattach:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .mattach:hover, .memo:hover, .memo.on { color:var(--text); border-color:var(--asi-blue-dim); }
+  /* 0.21.91 (Kenton: "messages should allow for the emojis to be used"): the Room Chat emoji grid in Messages too */
+  .memo { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; padding:0; font-size:17px; line-height:1; }
+  .memogrid[hidden] { display:none; }
+  .memogrid { flex:none; display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; padding:6px 10px; border-top:1px solid var(--line); max-height:170px; overflow-y:auto; }
+  .memogrid button { background:transparent; border:0; font-size:20px; line-height:1.3; cursor:pointer; border-radius:6px; padding:2px; height:auto; }
+  .memogrid button:hover { background:var(--surface-2); }
+  .memogrid .chint { grid-column:1 / -1; padding:2px 0 0; font-size:11px; color:var(--text-mute); }
   .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
   .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
     display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
@@ -4904,7 +4912,14 @@
   // it with the code. Inside, the page announces nothing (no presence, state or registry -- its token cannot either), and everything
   // the room board does (pins from other rooms, spotlights, layouts, room grids) is stored on the hub. "Pin to My room" in a tile's
   // menu pins a feed there from any room (a side token for My room, never replacing mine).
-  const personalStoreKey = () => { try { return "kastr.personal." + new URL(urlInput.value.trim()).host; } catch { return ""; } };
+  // 0.21.91 (Kenton: "When switching relays I have to setup 'My Room' code again. This should be stored across the fleet relays"):
+  // the record is kept per FLEET -- kastr.personal.f.<fleet id> -- the id every relay of the fleet reports in /api/auth (the hub's
+  // messages store id), remembered per relay address in kastr.fleet.<relay host> for the moments before /api/auth answers. Any
+  // address of any relay of the fleet (192.168.x.x, 127.0.0.1, a spoke, the hub) finds it. A relay with no fleet id (older than
+  // 0.21.91, an open relay) keeps the old per-address record.
+  const relayHostKey = () => { try { return new URL(urlInput.value.trim()).host; } catch { return ""; } };
+  const fleetFor = (h) => { try { const f = h ? localStorage.getItem("kastr.fleet." + h) || "" : ""; return /^[0-9a-f]{16}$/.test(f) ? f : ""; } catch { return ""; } };
+  const personalStoreKey = () => { const h = relayHostKey(), f = fleetFor(h); return f ? "kastr.personal.f." + f : (h ? "kastr.personal." + h : ""); };
   function personalGet() {
     try {
       const k = personalStoreKey(), p = k ? JSON.parse(localStorage.getItem(k) || "null") : null;
@@ -4914,11 +4929,63 @@
   let personalTok = null;   // { slug, token, at } -- a side token for My room (pins from other rooms)
   function personalSave(p) {
     try {
-      const k = personalStoreKey();
-      if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code })); else localStorage.removeItem(k); }
+      const k = personalStoreKey(), f = fleetFor(relayHostKey());
+      if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code, fleet: f || undefined })); else localStorage.removeItem(k); }
+      if (!p && f) { const h = relayHostKey(); if (h) localStorage.removeItem("kastr.personal." + h); }   // forgotten: the old per-address copy too
     } catch {}
     personalTok = null;
     try { paintSidebar(); } catch {}
+  }
+  // A relay told us its fleet: remember it for this address, and take an older per-address record of THIS fleet over (once).
+  // A record is only ever checked on the fleet it came from: one saved with its fleet id must match; one from before 0.21.91 is
+  // taken when it was saved for this very address, or when ITS relay (asked for /api/auth only -- no code) says the same fleet;
+  // then a quiet "open" on this fleet's hub must answer the same room. The per-address copies of this fleet are dropped after
+  // (one copy per fleet -- a later code change can never leave a stale copy behind).
+  let personalAdoptP = Promise.resolve();
+  function personalFleetSet(f) {
+    const h = relayHostKey();
+    if (!h || !/^[0-9a-f]{16}$/.test(String(f || ""))) return;
+    try { if (localStorage.getItem("kastr.fleet." + h) !== f) localStorage.setItem("kastr.fleet." + h, f); } catch {}
+    personalAdoptP = personalAdopt(f, h).catch(() => {});
+  }
+  async function personalFleetOfHost(host) {
+    if (location.protocol === "https:" || IS_WEB) return "";   // (a web page reaches no other relay host)
+    try {
+      const u = new URL("http://" + host);
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 2500);
+      try {
+        const d = await (await fetch("http://" + u.hostname + ":" + (Number(u.port || 443) + 1) + "/api/auth", { signal: ctl.signal, cache: "no-store" })).json();
+        return /^[0-9a-f]{16}$/.test(String(d?.fleet || "")) ? String(d.fleet) : "";
+      } finally { clearTimeout(t); }
+    } catch { return ""; }
+  }
+  async function personalAdopt(f, h) {
+    const fk = "kastr.personal.f." + f;
+    try { if (localStorage.getItem(fk)) return; } catch { return; }
+    const cands = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith("kastr.personal.") || k.startsWith("kastr.personal.f.") || k === "kastr.personal.people") continue;
+        try { const r = JSON.parse(localStorage.getItem(k) || "null"); if (r && isPersonalSlug(r.slug) && typeof r.code === "string") cands.push({ k, host: k.slice(15), r }); } catch {}
+      }
+    } catch {}
+    cands.sort((a, b) => (b.host === h) - (a.host === h));   // this very address first
+    for (const c of cands) {
+      let ours = c.r.fleet ? c.r.fleet === f : c.host === h;
+      if (!ours && !c.r.fleet) ours = (await personalFleetOfHost(c.host)) === f;
+      if (!ours) continue;   // another fleet's record: its code never goes to this fleet
+      const d = await personalApi({ op: "open", name: c.r.name, code: c.r.code });
+      if (!d.ok || d.slug !== c.r.slug) continue;
+      try {
+        localStorage.setItem(fk, JSON.stringify({ slug: d.slug, name: d.name || c.r.name, code: c.r.code, fleet: f }));
+        for (const o of cands) if (o.r.fleet === f || o.r.slug === c.r.slug) localStorage.removeItem(o.k);
+      } catch {}
+      personalTok = null;
+      try { paintSidebar(); } catch {}
+      try { window.dispatchEvent(new Event("kastr:personal")); } catch {}
+      return;
+    }
   }
   async function personalToken(p) {
     if (!authSecured) return "";
@@ -10597,6 +10664,7 @@
     savePersonalCode: (code) => { const p = personalGet(); if (p && code) personalSave({ ...p, code }); },
     personalDialog: (mode, note) => personalDialog(mode, note, { stay: true, min: 8 }),
     confirm: (o) => kastrConfirm(o), icon: (n) => icon(n), color: (k) => personColor(opKeyOf(k) || k), initials: (n) => viewerInitials(n),
+    emoji: () => window.__kastrEmoji || [],   // 0.21.91: the Room Chat emoji grid
     photo: (el, name) => { try { paintAvatar(el, String(name || "").trim().toLowerCase() === myOpName().toLowerCase() && window.__avatarLocal ? window.__avatarLocal : avatarUrls.get("", name)); } catch {} },   // 0.21.90
     menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
     panel: () => document.getElementById("msgPanel"), btn: () => document.getElementById("msgBtn"),
@@ -10617,6 +10685,21 @@
       return d;
     },
     profile: (done) => openProfile(false, done),
+    // 0.21.91: a rename moved My room and messages to a new name -- this device's My room record and the name it shows follow
+    personalReady: () => personalAdoptP,   // 0.21.91: an older per-address My room record may be being taken over for this fleet
+    savePersonalName: (name) => { const p = personalGet(); if (p && name) { personalSave({ ...p, name }); try { personalCardPaint(); } catch {} } },
+    setProfileName: (name) => {
+      const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return "";
+      const p = { ...(profile || {}), first: parts[0].slice(0, 20), last: parts.slice(1).join(" ").slice(0, 20) };
+      saveProfile(p);
+      const n = profileName(p);
+      const jn = document.getElementById("joinName"); if (jn) jn.value = n;
+      try { syncOperator(n); } catch {}
+      fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n }) }).catch(() => {});
+      try { hiMine(); paintPersonGroups(); applyState(); } catch {}
+      return n;
+    },
     busyUI: () => {
       const shown = (id) => { const e = document.getElementById(id); return !!e && !e.hidden; };
       return joinState !== "joined" || shown("joinGate") || shown("kConfirm") || shown("profilePop")
@@ -17448,6 +17531,7 @@
   profCanvas.addEventListener("pointerup", () => { pe.drag = null; });
   profCanvas.addEventListener("pointercancel", () => { pe.drag = null; });
   document.getElementById("profSave").addEventListener("click", () => {
+    const nameBefore = profile ? profileName(profile) : "";   // 0.21.91: Messages offers to move My room to a new name
     const norm = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 20);
     const p = { first: norm(document.getElementById("profFirst").value), last: norm(document.getElementById("profLast").value), avatar: profExport() };
     if (profHc.get()) p.color = profHc.get();   // 0.21.61: the colour others see
@@ -17464,6 +17548,7 @@
     applyState();
     window.__toast?.("Profile saved \u2014 " + name, 3000, { level: "info" });
     closeProfile();
+    if (name !== nameBefore) { try { window.__msg?.nameChanged?.(nameBefore, name); } catch {} }   // 0.21.91: "Rename your My room and messages?"
   });
 
   // ---- 0.8.8: Files popover (room files + relay-host listing) --------------
@@ -17881,6 +17966,7 @@
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
+      try { personalFleetSet(String(d.fleet || "")); } catch {}   // 0.21.91: My room is kept per fleet
       authHttps = Number(d.https) || 0;                 // 0.15.0
       libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
     } catch {}
@@ -21221,6 +21307,7 @@
                       "\u2705", "\u274C", "\u26A0\uFE0F", "\u2757", "\u2753", "\uD83D\uDD25", "\u2B50", "\uD83C\uDF89",
                       "\u2764\uFE0F", "\uD83D\uDC40", "\uD83D\uDCF7", "\uD83C\uDFA5", "\uD83D\uDCE1", "\uD83D\uDDA5\uFE0F", "\uD83D\uDD0C", "\uD83D\uDD0B",
                       "\uD83E\uDD16", "\uD83D\uDE9C", "\uD83D\uDEE0\uFE0F", "\uD83D\uDCCD", "\uD83D\uDCCB", "\u23F1\uFE0F", "\uD83C\uDF27\uFE0F", "\u2600\uFE0F"];
+  window.__kastrEmoji = CHAT_EMOJI;   // 0.21.91: Messages (assets/kastr-msg.js) offers the same grid
   {
     for (const ch of CHAT_EMOJI) {
       const b = document.createElement("button"); b.type = "button"; b.textContent = ch;

@@ -331,7 +331,8 @@ class Page(unittest.TestCase):
         self.assertIn('<div id="sbMine" class="sbmine" hidden></div>', p)
         self.assertIn('id="optMyRoom"', p)
         self.assertIn('document.getElementById("optMyRoom").addEventListener("click", () => personalDialog());', p)
-        self.assertIn('return "kastr.personal." + new URL(urlInput.value.trim()).host;', p)
+        # 0.21.91: kept per FLEET (kastr.personal.f.<fleet id>); the per-address key stays for a relay with no fleet id
+        self.assertIn('return f ? "kastr.personal.f." + f : (h ? "kastr.personal." + h : "");', p)
         self.assertIn('fetch(base + "/api/rooms/personal"', p)
         self.assertIn("switchRoom({ slug: p.slug, personal: true }, p.code);", p)
         self.assertIn("try { personalCardPaint(); } catch {}   // 0.21.75", p)

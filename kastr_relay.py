@@ -167,6 +167,7 @@ PERSONAL_RE = re.compile(r"^me-[0-9a-f]{12}$")
 PERSONAL_MAX = 500          # personal rooms one hub holds (their own cap -- KEPT_MAX counts shared rooms only)
 PERSONAL_CODE_MIN = 4          # what an EXISTING personal code may be (0.21.75 allowed 4): it still opens My room
 PERSONAL_CODE_NEW_MIN = 8      # 0.21.89 (Kenton: "8 everywhere"): a NEW or CHANGED personal code (it also guards the messages key)
+PERSONAL_ALIAS_TTL = 90 * 86400   # 0.21.91: a name someone changed away from points at the new one (and nobody else takes it) this long
 PERSONAL_CODE_MAX = 128
 PERSONAL_RESERVED = 'room names starting with "me-" are reserved for personal rooms (My room) -- pick another name'
 # 0.21.78 (Kenton: "I need to be able to share out access to 'my room' as wanted" / "Only allow people in 'My room' if the
@@ -3885,6 +3886,7 @@ class AuthStore:
         self.ver = 0            # 0.21.53: bumped on every save -- the standby's copy follows it
         self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
         self.renamed = {}        # 0.21.65: old slug -> {"to": new slug, "at": ms} (RENAMED_TTL) -- pages in the old name follow
+        self.paliases = {}       # 0.21.91: old name key -> {"to": new name key, "name": new display, "at", "until"} (PERSONAL_ALIAS_TTL)
         self.on_board = None     # 0.21.63: callable() -- a board changed or went with its room (AuthService re-lists the pins)
         # 0.21.91: callables(slug, why) -- a room was deleted ("closed" or "expired"): its cross-room listings go with it
         # (AuthService adds its registries; an OPEN relay's registry is here from the start)
@@ -3958,6 +3960,7 @@ class AuthStore:
                 except (TypeError, ValueError):
                     pass
             self._prune_closed()
+        self.paliases = self._paliases_clean(d.get("personalAliases"))   # 0.21.91
         ren = d.get("renamed")              # 0.21.65
         if isinstance(ren, dict):
             for old, r in ren.items():
@@ -4000,6 +4003,7 @@ class AuthStore:
                                  "vehicles": self.vehicles,      # 0.21.63: + vehicle API keys (hashes only)
                                  "invites": self.invites,        # 0.21.75: + room invite links (sha256 of the secret only)
                                  "renamed": self.renamed,        # 0.21.65: + old room names -> new
+                                 "personalAliases": self.paliases,   # 0.21.91: + names people changed away from -> their new name
                                  "links": self.links,            # 0.21.77: + the Links card's overrides
                                  "mesh": self.mesh,              # 0.21.77: + the hub / standby link cost
                                  "codesAt": self.codes_at}, self.log)   # 0.21.0
@@ -4465,6 +4469,109 @@ class AuthStore:
                 return None, None
             return slug, str(rec["personal"].get("owner") or "")
 
+    # ---- 0.21.91: a My room owner changes their name ---------------------------------------------------------------------
+    @staticmethod
+    def _paliases_clean(v):
+        out = {}
+        for k, a in (v.items() if isinstance(v, dict) else []):
+            if not isinstance(a, dict) or not personal_key(k) or not personal_key(a.get("to")):
+                continue
+            try:
+                out[personal_key(k)] = {"to": personal_key(a["to"]), "name": personal_name(a.get("name") or a["to"]),
+                                        "at": int(a.get("at") or 0), "until": int(a.get("until") or 0)}
+            except (TypeError, ValueError):
+                pass
+        return out
+
+    def _palias_live_locked(self, key, now=None):
+        now = time.time() if now is None else now
+        a = self.paliases.get(key)
+        return a if a and float(a.get("until") or 0) > now else None
+
+    def personal_alias(self, key, now=None):
+        """A name key someone changed away from (in the last 90 days) -> {to, name, at, until} of where they are now (followed
+        through later renames), else None."""
+        key = personal_key(key)
+        with self.lock:
+            a, seen = self._palias_live_locked(key, now), {key}
+            while a and a["to"] not in seen:
+                nxt = self._palias_live_locked(a["to"], now)
+                if not nxt:
+                    break
+                seen.add(a["to"])
+                a = dict(nxt)
+            return dict(a) if a else None
+
+    def personal_aliases_public(self, now=None):
+        """[{from, to, name, at, until}] -- the live renames (pages move their copy of a conversation to the new name)."""
+        now = time.time() if now is None else now
+        with self.lock:
+            keys = [k for k, a in self.paliases.items() if float(a.get("until") or 0) > now]
+        out = []
+        for k in keys:
+            a = self.personal_alias(k, now)
+            if a:
+                out.append({"from": k, "to": a["to"], "name": a["name"], "at": a["at"], "until": a["until"]})
+        return out
+
+    def personal_rename(self, name, new, code, now=None):
+        """The owner of `name`'s My room (its code proves it) takes the name `new` -> (verdict, info): "renamed" | "same" (only the
+        spelling changed) | "wrong" | "taken" (that name has a My room) | "held" (someone changed away from it lately).
+        The room keeps its slug; the old name points at the new one for PERSONAL_ALIAS_TTL."""
+        now = time.time() if now is None else now
+        disp, key, nkey = personal_name(name), personal_key(name), personal_key(new)
+        ndisp = personal_name(new)
+        if not key or not nkey:
+            return "bad", {}
+        with self.lock:
+            slug = self._personal_find(key)
+            if not slug or not _room_code_ok(self.rooms[slug], str(code or "")):
+                return "wrong", {}
+            rec = self.rooms[slug]
+            old = str(rec["personal"].get("owner") or disp)
+            if nkey != key:
+                if self._personal_find(nkey):
+                    return "taken", {}
+                a = self._palias_live_locked(nkey, now)
+                if a and a.get("to") != key:
+                    return "held", dict(a)
+            rec["personal"]["owner"] = ndisp
+            rec["personal"]["key"] = nkey
+            rec["creator"] = ndisp
+            rec["at"] = now
+            if nkey != key:
+                self.paliases.pop(nkey, None)   # (back to a name they had: it is theirs again)
+                for k, a in self.paliases.items():
+                    if a.get("to") == key:       # an older name of theirs follows them here too
+                        a.update(to=nkey, name=ndisp)
+                self.paliases[key] = {"to": nkey, "name": ndisp, "at": int(now), "until": int(now + PERSONAL_ALIAS_TTL)}
+            for k in [k for k, a in self.paliases.items() if float(a.get("until") or 0) <= now]:
+                self.paliases.pop(k, None)
+            self._save()
+            if nkey != key:
+                try:   # 0.21.92: their personal templates (and decks) follow the new name
+                    self.tplbook.rename_person(key, nkey, ndisp)
+                except Exception as e:
+                    self.log("relay auth: personal templates did not follow a rename: %s" % e)
+            return ("renamed" if nkey != key else "same"), {"slug": slug, "old": old, "name": ndisp}
+
+    def personal_unrename(self, new, old):
+        """Put a rename back (the messages store could not follow)."""
+        with self.lock:
+            slug = self._personal_find(personal_key(new))
+            if not slug:
+                return False
+            pr = self.rooms[slug]["personal"]
+            pr["owner"], pr["key"] = personal_name(old), personal_key(old)
+            self.rooms[slug]["creator"] = personal_name(old)
+            self.paliases.pop(personal_key(old), None)
+            self._save()
+            try:   # 0.21.92: their personal templates go back too
+                self.tplbook.rename_person(new, old, old)
+            except Exception:
+                pass
+            return True
+
     def personal_has(self, name):
         """0.21.88: does `name` have a personal room (My room)? (Messages: who can set up a messaging key.)"""
         with self.lock:
@@ -4480,6 +4587,8 @@ class AuthStore:
             slug = self._personal_find(key)
             if slug:
                 return (slug, "exists") if _room_code_ok(self.rooms[slug], code) else (None, "wrong")
+            if self._palias_live_locked(key):   # 0.21.91: someone changed away from this name lately -- it stays theirs a while
+                return None, "held"
             if len(code) < PERSONAL_CODE_NEW_MIN:   # 0.21.89: a new room takes a code of 8 or more (an existing one still opens)
                 return None, "short"
             if sum(1 for r in self.rooms.values() if is_personal_rec(r)) >= PERSONAL_MAX:
@@ -4618,6 +4727,7 @@ class AuthStore:
                                           "invites": self.invites,       # 0.21.75: invite links (digests) go with the hub
                                           "links": self.links, "mesh": self.mesh,       # 0.21.77: the mesh overrides go with the hub
                                           "library": self.libbook.export(),             # 0.21.84: the stream library's catalogue too
+                                          "personalAliases": self.paliases,             # 0.21.91: names people changed away from
                                           "templates": self.tplbook.export()}))         # 0.21.92: meeting templates (never a deck key)
 
     def merge_bundle(self, b):
@@ -4688,6 +4798,9 @@ class AuthStore:
                 if int(rec.get("at") or 0) > int((costs.get(node) or {}).get("at") or 0):
                     costs[node] = rec
             self.mesh = dict(self.mesh, costs=costs)
+            for k, a in self._paliases_clean(b.get("personalAliases")).items():   # 0.21.91: a rename made there (the later wins)
+                if int(a.get("at") or 0) > int((self.paliases.get(k) or {}).get("at") or 0):
+                    self.paliases[k] = a
             if isinstance(b.get("library"), dict):   # 0.21.84: hides, labels, aliases and site names set on the standby
                 n["library"] = self.libbook.merge(b["library"])
             if isinstance(b.get("templates"), dict):   # 0.21.92: templates saved / edited / deleted on the standby
@@ -4729,6 +4842,8 @@ class AuthStore:
                 self.links.update(self._links_clean(b["links"]))
             if isinstance(b.get("mesh"), dict):
                 self.mesh = self._mesh_clean(b["mesh"])
+            if isinstance(b.get("personalAliases"), dict):   # 0.21.91: renamed people go with the hub
+                self.paliases.update(self._paliases_clean(b["personalAliases"]))
             if isinstance(b.get("library"), dict):   # 0.21.84: the stream library's catalogue (hides never fail open)
                 n["library"] = self.libbook.import_(b["library"])
             if isinstance(b.get("templates"), dict):   # 0.21.92: meeting templates (their decks are copied apart, with their keys)
@@ -5624,6 +5739,10 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         if code and len(code) < PERSONAL_CODE_NEW_MIN:   # 0.21.89: "8 everywhere"
             return {"ok": False, "short": True, "codeMin": PERSONAL_CODE_NEW_MIN,
                     "error": "a personal code has at least %d characters" % PERSONAL_CODE_NEW_MIN}, 400
+        if hasattr(store, "personal_alias") and not store.personal_has(name):   # 0.21.91: an admin may use the old name of someone renamed
+            a = store.personal_alias(personal_key(name))
+            if a:
+                name = a["name"]
         slug = store.personal_reset(name, code or None)
         if not slug:
             return {"ok": False, "error": "%s has no personal room" % name}, 404
@@ -5647,11 +5766,19 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
 
     if op == "open":
         slug, owner = store.personal_check(name, code)
+        moved = None
+        if not slug and hasattr(store, "personal_alias"):   # 0.21.91: they changed their name -- the old one still opens it (90 days)
+            moved = store.personal_alias(personal_key(name))
+            if moved:
+                slug, owner = store.personal_check(moved["name"], code)
         if not slug:
             return wrong("wrong name or personal code")
         if lockout is not None:
             lockout.ok(peer)
-        return {"ok": True, "op": "open", "slug": slug, "name": owner or name}, 200
+        out = {"ok": True, "op": "open", "slug": slug, "name": owner or name}
+        if moved:
+            out["renamed"] = True
+        return out, 200
     if len(code) < PERSONAL_CODE_MIN:
         return {"ok": False, "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_MIN}, 400
     if store.configured() and not vouched:
@@ -5669,6 +5796,8 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         return wrong("%s already has a personal room -- enter its personal code (an admin can reset a forgotten one)" % name)
     if verdict == "full":
         return {"ok": False, "error": "this relay already holds %d personal rooms" % PERSONAL_MAX}, 409
+    if verdict == "held":    # 0.21.91: a name someone changed away from stays theirs for 90 days
+        return {"ok": False, "held": True, "error": "%s changed their name lately -- that name stays theirs for a while; pick another" % name}, 409
     if verdict == "short":   # 0.21.89: "8 everywhere"
         return {"ok": False, "short": True, "codeMin": PERSONAL_CODE_NEW_MIN,
                 "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_NEW_MIN}, 400
@@ -5862,6 +5991,7 @@ class PersonalLive:
         self.wfwd = {}        # 0.21.85: spoke: device host -> when that guest page's beat last went to the hub
         self.oncache = {}     # 0.21.85: spoke: (host, room, admin) -> (at, the hub's answer)
         self.mping = {}       # 0.21.88: device host -> (message seq, at) -- "pull your messages" (the beat says it; spokes mirror it)
+        self.fleet = ""       # 0.21.91: spoke: the fleet's id as the hub's long-poll says it (/api/auth hands it to pages)
         self.guests = {}      # 0.21.88: device host -> when it last beat with an invite-link / personal-room guest token
         self.bmode = {}       # 0.21.88: device host -> the page mode its beats say (boxes are not people)
         self.allcache = {}    # 0.21.88: spoke: "all" -> (at, the hub's All people rows)
@@ -6058,6 +6188,7 @@ class AuthService:
                                  # the correct relay for their location")
                                  "linkNode": True,   # 0.21.78: federation tokens name the spoke (per hub link stats)
                                  **svc.library_auth_fields(),   # 0.21.84: + library (1 | 0), libRoot, libraryWhy
+                                 "fleet": svc.fleet_id() or None,   # 0.21.91: the fleet (pages keep My room per fleet, not per address)
                                  "name": svc.relay_name() or None})
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
@@ -7392,7 +7523,11 @@ class AuthService:
             ppv = self._msgr().photo_index()["pv"]   # 0.21.90: the photo index's version -- a spoke re-reads it when it moves
         except Exception:
             ppv = None
-        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping, "ppv": ppv}
+        try:
+            fleet = self._msgr().fleet   # 0.21.91: the fleet's id -- every relay of the fleet tells its pages the same one
+        except Exception:
+            fleet = ""
+        return {"open": opened, "rooms": keep, "away": away, "inbox": box, "mping": mping, "ppv": ppv, "fleet": fleet}
 
     def personal_mirror_apply(self, d):
         """Spoke: the hub's `personal` from the long-poll. A room whose owner just left ends its guests' sessions here."""
@@ -7435,6 +7570,8 @@ class AuthService:
                     continue
                 pl.seen[iid] = now
                 self._p_inbox_put_locked(to, dict(item, at=now))
+            if re.match(r"^[0-9a-f]{16}$", str(pf.get("fleet") or "")):
+                pl.fleet = str(pf["fleet"])   # 0.21.91
             mp = pf.get("mping")   # 0.21.88: the hub's message pings -- a page on this spoke pulls when its beat says so
             for h, sq in (mp.items() if isinstance(mp, dict) else []):
                 if HOST_RE.match(str(h)) and isinstance(sq, int) and sq > (pl.mping.get(h) or (0,))[0]:
@@ -8749,6 +8886,9 @@ class AuthService:
                 continue
             name = personal_name(clean_label(r["name"], 40))
             nk = personal_key(name)
+            moved = self.store.personal_alias(nk) if nk and hasattr(self.store, "personal_alias") else None   # 0.21.91: renamed
+            if moved:
+                name, nk = moved["name"], moved["to"]
             if not nk:
                 continue
             x = by.setdefault(nk, {"name": name, "key": nk, "at": 0, "hosts": [], "web": False, "app": False, "msg": False})
@@ -9129,7 +9269,11 @@ class AuthService:
                         check_code=lambda n, c: bool(hasattr(st, "personal_check") and st.personal_check(n, c)[0]),
                         has_room=lambda n: bool(hasattr(st, "personal_has") and st.personal_has(n)),
                         set_code=lambda n, c: bool(hasattr(st, "personal_reset") and st.personal_reset(n, c)),
-                        ping=self._msg_ping)
+                        ping=self._msg_ping,
+                        alias_of=lambda nk: st.personal_alias(nk) if hasattr(st, "personal_alias") else None,          # 0.21.91
+                        aliases=lambda: st.personal_aliases_public() if hasattr(st, "personal_aliases_public") else [],
+                        rename_room=lambda o, n, c: st.personal_rename(o, n, c) if hasattr(st, "personal_rename") else ("unsupported", {}),
+                        unrename_room=lambda n, o: st.personal_unrename(n, o) if hasattr(st, "personal_unrename") else None)
                     self.__dict__["_messenger"] = m
                     threading.Thread(target=self._msg_loop, daemon=True, name="kastr-messages").start()
         return m
@@ -9157,7 +9301,18 @@ class AuthService:
         except Exception:
             pass
 
-    MSG_CODE_OPS = ("unlock", "setup", "recode")
+    MSG_CODE_OPS = ("unlock", "setup", "recode", "rename")   # 0.21.91: + a name change
+
+    def fleet_id(self):
+        """0.21.91: this fleet's id -- the hub's messages store id (a random 16 hex made once; a hub hand-over keeps it). A spoke
+        says what the hub's long-poll said ("" until it has heard). Not a secret: pages key My room's record on it, so any
+        address of any relay of the fleet finds it."""
+        if not self._p_spoke():
+            try:
+                return self._msgr().fleet
+            except Exception:
+                return ""
+        return str(getattr(self._pl(), "fleet", "") or "")
 
     def _msg_member(self, bearer):
         """-> (claims, room, host, error reply): a member token of a room (not the Lobby, not an invite-link guest)."""
@@ -9494,12 +9649,25 @@ class AuthService:
             if op == "apply" and v.get("guest"):
                 return {"ok": False, "error": "a guest can only look at templates"}, 403
             return self._tpl_run(t, p, v, rec, creator, admin, publisher, op == "preview", now)
-        if op == "deckOpen":   # a presenter opens the template's deck (room: anyone who could present there; personal: its owner)
+        if op == "deckOpen":
+            # Kenton (2026-10-27): before it is presented, a room template's deck opens ONLY for the template's named presenters
+            # and backstage (the person proven by name + My room code, My room's owner token, or a device that unlocked their
+            # messages -- never a name a page merely says) and the room's admins; everyone else sees only the live slide.
+            # A personal template's deck: its owner (_tpl_sees already checked).
             d = book.deck_of(tid)
             if not d:
                 return {"ok": False, "error": "this template has no deck"}, 404
-            if t.get("scope") == "room" and not (publisher and t.get("room") == room):
-                return {"ok": False, "error": "only the room's presenters open its template decks"}, 403
+            if t.get("scope") == "room":
+                pr = t.get("pres") if isinstance(t.get("pres"), dict) else {}
+                named = {T.name_key(x.get("name")) for x in (pr.get("presenters") or []) + (pr.get("backstage") or []) if isinstance(x, dict)}
+                named.discard("")
+                if t.get("room") != room:
+                    return {"ok": False, "error": "open the template's deck from its own room"}, 403
+                if not admin and not (ident and ident["nk"] in named):
+                    if ierr and ierr[0].get("wrong"):
+                        return ierr
+                    return {"ok": False, "named": False,
+                            "error": "only the template's presenters, its backstage and the room's admins open its deck before it is presented"}, 403
             out = {"ok": True, "deck": d, "rt": book.read_grant(d["id"], v["host"]), "files": sorted(d.get("files") or {})}
             pk = book.deck_page_key(d["id"])
             if pk:
@@ -15141,6 +15309,10 @@ class Relay:
         auth = self.auth
         if auth is not None:
             n = auth.store.import_bundle(rep["store"])
+            try:
+                auth._msgr().apply_aliases()   # 0.21.91
+            except Exception as e:
+                self.log("relay federation: take-over -- renamed people not moved in the messages copy: %s" % e)
             have = {(b.get("room"), b.get("host"), b.get("target")) for b in auth.bans.active()}
             for b in rep.get("bans") or []:
                 if isinstance(b, dict) and (b.get("room"), b.get("host"), b.get("target")) not in have:

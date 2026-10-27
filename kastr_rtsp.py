@@ -3955,6 +3955,48 @@ class Bridge:
                 self.log("rtsp: cross-room listing at %s failed: %s" % (re.sub(r"[?].*", "", url), str(e)[:120]))
             return None, 0
 
+    def _xs_follow(self, feed, ren, path, now=None):
+        """0.21.91: rooms the relay says were RENAMED ({old: new}) -- the camera's rooms follow (its code and generation move with
+        the name), persisted; the new name is listed on the next round (at once: xs_poke)."""
+        now = time.time() if now is None else now
+        own = path.split("/", 1)[0]
+        xs = list(getattr(feed, "xs", None) or [])
+        moved = {}
+        for old, new in ren.items():
+            if old not in xs or not _XS_ROOM_RE.match(new) or new == LIB_ROOT or is_home_room(new):
+                continue
+            i = xs.index(old)
+            if new in xs or new == own:
+                xs.pop(i)                     # already shown there (or it is its own room now): the old name just goes
+            else:
+                xs[i] = new
+            moved[old] = new
+            for attr in ("xs_codes", "xs_gen"):
+                m = getattr(feed, attr, None)
+                if isinstance(m, dict) and old in m:
+                    v = m.pop(old)
+                    if new not in m and new != own:
+                        m[new] = v
+            if isinstance(getattr(feed, "xs_state", None), dict):
+                feed.xs_state.pop(old, None)
+            if getattr(feed, "xs_auto", None) == old:
+                feed.xs_auto = new
+        if not moved:
+            return {}
+        feed.xs = xs
+        dropped = list(getattr(feed, "xs_dropped", None) or [])
+        dropped += [{"room": o, "to": n, "at": int(now), "why": "renamed"} for o, n in moved.items()]
+        feed.xs_dropped = dropped[-8:]
+        rec = self._xs_listed.get(path)
+        if rec:
+            rec["rooms"] -= set(moved)
+            if not rec["rooms"]:
+                self._xs_listed.pop(path, None)
+        self.persist_feeds()
+        self.log("rtsp: %s follows renamed room(s) %s" % (path, ", ".join("%s -> %s" % kv for kv in moved.items())))
+        self._xs_evt.set()   # the next round lists it under the new name (the loop runs again at once)
+        return moved
+
     def _xs_forget(self, feed, rooms, path, now=None):
         """0.21.91: rooms the relay says were DELETED -- out of this camera's rooms (and their codes and generations), persisted,
         and kept in xs_dropped so the page tells the person once."""
@@ -4055,6 +4097,12 @@ class Bridge:
                                     self._xs_forget(pub.feed, gone, path, now)
                                     for r in gone:
                                         state.pop(r, None)
+                                ren = {str(k): str(v) for k, v in (d.get("renamed") or {}).items() if str(k) in to} if isinstance(d.get("renamed"), dict) else {}
+                                if ren:    # 0.21.91: renamed -- the camera follows the new name (listed there on the next round)
+                                    self._xs_follow(pub.feed, ren, path, now)
+                                    for r in ren:
+                                        state.pop(r, None)
+                                    gone = gone + list(ren)
                                 ng = d.get("gens") if isinstance(d.get("gens"), dict) else {}
                                 learned = False
                                 for r in acc:

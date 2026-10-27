@@ -3022,7 +3022,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if p is None:
                     return self._chat_reply(413, {"error": "body too large"})
                 _auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
-                xs = _auth._xs("local") if _auth is not None and hasattr(_auth, "_xs") else None
+                xs = _auth._xs("local") if _auth is not None and hasattr(_auth, "_xs") else kastr_relay.XSHARE_OPEN   # 0.21.91: an open relay's listings follow a rename too
                 obj, code = kastr_relay.room_settings(store, p, admin=self._settings_admin(), log=log, xs=xs)
                 if code == 200:
                     try:

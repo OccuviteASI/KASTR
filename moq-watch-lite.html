@@ -2085,7 +2085,15 @@
   .mattach, .msend { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
     cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
   .mattach .icon, .msend .icon { width:17px; height:17px; }
-  .mattach:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .mattach:hover, .memo:hover, .memo.on { color:var(--text); border-color:var(--asi-blue-dim); }
+  /* 0.21.91 (Kenton: "messages should allow for the emojis to be used"): the Room Chat emoji grid in Messages too */
+  .memo { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; padding:0; font-size:17px; line-height:1; }
+  .memogrid[hidden] { display:none; }
+  .memogrid { flex:none; display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; padding:6px 10px; border-top:1px solid var(--line); max-height:170px; overflow-y:auto; }
+  .memogrid button { background:transparent; border:0; font-size:20px; line-height:1.3; cursor:pointer; border-radius:6px; padding:2px; height:auto; }
+  .memogrid button:hover { background:var(--surface-2); }
+  .memogrid .chint { grid-column:1 / -1; padding:2px 0 0; font-size:11px; color:var(--text-mute); }
   .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
   .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
     display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
@@ -10592,6 +10600,7 @@
     savePersonalCode: (code) => { const p = personalGet(); if (p && code) personalSave({ ...p, code }); },
     personalDialog: (mode, note) => personalDialog(mode, note, { stay: true, min: 8 }),
     confirm: (o) => kastrConfirm(o), icon: (n) => icon(n), color: (k) => personColor(opKeyOf(k) || k), initials: (n) => viewerInitials(n),
+    emoji: () => window.__kastrEmoji || [],   // 0.21.91: the Room Chat emoji grid
     photo: (el, name) => { try { paintAvatar(el, String(name || "").trim().toLowerCase() === myOpName().toLowerCase() && window.__avatarLocal ? window.__avatarLocal : avatarUrls.get("", name)); } catch {} },   // 0.21.90
     menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
     panel: () => document.getElementById("msgPanel"), btn: () => document.getElementById("msgBtn"),
@@ -21213,6 +21222,7 @@
                       "\u2705", "\u274C", "\u26A0\uFE0F", "\u2757", "\u2753", "\uD83D\uDD25", "\u2B50", "\uD83C\uDF89",
                       "\u2764\uFE0F", "\uD83D\uDC40", "\uD83D\uDCF7", "\uD83C\uDFA5", "\uD83D\uDCE1", "\uD83D\uDDA5\uFE0F", "\uD83D\uDD0C", "\uD83D\uDD0B",
                       "\uD83E\uDD16", "\uD83D\uDE9C", "\uD83D\uDEE0\uFE0F", "\uD83D\uDCCD", "\uD83D\uDCCB", "\u23F1\uFE0F", "\uD83C\uDF27\uFE0F", "\u2600\uFE0F"];
+  window.__kastrEmoji = CHAT_EMOJI;   // 0.21.91: Messages (assets/kastr-msg.js) offers the same grid
   {
     for (const ch of CHAT_EMOJI) {
       const b = document.createElement("button"); b.type = "button"; b.textContent = ch;

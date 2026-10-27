@@ -915,8 +915,9 @@
     if (pane.dataset.conv !== conv) {
       pane.dataset.conv = conv;
       pane.innerHTML = '<div class="mchead"><button type="button" class="mback" title="All conversations">' + K.icon("sbChev") + '</button><div class="mctitle"><div class="mn"></div><div class="mprev"></div></div><button type="button" class="mcmenu" title="Group options" hidden>' + K.icon("more") + "</button></div>"
-        + '<div class="mlog" aria-live="polite"></div><div class="mnokey" hidden></div><div class="matt" hidden></div>'
-        + '<div class="mcomp"><button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
+        + '<div class="mlog" aria-live="polite"></div><div class="mnokey" hidden></div><div class="matt" hidden></div><div class="memogrid" hidden></div>'
+        + '<div class="mcomp"><button type="button" class="memo" title="Emoji">\uD83D\uDE42</button>'
+        + '<button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
         + '<textarea class="mcin" rows="1" placeholder="Write a message" title="Enter sends, Shift+Enter starts a new line"></textarea><button type="button" class="msend" title="Send">' + K.icon("send") + "</button></div>"
         + '<input type="file" class="mfilein" multiple hidden>';
       const ta = pane.querySelector(".mcin"), fi = pane.querySelector(".mfilein");
@@ -925,6 +926,7 @@
         const t = ta.value, fs = pane.__files.slice();
         if (!t.trim() && !fs.length) return;
         ta.value = ""; pane.__files = []; paintAtt(pane); grow(ta);
+        pane.querySelector(".memogrid").hidden = true; pane.querySelector(".memo").classList.remove("on");
         send(conv, t, fs);
       };
       ta.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendNow(); } });
@@ -940,6 +942,26 @@
       pane.addEventListener("drop", (e) => { pane.classList.remove("mdrag"); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(pane, fs); } });
       pane.querySelector(".msend").addEventListener("click", (e) => { e.stopPropagation(); sendNow(); });
       pane.querySelector(".mattach").addEventListener("click", (e) => { e.stopPropagation(); fi.click(); });
+      // 0.21.91 (Kenton: "messages should allow for the emojis to be used"): the Room Chat grid, inserted where the cursor is;
+      // the system emoji keyboard (Win + .) works in the box as well
+      const eg = pane.querySelector(".memogrid"), eb = pane.querySelector(".memo");
+      const emoShow = (on) => { eg.hidden = !on; eb.classList.toggle("on", on); };
+      for (const ch of (K.emoji?.() || [])) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = ch;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const st = ta.selectionStart ?? ta.value.length, en = ta.selectionEnd ?? st;
+          ta.value = ta.value.slice(0, st) + ch + ta.value.slice(en);
+          ta.selectionStart = ta.selectionEnd = st + ch.length;
+          grow(ta); ta.focus();
+        });
+        eg.appendChild(b);
+      }
+      const eh = document.createElement("div"); eh.className = "chint";
+      eh.textContent = navigator.platform.startsWith("Win") ? "More: Win + . opens the system emoji keyboard" : "More: your system emoji keyboard (e.g. Ctrl + Cmd + Space)";
+      eg.appendChild(eh);
+      eb.addEventListener("click", (e) => { e.stopPropagation(); emoShow(eg.hidden); });
+      ta.addEventListener("keydown", (e) => { if (e.key === "Escape" && !eg.hidden) { e.preventDefault(); emoShow(false); } });
       fi.addEventListener("change", () => { addFiles(pane, [...fi.files]); fi.value = ""; });
       pane.querySelector(".mback").addEventListener("click", (e) => { e.stopPropagation(); S.view = "list"; if (!wide) S.open = ""; paint(); });
       pane.querySelector(".mcmenu").addEventListener("click", (e) => { e.stopPropagation(); groupMenu(e.currentTarget); });

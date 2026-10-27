@@ -735,10 +735,11 @@
     box.className = "msettings";
     box.innerHTML = '<div class="mshead"><button type="button" class="mback" title="Back">' + K.icon("sbChev") + '</button><span>Messages settings</span></div>'
       + '<p class="mhint">You are <b></b>. Any device with your name and My room code reads your messages (90 days).</p>'
-      + '<h4>Change my My room code</h4><input class="mo" type="password" autocomplete="current-password" placeholder="Current code">'
+      + '<h4>Change My room code</h4><input class="mo" type="password" autocomplete="current-password" placeholder="Current code">'
       + '<input class="mn1" type="password" autocomplete="new-password" placeholder="New code (at least ' + S.codeMin + ')"><input class="mn2" type="password" autocomplete="new-password" placeholder="New code again">'
       + '<button type="button" class="mprim" data-a="recode">Change code</button><p class="merr"></p>'
-      + '<h4>On this device</h4><label class="mchk"><input type="checkbox" class="mnotif"> Desktop notifications while KASTR is minimised</label>'
+      // 0.21.91 (Kenton: "this should be a toggle and not a checkbox"): the house switch, like People's Online only
+      + '<h4>On this device</h4><label class="mchk"><span class="switch sm"><input type="checkbox" class="mnotif"><i></i></span><span>Desktop notifications while KASTR is minimised</span></label>'
       + '<button type="button" class="mghost" data-a="forget">Forget messages on this device</button>';
     box.querySelector("b").textContent = S.name;
     const say = (m) => { box.querySelector(".merr").textContent = m; };

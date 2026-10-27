@@ -646,6 +646,7 @@
     }
     T("allup", { id: m.id, n: m.n });
     try { m.src.release?.(); } catch {}   // every slide is in memory: PowerPoint's pictures can go
+    uploadVideos(m).catch((e) => console.warn("KASTR pres: slide videos to the store", e));   // 0.21.91: they go with the deck
   }
   async function uploadNotes() {
     if (!mine) return;
@@ -682,7 +683,7 @@
       ...modeFields(),   // 0.21.89: the presenter mode, my camera / cut-out, backstage's mic + camera control
       // 0.21.91: co-presenters -- the owner (this page's person), the ownership generation, every presenter (main first) with
       // K and the store's write token wrapped to their own key, the presenter presenting now and their name
-      own: myPerson(), og: mine.og, cur: mine.cur, cn: nameOfPerson(mine.cur),
+      own: myPerson(), og: mine.og, cur: mine.cur, cn: nameOfPerson(mine.cur), vs: mine.vs || 0,   // vs: slide videos kept in the store (0.21.91)
       ps: mine.ps.map((x) => ({ p: x.p, n: x.name || nameOfPerson(x.p), w: x.w || "", t: x.t || "" })),
       ...audFields(),   // 0.21.91: am (audience muted), lt (let talk), hx (hands lowered by a presenter)
     });
@@ -886,6 +887,7 @@
     return keep;
   }
   window.addEventListener("pagehide", () => { if (mine) leaveMine("pagehide"); });
+  window.__presLeaving = () => { if (mine) leaveMine("left the room"); };   // 0.21.91: the page's Leave / room switch, before its share stops
 
   // ---- 0.21.87: videos on slides (the presenter) --------------------------------------------------------------------------
   // Kenton: "This powerpoint has a video in it, it doesn't appear to be working and I need that to be able to function inside
@@ -917,6 +919,16 @@
     if (!h) { view.paint(); return; }
     if (e.gone || mine !== m) { try { window.__presVideo.stop(h.id); } catch {} return; }
     e.shareId = h.id;
+    {   // 0.21.91: a deck handed over -- the video picks up where the room left it (time, playing)
+      const rv = (m.resumeVids || []).find((x) => x && x.v === sv.id && x.i === i);
+      if (rv) {
+        m.resumeVids = m.resumeVids.filter((x) => x !== rv);
+        const at = Number(rv.at) || Date.now(), t = Math.max(0, (Number(rv.t) || 0) + (rv.pl ? Math.max(0, Date.now() - at) / 1000 : 0));
+        const go = () => { if (e.gone || mine !== m) return; vidCtl(e, "seek", t); if (rv.pl) vidCtl(e, "play"); };
+        setTimeout(go, 400); setTimeout(() => { const s = window.__presVideo?.state(e.shareId); if (s && Math.abs(s.t - t) > 2) go(); }, 1800);
+        T("vid-resume", { id: m.id, idx: i, who: sv.id, t: +t.toFixed(1), pl: !!rv.pl });
+      }
+    }
     T("vid-share", { id: m.id, idx: i, who: sv.id });
     if (sv.auto && sv.delay > 0) {
       setTimeout(() => { if (!e.gone && mine === m && !e.st) vidCtl(e, "play"); }, Math.max(0, sv.delay - (performance.now() - e.live0)));
@@ -963,6 +975,60 @@
     T("vid-" + op, { id: mine?.id, idx: e.i, who: e.v });
     setTimeout(vidPoll, 60);
     return ok;
+  }
+  // 0.21.91 (Kenton: "When presenter changes, the slides should stay. The new presenter is only there for their own audio/video. So
+  // the slides should continue working. Video in the slides should also still work."): a hand-over on the spot changes only whose
+  // camera is in the slide -- the owner's page keeps the deck AND its videos. For an owner that leaves or drops, the deck's slide
+  // videos are in the store too: encrypted like the slides (HKDF(K, "video/<k>")), with a manifest (where each sits on its slide,
+  // auto / delay / loop / volume; HKDF(K, "videos")), read only with the deck's read token. A presenter who takes the deck over
+  // plays them from there, from where the room was. One video at most 200 MB (the store refuses more; that one then stays with
+  // the first owner).
+  const VID_STORE_MAX = 200 * 1024 * 1024;
+  async function uploadVideos(m) {
+    const per = (m.src && m.src.videos) || [];
+    const ids = [...new Set(per.flat().filter((v) => v && v.id).map((v) => v.id))];
+    if (!ids.length || !m.src.videoFile) return;
+    const files = {};
+    let old = false;
+    for (const id of ids) {
+      if (mine !== m) return;
+      let f = null; try { f = await m.src.videoFile(id); } catch {}
+      if (!f) continue;
+      if (f.size > VID_STORE_MAX) { T("vid-store-skip", { id: m.id, who: id, why: "size " + f.size }); continue; }
+      const ct = await seal(await hkdf(m.K, "video/" + id), new Uint8Array(await f.arrayBuffer()));
+      let r = null;
+      try { r = await fetch(m.base + "/api/pres/" + m.id + "/" + id + ".bin?token=" + m.token, { method: "POST", body: ct }); } catch {}
+      if (!r || !r.ok) { T("vid-store-fail", { id: m.id, who: id, why: r ? r.status : "net" }); if (r && r.status === 404) { old = true; break; } continue; }   // 404: a relay host older than 0.21.91
+      files[id] = { name: String(f.name || id).slice(0, 120), type: String(f.type || "video/mp4").slice(0, 60), size: f.size };
+    }
+    if (old || mine !== m || !Object.keys(files).length) return;
+    const man = { v: 1, per, files };
+    const r = await fetch(m.base + "/api/pres/" + m.id + "/videos.bin?token=" + m.token, { method: "POST", body: await seal(await hkdf(m.K, "videos"), enc.encode(JSON.stringify(man))) }).catch(() => null);
+    if (!r || !r.ok || mine !== m) return;
+    m.vs = Object.keys(files).length;
+    T("vid-store", { id: m.id, n: m.vs });
+    publishVid();
+  }
+  async function storedVideos(m, rt) {   // a deck handed over to me: its videos from the store -> a src the video code knows
+    const buf = await fetchBlob(baseFor({ base: m.base }), m.id, "videos.bin", 3, rt);
+    const man = JSON.parse(dec.decode(await unseal(await hkdf(m.K, "videos"), buf)));
+    const got = new Map();
+    return {
+      videos: Array.isArray(man.per) ? man.per : [],
+      videoFile: (id) => {
+        const meta = man.files && man.files[id];
+        if (!meta) return Promise.resolve(null);
+        if (!got.has(id)) got.set(id, (async () => {
+          const t0 = Date.now();
+          const b = await fetchBlob(baseFor({ base: m.base }), m.id, id + ".bin", 3, rt);
+          const u8 = await unseal(await hkdf(m.K, "video/" + id), b);
+          T("vid-load", { id: m.id, who: id, ms: Date.now() - t0, bytes: u8.length });
+          return new File([u8], meta.name || id, { type: meta.type || "video/mp4" });
+        })().catch((e) => { got.delete(id); console.warn("KASTR pres: a stored slide video", e); return null; }));
+        return got.get(id);
+      },
+      close() {},
+    };
   }
   function applyVidOp(op, who) {   // a backstage person's Play / Pause / seek -- only for the video of the slide live NOW
     const e = [...mine.vids.values()].find((x) => x.v === op.v && x.i === op.i && x.i === mine.idx);
@@ -1347,7 +1413,8 @@
     const lySave = () => { try { localStorage.setItem("kastr.pres.layout", JSON.stringify(LY)); } catch {} };
     function layoutApply() {
       if (!root) return;
-      const f = Math.max(0.3, Math.min(0.78, Number(LY.col) || 0.6));
+      // Kenton: a short window (under ~800 px) gives the notes the width -- the slide column shrinks (unless this device dragged it)
+      const f = Math.max(0.3, Math.min(0.78, Number(LY.col) || (window.innerHeight < 740 ? 0.4 : window.innerHeight < 800 ? 0.46 : 0.6)));
       root.style.setProperty("--lcol", f.toFixed(3) + "fr"); root.style.setProperty("--rcol", (1 - f).toFixed(3) + "fr");
       if (Number(LY.top) > 0) root.style.setProperty("--ptop", Math.round(LY.top) + "px"); else root.style.removeProperty("--ptop");
       // the strip: on unless this device hid it -- by default off on a short window (under 900 px tall) where the notes need the room
@@ -1369,7 +1436,7 @@
       dragLine($(".hdiv"), (e) => { const r = $(".panels").getBoundingClientRect(), s = $(".side").getBoundingClientRect(); LY.top = Math.max(28, Math.min(s.height - 160, e.clientY - r.top)); },
         (k) => { const t = Number(LY.top) || $(".panels").getBoundingClientRect().height; if (k === "ArrowUp") { LY.top = Math.max(28, t - 20); return true; } if (k === "ArrowDown") { LY.top = t + 20; return true; } return false; });
       $(".stripbtn").addEventListener("click", () => { LY.nostrip = !root.classList.contains("nostrip"); layoutApply(); lySave(); paint(); });
-      window.addEventListener("resize", () => { if (LY.nostrip === undefined) layoutApply(); });
+      window.addEventListener("resize", () => { if (LY.nostrip === undefined || !LY.col) layoutApply(); });
       for (const d of root.querySelectorAll("details.pnl")) {
         d.open = !!(LY.open && LY.open[d.dataset.k]);
         d.addEventListener("toggle", () => { LY.open = Object.assign({}, LY.open, { [d.dataset.k]: d.open }); if (!d.dataset.auto) lySave(); delete d.dataset.auto; paint(); });
@@ -1701,7 +1768,7 @@
         if (x.p === cur) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "Presenting now"; row.append(t); }
         else if (M.edit && here && x.ready && !M.old) {
           if (x.p === me) row.append(btn("takeover", "Take over", "Present now: your camera goes into the slide", () => curAct(x.p)));
-          else row.append(btn("nowbtn", "Now presenting: " + first(x.n), x.n + " presents now: their camera goes into the slide", () => curAct(x.p)));
+          else row.append(btn("nowbtn", "Hand over to " + first(x.n), x.n + " presents now: their camera goes into the slide (the slides and their videos go on as they are)", () => curAct(x.p)));
         }
         if (M.edit && x.p !== M.own) {
           row.append(btn("mv", "→ Backstage", "Make " + x.n + " backstage instead", () => roleAct(x.p, "b")));
@@ -2734,6 +2801,8 @@
     m.rbg = rbgOk(rec.rbg) ? rec.rbg : RBG_DEFAULT;
     m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", sig: "" };
     adoptExtra(m, rec);
+    m.vs = Number(rec.vs) || 0;
+    m.resumeVids = Array.isArray(rec.vids) ? rec.vids.slice(0, 8) : [];
     backstage.delete(rec.id);
     mine = m;
     T("adopt", { id: m.id, og: m.og, from: rec.own, ms: Date.now() - t0, gone: Date.now() - (bk.seenAt || 0) });
@@ -2743,6 +2812,8 @@
     rewrap();
     presNote(nameOfPerson(rec.own) + " left — “" + m.name + "” now runs from your KASTR. The room still sees slide " + (idx + 1) + ".", 9000, "event");
     view.paint();
+    if (m.vs) storedVideos(m, bk.rt).then((src) => { if (mine !== m) return; m.src = src; T("vid-src", { id: m.id, n: m.vs }); syncVideos(); view.paint(); })
+      .catch((e) => console.warn("KASTR pres: the deck's videos", e));
   }
   let adoptExtra = () => {};   // (audience mute)
   window.addEventListener("resize", () => { for (const o of overlays.values()) o.key = ""; schedule(); });
@@ -2973,7 +3044,7 @@
     const me = myPerson();
     const d = handState ? ds.find((x) => x.id === handState.id) : null;
     const letMe = d && d.am && d.lt.includes(me);
-    const show = !!talk.locked || !!handState;
+    const show = (!!talk.locked || !!handState) && !document.body.classList.contains("viewonly");   // a watching-only code has no mic to ask for
     if (!talkPill) {
       if (!show) return;
       talkPill = document.createElement("div"); talkPill.id = "presTalk"; talkPill.setAttribute("role", "status");

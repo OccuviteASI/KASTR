@@ -315,6 +315,10 @@
   body { -webkit-user-select:none; user-select:none; }
   input, textarea, select, [contenteditable], #chatLog, #chatLog *, #roomInfoPop .body, #aboutPop .body, #helpPop .body,
   #roomInfoPop .body *, #aboutPop .body *, #helpPop .body * { -webkit-user-select:text; user-select:text; }
+  /* 0.21.91 (Kenton: "When messaging someone I don't have the ability to select their message and copy content out of it"):
+     the text of every message in Messages selects and copies like Room Chat's */
+  .mlog .mtxt, .mlog .mtxt *, .mlog .mwho, .mlog .msys { -webkit-user-select:text; user-select:text; cursor:text; }
+  .mlog .mtxt a { cursor:pointer; }
   img, svg, canvas, video { -webkit-user-drag:none; }
   body.kdragging, body.kdragging * { -webkit-user-select:none !important; user-select:none !important; cursor:grabbing !important; }
   .dragghost { position:fixed; left:0; top:0; z-index:10000; pointer-events:none; opacity:.62; border-radius:8px; overflow:hidden;
@@ -15140,6 +15144,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
 
   function leaveChannel() {
+    try { window.__presLeaving?.(); } catch {}   // 0.21.91: a room switch hands my presentation over too (a no-op once done)
     try { window.__filesCleanup?.(); } catch {}   // 0.8.7: shared files die with the sharer
     try { window.__sinceAnnounce?.clear?.(); } catch {}   // 0.8.8
     memberSubsClear(); setTimeout(stateSync, 0);   // 0.13.0
@@ -21224,6 +21229,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.id) { chatHint(d.error || ("Upload failed (" + r.status + ")"), true); chatPending = chatPending.filter((p) => p !== rec); chip.remove(); chatAttachEl.hidden = !chatPending.length; continue; }
         rec.id = d.id; rec.size = d.size || f.size; rec.type = d.type || rec.type; chip.classList.remove("up");
+        chatGrow();   // 0.21.91: the strip above the box changed -- the box keeps its own size
       } catch (e) { chatHint("Upload failed \u2014 " + (e?.message || e), true); chatPending = chatPending.filter((p) => p !== rec); chip.remove(); chatAttachEl.hidden = !chatPending.length; }
     }
   }
@@ -21562,8 +21568,17 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     } catch (e) { window.__toast?.("Could not close the room \u2014 " + (e?.message || e), 6000, { level: "error" }); }
   };
   // ---- composer
-  function chatGrow() { chatInput.style.height = "auto"; chatInput.style.height = Math.min(120, chatInput.scrollHeight) + "px"; }
+  // 0.21.91: an empty box is always its natural one-line size (a height left over from an earlier message never sticks); a box
+  // with text is its text's height plus its borders (border-box: scrollHeight alone came out 2 px short and showed scroll
+  // arrows); a box that is not laid out (the panel closed, folded) is measured again when it is shown or resized
+  function chatGrow() {
+    if (!chatInput.value) { chatInput.style.height = ""; return; }
+    if (!chatInput.offsetWidth) return;
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(120, chatInput.scrollHeight + (chatInput.offsetHeight - chatInput.clientHeight)) + "px";
+  }
   chatInput.addEventListener("input", chatGrow);
+  try { let gw = 0; new ResizeObserver(() => { const w = chatInput.offsetWidth; if (w && w !== gw) { gw = w; chatGrow(); } }).observe(chatInput); } catch {}
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
     if (e.key === "Escape") { if (!chatEmojiEl.hidden) chatEmojiEl.hidden = true; else chatEntry.close(); }   // (a pinned Chat stays: chatEntry.close)
@@ -23231,6 +23246,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   setInterval(() => { liveSave(); hiMine(); }, 5000);   // 0.21.64: + my ring colour once my name is known
   function leaveMeeting() {
     if (joinState !== "joined") return;
+    try { window.__presLeaving?.(); } catch {}   // 0.21.91: a presentation with co-presenters is handed over before anything stops
     try { personalLeaveSend(false); } catch {}   // 0.21.78: the owner leaving My room -- its guests go to the Lobby
     try { localStorage.removeItem(LIVE_KEY); } catch {}   // 0.21.61: Leave = nothing to resume
     accGrantSet(null);   // 0.21.89: Leave ends a visit someone let me in for

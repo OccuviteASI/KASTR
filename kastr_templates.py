@@ -796,7 +796,18 @@ def _save(path, obj):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(obj, f, separators=(",", ":"))
-    os.replace(tmp, path)
+    _replace(tmp, path)
+
+
+def _replace(src, dst):
+    for i in range(10):   # Windows: a scanner or indexer may hold the old file a moment (Access is denied)
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == 9:
+                raise
+            time.sleep(0.05 * (i + 1))
 
 
 def _load(path):
@@ -1005,6 +1016,24 @@ class TemplateBook:
             self._save_locked()
             return len(shelf)
 
+    def rename_person(self, old, new, disp=""):
+        """0.21.91 renames: a person who changed their name keeps their personal templates (and their decks)."""
+        old, new = name_key(old), name_key(new)
+        if not old or not new or old == new:
+            return 0
+        with self.lock:
+            shelf = self.people.pop(old, None)
+            if not shelf:
+                return 0
+            for t in shelf.values():
+                t["owner"], t["ownerName"] = new, name_disp(disp) or t.get("ownerName") or new
+            self.people.setdefault(new, {}).update(shelf)
+            for m in self.decks.values():
+                if m.get("scope") == "me" and m.get("key") == old:
+                    m["key"] = new
+            self._save_locked()
+            return len(shelf)
+
     def _sweep_locked(self, now=None):
         now = _now() if now is None else now
         for tid in [k for k, at in self.gone.items() if now - at > GONE_KEEP_S]:
@@ -1044,7 +1073,7 @@ class TemplateBook:
             os.chmod(tmp, 0o600)
         except OSError:
             pass
-        os.replace(tmp, p)
+        _replace(tmp, p)
         self._mk = k
         return k
 
@@ -1122,7 +1151,7 @@ class TemplateBook:
             p = os.path.join(self._deck_dir(did), fname)
             with open(p + ".tmp", "wb") as f:
                 f.write(iv + ct)
-            os.replace(p + ".tmp", p)
+            _replace(p + ".tmp", p)
             m["files"][fname] = {"size": len(data), "h": hashlib.sha256(iv + ct).hexdigest()[:32]}
             m["size"] = sum(f["size"] for f in m["files"].values())
             m["upd"] = int(_now())
@@ -1220,7 +1249,7 @@ class TemplateBook:
             p = os.path.join(self._deck_dir(did), fname)
             with open(p + ".tmp", "wb") as f:
                 f.write(data)
-            os.replace(p + ".tmp", p)
+            _replace(p + ".tmp", p)
             return True
 
     def keys_export(self, dids):

@@ -429,6 +429,18 @@ class Personal(Base):
         # a room template cannot live in My room
         self.assertEqual(self.api({"op": "save", "name": "x", "sections": ["layout"]}, self.mytok)[1], 403)
 
+    def test_a_renamed_person_keeps_their_templates(self):
+        me = {"pname": "Kenton Jeffery", "pcode": MYCODE}
+        o, c = self.api(dict(me, op="save", scope="me", name="Mine", sections=["layout"]), self.pub)
+        self.assertEqual(c, 200, o)
+        verdict, info = self.st.personal_rename("Kenton Jeffery", "Kenton J", MYCODE)
+        self.assertEqual(verdict, "renamed")
+        lst, c = self.api({"op": "list", "pname": "Kenton J", "pcode": MYCODE}, self.pub)
+        self.assertEqual(([t["name"] for t in lst["mine"]], lst["mine"][0]["ownerName"]), (["Mine"], "Kenton J"))
+        self.assertTrue(self.st.personal_unrename("Kenton J", "Kenton Jeffery"))
+        lst, c = self.api(dict(me, op="list"), self.pub)
+        self.assertEqual([t["name"] for t in lst["mine"]], ["Mine"])
+
     def test_personal_cap(self):
         me = {"pname": "Kenton Jeffery", "pcode": MYCODE}
         for i in range(kt.TPL_PERSON_MAX):
@@ -468,15 +480,30 @@ class Decks(Base):
         self.assertIn(d["deck"], bundle)
         self.assertNotIn('"wk"', bundle)
         self.assertNotIn('"pk"', bundle)
-        # a presenter of the room opens it; a viewer cannot; another room cannot
-        o, c = self.api({"op": "deckOpen", "id": tid}, self.pub)
+        # Kenton (2026-10-27): before it is presented, ONLY the template's named presenters + backstage (proven by name + My room
+        # code) and the room's admins open the deck -- not any publisher, not a name a page merely says
+        for n, code in (("Ada", "ada-code-99"), ("Bob", "bob-code-99")):
+            kr.personal_op(self.st, {"op": "create", "name": n, "code": code, "access": "pub-1"}, "10.0.0.5")
+        o, c = self.api({"op": "deckOpen", "id": tid}, self.pub)                          # a publisher, not named
+        self.assertEqual((c, o.get("named")), (403, False))
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "by": "Ada"}, self.pub)[1], 403)   # saying a name is not enough
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Bob", "pcode": "bob-code-99"}, self.pub)[1], 403)   # a person, not named
+        o, c = self.api({"op": "deckOpen", "id": tid, "pname": "Ada", "pcode": "wrong-wrong"}, self.pub)
+        self.assertEqual((c, o.get("wrong")), (403, True))                              # a wrong code is counted
+        o, c = self.api({"op": "deckOpen", "id": tid, "pname": "Ada", "pcode": "ada-code-99"}, self.pub)   # named backstage
         self.assertEqual(c, 200, o)
         self.assertIn("pageKey", o)
         data, c = self.svc.tpl_deck_get({"d": [d["deck"]], "f": ["s0.bin"], "rt": [o["rt"]]}, None)
         self.assertEqual((c, data), (200, slide))
         self.assertEqual(self.svc.tpl_deck_get({"d": [d["deck"]], "f": ["s0.bin"], "rt": ["x.1.y"]}, None)[1], 403)
-        self.assertEqual(self.api({"op": "deckOpen", "id": tid}, self.view)[1], 403)
-        self.assertEqual(self.api({"op": "deckOpen", "id": tid}, mint(self.svc, "gamma"))[1], 403)
+        o, c = self.api({"op": "deckOpen", "id": tid, "pname": "Ada", "pcode": "ada-code-99"}, self.view)   # named, even on a viewer code
+        self.assertEqual(c, 200, o)
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid}, self.view)[1], 403)       # a viewer, not named
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid})[1], 200)                  # a room admin (the admin code)
+        o, c = self.api({"op": "deckOpen", "id": tid, "roomKey": self.room_key}, self.pub)   # the room's creator is a room admin
+        self.assertEqual(c, 200, o)
+        g = mint(self.svc, "gamma", code="adm-1")                                         # another room -- even an admin there
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Ada", "pcode": "ada-code-99", "tokens": {"beta": self.pub}}, g)[1], 403)
         # the deck goes with its template
         self.api({"op": "delete", "id": tid})
         self.assertFalse(os.path.exists(os.path.join(self.dir, "templates", "decks", d["deck"])))

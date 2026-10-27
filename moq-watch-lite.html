@@ -315,6 +315,10 @@
   body { -webkit-user-select:none; user-select:none; }
   input, textarea, select, [contenteditable], #chatLog, #chatLog *, #roomInfoPop .body, #aboutPop .body, #helpPop .body,
   #roomInfoPop .body *, #aboutPop .body *, #helpPop .body * { -webkit-user-select:text; user-select:text; }
+  /* 0.21.91 (Kenton: "When messaging someone I don't have the ability to select their message and copy content out of it"):
+     the text of every message in Messages selects and copies like Room Chat's */
+  .mlog .mtxt, .mlog .mtxt *, .mlog .mwho, .mlog .msys { -webkit-user-select:text; user-select:text; cursor:text; }
+  .mlog .mtxt a { cursor:pointer; }
   img, svg, canvas, video { -webkit-user-drag:none; }
   body.kdragging, body.kdragging * { -webkit-user-select:none !important; user-select:none !important; cursor:grabbing !important; }
   .dragghost { position:fixed; left:0; top:0; z-index:10000; pointer-events:none; opacity:.62; border-radius:8px; overflow:hidden;

@@ -159,7 +159,7 @@ class Page(unittest.TestCase):
         self.assertIn("return !!inviteGet() && !authAccessCode && !lastJoin()?.access;", g)
         self.assertIn("lastChannelList = guestRooms(deriveRooms());", p)
         self.assertIn("return list.filter((r) => r.slug === LOBBY || (!!inv && r.slug === inv.room));", p)
-        self.assertIn("host.hidden = inviteGuest();   // 0.21.91: a guest has no My room", p)
+        self.assertIn("if (inviteGuest()) { host.hidden = true; return; }   // 0.21.91: a guest has no My room", p)
         # the relay host is asked with the guest's token (it answers their room alone)
         self.assertIn('const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;', p)
         # a guest's Lobby mint carries the link

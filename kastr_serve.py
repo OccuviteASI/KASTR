@@ -3015,16 +3015,23 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _rooms_guest_cut(self, obj):
             """0.21.91 (Kenton: guests "see ONLY the Lobby and the room(s) they were invited to"): a list asked with a GUEST's token
             (an invite-link member or a personal-room guest of this relay's minter) answers their room alone -- nothing else of the
-            fleet (rooms, groups, renames). Without a token the list is the public one, as before."""
+            fleet (rooms, groups, renames). A member's or a browse token (an access code): every room. No token: none."""
             try:
                 auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
                 hdr = self.headers.get("Authorization") or ""
-                if auth is None or not hdr or not hasattr(auth, "_member_claims"):
-                    return obj
-                g = kastr_relay.guest_rooms(auth._member_claims(hdr))
+                claims = auth._member_claims(hdr) if (auth is not None and hdr and hasattr(auth, "_member_claims")) else None
+                if claims is None:
+                    # 0.21.91 (Kenton: "Room names must not be visible to anyone without a fleet access code"): no token -> no
+                    # rooms; the relay machine's own pages (loopback: the Relay page, its operator) still see them
+                    if self._local():
+                        return obj
+                    out = kastr_relay.rooms_for_guest(obj, set())
+                    out.update(guest=False, needCode=True)
+                    return out
+                g = kastr_relay.guest_rooms(claims)
                 return kastr_relay.rooms_for_guest(obj, g) if g is not None else obj
             except Exception:
-                return obj
+                return kastr_relay.rooms_for_guest(obj, set())
 
         def _rooms_api(self, method, path, qs):
             """The relay's room records for pages anywhere (CORS-open)."""

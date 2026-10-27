@@ -9693,7 +9693,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined") return;
     let conn = null;
     try {
-      conn = new Net.Connection({ url: new Signals.Signal(new URL(urlInput.value.trim())), enabled: true });
+      conn = new Net.Connection({ url: new Signals.Signal(new URL(withToken(urlInput.value.trim()))), enabled: true });   // 0.21.91: ~stats rides a token
     } catch { return; }
     try {
       const deadline = new Promise((res) => setTimeout(res, 1500, null));
@@ -14725,6 +14725,54 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     })();
   }
   const stampGone = (m, now) => { for (const r of m.values()) if (!r.goneAt) r.goneAt = now; };
+  // 0.21.91 (Kenton: "Room list needs an access code"): the relay shows a session without a token nothing of the rooms. The
+  // rooms connection and the list read carry a BROWSE token (minted with an access code: the saved one, the one typed on the
+  // Join room page, the one joined with) -- or a guest's own token (their room only). Without either the rooms are not listed.
+  let roomsBrowse = null;   // {token, exp, base}
+  const roomsBrowseKey = () => { try { return "kastr.browse." + new URL(urlInput.value.trim()).origin; } catch { return ""; } };
+  try { const b = JSON.parse(sessionStorage.getItem(roomsBrowseKey()) || "null"); if (b?.token && b.exp * 1000 > Date.now() + 60000) roomsBrowse = b; } catch {}
+  function roomsToken() {
+    try {
+      if (!authSecured) return "";
+      if (roomsBrowse && roomsBrowse.base === authBase() && roomsBrowse.exp * 1000 > Date.now()) return roomsBrowse.token;
+      if (joinState === "joined" && authTokens?.member) return authTokens.member;   // a guest's own (its room only), or a member's
+    } catch {}
+    return "";
+  }
+  let roomsBrowseBusy = null, roomsBrowseSaid = "";
+  async function roomsBrowseMint(access) {
+    const code = String(access ?? "").trim();
+    const base = authBase();
+    if (!base || !authSecured || (authCodes && !code)) return false;
+    if (roomsBrowse && roomsBrowse.base === base && roomsBrowse.code === code && roomsBrowse.exp * 1000 > Date.now() + 600000) return true;
+    if (roomsBrowseBusy) return roomsBrowseBusy;
+    roomsBrowseBusy = (async () => {
+      try {
+        const r = await fetch(base + "/api/token", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ browse: true, code, host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d?.tokens?.browse) { roomsBrowseSaid = String(d?.error || r.status); return false; }
+        const had = roomsToken();
+        roomsBrowse = { token: d.tokens.browse, exp: Number(d.exp) || 0, base, code };
+        try { sessionStorage.setItem(roomsBrowseKey(), JSON.stringify({ token: roomsBrowse.token, exp: roomsBrowse.exp, base })); } catch {}
+        if (had !== roomsBrowse.token) { roomsRebuild(); roomsMinterPoll().catch(() => {}); }   // the rooms show now
+        return true;
+      } catch { return false; } finally { setTimeout(() => { roomsBrowseBusy = null; }, 0); }
+    })();
+    return roomsBrowseBusy;
+  }
+  window.__roomsBrowse = { mint: (c) => roomsBrowseMint(c), token: () => !!roomsToken(), said: () => roomsBrowseSaid };   // rig (never the token)
+  // the access code this page knows -> the browse token; a guest's token change -> the rooms connection follows it
+  let roomsTokSeen = "";
+  setInterval(() => {
+    try {
+      if (!authSecured) return;
+      const code = authAccessCode || (joinState !== "joined" ? String(joinEls?.joinAccess?.value || lastJoin()?.access || "") : "");
+      if (code && !(roomsBrowse && roomsBrowse.base === authBase() && roomsBrowse.exp * 1000 > Date.now() + 600000)) roomsBrowseMint(code);
+      const t = roomsToken();
+      if (t !== roomsTokSeen) { const first = !roomsTokSeen; roomsTokSeen = t; if (t || !first) { roomsRebuild(); roomsMinterPoll().catch(() => {}); } }
+    } catch {}
+  }, 2000);
   function roomsRebuild() {
     roomsGen++;
     const gen = roomsGen;
@@ -14748,6 +14796,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomsDownAt = 0;
     let url;
     try { url = new URL(urlInput.value.trim()); } catch { roomsChanged(); return; }
+    { const t = roomsToken(); roomsTokSeen = t; if (t) url.searchParams.set("jwt", t); }   // 0.21.91: the rooms ride a token
     try { roomsConn = new Net.Connection({ url: new Signals.Signal(url), enabled: true }); }
     catch { roomsConn = null; roomsChanged(); return; }
     const conn = roomsConn;
@@ -14866,14 +14915,15 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let roomsGroups = {}, roomsGroupsAt = 0;   // 0.15.0 (B4): gid -> {name, order, rooms:[slug]} from the room store
   async function roomsMinterPoll() {
     roomsMinterAt = Date.now();
+    if (authSecured && !roomsToken()) return;   // 0.21.91: no access code yet -- no rooms (even on the relay machine itself)
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 4000);
     let got = null;
     try {
       const hb = relayHostBase();
       if (hb) {
-        // 0.21.91: a guest's page shows its token -- the relay host then answers only the guest's room (nothing of the fleet)
-        const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;
+        // 0.21.91: the list rides the rooms token (a browse token, or a guest's own -- the relay host answers their room only)
+        const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;
         const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store", headers: gh });
         if (r.ok) got = await r.json();
       }
@@ -14881,7 +14931,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!got && authSecured) {
       try {
         const base = authBase();
-        const gh = inviteGuest() && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;   // 0.21.91
+        const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;   // 0.21.91
         const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store", headers: gh }) : null;
         if (r && r.ok) got = await r.json();
       } catch {}
@@ -23360,6 +23410,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
     // 0.21.65: the rooms sidebar opens / closes from its edge tab (#sbEdge), wired with sbToggle
     joinEls.joinBtn.addEventListener("click", () => joinNow());
+    // 0.21.91 (Kenton: "The Join room page shows no rooms until a code is typed and checked, then lists them")
+    joinEls.joinAccess?.addEventListener("change", () => {
+      const v = joinEls.joinAccess.value.trim();
+      if (!v) return;
+      roomsBrowseMint(v).then((ok) => { if (!ok && /wrong access code/i.test(roomsBrowseSaid)) gateMsg("Wrong access code for this relay."); else if (ok) gateMsg(""); });
+    });
     // 0.13.2: Enter in any gate field joins (the code fields most of all -- Kenton typed a code and waited)
     for (const el of [joinEls.joinAccess, joinEls.joinPwd, joinEls.joinChanNew, joinEls.joinName]) {
       el?.addEventListener("keydown", (e) => {

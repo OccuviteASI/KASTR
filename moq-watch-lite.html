@@ -4216,16 +4216,35 @@
     const to = opts?.to || (x ? [...x.rooms] : []);
     const body = { path, from: CHANNEL, to, label: x?.label || shortLabel(path), kind: x?.kind || xsKindOf(path),
                    by: window.__publisher?.state?.()?.operator || "", tokens: stop ? {} : (x?.tokens || {}), stop };
+    if (!stop) { const g = xsGensOf(path), gens = {}; for (const sl of to) if (g[sl]) gens[sl] = g[sl]; if (Object.keys(gens).length) body.gens = gens; }   // 0.21.91
     const headers = { "content-type": "application/json" };
     if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;
     try {
       const r = await fetch(base + "/api/xshare", { method: "POST", headers, body: JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
+      // 0.21.91 (Kenton: "When a room is deleted, it doesn't delete the sharing of the cameras going to that room"): a room the
+      // relay says was DELETED leaves this share for good -- its remembered rooms too, so a restart or a new room of the same
+      // name never brings it back
+      const gone = !stop && x && Array.isArray(d.gone) ? d.gone.map(String).filter((sl) => x.rooms.has(sl)) : [];
+      if (gone.length) {
+        for (const sl of gone) { x.rooms.delete(sl); delete x.tokens[sl]; }
+        xsGensSet(path, (g) => { for (const sl of gone) delete g[sl]; });
+        const keep = xsSaved()[xsKey(path)];
+        if (Array.isArray(keep)) xsSave(path, keep.filter((sl) => !gone.includes(sl)));
+        if (!x.rooms.size) xsMine.delete(path);
+        xsChanged();
+        window.__toast?.(shortLabel(path) + " no longer shows in " + gone.join(", ") + " \u2014 " + (gone.length === 1 ? "that room was" : "those rooms were") + " deleted", 6000, { level: "event" });
+      }
       if (!stop && x && d.refused && typeof d.refused === "object") {
         for (const [slug, why] of Object.entries(d.refused)) {
+          if (gone.includes(slug)) continue;
           x.rooms.delete(slug); delete x.tokens[slug];
           window.__toast?.("Not shown in " + slug + ": " + why, 5000, { level: "warn" });
         }
+      }
+      if (!stop && x && d.gens && typeof d.gens === "object") {   // 0.21.91: each room as it was when it took the share
+        const fresh = Object.entries(d.gens).filter(([sl, g]) => g && x.rooms.has(sl) && !xsGensOf(path)[sl]);
+        if (fresh.length) xsGensSet(path, (g) => { for (const [sl, v] of fresh) g[sl] = String(v).slice(0, 24); });
       }
       return d;
     } catch { return null; }
@@ -4248,6 +4267,18 @@
     const o = xsSaved();
     if (rooms.length) o[xsKey(path)] = rooms; else delete o[xsKey(path)];
     try { localStorage.setItem(XS_PATHS_KEY(), JSON.stringify(o)); } catch {}
+    xsGensSet(path, (g) => { for (const sl of Object.keys(g)) if (!rooms.includes(sl)) delete g[sl]; });   // 0.21.91: a room let go forgets its generation
+  }
+  // 0.21.91: the generation of each room a share of mine was accepted in (the relay's `gens`: the room record's creation), kept
+  // beside the remembered rooms -- sent back with every listing, so a room that was deleted and made again is not the same room
+  const XS_GENS_KEY = () => "kastr.xshare.gens." + sbRelayHost();
+  function xsGensAll() { try { const o = JSON.parse(localStorage.getItem(XS_GENS_KEY()) || "{}"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch { return {}; } }
+  function xsGensOf(path) { const g = xsGensAll()[xsKey(path)]; return g && typeof g === "object" ? g : {}; }
+  function xsGensSet(path, fn) {
+    const o = xsGensAll(), k = xsKey(path), g = { ...(o[k] || {}) };
+    fn(g);
+    if (Object.keys(g).length) o[k] = g; else delete o[k];
+    try { localStorage.setItem(XS_GENS_KEY(), JSON.stringify(o)); } catch {}
   }
   const xsOtherRooms = () => (lastChannelList || []).filter((r) => r.slug !== CHANNEL && r.slug !== LOBBY && !isHomeRoom(r.slug)).sort((a, b) => a.slug.localeCompare(b.slug));   // 0.21.75: never a box's home
   // 0.21.75: on a Publisher box a camera's rooms belong to the BOX SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; it re-lists
@@ -25197,6 +25228,23 @@
   // SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; listed every minute with or without this window); the row shows them and
   // why a room refused the camera (locked without its code, removed by an admin, the relay's limits)
   const xsSrv = new Map();   // feed id -> { xs: [slug], xsState: {slug: "ok" | why}, xsLocked: [slug] } (/api/rtsp/list)
+  // 0.21.91: rooms the box server took a camera out of because they were DELETED (feed.xsDropped) -- said once per room and
+  // camera, all of one poll in one notice; what was dropped before this page opened (over 10 minutes ago) is not news
+  const xsDropSeen = new Set();
+  function xsDroppedNote(feeds) {
+    const now = Date.now() / 1000, news = [];
+    for (const f of feeds) for (const x of (Array.isArray(f.xsDropped) ? f.xsDropped : [])) {
+      const k = f.id + "|" + x.room + "|" + x.at;
+      if (xsDropSeen.has(k)) continue;
+      xsDropSeen.add(k);
+      if (now - Number(x.at || 0) < 600) news.push({ label: added.find((a) => a.kind === RTSP && a.feedId === f.id)?.label || f.publish?.label || "A camera", room: String(x.room) });
+    }
+    if (!news.length) return;
+    const rooms = [...new Set(news.map((n) => n.room))];
+    window.__toast?.(news.length === 1 ? news[0].label + " no longer shows in " + news[0].room + " \u2014 that room was deleted"
+      : news.length + " camera rooms removed \u2014 " + rooms.join(", ") + (rooms.length === 1 ? " was" : " were") + " deleted", 6000, { level: "event" });
+    log("Cross-room: " + news.map((n) => n.label + " left " + n.room).join("; ") + " (room deleted)");
+  }
   let xsSrvSig = "";
   const isBoxPage = () => /^publisher/.test(String(window.__pageMode?.() || ""));
   const xsSrvId = (a) => (a && !IS_WEB2 && isBoxPage() && nativeRtsp && a.kind === RTSP && a.feedId != null) ? a.feedId : null;
@@ -30496,6 +30544,7 @@
         {   // 0.21.75: the rooms each camera shows in (kept by this box's server) -> its row
           let sig = "";
           for (const f of d.feeds ?? []) { const v = { xs: Array.isArray(f.xs) ? f.xs : [], xsState: f.xsState || {}, xsLocked: f.xsLocked || [], library: f.publish?.library ?? null, lib: f.lib ?? null }; xsSrv.set(f.id, v); sig += f.id + ":" + JSON.stringify(v) + ";"; }
+          xsDroppedNote(d.feeds ?? []);   // 0.21.91
           for (const id of [...xsSrv.keys()]) if (!byId.has(id)) xsSrv.delete(id);
           if (sig !== xsSrvSig) { xsSrvSig = sig; try { renderSources(); } catch {} }
         }

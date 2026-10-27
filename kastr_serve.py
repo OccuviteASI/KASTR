@@ -3268,7 +3268,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                 _ob = json.loads(_obody or b"{}")
                             except ValueError:
                                 _ob = {}
-                            obj, code = kastr_relay.xshare_open("POST", _ob)
+                            try:   # 0.21.91: this relay judges deleted rooms only when it owns its rooms (not a spoke)
+                                _judge = not (relay_srv.hub_rooms_call is not None and relay_srv._hub_minter_url()
+                                              and relay_srv._cluster_raw().get("hub") is not True)
+                            except Exception:
+                                _judge = True
+                            obj, code = kastr_relay.xshare_open("POST", _ob, store=getattr(relay_srv, "store", None), judge=_judge)
                         return self._json_cors(code, obj)
                     if path0 == "/api/rooms/board":   # 0.21.63: an OPEN relay keeps room boards too (no tokens)
                         if method == "GET":

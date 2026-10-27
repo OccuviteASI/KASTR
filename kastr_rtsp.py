@@ -174,6 +174,10 @@ def _xs_fields(feed):
     codes = {r: str(c) for r, c in (codes if isinstance(codes, dict) else {}).items() if r in xs and c}
     if codes:
         out["xsCodes"] = codes
+    gens = getattr(feed, "xs_gen", None)   # 0.21.91: the generation of each room it was accepted in (see kastr_relay xshare_gone)
+    gens = {r: str(g) for r, g in (gens if isinstance(gens, dict) else {}).items() if r in xs and g}
+    if gens:
+        out["xsGen"] = gens
     return out
 
 # ---- 0.21.84 (Kenton: "No-room box cameras join the library automatically on update, with the alias rewrite. New cameras added
@@ -2785,6 +2789,8 @@ class Feed:
         self.xs = []                  # 0.21.75: the OTHER rooms this camera shows in (the bridge's xs loop lists it there)
         self.xs_codes = {}            # 0.21.75: room -> code of a locked target room (rtsp-feeds.json only; never sent to a page)
         self.xs_state = {}            # 0.21.75: room -> "ok" | why that room refused it (the page's row shows the reason)
+        self.xs_gen = {}              # 0.21.91: room -> the generation of the room it was accepted in (a newer room never inherits it)
+        self.xs_dropped = []          # 0.21.91: [{room, at, why}] -- rooms it left because they were deleted (the page says so once)
         self.lib = None               # 0.21.84: this camera's stream library switch (None = the box's default: on in no room)
         self.lib_aka = {}             # 0.21.84: its old paths (the room paths it had before the library) -> when it left them
         self.xs_auto = None           # 0.21.84: the room it was listed back into when it joined the library from that room
@@ -2802,6 +2808,7 @@ class Feed:
             "acodec": self.acodec,        # 0.9.5
             "sar": ("%d:%d" % tuple(self.sar)) if self.sar else None,   # 0.9.8
             "xs": list(self.xs), "xsState": dict(self.xs_state), "xsLocked": sorted(self.xs_codes),   # 0.21.75 (never the codes)
+            "xsDropped": list(getattr(self, "xs_dropped", None) or [])[-8:],   # 0.21.91: rooms it left because they were deleted
             "lib": self.lib,              # 0.21.84: its stream library switch (null = the box's default)
             "libList": self.lib_list,     # 0.21.85: listed in the library (null = on when this machine runs the relay)
         }
@@ -3723,6 +3730,8 @@ class Bridge:
                     feed.xs = [str(r) for r in rec["xs"] if _XS_ROOM_RE.match(str(r)) and not is_home_room(r)][:XS_ROOMS_MAX]
                     codes = rec.get("xsCodes") if isinstance(rec.get("xsCodes"), dict) else {}
                     feed.xs_codes = {str(r): str(c) for r, c in codes.items() if str(r) in feed.xs and c}
+                    gens = rec.get("xsGen") if isinstance(rec.get("xsGen"), dict) else {}   # 0.21.91
+                    feed.xs_gen = {str(r): str(g)[:24] for r, g in gens.items() if str(r) in feed.xs and g}
                 if rec.get("lib") in (True, False) and getattr(feed, "lib", None) is None:   # 0.21.84: its library switch, old paths
                     feed.lib = rec["lib"]
                 if isinstance(rec.get("libAka"), dict) and not getattr(feed, "lib_aka", None):
@@ -3803,6 +3812,7 @@ class Bridge:
                     self._xs_bad.pop(k, None)
         feed.xs, feed.xs_codes = out, keep
         feed.xs_state = {r: v for r, v in (getattr(feed, "xs_state", None) or {}).items() if r in out}
+        feed.xs_gen = {r: g for r, g in (getattr(feed, "xs_gen", None) or {}).items() if r in out}   # 0.21.91: a room picked again is learned anew
         self.persist_feeds()
         self.log("rtsp: %s shows in %s" % (pub.broadcast if pub is not None else "feed %s" % feed.id, ", ".join(out) or "its own room only"))
         try:
@@ -3898,6 +3908,33 @@ class Bridge:
                 self.log("rtsp: cross-room listing at %s failed: %s" % (re.sub(r"[?].*", "", url), str(e)[:120]))
             return None, 0
 
+    def _xs_forget(self, feed, rooms, path, now=None):
+        """0.21.91: rooms the relay says were DELETED -- out of this camera's rooms (and their codes and generations), persisted,
+        and kept in xs_dropped so the page tells the person once."""
+        now = time.time() if now is None else now
+        rooms = [r for r in rooms if r in (getattr(feed, "xs", None) or [])]
+        if not rooms:
+            return []
+        feed.xs = [r for r in feed.xs if r not in rooms]
+        for attr in ("xs_codes", "xs_gen", "xs_state"):
+            m = getattr(feed, attr, None)
+            if isinstance(m, dict):
+                for r in rooms:
+                    m.pop(r, None)
+        if getattr(feed, "xs_auto", None) in rooms:
+            feed.xs_auto = None
+        dropped = list(getattr(feed, "xs_dropped", None) or [])
+        dropped += [{"room": r, "at": int(now), "why": "deleted"} for r in rooms]
+        feed.xs_dropped = dropped[-8:]
+        rec = self._xs_listed.get(path)
+        if rec:
+            rec["rooms"] -= set(rooms)
+            if not rec["rooms"]:
+                self._xs_listed.pop(path, None)
+        self.persist_feeds()
+        self.log("rtsp: %s no longer shown in %s -- the room was deleted (removed from this camera's rooms)" % (path, ", ".join(rooms)))
+        return rooms
+
     def xs_tick(self, now=None, post=None, mint=None):
         """One round. `post(url, body, bearer) -> (dict | None, http code)` and `mint(relay, room, access, room_code) ->
         (status, url, detail)` (mint_member's shape) are injectable (tests). -> {path: {room: "ok" | why}}."""
@@ -3955,6 +3992,9 @@ class Bridge:
                             body = {"path": path, "to": to, "tokens": {r: t for r, t in toks.items() if t},
                                     "label": pub.label or segs[-1][:-5], "kind": "screen" if is_screen(pub.feed.url) else "rtsp",
                                     "by": segs[2] if len(segs) > 3 else ""}
+                            gens = {r: g for r, g in (getattr(pub.feed, "xs_gen", None) or {}).items() if r in to and g}
+                            if gens:
+                                body["gens"] = gens   # 0.21.91: the rooms as they were when they took it (a newer one of that name is not them)
                             d, code = post(minter + "/api/xshare", body, htok)
                             if not isinstance(d, dict):
                                 for r in to:
@@ -3963,9 +4003,25 @@ class Bridge:
                                 acc = [r for r in (d.get("to") or []) if r in to]
                                 for r in acc:
                                     state[r] = "ok"
+                                gone = [r for r in (d.get("gone") or []) if r in to]
+                                if gone:   # 0.21.91: deleted -- this camera leaves those rooms for good (never re-attached to a new one)
+                                    self._xs_forget(pub.feed, gone, path, now)
+                                    for r in gone:
+                                        state.pop(r, None)
+                                ng = d.get("gens") if isinstance(d.get("gens"), dict) else {}
+                                learned = False
+                                for r in acc:
+                                    g = str(ng.get(r) or "")[:24]
+                                    if g and not (getattr(pub.feed, "xs_gen", None) or {}).get(r):
+                                        if not isinstance(getattr(pub.feed, "xs_gen", None), dict):
+                                            pub.feed.xs_gen = {}
+                                        pub.feed.xs_gen[r] = g
+                                        learned = True
+                                if learned:
+                                    self.persist_feeds()
                                 ref = d.get("refused") if isinstance(d.get("refused"), dict) else {}
                                 for r in to:
-                                    if r not in state:
+                                    if r not in state and r not in gone:
                                         state[r] = str(ref.get(r) or d.get("error") or "refused")[:80]
                                 if acc:
                                     rec = self._xs_listed.setdefault(path, {"rooms": set(), "base": base, "minter": minter, "room": room})

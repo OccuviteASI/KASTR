@@ -174,6 +174,10 @@ def _xs_fields(feed):
     codes = {r: str(c) for r, c in (codes if isinstance(codes, dict) else {}).items() if r in xs and c}
     if codes:
         out["xsCodes"] = codes
+    gens = getattr(feed, "xs_gen", None)   # 0.21.91: the generation of each room it was accepted in (see kastr_relay xshare_gone)
+    gens = {r: str(g) for r, g in (gens if isinstance(gens, dict) else {}).items() if r in xs and g}
+    if gens:
+        out["xsGen"] = gens
     return out
 
 # ---- 0.21.84 (Kenton: "No-room box cameras join the library automatically on update, with the alias rewrite. New cameras added
@@ -1735,6 +1739,13 @@ class Hooks:
 
 
 PUBLISH_RETRY_S = [1, 2, 5, 10, 20, 30]
+# 0.21.91 (Kenton: alerts "after 1 try, and maybe again after a few tries, but I don't need it repeating forever" -- and the
+# log the same): a pair that keeps failing writes its start/exit lines in full for its FIRST try and its LOG_QUIET_AFTER-th
+# (with "still failing ... retrying quietly"), nothing for the tries between or after, and one summary line every
+# LOG_QUIET_SUMMARY_S while it keeps failing; the first time it streams again it says so (after how many failed tries). A
+# generation that lived over a minute exits in full as before (that is news, not a retry).
+LOG_QUIET_AFTER = 5
+LOG_QUIET_SUMMARY_S = 600
 
 
 def pause_card_input(url):
@@ -2209,6 +2220,7 @@ class Publisher:
             # after the lock -- the log may block on I/O)
             start_line = ("rtsp pair %s gen=%d start restarts=%d total=%d copy=%s ffmpeg=%s moq=%s"
                           % (self.broadcast, gen, self.restarts, self.restartsTotal, self.copy, ff.pid, mq.pid))
+            start_r = self.restarts                                       # 0.21.91: this try's place on the ladder
             self.errors.clear()
             self.error = None
             self.parked = False                                          # 0.12.0
@@ -2217,7 +2229,7 @@ class Publisher:
             drains = [threading.Thread(target=self._drain, args=(ff, "ffmpeg", gen), daemon=True),
                       threading.Thread(target=self._drain, args=(mq, "moq", gen), daemon=True)]
             self._drains = drains
-        self.bridge.log(start_line)                                      # 0.13.3
+        self._lq_line(start_line, start_r, "start")                       # 0.13.3; 0.21.91: quiet while it keeps failing
         for t in drains:
             t.start()
         if pump:   # 0.21.85
@@ -2405,6 +2417,8 @@ class Publisher:
                         if n > self._outSize:
                             self._outSize = n
                             self.flowingAt = time.time()
+                            if self.__dict__.get("_lq"):
+                                self._lq_back()   # 0.21.91
                     continue
                 if text:
                     text = _redact(re.sub(r"\x1b\[[0-9;]*m", "", text))   # 0.12.0: never a token
@@ -2476,6 +2490,7 @@ class Publisher:
             exit_line = ("rtsp pair %s gen=%d exit who=%s code=%s%s lived=%.1fs restarts=%d sessionFails=%d sessionKills=%d last=%s"
                          % (self.broadcast, gen, who, code, (" (" + why + ")") if why else "", lived, self.restarts, self.sessionFails, self.sessionKills,
                             ((mine or self.errors)[-1] if (mine or self.errors) else "")[:160]))
+            exit_r = -1 if lived > 60 else self.restarts                  # 0.21.91: -1 = it was working -- always logged
             if lived > 60:
                 self.restarts = 0       # it was working; forget the past
             hard = self._hard.pop(gen, None)                              # 0.12.0
@@ -2491,10 +2506,46 @@ class Publisher:
                 else:
                     decision = "ladder"
                     self._schedule_restart_locked()
-        self.bridge.log(exit_line)
+        self._lq_line(exit_line, exit_r, "exit")                          # 0.21.91
         self._notready("exit %s code %s" % (who, code))                  # 0.18.0
         if decision == "park":
             self._park()                # logs and may mint: never under the lock
+
+    def _lq_line(self, line, r, kind):
+        """0.21.91: launch.log for a pair's start / exit line -- `r` = its try's place on the ladder (restarts; -1 = always)."""
+        q = self.__dict__.get("_lq")
+        if q is None:
+            q = self.__dict__["_lq"] = {"n": 0, "lines": 0, "since": 0.0, "at": 0.0, "last": ""}
+        if r < 0 or r == 0 or r == LOG_QUIET_AFTER - 1:
+            self.bridge.log(line)
+            if kind == "exit" and r == LOG_QUIET_AFTER - 1:
+                self.bridge.log("rtsp pair %s: still failing after %d tries -- KASTR keeps retrying quietly (a summary every %d min)"
+                                % (self.broadcast, LOG_QUIET_AFTER, LOG_QUIET_SUMMARY_S // 60))
+            if kind == "exit" and r > 0:
+                q["n"] += 1
+            return
+        now = time.time()
+        q["lines"] += 1
+        if kind != "exit":
+            return
+        q["n"] += 1
+        q["last"] = line
+        if not q["since"]:
+            q["since"] = q["at"] = now
+        if now - q["at"] >= LOG_QUIET_SUMMARY_S:
+            q["at"] = now
+            self.bridge.log("rtsp pair %s: still failing -- %d failed tries since %s, KASTR keeps retrying quietly (last: %s)"
+                            % (self.broadcast, q["n"], time.strftime("%H:%M", time.localtime(q["since"])), line[-220:]))
+
+    def _lq_back(self):
+        """0.21.91: the pair streams (ffmpeg's output grew): a quiet stretch ends with one line, the count starts over."""
+        q = self.__dict__.get("_lq")
+        if not q or not (q["lines"] or q["n"]):
+            return
+        quiet = q["lines"]
+        self.__dict__["_lq"] = None
+        if quiet:
+            self.bridge.log("rtsp pair %s gen=%d streaming again after %d failed tr%s" % (self.broadcast, self._gen, max(1, self.restarts), "y" if self.restarts == 1 else "ies"))
 
     def _schedule_restart_locked(self):
         """0.13.3: queue the next ladder step. The caller holds self._lock
@@ -2785,6 +2836,8 @@ class Feed:
         self.xs = []                  # 0.21.75: the OTHER rooms this camera shows in (the bridge's xs loop lists it there)
         self.xs_codes = {}            # 0.21.75: room -> code of a locked target room (rtsp-feeds.json only; never sent to a page)
         self.xs_state = {}            # 0.21.75: room -> "ok" | why that room refused it (the page's row shows the reason)
+        self.xs_gen = {}              # 0.21.91: room -> the generation of the room it was accepted in (a newer room never inherits it)
+        self.xs_dropped = []          # 0.21.91: [{room, at, why}] -- rooms it left because they were deleted (the page says so once)
         self.lib = None               # 0.21.84: this camera's stream library switch (None = the box's default: on in no room)
         self.lib_aka = {}             # 0.21.84: its old paths (the room paths it had before the library) -> when it left them
         self.xs_auto = None           # 0.21.84: the room it was listed back into when it joined the library from that room
@@ -2802,6 +2855,7 @@ class Feed:
             "acodec": self.acodec,        # 0.9.5
             "sar": ("%d:%d" % tuple(self.sar)) if self.sar else None,   # 0.9.8
             "xs": list(self.xs), "xsState": dict(self.xs_state), "xsLocked": sorted(self.xs_codes),   # 0.21.75 (never the codes)
+            "xsDropped": list(getattr(self, "xs_dropped", None) or [])[-8:],   # 0.21.91: rooms it left because they were deleted
             "lib": self.lib,              # 0.21.84: its stream library switch (null = the box's default)
             "libList": self.lib_list,     # 0.21.85: listed in the library (null = on when this machine runs the relay)
         }
@@ -3723,6 +3777,8 @@ class Bridge:
                     feed.xs = [str(r) for r in rec["xs"] if _XS_ROOM_RE.match(str(r)) and not is_home_room(r)][:XS_ROOMS_MAX]
                     codes = rec.get("xsCodes") if isinstance(rec.get("xsCodes"), dict) else {}
                     feed.xs_codes = {str(r): str(c) for r, c in codes.items() if str(r) in feed.xs and c}
+                    gens = rec.get("xsGen") if isinstance(rec.get("xsGen"), dict) else {}   # 0.21.91
+                    feed.xs_gen = {str(r): str(g)[:24] for r, g in gens.items() if str(r) in feed.xs and g}
                 if rec.get("lib") in (True, False) and getattr(feed, "lib", None) is None:   # 0.21.84: its library switch, old paths
                     feed.lib = rec["lib"]
                 if isinstance(rec.get("libAka"), dict) and not getattr(feed, "lib_aka", None):
@@ -3803,6 +3859,7 @@ class Bridge:
                     self._xs_bad.pop(k, None)
         feed.xs, feed.xs_codes = out, keep
         feed.xs_state = {r: v for r, v in (getattr(feed, "xs_state", None) or {}).items() if r in out}
+        feed.xs_gen = {r: g for r, g in (getattr(feed, "xs_gen", None) or {}).items() if r in out}   # 0.21.91: a room picked again is learned anew
         self.persist_feeds()
         self.log("rtsp: %s shows in %s" % (pub.broadcast if pub is not None else "feed %s" % feed.id, ", ".join(out) or "its own room only"))
         try:
@@ -3898,6 +3955,33 @@ class Bridge:
                 self.log("rtsp: cross-room listing at %s failed: %s" % (re.sub(r"[?].*", "", url), str(e)[:120]))
             return None, 0
 
+    def _xs_forget(self, feed, rooms, path, now=None):
+        """0.21.91: rooms the relay says were DELETED -- out of this camera's rooms (and their codes and generations), persisted,
+        and kept in xs_dropped so the page tells the person once."""
+        now = time.time() if now is None else now
+        rooms = [r for r in rooms if r in (getattr(feed, "xs", None) or [])]
+        if not rooms:
+            return []
+        feed.xs = [r for r in feed.xs if r not in rooms]
+        for attr in ("xs_codes", "xs_gen", "xs_state"):
+            m = getattr(feed, attr, None)
+            if isinstance(m, dict):
+                for r in rooms:
+                    m.pop(r, None)
+        if getattr(feed, "xs_auto", None) in rooms:
+            feed.xs_auto = None
+        dropped = list(getattr(feed, "xs_dropped", None) or [])
+        dropped += [{"room": r, "at": int(now), "why": "deleted"} for r in rooms]
+        feed.xs_dropped = dropped[-8:]
+        rec = self._xs_listed.get(path)
+        if rec:
+            rec["rooms"] -= set(rooms)
+            if not rec["rooms"]:
+                self._xs_listed.pop(path, None)
+        self.persist_feeds()
+        self.log("rtsp: %s no longer shown in %s -- the room was deleted (removed from this camera's rooms)" % (path, ", ".join(rooms)))
+        return rooms
+
     def xs_tick(self, now=None, post=None, mint=None):
         """One round. `post(url, body, bearer) -> (dict | None, http code)` and `mint(relay, room, access, room_code) ->
         (status, url, detail)` (mint_member's shape) are injectable (tests). -> {path: {room: "ok" | why}}."""
@@ -3955,6 +4039,9 @@ class Bridge:
                             body = {"path": path, "to": to, "tokens": {r: t for r, t in toks.items() if t},
                                     "label": pub.label or segs[-1][:-5], "kind": "screen" if is_screen(pub.feed.url) else "rtsp",
                                     "by": segs[2] if len(segs) > 3 else ""}
+                            gens = {r: g for r, g in (getattr(pub.feed, "xs_gen", None) or {}).items() if r in to and g}
+                            if gens:
+                                body["gens"] = gens   # 0.21.91: the rooms as they were when they took it (a newer one of that name is not them)
                             d, code = post(minter + "/api/xshare", body, htok)
                             if not isinstance(d, dict):
                                 for r in to:
@@ -3963,9 +4050,25 @@ class Bridge:
                                 acc = [r for r in (d.get("to") or []) if r in to]
                                 for r in acc:
                                     state[r] = "ok"
+                                gone = [r for r in (d.get("gone") or []) if r in to]
+                                if gone:   # 0.21.91: deleted -- this camera leaves those rooms for good (never re-attached to a new one)
+                                    self._xs_forget(pub.feed, gone, path, now)
+                                    for r in gone:
+                                        state.pop(r, None)
+                                ng = d.get("gens") if isinstance(d.get("gens"), dict) else {}
+                                learned = False
+                                for r in acc:
+                                    g = str(ng.get(r) or "")[:24]
+                                    if g and not (getattr(pub.feed, "xs_gen", None) or {}).get(r):
+                                        if not isinstance(getattr(pub.feed, "xs_gen", None), dict):
+                                            pub.feed.xs_gen = {}
+                                        pub.feed.xs_gen[r] = g
+                                        learned = True
+                                if learned:
+                                    self.persist_feeds()
                                 ref = d.get("refused") if isinstance(d.get("refused"), dict) else {}
                                 for r in to:
-                                    if r not in state:
+                                    if r not in state and r not in gone:
                                         state[r] = str(ref.get(r) or d.get("error") or "refused")[:80]
                                 if acc:
                                     rec = self._xs_listed.setdefault(path, {"rooms": set(), "base": base, "minter": minter, "room": room})

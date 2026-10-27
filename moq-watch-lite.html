@@ -679,6 +679,16 @@
   /* Focus on content (0.8.8): own panes stay painted but out of the way */
   #stage .pubpane.focushide { position:absolute; right:8px; bottom:8px; width:96px; height:54px; opacity:.03; pointer-events:none; z-index:0; }
   #stage .pubpane.camkind.hideme { display:none; }
+  /* 0.21.91: View > Hide my shares -- my own panes leave MY screen (everyone else still sees them); one I deliberately put on
+     my stage is exempt while it holds it (module 1 tags the panes, module 2 stops their previews) */
+  #stage .pubpane.hidemine { display:none !important; }
+  #hideMineNote { position:absolute; z-index:8; left:8px; bottom:8px; display:flex; align-items:center; gap:6px; max-width:calc(100% - 16px);
+    font-size:11px; color:#cfd8e3; background:rgba(10,14,18,.72); border:1px solid var(--line); border-radius:999px; padding:3px 4px 3px 10px; }
+  #hideMineNote[hidden] { display:none; }
+  #hideMineNote span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #hideMineNote button { font-size:11px; padding:2px 9px; border-radius:999px; background:transparent; color:#fff; border:1px solid rgba(255,255,255,.28); cursor:pointer; }
+  #hideMineNote button:hover { border-color:var(--asi-blue); }
+  #hideMineShNote { margin:0 0 10px; font-size:12px; color:var(--text-dim); }
   /* grid cell zoom (0.8.8) -> view engine (0.8.12): zoom/pan state on any stage canvas */
   #stage .pane moq-watch { overflow:hidden; display:block; }
   #stage .pane.zoomed canvas, #stage .pubpane.zoomed canvas, #stage .pubpane.zoomed video { transform-origin:0 0; }
@@ -2097,7 +2107,15 @@
   .mattach, .msend { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
     cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
   .mattach .icon, .msend .icon { width:17px; height:17px; }
-  .mattach:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .mattach:hover, .memo:hover, .memo.on { color:var(--text); border-color:var(--asi-blue-dim); }
+  /* 0.21.91 (Kenton: "messages should allow for the emojis to be used"): the Room Chat emoji grid in Messages too */
+  .memo { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; padding:0; font-size:17px; line-height:1; }
+  .memogrid[hidden] { display:none; }
+  .memogrid { flex:none; display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; padding:6px 10px; border-top:1px solid var(--line); max-height:170px; overflow-y:auto; }
+  .memogrid button { background:transparent; border:0; font-size:20px; line-height:1.3; cursor:pointer; border-radius:6px; padding:2px; height:auto; }
+  .memogrid button:hover { background:var(--surface-2); }
+  .memogrid .chint { grid-column:1 / -1; padding:2px 0 0; font-size:11px; color:var(--text-mute); }
   .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
   .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
     display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
@@ -2547,6 +2565,7 @@
     </section>
   </div>
   <div id="stage-empty">Not connected yet.</div>
+  <div id="hideMineNote" hidden title="View &#9656; Hide my shares is on: your shares stop drawing on this screen to spare CPU. Everyone else still sees them live."><span>Your shares are hidden on this screen &middot; still live for everyone</span><button type="button" id="hideMineShow">Show</button></div>   <!-- 0.21.91 -->
   <button id="libEmptyCta" type="button" hidden title="The Streams panel: cameras from any site on the fleet"><span class="t">Add streams from the library</span><span class="d">Cameras from any site on the fleet</span></button>   <!-- 0.21.84: an empty room -->
 </div>
 <aside id="kDock" hidden aria-label="Pinned panels"><div id="kDockGrip" role="separator" aria-orientation="vertical" aria-label="Resize the pinned panels" tabindex="0" title="Drag to resize the pinned panels (arrow keys too)"></div></aside>
@@ -2638,6 +2657,7 @@
     <!-- 0.21.73: "Share something else" -- the next screen / window / tab picked replaces the share in place -->
     <p id="shSwapNote" hidden><span>Pick what to share instead of <b id="shSwapName"></b> &mdash; it takes its place, nothing stops.</span>
       <button type="button" class="ghost" id="shSwapCancel">Cancel</button></p>
+    <p class="hint" id="hideMineShNote" hidden>Your shares are hidden on this screen (View &#9656; Hide my shares) &mdash; they are still live for everyone else.</p>   <!-- 0.21.91 -->
     <p class="hint" id="viewOnlyNote" hidden style="margin:0 0 10px;color:var(--asi-amber)">View-only access code:
       this relay lets you watch, not publish. Ask the relay's owner for the publisher code to share.</p>
     <!-- Ported panels; every id is unchanged from the legacy page so the
@@ -3104,7 +3124,10 @@
     <div class="sep"></div>
     <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
-    <button class="opt" id="viewRtspOff" type="button" hidden title="Stop publishing this box's own RTSP cameras and their grids to spare CPU/GPU. Nothing is forgotten: rows, grids and settings stay; the same item turns them back on."><span class="oi">&#128247;</span>Cameras off (spare CPU)<span class="chk">&#10003;</span></button>
+    <!-- 0.21.91 (Kenton: "I want this to turn off my own shares from me seeing them, not turn off for everyone"): two items -- Hide my
+         shares (this screen only) and the 0.21.16 switch, renamed so nobody mistakes it for a local one -->
+    <button class="opt" id="viewHideMine" type="button" title="Your own shares (cameras, grids, screen, window and media shares, your webcam) leave THIS screen and stop drawing here to spare CPU. Everyone else still sees them live. Remembered on this device."><span class="oi">&#128065;</span>Hide my shares<span class="chk">&#10003;</span></button>
+    <button class="opt" id="viewRtspOff" type="button" hidden title="Stop publishing this box's own RTSP cameras and their grids to spare CPU/GPU -- NOBODY sees them while this is on. Nothing is forgotten: rows, grids and settings stay; the same item turns them back on."><span class="oi">&#128247;</span>Stop my cameras for everyone (spare CPU)<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFull" type="button"><span class="oi">&#9974;</span>Full screen</button>
     <div class="sep"></div>
     <button class="opt" id="viewVerbose" type="button" title="Also show the quiet confirmations (setting echoes, saved notes); off = events and problems only"><span class="oi">&#128276;</span>Verbose alerts<span class="chk">&#10003;</span></button>
@@ -4257,16 +4280,35 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const to = opts?.to || (x ? [...x.rooms] : []);
     const body = { path, from: CHANNEL, to, label: x?.label || shortLabel(path), kind: x?.kind || xsKindOf(path),
                    by: window.__publisher?.state?.()?.operator || "", tokens: stop ? {} : (x?.tokens || {}), stop };
+    if (!stop) { const g = xsGensOf(path), gens = {}; for (const sl of to) if (g[sl]) gens[sl] = g[sl]; if (Object.keys(gens).length) body.gens = gens; }   // 0.21.91
     const headers = { "content-type": "application/json" };
     if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;
     try {
       const r = await fetch(base + "/api/xshare", { method: "POST", headers, body: JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
+      // 0.21.91 (Kenton: "When a room is deleted, it doesn't delete the sharing of the cameras going to that room"): a room the
+      // relay says was DELETED leaves this share for good -- its remembered rooms too, so a restart or a new room of the same
+      // name never brings it back
+      const gone = !stop && x && Array.isArray(d.gone) ? d.gone.map(String).filter((sl) => x.rooms.has(sl)) : [];
+      if (gone.length) {
+        for (const sl of gone) { x.rooms.delete(sl); delete x.tokens[sl]; }
+        xsGensSet(path, (g) => { for (const sl of gone) delete g[sl]; });
+        const keep = xsSaved()[xsKey(path)];
+        if (Array.isArray(keep)) xsSave(path, keep.filter((sl) => !gone.includes(sl)));
+        if (!x.rooms.size) xsMine.delete(path);
+        xsChanged();
+        window.__toast?.(shortLabel(path) + " no longer shows in " + gone.join(", ") + " \u2014 " + (gone.length === 1 ? "that room was" : "those rooms were") + " deleted", 6000, { level: "event" });
+      }
       if (!stop && x && d.refused && typeof d.refused === "object") {
         for (const [slug, why] of Object.entries(d.refused)) {
+          if (gone.includes(slug)) continue;
           x.rooms.delete(slug); delete x.tokens[slug];
           window.__toast?.("Not shown in " + slug + ": " + why, 5000, { level: "warn" });
         }
+      }
+      if (!stop && x && d.gens && typeof d.gens === "object") {   // 0.21.91: each room as it was when it took the share
+        const fresh = Object.entries(d.gens).filter(([sl, g]) => g && x.rooms.has(sl) && !xsGensOf(path)[sl]);
+        if (fresh.length) xsGensSet(path, (g) => { for (const [sl, v] of fresh) g[sl] = String(v).slice(0, 24); });
       }
       return d;
     } catch { return null; }
@@ -4289,6 +4331,18 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const o = xsSaved();
     if (rooms.length) o[xsKey(path)] = rooms; else delete o[xsKey(path)];
     try { localStorage.setItem(XS_PATHS_KEY(), JSON.stringify(o)); } catch {}
+    xsGensSet(path, (g) => { for (const sl of Object.keys(g)) if (!rooms.includes(sl)) delete g[sl]; });   // 0.21.91: a room let go forgets its generation
+  }
+  // 0.21.91: the generation of each room a share of mine was accepted in (the relay's `gens`: the room record's creation), kept
+  // beside the remembered rooms -- sent back with every listing, so a room that was deleted and made again is not the same room
+  const XS_GENS_KEY = () => "kastr.xshare.gens." + sbRelayHost();
+  function xsGensAll() { try { const o = JSON.parse(localStorage.getItem(XS_GENS_KEY()) || "{}"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch { return {}; } }
+  function xsGensOf(path) { const g = xsGensAll()[xsKey(path)]; return g && typeof g === "object" ? g : {}; }
+  function xsGensSet(path, fn) {
+    const o = xsGensAll(), k = xsKey(path), g = { ...(o[k] || {}) };
+    fn(g);
+    if (Object.keys(g).length) o[k] = g; else delete o[k];
+    try { localStorage.setItem(XS_GENS_KEY(), JSON.stringify(o)); } catch {}
   }
   const xsOtherRooms = () => (lastChannelList || []).filter((r) => r.slug !== CHANNEL && r.slug !== LOBBY && !isHomeRoom(r.slug)).sort((a, b) => a.slug.localeCompare(b.slug));   // 0.21.75: never a box's home
   // 0.21.75: on a Publisher box a camera's rooms belong to the BOX SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; it re-lists
@@ -9116,6 +9170,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // 0.8.8: view state -- focus on content (main only, nothing else downloads)
   // and hide-me (own camera pane out of my own view).
   let focusMode = false, hideMe = false;
+  // 0.21.91: View > Hide my shares (kastr.view.hideMine) -- see tagHideMine
+  let hideMine = false, mineShowEl = null;
+  try { hideMine = localStorage.getItem("kastr.view.hideMine") === "1"; } catch {}
   let fillWin = false;   // 0.21.19: one stream fills the app window (not the screen); Esc / W / its icon leaves
   try { if (window.parent !== window) window.parent.postMessage({ kastrFillWin: false }, location.origin); } catch {}   // 0.21.20: a reload never leaves the shell's tab bar hidden
   window.addEventListener("message", (e) => { if (e.origin === location.origin && e.data?.kastrFillWinExit && fillWin) toggleFillWindow(); });   // 0.21.20: Esc pressed in the shell
@@ -9173,7 +9230,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     document.body.classList.toggle("mode-viewer", isViewerMode());
     document.body.classList.toggle("mode-publisher", isPublisherMode());
     if (isViewerMode()) {
-      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "joinPreview"]) {
+      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "viewHideMine", "joinPreview"]) {
         const el = document.getElementById(id); if (el) el.hidden = true;
       }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
@@ -10596,6 +10653,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     savePersonalCode: (code) => { const p = personalGet(); if (p && code) personalSave({ ...p, code }); },
     personalDialog: (mode, note) => personalDialog(mode, note, { stay: true, min: 8 }),
     confirm: (o) => kastrConfirm(o), icon: (n) => icon(n), color: (k) => personColor(opKeyOf(k) || k), initials: (n) => viewerInitials(n),
+    emoji: () => window.__kastrEmoji || [],   // 0.21.91: the Room Chat emoji grid
     photo: (el, name) => { try { paintAvatar(el, String(name || "").trim().toLowerCase() === myOpName().toLowerCase() && window.__avatarLocal ? window.__avatarLocal : avatarUrls.get("", name)); } catch {} },   // 0.21.90
     menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
     panel: () => document.getElementById("msgPanel"), btn: () => document.getElementById("msgBtn"),
@@ -12346,6 +12404,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__selfSpotDbg = () => ({ el: selfSpotEl?.dataset?.sid ?? null, connected: !!selfSpotEl?.isConnected, gridMode, selectedName, manualPick });   // rig (0.16.0)
   window.__selfSpot = (pane) => {
     manualPick = true;   // 0.13.3
+    if (hideMine && pane?.classList?.contains("hidemine")) mineShowEl = pane;   // 0.21.91: my own pick -- shown while it holds my stage
     // Clicking my own tile: spotlight it for me; clicking it again in
     // the spotlight returns to the grid (same semantics as remote tiles).
     if (!gridMode && selfSpotEl === pane) { selfSpotEl = null; gridMode = true; }
@@ -12666,6 +12725,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     stageEl.style.gridTemplateRows = "";   // spot's explicit rows (0.8.2)
   }
   function applyState() {
+    try { tagHideMine(); } catch {}   // 0.21.91: before the cells are counted
     stageWrap.classList.toggle("fsfill", stageFullscreen());   // 0.21.18: the full-screen look (CSS #stagewrap.fsfill) follows the same test as the layout
     try { WEB_RELAY_PAGE = isWebRelay(urlInput.value); } catch { WEB_RELAY_PAGE = false; }   // 0.21.7: budgets by transport
     // Visual order first: grid cells and list rows follow style.order; the
@@ -12719,7 +12779,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         : [...document.getElementById("pubPanes").children]
             .filter((el) => !el.classList.contains("screenkind")
                          && !(el.classList.contains("ingrid") && !el.classList.contains("gridfeed"))   // 0.9.5: an opened member counts
-                         && !el.classList.contains("hideme")).length;
+                         && !el.classList.contains("hideme") && !el.classList.contains("hidemine")).length;   // 0.21.91
       collageSize(Math.max(1, shownNames.length + ownCells + viewerEls.length));   // 0.21.36: re-run below with the cells actually shown
     } else {
       stageEl.style.gridTemplateColumns = "";
@@ -12730,7 +12790,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // and resizable up to two columns (the drag grip; width persisted).
     // Hidden screen panes are not cells (the 0.8.1 railRows overcount).
     const pubEls = mineEl.hidden ? [] : [...document.getElementById("pubPanes").children]
-      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme"));   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
+      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme") && !pe.classList.contains("hidemine"));   // 0.21.91: + Hide my shares   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
     // 0.16.0: a self-heal / republish REPLACES the pane element (stopSlot + startSlot) -- the
     // spotlight used to point at the detached node and fall back to the gallery a second later
     // (Kenton: "I can't spotlight my own camera"). Re-find it by its slot id first.
@@ -16676,6 +16736,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     { const b = document.getElementById("viewSpot"); if (b) { b.hidden = !spotSetNow().length; b.classList.toggle("on", roomSpotOnStage()); } }   // 0.21.54
     on("viewFocus", focusMode && !gridMode);
     on("viewHideMe", hideMe);
+    on("viewHideMine", hideMine);   // 0.21.91
     on("viewPublishOnly", publishOnly);   // 0.9.10
     { const b = document.getElementById("viewRtspOff"); if (b) { const sus = !!window.__rtspSuspend?.get?.(); b.hidden = IS_WEB || (!(window.__gridFeeds?.count?.() > 0) && !sus); b.classList.toggle("on", sus); } }   // 0.21.16: the box's RTSP switch (module 2 owns it; a web client has no bridge cameras)
     on("viewVerbose", toastPolicy().verbose());   // 0.15.0 (D2)
@@ -16738,6 +16799,53 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     paintViewPop();
     window.__toast?.(on ? "Verbose alerts on" : "Verbose alerts off", 3000, { level: "event" });
   });
+  // ---- 0.21.91 (Kenton: "I want this to turn off my own shares from me seeing them, not turn off for everyone. It's still using a
+  // bit of CPU to just show them"): View > Hide my shares. Per device, remembered (kastr.view.hideMine). MY OWN panes -- RTSP
+  // cameras, grids, screen / window / media shares, my webcam -- leave MY stage, gallery and rail (.hidemine), and module 2 stops
+  // their LOCAL previews (__pubPreviewSync: an element share's preview renderer, an RTSP camera's monitor player). Nothing that
+  // publishes stops: a grid's members keep their monitors and the grid keeps drawing (its mosaic is composed on this page from
+  // them), and everyone else sees my shares as before. Overrides: a pane I deliberately put on my stage (__selfSpot -- my own
+  // tile's "Pin for me", a grid cell) shows while it holds my stage and hides again when it leaves; the ROOM's spotlight on one
+  // of my shares does not unhide it (my stage keeps what else it shows). A stream of mine I add as a tile from another room or
+  // the Streams panel is a tile like anyone's, never touched here. Shown: the View item's tick, a small note on the stage and
+  // a line in the Share panel.
+  function tagHideMine() {
+    const pp = document.getElementById("pubPanes");
+    if (!pp) return;
+    if (mineShowEl && (!hideMine || !mineShowEl.isConnected || selfSpotEl !== mineShowEl || gridMode)) mineShowEl = null;
+    let changed = false;
+    for (const pe of pp.children) {
+      const want = hideMine && pe !== mineShowEl;
+      if (pe.classList.contains("hidemine") !== want) { pe.classList.toggle("hidemine", want); changed = true; }
+    }
+    paintHideMineNote();
+    if (changed) { try { window.__pubPreviewSync?.(); } catch {} }
+  }
+  function paintHideMineNote() {
+    const pp = document.getElementById("pubPanes");
+    const hidden = !!pp && [...pp.children].some((pe) => pe.classList.contains("hidemine"));
+    const n = document.getElementById("hideMineNote");
+    if (n && n.hidden === hidden) n.hidden = !hidden;
+    const s = document.getElementById("hideMineShNote");
+    if (s && s.hidden === hideMine) s.hidden = !hideMine;
+  }
+  function setHideMine(on) {
+    hideMine = !!on;
+    try { localStorage.setItem("kastr.view.hideMine", hideMine ? "1" : "0"); } catch {}
+    if (!hideMine) mineShowEl = null;
+    tagHideMine();
+    applyState();
+    paintViewPop();
+  }
+  window.__hideMine = { get: () => hideMine, set: setHideMine, shown: () => mineShowEl?.dataset?.sid ?? (mineShowEl ? "grid" : null) };   // module 2 + rig
+  document.getElementById("viewHideMine")?.addEventListener("click", () => {
+    setHideMine(!hideMine);
+    window.__toast?.(hideMine ? "Your shares are hidden on this screen \u2014 everyone else still sees them. View \u25b8 Hide my shares brings them back."
+      : "Your shares are shown on this screen again.", 4500, { level: "event" });
+  });
+  document.getElementById("hideMineShow")?.addEventListener("click", (e) => { e.stopPropagation(); setHideMine(false); window.__toast?.("Your shares are shown on this screen again.", 3000, { level: "event" }); });
+  new MutationObserver(() => { tagHideMine(); }).observe(document.getElementById("pubPanes"), { childList: true });
+  tagHideMine();
   document.getElementById("viewHideMe").addEventListener("click", () => {
     hideMe = !hideMe;
     for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.toggle("hideme", hideMe);
@@ -21225,6 +21333,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                       "\u2705", "\u274C", "\u26A0\uFE0F", "\u2757", "\u2753", "\uD83D\uDD25", "\u2B50", "\uD83C\uDF89",
                       "\u2764\uFE0F", "\uD83D\uDC40", "\uD83D\uDCF7", "\uD83C\uDFA5", "\uD83D\uDCE1", "\uD83D\uDDA5\uFE0F", "\uD83D\uDD0C", "\uD83D\uDD0B",
                       "\uD83E\uDD16", "\uD83D\uDE9C", "\uD83D\uDEE0\uFE0F", "\uD83D\uDCCD", "\uD83D\uDCCB", "\u23F1\uFE0F", "\uD83C\uDF27\uFE0F", "\u2600\uFE0F"];
+  window.__kastrEmoji = CHAT_EMOJI;   // 0.21.91: Messages (assets/kastr-msg.js) offers the same grid
   {
     for (const ch of CHAT_EMOJI) {
       const b = document.createElement("button"); b.type = "button"; b.textContent = ch;
@@ -25396,7 +25505,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
     // the monitor comes back (a not-yet-native slot turns native on its first frame, begin) -- after the bridge has resumed:
     // a monitor requested before the resume POST lands would only meet the 503 and start the ladder
-    const reattach = () => { for (const s of back) if (!rtspSuspended && slots.get(s.entry.id) === s) restartMonitor(s); };
+    const reattach = () => { for (const s of back) if (!rtspSuspended && slots.get(s.entry.id) === s && !s.monHidden) restartMonitor(s); };   // 0.21.91: not a monitor Hide my shares detached
     if (on) updateRtspGrid();   // seats for members marked native above (drawRtspGrid stays idle)
     for (const g of rtspGrids.values()) {
       try { g.moq?.broadcast?.in?.enabled?.set?.(!on && live); } catch {}
@@ -25413,8 +25522,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     else reattach();   // the server has resumed already (Relay page, hub)
     announce(); renderSources(); refreshUi(); paintRtspSwitch();
     if (window.__sinceAnnounce?.joinedAt?.()) { try { window.__sinceAnnounce.set(); } catch {} }   // presence + state.json carry rtsp "off" NOW (not at the next heartbeat); only while joined
-    window.__toast?.(seed && on ? "Cameras are off on this box \u2014 none of its RTSP feeds or grids is published. Share content \u25b8 Cameras (or View \u25b8 Cameras off) turns them back on."
-      : (on ? "Cameras off \u2014 this box publishes none of its RTSP feeds or grids until the switch is turned on. Nothing is forgotten."
+    window.__toast?.(seed && on ? "Cameras are off on this box \u2014 none of its RTSP feeds or grids is published. Share content \u25b8 Cameras (or View \u25b8 Stop my cameras for everyone) turns them back on."
+      : (on ? "Cameras stopped for everyone \u2014 this box publishes none of its RTSP feeds or grids until the switch is turned on. Nothing is forgotten. (To stop only drawing them here: View \u25b8 Hide my shares.)"
             : "Cameras on \u2014 publishing this box's RTSP feeds and grids again.") + (fromServer ? " (switched from the Relay page or the hub)" : ""), 6000, { level: "event" });
   }
   function paintRtspSwitch() {
@@ -25436,6 +25545,23 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; listed every minute with or without this window); the row shows them and
   // why a room refused the camera (locked without its code, removed by an admin, the relay's limits)
   const xsSrv = new Map();   // feed id -> { xs: [slug], xsState: {slug: "ok" | why}, xsLocked: [slug] } (/api/rtsp/list)
+  // 0.21.91: rooms the box server took a camera out of because they were DELETED (feed.xsDropped) -- said once per room and
+  // camera, all of one poll in one notice; what was dropped before this page opened (over 10 minutes ago) is not news
+  const xsDropSeen = new Set();
+  function xsDroppedNote(feeds) {
+    const now = Date.now() / 1000, news = [];
+    for (const f of feeds) for (const x of (Array.isArray(f.xsDropped) ? f.xsDropped : [])) {
+      const k = f.id + "|" + x.room + "|" + x.at;
+      if (xsDropSeen.has(k)) continue;
+      xsDropSeen.add(k);
+      if (now - Number(x.at || 0) < 600) news.push({ label: added.find((a) => a.kind === RTSP && a.feedId === f.id)?.label || f.publish?.label || "A camera", room: String(x.room) });
+    }
+    if (!news.length) return;
+    const rooms = [...new Set(news.map((n) => n.room))];
+    window.__toast?.(news.length === 1 ? news[0].label + " no longer shows in " + news[0].room + " \u2014 that room was deleted"
+      : news.length + " camera rooms removed \u2014 " + rooms.join(", ") + (rooms.length === 1 ? " was" : " were") + " deleted", 6000, { level: "event" });
+    log("Cross-room: " + news.map((n) => n.label + " left " + n.room).join("; ") + " (room deleted)");
+  }
   let xsSrvSig = "";
   const isBoxPage = () => /^publisher/.test(String(window.__pageMode?.() || ""));
   const xsSrvId = (a) => (a && !IS_WEB2 && isBoxPage() && nativeRtsp && a.kind === RTSP && a.feedId != null) ? a.feedId : null;
@@ -26604,6 +26730,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!slots.has(entry.id)) return;          // removed meanwhile
     if (entry.retryTimer) return;              // already queued
     if (rtspSuspended) return;                 // 0.21.16: monitors stay detached while the box's cameras are off (no ladder, no attempt counters, no eviction)
+    if (slots.get(entry.id)?.monHidden) return;   // 0.21.91: Hide my shares detached this monitor on purpose
     if (nativeRtsp) pollFeeds();               // 0.21.16: a monitor that ended may mean the switch was turned off elsewhere (Relay page, hub) -- the list says so at once, even on a page that is not live
 
     const n = entry.retries || 0;
@@ -26617,6 +26744,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       entry.retryTimer = null;
       const slot = slots.get(entry.id);
       if (!slot) return;
+      if (slot.monHidden) return;   // 0.21.91: hidden on this screen meanwhile
       if (slot.rtsp && slot.native) {
         // 0.9.4: a monitor is not a publisher -- reload only the local <video>.
         // The slot, its pane, its grid seat and its publish state all persist.
@@ -30228,6 +30356,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         s.pane.classList.remove("ingrid", "ghost", "gridfeed");   // 0.9.5: leaving the grid closes an opened member too
       }
     }
+    try { pubPreviewSync(); } catch {}   // 0.21.91: a camera that joined a grid needs its monitor again (the mosaic); one that left may lose it
     if (anyGrid) {
       announceGrid(true);   // 0.8.8: viewers learn the cell geometry -- 0.9.4: before the members publish
       syncNative();   // 0.9.1
@@ -30246,6 +30375,40 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       }
     }
   }
+
+  // 0.21.91: View > Hide my shares (module 1 tags my panes .hidemine and calls this) -- a hidden pane's LOCAL preview stops, and
+  // nothing that publishes does: an element share (camera, screen, media file) draws no preview (preview="none" -- the encoder
+  // reads the capture itself), an RTSP camera / native share outside a grid detaches its monitor player (the bridge's monitor
+  // ffmpeg ends with it; the server's pair keeps publishing and its badge reads the server's state). A GRID MEMBER keeps its
+  // monitor (the mosaic is drawn from it on this page) and a grid keeps drawing its canvas (the encoder reads it). While a
+  // share's mini window (Document PiP) is open it keeps its preview, and the webcam's (that window shows both).
+  function pubPreviewSync() {
+    const pip = [...slots.values()].some((s) => s.pip);
+    for (const slot of slots.values()) {
+      const hid = !!slot.pane?.classList?.contains("hidemine") && !slot.pip && !(pip && slot.entry.kind === "camera");
+      if (slot.rtsp) {
+        const off = hid && !!slot.native && !slot.inGrid && slot.entry.feedId != null;
+        if (off && !slot.monHidden) {
+          slot.monHidden = true;
+          if (slot.entry.retryTimer) { clearTimeout(slot.entry.retryTimer); slot.entry.retryTimer = null; }
+          detachMonitor(slot);
+          try { slot.video.pause(); } catch {}
+          try { slot.video.removeAttribute("src"); slot.video.load(); } catch {}
+          slot.monitorDown = false;
+        } else if (!off && slot.monHidden) {
+          slot.monHidden = false;
+          if (!rtspSuspended && slots.get(slot.entry.id) === slot) restartMonitor(slot);
+        }
+        continue;
+      }
+      if (!slot.publish) continue;
+      const want = previewOff.checked || hid ? "none" : "source";
+      if (slot.publish.getAttribute("preview") !== want) slot.publish.setAttribute("preview", want);
+    }
+  }
+  window.__pubPreviewSync = pubPreviewSync;
+  window.__previewState = () => [...slots.values()].map((s) => ({ id: s.entry.id, kind: s.entry.kind, rtsp: !!s.rtsp, inGrid: !!s.inGrid, hidden: !!s.pane?.classList?.contains("hidemine"),   // rig (0.21.91)
+    preview: s.publish ? s.publish.getAttribute("preview") : null, monitor: s.rtsp ? !!s.mon : null, monHidden: !!s.monHidden }));
 
   function stopSlot(id) {
     const slot = slots.get(id);
@@ -30386,12 +30549,14 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                     : { text: "publishing\u2026", cls: "", onair: false };
     }
     if (slot.rtsp) {
-      if (slotFailed(slot)) return { text: "failed", cls: "warn", onair: false };
+      // 0.21.91: the alerts went quiet after the 5th try, so the row's status line carries the live detail -- the reason and the try
+      const att = (slot.entry.retries || 0) > 0 ? "retrying (try " + (slot.entry.retries + 1) + ")" : "";
+      if (slotFailed(slot)) { const why = feedAlertReason(slot).replace(/^ffmpeg: /, "").split(" / ")[0].slice(0, 90); return { text: "failed" + (why || att ? " — " + [why, att].filter(Boolean).join("; ") : ""), cls: "warn", onair: false }; }
       if (slot.entry.evicted) return { text: "offline \u2014 removed from grid (" + (slot.entry.evictWhy === "monitor" ? "monitor attempt " : "attempt ") + (slot.entry.evictAttempt ?? slot.entry.retries ?? "?") + "); retrying", cls: "warn", onair: false };   // 0.14.0 / 0.21.5
       if (slot.inGrid) return { text: slot.ownPath && slot.moq?.broadcast ? "in grid \u00b7 full feed" : "in grid", cls: "ready", onair: false };   // 0.8.3 / 0.8.12
       // Neutral, not amber: still starting up is not a warning. Amber is
       // reserved for "failed", so the two are not the same colour at a glance.
-      if (!slot.moq) return { text: "connecting…", cls: "", onair: false };
+      if (!slot.moq) return { text: "connecting…" + (att ? " — " + att : ""), cls: "", onair: false };   // 0.21.91: + which try
       let on = false;
       try { on = slot.moq.broadcast?.in?.enabled?.peek?.() === true; } catch {}
       // 0.8.2: RTSP joins the relay-truth system -- the same 8s echo test
@@ -30698,6 +30863,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         {   // 0.21.75: the rooms each camera shows in (kept by this box's server) -> its row
           let sig = "";
           for (const f of d.feeds ?? []) { const v = { xs: Array.isArray(f.xs) ? f.xs : [], xsState: f.xsState || {}, xsLocked: f.xsLocked || [], library: f.publish?.library ?? null, lib: f.lib ?? null }; xsSrv.set(f.id, v); sig += f.id + ":" + JSON.stringify(v) + ";"; }
+          xsDroppedNote(d.feeds ?? []);   // 0.21.91
           for (const id of [...xsSrv.keys()]) if (!byId.has(id)) xsSrv.delete(id);
           if (sig !== xsSrvSig) { xsSrvSig = sig; try { renderSources(); } catch {} }
         }
@@ -32579,20 +32745,87 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
   }, 5000);
 
-  // RTSP faults become a toast the moment they turn true (0.7.8) -- the
-  // pane may not even exist yet, so a badge alone could say nothing.
-  setInterval(() => {
+  // RTSP faults become a toast (0.7.8) -- the pane may not even exist yet, so a badge alone could say nothing.
+  // 0.21.91 (Kenton: "I also don't need an alert every single time an RTSP share isn't connected and retries. I just need it
+  // after 1 try, and maybe again after a few tries, but I don't need it repeating forever"): ONE alert per camera after its
+  // first failed attempt, ONE more at the FEED_ALERT_AGAIN-th ("still failing after 5 tries -- KASTR keeps retrying quietly"),
+  // then nothing while it keeps failing; a camera that comes back starts over. The count lives on the ENTRY: the 0.7.8 toast
+  // lived on the SLOT, and a camera that never came up is rebuilt slot by slot by the retry ladder -- a fresh "RTSP source
+  // failed" on every retry, forever. Attempts: a camera that never came up on this page counts the page's own ladder
+  // (entry.retries -- every monitor that ended without a picture -- and every slot that turned "failed"); a camera the server
+  // publishes counts the server's consecutive failed restarts (publish.restarts) while its pair is down, or it is out of its
+  // grid. Cameras failing together make ONE notice ("3 cameras are offline ..."), never a stack. The Share panel's badge and
+  // status line keep showing the live state all along -- only the pop-ups stop repeating. Not an alert: an RTMP ingest waiting
+  // for its device, a pair parked for a fresh code, the box's cameras switched off.
+  const FEED_ALERT_AGAIN = 5, FEED_ALERT_GROUP_MS = 3000, FEED_ALERT_NAMES = 3;
+  const feedAlertQ = [];
+  const feedAlertLog = [];   // rig: what was said, when
+  function feedAlertReason(slot) {
+    const pi = slot.feed?.publish || slot.pub || null;
+    const r = (!slot.native && faultText(slot)) || slot.feed?.error || (pi && pi.running === false ? (pi.lastExit?.reason || pi.error) : "") || "";
+    return String(r).replace(/\[[^\]]* @ [0-9a-fx]+\]\s*/gi, "").replace(/\?[^ \/]*/g, "").replace(/\s+/g, " ").trim().slice(0, 140);   // ffmpeg's "[tcp @ 0000...]" tags and URL queries are noise here
+  }
+  function feedAlertState(slot) {   // -> { down, tries, ok }
+    const a = slot.entry;
+    const pi = slot.feed?.publish || slot.pub || null;
+    if (slot.native) {
+      if (pi && (pi.parked || pi.needsToken || pi.standby || pi.suspended)) return { down: false, tries: 0, ok: false };   // waiting for a code / asleep / switched off: not a camera fault
+      const down = !!a.evicted || !!(pi && pi.running === false && (pi.restarts || 0) > 0);
+      const tries = Math.max(pi?.restarts || 0, a.evicted ? Number(a.evictAttempt) || 1 : 0);
+      return { down, tries, ok: !down && !!pi?.running && (pi.restarts || 0) === 0 };
+    }
+    if (slot.monitorLoaded) return { down: false, tries: 0, ok: true };
+    const tries = Math.max(a.retries || 0, a.alertSlotFails || 0);
+    return { down: tries > 0, tries, ok: false };
+  }
+  function feedAlertTick() {
+    if (rtspSuspended) { feedAlertQ.length = 0; return; }
+    const now = Date.now();
     for (const slot of slots.values()) {
-      if (!slot.rtsp) continue;
-      const failed = slotFailed(slot);
-      if (failed && !slot.toasted) {
-        slot.toasted = true;
-        window.__toast?.("RTSP source failed \u2014 " + faultText(slot), 6000, { level: "error" });
-      } else if (!failed) {
-        slot.toasted = false;
+      if (!slot.rtsp || slot.feed?.ingest) continue;
+      const a = slot.entry;
+      if (!slot.native && !slot.alertCounted && slotFailed(slot)) { slot.alertCounted = true; a.alertSlotFails = (a.alertSlotFails || 0) + 1; }   // one per slot (the ladder makes a new one per retry)
+      const st = feedAlertState(slot);
+      if (st.ok) {
+        if (a.alertN) log((a.label || shortName(a.name)) + " is back \u2014 alerts for it start over");
+        a.alertN = 0; a.alertSlotFails = 0;
+        continue;
+      }
+      if (!st.down) continue;
+      const label = String(a.label || rtspLabel(a.url) || shortName(a.name));
+      if (st.tries >= FEED_ALERT_AGAIN && (a.alertN || 0) < 2) {
+        a.alertN = 2;
+        feedAlertQ.push({ kind: "still", id: a.id, label, tries: st.tries, at: now, screen: !!a.screen });
+      } else if (st.tries >= 1 && !a.alertN) {
+        a.alertN = 1;
+        feedAlertQ.push({ kind: "first", id: a.id, label, tries: st.tries, at: now, screen: !!a.screen, why: feedAlertReason(slot) });
       }
     }
-  }, 2000);
+    if (feedAlertQ.length && now - feedAlertQ[0].at >= FEED_ALERT_GROUP_MS) feedAlertFlush();
+  }
+  function feedAlertFlush() {
+    const q = feedAlertQ.splice(0);
+    if (!q.length) return;
+    const names = (xs) => xs.slice(0, FEED_ALERT_NAMES).map((x) => "\u201c" + x.label + "\u201d").join(", ") + (xs.length > FEED_ALERT_NAMES ? " and " + (xs.length - FEED_ALERT_NAMES) + " more" : "");
+    const first = q.filter((x) => x.kind === "first"), still = q.filter((x) => x.kind === "still");
+    let msg;
+    if (q.length === 1) {
+      const x = q[0], what = x.screen ? "Share" : "Camera";
+      msg = x.kind === "first"
+        ? what + " \u201c" + x.label + "\u201d is offline" + (x.why ? " \u2014 " + x.why : "") + ". KASTR keeps retrying; its status is in Share."
+        : "\u201c" + x.label + "\u201d is still failing after " + FEED_ALERT_AGAIN + " tries \u2014 KASTR keeps retrying quietly.";
+    } else {
+      const parts = [];
+      if (first.length) parts.push(first.length === 1 ? "1 camera is offline (" + names(first) + ")" : first.length + " cameras are offline (" + names(first) + ")");
+      if (still.length) parts.push(still.length + (still.length === 1 ? " is" : " are") + " still failing after " + FEED_ALERT_AGAIN + " tries (" + names(still) + ")");
+      msg = parts.join("; ") + " \u2014 KASTR keeps retrying" + (still.length ? " quietly" : "") + ". Share shows each one\u2019s status.";
+    }
+    feedAlertLog.push({ at: Date.now(), n: q.length, kinds: q.map((x) => x.kind + ":" + x.id), msg });
+    if (feedAlertLog.length > 50) feedAlertLog.splice(0, feedAlertLog.length - 50);
+    window.__toast?.(msg, 8000, { level: first.length ? "error" : "warn" });
+  }
+  setInterval(feedAlertTick, 1000);
+  window.__feedAlerts = { log: () => feedAlertLog.slice(), state: () => [...slots.values()].filter((s) => s.rtsp).map((s) => ({ id: s.entry.id, native: !!s.native, n: s.entry.alertN || 0, ...feedAlertState(s) })) };   // rig (0.21.91)
 
   const gridStateOf = (g) => ({ name: g.name, layout: g.layout, order: [...g.order], members: g.members.map((m) => m.entry.id), evicted: (g.evicted || []).map((a) => a.id) });   // 0.15.0
   window.__gridState = () => { const g = gridById("1"); return g ? gridStateOf(g) : null; };   // rig hook (0.14.0: evicted; 0.15.0: grid "1" -- see __gridStates)

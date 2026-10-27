@@ -2541,6 +2541,17 @@ class XShareRegistry:
                 self.ver += 1
         return n
 
+    def drop_into(self, room):
+        """0.21.91: room `room` was deleted (closed, expired) -> every listing INTO it goes, a board pin's too -> how many."""
+        n = 0
+        with self.lock:
+            for k in [k for k in self.items if k[1] == room]:
+                self.items.pop(k, None)
+                n += 1
+            if n:
+                self.ver += 1
+        return n
+
     def drop(self, path, to=None, which="share"):
         """Remove `path`'s listings (in the rooms of `to`, or all) -> the slugs removed. 0.21.63: `which` -- "share" (its
         sharer stopped: a listing PINNED to a room board stays, as the pin), "pin" (an unpin: the listing stays only while
@@ -2625,10 +2636,72 @@ class XShareRegistry:
 
 
 XSHARE_OPEN = XShareRegistry()   # an OPEN relay's listings (no token service runs there; kastr_serve answers for it)
+# 0.21.91 (Kenton: "When a room is deleted, it doesn't delete the sharing of the cameras going to that room"): a sharer (a
+# box's camera, a page's share) keeps re-listing its stream into the rooms it picked, every minute, with a member token it
+# mints for each -- and a token mints for ANY free name, so a deleted room kept getting the stream (and a new room of the same
+# name inherited it). Now: (1) deleting a room (closed by its creator, an admin or the hub; expired after ROOM_TTL unused)
+# drops every listing INTO it at once (AuthStore.on_room_gone -> XShareRegistry.drop_into); (2) the room that answers a
+# listing names its GENERATION (`gens`: the record's `created`, in ms) and the sharer sends back the one it was accepted
+# under; (3) a listing into a closed room (its tombstone), or into a name whose record is gone or newer than that
+# generation, is refused as GONE (`gone: [room]`) -- the sharer drops that room for good (a box from the camera's rooms and
+# rtsp-feeds.json, a page from the share's remembered rooms). Only the store that owns the rooms judges: the hub, a lone relay
+# (a spoke forwards; a spoke whose hub is dark judges nothing).
+XSHARE_GONE_TEXT = "the room was deleted"
+
+
+def room_gen(rec):
+    """0.21.91: a room record's generation -- its `created` time in ms as text (None: no record, or none recorded)."""
+    try:
+        c = float((rec or {}).get("created") or 0)
+    except (TypeError, ValueError):
+        c = 0.0
+    return str(int(c * 1000)) if c > 0 else None
+
+
+def xshare_gone(store, room, gen=None):
+    """0.21.91: was room `room` deleted since the sharer listed into it? -> XSHARE_GONE_TEXT or None. Closed (a tombstone),
+    or -- with the generation the sharer was accepted under -- no record any more, or a newer room under the same name."""
+    if store is None:
+        return None
+    try:
+        if hasattr(store, "is_closed") and store.is_closed(room):
+            return XSHARE_GONE_TEXT
+        g = str(gen or "").strip()
+        if not g:
+            return None
+        if hasattr(store, "renamed_to") and store.renamed_to(room):
+            return None   # renamed, not deleted (the old name redirects; its listings followed the rename)
+        cur = room_gen(store.room(room))
+    except Exception:
+        return None
+    return XSHARE_GONE_TEXT if cur != g else None
+
+
+def xshare_gens_in(p):
+    """0.21.91: the `gens` a sharer sends ({room: generation}) -- sane names and short values only."""
+    g = p.get("gens") if isinstance(p, dict) else None
+    if not isinstance(g, dict):
+        return {}
+    return {str(k): str(v)[:24] for k, v in list(g.items())[:XSHARE_TARGETS_MAX + 4] if SLUG_RE.match(str(k)) and v not in (None, "")}
+
+
+def xshare_gens_out(store, rooms):
+    """0.21.91: {room: generation} for the rooms that accepted a listing (the sharer keeps it; no record -> left out)."""
+    out = {}
+    if store is None:
+        return out
+    for b in rooms:
+        try:
+            g = room_gen(store.room(b))
+        except Exception:
+            g = None
+        if g:
+            out[b] = g
+    return out
 _XS_INIT_LOCK = threading.Lock()
 
 
-def xshare_open(method, p=None, room=None, now=None, store=None):
+def xshare_open(method, p=None, room=None, now=None, store=None, judge=True):
     """/api/xshare on an OPEN relay (no access codes: every session reads everything, so the registry is only the
     listing). GET ?room= -> the live listings; POST {from, path, to, label?, kind?, by?, stop?} -> (reply, code).
     0.21.63: `store` -- the relay's AuthStore: its room boards' pins are listed too."""
@@ -2655,7 +2728,8 @@ def xshare_open(method, p=None, room=None, now=None, store=None):
     if stop:
         gone = reg.drop(path, set(to) or None)
         return {"ok": True, "to": gone, "stopped": gone, "refused": {}, "open": True}, 200
-    refused, ok_to = {}, []
+    refused, ok_to, gone = {}, [], []
+    gens = xshare_gens_in(p)
     for b in to:
         if not SLUG_RE.match(b):
             refused[b] = "bad room name"
@@ -2663,11 +2737,18 @@ def xshare_open(method, p=None, room=None, now=None, store=None):
             refused[b] = "the stream's own room"
         elif reserved_slug(b):
             refused[b] = reserved_slug(b)   # 0.21.84
+        elif judge and xshare_gone(store, b, gens.get(b)):   # 0.21.91: a deleted room (judge: this relay owns its rooms)
+            refused[b] = XSHARE_GONE_TEXT
+            gone.append(b)
         else:
             ok_to.append(b)
     acc, ref, _new, _ch = reg.apply(path, frm, ok_to, label, kind, by, now) if ok_to else ([], {}, [], False)
     refused.update(ref)
     out = {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused, "open": True}
+    if gone:
+        out["gone"] = gone
+    if judge:
+        out["gens"] = xshare_gens_out(store, acc)
     if not acc:
         out["error"] = "no room accepted the listing"
         return out, 403
@@ -3836,6 +3917,9 @@ class AuthStore:
         self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
         self.renamed = {}        # 0.21.65: old slug -> {"to": new slug, "at": ms} (RENAMED_TTL) -- pages in the old name follow
         self.on_board = None     # 0.21.63: callable() -- a board changed or went with its room (AuthService re-lists the pins)
+        # 0.21.91: callables(slug, why) -- a room was deleted ("closed" or "expired"): its cross-room listings go with it
+        # (AuthService adds its registries; an OPEN relay's registry is here from the start)
+        self.on_room_gone = [lambda slug, why: XSHARE_OPEN.drop_into(slug)]
         self.lost = None         # 0.21.0: {"at", "kept"} when relay-auth.json was unreadable and no backup saved it
         self.recovered = None    # 0.21.0: epoch when the .bak copy was used
         self.frozen = None       # 0.21.0: the read error when the file could not be OPENED -- saves refuse until a restart
@@ -4266,7 +4350,17 @@ class AuthStore:
         ttl = ROOM_TTL
         return now - float(rec.get("at") or 0) > ttl
 
+    def _room_gone(self, slugs, why):
+        """0.21.91: tell on_room_gone about rooms that just went (never with the lock held)."""
+        for slug in slugs:
+            for f in list(getattr(self, "on_room_gone", None) or []):
+                try:
+                    f(slug, why)
+                except Exception as e:
+                    self.log("relay auth: room %s %s -- a follow-up failed: %s" % (slug, why, e))
+
     def room(self, slug):
+        gone = False
         with self.lock:
             rec = self.rooms.get(slug)
             if rec and self._dead(rec, time.time()):
@@ -4276,7 +4370,10 @@ class AuthStore:
                 except OSError:
                     pass
                 rec = None
-            return dict(rec) if rec else None
+                gone = True
+        if gone:
+            self._room_gone([slug], "expired")   # 0.21.91
+        return dict(rec) if rec else None
 
     def put_room(self, slug, rec):
         with self.lock:
@@ -4301,7 +4398,10 @@ class AuthStore:
                     self._save()
                 except OSError:
                     pass
-            return sorted(self.rooms)
+            live = sorted(self.rooms)
+        if dead:
+            self._room_gone(dead, "expired")   # 0.21.91
+        return live
 
     # ---- kept rooms + close tombstones (0.12.0)
 
@@ -4345,9 +4445,11 @@ class AuthStore:
         """0.21.25: a room is in use -> its record's `at` moves; a name with no record becomes a PLAIN record (stored on
         the hub, listed everywhere, gone ROOM_TTL after its last use). Never changes a lock or the kept flag. -> created?
         0.21.65: an old name of a renamed room is NOT re-created by a page still in it (it follows the redirect)."""
+        expired = False
         with self.lock:
             now = time.time()
             rec = self.rooms.get(slug)
+            expired = rec is not None and self._dead(rec, now)   # 0.21.91: the old room expired -- a NEW one is made below
             if rec is not None and not self._dead(rec, now):
                 rec["at"] = now
                 created = False
@@ -4363,7 +4465,9 @@ class AuthStore:
                                     "creator": str(creator or "")[:64], "created": now, "plain": True}
                 created = True
             self._save()
-            return created
+        if expired:
+            self._room_gone([slug], "expired")   # 0.21.91: before anything is listed into the new room
+        return created
 
     # ---- 0.21.75: personal rooms ("My room") ---------------------------------------------------------------------------
 
@@ -4864,6 +4968,7 @@ class AuthStore:
             self._save()
         if rec is not None and rec.get("board"):
             self._board_fire()
+        self._room_gone([slug], "closed")    # 0.21.91: its cross-room listings go with it
         return rec
 
     def drop_room(self, slug):
@@ -5853,6 +5958,12 @@ class AuthService:
         self._board_mirror_at = 0.0
         self._board_mirror_ver = None
         self._board_stop = threading.Event()
+        try:   # 0.21.91: a deleted room takes the listings into it (this service's registries)
+            hooks = self.store.on_room_gone
+            if not any(getattr(f, "__self__", None) is self for f in hooks):
+                hooks.append(self._xs_room_gone)
+        except AttributeError:
+            pass
         d, _why = load_json(self._spokes_path, self.log, "relay-spokes.json")
         if isinstance(d, dict):
             if isinstance(d.get("spokes"), dict):
@@ -10325,6 +10436,20 @@ class AuthService:
             except Exception:
                 pass
 
+    def _xs_room_gone(self, slug, why="closed"):
+        """0.21.91: room `slug` was deleted -> every listing INTO it goes (both copies; a hub wakes its spokes, which copy it)."""
+        n = 0
+        for which in ("local", "mirror"):
+            try:
+                n += self._xs(which).drop_into(slug)
+            except Exception:
+                pass
+        if n:
+            if not self._xs_spoke():
+                self._xs_changed()
+            self.log("relay auth: room %s %s -- %d cross-room listing(s) into it removed" % (slug, why, n))
+        return n
+
     def _xs_local(self, path, frm, to, label, kind, by, now, via="local"):
         acc, ref, new, changed = self._xs("local").apply(path, frm, to, label, kind, by, now)
         if changed and not self._xs_spoke():
@@ -10424,7 +10549,8 @@ class AuthService:
         if not to:
             return {"ok": False, "error": "no target rooms"}, 400
         toks = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
-        refused, ok_to = {}, []
+        refused, ok_to, gone = {}, [], []
+        gens = xshare_gens_in(p)   # 0.21.91
         for b in to:
             if not SLUG_RE.match(b):
                 refused[b] = "bad room name"
@@ -10434,6 +10560,10 @@ class AuthService:
                 continue
             if reserved_slug(b):
                 refused[b] = reserved_slug(b)   # 0.21.84: never into the library or a box's home room
+                continue
+            if not spoke and xshare_gone(getattr(self, "store", None), b, gens.get(b)):   # 0.21.91: deleted (a spoke: the hub judges)
+                refused[b] = XSHARE_GONE_TEXT
+                gone.append(b)
                 continue
             c = verify_token(str(toks.get(b) or ""), self.key, now)
             if not c or is_relay_claims(c):
@@ -10448,11 +10578,15 @@ class AuthService:
                 continue
             ok_to.append(b)
         if not ok_to:
-            return {"ok": False, "error": "no room accepted the listing", "to": [], "refused": refused}, 403
+            out = {"ok": False, "error": "no room accepted the listing", "to": [], "refused": refused}
+            if gone:
+                out["gone"] = gone   # 0.21.91
+            return out, 403
         out = None
         if spoke:
             d, code = self._xs_hub({"op": "xshare", "vouch": "member", "path": path, "from": room, "host": host,
-                                    "to": ok_to, "label": label, "kind": kind, "by": by})
+                                    "to": ok_to, "label": label, "kind": kind, "by": by,
+                                    "gens": {b: gens[b] for b in ok_to if b in gens}})   # 0.21.91: the hub judges deleted rooms
             if d is not None and code == 200:
                 acc = [b for b in (d.get("to") or []) if b in ok_to]
                 try:
@@ -10464,6 +10598,10 @@ class AuthService:
                 for k, v in (d.get("refused") or {}).items():
                     refused[str(k)[:40]] = str(v)[:80]
                 out = {"ok": bool(acc), "expires": exp, "to": acc, "refused": refused}
+                hg = [str(b) for b in (d.get("gone") or []) if str(b) in ok_to]   # 0.21.91: the hub's verdict, passed through
+                gone += hg   # (the hub dropped its listings; its next long-poll reply carries that to our copy)
+                if isinstance(d.get("gens"), dict):
+                    out["gens"] = {str(k): str(v)[:24] for k, v in d["gens"].items() if str(k) in acc and v}
             elif d is not None:
                 return {"ok": False, "error": str(d.get("error") or "the hub refused")[:120], "to": [], "refused": refused}, code
         if out is None:   # a hub, a lone relay, or a spoke whose hub is out of reach (kept here meanwhile)
@@ -10472,6 +10610,10 @@ class AuthService:
             out = {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused}
             if spoke:
                 out["hubDown"] = True
+            else:
+                out["gens"] = xshare_gens_out(getattr(self, "store", None), acc)   # 0.21.91
+        if gone:
+            out["gone"] = gone   # 0.21.91
         if not out["to"]:
             out["error"] = "no room accepted the listing"
             return out, 403
@@ -10512,7 +10654,8 @@ class AuthService:
                 self._xs_changed()
                 self.log("relay auth: %s no longer listed in %s (via a spoke)" % (path, ", ".join(gone)))
             return {"ok": True, "to": gone, "stopped": gone, "refused": {}}, 200
-        refused, ok_to = {}, []
+        refused, ok_to, gone = {}, [], []
+        gens = xshare_gens_in(p)   # 0.21.91
         for b in to:
             if not SLUG_RE.match(b):
                 refused[b] = "bad room name"
@@ -10520,11 +10663,18 @@ class AuthService:
                 refused[b] = "the stream's own room"
             elif reserved_slug(b):
                 refused[b] = reserved_slug(b)   # 0.21.84
+            elif xshare_gone(getattr(self, "store", None), b, gens.get(b)):   # 0.21.91: a deleted room
+                refused[b] = XSHARE_GONE_TEXT
+                gone.append(b)
             else:
                 ok_to.append(b)
         acc, ref = self._xs_local(path, frm, ok_to, label, kind, by, now, via="via a spoke") if ok_to else ([], {})
         refused.update(ref)
-        return {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused}, 200
+        out = {"ok": bool(acc), "expires": int(now + XSHARE_TTL), "to": acc, "refused": refused,
+               "gens": xshare_gens_out(getattr(self, "store", None), acc)}   # 0.21.91
+        if gone:
+            out["gone"] = gone
+        return out, 200
 
     def xshare_get(self, room, bearer=None, jwt=None, peer=""):
         """GET /api/xshare?room=<B>: the live listings into B -> {ok, room, items:[{path, from, label, kind, by, exp}],

@@ -33,6 +33,13 @@ import logging
 import sys
 import threading
 import time
+import os
+
+
+def under_tests():
+    """0.21.91 (Kenton saw "KASTR sharing" bars on his own desktop while test suites ran): never show a real window on the
+    desktop from a test run. KASTR itself never imports unittest; KASTR_OVERLAY_IN_TESTS=1 lets a hidden-desktop lab opt in."""
+    return "unittest" in sys.modules and os.environ.get("KASTR_OVERLAY_IN_TESTS") != "1"
 
 __all__ = ["ShareOverlay", "PointerOverlay", "list_monitors", "list_windows", "set_process_dpi_awareness"]
 
@@ -528,7 +535,7 @@ class ShareOverlay:
     # ---------------------------------------------------------- public API
     def start(self, hwnd=None, monitor_rect=None, label=None, hmonitor=None) -> bool:
         """Show the overlay (or retarget it if already running). True when up."""
-        if not AVAILABLE:
+        if not AVAILABLE or under_tests():
             return False
         tgt = _Target(hwnd, monitor_rect, hmonitor, label)
         with self._lock:
@@ -1141,7 +1148,7 @@ class PointerOverlay:
         self._err = None
 
     def start(self) -> bool:
-        if not AVAILABLE:
+        if not AVAILABLE or under_tests():
             return False
         self._thread = threading.Thread(target=self._run, name="kastr-rc-pointer", daemon=True)
         self._thread.start()

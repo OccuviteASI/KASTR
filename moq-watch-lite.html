@@ -656,7 +656,6 @@
     font-size:9px; font-style:italic; align-items:center; justify-content:center; margin-left:4px; vertical-align:middle; cursor:help; }
   /* Focus on content (0.8.8): own panes stay painted but out of the way */
   #stage .pubpane.focushide { position:absolute; right:8px; bottom:8px; width:96px; height:54px; opacity:.03; pointer-events:none; z-index:0; }
-  #stage .pubpane.camkind.hideme { display:none; }
   /* 0.21.91: View > Hide my shares -- my own panes leave MY screen (everyone else still sees them); one I deliberately put on
      my stage is exempt while it holds it (module 1 tags the panes, module 2 stops their previews) */
   #stage .pubpane.hidemine { display:none !important; }
@@ -3102,7 +3101,6 @@
     <button class="opt" id="viewSpot" type="button" title="Back to what the room spotlighted" hidden><span class="oi">&#10022;</span>Spotlight<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFocus" type="button" title="Only the main stage: everything else stops downloading"><span class="oi">&#9635;</span>Focus on content<span class="chk">&#10003;</span></button>
     <div class="sep"></div>
-    <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
     <!-- 0.21.91 (Kenton: "I want this to turn off my own shares from me seeing them, not turn off for everyone"): two items -- Hide my
          shares (this screen only) and the 0.21.16 switch, renamed so nobody mistakes it for a local one -->
@@ -3189,6 +3187,37 @@
   .cmark { font-size: 10px; opacity: .7; margin-left: 6px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; vertical-align: middle; }
   .ctyping { font-style: italic; opacity: .8; min-height: 0; }
 </style>
+<style>
+  /* ==== 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search -- the picker
+     (assets/kastr-gif.js) in Room Chat and Messages, where the emoji grid opens; the GIF button beside the emoji button ==== */
+  .cbtn.cgif, .mgif { font-family:var(--font-ui); font-size:10.5px; font-weight:700; letter-spacing:.04em; }
+  .mgif { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+  .mgif:hover, .mgif.on, .cbtn.cgif.on { color:var(--text); border-color:var(--asi-blue-dim); }
+  .cbtn.cgif[hidden], .mgif[hidden], .kgif[hidden] { display:none; }
+  .kgif { flex:none; display:flex; flex-direction:column; gap:6px; padding:6px 10px; border-top:1px solid var(--line); max-height:300px; min-height:0; }
+  .kgif .kgtop { display:flex; align-items:center; gap:8px; }
+  .kgif .kgq { flex:1; min-width:0; background:var(--surface); border:1px solid var(--line); color:var(--text); border-radius:8px;
+    padding:6px 9px; font-family:var(--font-ui); font-size:12.5px; height:auto; }
+  .kgif .kgq:focus { outline:none; border-color:var(--asi-blue); }
+  .kgif .kgby { flex:none; font-size:9.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--text-mute); white-space:nowrap; }
+  .kgif .kgscroll { flex:1; min-height:90px; overflow-y:auto; overscroll-behavior:contain; }
+  .kgif .kggrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); grid-auto-rows:80px; gap:4px; }
+  .kgif .kggrid button { position:relative; padding:0; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:var(--surface-2);
+    cursor:pointer; height:auto; min-width:0; }
+  .kgif .kggrid button:hover, .kgif .kggrid button:focus-visible { border-color:var(--asi-blue); outline:none; }
+  .kgif .kggrid img { width:100%; height:100%; object-fit:cover; display:block; }
+  .kgif .kggrid img:not([src]) { visibility:hidden; }
+  .kgif .kggrid button.bad { opacity:.4; }
+  .kgif .kggrid button.busy::after { content:""; position:absolute; inset:0; background:color-mix(in srgb, var(--surface) 55%, transparent); }
+  .kgif.sending .kggrid button:not(.busy) { opacity:.55; }
+  .kgif .kgend { height:1px; }
+  .kgif .kgmsg { font-size:11px; color:var(--text-mute); min-height:14px; }
+  .kgif .kgmsg:empty { display:none; }
+  .kgif .kgmsg.err { color:var(--asi-red); }
+  @media (max-width: 520px) { .kgif { max-height:46vh; } .kgif .kggrid { grid-template-columns:repeat(3, 1fr); grid-auto-rows:72px; } }
+  /* ==== end 0.21.91 GIF search ==== */
+</style>
 <div id="chatPanel" class="popcard" hidden>
   <div class="head"><span>Room Chat</span><span id="chatRoomLbl" class="sub"></span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
@@ -3196,8 +3225,10 @@
   <div id="chatDrop">Drop files here to attach them</div>
   <div id="chatAttach" class="catt" hidden></div>
   <div id="chatEmoji" class="cemoji" hidden></div>
+  <div id="chatGif" class="kgif" hidden></div><!-- 0.21.91: GIF search (assets/kastr-gif.js) -->
   <div class="ccomp">
     <button type="button" id="chatEmojiBtn" class="cbtn" title="Emoji">&#128578;</button>
+    <button type="button" id="chatGifBtn" class="cbtn cgif" title="GIF" hidden>GIF</button>
     <button type="button" id="chatFileBtn" class="cbtn" title="Attach a picture or file (stored on the relay host)">&#128206;</button>
     <textarea id="chatInput" rows="1" placeholder="Message the room&hellip;" title="Enter sends, Shift+Enter starts a new line"></textarea>
     <button type="button" id="chatSend" class="cbtn send" title="Send">&#10148;</button>
@@ -4104,8 +4135,14 @@
     const camOff = src ? !!src.videoPaused : !joinVidOn;
     topMicBtn.classList.toggle("on", micOff);
     topMicBtn.innerHTML = icon(micOff ? "micOff" : "mic") + '<span class="lbl">Mic</span>';
+    // 0.21.91 (Kenton: "everyone else should be muted and not able to unmute themselves unless they are added as a presenter"):
+    // while a presentation mutes its audience, my Mic wears a lock and says why (kastr-pres.js: window.__presTalk)
+    const talkLock = (() => { try { return window.__presTalk?.lock?.() || ""; } catch { return ""; } })();
+    topMicBtn.classList.toggle("talklock", !!talkLock);
+    if (talkLock) topMicBtn.insertAdjacentHTML("beforeend", '<span class="tlk">' + icon("lock") + '</span>');
     topMicBtn.title = src ? (micOff ? "Mic muted \u2014 click to unmute" : "Mute your microphone")
                           : (micOff ? "Mic off \u2014 click to join unmuted" : "Mic on \u2014 click to mute");
+    if (talkLock) topMicBtn.title = talkLock + " \u2014 you can ask to speak; a presenter can let you talk";
     topCamBtn.classList.toggle("on", camOff);
     topCamBtn.innerHTML = icon(camOff ? "camOff" : "cam") + '<span class="lbl">Camera</span>';
     topCamBtn.title = src ? (camOff ? "Camera off \u2014 click to resume" : "Turn your camera off")
@@ -4249,9 +4286,13 @@
         xsChanged();
         window.__toast?.(shortLabel(path) + " no longer shows in " + gone.join(", ") + " \u2014 " + (gone.length === 1 ? "that room was" : "those rooms were") + " deleted", 6000, { level: "event" });
       }
+      // 0.21.91 (Kenton: renamed rooms -- the shares "FOLLOW the new name"): the old name's listing is refused as `renamed`;
+      // the share takes the new name (a member token for it), its remembered rooms and generations too, and lists again
+      const ren = !stop && x && d.renamed && typeof d.renamed === "object" ? Object.entries(d.renamed).map(([a, b]) => [String(a), String(b)]).filter(([a]) => x.rooms.has(a)) : [];
+      if (ren.length) xsFollow(path, ren);
       if (!stop && x && d.refused && typeof d.refused === "object") {
         for (const [slug, why] of Object.entries(d.refused)) {
-          if (gone.includes(slug)) continue;
+          if (gone.includes(slug) || ren.some(([a]) => a === slug)) continue;
           x.rooms.delete(slug); delete x.tokens[slug];
           window.__toast?.("Not shown in " + slug + ": " + why, 5000, { level: "warn" });
         }
@@ -4262,6 +4303,26 @@
       }
       return d;
     } catch { return null; }
+  }
+  async function xsFollow(path, ren) {   // 0.21.91: [[old, new]] -- this share's rooms follow renamed rooms
+    const x = xsMine.get(path);
+    if (!x) return;
+    const moved = [];
+    for (const [a, b] of ren) {
+      if (!x.rooms.has(a)) continue;
+      x.rooms.delete(a); delete x.tokens[a];
+      if (b && b !== CHANNEL && !x.rooms.has(b)) {
+        try { x.tokens[b] = await xsTokenFor(b, xsCodes[a] || ""); x.rooms.add(b); if (xsCodes[a]) xsCodes[b] = xsCodes[a]; } catch {}
+      }
+      moved.push([a, b]);
+    }
+    if (!moved.length) return;
+    xsGensSet(path, (g) => { for (const [a, b] of moved) { if (g[a] && !g[b]) g[b] = g[a]; delete g[a]; } });
+    const keep = xsSaved()[xsKey(path)];
+    if (Array.isArray(keep)) xsSave(path, [...new Set(keep.map((sl) => (moved.find(([a]) => a === sl) || [])[1] || sl))].filter((sl) => sl && sl !== CHANNEL));
+    if (!x.rooms.size) xsMine.delete(path); else { x.postedAt = Date.now(); xsPost(path); }
+    xsChanged();
+    window.__toast?.(shortLabel(path) + " follows " + moved.map(([a, b]) => a + " \u2192 " + b).join(", ") + " (room renamed)", 5000, { level: "event" });
   }
   function xsStop(path) {
     const x = xsMine.get(path);
@@ -8754,6 +8815,7 @@
   function setMicFromDevice(muted, why) {   // the device says muted / unmuted
     const { src } = localCamSrc();
     if (!src) return;
+    if (!muted) { const lk = (() => { try { return window.__presTalk?.lock?.() || ""; } catch { return ""; } })(); if (lk) { if (src.micMuted) window.__toast?.(lk + " \u2014 the microphone's own key cannot unmute it now", 3500, { level: "info" }); return; } }   // 0.21.91
     if (!muted && deafened) { setDeafen(false); }   // unmuting on the device undeafens (as the Mic button does)
     if (!!src.micMuted === !!muted) return;
     src.micMuted = !!muted;
@@ -8915,6 +8977,11 @@
     paint();
   }
   topMicBtn.addEventListener("click", () => {
+    {   // 0.21.91: a presentation mutes its audience -- muting is fine, unmuting is not (until a presenter lets me talk)
+      const lk = (() => { try { return window.__presTalk?.lock?.() || ""; } catch { return ""; } })();
+      const { src: s0 } = localCamSrc();
+      if (lk && (s0 ? !!s0.micMuted : !joinMicOn)) { window.__toast?.(lk + " \u2014 ask to speak, and a presenter can let you talk", 4500, { level: "info" }); return; }
+    }
     if (deafened) { const wasOn = deafMicWas; setDeafen(false); if (wasOn) return; }   // 0.21.40: unmuting the mic undeafens
     const { src } = localCamSrc();
     if (!src) { ensureLocalCamera({ mic: !joinMicOn, vid: window.__join?.state?.() === "joined" ? false : undefined }); return; }
@@ -9180,7 +9247,7 @@
   window.__avatarLocal = myAvatar;
   // 0.8.8: view state -- focus on content (main only, nothing else downloads)
   // and hide-me (own camera pane out of my own view).
-  let focusMode = false, hideMe = false;
+  let focusMode = false;   // 0.21.91: "Hide me" is gone -- View > Hide my shares covers my webcam too
   // 0.21.91: View > Hide my shares (kastr.view.hideMine) -- see tagHideMine
   let hideMine = false, mineShowEl = null;
   try { hideMine = localStorage.getItem("kastr.view.hideMine") === "1"; } catch {}
@@ -9241,7 +9308,7 @@
     document.body.classList.toggle("mode-viewer", isViewerMode());
     document.body.classList.toggle("mode-publisher", isPublisherMode());
     if (isViewerMode()) {
-      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "viewHideMine", "joinPreview"]) {
+      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMine", "joinPreview"]) {
         const el = document.getElementById(id); if (el) el.hidden = true;
       }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
@@ -9365,9 +9432,13 @@
     // audible" report.
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return 0;   // 0.9.5: the grid's mute covers its members
     if (cgHide(name) && name !== selectedName) return 0;   // 0.21.66 (e): a camera here only for a grid is silent until opened
+    // 0.21.91: a presentation mutes its audience -- a person's mic that may not talk now is not heard HERE either (an older or a
+    // modified page that ignores its lock): gain 0 through the volume (the warm floor), the subscription stays, never `muted`
+    try { if (window.__presTalk?.silent?.(name)) return isAudible(name) || warmAudio ? WARM_FLOOR : 0; } catch {}
     if (isAudible(name)) return Math.max(gainFor(name), WARM_FLOOR);
     return warmAudio ? WARM_FLOOR : 0;      // 0 exactly = deliberate teardown
   }
+  window.__presTalkChanged = () => { try { applyVolumes(); paintTopCam(); } catch {} };   // 0.21.91: kastr-pres.js -- who may talk changed
   function applyVolumes() {
     for (const [name, t] of tiles) {
       const want = desiredVolume(name);
@@ -12805,7 +12876,7 @@
         : [...document.getElementById("pubPanes").children]
             .filter((el) => !el.classList.contains("screenkind")
                          && !(el.classList.contains("ingrid") && !el.classList.contains("gridfeed"))   // 0.9.5: an opened member counts
-                         && !el.classList.contains("hideme") && !el.classList.contains("hidemine")).length;   // 0.21.91
+                         && !el.classList.contains("hidemine")).length;   // 0.21.91: Hide my shares
       collageSize(Math.max(1, shownNames.length + ownCells + viewerEls.length));   // 0.21.36: re-run below with the cells actually shown
     } else {
       stageEl.style.gridTemplateColumns = "";
@@ -12816,7 +12887,7 @@
     // and resizable up to two columns (the drag grip; width persisted).
     // Hidden screen panes are not cells (the 0.8.1 railRows overcount).
     const pubEls = mineEl.hidden ? [] : [...document.getElementById("pubPanes").children]
-      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme") && !pe.classList.contains("hidemine"));   // 0.21.91: + Hide my shares   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
+      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hidemine"));   // 0.21.91: Hide my shares (it replaced 0.8.8's Hide me)   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
     // 0.16.0: a self-heal / republish REPLACES the pane element (stopSlot + startSlot) -- the
     // spotlight used to point at the detached node and fall back to the gallery a second later
     // (Kenton: "I can't spotlight my own camera"). Re-find it by its slot id first.
@@ -16752,7 +16823,6 @@
     on("viewSpeaker", !gridMode);
     { const b = document.getElementById("viewSpot"); if (b) { b.hidden = !spotSetNow().length; b.classList.toggle("on", roomSpotOnStage()); } }   // 0.21.54
     on("viewFocus", focusMode && !gridMode);
-    on("viewHideMe", hideMe);
     on("viewHideMine", hideMine);   // 0.21.91
     on("viewPublishOnly", publishOnly);   // 0.9.10
     { const b = document.getElementById("viewRtspOff"); if (b) { const sus = !!window.__rtspSuspend?.get?.(); b.hidden = IS_WEB || (!(window.__gridFeeds?.count?.() > 0) && !sus); b.classList.toggle("on", sus); } }   // 0.21.16: the box's RTSP switch (module 2 owns it; a web client has no bridge cameras)
@@ -16863,21 +16933,12 @@
   document.getElementById("hideMineShow")?.addEventListener("click", (e) => { e.stopPropagation(); setHideMine(false); window.__toast?.("Your shares are shown on this screen again.", 3000, { level: "event" }); });
   new MutationObserver(() => { tagHideMine(); }).observe(document.getElementById("pubPanes"), { childList: true });
   tagHideMine();
-  document.getElementById("viewHideMe").addEventListener("click", () => {
-    hideMe = !hideMe;
-    for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.toggle("hideme", hideMe);
-    applyState();
-    paintViewPop();   // 0.21.78: View stays open
-  });
   document.getElementById("viewFull").addEventListener("click", () => {
     closeAllPops();
     const el = document.documentElement;
     if (document.fullscreenElement) document.exitFullscreen?.();
     else ((el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el) ?? Promise.reject()).catch?.(() => { if (selectedName) toggleFullscreen(selectedName); });   // 0.17.0: WebKit prefix
   });
-  // hide-me follows newly started camera panes too
-  new MutationObserver(() => { if (hideMe) for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.add("hideme"); })
-    .observe(document.getElementById("pubPanes"), { childList: true });
 
   // ---- 0.8.8: Camera popover (Teams "Effects and settings") ------------------
   const CAMFX_KEY = "kastr.camfx";
@@ -18686,6 +18747,9 @@
         case "pres": if (value && typeof value === "object" && value.id) roomModel.pres = value; else delete roomModel.pres; break;
         case "presCtl": if (value && typeof value === "object" && value.id) roomModel.presCtl = value; else delete roomModel.presCtl; break;
         case "presPk": if (typeof value === "string" && value.length < 200) roomModel.presPk = value; else delete roomModel.presPk; break;
+        // 0.21.91 (co-presenters): `presCo` = this page can co-present (cap) + my own presenter state in a deck: my camera / cut-out
+        // (the owner copies the one presenting now into its `pres`), my mic / camera, which backstage people may control them (al)
+        case "presCo": if (value && typeof value === "object" && JSON.stringify(value).length < 8000) roomModel.presCo = value; else delete roomModel.presCo; break;
         default: return;
       }
       stateCommit();
@@ -20880,13 +20944,14 @@
       if (chatFetchAgain) { chatFetchAgain = false; setTimeout(() => chatFetch(), 200); }
     }
   }
-  async function chatSend() {
-    const text = chatInput.value.replace(/\s+$/, "");
-    const files = chatPending.filter((p) => p.id).map((p) => ({ id: p.id, name: p.name, size: p.size, type: p.type }));
-    if (!chatRoom || (!text && !files.length) || chatPending.some((p) => !p.id)) return;
+  async function chatSend(over) {
+    over = over && Array.isArray(over.files) ? over : null;   // 0.21.91: a picked GIF {files} (the Send button's click event is not one)
+    const text = over ? "" : chatInput.value.replace(/\s+$/, "");
+    const files = over ? over.files : chatPending.filter((p) => p.id).map((p) => ({ id: p.id, name: p.name, size: p.size, type: p.type }));
+    if (!chatRoom || (!text && !files.length) || (!over && chatPending.some((p) => !p.id))) return;
     chatSendBtn.disabled = true;
     const cid = chatCid();
-    const clearComposer = () => { chatInput.value = ""; chatGrow(); for (const p of chatPending) p.el?.remove(); chatPending = []; chatAttachEl.hidden = true; chatTypingStop(); };
+    const clearComposer = over ? () => {} : () => { chatInput.value = ""; chatGrow(); for (const p of chatPending) p.el?.remove(); chatPending = []; chatAttachEl.hidden = true; chatTypingStop(); };
     // 0.13.0: the store keeps history; delivery rides my chat.json Window. Store down (no answer in
     // 4 s, network error, 5xx) -> the message still goes out live, marked "not saved" (never re-posted).
     const liveOnly = (why) => {
@@ -21324,6 +21389,25 @@
     chatEmojiEl.appendChild(h);
   }
   document.getElementById("chatEmojiBtn").addEventListener("click", (e) => { e.stopPropagation(); chatEmojiEl.hidden = !chatEmojiEl.hidden; });
+  // ---- 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search. The picker is
+  // assets/kastr-gif.js (Messages uses it too); it asks the relay this page uses with the room's member token (the hub holds the
+  // GIPHY key and proxies the pictures; never the Lobby). A pick goes out as a normal Room Chat attachment (stored on the relay
+  // host), like a pasted picture, on its own -- what is typed in the box stays.
+  window.__kgif = {
+    base: () => authBase(), token: () => authTokens?.member || "",
+    ok: () => { try { return joinState === "joined" && !inLobby() && authSecured && !!authTokens?.member; } catch { return false; } },
+  };
+  async function chatSendGif(file) {
+    if (!chatRoom) throw new Error("join a room first");
+    const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/files"), { method: "POST", body: file,
+      headers: { "Content-Type": file.type || "image/gif", "X-Kastr-Name": encodeURIComponent(file.name), "X-Kastr-Op": encodeURIComponent(chatMe()) } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.id) throw new Error(d.error || ("upload failed (" + r.status + ")"));
+    await chatSend({ files: [{ id: d.id, name: file.name, size: d.size || file.size, type: d.type || file.type || "image/gif" }] });
+  }
+  window.__gifChatMount = () => window.__gif?.mount({ root: chatPanel, btn: document.getElementById("chatGifBtn"), panel: document.getElementById("chatGif"),
+    input: chatInput, emoji: { btn: document.getElementById("chatEmojiBtn"), panel: chatEmojiEl }, send: (file) => chatSendGif(file) });
+  // ---- end 0.21.91 GIF search
   chatRenderAll();
 
   // ---- shared files (0.8.7) ---------------------------------------------------
@@ -24791,6 +24875,7 @@
           }
         }
         if ("micMuted" in m.set) {
+          if (!m.set.micMuted && a.kind === "camera") { try { if (window.__presTalk?.lock?.()) m.set.micMuted = true; } catch {} }   // 0.21.91: muted while a presentation mutes its audience
           a.micMuted = !!m.set.micMuted;
           const slot = slots.get(a.id);
           if (slot && !slot.rtsp) slot.publish.muted = a.micMuted || !audioFor(a) || !!a.sharePaused;   // 0.21.73: a paused share stays silent
@@ -24977,7 +25062,8 @@
     if (!d || d.locked !== true) { lockSeen = false; return; }
     if (lockSeen) return;
     lockSeen = true;
-    for (const a of added.filter(isScreenShare)) { try { removeSource(a.id); } catch {} }
+    // 0.21.91: a presentation's slide share is a canvas KASTR draws (the deck, never the screen): a lock does not end the presentation
+    for (const a of added.filter((x) => isScreenShare(x) && !x.presCanvas)) { try { removeSource(a.id); } catch {} }
     log("This computer was locked \u2014 screen sharing stopped");
     window.__toast?.("Screen sharing stopped \u2014 this computer was locked. Share again when you are back.", 8000, { level: "warn" });
   }
@@ -25420,8 +25506,11 @@
       const k = f.id + "|" + x.room + "|" + x.at;
       if (xsDropSeen.has(k)) continue;
       xsDropSeen.add(k);
-      if (now - Number(x.at || 0) < 600) news.push({ label: added.find((a) => a.kind === RTSP && a.feedId === f.id)?.label || f.publish?.label || "A camera", room: String(x.room) });
+      if (now - Number(x.at || 0) < 600) news.push({ label: added.find((a) => a.kind === RTSP && a.feedId === f.id)?.label || f.publish?.label || "A camera", room: String(x.room), to: x.why === "renamed" ? String(x.to || "") : "" });
     }
+    const moved = news.filter((n) => n.to);   // 0.21.91: a renamed room -- the camera followed it
+    if (moved.length) window.__toast?.(moved.map((n) => n.label + " follows " + n.room + " \u2192 " + n.to).join("; ") + " (room renamed)", 5000, { level: "event" });
+    news.splice(0, news.length, ...news.filter((n) => !n.to));
     if (!news.length) return;
     const rooms = [...new Set(news.map((n) => n.room))];
     window.__toast?.(news.length === 1 ? news[0].label + " no longer shows in " + news[0].room + " \u2014 that room was deleted"
@@ -28240,7 +28329,7 @@
       note.textContent = previewOff.checked ? "Sharing (preview off)" : "You are sharing this KASTR window";
       pane.appendChild(note);
     }
-    if (entry.kind === "camera") pane.classList.add("camkind");   // 0.8.8: View -> Hide me targets it
+    if (entry.kind === "camera") pane.classList.add("camkind");   // 0.8.8 (my camera's pane: self-mirror, deafened chip)
     const mchip = document.createElement("div");
     mchip.className = "mchip";
     mchip.innerHTML = (window.__icon?.("micOff") ?? "") + (window.__icon?.("earOff") ?? "");   // 0.21.40: + deafened
@@ -33134,6 +33223,7 @@
   log("Idle. Add sources, start them, then go live.");
 </script>
 <!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
+<script type="module" src="/assets/kastr-gif.js"></script>
 <script type="module" src="/assets/kastr-msg.js"></script>
 <script type="module" src="/assets/kastr-templates.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>

@@ -1102,7 +1102,11 @@
       return c;
     }));
   }
-  const grow = (ta) => { ta.style.height = "auto"; ta.style.height = Math.min(120, ta.scrollHeight) + "px"; };
+  const grow = (ta) => {   // 0.21.91: empty = natural size; text = its height plus the borders (border-box: no scroll arrows)
+    if (!ta.value) { ta.style.height = ""; return; }
+    if (!ta.offsetWidth) return;
+    ta.style.height = "auto"; ta.style.height = Math.min(120, ta.scrollHeight + (ta.offsetHeight - ta.clientHeight)) + "px";
+  };
   async function groupMenu(anchor) {
     const g = S.groups.get(S.open.slice(2));
     if (!g) return;

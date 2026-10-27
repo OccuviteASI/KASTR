@@ -2919,7 +2919,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 n = 0
             self._chat_body_read = True
             hosttxt = ("[" + hub["host"] + "]") if ":" in hub["host"] else hub["host"]
-            target = (hub.get("base") or "http://%s:%d" % (hosttxt, hub["web"])) + self.path   # 0.19.0: a web relay's origin
+            # 0.21.91: the reader's room token stays here -- this spoke checked it; the hub trusts the federation token (and
+            # could not verify a token another minter signed). Every other query (since, limit, a delete token) goes on.
+            _u = urlparse(self.path)
+            _q = [kv for kv in urllib.parse.parse_qsl(_u.query, keep_blank_values=True) if kv[0] != "jwt"]
+            fwd_path = _u.path + ("?" + urllib.parse.urlencode(_q) if _q else "")
+            target = (hub.get("base") or "http://%s:%d" % (hosttxt, hub["web"])) + fwd_path   # 0.19.0: a web relay's origin
             headers = {"X-Kastr-Via": self._chat_via()}
             if tok:
                 headers["Authorization"] = "Bearer " + tok
@@ -2928,7 +2933,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ct = self.headers.get("Content-Type")
             if ct:
                 headers["Content-Type"] = ct
-            for k in ("X-Kastr-Name", "X-Kastr-Op", "X-Kastr-Jwt", "X-Kastr-Room", "X-Kastr-Owner", "X-Kastr-Kind"):
+            for k in ("X-Kastr-Name", "X-Kastr-Op", "X-Kastr-Room", "X-Kastr-Owner", "X-Kastr-Kind"):   # 0.21.91: never X-Kastr-Jwt
                 v = self.headers.get(k)
                 if v:
                     headers[k] = v

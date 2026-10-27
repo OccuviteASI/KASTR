@@ -21004,6 +21004,7 @@
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.id) { chatHint(d.error || ("Upload failed (" + r.status + ")"), true); chatPending = chatPending.filter((p) => p !== rec); chip.remove(); chatAttachEl.hidden = !chatPending.length; continue; }
         rec.id = d.id; rec.size = d.size || f.size; rec.type = d.type || rec.type; chip.classList.remove("up");
+        chatGrow();   // 0.21.91: the strip above the box changed -- the box keeps its own size
       } catch (e) { chatHint("Upload failed \u2014 " + (e?.message || e), true); chatPending = chatPending.filter((p) => p !== rec); chip.remove(); chatAttachEl.hidden = !chatPending.length; }
     }
   }
@@ -21342,8 +21343,17 @@
     } catch (e) { window.__toast?.("Could not close the room \u2014 " + (e?.message || e), 6000, { level: "error" }); }
   };
   // ---- composer
-  function chatGrow() { chatInput.style.height = "auto"; chatInput.style.height = Math.min(120, chatInput.scrollHeight) + "px"; }
+  // 0.21.91: an empty box is always its natural one-line size (a height left over from an earlier message never sticks); a box
+  // with text is its text's height plus its borders (border-box: scrollHeight alone came out 2 px short and showed scroll
+  // arrows); a box that is not laid out (the panel closed, folded) is measured again when it is shown or resized
+  function chatGrow() {
+    if (!chatInput.value) { chatInput.style.height = ""; return; }
+    if (!chatInput.offsetWidth) return;
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(120, chatInput.scrollHeight + (chatInput.offsetHeight - chatInput.clientHeight)) + "px";
+  }
   chatInput.addEventListener("input", chatGrow);
+  try { let gw = 0; new ResizeObserver(() => { const w = chatInput.offsetWidth; if (w && w !== gw) { gw = w; chatGrow(); } }).observe(chatInput); } catch {}
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
     if (e.key === "Escape") { if (!chatEmojiEl.hidden) chatEmojiEl.hidden = true; else chatEntry.close(); }   // (a pinned Chat stays: chatEntry.close)

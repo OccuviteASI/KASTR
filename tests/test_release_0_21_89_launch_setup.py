@@ -32,7 +32,7 @@ class Card(unittest.TestCase):
 
     def test_required_and_which_steps(self):
         g = self.gate
-        self.assertIn('const GATE_STATES = new Set(["noroom", "needcode", "short", "rekey"]);', g)
+        self.assertIn('const GATE_STATES = new Set(["noroom", "needcode", "short", "rekey", "mustchange"]);', g)
         code = "\n".join(ln for ln in g.splitlines() if not ln.strip().startswith("//"))
         self.assertNotIn("Not now", code)                                    # no way past it
         self.assertIn('if (e.key === "Escape") e.preventDefault();   // required: Esc does not dismiss it', g)

@@ -11,6 +11,7 @@
 <script src="/assets/client.js"></script>
 <script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs","https://esm.sh/@moq/publish":"/assets/vendor/esm/@moq/publish@0.5.2.target-es2022.mjs"}}</script>
 <script type="module" src="/assets/asi-brand.js"></script>
+<script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the Reset My room passcode dialog (the app's People has it too) -->
 <style>
   * { box-sizing:border-box; }
   /* 0.21.0: a responsive card grid -- every panel is a card, the log spans the full width, one column
@@ -722,6 +723,26 @@
           <thead><tr><th>Vehicle</th><th>Created</th><th>Last used</th><th>Last room</th><th></th></tr></thead>
           <tbody></tbody>
         </table></div>
+      </div>
+    </section>
+
+    <!-- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): the people with a My room on this hub (names only, never a
+         code), Reset (a temporary passcode they replace) / Remove, and the last resets. This machine only; a spoke shows one line.
+         Hidden until POST /api/rooms/personal {op: "list"} answers. -->
+    <section class="panel" id="pmrPanel" hidden>
+      <h2>My rooms</h2>
+      <p class="hint" id="pmrSpoke" hidden>My rooms are kept on the hub &mdash; reset or remove one on the hub&rsquo;s Relay page (or from People, with the admin code).</p>
+      <div id="pmrBox">
+        <p class="hint" style="margin-top:0">Each person&rsquo;s My room (and the key of their messages) opens with their name and their own passcode.
+          <b>Reset</b> gives them a temporary passcode to pass on &mdash; they pick their own when they next open My room; their older messages still
+          need their old passcode. <b>Remove</b> clears the room. Admins can do the same from a person&rsquo;s menu in People.</p>
+        <span id="pmrMsg" class="hint blk"></span>
+        <div id="pmrNote" class="hint">Nobody has a My room yet.</div>
+        <div class="tblwrap"><table class="rooms" id="pmrTable">
+          <thead><tr><th>Person</th><th>Last used</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="pmrAuditBox" hidden><h3 style="font-size:12px;margin:10px 0 4px;color:var(--text-dim)">Last resets</h3><div id="pmrAudit" class="hint"></div></div>
       </div>
     </section>
 
@@ -3198,6 +3219,65 @@
   }
   paintVehicles();
   setInterval(paintVehicles, 10000);
+
+  // ---- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): the hub's My rooms card. POST /api/rooms/personal
+  // {op: "list"} (this machine = the relay's operator) -> {people: [{name, used, made, mustChange}], audit: [{at, op, name, by, host,
+  // relay}], spoke?}; Reset / Remove open the shared dialog (assets/kastr-pmreset.js) -> {op: "reset", name, code?}. Every 15 s.
+  const pmrPanel = $("pmrPanel"), pmrBody = $("pmrTable").querySelector("tbody");
+  async function pmrPost(body) {
+    const res = await fetch("/api/rooms/personal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await res.json().catch(() => ({}));
+    return Object.assign({}, d, { ok: res.ok && d.ok !== false, status: res.status });
+  }
+  function pmrOpen(name, stage) {
+    if (!window.KastrPmReset) { $("pmrMsg").textContent = "The reset dialog did not load \u2014 reload this page."; return; }
+    window.KastrPmReset.open({ name, stage, post: pmrPost, onDone: () => paintPmr() });
+  }
+  async function paintPmr() {
+    if (!LOCAL) { pmrPanel.hidden = true; return; }
+    let d = null;
+    try { d = await pmrPost({ op: "list" }); } catch { pmrPanel.hidden = true; return; }
+    if (!d || !(d.ok || d.spoke)) { pmrPanel.hidden = true; return; }   // no relay here / an older KASTR
+    pmrPanel.hidden = false;
+    $("pmrSpoke").hidden = !d.spoke;
+    $("pmrBox").hidden = !!d.spoke;
+    if (d.spoke) return;
+    const rows = Array.isArray(d.people) ? d.people : [];
+    pmrBody.replaceChildren(...rows.map((r) => {
+      const tr = document.createElement("tr");
+      tr.dataset.pmr = r.name;
+      const a = document.createElement("td"); a.className = "slug";
+      const nm = document.createElement("span"); nm.textContent = r.name;
+      a.appendChild(nm);
+      if (r.mustChange) { const f = document.createElement("span"); f.className = "vflag"; f.textContent = "temporary passcode"; f.title = "Reset by an admin: they pick their own passcode when they next open My room"; a.appendChild(f); }
+      const u = document.createElement("td"); u.className = "mono";
+      u.textContent = r.used ? agoText(Date.now() / 1000 - Number(r.used)) : (r.made ? "made " + fmtWhen(r.made) : "\u2014");
+      const act = document.createElement("td"); act.className = "act";
+      for (const [label, stage, cls, tip] of [["Reset", "reset", "", "Give " + r.name + " a temporary passcode (they pick their own)"],
+                                               ["Remove", "remove", "ghost", "Remove " + r.name + "\u2019s My room (asks first)"]]) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.title = tip; b.style.marginLeft = "4px";
+        if (cls) b.className = cls;
+        b.addEventListener("click", () => pmrOpen(r.name, stage));
+        act.appendChild(b);
+      }
+      tr.append(a, u, act);
+      return tr;
+    }));
+    $("pmrNote").hidden = rows.length > 0;
+    $("pmrTable").hidden = !rows.length;
+    const au = Array.isArray(d.audit) ? d.audit : [];
+    $("pmrAuditBox").hidden = !au.length;
+    $("pmrAudit").replaceChildren(...au.slice(0, 8).map((e) => {
+      const div = document.createElement("div");
+      div.textContent = fmtWhen(e.at) + " \u2014 " + (e.by || "an admin") + (e.host ? " (" + e.host + ")" : "") + (e.op === "remove" ? " removed " : " reset the passcode of ")
+        + e.name + (e.op === "remove" ? "\u2019s My room" : "") + (e.relay ? " \u00b7 via " + e.relay : "");
+      return div;
+    }));
+  }
+  paintPmr();
+  setInterval(paintPmr, 15000);
+  window.__pmrPaint = paintPmr;   // rig
+  // ---- end 0.21.91 passcode reset ----
 
   // 0.21.84 (Kenton: "a fleet-wide library of available streams"): the hub's Stream library card + the site names on the Links card.
   // GET /api/relay/library every 10 s -> {ok, hub, on, why, root, minVersion, ver, entries: [Row + hidden], local, counts: {entries, live,

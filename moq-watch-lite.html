@@ -5156,6 +5156,11 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       try { await personalToken(p); }
       catch (e) {
         const m = String(e?.message || e);
+        if (/pick your own passcode/i.test(m)) {   // 0.21.91 passcode reset: an admin's temporary code -- their own first
+          personalSave(null);
+          personalDialog("open", "An admin reset your My room passcode \u2014 enter the temporary passcode, then pick your own.");
+          return;
+        }
         if (/wrong room code|no such personal room/i.test(m)) {
           personalSave(null);
           personalDialog("open", "My room did not open with the code this device remembered \u2014 enter your name and personal code again (an admin may have reset it).");
@@ -5293,6 +5298,25 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     };
     q(".pmok").onclick = async () => {
       const mode = el.__mode;
+      if (mode === "change") {   // 0.21.91 passcode reset: their own passcode replaces the admin's temporary one
+        const t = el.__temp || {}, n1 = q(".pmcode").value;
+        if (!t.code) { pmPaint("open"); return; }
+        if (n1.length < 8) { say("A passcode has at least 8 characters (it also protects your messages).", true); q(".pmcode").focus(); return; }
+        if (n1 !== q(".pmcode2").value) { say("The two passcodes do not match.", true); q(".pmcode2").focus(); return; }
+        if (n1 === t.code) { say("Pick a passcode of your own \u2014 not the temporary one.", true); q(".pmcode").focus(); return; }
+        q(".pmok").disabled = true; say("Changing\u2026");
+        const d = await personalApi({ op: "change", name: t.name, code: t.code, newCode: n1 });
+        q(".pmok").disabled = false;
+        if (!d.ok) { say(d.error || "Refused.", true); return; }
+        el.__temp = null;
+        personalSave({ slug: d.slug, name: d.name || t.name, code: n1 });
+        q(".pmcode").value = ""; q(".pmcode2").value = "";
+        close();
+        try { window.dispatchEvent(new Event("kastr:personal")); } catch {}   // Messages: their key asks for the previous passcode
+        window.__toast?.("Your new My room passcode is set \u2014 it opens My room and your messages on any device.", 5000, { level: "event" });
+        if (joinState === "joined" && !el.__opts?.stay) personalEnter();
+        return;
+      }
       if (mode === "have") { close(); if (!(joinState === "joined" && CHANNEL === personalGet()?.slug)) personalEnter(); return; }
       const name = q(".pmname").value.trim().replace(/\s+/g, " "), code = q(".pmcode").value;
       if (!name) { say("Enter your name.", true); q(".pmname").focus(); return; }
@@ -5304,6 +5328,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await personalApi({ op: mode === "make" ? "create" : "open", name, code, access: authAccessCode || undefined });
       q(".pmok").disabled = false;
       if (!d.ok) { say(d.error || "Refused.", true); return; }
+      if (d.mustChange) {   // 0.21.91 passcode reset: an admin's temporary passcode -- nothing is saved until they pick their own
+        el.__temp = { name: d.name || name, code };
+        q(".pmcode").value = ""; q(".pmcode2").value = "";
+        pmPaint("change");
+        return;
+      }
       personalSave({ slug: d.slug, name: d.name || name, code });
       q(".pmcode").value = ""; q(".pmcode2").value = "";
       close();
@@ -5330,7 +5360,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     q(".pmshare").hidden = mode !== "have";
     const inMine = mode === "have" && joinState === "joined" && !!p && CHANNEL === p.slug;
     q(".pmok").hidden = inMine;
-    q(".pmok").textContent = mode === "have" ? "Go to My room" : mode === "make" ? "Make my room" : "Open my room";
+    q(".pmok").textContent = mode === "have" ? "Go to My room" : mode === "make" ? "Make my room" : mode === "change" ? "Use this passcode" : "Open my room";
+    if (mode === "change") {   // 0.21.91 passcode reset: the new passcode twice (no name, no tabs)
+      q(".pmtabs").hidden = true;
+      q(".pmname").closest(".pmf").hidden = true;
+      q(".pmmake").hidden = false;
+      pmEl.__say("An admin reset your My room passcode. Pick your own passcode (8 characters or more) before going on.");
+      setTimeout(() => { try { q(".pmcode").focus(); } catch {} }, 30);
+    } else pmEl.__temp = null;
+    for (const s of [".pmintro", ".pmcaps"]) q(s).style.display = mode === "change" ? "none" : "";   // (just the new passcode)
+    q("#pmTitle").textContent = mode === "change" ? "Pick your own My room passcode" : "My room";
     if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". It is the first card in your rooms list; nobody else sees it there unless you share it.";
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
     if (note) pmEl.__say(note, true);
@@ -5659,8 +5698,52 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const m of members.values()) if (String(m.op || "").toLowerCase() === k && HOST_RE.test(String(m.host || ""))) return String(m.host);
     return "";
   }
-  // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
+  // ---- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): admin-code holders (and the relay's operator) get
+  // "Reset My room passcode..." on a person's menus -- only for people with a My room when the hub's list answered (POST
+  // /api/rooms/personal {op: "list"}: names only, refreshed at most every 60 s), on everyone otherwise (a 404 then says so).
+  const pmr = { names: null, at: 0, busy: false };
+  const pmrKey = (n) => String(n || "").trim().replace(/\s+/g, " ").toLowerCase();
+  function pmrAdmin() {
+    try { if (authSecured && authRole === "admin" && authTokens?.member) return true; } catch {}
+    try { return typeof isRelayOperator === "function" && !!isRelayOperator(); } catch { return false; }
+  }
+  async function pmrPost(body) {
+    const base = relayHostBase() || chatBase();
+    if (!base) return { ok: false, error: "No relay host to talk to." };
+    const headers = { "content-type": "application/json" };
+    if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;   // the admin grant proves it
+    const r = await fetch(base + "/api/rooms/personal", { method: "POST", headers, body: JSON.stringify({ ...body, by: myOpName() || undefined }) });
+    const d = await r.json().catch(() => ({}));
+    return { ...d, ok: r.ok && d.ok !== false, status: r.status };
+  }
+  async function pmrRefresh(force) {
+    if (!pmrAdmin() || pmr.busy || (!force && Date.now() - pmr.at < 60000)) return;
+    pmr.busy = true; pmr.at = Date.now();
+    try {
+      const d = await pmrPost({ op: "list" });
+      pmr.names = d.ok && Array.isArray(d.people) ? new Set(d.people.map((x) => pmrKey(x?.name))) : null;
+    } catch { pmr.names = null; } finally { pmr.busy = false; }
+  }
+  function pmrItems(p) {
+    if (!p || p.me || !p.name || !pmrAdmin() || pmrKey(p.name) === pmrKey(myOpName())) return [];
+    pmrRefresh();
+    if (pmr.names && !pmr.names.has(pmrKey(p.name))) return [];
+    return [{ value: "pinv-pmr", label: "Reset My room passcode\u2026 (admin)", tip: "Give " + p.name + " a temporary My room passcode (they pick their own), or remove their My room" }];
+  }
+  function pmrOpen(name) {
+    if (!window.KastrPmReset) { window.__toast?.("The reset dialog did not load \u2014 reload KASTR", 4000, { level: "warn" }); return; }
+    window.KastrPmReset.open({ name: String(name), post: pmrPost, onDone: (op) => { pmr.at = 0; log("Admin My room " + op + " for " + name); pmrRefresh(true); } });
+  }
+  window.__pmr = { state: () => ({ admin: pmrAdmin(), names: pmr.names ? [...pmr.names] : null, at: pmr.at }), refresh: () => pmrRefresh(true), open: pmrOpen, items: (n) => pmrItems({ name: n }) };   // rig
   function personInviteItems(p) {
+    const r = personInviteItems2(p), a = pmrItems(p);
+    if (!a.length) return r;
+    if (!r) return { items: a, pick: (v) => (v === "pinv-pmr" ? pmrOpen(p.name) : null) };
+    return { items: [...r.items, { sep: true }, ...a], pick: (v) => (v === "pinv-pmr" ? pmrOpen(p.name) : r.pick(v)) };
+  }
+  // ---- end 0.21.91 passcode reset ----
+  // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
+  function personInviteItems2(p) {
     const r = personInviteItems0(p);
     const ok = !!p && !p.me && !!p.name && !!window.__kmsg?.allowed?.();
     if (!ok) return r;
@@ -10786,10 +10869,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           mb.innerHTML = icon("msg");
           mb.addEventListener("click", (e) => { e.stopPropagation(); go(); });
           row.appendChild(mb);
-          const adm = eoMsgAdmin(x);
+          const adm = [...eoMsgAdmin(x), ...pmrItems(x)];   // 0.21.91 passcode reset: + Reset My room passcode
           const open = (anchor) => {
             const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm];
-            openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
+            openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-pmr" ? pmrOpen(x.name) : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
             row.classList.add("menu"); watchMenuClose(row);
           };
           row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); open(pointAnchor(e.clientX, e.clientY)); });
@@ -10828,6 +10911,11 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomMake: async (name, code) => {
       const d = await personalApi({ op: "create", name, code, access: authAccessCode || undefined });
       if (d.ok) { personalSave({ slug: d.slug, name: d.name || name, code }); try { personalCardPaint(); } catch {} }
+      return d;
+    },
+    roomChange: async (name, code, newCode) => {   // 0.21.91 passcode reset: their own passcode replaces an admin's temporary one
+      const d = await personalApi({ op: "change", name, code, newCode });
+      if (d.ok) { personalSave({ slug: d.slug, name: d.name || name, code: newCode }); try { personalCardPaint(); } catch {} }
       return d;
     },
     roomOpen: async (name, code) => {
@@ -33758,6 +33846,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 </script>
 <!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
 <script type="module" src="/assets/kastr-gif.js"></script>
+<script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the admin's Reset My room passcode dialog -->
 <script type="module" src="/assets/kastr-msg.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>
 </body>

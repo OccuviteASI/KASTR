@@ -3185,6 +3185,37 @@
   .cmark { font-size: 10px; opacity: .7; margin-left: 6px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; vertical-align: middle; }
   .ctyping { font-style: italic; opacity: .8; min-height: 0; }
 </style>
+<style>
+  /* ==== 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search -- the picker
+     (assets/kastr-gif.js) in Room Chat and Messages, where the emoji grid opens; the GIF button beside the emoji button ==== */
+  .cbtn.cgif, .mgif { font-family:var(--font-ui); font-size:10.5px; font-weight:700; letter-spacing:.04em; }
+  .mgif { flex:none; width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+  .mgif:hover, .mgif.on, .cbtn.cgif.on { color:var(--text); border-color:var(--asi-blue-dim); }
+  .cbtn.cgif[hidden], .mgif[hidden], .kgif[hidden] { display:none; }
+  .kgif { flex:none; display:flex; flex-direction:column; gap:6px; padding:6px 10px; border-top:1px solid var(--line); max-height:300px; min-height:0; }
+  .kgif .kgtop { display:flex; align-items:center; gap:8px; }
+  .kgif .kgq { flex:1; min-width:0; background:var(--surface); border:1px solid var(--line); color:var(--text); border-radius:8px;
+    padding:6px 9px; font-family:var(--font-ui); font-size:12.5px; height:auto; }
+  .kgif .kgq:focus { outline:none; border-color:var(--asi-blue); }
+  .kgif .kgby { flex:none; font-size:9.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--text-mute); white-space:nowrap; }
+  .kgif .kgscroll { flex:1; min-height:90px; overflow-y:auto; overscroll-behavior:contain; }
+  .kgif .kggrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); grid-auto-rows:80px; gap:4px; }
+  .kgif .kggrid button { position:relative; padding:0; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:var(--surface-2);
+    cursor:pointer; height:auto; min-width:0; }
+  .kgif .kggrid button:hover, .kgif .kggrid button:focus-visible { border-color:var(--asi-blue); outline:none; }
+  .kgif .kggrid img { width:100%; height:100%; object-fit:cover; display:block; }
+  .kgif .kggrid img:not([src]) { visibility:hidden; }
+  .kgif .kggrid button.bad { opacity:.4; }
+  .kgif .kggrid button.busy::after { content:""; position:absolute; inset:0; background:color-mix(in srgb, var(--surface) 55%, transparent); }
+  .kgif.sending .kggrid button:not(.busy) { opacity:.55; }
+  .kgif .kgend { height:1px; }
+  .kgif .kgmsg { font-size:11px; color:var(--text-mute); min-height:14px; }
+  .kgif .kgmsg:empty { display:none; }
+  .kgif .kgmsg.err { color:var(--asi-red); }
+  @media (max-width: 520px) { .kgif { max-height:46vh; } .kgif .kggrid { grid-template-columns:repeat(3, 1fr); grid-auto-rows:72px; } }
+  /* ==== end 0.21.91 GIF search ==== */
+</style>
 <div id="chatPanel" class="popcard" hidden>
   <div class="head"><span>Room Chat</span><span id="chatRoomLbl" class="sub"></span><span class="sp"></span>
     <button type="button" class="close" title="Close">&#10005;</button></div>
@@ -3192,8 +3223,10 @@
   <div id="chatDrop">Drop files here to attach them</div>
   <div id="chatAttach" class="catt" hidden></div>
   <div id="chatEmoji" class="cemoji" hidden></div>
+  <div id="chatGif" class="kgif" hidden></div><!-- 0.21.91: GIF search (assets/kastr-gif.js) -->
   <div class="ccomp">
     <button type="button" id="chatEmojiBtn" class="cbtn" title="Emoji">&#128578;</button>
+    <button type="button" id="chatGifBtn" class="cbtn cgif" title="GIF" hidden>GIF</button>
     <button type="button" id="chatFileBtn" class="cbtn" title="Attach a picture or file (stored on the relay host)">&#128206;</button>
     <textarea id="chatInput" rows="1" placeholder="Message the room&hellip;" title="Enter sends, Shift+Enter starts a new line"></textarea>
     <button type="button" id="chatSend" class="cbtn send" title="Send">&#10148;</button>
@@ -20884,13 +20917,14 @@
       if (chatFetchAgain) { chatFetchAgain = false; setTimeout(() => chatFetch(), 200); }
     }
   }
-  async function chatSend() {
-    const text = chatInput.value.replace(/\s+$/, "");
-    const files = chatPending.filter((p) => p.id).map((p) => ({ id: p.id, name: p.name, size: p.size, type: p.type }));
-    if (!chatRoom || (!text && !files.length) || chatPending.some((p) => !p.id)) return;
+  async function chatSend(over) {
+    over = over && Array.isArray(over.files) ? over : null;   // 0.21.91: a picked GIF {files} (the Send button's click event is not one)
+    const text = over ? "" : chatInput.value.replace(/\s+$/, "");
+    const files = over ? over.files : chatPending.filter((p) => p.id).map((p) => ({ id: p.id, name: p.name, size: p.size, type: p.type }));
+    if (!chatRoom || (!text && !files.length) || (!over && chatPending.some((p) => !p.id))) return;
     chatSendBtn.disabled = true;
     const cid = chatCid();
-    const clearComposer = () => { chatInput.value = ""; chatGrow(); for (const p of chatPending) p.el?.remove(); chatPending = []; chatAttachEl.hidden = true; chatTypingStop(); };
+    const clearComposer = over ? () => {} : () => { chatInput.value = ""; chatGrow(); for (const p of chatPending) p.el?.remove(); chatPending = []; chatAttachEl.hidden = true; chatTypingStop(); };
     // 0.13.0: the store keeps history; delivery rides my chat.json Window. Store down (no answer in
     // 4 s, network error, 5xx) -> the message still goes out live, marked "not saved" (never re-posted).
     const liveOnly = (why) => {
@@ -21328,6 +21362,25 @@
     chatEmojiEl.appendChild(h);
   }
   document.getElementById("chatEmojiBtn").addEventListener("click", (e) => { e.stopPropagation(); chatEmojiEl.hidden = !chatEmojiEl.hidden; });
+  // ---- 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search. The picker is
+  // assets/kastr-gif.js (Messages uses it too); it asks the relay this page uses with the room's member token (the hub holds the
+  // GIPHY key and proxies the pictures; never the Lobby). A pick goes out as a normal Room Chat attachment (stored on the relay
+  // host), like a pasted picture, on its own -- what is typed in the box stays.
+  window.__kgif = {
+    base: () => authBase(), token: () => authTokens?.member || "",
+    ok: () => { try { return joinState === "joined" && !inLobby() && authSecured && !!authTokens?.member; } catch { return false; } },
+  };
+  async function chatSendGif(file) {
+    if (!chatRoom) throw new Error("join a room first");
+    const r = await fetch(chatUrl("/api/chat/" + chatRoom + "/files"), { method: "POST", body: file,
+      headers: { "Content-Type": file.type || "image/gif", "X-Kastr-Name": encodeURIComponent(file.name), "X-Kastr-Op": encodeURIComponent(chatMe()) } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.id) throw new Error(d.error || ("upload failed (" + r.status + ")"));
+    await chatSend({ files: [{ id: d.id, name: file.name, size: d.size || file.size, type: d.type || file.type || "image/gif" }] });
+  }
+  window.__gifChatMount = () => window.__gif?.mount({ root: chatPanel, btn: document.getElementById("chatGifBtn"), panel: document.getElementById("chatGif"),
+    input: chatInput, emoji: { btn: document.getElementById("chatEmojiBtn"), panel: chatEmojiEl }, send: (file) => chatSendGif(file) });
+  // ---- end 0.21.91 GIF search
   chatRenderAll();
 
   // ---- shared files (0.8.7) ---------------------------------------------------
@@ -33068,6 +33121,7 @@
   log("Idle. Add sources, start them, then go live.");
 </script>
 <!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
+<script type="module" src="/assets/kastr-gif.js"></script>
 <script type="module" src="/assets/kastr-msg.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>
 </body>

@@ -101,6 +101,7 @@ from urllib.parse import urlparse, parse_qs   # 0.20.0: + parse_qs (the bans lon
 import kastr_rtsp
 import kastr_msg   # 0.21.88: private messages (the hub's end-to-end encrypted store)
 import kastr_access   # 0.21.89: Ask for access (the hub's desk of asks, answers and one-visit grants)
+import kastr_gif   # 0.21.91: GIF search -- GIPHY through the hub (the key stays on the hub)
 
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
@@ -1815,6 +1816,7 @@ PHOTO_REFRESH_S = 2.5      # a spoke asks the hub's photo index at most this oft
 PHOTO_ROSTER_S = 90        # a name a room's beats said this recently is "in the room" (what an invite-link guest may see)
 PHOTO_GUEST_CACHE_S = 15   # a spoke reuses the hub's "who is in this room" answer for a guest this long
 PHOTO_CACHE_MAX = 4000     # photo files a spoke keeps
+GIF_STATUS_S = 60          # 0.21.91: a spoke asks the hub whether GIF search is on at most this often (15 s while the hub is away)
 
 
 def photo_rows_clean(rows):
@@ -6299,6 +6301,23 @@ class AuthService:
                             pass
                     else:
                         self._reply(obj, code)
+                elif path.startswith("/api/gif/"):     # 0.21.91: GIF search (status, search, a picture) -- GIPHY through the hub
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, hdrs, code = svc.gif_get(path, {k: (v or [""])[0] for k, v in qs.items()}, self.headers.get("Authorization"), self._peer())
+                    if isinstance(obj, (bytes, bytearray)):
+                        self.send_response(200)
+                        for k, v in (hdrs or {}).items():
+                            self.send_header(k, str(v))
+                        self.send_header("Content-Length", str(len(obj)))
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self.end_headers()
+                        try:
+                            self.wfile.write(obj)
+                        except OSError:
+                            pass
+                    else:
+                        self._reply(obj, code, hdrs)
                 elif path == "/api/msg/file":          # 0.21.88: a message attachment's ciphertext
                     qs = parse_qs(urlparse(self.path).query)
                     obj, code = svc.msg_file_get(qs, self.headers.get("Authorization"), (qs.get("jwt") or [""])[0], self._peer())
@@ -6625,6 +6644,8 @@ class AuthService:
             return self._p_all(time.time())
         if op in ("pphoto", "pphotos", "pphotoq"):   # 0.21.90: profile photos (set / the index + the spoke's rooms / a guest's room)
             return self._photo_fed(op, p)
+        if op == "gif":        # 0.21.91: GIF search from a spoke (it checked the member token; the hub holds the GIPHY key)
+            return self._gif_fed(p, bearer)
         if op == "personal":   # 0.21.75: My room -- the spoke checked the member's access code (vouch "member") or an admin
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
@@ -9260,6 +9281,123 @@ class AuthService:
         data, ctype, h = got
         return data, {"Content-Type": ctype, "X-Kastr-Photo": h,
                       "Cache-Control": "private, max-age=31536000, immutable" if v and v == h else "private, no-cache"}, 200
+
+    # ---- 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF SEARCH ------------
+    # GIPHY through the hub (kastr_gif.GifSearch keeps Kenton's key there -- never in a reply, a log or a page). Pages ask the
+    # relay they use: GET /api/gif/status | /api/gif/search?q=&offset= | /api/gif/media/<id>?r=p|s with a member token of a
+    # room (never the Lobby, never a vehicle key's token). A spoke checks the token, rate-limits and forwards to the hub
+    # (rooms_fed op "gif"; a picture with the federation token); the hub rate-limits per spoke device too. Pages never name
+    # a URL: the hub builds every GIPHY request from a term, an offset or a GIF id and a fixed rendition allow-list.
+    def _gifs(self):
+        return kastr_gif.for_dir(getattr(self.store, "state_dir", os.getcwd()), self.log)
+
+    def gif_on(self, now=None):
+        """Is GIF search on for this relay's pages? (the hub: its key + switch; a spoke: the hub's answer, cached)"""
+        now = time.time() if now is None else now
+        if not self._p_spoke():
+            return self._gifs().active()
+        hit = self.__dict__.get("_gif_st")
+        if hit and now - hit[0] < hit[2]:
+            return hit[1]
+        r = self._hub_fed({"op": "gif", "what": "status"}, timeout=5)
+        on = bool(r is not None and r[1] == 200 and r[0].get("ok") and r[0].get("on") is True)
+        self.__dict__["_gif_st"] = (now, on, GIF_STATUS_S if r is not None else 15)
+        return on
+
+    def gif_get(self, path, q, bearer, peer=""):
+        """GET /api/gif/<what> -> (reply | bytes, headers, code)."""
+        q = q if isinstance(q, dict) else {}
+        now = time.time()
+        what = path[len("/api/gif/"):] if str(path).startswith("/api/gif/") else ""
+        fed = self._bearer_relay(bearer)
+        if fed:
+            if self._p_spoke():
+                return {"ok": False, "error": "GIF search is answered by the hub"}, None, 409
+            dev = str(q.get("who") or "")
+            who = "fed:%s:%s" % (fed.get("node") or "spoke", dev if HOST_RE.match(dev) else "?")
+        else:
+            claims = self._member_claims(bearer)
+            if claims is None:
+                return {"ok": False, "error": "join a room first (a member token is required)"}, None, 403
+            room, dev = claims_identity(claims)
+            if claims.get("lobby") or claims.get("vehicle") or room == LOBBY_SLUG or not room:
+                return {"ok": False, "error": "GIF search works in rooms, not the Lobby"}, None, 403
+            if self.bans and self.bans.hit(room, dev, peer, now):
+                return {"ok": False, "error": self.REVOKED_TEXT}, None, 403
+            who = "tok:" + hashlib.sha256(str(bearer)[7:].strip().encode()).hexdigest()[:20]
+            dev = dev or ""
+        if what == "status":
+            return {"ok": True, "on": self.gif_on(now)}, None, 200
+        gifs = self._gifs()
+        if what == "search":
+            ok, wait = gifs.rate.allow(who, "search", now)
+            if not ok:
+                return {"ok": False, "error": "too many GIF searches -- try again in %d s" % wait, "retryAfter": wait}, {"Retry-After": wait}, 429
+            if not self._p_spoke():
+                d, code = gifs.search(q.get("q"), q.get("offset"), now)
+                return d, None, code
+            r = self._hub_fed({"op": "gif", "what": "search", "q": kastr_gif.clean_q(q.get("q")),
+                               "offset": kastr_gif.clean_offset(q.get("offset")), "who": dev}, timeout=15)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, None, 503
+            d, code = r
+            if code == 400 and d.get("error") == "bad room":
+                return {"ok": False, "off": True, "error": "the hub runs an older KASTR without GIF search"}, None, 404
+            return d, None, code
+        m = re.match(r"^media/([A-Za-z0-9]{1,48})$", what)
+        if not m:
+            return {"ok": False, "error": "unknown endpoint"}, None, 404
+        rend = str(q.get("r") or "")
+        if rend not in kastr_gif.RENDITIONS:
+            return {"ok": False, "error": "no such GIF"}, None, 400
+        ok, wait = gifs.rate.allow(who, "media", now)
+        if not ok:
+            return {"ok": False, "error": "too many GIFs at once -- try again in %d s" % wait, "retryAfter": wait}, {"Retry-After": wait}, 429
+        if not self._p_spoke():
+            data, ctype, code = gifs.media_get(m.group(1), rend, now)
+            if code != 200:
+                return data, None, code
+        else:
+            rr = self._hub_raw("GET", "/api/gif/media/%s?%s" % (m.group(1), urllib.parse.urlencode({"r": rend, "who": dev})), None, timeout=20)
+            if rr is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, None, 503
+            code, data = rr
+            if code != 200:
+                try:
+                    d = json.loads(data.decode("utf-8", "replace") or "{}")
+                except ValueError:
+                    d = {}
+                return (d if isinstance(d, dict) and d else {"ok": False, "error": "the hub answered %d" % code}), None, code
+            if len(data) > kastr_gif.SIZE_MAX[rend] or not kastr_gif.gif_magic(data):
+                return {"ok": False, "error": "the hub sent something that is not a GIF"}, None, 502
+            ctype = "image/gif" if data[:3] == b"GIF" else "image/webp"
+        return data, {"Content-Type": ctype, "Cache-Control": "private, max-age=900"}, 200
+
+    def _gif_fed(self, p, bearer):
+        """Hub side of a spoke's GIF calls (rooms_fed checked the federation bearer)."""
+        what = str(p.get("what") or "")
+        if what == "status":
+            return {"ok": True, "on": self._gifs().active()}, 200
+        if what != "search":
+            return {"ok": False, "error": "bad gif op"}, 400
+        fed = self._bearer_relay(bearer) or {}
+        dev = str(p.get("who") or "")
+        ok, wait = self._gifs().rate.allow("fed:%s:%s" % (fed.get("node") or "spoke", dev if HOST_RE.match(dev) else "?"), "search")
+        if not ok:
+            return {"ok": False, "error": "too many GIF searches -- try again in %d s" % wait, "retryAfter": wait}, 429
+        return self._gifs().search(p.get("q"), p.get("offset"))
+
+    def gif_operator_view(self):
+        """GET /api/relay/gif (the Relay page of this machine) -- never the key."""
+        if self._p_spoke():
+            return {"ok": True, "spoke": True, "on": self.gif_on()}, 200
+        return dict(self._gifs().view(), ok=True, hub=True, secured=True), 200
+
+    def gif_operator(self, p):
+        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page)."""
+        if self._p_spoke():
+            return {"ok": False, "spoke": True, "error": "GIF search is set on the hub's Relay page"}, 409
+        return self._gifs().configure(p)
 
     # ---- 0.21.88 (Kenton: "a private messaging feature ... whether online/offline. If offline, send it when back online.
     # Ability to setup group messages. These messages are not tied to any rooms."): PRIVATE MESSAGES. The hub keeps them
@@ -15712,6 +15850,7 @@ GUARDED_POSTS = ("/api/relay/start", "/api/relay/stop", "/api/relay/use",
                  "/api/relay/pulltest",        # 0.21.63: fetch one stream cold, time the first byte
                  "/api/relay/links",           # 0.21.77: the Links card's overrides and the hub link cost
                  "/api/relay/library",         # 0.21.84: the stream library's fleet switch / admin ops (the hub's operator)
+                 "/api/relay/gif",             # 0.21.91: GIF search -- the hub's GIPHY key and switch
                  "/api/relay/standby")         # 0.21.53
 
 
@@ -15859,6 +15998,15 @@ def handle_api(handler, relay, path, set_relay_url=None):
             reply(*auth.library_operator(_payload_of(handler) or {}))
         else:
             reply(*auth.library_operator_view())
+        return True
+    if path == "/api/relay/gif":   # 0.21.91: GIF search (GIPHY) -- GET the card (never the key); POST {key} | {remove} | {on}
+        auth = getattr(relay, "auth", None)
+        post = handler.command == "POST"
+        if auth is not None:
+            reply(*(auth.gif_operator(_payload_of(handler) or {}) if post else auth.gif_operator_view()))
+        else:
+            g = kastr_gif.for_dir(getattr(relay, "state_dir", None) or os.getcwd())
+            reply(*(g.configure(_payload_of(handler) or {}) if post else (dict(g.view(), ok=True, hub=True, secured=False), 200)))
         return True
     if path == "/api/relay/standby":   # 0.21.53 (Kenton: "Make standby" on a spoke's row) {name, address?} | {clear: true}
         reply(*relay.make_standby(_payload_of(handler) or {}))

@@ -33,7 +33,7 @@ Routes (kastr_serve dispatches /api/pres*):
   GET  /api/pres/conv/<job>/v<k>.<ext>  0.21.87: a video pulled out of the deck (the converting page holds the job id)
   GET  /api/pres/office           this computer only: {powerpoint, word, libreoffice, powerpointExport}
   POST /api/pres/new              {room, name, n} -> {id, token, rtoken}
-  POST /api/pres/<id>/<file>?token=   body = one encrypted blob (s<i>.bin | notes.bin)
+  POST /api/pres/<id>/<file>?token=   body = one encrypted blob (s<i>.bin | notes.bin | 0.21.91: videos.bin, v<k>.bin)
   POST /api/pres/<id>/live?token=&i=  the slide that is live now
   GET  /api/pres/<id>/<file>[?rt=]    the blob (CORS + CORP cross-origin); without rt only the live s<i>.bin
   POST /api/pres/<id>/end?token=  remove the deck (also the presenter page's pagehide beacon)
@@ -87,11 +87,16 @@ XML_MAX = 24 * 1024 * 1024             # one XML part
 MEDIA_MAX = 40 * 1024 * 1024           # one picture
 SLIDES_MAX = 500
 STORE_BLOB_MAX = 40 * 1024 * 1024      # one encrypted slide picture
+# 0.21.91 (Kenton: "When presenter changes, the slides should stay ... Video in the slides should also still work."): the deck's
+# slide videos are kept here too -- encrypted by the presenter's page with its own key (HKDF(K, "video/<k>")), opened only with
+# the deck's read token (presenters + backstage) -- so a presenter who takes the deck over can play them. One video at most the
+# size a whole .pptx may be (CONVERT_MAX) + the AES-GCM framing; the deck as a whole still within STORE_DECK_MAX.
+STORE_VIDEO_MAX = 200 * 1024 * 1024 + 64
 STORE_DECK_MAX = 600 * 1024 * 1024     # one deck
 STORE_TOTAL_MAX = 4 * 1024 ** 3        # every deck on this relay host
 STORE_DECKS_MAX = 300
 STORE_TTL_S = 24 * 3600
-BLOB_RE = re.compile(r"^(s\d{1,4}|notes)\.bin$")
+BLOB_RE = re.compile(r"^(s\d{1,4}|notes|videos|v\d{1,3})\.bin$")   # 0.21.91: + the videos' manifest and the videos
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".bmp": "image/bmp", ".webp": "image/webp", ".svg": "image/svg+xml"}
@@ -1580,7 +1585,10 @@ class Store:
             return 403, "not the presenter"
         if length <= 0:
             return 400, "empty"
-        if length > STORE_BLOB_MAX:
+        is_video = fname.startswith("v") and fname != "videos.bin"
+        if length > (STORE_VIDEO_MAX if is_video else STORE_BLOB_MAX):
+            if is_video:
+                return 413, "one slide video may be at most %d MB" % (STORE_VIDEO_MAX // 1048576)
             return 413, "one slide picture may be at most %d MB" % (STORE_BLOB_MAX // 1048576)
         if self._size(did) + length > STORE_DECK_MAX:
             return 413, "this presentation is too large"

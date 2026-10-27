@@ -153,7 +153,8 @@ class Ffmpeg(unittest.TestCase):
         self.assertIn("gfxcapture=hmonitor=77", g)
         self.assertIn("width=1728:height=1080", g)   # 2880x1800 fitted into 1920x1080, aspect kept
         self.assertIn("color=c=black:s=1728x1080:r=30", g)   # 0.21.22: a 30 fps clock carries the capture --
-        self.assertIn("overlay=eof_action=repeat:repeatlast=1", g)   # a still page / window / screen keeps sending frames
+        self.assertIn("repeatlast=1", g)   # a still page / window / screen keeps sending frames
+        self.assertIn("overlay=eof_action=endall", g)   # 0.21.91: a monitor capture Windows closes ends ffmpeg (restarted), never a frozen frame
         with mock.patch.object(kastr_screen, "_resolve", return_value={"rect": {"x": 0, "y": 0, "w": 800, "h": 601}}),                 mock.patch.object(kastr_screen, "_kick_soon"):
             g2 = kastr_screen.capture_input("screen://window/99")[3]
         self.assertIn("hwnd=99", g2)

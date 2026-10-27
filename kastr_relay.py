@@ -3973,6 +3973,7 @@ class AuthStore:
         self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
         self.renamed = {}        # 0.21.65: old slug -> {"to": new slug, "at": ms} (RENAMED_TTL) -- pages in the old name follow
         self.paliases = {}       # 0.21.91: old name key -> {"to": new name key, "name": new display, "at", "until"} (PERSONAL_ALIAS_TTL)
+        self.paudit = []         # 0.21.91 passcode reset: [{at, op, name, by, host, relay}] -- an admin's My room resets (never a code)
         self.on_board = None     # 0.21.63: callable() -- a board changed or went with its room (AuthService re-lists the pins)
         # 0.21.91: callables(slug, why) -- a room was deleted ("closed" or "expired"): its cross-room listings go with it
         # (AuthService adds its registries; an OPEN relay's registry is here from the start)
@@ -4045,6 +4046,7 @@ class AuthStore:
                     pass
             self._prune_closed()
         self.paliases = self._paliases_clean(d.get("personalAliases"))   # 0.21.91
+        self.paudit = self._paudit_clean(d.get("personalAudit"))         # 0.21.91 passcode reset
         self.lapsed = self._lapsed_clean(d.get("lapsed"))   # 0.21.91
         ren = d.get("renamed")              # 0.21.65
         if isinstance(ren, dict):
@@ -4089,6 +4091,7 @@ class AuthStore:
                                  "invites": self.invites,        # 0.21.75: + room invite links (sha256 of the secret only)
                                  "renamed": self.renamed,        # 0.21.65: + old room names -> new
                                  "personalAliases": self.paliases,   # 0.21.91: + names people changed away from -> their new name
+                                 "personalAudit": self.paudit,   # 0.21.91 passcode reset: + who reset / removed whose My room (no code)
                                  "lapsed": self.lapsed,          # 0.21.91: + the generations of rooms that lapsed (not closed)
                                  "links": self.links,            # 0.21.77: + the Links card's overrides
                                  "mesh": self.mesh,              # 0.21.77: + the hub / standby link cost
@@ -4577,6 +4580,21 @@ class AuthStore:
         with self.lock:
             return sum(1 for r in self.rooms.values() if is_personal_rec(r))
 
+    def personal_main(self, slug, main=None):
+        """0.21.91 (Kenton: "Main-room choice follows the person"): the owner's main room kept in their My room record --
+        "mine" | "lobby" ("" when not chosen yet); `main` sets it. None when `slug` is not a personal room."""
+        with self.lock:
+            rec = self.rooms.get(slug)
+            if not is_personal_rec(rec):
+                return None
+            cur = str(rec["personal"].get("main") or "")
+            if main not in ("mine", "lobby") or main == cur:
+                return cur
+            new = dict(rec)
+            new["personal"] = dict(rec["personal"], main=main)
+        self.put_room(slug, new)
+        return main
+
     def personal_check(self, name, code):
         """-> (slug, owner) when `name` has a personal room and `code` is its personal code, else (None, None)."""
         with self.lock:
@@ -4715,9 +4733,11 @@ class AuthStore:
             self._save()
             return slug, "created"
 
-    def personal_reset(self, name, code=None):
+    def personal_reset(self, name, code=None, must_change=False):
         """An admin, for a forgotten personal code: with `code` the room keeps its board and takes the new code; without one
-        the room is gone (its owner makes a new one). -> the slug, or None when that name has no personal room."""
+        the room is gone (its owner makes a new one). -> the slug, or None when that name has no personal room.
+        0.21.91 passcode reset: `must_change` (an admin's temporary code) marks the record -- the owner's next unlock makes them
+        pick their own code first; ANY other code change (Messages' recode / setup, the owner's own change) clears it."""
         fire = False
         with self.lock:
             slug = self._personal_find(personal_key(name))
@@ -4726,6 +4746,11 @@ class AuthStore:
             if code:
                 salt = os.urandom(8).hex()
                 self.rooms[slug].update(salt=salt, hash=hashlib.sha256((salt + str(code)).encode()).hexdigest(), at=time.time())
+                pr = self.rooms[slug]["personal"]
+                if must_change:
+                    pr["mustChange"] = True
+                else:
+                    pr.pop("mustChange", None)
             else:
                 rec = self.rooms.pop(slug)
                 if rec.get("board"):
@@ -4735,6 +4760,60 @@ class AuthStore:
         if fire:
             self._board_fire()
         return slug
+
+    # ---- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): an admin's reset, the must-change flag, the audit --
+    PAUDIT_KEEP = 200
+
+    @staticmethod
+    def _paudit_clean(v):
+        out = []
+        for e in (v if isinstance(v, list) else [])[-AuthStore.PAUDIT_KEEP:]:
+            if not isinstance(e, dict) or e.get("op") not in ("reset", "remove"):
+                continue
+            try:
+                out.append({"at": int(e.get("at") or 0), "op": e["op"], "name": personal_name(e.get("name")),
+                            "by": clean_label(e.get("by"), 40), "host": str(e.get("host") or "") if HOST_RE.match(str(e.get("host") or "")) else "",
+                            "relay": clean_label(e.get("relay"), 40)})
+            except (TypeError, ValueError):
+                pass
+        return out
+
+    def personal_must(self, name):
+        """Must the owner of `name`'s My room pick their own code (an admin gave it a temporary one)?"""
+        with self.lock:
+            slug = self._personal_find(personal_key(name))
+            return bool(slug) and bool(self.rooms[slug]["personal"].get("mustChange"))
+
+    def personal_used(self, slug, now=None):
+        """Its owner opened it (a mint with its code) -> `personal.used` (saved at most hourly: the Relay page's "last used")."""
+        now = time.time() if now is None else now
+        with self.lock:
+            r = self.rooms.get(slug)
+            if not is_personal_rec(r) or now - float(r["personal"].get("used") or 0) < 3600:
+                return
+            r["personal"]["used"] = int(now)
+            self._save()
+
+    def personal_list(self):
+        """[{name, used, mustChange}] -- the people with a My room, for an admin (names only: never a code, a hash or a slug)."""
+        with self.lock:
+            rows = [{"name": str(r["personal"].get("owner") or ""), "used": int(r["personal"].get("used") or 0),
+                     "made": int(r.get("created") or 0), "mustChange": bool(r["personal"].get("mustChange"))}
+                    for r in self.rooms.values() if is_personal_rec(r)]
+        return sorted(rows, key=lambda x: (x["name"].lower(), x["name"]))
+
+    def personal_audit_add(self, op, name, who=None):
+        who = who if isinstance(who, dict) else {}
+        e = {"at": int(time.time()), "op": op, "name": personal_name(name), "by": clean_label(who.get("name"), 40) or "an admin",
+             "host": str(who.get("host") or "") if HOST_RE.match(str(who.get("host") or "")) else "", "relay": clean_label(who.get("relay"), 40)}
+        with self.lock:
+            self.paudit = (self.paudit + [e])[-self.PAUDIT_KEEP:]
+            self._save()
+        return e
+
+    def personal_audit_view(self, n=10):
+        with self.lock:
+            return [dict(e) for e in reversed(self.paudit[-max(0, int(n)):])]
 
     def personal_public(self):
         """The Relay page's count (never the names' rooms or codes)."""
@@ -5819,21 +5898,32 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
     return {"ok": True, "roomKey": rec["roomKey"], "persistent": bool(keep)}, 200
 
 
-def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=False, admin_check=None):
+def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=False, admin_check=None, who=None):
     """0.21.75 (Kenton: identity = "name + a personal code the person picks once"): POST /api/rooms/personal -> (reply, code).
     {op: "create", name, code, access} makes the person's room (any member access code -- what a token needs anyway; a spoke
     checked it and `vouched`); a name that has one already opens it when the code matches, else it is a wrong code.
     {op: "open", name, code} -> its slug. Wrong codes (and unknown names -- the same answer) count toward the lockout.
     {op: "reset", name, code?} an admin (or the relay's operator): a new code (the board stays), or none (the room is gone).
-    The reply never carries a code; a refusal of a code guess says `wrong: true` (a spoke counts it where the person is)."""
+    The reply never carries a code; a refusal of a code guess says `wrong: true` (a spoke counts it where the person is).
+    0.21.91 passcode reset: {op: "list"} an admin (or the operator) -> {people: [{name, used, mustChange}], audit: [...]} (names
+    only); a reset with a code is a TEMPORARY code (`mustChange` until the owner picks their own: {op: "change", name, code,
+    newCode}); every reset / remove is audited with `who` (the admin's name + device, or "relay operator") -- never a code."""
     log = log or (lambda m: None)
     p = p if isinstance(p, dict) else {}
     op = str(p.get("op") or "")
+    # ---- 0.21.91 passcode reset: the admin's list ----
+    if op == "list":
+        if not admin:
+            return {"ok": False, "error": "only an admin (the admin code) or the relay's operator lists My rooms"}, 403
+        rows = store.personal_list() if hasattr(store, "personal_list") else []
+        audit = store.personal_audit_view(12) if hasattr(store, "personal_audit_view") else []
+        return {"ok": True, "op": "list", "people": rows, "audit": audit, "count": len(rows), "max": PERSONAL_MAX}, 200
+    # ---- end 0.21.91 passcode reset ----
     name = personal_name(p.get("name"))
     code = p.get("code")
     code = "" if code is None else str(code)
-    if op not in ("open", "create", "reset"):
-        return {"ok": False, "error": "unknown op (open|create|reset)"}, 400
+    if op not in ("open", "create", "reset", "pref", "change"):
+        return {"ok": False, "error": "unknown op (open|create|reset|pref|change|list)"}, 400
     if not name:
         return {"ok": False, "error": "your name is required"}, 400
     if len(code) > PERSONAL_CODE_MAX:
@@ -5848,13 +5938,17 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
             a = store.personal_alias(personal_key(name))
             if a:
                 name = a["name"]
-        slug = store.personal_reset(name, code or None)
+        slug = store.personal_reset(name, code or None, must_change=bool(code))   # 0.21.91: a temporary code -- they pick their own
         if not slug:
             return {"ok": False, "error": "%s has no personal room" % name}, 404
-        log("relay: personal room of %s %s by an admin" % (name, "given a new code" if code else "cleared"))
+        w = who if isinstance(who, dict) else {"name": "an admin"}
+        if hasattr(store, "personal_audit_add"):   # 0.21.91 passcode reset: who did it, when, for whom (never a code)
+            store.personal_audit_add("reset" if code else "remove", name, w)
+        log("relay: personal room of %s %s by %s" % (name, "given a temporary code" if code else "cleared",
+                                                    clean_label(w.get("name"), 40) or "an admin"))
         # 0.21.88: the person's messaging key stays wrapped under the OLD code -- Messages asks them for it ("keep your
         # history") or lets them start fresh (older messages then cannot be read). A code changed from Messages re-wraps it.
-        return {"ok": True, "op": "reset", "name": name, "cleared": not code,
+        return {"ok": True, "op": "reset", "name": name, "cleared": not code, "mustChange": bool(code),
                 "messages": "their messages key still opens only with the old code (Messages asks for it, or they start fresh and lose older messages)"}, 200
     if lockout is not None:
         wait = lockout.locked_for(peer)
@@ -5869,6 +5963,20 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         out.update(ok=False, wrong=True)
         return out, c
 
+    if op == "pref":   # 0.21.91: the owner's main room (My room | Lobby), kept with My room -- name + personal code, as "open"
+        main = p.get("main")
+        if main not in (None, "", "mine", "lobby"):
+            return {"ok": False, "error": "main is mine or lobby"}, 400
+        slug, owner = store.personal_check(name, code)
+        if not slug and hasattr(store, "personal_alias"):
+            moved = store.personal_alias(personal_key(name))
+            if moved:
+                slug, owner = store.personal_check(moved["name"], code)
+        if not slug or not hasattr(store, "personal_main"):
+            return wrong("wrong name or personal code")
+        if lockout is not None:
+            lockout.ok(peer)
+        return {"ok": True, "op": "pref", "main": store.personal_main(slug, main or None) or ""}, 200
     if op == "open":
         slug, owner = store.personal_check(name, code)
         moved = None
@@ -5883,7 +5991,28 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         out = {"ok": True, "op": "open", "slug": slug, "name": owner or name}
         if moved:
             out["renamed"] = True
+        if hasattr(store, "personal_must") and store.personal_must(owner or name):
+            out["mustChange"] = True   # 0.21.91 passcode reset: an admin's temporary code -- the page asks for their own first
         return out, 200
+    if op == "change":   # 0.21.91 passcode reset: the owner picks their own code (the current one proves it)
+        new = str(p.get("newCode") or "")
+        if not (PERSONAL_CODE_NEW_MIN <= len(new) <= PERSONAL_CODE_MAX):
+            return {"ok": False, "short": True, "codeMin": PERSONAL_CODE_NEW_MIN,
+                    "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_NEW_MIN}, 400
+        slug, owner = store.personal_check(name, code)
+        if not slug and hasattr(store, "personal_alias"):
+            moved = store.personal_alias(personal_key(name))
+            if moved:
+                slug, owner = store.personal_check(moved["name"], code)
+        if not slug:
+            return wrong("wrong name or personal code")
+        if new == code and hasattr(store, "personal_must") and store.personal_must(owner or name):
+            return {"ok": False, "same": True, "error": "pick a code of your own -- not the temporary one an admin gave you"}, 400
+        if lockout is not None:
+            lockout.ok(peer)
+        store.personal_reset(owner or name, new)   # (clears mustChange)
+        log("relay: personal room of %s given a new code by its owner (from %s)" % (owner or name, peer or "?"))
+        return {"ok": True, "op": "change", "slug": slug, "name": owner or name}, 200
     if len(code) < PERSONAL_CODE_MIN:
         return {"ok": False, "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_MIN}, 400
     if store.configured() and not vouched:
@@ -6740,7 +6869,8 @@ class AuthService:
         if op == "personal":   # 0.21.75: My room -- the spoke checked the member's access code (vouch "member") or an admin
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
-                               vouched=p.get("vouch") in ("member", "admin"), admin=p.get("vouch") == "admin")
+                               vouched=p.get("vouch") in ("member", "admin"), admin=p.get("vouch") == "admin",
+                               who=p.get("who") if p.get("vouch") == "admin" and isinstance(p.get("who"), dict) else None)   # 0.21.91 passcode reset
         if op in ("library", "libraryAdmin", "libraryStill"):   # 0.21.84: a spoke's library rows, an admin it verified, a still
             return self._lib_fed(op, p)
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
@@ -7495,6 +7625,10 @@ class AuthService:
         if info is None or rec is None:
             return "none", {}
         if code and _room_code_ok(rec, code):
+            if isinstance(rec.get("personal"), dict) and rec["personal"].get("mustChange"):
+                return "change", info   # 0.21.91 passcode reset: an admin's temporary code opens nothing until they pick their own
+            if hasattr(self.store, "personal_used"):
+                self.store.personal_used(slug)   # 0.21.91: the Relay page's "last used"
             return "owner", info
         if not (invited or (host and host in info["people"])):
             return "wrong", info
@@ -7515,7 +7649,7 @@ class AuthService:
             if c == 200 and d.get("locked"):
                 return ("owner" if d.get("ok") else "wrong"), {}
             return ("none" if c in (200, 400, 404) else "down"), {}
-        if v not in ("owner", "guest", "away", "wrong", "none"):
+        if v not in ("owner", "guest", "away", "wrong", "none", "change"):   # 0.21.91: + change (a temporary code)
             return "down", {}
         info = {"owner": clean_label(d.get("owner"), 40), "coMe": bool(d.get("co"))}
         if v == "guest":
@@ -7534,6 +7668,10 @@ class AuthService:
             return {"ok": False, "error": "no such personal room"}, 404
         if verdict == "wrong":
             return self._fail(peer, "wrong room code", slug)
+        if verdict == "change":   # 0.21.91 passcode reset
+            self._ok(peer)
+            return {"ok": False, "mustChange": True, "owner": owner,
+                    "error": "an admin reset this My room passcode -- pick your own passcode first"}, 403
         if verdict == "away":
             return {"ok": False, "ownerAway": True, "owner": owner,
                     "error": "%s isn't in their room right now" % (owner or "The owner")}, 403
@@ -9527,17 +9665,27 @@ class AuthService:
             return {"ok": False, "error": "too many GIF searches -- try again in %d s" % wait, "retryAfter": wait}, 429
         return self._gifs().search(p.get("q"), p.get("offset"))
 
-    def gif_operator_view(self):
-        """GET /api/relay/gif (the Relay page of this machine) -- never the key."""
-        if self._p_spoke():
+    def gif_operator_view(self, standby=False):
+        """GET /api/relay/gif (the Relay page of this machine) -- never the key. `standby`: this relay is the fleet's
+        standby hub (handle_api asks the cluster) -- it keeps its OWN key, used only while it acts as the hub."""
+        spoke = self._p_spoke()
+        if spoke and not standby:
             return {"ok": True, "spoke": True, "on": self.gif_on()}, 200
-        return dict(self._gifs().view(), ok=True, hub=True, secured=True), 200
+        out = dict(self._gifs().view(), ok=True, hub=not spoke, secured=True)
+        if standby:
+            out.update(standby=True, acting=not spoke)
+        return out, 200
 
-    def gif_operator(self, p):
-        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page)."""
-        if self._p_spoke():
+    def gif_operator(self, p, standby=False):
+        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page, or the standby hub's: its own key,
+        kept on that machine and never sent anywhere -- no key rides the replica or the hand-over)."""
+        spoke = self._p_spoke()
+        if spoke and not standby:
             return {"ok": False, "spoke": True, "error": "GIF search is set on the hub's Relay page"}, 409
-        return self._gifs().configure(p)
+        out, code = self._gifs().configure(p)
+        if code == 200 and standby:
+            out = dict(out, standby=True, acting=not spoke, hub=not spoke)
+        return out, code
 
     # ---- 0.21.88 (Kenton: "a private messaging feature ... whether online/offline. If offline, send it when back online.
     # Ability to setup group messages. These messages are not tied to any rooms."): PRIVATE MESSAGES. The hub keeps them
@@ -9556,6 +9704,7 @@ class AuthService:
                         check_code=lambda n, c: bool(hasattr(st, "personal_check") and st.personal_check(n, c)[0]),
                         has_room=lambda n: bool(hasattr(st, "personal_has") and st.personal_has(n)),
                         set_code=lambda n, c: bool(hasattr(st, "personal_reset") and st.personal_reset(n, c)),
+                        must_change=lambda n: bool(hasattr(st, "personal_must") and st.personal_must(n)),   # 0.21.91 passcode reset
                         ping=self._msg_ping,
                         alias_of=lambda nk: st.personal_alias(nk) if hasattr(st, "personal_alias") else None,          # 0.21.91
                         aliases=lambda: st.personal_aliases_public() if hasattr(st, "personal_aliases_public") else [],
@@ -16142,8 +16291,12 @@ def handle_api(handler, relay, path, set_relay_url=None):
     if path == "/api/relay/gif":   # 0.21.91: GIF search (GIPHY) -- GET the card (never the key); POST {key} | {remove} | {on}
         auth = getattr(relay, "auth", None)
         post = handler.command == "POST"
+        try:   # the fleet's standby hub keeps its own key for when it acts as the hub
+            standby = (relay.standby_view() or {}).get("role") in ("standby", "promoted") if callable(getattr(relay, "standby_view", None)) else False
+        except Exception:
+            standby = False
         if auth is not None:
-            reply(*(auth.gif_operator(_payload_of(handler) or {}) if post else auth.gif_operator_view()))
+            reply(*(auth.gif_operator(_payload_of(handler) or {}, standby=standby) if post else auth.gif_operator_view(standby=standby)))
         else:
             g = kastr_gif.for_dir(getattr(relay, "state_dir", None) or os.getcwd())
             reply(*(g.configure(_payload_of(handler) or {}) if post else (dict(g.view(), ok=True, hub=True, secured=False), 200)))

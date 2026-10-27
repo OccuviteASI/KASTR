@@ -11,6 +11,7 @@
 <script src="/assets/client.js"></script>
 <script type="importmap">{"imports":{"https://esm.sh/@moq/watch":"/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs","https://esm.sh/@moq/publish":"/assets/vendor/esm/@moq/publish@0.5.2.target-es2022.mjs"}}</script>
 <script type="module" src="/assets/asi-brand.js"></script>
+<script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the Reset My room passcode dialog (the app's People has it too) -->
 <style>
   * { box-sizing:border-box; }
   /* 0.21.0: a responsive card grid -- every panel is a card, the log spans the full width, one column
@@ -725,6 +726,26 @@
       </div>
     </section>
 
+    <!-- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): the people with a My room on this hub (names only, never a
+         code), Reset (a temporary passcode they replace) / Remove, and the last resets. This machine only; a spoke shows one line.
+         Hidden until POST /api/rooms/personal {op: "list"} answers. -->
+    <section class="panel" id="pmrPanel" hidden>
+      <h2>My rooms</h2>
+      <p class="hint" id="pmrSpoke" hidden>My rooms are kept on the hub &mdash; reset or remove one on the hub&rsquo;s Relay page (or from People, with the admin code).</p>
+      <div id="pmrBox">
+        <p class="hint" style="margin-top:0">Each person&rsquo;s My room (and the key of their messages) opens with their name and their own passcode.
+          <b>Reset</b> gives them a temporary passcode to pass on &mdash; they pick their own when they next open My room; their older messages still
+          need their old passcode. <b>Remove</b> clears the room. Admins can do the same from a person&rsquo;s menu in People.</p>
+        <span id="pmrMsg" class="hint blk"></span>
+        <div id="pmrNote" class="hint">Nobody has a My room yet.</div>
+        <div class="tblwrap"><table class="rooms" id="pmrTable">
+          <thead><tr><th>Person</th><th>Last used</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="pmrAuditBox" hidden><h3 style="font-size:12px;margin:10px 0 4px;color:var(--text-dim)">Last resets</h3><div id="pmrAudit" class="hint"></div></div>
+      </div>
+    </section>
+
     <!-- 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search through the hub (GIPHY).
          Kenton's key is pasted here on the hub and kept on the hub -- GET /api/relay/gif never answers it (its last four characters at
          most), and the field is cleared after Save. Changes from this machine only. Hidden until GET /api/relay/gif answers. -->
@@ -735,6 +756,7 @@
         <p class="hint" style="margin-top:0">A <b>GIF</b> button in Room Chat and Messages. Searches and pictures go through this hub with one
           GIPHY API key, so GIPHY never sees anyone&rsquo;s address; rated PG-13. A picked GIF is sent as a copy (in Messages, end-to-end encrypted).</p>
         <div class="warn" id="gifOff" hidden></div>
+        <p class="hint" id="gifStandby" hidden></p>
         <div class="vehadd">
           <input type="password" id="gifKey" maxlength="64" placeholder="GIPHY API key" autocomplete="off" spellcheck="false" aria-label="GIPHY API key">
           <button type="button" id="gifSave">Save</button>
@@ -3198,6 +3220,65 @@
   paintVehicles();
   setInterval(paintVehicles, 10000);
 
+  // ---- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): the hub's My rooms card. POST /api/rooms/personal
+  // {op: "list"} (this machine = the relay's operator) -> {people: [{name, used, made, mustChange}], audit: [{at, op, name, by, host,
+  // relay}], spoke?}; Reset / Remove open the shared dialog (assets/kastr-pmreset.js) -> {op: "reset", name, code?}. Every 15 s.
+  const pmrPanel = $("pmrPanel"), pmrBody = $("pmrTable").querySelector("tbody");
+  async function pmrPost(body) {
+    const res = await fetch("/api/rooms/personal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await res.json().catch(() => ({}));
+    return Object.assign({}, d, { ok: res.ok && d.ok !== false, status: res.status });
+  }
+  function pmrOpen(name, stage) {
+    if (!window.KastrPmReset) { $("pmrMsg").textContent = "The reset dialog did not load \u2014 reload this page."; return; }
+    window.KastrPmReset.open({ name, stage, post: pmrPost, onDone: () => paintPmr() });
+  }
+  async function paintPmr() {
+    if (!LOCAL) { pmrPanel.hidden = true; return; }
+    let d = null;
+    try { d = await pmrPost({ op: "list" }); } catch { pmrPanel.hidden = true; return; }
+    if (!d || !(d.ok || d.spoke)) { pmrPanel.hidden = true; return; }   // no relay here / an older KASTR
+    pmrPanel.hidden = false;
+    $("pmrSpoke").hidden = !d.spoke;
+    $("pmrBox").hidden = !!d.spoke;
+    if (d.spoke) return;
+    const rows = Array.isArray(d.people) ? d.people : [];
+    pmrBody.replaceChildren(...rows.map((r) => {
+      const tr = document.createElement("tr");
+      tr.dataset.pmr = r.name;
+      const a = document.createElement("td"); a.className = "slug";
+      const nm = document.createElement("span"); nm.textContent = r.name;
+      a.appendChild(nm);
+      if (r.mustChange) { const f = document.createElement("span"); f.className = "vflag"; f.textContent = "temporary passcode"; f.title = "Reset by an admin: they pick their own passcode when they next open My room"; a.appendChild(f); }
+      const u = document.createElement("td"); u.className = "mono";
+      u.textContent = r.used ? agoText(Date.now() / 1000 - Number(r.used)) : (r.made ? "made " + fmtWhen(r.made) : "\u2014");
+      const act = document.createElement("td"); act.className = "act";
+      for (const [label, stage, cls, tip] of [["Reset", "reset", "", "Give " + r.name + " a temporary passcode (they pick their own)"],
+                                               ["Remove", "remove", "ghost", "Remove " + r.name + "\u2019s My room (asks first)"]]) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.title = tip; b.style.marginLeft = "4px";
+        if (cls) b.className = cls;
+        b.addEventListener("click", () => pmrOpen(r.name, stage));
+        act.appendChild(b);
+      }
+      tr.append(a, u, act);
+      return tr;
+    }));
+    $("pmrNote").hidden = rows.length > 0;
+    $("pmrTable").hidden = !rows.length;
+    const au = Array.isArray(d.audit) ? d.audit : [];
+    $("pmrAuditBox").hidden = !au.length;
+    $("pmrAudit").replaceChildren(...au.slice(0, 8).map((e) => {
+      const div = document.createElement("div");
+      div.textContent = fmtWhen(e.at) + " \u2014 " + (e.by || "an admin") + (e.host ? " (" + e.host + ")" : "") + (e.op === "remove" ? " removed " : " reset the passcode of ")
+        + e.name + (e.op === "remove" ? "\u2019s My room" : "") + (e.relay ? " \u00b7 via " + e.relay : "");
+      return div;
+    }));
+  }
+  paintPmr();
+  setInterval(paintPmr, 15000);
+  window.__pmrPaint = paintPmr;   // rig
+  // ---- end 0.21.91 passcode reset ----
+
   // 0.21.84 (Kenton: "a fleet-wide library of available streams"): the hub's Stream library card + the site names on the Links card.
   // GET /api/relay/library every 10 s -> {ok, hub, on, why, root, minVersion, ver, entries: [Row + hidden], local, counts: {entries, live,
   // hidden, offline}, hubDown?, listAt? and on the hub: switch, switchAt, preflight: {ok, why}, sites: {node: {site, set, name, default}},
@@ -4045,8 +4126,12 @@
     $("gifSave").disabled = !LOCAL;
     $("gifKey").disabled = !LOCAL;
     $("gifRemove").disabled = !LOCAL || !d.set;
+    const sb = $("gifStandby");
+    sb.hidden = !d.standby;
+    sb.textContent = !d.standby ? "" : "This relay is the fleet\u2019s standby hub. Paste the same GIPHY key here: it is kept on this machine only (it never "
+      + "travels with the standby copy) and used only while this relay acts as the hub \u2014 " + (d.acting ? "it does now." : "now the main hub answers GIF searches.");
     const off = $("gifOff");
-    off.hidden = !!d.active && d.secured !== false;
+    off.hidden = (!!d.active && d.secured !== false) || (!!d.standby && !d.acting && d.secured !== false);
     off.textContent = d.secured === false
       ? "GIF search needs a secured relay (Require access codes, in Server): pages ask with their room’s member token."
       : !d.set ? "GIF search is off: paste a GIPHY API key below and press Save — the GIF button then shows in Room Chat and Messages for everyone."

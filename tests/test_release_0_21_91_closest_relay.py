@@ -234,10 +234,15 @@ class Page(unittest.TestCase):
 
     def test_hourly(self):
         p = self.p
-        self.assertIn("const relayHr = { period: 3600000, jitter: 300000, confirm: 20000,", p)
+        self.assertIn("const relayHr = { period: 3600000, jitter: 300000, timer: 0, next: 0, checks: 0, last: null, wins: null };", p)
         h = body(p, "async function relayHourlyCheck() {", 3000)
         self.assertIn("return { win: b.ms <= c.ms * 0.75 && c.ms - b.ms >= 10, cur: c, best: b };", h)
-        self.assertIn("await new Promise((r) => setTimeout(r, relayHr.confirm));   // the second probe: noise does not move anyone", h)
+        # Kenton: "only move when the other relay is clearly better in TWO consecutive hourly checks"
+        self.assertIn('if (!j2.win) { relayHr.wins = null; relayHr.last = { at: now, stay: true, ...said(j2) }; return; }', h)
+        self.assertIn("relayHr.wins = relayHr.wins && relayHr.wins.url === j2.best.url ? { url: j2.best.url, n: relayHr.wins.n + 1 } : { url: j2.best.url, n: 1 };", h)
+        self.assertIn('if (relayHr.wins.n < 2) { relayHr.last = { at: now, win: 1, waits: "the next hourly check", ...said(j2) }; return; }', h)
+        self.assertLess(h.index("relayHr.wins.n < 2"), h.index("const busy = relayBusy();"))   # a busy moment postpones the second win's move
+        self.assertNotIn("relayHr.confirm", p)
         self.assertIn('relayManual() ? "a relay picked by hand" : failed ? "moved after a relay failed (this run)"', h)
         self.assertIn('"Moved to " + relayDisp(j2.best) + " (closer: " + Math.round(j2.best.ms) + " ms vs " + Math.round(j2.cur.ms) + " ms)"', h)
         b = body(p, "function relayBusy() {", 900)

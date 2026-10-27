@@ -113,7 +113,7 @@ class ThePickerAndSections(unittest.TestCase):
         pp = block(JS, "    function paintPeople(v, M) {", "    // the people picker")
         self.assertIn('dot.className = "dot" + (!here ? "" : x.ready ? " ready" : " wait");', pp)
         self.assertIn('btn("takeover", "Take over"', pp)
-        self.assertIn('btn("nowbtn", "Now presenting: " + first(x.n)', pp)
+        self.assertIn('btn("nowbtn", "Hand over to " + first(x.n)', pp)   # Kenton: "Hand over to <first name>"
         self.assertIn('t.textContent = "Presenting now";', pp)
         self.assertIn('btn("mv", "→ Backstage"', pp)
         self.assertIn('btn("mv", "→ Presenter"', pp)
@@ -205,6 +205,66 @@ class Ownership(unittest.TestCase):
         self.assertIn("bk.orphan = true;", sb)
         es = block(JS, "  function endSeen(id, path) {", "  // 0.21.91: my requests")
         self.assertIn("if (who !== rec.own && !(rec.ps || []).some((x) => x.p === who)) return;", es)   # only its presenters say it ended
+
+
+class SlideVideosGoWithTheDeck(unittest.TestCase):
+    """Kenton: "When presenter changes, the slides should stay. The new presenter is only there for their own audio/video. So the
+    slides should continue working. Video in the slides should also still work." """
+
+    def test_the_owner_puts_them_in_the_store_encrypted(self):
+        rr = block(JS, "  async function renderRest() {", "  async function uploadNotes() {")
+        self.assertIn("uploadVideos(m).catch(", rr)   # once every slide is up
+        uv = block(JS, "  async function uploadVideos(m) {", "  async function storedVideos(m, rt) {")
+        self.assertIn('const ct = await seal(await hkdf(m.K, "video/" + id), new Uint8Array(await f.arrayBuffer()));', uv)
+        self.assertIn('"/api/pres/" + m.id + "/" + id + ".bin?token=" + m.token', uv)
+        self.assertIn("if (f.size > VID_STORE_MAX)", uv)
+        self.assertIn('await seal(await hkdf(m.K, "videos"), enc.encode(JSON.stringify(man)))', uv)   # the manifest: where each sits, auto, loop...
+        self.assertIn("if (r && r.status === 404) { old = true; break; }", uv)   # an older relay host: nothing else is tried
+        self.assertIn("vs: mine.vs || 0,", block(JS, "  function publish() {", "  function goTo("))
+
+    def test_a_new_owner_plays_them_from_where_the_room_was(self):
+        sv = block(JS, "  async function storedVideos(m, rt) {", "  function applyVidOp(")
+        self.assertIn('fetchBlob(baseFor({ base: m.base }), m.id, "videos.bin", 3, rt)', sv)   # the read token: presenters + backstage only
+        self.assertIn('await unseal(await hkdf(m.K, "video/" + id), b)', sv)
+        ad = block(JS, "  async function adopt(bk) {", "  let adoptExtra = ")
+        self.assertIn("m.resumeVids = Array.isArray(rec.vids) ? rec.vids.slice(0, 8) : [];", ad)
+        self.assertIn("if (m.vs) storedVideos(m, bk.rt).then((src) => { if (mine !== m) return; m.src = src;", ad)
+        st = block(JS, "  async function startVid(m, k, i, sv) {", "  function stopVid(")
+        self.assertIn('vidCtl(e, "seek", t); if (rv.pl) vidCtl(e, "play");', st)
+
+    def test_the_store_keeps_them_for_presenters_only(self):
+        import importlib, tempfile, io, shutil, sys
+        sys.path.insert(0, HERE)
+        kp = importlib.import_module("kastr_pres")
+        self.assertTrue(kp.BLOB_RE.match("v0.bin") and kp.BLOB_RE.match("v12.bin") and kp.BLOB_RE.match("videos.bin"))
+        self.assertFalse(kp.BLOB_RE.match("v1234.bin") or kp.BLOB_RE.match("video.bin"))
+        tmp = tempfile.mkdtemp()
+        try:
+            st = kp.Store(tmp)
+            did, tok, rtok = st.create("room", "deck", 3)
+            big = 50 * 1024 * 1024   # over a slide picture's cap, under a video's
+            code, _ = st.put(did, tok, "s0.bin", io.BytesIO(b"x" * 10), 10)
+            self.assertEqual(code, 200)
+            class Zero(io.RawIOBase):   # a long body without holding it in memory
+                def __init__(self, n): self.n = n
+                def read(self, k=-1):
+                    k = min(self.n, k if k and k > 0 else self.n); self.n -= k; return b"\0" * k
+            self.assertEqual(st.put(did, tok, "s1.bin", Zero(big), big)[0], 413)   # a slide: 40 MB at most
+            self.assertEqual(st.put(did, tok, "v0.bin", Zero(big), big)[0], 200)   # a video: up to 200 MB
+            self.assertEqual(st.put(did, tok, "v1.bin", Zero(10), kp.STORE_VIDEO_MAX + 1)[0], 413)
+            self.assertEqual(st.readable(did, "v0.bin", "")[0], False)   # a viewer: never a video file
+            self.assertEqual(st.readable(did, "v0.bin", rtok)[0], True)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class LeavingHandsOverFirst(unittest.TestCase):
+    def test_leave_and_room_switch_tell_the_presentation_first(self):
+        lm = block(PAGE, "  function leaveMeeting() {", '    document.getElementById("stopBtn").click();')
+        self.assertIn("try { window.__presLeaving?.(); } catch {}", lm)   # before the publisher stops the slide share
+        lc = block(PAGE, "  function leaveChannel() {", "    memberSubsClear();")
+        self.assertIn("try { window.__presLeaving?.(); } catch {}", lc)
+        self.assertIn('window.__presLeaving = () => { if (mine) leaveMine("left the room"); };', JS)
 
 
 class MicCameraPerPresenter(unittest.TestCase):

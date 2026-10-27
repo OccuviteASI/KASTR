@@ -295,13 +295,23 @@ def capture_size(url):
     return _fit(w, h)
 
 
-def _clocked(cap, w, h, fps=FPS):
+def _clocked(cap, w, h, fps=FPS, eof="repeat"):
     """A steady 30 fps whatever the capture does: Windows Graphics Capture sends a frame only when the window repaints,
     and fps= releases frames only as newer ones arrive -- a still page sent nothing at all (lab 2026-10-06). A black
     clock at 30 fps carries the capture on top and repeats its last frame, so a still screen, window or tab keeps
-    sending frames (and keyframes to late joiners) once its first frame is in."""
-    return ("color=c=black:s=%dx%d:r=%d[kbg];%s,format=yuv420p[kfg];[kbg][kfg]overlay=eof_action=repeat:repeatlast=1:shortest=0,setsar=1"
-            % (w, h, fps, cap))
+    sending frames (and keyframes to late joiners) once its first frame is in.
+    0.21.91 (field: "a frozen picture ... not updating when apps were opened or clicked", a whole-screen share from the KASTR
+    app): `eof` is what happens when the capture ENDS. "repeat" kept the last frame on the clock for ever -- ffmpeg stayed
+    alive, its output kept growing, nothing was logged (gfxcapture's "Capture item closed" is below -loglevel error), so a
+    monitor capture that Windows closed (a display change: resolution / scaling / a monitor switched off or unplugged / a
+    dock, a remote-desktop or graphics-driver reset) froze for good with nobody told. A screen passes eof="endall": ffmpeg
+    then ends with the capture, the pair restarts it (kastr_rtsp.Publisher._watch says why in launch.log)."""
+    return ("color=c=black:s=%dx%d:r=%d[kbg];%s,format=yuv420p[kfg];[kbg][kfg]overlay=eof_action=%s:repeatlast=1:shortest=0,setsar=1"
+            % (w, h, fps, cap, "endall" if eof == "endall" else "repeat"))
+
+
+# 0.21.91: a SCREEN capture that ends ends ffmpeg (see _clocked) -- KASTR_SCREEN_EOF_REPEAT=1 brings back the old frozen frame
+MONITOR_EOF = "repeat" if os.environ.get("KASTR_SCREEN_EOF_REPEAT") == "1" else "endall"
 
 
 def kick(url):
@@ -375,7 +385,9 @@ def capture_input(url, cursor=True, fps=None):
         else ("monitor_idx=%d" % n) if kind == "monitor" else ("hwnd=%d" % n)
     cap = ("gfxcapture=%s:max_framerate=%d:width=%d:height=%d:resize_mode=scale_aspect:capture_cursor=%d,"
            "hwdownload,format=bgra,scale=%d:%d" % (target, fps, w, h, cur, w, h))
-    return ["-f", "lavfi", "-i", _clocked(cap, w, h, fps)]
+    # 0.21.91: a monitor capture Windows closes ends ffmpeg (restarted, logged) instead of freezing for good; a window or tab
+    # keeps its last frame (a minimised or closed window is the overlay's business -- on_target_gone)
+    return ["-f", "lavfi", "-i", _clocked(cap, w, h, fps, eof=MONITOR_EOF if kind == "monitor" else "repeat")]
 
 
 def feed_loopback(ff, exclude_pid=None, log=None):

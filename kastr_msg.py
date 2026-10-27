@@ -190,7 +190,7 @@ class Messenger:
     `set_code(name, code)` -> bool (a new My room code), `ping(hosts, seq)` (tell those devices to pull)."""
 
     def __init__(self, state_dir, log=None, check_code=None, has_room=None, set_code=None, ping=None,
-                 alias_of=None, aliases=None, rename_room=None, unrename_room=None):
+                 alias_of=None, aliases=None, rename_room=None, unrename_room=None, must_change=None):
         self.dir = os.path.join(state_dir, "messages")
         self.log = log or (lambda m: None)
         # 0.21.91: renamed people -- the hub's alias store (AuthStore: old name key -> new; 90 days) and My room's own rename
@@ -201,6 +201,7 @@ class Messenger:
         self.check_code = check_code or (lambda n, c: False)
         self.has_room = has_room or (lambda n: False)
         self.set_code = set_code or (lambda n, c: False)
+        self.must_change = must_change or (lambda n: False)   # 0.21.91 passcode reset: an admin's temporary code (pick your own first)
         self.ping = ping or (lambda hosts, seq: None)
         self.lock = threading.RLock()
         self.meta_path = os.path.join(self.dir, "meta.json")
@@ -477,10 +478,13 @@ class Messenger:
 
     def op_unlock(self, p, host, now):
         """{name, code} -> the wrapped identity (this device is then one of the person's), or {setup: true} when the person has
-        none yet. A new device leaves a note for the person's other devices."""
+        none yet. A new device leaves a note for the person's other devices. 0.21.91: an admin's temporary My room code
+        answers {mustChange: true} -- the page has them pick their own code first (POST /api/rooms/personal op "change")."""
         name, err = self._code(p)
         if err:
             return err
+        if self.must_change(name):   # 0.21.91 passcode reset
+            return {"ok": False, "mustChange": True, "error": "an admin reset your My room passcode -- pick your own passcode first"}, 409
         nk = name_key(name)
         per = self.persons.get(nk)
         if not per:

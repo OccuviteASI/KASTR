@@ -5332,17 +5332,15 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       q(".pmok").disabled = true;
       const d = await personalApi({ op, name, code, access: authAccessCode || undefined });
       q(".pmok").disabled = false;
-<<<<<<< HEAD
-      if (!d.ok) { say(d.error || "Refused.", true); return; }
+      if (!d.ok) {
+        say(mode === "make" && op === "open" && d.wrong ? "A new My room needs a passcode of at least 8 characters (it also protects your messages). If you already have a My room, that isn\u2019t its passcode."
+          : (d.error || "Refused."), true);
+        return;
+      }
       if (d.mustChange) {   // 0.21.91 passcode reset: an admin's temporary passcode -- nothing is saved until they pick their own
         el.__temp = { name: d.name || name, code };
         q(".pmcode").value = ""; q(".pmcode2").value = "";
         pmPaint("change");
-=======
-      if (!d.ok) {
-        say(mode === "make" && op === "open" && d.wrong ? "A new My room needs a passcode of at least 8 characters (it also protects your messages). If you already have a My room, that isn\u2019t its passcode."
-          : (d.error || "Refused."), true);
->>>>>>> fix-short-mycode
         return;
       }
       personalSave({ slug: d.slug, name: d.name || name, code });

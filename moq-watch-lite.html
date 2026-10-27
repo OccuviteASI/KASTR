@@ -5290,7 +5290,7 @@
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
       personalSharedApply(d.shared);
-      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes
+      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "tplpres") { try { window.__tplUI?.presReady?.(it); } catch {} } else personInviteArrive(it); }   // 0.21.92: + a template's presentation is ready for me   // 0.21.79: + remote-control notes
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
       accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)

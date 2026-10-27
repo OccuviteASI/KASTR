@@ -540,6 +540,34 @@ class Decks(Base):
         kr.personal_op(self.st, {"op": "create", "name": "Carlo", "code": "carlo-code-9", "access": "pub-1"}, "10.0.0.5")
         self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Carlo", "pcode": "carlo-code-9"}, self.pub)[1], 403)
 
+    def test_apply_gets_the_presentation_ready_for_the_main_presenter(self):
+        # Kenton (2026-10-27, item 7): "Ready, with a Start button" -- the main presenter's device is told; nothing goes live here
+        o, c = self.api({"op": "save", "name": "Q3", "sections": ["layout", "pres"],
+                         "pres": {"presenters": [{"name": "Carlo Bos", "main": True}, {"name": "Kenton"}],
+                                  "backstage": [{"name": "Ada", "control": ["Carlo Bos"]}], "mode": "side", "audience": {"muted": False}}})
+        self.assertEqual(c, 200, o)
+        t = o["template"]
+        self.assertEqual(t["pres"]["mode"], "sbs")                                     # kastr-pres.js's id for Side-by-side
+        self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")   # Carlo's device is known
+        pv, c = self.api({"op": "preview", "id": t["id"]})
+        self.assertEqual(pv["presFor"]["name"], "Carlo Bos")
+        self.assertNotIn("host", pv["presFor"])
+        self.assertEqual(self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")[0]["inbox"], [])   # a preview tells nobody
+        ap, c = self.api({"op": "apply", "id": t["id"], "by": "Kenton"})
+        self.assertEqual((ap["presFor"]["me"], ap["presFor"]["told"]), (False, True))
+        box = self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")[0]["inbox"]
+        self.assertEqual([(x["kind"], x["tid"], x["room"], x["for"]) for x in box], [("tplpres", t["id"], "beta", "Carlo Bos")])
+        # the main presenter applying it himself: ready on his own page, nobody else is told
+        ap, c = self.api({"op": "apply", "id": t["id"], "by": "Carlo Bos"}, self.pub)
+        self.assertTrue(ap["presFor"]["me"])
+        self.assertNotIn("told", ap["presFor"])
+        # an edit changes roles and the start slide, never which deck the hub keeps
+        o, c = self.api({"op": "update", "id": t["id"], "pres": {"deck": {"id": "d0123456789abcdef", "name": "forged", "start": 3},
+                                                                  "presenters": [{"name": "Ada", "main": True}], "mode": "reporter"}})
+        self.assertEqual(c, 200, o)
+        self.assertIsNone(o["template"]["pres"]["deck"])
+        self.assertEqual((o["template"]["pres"]["presenters"][0]["name"], o["template"]["pres"]["mode"]), ("Ada", "reporter"))
+
     def test_decks_and_templates_move_with_the_hub(self):
         o, c = self.api({"op": "save", "name": "Moves", "sections": ["layout", "pres"], "pres": {}})
         tid = o["template"]["id"]
@@ -629,6 +657,20 @@ class Page(unittest.TestCase):
         self.assertRegex(self.js, r"available\s*=\s*\(\)\s*=>[^\n]*secured\(\)")
         self.assertNotRegex(self.js, r"console\.(log|info|warn)\([^)]*pcode")
         self.assertIn("/api/templates", self.js)
+
+    def test_presentation_wiring(self):
+        with open(os.path.join(HERE, "assets", "kastr-pres.js"), encoding="utf-8") as f:
+            pres = f.read()
+        # the template's start applies BEFORE the first publish (the room never sees slide 1 first)
+        i_pre, i_pub = pres.index("tplPreset(mine, file, opts);"), pres.index("mine.startedMs = Math.round(performance.now() - t0);\n    publish();")
+        self.assertLess(i_pre, i_pub)
+        self.assertIn("await ensureSlide(mine.idx); if (mine.idx) await postLive(mine, mine.idx);", pres)
+        self.assertIn("    tplSnap,   // 0.21.92", pres)
+        self.assertIn('it?.kind === "tplpres"', self.page)
+        # Start presenting is the only thing that starts it; the deck is loaded before (nothing published)
+        self.assertIn("window.__pres.startFromFile(R.file, {", self.js)
+        self.assertEqual(self.js.count("startFromFile("), 1)
+        self.assertIn('"Start presenting"', self.js)
 
     def test_build_has_the_module(self):
         with open(os.path.join(HERE, "build.py"), encoding="utf-8") as f:

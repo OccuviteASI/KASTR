@@ -67,7 +67,7 @@ INVITE_TTLS = (3600, 86400, 604800)
 INVITE_PEOPLE_MAX = 30
 CAMS_MAX = 64
 PRES_PEOPLE_MAX = 8
-PRES_MODES = ("content", "standout", "side", "reporter")
+PRES_MODES = ("content", "standout", "sbs", "reporter")   # kastr-pres.js MODES
 START_MODES = ("", "gallery", "spotlight")
 VIEW_MODES = ("", "gallery", "speaker")
 UNDO_KEEP_S = 600                  # an apply can be undone this long (by the device that applied it)
@@ -341,7 +341,7 @@ def clean_pres(v):
     aud = v.get("audience") if isinstance(v.get("audience"), dict) else {}
     return {"deck": deck, "presenters": presenters, "backstage": backstage,
             "audience": {"muted": aud.get("muted") is not False, "ask": aud.get("ask") is not False},
-            "mode": v.get("mode") if v.get("mode") in PRES_MODES else "standout",
+            "mode": "sbs" if v.get("mode") == "side" else v.get("mode") if v.get("mode") in PRES_MODES else "standout",
             "reporterBg": txt(v.get("reporterBg"), 60)}
 
 

@@ -567,7 +567,7 @@
 
   // ---- the presenter (authority) ------------------------------------------------------------------------------------
   let mine = null;
-  async function startFromFile(file) {
+  async function startFromFile(file, opts) {   // 0.21.92: opts -- a meeting template's start (tplPreset)
     if (!subtle) { toast("Presentations need a secure page (https or this computer's KASTR).", 6000, "warn"); return; }
     if (mine) { toast("You are already presenting " + mine.name + " — end it first.", 5000, "warn"); return; }
     const c = ctx();
@@ -601,8 +601,9 @@
     T("start", { id: mine.id, n: mine.n, kind: mine.kind });
     modeInit(mine);   // 0.21.89: Standout when my camera is on, else Content only
     audienceInit(mine);   // 0.21.91: the audience is muted while I present (until a presenter turns it off)
+    tplPreset(mine, file, opts);   // 0.21.92: a meeting template's slide / mode / backdrop / audience -- before anything is published
     view.prep("Preparing slide 1 of " + mine.n + "…");
-    try { await ensureSlide(0); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
+    try { await ensureSlide(mine.idx); if (mine.idx) await postLive(mine, mine.idx); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
     await uploadNotes();
     startShare();
     mine.startedMs = Math.round(performance.now() - t0);
@@ -612,6 +613,18 @@
     view.open({ deck: mine.id });
     if (mine.warnings.length) presNote("Some slide content is simplified: " + mine.warnings.slice(0, 2).join("; "), 20000, "warn");   // 0.21.89: never over the picker
     renderRest();
+  }
+  // 0.21.92 (Kenton: a template's presentation is "Ready, with a Start button"): the template's starting slide, presenter mode,
+  // Reporter background and "Audience muted" apply to the deck before its first publish -- the room never sees slide 1 first.
+  function tplPreset(m, file, o) {
+    m.file = file;   // kept for Save as a template (the hub's deck store keeps the deck as the file it came from)
+    if (!o || typeof o !== "object") return;
+    if (Number.isInteger(o.idx)) m.idx = clampI(o.idx, m.n);
+    if (modeOk(o.cm)) m.cm = o.cm;
+    if (rbgOk(o.rbg)) m.rbg = o.rbg;
+    if (o.am === 0 || o.am === false) m.am = 0;
+    m.tpl = String(o.tpl || "").slice(0, 16);
+    T("tpl-preset", { id: m.id, idx: m.idx, who: m.cm });
   }
   function ensureSlide(i) {   // render + encrypt + upload slide i (once; callers at the same time share one try)
     const m = mine;
@@ -3022,8 +3035,20 @@
                     decks: liveDecks().map((d) => ({ id: d.id, am: d.am, lt: d.lt, hx: d.hx, old: !!d.old })) }),
   };
 
+  // 0.21.92: what "Save as a template" keeps of the deck I run -- the file, the slide, the mode, the backdrop, the audience rule,
+  // the presenters (me = main) and backstage, and each presenter's "Can control my mic and camera" (theirs from their presCo)
+  function tplSnap() {
+    const m = mine;
+    if (!m) return null;
+    const me = myPerson();
+    const alOf = (p) => { if (p === me) return self.al; const co = coOf(p); return new Set(co && co.id === m.id && Array.isArray(co.al) ? co.al : []); };
+    const ps = m.ps.map((x) => ({ p: x.p, name: x.name || nameOfPerson(x.p), main: x.p === me }));
+    const bs = [...m.bs].map(([p, b]) => ({ p, name: b.name || nameOfPerson(p), control: ps.filter((x) => alOf(x.p).has(p)).map((x) => x.name) }));
+    return { file: m.file || null, name: m.name, kind: m.kind, n: m.n, idx: m.idx, cm: m.cm, rbg: m.rbg, am: m.am ? 1 : 0, ps, bs };
+  }
   window.__pres = {
     startFromFile,
+    tplSnap,   // 0.21.92
     end: () => endMine("api"),
     go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i); return true; },   // a viewer has no deck here: false (0.21.91: the blank stays)
     blank: (kind) => { const v = view.deck(); if (!v) return false; const nb = kind === "black" || kind === "white" ? kind : null; if (v.role === "presenter") goTo(v.idx, myPerson(), nb); else sendIntent(v.id, v.idx, nb); return true; },   // 0.21.91 rig

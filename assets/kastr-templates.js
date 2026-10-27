@@ -4,7 +4,7 @@
 //
 // A TEMPLATE is a saved snapshot of how a room is set up, in sections: Layout & view (the room board + whether it starts on the
 // spotlight or the gallery), Streams & cameras (what the board pulls in from other rooms and the library), Presentation & roles
-// (its saved shape; starting a presentation from it comes with co-presenters), Room settings (the code's DIGEST only -- the hub
+// (deck, slide, presenters + backstage, audience rule, mode: "Ready, with a Start button" for the main presenter), Room settings (the code's DIGEST only -- the hub
 // takes it from the room record, never from a page), Invites (people by name, an invite link made fresh at apply, My room's
 // people with access) and -- personal templates only -- My view (this device's own grid layouts, pins, panels, gallery).
 // WHERE: More > Templates... ("This room" and "Mine"), Room settings' Templates row, a room card's right-click "Apply template...",
@@ -342,7 +342,7 @@
     K.closePops();
     if (!saveEl) saveEl = shell("kTplSave", "Save as a template", true);
     S.slug = slug || K.room(); S.scope = scope || "room"; S.people = new Map(); S.link = 0; S.start = K.start(); S.access = true;
-    S.on = { layout: true, streams: true, pres: false, settings: true, invites: false, view: true };
+    S.on = { layout: true, streams: true, pres: !!presSnap(), settings: true, invites: false, view: true };
     S.counts = null; S.view = K.view.snap(); S.rec = K.roomRec(S.slug);
     saveEl.__title.textContent = "Save " + K.title(S.slug) + " as a template";
     paintSave();
@@ -388,8 +388,10 @@
     startSel.append(ss);
     sec("layout", c ? words("layout", c.layout) : "Counting…", startSel);
     sec("streams", c ? words("streams", c.streams) : "Counting…", null, false, "Box cameras are kept by the box and camera, library streams by their library name — so a camera that moved is still found.");
-    sec("pres", "Deck and starting slide, presenters and backstage, audience muted / Ask to speak, presenter mode", null, true, "Comes with co-presenters (0.21.91) — this version keeps the section's shape only.");
-    if (!personalRoom) sec("settings", words("settings", { locked: rec.locked, keep: rec.keep, viewLock: rec.viewLock, group: rec.groupName || rec.group }), null, false, rec.locked ? "The room’s code is kept only as the hub keeps it (a salted digest) — never the code." : "");
+    S.pres = presSnap();
+    sec("pres", S.pres ? presSnapWords(S.pres) : "Deck and starting slide, presenters and backstage, audience rules, presenter mode", null, !S.pres,
+      S.pres ? "The deck is kept on the hub (encrypted) as the file it came from; applying the template gets it ready for the main presenter, who presses Start presenting."
+        : "Present a deck here first (Share ▸ Presentation) — then its deck, slide, roles, audience rule and mode can be kept.");    if (!personalRoom) sec("settings", words("settings", { locked: rec.locked, keep: rec.keep, viewLock: rec.viewLock, group: rec.groupName || rec.group }), null, false, rec.locked ? "The room’s code is kept only as the hub keeps it (a salted digest) — never the code." : "");
     // invites: the people here now (tick to invite them next time), an invite link made fresh at apply, My room's people with access
     const inv = div("ktsx");
     const here = K.peopleHere();
@@ -433,20 +435,186 @@
     if (!name) { saveEl.__say("Give the template a name.", true); saveEl.querySelector(".ktname").focus(); return; }
     const pc = saveEl.querySelector(".ktpc");
     if (pc && pc.value) { mineCode = pc.value; mineStale = false; }
-    const sections = Object.keys(S.on).filter((k) => S.on[k] && (k !== "pres") && (k !== "view" || S.scope === "me") && (k !== "settings" || !K.isPersonal(S.slug)));
+    const sections = Object.keys(S.on).filter((k) => S.on[k] && (k !== "pres" || !!S.pres) && (k !== "view" || S.scope === "me") && (k !== "settings" || !K.isPersonal(S.slug)));
     if (!sections.length) { saveEl.__say("Pick at least one section.", true); return; }
     const body = { op: "save", scope: S.scope, name, note: saveEl.querySelector(".ktnote").value.trim(), sections, start: S.start,
       invites: { people: [...S.people.values()].filter((p) => p.on).map((p) => ({ name: p.name, host: p.host || undefined })), link: S.link ? { ttl: S.link } : null },
       view: S.scope === "me" ? S.view : undefined, withAccess: S.access };
+    const pres = sections.includes("pres") ? S.pres : null;
+    if (pres) body.pres = presFromSnap(pres);
     saveEl.__say("Saving…");
     const go = saveEl.querySelector(".ktgo"); go.disabled = true;
     const d = await call(body, S.slug, S.scope === "me");
+    if (!d.ok) { go.disabled = false; saveEl.__say(d.error || "Refused.", true); return; }
+    if (pres && pres.file) {   // the deck goes to the hub's deck store (encrypted there) as the file it came from
+      const up = await deckUpload(d.template, pres, S.slug, (pct) => saveEl.__say("Keeping the deck on the hub… " + pct + "%"));
+      if (!up.ok) { go.disabled = false; saveEl.__say("Saved, but the deck was not kept: " + (up.error || "refused") + " — try Update from this room while presenting.", true); refreshAll(); return; }
+      d.template = up.template || d.template;
+    }
     go.disabled = false;
-    if (!d.ok) { saveEl.__say(d.error || "Refused.", true); return; }
     saveEl.__close();
-    T("saved", { id: d.template?.id, scope: S.scope, sections });
+    T("saved", { id: d.template?.id, scope: S.scope, sections, deck: !!(pres && pres.file) });
     toast("Saved “" + name + "” — " + countsLine(d.template), 5000);
     refreshAll();
+  }
+
+  // ======================================================================================================================
+  // PRESENTATION & ROLES (Kenton 2026-10-27: "Ready, with a Start button"): Save keeps the deck this page presents (the file it
+  // came from, on the hub, encrypted at rest), its slide, presenters (main) and backstage with each one's "Can control my mic and
+  // camera", "Audience muted", the presenter mode and the Reporter background. Apply gets it READY for the main presenter: their
+  // page loads the deck and shows "Start presenting"; nothing goes live until they press it. Then the deck starts on its slide
+  // with its mode, backdrop and audience rule, the people who are here get their roles, and the absent ones are named.
+  // ======================================================================================================================
+  const PART = 16 * 1024 * 1024;
+  const presSnap = () => { try { const s = window.__pres?.tplSnap?.(); return s && s.n ? s : null; } catch { return null; } };
+  const MODE_WORD = { content: "Content only", standout: "Standout", sbs: "Side-by-side", reporter: "Reporter" };
+  function presSnapWords(s) {
+    const others = s.ps.filter((x) => !x.main).map((x) => x.name);
+    return "“" + s.name + "” (" + plural(s.n, "slide") + ", from slide " + (s.idx + 1) + ")" + (s.file ? "" : " — roles only (this deck was handed to you)")
+      + " · " + (others.length ? "presenters: you, " + others.join(", ") : "you present") + (s.bs.length ? " · backstage: " + s.bs.map((b) => b.name).join(", ") : "")
+      + " · " + (MODE_WORD[s.cm] || s.cm) + " · " + (s.am ? "audience muted" : "audience may talk");
+  }
+  function presFromSnap(s) {
+    return { presenters: s.ps.map((x) => ({ name: x.name, main: !!x.main })), backstage: s.bs.map((b) => ({ name: b.name, control: b.control || [] })),
+      audience: { muted: !!s.am, ask: true }, mode: s.cm, reporterBg: s.rbg || "" };
+  }
+  async function deckUpload(t, s, slug, prog) {
+    const f = s.file, size = f.size || 0;
+    const nd = await call({ op: "deckNew", id: t.id, name: s.name || f.name, kind: s.kind === "pdf" ? "pdf" : "pptx", slides: s.n, size }, slug, t.scope === "me");
+    if (!nd.ok) return nd;
+    const parts = Math.max(1, Math.ceil(size / PART));
+    for (let i = 0; i < parts; i++) {
+      const fn = "part." + String(i).padStart(3, "0");
+      let ok = false, err = "";
+      for (let tries = 0; tries < 3 && !ok; tries++) {
+        try {
+          const r = await fetch(K.base() + "/api/templates/deck?d=" + nd.deck + "&f=" + fn + "&ut=" + nd.utok, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: f.slice(i * PART, (i + 1) * PART) });
+          const j = await r.json().catch(() => ({}));
+          ok = r.ok && j.ok; err = j.error || ("HTTP " + r.status);
+        } catch (e) { err = String(e?.message || e); }
+      }
+      if (!ok) return { ok: false, error: err };
+      prog?.(Math.round(((i + 1) / parts) * 100));
+    }
+    const dd = await call({ op: "deckDone", id: t.id, deck: nd.deck, utok: nd.utok, start: s.idx || 0 }, slug, t.scope === "me");
+    T("deck-up", { ok: dd.ok, parts, size });
+    return dd;
+  }
+  // ---- ready: the main presenter's page ----------------------------------------------------------------------------------
+  let readyEl = null;
+  const R = { tid: "", room: "", t: null, file: null, busy: false, err: "", by: "" };
+  function readyBuild() {
+    const el = document.createElement("div");
+    el.id = "kTplReady"; el.hidden = true; el.setAttribute("role", "status");
+    el.innerHTML = '<div class="ktr-t"><b class="ktr-n"></b><span class="ktr-d"></span><span class="ktr-e"></span></div>'
+      + '<div class="ktr-code" hidden><input type="text" class="masked" placeholder="My room code" aria-label="My room code" autocomplete="off"><button type="button" class="ktr-load">Load</button></div>'
+      + '<button type="button" class="ktr-go">Start presenting</button><button type="button" class="ghost ktr-no" title="Not now">Not now</button>';
+    document.body.appendChild(el);
+    el.querySelector(".ktr-no").onclick = () => { el.hidden = true; R.file = null; T("ready-dismissed", {}); };
+    el.querySelector(".ktr-go").onclick = () => presStart();
+    el.querySelector(".ktr-load").onclick = () => { const c = el.querySelector(".ktr-code input").value; if (c) { mineCode = c; mineStale = false; } readyLoad(); };
+    return el;
+  }
+  css.textContent += `
+  #kTplReady { position:fixed; left:50%; bottom:84px; transform:translateX(-50%); z-index:88; display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    max-width:calc(100vw - 24px); background:var(--surface); color:var(--text); border:1px solid var(--asi-blue); border-radius:12px; padding:10px 12px 10px 16px;
+    box-shadow:0 12px 32px rgba(0,0,0,.5); font-size:13px; }
+  #kTplReady[hidden] { display:none; }
+  #kTplReady .ktr-t { display:flex; flex-direction:column; gap:2px; min-width:200px; max-width:520px; flex:1; }
+  #kTplReady .ktr-d { color:var(--text-dim); font-size:12px; line-height:1.45; }
+  #kTplReady .ktr-e { color:var(--asi-amber); font-size:12px; }
+  #kTplReady .ktr-e:empty { display:none; }
+  #kTplReady .ktr-code { display:flex; gap:6px; }
+  #kTplReady .ktr-code[hidden] { display:none; }
+  #kTplReady input { background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:6px; padding:5px 8px; font:inherit; width:150px; }
+  #kTplReady input.masked { -webkit-text-security:disc; }
+  #kTplReady button { height:32px; padding:0 14px; }
+  #kTplReady .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); }
+  @media (max-width:640px) { #kTplReady { bottom:72px; left:12px; right:12px; transform:none; } }`;
+  function readyPaint() {
+    if (!readyEl) return;
+    const t = R.t, p = t?.pres || {};
+    const main = (p.presenters || []).find((x) => x.main);
+    const here = new Set((window.__presPeople?.()?.people || []).map((x) => String(x.name || "").trim().toLowerCase()));
+    here.add(String(K.me() || "").trim().toLowerCase());
+    const others = (p.presenters || []).filter((x) => !x.main).map((x) => x.name), bs = (p.backstage || []).map((b) => b.name);
+    const away = [...others, ...bs].filter((n) => !here.has(String(n).trim().toLowerCase()));
+    readyEl.querySelector(".ktr-n").textContent = "“" + (t?.name || "Template") + "” is ready" + (main ? " for " + main.name : "");
+    readyEl.querySelector(".ktr-d").textContent = (p.deck ? "“" + p.deck.name + "” from slide " + ((p.deck.start || 0) + 1) : "No deck") + " · " + (MODE_WORD[p.mode] || p.mode || "Standout")
+      + " · " + (p.audience?.muted === false ? "audience may talk" : "audience muted") + (others.length ? " · with " + others.join(", ") : "") + (bs.length ? " · backstage: " + bs.join(", ") : "")
+      + ". Nothing is shown until you press Start presenting.";
+    readyEl.querySelector(".ktr-e").textContent = R.err || (away.length ? "Not here yet: " + away.join(", ") + " — they get their role when they join; or add them later." : "");
+    const go = readyEl.querySelector(".ktr-go");
+    go.disabled = R.busy || !R.file;
+    go.textContent = R.busy ? "Starting…" : !R.file ? "Loading the deck…" : "Start presenting";
+  }
+  async function readyShow(tid, room, by) {
+    if (!readyEl) readyEl = readyBuild();
+    R.tid = tid; R.room = room; R.t = null; R.file = null; R.err = ""; R.busy = false; R.by = by || "";
+    readyEl.hidden = false;
+    readyEl.querySelector(".ktr-code").hidden = true;
+    readyPaint();
+    const g = await call({ op: "get", id: tid }, room, true);
+    if (!g.ok) { R.err = g.error || "Could not read the template."; readyPaint(); return; }
+    R.t = g.template;
+    T("ready", { tid, room });
+    readyPaint();
+    await readyLoad();
+  }
+  async function readyLoad() {   // the deck from the hub's store -> a File in this page (nothing is published yet)
+    const t = R.t;
+    if (!t || !t.pres?.deck) { R.err = t ? "This template keeps no deck — share one with Share ▸ Presentation." : R.err; readyPaint(); return; }
+    R.err = ""; readyPaint();
+    const t0 = performance.now();
+    const o = await call({ op: "deckOpen", id: t.id }, R.room, true);
+    if (!o.ok) {
+      R.err = o.error || "The deck did not open.";
+      if (o.locked || o.wrong || o.named === false) readyEl.querySelector(".ktr-code").hidden = false;
+      readyPaint(); return;
+    }
+    readyEl.querySelector(".ktr-code").hidden = true;
+    const blobs = [];
+    for (const fn of (o.files || []).filter((f) => /^part\.\d{3}$/.test(f)).sort()) {
+      const r = await fetch(K.base() + "/api/templates/deck?d=" + o.deck.id + "&f=" + fn + "&rt=" + encodeURIComponent(o.rt), { cache: "no-store" }).catch(() => null);
+      if (!r || !r.ok) { R.err = "The deck could not be loaded from the hub (" + (r ? r.status : "no answer") + ")."; readyPaint(); return; }
+      blobs.push(await r.blob());
+    }
+    const nm = String(o.deck.name || "deck") + (/\.(pptx|pdf|ppsx|potx|pptm|ppsm)$/i.test(o.deck.name || "") ? "" : (o.deck.kind === "pdf" ? ".pdf" : ".pptx"));
+    R.file = new File(blobs, nm, { type: o.deck.kind === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
+    T("ready-loaded", { size: R.file.size, ms: Math.round(performance.now() - t0) });
+    readyPaint();
+  }
+  async function presStart() {
+    const t = R.t, p = t?.pres || {};
+    if (!R.file || R.busy || !window.__pres?.startFromFile) return;
+    R.busy = true; readyPaint();
+    const t0 = performance.now();
+    const deck = p.deck || {};
+    await window.__pres.startFromFile(R.file, { idx: Number(deck.start) || 0, cm: p.mode, rbg: p.reporterBg, am: p.audience?.muted === false ? 0 : 1, tpl: t.id });
+    const st = window.__pres.state?.();
+    if (!st?.mine) { R.busy = false; R.err = "The presentation did not start."; readyPaint(); return; }
+    // the people who are here get their roles (by name); "Can control my mic and camera" -- mine, as the template says
+    const people = (window.__presPeople?.()?.people || []).map((x) => ({ pk: x.host + "/" + (x.op || x.peer), name: String(x.name || "") }));
+    const pkOf = (n) => people.find((x) => x.name.trim().toLowerCase() === String(n || "").trim().toLowerCase())?.pk || "";
+    const me = String(K.me() || "").trim().toLowerCase();
+    const missing = [], refused = [];
+    for (const x of (p.presenters || []).filter((x) => !x.main)) { const pk = pkOf(x.name); if (!pk) missing.push(x.name); else if (!window.__pres.role(pk, "p")) refused.push(x.name); }
+    for (const b of p.backstage || []) {
+      const pk = pkOf(b.name);
+      if (!pk) { missing.push(b.name); continue; }
+      if (!window.__pres.role(pk, "b")) { refused.push(b.name); continue; }
+      window.__pres.allow(pk, (b.control || []).some((c) => String(c).trim().toLowerCase() === me));
+    }
+    R.busy = false; readyEl.hidden = true; R.file = null;
+    T("pres-started", { ms: Math.round(performance.now() - t0), missing: missing.length, refused: refused.length });
+    window.__tplPres = { tid: t.id, at: Date.now(), missing, refused, ms: Math.round(performance.now() - t0) };   // rig
+    toast("Presenting “" + (deck.name || "the deck") + "” from slide " + ((Number(deck.start) || 0) + 1)
+      + (missing.length ? " — not here: " + missing.join(", ") + " (add them from the presenter view when they come)" : "")
+      + (refused.length ? " — " + refused.join(", ") + " could not take a role (an older KASTR?)" : ""), 9000, missing.length || refused.length ? "warn" : "event");
+  }
+  function presReady(it) {   // a template's presentation is ready for me (the hub told my device on my people beat)
+    if (!it || !it.tid || it.room !== K.room()) return;
+    readyShow(String(it.tid), String(it.room), String(it.by || ""));
   }
 
   // ======================================================================================================================
@@ -494,6 +662,7 @@
     if (n("missing")) parts.push(plural(n("missing"), "camera") + " not found");
     if (n("moved")) parts.push(plural(n("moved"), "camera") + " moved");
     if (d.view) parts.push("your own view on this device");
+    if (d.pres && d.presFor) parts.push("gets “" + (d.pres.deck?.name || "the presentation") + "” ready for " + (d.presFor.me ? "you" : d.presFor.name) + " (nothing is shown until Start presenting)");
     return parts.join(", ") || "No changes — " + K.title(d.room) + " already looks like this.";
   }
   function camRow(x) {
@@ -576,7 +745,7 @@
       }
       const cams = (d.cams || []).filter((x) => x.status !== "left out" || A.choices[x.path]);
       if (cams.length) { const box = div("ktcams"); box.append(div("lbl", "Cameras and streams")); for (const x of cams.slice(0, 40)) box.append(camRow(x)); pv.append(box); }
-      if (d.pres) pv.append(div("hint", "Presentation & roles: " + esc(words("pres", { deck: !!d.pres.deck, slides: d.pres.deck?.slides, presenters: (d.pres.presenters || []).length, backstage: (d.pres.backstage || []).length, mode: d.pres.mode })) + " — starting a presentation from a template comes with co-presenters."));
+      if (d.pres) pv.append(div("hint", "Presentation & roles: " + esc(words("pres", { deck: !!d.pres.deck, slides: d.pres.deck?.slides, presenters: (d.pres.presenters || []).length, backstage: (d.pres.backstage || []).length, mode: MODE_WORD[d.pres.mode] || d.pres.mode })) + (d.presFor ? " — ready for " + (d.presFor.me ? "you" : d.presFor.name) + ": the deck loads and " + (d.presFor.me ? "you see" : "they see") + " Start presenting; nothing is shown until it is pressed." : ".")));
       if ((d.notes || []).length) {
         const nb = div("ktnotes", '<span class="lbl">Skipped</span>');
         for (const n of d.notes) nb.append(div("", "<b>" + esc(n.what) + "</b> — " + esc(n.why)));
@@ -613,6 +782,11 @@
       const link = await K.inviteLink(d.link.token, slug).catch(() => "");
       if (link) toast("A fresh " + (TTL[d.link.ttl] || "") + " invite link for " + K.title(slug) + " is ready.", 20000, "event", { label: "Copy link", fn: () => { try { navigator.clipboard.writeText(link); toast("Invite link copied", 2500); } catch {} } });
     }
+    if (d.pres && d.presFor) {   // "Ready, with a Start button": here when I am the main presenter, else on their page
+      window.__tplLast.presFor = { name: d.presFor.name, me: !!d.presFor.me, told: !!d.presFor.told };
+      if (d.presFor.me && slug === K.room()) readyShow(t.id, slug, K.me());
+      else if (!d.presFor.told) toast("“" + t.name + "”: " + d.presFor.name + " is not on KASTR right now — the presentation is ready for them when they apply it again.", 8000, "warn");
+    }
     refreshAll();
   }
   async function undo(uid, slug, name) {
@@ -634,6 +808,7 @@
     E.lay = t.layout ? JSON.parse(JSON.stringify(t.layout)) : null;
     E.inv = t.invites ? JSON.parse(JSON.stringify(t.invites)) : null;
     E.set = t.settings ? { ...t.settings } : null;
+    E.pres = t.pres ? JSON.parse(JSON.stringify(t.pres)) : null;
     paintEdit();
     editEl.__open();
   }
@@ -680,6 +855,49 @@
         items.append(ls);
         sm.append(items);
       }
+      if (k === "pres" && E.pres) {   // roles: who presents (main first), who is backstage; the mode, the audience rule, the start slide
+        const P = E.pres, items = div("ktitems");
+        P.presenters = P.presenters || []; P.backstage = P.backstage || [];
+        for (const x of P.presenters) {
+          const c = div("ktchip on", esc((x.main ? "★ " : "") + x.name) + ' <span class="x" aria-hidden="true">×</span>');
+          c.title = x.main ? "The main presenter (sees Start presenting)" : "A presenter — click to remove";
+          c.onclick = () => { P.presenters = P.presenters.filter((y) => y !== x); if (x.main && P.presenters[0]) P.presenters[0].main = true; for (const b of P.backstage) b.control = (b.control || []).filter((n) => n !== x.name); paintEdit(); };
+          items.append(c);
+        }
+        for (const b of P.backstage) {
+          const c = div("ktchip", esc("Backstage: " + b.name) + ' <span class="x" aria-hidden="true">×</span>');
+          c.onclick = () => { P.backstage = P.backstage.filter((y) => y !== b); paintEdit(); };
+          items.append(c);
+        }
+        const addP = (as) => async (e) => {
+          const all = await K.people().catch(() => []);
+          const have = new Set([...P.presenters, ...P.backstage].map((x) => String(x.name).toLowerCase()));
+          const list = all.filter((x) => !have.has(String(x.name).toLowerCase())).slice(0, 40).map((x) => ({ value: x.name, label: x.name }));
+          if (!list.length) return;
+          K.menu(e.currentTarget, list, (v) => {
+            if (as === "p") { P.presenters.push({ name: v, main: !P.presenters.length }); for (const b of P.backstage) (b.control = b.control || []).push(v); }
+            else P.backstage.push({ name: v, control: P.presenters.map((x) => x.name) });
+            paintEdit();
+          });
+        };
+        const ap = btn("Add presenter…", "ghost"), ab = btn("Add backstage…", "ghost");
+        for (const b of [ap, ab]) { b.style.height = "24px"; b.style.fontSize = "11.5px"; }
+        ap.onclick = addP("p"); ab.onclick = addP("b");
+        items.append(ap, ab);
+        const ms = document.createElement("select");
+        ms.innerHTML = Object.entries(MODE_WORD).map(([v, w]) => '<option value="' + v + '">' + esc(w) + '</option>').join("");
+        ms.value = P.mode || "standout"; ms.onchange = () => { P.mode = ms.value; };
+        const am = div("ktchip" + (P.audience?.muted !== false ? " on" : ""), "Audience muted");
+        am.onclick = () => { P.audience = { ...(P.audience || {}), muted: P.audience?.muted === false }; paintEdit(); };
+        items.append(ms, am);
+        if (P.deck) {
+          const si = document.createElement("input"); si.type = "number"; si.min = "1"; si.max = String(P.deck.slides || 1); si.value = String((P.deck.start || 0) + 1);
+          si.style.width = "64px"; si.title = "Start on slide"; si.setAttribute("aria-label", "Start on slide");
+          si.onchange = () => { P.deck.start = Math.max(0, Math.min((P.deck.slides || 1) - 1, (Number(si.value) || 1) - 1)); };
+          items.append(div("hint", "Start on slide"), si);
+        }
+        sm.append(items);
+      }
       if (k === "settings" && E.set) {
         const items = div("ktitems");
         const tog = (key, text, onlyOff) => { const c = div("ktchip" + (E.set[key] ? " on" : ""), esc(text)); c.onclick = () => { if (onlyOff && !E.set[key]) { toast("A lock is taken from the room itself — use “Update from this room” after locking it.", 4500); return; } E.set[key] = !E.set[key]; paintEdit(); }; items.append(c); };
@@ -700,6 +918,7 @@
     if (E.lay) body.layout = E.lay;
     if (E.inv) body.invites = E.inv;
     if (E.set) body.settings = { locked: !!E.set.locked, keep: !!E.set.keep, viewLock: !!E.set.viewLock };
+    if (E.pres) body.pres = E.pres;
     editEl.__say("Saving…");
     const d = await call(body, E.slug, t.scope === "me");
     if (!d.ok) { editEl.__say(d.error || "Refused.", true); return; }
@@ -772,6 +991,7 @@
   }
   window.__tplUI = {
     open: openList, save: openSave, apply: openApply, edit: openEdit, roomSettings, myRoom, canApplyTo, applyTo, available,
+    presReady, ready: readyShow, presStart, presState: () => ({ tid: R.tid, loaded: !!R.file, size: R.file ? R.file.size : 0, busy: R.busy, err: R.err, shown: !!readyEl && !readyEl.hidden }),   // 0.21.92: presentation & roles
     state: () => ({ list: L.d ? { ok: L.d.ok, n: (L.d.templates || []).length, mine: L.d.mine ? L.d.mine.length : null, can: L.d.can } : null,
       apply: A.d ? { ok: A.d.ok, changes: A.d.changes, notes: A.d.notes, cams: A.d.cams, settings: A.d.settings, invites: A.d.invites } : null, trace: trace.slice(-40) }),
   };

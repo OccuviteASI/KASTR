@@ -9914,6 +9914,10 @@ class AuthService:
                     if s == "view" and t.get("scope") != "me":
                         continue
                     nt[s] = p[s]
+                    if s == "pres":   # the deck is the hub's record -- a page changes only where it starts
+                        old_deck = (t.get("pres") or {}).get("deck") if isinstance(t.get("pres"), dict) else None
+                        nd = p[s].get("deck") if isinstance(p[s].get("deck"), dict) else {}
+                        nt[s] = dict(p[s], deck=dict(old_deck, start=nd.get("start", old_deck.get("start", 0))) if old_deck else None)
                     nt.setdefault("on", {})[s] = nt.get("on", {}).get(s, True)
             if isinstance(p.get("settings"), dict) and "settings" in nt:   # flags only -- the digest is the room's, never a page's
                 st = dict(nt["settings"])
@@ -10195,11 +10199,28 @@ class AuthService:
         out["invites"] = {"people": [x["name"] for x in inv_plan["people"]], "link": inv_plan["link"],
                           "access": [x.get("name") or x["host"] for x in inv_plan["access"]]}
         if on.get("pres") and t.get("pres"):
-            out["pres"] = t["pres"]   # phase 1: the page shows it (and, once co-presenters land, offers to start with it)
+            # Kenton (2026-10-27): "Ready, with a Start button" -- the MAIN presenter's page loads the deck and shows Start
+            # presenting; nothing goes live until they press it. Who that is, and whether KASTR knows their device.
+            out["pres"] = t["pres"]
+            main = next((x for x in t["pres"].get("presenters") or [] if x.get("main")), None)
+            if main:
+                mk = T.name_key(main.get("name"))
+                mh = ""
+                try:
+                    for x in self._p_seen_local(now):   # newest first: the name's latest device
+                        if T.name_key(x.get("name")) == mk:
+                            mh = x["host"]
+                            break
+                except Exception:
+                    pass
+                me = T.name_key(v.get("by")) == mk or mh == v["host"]
+                out["presFor"] = {"name": main.get("name") or "", "me": bool(me), "known": bool(mh) or bool(me), "host": "" if me else mh}
         if on.get("view") and t.get("view"):
             out["view"] = t["view"]   # My view: the applying page applies it on its own device
         out["notes"] = notes
         if dry:
+            if isinstance(out.get("presFor"), dict):
+                out["presFor"].pop("host", None)   # which device is the hub's to know (an apply tells it)
             return out, 200
         # ---- apply
         before = board_now
@@ -10269,6 +10290,25 @@ class AuthService:
             else:
                 note("invites", "Access for %s" % (x.get("name") or x["host"]), obj.get("error") or "refused")
         out["sent"] = sent
+        pf = out.pop("presFor", None) if isinstance(out.get("presFor"), dict) else None
+        if pf is not None:
+            host = pf.pop("host", "")
+            if host and not pf["me"]:   # the main presenter is elsewhere: their page hears it on its people beat (spokes: the long-poll)
+                item = {"id": os.urandom(6).hex(), "kind": "tplpres", "room": room, "tid": t["id"], "name": t["name"], "by": clean_label(by, 40),
+                        "for": pf["name"], "at": now}
+                pl = self._pl()
+                with self.lock:
+                    self._p_inbox_put_locked(host, item)
+                    pl.seq += 1
+                    pl.out.append({"seq": pl.seq, "at": now, "to": host, "item": item})
+                    pl.out = pl.out[-PINBOX_KEEP:]
+                self._p_thread()
+                try:
+                    self.bans.nudge()
+                except Exception:
+                    pass
+                pf["told"] = True
+            out["presFor"] = pf
         out["undo"] = self._tpl_undo().put({"room": room, "host": v["host"], "before": before, "after": after, "settings": st_undo,
                                             "links": links, "access": access, "tid": t["id"]})
         out["done"] = {"layout": done, "settings": len(st_undo), "invites": len(sent), "link": bool(out.get("link")),

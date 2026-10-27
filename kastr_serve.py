@@ -751,8 +751,8 @@ def media_shutdown():
 # and the session secrets (access/code inside kastr.lastjoin, kastr.auth*)
 # never stored -- the page strips them as well; this is belt and braces.
 PREFS_ALLOW = re.compile(r"^kastr\.(lastjoin|rtsp\.|grid\.|profile$|sidebar|mic\.|volume$|relay\.history$"
-                         r"|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.|camfx$|toasts\.|rooms\.groups\."
-                         r"|theme$|theme\.custom$|accent$|selfmirror$)")   # 0.21.72: + theme, custom colours, accent
+                         r"|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.|camfx$|toasts\.|rooms\.groups\.|view\.hideMine$"
+                         r"|theme$|theme\.custom$|accent$|selfmirror$)")   # 0.21.72: + theme, custom colours, accent; 0.21.91: + view.hideMine (Hide my shares)
 PREFS_DENY = re.compile(r"^kastr\.auth")
 PREFS_SECRET_FIELDS = ("access", "code")
 PREFS_VALUE_MAX = 64 * 1024
@@ -3320,7 +3320,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                 _ob = json.loads(_obody or b"{}")
                             except ValueError:
                                 _ob = {}
-                            obj, code = kastr_relay.xshare_open("POST", _ob)
+                            try:   # 0.21.91: this relay judges deleted rooms only when it owns its rooms (not a spoke)
+                                _judge = not (relay_srv.hub_rooms_call is not None and relay_srv._hub_minter_url()
+                                              and relay_srv._cluster_raw().get("hub") is not True)
+                            except Exception:
+                                _judge = True
+                            obj, code = kastr_relay.xshare_open("POST", _ob, store=getattr(relay_srv, "store", None), judge=_judge)
                         return self._json_cors(code, obj)
                     if path0 == "/api/rooms/board":   # 0.21.63: an OPEN relay keeps room boards too (no tokens)
                         if method == "GET":

@@ -10563,6 +10563,20 @@
       return d;
     },
     profile: (done) => openProfile(false, done),
+    // 0.21.91: a rename moved My room and messages to a new name -- this device's My room record and the name it shows follow
+    savePersonalName: (name) => { const p = personalGet(); if (p && name) { personalSave({ ...p, name }); try { personalCardPaint(); } catch {} } },
+    setProfileName: (name) => {
+      const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return "";
+      const p = { ...(profile || {}), first: parts[0].slice(0, 20), last: parts.slice(1).join(" ").slice(0, 20) };
+      saveProfile(p);
+      const n = profileName(p);
+      const jn = document.getElementById("joinName"); if (jn) jn.value = n;
+      try { syncOperator(n); } catch {}
+      fetch("/api/operator", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n }) }).catch(() => {});
+      try { hiMine(); paintPersonGroups(); applyState(); } catch {}
+      return n;
+    },
     busyUI: () => {
       const shown = (id) => { const e = document.getElementById(id); return !!e && !e.hidden; };
       return joinState !== "joined" || shown("joinGate") || shown("kConfirm") || shown("profilePop")
@@ -17344,6 +17358,7 @@
   profCanvas.addEventListener("pointerup", () => { pe.drag = null; });
   profCanvas.addEventListener("pointercancel", () => { pe.drag = null; });
   document.getElementById("profSave").addEventListener("click", () => {
+    const nameBefore = profile ? profileName(profile) : "";   // 0.21.91: Messages offers to move My room to a new name
     const norm = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 20);
     const p = { first: norm(document.getElementById("profFirst").value), last: norm(document.getElementById("profLast").value), avatar: profExport() };
     if (profHc.get()) p.color = profHc.get();   // 0.21.61: the colour others see
@@ -17360,6 +17375,7 @@
     applyState();
     window.__toast?.("Profile saved \u2014 " + name, 3000, { level: "info" });
     closeProfile();
+    if (name !== nameBefore) { try { window.__msg?.nameChanged?.(nameBefore, name); } catch {} }   // 0.21.91: "Rename your My room and messages?"
   });
 
   // ---- 0.8.8: Files popover (room files + relay-host listing) --------------

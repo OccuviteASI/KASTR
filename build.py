@@ -950,6 +950,7 @@ def main():
         "--hidden-import", "kastr_pres",   # 0.21.84 (prototype): Share > Presentation -- .pptx scenes + the encrypted slide store (lazy import)
         "--hidden-import", "kastr_msg",   # 0.21.88: private messages -- the hub's end-to-end encrypted store
         "--hidden-import", "kastr_access",   # 0.21.89: Ask for access -- the hub's desk of asks, answers and one-visit grants
+        "--hidden-import", "kastr_templates",   # 0.21.92: meeting templates -- the hub's store, its encrypted deck store, the planner
         "--hidden-import", "kastr_mdns", "--hidden-import", "kastr_tabs", "--hidden-import", "kastr_micmute", "--hidden-import", "kastr_lock",   # 0.21.41: mic mute, session lock   # 0.21.22: relay discovery, browser tabs (lazy imports)
         "--noconfirm", "--clean", "--onefile", "--noconsole",
         "--name", NAME,

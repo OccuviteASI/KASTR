@@ -776,7 +776,8 @@
     const n = (d.done?.layout || 0) + (d.done?.settings || 0) + (d.done?.invites || 0) + (d.done?.access || 0) + (d.done?.link ? 1 : 0);
     const skipped = (d.notes || []).length;
     window.__tplLast = { undo: d.undo, room: slug, id: t.id, at: Date.now(), done: d.done, sent: d.sent || [], link: !!d.link, notes: (d.notes || []).length };   // rig (no token)
-    toast("Applied “" + t.name + "” to " + K.title(slug) + " — " + plural(n, "change") + (mine ? " + your view" : "") + (skipped ? ", " + skipped + " skipped" : ""), 20000, skipped ? "warn" : "event",
+    const presWord = d.pres && d.presFor ? (n ? ", " : "") + "presentation ready for " + (d.presFor.me ? "you" : d.presFor.name) : "";
+    toast("Applied “" + t.name + "” to " + K.title(slug) + " — " + (n || !presWord ? plural(n, "change") : "") + presWord + (mine ? " + your view" : "") + (skipped ? ", " + skipped + " skipped" : ""), 20000, skipped ? "warn" : "event",
       d.undo ? { label: "Undo", fn: () => undo(d.undo, slug, t.name) } : undefined);
     if (d.link?.token) {
       const link = await K.inviteLink(d.link.token, slug).catch(() => "");

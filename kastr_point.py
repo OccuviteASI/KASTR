@@ -245,7 +245,7 @@ class WinRipples:
 
     def start(self):
         import kastr_overlay as ko
-        if not ko.AVAILABLE:
+        if not ko.AVAILABLE or ko.under_tests():   # 0.21.91: never a real window on the desktop from a test run
             return False
         self._thread = threading.Thread(target=self._run, name="kastr-point-ripples", daemon=True)
         self._thread.start()
@@ -480,6 +480,9 @@ class X11Ripples:
         self.drawn = 0
 
     def start(self):
+        import kastr_overlay as ko
+        if ko.under_tests():   # 0.21.91: never a real window on the desktop from a test run
+            return False
         self._th = threading.Thread(target=self._run, name="kastr-point-x11-ripples", daemon=True)
         self._th.start()
         return True

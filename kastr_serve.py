@@ -149,6 +149,56 @@ def window_geom_ok(geom):
     return x > -30000 and y > -30000 and 320 <= w <= 20000 and 240 <= h <= 20000
 
 
+def native_kastr_zoomed(geom):
+    """0.21.91 (Kenton: "The KASTR window isn't starting as maximized, just as expanded most of the way"): the page guesses
+    "maximized" from its size against the screen, which missed at his 200 % scale, so a maximized window was saved as a large
+    plain one and came back "expanded most of the way". On Windows, ask the window itself: a visible KASTR browser window that
+    IS maximized (IsZoomed) and has the reported size is maximized, whatever the guess said."""
+    if sys.platform != "win32" or not isinstance(geom, dict):
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+        u = ctypes.windll.user32
+        try:
+            old = u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))   # per-monitor v2 on this thread: physical pixels
+        except Exception:
+            old = None
+        gw, gh = float(geom.get("w") or 0), float(geom.get("h") or 0)
+        hit = []
+        proc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+        def cb(h, _):
+            try:
+                if not u.IsWindowVisible(h) or not u.IsZoomed(h):
+                    return True
+                cls = ctypes.create_unicode_buffer(64)
+                u.GetClassNameW(h, cls, 64)
+                if not cls.value.startswith("Chrome_WidgetWin"):
+                    return True
+                t = ctypes.create_unicode_buffer(256)
+                u.GetWindowTextW(h, t, 256)
+                if "KASTR" not in t.value:
+                    return True
+                r = wt.RECT()
+                u.GetWindowRect(h, ctypes.byref(r))
+                sc = (u.GetDpiForWindow(h) or 96) / 96.0
+                if abs((r.right - r.left) / sc - gw) <= 40 and abs((r.bottom - r.top) / sc - gh) <= 40:
+                    hit.append(h)
+            except Exception:
+                pass
+            return True
+        u.EnumWindows(proc(cb), 0)
+        try:
+            if old is not None:
+                u.SetThreadDpiAwarenessContext(ctypes.c_void_p(old))
+        except Exception:
+            pass
+        return bool(hit)
+    except Exception:
+        return False
+
+
 def invite_parse(url):
     """kastr://join?i=..&room=..&relay=.. (or a /join#i=.. link, or ?invite=) -> {token, room, relay} or None."""
     s = str(url or "").strip()[:2048]
@@ -1977,6 +2027,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
+            if geom.get("maximized") is not True and native_kastr_zoomed(geom):   # 0.21.91: the window says it is maximized
+                geom["maximized"] = True
             if window_file:
                 try:
                     # Whole-file replace: a half-written geometry would be

@@ -3019,6 +3019,8 @@
     <button class="opt phoneonly" id="optFiles" type="button"><span class="oi">&#128462;</span>Files&hellip;</button>
     <div class="sep"></div>
     <button class="opt" id="optProfile" type="button"><span class="oi">&#128100;</span>Profile&hellip;</button>
+    <!-- 0.21.91: Leave never logs out -- signing out (another access code, another fleet's relay) is here -->
+    <button class="opt" id="optSignOut" type="button" hidden title="Back to the Join room page; this computer forgets the access code it keeps for the next launch"><span class="oi">&#8617;</span>Sign out&hellip;</button>
     <!-- 0.21.61 (Kenton: "Let people choose light/dark mode or the system default") -->
     <!-- 0.21.72 (Kenton: "I would like more theme options other than light/dark/system"): named themes, High contrast, Custom -->
     <div class="opt themerow" role="radiogroup" aria-label="Theme"><span class="oi">&#9680;</span><span class="tl">Theme</span>
@@ -16776,6 +16778,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   document.getElementById("optMyRoom").addEventListener("click", () => personalDialog());   // 0.21.75
   document.getElementById("optFiles").addEventListener("click", () => { closeAllPops(); filesPop.hidden = false; paintFilesPop(); placePop(filesPop, filesBtn); filesBtn.classList.add("grid-on"); });
   document.getElementById("optProfile").addEventListener("click", () => openProfile(false));
+  // 0.21.91: More > Sign out... (a person's KASTR, while in a room): the Join room page, the access code forgotten here
+  setInterval(() => { const b = document.getElementById("optSignOut"); if (b) { let on = false; try { on = joinState === "joined" && mainPerson(); } catch {} b.hidden = !on; } }, 1000);
+  document.getElementById("optSignOut").addEventListener("click", async () => {
+    closeAllPops();
+    const relay = relayNameOf(urlInput.value.trim()) || relayLabel(urlInput.value.trim());
+    if (!(await kastrConfirm({ title: "Sign out", message: "Sign out of " + relay + "?",
+      detail: "You leave the room and see the Join room page. This computer forgets the access code it keeps for the next launch \u2014 you type it again (or another one).", ok: "Sign out" }))) return;
+    try { leaveMeeting(); } catch {}
+    try { localStorage.removeItem("kastr.lastjoin"); } catch {}
+    authAccessCode = "";
+    try { joinEls.joinAccess.value = ""; joinEls.joinPwd.value = ""; } catch {}
+    log("Signed out of " + relay + " (the access code is forgotten on this computer)");
+  });
 
   function paintRoomInfo() {
     const body = document.getElementById("roomInfoBody");

@@ -134,6 +134,14 @@ class Page(unittest.TestCase):
         self.assertIn("try { personalLeaveSend(false); } catch {}   // 0.21.78: the owner leaving My room", lm)
         self.assertIn("try { leaveMeeting(); } catch {}", body(p, "function personalEnded(room, info) {", 1200))   # End their session -> the ended screen
 
+    def test_sign_out_is_in_more(self):
+        p = self.p
+        self.assertIn('<button class="opt" id="optSignOut" type="button" hidden', p)
+        s = body(p, 'document.getElementById("optSignOut").addEventListener("click", async () => {', 1200)
+        self.assertIn("try { leaveMeeting(); } catch {}", s)                       # the Join room page
+        self.assertIn('try { localStorage.removeItem("kastr.lastjoin"); } catch {}', s)   # the next launch asks for a code
+        self.assertIn('on = joinState === "joined" && mainPerson();', p)           # a person's KASTR in a room (a box keeps its Leave)
+
     def test_no_leave_in_the_lobby(self):
         p = self.p
         self.assertIn("#topbar #leaveBtn[hidden] { display:none !important; }", p)

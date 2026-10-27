@@ -1145,7 +1145,34 @@
   #presView button.big { font-size:18px; padding:12px 22px; min-width:120px; }
   #presView button.on { background:#0b5c86; border-color:#1592d1; }
   #presView button.end { background:#5c1d1d; border-color:#8a2b2b; }
-  #presView .pb { flex:1; min-height:0; display:grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); gap:14px; padding:14px; }
+  #presView .pb { flex:1; min-height:0; display:grid; grid-template-columns: minmax(0, var(--lcol, 3fr)) 10px minmax(280px, var(--rcol, 2fr)); gap:4px; padding:10px 12px; }
+  #presView .vdiv, #presView .hdiv { background:transparent; border-radius:4px; touch-action:none; outline:none; }
+  #presView .vdiv { cursor:col-resize; margin:30px 0; background:linear-gradient(90deg, transparent 4px, #1f2a36 4px, #1f2a36 6px, transparent 6px); }
+  #presView .hdiv { cursor:row-resize; flex:none; height:10px; background:linear-gradient(180deg, transparent 4px, #1f2a36 4px, #1f2a36 6px, transparent 6px); }
+  #presView .vdiv:hover, #presView .vdiv:focus-visible, #presView .vdiv.drag { background:linear-gradient(90deg, transparent 3px, #1592d1 3px, #1592d1 7px, transparent 7px); }
+  #presView .hdiv:hover, #presView .hdiv:focus-visible, #presView .hdiv.drag { background:linear-gradient(180deg, transparent 3px, #1592d1 3px, #1592d1 7px, transparent 7px); }
+  #presView .panels { flex:none; max-height:var(--ptop, 42%); overflow:auto; display:flex; flex-direction:row; flex-wrap:wrap; gap:4px; align-items:flex-start; }
+  #presView details.pnl { border:1px solid #1f2a36; border-radius:6px; background:#0f1722; flex:1 1 150px; min-width:0; }
+  #presView details.pnl[open] { flex-basis:100%; order:-1; }   /* closed panels share one row; an open one takes the width */
+  #presView details.pnl > summary { list-style:none; cursor:pointer; display:flex; gap:8px; align-items:center; padding:5px 10px; font-size:12px;
+    letter-spacing:.05em; text-transform:uppercase; color:#8aa0b5; user-select:none; }
+  #presView details.pnl > summary::-webkit-details-marker { display:none; }
+  #presView details.pnl > summary::before { content:"▸"; font-size:11px; transition:transform .12s; }
+  #presView details.pnl[open] > summary::before { transform:rotate(90deg); }
+  #presView details.pnl > summary .pnt { flex:none; }
+  #presView details.pnl > summary .pv { flex:1; min-width:0; text-transform:none; letter-spacing:0; color:#cfe3f3; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+  #presView details.pnl.attn > summary { color:#ffcf7a; }
+  #presView details.pnl.attn > summary .pv { color:#ffcf7a; font-weight:600; }
+  #presView details.pnl .pbody { padding:0 8px 8px; }
+  #presView details.pnl .pbody .modebox, #presView details.pnl .pbody .pplbox { border:0; padding:0; background:transparent; }
+  #presView details.pnl .pbody .modebox .mhead { display:none; }   /* the panel's own title says it */
+  #presView .nrow { flex:none; }
+  #presView .nxt { flex:none; display:flex; flex-direction:row; align-items:center; gap:6px; cursor:default; }
+  #presView .nxt canvas { width:84px; aspect-ratio:16/9; background:#000; border-radius:3px; box-shadow:0 0 0 1px #1592d1; }
+  #presView .nxt .nxl { font-size:11px; color:#8aa0b5; white-space:nowrap; }
+  #presView.nostrip .strip { display:none; }
+  #presView .ph .stripbtn { padding:4px 10px; font-size:12.5px; }
+  #presView.nostrip .ph .stripbtn { opacity:.6; }
   #presView .cur { display:flex; flex-direction:column; min-height:0; gap:8px; }
   #presView .cap { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:#8aa0b5; display:flex; gap:8px; align-items:center; }
   #presView .cap .live { color:#fff; background:#c62828; padding:1px 7px; border-radius:4px; letter-spacing:.08em; }
@@ -1153,10 +1180,8 @@
   #presView .cur canvas { display:block; background:#000; border-radius:6px; box-shadow:0 0 0 2px #c62828; }
   #presView .ctl { display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; }
   #presView .ctl .num { font-size:18px; font-variant-numeric:tabular-nums; min-width:110px; text-align:center; }
-  #presView .side { display:flex; flex-direction:column; gap:10px; min-height:0; overflow:auto; }
-  #presView .nexts { display:grid; grid-template-columns: 2fr 1fr; gap:8px; }
-  #presView .nexts canvas { width:100%; aspect-ratio:16/9; background:#000; border-radius:5px; }
-  #presView .notes { flex:1; min-height:80px; overflow:auto; background:#0f1722; border:1px solid #1f2a36; border-radius:6px; padding:10px 14px;
+  #presView .side { display:flex; flex-direction:column; gap:6px; min-height:0; overflow:hidden; }
+  #presView .notes { flex:1; min-height:120px; overflow:auto; background:#0f1722; border:1px solid #1f2a36; border-radius:6px; padding:10px 14px;
     white-space:pre-wrap; font-size:var(--pnfs, 20px); line-height:1.45; user-select:text; -webkit-user-select:text; }
   #presView .notes.empty { color:#6b7d8f; font-style:italic; }
   #presView textarea.notes { resize:none; color:#e6edf3; font-family:inherit; }
@@ -1203,9 +1228,9 @@
   #presView .ppick .pkr .pkn { flex:1; display:flex; flex-direction:column; white-space:normal; }
   #presView .ppick .pkr .pkn small { color:#8aa0b5; font-size:11px; }
   #presView .ppick .none { color:#6b7d8f; padding:10px; font-size:13px; }
-  #presView .strip { display:flex; gap:8px; overflow-x:auto; padding:8px 14px 12px; border-top:1px solid #1f2a36; background:#0f1722; }
-  #presView .strip .th { flex:none; width:144px; cursor:pointer; text-align:center; font-size:11px; color:#8aa0b5; }
-  #presView .strip .th canvas { width:144px; height:81px; display:block; background:#000; border-radius:4px; border:2px solid transparent; }
+  #presView .strip { display:flex; gap:6px; overflow-x:auto; padding:5px 12px 6px; border-top:1px solid #1f2a36; background:#0f1722; flex:none; }
+  #presView .strip .th { flex:none; width:88px; cursor:pointer; text-align:center; font-size:10px; color:#8aa0b5; line-height:1.2; }
+  #presView .strip .th canvas { width:88px; height:50px; display:block; background:#000; border-radius:3px; border:2px solid transparent; }
   #presView .strip .th.cur canvas { border-color:#c62828; }
   #presView .strip .th.next canvas { border-color:#1592d1; }
   #presView .strip .th.wait { opacity:.45; }
@@ -1231,6 +1256,14 @@
   #presView .vbar .vnote { color:#ffcf7a; font-size:13px; }
   @media (max-width: 760px) {
     #presView .pb { grid-template-columns: 1fr; overflow:auto; }
+    #presView .vdiv, #presView .hdiv { display:none; }
+    #presView .pb { display:flex; flex-direction:column; }   /* a phone: one column that scrolls -- slide, controls, notes, panels */
+    #presView .pb > .cur, #presView .pb > .side { flex:none; min-height:auto; }
+    #presView .side { overflow:visible; }
+    #presView .nrow { flex-wrap:wrap; }
+    #presView .nrow .ncap { order:5; flex-basis:100%; }
+    #presView .panels { order:3; max-height:none; }
+    #presView .notes { min-height:40vh; }
     #presView .curwrap { flex:none; }
     #presView .strip { display:none; }
     #presView button.big { flex:1; font-size:22px; padding:16px; }
@@ -1250,6 +1283,7 @@
       root.innerHTML = `
         <div class="ph"><span class="ttl"></span><span class="role"></span><span class="nowp" title="The presenter presenting now -- their camera is the one in the slide"></span><span class="sp"></span>
           <span class="timer" title="Time since the presentation started"></span><span class="clock"></span>
+          <button type="button" class="stripbtn" title="Show or hide the slides along the bottom (remembered on this device)">Slides</button>
           <button type="button" class="hide" title="Back to the room (the presentation keeps going; Esc)">Back to room</button>
           <button type="button" class="end" title="End the presentation for everyone">End</button></div>
         <div class="prep"></div>
@@ -1260,13 +1294,22 @@
               <button type="button" class="blk" title="Black screen for everyone (B or .)">Black</button><button type="button" class="wht" title="White screen for everyone (W or ,)">White</button></div>
             <div class="vbar"><button type="button" class="vplay" title="Play or pause the video on this slide for everyone">▶ Play video</button>
               <input type="range" class="vseek" min="0" max="1000" value="0" title="The video's position (everyone)"><span class="vtime"></span><span class="vnote"></span></div></div>
-          <div class="side"><div class="cap">Next</div><div class="nexts"><canvas class="n1"></canvas><canvas class="n2"></canvas></div>
-            <div class="nrow"><span class="cap ncap">Notes — only you<span class="bsn"></span> can see these</span>
-              <button type="button" class="fsm" title="Smaller notes">A−</button><button type="button" class="fsp" title="Larger notes">A+</button>
+          <div class="vdiv" role="separator" aria-orientation="vertical" tabindex="0" title="Drag: a bigger slide or wider notes (remembered on this device; arrow keys too)"></div>
+          <div class="side">
+            <div class="panels">
+              <details class="pnl" data-k="mode"><summary><span class="pnt">Mode</span><span class="pv"></span></summary><div class="pbody pmode"></div></details>
+              <details class="pnl" data-k="av"><summary><span class="pnt">Mic &amp; audience</span><span class="pv"></span></summary><div class="pbody pav"></div></details>
+              <details class="pnl" data-k="ppl"><summary><span class="pnt">People</span><span class="pv"></span></summary><div class="pbody">
+            <div class="pplbox"><div class="psec psp"><div class="cap">Presenters<span class="sp"></span><button type="button" class="addp" title="Make someone in the room a presenter: the same powers as you, and their camera in the slide while it is their turn">Add presenter</button></div><div class="rows"></div></div>
+              <div class="psec psb"><div class="cap">Backstage — see the notes and what is next, can move the slides<span class="sp"></span><button type="button" class="addb" title="Make someone in the room backstage">Add backstage</button></div><div class="rows"></div></div></div></div></details>
+            </div>
+            <div class="hdiv" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag: more room for the notes (remembered on this device; arrow keys too)"></div>
+            <div class="nrow"><div class="nxt" title="The next slide"><canvas class="n1"></canvas><span class="nxl"></span></div>
+              <span class="cap ncap">Notes — only you<span class="bsn"></span> can see these</span>
+              <button type="button" class="fsm" title="Smaller notes (remembered on this device)">A−</button><button type="button" class="fsp" title="Larger notes (remembered on this device)">A+</button>
               <button type="button" class="edit" title="Write or change the notes for this slide">Edit</button></div>
             <div class="notes"></div>
-            <div class="pplbox"><div class="psec psp"><div class="cap">Presenters<span class="sp"></span><button type="button" class="addp" title="Make someone in the room a presenter: the same powers as you, and their camera in the slide while it is their turn">Add presenter</button></div><div class="rows"></div></div>
-              <div class="psec psb"><div class="cap">Backstage — see the notes and what is next, can move the slides<span class="sp"></span><button type="button" class="addb" title="Make someone in the room backstage">Add backstage</button></div><div class="rows"></div></div></div></div>
+          </div>
         </div>
         <div class="strip"></div>
         <div class="ppick" hidden><div class="pk"><div class="pkh"><b class="pkt"></b><button type="button" class="pkx">Close</button></div><input type="search" class="pks" placeholder="Search people in the room" aria-label="Search people"><div class="pkl"></div></div></div>`;
@@ -1294,7 +1337,63 @@
       $(".vseek").addEventListener("input", () => { $(".vbar").dataset.scrub = "1"; });
       $(".vseek").addEventListener("change", () => { delete $(".vbar").dataset.scrub; const lv = liveVid(); if (lv?.dur) vidPress("seek", Number($(".vseek").value) / 1000 * lv.dur); });
       root.style.setProperty("--pnfs", fs + "px");
+      layoutBuild();   // 0.21.91
       new ResizeObserver(() => paint()).observe(root);
+    }
+    // 0.21.91: the layout, remembered on this device (kastr.pres.layout): the slide column's share, the panels' height (the notes take
+    // the rest), the strip on / off, which panels are open (all closed at first -- one opens by itself when it needs attention)
+    let LY = {};
+    try { LY = JSON.parse(localStorage.getItem("kastr.pres.layout") || "{}") || {}; } catch {}
+    const lySave = () => { try { localStorage.setItem("kastr.pres.layout", JSON.stringify(LY)); } catch {} };
+    function layoutApply() {
+      if (!root) return;
+      const f = Math.max(0.3, Math.min(0.78, Number(LY.col) || 0.6));
+      root.style.setProperty("--lcol", f.toFixed(3) + "fr"); root.style.setProperty("--rcol", (1 - f).toFixed(3) + "fr");
+      if (Number(LY.top) > 0) root.style.setProperty("--ptop", Math.round(LY.top) + "px"); else root.style.removeProperty("--ptop");
+      // the strip: on unless this device hid it -- by default off on a short window (under 900 px tall) where the notes need the room
+      root.classList.toggle("nostrip", LY.nostrip === undefined ? window.innerHeight < 900 : !!LY.nostrip);
+    }
+    function dragLine(el, onMove, onKey) {
+      el.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); el.setPointerCapture(e.pointerId); el.classList.add("drag");
+        const mv = (ev) => { onMove(ev); layoutApply(); };
+        const up = () => { el.classList.remove("drag"); el.removeEventListener("pointermove", mv); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); lySave(); paint(); };
+        el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+      });
+      el.addEventListener("keydown", (e) => { const d = onKey(e.key); if (d) { e.preventDefault(); e.stopPropagation(); layoutApply(); lySave(); paint(); } });
+    }
+    function layoutBuild() {
+      layoutApply();
+      dragLine($(".vdiv"), (e) => { const r = $(".pb").getBoundingClientRect(); LY.col = Math.max(0.3, Math.min(0.78, (e.clientX - r.left) / Math.max(1, r.width))); },
+        (k) => { const c = Number(LY.col) || 0.6; if (k === "ArrowLeft") { LY.col = Math.max(0.3, c - 0.02); return true; } if (k === "ArrowRight") { LY.col = Math.min(0.78, c + 0.02); return true; } return false; });
+      dragLine($(".hdiv"), (e) => { const r = $(".panels").getBoundingClientRect(), s = $(".side").getBoundingClientRect(); LY.top = Math.max(28, Math.min(s.height - 160, e.clientY - r.top)); },
+        (k) => { const t = Number(LY.top) || $(".panels").getBoundingClientRect().height; if (k === "ArrowUp") { LY.top = Math.max(28, t - 20); return true; } if (k === "ArrowDown") { LY.top = t + 20; return true; } return false; });
+      $(".stripbtn").addEventListener("click", () => { LY.nostrip = !root.classList.contains("nostrip"); layoutApply(); lySave(); paint(); });
+      window.addEventListener("resize", () => { if (LY.nostrip === undefined) layoutApply(); });
+      for (const d of root.querySelectorAll("details.pnl")) {
+        d.open = !!(LY.open && LY.open[d.dataset.k]);
+        d.addEventListener("toggle", () => { LY.open = Object.assign({}, LY.open, { [d.dataset.k]: d.open }); if (!d.dataset.auto) lySave(); delete d.dataset.auto; paint(); });
+      }
+    }
+    function panelInfo(v, M) {   // each panel's one-line summary (they are closed) and whether one needs attention
+      const pnl = (k) => root.querySelector('details.pnl[data-k="' + k + '"]');
+      const set = (k, text, attn) => {
+        const d = pnl(k); if (!d) return;
+        const pv = d.querySelector(".pv");
+        if (pv.textContent !== text) pv.textContent = text;
+        const was = d.classList.contains("attn");
+        d.classList.toggle("attn", !!attn);
+        if (attn && !was && !d.open) { d.dataset.auto = "1"; d.open = true; }   // it needs attention: open by itself (not remembered)
+      };
+      const mv = modeView();
+      if (mv) {
+        const why = mui && mui.why ? mui.why.textContent : "";
+        set("mode", MODE_NAME[mv.cm] + (mv.eff !== mv.cm ? " · the room sees the slide only" : "") + (M && M.ps.length > 1 ? " · " + (mv.turn ? "you present" : mv.cn + " presents") : ""), !!why);
+        pnl("mode").hidden = !(mv.role === "presenter" || mv.has);
+      }
+      const ex = panelAvInfo(v);
+      set("av", ex.text, ex.attn);
+      set("ppl", M ? M.ps.length + (M.ps.length === 1 ? " presenter" : " presenters") + " · " + M.bs.length + " backstage" : "", false);
     }
     function setFs(v) { fs = Math.max(12, Math.min(48, v)); root.style.setProperty("--pnfs", fs + "px"); try { localStorage.setItem("kastr.pres.notesSize", String(fs)); } catch {} }
     function deck() {   // {role, rec-like view} for the deck on show
@@ -1498,19 +1597,21 @@
         nb.classList.toggle("empty", !txt);
       }
       paintPeople(v, M);   // 0.21.91: Presenters + Backstage (read-only for backstage)
+      panelInfo(v, M);   // 0.21.91: the panels' summaries; one that needs attention opens
       {   // the live slide as large as its box allows, in the deck's own shape
         const wrap = $(".curwrap"), cv = $(".curcv"), r = wrap.getBoundingClientRect();
         const ar = v.ar || 16 / 9, narrow = window.matchMedia("(max-width: 760px)").matches;
-        const w = narrow ? r.width : Math.min(r.width, r.height * ar), h = w / ar;
+        const w = Math.max(40, narrow ? r.width : Math.min(r.width, r.height * ar)), h = w / ar;
         cv.style.width = Math.floor(w) + "px"; cv.style.height = Math.floor(h) + "px";
-        for (const c of root.querySelectorAll(".nexts canvas")) c.style.aspectRatio = String(ar);
+        for (const c of root.querySelectorAll(".nxt canvas")) c.style.aspectRatio = String(ar);
+        $(".nxl").textContent = v.idx + 1 < v.n ? "Next: " + (v.idx + 2) : "End of the deck";
       }
       {   // 0.21.91: the room sees Black / White -- this view keeps the slide, marked
         const rs = $(".rsee");
         rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : "";
         rs.dataset.k = v.blank || "";
       }
-      const cvs = [[$(".curcv"), v.idx, null], [$(".n1"), v.idx + 1, null], [$(".n2"), v.idx + 2, null]];
+      const cvs = [[$(".curcv"), v.idx, null], [$(".n1"), v.idx + 1, null]];   // 0.21.91: one small next slide
       for (const [cv, i, bl] of cvs) {
         fitCanvas(cv);
         if (i >= v.n) { drawContain(cv, null, null, i === v.n ? "End of the deck" : ""); continue; }
@@ -2305,20 +2406,20 @@
     background:rgba(0,0,0,.55); padding:1px 6px; border-radius:3px; pointer-events:none; }
   #presView .modebox .mwhy { grid-column:1 / -1; font-size:13px; color:#ffcf7a; min-height:0; }
   #presView .modebox .mwhy:empty { display:none; }
-  #presView .modebox .avrow { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; }
-  #presView .modebox .avrow:empty { display:none; }
-  #presView .modebox .avsw { display:inline-flex; flex-direction:row; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-size:13px; color:#e6edf3; margin:0; }
-  #presView .modebox .avsw input { display:inline-block; width:auto; height:auto; margin:0; flex:none; }
-  #presView .modebox .avnote { color:#8fd3ff; }
-  #presView .modebox .avwhy { color:#ffcf7a; flex-basis:100%; }
-  #presView .modebox .avwhy:empty { display:none; }
-  #presView .modebox .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
-  #presView .modebox .avrow button:disabled { opacity:.5; cursor:not-allowed; }
-  #presView .modebox .avto { display:inline-flex; flex-wrap:wrap; gap:4px; align-items:center; flex-basis:100%; }
-  #presView .modebox .avto .avtol { color:#8aa0b5; font-size:12px; }
-  #presView .modebox .avto button { padding:2px 9px; font-size:12px; border-radius:999px; }
-  #presView .modebox .avto button.on { background:#0b5c86; border-color:#1592d1; }
-  #presView .modebox .avto button.no { opacity:.6; text-decoration:line-through; }
+  #presView .avrow { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; }
+  #presView .avrow:empty { display:none; }
+  #presView .avsw { display:inline-flex; flex-direction:row; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-size:13px; color:#e6edf3; margin:0; }
+  #presView .avsw input { display:inline-block; width:auto; height:auto; margin:0; flex:none; }
+  #presView .avnote { color:#8fd3ff; }
+  #presView .avwhy { color:#ffcf7a; flex-basis:100%; }
+  #presView .avwhy:empty { display:none; }
+  #presView .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
+  #presView .avrow button:disabled { opacity:.5; cursor:not-allowed; }
+  #presView .avto { display:inline-flex; flex-wrap:wrap; gap:4px; align-items:center; flex-basis:100%; }
+  #presView .avto .avtol { color:#8aa0b5; font-size:12px; }
+  #presView .avto button { padding:2px 9px; font-size:12px; border-radius:999px; }
+  #presView .avto button.on { background:#0b5c86; border-color:#1592d1; }
+  #presView .avto button.no { opacity:.6; text-decoration:line-through; }
   #presView .modebox .rbgs { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; }
   #presView .modebox .rbgs button { padding:0; width:52px; height:30px; border-radius:4px; overflow:hidden; border:2px solid transparent; background:#000; }
   #presView .modebox .rbgs button img { width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; }
@@ -2341,10 +2442,11 @@
       <div class="pvwrap"><canvas class="pvcv"></canvas><span class="pvtag">What the room sees</span></div>
       <div class="rbgs" title="Reporter's backdrop -- everyone sees the same">${REPORTER_BGS.map((b) => `<button type="button" data-rbg="${b[0]}" title="${b[1]}"><img alt="" src="/assets/bg/${b[3]}" loading="lazy"></button>`).join("")}</div>
       <div class="mwhy"></div><div class="avrow"></div>`;
-    const side = root.querySelector(".side");
+    const side = root.querySelector(".pmode") || root.querySelector(".side");   // 0.21.91: in the "Presenter mode" panel
     if (!side) return;
     side.insertBefore(box, side.firstChild);
     mui = { box, pv: box.querySelector(".pvcv"), why: box.querySelector(".mwhy"), av: box.querySelector(".avrow"), btns: [...box.querySelectorAll(".modes button")], avSig: "", pvAt: 0, still: { key: "", bmp: null } };
+    { const pav = root.querySelector(".pav"); if (pav) pav.appendChild(mui.av); }   // 0.21.91: mic, camera + audience in their own panel
     for (const b of mui.btns) b.addEventListener("click", () => window.__pres.mode(b.dataset.mode));
     mui.rbgs = box.querySelector(".rbgs");
     for (const b of mui.rbgs.querySelectorAll("button")) b.addEventListener("click", () => window.__pres.reporterBg(b.dataset.rbg));
@@ -2490,6 +2592,7 @@
     if (!mui || !view.isOpen()) return false;
     const mv = modeView();
     if (!mv || mui.box.style.display === "none") return false;
+    if (!mui.box.closest("details")?.open) { if (performance.now() - (mui.paintAt || 0) > 1000) { mui.paintAt = performance.now(); modeUiPaint(); } return true; }   // 0.21.91: no preview while its panel is closed
     const now = performance.now();
     if (now - (mui.paintAt || 0) > 1000) { mui.paintAt = now; modeUiPaint(); }   // the notice's age, backstage's buttons
     if (now - mui.pvAt < 80) return true;
@@ -2793,6 +2896,17 @@
     }
     return out.sort((a, b) => a.at - b.at);
   }
+  function panelAvInfo(v) {   // 0.21.91 layout: the "Mic, camera & audience" panel's one line; raised hands need attention
+    if (!v) return { text: "", attn: false };
+    const d = liveDecks().find((x) => x.id === v.id);
+    const hs = d && d.am ? hands(v.id).filter((h) => !h.talking) : [];
+    const parts = [];
+    if (v.role !== "backstage") parts.push(self.ms.mic === "on" ? "Mic on" : self.ms.mic === "muted" ? "Mic muted" : "No mic");
+    if (d && !d.old) parts.push(d.am ? "Audience muted" : "Audience may talk");
+    if (hs.length) parts.push(hs.length + (hs.length === 1 ? " hand up" : " hands up"));
+    if (v.role === "backstage" && talk.locked) parts.push("you are muted");
+    return { text: parts.join(" · "), attn: hs.length > 0 && v.role !== "backstage" };
+  }
   function amAct(v) {   // the presenter view's "Audience muted" switch (owner: directly; an added presenter: asks the owner)
     const v0 = view.deck();
     if (!v0) return false;
@@ -2887,13 +3001,13 @@
   #presTalk.free { background:#0f2a1a; color:#c8f5d8; border-color:#2a6b45; }
   #presTalk .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #presTalk button { background:#0b5c86; color:#fff; border:0; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
-  #presView .modebox .audbox { flex-basis:100%; display:flex; flex-direction:column; gap:6px; border-top:1px solid #1f2a36; padding-top:6px; }
-  #presView .modebox .hands { display:grid; gap:4px; }
-  #presView .modebox .hand { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:3px 6px; border-radius:6px; background:#2a2110; color:#ffcf7a; }
-  #presView .modebox .hand.talking { background:#0f2a1a; color:#c8f5d8; }
-  #presView .modebox .hand .hn { flex:1; min-width:90px; }
-  #presView .modebox .hn.none { color:#6b7d8f; font-size:12px; }
-  #presView .modebox .hand button { padding:2px 8px; font-size:12px; }
+  #presView .audbox { flex-basis:100%; display:flex; flex-direction:column; gap:6px; border-top:1px solid #1f2a36; padding-top:6px; }
+  #presView .hands { display:grid; gap:4px; }
+  #presView .hand { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:3px 6px; border-radius:6px; background:#2a2110; color:#ffcf7a; }
+  #presView .hand.talking { background:#0f2a1a; color:#c8f5d8; }
+  #presView .hand .hn { flex:1; min-width:90px; }
+  #presView .hn.none { color:#6b7d8f; font-size:12px; }
+  #presView .hand button { padding:2px 8px; font-size:12px; }
   body:has(#presView.show) #presTalk { top:54px; left:auto; right:14px; transform:none; z-index:86; }
   #topMicBtn.talklock { position:relative; }
   #topMicBtn .tlk { position:absolute; top:3px; right:5px; display:inline-flex; color:#f5b942; pointer-events:none; }

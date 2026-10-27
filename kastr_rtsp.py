@@ -1739,6 +1739,32 @@ class Hooks:
 
 
 PUBLISH_RETRY_S = [1, 2, 5, 10, 20, 30]
+# 0.21.91 (field: a whole-screen share froze on one picture while the controller opened apps): the frozen-capture watchdog.
+# A native screen share whose ffmpeg is alive but whose output has not grown for SCREEN_STALL_S seconds (a capture that stopped
+# delivering, an encoder or pipe that stalled) restarts its capture and says so in launch.log -- never a silent freeze. A
+# second freeze waits SCREEN_STALL_BACKOFF[n] s after the last restart (a locked box's capture must not churn); two quiet
+# minutes start the count over. KASTR_SCREEN_STALL_S=0 switches the watchdog off.
+try:
+    SCREEN_STALL_S = float(os.environ.get("KASTR_SCREEN_STALL_S") or 8)
+except ValueError:
+    SCREEN_STALL_S = 8.0
+SCREEN_STALL_BACKOFF = [0, 30, 60, 120, 300]
+SCREEN_STALL_RESET_S = 120
+SCREEN_STALL_RELAY_S = 20   # 0.21.91: a moq session line (SOFT/HARD) this recent means the relay link, not the capture, stalled
+
+
+def screen_exit_reason(url, who, code):
+    """0.21.91: launch.log's words for a screen share's ffmpeg that ended on its own with code 0 -- the capture ended
+    (kastr_screen._clocked eof=endall: Windows closed the monitor's capture), or ""."""
+    if who != "ffmpeg" or not is_screen(url or ""):
+        return ""
+    try:
+        if int(code) != 0:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    return ("the screen capture ended -- Windows closed it (a display change: resolution, scaling, a monitor switched off or "
+            "unplugged, a dock, a remote-desktop or graphics-driver reset); restarting it")
 # 0.21.91 (Kenton: alerts "after 1 try, and maybe again after a few tries, but I don't need it repeating forever" -- and the
 # log the same): a pair that keeps failing writes its start/exit lines in full for its FIRST try and its LOG_QUIET_AFTER-th
 # (with "still failing ... retrying quietly"), nothing for the tries between or after, and one summary line every
@@ -2049,6 +2075,10 @@ class Publisher:
         self.restartsTotal = 0
         self.lastSessionAt = None
         self.flowingAt = None       # 0.21.31: the last time ffmpeg's output grew -- the camera is really streaming
+        self.captureStalls = 0      # 0.21.91: frozen-capture watchdog restarts (screen shares) -- never forgotten
+        self.lastCaptureStall = None   # 0.21.91: {at, quiet, gen, paused, rc} of the last one
+        self._stallAt = 0.0
+        self._stallRun = 0
         self._outSize = 0
         self._timer = None
         self._lock = threading.Lock()
@@ -2081,6 +2111,8 @@ class Publisher:
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
                 "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
                 "flowingAt": self.flowingAt,                                         # 0.21.31
+                "captureStalls": self.captureStalls,                                 # 0.21.91: frozen-capture watchdog
+                "lastCaptureStall": self.lastCaptureStall,                           # 0.21.91
                 "library": self._library_info(),                                     # 0.21.84: the stream library (main pairs)
                 "listed": self._listed_info(),                                       # 0.21.85: listed there too (its room path kept)
                 "error": self.error, "since": self.since}
@@ -2452,6 +2484,8 @@ class Publisher:
             time.sleep(0.5)
             if self.stopping or gen != self._gen:
                 return
+            if self._stall_check(gen):   # 0.21.91: a frozen screen capture -- restarted (the restart ends this generation)
+                return
         # 0.13.1: who ended the pair (poll() = its exit code), before the
         # survivor is killed below
         rc = ff.poll()
@@ -2485,7 +2519,7 @@ class Publisher:
             # 0.21.52 (field, Mendon: a camera exited every 10.5 s and the line ended with the moq tool's message): the line
             # names the process that exited -- its own last stderr line, and what its exit code means
             mine = [e for e in self.errors if e.startswith(who + ":")]
-            why = ffmpeg_exit_reason(code) if who == "ffmpeg" else ""
+            why = (ffmpeg_exit_reason(code) if who == "ffmpeg" else "") or screen_exit_reason(getattr(self.feed, "url", ""), who, code)   # 0.21.91
             self.lastExit["reason"] = why
             exit_line = ("rtsp pair %s gen=%d exit who=%s code=%s%s lived=%.1fs restarts=%d sessionFails=%d sessionKills=%d last=%s"
                          % (self.broadcast, gen, who, code, (" (" + why + ")") if why else "", lived, self.restarts, self.sessionFails, self.sessionKills,
@@ -2510,6 +2544,43 @@ class Publisher:
         self._notready("exit %s code %s" % (who, code))                  # 0.18.0
         if decision == "park":
             self._park()                # logs and may mint: never under the lock
+
+    def _stall_check(self, gen, now=None):
+        """0.21.91: the frozen-capture watchdog (see SCREEN_STALL_S) for this generation -- True when it restarts the capture.
+        A screen share's main pair only; a paused share runs on its card and is watched the same way."""
+        if (SCREEN_STALL_S <= 0 or self.role != "main" or not is_screen(getattr(self.feed, "url", "")) or self.stopping
+                or gen != self._gen or not self.running or self.standby or self.suspended):
+            return False
+        now = time.time() if now is None else now
+        last = max(self.since or now, self.flowingAt or 0)
+        if now - last < SCREEN_STALL_S:
+            if self._stallRun and now - self._stallAt >= SCREEN_STALL_RESET_S:
+                self._stallRun = 0
+            return False
+        if self.lastSessionAt and now - self.lastSessionAt < SCREEN_STALL_RELAY_S:
+            return False   # moq is fighting its relay link (its own reconnects / the ladder handle that) -- not the capture
+        if self._stallAt and now - self._stallAt < SCREEN_STALL_BACKOFF[min(self._stallRun, len(SCREEN_STALL_BACKOFF) - 1)]:
+            return False
+        self._stallRun += 1
+        self.captureStalls += 1
+        self._stallAt = now
+        quiet = round(now - last, 1)
+        self.lastCaptureStall = {"at": now, "quiet": quiet, "gen": gen, "paused": bool(self.paused), "rc": bool(self.rcmode)}
+        self.bridge.log("screen: share %s capture froze -- no new picture for %.0f s (gen %d, ffmpeg still running, %s) -- "
+                        "restarting the capture (freeze #%d)" % (self.broadcast, quiet, gen,
+                                                                 "never streamed" if (self.flowingAt or 0) < (self.since or 0) else "streamed before",
+                                                                 self.captureStalls))
+        threading.Thread(target=self._stall_restart, name="kastr-capture-stall", daemon=True).start()
+        return True
+
+    def _stall_restart(self):
+        """0.21.91: end the frozen pair ffmpeg-first (quiet: the relay drops the old broadcast at once, players move on) and
+        start a fresh capture."""
+        try:
+            if self.quiet():
+                self.nudge("capture-stall")
+        except Exception as e:
+            self.bridge.log("screen: share %s capture restart failed: %s" % (self.broadcast, e))
 
     def _lq_line(self, line, r, kind):
         """0.21.91: launch.log for a pair's start / exit line -- `r` = its try's place on the ladder (restarts; -1 = always)."""

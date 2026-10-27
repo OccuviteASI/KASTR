@@ -4133,8 +4133,14 @@
     const camOff = src ? !!src.videoPaused : !joinVidOn;
     topMicBtn.classList.toggle("on", micOff);
     topMicBtn.innerHTML = icon(micOff ? "micOff" : "mic") + '<span class="lbl">Mic</span>';
+    // 0.21.91 (Kenton: "everyone else should be muted and not able to unmute themselves unless they are added as a presenter"):
+    // while a presentation mutes its audience, my Mic wears a lock and says why (kastr-pres.js: window.__presTalk)
+    const talkLock = (() => { try { return window.__presTalk?.lock?.() || ""; } catch { return ""; } })();
+    topMicBtn.classList.toggle("talklock", !!talkLock);
+    if (talkLock) topMicBtn.insertAdjacentHTML("beforeend", '<span class="tlk">' + icon("lock") + '</span>');
     topMicBtn.title = src ? (micOff ? "Mic muted \u2014 click to unmute" : "Mute your microphone")
                           : (micOff ? "Mic off \u2014 click to join unmuted" : "Mic on \u2014 click to mute");
+    if (talkLock) topMicBtn.title = talkLock + " \u2014 you can ask to speak; a presenter can let you talk";
     topCamBtn.classList.toggle("on", camOff);
     topCamBtn.innerHTML = icon(camOff ? "camOff" : "cam") + '<span class="lbl">Camera</span>';
     topCamBtn.title = src ? (camOff ? "Camera off \u2014 click to resume" : "Turn your camera off")
@@ -8804,6 +8810,7 @@
   function setMicFromDevice(muted, why) {   // the device says muted / unmuted
     const { src } = localCamSrc();
     if (!src) return;
+    if (!muted) { const lk = (() => { try { return window.__presTalk?.lock?.() || ""; } catch { return ""; } })(); if (lk) { if (src.micMuted) window.__toast?.(lk + " \u2014 the microphone's own key cannot unmute it now", 3500, { level: "info" }); return; } }   // 0.21.91
     if (!muted && deafened) { setDeafen(false); }   // unmuting on the device undeafens (as the Mic button does)
     if (!!src.micMuted === !!muted) return;
     src.micMuted = !!muted;
@@ -8965,6 +8972,11 @@
     paint();
   }
   topMicBtn.addEventListener("click", () => {
+    {   // 0.21.91: a presentation mutes its audience -- muting is fine, unmuting is not (until a presenter lets me talk)
+      const lk = (() => { try { return window.__presTalk?.lock?.() || ""; } catch { return ""; } })();
+      const { src: s0 } = localCamSrc();
+      if (lk && (s0 ? !!s0.micMuted : !joinMicOn)) { window.__toast?.(lk + " \u2014 ask to speak, and a presenter can let you talk", 4500, { level: "info" }); return; }
+    }
     if (deafened) { const wasOn = deafMicWas; setDeafen(false); if (wasOn) return; }   // 0.21.40: unmuting the mic undeafens
     const { src } = localCamSrc();
     if (!src) { ensureLocalCamera({ mic: !joinMicOn, vid: window.__join?.state?.() === "joined" ? false : undefined }); return; }
@@ -9415,9 +9427,13 @@
     // audible" report.
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return 0;   // 0.9.5: the grid's mute covers its members
     if (cgHide(name) && name !== selectedName) return 0;   // 0.21.66 (e): a camera here only for a grid is silent until opened
+    // 0.21.91: a presentation mutes its audience -- a person's mic that may not talk now is not heard HERE either (an older or a
+    // modified page that ignores its lock): gain 0 through the volume (the warm floor), the subscription stays, never `muted`
+    try { if (window.__presTalk?.silent?.(name)) return isAudible(name) || warmAudio ? WARM_FLOOR : 0; } catch {}
     if (isAudible(name)) return Math.max(gainFor(name), WARM_FLOOR);
     return warmAudio ? WARM_FLOOR : 0;      // 0 exactly = deliberate teardown
   }
+  window.__presTalkChanged = () => { try { applyVolumes(); paintTopCam(); } catch {} };   // 0.21.91: kastr-pres.js -- who may talk changed
   function applyVolumes() {
     for (const [name, t] of tiles) {
       const want = desiredVolume(name);
@@ -18726,6 +18742,9 @@
         case "pres": if (value && typeof value === "object" && value.id) roomModel.pres = value; else delete roomModel.pres; break;
         case "presCtl": if (value && typeof value === "object" && value.id) roomModel.presCtl = value; else delete roomModel.presCtl; break;
         case "presPk": if (typeof value === "string" && value.length < 200) roomModel.presPk = value; else delete roomModel.presPk; break;
+        // 0.21.91 (co-presenters): `presCo` = this page can co-present (cap) + my own presenter state in a deck: my camera / cut-out
+        // (the owner copies the one presenting now into its `pres`), my mic / camera, which backstage people may control them (al)
+        case "presCo": if (value && typeof value === "object" && JSON.stringify(value).length < 8000) roomModel.presCo = value; else delete roomModel.presCo; break;
         default: return;
       }
       stateCommit();
@@ -24775,6 +24794,7 @@
           }
         }
         if ("micMuted" in m.set) {
+          if (!m.set.micMuted && a.kind === "camera") { try { if (window.__presTalk?.lock?.()) m.set.micMuted = true; } catch {} }   // 0.21.91: muted while a presentation mutes its audience
           a.micMuted = !!m.set.micMuted;
           const slot = slots.get(a.id);
           if (slot && !slot.rtsp) slot.publish.muted = a.micMuted || !audioFor(a) || !!a.sharePaused;   // 0.21.73: a paused share stays silent
@@ -24961,7 +24981,8 @@
     if (!d || d.locked !== true) { lockSeen = false; return; }
     if (lockSeen) return;
     lockSeen = true;
-    for (const a of added.filter(isScreenShare)) { try { removeSource(a.id); } catch {} }
+    // 0.21.91: a presentation's slide share is a canvas KASTR draws (the deck, never the screen): a lock does not end the presentation
+    for (const a of added.filter((x) => isScreenShare(x) && !x.presCanvas)) { try { removeSource(a.id); } catch {} }
     log("This computer was locked \u2014 screen sharing stopped");
     window.__toast?.("Screen sharing stopped \u2014 this computer was locked. Share again when you are back.", 8000, { level: "warn" });
   }

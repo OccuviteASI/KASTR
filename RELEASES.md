@@ -2,6 +2,27 @@
 
 What changed in each build, newest first.
 
+## v0.21.90 — Profile photos that load for everyone
+
+**No more broken profile photos (Kenton: "I'm often getting users that have uploaded a photo showing as a broken link instead of the photo they uploaded").**
+
+Why they broke: a photo was kept only on the KASTR of the relay its owner was connected to, and was shared under that machine's address. That address was often one only the owner's own machine could use:
+- `localhost`, for someone whose KASTR runs on the relay machine itself;
+- a site-only name or private address, for someone at another site, such as Carlo's PC at Tremonton.
+
+The photo was also deleted whenever its owner closed KASTR or changed rooms.
+
+What changed:
+- **One photo per person, kept on the hub.** Your photo goes up once, through your own relay, to the hub. Every KASTR serves photos to its own pages from the hub's copy, so a photo loads from any site, on relay machines and over https.
+- **Photos stay when people close KASTR,** so the offline people in All people now show their photo.
+- **Changing or removing your photo** shows everywhere within a few seconds, and your other devices pick it up too.
+- **Once someone has set up messages,** only their own unlocked devices (or an admin) can change their photo.
+- **A photo that can't load shows the person's initials,** never a broken-image icon.
+- **Who can see photos:** everyone on the fleet sees them. Invite-link guests see only the photos of the people in their room. Anyone else is refused.
+- **Your existing photo uploads to the hub by itself** the first time you open this version.
+- **When the hub role moves to another machine,** the photos move with it.
+- **During the update:** people still on 0.21.89 see initials for people on 0.21.90. Relays without access codes show initials only.
+
 ## v0.21.89 — Presenter modes, backstage mic and camera control, Ask for access, and My room + messages set up for everyone
 
 **Present a deck with your camera: four presenter modes (Kenton: "present a power point and also share my video, with options to switch between the different presenter modes").**

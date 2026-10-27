@@ -26,7 +26,7 @@ All of it is built: the hub store, the encrypted deck store, preview / apply / u
   - Start presenting starts the deck on its slide with its mode, background and audience rule, gives the people who are here their roles, and names who is absent.
   - Slide videos travel inside the stored .pptx: when the deck starts, it converts again and its videos go to the deck store the usual way (lab-proven).
 
-**Tests:** `tests/test_release_0_21_92_templates.py` has 28 tests. On head a3f5ade: Windows 1942 OK, WSL 1942 OK.
+**Tests:** `tests/test_release_0_21_92_templates.py` has 26 tests. On head a3f5ade: Windows 1942 OK, WSL 1942 OK.
 
 **Lab:** the scripts are in `scratchpad\v02192\templates\`. They use ports 8881–8883 and relays 4861/4871/4881.
 - `lab.py up | down`

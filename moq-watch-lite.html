@@ -24829,7 +24829,8 @@
     if (!d || d.locked !== true) { lockSeen = false; return; }
     if (lockSeen) return;
     lockSeen = true;
-    for (const a of added.filter(isScreenShare)) { try { removeSource(a.id); } catch {} }
+    // 0.21.91: a presentation's slide share is a canvas KASTR draws (the deck, never the screen): a lock does not end the presentation
+    for (const a of added.filter((x) => isScreenShare(x) && !x.presCanvas)) { try { removeSource(a.id); } catch {} }
     log("This computer was locked \u2014 screen sharing stopped");
     window.__toast?.("Screen sharing stopped \u2014 this computer was locked. Share again when you are back.", 8000, { level: "warn" });
   }

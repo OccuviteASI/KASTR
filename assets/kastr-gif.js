@@ -9,7 +9,7 @@
 (() => {
   "use strict";
   if (window.__gif) return;
-  const STATUS_MS = 5 * 60000, RETRY_MS = 60000, DEBOUNCE_MS = 350, PREVIEW_PAR = 4, PREVIEW_KEEP = 240;
+  const STATUS_MS = 60000, RETRY_MS = 30000, DEBOUNCE_MS = 350, PREVIEW_PAR = 4, PREVIEW_KEEP = 240;
   const B = () => window.__kgif || null;
   const toast = (m, ms, level) => { try { window.__toast?.(m, ms || 5000, { level: level || "warn" }); } catch {} };
   let on = false, onFor = "", onAt = 0, checking = null;

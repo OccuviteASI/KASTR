@@ -2993,11 +2993,10 @@
     talkPill.classList.toggle("withpill", !!document.querySelector("#presPill.show"));
   }
   const TALK_CSS = `
-  #presTalk { position:fixed; top:58px; left:50%; transform:translateX(-50%); z-index:84; display:none; gap:10px; align-items:center;
+  #presTalk { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:84; display:none; gap:10px; align-items:center;
     background:#2a1414; color:#ffd7d7; border:1px solid #6b2a2a; border-radius:999px; padding:5px 6px 5px 14px; font:13px 'Segoe UI', system-ui, sans-serif;
     box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
   #presTalk.show { display:flex; }
-  #presTalk.withpill { top:98px; }
   #presTalk.free { background:#0f2a1a; color:#c8f5d8; border-color:#2a6b45; }
   #presTalk .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #presTalk button { background:#0b5c86; color:#fff; border:0; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
@@ -3008,7 +3007,8 @@
   #presView .hand .hn { flex:1; min-width:90px; }
   #presView .hn.none { color:#6b7d8f; font-size:12px; }
   #presView .hand button { padding:2px 8px; font-size:12px; }
-  body:has(#presView.show) #presTalk { top:54px; left:auto; right:14px; transform:none; z-index:86; }
+  body:has(#presView.show) #presTalk { top:6px; bottom:auto; z-index:86; padding:3px 4px 3px 12px; font-size:12px; max-width:min(560px, 46vw); }   /* in the presenter view: in its top bar, over nothing */
+  body:has(#presView.show) #presTalk button { padding:3px 10px; }
   #topMicBtn.talklock { position:relative; }
   #topMicBtn .tlk { position:absolute; top:3px; right:5px; display:inline-flex; color:#f5b942; pointer-events:none; }
   #topMicBtn .tlk svg, #topMicBtn .tlk .icon { width:12px; height:12px; }`;

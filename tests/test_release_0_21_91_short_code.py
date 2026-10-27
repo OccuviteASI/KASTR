@@ -88,7 +88,7 @@ class Page(unittest.TestCase):
         js = self.js
         self.assertIn('if (use.length < S.codeMin) { S.pendingCode = code; setState("short"); return false; }', js)
         self.assertIn("const needOld = st === \"short\" && !(S.pendingCode || K.personal()?.code);", js)   # never typed twice
-        self.assertIn('if ((st === "noroom" || st === "short") && c1.length < min)', js)      # the unlock step checks no length
+        self.assertIn('if ((st === "noroom" || st === "short" || st === "mustchange") && c1.length < min)', js)   # the unlock step checks no length
         self.assertIn('window.addEventListener("kastr:personal", () => setTimeout(() => init(true), 200));', js)
         # the fleet take-over opens with the remembered passcode (no length rule)
         a = self.p[self.p.index("async function personalAdopt(f, h)"):self.p.index("async function personalAdopt(f, h)") + 2400]

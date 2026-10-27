@@ -656,7 +656,6 @@
     font-size:9px; font-style:italic; align-items:center; justify-content:center; margin-left:4px; vertical-align:middle; cursor:help; }
   /* Focus on content (0.8.8): own panes stay painted but out of the way */
   #stage .pubpane.focushide { position:absolute; right:8px; bottom:8px; width:96px; height:54px; opacity:.03; pointer-events:none; z-index:0; }
-  #stage .pubpane.camkind.hideme { display:none; }
   /* 0.21.91: View > Hide my shares -- my own panes leave MY screen (everyone else still sees them); one I deliberately put on
      my stage is exempt while it holds it (module 1 tags the panes, module 2 stops their previews) */
   #stage .pubpane.hidemine { display:none !important; }
@@ -3100,7 +3099,6 @@
     <button class="opt" id="viewSpot" type="button" title="Back to what the room spotlighted" hidden><span class="oi">&#10022;</span>Spotlight<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewFocus" type="button" title="Only the main stage: everything else stops downloading"><span class="oi">&#9635;</span>Focus on content<span class="chk">&#10003;</span></button>
     <div class="sep"></div>
-    <button class="opt" id="viewHideMe" type="button" title="Hide your own preview (you keep publishing)"><span class="oi">&#128683;</span>Hide me<span class="chk">&#10003;</span></button>
     <button class="opt" id="viewPublishOnly" type="button" title="This device publishes but does not download or decode anyone else's streams (saves CPU on a camera box)"><span class="oi">&#128228;</span>Publish only<span class="chk">&#10003;</span></button>
     <!-- 0.21.91 (Kenton: "I want this to turn off my own shares from me seeing them, not turn off for everyone"): two items -- Hide my
          shares (this screen only) and the 0.21.16 switch, renamed so nobody mistakes it for a local one -->
@@ -4247,9 +4245,13 @@
         xsChanged();
         window.__toast?.(shortLabel(path) + " no longer shows in " + gone.join(", ") + " \u2014 " + (gone.length === 1 ? "that room was" : "those rooms were") + " deleted", 6000, { level: "event" });
       }
+      // 0.21.91 (Kenton: renamed rooms -- the shares "FOLLOW the new name"): the old name's listing is refused as `renamed`;
+      // the share takes the new name (a member token for it), its remembered rooms and generations too, and lists again
+      const ren = !stop && x && d.renamed && typeof d.renamed === "object" ? Object.entries(d.renamed).map(([a, b]) => [String(a), String(b)]).filter(([a]) => x.rooms.has(a)) : [];
+      if (ren.length) xsFollow(path, ren);
       if (!stop && x && d.refused && typeof d.refused === "object") {
         for (const [slug, why] of Object.entries(d.refused)) {
-          if (gone.includes(slug)) continue;
+          if (gone.includes(slug) || ren.some(([a]) => a === slug)) continue;
           x.rooms.delete(slug); delete x.tokens[slug];
           window.__toast?.("Not shown in " + slug + ": " + why, 5000, { level: "warn" });
         }
@@ -4260,6 +4262,26 @@
       }
       return d;
     } catch { return null; }
+  }
+  async function xsFollow(path, ren) {   // 0.21.91: [[old, new]] -- this share's rooms follow renamed rooms
+    const x = xsMine.get(path);
+    if (!x) return;
+    const moved = [];
+    for (const [a, b] of ren) {
+      if (!x.rooms.has(a)) continue;
+      x.rooms.delete(a); delete x.tokens[a];
+      if (b && b !== CHANNEL && !x.rooms.has(b)) {
+        try { x.tokens[b] = await xsTokenFor(b, xsCodes[a] || ""); x.rooms.add(b); if (xsCodes[a]) xsCodes[b] = xsCodes[a]; } catch {}
+      }
+      moved.push([a, b]);
+    }
+    if (!moved.length) return;
+    xsGensSet(path, (g) => { for (const [a, b] of moved) { if (g[a] && !g[b]) g[b] = g[a]; delete g[a]; } });
+    const keep = xsSaved()[xsKey(path)];
+    if (Array.isArray(keep)) xsSave(path, [...new Set(keep.map((sl) => (moved.find(([a]) => a === sl) || [])[1] || sl))].filter((sl) => sl && sl !== CHANNEL));
+    if (!x.rooms.size) xsMine.delete(path); else { x.postedAt = Date.now(); xsPost(path); }
+    xsChanged();
+    window.__toast?.(shortLabel(path) + " follows " + moved.map(([a, b]) => a + " \u2192 " + b).join(", ") + " (room renamed)", 5000, { level: "event" });
   }
   function xsStop(path) {
     const x = xsMine.get(path);
@@ -9175,7 +9197,7 @@
   window.__avatarLocal = myAvatar;
   // 0.8.8: view state -- focus on content (main only, nothing else downloads)
   // and hide-me (own camera pane out of my own view).
-  let focusMode = false, hideMe = false;
+  let focusMode = false;   // 0.21.91: "Hide me" is gone -- View > Hide my shares covers my webcam too
   // 0.21.91: View > Hide my shares (kastr.view.hideMine) -- see tagHideMine
   let hideMine = false, mineShowEl = null;
   try { hideMine = localStorage.getItem("kastr.view.hideMine") === "1"; } catch {}
@@ -9236,7 +9258,7 @@
     document.body.classList.toggle("mode-viewer", isViewerMode());
     document.body.classList.toggle("mode-publisher", isPublisherMode());
     if (isViewerMode()) {
-      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "viewHideMine", "joinPreview"]) {
+      for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMine", "joinPreview"]) {
         const el = document.getElementById(id); if (el) el.hidden = true;
       }
       for (const id of ["topCamBtn", "topMicBtn"]) document.getElementById(id)?.closest(".tbgrp")?.setAttribute("hidden", "");
@@ -12800,7 +12822,7 @@
         : [...document.getElementById("pubPanes").children]
             .filter((el) => !el.classList.contains("screenkind")
                          && !(el.classList.contains("ingrid") && !el.classList.contains("gridfeed"))   // 0.9.5: an opened member counts
-                         && !el.classList.contains("hideme") && !el.classList.contains("hidemine")).length;   // 0.21.91
+                         && !el.classList.contains("hidemine")).length;   // 0.21.91: Hide my shares
       collageSize(Math.max(1, shownNames.length + ownCells + viewerEls.length));   // 0.21.36: re-run below with the cells actually shown
     } else {
       stageEl.style.gridTemplateColumns = "";
@@ -12811,7 +12833,7 @@
     // and resizable up to two columns (the drag grip; width persisted).
     // Hidden screen panes are not cells (the 0.8.1 railRows overcount).
     const pubEls = mineEl.hidden ? [] : [...document.getElementById("pubPanes").children]
-      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hideme") && !pe.classList.contains("hidemine"));   // 0.21.91: + Hide my shares   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
+      .filter((pe) => !(pe.classList.contains("ingrid") && !pe.classList.contains("gridfeed")) && !pe.classList.contains("hidemine"));   // 0.21.91: Hide my shares (it replaced 0.8.8's Hide me)   // merged members are hidden (0.8.4) unless opened from the grid (0.9.5); hide-me (0.8.8)
     // 0.16.0: a self-heal / republish REPLACES the pane element (stopSlot + startSlot) -- the
     // spotlight used to point at the detached node and fall back to the gallery a second later
     // (Kenton: "I can't spotlight my own camera"). Re-find it by its slot id first.
@@ -16747,7 +16769,6 @@
     on("viewSpeaker", !gridMode);
     { const b = document.getElementById("viewSpot"); if (b) { b.hidden = !spotSetNow().length; b.classList.toggle("on", roomSpotOnStage()); } }   // 0.21.54
     on("viewFocus", focusMode && !gridMode);
-    on("viewHideMe", hideMe);
     on("viewHideMine", hideMine);   // 0.21.91
     on("viewPublishOnly", publishOnly);   // 0.9.10
     { const b = document.getElementById("viewRtspOff"); if (b) { const sus = !!window.__rtspSuspend?.get?.(); b.hidden = IS_WEB || (!(window.__gridFeeds?.count?.() > 0) && !sus); b.classList.toggle("on", sus); } }   // 0.21.16: the box's RTSP switch (module 2 owns it; a web client has no bridge cameras)
@@ -16858,21 +16879,12 @@
   document.getElementById("hideMineShow")?.addEventListener("click", (e) => { e.stopPropagation(); setHideMine(false); window.__toast?.("Your shares are shown on this screen again.", 3000, { level: "event" }); });
   new MutationObserver(() => { tagHideMine(); }).observe(document.getElementById("pubPanes"), { childList: true });
   tagHideMine();
-  document.getElementById("viewHideMe").addEventListener("click", () => {
-    hideMe = !hideMe;
-    for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.toggle("hideme", hideMe);
-    applyState();
-    paintViewPop();   // 0.21.78: View stays open
-  });
   document.getElementById("viewFull").addEventListener("click", () => {
     closeAllPops();
     const el = document.documentElement;
     if (document.fullscreenElement) document.exitFullscreen?.();
     else ((el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el) ?? Promise.reject()).catch?.(() => { if (selectedName) toggleFullscreen(selectedName); });   // 0.17.0: WebKit prefix
   });
-  // hide-me follows newly started camera panes too
-  new MutationObserver(() => { if (hideMe) for (const pe of document.querySelectorAll("#pubPanes .pubpane.camkind")) pe.classList.add("hideme"); })
-    .observe(document.getElementById("pubPanes"), { childList: true });
 
   // ---- 0.8.8: Camera popover (Teams "Effects and settings") ------------------
   const CAMFX_KEY = "kastr.camfx";
@@ -25339,8 +25351,11 @@
       const k = f.id + "|" + x.room + "|" + x.at;
       if (xsDropSeen.has(k)) continue;
       xsDropSeen.add(k);
-      if (now - Number(x.at || 0) < 600) news.push({ label: added.find((a) => a.kind === RTSP && a.feedId === f.id)?.label || f.publish?.label || "A camera", room: String(x.room) });
+      if (now - Number(x.at || 0) < 600) news.push({ label: added.find((a) => a.kind === RTSP && a.feedId === f.id)?.label || f.publish?.label || "A camera", room: String(x.room), to: x.why === "renamed" ? String(x.to || "") : "" });
     }
+    const moved = news.filter((n) => n.to);   // 0.21.91: a renamed room -- the camera followed it
+    if (moved.length) window.__toast?.(moved.map((n) => n.label + " follows " + n.room + " \u2192 " + n.to).join("; ") + " (room renamed)", 5000, { level: "event" });
+    news.splice(0, news.length, ...news.filter((n) => !n.to));
     if (!news.length) return;
     const rooms = [...new Set(news.map((n) => n.room))];
     window.__toast?.(news.length === 1 ? news[0].label + " no longer shows in " + news[0].room + " \u2014 that room was deleted"
@@ -28159,7 +28174,7 @@
       note.textContent = previewOff.checked ? "Sharing (preview off)" : "You are sharing this KASTR window";
       pane.appendChild(note);
     }
-    if (entry.kind === "camera") pane.classList.add("camkind");   // 0.8.8: View -> Hide me targets it
+    if (entry.kind === "camera") pane.classList.add("camkind");   // 0.8.8 (my camera's pane: self-mirror, deafened chip)
     const mchip = document.createElement("div");
     mchip.className = "mchip";
     mchip.innerHTML = (window.__icon?.("micOff") ?? "") + (window.__icon?.("earOff") ?? "");   // 0.21.40: + deafened

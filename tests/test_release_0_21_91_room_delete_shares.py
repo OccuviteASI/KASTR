@@ -99,24 +99,66 @@ class Server(unittest.TestCase):
         self.assertEqual((c, o["to"]), (200, ["beta"]))
         self.assertNotEqual(o["gens"]["beta"], gen)
 
-    def test_expired_room_drops_listings_and_is_gone(self):
-        o, _ = self.share()
-        gen = o["gens"]["beta"]
+    def lapse(self, room="beta"):
         with self.st.lock:
-            self.st.rooms["beta"]["at"] = time.time() - kr.ROOM_TTL - 5      # nobody used it for ROOM_TTL
-        self.assertEqual(self.st.room_slugs(), [])                           # the expiry sweep (any room list)
-        self.assertEqual(self.listed(), [])
-        o, c = self.share(gens={"beta": gen})
-        self.assertEqual((c, o.get("gone")), (403, ["beta"]), o)
+            self.st.rooms[room]["at"] = time.time() - kr.ROOM_TTL - 5       # nobody used it for ROOM_TTL
 
-    def test_expired_on_touch_is_a_new_room(self):
+    def test_lapsed_room_keeps_its_shares(self):
+        # follow-up (Kenton): a room that lapses ~10 min after the last person leaves is NOT deleted
         o, _ = self.share()
         gen = o["gens"]["beta"]
-        with self.st.lock:
-            self.st.rooms["beta"]["at"] = time.time() - kr.ROOM_TTL - 5
-        self.assertTrue(self.st.touch_room("beta", "later"))                # a page enters the name again: a new record
+        self.lapse()
+        self.assertEqual(self.st.room_slugs(), [])                           # the lapse sweep (any room list)
+        self.assertEqual(self.listed(), [PATH])                              # the listing stays
+        self.assertEqual(self.st.lapsed_gen("beta"), gen)                    # its generation is remembered
+        o, c = self.share(gens={"beta": gen})                               # the sharer's heartbeat while it is lapsed
+        self.assertEqual((c, o["to"], o.get("gone")), (200, ["beta"], None), o)
+        self.assertEqual(o["gens"], {})                                     # no record to name (the sharer keeps its own)
+
+    def test_lapsed_room_used_again_is_the_same_room(self):
+        o, _ = self.share()
+        gen = o["gens"]["beta"]
+        self.lapse()
+        self.assertTrue(self.st.touch_room("beta", "later"))                # a page enters the name again: a record again ...
+        self.assertEqual(kr.room_gen(self.st.room("beta")), gen)            # ... of the SAME generation
+        self.assertEqual(self.listed(), [PATH])
+        o, c = self.share(gens={"beta": gen})
+        self.assertEqual((c, o["to"], o["gens"]), (200, ["beta"], {"beta": gen}))
+        self.assertIsNone(self.st.lapsed_gen("beta"))                        # used up
+
+    def test_lapse_then_registered_and_survives_a_restart(self):
+        o, _ = self.share()
+        gen = o["gens"]["beta"]
+        self.lapse()
+        self.st.room_slugs()
+        again = kr.AuthStore(self.st.state_dir)                              # relay-auth.json keeps the memory
+        self.assertEqual(again.lapsed_gen("beta"), gen)
+        again.put_room("beta", {"salt": "", "hash": "", "roomKey": "k", "at": time.time(), "persistent": True, "created": time.time()})
+        self.assertEqual(kr.room_gen(again.room("beta")), gen)               # registered (kept) after the lapse: same room
+
+    def test_close_after_a_lapse_is_a_delete(self):
+        o, _ = self.share()
+        gen = o["gens"]["beta"]
+        self.lapse()
+        self.st.room_slugs()
+        kr.close_room(self.st, "beta", operator=True)                        # the operator deletes the lapsed name
         self.assertEqual(self.listed(), [])
-        self.assertEqual(self.share(gens={"beta": gen})[0].get("gone"), ["beta"])
+        self.assertIsNone(self.st.lapsed_gen("beta"))
+        self.st.closed.clear()                                               # an hour later: the tombstone is gone too
+        self.st.touch_room("beta", "someone")                                # a DIFFERENT room under the name
+        self.assertNotEqual(kr.room_gen(self.st.room("beta")), gen)
+        self.assertEqual(self.share(gens={"beta": gen})[0].get("gone"), ["beta"])   # never inherited
+
+    def test_lapse_memory_is_bounded(self):
+        with self.st.lock:
+            for i in range(kr.LAPSED_MAX + 5):
+                self.st._lapse_locked("r%d" % i, {"created": 1700000000 + i})
+            self.st._lapse_locked("old", {"created": 1600000000})
+            self.st.lapsed["old"]["at"] = int(time.time()) - kr.LAPSED_TTL - 5
+            self.st._lapse_locked("new", {"created": 1700009999})
+        self.assertLessEqual(len(self.st.lapsed), kr.LAPSED_MAX)
+        self.assertNotIn("old", self.st.lapsed)
+        self.assertIn("new", self.st.lapsed)
 
     def test_live_room_with_its_generation_stays(self):
         o, _ = self.share()
@@ -127,11 +169,18 @@ class Server(unittest.TestCase):
         o, c = self.share(to=["gamma"], tokens={"gamma": mint(self.svc, "gamma")})   # a name with no record (as before 0.21.91)
         self.assertEqual((c, o["to"], o["gens"]), (200, ["gamma"], {}))
 
-    def test_renamed_room_is_not_gone(self):
+    def test_renamed_room_tells_the_sharer_to_follow(self):
+        # follow-up (Kenton): when a room is RENAMED the camera shares FOLLOW the new name
         o, _ = self.share()
-        self.st.rename_room("beta", "beta-2")
-        o, c = self.share(gens=o["gens"])
-        self.assertNotIn("gone", o)
+        gen = o["gens"]["beta"]
+        o, c = kr.room_settings(self.st, {"slug": "beta", "op": "rename", "to": "beta-2"}, admin=True, xs=self.svc._xs("local"))
+        self.assertEqual(c, 200, o)
+        self.assertEqual(self.listed("beta-2"), [PATH])                     # the listing moved with the room
+        o, c = self.share(gens={"beta": gen})                               # the sharer still names the old room
+        self.assertEqual((c, o.get("renamed"), o.get("gone")), (403, {"beta": "beta-2"}, None), o)
+        self.assertEqual(self.listed("beta"), [])                            # never re-listed under the old name
+        o, c = self.share(to=["beta-2"], tokens={"beta-2": mint(self.svc, "beta-2")}, gens={"beta-2": gen})   # it follows
+        self.assertEqual((c, o["to"], o["gens"]), (200, ["beta-2"], {"beta-2": gen}))   # the same room (generation kept)
 
     def test_hook_registered_once(self):
         n = sum(1 for f in self.st.on_room_gone if getattr(f, "__self__", None) is self.svc)
@@ -170,6 +219,24 @@ class Federation(unittest.TestCase):
         o, c = self.post(gens={"beta": gen})
         self.assertEqual((c, o.get("gone")), (403, ["beta"]), o)
 
+    def test_spoke_passes_a_rename_through(self):
+        o, _ = self.post()
+        o, c = self.hub.rooms_fed({"op": "settings", "vouch": "admin", "body": {"slug": "beta", "op": "rename", "to": "gate"}},
+                                  "Bearer " + self.fed)                     # renamed at the hub (a spoke's admin)
+        self.assertEqual(c, 200, o)
+        o, c = self.post()
+        self.assertEqual((c, o.get("renamed")), (403, {"beta": "gate"}), o)
+
+    def test_hub_lapse_is_not_a_delete(self):
+        o, _ = self.post()
+        gen = o["gens"]["beta"]
+        with self.hub.store.lock:
+            self.hub.store.rooms["beta"]["at"] = time.time() - kr.ROOM_TTL - 5
+        self.hub.store.room_slugs()
+        self.assertEqual(len(self.hub._xs("local").into("beta")), 1)
+        o, c = self.post(gens={"beta": gen})
+        self.assertEqual((c, o["to"], o.get("gone")), (200, ["beta"], None), o)
+
     def test_spoke_with_a_dark_hub_judges_nothing(self):
         hub = [None]
         dead = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4463, store(), hub=lambda: hub[0], fed_token=lambda: self.fed)
@@ -198,6 +265,17 @@ class OpenRelay(unittest.TestCase):
         self.assertEqual((c, o.get("gone")), (403, ["beta"]))
         o, c = kr.xshare_open("POST", {"from": "alpha", "path": PATH, "to": ["beta"]}, store=self.st, judge=False)   # a spoke's open relay
         self.assertEqual(c, 200)
+
+    def test_open_relay_rename_followed(self):
+        o, c = kr.xshare_open("POST", {"from": "alpha", "path": PATH, "to": ["beta"]}, store=self.st)
+        o, c = kr.room_settings(self.st, {"slug": "beta", "op": "rename", "to": "gate"}, admin=True, xs=kr.XSHARE_OPEN)
+        self.assertEqual(c, 200, o)
+        self.assertEqual([i["path"] for i in kr.xshare_open("GET", room="gate")[0]["items"]], [PATH])
+        o, c = kr.xshare_open("POST", {"from": "alpha", "path": PATH, "to": ["beta"]}, store=self.st)
+        self.assertEqual((c, o.get("renamed")), (403, {"beta": "gate"}))
+
+    def test_open_relay_settings_route_renames_the_open_registry(self):
+        self.assertIn('else kastr_relay.XSHARE_OPEN   # 0.21.91: an open relay', read("kastr_serve.py"))
 
 
 class Box(Sandbox):
@@ -247,6 +325,37 @@ class Box(Sandbox):
         b.xs_tick(post=self.gone_post(), mint=self.relay.mint)                # not posted to rb again, even when "rb" exists anew
         self.assertEqual(self.relay.lists()[n][1]["to"], ["ra"])
 
+    def test_renamed_room_followed(self):
+        b = self.bridge()
+        feed = self.camera(b)
+        feed.xs = ["ra", "rb"]
+        feed.xs_codes = {"rb": "secret"}
+        b.xs_tick(post=self.gone_post(), mint=self.relay.mint)
+
+        def post(url, body, bearer):
+            if not body.get("stop") and "rb" in body["to"]:
+                self.relay.posts.append((url, json.loads(json.dumps(body)), bearer))
+                acc = [r for r in body["to"] if r != "rb"]
+                return {"ok": True, "to": acc, "refused": {"rb": "renamed to gate"}, "renamed": {"rb": "gate"},
+                        "gens": {r: "g-" + r for r in acc}}, 200
+            return self.gone_post()(url, body, bearer)
+        b.xs_tick(post=post, mint=self.relay.mint)
+        self.assertEqual(feed.xs, ["ra", "gate"])                             # same place in the list
+        self.assertEqual((feed.xs_codes, feed.xs_gen), ({"gate": "secret"}, {"ra": "g-ra", "gate": "g-rb"}))   # code + generation follow
+        self.assertEqual([(d["room"], d["to"], d["why"]) for d in feed.xs_dropped], [("rb", "gate", "renamed")])
+        self.assertEqual(self.feeds_doc()["feeds"][0]["xs"], ["ra", "gate"])
+        self.assertTrue(any("follows renamed room(s) rb -> gate" in ln for ln in self.lines))
+        b.xs_tick(post=self.gone_post(), mint=self.relay.mint)                 # the next round lists it under the new name
+        last = self.relay.lists()[-1][1]
+        self.assertEqual((last["to"], last["gens"]), (["ra", "gate"], {"ra": "g-ra", "gate": "g-rb"}))
+
+    def test_rename_into_a_room_it_already_shows_in(self):
+        b = self.bridge()
+        feed = self.camera(b)
+        feed.xs = ["ra", "rb"]
+        moved = b._xs_follow(feed, {"rb": "ra"}, PATH1)
+        self.assertEqual((moved, feed.xs), ({"rb": "ra"}, ["ra"]))
+
     def test_all_rooms_gone_stops_listing(self):
         b = self.bridge()
         feed = self.camera(b)
@@ -288,7 +397,17 @@ class Page(unittest.TestCase):
         self.assertIn("const gone = !stop && x && Array.isArray(d.gone) ? d.gone.map(String).filter((sl) => x.rooms.has(sl)) : [];", s)
         self.assertIn("if (Array.isArray(keep)) xsSave(path, keep.filter((sl) => !gone.includes(sl)));", s)   # a restart never brings it back
         self.assertIn('const XS_GENS_KEY = () => "kastr.xshare.gens." + sbRelayHost();', s)
-        self.assertIn("if (gone.includes(slug)) continue;", s)            # one notice, not two
+        self.assertIn("if (gone.includes(slug) || ren.some(([a]) => a === slug)) continue;", s)   # one notice, not two
+
+    def test_page_share_follows_a_rename(self):
+        s = self.s
+        self.assertIn("if (ren.length) xsFollow(path, ren);", s)
+        self.assertIn("async function xsFollow(path, ren) {", s)
+        self.assertIn("try { x.tokens[b] = await xsTokenFor(b, xsCodes[a] || \"\"); x.rooms.add(b);", s)
+        self.assertIn("xsGensSet(path, (g) => { for (const [a, b] of moved) { if (g[a] && !g[b]) g[b] = g[a]; delete g[a]; } });", s)
+        self.assertIn("if (Array.isArray(keep)) xsSave(path, [...new Set(keep.map((sl) => (moved.find(([a]) => a === sl) || [])[1] || sl))]", s)
+        self.assertIn('if (gone.includes(slug) || ren.some(([a]) => a === slug)) continue;', s)
+        self.assertIn('to: x.why === "renamed" ? String(x.to || "") : ""', s)   # the box page says so too
 
     def test_box_page_says_it_once(self):
         s = self.s

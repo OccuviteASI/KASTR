@@ -25,5 +25,12 @@ class NotificationsToggle(unittest.TestCase):
         self.assertIn(".mchk .switch { flex:none; }", s)
 
 
+class MessagesButtonsCentred(unittest.TestCase):
+    def test_pill_grows_and_centres(self):
+        s = read("moq-watch-lite.html")
+        self.assertIn("height:auto; min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:6px; "
+                      "text-align:center; line-height:1.25; }", s)
+
+
 if __name__ == "__main__":
     unittest.main()

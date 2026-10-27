@@ -6,7 +6,7 @@
 // WHO: a person = a name with a My room. Their ONE identity key pair (ECDH P-256) lives on the hub wrapped under
 // PBKDF2-SHA256(My room code, salt, 600000) + AES-GCM; this page fetches the wrap after proving name + code, opens it here and
 // keeps the private key NON-EXTRACTABLE in IndexedDB. The code itself is what this device already remembers for My room
-// (kastr.personal.<relay host>) or what the person types once.
+// (kastr.personal.f.<fleet id> since 0.21.91 -- any relay of the fleet) or what the person types once.
 // WHAT THE HUB SEES: names, group membership, timestamps, sizes -- never a message, a file, the private key or the key the code
 // derives. A message = AES-GCM(K, body) with K wrapped for every reader PERSON (and me: my other devices) under
 // HKDF(ECDH(my key, their key), salt = message id, "kastr-msg-wrap-v1|<sender key id>|<reader key id>").
@@ -14,9 +14,13 @@
 // beat says so (window.__msg.ping), and every 30 s. History stays here too (IndexedDB, trimmed at 90 days).
 (() => {
   "use strict";
-  if (window.__msg) return;
+  // 0.21.91: the page's bridge may come a moment AFTER this module runs (module scripts do not wait for each other once one is
+  // awaiting) -- wait for it instead of giving up (a page with no Messages at all, seen in the lab now and then)
+  let boots = 0;
+  const boot = () => { if (window.__msg) return; if (!window.__kmsg) { if (++boots < 600) setTimeout(boot, 100); return; } main(); };
+  boot();
+  function main() {
   const K = window.__kmsg;   // the page's bridge (moq-watch-lite.html)
-  if (!K) return;
   const subtle = (window.crypto && window.crypto.subtle) || null;
   const enc = new TextEncoder(), dec = new TextDecoder();
   const ITER = 600000;            // PBKDF2-SHA256 iterations (OWASP 2023); the hub refuses fewer
@@ -115,6 +119,7 @@
     view: "list", picker: null, filter: "", people: [], peopleAt: 0, ticks: {}, codeMin: 8, hubDown: false, settings: false,
   };
   const by = () => S.fleet + "|" + S.nk;
+  const renameMap = new Map();   // 0.21.91: old name key -> {key, name} (people who changed their name)
   const convOf = (r) => (r.gid ? "g:" + r.gid : "p:" + (r.mine ? r.to : r.from));
   const meName = () => nameDisp(K.personal()?.name || K.me());
 
@@ -158,6 +163,7 @@
     if (!subtle || !window.indexedDB) { setState("nocrypto"); return; }
     if (!K.allowed()) { if (S.state !== "off") { S.state = "off"; S.id = null; } paintBtn(); return; }
     if (initBusy) { initAgain = true; return; }
+    try { await K.personalReady?.(); } catch {}   // 0.21.91: My room's record of this fleet, before anything is asked
     const name = meName(), nk = nameKey(name);
     if (!nk) { setState("noname"); return; }
     if (!force && S.state === "ready" && S.nk === nk) return;
@@ -173,6 +179,8 @@
       }
       S.hubDown = false;
       S.fleet = String(st.fleet || ""); S.codeMin = Number(st.codeMin) || 8;
+      const mv = (st.renamed || {})[nk];
+      if (mv && mv.key && mv.key !== nk) { initBusy = false; await selfRenamed(nk, mv.key, mv.name || mv.key); return; }   // 0.21.91: renamed on another device
       const local = await idbGet("ids", by()).catch(() => null);
       if (st.blocked) { if (local) await idbDel("ids", by()).catch(() => {}); S.id = null; setState("blocked"); return; }
       if (local && st.has && st.unlocked && local.kid === st.kid) { await ready(local); return; }
@@ -270,6 +278,9 @@
         if (S.hubDown) { S.hubDown = false; paint(); outboxRetry(); }
         if ((d.locked || []).includes(S.nk)) { await lockedOut(); return; }
         if (d.fleet && d.fleet !== S.fleet) break;
+        const mv = (d.renamed || {})[S.nk];   // 0.21.91: I changed my name on another device -- this copy moves over first
+        if (mv && mv.key && mv.key !== S.nk) { S.busy = false; await selfRenamed(S.nk, mv.key, mv.name || mv.key); return; }
+        applyRenames(d.renames || []);   // 0.21.91: someone else did -- my copy of our conversation follows
         S.top = Number(d.top) || S.top;
         for (const g of d.groups || []) S.groups.set(g.gid, g);
         idbPut("meta", { k: "groups|" + by(), v: [...S.groups.values()] }).catch(() => {});
@@ -387,7 +398,11 @@
     if (miss.length) {
       const d = await api({ op: "keys", names: miss });
       if (!d.ok) throw Object.assign(new Error(d.error || "keys"), { net: d.net || d.status === 503 });
-      for (const n of miss) S.keys.set(n, { row: (d.keys || {})[n] || null, at: Date.now() });
+      for (const n of miss) {   // 0.21.91: a name someone changed away from answers with their new name's key
+        const mv = (d.renamed || {})[n];
+        if (mv?.key) { renameMap.set(n, { key: mv.key, name: mv.name }); }
+        S.keys.set(n, { row: (d.keys || {})[n] || (mv?.key ? (d.keys || {})[mv.key] : null) || null, at: Date.now() });
+      }
     }
     const out = {};
     for (const n of want) out[n] = S.keys.get(n)?.row || null;
@@ -416,6 +431,7 @@
     text = String(text || "").slice(0, 20000);
     files = (files || []).slice(0, 10);
     if (!text.trim() && !files.length) return;
+    { const mv = conv.startsWith("p:") ? renameMap.get(conv.slice(2)) : null; if (mv?.key) conv = "p:" + mv.key; }   // 0.21.91: to their new name
     const cid = rid();
     const rec = { k: "cid:" + cid, by: by(), cid, at: Math.floor(Date.now() / 1000), from: S.nk, fromName: S.name, mine: true, kind: "msg", text,
                   files: files.map((f) => ({ name: f.name || "file", type: f.type || "", size: f.size, local: URL.createObjectURL(f) })),
@@ -565,7 +581,8 @@
     const s = r.sys || {}, who = r.mine ? "You" : r.fromName, names = (s.names || []).join(", ");
     return s.ev === "create" ? who + " made the group “" + (s.name || "") + "”" + (names ? " with " + names : "")
       : s.ev === "add" ? who + " added " + names : s.ev === "remove" ? who + " removed " + names
-      : s.ev === "leave" ? who + " left" : s.ev === "rename" ? who + " renamed the group “" + (s.name || "") + "”" : who + " changed the group";
+      : s.ev === "leave" ? who + " left" : s.ev === "rename" ? who + " renamed the group “" + (s.name || "") + "”"
+      : s.ev === "renamed" ? (s.from || who) + " is now " + (s.name || who) : who + " changed the group";   // 0.21.91: a person's new name
   }
 
   let wide = false;
@@ -915,8 +932,10 @@
     if (pane.dataset.conv !== conv) {
       pane.dataset.conv = conv;
       pane.innerHTML = '<div class="mchead"><button type="button" class="mback" title="All conversations">' + K.icon("sbChev") + '</button><div class="mctitle"><div class="mn"></div><div class="mprev"></div></div><button type="button" class="mcmenu" title="Group options" hidden>' + K.icon("more") + "</button></div>"
-        + '<div class="mlog" aria-live="polite"></div><div class="mnokey" hidden></div><div class="matt" hidden></div>'
-        + '<div class="mcomp"><button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
+        + '<div class="mlog" aria-live="polite"></div><div class="mnokey" hidden></div><div class="matt" hidden></div><div class="memogrid" hidden></div><div class="mgifgrid kgif" hidden></div>'
+        + '<div class="mcomp"><button type="button" class="memo" title="Emoji">\uD83D\uDE42</button>'
+        + '<button type="button" class="mgif" title="GIF" hidden>GIF</button>'   // 0.21.91: GIF search (assets/kastr-gif.js)
+        + '<button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
         + '<textarea class="mcin" rows="1" placeholder="Write a message" title="Enter sends, Shift+Enter starts a new line"></textarea><button type="button" class="msend" title="Send">' + K.icon("send") + "</button></div>"
         + '<input type="file" class="mfilein" multiple hidden>';
       const ta = pane.querySelector(".mcin"), fi = pane.querySelector(".mfilein");
@@ -925,6 +944,7 @@
         const t = ta.value, fs = pane.__files.slice();
         if (!t.trim() && !fs.length) return;
         ta.value = ""; pane.__files = []; paintAtt(pane); grow(ta);
+        pane.querySelector(".memogrid").hidden = true; pane.querySelector(".memo").classList.remove("on");
         send(conv, t, fs);
       };
       ta.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendNow(); } });
@@ -940,6 +960,32 @@
       pane.addEventListener("drop", (e) => { pane.classList.remove("mdrag"); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(pane, fs); } });
       pane.querySelector(".msend").addEventListener("click", (e) => { e.stopPropagation(); sendNow(); });
       pane.querySelector(".mattach").addEventListener("click", (e) => { e.stopPropagation(); fi.click(); });
+      // 0.21.91 (Kenton: "messages should allow for the emojis to be used"): the Room Chat grid, inserted where the cursor is;
+      // the system emoji keyboard (Win + .) works in the box as well
+      const eg = pane.querySelector(".memogrid"), eb = pane.querySelector(".memo");
+      const emoShow = (on) => { eg.hidden = !on; eb.classList.toggle("on", on); };
+      for (const ch of (K.emoji?.() || [])) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = ch;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const st = ta.selectionStart ?? ta.value.length, en = ta.selectionEnd ?? st;
+          ta.value = ta.value.slice(0, st) + ch + ta.value.slice(en);
+          ta.selectionStart = ta.selectionEnd = st + ch.length;
+          grow(ta); ta.focus();
+        });
+        eg.appendChild(b);
+      }
+      const eh = document.createElement("div"); eh.className = "chint";
+      eh.textContent = navigator.platform.startsWith("Win") ? "More: Win + . opens the system emoji keyboard" : "More: your system emoji keyboard (e.g. Ctrl + Cmd + Space)";
+      eg.appendChild(eh);
+      eb.addEventListener("click", (e) => { e.stopPropagation(); emoShow(eg.hidden); });
+      ta.addEventListener("keydown", (e) => { if (e.key === "Escape" && !eg.hidden) { e.preventDefault(); emoShow(false); } });
+      // ---- 0.21.91 (Kenton: "I would like to add gif search options as well to the chat/messages."): GIF search -- the shared
+      // picker (assets/kastr-gif.js) opens where the emoji grid does (one of the two at a time); a pick is fetched through the hub
+      // and sent as an end-to-end encrypted attachment, exactly like a pasted picture (the recipient never contacts GIPHY)
+      window.__gif?.mount({ root: pane, btn: pane.querySelector(".mgif"), panel: pane.querySelector(".mgifgrid"), input: ta,
+        emoji: { btn: eb, panel: eg }, send: async (file) => { send(conv, "", [file]); } });
+      // ---- end 0.21.91 GIF search
       fi.addEventListener("change", () => { addFiles(pane, [...fi.files]); fi.value = ""; });
       pane.querySelector(".mback").addEventListener("click", (e) => { e.stopPropagation(); S.view = "list"; if (!wide) S.open = ""; paint(); });
       pane.querySelector(".mcmenu").addEventListener("click", (e) => { e.stopPropagation(); groupMenu(e.currentTarget); });
@@ -1111,6 +1157,114 @@
     });
   }
 
+  // ---- 0.21.91 (Kenton: when someone who already has a My room changes their name, MOVE EVERYTHING to the new name) ----------
+  // POST /api/msg {op: "rename", name, newName, code, wrapped, iv, salt, iter}: the code proves it; this device opens the hub's
+  // wrap of the messages key with the code (its AES-GCM additional data is "kastr-msg-id-v1|<OLD name key>") and wraps the
+  // same key again with the same code under "kastr-msg-id-v1|<NEW name key>" (a fresh salt and iv) -- the key itself and its
+  // id do not change, so every message still opens. The hub moves My room (same room), the messages store, the photo and
+  // keeps the old name pointing at the new one for 90 days. Here: My room's record on this device, the profile name, and my
+  // copy of the history (IndexedDB) move to the new name; other devices of mine hear it on their next status / pull.
+  async function renameMe(newName, code) {
+    newName = nameDisp(newName).slice(0, 40);
+    const oldName = S.name, oldNk = S.nk, newNk = nameKey(newName);
+    if (!newNk) return { ok: false, error: "Enter the new name." };
+    if (newName === oldName) return { ok: true, same: true, name: newName };
+    const u = await api({ op: "unlock", name: oldName, code });
+    if (!u.ok) return { ok: false, wrong: !!u.wrong, error: u.wrong ? "That isn\u2019t your My room code." : (u.error || "Refused.") };
+    const body = { op: "rename", name: oldName, newName, code };
+    if (u.person) {
+      let pk8 = null;
+      try { pk8 = await openWrap(u.person, code); } catch { return { ok: false, error: "Your messages key does not open with that code." }; }
+      Object.assign(body, await rewrap(pk8, newNk, code));
+      pk8.fill(0);
+    }
+    const d = await api(body);
+    if (!d.ok) return { ok: false, taken: !!d.taken, wrong: !!d.wrong, error: d.error || "Refused." };
+    T("renamed", { from: oldNk, to: d.key || newNk });
+    await selfRenamed(oldNk, d.key || newNk, d.name || newName, code);
+    return { ok: true, name: d.name || newName };
+  }
+  let selfMoving = false;
+  async function selfRenamed(oldNk, newNk, newName, code) {
+    if (selfMoving) return;
+    selfMoving = true;
+    try {
+      const p = K.personal();
+      if (p && nameKey(p.name) === oldNk) K.savePersonalName?.(newName);       // My room's record on this device (same room)
+      else if (!p && code) await K.roomOpen?.(newName, code);                   // (a device that had none: My room on its rail now)
+      if (nameKey(K.me()) === oldNk) K.setProfileName?.(newName);              // the name this device shows everyone
+      if (S.fleet) await migrateLocal(oldNk, newNk, newName).catch((e) => T("migrate-fail", { e: String(e?.message || e) }));
+      S.recs.clear(); S.groups.clear(); S.reads = {}; S.keys.clear(); S.cur = 0; S.open = S.open === "p:" + oldNk ? "" : S.open;
+      S.id = null; S.nk = ""; S.state = "init";
+      toast("You are now \u201c" + newName + "\u201d for My room and messages", 6000, "event");
+    } finally { selfMoving = false; }
+    setTimeout(() => init(true), 50);
+  }
+  async function migrateLocal(oldNk, newNk, newName) {
+    const ob = S.fleet + "|" + oldNk, nb = S.fleet + "|" + newNk;
+    const id = await idbGet("ids", ob).catch(() => null);
+    if (id) { await idbPut("ids", Object.assign({}, id, { k: nb, nk: newNk, name: newName })); await idbDel("ids", ob); }
+    for (const m of ["cur", "reads", "groups"]) {
+      const v = await idbGet("meta", m + "|" + ob).catch(() => null);
+      if (!v) continue;
+      let val = v.v;
+      if (m === "reads" && val) { const r = {}; for (const [k, x] of Object.entries(val)) r[k === "p:" + oldNk ? "p:" + newNk : k] = x; val = r; }
+      await idbPut("meta", { k: m + "|" + nb, v: val });
+      await idbDel("meta", m + "|" + ob);
+    }
+    for (const r of await idbAll("msgs", "by", ob).catch(() => [])) {
+      const n = Object.assign({}, r, { by: nb, k: nb + "|" + r.seq });
+      if (n.from === oldNk) { n.from = newNk; n.fromName = newName; }
+      if (n.to === oldNk) { n.to = newNk; n.toName = newName; }
+      n.mine = n.from === newNk;
+      await idbPut("msgs", n);
+      await idbDel("msgs", r.k);
+    }
+    for (const o of await idbAll("outbox").catch(() => [])) if (o.by === ob) await idbPut("outbox", Object.assign({}, o, { by: nb }));
+  }
+  const renamesDone = new Set();
+  function applyRenames(list) {
+    for (const r of list) {
+      const o = String(r?.from || ""), n = String(r?.to || "");
+      if (!o || !n || o === n || o === S.nk || renamesDone.has(o + ">" + n)) continue;
+      renamesDone.add(o + ">" + n);
+      renameMap.set(o, { key: n, name: r.name || n });
+      let moved = 0;
+      for (const rec of S.recs.values()) {
+        let c = false;
+        if (rec.from === o) { rec.from = n; rec.fromName = r.name || n; c = true; }
+        if (rec.to === o) { rec.to = n; rec.toName = r.name || n; c = true; }
+        if (c) { moved++; if (rec.seq) idbPut("msgs", rec).catch(() => {}); }
+      }
+      if (S.reads["p:" + o] !== undefined) {
+        S.reads["p:" + n] = Math.max(Number(S.reads["p:" + n]) || 0, Number(S.reads["p:" + o]) || 0);
+        delete S.reads["p:" + o];
+        idbPut("meta", { k: "reads|" + by(), v: S.reads }).catch(() => {});
+      }
+      if (S.open === "p:" + o) S.open = "p:" + n;
+      if (S.ticks["p:" + o]) { S.ticks["p:" + n] = S.ticks["p:" + o]; delete S.ticks["p:" + o]; }
+      S.keys.delete(o);
+      if (moved) T("rename-applied", { from: o, to: n, moved });
+    }
+  }
+  // The Profile saved a new name: unlocked -> "Rename your My room and messages to <new>?" (or keep the old name for My room);
+  // the card up for my own My room (short code / earlier code) -> the card's rename, with the new name filled in.
+  async function nameChanged(before, after) {
+    after = nameDisp(after).slice(0, 40);
+    if (!K.allowed() || !nameKey(after) || nameKey(after) === S.nk || !S.nk) return;
+    if (S.state === "ready") {
+      const old = S.name;
+      const v = await K.confirm({ title: "Rename your My room and messages?", message: "Rename your My room and messages to \u201c" + after + "\u201d?",
+        detail: "Your My room, your messages (with their history) and your photo move to the new name, and everyone sees it. The old name keeps pointing to you for 90 days. Confirm with your My room code.",
+        ok: "Rename", cancel: "Keep using " + old + " for My room", input: { masked: true, placeholder: "My room code" },
+        check: async (code) => { if (!code) return "Enter your My room code."; const r = await renameMe(after, code); return r.ok ? "" : r.error; } });
+      T("profile-rename", { done: v !== false });
+      return;
+    }
+    if (S.state === "short" || S.state === "rekey") { gateSub = "rename"; gateSubName = after; gateKey = ""; setTimeout(gateTick, 0); return; }
+    setTimeout(() => init(true), 50);
+  }
+
   // ---- 0.21.89 (Kenton: "On launch, have people set their 'my room' and messages up if they haven't already" -- REQUIRED) ----
   // One card over the whole page once a PERSON has joined a room with an access code (never a camera box, a relay-only machine,
   // a viewer-only display, the Lobby, an invite-link or My room guest -- K.allowed() + K.person()) and Messages need a step
@@ -1125,10 +1279,11 @@
                   error: "My room and messages will be set up when the hub is reachable",
                   old: "My room and messages will be set up when this relay runs KASTR 0.21.88 or later" };
   let gateEl = null, gateKey = "", gateBusy = false, gateShownAt = 0;
+  let gateSub = null, gateSubName = "";   // 0.21.91: "rename" (My room is theirs: everything moves) | "choice" (the unlock card: mine, or another name)
   const gateOn = () => !!gateEl && !gateEl.hidden;
   function gateWanted() {
     if (!K.allowed() || !(K.person?.() ?? false)) return false;
-    return GATE_STATES.has(S.state) || (gateOn() && (S.state === "unlocking" || gateBusy));
+    return GATE_STATES.has(S.state) || (gateOn() && (S.state === "unlocking" || S.state === "init" || gateBusy || !!gateSub));
   }
   function gateBar() {
     let bar = document.getElementById("kSetupBar");
@@ -1159,11 +1314,13 @@
     el.innerHTML = '<div class="popcard ksetup"><div class="body">'
       + '<div class="ksico">' + K.icon("msg") + '</div><h3 id="ksTitle"></h3><p class="kslead"></p>'
       + '<div class="ksname"><span class="lbl">Name</span><b class="ksn"></b><button type="button" class="kslink" data-a="name">Change name</button></div>'
+      + '<label class="ksf" data-f="nn" hidden><span>New name</span><input type="text" class="ksnn" maxlength="40" autocomplete="name" spellcheck="false"></label>'
       + '<label class="ksf" data-f="old"><span>Current My room code</span><input type="password" class="kso" autocomplete="current-password"></label>'
       + '<label class="ksf" data-f="c1"><span class="ksc1l">My room code</span><input type="password" class="ksc1" autocomplete="new-password"></label>'
       + '<label class="ksf" data-f="c2"><span>The same code again</span><input type="password" class="ksc2" autocomplete="new-password"></label>'
       + '<p class="kshint"></p><p class="kserr" role="alert"></p>'
-      + '<div class="ksbtns"><button type="button" class="mghost" data-a="fresh" hidden>Start fresh</button><button type="button" class="mprim" data-a="go"></button></div>'
+      + '<div class="ksbtns"><button type="button" class="mghost" data-a="back" hidden>Back</button><button type="button" class="mghost" data-a="other" hidden>Use a different name</button>'
+      + '<button type="button" class="mghost" data-a="fresh" hidden>Start fresh</button><button type="button" class="mprim" data-a="go"></button></div>'
       + '<p class="ksforgot">Forgot your code? A fleet admin can reset your My room \u2014 your message history would be lost.</p>'
       + '<div class="ksmic" hidden><span>Your microphone is on</span><button type="button" class="mghost" data-a="mute">Mute</button></div>'
       + "</div></div>";
@@ -1176,11 +1333,22 @@
     el.querySelector('[data-a="go"]').addEventListener("click", () => gateGo());
     el.querySelector('[data-a="fresh"]').addEventListener("click", () => gateFresh());
     el.querySelector('[data-a="mute"]').addEventListener("click", () => { try { K.mic?.().mute?.(); } catch {} setTimeout(gateMic, 300); });
-    el.querySelector('[data-a="name"]').addEventListener("click", () => {
-      el.hidden = true; gateKey = "";
+    const toProfile = () => {
+      el.hidden = true; gateKey = ""; gateSub = null;
       T("gate-name", {});
       K.profile?.(() => { S.state = "init"; setTimeout(() => init(true).then(gateTick), 50); });   // a new name: asked again from the start
+    };
+    el.querySelector('[data-a="name"]').addEventListener("click", () => {
+      // 0.21.91: My room is theirs (a short code, an earlier code) -> rename it; the unlock card may be someone else's name ->
+      // ask; a brand-new person -> the Profile, as before
+      const st = S.state;
+      if (st === "short" || st === "rekey") { gateSub = "rename"; gateSubName = ""; }
+      else if (st === "needcode") gateSub = "choice";
+      else return toProfile();
+      gateKey = ""; T("gate-sub", { sub: gateSub }); gatePaint();
     });
+    el.querySelector('[data-a="other"]').addEventListener("click", () => toProfile());
+    el.querySelector('[data-a="back"]').addEventListener("click", () => { gateSub = null; gateKey = ""; gatePaint(); });
     document.body.appendChild(el);
     return el;
   }
@@ -1191,7 +1359,7 @@
   }
   function gatePaint() {
     if (!gateEl) gateEl = gateBuild();
-    const st = gateBusy || S.state === "unlocking" ? (gateEl.dataset.st || S.state) : S.state;
+    const st = gateSub || (gateBusy || S.state === "unlocking" || S.state === "init" ? (gateEl.dataset.st || S.state) : S.state);
     const key = st + "|" + S.name;
     const q = (sel) => gateEl.querySelector(sel);
     const err = q(".kserr");
@@ -1204,6 +1372,8 @@
         needcode: ["Unlock your messages", "\u201c" + S.name + "\u201d already has a My room on this hub. If it\u2019s yours, enter your My room code to unlock your messages on this device. If it isn\u2019t you, change your name.", "Unlock"],
         short: ["Pick a longer My room code", "Pick a longer My room code to turn on messages. It becomes your My room code everywhere \u2014 your other devices ask for it once.", "Use this code"],
         rekey: ["Enter your earlier My room code", "Your messages key was locked with an earlier My room code (an admin may have reset it). Enter that earlier code to keep your history \u2014 or start fresh (older messages cannot be read again).", "Unlock"],
+        rename: ["Rename My room and messages", "Your My room, your messages (with their history) and your photo move to the new name, and everyone sees it. The old name keeps pointing to you for 90 days. Confirm with your My room code.", "Rename"],
+        choice: ["Change name", "Is \u201c" + S.name + "\u201d your own My room, set up on another device? Rename it \u2014 everything moves to the new name. If it isn\u2019t yours, use a different name.", "It\u2019s mine \u2014 rename it"],
       }[st] || ["Set up My room and messages", "", "Continue"];
       q("#ksTitle").textContent = t[0];
       q(".kslead").textContent = t[1];
@@ -1211,16 +1381,21 @@
       q(".ksn").textContent = S.name || "\u2014";
       const needOld = st === "short" && !(S.pendingCode || K.personal()?.code);
       q('[data-f="old"]').hidden = !needOld;
-      q('[data-f="c1"]').hidden = false;
+      q('[data-f="nn"]').hidden = st !== "rename";
+      q('[data-f="c1"]').hidden = st === "choice";
       q('[data-f="c2"]').hidden = !(st === "noroom" || st === "short");
-      q(".ksc1l").textContent = st === "short" ? "New My room code" : st === "rekey" ? "Earlier My room code" : "My room code";
+      q('[data-a="name"]').hidden = st === "rename" || st === "choice";
+      q('[data-a="back"]').hidden = !(st === "rename" || st === "choice");
+      q('[data-a="other"]').hidden = st !== "choice";
+      q(".ksc1l").textContent = st === "short" ? "New My room code" : st === "rekey" ? "Earlier My room code" : st === "rename" ? "Your My room code" : "My room code";
       q(".ksc1").autocomplete = st === "noroom" || st === "short" ? "new-password" : "current-password";
       q(".kshint").textContent = st === "noroom" || st === "short" ? "At least " + min + " characters \u2014 it opens My room and your messages on any device, so pick one only you know." : "";
       q(".kshint").hidden = !q(".kshint").textContent;
       q('[data-a="fresh"]').hidden = st !== "rekey";
       q(".ksforgot").hidden = st === "noroom";
       for (const i of gateEl.querySelectorAll("input")) { i.value = ""; i.classList.remove("bad"); }
-      err.textContent = S.why && st !== "noroom" ? S.why : "";
+      if (st === "rename") q(".ksnn").value = gateSubName || "";
+      err.textContent = S.why && !["noroom", "rename", "choice"].includes(st) ? S.why : "";
       gateEl.hidden = false;
       gateShownAt = Date.now();
       T("gate-show", { st });
@@ -1244,6 +1419,8 @@
     const st = gateEl.dataset.st, min = S.codeMin || 8;
     const q = (sel) => gateEl.querySelector(sel);
     const c1 = q(".ksc1").value, c2 = q(".ksc2").value, old = q(".kso").value;
+    if (st === "choice") { gateSub = "rename"; gateSubName = ""; gateKey = ""; gatePaint(); return; }   // 0.21.91
+    if (st === "rename" && !nameKey(q(".ksnn").value)) return gateSay("Enter the new name.", ["ksnn"]);
     if (!c1) return gateSay("Enter " + (st === "short" ? "a new" : st === "rekey" ? "your earlier" : "your") + " My room code.", ["ksc1"]);
     if ((st === "noroom" || st === "short") && c1.length < min) return gateSay("Too short \u2014 a My room code has at least " + min + " characters.", ["ksc1"]);
     if ((st === "noroom" || st === "short") && c1 !== c2) return gateSay("The two codes don\u2019t match.", ["ksc2"]);
@@ -1274,6 +1451,10 @@
         const ok = await unlock(cur, false, c1);
         if (!ok) { gateSay(S.state === "needcode" ? "The current code is wrong." : (S.why || "Could not change the code."), ["kso"]); return; }
         if (!K.personal()) await K.roomOpen(S.name, c1);
+      } else if (st === "rename") {   // 0.21.91: everything moves; then the card carries on under the new name
+        const r = await renameMe(q(".ksnn").value, c1);
+        if (!r.ok) { gateSay(r.error || "Could not rename.", r.wrong ? ["ksc1"] : ["ksnn"]); return; }
+        gateSub = null; gateSubName = ""; gateKey = "";
       } else if (st === "rekey") {
         S.why = "";
         await rekeyWith(c1);
@@ -1325,7 +1506,10 @@
     fileUrl: (seq, i) => { const r = S.recs.get("seq:" + seq); return r && r.files?.[i] ? fileUrl(r.files[i]) : null; },
     people: () => S.people,
     keys: (names, force) => keysFor(names, force),
-    gate: () => ({ shown: gateOn(), st: gateEl?.dataset.st || "", busy: gateBusy, wanted: gateWanted(), bar: (() => { const b = document.getElementById("kSetupBar"); return b && !b.hidden ? b.textContent : ""; })(),
+    nameChanged: (before, after) => nameChanged(before, after),   // 0.21.91: the Profile saved a new name
+    rename: (newName, code) => renameMe(newName, code),           // 0.21.91 (rig)
+    forgetRenames: () => { renameMap.clear(); renamesDone.clear(); S.keys.clear(); },   // 0.21.91 (rig: play an outdated device)
+    gate: () => ({ shown: gateOn(), sub: gateSub || "", st: gateEl?.dataset.st || "", busy: gateBusy, wanted: gateWanted(), bar: (() => { const b = document.getElementById("kSetupBar"); return b && !b.hidden ? b.textContent : ""; })(),
       err: gateEl?.querySelector(".kserr")?.textContent || "", shownAt: gateShownAt }),   // 0.21.89 rig
   };
   setInterval(() => { if (S.state === "ready") { pull(); ticks(); } else if (K.allowed() && ["off", "down", "noroom"].includes(S.state)) init(); else paintBtn(); }, POLL_MS);
@@ -1334,4 +1518,5 @@
   window.addEventListener("kastr:auth", () => setTimeout(() => init(), 400));
   window.addEventListener("kastr:personal", () => setTimeout(() => init(true), 200));
   setTimeout(() => init(), 1500);
+  }
 })();

@@ -80,7 +80,8 @@ class Card(unittest.TestCase):
         self.assertNotIn("sessionStorage", g)
         self.assertNotIn("idbPut(\"meta\"", g)
         # My room is remembered as the My room dialog does (unchanged: slug, name, code under kastr.personal.<relay host>)
-        self.assertIn('if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code })); else localStorage.removeItem(k); }', p)
+        # (0.21.91: under the FLEET's key -- the same record, now with the fleet id beside it)
+        self.assertIn('if (k) { if (p) localStorage.setItem(k, JSON.stringify({ slug: p.slug, name: p.name || "", code: p.code, fleet: f || undefined })); else localStorage.removeItem(k); }', p)
         self.assertEqual(p.count("personalSave({ slug: d.slug, name: d.name || name, code });"), 3)   # the dialog + roomMake + roomOpen
 
     def test_launch_paths_untouched(self):

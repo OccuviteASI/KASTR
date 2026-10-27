@@ -4470,11 +4470,8 @@
         else if (r.rooms?.length) window.__toast?.(shortLabel(p) + " also shows in " + r.rooms.join(", "), 3500, { level: "event" });
         continue;
       }
-      if (/\/camera(-\d+)?\.hang$/.test(p) || isPublisherMode() || publishOnly || xsAsked.has(p)) continue;
-      if (Date.now() - xsJoinedAt < 45000 || !xsOtherRooms().length || document.getElementById("xsPop")) continue;   // what a (re)join brings back (a restored camera can take 30 s) is not news
-      xsAsked.add(p);
-      openXsPicker(p, null, { prompt: true });
-      break;   // one question at a time
+      // 0.21.91 (Kenton: "I don't need this popping up everytime I share something"): a new share is NOT asked about other
+      // rooms any more -- it is shown in this room only; the share's own "This room" button (Share panel row) opens the picker
     }
     for (const p of [...xsSeen]) if (!mineNames.has(p)) xsSeen.delete(p);   // a share that comes back later is looked at again
   }

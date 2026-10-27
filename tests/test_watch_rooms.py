@@ -153,8 +153,8 @@ class ShareRoomsPerShare(unittest.TestCase):
         self.assertNotIn('id="xsRoomsRow"', p)
         body = p[p.index("  async function xsTick() {"):p.index("  // members' side: what is listed into my room")]
         self.assertIn("const r = await xsSetRooms(p, keep, { remember: false });", body)   # remembered rooms come back
-        self.assertIn(r"/\/camera(-\d+)?\.hang$/.test(p) || isPublisherMode()", body)   # the camera and a box never ask
-        self.assertIn("openXsPicker(p, null, { prompt: true });", body)
+        self.assertNotIn("openXsPicker(p, null, { prompt: true });", body)   # 0.21.91 (Kenton): no pop-up on every share
+        self.assertIn('the share\'s own "This room" button (Share panel row) opens the picker', body)
 
 
 if __name__ == "__main__":

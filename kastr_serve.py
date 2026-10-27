@@ -3981,7 +3981,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 == "/api/rc":                  # 0.21.79: remote control -- the prompt, the grant, the controller's input
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
-            if path0 in ("/api/rcadmin", "/api/rcadmin/ctl"):   # 0.21.83 (D): the opt-in checkbox (THIS machine only) + the source switcher
+            if path0 in ("/api/rcadmin", "/api/rcadmin/ctl", "/api/rcadmin/ask"):   # 0.21.83 (D): the opt-in checkbox (THIS machine only) + the source switcher; 0.21.92: + an admin's ask answered here
                 import kastr_rcadmin
                 return kastr_rcadmin.handle_api(self, self._rcadmin_dir(), _note)
             if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
@@ -5087,7 +5087,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._lan_api(path, "GET")
             if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp", "/api/screen/rtmp/firewall"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
-            if path in ("/api/rcadmin", "/api/rcadmin/session"):   # 0.21.83 (D): this machine's opt-in, its sessions; the helper page's session
+            if path in ("/api/rcadmin", "/api/rcadmin/session", "/api/rcadmin/ask"):   # 0.21.83 (D): this machine's opt-in, its sessions; the helper page's session; 0.21.92: the Allow prompt's monitors
                 import kastr_rcadmin
                 return kastr_rcadmin.handle_api(self, self._rcadmin_dir(), _note)
             if path == "/api/rc":                   # 0.21.79: remote control -- what this computer can do + the grant's state

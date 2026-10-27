@@ -140,7 +140,8 @@
     $("mName").textContent = mName();
     $("mMeta").textContent = [S.machine?.role, S.machine?.site ? "via " + S.machine.site : "", "session " + String(S.sid).slice(0, 8)].filter(Boolean).join(" · ");
     if (S.machine?.adminWindows === "limited") { const n = $("note"); n.textContent = "Minimize, move, resize and close need KASTR to run as administrator on " + mName() + "’s computer"; n.title = "Administrator windows: Windows keeps a normal process out of them"; n.hidden = false; }
-    msg("Connecting to " + esc(mName()) + "…<span class='sub'>Control is already granted — " + esc(mName()) + " shows a red bar with your name while you are connected.</span>");
+    if (S.kind === "ask") { chip("Waiting for " + mName() + " to allow…", "wait"); msg("Asking " + esc(mName()) + "…<span class='sub'>" + esc(mName()) + " gets a prompt to allow it and picks the screen (up to " + (Number(S.wait) || 60) + " s). Their screen opens here privately — nobody else sees it.</span>"); }   // 0.21.92: an admin's ask
+    else msg("Connecting to " + esc(mName()) + "…<span class='sub'>Control is already granted — " + esc(mName()) + " shows a red bar with your name while you are connected.</span>");
     const url = withJwt(S.relay, S.token);
     conn = connect(url);
     prod = producer(conn, S.paths.admin, ["in.json", "ctl.json"], { priority: 255, maxAge: 2000 });
@@ -237,13 +238,15 @@
     const d = await api({ op: "status", sid: S.sid });
     if (c.ended) return;
     if (d.ok && d.state === "ended") { ended(d.why || "stopped", d.whyText); return; }
-    if (d.ok && d.state === "pending" && !c.live) chip("Waiting for " + mName() + "…", "wait");
+    if (d.ok && d.state === "pending" && !c.live) chip("Waiting for " + mName() + (S.kind === "ask" ? " to allow…" : "…"), "wait");
+    if (d.ok && d.state === "live" && S.kind === "ask" && !c.live && !c.allowedAt) { c.allowedAt = Date.now(); chip("Allowed — connecting…", "wait"); }   // 0.21.92
     if (d.http === 404 && !c.live) ended("noanswer");
   }
   const WHY = { admin: "you ended it", operator: "the hub's operator ended it", hotkey: "someone at the machine pressed Ctrl+Alt+Space", bar: "someone at the machine clicked Stop control",
                 stopped: "it was stopped on the machine", timeout: "the connection went quiet for 10 s", share: "the capture stopped on the machine", noanswer: "the machine did not answer",
                 lost: "the machine went quiet", limit: "the 8-hour limit", off: "the machine's owner switched unattended control off", busy: "someone else controls that machine",
-                desktop: "nobody is signed in on the machine", error: "it could not start", closed: "KASTR closed on the machine", released: "you gave it back", restart: "the hub restarted" };
+                desktop: "nobody is signed in on the machine", error: "it could not start", closed: "KASTR closed on the machine", released: "you gave it back", restart: "the hub restarted",
+                denied: "they declined" };   // 0.21.92: + an ask's answer
   function ended(why, text) {
     if (c.ended) return;
     c.ended = why || "stopped";
@@ -253,6 +256,11 @@
     $("sw").hidden = true; $("blk").hidden = true; $("srcPop").hidden = true;
     for (const id of ["prevMon", "nextMon", "srcBtn", "frontBtn", "stopBtn"]) $(id).disabled = true;
     try { $("w").removeAttribute("url"); } catch {}
+    if (S?.kind === "ask" && !c.live && (c.ended === "denied" || c.ended === "noanswer" || c.ended === "busy" || c.ended === "desktop")) {   // 0.21.92: the ask's answer
+      chip(c.ended === "denied" ? "Declined" : c.ended === "noanswer" ? "No answer" : "Not started", "end");
+      msg(esc(mName()) + (c.ended === "denied" ? " declined your remote control request." : c.ended === "noanswer" ? " didn't answer your remote control request." : c.ended === "busy" ? "'s computer is being controlled by someone already." : "'s screen can't be shared right now.")
+        + "<span class='sub'>The request was logged on their computer and on the hub.</span><button type='button' id='closeWin'>Close window</button>");
+    } else
     msg("The session with " + esc(mName()) + " ended — " + esc(WHY[c.ended] || text || c.ended) + ".<span class='sub'>Everything was logged on the machine and on the hub.</span><button type='button' id='closeWin'>Close window</button>");
     $("closeWin")?.addEventListener("click", () => window.close());
     setTimeout(() => { try { prod?.close(); } catch {} }, 2500);

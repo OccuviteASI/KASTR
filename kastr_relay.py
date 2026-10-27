@@ -204,6 +204,7 @@ RC_ASK_RATE = (3, 60)          # control requests one asker may send ONE sharer 
 RC_ASK_RATE_ALL = (10, 60)     # ... and to everyone together
 RC_DENY_COOL = 30              # s: after a "no" the asker waits this long before asking that person again
 RC_INBOX_TTL = 45              # s: a control note older than this is stale (an ask nobody saw is not shown late)
+RCX_INBOX_TTL = 55             # 0.21.92: an admin's ask note (the hub's ask lasts kastr_rcadmin.ASK_S = 60 s)
 RC_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 RC_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
 RC_FK_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")   # 0.21.83: the grant's file-transfer key on an "allow" note (32 bytes, base64url)
@@ -6059,6 +6060,35 @@ def rc_item_clean(item):
     return out
 
 
+# ---- 0.21.92 ADMIN ASKS (Kenton: "As an admin logged in, I need an option when right clicking a user to request remote control, or
+# take control if it's already allowed in the permissions."): the hub's ask note for a person's device (kastr_rcadmin.HubRegistry.
+# ask) rides the same per-device inbox as person invites -- {kind: "rcx", sid, ck (the one-time claim key: ONLY this device's page
+# ever sees it), by, from, exp}; a withdrawn ask sends {kind: "rcx", sid, x: "cancel"} so the person's prompt closes.
+RCX_SID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def rcx_item_clean(item):
+    """0.21.92: an admin's ask note as it travels (hub -> spokes -> the person's page's beat) -> a cleaned copy, or None."""
+    if not isinstance(item, dict) or item.get("kind") != "rcx":
+        return None
+    sid, frm = str(item.get("sid") or ""), str(item.get("from") or "")
+    if not RCX_SID_RE.match(sid) or not HOST_RE.match(frm):
+        return None
+    out = {"kind": "rcx", "sid": sid, "from": frm, "by": clean_label(item.get("by"), 40) or frm}
+    if item.get("x") == "cancel":
+        out.update(id="rcx-x-" + sid, x="cancel")
+        return out
+    ck = str(item.get("ck") or "")
+    try:
+        exp = int(item.get("exp") or 0)
+    except (TypeError, ValueError):
+        exp = 0
+    if not RCX_SID_RE.match(ck) or exp <= 0:
+        return None
+    out.update(id="rcx-" + sid, ck=ck, exp=exp)
+    return out
+
+
 def rc_can_ask(claims, room, host):
     """0.21.79 (Kenton: "publishers and admins of that room only"): may this member token ask to control a screen in
     `room`? A publisher's token puts media under its own host (<room>/<host>); an admin's also carries <room>/~admin. A
@@ -7594,7 +7624,8 @@ class AuthService:
         pl = self._pl()
         with self.lock:
             items = [x for x in pl.inbox.pop(host, [])
-                     if now - float(x.get("at") or 0) <= (RC_INBOX_TTL if x.get("kind") == "rc" else PINBOX_TTL)]   # 0.21.79
+                     if now - float(x.get("at") or 0) <= (RC_INBOX_TTL if x.get("kind") == "rc" else RCX_INBOX_TTL if x.get("kind") == "rcx"
+                                                          else PINBOX_TTL)]   # 0.21.79; 0.21.92: + an admin's ask
         return items
 
     def _p_inbox_put_locked(self, host, item):
@@ -7660,6 +7691,13 @@ class AuthService:
                         continue
                     pl.seen[rc["id"]] = now
                     self._rc_put_locked(to, rc, now)
+                    continue
+                if isinstance(item, dict) and item.get("kind") == "rcx":   # 0.21.92: an admin's ask (or its withdrawal)
+                    rx = rcx_item_clean(item)
+                    if rx is None or not HOST_RE.match(to) or rx["id"] in pl.seen:
+                        continue
+                    pl.seen[rx["id"]] = now
+                    self._p_inbox_put_locked(to, dict(rx, at=now))
                     continue
                 if not isinstance(item, dict) or not HOST_RE.match(to) or not INVITE_RE.match(str(item.get("token") or "")):
                     continue
@@ -7995,18 +8033,28 @@ class AuthService:
         if op == "start":
             return reg.start(req.get("node"), req.get("monitor"), who)
         if op == "stop":
-            return reg.stop(req.get("sid"), who, "operator" if who.get("kind") == "operator" else "admin")
+            d, code = reg.stop(req.get("sid"), who, "operator" if who.get("kind") == "operator" else "admin")
+            cancel = d.pop("_cancel", None)   # 0.21.92: an ask withdrawn before its answer -- the person's prompt closes
+            if cancel and HOST_RE.match(str(cancel.get("to") or "")):
+                self._rc_put(cancel["to"], dict(cancel["note"]), time.time())
+            return d, code
         if op == "status":
             return reg.status(req.get("sid"))
         if op == "sessions":
             return {"ok": True, "sessions": reg.audit_view(), "hub": self._rcx_name()}, 200
-        return {"ok": False, "error": "op is machines | start | stop | status | sessions"}, 400
+        if op == "ask":   # 0.21.92: a fleet admin asks a person's KASTR -- the note goes to that device's inbox, never to the admin
+            d, code = reg.ask(req.get("node"), req.get("name"), who)
+            note = d.pop("_note", None)
+            if code == 200 and note:
+                self._rc_put(str(req.get("node")), dict(note), time.time())
+            return d, code
+        return {"ok": False, "error": "op is machines | start | stop | status | sessions | ask"}, 400
 
     def _rcx_admin(self, p, who):
         """A fleet admin's (or the hub operator's) call, answered by the hub (forwarded from a spoke); a start's answer gets
         the admin's session token for THIS relay (the one the admin's page dials)."""
         import kastr_rcadmin
-        req = {k: p.get(k) for k in ("op", "node", "monitor", "sid")}
+        req = {k: p.get(k) for k in ("op", "node", "monitor", "sid", "name")}   # 0.21.92: + name (an ask: the person's)
         op = str(req.get("op") or "")
         if self._rcx_spoke():
             out = self._hub_post("/api/rcx/fed", {"op": "admin", "req": req, "who": who}, timeout=10)
@@ -8017,18 +8065,20 @@ class AuthService:
                 return {"ok": False, "error": "the hub runs a KASTR older than 0.21.83 -- update the hub first"}, 501
         else:
             d, code = self._rcx_admin_hub(req, who)
-        if op == "start" and code == 200 and d.get("ok") and kastr_rcadmin.SID_RE.match(str(d.get("sid") or "")):
+        if op in ("start", "ask") and code == 200 and d.get("ok") and kastr_rcadmin.SID_RE.match(str(d.get("sid") or "")):   # 0.21.92: + ask
             d = dict(d, token=_mint(self.key, kastr_rcadmin.admin_claims(d["sid"], d["exp"])), paths=kastr_rcadmin.paths(d["sid"]),
                      relayPort=self.relay_port, adminHost=who.get("host") or "")
+            d.pop("_note", None)   # never the person's claim key (a hub answer never carries it -- belt and braces)
             self._rcx_note(d["sid"], d["exp"])
-            self.log("relay auth: %s (fleet admin) controls %s -- session %s" % (who.get("name") or who.get("host"), req.get("node"), d["sid"][:8]))
+            self.log("relay auth: %s (fleet admin) %s %s -- session %s" % (who.get("name") or who.get("host"), "asks" if op == "ask" else "controls",
+                                                                           req.get("node"), d["sid"][:8]))
         if (op == "stop" and code == 200) or (op == "status" and code == 200 and d.get("state") == "ended"):
             self._rcx_dead_add(req.get("sid"))
         return d, code
 
     def rcx_admin_api(self, p, bearer, peer=""):
-        """POST /api/rcx {op: machines | start | stop | status | sessions, node?, monitor?, sid?, by?, color?} -- FLEET ADMINS
-        only: a member token THIS relay minted with the admin grant (the admin access code)."""
+        """POST /api/rcx {op: machines | start | stop | status | sessions | ask (0.21.92), node?, monitor?, sid?, name?, by?, color?}
+        -- FLEET ADMINS only: a member token THIS relay minted with the admin grant (the admin access code)."""
         p = p if isinstance(p, dict) else {}
         claims = self._member_claims(bearer)
         if not claims or not claims_admin_any(claims):

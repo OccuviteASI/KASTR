@@ -3365,7 +3365,7 @@
   const RCX_WHY = { admin: "the admin ended it", operator: "the hub's operator ended it", hotkey: "Ctrl+Alt+Space here", bar: "Stop control here", stopped: "stopped here",
                     timeout: "lost touch (10 s)", share: "the capture stopped", noanswer: "no answer from the machine", lost: "the machine went quiet", limit: "8-hour limit",
                     off: "unattended control switched off", busy: "busy", desktop: "nobody signed in", error: "could not start", closed: "KASTR closed", released: "the admin gave it back",
-                    restart: "the hub restarted" };
+                    restart: "the hub restarted", denied: "they declined" };   // 0.21.92: + an admin's ask
   let rcxMach = new Map();   // node -> the hub's row (the mesh map's Control buttons read it)
   const rcxName = (m) => m.nick || m.hostname || m.name || m.node;
   // 0.21.86 (Kenton: a Linux relay showed "nobody is signed in" for every X11 reason): what keeps its desktop out of reach
@@ -3375,7 +3375,7 @@
     if (!rows.length) return "<div class='hint'>" + (fleet ? "No remote sessions yet." : "No fleet admin has controlled this machine.") + "</div>";
     return "<table class='rooms'><tr>" + (fleet ? "<th>Machine</th>" : "") + "<th>Who</th><th>From</th><th>Start</th><th>End</th><th>Duration</th><th>How it ended</th></tr>"
       + rows.map((r) => "<tr>" + (fleet ? "<td>" + esc(r.machine || r.node) + (r.site ? "<div class='hint'>" + esc(r.site) + "</div>" : "") + "</td>" : "")
-        + "<td>" + esc(r.admin || "?") + (r.kind === "operator" ? " <span class='hint'>(hub operator)</span>" : " <span class='hint'>(fleet admin)</span>") + "</td>"
+        + "<td>" + esc(r.admin || "?") + (r.kind === "operator" ? " <span class='hint'>(hub operator)</span>" : (r.ask || r.kind === "ask") ? " <span class='hint'>(admin, asked)</span>" : " <span class='hint'>(fleet admin)</span>") + "</td>"   // 0.21.92: + asked
         + "<td>" + esc(r.from || "—") + "</td><td>" + rcxWhen(r.start || r.at) + "</td>"
         + "<td>" + (r.state === "live" ? "<span class='updok'>connected now</span>" : rcxWhen(r.end)) + "</td><td>" + (r.state === "live" ? rcxDur(Math.round(Date.now() / 1000 - (r.start || r.at))) : rcxDur(r.dur)) + "</td>"
         + "<td>" + esc(r.state === "live" ? "" : (RCX_WHY[r.why] || r.why || (r.state === "pending" ? "starting" : ""))) + "</td></tr>").join("") + "</table>";

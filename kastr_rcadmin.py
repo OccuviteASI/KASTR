@@ -41,6 +41,15 @@ What was decided, and where each part lives:
     monitors (each, and All monitors) and its windows; a pick re-points the private capture in place (kastr_rtsp.Bridge.
     retarget -- the same session, control kept: the grant is re-made for the new target at once), a window share follows the
     window, and Bring to front raises the picked window with normal rights (Windows may refuse; the view says so).
+  * 0.21.92 ASKS (Kenton, 2026-10-27: "As an admin logged in, I need an option when right clicking a user to request remote
+    control, or take control if it's already allowed in the permissions."): a fleet admin's "Request remote control..." on a
+    PERSON's computer. The hub mints an ASK session (no opt-in: the person answers every ask), its note rides that device's
+    inbox (the people beats, like a person invite) with a one-time claim key `ck`; the person's KASTR shows Allow / Deny with a
+    monitor picker (the main one first, All monitors). Allow -> that KASTR claims the session with `ck` (MACs exactly like an
+    opted-in machine's key) and runs the SAME private capture as Machines... -- never announced in any room -- with the pill
+    "<admin> is controlling this screen". Deny / no answer in ASK_S -> the admin hears "declined" / "no answer". It never
+    polls like an opted-in machine: while it runs, it tells the hub every ASK_SEEN_S that it still does (ask_seen), and hears
+    there when the admin ended it. Both logs keep every ask (allowed or not, who, when, how long).
 """
 import hashlib
 import hmac
@@ -86,13 +95,18 @@ KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 KID_RE = re.compile(r"^[0-9a-f]{16}$")
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SRC_RE = re.compile(r"^screen://(monitor|window)/([0-9]{1,20})$")
+# ---- 0.21.92: admin asks (see the docstring)
+ASK_S = 60                     # an ask nobody answers ends "noanswer" (the person's prompt counts the same)
+ASK_SEEN_S = 5                 # the person's KASTR says its ask session still runs this often (it does not poll)
+CK_RE = re.compile(r"^[0-9a-f]{32}$")
 WHY_TEXT = {"admin": "the admin ended it", "operator": "the hub's operator ended it", "hotkey": "Ctrl+Alt+Space on the machine",
             "bar": "Stop control on the machine", "stopped": "stopped on the machine", "timeout": "lost touch for 10 s",
             "share": "the capture stopped", "noanswer": "the machine did not answer", "lost": "the machine went quiet",
             "limit": "the 8-hour limit", "off": "the machine's opt-in was switched off", "busy": "someone else controls it",
             "desktop": "nobody is signed in on the machine", "error": "it could not start", "closed": "KASTR closed",
             "released": "the admin gave it back", "retarget": "the capture changed", "restart": "the hub restarted",
-            "paused": "the capture was paused", "left": "the admin left"}
+            "paused": "the capture was paused", "left": "the admin left",
+            "denied": "they declined"}   # 0.21.92: an ask's answer
 END_WHYS = tuple(WHY_TEXT)
 
 
@@ -169,6 +183,11 @@ def admin_windows(platform, elevated):
 
 def pill_text(admin):
     return "%s (fleet admin) is controlling this machine — Stop control (Ctrl+Alt+Space)" % (_txt(admin, 40) or "A fleet admin")
+
+
+def ask_pill_text(admin):
+    """0.21.92: the pill on a person's computer that allowed an admin's ask."""
+    return "%s is controlling this screen — Stop control (Ctrl+Alt+Space)" % (_txt(admin, 40) or "An admin")
 
 
 def monitor_url(mon):
@@ -397,12 +416,15 @@ class HubRegistry:
 
     def _sweep_locked(self, now):
         for s in list(self.sessions.values()):
-            if s["state"] == "pending" and now - s["at"] > PENDING_S:
+            if s["state"] == "pending" and now - s["at"] > (ASK_S if s.get("ask") else PENDING_S):   # 0.21.92: an ask waits longer
                 self._end_locked(s, "noanswer")
             elif s["state"] == "live":
                 m = self.machines.get(s["node"]) or {}
                 if now > s["exp"]:
                     self._end_locked(s, "limit")
+                elif s.get("ask"):   # 0.21.92: a person's KASTR does not poll -- its ask_seen keeps the session
+                    if now - float(s.get("seen") or s.get("liveAt") or now) > LOST_S:
+                        self._end_locked(s, "lost")
                 elif now - float(m.get("at") or 0) > LOST_S:
                     self._end_locked(s, "lost")
             elif s["state"] == "ended" and now - s.get("endedAt", now) > 86400:
@@ -413,9 +435,9 @@ class HubRegistry:
 
     def _items_locked(self, node, now):
         start = [{"sid": s["sid"], "admin": s["admin"], "via": s["adminRelay"], "monitor": s["monitor"], "exp": int(s["exp"])}
-                 for s in self.sessions.values() if s["node"] == node and s["state"] == "pending"]
+                 for s in self.sessions.values() if s["node"] == node and s["state"] == "pending" and not s.get("ask")]   # 0.21.92: never an ask
         stop = [s["sid"] for s in self.sessions.values() if s["node"] == node and s["state"] == "ended" and s.get("liveAt")
-                and not s.get("ack") and now - s.get("endedAt", now) < 300]
+                and not s.get("ack") and not s.get("ask") and now - s.get("endedAt", now) < 300]
         return start, stop
 
     def dead(self, sid):
@@ -428,6 +450,8 @@ class HubRegistry:
     def poll(self, p, via="", ip="", wait=True):
         """POST /api/rcx/poll from a machine (here, or through a spoke). -> (reply, code)."""
         p = p if isinstance(p, dict) else {}
+        if p.get("ask"):   # 0.21.92: a person's KASTR running an ask session says it still does (ask_seen)
+            return self.ask_seen(p)
         node = str(p.get("node") or "")
         if not HOST_RE.match(node):
             return {"ok": False, "error": "node required"}, 400
@@ -527,8 +551,10 @@ class HubRegistry:
         except (TypeError, ValueError):
             return {"ok": False, "error": "ts required"}, 400
         with self.cv:
-            row = self.machines.get(node)
             s = self.sessions.get(sid)
+            if s is not None and s.get("ask"):   # 0.21.92: an ask -- the person's KASTR proves it with the ask's claim key
+                return self._ask_claim_locked(s, p, node, sid, ts, now)
+            row = self.machines.get(node)
             if not row or not row.get("key") or abs(now - ts) > MAC_SKEW_S or not mac_ok(row["key"], p.get("mac"), "claim", sid, node, ts):
                 return {"ok": False, "error": "the claim does not check"}, 401
             self._sweep_locked(now)
@@ -561,6 +587,13 @@ class HubRegistry:
         except (TypeError, ValueError):
             return {"ok": False, "error": "ts required"}, 400
         with self.cv:
+            s0 = self.sessions.get(sid)
+            if s0 is not None and s0.get("ask"):   # 0.21.92: the person said no / did not answer / their session ended there
+                if s0["node"] != node or abs(now - ts) > MAC_SKEW_S or not mac_ok(s0["ck"], p.get("mac"), "end", sid, node, ts, why):
+                    return {"ok": False, "error": "the end does not check"}, 401
+                s0["ack"] = True
+                self._end_locked(s0, why, by=s0.get("person") or node)
+                return {"ok": True, "sid": sid, "state": "ended", "why": s0["why"]}, 200
             row = self.machines.get(node)
             if not row or abs(now - ts) > MAC_SKEW_S or not mac_ok(row.get("key") or "", p.get("mac"), "end", sid, node, ts, why):
                 return {"ok": False, "error": "the end does not check"}, 401
@@ -640,8 +673,13 @@ class HubRegistry:
             s = self.sessions.get(str(sid))
             if not s:
                 return {"ok": False, "error": "no such session"}, 404
+            was = s["state"]
             self._end_locked(s, why if why in ("admin", "operator", "released", "left", "closed") else "admin", by=who.get("name") or "")
-            return {"ok": True, "sid": s["sid"], "state": s["state"], "why": s["why"]}, 200
+            out = {"ok": True, "sid": s["sid"], "state": s["state"], "why": s["why"]}
+            if s.get("ask") and was == "pending":   # 0.21.92: the admin withdrew the ask -- the person's prompt closes (its inbox)
+                out["_cancel"] = {"to": s["node"], "note": {"id": "rcx-x-" + s["sid"], "kind": "rcx", "sid": s["sid"], "x": "cancel",
+                                                            "by": s["admin"], "from": s["adminHost"]}}
+            return out, 200
 
     def status(self, sid):
         with self.cv:
@@ -650,7 +688,103 @@ class HubRegistry:
             if not s:
                 return {"ok": False, "error": "no such session"}, 404
             return {"ok": True, "sid": s["sid"], "state": s["state"], "why": s.get("why") or "", "whyText": WHY_TEXT.get(s.get("why") or "", ""),
-                    "at": int(s["at"]), "liveAt": int(s["liveAt"]) if s.get("liveAt") else None, "exp": int(s["exp"])}, 200
+                    "at": int(s["at"]), "liveAt": int(s["liveAt"]) if s.get("liveAt") else None, "exp": int(s["exp"]),
+                    "ask": bool(s.get("ask")), "wait": ASK_S if s.get("ask") else PENDING_S}, 200   # 0.21.92: + ask
+
+    # ---- 0.21.92: an admin asks a PERSON's KASTR (no opt-in: the person answers)
+    def ask(self, node, person=None, who=None):
+        """A fleet admin (vouched for by its relay) asks `node` -- a person's computer -- for remote control. -> (reply, code);
+        the reply's "_note" is the person's inbox note (the caller delivers it and never hands it to the admin)."""
+        who = who if isinstance(who, dict) else {}
+        node = str(node or "")
+        now = self.clock()
+        if not HOST_RE.match(node):
+            return {"ok": False, "error": "who? (their device)"}, 400
+        host = str(who.get("host") or "")
+        if not HOST_RE.match(host):
+            return {"ok": False, "error": "this KASTR is too old to ask -- update it first"}, 400
+        if host == node:
+            return {"ok": False, "error": "that is your own computer"}, 400
+        name = _txt(person, 40) or node
+        with self.cv:
+            self._sweep_locked(now)
+            cur = self._busy_locked(node)
+            if cur is not None:
+                msg = ("%s is connected to %s now" if cur["state"] == "live" else "%s is asking %s already") % (cur["admin"], name)
+                return {"ok": False, "error": msg, "why": "busy", "by": cur["admin"]}, 409
+            ok, w = self._rate_ok_locked(("start", host), START_RATE_ADMIN[0], START_RATE_ADMIN[1], now)
+            if not ok:
+                return {"ok": False, "error": "too many remote control requests -- wait a minute", "retryAfter": w}, 429
+            ok, w = self._rate_ok_locked(("startm", node), START_RATE_MACHINE[0], START_RATE_MACHINE[1], now)
+            if not ok:
+                return {"ok": False, "error": "%s was asked too often -- wait a minute" % name, "retryAfter": w}, 429
+            sid, rcid, ck = os.urandom(16).hex(), os.urandom(8).hex(), os.urandom(16).hex()
+            admin = _txt(who.get("name"), 40) or host
+            frm = " · ".join(x for x in (_txt(who.get("relay"), 40), _txt(who.get("ip"), 64)) if x)
+            color = str(who.get("color") or "") if COLOR_RE.match(str(who.get("color") or "")) else "#009fda"
+            arow = {"sid": sid, "node": node, "machine": name, "site": "", "admin": admin, "adminHost": host, "from": frm, "kind": "admin",
+                    "ask": True, "monitor": None, "at": int(now), "state": "pending", "start": None, "end": None, "dur": None, "why": ""}
+            s = {"sid": sid, "rcid": rcid, "node": node, "machine": name, "person": name, "admin": admin, "adminHost": host,
+                 "adminRelay": _txt(who.get("relay"), 40), "adminFrom": frm or "?", "kind": "admin", "color": color, "monitor": None,
+                 "at": now, "exp": now + SESSION_MAX_S, "state": "pending", "row": arow, "ask": True, "ck": ck, "seen": None}
+            self.sessions[sid] = s
+            self.audit.append(arow)
+            del self.audit[:-AUDIT_MAX]
+            self.log("rcx: %s (%s) asks %s (%s) for remote control -- session %s" % (admin, frm or host, name, node, sid[:8]))
+            self._save_locked()
+            self.cv.notify_all()
+            note = {"id": "rcx-" + sid, "kind": "rcx", "sid": sid, "ck": ck, "by": admin, "from": host, "exp": int(now + ASK_S)}
+            return {"ok": True, "sid": sid, "rcid": rcid, "exp": int(s["exp"]), "ask": True, "wait": ASK_S,
+                    "machine": {"node": node, "name": name, "hostname": name, "role": "Person", "monitors": [], "adminWindows": "full",
+                                "online": True, "site": ""},
+                    "_note": note}, 200
+
+    def _ask_claim_locked(self, s, p, node, sid, ts, now):
+        """The person allowed: their KASTR claims the ask with its claim key (and says which monitor they picked)."""
+        if s["node"] != node or abs(now - ts) > MAC_SKEW_S or not mac_ok(s["ck"], p.get("mac"), "claim", sid, node, ts):
+            return {"ok": False, "error": "the claim does not check"}, 401
+        self._sweep_locked(now)
+        if s["state"] == "ended":
+            return {"ok": False, "error": "that request is over (%s)" % WHY_TEXT.get(s["why"], s["why"]), "why": s["why"]}, 410
+        if s["state"] == "pending":
+            try:
+                mon = int(p.get("monitor"))
+            except (TypeError, ValueError):
+                mon = 0
+            if mon < 0 or (mon >= 64 and mon != ALL_MONITORS):
+                mon = 0
+            s.update(state="live", liveAt=now, seen=now, monitor=mon)
+            s["row"].update(state="live", start=int(now), monitor=mon, answer="allowed")
+            self.log("rcx: %s allowed %s (admin, %s) to control their screen (%s, session %s)" % (s["person"], s["admin"], s["adminFrom"], node, sid[:8]))
+            self._save_locked()
+            self.cv.notify_all()
+        return {"ok": True, "sid": sid, "rcid": s["rcid"], "admin": s["admin"], "adminHost": s["adminHost"], "adminFrom": s["adminFrom"],
+                "color": s["color"], "monitor": s["monitor"], "exp": int(s["exp"]), "kind": s["kind"], "ask": True,
+                "check": mac(s["ck"], "ok", sid, s["rcid"], int(s["exp"]), s["admin"])}, 200
+
+    def ask_seen(self, p):
+        """POST /api/rcx/poll {ask, node, sid, ts, mac} from a person's KASTR running an ask session: it still runs (the hub
+        ends it "lost" after LOST_S without one) -- and the answer says when the admin ended it."""
+        p = p if isinstance(p, dict) else {}
+        node, sid = str(p.get("node") or ""), str(p.get("sid") or p.get("ask") or "")
+        if not HOST_RE.match(node) or not SID_RE.match(sid):
+            return {"ok": False, "error": "node and sid required"}, 400
+        now = self.clock()
+        try:
+            ts = int(p.get("ts"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "ts required"}, 400
+        with self.cv:
+            s = self.sessions.get(sid)
+            if not s or not s.get("ask") or s["node"] != node or abs(now - ts) > MAC_SKEW_S or not mac_ok(s["ck"], p.get("mac"), "seen", sid, node, ts):
+                return {"ok": False, "error": "the poll does not check", "gone": not s}, 401
+            ok, wait_s = self._rate_ok_locked(("askseen", node), POLL_RATE[0], POLL_RATE[1], now)
+            if not ok:
+                return {"ok": False, "error": "too many polls", "retryAfter": wait_s}, 429
+            self._sweep_locked(now)
+            if s["state"] == "live":
+                s["seen"] = now
+            return {"ok": True, "sid": sid, "state": s["state"], "why": s.get("why") or ""}, 200
 
     def _public(self, r, now, nicks=None):
         live = self._busy_locked(r["node"])
@@ -969,7 +1103,7 @@ class Agent:
                     self.http(minter + "/api/rcx/poll", self.poll_body(s, on=False), 10)
                 self._told_on = False
             sess = self.session
-            if sess and sess.get("sid"):
+            if sess and sess.get("sid") and not sess.get("ask"):   # 0.21.92: an ask the person allowed is not the opt-in's
                 self.end_session(sess["sid"], "off")
             self.last.update(state="off", error="", at=int(self.clock()))
             return 3
@@ -1013,14 +1147,16 @@ class Agent:
         return 0
 
     # ---- one session
-    def _machine_end(self, sid, why, s=None):
-        s = s or load_settings(self.state_dir)
+    def _machine_end(self, sid, why, s=None, ck=None):
+        """Tell the hub a session ended here -- with the machine's key, or (0.21.92) an ask's claim key `ck`."""
+        if not ck:
+            s = s or load_settings(self.state_dir)
         base, minter = self.bases()
-        if not minter or not s["key"]:
+        if not minter or not (ck or s["key"]):
             return None
         node, ts = self.node_id(), int(self.clock())
         why = why if why in END_WHYS else "stopped"
-        return self.http(minter + "/api/rcx/end", {"node": node, "sid": sid, "ts": ts, "why": why, "mac": mac(s["key"], "end", sid, node, ts, why)}, 10)
+        return self.http(minter + "/api/rcx/end", {"node": node, "sid": sid, "ts": ts, "why": why, "mac": mac(ck or s["key"], "end", sid, node, ts, why)}, 10)
 
     def begin(self, notice):
         sid = str(notice.get("sid") or "")
@@ -1054,14 +1190,20 @@ class Agent:
             self.log("rcx: session %s: the hub's answer does not check with this machine's key -- refused" % sid[:8])
             self._cleanup(why="error", tell=True)
             return False
+        return self._run(sid, d, base)[0]
+
+    def _run(self, sid, d, base, ck=None):
+        """The hub's claim answer checked: the private capture, the grant, the helper page, the logs. ck = an ask's claim key
+        (0.21.92: a person allowed an admin's ask) -- else an opted-in machine's session. -> (ok, why)."""
+        rcid, admin, exp = str(d.get("rcid") or ""), str(d.get("admin") or ""), int(d.get("exp") or 0)
         dk = desktop_state()
         if not dk["ok"]:
             self.log("rcx: session %s: nobody is signed in here (%s) -- nothing to show" % (sid[:8], dk["why"]))
             self._cleanup(why="desktop", tell=True)
-            return False
+            return False, "desktop"
         if self.bridge is None:
             self._cleanup(why="error", tell=True)
-            return False
+            return False, "error"
         pp = paths(sid)
         relay = base + ("" if base.endswith("/relay") else "/") + "?jwt=" + str(d["token"])
         url = monitor_url(d.get("monitor"))
@@ -1069,7 +1211,7 @@ class Agent:
             self.session.update(state="starting", rcid=rcid, admin=admin, adminHost=str(d.get("adminHost") or ""),
                                 adminFrom=str(d.get("adminFrom") or ""), color=str(d.get("color") or "#009fda"), exp=exp, url=url,
                                 relay=relay, paths=pp, pk=os.urandom(16).hex(), feed=None, proc=None, n=0, switching=False,
-                                monitor=d.get("monitor"), kind=str(d.get("kind") or "admin"))
+                                monitor=d.get("monitor"), kind=str(d.get("kind") or "admin"), ask=bool(ck), ck=ck or "")   # 0.21.92: + ask
         try:
             feed = self.bridge.add_private(url, sid)
         except Exception as e:
@@ -1089,22 +1231,27 @@ class Agent:
         ok, why = self._grant()
         if not ok:
             self._cleanup(why=why or "busy", tell=True)
-            return False
+            return False, why or "busy"
         proc = self.launch(sid, self.session["pk"])
         with self.lock:
             self.session.update(proc=proc, state="live", started=self.clock())
         audit_append(self.state_dir, {"ev": "start", "sid": sid, "admin": admin, "adminHost": self.session["adminHost"],
-                                      "from": self.session["adminFrom"], "kind": self.session["kind"], "monitor": d.get("monitor"),
+                                      "from": self.session["adminFrom"], "kind": "ask" if ck else self.session["kind"], "monitor": d.get("monitor"),
                                       "start": int(self.clock()), "state": "live"})
-        self.log("rcx: %s (fleet admin, %s) is controlling this machine (session %s, %s)" % (admin, self.session["adminFrom"], sid[:8], url))
+        if ck:   # 0.21.92
+            self.log("rcx: %s (admin, %s) is controlling this screen -- asked, and allowed here (session %s, %s)" % (admin, self.session["adminFrom"], sid[:8], url))
+        else:
+            self.log("rcx: %s (fleet admin, %s) is controlling this machine (session %s, %s)" % (admin, self.session["adminFrom"], sid[:8], url))
         threading.Thread(target=self._watch, args=(sid,), name="kastr-rcx-watch", daemon=True).start()
-        return True
+        if ck:   # 0.21.92: an ask session does not poll -- it tells the hub it still runs, and hears there when the admin ended it
+            threading.Thread(target=self._ask_beat, args=(sid,), name="kastr-rcx-askbeat", daemon=True).start()
+        return True, ""
 
     def _grant(self):
         sess = self.session
         rc = self.rc()
         out, code = rc.start(sess["rcid"], sess["adminHost"], sess["admin"], sess["feed"], share=sess["paths"]["screen"],
-                             color=sess["color"], bar=pill_text(sess["admin"]))
+                             color=sess["color"], bar=(ask_pill_text if sess.get("ask") else pill_text)(sess["admin"]))   # 0.21.92: an ask's own words
         if code != 200:
             self.log("rcx: session %s: control could not start: %s" % (sess["sid"][:8], out.get("error")))
             return False, out.get("why") or "busy"
@@ -1166,7 +1313,7 @@ class Agent:
                 pass
         if tell:
             try:
-                self._machine_end(sid, why)
+                self._machine_end(sid, why, ck=sess.get("ck") or None)   # 0.21.92: an ask's claim key
             except Exception:
                 pass
         if sess.get("state") in ("live", "starting"):
@@ -1348,6 +1495,123 @@ class Agent:
                     else "the window manager did not bring that window to the front"}, 200
         return {"ok": True, "front": True}, 200
 
+    # ---- 0.21.92: an admin's ask on THIS computer (the person's page asks; nothing here runs without their Allow)
+    def ask_info(self, monitors=True):
+        """GET /api/rcadmin/ask: what the Allow prompt shows -- this computer's monitors, whether its desktop can be shared, and
+        whether someone controls it already. monitors=False (?probe=1, the page's capability check every 30 s): no screen
+        listing at all."""
+        busy = ""
+        try:
+            g = self.rc().grant
+            if g:
+                busy = g.get("name") or "someone"
+        except Exception:
+            busy = ""
+        sess = self.session
+        if sess and not busy:
+            busy = sess.get("admin") or "someone"
+        live = {"sid": sess["sid"], "admin": sess.get("admin") or ""} if sess and sess.get("ask") and sess.get("state") == "live" else None
+        return {"ok": True, "monitors": list_monitors() if monitors else [], "desktop": desktop_state(), "busy": busy, "platform": sys.platform,
+                "all": ALL_MONITORS, "wait": ASK_S, "session": live}
+
+    def answer_ask(self, sid, ck, answer, monitor=None, by=""):
+        """POST /api/rcadmin/ask {sid, ck, answer: allow | deny | timeout, monitor?, by?} from this computer's own page (the
+        person's click). Allow -> the claim at the hub (with the ask's claim key), then the private capture + the grant exactly
+        like Machines... -> (reply, code)."""
+        sid, ck, answer = str(sid or ""), str(ck or ""), str(answer or "")
+        if not SID_RE.match(sid) or not CK_RE.match(ck):
+            return {"ok": False, "error": "bad request"}, 400
+        if answer not in ("allow", "deny", "timeout", "stop"):
+            return {"ok": False, "error": "answer: allow | deny | timeout | stop"}, 400
+        if answer == "stop":   # the page's own Stop control (its in-page bar) -- only for the ask it allowed
+            sess = self.session
+            if not sess or sess.get("sid") != sid or not hmac.compare_digest(str(sess.get("ck") or ""), ck):
+                return {"ok": False, "error": "no such session"}, 404
+            self.end_session(sid, "bar", tell=True)
+            return {"ok": True}, 200
+        by = _txt(by, 40) or "An admin"
+        base, minter = self.bases()
+        if not minter:
+            return {"ok": False, "error": "this KASTR uses no relay"}, 409
+        if answer != "allow":
+            why = "denied" if answer == "deny" else "noanswer"
+            try:
+                self._machine_end(sid, why, ck=ck)
+            except Exception:
+                pass
+            audit_append(self.state_dir, {"ev": "ask", "sid": sid, "admin": by, "kind": "ask", "at": int(self.clock()), "state": "ended", "why": why})
+            self.log("rcx: %s asked to control this screen -- %s" % (by, "declined here" if why == "denied" else "no answer here"))
+            return {"ok": True, "answer": answer}, 200
+        dk = desktop_state()
+        if not dk["ok"]:
+            self._machine_end(sid, "desktop", ck=ck)
+            return {"ok": False, "error": "this screen cannot be shared now (%s)" % (dk.get("why") or "no desktop"), "why": "desktop"}, 409
+        with self.lock:
+            busy = self.session is not None
+            if not busy:
+                self.session = {"sid": sid, "state": "claiming", "at": self.clock(), "ask": True, "ck": ck}
+        if busy:
+            self._machine_end(sid, "busy", ck=ck)
+            return {"ok": False, "error": "another remote session runs on this computer", "why": "busy"}, 409
+        node, ts = self.node_id(), int(self.clock())
+        try:
+            mon = int(monitor)
+        except (TypeError, ValueError):
+            mon = 0
+        try:
+            d, code = self.http(minter + "/api/rcx/claim", {"node": node, "sid": sid, "ts": ts, "monitor": mon, "mac": mac(ck, "claim", sid, node, ts)}, 15)
+            if d is None or code != 200 or not d.get("ok") or not d.get("token"):
+                with self.lock:
+                    self.session = None
+                err = (d or {}).get("error") or ("the relay did not answer" if d is None else "HTTP %d" % code)
+                self.log("rcx: ask %s: the claim was refused (%s: %s)" % (sid[:8], code, err))
+                return {"ok": False, "error": err, "why": (d or {}).get("why") or ""}, (410 if code == 410 else 409)
+            rcid, admin, exp = str(d.get("rcid") or ""), str(d.get("admin") or ""), int(d.get("exp") or 0)
+            if not mac_ok(ck, d.get("check"), "ok", sid, rcid, exp, admin) or not RCID_RE.match(rcid):
+                self.log("rcx: ask %s: the hub's answer does not check with the ask's key -- refused" % sid[:8])
+                self._cleanup(why="error", tell=True)
+                return {"ok": False, "error": "the hub's answer does not check -- refused"}, 409
+            ok, why = self._run(sid, d, base, ck=ck)
+        except Exception as e:
+            self.log("rcx: ask %s could not start: %s" % (sid[:8], e))
+            self._cleanup(why="error", tell=True)
+            return {"ok": False, "error": "it could not start: %s" % str(e)[:120], "why": "error"}, 500
+        if not ok:
+            return {"ok": False, "error": WHY_TEXT.get(why, "it could not start"), "why": why}, 409
+        return {"ok": True, "sid": sid, "admin": admin, "monitor": d.get("monitor")}, 200
+
+    def ask_beat_once(self, sid):
+        """One "still running" to the hub for an ask session -> the hub's state ("live", "ended", ...) or None. An ended answer
+        (the admin stopped, the hub restarted) ends it here."""
+        sess = self.session
+        if not sess or sess.get("sid") != sid or not sess.get("ck"):
+            return None
+        base, minter = self.bases()
+        if not minter:
+            return None
+        node, ts = self.node_id(), int(self.clock())
+        d, code = self.http(minter + "/api/rcx/poll", {"ask": sid, "node": node, "sid": sid, "ts": ts, "mac": mac(sess["ck"], "seen", sid, node, ts)}, 10)
+        if d is None:
+            return None
+        if code == 200 and d.get("state") == "ended":
+            self.end_session(sid, d.get("why") if d.get("why") in END_WHYS else "admin", tell=False)
+            return "ended"
+        if code == 401 and d.get("gone"):   # the hub no longer knows it (it restarted)
+            self.end_session(sid, "restart", tell=False)
+            return "ended"
+        return d.get("state") if code == 200 else None
+
+    def _ask_beat(self, sid):
+        while not self._stop.wait(ASK_SEEN_S):
+            sess = self.session
+            if not sess or sess.get("sid") != sid:
+                return
+            try:
+                if self.ask_beat_once(sid) == "ended":
+                    return
+            except Exception as e:
+                self._say("askbeat", "rcx: ask %s: %s" % (sid[:8], e), 300)
+
     def status(self):
         s = load_settings(self.state_dir)
         sess = self.session
@@ -1356,7 +1620,7 @@ class Agent:
                 "platform": sys.platform, "elevated": is_elevated(), "adminWindows": admin_windows(sys.platform, is_elevated()),
                 "hub": dict(self.last),
                 "session": {"sid": sess["sid"][:8], "admin": sess.get("admin") or "", "from": sess.get("adminFrom") or "", "since": int(sess.get("started") or sess.get("at") or 0),
-                            "url": sess.get("url") or "", "state": sess.get("state")} if sess else None,
+                            "url": sess.get("url") or "", "state": sess.get("state"), "ask": bool(sess.get("ask"))} if sess else None,   # 0.21.92: + ask
                 "audit": audit_sessions(self.state_dir, 50)}
 
 
@@ -1405,7 +1669,9 @@ def _guard(handler):
 def handle_api(handler, state_dir, log=None):
     """GET /api/rcadmin -> this machine's setting, its desktop, the hub's last word, its sessions;
     POST /api/rcadmin {on} -> the checkbox (THIS machine only); GET /api/rcadmin/session?sid=&k= -> the helper page's session;
-    POST /api/rcadmin/ctl {sid, k, op: sources | src | front | thumbs} -> the source switcher."""
+    POST /api/rcadmin/ctl {sid, k, op: sources | src | front | thumbs} -> the source switcher;
+    0.21.92: GET /api/rcadmin/ask -> what the Allow prompt shows; POST /api/rcadmin/ask {sid, ck, answer, monitor?, by?} -> the
+    person's answer to an admin's ask (this computer's own page only, like the checkbox)."""
     from urllib.parse import parse_qs, urlparse
 
     def send(code, obj):
@@ -1434,6 +1700,10 @@ def handle_api(handler, state_dir, log=None):
                 return send(404, {"ok": False, "error": "no agent"})
             out, code = agent.page_session((q.get("sid") or [""])[0], (q.get("k") or [""])[0])
             return send(code, out)
+        if path == "/api/rcadmin/ask":   # 0.21.92
+            if agent is None:
+                return send(404, {"ok": False, "error": "remote control is not available in this KASTR"})
+            return send(200, agent.ask_info(monitors=(q.get("probe") or [""])[0] != "1"))
         if agent is not None:
             return send(200, agent.status())
         s = load_settings(state_dir)
@@ -1456,11 +1726,16 @@ def handle_api(handler, state_dir, log=None):
             agent.poke()
             if not p["on"]:
                 sess = agent.session
-                if sess and sess.get("sid"):
+                if sess and sess.get("sid") and not sess.get("ask"):   # 0.21.92: an allowed ask is not the opt-in's
                     agent.end_session(sess["sid"], "off", tell=True)
                 agent.tell_off()
             return send(200, agent.status())
         return send(200, {"ok": True, "on": p["on"]})
+    if path == "/api/rcadmin/ask":   # 0.21.92: the person's Allow / Deny (or their prompt timing out)
+        if agent is None:
+            return send(404, {"ok": False, "error": "remote control is not available in this KASTR"})
+        out, code = agent.answer_ask(p.get("sid"), p.get("ck"), p.get("answer"), p.get("monitor"), p.get("by"))
+        return send(code, out)
     if path == "/api/rcadmin/ctl":
         if agent is None:
             return send(404, {"ok": False, "error": "no agent"})

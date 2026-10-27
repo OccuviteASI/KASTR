@@ -1145,6 +1145,39 @@
   #kRcAsk .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:14px 16px 16px; }
   #kRcAsk .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
   #kRcAsk .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  /* 0.21.92 (Kenton: "As an admin logged in, I need an option when right clicking a user to request remote control, or take
+     control if it's already allowed in the permissions."): the person's Allow / Deny for an admin's ask (+ which screen), the
+     in-page "<admin> is controlling this screen" bar, and a greyed menu row that says why not */
+  #kRcxAsk { position:fixed; inset:0; z-index:141; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kRcxAsk[hidden] { display:none; }
+  #kRcxAsk .popcard { position:static; width:min(460px, calc(100vw - 32px)); max-height:none; animation:kcIn .14s ease-out; }
+  #kRcxAsk .body { padding:16px 16px 2px; flex:none; overflow:visible; }
+  #kRcxAsk .kcmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
+  #kRcxAsk .kcmsg b { color:var(--text); }
+  #kRcxAsk .rxlab { margin:12px 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-mute); }
+  #kRcxAsk .rxmons { display:flex; flex-direction:column; gap:4px; }
+  #kRcxAsk .rxmon { display:flex; align-items:center; gap:10px; padding:7px 10px; border:1px solid var(--line); border-radius:6px; background:var(--surface-2);
+    color:var(--text); font-size:13px; cursor:pointer; }
+  #kRcxAsk .rxmon:hover { border-color:var(--asi-blue-dim); }
+  #kRcxAsk .rxmon.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue) inset; }
+  #kRcxAsk .rxmon input { accent-color:var(--asi-blue); margin:0; }
+  #kRcxAsk .rxmon .sz { margin-left:auto; color:var(--text-dim); font-size:12px; white-space:nowrap; }
+  #kRcxAsk .kcdet { margin:12px 0 0; font-size:12px; line-height:1.5; color:var(--text-dim); overflow-wrap:break-word; }
+  #kRcxAsk .rxwarn { margin:10px 0 0; font-size:12px; color:var(--asi-amber); }
+  #kRcxAsk .rxwarn[hidden] { display:none; }
+  #kRcxAsk .kcbtns { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:14px 16px 16px; }
+  #kRcxAsk .kcbtns .rxleft { margin-right:auto; font-size:12px; color:var(--text-mute); }
+  #kRcxAsk .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kRcxAsk .kcbtns button:focus-visible, #kRcxAsk .rxmon:focus-within { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  #kRcxAsk .kcbtns button:disabled { opacity:.45; cursor:default; }
+  #kRcxBar { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:150; display:flex; align-items:center; gap:10px;
+    padding:6px 8px 6px 14px; border-radius:20px; font-size:13px; color:#fff; background:#B42318; box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
+  #kRcxBar[hidden] { display:none; }
+  #kRcxBar .t { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #kRcxBar button { background:#fff; color:#B42318; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
+  #mineMenu .mi.dis, #mineMenu .mi.dis:hover { opacity:.5; cursor:default; background:transparent; color:var(--text-dim); }
+  #mineMenu .mi.dis:hover .mico { color:var(--text); }
+  #mineMenu .mhint.mwhy { padding:0 10px 6px 38px; font-size:11px; white-space:normal; max-width:280px; }
   #kRcBar, #kRcCtl { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:150; display:flex; align-items:center; gap:10px;
     padding:6px 8px 6px 14px; border-radius:20px; font-size:13px; color:#fff; box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
   #kRcBar { background:#B42318; }
@@ -4149,6 +4182,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         b.appendChild(lk);
       }
       b.title = it.tip || it.label;
+      if (it.disabled) {   // 0.21.92: a greyed row that says why (an admin's remote control item a person can't get)
+        b.classList.add("dis"); b.setAttribute("aria-disabled", "true"); b.title = it.why || it.tip || it.label;
+        menu.appendChild(b);
+        if (it.why) { const d = document.createElement("div"); d.className = "mhint mwhy"; d.textContent = it.why; menu.appendChild(d); }
+        continue;
+      }
       b.addEventListener("click", () => { closeMineMenu(); pick(it.value); });
       menu.appendChild(b);
     }
@@ -5350,7 +5389,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
       personalSharedApply(d.shared);
-      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes
+      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "rcx") rcxAskArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes; 0.21.92: + an admin's ask
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
       accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)
@@ -5640,7 +5679,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
   function personInviteItems(p) {
-    const r = personInviteItems0(p);
+    const r = rcaWrap(personInviteItems0(p), p);   // 0.21.92: + an admin's Request remote control... / Take control
     const ok = !!p && !p.me && !!p.name && !!window.__kmsg?.allowed?.();
     if (!ok) return r;
     const m = { value: "pinv-msg", icon: "msg", label: "Message " + p.name, tip: "A private message, end-to-end encrypted — they get it even when they are offline" };
@@ -10767,7 +10806,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           row.appendChild(mb);
           const adm = eoMsgAdmin(x);
           const open = (anchor) => {
-            const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm];
+            const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm, ...rcaOffline(x)];   // 0.21.92: + greyed remote control
             openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
             row.classList.add("menu"); watchMenuClose(row);
           };
@@ -14767,7 +14806,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, deaf: v.deaf === 1 } });   // 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, deaf: v.deaf === 1, rca: v.rca === 1 ? 1 : typeof v.rca === "string" ? String(v.rca).slice(0, 16) : undefined } });   // 0.21.92: + rca (can an admin ask it for remote control?); 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           hiNote(v.op, v.hc);   // 0.21.61: their colour
           roomsMoved(full, String(v.peer), pp[0]);   // 0.21.61: moved rooms -> gone from the old one now
           roomsChanged();
@@ -16769,6 +16808,254 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     rcxSend(name);
     rcxRefresh();
   }
+  // ---- 0.21.92 ADMIN REMOTE CONTROL FROM A PERSON'S MENU (Kenton, 2026-10-27: "As an admin logged in, I need an option when
+  // right clicking a user to request remote control, or take control if it's already allowed in the permissions."). His
+  // decisions: admin-code holders only (the relay refuses anyone else); PRIVATE -- the person's screen opens in my KASTR only
+  // (the 0.21.83 private path of Machines...: ~rcx/<sid>, never announced in any room); the person picks the screen in the Allow
+  // prompt (their main monitor first, All monitors), I can switch afterwards like Machines...; "Take control" (no prompt) only
+  // for a relay / hub / box that opted in on its own Relay page -- a person's computer is always "Request remote control...",
+  // which they must allow. Every person menu (the rail, People, Everyone online, All people, a person's tile) gets the item
+  // through personInviteItems -> rcaWrap; a person who cannot be asked (offline, a web page, a locked screen, an older KASTR)
+  // gets it greyed with the reason. THE PERSON: the ask arrives on the people beat (kind "rcx", with the one-time claim key only
+  // this device sees), Allow / Deny + the monitor picker; Allow -> this computer's own KASTR claims it (/api/rcadmin/ask).
+  const RCA_WHY = { web: "uses KASTR in a web browser — remote control needs the KASTR app", locked: "is away (their screen is locked)",
+    wayland: "runs a Wayland desktop — remote control needs X11", "no-display": "runs KASTR without a desktop display", "no-x11": "is missing the X11 libraries",
+    "no-xtest": "is missing XTest (libxtst6)", nosession: "has nobody signed in on their desktop", unsupported: "can’t be controlled remotely",
+    off: "has remote control switched off in their KASTR", busy: "is being controlled by someone already" };
+  let rcaMach = new Map(), rcaMachAt = 0, rcaMachBusy = false, rcaLast = null;
+  async function rcaMachines(force) {   // the machines that let fleet admins in without asking ("Take control")
+    if (!rcxIsAdmin() || rcaMachBusy || (!force && Date.now() - rcaMachAt < 20000)) return;
+    rcaMachBusy = true;
+    try {
+      const d = await rcxCall({ op: "machines" });
+      if (d.ok) rcaMach = new Map((d.machines || []).map((m) => [String(m.node), m]));
+      rcaMachAt = Date.now();
+    } finally { rcaMachBusy = false; }
+  }
+  setInterval(() => { if (rcxIsAdmin()) rcaMachines(false); else if (rcaMach.size) rcaMach = new Map(); }, 10000);
+  function rcaWho(host) {   // the freshest public state of a page on that device (its `rca`: can it be asked?)
+    let best = null;
+    for (const x of roomsPres.values()) if (x.state && !x.goneAt && x.who?.host === host && (!best || (x.seen || 0) > (best.seen || 0))) best = x;
+    return best?.who || null;
+  }
+  function rcaState(p, host) {
+    const name = p.name || prettyOperator(p.key || "") || host || "They";
+    if (!host) return { dis: name + " is offline" };
+    const m = rcaMach.get(host);
+    if (m) { const can = m.online && m.desktop?.ok && !m.session && !m.busy; return can ? { take: m } : { take: m, dis: rcxStatus(m).text }; }
+    if (/^web-/.test(host)) return { dis: name + " " + RCA_WHY.web };
+    const w = rcaWho(host);
+    if (w) {
+      if (w.rca === 1) return { ask: true };
+      if (typeof w.rca === "string" && w.rca) return { dis: name + " " + (RCA_WHY[w.rca] || RCA_WHY.unsupported) };
+      return { dis: name + "’s KASTR" + (w.kv ? " (" + w.kv + ")" : "") + " is too old to be asked — it needs an update" };
+    }
+    return { ask: true, unsure: true };   // in a private room (no public state): ask -- the hub says "no answer" if it can't
+  }
+  function rcaWrap(r, p) {
+    try {
+      if (!p || p.me || !rcxIsAdmin()) return r;
+      const host = String(p.host || personHostOf(p.key, p.room && p.room !== "~private" ? p.room : CHANNEL) || "");
+      if (host && host === HOSTNAME1) return r;
+      rcaMachines(false);
+      const s = rcaState(p, host), name = p.name || prettyOperator(p.key || "") || host;
+      const it = s.take && !s.dis ? { value: "pinv-rca-take", icon: "mouse", label: "Take control", tip: "Open " + name + "’s desktop with control now — it lets fleet admins in without asking; its red bar names you" }
+        : s.take ? { value: "pinv-rca-x", icon: "mouse", label: "Take control", disabled: true, why: s.dis }
+        : s.ask ? { value: "pinv-rca-ask", icon: "mouse", label: "Request remote control…", tip: name + " gets a prompt to allow it; their screen opens privately here — nobody else sees it" }
+        : { value: "pinv-rca-x", icon: "mouse", label: "Request remote control…", disabled: true, why: s.dis };
+      const more = !r && p.more?.items?.length ? p.more : null;   // Everyone online's admin items when there is nothing else
+      const items = r ? [...r.items, { sep: true }, it] : more ? [...more.items, { sep: true }, it] : [it];
+      return { items, pick: (v) => (v === "pinv-rca-ask" ? rcaAsk(p, host) : v === "pinv-rca-take" ? rcxControl(s.take) : v === "pinv-rca-x" ? null
+        : r ? r.pick(v) : more && String(v).startsWith("pinv-eo") ? more.pick(v) : null) };
+    } catch (e) { console.warn("KASTR: remote control item:", e); return r; }
+  }
+  function rcaOffline(x) {   // All people's offline rows: greyed, with the reason
+    return rcxIsAdmin() && x && !x.me ? [{ sep: true }, { value: "pinv-rca-x", icon: "mouse", label: "Request remote control…", disabled: true, why: (x.name || "They") + " is offline" }] : [];
+  }
+  async function rcaAsk(p, host) {
+    const who = p.name || prettyOperator(p.key || "") || host, wname = "kastr-rcx-" + host;
+    const old = rcxWins.get(wname);
+    if (old && !old.win.closed && old.s) { try { old.win.focus(); } catch {} return; }
+    let win = null;
+    try { win = window.open("/rcx.html", wname, "popup,width=1440,height=900"); } catch {}   // opened on the click (a pop-up needs the gesture)
+    if (!win) { rcToast("The session window was blocked — allow pop-up windows for KASTR.", 6000, "warn"); return; }
+    const rec = { win, s: null, error: null };
+    rcxWins.set(wname, rec);
+    const t0 = Date.now();
+    const d = await rcxCall({ op: "ask", node: host, name: who });
+    if (!d.ok || !d.token) {
+      rec.error = d.http === 400 && /op is/.test(String(d.error || "")) ? "the hub’s KASTR is older than this feature — update the hub first"
+        : String(d.error || "the hub did not send the request").replace(" -- ", " — ");
+      rcxSend(wname);
+      rcaLast = { host, who, state: "error", error: rec.error, at: Date.now() };
+      rcToast("Could not ask " + who + ": " + rec.error, 7000, "warn");
+      return;
+    }
+    rec.s = { sid: d.sid, rcid: d.rcid, token: d.token, paths: d.paths, relay: urlInput.value.trim(), exp: d.exp, kind: "ask", wait: d.wait || 60,
+              machine: { ...(d.machine || {}), node: host, name: who, hostname: who, nick: who },
+              admin: { name: myOpName() || "", color: rcMyColor() }, api: { kind: "member", base: authBase(), bearer: authTokens?.member } };
+    rcxSend(wname);
+    rcaLast = { host, who, sid: d.sid, state: "asking", at: t0 };
+    log("Remote control: asked " + who + " (" + host + ", session " + String(d.sid).slice(0, 8) + ")");
+    rcToast("Asked " + who + " for remote control — they get a prompt to allow it.", 6000);
+    const poll = async () => {   // the answer, here too (the session window says it as well)
+      if (rcaLast?.sid !== d.sid || Date.now() - t0 > ((d.wait || 60) + 25) * 1000) return;
+      const st = await rcxCall({ op: "status", sid: d.sid });
+      if (rcaLast?.sid !== d.sid) return;
+      if (st.ok && st.state === "live") {
+        rcaLast = { ...rcaLast, state: "live", allowedMs: Date.now() - t0 };
+        rcToast(who + " allowed it — their screen opens privately in the session window.", 6000);
+        try { rec.win.focus(); } catch {}
+        return;
+      }
+      if (st.ok && st.state === "ended") {
+        rcaLast = { ...rcaLast, state: "ended", why: st.why };
+        const t = st.why === "denied" ? who + " declined your remote control request." : st.why === "noanswer" ? who + " didn’t answer your remote control request."
+          : st.why === "busy" ? who + "’s computer is being controlled by someone already." : st.why === "desktop" ? who + "’s screen can’t be shared right now."
+          : "The remote control request to " + who + " ended — " + (st.whyText || st.why) + ".";
+        rcToast(t, 8000, st.why === "denied" || st.why === "noanswer" || st.why === "admin" ? "event" : "warn");
+        return;
+      }
+      setTimeout(poll, 1000);
+    };
+    setTimeout(poll, 1000);
+  }
+  // ---- the person: Allow / Deny (+ which screen)
+  let rcxAskCur = null, rcxBarCur = null;
+  const rcxAskSeen = new Set();
+  async function rcxAskArrive(it) {
+    if (!it || it.kind !== "rcx" || !/^[0-9a-f]{32}$/.test(String(it.sid || ""))) return;
+    if (it.x === "cancel") { if (rcxAskCur?.sid === it.sid) rcxAskClose(null, "withdrawn"); return; }
+    if (rcxAskSeen.has(it.sid) || !/^[0-9a-f]{32}$/.test(String(it.ck || ""))) return;
+    rcxAskSeen.add(it.sid);
+    if (IS_WEB || rcxAskCur) return;   // a web page cannot be controlled; one prompt at a time (the hub allows one ask per device)
+    let info = null;
+    try { info = await fetch("/api/rcadmin/ask", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    if (!info?.ok) { log("Remote control: an admin asked, but this KASTR cannot answer (" + (info?.error || "no answer") + ")"); return; }
+    const left = Math.max(15, Math.min(Number(info.wait) || 60, Math.round((Number(it.exp) * 1000 - Date.now()) / 1000) || 55));
+    rcxAskOpen({ sid: String(it.sid), ck: String(it.ck), by: String(it.by || "An admin").slice(0, 40), from: String(it.from || ""), info, left, at: Date.now() });
+  }
+  function rcxAskOpen(a) {
+    let el = document.getElementById("kRcxAsk");
+    if (!el) {
+      el = document.createElement("div"); el.id = "kRcxAsk"; el.hidden = true;
+      el.innerHTML = '<div class="popcard" role="dialog" aria-modal="true" aria-labelledby="rxTitle"><div class="head"><span id="rxTitle">Remote control request</span></div>'
+        + '<div class="body"><p class="kcmsg"></p><div class="rxlab">Screen to share</div><div class="rxmons" role="radiogroup" aria-label="Screen to share"></div>'
+        + '<p class="kcdet"></p><p class="rxwarn" hidden></p></div>'
+        + '<div class="kcbtns"><span class="rxleft"></span><button type="button" class="ghost rxno">Deny</button><button type="button" class="rxyes">Allow</button></div></div>';
+      el.addEventListener("click", (e) => e.stopPropagation());
+      el.querySelector(".rxno").addEventListener("click", () => rcxAskClose("deny"));
+      el.querySelector(".rxyes").addEventListener("click", () => rcxAskClose("allow"));
+      el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); rcxAskClose("deny"); } else e.stopPropagation(); });
+      document.body.appendChild(el);
+    }
+    const mons = (a.info.monitors || []).filter((m) => Number.isFinite(Number(m.index)));
+    const main = mons.find((m) => m.primary) || mons[0];
+    const opts = mons.map((m) => ({ v: Number(m.index), t: String(m.name || "Screen " + (Number(m.index) + 1)) + (m.primary ? " (main)" : ""), sz: m.width && m.height ? m.width + " × " + m.height : "" }));
+    if (mons.length > 1) opts.push({ v: Number(a.info.all) || 99, t: "All monitors", sz: mons.length + " screens" });
+    if (!opts.length) opts.push({ v: 0, t: "My screen", sz: "" });
+    const box = el.querySelector(".rxmons");
+    box.replaceChildren(...opts.map((o, i) => {
+      const lab = document.createElement("label"); lab.className = "rxmon";
+      const inp = document.createElement("input"); inp.type = "radio"; inp.name = "rxmon"; inp.value = String(o.v);
+      inp.checked = main ? o.v === Number(main.index) : i === 0;
+      const t = document.createElement("span"); t.textContent = o.t;
+      const sz = document.createElement("span"); sz.className = "sz"; sz.textContent = o.sz;
+      lab.append(inp, t, sz);
+      inp.addEventListener("change", () => { for (const x of box.querySelectorAll(".rxmon")) x.classList.toggle("on", !!x.querySelector("input")?.checked); });
+      lab.classList.toggle("on", inp.checked);
+      return lab;
+    }));
+    const msg = el.querySelector(".kcmsg"); msg.replaceChildren();
+    const b = document.createElement("b"); b.textContent = a.by;
+    msg.append(b, " (admin) asks to see and control your computer.");
+    el.querySelector(".kcdet").textContent = a.by + " will see and control this screen privately; you can stop any time (Ctrl+Alt+Space or Stop control). Nobody in your rooms sees it.";
+    const warn = el.querySelector(".rxwarn"), yes = el.querySelector(".rxyes");
+    const bad = !a.info.desktop?.ok ? "This screen can’t be shared right now (" + (RCA_WHY[a.info.desktop?.why] ? "it " + RCA_WHY[a.info.desktop.why].replace(/^is |^has /, "") : a.info.desktop?.why || "no desktop") + ")."
+      : a.info.busy ? "Someone (" + a.info.busy + ") is controlling this computer already." : "";
+    warn.textContent = bad; warn.hidden = !bad; yes.disabled = !!bad;
+    rcxAskCur = a;
+    const tick = () => {
+      const s = Math.max(0, a.left - Math.floor((Date.now() - a.at) / 1000));
+      el.querySelector(".rxleft").textContent = "Closes in " + s + " s";
+      if (s <= 0 && rcxAskCur === a) rcxAskClose("timeout");
+    };
+    tick();
+    a.t = setInterval(tick, 500);
+    el.hidden = false;
+    try { el.querySelector(".rxno").focus(); } catch {}
+    try { chimeRoom(); } catch {}
+    log("Remote control: " + a.by + " (admin) asks to control this computer (session " + a.sid.slice(0, 8) + ")");
+  }
+  async function rcxAskPost(body) {
+    try {
+      const r = await fetch("/api/rcadmin/ask", { method: "POST", headers: { "content-type": "application/json", "x-kastr-rc": "1" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      return { ...d, ok: r.ok && d.ok !== false, http: r.status };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  async function rcxAskClose(answer, why) {   // "allow" | "deny" | "timeout" | null (the admin withdrew it)
+    const a = rcxAskCur;
+    if (!a) return;
+    rcxAskCur = null;
+    clearInterval(a.t);
+    const el = document.getElementById("kRcxAsk");
+    const mon = Number(el?.querySelector(".rxmons input:checked")?.value ?? 0);
+    if (el) el.hidden = true;
+    if (!answer) { if (why === "withdrawn") rcToast(a.by + " withdrew the remote control request.", 5000); return; }
+    a.answeredAt = Date.now();
+    window.__rcaAnswered = { sid: a.sid, answer, at: a.answeredAt, monitor: mon };   // rig: the lab's "Allow -> picture" clock starts here
+    const d = await rcxAskPost({ sid: a.sid, ck: a.ck, answer, monitor: mon, by: a.by });
+    log("Remote control: " + (answer === "allow" ? "allowed " : answer === "deny" ? "declined " : "no answer for ") + a.by + (d.ok ? "" : " (" + (d.error || d.http) + ")"));
+    if (answer !== "allow") return;
+    if (!d.ok) { rcToast("Remote control could not start: " + (d.error || "no answer from KASTR"), 7000, "warn"); return; }
+    rcxBarShow(a);
+  }
+  function rcxBarShow(a) {   // the page's own "<admin> is controlling this screen -- Stop control" (the screen's red bar and pill say it too)
+    let bar = document.getElementById("kRcxBar");
+    if (!bar) {
+      bar = document.createElement("div"); bar.id = "kRcxBar"; bar.hidden = true; bar.setAttribute("role", "status");
+      bar.innerHTML = '<span class="t"></span><button type="button">Stop control</button>';
+      bar.querySelector("button").addEventListener("click", () => { const c = rcxBarCur; if (c) rcxAskPost({ sid: c.sid, ck: c.ck, answer: "stop" }).then(() => rcxBarPoll()); });
+      document.body.appendChild(bar);
+    }
+    bar.querySelector(".t").textContent = a.by + " is controlling this screen (Ctrl+Alt+Space stops it)";
+    bar.hidden = false;
+    rcxBarCur = a;
+    clearInterval(a.bt);
+    a.bt = setInterval(rcxBarPoll, 2000);
+  }
+  async function rcxBarPoll() {
+    const c = rcxBarCur;
+    if (!c) return;
+    let d = null;
+    try { d = await fetch("/api/rcadmin/ask?probe=1", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    if (d && d.ok && d.session?.sid === c.sid) return;
+    if (!d) return;
+    clearInterval(c.bt);
+    rcxBarCur = null;
+    const bar = document.getElementById("kRcxBar");
+    if (bar) bar.hidden = true;
+    rcToast("Remote control by " + c.by + " ended.", 5000);
+  }
+  // my own capability, in my public state (an admin's menu greys the item with the reason -- or asks)
+  async function rcaProbe() {
+    let v = "web";
+    if (!IS_WEB) {
+      try {
+        const r = await fetch("/api/rcadmin/ask?probe=1", { cache: "no-store" });
+        const d = await r.json().catch(() => ({}));
+        v = r.ok && d.ok ? (d.desktop?.ok ? (d.busy ? "busy" : 1) : String(d.desktop?.why || "unsupported").slice(0, 16)) : "off";
+      } catch { v = "off"; }
+    }
+    try { if (pubModel.rca !== v) { pubModel.rca = v; stateCommit(); } } catch {}
+  }
+  setTimeout(rcaProbe, 2500);
+  setInterval(rcaProbe, 30000);
+  window.__rca = { wrap: rcaWrap, state: (name) => { const p = participantList().find((x) => x.name === name); return p ? rcaState(p, p.host || personHostOf(p.key, CHANNEL)) : null; },
+    machines: (f) => (f ? rcaMachines(true) : [...rcaMach.keys()]), ask: rcaAsk, last: () => rcaLast, arrive: rcxAskArrive, probe: rcaProbe,
+    prompt: () => (rcxAskCur ? { sid: rcxAskCur.sid, by: rcxAskCur.by, mons: [...document.querySelectorAll("#kRcxAsk .rxmon")].map((x) => x.textContent) } : null),
+    answer: (v) => rcxAskClose(v), bar: () => (rcxBarCur ? document.querySelector("#kRcxBar .t")?.textContent : null) };   // rig
   // 0.21.7: a web client downloads the full install zip from the host it is looking at (More > About). The
   // host assembles it from the parts every install carries (kastr_release.py, 10-20 s); a link whose zip is not
   // ready yet POSTs the preparation, says so, and follows itself when the manifest reports the zip ready.

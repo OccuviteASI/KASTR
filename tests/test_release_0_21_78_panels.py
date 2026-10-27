@@ -72,7 +72,7 @@ class PanelsStayOpen(unittest.TestCase):
         self.assertNotIn("() => chatFileInp.click()", self.p)
 
     def test_view_picks_keep_view_open(self):
-        view = between(self.p, '  document.getElementById("viewGallery").addEventListener', "  // hide-me follows newly started camera panes too")
+        view = between(self.p, '  document.getElementById("viewGallery").addEventListener', "  // ---- 0.8.8: Camera popover")   # 0.21.91: "Hide me" (and its comment) is gone
         self.assertEqual(view.count("closeAllPops()"), 1)                           # Full screen only
         self.assertIn('document.getElementById("viewFull").addEventListener("click", () => {\r\n    closeAllPops();', view)
 

@@ -56,7 +56,12 @@ class ViewMenu(unittest.TestCase):
         # declared before applyState (which reads it) -- no temporal-dead-zone error on the first layout
         self.assertLess(self.s.index("let hideMine = false"), self.s.index("  function applyState() {"))
         # a viewer device has no shares: the item hides with Hide me
-        self.once('for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMe", "viewHideMine", "joinPreview"]) {')
+        self.once('for (const id of ["shareBtn", "stopShareBtn", "viewPublishOnly", "viewHideMine", "joinPreview"]) {')
+
+    def test_old_hide_me_is_gone(self):
+        # follow-up (Kenton): "Hide my shares" covers it. Hide me was never remembered (a page variable), so nobody is migrated.
+        for gone in ('id="viewHideMe"', ">Hide me<", "hideMe", '"hideme"', ".hideme"):
+            self.assertNotIn(gone, self.s)
 
     def test_view_menu_paints_the_tick(self):
         self.once('on("viewHideMine", hideMine);   // 0.21.91')
@@ -84,8 +89,8 @@ class Layout(unittest.TestCase):
         st = between(self.s, "  function applyState() {", "    const railRemote = ")
         self.assertIn("try { tagHideMine(); } catch {}   // 0.21.91: before the cells are counted", st)
         self.assertLess(st.index("tagHideMine()"), st.index("const ownCells"))
-        self.assertIn('!el.classList.contains("hideme") && !el.classList.contains("hidemine")).length;', st)
-        self.assertIn('!pe.classList.contains("hideme") && !pe.classList.contains("hidemine"));', st)
+        self.assertIn('&& !el.classList.contains("hidemine")).length;   // 0.21.91: Hide my shares', st)
+        self.assertIn('&& !pe.classList.contains("hidemine"));   // 0.21.91: Hide my shares (it replaced', st)
 
     def test_tagging(self):
         f = between(self.s, "  function tagHideMine() {", "  function paintHideMineNote() {")

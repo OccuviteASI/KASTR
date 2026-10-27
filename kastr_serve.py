@@ -3023,7 +3023,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if p is None:
                     return self._chat_reply(413, {"error": "body too large"})
                 _auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
-                xs = _auth._xs("local") if _auth is not None and hasattr(_auth, "_xs") else None
+                xs = _auth._xs("local") if _auth is not None and hasattr(_auth, "_xs") else kastr_relay.XSHARE_OPEN   # 0.21.91: an open relay's listings follow a rename too
                 obj, code = kastr_relay.room_settings(store, p, admin=self._settings_admin(), log=log, xs=xs)
                 if code == 200:
                     try:
@@ -5279,6 +5279,10 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
     if alive_ref is None:
         alive_ref = [0.0]
     class _Server(ThreadingHTTPServer):
+        # 0.21.91: a page opens ~50 files at once; socketserver's default listen queue of 5 refused some of them (pages that
+        # half-loaded until a reload)
+        request_queue_size = 128
+
         # 0.14.0: media children die with the server -- the launcher's teardown
         # calls shutdown() (and server_close() on the extra listeners).
         def shutdown(self):

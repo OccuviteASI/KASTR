@@ -189,9 +189,15 @@ class Messenger:
     """The hub's message store. `check_code(name, code)` -> bool (the My room check), `has_room(name)` -> bool,
     `set_code(name, code)` -> bool (a new My room code), `ping(hosts, seq)` (tell those devices to pull)."""
 
-    def __init__(self, state_dir, log=None, check_code=None, has_room=None, set_code=None, ping=None):
+    def __init__(self, state_dir, log=None, check_code=None, has_room=None, set_code=None, ping=None,
+                 alias_of=None, aliases=None, rename_room=None, unrename_room=None):
         self.dir = os.path.join(state_dir, "messages")
         self.log = log or (lambda m: None)
+        # 0.21.91: renamed people -- the hub's alias store (AuthStore: old name key -> new; 90 days) and My room's own rename
+        self.alias_of = alias_of or (lambda nk: None)              # nk -> {"to": new nk, "name": new display} | None
+        self.aliases = aliases or (lambda: [])                     # -> [{from, to, name, at, until}]
+        self.rename_room = rename_room or (lambda old, new, code: ("unsupported", {}))
+        self.unrename_room = unrename_room or (lambda new, old: None)
         self.check_code = check_code or (lambda n, c: False)
         self.has_room = has_room or (lambda n: False)
         self.set_code = set_code or (lambda n, c: False)
@@ -406,7 +412,39 @@ class Messenger:
         if op in ("devices", "devremove", "devallow") and not admin:
             return {"ok": False, "error": "only an admin manages someone's messaging devices"}, 403
         with self.lock:
-            return fn(p, host, now)
+            p, renamed = self._resolve(p, op)
+            out, code = fn(p, host, now)
+            if renamed and isinstance(out, dict) and op in ("status", "unlock", "pull", "keys", "send"):
+                out = dict(out, renamed=renamed)   # 0.21.91: "<old> is now <new>" -- the page moves its copy over
+            return out, code
+
+    def _resolve(self, p, op):
+        """0.21.91: a request that names someone by a name they changed (an outdated device, a page that has not heard yet) is
+        read as their new name. -> (request, {old key: {key, name}})."""
+        renamed = {}
+
+        def one(v):
+            nk = name_key(v)
+            a = self.alias_of(nk) if nk else None
+            if not a or not a.get("to"):
+                return v
+            renamed[nk] = {"key": a["to"], "name": a.get("name") or a["to"]}
+            return a.get("name") or a["to"]
+        q = dict(p)
+        for k in ("as", "to", "member") + (() if op == "rename" else ("name",)):
+            if isinstance(q.get(k), str):
+                q[k] = one(q[k])
+            elif k == "as" and isinstance(q.get(k), list):
+                q[k] = [one(x) if isinstance(x, str) else x for x in q[k][:8]]
+        for k in ("names", "members"):
+            if isinstance(q.get(k), list):
+                q[k] = [one(x) if isinstance(x, str) else x for x in q[k][:300]]
+        conv = str(q.get("conv") or "")
+        if conv.startswith("p:"):
+            a = self.alias_of(conv[2:])
+            if a and a.get("to"):
+                q["conv"] = "p:" + a["to"]
+        return q, renamed
 
     def _who(self, p, host, key="as"):
         """The person this device acts as (`as`: a name it unlocked) -> (nk, error reply)."""
@@ -661,9 +699,13 @@ class Messenger:
         groups = [self._group_public(g) for g in self.groups.values() if mset.intersection(g.get("members") or []) or
                   (g.get("deleted") and mset.intersection(g.get("was") or []))]
         notes = {nk: [dict(x) for x in self.notes.get(nk) or []] for nk in mine}
+        try:
+            renames = [r for r in (self.aliases() or []) if isinstance(r, dict)][:500]   # 0.21.91
+        except Exception:
+            renames = []
         return {"ok": True, "fleet": self.fleet, "msgs": out, "more": more, "cur": out[-1]["seq"] if out else max(since, 0),
                 "top": self.seq, "groups": groups, "reads": {nk: dict(self.reads.get(nk) or {}) for nk in mine}, "keys": keys,
-                "notes": notes, "locked": locked}, 200
+                "notes": notes, "locked": locked, "renames": renames}, 200
 
     def op_read(self, p, host, now):
         """{as, conv ("p:<name key>" | "g:<gid>"), seq} -> the person has read that conversation up to seq (every device of
@@ -857,6 +899,155 @@ class Messenger:
         self._ping_person(was, self.seq)
         self.log("messages: group %s deleted by its creator (%d message(s) removed from the hub)" % (gid, len(drop)))
         return {"ok": True}, 200
+
+    # ---- 0.21.91: a person changes their name -- everything moves ----------------------------------------------------
+    RENAME_RATE = (6, 86400)
+
+    def op_rename(self, p, host, now):
+        """{name (the current one), newName, code, wrapped?, iv?, salt?, iter?} -> {ok, name, key, old}. The current My room
+        code proves it; the new name must be free (no My room, no messaging person, no name someone else changed away from in
+        the last 90 days). My room keeps its slug under the new owner name (AuthStore.personal_rename, which also keeps the
+        alias old -> new); here the person record (its private key re-wrapped by the device under the NEW name: the wrap's
+        AES-GCM additional data is "kastr-msg-id-v1|<name key>"), groups, read marks, cursors, notes, attachments, the photo
+        and every message move to the new name key, and each conversation partner / group gets a line "<old> is now <new>"."""
+        old, err = self._code(p)
+        if err:
+            return err
+        new = name_disp(p.get("newName"))[:40]
+        ok_, nk_ = name_key(old), name_key(new)
+        if not nk_:
+            return {"ok": False, "error": "the new name is required"}, 400
+        if not self._rate_ok(("rename", host), self.RENAME_RATE, now):
+            return {"ok": False, "error": "too many name changes today", "retryAfter": 3600}, 429
+        if nk_ != ok_ and nk_ in self.persons:
+            return {"ok": False, "taken": True, "error": "%s is already taken" % new}, 409
+        per = self.persons.get(ok_)
+        w = None
+        if per and nk_ != ok_:
+            ok, it = self._wrapped_ok(p)
+            if not ok:
+                return {"ok": False, "rewrap": True, "error": "the messages key must be wrapped again under the new name"}, 400
+            if per and host not in (per.get("devices") or {}):
+                pass   # a device that proved the code may move it (it unlocks the same way)
+            w = {"wrapped": p["wrapped"], "iv": p["iv"], "salt": p["salt"], "iter": it}
+        verdict, info = self.rename_room(old, new, str(p.get("code") or ""))
+        if verdict == "wrong":
+            return {"ok": False, "wrong": True, "error": "wrong name or My room code"}, 403
+        if verdict in ("taken", "held"):
+            return {"ok": False, "taken": True, "held": verdict == "held",
+                    "error": ("%s is already taken" % new) if verdict == "taken" else
+                             ("%s is kept for someone who changed their name until %s" % (new, time.strftime("%Y-%m-%d", time.localtime(float((info or {}).get("until") or now)))))}, 409
+        if verdict not in ("renamed", "same"):
+            return {"ok": False, "error": "My room could not be renamed (%s)" % verdict}, 500
+        old_disp = (info or {}).get("old") or old
+        try:
+            self._rename_refs(ok_, nk_, new, old_disp, now, rewrap=w, announce=nk_ != ok_)
+        except Exception as e:
+            try:
+                self.unrename_room(new, old_disp)
+            except Exception:
+                pass
+            self.log("messages: rename of %s failed -- My room put back: %s" % (old_disp, e))
+            return {"ok": False, "error": "the rename failed -- nothing changed"}, 500
+        self.log("messages: %s renamed %s -> %s (everything moved)" % (host, old_disp, new))
+        return {"ok": True, "name": new, "key": nk_, "old": old_disp, "slug": (info or {}).get("slug")}, 200
+
+    def _rename_refs(self, o, n, disp, old_disp, now, rewrap=None, announce=True):
+        """Every reference to name key `o` becomes `n` (display `disp`). Under the lock."""
+        per = self.persons.pop(o, None)
+        if per is not None:
+            per["name"] = disp
+            if rewrap:
+                per.update(rewrap, keyAt=int(now), at=int(now))
+            have = self.persons.get(n)
+            if have is None or self._key_at(have) < self._key_at(per):   # a tie: the record already under the new name
+                if have is not None:   # (a merge that met both) -- the devices of both stay
+                    per.setdefault("devices", {}).update({h: d for h, d in (have.get("devices") or {}).items() if h not in per["devices"]})
+                self.persons[n] = per
+        for g in self.groups.values():
+            if o in (g.get("members") or []) or o in (g.get("was") or []) or g.get("creator") == o:
+                g["members"] = [n if m == o else m for m in g.get("members") or []]
+                if g.get("was"):
+                    g["was"] = [n if m == o else m for m in g["was"]]
+                if g.get("creator") == o:
+                    g["creator"] = n
+                names = g.setdefault("names", {})
+                names.pop(o, None)
+                names[n] = disp
+                g["members"] = list(dict.fromkeys(g["members"]))
+                g["ver"] = int(g.get("ver") or 0) + 1
+        if o in self.reads:
+            mine = self.reads.setdefault(n, {})
+            for k, v in self.reads.pop(o).items():
+                mine[k] = max(int(v or 0), int(mine.get(k) or 0))
+        for r in self.reads.values():
+            if "p:" + o in r:
+                v = r.pop("p:" + o)
+                r["p:" + n] = max(int(v or 0), int(r.get("p:" + n) or 0))
+        for c in self.cursors.values():
+            if o in c:
+                v = c.pop(o)
+                c[n] = max(int(v or 0), int(c.get(n) or 0))
+        if o in self.notes:
+            self.notes[n] = (self.notes.get(n) or []) + self.notes.pop(o)
+        for f in self.files.values():
+            if f.get("by") == o:
+                f["by"] = n
+            if isinstance(f.get("who"), list) and o in f["who"]:
+                f["who"] = sorted({n if x == o else x for x in f["who"]})
+        if o in self.photos:   # the photo follows (a newer one under the new name stays)
+            ph = dict(self.photos.pop(o), name=disp)
+            if n not in self.photos or int(ph.get("at") or 0) >= int(self.photos[n].get("at") or 0):
+                self.photos[n] = ph
+            self._photo_cache = None
+        partners = set()
+        for q, e in list(self.msgs.items()):
+            hit = False
+            if e.get("from") == o:
+                e["from"], e["fromName"], hit = n, disp, True
+            if e.get("to") == o:
+                e["to"], e["toName"], hit = n, disp, True
+            if o in (e.get("who") or []):
+                e["who"], hit = sorted({n if x == o else x for x in e["who"]}), True
+            if hit:
+                self._store_msg(e)
+                if e.get("kind") == "msg" and not e.get("gid"):
+                    partners.add(e["to"] if e.get("from") == n else e.get("from"))
+        partners.discard(n)
+        partners.discard(None)
+        pings = {n} | partners
+        if announce:
+            for pk in sorted(partners):
+                self.seq += 1
+                env = {"seq": self.seq, "uid": "s:" + os.urandom(8).hex(), "at": int(now), "kind": "sys", "from": n, "fromName": disp,
+                       "to": pk, "toName": (self.persons.get(pk) or {}).get("name") or pk, "who": sorted({n, pk}),
+                       "sys": {"ev": "renamed", "from": old_disp, "name": disp}}
+                self.msgs[env["seq"]] = env
+                self._store_msg(env)
+            for g in list(self.groups.values()):
+                if not g.get("deleted") and n in (g.get("members") or []):
+                    self._sys(g["gid"], "renamed", n, now, **{"from": old_disp, "name": disp})
+                    pings |= set(g.get("members") or [])
+        self._touch(now=True)
+        self._ping_person(sorted(pings), self.seq)
+
+    def apply_aliases(self, now=None):
+        """0.21.91: a copy (hand-over, the standby's, a hand-back) may still hold someone under a name they changed -- the hub's
+        aliases move it (no new lines: the partners' "is now" lines travel with the messages)."""
+        now = time.time() if now is None else now
+        moved = 0
+        with self.lock:
+            for _i in range(3):
+                keys = set(self.persons) | {e.get("from") for e in self.msgs.values()} | {e.get("to") for e in self.msgs.values() if e.get("to")} \
+                    | set(self.photos) | {m for g in self.groups.values() for m in g.get("members") or []}
+                todo = [(k, self.alias_of(k)) for k in keys if k]
+                todo = [(k, a) for k, a in todo if a and a.get("to") and a["to"] != k]
+                if not todo:
+                    break
+                for k, a in todo:
+                    self._rename_refs(k, a["to"], a.get("name") or a["to"], k, now, announce=False)
+                    moved += 1
+        return moved
 
     # ---- admins: a person's devices --------------------------------------------------------------------------------
     def op_devices(self, p, host, now):
@@ -1152,6 +1343,10 @@ class Messenger:
                 pass
             if meta or n["msgs"] or self.seq != seq0:
                 self._touch(now=True)
+        try:
+            n["aliased"] = self.apply_aliases(now)   # 0.21.91: anyone it holds under a name they changed moves to the new one
+        except Exception as e:
+            self.log("messages: renames not applied to the copy: %s" % e)
         if n["msgs"] or n["files"]:
             self.sweep(now)
         return n

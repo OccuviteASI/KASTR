@@ -509,6 +509,37 @@ class Decks(Base):
         self.assertFalse(os.path.exists(os.path.join(self.dir, "templates", "decks", d["deck"])))
         self.assertEqual(self.st.tplbook.decks, {})
 
+    def test_a_rename_never_cuts_deck_access_or_a_role(self):
+        kr.personal_op(self.st, {"op": "create", "name": "Kenton Jeffery", "code": MYCODE, "access": "pub-1"}, "10.0.0.5")
+        kr.personal_op(self.st, {"op": "create", "name": "Ada", "code": "ada-code-99", "access": "pub-1"}, "10.0.0.5")
+        o, c = self.api({"op": "save", "name": "Briefing", "sections": ["layout", "pres"],
+                         "pres": {"presenters": [{"name": "Kenton Jeffery", "main": True}, {"name": "Bob"}],
+                                  "backstage": [{"name": "Ada", "control": ["Kenton Jeffery", "Bob"]}]}})
+        tid = o["template"]["id"]
+        d, c = self.api({"op": "deckNew", "id": tid, "name": "D", "size": 10})
+        self.svc.tpl_deck_post(b"0123456789", {"d": [d["deck"]], "f": ["s0.bin"], "ut": [d["utok"]]}, None)
+        self.api({"op": "deckDone", "id": tid, "deck": d["deck"], "utok": d["utok"]})
+        self.assertEqual(self.st.personal_rename("Kenton Jeffery", "Kenton J", MYCODE)[0], "renamed")
+        pr = self.st.tplbook.get(tid)["pres"]
+        self.assertEqual([p["name"] for p in pr["presenters"]], ["Kenton J", "Bob"])          # the role follows the person
+        self.assertEqual(pr["backstage"][0]["control"], ["Kenton J", "Bob"])                  # and Ada's "Can control my mic and camera"
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Kenton J", "pcode": MYCODE}, self.pub)[1], 200)
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Ada", "pcode": "ada-code-99"}, self.pub)[1], 200)
+        # put back: the template names him as before
+        self.assertTrue(self.st.personal_unrename("Kenton J", "Kenton Jeffery"))
+        pr = self.st.tplbook.get(tid)["pres"]
+        self.assertEqual((pr["presenters"][0]["name"], pr["backstage"][0]["control"][0]), ("Kenton Jeffery", "Kenton Jeffery"))
+        # the fallback: a copy that still holds the old name (e.g. handed back from the standby) -- the hub's 90-day alias
+        self.st.personal_rename("Kenton Jeffery", "Kenton J", MYCODE)
+        t = self.st.tplbook.get(tid)
+        t["pres"]["presenters"][0]["name"] = "Kenton Jeffery"
+        self.st.tplbook.put(t)
+        self.assertEqual(self.st.tplbook.get(tid)["pres"]["presenters"][0]["name"], "Kenton Jeffery")
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Kenton J", "pcode": MYCODE}, self.pub)[1], 200)
+        # ... and nobody else gets in through it
+        kr.personal_op(self.st, {"op": "create", "name": "Carlo", "code": "carlo-code-9", "access": "pub-1"}, "10.0.0.5")
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid, "pname": "Carlo", "pcode": "carlo-code-9"}, self.pub)[1], 403)
+
     def test_decks_and_templates_move_with_the_hub(self):
         o, c = self.api({"op": "save", "name": "Moves", "sections": ["layout", "pres"], "pres": {}})
         tid = o["template"]["id"]

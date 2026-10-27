@@ -9663,6 +9663,13 @@ class AuthService:
                 named.discard("")
                 if t.get("room") != room:
                     return {"ok": False, "error": "open the template's deck from its own room"}, 403
+                if ident and ident["nk"] not in named and hasattr(self.store, "personal_alias"):
+                    # 0.21.92 (fallback): a name the template still holds that its person changed away from in the last 90 days
+                    for n0 in named:
+                        a = self.store.personal_alias(n0, now)
+                        if a and a.get("to") == ident["nk"]:
+                            named.add(ident["nk"])
+                            break
                 if not admin and not (ident and ident["nk"] in named):
                     if ierr and ierr[0].get("wrong"):
                         return ierr

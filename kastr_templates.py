@@ -1022,17 +1022,46 @@ class TemplateBook:
         if not old or not new or old == new:
             return 0
         with self.lock:
+            n = 0
             shelf = self.people.pop(old, None)
-            if not shelf:
-                return 0
-            for t in shelf.values():
-                t["owner"], t["ownerName"] = new, name_disp(disp) or t.get("ownerName") or new
-            self.people.setdefault(new, {}).update(shelf)
+            if shelf:
+                for t in shelf.values():
+                    t["owner"], t["ownerName"] = new, name_disp(disp) or t.get("ownerName") or new
+                self.people.setdefault(new, {}).update(shelf)
+                n += len(shelf)
             for m in self.decks.values():
                 if m.get("scope") == "me" and m.get("key") == old:
                     m["key"] = new
-            self._save_locked()
-            return len(shelf)
+            n += self._rename_in_pres_locked(old, name_disp(disp) or new)
+            if n:
+                self._save_locked()
+            return n
+
+    def _rename_in_pres_locked(self, old_key, new_name):
+        """Every template naming `old_key` as a presenter, a backstage person or in a backstage person's control list names
+        `new_name` instead (a rename never cuts deck access or a role). -> how many templates changed."""
+        n = 0
+        for book in (self.rooms, self.people):
+            for shelf in book.values():
+                for t in shelf.values():
+                    pr = t.get("pres")
+                    if not isinstance(pr, dict):
+                        continue
+                    hit = False
+                    for x in (pr.get("presenters") or []) + (pr.get("backstage") or []):
+                        if isinstance(x, dict) and name_key(x.get("name")) == old_key:
+                            x["name"] = new_name
+                            hit = True
+                    for b in pr.get("backstage") or []:
+                        if isinstance(b, dict) and isinstance(b.get("control"), list):
+                            ctl = [new_name if name_key(c) == old_key else c for c in b["control"]]
+                            if ctl != b["control"]:
+                                b["control"] = ctl
+                                hit = True
+                    if hit:
+                        t["upd"] = int(_now())
+                        n += 1
+        return n
 
     def _sweep_locked(self, now=None):
         now = _now() if now is None else now

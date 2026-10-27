@@ -87,7 +87,7 @@ class Roles(unittest.TestCase):
     def test_copresenter_requests_are_presenter_only(self):
         ao = block(JS, "  function applyOp(ctl, who, isP) {", "  let rewrapT = null;")
         self.assertIn('if (ctl.pp && typeof ctl.pp === "object") { if (isP) presOp(ctl.pp, who); else T("drop"', ao)
-        po = block(JS, "  function presOp(pp, who) {", "  const audienceOp")
+        po = block(JS, "  function presOp(pp, who) {", "  let audienceOp")
         for op in ('case "role":', 'case "cur":', 'case "rbg":', 'case "end":', 'case "note":'):
             self.assertIn(op, po)
         self.assertIn("unseal(m.notesKey, unb64(pp.c))", po)   # a co-presenter's note travels sealed with the notes key

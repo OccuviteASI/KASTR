@@ -600,6 +600,7 @@
     };
     T("start", { id: mine.id, n: mine.n, kind: mine.kind });
     modeInit(mine);   // 0.21.89: Standout when my camera is on, else Content only
+    audienceInit(mine);   // 0.21.91: the audience is muted while I present (until a presenter turns it off)
     view.prep("Preparing slide 1 of " + mine.n + "…");
     try { await ensureSlide(0); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
     await uploadNotes();
@@ -683,6 +684,7 @@
       // K and the store's write token wrapped to their own key, the presenter presenting now and their name
       own: myPerson(), og: mine.og, cur: mine.cur, cn: nameOfPerson(mine.cur),
       ps: mine.ps.map((x) => ({ p: x.p, n: x.name || nameOfPerson(x.p), w: x.w || "", t: x.t || "" })),
+      ...audFields(),   // 0.21.91: am (audience muted), lt (let talk), hx (hands lowered by a presenter)
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
@@ -817,7 +819,7 @@
       default: if (!audienceOp(pp, who)) T("drop", { id: m.id, who, why: "op " + pp.op });
     }
   }
-  const audienceOp = () => false;   // (audience mute: below)
+  let audienceOp = () => false;   // (audience mute: below)
   // the share: the live slide as a normal content share (old KASTRs, phones, web, the recorder)
   function startShare() {
     if (!mine || !window.__presShare) return;
@@ -2626,6 +2628,270 @@
   }
   let adoptExtra = () => {};   // (audience mute)
   window.addEventListener("resize", () => { for (const o of overlays.values()) o.key = ""; schedule(); });
+
+  // ---- 0.21.91: AUDIENCE MUTE ----------------------------------------------------------------------------------------------------
+  // Kenton: "By default when presenting, everyone else should be muted and not able to unmute themselves unless they are added as a
+  // presenter." Decided: only PRESENTERS talk while a presentation is live -- the audience AND backstage are muted and cannot
+  // unmute (backstage still runs slides, notes and mic / camera control). The record carries it, so late joiners obey:
+  //   am  1 = "Audience muted" (ON when a presentation starts; any presenter turns it off for Q&A and back on)
+  //   lt  the people a presenter let talk (a raised hand -> "Let <name> talk"): they MAY unmute (never forced) until they lower
+  //       their hand / Done, a presenter mutes them again, or the presentation ends
+  //   hx  [[person, hand at]]: hands a presenter dismissed (or took the talk back from) -- that page lowers its hand
+  // A raised hand is one small field on the asker's own page: presCo.hand {id, at} (at most one change a second and a half).
+  // Enforced on BOTH sides: (a) my own page mutes its mic through the real path (__presAV.mic -> micMuted + sendControl +
+  // renderMine) and the page refuses to unmute it (the Mic button, the microphone's own mute key, a control message); (b) EVERY
+  // 0.21.91 page plays a PERSON'S MIC at gain 0 (its volume path -- the warm floor, never `muted`, never a disconnect) unless that
+  // person may talk now, so an older KASTR or a modified page that ignores the lock is not heard here. A person's mic = the audio
+  // of a person's camera stream in my room: <room>/<host>/<op>/camera(-n).hang of a page that is not a box (publisher / relay
+  // mode). Boxes, RTSP cameras, media files, screen shares, slide videos and sound clips keep their sound.
+  const talk = { locked: "", was: null, unlockMic: null, active: false, allowed: new Set(), boxes: new Set(), sig: "", handAt: 0, lastHand: 0, freeBy: "" };
+  let handState = null;   // my raised hand {id, at}
+  coExtra = () => (handState ? { hand: handState } : {});
+  function liveDecks() {   // every presentation live in my room, as its record says (mine first)
+    const out = [];
+    if (mine) out.push({ id: mine.id, am: mine.am ? 1 : 0, own: myPerson(), ps: mine.ps.map((x) => x.p), lt: [...(mine.lt || [])], hx: [...(mine.hx || new Map())], cn: nameOfPerson(mine.cur) });
+    for (const { rec } of deckRecs().values()) {
+      if (mine && rec.id === mine.id) continue;
+      out.push({ id: rec.id, am: Number(rec.am) ? 1 : 0, own: rec.own || "", ps: Array.isArray(rec.ps) ? rec.ps.map((x) => x.p) : [], lt: Array.isArray(rec.lt) ? rec.lt.map(String) : [],
+                 hx: Array.isArray(rec.hx) ? rec.hx : [], cn: rec.cn || nameOfPerson(rec.own || "") , old: !Array.isArray(rec.ps) });
+    }
+    return out;
+  }
+  const mayTalk = (d, who) => !d.am || who === d.own || d.ps.includes(who) || d.lt.includes(who);
+  function lockReason(ds) {
+    const me = myPerson();
+    for (const d of ds) if (!d.old && d.am && !mayTalk(d, me)) return "Muted while " + d.cn + " presents";
+    return "";
+  }
+  const PERSON_CAM = /^camera(-\d+)?\.hang$/;
+  function silent(path) {   // a person's mic that may not be heard now (this page plays it at gain 0)
+    if (!talk.active) return false;
+    const p = String(path || "").split("/");
+    if (p.length !== 4 || !PERSON_CAM.test(p[3])) return false;
+    const c = ctx();
+    if (!c || p[0] !== c.channel) return false;
+    const key = (p[1] + "/" + p[2]).toLowerCase();
+    return !talk.allowed.has(key) && !talk.boxes.has(key);
+  }
+  function talkTick() {
+    const ds = liveDecks().filter((d) => !d.old);
+    const me = myPerson();
+    // who may be heard: in every deck with the audience muted, its presenters + the people let talk (and boxes, always)
+    const muting = ds.filter((d) => d.am);
+    const allowed = new Set();
+    for (const d of muting) for (const p of [d.own, ...d.ps, ...d.lt]) if (p) allowed.add(String(p).toLowerCase());
+    const boxes = new Set();
+    for (const p of (ctx()?.people || [])) if (/^(publisher|publisher-relay|relay)$/.test(p.mode)) boxes.add((p.host + "/" + (p.op || p.peer)).toLowerCase());
+    // a deck where I am the audience but let talk does not lock me -- yet another deck with its audience muted does
+    const lk = lockReason(muting);
+    const AV = window.__presAV;
+    let st = null; try { st = AV?.state?.() || null; } catch {}
+    const micOn = !!(st && st.mic === "on");
+    let changed = false;
+    if (lk) {
+      if (!talk.locked) { talk.locked = lk; if (talk.was === null) talk.was = micOn; changed = true; T("talk-lock", { who: lk }); }
+      else if (talk.locked !== lk) { talk.locked = lk; changed = true; }
+      if (micOn) { try { AV.mic(true); } catch {} T("talk-mute", { who: me }); }   // the real path: micMuted + sendControl + renderMine
+    } else if (talk.locked) {
+      talk.locked = ""; talk.unlockMic = micOn; changed = true; T("talk-free", { who: me });
+    }
+    if (!lk && talk.was !== null && ds.length && talk.unlockMic !== null && micOn !== talk.unlockMic) talk.was = null;   // they took the mic themselves
+    if (!ds.length && talk.was !== null) {   // the presentation is over: my mic as it was before it
+      const was = talk.was;
+      talk.was = null; talk.unlockMic = null;
+      if (was && !micOn) { try { AV?.mic(false); } catch {} }
+      T("talk-restore", { who: was ? "on" : "off" });
+      changed = true;
+    }
+    // my hand: lowered when the deck is gone, the audience is not muted any more, or a presenter dismissed it / took the talk back
+    if (handState) {
+      const d = ds.find((x) => x.id === handState.id);
+      const dismissed = d && d.hx.some((h) => Array.isArray(h) && h[0] === me && Number(h[1]) === handState.at);
+      if (!d || !d.am || dismissed) { if (dismissed) toast("A presenter lowered your hand.", 5000); handState = null; T("hand-down", { why: !d ? "gone" : !d.am ? "unmuted" : "dismissed" }); changed = true; coPublish(); }
+    }
+    const sig = JSON.stringify([!!muting.length, [...allowed].sort(), [...boxes].sort(), talk.locked]);
+    if (sig !== talk.sig) { talk.sig = sig; talk.active = !!muting.length; talk.allowed = allowed; talk.boxes = boxes; changed = true; }
+    if (changed) { try { window.__presTalkChanged?.(); } catch {} paintTalkPill(); try { view.paint(); } catch {} }
+    else paintTalkPill();
+  }
+  setInterval(() => { try { talkTick(); } catch (e) { console.warn("KASTR pres: audience", e); } }, 300);
+  function raiseHand(on) {   // the audience's "Ask to speak" / Lower hand / Done
+    const now = Date.now();
+    if (now - talk.lastHand < 1500) return false;   // cheap: at most one change a second and a half
+    const d = liveDecks().find((x) => !x.old && x.am && !mayTalk(x, myPerson())) || (handState && liveDecks().find((x) => x.id === handState.id));
+    if (on) { if (!d || handState) return false; handState = { id: d.id, at: now }; }
+    else { if (!handState) return false; handState = null; }
+    talk.lastHand = now;
+    T(on ? "hand-up" : "hand-down", { id: d && d.id, why: "me" });
+    ensurePk(); coPublish(); paintTalkPill();
+    return true;
+  }
+  // the owner page: the switch, the hands, who may talk
+  function audienceInit(m) { m.am = 1; m.lt = new Set(); m.hx = new Map(); }
+  function audFields() { const m = mine; return m && m.lt ? { am: m.am ? 1 : 0, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {}; }
+  function handOf(p) { const co = coOf(p); return co && co.hand && mine && co.hand.id === mine.id ? Number(co.hand.at) || 0 : 0; }
+  function setAm(v, by) {
+    const m = mine;
+    if (!m || !m.lt) return false;
+    const nv = v ? 1 : 0;
+    if (m.am === nv) return true;
+    m.am = nv;
+    if (nv) m.lt.clear();   // muted again: whoever was let talk asks again
+    T("am", { id: m.id, who: nv ? "on" : "off", by: by || myPerson() });
+    publish(); modeTick(); talkTick(); view.paint();
+    return true;
+  }
+  function setTalk(p, v, by) {   // "Let <name> talk" (v) / "Dismiss" or "Mute again" (!v)
+    const m = mine;
+    if (!m || !m.lt || typeof p !== "string" || !p) return false;
+    if (v) { if (!handOf(p)) return false; m.lt.add(p); m.hx.delete(p); }
+    else { m.lt.delete(p); const at = handOf(p); if (at) m.hx.set(p, at); }
+    T(v ? "let-talk" : "no-talk", { id: m.id, who: p, by: by || myPerson() });
+    publish(); talkTick(); view.paint();
+    return true;
+  }
+  audienceOp = (pp, who) => {   // a co-presenter's request (presOp)
+    if (pp.op === "am") return setAm(!!pp.v, who) || true;
+    if (pp.op === "lt") return setTalk(String(pp.p || ""), !!pp.v, who) || true;
+    return false;
+  };
+  adoptExtra = (m, rec) => { m.am = rec.am === undefined ? 1 : Number(rec.am) ? 1 : 0; m.lt = new Set(Array.isArray(rec.lt) ? rec.lt.map(String) : []); m.hx = new Map(Array.isArray(rec.hx) ? rec.hx.filter((h) => Array.isArray(h)).map((h) => [String(h[0]), Number(h[1]) || 0]) : []); };
+  function audiencePrune() {   // the owner: someone let talk lowered their hand (Done) -> no longer let talk
+    const m = mine;
+    if (!m || !m.lt) return;
+    let ch = false;
+    for (const p of [...m.lt]) if (!handOf(p)) { m.lt.delete(p); ch = true; T("talk-done", { id: m.id, who: p }); }
+    for (const [p, at] of [...m.hx]) if (handOf(p) !== at && Date.now() - at > 600000) { m.hx.delete(p); ch = true; }
+    if (ch) { publish(); talkTick(); view.paint(); }
+  }
+  setInterval(() => { try { audiencePrune(); } catch {} }, 700);
+  function hands(deckId) {   // the raised hands in the room for this deck: [{p, name, at, talking}]
+    const out = [];
+    const d = liveDecks().find((x) => x.id === deckId);
+    if (!d) return out;
+    for (const [path, r] of remote) {
+      const h = r.co && r.co.hand;
+      if (!h || h.id !== deckId) continue;
+      const p = personOfPath(path);
+      if (d.hx.some((x) => Array.isArray(x) && x[0] === p && Number(x[1]) === Number(h.at))) continue;
+      out.push({ p, name: nameOfPerson(p), at: Number(h.at) || 0, talking: d.lt.includes(p) });
+    }
+    return out.sort((a, b) => a.at - b.at);
+  }
+  function amAct(v) {   // the presenter view's "Audience muted" switch (owner: directly; an added presenter: asks the owner)
+    const v0 = view.deck();
+    if (!v0) return false;
+    if (v0.role === "presenter") return setAm(v, myPerson());
+    if (v0.role === "copresenter") return sendPresOp(v0.id, { op: "am", v: v ? 1 : 0 });
+    return false;
+  }
+  function talkAct(p, v) {
+    const v0 = view.deck();
+    if (!v0) return false;
+    if (v0.role === "presenter") return setTalk(p, v, myPerson());
+    if (v0.role === "copresenter") return sendPresOp(v0.id, { op: "lt", p, v: v ? 1 : 0 });
+    return false;
+  }
+  avExtraSig = () => {
+    const v = view.deck();
+    if (!v) return "";
+    const d = liveDecks().find((x) => x.id === v.id);
+    return JSON.stringify([d && d.am, hands(v.id).map((h) => [h.p, h.talking])]);
+  };
+  avExtra = (row) => {   // the presenters: "Audience muted" + the raised hands
+    const v = view.deck();
+    const d = v && liveDecks().find((x) => x.id === v.id);
+    if (!d || d.old) return;
+    const box = document.createElement("div"); box.className = "audbox";
+    const lab = document.createElement("label"); lab.className = "avsw audsw";
+    lab.title = "On: only the presenters can talk -- everyone else is muted and cannot unmute (they can ask to speak). Off: everyone may unmute themselves (Q&A).";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "amsw"; cb.checked = !!d.am;
+    cb.addEventListener("change", () => amAct(cb.checked));
+    lab.append(cb, document.createTextNode("Audience muted"));
+    box.append(lab);
+    const hs = hands(v.id);
+    if (d.am && hs.length) {
+      const list = document.createElement("div"); list.className = "hands";
+      for (const h of hs) {
+        const r = document.createElement("div"); r.className = "hand" + (h.talking ? " talking" : ""); r.dataset.who = h.p;
+        const n = document.createElement("span"); n.className = "hn"; n.textContent = (h.talking ? "Talking: " : "Hand up: ") + h.name;
+        r.append(n);
+        if (!h.talking) {
+          const a = document.createElement("button"); a.type = "button"; a.className = "letb"; a.textContent = "Let " + String(h.name).split(/\s+/)[0] + " talk";
+          a.title = h.name + " may unmute until they click Done, you mute them again, or the presentation ends";
+          a.addEventListener("click", () => talkAct(h.p, true));
+          const x = document.createElement("button"); x.type = "button"; x.className = "disb"; x.textContent = "Dismiss";
+          x.addEventListener("click", () => talkAct(h.p, false));
+          r.append(a, x);
+        } else {
+          const x = document.createElement("button"); x.type = "button"; x.className = "disb"; x.textContent = "Mute again";
+          x.addEventListener("click", () => talkAct(h.p, false));
+          r.append(x);
+        }
+        list.append(r);
+      }
+      box.append(list);
+    } else if (d.am) {
+      const n = document.createElement("span"); n.className = "hn none"; n.textContent = "No hands raised";
+      box.append(n);
+    }
+    row.append(box);
+  };
+  // the audience's pill: the lock, Ask to speak / Lower hand, "you may talk" / Done
+  let talkPill = null;
+  function paintTalkPill() {
+    const ds = liveDecks().filter((x) => !x.old);
+    const me = myPerson();
+    const d = handState ? ds.find((x) => x.id === handState.id) : null;
+    const letMe = d && d.am && d.lt.includes(me);
+    const show = !!talk.locked || !!handState;
+    if (!talkPill) {
+      if (!show) return;
+      talkPill = document.createElement("div"); talkPill.id = "presTalk"; talkPill.setAttribute("role", "status");
+      talkPill.innerHTML = '<span class="tt"></span><button type="button" class="tb"></button>';
+      talkPill.querySelector(".tb").addEventListener("click", () => raiseHand(!handState));
+      document.body.appendChild(talkPill);
+    }
+    talkPill.classList.toggle("show", show);
+    if (!show) return;
+    const txt = letMe ? "You may talk now — unmute when you are ready" : talk.locked + (handState ? " · your hand is up" : "");
+    const b = letMe ? "Done" : handState ? "Lower hand" : "Ask to speak";
+    const t = talkPill.querySelector(".tt"), bb = talkPill.querySelector(".tb");
+    if (t.textContent !== txt) t.textContent = txt;
+    if (bb.textContent !== b) bb.textContent = b;
+    bb.title = letMe ? "Lower your hand -- you are muted again" : handState ? "Lower your hand" : "Raise your hand: the presenters can let you talk";
+    talkPill.classList.toggle("free", !!letMe);
+    talkPill.classList.toggle("withpill", !!document.querySelector("#presPill.show"));
+  }
+  const TALK_CSS = `
+  #presTalk { position:fixed; top:58px; left:50%; transform:translateX(-50%); z-index:84; display:none; gap:10px; align-items:center;
+    background:#2a1414; color:#ffd7d7; border:1px solid #6b2a2a; border-radius:999px; padding:5px 6px 5px 14px; font:13px 'Segoe UI', system-ui, sans-serif;
+    box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
+  #presTalk.show { display:flex; }
+  #presTalk.withpill { top:98px; }
+  #presTalk.free { background:#0f2a1a; color:#c8f5d8; border-color:#2a6b45; }
+  #presTalk .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #presTalk button { background:#0b5c86; color:#fff; border:0; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
+  #presView .modebox .audbox { flex-basis:100%; display:flex; flex-direction:column; gap:6px; border-top:1px solid #1f2a36; padding-top:6px; }
+  #presView .modebox .hands { display:grid; gap:4px; }
+  #presView .modebox .hand { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:3px 6px; border-radius:6px; background:#2a2110; color:#ffcf7a; }
+  #presView .modebox .hand.talking { background:#0f2a1a; color:#c8f5d8; }
+  #presView .modebox .hand .hn { flex:1; min-width:90px; }
+  #presView .modebox .hn.none { color:#6b7d8f; font-size:12px; }
+  #presView .modebox .hand button { padding:2px 8px; font-size:12px; }
+  body:has(#presView.show) #presTalk { top:54px; left:auto; right:14px; transform:none; z-index:86; }
+  #topMicBtn.talklock { position:relative; }
+  #topMicBtn .tlk { position:absolute; top:3px; right:5px; display:inline-flex; color:#f5b942; pointer-events:none; }
+  #topMicBtn .tlk svg, #topMicBtn .tlk .icon { width:12px; height:12px; }`;
+  (() => { const st = document.createElement("style"); st.id = "presTalkCss"; st.textContent = TALK_CSS; document.head.appendChild(st); })();
+  modeSigExtra = () => JSON.stringify(audFields());
+  window.__presTalk = {
+    lock: () => talk.locked,                 // "" or why my mic is locked ("Muted while Ada presents")
+    silent: (path) => silent(path),          // a person's mic that may not be heard here now (gain 0)
+    hand: (on) => raiseHand(on !== false),   // rig + the pill
+    state: () => ({ locked: talk.locked, was: talk.was, active: talk.active, allowed: [...talk.allowed], boxes: [...talk.boxes], hand: handState,
+                    decks: liveDecks().map((d) => ({ id: d.id, am: d.am, lt: d.lt, hx: d.hx, old: !!d.old })) }),
+  };
 
   window.__pres = {
     startFromFile,

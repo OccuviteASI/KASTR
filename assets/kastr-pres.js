@@ -22,6 +22,15 @@
 //              cut-out for Standout and Reporter comes from the presenter's page, window.__presCut), picked by the presenter or
 //              backstage (presCtl.cm); backstage can also mute / unmute the presenter's mic and pause / resume their video
 //              (presCtl.av) while the presenter's switch allows it. See "PRESENTER MODES" below.
+// CO-PRESENTERS (0.21.91): the presenter view has two sections, Presenters and Backstage. Added presenters get K and the deck's
+//              write token (both wrapped to their own key, `ps[].w` / `ps[].t`) and the same powers as the main presenter
+//              (slides, notes, modes, people, End) -- their requests ride presCtl like backstage's, applied by the OWNER page (the
+//              page that publishes `pres`). Hand-over on the spot: `pres.cur` is the presenter presenting now; their camera /
+//              cut-out is the one in the slide (each presenter's page publishes its own cut-out only while it is their turn, and
+//              its own camera state in room.json `presCo`). The OWNER role passes on: when the owner's record goes (they left or
+//              dropped) and the store still holds the deck, the next present presenter re-publishes the deck as owner
+//              (`og` + 1); a returning old owner sees the newer record and steps down. Backstage's mic / camera control is per
+//              presenter, per backstage person (`presCo.al`), checked on the TARGET presenter's own page. See "CO-PRESENTERS".
 // Collisions: an intent carries the version it saw (`bv`); the presenter applies it when nobody else moved since
 // (bv == ver) or when the last move was the same person's (a fast double Next from one clicker) -- two people pressing
 // Next on slide 3 at once land on 4, not 5.
@@ -101,7 +110,7 @@
   const stateSet = (k, v) => { try { window.__state?.set?.(k, v); } catch {} };
 
   // ---- what other pages publish (fed by memberApply) ----------------------------------------------------------------
-  const remote = new Map();   // member path -> {pres, ctl, pk}
+  const remote = new Map();   // member path -> {pres, ctl, pk, co}
   let pkPublished = "";
   window.__presMember = (path, v) => {
     const me = meDbg().room;
@@ -109,11 +118,14 @@
     if (!v) { remote.delete(path); schedule(); return; }
     const cur = remote.get(path) || {};
     const next = { pres: v.pres && typeof v.pres === "object" ? v.pres : null, ctl: v.presCtl && typeof v.presCtl === "object" ? v.presCtl : null,
-                   pk: typeof v.presPk === "string" ? v.presPk : "" };
+                   pk: typeof v.presPk === "string" ? v.presPk : "", co: v.presCo && typeof v.presCo === "object" ? v.presCo : null };   // 0.21.91: + presCo
     remote.set(path, next);
-    if (mine && next.ctl && next.ctl.id === mine.id) applyIntent(path, next.ctl);
+    if (next.co && next.co.end) endSeen(String(next.co.end), path);   // 0.21.91: a presenter ended it (before any hand-over starts)
+    if (next.co && next.co.rel) relSeen.set(String(next.co.rel), Date.now());   // 0.21.91: its owner handed it over (left on purpose)
+    if (next.ctl) ctlArrived(path, next.ctl);   // 0.21.91: the owner applies intents; any presenter applies mic / camera requests to itself
     if (mine && next.pk !== (cur.pk || "")) rewrapSoon();
     if (next.pres) T("seen", { id: next.pres.id, idx: next.pres.idx, ver: next.pres.ver, who: path });
+    if (mine && next.co && personOfPath(path) === mine.cur) { try { modeTick(); } catch {} }   // 0.21.91: the presenter presenting now changed something: the room hears at once
     schedule();
   };
   async function ensurePk() {   // publish my public key once a presentation exists in my room (or I present)
@@ -122,7 +134,32 @@
     if (!any) return;
     const k = await myKeys();
     if (pkPublished !== k.pub) { pkPublished = k.pub; stateSet("presPk", k.pub); }
+    coPublish();   // 0.21.91: "this KASTR can co-present" (+ my presenter state)
   }
+  // 0.21.91: one deck, one record -- the newest owner's (a hand-over re-publishes the same deck id with og + 1 from another page;
+  // for a moment the old owner's may still be there). Ties: the lower person key.
+  function recBetter(a, b) {   // a newer than b?
+    const ga = Number(a.og) || 1, gb = Number(b.og) || 1;
+    if (ga !== gb) return ga > gb;
+    return String(a.own || "") < String(b.own || "");
+  }
+  function deckRecs() {   // deck id -> {rec, path}: the winning record of each deck in my room
+    const out = new Map();
+    for (const [path, r] of remote) {
+      const rec = r.pres;
+      if (!rec || !rec.id) continue;
+      const cur = out.get(rec.id);
+      if (!cur || recBetter(rec, cur.rec)) out.set(rec.id, { rec, path });
+    }
+    return out;
+  }
+  const coOf = (pk) => { for (const [p, r] of remote) if (r.co && personOfPath(p) === pk) return r.co; return null; };   // a person's presCo
+  const pathOfPerson = (pk) => { for (const p of remote.keys()) if (personOfPath(p) === pk) return p; return ""; };
+  const canCo = (pk) => { const co = coOf(pk); return !!(co && Number(co.cap) >= 2); };   // their KASTR can co-present (0.21.91+)
+  const hereNow = (pk) => pk === myPerson() || !!pathOfPerson(pk);
+  // 0.21.91: in the room by its presence (state.json beats, with the room's grace) -- a second, independent sign of life
+  const inPresence = (pk) => (ctx()?.people || []).some((x) => x.host + "/" + (x.op || x.peer) === pk);
+  const relSeen = new Map();   // deck id -> when its owner said it handed the deck over
 
   // ---- slide pictures ---------------------------------------------------------------------------------------------------
   const stillCache = new Map();   // "<id>/<i>" -> Promise<ImageBitmap>
@@ -558,9 +595,12 @@
       blobs: new Array(src.n).fill(null), up: new Array(src.n).fill(false), busy: [], rendering: null, want: [],
       idx: 0, ver: 1, by: myPerson(), blank: null, t0: Date.now(), bs: new Map(), lastSeq: new Map(), share: null, pk: me.pub,
       warnings: src.warnings || [], startedMs: 0, pubSeq: 0, told: 0, vids: new Map(),   // 0.21.87: + the videos playing on the live slide
+      // 0.21.91: the presenters (me first), the ownership generation, the presenter presenting now
+      ps: [{ p: myPerson(), name: nameOfPerson(myPerson()), w: "", t: "", pkUsed: "" }], og: 1, cur: myPerson(), rt: deck.rtoken || "",
     };
     T("start", { id: mine.id, n: mine.n, kind: mine.kind });
     modeInit(mine);   // 0.21.89: Standout when my camera is on, else Content only
+    audienceInit(mine);   // 0.21.91: the audience is muted while I present (until a presenter turns it off)
     view.prep("Preparing slide 1 of " + mine.n + "…");
     try { await ensureSlide(0); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
     await uploadNotes();
@@ -614,6 +654,10 @@
     await fetch(mine.base + "/api/pres/" + mine.id + "/notes.bin?token=" + mine.token, { method: "POST", body: ct }).catch(() => {});
   }
   async function stillFor(deckId, i) {   // a bitmap of slide i for whoever may open it
+    if (mine && deckId === mine.id && mine.adopted) {   // 0.21.91: a deck handed over to me -- its slides come from the store
+      const m = mine;
+      return cacheGet(deckId + "/" + i, () => bitmapFromCipher(baseFor({ base: m.base }), deckId, i, m.keys[i], m.rt));
+    }
     if (mine && deckId === mine.id) {
       return cacheGet(deckId + "/" + i, async () => {
         if (!mine.blobs[i]) { mine.want.unshift(i); await ensureSlide(i); }
@@ -629,20 +673,29 @@
     const kIdx = mine.keys[mine.idx];
     stateSet("pres", {
       v: 1, id: mine.id, base: mine.base, name: mine.name, kind: mine.kind, n: mine.n, ar: +mine.ar.toFixed(4),
-      idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank || "", k: b64(kIdx), t0: mine.t0, pk: mine.pk,
+      idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank || "", k: mine.blank ? "" : b64(kIdx), t0: mine.t0, pk: mine.pk,   // 0.21.91: no key under a blank
       share: mine.share?.path || "", nv: mine.nv, rt: mine.rtEnc,
       bs: [...mine.bs.entries()].map(([p, b]) => ({ p, n: b.name || "", w: b.w || "" })),
       // 0.21.87: the live slide's videos -- their stream, their spot (fractions of the slide) and how far they are
       vids: [...mine.vids.values()].filter((e) => e.path && e.i === mine.idx).map((e) => ({ v: e.v, p: e.path, i: e.i, x: +e.sv.x.toFixed(5), y: +e.sv.y.toFixed(5),
         w: +e.sv.w.toFixed(5), h: +e.sv.h.toFixed(5), pl: e.pl, t: +e.t.toFixed(2), at: e.at, d: +e.d.toFixed(2), st: e.st, auto: !!e.sv.auto, k: e.sv.kind === "audio" ? "a" : "v" })),   // 0.21.88: k = "a" -- a sound clip: heard, never drawn
       ...modeFields(),   // 0.21.89: the presenter mode, my camera / cut-out, backstage's mic + camera control
+      // 0.21.91: co-presenters -- the owner (this page's person), the ownership generation, every presenter (main first) with
+      // K and the store's write token wrapped to their own key, the presenter presenting now and their name
+      own: myPerson(), og: mine.og, cur: mine.cur, cn: nameOfPerson(mine.cur),
+      ps: mine.ps.map((x) => ({ p: x.p, n: x.name || nameOfPerson(x.p), w: x.w || "", t: x.t || "" })),
+      ...audFields(),   // 0.21.91: am (audience muted), lt (let talk), hx (hands lowered by a presenter)
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
+  // 0.21.91 (Kenton: "If I use the black/white out option, I want to still see the preview myself, and only hide it for the room.
+  // It should stay persistent until I turn it off, not just for that 1 slide."): `blank` undefined = keep the room's Black / White
+  // across moves (Next / Back / a click in the strip); only the Black / White buttons change it. While the room sees a blank, the
+  // store is not told the slide underneath and the record carries no slide key: a viewer cannot open what the room does not see.
   function goTo(i, by, blank) {
     if (!mine) return;
     const ni = clampI(i, mine.n);
-    const nb = blank === undefined ? null : (blank || null);
+    const nb = blank === undefined ? mine.blank : (blank || null);
     if (ni === mine.idx && nb === mine.blank) return;
     mine.idx = ni; mine.blank = nb; mine.ver++; mine.by = by || myPerson();
     if (!mine.up[ni]) mine.want.unshift(ni);
@@ -652,7 +705,7 @@
     // else), then the room hears of the move; moves are told to the store in order, the room gets the newest
     const m = mine, seq = ++m.pubSeq;
     const tell = () => { m.told = Math.max(m.told, seq); if (mine === m && seq === m.pubSeq) publish(); };
-    if (ni === m.liveIdx) tell();
+    if (nb || ni === m.liveIdx) tell();   // blanked: the room sees nothing of the slide (the store keeps the slide it last showed)
     else m.liveChain = m.liveChain.then(() => postLive(m, ni)).then(tell, tell);
     for (const k of [ni + 1, ni + 2]) if (k < mine.n && !mine.up[k]) mine.want.push(k);
     syncVideos();   // 0.21.87: the slide before's video stops; this slide's starts (or waits for Play)
@@ -664,41 +717,113 @@
       if (r.ok) m.liveIdx = i;
     } catch {} finally { clearTimeout(t); }
   }
+  // 0.21.91: an intent is the requester's last few requests (presCtl.q, oldest first; an older KASTR sends one, at the top
+  // level) -- applied in order, each once (seq), so a quick second request never hides the first
+  function ctlOps(ctl) {
+    const q = Array.isArray(ctl.q) && ctl.q.length ? ctl.q.filter((o) => o && typeof o === "object" && Number.isFinite(o.seq)) : [ctl];
+    return q.slice(-8).sort((a, b) => a.seq - b.seq);
+  }
   function applyIntent(path, ctl) {
-    const who = personOfPath(path);
-    const b = mine.bs.get(who);
-    if (!b) return;   // only the backstage people the presenter picked
+    const who = personOfPath(path), me = myPerson();
+    const isB = mine.bs.has(who), isP = who !== me && mine.ps.some((x) => x.p === who);
+    if (!isB && !isP) return;   // only the backstage people and the presenters
     const last = mine.lastSeq.get(who) || 0;
-    if (!(ctl.seq > last)) return;
-    mine.lastSeq.set(who, ctl.seq);
-    if (ctl.cm !== undefined || (ctl.av && typeof ctl.av === "object")) { applyModeAv(ctl, who); return; }   // 0.21.89: a mode, or my mic / camera
+    let top = last;
+    for (const o of ctlOps(ctl)) {
+      if (!(o.seq > last) || o.id !== mine.id) continue;
+      top = Math.max(top, o.seq);
+      try { applyOp(o, who, isP); } catch (e) { console.warn("KASTR pres: intent", e); }
+      if (!mine) return;   // it ended the presentation
+    }
+    mine.lastSeq.set(who, top);
+  }
+  function applyOp(ctl, who, isP) {
+    if (ctl.pp && typeof ctl.pp === "object") { if (isP) presOp(ctl.pp, who); else T("drop", { id: mine.id, who, why: "not a presenter" }); return; }   // 0.21.91
+    if (ctl.cm !== undefined) { if (!modeOk(ctl.cm)) { T("drop", { id: mine.id, who }); return; } T("mode-apply", { id: mine.id, who: ctl.cm, by: who }); setMode(ctl.cm, who); return; }   // 0.21.89: a mode
+    if (ctl.av && typeof ctl.av === "object") { if (!ctl.av.to || ctl.av.to === myPerson()) avApply(who, ctl.av.op, ctl.seq); return; }   // my mic / camera (0.21.91: a request to another presenter is theirs)
     if (ctl.vid && typeof ctl.vid === "object") { applyVidOp(ctl.vid, who); return; }   // 0.21.87: Play / Pause / seek of the live slide's video
+    if (ctl.to === undefined) return;
     if (ctl.bv !== mine.ver && mine.by !== who) { T("drop", { id: mine.id, idx: ctl.to, ver: mine.ver, who }); return; }   // somebody else moved first
     T("apply", { id: mine.id, idx: ctl.to, ver: mine.ver + 1, who });
-    goTo(ctl.to, who, ctl.blank === undefined ? null : ctl.blank);
+    goTo(ctl.to, who, ctl.blank);   // 0.21.91: undefined = the room's blank stays
   }
   let rewrapT = null;
   function rewrapSoon() { clearTimeout(rewrapT); rewrapT = setTimeout(rewrap, 50); }
-  async function rewrap() {   // K for every backstage person whose KASTR published a key
+  async function rewrap() {   // K for every backstage person and presenter whose KASTR published a key (+ the write token for presenters)
     if (!mine) return;
+    const m = mine, me = myPerson();
     let changed = false;
-    for (const [who, b] of mine.bs) {
+    const one = async (who, b, pres) => {
       const path = [...remote.keys()].find((p) => personOfPath(p) === who && remote.get(p)?.pk);
       const pk = path ? remote.get(path).pk : "";
-      if (!pk) { if (b.w) { b.w = ""; b.pkUsed = ""; changed = true; } continue; }
-      if (b.pkUsed === pk && b.w) continue;
-      const wk = await wrapKey(pk, mine.id + "/" + who);
-      b.w = b64(await seal(wk, mine.K)); b.pkUsed = pk; changed = true;
-    }
+      if (!pk) { if (b.w) { b.w = ""; b.t = ""; b.pkUsed = ""; changed = true; } return; }
+      if (b.pkUsed === pk && b.w && (!pres || b.t)) return;
+      const wk = await wrapKey(pk, m.id + "/" + who);
+      b.w = b64(await seal(wk, m.K)); b.pkUsed = pk; changed = true;
+      b.t = pres ? b64(await seal(await hkdf(wk, "write"), enc.encode(m.token))) : "";   // 0.21.91: a presenter can run the deck on
+    };
+    for (const [who, b] of m.bs) await one(who, b, false);
+    for (const x of m.ps) if (x.p !== me) await one(x.p, x, true);
+    if (mine !== m) return;
     if (changed) { publish(); view.paint(); }
   }
-  function setBackstage(who, on) {
-    if (!mine || !who) return;
-    if (on) mine.bs.set(who, { name: nameOfPerson(who), w: "", pkUsed: "" });
-    else mine.bs.delete(who);
-    publish(); rewrap(); view.paint();
-    T(on ? "bs+" : "bs-", { id: mine.id, who });
+  // 0.21.91: who is a presenter / backstage (one or the other, never both). The page that runs the deck stays a presenter.
+  function setRole(who, r, by) {
+    const m = mine, me = myPerson();
+    if (!m || !who || typeof who !== "string" || who.length > 160) return false;
+    if (who === me && r !== "p") return false;
+    const i = m.ps.findIndex((x) => x.p === who);
+    if (r === "p") {
+      if (i >= 0) return true;
+      if (!canCo(who)) return false;   // their KASTR cannot co-present (0.21.90 or older, or not open)
+      m.bs.delete(who);
+      m.ps.push({ p: who, name: nameOfPerson(who), w: "", t: "", pkUsed: "" });
+    } else if (r === "b") {
+      if (i >= 0) m.ps.splice(i, 1);
+      if (!m.bs.has(who)) m.bs.set(who, { name: nameOfPerson(who), w: "", pkUsed: "" });
+    } else {
+      if (i >= 0) m.ps.splice(i, 1);
+      m.bs.delete(who);
+    }
+    if (m.cur !== me && !m.ps.some((x) => x.p === m.cur)) m.cur = me;   // the one presenting now left the presenters: back to me
+    publish(); rewrap(); view.paint(); modeTick();
+    T("role", { id: m.id, who, r: r || "-", by: by || me });
+    return true;
   }
+  function setBackstage(who, on) { return setRole(who, on ? "b" : "", myPerson()); }
+  function setCur(who, by) {   // 0.21.91: "Now presenting" / "Take over"
+    const m = mine;
+    if (!m || !m.ps.some((x) => x.p === who)) return false;
+    if (who !== myPerson() && !canCo(who)) return false;
+    if (m.cur === who) return true;
+    m.cur = who; m.curGoneAt = 0; m.curBy = by || myPerson(); m.curAt = Date.now();
+    T("cur", { id: m.id, who, by: m.curBy });
+    modeTick(); publish(); view.paint();
+    return true;
+  }
+  function presOp(pp, who) {   // 0.21.91: a co-presenter's request -- the same powers as mine
+    const m = mine, name = nameOfPerson(who);
+    switch (pp.op) {
+      case "role": setRole(String(pp.p || ""), pp.r === "p" ? "p" : pp.r === "b" ? "b" : "", who); return;
+      case "cur": setCur(String(pp.p || ""), who); return;
+      case "rbg": if (rbgOk(pp.v)) { m.rbg = pp.v; T("rbg", { id: m.id, who: pp.v, by: who }); modeTick(); } return;
+      case "end": T("end-by", { id: m.id, who }); endMine("ended by " + name); toast("“" + m.name + "” was ended by " + name + ".", 6000); return;
+      case "note": {
+        const i = Number(pp.i);
+        if (!Number.isInteger(i) || i < 0 || i >= m.n || typeof pp.c !== "string" || pp.c.length > 40000) return;
+        unseal(m.notesKey, unb64(pp.c)).then((u8) => {
+          if (mine !== m) return;
+          m.notes[i] = dec.decode(u8).slice(0, 20000); m.nv++;
+          T("note", { id: m.id, idx: i, who });
+          uploadNotes().then(() => publish());
+          view.paint();
+        }).catch((e) => console.warn("KASTR pres: a note that does not open", e));
+        return;
+      }
+      default: if (!audienceOp(pp, who)) T("drop", { id: m.id, who, why: "op " + pp.op });
+    }
+  }
+  let audienceOp = () => false;   // (audience mute: below)
   // the share: the live slide as a normal content share (old KASTRs, phones, web, the recorder)
   function startShare() {
     if (!mine || !window.__presShare) return;
@@ -730,7 +855,9 @@
     drawContain(m.shareCv, bmp, m.blank, "Slide " + (m.idx + 1));
     if (document.visibilityState !== "visible") { try { m.share?.push(); } catch {} }
   }
-  function endMine(why) {
+  let endMark = null;   // 0.21.91: {id, at} -- "I ended this deck" (presCo.end), so no co-presenter takes it over
+  let relMark = null;   // 0.21.91: {id, at} -- "I handed this deck over" (presCo.rel): a co-presenter takes it at once
+  function endMine(why, keep) {   // keep (0.21.91): hand the deck over -- the store keeps it, a co-presenter runs it on
     const m = mine;
     if (!m) return;
     for (const k of [...m.vids.keys()]) stopVid(m, k, "end");   // 0.21.87
@@ -738,14 +865,27 @@
     mine = null;
     clearInterval(m.keep);
     try { if (m.share) window.__presShare.stop(m.share.id); } catch {}
+    if (keep) relMark = { id: m.id, at: Date.now() };
+    if (!keep) {   // the store first (a co-presenter that looks finds it gone), then the room
+      endMark = { id: m.id, at: Date.now() };
+      try { navigator.sendBeacon(m.base + "/api/pres/" + m.id + "/end?token=" + m.token, new Blob([])); } catch {}
+    }
     stateSet("pres", null);
-    try { navigator.sendBeacon(m.base + "/api/pres/" + m.id + "/end?token=" + m.token, new Blob([])); } catch {}
-    try { m.src.close(); } catch {}
+    coPublish();
+    try { m.src?.close(); } catch {}
     for (const k of [...stillCache.keys()]) if (k.startsWith(m.id + "/")) stillCache.delete(k);
-    T("end", { id: m.id, why });
+    T(keep ? "release" : "end", { id: m.id, why });
     view.paint();
   }
-  window.addEventListener("pagehide", () => { if (mine) endMine("pagehide"); });
+  // 0.21.91: a co-presenter who can run the deck on (holds K + the write token, is here, can co-present)
+  const coReady = (m) => !!m && m.ps.some((x) => x.p !== myPerson() && x.w && x.t && hereNow(x.p) && canCo(x.p));
+  function leaveMine(why) {   // I leave (the page goes, I left the room): hand over when a co-presenter can take it, else end it
+    if (!mine) return false;
+    const keep = coReady(mine);
+    endMine(why, keep);
+    return keep;
+  }
+  window.addEventListener("pagehide", () => { if (mine) leaveMine("pagehide"); });
 
   // ---- 0.21.87: videos on slides (the presenter) --------------------------------------------------------------------------
   // Kenton: "This powerpoint has a video in it, it doesn't appear to be working and I need that to be able to function inside
@@ -754,7 +894,7 @@
   // and announce) and every page draws that stream in the video's spot on the slide, with its sound. It starts by itself when
   // the deck says "Start: Automatically", otherwise it waits for Play from the presenter or a backstage person. The slide
   // change stops it; back on the slide it waits again on its poster. Nothing of it is published before its slide is live.
-  function vidList(m, i) { return ((m.src.videos || [])[i] || []).filter((v) => v.id); }
+  function vidList(m, i) { return (((m.src && m.src.videos) || [])[i] || []).filter((v) => v.id); }   // 0.21.91: a handed-over deck has no videos here
   function syncVideos() {
     const m = mine;
     if (!m) return;
@@ -834,57 +974,94 @@
   // ---- backstage + viewers -------------------------------------------------------------------------------------------
   const backstage = new Map();   // deck id -> {rec, path, K, keys, notes, nv, seq, opt, optAt}
   let ctlSeq = Math.floor(Date.now() / 1000) % 100000 * 10;
+  const ORPHAN_MS = 30000;   // 0.21.91: how long a deck whose record went stays waiting for a hand-over
+  const HANDOVER_MS = 1500;  // 0.21.91: the record gone this long (+ 2 s per presenter before me) -> I run the deck on
   async function syncBackstage() {
     const me = myPerson();
     const live = new Set();
-    for (const [path, r] of remote) {
-      const rec = r.pres;
-      if (!rec || !rec.id) continue;
-      const mineB = (rec.bs || []).find((b) => b.p === me);
+    const recs = deckRecs();
+    for (const [id, { rec, path }] of recs) {
+      if (mine && mine.id === id) continue;   // mine (a newer owner elsewhere is handled by the demotion check)
+      const mineP = rec.own !== me ? (rec.ps || []).find((b) => b.p === me) : null;   // 0.21.91: an added presenter
+      const mineB = mineP || (rec.bs || []).find((b) => b.p === me);
       if (!mineB) continue;
-      live.add(rec.id);
-      let bk = backstage.get(rec.id);
-      if (!bk) { bk = { rec, path, K: null, keys: null, notes: null, nv: 0, w: "" }; backstage.set(rec.id, bk); T("bs-seen", { id: rec.id }); }
-      bk.rec = rec; bk.path = path;
-      if (mineB.w && mineB.w !== bk.w && subtle) {
+      live.add(id);
+      let bk = backstage.get(id);
+      if (!bk) { bk = { rec, path, K: null, keys: null, notes: null, nv: 0, w: "" }; backstage.set(id, bk); T("bs-seen", { id }); }
+      const wasPr = !!bk.pr;
+      bk.rec = rec; bk.path = path; bk.pr = !!mineP; bk.seenAt = Date.now(); bk.orphan = false;
+      if (mineB.w && (mineB.w !== bk.w || rec.pk !== bk.pkFrom) && subtle) {
         try {
           const wk = await wrapKey(rec.pk, rec.id + "/" + me);
           bk.K = await unseal(wk, unb64(mineB.w));
           bk.keys = await Promise.all(Array.from({ length: rec.n }, (_, i) => hkdf(bk.K, "slide/" + i)));
           bk.notesKey = await hkdf(bk.K, "notes");
           bk.rt = rec.rt ? dec.decode(await unseal(await hkdf(bk.K, "read"), unb64(rec.rt))) : "";
-          bk.w = mineB.w;
-          T("bs-key", { id: rec.id });
-          if (!bk.toasted) { bk.toasted = true; toast(nameOfPerson(personOfPath(path)) + " made you backstage for “" + rec.name + "”. Open the presenter view from the pill at the top.", 9000); }
+          bk.wt = mineP && mineP.t ? dec.decode(await unseal(await hkdf(wk, "write"), unb64(mineP.t))) : "";   // 0.21.91: the write token
+          bk.w = mineB.w; bk.pkFrom = rec.pk;
+          T(mineP ? "co-key" : "bs-key", { id });
+          if (!bk.toasted || wasPr !== !!mineP) {
+            bk.toasted = true;
+            const by = nameOfPerson(rec.own || personOfPath(path));
+            toast(mineP ? by + " made you a presenter of “" + rec.name + "”. Open the presenter view from the pill at the top."
+                        : by + " made you backstage for “" + rec.name + "”. Open the presenter view from the pill at the top.", 9000);
+          }
           view.offer();
         } catch (e) { console.warn("KASTR pres: unwrap failed", e); }
       }
+      if (!mineP) bk.wt = "";
       if (bk.K && rec.nv !== bk.nv) {
         bk.nv = rec.nv;
         fetchBlob(baseFor(rec), rec.id, "notes.bin", 10, bk.rt).then((buf) => unseal(bk.notesKey, buf)).then((u8) => { bk.notes = JSON.parse(dec.decode(u8)).notes || []; T("bs-notes", { id: rec.id }); view.paint(); }).catch((e) => console.warn("KASTR pres: notes", e));
       }
     }
-    for (const id of [...backstage.keys()]) if (!live.has(id)) { backstage.delete(id); T("bs-gone", { id }); }
+    for (const [id, bk] of [...backstage]) {
+      if (live.has(id)) continue;
+      // 0.21.91: still in the room but I am no longer in it -> gone now; the record itself gone -> wait for a hand-over
+      if (recs.has(id) || bk.ended || (mine && mine.id === id) || !bk.K || Date.now() - (bk.seenAt || 0) > ORPHAN_MS) { backstage.delete(id); T("bs-gone", { id }); view.paint(); continue; }
+      if (!bk.orphan) { bk.orphan = true; T("orphan", { id }); view.paint(); }
+    }
+  }
+  function endSeen(id, path) {   // 0.21.91: a presenter of this deck says it ended -- nobody takes it over
+    const bk = backstage.get(id);
+    if (!bk) return;
+    const who = personOfPath(path), rec = bk.rec || {};
+    if (who !== rec.own && !(rec.ps || []).some((x) => x.p === who)) return;   // only its presenters may say so
+    bk.ended = true; backstage.delete(id); T("bs-gone", { id, why: "ended" }); view.paint();
+  }
+  // 0.21.91: my requests -- presCtl carries the newest at the top level (what older KASTRs read) and my last few in q
+  const ctlQ = [];
+  function ctlSend(o) {
+    ctlSeq++;
+    const op = Object.assign({ seq: ctlSeq, at: Date.now() }, o);
+    ctlQ.push(op); while (ctlQ.length > 6) ctlQ.shift();
+    stateSet("presCtl", Object.assign({}, op, { q: ctlQ.filter((x) => x.id === op.id) }));
+    return op;
   }
   function sendIntent(deckId, to, blank) {
     const bk = backstage.get(deckId);
     if (!bk) return;
-    ctlSeq++;
-    const ctl = { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: clampI(to, bk.rec.n), at: Date.now() };
-    if (blank !== undefined) ctl.blank = blank || null;
+    const o = { id: deckId, bv: bk.rec.ver, to: clampI(to, bk.rec.n) };
+    if (blank !== undefined) o.blank = blank || null;
+    const ctl = ctlSend(o);
     bk.opt = ctl.to; bk.optBlank = blank === undefined ? null : blank; bk.optAt = Date.now(); bk.optVer = bk.rec.ver;
-    stateSet("presCtl", ctl);
     T("intent", { id: deckId, idx: ctl.to, ver: ctl.bv });
     view.paint();
   }
   function sendVidIntent(deckId, vr, op, t) {   // 0.21.87: backstage Play / Pause / seek of the live slide's video (vr = its entry in pres.vids)
     const bk = backstage.get(deckId);
     if (!bk || !vr) return;
-    ctlSeq++;
-    const ctl = { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), vid: { v: vr.v, i: vr.i, op } };
-    if (t != null) ctl.vid.t = +Number(t).toFixed(2);
-    stateSet("presCtl", ctl);
-    T("vid-intent", { id: deckId, idx: vr.i, ver: ctl.bv, who: op });
+    const o = { id: deckId, bv: bk.rec.ver, to: bk.rec.idx, vid: { v: vr.v, i: vr.i, op } };
+    if (t != null) o.vid.t = +Number(t).toFixed(2);
+    ctlSend(o);
+    T("vid-intent", { id: deckId, idx: vr.i, ver: o.bv, who: op });
+  }
+  function sendPresOp(deckId, pp) {   // 0.21.91: a co-presenter's request to the owner page (people, now presenting, notes, Reporter, End)
+    const bk = backstage.get(deckId);
+    if (!bk || !bk.pr) return false;
+    ctlSend({ id: deckId, bv: bk.rec.ver, to: bk.rec.idx, pp });
+    T("pp-intent", { id: deckId, who: pp.op });
+    return true;
   }
 
   // viewers (and backstage): the sharp live slide over the share's tile
@@ -893,7 +1070,7 @@
   function syncOverlays() {
     const tiles = window.__switcher?.tiles;
     const want = new Map();
-    for (const r of remote.values()) if (r.pres && r.pres.share) want.set(r.pres.share, r.pres);
+    for (const { rec } of deckRecs().values()) if (rec.share) want.set(rec.share, rec);   // 0.21.91: one record per deck (a hand-over: the newest owner's)
     for (const [path, o] of overlays) {
       const t = tiles && tiles.get(path);
       if (!want.has(path) || !t || !o.cv.isConnected) { try { o.cv.remove(); o.vcv.remove(); o.ccv?.remove(); } catch {} try { o.vBmp?.close(); } catch {} overlays.delete(path); }
@@ -968,7 +1145,34 @@
   #presView button.big { font-size:18px; padding:12px 22px; min-width:120px; }
   #presView button.on { background:#0b5c86; border-color:#1592d1; }
   #presView button.end { background:#5c1d1d; border-color:#8a2b2b; }
-  #presView .pb { flex:1; min-height:0; display:grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); gap:14px; padding:14px; }
+  #presView .pb { flex:1; min-height:0; display:grid; grid-template-columns: minmax(0, var(--lcol, 3fr)) 10px minmax(280px, var(--rcol, 2fr)); gap:4px; padding:10px 12px; }
+  #presView .vdiv, #presView .hdiv { background:transparent; border-radius:4px; touch-action:none; outline:none; }
+  #presView .vdiv { cursor:col-resize; margin:30px 0; background:linear-gradient(90deg, transparent 4px, #1f2a36 4px, #1f2a36 6px, transparent 6px); }
+  #presView .hdiv { cursor:row-resize; flex:none; height:10px; background:linear-gradient(180deg, transparent 4px, #1f2a36 4px, #1f2a36 6px, transparent 6px); }
+  #presView .vdiv:hover, #presView .vdiv:focus-visible, #presView .vdiv.drag { background:linear-gradient(90deg, transparent 3px, #1592d1 3px, #1592d1 7px, transparent 7px); }
+  #presView .hdiv:hover, #presView .hdiv:focus-visible, #presView .hdiv.drag { background:linear-gradient(180deg, transparent 3px, #1592d1 3px, #1592d1 7px, transparent 7px); }
+  #presView .panels { flex:none; max-height:var(--ptop, 42%); overflow:auto; display:flex; flex-direction:row; flex-wrap:wrap; gap:4px; align-items:flex-start; }
+  #presView details.pnl { border:1px solid #1f2a36; border-radius:6px; background:#0f1722; flex:1 1 150px; min-width:0; }
+  #presView details.pnl[open] { flex-basis:100%; order:-1; }   /* closed panels share one row; an open one takes the width */
+  #presView details.pnl > summary { list-style:none; cursor:pointer; display:flex; gap:8px; align-items:center; padding:5px 10px; font-size:12px;
+    letter-spacing:.05em; text-transform:uppercase; color:#8aa0b5; user-select:none; }
+  #presView details.pnl > summary::-webkit-details-marker { display:none; }
+  #presView details.pnl > summary::before { content:"▸"; font-size:11px; transition:transform .12s; }
+  #presView details.pnl[open] > summary::before { transform:rotate(90deg); }
+  #presView details.pnl > summary .pnt { flex:none; }
+  #presView details.pnl > summary .pv { flex:1; min-width:0; text-transform:none; letter-spacing:0; color:#cfe3f3; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+  #presView details.pnl.attn > summary { color:#ffcf7a; }
+  #presView details.pnl.attn > summary .pv { color:#ffcf7a; font-weight:600; }
+  #presView details.pnl .pbody { padding:0 8px 8px; }
+  #presView details.pnl .pbody .modebox, #presView details.pnl .pbody .pplbox { border:0; padding:0; background:transparent; }
+  #presView details.pnl .pbody .modebox .mhead { display:none; }   /* the panel's own title says it */
+  #presView .nrow { flex:none; }
+  #presView .nxt { flex:none; display:flex; flex-direction:row; align-items:center; gap:6px; cursor:default; }
+  #presView .nxt canvas { width:84px; aspect-ratio:16/9; background:#000; border-radius:3px; box-shadow:0 0 0 1px #1592d1; }
+  #presView .nxt .nxl { font-size:11px; color:#8aa0b5; white-space:nowrap; }
+  #presView.nostrip .strip { display:none; }
+  #presView .ph .stripbtn { padding:4px 10px; font-size:12.5px; }
+  #presView.nostrip .ph .stripbtn { opacity:.6; }
   #presView .cur { display:flex; flex-direction:column; min-height:0; gap:8px; }
   #presView .cap { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:#8aa0b5; display:flex; gap:8px; align-items:center; }
   #presView .cap .live { color:#fff; background:#c62828; padding:1px 7px; border-radius:4px; letter-spacing:.08em; }
@@ -976,24 +1180,57 @@
   #presView .cur canvas { display:block; background:#000; border-radius:6px; box-shadow:0 0 0 2px #c62828; }
   #presView .ctl { display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; }
   #presView .ctl .num { font-size:18px; font-variant-numeric:tabular-nums; min-width:110px; text-align:center; }
-  #presView .side { display:flex; flex-direction:column; gap:10px; min-height:0; }
-  #presView .nexts { display:grid; grid-template-columns: 2fr 1fr; gap:8px; }
-  #presView .nexts canvas { width:100%; aspect-ratio:16/9; background:#000; border-radius:5px; }
-  #presView .notes { flex:1; min-height:80px; overflow:auto; background:#0f1722; border:1px solid #1f2a36; border-radius:6px; padding:10px 14px;
+  #presView .side { display:flex; flex-direction:column; gap:6px; min-height:0; overflow:hidden; }
+  #presView .notes { flex:1; min-height:120px; overflow:auto; background:#0f1722; border:1px solid #1f2a36; border-radius:6px; padding:10px 14px;
     white-space:pre-wrap; font-size:var(--pnfs, 20px); line-height:1.45; user-select:text; -webkit-user-select:text; }
   #presView .notes.empty { color:#6b7d8f; font-style:italic; }
   #presView textarea.notes { resize:none; color:#e6edf3; font-family:inherit; }
   #presView .nrow { display:flex; gap:6px; align-items:center; }
   #presView .nrow .ncap { display:block; flex:1; }
-  #presView .bsbox { border:1px solid #1f2a36; border-radius:6px; padding:8px 10px; background:#0f1722; }
-  #presView .bsbox .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
-  #presView .bsbox .chip { display:inline-flex; gap:6px; align-items:center; background:#1a2633; border:1px solid #2c3b4b; border-radius:999px; padding:3px 10px; font-size:13px; }
-  #presView .bsbox .chip.off { opacity:.55; }
-  #presView .bsbox .chip input { margin:0; }
-  #presView .bsbox .chip .st { font-size:11px; color:#8aa0b5; }
-  #presView .strip { display:flex; gap:8px; overflow-x:auto; padding:8px 14px 12px; border-top:1px solid #1f2a36; background:#0f1722; }
-  #presView .strip .th { flex:none; width:144px; cursor:pointer; text-align:center; font-size:11px; color:#8aa0b5; }
-  #presView .strip .th canvas { width:144px; height:81px; display:block; background:#000; border-radius:4px; border:2px solid transparent; }
+  #presView .pplbox { border:1px solid #1f2a36; border-radius:6px; padding:8px 10px; background:#0f1722; display:grid; gap:8px; }
+  #presView .psec .cap { margin-bottom:4px; }
+  #presView .psec .cap .sp { flex:1; }
+  #presView .psec .cap button { text-transform:none; letter-spacing:0; font-size:12px; padding:3px 9px; }
+  #presView .psec .rows { display:grid; gap:4px; }
+  #presView .psec .empty { font-size:12px; color:#6b7d8f; }
+  #presView .prow { display:flex; align-items:center; gap:7px; min-height:30px; padding:2px 6px; border-radius:6px; background:#131d29; font-size:13px; flex-wrap:wrap; }
+  #presView .prow.now { box-shadow: inset 0 0 0 1px #c62828; }
+  #presView .prow .pav { width:24px; height:24px; border-radius:50%; flex:none; display:inline-flex; align-items:center; justify-content:center; overflow:hidden;
+    font-size:10px; font-weight:600; color:#fff; background:#2c3b4b; position:relative; }
+  #presView .prow .pav img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  #presView .prow .dot { width:8px; height:8px; border-radius:50%; flex:none; background:#5b6b7b; }
+  #presView .prow .dot.ready { background:#2fbf71; }
+  #presView .prow .dot.wait { background:#e0a92e; }
+  #presView .prow .pn { flex:1; min-width:70px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #presView .prow .pn .you { color:#8aa0b5; }
+  #presView .prow .tag { font-size:11px; padding:1px 7px; border-radius:999px; background:#c62828; color:#fff; white-space:nowrap; }
+  #presView .prow .tag.own { background:#1d3a52; color:#8fd3ff; }
+  #presView .prow button { padding:2px 8px; font-size:12px; }
+  #presView .prow button.x { padding:2px 7px; color:#ffb4b4; }
+  #presView .prow label.allow { display:inline-flex; flex-direction:row; gap:5px; align-items:center; font-size:12px; color:#cfe3f3; cursor:pointer; white-space:nowrap; margin:0; }
+  #presView .prow label.allow input { margin:0; width:auto; height:auto; }
+  #presView .prow label.allow.ro { cursor:default; opacity:.8; }
+  #presView .ph .nowp { font-size:12px; padding:2px 9px; border-radius:999px; background:#3a1414; color:#ffb4b4; white-space:nowrap; }
+  #presView .ph .nowp:empty { display:none; }
+  #presView .ppick { position:absolute; inset:0; z-index:5; background:rgba(4,8,12,.6); display:flex; align-items:center; justify-content:center; }
+  #presView .ppick[hidden] { display:none; }
+  #presView .ppick .pk { width:min(440px, 94vw); max-height:min(560px, 86vh); display:flex; flex-direction:column; background:#0f1722; border:1px solid #2c3b4b;
+    border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.55); }
+  #presView .ppick .pkh { display:flex; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid #1f2a36; }
+  #presView .ppick .pkh b { flex:1; font-size:15px; }
+  #presView .ppick input[type=search] { margin:10px 12px 6px; padding:7px 10px; border-radius:6px; border:1px solid #2c3b4b; background:#0b1118; color:#e6edf3; font:inherit; }
+  #presView .ppick .pkl { overflow:auto; padding:4px 8px 10px; display:grid; gap:4px; }
+  #presView .ppick .pkr { display:flex; align-items:center; gap:9px; padding:6px 8px; border-radius:6px; background:#131d29; border:1px solid transparent; cursor:pointer; text-align:left; width:100%; justify-content:flex-start; }
+  #presView .ppick .pkr:hover:not(:disabled) { border-color:#1592d1; }
+  #presView .ppick .pkr:disabled { opacity:.5; cursor:not-allowed; }
+  #presView .ppick .pkr .pav { width:30px; height:30px; border-radius:50%; flex:none; display:inline-flex; align-items:center; justify-content:center; overflow:hidden; font-size:11px; font-weight:600; color:#fff; background:#2c3b4b; position:relative; }
+  #presView .ppick .pkr .pav img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  #presView .ppick .pkr .pkn { flex:1; display:flex; flex-direction:column; white-space:normal; }
+  #presView .ppick .pkr .pkn small { color:#8aa0b5; font-size:11px; }
+  #presView .ppick .none { color:#6b7d8f; padding:10px; font-size:13px; }
+  #presView .strip { display:flex; gap:6px; overflow-x:auto; padding:5px 12px 6px; border-top:1px solid #1f2a36; background:#0f1722; flex:none; }
+  #presView .strip .th { flex:none; width:88px; cursor:pointer; text-align:center; font-size:10px; color:#8aa0b5; line-height:1.2; }
+  #presView .strip .th canvas { width:88px; height:50px; display:block; background:#000; border-radius:3px; border:2px solid transparent; }
   #presView .strip .th.cur canvas { border-color:#c62828; }
   #presView .strip .th.next canvas { border-color:#1592d1; }
   #presView .strip .th.wait { opacity:.45; }
@@ -1006,6 +1243,12 @@
   .pane canvas.presov { position:absolute; inset:0; width:100%; height:100%; z-index:2; pointer-events:none; background:#000; }
   .pane canvas.presvid { position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none; }
   #presView .cur canvas.vidcv { position:absolute; pointer-events:none; background:transparent; box-shadow:none; border-radius:0; }
+  #presView .rsee { position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:2; pointer-events:none; font-size:14px; font-weight:600;
+    padding:4px 12px; border-radius:999px; background:#000; color:#fff; border:1px solid #fff; box-shadow:0 2px 10px rgba(0,0,0,.6); }
+  #presView .rsee:empty { display:none; }
+  #presView .rsee[data-k="white"] { background:#fff; color:#000; border-color:#000; }
+  #presView .ctl button.blk.on { background:#000; border-color:#fff; color:#fff; }
+  #presView .ctl button.wht.on { background:#fff; border-color:#000; color:#000; }
   #presView .vbar { display:none; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; }
   #presView .vbar.show { display:flex; }
   #presView .vbar input[type=range] { width:min(420px, 40vw); }
@@ -1013,6 +1256,14 @@
   #presView .vbar .vnote { color:#ffcf7a; font-size:13px; }
   @media (max-width: 760px) {
     #presView .pb { grid-template-columns: 1fr; overflow:auto; }
+    #presView .vdiv, #presView .hdiv { display:none; }
+    #presView .pb { display:flex; flex-direction:column; }   /* a phone: one column that scrolls -- slide, controls, notes, panels */
+    #presView .pb > .cur, #presView .pb > .side { flex:none; min-height:auto; }
+    #presView .side { overflow:visible; }
+    #presView .nrow { flex-wrap:wrap; }
+    #presView .nrow .ncap { order:5; flex-basis:100%; }
+    #presView .panels { order:3; max-height:none; }
+    #presView .notes { min-height:40vh; }
     #presView .curwrap { flex:none; }
     #presView .strip { display:none; }
     #presView button.big { flex:1; font-size:22px; padding:16px; }
@@ -1030,26 +1281,38 @@
       const st = document.createElement("style"); st.textContent = CSS; document.head.appendChild(st);
       root = document.createElement("div"); root.id = "presView"; root.setAttribute("role", "dialog"); root.setAttribute("aria-label", "Presenter view");
       root.innerHTML = `
-        <div class="ph"><span class="ttl"></span><span class="role"></span><span class="sp"></span>
+        <div class="ph"><span class="ttl"></span><span class="role"></span><span class="nowp" title="The presenter presenting now -- their camera is the one in the slide"></span><span class="sp"></span>
           <span class="timer" title="Time since the presentation started"></span><span class="clock"></span>
+          <button type="button" class="stripbtn" title="Show or hide the slides along the bottom (remembered on this device)">Slides</button>
           <button type="button" class="hide" title="Back to the room (the presentation keeps going; Esc)">Back to room</button>
           <button type="button" class="end" title="End the presentation for everyone">End</button></div>
         <div class="prep"></div>
         <div class="pb">
-          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas></div>
+          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas><span class="rsee" title="Black / White hides the slide for the room only -- you still see it. It stays on across slide changes until you turn it off."></span></div>
             <div class="ctl"><button type="button" class="big back" title="Previous slide (Left, PageUp, Backspace)">◀ Back</button>
               <span class="num"></span><button type="button" class="big next" title="Next slide (Right, PageDown, Space)">Next ▶</button>
               <button type="button" class="blk" title="Black screen for everyone (B or .)">Black</button><button type="button" class="wht" title="White screen for everyone (W or ,)">White</button></div>
             <div class="vbar"><button type="button" class="vplay" title="Play or pause the video on this slide for everyone">▶ Play video</button>
               <input type="range" class="vseek" min="0" max="1000" value="0" title="The video's position (everyone)"><span class="vtime"></span><span class="vnote"></span></div></div>
-          <div class="side"><div class="cap">Next</div><div class="nexts"><canvas class="n1"></canvas><canvas class="n2"></canvas></div>
-            <div class="nrow"><span class="cap ncap">Notes — only you<span class="bsn"></span> can see these</span>
-              <button type="button" class="fsm" title="Smaller notes">A−</button><button type="button" class="fsp" title="Larger notes">A+</button>
+          <div class="vdiv" role="separator" aria-orientation="vertical" tabindex="0" title="Drag: a bigger slide or wider notes (remembered on this device; arrow keys too)"></div>
+          <div class="side">
+            <div class="panels">
+              <details class="pnl" data-k="mode"><summary><span class="pnt">Mode</span><span class="pv"></span></summary><div class="pbody pmode"></div></details>
+              <details class="pnl" data-k="av"><summary><span class="pnt">Mic &amp; audience</span><span class="pv"></span></summary><div class="pbody pav"></div></details>
+              <details class="pnl" data-k="ppl"><summary><span class="pnt">People</span><span class="pv"></span></summary><div class="pbody">
+            <div class="pplbox"><div class="psec psp"><div class="cap">Presenters<span class="sp"></span><button type="button" class="addp" title="Make someone in the room a presenter: the same powers as you, and their camera in the slide while it is their turn">Add presenter</button></div><div class="rows"></div></div>
+              <div class="psec psb"><div class="cap">Backstage — see the notes and what is next, can move the slides<span class="sp"></span><button type="button" class="addb" title="Make someone in the room backstage">Add backstage</button></div><div class="rows"></div></div></div></div></details>
+            </div>
+            <div class="hdiv" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag: more room for the notes (remembered on this device; arrow keys too)"></div>
+            <div class="nrow"><div class="nxt" title="The next slide"><canvas class="n1"></canvas><span class="nxl"></span></div>
+              <span class="cap ncap">Notes — only you<span class="bsn"></span> can see these</span>
+              <button type="button" class="fsm" title="Smaller notes (remembered on this device)">A−</button><button type="button" class="fsp" title="Larger notes (remembered on this device)">A+</button>
               <button type="button" class="edit" title="Write or change the notes for this slide">Edit</button></div>
             <div class="notes"></div>
-            <div class="bsbox"><div class="cap">Backstage — people who see the notes and what is next, and can move the slides</div><div class="chips"></div></div></div>
+          </div>
         </div>
-        <div class="strip"></div>`;
+        <div class="strip"></div>
+        <div class="ppick" hidden><div class="pk"><div class="pkh"><b class="pkt"></b><button type="button" class="pkx">Close</button></div><input type="search" class="pks" placeholder="Search people in the room" aria-label="Search people"><div class="pkl"></div></div></div>`;
       document.body.appendChild(root);
       modeUiBuild(root);   // 0.21.89: the presenter-mode picker + preview (+ backstage's mic / camera)
       pill = document.createElement("div"); pill.id = "presPill";
@@ -1057,7 +1320,12 @@
       document.body.appendChild(pill);
       pill.querySelector("button").addEventListener("click", () => { hidden = false; open({ deck: pillDeck() }); });
       $(".hide").addEventListener("click", () => { hidden = true; close(); });
-      $(".end").addEventListener("click", () => { if (mine && deckId === mine.id) endMine("ended"); close(); });
+      $(".end").addEventListener("click", () => { endPress(); });
+      $(".addp").addEventListener("click", () => openPicker("p"));   // 0.21.91
+      $(".addb").addEventListener("click", () => openPicker("b"));
+      $(".pkx").addEventListener("click", () => closePicker());
+      $(".pks").addEventListener("input", () => paintPicker());
+      $(".ppick").addEventListener("click", (e) => { if (e.target === $(".ppick")) closePicker(); });
       $(".next").addEventListener("click", () => step(1));
       $(".back").addEventListener("click", () => step(-1));
       $(".blk").addEventListener("click", () => blank("black"));
@@ -1069,7 +1337,63 @@
       $(".vseek").addEventListener("input", () => { $(".vbar").dataset.scrub = "1"; });
       $(".vseek").addEventListener("change", () => { delete $(".vbar").dataset.scrub; const lv = liveVid(); if (lv?.dur) vidPress("seek", Number($(".vseek").value) / 1000 * lv.dur); });
       root.style.setProperty("--pnfs", fs + "px");
+      layoutBuild();   // 0.21.91
       new ResizeObserver(() => paint()).observe(root);
+    }
+    // 0.21.91: the layout, remembered on this device (kastr.pres.layout): the slide column's share, the panels' height (the notes take
+    // the rest), the strip on / off, which panels are open (all closed at first -- one opens by itself when it needs attention)
+    let LY = {};
+    try { LY = JSON.parse(localStorage.getItem("kastr.pres.layout") || "{}") || {}; } catch {}
+    const lySave = () => { try { localStorage.setItem("kastr.pres.layout", JSON.stringify(LY)); } catch {} };
+    function layoutApply() {
+      if (!root) return;
+      const f = Math.max(0.3, Math.min(0.78, Number(LY.col) || 0.6));
+      root.style.setProperty("--lcol", f.toFixed(3) + "fr"); root.style.setProperty("--rcol", (1 - f).toFixed(3) + "fr");
+      if (Number(LY.top) > 0) root.style.setProperty("--ptop", Math.round(LY.top) + "px"); else root.style.removeProperty("--ptop");
+      // the strip: on unless this device hid it -- by default off on a short window (under 900 px tall) where the notes need the room
+      root.classList.toggle("nostrip", LY.nostrip === undefined ? window.innerHeight < 900 : !!LY.nostrip);
+    }
+    function dragLine(el, onMove, onKey) {
+      el.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); el.setPointerCapture(e.pointerId); el.classList.add("drag");
+        const mv = (ev) => { onMove(ev); layoutApply(); };
+        const up = () => { el.classList.remove("drag"); el.removeEventListener("pointermove", mv); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); lySave(); paint(); };
+        el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+      });
+      el.addEventListener("keydown", (e) => { const d = onKey(e.key); if (d) { e.preventDefault(); e.stopPropagation(); layoutApply(); lySave(); paint(); } });
+    }
+    function layoutBuild() {
+      layoutApply();
+      dragLine($(".vdiv"), (e) => { const r = $(".pb").getBoundingClientRect(); LY.col = Math.max(0.3, Math.min(0.78, (e.clientX - r.left) / Math.max(1, r.width))); },
+        (k) => { const c = Number(LY.col) || 0.6; if (k === "ArrowLeft") { LY.col = Math.max(0.3, c - 0.02); return true; } if (k === "ArrowRight") { LY.col = Math.min(0.78, c + 0.02); return true; } return false; });
+      dragLine($(".hdiv"), (e) => { const r = $(".panels").getBoundingClientRect(), s = $(".side").getBoundingClientRect(); LY.top = Math.max(28, Math.min(s.height - 160, e.clientY - r.top)); },
+        (k) => { const t = Number(LY.top) || $(".panels").getBoundingClientRect().height; if (k === "ArrowUp") { LY.top = Math.max(28, t - 20); return true; } if (k === "ArrowDown") { LY.top = t + 20; return true; } return false; });
+      $(".stripbtn").addEventListener("click", () => { LY.nostrip = !root.classList.contains("nostrip"); layoutApply(); lySave(); paint(); });
+      window.addEventListener("resize", () => { if (LY.nostrip === undefined) layoutApply(); });
+      for (const d of root.querySelectorAll("details.pnl")) {
+        d.open = !!(LY.open && LY.open[d.dataset.k]);
+        d.addEventListener("toggle", () => { LY.open = Object.assign({}, LY.open, { [d.dataset.k]: d.open }); if (!d.dataset.auto) lySave(); delete d.dataset.auto; paint(); });
+      }
+    }
+    function panelInfo(v, M) {   // each panel's one-line summary (they are closed) and whether one needs attention
+      const pnl = (k) => root.querySelector('details.pnl[data-k="' + k + '"]');
+      const set = (k, text, attn) => {
+        const d = pnl(k); if (!d) return;
+        const pv = d.querySelector(".pv");
+        if (pv.textContent !== text) pv.textContent = text;
+        const was = d.classList.contains("attn");
+        d.classList.toggle("attn", !!attn);
+        if (attn && !was && !d.open) { d.dataset.auto = "1"; d.open = true; }   // it needs attention: open by itself (not remembered)
+      };
+      const mv = modeView();
+      if (mv) {
+        const why = mui && mui.why ? mui.why.textContent : "";
+        set("mode", MODE_NAME[mv.cm] + (mv.eff !== mv.cm ? " · the room sees the slide only" : "") + (M && M.ps.length > 1 ? " · " + (mv.turn ? "you present" : mv.cn + " presents") : ""), !!why);
+        pnl("mode").hidden = !(mv.role === "presenter" || mv.has);
+      }
+      const ex = panelAvInfo(v);
+      set("av", ex.text, ex.attn);
+      set("ppl", M ? M.ps.length + (M.ps.length === 1 ? " presenter" : " presenters") + " · " + M.bs.length + " backstage" : "", false);
     }
     function setFs(v) { fs = Math.max(12, Math.min(48, v)); root.style.setProperty("--pnfs", fs + "px"); try { localStorage.setItem("kastr.pres.notesSize", String(fs)); } catch {} }
     function deck() {   // {role, rec-like view} for the deck on show
@@ -1077,8 +1401,9 @@
       const bk = backstage.get(deckId);
       if (!bk) return null;
       const opt = bk.opt != null && Date.now() - bk.optAt < 1500 && bk.rec.ver === bk.optVer;
-      return { role: "backstage", id: bk.rec.id, name: bk.rec.name, n: bk.rec.n, idx: opt ? bk.opt : bk.rec.idx, blank: opt ? bk.optBlank : (bk.rec.blank || null),
-               t0: bk.rec.t0, notes: bk.notes, by: bk.rec.by, ver: bk.rec.ver, ar: bk.rec.ar, presenter: nameOfPerson(personOfPath(bk.path)), ready: !!bk.keys };
+      return { role: bk.pr ? "copresenter" : "backstage", id: bk.rec.id, name: bk.rec.name, n: bk.rec.n, idx: opt ? bk.opt : bk.rec.idx, blank: opt ? bk.optBlank : (bk.rec.blank || null),
+               t0: bk.rec.t0, notes: bk.notes, by: bk.rec.by, ver: bk.rec.ver, ar: bk.rec.ar, presenter: nameOfPerson(bk.rec.own || personOfPath(bk.path)), ready: !!bk.keys,
+               orphan: !!bk.orphan };   // 0.21.91: + a co-presenter; orphan = its owner went, a hand-over is on its way
     }
     function open(o) {
       build();
@@ -1099,17 +1424,17 @@
       const id = pillDeck();
       const show = !!id && !isOpen();
       pill.classList.toggle("show", show);
-      if (show) pill.querySelector(".pt").textContent = mine ? "You are presenting “" + mine.name + "”" : "Backstage for “" + (backstage.get(id)?.rec.name || "") + "”";
+      if (show) { const b = backstage.get(id); pill.querySelector(".pt").textContent = mine ? "You are presenting “" + mine.name + "”" : (b?.pr ? "You co-present “" : "Backstage for “") + (b?.rec.name || "") + "”"; }
     }
-    function step(d) {
+    function step(d) {   // 0.21.91: a move keeps the room's Black / White
       const v = deck(); if (!v) return;
       const to = clampI(v.idx + d, v.n);
-      if (v.role === "presenter") goTo(to, myPerson(), null);
-      else sendIntent(v.id, to, null);
+      if (v.role === "presenter") goTo(to, myPerson());
+      else sendIntent(v.id, to);
     }
     function goto(i) {
       const v = deck(); if (!v) return;
-      if (v.role === "presenter") goTo(i, myPerson(), null); else sendIntent(v.id, i, null);
+      if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i);
     }
     function blank(kind) {
       const v = deck(); if (!v) return;
@@ -1117,21 +1442,45 @@
       if (v.role === "presenter") goTo(v.idx, myPerson(), nb); else sendIntent(v.id, v.idx, nb);
     }
     function toggleEdit() {
-      if (!(mine && deckId === mine.id)) return;
+      const v = deck();
+      if (!v || (v.role !== "presenter" && v.role !== "copresenter")) return;   // 0.21.91: + an added presenter
+      const own = v.role === "presenter", bk = own ? null : backstage.get(v.id);
+      const notes = own ? mine.notes : (bk && bk.notes);
+      if (!notes) return;
       const box = $(".notes");
       if (!editing) {
         editing = true;
-        const ta = document.createElement("textarea"); ta.className = "notes"; ta.value = mine.notes[mine.idx] || "";
-        ta.dataset.idx = String(mine.idx);
+        const ta = document.createElement("textarea"); ta.className = "notes"; ta.value = notes[v.idx] || "";
+        ta.dataset.idx = String(v.idx);
         box.replaceWith(ta); ta.focus(); $(".edit").textContent = "Save";
       } else {
         const ta = root.querySelector("textarea.notes");
-        const i = Number(ta.dataset.idx);
-        mine.notes[i] = ta.value; mine.nv++;
-        uploadNotes().then(() => publish());
+        const i = Number(ta.dataset.idx), text = ta.value.slice(0, 20000);
+        if (own) { mine.notes[i] = text; mine.nv++; uploadNotes().then(() => publish()); }
+        else if (bk && bk.notesKey) {   // the owner page stores it: sealed with the notes key, so the room never reads it
+          bk.notes[i] = text;
+          seal(bk.notesKey, enc.encode(text)).then((ct) => sendPresOp(v.id, { op: "note", i, c: b64(ct) }));
+        }
         const d = document.createElement("div"); d.className = "notes"; ta.replaceWith(d);
         editing = false; $(".edit").textContent = "Edit"; paintAll();
       }
+    }
+    function endPress() {   // 0.21.91: any presenter ends it for everyone
+      const v = deck();
+      if (v && v.role === "presenter" && mine) endMine("ended");
+      else if (v && v.role === "copresenter") {
+        const bk = backstage.get(v.id), id = v.id;
+        sendPresOp(id, { op: "end" });
+        setTimeout(() => {   // the owner did not answer (it is going away?): the store forgets the deck -- nobody takes it over
+          const b = backstage.get(id);
+          if (!b || !b.wt) return;
+          endMark = { id, at: Date.now() }; coPublish();
+          fetch(baseFor(b.rec) + "/api/pres/" + id + "/end?token=" + encodeURIComponent(b.wt), { method: "POST" }).catch(() => {});
+          T("end-self", { id });
+        }, 3000);
+        void bk;
+      }
+      close();
     }
     function tick() {
       const v = deck();
@@ -1148,7 +1497,7 @@
       if (!v) return null;
       if (v.role === "presenter") {
         const e = [...mine.vids.values()].find((x) => x.i === mine.idx);
-        const linked = ((mine.src.videos || [])[mine.idx] || []).find((x) => x.linked);
+        const linked = (((mine.src && mine.src.videos) || [])[mine.idx] || []).find((x) => x.linked);
         if (!e) return linked ? { role: v.role, linked: linked.linked, audio: linked.kind === "audio" } : null;
         const s = e.shareId != null ? window.__presVideo?.state(e.shareId) : null;
         return { role: v.role, e, playing: !!s?.playing, t: s ? s.t : 0, dur: s ? s.dur : 0, err: e.err, ready: !!s, audio: e.sv.kind === "audio" };
@@ -1197,12 +1546,12 @@
       if (v.role === "presenter") {
         const es = [...mine.vids.values()].filter((e) => e.i === mine.idx);
         any = es.length > 0;
-        if (!mine.blank) items = es.filter((e) => e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
+        items = es.filter((e) => e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
       } else {
         const rec = backstage.get(v.id)?.rec;
         const rs = rec && rec.idx === v.idx ? (rec.vids || []).filter((x) => x.i === rec.idx) : [];
         any = rs.length > 0;
-        if (!v.blank) items = rs.filter((x) => x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
+        items = rs.filter((x) => x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
       }
       const n = drawVids(vc, v.ar || 16 / 9, items);
       if (n && vidViewPainted !== v.id + "/" + v.idx) { vidViewPainted = v.id + "/" + v.idx; T("vid-paint", { id: v.id, idx: v.idx, who: "view" }); }
@@ -1226,36 +1575,47 @@
       }
       $(".ttl").textContent = v.name;
       const role = $(".role");
-      role.textContent = v.role === "presenter" ? "You are presenting" : "Backstage for " + v.presenter;
-      role.classList.toggle("bs", v.role !== "presenter");
-      $(".end").style.display = v.role === "presenter" ? "" : "none";
-      $(".edit").style.display = v.role === "presenter" && !editing ? "" : (editing ? "" : "none");
+      const P = v.role === "presenter" || v.role === "copresenter";   // 0.21.91: an added presenter has the same powers
+      const M = pplModel(v);
+      role.textContent = v.role === "presenter" ? (M && M.ps.length > 1 ? "Presenter" : "You are presenting") : v.role === "copresenter" ? "Co-presenter" : "Backstage for " + v.presenter;
+      role.classList.toggle("bs", v.role === "backstage");
+      $(".nowp").textContent = v.orphan ? "Handing over…" : M && M.ps.length > 1 ? "Now presenting: " + (M.cur === myPerson() ? "you" : nameOfPerson(M.cur)) : "";
+      $(".end").style.display = P ? "" : "none";
+      $(".edit").style.display = P || editing ? "" : "none";
       $(".num").textContent = "Slide " + (v.idx + 1) + " of " + v.n;
       $(".who").textContent = v.ver > 1 && v.by && v.by !== myPerson() ? "moved by " + nameOfPerson(v.by) : "";
       $(".blk").classList.toggle("on", v.blank === "black");
       $(".wht").classList.toggle("on", v.blank === "white");
-      const bsN = v.role === "presenter" ? [...mine.bs.keys()].map(nameOfPerson) : [];
-      $(".bsn").textContent = v.role === "presenter" ? (bsN.length ? " and " + bsN.join(", ") : "") : " and the presenter";
+      {   // who else reads the notes
+        const others = M ? [...M.ps, ...M.bs].map((x) => x.p).filter((p) => p !== myPerson()).map(nameOfPerson) : [];
+        $(".bsn").textContent = others.length ? " and " + others.join(", ") : "";
+      }
       if (!editing) {
         const nb = $(".notes");
         const txt = v.notes ? (v.notes[v.idx] || "") : null;
-        nb.textContent = txt == null ? "Opening the notes…" : txt || (v.role === "presenter" ? "No notes for this slide — Edit to add some (only you and backstage see them)." : "No notes for this slide.");
+        nb.textContent = txt == null ? "Opening the notes…" : txt || (P ? "No notes for this slide — Edit to add some (only the presenters and backstage see them)." : "No notes for this slide.");
         nb.classList.toggle("empty", !txt);
       }
-      $(".bsbox").style.display = v.role === "presenter" ? "" : "none";
-      if (v.role === "presenter") paintBackstage();
+      paintPeople(v, M);   // 0.21.91: Presenters + Backstage (read-only for backstage)
+      panelInfo(v, M);   // 0.21.91: the panels' summaries; one that needs attention opens
       {   // the live slide as large as its box allows, in the deck's own shape
         const wrap = $(".curwrap"), cv = $(".curcv"), r = wrap.getBoundingClientRect();
         const ar = v.ar || 16 / 9, narrow = window.matchMedia("(max-width: 760px)").matches;
-        const w = narrow ? r.width : Math.min(r.width, r.height * ar), h = w / ar;
+        const w = Math.max(40, narrow ? r.width : Math.min(r.width, r.height * ar)), h = w / ar;
         cv.style.width = Math.floor(w) + "px"; cv.style.height = Math.floor(h) + "px";
-        for (const c of root.querySelectorAll(".nexts canvas")) c.style.aspectRatio = String(ar);
+        for (const c of root.querySelectorAll(".nxt canvas")) c.style.aspectRatio = String(ar);
+        $(".nxl").textContent = v.idx + 1 < v.n ? "Next: " + (v.idx + 2) : "End of the deck";
       }
-      const cvs = [[$(".curcv"), v.idx, v.blank], [$(".n1"), v.idx + 1, null], [$(".n2"), v.idx + 2, null]];
+      {   // 0.21.91: the room sees Black / White -- this view keeps the slide, marked
+        const rs = $(".rsee");
+        rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : "";
+        rs.dataset.k = v.blank || "";
+      }
+      const cvs = [[$(".curcv"), v.idx, null], [$(".n1"), v.idx + 1, null]];   // 0.21.91: one small next slide
       for (const [cv, i, bl] of cvs) {
         fitCanvas(cv);
         if (i >= v.n) { drawContain(cv, null, null, i === v.n ? "End of the deck" : ""); continue; }
-        if (v.role === "backstage" && !v.ready) { drawContain(cv, null, null, "Waiting for the key…"); continue; }
+        if (v.role !== "presenter" && !v.ready) { drawContain(cv, null, null, "Waiting for the key…"); continue; }
         stillFor(v.id, i).then((b) => { if (seq !== paintSeq) return; drawContain(cv, b, bl, ""); if (cv === cvs[0][0]) T("paint", { id: v.id, idx: i, ver: seq, who: "view" }); })
           .catch(() => drawContain(cv, null, null, "Slide " + (i + 1) + "…"));
       }
@@ -1265,33 +1625,165 @@
       vidLoop();
     }
     function paintAll() { paint(); }
-    function paintBackstage() {
-      const box = $(".bsbox .chips");
-      const c = ctx();
+    // ---- 0.21.91 (Kenton: "The Backstage selector should be reworked"): two sections, Presenters (the main presenter first) and
+    // Backstage, each with a ready dot and a remove x, an Add button that opens a people picker, a move between the sections, and on
+    // each backstage row the viewing presenter's OWN "Can control my mic and camera" for that person. Read-only for backstage.
+    function pplModel(v) {
       const me = myPerson();
-      const people = (c?.people || []).filter((p) => p.host + "/" + (p.op || p.peer) !== me);
-      const seen = new Set();
-      const chips = [];
-      for (const p of people) {
-        const who = p.host + "/" + (p.op || p.peer);
-        if (seen.has(who)) continue; seen.add(who);
-        const path = [...remote.keys()].find((k) => personOfPath(k) === who && remote.get(k)?.pk);
-        const capable = !!path;
-        const on = mine.bs.has(who);
-        const b = mine.bs.get(who);
-        const lab = document.createElement("label"); lab.className = "chip" + (capable ? "" : " off");
-        lab.title = capable ? (on ? "Backstage: sees the notes and the next slides and can move the slides" : "Make " + (p.name || p.op) + " backstage") : (p.name || p.op || p.host) + "'s KASTR is older than 0.21.84 (or not open) and cannot be backstage";
-        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = on; cb.disabled = !capable && !on; cb.dataset.who = who;
-        cb.addEventListener("change", () => setBackstage(who, cb.checked));
-        const nm = document.createElement("span"); nm.textContent = p.name || p.op || p.host;
-        const stt = document.createElement("span"); stt.className = "st"; stt.textContent = on ? (b?.w ? "✓ ready" : "waiting…") : "";
-        lab.append(cb, nm, stt); chips.push(lab);
+      if (!v) return null;
+      if (v.role === "presenter") {
+        return { own: me, cur: mine.cur, edit: true, mePres: true,
+                 ps: mine.ps.map((x) => ({ p: x.p, n: x.name || nameOfPerson(x.p), ready: x.p === me || !!(x.w && x.t) })),
+                 bs: [...mine.bs].map(([p, b]) => ({ p, n: b.name || nameOfPerson(p), ready: !!b.w })) };
       }
-      if (!chips.length) { const e = document.createElement("span"); e.className = "st"; e.style.color = "#6b7d8f"; e.textContent = "Nobody else is in the room yet."; chips.push(e); }
-      const sig = chips.map((c) => c.outerHTML + (c.querySelector("input")?.checked ? "1" : "0")).join("|");
-      if (sig === box.dataset.sig) return;
-      box.dataset.sig = sig;
-      box.replaceChildren(...chips);
+      const bk = backstage.get(v.id), rec = bk && bk.rec;
+      if (!rec) return null;
+      const own = rec.own || personOfPath(bk.path);
+      const ps = (Array.isArray(rec.ps) && rec.ps.length ? rec.ps : [{ p: own, n: "" }]).map((x) => ({ p: x.p, n: x.n || nameOfPerson(x.p), ready: x.p === own || !!(x.w && x.t) }));
+      return { own, cur: rec.cur || own, edit: v.role === "copresenter", mePres: v.role === "copresenter", old: !(Array.isArray(rec.ps) && rec.ps.length),
+               ps, bs: (rec.bs || []).map((x) => ({ p: x.p, n: x.n || nameOfPerson(x.p), ready: !!x.w })) };
+    }
+    function roleAct(who, r) {   // add / move / remove (the owner page applies it)
+      const v = deck();
+      if (!v) return false;
+      if (v.role === "presenter") return setRole(who, r, myPerson());
+      if (v.role === "copresenter") return sendPresOp(v.id, { op: "role", p: who, r });
+      return false;
+    }
+    function curAct(who) {   // "Now presenting: <name>" / "Take over"
+      const v = deck();
+      if (!v) return false;
+      if (v.role === "presenter") return setCur(who, myPerson());
+      if (v.role === "copresenter") { const ok = sendPresOp(v.id, { op: "cur", p: who }); const bk = backstage.get(v.id); if (bk) { bk.optCur = who; bk.optCurAt = Date.now(); } paint(); return ok; }
+      return false;
+    }
+    function allowAct(who, on) {   // MY setting for this backstage person
+      if (!presentingDeck()) return false;
+      if (on) self.al.add(who); else self.al.delete(who);
+      self.alSeen.add(who);
+      T("allow", { who, on: on ? 1 : 0 });
+      modeTick(); coPublish();
+      if (mine) publish();
+      paint();
+      return true;
+    }
+    function personAvatar(el, pk, name) {
+      const K = window.__kmsg;
+      el.textContent = K?.initials ? K.initials(name) : String(name || "?").slice(0, 2).toUpperCase();
+      try { const c = K?.color?.(String(pk).split("/")[1] || pk); if (c) el.style.background = c; } catch {}
+      try { K?.photo?.(el, name); } catch {}
+    }
+    function btn(cls, text, title, fn) {
+      const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = text; if (title) b.title = title;
+      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+      return b;
+    }
+    function paintPeople(v, M) {
+      const box = $(".pplbox");
+      if (!M) { box.style.display = "none"; return; }
+      box.style.display = "";
+      const me = myPerson();
+      const first = (n) => String(n || "").split(/\s+/)[0] || n;
+      const curOpt = (() => { const bk = v.role === "copresenter" ? backstage.get(v.id) : null; return bk && bk.optCur && Date.now() - bk.optCurAt < 1500 ? bk.optCur : null; })();
+      const cur = curOpt || M.cur;
+      $(".addp").style.display = M.edit ? "" : "none";
+      $(".addb").style.display = M.edit ? "" : "none";
+      const rowsP = M.ps.map((x) => {
+        const here = hereNow(x.p);
+        const row = document.createElement("div"); row.className = "prow" + (x.p === cur ? " now" : ""); row.dataset.who = x.p; row.dataset.kind = "p";
+        const av = document.createElement("span"); av.className = "pav"; personAvatar(av, x.p, x.n);
+        const dot = document.createElement("span"); dot.className = "dot" + (!here ? "" : x.ready ? " ready" : " wait");
+        dot.title = !here ? x.n + " is not in the room" : x.ready ? "Ready" : "Getting the slides' key…";
+        const nm = document.createElement("span"); nm.className = "pn"; nm.textContent = x.n;
+        if (x.p === me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (you)"; nm.appendChild(y); }
+        row.append(av, dot, nm);
+        if (x.p === M.own && M.ps.length > 1) { const t = document.createElement("span"); t.className = "tag own"; t.textContent = "runs the deck"; t.title = "The presentation runs from " + (x.p === me ? "your" : x.n + "'s") + " KASTR (if it leaves, the next presenter takes over)"; row.append(t); }
+        if (x.p === cur) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "Presenting now"; row.append(t); }
+        else if (M.edit && here && x.ready && !M.old) {
+          if (x.p === me) row.append(btn("takeover", "Take over", "Present now: your camera goes into the slide", () => curAct(x.p)));
+          else row.append(btn("nowbtn", "Now presenting: " + first(x.n), x.n + " presents now: their camera goes into the slide", () => curAct(x.p)));
+        }
+        if (M.edit && x.p !== M.own) {
+          row.append(btn("mv", "→ Backstage", "Make " + x.n + " backstage instead", () => roleAct(x.p, "b")));
+          row.append(btn("x", "×", x.p === me ? "Stop being a presenter" : "Remove " + x.n + " from the presenters", () => roleAct(x.p, "")));
+        }
+        return row;
+      });
+      const rowsB = M.bs.map((x) => {
+        const here = hereNow(x.p);
+        const row = document.createElement("div"); row.className = "prow"; row.dataset.who = x.p; row.dataset.kind = "b";
+        const av = document.createElement("span"); av.className = "pav"; personAvatar(av, x.p, x.n);
+        const dot = document.createElement("span"); dot.className = "dot" + (!here ? "" : x.ready ? " ready" : " wait");
+        dot.title = !here ? x.n + " is not in the room" : x.ready ? "Ready" : "Getting the slides' key…";
+        const nm = document.createElement("span"); nm.className = "pn"; nm.textContent = x.n;
+        if (x.p === me) { const y = document.createElement("span"); y.className = "you"; y.textContent = " (you)"; nm.appendChild(y); }
+        row.append(av, dot, nm);
+        if (M.mePres) {   // MY setting for this person (each presenter has their own)
+          const lab = document.createElement("label"); lab.className = "allow";
+          lab.title = "Your own setting: " + x.n + " may mute / unmute your mic and pause / resume your video (other presenters decide for themselves)";
+          const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = self.al.has(x.p); cb.dataset.who = x.p;
+          cb.addEventListener("change", () => allowAct(x.p, cb.checked));
+          lab.append(cb, document.createTextNode("Can control my mic and camera"));
+          row.append(lab);
+        }
+        if (M.edit) {
+          if (canCo(x.p)) row.append(btn("mv", "→ Presenter", "Make " + x.n + " a presenter instead", () => roleAct(x.p, "p")));
+          row.append(btn("x", "×", "Remove " + x.n + " from backstage", () => roleAct(x.p, "")));
+        }
+        return row;
+      });
+      const empty = (t) => { const e = document.createElement("div"); e.className = "empty"; e.textContent = t; return e; };
+      const pr = $(".psp .rows"), br = $(".psb .rows");
+      const sigOf = (els) => els.map((e) => e.outerHTML + "|" + [...e.querySelectorAll("input")].map((i) => (i.checked ? 1 : 0)).join("")).join("\n");
+      const nextP = rowsP.length ? rowsP : [empty("Nobody yet")];
+      const nextB = rowsB.length ? rowsB : [empty(M.edit ? "Nobody backstage — Add backstage to give someone the notes and the slides" : "Nobody")];
+      const sp = sigOf(nextP), sb = sigOf(nextB);
+      if (pr.dataset.sig !== sp) { pr.dataset.sig = sp; pr.replaceChildren(...nextP); }
+      if (br.dataset.sig !== sb) { br.dataset.sig = sb; br.replaceChildren(...nextB); }
+      if (!$(".ppick").hidden) paintPicker();
+    }
+    // the people picker: people in the room (photo + name), searchable; whose KASTR cannot do it is listed greyed with why
+    let pickKind = "p";
+    function openPicker(kind) {
+      pickKind = kind === "b" ? "b" : "p";
+      $(".pkt").textContent = pickKind === "p" ? "Add presenter" : "Add backstage";
+      $(".pks").value = "";
+      $(".ppick").hidden = false;
+      paintPicker();
+      setTimeout(() => { try { $(".pks").focus(); } catch {} }, 0);
+      T("picker", { who: pickKind });
+    }
+    function closePicker() { if (root) $(".ppick").hidden = true; }
+    function paintPicker() {
+      const v = deck(), M = pplModel(v);
+      if (!M || !M.edit) { closePicker(); return; }
+      const me = myPerson(), q = $(".pks").value.trim().toLowerCase();
+      const inP = new Set(M.ps.map((x) => x.p)), inB = new Set(M.bs.map((x) => x.p));
+      const seen = new Set(), rows = [];
+      for (const p of (ctx()?.people || [])) {
+        const who = p.host + "/" + (p.op || p.peer);
+        if (who === me || seen.has(who)) continue;
+        seen.add(who);
+        if (pickKind === "p" ? inP.has(who) : inB.has(who)) continue;
+        const name = p.name || p.op || p.host;
+        if (q && !name.toLowerCase().includes(q)) continue;
+        const hasPk = [...remote.entries()].some(([k, r]) => personOfPath(k) === who && r.pk);
+        let why = "";
+        if (pickKind === "p" && !canCo(who)) why = hasPk ? "Their KASTR is older than 0.21.91 — it cannot co-present (backstage works)" : "Their KASTR is older (or not open) — it cannot present";
+        else if (pickKind === "b" && !hasPk) why = "Their KASTR is older than 0.21.84 (or not open) — it cannot be backstage";
+        const b = document.createElement("button"); b.type = "button"; b.className = "pkr"; b.dataset.who = who; b.disabled = !!why;
+        const av = document.createElement("span"); av.className = "pav"; personAvatar(av, who, name);
+        const nm = document.createElement("span"); nm.className = "pkn"; nm.append(document.createTextNode(name));
+        const sm = document.createElement("small");
+        sm.textContent = why || (pickKind === "p" && inB.has(who) ? "Backstage now — becomes a presenter" : pickKind === "b" && inP.has(who) ? "A presenter now — becomes backstage" : p.mode === "viewer" ? "Watching" : "In the room");
+        nm.append(sm);
+        b.append(av, nm);
+        b.title = why || (pickKind === "p" ? "Make " + name + " a presenter" : "Make " + name + " backstage");
+        b.addEventListener("click", () => { if (roleAct(who, pickKind)) closePicker(); });
+        rows.push(b);
+      }
+      if (!rows.length) { const e = document.createElement("div"); e.className = "none"; e.textContent = q ? "Nobody by that name in the room." : "Nobody else in the room to add."; rows.push(e); }
+      $(".pkl").replaceChildren(...rows);
     }
     let stripFor = "";
     const thumbDone = new Set();
@@ -1313,7 +1805,7 @@
       for (const d of strip.children) {
         const i = Number(d.dataset.i);
         d.classList.toggle("cur", i === v.idx); d.classList.toggle("next", i === v.idx + 1);
-        const ready = v.role === "presenter" ? !!mine.blobs[i] : !!v.ready;
+        const ready = v.role === "presenter" ? (mine.adopted || !!mine.blobs[i]) : !!v.ready;   // 0.21.91: a handed-over deck reads the store
         d.classList.toggle("wait", !ready);
         if (ready && !thumbDone.has(v.id + "/" + i)) {
           thumbDone.add(v.id + "/" + i);
@@ -1347,7 +1839,9 @@
     }
     window.addEventListener("keydown", onKey, true);
     return { open, close, prep, paint: () => paint(), paintStrip: () => paintStrip(), offer: () => offer(), isOpen, deck: () => deck(),
-             paintVid: () => paintVid(), drawVid: () => drawVid(), vidPress: (op, t) => vidPress(op, t) };   // 0.21.87
+             paintVid: () => paintVid(), drawVid: () => drawVid(), vidPress: (op, t) => vidPress(op, t),   // 0.21.87
+             people: () => pplModel(deck()), picker: (k) => openPicker(k), pickerClose: () => closePicker(), role: (w, r) => roleAct(w, r), now: (w) => curAct(w),   // 0.21.91
+             end: () => endPress(), allow: (w, on) => allowAct(w, !!on) };
   })();
 
   // ---- 0.21.87: a slide's video drawn in its spot -- viewers' and backstage's tiles (the hidden stream's newest frame) and
@@ -1631,18 +2125,38 @@
     const g = o.ccv.getContext("2d"), W = o.ccv.width, H = o.ccv.height;
     const src = camSourceFor(rec, mode);
     // a new picture (or a new size / mode) is drawn; the same frame again is not (the loop runs at the display's rate)
-    const fk = mode + "/" + rec.ar + "/" + (src ? (src.kind === "cut" ? "c" + (unp ? unp.n : 0) : "b" + (src.img.timestamp ?? Math.random())) : "none/" + (rec.cam || ""));
+    const fk = mode + "/" + rec.ar + "/" + (rec.cn || "") + "/" + (src ? (src.kind === "cut" ? "c" + (unp ? unp.n : 0) : "b" + (src.img.timestamp ?? Math.random())) : "none/" + (rec.cam || ""));
     if (!resized && fk === o.camFk) return true;
     o.camFk = fk;
     g.clearRect(0, 0, W, H);
     const L = presLayout(mode, W, H, rec.ar, src ? src.ar : 16 / 9, !!(src && src.kind === "cut"));
     const n = drawCam(g, L, src, W, H, camLabel(rec));
-    const key = rec.id + "/" + mode + "/" + (src ? src.kind : "");
-    if (n && o.camPainted !== key) { o.camPainted = key; T("cam-paint", { id: rec.id, idx: rec.idx, who: "overlay", mode, kind: src.kind }); }
+    o.tagged = n && multiPres(rec) ? drawTag(g, L, rec.cn, W, H) : "";   // 0.21.91: the presenter presenting now, by name
+    const key = rec.id + "/" + mode + "/" + (src ? src.kind : "") + "/" + (rec.cam || "") + "/" + (rec.cut || "");
+    if (n && o.camPainted !== key) { o.camPainted = key; T("cam-paint", { id: rec.id, idx: rec.idx, who: "overlay", mode, kind: src.kind, cur: rec.cur || "", cam: rec.cam || "", cut: rec.cut || "" }); }
     o.camKind = src ? src.kind : ""; o.camN = (o.camN || 0) + n;
     return true;
   }
   const slideRectFn = (rec) => (W, H) => presLayout(modeOf(rec), W, H, rec.ar, 16 / 9, true).slide;
+  // 0.21.91: a deck with more than one presenter names the one presenting now on the camera layer (a small tag at their picture)
+  const multiPres = (rec) => !!(rec && Array.isArray(rec.ps) && rec.ps.length > 1);
+  function drawTag(g, L, name, W, H) {
+    if (!L.cam || !name) return "";
+    const r = L.cam, clip = L.clip || { x: 0, y: 0, w: W, h: H };
+    const fs = Math.max(10, Math.min(20, Math.round(Math.min(W, H) * 0.028)));
+    g.save();
+    g.font = "600 " + fs + "px 'Segoe UI', system-ui, sans-serif";
+    const tw = g.measureText(name).width, ph = Math.round(fs * 0.45), h = fs + ph * 2 / 1.4, w = tw + ph * 2;
+    const left = L.kind === "cut" ? r.x + r.w * 0.18 : r.x + Math.max(4, r.w * 0.04);
+    const bottom = Math.min(r.y + r.h, clip.y + clip.h, H) - Math.max(4, fs * 0.5);
+    const x = Math.max(clip.x + 4, Math.min(left, clip.x + clip.w - w - 4)), y = bottom - h;
+    g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, h, h / 2); else g.rect(x, y, w, h);
+    g.fillStyle = "rgba(10,16,24,0.78)"; g.fill();
+    g.fillStyle = "#ffffff"; g.textAlign = "left"; g.textBaseline = "middle";
+    g.fillText(name, x + ph, y + h / 2 + 1);
+    g.restore();
+    return name;
+  }
   // which presenter cameras this page draws inside a presentation tile (not a tile of their own meanwhile) and which cut-outs
   // it subscribes -- only presentations whose tile is here
   let hideSig = "", cutSig = "";
@@ -1654,66 +2168,134 @@
       if (r.cam) hide.push(r.cam);
       if (cutMode(m) && r.cut) cuts.push(r.cut);
     }
-    // backstage: the preview in my presenter view draws the same pictures
+    // backstage: the preview in my presenter view draws the same pictures; 0.21.91: so does mine when another presenter presents
+    if (mine && mine.ms && mine.cur !== myPerson() && cutMode(mine.ms.eff) && mine.ms.cut && !cuts.includes(mine.ms.cut)) cuts.push(mine.ms.cut);
     const hs = hide.sort().join("|"), cs = cuts.sort().join("|");
     if (hs !== hideSig) { hideSig = hs; try { window.__presCamHide?.(hide); } catch {} T("cam-hide", { who: hs }); }
     if (cs !== cutSig) { cutSig = cs; try { window.__presCutWant?.(cuts); } catch {} T("cut-want", { who: cs }); }
   }
 
   // ---- the presenter: the chosen mode, the camera, the cut-out, backstage's mic / camera control ------------------------------
+  // 0.21.91 (Kenton: "allow them to show their camera instead of the main presenters camera while they are presenting their part of
+  // the slides" + "Backstage can control my mic and camera should be an option per backstage person"): every PRESENTER's page (the
+  // owner's and each added presenter's) keeps its OWN camera / cut-out / mic state here (`self`) and publishes it in its room.json
+  // `presCo` {cap, id, al, cam, cut, nocut, live, av, ack}. Its cut-out runs only while it is that presenter's turn (pres.cur) in
+  // Standout / Reporter with the camera on (and it encodes only while somebody subscribes). The OWNER copies the camera fields of
+  // the presenter presenting now into `pres` (cam / cut / cme / nocut / cwhy) -- one record, so a hand-over swaps the person in one
+  // step, and older KASTRs follow it too. Mic / camera requests are answered by the TARGET presenter's own page: the requester must
+  // be backstage in the deck, that presenter must allow that person (`al`, ON for each newly added backstage person), the deck live.
+  const CAP = 2;   // presCo.cap: 2 = this KASTR can co-present (0.21.91)
+  const self = { id: "", al: new Set(), alSeen: new Set(), bp: false, bpAt: 0, note: null, ack: null, avSeq: new Map(),
+                 ms: { cutOn: false, cam: "", cut: "", nocut: "", live: false, mic: "none", camSt: "off", hw: false, turn: false } };
+  let coSig = "";
+  function presentingDeck() {   // the deck I present (its owner, or an added presenter) -> {id, owner, rec?, bk?} | null
+    if (mine) return { id: mine.id, owner: true };
+    for (const bk of backstage.values()) if (bk.pr && bk.K && !bk.ended) return { id: bk.rec.id, owner: false, rec: bk.rec, bk };
+    return null;
+  }
+  function deckBs(pd) { return pd.owner ? [...mine.bs.keys()] : (pd.rec.bs || []).map((b) => b.p); }
+  function coPublish() {
+    if (!pkPublished) return;   // nothing to say until a presentation is in my room
+    const pd = presentingDeck(), s = self.ms;
+    const o = { cap: CAP };
+    if (pd) {
+      o.id = pd.id; o.al = [...self.al]; o.cam = s.cam; o.cut = s.cut; o.nocut = s.nocut; o.live = s.live ? 1 : 0;
+      o.av = { m: s.mic, c: s.camSt, bp: self.bp ? 1 : 0, n: self.note ? self.note.t : "", na: self.note ? self.note.at : 0, nb: self.note ? self.note.by : "" };
+      if (self.ack) o.ack = self.ack;
+    }
+    if (endMark && Date.now() - endMark.at < 60000) o.end = endMark.id;
+    if (relMark && Date.now() - relMark.at < 60000) o.rel = relMark.id;
+    Object.assign(o, coExtra());
+    const sig = JSON.stringify(o);
+    if (sig === coSig) return;
+    coSig = sig;
+    stateSet("presCo", o);
+  }
+  let coExtra = () => ({});   // (audience mute: my raised hand)
   function camNow() { try { return window.__presCut?.camInfo?.() || null; } catch { return null; } }
+  function selfTick() {   // my own camera / cut-out / mic as a presenter of a deck (owner or added)
+    const pd = presentingDeck(), s = self.ms, C = window.__presCut;
+    if (!pd || pd.id !== self.id) {
+      if (s.cutOn) { s.cutOn = false; try { C?.stop(); } catch {} T("cut-stop", { id: self.id, who: "self" }); }
+      self.id = pd ? pd.id : ""; self.al.clear(); self.alSeen.clear(); self.bp = false; self.note = null; self.ack = null; self.avSeq.clear();
+      Object.assign(s, { cam: "", cut: "", nocut: "", live: false, turn: false });
+    }
+    if (!pd) { coPublish(); return; }
+    const bs = deckBs(pd);   // Kenton: a newly added backstage person may control my mic + camera until I say otherwise
+    for (const p of bs) if (!self.alSeen.has(p)) { self.alSeen.add(p); self.al.add(p); }
+    for (const p of [...self.alSeen]) if (!bs.includes(p)) { self.alSeen.delete(p); self.al.delete(p); }
+    const ci = camNow();
+    let av = null; try { av = window.__presAV?.state?.() || null; } catch {}
+    const live = !!(ci && ci.live);
+    if (self.bp && (!ci || (live && Date.now() - self.bpAt > 4000))) self.bp = false;   // the camera is back (whoever resumed it), or gone
+    const cm = pd.owner ? mine.cm : (modeOk(pd.rec.cm) ? pd.rec.cm : "content");
+    const cur = pd.owner ? mine.cur : (pd.rec.cur || pd.rec.own || "");
+    s.turn = cur === myPerson();
+    const wantCut = s.turn && live && cutMode(cm) && !!C && ci.canCut !== false && !(pd.bk && pd.bk.orphan);
+    if (wantCut && !s.cutOn) { s.cutOn = true; try { C.start(); } catch (e) { console.warn("KASTR pres: cut-out", e); } T("cut-start", { id: pd.id }); }
+    if (!wantCut && s.cutOn) { s.cutOn = false; try { C.stop(); } catch {} T("cut-stop", { id: pd.id }); }
+    let cs = null; try { cs = s.cutOn ? C.state() : null; } catch {}
+    s.live = live;
+    s.cam = live ? ci.path : "";
+    s.cut = cs && cs.ready ? cs.path : "";
+    s.nocut = ci && ci.canCut === false ? (ci.why || "this computer cannot cut you out of your background") : !C ? "this KASTR cannot" : "";
+    s.mic = av ? av.mic : "none";
+    s.camSt = !ci ? "off" : ci.live ? "on" : self.bp ? "paused" : "off";
+    s.hw = !!(av && av.hw);
+    coPublish();
+  }
   function modeInit(m) {
     const ci = camNow();
     m.cm = ci && ci.live ? "standout" : "content";   // Kenton: Standout when the camera is on, else Content only
-    m.avOk = true; m.avBp = false; m.avNote = null; m.ack = null;
     m.rbg = RBG_DEFAULT;   // Reporter's backdrop: the first ASI background
-    m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", mic: "none", camSt: "off", cutOn: false, sig: "", by: "" };
+    m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", sig: "" };   // what the room is shown: the presenter presenting now
     T("mode", { id: m.id, who: m.cm, why: "start" });
     modeTick();
   }
   function modeFields() {
     const m = mine;
     if (!m || !m.ms) return {};
-    const s = m.ms;
+    const s = m.ms, o = self.ms;
     return { cm: m.cm, cme: s.eff, cam: s.cam, cut: s.cut, nocut: s.nocut, cwhy: s.why, rbg: m.rbg || RBG_DEFAULT,
-             av: { m: s.mic, c: s.camSt, bp: !!m.avBp, ok: !!m.avOk, n: m.avNote ? m.avNote.t : "", na: m.avNote ? m.avNote.at : 0, nb: m.avNote ? m.avNote.by : "" },
-             ack: m.ack || null };
+             // av / ack: MY mic + camera (what a 0.21.89/0.21.90 backstage page reads; 0.21.91 pages read each presenter's presCo)
+             av: { m: o.mic, c: o.camSt, bp: !!self.bp, ok: self.al.size > 0, n: self.note ? self.note.t : "", na: self.note ? self.note.at : 0, nb: self.note ? self.note.by : "" },
+             ack: self.ack || null };
   }
   function modeTick() {
+    selfTick();
     const m = mine;
     if (!m || !m.ms) return;
-    const s = m.ms, ci = camNow(), C = window.__presCut;
-    let av = null; try { av = window.__presAV?.state?.() || null; } catch {}
-    const live = !!(ci && ci.live);
-    if (m.avBp && (!ci || (live && Date.now() - (m.avBpAt || 0) > 4000))) m.avBp = false;   // the camera is back (whoever resumed it), or gone (the pause takes a moment to land)
-    const eff = live ? m.cm : "content";
-    const wantCut = live && cutMode(eff) && !!C && ci.canCut !== false;
-    if (wantCut && !s.cutOn) { s.cutOn = true; try { C.start(); } catch (e) { console.warn("KASTR pres: cut-out", e); } T("cut-start", { id: m.id }); }
-    if (!wantCut && s.cutOn) { s.cutOn = false; try { C.stop(); } catch {} T("cut-stop", { id: m.id }); }
-    let cs = null; try { cs = s.cutOn ? C.state() : null; } catch {}
-    s.eff = eff;
-    s.cam = live ? ci.path : "";
-    s.cut = cs && cs.ready ? cs.path : "";
-    s.nocut = ci && ci.canCut === false ? (ci.why || "this computer cannot cut you out of your background") : !C ? "this KASTR cannot" : "";
-    s.why = live ? "" : m.avBp ? "bs" : "off";
-    s.mic = av ? av.mic : "none";
-    s.camSt = !ci ? "off" : ci.live ? "on" : m.avBp ? "paused" : "off";
-    s.hw = !!(av && av.hw);
-    const sig = JSON.stringify([m.cm, m.rbg, s.eff, s.cam, s.cut, s.nocut, s.why, s.mic, s.camSt, m.avBp, m.avOk, m.avNote && m.avNote.at, m.ack && m.ack.s]);
+    const s = m.ms, me = myPerson();
+    if (m.cur !== me) {   // the presenter presenting now: gone (or no longer a presenter) for 4 s -> back to me
+      const ok = m.ps.some((x) => x.p === m.cur) && hereNow(m.cur) && canCo(m.cur);
+      if (ok) m.curGoneAt = 0;
+      else if (!m.curGoneAt) m.curGoneAt = Date.now();
+      else if (Date.now() - m.curGoneAt > 4000) { T("cur-back", { id: m.id, who: m.cur }); m.cur = me; m.curGoneAt = 0; }
+    }
+    const co = m.cur === me ? null : coOf(m.cur);
+    const src = m.cur === me ? self.ms : co && co.id === m.id ? co : {};
+    const live = !!src.live;
+    s.eff = live ? m.cm : "content";
+    s.cam = live ? String(src.cam || "") : "";
+    s.cut = live && cutMode(m.cm) ? String(src.cut || "") : "";
+    s.nocut = String(src.nocut || "");
+    const bp = m.cur === me ? self.bp : !!(src.av && src.av.bp);
+    s.why = live ? "" : bp ? "bs" : "off";
+    const sig = JSON.stringify([m.cm, m.rbg, m.cur, s.eff, s.cam, s.cut, s.nocut, s.why, self.ms.mic, self.ms.camSt, self.bp, self.al.size > 0, self.note && self.note.at, self.ack && self.ack.s, m.ps.length, modeSigExtra()]);
     if (sig !== s.sig) {
       const first = !s.sig;
       s.sig = sig;
-      if (!first) { T("mode-pub", { id: m.id, who: s.eff }); publishVid(); }
+      if (!first) { T("mode-pub", { id: m.id, who: s.eff, cur: m.cur }); publishVid(); }
       try { view.paint(); } catch {}
     }
   }
+  let modeSigExtra = () => "";   // (audience mute)
   setInterval(() => { try { modeTick(); } catch (e) { console.warn("KASTR pres: modes", e); } }, 300);
   function modeEnd(m) {
-    if (!m || !m.ms) return;
-    if (m.ms.cutOn) { m.ms.cutOn = false; try { window.__presCut?.stop(); } catch {} }
+    if (self.ms.cutOn) { self.ms.cutOn = false; try { window.__presCut?.stop(); } catch {} }
     try { window.__presCut?.camVideoStop?.(); } catch {}
   }
-  function setMode(cm, by) {   // the presenter's own choice, or an accepted backstage one
+  function setMode(cm, by) {   // a presenter's own choice, or an accepted backstage / co-presenter one
     const m = mine;
     if (!m || !modeOk(cm) || !m.ms) return false;
     m.modeBy = by || myPerson();
@@ -1723,67 +2305,80 @@
     modeTick();
     return true;
   }
-  function avNotice(m, text, by) {
-    m.avNote = { t: text, at: Date.now(), by };
+  function avNotice(text, by) {
+    self.note = { t: text, at: Date.now(), by };
     presNote(text, 6000, "event");   // the presenter view's notice line -- or a toast on the main page when the view is closed
   }
-  function applyModeAv(ctl, who) {   // a backstage person's mode or mic / camera request (applyIntent checked: backstage, newer seq)
-    const m = mine;
-    const name = nameOfPerson(who);
-    if (ctl.cm !== undefined) {
-      if (!modeOk(ctl.cm)) { T("drop", { id: m.id, who }); return; }
-      T("mode-apply", { id: m.id, who: ctl.cm, by: who });
-      setMode(ctl.cm, who);
-      return;
-    }
-    const op = ctl.av && ctl.av.op;
-    const answer = (ok, why) => { m.ack = { p: who, s: ctl.seq, ok, why: why || "" }; T(ok ? "av-apply" : "av-deny", { id: m.id, who: op, by: who, why }); modeTick(); };
+  function avApply(who, op, seq) {   // a backstage person's mic / camera request TO ME -- checked here, on my own page
+    const pd = presentingDeck();
+    const name = nameOfPerson(who), me = nameOfPerson(myPerson());
+    const answer = (ok, why) => { self.ack = { p: who, s: seq, ok, why: why || "" }; T(ok ? "av-apply" : "av-deny", { id: pd && pd.id, who: op, by: who, why }); modeTick(); };
+    if (!pd) return answer(false, "the presentation is over");
+    if (!deckBs(pd).includes(who)) return answer(false, name + " is not backstage");
     if (!["mute", "unmute", "pause", "resume"].includes(op)) return answer(false, "not a mic or camera request");
-    if (!m.avOk) return answer(false, nameOfPerson(myPerson()) + " turned off backstage control of their mic and camera");
+    if (!self.al.has(who)) return answer(false, me + " hasn't allowed you to control their mic and camera");
     const AV = window.__presAV;
     if (!AV) return answer(false, "this KASTR cannot");
     if (op === "mute" || op === "unmute") {
       const r = AV.mic(op === "mute");
       if (!r || !r.ok) return answer(false, (r && r.why) || "the microphone is not available");
-      if (!r.noop) avNotice(m, (op === "mute" ? "Muted by " : "Unmuted by ") + name, who);
+      if (!r.noop) avNotice((op === "mute" ? "Muted by " : "Unmuted by ") + name, who);
       return answer(true);
     }
     const ci = camNow();
-    const me = nameOfPerson(myPerson());
     if (!ci) return answer(false, me + "'s camera is off");
     if (op === "pause") {
       if (!ci.live) return answer(true);   // already not sending a picture: nothing to do
       const r = AV.cam(true);
       if (!r || !r.ok) return answer(false, (r && r.why) || "the camera did not pause");
-      m.avBp = true; m.avBpAt = Date.now();
-      if (!r.noop) avNotice(m, "Video paused by " + name, who);
+      self.bp = true; self.bpAt = Date.now();
+      if (!r.noop) avNotice("Video paused by " + name, who);
       return answer(true);
     }
     if (ci.live) return answer(true);   // resume: already on
-    if (!m.avBp) return answer(false, me + "'s camera is off");   // backstage resumes only what backstage paused
+    if (!self.bp) return answer(false, me + "'s camera is off");   // backstage resumes only what backstage paused
     const r = AV.cam(false);
     if (!r || !r.ok) return answer(false, (r && r.why) || "the camera did not resume");
-    m.avBp = false;
-    if (!r.noop) avNotice(m, "Video resumed by " + name, who);
+    self.bp = false;
+    if (!r.noop) avNotice("Video resumed by " + name, who);
     return answer(true);
   }
-  // backstage: the requests (presCtl, like Next / Back)
+  // 0.21.91: requests that reach a presenter who is not the owner -- mic / camera requests addressed to me
+  function ctlArrived(path, ctl) {
+    if (mine && ctl.id === mine.id) { applyIntent(path, ctl); return; }
+    const pd = presentingDeck();
+    if (!pd || pd.id !== ctl.id) return;
+    const who = personOfPath(path), me = myPerson();
+    const first = !self.avSeq.has(who), last = self.avSeq.get(who) || 0;
+    let top = last;
+    for (const o of ctlOps(ctl)) {
+      if (!(o.seq > last) || o.id !== pd.id) continue;
+      top = Math.max(top, o.seq);
+      if (first && Math.abs(Date.now() - (Number(o.at) || 0)) > 15000) continue;   // an old request I never saw: not now
+      if (o.av && typeof o.av === "object" && o.av.to === me) avApply(who, o.av.op, o.seq);
+    }
+    self.avSeq.set(who, top);
+  }
+  // backstage / co-presenters: the requests (presCtl, like Next / Back)
   function sendModeIntent(deckId, cm) {
     const bk = backstage.get(deckId);
     if (!bk || !modeOk(cm) || !bk.rec.cm) return false;   // a presenter without modes (older KASTR): never asked
-    ctlSeq++;
-    stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), cm });
+    ctlSend({ id: deckId, bv: bk.rec.ver, to: bk.rec.idx, cm });
     bk.optCm = cm; bk.optCmAt = Date.now();
     T("mode-intent", { id: deckId, who: cm });
     return true;
   }
-  function sendAvIntent(deckId, op) {
+  function sendAvIntent(deckId, op, to) {   // 0.21.91: to = the presenter whose mic / camera (default: the one presenting now)
     const bk = backstage.get(deckId);
-    if (!bk || !bk.rec.av || !["mute", "unmute", "pause", "resume"].includes(op)) return false;
-    ctlSeq++;
-    stateSet("presCtl", { id: deckId, seq: ctlSeq, bv: bk.rec.ver, to: bk.rec.idx, at: Date.now(), av: { op } });
-    bk.avAsk = { op, seq: ctlSeq, at: Date.now() };
-    T("av-intent", { id: deckId, who: op });
+    if (!bk || !["mute", "unmute", "pause", "resume"].includes(op)) return false;
+    const rec = bk.rec, co = Array.isArray(rec.ps) && rec.ps.length;
+    const tgt = to || rec.cur || rec.own || personOfPath(bk.path);
+    if (!co && !rec.av) return false;   // an older presenter without mic / camera control
+    const av = { op };
+    if (co) av.to = tgt;   // an older owner reads {op} as "mine"
+    const ctl = ctlSend({ id: deckId, bv: rec.ver, to: rec.idx, av });
+    bk.avAsk = bk.lastAsk = { op, seq: ctl.seq, at: Date.now(), to: co ? tgt : "" };
+    T("av-intent", { id: deckId, who: op, to: av.to || "" });
     return true;
   }
 
@@ -1811,15 +2406,20 @@
     background:rgba(0,0,0,.55); padding:1px 6px; border-radius:3px; pointer-events:none; }
   #presView .modebox .mwhy { grid-column:1 / -1; font-size:13px; color:#ffcf7a; min-height:0; }
   #presView .modebox .mwhy:empty { display:none; }
-  #presView .modebox .avrow { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; }
-  #presView .modebox .avrow:empty { display:none; }
-  #presView .modebox .avsw { display:inline-flex; flex-direction:row; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-size:13px; color:#e6edf3; margin:0; }
-  #presView .modebox .avsw input { display:inline-block; width:auto; height:auto; margin:0; flex:none; }
-  #presView .modebox .avnote { color:#8fd3ff; }
-  #presView .modebox .avwhy { color:#ffcf7a; flex-basis:100%; }
-  #presView .modebox .avwhy:empty { display:none; }
-  #presView .modebox .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
-  #presView .modebox .avrow button:disabled { opacity:.5; cursor:not-allowed; }
+  #presView .avrow { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; }
+  #presView .avrow:empty { display:none; }
+  #presView .avsw { display:inline-flex; flex-direction:row; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-size:13px; color:#e6edf3; margin:0; }
+  #presView .avsw input { display:inline-block; width:auto; height:auto; margin:0; flex:none; }
+  #presView .avnote { color:#8fd3ff; }
+  #presView .avwhy { color:#ffcf7a; flex-basis:100%; }
+  #presView .avwhy:empty { display:none; }
+  #presView .avrow button.off { background:#5c1d1d; border-color:#8a2b2b; }
+  #presView .avrow button:disabled { opacity:.5; cursor:not-allowed; }
+  #presView .avto { display:inline-flex; flex-wrap:wrap; gap:4px; align-items:center; flex-basis:100%; }
+  #presView .avto .avtol { color:#8aa0b5; font-size:12px; }
+  #presView .avto button { padding:2px 9px; font-size:12px; border-radius:999px; }
+  #presView .avto button.on { background:#0b5c86; border-color:#1592d1; }
+  #presView .avto button.no { opacity:.6; text-decoration:line-through; }
   #presView .modebox .rbgs { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; }
   #presView .modebox .rbgs button { padding:0; width:52px; height:30px; border-radius:4px; overflow:hidden; border:2px solid transparent; background:#000; }
   #presView .modebox .rbgs button img { width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; }
@@ -1842,10 +2442,11 @@
       <div class="pvwrap"><canvas class="pvcv"></canvas><span class="pvtag">What the room sees</span></div>
       <div class="rbgs" title="Reporter's backdrop -- everyone sees the same">${REPORTER_BGS.map((b) => `<button type="button" data-rbg="${b[0]}" title="${b[1]}"><img alt="" src="/assets/bg/${b[3]}" loading="lazy"></button>`).join("")}</div>
       <div class="mwhy"></div><div class="avrow"></div>`;
-    const side = root.querySelector(".side");
+    const side = root.querySelector(".pmode") || root.querySelector(".side");   // 0.21.91: in the "Presenter mode" panel
     if (!side) return;
     side.insertBefore(box, side.firstChild);
     mui = { box, pv: box.querySelector(".pvcv"), why: box.querySelector(".mwhy"), av: box.querySelector(".avrow"), btns: [...box.querySelectorAll(".modes button")], avSig: "", pvAt: 0, still: { key: "", bmp: null } };
+    { const pav = root.querySelector(".pav"); if (pav) pav.appendChild(mui.av); }   // 0.21.91: mic, camera + audience in their own panel
     for (const b of mui.btns) b.addEventListener("click", () => window.__pres.mode(b.dataset.mode));
     mui.rbgs = box.querySelector(".rbgs");
     for (const b of mui.rbgs.querySelectorAll("button")) b.addEventListener("click", () => window.__pres.reporterBg(b.dataset.rbg));
@@ -1858,34 +2459,39 @@
   function modeView() {
     const v = view.deck();
     if (!v) return null;
+    const me = myPerson();
     if (v.role === "presenter") {
       const s = mine.ms || {};
-      return { v, role: "presenter", cm: mine.cm, rbg: mine.rbg, eff: s.eff || "content", why: s.why, nocut: s.nocut, av: modeFields().av, cutOn: !!s.cut, rec: null };
+      return { v, role: "presenter", cm: mine.cm, rbg: mine.rbg, eff: s.eff || "content", why: s.why, nocut: s.nocut, cutOn: !!s.cut, rec: null,
+               cur: mine.cur, turn: mine.cur === me, cn: nameOfPerson(mine.cur), roomCam: { cam: s.cam, cut: s.cut } };
     }
     const bk = backstage.get(v.id);
     const rec = bk && bk.rec;
     if (!rec) return null;
     const opt = bk.optCm && Date.now() - bk.optCmAt < 1500 && rec.cm !== bk.optCm ? bk.optCm : null;
-    return { v, role: "backstage", cm: opt || rec.cm || "content", rbg: rec.rbg, eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", av: rec.av || null, cutOn: !!rec.cut, rec, bk, has: !!rec.cm };
+    const cur = rec.cur || rec.own || personOfPath(bk.path);
+    return { v, role: v.role, cm: opt || rec.cm || "content", rbg: rec.rbg, eff: modeOf(rec), why: rec.cwhy || "", nocut: rec.nocut || "", av: rec.av || null, cutOn: !!rec.cut, rec, bk, has: !!rec.cm,
+             cur, turn: v.role === "copresenter" && cur === me, cn: rec.cn || nameOfPerson(cur) };
   }
   function modeUiPaint() {
     if (!mui) return;
     const mv = modeView();
     mui.box.style.display = mv && (mv.role === "presenter" || mv.has) ? "" : "none";
     if (!mv) return;
-    mui.rbgs.style.display = mv.role === "presenter" && mv.cm === "reporter" ? "" : "none";   // Kenton: the presenter picks, shown in Reporter
+    const P = mv.role !== "backstage";
+    mui.rbgs.style.display = P && mv.cm === "reporter" ? "" : "none";   // Kenton: the presenters pick, shown in Reporter
     for (const b of mui.rbgs.children) b.classList.toggle("on", b.dataset.rbg === (mv.rbg || RBG_DEFAULT));
     for (const b of mui.btns) { b.classList.toggle("on", b.dataset.mode === mv.cm); b.classList.toggle("eff", b.dataset.mode === mv.eff && mv.eff !== mv.cm); }
-    const who = mv.role === "presenter" ? "" : nameOfPerson(personOfPath(mv.bk.path));
+    const who = mv.turn ? "" : mv.cn;   // 0.21.91: the presenter presenting now
     let why = "";
     if (mv.cm !== "content" && mv.eff === "content") {
-      if (mv.why === "bs") why = (mv.av && mv.av.nb ? "Video paused by " + nameOfPerson(mv.av.nb) : "Video paused by backstage") + " — showing the slide only";
-      else why = (mv.role === "presenter" ? "Camera off" : who + "'s camera is off") + " — showing the slide only";
+      if (mv.why === "bs") { const av = mv.turn ? modeFields().av : (mv.rec && mv.rec.av) || null; why = (av && av.nb ? "Video paused by " + nameOfPerson(av.nb) : "Video paused by backstage") + " — showing the slide only"; }
+      else why = (mv.turn ? "Camera off" : who + "'s camera is off") + " — showing the slide only";
     } else if (cutMode(mv.eff) && mv.nocut) {
-      why = (mv.role === "presenter" ? "Your camera cannot be cut out here (" + mv.nocut + ")" : who + "'s camera cannot be cut out") + " — the room sees it in a box";
+      why = (mv.turn ? "Your camera cannot be cut out here (" + mv.nocut + ")" : who + "'s camera cannot be cut out") + " — the room sees it in a box";
     }
     if (mui.why.textContent !== why) mui.why.textContent = why;
-    paintAvRow(mv, who);
+    paintAvRow(mv);
   }
   let noteT = 0;
   function presNote(msg, ms, level) {   // the presenter view's notice line while it is open (never on top of its controls), else a toast
@@ -1901,10 +2507,23 @@
     T("note", { who: level || "event" });
   }
   const ago = (at) => { const s = Math.max(0, Math.round((Date.now() - at) / 1000)); return s < 60 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
-  function paintAvRow(mv, who) {
-    const row = mui.av, av = mv.av || {};
-    if (mv.role === "presenter") {
-      const sig = "p|" + (mine.avOk ? 1 : 0) + "|" + (av.n || "") + "|" + Math.floor((Date.now() - (av.na || 0)) / 10000) + "|" + av.m + "|" + av.c;
+  // 0.21.91: a backstage person's mic / camera target -- the presenter presenting now unless they picked another
+  function avTargets(mv) {
+    const rec = mv.rec, me = myPerson();
+    const ps = Array.isArray(rec.ps) && rec.ps.length ? rec.ps.map((x) => x.p) : [rec.own || personOfPath(mv.bk.path)];
+    return ps.filter((p) => p !== me).map((p) => {
+      const co = coOf(p), old = !(Array.isArray(rec.ps) && rec.ps.length);
+      const av = co && co.id === rec.id ? co.av : old ? rec.av : null;
+      const ack = co && co.id === rec.id ? co.ack : old ? rec.ack : null;
+      const allowed = old ? !!(rec.av && rec.av.ok) : !!(co && co.id === rec.id && Array.isArray(co.al) && co.al.includes(me));
+      return { p, name: nameOfPerson(p), av, ack, allowed, here: hereNow(p) && (old || !!co) };
+    });
+  }
+  function paintAvRow(mv) {
+    const row = mui.av;
+    if (mv.role !== "backstage") {   // a presenter: MY mic + camera (each backstage person's control is a toggle on their row)
+      const av = modeFields().av || { m: self.ms.mic, c: self.ms.camSt, n: self.note ? self.note.t : "", na: self.note ? self.note.at : 0 };
+      const sig = "p|" + (av.n || "") + "|" + Math.floor((Date.now() - (av.na || 0)) / 10000) + "|" + av.m + "|" + av.c + "|" + avExtraSig();
       if (sig === mui.avSig) return;
       mui.avSig = sig;
       row.replaceChildren();
@@ -1917,46 +2536,63 @@
       pc.textContent = av.c === "on" ? "Camera on" : "Camera off"; pc.title = "Your camera (the same as Camera in the room's toolbar)";
       pc.addEventListener("click", tb("topCamBtn"));
       row.append(pm, pc);
-      const lab = document.createElement("label"); lab.className = "avsw"; lab.title = "Your backstage people can mute / unmute your mic and pause / resume your video (this presentation only)";
-      const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "avok"; cb.checked = !!mine.avOk;
-      cb.addEventListener("change", () => window.__pres.avSwitch(cb.checked));
-      lab.append(cb, document.createTextNode("Backstage can control my mic and camera"));
-      row.append(lab);
+      avExtra(row);
       if (av.n) { const n = document.createElement("span"); n.className = "avnote"; n.textContent = av.n + " · " + ago(av.na); row.append(n); }
       return;
     }
-    if (!mv.av) { if (mui.avSig !== "none") { mui.avSig = "none"; row.replaceChildren(); } return; }
-    const ask = mv.bk.avAsk && Date.now() - mv.bk.avAsk.at < 4000 ? mv.bk.avAsk : null;
-    const ack = mv.rec.ack && mv.rec.ack.p === myPerson() ? mv.rec.ack : null;
-    const lastAck = ack && mv.bk.avAsk && ack.s === mv.bk.avAsk.seq ? ack : null;
-    const sig = "b|" + JSON.stringify([av, ask && ask.seq, lastAck && [lastAck.s, lastAck.ok, lastAck.why], who]);
+    if (!mv.rec.av && !(Array.isArray(mv.rec.ps) && mv.rec.ps.length)) { if (mui.avSig !== "none") { mui.avSig = "none"; row.replaceChildren(); } return; }
+    const ts = avTargets(mv);
+    let to = mui.avTo && ts.some((t) => t.p === mui.avTo) ? mui.avTo : null;
+    if (!to) to = (ts.find((t) => t.p === mv.cur) || ts[0] || {}).p || "";
+    const t = ts.find((x) => x.p === to) || { name: "", av: null, allowed: false };
+    const av = t.av || {};
+    const ask = mv.bk.avAsk && Date.now() - mv.bk.avAsk.at < 4000 && (!mv.bk.avAsk.to || mv.bk.avAsk.to === to) ? mv.bk.avAsk : null;
+    const ack = t.ack && t.ack.p === myPerson() ? t.ack : null;
+    const lastAck = ack && mv.bk.lastAsk && ack.s === mv.bk.lastAsk.seq && (!mv.bk.lastAsk.to || mv.bk.lastAsk.to === to) ? ack : null;
+    const sig = "b|" + JSON.stringify([ts.map((x) => [x.p, x.allowed, x.here, x.av]), to, mv.cur, ask && ask.seq, lastAck && [lastAck.s, lastAck.ok, lastAck.why]]);
     if (sig === mui.avSig) return;
     mui.avSig = sig;
     row.replaceChildren();
-    const off = !av.ok, offWhy = who + " turned off backstage control of their mic and camera";
+    if (ts.length > 1) {   // whose mic / camera: the presenter presenting now first chosen
+      const pick = document.createElement("span"); pick.className = "avto";
+      const lab = document.createElement("span"); lab.className = "avtol"; lab.textContent = "Control:";
+      pick.append(lab);
+      for (const x of ts) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "avtob" + (x.p === to ? " on" : "") + (x.allowed ? "" : " no");
+        b.dataset.who = x.p;
+        b.textContent = x.name + (x.p === mv.cur ? " · now" : "");
+        b.title = x.allowed ? "Control " + x.name + "'s mic and camera" : x.name + " hasn't allowed you to control their mic and camera";
+        b.addEventListener("click", () => { mui.avTo = x.p; mui.avSig = ""; T("av-target", { who: x.p }); modeUiPaint(); });
+        pick.append(b);
+      }
+      row.append(pick);
+    }
+    const who = t.name, off = !t.allowed, offWhy = who + " hasn't allowed you to control their mic and camera";
     const mic = document.createElement("button"); mic.type = "button"; mic.className = "avmic";
     const micOn = av.m === "on";
-    mic.textContent = av.m === "none" ? "No microphone" : micOn ? "Mic on · Mute" : "Mic muted · Unmute";
+    mic.textContent = !t.av ? "Mic —" : av.m === "none" ? "No microphone" : micOn ? "Mic on · Mute" : "Mic muted · Unmute";
     mic.classList.toggle("off", av.m === "muted");
-    mic.disabled = off || av.m === "none" || (ask && /mute/.test(ask.op) && !lastAck);
+    mic.disabled = off || !t.av || av.m === "none" || (ask && /mute/.test(ask.op) && !lastAck);
     mic.title = off ? offWhy : av.m === "none" ? who + " has no microphone on" : micOn ? "Mute " + who + "'s microphone (straight away)" : "Unmute " + who + "'s microphone (straight away)";
-    mic.addEventListener("click", () => window.__pres.av(micOn ? "mute" : "unmute"));
+    mic.addEventListener("click", () => window.__pres.av(micOn ? "mute" : "unmute", to));
     const cam = document.createElement("button"); cam.type = "button"; cam.className = "avcam";
-    cam.textContent = av.c === "on" ? "Video on · Pause" : av.c === "paused" ? "Video paused · Resume" : "Camera off";
+    cam.textContent = !t.av ? "Video —" : av.c === "on" ? "Video on · Pause" : av.c === "paused" ? "Video paused · Resume" : "Camera off";
     cam.classList.toggle("off", av.c !== "on");
-    cam.disabled = off || av.c === "off" || (ask && /pause|resume/.test(ask.op) && !lastAck);
-    cam.title = off ? offWhy : av.c === "off" ? who + "'s camera is off" : av.c === "on" ? "Pause " + who + "'s video (the room sees the slide only)" : "Resume " + who + "'s video";
-    cam.addEventListener("click", () => window.__pres.av(av.c === "on" ? "pause" : "resume"));
+    cam.disabled = off || !t.av || av.c === "off" || (ask && /pause|resume/.test(ask.op) && !lastAck);
+    cam.title = off ? offWhy : av.c === "off" ? who + "'s camera is off" : av.c === "on" ? "Pause " + who + "'s video (the room sees the slide only while it is their turn)" : "Resume " + who + "'s video";
+    cam.addEventListener("click", () => window.__pres.av(av.c === "on" ? "pause" : "resume", to));
     row.append(mic, cam);
     const why = document.createElement("span"); why.className = "avwhy";
     why.textContent = off ? offWhy : lastAck && !lastAck.ok ? "Not done: " + lastAck.why : av.c === "off" ? who + "'s camera is off" : "";
     row.append(why);
   }
+  let avExtra = () => {}, avExtraSig = () => "";   // (audience mute: the switch + raised hands)
   // the preview: the same composition the room's tiles draw, small, ~12 a second, while the presenter view is open
   function modeUiFrame() {
     if (!mui || !view.isOpen()) return false;
     const mv = modeView();
     if (!mv || mui.box.style.display === "none") return false;
+    if (!mui.box.closest("details")?.open) { if (performance.now() - (mui.paintAt || 0) > 1000) { mui.paintAt = performance.now(); modeUiPaint(); } return true; }   // 0.21.91: no preview while its panel is closed
     const now = performance.now();
     if (now - (mui.paintAt || 0) > 1000) { mui.paintAt = now; modeUiPaint(); }   // the notice's age, backstage's buttons
     if (now - mui.pvAt < 80) return true;
@@ -1969,38 +2605,42 @@
       mui.still.key = key; mui.still.bmp = null;
       stillFor(v.id, v.idx).then((b) => { if (mui.still.key === key) mui.still.bmp = b; }).catch(() => {});
     }
-    drawLaid(cv, mui.still.bmp, v.blank, mv.eff, ar, "", mv.rbg);
+    drawLaid(cv, mui.still.bmp, roomBlank(mv), mv.eff, ar, "", mv.rbg);
     const g = cv.getContext("2d");
     // the slide's video in its spot (moved with the slide)
     let items = [];
-    if (!v.blank) {
+    if (!roomBlank(mv)) {
       if (mv.role === "presenter") items = [...mine.vids.values()].filter((e) => e.i === mine.idx && e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
       else if (mv.rec.idx === v.idx) items = (mv.rec.vids || []).filter((x) => x.i === mv.rec.idx && x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
     }
     if (items.length) { const R = presLayout(mv.eff, W, H, ar, 16 / 9, true).slide; for (const it of items) if (it.src) { try { g.drawImage(it.src, R.x + it.x * R.w, R.y + it.y * R.h, it.w * R.w, it.h * R.h); } catch {} } }
     if (mv.eff !== "content") {
       let src = null;
-      if (mv.role === "presenter") {
+      if (mv.turn) {   // it is MY turn: my own picture, straight from this page
         const P = window.__presCut;
-        const p = cutMode(mv.eff) && mv.cutOn ? P?.person?.() : null;
+        const p = cutMode(mv.eff) && self.ms.cut ? P?.person?.() : null;
         if (p) src = { kind: "cut", img: p.img, ar: p.ar, mirror: p.mirror };
         else { const vid = P?.camVideo?.(); if (vid) src = { kind: "box", img: vid, iw: vid.videoWidth, ih: vid.videoHeight, ar: vid.videoWidth / vid.videoHeight }; }
-      } else src = camSourceFor(mv.rec, mv.eff);
+      } else src = camSourceFor(mv.rec || mv.roomCam, mv.eff);   // another presenter's: what the room gets
       const L = presLayout(mv.eff, W, H, ar, src ? src.ar : 16 / 9, !!(src && src.kind === "cut"));
-      if (drawCam(g, L, src, W, H, "Camera starting…") && mui.pvKey !== key + "/" + mv.eff) { mui.pvKey = key + "/" + mv.eff; T("pv-paint", { id: v.id, who: mv.role, mode: mv.eff, kind: src && src.kind }); }
+      const n = drawCam(g, L, src, W, H, "Camera starting…");
+      if (n && multiPres(mv.rec || mine)) drawTag(g, L, mv.cn, W, H);
+      if (n && mui.pvKey !== key + "/" + mv.eff + "/" + mv.cur) { mui.pvKey = key + "/" + mv.eff + "/" + mv.cur; T("pv-paint", { id: v.id, who: mv.role, mode: mv.eff, kind: src && src.kind, cur: mv.cur }); }
     }
     return true;
   }
+  let roomBlank = (mv) => mv.v.blank;   // (blackout: what the ROOM sees)
   function modeState() {
     const m = mine;
     return {
-      mine: m && m.ms ? { cm: m.cm, eff: m.ms.eff, cam: m.ms.cam, cut: m.ms.cut, nocut: m.ms.nocut, why: m.ms.why, mic: m.ms.mic, camSt: m.ms.camSt, avOk: m.avOk, avBp: m.avBp,
-                          note: m.avNote, ack: m.ack, cutState: (() => { try { return window.__presCut?.state?.() || null; } catch { return null; } })() } : null,
+      mine: m && m.ms ? { cm: m.cm, eff: m.ms.eff, cam: m.ms.cam, cut: m.ms.cut, nocut: m.ms.nocut, why: m.ms.why, mic: self.ms.mic, camSt: self.ms.camSt, avOk: self.al.size > 0, avBp: self.bp,
+                          note: self.note, ack: self.ack, cur: m.cur, og: m.og, cutState: (() => { try { return window.__presCut?.state?.() || null; } catch { return null; } })() } : null,
+      self: { id: self.id, al: [...self.al], turn: !!self.ms.turn, cam: self.ms.cam, cut: self.ms.cut, live: self.ms.live, cutOn: self.ms.cutOn, bp: self.bp, ack: self.ack, note: self.note },   // 0.21.91
       tiles: [...overlays.entries()].map(([p, o]) => ({ path: p, mode: modeOf(o.rec), cm: o.rec.cm || null, rbg: o.rec.rbg || null, rbgLoaded: !!(o.rec.rbg && rbgImgs.get(o.rec.rbg)?.ok), cam: o.rec.cam || "", cut: o.rec.cut || "", kind: o.camKind || "", n: o.camN || 0,
-                                                        av: o.rec.av || null, ack: o.rec.ack || null })),
+                                                        av: o.rec.av || null, ack: o.rec.ack || null, cur: o.rec.cur || "", cn: o.rec.cn || "", tag: o.tagged || "" })),
       hide: hideSig ? hideSig.split("|") : [], cuts: cutSig ? cutSig.split("|") : [], unpacked: unp && !unp.failed ? unp.n : 0,
       ui: mui ? { shown: mui.box.style.display !== "none", on: (mui.btns.find((b) => b.classList.contains("on")) || {}).dataset?.mode || "", why: mui.why.textContent,
-                  av: mui.av.textContent, buttons: [...mui.av.querySelectorAll("button")].map((b) => ({ c: b.className, t: b.textContent, d: b.disabled, title: b.title })) } : null,
+                  av: mui.av.textContent, avTo: mui.avTo || "", buttons: [...mui.av.querySelectorAll("button")].map((b) => ({ c: b.className, t: b.textContent, d: b.disabled, title: b.title })) } : null,
     };
   }
 
@@ -2016,18 +2656,377 @@
   setInterval(() => {
     try { syncOverlays(); } catch {}
     try { if (mine) rewrap(); } catch {}
-    if (mine) {   // the presentation belongs to its room and its share: leaving either ends it
+    if (mine) {   // the presentation belongs to its room and its share: leaving either ends it (0.21.91: or hands it over)
       const c = ctx();
-      if (!c || !c.joined || c.channel !== mine.room) { endMine("left the room"); toast("The presentation ended (you left the room).", 5000); }
+      if (!c || !c.joined || c.channel !== mine.room) { const kept = leaveMine("left the room"); toast(kept ? "You left the room — the presentation goes on with the other presenters." : "The presentation ended (you left the room).", 5000); }
       else if (mine.share && mine.share.id != null && window.__presShare && window.__presShare.alive && !window.__presShare.alive(mine.share.id)) { endMine("share stopped"); toast("The presentation ended (its share was stopped).", 5000); }
     }
+    try { ownership(); } catch (e) { console.warn("KASTR pres: hand-over", e); }
   }, 700);
+  // ---- 0.21.91: the OWNER role passes on ----------------------------------------------------------------------------------------
+  // Kenton: "Work out ... what happens to the deck if the MAIN presenter leaves or drops while added presenters remain." The deck is
+  // the store's (encrypted, on the relay host) plus the record one page publishes. Every added presenter holds K (every slide and
+  // the notes, through the read token) and the store's write token, so any of them can publish the record, tell the store the
+  // live slide and share it. When the owner's record is gone -- it handed the deck over (presCo.rel: at once), or it vanished AND the
+  // owner left the room's presence (a drop: after the room's grace) -- plus 2 s for each present presenter before me in the list,
+  // and the owner did not END it (presCo.end; the store still serves the deck), the first present presenter publishes
+  // the same deck id with og + 1: the same slide, mode, people and presenter presenting now. A returning old owner (a network blip)
+  // sees a record of its deck with a higher og and steps down to a co-presenter. Nothing new reaches viewers: the record carries
+  // the live slide's key only, as before. A handed-over deck has no slide videos (the files were only on the first owner's page).
+  function ownership() {
+    const me = myPerson();
+    if (mine) {   // a newer owner of my deck (I was away): I step down
+      for (const r of remote.values()) {
+        const rec = r.pres;
+        if (rec && rec.id === mine.id && recBetter(rec, { og: mine.og, own: me })) { T("demote", { id: mine.id, og: rec.og, who: rec.own }); endMine("a newer owner", true); presNote("“" + rec.name + "” is now run from " + nameOfPerson(rec.own) + "'s KASTR — you are still a presenter.", 8000, "event"); schedule(); break; }
+      }
+      return;
+    }
+    const now = Date.now();
+    for (const bk of backstage.values()) {
+      if (!bk.orphan || bk.adopting || bk.ended || !bk.pr || !bk.K || !bk.wt || !bk.rec) continue;
+      const rec = bk.rec;
+      const order = (rec.ps || []).map((x) => x.p).filter((p) => p !== rec.own && (p === me || (canCo(p) && hereNow(p))));
+      const rank = order.indexOf(me);
+      if (rank < 0) continue;
+      // the owner handed it over (left on purpose): at once; else only once the owner is gone from the room's PRESENCE too
+      // (a gap in its room.json alone -- a re-subscribe -- never moves the deck)
+      const released = relSeen.has(rec.id);
+      if (!released && inPresence(rec.own)) continue;
+      if (now - (bk.seenAt || 0) < (released ? 300 : HANDOVER_MS) + rank * 2000) continue;
+      bk.adopting = true;
+      adopt(bk).catch((e) => console.warn("KASTR pres: take over", e)).finally(() => { bk.adopting = false; });
+    }
+  }
+  async function adopt(bk) {
+    const rec = bk.rec, me = myPerson(), c = ctx();
+    if (mine || !c || !c.joined) return;
+    const t0 = Date.now();
+    let r = null;
+    try { r = await fetch(baseFor(rec) + "/api/pres/" + rec.id + "/notes.bin?rt=" + encodeURIComponent(bk.rt || ""), { cache: "no-store" }); } catch { return; }   // the relay host away: try again
+    if (r.status === 404 || r.status === 403) { bk.ended = true; backstage.delete(rec.id); T("bs-gone", { id: rec.id, why: "store" }); view.paint(); return; }   // ended
+    if (!r.ok) return;
+    if (backstage.get(rec.id) !== bk || !bk.orphan || mine) return;   // the record came back meanwhile (or someone else took it)
+    for (const x of remote.values()) if (x.pres && x.pres.id === rec.id) return;
+    const meK = await myKeys();
+    const base = rec.base;
+    const idx = clampI(rec.idx, rec.n);
+    let lr = null;
+    try { lr = await fetch(base + "/api/pres/" + rec.id + "/live?token=" + encodeURIComponent(bk.wt) + "&i=" + idx, { method: "POST" }); } catch {}
+    if (!lr || !lr.ok) { T("adopt-fail", { id: rec.id, why: lr ? lr.status : "net" }); return; }
+    if (mine || backstage.get(rec.id) !== bk) return;
+    const m = {
+      id: rec.id, token: bk.wt, rtEnc: rec.rt || "", rt: bk.rt || "", liveIdx: idx, liveChain: Promise.resolve(), via: "handed over", base, room: c.channel, name: rec.name, kind: rec.kind,
+      n: rec.n, ar: Number(rec.ar) || 16 / 9, src: null, adopted: true, K: bk.K, keys: bk.keys, notesKey: bk.notesKey, notes: (bk.notes || []).slice(), nv: Number(rec.nv) || 1,
+      blobs: new Array(rec.n).fill(null), up: new Array(rec.n).fill(true), busy: [], rendering: null, want: [],
+      idx, ver: (Number(rec.ver) || 1) + 1, by: me, blank: rec.blank || null, t0: rec.t0, bs: new Map(), lastSeq: new Map(), share: null, pk: meK.pub,
+      warnings: [], startedMs: 0, pubSeq: 0, told: 0, vids: new Map(),
+      ps: (rec.ps || []).map((x) => ({ p: x.p, name: x.n || nameOfPerson(x.p), w: "", t: "", pkUsed: "" })), og: (Number(rec.og) || 1) + 1,
+      cur: rec.cur && rec.cur !== rec.own && hereNow(rec.cur) ? rec.cur : me,
+    };
+    for (const b of rec.bs || []) if (b && b.p) m.bs.set(b.p, { name: b.n || nameOfPerson(b.p), w: "", pkUsed: "" });
+    if (!m.ps.some((x) => x.p === me)) m.ps.push({ p: me, name: nameOfPerson(me), w: "", t: "", pkUsed: "" });
+    for (const [p, x] of remote) if (x.ctl) {   // the requests already made were for the old owner: not again
+      const who = personOfPath(p);
+      for (const o of ctlOps(x.ctl)) if (o.id === m.id) m.lastSeq.set(who, Math.max(m.lastSeq.get(who) || 0, o.seq));
+    }
+    m.cm = modeOk(rec.cm) ? rec.cm : "content";
+    m.rbg = rbgOk(rec.rbg) ? rec.rbg : RBG_DEFAULT;
+    m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", sig: "" };
+    adoptExtra(m, rec);
+    backstage.delete(rec.id);
+    mine = m;
+    T("adopt", { id: m.id, og: m.og, from: rec.own, ms: Date.now() - t0, gone: Date.now() - (bk.seenAt || 0) });
+    modeTick();
+    startShare();
+    publish();
+    rewrap();
+    presNote(nameOfPerson(rec.own) + " left — “" + m.name + "” now runs from your KASTR. The room still sees slide " + (idx + 1) + ".", 9000, "event");
+    view.paint();
+  }
+  let adoptExtra = () => {};   // (audience mute)
   window.addEventListener("resize", () => { for (const o of overlays.values()) o.key = ""; schedule(); });
+
+  // ---- 0.21.91: AUDIENCE MUTE ----------------------------------------------------------------------------------------------------
+  // Kenton: "By default when presenting, everyone else should be muted and not able to unmute themselves unless they are added as a
+  // presenter." Decided: only PRESENTERS talk while a presentation is live -- the audience AND backstage are muted and cannot
+  // unmute (backstage still runs slides, notes and mic / camera control). The record carries it, so late joiners obey:
+  //   am  1 = "Audience muted" (ON when a presentation starts; any presenter turns it off for Q&A and back on)
+  //   lt  the people a presenter let talk (a raised hand -> "Let <name> talk"): they MAY unmute (never forced) until they lower
+  //       their hand / Done, a presenter mutes them again, or the presentation ends
+  //   hx  [[person, hand at]]: hands a presenter dismissed (or took the talk back from) -- that page lowers its hand
+  // A raised hand is one small field on the asker's own page: presCo.hand {id, at} (at most one change a second and a half).
+  // Enforced on BOTH sides: (a) my own page mutes its mic through the real path (__presAV.mic -> micMuted + sendControl +
+  // renderMine) and the page refuses to unmute it (the Mic button, the microphone's own mute key, a control message); (b) EVERY
+  // 0.21.91 page plays a PERSON'S MIC at gain 0 (its volume path -- the warm floor, never `muted`, never a disconnect) unless that
+  // person may talk now, so an older KASTR or a modified page that ignores the lock is not heard here. A person's mic = the audio
+  // of a person's camera stream in my room: <room>/<host>/<op>/camera(-n).hang of a page that is not a box (publisher / relay
+  // mode). Boxes, RTSP cameras, media files, screen shares, slide videos and sound clips keep their sound.
+  const talk = { locked: "", was: null, unlockMic: null, active: false, allowed: new Set(), boxes: new Set(), sig: "", handAt: 0, lastHand: 0, freeBy: "" };
+  let handState = null;   // my raised hand {id, at}
+  coExtra = () => (handState ? { hand: handState } : {});
+  function liveDecks() {   // every presentation live in my room, as its record says (mine first)
+    const out = [];
+    if (mine) out.push({ id: mine.id, am: mine.am ? 1 : 0, own: myPerson(), ps: mine.ps.map((x) => x.p), lt: [...(mine.lt || [])], hx: [...(mine.hx || new Map())], cn: nameOfPerson(mine.cur) });
+    for (const { rec } of deckRecs().values()) {
+      if (mine && rec.id === mine.id) continue;
+      out.push({ id: rec.id, am: Number(rec.am) ? 1 : 0, own: rec.own || "", ps: Array.isArray(rec.ps) ? rec.ps.map((x) => x.p) : [], lt: Array.isArray(rec.lt) ? rec.lt.map(String) : [],
+                 hx: Array.isArray(rec.hx) ? rec.hx : [], cn: rec.cn || nameOfPerson(rec.own || "") , old: !Array.isArray(rec.ps) });
+    }
+    return out;
+  }
+  const mayTalk = (d, who) => !d.am || who === d.own || d.ps.includes(who) || d.lt.includes(who);
+  function lockReason(ds) {
+    const me = myPerson();
+    for (const d of ds) if (!d.old && d.am && !mayTalk(d, me)) return "Muted while " + d.cn + " presents";
+    return "";
+  }
+  const PERSON_CAM = /^camera(-\d+)?\.hang$/;
+  function silent(path) {   // a person's mic that may not be heard now (this page plays it at gain 0)
+    if (!talk.active) return false;
+    const p = String(path || "").split("/");
+    if (p.length !== 4 || !PERSON_CAM.test(p[3])) return false;
+    const c = ctx();
+    if (!c || p[0] !== c.channel) return false;
+    const key = (p[1] + "/" + p[2]).toLowerCase();
+    return !talk.allowed.has(key) && !talk.boxes.has(key);
+  }
+  function talkTick() {
+    const ds = liveDecks().filter((d) => !d.old);
+    const me = myPerson();
+    // who may be heard: in every deck with the audience muted, its presenters + the people let talk (and boxes, always)
+    const muting = ds.filter((d) => d.am);
+    const allowed = new Set();
+    for (const d of muting) for (const p of [d.own, ...d.ps, ...d.lt]) if (p) allowed.add(String(p).toLowerCase());
+    const boxes = new Set();
+    for (const p of (ctx()?.people || [])) if (/^(publisher|publisher-relay|relay)$/.test(p.mode)) boxes.add((p.host + "/" + (p.op || p.peer)).toLowerCase());
+    // a deck where I am the audience but let talk does not lock me -- yet another deck with its audience muted does
+    const lk = lockReason(muting);
+    const AV = window.__presAV;
+    let st = null; try { st = AV?.state?.() || null; } catch {}
+    const micOn = !!(st && st.mic === "on");
+    let changed = false;
+    if (lk) {
+      if (!talk.locked) { talk.locked = lk; if (talk.was === null) talk.was = micOn; changed = true; T("talk-lock", { who: lk }); }
+      else if (talk.locked !== lk) { talk.locked = lk; changed = true; }
+      if (micOn) { try { AV.mic(true); } catch {} T("talk-mute", { who: me }); }   // the real path: micMuted + sendControl + renderMine
+    } else if (talk.locked) {
+      talk.locked = ""; talk.unlockMic = micOn; changed = true; T("talk-free", { who: me });
+    }
+    if (!lk && talk.was !== null && ds.length && talk.unlockMic !== null && micOn !== talk.unlockMic) talk.was = null;   // they took the mic themselves
+    if (!ds.length && talk.was !== null) {   // the presentation is over: my mic as it was before it
+      const was = talk.was;
+      talk.was = null; talk.unlockMic = null;
+      if (was && !micOn) { try { AV?.mic(false); } catch {} }
+      T("talk-restore", { who: was ? "on" : "off" });
+      changed = true;
+    }
+    // my hand: lowered when the deck is gone, the audience is not muted any more, or a presenter dismissed it / took the talk back
+    if (handState) {
+      const d = ds.find((x) => x.id === handState.id);
+      const dismissed = d && d.hx.some((h) => Array.isArray(h) && h[0] === me && Number(h[1]) === handState.at);
+      if (!d || !d.am || dismissed) { if (dismissed) toast("A presenter lowered your hand.", 5000); handState = null; T("hand-down", { why: !d ? "gone" : !d.am ? "unmuted" : "dismissed" }); changed = true; coPublish(); }
+    }
+    const sig = JSON.stringify([!!muting.length, [...allowed].sort(), [...boxes].sort(), talk.locked]);
+    if (sig !== talk.sig) { talk.sig = sig; talk.active = !!muting.length; talk.allowed = allowed; talk.boxes = boxes; changed = true; }
+    if (changed) { try { window.__presTalkChanged?.(); } catch {} paintTalkPill(); try { view.paint(); } catch {} }
+    else paintTalkPill();
+  }
+  setInterval(() => { try { talkTick(); } catch (e) { console.warn("KASTR pres: audience", e); } }, 300);
+  function raiseHand(on) {   // the audience's "Ask to speak" / Lower hand / Done
+    const now = Date.now();
+    if (now - talk.lastHand < 1500) return false;   // cheap: at most one change a second and a half
+    const d = liveDecks().find((x) => !x.old && x.am && !mayTalk(x, myPerson())) || (handState && liveDecks().find((x) => x.id === handState.id));
+    if (on) { if (!d || handState) return false; handState = { id: d.id, at: now }; }
+    else { if (!handState) return false; handState = null; }
+    talk.lastHand = now;
+    T(on ? "hand-up" : "hand-down", { id: d && d.id, why: "me" });
+    ensurePk(); coPublish(); paintTalkPill();
+    return true;
+  }
+  // the owner page: the switch, the hands, who may talk
+  function audienceInit(m) { m.am = 1; m.lt = new Set(); m.hx = new Map(); }
+  function audFields() { const m = mine; return m && m.lt ? { am: m.am ? 1 : 0, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {}; }
+  function handOf(p) { const co = coOf(p); return co && co.hand && mine && co.hand.id === mine.id ? Number(co.hand.at) || 0 : 0; }
+  function setAm(v, by) {
+    const m = mine;
+    if (!m || !m.lt) return false;
+    const nv = v ? 1 : 0;
+    if (m.am === nv) return true;
+    m.am = nv;
+    if (nv) m.lt.clear();   // muted again: whoever was let talk asks again
+    T("am", { id: m.id, who: nv ? "on" : "off", by: by || myPerson() });
+    publish(); modeTick(); talkTick(); view.paint();
+    return true;
+  }
+  function setTalk(p, v, by) {   // "Let <name> talk" (v) / "Dismiss" or "Mute again" (!v)
+    const m = mine;
+    if (!m || !m.lt || typeof p !== "string" || !p) return false;
+    if (v) { if (!handOf(p)) return false; m.lt.add(p); m.hx.delete(p); }
+    else { m.lt.delete(p); const at = handOf(p); if (at) m.hx.set(p, at); }
+    T(v ? "let-talk" : "no-talk", { id: m.id, who: p, by: by || myPerson() });
+    publish(); talkTick(); view.paint();
+    return true;
+  }
+  audienceOp = (pp, who) => {   // a co-presenter's request (presOp)
+    if (pp.op === "am") return setAm(!!pp.v, who) || true;
+    if (pp.op === "lt") return setTalk(String(pp.p || ""), !!pp.v, who) || true;
+    return false;
+  };
+  adoptExtra = (m, rec) => { m.am = rec.am === undefined ? 1 : Number(rec.am) ? 1 : 0; m.lt = new Set(Array.isArray(rec.lt) ? rec.lt.map(String) : []); m.hx = new Map(Array.isArray(rec.hx) ? rec.hx.filter((h) => Array.isArray(h)).map((h) => [String(h[0]), Number(h[1]) || 0]) : []); };
+  function audiencePrune() {   // the owner: someone let talk lowered their hand (Done) -> no longer let talk
+    const m = mine;
+    if (!m || !m.lt) return;
+    let ch = false;
+    for (const p of [...m.lt]) if (!handOf(p)) { m.lt.delete(p); ch = true; T("talk-done", { id: m.id, who: p }); }
+    for (const [p, at] of [...m.hx]) if (handOf(p) !== at && Date.now() - at > 600000) { m.hx.delete(p); ch = true; }
+    if (ch) { publish(); talkTick(); view.paint(); }
+  }
+  setInterval(() => { try { audiencePrune(); } catch {} }, 700);
+  function hands(deckId) {   // the raised hands in the room for this deck: [{p, name, at, talking}]
+    const out = [];
+    const d = liveDecks().find((x) => x.id === deckId);
+    if (!d) return out;
+    for (const [path, r] of remote) {
+      const h = r.co && r.co.hand;
+      if (!h || h.id !== deckId) continue;
+      const p = personOfPath(path);
+      if (d.hx.some((x) => Array.isArray(x) && x[0] === p && Number(x[1]) === Number(h.at))) continue;
+      out.push({ p, name: nameOfPerson(p), at: Number(h.at) || 0, talking: d.lt.includes(p) });
+    }
+    return out.sort((a, b) => a.at - b.at);
+  }
+  function panelAvInfo(v) {   // 0.21.91 layout: the "Mic, camera & audience" panel's one line; raised hands need attention
+    if (!v) return { text: "", attn: false };
+    const d = liveDecks().find((x) => x.id === v.id);
+    const hs = d && d.am ? hands(v.id).filter((h) => !h.talking) : [];
+    const parts = [];
+    if (v.role !== "backstage") parts.push(self.ms.mic === "on" ? "Mic on" : self.ms.mic === "muted" ? "Mic muted" : "No mic");
+    if (d && !d.old) parts.push(d.am ? "Audience muted" : "Audience may talk");
+    if (hs.length) parts.push(hs.length + (hs.length === 1 ? " hand up" : " hands up"));
+    if (v.role === "backstage" && talk.locked) parts.push("you are muted");
+    return { text: parts.join(" · "), attn: hs.length > 0 && v.role !== "backstage" };
+  }
+  function amAct(v) {   // the presenter view's "Audience muted" switch (owner: directly; an added presenter: asks the owner)
+    const v0 = view.deck();
+    if (!v0) return false;
+    if (v0.role === "presenter") return setAm(v, myPerson());
+    if (v0.role === "copresenter") return sendPresOp(v0.id, { op: "am", v: v ? 1 : 0 });
+    return false;
+  }
+  function talkAct(p, v) {
+    const v0 = view.deck();
+    if (!v0) return false;
+    if (v0.role === "presenter") return setTalk(p, v, myPerson());
+    if (v0.role === "copresenter") return sendPresOp(v0.id, { op: "lt", p, v: v ? 1 : 0 });
+    return false;
+  }
+  avExtraSig = () => {
+    const v = view.deck();
+    if (!v) return "";
+    const d = liveDecks().find((x) => x.id === v.id);
+    return JSON.stringify([d && d.am, hands(v.id).map((h) => [h.p, h.talking])]);
+  };
+  avExtra = (row) => {   // the presenters: "Audience muted" + the raised hands
+    const v = view.deck();
+    const d = v && liveDecks().find((x) => x.id === v.id);
+    if (!d || d.old) return;
+    const box = document.createElement("div"); box.className = "audbox";
+    const lab = document.createElement("label"); lab.className = "avsw audsw";
+    lab.title = "On: only the presenters can talk -- everyone else is muted and cannot unmute (they can ask to speak). Off: everyone may unmute themselves (Q&A).";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "amsw"; cb.checked = !!d.am;
+    cb.addEventListener("change", () => amAct(cb.checked));
+    lab.append(cb, document.createTextNode("Audience muted"));
+    box.append(lab);
+    const hs = hands(v.id);
+    if (d.am && hs.length) {
+      const list = document.createElement("div"); list.className = "hands";
+      for (const h of hs) {
+        const r = document.createElement("div"); r.className = "hand" + (h.talking ? " talking" : ""); r.dataset.who = h.p;
+        const n = document.createElement("span"); n.className = "hn"; n.textContent = (h.talking ? "Talking: " : "Hand up: ") + h.name;
+        r.append(n);
+        if (!h.talking) {
+          const a = document.createElement("button"); a.type = "button"; a.className = "letb"; a.textContent = "Let " + String(h.name).split(/\s+/)[0] + " talk";
+          a.title = h.name + " may unmute until they click Done, you mute them again, or the presentation ends";
+          a.addEventListener("click", () => talkAct(h.p, true));
+          const x = document.createElement("button"); x.type = "button"; x.className = "disb"; x.textContent = "Dismiss";
+          x.addEventListener("click", () => talkAct(h.p, false));
+          r.append(a, x);
+        } else {
+          const x = document.createElement("button"); x.type = "button"; x.className = "disb"; x.textContent = "Mute again";
+          x.addEventListener("click", () => talkAct(h.p, false));
+          r.append(x);
+        }
+        list.append(r);
+      }
+      box.append(list);
+    } else if (d.am) {
+      const n = document.createElement("span"); n.className = "hn none"; n.textContent = "No hands raised";
+      box.append(n);
+    }
+    row.append(box);
+  };
+  // the audience's pill: the lock, Ask to speak / Lower hand, "you may talk" / Done
+  let talkPill = null;
+  function paintTalkPill() {
+    const ds = liveDecks().filter((x) => !x.old);
+    const me = myPerson();
+    const d = handState ? ds.find((x) => x.id === handState.id) : null;
+    const letMe = d && d.am && d.lt.includes(me);
+    const show = !!talk.locked || !!handState;
+    if (!talkPill) {
+      if (!show) return;
+      talkPill = document.createElement("div"); talkPill.id = "presTalk"; talkPill.setAttribute("role", "status");
+      talkPill.innerHTML = '<span class="tt"></span><button type="button" class="tb"></button>';
+      talkPill.querySelector(".tb").addEventListener("click", () => raiseHand(!handState));
+      document.body.appendChild(talkPill);
+    }
+    talkPill.classList.toggle("show", show);
+    if (!show) return;
+    const txt = letMe ? "You may talk now — unmute when you are ready" : talk.locked + (handState ? " · your hand is up" : "");
+    const b = letMe ? "Done" : handState ? "Lower hand" : "Ask to speak";
+    const t = talkPill.querySelector(".tt"), bb = talkPill.querySelector(".tb");
+    if (t.textContent !== txt) t.textContent = txt;
+    if (bb.textContent !== b) bb.textContent = b;
+    bb.title = letMe ? "Lower your hand -- you are muted again" : handState ? "Lower your hand" : "Raise your hand: the presenters can let you talk";
+    talkPill.classList.toggle("free", !!letMe);
+    talkPill.classList.toggle("withpill", !!document.querySelector("#presPill.show"));
+  }
+  const TALK_CSS = `
+  #presTalk { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:84; display:none; gap:10px; align-items:center;
+    background:#2a1414; color:#ffd7d7; border:1px solid #6b2a2a; border-radius:999px; padding:5px 6px 5px 14px; font:13px 'Segoe UI', system-ui, sans-serif;
+    box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
+  #presTalk.show { display:flex; }
+  #presTalk.free { background:#0f2a1a; color:#c8f5d8; border-color:#2a6b45; }
+  #presTalk .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #presTalk button { background:#0b5c86; color:#fff; border:0; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
+  #presView .audbox { flex-basis:100%; display:flex; flex-direction:column; gap:6px; border-top:1px solid #1f2a36; padding-top:6px; }
+  #presView .hands { display:grid; gap:4px; }
+  #presView .hand { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:3px 6px; border-radius:6px; background:#2a2110; color:#ffcf7a; }
+  #presView .hand.talking { background:#0f2a1a; color:#c8f5d8; }
+  #presView .hand .hn { flex:1; min-width:90px; }
+  #presView .hn.none { color:#6b7d8f; font-size:12px; }
+  #presView .hand button { padding:2px 8px; font-size:12px; }
+  body:has(#presView.show) #presTalk { top:6px; bottom:auto; z-index:86; padding:3px 4px 3px 12px; font-size:12px; max-width:min(560px, 46vw); }   /* in the presenter view: in its top bar, over nothing */
+  body:has(#presView.show) #presTalk button { padding:3px 10px; }
+  #topMicBtn.talklock { position:relative; }
+  #topMicBtn .tlk { position:absolute; top:3px; right:5px; display:inline-flex; color:#f5b942; pointer-events:none; }
+  #topMicBtn .tlk svg, #topMicBtn .tlk .icon { width:12px; height:12px; }`;
+  (() => { const st = document.createElement("style"); st.id = "presTalkCss"; st.textContent = TALK_CSS; document.head.appendChild(st); })();
+  modeSigExtra = () => JSON.stringify(audFields());
+  window.__presTalk = {
+    lock: () => talk.locked,                 // "" or why my mic is locked ("Muted while Ada presents")
+    silent: (path) => silent(path),          // a person's mic that may not be heard here now (gain 0)
+    hand: (on) => raiseHand(on !== false),   // rig + the pill
+    state: () => ({ locked: talk.locked, was: talk.was, active: talk.active, allowed: [...talk.allowed], boxes: [...talk.boxes], hand: handState,
+                    decks: liveDecks().map((d) => ({ id: d.id, am: d.am, lt: d.lt, hx: d.hx, old: !!d.old })) }),
+  };
 
   window.__pres = {
     startFromFile,
     end: () => endMine("api"),
-    go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson(), null); else sendIntent(v.id, i, null); return true; },   // a viewer has no deck here: false
+    go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i); return true; },   // a viewer has no deck here: false (0.21.91: the blank stays)
+    blank: (kind) => { const v = view.deck(); if (!v) return false; const nb = kind === "black" || kind === "white" ? kind : null; if (v.role === "presenter") goTo(v.idx, myPerson(), nb); else sendIntent(v.id, v.idx, nb); return true; },   // 0.21.91 rig
     next: () => { const v = view.deck(); if (v) window.__pres.go(v.idx + 1); },
     back: () => { const v = view.deck(); if (v) window.__pres.go(v.idx - 1); },
     setBackstage,
@@ -2053,21 +3052,30 @@
       const bk = [...backstage.values()].find((b) => b.keys);
       return bk ? sendModeIntent(bk.rec.id, cm) : false;
     },
-    av: (op) => { if (mine) return false; const bk = [...backstage.values()].find((b) => b.keys); return bk ? sendAvIntent(bk.rec.id, op) : false; },
-    avSwitch: (on) => { if (!mine || !mine.ms) return false; mine.avOk = !!on; T("av-switch", { id: mine.id, who: on ? "on" : "off" }); modeTick(); return true; },
-    reporterBg: (id) => { if (!mine || !mine.ms || !rbgOk(id)) return false; mine.rbg = id; T("rbg", { id: mine.id, who: id }); modeTick(); return true; },   // the presenter only
+    av: (op, to) => { const bk = [...backstage.values()].find((b) => b.keys && !b.pr); return bk ? sendAvIntent(bk.rec.id, op, to) : false; },   // 0.21.91: to = which presenter (default: presenting now)
+    // 0.21.91: my own "Can control my mic and camera" for one backstage person (each presenter decides for themselves)
+    allow: (who, on) => { const v = view.deck(); return v && v.role !== "backstage" ? view.allow(who, on) : false; },
+    reporterBg: (id) => {   // the presenters
+      if (!rbgOk(id)) return false;
+      if (mine && mine.ms) { mine.rbg = id; T("rbg", { id: mine.id, who: id }); modeTick(); return true; }
+      const bk = [...backstage.values()].find((b) => b.keys && b.pr);
+      return bk ? sendPresOp(bk.rec.id, { op: "rbg", v: id }) : false;
+    },
+    role: (who, r) => view.role(who, r), now: (who) => view.now(who), people: () => view.people(), picker: (k) => view.picker(k),   // 0.21.91
+    endAll: () => view.end(),
     reporterBgs: () => REPORTER_BGS.map((b) => b[0]),
     modes: () => modeState(),
     layout: presLayout,   // rig: the geometry alone
     trace,
     state: () => ({
       me: myPerson(),
-      mine: mine ? { id: mine.id, name: mine.name, kind: mine.kind, via: mine.via, n: mine.n, idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank,
+      mine: mine ? { id: mine.id, name: mine.name, kind: mine.kind, via: mine.via, n: mine.n, idx: mine.idx, ver: mine.ver, by: mine.by, blank: mine.blank, og: mine.og, cur: mine.cur, adopted: !!mine.adopted,
+                     ps: mine.ps.map((x) => ({ p: x.p, ready: !!(x.w && x.t) })),
                      up: mine.up.filter(Boolean).length, share: mine.share?.path || "", shareId: mine.share ? mine.share.id : null, bs: [...mine.bs.entries()].map(([p, b]) => ({ p, ready: !!b.w })),
                      startedMs: mine.startedMs, warnings: mine.warnings } : null,
-      backstage: [...backstage.values()].map((b) => ({ id: b.rec.id, idx: b.rec.idx, ver: b.rec.ver, key: !!b.keys, rt: !!b.rt, notes: b.notes ? b.notes.length : null })),
+      backstage: [...backstage.values()].map((b) => ({ id: b.rec.id, idx: b.rec.idx, ver: b.rec.ver, key: !!b.keys, rt: !!b.rt, notes: b.notes ? b.notes.length : null, pr: !!b.pr, wt: !!b.wt, orphan: !!b.orphan, cur: b.rec.cur || "", og: b.rec.og || 1 })),
       viewerHeld: [...overlays.values()].filter((o) => o.vKey).map((o) => o.vKey),   // what a viewer keeps: the live slide only
-      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p),
+      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, idx: r.pres.idx, ver: r.pres.ver, bs: (r.pres.bs || []).map((b) => b.p), ps: (r.pres.ps || []).map((b) => b.p), og: r.pres.og || 1, cur: r.pres.cur || "", own: r.pres.own || "", blank: r.pres.blank || "", key: !!r.pres.k, am: r.pres.am,
                                                                                 vids: (r.pres.vids || []).map((x) => ({ i: x.i, p: x.p, pl: x.pl, st: x.st, t: x.t })) })),
       overlays: [...overlays.entries()].map(([p, o]) => ({ path: p, key: o.key, w: o.cv.width, h: o.cv.height })),
       viewerFetches: viewerFetches.slice(),
@@ -2075,7 +3083,7 @@
       pk: !!pkPublished,
       // 0.21.87: the presenter's slide videos; what each tile drew of a slide's video
       vids: mine ? [...mine.vids.values()].map((e) => ({ k: e.k, i: e.i, v: e.v, auto: !!e.sv.auto, shareId: e.shareId, path: e.path, pl: e.pl, st: e.st, t: e.t, err: e.err })) : [],
-      deckVideos: mine ? (mine.src.videos || []).map((l) => l.map((v) => (v.id ? v.id + (v.kind === "audio" ? ":audio" : "") : "linked:" + v.linked))) : null,
+      deckVideos: mine ? ((mine.src && mine.src.videos) || []).map((l) => l.map((v) => (v.id ? v.id + (v.kind === "audio" ? ":audio" : "") : "linked:" + v.linked))) : null,
       vidDrawn: [...overlays.entries()].map(([p, o]) => ({ path: p, drawn: o.vDrawn || 0, last: o.vLast || 0, painted: o.vPainted || null })),
     }),
     __drawSlide: drawSlide,   // rig: render a scene slide without a room

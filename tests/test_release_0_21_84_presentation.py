@@ -553,14 +553,14 @@ class PageSeams(unittest.TestCase):
         self.has('GlobalWorkerOptions.workerSrc = "/assets/vendor/pdfjs/pdf.worker.min.mjs"', j)
         pub = j[j.index("  function publish() {"):j.index("  function goTo(")]
         self.hasnt("notes:", pub, "the public record never carries a note")
-        self.has("k: b64(kIdx)", pub)   # only the LIVE slide's key
+        self.has('k: mine.blank ? "" : b64(kIdx)', pub)   # only the LIVE slide's key (0.21.91: none while the room sees Black / White)
         self.has('hkdf(K, "slide/" + i)', j)
         self.has('hkdf(K, "notes")', j)
         self.has('namedCurve: "P-256"', j)
         self.has('"AES-GCM"', j)
         self.has("const b = await bitmapFromCipher(baseFor(rec), rec.id, rec.idx, unb64(rec.k));", j)   # a viewer opens only the live slide, without the read token
         self.has("if (ctl.bv !== mine.ver && mine.by !== who)", j)   # the collision rule
-        self.has("if (!b) return;   // only the backstage people the presenter picked", j)
+        self.has("if (!isB && !isP) return;   // only the backstage people and the presenters", j)   # 0.21.91: + added presenters
         self.has('stateSet("presPk", k.pub)', j)
         # notes are fetched only by backstage (after unwrapping K), never by the viewer path
         self.assertEqual(j.count('"notes.bin"'), 2)   # fetchBlob's no-store rule + the backstage fetch (uploadNotes posts /notes.bin)

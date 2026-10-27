@@ -44,7 +44,8 @@ class Page(unittest.TestCase):
         p = _read("moq-watch-lite.html")
         body = p[p.index("  async function lockTick() {"):p.index("  setInterval(lockTick, 2000);")]
         self.assertIn('if (["publisher", "publisher-relay"].includes(window.__pageMode?.())) return;', body)
-        self.assertIn("for (const a of added.filter(isScreenShare)) { try { removeSource(a.id); } catch {} }", body)
+        # 0.21.91: not a presentation's slide canvas (the deck, never the screen) -- a lock no longer ends a presentation
+        self.assertIn("for (const a of added.filter((x) => isScreenShare(x) && !x.presCanvas)) { try { removeSource(a.id); } catch {} }", body)
         self.assertIn("const isScreenShare = (a) => a.kind === SCREEN || (a.kind === RTSP && (a.screen || isScreenUrl(a.url)));", p)
 
 

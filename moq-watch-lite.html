@@ -209,6 +209,11 @@
   #mainGo { position:fixed; left:50%; top:42%; transform:translate(-50%, -50%); z-index:60; padding:12px 20px; border-radius:10px;
     background:var(--surface-2); border:1px solid var(--line); color:var(--text-dim); font-size:14px; box-shadow:0 8px 30px rgba(0,0,0,.25); pointer-events:none; }
   #mainGo[hidden] { display:none; }
+  /* 0.21.91: "No relays are available right now -- KASTR keeps trying" (over the Join room page too) */
+  #relayNote { position:fixed; left:50%; top:64px; transform:translateX(-50%); z-index:72; max-width:calc(100vw - 32px); box-sizing:border-box;
+    padding:8px 16px; border-radius:8px; background:var(--asi-amber); color:#1a1200; font-size:13px; font-weight:600; text-align:center;
+    box-shadow:0 6px 20px rgba(0,0,0,.3); }
+  #relayNote[hidden] { display:none; }
   #profilePop .mainrow { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
   #profilePop .mainrow[hidden] { display:none; }
   #profilePop .mainrow .hclbl { font-size:11px; color:var(--text-dim); }
@@ -19412,6 +19417,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // publish half through the shared field's change event (slots + registry
   // follow), then reconnects whichever connection this page is running.
   window.__kastrSetRelay = async (u) => {
+    try { if (!relayAutoSwitching && String(u || "").trim() && String(u || "").trim() !== urlInput.value.trim()) relayManualSet(String(u).trim()); } catch {}   // 0.21.91: a switch by hand
     urlInput.value = String(u || "").trim();
     // 0.8.3: remember every relay we've pointed at -- the masthead popover
     // offers the list back as a datalist (same-origin localStorage).
@@ -21988,7 +21994,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const sel = joinEls.joinRelaySel;   // 0.21.0
     if (sel && document.activeElement !== sel) {
       if (v && ![...sel.options].some((o) => o.value === v)) sel.insertBefore(new Option(v, v), sel.firstChild);
-      if (v) sel.value = v;
+      let auto = false;   // 0.21.91: "Closest automatically" stays picked unless the person picked a relay by hand
+      try { auto = !!relayRank && !relayManual() && [...sel.options].some((o) => o.value === "__auto"); } catch {}
+      if (v) sel.value = auto ? "__auto" : v;
     }
   }
   // ---- 0.21.22 (Kenton): relay failover + LAN discovery (the desktop app; a web client cannot browse mDNS) -------------
@@ -22089,23 +22097,20 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       try { inst = await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json()); } catch {}
       if (inst?.justRestarted || inst?.adminMoved) return urlInput.value.trim() || null;
     }
+    // 0.21.91 (Kenton: "On launch of KASTR always do a check to find the closest relay and select that"): the fleet's relays (the
+    // hub's registry, cached), this machine's own and the ones found on the network, each measured (3 samples, 1.5 s, in
+    // parallel, from this machine's KASTR); the lowest round trip OF THE FLEET wins -- a relay found on the network that is not
+    // the fleet's is listed, never picked (nor sent this fleet's codes). Nothing online: the note, and KASTR keeps trying.
     const cur = urlInput.value.trim();
-    let hist = [];
-    try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
-    const found = await lanDiscover().catch(() => []);
-    const urls = [...new Set([cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || []), ...found.map((f) => f.urls?.[0]).filter(Boolean)].filter(Boolean))];
-    let d = null;
-    try { d = await fetch("/api/lan/nearest?" + urls.map((u) => "url=" + encodeURIComponent(u)).join("&"), { cache: "no-store" }).then((r) => r.json()); } catch {}
-    const ranked = (d?.relays || []).filter((r) => r.online);
-    for (const r of d?.relays || []) { if (r.name) relayNameSet(r.url, r.name); gateRelayState.set(r.url, { online: !!r.online, at: Date.now() }); }
-    window.__relayRanked = d?.relays || [];   // rig
-    const best = ranked[0];
-    if (!best) return null;
+    window.__lanFound = await lanDiscover().catch(() => []);
+    const rk = await relayRankRun();
+    window.__relayRanked = rk?.list || [];   // rig
+    const best = relayBest(rk);
+    if (!best) { if (rk) { relayNoneStart("launch"); return false; } return null; }
     if (best.url !== cur) {
-      await gateRelayApply(best.url, { keepCodes: true });   // 0.21.38: the saved codes stay
+      await relayApplyAuto(best.url);   // 0.21.38: the saved codes stay (fleet-wide)
       relayAutoMoved = true;   // 0.21.91: a move within the fleet -- the saved codes still open the main room
-      window.__toast?.("Connected to the nearest relay: " + (relayNameOf(best.url) || relayLabel(best.url))
-        + (best.hops != null ? " (" + best.hops + " hop" + (best.hops === 1 ? "" : "s") + ")" : ""), 6000, { level: "info" });
+      window.__toast?.("Connected to the closest relay: " + relayDisp(best) + " (" + Math.round(best.ms) + " ms)", 6000, { level: "info" });
     }
     try { paintRelayRow(); } catch {}
     return best.url;
@@ -22114,17 +22119,229 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // 0.21.91: the main-room launch waits for this (it may move this machine to another relay of the fleet)
   let relayPickDoneRes = null, relayAutoMoved = false;
   const relayPickDone = new Promise((r) => { relayPickDoneRes = r; });
-  setTimeout(() => { relayAutoPick().then((u) => { if (!u) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }).finally(() => relayPickDoneRes()); }, 1500);
-  { // a relay down for 15 s during a session -> one offer per outage
+  setTimeout(() => { relayAutoPick().then((u) => { if (u === null) return relayFailover("launch"); }).catch(() => { relayFailover("launch").catch(() => {}); }).finally(() => relayPickDoneRes()); }, 1500);   // 0.21.91: false = nothing online (the note says so)
+  { // a relay down for 15 s during a session: a person's KASTR moves to the next closest relay of the fleet (0.21.91); a box,
+    // a relay-only machine or a web client keeps the one offer per outage
     let downSince = 0, offered = false;
     setInterval(() => {
-      if (joinState !== "joined") { downSince = 0; offered = false; return; }
+      if (joinState !== "joined" || relayMoving) { downSince = 0; offered = false; return; }
       const st = window.__relayHealth?.() || "connected";
       if (st === "connected") { downSince = 0; offered = false; return; }
       if (!downSince) downSince = Date.now();
-      if (!offered && Date.now() - downSince > 15000) { offered = true; relayFailover("session").catch(() => {}); }
-    }, 5000);
+      if (!offered && Date.now() - downSince > RELAY_DEAD_MS) { offered = true; (relayMoveCan() ? relayFailMove() : relayFailover("session")).catch(() => {}); }
+    }, 2000);
   }
+  // ---- 0.21.91 THE CLOSEST RELAY -------------------------------------------------------------------------------------------------
+  // Kenton: "On launch of KASTR always do a check to find the closest relay and select that. Keep the dropdown menu so people can
+  // choose another relay if needed. If none are online and available, put a note for that to let them know that there are no
+  // available relays." + "Also do a check every hour and move to the nearest relay if there is a closer one." + LAN relays (mDNS)
+  // in the list, never picked from another fleet. Decided: lowest measured round trip; a manual pick lasts until KASTR closes (no
+  // automatic moves then); a relay dead for ~15 s -> the next closest, back in the same room by the silent rejoin, and no moving
+  // back this run; the hourly move needs a clear win twice (25 % and 10 ms) and waits while presenting, recording, under / giving
+  // remote control, sending a file or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
+  const RELAY_DEAD_MS = 15000;
+  const FLEET_KEY = "kastr.fleet.relays";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
+  const fleetCache = () => { try { const d = JSON.parse(localStorage.getItem(FLEET_KEY) || "null"); return d && Array.isArray(d.relays) ? d : null; } catch { return null; } };
+  async function fleetFetch() {
+    if (joinState !== "joined" || !authSecured || !authTokens?.member || inviteGuest()) return null;
+    const base = authBase();
+    if (!base) return null;
+    try {
+      const r = await fetch(base + "/api/fleet/relays", { cache: "no-store", headers: { authorization: "Bearer " + authTokens.member } });
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (!Array.isArray(d?.relays)) return null;
+      const rows = d.relays.filter((x) => x && x.name && Array.isArray(x.urls))
+        .map((x) => ({ name: String(x.name).slice(0, 40), urls: x.urls.map(String).filter((u) => /^https?:[/][/]/.test(u)).slice(0, 8) })).filter((x) => x.urls.length).slice(0, 64);
+      if (rows.length || !d.hubDown) localStorage.setItem(FLEET_KEY, JSON.stringify({ at: Date.now(), relays: rows }));
+      return rows;
+    } catch { return null; }
+  }
+  setInterval(() => { const c = fleetCache(); if (!c || Date.now() - c.at > 600000) fleetFetch(); }, 60000);
+  window.addEventListener("kastr:auth", () => setTimeout(() => { const c = fleetCache(); if (!c || Date.now() - c.at > 60000) fleetFetch(); }, 2500));
+  const relayDisp = (r) => (r && (r.name || relayNameOf(r.url) || relayLabel(r.url))) || "";
+  // every relay to measure: the fleet's registry (all its addresses), this machine's own (the current one, the recent ones, the
+  // built-in fleet list), and the ones found on the network -- of the fleet when an address (or a certificate this computer saw
+  // before) matches, else "on this network" (listed, never picked)
+  function relayCands() {
+    const cur = urlInput.value.trim();
+    let hist = [];
+    try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
+    const out = [], fleetUrls = new Set();
+    for (const r of fleetCache()?.relays || []) { out.push({ name: r.name, urls: r.urls.slice(0, 8), fleet: true }); for (const u of r.urls) fleetUrls.add(u); }
+    for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {
+      if (!u || fleetUrls.has(u)) continue;
+      fleetUrls.add(u);
+      out.push({ name: relayNameOf(u) || "", urls: [u], fleet: true });
+    }
+    const fps = new Set(Object.values(relayFps()).filter(Boolean));
+    for (const f of window.__lanFound || []) {
+      const urls = (f.urls || []).filter((u) => /^https?:[/][/]/.test(u)).slice(0, 8);
+      if (!urls.length || urls.some((u) => fleetUrls.has(u))) continue;   // a fleet relay found on the network: already listed
+      const known = !!f.fp && fps.has(String(f.fp).toLowerCase());          // a relay this computer used before, at a new address
+      out.push({ name: f.name || "", urls, fleet: known, lan: !known });
+      for (const u of urls) fleetUrls.add(u);
+    }
+    return out;
+  }
+  let relayRank = null, relayRanking = null;   // {at, list, ms} -- the last measurement
+  async function relayRankRun() {
+    if (relayRanking) return relayRanking;
+    relayRanking = (async () => {
+      let d = null;
+      try {
+        d = await fetch("/api/lan/closest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ relays: relayCands(), samples: 3 }) })
+          .then((r) => (r.ok ? r.json() : null));
+      } catch {}
+      if (!d || !Array.isArray(d.relays)) return relayRank;
+      relayRank = { at: Date.now(), list: d.relays, ms: d.ms };
+      for (const r of d.relays) {
+        if (r.name && !r.lan) for (const a of r.addrs || []) relayNameSet(a.url, r.name);
+        for (const a of r.addrs || []) gateRelayState.set(a.url, { online: !!a.online, at: Date.now(), ms: a.ms });
+        if (r.online && r.fp && r.fleet) relayFpRemember(r.url, r.fp);
+      }
+      try { paintRelayRow(); } catch {}
+      return relayRank;
+    })();
+    try { return await relayRanking; } finally { relayRanking = null; }
+  }
+  const relayBest = (rk) => (rk?.list || []).find((r) => r.online && r.fleet) || null;
+  const relayRankFor = (rk, url) => (rk?.list || []).find((r) => r.url === url || (r.addrs || []).some((a) => a.url === url)) || null;
+  const RELAY_MANUAL = "kastr.relay.manual";   // this run's own pick (sessionStorage: until KASTR closes)
+  const relayManual = () => { try { return sessionStorage.getItem(RELAY_MANUAL) || ""; } catch { return ""; } };
+  function relayManualSet(u) { try { if (u) sessionStorage.setItem(RELAY_MANUAL, u); else sessionStorage.removeItem(RELAY_MANUAL); } catch {} }
+  let relayAutoSwitching = false, relayMoving = false;
+  async function relayApplyAuto(url) {   // a switch KASTR makes (never counted as the person's pick)
+    relayAutoSwitching = true;
+    try { await gateRelayApply(url, { keepCodes: true }); } finally { relayAutoSwitching = false; }
+  }
+  const relayMoveCan = () => { try { return mainPerson() && !IS_WEB && gateIsLoopback(); } catch { return false; } };
+  // nothing online: the note (over everything, the Join room page too) and a re-check every 10 s, 20 s, 40 s, then each minute
+  let relayNone = null, relayNoteEl = null;
+  function relayNoteShow(text) {
+    if (!text && !relayNoteEl) return;
+    if (!relayNoteEl) { relayNoteEl = document.createElement("div"); relayNoteEl.id = "relayNote"; relayNoteEl.setAttribute("role", "status"); document.body.appendChild(relayNoteEl); }
+    relayNoteEl.textContent = text || "";
+    relayNoteEl.hidden = !text;
+  }
+  function relayNoneStart(where) {
+    if (relayNone) return;
+    relayNone = { since: Date.now(), tries: 0, where, timer: 0 };
+    log("No relays are available right now \u2014 KASTR keeps trying (" + where + ")");
+    relayNoteShow("No relays are available right now \u2014 KASTR keeps trying");
+    relayNoneNext();
+  }
+  function relayNoneNext() {
+    const n = relayNone;
+    if (!n) return;
+    const wait = Math.min(60000, 10000 * Math.pow(2, n.tries));
+    n.next = Date.now() + wait;
+    clearTimeout(n.timer);
+    n.timer = setTimeout(() => relayNoneCheck(n).catch(() => {}), wait);
+  }
+  async function relayNoneCheck(n) {
+    if (relayNone !== n) return;
+    n.tries++;
+    const rk = await relayRankRun();
+    const cur = urlInput.value.trim();
+    const best = n.where === "session" ? (rk?.list || []).find((r) => r.online && r.fleet) : relayBest(rk);
+    if (!best) { relayNoneNext(); return; }
+    relayNone = null;
+    relayNoteShow("");
+    log("A relay answers again: " + relayDisp(best) + " (" + Math.round(best.ms) + " ms) after " + Math.round((Date.now() - n.since) / 1000) + " s");
+    if (n.where === "session") {
+      if (relayRankFor(rk, cur)?.online) return;   // the same relay is back: the connection heals by itself
+      await relayMove(best, "failover", "Moved to " + relayDisp(best) + " \u2014 " + (relayNameOf(cur) || relayLabel(cur)) + " stopped answering");
+      return;
+    }
+    if (best.url !== cur) { await relayApplyAuto(best.url); relayAutoMoved = true; }   // within the fleet: the saved codes stay
+    window.__toast?.("A relay is available again \u2014 connected to " + relayDisp(best), 6000, { level: "event" });
+    if (joinState === "prejoin" && mainInfo.relayDown) { mainInfo.relayDown = false; mainLaunch(); }   // the main room now
+  }
+  // a move during a session: the room comes back by the silent rejoin (this window's session ticket) after a reload
+  const RELAY_MOVE_KEY = "kastr.relay.move";
+  async function relayMove(best, why, note) {
+    if (relayMoving || !best) return;
+    relayMoving = true;
+    const from = urlInput.value.trim();
+    try { sessionStorage.setItem(RELAY_MOVE_KEY, JSON.stringify({ why, from, to: best.url, note, at: Date.now(), room: joinState === "joined" ? CHANNEL : "" })); } catch {}
+    if (why === "failover") { try { sessionStorage.setItem("kastr.relay.failed", "1"); } catch {} }   // no moving back this run
+    log("Relay: " + note);
+    try { await relayApplyAuto(best.url); } catch {}
+    setTimeout(() => location.reload(), 150);
+  }
+  async function relayFailMove() {
+    const cur = urlInput.value.trim();
+    const rk = await relayRankRun();
+    if (relayRankFor(rk, cur)?.online && window.__relayHealth?.() === "connected") return;   // it came back while we measured
+    const best = (rk?.list || []).find((r) => r.online && r.fleet && r.url !== cur && !(r.addrs || []).some((a) => a.url === cur));
+    if (!best) { relayNoneStart("session"); return; }
+    await relayMove(best, "failover", "Moved to " + relayDisp(best) + " \u2014 " + (relayNameOf(cur) || relayLabel(cur)) + " stopped answering");
+  }
+  // after the reload: say where we are, and how long the room was away
+  let relayMoveLast = null;
+  {
+    let m = null;
+    try { m = JSON.parse(sessionStorage.getItem(RELAY_MOVE_KEY) || "null"); sessionStorage.removeItem(RELAY_MOVE_KEY); } catch {}
+    if (m && Date.now() - (Number(m.at) || 0) < 120000) {
+      relayMoveLast = { ...m };
+      const t = setInterval(() => {
+        if (joinState === "joined") {
+          clearInterval(t);
+          relayMoveLast.blipMs = Date.now() - m.at;
+          relayMoveLast.backIn = CHANNEL;
+          log("Relay move (" + m.why + "): back in " + roomTitle(CHANNEL) + " after " + relayMoveLast.blipMs + " ms");
+          window.__toast?.(m.note, 8000, { level: "event" });
+        } else if (Date.now() - m.at > 90000) clearInterval(t);
+      }, 250);
+    }
+  }
+  // the hourly re-check (with a random lead so a whole site does not probe at once)
+  const relayHr = { period: 3600000, jitter: 300000, confirm: 20000, timer: 0, next: 0, checks: 0, last: null };
+  function relayHourlyArm(ms) {
+    clearTimeout(relayHr.timer);
+    const w = ms ?? (relayHr.period + Math.random() * relayHr.jitter);
+    relayHr.next = Date.now() + w;
+    relayHr.timer = setTimeout(() => relayHourlyCheck().catch(() => {}), w);
+  }
+  function relayBusy() {   // a bad moment for a move -> what it is, else ""
+    try { const ps = window.__pres?.state?.(); if (ps?.mine) return "presenting"; if ((ps?.backstage || []).some((b) => b.key)) return "backstage"; } catch {}
+    try { if (window.__rec?.state?.().recording) return "recording"; } catch {}
+    try { const rs = window.__rc?.state?.(); if (rs?.ctl) return "controlling someone"; if (rs?.grant) return "under remote control"; } catch {}
+    try { if ([...uploading.values()].some((u) => !u.done && !u.err)) return "sending a file"; } catch {}
+    try { if ((window.__publisher?.talkAgo?.() ?? 1e9) < 10000) return "talking"; } catch {}
+    return "";
+  }
+  async function relayHourlyCheck() {
+    relayHourlyArm();
+    relayHr.checks++;
+    const now = Date.now();
+    let failed = false;
+    try { failed = sessionStorage.getItem("kastr.relay.failed") === "1"; } catch {}
+    const skip = !relayMoveCan() ? "not a person's KASTR" : relayManual() ? "a relay picked by hand" : failed ? "moved after a relay failed (this run)"
+      : joinState !== "joined" ? "not in a room" : relayMoving ? "moving" : "";
+    if (skip) { relayHr.last = { at: now, skip }; return; }
+    const judge = (rk) => {
+      const c = relayRankFor(rk, urlInput.value.trim()), b = relayBest(rk);
+      if (!b || !c || !c.online || b.url === c.url) return { win: false, cur: c, best: b };
+      return { win: b.ms <= c.ms * 0.75 && c.ms - b.ms >= 10, cur: c, best: b };
+    };
+    const j1 = judge(await relayRankRun());
+    const said = (j) => ({ cur: j.cur ? { name: relayDisp(j.cur), ms: j.cur.ms } : null, best: j.best ? { name: relayDisp(j.best), ms: j.best.ms } : null });
+    if (!j1.win) { relayHr.last = { at: now, stay: true, ...said(j1) }; return; }
+    await new Promise((r) => setTimeout(r, relayHr.confirm));   // the second probe: noise does not move anyone
+    const j2 = judge(await relayRankRun());
+    if (!j2.win || j2.best.url !== j1.best.url) { relayHr.last = { at: now, stay: true, noise: true, ...said(j2) }; return; }
+    const busy = relayBusy();
+    if (busy) { relayHr.last = { at: now, postponed: busy, ...said(j2) }; log("Closer relay " + relayDisp(j2.best) + " -- the move waits (" + busy + ")"); return; }
+    relayHr.last = { at: now, move: j2.best.url, ...said(j2) };
+    await relayMove(j2.best, "hourly", "Moved to " + relayDisp(j2.best) + " (closer: " + Math.round(j2.best.ms) + " ms vs " + Math.round(j2.cur.ms) + " ms)");
+  }
+  pageModeReady.then(() => { if (relayMoveCan()) relayHourlyArm(); });
+  window.__relayPick = { cands: relayCands, rank: relayRankRun, state: () => ({ rank: relayRank, manual: relayManual(), none: relayNone && { since: relayNone.since, tries: relayNone.tries, where: relayNone.where, next: relayNone.next },
+    move: relayMoveLast, hourly: { ...relayHr, timer: undefined }, moving: relayMoving, fleet: fleetCache() }), fleet: fleetFetch, busy: relayBusy,
+    hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms, confirmMs) => { relayHr.period = ms; relayHr.jitter = 0; if (confirmMs != null) relayHr.confirm = confirmMs; relayHourlyArm(ms); },
+    failNow: () => relayFailMove(), deadMs: () => RELAY_DEAD_MS };   // rig
   function paintRelayRow() {
     const row = joinEls.joinRelayRow;
     if (!row) return;
@@ -22135,21 +22352,43 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const sel = joinEls.joinRelaySel;   // 0.21.0: a real select -- the datalist filtered itself down to the current value and "did nothing"
     if (sel && document.activeElement !== sel) {
       const cur = urlInput.value.trim();
-      const opts = [...new Set([cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])].filter(Boolean))];   // 0.21.34: + the fleet's relays (asi-brand.js)
-      const lan = (window.__lanRelays || []).filter((f) => f.urls?.[0] && !opts.includes(f.urls[0]));   // 0.21.22: found on the network (one click, never automatic)
-      const mark = (u) => { const st = gateRelayState.get(u); return st == null ? "" : (st.online ? "\uD83D\uDFE2 " : "\uD83D\uDD34 "); };   // 0.21.30
-      const word = () => "";   // 0.21.33 (Kenton): the dot's colour says online / offline -- no words
-      for (const f of lan) if (f.name) relayNameSet(f.urls[0], f.name);   // 0.21.33
-      const opt = (label, u) => { const o = new Option(label, u); const st = gateRelayState.get(u); o.title = u + (st == null ? "" : st.online ? " (online)" : " (offline)"); return o; };   // the address (and the state) on hover
-      sel.replaceChildren(...opts.map((u) => opt(mark(u) + (relayNameOf(u) || relayLabel(u)) + word(u), u)),   // 0.21.33: the name, not the address
-        ...lan.map((f) => opt(mark(f.urls[0]) + "Found on your network: " + (f.name || relayLabel(f.urls[0])) + word(f.urls[0]), f.urls[0])),
-        new Option("Other\u2026", "__other"));
-      if (cur) sel.value = cur;
-      sel.title = cur ? (relayNameOf(cur) ? relayNameOf(cur) + " \u2014 " : "") + cur : "";
-      gateRelayProbeAll([...opts, ...lan.map((f) => f.urls[0])]);   // 0.21.30 (Kenton): which relays are online, in the picker
+      // 0.21.91 (Kenton: "Keep the dropdown menu so people can choose another relay if needed"): first "Closest automatically (now:
+      // <relay>, 12 ms)", then every relay measured (its ms, or "unreachable"; the network's own relays "On this network"), then
+      // what is not measured yet, then Other... A pick of one lasts until KASTR closes; "Closest automatically" hands it back.
+      const ms = (r) => (r.online ? Math.round(r.ms) + " ms" : "unreachable");
+      const best = relayBest(relayRank), man = relayManual(), listed = new Set(), opts = [];
+      opts.push(new Option("Closest automatically" + (best ? " (now: " + relayDisp(best) + ", " + Math.round(best.ms) + " ms)" : relayRank ? " (none answers now)" : ""), "__auto"));
+      for (const r of relayRank?.list || []) {
+        const o = new Option((r.lan ? "On this network: " : "") + relayDisp(r) + " \u2014 " + ms(r), r.url);
+        o.title = (r.addrs || []).map((a) => a.url + " \u2014 " + (a.online ? Math.round(a.ms) + " ms" : "unreachable")).join("\n") + (r.lan ? "\nNot a relay of this fleet: KASTR never picks it by itself" : "");
+        listed.add(r.url);
+        for (const a of r.addrs || []) listed.add(a.url);
+        opts.push(o);
+      }
+      for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {   // 0.21.34: + the fleet's relays (asi-brand.js) -- not measured yet
+        if (!u || listed.has(u)) continue;
+        listed.add(u);
+        const o = new Option(relayNameOf(u) || relayLabel(u), u); o.title = u; opts.push(o);
+      }
+      if (cur && !listed.has(cur)) opts.push(new Option(relayLabel(cur), cur));
+      opts.push(new Option("Other\u2026", "__other"));
+      sel.replaceChildren(...opts);
+      sel.value = man ? (listed.has(man) ? man : cur) : relayRank ? "__auto" : cur;
+      sel.title = cur ? (relayNameOf(cur) ? relayNameOf(cur) + " \u2014 " : "") + cur + (man ? " (picked by hand until KASTR closes)" : "") : "";
+      if (!relayRank || Date.now() - relayRank.at > 60000) relayRankSoon();   // measured when the page shows the list
       if (joinEls.joinRelay) joinEls.joinRelay.hidden = true;
     }
     gateRelayMirror();
+  }
+  let relayRankSoonT = 0;
+  function relayRankSoon() {   // 0.21.91: a measurement soon (the network browsed again at most every 2 minutes)
+    if (relayRankSoonT || relayRanking) return;
+    relayRankSoonT = setTimeout(async () => {
+      try {
+        if (!window.__lanFoundAt || Date.now() - window.__lanFoundAt > 120000) { window.__lanFound = await lanDiscover().catch(() => window.__lanFound || []); window.__lanFoundAt = Date.now(); }
+        await relayRankRun();
+      } finally { relayRankSoonT = 0; }
+    }, 300);
   }
   // 0.21.30 (Kenton: "the launch page is no longer showing which relays are online or not"): every relay in the join
   // card's picker is probed (the same /api/lan/probe the failover uses) and marked online / offline; answers are reused
@@ -22797,6 +23036,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     joinEls.joinGate.hidden = true;   // (the page's own markup shows it until a script hides it; whoever needs it shows it again)
     await Promise.race([relayPickDone, mainSleep(8000)]);   // the nearest relay first (it may move this machine within the fleet)
     if (joinState !== "prejoin") { mainCover(""); return; }
+    if (relayNone) { mainInfo.relayDown = true; mainCover(""); return gate("no relays are available (KASTR keeps trying)"); }   // 0.21.91
     if (await resumeCheck()) { mainInfo.phase = "resume"; mainInfo.ms = Math.round(performance.now() - t0); return; }   // an update / restart: back to the room I was in
     if (!IS_WEB && gateIsLoopback()) { try { await invitePendingPoll(); } catch {} }   // an invite link that started KASTR wins
     if (inviteGet() || joinState !== "prejoin" || !joinEls.joinGate.hidden) {
@@ -22804,7 +23044,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (joinState === "prejoin" && joinEls.joinGate.hidden) gateShow();
       return;
     }
-    const cur = urlInput.value.trim(), fleet = new Set(window.__KASTR_KNOWN_RELAYS || []);
+    const cur = urlInput.value.trim(), fleet = new Set([...(window.__KASTR_KNOWN_RELAYS || []), ...((fleetCache()?.relays || []).flatMap((r) => r.urls || []))]);   // + the hub's registry
     if (gateCodesStale || (lj.relay && lj.relay !== cur && !(fleet.has(lj.relay) && fleet.has(cur)) && !relayAutoMoved)) { mainCover(""); return gate("another relay than the last join's"); }
     await authDetect().catch(() => {});
     const access = String(lj.access || "");
@@ -22887,10 +23127,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinEls.joinRelay) {
       joinEls.joinRelay.addEventListener("change", () => { gateRelayApply(); });
       joinEls.joinRelay.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); gateRelayApply(); } });
-      joinEls.joinRelaySel?.addEventListener("change", () => {   // 0.21.0: picking an entry switches at once
+      joinEls.joinRelaySel?.addEventListener("change", async () => {   // 0.21.0: picking an entry switches at once
         const sel = joinEls.joinRelaySel;
         if (sel.value === "__other") { joinEls.joinRelay.hidden = false; joinEls.joinRelay.value = ""; try { joinEls.joinRelay.focus(); } catch {} return; }
-        gateRelayApply(sel.value);
+        if (sel.value === "__auto") {   // 0.21.91: back to the closest (measured now)
+          relayManualSet("");
+          const best = relayBest(await relayRankRun());
+          if (best && best.url !== urlInput.value.trim()) await relayApplyAuto(best.url);
+          try { paintRelayRow(); } catch {}
+          return;
+        }
+        relayManualSet(sel.value);   // 0.21.91: the person's own pick lasts until KASTR closes (no automatic moves)
+        const picked = relayRankFor(relayRank, sel.value);   // a fleet relay keeps the codes (fleet-wide); another fleet's never gets them
+        gateRelayApply(sel.value, picked && picked.fleet ? { keepCodes: true } : undefined);
       });
       urlInput.addEventListener("change", gateRelayMirror);
     }
@@ -33029,6 +33278,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     talking: () => talkOn,                                   // 0.12.0: the room-wide speaking announce is on
     opSlug: () => operatorSlug(),                            // 0.12.0: chat records carry the same op key as presence
     fakeTalk: (ms) => { talkForceUntil = Date.now() + (Number(ms) || 3000); },   // 0.12.0 (rig): pretend the mic is loud
+    talkAgo: () => (talkLastLoud ? performance.now() - talkLastLoud : 1e9),   // 0.21.91: ms since my mic was last loud (the hourly relay move waits)
     nudge: nudgeFromViewer,   // 0.8.7: viewer stall report -> nudge/rebuild
     refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.5: the upright loop probe settling late
     resumeAudio: () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); } catch {} },   // 0.8.9: phones

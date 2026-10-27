@@ -1683,6 +1683,21 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         return send(400, {"error": "bad json"})
                     mdns_advertise(sd, bool(body.get("advertise")))
                 return send(200, {"advertise": mdns_advertise(sd), "listening": MDNS_ADV[0] is not None})
+            if path == "/api/lan/closest":   # 0.21.91: the candidate relays by measured round trip (this machine only)
+                if method != "POST":
+                    return send(405, {"error": "POST"})
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(min(n, 65536)) or b"{}") if n else {}
+                except Exception:
+                    return send(400, {"error": "bad json"})
+                try:
+                    samples = max(1, min(5, int(body.get("samples") or 3)))
+                except (TypeError, ValueError):
+                    samples = 3
+                t0 = time.time()
+                out = closest_relays(body.get("relays") if isinstance(body.get("relays"), list) else [], samples=samples)
+                return send(200, {"relays": out, "ms": int((time.time() - t0) * 1000)})
             if method != "GET":
                 return send(405, {"error": "GET"})
             qs = parse_qs(urlparse(self.path).query)
@@ -4885,6 +4900,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._mobile()
             if path in ("/api/auth", "/api/token", "/api/rooms", "/api/bans", "/api/spokes/link",   # 0.11.0: + remembered rooms; 0.19.0: + the hub's bans; 0.21.25: + spokes/link
                         "/api/xshare",                                                          # 0.21.41: the cross-room listings into a room
+                        "/api/fleet/relays",                                                    # 0.21.91: the fleet's relays (the closest relay)
                         "/api/library", "/api/library/still",                                   # 0.21.84: the stream library's catalogue, a still
                         "/api/invites"):                                                        # 0.21.75: a room's live invite links
                 return self._auth_proxy("GET")
@@ -5173,9 +5189,10 @@ def _mdns_info(relay_srv, web_port):
         return None
 
 
-def probe_relay(url, timeout=1.5):
+def probe_relay(url, timeout=1.5, name=True):
     """Is a relay address online? A native relay answers /certificate.sha256 over HTTP on its own port (the fingerprint
-    comes back too); a web relay (an address ending /relay) is its host's web server."""
+    comes back too); a web relay (an address ending /relay) is its host's web server. 0.21.91: name=False skips the name
+    lookup (the extra samples of closest_relays)."""
     import ssl
     try:
         u = urlparse(str(url or "").strip())
@@ -5190,6 +5207,8 @@ def probe_relay(url, timeout=1.5):
             body = r.read(512).decode("ascii", "replace").strip()
         fp = "" if web else (body if re.match(r"^[0-9a-fA-F:]{40,}$", body) else "")
         out = {"online": True, "fp": fp.lower(), "ms": int((time.time() - t0) * 1000), "web": web}
+        if not name:
+            return out
         # 0.21.33: the relay's name for the pickers -- its access-code service answers /api/auth (port + 1 on a native
         # relay, the web port behind a web relay); an open relay has none and stays nameless
         try:
@@ -5271,6 +5290,82 @@ def rank_relays(urls, probe=None, hops=None, resolve=None):
         out = list(ex.map(one, todo))
     big = 10 ** 6
     out.sort(key=lambda r: (not r["online"], not r["private"], r["hops"] if r["hops"] is not None else big, r["ms"] if r["ms"] is not None else big))
+    return out
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    n = len(xs)
+    if not n:
+        return None
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+def closest_relays(cands, samples=3, timeout=1.5, probe=None, resolve=None):
+    """0.21.91 (Kenton: "On launch of KASTR always do a check to find the closest relay and select that ... If none are online
+    and available, put a note"): the candidate relays nearest first by MEASURED round trip. cands: [{name, urls, fleet, lan}]
+    -- a relay with every address it is known by (LAN / private / public). Every address is sampled `samples` times (the relay's
+    own /certificate.sha256 over HTTP, `timeout` each; an address that does not answer its first sample is not asked again),
+    the addresses in parallel; an address's RTT is the median of its answers. A relay is dialled at its reachable address -- a
+    private (LAN) one before a public one, then the fastest -- and ranks by that RTT: online first, then the lowest; a tie
+    (within 1 ms) goes to the fleet's relay. -> [{name, url, ms, online, private, fleet, lan, fp, addrs: [{url, ms, online,
+    private}]}]."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+    probe = probe or probe_relay
+    resolve = resolve or (lambda h: socket.gethostbyname(h))
+    rel, jobs = [], []
+    for c in (cands or [])[:32]:
+        if not isinstance(c, dict):
+            continue
+        urls = []
+        for u in (c.get("urls") or [])[:8]:
+            u = str(u or "").strip()
+            if u.startswith(("http://", "https://")) and u not in urls:
+                urls.append(u)
+        if not urls:
+            continue
+        rel.append({"name": str(c.get("name") or "")[:40], "fleet": bool(c.get("fleet")), "lan": bool(c.get("lan")), "urls": urls})
+        for u in urls:
+            jobs.append(u)
+    jobs = list(dict.fromkeys(jobs))
+
+    def one(u):
+        rec = {"url": u, "online": False, "ms": None, "private": False, "fp": "", "name": ""}
+        try:
+            host = urlparse(u).hostname or ""
+            ip = host if re.match(r"^[0-9.]+$|:", host) else resolve(host)
+            rec["private"] = _is_private_ip(ip) and not kastr_relay.is_web_relay(u)
+        except Exception:
+            pass
+        got = []
+        for i in range(max(1, int(samples))):
+            r = probe(u, timeout, name=(i == 0)) if i == 0 else probe(u, timeout, name=False)
+            if not r.get("online"):
+                if i == 0:
+                    break
+                continue
+            got.append(float(r.get("ms") or 0))
+            if i == 0:
+                rec["fp"] = r.get("fp") or ""
+                rec["name"] = r.get("name") or ""
+        if got:
+            rec["online"] = True
+            rec["ms"] = round(_median(got), 1)
+            rec["samples"] = [round(x, 1) for x in got]
+        return rec
+    with ThreadPoolExecutor(max_workers=min(24, max(1, len(jobs)))) as ex:
+        res = dict(zip(jobs, ex.map(one, jobs)))
+    out = []
+    for r in rel:
+        addrs = [res[u] for u in r["urls"]]
+        up = [a for a in addrs if a["online"]]
+        pick = sorted(up, key=lambda a: (not a["private"], a["ms"]))[0] if up else addrs[0]
+        out.append({"name": r["name"] or pick.get("name") or "", "url": pick["url"], "ms": pick["ms"] if up else None, "online": bool(up),
+                    "private": pick["private"], "fleet": r["fleet"], "lan": r["lan"], "fp": pick.get("fp") or "",
+                    "addrs": [{"url": a["url"], "ms": a["ms"], "online": a["online"], "private": a["private"]} for a in addrs]})
+    big = 10 ** 9
+    out.sort(key=lambda r: (not r["online"], round(r["ms"]) if r["ms"] is not None else big, not r["fleet"]))
     return out
 
 

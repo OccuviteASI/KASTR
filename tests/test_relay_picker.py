@@ -50,8 +50,9 @@ class RelayNames(unittest.TestCase):
 
     def test_pickers_show_names_and_dots(self):
         p, b = _read("moq-watch-lite.html"), _read("assets/asi-brand.js")
-        self.assertIn("opt(mark(u) + (relayNameOf(u) || relayLabel(u)) + word(u), u)", p)
-        self.assertIn('const word = () => "";', p)                         # no "online"/"offline" words
+        # 0.21.91: names, each with its measured ms or "unreachable" (Kenton: "Each relay shows its measured ms, or 'unreachable'")
+        self.assertIn('const o = new Option((r.lan ? "On this network: " : "") + relayDisp(r) + " \\u2014 " + ms(r), r.url);', p)
+        self.assertIn("const relayDisp = (r) => (r && (r.name || relayNameOf(r.url) || relayLabel(r.url))) || \"\";", p)
         self.assertIn("txt.textContent = (relayNameOf(u) || u.replace(", b)
         self.assertIn('if (r?.name) relayNameSet(url, r.name);', p)
         self.assertIn('out["name"] = nm.strip()[:32]', _read("kastr_serve.py"))

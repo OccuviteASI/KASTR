@@ -52,7 +52,8 @@ class Nearest(unittest.TestCase):
         p = _read("moq-watch-lite.html")
         self.assertIn('if (IS_WEB || !gateIsLoopback() || !["full", "viewer"].includes(PAGE_MODE)) return null;', p)
         self.assertIn('sessionStorage.getItem("kastr.rejoin") || sessionStorage.getItem("kastr.autopicked")', p)
-        self.assertIn("relayAutoPick().then((u) => { if (!u) return relayFailover(\"launch\"); })", p)
+        # 0.21.91: null = not picked here (a box, a reload) -> the old failover; false = nothing online (the "no relays" note)
+        self.assertIn("relayAutoPick().then((u) => { if (u === null) return relayFailover(\"launch\"); })", p)
 
 
 class GalleryFits(unittest.TestCase):

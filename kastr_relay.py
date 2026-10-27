@@ -2961,6 +2961,28 @@ def rooms_for_guest(obj, allowed):
     return out
 
 
+def fleet_relay_rows(rows):
+    """0.21.91: the hub's relay registry (_p_relays: [{name, addrs: [{address, why}]}]) as the pages' candidates ->
+    [{name, urls}]. A native relay is dialled as http://host:port (the page fetches its certificate's fingerprint); a web relay
+    (.../relay) keeps its address."""
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict) or not r.get("name"):
+            continue
+        urls = []
+        for a in r.get("addrs") or []:
+            u = str((a or {}).get("address") or "") if isinstance(a, dict) else str(a or "")
+            m = re.match(r"^(https?)://([A-Za-z0-9.\-\[\]:]{1,200}?)(:\d{1,5})?(/relay)?/?$", u)
+            if not m:
+                continue
+            u = ("%s://%s%s/relay" % (m.group(1), m.group(2), m.group(3) or "")) if m.group(4) else ("http://%s%s" % (m.group(2), m.group(3) or ":4443"))
+            if u not in urls:
+                urls.append(u)
+        if urls:
+            out.append({"name": clean_label(r.get("name"), 40) or "relay", "urls": urls[:8]})
+    return out[:64]
+
+
 def library_scope(claims, room=None, boards=None, listed=None):
     """0.21.84 (the scope seam): what a member token's holder may read of the stream library -> "lib" (all of it: fleet
     members, viewers included), [paths] (an invite-link guest `inv` or a personal-room guest `pg`: only the library streams
@@ -6078,6 +6100,9 @@ class AuthService:
                                  "linkNode": True,   # 0.21.78: federation tokens name the spoke (per hub link stats)
                                  **svc.library_auth_fields(),   # 0.21.84: + library (1 | 0), libRoot, libraryWhy
                                  "name": svc.relay_name() or None})
+                elif path == "/api/fleet/relays":     # 0.21.91: the fleet's relays for a member's page (the closest relay)
+                    obj, code = svc.fleet_relays_api(self.headers.get("Authorization"))
+                    self._reply(obj, code)
                 elif path == "/api/rooms":
                     # 0.11.0: the locked rooms this relay remembers (possibly empty) so a
                     # gate can list them and take their codes -- names only.
@@ -6448,6 +6473,8 @@ class AuthService:
         if op == "list":
             return {"ok": True, "rooms": self.store.rooms_public(), "closed": self.store.closed_public(),
                     "groups": self.store.groups_public(), "renamed": self.store.renamed_public()}, 200   # 0.21.65: + renamed
+        if op == "relays":     # 0.21.91: the fleet's relays for a spoke's page (the closest relay at launch)
+            return {"ok": True, "relays": self._p_relays()}, 200
         if op == "settings":   # 0.21.65: Room settings from a spoke's page (vouch "admin": the spoke checked the admin token)
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return room_settings(self.store, body, admin=p.get("vouch") == "admin", log=self.log, xs=self._xs("local"))
@@ -8613,6 +8640,28 @@ class AuthService:
                 out.append({"name": str(v["name"]), "addrs": standby_candidates(v)[:8]})
         self.__dict__["_p_relays_c"] = (now, out)
         return out
+
+    def fleet_relays_api(self, bearer):
+        """0.21.91 (Kenton: "On launch of KASTR always do a check to find the closest relay and select that"): GET /api/fleet/relays
+        with a member token of any room (the Lobby's too) -> {ok, relays: [{name, urls}], hubDown?} -- the hub's registry (the
+        hub and every spoke, with the addresses the Move dialog offers). A spoke asks its hub; a dark hub leaves this relay alone.
+        Never a guest's (an invite link) or a vehicle's token: the fleet's addresses are for its members."""
+        c = self._member_claims(bearer)
+        if not c or c.get("vehicle") or guest_rooms(c) is not None or c.get("lib") or c.get("libv"):
+            return {"ok": False, "error": "a member token of this fleet is required"}, 403
+        rows, down = None, False
+        if self._p_spoke():
+            out = self._hub_fed({"op": "relays"}, timeout=5)
+            if out and out[1] == 200 and isinstance(out[0].get("relays"), list):
+                rows = out[0]["relays"]
+            else:
+                down = True
+        if rows is None:
+            rows = self._p_relays() if not self._p_spoke() else [self._p_relays()[0]]   # (a spoke's own row only when the hub is dark)
+        res = {"ok": True, "relays": fleet_relay_rows(rows)}
+        if down:
+            res["hubDown"] = True
+        return res, 200
 
     def _p_online(self, host, room, admin, now):
         """POST /api/people {op: "online"} -> {ok, rows, at, hubDown?, hubOld?, relays?, apps?} (admins: + the Move choices

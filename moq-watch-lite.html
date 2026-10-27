@@ -1474,6 +1474,18 @@
   .pubui .badge.on, #pubPanes .badge.on { background:var(--asi-red); color:#fff; font-weight:600; }
   .pubui .badge.ready, #pubPanes .badge.ready { background:rgba(92,184,92,.16); color:var(--asi-green); }
   .pubui .badge.warn, #pubPanes .badge.warn { background:rgba(240,173,0,.16); color:var(--asi-amber); }
+  /* 0.21.91 (Kenton: "I can't click on the buttons behind the alert. I need all of the buttons to be available no matter
+     what"): a long status ("offline — removed from grid …") could not shrink and pushed the row's buttons off its right
+     edge. The badge now shrinks (short word, ellipsis), the full status sits on its own line under the row, and the
+     buttons wrap to a second line rather than ever leaving the row. */
+  .pubui .camrow .top { flex-wrap:wrap; row-gap:6px; }
+  .pubui .camrow .top .badge { flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pubui .camrow .top .lbl { flex:1 1 90px; min-width:60px; }   /* the camera's name keeps room; buttons wrap first */
+  /* the notice box (.pubui .warn, later in this sheet) also matched "badge warn" and blew the badge up into a box */
+  .pubui .badge.warn, #pubPanes .badge.warn { padding:2px 7px; border:0; border-radius:3px; margin:0; font-size:10px; line-height:normal; }
+  .pubui .camrow .stfull { font-size:11px; line-height:1.35; color:var(--text-dim); margin:-2px 0 7px; overflow-wrap:anywhere; }
+  .pubui .camrow .stfull.warn { color:var(--asi-amber); padding:5px 8px; border-radius:5px; margin:-2px 0 7px; }
+  .pubui .camrow .stfull[hidden] { display:none; }
   .pubui .hint { font-size:11px; color:var(--text-mute); line-height:1.6; margin:0 0 10px; }
   .pubui .warn { border:1px solid rgba(240,173,0,.3); background:rgba(240,173,0,.07); border-radius:6px; padding:10px 11px; font-size:11.5px; color:var(--asi-amber); line-height:1.6; margin-bottom:11px; }
   #pubStatus { font-size:11px; color:var(--text-dim); white-space:pre-wrap; line-height:1.5; font-family:var(--font-mono); }
@@ -30043,6 +30055,12 @@
   // What THIS slot is doing, as opposed to what the rig as a whole is doing.
   // An RTSP slot only reaches air once its <video> has data and its broadcast
   // is announcing; badging it "ON AIR" before then states something false.
+  // 0.21.91: the badge's word for a status ("offline — removed from grid (…); retrying" -> "offline",
+  // "in grid · asleep (nobody watching)" -> "in grid"); the full text goes on the row's own status line
+  function camBadgeShort(t) {
+    const x = String(t || "").split(" \u2014 ")[0].split(" \u00b7 ")[0].trim();
+    return x || String(t || "");
+  }
   function slotStatus(slot) {
     if (slot.rtsp && slot.native) {   // 0.9.1: the server publishes; relay truth is still the echo
       if (rtspSuspended || slot.pub?.suspended) return { text: "suspended", cls: "ready", onair: false };   // 0.21.16: the box's cameras are switched off
@@ -30244,8 +30262,13 @@
       const slot = slots.get(Number(row.dataset.id));
       const st = slot ? slotStatus(slot) : null;
       const b = row.querySelector(".badge");
-      b.textContent = st ? st.text : "off";
+      const full = st ? st.text : "off";
+      const short = camBadgeShort(full);
+      b.textContent = short;   // 0.21.91: the word on the badge; the whole status on the line below (never covers the buttons)
       b.className = "badge " + (st ? st.cls : "");
+      let sf = row.querySelector(":scope > .stfull");
+      if (!sf && full !== short) { sf = document.createElement("div"); row.querySelector(".top")?.after(sf); }
+      if (sf) { sf.className = "stfull " + (st ? st.cls : ""); sf.textContent = full !== short ? full : ""; sf.hidden = full === short; }
       // 0.9.8: the Audio box follows the entry and shows the server's truth
       const ab = row.querySelector(".aud input");
       if (ab) {

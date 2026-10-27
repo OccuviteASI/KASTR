@@ -80,6 +80,8 @@ class Remembered(unittest.TestCase):
         la = block(JS, "    function layoutApply() {", "    function dragLine(")
         self.assertIn('LY.nostrip === undefined ? window.innerHeight < 900 : !!LY.nostrip', la)   # a short window starts without the strip
         self.assertIn("Math.max(0.3, Math.min(0.78,", la)
+        # Kenton: below ~800 px tall the slide column shrinks so the notes widen (the font stays as the person set it)
+        self.assertIn("(window.innerHeight < 740 ? 0.4 : window.innerHeight < 800 ? 0.46 : 0.6)", la)
         self.assertIn('try { fs = Number(localStorage.getItem("kastr.pres.notesSize")) || 20; } catch {}', JS)   # A- / A+ per device
 
     def test_thinner_strip(self):

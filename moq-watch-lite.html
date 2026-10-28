@@ -22683,7 +22683,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // in the list, never picked from another fleet. Decided: lowest measured round trip; a manual pick lasts until KASTR closes (no
   // automatic moves then); a relay dead for ~15 s -> the next closest, back in the same room by the silent rejoin, and no moving
   // back this run; the hourly move needs a clear win twice (25 % and 10 ms) and waits while presenting, recording, under / giving
-  // remote control, sending a file or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
+  // remote control, sending a file, sharing a screen or window (0.21.93) or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
   const RELAY_DEAD_MS = 15000;
   const FLEET_KEY = "kastr.relays.fleet";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
   const fleetCache = () => { try { const d = JSON.parse(localStorage.getItem(FLEET_KEY) || "null"); return d && Array.isArray(d.relays) ? d : null; } catch { return null; } };
@@ -22859,6 +22859,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { if (window.__rec?.state?.().recording) return "recording"; } catch {}
     try { const rs = window.__rc?.state?.(); if (rs?.ctl) return "controlling someone"; if (rs?.grant) return "under remote control"; } catch {}
     try { if ([...uploading.values()].some((u) => !u.done && !u.err)) return "sending a file"; } catch {}
+    try { if (window.__publisher?.sharingScreen?.()) return "sharing a screen or window"; } catch {}   // 0.21.93: a move reloads the page -- a browser share ends, a native one restarts on the new relay
     try { if ((window.__publisher?.talkAgo?.() ?? 1e9) < 10000) return "talking"; } catch {}
     return "";
   }
@@ -33964,6 +33965,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     opSlug: () => operatorSlug(),                            // 0.12.0: chat records carry the same op key as presence
     fakeTalk: (ms) => { talkForceUntil = Date.now() + (Number(ms) || 3000); },   // 0.12.0 (rig): pretend the mic is loud
     talkAgo: () => (talkLastLoud ? performance.now() - talkLastLoud : 1e9),   // 0.21.91: ms since my mic was last loud (the hourly relay move waits)
+    sharingScreen: () => { try { return added.some((a) => isScreenShare(a)); } catch { return false; } },   // 0.21.93: a screen / window / tab share (native or browser, paused too) -- the hourly relay move waits
     nudge: nudgeFromViewer,   // 0.8.7: viewer stall report -> nudge/rebuild
     refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.5: the upright loop probe settling late
     resumeAudio: () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); } catch {} },   // 0.8.9: phones

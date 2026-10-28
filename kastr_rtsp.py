@@ -1760,6 +1760,16 @@ except ValueError:
 SCREEN_STALL_BACKOFF = [0, 30, 60, 120, 300]
 SCREEN_STALL_RESET_S = 120
 SCREEN_STALL_RELAY_S = 20   # 0.21.91: a moq session line (SOFT/HARD) this recent means the relay link, not the capture, stalled
+# 0.21.93 (field, Kordale's My room: a Teams window share's VIDEO stopped every few minutes while its SOUND kept playing; only
+# Pause + Resume brought the picture back): the watchdog above measures ffmpeg's OUTPUT BYTES, which a share with sound could
+# keep growing while its picture has stopped. A screen share's picture is a constant 30 fps clock (kastr_screen._clocked; the
+# paused card too), so a flat video FRAME count (-progress `frame=`) on a running pair is never normal: it is judged by its own
+# clock as well, with the same threshold, backoff and relay exemption, and shown in diag (videoFrames / videoAt).
+# Lab 2026-10-28 (bundled ffmpeg 9.0.1, the real clocked graph, a capture branch that stops without ending, PCM sound on stdin):
+# the overlay holds the clock AND ffmpeg's scheduler holds the sound with it -- frames and bytes go flat together, so the
+# output-bytes check already restarts that one ("capture froze"). Sound that keeps playing while the picture is gone therefore
+# points past ffmpeg (moq import / relay / the viewer); videoFrames climbing in diag during such a stall proves it. The frame
+# clock is the safety net for an ffmpeg that does let the sound through ("video stopped ... sound kept flowing" in launch.log).
 
 
 def screen_exit_reason(url, who, code):
@@ -2084,6 +2094,10 @@ class Publisher:
         self.restartsTotal = 0
         self.lastSessionAt = None
         self.flowingAt = None       # 0.21.31: the last time ffmpeg's output grew -- the camera is really streaming
+        self.videoFrames = 0        # 0.21.93: ffmpeg's video frame count (-progress frame=) of the running generation
+        self.videoAt = None         # 0.21.93: the last time that count grew -- the picture is really moving
+        self._vFrames = 0
+        self._vSeen = False         # 0.21.93: this generation printed frame= (an encode that reports its video count)
         self.captureStalls = 0      # 0.21.91: frozen-capture watchdog restarts (screen shares) -- never forgotten
         self.lastCaptureStall = None   # 0.21.91: {at, quiet, gen, paused, rc} of the last one
         self._stallAt = 0.0
@@ -2120,6 +2134,7 @@ class Publisher:
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
                 "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
                 "flowingAt": self.flowingAt,                                         # 0.21.31
+                "videoFrames": self.videoFrames, "videoAt": self.videoAt,            # 0.21.93: video-only stalls
                 "captureStalls": self.captureStalls,                                 # 0.21.91: frozen-capture watchdog
                 "lastCaptureStall": self.lastCaptureStall,                           # 0.21.91
                 "library": self._library_info(),                                     # 0.21.84: the stream library (main pairs)
@@ -2219,6 +2234,7 @@ class Publisher:
             self._gen += 1
             gen = self._gen
             self._outSize = 0                                            # 0.21.31: this generation has delivered nothing yet
+            self._vFrames, self._vSeen, self.videoFrames = 0, False, 0       # 0.21.93: nor a video frame
             self._hard = {g: r for g, r in self._hard.items() if g >= gen}   # 0.12.0: older verdicts are spent
             ff_args, moq_args = self._args()
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -2453,6 +2469,13 @@ class Publisher:
             for line in proc.stderr:
                 text = line.decode("utf-8", "replace").strip()
                 if text and tag == "ffmpeg" and PROGRESS_RE.match(text):   # 0.21.31: a -progress line, never an error
+                    if text.startswith("frame=") and text[6:].isdigit() and gen == self._gen:   # 0.21.93: the video's own clock
+                        n = int(text[6:])
+                        self._vSeen = True
+                        if n > self._vFrames:
+                            self._vFrames = self.videoFrames = n
+                            self.videoAt = time.time()
+                        continue
                     if text.startswith("total_size=") and text[11:].isdigit() and gen == self._gen:
                         n = int(text[11:])
                         if n > self._outSize:
@@ -2561,7 +2584,11 @@ class Publisher:
                 or gen != self._gen or not self.running or self.standby or self.suspended):
             return False
         now = time.time() if now is None else now
-        last = max(self.since or now, self.flowingAt or 0)
+        last_out = max(self.since or now, self.flowingAt or 0)
+        # 0.21.93: and the picture's own clock, once this generation reports it -- bytes alone keep flowing on sound
+        last_vid = max(self.since or now, self.videoAt or 0) if self._vSeen else last_out
+        last = min(last_out, last_vid)
+        video_only = now - last_out < SCREEN_STALL_S <= now - last_vid
         if now - last < SCREEN_STALL_S:
             if self._stallRun and now - self._stallAt >= SCREEN_STALL_RESET_S:
                 self._stallRun = 0
@@ -2574,11 +2601,17 @@ class Publisher:
         self.captureStalls += 1
         self._stallAt = now
         quiet = round(now - last, 1)
-        self.lastCaptureStall = {"at": now, "quiet": quiet, "gen": gen, "paused": bool(self.paused), "rc": bool(self.rcmode)}
-        self.bridge.log("screen: share %s capture froze -- no new picture for %.0f s (gen %d, ffmpeg still running, %s) -- "
-                        "restarting the capture (freeze #%d)" % (self.broadcast, quiet, gen,
-                                                                 "never streamed" if (self.flowingAt or 0) < (self.since or 0) else "streamed before",
-                                                                 self.captureStalls))
+        self.lastCaptureStall = {"at": now, "quiet": quiet, "gen": gen, "paused": bool(self.paused), "rc": bool(self.rcmode),
+                                 "kind": "video" if video_only else "output", "frames": self._vFrames}   # 0.21.93
+        if video_only:   # 0.21.93: the field case -- the sound kept the output growing, the picture had stopped
+            self.bridge.log("screen: share %s video stopped -- no new video frame for %.0f s while its sound kept flowing (frames flat "
+                            "at %d, gen %d, ffmpeg still running) -- restarting the capture (freeze #%d)"
+                            % (self.broadcast, quiet, self._vFrames, gen, self.captureStalls))
+        else:
+            self.bridge.log("screen: share %s capture froze -- no new picture for %.0f s (gen %d, ffmpeg still running, %s) -- "
+                            "restarting the capture (freeze #%d)" % (self.broadcast, quiet, gen,
+                                                                     "never streamed" if (self.flowingAt or 0) < (self.since or 0) else "streamed before",
+                                                                     self.captureStalls))
         threading.Thread(target=self._stall_restart, name="kastr-capture-stall", daemon=True).start()
         return True
 

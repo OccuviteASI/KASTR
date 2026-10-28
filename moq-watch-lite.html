@@ -2140,7 +2140,10 @@
   .mst.read { color:#7fe3ff; opacity:1; }
   :root[data-theme="light"] .mst.read { color:#fff; font-weight:700; }
   .mst.bad { color:var(--asi-red); white-space:normal; }
-  .mb.mine .mst.bad { color:#ffd0d0; }
+  /* 0.21.92 (Kenton: the "Not sent" note after the time could not be read on his lime bubble): on my own bubble the note uses
+     the bubble's own ink, full strength, on its own line -- a fixed pink only worked on a blue accent */
+  .mb.mine .mmeta:has(.mst.bad) { opacity:1; white-space:normal; }
+  .mb.mine .mst.bad { display:block; color:var(--on-accent); font-weight:600; text-align:left; margin-top:2px; }
   .mimg { margin:2px 0 4px; border-radius:10px; overflow:hidden; max-width:280px; min-height:40px; min-width:80px; background:rgba(0,0,0,.15); }
   .mimg img { display:block; max-width:100%; max-height:260px; cursor:zoom-in; }
   .mimg.loading { min-height:120px; }

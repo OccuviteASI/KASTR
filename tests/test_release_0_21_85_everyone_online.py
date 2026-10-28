@@ -419,7 +419,7 @@ class Serve(unittest.TestCase):
     def test_same_endpoint_through_the_web_port(self):
         self.assertIn('"/api/people",                                       # 0.21.78: beats, person invites, My room shared', _read("kastr_serve.py"))
         r = _read("kastr_relay.py")
-        self.assertIn('"pwhere", "ponline", "pcmd")', r)
+        self.assertIn('"pwhere", "ponline", "pcmd",', r)   # 0.21.92: + the role-invite ops after it
         self.assertIn('return self._p_online(host, room, claims_admin_any(claims), now)', r)
 
 

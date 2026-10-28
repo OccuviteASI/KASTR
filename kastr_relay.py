@@ -4341,10 +4341,11 @@ class AuthStore:
             self.invites.pop(k, None)
         return bool(dead)
 
-    def invite_create(self, room, ttl, by="", personal_ok=False, bound=None, bound_name=""):
+    def invite_create(self, room, ttl, by="", personal_ok=False, bound=None, bound_name="", role=""):
         """-> (row, token, 200) -- the token exists only in this return value; (None, why, http code) when refused.
         0.21.78: personal_ok -- the room's OWNER asks (the caller checked); bound -- a person invite: only that device's host
-        may use it (a right-click "Invite to ..."), `bound_name` says whom in Room settings."""
+        may use it (a right-click "Invite to ..."), `bound_name` says whom in Room settings.
+        0.21.92: role "p" / "b" -- a presenter / backstage invite (a person invite only): any member of the room may withdraw it."""
         room = str(room or "")
         if not SLUG_RE.match(room):
             return None, "bad room name", 400
@@ -4378,6 +4379,8 @@ class AuthStore:
                    "revokedAt": None, "uses": 0, "hosts": []}
             if bound is not None:   # 0.21.78
                 rec["for"], rec["forName"] = str(bound), clean_label(bound_name, 40)
+                if role in ("p", "b"):   # 0.21.92
+                    rec["role"] = role
             self.invites[iid] = rec
             self._save()
             return self._invite_row(rec), token, 200
@@ -4417,6 +4420,18 @@ class AuthStore:
                     rec["uses"] = int(rec.get("uses") or 0) + 1
                     self._save()
             return "ok", self._invite_row(rec)
+
+    def invite_state(self, iid, now=None):
+        """0.21.92: one invite's state without its token -> {room, role, for, state} | None. state: "pending" (it still
+        works and nobody used it), "used", "revoked", "expired"."""
+        now = time.time() if now is None else now
+        with self.lock:
+            r = self.invites.get(str(iid or ""))
+            if r is None:
+                return None
+            st = ("revoked" if r.get("revoked") else "expired" if now >= float(r.get("exp") or 0)
+                  else "used" if int(r.get("uses") or 0) > 0 else "pending")
+            return {"room": r["room"], "role": str(r.get("role") or ""), "for": str(r.get("for") or ""), "state": st}
 
     def invite_revoke(self, room, iid=None):
         """Revoke one link of `room` (iid) or every live one (iid None). -> (revoked count, found)."""
@@ -6213,7 +6228,8 @@ def group_op(store, p, operator=False, log=None):
 
 P_FED_OPS = ("pjudge", "pbeat", "pleave", "pinvite", "pseen", "plist", "pshare", "pco",   # 0.21.78: rooms_fed ops of My room shared
              "prc",                                                                         # 0.21.79: a remote-control note
-             "pwhere", "ponline", "pcmd")                                                   # 0.21.85: Everyone online, an admin's Restart / Move
+             "pwhere", "ponline", "pcmd",                                                   # 0.21.85: Everyone online, an admin's Restart / Move
+             "pianswer", "pistate", "pirevoke")                                             # 0.21.92: presenter / backstage invites
 
 
 def online_rows_clean(rows):
@@ -6377,6 +6393,7 @@ class PersonalLive:
         self.photo_busy = False
         self.photo_old = False   # 0.21.90: spoke: the hub keeps no photos (older than 0.21.90)
         self.pq = {}          # 0.21.90: spoke: room -> (at, the hub's set of name keys in it)
+        self.ians = {}        # 0.21.92: hub: role-invite id -> ("join" | "ignore", at) -- the invited page's answer
         self.thread = None
 
 
@@ -7520,6 +7537,7 @@ class AuthService:
             gone = [k for k, v in self._inv_cache.items() if v[1].get("id") in drop]
             for k in gone:
                 self._inv_cache.pop(k, None)
+        self._p_inbox_drop(drop)   # 0.21.92: a withdrawn invite's prompt waiting here goes too
         if self._p_inv_end(drop):   # 0.21.85: a My room guest who came by a revoked link is out now
             threading.Thread(target=self.trigger_revalidate, daemon=True).start()
         return len(gone)
@@ -7975,6 +7993,23 @@ class AuthService:
                      if now - float(x.get("at") or 0) <= (RC_INBOX_TTL if x.get("kind") == "rc" else RCX_INBOX_TTL if x.get("kind") == "rcx"
                                                           else PINBOX_TTL)]   # 0.21.79; 0.21.92: + an admin's ask
         return items
+
+    def _p_inbox_drop(self, ids):
+        """0.21.92: invites withdrawn -> their notes out of every inbox here (and, on the hub, out of the spokes' feed)."""
+        ids = {str(i) for i in ids or ()}
+        if not ids:
+            return 0
+        pl, n = self._pl(), 0
+        with self.lock:
+            for h in list(pl.inbox):
+                keep = [x for x in pl.inbox[h] if str(x.get("id") or "") not in ids]
+                n += len(pl.inbox[h]) - len(keep)
+                if keep:
+                    pl.inbox[h] = keep
+                else:
+                    pl.inbox.pop(h, None)
+            pl.out = [x for x in pl.out if str((x.get("item") or {}).get("id") or "") not in ids]
+        return n
 
     def _p_inbox_put_locked(self, host, item):
         pl = self._pl()
@@ -8460,9 +8495,11 @@ class AuthService:
                "kind": "operator", "color": str(p.get("color") or "")[:7]}
         return self._rcx_admin(p, who)
 
-    def _p_invite_make(self, room, frm, by, to, to_name, now=None):
+    def _p_invite_make(self, room, frm, by, to, to_name, now=None, role="", deck=""):
         """Hub: a person invite -- a link bound to the invited device, then a note for that device's page (here, and on every
-        spoke through the long-poll). -> (reply, code)."""
+        spoke through the long-poll). -> (reply, code). 0.21.92: role "p" / "b" (+ the deck's name) -- "<by> wants you as
+        presenter / backstage in <room>"; the role itself waits on the presenter's page until they are in the room."""
+        role = role if role in ("p", "b") else ""
         now = time.time() if now is None else now
         title = room
         away = False
@@ -8472,11 +8509,13 @@ class AuthService:
                 return {"ok": False, "error": "no such personal room"}, 404
             title = (info["owner"] or "Someone") + "'s room"
             away = not self.personal_open(room, now)
-        row, tok, code = self.store.invite_create(room, PINVITE_TTL, by, personal_ok=is_personal(room), bound=to, bound_name=to_name)
+        row, tok, code = self.store.invite_create(room, PINVITE_TTL, by, personal_ok=is_personal(room), bound=to, bound_name=to_name, role=role)
         if row is None:
             return {"ok": False, "error": tok}, code
         item = {"id": row["id"], "kind": "invite", "room": room, "title": title, "from": frm, "by": clean_label(by, 40),
                 "token": tok, "exp": row["exp"], "at": now}
+        if role:   # 0.21.92
+            item["role"], item["deck"] = role, clean_label(deck, 60)
         pl = self._pl()
         with self.lock:
             self._p_inbox_put_locked(to, item)
@@ -8485,8 +8524,68 @@ class AuthService:
             pl.out = pl.out[-PINBOX_KEEP:]
         self._p_thread()
         self.bans.nudge()
-        self.log("relay auth: %s invited %s to %s (link %s, one device)" % (by or frm, to_name or to, room, row["id"]))
-        return {"ok": True, "to": to, "room": room, "id": row["id"], "away": away}, 200
+        self.log("relay auth: %s invited %s to %s (link %s, one device%s)" % (by or frm, to_name or to, room, row["id"],
+                                                                          {"p": ", as a presenter", "b": ", as backstage"}.get(role, "")))
+        return {"ok": True, "to": to, "room": room, "id": row["id"], "away": away, "role": role}, 200
+
+    def _p_rinv(self, op, room, host, guest, p, now=None):
+        """0.21.92 hub: presenter / backstage invites after they went out. op "answer" {id, a}: the INVITED device says Join /
+        Ignore (its own invite only); "state" {ids, names}: a member of the invite's room asks how its role invites stand
+        (pending / ignored / used / revoked / expired / gone) and where renamed people went (name key -> {to, name});
+        "revoke" {id}: a member of the room (never a guest) withdraws a role invite -- the link stops working and its prompt
+        goes from every inbox."""
+        now = time.time() if now is None else now
+        if not hasattr(self.store, "invite_state"):
+            return {"ok": False, "error": "this relay keeps no invites"}, 501
+        pl = self._pl()
+        if op == "state":
+            ids = [str(i) for i in (p.get("ids") or [])[:24] if re.match(r"^[0-9a-f]{8}$", str(i))] if isinstance(p.get("ids"), list) else []
+            out = {}
+            with self.lock:
+                for k in [k for k, v in pl.ians.items() if now - v[1] > 7200]:
+                    pl.ians.pop(k, None)
+                ans = {i: pl.ians.get(i) for i in ids}
+            for iid in ids:
+                st = self.store.invite_state(iid, now)
+                if st is None or st["room"] != room or not st["role"]:
+                    out[iid] = "gone"
+                    continue
+                s = st["state"]
+                if s == "pending" and ans.get(iid) and ans[iid][0] == "ignore":
+                    s = "ignored"
+                out[iid] = s
+            alias = {}
+            names = p.get("names") if isinstance(p.get("names"), list) else []
+            if hasattr(self.store, "personal_alias"):
+                for k in names[:24]:
+                    k = kastr_msg.name_key(k) if isinstance(k, str) else ""
+                    a = self.store.personal_alias(k, now) if k else None
+                    if a and a.get("to"):
+                        alias[k] = {"to": str(a["to"]), "name": clean_label(a.get("name"), 48)}
+            return {"ok": True, "states": out, "alias": alias}, 200
+        iid = str(p.get("id") or "")
+        if not re.match(r"^[0-9a-f]{8}$", iid):
+            return {"ok": False, "error": "which invitation?"}, 400
+        st = self.store.invite_state(iid, now)
+        if op == "answer":
+            if st is None or not st["role"] or st["for"] != host:
+                return {"ok": False, "error": "no such invitation"}, 404
+            with self.lock:
+                pl.ians[iid] = ("join" if p.get("a") == "join" else "ignore", now)
+            return {"ok": True, "state": st["state"]}, 200
+        if guest:
+            return {"ok": False, "error": "a guest cannot withdraw invitations"}, 403
+        if st is None or st["room"] != room or not st["role"]:
+            return {"ok": False, "error": "no such presenter / backstage invitation in this room"}, 404
+        n, _found = self.store.invite_revoke(room, iid)
+        self._p_inbox_drop({iid})
+        if n:
+            self.log("relay auth: role invitation %s of room %s withdrawn by %s" % (iid, room, host or "a member"))
+            try:
+                self.bans.nudge()   # the spokes drop it from their caches and their inboxes
+            except Exception:
+                pass
+        return {"ok": True, "revoked": n}, 200
 
     def _p_seen_local(self, now=None):
         """The people this relay knows -- its apps' check-ins, its live sessions, the names pages say in their beats, and on
@@ -8608,7 +8707,15 @@ class AuthService:
                 return {"ok": False, "error": "bad invite"}, 400
             if p.get("vouch") != ("owner" if is_personal(room) else "member"):
                 return {"ok": False, "error": "the spoke must vouch for a member of the room (its owner, for a personal room)"}, 403
-            return self._p_invite_make(room, host, clean_label(p.get("by"), 40), to, clean_label(p.get("toName"), 40))
+            if p.get("role") in ("p", "b") and p.get("guest"):
+                return {"ok": False, "error": "a guest cannot invite people from outside the room"}, 403
+            return self._p_invite_make(room, host, clean_label(p.get("by"), 40), to, clean_label(p.get("toName"), 40),
+                                       role=str(p.get("role") or ""), deck=clean_label(p.get("deck"), 60))   # 0.21.92: + a role
+        if op in ("pianswer", "pistate", "pirevoke"):   # 0.21.92: presenter / backstage invites (the spoke checked the member token)
+            room = str(p.get("room") or "")
+            if p.get("vouch") != "member" or not host or not SLUG_RE.match(room):
+                return {"ok": False, "error": "the spoke must vouch for a member of the room"}, 403
+            return self._p_rinv(op[2:], room, host, bool(p.get("guest")), p)
         if not is_personal(slug):
             return {"ok": False, "error": "bad room"}, 400
         if op == "pjudge":
@@ -8738,10 +8845,26 @@ class AuthService:
             if not self._p_rate_ok(host, now):
                 return {"ok": False, "error": "too many invites -- wait a minute", "retryAfter": PINVITE_RATE[1]}, 429
             by, to_name = clean_label(p.get("by"), 40) or host, clean_label(p.get("toName"), 40)
+            role = str(p.get("role") or "") if p.get("role") in ("p", "b") else ""   # 0.21.92: a presenter / backstage invite
+            deck = clean_label(p.get("deck"), 60) if role else ""
+            if role and (claims.get("inv") or claims.get("pg")):
+                return {"ok": False, "error": "a guest cannot invite people from outside the room"}, 403
             if not self._p_spoke():
-                return self._p_invite_make(room, host, by, to, to_name, now)
+                return self._p_invite_make(room, host, by, to, to_name, now, role=role, deck=deck)
             return self._p_hub_call({"op": "pinvite", "vouch": "owner" if owner else "member", "room": room, "host": host,
-                                     "by": by, "to": to, "toName": to_name})
+                                     "by": by, "to": to, "toName": to_name, "role": role, "deck": deck})
+        if op in ("ianswer", "istate", "irevoke"):   # 0.21.92: presenter / backstage invites -- Join / Ignore, how they stand, withdraw
+            guest = bool(claims.get("inv") or claims.get("pg"))
+            if op == "irevoke" and guest:
+                return {"ok": False, "error": "a guest cannot withdraw invitations"}, 403
+            if op != "ianswer" and (room == LOBBY_SLUG or claims.get("lobby")):
+                return {"ok": False, "error": "join the room first"}, 403
+            body = {"id": str(p.get("id") or "")[:16], "a": "join" if p.get("a") == "join" else "ignore",
+                    "ids": [str(i)[:16] for i in p.get("ids")[:24]] if isinstance(p.get("ids"), list) else [],
+                    "names": [str(n)[:64] for n in p.get("names")[:24]] if isinstance(p.get("names"), list) else []}
+            if not self._p_spoke():
+                return self._p_rinv(op[1:], room, host, guest, body, now)
+            return self._p_hub_call(dict(body, op="p" + op, vouch="member", room=room, host=host, guest=guest), timeout=5)
         if op == "rc":   # 0.21.79: remote control notes
             return self.rc_send(p, claims, room, host, now)
         if op == "photo":    # 0.21.90: set / remove my profile photo (the hub keeps it)

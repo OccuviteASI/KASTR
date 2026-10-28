@@ -24,7 +24,7 @@ def block(src, start, end):
 class TheRecord(unittest.TestCase):
     def test_on_by_default_next_to_am(self):
         self.assertIn("function audienceInit(m) { m.am = 1; m.ask = 1;", AUD)
-        self.assertIn("{ am: m.am ? 1 : 0, ask: m.ask === 0 ? 0 : 1, lt:", AUD)
+        self.assertIn("{ am: m.am ? 1 : 0, ask: m.ask === 0 ? 0 : 1, see: m.see === 0 ? 0 : 1, lt:", AUD)   # 0.21.92: + see
         self.assertIn("ask: rec.ask === undefined || Number(rec.ask) ? 1 : 0,", AUD)   # an older owner: on
         self.assertIn("m.ask = rec.ask === undefined || Number(rec.ask) ? 1 : 0;", AUD)   # a hand-over keeps it
 
@@ -32,7 +32,7 @@ class TheRecord(unittest.TestCase):
         self.assertIn('if (pp.op === "ask") return setAsk(!!pp.v, who) || true;', AUD)
         aa = block(AUD, "  function askAct(v) {", "  function panelAvInfo(")
         self.assertIn('if (v0.role === "copresenter") return sendPresOp(v0.id, { op: "ask", v: v ? 1 : 0 });', aa)
-        self.assertIn('al.append(ac, document.createTextNode("Ask to speak"));', AUD)
+        self.assertIn('al.append(switchOf(ac), document.createTextNode("Ask to speak"));', AUD)
         ax = block(AUD, "  avExtra = (row) => {", "  // the audience's pill")
         self.assertLess(ax.index('"Audience muted"'), ax.index('"Ask to speak"'))   # under Audience muted
 
@@ -60,7 +60,9 @@ class Templates(unittest.TestCase):
         self.assertIn("askPreset(mine, arguments[1]);", sf)
         self.assertLess(sf.index("audienceInit(mine);"), sf.index("askPreset(mine, arguments[1]);"))
         self.assertIn("(o.audience && (o.audience.ask === 0 || o.audience.ask === false))", AUD)
-        self.assertIn("audSnap: () => (mine && mine.lt ? { am: mine.am ? 1 : 0, ask: mine.ask === 0 ? 0 : 1 } : null),", JS)
+        # 0.21.92: audSnap is a function of its own and carries "Audience can see each other" too (plain keys)
+        self.assertIn("if (mine && mine.lt) return { am: mine.am ? 1 : 0, ask: mine.ask === 0 ? 0 : 1, see: mine.see === 0 ? 0 : 1 };", JS)
+        self.assertIn("audSnap, audApply, rolesSnap, rolesApply,", JS)
 
 
 if __name__ == "__main__":

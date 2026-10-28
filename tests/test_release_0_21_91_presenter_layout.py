@@ -39,12 +39,12 @@ class Structure(unittest.TestCase):
         self.assertIn("#presView .side { display:flex; flex-direction:column; gap:6px; min-height:0; overflow:hidden; }", CSS)
 
     def test_one_small_next_slide(self):
-        self.assertIn('<div class="nxt" title="The next slide"><canvas class="n1"></canvas><span class="nxl"></span></div>', JS)
+        self.assertIn('<div class="nxtbox"><div class="nxt" title="The next slide"><canvas class="n1"></canvas><span class="nxl"></span><span class="nxgrip"', JS)   # 0.21.92: + the size grip
         self.assertNotIn('class="n2"', JS)
         self.assertNotIn(".nexts", JS)
         pt = block(JS, "    async function paint() {", "    function paintAll()")
         self.assertIn("const cvs = [[$(\".curcv\"), v.idx, null], [$(\".n1\"), v.idx + 1, null]];", pt)
-        self.assertIn("#presView .nxt canvas { width:84px;", CSS)
+        self.assertIn("#presView .nxt canvas { display:block; width:100%; aspect-ratio:16/9;", CSS)   # 0.21.92: sized by --nxw (half the live slide)
 
     def test_collapsible_panels_closed_at_first(self):
         for k in ("mode", "av", "ppl"):

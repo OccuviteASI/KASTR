@@ -11,7 +11,8 @@ Usage:
 Always serves the folder this script lives in, so it works no matter what the
 current working directory is.
 
---relay  Relay to point the pages at. Defaults to kastr_serve.DEFAULT_RELAY.
+--relay  Relay to point the pages at. Defaults to kastr_serve.DEFAULT_RELAY
+         (0.21.93: the fleet's web address; KASTR_DEFAULT_RELAY overrides it).
          Pass --relay http://localhost:4443 to disable rewriting (no-op).
 --coep   Cross-Origin-Embedder-Policy value:
            require-corp   (default) strictest; cross-origin subresources must

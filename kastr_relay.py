@@ -9488,6 +9488,12 @@ class AuthService:
         except Exception:
             ips = []
         out = [{"name": self.relay_name() or "hub", "addrs": [{"address": "http://%s:%d" % (ip, port), "why": "one of its network addresses"} for ip in ips][:8]}]
+        try:
+            pub = PUBLIC_RELAY_FN() if PUBLIC_RELAY_FN else None   # 0.21.93: the web address is part of the fleet (last on the row)
+        except Exception:
+            pub = None
+        if pub:
+            out[0]["addrs"] = out[0]["addrs"][:7] + [{"address": pub, "why": "its public web address"}]
         with self.lock:
             sp = [dict(v) for v in self.spokes.values()]
         for v in sorted(sp, key=lambda v: str(v.get("name") or "")):
@@ -14618,6 +14624,7 @@ def probe_hub_web(relay_url, candidates=(), budget=3.0):
 
 
 HUB_WEB_SINK = None        # 0.15.0: kastr_serve.HUB_WEB once loaded -- hub_web_note mirrors into it
+PUBLIC_RELAY_FN = None     # 0.21.93: kastr_serve.public_relay_url -- this hub's public web relay (kastr.ini public_url + /relay)
 
 
 def _hub_web_file(state_dir):

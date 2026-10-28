@@ -231,7 +231,20 @@ class Endpoints(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def req(self, method, path, body=None, headers=None):
-        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=120)
+        # 0.21.92: under a loaded machine (the full suite next to a Linux build) Windows once in a while gave up on the
+        # loopback CONNECT itself (WinError 10060 after ~21 s of unanswered SYNs) while the server kept serving -- every
+        # request here is a new connection (HTTP/1.0) and the server closes first, so its TIME_WAITs pile up on this port.
+        # Nothing was sent yet when the connect fails, so a fresh connection (a new client port) is a safe retry.
+        for attempt in range(4):
+            c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=120)
+            try:
+                c.connect()
+                break
+            except (ConnectionError, TimeoutError, OSError):
+                c.close()
+                if attempt == 3:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
         h = dict(headers or {})
         c.request(method, path, body=body, headers=h)
         r = c.getresponse()
@@ -268,6 +281,7 @@ class Endpoints(unittest.TestCase):
     def test_validation(self):
         if not FF:
             self.skipTest("no ffmpeg here")
+        self.forget_jobs()
         self.assertEqual(self.jreq("POST", "/api/record/convert?fmt=avi", body=b"x" * 10)[0], 400)
         self.assertEqual(self.jreq("POST", "/api/record/convert?fmt=mp4", body=b"")[0], 411)
         with mock.patch.object(kr, "UPLOAD_MAX", 100):
@@ -322,8 +336,16 @@ class Endpoints(unittest.TestCase):
             code, d = self.jreq("GET", "/api/record/job/" + job)
             if d.get("state") in ("done", "error", "cancelled"):
                 return d
-            time.sleep(0.2)
+            time.sleep(0.4)   # 0.21.92: fewer connections while a conversion runs
         self.fail("job did not finish")
+
+    @staticmethod
+    def forget_jobs():
+        """0.21.92: a subtest that failed half-way leaves no job / files behind for the next one to trip over."""
+        with kr.JOBS_LOCK:
+            jobs = list(kr.JOBS.values())
+        for j in jobs:
+            kr.drop(j)
 
     def probe_out(self, data, fmt):
         p = os.path.join(self.tmp, "check" + kr.EXT[fmt])
@@ -345,6 +367,7 @@ class Endpoints(unittest.TestCase):
         }
         for (clip, fmt), (wv, wa) in want.items():
             with self.subTest(clip=clip, fmt=fmt):
+                self.forget_jobs()
                 with open(self.clips[clip], "rb") as f:
                     body = f.read()
                 ctype = "video/mp4" if clip.endswith(".mp4") else "video/webm;codecs=vp9,opus"

@@ -479,6 +479,48 @@ def maximize_pid(pid):
     return n
 
 
+def _iconify(d, w, maximize):
+    """0.21.92: maximized first when the restore should come back maximized (EWMH _NET_WM_STATE), then iconic (ICCCM
+    WM_CHANGE_STATE IconicState -- what XIconifyWindow sends)."""
+    d.x.XSendEvent.restype = c_int
+    d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XEvent)]
+    if maximize:
+        ev = XEvent()
+        c = ev.xclient
+        c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, int(w), 32
+        c.message_type = d.atom("_NET_WM_STATE")
+        c.l[0], c.l[1], c.l[2], c.l[3] = 1, d.atom("_NET_WM_STATE_MAXIMIZED_VERT"), d.atom("_NET_WM_STATE_MAXIMIZED_HORZ"), 1
+        d.x.XSendEvent(d.dpy, d.root, 0, (1 << 19) | (1 << 20), ctypes.byref(ev))
+    ev = XEvent()
+    c = ev.xclient
+    c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, int(w), 32
+    c.message_type = d.atom("WM_CHANGE_STATE")
+    c.l[0] = 3   # IconicState
+    d.x.XSendEvent(d.dpy, d.root, 0, (1 << 19) | (1 << 20), ctypes.byref(ev))
+
+
+def iconify_xid(xid, maximize=False):
+    """0.21.92 ("Start minimized" for the sign-in start): ask the window manager to minimize one window."""
+    with Display() as d:
+        _iconify(d, xid, maximize)
+        d.x.XFlush(d.dpy)
+    return True
+
+
+def iconify_pid(pid, maximize=False):
+    """0.21.92: minimize the mapped windows of `pid` (maximized first when `maximize`, so a restore brings it back so)
+    -> how many windows were asked (0 = none of that process is mapped yet)."""
+    n = 0
+    with Display() as d:
+        wins = d.windows_prop(d.root, "_NET_CLIENT_LIST")
+        mine = [w for w in wins if d.pid(w) == int(pid) and (d.rect(w) or {}).get("viewable") and (d.rect(w) or {}).get("w", 0) >= 200]
+        for w in mine:
+            _iconify(d, w, maximize)
+            n += 1
+        d.x.XFlush(d.dpy)
+    return n
+
+
 def window_rect(xid):
     try:
         with Display() as d:

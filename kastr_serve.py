@@ -274,57 +274,149 @@ def invite_pending_take():
     return {k: inv[k] for k in ("token", "room", "relay")}
 
 
-def autorun_state():
-    """Is KASTR registered to start with this machine? Per-user, no admin.
-    Windows: HKCU Run key; Linux: ~/.config/autostart. Frozen builds only
-    (a dev checkout has no stable exe to point at)."""
-    if not getattr(sys, "frozen", False):
-        return {"enabled": False, "supported": False,
-                "note": "autorun applies to the installed app, not a source checkout"}
-    exe = sys.executable
+# 0.21.92 (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins"): the
+# Profile menu has the switch too, plus "Start minimized" -- the Run key / autostart entry then carries AUTORUN_FLAG, and that
+# launch opens the window minimized (still connecting, still going straight into the main room). The choice is kept in
+# autorun.json in the state folder, so the Relay page's switch (which knows nothing of it) rewrites the entry with the same flag.
+AUTORUN_FLAG = "--minimized"
+_AUTORUN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_AUTORUN_FLAG_RE = re.compile(r"(?:^|\s)--minimized(?:\s|$)")
+
+
+def _autorun_pref_file():
+    return os.path.join(STATE_DIR, "autorun.json") if STATE_DIR else None
+
+
+def autorun_pref_minimized():
+    """The saved "Start minimized" choice (False when never set)."""
+    p = _autorun_pref_file()
+    if not p:
+        return False
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f).get("minimized") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _autorun_pref_save(minimized):
+    p = _autorun_pref_file()
+    if not p:
+        return
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"minimized": bool(minimized)}, f)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _autorun_desktop():
+    return os.path.expanduser("~/.config/autostart/kastr.desktop")
+
+
+def _autorun_read():
+    """-> the command KASTR's autorun entry runs ("" when there is none). Windows: the HKCU Run value; Linux: the Exec line."""
     if sys.platform == "win32":
         try:
             import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTORUN_RUN_KEY) as k:
                 val, _ = winreg.QueryValueEx(k, "KASTR")
-            return {"enabled": exe.lower() in str(val).lower(), "supported": True}
+            return str(val or "")
         except OSError:
-            return {"enabled": False, "supported": True}
-    desk = os.path.expanduser("~/.config/autostart/kastr.desktop")
-    return {"enabled": os.path.exists(desk), "supported": True}
+            return ""
+    try:
+        with open(_autorun_desktop(), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Exec="):
+                    return line[5:].strip() or " "
+        return " "   # an entry without an Exec line is still ours to report (0.8.2 judged by the file alone)
+    except OSError:
+        return ""
 
 
-def autorun_set(enabled):
-    if not getattr(sys, "frozen", False):
-        return {"error": "autorun is for the installed app (frozen builds) only"}
-    exe = sys.executable
+def _autorun_command(exe, minimized):
+    return '"%s"%s' % (exe, (" " + AUTORUN_FLAG) if minimized else "")
+
+
+def _autorun_write(exe, enabled, minimized):
     if sys.platform == "win32":
         import winreg
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
-                              r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _AUTORUN_RUN_KEY) as k:
             if enabled:
-                winreg.SetValueEx(k, "KASTR", 0, winreg.REG_SZ, '"%s"' % exe)
+                winreg.SetValueEx(k, "KASTR", 0, winreg.REG_SZ, _autorun_command(exe, minimized))
             else:
                 try:
                     winreg.DeleteValue(k, "KASTR")
                 except OSError:
                     pass
-        return {"ok": True, "enabled": bool(enabled)}
-    d = os.path.expanduser("~/.config/autostart")
-    desk = os.path.join(d, "kastr.desktop")
+        return
+    desk = _autorun_desktop()
     if enabled:
-        os.makedirs(d, exist_ok=True)
+        os.makedirs(os.path.dirname(desk), exist_ok=True)
         with open(desk, "w", encoding="utf-8") as f:
             f.write("[Desktop Entry]\nType=Application\nName=KASTR\n"
                     "Comment=Kenton's ASI Streaming Tool with Relay\n"
-                    'Exec="%s"\nX-GNOME-Autostart-enabled=true\n' % exe)
+                    "Exec=%s\nX-GNOME-Autostart-enabled=true\n" % _autorun_command(exe, minimized))
     else:
         try:
             os.remove(desk)
         except OSError:
             pass
-    return {"ok": True, "enabled": bool(enabled)}
+
+
+def autorun_state():
+    """Is KASTR registered to start with this machine? Per-user, no admin.
+    Windows: HKCU Run key; Linux: ~/.config/autostart. Frozen builds only
+    (a dev checkout has no stable exe to point at).
+    0.21.92: + minimized -- the entry's own flag while it is on, the saved choice while it is off."""
+    if not getattr(sys, "frozen", False):
+        return {"enabled": False, "supported": False, "minimized": False,
+                "note": "autorun applies to the installed app, not a source checkout"}
+    exe = sys.executable
+    cmd = _autorun_read()
+    if sys.platform == "win32":
+        enabled = bool(cmd) and exe.lower() in cmd.lower()
+    else:
+        enabled = bool(cmd)
+    minimized = bool(_AUTORUN_FLAG_RE.search(cmd)) if enabled else autorun_pref_minimized()
+    return {"enabled": enabled, "supported": True, "minimized": minimized}
+
+
+def autorun_set(enabled, minimized=None):
+    """Turn KASTR's autorun entry on (written fresh, with the "Start minimized" flag when chosen) or off (the entry goes).
+    `minimized` None = keep the saved choice (the Relay page's switch); True / False = save it."""
+    if not getattr(sys, "frozen", False):
+        return {"error": "autorun is for the installed app (frozen builds) only"}
+    if minimized is not None:
+        _autorun_pref_save(bool(minimized))
+    flag = autorun_pref_minimized() if minimized is None else bool(minimized)
+    _autorun_write(sys.executable, bool(enabled), flag)
+    return {"ok": True, "enabled": bool(enabled), "minimized": flag}
+
+
+def autorun_flag_fix(keep):
+    """0.21.92: the launcher's repair of the entry's flag, never its on / off. keep=False drops --minimized (before this
+    machine moves to a KASTR older than 0.21.92, whose launcher would refuse the unknown flag and never start at sign-in);
+    keep=True puts it back when the saved choice says so (after such a version came and went). -> what it did ("" = nothing)."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    st = autorun_state()
+    if not st.get("enabled"):
+        return ""
+    has = bool(_AUTORUN_FLAG_RE.search(_autorun_read()))
+    if keep and has:
+        return ""   # only ever puts it back -- a flag the saved choice does not know of stays (a reset state folder)
+    want = bool(keep) and autorun_pref_minimized()
+    if has == want:
+        return ""
+    try:
+        _autorun_write(sys.executable, True, want)
+    except OSError as e:
+        return "could not rewrite the autorun entry (%s)" % e
+    return "start minimized flag " + ("restored" if want else "dropped")
 
 
 def _ini_file():
@@ -4079,10 +4171,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 else:
                     try:
                         n = int(self.headers.get("Content-Length") or 0)
-                        want = bool(json.loads(self.rfile.read(n) or b"{}").get("enabled"))
+                        req = json.loads(self.rfile.read(n) or b"{}")
+                        want = bool(req.get("enabled"))
+                        mini = req.get("minimized")   # 0.21.92: the Profile menu's "Start minimized"; absent = keep the saved one
+                        mini = None if mini is None else bool(mini)
                     except Exception:
-                        want = False
-                    body = json.dumps(autorun_set(want)).encode()
+                        want, mini = False, None
+                    try:
+                        body = json.dumps(autorun_set(want, mini)).encode()
+                    except OSError as e:
+                        body = json.dumps({"error": "could not change the autorun entry: %s" % e}).encode()
                     self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))

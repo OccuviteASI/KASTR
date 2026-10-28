@@ -217,6 +217,10 @@
   #profilePop .mainrow { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
   #profilePop .mainrow[hidden] { display:none; }
   #profilePop .mainrow .hclbl { font-size:11px; color:var(--text-dim); }
+  #profilePop .bootrow { display:flex; flex-direction:column; gap:0; margin:0 0 12px; }   /* 0.21.92: Start KASTR when I sign in */
+  #profilePop .bootrow[hidden], #profilePop .bootrow .sw[hidden] { display:none; }
+  #profilePop .bootrow .sw { padding:4px 0; }
+  #profilePop .bootrow #profBootMinRow { padding-left:18px; }
   #profilePop .mainseg { display:inline-flex; align-self:flex-start; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
   #profilePop .mainseg label { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:13px; color:var(--text-dim); cursor:pointer; }
   #profilePop .mainseg label + label { border-left:1px solid var(--line); }
@@ -3309,6 +3313,12 @@
         <label title="KASTR starts in My room, and Leave takes you there"><input type="radio" name="profMain" value="mine">My room</label>
         <label title="KASTR starts in the Lobby, and Leave takes you there"><input type="radio" name="profMain" value="lobby">Lobby</label></div>
       <p class="hint">Where KASTR starts and where <b>Leave</b> takes you. Leaving your main room takes you to the Lobby. Saved on this device.</p></div>
+    <!-- 0.21.92 (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins") --
+         the Relay page's switch, for everyone: this computer's own KASTR only (hidden for web pages and dev checkouts) -->
+    <div class="bootrow" id="profBootRow" hidden>
+      <div class="sw"><label class="switch"><input type="checkbox" id="profBoot"><i></i></label><span>Start KASTR when I sign in to this computer</span></div>
+      <div class="sw" id="profBootMinRow" hidden><label class="switch"><input type="checkbox" id="profBootMin"><i></i></label><span>Start minimized</span></div>
+      <p class="hint" id="profBootMsg">KASTR opens when you sign in and goes straight into your main room.</p></div>
     <div class="btnrow"><button type="button" id="profSave" class="join">Save</button><span id="profMsg" class="hint"></span></div>
   </div>
 </div>
@@ -17769,8 +17779,46 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       row.hidden = !can;
       for (const r of row.querySelectorAll('input[name="profMain"]')) r.checked = r.value === mainPref();
     }
+    bootPaint();   // 0.21.92
     setTimeout(() => document.getElementById("profFirst").focus(), 50);
   }
+  // 0.21.92 (Kenton): "Start KASTR when I sign in to this computer" for everyone (it was on the Relay page only) -- the same
+  // /api/autorun the Relay page's switch uses, so the two always agree. Only this computer's own KASTR shows it: a web page
+  // (another machine's KASTR) never does, and the server says supported:false for a dev checkout / 403 for a remote page.
+  // "Start minimized" shows while the first switch is on; the choice is kept on this computer, so the Relay page's switch
+  // (or turning this one off and on again) writes the same entry.
+  const BOOT_HINT = { on: "KASTR opens when you sign in and goes straight into your main room.", min: "KASTR starts minimized when you sign in \u2014 it still connects and goes into your main room. Opening KASTR yourself always shows the window.", off: "Off \u2014 KASTR starts only when you open it." };
+  function bootShow(a) {
+    const on = !!a.enabled, mini = !!a.minimized;
+    document.getElementById("profBoot").checked = on;
+    document.getElementById("profBootMin").checked = mini;
+    document.getElementById("profBootMinRow").hidden = !on;
+    document.getElementById("profBootMsg").textContent = !on ? BOOT_HINT.off : mini ? BOOT_HINT.min : BOOT_HINT.on;
+  }
+  async function bootPaint() {
+    const row = document.getElementById("profBootRow");
+    if (IS_WEB) { row.hidden = true; return; }
+    let a = null;
+    try { const r = await fetch("/api/autorun", { cache: "no-store" }); if (r.ok) a = await r.json(); } catch {}
+    if (!a || a.error || a.supported === false) { row.hidden = true; return; }
+    bootShow(a);
+    row.hidden = false;
+  }
+  async function bootSet(enabled, minimized) {
+    let a;
+    try {
+      const r = await fetch("/api/autorun", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled, minimized }) });
+      a = await r.json();
+    } catch (e) { a = { error: String(e?.message || e) }; }
+    if (!a || a.error || !a.ok) {
+      window.__toast?.("Could not change the sign-in start: " + (a?.error || "no answer"), 6000, { level: "warn" });
+      return bootPaint();
+    }
+    bootShow(a);
+    window.__toast?.(!a.enabled ? "KASTR will not start when you sign in" : a.minimized ? "KASTR will start minimized when you sign in" : "KASTR will start when you sign in to this computer", 4000, { level: "event" });
+  }
+  document.getElementById("profBoot").addEventListener("change", (e) => bootSet(e.target.checked, document.getElementById("profBootMin").checked));   // the minimized choice stays
+  document.getElementById("profBootMin").addEventListener("change", (e) => bootSet(true, e.target.checked));
   for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
     if (!r.checked) return;
     mainPrefSet(r.value);
@@ -18210,6 +18258,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let authChat = false;     // 0.12.0: ... and .chat
   let authState = false;
   let authWeb = 0;                    // 0.14.0 F: hub web port from /api/auth; 0.21.7: 0 = not told (consumers fall back to 8000 LAST, and only on the app)
+  let authWebFor = "";                // 0.21.92: the authBase() that told us authWeb
   let authNs = "";                    // 0.21.17: the control namespace the cached/minted token grants
   let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves "~state" publicly (state tracks); open relays always
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
@@ -18241,6 +18290,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
+      authWebFor = base;                                // 0.21.92: ...of the relay at THIS base (relayHostBase trusts it only for that relay)
       try { personalFleetSet(String(d.fleet || "")); } catch {}   // 0.21.91: My room is kept per fleet
       authHttps = Number(d.https) || 0;                 // 0.15.0
       libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
@@ -21678,6 +21728,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (isWebRelay(wu.href)) return wu.origin === location.origin ? location.origin : wu.origin;   // 0.19.0
       const h = wu.hostname;
       const same = h === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(h) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
+      // 0.21.92 (a non-hub KASTR answered "already has a My room with another code" right after Set up with a brand-new name):
+      // the relay is on THIS machine but ANOTHER KASTR runs it (a second KASTR here -- a relay box's service and a person's app,
+      // a dev copy). Its /api/auth names its web port: that KASTR keeps My room, chat and the rooms (it forwards them to the
+      // hub); this page's own KASTR has a store of its own nobody else reads -- My room made there was a split brain (Messages,
+      // at the relay, then said "wrong code"; the next Set up there said "already has a My room").
+      if (same && !IS_WEB && location.protocol === "http:" && authWeb &&authWebFor && authWebFor === authBase()
+          && String(authWeb) !== (location.port || "80")) return "http://" + location.hostname + ":" + authWeb;
       // 0.8.9: an https page (phone) must not mix content -- other hosts on their https port
       return same ? location.origin : (location.protocol === "https:" ? "https://" + h + ":" + (window.__auth?.https || 8443) : "http://" + h + ":" + (window.__auth?.web || 8000));   // 0.15.0: the ports the hub advertises on /api/auth (0.14.0 pin), not literals
     } catch { return null; }

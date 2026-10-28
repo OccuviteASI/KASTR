@@ -2,6 +2,17 @@
 
 What changed in each build, newest first.
 
+## v0.21.92 (in progress)
+
+**Start KASTR when you sign in, for everyone (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins").**
+- **Profile > "Start KASTR when I sign in to this computer"** is a switch next to Main room. It stays in step with the switch on the Relay page, is off by default, and leaves an existing start-up entry alone. It is not shown on web pages or in a developer copy.
+- **"Start minimized"** shows while that switch is on. KASTR then opens in the taskbar at sign-in, still connects and joins your main room. Click it to bring it back (maximized if it was). Starting KASTR yourself always opens it normally.
+- On Linux, X11 desktops minimize it; Wayland desktops cannot, so it opens normally there.
+
+**My room on a second KASTR on a relay's machine.** A page whose relay ran on the same computer but under another KASTR kept My room in its own KASTR, while Messages asked the relay. Set up with a brand-new name could then say "Wrong My room code", and the next Set up said "already has a My room with another code". My room now goes to the KASTR that runs the relay. A My room left behind in the wrong place is simply ignored.
+
+**Tests:** the recording-formats test no longer fails with a connection time-out when the machine is busy (it retries the connection; the server was never blocked).
+
 ## v0.21.91 — Co-presenters, your main room, the closest relay, GIFs and emoji in Messages, and passcode resets
 
 **Co-presenters (Kenton: "allow them to show their camera instead of the main presenters camera while they are presenting their part of the slides").**

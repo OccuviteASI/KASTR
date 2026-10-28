@@ -639,7 +639,8 @@
       items.push({ sep: true });
       items.push({ value: "vo", label: "View once", on: vo });
       items.push({ hint: "Opens once for each person, then it is gone. No save or copy in KASTR. They can still take a screenshot." });
-    }    K.menu(anchor, items, async (v) => {
+    }
+    K.menu(anchor, items, async (v) => {
       if (v === "vo") {
         if (vo) S.voNext.delete(conv);
         else { S.voNext.add(conv); toast("View once: your next message opens once for each person. They can still take a screenshot.", 6000, "info"); }

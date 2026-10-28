@@ -22405,9 +22405,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       chatRenderAll();
     });
   }
-  window.__chatTimers = () => ({ tv: chatTv, skew: chatSkew, roomTtl: chatRoomTtl, next: chatTtlNext, vo: chatVoNext, sched: chatSched.map((s) => ({ sid: s.sid, rel: s.rel })) });   // rig
+  window.__chatTimers = () => ({ room: chatRoom, tv: chatTv, skew: chatSkew, roomTtl: chatRoomTtl, next: chatTtlNext, vo: chatVoNext, sched: chatSched.map((s) => ({ sid: s.sid, rel: s.rel })) });   // rig
   window.__chatMsgs = () => chatMsgs.map((m) => ({ id: m.id, text: m.text || "", exp: Number(m.exp) || 0, vo: m.vo || 0, sys: m.sys || "", nf: (m.files || []).length || m.nf || 0 }));   // rig
   window.__chatOldRead = async () => (await fetch(chatUrl("/api/chat/" + chatRoom, "since=0&limit=200"), { cache: "no-store" })).json();   // rig: what a 0.21.92 page reads
+  window.__chatVoTry = async (id) => (await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ act: "open", id, dev: chatDev() }) })).status;   // rig: the host's answer to one more opening from this device
   // ---- end 0.21.93 Room Chat timers
   chatRenderAll();
 

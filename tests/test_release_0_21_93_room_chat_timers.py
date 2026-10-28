@@ -272,5 +272,69 @@ class Wiring(unittest.TestCase):
                 self.assertNotIn(b"\r", f.read())
 
 
+class SpokeProxy(unittest.TestCase):
+    """A spoke forwards Room Chat to the hub: the hub's view-once "already opened" (410) reaches the page as 410
+    (the page says "Already opened on this device"), while a hub's "room closed" 410 still turns into 502."""
+
+    def _through(self, code, body):
+        import http.server
+        import threading
+        import kastr_serve as ks
+
+        class Hub(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                out = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        got = []
+        req = json.dumps({"act": "open", "id": 1, "dev": "d"}).encode()
+
+        class Fake:
+            path = "/api/chat/ops"
+            headers = {"Content-Length": str(len(req)), "Content-Type": "application/json"}
+
+            def __init__(self):
+                import io
+                self.rfile = io.BytesIO(req)
+
+            def _hub_token(self, hub):
+                return "", {}
+
+            def _chat_via(self):
+                return "spoke-0000"
+
+            def _room_persistent(self, room):
+                return False
+
+            def _chat_reply(self, c, obj, headers=None):
+                got.append((c, obj))
+
+        try:
+            handler = ks.make_handler(HERE, quiet=True).func
+            handler._chat_proxy(Fake(), "POST", "ops", {"host": "127.0.0.1", "web": srv.server_address[1]})
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        return got
+
+    def test_already_opened_passes(self):
+        self.assertEqual(self._through(410, {"error": "already opened", "opened": 1800000000}),
+                         [(410, {"error": "already opened", "opened": 1800000000})])
+
+    def test_room_closed_stays_502(self):
+        got = self._through(410, {"error": "room closed", "closed": 1800000000})
+        self.assertEqual([c for c, _ in got], [502])
+
+
 if __name__ == "__main__":
     unittest.main()

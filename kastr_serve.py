@@ -3149,7 +3149,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _chat_proxy(self, method, room, hub, files=False, admin=False):
             """A spoke forwards the whole call to the hub's KASTR with its
             federation token; the hub's reply comes back as-is, except a 404
-            from a hub without a chat service and a 410 (room closed there)."""
+            from a hub without a chat service and a 410 (room closed there;
+            a view-once "already opened" 410 passes)."""
             tok, info = self._hub_token(hub)
             if not tok and info.get("hubCodes"):
                 return self._chat_reply(502, {"error": "no federation token for the hub"})
@@ -3199,7 +3200,14 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if code == 404 and "json" not in (hdrs.get("Content-Type") or ""):
                     return self._chat_reply(502, {"error": "hub chat unavailable"})
                 if code == 410:
-                    return self._chat_reply(502, {"error": "hub chat closed this room"})
+                    # 0.21.93: only the hub's "room closed" turns into 502; a view-once "already opened" 410 goes on as-is
+                    try:
+                        body = json.loads(r.read(65536) or b"{}")
+                    except Exception:
+                        body = {}
+                    if not isinstance(body, dict) or not body or "closed" in body:
+                        return self._chat_reply(502, {"error": "hub chat closed this room"})
+                    return self._chat_reply(410, body)
                 self.send_response(code)
                 for k in ("Content-Type", "Content-Length", "Content-Disposition", "Cache-Control",
                           "Retry-After", "X-Content-Type-Options"):

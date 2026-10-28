@@ -3255,8 +3255,6 @@
     <div class="sw"><label class="switch"><input type="checkbox" id="fxSelfMirror"><i></i></label><span>Mirror my own view<small>Only you see it mirrored</small></span></div>
     <div class="sw"><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label><span>Mirror for everyone<small>Flips the picture you send</small></span></div>
     <div class="sw"><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label><span>Background quality<small id="fxQualityLbl">Balanced</small></span></div>
-    <div class="sw"><span>Processor<small id="fxProcLbl">Auto</small></span><div class="seg" id="fxProc" role="radiogroup" aria-label="Where the background effect runs">
-      <button type="button" data-proc="auto" title="The NPU when this computer has one, else the graphics card, else the standard model">Auto</button><button type="button" data-proc="npu" title="The neural processor (Intel AI Boost, AMD XDNA, Qualcomm Hexagon...)">NPU</button><button type="button" data-proc="gpu" title="The graphics card">GPU</button><button type="button" data-proc="standard" title="The standard model (MediaPipe) -- works everywhere">Standard</button></div></div>
     <button class="opt" id="camXs" type="button">Show my camera in other rooms&hellip;</button>   <!-- 0.21.62 -->
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
@@ -17248,7 +17246,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
              bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror,   // 0.21.0: phone cameras
-             proc: ["auto", "npu", "gpu", "standard"].includes(s.proc) ? s.proc : "auto" };   // 0.21.21: where the effect runs
+             proc: "auto" };   // 0.21.21: where the effect runs; 0.21.93 (Kenton): always Auto -- no Processor choice
   }
   camFx = normalizeCamFx(camFx);
   // 0.21.5: on a device whose camera runs the upright loop (WebKit), a Rotate saved before 0.21.5 was
@@ -17546,20 +17544,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     document.getElementById("fxSelfMirror").checked = selfMirrorOn();   // 0.21.72
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
-    paintFxProc();   // 0.21.21
   }
-  function paintFxProc() {   // 0.21.21: the choice + what actually runs ("Auto \u00b7 NPU 33 ms")
-    const p = camFx.proc || "auto";
-    for (const b of document.querySelectorAll("#fxProc button")) b.classList.toggle("on", b.dataset.proc === p);
-    const e = window.__fxEngine?.(), names = { npu: "NPU", gpu: "GPU", standard: "Standard" };
-    const lbl = document.getElementById("fxProcLbl"); if (!lbl) return;
-    lbl.textContent = (names[p] || "Auto") + (e && e.engine ? " \u00b7 running on " + (names[e.engine] || e.engine) + (e.ms ? " " + e.ms + " ms" : "") + (e.note ? " (" + e.note + ")" : "") : "");
-  }
-  setInterval(() => { if (!document.getElementById("camPop")?.hidden) paintFxProc(); }, 1500);
-  document.getElementById("fxProc")?.addEventListener("click", (e) => {   // 0.21.21
-    const b = e.target.closest("button[data-proc]"); if (!b) return;
-    camFx.proc = b.dataset.proc; pushCamFx(); paintFxProc();
-  });
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
   {   // 0.21.71: Blur strength (the slider and the % box agree; the camera follows within 150 ms) and the Add split button
     let amtT = 0;
@@ -28470,7 +28455,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
              quality: fx.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror,   // 0.21.0
-             proc: ["auto", "npu", "gpu", "standard"].includes(fx.proc) ? fx.proc : "auto" };   // 0.21.21
+             proc: "auto" };   // 0.21.21; 0.21.93: always Auto (an older page's NPU / GPU / Standard pick too)
   }
   // 0.15.0: background markers -> something drawImage can take.
   //   bg:<key>        Blob in IndexedDB kastr-bg/bg (written by the Watch half) -> object URL, cached per key

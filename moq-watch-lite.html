@@ -22689,8 +22689,14 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const RELAY_DEAD_MS = 15000;
   const FLEET_KEY = "kastr.relays.fleet";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
   const fleetCache = () => { try { const d = JSON.parse(localStorage.getItem(FLEET_KEY) || "null"); return d && Array.isArray(d.relays) ? d : null; } catch { return null; } };
-  async function fleetFetch() {
-    if (joinState !== "joined" || !authSecured || !authTokens?.member || inviteGuest()) return null;
+  // 0.21.93 (Kenton: "remove the built-in relay addresses ... use the web address as the relay on the first run, then have the hub
+  // distribute the known relays to the clients and have them switch to the best relay"): the ONE relay address built in
+  // (kastr_serve.DEFAULT_RELAY, substituted as the page is served) -- the first run's relay and the last resort. It counts as the
+  // fleet's (the hub lists it too, on its own row). Every other relay comes from the hub's list (FLEET_KEY).
+  const WEB_RELAY = (() => { const v = "__KASTR_WEB_RELAY__"; return /^https?:[/][/]/.test(v) ? v : ""; })();
+  const fleetUrlSet = () => new Set([...(fleetCache()?.relays || []).flatMap((r) => r.urls || []), WEB_RELAY].filter(Boolean));   // 0.21.93: every address of the fleet
+  async function fleetFetch(pre) {   // 0.21.93: pre -- the first-run move asks right after the access code (still joining)
+    if (!(joinState === "joined" || (pre && joinState === "joining")) || !authSecured || !authTokens?.member || inviteGuest()) return null;
     const base = authBase();
     if (!base) return null;
     try {
@@ -22707,16 +22713,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   setInterval(() => { const c = fleetCache(); if (!c || Date.now() - c.at > 600000) fleetFetch(); }, 60000);
   window.addEventListener("kastr:auth", () => setTimeout(() => { const c = fleetCache(); if (!c || Date.now() - c.at > 60000) fleetFetch(); }, 2500));
   const relayDisp = (r) => (r && (r.name || relayNameOf(r.url) || relayLabel(r.url))) || "";
-  // every relay to measure: the fleet's registry (all its addresses), this machine's own (the current one, the recent ones, the
-  // built-in fleet list), and the ones found on the network -- of the fleet when an address (or a certificate this computer saw
-  // before) matches, else "on this network" (listed, never picked)
+  // every relay to measure: the fleet's registry (all its addresses), this machine's own (the current one, the recent ones), the
+  // web address last (0.21.93: the only built-in address -- the list of relay IPs is gone), and the ones found on the network --
+  // of the fleet when an address (or a certificate this computer saw before) matches, else "on this network" (listed, never picked)
   function relayCands() {
     const cur = urlInput.value.trim();
     let hist = [];
     try { hist = JSON.parse(localStorage.getItem("kastr.relay.history") || "[]").filter((x) => typeof x === "string" && x); } catch {}
     const out = [], fleetUrls = new Set();
     for (const r of fleetCache()?.relays || []) { out.push({ name: r.name, urls: r.urls.slice(0, 8), fleet: true }); for (const u of r.urls) fleetUrls.add(u); }
-    for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {
+    for (const u of [cur, ...hist, WEB_RELAY]) {   // 0.21.93: + the web address (the first run's relay, the last resort)
       if (!u || fleetUrls.has(u)) continue;
       fleetUrls.add(u);
       out.push({ name: relayNameOf(u) || "", urls: [u], fleet: true });
@@ -22763,11 +22769,84 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     relayAutoSwitching = true;
     try { await gateRelayApply(url, { keepCodes: true }); } finally { relayAutoSwitching = false; }
     try {   // within the fleet: the new relay is this device's fleet too (My room and messages are remembered per fleet)
-      const h = relayHostKey(), ours = new Set([...(fleetCache()?.relays || []).flatMap((r) => r.urls || []), ...(window.__KASTR_KNOWN_RELAYS || [])]);
+      const h = relayHostKey(), ours = fleetUrlSet();   // 0.21.93: the hub's list + the web address
       if (fromFleet && h && !fleetFor(h) && ours.has(url)) localStorage.setItem("kastr.fleet." + h, fromFleet);
     } catch {}
   }
   const relayMoveCan = () => { try { return mainPerson() && !IS_WEB && gateIsLoopback(); } catch { return false; } };
+  // 0.21.93 THE FIRST-RUN MOVE (Kenton: "use the web address as the relay on the first run, then have the hub distribute the known
+  // relays to the clients and have them switch to the best relay"; decided: right after the access code is accepted on the Join room
+  // page, BEFORE the room): the hub's list (asked now, with the token the code just bought), every relay measured, and the fastest of
+  // the fleet that answers wins -- the web address only when it really is faster. About 3.5 s to decide; no list, nothing faster or
+  // too slow: the join carries on on the web address. A switch KASTR makes (never the person's pick); the saved codes, My room and
+  // messages stay (one fleet). Only while on a web relay, once per run; never a web client, a camera box or a relay machine.
+  const RELAY_FIRST = "kastr.relay.firstmove";   // sessionStorage: tried this run
+  const RELAY_FIRST_MS = 3500;
+  let relayFirst = null;   // rig: {at, from, to, moved, why, best, ms: {list, rank, move, total}}
+  function relayFirstCan() {
+    try {
+      if (!relayMoveCan() || relayManual() || inviteGet() || inviteGuest() || !authSecured || !authTokens?.member) return false;
+      return isWebRelay(urlInput.value.trim()) && !sessionStorage.getItem(RELAY_FIRST);
+    } catch { return false; }
+  }
+  function relayFirstNote(text) {   // the status line + launch.log (this machine's KASTR adds "page: "; loopback-only route)
+    log(text);
+    try { fetch("/api/rtsp/note", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => {}); } catch {}
+  }
+  async function relayFirstAuth(slug, access, pwd) {   // the relay just switched to: its /api/auth asked, then a token there
+    const base = authBase();
+    for (let i = 0; i < 30 && authChecked !== base; i++) await new Promise((r) => setTimeout(r, 100));
+    if (authChecked !== base || !authSecured) return "its access-code service did not answer";
+    if (authTokens?.member) return "";   // (a token for that relay this run already)
+    try {
+      if (await withinMs(authMint(slug, access, pwd), 6000) === JOIN_TIMEOUT) return "its token service did not answer in 6 s";
+    } catch (e) { return String(e?.message || e); }
+    return authTokens?.member ? "" : "no token";
+  }
+  async function relayFirstMove(slug, access, pwd) {   // -> true when this join now goes on another relay (with a token there)
+    if (!relayFirstCan()) return false;
+    try { sessionStorage.setItem(RELAY_FIRST, "1"); } catch {}
+    const t0 = performance.now(), from = urlInput.value.trim(), ms = {};
+    const rec = relayFirst = { at: Date.now(), from, to: from, moved: false, why: "", best: null, ms };
+    const lap = () => Math.round(performance.now() - t0);
+    const left = () => Math.max(0, RELAY_FIRST_MS - (performance.now() - t0));
+    const done = (why) => {
+      rec.why = why; ms.total = lap();
+      relayFirstNote("First run: " + (rec.moved ? "moved to " + (rec.best?.name || rec.to) + " (" + Math.round(rec.best?.ms ?? 0) + " ms)" : "stayed on " + relayLabel(from))
+        + " \u2014 " + why + " [list " + (ms.list ?? "-") + " ms, measure " + (ms.rank ?? "-") + " ms, move " + (ms.move ?? "-") + " ms, total " + ms.total + " ms]");
+      return rec.moved;
+    };
+    gateMsg("Joining\u2026 finding the closest relay");
+    const rows = await withinMs(fleetFetch(true), left());
+    ms.list = lap();
+    if (rows === JOIN_TIMEOUT) return done("the hub's relay list did not come in time");
+    if (!rows) return done("the hub sent no relay list");
+    if (relayRanking) await withinMs(relayRanking, left());   // a measurement from before the list: this one needs the list's relays
+    const rk = left() > 0 ? await withinMs(relayRankRun(), left()) : JOIN_TIMEOUT;
+    ms.rank = lap() - ms.list;
+    if (rk === JOIN_TIMEOUT) return done("measuring the relays took longer than " + (RELAY_FIRST_MS / 1000) + " s");
+    const best = relayBest(rk);
+    rec.best = best && { url: best.url, name: relayDisp(best), ms: best.ms };
+    if (!best) return done("no relay of the fleet answered");
+    if (best.url === from) return done("the web address is the fastest that answered");
+    const t1 = performance.now();
+    gateMsg("Joining\u2026 moving to " + relayDisp(best));
+    await relayApplyAuto(best.url);
+    if (urlInput.value.trim() !== best.url) { ms.move = Math.round(performance.now() - t1); return done("the switch to " + relayDisp(best) + " did not happen"); }
+    const why = await relayFirstAuth(slug, access, pwd);
+    ms.move = Math.round(performance.now() - t1);
+    if (why) {   // back to the web address (its token is still this tab's) -- the join goes on there
+      await relayApplyAuto(from);
+      const back = await relayFirstAuth(slug, access, pwd);
+      if (back) throw new Error("back on " + relayLabel(from) + ": " + back);
+      return done(relayDisp(best) + " refused the code (" + why + ") \u2014 back on the web address");
+    }
+    rec.moved = true; rec.to = best.url;
+    relayAutoMoved = true;   // a move within the fleet -- the saved codes still open the main room
+    try { paintRelayRow(); } catch {}
+    window.__toast?.("Connected to the closest relay: " + relayDisp(best) + " (" + Math.round(best.ms) + " ms)", 6000, { level: "info" });
+    return done("the fastest relay of the fleet");
+  }
   // nothing online: the note (over everything, the Join room page too) and a re-check every 10 s, 20 s, 40 s, then each minute
   let relayNone = null, relayNoteEl = null;
   function relayNoteShow(text) {
@@ -22892,7 +22971,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   pageModeReady.then(() => { if (relayMoveCan()) relayHourlyArm(); });
   window.__relayPick = { cands: relayCands, rank: relayRankRun, state: () => ({ rank: relayRank, manual: relayManual(), none: relayNone && { since: relayNone.since, tries: relayNone.tries, where: relayNone.where, next: relayNone.next },
-    move: relayMoveLast, hourly: { ...relayHr, timer: undefined }, moving: relayMoving, fleet: fleetCache() }), fleet: fleetFetch, busy: relayBusy,
+    move: relayMoveLast, hourly: { ...relayHr, timer: undefined }, moving: relayMoving, fleet: fleetCache(), firstRun: relayFirst, web: WEB_RELAY }), fleet: fleetFetch, busy: relayBusy,   // 0.21.93: + the first-run move
     hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms) => { relayHr.period = ms; relayHr.jitter = 0; relayHourlyArm(ms); },
     failNow: () => relayFailMove(), deadMs: () => RELAY_DEAD_MS };   // rig
   function paintRelayRow() {
@@ -22918,10 +22997,11 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         for (const a of r.addrs || []) listed.add(a.url);
         opts.push(o);
       }
-      for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {   // 0.21.34: + the fleet's relays (asi-brand.js) -- not measured yet
+      const fl = (fleetCache()?.relays || []).map((r) => [r.urls[0], r.name]);   // 0.21.93: the hub's list (its names) + the web address
+      for (const [u, nm] of [[cur], ...hist.map((h) => [h]), ...fl, [WEB_RELAY]]) {   // 0.21.34: + the fleet's relays -- not measured yet
         if (!u || listed.has(u)) continue;
         listed.add(u);
-        const o = new Option(relayNameOf(u) || relayLabel(u), u); o.title = u; opts.push(o);
+        const o = new Option(relayNameOf(u) || nm || relayLabel(u), u); o.title = u; opts.push(o);
       }
       if (cur && !listed.has(cur)) opts.push(new Option(relayLabel(cur), cur));
       opts.push(new Option("Other\u2026", "__other"));
@@ -23398,6 +23478,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           : /in their room right now/i.test(msg) ? msg + " \u2014 try again once they are back."   // 0.21.85: a My room's owner gate (the guest's Join again)
           : "Room-code service unreachable \u2014 " + msg);
       }
+      // 0.21.93: the first run (on the web address): the hub's relays measured, the fastest taken -- before the room
+      if (!rejoinRec && relayFirstCan()) {
+        try { await relayFirstMove(slug, joinEls.joinAccess.value, pwd); }
+        catch (e) { return joinFail("Could not join: " + String(e?.message || e)); }
+        gateMsg("Joining\u2026");
+      }
     }
 
     // One path: publish a camera whenever the machine has one (the mic and
@@ -23601,7 +23687,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (joinState === "prejoin" && joinEls.joinGate.hidden) gateShow();
       return;
     }
-    const cur = urlInput.value.trim(), fleet = new Set([...(window.__KASTR_KNOWN_RELAYS || []), ...((fleetCache()?.relays || []).flatMap((r) => r.urls || []))]);   // + the hub's registry
+    const cur = urlInput.value.trim(), fleet = fleetUrlSet();   // the hub's registry; 0.21.93: + the web address (the fleet's too)
     if (gateCodesStale || (lj.relay && lj.relay !== cur && !(fleet.has(lj.relay) && fleet.has(cur)) && !relayAutoMoved)) { mainCover(""); return gate("another relay than the last join's"); }
     await authDetect().catch(() => {});
     const access = String(lj.access || "");

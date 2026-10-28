@@ -284,7 +284,7 @@ predates versioning (v0.5, 2026-08-25).
 
 | ID | Requirement | Status | Version |
 |---|---|---|---|
-| R-1 | Default relay `10.10.105.190:4443`; overridable per page, per launch (`--relay`), in `kastr.ini`, or repointed at runtime from the Relay page. | ✅ | |
+| R-1 | Default relay: the fleet's web address `https://kastr.madlabs.app/relay` (0.21.93: the ONLY relay address built in — no private relay IPs ship; `KASTR_DEFAULT_RELAY` replaces it for labs and tests); overridable per page, per launch (`--relay`), in `kastr.ini` (the templates leave `relay =` unset), or repointed at runtime from the Relay page. A saved relay (`relay-use.json`) still wins on relaunch. 0.21.93 first-run move: right after the access code is accepted on the Join room page (desktop app on a web relay, not the person's pick, once per run, no invite), the page asks the hub's `/api/fleet/relays` with the token it just got, measures every relay (`/api/lan/closest`) and moves to the fastest of the fleet that answers (`relayApplyAuto`, codes kept) BEFORE the room, re-minting there; ~3.5 s to decide, otherwise (or when the new relay refuses) the join goes on on the web address; logged to launch.log and `__relayPick.state().firstRun`. The hub lists its own `public_url` + `/relay` last on its row (the web address is the fleet's: fleet id, My room and messages carry over); candidates = the hub's list, current + recent, the web address last. | ✅ | 0.21.93 |
 | R-2 | Host a MoQ relay on this machine (bundled moq-relay), for isolated networks. | ✅ | |
 | R-3 | Relay stats live inside the relay badge (top right), available from every page. | ✅ | |
 | R-4 | Relay stats card removed from the home page (redundant with the badge). | ✅ | 0.5.5 |
@@ -487,7 +487,7 @@ predates versioning (v0.5, 2026-08-25).
 | Area | Requirement | Since |
 |---|---|---|
 | W | No Room row on the join card: the first join goes to `main`, later ones to the room you were last in (or `main` if it closed or its code is not saved); a Share invite link still opens its room. | 0.21.34 |
-| W | The fleet's relays (`KNOWN_RELAYS` in asi-brand.js) are always listed in the join card's Relay picker and the Relay menu, after this computer's recent relays, with their online dot; they are offered, never switched to by the failover. | 0.21.34 |
+| W | The fleet's relays are always listed in the join card's Relay picker and the Relay menu, after this computer's recent relays, with their online dot. 0.21.93: they are the hub's list (cached in `kastr.relays.fleet` after the access code, with the hub's names) plus the web address — the built-in `KNOWN_RELAYS` IP list is gone. | 0.21.34, 0.21.93 |
 | W | No rail resize handle without a rail (Fill window, full screen, focus on content, everyone spotlit). | 0.21.34 |
 
 ### Added in 0.21.33

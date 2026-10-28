@@ -187,14 +187,14 @@ class Page(unittest.TestCase):
     def test_candidates(self):
         c = body(self.p, "function relayCands() {", 2400)
         self.assertIn("for (const r of fleetCache()?.relays || []) { out.push({ name: r.name, urls: r.urls.slice(0, 8), fleet: true });", c)
-        self.assertIn("for (const u of [cur, ...hist, ...(window.__KASTR_KNOWN_RELAYS || [])]) {", c)
+        self.assertIn("for (const u of [cur, ...hist, WEB_RELAY]) {", c)   # 0.21.93: the built-in list is gone; the web address last
         self.assertIn("if (!urls.length || urls.some((u) => fleetUrls.has(u))) continue;   // a fleet relay found on the network: already listed", c)
         self.assertIn("const known = !!f.fp && fps.has(String(f.fp).toLowerCase());", c)
         self.assertIn("out.push({ name: f.name || \"\", urls, fleet: known, lan: !known });", c)
         self.assertIn('const FLEET_KEY = "kastr.relays.fleet";', self.p)   # (kastr.fleet.<host> is the fleet id of a relay)
         self.assertIn('if (fromFleet && h && !fleetFor(h) && ours.has(url)) localStorage.setItem("kastr.fleet." + h, fromFleet);', self.p)
         self.assertIn('fetch(base + "/api/fleet/relays", { cache: "no-store", headers: { authorization: "Bearer " + authTokens.member } })', self.p)
-        self.assertIn('if (joinState !== "joined" || !authSecured || !authTokens?.member || inviteGuest()) return null;', self.p)
+        self.assertIn('if (!(joinState === "joined" || (pre && joinState === "joining")) || !authSecured || !authTokens?.member || inviteGuest()) return null;', self.p)   # 0.21.93: + the first-run move
 
     def test_dropdown(self):
         p = self.p
@@ -215,7 +215,7 @@ class Page(unittest.TestCase):
         self.assertIn("#relayNote { position:fixed;", p)
         # a relay that answers again is a move within the fleet: the saved codes open the main room (no Join room page)
         self.assertIn("if (best.url !== cur) { await relayApplyAuto(best.url); relayAutoMoved = true; }   // within the fleet: the saved codes stay", p)
-        self.assertIn("...((fleetCache()?.relays || []).flatMap((r) => r.urls || []))]);   // + the hub's registry", p)
+        self.assertIn("fleet = fleetUrlSet();   // the hub's registry; 0.21.93: + the web address (the fleet's too)", p)
         # the dropdown keeps "Closest automatically" picked unless the person picked a relay by hand
         self.assertIn('if (v) sel.value = auto ? "__auto" : v;', p)
         self.assertIn("gateRelayApply(sel.value, picked && picked.fleet ? { keepCodes: true } : undefined);", p)

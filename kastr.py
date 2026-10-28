@@ -14,7 +14,9 @@ this machine can host a relay itself (see the Relay page).
 Config, in precedence order:
   1. command line     KASTR.exe --relay http://10.0.0.5:4443
   2. kastr.ini         next to the .exe, [streamer] relay = ...
-  3. built-in default kastr_serve.DEFAULT_RELAY
+  3. built-in default kastr_serve.DEFAULT_RELAY -- 0.21.93: the fleet's web address
+     (https://kastr.madlabs.app/relay); after the access code the hub's relay list
+     moves the app to the fastest relay. No private relay IPs are built in.
 """
 import argparse
 import configparser

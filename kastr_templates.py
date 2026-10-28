@@ -296,7 +296,8 @@ def clean_invites(v):
 
 
 def clean_pres(v):
-    """The PRESENTATION section's saved shape (phase 1 keeps it; the presentation code reads it once co-presenters land)."""
+    """The PRESENTATION section's saved shape: the deck (the hub's record), presenters (one main) and backstage with each one's
+    control list, the audience switches (Audience muted, Ask to speak), the presenter mode and the Reporter background."""
     v = v if isinstance(v, dict) else {}
     d = v.get("deck") if isinstance(v.get("deck"), dict) else None
     deck = None
@@ -339,10 +340,48 @@ def clean_pres(v):
         if len(backstage) >= PRES_PEOPLE_MAX:
             break
     aud = v.get("audience") if isinstance(v.get("audience"), dict) else {}
-    return {"deck": deck, "presenters": presenters, "backstage": backstage,
-            "audience": {"muted": aud.get("muted") is not False, "ask": aud.get("ask") is not False},
-            "mode": "sbs" if v.get("mode") == "side" else v.get("mode") if v.get("mode") in PRES_MODES else "standout",
-            "reporterBg": txt(v.get("reporterBg"), 60)}
+    out = {"deck": deck, "presenters": presenters, "backstage": backstage,
+           "audience": {"muted": aud.get("muted") is not False, "ask": aud.get("ask") is not False},
+           "mode": "sbs" if v.get("mode") == "side" else v.get("mode") if v.get("mode") in PRES_MODES else "standout",
+           "reporterBg": txt(v.get("reporterBg"), 60)}
+    # 0.21.92 (Kenton: "Add any of the toggles to the presentation templates"): `opts` = the page's ONE table of deck-wide options
+    # (kastr-pres.js TPL_OPTS) by key -- 0/1 or a short id, so a toggle added to the presenter view later is kept without a hub
+    # change. The named fields above stay in step with it: a named field the body carries wins (an older page edits only those),
+    # else the opts value fills it.
+    opts = clean_pres_opts(v.get("opts"))
+    if "am" in opts and "muted" not in aud:
+        out["audience"]["muted"] = bool(opts["am"])
+    if "ask" in opts and "ask" not in aud:
+        out["audience"]["ask"] = bool(opts["ask"])
+    if opts.get("cm") in PRES_MODES and "mode" not in v:
+        out["mode"] = opts["cm"]
+    if isinstance(opts.get("rbg"), str) and "reporterBg" not in v:
+        out["reporterBg"] = opts["rbg"]
+    opts.update({"am": 1 if out["audience"]["muted"] else 0, "ask": 1 if out["audience"]["ask"] else 0, "cm": out["mode"]})
+    if out["reporterBg"]:
+        opts["rbg"] = out["reporterBg"]
+    out["opts"] = opts
+    # 0.21.92 (Kenton): "Close the room when the presentation ends" -- for a room the template creates for itself (on by default)
+    out["closeOnEnd"] = v.get("closeOnEnd") is not False
+    return out
+
+
+PRES_OPT_KEY_RE = re.compile(r"^[a-z][A-Za-z0-9]{0,15}$")
+PRES_OPT_STR_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+PRES_OPTS_MAX = 24
+
+
+def clean_pres_opts(v):
+    """A template's deck-wide presentation options: {key: 0|1|short id}; anything else is dropped."""
+    out = {}
+    for k, x in (v.items() if isinstance(v, dict) else []):
+        if len(out) >= PRES_OPTS_MAX or not isinstance(k, str) or not PRES_OPT_KEY_RE.match(k):
+            continue
+        if isinstance(x, bool) or x in (0, 1):
+            out[k] = 1 if x else 0
+        elif isinstance(x, str) and PRES_OPT_STR_RE.match(x):
+            out[k] = x
+    return out
 
 
 def _jsonable_small(v, cap):

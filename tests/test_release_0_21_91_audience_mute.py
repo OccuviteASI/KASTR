@@ -37,12 +37,12 @@ def block(src, start, end):
 
 class TheRecord(unittest.TestCase):
     def test_on_when_a_presentation_starts(self):
-        self.assertIn("function audienceInit(m) { m.am = 1; m.lt = new Set(); m.hx = new Map(); }", AUD)
+        self.assertIn("function audienceInit(m) { m.am = 1; m.ask = 1; m.lt = new Set(); m.hx = new Map(); }", AUD)   # + Ask to speak (on)
         sf = block(JS, "  async function startFromFile(file) {", "  function ensureSlide(i) {")
         self.assertLess(sf.index("audienceInit(mine);"), sf.index("publish();"))
         pub = block(JS, "  function publish() {", "  function goTo(")
         self.assertIn("...audFields(),", pub)   # in the record: late joiners obey
-        self.assertIn("return m && m.lt ? { am: m.am ? 1 : 0, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {};", AUD)
+        self.assertIn("return m && m.lt ? { am: m.am ? 1 : 0, ask: m.ask === 0 ? 0 : 1, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {};", AUD)
 
     def test_any_presenter_switches_it(self):
         self.assertIn('if (pp.op === "am") return setAm(!!pp.v, who) || true;', AUD)
@@ -115,7 +115,7 @@ class RaiseAHand(unittest.TestCase):
 
     def test_let_talk_dismiss_done(self):
         st = block(AUD, "  function setTalk(p, v, by) {", "  audienceOp = ")
-        self.assertIn("if (v) { if (!handOf(p)) return false; m.lt.add(p); m.hx.delete(p); }", st)   # only a raised hand
+        self.assertIn("if (v) { if (!handOf(p) || m.ask === 0) return false; m.lt.add(p); m.hx.delete(p); }", st)   # only a raised hand
         self.assertIn("else { m.lt.delete(p); const at = handOf(p); if (at) m.hx.set(p, at); }", st)
         pr = block(AUD, "  function audiencePrune() {", "  setInterval(() => { try { audiencePrune(); }")
         self.assertIn("for (const p of [...m.lt]) if (!handOf(p)) { m.lt.delete(p);", pr)   # Done = the hand lowered

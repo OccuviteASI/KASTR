@@ -3704,6 +3704,26 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const MAIN_ROOM_KEY = "kastr.mainroom";
   const mainPref = () => { try { return localStorage.getItem(MAIN_ROOM_KEY) === "lobby" ? "lobby" : "mine"; } catch { return "mine"; } };
   function mainPrefSet(v) { try { localStorage.setItem(MAIN_ROOM_KEY, v === "lobby" ? "lobby" : "mine"); } catch {} }
+  // 0.21.91 (Kenton: "Main-room choice follows the person"): kept on the hub in their My room record (name + My room code, as
+  // My room opens), so every device that opens My room uses it; this device's value is the fallback until the hub answers.
+  // -> the hub's value ("mine" | "lobby" | "" not chosen there yet), or null (no My room here / the hub did not answer)
+  let mainPrefHub = null;
+  async function mainPrefSync(push) {
+    let pr = null;
+    try { pr = window.__personal?.get?.(); } catch {}
+    if (!pr || !pr.code) return null;
+    const body = { op: "pref", name: pr.name || myOpName(), code: pr.code };
+    if (push) body.main = mainPref();
+    let d = null;
+    try { d = await window.__personal.api(body); } catch {}
+    if (!d?.ok) return null;
+    const v = String(d.main || "");
+    mainPrefHub = v;
+    if (v === "mine" || v === "lobby") mainPrefSet(v);
+    else if (!push) mainPrefSync(true);   // the hub has none yet: this device's choice goes up
+    return v;
+  }
+  window.__mainPrefSync = (push) => mainPrefSync(push);   // rig
   // 0.21.91 (Kenton: "Guests should only see the lobby and the room they were invited to"): a GUEST is someone who came by an
   // invite link with no access code of their own -- in a room or the Lobby: a secured relay's token minted without one; before
   // joining: an invite on this tab and no access code known here. They see the Lobby and the invited room, nothing else.
@@ -5059,6 +5079,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     } catch {}
     personalTok = null;
     try { paintSidebar(); } catch {}
+    if (p) setTimeout(() => { try { mainPrefSync(false); } catch {} }, 300);   // 0.21.91: the person's main room, kept with My room on the hub
   }
   // A relay told us its fleet: remember it for this address, and take an older per-address record of THIS fleet over (once).
   // A record is only ever checked on the fleet it came from: one saved with its fleet id must match; one from before 0.21.91 is
@@ -5137,6 +5158,11 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       try { await personalToken(p); }
       catch (e) {
         const m = String(e?.message || e);
+        if (/pick your own passcode/i.test(m)) {   // 0.21.91 passcode reset: an admin's temporary code -- their own first
+          personalSave(null);
+          personalDialog("open", "An admin reset your My room passcode \u2014 enter the temporary passcode, then pick your own.");
+          return;
+        }
         if (/wrong room code|no such personal room/i.test(m)) {
           personalSave(null);
           personalDialog("open", "My room did not open with the code this device remembered \u2014 enter your name and personal code again (an admin may have reset it).");
@@ -5249,7 +5275,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow pmf"><span class="lbl">Your name</span><div class="rsf"><input class="pmname" type="text" maxlength="48" autocomplete="off" spellcheck="false" aria-label="Your name"></div></div>'
       + '<div class="rsrow pmf"><span class="lbl">Passcode</span><div class="rsf"><input class="pmcode masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode (personal code)"></div></div>'
       + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
-      + '<p class="rshint">Pick a passcode only you know (8 characters or more). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
+      + '<p class="rshint">Pick a passcode only you know (8 characters or more; a shorter one from before still opens your My room). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
       + '<div class="rsrow pmtpl" hidden><span class="lbl">My templates</span><div class="pmtplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<p class="rsmsg" role="status"></p></div>'
@@ -5275,17 +5301,51 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     };
     q(".pmok").onclick = async () => {
       const mode = el.__mode;
+      if (mode === "change") {   // 0.21.91 passcode reset: their own passcode replaces the admin's temporary one
+        const t = el.__temp || {}, n1 = q(".pmcode").value;
+        if (!t.code) { pmPaint("open"); return; }
+        if (n1.length < 8) { say("A passcode has at least 8 characters (it also protects your messages).", true); q(".pmcode").focus(); return; }
+        if (n1 !== q(".pmcode2").value) { say("The two passcodes do not match.", true); q(".pmcode2").focus(); return; }
+        if (n1 === t.code) { say("Pick a passcode of your own \u2014 not the temporary one.", true); q(".pmcode").focus(); return; }
+        q(".pmok").disabled = true; say("Changing\u2026");
+        const d = await personalApi({ op: "change", name: t.name, code: t.code, newCode: n1 });
+        q(".pmok").disabled = false;
+        if (!d.ok) { say(d.error || "Refused.", true); return; }
+        el.__temp = null;
+        personalSave({ slug: d.slug, name: d.name || t.name, code: n1 });
+        q(".pmcode").value = ""; q(".pmcode2").value = "";
+        close();
+        try { window.dispatchEvent(new Event("kastr:personal")); } catch {}   // Messages: their key asks for the previous passcode
+        window.__toast?.("Your new My room passcode is set \u2014 it opens My room and your messages on any device.", 5000, { level: "event" });
+        if (joinState === "joined" && !el.__opts?.stay) personalEnter();
+        return;
+      }
       if (mode === "have") { close(); if (!(joinState === "joined" && CHANNEL === personalGet()?.slug)) personalEnter(); return; }
       const name = q(".pmname").value.trim().replace(/\s+/g, " "), code = q(".pmcode").value;
       if (!name) { say("Enter your name.", true); q(".pmname").focus(); return; }
-      const cmin = mode === "make" ? 8 : 4;   // 0.21.89 (Kenton: "8 everywhere"): a NEW code has 8 or more; an existing shorter one still opens
-      if (code.length < cmin) { say("A personal code has at least " + cmin + " characters" + (cmin > 4 ? " (it also protects your messages)" : "") + ".", true); q(".pmcode").focus(); return; }
-      if (mode === "make" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
-      say(mode === "make" ? "Making your room\u2026" : "Opening your room\u2026");
+      // 0.21.91 (Kenton: "If a user already has a short password set ... they aren't able to login with the old password and can't
+      // change to the new password"): this dialog opens in "Make" whenever the device has no My room yet -- also for someone whose
+      // My room exists with a passcode from before 0.21.89 (4-7 characters), and Make refused anything under 8 before asking the
+      // hub. A passcode under 8 can only be an EXISTING My room's, so it OPENS it (typed once; the hub still makes new rooms with 8
+      // or more), and Messages then ask for a longer one with the old passcode remembered.
+      if (code.length < 4) { say("A personal code has at least 4 characters.", true); q(".pmcode").focus(); return; }
+      const op = mode === "make" && code.length >= 8 ? "create" : "open";
+      if (op === "create" && code !== q(".pmcode2").value) { say("The two codes do not match.", true); q(".pmcode2").focus(); return; }
+      say(op === "create" ? "Making your room\u2026" : "Opening your room\u2026");
       q(".pmok").disabled = true;
-      const d = await personalApi({ op: mode === "make" ? "create" : "open", name, code, access: authAccessCode || undefined });
+      const d = await personalApi({ op, name, code, access: authAccessCode || undefined });
       q(".pmok").disabled = false;
-      if (!d.ok) { say(d.error || "Refused.", true); return; }
+      if (!d.ok) {
+        say(mode === "make" && op === "open" && d.wrong ? "A new My room needs a passcode of at least 8 characters (it also protects your messages). If you already have a My room, that isn\u2019t its passcode."
+          : (d.error || "Refused."), true);
+        return;
+      }
+      if (d.mustChange) {   // 0.21.91 passcode reset: an admin's temporary passcode -- nothing is saved until they pick their own
+        el.__temp = { name: d.name || name, code };
+        q(".pmcode").value = ""; q(".pmcode2").value = "";
+        pmPaint("change");
+        return;
+      }
       personalSave({ slug: d.slug, name: d.name || name, code });
       q(".pmcode").value = ""; q(".pmcode2").value = "";
       close();
@@ -5312,7 +5372,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     q(".pmshare").hidden = mode !== "have";
     const inMine = mode === "have" && joinState === "joined" && !!p && CHANNEL === p.slug;
     q(".pmok").hidden = inMine;
-    q(".pmok").textContent = mode === "have" ? "Go to My room" : mode === "make" ? "Make my room" : "Open my room";
+    q(".pmok").textContent = mode === "have" ? "Go to My room" : mode === "make" ? "Make my room" : mode === "change" ? "Use this passcode" : "Open my room";
+    if (mode === "change") {   // 0.21.91 passcode reset: the new passcode twice (no name, no tabs)
+      q(".pmtabs").hidden = true;
+      q(".pmname").closest(".pmf").hidden = true;
+      q(".pmmake").hidden = false;
+      pmEl.__say("An admin reset your My room passcode. Pick your own passcode (8 characters or more) before going on.");
+      setTimeout(() => { try { q(".pmcode").focus(); } catch {} }, 30);
+    } else pmEl.__temp = null;
+    for (const s of [".pmintro", ".pmcaps"]) q(s).style.display = mode === "change" ? "none" : "";   // (just the new passcode)
+    q("#pmTitle").textContent = mode === "change" ? "Pick your own My room passcode" : "My room";
     if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". It is the first card in your rooms list; nobody else sees it there unless you share it.";
     try { window.__tplUI?.myRoom?.(q(".pmtpl"), mode === "have" && !!p); } catch {}   // 0.21.92: my templates
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
@@ -5354,7 +5423,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
       personalSharedApply(d.shared);
-      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "tplpres") { try { window.__tplUI?.presReady?.(it); } catch {} } else personInviteArrive(it); }   // 0.21.92: + a template's presentation is ready for me   // 0.21.79: + remote-control notes
+      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "tplpres") { try { window.__tplUI?.presReady?.(it); } catch {} } else if (it?.kind === "tplco") { try { window.__tplUI?.presCo?.(it); } catch {} } else personInviteArrive(it); }   // 0.21.92: + a template's presentation is ready for me   // 0.21.79: + remote-control notes
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
       accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)
@@ -5642,8 +5711,52 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const m of members.values()) if (String(m.op || "").toLowerCase() === k && HOST_RE.test(String(m.host || ""))) return String(m.host);
     return "";
   }
-  // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
+  // ---- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): admin-code holders (and the relay's operator) get
+  // "Reset My room passcode..." on a person's menus -- only for people with a My room when the hub's list answered (POST
+  // /api/rooms/personal {op: "list"}: names only, refreshed at most every 60 s), on everyone otherwise (a 404 then says so).
+  const pmr = { names: null, at: 0, busy: false };
+  const pmrKey = (n) => String(n || "").trim().replace(/\s+/g, " ").toLowerCase();
+  function pmrAdmin() {
+    try { if (authSecured && authRole === "admin" && authTokens?.member) return true; } catch {}
+    try { return typeof isRelayOperator === "function" && !!isRelayOperator(); } catch { return false; }
+  }
+  async function pmrPost(body) {
+    const base = relayHostBase() || chatBase();
+    if (!base) return { ok: false, error: "No relay host to talk to." };
+    const headers = { "content-type": "application/json" };
+    if (authSecured && authTokens?.member) headers.authorization = "Bearer " + authTokens.member;   // the admin grant proves it
+    const r = await fetch(base + "/api/rooms/personal", { method: "POST", headers, body: JSON.stringify({ ...body, by: myOpName() || undefined }) });
+    const d = await r.json().catch(() => ({}));
+    return { ...d, ok: r.ok && d.ok !== false, status: r.status };
+  }
+  async function pmrRefresh(force) {
+    if (!pmrAdmin() || pmr.busy || (!force && Date.now() - pmr.at < 60000)) return;
+    pmr.busy = true; pmr.at = Date.now();
+    try {
+      const d = await pmrPost({ op: "list" });
+      pmr.names = d.ok && Array.isArray(d.people) ? new Set(d.people.map((x) => pmrKey(x?.name))) : null;
+    } catch { pmr.names = null; } finally { pmr.busy = false; }
+  }
+  function pmrItems(p) {
+    if (!p || p.me || !p.name || !pmrAdmin() || pmrKey(p.name) === pmrKey(myOpName())) return [];
+    pmrRefresh();
+    if (pmr.names && !pmr.names.has(pmrKey(p.name))) return [];
+    return [{ value: "pinv-pmr", label: "Reset My room passcode\u2026 (admin)", tip: "Give " + p.name + " a temporary My room passcode (they pick their own), or remove their My room" }];
+  }
+  function pmrOpen(name) {
+    if (!window.KastrPmReset) { window.__toast?.("The reset dialog did not load \u2014 reload KASTR", 4000, { level: "warn" }); return; }
+    window.KastrPmReset.open({ name: String(name), post: pmrPost, onDone: (op) => { pmr.at = 0; log("Admin My room " + op + " for " + name); pmrRefresh(true); } });
+  }
+  window.__pmr = { state: () => ({ admin: pmrAdmin(), names: pmr.names ? [...pmr.names] : null, at: pmr.at }), refresh: () => pmrRefresh(true), open: pmrOpen, items: (n) => pmrItems({ name: n }) };   // rig
   function personInviteItems(p) {
+    const r = personInviteItems2(p), a = pmrItems(p);
+    if (!a.length) return r;
+    if (!r) return { items: a, pick: (v) => (v === "pinv-pmr" ? pmrOpen(p.name) : null) };
+    return { items: [...r.items, { sep: true }, ...a], pick: (v) => (v === "pinv-pmr" ? pmrOpen(p.name) : r.pick(v)) };
+  }
+  // ---- end 0.21.91 passcode reset ----
+  // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
+  function personInviteItems2(p) {
     const r = personInviteItems0(p);
     const ok = !!p && !p.me && !!p.name && !!window.__kmsg?.allowed?.();
     if (!ok) return r;
@@ -10770,10 +10883,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           mb.innerHTML = icon("msg");
           mb.addEventListener("click", (e) => { e.stopPropagation(); go(); });
           row.appendChild(mb);
-          const adm = eoMsgAdmin(x);
+          const adm = [...eoMsgAdmin(x), ...pmrItems(x)];   // 0.21.91 passcode reset: + Reset My room passcode
           const open = (anchor) => {
             const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm];
-            openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
+            openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-pmr" ? pmrOpen(x.name) : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
             row.classList.add("menu"); watchMenuClose(row);
           };
           row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); open(pointAnchor(e.clientX, e.clientY)); });
@@ -10812,6 +10925,11 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomMake: async (name, code) => {
       const d = await personalApi({ op: "create", name, code, access: authAccessCode || undefined });
       if (d.ok) { personalSave({ slug: d.slug, name: d.name || name, code }); try { personalCardPaint(); } catch {} }
+      return d;
+    },
+    roomChange: async (name, code, newCode) => {   // 0.21.91 passcode reset: their own passcode replaces an admin's temporary one
+      const d = await personalApi({ op: "change", name, code, newCode });
+      if (d.ok) { personalSave({ slug: d.slug, name: d.name || name, code: newCode }); try { personalCardPaint(); } catch {} }
       return d;
     },
     roomOpen: async (name, code) => {
@@ -11543,8 +11661,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const myKey = HOSTNAME1 + "/" + String(window.__publisher?.opSlug?.() || "").toLowerCase();
       if (target !== myKey && target !== myKey + "/" + statePeer()) return;
       log("Removed from the room by " + by + ".");
-      window.__toast?.("Removed from this room by " + prettyOperator(by), 8000, { level: "warn" });
-      try { leaveMeeting(); } catch {}
+      // 0.21.91 (Kenton: removed by an admin -> "land in the main room ... with a note saying what happened")
+      forcedToMain("Removed from a room", "Removed from " + roomTitle(CHANNEL) + " by " + prettyOperator(by) + ".");
       return;
     }
     if (!mineNames.has(target)) return;
@@ -14672,6 +14790,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__roomsRegDbg = () => [...roomsReg.values()].map((r) => ({ slug: r.slug, locked: r.locked, gone: !!r.goneAt }));   // rig (0.21.75): the raw ~channels entries
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
+  let roomsClosedWhy = {};       // 0.21.92: slug -> "pres" (a template's room closed when its presentation ended)
   let roomsRenamed = {};         // 0.21.65: old slug -> new slug (Room settings > Rename)
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
   let roomsSlugsSeen = "", roomsMinterAt = 0;
@@ -14882,9 +15001,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!slug || !ROOM_RE.test(slug) || slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75
       roomsMinter.set(slug, { slug, locked: r.locked !== false && (r.locked === true || r.persistent !== true),
                               persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0,
-                              viewLock: !!r.viewLock, keptBy: r.keptBy || "" });   // 0.21.65: + the view lock, kept by the board
+                              viewLock: !!r.viewLock, keptBy: r.keptBy || "", tplClose: !!r.tplClose });   // 0.21.65: + the view lock, kept by the board; 0.21.92: + a template's room End closes
     }
     roomsClosed = got.closed && typeof got.closed === "object" ? got.closed : {};
+    roomsClosedWhy = got.closedWhy && typeof got.closedWhy === "object" ? got.closedWhy : {};   // 0.21.92
     // 0.21.65: renamed rooms {old: new} -- I follow my room's new name; my shares listed into an old name follow it too
     roomsRenamed = got.renamed && typeof got.renamed === "object" ? got.renamed : {};
     if (joinState === "joined" && roomsRenamed[CHANNEL]) roomRenamedFollow(CHANNEL, String(roomsRenamed[CHANNEL]));
@@ -17661,6 +17781,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
     if (!r.checked) return;
     mainPrefSet(r.value);
+    mainPrefSync(true).catch(() => {});   // 0.21.91: to the hub, with My room (every device that opens My room follows it)
     window.__toast?.(r.value === "lobby" ? "Main room: the Lobby \u2014 KASTR starts there and Leave takes you there" : "Main room: My room \u2014 KASTR starts there and Leave takes you there", 4000, { level: "event" });
     try { gateKey = ""; gatePaintChannels(); } catch {}
   });
@@ -18603,9 +18724,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const msg = String(e?.message || e);
         if (/removed from this room/i.test(msg)) {
           log("Removed from the room by an admin (the relay refuses this device for a while).");
-          window.__toast?.("You were removed from this room by an admin.", 8000, { level: "warn" });
-          try { leaveMeeting(); } catch {}
-          try { gateMsg("You were removed from this room by an admin — try again later."); } catch {}
+          forcedToMain("Removed from a room", "You were removed from " + roomTitle(readChannel()) + " by an admin \u2014 you can try that room again later.");   // 0.21.91
         }
       } finally { authHealBusy = false; }
     } catch {}
@@ -21149,6 +21268,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.id) { chatHint(d.error || ("Upload failed (" + r.status + ")"), true); chatPending = chatPending.filter((p) => p !== rec); chip.remove(); chatAttachEl.hidden = !chatPending.length; continue; }
         rec.id = d.id; rec.size = d.size || f.size; rec.type = d.type || rec.type; chip.classList.remove("up");
+        chatGrow();   // 0.21.91: the strip above the box changed -- the box keeps its own size
       } catch (e) { chatHint("Upload failed \u2014 " + (e?.message || e), true); chatPending = chatPending.filter((p) => p !== rec); chip.remove(); chatAttachEl.hidden = !chatPending.length; }
     }
   }
@@ -21438,8 +21558,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       chatHint(chatDisabled, true); chatRenderAll();
       return;
     }
-    window.__toast?.("Room " + room + " was closed \u2014 " + why + ". Back to the lobby.", 7000);
-    try { leaveMeeting(); } catch {}
+    if (why === "pres") forcedToMain("Presentation ended", "The presentation ended and " + roomTitle(room) + " was closed.");   // 0.21.92: a template's room
+    else forcedToMain("Room closed", "Room " + room + " was closed \u2014 " + why + ".");   // 0.21.91: the main room, never the Join room page
     try { window.__channels?.emberCancel?.(room); } catch {}   // a closed room gets no ember
   }
   // the STORE decides a room is closed; the announce (and a 410) only prompt the check
@@ -21448,7 +21568,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined" || CHANNEL === "main") return;
     const ts = roomsClosed[CHANNEL];
     const joinedAt = (() => { try { return window.__sinceAnnounce?.joinedAt?.() || 0; } catch { return 0; } })();
-    if (ts && Number(ts) > joinedAt) chatRoomClosed("closed by its creator or the relay operator");
+    if (ts && Number(ts) > joinedAt) chatRoomClosed(roomsClosedWhy[CHANNEL] === "pres" ? "pres" : "closed by its creator or the relay operator");
   }
   window.__roomsChanged = () => { clearTimeout(chatClosedCheckT); chatClosedCheckT = setTimeout(chatClosedCheck, 100); };
   window.__roomClosedHint = (slug, ts) => { if (slug === CHANNEL && joinState === "joined") { roomsMinterPoll().then(chatClosedCheck).catch(() => {}); } };
@@ -21482,13 +21602,22 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       window.__toast?.("Room " + slug + " closed.", 4000, { level: "info" });
       try { const list = myChannels().filter((x) => x.slug !== slug); localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list)); } catch {}
       roomsMinterPoll().catch(() => {});
-      if (joinState === "joined" && CHANNEL === slug) { try { leaveMeeting(); } catch {} }
+      if (joinState === "joined" && CHANNEL === slug) { try { if (mainPerson()) leaveToMain(); else leaveMeeting(); } catch {} }   // 0.21.91: I closed it -- my main room
       try { window.__channels?.emberCancel?.(slug); } catch {}   // no ember for a room that no longer exists
     } catch (e) { window.__toast?.("Could not close the room \u2014 " + (e?.message || e), 6000, { level: "error" }); }
   };
   // ---- composer
-  function chatGrow() { chatInput.style.height = "auto"; chatInput.style.height = Math.min(120, chatInput.scrollHeight) + "px"; }
+  // 0.21.91: an empty box is always its natural one-line size (a height left over from an earlier message never sticks); a box
+  // with text is its text's height plus its borders (border-box: scrollHeight alone came out 2 px short and showed scroll
+  // arrows); a box that is not laid out (the panel closed, folded) is measured again when it is shown or resized
+  function chatGrow() {
+    if (!chatInput.value) { chatInput.style.height = ""; return; }
+    if (!chatInput.offsetWidth) return;
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(120, chatInput.scrollHeight + (chatInput.offsetHeight - chatInput.clientHeight)) + "px";
+  }
   chatInput.addEventListener("input", chatGrow);
+  try { let gw = 0; new ResizeObserver(() => { const w = chatInput.offsetWidth; if (w && w !== gw) { gw = w; chatGrow(); } }).observe(chatInput); } catch {}
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
     if (e.key === "Escape") { if (!chatEmojiEl.hidden) chatEmojiEl.hidden = true; else chatEntry.close(); }   // (a pinned Chat stays: chatEntry.close)
@@ -22491,7 +22620,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
   }
   // the hourly re-check (with a random lead so a whole site does not probe at once)
-  const relayHr = { period: 3600000, jitter: 300000, confirm: 20000, timer: 0, next: 0, checks: 0, last: null };
+  const relayHr = { period: 3600000, jitter: 300000, timer: 0, next: 0, checks: 0, last: null, wins: null };   // wins: {url, n} -- consecutive checks it won
   function relayHourlyArm(ms) {
     clearTimeout(relayHr.timer);
     const w = ms ?? (relayHr.period + Math.random() * relayHr.jitter);
@@ -22520,12 +22649,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!b || !c || !c.online || b.url === c.url) return { win: false, cur: c, best: b };
       return { win: b.ms <= c.ms * 0.75 && c.ms - b.ms >= 10, cur: c, best: b };
     };
-    const j1 = judge(await relayRankRun());
-    const said = (j) => ({ cur: j.cur ? { name: relayDisp(j.cur), ms: j.cur.ms } : null, best: j.best ? { name: relayDisp(j.best), ms: j.best.ms } : null });
-    if (!j1.win) { relayHr.last = { at: now, stay: true, ...said(j1) }; return; }
-    await new Promise((r) => setTimeout(r, relayHr.confirm));   // the second probe: noise does not move anyone
+    // 0.21.91 (Kenton: "only move when the other relay is clearly better in TWO consecutive hourly checks"): a win is counted;
+    // the move comes at the second hourly check in a row that the same relay wins (a check it does not win starts over)
     const j2 = judge(await relayRankRun());
-    if (!j2.win || j2.best.url !== j1.best.url) { relayHr.last = { at: now, stay: true, noise: true, ...said(j2) }; return; }
+    const said = (j) => ({ cur: j.cur ? { name: relayDisp(j.cur), ms: j.cur.ms } : null, best: j.best ? { name: relayDisp(j.best), ms: j.best.ms } : null });
+    if (!j2.win) { relayHr.wins = null; relayHr.last = { at: now, stay: true, ...said(j2) }; return; }
+    relayHr.wins = relayHr.wins && relayHr.wins.url === j2.best.url ? { url: j2.best.url, n: relayHr.wins.n + 1 } : { url: j2.best.url, n: 1 };
+    if (relayHr.wins.n < 2) { relayHr.last = { at: now, win: 1, waits: "the next hourly check", ...said(j2) }; return; }
     const busy = relayBusy();
     if (busy) { relayHr.last = { at: now, postponed: busy, ...said(j2) }; log("Closer relay " + relayDisp(j2.best) + " -- the move waits (" + busy + ")"); return; }
     relayHr.last = { at: now, move: j2.best.url, ...said(j2) };
@@ -22534,7 +22664,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   pageModeReady.then(() => { if (relayMoveCan()) relayHourlyArm(); });
   window.__relayPick = { cands: relayCands, rank: relayRankRun, state: () => ({ rank: relayRank, manual: relayManual(), none: relayNone && { since: relayNone.since, tries: relayNone.tries, where: relayNone.where, next: relayNone.next },
     move: relayMoveLast, hourly: { ...relayHr, timer: undefined }, moving: relayMoving, fleet: fleetCache() }), fleet: fleetFetch, busy: relayBusy,
-    hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms, confirmMs) => { relayHr.period = ms; relayHr.jitter = 0; if (confirmMs != null) relayHr.confirm = confirmMs; relayHourlyArm(ms); },
+    hourlyNow: () => relayHourlyCheck(), hourlyEvery: (ms) => { relayHr.period = ms; relayHr.jitter = 0; relayHourlyArm(ms); },
     failNow: () => relayFailMove(), deadMs: () => RELAY_DEAD_MS };   // rig
   function paintRelayRow() {
     const row = joinEls.joinRelayRow;
@@ -23229,7 +23359,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!name) return gate("no name yet");
     mainCover("Starting KASTR\u2026");
     joinEls.joinGate.hidden = true;   // (the page's own markup shows it until a script hides it; whoever needs it shows it again)
+    const prefAsked = mainPrefSync(false).catch(() => null);   // the hub's main-room choice (this device's until it answers)
     await Promise.race([relayPickDone, mainSleep(8000)]);   // the nearest relay first (it may move this machine within the fleet)
+    mainInfo.prefHub = await Promise.race([prefAsked, mainSleep(2000).then(() => null)]);
     if (joinState !== "prejoin") { mainCover(""); return; }
     if (relayNone) { mainInfo.relayDown = true; mainCover(""); return gate("no relays are available (KASTR keeps trying)"); }   // 0.21.91
     if (await resumeCheck()) { mainInfo.phase = "resume"; mainInfo.ms = Math.round(performance.now() - t0); return; }   // an update / restart: back to the room I was in
@@ -23254,6 +23386,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     mainInfo.ticketMs = Math.round(performance.now() - t0);
     gateShow();
   }
+  window.addEventListener("kastr:personal", () => setTimeout(() => mainPrefSync(false).catch(() => {}), 500));   // My room set up here: its choice
   function mainLaunchDone(t) {
     if (joinState !== "joined") return;
     mainInfo.phase = "joined"; mainInfo.ms = Date.now() - mainInfo.t0; mainInfo.room = CHANNEL;
@@ -23268,8 +23401,25 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       : why || "Could not open " + roomTitle(t.room) + " \u2014 pick a room and join.");
   }
   // Leave -> the main room (the Lobby when I am in it already); a guest -> the Lobby with the invited room; a box -> as before
+  // 0.21.91 (Kenton: removed by an admin or the room closed -> the main room, "with a note saying what happened"); a camera box, a
+  // relay-only machine or a viewer display: the Join room page as before (the reason in its message line)
+  let forcedBusy = false;   // 0.21.92: one forced move at a time (a room's close can arrive twice: the close hint + the rooms poll)
+  async function forcedToMain(title, message) {
+    if (forcedBusy) return;
+    forcedBusy = true;
+    try { await forcedToMainNow(title, message); } finally { forcedBusy = false; }
+  }
+  async function forcedToMainNow(title, message) {
+    if (!mainPerson() || joinState !== "joined") { try { leaveMeeting(); } catch {} try { if (message) gateMsg(message); } catch {} return; }
+    await leaveToMain({ quiet: true });
+    if (joinState !== "joined") { try { if (message) gateMsg(message); } catch {} return; }   // even the Lobby refused: the Join room page
+    mainInfo.forced = { title, message, to: CHANNEL, at: Date.now() };
+    log(title + ": " + message + " \u2014 now in " + roomTitle(CHANNEL));
+    kastrConfirm({ title, message, detail: "You\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)) + " now.", ok: "OK", noCancel: true });
+  }
+  window.__forcedToMain = (t, m) => forcedToMain(t, m);   // rig
   let leaveBusy = false;
-  async function leaveToMain() {
+  async function leaveToMain(opts) {
     if (joinState !== "joined" || leaveBusy) return;
     if (!mainPerson()) { leaveMeeting(); return; }   // camera boxes / viewer displays: the Join room page, as before
     if (CHANNEL === LOBBY) return;                   // (no Leave in the Lobby)
@@ -23285,7 +23435,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (joinState === "joined" && CHANNEL === from) { log("Leave: the main room and the Lobby refused \u2014 the Join room page"); leaveMeeting(); return; }
       mainInfo.leave = { from, to: CHANNEL, ms: Math.round(performance.now() - t0), at: Date.now() };
       log("Left " + roomTitle(from) + " \u2014 now in " + roomTitle(CHANNEL) + " (" + mainInfo.leave.ms + " ms)");
-      window.__toast?.("Left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " \u2014 you\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)), 4000, { level: "event" });
+      if (!opts?.quiet) window.__toast?.("Left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " \u2014 you\u2019re in " + (CHANNEL === LOBBY ? "the Lobby" : roomTitle(CHANNEL)), 4000, { level: "event" });
     } finally { leaveBusy = false; }
   }
   // the landing in My room after it is set up (the first join of a person whose main room is My room)
@@ -24748,7 +24898,32 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomRec: (slug) => {
       const r = roomsMinter.get(slug) || lastChannelList.find((x) => x.slug === slug) || {};
       const g = roomGroupOf(slug) || "";
-      return { locked: !!r.locked, keep: !!r.persistent, viewLock: !!r.viewLock, group: g, groupName: (g && roomsGroups?.[g]?.name) || "" };
+      return { locked: !!r.locked, keep: !!r.persistent, viewLock: !!r.viewLock, group: g, groupName: (g && roomsGroups?.[g]?.name) || "", tplClose: !!r.tplClose };
+    },
+    // 0.21.92 "Create a new room for this": a plain room through the Create room form's own path (the same rules) -> {ok, slug} | {ok:false,
+    // taken?, error}. A name that is already a room is refused (a template never takes over -- or later closes -- a room that existed).
+    taken: (name) => { const s = channelSlug(String(name || "")); return lastChannelList.some((r) => r.slug === s) || roomsMinter.has(s) || s === "main" || s === LOBBY; },
+    slugOf: (name) => channelSlug(String(name || "")),
+    createRoom: async (name) => {
+      const slug = channelSlug(String(name || ""));
+      if (!String(name || "").trim() || slug === "main" || slug === LOBBY || !ROOM_RE.test(slug)) return { ok: false, error: "Name the room first." };
+      if (isHomeRoom(slug) || isPersonalSlug(slug) || slug === "lib") return { ok: false, error: "That name is kept for something else \u2014 pick another name." };
+      if (lastChannelList.some((r) => r.slug === slug) || roomsMinter.has(slug)) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };
+      const rec = await createChannelRecord(slug, "", false);
+      const g = await registerRoomRec(rec, authAccessCode);
+      if (!g.ok) return { ok: false, error: g.error || "The room was not created." };
+      if (!rec.roomKey) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };   // it was there (a plain room is anybody's)
+      rememberChannel(rec);
+      try { await roomsMinterPoll(); } catch {}
+      return { ok: true, slug: rec.slug };
+    },
+    go: (slug) => { const rec = myChannels().find((r) => r.slug === slug) || lastChannelList.find((r) => r.slug === slug) || { slug }; return switchRoom(rec, ""); },
+    // a room the hub just closed: everyone's page learns from the store (the close hint + the rooms poll); mine too, now
+    closed: (slug) => {
+      roomsClosedWhy = Object.assign({}, roomsClosedWhy, { [slug]: "pres" });   // the hub closed it at End: my own note says so, whichever path moves me first
+      try { window.__channels?.closedHint?.(slug); } catch {}
+      try { const list = myChannels().filter((x) => x.slug !== slug); localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list)); } catch {}
+      roomsMinterPoll().then(() => chatClosedCheck()).catch(() => {});
     },
     settingsRole: (slug) => roomSettingsRole(roomsMinter.get(slug) || lastChannelList.find((r) => r.slug === slug) || { slug }),
     board: () => (board.room === CHANNEL ? JSON.parse(JSON.stringify({ pins: board.pins, spots: board.spots, grids: board.grids, split: board.split, spotOrder: board.spotOrder, customGrids: board.customGrids })) : null),
@@ -24760,6 +24935,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     people: () => eoPeopleForMsg(),
     inviteLink: (token, slug) => inviteJoinLink(token, slug),
     refresh: () => { try { boardPoll(); } catch {} try { roomsMinterPoll(); } catch {} },
+    roomsFresh: () => roomsMinterPoll(),   // 0.21.92: the room records now (End in a room a template made: closes on End?)
     confirm: (o) => kastrConfirm(o), icon: (n) => icon(n),
     menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
     closePops: () => { try { closeAllPops(); } catch {} },
@@ -33795,6 +33971,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 </script>
 <!-- 0.21.84 (prototype): Share > Presentation -- presenter view, backstage, the sharp live slide over the share's tile -->
 <script type="module" src="/assets/kastr-gif.js"></script>
+<script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the admin's Reset My room passcode dialog -->
 <script type="module" src="/assets/kastr-msg.js"></script>
 <script type="module" src="/assets/kastr-templates.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>

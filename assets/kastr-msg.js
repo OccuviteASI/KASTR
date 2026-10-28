@@ -200,6 +200,7 @@
     setState("unlocking");
     const u = await api({ op: "unlock", name: S.name, code });
     if (!u.ok) {
+      if (u.mustChange) { S.pendingCode = code; setState("mustchange"); return false; }   // 0.21.91 passcode reset: an admin's temporary code
       if (u.wrong) { setState("needcode", auto ? "This device’s saved My room code did not work — enter it again." : "Wrong My room code."); return false; }
       if (u.blocked) { setState("blocked"); return false; }
       if (u.status === 429) { setState("needcode", u.error || "Too many attempts — wait a little."); return false; }
@@ -673,7 +674,8 @@
       noroom: ["Set up messages", "Messages use your name and your My room code: anyone who knows them can read your messages on any device, so pick a code only you know (at least " + S.codeMin + " characters)."],
       needcode: ["Unlock your messages", "Enter your My room code to read your messages on this device — the same name and code on any device show all your messages (90 days)."],
       short: ["Pick a longer code", "Your My room code is shorter than " + S.codeMin + " characters. Messages need a longer one (it protects your key on the hub); this also becomes your My room code."],
-      rekey: ["Your key needs the old code", "Your messages key was locked with an earlier My room code (an admin may have reset it). Enter that earlier code to keep your history — or start fresh (messages from before cannot be read again)."],
+      rekey: ["Your key needs the old code", "An admin reset your My room passcode. Enter your previous passcode to keep your message history, or start fresh."],   // 0.21.91 passcode reset
+      mustchange: ["Pick your own passcode", "An admin reset your My room passcode. Pick your own passcode (at least " + S.codeMin + " characters) before going on."],   // 0.21.91 passcode reset
     }[st] || ["Messages", ""];
     const id = "mset-" + st + "-" + (S.why || "");
     if (body.dataset.view === id) return;
@@ -683,7 +685,7 @@
     if (st === "noroom") html += '<button type="button" class="mprim" data-a="room">Set up My room</button>';
     if (st === "needcode" || st === "rekey") html += '<input class="mcode" type="password" autocomplete="current-password" placeholder="' + (st === "rekey" ? "Earlier My room code" : "My room code") + '"><button type="button" class="mprim" data-a="unlock">Unlock</button>';
     if (st === "rekey") html += '<button type="button" class="mghost" data-a="fresh">Start fresh</button>';
-    if (st === "short") html += '<input class="mnew1" type="password" autocomplete="new-password" placeholder="New code (at least ' + S.codeMin + ' characters)"><input class="mnew2" type="password" autocomplete="new-password" placeholder="The new code again"><button type="button" class="mprim" data-a="short">Use this code</button>';
+    if (st === "short" || st === "mustchange") html += '<input class="mnew1" type="password" autocomplete="new-password" placeholder="New code (at least ' + S.codeMin + ' characters)"><input class="mnew2" type="password" autocomplete="new-password" placeholder="The new code again"><button type="button" class="mprim" data-a="short">Use this code</button>';
     if (st === "down" || st === "error") html += '<button type="button" class="mghost" data-a="retry">Try again</button>';
     html += "</div>";
     body.innerHTML = html;
@@ -721,6 +723,18 @@
         const n1 = body.querySelector(".mnew1").value, n2 = body.querySelector(".mnew2").value;
         if (n1.length < S.codeMin) { say("At least " + S.codeMin + " characters."); return; }
         if (n1 !== n2) { say("The two codes do not match."); return; }
+        if (st === "mustchange") {   // 0.21.91 passcode reset: My room takes their own code; then the key asks for the previous one
+          const tmp = S.pendingCode || "";
+          if (!tmp) { body.dataset.view = ""; setState("needcode"); return; }
+          if (n1 === tmp) { say("Pick a passcode of your own \u2014 not the temporary one."); return; }
+          b.disabled = true; say("Changing\u2026");
+          const d = await K.roomChange(S.name, tmp, n1);
+          b.disabled = false;
+          if (!d.ok) { say(d.error || "Could not change the passcode."); return; }
+          S.pendingCode = ""; body.dataset.view = "";
+          await unlock(n1, false);
+          return;
+        }
         const old = S.pendingCode || K.personal()?.code || "";
         if (!old) { say("Enter your current My room code in My room first."); return; }
         b.disabled = true; say("Setting up…");
@@ -1102,7 +1116,11 @@
       return c;
     }));
   }
-  const grow = (ta) => { ta.style.height = "auto"; ta.style.height = Math.min(120, ta.scrollHeight) + "px"; };
+  const grow = (ta) => {   // 0.21.91: empty = natural size; text = its height plus the borders (border-box: no scroll arrows)
+    if (!ta.value) { ta.style.height = ""; return; }
+    if (!ta.offsetWidth) return;
+    ta.style.height = "auto"; ta.style.height = Math.min(120, ta.scrollHeight + (ta.offsetHeight - ta.clientHeight)) + "px";
+  };
   async function groupMenu(anchor) {
     const g = S.groups.get(S.open.slice(2));
     if (!g) return;
@@ -1274,7 +1292,7 @@
   // NEVER blocks when Messages cannot be reached (the hub away, a relay older than 0.21.88, no WebCrypto here, an admin removed
   // this device): a quiet line says so, and the card comes when the hub answers again (the 30 s check). The code is never kept
   // anywhere new -- My room remembers it on this device exactly as the My room dialog does (kastr.personal.<relay host>).
-  const GATE_STATES = new Set(["noroom", "needcode", "short", "rekey"]);
+  const GATE_STATES = new Set(["noroom", "needcode", "short", "rekey", "mustchange"]);   // 0.21.91: + mustchange (an admin's reset)
   const QUIET = { down: "My room and messages will be set up when the hub is reachable",
                   error: "My room and messages will be set up when the hub is reachable",
                   old: "My room and messages will be set up when this relay runs KASTR 0.21.88 or later" };
@@ -1371,7 +1389,8 @@
         noroom: ["Set up My room and messages", "KASTR keeps your own room (My room) and your private messages under your name and a code only you know. Pick it once \u2014 the same name and code open both on any device.", "Set up"],
         needcode: ["Unlock your messages", "\u201c" + S.name + "\u201d already has a My room on this hub. If it\u2019s yours, enter your My room code to unlock your messages on this device. If it isn\u2019t you, change your name.", "Unlock"],
         short: ["Pick a longer My room code", "Pick a longer My room code to turn on messages. It becomes your My room code everywhere \u2014 your other devices ask for it once.", "Use this code"],
-        rekey: ["Enter your earlier My room code", "Your messages key was locked with an earlier My room code (an admin may have reset it). Enter that earlier code to keep your history \u2014 or start fresh (older messages cannot be read again).", "Unlock"],
+        rekey: ["Enter your earlier My room code", "An admin reset your My room passcode. Enter your previous passcode to keep your message history, or start fresh.", "Unlock"],   // 0.21.91 passcode reset
+        mustchange: ["Pick your own My room passcode", "An admin reset your My room passcode. Pick your own passcode before going on \u2014 it opens My room and your messages on any device.", "Use this passcode"],   // 0.21.91 passcode reset
         rename: ["Rename My room and messages", "Your My room, your messages (with their history) and your photo move to the new name, and everyone sees it. The old name keeps pointing to you for 90 days. Confirm with your My room code.", "Rename"],
         choice: ["Change name", "Is \u201c" + S.name + "\u201d your own My room, set up on another device? Rename it \u2014 everything moves to the new name. If it isn\u2019t yours, use a different name.", "It\u2019s mine \u2014 rename it"],
       }[st] || ["Set up My room and messages", "", "Continue"];
@@ -1383,16 +1402,16 @@
       q('[data-f="old"]').hidden = !needOld;
       q('[data-f="nn"]').hidden = st !== "rename";
       q('[data-f="c1"]').hidden = st === "choice";
-      q('[data-f="c2"]').hidden = !(st === "noroom" || st === "short");
-      q('[data-a="name"]').hidden = st === "rename" || st === "choice";
+      q('[data-f="c2"]').hidden = !(st === "noroom" || st === "short" || st === "mustchange");
+      q('[data-a="name"]').hidden = st === "rename" || st === "choice" || st === "mustchange";
       q('[data-a="back"]').hidden = !(st === "rename" || st === "choice");
       q('[data-a="other"]').hidden = st !== "choice";
-      q(".ksc1l").textContent = st === "short" ? "New My room code" : st === "rekey" ? "Earlier My room code" : st === "rename" ? "Your My room code" : "My room code";
-      q(".ksc1").autocomplete = st === "noroom" || st === "short" ? "new-password" : "current-password";
-      q(".kshint").textContent = st === "noroom" || st === "short" ? "At least " + min + " characters \u2014 it opens My room and your messages on any device, so pick one only you know." : "";
+      q(".ksc1l").textContent = st === "short" || st === "mustchange" ? "New My room code" : st === "rekey" ? "Earlier My room code" : st === "rename" ? "Your My room code" : "My room code";
+      q(".ksc1").autocomplete = st === "noroom" || st === "short" || st === "mustchange" ? "new-password" : "current-password";
+      q(".kshint").textContent = st === "noroom" || st === "short" || st === "mustchange" ? "At least " + min + " characters \u2014 it opens My room and your messages on any device, so pick one only you know." : "";
       q(".kshint").hidden = !q(".kshint").textContent;
       q('[data-a="fresh"]').hidden = st !== "rekey";
-      q(".ksforgot").hidden = st === "noroom";
+      q(".ksforgot").hidden = st === "noroom" || st === "mustchange";   // 0.21.91 passcode reset: (they were just reset)
       for (const i of gateEl.querySelectorAll("input")) { i.value = ""; i.classList.remove("bad"); }
       if (st === "rename") q(".ksnn").value = gateSubName || "";
       err.textContent = S.why && !["noroom", "rename", "choice"].includes(st) ? S.why : "";
@@ -1422,8 +1441,8 @@
     if (st === "choice") { gateSub = "rename"; gateSubName = ""; gateKey = ""; gatePaint(); return; }   // 0.21.91
     if (st === "rename" && !nameKey(q(".ksnn").value)) return gateSay("Enter the new name.", ["ksnn"]);
     if (!c1) return gateSay("Enter " + (st === "short" ? "a new" : st === "rekey" ? "your earlier" : "your") + " My room code.", ["ksc1"]);
-    if ((st === "noroom" || st === "short") && c1.length < min) return gateSay("Too short \u2014 a My room code has at least " + min + " characters.", ["ksc1"]);
-    if ((st === "noroom" || st === "short") && c1 !== c2) return gateSay("The two codes don\u2019t match.", ["ksc2"]);
+    if ((st === "noroom" || st === "short" || st === "mustchange") && c1.length < min) return gateSay("Too short \u2014 a My room code has at least " + min + " characters.", ["ksc1"]);
+    if ((st === "noroom" || st === "short" || st === "mustchange") && c1 !== c2) return gateSay("The two codes don\u2019t match.", ["ksc2"]);
     if (st === "short" && !q('[data-f="old"]').hidden && !old) return gateSay("Enter your current My room code.", ["kso"]);
     gateBusy = true; gateSay(st === "noroom" ? "Setting up\u2026" : "Opening\u2026");
     q('[data-a="go"]').disabled = true;
@@ -1441,7 +1460,7 @@
       } else if (st === "needcode") {
         const ok = await unlock(c1, false);
         if (!ok) {
-          if (S.state === "short") return;   // their code works, but messages need a longer one: the next card
+          if (S.state === "short" || S.state === "mustchange") return;   // their code works, but: a longer one / their own (0.21.91) -- the next card
           gateSay(/Wrong/.test(S.why) ? "That isn\u2019t the My room code of \u201c" + S.name + "\u201d. If this name isn\u2019t yours, change your name." : (S.why || "Could not unlock."), ["ksc1"]);
           return;
         }
@@ -1451,6 +1470,14 @@
         const ok = await unlock(cur, false, c1);
         if (!ok) { gateSay(S.state === "needcode" ? "The current code is wrong." : (S.why || "Could not change the code."), ["kso"]); return; }
         if (!K.personal()) await K.roomOpen(S.name, c1);
+      } else if (st === "mustchange") {   // 0.21.91 passcode reset: My room takes their own code; the key then asks for the previous one
+        const tmp = S.pendingCode || "";
+        if (!tmp) { S.state = "needcode"; gateKey = ""; return; }
+        if (c1 === tmp) return gateSay("Pick a passcode of your own \u2014 not the temporary one.", ["ksc1"]);
+        const d = await K.roomChange(S.name, tmp, c1);
+        if (!d.ok) { gateSay(d.error || "Could not change the passcode.", ["ksc1"]); return; }
+        S.pendingCode = "";
+        await unlock(c1, false);
       } else if (st === "rename") {   // 0.21.91: everything moves; then the card carries on under the new name
         const r = await renameMe(q(".ksnn").value, c1);
         if (!r.ok) { gateSay(r.error || "Could not rename.", r.wrong ? ["ksc1"] : ["ksnn"]); return; }

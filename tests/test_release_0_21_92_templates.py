@@ -51,6 +51,11 @@ def pin(svc, room, path, tok, label="Cam", tokens=None):
     return o
 
 
+def _read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 def board_sig(b):
     b = kt.clean_layout(b)
     b.pop("start", None)
@@ -568,6 +573,48 @@ class Decks(Base):
         self.assertIsNone(o["template"]["pres"]["deck"])
         self.assertEqual((o["template"]["pres"]["presenters"][0]["name"], o["template"]["pres"]["mode"]), ("Ada", "reporter"))
 
+    def test_ask_to_speak_and_co_presenters_own_control_lists(self):
+        # 0.21.91: "Ask to speak" is a switch of its own (kept while muted); co-presenters have the same powers and their OWN
+        # "Can control my mic and camera" -- after Start presenting, each co-presenter's device hears whom the template says THEY
+        # do not allow (from the hub's template, never from the page)
+        o, c = self.api({"op": "save", "name": "Board", "sections": ["layout", "pres"],
+                         "pres": {"presenters": [{"name": "Kenton", "main": True}, {"name": "Carlo Bos"}, {"name": "Bob"}],
+                                  "backstage": [{"name": "Ada", "control": ["Kenton", "Bob"]}, {"name": "Bea", "control": ["Kenton", "Carlo Bos", "Bob"]}],
+                                  "audience": {"muted": True, "ask": False}, "mode": "reporter"}})
+        self.assertEqual(c, 200, o)
+        tid = o["template"]["id"]
+        self.assertEqual(o["template"]["pres"]["audience"], {"muted": True, "ask": False})
+        o, c = self.api({"op": "update", "id": tid, "pres": dict(o["template"]["pres"], audience={"muted": True, "ask": True})})
+        self.assertEqual(o["template"]["pres"]["audience"], {"muted": True, "ask": True})
+        self.assertEqual(self.api({"op": "presCo", "id": tid, "deck": "pd-1a2b3c4d"})[1], 404)            # no deck kept: nothing to start
+        d, c = self.api({"op": "deckNew", "id": tid, "name": "Board.pdf", "kind": "pdf", "slides": 4, "size": 3000})
+        self.svc.tpl_deck_post(b"x" * 3000, {"d": [d["deck"]], "f": ["part.000"], "ut": [d["utok"]]}, None)
+        self.api({"op": "deckDone", "id": tid, "deck": d["deck"], "utok": d["utok"], "start": 2})
+        bob = mint(self.svc, "beta", host="bob-pc-5e6f", room_code=CODE)
+        self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")
+        self.svc.people_api({"op": "beat", "name": "Bob"}, "Bearer " + bob, "10.0.0.9")
+        self.assertEqual(self.api({"op": "presCo", "id": tid, "deck": "../x"})[1], 400)
+        r, c = self.api({"op": "presCo", "id": tid, "deck": "pd-1a2b3c4d", "deny": ["Bea"]})
+        self.assertEqual((c, r["told"]), (200, 1))                                 # Bob allows everyone: nothing to tell him
+        box = self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")[0]["inbox"]
+        self.assertEqual([(x["kind"], x["deck"], x["deny"], x["owner"]) for x in box], [("tplco", "pd-1a2b3c4d", ["Ada"], "Kenton")])
+        # only the template's named people (or admins) may send it
+        kr.personal_op(self.st, {"op": "create", "name": "Zed", "code": "zed-code-99", "access": "pub-1"}, "10.0.0.5")
+        self.assertEqual(self.api({"op": "presCo", "id": tid, "deck": "pd-1a2b3c4d", "pname": "Zed", "pcode": "zed-code-99"}, self.pub)[1], 403)
+        # applied to a FRESH room: there its deck opens (and the template reads) for the named people and that room's admins
+        gadm = mint(self.svc, "gamma", code="adm-1")
+        gpub = mint(self.svc, "gamma", host="zed-pc-7a7a", code="pub-1")
+        self.assertEqual(self.api({"op": "get", "id": tid}, gadm)[1], 403)
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid}, gadm)[1], 403)
+        o, c = self.api({"op": "apply", "id": tid, "on": {"layout": False}, "tokens": {"beta": self.adm}, "by": "Kenton", "here": "beta"}, gadm)
+        self.assertEqual(c, 200, o)
+        # Kenton (the main presenter) applied it to a room he is not in: his own device keeps it for when he goes there
+        self.assertEqual((o["presFor"]["me"], o["presFor"].get("away"), o["presFor"].get("told")), (True, True, True))
+        self.assertEqual(self.api({"op": "get", "id": tid}, gadm)[1], 200)
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid}, gadm)[1], 200)
+        self.assertEqual(self.api({"op": "get", "id": tid, "pname": "Zed", "pcode": "zed-code-99"}, gpub)[1], 403)   # not named
+        self.assertEqual(self.api({"op": "deckOpen", "id": tid}, mint(self.svc, "delta", code="adm-1"))[1], 403)    # not applied there
+
     def test_decks_and_templates_move_with_the_hub(self):
         o, c = self.api({"op": "save", "name": "Moves", "sections": ["layout", "pres"], "pres": {}})
         tid = o["template"]["id"]
@@ -593,6 +640,182 @@ class Decks(Base):
         new.tplbook.delete(tid)
         self.st.merge_bundle(new.export_bundle())
         self.assertIsNone(self.st.tplbook.get(tid))
+
+
+class TemplateRoom(Base):
+    """Kenton (2026-10-28): "When creating a presentation using the template and having it create a room for it, close the room
+    after the presenter ends the meeting." -- the page creates the room (the Create room path), the hub marks it as made by this
+    run (op room), End -> op presEnd closes it like an admin close. Never a room that existed before; only that run's presenters,
+    the room's creator and admins."""
+
+    def setUp(self):
+        super().setUp()
+        for n, code in (("Carlo Bos", "carlo-code-99"), ("Ada", "ada-code-99"), ("Zed", "zed-code-99")):
+            kr.personal_op(self.st, {"op": "create", "name": n, "code": code, "access": "pub-1"}, "10.0.0.5")
+        o, c = self.api({"op": "save", "name": "Q3 review", "sections": ["layout", "pres"],
+                         "pres": {"presenters": [{"name": "Kenton", "main": True}, {"name": "Carlo Bos"}],
+                                  "backstage": [{"name": "Ada", "control": ["Kenton"]}], "mode": "standout"}})
+        self.assertEqual(c, 200, o)
+        self.tid = o["template"]["id"]
+        self.closed = []
+        self._hook = kr.ROOM_CLOSE_HOOK[0]
+        kr.ROOM_CLOSE_HOOK[0] = self.closed.append      # what kastr_serve's hook does: the room's chat goes
+
+    def tearDown(self):
+        kr.ROOM_CLOSE_HOOK[0] = self._hook
+        super().tearDown()
+
+    def make(self, slug, host=HOST):
+        """The page's Create room path (a plain room) + the starter's token there -> (roomKey, token)."""
+        o, c = kr.register_room(self.st, {"slug": slug, "plain": True, "creator": "Kenton"}, "10.0.0.7")
+        self.assertEqual(c, 200, o)
+        return o.get("roomKey"), mint(self.svc, slug, host=host)
+
+    def test_the_switch_is_kept_in_the_template(self):
+        t = self.st.tplbook.get(self.tid)
+        self.assertIs(t["pres"]["closeOnEnd"], True)                               # on by default
+        o, c = self.api({"op": "update", "id": self.tid, "pres": dict(t["pres"], closeOnEnd=False)})
+        self.assertIs(o["template"]["pres"]["closeOnEnd"], False)
+        self.assertIs(kt.clean_pres({"closeOnEnd": True})["closeOnEnd"], True)
+
+    def test_create_a_room_then_end_closes_it(self):
+        key, tok = self.make("q3-review")
+        self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")   # Carlo's device is known
+        self.assertEqual(self.api({"op": "room", "id": self.tid, "tokens": {"beta": self.adm}}, tok)[1], 403)   # no roomKey: not its maker
+        mk, c = self.api({"op": "room", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}, "by": "Kenton"}, tok)
+        self.assertEqual(c, 200, mk)
+        self.assertTrue(mk["close"])
+        self.assertEqual(self.api({"op": "room", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}}, tok)[1], 409)   # never twice
+        rec = self.st.room("q3-review")
+        self.assertEqual((rec["tpl"]["id"], rec["tpl"]["run"]), (self.tid, mk["run"]))
+        self.assertTrue(next(r for r in self.st.rooms_public() if r["slug"] == "q3-review")["tplClose"])
+        ap, c = self.api({"op": "apply", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}, "by": "Kenton", "here": "q3-review",
+                          "run": mk["run"]}, tok)
+        self.assertEqual(c, 200, ap)
+        self.assertEqual(ap["sent"], ["Carlo Bos"])                                    # the usual invite for the named people
+        self.assertTrue(any(n["what"] == "Invite Ada" for n in ap["notes"]))           # Ada: not seen -- her role waits for her
+        self.assertEqual(ap["tplRoom"]["close"], True)
+        self.assertTrue(ap["presFor"]["me"])
+        box = self.svc.people_api({"op": "beat", "name": "Carlo Bos"}, "Bearer " + self.pub, "10.0.0.8")[0]["inbox"]
+        self.assertTrue(any(x.get("room") == "q3-review" for x in box))
+        inv, c = self.svc._invite_make("q3-review", 3600, "Kenton")
+        self.assertEqual(c, 200, inv)
+        # End by a named co-presenter (proven by name + My room code) -> the hub closes it like an admin close
+        carlo = mint(self.svc, "q3-review", host=OTHER)
+        o, c = self.api({"op": "presEnd", "pname": "Carlo Bos", "pcode": "carlo-code-99"}, carlo)
+        self.assertEqual(c, 200, o)
+        self.assertIsNone(self.st.room("q3-review"))
+        self.assertIn("q3-review", self.st.closed_public())
+        self.assertEqual(self.st.closed_why_public().get("q3-review"), "pres")       # the pages' note: "The presentation ended ..."
+        self.assertEqual(self.closed, ["q3-review"])                                   # its chat goes
+        self.assertTrue(self.st.invites[inv["id"]]["revoked"])                         # its invite links stop working
+        g = kr.rooms_for_guest({"rooms": [], "closed": {"q3-review": 1, "beta": 2}, "closedWhy": {"q3-review": "pres"}}, {"beta"})
+        self.assertEqual(g["closedWhy"], {})                                           # a guest learns only its own rooms
+        # an admin close afterwards is an ordinary close again
+        self.st.close_room("q3-review")
+        self.assertNotIn("q3-review", self.st.closed_why_public())
+
+    def test_a_room_that_existed_before_is_never_closed(self):
+        # beta: the template's own room (made before this run) -- never marked, never closed by End
+        self.st.rooms["beta"]["created"] = time.time() - 3600
+        o, c = self.api({"op": "room", "id": self.tid, "roomKey": self.room_key})
+        self.assertEqual(c, 409, o)
+        o, c = self.api({"op": "presEnd"})                                             # even an admin: not a template's room
+        self.assertEqual((c, o.get("kept")), (409, True))
+        self.assertIsNotNone(self.st.room("beta"))
+        # an older plain room its maker still holds the key to: too old to be "made by this run"
+        key, tok = self.make("old-room")
+        self.st.rooms["old-room"]["created"] = time.time() - kr.TPL_ROOM_NEW_S - 5
+        self.assertEqual(self.api({"op": "room", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}}, tok)[1], 409)
+        self.assertEqual(self.api({"op": "presEnd", "roomKey": key}, tok)[1], 409)
+        self.assertIsNotNone(self.st.room("old-room"))
+        # a room that was there when the page tried to create it: the Create room path gives no roomKey -> nothing to mark with
+        o, c = kr.register_room(self.st, {"slug": "old-room", "plain": True, "creator": "Mallory"}, "10.0.0.9")
+        self.assertIsNone(o.get("roomKey"))
+        # the switch off: End leaves it open
+        key2, tok2 = self.make("q3-open")
+        mk, c = self.api({"op": "room", "id": self.tid, "roomKey": key2, "close": False, "tokens": {"beta": self.adm}}, tok2)
+        self.assertEqual((c, mk["close"]), (200, False))
+        self.assertEqual(self.api({"op": "presEnd", "roomKey": key2}, tok2)[1], 409)
+        self.assertIsNotNone(self.st.room("q3-open"))
+        self.assertEqual(self.closed, [])
+
+    def test_only_that_runs_presenters_close_it(self):
+        key, tok = self.make("q3-b")
+        mk, c = self.api({"op": "room", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}}, tok)
+        self.assertEqual(c, 200, mk)
+        other = mint(self.svc, "q3-b", host="zed-pc-7a7a")
+        viewer = mint(self.svc, "q3-b", host="watch-9f9f", code="view-1")
+        self.assertEqual(self.api({"op": "presEnd"}, other)[1], 403)                                   # a publisher, not named
+        self.assertEqual(self.api({"op": "presEnd", "by": "Carlo Bos"}, other)[1], 403)               # saying a name is not enough
+        self.assertEqual(self.api({"op": "presEnd", "pname": "Zed", "pcode": "zed-code-99"}, other)[1], 403)   # a person, not named
+        self.assertEqual(self.api({"op": "presEnd", "pname": "Ada", "pcode": "ada-code-99"}, other)[1], 403)   # backstage is no presenter
+        o, c = self.api({"op": "presEnd", "pname": "Carlo Bos", "pcode": "wrong-wrong"}, other)
+        self.assertEqual((c, o.get("wrong")), (403, True))
+        self.assertEqual(self.api({"op": "presEnd"}, viewer)[1], 403)
+        self.assertEqual(self.api({"op": "presEnd", "run": "0" * 12, "roomKey": key}, tok)[1], 409)   # another run's room
+        # apply, a second apply, undo: none of them closes it (only End does)
+        ap, c = self.api({"op": "apply", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}, "here": "q3-b", "run": mk["run"]}, tok)
+        self.assertEqual(c, 200, ap)
+        self.assertEqual(self.api({"op": "undo", "undo": ap["undo"], "roomKey": key}, tok)[1], 200)
+        self.assertIsNotNone(self.st.room("q3-b"))
+        o, c = self.api({"op": "presEnd", "roomKey": key, "run": mk["run"]}, tok)                    # the room's creator (the starter)
+        self.assertEqual(c, 200, o)
+        self.assertIsNone(self.st.room("q3-b"))
+        self.assertEqual(self.api({"op": "presEnd", "roomKey": key}, tok)[1], 409)                    # gone: nothing left to close
+        # an admin closes one too
+        key3, tok3 = self.make("q3-c")
+        self.api({"op": "room", "id": self.tid, "roomKey": key3, "tokens": {"beta": self.adm}}, tok3)
+        self.assertEqual(self.api({"op": "presEnd"}, mint(self.svc, "q3-c", host="admin-pc-1111", code="adm-1"))[1], 200)
+        self.assertEqual(self.closed, ["q3-b", "q3-c"])
+
+    def test_invited_presenters_close_it_and_the_pages_hint_finds_them(self):
+        # the lab: Carlo's page is on a spoke the hub has no check-in from -- the applying page says which device it saw him on
+        key, tok = self.make("q3-g")
+        mk, c = self.api({"op": "room", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}}, tok)
+        ap, c = self.api({"op": "apply", "id": self.tid, "roomKey": key, "tokens": {"beta": self.adm}, "here": "q3-g", "run": mk["run"],
+                          "by": "Kenton", "people": [{"name": "Carlo Bos", "host": "carlo-pc-5e6f"}, {"name": "Mallory", "host": "mal-pc-6666"},
+                                                     {"name": "Ada", "host": "not a host"}]}, tok)
+        self.assertEqual(c, 200, ap)
+        self.assertEqual(ap["sent"], ["Carlo Bos"])                     # Mallory is not the template's; Ada's "host" is no device
+        # they join by that invite -> invite-link guests in the room; a named presenter among them still closes it, nobody else
+        def guest(host):
+            inv, c = self.svc._invite_make("q3-g", 3600, "Kenton")
+            r, c = self.svc.token({"room": "q3-g", "invite": inv["token"], "host": host}, "10.0.0.9")
+            self.assertEqual(c, 200, r)
+            return r["tokens"]["member"]
+        carlo, ada, zed = guest("carlo-pc-5e6f"), guest("ada-pc-1234"), guest("zed-pc-7a7a")
+        self.assertEqual(self.api({"op": "apply", "id": self.tid, "here": "q3-g"}, carlo)[1], 403)            # a guest applies nothing
+        self.assertEqual(self.api({"op": "presEnd"}, carlo)[1], 403)                                          # not proven
+        self.assertEqual(self.api({"op": "presEnd", "pname": "Ada", "pcode": "ada-code-99"}, ada)[1], 403)    # backstage
+        self.assertEqual(self.api({"op": "presEnd", "pname": "Zed", "pcode": "zed-code-99"}, zed)[1], 403)    # not named
+        self.assertIsNotNone(self.st.room("q3-g"))
+        o, c = self.api({"op": "presEnd", "pname": "Carlo Bos", "pcode": "carlo-code-99"}, carlo)
+        self.assertEqual(c, 200, o)
+        self.assertIsNone(self.st.room("q3-g"))
+
+    def test_only_end_calls_the_hook(self):
+        # hand over, take over, Leave (which hands over) and a dropped connection never close the room: the page's End button is
+        # the ONE caller of window.__pres.onEnd (kastr-pres.js endPress); kastr-templates.js calls presEnd only from that hook
+        src = _read(os.path.join(HERE, "assets", "kastr-pres.js"))
+        self.assertEqual(len(re.findall(r"__pres\.onEnd|\.onEnd\b", src)), 2, "endPress reads it; the export declares it")
+        body = src[src.index("function endPress()"):src.index("function endNow()")]
+        self.assertIn("window.__pres.onEnd", body)
+        for fn in ("function leaveMine(", "function endMine(", "function setCur(", "function presOp("):
+            i = src.index(fn)
+            self.assertNotIn("onEnd", src[i:src.index("\n  }", i)])
+        tpl = _read(os.path.join(HERE, "assets", "kastr-templates.js"))
+        self.assertEqual(tpl.count('op: "presEnd"'), 1)
+        i = tpl.index("async function closeTplRoom(")
+        self.assertIn("return () => closeTplRoom(slug);", tpl[tpl.index("async function presEndHook("):i])
+        self.assertIn("End the presentation and close", tpl)
+        self.assertIn("Create a new room for this", tpl)
+        self.assertIn("Close the room when the presentation ends", tpl)
+        page = _read(os.path.join(HERE, "moq-watch-lite.html"))
+        self.assertIn('"The presentation ended and " + roomTitle(room) + " was closed."', page)
+        # a spoke's page learns why too: the spoke's merge of the hub's rooms keeps closedWhy (the lab caught it dropping it)
+        serve = _read(os.path.join(HERE, "kastr_serve.py"))
+        self.assertIn('"closedWhy": hub_obj.get("closedWhy") or {}', serve[serve.index("def _rooms_merge("):])
 
 
 class Federation(Base):
@@ -627,6 +850,26 @@ class Federation(Base):
         self.base[0] = "http://127.0.0.1:9"
         o, c = self.spoke.templates_api({"op": "list"}, "Bearer " + self.sadm, "10.0.0.8")
         self.assertEqual((c, o.get("hubDown")), (503, True))
+
+    def test_a_spoke_carries_template_notes_to_its_pages(self):
+        # a co-presenter (or the main presenter) whose page beats on a spoke hears the hub's tplco / tplpres there, once, cleaned
+        co = {"id": "a1b2c3d4e5f6", "kind": "tplco", "room": "beta", "tid": "t0123456789ab", "deck": "dc5fe7cc33f4f3931",
+              "owner": "Kenton", "deny": ["Ada Backstage"], "at": time.time(), "code": "never-carried"}
+        ready = {"id": "b1b2c3d4e5f6", "kind": "tplpres", "room": "beta", "tid": "t0123456789ab", "name": "Board meeting",
+                 "by": "Kenton", "for": "Carlo Bos", "at": time.time()}
+        feed = {"open": [], "rooms": {}, "away": {}, "inbox": [{"seq": 1, "to": "carlo-pc-3c4d", "item": co},
+                                                             {"seq": 2, "to": "carlo-pc-3c4d", "item": ready},
+                                                             {"seq": 3, "to": "carlo-pc-3c4d", "item": dict(co, id="c1b2c3d4e5f6", deck="../x")},
+                                                             {"seq": 4, "to": "carlo-pc-3c4d", "item": dict(co, id="d1b2c3d4e5f6", deny=[])}]}
+        self.spoke.personal_mirror_apply({"personal": feed})
+        self.spoke.personal_mirror_apply({"personal": feed})   # the same long-poll answer again: not twice
+        got = [x for x in self.spoke._p_inbox_take("carlo-pc-3c4d", time.time()) if str(x.get("kind")).startswith("tpl")]
+        self.assertEqual(sorted(x["kind"] for x in got), ["tplco", "tplpres"])
+        c = next(x for x in got if x["kind"] == "tplco")
+        self.assertEqual((c["deck"], c["deny"], c["room"], c["owner"]), ("dc5fe7cc33f4f3931", ["Ada Backstage"], "beta", "Kenton"))
+        self.assertNotIn("code", c)
+        self.assertIsNone(kr.tpl_item_clean(dict(co, room="Not A Slug")))
+        self.assertIsNone(kr.tpl_item_clean(dict(co, kind="rc")))
 
     def test_rooms_fed_needs_federation_and_a_vouch(self):
         body = {"op": "tpl", "vouch": {"room": "beta", "host": HOST, "adminAny": True}, "body": {"op": "list"}}
@@ -666,11 +909,55 @@ class Page(unittest.TestCase):
         self.assertLess(i_pre, i_pub)
         self.assertIn("await ensureSlide(mine.idx); if (mine.idx) await postLive(mine, mine.idx);", pres)
         self.assertIn("    tplSnap,   // 0.21.92", pres)
+        # 0.21.91's audience switches: Save takes Ask to speak from audSnap, Start sets it before the first publish
+        self.assertIn("const aud = window.__pres.audSnap() ||", pres)
+        self.assertLess(pres.index("askPreset(mine, arguments[1]);"), i_pub)
+        self.assertIn("ask: p.audience?.ask === false ? 0 : 1", self.js)
+        self.assertIn('"Ask to speak"', self.js)
+        # co-presenters' own control lists: the hub tells their devices; their page switches its own
+        self.assertIn('it?.kind === "tplco"', self.page)
+        self.assertIn("tplCo: (id, names) =>", pres)
+        self.assertIn('op: "presCo"', self.js)
+        # people who are NOT here stay in the template and are handed to the role code as they are (one seam: giveRole)
+        self.assertIn("const giveRole = (x, r) =>", self.js)
+        self.assertIn('placeholder = "or type a name"', self.js)
+        # Update from this room re-takes a presentation I run there
+        self.assertIn('body.add = ["pres"]', self.js)
         self.assertIn('it?.kind === "tplpres"', self.page)
         # Start presenting is the only thing that starts it; the deck is loaded before (nothing published)
         self.assertIn("window.__pres.startFromFile(R.file, {", self.js)
         self.assertEqual(self.js.count("startFromFile("), 1)
         self.assertIn('"Start presenting"', self.js)
+
+    def test_every_presentation_toggle_rides_one_table(self):
+        # Kenton: "Add any of the toggles to the presentation templates" -- one table on the page, any key kept by the hub
+        with open(os.path.join(HERE, "assets", "kastr-pres.js"), encoding="utf-8") as f:
+            pres = f.read()
+        self.assertIn("const TPL_OPTS = [", pres)
+        for key in ('key: "cm"', 'key: "rbg"', 'key: "am"', 'key: "ask"'):
+            self.assertIn(key, pres)
+        self.assertIn("for (const t of TPL_OPTS) if (Object.prototype.hasOwnProperty.call(oo, t.key))", pres)   # unknown keys skipped
+        self.assertIn("tplOpts: () => TPL_OPTS.map(", pres)
+        self.assertIn("o: p.opts || {}, tpl: t.id", self.js)
+        self.assertIn("for (const o of optRows().filter((x) => x.sw))", self.js)
+        c = kt.clean_pres({"presenters": [{"name": "Kenton", "main": True}],
+                           "opts": {"am": 0, "ask": False, "cm": "reporter", "rbg": "asi-2", "see": 1, "Bad Key": 1, "x": {"no": 1},
+                                    "url": "https://x", "n": 7}})
+        self.assertEqual(c["opts"], {"am": 0, "ask": 0, "cm": "reporter", "rbg": "asi-2", "see": 1})   # a toggle from a newer page kept
+        self.assertEqual((c["audience"], c["mode"], c["reporterBg"]), ({"muted": False, "ask": False}, "reporter", "asi-2"))
+        old = kt.clean_pres({"presenters": [{"name": "Kenton"}], "audience": {"muted": True, "ask": False}, "mode": "sbs"})
+        self.assertEqual(old["opts"], {"am": 1, "ask": 0, "cm": "sbs"})                                 # an older template: in step
+        mix = kt.clean_pres({"presenters": [{"name": "Kenton"}], "audience": {"muted": True, "ask": True}, "opts": {"am": 0, "ask": 0, "see": 0}})
+        self.assertEqual((mix["audience"], mix["opts"]["see"]), ({"muted": True, "ask": True}, 0))     # a named field the body carries wins
+
+    def test_every_on_off_option_is_a_switch(self):
+        # Kenton's standing rule: a toggle switch, never a plain checkbox (nor a lit-up chip standing in for one)
+        self.assertNotIn('<input type="checkbox" aria-label', self.js)
+        self.assertNotRegex(self.js, r'div\("ktchip" \+ \([^)]*\? " on"')
+        self.assertIn('<span class="switch sm"><input type="checkbox"><i></i></span>', self.js)
+        self.assertIn('<label class="switch sm"><input type="checkbox"><i></i></label>', self.js)
+        for words in ('"Audience muted"', '"Ask to speak"', '"Locked"', '"Kept open"', '"View locked"', "mic and camera"):
+            self.assertIn(words, self.js)
 
     def test_build_has_the_module(self):
         with open(os.path.join(HERE, "build.py"), encoding="utf-8") as f:

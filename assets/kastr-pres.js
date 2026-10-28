@@ -603,6 +603,7 @@
     modeInit(mine);   // 0.21.89: Standout when my camera is on, else Content only
     audienceInit(mine);   // 0.21.91: the audience is muted while I present (until a presenter turns it off)
     tplPreset(mine, file, opts);   // 0.21.92: a meeting template's slide / mode / backdrop / audience -- before anything is published
+    askPreset(mine, arguments[1]);   // 0.21.91: a meeting template's audience.ask (startFromFile(file, opts): opts.ask === 0 -> off)
     view.prep("Preparing slide 1 of " + mine.n + "…");
     try { await ensureSlide(mine.idx); if (mine.idx) await postLive(mine, mine.idx); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
     await uploadNotes();
@@ -617,6 +618,17 @@
   }
   // 0.21.92 (Kenton: a template's presentation is "Ready, with a Start button"): the template's starting slide, presenter mode,
   // Reporter background and "Audience muted" apply to the deck before its first publish -- the room never sees slide 1 first.
+  // 0.21.92 (Kenton: "Add any of the toggles to the presentation templates"): every deck-wide option a template keeps, in ONE
+  // table -- {key, read(deck) -> saved value, apply(deck, value) before the first publish}; `sw` rows are on/off switches the
+  // template editor shows (text + default). A key this page does not know (a newer template) is skipped; a key the template
+  // lacks keeps the page's default. Each backstage person's "Can control my mic and camera" is per person (the roles), not here;
+  // per-device layout (divider positions, next-slide size, the strip) is never template material.
+  const TPL_OPTS = [
+    { key: "cm", read: (m) => m.cm, apply: (m, v) => { if (modeOk(v)) m.cm = v; } },                                  // presenter mode
+    { key: "rbg", read: (m) => m.rbg || RBG_DEFAULT, apply: (m, v) => { if (rbgOk(v)) m.rbg = v; } },                  // Reporter background
+    { key: "am", sw: 1, text: "Audience muted", def: 1, read: (m) => (m.am ? 1 : 0), apply: (m, v) => { m.am = v ? 1 : 0; } },
+    { key: "ask", sw: 1, text: "Ask to speak", def: 1, needs: "am", read: (m) => (m.ask === 0 ? 0 : 1), apply: (m, v) => { m.ask = v ? 1 : 0; } },
+  ];
   function tplPreset(m, file, o) {
     m.file = file;   // kept for Save as a template (the hub's deck store keeps the deck as the file it came from)
     if (!o || typeof o !== "object") return;
@@ -624,6 +636,8 @@
     if (modeOk(o.cm)) m.cm = o.cm;
     if (rbgOk(o.rbg)) m.rbg = o.rbg;
     if (o.am === 0 || o.am === false) m.am = 0;
+    const oo = o.o && typeof o.o === "object" ? o.o : {};
+    for (const t of TPL_OPTS) if (Object.prototype.hasOwnProperty.call(oo, t.key)) { try { t.apply(m, oo[t.key]); } catch {} }
     m.tpl = String(o.tpl || "").slice(0, 16);
     T("tpl-preset", { id: m.id, idx: m.idx, who: m.cm });
   }
@@ -1547,6 +1561,18 @@
       }
     }
     function endPress() {   // 0.21.91: any presenter ends it for everyone
+      // 0.21.92 (meeting templates): the ONE hook -- window.__pres.onEnd({id, role}) may ask first (false: keep presenting) and may
+      // hand back a function to run once it has ended (a room a template made closes). Only End calls it: hand over, take over,
+      // Leave and a dropped connection never do.
+      const hook = window.__pres && window.__pres.onEnd, v0 = deck();
+      if (typeof hook === "function" && v0) {
+        Promise.resolve().then(() => hook({ id: v0.id, role: v0.role })).catch(() => true)
+          .then((after) => { if (after === false) return; endNow(); if (typeof after === "function") { try { after(); } catch {} } });
+        return;
+      }
+      endNow();
+    }
+    function endNow() {
       const v = deck();
       if (v && v.role === "presenter" && mine) endMine("ended");
       else if (v && v.role === "copresenter") {
@@ -2852,10 +2878,10 @@
   coExtra = () => (handState ? { hand: handState } : {});
   function liveDecks() {   // every presentation live in my room, as its record says (mine first)
     const out = [];
-    if (mine) out.push({ id: mine.id, am: mine.am ? 1 : 0, own: myPerson(), ps: mine.ps.map((x) => x.p), lt: [...(mine.lt || [])], hx: [...(mine.hx || new Map())], cn: nameOfPerson(mine.cur) });
+    if (mine) out.push({ id: mine.id, am: mine.am ? 1 : 0, ask: mine.ask === 0 ? 0 : 1, own: myPerson(), ps: mine.ps.map((x) => x.p), lt: [...(mine.lt || [])], hx: [...(mine.hx || new Map())], cn: nameOfPerson(mine.cur) });
     for (const { rec } of deckRecs().values()) {
       if (mine && rec.id === mine.id) continue;
-      out.push({ id: rec.id, am: Number(rec.am) ? 1 : 0, own: rec.own || "", ps: Array.isArray(rec.ps) ? rec.ps.map((x) => x.p) : [], lt: Array.isArray(rec.lt) ? rec.lt.map(String) : [],
+      out.push({ id: rec.id, am: Number(rec.am) ? 1 : 0, ask: rec.ask === undefined || Number(rec.ask) ? 1 : 0, own: rec.own || "", ps: Array.isArray(rec.ps) ? rec.ps.map((x) => x.p) : [], lt: Array.isArray(rec.lt) ? rec.lt.map(String) : [],
                  hx: Array.isArray(rec.hx) ? rec.hx : [], cn: rec.cn || nameOfPerson(rec.own || "") , old: !Array.isArray(rec.ps) });
     }
     return out;
@@ -2910,7 +2936,7 @@
     if (handState) {
       const d = ds.find((x) => x.id === handState.id);
       const dismissed = d && d.hx.some((h) => Array.isArray(h) && h[0] === me && Number(h[1]) === handState.at);
-      if (!d || !d.am || dismissed) { if (dismissed) toast("A presenter lowered your hand.", 5000); handState = null; T("hand-down", { why: !d ? "gone" : !d.am ? "unmuted" : "dismissed" }); changed = true; coPublish(); }
+      if (!d || !d.am || !d.ask || dismissed) { if (dismissed) toast("A presenter lowered your hand.", 5000); else if (d && d.am && !d.ask) toast("The presenters turned Ask to speak off — your hand is down.", 5000); handState = null; T("hand-down", { why: !d ? "gone" : !d.am ? "unmuted" : !d.ask ? "ask off" : "dismissed" }); changed = true; coPublish(); }
     }
     const sig = JSON.stringify([!!muting.length, [...allowed].sort(), [...boxes].sort(), talk.locked]);
     if (sig !== talk.sig) { talk.sig = sig; talk.active = !!muting.length; talk.allowed = allowed; talk.boxes = boxes; changed = true; }
@@ -2922,7 +2948,7 @@
     const now = Date.now();
     if (now - talk.lastHand < 1500) return false;   // cheap: at most one change a second and a half
     const d = liveDecks().find((x) => !x.old && x.am && !mayTalk(x, myPerson())) || (handState && liveDecks().find((x) => x.id === handState.id));
-    if (on) { if (!d || handState) return false; handState = { id: d.id, at: now }; }
+    if (on) { if (!d || handState || !d.ask) return false; handState = { id: d.id, at: now }; }   // 0.21.91: not while Ask to speak is off
     else { if (!handState) return false; handState = null; }
     talk.lastHand = now;
     T(on ? "hand-up" : "hand-down", { id: d && d.id, why: "me" });
@@ -2930,8 +2956,29 @@
     return true;
   }
   // the owner page: the switch, the hands, who may talk
-  function audienceInit(m) { m.am = 1; m.lt = new Set(); m.hx = new Map(); }
-  function audFields() { const m = mine; return m && m.lt ? { am: m.am ? 1 : 0, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {}; }
+  function audienceInit(m) { m.am = 1; m.ask = 1; m.lt = new Set(); m.hx = new Map(); }
+  // ask: 0 = "Ask to speak" off (Kenton) -- no raised hands: the pill offers none, raised ones go down, new ones are refused here
+  // and on every page that reads the record; absent (an older owner) = on
+  function audFields() { const m = mine; return m && m.lt ? { am: m.am ? 1 : 0, ask: m.ask === 0 ? 0 : 1, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {}; }
+  function askPreset(m, o) { if (o && typeof o === "object" && (o.ask === 0 || o.ask === false || (o.audience && (o.audience.ask === 0 || o.audience.ask === false)))) m.ask = 0; }
+  function setAsk(v, by) {
+    const m = mine;
+    if (!m || !m.lt) return false;
+    const nv = v ? 1 : 0;
+    if ((m.ask === 0 ? 0 : 1) === nv) return true;
+    m.ask = nv;
+    if (!nv) { for (const p of [...m.lt]) { m.lt.delete(p); } for (const h of hands(m.id)) m.hx.set(h.p, h.at); }   // every hand down, nobody let talk any more
+    T("ask", { id: m.id, who: nv ? "on" : "off", by: by || myPerson() });
+    publish(); talkTick(); view.paint();
+    return true;
+  }
+  function askAct(v) {
+    const v0 = view.deck();
+    if (!v0) return false;
+    if (v0.role === "presenter") return setAsk(v, myPerson());
+    if (v0.role === "copresenter") return sendPresOp(v0.id, { op: "ask", v: v ? 1 : 0 });
+    return false;
+  }
   function handOf(p) { const co = coOf(p); return co && co.hand && mine && co.hand.id === mine.id ? Number(co.hand.at) || 0 : 0; }
   function setAm(v, by) {
     const m = mine;
@@ -2947,7 +2994,7 @@
   function setTalk(p, v, by) {   // "Let <name> talk" (v) / "Dismiss" or "Mute again" (!v)
     const m = mine;
     if (!m || !m.lt || typeof p !== "string" || !p) return false;
-    if (v) { if (!handOf(p)) return false; m.lt.add(p); m.hx.delete(p); }
+    if (v) { if (!handOf(p) || m.ask === 0) return false; m.lt.add(p); m.hx.delete(p); }
     else { m.lt.delete(p); const at = handOf(p); if (at) m.hx.set(p, at); }
     T(v ? "let-talk" : "no-talk", { id: m.id, who: p, by: by || myPerson() });
     publish(); talkTick(); view.paint();
@@ -2955,10 +3002,11 @@
   }
   audienceOp = (pp, who) => {   // a co-presenter's request (presOp)
     if (pp.op === "am") return setAm(!!pp.v, who) || true;
+    if (pp.op === "ask") return setAsk(!!pp.v, who) || true;
     if (pp.op === "lt") return setTalk(String(pp.p || ""), !!pp.v, who) || true;
     return false;
   };
-  adoptExtra = (m, rec) => { m.am = rec.am === undefined ? 1 : Number(rec.am) ? 1 : 0; m.lt = new Set(Array.isArray(rec.lt) ? rec.lt.map(String) : []); m.hx = new Map(Array.isArray(rec.hx) ? rec.hx.filter((h) => Array.isArray(h)).map((h) => [String(h[0]), Number(h[1]) || 0]) : []); };
+  adoptExtra = (m, rec) => { m.am = rec.am === undefined ? 1 : Number(rec.am) ? 1 : 0; m.ask = rec.ask === undefined || Number(rec.ask) ? 1 : 0; m.lt = new Set(Array.isArray(rec.lt) ? rec.lt.map(String) : []); m.hx = new Map(Array.isArray(rec.hx) ? rec.hx.filter((h) => Array.isArray(h)).map((h) => [String(h[0]), Number(h[1]) || 0]) : []); };
   function audiencePrune() {   // the owner: someone let talk lowered their hand (Done) -> no longer let talk
     const m = mine;
     if (!m || !m.lt) return;
@@ -2971,7 +3019,7 @@
   function hands(deckId) {   // the raised hands in the room for this deck: [{p, name, at, talking}]
     const out = [];
     const d = liveDecks().find((x) => x.id === deckId);
-    if (!d) return out;
+    if (!d || !d.ask) return out;   // 0.21.91: Ask to speak off -- a raised hand (an older or a modified page) is not listed
     for (const [path, r] of remote) {
       const h = r.co && r.co.hand;
       if (!h || h.id !== deckId) continue;
@@ -2987,7 +3035,7 @@
     const hs = d && d.am ? hands(v.id).filter((h) => !h.talking) : [];
     const parts = [];
     if (v.role !== "backstage") parts.push(self.ms.mic === "on" ? "Mic on" : self.ms.mic === "muted" ? "Mic muted" : "No mic");
-    if (d && !d.old) parts.push(d.am ? "Audience muted" : "Audience may talk");
+    if (d && !d.old) parts.push(d.am ? "Audience muted" + (d.ask ? "" : " · no asking") : "Audience may talk");
     if (hs.length) parts.push(hs.length + (hs.length === 1 ? " hand up" : " hands up"));
     if (v.role === "backstage" && talk.locked) parts.push("you are muted");
     return { text: parts.join(" · "), attn: hs.length > 0 && v.role !== "backstage" };
@@ -3010,7 +3058,7 @@
     const v = view.deck();
     if (!v) return "";
     const d = liveDecks().find((x) => x.id === v.id);
-    return JSON.stringify([d && d.am, hands(v.id).map((h) => [h.p, h.talking])]);
+    return JSON.stringify([d && d.am, d && d.ask, hands(v.id).map((h) => [h.p, h.talking])]);
   };
   avExtra = (row) => {   // the presenters: "Audience muted" + the raised hands
     const v = view.deck();
@@ -3023,6 +3071,14 @@
     cb.addEventListener("change", () => amAct(cb.checked));
     lab.append(cb, document.createTextNode("Audience muted"));
     box.append(lab);
+    {   // 0.21.91 (Kenton): "Ask to speak" -- on: muted people can raise a hand; off: no hands at all
+      const al = document.createElement("label"); al.className = "avsw audsw asklab";
+      al.title = "On: people who are muted can raise a hand and a presenter can let them talk. Off: no raised hands (any raised one goes down).";
+      const ac = document.createElement("input"); ac.type = "checkbox"; ac.className = "asksw"; ac.checked = !!d.ask;
+      ac.addEventListener("change", () => askAct(ac.checked));
+      al.append(ac, document.createTextNode("Ask to speak"));
+      box.append(al);
+    }
     const hs = hands(v.id);
     if (d.am && hs.length) {
       const list = document.createElement("div"); list.className = "hands";
@@ -3071,6 +3127,7 @@
     const txt = letMe ? "You may talk now — unmute when you are ready" : talk.locked + (handState ? " · your hand is up" : "");
     const b = letMe ? "Done" : handState ? "Lower hand" : "Ask to speak";
     const t = talkPill.querySelector(".tt"), bb = talkPill.querySelector(".tb");
+    { const dk = ds.find((x) => x.am && !mayTalk(x, me)); bb.hidden = !letMe && !handState && !!dk && !dk.ask; }   // 0.21.91: Ask to speak off -- no button
     if (t.textContent !== txt) t.textContent = txt;
     if (bb.textContent !== b) bb.textContent = b;
     bb.title = letMe ? "Lower your hand -- you are muted again" : handState ? "Lower your hand" : "Raise your hand: the presenters can let you talk";
@@ -3083,6 +3140,7 @@
     box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
   #presTalk.show { display:flex; }
   #presTalk.free { background:#0f2a1a; color:#c8f5d8; border-color:#2a6b45; }
+  #presTalk button[hidden] { display:none; }
   #presTalk .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #presTalk button { background:#0b5c86; color:#fff; border:0; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
   #presView .audbox { flex-basis:100%; display:flex; flex-direction:column; gap:6px; border-top:1px solid #1f2a36; padding-top:6px; }
@@ -3103,8 +3161,9 @@
     lock: () => talk.locked,                 // "" or why my mic is locked ("Muted while Ada presents")
     silent: (path) => silent(path),          // a person's mic that may not be heard here now (gain 0)
     hand: (on) => raiseHand(on !== false),   // rig + the pill
+    ask: (on) => askAct(on !== false),   // rig: the presenter view's "Ask to speak" switch
     state: () => ({ locked: talk.locked, was: talk.was, active: talk.active, allowed: [...talk.allowed], boxes: [...talk.boxes], hand: handState,
-                    decks: liveDecks().map((d) => ({ id: d.id, am: d.am, lt: d.lt, hx: d.hx, old: !!d.old })) }),
+                    decks: liveDecks().map((d) => ({ id: d.id, am: d.am, ask: d.ask, lt: d.lt, hx: d.hx, old: !!d.old })) }),
   };
 
   // 0.21.92: what "Save as a template" keeps of the deck I run -- the file, the slide, the mode, the backdrop, the audience rule,
@@ -3116,12 +3175,22 @@
     const alOf = (p) => { if (p === me) return self.al; const co = coOf(p); return new Set(co && co.id === m.id && Array.isArray(co.al) ? co.al : []); };
     const ps = m.ps.map((x) => ({ p: x.p, name: x.name || nameOfPerson(x.p), main: x.p === me }));
     const bs = [...m.bs].map(([p, b]) => ({ p, name: b.name || nameOfPerson(p), control: ps.filter((x) => alOf(x.p).has(p)).map((x) => x.name) }));
-    return { file: m.file || null, name: m.name, kind: m.kind, n: m.n, idx: m.idx, cm: m.cm, rbg: m.rbg, am: m.am ? 1 : 0, ps, bs };
+    const aud = window.__pres.audSnap() || { am: m.am ? 1 : 0, ask: 1 };   // 0.21.91's audience switches (Audience muted + Ask to speak)
+    const o = {};
+    for (const t of TPL_OPTS) { try { o[t.key] = t.read(m); } catch {} }
+    return { file: m.file || null, name: m.name, kind: m.kind, n: m.n, idx: m.idx, cm: m.cm, rbg: m.rbg, am: aud.am, ask: aud.ask, o, ps, bs };
   }
   window.__pres = {
     startFromFile,
     tplSnap,   // 0.21.92
+    tplOpts: () => TPL_OPTS.map((t) => ({ key: t.key, sw: !!t.sw, text: t.text || "", def: t.def, needs: t.needs || "" })),   // 0.21.92: the template editor's switches
+    // 0.21.92: a template's "Can control my mic and camera" for ME as a presenter of deck `id`: switch off the backstage people named
+    // (name keys) -> {set: [names switched]} | null (not presenting that deck yet)
+    tplCo: (id, names) => { const pd = presentingDeck(); if (!pd || pd.id !== id || self.id !== id) return null; const want = new Set(names); const set = [];
+      for (const p of deckBs(pd)) { const k = String(nameOfPerson(p) || "").trim().toLowerCase(); if (want.has(k) && (view.allow(p, false), true)) set.push(k); } return { set }; },
+    audSnap: () => (mine && mine.lt ? { am: mine.am ? 1 : 0, ask: mine.ask === 0 ? 0 : 1 } : null),   // 0.21.91: for a meeting template's tplSnap (audience.ask)
     end: () => endMine("api"),
+    onEnd: null,   // 0.21.92: set by assets/kastr-templates.js -- the End button's hook (see endPress)
     go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i); return true; },   // a viewer has no deck here: false (0.21.91: the blank stays)
     blank: (kind) => { const v = view.deck(); if (!v) return false; const nb = kind === "black" || kind === "white" ? kind : null; if (v.role === "presenter") goTo(v.idx, myPerson(), nb); else sendIntent(v.id, v.idx, nb); return true; },   // 0.21.91 rig
     next: () => { const v = view.deck(); if (v) window.__pres.go(v.idx + 1); },

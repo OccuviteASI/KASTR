@@ -70,7 +70,10 @@
   .ktsecs { display:flex; flex-direction:column; gap:6px; }
   .ktsec { display:flex; gap:10px; align-items:flex-start; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface-2); }
   .ktsec.off { opacity:.55; }
-  .ktsec input[type=checkbox] { margin-top:2px; accent-color:var(--asi-blue); flex:none; }
+  .ktsec > .switch { margin-top:1px; }
+  .ktsw { display:inline-flex; flex-direction:row; align-items:center; gap:6px; font-size:11.5px; color:var(--text-dim); cursor:pointer; user-select:none; padding:2px 8px 2px 2px; }
+  .ktsw.on { color:var(--text); }
+  .ktsw.dim { opacity:.45; cursor:default; }
   .ktsec .ktsm { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
   .ktsec .ktst { color:var(--text); font-weight:600; font-size:12.5px; }
   .ktsec .ktsc { color:var(--text-dim); font-size:12px; line-height:1.45; }
@@ -166,7 +169,7 @@
     if (sec === "streams") return c.cams ? plural(c.cams, "camera") + (c.foreign || c.lib ? " (" + list([c.foreign && c.foreign + " from other rooms", c.lib && c.lib + " from the library"]) + ")" : "") : "no cameras";
     if (sec === "settings") return list([c.locked ? "locked" : "unlocked", c.keep && "kept open", c.viewLock && "view locked", c.group && ("group " + c.group)]);
     if (sec === "invites") return list([c.people && plural(c.people, "person", "people") + " to invite", c.link && "an invite link", c.access && plural(c.access, "person", "people") + " with access"]) || "nobody";
-    if (sec === "pres") return list([c.deck ? "a deck" + (c.slides ? " (" + plural(c.slides, "slide") + ")" : "") : "", c.presenters && plural(c.presenters, "presenter"), c.backstage && plural(c.backstage, "backstage person", "backstage people"), c.mode && c.mode]) || "presenter options";
+    if (sec === "pres") return list([c.deck ? "a deck" + (c.slides ? " (" + plural(c.slides, "slide") + ")" : "") : "", c.presenters && plural(c.presenters, "presenter"), c.backstage && plural(c.backstage, "backstage person", "backstage people"), c.mode && (MODE_WORD[c.mode] || c.mode)]) || "presenter options";
     if (sec === "view") return list([c.grids && plural(c.grids, "grid layout"), c.pins && plural(c.pins, "pin"), c.dock && plural(c.dock, "pinned panel"), c.mode && c.mode]) || "your own view";
     return "";
   }
@@ -320,9 +323,19 @@
     refreshAll();
   }
   async function resnap(t, slug) {
-    if (!(await K.confirm({ title: "Update template", message: "Update “" + t.name + "” from " + K.title(slug) + " as it is now?", detail: "Its layout, streams and room settings are taken again; its name, note, invites and presentation stay.", ok: "Update" }))) return;
-    const d = await call({ op: "update", id: t.id, resnap: true, start: K.start() }, slug, t.scope === "me");
+    const ps = slug === K.room() && t.on?.pres !== false ? presSnap() : null;   // a deck I run here now: its presentation is taken again too
+    if (!(await K.confirm({ title: "Update template", message: "Update “" + t.name + "” from " + K.title(slug) + " as it is now?",
+      detail: ps ? "Its layout, streams, room settings and presentation (“" + ps.name + "”, its slide, roles and audience rules) are taken again; its name, note and invites stay."
+        : "Its layout, streams and room settings are taken again; its name, note, invites and presentation stay.", ok: "Update" }))) return;
+    const body = { op: "update", id: t.id, resnap: true, start: K.start() };
+    if (ps) { body.pres = presFromSnap(ps); body.add = ["pres"]; }
+    const d = await call(body, slug, t.scope === "me");
     if (!d.ok) { toast("Templates: " + d.error, 6000, "warn"); return; }
+    if (ps && ps.file) {
+      const up = await deckUpload(d.template || t, ps, slug, null);
+      if (!up.ok) { toast("Updated, but the deck was not kept: " + (up.error || "refused"), 7000, "warn"); refreshAll(); return; }
+    }
+    T("resnap", { id: t.id, pres: !!ps, deck: !!(ps && ps.file) });
     toast("Updated “" + t.name + "” from " + K.title(slug), 3000);
     refreshAll();
   }
@@ -333,7 +346,19 @@
   }
 
   // ======================================================================================================================
-  // SAVE: name, note, This room / Just me, a checkbox per section with live counts
+  // 0.21.92 (Kenton): every on/off option is a toggle switch, never a plain checkbox or a lit chip.
+  // The outer label gives the words + switch one click target; the span.switch is the page's own markup.
+  const sw = (text, on, change, o = {}) => {
+    const l = document.createElement("label"); l.className = "ktsw" + (on ? " on" : "") + (o.dim ? " dim" : "");
+    l.innerHTML = '<span class="switch sm"><input type="checkbox"><i></i></span><span></span>';
+    l.lastChild.textContent = text; if (o.title) l.title = o.title;
+    const cb = l.querySelector("input"); cb.checked = !!on; cb.disabled = !!o.disabled; cb.setAttribute("aria-label", text);
+    if (o.sec) { cb.dataset.sec = o.sec; l.dataset.sec = o.sec; }
+    cb.onchange = () => { const v = change(cb.checked); if (v === false) { cb.checked = !cb.checked; return; } l.classList.toggle("on", cb.checked); };
+    return l;
+  };
+  const SWITCH = '<label class="switch sm"><input type="checkbox"><i></i></label>';
+  // SAVE: name, note, This room / Just me, a switch per section with live counts
   // ======================================================================================================================
   let saveEl = null;
   const S = { slug: "", scope: "room", on: {}, people: new Map(), link: 0, start: "spotlight", counts: null, view: null, access: true, rec: null };
@@ -376,8 +401,8 @@
     const secs = div("ktsecs");
     const sec = (k, text, extra, disabled, why) => {
       const r = div("ktsec" + (S.on[k] && !disabled ? "" : " off"));
-      r.innerHTML = '<input type="checkbox" aria-label="' + esc(SEC[k]) + '"><div class="ktsm"><span class="ktst">' + esc(SEC[k]) + '</span><span class="ktsc">' + esc(text) + '</span>' + (why ? '<span class="hint">' + esc(why) + '</span>' : "") + '</div>';
-      const cb = r.querySelector("input");
+      r.innerHTML = SWITCH + '<div class="ktsm"><span class="ktst">' + esc(SEC[k]) + '</span><span class="ktsc">' + esc(text) + '</span>' + (why ? '<span class="hint">' + esc(why) + '</span>' : "") + '</div>';
+      const cb = r.querySelector("input"); cb.setAttribute("aria-label", SEC[k]);
       cb.checked = !!S.on[k] && !disabled; cb.disabled = !!disabled; cb.dataset.sec = k;
       cb.onchange = () => { S.on[k] = cb.checked; r.classList.toggle("off", !cb.checked); };
       if (extra) r.querySelector(".ktsm").append(extra);
@@ -392,15 +417,13 @@
     sec("pres", S.pres ? presSnapWords(S.pres) : "Deck and starting slide, presenters and backstage, audience rules, presenter mode", null, !S.pres,
       S.pres ? "The deck is kept on the hub (encrypted) as the file it came from; applying the template gets it ready for the main presenter, who presses Start presenting."
         : "Present a deck here first (Share ▸ Presentation) — then its deck, slide, roles, audience rule and mode can be kept.");    if (!personalRoom) sec("settings", words("settings", { locked: rec.locked, keep: rec.keep, viewLock: rec.viewLock, group: rec.groupName || rec.group }), null, false, rec.locked ? "The room’s code is kept only as the hub keeps it (a salted digest) — never the code." : "");
-    // invites: the people here now (tick to invite them next time), an invite link made fresh at apply, My room's people with access
+    // invites: the people here now (switch on to invite them next time), an invite link made fresh at apply, My room's people with access
     const inv = div("ktsx");
     const here = K.peopleHere();
     for (const p of here) { if (!S.people.has(p.name.toLowerCase()) && S.people.__init !== true) S.people.set(p.name.toLowerCase(), { ...p, on: false }); }
     S.people.__init = true;
     for (const [k, p] of S.people) {
-      const ch = div("ktchip" + (p.on ? " on" : ""), esc(p.name));
-      ch.onclick = () => { p.on = !p.on; ch.classList.toggle("on", p.on); paintInvCount(); };
-      inv.append(ch);
+      inv.append(sw(p.name, p.on, (v) => { p.on = v; paintInvCount(); }, { title: "Invite " + p.name + " when this template is applied" }));
     }
     const add = btn("Add someone…", "ghost");
     add.style.height = "24px"; add.style.fontSize = "11.5px";
@@ -468,15 +491,36 @@
   const PART = 16 * 1024 * 1024;
   const presSnap = () => { try { const s = window.__pres?.tplSnap?.(); return s && s.n ? s : null; } catch { return null; } };
   const MODE_WORD = { content: "Content only", standout: "Standout", sbs: "Side-by-side", reporter: "Reporter" };
+  // 0.21.91's two audience switches: "Audience muted" and (while muted) "Ask to speak"
+  const audWords = (a) => (a && a.muted === false ? "audience may talk" : "audience muted" + (a && a.ask === false ? ", no asking" : ", Ask to speak on"));
   function presSnapWords(s) {
     const others = s.ps.filter((x) => !x.main).map((x) => x.name);
     return "“" + s.name + "” (" + plural(s.n, "slide") + ", from slide " + (s.idx + 1) + ")" + (s.file ? "" : " — roles only (this deck was handed to you)")
       + " · " + (others.length ? "presenters: you, " + others.join(", ") : "you present") + (s.bs.length ? " · backstage: " + s.bs.map((b) => b.name).join(", ") : "")
-      + " · " + (MODE_WORD[s.cm] || s.cm) + " · " + (s.am ? "audience muted" : "audience may talk");
+      + " · " + (MODE_WORD[s.cm] || s.cm) + " · " + audWords({ muted: !!s.am, ask: s.ask !== 0 });
   }
   function presFromSnap(s) {
     return { presenters: s.ps.map((x) => ({ name: x.name, main: !!x.main })), backstage: s.bs.map((b) => ({ name: b.name, control: b.control || [] })),
-      audience: { muted: !!s.am, ask: true }, mode: s.cm, reporterBg: s.rbg || "" };
+      audience: { muted: !!s.am, ask: s.ask !== 0 }, mode: s.cm, reporterBg: s.rbg || "", deck: { start: s.idx || 0 }, opts: { ...(s.o || {}) } };
+  }
+  // the deck-wide options (one table in kastr-pres.js: window.__pres.tplOpts); this list is only for a page without it
+  const OPTS_FALLBACK = [{ key: "am", sw: true, text: "Audience muted", def: 1, needs: "" }, { key: "ask", sw: true, text: "Ask to speak", def: 1, needs: "am" }];
+  const optRows = () => { try { const r = window.__pres?.tplOpts?.(); if (Array.isArray(r) && r.length) return r; } catch {} return OPTS_FALLBACK; };
+  function presOpt(P, key, def) {   // a template's value for one option: opts first, then the named fields older templates have
+    const o = P.opts || {};
+    if (Object.prototype.hasOwnProperty.call(o, key)) return o[key];
+    if (key === "am") return P.audience?.muted === false ? 0 : 1;
+    if (key === "ask") return P.audience?.ask === false ? 0 : 1;
+    if (key === "cm") return P.mode;
+    if (key === "rbg") return P.reporterBg || undefined;
+    return def;
+  }
+  function presOptSet(P, key, v) {   // keeps the named fields in step (the Ready line and older pages read them)
+    P.opts = { ...(P.opts || {}), [key]: v };
+    if (key === "am") P.audience = { ...(P.audience || {}), muted: !!v };
+    if (key === "ask") P.audience = { ...(P.audience || {}), ask: !!v };
+    if (key === "cm") P.mode = v;
+    if (key === "rbg") P.reporterBg = v;
   }
   async function deckUpload(t, s, slug, prog) {
     const f = s.file, size = f.size || 0;
@@ -541,7 +585,7 @@
     const away = [...others, ...bs].filter((n) => !here.has(String(n).trim().toLowerCase()));
     readyEl.querySelector(".ktr-n").textContent = "“" + (t?.name || "Template") + "” is ready" + (main ? " for " + main.name : "");
     readyEl.querySelector(".ktr-d").textContent = (p.deck ? "“" + p.deck.name + "” from slide " + ((p.deck.start || 0) + 1) : "No deck") + " · " + (MODE_WORD[p.mode] || p.mode || "Standout")
-      + " · " + (p.audience?.muted === false ? "audience may talk" : "audience muted") + (others.length ? " · with " + others.join(", ") : "") + (bs.length ? " · backstage: " + bs.join(", ") : "")
+      + " · " + audWords(p.audience) + (others.length ? " · with " + others.join(", ") : "") + (bs.length ? " · backstage: " + bs.join(", ") : "")
       + ". Nothing is shown until you press Start presenting.";
     readyEl.querySelector(".ktr-e").textContent = R.err || (away.length ? "Not here yet: " + away.join(", ") + " — they get their role when they join; or add them later." : "");
     const go = readyEl.querySelector(".ktr-go");
@@ -590,30 +634,116 @@
     R.busy = true; readyPaint();
     const t0 = performance.now();
     const deck = p.deck || {};
-    await window.__pres.startFromFile(R.file, { idx: Number(deck.start) || 0, cm: p.mode, rbg: p.reporterBg, am: p.audience?.muted === false ? 0 : 1, tpl: t.id });
+    await window.__pres.startFromFile(R.file, { idx: Number(deck.start) || 0, cm: p.mode, rbg: p.reporterBg, am: p.audience?.muted === false ? 0 : 1, ask: p.audience?.ask === false ? 0 : 1, o: p.opts || {}, tpl: t.id });
     const st = window.__pres.state?.();
     if (!st?.mine) { R.busy = false; R.err = "The presentation did not start."; readyPaint(); return; }
     // the people who are here get their roles (by name); "Can control my mic and camera" -- mine, as the template says
     const people = (window.__presPeople?.()?.people || []).map((x) => ({ pk: x.host + "/" + (x.op || x.peer), name: String(x.name || "") }));
     const pkOf = (n) => people.find((x) => x.name.trim().toLowerCase() === String(n || "").trim().toLowerCase())?.pk || "";
     const me = String(K.me() || "").trim().toLowerCase();
-    const missing = [], refused = [];
-    for (const x of (p.presenters || []).filter((x) => !x.main)) { const pk = pkOf(x.name); if (!pk) missing.push(x.name); else if (!window.__pres.role(pk, "p")) refused.push(x.name); }
+    const missing = [], refused = [], waiting = [];
+    // the ONE seam to the presenter role code: someone here gets the role by their person key; someone who is NOT here is handed
+    // over as the template has them (name as kept, keyed by the name key) when the role code can hold a role for an absent person
+    // (0.21.92: invite + the role waits until they join) -- else they are named as not here
+    const giveRole = (x, r) => {
+      const pk = pkOf(x.name);
+      if (pk) return window.__pres.role(pk, r) ? "ok" : "refused";
+      const later = window.__pres.roleAbsent || window.__pres.roleByName;
+      if (typeof later === "function") { try { if (later(String(x.name), r, { key: String(x.name).trim().toLowerCase(), control: x.control || [], from: "template" })) return "waiting"; } catch {} }
+      return "missing";
+    };
+    const tally = (x, r) => { const w = giveRole(x, r); if (w === "missing") missing.push(x.name); else if (w === "refused") refused.push(x.name); else if (w === "waiting") waiting.push(x.name); return w; };
+    for (const x of (p.presenters || []).filter((x) => !x.main)) tally(x, "p");
     for (const b of p.backstage || []) {
-      const pk = pkOf(b.name);
-      if (!pk) { missing.push(b.name); continue; }
-      if (!window.__pres.role(pk, "b")) { refused.push(b.name); continue; }
-      window.__pres.allow(pk, (b.control || []).some((c) => String(c).trim().toLowerCase() === me));
+      if (tally(b, "b") !== "ok") continue;
+      window.__pres.allow(pkOf(b.name), (b.control || []).some((c) => String(c).trim().toLowerCase() === me));
     }
+    // 0.21.91: co-presenters have the same powers and their OWN "Can control my mic and camera" -- the template's lists for them go
+    // to their devices (the hub's people beat); their page sets its own switches once they are a presenter of this deck
+    const cos = (p.presenters || []).filter((x) => !x.main && !refused.includes(x.name));   // absent ones too: their device hears it when they come
+    if (cos.length && (p.backstage || []).length) call({ op: "presCo", id: t.id, deck: st.mine.id, to: Object.fromEntries(cos.map((x) => [x.name, (pkOf(x.name) || "").split("/")[0]]).filter((e) => e[1])) }, R.room, true).then((d) => T("pres-co", { ok: !!d.ok, told: d.told || 0 })).catch(() => {});
     R.busy = false; readyEl.hidden = true; R.file = null;
     T("pres-started", { ms: Math.round(performance.now() - t0), missing: missing.length, refused: refused.length });
-    window.__tplPres = { tid: t.id, at: Date.now(), missing, refused, ms: Math.round(performance.now() - t0) };   // rig
+    window.__tplPres = { tid: t.id, at: Date.now(), missing, refused, waiting, ms: Math.round(performance.now() - t0) };   // rig
     toast("Presenting “" + (deck.name || "the deck") + "” from slide " + ((Number(deck.start) || 0) + 1)
+      + (waiting.length ? " — invited, their role waits for them: " + waiting.join(", ") : "")
       + (missing.length ? " — not here: " + missing.join(", ") + " (add them from the presenter view when they come)" : "")
       + (refused.length ? " — " + refused.join(", ") + " could not take a role (an older KASTR?)" : ""), 9000, missing.length || refused.length ? "warn" : "event");
   }
+  // ---- a co-presenter's page: the template's "Can control my mic and camera" for ME (names I do not allow), once, per person
+  const CO = new Map();   // deck id -> {deny:Set(name key), done:Set, until}
+  let coTimer = 0;
+  function presCo(it) {
+    if (!it || !it.deck || it.room !== K.room() || !Array.isArray(it.deny)) return;
+    CO.set(String(it.deck), { deny: new Set(it.deny.map((n) => String(n).trim().toLowerCase())), done: new Set(), until: Date.now() + 10 * 60000, by: String(it.owner || "") });
+    T("co-note", { deck: it.deck, n: it.deny.length });
+    coTick();
+  }
+  function coTick() {
+    clearTimeout(coTimer);
+    for (const [id, c] of CO) {
+      if (Date.now() > c.until || c.done.size >= c.deny.size) { CO.delete(id); continue; }
+      let r = null; try { r = window.__pres?.tplCo?.(id, [...c.deny].filter((n) => !c.done.has(n))); } catch {}
+      for (const n of (r && r.set) || []) c.done.add(n);
+      if (r && r.set && r.set.length) T("co-applied", { deck: id, n: r.set.length });
+    }
+    if (CO.size) coTimer = setTimeout(coTick, 1000);
+  }
+  function presTo(t) {   // the main presenter's device as this page sees them (People), for the hub to tell it
+    const main = (t?.pres?.presenters || []).find((x) => x.main);
+    if (!main) return undefined;
+    const x = (window.__presPeople?.()?.people || []).find((y) => String(y.name || "").trim().toLowerCase() === String(main.name).trim().toLowerCase());
+    return x ? { name: main.name, host: x.host } : undefined;
+  }
+  function seenRoles(t) {   // "Create a new room for this": the template's named people as this page sees them now -> [{name, host}]
+    const want = new Set([...(t.pres?.presenters || []), ...(t.pres?.backstage || [])].map((x) => String(x?.name || "").trim().toLowerCase()).filter(Boolean));
+    const out = [];
+    for (const x of window.__presPeople?.()?.people || []) {
+      const n = String(x.name || "").trim().toLowerCase();
+      if (want.has(n) && x.host && !out.some((y) => y.name.toLowerCase() === n)) out.push({ name: String(x.name), host: String(x.host) });
+    }
+    return out.slice(0, 24);
+  }
+  // ---- 0.21.92 (Kenton: "...having it create a room for it, close the room after the presenter ends the meeting."): End in a room a
+  // template made. kastr-pres.js's End button calls window.__pres.onEnd (its ONE hook) -- only End; hand over, take over, Leave and a
+  // dropped connection never do. Here: ask, then (once the presentation has ended) the hub closes the room -- only one it marked as
+  // made by this run, only for that run's presenters, the room's creator and admins.
+  async function presEndHook() {
+    const slug = K.room();
+    if (!slug) return true;
+    if (!K.roomRec(slug).tplClose && typeof K.roomsFresh === "function") {   // my copy of the room records is up to 30 s old: ask once (1.5 s at most)
+      try { await Promise.race([K.roomsFresh(), new Promise((r) => setTimeout(r, 1500))]); } catch {}
+    }
+    if (!K.roomRec(slug).tplClose) return true;
+    const yes = await K.confirm({ title: "End the presentation", message: "End the presentation and close " + K.title(slug) + " for everyone?",
+      detail: "A template made this room for the presentation. Everyone goes back to their main room and its invite links stop working.", ok: "End and close", danger: true });
+    if (!yes) return false;
+    return () => closeTplRoom(slug);
+  }
+  async function closeTplRoom(slug) {
+    const d = await call({ op: "presEnd" }, slug, true);
+    T("tplroom-end", { ok: !!d.ok, slug, kept: !!d.kept });
+    window.__tplRoomEnd = { slug, ok: !!d.ok, error: d.ok ? "" : String(d.error || ""), at: Date.now() };   // rig
+    if (d.ok) { K.closed(slug); return; }
+    toast("The presentation ended; " + K.title(slug) + " stays open — " + (d.error || "the hub refused"), 8000, "warn");
+  }
+  const hookEnd = () => { const P = window.__pres; if (!P || typeof P !== "object") return false; if (P.onEnd !== presEndHook) P.onEnd = presEndHook; return true; };
+  if (!hookEnd()) { let n = 0; const iv = setInterval(() => { if (hookEnd() || ++n > 240) clearInterval(iv); }, 500); }
+  let readyLater = null, readyLaterTimer = 0;   // ready for me in ANOTHER room: shown when I go there (30 min)
   function presReady(it) {   // a template's presentation is ready for me (the hub told my device on my people beat)
-    if (!it || !it.tid || it.room !== K.room()) return;
+    if (!it || !it.tid) return;
+    if (it.room !== K.room()) {
+      readyLater = { tid: String(it.tid), room: String(it.room), by: String(it.by || ""), until: Date.now() + 30 * 60000 };
+      T("ready-later", { room: it.room });
+      clearInterval(readyLaterTimer);
+      readyLaterTimer = setInterval(() => {
+        const w = readyLater;
+        if (!w || Date.now() > w.until) { readyLater = null; clearInterval(readyLaterTimer); return; }
+        if (K.room() === w.room) { readyLater = null; clearInterval(readyLaterTimer); readyShow(w.tid, w.room, w.by); }
+      }, 1500);
+      return;
+    }
+    readyLater = null;
     readyShow(String(it.tid), String(it.room), String(it.by || ""));
   }
 
@@ -710,26 +840,23 @@
     const rs = document.createElement("select"); rs.setAttribute("aria-label", "Room to apply it to");
     const rooms = K.rooms(); const p = K.personal();
     const opts = [...rooms]; if (p?.slug && !opts.some((r) => r.slug === p.slug)) opts.unshift({ slug: p.slug, title: K.title(p.slug) });
-    if (!opts.some((r) => r.slug === A.slug)) opts.unshift({ slug: A.slug, title: K.title(A.slug) });
-    rs.innerHTML = opts.map((r) => '<option value="' + esc(r.slug) + '">' + esc(r.title + (r.slug === K.room() ? " (this room)" : "")) + '</option>').join("");
-    rs.value = A.slug; rs.onchange = () => { A.slug = rs.value; A.choices = {}; preview(); };
+    if (A.slug !== NEW && !opts.some((r) => r.slug === A.slug)) opts.unshift({ slug: A.slug, title: K.title(A.slug) });
+    const canNew = !!t.pres && t.on?.pres !== undefined && typeof K.createRoom === "function";   // 0.21.92: "Create a new room for this"
+    rs.innerHTML = opts.map((r) => '<option value="' + esc(r.slug) + '">' + esc(r.title + (r.slug === K.room() ? " (this room)" : "")) + '</option>').join("")
+      + (canNew ? '<option value="' + NEW + '">+ Create a new room for this…</option>' : "");
+    rs.value = A.slug; rs.onchange = () => {
+      if (rs.value === NEW) { A.slug = NEW; A.mode = "replace"; A.choices = {}; A.d = null; if (!A.newName) A.newName = newRoomName(t); if (A.newClose === undefined) A.newClose = t.pres?.closeOnEnd !== false; paintApply(); return; }
+      A.slug = rs.value; A.choices = {}; preview();
+    };
     target.append(rs);
     body.append(target);
+    if (A.slug === NEW) { paintApplyNew(t, body, foot, secsOf(t)); return; }
     const mode = div("field", '<span class="lbl">How</span>');
     const seg = div("ktseg");
     for (const [k, txt] of [["replace", "Replace"], ["merge", "Merge"]]) { const b = btn(txt, A.mode === k ? "on" : "", () => { A.mode = k; preview(); }); b.dataset.mode = k; seg.append(b); }
-    mode.append(seg, div("hint", A.mode === "replace" ? "The room ends up as the template says (for the sections ticked): pins, spotlights and grids it does not have are removed." : "Only what the room lacks is added; everything it has now stays."));
+    mode.append(seg, div("hint", A.mode === "replace" ? "The room ends up as the template says (for the sections switched on): pins, spotlights and grids it does not have are removed." : "Only what the room lacks is added; everything it has now stays."));
     body.append(mode);
-    const secs = div("ktitems");
-    for (const k of SEC_ORDER) {
-      if (t.on?.[k] === undefined) continue;
-      const ch = div("ktchip" + (A.on[k] ? " on" : ""), esc(SEC[k]));
-      ch.dataset.sec = k;
-      ch.title = words(k, t.counts?.[k]);
-      ch.onclick = () => { if (!t.on[k]) { toast(SEC[k] + " is switched off in this template (Edit to switch it on).", 3500); return; } A.on[k] = !A.on[k]; preview(); };
-      secs.append(ch);
-    }
-    body.append(div("field", '<span class="lbl">Sections</span>'), secs);
+    body.append(div("field", '<span class="lbl">Sections</span>'), secsOf(t, preview));
     const pv = div("ktprev");
     if (!d || A.busy) pv.append(div("ktsum", A.busy && d ? esc(previewLine(d)) + " …" : "Working out what changes…"));
     else if (!d.ok) pv.append(div("ktsum", '<span style="color:var(--asi-red)">' + esc(d.error || "Refused.") + '</span>'));
@@ -761,15 +888,92 @@
     if (d?.ok && !may) body.append(div("hint", "You can look at it. Applying needs the publisher code" + (d.can && !d.can.layout ? " (an admin while the view is locked)" : "") + "."));
     foot.append(div("sp"), btn("Cancel", "ghost", () => applyEl.__close()), go);
   }
+  const NEW = "__new";   // 0.21.92: the room picker's "Create a new room for this"
+  function secsOf(t, again) {   // the template's sections as switches (this apply only)
+    const secs = div("ktitems");
+    for (const k of SEC_ORDER) {
+      if (t.on?.[k] === undefined) continue;
+      secs.append(sw(SEC[k], A.on[k], (v) => { if (!t.on[k]) { toast(SEC[k] + " is switched off in this template (Edit to switch it on).", 3500); return false; } A.on[k] = v; again?.(); },
+        { sec: k, title: words(k, t.counts?.[k]), dim: !t.on[k] }));
+    }
+    return secs;
+  }
+  function newRoomName(t) {   // the template's name; the date added when that name is taken (and a number when that is too)
+    const base = String(t.name || "Presentation").trim() || "Presentation";
+    if (!K.taken(base)) return base;
+    const d = new Date(), day = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    let b = base;
+    while (b.length > 1 && K.slugOf(b).length + 1 + day.length > 32) b = b.slice(0, -1).trim();
+    let nm = b + " " + day;
+    for (let i = 2; K.taken(nm) && i < 30; i++) nm = b + " " + day + " " + i;
+    return nm;
+  }
+  function paintApplyNew(t, body, foot, secs) {   // "Create a new room for this": no preview -- the room is empty until KASTR makes it
+    const nf = div("field", '<span class="lbl">New room name</span>');
+    const ni = document.createElement("input"); ni.type = "text"; ni.maxLength = 40; ni.value = A.newName || ""; ni.setAttribute("aria-label", "New room name"); ni.className = "ktnewname";
+    const why = div("hint");
+    const check = () => {
+      const nm = ni.value.trim(); A.newName = nm;
+      const taken = nm && K.taken(nm);
+      why.textContent = !nm ? "Name the room." : taken ? "A room named “" + K.slugOf(nm) + "” already exists — pick another name." : "The room: “" + K.slugOf(nm) + "”.";
+      why.style.color = !nm || taken ? "var(--asi-red)" : "";
+      const go = foot.querySelector(".ktgo"); if (go) go.disabled = !nm || taken;
+    };
+    ni.oninput = check;
+    nf.append(ni, why);
+    body.append(nf);
+    const cl = sw("Close the room when the presentation ends", A.newClose !== false, (v) => { A.newClose = !!v; },
+      { title: "End (any presenter) closes the room for everyone: they go back to their main room. Hand over, Take over and Leave never close it." });
+    cl.classList.add("ktclose");
+    body.append(div("field", '<span class="lbl">When it ends</span>'), cl);
+    body.append(div("field", '<span class="lbl">Sections</span>'), secs);
+    body.append(div("ktprev", '<div class="ktsum">' + esc("KASTR creates the room, moves you in and applies “" + t.name + "” there: layout, streams, settings, presentation and roles. Its presenters and backstage are invited; their roles wait for them there. Nothing is shown until Start presenting.") + '</div>'));
+    const msg = document.createElement("p"); msg.className = "msg"; msg.setAttribute("role", "status"); body.append(msg);
+    applyEl.__say = (s, bad) => { msg.textContent = s || ""; msg.classList.toggle("err", !!bad); };
+    const go = btn("Create room and apply", "ktgo", doApplyNew);
+    foot.append(div("sp"), btn("Cancel", "ghost", () => applyEl.__close()), go);
+    check();
+    setTimeout(() => { try { ni.focus(); ni.select(); } catch {} }, 0);
+  }
+  async function doApplyNew() {
+    const t = A.t, name = String(A.newName || "").trim();
+    const go = applyEl.querySelector(".ktgo");
+    if (!name || K.taken(name)) return;
+    go.disabled = true; applyEl.__say("Creating “" + name + "”…");
+    const t0 = performance.now();
+    const tokens = await proofs(t, "");   // "I can see the template's room" -- from the room I am in now, before I leave it
+    const seen = seenRoles(t);           // the devices I see its presenters and backstage on here (the invite goes there)
+    const c = await K.createRoom(name);
+    T("tplroom-created", { ok: !!c.ok, slug: c.slug || "", ms: Math.round(performance.now() - t0) });
+    if (!c.ok) { applyEl.__say(c.error || "The room was not created.", true); go.disabled = false; return; }
+    const slug = c.slug, close = A.newClose !== false, on = { ...A.on };
+    applyEl.__close();
+    toast("Created " + K.title(slug) + " — moving you in…", 4000);
+    try { await K.go(slug); } catch {}
+    const until = Date.now() + 25000;
+    while (Date.now() < until && !(K.room() === slug && K.joined() && K.token())) await new Promise((r) => setTimeout(r, 250));
+    if (K.room() !== slug || !K.joined()) { toast("Created " + K.title(slug) + ", but KASTR could not move you in — go there and apply “" + t.name + "”.", 9000, "warn"); return; }
+    const mk = await call({ op: "room", id: t.id, close, tokens }, slug, t.scope === "me");
+    T("tplroom-marked", { ok: !!mk.ok, close: !!mk.close });
+    if (!mk.ok) toast("“" + t.name + "”: " + K.title(slug) + " stays open after the presentation — " + (mk.error || "the hub did not mark it"), 8000, "warn");
+    const d = await call({ op: "apply", id: t.id, mode: "replace", on, choices: {}, live: [], tokens, here: slug, presTo: presTo(t), run: mk.ok ? mk.run : undefined, people: seen }, slug, t.scope === "me");
+    T("applied", { ok: d.ok, ms: Math.round(performance.now() - t0), done: d.done, notes: (d.notes || []).length, fresh: 1 });
+    window.__tplRoom = { slug, run: !!mk.ok, close: !!(mk.ok && mk.close), ms: Math.round(performance.now() - t0) };   // rig (no token)
+    if (!d.ok) { toast("Created " + K.title(slug) + ", but “" + t.name + "” was not applied: " + (d.error || "refused"), 9000, "warn"); return; }
+    applied(t, slug, d);
+  }
   async function doApply() {
     const t = A.t, slug = A.slug;
     applyEl.__say("Applying…");
     applyEl.querySelector(".ktgo").disabled = true;
     const t0 = performance.now();
-    const d = await call({ op: "apply", id: t.id, mode: A.mode, on: A.on, choices: A.choices, live: slug === K.room() ? K.live() : [], tokens: await proofs(t, slug) }, slug, t.scope === "me");
+    const d = await call({ op: "apply", id: t.id, mode: A.mode, on: A.on, choices: A.choices, live: slug === K.room() ? K.live() : [], tokens: await proofs(t, slug), here: K.room(), presTo: presTo(t) }, slug, t.scope === "me");
     T("applied", { ok: d.ok, ms: Math.round(performance.now() - t0), done: d.done, notes: (d.notes || []).length });
     if (!d.ok) { applyEl.__say(d.error || "Refused.", true); applyEl.querySelector(".ktgo").disabled = false; return; }
     applyEl.__close();
+    applied(t, slug, d);
+  }
+  async function applied(t, slug, d) {   // after an apply: the view, the toast with Undo, the link, the presentation's Ready
     let mine = 0;
     if (d.view && slug === K.room()) { try { mine = K.view.apply(d.view); } catch {} }
     K.refresh();
@@ -786,6 +990,7 @@
     if (d.pres && d.presFor) {   // "Ready, with a Start button": here when I am the main presenter, else on their page
       window.__tplLast.presFor = { name: d.presFor.name, me: !!d.presFor.me, told: !!d.presFor.told };
       if (d.presFor.me && slug === K.room()) readyShow(t.id, slug, K.me());
+      else if (d.presFor.me) toast("“" + t.name + "”: the presentation is ready for you in " + K.title(slug) + " — go there and press Start presenting.", 8000);
       else if (!d.presFor.told) toast("“" + t.name + "”: " + d.presFor.name + " is not on KASTR right now — the presentation is ready for them when they apply it again.", 8000, "warn");
     }
     refreshAll();
@@ -826,8 +1031,8 @@
     for (const k of SEC_ORDER) {
       if (t.on?.[k] === undefined) continue;
       const r = div("ktsec" + (E.on[k] ? "" : " off"));
-      r.innerHTML = '<input type="checkbox" aria-label="' + esc(SEC[k]) + '"><div class="ktsm"><span class="ktst">' + esc(SEC[k]) + '</span><span class="ktsc">' + esc(words(k, t.counts?.[k])) + '</span></div>';
-      const cb = r.querySelector("input"); cb.checked = !!E.on[k]; cb.onchange = () => { E.on[k] = cb.checked; r.classList.toggle("off", !cb.checked); };
+      r.innerHTML = SWITCH + '<div class="ktsm"><span class="ktst">' + esc(SEC[k]) + '</span><span class="ktsc">' + esc(words(k, t.counts?.[k])) + '</span></div>';
+      const cb = r.querySelector("input"); cb.setAttribute("aria-label", SEC[k]); cb.dataset.sec = k; cb.checked = !!E.on[k]; cb.onchange = () => { E.on[k] = cb.checked; r.classList.toggle("off", !cb.checked); };
       const sm = r.querySelector(".ktsm");
       if (k === "layout" && E.lay) {
         const items = div("ktitems");
@@ -869,6 +1074,13 @@
           const c = div("ktchip", esc("Backstage: " + b.name) + ' <span class="x" aria-hidden="true">×</span>');
           c.onclick = () => { P.backstage = P.backstage.filter((y) => y !== b); paintEdit(); };
           items.append(c);
+          // 0.21.91 roles: each presenter's own "Can control my mic and camera" switch for this backstage person
+          for (const x of P.presenters) {
+            const has = (b.control || []).includes(x.name);
+            items.append(sw(b.name + " can control " + x.name + "’s mic and camera", has, (v) => {
+              b.control = (b.control || []).filter((n) => n !== x.name); if (v) b.control.push(x.name);
+            }, { title: "The same switch " + x.name + " has in Presenters/Backstage while presenting" }));
+          }
         }
         const addP = (as) => async (e) => {
           const all = await K.people().catch(() => []);
@@ -884,13 +1096,32 @@
         const ap = btn("Add presenter…", "ghost"), ab = btn("Add backstage…", "ghost");
         for (const b of [ap, ab]) { b.style.height = "24px"; b.style.fontSize = "11.5px"; }
         ap.onclick = addP("p"); ab.onclick = addP("b");
-        items.append(ap, ab);
+        // someone who is not online: a typed name (kept as typed; the role waits for them when the template is used)
+        const tn = document.createElement("input"); tn.type = "text"; tn.maxLength = 40; tn.placeholder = "or type a name"; tn.className = "kttyped";
+        tn.setAttribute("aria-label", "A name to add (someone not online)"); tn.style.width = "130px";
+        const addTyped = (as) => () => {
+          const v = tn.value.trim().replace(/\s+/g, " ");
+          if (!v || [...P.presenters, ...P.backstage].some((x) => String(x.name).trim().toLowerCase() === v.toLowerCase())) return;
+          if (as === "p") { P.presenters.push({ name: v, main: !P.presenters.length }); for (const b of P.backstage) (b.control = b.control || []).push(v); }
+          else P.backstage.push({ name: v, control: P.presenters.map((x) => x.name) });
+          paintEdit();
+        };
+        const tp = btn("+ Presenter", "ghost", addTyped("p")), tb = btn("+ Backstage", "ghost", addTyped("b"));
+        for (const b of [tp, tb]) { b.style.height = "24px"; b.style.fontSize = "11.5px"; }
+        items.append(ap, ab, tn, tp, tb);
         const ms = document.createElement("select");
         ms.innerHTML = Object.entries(MODE_WORD).map(([v, w]) => '<option value="' + v + '">' + esc(w) + '</option>').join("");
-        ms.value = P.mode || "standout"; ms.onchange = () => { P.mode = ms.value; };
-        const am = div("ktchip" + (P.audience?.muted !== false ? " on" : ""), "Audience muted");
-        am.onclick = () => { P.audience = { ...(P.audience || {}), muted: P.audience?.muted === false }; paintEdit(); };
-        items.append(ms, am);
+        ms.value = presOpt(P, "cm", "standout") || "standout"; ms.onchange = () => { presOptSet(P, "cm", ms.value); };
+        items.append(ms);
+        for (const o of optRows().filter((x) => x.sw)) {   // every on/off option of the presenter view, from the one table
+          const off = o.needs && !presOpt(P, o.needs, 1);   // e.g. Ask to speak only while the audience is muted
+          const on = !off && !!presOpt(P, o.key, o.def);
+          items.append(sw(o.text || o.key, on, (v) => { presOptSet(P, o.key, v ? 1 : 0); paintEdit(); },
+            { disabled: !!off, dim: !!off, title: off ? "Only while “" + (optRows().find((x) => x.key === o.needs)?.text || o.needs) + "” is on." : "" }));
+        }
+        // 0.21.92 (Kenton): a room this template creates for itself (Apply > Create a new room for this) closes when a presenter ends it
+        items.append(sw("Close the room when the presentation ends", P.closeOnEnd !== false, (v) => { P.closeOnEnd = !!v; },
+          { title: "Only for a room the template creates (Apply ▸ Create a new room for this). A room that existed before is never closed." }));
         if (P.deck) {
           const si = document.createElement("input"); si.type = "number"; si.min = "1"; si.max = String(P.deck.slides || 1); si.value = String((P.deck.start || 0) + 1);
           si.style.width = "64px"; si.title = "Start on slide"; si.setAttribute("aria-label", "Start on slide");
@@ -901,7 +1132,7 @@
       }
       if (k === "settings" && E.set) {
         const items = div("ktitems");
-        const tog = (key, text, onlyOff) => { const c = div("ktchip" + (E.set[key] ? " on" : ""), esc(text)); c.onclick = () => { if (onlyOff && !E.set[key]) { toast("A lock is taken from the room itself — use “Update from this room” after locking it.", 4500); return; } E.set[key] = !E.set[key]; paintEdit(); }; items.append(c); };
+        const tog = (key, text, onlyOff) => items.append(sw(text, E.set[key], (v) => { if (onlyOff && v) { toast("A lock is taken from the room itself — use “Update from this room” after locking it.", 4500); return false; } E.set[key] = v; paintEdit(); }));
         tog("locked", "Locked", true); tog("keep", "Kept open"); tog("viewLock", "View locked");
         sm.append(items);
       }
@@ -992,7 +1223,7 @@
   }
   window.__tplUI = {
     open: openList, save: openSave, apply: openApply, edit: openEdit, roomSettings, myRoom, canApplyTo, applyTo, available,
-    presReady, ready: readyShow, presStart, presState: () => ({ tid: R.tid, loaded: !!R.file, size: R.file ? R.file.size : 0, busy: R.busy, err: R.err, shown: !!readyEl && !readyEl.hidden }),   // 0.21.92: presentation & roles
+    presReady, presCo, coState: () => [...CO].map(([id, c]) => ({ id, deny: c.deny.size, done: c.done.size })), ready: readyShow, presStart, presState: () => ({ tid: R.tid, loaded: !!R.file, size: R.file ? R.file.size : 0, busy: R.busy, err: R.err, shown: !!readyEl && !readyEl.hidden }),   // 0.21.92: presentation & roles
     state: () => ({ list: L.d ? { ok: L.d.ok, n: (L.d.templates || []).length, mine: L.d.mine ? L.d.mine.length : null, can: L.d.can } : null,
       apply: A.d ? { ok: A.d.ok, changes: A.d.changes, notes: A.d.notes, cams: A.d.cams, settings: A.d.settings, invites: A.d.invites } : null, trace: trace.slice(-40) }),
   };

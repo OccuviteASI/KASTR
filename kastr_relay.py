@@ -185,6 +185,8 @@ PINVITE_TTL = 3600             # a person invite's link (bound to the invited de
 PINVITE_RATE = (6, 60)         # person invites one sender may send per minute
 PINBOX_TTL = 180               # s: an invite waits this long for the invited page's next beat
 PINBOX_KEEP = 64               # invites the hub keeps for its spokes' long-polls
+TPL_APPLIED_S = 12 * 3600       # 0.21.92: a room template applied to another room -- its deck opens from there this long
+TPL_ROOM_NEW_S = 600            # 0.21.92: "Create a new room for this" -- the hub marks a room made at most this long ago, never an older one
 # 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): public rooms announce their people on the
 # public ~presence / ~state prefixes (the page's rooms rail reads them fleet-wide); a personal room says nothing in public
 # (0.21.75), so its pages' BEATS say where they are: the hub keeps the fleet's table (its own pages' beats, its spokes'
@@ -2989,6 +2991,8 @@ def rooms_for_guest(obj, allowed):
     out["rooms"] = [x for x in (obj.get("rooms") or []) if isinstance(x, dict) and x.get("slug") in allowed]
     closed = obj.get("closed")
     out["closed"] = {k: v for k, v in closed.items() if k in allowed} if isinstance(closed, dict) else {}
+    cw = obj.get("closedWhy")
+    out["closedWhy"] = {k: v for k, v in cw.items() if k in allowed} if isinstance(cw, dict) else {}   # 0.21.92
     out["groups"] = {}
     out["renamed"] = {}
     out["guest"] = True
@@ -3963,6 +3967,7 @@ class AuthStore:
         self.codes = {"viewer": None, "publisher": None, "federation": None, "admin": None}   # 0.11.0: + federation; 0.16.0: + admin
         self.rooms = {}
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
+        self.closed_why = {}     # 0.21.92: slug -> "pres" (a template's room closed when its presentation ended); memory only
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
         self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
         self.vehicles = {}       # 0.21.63: id -> {id, name, salt, hash, iter, created, lastUsed, lastRoom, revoked} (never a key)
@@ -3973,6 +3978,7 @@ class AuthStore:
         self.board_ver = 0       # 0.21.63: bumped on every room-board change (spokes copy the boards with it)
         self.renamed = {}        # 0.21.65: old slug -> {"to": new slug, "at": ms} (RENAMED_TTL) -- pages in the old name follow
         self.paliases = {}       # 0.21.91: old name key -> {"to": new name key, "name": new display, "at", "until"} (PERSONAL_ALIAS_TTL)
+        self.paudit = []         # 0.21.91 passcode reset: [{at, op, name, by, host, relay}] -- an admin's My room resets (never a code)
         self.on_board = None     # 0.21.63: callable() -- a board changed or went with its room (AuthService re-lists the pins)
         # 0.21.91: callables(slug, why) -- a room was deleted ("closed" or "expired"): its cross-room listings go with it
         # (AuthService adds its registries; an OPEN relay's registry is here from the start)
@@ -4048,6 +4054,7 @@ class AuthStore:
                     pass
             self._prune_closed()
         self.paliases = self._paliases_clean(d.get("personalAliases"))   # 0.21.91
+        self.paudit = self._paudit_clean(d.get("personalAudit"))         # 0.21.91 passcode reset
         self.lapsed = self._lapsed_clean(d.get("lapsed"))   # 0.21.91
         ren = d.get("renamed")              # 0.21.65
         if isinstance(ren, dict):
@@ -4092,6 +4099,7 @@ class AuthStore:
                                  "invites": self.invites,        # 0.21.75: + room invite links (sha256 of the secret only)
                                  "renamed": self.renamed,        # 0.21.65: + old room names -> new
                                  "personalAliases": self.paliases,   # 0.21.91: + names people changed away from -> their new name
+                                 "personalAudit": self.paudit,   # 0.21.91 passcode reset: + who reset / removed whose My room (no code)
                                  "lapsed": self.lapsed,          # 0.21.91: + the generations of rooms that lapsed (not closed)
                                  "links": self.links,            # 0.21.77: + the Links card's overrides
                                  "mesh": self.mesh,              # 0.21.77: + the hub / standby link cost
@@ -4507,6 +4515,9 @@ class AuthStore:
         cutoff = int(time.time() * 1000) - CLOSED_TTL * 1000
         for k in [k for k, ts in self.closed.items() if ts < cutoff]:
             del self.closed[k]
+        cw = self.__dict__.setdefault("closed_why", {})
+        for k in [k for k in cw if k not in self.closed]:
+            del cw[k]
 
     def kept_slugs(self):
         with self.lock:
@@ -4526,6 +4537,8 @@ class AuthStore:
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
                 if r.get("viewLock"):
                     row["viewLock"] = True      # 0.21.65 (m): only the creator or an admin changes the room's view
+                if isinstance(r.get("tpl"), dict) and r["tpl"].get("close"):
+                    row["tplClose"] = True      # 0.21.92: a template made it -- End closes it (the presenters' End asks first)
                 if r.get("persistent") and r.get("keptBy") == "board":
                     row["keptBy"] = "board"     # 0.21.65: kept open only because its board holds something
                 b = r.get("board") if isinstance(r.get("board"), dict) else {}
@@ -4579,6 +4592,21 @@ class AuthStore:
     def personal_count(self):
         with self.lock:
             return sum(1 for r in self.rooms.values() if is_personal_rec(r))
+
+    def personal_main(self, slug, main=None):
+        """0.21.91 (Kenton: "Main-room choice follows the person"): the owner's main room kept in their My room record --
+        "mine" | "lobby" ("" when not chosen yet); `main` sets it. None when `slug` is not a personal room."""
+        with self.lock:
+            rec = self.rooms.get(slug)
+            if not is_personal_rec(rec):
+                return None
+            cur = str(rec["personal"].get("main") or "")
+            if main not in ("mine", "lobby") or main == cur:
+                return cur
+            new = dict(rec)
+            new["personal"] = dict(rec["personal"], main=main)
+        self.put_room(slug, new)
+        return main
 
     def personal_check(self, name, code):
         """-> (slug, owner) when `name` has a personal room and `code` is its personal code, else (None, None)."""
@@ -4727,9 +4755,11 @@ class AuthStore:
             self._save()
             return slug, "created"
 
-    def personal_reset(self, name, code=None):
+    def personal_reset(self, name, code=None, must_change=False):
         """An admin, for a forgotten personal code: with `code` the room keeps its board and takes the new code; without one
-        the room is gone (its owner makes a new one). -> the slug, or None when that name has no personal room."""
+        the room is gone (its owner makes a new one). -> the slug, or None when that name has no personal room.
+        0.21.91 passcode reset: `must_change` (an admin's temporary code) marks the record -- the owner's next unlock makes them
+        pick their own code first; ANY other code change (Messages' recode / setup, the owner's own change) clears it."""
         fire = False
         with self.lock:
             slug = self._personal_find(personal_key(name))
@@ -4738,6 +4768,11 @@ class AuthStore:
             if code:
                 salt = os.urandom(8).hex()
                 self.rooms[slug].update(salt=salt, hash=hashlib.sha256((salt + str(code)).encode()).hexdigest(), at=time.time())
+                pr = self.rooms[slug]["personal"]
+                if must_change:
+                    pr["mustChange"] = True
+                else:
+                    pr.pop("mustChange", None)
             else:
                 rec = self.rooms.pop(slug)
                 if rec.get("board"):
@@ -4747,6 +4782,60 @@ class AuthStore:
         if fire:
             self._board_fire()
         return slug
+
+    # ---- 0.21.91 passcode reset (Kenton: "Yes, in People + hub Relay page"): an admin's reset, the must-change flag, the audit --
+    PAUDIT_KEEP = 200
+
+    @staticmethod
+    def _paudit_clean(v):
+        out = []
+        for e in (v if isinstance(v, list) else [])[-AuthStore.PAUDIT_KEEP:]:
+            if not isinstance(e, dict) or e.get("op") not in ("reset", "remove"):
+                continue
+            try:
+                out.append({"at": int(e.get("at") or 0), "op": e["op"], "name": personal_name(e.get("name")),
+                            "by": clean_label(e.get("by"), 40), "host": str(e.get("host") or "") if HOST_RE.match(str(e.get("host") or "")) else "",
+                            "relay": clean_label(e.get("relay"), 40)})
+            except (TypeError, ValueError):
+                pass
+        return out
+
+    def personal_must(self, name):
+        """Must the owner of `name`'s My room pick their own code (an admin gave it a temporary one)?"""
+        with self.lock:
+            slug = self._personal_find(personal_key(name))
+            return bool(slug) and bool(self.rooms[slug]["personal"].get("mustChange"))
+
+    def personal_used(self, slug, now=None):
+        """Its owner opened it (a mint with its code) -> `personal.used` (saved at most hourly: the Relay page's "last used")."""
+        now = time.time() if now is None else now
+        with self.lock:
+            r = self.rooms.get(slug)
+            if not is_personal_rec(r) or now - float(r["personal"].get("used") or 0) < 3600:
+                return
+            r["personal"]["used"] = int(now)
+            self._save()
+
+    def personal_list(self):
+        """[{name, used, mustChange}] -- the people with a My room, for an admin (names only: never a code, a hash or a slug)."""
+        with self.lock:
+            rows = [{"name": str(r["personal"].get("owner") or ""), "used": int(r["personal"].get("used") or 0),
+                     "made": int(r.get("created") or 0), "mustChange": bool(r["personal"].get("mustChange"))}
+                    for r in self.rooms.values() if is_personal_rec(r)]
+        return sorted(rows, key=lambda x: (x["name"].lower(), x["name"]))
+
+    def personal_audit_add(self, op, name, who=None):
+        who = who if isinstance(who, dict) else {}
+        e = {"at": int(time.time()), "op": op, "name": personal_name(name), "by": clean_label(who.get("name"), 40) or "an admin",
+             "host": str(who.get("host") or "") if HOST_RE.match(str(who.get("host") or "")) else "", "relay": clean_label(who.get("relay"), 40)}
+        with self.lock:
+            self.paudit = (self.paudit + [e])[-self.PAUDIT_KEEP:]
+            self._save()
+        return e
+
+    def personal_audit_view(self, n=10):
+        with self.lock:
+            return [dict(e) for e in reversed(self.paudit[-max(0, int(n)):])]
 
     def personal_public(self):
         """The Relay page's count (never the names' rooms or codes)."""
@@ -5096,6 +5185,12 @@ class AuthStore:
             self._prune_closed()
             return dict(self.closed)
 
+    def closed_why_public(self):
+        """0.21.92: why a tombstone's room was closed, when it was not an ordinary close -> {slug: "pres"}."""
+        with self.lock:
+            self._prune_closed()
+            return dict(self.__dict__.get("closed_why") or {})
+
     # ---- 0.21.65: renamed rooms (old name -> new name) ----------------------------------------------------------------
 
     def _renamed_live(self, slug, now=None):
@@ -5173,11 +5268,17 @@ class AuthStore:
             self._prune_closed()
             return slug in self.closed
 
-    def close_room(self, slug):
-        """Forget the record and leave a tombstone -> the removed record or None."""
+    def close_room(self, slug, why=None):
+        """Forget the record and leave a tombstone -> the removed record or None. `why` (0.21.92): "pres" -- a template's room
+        closed when its presentation ended (the pages' note says so)."""
         with self.lock:
             rec = self.rooms.pop(slug, None)
             self.closed[slug] = int(time.time() * 1000)
+            cw = self.__dict__.setdefault("closed_why", {})
+            if why:
+                cw[slug] = str(why)[:16]
+            else:
+                cw.pop(slug, None)
             self.lapsed.pop(slug, None)      # 0.21.91: closed = deleted -- a room made under the name later is a new generation
             self._prune_closed()
             for r in self.invites.values():   # 0.21.75: a closed room's invite links stop working
@@ -5840,21 +5941,32 @@ def register_room(store, p, peer="", log=None, lockout=None, hub_check=None, on_
     return {"ok": True, "roomKey": rec["roomKey"], "persistent": bool(keep)}, 200
 
 
-def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=False, admin_check=None):
+def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=False, admin_check=None, who=None):
     """0.21.75 (Kenton: identity = "name + a personal code the person picks once"): POST /api/rooms/personal -> (reply, code).
     {op: "create", name, code, access} makes the person's room (any member access code -- what a token needs anyway; a spoke
     checked it and `vouched`); a name that has one already opens it when the code matches, else it is a wrong code.
     {op: "open", name, code} -> its slug. Wrong codes (and unknown names -- the same answer) count toward the lockout.
     {op: "reset", name, code?} an admin (or the relay's operator): a new code (the board stays), or none (the room is gone).
-    The reply never carries a code; a refusal of a code guess says `wrong: true` (a spoke counts it where the person is)."""
+    The reply never carries a code; a refusal of a code guess says `wrong: true` (a spoke counts it where the person is).
+    0.21.91 passcode reset: {op: "list"} an admin (or the operator) -> {people: [{name, used, mustChange}], audit: [...]} (names
+    only); a reset with a code is a TEMPORARY code (`mustChange` until the owner picks their own: {op: "change", name, code,
+    newCode}); every reset / remove is audited with `who` (the admin's name + device, or "relay operator") -- never a code."""
     log = log or (lambda m: None)
     p = p if isinstance(p, dict) else {}
     op = str(p.get("op") or "")
+    # ---- 0.21.91 passcode reset: the admin's list ----
+    if op == "list":
+        if not admin:
+            return {"ok": False, "error": "only an admin (the admin code) or the relay's operator lists My rooms"}, 403
+        rows = store.personal_list() if hasattr(store, "personal_list") else []
+        audit = store.personal_audit_view(12) if hasattr(store, "personal_audit_view") else []
+        return {"ok": True, "op": "list", "people": rows, "audit": audit, "count": len(rows), "max": PERSONAL_MAX}, 200
+    # ---- end 0.21.91 passcode reset ----
     name = personal_name(p.get("name"))
     code = p.get("code")
     code = "" if code is None else str(code)
-    if op not in ("open", "create", "reset"):
-        return {"ok": False, "error": "unknown op (open|create|reset)"}, 400
+    if op not in ("open", "create", "reset", "pref", "change"):
+        return {"ok": False, "error": "unknown op (open|create|reset|pref|change|list)"}, 400
     if not name:
         return {"ok": False, "error": "your name is required"}, 400
     if len(code) > PERSONAL_CODE_MAX:
@@ -5869,13 +5981,17 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
             a = store.personal_alias(personal_key(name))
             if a:
                 name = a["name"]
-        slug = store.personal_reset(name, code or None)
+        slug = store.personal_reset(name, code or None, must_change=bool(code))   # 0.21.91: a temporary code -- they pick their own
         if not slug:
             return {"ok": False, "error": "%s has no personal room" % name}, 404
-        log("relay: personal room of %s %s by an admin" % (name, "given a new code" if code else "cleared"))
+        w = who if isinstance(who, dict) else {"name": "an admin"}
+        if hasattr(store, "personal_audit_add"):   # 0.21.91 passcode reset: who did it, when, for whom (never a code)
+            store.personal_audit_add("reset" if code else "remove", name, w)
+        log("relay: personal room of %s %s by %s" % (name, "given a temporary code" if code else "cleared",
+                                                    clean_label(w.get("name"), 40) or "an admin"))
         # 0.21.88: the person's messaging key stays wrapped under the OLD code -- Messages asks them for it ("keep your
         # history") or lets them start fresh (older messages then cannot be read). A code changed from Messages re-wraps it.
-        return {"ok": True, "op": "reset", "name": name, "cleared": not code,
+        return {"ok": True, "op": "reset", "name": name, "cleared": not code, "mustChange": bool(code),
                 "messages": "their messages key still opens only with the old code (Messages asks for it, or they start fresh and lose older messages)"}, 200
     if lockout is not None:
         wait = lockout.locked_for(peer)
@@ -5890,6 +6006,20 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         out.update(ok=False, wrong=True)
         return out, c
 
+    if op == "pref":   # 0.21.91: the owner's main room (My room | Lobby), kept with My room -- name + personal code, as "open"
+        main = p.get("main")
+        if main not in (None, "", "mine", "lobby"):
+            return {"ok": False, "error": "main is mine or lobby"}, 400
+        slug, owner = store.personal_check(name, code)
+        if not slug and hasattr(store, "personal_alias"):
+            moved = store.personal_alias(personal_key(name))
+            if moved:
+                slug, owner = store.personal_check(moved["name"], code)
+        if not slug or not hasattr(store, "personal_main"):
+            return wrong("wrong name or personal code")
+        if lockout is not None:
+            lockout.ok(peer)
+        return {"ok": True, "op": "pref", "main": store.personal_main(slug, main or None) or ""}, 200
     if op == "open":
         slug, owner = store.personal_check(name, code)
         moved = None
@@ -5904,7 +6034,28 @@ def personal_op(store, p, peer="", log=None, lockout=None, vouched=False, admin=
         out = {"ok": True, "op": "open", "slug": slug, "name": owner or name}
         if moved:
             out["renamed"] = True
+        if hasattr(store, "personal_must") and store.personal_must(owner or name):
+            out["mustChange"] = True   # 0.21.91 passcode reset: an admin's temporary code -- the page asks for their own first
         return out, 200
+    if op == "change":   # 0.21.91 passcode reset: the owner picks their own code (the current one proves it)
+        new = str(p.get("newCode") or "")
+        if not (PERSONAL_CODE_NEW_MIN <= len(new) <= PERSONAL_CODE_MAX):
+            return {"ok": False, "short": True, "codeMin": PERSONAL_CODE_NEW_MIN,
+                    "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_NEW_MIN}, 400
+        slug, owner = store.personal_check(name, code)
+        if not slug and hasattr(store, "personal_alias"):
+            moved = store.personal_alias(personal_key(name))
+            if moved:
+                slug, owner = store.personal_check(moved["name"], code)
+        if not slug:
+            return wrong("wrong name or personal code")
+        if new == code and hasattr(store, "personal_must") and store.personal_must(owner or name):
+            return {"ok": False, "same": True, "error": "pick a code of your own -- not the temporary one an admin gave you"}, 400
+        if lockout is not None:
+            lockout.ok(peer)
+        store.personal_reset(owner or name, new)   # (clears mustChange)
+        log("relay: personal room of %s given a new code by its owner (from %s)" % (owner or name, peer or "?"))
+        return {"ok": True, "op": "change", "slug": slug, "name": owner or name}, 200
     if len(code) < PERSONAL_CODE_MIN:
         return {"ok": False, "error": "pick a personal code of at least %d characters" % PERSONAL_CODE_MIN}, 400
     if store.configured() and not vouched:
@@ -6078,6 +6229,33 @@ def rc_item_clean(item):
     fk = str(item.get("fk") or "")
     if item["rc"] == "allow" and RC_FK_RE.match(fk):
         out["fk"] = fk
+    return out
+
+
+TPL_ITEM_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+TPL_DECK_RE = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
+TPL_ID_RE = re.compile(r"^t[0-9a-f]{6,24}$")
+
+
+def tpl_item_clean(item):
+    """0.21.92: a template's note as it travels hub -> spoke -> the page's beat (a page on a spoke relay hears it there too)
+    -> a cleaned copy, or None. `tplpres`: a template's presentation is ready for its main presenter; `tplco`: the backstage
+    people a co-presenter's own "Can control my mic and camera" leaves off. No code, no token, no deck key -- only names."""
+    if not isinstance(item, dict) or item.get("kind") not in ("tplpres", "tplco"):
+        return None
+    iid, room, tid = str(item.get("id") or ""), str(item.get("room") or ""), str(item.get("tid") or "")
+    if not TPL_ITEM_ID_RE.match(iid) or not SLUG_RE.match(room) or not TPL_ID_RE.match(tid):
+        return None
+    out = {"id": iid, "kind": item["kind"], "room": room, "tid": tid}
+    if item["kind"] == "tplpres":
+        out.update({"name": clean_label(item.get("name"), 80), "by": clean_label(item.get("by"), 40), "for": clean_label(item.get("for"), 40)})
+        return out
+    deck = str(item.get("deck") or "")
+    deny = [clean_label(n, 40) for n in (item.get("deny") if isinstance(item.get("deny"), list) else [])[:kastr_templates.PRES_PEOPLE_MAX]]
+    deny = [n for n in deny if n]
+    if not TPL_DECK_RE.match(deck) or not deny:
+        return None
+    out.update({"deck": deck, "owner": clean_label(item.get("owner"), 40), "deny": deny})
     return out
 
 
@@ -6739,6 +6917,7 @@ class AuthService:
         # codes, its admins' tokens) and says so in `vouch`; the federation token is what makes that trustworthy.
         if op == "list":
             return {"ok": True, "rooms": self.store.rooms_public(), "closed": self.store.closed_public(),
+                    "closedWhy": self.store.closed_why_public(),   # 0.21.92
                     "groups": self.store.groups_public(), "renamed": self.store.renamed_public()}, 200   # 0.21.65: + renamed
         if op == "relays":     # 0.21.91: the fleet's relays for a spoke's page (the closest relay at launch)
             return {"ok": True, "relays": self._p_relays()}, 200
@@ -6766,7 +6945,8 @@ class AuthService:
         if op == "personal":   # 0.21.75: My room -- the spoke checked the member's access code (vouch "member") or an admin
             body = p.get("body") if isinstance(p.get("body"), dict) else {}
             return personal_op(self.store, body, str(p.get("peer") or "")[:64], self.log, None,
-                               vouched=p.get("vouch") in ("member", "admin"), admin=p.get("vouch") == "admin")
+                               vouched=p.get("vouch") in ("member", "admin"), admin=p.get("vouch") == "admin",
+                               who=p.get("who") if p.get("vouch") == "admin" and isinstance(p.get("who"), dict) else None)   # 0.21.91 passcode reset
         if op in ("library", "libraryAdmin", "libraryStill"):   # 0.21.84: a spoke's library rows, an admin it verified, a still
             return self._lib_fed(op, p)
         if op == "xshare":   # 0.21.41: a spoke verified the member's tokens (vouch "member"); the hub keeps the registry
@@ -7526,6 +7706,10 @@ class AuthService:
         if info is None or rec is None:
             return "none", {}
         if code and _room_code_ok(rec, code):
+            if isinstance(rec.get("personal"), dict) and rec["personal"].get("mustChange"):
+                return "change", info   # 0.21.91 passcode reset: an admin's temporary code opens nothing until they pick their own
+            if hasattr(self.store, "personal_used"):
+                self.store.personal_used(slug)   # 0.21.91: the Relay page's "last used"
             return "owner", info
         if not (invited or (host and host in info["people"])):
             return "wrong", info
@@ -7546,7 +7730,7 @@ class AuthService:
             if c == 200 and d.get("locked"):
                 return ("owner" if d.get("ok") else "wrong"), {}
             return ("none" if c in (200, 400, 404) else "down"), {}
-        if v not in ("owner", "guest", "away", "wrong", "none"):
+        if v not in ("owner", "guest", "away", "wrong", "none", "change"):   # 0.21.91: + change (a temporary code)
             return "down", {}
         info = {"owner": clean_label(d.get("owner"), 40), "coMe": bool(d.get("co"))}
         if v == "guest":
@@ -7565,6 +7749,10 @@ class AuthService:
             return {"ok": False, "error": "no such personal room"}, 404
         if verdict == "wrong":
             return self._fail(peer, "wrong room code", slug)
+        if verdict == "change":   # 0.21.91 passcode reset
+            self._ok(peer)
+            return {"ok": False, "mustChange": True, "owner": owner,
+                    "error": "an admin reset this My room passcode -- pick your own passcode first"}, 403
         if verdict == "away":
             return {"ok": False, "ownerAway": True, "owner": owner,
                     "error": "%s isn't in their room right now" % (owner or "The owner")}, 403
@@ -7721,6 +7909,13 @@ class AuthService:
                         continue
                     pl.seen[rc["id"]] = now
                     self._rc_put_locked(to, rc, now)
+                    continue
+                if isinstance(item, dict) and item.get("kind") in ("tplpres", "tplco"):   # 0.21.92: a template's note
+                    ti = tpl_item_clean(item)
+                    if ti is None or not HOST_RE.match(to) or ti["id"] in pl.seen:
+                        continue
+                    pl.seen[ti["id"]] = now
+                    self._p_inbox_put_locked(to, dict(ti, at=now))
                     continue
                 if not isinstance(item, dict) or not HOST_RE.match(to) or not INVITE_RE.match(str(item.get("token") or "")):
                     continue
@@ -9538,17 +9733,27 @@ class AuthService:
             return {"ok": False, "error": "too many GIF searches -- try again in %d s" % wait, "retryAfter": wait}, 429
         return self._gifs().search(p.get("q"), p.get("offset"))
 
-    def gif_operator_view(self):
-        """GET /api/relay/gif (the Relay page of this machine) -- never the key."""
-        if self._p_spoke():
+    def gif_operator_view(self, standby=False):
+        """GET /api/relay/gif (the Relay page of this machine) -- never the key. `standby`: this relay is the fleet's
+        standby hub (handle_api asks the cluster) -- it keeps its OWN key, used only while it acts as the hub."""
+        spoke = self._p_spoke()
+        if spoke and not standby:
             return {"ok": True, "spoke": True, "on": self.gif_on()}, 200
-        return dict(self._gifs().view(), ok=True, hub=True, secured=True), 200
+        out = dict(self._gifs().view(), ok=True, hub=not spoke, secured=True)
+        if standby:
+            out.update(standby=True, acting=not spoke)
+        return out, 200
 
-    def gif_operator(self, p):
-        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page)."""
-        if self._p_spoke():
+    def gif_operator(self, p, standby=False):
+        """POST /api/relay/gif {key} | {remove: true} | {on} (the hub's own Relay page, or the standby hub's: its own key,
+        kept on that machine and never sent anywhere -- no key rides the replica or the hand-over)."""
+        spoke = self._p_spoke()
+        if spoke and not standby:
             return {"ok": False, "spoke": True, "error": "GIF search is set on the hub's Relay page"}, 409
-        return self._gifs().configure(p)
+        out, code = self._gifs().configure(p)
+        if code == 200 and standby:
+            out = dict(out, standby=True, acting=not spoke, hub=not spoke)
+        return out, code
 
     # ---- 0.21.88 (Kenton: "a private messaging feature ... whether online/offline. If offline, send it when back online.
     # Ability to setup group messages. These messages are not tied to any rooms."): PRIVATE MESSAGES. The hub keeps them
@@ -9567,6 +9772,7 @@ class AuthService:
                         check_code=lambda n, c: bool(hasattr(st, "personal_check") and st.personal_check(n, c)[0]),
                         has_room=lambda n: bool(hasattr(st, "personal_has") and st.personal_has(n)),
                         set_code=lambda n, c: bool(hasattr(st, "personal_reset") and st.personal_reset(n, c)),
+                        must_change=lambda n: bool(hasattr(st, "personal_must") and st.personal_must(n)),   # 0.21.91 passcode reset
                         ping=self._msg_ping,
                         alias_of=lambda nk: st.personal_alias(nk) if hasattr(st, "personal_alias") else None,          # 0.21.91
                         aliases=lambda: st.personal_aliases_public() if hasattr(st, "personal_aliases_public") else [],
@@ -9743,6 +9949,9 @@ class AuthService:
     # rest); POST /api/templates/deck?d=&f=&ut= (one file, raw), GET /api/templates/deck?d=&f=&rt= (a read grant from
     # op deckOpen). An open relay has no token service -- no templates there (Kenton).
     TPL_LOOK_OPS = ("list", "get", "preview")
+    # 0.21.92: an invite-link guest (a template's room invites its presenters and backstage) may still do what only a PROVEN named
+    # person does -- open the deck, take their own control list, a named presenter's End -- each op checks the name itself
+    TPL_GUEST_NAMED_OPS = ("deckOpen", "presCo", "presEnd")
     TPL_OLD_HUB = "the hub runs an older KASTR without meeting templates -- update the hub first"
 
     def _tplb(self):
@@ -9768,7 +9977,7 @@ class AuthService:
             return {"ok": False, "error": "templates belong to a room -- join one (not the Lobby)"}, 403
         op = str(p.get("op") or "")
         guest = bool(claims.get("inv") or claims.get("pg"))
-        if guest and (op not in self.TPL_LOOK_OPS or claims.get("pg")):
+        if guest and (claims.get("pg") or (op not in self.TPL_LOOK_OPS and op not in self.TPL_GUEST_NAMED_OPS)):
             return {"ok": False, "error": "a guest can only look at this room's templates"}, 403
         now = time.time()
         if self.bans and self.bans.hit(room, host, peer, now):
@@ -9933,6 +10142,8 @@ class AuthService:
             return {"ok": True, "template": self._tpl_pub(c, True)}, 200
         if op == "undo":
             return self._tpl_undo_run(p, v, now)
+        if op == "presEnd":
+            return self._tpl_pres_end(p, v, rec, creator, ident, ierr, now)
         tid = str(p.get("id") or "")
         t = book.get(tid) if T.TID_RE.match(tid) else None
         if t is None:
@@ -9940,14 +10151,20 @@ class AuthService:
         if t.get("scope") == "me" and ierr and not ident:
             return ierr
         if not self._tpl_sees(t, v, ident):
-            return {"ok": False, "error": "that template is not yours to see"}, 403
+            # 0.21.92: a room template just applied to THIS room (another room than its own) -- its named presenters and backstage
+            # and this room's admins read it here to get its presentation ready (get / deckOpen / presCo only)
+            if not (op in ("get", "deckOpen", "presCo") and t.get("scope") == "room" and self._tpl_applied_to(t["id"], room, now)
+                    and (admin or self._tpl_named(t, ident, now))):
+                return {"ok": False, "error": "that template is not yours to see"}, 403
         if op == "get":
             return {"ok": True, "template": self._tpl_pub(t, admin)}, 200
+        if op == "room":
+            return self._tpl_room_mark(t, p, v, rec, creator, now)
         if op in ("preview", "apply"):
             if op == "apply" and v.get("guest"):
                 return {"ok": False, "error": "a guest can only look at templates"}, 403
             return self._tpl_run(t, p, v, rec, creator, admin, publisher, op == "preview", now)
-        if op == "deckOpen":
+        if op in ("deckOpen", "presCo"):
             # Kenton (2026-10-27): before it is presented, a room template's deck opens ONLY for the template's named presenters
             # and backstage (the person proven by name + My room code, My room's owner token, or a device that unlocked their
             # messages -- never a name a page merely says) and the room's admins; everyone else sees only the live slide.
@@ -9956,23 +10173,15 @@ class AuthService:
             if not d:
                 return {"ok": False, "error": "this template has no deck"}, 404
             if t.get("scope") == "room":
-                pr = t.get("pres") if isinstance(t.get("pres"), dict) else {}
-                named = {T.name_key(x.get("name")) for x in (pr.get("presenters") or []) + (pr.get("backstage") or []) if isinstance(x, dict)}
-                named.discard("")
-                if t.get("room") != room:
-                    return {"ok": False, "error": "open the template's deck from its own room"}, 403
-                if ident and ident["nk"] not in named and hasattr(self.store, "personal_alias"):
-                    # 0.21.92 (fallback): a name the template still holds that its person changed away from in the last 90 days
-                    for n0 in named:
-                        a = self.store.personal_alias(n0, now)
-                        if a and a.get("to") == ident["nk"]:
-                            named.add(ident["nk"])
-                            break
-                if not admin and not (ident and ident["nk"] in named):
+                if t.get("room") != room and not self._tpl_applied_to(t["id"], room, now):
+                    return {"ok": False, "error": "open the template's deck from its own room (or a room it was just applied to)"}, 403
+                if not admin and not self._tpl_named(t, ident, now):
                     if ierr and ierr[0].get("wrong"):
                         return ierr
                     return {"ok": False, "named": False,
                             "error": "only the template's presenters, its backstage and the room's admins open its deck before it is presented"}, 403
+            if op == "presCo":
+                return self._tpl_pres_co(t, p, v, room, now)
             out = {"ok": True, "deck": d, "rt": book.read_grant(d["id"], v["host"]), "files": sorted(d.get("files") or {})}
             pk = book.deck_page_key(d["id"])
             if pk:
@@ -10059,7 +10268,145 @@ class AuthService:
                 nt["pres"] = dict(nt["pres"], deck=None)
                 book.put(nt)
             return {"ok": True, "removed": n}, 200
-        return {"ok": False, "error": "unknown op (list | get | save | update | delete | preview | apply | undo | deckNew | deckDone | deckOpen | deckDel)"}, 400
+        return {"ok": False, "error": "unknown op (list | get | save | update | delete | preview | apply | undo | deckNew | deckDone | deckOpen | presCo | deckDel | room | presEnd)"}, 400
+
+    def _tpl_named(self, t, ident, now, roles=("presenters", "backstage")):
+        """The proven person (`ident`: name + My room code, My room's owner token, or unlocked messages -- never a name a page merely
+        says) is one of the template's presenters or backstage (`roles`); a name the template still holds that its person changed
+        away from in the last 90 days counts (the hub's rename alias)."""
+        T = kastr_templates
+        if not ident:
+            return False
+        pr = t.get("pres") if isinstance(t.get("pres"), dict) else {}
+        named = {T.name_key(x.get("name")) for r in roles for x in (pr.get(r) or []) if isinstance(x, dict)}
+        named.discard("")
+        if ident["nk"] in named:
+            return True
+        if hasattr(self.store, "personal_alias"):
+            for n0 in named:
+                a = self.store.personal_alias(n0, now)
+                if a and a.get("to") == ident["nk"]:
+                    return True
+        return False
+
+    def _tpl_room_mark(self, t, p, v, rec, creator, now):
+        """op room (0.21.92, Kenton: "When creating a presentation using the template and having it create a room for it, close the
+        room after the presenter ends the meeting."): "Create a new room for this" -- the page just CREATED this room (the Create
+        room path, so its rules hold) and moved in; the hub marks the record as made by this run -> {run, close}. Only a fresh room
+        its creator's device marks (the roomKey proves it made it), never one older than TPL_ROOM_NEW_S, never a marked one again,
+        never My room. The mark is what op presEnd checks -- a room without it is never closed by a template."""
+        room = v["room"]
+        if v.get("guest") or is_personal(room) or not rec:
+            return {"ok": False, "error": "a template makes a room of its own for a member only (not a guest, not My room)"}, 403
+        if not creator:
+            return {"ok": False, "error": "only the device that just created this room marks it as the template's room"}, 403
+        pr = t.get("pres") if isinstance(t.get("pres"), dict) else None
+        if not pr:
+            return {"ok": False, "error": "this template has no presentation"}, 400
+        close = p.get("close") if isinstance(p.get("close"), bool) else pr.get("closeOnEnd") is not False
+        mk = {"id": t["id"], "run": os.urandom(6).hex(), "by": clean_label(v.get("by") or v.get("host"), 40), "at": now, "close": bool(close)}
+        st = self.store
+        with st.lock:
+            cur = st.rooms.get(room)
+            if cur is None:
+                return {"ok": False, "error": "no such room"}, 404
+            if cur.get("tpl"):
+                return {"ok": False, "error": "this room is already a template's room"}, 409
+            if now - float(cur.get("created") or 0) > TPL_ROOM_NEW_S:
+                return {"ok": False, "error": "this room existed before -- a template closes only a room it made"}, 409
+            cur["tpl"] = mk
+            st._save()
+        self._tpl_applied_to(t["id"], room, now, put=True)
+        self.log("relay auth: room %s made by template %s '%s' (run %s, %s at End) for %s"
+                 % (room, t["id"], t.get("name"), mk["run"], "closes" if mk["close"] else "stays", mk["by"]))
+        return {"ok": True, "room": room, "run": mk["run"], "close": mk["close"]}, 200
+
+    def _tpl_pres_end(self, p, v, rec, creator, ident, ierr, now):
+        """op presEnd (0.21.92): a presenter pressed End in a room a template MADE (op room's mark, with "Close the room when the
+        presentation ends" on) -> the hub deletes the room exactly like an admin close (record + tombstone, its invites revoked, the
+        shares listed into it removed, its chat gone); the pages' note says the presentation ended. Only End calls this: hand over,
+        take over, a presenter's Leave and a dropped connection never do. A room without the mark (it existed before the template
+        ran) is never closed here. Who: that run's presenters (proven -- name + My room code, My room's owner token, unlocked
+        messages; never a name a page merely says), the room's creator (the device that made it) and admins."""
+        room = v["room"]
+        mk = rec.get("tpl") if isinstance(rec, dict) and isinstance(rec.get("tpl"), dict) else None
+        if not mk or not mk.get("close"):
+            return {"ok": False, "kept": True, "error": "this room was not made by a template to close when its presentation ends"}, 409
+        if p.get("run") and str(p.get("run")) != str(mk.get("run") or ""):
+            return {"ok": False, "kept": True, "error": "this room was made by another run of the template"}, 409
+        t = self._tplb().get(str(mk.get("id") or "")) if kastr_templates.TID_RE.match(str(mk.get("id") or "")) else None
+        presenter = t is not None and self._tpl_named(t, ident, now, roles=("presenters",))
+        admin = not v.get("guest") and bool(v.get("adminAny") or v.get("admin"))
+        if not (presenter or ((creator or admin) and not v.get("guest"))):   # an invited guest: only as a proven named presenter
+            if ierr and ierr[0].get("wrong"):
+                return ierr
+            return {"ok": False, "named": False, "error": "only the template's presenters, the room's creator and admins close it"}, 403
+        self.store.close_room(room, why="pres")
+        hook = ROOM_CLOSE_HOOK[0]
+        if hook is not None:
+            try:
+                hook(room)
+            except Exception as e:
+                self.log("relay: room %s closed but its chat could not be removed: %s" % (room, e))
+        self.log("relay auth: room %s closed -- its presentation ended (template %s, run %s, by %s)"
+                 % (room, mk.get("id"), mk.get("run"), v.get("by") or v.get("host")))
+        return {"ok": True, "closed": room}, 200
+
+    def _tpl_applied_to(self, tid, room, now, put=False):
+        """A room template applied to ANOTHER room: its deck opens from there for TPL_APPLIED_S (the named people and that room's
+        admins, as in its own room) -- the main presenter gets it ready there and presses Start. Memory only (hub)."""
+        with self.lock:
+            m = self.__dict__.setdefault("_tpl_applied", {})
+            for k in [k for k, at in m.items() if now - at > TPL_APPLIED_S]:
+                m.pop(k, None)
+            if put:
+                m[(tid, room)] = now
+                return True
+            return (tid, room) in m
+
+    def _tpl_pres_co(self, t, p, v, room, now):
+        """op presCo (0.21.91 co-presenters have the same powers and their OWN "Can control my mic and camera"): the main presenter
+        just pressed Start presenting -- each co-presenter's device hears, on its people beat, which backstage people the template
+        says THEY do not allow; their page switches those off once it presents deck `deck`. What it says comes from the hub's
+        template, never from the page (only the deck id does)."""
+        T = kastr_templates
+        pr = t.get("pres") if isinstance(t.get("pres"), dict) else {}
+        deck = str(p.get("deck") or "")
+        if not re.match(r"^[A-Za-z0-9_-]{4,40}$", deck):
+            return {"ok": False, "error": "which deck?"}, 400
+        main = next((x.get("name") for x in pr.get("presenters") or [] if isinstance(x, dict) and x.get("main")), "")
+        bs = [b for b in pr.get("backstage") or [] if isinstance(b, dict)]
+        try:
+            seen = list(self._p_seen_local(now))
+        except Exception:
+            seen = []
+        told, pl = 0, self._pl()
+        for x in pr.get("presenters") or []:
+            if not isinstance(x, dict) or x.get("main"):
+                continue
+            nk = T.name_key(x.get("name"))
+            deny = [b["name"] for b in bs if nk not in {T.name_key(c) for c in b.get("control") or []}]
+            # the device: the one the main presenter's page sees them on (like a person invite: a page names the device; what it
+            # is told comes from the template), else the name's latest device the hub knows (newest first)
+            to = p.get("to") if isinstance(p.get("to"), dict) else {}
+            host = next((str(h) for n, h in to.items() if T.name_key(n) == nk and HOST_RE.match(str(h or ""))), "")                 or next((y["host"] for y in seen if T.name_key(y.get("name")) == nk), "")
+            if not deny or not host or host == v["host"]:
+                continue
+            item = {"id": os.urandom(6).hex(), "kind": "tplco", "room": room, "tid": t["id"], "deck": deck, "owner": clean_label(main, 40),
+                    "deny": deny[:T.PRES_PEOPLE_MAX], "at": now}
+            with self.lock:
+                self._p_inbox_put_locked(host, item)
+                pl.seq += 1
+                pl.out.append({"seq": pl.seq, "at": now, "to": host, "item": item})
+                pl.out = pl.out[-PINBOX_KEEP:]
+            told += 1
+        if told:
+            self._p_thread()
+            try:
+                self.bans.nudge()
+            except Exception:
+                pass
+        return {"ok": True, "told": told}, 200
 
     def _tpl_snap(self, room, secs, p, v, scope, keep=None):
         """A room as it is now -> the template sections asked for (the hub's own records: the board, the lock's DIGEST, keep,
@@ -10286,6 +10633,39 @@ class AuthService:
             if (inv_plan["people"] or inv_plan["link"] or inv_plan["access"]) and not invites_ok:
                 note("invites", "Invites", "invites from a template need a room admin (the admin code or the room's creator)")
                 inv_plan = {"people": [], "link": None, "access": []}
+        mk = rec.get("tpl") if isinstance(rec.get("tpl"), dict) else None
+        if (mk and mk.get("id") == t["id"] and p.get("run") and str(p.get("run")) == str(mk.get("run") or "")
+                and on.get("pres") and isinstance(t.get("pres"), dict) and invites_ok):
+            # 0.21.92 "Create a new room for this": the room is new, so the template's presenters and backstage are invited to it
+            # (the usual person invite; their role waits for them there)
+            seen_h = {}
+            try:
+                for x in self._p_seen_local(now):
+                    k = T.name_key(x.get("name"))
+                    if k and k not in seen_h:
+                        seen_h[k] = x["host"]
+            except Exception:
+                pass
+            have = {T.name_key(x["name"]) for x in inv_plan["people"]}
+            mek = T.name_key(v.get("by"))
+            # the devices the applying page saw them on just before it made the room (a spoke's page the hub has not heard of):
+            # only for the template's own named people -- the same invite the page could send from People itself
+            for x in (p.get("people") if isinstance(p.get("people"), list) else [])[:24]:
+                if isinstance(x, dict) and HOST_RE.match(str(x.get("host") or "")):
+                    k = T.name_key(x.get("name"))
+                    if k and k not in seen_h:
+                        seen_h[k] = str(x["host"])
+            for x in (t["pres"].get("presenters") or []) + (t["pres"].get("backstage") or []):
+                k = T.name_key((x or {}).get("name"))
+                if not k or k in have or k == mek:
+                    continue
+                have.add(k)
+                h = seen_h.get(k)
+                if not h:
+                    note("invites", "Invite %s" % x.get("name"), "KASTR has not seen them in 30 days -- their role waits for them here")
+                elif h != v["host"]:
+                    inv_plan["people"].append({"name": x.get("name") or h, "host": h})
+            out["tplRoom"] = {"close": bool(mk.get("close")), "run": mk["run"]}
         out["invites"] = {"people": [x["name"] for x in inv_plan["people"]], "link": inv_plan["link"],
                           "access": [x.get("name") or x["host"] for x in inv_plan["access"]]}
         if on.get("pres") and t.get("pres"):
@@ -10295,16 +10675,22 @@ class AuthService:
             main = next((x for x in t["pres"].get("presenters") or [] if x.get("main")), None)
             if main:
                 mk = T.name_key(main.get("name"))
-                mh = ""
+                pt = p.get("presTo") if isinstance(p.get("presTo"), dict) else {}   # the device the applying page sees them on
+                mh = str(pt.get("host") or "") if T.name_key(pt.get("name")) == mk and HOST_RE.match(str(pt.get("host") or "")) else ""
                 try:
-                    for x in self._p_seen_local(now):   # newest first: the name's latest device
+                    for x in ([] if mh else self._p_seen_local(now)):   # newest first: the name's latest device
                         if T.name_key(x.get("name")) == mk:
                             mh = x["host"]
                             break
                 except Exception:
                     pass
                 me = T.name_key(v.get("by")) == mk or mh == v["host"]
-                out["presFor"] = {"name": main.get("name") or "", "me": bool(me), "known": bool(mh) or bool(me), "host": "" if me else mh}
+                here = str(p.get("here") or "")   # the room the applying page is in (its token is the target room's)
+                away = bool(me) and bool(SLUG_RE.match(here)) and here != room   # applied to ANOTHER room: my device keeps it for when I go there
+                out["presFor"] = {"name": main.get("name") or "", "me": bool(me), "known": bool(mh) or bool(me),
+                                  "host": v["host"] if away else "" if me else mh}
+                if away:
+                    out["presFor"]["away"] = True
         if on.get("view") and t.get("view"):
             out["view"] = t["view"]   # My view: the applying page applies it on its own device
         out["notes"] = notes
@@ -10382,8 +10768,9 @@ class AuthService:
         out["sent"] = sent
         pf = out.pop("presFor", None) if isinstance(out.get("presFor"), dict) else None
         if pf is not None:
+            self._tpl_applied_to(t["id"], room, now, put=True)   # its deck now opens from this room too (a fresh room it was applied to)
             host = pf.pop("host", "")
-            if host and not pf["me"]:   # the main presenter is elsewhere: their page hears it on its people beat (spokes: the long-poll)
+            if host and (not pf["me"] or pf.get("away")):   # the main presenter is elsewhere: their page hears it on its people beat (spokes: the long-poll)
                 item = {"id": os.urandom(6).hex(), "kind": "tplpres", "room": room, "tid": t["id"], "name": t["name"], "by": clean_label(by, 40),
                         "for": pf["name"], "at": now}
                 pl = self._pl()
@@ -17012,8 +17399,12 @@ def handle_api(handler, relay, path, set_relay_url=None):
     if path == "/api/relay/gif":   # 0.21.91: GIF search (GIPHY) -- GET the card (never the key); POST {key} | {remove} | {on}
         auth = getattr(relay, "auth", None)
         post = handler.command == "POST"
+        try:   # the fleet's standby hub keeps its own key for when it acts as the hub
+            standby = (relay.standby_view() or {}).get("role") in ("standby", "promoted") if callable(getattr(relay, "standby_view", None)) else False
+        except Exception:
+            standby = False
         if auth is not None:
-            reply(*(auth.gif_operator(_payload_of(handler) or {}) if post else auth.gif_operator_view()))
+            reply(*(auth.gif_operator(_payload_of(handler) or {}, standby=standby) if post else auth.gif_operator_view(standby=standby)))
         else:
             g = kastr_gif.for_dir(getattr(relay, "state_dir", None) or os.getcwd())
             reply(*(g.configure(_payload_of(handler) or {}) if post else (dict(g.view(), ok=True, hub=True, secured=False), 200)))
@@ -17290,6 +17681,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
         # 0.12.0: every room this relay remembers + the recently closed (readable like status)
         # 0.15.0: + the room groups
         out = {"rooms": relay.store.rooms_public(), "closed": relay.store.closed_public(),
+               "closedWhy": relay.store.closed_why_public(),   # 0.21.92
                "groups": relay.store.groups_public()}
         if hasattr(relay.store, "personal_public"):
             out["personal"] = relay.store.personal_public()   # 0.21.75: how many personal rooms (a count -- never whose)

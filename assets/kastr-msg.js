@@ -1930,7 +1930,7 @@
       convs: convs().map((c) => ({ conv: c.conv, title: c.title, unread: c.unread, last: preview(c.last) })), groups: [...S.groups.values()].map((g) => ({ gid: g.gid, name: g.name, members: g.members })) }),
     msgs: (conv) => [...S.recs.values()].filter((r) => !conv || convOf(r) === conv).sort((a, b) => (a.seq || 1e15) - (b.seq || 1e15))
       .map((r) => ({ seq: r.seq, from: r.fromName, mine: r.mine, text: r.text, files: (r.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size, fid: f.fid })), sys: r.sys ? sysText(r) : "", locked: !!r.locked, bad: !!r.bad, waiting: !!r.waiting, err: r.err || "",
-        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0, vo: r.vo || 0, opened: r.opened || 0 })),   // 0.21.93
+        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0, vo: r.vo || 0, opened: r.opened || 0, sched: !!r.sched, rel: r.rel || 0, cid: r.cid || "" })),   // 0.21.93
     timers: () => ({ tv: S.tv, skew: S.skew, convt: S.convt, next: Object.fromEntries(S.ttlNext), sched: S.sched || [] }),   // 0.21.93 rig
     idb: async () => ({ msgs: (await idbAll("msgs", "by", by()).catch(() => [])).map((r) => ({ seq: r.seq, ttl: r.ttl || 0, text: r.text || "" })),
       blobs: (await idbAll("blobs").catch(() => [])).map((b) => b.fid) }),   // 0.21.93 rig: what this device still keeps
@@ -1938,6 +1938,8 @@
     pull, init, open: openConv, unlock: (code) => unlock(code, false), picker: openPicker, trace,
     ctimer: (conv, s) => api({ op: "ctimer", as: S.name, conv, s }).then((d) => { pull(); return d; }),   // 0.21.93 rig
     vopen: (seq) => { const r = S.recs.get("seq:" + seq); return r ? voOpen(r) : null; },   // 0.21.93 rig
+    sched: (cid, d, rel) => api({ op: "sched", as: S.name, cid, do: d, rel }).then((x) => { pull(); return x; }),   // 0.21.93 rig
+    hubNow: () => hubNow(),   // 0.21.93 rig
     fileUrl: (seq, i) => { const r = S.recs.get("seq:" + seq); return r && r.files?.[i] ? fileUrl(r.files[i]) : null; },
     people: () => S.people,
     keys: (names, force) => keysFor(names, force),

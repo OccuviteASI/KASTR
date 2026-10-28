@@ -52,7 +52,7 @@ class WatchPage(unittest.TestCase):
         self.assertIn("if (rtspSuspended) return;", body_of(self.text, "  function syncNative(force) {", 1))
         self.assertIn("if (rtspSuspended) return;", body_of(self.text, "  function drawRtspGrid(g) {", 1))
         self.assertIn("if (rtspSuspended) return;", body_of(self.text, "  function gridEvictionTick() {", 1))
-        self.assertIn("if (rtspSuspended) return;", body_of(self.text, "  function nudgeFromViewer(fullPath) {", 1))
+        self.assertIn("if (rtspSuspended) return;", body_of(self.text, "  function nudgeFromViewer(fullPath, kind, from) {", 1))
         self.assertIn("if (rtspSuspended) return;", body_of(self.text, "    if (entry.retryTimer) return;              // already queued", 1))
         self.once("for (const g of ((live && !rtspSuspended) ? gridsSorted() : [])) {")
         self.once("enabled: live && !(slot.canvas && rtspSuspended),")

@@ -1760,6 +1760,37 @@ except ValueError:
 SCREEN_STALL_BACKOFF = [0, 30, 60, 120, 300]
 SCREEN_STALL_RESET_S = 120
 SCREEN_STALL_RELAY_S = 20   # 0.21.91: a moq session line (SOFT/HARD) this recent means the relay link, not the capture, stalled
+# 0.21.93 (field, Kordale's My room: a Teams window share's VIDEO stopped every few minutes while its SOUND kept playing; only
+# Pause + Resume brought the picture back): the watchdog above measures ffmpeg's OUTPUT BYTES, which a share with sound could
+# keep growing while its picture has stopped. A screen share's picture is a constant 30 fps clock (kastr_screen._clocked; the
+# paused card too), so a flat video FRAME count (-progress `frame=`) on a running pair is never normal: it is judged by its own
+# clock as well, with the same threshold, backoff and relay exemption, and shown in diag (videoFrames / videoAt).
+# Lab 2026-10-28 (bundled ffmpeg 9.0.1, the real clocked graph, a capture branch that stops without ending, PCM sound on stdin):
+# the overlay holds the clock AND ffmpeg's scheduler holds the sound with it -- frames and bytes go flat together, so the
+# output-bytes check already restarts that one ("capture froze"). Sound that keeps playing while the picture is gone therefore
+# points past ffmpeg (moq import / relay / the viewer); videoFrames climbing in diag during such a stall proves it. The frame
+# clock is the safety net for an ffmpeg that does let the sound through ("video stopped ... sound kept flowing" in launch.log).
+# 0.21.93 (item 4): the heal for the stall past ffmpeg. A VIEWER whose tile's picture stopped while its sound kept playing
+# re-subscribes on its own first; still stalled 6 s later, it reports to the owner (room.json `stalled`, kind "video" -- My room
+# and invite-link guests included). The owner's page posts /api/rtsp/heal and the pair restarts the cheapest part that cures it:
+# first only its `moq import` (a fresh relay session and announce -- ffmpeg, the capture and the sound loopback keep running;
+# the new moq starts at the next PAT, as LibMirror does), then -- a second report within HEAL_ESCALATE_S of an import restart
+# means that did not bring the picture back -- the whole pair (ffmpeg-first quiet() + a fresh start: what ONE half of Pause +
+# Resume does; Pause + Resume is two such restarts, onto the pause card and back). At most one heal per HEAL_GAP_S per share
+# and HEAL_MAX per HEAL_WINDOW_S; each one (and each refusal) is one launch.log line.
+HEAL_GAP_S = 30
+HEAL_MAX = 6
+HEAL_WINDOW_S = 600
+HEAL_ESCALATE_S = 120
+HEAL_SWAP_WAIT_S = 1.5    # the old moq's grace to close its session on EOF before it is killed
+
+
+def _close_quiet(f):
+    try:
+        if f is not None:
+            f.close()
+    except Exception:
+        pass
 
 
 def screen_exit_reason(url, who, code):
@@ -2084,6 +2115,10 @@ class Publisher:
         self.restartsTotal = 0
         self.lastSessionAt = None
         self.flowingAt = None       # 0.21.31: the last time ffmpeg's output grew -- the camera is really streaming
+        self.videoFrames = 0        # 0.21.93: ffmpeg's video frame count (-progress frame=) of the running generation
+        self.videoAt = None         # 0.21.93: the last time that count grew -- the picture is really moving
+        self._vFrames = 0
+        self._vSeen = False         # 0.21.93: this generation printed frame= (an encode that reports its video count)
         self.captureStalls = 0      # 0.21.91: frozen-capture watchdog restarts (screen shares) -- never forgotten
         self.lastCaptureStall = None   # 0.21.91: {at, quiet, gen, paused, rc} of the last one
         self._stallAt = 0.0
@@ -2095,6 +2130,14 @@ class Publisher:
         self.pumped = False         # 0.21.85: this generation's MPEG-TS passes a pump (a listed share's library copy rides on it)
         self.libMirror = None       # 0.21.85: (lib path, library URL) while this share is LISTED in the stream library
         self.libPipe = None         # 0.21.85: the running generation's LibMirror
+        self.heals = {"import": 0, "pair": 0, "limited": 0, "refused": 0}   # 0.21.93: viewer-reported video stalls healed here
+        self.lastHeal = None        # 0.21.93: {at, step, why, gen, ok, reason?} of the last heal request
+        self._healHist = []         # 0.21.93: when the heals of the last HEAL_WINDOW_S ran
+        self._mqArgv = None         # 0.21.93: this generation's moq argv (an import restart reuses it)
+        self._mqDst = None          # 0.21.93: where the pump writes (the current moq's stdin; None = between moqs, dropped)
+        self._mqSync = False        # 0.21.93: the next write starts at a PAT (a fresh moq reads the tables first)
+        self._reimp = None          # 0.21.93: an import restart in flight (the watcher ignores the old moq's exit)
+        self.importRestarts = 0     # 0.21.93: moq-only restarts -- never forgotten
 
     def info(self):
         return {"broadcast": self.broadcast,
@@ -2120,8 +2163,11 @@ class Publisher:
                 "lowLive": bool(self.lowPub is not None and self.lowPub.running),   # 0.21.7
                 "suspended": bool(self.suspended),                                   # 0.21.16: the box's RTSP switch is off
                 "flowingAt": self.flowingAt,                                         # 0.21.31
+                "videoFrames": self.videoFrames, "videoAt": self.videoAt,            # 0.21.93: video-only stalls
                 "captureStalls": self.captureStalls,                                 # 0.21.91: frozen-capture watchdog
                 "lastCaptureStall": self.lastCaptureStall,                           # 0.21.91
+                "heals": dict(self.heals), "lastHeal": self.lastHeal,                # 0.21.93: viewer-reported video stalls
+                "importRestarts": self.importRestarts,                               # 0.21.93
                 "library": self._library_info(),                                     # 0.21.84: the stream library (main pairs)
                 "listed": self._listed_info(),                                       # 0.21.85: listed there too (its room path kept)
                 "error": self.error, "since": self.since}
@@ -2219,6 +2265,7 @@ class Publisher:
             self._gen += 1
             gen = self._gen
             self._outSize = 0                                            # 0.21.31: this generation has delivered nothing yet
+            self._vFrames, self._vSeen, self.videoFrames = 0, False, 0       # 0.21.93: nor a video frame
             self._hard = {g: r for g, r in self._hard.items() if g >= gen}   # 0.12.0: older verdicts are spent
             ff_args, moq_args = self._args()
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -2228,6 +2275,8 @@ class Publisher:
                 pump = self.role == "main" and bool(self.bridge._lib_list_pump(self))
             except Exception:
                 pump = False
+            if self.role == "main" and is_screen(getattr(self.feed, "url", "")):
+                pump = True   # 0.21.93: a screen share's moq import can be restarted alone (restart_import) -- the pump swaps it
             try:
                 snd = is_screen(self.feed.url) and self.audio and self.role != "low" and not self.paused   # 0.21.20; 0.21.73: a paused share is silent
                 ff = subprocess.Popen(ff_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -2252,6 +2301,8 @@ class Publisher:
                 ff.stdout.close()       # moq owns the read end now
             self.procs = (ff, mq)
             self.pumped = pump
+            self._mqArgv = list(moq_args)                                # 0.21.93
+            self._mqDst, self._mqSync, self._reimp = (mq.stdin if pump else None), False, None
             # 0.9.8: into the job and the registry -- they die with KASTR now
             self.bridge._child_started(ff, ff_args, [self.feed.url], "ffmpeg")
             self.bridge._child_started(mq, moq_args, [self.broadcast], "moq")
@@ -2290,7 +2341,7 @@ class Publisher:
     def _pump(self, gen, ff, mq):
         """0.21.85: a LISTED share's pair -- ffmpeg's MPEG-TS to the room's moq (every byte written before the next is read: the
         back-pressure of the direct pipe it replaces) and a copy to the library's (LibMirror, never in the room's way)."""
-        src, dst = ff.stdout, mq.stdin
+        src = ff.stdout
         lm = LibMirror(self, gen)
         self.libPipe = lm
         off = 0
@@ -2302,24 +2353,42 @@ class Publisher:
                     break
                 if not b:
                     break
-                try:
-                    mv = memoryview(b)
-                    while mv:
-                        n = dst.write(mv)
-                        if not n:
-                            raise OSError("short write")
-                        mv = mv[n:]
-                except (OSError, ValueError):
-                    break
+                # 0.21.93: the room's moq of this moment -- an import restart (restart_import) swaps it; between two moqs the
+                # bytes are dropped (ffmpeg and the sound loopback never wait), and a fresh moq starts at the next PAT
+                # no swap in flight (or a stale generation's pump): the pair's own moq, as before 0.21.93
+                if gen == self._gen and (self._mqDst is not None or self._reimp is not None):
+                    dst = self._mqDst
+                else:
+                    dst = mq.stdin
+                w = b
+                if dst is not None and self._mqSync:
+                    i = ts_pat_start(b, off)
+                    if i is None:
+                        w = None
+                    else:
+                        w = b[i:]
+                        self._mqSync = False
+                if dst is not None and w:
+                    try:
+                        mv = memoryview(w)
+                        while mv:
+                            n = dst.write(mv)
+                            if not n:
+                                raise OSError("short write")
+                            mv = mv[n:]
+                    except (OSError, ValueError):
+                        if gen != self._gen or (self._reimp is None and (self._mqDst is dst or self._mqDst is None)):
+                            break   # the room's moq is gone (not swapped): the pair ends, the watcher restarts it
                 try:
                     lm.feed(b, off)
                 except Exception as e:
                     self.bridge.log("rtsp: library copy of %s: %s" % (self.broadcast, e))
                 off += len(b)
         finally:
-            for f in (dst, src):
+            for f in (self._mqDst if gen == self._gen else None, mq.stdin, src):
                 try:
-                    f.close()
+                    if f is not None:
+                        f.close()
                 except Exception:
                     pass
             lm.close()
@@ -2453,6 +2522,13 @@ class Publisher:
             for line in proc.stderr:
                 text = line.decode("utf-8", "replace").strip()
                 if text and tag == "ffmpeg" and PROGRESS_RE.match(text):   # 0.21.31: a -progress line, never an error
+                    if text.startswith("frame=") and text[6:].isdigit() and gen == self._gen:   # 0.21.93: the video's own clock
+                        n = int(text[6:])
+                        self._vSeen = True
+                        if n > self._vFrames:
+                            self._vFrames = self.videoFrames = n
+                            self.videoAt = time.time()
+                        continue
                     if text.startswith("total_size=") and text[11:].isdigit() and gen == self._gen:
                         n = int(text[11:])
                         if n > self._outSize:
@@ -2487,14 +2563,25 @@ class Publisher:
             self.lastSession = text[-160:]
             self.lastSessionAt = time.time()                             # 0.13.3
 
+    def _cur_mq(self, gen, mq):
+        """0.21.93: this generation's moq of this moment (an import restart swaps it in procs)."""
+        p = self.procs
+        return p[1] if gen == self._gen and len(p) == 2 and p[0] is not None else mq
+
     def _watch(self, gen, ff, mq, drains=()):
         # whichever ends first ends the pair
-        while ff.poll() is None and mq.poll() is None:
+        while True:
+            m = self._cur_mq(gen, mq)
+            if ff.poll() is not None:
+                break
+            if m.poll() is not None and self._reimp is None and self._cur_mq(gen, mq) is m:
+                break   # 0.21.93: an old moq that an import restart is replacing is not the pair ending
             time.sleep(0.5)
             if self.stopping or gen != self._gen:
                 return
             if self._stall_check(gen):   # 0.21.91: a frozen screen capture -- restarted (the restart ends this generation)
                 return
+        mq = self._cur_mq(gen, mq)
         # 0.13.1: who ended the pair (poll() = its exit code), before the
         # survivor is killed below
         rc = ff.poll()
@@ -2561,7 +2648,11 @@ class Publisher:
                 or gen != self._gen or not self.running or self.standby or self.suspended):
             return False
         now = time.time() if now is None else now
-        last = max(self.since or now, self.flowingAt or 0)
+        last_out = max(self.since or now, self.flowingAt or 0)
+        # 0.21.93: and the picture's own clock, once this generation reports it -- bytes alone keep flowing on sound
+        last_vid = max(self.since or now, self.videoAt or 0) if self._vSeen else last_out
+        last = min(last_out, last_vid)
+        video_only = now - last_out < SCREEN_STALL_S <= now - last_vid
         if now - last < SCREEN_STALL_S:
             if self._stallRun and now - self._stallAt >= SCREEN_STALL_RESET_S:
                 self._stallRun = 0
@@ -2574,11 +2665,17 @@ class Publisher:
         self.captureStalls += 1
         self._stallAt = now
         quiet = round(now - last, 1)
-        self.lastCaptureStall = {"at": now, "quiet": quiet, "gen": gen, "paused": bool(self.paused), "rc": bool(self.rcmode)}
-        self.bridge.log("screen: share %s capture froze -- no new picture for %.0f s (gen %d, ffmpeg still running, %s) -- "
-                        "restarting the capture (freeze #%d)" % (self.broadcast, quiet, gen,
-                                                                 "never streamed" if (self.flowingAt or 0) < (self.since or 0) else "streamed before",
-                                                                 self.captureStalls))
+        self.lastCaptureStall = {"at": now, "quiet": quiet, "gen": gen, "paused": bool(self.paused), "rc": bool(self.rcmode),
+                                 "kind": "video" if video_only else "output", "frames": self._vFrames}   # 0.21.93
+        if video_only:   # 0.21.93: the field case -- the sound kept the output growing, the picture had stopped
+            self.bridge.log("screen: share %s video stopped -- no new video frame for %.0f s while its sound kept flowing (frames flat "
+                            "at %d, gen %d, ffmpeg still running) -- restarting the capture (freeze #%d)"
+                            % (self.broadcast, quiet, self._vFrames, gen, self.captureStalls))
+        else:
+            self.bridge.log("screen: share %s capture froze -- no new picture for %.0f s (gen %d, ffmpeg still running, %s) -- "
+                            "restarting the capture (freeze #%d)" % (self.broadcast, quiet, gen,
+                                                                     "never streamed" if (self.flowingAt or 0) < (self.since or 0) else "streamed before",
+                                                                     self.captureStalls))
         threading.Thread(target=self._stall_restart, name="kastr-capture-stall", daemon=True).start()
         return True
 
@@ -2640,6 +2737,139 @@ class Publisher:
         t.daemon = True
         self._timer = t
         t.start()
+
+    def restart_import(self, why="heal"):
+        """0.21.93: restart only this pair's `moq import` -- a fresh relay session and announce of the same broadcast -- while
+        ffmpeg (the capture, the encoder, the sound loopback) keeps running. The old moq gets EOF (its session closes and the
+        relay withdraws the broadcast at once; killed after HEAL_SWAP_WAIT_S), the new one is fed from the next PAT. Needs the
+        pump (every screen share's main pair has it). False = nothing to restart (not running, no pump, one in flight)."""
+        with self._lock:
+            if (self.stopping or not self.running or not self.pumped or self._reimp is not None or len(self.procs) != 2
+                    or not self._mqArgv or self.standby or self.suspended):
+                return False
+            gen = self._gen
+            ff, old = self.procs
+            if ff.poll() is not None:
+                return False
+            self._reimp = {"gen": gen, "why": str(why or "")[:32], "at": time.time()}
+            self._mqDst = None               # the pump drops bytes until the new moq is in
+        threading.Thread(target=self._reimport_run, args=(gen, ff, old, why), daemon=True, name="kastr-import-restart").start()
+        return True
+
+    def _reimport_run(self, gen, ff, old, why):
+        t0 = time.time()
+        try:
+            # EOF: moq ends its session, the relay withdraws the broadcast. Closed on a helper thread: a pump write blocked on a
+            # wedged moq must not hold this up (the kill below breaks that write)
+            threading.Thread(target=_close_quiet, args=(old.stdin,), daemon=True, name="kastr-import-eof").start()
+            try:
+                old.wait(timeout=HEAL_SWAP_WAIT_S)
+                how = "closed"
+            except Exception:
+                how = "killed"
+                try:
+                    old.kill()
+                    old.wait(timeout=2)
+                except Exception:
+                    pass
+            self.bridge._child_ended(old.pid)
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            with self._lock:
+                if gen != self._gen or self.stopping or ff.poll() is not None:
+                    self._reimp = None
+                    return
+                argv = list(self._mqArgv)
+            try:
+                mq = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                      creationflags=flags, bufsize=0)
+            except OSError as e:
+                self.bridge.log("rtsp import restart %s gen=%d failed: %s -- restarting the pair" % (self.broadcast, gen, e))
+                with self._lock:
+                    self._reimp = None
+                if gen == self._gen and not self.stopping:
+                    self.nudge("heal-import-failed")
+                return
+            self.bridge._child_started(mq, argv, [self.broadcast], "moq")
+            d = threading.Thread(target=self._drain, args=(mq, "moq", gen), daemon=True)
+            with self._lock:
+                if gen != self._gen or self.stopping:
+                    stale = True
+                else:
+                    stale = False
+                    self.procs = (ff, mq)
+                    self._mqSync = True
+                    self._mqDst = mq.stdin
+                    self.importRestarts += 1
+                    try:
+                        self._drains.append(d)
+                    except Exception:
+                        pass
+                self._reimp = None
+            if stale:
+                try:
+                    mq.kill()
+                except OSError:
+                    pass
+                self.bridge._child_ended(mq.pid)
+                return
+            d.start()
+            self.bridge.log("rtsp import restart %s gen=%d why=%s -- old moq %s %s, new moq %s in %.1f s (ffmpeg %s kept, frames %d; import restart #%d)"
+                            % (self.broadcast, gen, why, old.pid, how, mq.pid, time.time() - t0, ff.pid, self._vFrames, self.importRestarts))
+        except Exception as e:
+            with self._lock:
+                self._reimp = None
+            self.bridge.log("rtsp import restart %s failed: %s" % (self.broadcast, e))
+
+    def heal(self, why="viewer-video", now=None):
+        """0.21.93: a viewer's report that this screen share's PICTURE stopped while its sound kept playing (see HEAL_GAP_S).
+        Restarts the cheapest part that cures it: the moq import alone first, the whole pair when an import restart in the
+        last HEAL_ESCALATE_S did not help. Rate-limited per share. Returns {"did": import|pair|limited|refused, ...}."""
+        now = time.time() if now is None else now
+        why = str(why or "viewer-video")[:32]
+        refuse = ("not a screen share" if self.role != "main" or not is_screen(getattr(self.feed, "url", "")) else
+                  "stopping" if self.stopping else "asleep" if self.standby else "switched off" if self.suspended else
+                  "paused (its card has no sound -- not this stall)" if self.paused else
+                  "not running (the ladder restarts it)" if not self.running else "")
+        if refuse:
+            self.heals["refused"] += 1
+            self.lastHeal = {"at": now, "step": "refused", "why": why, "gen": self._gen, "reason": refuse}
+            self.bridge.log("rtsp heal %s refused why=%s -- %s" % (self.broadcast, why, refuse))
+            return {"did": "refused", "reason": refuse}
+        hist = [t for t in self._healHist if now - t < HEAL_WINDOW_S]
+        self._healHist = hist
+        last = self.lastHeal if self.lastHeal and self.lastHeal.get("step") in ("import", "pair") else None
+        limit = ""
+        if hist and now - hist[-1] < HEAL_GAP_S:
+            limit = "healed %.0f s ago (one per %d s)" % (now - hist[-1], HEAL_GAP_S)
+        elif len(hist) >= HEAL_MAX:
+            limit = "%d heals in the last %d min (at most %d)" % (len(hist), HEAL_WINDOW_S // 60, HEAL_MAX)
+        if limit:
+            self.heals["limited"] += 1
+            self.bridge.log("rtsp heal %s limited why=%s -- %s" % (self.broadcast, why, limit))
+            return {"did": "limited", "reason": limit}
+        step = "import"
+        if last and last["step"] == "import" and now - last["at"] < HEAL_ESCALATE_S:
+            step = "pair"      # the moq-only restart did not bring the picture back
+        if step == "import" and not self.restart_import(why):
+            step = "pair"      # no pump / one in flight: the whole pair
+        hist.append(now)
+        self.heals[step] += 1
+        self.lastHeal = {"at": now, "step": step, "why": why, "gen": self._gen}
+        self.bridge.log("rtsp heal %s step=%s why=%s gen=%d frames=%d (heal %d in %d min; %s)"
+                        % (self.broadcast, step, why, self._gen, self._vFrames, len(hist), HEAL_WINDOW_S // 60,
+                           "moq import only, ffmpeg kept" if step == "import" else
+                           "the import restart %.0f s ago did not help -- full pair restart" % (now - last["at"]) if last and last["step"] == "import" else
+                           "full pair restart"))
+        if step == "pair":
+            threading.Thread(target=self._heal_pair, name="kastr-heal-pair", daemon=True).start()
+        return {"did": step, "n": len(hist)}
+
+    def _heal_pair(self):
+        try:
+            if self.quiet():
+                self.nudge("heal")
+        except Exception as e:
+            self.bridge.log("rtsp heal %s pair restart failed: %s" % (self.broadcast, e))
 
     def quiet(self):
         """0.21.83 (D) (lab v02183: after a source switch the admin's player waited 4-20 s, sometimes for good): end the running
@@ -5034,6 +5264,13 @@ class Bridge:
             pub.nudge(why)
         return bool(pub)
 
+    def heal(self, feed_id, why="viewer-video"):
+        """0.21.93: a viewer's video-stall report against my screen share (Publisher.heal)."""
+        pub = self._pubs.get(int(feed_id))
+        if not pub:
+            return {"did": "refused", "reason": "no such share"}
+        return pub.heal(why)
+
     def publication(self, feed_id):
         pub = self._pubs.get(int(feed_id))
         return pub.info() if pub else None
@@ -5539,6 +5776,7 @@ def handle_api(handler, bridge, path):
         return True
 
     if path in ("/api/rtsp/publish", "/api/rtsp/unpublish", "/api/rtsp/nudge", "/api/rtsp/suspend",   # 0.21.16: suspend
+                "/api/rtsp/heal",                                            # 0.21.93: a viewer's video stall
                 "/api/rtsp/pause", "/api/rtsp/retarget",                                             # 0.21.73: a share paused / swapped
                 "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note",    # 0.12.0: keep, persist; 0.21.5: note
                 "/api/rtsp/xs",                                             # 0.21.75: the other rooms a camera shows in
@@ -5625,8 +5863,10 @@ def handle_api(handler, bridge, path):
                     reply(bridge.lib_shares(payload))
                 else:
                     reply(bridge.lib_public())
+            elif path == "/api/rtsp/heal":                                # 0.21.93: {id, why} -> {did, reason?|n}
+                reply(bridge.heal(payload.get("id"), str(payload.get("why") or "viewer-video").strip()[:32]))
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
-                text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:240]
+                text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:400]   # 0.21.93: was 240 -- a video-stall line carries its clocks + caption
                 if text:
                     bridge.log("page: " + text)
                 reply({"ok": bool(text)})

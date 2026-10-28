@@ -483,6 +483,114 @@ def maximize_when_shown(proc, limit=30.0, profile=None):
     note("window: the window did not show within %d s -- left as it opened" % int(limit))
 
 
+# 0.21.92 (Kenton: "Start minimized" next to "Start KASTR when I sign in to this computer"): the sign-in launch carries
+# --minimized (kastr_serve.AUTORUN_FLAG). The window opens as always (maximized when it was), the launcher then minimizes it --
+# the page still connects and goes straight into the main room -- and a restore from the taskbar brings it back maximized when it
+# was. Taken out of argv like an invite, so an update / restart relaunch, a browser relaunch and every hand launch open normally.
+START_MINIMIZED = [False]
+
+
+def split_minimized_argv(argv):
+    """-> (was --minimized there, the rest of argv)."""
+    rest = [a for a in list(argv or []) if str(a) != kastr_serve.AUTORUN_FLAG]
+    return len(rest) != len(list(argv or [])), rest
+
+
+def _starts_maximized():
+    """Does this launch's window open maximized (window.json says so, or nothing usable is saved)?"""
+    try:
+        return "--start-maximized" in window_args()
+    except Exception:
+        return True
+
+
+def _win_minimize(hwnd, restore_max):
+    """Windows: minimize without activating anything (SW_SHOWMINNOACTIVE, through the window placement) and, when the window
+    should come back maximized, mark the placement so (WPF_RESTORETOMAXIMIZED) -> is it minimized now?"""
+    import ctypes
+    from ctypes import wintypes as wt
+
+    class WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [("length", wt.UINT), ("flags", wt.UINT), ("showCmd", wt.UINT), ("ptMinPosition", wt.POINT),
+                    ("ptMaxPosition", wt.POINT), ("rcNormalPosition", wt.RECT)]
+    user32 = ctypes.windll.user32
+    wp = WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(WINDOWPLACEMENT)
+    if user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+        if restore_max or user32.IsZoomed(hwnd):
+            wp.flags |= 0x0002   # WPF_RESTORETOMAXIMIZED
+        wp.showCmd = 7           # SW_SHOWMINNOACTIVE
+        user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
+    if not user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 7)
+    return bool(user32.IsIconic(hwnd))
+
+
+def _minimize_windows(pid, restore_max):
+    """Windows: minimize the visible Chromium top-level windows of `pid` -> how many."""
+    import ctypes
+    from ctypes import wintypes as wt
+    user32 = ctypes.windll.user32
+    found = []
+    proc_t = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def cb(hwnd, _):
+        try:
+            if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4) or user32.IsIconic(hwnd):
+                return True
+            owner = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value != pid:
+                return True
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, cls, 64)
+            r = wt.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            if cls.value.startswith("Chrome_WidgetWin") and r.right - r.left >= 200 and r.bottom - r.top >= 150:
+                found.append(hwnd)
+        except Exception:
+            pass
+        return True
+    user32.EnumWindows(proc_t(cb), 0)
+    return sum(1 for hwnd in found if _win_minimize(hwnd, restore_max))
+
+
+def minimize_when_shown(proc, limit=30.0, profile=None):
+    """0.21.92: the sign-in launch's window -- once it shows (in the process this started, or in whichever browser holds our
+    profile), minimize it. Takes the place of maximize_when_shown for that launch: the window keeps its maximized state for
+    the restore instead of being shown maximized."""
+    t0 = time.monotonic()
+    pid = getattr(proc, "pid", None)
+    restore_max = _starts_maximized()
+    while time.monotonic() - t0 < limit:
+        try:
+            if proc.poll() is None:
+                pids = [pid]
+            else:
+                pids = _browser_pids_for(profile) if profile else []
+                if not pids:
+                    time.sleep(0.5)
+                    continue
+            if WINDOWS:
+                n = sum(_minimize_windows(p, restore_max) for p in pids)
+            elif sys.platform.startswith("linux"):
+                import kastr_x11
+                if kastr_x11.session_kind() != "x11":
+                    note("window: Start minimized needs an X11 session (Wayland lets no app minimize a window) -- left open")
+                    return
+                n = sum(kastr_x11.iconify_pid(p, maximize=restore_max) for p in pids)
+            else:
+                return
+        except Exception as e:
+            note("window: could not minimize (%s)" % e)
+            return
+        if n:
+            note("window: started minimized, as chosen for the sign-in start (%.1f s after launch)" % (time.monotonic() - t0))
+            return
+        time.sleep(0.1)
+    note("window: the window did not show within %d s -- left as it opened" % int(limit))
+
+
 def window_args():
     """Chrome flags to put the window back where it was.
 
@@ -604,6 +712,29 @@ def feed_version_ok(info, theirs):
     return offered == str(theirs or "").strip(), offered
 
 
+AUTORUN_FLAG_SINCE = (0, 21, 92)   # the first launcher that knows --minimized
+
+
+def _vtuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))[:3])
+
+
+def autorun_for_version(theirs):
+    """0.21.92: this machine is about to run KASTR v{theirs}. A launcher older than 0.21.92 refuses the unknown --minimized
+    (its argument error ends the sign-in start), so the flag leaves the autorun entry first; the next 0.21.92+ start puts it
+    back from the saved choice. -> what was done ("" = nothing)."""
+    t = _vtuple(theirs)
+    if not t or t >= AUTORUN_FLAG_SINCE:
+        return ""
+    try:
+        did = kastr_serve.autorun_flag_fix(False)
+    except Exception as e:
+        did = "could not check the sign-in start (%s)" % e
+    if did:
+        note("autorun: %s -- v%s does not know %s" % (did, theirs, kastr_serve.AUTORUN_FLAG))
+    return did
+
+
 def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
     """Download, verify, swap and relaunch as the authority's version.
 
@@ -664,6 +795,7 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             raise RuntimeError("checksum mismatch")
         if os.path.getsize(tmp) != int(info.get("size") or 0):
             raise RuntimeError("size mismatch")
+        autorun_for_version(theirs)   # 0.21.92: before a launcher that may not know --minimized runs at sign-in
         # 0.21.3: Windows -- a detached helper swaps the files after we exit and starts the new build at its final
         # path; no running image is ever renamed (PyInstaller onefile aborts on that, see swap_via_helper_windows)
         if WINDOWS and getattr(sys, "frozen", False) and not _takeover_enabled():
@@ -2495,10 +2627,17 @@ def launch(browser, url, page):
 def _maximize_later(proc):
     if MACOS:
         return
+    mini, START_MINIMIZED[0] = START_MINIMIZED[0], False   # 0.21.92: the sign-in launch's first window only
     if USER_BROWSER[0]:   # 0.21.88: the person's own browser -- only the ONE new KASTR window, never their other windows
         before = _PRE_WINDOWS[0]
         if before is not None:
-            threading.Thread(target=place_user_window, args=(before,), daemon=True, name="kastr-place").start()
+            if mini:
+                threading.Thread(target=place_user_window, args=(before,), kwargs={"minimize": True}, daemon=True, name="kastr-place").start()
+            else:
+                threading.Thread(target=place_user_window, args=(before,), daemon=True, name="kastr-place").start()
+        return
+    if mini:
+        threading.Thread(target=minimize_when_shown, args=(proc,), kwargs={"profile": _ACTIVE_PROFILE}, daemon=True, name="kastr-minimize").start()
         return
     if saved_maximized():
         threading.Thread(target=maximize_when_shown, args=(proc,), kwargs={"profile": _ACTIVE_PROFILE}, daemon=True, name="kastr-maximize").start()
@@ -2585,10 +2724,12 @@ def _win_place(hwnd, geom):
     return "placed"
 
 
-def place_user_window(before, limit=30.0):
+def place_user_window(before, limit=30.0, minimize=False):
     geom = _saved_geom()
     if not geom or not window_geom_ok_launcher(geom):
-        return
+        if not minimize:
+            return
+        geom = None   # 0.21.92: nothing to put back, but the sign-in launch's window still goes to the taskbar
     t0 = time.monotonic()
     while time.monotonic() - t0 < limit:
         try:
@@ -2597,6 +2738,23 @@ def place_user_window(before, limit=30.0):
             note("window: could not look for the KASTR window (%s)" % e)
             return
         if new:
+            if minimize:   # 0.21.92: the sign-in launch -- its bounds go back, then it is minimized (maximized for the restore)
+                try:
+                    restore_max = bool(geom and geom.get("maximized") is True)
+                    if WINDOWS:
+                        if geom and not restore_max:
+                            _win_place(new[0], geom)
+                        _win_minimize(new[0], restore_max)
+                    else:
+                        import kastr_x11
+                        if kastr_x11.session_kind() != "x11":
+                            note("window: Start minimized needs an X11 session (Wayland lets no app minimize a window) -- left open")
+                            return
+                        kastr_x11.iconify_xid(new[0], maximize=restore_max)
+                    note("window: the KASTR window in your browser started minimized, as chosen for the sign-in start")
+                except Exception as e:
+                    note("window: could not minimize the KASTR window (%s)" % e)
+                return
             try:
                 if WINDOWS:
                     done = _win_place(new[0], geom)
@@ -3445,6 +3603,9 @@ def build_parser(ini):
     # 0.21.75: a room invite link (kastr://join?i=..&room=..&relay=..) -- the page opens that room with no codes
     ap.add_argument("--invite", metavar="URL", default=None,
                     help="open a room invite link (kastr://join?... -- also accepted as a bare argument)")
+    # 0.21.92: what the sign-in start (Profile > Start minimized) runs with; main() takes it out of argv first
+    ap.add_argument(kastr_serve.AUTORUN_FLAG, action="store_true",
+                    help="open the window minimized (the sign-in start's choice); a relaunch opens normally")
     return ap
 
 
@@ -3452,9 +3613,12 @@ def main():
     ini, ini_path = read_ini()
     # 0.21.75: an invite link rides the command line once -- taken out of argv, so an update relaunch never replays it
     invite_url, _rest = split_invite_argv(sys.argv[1:])
+    START_MINIMIZED[0], _rest = split_minimized_argv(_rest)   # 0.21.92: the sign-in start's --minimized, once
     sys.argv[1:] = _rest
     args = build_parser(ini).parse_args(_rest)   # 0.12.0: parser factored out (testable)
     args.invite = invite_url
+    if START_MINIMIZED[0]:
+        note("window: started at sign-in with %s -- the window opens minimized" % kastr_serve.AUTORUN_FLAG)
     register_url_protocol()                       # 0.21.75: every launch (the exe may have moved); never fails
     # 0.21.86: an invite opened just before an update / restart relaunch is offered again (the file lives INVITE_PENDING_S)
     if kastr_serve.invite_pending_restore(os.path.join(state_dir(), "invite-pending.json")) and not invite_url:
@@ -3674,6 +3838,10 @@ def main():
         # relaunch wait -- never hand the window to it; take the next port.
         note("relaunch: KASTR %s (pid %s) still answers on port %d -- not handing over"
              % (squatter.get("version"), squatter.get("pid"), args.port))
+    if squatter and same_build(squatter) and not args.no_browser and not relaunched and START_MINIMIZED[0] and not args.invite:
+        note("KASTR %s already on port %d (pid %s): the sign-in start leaves it as it is"
+             % (squatter.get("version"), args.port, squatter.get("pid")))   # 0.21.92
+        return 0
     if squatter and same_build(squatter) and not args.no_browser and not relaunched:
         browser = find_browser()
         note("KASTR %s already on port %d (pid %s): handing the window over"
@@ -3779,6 +3947,12 @@ def main():
     # 0.8.10: shared-file storage and LAN naming no longer need a hosted relay
     kastr_serve.STATE_DIR = state_dir()
     kastr_serve.HTTP_PORT = port
+    try:   # 0.21.92: a "Start minimized" flag an older KASTR's run had to drop comes back (autorun_for_version)
+        _did = kastr_serve.autorun_flag_fix(True)
+        if _did:
+            note("autorun: " + _did)
+    except Exception as e:
+        note("autorun: could not check the sign-in start (%s)" % e)
     import kastr_relay as _kr_web      # main() imports kastr_relay locally further down, so bind the name here too
     _kr_web.WEB_PORT = port              # 0.14.0 F: the token service advertises it on /api/auth
     kastr_serve.LAN_OK = args.host not in ("127.0.0.1", "localhost", "::1")

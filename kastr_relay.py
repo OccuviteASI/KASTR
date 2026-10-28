@@ -15470,6 +15470,8 @@ class Relay:
                 merged.sort(key=_id)
                 with open(fp, "w", encoding="utf-8", newline="") as f:
                     f.write("\n".join(merged) + "\n")
+                import kastr_chat as _kc   # 0.21.93: what either copy deleted stays deleted (its line overwritten)
+                _kc.scrub_file(fp)
                 if c.get("keep"):
                     open(os.path.join(cdir, room + ".keep"), "a").close()
                 chats += 1
@@ -15481,6 +15483,7 @@ class Relay:
             if cs is not None:
                 with cs.lock:
                     cs._last_id.clear()
+                    cs._due = None   # 0.21.93: the timers look at every room again
         except Exception:
             pass
         msgs = self._msg_takeover(d.get("messages"), base, tok)   # 0.21.88: the messages store comes too
@@ -16618,6 +16621,9 @@ class Relay:
                         f.seek(int(c.get("from") or 0))
                         f.truncate()
                         f.write(str(c.get("text") or "").encode("utf-8"))
+                    if '"del"' in str(c.get("text") or "") or '"sdone"' in str(c.get("text") or ""):
+                        import kastr_chat as _kc   # 0.21.93: a tombstone arrived -- the line it kills is overwritten here too (same size)
+                        _kc.scrub_file(path)
                     keep = os.path.join(rdir, room + ".keep")
                     if c.get("keep"):
                         open(keep, "a").close()

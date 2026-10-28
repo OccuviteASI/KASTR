@@ -1286,6 +1286,30 @@
   #kPtBar .stop { background:#fff; color:#0f2235; font-weight:600; }
   /* 0.21.42 (Kenton: "a stylized popup in the middle of the screen, not just a chrome popup"): KASTR's own yes/no question */
   #kConfirm { position:fixed; inset:0; z-index:140; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  /* 0.21.92 I: remove / ban -- Ban <name>... (a segmented choice of how long), the danger row in person menus, the Bans lists */
+  #mineMenu .mi.danger, #mineMenu .mi.danger .mico { color:var(--asi-red); }
+  #mineMenu .mi.danger:hover { background:var(--asi-red); color:#fff; }
+  #mineMenu .mi.danger:hover .mico { color:#fff; }
+  #kBanDlg { position:fixed; inset:0; z-index:141; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kBanDlg[hidden] { display:none; }
+  #kBanDlg .popcard { position:static; width:min(440px, calc(100vw - 32px)); max-height:none; }
+  #kBanDlg .body { padding:16px 16px 2px; flex:none; overflow:visible; }
+  #kBanDlg .bdmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
+  #kBanDlg .bddet { margin:8px 0 0; font-size:12px; line-height:1.5; color:var(--text-dim); }
+  #kBanDlg .seg { display:flex; flex-wrap:wrap; margin:12px 0 0; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  #kBanDlg .seg button { flex:1 1 auto; background:transparent; border:0; border-left:1px solid var(--line); color:var(--text-dim); font-size:12.5px; padding:7px 8px; cursor:pointer; height:auto; min-height:0; }
+  #kBanDlg .seg button:first-child { border-left:0; }
+  #kBanDlg .seg button.on { background:var(--asi-red); color:#fff; }
+  #kBanDlg .seg button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:-2px; }
+  #kBanDlg .bderr { margin:8px 0 0; font-size:12px; color:var(--asi-red); }
+  #kBanDlg .bderr[hidden] { display:none; }
+  #kBanDlg .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:14px 16px 16px; }
+  #kBanDlg .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kBanDlg .kcbtns .danger { background:var(--asi-red); color:#fff; }
+  #kRoomSet .rsban[hidden] { display:none; }
+  #kRoomSet .rsbanlist { display:flex; flex-direction:column; gap:4px; }
+  #kRoomSet .rsbanlist .rsinvrow .sub, #kMyShare .msbans .sub { color:var(--text-mute); font-size:11.5px; }
+  /* end 0.21.92 I: remove / ban */
   #kConfirm[hidden] { display:none; }
   /* 0.21.65 (Kenton: "Ability to change room settings after the fact. Only for admin or creator. Right click menu.") */
   #kRoomSet { position:fixed; inset:0; z-index:139; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
@@ -3915,6 +3939,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     msg: '<path d="M2.5 4.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1H7.5l-3 2.5v-2.5h-1a1 1 0 0 1-1-1z"/><path d="M15.5 7h1a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-1v2.3l-3-2.3H9.5a1 1 0 0 1-1-1V13"/>',
     clip: '<path d="M14.5 9.5 9 15a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3L7.5 13a1.1 1.1 0 0 1-1.6-1.6L11 6.3"/>',
     send: '<path d="M3 10 17 3l-4.5 14-3-5.5z" /><path d="M9.5 11.5 17 3"/>',
+    ban: '<circle cx="10" cy="10" r="7"/><path d="M5.1 5.1l9.8 9.8"/>',   // 0.21.92 I: remove / ban -- Ban <name>...
   };
   function icon(name, cls) {
     return '<svg class="icon ' + name + (cls ? " " + cls : "")
@@ -4215,7 +4240,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const on = it.value === current || it.on === true;
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "mi" + (on ? " on" : "");
+      b.className = "mi" + (on ? " on" : "") + (it.danger ? " danger" : "");   // 0.21.92 I: remove / ban -- Ban <name>... in red
       if (withIcons) {   // 0.21.23: every row keeps the glyph column so the words line up
         const ic = document.createElement("span");
         ic.className = "mico";
@@ -5537,6 +5562,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (st.owner) personalOwners.set(room, String(st.owner));
     if (typeof st.co === "boolean" && st.co !== authCo) { authCo = st.co; try { paintRoomInfo(); } catch {} }
     if (st.open === null || st.open === undefined) return;   // the hub's word is late here -- my session decides
+    if (st.banned || st.removed) { rbPersonalOut(room, st); return; }   // 0.21.92 I: remove / ban -- the owner removed / banned me
     if (st.open && st.access !== false) return;
     const owner = String(st.owner || "") || "The owner";
     const why = !st.open ? (st.why === "left" ? owner + " left their room" : owner + " is no longer in their room") : owner + " removed your access to their room";
@@ -5562,11 +5588,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function personalEnded(room, info) {
     const owner = String(info?.owner || "") || personalOwners.get(room) || "";
     const who = owner || "The owner", kind = String(info?.kind || "left");
-    const title = kind === "revoked" ? who + " took back your invite link"
+    const rbt = rbEndedText(room, kind, who, owner, info);   // 0.21.92 I: remove / ban
+    const title = rbt ? rbt.title : kind === "revoked" ? who + " took back your invite link"
       : kind === "access" ? who + " removed your access to their room"
       : kind === "gone" ? who + " is no longer in their room \u2014 the room closed"
       : who + " left their room \u2014 the room closed";
-    const detail = kind === "revoked" || kind === "access" ? "Ask " + (owner || "them") + " for a new invite link to come back."
+    const detail = rbt ? rbt.detail : kind === "revoked" || kind === "access" ? "Ask " + (owner || "them") + " for a new invite link to come back."
       : "Join again with the same invite link once " + (owner || "they") + " " + (owner ? "is" : "are") + " back in it (while the link still works).";
     pEnded = { room, owner, kind };
     log("My room: session ended \u2014 " + title);
@@ -5644,6 +5671,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow"><span class="lbl">Invite links</span><div class="msttl"><button type="button" data-t="3600">1 hour</button><button type="button" data-t="86400">24 hours</button><button type="button" data-t="604800">7 days</button><span class="sp"></span><button type="button" class="mscopy">Copy invite link</button></div>'
       + '<div class="msplist mslinks"></div>'
       + '<p class="rshint">Anyone with a link joins while you are in My room, without any code. Revoke a link to stop it letting anyone else in.</p></div>'
+      + '<div class="rsrow msban" hidden><span class="lbl">Bans</span><div class="msplist msbans"></div>'   // 0.21.92 I: remove / ban
+      + '<p class="rshint">People you banned from My room and until when. Lift lets them back in at once.</p></div>'
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="pmok msclose">Close</button></div></div>';
     document.body.appendChild(el);
@@ -5743,6 +5772,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
     if (!d.ok) { msEl?.__say(d.error || "Could not load who has access.", true); return; }
     msPaintList(d);
+    rbMsLoad();   // 0.21.92 I: remove / ban -- My room's Bans
   }
   async function personalShareOpen() {
     if (!personalGet()) { personalDialog(); return; }
@@ -9759,6 +9789,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const tileName = p.cam || (p.content || [])[0];
     if (tileName && tiles.get(tileName)?.pane?.__openMenu) return true;
     if (personInviteItems(p)) return true;   // 0.21.78: Invite to <this room> / My room
+    if (rbTargets(p.key).length && rbCan()) return true;   // 0.21.92 I: remove / ban (an admin; My room's owner)
     return !!(p.viewer && authRole === "admin");
   }
   // 0.21.78 (Kenton: "Allow right clicking on a person in the people menu to have the same options as on the left"): the rail and
@@ -9769,17 +9800,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const pane = tileName ? tiles.get(tileName)?.pane : null;
     if (pane?.__openMenu) { pane.__openMenu(anchor, inv); return true; }
     const items = [];
-    if (p.viewer && authRole === "admin") items.push({ value: "akick", icon: "leave", label: "Remove " + p.name + " from the room (admin)" });   // a watcher has no tile
     if (inv) { if (items.length) items.push({ sep: true }); items.push(...inv.items); }
+    const rb = rbItems(p.key, p.name);   // 0.21.92 I: remove / ban -- Remove <name> from the room, Ban <name>... (a watcher has no tile)
+    if (rb.length) { if (items.length) items.push({ sep: true }); items.push(...rb); }
     if (!items.length) return false;
     openMineMenu(anchor, items, "", async (v) => {
       if (inv && String(v).startsWith("pinv")) { inv.pick(v); return; }
-      if (v !== "akick") return;
-      if (!(await kastrConfirm({ title: "Remove from the room", message: "Remove " + p.name + " from the room?", ok: "Remove", danger: true }))) return;
-      for (const x of roomsPres.values()) {
-        if (!x.state || x.goneAt || String(x.who?.op || "").toLowerCase() !== p.key || x.who.peer === statePeer()) continue;
-        window.__adminSend?.({ op: "kick", target: x.who.host + "/" + x.who.op + "/" + x.who.peer });
-      }
+      if (v === "aremove" || v === "aban") rbPick(v, p.key, p.name);   // 0.21.92 I
     });
     return true;
   }
@@ -11138,6 +11165,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const myKey = HOSTNAME1 + "/" + String(window.__publisher?.opSlug?.() || "").toLowerCase();
       if (target !== myKey && target !== myKey + "/" + statePeer()) return;
       log("Removed from the room by " + by + ".");
+      // 0.21.92 I: remove / ban -- a Ban says until when (0.21.91 pages ignore `ban` and show the Removed note)
+      if (cmd.ban && typeof cmd.ban === "object") { rbBannedNote(CHANNEL, { ...cmd.ban, by: cmd.ban.by || prettyOperator(by) }); return; }
       // 0.21.91 (Kenton: removed by an admin -> "land in the main room ... with a note saying what happened")
       forcedToMain("Removed from a room", "Removed from " + roomTitle(CHANNEL) + " by " + prettyOperator(by) + ".");
       return;
@@ -13771,7 +13800,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
           items.push({ value: "astop", label: "Stop this share (admin)" });
           if (!isContentPath(name)) items.push({ value: "amute", label: "Mute their microphone (admin)" });
-          items.push({ value: "akick", label: "Remove " + prettyOperator(person === "?" ? "this member" : person) + " from the room (admin)" });
+          // 0.21.92 I: remove / ban -- "Remove ... from the room" moved to the bottom of the menu, beside Ban...
         }
         items.push({ value: "lat", label: latencyShown.has(name) ? "Hide latency" : "Show latency (only you see it)" });   // 0.21.22
         { const wrn = wrRoomOf(name); if (wrn) { const ww = watchRooms.get(wrn); items.push({ sep: true }, { value: "wrsound", icon: ww?.sound ? "spkOff" : "spk", label: (ww?.sound ? "Mute " : "Hear ") + wrn },
@@ -13813,7 +13842,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         }
         if (extra?.items?.length) items.push({ sep: true }, ...extra.items);   // 0.21.78: Invite to <room> / My room (a person's row)
         if (isLibPath(name)) libTileItems(name, items);   // 0.21.84: "From the library - Box - Site", Remove from this room, Open in the library
+        else if (!mineNames.has(name) && !wrRoomOf(name) && person !== "?") {   // 0.21.92 I: remove / ban -- together, at the bottom
+          const rbHost = String(name).split("/").filter(Boolean)[1] || "";
+          const rb = rbItems(person, prettyOperator(person), rbHost);
+          if (rb.length) items.push({ sep: true }, ...rb);
+        }
         openMineMenu(anchor, items, "", async (v) => {
+          if (v === "aremove" || v === "aban") { rbPick(v, person, prettyOperator(person), String(name).split("/").filter(Boolean)[1] || ""); return; }   // 0.21.92 I
           if (extra?.pick && String(v).startsWith("pinv")) { extra.pick(v); return; }   // 0.21.78
           if (String(v).startsWith("lib:")) { libTileMenuPick(name, v); return; }   // 0.21.84: the library rows
           if (v === "boxtake") { rcaTilePick(name); return; }   // 0.21.92
@@ -13847,16 +13882,6 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (v === "unspot") { window.__spotRemove(name); return; }   // 0.21.32: this one only
           if (v === "astop") window.__adminSend?.({ op: "stop", target: name });
           else if (v === "amute") window.__adminSend?.({ op: "mute", target: name });
-          else if (v === "akick") {
-            const pp = String(name).split("/").filter(Boolean);   // <room>/<host>/<operator>/<leaf>
-            if (pp.length >= 3 && await kastrConfirm({ title: "Remove from the room", message: "Remove " + prettyOperator(person) + " from the room?", ok: "Remove", danger: true })) {
-              // one kick per PAGE of that operator on that machine (their .state records name the peers);
-              // without any, the host/operator pair (every page of theirs there)
-              const peers = [...roomsPres.values()].filter((x) => x.state && !x.goneAt && x.who?.host === pp[1] && String(x.who?.op || "").toLowerCase() === String(pp[2]).toLowerCase() && x.who.peer !== statePeer()).map((x) => x.who.peer);   // never yourself
-              if (peers.length) for (const pr of peers) window.__adminSend?.({ op: "kick", target: pp[1] + "/" + pp[2] + "/" + pr });
-              else window.__adminSend?.({ op: "kick", target: pp[1] + "/" + pp[2] });
-            }
-          }
           else if (v === "fs") toggleFullscreen(name);
           else if (v === "mute") toggleMute(name);
           else if (v === "pmute") {
@@ -18201,6 +18226,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           body: JSON.stringify({ room, code: authCodes ? (access ?? "") : ((access ?? "") || (roomCode ?? "")), roomCode: roomCode ?? "",
                                  host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined,   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
                                  admit: admTok,   // 0.21.89: let in by someone in the room (this visit)
+                                 op: String(window.__publisher?.opSlug?.() || "").toLowerCase() || undefined,   // 0.21.92 I: remove / ban -- a Ban covers my name too
                                  invite: invTok }),   // 0.21.75
         });
         break;
@@ -18213,6 +18239,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const d = await r.json().catch(() => ({}));
     if (invTok && !(r.ok && d.ok) && /^(expired|revoked|wrong)$/.test(String(d.invite || ""))) inviteSet(null);   // 0.21.75: a dead link is dropped
     if (admTok && !(r.ok && d.ok) && /^(expired|wrong|room)$/.test(String(d.admit || ""))) accGrantSet(null);   // 0.21.89: that visit is over
+    if ((!r.ok || !d.ok) && d.ban && typeof d.ban === "object") throw Object.assign(new Error(d.error || ("token refused (" + r.status + ")")), { ban: d.ban });   // 0.21.92 I: remove / ban -- + the ban
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
     if (invTok && d.invite?.id) inviteSet({ ...inv, id: d.invite.id, exp: Number(d.invite.exp) || 0 });   // 0.21.75
     { const g = accGrantGet(); if (g && g.room !== room) accGrantSet(null); }   // 0.21.89: in another room now -- that visit is over (asking again next time)
@@ -18603,13 +18630,210 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   window.__paintRecordings = paintRecordings;
 
+  // ---- 0.21.92 I: remove / ban ----------------------------------------------------------------------------------------------
+  // Kenton (2026-10-28): "give an option on people that allows me to kick from the room. This doesn't kick them for any specific
+  // timeframe. This doesn't block them from coming back. Add an option to ban (timeframe)." Every person menu ends with
+  // "Remove <name> from the room" (their sessions close; no ban -- they may come straight back) and "Ban <name>..." (removed,
+  // then refused for 15 minutes, 1 hour, 24 hours, 7 days or until lifted). Rooms: the admin code. My room: its owner only.
+  // Nobody removes themselves; the relay refuses a My room owner's Remove of a fleet admin.
+  const RB_LENGTHS = [{ secs: 900, label: "15 minutes" }, { secs: 3600, label: "1 hour" }, { secs: 86400, label: "24 hours" },
+    { secs: 604800, label: "7 days" }, { forever: true, label: "Until I lift it" }];
+  function rbCan() {
+    if (!authSecured || !authTokens?.member || joinState !== "joined") return false;
+    if (isPersonalSlug(CHANNEL)) return authPersonal && !authGuest;   // My room: the owner only (never the co-arranger)
+    return authRole === "admin" && CHANNEL !== LOBBY;
+  }
+  function rbTargets(key, host) {   // one target per page of theirs here (host/op/peer); else host/op from their tile
+    const k = String(key || "").toLowerCase(), out = [];
+    if (!k || k === "?" || k.includes("@") || k.startsWith("lib:") || k === myPersonKey() || k === String(window.__publisher?.opSlug?.() || "").toLowerCase()) return out;
+    const meP = window.__publisher?.peer;
+    for (const m of members.values()) {
+      if (!m?.op || String(m.op).toLowerCase() !== k || !HOST_RE.test(String(m.host || "")) || m.peer === meP || m.peer === statePeer()) continue;
+      if (m.host === HOSTNAME1) continue;   // never this machine (my own other pages)
+      const t = m.host + "/" + k + (/^[A-Za-z0-9-]{1,40}$/.test(String(m.peer || "")) ? "/" + m.peer : "");
+      if (!out.includes(t)) out.push(t);
+    }
+    if (!out.length && HOST_RE.test(String(host || "")) && host !== HOSTNAME1) out.push(host + "/" + k);
+    return out;
+  }
+  function rbItems(key, name, host) {
+    if (!rbCan() || !rbTargets(key, host).length) return [];
+    const nm = String(name || prettyOperator(key));
+    return [{ value: "aremove", icon: "leave", label: "Remove " + nm + " from the room", tip: "Their session ends; they can come straight back" },
+            { value: "aban", icon: "ban", label: "Ban " + nm + "\u2026", danger: true, tip: "Remove them and keep them out for a while" }];
+  }
+  function rbUntilText(ban) {
+    if (!ban) return "";
+    if (ban.forever) return "until " + (String(ban.by || "") ? (/\s/.test(ban.by) ? ban.by : prettyOperator(ban.by)) : "an admin") + " lifts it";
+    const d = new Date((Number(ban.until) || 0) * 1000), t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return "until " + (d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " " + t);
+  }
+  function rbBannedText(room, ban) { return "You\u2019re banned from " + roomTitle(room) + " " + rbUntilText(ban) + "."; }
+  function rbEndedText(room, kind, who, owner, info) {   // My room's ended screen after the owner's Remove / Ban
+    if (kind === "removed") return { title: "Removed from " + roomTitle(room) + " by " + who + ".",
+      detail: "You can join again with the same invite link while " + (owner || "they") + " " + (owner ? "is" : "are") + " in it." };
+    if (kind === "banned") return { title: rbBannedText(room, info?.ban), detail: "Ask " + (owner || "them") + " to lift the ban if this was a mistake." };
+    return null;
+  }
+  function rbBannedNote(room, ban) {
+    log("Banned from " + room + " " + rbUntilText(ban) + ".");
+    forcedToMain("Banned from a room", rbBannedText(room, ban));
+  }
+  function rbPersonalOut(room, st) {   // My room's guest: the owner removed or banned me
+    const owner = String(st.owner || "") || personalOwners.get(room) || "";
+    const kind = st.banned ? "banned" : "removed";
+    const ban = st.banned ? { ...st.banned, by: st.banned.by || owner } : null;
+    if (joinState !== "joined" || CHANNEL !== room || pKickSaid === room + "|" + kind) return;
+    pKickSaid = room + "|" + kind; setTimeout(() => { pKickSaid = ""; }, 5000);
+    if (authSecured && !authAccessCode) { personalEnded(room, { owner, kind, ban }); return; }   // came by an invite link only: the ended gate
+    if (ban) rbBannedNote(room, ban);
+    else forcedToMain("Removed from a room", "Removed from " + roomTitle(room) + " by " + (owner || "its owner") + ".");
+  }
+  async function rbPick(v, key, name, host) {
+    const targets = rbTargets(key, host);
+    if (!targets.length) { window.__toast?.(name + " isn\u2019t in this room now.", 3000, { level: "info" }); return; }
+    if (v === "aremove") {
+      if (!(await kastrConfirm({ title: "Remove from the room", message: "Remove " + name + " from the room?",
+        detail: "Their session ends and they land in their main room. They can come straight back \u2014 use Ban\u2026 to keep them out.", ok: "Remove", danger: true }))) return;
+      rbSend(targets, { mode: "remove" }, name);
+      return;
+    }
+    const pick = await rbBanAsk(name);
+    if (pick) rbSend(targets, { mode: "ban", ...pick }, name);
+  }
+  function rbBanAsk(name) {   // -> {secs} | {forever: true} | null
+    return new Promise((resolve) => {
+      let el = document.getElementById("kBanDlg");
+      if (!el) {
+        el = document.createElement("div"); el.id = "kBanDlg"; el.hidden = true;
+        el.innerHTML = '<div class="popcard" role="dialog" aria-modal="true" aria-labelledby="bdTitle"><div class="head"><span id="bdTitle"></span></div>'
+          + '<div class="body"><p class="bdmsg"></p><div class="seg" role="radiogroup" aria-label="How long"></div>'
+          + '<p class="bddet"></p><p class="bderr" hidden></p></div>'
+          + '<div class="kcbtns"><button type="button" class="ghost bdno">Cancel</button><button type="button" class="danger bdyes">Ban</button></div></div>';
+        el.addEventListener("click", (e) => e.stopPropagation());
+        document.body.appendChild(el);
+      }
+      const q = (s) => el.querySelector(s);
+      let cur = RB_LENGTHS[1];
+      q("#bdTitle").textContent = "Ban " + name;
+      q(".bdmsg").textContent = "Remove " + name + " from " + roomTitle(CHANNEL) + " and keep them out for:";
+      const seg = q(".seg");
+      const paint = () => {
+        for (const b of seg.children) { const on = b.__len === cur; b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false"); b.tabIndex = on ? 0 : -1; }
+        q(".bddet").textContent = cur.forever ? "They stay out until you lift the ban (Room settings \u203a Bans)." : "They can come back " + rbUntilText({ until: Date.now() / 1000 + cur.secs }) + ", or sooner if you lift the ban.";
+      };
+      seg.replaceChildren(...RB_LENGTHS.map((L) => { const b = document.createElement("button"); b.type = "button"; b.setAttribute("role", "radio"); b.textContent = L.label; b.__len = L; b.onclick = () => { cur = L; paint(); }; return b; }));
+      seg.onkeydown = (e) => {
+        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+        e.preventDefault(); const i = RB_LENGTHS.indexOf(cur), n = RB_LENGTHS.length;
+        cur = RB_LENGTHS[(i + (e.key === "ArrowRight" ? 1 : n - 1)) % n]; paint(); try { [...seg.children].find((b) => b.__len === cur)?.focus(); } catch {}
+      };
+      paint();
+      const done = (v) => { el.hidden = true; document.removeEventListener("keydown", key, true); resolve(v); };
+      const key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); } else if (e.key !== "Tab" && !e.key.startsWith("Arrow") && e.key !== "Enter" && e.key !== " ") e.stopPropagation(); };
+      q(".bdno").onclick = () => done(null);
+      q(".bdyes").onclick = () => done(cur.forever ? { forever: true } : { secs: cur.secs });
+      el.onclick = (e) => { e.stopPropagation(); if (e.target === el) done(null); };
+      el.hidden = false;
+      document.addEventListener("keydown", key, true);
+      try { [...seg.children].find((b) => b.__len === cur)?.focus(); } catch {}
+    });
+  }
+  function rbSend(targets, opt, name) {
+    const room = CHANNEL, personal = isPersonalSlug(room);
+    const ban = opt.mode === "ban" ? { kind: "ban", forever: !!opt.forever, until: opt.forever ? 0 : Math.round(Date.now() / 1000) + (opt.secs || 0),
+                                       by: String(window.__publisher?.state?.()?.operator || "").trim() } : null;
+    // rooms: the ~admin announce first (their page leaves on its own, a 0.21.91 page too), the relay 2 s later; My room has no
+    // announce -- the relay closes the session and the guest's next beat (4 s) says why
+    if (!personal) for (const t of targets) window.__adminSend?.({ op: "kick", target: t, rb: 1, ...(ban ? { ban } : {}) });
+    const hosts = [...new Map(targets.map((t) => { const pp = t.split("/"); return [pp[0], pp[0] + "/" + pp[1]]; })).values()];
+    setTimeout(async () => {
+      let n = 0, err = "", last = null;
+      for (const t of hosts) {
+        const r = await window.__adminKick(t, { ...opt, who: name, room });
+        if (r?.ok) { n += r.revoked?.length || 0; last = r; } else err = r?.error || "refused";
+      }
+      if (err && !last) { window.__toast?.("Could not " + (opt.mode === "ban" ? "ban " : "remove ") + name + ": " + String(err).replace(" -- ", " \u2014 "), 6000, { level: "warn" }); return; }
+      if (opt.mode === "remove" && last && !last.mode && last.ban?.until) {   // a 0.21.91 relay host: it knows only 0.17.0's kick
+        window.__toast?.(name + " was removed. This relay\u2019s KASTR is older than 0.21.92, so it also keeps them out for an hour.", 8000, { level: "warn" });
+        return;
+      }
+      if (opt.mode === "ban" && last?.mode !== "ban") {   // a 0.21.91 relay host: its one-hour kick
+        window.__toast?.(name + " was removed. This relay\u2019s KASTR is older than 0.21.92, so it kept them out for an hour, not the length you picked.", 8000, { level: "warn" });
+        return;
+      }
+      window.__toast?.(opt.mode === "ban" ? name + " is banned from " + roomTitle(room) + " " + rbUntilText(last?.ban || { ...ban, by: "you" }).replace(/until .* lifts it$/, "until you lift it") + "."
+                                          : name + " was removed from " + roomTitle(room) + ". They can come back whenever they like.", 6000, { level: "event" });
+      if (opt.mode === "ban") { try { if (rsEl && !rsEl.hidden && rsSlug === room) rbRsLoad(); if (msEl && !msEl.hidden) rbMsLoad(); } catch {} }
+    }, personal ? 0 : 2000);
+  }
+  function rbBansPaint(box, d, mine) {
+    if (!box) return;
+    const rows = d?.ok && Array.isArray(d.bans) ? d.bans.filter((b) => b && b.host) : [];
+    box.replaceChildren();
+    if (!rows.length) { const p = document.createElement(mine ? "div" : "p"); p.className = mine ? "mspnone" : "rsinvempty"; p.textContent = d?.ok ? "Nobody is banned." : (d?.error || "Could not load the bans."); box.appendChild(p); return; }
+    for (const b of rows) {
+      const row = document.createElement("div"); row.className = mine ? "msprow" : "rsinvrow";
+      const meta = document.createElement(mine ? "span" : "div"); meta.className = mine ? "nm" : "meta";
+      const a = document.createElement("span"); a.textContent = (b.who ? (/\s/.test(b.who) ? b.who : prettyOperator(b.who)) : b.host) + (b.kind === "ban" ? "" : " (removed for a while)");
+      const sub = document.createElement("span"); sub.className = "sub";
+      sub.textContent = (mine ? " \u00b7 " : "") + "By " + (b.by ? (/\s/.test(b.by) ? b.by : prettyOperator(b.by)) : "an admin") + " \u00b7 " + (b.forever ? "until lifted" : rbUntilText(b));
+      if (mine) meta.append(a, sub); else meta.append(a, sub);
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "ghost"; btn.dataset.ban = b.host; btn.dataset.who = b.who || ""; btn.textContent = "Lift";
+      row.append(meta, btn);
+      box.appendChild(row);
+    }
+  }
+  async function rbRsLoad() {
+    if (!rsEl || !rsSlug) return;
+    const sec = rsEl.querySelector(".rsban"), slug = rsSlug;
+    sec.hidden = !(authSecured && authRole === "admin" && slug === CHANNEL && !isPersonalSlug(slug) && joinState === "joined");   // the list needs this room's admin token
+    if (sec.hidden) return;
+    const d = await window.__adminKick("", { mode: "list" });
+    if (d.status === 400 && !d.bans) { sec.hidden = true; return; }   // a 0.21.91 relay host: no list
+    if (slug === rsSlug) rbBansPaint(rsEl.querySelector(".rsbanlist"), d, false);
+  }
+  async function rbMsLoad() {
+    if (!msEl) return;
+    const sec = msEl.querySelector(".msban"), p = personalGet();
+    if (!p || !authSecured) { sec.hidden = true; return; }
+    let tok = null;
+    try { tok = await personalToken(p); } catch { tok = null; }
+    if (!tok) { sec.hidden = true; return; }
+    const d = await window.__adminKick("", { mode: "list", token: tok, room: p.slug });
+    sec.hidden = !d.ok && (d.status === 400 || d.status === 403);
+    if (sec.hidden) return;
+    const box = msEl.querySelector(".msbans");
+    rbBansPaint(box, d, true);
+    box.onclick = (e) => {
+      const b = e.target.closest?.("button[data-ban]");
+      if (b) rbLift(p.slug, b.dataset.ban, b.dataset.who || "", tok, (x) => rbBansPaint(box, x, true), (t, bad) => msEl.__say(t, bad));
+    };
+  }
+  async function rbLift(room, host, who, tok, paint, say) {
+    const nm = who ? (/\s/.test(who) ? who : prettyOperator(who)) : host;
+    if (!(await kastrConfirm({ title: "Lift ban", message: "Let " + nm + " back into " + roomTitle(room) + "?", ok: "Lift ban" }))) return;
+    const d = await window.__adminKick("", { mode: "lift", host, room, ...(tok ? { token: tok } : {}) });
+    if (!d.ok) { say?.(d.error || "Refused.", true); return; }
+    say?.(nm + " can come back now.");
+    paint?.(d);
+  }
+  window.__rb = { can: rbCan, targets: rbTargets, items: rbItems, send: rbSend, banAsk: rbBanAsk, bannedText: rbBannedText, until: rbUntilText };   // rig
+  // ---- end 0.21.92 I: remove / ban --------------------------------------------------------------------------------------------
   window.__adminKick = async (target, until = 3600) => {
     if (!authSecured || !authTokens?.member) return { ok: false, error: "open relay \u2014 no relay-side removal" };
     const base = authBase();
     if (!base) return { ok: false, error: "no relay" };
+    // 0.21.92 I: remove / ban -- an object says what: {mode: "remove" | "ban" | "list" | "lift", secs?, forever?, who?, host?};
+    // a number is 0.17.0's kick (an old rig); a 0.21.91 relay host answers a mode with its one-hour kick
+    const opt = until && typeof until === "object" ? until : null;
+    const meName = String(window.__publisher?.state?.()?.operator || "").trim();
+    const meOp = String(window.__publisher?.opSlug?.() || "").toLowerCase();
     try {
       const r = await fetch(base + "/api/kick", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: authTokens.member, room: CHANNEL, target, until }) });
+        body: JSON.stringify(opt ? { token: opt.token || authTokens.member, room: opt.room || CHANNEL, target, mode: opt.mode, secs: opt.secs, forever: !!opt.forever,
+                                     who: opt.who || undefined, host: opt.host || undefined, by: meName || undefined, byOp: meOp || undefined }
+                                 : { token: authTokens.member, room: CHANNEL, target, until }) });
       const d = await r.json().catch(() => ({}));
       return { ...d, ok: !!(r.ok && d.ok), status: r.status };
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
@@ -18633,7 +18857,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const msg = String(e?.message || e);
         if (/removed from this room/i.test(msg)) {
           log("Removed from the room by an admin (the relay refuses this device for a while).");
-          forcedToMain("Removed from a room", "You were removed from " + roomTitle(readChannel()) + " by an admin \u2014 you can try that room again later.");   // 0.21.91
+          if (e?.ban?.kind === "ban") rbBannedNote(readChannel(), e.ban);   // 0.21.92 I: remove / ban
+          else forcedToMain("Removed from a room", "You were removed from " + roomTitle(readChannel()) + " by an admin \u2014 you can try that room again later.");   // 0.21.91
         }
       } finally { authHealBusy = false; }
     } catch {}
@@ -20008,6 +20233,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow rsinv" hidden><span class="lbl">Invite links</span><div class="rsinvlist"></div>'   // 0.21.75
       + '<div class="rsf"><button type="button" class="rsinvall" hidden>Revoke all</button></div>'
       + '<p class="rshint">Links people in this room made with Share invite. Revoking one stops it letting anyone else in; people already here stay.</p></div>'
+      + '<div class="rsrow rsban" hidden><span class="lbl">Bans</span><div class="rsbanlist"></div>'   // 0.21.92 I: remove / ban
+      + '<p class="rshint">People banned from this room, who banned them and until when. Lift lets them back in at once, on every relay.</p></div>'
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost rsclose">Close</button></div></div>';
     document.body.appendChild(el);
@@ -20087,6 +20314,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     q(".rsinvlist").addEventListener("click", async (e) => {
       const b = e.target.closest?.("button[data-inv]");
       if (b) await rsInvRevoke({ id: b.dataset.inv });
+    });
+    q(".rsbanlist").addEventListener("click", (e) => {   // 0.21.92 I: remove / ban -- Lift
+      const b = e.target.closest?.("button[data-ban]");
+      if (b) rbLift(rsSlug, b.dataset.ban, b.dataset.who || "", null, (d) => rbBansPaint(q(".rsbanlist"), d, false), (t, bad) => say(t, bad));
     });
     return el;
   }
@@ -20184,6 +20415,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     rsEl.__say("");
     rsPaint();
     rsInvLoad();   // 0.21.75
+    rbRsLoad();    // 0.21.92 I: remove / ban -- the room's Bans (an admin in the room)
     try { window.__tplUI?.roomSettings?.(rsEl.querySelector(".rstpl"), rsSlug); } catch {}   // 0.21.92: the room's templates
     rsEl.hidden = false;
     document.addEventListener("keydown", rsEl.__key, true);
@@ -21988,7 +22220,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (authSecured) {
       // 0.10.0: the cached relay access code plus the room's own code
       try { await authMint(rec.slug, authAccessCode, code ?? ""); switchMark("mint"); }
-      catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.("Could not join " + roomTitle(rec.slug) + ": " + (e?.message || e), 5000, { level: "warn" }); return; }   // 0.21.42: said, and nothing muted; 0.21.78: its title
+      catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.(e?.ban?.kind === "ban" ? rbBannedText(rec.slug, e.ban) : "Could not join " + roomTitle(rec.slug) + ": " + (e?.message || e), 6000, { level: "warn" }); return; }   // 0.21.42: said, and nothing; 0.21.92 I: + banned muted; 0.21.78: its title
     }
     // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
     if (!isPublisherMode() && !opts?.follow) {   // 0.21.65: following a renamed room is not changing rooms
@@ -23077,6 +23309,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           try { gatePaintChannels(); } catch {}
           return joinFail("My room did not open with the code this device remembered \u2014 pick a room and join; My room asks for its code again.");
         }
+        if (e?.ban?.kind === "ban") return joinFail(rbBannedText(slug, e.ban));   // 0.21.92 I: remove / ban
         return joinFail(/removed from this room/i.test(msg) ? "You were removed from this room by an admin \u2014 try again later."   // 0.17.0
           : /wrong access code/i.test(msg) ? "Wrong access code for this relay."
           : /wrong room code/i.test(msg) ? "Wrong room code."
@@ -23961,7 +24194,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // do not apply to a library stream go)
   function libTileItems(name, items) {
     const e = libCat.get(name), why = libAddWhy(), here = libHere(name);
-    for (let i = items.length - 1; i >= 0; i--) if (["rpin", "rpinoff", "astop", "amute", "akick", "mypin"].includes(items[i].value)) items.splice(i, 1);
+    for (let i = items.length - 1; i >= 0; i--) if (["rpin", "rpinoff", "astop", "amute", "akick", "aremove", "aban", "mypin"].includes(items[i].value)) items.splice(i, 1);   // 0.21.92 I: + remove / ban
     const head = [{ cap: "From the library \u00b7 " + (e?.box || String(name).split("/")[1] || "?") + " \u00b7 " + (e?.site || "?") }];
     if (here === "pin") head.push(why ? { hint: "Remove from this room: " + why } : { value: "lib:remove", icon: "eye", label: "Remove from this room", tip: "Its tile goes for everyone in " + roomTitle(CHANNEL) + " (the stream stays in the library)" });
     else if (libMeHas(name)) head.push({ value: "lib:meoff", icon: "eye", label: "Remove from this room (just me)", tip: "It was on your screen only" });
@@ -33021,9 +33254,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const by = (() => { try { return operatorSlug() || "admin"; } catch { return "admin"; } })();
     try { adminAnn.set(nonce, JSON.stringify({ ...cmd, by, nonce, at: Date.now() })); } catch {}
     setTimeout(() => { try { adminAnn.clear(nonce); } catch {} }, 4000);
-    if (cmd.op === "kick" && typeof window.__adminKick === "function") {   // 0.17.0: and the relay refuses them for an hour
-      setTimeout(() => window.__adminKick(cmd.target).then((r) => {   // after the announce has landed: the page leaves on its own first
-        if (r?.ok) window.__toast?.("Removed at the relay too \u2014 " + (r.revoked?.length || 0) + " session(s) closed, re-entry blocked for " + Math.max(1, Math.round(((r.ban?.until || 0) - Date.now() / 1000) / 60)) + " min", 6000, { level: "event" });
+    if (cmd.op === "kick" && !cmd.rb && typeof window.__adminKick === "function") {   // 0.17.0; 0.21.92 I: a plain Remove (rbSend does its own)
+      setTimeout(() => window.__adminKick(cmd.target, { mode: "remove" }).then((r) => {   // after the announce has landed: the page leaves on its own first
+        if (r?.ok) window.__toast?.("Removed at the relay too \u2014 " + (r.revoked?.length || 0) + " session(s) closed. " + (!r.mode && r.ban?.until ? "This relay\u2019s KASTR is older than 0.21.92, so it keeps them out for an hour." : "They can come back."), 6000, { level: r.mode ? "event" : "warn" });   // 0.21.92 I: remove / ban
         else if (r?.error) window.__toast?.("Relay-side removal unavailable: " + r.error, 5000, { level: "info" });
       }).catch(() => {}), 2000);
     }

@@ -37,12 +37,12 @@ def block(src, start, end):
 
 class TheRecord(unittest.TestCase):
     def test_on_when_a_presentation_starts(self):
-        self.assertIn("function audienceInit(m) { m.am = 1; m.ask = 1; m.lt = new Set(); m.hx = new Map(); }", AUD)   # + Ask to speak (on)
+        self.assertIn("function audienceInit(m) { m.am = 1; m.ask = 1; m.see = 1; m.lt = new Set(); m.hx = new Map(); }", AUD)   # 0.21.92: + see   # + Ask to speak (on)
         sf = block(JS, "  async function startFromFile(file) {", "  function ensureSlide(i) {")
         self.assertLess(sf.index("audienceInit(mine);"), sf.index("publish();"))
         pub = block(JS, "  function publish() {", "  function goTo(")
         self.assertIn("...audFields(),", pub)   # in the record: late joiners obey
-        self.assertIn("return m && m.lt ? { am: m.am ? 1 : 0, ask: m.ask === 0 ? 0 : 1, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {};", AUD)
+        self.assertIn("return m && m.lt ? { am: m.am ? 1 : 0, ask: m.ask === 0 ? 0 : 1, see: m.see === 0 ? 0 : 1, lt: [...m.lt], hx: [...m.hx].slice(-24) } : {};", AUD)
 
     def test_any_presenter_switches_it(self):
         self.assertIn('if (pp.op === "am") return setAm(!!pp.v, who) || true;', AUD)
@@ -50,7 +50,7 @@ class TheRecord(unittest.TestCase):
         self.assertIn("let audienceOp = () => false;", JS)
         po = block(JS, "  function presOp(pp, who) {", "  let audienceOp")
         self.assertIn("default: if (!audienceOp(pp, who))", po)   # presenter-only (applyOp checks isP before presOp)
-        self.assertIn('lab.append(cb, document.createTextNode("Audience muted"));', AUD)
+        self.assertIn('lab.append(switchOf(cb), document.createTextNode("Audience muted"));', AUD)
 
     def test_handover_keeps_it(self):
         self.assertIn("adoptExtra = (m, rec) => { m.am = rec.am === undefined ? 1 : Number(rec.am) ? 1 : 0;", AUD)
@@ -58,10 +58,10 @@ class TheRecord(unittest.TestCase):
 
 class WhoMayTalk(unittest.TestCase):
     def test_presenters_and_people_let_talk(self):
-        self.assertIn("const mayTalk = (d, who) => !d.am || who === d.own || d.ps.includes(who) || d.lt.includes(who);", AUD)
+        self.assertIn("const mayTalk = (d, who) => !d.am || who === d.own || d.ps.includes(who) || d.lt.includes(who) || (d.pp || []).includes(who);", AUD)   # 0.21.92: + waiting presenters
         self.assertIn('return "Muted while " + d.cn + " presents";', AUD)
         tt = block(AUD, "  function talkTick() {", "  setInterval(() => { try { talkTick(); }")
-        self.assertIn("for (const p of [d.own, ...d.ps, ...d.lt]) if (p) allowed.add(String(p).toLowerCase());", tt)
+        self.assertIn("for (const p of [d.own, ...d.ps, ...d.lt, ...(d.pp || [])]) if (p) allowed.add(String(p).toLowerCase());", tt)
 
     def test_a_person_mic_only(self):
         self.assertIn("const PERSON_CAM = /^camera(-\\d+)?\\.hang$/;", AUD)

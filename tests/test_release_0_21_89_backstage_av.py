@@ -97,11 +97,11 @@ class ThePresentersPage(unittest.TestCase):
 
     def test_allowed_by_default_for_each_newly_added_backstage_person(self):
         st = block(JS, "  function selfTick() {", "  function modeInit(m) {")
-        self.assertIn("for (const p of bs) if (!self.alSeen.has(p)) { self.alSeen.add(p); self.al.add(p); }", st)
+        self.assertIn("for (const p of bs) if (!self.alSeen.has(p)) { self.alSeen.add(p); if (!preDenied(pd.id, p)) self.al.add(p); }", st)   # 0.21.92: unless said no in advance (a template)
         self.assertIn("for (const p of [...self.alSeen]) if (!bs.includes(p)) { self.alSeen.delete(p); self.al.delete(p); }", st)
         self.assertNotIn('createTextNode("Backstage can control my mic and camera")', JS)   # the one global switch is gone
         self.assertNotIn("avSwitch:", JS)
-        self.assertIn('lab.append(cb, document.createTextNode("Can control my mic and camera"));', JS)   # on each backstage row
+        self.assertIn('lab.append(switchOf(cb), document.createTextNode("Can control my mic and camera"));', JS)   # on each backstage row
 
     def test_state_published_for_backstage(self):
         mf = block(JS, "  function modeFields() {", "  function modeTick() {")

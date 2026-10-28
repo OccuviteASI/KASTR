@@ -4850,6 +4850,34 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // is not also a tile of its own here (gallery, rail) -- unless I put it on my stage myself -- yet it keeps decoding (cgWarm),
   // because kastr-pres.js draws its frames. Fed by kastr-pres.js (window.__presCamHide); empty while every deck is Content only.
   const presCamHide = new Set();
+  // 0.21.92 (Kenton: "When presenting, don't show cameras in the side rail for everyone, only show the cameras that are being passed
+  // through the presentation") + the presenters' "Audience can see each other" switch. Fed by kastr-pres.js (window.__presAudHide)
+  // on an AUDIENCE member's page while a presentation is live in my room -- null on a presenter's or backstage page, and once it ends:
+  //   show   the cameras in the presentation now (the presenter presenting now, in a mode that shows them; + the record's fs feeds)
+  //   staff  the presenters, backstage and the people a role waits for who are here ("host/op")      anon  "Audience can see each other" off
+  // A person's camera of my room that is not in `show` is no tile here -- rail, gallery, stage, spotlight; never kept for the stage
+  // either -- and is NOT subscribed (visible="never"; its sound stays: someone a presenter let talk is heard). With anon, an audience
+  // member's camera also leaves every custom grid here (not kept warm) and Room Chat names them "Audience member". The People lists
+  // do not change. Boxes, RTSP cameras and shares are not people (pathClass) and stay. It is THIS page that leaves them out: an older
+  // KASTR (0.21.91) shows everything.
+  let presAud = null;   // {show:Set, staff:Set, ops:Set, anon, me, tiles:[]} | null
+  const PRES_PERSON_CAM = /^camera(-\d+)?\.hang$/;
+  function presAudHidden(name, inGrid) {
+    const a = presAud;
+    if (!a) return false;
+    const n = String(name), p = n.split("/");
+    if (p.length !== 4 || p[0] !== CHANNEL || !PRES_PERSON_CAM.test(p[3]) || a.show.has(n) || pathClass(n) !== "person") return false;
+    const key = (p[1] + "/" + p[2]).toLowerCase();
+    if (key === a.me) return false;
+    return inGrid ? (a.anon && !a.staff.has(key)) : true;
+  }
+  const presAnon = (op) => { const a = presAud; if (!a || !a.anon) return false; const o = String(op || "").toLowerCase(); return !!o && !a.ops.has(o) && o !== chatMe(); };   // Room Chat: another audience member
+  function presAudStage() {   // the camera on my stage is not shown now: the presentation takes the stage (else the gallery)
+    gridZoom = null;
+    const was = selectedName, to = presAud ? presAud.tiles.find((n) => tiles.has(n)) : undefined;
+    if (to) selectedName = to; else { selectedName = undefined; gridMode = true; }
+    console.log("[kastr] presentation: " + was + " is not shown to the audience -- the stage shows " + (to || "the gallery"));
+  }
   const roomSplit = new Set();   // 0.21.65: grid cameras SPLIT OUT in this room (board.split) -- a tile of their own here, their cell stays
   // 0.21.75 (Kenton: "hide individual cameras in my grid view"): roomHid also holds the cameras I hid in MY view of a grid (myHid,
   // this device only) so their own tiles leave my gallery / rail / stage too; roomHidBoard = the room's own removals alone.
@@ -5879,16 +5907,42 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined" || CHANNEL === room) return;
     const t = roomTitle(room);
     try { chimeRoom(); } catch {}
-    log("Invite from " + (it.by || "someone") + " to " + room);
-    const go = await kastrConfirm({ title: "Invitation", message: (it.by || "Someone") + " invites you to " + t,
-      detail: "Join now? Your microphone will be muted and your camera turned off. Ignore to stay in " + roomTitle(CHANNEL) + ".", ok: "Join", cancel: "Ignore" });
+    const role = it.role === "p" || it.role === "b" ? it.role : "";   // 0.21.92: a presenter / backstage invitation
+    log("Invite from " + (it.by || "someone") + " to " + room + (role ? " (as " + (role === "p" ? "presenter" : "backstage") + ")" : ""));
+    const go = await kastrConfirm(role
+      ? { title: role === "p" ? "Presenter invitation" : "Backstage invitation", message: (it.by || "Someone") + " wants you as " + (role === "p" ? "presenter" : "backstage") + " in " + t,
+          detail: (it.deck ? "“" + String(it.deck).slice(0, 60) + "”. " : "") + "Join now? Your microphone will be muted and your camera turned off. Ignore to stay in " + roomTitle(CHANNEL) + " — the role waits for you if you come in later.", ok: "Join", cancel: "Ignore" }
+      : { title: "Invitation", message: (it.by || "Someone") + " invites you to " + t,
+          detail: "Join now? Your microphone will be muted and your camera turned off. Ignore to stay in " + roomTitle(CHANNEL) + ".", ok: "Join", cancel: "Ignore" });
+    if (role) {   // the presenter's page learns Join / Ignore ("waiting"); a withdrawn invitation does not open the room
+      const d = await roleInvCall("ianswer", { id: String(it.id), a: go ? "join" : "ignore" });
+      if (go && d && (d.state === "revoked" || d.state === "expired")) { window.__toast?.("That invitation was withdrawn — " + t + " is not expecting you now.", 6000, { level: "info" }); return; }
+    }
     if (!go || joinState !== "joined" || CHANNEL === room) return;
     inviteSet({ token: String(it.token), room, at: Date.now() });   // rides the mint (and its re-mints) for this room: no code needed
     switchRoom({ slug: room, personal: isPersonalSlug(room) }, "");
   }
+  // 0.21.92 (kastr-pres.js): presenter / backstage invitations -- a person invite that names the role; how they stand, the
+  // invited page's Join / Ignore, a presenter withdrawing one. -> the relay's answer {ok, ...} (+ status), or {ok: false, error}
+  async function roleInvCall(op, body) {
+    const base = authBase();
+    if (!base || !authTokens?.member) return { ok: false, error: "join a room first" };
+    const ctl = new AbortController(), tmo = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const r = await fetch(base + "/api/people", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + authTokens.member },
+        body: JSON.stringify(Object.assign({}, body || {}, { op })), signal: ctl.signal });
+      const d = await r.json().catch(() => ({}));
+      return r.ok ? Object.assign({ status: r.status }, d) : Object.assign({}, d, { ok: false, status: r.status, error: d.error || ("HTTP " + r.status) });
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; } finally { clearTimeout(tmo); }
+  }
+  function roleInvite(o) {
+    o = o || {};
+    return roleInvCall("invite", { to: String(o.to || ""), toName: String(o.toName || "").slice(0, 40), by: myOpName() || undefined, role: o.role === "b" ? "b" : "p", deck: String(o.deck || "").slice(0, 60) });
+  }
   window.__myShare = { open: personalShareOpen, beat: peopleBeat, people: personalPeopleCall, invite: personInvite, items: personInviteItems,
     arrive: personInviteArrive, shared: () => personalShared.slice(), owner: () => (pbOwner ? pbOwner.slug : ""), menu: personalCardMenu,
-    guest: () => ({ guest: authGuest, co: authCo }), host: () => HOSTNAME1 };   // rig
+    guest: () => ({ guest: authGuest, co: authCo }), host: () => HOSTNAME1,   // rig
+    roleInvite, rinv: (op, body) => (/^i(state|revoke|answer)$/.test(String(op)) ? roleInvCall(op, body) : Promise.resolve({ ok: false, error: "op" })) };   // 0.21.92
   // ---- 0.21.89 ASK FOR ACCESS (Kenton: "let someone prompt people in a locked room that lets someone with permissions in the
   // room already to allow them in without a code"; "Maybe an 'Ask for access' in the same pop-up as the code entry"). THE ASKER:
   // POST /api/access {op: "ask"} at MY relay host with my access code; the hub tells the room's admins and its creator who are
@@ -7706,7 +7760,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return cghMem.set;
   }
   const cgHid = (id, k) => cghSet().has(id + "|" + k);
-  const cgVis = (t, cams) => (t.cgDraft || !t.cgDef ? cams : cams.filter((k) => !cgHid(t.cgDef.id, k)));
+  const cgVis = (t, cams) => (t.cgDraft || !t.cgDef ? cams : cams.filter((k) => !cgHid(t.cgDef.id, k))).filter((k) => !presAudHidden(k, true));   // 0.21.92: + "Audience can see each other" off
   const cgHidList = (def) => [...new Set((def?.g?.slots || []).flatMap((s) => (s.cams || []).map(String)))].filter((k) => cgHid(def.id, k));
   function cgHidPut(id, keys, on) {
     const s = cghSet();
@@ -10031,8 +10085,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     eoSetView(eoOn() ? "room" : "all");
     (eoOn() ? eoEls.tabAll : eoEls.tabRoom).focus();
   });
-  async function eoFetch() {
-    if (eo.busy || !eoOn() || joinState !== "joined" || !authSecured || !authTokens?.member || inLobby()) return;
+  async function eoFetch(force) {   // 0.21.92: force -- the presenter view's people picker asks while the All view is closed
+    if (eo.busy || (!eoOn() && force !== true) || joinState !== "joined" || !authSecured || !authTokens?.member || inLobby()) return;
     const base = authBase();
     if (!base) return;
     eo.busy = true;
@@ -10171,7 +10225,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   window.__everyone = { build: () => eoBuild().map((g) => ({ key: g.key, slug: g.slug, title: g.title, priv: g.priv, locked: g.locked, go: g.go,
     people: g.people.map((x) => ({ name: x.name, host: x.host, room: x.room, priv: x.priv, guest: x.guest, me: x.me, pub: x.pub })) })),
-    view: (v) => (v ? eoSetView(v) : eo.view), fetch: eoFetch, fetchAll: eoFetchAll, onlineOnly: (on) => { if (on !== undefined) { const el = document.getElementById("pplOnline"); el.checked = !!on; el.dispatchEvent(new Event("change")); } return eo.onlineOnly; },
+    view: (v) => (v ? eoSetView(v) : eo.view), fetch: (force) => eoFetch(force === true), fetchAll: eoFetchAll, onlineOnly: (on) => { if (on !== undefined) { const el = document.getElementById("pplOnline"); el.checked = !!on; el.dispatchEvent(new Event("change")); } return eo.onlineOnly; },
     offline: () => eoOffline(eoBuild()).map((r) => ({ name: r.name, at: r.at, msg: !!r.msg })), all: () => eo.all.map((r) => ({ name: r.name, at: r.at, msg: !!r.msg, web: !!r.web, app: !!r.app })),   // 0.21.88 rig
     state: () => ({ view: eo.view, at: eo.at, hubDown: eo.hubDown, hubOld: eo.hubOld, old: eo.old, n: eo.rows.length,
     relays: eo.relays.map((r) => r.name), apps: eo.apps ? eo.apps.size : null }) };   // rig
@@ -10522,6 +10576,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || (deadMember(name) && !(name === selectedName && !gridMode && gridPickHeld(name))) || leavingExMember(name) || roomHid.has(name)   // 0.21.80: a clicked camera held through a `down` flap stays shown
     || (cgHide(name) && (gridMode || name !== selectedName))   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
     || (presCamHide.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))   // 0.21.89: drawn inside its presentation tile
+    || presAudHidden(name, false)   // 0.21.92: an audience member sees the presentation's cameras only (no stage exception)
     || gridDark(name);
   // 0.21.66 (Kenton: an RTMP grid sat on "cameras offline -- reconnecting (3)" -- "It should hide it"): a grid whose every camera is
   // offline is hidden here like a camera behind its grid (gallery, rail, stage, spotlight, pins); the owner box keeps it running and
@@ -10753,6 +10808,20 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { applyState(); } catch {}
     return true;
   };
+  window.__presAudHide = (a) => {   // 0.21.92: kastr-pres.js -- what this AUDIENCE member's page leaves out (null: nothing)
+    const next = a && typeof a === "object" ? { show: new Set((Array.isArray(a.show) ? a.show : []).map(String)), staff: new Set((Array.isArray(a.staff) ? a.staff : []).map((x) => String(x).toLowerCase())),
+                                                anon: !!a.anon, me: String(a.me || "").toLowerCase(), tiles: (Array.isArray(a.tiles) ? a.tiles : []).map(String) } : null;
+    if (next) next.ops = new Set([...next.staff].map((k) => k.split("/")[1] || "").filter(Boolean));
+    const chatSig = (x) => (x && x.anon ? [...x.ops].sort().join("|") : "");
+    const was = chatSig(presAud);
+    presAud = next;
+    if (presAud && !gridMode && selectedName && presAudHidden(selectedName, false)) presAudStage();
+    try { cgTick(); } catch {}
+    try { applyState(); } catch {}
+    if (chatSig(presAud) !== was) { try { chatRenderAll(); paintTyping(); } catch {} }
+    return true;
+  };
+  window.__presAudState = () => (presAud ? { show: [...presAud.show], staff: [...presAud.staff], anon: presAud.anon, me: presAud.me, tiles: presAud.tiles.slice() } : null);   // rig
   const PRES_CUT_RE = /^[a-z0-9-]+\/[a-z0-9-]+\/(?:[a-z0-9-]+\/)?presentation_cutout_[a-z0-9]+\.cut$/;
   const presCuts = new Map();   // cut-out path -> {w: <moq-watch>, ts, at, kicks}
   function presCutHold() {
@@ -12487,6 +12556,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // Visual order first: grid cells and list rows follow style.order; the
     // DOM itself never moves. 0.6.10: collage (uniform best-fit) or spot
     // (content + ladder), both plain grid placement of the same panes.
+    if (presAud && !gridMode && selectedName && presAudHidden(selectedName, false)) presAudStage();   // 0.21.92: e.g. a People click on an audience member
     autoContentCheck();
     {   // 0.21.66 (Mendon): a grid camera on my stage that cannot be shown (parked, down, removed here) parks its grid behind nothing --
         // the grid "disappears" until a reload. Hand the stage back to the grid instead.
@@ -19168,7 +19238,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const el = document.getElementById("chatTyping");
     if (!el) return;
     const me = statePeer();
-    const names = [...members.values()].filter((m) => m.state && m.typing && m.peer !== me).map((m) => m.name || m.op || "someone");
+    const names = [...members.values()].filter((m) => m.state && m.typing && m.peer !== me).map((m) => (presAnon(m.op) ? "Audience member" : m.name || m.op || "someone"));   // 0.21.92
     el.textContent = names.length ? (names.length === 1 ? names[0] + " is typing\u2026" : names.slice(0, 2).join(", ") + (names.length > 2 ? " and others" : "") + " are typing\u2026") : "";
     el.hidden = !names.length;
   }
@@ -21012,13 +21082,17 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const me = chatMe();
     const op = String(m.op || "").toLowerCase();
     if (op && op === me) el.classList.add("mine");
-    if (prev && String(prev.op || "").toLowerCase() === op && tsMs(m) - tsMs(prev) < 300000) el.classList.add("cont");
+    // 0.21.92: "Audience can see each other" off (a live presentation) -- another audience member is "Audience member": no name, no
+    // colour, no "via", never run together with their previous line. Only on this page: the transcript keeps the real name.
+    const anon = presAnon(op);
+    if (anon) el.classList.add("anon");
+    if (!anon && prev && String(prev.op || "").toLowerCase() === op && tsMs(m) - tsMs(prev) < 300000) el.classList.add("cont");
     const hd = document.createElement("div"); hd.className = "chd";
-    const who = document.createElement("span"); who.className = "cwho"; who.textContent = m.name || m.op || "someone";
-    try { who.style.color = window.__personColor?.(op) || ""; } catch {}
+    const who = document.createElement("span"); who.className = "cwho"; who.textContent = anon ? "Audience member" : m.name || m.op || "someone";
+    try { who.style.color = anon ? "" : window.__personColor?.(op) || ""; } catch {}
     const ts = document.createElement("span"); ts.className = "cts"; ts.textContent = fmtTime(new Date(tsMs(m)));
     hd.append(who, ts);
-    if (m.via) { const v = document.createElement("span"); v.className = "cvia"; v.textContent = "via " + m.via; hd.appendChild(v); }
+    if (m.via && !anon) { const v = document.createElement("span"); v.className = "cvia"; v.textContent = "via " + m.via; hd.appendChild(v); }
     el.appendChild(hd);
     const body = document.createElement("div"); body.className = "cbody";
     const tx = document.createElement("div"); tx.className = "ctxt";

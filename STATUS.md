@@ -146,18 +146,20 @@ The file so far is kept and recording continues into part 2, 3, ...
 
 Suite results:
 
-- Windows `python -m unittest discover -s tests -q`: 2137 tests run, 5 skipped. Only `test_npu_fx` fails, which is known and ignored.
-- WSL (`wsl.exe -u root --cd <worktree> -e ~/.venvs/kastr/bin/python3 -m unittest discover -s tests -q`, run through PowerShell; the bash form was refused by the isolation guard): 2137 tests run, 8 skipped. Only `test_npu_fx` fails.
+- After merging main at 0039ef3 (F's presentation work):
+  - Windows `python -m unittest discover -s tests -q`: 2168 tests run, 6 skipped. Only `test_npu_fx` fails, which is known and ignored.
+  - WSL (`wsl.exe -u root --cd <worktree> -e ~/.venvs/kastr/bin/python3 -m unittest discover -s tests -q`, run through PowerShell; the bash form was refused by the isolation guard): 2168 tests run, 9 skipped. Only `test_npu_fx` fails.
+  - The lab E2E and the gate test both passed again on the merged code. Merging also hit one conflict, in the `TPL_OPTS` table: F's `see` row and my `rec` row. I kept both.
 - One more failure, `test_release_0_21_84_presentation` `test_share_row_and_script`, was caused by my tag's position. I moved the tag and that test now passes. The lab re-check afterwards also passed: template start in 3.5 s, part 2 1.0 s after the kill, room closed after the file was `done`.
 
 ## Regions touched in shared files
 
 | File | Region |
 |---|---|
-| `assets/kastr-pres.js` (LF) | `TPL_OPTS`: one `rec` row, marked (~L631-633) |
-| `assets/kastr-pres.js` | `endPress()` hook branch: wait for `__presrec.endWait` before `after()`, marked (~L1575-1580) |
-| `assets/kastr-pres.js` | `window.__pres.recDeck` block after `window.__pres = {...}`, marked (~L3268-3277) |
-| `moq-watch-lite.html` (CRLF) | one `<script type="module" src="/assets/kastr-presrec.js">` tag just BEFORE the kastr-pres.js tag (~L33902); 0.21.84's test keeps kastr-pres.js last before `</body>`, and presrec reads `__pres` only lazily |
+| `assets/kastr-pres.js` (LF) | `TPL_OPTS`: one `rec` row, marked (~L671-673) |
+| `assets/kastr-pres.js` | `endPress()` hook branch: wait for `__presrec.endWait` before `after()`, marked (~L1823-1828) |
+| `assets/kastr-pres.js` | `window.__pres.recDeck` block after `window.__pres = {...}`, marked (~L3781-3790) |
+| `moq-watch-lite.html` (CRLF) | one `<script type="module" src="/assets/kastr-presrec.js">` tag just BEFORE the kastr-pres.js tag (~L33976); 0.21.84's test keeps kastr-pres.js last before `</body>`, and presrec reads `__pres` only lazily |
 | `kastr_serve.py` (CRLF) | precache line (L77) |
 | `kastr_serve.py` | `_web_relay_for` (the recorder dials this host's relay, ~L1926) |
 | `kastr_serve.py` | `_auth_proxy` (the recorder mints at this machine's relay, ~L3536) |

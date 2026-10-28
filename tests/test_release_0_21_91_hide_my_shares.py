@@ -68,7 +68,7 @@ class ViewMenu(unittest.TestCase):
 
     def test_prefs_mirror_keeps_it(self):
         self.assertIn("|view\\.hideMine$|theme$|theme\\.custom$|accent$|selfmirror$)/;", read(os.path.join("assets", "prefs.js")))
-        self.assertIn('|toasts\\.|rooms\\.groups\\.|view\\.hideMine$"\n                         r"|theme$|theme\\.custom$|accent$|selfmirror$)")', read("kastr_serve.py"))
+        self.assertIn('|toasts\\.|rooms\\.groups\\.|mainroom$|view\\.hideMine$"\n                         r"|theme$|theme\\.custom$|accent$|selfmirror$)")', read("kastr_serve.py"))
         import importlib, sys
         sys.path.insert(0, ROOT)
         ks = importlib.import_module("kastr_serve")

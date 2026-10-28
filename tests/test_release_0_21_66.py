@@ -347,7 +347,8 @@ class Page(unittest.TestCase):
             self.assertIn(need, menu)
         ed = self.sec("  const gridEditor = (() => {", "  window.__gridEditor = gridEditor;")
         self.assertIn("if (o.name != null) {", ed)
-        self.assertIn('sl.append(si, o.share.label || "Share with this room");', ed)
+        self.assertIn('sl.append(ssw, o.share.label || "Share with this room");', ed)   # 0.21.92: si wrapped in a .switch (ssw)
+        self.assertIn('const ssw = mkEl("span", "switch sm"); ssw.append(si, mkEl("i"));', ed)
         self.assertIn("if (cgOpened && cgOpened.cam === name && tiles.has(cgOpened.grid))", p)
 
     def test_editor_keeps_its_own_band(self):

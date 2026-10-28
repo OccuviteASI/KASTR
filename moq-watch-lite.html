@@ -217,6 +217,10 @@
   #profilePop .mainrow { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
   #profilePop .mainrow[hidden] { display:none; }
   #profilePop .mainrow .hclbl { font-size:11px; color:var(--text-dim); }
+  #profilePop .bootrow { display:flex; flex-direction:column; gap:0; margin:0 0 12px; }   /* 0.21.92: Start KASTR when I sign in */
+  #profilePop .bootrow[hidden], #profilePop .bootrow .sw[hidden] { display:none; }
+  #profilePop .bootrow .sw { padding:4px 0; }
+  #profilePop .bootrow #profBootMinRow { padding-left:18px; }
   #profilePop .mainseg { display:inline-flex; align-self:flex-start; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
   #profilePop .mainseg label { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:13px; color:var(--text-dim); cursor:pointer; }
   #profilePop .mainseg label + label { border-left:1px solid var(--line); }
@@ -3309,6 +3313,12 @@
         <label title="KASTR starts in My room, and Leave takes you there"><input type="radio" name="profMain" value="mine">My room</label>
         <label title="KASTR starts in the Lobby, and Leave takes you there"><input type="radio" name="profMain" value="lobby">Lobby</label></div>
       <p class="hint">Where KASTR starts and where <b>Leave</b> takes you. Leaving your main room takes you to the Lobby. Saved on this device.</p></div>
+    <!-- 0.21.92 (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins") --
+         the Relay page's switch, for everyone: this computer's own KASTR only (hidden for web pages and dev checkouts) -->
+    <div class="bootrow" id="profBootRow" hidden>
+      <div class="sw"><label class="switch"><input type="checkbox" id="profBoot"><i></i></label><span>Start KASTR when I sign in to this computer</span></div>
+      <div class="sw" id="profBootMinRow" hidden><label class="switch"><input type="checkbox" id="profBootMin"><i></i></label><span>Start minimized</span></div>
+      <p class="hint" id="profBootMsg">KASTR opens when you sign in and goes straight into your main room.</p></div>
     <div class="btnrow"><button type="button" id="profSave" class="join">Save</button><span id="profMsg" class="hint"></span></div>
   </div>
 </div>
@@ -9791,7 +9801,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined") return;
     let conn = null;
     try {
-      conn = new Net.Connection({ url: new Signals.Signal(new URL(urlInput.value.trim())), enabled: true });
+      conn = new Net.Connection({ url: new Signals.Signal(new URL(withToken(urlInput.value.trim()))), enabled: true });   // 0.21.91: ~stats rides a token
     } catch { return; }
     try {
       const deadline = new Promise((res) => setTimeout(res, 1500, null));
@@ -14828,12 +14838,63 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     })();
   }
   const stampGone = (m, now) => { for (const r of m.values()) if (!r.goneAt) r.goneAt = now; };
+  // 0.21.91 (Kenton: "Room list needs an access code"): the relay shows a session without a token nothing of the rooms. The
+  // rooms connection and the list read carry a BROWSE token (minted with an access code: the saved one, the one typed on the
+  // Join room page, the one joined with) -- or a guest's own token (their room only). Without either the rooms are not listed.
+  let roomsBrowse = null;   // {token, exp, base}
+  const roomsBrowseKey = () => { try { return "kastr.browse." + new URL(urlInput.value.trim()).origin; } catch { return ""; } };
+  try { const b = JSON.parse(sessionStorage.getItem(roomsBrowseKey()) || "null"); if (b?.token && b.exp * 1000 > Date.now() + 60000) roomsBrowse = b; } catch {}
+  function roomsToken() {
+    try {
+      if (!authSecured) return "";
+      if (roomsBrowse && roomsBrowse.base === authBase() && roomsBrowse.exp * 1000 > Date.now()) return roomsBrowse.token;
+      if (joinState === "joined" && authTokens?.member) return authTokens.member;   // a guest's own (its room only), or a member's
+    } catch {}
+    return "";
+  }
+  let roomsBrowseBusy = null, roomsBrowseSaid = "";
+  async function roomsBrowseMint(access) {
+    const code = String(access ?? "").trim();
+    const base = authBase();
+    if (!base || !authSecured || (authCodes && !code)) return false;
+    if (roomsBrowse && roomsBrowse.base === base && roomsBrowse.code === code && roomsBrowse.exp * 1000 > Date.now() + 600000) return true;
+    if (roomsBrowseBusy) return roomsBrowseBusy;
+    roomsBrowseBusy = (async () => {
+      try {
+        const r = await fetch(base + "/api/token", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ browse: true, code, host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d?.tokens?.browse) { roomsBrowseSaid = String(d?.error || r.status); return false; }
+        const had = roomsToken();
+        roomsBrowse = { token: d.tokens.browse, exp: Number(d.exp) || 0, base, code };
+        try { sessionStorage.setItem(roomsBrowseKey(), JSON.stringify({ token: roomsBrowse.token, exp: roomsBrowse.exp, base })); } catch {}
+        if (had !== roomsBrowse.token) { roomsRebuild(); roomsMinterPoll().catch(() => {}); }   // the rooms show now
+        return true;
+      } catch { return false; } finally { setTimeout(() => { roomsBrowseBusy = null; }, 0); }
+    })();
+    return roomsBrowseBusy;
+  }
+  window.__roomsBrowse = { mint: (c) => roomsBrowseMint(c), token: () => !!roomsToken(), said: () => roomsBrowseSaid };   // rig (never the token)
+  // the access code this page knows -> the browse token; a guest's token change -> the rooms connection follows it
+  let roomsTokSeen = "";
+  setInterval(() => {
+    try {
+      if (!authSecured) return;
+      const code = authAccessCode || (joinState !== "joined" ? String(joinEls?.joinAccess?.value || lastJoin()?.access || "") : "");
+      if (code && !(roomsBrowse && roomsBrowse.base === authBase() && roomsBrowse.exp * 1000 > Date.now() + 600000)) roomsBrowseMint(code);
+      const t = roomsToken();
+      if (t !== roomsTokSeen) { const first = !roomsTokSeen; roomsTokSeen = t; if (t || !first) { roomsRebuild(); roomsMinterPoll().catch(() => {}); } }
+    } catch {}
+  }, 2000);
   function roomsRebuild() {
     roomsGen++;
     const gen = roomsGen;
-    for (const a of roomsAnns) { try { a.close?.(); } catch {} }
+    // 0.21.92: the connection first, then its announcement readers (next tick) -- the library's announce loop appended to a
+    // reader closed under it and logged "announcements are closed" on every token switch
+    const oldAnns = roomsAnns;
     roomsAnns = [];
     if (roomsConn) { try { roomsConn.close(); } catch {} roomsConn = null; }
+    setTimeout(() => { for (const a of oldAnns) { try { a.close?.(); } catch {} } }, 0);
     const now = Date.now();
     // 0.13.0 (F7): a CHANGED relay url drops the previous relay's rooms outright
     // (the grace below used to keep relay A's rooms listed under relay B)
@@ -14851,6 +14912,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomsDownAt = 0;
     let url;
     try { url = new URL(urlInput.value.trim()); } catch { roomsChanged(); return; }
+    { const t = roomsToken(); roomsTokSeen = t; if (t) url.searchParams.set("jwt", t); }   // 0.21.91: the rooms ride a token
     try { roomsConn = new Net.Connection({ url: new Signals.Signal(url), enabled: true }); }
     catch { roomsConn = null; roomsChanged(); return; }
     const conn = roomsConn;
@@ -14969,14 +15031,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let roomsGroups = {}, roomsGroupsAt = 0;   // 0.15.0 (B4): gid -> {name, order, rooms:[slug]} from the room store
   async function roomsMinterPoll() {
     roomsMinterAt = Date.now();
+    if (authChecked !== authBase()) return;   // 0.21.92: not before this page checked THIS relay (it read the list tokenless once)
+    if (authSecured && !roomsToken()) return;   // 0.21.91: no access code yet -- no rooms (even on the relay machine itself)
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 4000);
     let got = null;
     try {
       const hb = relayHostBase();
       if (hb) {
-        // 0.21.91: a guest's page shows its token -- the relay host then answers only the guest's room (nothing of the fleet)
-        const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;
+        // 0.21.91: the list rides the rooms token (a browse token, or a guest's own -- the relay host answers their room only)
+        const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;
         const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store", headers: gh });
         if (r.ok) got = await r.json();
       }
@@ -14984,7 +15048,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!got && authSecured) {
       try {
         const base = authBase();
-        const gh = inviteGuest() && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;   // 0.21.91
+        const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;   // 0.21.91
         const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store", headers: gh }) : null;
         if (r && r.ok) got = await r.json();
       } catch {}
@@ -17771,8 +17835,46 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       row.hidden = !can;
       for (const r of row.querySelectorAll('input[name="profMain"]')) r.checked = r.value === mainPref();
     }
+    bootPaint();   // 0.21.92
     setTimeout(() => document.getElementById("profFirst").focus(), 50);
   }
+  // 0.21.92 (Kenton): "Start KASTR when I sign in to this computer" for everyone (it was on the Relay page only) -- the same
+  // /api/autorun the Relay page's switch uses, so the two always agree. Only this computer's own KASTR shows it: a web page
+  // (another machine's KASTR) never does, and the server says supported:false for a dev checkout / 403 for a remote page.
+  // "Start minimized" shows while the first switch is on; the choice is kept on this computer, so the Relay page's switch
+  // (or turning this one off and on again) writes the same entry.
+  const BOOT_HINT = { on: "KASTR opens when you sign in and goes straight into your main room.", min: "KASTR starts minimized when you sign in \u2014 it still connects and goes into your main room. Opening KASTR yourself always shows the window.", off: "Off \u2014 KASTR starts only when you open it." };
+  function bootShow(a) {
+    const on = !!a.enabled, mini = !!a.minimized;
+    document.getElementById("profBoot").checked = on;
+    document.getElementById("profBootMin").checked = mini;
+    document.getElementById("profBootMinRow").hidden = !on;
+    document.getElementById("profBootMsg").textContent = !on ? BOOT_HINT.off : mini ? BOOT_HINT.min : BOOT_HINT.on;
+  }
+  async function bootPaint() {
+    const row = document.getElementById("profBootRow");
+    if (IS_WEB) { row.hidden = true; return; }
+    let a = null;
+    try { const r = await fetch("/api/autorun", { cache: "no-store" }); if (r.ok) a = await r.json(); } catch {}
+    if (!a || a.error || a.supported === false) { row.hidden = true; return; }
+    bootShow(a);
+    row.hidden = false;
+  }
+  async function bootSet(enabled, minimized) {
+    let a;
+    try {
+      const r = await fetch("/api/autorun", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled, minimized }) });
+      a = await r.json();
+    } catch (e) { a = { error: String(e?.message || e) }; }
+    if (!a || a.error || !a.ok) {
+      window.__toast?.("Could not change the sign-in start: " + (a?.error || "no answer"), 6000, { level: "warn" });
+      return bootPaint();
+    }
+    bootShow(a);
+    window.__toast?.(!a.enabled ? "KASTR will not start when you sign in" : a.minimized ? "KASTR will start minimized when you sign in" : "KASTR will start when you sign in to this computer", 4000, { level: "event" });
+  }
+  document.getElementById("profBoot").addEventListener("change", (e) => bootSet(e.target.checked, document.getElementById("profBootMin").checked));   // the minimized choice stays
+  document.getElementById("profBootMin").addEventListener("change", (e) => bootSet(true, e.target.checked));
   for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
     if (!r.checked) return;
     mainPrefSet(r.value);
@@ -17838,7 +17940,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     paintFilesBadge();
     const base = relayHostBase();
     if (!base || !window.__joinedChannel?.()) return;
-    fetch(base + "/api/files?room=" + encodeURIComponent(readChannel() || "main"), { cache: "no-store" }).then((r) => r.json()).then((j) => {
+    fetch(base + "/api/files?room=" + encodeURIComponent(readChannel() || "main"), { cache: "no-store", headers: authBearer() }).then((r) => r.json()).then((j) => {
       listedFiles.clear();
       for (const m of (j?.files || [])) {
         if (!m?.id) continue;
@@ -18199,6 +18301,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // the cert-fingerprint fetch strips the query, bundle-verified). Open relays:
   // detection misses and every helper is a no-op.
   let authSecured = false;
+  let authChecked = "";     // 0.21.92: the authBase() whose /api/auth this page has asked ("" = not yet)
   let authCodes = false;    // 0.10.0: the relay has viewer/publisher access codes
   let authLegacy = false;   // 0.10.0: secured, but no access codes yet (room codes only)
   let authRole = "";        // 0.10.0: "publisher" | "viewer" from the last mint ("" = open relay)
@@ -18212,6 +18315,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let authChat = false;     // 0.12.0: ... and .chat
   let authState = false;
   let authWeb = 0;                    // 0.14.0 F: hub web port from /api/auth; 0.21.7: 0 = not told (consumers fall back to 8000 LAST, and only on the app)
+  let authWebFor = "";                // 0.21.92: the authBase() that told us authWeb
   let authNs = "";                    // 0.21.17: the control namespace the cached/minted token grants
   let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves "~state" publicly (state tracks); open relays always
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
@@ -18224,12 +18328,17 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       return "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);
     } catch { return null; }
   }
+  // 0.21.92: the member token as a header (a secured relay's file lists and room touches are for members of the room)
+  function authBearer() {
+    return (authSecured && authTokens?.member) ? { authorization: "Bearer " + authTokens.member } : {};
+  }
   function authStoreKey() {
     try { return "kastr.auth." + new URL(urlInput.value.trim()).origin; } catch { return null; }
   }
   async function authDetect() {
     const base = authBase();
     authSecured = false;
+    authChecked = "";   // 0.21.92
     if (!base) return;
     try {
       const ctl = new AbortController();
@@ -18243,10 +18352,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
+      authWebFor = base;                                // 0.21.92: ...of the relay at THIS base (relayHostBase trusts it only for that relay)
       try { personalFleetSet(String(d.fleet || "")); } catch {}   // 0.21.91: My room is kept per fleet
       authHttps = Number(d.https) || 0;                 // 0.15.0
       libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
     } catch {}
+    authChecked = base;   // 0.21.92: asked (an open relay without /api/auth counts as asked)
     if (!authSecured) { authTokens = null; authExp = 0; authRole = ""; authCodes = false; authLegacy = false; authTalking = true; authChat = true; authState = true; return; }
     // A token for this relay origin survives reloads within the tab.
     if (!authTokens) {
@@ -18735,6 +18846,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     get web() { return authWeb; },           // 0.14.0 F
     get https() { return authHttps || 8443; }, // 0.15.0
     withToken,
+    bearer: authBearer,   // 0.21.92
     base: authBase,
     mint: authMint,
     detect: authDetect,
@@ -21680,6 +21792,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (isWebRelay(wu.href)) return wu.origin === location.origin ? location.origin : wu.origin;   // 0.19.0
       const h = wu.hostname;
       const same = h === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(h) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
+      // 0.21.92 (a non-hub KASTR answered "already has a My room with another code" right after Set up with a brand-new name):
+      // the relay is on THIS machine but ANOTHER KASTR runs it (a second KASTR here -- a relay box's service and a person's app,
+      // a dev copy). Its /api/auth names its web port: that KASTR keeps My room, chat and the rooms (it forwards them to the
+      // hub); this page's own KASTR has a store of its own nobody else reads -- My room made there was a split brain (Messages,
+      // at the relay, then said "wrong code"; the next Set up there said "already has a My room").
+      if (same && !IS_WEB && location.protocol === "http:" && authWeb &&authWebFor && authWebFor === authBase()
+          && String(authWeb) !== (location.port || "80")) return "http://" + location.hostname + ":" + authWeb;
       // 0.8.9: an https page (phone) must not mix content -- other hosts on their https port
       return same ? location.origin : (location.protocol === "https:" ? "https://" + h + ":" + (window.__auth?.https || 8443) : "http://" + h + ":" + (window.__auth?.web || 8000));   // 0.15.0: the ports the hub advertises on /api/auth (0.14.0 pin), not literals
     } catch { return null; }
@@ -21822,7 +21941,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (rb && rb !== location.origin) {
       try {
         const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3000);
-        const r = await fetch(rb + "/api/files?room=" + encodeURIComponent(room), { cache: "no-store", signal: ctl.signal });
+        const r = await fetch(rb + "/api/files?room=" + encodeURIComponent(room), { cache: "no-store", signal: ctl.signal, headers: authBearer() });
         clearTimeout(tm);
         if (r.ok) store = { base: rb, publicBase: rb, mode: "relay" };
       } catch {}
@@ -23475,6 +23594,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
     // 0.21.65: the rooms sidebar opens / closes from its edge tab (#sbEdge), wired with sbToggle
     joinEls.joinBtn.addEventListener("click", () => joinNow());
+    // 0.21.91 (Kenton: "The Join room page shows no rooms until a code is typed and checked, then lists them")
+    joinEls.joinAccess?.addEventListener("change", () => {
+      const v = joinEls.joinAccess.value.trim();
+      if (!v) return;
+      roomsBrowseMint(v).then((ok) => { if (!ok && /wrong access code/i.test(roomsBrowseSaid)) gateMsg("Wrong access code for this relay."); else if (ok) gateMsg(""); });
+    });
     // 0.13.2: Enter in any gate field joins (the code fields most of all -- Kenton typed a code and waited)
     for (const el of [joinEls.joinAccess, joinEls.joinPwd, joinEls.joinChanNew, joinEls.joinName]) {
       el?.addEventListener("keydown", (e) => {
@@ -32487,7 +32612,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const hb = window.__relayHostBase?.();
     if (!hb || !slug || slug === "main") return;
     const creator = (window.__publisher?.state?.()?.operator || "").slice(0, 40);
-    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug, creator }) }).catch(() => {});
+    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json", ...(window.__auth?.bearer?.() || {}) },
+      body: JSON.stringify({ slug, creator }) }).catch(() => {});   // 0.21.92: + the member token (a touch without one makes no room)
   }
   function chanRegClear() {
     if (roomTouchT) { clearInterval(roomTouchT); roomTouchT = null; }

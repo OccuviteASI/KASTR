@@ -1089,18 +1089,26 @@
   });
 
   // 0.8.2: machine-boot autorun (per-user; frozen builds only).
-  api("/api/autorun").then((a) => {
+  // 0.21.92: the same switch lives in the main page's Profile menu ("Start KASTR when I sign in to this computer", with
+  // "Start minimized") -- re-read whenever this page comes back, so the two stay in step; a change here keeps the saved
+  // minimized choice (the POST names no `minimized`).
+  const bootPaint = () => api("/api/autorun").then((a) => {
     $("bootrun").checked = !!a.enabled;
     if (a.supported === false) {
       $("bootrun").disabled = true;
       $("bootMsg").textContent = a.note || "";
+    } else {
+      $("bootMsg").textContent = a.enabled && a.minimized ? "Starts minimized (Profile menu > Start minimized)." : "";
     }
   }).catch(() => {});
+  bootPaint();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") bootPaint(); });
+  window.addEventListener("focus", () => bootPaint());
   $("bootrun").addEventListener("change", async () => {
     try {
       const r = await api("/api/autorun", { enabled: $("bootrun").checked });
       $("bootMsg").textContent = r.error ? r.error
-        : (r.enabled ? "KASTR will start with this machine." : "Autorun removed.");
+        : (r.enabled ? (r.minimized ? "KASTR will start with this machine, minimized." : "KASTR will start with this machine.") : "Autorun removed.");
       if (r.error) $("bootrun").checked = !$("bootrun").checked;
     } catch (e) {
       $("bootMsg").textContent = "Failed: " + (e?.message || e);

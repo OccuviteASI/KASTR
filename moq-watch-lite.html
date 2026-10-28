@@ -2140,7 +2140,10 @@
   .mst.read { color:#7fe3ff; opacity:1; }
   :root[data-theme="light"] .mst.read { color:#fff; font-weight:700; }
   .mst.bad { color:var(--asi-red); white-space:normal; }
-  .mb.mine .mst.bad { color:#ffd0d0; }
+  /* 0.21.92 (Kenton: the "Not sent" note after the time could not be read on his lime bubble): on my own bubble the note uses
+     the bubble's own ink, full strength, on its own line -- a fixed pink only worked on a blue accent */
+  .mb.mine .mmeta:has(.mst.bad) { opacity:1; white-space:normal; }
+  .mb.mine .mst.bad { display:block; color:var(--on-accent); font-weight:600; text-align:left; margin-top:2px; }
   .mimg { margin:2px 0 4px; border-radius:10px; overflow:hidden; max-width:280px; min-height:40px; min-width:80px; background:rgba(0,0,0,.15); }
   .mimg img { display:block; max-width:100%; max-height:260px; cursor:zoom-in; }
   .mimg.loading { min-height:120px; }
@@ -3060,6 +3063,8 @@
     <button class="opt" id="optGrid" type="button" title="A grid of cameras from any room you can see -- for you, or shared with this room"><span class="oi">&#9638;</span>Build a grid&hellip;</button>
     <!-- 0.21.75 (Kenton: "everyone can have a personal room that no other user sees") -->
     <button class="opt" id="optMyRoom" type="button" title="Your own room: your views of feeds from any room, only you see it, on any device"><span class="oi">&#9733;</span>My room&hellip;</button>
+    <!-- 0.21.92 (Kenton: meeting templates): saved room set-ups -- this room's and my own (assets/kastr-templates.js shows it on a relay with access codes) -->
+    <button class="opt" id="optTpl" type="button" hidden title="Saved set-ups of a room -- pins, spotlights, grids, settings, invites -- to put back or reuse"><span class="oi">&#9636;</span>Templates&hellip;</button>
     <!-- 0.21.83 (D) (Kenton: "how would I access this from my own KASTR?"): fleet admins only -->
     <button class="opt" id="optMachines" type="button" hidden title="Relays, hubs and camera boxes that let fleet admins control them without asking"><span class="oi">&#128421;</span>Machines&hellip;</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
@@ -3536,6 +3541,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 </main>
 
 <script src="/assets/prefs.js"></script>
+<script src="/assets/vault.js"></script><!-- 0.21.92: codes in this browser's storage kept wrapped (AES-GCM, a non-extractable key) -->
 <script src="/assets/kastr-rcf.js"></script><!-- 0.21.92: remote-control files (shared with rcx.html / rcx-agent.html) -->
 <script>
   // 0.13.0 (F3): the rooms sidebar starts COLLAPSED unless the toggle saved
@@ -3572,6 +3578,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 <script type="module">
   import "https://esm.sh/@moq/watch/element";
   import { Net, Signals, Video as WatchVideo } from "https://esm.sh/@moq/watch";   // 0.21.15 (P12c): Video.Decoder.supported = the full-config probe
+  await window.__kastrVault?.ready;   // 0.21.92: the saved codes are opened (assets/vault.js) before the first read
 
   // ---- 0.17.0: who this page runs for (assets/client.js, substituted by the server) ----
   // "app" = the machine's own KASTR window; "web" = a browser on another device that
@@ -5337,6 +5344,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
       + '<p class="rshint">Pick a passcode only you know (8 characters or more; a shorter one from before still opens your My room). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
+      + '<div class="rsrow pmtpl" hidden><span class="lbl">My templates</span><div class="pmtplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmshare" hidden>Share My room\u2026</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
     document.body.appendChild(el);
@@ -5442,6 +5450,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const s of [".pmintro", ".pmcaps"]) q(s).style.display = mode === "change" ? "none" : "";   // (just the new passcode)
     q("#pmTitle").textContent = mode === "change" ? "Pick your own My room passcode" : "My room";
     if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". It is the first card in your rooms list; nobody else sees it there unless you share it.";
+    try { window.__tplUI?.myRoom?.(q(".pmtpl"), mode === "have" && !!p); } catch {}   // 0.21.92: my templates
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
     if (note) pmEl.__say(note, true);
   }
@@ -5481,7 +5490,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
       personalSharedApply(d.shared);
-      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "rcx") rcxAskArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes; 0.21.92: + an admin's ask
+      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "rcx") rcxAskArrive(it); else if (it?.kind === "tplpres") { try { window.__tplUI?.presReady?.(it); } catch {} } else if (it?.kind === "tplco") { try { window.__tplUI?.presCo?.(it); } catch {} } else personInviteArrive(it); }   // 0.21.79: + remote-control notes; 0.21.92: + an admin's ask, + a template's presentation is ready for me
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
       accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)
@@ -8431,6 +8440,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     else if (v === "sound") wrSetSound(rec.slug, !watchRooms.get(rec.slug)?.sound);
     else if (v === "join") sbCardClick(card, rec);
     else if (v === "rsettings") openRoomSettings(rec);   // 0.21.65
+    else if (v === "tplApply") window.__tplUI?.applyTo?.(rec.slug);   // 0.21.92: meeting templates
   }
   setInterval(() => {   // fresh tokens 10 min before expiry (live sessions ride out the old one; re-armed tiles take the new)
     if (!authSecured || joinState !== "joined") return;
@@ -14260,6 +14270,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__roomsRegDbg = () => [...roomsReg.values()].map((r) => ({ slug: r.slug, locked: r.locked, gone: !!r.goneAt }));   // rig (0.21.75): the raw ~channels entries
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
+  let roomsClosedWhy = {};       // 0.21.92: slug -> "pres" (a template's room closed when its presentation ended)
   let roomsRenamed = {};         // 0.21.65: old slug -> new slug (Room settings > Rename)
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
   let roomsSlugsSeen = "", roomsMinterAt = 0;
@@ -14524,9 +14535,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!slug || !ROOM_RE.test(slug) || slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75
       roomsMinter.set(slug, { slug, locked: r.locked !== false && (r.locked === true || r.persistent !== true),
                               persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0,
-                              viewLock: !!r.viewLock, keptBy: r.keptBy || "" });   // 0.21.65: + the view lock, kept by the board
+                              viewLock: !!r.viewLock, keptBy: r.keptBy || "", tplClose: !!r.tplClose });   // 0.21.65: + the view lock, kept by the board; 0.21.92: + a template's room End closes
     }
     roomsClosed = got.closed && typeof got.closed === "object" ? got.closed : {};
+    roomsClosedWhy = got.closedWhy && typeof got.closedWhy === "object" ? got.closedWhy : {};   // 0.21.92
     // 0.21.65: renamed rooms {old: new} -- I follow my room's new name; my shares listed into an old name follow it too
     roomsRenamed = got.renamed && typeof got.renamed === "object" ? got.renamed : {};
     if (joinState === "joined" && roomsRenamed[CHANNEL]) roomRenamedFollow(CHANNEL, String(roomsRenamed[CHANNEL]));
@@ -19924,6 +19936,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const r = card.__rec || rec;
       const items = wrCardItems(r);
       if (roomSettingsRole(r)) items.push(...(items.length ? [{ sep: true }] : []), { value: "rsettings", icon: "lock", label: "Room settings\u2026", tip: "Lock, keep open, rename, group, lock the view (the room\u2019s creator or an admin)" });   // 0.21.65
+      try { if (window.__tplUI?.canApplyTo?.(r.slug)) items.push(...(items.length ? [{ sep: true }] : []), { value: "tplApply", label: "Apply template\u2026", tip: "Put a saved set-up of a room into " + r.slug + " (pins, spotlights, grids; settings and invites for its admins)" }); } catch {}   // 0.21.92
       if (!items.length) return;
       e.preventDefault(); e.stopPropagation();
       openMineMenu(pointAnchor(e.clientX, e.clientY), items, "", (v) => wrCardPick(card, r, v));
@@ -19991,6 +20004,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rsview"><i></i></span><span>Lock the view</span></label>'
       + '<p class="rshint">Only the room\u2019s creator or an admin can spotlight, pin or arrange things for everyone. Everyone can still pin, arrange, mute and zoom for themselves.</p></div>'
       + '<div class="rsrow"><span class="lbl">Group</span><div class="rsf"><select class="rsgroup" aria-label="Room group"></select></div></div>'
+      + '<div class="rsrow rstpl" hidden><span class="lbl">Templates</span><div class="rstplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<div class="rsrow rsinv" hidden><span class="lbl">Invite links</span><div class="rsinvlist"></div>'   // 0.21.75
       + '<div class="rsf"><button type="button" class="rsinvall" hidden>Revoke all</button></div>'
       + '<p class="rshint">Links people in this room made with Share invite. Revoking one stops it letting anyone else in; people already here stay.</p></div>'
@@ -20170,6 +20184,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     rsEl.__say("");
     rsPaint();
     rsInvLoad();   // 0.21.75
+    try { window.__tplUI?.roomSettings?.(rsEl.querySelector(".rstpl"), rsSlug); } catch {}   // 0.21.92: the room's templates
     rsEl.hidden = false;
     document.addEventListener("keydown", rsEl.__key, true);
     try { rsEl.querySelector(".rsname").focus(); } catch {}
@@ -21081,7 +21096,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json();
       if (room !== chatRoom) return;
       chatDisabled = "";
-      chatHint(d.persistent ? "Room kept open \u2014 its history stays until the room is closed." : "");
+      chatHint(d.persistent && !isPersonalSlug(room) ? "Room kept open \u2014 its history stays until the room is closed." : "");
       if (full) { chatMsgs = chatMsgs.filter((m) => m.local || m.viaWindow); chatLastId = 0; }   // 0.13.0: live-delivered records survive a rebind
       chatAppend(Array.isArray(d.messages) ? d.messages : []);
       if (full && !chatMsgs.length) chatRenderAll();
@@ -21453,7 +21468,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       chatHint(chatDisabled, true); chatRenderAll();
       return;
     }
-    forcedToMain("Room closed", "Room " + room + " was closed \u2014 " + why + ".");   // 0.21.91: the main room, never the Join room page
+    if (why === "pres") forcedToMain("Presentation ended", "The presentation ended and " + roomTitle(room) + " was closed.");   // 0.21.92: a template's room
+    else forcedToMain("Room closed", "Room " + room + " was closed \u2014 " + why + ".");   // 0.21.91: the main room, never the Join room page
     try { window.__channels?.emberCancel?.(room); } catch {}   // a closed room gets no ember
   }
   // the STORE decides a room is closed; the announce (and a 410) only prompt the check
@@ -21462,7 +21478,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined" || CHANNEL === "main") return;
     const ts = roomsClosed[CHANNEL];
     const joinedAt = (() => { try { return window.__sinceAnnounce?.joinedAt?.() || 0; } catch { return 0; } })();
-    if (ts && Number(ts) > joinedAt) chatRoomClosed("closed by its creator or the relay operator");
+    if (ts && Number(ts) > joinedAt) chatRoomClosed(roomsClosedWhy[CHANNEL] === "pres" ? "pres" : "closed by its creator or the relay operator");
   }
   window.__roomsChanged = () => { clearTimeout(chatClosedCheckT); chatClosedCheckT = setTimeout(chatClosedCheck, 100); };
   window.__roomClosedHint = (slug, ts) => { if (slug === CHANNEL && joinState === "joined") { roomsMinterPoll().then(chatClosedCheck).catch(() => {}); } };
@@ -23304,7 +23320,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // Leave -> the main room (the Lobby when I am in it already); a guest -> the Lobby with the invited room; a box -> as before
   // 0.21.91 (Kenton: removed by an admin or the room closed -> the main room, "with a note saying what happened"); a camera box, a
   // relay-only machine or a viewer display: the Join room page as before (the reason in its message line)
+  let forcedBusy = false;   // 0.21.92: one forced move at a time (a room's close can arrive twice: the close hint + the rooms poll)
   async function forcedToMain(title, message) {
+    if (forcedBusy) return;
+    forcedBusy = true;
+    try { await forcedToMainNow(title, message); } finally { forcedBusy = false; }
+  }
+  async function forcedToMainNow(title, message) {
     if (!mainPerson() || joinState !== "joined") { try { leaveMeeting(); } catch {} try { if (message) gateMsg(message); } catch {} return; }
     await leaveToMain({ quiet: true });
     if (joinState !== "joined") { try { if (message) gateMsg(message); } catch {} return; }   // even the Lobby refused: the Join room page
@@ -24745,6 +24767,105 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     paintMs: () => { const t0 = performance.now(); libPaint(true); libRender(); return performance.now() - t0; },
     rel: () => sbRelayHost(), here: libHere, me: libMeSet, pin: libBoardPin, cost: libCostHint, aka: (m) => libAkaRewrite(new Map(Object.entries(m || {}))), why: libAddWhy, gate: libGate, build: cgNewFrom,
   };
+  // ---- 0.21.92 (Kenton: meeting templates, phase 1 "by hand"): the bridge assets/kastr-templates.js talks to the page through.
+  // Templates live on the hub (POST /api/templates at this page's minter, a spoke forwards); a relay WITHOUT access codes has no
+  // token service and no templates (Kenton: no). My view (a personal template's own section) is this device's arrangement:
+  // my grid layouts (kastr.vgrid.*), my pins, my own grids, the pinned panels and gallery / speaker.
+  function tplViewSnap() {
+    const grids = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(VG_KEY)) continue;
+        const v = JSON.parse(localStorage.getItem(k) || "null");
+        if (v && typeof v === "object") grids[k.slice(VG_KEY.length)] = v;
+      }
+    } catch {}
+    try { pinsLoad(); } catch {}
+    let cg = {}; try { cg = cgMine(); } catch {}
+    return { grids, pins: [...myPins], dock: [...(dockSt.pins || [])], cgrids: cg, mode: galleryChosen ? "gallery" : "speaker" };
+  }
+  function tplViewApply(v) {
+    if (!v || typeof v !== "object") return 0;
+    let n = 0;
+    try { for (const [k, g] of Object.entries(v.grids || {})) { if (g && typeof g === "object") { localStorage.setItem(VG_KEY + k, JSON.stringify(g)); n++; } } } catch {}
+    try { roomGridChanged(); } catch {}
+    if (Array.isArray(v.pins)) { try { pinsLoad(); myPins = v.pins.filter((x) => typeof x === "string").slice(0, PIN_MAX); pinsSave(); n += myPins.length; } catch {} }
+    if (v.cgrids && typeof v.cgrids === "object" && Object.keys(v.cgrids).length) { try { cgMineWrite({ ...cgMine(), ...v.cgrids }); cgSync(); n += Object.keys(v.cgrids).length; } catch {} }
+    if (Array.isArray(v.dock) && !isPhone()) { for (const k of v.dock) { if (DOCK_ORDER.includes(k) && !dockSt.pins.includes(k)) { try { dockPin(k, true); n++; } catch {} } } }
+    if (v.mode === "gallery") { try { goGallery(); } catch {} }
+    else if (v.mode === "speaker") { try { galleryChosen = false; manualPick = false; spotApplyWinner(); } catch {} }
+    try { applyState(); } catch {}
+    return n;
+  }
+  window.__ktpl = {
+    secured: () => !!authSecured,
+    joined: () => joinState === "joined" && CHANNEL !== LOBBY,
+    room: () => CHANNEL, lobby: () => LOBBY,
+    base: () => authBase(),
+    token: () => authTokens?.member || "",
+    role: () => authRole || "",
+    guest: () => !!authGuest || !!(inviteGet() && !authAccessCode),
+    tokenFor: async (slug) => {   // a member token for a room (mine for the room I am in; a side token for another -- never replacing mine)
+      if (slug === CHANNEL) return authTokens?.member || "";
+      const p = personalGet();
+      if (p && slug === p.slug) return personalToken(p);
+      const w = watchRooms.get(slug);
+      if (w?.token && w.exp * 1000 - Date.now() > 60000) return w.token;
+      return xsTokenFor(slug, w?.code || xsCodes[slug] || "");
+    },
+    roomKey: (slug) => myChannels().find((r) => r.slug === slug)?.roomKey || undefined,
+    isPersonal: (s) => isPersonalSlug(s), personal: () => personalGet(), title: (s) => roomTitle(s),
+    me: () => myOpName(), host: () => HOSTNAME1,
+    rooms: () => lastChannelList.filter((r) => r && r.slug && r.slug !== LOBBY && !isHomeRoom(r.slug)).map((r) => ({ slug: r.slug, title: roomTitle(r.slug) })),
+    roomRec: (slug) => {
+      const r = roomsMinter.get(slug) || lastChannelList.find((x) => x.slug === slug) || {};
+      const g = roomGroupOf(slug) || "";
+      return { locked: !!r.locked, keep: !!r.persistent, viewLock: !!r.viewLock, group: g, groupName: (g && roomsGroups?.[g]?.name) || "", tplClose: !!r.tplClose };
+    },
+    // 0.21.92 "Create a new room for this": a plain room through the Create room form's own path (the same rules) -> {ok, slug} | {ok:false,
+    // taken?, error}. A name that is already a room is refused (a template never takes over -- or later closes -- a room that existed).
+    taken: (name) => { const s = channelSlug(String(name || "")); return lastChannelList.some((r) => r.slug === s) || roomsMinter.has(s) || s === "main" || s === LOBBY; },
+    slugOf: (name) => channelSlug(String(name || "")),
+    createRoom: async (name) => {
+      const slug = channelSlug(String(name || ""));
+      if (!String(name || "").trim() || slug === "main" || slug === LOBBY || !ROOM_RE.test(slug)) return { ok: false, error: "Name the room first." };
+      if (isHomeRoom(slug) || isPersonalSlug(slug) || slug === "lib") return { ok: false, error: "That name is kept for something else \u2014 pick another name." };
+      if (lastChannelList.some((r) => r.slug === slug) || roomsMinter.has(slug)) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };
+      const rec = await createChannelRecord(slug, "", false);
+      const g = await registerRoomRec(rec, authAccessCode);
+      if (!g.ok) return { ok: false, error: g.error || "The room was not created." };
+      if (!rec.roomKey) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };   // it was there (a plain room is anybody's)
+      rememberChannel(rec);
+      try { await roomsMinterPoll(); } catch {}
+      return { ok: true, slug: rec.slug };
+    },
+    go: (slug) => { const rec = myChannels().find((r) => r.slug === slug) || lastChannelList.find((r) => r.slug === slug) || { slug }; return switchRoom(rec, ""); },
+    // a room the hub just closed: everyone's page learns from the store (the close hint + the rooms poll); mine too, now
+    closed: (slug) => {
+      roomsClosedWhy = Object.assign({}, roomsClosedWhy, { [slug]: "pres" });   // the hub closed it at End: my own note says so, whichever path moves me first
+      try { window.__channels?.closedHint?.(slug); } catch {}
+      try { const list = myChannels().filter((x) => x.slug !== slug); localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list)); } catch {}
+      roomsMinterPoll().then(() => chatClosedCheck()).catch(() => {});
+    },
+    settingsRole: (slug) => roomSettingsRole(roomsMinter.get(slug) || lastChannelList.find((r) => r.slug === slug) || { slug }),
+    board: () => (board.room === CHANNEL ? JSON.parse(JSON.stringify({ pins: board.pins, spots: board.spots, grids: board.grids, split: board.split, spotOrder: board.spotOrder, customGrids: board.customGrids })) : null),
+    live: () => [...tiles].filter(([n, t]) => String(n).endsWith(".hang") && !t.cg && (t.hasVideo === true || t.hasAudio === true)).map(([n]) => String(n)),   // a catalog was read: really live
+    lib: () => [...libCat.values()].map((e) => ({ path: e.path, label: e.label, site: e.site, live: libStateOf(e) === "live" })).slice(0, 400),
+    label: (p) => { try { return shortLabel(String(p)); } catch { return String(p).split("/").pop().replace(/\.hang$/, ""); } },
+    start: () => (galleryChosen ? "gallery" : "spotlight"),
+    peopleHere: () => { try { const out = []; for (const g of eoBuild()) for (const x of g.people || []) if (x.room === CHANNEL && !x.me && x.name) out.push({ name: x.name, host: x.host || "" }); return out; } catch { return []; } },
+    people: () => eoPeopleForMsg(),
+    inviteLink: (token, slug) => inviteJoinLink(token, slug),
+    refresh: () => { try { boardPoll(); } catch {} try { roomsMinterPoll(); } catch {} },
+    roomsFresh: () => roomsMinterPoll(),   // 0.21.92: the room records now (End in a room a template made: closes on End?)
+    confirm: (o) => kastrConfirm(o), icon: (n) => icon(n),
+    menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
+    closePops: () => { try { closeAllPops(); } catch {} },
+    myRoomDialog: () => personalDialog(),
+    phone: () => { try { return isPhone(); } catch { return false; } },
+    view: { snap: tplViewSnap, apply: tplViewApply },
+  };
 </script>
 
 <script type="module">
@@ -24764,6 +24885,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // bridge, so it is published through the lower-level API the element itself
   // is built on -- Broadcast + Video.Capture + Video.Encoder.
   import { Net, Signals, Broadcast, Video } from "https://esm.sh/@moq/publish";
+  await window.__kastrVault?.ready;   // 0.21.92: the saved codes (camera addresses, the session) opened first
   // ---- 0.16.0: @moq/publish 0.5.0 adapters ------------------------------------------
   // <moq-publish> keeps its video capture behind `video.in.capture` (a signal holding a
   // Video.Capture; its `in.source` IS the element's source signal) and its audio capture behind
@@ -33776,6 +33898,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 <script type="module" src="/assets/kastr-gif.js"></script>
 <script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the admin's Reset My room passcode dialog -->
 <script type="module" src="/assets/kastr-msg.js"></script>
+<script type="module" src="/assets/kastr-templates.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>
 <script type="module" src="/assets/kastr-presrec.js"></script><!-- 0.21.92 H: record the presentation (the switch, Recordings, the relay host's recorder page) -->
 </body>

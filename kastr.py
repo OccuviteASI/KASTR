@@ -34,6 +34,7 @@ import urllib.request
 
 import kastr_serve
 import kastr_rtsp   # 0.18.0: hooks
+import kastr_secret   # 0.21.92: secrets at rest sealed, launch.log masked
 
 APP_NAME = "KASTR"  # Kenton's ASI Streaming Tool with Relay
 FROZEN = getattr(sys, "frozen", False)
@@ -643,8 +644,8 @@ def note(msg):
                 os.replace(p, p + ".1")
         except OSError:
             pass
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + str(msg).rstrip() + chr(10))
+        with open(p, "a", encoding="utf-8") as f:   # 0.21.92: no code, token or password ever lands in launch.log
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + kastr_secret.mask(str(msg).rstrip()) + chr(10))
     except Exception:
         pass
 
@@ -712,6 +713,29 @@ def feed_version_ok(info, theirs):
     return offered == str(theirs or "").strip(), offered
 
 
+def secrets_for_swap(theirs, mine):
+    """0.21.92: "match client to server" swaps in the hub's version, downgrades included -- a 0.21.92 box that follows
+    a 0.21.91 spoke would read every "ksec1:..." value as the code itself (an unattended camera box would stop
+    re-sharing into its locked rooms). Called once the download is verified, right before the swap: an older build
+    gets the folder back in the plain form it reads (the next 0.21.92+ start seals it again). -> True when it did."""
+    if kastr_secret.reads_sealed(theirs):
+        return False
+    try:
+        kastr_secret.unseal_state(state_dir(), log=note)
+    except Exception as e:
+        note("secrets: could not prepare the state folder for v%s (%s)" % (theirs, e))
+    return True
+
+
+def secrets_swap_failed(theirs):
+    """The older build was NOT placed: this version keeps running -- seal again."""
+    try:
+        kastr_secret.reseal_state(state_dir(), log=note)
+        note("secrets: v%s was not installed -- the saved codes are sealed again" % theirs)
+    except Exception as e:
+        note("secrets: could not seal again (%s) -- the next start does" % e)
+
+
 AUTORUN_FLAG_SINCE = (0, 21, 92)   # the first launcher that knows --minimized
 
 
@@ -771,6 +795,7 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
     print(f"{APP_NAME}: updating v{mine} -> v{theirs} from {base} ...", flush=True)
     update_note("updating", f"v{mine} -> v{theirs} from {base}")
     aside = None
+    plain_for_older = False   # 0.21.92: the state folder was put in the plain form for an older build
     try:
         import hashlib
         h = hashlib.sha256()
@@ -795,6 +820,7 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             raise RuntimeError("checksum mismatch")
         if os.path.getsize(tmp) != int(info.get("size") or 0):
             raise RuntimeError("size mismatch")
+        plain_for_older = secrets_for_swap(theirs, mine)   # 0.21.92: verified -- an older build reads plain codes
         autorun_for_version(theirs)   # 0.21.92: before a launcher that may not know --minimized runs at sign-in
         # 0.21.3: Windows -- a detached helper swaps the files after we exit and starts the new build at its final
         # path; no running image is ever renamed (PyInstaller onefile aborts on that, see swap_via_helper_windows)
@@ -865,6 +891,8 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             os.remove(tmp)
         except OSError:
             pass
+        if plain_for_older:   # 0.21.92: nothing older was placed -- this version runs on, sealed
+            secrets_swap_failed(theirs)
         print(f"{APP_NAME}: update failed ({e}); launching v{mine} as-is", flush=True)
         update_note("failed", f"{e} -- launched v{mine} as-is")
         return "failed"
@@ -3611,6 +3639,13 @@ def build_parser(ini):
 
 def main():
     ini, ini_path = read_ini()
+    # 0.21.92 (Kenton: "fix the plain text passcodes"): sealed secrets from here on; the first start of this version
+    # rewrites the 0.21.91 files (and their .bak copies) sealed. Windows: DPAPI (this user); else the owner-only key file.
+    try:
+        kastr_secret.configure(state_dir(), prefer_keyring=False, log=note)
+        kastr_secret.migrate_state(state_dir(), log=note)
+    except Exception as e:
+        note("secrets: could not seal the saved codes (%s) -- they stay as they were" % e)
     # 0.21.75: an invite link rides the command line once -- taken out of argv, so an update relaunch never replays it
     invite_url, _rest = split_invite_argv(sys.argv[1:])
     START_MINIMIZED[0], _rest = split_minimized_argv(_rest)   # 0.21.92: the sign-in start's --minimized, once
@@ -4187,6 +4222,7 @@ def main():
                 return
             if not isinstance(doc, dict):
                 return
+            doc = kastr_secret.open_doc(path, doc)   # 0.21.92: the codes are kept sealed
             room = str(doc.get("room") or "").strip().lower()
             feeds = [x for x in (doc.get("feeds") or []) if isinstance(x, dict) and x.get("url") and x.get("keep", True)]
             if doc.get("suspended") is True:   # 0.21.16: the switch survives the relaunch -- records come back, nothing starts
@@ -4221,10 +4257,12 @@ def main():
                 try:
                     with open(path, encoding="utf-8-sig") as f:
                         doc = json.load(f)
-                    doc["restoreError"] = "the relay refused the saved access code (%s)" % detail
+                    doc["restoreError"] = "the relay refused the saved access code (%s)" % kastr_secret.mask(detail)
                     tmp = path + ".tmp"
                     with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump(doc, f)
+                        json.dump(kastr_secret.seal_doc(path, doc), f)   # 0.21.92: still sealed
+                    if os.name != "nt":
+                        os.chmod(tmp, 0o600)
                     os.replace(tmp, path)
                 except Exception:
                     pass

@@ -1488,10 +1488,35 @@ def _replace(src, dst, tries=40):
     return False
 
 
+def _tok_ok(stored, given):
+    """0.21.92: a presenter / read token against the stored digest (a 0.21.91 deck still holds the plain token)."""
+    import kastr_secret
+    return kastr_secret.digest_matches(stored, given)
+
+
 class Store:
     def __init__(self, base):
         self.root = os.path.join(base, "pres")
         os.makedirs(self.root, exist_ok=True)
+        self._digest_old()
+
+    def _digest_old(self):
+        """0.21.92: a deck made by 0.21.91 kept its presenter / read tokens in plain text -- keep only their digests."""
+        import kastr_secret
+        for did in self._decks():
+            m = self._meta(did)
+            if not isinstance(m, dict):
+                continue
+            ch = False
+            for k in ("token", "rtoken"):
+                v = m.get(k)
+                if isinstance(v, str) and v and not v.startswith("sha256:"):
+                    m[k], ch = kastr_secret.digest(v), True
+            if ch:
+                try:
+                    self._write_meta(did, m)
+                except OSError:
+                    pass
 
     def _meta(self, did):
         try:
@@ -1540,7 +1565,8 @@ class Store:
                 raise ValueError("this relay host's presentation space is full")
             did, tok, rtok = uuid.uuid4().hex, uuid.uuid4().hex, uuid.uuid4().hex
             os.makedirs(os.path.join(self.root, did))
-            meta = {"id": did, "token": tok, "rtoken": rtok, "live": 0, "room": str(room or "")[:64], "name": str(name or "")[:120],
+            import kastr_secret   # 0.21.92: the store keeps only the tokens' digests (the presenter holds the tokens)
+            meta = {"id": did, "token": kastr_secret.digest(tok), "rtoken": kastr_secret.digest(rtok), "live": 0, "room": str(room or "")[:64], "name": str(name or "")[:120],
                     "n": max(0, min(SLIDES_MAX, _int(n))), "at": int(now or time.time())}
             self._write_meta(did, meta)
             return did, tok, rtok
@@ -1559,7 +1585,7 @@ class Store:
             m = self._meta(did)
             if m is None:
                 return 404
-            if not token or token != m.get("token"):
+            if not _tok_ok(m.get("token"), token):
                 return 403
             m["live"] = max(0, min(SLIDES_MAX, _int(i)))
             self._write_meta(did, m)
@@ -1571,7 +1597,7 @@ class Store:
         m = self._meta(did) if ID_RE.match(did or "") else None
         if m is None:
             return False, False
-        if rtoken and rtoken == m.get("rtoken"):
+        if _tok_ok(m.get("rtoken"), rtoken):
             return True, True
         return fname == "s%d.bin" % _int(m.get("live")), False
 
@@ -1581,7 +1607,7 @@ class Store:
         m = self._meta(did)
         if m is None:
             return 404, "no such presentation"
-        if not token or token != m.get("token"):
+        if not _tok_ok(m.get("token"), token):
             return 403, "not the presenter"
         if length <= 0:
             return 400, "empty"
@@ -1628,7 +1654,7 @@ class Store:
         m = self._meta(did)
         if m is None:
             return 200
-        if token != m.get("token"):
+        if not _tok_ok(m.get("token"), token):
             return 403
         shutil.rmtree(os.path.join(self.root, did), ignore_errors=True)
         return 200

@@ -232,14 +232,21 @@ def settings_path(state_dir):
     return os.path.join(state_dir or ".", "rcadmin.json")
 
 
-def load_settings(state_dir):
-    """{on, key, since} -- off (and no key) when the file is missing or unreadable."""
+def _read_settings(state_dir):
+    """0.21.92: rcadmin.json as stored, its sealed key opened (an old plain one still reads)."""
+    import kastr_secret
     try:
         with open(settings_path(state_dir), encoding="utf-8-sig") as f:
             d = json.load(f)
     except (OSError, ValueError):
         d = {}
-    d = d if isinstance(d, dict) else {}
+    d = kastr_secret.open_doc(settings_path(state_dir), d) if isinstance(d, dict) else {}
+    return d if isinstance(d, dict) else {}
+
+
+def load_settings(state_dir):
+    """{on, key, since} -- off (and no key) when the file is missing or unreadable."""
+    d = _read_settings(state_dir)
     key = str(d.get("key") or "")
     return {"on": d.get("on") is True and bool(KEY_RE.match(key)), "key": key if KEY_RE.match(key) else "",
             "since": int(d.get("since") or 0) if str(d.get("since") or "0").isdigit() else 0}
@@ -248,9 +255,10 @@ def load_settings(state_dir):
 def save_settings(state_dir, d):
     path = settings_path(state_dir)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    import kastr_secret
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"on": bool(d.get("on")), "key": d.get("key") or "", "since": int(d.get("since") or 0)}, f)
+    with open(tmp, "w", encoding="utf-8") as f:   # 0.21.92: the key sealed (DPAPI / the owner-only key file)
+        json.dump(kastr_secret.seal_doc(path, {"on": bool(d.get("on")), "key": d.get("key") or "", "since": int(d.get("since") or 0)}), f)
     if os.name != "nt":
         os.chmod(tmp, 0o600)
     os.replace(tmp, path)
@@ -260,11 +268,7 @@ def set_optin(state_dir, on, log=None):
     """The checkbox (THIS machine only -- handle_api guards the caller). The key is made once and kept (unticking and
     ticking again keeps the hub's pin)."""
     s = load_settings(state_dir)
-    try:
-        with open(settings_path(state_dir), encoding="utf-8-sig") as f:
-            old_key = str((json.load(f) or {}).get("key") or "")
-    except (OSError, ValueError, AttributeError):
-        old_key = ""
+    old_key = str(_read_settings(state_dir).get("key") or "")
     key = s["key"] or (old_key if KEY_RE.match(old_key) else "") or new_key()
     was = s["on"]
     out = {"on": bool(on), "key": key, "since": int(_now()) if (bool(on) and not was) else (s["since"] if on else 0)}
@@ -354,6 +358,8 @@ class HubRegistry:
                 d = json.load(f)
         except (OSError, ValueError):
             return
+        import kastr_secret
+        d = kastr_secret.open_doc(self.path, d)   # 0.21.92: the pinned keys are kept sealed
         now = self.clock()
         for node, r in ((d or {}).get("machines") or {}).items():
             if isinstance(r, dict) and HOST_RE.match(str(node)) and KEY_RE.match(str(r.get("key") or "")) and now - float(r.get("at") or 0) < KEY_KEEP_S:
@@ -373,9 +379,10 @@ class HubRegistry:
         self._saved_at = now
         doc = {"machines": {k: {x: y for x, y in v.items() if x != "node"} for k, v in self.machines.items()}, "audit": self.audit[-AUDIT_MAX:]}
         try:
+            import kastr_secret
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(doc, f)
+                json.dump(kastr_secret.seal_doc(self.path, doc), f)   # 0.21.92: the pinned keys sealed
             if os.name != "nt":
                 os.chmod(tmp, 0o600)
             os.replace(tmp, self.path)

@@ -91,6 +91,20 @@ def _eq(a, b):
     return bool(a) and bool(b) and hmac.compare_digest(str(a), str(b))
 
 
+def _stored_h(stored):
+    """A deck's stored token as its SHA-256 hex: 0.21.92 keeps "sha256:<hex>" (kastr_secret.digest), a 0.21.91 deck the plain token."""
+    stored = str(stored or "")
+    if not stored:
+        return ""
+    return stored[7:] if stored.startswith("sha256:") else _h(stored)
+
+
+def _tok_eq(stored, given):
+    """A request's token against a deck's stored one (digest or plain) -- constant time."""
+    h = _stored_h(stored)
+    return bool(h) and bool(given) and hmac.compare_digest(h, _h(given))
+
+
 def _now_ms():
     return int(time.time() * 1000)
 
@@ -163,9 +177,9 @@ class PresRec:
         m = self._deck(did)
         if not m or not k:
             return None
-        if _eq(k, m.get("token")):
+        if _tok_eq(m.get("token"), k):
             return "presenter"
-        if _eq(k, m.get("rtoken")):
+        if _tok_eq(m.get("rtoken"), k):
             return "backstage"
         return None
 
@@ -262,7 +276,7 @@ class PresRec:
             meta = {"v": 1, "rid": rid, "deck": did, "room": str(deck.get("room") or "")[:64],
                     "name": str(name or deck.get("name") or "Presentation")[:120], "at": _now_ms(), "end": 0,
                     "by": who, "byName": str(by_name or "")[:60], "state": "rec", "why": "", "warn": "", "size": 0, "parts": [],
-                    "tokH": _h(deck.get("token")), "rtH": _h(deck.get("rtoken")), "dk": secrets.token_urlsafe(18)}
+                    "tokH": _stored_h(deck.get("token")), "rtH": _stored_h(deck.get("rtoken")), "dk": secrets.token_urlsafe(18)}
             self._save(meta)
             s = Session(meta)
             self.live[rid] = s

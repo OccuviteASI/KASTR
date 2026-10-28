@@ -628,6 +628,9 @@
     { key: "rbg", read: (m) => m.rbg || RBG_DEFAULT, apply: (m, v) => { if (rbgOk(v)) m.rbg = v; } },                  // Reporter background
     { key: "am", sw: 1, text: "Audience muted", def: 1, read: (m) => (m.am ? 1 : 0), apply: (m, v) => { m.am = v ? 1 : 0; } },
     { key: "ask", sw: 1, text: "Ask to speak", def: 1, needs: "am", read: (m) => (m.ask === 0 ? 0 : 1), apply: (m, v) => { m.ask = v ? 1 : 0; } },
+    // 0.21.92 H: record the presentation -- on: assets/kastr-presrec.js switches Record on as the presentation starts (End finishes it)
+    { key: "rec", sw: 1, text: "Record the presentation", def: 0, read: (m) => (window.__presrec?.recOn?.(m.id) ? 1 : 0), apply: (m, v) => { m.recWant = v ? 1 : 0; } },
+    // 0.21.92 H: end
   ];
   function tplPreset(m, file, o) {
     m.file = file;   // kept for Save as a template (the hub's deck store keeps the deck as the file it came from)
@@ -1567,7 +1570,15 @@
       const hook = window.__pres && window.__pres.onEnd, v0 = deck();
       if (typeof hook === "function" && v0) {
         Promise.resolve().then(() => hook({ id: v0.id, role: v0.role })).catch(() => true)
-          .then((after) => { if (after === false) return; endNow(); if (typeof after === "function") { try { after(); } catch {} } });
+          .then((after) => {
+            if (after === false) return;
+            // 0.21.92 H: record the presentation -- End finishes the recording; a room a template made closes only after that
+            let fin = null;
+            try { fin = typeof after === "function" ? window.__presrec?.endWait?.(v0.id) || null : null; } catch {}
+            endNow();
+            if (typeof after === "function") Promise.resolve(fin).catch(() => {}).then(() => { try { after(); } catch {} });
+            // 0.21.92 H: end
+          });
         return;
       }
       endNow();
@@ -3257,7 +3268,7 @@
   // 0.21.92 H: record the presentation -- the deck I present (or am backstage for) with the store key its Record switch uses
   // (a presenter: the write token; backstage: the read token), for assets/kastr-presrec.js only; a viewer: null
   window.__pres.recDeck = () => {
-    if (mine) return { role: "presenter", own: true, id: mine.id, base: mine.base, k: mine.token || mine.rt || "", name: mine.name, room: mine.room || "", rec: null };
+    if (mine) return { role: "presenter", own: true, id: mine.id, base: mine.base, k: mine.token || mine.rt || "", name: mine.name, room: mine.room || "", rec: null, want: !!mine.recWant };
     const bk = [...backstage.values()].find((b) => b.keys && (b.wt || b.rt));
     if (!bk) return null;
     return { role: bk.pr ? "presenter" : "backstage", own: false, id: bk.rec.id, base: baseFor(bk.rec), k: bk.wt || bk.rt, name: bk.rec.name || "",

@@ -235,10 +235,12 @@
   function switcher() {
     const POLL_MS = 4000, LIST_KEY = "kastr.presrec.decks", LIST_MAX = 40, LIST_DAYS = 60;
     const S = { d: null, st: null, got: 0, busy: false, gone: false, warned: "", want: 0, last: null, endFor: null, el: null, panel: null };
-    window.__presrec = {   // rig + templates
+    window.__presrec = {   // rig + templates (kastr-pres.js's TPL_OPTS row `rec`, its End)
       state: () => ({ deck: S.d ? { id: S.d.id, role: S.d.role, own: S.d.own } : null, st: S.st, want: S.want, gone: S.gone }),
       set: (on) => setRec(on !== false),
       list: () => listNow(),
+      recOn: (id) => !!(S.d && S.d.id === id && S.st && S.st.on),   // Save as a template: is it recording now?
+      endWait: (id) => endWait(id),   // End: resolves once the recording's file is finished (null: nothing recording)
     };
     const deck = () => { try { return window.__pres?.recDeck?.() || null; } catch { return null; } };
     const toast = (m, ms) => { try { window.__toast?.(m, ms || 6000, { level: "event" }); } catch {} };
@@ -399,10 +401,11 @@
     function bearer() {
       try { const h = window.__auth?.bearer?.() || {}; const a = String(h.authorization || ""); return a.startsWith("Bearer ") ? a.slice(7) : ""; } catch { return ""; }
     }
-    async function listAt(base, room) {
+    async function listAt(base, room, extra) {
       const keys = decksGet().filter((x) => x.b === base).map((x) => ({ d: x.d, k: x.k }));
       const d = S.d;
       if (d && d.base === base && !keys.some((x) => x.d === d.id)) keys.unshift({ d: d.id, k: d.k });
+      if (extra && !keys.some((x) => x.d === extra.d)) keys.unshift(extra);
       const r = await fetch(base + "/api/presrec/list", { method: "POST", body: JSON.stringify({ keys, room: room || "", bearer: bearer() }) });
       if (!r.ok) throw new Error(String(r.status));
       return (await r.json()).recordings || [];
@@ -466,34 +469,26 @@
       }
     }
 
-    // ---- meeting templates: `rec` rides the presentation toggles (audSnap / audApply), startFromFile(file, {rec: 1}) ----
-    function wrapTemplates() {
-      const P = window.__pres;
-      if (!P || P.__presrec) return;
-      P.__presrec = true;
-      const snap0 = P.audSnap;
-      if (typeof snap0 === "function") P.audSnap = function () { const s = snap0.apply(this, arguments); return s && S.d ? { ...s, rec: S.st && S.st.on ? 1 : 0 } : s; };
-      const apply0 = P.audApply;
-      P.audApply = function (s) {
-        const out = typeof apply0 === "function" ? apply0.apply(this, arguments) : null;
-        if (s && typeof s === "object" && "rec" in s) {
-          const on = s.rec === true || Number(s.rec) === 1;
-          if (S.d) { setRec(on); if (out && typeof out === "object") out.rec = true; else return { rec: true }; }
-          else if (on) S.want = Date.now();   // the deck is not up yet: it starts when the presentation does
+    // ---- End (kastr-pres.js's endPress, before a template's room closes): wait until the relay host has finished the file ----
+    function endWait(id) {
+      const d = S.d;
+      if (!d || d.id !== id || !S.st || !S.st.on) return null;
+      const key = { d: d.id, k: d.k };
+      return (async () => {
+        const t0 = Date.now();
+        await new Promise((r) => setTimeout(r, 1500));
+        while (Date.now() - t0 < 30000) {
+          try { const x = (await listAt(d.base, d.room, key)).find((r) => r.deck === id); if (!x || x.state !== "rec") return true; } catch {}
+          await new Promise((r) => setTimeout(r, 1000));
         }
-        return out;
-      };
-      const start0 = P.startFromFile;
-      if (typeof start0 === "function") P.startFromFile = function (file, opts) {
-        if (opts && (opts.rec === true || Number(opts.rec) === 1)) S.want = Date.now();
-        return start0.apply(this, arguments);
-      };
+        return false;
+      })();
     }
 
     // ---- the loop ----
     let pollT = 0;
     setInterval(() => {
-      wrapState(); wrapTemplates();
+      wrapState();
       const d = deck();
       const prev = S.d;
       if (!d) {
@@ -503,7 +498,7 @@
       }
       const changed = !prev || prev.id !== d.id || prev.k !== d.k;
       S.d = d;
-      if (changed) { S.st = null; S.gone = false; mirrored = ""; decksRemember(d); pollT = 0; }
+      if (changed) { S.st = null; S.gone = false; mirrored = ""; decksRemember(d); pollT = 0; if (d.own && d.want) S.want = Date.now(); }   // a template's `rec`
       // someone else switched it: the owner's record says so before my next poll
       if (!d.own && d.rec && S.st && !!d.rec.on !== !!S.st.on) pollT = 0;
       if (Date.now() - pollT > POLL_MS) {

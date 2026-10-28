@@ -1,0 +1,312 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KASTR probe checks</title>
+<style>
+  html, body { background: #10151c; color: #e8eef6; font: 22px/1.4 sans-serif; margin: 0; padding: 12px; }
+  #s { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="s">KASTR probe: checking the browser engine...</div>
+<!--
+  Served by the app itself at https://appassets.androidplatform.net/probe.html (shouldInterceptRequest), so the page is a
+  secure context like the real KASTR page. Nothing here contacts a relay: the only network attempt is a WebTransport to
+  127.0.0.1 port 9, which is meant to fail, to tell "WebTransport exists" from "WebTransport can try a connection".
+  Display-only build: no camera or microphone is touched.
+-->
+<script>
+/* Part 1 is plain ES5 so even a very old WebView reports something. */
+(function () {
+  var r = { stage: 'basic' };
+  function ty(name) { try { return typeof window[name]; } catch (e) { return 'error'; } }
+  try { r.userAgent = navigator.userAgent; } catch (e) { r.userAgent = 'error'; }
+  r.secureContext = window.isSecureContext === true;
+  r.crossOriginIsolated = window.crossOriginIsolated === true;
+  r.types = {};
+  var names = ['WebTransport', 'VideoDecoder', 'VideoEncoder', 'AudioDecoder', 'AudioEncoder', 'VideoFrame',
+    'EncodedVideoChunk', 'ImageDecoder', 'OffscreenCanvas', 'MediaStreamTrackProcessor', 'MediaStreamTrackGenerator',
+    'AudioWorkletNode', 'AudioContext', 'RTCPeerConnection', 'WebAssembly', 'SharedArrayBuffer', 'indexedDB',
+    'MediaSource', 'ManagedMediaSource', 'Worker', 'BroadcastChannel', 'WebSocket', 'TextDecoderStream', 'ReadableStream'];
+  for (var i = 0; i < names.length; i++) r.types[names[i]] = ty(names[i]);
+  try { r.cryptoSubtle = typeof (window.crypto && window.crypto.subtle); } catch (e) { r.cryptoSubtle = 'error'; }
+  try { r.webgpu = typeof navigator.gpu; } catch (e) { r.webgpu = 'error'; }
+  try {
+    r.screen = { w: screen.width, h: screen.height, dpr: window.devicePixelRatio, innerW: window.innerWidth, innerH: window.innerHeight };
+  } catch (e) {}
+  try { r.hardwareConcurrency = navigator.hardwareConcurrency; r.deviceMemory = navigator.deviceMemory; } catch (e) {}
+  try { r.language = navigator.language; } catch (e) {}
+  window.__probeBasic = r;
+  window.onerror = function (msg, src, line) {
+    try { KastrProbe.error(String(msg) + ' (line ' + line + ')'); } catch (e) {}
+  };
+  try { KastrProbe.basic(JSON.stringify(r)); } catch (e) {}
+})();
+</script>
+<script>
+/* Part 2 needs async/await (Chrome 55+). If the engine cannot parse it, window.onerror reports a SyntaxError and the
+   app keeps part 1's results. */
+(async function () {
+  const out = { stage: 'full' };
+  const status = document.getElementById('s');
+  const say = (t) => { status.textContent = 'KASTR probe: ' + t; try { KastrProbe.progress(t); } catch (e) {} };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const timeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout ' + ms + ' ms')), ms))]);
+  const ename = (e) => (e && (e.name || (e.constructor && e.constructor.name))) || String(e);
+  const emsg = (e) => String((e && e.message) || e).slice(0, 160);
+
+  // ---------- WebTransport: exists vs works ----------
+  say('WebTransport');
+  out.webTransport = await (async () => {
+    const o = { type: typeof WebTransport };
+    if (typeof WebTransport !== 'function') { o.verdict = 'absent'; return o; }
+    let t;
+    try {
+      t = new WebTransport('https://127.0.0.1:9/kastr-probe');
+      o.construct = 'ok';
+    } catch (e) {
+      o.construct = 'threw'; o.errorClass = ename(e); o.message = emsg(e); o.verdict = 'exists, construct fails';
+      return o;
+    }
+    try { t.closed.catch(() => {}); } catch (e) {}
+    try {
+      await timeout(t.ready, 8000);
+      o.ready = 'resolved (unexpected for 127.0.0.1:9)'; o.verdict = 'works';
+    } catch (e) {
+      o.ready = 'rejected'; o.errorClass = ename(e); o.message = emsg(e);
+      if (e && e.source !== undefined) o.source = e.source;
+      if (o.errorClass === 'WebTransportError') o.verdict = 'works (tried to connect, failed as expected)';
+      else if (/^timeout/.test(o.message)) o.verdict = 'exists (no answer within 8 s)';
+      else o.verdict = 'exists, unexpected error';
+    }
+    try { t.close(); } catch (e) {}
+    return o;
+  })();
+
+  // ---------- WebCodecs ----------
+  const SIZES = { '720p': [1280, 720], '1080p': [1920, 1080], '4K': [3840, 2160] };
+  // decode matrix: what the KASTR page may receive (incl. the exact strings moq-watch-lite.html uses)
+  const DECODE = [
+    ['H.264 Baseline 3.0', 'avc1.42E01E', ['720p', '1080p']],
+    ['H.264 Baseline 3.1', 'avc1.42E01F', ['720p', '1080p']],
+    ['H.264 Main 3.1', 'avc1.4D401F', ['1080p']],
+    ['H.264 High 4.0', 'avc1.640028', ['720p', '1080p', '4K']],
+    ['H.264 High 5.1', 'avc1.640033', ['4K']],
+    ['HEVC Main 3.1 (hvc1)', 'hvc1.1.6.L93.B0', ['720p', '1080p']],
+    ['HEVC Main 3.1 (hev1)', 'hev1.1.6.L93.B0', ['1080p']],
+    ['HEVC Main 4.0', 'hvc1.1.6.L120.B0', ['1080p']],
+    ['HEVC Main 5.1', 'hvc1.1.6.L153.B0', ['4K']],
+    ['VP8', 'vp8', ['720p', '1080p']],
+    ['VP9 profile 0', 'vp09.00.10.08', ['1080p']],
+    ['VP9 profile 0 L5.0', 'vp09.00.50.08', ['4K']],
+    ['AV1 Main 4.0', 'av01.0.08M.08', ['1080p']],
+    ['AV1 Main 5.1', 'av01.0.13M.08', ['4K']],
+  ];
+  const ENCODE = [
+    ['H.264 Baseline 3.1', 'avc1.42E01F', ['720p', '1080p']],
+    ['H.264 High 4.0', 'avc1.640028', ['1080p']],
+    ['HEVC Main 4.0', 'hvc1.1.6.L120.B0', ['1080p']],
+    ['VP8', 'vp8', ['720p']],
+    ['VP9 profile 0', 'vp09.00.10.08', ['1080p']],
+    ['AV1 Main 4.0', 'av01.0.08M.08', ['1080p']],
+  ];
+  async function supported(kind, cfg) {
+    const C = kind === 'decoder' ? window.VideoDecoder : window.VideoEncoder;
+    if (typeof C !== 'function' || typeof C.isConfigSupported !== 'function') return 'absent';
+    try {
+      const r = await timeout(C.isConfigSupported(cfg), 5000);
+      return r && r.supported ? 'yes' : 'no';
+    } catch (e) {
+      return 'error ' + ename(e);
+    }
+  }
+  say('WebCodecs decode');
+  out.videoDecode = [];
+  for (const [label, codec, sizes] of DECODE) {
+    for (const sz of sizes) {
+      const [w, h] = SIZES[sz];
+      const base = { codec, codedWidth: w, codedHeight: h };
+      const row = { label, codec, size: sz };
+      row.any = await supported('decoder', base);
+      row.hw = await supported('decoder', Object.assign({ hardwareAcceleration: 'prefer-hardware' }, base));
+      row.sw = await supported('decoder', Object.assign({ hardwareAcceleration: 'prefer-software' }, base));
+      out.videoDecode.push(row);
+    }
+  }
+  say('WebCodecs encode');
+  out.videoEncode = [];
+  for (const [label, codec, sizes] of ENCODE) {
+    for (const sz of sizes) {
+      const [w, h] = SIZES[sz];
+      const base = { codec, width: w, height: h, bitrate: sz === '720p' ? 2500000 : 5000000, framerate: 30 };
+      const row = { label, codec, size: sz };
+      row.any = await supported('encoder', base);
+      row.hw = await supported('encoder', Object.assign({ hardwareAcceleration: 'prefer-hardware' }, base));
+      out.videoEncode.push(row);
+    }
+  }
+
+  // A real decode: encode 30 frames here, then decode them (hardware first). Shows decode actually produces frames,
+  // not just that isConfigSupported says yes. Only runs where this engine can also encode that codec.
+  async function roundTrip(codec, w, h, decHw) {
+    const o = { codec, size: w + 'x' + h, decoderAcceleration: decHw };
+    if (typeof VideoEncoder !== 'function' || typeof VideoDecoder !== 'function' || typeof VideoFrame !== 'function') { o.result = 'skipped (no WebCodecs)'; return o; }
+    const encCfg = { codec, width: w, height: h, bitrate: 6000000, framerate: 30 };
+    if (codec.startsWith('avc1')) encCfg.avc = { format: 'annexb' };
+    if (codec.startsWith('hvc1') || codec.startsWith('hev1')) encCfg.hevc = { format: 'annexb' };
+    let es;
+    try { es = await timeout(VideoEncoder.isConfigSupported(encCfg), 5000); } catch (e) { o.result = 'skipped (encoder check ' + ename(e) + ')'; return o; }
+    if (!es || !es.supported) { o.result = 'skipped (cannot encode it here, so nothing to decode)'; return o; }
+    const chunks = []; let decCfg = null; let encErr = null;
+    const enc = new VideoEncoder({
+      output: (chunk, meta) => { if (meta && meta.decoderConfig && !decCfg) decCfg = meta.decoderConfig; chunks.push(chunk); },
+      error: (e) => { encErr = e; },
+    });
+    try {
+      enc.configure(encCfg);
+      let canvas;
+      if (typeof OffscreenCanvas === 'function') canvas = new OffscreenCanvas(w, h);
+      else { canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h; }
+      const g = canvas.getContext('2d');
+      for (let i = 0; i < 30; i++) {
+        g.fillStyle = 'hsl(' + (i * 12) + ',70%,40%)'; g.fillRect(0, 0, w, h);
+        g.fillStyle = '#fff'; g.fillRect((i * 37) % (w - 200), (i * 23) % (h - 200), 200, 200);
+        const f = new VideoFrame(canvas, { timestamp: i * 33333 });
+        enc.encode(f, { keyFrame: i === 0 });
+        f.close();
+      }
+      await timeout(enc.flush(), 20000);
+      enc.close();
+    } catch (e) { o.result = 'encode failed: ' + ename(e) + ' ' + emsg(e); try { enc.close(); } catch (x) {} return o; }
+    if (encErr) { o.result = 'encode error: ' + ename(encErr); return o; }
+    if (!chunks.length) { o.result = 'encoder gave no chunks'; return o; }
+    const cfg = Object.assign({ codec, codedWidth: w, codedHeight: h }, decCfg || {});
+    cfg.hardwareAcceleration = decHw;
+    let ds;
+    try { ds = await timeout(VideoDecoder.isConfigSupported(cfg), 5000); } catch (e) { o.result = 'decoder check ' + ename(e); return o; }
+    if (!ds || !ds.supported) { o.result = 'decoder says not supported'; return o; }
+    let frames = 0; let decErr = null; let firstW = 0; let firstH = 0;
+    const dec = new VideoDecoder({
+      output: (f) => { if (!frames) { firstW = f.displayWidth; firstH = f.displayHeight; } frames++; f.close(); },
+      error: (e) => { decErr = e; },
+    });
+    const t0 = performance.now();
+    try {
+      dec.configure(cfg);
+      for (const c of chunks) dec.decode(c);
+      await timeout(dec.flush(), 20000);
+      dec.close();
+    } catch (e) { o.result = 'decode failed: ' + ename(e) + ' ' + emsg(e); try { dec.close(); } catch (x) {} return o; }
+    if (decErr) { o.result = 'decode error: ' + ename(decErr); return o; }
+    const ms = performance.now() - t0;
+    o.framesIn = chunks.length; o.framesOut = frames; o.out = firstW + 'x' + firstH;
+    o.msPerFrame = frames ? Math.round(ms / frames * 10) / 10 : null;
+    o.result = frames === chunks.length ? 'ok' : 'partial';
+    return o;
+  }
+  say('real decode (encode then decode)');
+  out.decodeRoundTrip = [];
+  for (const [codec, w, h] of [['avc1.640028', 1920, 1080], ['avc1.640033', 3840, 2160], ['hvc1.1.6.L120.B0', 1920, 1080], ['hvc1.1.6.L153.B0', 3840, 2160]]) {
+    for (const acc of ['prefer-hardware', 'no-preference']) {
+      try { out.decodeRoundTrip.push(await roundTrip(codec, w, h, acc)); }
+      catch (e) { out.decodeRoundTrip.push({ codec, size: w + 'x' + h, decoderAcceleration: acc, result: 'error ' + ename(e) }); }
+    }
+  }
+
+  // ---------- audio codecs ----------
+  say('audio codecs');
+  async function asup(C, cfg) {
+    if (typeof C !== 'function' || typeof C.isConfigSupported !== 'function') return 'absent';
+    try { const r = await timeout(C.isConfigSupported(cfg), 5000); return r && r.supported ? 'yes' : 'no'; }
+    catch (e) { return 'error ' + ename(e); }
+  }
+  out.audio = {
+    opusDecode: await asup(window.AudioDecoder, { codec: 'opus', sampleRate: 48000, numberOfChannels: 2 }),
+    opusEncodeMono: await asup(window.AudioEncoder, { codec: 'opus', sampleRate: 48000, numberOfChannels: 1, bitrate: 64000 }),
+    opusEncodeStereo: await asup(window.AudioEncoder, { codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 }),
+    aacDecode: await asup(window.AudioDecoder, { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2 }),
+  };
+
+  // ---------- other platform features the KASTR page uses ----------
+  say('graphics, audio worklet, storage, crypto');
+  const f = {};
+  try { const oc = new OffscreenCanvas(16, 16); f.offscreenCanvas = oc.getContext('2d') ? 'yes' : 'no 2d context'; }
+  catch (e) { f.offscreenCanvas = typeof OffscreenCanvas === 'undefined' ? 'absent' : 'error ' + ename(e); }
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2');
+    f.webgl2 = gl ? 'yes' : 'no';
+    if (gl) {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      f.gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)).slice(0, 80) : String(gl.getParameter(gl.RENDERER)).slice(0, 80);
+      f.maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    }
+  } catch (e) { f.webgl2 = 'error ' + ename(e); }
+  try {
+    if (typeof AudioWorkletNode !== 'function') f.audioWorklet = 'absent';
+    else {
+      const ctx = new AudioContext();
+      f.audioSampleRate = ctx.sampleRate;
+      if (!ctx.audioWorklet) f.audioWorklet = 'no audioWorklet on AudioContext';
+      else {
+        const src = 'class P extends AudioWorkletProcessor{process(){return true}} registerProcessor("kastr-probe",P);';
+        const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+        await timeout(ctx.audioWorklet.addModule(url), 5000);
+        const n = new AudioWorkletNode(ctx, 'kastr-probe');
+        n.disconnect();
+        f.audioWorklet = 'yes (module loaded, node made)';
+        URL.revokeObjectURL(url);
+      }
+      try { await ctx.close(); } catch (e) {}
+    }
+  } catch (e) { f.audioWorklet = 'error ' + ename(e) + ' ' + emsg(e); }
+  f.mediaStreamTrackProcessor = typeof MediaStreamTrackProcessor;
+  f.mediaStreamTrackGenerator = typeof MediaStreamTrackGenerator;
+  try {
+    if (!window.crypto || !crypto.subtle) f.cryptoSubtle = 'absent';
+    else {
+      await crypto.subtle.digest('SHA-256', new Uint8Array([1, 2, 3]));
+      const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, k, new Uint8Array(8));
+      f.cryptoSubtle = 'yes (SHA-256 + AES-GCM)';
+    }
+  } catch (e) { f.cryptoSubtle = 'error ' + ename(e); }
+  try {
+    if (!window.indexedDB) f.indexedDB = 'absent';
+    else {
+      f.indexedDB = await timeout(new Promise((res) => {
+        const rq = indexedDB.open('kastr-probe-check', 1);
+        rq.onupgradeneeded = () => { try { rq.result.createObjectStore('s'); } catch (e) {} };
+        rq.onsuccess = () => { try { rq.result.close(); indexedDB.deleteDatabase('kastr-probe-check'); } catch (e) {} res('yes'); };
+        rq.onerror = () => res('error ' + ename(rq.error));
+        rq.onblocked = () => res('blocked');
+      }), 5000);
+    }
+  } catch (e) { f.indexedDB = 'error ' + ename(e); }
+  f.secureContext = window.isSecureContext === true;
+  f.localStorage = (() => { try { localStorage.setItem('kastr-probe', '1'); localStorage.removeItem('kastr-probe'); return 'yes'; } catch (e) { return 'error ' + ename(e); } })();
+  f.requestVideoFrameCallback = typeof HTMLVideoElement !== 'undefined' && 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  try {
+    const v = document.createElement('video');
+    f.canPlay = {
+      h264: v.canPlayType('video/mp4; codecs="avc1.640028"'),
+      hevc: v.canPlayType('video/mp4; codecs="hvc1.1.6.L120.B0"'),
+      vp9: v.canPlayType('video/webm; codecs="vp9"'),
+      av1: v.canPlayType('video/mp4; codecs="av01.0.08M.08"'),
+    };
+  } catch (e) {}
+  f.mediaDevices = typeof (navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  f.displayMedia = typeof (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  f.wakeLock = typeof (navigator.wakeLock && navigator.wakeLock.request);
+  f.fullscreen = typeof document.documentElement.requestFullscreen;
+  out.features = f;
+  out.cameraMic = 'not checked (display-only build)';
+
+  say('done');
+  try { KastrProbe.full(JSON.stringify(out)); } catch (e) {}
+})().catch(function (e) { try { KastrProbe.error('probe script: ' + (e && e.name) + ' ' + (e && e.message)); } catch (x) {} });
+</script>
+</body>
+</html>

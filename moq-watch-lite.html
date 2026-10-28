@@ -2161,8 +2161,10 @@
   .mtxt { font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
   .mtxt a { color:inherit; text-decoration:underline; }
   .mmeta { font-size:10px; opacity:.7; text-align:right; margin-top:2px; white-space:nowrap; }
-  .mst.read { color:#7fe3ff; opacity:1; }
-  :root[data-theme="light"] .mst.read { color:#fff; font-weight:700; }
+  .mst svg { display:inline-block; vertical-align:-2px; margin-left:4px; }   /* 0.21.93: one mark per step (kastr-msg.js stMark) */
+  .mst.st-sending { opacity:.75; }
+  .mst.st-dlv { --mst-ink:var(--asi-blue); }   /* the check cut out of the filled circle: the bubble's own colour */
+  .mst.read { color:var(--on-accent); }   /* 0.21.93: the eye's shape says "read" -- the bubble's own ink (a fixed cyan vanished on light accents) */
   .mst.bad { color:var(--asi-red); white-space:normal; }
   /* 0.21.92 (Kenton: the "Not sent" note after the time could not be read on his lime bubble): on my own bubble the note uses
      the bubble's own ink, full strength, on its own line -- a fixed pink only worked on a blue accent */

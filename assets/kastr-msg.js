@@ -554,6 +554,30 @@
     if (n > was) { b.classList.remove("pulse"); void b.offsetWidth; b.classList.add("pulse"); }
     btn.title = "Messages" + (n ? " — " + n + " unread" : "");
   }
+  // 0.21.93 (Kenton: "Clearer icons on each"): sending = an open circle, sent (on the hub) = a check, delivered = a filled
+  // check, read = an eye; the words + the time on hover. The hub keeps when each cursor moved (op ticks dt / rt: [[seq, at]])
+  const ST_SVG = {
+    sending: '<circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+    sent: '<path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    dlv: '<circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.6 8.3l2.4 2.4 4.4-5" fill="none" stroke="var(--mst-ink, #000)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    read: '<path d="M1 8s2.6-4.6 7-4.6S15 8 15 8s-2.6 4.6-7 4.6S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.3" fill="currentColor"/>',
+  };
+  function stMark(el, kind, words) {
+    el.classList.add("st-" + kind);
+    if (kind === "read") el.classList.add("read");
+    el.title = words;
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", words);
+    el.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' + ST_SVG[kind] + "</svg>";
+  }
+  const RCPT_KEEP = 60;   // kastr_msg.RCPT_KEEP: a full list may have lost the start, so its first entry is no time for older seqs
+  function rcptAt(lst, seq) {
+    if (!Array.isArray(lst)) return "";
+    const i = lst.findIndex((x) => Array.isArray(x) && x[0] >= seq);
+    return i < 0 || (i === 0 && lst.length >= RCPT_KEEP) ? "" : " " + fmtWhen(lst[i][1]);
+  }
+  const fmtWhen = (t) => { const d = new Date(t * 1000), tm = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return d.toDateString() === new Date().toDateString() ? tm : d.toLocaleDateString([], { month: "short", day: "numeric" }) + ", " + tm; };
   const fmtTime = (s) => { const d = new Date(s * 1000), now = new Date(); return d.toDateString() === now.toDateString() ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : Date.now() - d < 6 * 86400000 ? d.toLocaleDateString([], { weekday: "short" }) : d.toLocaleDateString([], { month: "short", day: "numeric" }); };
   const fmtDay = (s) => { const d = new Date(s * 1000), now = new Date(); if (d.toDateString() === now.toDateString()) return "Today";
@@ -1047,10 +1071,10 @@
         const s = document.createElement("span"); s.className = "mst";
         if (r.err) { s.textContent = " ⚠ Not sent: " + r.err; s.classList.add("bad"); }
         else if (r.waiting) s.textContent = " ⏲ Waiting for the hub";
-        else if (r.sending || !r.seq) s.textContent = " …";
-        else if (tk && tk.r >= r.seq) { s.textContent = " ✓✓"; s.classList.add("read"); s.title = "Read"; }
-        else if (tk && tk.d >= r.seq) { s.textContent = " ✓✓"; s.title = "Delivered"; }
-        else { s.textContent = " ✓"; s.title = "Sent — waiting on the hub until they are online"; }
+        else if (r.sending || !r.seq) stMark(s, "sending", "Sending…");   // 0.21.93 (Kenton): a different mark for each step
+        else if (tk && tk.r >= r.seq) stMark(s, "read", "Read" + rcptAt(tk.rt, r.seq));
+        else if (tk && tk.d >= r.seq) stMark(s, "dlv", "Delivered" + rcptAt(tk.dt, r.seq));
+        else stMark(s, "sent", "Sent " + fmtWhen(r.at) + " — on the hub, waiting until they are online");
         meta.appendChild(s);
       }
       bub.appendChild(meta);

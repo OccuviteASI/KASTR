@@ -424,12 +424,12 @@ class Hub(Base):
         o, c = self.kris.send("Kris Price", {"t": "hi"}, to="Ada")
         seq = o["seq"]
         o, c = self.kris.api({"op": "ticks", "as": "Kris Price", "names": ["Ada"]})
-        self.assertEqual(o["ticks"]["ada"], {"d": 0, "r": 0})
+        self.assertEqual({k: o["ticks"]["ada"][k] for k in "dr"}, {"d": 0, "r": 0})   # 0.21.93: + dt / rt (the times)
         self.ada.pull(["Ada"])
         self.ada.pull(["Ada"])                                       # the ack rides the next pull
         self.assertEqual(self.ada.api({"op": "read", "as": "Ada", "conv": "p:kris price", "seq": seq})[1], 200)
         o, c = self.kris.api({"op": "ticks", "as": "Kris Price", "names": ["Ada"]})
-        self.assertEqual(o["ticks"]["ada"], {"d": seq, "r": seq})
+        self.assertEqual({k: o["ticks"]["ada"][k] for k in "dr"}, {"d": seq, "r": seq})
         # Ada's other device learns the read mark on its next pull
         tab = Device(self.svc, "web-ada00000-1234", room="beta")
         tab.unlock("Ada", ADA_CODE)

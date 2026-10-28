@@ -49,6 +49,7 @@ MSG_GROUP_MAX = 50                  # people in one group
 MSG_SEND_RATE = (120, 60)           # messages one device may send per minute
 MSG_FILE_RATE = (40, 600)           # attachments one device may upload per 10 minutes
 MSG_TOTAL_MAX = 200000              # messages one hub keeps (the oldest go first)
+RCPT_KEEP = 60                      # 0.21.93: cursor advances kept per list (delivered; read per conversation) -- the receipt times
 MSG_NOTE_KEEP_S = 30 * 86400        # "a new device unlocked your messages" notes
 MSG_PING_KEEP_S = 600
 PHOTO_MAX = 256 * 1024              # 0.21.90: one profile photo (bytes)
@@ -72,6 +73,23 @@ PFID_RE = re.compile(r"^p-[0-9a-f]{16}$")      # ... a photo as a store "file" (
 def name_disp(name):
     """A person's name as shown (trimmed, inner spaces collapsed, at most 48) -- kastr_relay.personal_name."""
     return " ".join(str(name or "").split())[:NAME_MAX]
+
+
+def _rcpt_merge(a, b):
+    """0.21.93: two receipt-time lists [[seq, at], ...] as one -- the earliest time each seq was reached, newest RCPT_KEEP."""
+    best = {}
+    for x in list(a or []) + list(b or []):
+        try:
+            q, t = int(x[0]), int(x[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        best[q] = min(t, best.get(q, t))
+    out, low = [], None
+    for q in sorted(best, reverse=True):   # a smaller seq reached no earlier than a bigger one adds nothing (the bigger covers it)
+        if low is None or best[q] < low:
+            out.append([q, best[q]])
+            low = best[q]
+    return out[::-1][-RCPT_KEEP:]
 
 
 def name_key(name):
@@ -212,6 +230,7 @@ class Messenger:
         self.groups = m.get("groups") if isinstance(m.get("groups"), dict) else {}
         self.reads = m.get("reads") if isinstance(m.get("reads"), dict) else {}        # nk -> {conv: seq}
         self.cursors = m.get("cursors") if isinstance(m.get("cursors"), dict) else {}  # device host -> {nk: seq, "at": t}
+        self.rcpt = m.get("rcpt") if isinstance(m.get("rcpt"), dict) else {}           # 0.21.93: nk -> {"d" | conv: [[seq, at], ...]}
         self.notes = m.get("notes") if isinstance(m.get("notes"), dict) else {}        # nk -> [{id, at, host, kind}]
         self.files = m.get("files") if isinstance(m.get("files"), dict) else {}        # fid -> {at, size, by, who: [nk] | None}
         self.photos = m.get("photos") if isinstance(m.get("photos"), dict) else {}     # 0.21.90: nk -> {h, at, type, size, by, name} (h "": removed)
@@ -242,7 +261,7 @@ class Messenger:
     # ---- persistence ----------------------------------------------------------------------------------------------
     def _meta(self):
         return {"fleet": self.fleet, "seq": self.seq, "persons": self.persons, "groups": self.groups, "reads": self.reads,
-                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos}
+                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos, "rcpt": self.rcpt}
 
     def _touch(self, now=False):
         """Meta changed: written at once (`now`: identities, groups) or within two seconds (cursors, reads)."""
@@ -307,6 +326,14 @@ class Messenger:
                     self.notes.pop(nk, None)
             for h in [h for h, c in self.cursors.items() if now - float(c.get("at") or 0) > MSG_KEEP_S]:
                 self.cursors.pop(h, None)
+            for nk in list(self.rcpt):   # 0.21.93: receipt times older than the messages they could describe
+                r = self.rcpt[nk]
+                for k in list(r):
+                    r[k] = [x for x in r[k] if float(x[1]) >= cut]
+                    if not r[k]:
+                        r.pop(k, None)
+                if not r:
+                    self.rcpt.pop(nk, None)
             for gid in [g for g, r in self.groups.items() if r.get("deleted") and now - float(r.get("deleted") or 0) > MSG_KEEP_S]:
                 self.groups.pop(gid, None)
             for nk in [k for k, ph in self.photos.items() if not ph.get("h") and now - float(ph.get("at") or 0) > PHOTO_KEEP_GONE_S]:
@@ -650,6 +677,14 @@ class Messenger:
         self._ping_person(readers, env["seq"], skip=host)
         return {"ok": True, "seq": env["seq"], "at": env["at"]}, 200
 
+    def _rcpt_add(self, nk, key, seq, now):
+        """0.21.93: when `nk`'s delivered ("d") or read (conv) cursor reached `seq` -- the receipt marks' hover times."""
+        lst = self.rcpt.setdefault(nk, {}).setdefault(key, [])
+        if lst and int(lst[-1][0]) >= seq:
+            return
+        lst.append([int(seq), int(now)])
+        del lst[:-RCPT_KEEP]
+
     def op_pull(self, p, host, now):
         """{as: [names], since, ack?} -> {msgs, more, groups, reads, keys, notes, locked, cur}. `ack` = the highest seq this
         device has safely kept (delivered); `since` = what it already has."""
@@ -672,6 +707,7 @@ class Messenger:
             c = self.cursors.setdefault(host, {})
             for nk in mine:
                 c[nk] = max(int(c.get(nk) or 0), min(ack, self.seq))
+                self._rcpt_add(nk, "d", c[nk], now)
             c["at"] = int(now)
             for nk in mine:
                 d = (self.persons[nk].setdefault("devices", {})).get(host)
@@ -727,6 +763,7 @@ class Messenger:
         r = self.reads.setdefault(nk, {})
         if seq > int(r.get(conv) or 0):
             r[conv] = seq
+            self._rcpt_add(nk, conv, seq, now)
             if len(r) > 2000:
                 for k in sorted(r, key=lambda k: r[k])[:len(r) - 2000]:
                     r.pop(k, None)
@@ -746,7 +783,8 @@ class Messenger:
             if not per:
                 continue
             d = max([int((self.cursors.get(h) or {}).get(o) or 0) for h in (per.get("devices") or {})] or [0])
-            out[o] = {"d": d, "r": int((self.reads.get(o) or {}).get("p:" + nk) or 0)}
+            rc = self.rcpt.get(o) or {}   # 0.21.93: + when each cursor got there (the marks' hover times)
+            out[o] = {"d": d, "r": int((self.reads.get(o) or {}).get("p:" + nk) or 0), "dt": list(rc.get("d") or []), "rt": list(rc.get("p:" + nk) or [])}
         return {"ok": True, "ticks": out}, 200
 
     # ---- groups ------------------------------------------------------------------------------------------------------
@@ -992,6 +1030,13 @@ class Messenger:
             if o in c:
                 v = c.pop(o)
                 c[n] = max(int(v or 0), int(c.get(n) or 0))
+        if o in self.rcpt:   # 0.21.93: the receipt times follow the name too
+            mine = self.rcpt.setdefault(n, {})
+            for k, v in self.rcpt.pop(o).items():
+                mine[k] = _rcpt_merge(mine.get(k), v)
+        for r in self.rcpt.values():
+            if "p:" + o in r:
+                r["p:" + n] = _rcpt_merge(r.get("p:" + n), r.pop("p:" + o))
         if o in self.notes:
             self.notes[n] = (self.notes.get(n) or []) + self.notes.pop(o)
         for f in self.files.values():
@@ -1161,7 +1206,7 @@ class Messenger:
             if meta_ver != mv:
                 out["meta"] = json.loads(json.dumps({"persons": self.persons, "groups": self.groups, "reads": self.reads,
                                                      "cursors": self.cursors, "notes": self.notes, "files": self.files,
-                                                     "photos": self.photos}))   # 0.21.90: + the profile photos (their bytes: missing_files)
+                                                     "photos": self.photos, "rcpt": self.rcpt}))   # 0.21.90: + the profile photos (their bytes: missing_files)
             msgs, size, more = [], 0, False
             for q in sorted(x for x in self.msgs if x > since):
                 if len(msgs) >= self.SYNC_MSGS or size > self.SYNC_BYTES:
@@ -1294,6 +1339,12 @@ class Messenger:
                         mine[str(k)[:60]] = max(int(q), int(mine.get(str(k)[:60]) or 0))
                     except (TypeError, ValueError):
                         pass
+            for nk, r in (meta.get("rcpt") or {}).items() if isinstance(meta.get("rcpt"), dict) else []:   # 0.21.93
+                if not name_key(nk) or not isinstance(r, dict):
+                    continue
+                mine = self.rcpt.setdefault(name_key(nk), {})
+                for k, lst in r.items():
+                    mine[str(k)[:60]] = _rcpt_merge(mine.get(str(k)[:60]), lst)
             for nk, lst in (meta.get("notes") or {}).items() if isinstance(meta.get("notes"), dict) else []:
                 have = {x.get("id") for x in self.notes.get(name_key(nk)) or []}
                 add = [dict(x) for x in (lst if isinstance(lst, list) else []) if isinstance(x, dict) and x.get("id") and x.get("id") not in have]

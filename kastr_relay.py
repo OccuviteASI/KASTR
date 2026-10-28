@@ -102,6 +102,7 @@ import kastr_rtsp
 import kastr_msg   # 0.21.88: private messages (the hub's end-to-end encrypted store)
 import kastr_access   # 0.21.89: Ask for access (the hub's desk of asks, answers and one-visit grants)
 import kastr_gif   # 0.21.91: GIF search -- GIPHY through the hub (the key stays on the hub)
+import kastr_secret   # 0.21.92: secrets at rest are sealed (DPAPI / owner-only key), logs masked
 
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
@@ -1337,6 +1338,7 @@ def _ensure_jwk(state_dir):
     key = os.urandom(32)
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"kty": "oct", "alg": "HS256", "k": _b64u(key)}, f)
+    kastr_secret.owner_only(path)   # 0.21.92: moq-relay reads it in the clear -- owner-only on POSIX
     return path, key
 
 
@@ -1654,7 +1656,8 @@ _LOG_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 def redact_log(text):
     """The field check's rules: no token, code or bearer ever leaves a machine in a collected log."""
-    t = re.sub(r"(?i)(jwt=)[A-Za-z0-9._\-]+", r"\1<redacted>", str(text or ""))
+    t = kastr_secret.mask(str(text or ""))   # 0.21.92: + passwords in URLs, invite tokens, JWTs, known secrets
+    t = re.sub(r"(?i)(jwt=)[A-Za-z0-9._\-]+", r"\1<redacted>", t)
     t = re.sub(r'(?i)("(token|code|access|secret|roomKey|admin|publisher|viewer|federation)"\s*:\s*)"[^"]*"', r'\1"<redacted>"', t)
     t = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1<redacted>", t)
     return t
@@ -3762,7 +3765,7 @@ def load_json(path, log=None, what=None, retries=6):
     for i in range(max(1, retries)):
         try:
             with open(path, encoding="utf-8-sig") as f:
-                return json.load(f), ""
+                return kastr_secret.open_doc(path, json.load(f)), ""   # 0.21.92: sealed fields opened
         except FileNotFoundError:
             return None, "missing"
         except (PermissionError, OSError) as ex:
@@ -3791,18 +3794,20 @@ def save_json(path, obj, log=None, backup=True):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(obj, f)
+            json.dump(kastr_secret.seal_doc(path, obj), f)   # 0.21.92: the file's secret fields sealed (kastr_secret.POLICY)
             f.flush()
             try:
                 os.fsync(f.fileno())
             except OSError:
                 pass
+        kastr_secret.owner_only(tmp)
         if backup and os.path.isfile(path):
             try:
                 with open(path, encoding="utf-8-sig") as f:
-                    json.load(f)
-                import shutil
-                shutil.copyfile(path, path + ".bak")
+                    cur = json.load(f)
+                with open(path + ".bak", "w", encoding="utf-8") as f:   # 0.21.92: sealed -- never a plain copy of a 0.21.91 file
+                    json.dump(kastr_secret.seal_doc(path, cur), f)
+                kastr_secret.owner_only(path + ".bak")
             except Exception:
                 pass          # an unparseable or busy current file is not worth keeping
         for i in range(6):
@@ -13134,6 +13139,7 @@ class Relay:
         path = os.path.join(self.state_dir, "relay.toml")
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(cfg))
+        kastr_secret.owner_only(path)   # 0.21.92: moq-relay reads its connect token in the clear -- owner-only on POSIX
         try:
             os.remove(os.path.join(self.state_dir, "lan.secret"))   # 0.21.40: the LAN mesh is gone; its plaintext secret goes too
         except OSError:
@@ -14269,6 +14275,7 @@ class Relay:
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(text)
+            kastr_secret.owner_only(tmp)   # 0.21.92: moq-relay reads the link tokens in the clear -- owner-only on POSIX
             os.replace(tmp, path)
         except OSError as e:
             self.log("relay mesh: %s not written: %s" % (MESH_PEERS_FILE, e))
@@ -15536,6 +15543,7 @@ class Relay:
                     line = ANSI.sub("", line).rstrip()
                     if not line:
                         continue
+                    line = kastr_secret.mask(line)   # 0.21.92: a ?jwt= or a password never reaches relay.log or the page
                     self._log_disk(line)   # 0.21.50: the whole log, for a field check's -Find
                     with self._lock:
                         self._log.append(line)

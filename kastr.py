@@ -34,6 +34,7 @@ import urllib.request
 
 import kastr_serve
 import kastr_rtsp   # 0.18.0: hooks
+import kastr_secret   # 0.21.92: secrets at rest sealed, launch.log masked
 
 APP_NAME = "KASTR"  # Kenton's ASI Streaming Tool with Relay
 FROZEN = getattr(sys, "frozen", False)
@@ -535,8 +536,8 @@ def note(msg):
                 os.replace(p, p + ".1")
         except OSError:
             pass
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + str(msg).rstrip() + chr(10))
+        with open(p, "a", encoding="utf-8") as f:   # 0.21.92: no code, token or password ever lands in launch.log
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + kastr_secret.mask(str(msg).rstrip()) + chr(10))
     except Exception:
         pass
 
@@ -3450,6 +3451,13 @@ def build_parser(ini):
 
 def main():
     ini, ini_path = read_ini()
+    # 0.21.92 (Kenton: "fix the plain text passcodes"): sealed secrets from here on; the first start of this version
+    # rewrites the 0.21.91 files (and their .bak copies) sealed. Windows: DPAPI (this user); else the owner-only key file.
+    try:
+        kastr_secret.configure(state_dir(), prefer_keyring=False, log=note)
+        kastr_secret.migrate_state(state_dir(), log=note)
+    except Exception as e:
+        note("secrets: could not seal the saved codes (%s) -- they stay as they were" % e)
     # 0.21.75: an invite link rides the command line once -- taken out of argv, so an update relaunch never replays it
     invite_url, _rest = split_invite_argv(sys.argv[1:])
     sys.argv[1:] = _rest
@@ -4013,6 +4021,7 @@ def main():
                 return
             if not isinstance(doc, dict):
                 return
+            doc = kastr_secret.open_doc(path, doc)   # 0.21.92: the codes are kept sealed
             room = str(doc.get("room") or "").strip().lower()
             feeds = [x for x in (doc.get("feeds") or []) if isinstance(x, dict) and x.get("url") and x.get("keep", True)]
             if doc.get("suspended") is True:   # 0.21.16: the switch survives the relaunch -- records come back, nothing starts
@@ -4047,10 +4056,12 @@ def main():
                 try:
                     with open(path, encoding="utf-8-sig") as f:
                         doc = json.load(f)
-                    doc["restoreError"] = "the relay refused the saved access code (%s)" % detail
+                    doc["restoreError"] = "the relay refused the saved access code (%s)" % kastr_secret.mask(detail)
                     tmp = path + ".tmp"
                     with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump(doc, f)
+                        json.dump(kastr_secret.seal_doc(path, doc), f)   # 0.21.92: still sealed
+                    if os.name != "nt":
+                        os.chmod(tmp, 0o600)
                     os.replace(tmp, path)
                 except Exception:
                     pass

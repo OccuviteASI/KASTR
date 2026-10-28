@@ -309,6 +309,7 @@
         if (d.tv) {   // 0.21.93: a hub that keeps timers -- its clock, the conversation defaults, which timed messages still live
           S.tv = true; S.skew = Number(d.now) - Date.now() / 1000 || 0; S.convt = d.convt || {}; tm = d.tm || {};
           S.sched = Array.isArray(d.sched) ? d.sched : [];
+          await schedOpen(S.sched, d.keys || {});
           idbPut("meta", { k: "timers|" + by(), v: { tv: true, skew: S.skew, convt: S.convt } }).catch(() => {});
         } else if (S.tv) { S.tv = false; idbPut("meta", { k: "timers|" + by(), v: { tv: false } }).catch(() => {}); }   // an older hub (a hand-back)
         if (!d.more) break;
@@ -442,7 +443,7 @@
     Kraw.fill(0);
     return { iv: b64(iv), ct: b64(ct), wraps, missing: Object.entries(keys).filter(([, v]) => !v).map(([k]) => k) };
   }
-  async function send(conv, text, files) {
+  async function send(conv, text, files, o) {
     text = String(text || "").slice(0, 20000);
     files = (files || []).slice(0, 10);
     if (!text.trim() && !files.length) return;
@@ -456,7 +457,8 @@
     if (ttl) rec.ttl = ttl;
     S.recs.set(rec.k, rec);
     paint();
-    const ob = { cid, by: by(), conv, text, files, ttl, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
+    const rel = S.tv && o?.rel ? Math.floor(o.rel) : 0;   // 0.21.93 send later: when (the hub's clock) -- the hub holds it till then
+    const ob = { cid, by: by(), conv, text, files, ttl, rel, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
     idbPut("outbox", ob).catch(() => {});
     rec.outbox = ob;
     await deliver(rec, ob);
@@ -485,7 +487,7 @@
       if (ob.conv.startsWith("p:") && sealed.missing.includes(ob.conv.slice(2))) throw Object.assign(new Error(convTitle(ob.conv) + " hasn’t set up messages yet"), { fatal: true });
       const send1 = (s) => api({ op: "send", as: S.name, cid: ob.cid, iv: s.iv, ct: s.ct, wraps: s.wraps, files: metas.map((m) => m.fid),
                                  gid: ob.conv.startsWith("g:") ? ob.conv.slice(2) : undefined, to: ob.conv.startsWith("p:") ? ob.conv.slice(2) : undefined,
-                                 tv: 1, ttl: ob.ttl || 0 });
+                                 tv: 1, ttl: ob.ttl || 0, rel: ob.rel || undefined });
       let d = await send1(sealed);
       if (!d.ok && d.status === 409 && d.stale) { await keysFor(readersOf(ob.conv), true); sealed = await seal(ob.conv, ob.cid, body); d = await send1(sealed); }
       if (!d.ok) {
@@ -494,6 +496,11 @@
       }
       rec.sending = false; rec.seq = d.seq;
       if (d.gone) { S.recs.delete(rec.k); idbDel("outbox", ob.cid).catch(() => {}); }   // 0.21.93: a resend of one whose time already ran out
+      if (d.sched) {   // 0.21.93 send later: held on the hub now; it comes back in the pull as "Scheduled for ..."
+        S.recs.delete(rec.k); idbDel("outbox", ob.cid).catch(() => {});
+        if (Number(d.now)) S.skew = Number(d.now) - Date.now() / 1000;
+        toast("Scheduled for " + fmtWhen(Number(d.rel) - (S.skew || 0)) + " — the hub sends it then", 5000, "event");
+      }
       T("sent", { cid: ob.cid, seq: d.seq });
       pull();
     } catch (e) {
@@ -643,6 +650,87 @@
     });
   }
   setInterval(timerBeat, 5000);
+  // SEND LATER: sealed here at once; the hub keeps the sealed copy (no number yet: no page sees it, an older one neither) and
+  // releases it at `rel` on ITS clock, even with this computer off. My pages list mine (pull `sched`) as "Scheduled for
+  // <time>" (shown in this device's time zone) -- change the time, send now or cancel. Never kept in IndexedDB: the hub has it.
+  async function schedOpen(list, keys) {
+    const want = new Set();
+    for (const m of list) {
+      if (!m?.cid) continue;
+      const k = "sch:" + m.cid;
+      want.add(k);
+      const old = S.recs.get(k);
+      if (old && old.rel === Number(m.rel)) continue;
+      const r = await openMsg(Object.assign({}, m, { seq: 0 }), keys);
+      if (!r) continue;
+      Object.assign(r, { k, seq: 0, sched: true, rel: Number(m.rel) || 0 });
+      S.recs.set(k, r);
+    }
+    for (const k of [...S.recs.keys()]) if (k.startsWith("sch:") && !want.has(k)) S.recs.delete(k);
+  }
+  const tzName = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } };
+  async function pickTime(title, message, def, ok) {   // a date + time in this device's zone -> the hub's epoch seconds (0: cancelled)
+    const loc = (sec) => { const d = new Date(sec * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+    const now = Date.now() / 1000;
+    def = Math.max(def, now + 300);
+    def = Math.ceil(def / 300) * 300;   // a round 5 minutes
+    const v = await K.confirm({ title, message: message + (tzName() ? " (" + tzName() + ")" : ""), ok: ok || "Schedule",
+      input: { type: "datetime-local", value: loc(def), min: loc(now + 60), max: loc(now + 90 * 86400 - 3600) },
+      check: (x) => { const t = new Date(String(x || "")).getTime() / 1000;
+        if (!x || !isFinite(t)) return "Pick a date and a time.";
+        if (t < Date.now() / 1000 + 60) return "Pick a time at least a minute from now.";
+        return t > Date.now() / 1000 + 90 * 86400 ? "Up to 90 days ahead." : ""; } });
+    if (!v) return 0;
+    return Math.floor(new Date(String(v)).getTime() / 1000 + (S.skew || 0));
+  }
+  function sendMenu(anchor, conv, ta, pane) {
+    if (!S.tv) { toast("Send later needs the hub on KASTR 0.21.93 or newer", 5000, "info"); return; }
+    K.menu(anchor, [{ value: "later", label: "Send later…" }, { hint: "The hub keeps it sealed and sends it then, even with this computer off." }], async () => {
+      if (!ta.value.trim() && !pane.__files.length) { toast("Write the message first, then pick Send later", 4000, "info"); ta.focus(); return; }
+      const rel = await pickTime("Send later", "When should it go?", Date.now() / 1000 + 3600);
+      if (!rel) return;
+      const t = ta.value, fs = pane.__files.slice();
+      if (!t.trim() && !fs.length) return;
+      ta.value = ""; pane.__files = []; paintAtt(pane); grow(ta);
+      send(conv, t, fs, { rel });
+    });
+  }
+  function schedEl(r) {
+    const b = document.createElement("div"); b.className = "mb mine msched";
+    const bub = document.createElement("div"); bub.className = "mbub";
+    if (r.locked || r.bad) { bub.classList.add("mlock"); bub.textContent = "A scheduled message (it cannot be opened on this device)."; }
+    else {
+      for (const f of r.files || []) bub.appendChild(fileEl(f));
+      if (r.text) { const t = document.createElement("div"); t.className = "mtxt"; t.textContent = r.text; linkify(t); bub.appendChild(t); }
+    }
+    const meta = document.createElement("div"); meta.className = "mmeta";
+    if (r.ttl) meta.appendChild(clockEl(r));
+    const w = document.createElement("button"); w.type = "button"; w.className = "mschd";
+    w.innerHTML = K.icon("clock"); w.appendChild(document.createTextNode("Scheduled for " + fmtWhen(r.rel - (S.skew || 0)) + " ▾"));
+    w.title = "Change the time, send now or cancel";
+    w.addEventListener("click", (e) => { e.stopPropagation(); schedMenu(w, r); });
+    meta.appendChild(w);
+    bub.appendChild(meta); b.appendChild(bub);
+    return b;
+  }
+  function schedMenu(anchor, r) {
+    K.menu(anchor, [{ value: "time", label: "Change the time…" }, { value: "now", label: "Send now" }, { sep: true }, { value: "cancel", label: "Cancel — don’t send it", danger: true }], async (v) => {
+      let d = null;
+      if (v === "time") {
+        const rel = await pickTime("Change the time", "When should it go?", r.rel - (S.skew || 0), "Change");
+        if (!rel) return;
+        d = await api({ op: "sched", as: S.name, cid: r.cid, do: "time", rel });
+      } else if (v === "now") d = await api({ op: "sched", as: S.name, cid: r.cid, do: "now" });
+      else if (v === "cancel") {
+        if (!(await K.confirm({ title: "Cancel the scheduled message", message: "Don’t send it?", detail: "It leaves the hub at once.", ok: "Cancel it", cancel: "Keep it", danger: true }))) return;
+        d = await api({ op: "sched", as: S.name, cid: r.cid, do: "cancel" });
+        if (d.ok) { for (const f of r.files || []) if (f?.fid) idbDel("blobs", f.fid).catch(() => {}); S.recs.delete(r.k); }
+      }
+      if (d && !d.ok) toast(d.sent ? "It was already sent" : "Could not do that: " + (d.error || d.status), 5000, "warn");
+      if (d && Number(d.now)) S.skew = Number(d.now) - Date.now() / 1000;
+      pull();
+    });
+  }
   // ---- end 0.21.93 per-message timers
   async function ticks() {
     if (S.state !== "ready" || !S.open.startsWith("p:") || !panelShown()) return;
@@ -736,6 +824,7 @@
     if (r.locked) return "Sent before this key was made";
     if (r.bad) return "Could not be opened";
     const who = r.mine ? "You: " : r.gid ? r.fromName.split(" ")[0] + ": " : "";
+    if (r.sched) return "Scheduled: " + (r.text ? r.text.replace(/\s+/g, " ").slice(0, 70) : "an attachment");   // 0.21.93
     if (r.text) return who + r.text.replace(/\s+/g, " ").slice(0, 80);
     const f = (r.files || [])[0];
     return f ? who + (IMG_TYPES.test(f.type || "") ? "Picture" : f.name) : "";
@@ -1137,7 +1226,15 @@
       pane.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); pane.classList.add("mdrag"); } });
       pane.addEventListener("dragleave", () => pane.classList.remove("mdrag"));
       pane.addEventListener("drop", (e) => { pane.classList.remove("mdrag"); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(pane, fs); } });
-      pane.querySelector(".msend").addEventListener("click", (e) => { e.stopPropagation(); sendNow(); });
+      const sb = pane.querySelector(".msend");
+      sb.addEventListener("click", (e) => { e.stopPropagation(); if (sb.__held) { sb.__held = false; return; } sendNow(); });
+      // 0.21.93 Send later: right-click Send, or hold it (a touch screen) -- the hub keeps the sealed message until then
+      const later = () => sendMenu(sb, conv, ta, pane);
+      sb.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); later(); });
+      let holdT = 0;
+      sb.addEventListener("pointerdown", (e) => { if (e.pointerType === "mouse") return; clearTimeout(holdT); holdT = setTimeout(() => { sb.__held = true; later(); }, 550); });
+      for (const ev of ["pointerup", "pointerleave", "pointercancel"]) sb.addEventListener(ev, () => clearTimeout(holdT));
+      pane.__sendNow = sendNow;
       pane.querySelector(".mattach").addEventListener("click", (e) => { e.stopPropagation(); fi.click(); });
       // 0.21.91 (Kenton: "messages should allow for the emojis to be used"): the Room Chat grid, inserted where the cursor is;
       // the system emoji keyboard (Win + .) works in the box as well
@@ -1181,6 +1278,7 @@
       tb.classList.toggle("on", s > 0);
       tb.querySelector(".mtl").textContent = s > 0 ? ttlShort(s) : "";
       tb.title = s > 0 ? "Disappears " + ttlName(s) + " after it is read" + (own ? " (this message only)" : " (this conversation’s setting)") : "Disappearing messages: off";
+      pane.querySelector(".msend").title = S.tv ? "Send — right-click or hold for Send later" : "Send";
     }
     const nokey = pane.querySelector(".mnokey");
     const cant = !!nk && S.keys.has(nk) && !keyRow;
@@ -1190,16 +1288,18 @@
     if (nk && !S.keys.has(nk)) keysFor([nk]).then(() => paintConv()).catch(() => {});
     // the log
     const log = pane.querySelector(".mlog");
-    const recs = [...S.recs.values()].filter((r) => r.by === by() && convOf(r) === conv).sort((a, b) => (a.seq || 1e15) - (b.seq || 1e15) || a.at - b.at);
+    const ord = (r) => (r.sched ? 2e15 + r.rel : r.seq || 1e15);   // 0.21.93: scheduled ones last, in their release order
+    const recs = [...S.recs.values()].filter((r) => r.by === by() && convOf(r) === conv).sort((a, b) => ord(a) - ord(b) || a.at - b.at);
     const read = Number(S.reads[conv]) || 0;
     const tk = S.ticks[conv] || null;
-    const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || "", r.ttl || 0, r.exp || 0, r.st || 0]), read, tk]);
+    const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || "", r.ttl || 0, r.exp || 0, r.st || 0, r.rel || 0]), read, tk]);
     if (log.__sig === sig) return;
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     log.__sig = sig;
     const els = [];
     let day = "", prev = null, newMark = false;
     for (const r of recs) {
+      if (r.sched) { if (day !== "sched") { const x = document.createElement("div"); x.className = "mday"; x.textContent = "Scheduled"; els.push(x); day = "sched"; } els.push(schedEl(r)); prev = null; continue; }   // 0.21.93
       const d = fmtDay(r.at);
       if (d !== day) { const x = document.createElement("div"); x.className = "mday"; x.textContent = d; els.push(x); day = d; prev = null; }
       if (!newMark && !r.mine && r.seq && r.seq > (log.__readAtOpen ?? read) && r.kind === "msg") { const x = document.createElement("div"); x.className = "mnewmark"; x.textContent = "New"; els.push(x); newMark = true; }

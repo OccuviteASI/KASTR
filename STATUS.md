@@ -45,4 +45,6 @@ Seen in passing, **not caused by this change**: stats.html in the light theme sh
 
 ## Suites
 
-See the final report. Everything passes except `test_npu_fx`, which is known to fail.
+These were run after merging main at 8c405e2:
+- Windows: Ran 2212, the only failure is `test_npu_fx.test_vendored_and_verified`, which is known to fail. 10 skipped.
+- WSL: Ran 2212, the only failure is `test_npu_fx.test_vendored_and_verified`. 9 skipped.

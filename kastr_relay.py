@@ -10164,11 +10164,22 @@ class AuthService:
 
     def _msg_loop(self):
         stop = self.__dict__.get("_board_stop") or threading.Event()
-        while not stop.wait(3600):
+        swept = time.time()
+        while not stop.wait(self.MSG_TICK_S):
+            try:   # 0.21.93: the timer beat -- scheduled messages out, timed ones gone (the hub only: a spoke's or the
+                if not self._p_spoke():   # standby's copy follows the hub's tombstones; a promoted standby beats itself)
+                    self._msgr().tick()
+            except Exception as e:
+                self.log("relay auth: messages timers: %s" % str(e)[:120])
+            if time.time() - swept < 3600:
+                continue
+            swept = time.time()
             try:
                 self._msgr().sweep()
             except Exception as e:
                 self.log("relay auth: messages sweep: %s" % str(e)[:120])
+
+    MSG_TICK_S = 5   # 0.21.93
 
     def _msg_ping(self, hosts, seq):
         """Hub: these devices pull their messages -- the beat of the page on this relay says so at once, and a spoke's pages

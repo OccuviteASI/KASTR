@@ -117,6 +117,8 @@
     recs: new Map(),       // "seq:<n>" | "cid:<id>" (mine, not yet back from the hub) -> a message
     groups: new Map(), reads: {}, open: "", keys: new Map(), lastPing: 0, busy: false, histDone: false, devices: 0,
     view: "list", picker: null, filter: "", people: [], peopleAt: 0, ticks: {}, codeMin: 8, hubDown: false, settings: false,
+    // 0.21.93 timers: the hub knows them (tv), its clock minus mine (s), conversation defaults, the next message's own timer
+    tv: false, skew: 0, convt: {}, ttlNext: new Map(),
   };
   const by = () => S.fleet + "|" + S.nk;
   const renameMap = new Map();   // 0.21.91: old name key -> {key, name} (people who changed their name)
@@ -246,7 +248,10 @@
     if (Array.isArray(g?.v)) for (const x of g.v) S.groups.set(x.gid, x);
     const rd = await idbGet("meta", "reads|" + by()).catch(() => null);
     if (rd?.v) S.reads = rd.v;
+    const tq = await idbGet("meta", "timers|" + by()).catch(() => null);   // 0.21.93: what the hub last said (offline purges)
+    if (tq?.v) { S.tv = !!tq.v.tv; S.skew = Number(tq.v.skew) || 0; S.convt = tq.v.convt || {}; }
     await loadLocal();
+    timerStubs();
     setState("ready");
     pull();
     outboxRetry();
@@ -256,6 +261,7 @@
     const rows = await idbAll("msgs", "by", by()).catch(() => []);
     for (const r of rows) {
       if (r.at * 1000 < cut) { idbDel("msgs", r.k).catch(() => {}); continue; }
+      if ((r.ttl || r.vo) && timedGone(r)) { dropRec(r); continue; }   // 0.21.93: its time ran out while this page was closed
       S.recs.set("seq:" + r.seq, r);
     }
     const ob = await idbAll("outbox").catch(() => []);
@@ -268,10 +274,10 @@
     if (S.state !== "ready" || !K.allowed()) return;
     if (S.busy) { pullAgain = true; return; }
     S.busy = true;
-    let fresh = [];
+    let fresh = [], tm = null;
     try {
       for (let round = 0; round < 30; round++) {
-        const d = await api({ op: "pull", as: [S.name], since: S.cur, ack: S.cur });
+        const d = await api({ op: "pull", as: [S.name], since: S.cur, ack: S.cur, tv: 1 });
         if (!d.ok) {
           if (d.status === 503 || d.net) { if (!S.hubDown) { S.hubDown = true; paint(); } }
           break;
@@ -300,11 +306,17 @@
         }
         idbPut("meta", { k: "cur|" + by(), v: S.cur }).catch(() => {});
         notes((d.notes || {})[S.nk] || []);
+        if (d.tv) {   // 0.21.93: a hub that keeps timers -- its clock, the conversation defaults, which timed messages still live
+          S.tv = true; S.skew = Number(d.now) - Date.now() / 1000 || 0; S.convt = d.convt || {}; tm = d.tm || {};
+          S.sched = Array.isArray(d.sched) ? d.sched : [];
+          idbPut("meta", { k: "timers|" + by(), v: { tv: true, skew: S.skew, convt: S.convt } }).catch(() => {});
+        } else if (S.tv) { S.tv = false; idbPut("meta", { k: "timers|" + by(), v: { tv: false } }).catch(() => {}); }   // an older hub (a hand-back)
         if (!d.more) break;
       }
+      if (tm) purgeTimed(tm);
       if (fresh.length) {
-        await api({ op: "pull", as: [S.name], since: S.cur, ack: S.cur });   // ack at once (the sender's "delivered")
-        arrived(fresh);
+        await api({ op: "pull", as: [S.name], since: S.cur, ack: S.cur, tv: 1 });   // ack at once (the sender's "delivered")
+        arrived(fresh.filter((r) => S.recs.has("seq:" + r.seq)));
       }
     } finally {
       S.busy = false;
@@ -317,6 +329,7 @@
                    gid: m.gid || "", to: m.to || "", toName: m.toName || "", kind: m.kind || "msg" };
     base.mine = base.from === S.nk;
     if (m.kind === "sys") return Object.assign(base, { sys: m.sys || {} });
+    if (Number(m.ttl) > 0) base.ttl = Number(m.ttl);   // 0.21.93: disappearing (seconds after each reader reads it)
     const w = (m.wraps || {})[S.kid];
     const sk = keys[m.fromKid];
     if (!w || !sk) return Object.assign(base, { locked: true });
@@ -326,6 +339,7 @@
       const ck = await aesKey(raw, ["decrypt"]);
       raw.fill(0);
       const body = JSON.parse(dec.decode(await subtle.decrypt({ name: "AES-GCM", iv: unb64(m.iv), additionalData: enc.encode("kastr-msg-v1|" + m.cid) }, ck, unb64(m.ct))));
+      if (!base.ttl && Number(body.x?.ttl) > 0) base.ttl = Number(body.x.ttl);   // 0.21.93: the sealed copy of the timer
       return Object.assign(base, { text: String(body.t || ""), files: Array.isArray(body.files) ? body.files.slice(0, 10) : [] });
     } catch (e) {
       T("decrypt-fail", { seq: m.seq, e: String(e?.message || e) });
@@ -434,12 +448,15 @@
     if (!text.trim() && !files.length) return;
     { const mv = conv.startsWith("p:") ? renameMap.get(conv.slice(2)) : null; if (mv?.key) conv = "p:" + mv.key; }   // 0.21.91: to their new name
     const cid = rid();
+    const ttl = S.tv ? ttlFor(conv) : 0;   // 0.21.93: this message's own timer, else the conversation's (once: the next one is back to it)
+    S.ttlNext.delete(conv);
     const rec = { k: "cid:" + cid, by: by(), cid, at: Math.floor(Date.now() / 1000), from: S.nk, fromName: S.name, mine: true, kind: "msg", text,
                   files: files.map((f) => ({ name: f.name || "file", type: f.type || "", size: f.size, local: URL.createObjectURL(f) })),
                   gid: conv.startsWith("g:") ? conv.slice(2) : "", to: conv.startsWith("p:") ? conv.slice(2) : "", sending: true };
+    if (ttl) rec.ttl = ttl;
     S.recs.set(rec.k, rec);
     paint();
-    const ob = { cid, by: by(), conv, text, files, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
+    const ob = { cid, by: by(), conv, text, files, ttl, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
     idbPut("outbox", ob).catch(() => {});
     rec.outbox = ob;
     await deliver(rec, ob);
@@ -463,11 +480,12 @@
         ob.metas = metas.slice();
         idbPut("outbox", ob).catch(() => {});
       }
-      const body = { v: 1, t: ob.text, files: metas };
+      const body = Object.assign({ v: 1, t: ob.text, files: metas }, ob.ttl ? { x: { ttl: ob.ttl } } : {});   // 0.21.93: the timer sealed in too
       let sealed = await seal(ob.conv, ob.cid, body);
       if (ob.conv.startsWith("p:") && sealed.missing.includes(ob.conv.slice(2))) throw Object.assign(new Error(convTitle(ob.conv) + " hasn’t set up messages yet"), { fatal: true });
       const send1 = (s) => api({ op: "send", as: S.name, cid: ob.cid, iv: s.iv, ct: s.ct, wraps: s.wraps, files: metas.map((m) => m.fid),
-                                 gid: ob.conv.startsWith("g:") ? ob.conv.slice(2) : undefined, to: ob.conv.startsWith("p:") ? ob.conv.slice(2) : undefined });
+                                 gid: ob.conv.startsWith("g:") ? ob.conv.slice(2) : undefined, to: ob.conv.startsWith("p:") ? ob.conv.slice(2) : undefined,
+                                 tv: 1, ttl: ob.ttl || 0 });
       let d = await send1(sealed);
       if (!d.ok && d.status === 409 && d.stale) { await keysFor(readersOf(ob.conv), true); sealed = await seal(ob.conv, ob.cid, body); d = await send1(sealed); }
       if (!d.ok) {
@@ -475,6 +493,7 @@
         throw Object.assign(new Error(d.error || ("HTTP " + d.status)), { fatal: true });
       }
       rec.sending = false; rec.seq = d.seq;
+      if (d.gone) { S.recs.delete(rec.k); idbDel("outbox", ob.cid).catch(() => {}); }   // 0.21.93: a resend of one whose time already ran out
       T("sent", { cid: ob.cid, seq: d.seq });
       pull();
     } catch (e) {
@@ -499,13 +518,132 @@
   let readT = 0;
   function markRead(conv) {
     const last = Math.max(0, ...[...S.recs.values()].filter((r) => r.seq && convOf(r) === conv).map((r) => r.seq));
-    if (!last || last <= (Number(S.reads[conv]) || 0)) return;
-    S.reads[conv] = last;
+    // 0.21.93: a disappearing message's timer starts when I read it -- a read goes to the hub for it even when the
+    // conversation was already marked read (on a device that showed it before this one could start timers)
+    const timed = [...S.recs.values()].filter((r) => r.seq && !r.mine && r.ttl && !r.st && convOf(r) === conv && r.seq <= last);
+    if (!last || (last <= (Number(S.reads[conv]) || 0) && !timed.length)) return;
+    for (const r of timed) { r.st = 1; r.exp = Math.floor(hubNow()) + r.ttl; idbPut("msgs", r).catch(() => {}); }   // the hub's answer corrects it
+    S.reads[conv] = Math.max(last, Number(S.reads[conv]) || 0);
     idbPut("meta", { k: "reads|" + by(), v: S.reads }).catch(() => {});
     clearTimeout(readT);
-    readT = setTimeout(() => api({ op: "read", as: S.name, conv, seq: last }), 400);
+    readT = setTimeout(() => api({ op: "read", as: S.name, conv, seq: last, tv: 1 }).then((d) => { if (d.ok && timed.length) pull(); }), 400);
     paintBtn();
   }
+
+  // ---- 0.21.93 per-message timers (Kenton 2026-10-27/28) --------------------------------------------------------------------
+  // DISAPPEARING: a conversation default (anyone in it changes it -- menu > Disappearing messages) and the composer's timer
+  // button for the next message only. Each reader's copy goes `ttl` after THEY read it (7 days at the latest unread); the
+  // sender's copy goes `ttl` after the first reader read it (so a short timer never erases it before anyone saw it). The hub
+  // deletes its ciphertext + attachments when every reader is done and lists my live timed messages in each pull (`tm`,
+  // uid -> [when, started]); this page deletes its own copy (IndexedDB + cached pictures) when its time comes or when the hub
+  // no longer lists it -- also a device that was offline, on its next pull. Times are on the hub's clock (S.skew).
+  const TTL_OPTS = [[0, "Off"], [300, "5 minutes"], [3600, "1 hour"], [28800, "8 hours"], [86400, "24 hours"], [604800, "7 days"], [2592000, "30 days"]];
+  const TTL_MIN = 60, TTL_MAX = 90 * 86400, TTL_CAP = 7 * 86400;
+  const hubNow = () => Date.now() / 1000 + (S.skew || 0);
+  const uidOf = (r) => "m:" + r.from + ":" + r.cid;
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  function ttlName(s) {
+    s = Number(s) || 0;
+    const o = TTL_OPTS.find((x) => x[0] === s);
+    if (o) return o[1];
+    return s % 86400 === 0 ? plural(s / 86400, "day") : s % 3600 === 0 ? plural(s / 3600, "hour") : plural(Math.round(s / 60), "minute");
+  }
+  const ttlShort = (s) => (s >= 86400 ? Math.round(s / 86400) + "d" : s >= 3600 ? Math.round(s / 3600) + "h" : Math.max(1, Math.ceil(s / 60)) + "m");
+  function parseTtl(v) {   // "45 minutes", "3h", "2 days", "1 week" -> seconds (0 when it cannot be read)
+    const m = /^\s*(\d+(?:[.,]\d+)?)\s*(m|mins?|minutes?|h|hrs?|hours?|d|days?|w|wks?|weeks?)?\s*$/i.exec(String(v || ""));
+    if (!m) return 0;
+    const n = parseFloat(m[1].replace(",", ".")), u = (m[2] || "m")[0].toLowerCase();
+    return Math.round(n * ({ m: 60, h: 3600, d: 86400, w: 604800 }[u] || 60));
+  }
+  const ttlFor = (conv) => (S.ttlNext.has(conv) ? S.ttlNext.get(conv) : Number(S.convt[conv]?.s) || 0);
+  function timedGone(r) {   // its time ran out (what the hub said last, else the 7-day cap from when it was sent)
+    const now = hubNow();
+    if (r.exp) return r.exp <= now;
+    return !!r.seq && r.at + TTL_CAP + (r.ttl && r.st ? r.ttl : 0) <= now;
+  }
+  function dropRec(r) {   // my copy goes for real: the message, its cached pictures (IndexedDB) and their in-memory URLs
+    if (r.seq) S.recs.delete("seq:" + r.seq);
+    idbDel("msgs", r.k).catch(() => {});
+    for (const f of r.files || []) {
+      if (!f?.fid) continue;
+      idbDel("blobs", f.fid).catch(() => {});
+      const u = blobUrls.get(f.fid);
+      blobUrls.delete(f.fid);
+      if (u) Promise.resolve(u).then((x) => { try { URL.revokeObjectURL(x); } catch {} }).catch(() => {});
+    }
+    T("timer-drop", { seq: r.seq });
+  }
+  function purgeTimed(tm) {   // the hub's list of my live timed messages: what is missing (or past its time) goes here too
+    let n = 0;
+    for (const r of [...S.recs.values()]) {
+      if (r.by !== by() || !r.seq || !(r.ttl || r.vo)) continue;
+      const t = tm ? tm[uidOf(r)] : null;
+      if (tm && !t) { dropRec(r); n++; continue; }
+      if (t && (r.exp !== t[0] || !!r.st !== !!t[1])) { r.exp = t[0]; r.st = t[1] ? 1 : 0; idbPut("msgs", r).catch(() => {}); }
+      if (timedGone(r)) { dropRec(r); n++; }
+    }
+    if (n) { T("timer-purge", { n }); paint(); }
+    return n;
+  }
+  function timerStubs() {   // a line an older KASTR kept instead of a timed message: pulled again, this time the real thing
+    const st = [...S.recs.values()].filter((r) => r.kind === "sys" && r.seq && /update KASTR to see/.test((r.sys?.names || []).join(" ")));
+    if (!st.length) return;
+    for (const r of st) { S.recs.delete("seq:" + r.seq); idbDel("msgs", r.k).catch(() => {}); }
+    S.cur = Math.max(0, Math.min(...st.map((r) => r.seq)) - 1);
+    S.histDone = false;   // history, not news
+    T("timer-refill", { from: S.cur, n: st.length });
+  }
+  function timerBeat() {   // every few seconds: copies whose time came go; the badges count down
+    if (S.state !== "ready") return;
+    let n = 0;
+    for (const r of [...S.recs.values()]) if (r.seq && (r.ttl || r.vo) && r.by === by() && timedGone(r)) { dropRec(r); n++; }
+    if (n) { paint(); return; }
+    for (const el of body.querySelectorAll(".mclk[data-exp]")) {
+      const t = clockText(Number(el.dataset.exp), Number(el.dataset.ttl), el.dataset.st === "1");
+      if (el.lastChild && el.lastChild.textContent !== t) el.lastChild.textContent = t;
+    }
+  }
+  const clockText = (exp, ttl, st) => (st && exp ? ttlShort(Math.max(0, exp - hubNow())) : ttlShort(ttl));
+  function clockEl(r) {
+    const c = document.createElement("span"); c.className = "mclk";
+    c.dataset.exp = String(r.exp || 0); c.dataset.ttl = String(r.ttl || 0); c.dataset.st = r.st ? "1" : "0";
+    c.innerHTML = K.icon("clock");
+    c.appendChild(document.createTextNode(clockText(r.exp, r.ttl, r.st)));
+    c.title = r.st && r.exp ? "Disappears " + new Date((r.exp - (S.skew || 0)) * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })
+      : r.mine ? "Disappears " + ttlName(r.ttl) + " after it is read (within 7 days if nobody reads it)"
+      : "Disappears " + ttlName(r.ttl) + " after you read it (within 7 days if you don’t)";
+    return c;
+  }
+  // the length menu: the conversation's default (menu) or the next message's own (the composer's timer button)
+  function timerMenu(anchor, conv, scope) {
+    const cur = scope === "conv" ? Number(S.convt[conv]?.s) || 0 : ttlFor(conv);
+    const known = TTL_OPTS.some((x) => x[0] === cur);
+    const items = [{ cap: scope === "conv" ? "Disappearing messages — everyone here" : "Disappearing — this message" }];
+    for (const [s, label] of TTL_OPTS) items.push({ value: String(s), label, on: s === cur });
+    items.push({ value: "custom", label: known ? "Custom…" : "Custom (" + ttlName(cur) + ")…", on: !known });
+    items.push({ hint: scope === "conv" ? "Starts when each person reads a message. Everyone sees the change." : "Starts when they read it. Only this message — the next one uses the conversation’s setting." });
+    K.menu(anchor, items, async (v) => {
+      let s = Number(v) || 0;
+      if (v === "custom") {
+        const t = await K.confirm({ title: "Disappearing messages", message: "How long after it is read? From 1 minute to 90 days.", ok: "Set",
+          input: { value: known ? "" : ttlName(cur), placeholder: "e.g. 45 minutes, 3 hours, 2 days" },
+          check: (x) => { const n = parseTtl(x); return n >= TTL_MIN && n <= TTL_MAX ? "" : "Type a length from 1 minute to 90 days (e.g. 45 minutes, 3 hours, 2 days)."; } });
+        if (!t) return;
+        s = parseTtl(t);
+      }
+      if (scope === "conv") {
+        const d = await api({ op: "ctimer", as: S.name, conv, s });
+        if (!d.ok) { toast("Could not change it: " + (d.error || d.status), 5000, "warn"); return; }
+        S.convt[conv] = { s, at: Math.floor(hubNow()), by: S.nk };
+        S.ttlNext.delete(conv);
+        pull();
+      } else if (s === (Number(S.convt[conv]?.s) || 0)) S.ttlNext.delete(conv);
+      else S.ttlNext.set(conv, s);
+      paintConv();
+    });
+  }
+  setInterval(timerBeat, 5000);
+  // ---- end 0.21.93 per-message timers
   async function ticks() {
     if (S.state !== "ready" || !S.open.startsWith("p:") || !panelShown()) return;
     const d = await api({ op: "ticks", as: S.name, names: [S.open.slice(2)] });
@@ -583,7 +721,9 @@
     return s.ev === "create" ? who + " made the group “" + (s.name || "") + "”" + (names ? " with " + names : "")
       : s.ev === "add" ? who + " added " + names : s.ev === "remove" ? who + " removed " + names
       : s.ev === "leave" ? who + " left" : s.ev === "rename" ? who + " renamed the group “" + (s.name || "") + "”"
-      : s.ev === "renamed" ? (s.from || who) + " is now " + (s.name || who) : who + " changed the group";   // 0.21.91: a person's new name
+      : s.ev === "renamed" ? (s.from || who) + " is now " + (s.name || who)   // 0.21.91: a person's new name
+      : s.ev === "timer" ? who + (Number(s.s) > 0 ? " set disappearing messages to " + ttlName(s.s) : " turned off disappearing messages")   // 0.21.93
+      : who + " changed the group";
   }
 
   let wide = false;
@@ -950,6 +1090,7 @@
         + '<div class="mcomp"><button type="button" class="memo" title="Emoji">\uD83D\uDE42</button>'
         + '<button type="button" class="mgif" title="GIF" hidden>GIF</button>'   // 0.21.91: GIF search (assets/kastr-gif.js)
         + '<button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
+        + '<button type="button" class="mtimer" title="Disappearing messages" hidden>' + K.icon("clock") + '<span class="mtl"></span></button>'   // 0.21.93
         + '<textarea class="mcin" rows="1" placeholder="Write a message" title="Enter sends, Shift+Enter starts a new line"></textarea><button type="button" class="msend" title="Send">' + K.icon("send") + "</button></div>"
         + '<input type="file" class="mfilein" multiple hidden>';
       const ta = pane.querySelector(".mcin"), fi = pane.querySelector(".mfilein");
@@ -1003,11 +1144,20 @@
       fi.addEventListener("change", () => { addFiles(pane, [...fi.files]); fi.value = ""; });
       pane.querySelector(".mback").addEventListener("click", (e) => { e.stopPropagation(); S.view = "list"; if (!wide) S.open = ""; paint(); });
       pane.querySelector(".mcmenu").addEventListener("click", (e) => { e.stopPropagation(); groupMenu(e.currentTarget); });
+      pane.querySelector(".mtimer").addEventListener("click", (e) => { e.stopPropagation(); timerMenu(e.currentTarget, conv, "msg"); });
     }
     pane.querySelector(".mctitle .mn").textContent = convTitle(conv);
     pane.querySelector(".mctitle .mprev").textContent = g ? (g.members || []).map((m) => (m === S.nk ? "You" : (g.names || {})[m] || m)).join(", ")
       : keyRow ? (keyRow.devices > 1 ? "Messages reach " + keyRow.devices + " of their devices" : "End-to-end encrypted") : "";
-    pane.querySelector(".mcmenu").hidden = !g;
+    pane.querySelector(".mcmenu").hidden = !g && !(S.tv && nk);   // 0.21.93: a 1:1 has a menu too (Disappearing messages)
+    pane.querySelector(".mcmenu").title = g ? "Group options" : "Conversation options";
+    { // 0.21.93: the composer's timer -- lit with the length while the next message will disappear
+      const tb = pane.querySelector(".mtimer"), s = ttlFor(conv), own = S.ttlNext.has(conv);
+      tb.hidden = !S.tv;
+      tb.classList.toggle("on", s > 0);
+      tb.querySelector(".mtl").textContent = s > 0 ? ttlShort(s) : "";
+      tb.title = s > 0 ? "Disappears " + ttlName(s) + " after it is read" + (own ? " (this message only)" : " (this conversation’s setting)") : "Disappearing messages: off";
+    }
     const nokey = pane.querySelector(".mnokey");
     const cant = !!nk && S.keys.has(nk) && !keyRow;
     nokey.hidden = !cant;
@@ -1019,7 +1169,7 @@
     const recs = [...S.recs.values()].filter((r) => r.by === by() && convOf(r) === conv).sort((a, b) => (a.seq || 1e15) - (b.seq || 1e15) || a.at - b.at);
     const read = Number(S.reads[conv]) || 0;
     const tk = S.ticks[conv] || null;
-    const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || ""]), read, tk]);
+    const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || "", r.ttl || 0, r.exp || 0, r.st || 0]), read, tk]);
     if (log.__sig === sig) return;
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     log.__sig = sig;
@@ -1043,6 +1193,7 @@
       }
       const meta = document.createElement("div"); meta.className = "mmeta";
       meta.textContent = new Date(r.at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      if (r.ttl) meta.prepend(clockEl(r));   // 0.21.93: the time left (its own span, beside the ticks)
       if (r.mine) {
         const s = document.createElement("span"); s.className = "mst";
         if (r.err) { s.textContent = " ⚠ Not sent: " + r.err; s.classList.add("bad"); }
@@ -1122,16 +1273,20 @@
     ta.style.height = "auto"; ta.style.height = Math.min(120, ta.scrollHeight + (ta.offsetHeight - ta.clientHeight)) + "px";
   };
   async function groupMenu(anchor) {
-    const g = S.groups.get(S.open.slice(2));
-    if (!g) return;
+    const conv = S.open;
+    const tl = S.tv ? { value: "timer", label: "Disappearing messages: " + ttlName(Number(S.convt[conv]?.s) || 0) + "…" } : null;   // 0.21.93
+    const g = conv.startsWith("g:") ? S.groups.get(conv.slice(2)) : null;
+    if (!g) { if (tl && conv.startsWith("p:")) timerMenu(anchor, conv, "conv"); return; }   // a 1:1: the lengths straight away
     const mine = g.creator === S.nk;
     const items = [{ value: "add", label: "Add people…" }];
+    if (tl) items.unshift(tl, { sep: true });
     if (mine) items.push({ value: "rename", label: "Rename…" });
     if (mine) for (const m of g.members || []) if (m !== S.nk) items.push({ value: "rm|" + m, label: "Remove " + ((g.names || {})[m] || m) });
     items.push({ value: "leave", label: "Leave the group" });
     if (mine) items.push({ value: "delete", label: "Delete the group" });
     K.menu(anchor, items, async (v) => {
       let d = null;
+      if (v === "timer") return setTimeout(() => timerMenu(anchor, conv, "conv"), 0);
       if (v === "add") return openPicker("add", g.gid);
       if (v === "rename") {
         const n = await K.confirm({ title: "Rename the group", message: "A new name for “" + g.name + "”", ok: "Rename", input: { value: g.name, placeholder: "Group name" },
@@ -1528,8 +1683,13 @@
     state: () => ({ state: S.state, why: S.why, fleet: S.fleet, name: S.name, kid: S.kid, cur: S.cur, open: S.open, hubDown: S.hubDown, n: S.recs.size,
       convs: convs().map((c) => ({ conv: c.conv, title: c.title, unread: c.unread, last: preview(c.last) })), groups: [...S.groups.values()].map((g) => ({ gid: g.gid, name: g.name, members: g.members })) }),
     msgs: (conv) => [...S.recs.values()].filter((r) => !conv || convOf(r) === conv).sort((a, b) => (a.seq || 1e15) - (b.seq || 1e15))
-      .map((r) => ({ seq: r.seq, from: r.fromName, mine: r.mine, text: r.text, files: (r.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size })), sys: r.sys ? sysText(r) : "", locked: !!r.locked, bad: !!r.bad, waiting: !!r.waiting, err: r.err || "" })),
-    send: (conv, text, files) => send(conv, text, files), pull, init, open: openConv, unlock: (code) => unlock(code, false), picker: openPicker, trace,
+      .map((r) => ({ seq: r.seq, from: r.fromName, mine: r.mine, text: r.text, files: (r.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size, fid: f.fid })), sys: r.sys ? sysText(r) : "", locked: !!r.locked, bad: !!r.bad, waiting: !!r.waiting, err: r.err || "",
+        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0 })),   // 0.21.93
+    timers: () => ({ tv: S.tv, skew: S.skew, convt: S.convt, next: Object.fromEntries(S.ttlNext), sched: S.sched || [] }),   // 0.21.93 rig
+    idb: async () => ({ msgs: (await idbAll("msgs", "by", by()).catch(() => [])).map((r) => ({ seq: r.seq, ttl: r.ttl || 0, text: r.text || "" })),
+      blobs: (await idbAll("blobs").catch(() => [])).map((b) => b.fid) }),   // 0.21.93 rig: what this device still keeps
+    send: (conv, text, files, o) => { if (o && "ttl" in o) S.ttlNext.set(conv, Number(o.ttl) || 0); return send(conv, text, files); }, pull, init, open: openConv,
+    ctimer: (conv, s) => api({ op: "ctimer", as: S.name, conv, s }).then((d) => { pull(); return d; }),   // 0.21.93 rig unlock: (code) => unlock(code, false), picker: openPicker, trace,
     fileUrl: (seq, i) => { const r = S.recs.get("seq:" + seq); return r && r.files?.[i] ? fileUrl(r.files[i]) : null; },
     people: () => S.people,
     keys: (names, force) => keysFor(names, force),

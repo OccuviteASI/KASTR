@@ -2200,6 +2200,17 @@
   .memogrid button { background:transparent; border:0; font-size:20px; line-height:1.3; cursor:pointer; border-radius:6px; padding:2px; height:auto; }
   .memogrid button:hover { background:var(--surface-2); }
   .memogrid .chint { grid-column:1 / -1; padding:2px 0 0; font-size:11px; color:var(--text-mute); }
+  /* 0.21.93 per-message timers: the composer's timer (lit with the length while the next message will disappear) and the
+     bubble's clock badge (the time left once it is read) */
+  .mtimer { flex:none; min-width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:2px; padding:0 6px; font-size:11px; font-weight:600; }
+  .mtimer[hidden] { display:none; }
+  .mtimer .icon { width:17px; height:17px; }
+  .mtimer:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .mtimer.on { color:var(--asi-blue); border-color:var(--asi-blue); }
+  .mtimer .mtl:empty { display:none; }
+  .mclk { display:inline-flex; align-items:center; gap:2px; margin-right:5px; vertical-align:-1px; }
+  .mclk .icon { width:10px; height:10px; stroke-width:2; }
   .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
   .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
     display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
@@ -3940,6 +3951,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     clip: '<path d="M14.5 9.5 9 15a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3L7.5 13a1.1 1.1 0 0 1-1.6-1.6L11 6.3"/>',
     send: '<path d="M3 10 17 3l-4.5 14-3-5.5z" /><path d="M9.5 11.5 17 3"/>',
     ban: '<circle cx="10" cy="10" r="7"/><path d="M5.1 5.1l9.8 9.8"/>',   // 0.21.92 I: remove / ban -- Ban <name>...
+    clock: '<circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.7 1.7"/><path d="M8 2h4"/>',   // 0.21.93: message timers
   };
   function icon(name, cls) {
     return '<svg class="icon ' + name + (cls ? " " + cls : "")
@@ -15411,6 +15423,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       // 0.21.42: an optional field (a locked room's code) -- the popup resolves its value; `check(value)` may answer an error
       // string, which keeps the popup open with the error under the field
       const inp = q(".kcin"), err = q(".kcerr");
+      inp.type = (o.input && o.input.type) || "text"; inp.min = (o.input && o.input.min) || ""; inp.max = (o.input && o.input.max) || "";   // 0.21.93: e.g. datetime-local (Send later)
       inp.hidden = !o.input; inp.value = String(o.input?.value || ""); err.hidden = true; err.textContent = "";   // 0.21.66: + a starting value
       if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
       // 0.21.89: an optional second action beside the field (`extra`: {label, run(api), primary?} -- Ask for access). run() may

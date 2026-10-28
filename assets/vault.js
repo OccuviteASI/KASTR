@@ -27,7 +27,7 @@
   var PFX = "kv1:";
   var LOCAL = /^kastr\.(lastjoin|live|personal\.(?!people$).+)$/;                 // always wrapped
   var LOCAL_IF = /^kastr\.(rtsp\.(persist|history)|relay\.history)$/;              // wrapped while they carry a credential
-  var SESSION = /^kastr\.(rejoin|watchcodes|invite|access|auth\..+)$/;            // this tab's codes and tokens
+  var SESSION = /^kastr\.(rejoin|watchcodes|invite|access|auth\..+|browse\..+|stats\.browse\..+)$/;   // this tab's codes and tokens
   var CRED = /(:\/\/[^\/\s@"]+@|[?&;#](jwt|token|access|code|key|apikey|api_key|secret|password|passwd|pwd|pass|auth|invite|sig|i)=[^&\s"]|\bki-[0-9a-f]{8}-|\beyJ[A-Za-z0-9_-]{6,}\.)/i;
   var subtle = (window.isSecureContext && window.crypto && window.crypto.subtle) ? window.crypto.subtle : null;
   var oGet = proto.getItem, oSet = proto.setItem, oRem = proto.removeItem;   // prefs.js's mirror wrappers underneath

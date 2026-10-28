@@ -851,8 +851,8 @@ def media_shutdown():
 # and the session secrets (access/code inside kastr.lastjoin, kastr.auth*)
 # never stored -- the page strips them as well; this is belt and braces.
 PREFS_ALLOW = re.compile(r"^kastr\.(lastjoin|rtsp\.|grid\.|profile$|sidebar|mic\.|volume$|relay\.history$"
-                         r"|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|watch\.|camfx$|toasts\.|rooms\.groups\.|view\.hideMine$"
-                         r"|theme$|theme\.custom$|accent$|selfmirror$)")   # 0.21.72: + theme, custom colours, accent; 0.21.91: + view.hideMine (Hide my shares)
+                         r"|channels\.mine$|channel$|operator\.name$|publishOnly$|rail\.w$|pres\.(layout|notesSize)$|watch\.|camfx$|toasts\.|rooms\.groups\.|mainroom$|view\.hideMine$"
+                         r"|theme$|theme\.custom$|accent$|selfmirror$)")   # 0.21.72: + theme, custom colours, accent; 0.21.91: + view.hideMine (Hide my shares); 0.21.92: + the presenter view's layout + notes size, + mainroom (the page kept it since 0.21.91)
 PREFS_DENY = re.compile(r"^kastr\.auth")
 PREFS_SECRET_FIELDS = ("access", "code")
 PREFS_VALUE_MAX = 64 * 1024

@@ -1535,6 +1535,7 @@
     keys: (names, force) => keysFor(names, force),
     nameChanged: (before, after) => nameChanged(before, after),   // 0.21.91: the Profile saved a new name
     rename: (newName, code) => renameMe(newName, code),           // 0.21.91 (rig)
+    renamed: (k) => renameMap.get(String(k || "")) || null,   // 0.21.92: an old name key -> {key, name} (the presenter view follows a renamed person)
     forgetRenames: () => { renameMap.clear(); renamesDone.clear(); S.keys.clear(); },   // 0.21.91 (rig: play an outdated device)
     gate: () => ({ shown: gateOn(), sub: gateSub || "", st: gateEl?.dataset.st || "", busy: gateBusy, wanted: gateWanted(), bar: (() => { const b = document.getElementById("kSetupBar"); return b && !b.hidden ? b.textContent : ""; })(),
       err: gateEl?.querySelector(".kserr")?.textContent || "", shownAt: gateShownAt }),   // 0.21.89 rig

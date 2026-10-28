@@ -60,6 +60,12 @@ class Templates(unittest.TestCase):
         self.assertIn("roleAbsent: (name, r, o) =>", JS)
         self.assertIn("function preDenied(id, p) {", JS)
 
+    def test_template_table_carries_see(self):
+        self.assertIn('{ key: "see", sw: 1, text: "Audience can see each other", def: 1, read: (m) => (m.see === 0 ? 0 : 1), apply: (m, v) => { m.see = v ? 1 : 0; } },', JS)
+        self.assertIn("for (const x of rs.backstage) if (!x.here && !has.has(nk(x.name)))", JS)   # tplSnap keeps the waiting people
+        self.assertNotIn("audSnap: () => (mine && mine.lt ?", JS)   # one audSnap (with see)
+        self.assertIn("const hook = window.__pres && window.__pres.onEnd, v0 = deck();", JS)   # B's End hook kept
+
     def test_roles_snapshot_names_and_presence(self):
         self.assertIn("const kept = new Map();", JS)
         self.assertIn("const here = (p) => p === me || inRoom.has(p);", JS)

@@ -102,6 +102,8 @@ import kastr_rtsp
 import kastr_msg   # 0.21.88: private messages (the hub's end-to-end encrypted store)
 import kastr_access   # 0.21.89: Ask for access (the hub's desk of asks, answers and one-visit grants)
 import kastr_gif   # 0.21.91: GIF search -- GIPHY through the hub (the key stays on the hub)
+import kastr_secret   # 0.21.92: secrets at rest are sealed (DPAPI / owner-only key), logs masked
+import kastr_templates   # 0.21.92: meeting templates (the hub's store, its encrypted deck store, the planner)
 
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
@@ -184,6 +186,8 @@ PINVITE_TTL = 3600             # a person invite's link (bound to the invited de
 PINVITE_RATE = (6, 60)         # person invites one sender may send per minute
 PINBOX_TTL = 180               # s: an invite waits this long for the invited page's next beat
 PINBOX_KEEP = 64               # invites the hub keeps for its spokes' long-polls
+TPL_APPLIED_S = 12 * 3600       # 0.21.92: a room template applied to another room -- its deck opens from there this long
+TPL_ROOM_NEW_S = 600            # 0.21.92: "Create a new room for this" -- the hub marks a room made at most this long ago, never an older one
 # 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): public rooms announce their people on the
 # public ~presence / ~state prefixes (the page's rooms rail reads them fleet-wide); a personal room says nothing in public
 # (0.21.75), so its pages' BEATS say where they are: the hub keeps the fleet's table (its own pages' beats, its spokes'
@@ -204,6 +208,7 @@ RC_ASK_RATE = (3, 60)          # control requests one asker may send ONE sharer 
 RC_ASK_RATE_ALL = (10, 60)     # ... and to everyone together
 RC_DENY_COOL = 30              # s: after a "no" the asker waits this long before asking that person again
 RC_INBOX_TTL = 45              # s: a control note older than this is stale (an ask nobody saw is not shown late)
+RCX_INBOX_TTL = 55             # 0.21.92: an admin's ask note (the hub's ask lasts kastr_rcadmin.ASK_S = 60 s)
 RC_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 RC_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
 RC_FK_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")   # 0.21.83: the grant's file-transfer key on an "allow" note (32 bytes, base64url)
@@ -1337,6 +1342,7 @@ def _ensure_jwk(state_dir):
     key = os.urandom(32)
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"kty": "oct", "alg": "HS256", "k": _b64u(key)}, f)
+    kastr_secret.owner_only(path)   # 0.21.92: moq-relay reads it in the clear -- owner-only on POSIX
     return path, key
 
 
@@ -1491,10 +1497,25 @@ def public_patterns():
     return out
 
 
+ANON_KIND = NS + "anon"   # 0.21.91: what a tokenless session may read -- nothing is ever published there
+
+
+def public_patterns_for(rooms):
+    """0.21.91: the public kinds of these rooms only (a guest's own room) -- never the relay's ~stats."""
+    out = []
+    for k in PUBLIC_KINDS:
+        if k == STATS_KIND:
+            continue
+        for room in sorted(rooms or ()):
+            out += [k + "/" + room, k + "/" + room + "/**"]
+    return out
+
+
 def public_grant():
-    """What a tokenless session gets: the public kinds, subscribe only (today's
-    `public = { subscribe = [...] }`). Publishing always needed a token."""
-    return {"publish": [], "subscribe": public_patterns()}
+    """What a tokenless session gets. 0.21.91 (Kenton: "Room names must not be visible to anyone without a fleet access code"):
+    NOTHING -- the public kinds (room names, who is where) ride a token now: a member's, or the Join room page's browse token
+    (an access code). Until 0.21.90 it was the public kinds, subscribe only. Publishing always needed a token."""
+    return {"publish": [], "subscribe": [ANON_KIND]}   # (an empty grant is refused outright -- the page's relay health needs the session)
 
 
 def claims_to_grant(claims, now=None):
@@ -1515,7 +1536,8 @@ def claims_to_grant(claims, now=None):
         pub = [p for p in pub if _is_control_put(p)]
         sub = []
     if "**" not in sub:
-        for q in public_patterns():
+        g = guest_rooms(claims)   # 0.21.91: a guest (an invite link, a My room guest) reads the public kinds of their room only
+        for q in (public_patterns() if g is None else public_patterns_for(g)):
             if q not in sub:
                 sub.append(q)
     grant = {"publish": pub, "subscribe": sub}
@@ -1654,7 +1676,8 @@ _LOG_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 def redact_log(text):
     """The field check's rules: no token, code or bearer ever leaves a machine in a collected log."""
-    t = re.sub(r"(?i)(jwt=)[A-Za-z0-9._\-]+", r"\1<redacted>", str(text or ""))
+    t = kastr_secret.mask(str(text or ""))   # 0.21.92: + passwords in URLs, invite tokens, JWTs, known secrets
+    t = re.sub(r"(?i)(jwt=)[A-Za-z0-9._\-]+", r"\1<redacted>", t)
     t = re.sub(r'(?i)("(token|code|access|secret|roomKey|admin|publisher|viewer|federation)"\s*:\s*)"[^"]*"', r'\1"<redacted>"', t)
     t = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1<redacted>", t)
     return t
@@ -2988,6 +3011,8 @@ def rooms_for_guest(obj, allowed):
     out["rooms"] = [x for x in (obj.get("rooms") or []) if isinstance(x, dict) and x.get("slug") in allowed]
     closed = obj.get("closed")
     out["closed"] = {k: v for k, v in closed.items() if k in allowed} if isinstance(closed, dict) else {}
+    cw = obj.get("closedWhy")
+    out["closedWhy"] = {k: v for k, v in cw.items() if k in allowed} if isinstance(cw, dict) else {}   # 0.21.92
     out["groups"] = {}
     out["renamed"] = {}
     out["guest"] = True
@@ -3762,7 +3787,7 @@ def load_json(path, log=None, what=None, retries=6):
     for i in range(max(1, retries)):
         try:
             with open(path, encoding="utf-8-sig") as f:
-                return json.load(f), ""
+                return kastr_secret.open_doc(path, json.load(f)), ""   # 0.21.92: sealed fields opened
         except FileNotFoundError:
             return None, "missing"
         except (PermissionError, OSError) as ex:
@@ -3791,18 +3816,20 @@ def save_json(path, obj, log=None, backup=True):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(obj, f)
+            json.dump(kastr_secret.seal_doc(path, obj), f)   # 0.21.92: the file's secret fields sealed (kastr_secret.POLICY)
             f.flush()
             try:
                 os.fsync(f.fileno())
             except OSError:
                 pass
+        kastr_secret.owner_only(tmp)
         if backup and os.path.isfile(path):
             try:
                 with open(path, encoding="utf-8-sig") as f:
-                    json.load(f)
-                import shutil
-                shutil.copyfile(path, path + ".bak")
+                    cur = json.load(f)
+                with open(path + ".bak", "w", encoding="utf-8") as f:   # 0.21.92: sealed -- never a plain copy of a 0.21.91 file
+                    json.dump(kastr_secret.seal_doc(path, cur), f)
+                kastr_secret.owner_only(path + ".bak")
             except Exception:
                 pass          # an unparseable or busy current file is not worth keeping
         for i in range(6):
@@ -3962,6 +3989,7 @@ class AuthStore:
         self.codes = {"viewer": None, "publisher": None, "federation": None, "admin": None}   # 0.11.0: + federation; 0.16.0: + admin
         self.rooms = {}
         self.closed = {}         # 0.12.0: slug -> ms timestamp of its close (CLOSED_TTL)
+        self.closed_why = {}     # 0.21.92: slug -> "pres" (a template's room closed when its presentation ended); memory only
         self.groups = {}         # 0.15.0: gid -> {"name", "order", "rooms": [slug]} (a slug in at most one group)
         self.codes_at = {}       # 0.21.0: code -> epoch of its last set/clear (the Relay page shows "set <date>")
         self.vehicles = {}       # 0.21.63: id -> {id, name, salt, hash, iter, created, lastUsed, lastRoom, revoked} (never a key)
@@ -3984,6 +4012,9 @@ class AuthStore:
         self._load()
         self.libbook = LibraryBook(state_dir, log)   # 0.21.84: the stream library's fleet catalogue (library.json; the hub's)
         self.libbook.on_save = self._lib_saved
+        # 0.21.92: meeting templates (templates/templates.json; the hub's) -- a save moves the store's version like the library
+        self.tplbook = kastr_templates.TemplateBook(state_dir, log)
+        self.tplbook.on_save = self._lib_saved
 
     def _path(self):
         return os.path.join(self.state_dir, "relay-auth.json")
@@ -4521,6 +4552,9 @@ class AuthStore:
         cutoff = int(time.time() * 1000) - CLOSED_TTL * 1000
         for k in [k for k, ts in self.closed.items() if ts < cutoff]:
             del self.closed[k]
+        cw = self.__dict__.setdefault("closed_why", {})
+        for k in [k for k in cw if k not in self.closed]:
+            del cw[k]
 
     def kept_slugs(self):
         with self.lock:
@@ -4540,6 +4574,8 @@ class AuthStore:
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
                 if r.get("viewLock"):
                     row["viewLock"] = True      # 0.21.65 (m): only the creator or an admin changes the room's view
+                if isinstance(r.get("tpl"), dict) and r["tpl"].get("close"):
+                    row["tplClose"] = True      # 0.21.92: a template made it -- End closes it (the presenters' End asks first)
                 if r.get("persistent") and r.get("keptBy") == "board":
                     row["keptBy"] = "board"     # 0.21.65: kept open only because its board holds something
                 b = r.get("board") if isinstance(r.get("board"), dict) else {}
@@ -4552,13 +4588,17 @@ class AuthStore:
                 rows.append(row)
             return rows
 
-    def touch_room(self, slug, creator=""):
+    def touch_room(self, slug, creator="", create=True):
         """0.21.25: a room is in use -> its record's `at` moves; a name with no record becomes a PLAIN record (stored on
         the hub, listed everywhere, gone ROOM_TTL after its last use). Never changes a lock or the kept flag. -> created?
-        0.21.65: an old name of a renamed room is NOT re-created by a page still in it (it follows the redirect)."""
+        0.21.65: an old name of a renamed room is NOT re-created by a page still in it (it follows the redirect).
+        0.21.92: create=False (a touch without a member token: a page older than 0.21.92) keeps a live room alive and
+        never makes one."""
         with self.lock:
             now = time.time()
             rec = self.rooms.get(slug)
+            if not create and (rec is None or self._dead(rec, now)):
+                return False
             if rec is not None and self._dead(rec, now):
                 self._lapse_locked(slug, rec)   # 0.21.91: it lapsed -- the record made below is the same room again
             if rec is not None and not self._dead(rec, now):
@@ -4697,6 +4737,11 @@ class AuthStore:
             for k in [k for k, a in self.paliases.items() if float(a.get("until") or 0) <= now]:
                 self.paliases.pop(k, None)
             self._save()
+            if nkey != key:
+                try:   # 0.21.92: their personal templates (and decks) follow the new name
+                    self.tplbook.rename_person(key, nkey, ndisp)
+                except Exception as e:
+                    self.log("relay auth: personal templates did not follow a rename: %s" % e)
             return ("renamed" if nkey != key else "same"), {"slug": slug, "old": old, "name": ndisp}
 
     def personal_unrename(self, new, old):
@@ -4710,6 +4755,10 @@ class AuthStore:
             self.rooms[slug]["creator"] = personal_name(old)
             self.paliases.pop(personal_key(old), None)
             self._save()
+            try:   # 0.21.92: their personal templates go back too
+                self.tplbook.rename_person(new, old, old)
+            except Exception:
+                pass
             return True
 
     def personal_has(self, name):
@@ -4929,7 +4978,8 @@ class AuthStore:
                                           "links": self.links, "mesh": self.mesh,       # 0.21.77: the mesh overrides go with the hub
                                           "lapsed": self.lapsed,                        # 0.21.91: lapsed rooms' generations go too
                                           "library": self.libbook.export(),             # 0.21.84: the stream library's catalogue too
-                                          "personalAliases": self.paliases}))           # 0.21.91: names people changed away from
+                                          "personalAliases": self.paliases,             # 0.21.91: names people changed away from
+                                          "templates": self.tplbook.export()}))         # 0.21.92: meeting templates (never a deck key)
 
     def merge_bundle(self, b):
         """0.21.53: a hand-BACK -- what the standby changed while it was the hub. Per room the newer `at` wins, a newer
@@ -5004,6 +5054,8 @@ class AuthStore:
                     self.paliases[k] = a
             if isinstance(b.get("library"), dict):   # 0.21.84: hides, labels, aliases and site names set on the standby
                 n["library"] = self.libbook.merge(b["library"])
+            if isinstance(b.get("templates"), dict):   # 0.21.92: templates saved / edited / deleted on the standby
+                n["templates"] = self.tplbook.merge(b["templates"])
             self._save()
         return n
 
@@ -5048,6 +5100,8 @@ class AuthStore:
                 self.paliases.update(self._paliases_clean(b["personalAliases"]))
             if isinstance(b.get("library"), dict):   # 0.21.84: the stream library's catalogue (hides never fail open)
                 n["library"] = self.libbook.import_(b["library"])
+            if isinstance(b.get("templates"), dict):   # 0.21.92: meeting templates (their decks are copied apart, with their keys)
+                n["templates"] = self.tplbook.import_(b["templates"])
             self._save()
         return n
 
@@ -5172,6 +5226,12 @@ class AuthStore:
             self._prune_closed()
             return dict(self.closed)
 
+    def closed_why_public(self):
+        """0.21.92: why a tombstone's room was closed, when it was not an ordinary close -> {slug: "pres"}."""
+        with self.lock:
+            self._prune_closed()
+            return dict(self.__dict__.get("closed_why") or {})
+
     # ---- 0.21.65: renamed rooms (old name -> new name) ----------------------------------------------------------------
 
     def _renamed_live(self, slug, now=None):
@@ -5238,6 +5298,10 @@ class AuthStore:
             self.board_ver += 1      # boards carry the redirect (spokes copy it with their boards)
             self._save()
         self._board_fire()
+        try:   # 0.21.92: the room's templates go with it
+            self.tplbook.rename_room(old, new)
+        except Exception as e:
+            self.log("relay auth: room %s renamed -- its templates did not follow: %s" % (old, e))
         return None, 200
 
     def is_closed(self, slug):
@@ -5245,11 +5309,17 @@ class AuthStore:
             self._prune_closed()
             return slug in self.closed
 
-    def close_room(self, slug):
-        """Forget the record and leave a tombstone -> the removed record or None."""
+    def close_room(self, slug, why=None):
+        """Forget the record and leave a tombstone -> the removed record or None. `why` (0.21.92): "pres" -- a template's room
+        closed when its presentation ended (the pages' note says so)."""
         with self.lock:
             rec = self.rooms.pop(slug, None)
             self.closed[slug] = int(time.time() * 1000)
+            cw = self.__dict__.setdefault("closed_why", {})
+            if why:
+                cw[slug] = str(why)[:16]
+            else:
+                cw.pop(slug, None)
             self.lapsed.pop(slug, None)      # 0.21.91: closed = deleted -- a room made under the name later is a new generation
             self._prune_closed()
             for r in self.invites.values():   # 0.21.75: a closed room's invite links stop working
@@ -6204,6 +6274,62 @@ def rc_item_clean(item):
     return out
 
 
+# ---- 0.21.92 ADMIN ASKS (Kenton: "As an admin logged in, I need an option when right clicking a user to request remote control, or
+# take control if it's already allowed in the permissions."): the hub's ask note for a person's device (kastr_rcadmin.HubRegistry.
+# ask) rides the same per-device inbox as person invites -- {kind: "rcx", sid, ck (the one-time claim key: ONLY this device's page
+# ever sees it), by, from, exp}; a withdrawn ask sends {kind: "rcx", sid, x: "cancel"} so the person's prompt closes.
+RCX_SID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def rcx_item_clean(item):
+    """0.21.92: an admin's ask note as it travels (hub -> spokes -> the person's page's beat) -> a cleaned copy, or None."""
+    if not isinstance(item, dict) or item.get("kind") != "rcx":
+        return None
+    sid, frm = str(item.get("sid") or ""), str(item.get("from") or "")
+    if not RCX_SID_RE.match(sid) or not HOST_RE.match(frm):
+        return None
+    out = {"kind": "rcx", "sid": sid, "from": frm, "by": clean_label(item.get("by"), 40) or frm}
+    if item.get("x") == "cancel":
+        out.update(id="rcx-x-" + sid, x="cancel")
+        return out
+    ck = str(item.get("ck") or "")
+    try:
+        exp = int(item.get("exp") or 0)
+    except (TypeError, ValueError):
+        exp = 0
+    if not RCX_SID_RE.match(ck) or exp <= 0:
+        return None
+    out.update(id="rcx-" + sid, ck=ck, exp=exp)
+    return out
+
+
+TPL_ITEM_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+TPL_DECK_RE = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
+TPL_ID_RE = re.compile(r"^t[0-9a-f]{6,24}$")
+
+
+def tpl_item_clean(item):
+    """0.21.92: a template's note as it travels hub -> spoke -> the page's beat (a page on a spoke relay hears it there too)
+    -> a cleaned copy, or None. `tplpres`: a template's presentation is ready for its main presenter; `tplco`: the backstage
+    people a co-presenter's own "Can control my mic and camera" leaves off. No code, no token, no deck key -- only names."""
+    if not isinstance(item, dict) or item.get("kind") not in ("tplpres", "tplco"):
+        return None
+    iid, room, tid = str(item.get("id") or ""), str(item.get("room") or ""), str(item.get("tid") or "")
+    if not TPL_ITEM_ID_RE.match(iid) or not SLUG_RE.match(room) or not TPL_ID_RE.match(tid):
+        return None
+    out = {"id": iid, "kind": item["kind"], "room": room, "tid": tid}
+    if item["kind"] == "tplpres":
+        out.update({"name": clean_label(item.get("name"), 80), "by": clean_label(item.get("by"), 40), "for": clean_label(item.get("for"), 40)})
+        return out
+    deck = str(item.get("deck") or "")
+    deny = [clean_label(n, 40) for n in (item.get("deny") if isinstance(item.get("deny"), list) else [])[:kastr_templates.PRES_PEOPLE_MAX]]
+    deny = [n for n in deny if n]
+    if not TPL_DECK_RE.match(deck) or not deny:
+        return None
+    out.update({"deck": deck, "owner": clean_label(item.get("owner"), 40), "deny": deny})
+    return out
+
+
 def rc_can_ask(claims, room, host):
     """0.21.79 (Kenton: "publishers and admins of that room only"): may this member token ask to control a screen in
     `room`? A publisher's token puts media under its own host (<room>/<host>); an admin's also carries <room>/~admin. A
@@ -6450,7 +6576,13 @@ class AuthService:
                     # 0.15.0: + the relay-defined room groups
                     out = {"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
                            "renamed": svc.store.renamed_public()}   # 0.21.65
-                    g = guest_rooms(svc._member_claims(self.headers.get("Authorization")))   # 0.21.91: a guest sees their room only
+                    # 0.21.91: a guest sees their room only; nobody without a token sees any. 0.21.92: the machine itself neither
+                    # (its Relay page reads /api/relay/rooms; a page reads with its token -- never before it checked the relay)
+                    c = svc._member_claims(self.headers.get("Authorization"))
+                    g = guest_rooms(c)
+                    if c is None:
+                        out = rooms_for_guest(out, set())
+                        out.update(guest=False, needCode=True)
                     self._reply(rooms_for_guest(out, g) if g is not None else out)
                 elif path == "/api/invites":           # 0.21.75: a room's live invite links (its creator or an admin)
                     qs = parse_qs(urlparse(self.path).query)
@@ -6499,6 +6631,22 @@ class AuthService:
                         self.send_header("Content-Length", str(len(obj)))
                         self.send_header("Access-Control-Allow-Origin", "*")
                         self.send_header("X-Content-Type-Options", "nosniff")
+                        self.end_headers()
+                        try:
+                            self.wfile.write(obj)
+                        except OSError:
+                            pass
+                    else:
+                        self._reply(obj, code)
+                elif path == "/api/templates/deck":    # 0.21.92: a template deck's file (a read grant; fed=1: a hub copying the decks)
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, code = svc.tpl_deck_get(qs, self.headers.get("Authorization"), self._peer())
+                    if isinstance(obj, (bytes, bytearray)):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Length", str(len(obj)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Access-Control-Allow-Origin", "*")
                         self.end_headers()
                         try:
                             self.wfile.write(obj)
@@ -6566,6 +6714,17 @@ class AuthService:
 
             def do_POST(self):
                 path = self.path.split("?")[0]
+                if path == "/api/templates/deck":      # 0.21.92: one file of a template deck (raw body, up to 64 MB)
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        n = -1
+                    if n <= 0 or n > kastr_templates.DECK_FILE_MAX:
+                        self.rfile.read(max(0, min(n, 1 << 20)))
+                        return self._reply({"ok": False, "error": "one file of a deck is at most 64 MB"}, 413)
+                    data = self.rfile.read(n)
+                    obj, code = svc.tpl_deck_post(data, parse_qs(urlparse(self.path).query), self.headers.get("Authorization"), self._peer())
+                    return self._reply(obj, code)
                 if path == "/api/msg/file":            # 0.21.88: a message attachment's ciphertext (raw body, up to 25 MB)
                     try:
                         n = int(self.headers.get("Content-Length") or 0)
@@ -6603,6 +6762,13 @@ class AuthService:
                     obj, code = svc.access_api(p, self.headers.get("Authorization"), self._peer())
                     hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                     self._reply(obj, code, hdrs)
+                elif path == "/api/templates":         # 0.21.92: meeting templates (list, save, preview, apply, undo, decks)
+                    obj, code = svc.templates_api(p, self.headers.get("Authorization"), self._peer())
+                    hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                    self._reply(obj, code, hdrs)
+                elif path == "/api/templates/fed":     # 0.21.92: deck keys for a hub copying the decks (hand-over / standby)
+                    obj, code = svc.tpl_fed_api(p, self.headers.get("Authorization"))
+                    self._reply(obj, code)
                 elif path == "/api/msg/sync":          # 0.21.88: a page of the messages store (hand-over / standby copy)
                     obj, code = svc.msg_sync_api(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
@@ -6719,6 +6885,25 @@ class AuthService:
     def locked_for(self, peer):
         return self.lockout.locked_for(peer)
 
+    def _browse_token(self, access, peer=""):
+        """0.21.91 (Kenton: "The Join room page shows no rooms until a code is typed and checked"): POST /api/token {browse: true,
+        code} -> a BROWSE token: no room, nothing to publish, the public kinds to read (the rooms, who is where) -- for any
+        access code of this fleet (viewer, publisher, admin; a relay without access codes: anyone). A wrong code counts in the
+        lockout like any code."""
+        wait = self.locked_for(peer)
+        if wait:
+            return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if self.store.configured():
+            ok = bool(access) and (self.store.check("viewer", access) or self.store.check("publisher", access)
+                                   or self.store.check("admin", access) or self._hub_admin_ok(access))
+            if not ok:
+                return self._fail(peer, "wrong access code", "(rooms list)", what="the rooms list of")
+        self._ok(peer)
+        now = int(time.time())
+        exp = now + VIEWER_TTL
+        tok = _mint(self.key, {"root": "", "get": [], "put": [], "browse": 1, "iat": now, "exp": exp})
+        return {"ok": True, "exp": exp, "ns": NS, "tokens": {"browse": tok}}, 200
+
     def _fail(self, peer, why, slug, what="room"):
         return self.lockout.fail(peer, why, slug, what)
 
@@ -6829,6 +7014,7 @@ class AuthService:
         # codes, its admins' tokens) and says so in `vouch`; the federation token is what makes that trustworthy.
         if op == "list":
             return {"ok": True, "rooms": self.store.rooms_public(), "closed": self.store.closed_public(),
+                    "closedWhy": self.store.closed_why_public(),   # 0.21.92
                     "groups": self.store.groups_public(), "renamed": self.store.renamed_public()}, 200   # 0.21.65: + renamed
         if op == "relays":     # 0.21.91: the fleet's relays for a spoke's page (the closest relay at launch)
             return {"ok": True, "relays": self._p_relays()}, 200
@@ -6899,12 +7085,20 @@ class AuthService:
             return self._acc_fed(p)
         if op in P_FED_OPS:   # 0.21.78: My room shared -- a spoke checked the member's token with its own key and says so in `vouch`
             return self._p_fed(op, p)
+        if op == "tpl":       # 0.21.92: meeting templates -- the spoke checked the member's token (and any proofs) and says so in `vouch`
+            v = p.get("vouch") if isinstance(p.get("vouch"), dict) else {}
+            if not HOST_RE.match(str(v.get("host") or "")) or not SLUG_RE.match(str(v.get("room") or "")):
+                return {"ok": False, "error": "the spoke must vouch for a member's device"}, 403
+            return self._tpl_hub(p.get("body") if isinstance(p.get("body"), dict) else {}, v, time.time())
         slug = str(p.get("slug") or "")
         if not SLUG_RE.match(slug) or slug == "main":
             return {"ok": False, "error": "bad room"}, 400
         if op == "close":
             return close_room(self.store, slug, p.get("roomKey"), p.get("vouch") == "admin", hook=ROOM_CLOSE_HOOK[0], log=self.log)
         if op == "touch":
+            if p.get("only") is True:   # 0.21.92: a spoke's tokenless touch (an old page) -- keep a live room alive, make none
+                self.store.touch_room(slug, str(p.get("creator") or ""), create=False)
+                return {"ok": True}, 200
             created = self.store.touch_room(slug, str(p.get("creator") or ""))
             return {"ok": True, "created": created}, 200
         if op in ("adopt", "lock") and personal_reserved(slug):
@@ -7055,6 +7249,8 @@ class AuthService:
             return self._admin_verify(str(p.get("admin") or ""), peer)
         if p.get("library") is True and not p.get("room"):   # 0.21.84: a library publisher token (no room)
             return self._library_token(p, peer)
+        if p.get("browse") is True and not p.get("room"):    # 0.21.91: the Join room page reads the rooms with an access code
+            return self._browse_token(str(p.get("code") or ""), peer)
         slug = str(p.get("room") or "")
         access = str(p.get("code") or "")
         room_code = p.get("roomCode")
@@ -7750,7 +7946,8 @@ class AuthService:
         pl = self._pl()
         with self.lock:
             items = [x for x in pl.inbox.pop(host, [])
-                     if now - float(x.get("at") or 0) <= (RC_INBOX_TTL if x.get("kind") == "rc" else PINBOX_TTL)]   # 0.21.79
+                     if now - float(x.get("at") or 0) <= (RC_INBOX_TTL if x.get("kind") == "rc" else RCX_INBOX_TTL if x.get("kind") == "rcx"
+                                                          else PINBOX_TTL)]   # 0.21.79; 0.21.92: + an admin's ask
         return items
 
     def _p_inbox_drop(self, ids):
@@ -7833,6 +8030,20 @@ class AuthService:
                         continue
                     pl.seen[rc["id"]] = now
                     self._rc_put_locked(to, rc, now)
+                    continue
+                if isinstance(item, dict) and item.get("kind") == "rcx":   # 0.21.92: an admin's ask (or its withdrawal)
+                    rx = rcx_item_clean(item)
+                    if rx is None or not HOST_RE.match(to) or rx["id"] in pl.seen:
+                        continue
+                    pl.seen[rx["id"]] = now
+                    self._p_inbox_put_locked(to, dict(rx, at=now))
+                    continue
+                if isinstance(item, dict) and item.get("kind") in ("tplpres", "tplco"):   # 0.21.92: a template's note
+                    ti = tpl_item_clean(item)
+                    if ti is None or not HOST_RE.match(to) or ti["id"] in pl.seen:
+                        continue
+                    pl.seen[ti["id"]] = now
+                    self._p_inbox_put_locked(to, dict(ti, at=now))
                     continue
                 if not isinstance(item, dict) or not HOST_RE.match(to) or not INVITE_RE.match(str(item.get("token") or "")):
                     continue
@@ -8168,18 +8379,28 @@ class AuthService:
         if op == "start":
             return reg.start(req.get("node"), req.get("monitor"), who)
         if op == "stop":
-            return reg.stop(req.get("sid"), who, "operator" if who.get("kind") == "operator" else "admin")
+            d, code = reg.stop(req.get("sid"), who, "operator" if who.get("kind") == "operator" else "admin")
+            cancel = d.pop("_cancel", None)   # 0.21.92: an ask withdrawn before its answer -- the person's prompt closes
+            if cancel and HOST_RE.match(str(cancel.get("to") or "")):
+                self._rc_put(cancel["to"], dict(cancel["note"]), time.time())
+            return d, code
         if op == "status":
             return reg.status(req.get("sid"))
         if op == "sessions":
             return {"ok": True, "sessions": reg.audit_view(), "hub": self._rcx_name()}, 200
-        return {"ok": False, "error": "op is machines | start | stop | status | sessions"}, 400
+        if op == "ask":   # 0.21.92: a fleet admin asks a person's KASTR -- the note goes to that device's inbox, never to the admin
+            d, code = reg.ask(req.get("node"), req.get("name"), who)
+            note = d.pop("_note", None)
+            if code == 200 and note:
+                self._rc_put(str(req.get("node")), dict(note), time.time())
+            return d, code
+        return {"ok": False, "error": "op is machines | start | stop | status | sessions | ask"}, 400
 
     def _rcx_admin(self, p, who):
         """A fleet admin's (or the hub operator's) call, answered by the hub (forwarded from a spoke); a start's answer gets
         the admin's session token for THIS relay (the one the admin's page dials)."""
         import kastr_rcadmin
-        req = {k: p.get(k) for k in ("op", "node", "monitor", "sid")}
+        req = {k: p.get(k) for k in ("op", "node", "monitor", "sid", "name")}   # 0.21.92: + name (an ask: the person's)
         op = str(req.get("op") or "")
         if self._rcx_spoke():
             out = self._hub_post("/api/rcx/fed", {"op": "admin", "req": req, "who": who}, timeout=10)
@@ -8190,18 +8411,20 @@ class AuthService:
                 return {"ok": False, "error": "the hub runs a KASTR older than 0.21.83 -- update the hub first"}, 501
         else:
             d, code = self._rcx_admin_hub(req, who)
-        if op == "start" and code == 200 and d.get("ok") and kastr_rcadmin.SID_RE.match(str(d.get("sid") or "")):
+        if op in ("start", "ask") and code == 200 and d.get("ok") and kastr_rcadmin.SID_RE.match(str(d.get("sid") or "")):   # 0.21.92: + ask
             d = dict(d, token=_mint(self.key, kastr_rcadmin.admin_claims(d["sid"], d["exp"])), paths=kastr_rcadmin.paths(d["sid"]),
                      relayPort=self.relay_port, adminHost=who.get("host") or "")
+            d.pop("_note", None)   # never the person's claim key (a hub answer never carries it -- belt and braces)
             self._rcx_note(d["sid"], d["exp"])
-            self.log("relay auth: %s (fleet admin) controls %s -- session %s" % (who.get("name") or who.get("host"), req.get("node"), d["sid"][:8]))
+            self.log("relay auth: %s (fleet admin) %s %s -- session %s" % (who.get("name") or who.get("host"), "asks" if op == "ask" else "controls",
+                                                                           req.get("node"), d["sid"][:8]))
         if (op == "stop" and code == 200) or (op == "status" and code == 200 and d.get("state") == "ended"):
             self._rcx_dead_add(req.get("sid"))
         return d, code
 
     def rcx_admin_api(self, p, bearer, peer=""):
-        """POST /api/rcx {op: machines | start | stop | status | sessions, node?, monitor?, sid?, by?, color?} -- FLEET ADMINS
-        only: a member token THIS relay minted with the admin grant (the admin access code)."""
+        """POST /api/rcx {op: machines | start | stop | status | sessions | ask (0.21.92), node?, monitor?, sid?, name?, by?, color?}
+        -- FLEET ADMINS only: a member token THIS relay minted with the admin grant (the admin access code)."""
         p = p if isinstance(p, dict) else {}
         claims = self._member_claims(bearer)
         if not claims or not claims_admin_any(claims):
@@ -9942,6 +10165,973 @@ class AuthService:
             return json.loads(r[1].decode("utf-8", "replace") or "{}"), r[0]
         except ValueError:
             return {"ok": False, "error": "the hub answered oddly"}, 502
+
+    # ---- 0.21.92 (Kenton: meeting templates, phase 1 "by hand"): MEETING TEMPLATES -------------------------------------
+    # kastr_templates keeps them (store.tplbook, the hub's; carried in the records bundle like the stream library) and plans
+    # what an apply changes. POST /api/templates {op, ...} with Bearer = a member token of the room the page is in: the relay
+    # the page calls checks it -- and any proof tokens for OTHER rooms (`tokens`) -- with its own key; a spoke forwards to the
+    # hub (rooms_fed op "tpl") vouching for what it checked. The hub runs every save / preview / apply / undo against its own
+    # room records, re-checking each item against the APPLIER's rights (a template never carries power). Personal templates:
+    # the person proves name + My room code (wrong codes count toward the lockout of the relay called), or the page is My
+    # room's owner, or the device already unlocked that person's messages. Decks: kastr_templates.TemplateBook (encrypted at
+    # rest); POST /api/templates/deck?d=&f=&ut= (one file, raw), GET /api/templates/deck?d=&f=&rt= (a read grant from
+    # op deckOpen). An open relay has no token service -- no templates there (Kenton).
+    TPL_LOOK_OPS = ("list", "get", "preview")
+    # 0.21.92: an invite-link guest (a template's room invites its presenters and backstage) may still do what only a PROVEN named
+    # person does -- open the deck, take their own control list, a named presenter's End -- each op checks the name itself
+    TPL_GUEST_NAMED_OPS = ("deckOpen", "presCo", "presEnd")
+    TPL_OLD_HUB = "the hub runs an older KASTR without meeting templates -- update the hub first"
+
+    def _tplb(self):
+        return getattr(self.store, "tplbook", None)
+
+    def _tpl_undo(self):
+        u = self.__dict__.get("_tplundo")
+        if u is None:
+            with _XS_INIT_LOCK:
+                u = self.__dict__.setdefault("_tplundo", kastr_templates.UndoBook())
+        return u
+
+    def templates_api(self, p, bearer, peer=""):
+        """POST /api/templates -> (reply, code). See kastr_templates for what a template is."""
+        p = p if isinstance(p, dict) else {}
+        claims = self._member_claims(bearer)
+        if claims is None:
+            return {"ok": False, "error": "join a room first (a member token is required)"}, 403
+        room, host = claims_identity(claims)
+        if not room or not host or not SLUG_RE.match(room):
+            return {"ok": False, "error": "this page's token names no device -- rejoin the room"}, 403
+        if claims.get("lobby") or room == LOBBY_SLUG or claims.get("vehicle") or room == LIB_ROOT:
+            return {"ok": False, "error": "templates belong to a room -- join one (not the Lobby)"}, 403
+        op = str(p.get("op") or "")
+        guest = bool(claims.get("inv") or claims.get("pg"))
+        if guest and (claims.get("pg") or (op not in self.TPL_LOOK_OPS and op not in self.TPL_GUEST_NAMED_OPS)):
+            return {"ok": False, "error": "a guest can only look at this room's templates"}, 403
+        now = time.time()
+        if self.bans and self.bans.hit(room, host, peer, now):
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        coded = bool(p.get("pcode"))
+        if coded:
+            wait = self.lockout.locked_for(peer)
+            if wait:
+                return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        v = {"room": room, "host": host, "role": claims_role(claims), "guest": guest,
+             "admin": bool(claims_admin(claims, room)) and not guest, "adminAny": bool(claims_admin_any(claims)) and not guest,
+             "personal": bool(claims.get("personal")) and is_personal(room), "by": clean_label(p.get("by"), 40)}
+        proofs = {}
+        toks = p.get("tokens") if isinstance(p.get("tokens"), dict) else {}
+        for r, tok in list(toks.items())[:24]:   # proof that the applier can see another room (as for a cross-room pin)
+            r = str(r)
+            if not SLUG_RE.match(r) or r == room:
+                continue
+            c = verify_token(str(tok or ""), self.key, now)
+            if not c or is_relay_claims(c) or c.get("lobby") or not claims_cover(c, r):
+                continue
+            _rf, hf = claims_identity(c)
+            if self.bans and self.bans.hit(r, hf, peer, now):
+                continue
+            proofs[r] = {"ok": True, "admin": bool(claims_admin(c, r)), "host": hf or ""}
+        v["proofs"] = proofs
+        body = {k: x for k, x in p.items() if k != "tokens"}
+        if not self._p_spoke():
+            out, code = self._tpl_hub(body, v, now)
+        else:
+            r = self._hub_fed({"op": "tpl", "vouch": v, "body": body}, timeout=25)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- templates live on the hub; try again shortly"}, 503
+            out, code = r
+            if code == 400 and out.get("error") == "bad room":
+                return {"ok": False, "old": True, "error": self.TPL_OLD_HUB}, 501
+        if coded:
+            if code == 403 and out.get("wrong"):
+                o2, c2 = self.lockout.fail(peer, "wrong name or My room code", personal_name(p.get("pname")), what="templates of")
+                out = dict(out, error=o2.get("error") or out.get("error"))
+                if c2 == 429:
+                    return dict(o2, ok=False, wrong=True), 429
+            elif code == 200:
+                self.lockout.ok(peer)
+        return out, code
+
+    def _tpl_ident(self, p, v):
+        """The PERSON a personal-template call acts as -> ({nk, name}, None) | (None, None: none asked) | (None, error reply)."""
+        T = kastr_templates
+        if v.get("personal"):   # My room's owner (the room's personal token): its owner's name
+            rec = self.store.room(v["room"]) or {}
+            pr = rec.get("personal") if isinstance(rec.get("personal"), dict) else {}
+            if pr.get("key"):
+                return {"nk": str(pr["key"]), "name": str(pr.get("owner") or pr["key"])}, None
+        name = T.name_disp(p.get("pname"))
+        if not name:
+            return None, None
+        nk = T.name_key(name)
+        code = str(p.get("pcode") or "")
+        if code:
+            slug, owner = self.store.personal_check(name, code) if hasattr(self.store, "personal_check") else (None, None)
+            if slug:
+                return {"nk": nk, "name": owner or name}, None
+            return None, ({"ok": False, "wrong": True, "error": "wrong name or My room code"}, 403)
+        try:   # a device that unlocked this person's messages (the same name + My room code, proven once)
+            if self._msgr()._unlocked(nk, v.get("host")):
+                return {"nk": nk, "name": name}, None
+        except Exception:
+            pass
+        return None, ({"ok": False, "locked": True, "error": "type your My room code to open your templates"}, 403)
+
+    def _tpl_rights(self, p, v):
+        rec = self.store.room(v["room"]) or {}
+        creator = bool(p.get("roomKey")) and str(p.get("roomKey")) == str(rec.get("roomKey") or "")
+        guest = bool(v.get("guest"))
+        admin = not guest and bool(v.get("adminAny") or v.get("admin") or creator or v.get("personal"))
+        publisher = not guest and (v.get("role") == "publisher" or admin)
+        return rec, creator, admin, publisher
+
+    def _tpl_sees(self, t, v, ident):
+        if t.get("scope") == "me":
+            return bool(ident) and ident["nk"] == t.get("owner")
+        return t.get("room") == v["room"] or bool((v.get("proofs") or {}).get(t.get("room"), {}).get("ok"))
+
+    def _tpl_edits(self, t, v, ident, admin):
+        if t.get("scope") == "me":
+            return bool(ident) and ident["nk"] == t.get("owner")
+        if t.get("room") == v["room"]:
+            return admin
+        pr = (v.get("proofs") or {}).get(t.get("room")) or {}
+        return bool(pr.get("ok") and (pr.get("admin") or v.get("adminAny")))
+
+    def _tpl_pub(self, t, admin=False):
+        out = kastr_templates.public(t, admin)
+        d = self._tplb().deck_of(t["id"])
+        if d:
+            out["deckFile"] = {k: d.get(k) for k in ("id", "name", "kind", "slides", "size", "at", "by")}
+        return out
+
+    def _tpl_hub(self, p, v, now=None):
+        """The hub's side of every template call (`v`: what the relay the page called checked)."""
+        T = kastr_templates
+        now = time.time() if now is None else now
+        book = self._tplb()
+        if book is None:
+            return {"ok": False, "error": "no template store here"}, 503
+        p = p if isinstance(p, dict) else {}
+        op = str(p.get("op") or "")
+        room = str(v.get("room") or "")
+        if not SLUG_RE.match(room) or room in (LOBBY_SLUG, LIB_ROOT):
+            return {"ok": False, "error": "templates belong to a room -- join one (not the Lobby)"}, 403
+        rec, creator, admin, publisher = self._tpl_rights(p, v)
+        personal_room = is_personal(room)
+        ident, ierr = (None, None)
+        if p.get("pname") or v.get("personal"):
+            ident, ierr = self._tpl_ident(p, v)
+        if op == "list":
+            mine, merr = None, None
+            if ident:
+                mine = [self._tpl_pub(t) for t in book.list("me", ident["nk"])]
+            elif ierr:
+                merr = ierr[0]
+            out = {"ok": True, "room": room, "templates": [] if personal_room else [self._tpl_pub(t, admin) for t in book.list("room", room)],
+                   "mine": mine, "me": ident["name"] if ident else None,
+                   "can": {"save": admin and not personal_room, "saveMine": bool(ident), "apply": publisher,
+                           "layout": publisher and (admin or not rec.get("viewLock")) and (not personal_room or bool(v.get("personal"))),
+                           "settings": admin and not personal_room, "invites": admin, "decks": book.crypto_ok()},
+                   "viewLock": bool(rec.get("viewLock")), "personal": personal_room,
+                   "limits": {"room": T.TPL_ROOM_MAX, "me": T.TPL_PERSON_MAX, "bytes": T.TPL_BYTES_MAX, "deck": T.DECK_MAX}}
+            if merr:
+                out["mineError"] = merr.get("error")
+                if merr.get("wrong"):
+                    return dict(out, wrong=True, ok=False, error=merr.get("error")), 403
+            return out, 200
+        if op in ("save", "saveMine") or (op == "save" and p.get("scope") == "me"):
+            scope = "me" if (op == "saveMine" or p.get("scope") == "me") else "room"
+            if scope == "room":
+                if personal_room:
+                    return {"ok": False, "error": "My room keeps personal templates only (Just me)"}, 403
+                if not admin:
+                    return {"ok": False, "error": "only a room admin (the admin code or the room's creator) saves this room's templates"}, 403
+            else:
+                if ierr:
+                    return ierr
+                if not ident:
+                    return {"ok": False, "error": "type your name and My room code to save your own templates"}, 403
+            secs = [s for s in (p.get("sections") if isinstance(p.get("sections"), list) else T.SECTIONS)
+                    if s in (T.SECTIONS if scope == "me" else T.ROOM_SECTIONS)]
+            t = dict(self._tpl_snap(room, secs, p, v, scope), id="t000000000000", scope=scope, name=p.get("name"),
+                     note=p.get("note"), by=v.get("by") or (ident or {}).get("name") or "")
+            if scope == "room":
+                t["room"] = room
+            else:
+                t.update(owner=ident["nk"], ownerName=ident["name"], room=room)
+            if not any(s in t for s in T.SECTIONS):
+                return {"ok": False, "error": "pick at least one section"}, 400
+            c, why, code = book.put(t, new=True)
+            if c is None:
+                return {"ok": False, "error": why}, code
+            self.log("relay auth: template %s '%s' saved for %s by %s" % (c["id"], c["name"], room if scope == "room" else "a person",
+                                                                            v.get("by") or v.get("host")))
+            return {"ok": True, "template": self._tpl_pub(c, True)}, 200
+        if op == "undo":
+            return self._tpl_undo_run(p, v, now)
+        if op == "presEnd":
+            return self._tpl_pres_end(p, v, rec, creator, ident, ierr, now)
+        tid = str(p.get("id") or "")
+        t = book.get(tid) if T.TID_RE.match(tid) else None
+        if t is None:
+            return {"ok": False, "error": "no such template"}, 404
+        if t.get("scope") == "me" and ierr and not ident:
+            return ierr
+        if not self._tpl_sees(t, v, ident):
+            # 0.21.92: a room template just applied to THIS room (another room than its own) -- its named presenters and backstage
+            # and this room's admins read it here to get its presentation ready (get / deckOpen / presCo only)
+            if not (op in ("get", "deckOpen", "presCo") and t.get("scope") == "room" and self._tpl_applied_to(t["id"], room, now)
+                    and (admin or self._tpl_named(t, ident, now))):
+                return {"ok": False, "error": "that template is not yours to see"}, 403
+        if op == "get":
+            return {"ok": True, "template": self._tpl_pub(t, admin)}, 200
+        if op == "room":
+            return self._tpl_room_mark(t, p, v, rec, creator, now)
+        if op in ("preview", "apply"):
+            if op == "apply" and v.get("guest"):
+                return {"ok": False, "error": "a guest can only look at templates"}, 403
+            return self._tpl_run(t, p, v, rec, creator, admin, publisher, op == "preview", now)
+        if op in ("deckOpen", "presCo"):
+            # Kenton (2026-10-27): before it is presented, a room template's deck opens ONLY for the template's named presenters
+            # and backstage (the person proven by name + My room code, My room's owner token, or a device that unlocked their
+            # messages -- never a name a page merely says) and the room's admins; everyone else sees only the live slide.
+            # A personal template's deck: its owner (_tpl_sees already checked).
+            d = book.deck_of(tid)
+            if not d:
+                return {"ok": False, "error": "this template has no deck"}, 404
+            if t.get("scope") == "room":
+                if t.get("room") != room and not self._tpl_applied_to(t["id"], room, now):
+                    return {"ok": False, "error": "open the template's deck from its own room (or a room it was just applied to)"}, 403
+                if not admin and not self._tpl_named(t, ident, now):
+                    if ierr and ierr[0].get("wrong"):
+                        return ierr
+                    return {"ok": False, "named": False,
+                            "error": "only the template's presenters, its backstage and the room's admins open its deck before it is presented"}, 403
+            if op == "presCo":
+                return self._tpl_pres_co(t, p, v, room, now)
+            out = {"ok": True, "deck": d, "rt": book.read_grant(d["id"], v["host"]), "files": sorted(d.get("files") or {})}
+            pk = book.deck_page_key(d["id"])
+            if pk:
+                out["pageKey"] = pk
+            self.log("relay auth: template deck %s opened for %s (%s)" % (d["id"], v.get("host"), room))
+            return out, 200
+        if not self._tpl_edits(t, v, ident, admin):
+            return {"ok": False, "error": "only a room admin edits this room's templates" if t.get("scope") == "room"
+                    else "only its owner edits a personal template"}, 403
+        if op == "delete":
+            book.delete(tid)
+            self.log("relay auth: template %s '%s' deleted by %s" % (tid, t["name"], v.get("by") or v.get("host")))
+            return {"ok": True, "deleted": tid}, 200
+        if op == "update":
+            nt = dict(t)
+            for k in ("name", "note"):
+                if isinstance(p.get(k), str):
+                    nt[k] = p[k]
+            if isinstance(p.get("on"), dict):
+                nt["on"] = {s: (p["on"].get(s) is not False) if s in p["on"] else nt.get("on", {}).get(s, True) for s in nt.get("on") or {}}
+            if p.get("resnap"):   # "Update template from this room"
+                if t.get("scope") == "room" and t.get("room") != room:
+                    return {"ok": False, "error": "open the template's own room to update it from the room"}, 409
+                nt.update(self._tpl_snap(room, [s for s in ("layout", "streams", "settings") if s in nt], p, v, t["scope"], keep=nt))
+                if t.get("scope") == "me":
+                    nt["room"] = room
+            for s in ("layout", "streams", "invites", "pres", "view"):
+                if isinstance(p.get(s), dict) and (s in nt or s in (p.get("add") or [])):
+                    if s == "view" and t.get("scope") != "me":
+                        continue
+                    nt[s] = p[s]
+                    if s == "pres":   # the deck is the hub's record -- a page changes only where it starts
+                        old_deck = (t.get("pres") or {}).get("deck") if isinstance(t.get("pres"), dict) else None
+                        nd = p[s].get("deck") if isinstance(p[s].get("deck"), dict) else {}
+                        nt[s] = dict(p[s], deck=dict(old_deck, start=nd.get("start", old_deck.get("start", 0))) if old_deck else None)
+                    nt.setdefault("on", {})[s] = nt.get("on", {}).get(s, True)
+            if isinstance(p.get("settings"), dict) and "settings" in nt:   # flags only -- the digest is the room's, never a page's
+                st = dict(nt["settings"])
+                for k in ("keep", "viewLock"):
+                    if k in p["settings"]:
+                        st[k] = bool(p["settings"][k])
+                if p["settings"].get("locked") is False:
+                    st.update(locked=False, salt=None, hash=None)
+                if "group" in p["settings"]:
+                    g = p["settings"]["group"]
+                    st["group"] = str(g) if g not in (None, "") and SLUG_RE.match(str(g)) else None
+                    st["groupName"] = ((self.store.groups_public().get(st["group"]) or {}).get("name") or "") if st["group"] else ""
+                nt["settings"] = st
+            for s in (p.get("remove") if isinstance(p.get("remove"), list) else []):
+                if s in T.SECTIONS:
+                    nt.pop(s, None)
+                    (nt.get("on") or {}).pop(s, None)
+            c, why, code = book.put(nt)
+            if c is None:
+                return {"ok": False, "error": why}, code
+            return {"ok": True, "template": self._tpl_pub(c, True)}, 200
+        if op == "deckNew":
+            if t.get("scope") == "room" and t.get("room") != room:
+                return {"ok": False, "error": "open the template's own room to give it a deck"}, 409
+            d, why, code = book.deck_new(tid, p.get("name"), p.get("kind"), p.get("slides"), p.get("size"), v.get("by") or v.get("host"),
+                                         p.get("pageKey"))
+            if d is None:
+                return {"ok": False, "error": why}, code
+            return dict(d, ok=True, max=T.DECK_MAX, fileMax=T.DECK_FILE_MAX), 200
+        if op == "deckDone":
+            meta, why = book.deck_done(str(p.get("deck") or ""), str(p.get("utok") or ""))
+            if meta is None:
+                return {"ok": False, "error": why}, 404
+            nt = dict(t)
+            pr = dict(nt.get("pres") or {})
+            pr["deck"] = {"id": meta["id"], "name": meta["name"], "slides": meta["slides"], "kind": meta["kind"], "size": meta["size"],
+                          "start": max(0, int(p.get("start") or 0))}
+            nt["pres"] = pr
+            nt.setdefault("on", {})["pres"] = True
+            c, why, code = book.put(nt)
+            if c is None:
+                return {"ok": False, "error": why}, code
+            self.log("relay auth: template %s keeps deck %s (%d file(s), %d bytes)" % (tid, meta["id"], len(meta.get("files") or {}), meta["size"]))
+            return {"ok": True, "template": self._tpl_pub(c, True)}, 200
+        if op == "deckDel":
+            n = book.deck_drop(tid)
+            nt = dict(t)
+            if isinstance(nt.get("pres"), dict):
+                nt["pres"] = dict(nt["pres"], deck=None)
+                book.put(nt)
+            return {"ok": True, "removed": n}, 200
+        return {"ok": False, "error": "unknown op (list | get | save | update | delete | preview | apply | undo | deckNew | deckDone | deckOpen | presCo | deckDel | room | presEnd)"}, 400
+
+    def _tpl_named(self, t, ident, now, roles=("presenters", "backstage")):
+        """The proven person (`ident`: name + My room code, My room's owner token, or unlocked messages -- never a name a page merely
+        says) is one of the template's presenters or backstage (`roles`); a name the template still holds that its person changed
+        away from in the last 90 days counts (the hub's rename alias)."""
+        T = kastr_templates
+        if not ident:
+            return False
+        pr = t.get("pres") if isinstance(t.get("pres"), dict) else {}
+        named = {T.name_key(x.get("name")) for r in roles for x in (pr.get(r) or []) if isinstance(x, dict)}
+        named.discard("")
+        if ident["nk"] in named:
+            return True
+        if hasattr(self.store, "personal_alias"):
+            for n0 in named:
+                a = self.store.personal_alias(n0, now)
+                if a and a.get("to") == ident["nk"]:
+                    return True
+        return False
+
+    def _tpl_room_mark(self, t, p, v, rec, creator, now):
+        """op room (0.21.92, Kenton: "When creating a presentation using the template and having it create a room for it, close the
+        room after the presenter ends the meeting."): "Create a new room for this" -- the page just CREATED this room (the Create
+        room path, so its rules hold) and moved in; the hub marks the record as made by this run -> {run, close}. Only a fresh room
+        its creator's device marks (the roomKey proves it made it), never one older than TPL_ROOM_NEW_S, never a marked one again,
+        never My room. The mark is what op presEnd checks -- a room without it is never closed by a template."""
+        room = v["room"]
+        if v.get("guest") or is_personal(room) or not rec:
+            return {"ok": False, "error": "a template makes a room of its own for a member only (not a guest, not My room)"}, 403
+        if not creator:
+            return {"ok": False, "error": "only the device that just created this room marks it as the template's room"}, 403
+        pr = t.get("pres") if isinstance(t.get("pres"), dict) else None
+        if not pr:
+            return {"ok": False, "error": "this template has no presentation"}, 400
+        close = p.get("close") if isinstance(p.get("close"), bool) else pr.get("closeOnEnd") is not False
+        mk = {"id": t["id"], "run": os.urandom(6).hex(), "by": clean_label(v.get("by") or v.get("host"), 40), "at": now, "close": bool(close)}
+        st = self.store
+        with st.lock:
+            cur = st.rooms.get(room)
+            if cur is None:
+                return {"ok": False, "error": "no such room"}, 404
+            if cur.get("tpl"):
+                return {"ok": False, "error": "this room is already a template's room"}, 409
+            if now - float(cur.get("created") or 0) > TPL_ROOM_NEW_S:
+                return {"ok": False, "error": "this room existed before -- a template closes only a room it made"}, 409
+            cur["tpl"] = mk
+            st._save()
+        self._tpl_applied_to(t["id"], room, now, put=True)
+        self.log("relay auth: room %s made by template %s '%s' (run %s, %s at End) for %s"
+                 % (room, t["id"], t.get("name"), mk["run"], "closes" if mk["close"] else "stays", mk["by"]))
+        return {"ok": True, "room": room, "run": mk["run"], "close": mk["close"]}, 200
+
+    def _tpl_pres_end(self, p, v, rec, creator, ident, ierr, now):
+        """op presEnd (0.21.92): a presenter pressed End in a room a template MADE (op room's mark, with "Close the room when the
+        presentation ends" on) -> the hub deletes the room exactly like an admin close (record + tombstone, its invites revoked, the
+        shares listed into it removed, its chat gone); the pages' note says the presentation ended. Only End calls this: hand over,
+        take over, a presenter's Leave and a dropped connection never do. A room without the mark (it existed before the template
+        ran) is never closed here. Who: that run's presenters (proven -- name + My room code, My room's owner token, unlocked
+        messages; never a name a page merely says), the room's creator (the device that made it) and admins."""
+        room = v["room"]
+        mk = rec.get("tpl") if isinstance(rec, dict) and isinstance(rec.get("tpl"), dict) else None
+        if not mk or not mk.get("close"):
+            return {"ok": False, "kept": True, "error": "this room was not made by a template to close when its presentation ends"}, 409
+        if p.get("run") and str(p.get("run")) != str(mk.get("run") or ""):
+            return {"ok": False, "kept": True, "error": "this room was made by another run of the template"}, 409
+        t = self._tplb().get(str(mk.get("id") or "")) if kastr_templates.TID_RE.match(str(mk.get("id") or "")) else None
+        presenter = t is not None and self._tpl_named(t, ident, now, roles=("presenters",))
+        admin = not v.get("guest") and bool(v.get("adminAny") or v.get("admin"))
+        if not (presenter or ((creator or admin) and not v.get("guest"))):   # an invited guest: only as a proven named presenter
+            if ierr and ierr[0].get("wrong"):
+                return ierr
+            return {"ok": False, "named": False, "error": "only the template's presenters, the room's creator and admins close it"}, 403
+        self.store.close_room(room, why="pres")
+        hook = ROOM_CLOSE_HOOK[0]
+        if hook is not None:
+            try:
+                hook(room)
+            except Exception as e:
+                self.log("relay: room %s closed but its chat could not be removed: %s" % (room, e))
+        self.log("relay auth: room %s closed -- its presentation ended (template %s, run %s, by %s)"
+                 % (room, mk.get("id"), mk.get("run"), v.get("by") or v.get("host")))
+        return {"ok": True, "closed": room}, 200
+
+    def _tpl_applied_to(self, tid, room, now, put=False):
+        """A room template applied to ANOTHER room: its deck opens from there for TPL_APPLIED_S (the named people and that room's
+        admins, as in its own room) -- the main presenter gets it ready there and presses Start. Memory only (hub)."""
+        with self.lock:
+            m = self.__dict__.setdefault("_tpl_applied", {})
+            for k in [k for k, at in m.items() if now - at > TPL_APPLIED_S]:
+                m.pop(k, None)
+            if put:
+                m[(tid, room)] = now
+                return True
+            return (tid, room) in m
+
+    def _tpl_pres_co(self, t, p, v, room, now):
+        """op presCo (0.21.91 co-presenters have the same powers and their OWN "Can control my mic and camera"): the main presenter
+        just pressed Start presenting -- each co-presenter's device hears, on its people beat, which backstage people the template
+        says THEY do not allow; their page switches those off once it presents deck `deck`. What it says comes from the hub's
+        template, never from the page (only the deck id does)."""
+        T = kastr_templates
+        pr = t.get("pres") if isinstance(t.get("pres"), dict) else {}
+        deck = str(p.get("deck") or "")
+        if not re.match(r"^[A-Za-z0-9_-]{4,40}$", deck):
+            return {"ok": False, "error": "which deck?"}, 400
+        main = next((x.get("name") for x in pr.get("presenters") or [] if isinstance(x, dict) and x.get("main")), "")
+        bs = [b for b in pr.get("backstage") or [] if isinstance(b, dict)]
+        try:
+            seen = list(self._p_seen_local(now))
+        except Exception:
+            seen = []
+        told, pl = 0, self._pl()
+        for x in pr.get("presenters") or []:
+            if not isinstance(x, dict) or x.get("main"):
+                continue
+            nk = T.name_key(x.get("name"))
+            deny = [b["name"] for b in bs if nk not in {T.name_key(c) for c in b.get("control") or []}]
+            # the device: the one the main presenter's page sees them on (like a person invite: a page names the device; what it
+            # is told comes from the template), else the name's latest device the hub knows (newest first)
+            to = p.get("to") if isinstance(p.get("to"), dict) else {}
+            host = next((str(h) for n, h in to.items() if T.name_key(n) == nk and HOST_RE.match(str(h or ""))), "")                 or next((y["host"] for y in seen if T.name_key(y.get("name")) == nk), "")
+            if not deny or not host or host == v["host"]:
+                continue
+            item = {"id": os.urandom(6).hex(), "kind": "tplco", "room": room, "tid": t["id"], "deck": deck, "owner": clean_label(main, 40),
+                    "deny": deny[:T.PRES_PEOPLE_MAX], "at": now}
+            with self.lock:
+                self._p_inbox_put_locked(host, item)
+                pl.seq += 1
+                pl.out.append({"seq": pl.seq, "at": now, "to": host, "item": item})
+                pl.out = pl.out[-PINBOX_KEEP:]
+            told += 1
+        if told:
+            self._p_thread()
+            try:
+                self.bans.nudge()
+            except Exception:
+                pass
+        return {"ok": True, "told": told}, 200
+
+    def _tpl_snap(self, room, secs, p, v, scope, keep=None):
+        """A room as it is now -> the template sections asked for (the hub's own records: the board, the lock's DIGEST, keep,
+        view lock, group; My room's people with access). What only the page knows comes from the call (invites, the
+        presentation, My view, gallery / spotlight start)."""
+        T = kastr_templates
+        out = {}
+        lay = T.clean_layout(dict(self.store.board(room), start=p.get("start") or ((keep or {}).get("layout") or {}).get("start") or ""))
+        if "layout" in secs:
+            out["layout"] = lay
+        if "streams" in secs:
+            out["streams"] = T.snap_streams(lay, room)
+        if "settings" in secs and not is_personal(room):
+            rec = self.store.room(room) or {}
+            groups = self.store.groups_public()
+            gid = next((g for g, x in groups.items() if room in (x.get("rooms") or [])), None)
+            out["settings"] = {"locked": bool(rec.get("hash")), "salt": rec.get("salt") or "", "hash": rec.get("hash") or "",
+                               "keep": bool(rec.get("persistent")), "viewLock": bool(rec.get("viewLock")), "group": gid,
+                               "groupName": (groups.get(gid) or {}).get("name") or "" if gid else ""}
+        if "invites" in secs and keep is None:
+            inv = T.clean_invites(p.get("invites"))
+            if is_personal(room) and v.get("personal") and not inv["access"] and p.get("withAccess") is not False:
+                info = self.store.personal_info(room) if hasattr(self.store, "personal_info") else None
+                inv["access"] = [{"name": x.get("name") or "", "host": h} for h, x in ((info or {}).get("people") or {}).items()][:T.INVITE_PEOPLE_MAX]
+            out["invites"] = inv
+        if "pres" in secs and keep is None:
+            out["pres"] = T.clean_pres(p.get("pres"))
+        if "view" in secs and scope == "me" and keep is None:
+            out["view"] = T.clean_view(p.get("view"))
+        return out
+
+    def _tpl_cam_status(self, rows, live, now):
+        """Each camera of a template -> live now / known but offline / not found (+ where the same camera is now, when it
+        moved: the library's alias or the same origin live elsewhere). `live`: what the applying page sees live."""
+        T = kastr_templates
+        try:
+            lrows = {r["path"]: r for r in self.store.libbook.public_rows(now, admin=True)}
+        except Exception:
+            lrows = {}
+        aka = {a: r["path"] for r in lrows.values() for a in r.get("aka") or []}
+        xs_live = set()
+        try:
+            reg = self._xs_view(now)[0]
+            with reg.lock:
+                xs_live = {k[0] for k, e in reg.items.items() if float(e.get("sexp") or 0) > now}
+        except Exception:
+            pass
+        known = set(lrows)
+        try:
+            for b in self.store.boards_public().values():
+                known |= set(T.layout_paths(T.clean_layout(b)))
+                for gp, m in (b.get("metas") or {}).items():
+                    known.add(gp)
+                    known |= set((m.get("meta") or {}).get("members") or [])
+        except Exception:
+            pass
+        live_all = set(live) | xs_live | {q for q, r in lrows.items() if r.get("online")}
+        by_origin = {}
+        for q in sorted(live_all):
+            by_origin.setdefault(T.origin_of(q), q)
+        out = []
+        for r in rows:
+            q = r.get("to")
+            o = dict(r)
+            if q is None:
+                o["status"] = "left out"
+            elif q in live_all:
+                o["status"] = "live"
+            elif q in aka:
+                o["status"], o["found"] = "moved", aka[q]
+                o["foundLive"] = aka[q] in live_all
+            elif by_origin.get(T.origin_of(q)) not in (None, q):
+                o["status"], o["found"], o["foundLive"] = "moved", by_origin[T.origin_of(q)], True
+            elif q in known or r["path"] in known:
+                o["status"] = "offline"
+            else:
+                o["status"] = "missing"
+            out.append(o)
+        return out
+
+    def _tpl_item_why(self, room, op, it, v, now):
+        """Would the APPLIER be refused this one item? -> why, or None. (The room's own checks -- caps, a spotlight's pin,
+        another room's grid being listed here -- answer at apply.)"""
+        T = kastr_templates
+
+        def foreign(path):
+            frm = T.room_of(path)
+            if frm == room:
+                return None
+            if personal_reserved(frm):
+                return "a feed from a personal room stays in it"
+            if frm == LIB_ROOT:
+                _np, err = self._lib_add_ok(path, now)
+                return (err[0].get("error") or "not in the stream library") if err else None
+            if self._room_locked(frm):
+                pr = (v.get("proofs") or {}).get(frm) or {}
+                if not pr.get("ok"):
+                    return "%s is locked -- watch it (or join it) first so KASTR can see you may" % frm
+                own = bool(pr.get("host")) and path.split("/")[1] == pr.get("host")
+                if not own and not pr.get("admin") and not v.get("adminAny"):
+                    return "only an admin can pin a locked room's stream into another room"
+            return None
+        if op == "pin":
+            return foreign(it.get("path"))
+        if op == "cgrid":
+            for s in (it.get("grid") or {}).get("slots") or []:
+                for mp in s.get("cams") or []:
+                    why = foreign(mp)
+                    if why:
+                        return why
+        return None
+
+    def _tpl_run(self, t, p, v, rec, creator, admin, publisher, dry, now):
+        """Preview (dry) or apply a template to the caller's room. Replace = the room ends up as the template says (for the
+        sections switched on); Merge = only what the room lacks is added. -> (reply, code)."""
+        T = kastr_templates
+        room = v["room"]
+        on = {s: bool(x) for s, x in (t.get("on") or {}).items()}
+        for s, x in (p.get("on") if isinstance(p.get("on"), dict) else {}).items():
+            if s in on and x is False:
+                on[s] = False
+        mode = "merge" if p.get("mode") == "merge" else "replace"
+        personal_room = is_personal(room)
+        boss = admin or bool(v.get("personal"))
+        vlocked = bool(rec.get("viewLock"))
+        layout_ok = publisher and (boss or not vlocked) and (not personal_room or bool(v.get("personal")))
+        settings_ok = admin and not personal_room
+        invites_ok = admin
+        notes = []
+
+        def note(sec, what, why):
+            notes.append({"section": sec, "what": what, "why": why})
+        src = t.get("room") or room
+        choices = p.get("choices") if isinstance(p.get("choices"), dict) else {}
+        live = {str(x)[:300] for x in (p.get("live") if isinstance(p.get("live"), list) else [])[:800] if isinstance(x, str)}
+        streams_on = on.get("streams", True) if "streams" in t else True
+        board_now = self.store.board(room)
+        labels = {c["path"]: c.get("label") for c in ((t.get("streams") or {}).get("cams") or [])}
+        for pn in (t.get("layout") or {}).get("pins") or []:
+            labels.setdefault(pn["path"], pn.get("label"))
+        out = {"ok": True, "room": room, "mode": mode, "dry": dry, "template": {"id": t["id"], "name": t["name"], "scope": t["scope"]},
+               "on": on, "can": {"layout": layout_ok, "settings": settings_ok, "invites": invites_ok}}
+        ops, target = [], None
+        if on.get("layout") and t.get("layout"):
+            target, dropped = T.map_layout(t["layout"], src, room, streams_on, choices)
+            ops = T.plan_ops(target, board_now, mode, int(now * 1000))
+            out["dropped"] = dropped
+        rows = T.cam_rows(t, src, room, streams_on, choices) if (on.get("layout") or on.get("streams")) else []
+        out["cams"] = self._tpl_cam_status(rows, live, now)
+        allowed = []
+        if ops and not layout_ok:
+            why = ("only the room's owner arranges a personal room" if personal_room
+                   else VIEW_LOCKED_TEXT if publisher and vlocked
+                   else "viewers cannot change the room's layout -- join with the publisher code")
+            note("layout", "%d change%s to the room's layout" % (len(ops), "" if len(ops) == 1 else "s"), why)
+        else:
+            for op, it in ops:
+                why = self._tpl_item_why(room, op, it, v, now)
+                if why:
+                    note("layout", T.op_words(op, it, labels), why)
+                else:
+                    allowed.append((op, it))
+        out["changes"] = T.summarize(allowed)
+        out["ops"] = [{"op": op, "words": T.op_words(op, it, labels)} for op, it in allowed][:120]
+        if target is not None:
+            spots = list(target.get("spots") or []) if mode == "replace" else \
+                [s["target"] for s in board_now.get("spots") or []] + [x for x in target.get("spots") or [] if x not in {s["target"] for s in board_now.get("spots") or []}]
+            by_origin = {T.origin_of(k): v for k, v in labels.items() if v}   # a feed that followed to this room keeps its label
+            out["spotsAfter"] = [labels.get(x) or by_origin.get(T.origin_of(x)) or T.leaf(x) for x in spots]
+            out["start"] = target.get("start") or ""
+        # ---- room settings
+        st_ops = []
+        if on.get("settings") and t.get("settings"):
+            st = t["settings"]
+            if personal_room:
+                note("settings", "Room settings", "My room has no room settings")
+            else:
+                if st.get("locked") and st.get("hash") and st.get("hash") != rec.get("hash"):
+                    st_ops.append(("code" if rec.get("hash") else "lock", {"salt": st["salt"], "hash": st["hash"]}))
+                elif not st.get("locked") and rec.get("hash"):
+                    st_ops.append(("unlock", {}))
+                if bool(st.get("keep")) != bool(rec.get("persistent")):
+                    st_ops.append(("keep", {"keep": bool(st.get("keep"))}))
+                if bool(st.get("viewLock")) != bool(rec.get("viewLock")):
+                    st_ops.append(("viewlock", {"locked": bool(st.get("viewLock"))}))
+                groups = self.store.groups_public()
+                cur_gid = next((g for g, x in groups.items() if room in (x.get("rooms") or [])), None)
+                if st.get("group") != cur_gid:
+                    if st.get("group") and st["group"] not in groups:
+                        note("settings", "Group %s" % (st.get("groupName") or st["group"]), "that group no longer exists")
+                    else:
+                        st_ops.append(("group", {"group": st.get("group")}))
+                if st_ops and not settings_ok:
+                    note("settings", ", ".join(self._tpl_set_words(o, it) for o, it in st_ops),
+                         "room settings need a room admin (the admin code or the room's creator)")
+                    st_ops = []
+        out["settings"] = [{"op": o, "words": self._tpl_set_words(o, it)} for o, it in st_ops]
+        # ---- invites
+        inv_plan = {"people": [], "link": None, "access": []}
+        if on.get("invites") and t.get("invites"):
+            inv = t["invites"]
+            hosts = {}
+            try:
+                for x in self._p_seen_local(now):   # newest first: a name's latest device
+                    k = T.name_key(x.get("name"))
+                    if k and k not in hosts:
+                        hosts[k] = x["host"]
+            except Exception:
+                pass
+            for x in inv.get("people") or []:
+                h = hosts.get(T.name_key(x.get("name"))) or x.get("host")
+                if not h:
+                    note("invites", "Invite %s" % (x.get("name") or "?"), "KASTR has not seen them in 30 days")
+                elif h != v["host"]:
+                    inv_plan["people"].append({"name": x.get("name") or h, "host": h})
+            if inv.get("link"):
+                inv_plan["link"] = dict(inv["link"])
+            if inv.get("access"):
+                if personal_room:
+                    have = set(((self.store.personal_info(room) or {}).get("people") or {}))
+                    inv_plan["access"] = [x for x in inv["access"] if x.get("host") and x["host"] not in have and x["host"] != v["host"]]
+                else:
+                    note("invites", "People with access", "only My room keeps a list of people with access")
+            if (inv_plan["people"] or inv_plan["link"] or inv_plan["access"]) and not invites_ok:
+                note("invites", "Invites", "invites from a template need a room admin (the admin code or the room's creator)")
+                inv_plan = {"people": [], "link": None, "access": []}
+        mk = rec.get("tpl") if isinstance(rec.get("tpl"), dict) else None
+        if (mk and mk.get("id") == t["id"] and p.get("run") and str(p.get("run")) == str(mk.get("run") or "")
+                and on.get("pres") and isinstance(t.get("pres"), dict) and invites_ok):
+            # 0.21.92 "Create a new room for this": the room is new, so the template's presenters and backstage are invited to it
+            # (the usual person invite; their role waits for them there)
+            seen_h = {}
+            try:
+                for x in self._p_seen_local(now):
+                    k = T.name_key(x.get("name"))
+                    if k and k not in seen_h:
+                        seen_h[k] = x["host"]
+            except Exception:
+                pass
+            have = {T.name_key(x["name"]) for x in inv_plan["people"]}
+            mek = T.name_key(v.get("by"))
+            # the devices the applying page saw them on just before it made the room (a spoke's page the hub has not heard of):
+            # only for the template's own named people -- the same invite the page could send from People itself
+            for x in (p.get("people") if isinstance(p.get("people"), list) else [])[:24]:
+                if isinstance(x, dict) and HOST_RE.match(str(x.get("host") or "")):
+                    k = T.name_key(x.get("name"))
+                    if k and k not in seen_h:
+                        seen_h[k] = str(x["host"])
+            for x in (t["pres"].get("presenters") or []) + (t["pres"].get("backstage") or []):
+                k = T.name_key((x or {}).get("name"))
+                if not k or k in have or k == mek:
+                    continue
+                have.add(k)
+                h = seen_h.get(k)
+                if not h:
+                    note("invites", "Invite %s" % x.get("name"), "KASTR has not seen them in 30 days -- their role waits for them here")
+                elif h != v["host"]:
+                    inv_plan["people"].append({"name": x.get("name") or h, "host": h})
+            out["tplRoom"] = {"close": bool(mk.get("close")), "run": mk["run"]}
+        out["invites"] = {"people": [x["name"] for x in inv_plan["people"]], "link": inv_plan["link"],
+                          "access": [x.get("name") or x["host"] for x in inv_plan["access"]]}
+        if on.get("pres") and t.get("pres"):
+            # Kenton (2026-10-27): "Ready, with a Start button" -- the MAIN presenter's page loads the deck and shows Start
+            # presenting; nothing goes live until they press it. Who that is, and whether KASTR knows their device.
+            out["pres"] = t["pres"]
+            main = next((x for x in t["pres"].get("presenters") or [] if x.get("main")), None)
+            if main:
+                mk = T.name_key(main.get("name"))
+                pt = p.get("presTo") if isinstance(p.get("presTo"), dict) else {}   # the device the applying page sees them on
+                mh = str(pt.get("host") or "") if T.name_key(pt.get("name")) == mk and HOST_RE.match(str(pt.get("host") or "")) else ""
+                try:
+                    for x in ([] if mh else self._p_seen_local(now)):   # newest first: the name's latest device
+                        if T.name_key(x.get("name")) == mk:
+                            mh = x["host"]
+                            break
+                except Exception:
+                    pass
+                me = T.name_key(v.get("by")) == mk or mh == v["host"]
+                here = str(p.get("here") or "")   # the room the applying page is in (its token is the target room's)
+                away = bool(me) and bool(SLUG_RE.match(here)) and here != room   # applied to ANOTHER room: my device keeps it for when I go there
+                out["presFor"] = {"name": main.get("name") or "", "me": bool(me), "known": bool(mh) or bool(me),
+                                  "host": v["host"] if away else "" if me else mh}
+                if away:
+                    out["presFor"]["away"] = True
+        if on.get("view") and t.get("view"):
+            out["view"] = t["view"]   # My view: the applying page applies it on its own device
+        out["notes"] = notes
+        if dry:
+            if isinstance(out.get("presFor"), dict):
+                out["presFor"].pop("host", None)   # which device is the hub's to know (an apply tells it)
+            return out, 200
+        # ---- apply
+        before = board_now
+        rk = str(p.get("roomKey") or "")[:64] if creator else None
+        by = v.get("by") or v.get("host") or ""
+        done = 0
+        for op, it in allowed:
+            it2 = json.loads(json.dumps(it))
+            it2["by"] = by
+            if op in ("pin", "cgrid"):
+                err = self._lib_board_check(room, op, it2, now)
+                if err:
+                    note("layout", T.op_words(op, it, labels), err[0].get("error") or "refused")
+                    continue
+            if op in BOARD_GRID_OPS + BOARD_SPLIT_OPS:
+                boards = self.store.boards_public()
+                why = board_foreign_ok(room, op, it2, boards.get(room) or {}, boards, self._xs_view(now)[0].into(room, now))
+                if why:
+                    note("layout", T.op_words(op, it, labels), why)
+                    continue
+            _b, code, err = self.store.board_apply(room, op, it2, now, boss=boss, room_key=rk)
+            if err:
+                note("layout", T.op_words(op, it, labels), err)
+            else:
+                done += 1
+        after = self.store.board(room)
+        st_undo = []
+        if st_ops:
+            prev = dict(rec)
+            groups = self.store.groups_public()
+            prev_gid = next((g for g, x in groups.items() if room in (x.get("rooms") or [])), None)
+            for o, it in st_ops:
+                body = dict(it, slug=room, op=o)
+                obj, code = room_settings(self.store, body, admin=True, log=self.log, xs=self._xs("local"))
+                if code != 200:
+                    note("settings", self._tpl_set_words(o, it), obj.get("error") or "refused")
+                    continue
+                if o in ("lock", "code"):
+                    st_undo.append(("code", {"salt": prev.get("salt"), "hash": prev.get("hash")}) if prev.get("hash") else ("unlock", {}))
+                elif o == "unlock":
+                    st_undo.append(("lock", {"salt": prev.get("salt"), "hash": prev.get("hash")}))
+                elif o == "keep":
+                    st_undo.append(("keep", {"keep": bool(prev.get("persistent"))}))
+                elif o == "viewlock":
+                    st_undo.append(("viewlock", {"locked": bool(prev.get("viewLock"))}))
+                elif o == "group":
+                    st_undo.append(("group", {"group": prev_gid}))
+        links, sent, access = [], [], []
+        if inv_plan["link"]:
+            obj, code = self._invite_make(room, inv_plan["link"]["ttl"], by, personal_ok=personal_room and bool(v.get("personal")))
+            if code == 200:
+                links.append(obj["id"])
+                out["link"] = {"token": obj["token"], "exp": obj["exp"], "ttl": obj["ttl"], "id": obj["id"], "room": room}
+            else:
+                note("invites", "Invite link", obj.get("error") or "refused")
+        for x in inv_plan["people"]:
+            obj, code = self._p_invite_make(room, v["host"], by, x["host"], x["name"], now)
+            if code == 200:
+                links.append(obj["id"])
+                sent.append(x["name"])
+            else:
+                note("invites", "Invite %s" % x["name"], obj.get("error") or "refused")
+        for x in inv_plan["access"]:
+            obj, code = self._p_share(room, x["host"], x.get("name") or "", True)
+            if code == 200:
+                access.append(x["host"])
+            else:
+                note("invites", "Access for %s" % (x.get("name") or x["host"]), obj.get("error") or "refused")
+        out["sent"] = sent
+        pf = out.pop("presFor", None) if isinstance(out.get("presFor"), dict) else None
+        if pf is not None:
+            self._tpl_applied_to(t["id"], room, now, put=True)   # its deck now opens from this room too (a fresh room it was applied to)
+            host = pf.pop("host", "")
+            if host and (not pf["me"] or pf.get("away")):   # the main presenter is elsewhere: their page hears it on its people beat (spokes: the long-poll)
+                item = {"id": os.urandom(6).hex(), "kind": "tplpres", "room": room, "tid": t["id"], "name": t["name"], "by": clean_label(by, 40),
+                        "for": pf["name"], "at": now}
+                pl = self._pl()
+                with self.lock:
+                    self._p_inbox_put_locked(host, item)
+                    pl.seq += 1
+                    pl.out.append({"seq": pl.seq, "at": now, "to": host, "item": item})
+                    pl.out = pl.out[-PINBOX_KEEP:]
+                self._p_thread()
+                try:
+                    self.bans.nudge()
+                except Exception:
+                    pass
+                pf["told"] = True
+            out["presFor"] = pf
+        out["undo"] = self._tpl_undo().put({"room": room, "host": v["host"], "before": before, "after": after, "settings": st_undo,
+                                            "links": links, "access": access, "tid": t["id"]})
+        out["done"] = {"layout": done, "settings": len(st_undo), "invites": len(sent), "link": bool(out.get("link")),
+                       "access": len(access)}
+        self.log("relay auth: template %s '%s' applied to %s (%s) by %s -- %d layout change(s), %d setting(s), %d invite(s), %d skipped"
+                 % (t["id"], t["name"], room, mode, by, done, len(st_undo), len(sent), len(notes)))
+        return out, 200
+
+    @staticmethod
+    def _tpl_set_words(op, it):
+        if op == "lock":
+            return "locks the room"
+        if op == "code":
+            return "changes the room's code"
+        if op == "unlock":
+            return "unlocks the room"
+        if op == "keep":
+            return "keeps it open" if it.get("keep") else "stops keeping it open"
+        if op == "viewlock":
+            return "locks the view" if it.get("locked") else "unlocks the view"
+        if op == "group":
+            return "moves it to group %s" % it["group"] if it.get("group") else "takes it out of its group"
+        return op
+
+    def _tpl_undo_run(self, p, v, now):
+        """Undo an apply (the device that applied it, within kastr_templates.UNDO_KEEP_S): only what that apply changed goes
+        back -- later changes by others to other items stay; invite links it made stop working (sent invites cannot be unsent)."""
+        T = kastr_templates
+        r, err = self._tpl_undo().take(p.get("undo"), v.get("host"))
+        if r is None:
+            return {"ok": False, "error": err}, 409
+        room = r["room"]
+        if room != v.get("room"):
+            return {"ok": False, "error": "undo it from the room it was applied to"}, 409
+        notes = []
+        for o, it in reversed(r.get("settings") or []):   # settings first (a view lock the apply turned on comes off)
+            obj, code = room_settings(self.store, dict(it, slug=room, op=o), admin=True, log=self.log, xs=self._xs("local"))
+            if code != 200:
+                notes.append({"section": "settings", "what": self._tpl_set_words(o, it), "why": obj.get("error") or "refused"})
+        ops = T.undo_ops(r["before"], r["after"], self.store.board(room))
+        n = 0
+        for op, it in ops:
+            it["by"] = v.get("by") or v.get("host") or ""
+            _b, code, e = self.store.board_apply(room, op, it, now, boss=True)
+            if e:
+                notes.append({"section": "layout", "what": T.op_words(op, it), "why": e})
+            else:
+                n += 1
+        for iid in r.get("links") or []:
+            try:
+                self.store.invite_revoke(room, iid)
+            except Exception:
+                pass
+        for h in r.get("access") or []:
+            try:
+                self._p_share(room, h, "", False)
+            except Exception:
+                pass
+        self.log("relay auth: template apply on %s undone by %s -- %d layout change(s) back" % (room, v.get("host"), n))
+        return {"ok": True, "room": room, "reverted": T.summarize(ops), "layout": n, "settings": len(r.get("settings") or []),
+                "links": len(r.get("links") or []), "notes": notes}, 200
+
+    def tpl_deck_post(self, data, q, bearer, peer=""):
+        """POST /api/templates/deck?d=<deck>&f=<file>&ut=<upload token> (one file's bytes). The upload token -- handed to the
+        template's editor by op deckNew -- is the credential; a spoke forwards the bytes to the hub."""
+        did, fn, ut = str((q.get("d") or [""])[0]), str((q.get("f") or [""])[0]), str((q.get("ut") or [""])[0])
+        if not kastr_templates.DID_RE.match(did) or not kastr_templates.FILE_RE.match(fn) or not ut:
+            return {"ok": False, "error": "which deck file?"}, 400
+        if not self._p_spoke():
+            return self.store.tplbook.deck_put(did, ut, fn, data)
+        r = self._hub_raw("POST", "/api/templates/deck?d=%s&f=%s&ut=%s" % (did, urllib.parse.quote(fn), urllib.parse.quote(ut)), data, timeout=300)
+        if r is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+        try:
+            return json.loads(r[1].decode("utf-8", "replace") or "{}"), r[0]
+        except ValueError:
+            return {"ok": False, "error": "the hub answered oddly"}, 502
+
+    def tpl_deck_get(self, q, bearer, peer=""):
+        """GET /api/templates/deck?d=&f=&rt= (a read grant from op deckOpen) -> (bytes, 200) | (reply, code). fed=1: a hub
+        copying the decks (the federation token; the hand-over hour or the named standby) gets the file AS KEPT (encrypted)."""
+        book = self._tplb()
+        did, fn = str((q.get("d") or [""])[0]), str((q.get("f") or [""])[0])
+        if book is None or not kastr_templates.DID_RE.match(did) or not kastr_templates.FILE_RE.match(fn):
+            return {"ok": False, "error": "which deck file?"}, 400
+        if (q.get("fed") or [""])[0] == "1":
+            if not self._msg_sync_ok(bearer, (q.get("node") or [""])[0]):
+                return {"ok": False, "error": "not allowed"}, 403
+            data = book.deck_raw(did, fn)
+            return (data, 200) if data is not None else ({"ok": False, "error": "no such file"}, 404)
+        rt = str((q.get("rt") or [""])[0])
+        if not self._p_spoke():
+            if not book.read_ok(did, rt):
+                return {"ok": False, "error": "open the deck again (its read grant ran out)"}, 403
+            data = book.deck_file(did, fn)
+            return (data, 200) if data is not None else ({"ok": False, "error": "no such file"}, 404)
+        r = self._hub_raw("GET", "/api/templates/deck?d=%s&f=%s&rt=%s" % (did, urllib.parse.quote(fn), urllib.parse.quote(rt)), None, timeout=300)
+        if r is None:
+            return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- try again shortly"}, 503
+        if r[0] == 200:
+            return r[1], 200
+        try:
+            return json.loads(r[1].decode("utf-8", "replace") or "{}"), r[0]
+        except ValueError:
+            return {"ok": False, "error": "the hub answered oddly"}, 502
+
+    def tpl_fed_api(self, p, bearer):
+        """POST /api/templates/fed {op: "keys", dids, node} (federation token) -> the deck keys for a hub copying the decks (the
+        hand-over hour, or the named standby). The keys travel here only; the copying hub wraps them under its own master key."""
+        p = p if isinstance(p, dict) else {}
+        if not self._msg_sync_ok(bearer, p.get("node")):
+            return {"ok": False, "error": "only the hub's standby (or the box a hub was just handed to) copies the decks"}, 403
+        book = self._tplb()
+        if book is None:
+            return {"ok": False, "error": "no template store here"}, 503
+        if p.get("op") == "keys":
+            return {"ok": True, "keys": book.keys_export([str(d) for d in (p.get("dids") or [])][:500])}, 200
+        return {"ok": False, "error": "unknown op"}, 400
 
     def _hub_raw(self, method, path, data, timeout=60):
         """Spoke side: one raw request at the hub's minter with the federation token -> (code, bytes) or None."""
@@ -13257,6 +14447,7 @@ class Relay:
         path = os.path.join(self.state_dir, "relay.toml")
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(cfg))
+        kastr_secret.owner_only(path)   # 0.21.92: moq-relay reads its connect token in the clear -- owner-only on POSIX
         try:
             os.remove(os.path.join(self.state_dir, "lan.secret"))   # 0.21.40: the LAN mesh is gone; its plaintext secret goes too
         except OSError:
@@ -13849,6 +15040,7 @@ class Relay:
         except Exception:
             pass
         msgs = self._msg_takeover(d.get("messages"), base, tok)   # 0.21.88: the messages store comes too
+        self._tpl_decks_copy(base, tok, "", deadline=3600.0, why="hand-over")   # 0.21.92: template decks (keys + files), in the background
         cur = self._cluster_raw()
         cur["hub"] = True
         cur["connect"] = ""
@@ -13928,6 +15120,40 @@ class Relay:
         except Exception as e:
             self.log("relay federation: hand-over -- messages not taken: %s" % e)
             return None
+
+    # ---- 0.21.92: template DECKS move with the hub (the templates themselves ride the records bundle) --------------------------
+    def _tpl_decks_copy(self, base, tok, node, deadline=3600.0, why="copy"):
+        """Copy the decks this relay's template book lists but lacks (their keys over the federation channel -- wrapped here
+        under this relay's own master key at once -- and their files as kept) from the hub at `base`, in the background."""
+        auth = getattr(self, "auth", None)
+        book = getattr(getattr(auth, "store", None), "tplbook", None) if auth is not None else None
+        if book is None:
+            return
+        if getattr(self, "_tpl_copy_busy", False):
+            return
+        miss = book.missing()
+        if not miss["keys"] and not miss["files"]:
+            return
+
+        def keys(dids):
+            d = self._fed_post(base, tok, "/api/templates/fed", {"op": "keys", "dids": dids, "node": node}, timeout=60)
+            return d.get("keys") if isinstance(d, dict) and d.get("ok") else None
+
+        def fetch(did, fn):
+            from urllib.parse import quote
+            return self._fed_get_raw(base, tok, "/api/templates/deck?fed=1&d=%s&f=%s&node=%s" % (did, quote(fn), quote(node)))
+
+        def go():
+            self._tpl_copy_busy = True
+            try:
+                n = kastr_templates.deck_sync(book, keys, fetch, self.log, deadline=deadline)
+                if n.get("keys") or n.get("files") or n.get("missing"):
+                    self.log("relay federation: %s -- template decks: %s" % (why, n))
+            except Exception as e:
+                self.log("relay federation: %s -- template decks not copied: %s" % (why, str(e)[:120]))
+            finally:
+                self._tpl_copy_busy = False
+        threading.Thread(target=go, daemon=True, name="kastr-tpl-decks").start()
 
     def _msg_replica_start(self):
         if getattr(self, "_msg_replica_thread", None) and self._msg_replica_thread.is_alive():
@@ -14392,6 +15618,7 @@ class Relay:
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(text)
+            kastr_secret.owner_only(tmp)   # 0.21.92: moq-relay reads the link tokens in the clear -- owner-only on POSIX
             os.replace(tmp, path)
         except OSError as e:
             self.log("relay mesh: %s not written: %s" % (MESH_PEERS_FILE, e))
@@ -14930,6 +16157,12 @@ class Relay:
             changed = False
             if "store" in d:
                 rep["store"], changed = d["store"], True
+                try:   # 0.21.92: the standby keeps the template decks too (its own book lists them; the files follow in the background)
+                    if self.auth is not None and isinstance((d["store"] or {}).get("templates"), dict):
+                        self.auth.store.tplbook.import_(d["store"]["templates"])
+                        self._tpl_decks_copy(minter, tok, _machine_node(), deadline=1800.0, why="standby copy")
+                except Exception as e:
+                    self.log("relay federation: standby copy -- templates: %s" % str(e)[:120])
             if "bans" in d:
                 rep["bans"], changed = d["bans"], True
             for room, c in (d.get("chat") or {}).items():
@@ -15110,7 +16343,7 @@ class Relay:
             self.log("relay federation: spoke %s reports the main hub down for %s s -- vote counted" % (p.get("spoke") or peer, p.get("downFor")))
             threading.Thread(target=self._failover_tick, daemon=True).start()
             return {"ok": True, "promoting": True}, 202
-        if op in ("handback", "handback/done", "handback/msgs", "handback/msgfile"):   # 0.21.88: + the messages store
+        if op in ("handback", "handback/done", "handback/msgs", "handback/msgfile", "handback/tplkeys", "handback/tplfile"):   # 0.21.88: + the messages store; 0.21.92: + template decks
             so = cur.get("standbyOf") if isinstance(cur.get("standbyOf"), dict) else {}
             try:
                 ts = int(p.get("ts") or 0)
@@ -15122,6 +16355,15 @@ class Relay:
                 return {"ok": False, "error": "this standby is not acting as the hub"}, 409
             if op == "handback/msgs" and self.auth is not None:   # 0.21.88: a page of the messages store
                 return {"ok": True, "page": self.auth._msgr().export(p.get("since") or 0, p.get("metaVer"))}, 200
+            if op == "handback/tplkeys" and self.auth is not None:   # 0.21.92: the keys of decks made here while acting as the hub
+                return {"ok": True, "keys": self.auth.store.tplbook.keys_export([str(x) for x in (p.get("dids") or [])][:500])}, 200
+            if op == "handback/tplfile" and self.auth is not None:   # 0.21.92: one deck file as kept (base64, 8 MB at a time)
+                data = self.auth.store.tplbook.deck_raw(str(p.get("d") or ""), str(p.get("f") or ""))
+                if data is None:
+                    return {"ok": False, "error": "no such file"}, 404
+                off = max(0, int(p.get("off") or 0))
+                part = data[off:off + 8 * 1024 * 1024]
+                return {"ok": True, "data": base64.b64encode(part).decode(), "size": len(data), "off": off}, 200
             if op == "handback/msgfile" and self.auth is not None:   # 0.21.88: one attachment's ciphertext (base64)
                 data = self.auth._msgr().file_raw(str(p.get("fid") or ""))
                 if data is None:
@@ -15227,6 +16469,29 @@ class Relay:
             self.log("relay federation: hand-back messages -- %s" % {k: v for k, v in tot.items() if isinstance(v, int)})
         except Exception as e:
             self.log("relay federation: hand-back messages not copied: %s" % e)
+        try:   # 0.21.92: decks made on the standby while it was the hub (the templates came with the bundle above)
+            book = auth.store.tplbook if auth is not None else None
+
+            def tkeys(dids):
+                d3 = call("handback/tplkeys", {"dids": dids})
+                return d3.get("keys") if isinstance(d3, dict) and d3.get("ok") else None
+
+            def tfile(did, fn):
+                buf, off = b"", 0
+                while True:
+                    d3 = call("handback/tplfile", {"d": did, "f": fn, "off": off})
+                    if not (isinstance(d3, dict) and d3.get("ok")):
+                        return None
+                    part = base64.b64decode(d3.get("data") or "")
+                    buf += part
+                    off += len(part)
+                    if not part or off >= int(d3.get("size") or 0):
+                        return buf
+            if book is not None:
+                n = kastr_templates.deck_sync(book, tkeys, tfile, self.log, deadline=600)
+                self.log("relay federation: hand-back template decks -- %s" % n)
+        except Exception as e:
+            self.log("relay federation: hand-back template decks not copied: %s" % e)
         try:
             call("handback/done")
         except Exception as e:
@@ -15659,6 +16924,7 @@ class Relay:
                     line = ANSI.sub("", line).rstrip()
                     if not line:
                         continue
+                    line = kastr_secret.mask(line)   # 0.21.92: a ?jwt= or a password never reaches relay.log or the page
                     self._log_disk(line)   # 0.21.50: the whole log, for a field check's -Find
                     with self._lock:
                         self._log.append(line)
@@ -15785,7 +17051,7 @@ class Relay:
     # 0.17.0: a remote reader (a LAN box, a web client) gets the public shape -- no
     # relay log, binary path, cluster/auth/internal detail; the federation block
     # keeps hub/token/tls only. The machine's own pages see everything.
-    PUBLIC_STATUS_DROP = ("log", "binary", "error", "auth", "internal", "cluster", "autostart")
+    PUBLIC_STATUS_DROP = ("log", "logRemote", "binary", "error", "auth", "internal", "cluster", "autostart")   # 0.21.92: + logRemote (room paths)
 
     def status(self, public=False):
         d = self._status_full()
@@ -16307,8 +17573,9 @@ def handle_api(handler, relay, path, set_relay_url=None):
         return True
     # 0.17.0: every other read under /api/relay/* (name, cluster, autostart, codes,
     # firewall, webport, lan, health, bans) belongs to the Relay page, which is a
-    # host page; the room list stays public (pages on other machines list rooms).
-    if not local and handler.command in ("GET", "HEAD") and not path.startswith("/api/relay/rooms"):
+    # host page. 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): the room list
+    # too -- only the Relay page reads /api/relay/rooms; pages elsewhere read /api/rooms/list with a token.
+    if not local and handler.command in ("GET", "HEAD"):
         reply({"error": "relay settings are read from the machine itself"}, 403)
         return True
 
@@ -16646,6 +17913,7 @@ def handle_api(handler, relay, path, set_relay_url=None):
         # 0.12.0: every room this relay remembers + the recently closed (readable like status)
         # 0.15.0: + the room groups
         out = {"rooms": relay.store.rooms_public(), "closed": relay.store.closed_public(),
+               "closedWhy": relay.store.closed_why_public(),   # 0.21.92
                "groups": relay.store.groups_public()}
         if hasattr(relay.store, "personal_public"):
             out["personal"] = relay.store.personal_public()   # 0.21.75: how many personal rooms (a count -- never whose)

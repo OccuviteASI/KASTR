@@ -217,6 +217,10 @@
   #profilePop .mainrow { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
   #profilePop .mainrow[hidden] { display:none; }
   #profilePop .mainrow .hclbl { font-size:11px; color:var(--text-dim); }
+  #profilePop .bootrow { display:flex; flex-direction:column; gap:0; margin:0 0 12px; }   /* 0.21.92: Start KASTR when I sign in */
+  #profilePop .bootrow[hidden], #profilePop .bootrow .sw[hidden] { display:none; }
+  #profilePop .bootrow .sw { padding:4px 0; }
+  #profilePop .bootrow #profBootMinRow { padding-left:18px; }
   #profilePop .mainseg { display:inline-flex; align-self:flex-start; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
   #profilePop .mainseg label { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:13px; color:var(--text-dim); cursor:pointer; }
   #profilePop .mainseg label + label { border-left:1px solid var(--line); }
@@ -1145,6 +1149,51 @@
   #kRcAsk .kcbtns { display:flex; justify-content:flex-end; gap:8px; padding:14px 16px 16px; }
   #kRcAsk .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
   #kRcAsk .kcbtns button:focus-visible { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  /* 0.21.92 (Kenton: "As an admin logged in, I need an option when right clicking a user to request remote control, or take
+     control if it's already allowed in the permissions."): the person's Allow / Deny for an admin's ask (+ which screen), the
+     in-page "<admin> is controlling this screen" bar, and a greyed menu row that says why not */
+  #kRcxAsk { position:fixed; inset:0; z-index:141; background:rgba(3,5,10,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
+  #kRcxAsk[hidden] { display:none; }
+  #kRcxAsk .popcard { position:static; width:min(460px, calc(100vw - 32px)); max-height:none; animation:kcIn .14s ease-out; }
+  #kRcxAsk .body { padding:16px 16px 2px; flex:none; overflow:visible; }
+  #kRcxAsk .kcmsg { margin:0; font-size:14px; line-height:1.45; color:var(--text); overflow-wrap:break-word; }
+  #kRcxAsk .kcmsg b { color:var(--text); }
+  #kRcxAsk .rxlab { margin:12px 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-mute); }
+  #kRcxAsk .rxmons { display:flex; flex-direction:column; gap:4px; }
+  #kRcxAsk .rxmon { display:flex; align-items:center; gap:10px; padding:7px 10px; border:1px solid var(--line); border-radius:6px; background:var(--surface-2);
+    color:var(--text); font-size:13px; cursor:pointer; }
+  #kRcxAsk .rxmon:hover { border-color:var(--asi-blue-dim); }
+  #kRcxAsk .rxmon.on { border-color:var(--asi-blue); box-shadow:0 0 0 1px var(--asi-blue) inset; }
+  #kRcxAsk .rxmon input { accent-color:var(--asi-blue); margin:0; }
+  #kRcxAsk .rxmon .sz { margin-left:auto; color:var(--text-dim); font-size:12px; white-space:nowrap; }
+  #kRcxAsk .kcdet { margin:12px 0 0; font-size:12px; line-height:1.5; color:var(--text-dim); overflow-wrap:break-word; }
+  #kRcxAsk .rxwarn { margin:10px 0 0; font-size:12px; color:var(--asi-amber); }
+  #kRcxAsk .rxwarn[hidden] { display:none; }
+  #kRcxAsk .kcbtns { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:14px 16px 16px; }
+  #kRcxAsk .kcbtns .rxleft { margin-right:auto; font-size:12px; color:var(--text-mute); }
+  #kRcxAsk .kcbtns .ghost { background:transparent; border:1px solid var(--line); color:var(--text-dim); font-weight:500; }
+  #kRcxAsk .kcbtns button:focus-visible, #kRcxAsk .rxmon:focus-within { outline:2px solid var(--asi-blue); outline-offset:2px; }
+  #kRcxAsk .kcbtns button:disabled { opacity:.45; cursor:default; }
+  #kRcxBar { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:150; display:flex; align-items:center; gap:10px;
+    padding:6px 8px 6px 14px; border-radius:20px; font-size:13px; color:#fff; background:#B42318; box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
+  #kRcxBar[hidden] { display:none; }
+  #kRcxBar .t { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #kRcxBar button { background:#fff; color:#B42318; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
+  /* 0.21.92: a private session's files under the red bar (the machine's helper page is headless) -- Cancel / Get here */
+  #kRcxFiles { position:fixed; top:52px; left:50%; transform:translateX(-50%); z-index:150; display:flex; flex-direction:column; gap:6px; width:min(460px, calc(100vw - 28px)); }
+  #kRcxFiles[hidden] { display:none; }
+  #kRcxFiles .rcfrow { display:flex; align-items:center; gap:6px 10px; flex-wrap:wrap; padding:8px 8px 8px 12px; border-radius:12px; background:#0f2235;
+    border:1px solid var(--asi-amber); color:#fff; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #kRcxFiles .rcfrow.ok { border-color:#2BB673; }
+  #kRcxFiles .rcfrow.warn { border-color:#E5484D; background:#3a1414; }
+  #kRcxFiles .rcfrow.info { border-color:#5b6472; }
+  #kRcxFiles .t { flex:1 1 220px; min-width:0; overflow-wrap:anywhere; line-height:1.35; }
+  #kRcxFiles .bar { order:3; flex:1 0 100%; height:4px; border-radius:2px; background:rgba(255,255,255,.15); overflow:hidden; }
+  #kRcxFiles .bar i { display:block; height:100%; background:var(--asi-amber); transition:width .2s; }
+  #kRcxFiles button { background:var(--asi-amber); color:#111; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
+  #mineMenu .mi.dis, #mineMenu .mi.dis:hover { opacity:.5; cursor:default; background:transparent; color:var(--text-dim); }
+  #mineMenu .mi.dis:hover .mico { color:var(--text); }
+  #mineMenu .mhint.mwhy { padding:0 10px 6px 38px; font-size:11px; white-space:normal; max-width:280px; }
   #kRcBar, #kRcCtl { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:150; display:flex; align-items:center; gap:10px;
     padding:6px 8px 6px 14px; border-radius:20px; font-size:13px; color:#fff; box-shadow:0 6px 20px rgba(0,0,0,.45); max-width:calc(100vw - 24px); }
   #kRcBar { background:#B42318; }
@@ -2091,7 +2140,10 @@
   .mst.read { color:#7fe3ff; opacity:1; }
   :root[data-theme="light"] .mst.read { color:#fff; font-weight:700; }
   .mst.bad { color:var(--asi-red); white-space:normal; }
-  .mb.mine .mst.bad { color:#ffd0d0; }
+  /* 0.21.92 (Kenton: the "Not sent" note after the time could not be read on his lime bubble): on my own bubble the note uses
+     the bubble's own ink, full strength, on its own line -- a fixed pink only worked on a blue accent */
+  .mb.mine .mmeta:has(.mst.bad) { opacity:1; white-space:normal; }
+  .mb.mine .mst.bad { display:block; color:var(--on-accent); font-weight:600; text-align:left; margin-top:2px; }
   .mimg { margin:2px 0 4px; border-radius:10px; overflow:hidden; max-width:280px; min-height:40px; min-width:80px; background:rgba(0,0,0,.15); }
   .mimg img { display:block; max-width:100%; max-height:260px; cursor:zoom-in; }
   .mimg.loading { min-height:120px; }
@@ -3011,6 +3063,8 @@
     <button class="opt" id="optGrid" type="button" title="A grid of cameras from any room you can see -- for you, or shared with this room"><span class="oi">&#9638;</span>Build a grid&hellip;</button>
     <!-- 0.21.75 (Kenton: "everyone can have a personal room that no other user sees") -->
     <button class="opt" id="optMyRoom" type="button" title="Your own room: your views of feeds from any room, only you see it, on any device"><span class="oi">&#9733;</span>My room&hellip;</button>
+    <!-- 0.21.92 (Kenton: meeting templates): saved room set-ups -- this room's and my own (assets/kastr-templates.js shows it on a relay with access codes) -->
+    <button class="opt" id="optTpl" type="button" hidden title="Saved set-ups of a room -- pins, spotlights, grids, settings, invites -- to put back or reuse"><span class="oi">&#9636;</span>Templates&hellip;</button>
     <!-- 0.21.83 (D) (Kenton: "how would I access this from my own KASTR?"): fleet admins only -->
     <button class="opt" id="optMachines" type="button" hidden title="Relays, hubs and camera boxes that let fleet admins control them without asking"><span class="oi">&#128421;</span>Machines&hellip;</button>
     <!-- 0.21.40 (Kenton: "mute all inbound audio as well as mute my own mic. Deafen might be the best way to name it") -->
@@ -3309,6 +3363,12 @@
         <label title="KASTR starts in My room, and Leave takes you there"><input type="radio" name="profMain" value="mine">My room</label>
         <label title="KASTR starts in the Lobby, and Leave takes you there"><input type="radio" name="profMain" value="lobby">Lobby</label></div>
       <p class="hint">Where KASTR starts and where <b>Leave</b> takes you. Leaving your main room takes you to the Lobby. Saved on this device.</p></div>
+    <!-- 0.21.92 (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins") --
+         the Relay page's switch, for everyone: this computer's own KASTR only (hidden for web pages and dev checkouts) -->
+    <div class="bootrow" id="profBootRow" hidden>
+      <div class="sw"><label class="switch"><input type="checkbox" id="profBoot"><i></i></label><span>Start KASTR when I sign in to this computer</span></div>
+      <div class="sw" id="profBootMinRow" hidden><label class="switch"><input type="checkbox" id="profBootMin"><i></i></label><span>Start minimized</span></div>
+      <p class="hint" id="profBootMsg">KASTR opens when you sign in and goes straight into your main room.</p></div>
     <div class="btnrow"><button type="button" id="profSave" class="join">Save</button><span id="profMsg" class="hint"></span></div>
   </div>
 </div>
@@ -3481,6 +3541,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 </main>
 
 <script src="/assets/prefs.js"></script>
+<script src="/assets/vault.js"></script><!-- 0.21.92: codes in this browser's storage kept wrapped (AES-GCM, a non-extractable key) -->
+<script src="/assets/kastr-rcf.js"></script><!-- 0.21.92: remote-control files (shared with rcx.html / rcx-agent.html) -->
 <script>
   // 0.13.0 (F3): the rooms sidebar starts COLLAPSED unless the toggle saved
   // "1". Set here, before the module graph loads, so the wide sidebar never
@@ -3516,6 +3578,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 <script type="module">
   import "https://esm.sh/@moq/watch/element";
   import { Net, Signals, Video as WatchVideo } from "https://esm.sh/@moq/watch";   // 0.21.15 (P12c): Video.Decoder.supported = the full-config probe
+  await window.__kastrVault?.ready;   // 0.21.92: the saved codes are opened (assets/vault.js) before the first read
 
   // ---- 0.17.0: who this page runs for (assets/client.js, substituted by the server) ----
   // "app" = the machine's own KASTR window; "web" = a browser on another device that
@@ -4169,6 +4232,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         b.appendChild(lk);
       }
       b.title = it.tip || it.label;
+      if (it.disabled) {   // 0.21.92: a greyed row that says why (an admin's remote control item a person can't get)
+        b.classList.add("dis"); b.setAttribute("aria-disabled", "true"); b.title = it.why || it.tip || it.label;
+        menu.appendChild(b);
+        if (it.why) { const d = document.createElement("div"); d.className = "mhint mwhy"; d.textContent = it.why; menu.appendChild(d); }
+        continue;
+      }
       b.addEventListener("click", () => { closeMineMenu(); pick(it.value); });
       menu.appendChild(b);
     }
@@ -5303,6 +5372,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow pmf pmmake"><span class="lbl">Passcode again</span><div class="rsf"><input class="pmcode2 masked" type="text" autocomplete="off" spellcheck="false" aria-label="Passcode again"></div>'
       + '<p class="rshint">Pick a passcode only you know (8 characters or more; a shorter one from before still opens your My room). On another device, enter your name and this passcode once. An admin can reset a forgotten one.</p></div>'
       + '<div class="rsrow pmhave" hidden><p class="rshint pmhavetxt"></p></div>'
+      + '<div class="rsrow pmtpl" hidden><span class="lbl">My templates</span><div class="pmtplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<p class="rsmsg" role="status"></p></div>'
       + '<div class="kcbtns"><button type="button" class="ghost pmforget" hidden>Forget on this device</button><button type="button" class="ghost pmshare" hidden>Share My room\u2026</button><button type="button" class="ghost pmclose">Close</button><button type="button" class="pmok">Make my room</button></div></div>';
     document.body.appendChild(el);
@@ -5408,6 +5478,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const s of [".pmintro", ".pmcaps"]) q(s).style.display = mode === "change" ? "none" : "";   // (just the new passcode)
     q("#pmTitle").textContent = mode === "change" ? "Pick your own My room passcode" : "My room";
     if (mode === "have" && p) q(".pmhavetxt").textContent = "My room is set up on this device" + (p.name ? " for " + p.name : "") + ". It is the first card in your rooms list; nobody else sees it there unless you share it.";
+    try { window.__tplUI?.myRoom?.(q(".pmtpl"), mode === "have" && !!p); } catch {}   // 0.21.92: my templates
     if (!q(".pmname").value) q(".pmname").value = String(window.__publisher?.state?.()?.operator || localStorage.getItem("kastr.operator.name") || "").trim();
     if (note) pmEl.__say(note, true);
   }
@@ -5447,7 +5518,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json().catch(() => null);
       if (!d?.ok) return;
       personalSharedApply(d.shared);
-      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else personInviteArrive(it); }   // 0.21.79: + remote-control notes
+      for (const it of Array.isArray(d.inbox) ? d.inbox : []) { if (it?.kind === "rc") rcArrive(it); else if (it?.kind === "rcx") rcxAskArrive(it); else if (it?.kind === "tplpres") { try { window.__tplUI?.presReady?.(it); } catch {} } else if (it?.kind === "tplco") { try { window.__tplUI?.presCo?.(it); } catch {} } else personInviteArrive(it); }   // 0.21.79: + remote-control notes; 0.21.92: + an admin's ask, + a template's presentation is ready for me
       if (d.msg) { try { window.__msg?.ping(d.msg); } catch {} }   // 0.21.88: a message / read mark / group change waits at the hub
       if (d.personal && room === CHANNEL) personalStateApply(d.personal, room, tok);
       accApply(d.access, room);   // 0.21.89: people asking to join this room (only for those who may let them in)
@@ -5781,7 +5852,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // ---- end 0.21.91 passcode reset ----
   // 0.21.88: every person menu (the rail, the People panel, a tile's) leads with "Message <name>" (private messages)
   function personInviteItems2(p) {
-    const r = personInviteItems0(p);
+    const r = rcaWrap(personInviteItems0(p), p);   // 0.21.92: + an admin's Request remote control... / Take control
     const ok = !!p && !p.me && !!p.name && !!window.__kmsg?.allowed?.();
     if (!ok) return r;
     const m = { value: "pinv-msg", icon: "msg", label: "Message " + p.name, tip: "A private message, end-to-end encrypted — they get it even when they are offline" };
@@ -6438,7 +6509,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     e.preventDefault(); e.stopImmediatePropagation();
     if (e.code === "Escape" && !e.repeat) { clearTimeout(c.escT); c.escT = setTimeout(() => { if (rcCtl === c) rcCtlEnd("released", false); }, 1000); }   // hold Esc 1 s
     if (e.repeat || !e.code || c.down.has(e.code)) return;   // their computer repeats a held key itself
-    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && (navigator.clipboard?.readText || rcf) && !c.hold) {   // paste: my clipboard first, then the keys
+    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && (navigator.clipboard?.readText || RCF.cur()) && !c.hold) {   // paste: my clipboard first, then the keys
       c.hold = [];
       // 0.21.83: + files / a picture I copied: theirs once they have them (the keys wait; "Paste without them" lets them go)
       let tx0 = null, txDone = !navigator.clipboard?.readText, fDone = false;
@@ -7636,618 +7707,28 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // wait until the files are there). A file dragged from the controller's desktop onto the shared screen is sent and dropped
   // where it was let go (kastr_rcfiles: an Explorer folder / the desktop / an XDND target, else Downloads/KASTR).
   // in flight: 8 MB of chunks (lab v02183: 24 MB in flight swamped the relay link and the page; 8 MB ran 12 MB/s, stalls < 0.1 s)
-  const RCF_WIN_BYTES = 8 * 1048576, RCF_RESEND_MS = 2500, RCF_PRIO = 30, RCF_TICK_MS = 600, RCF_Q_MS = 60, RCF_STALL_MS = 45000, RCF_NOTE_MS = 15000;
-  const RCF_CS = 524288, RCF_AUTO = 100 * 1048576, RCF_MAGIC = 0x4B524631;   // "KRF1"; a dropped file's chunks: 512 KB (kastr_rcfiles.CHUNK)
-  const RCF_FK_RE = /^[A-Za-z0-9_-]{43}$/, RCF_OID_RE = /^[0-9a-f]{16}$/;
-  let rcf = null;
-  const rcfNotes = [];   // [{k, t, level, at}] -- they outlive the session (the "received" note stays a while)
-  const rcfHex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
-  const rcfB64 = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const rcfUnB64 = (s) => Uint8Array.from(atob(String(s).replace(/-/g, "+").replace(/_/g, "/") + "="), (ch) => ch.charCodeAt(0));
-  const rcfNewKey = () => rcfB64(crypto.getRandomValues(new Uint8Array(32)));
-  function rcfSize(n) {
-    n = Number(n) || 0;
-    const u = ["bytes", "KB", "MB", "GB", "TB"];
-    let i = 0;
-    while (n >= 1024 && i < 4) { n /= 1024; i++; }
-    return i ? (n < 10 ? n.toFixed(1) : String(Math.round(n))) + " " + u[i] : n + (n === 1 ? " byte" : " bytes");
-  }
-  function rcfDescribe(pub) {   // "report.docx" / "the folder Photos" / "3 files" / "a picture"
-    if (pub.kind === "image") return "a picture";
-    if (pub.name) return String(pub.name).slice(0, 120);
-    const tops = (pub.items || []).filter((it) => !String(it.p).includes("/"));
-    const nf = (pub.items || []).filter((it) => !it.d).length;
-    if (tops.length === 1) return (tops[0].d ? "the folder " : "") + tops[0].p;
-    return nf + " file" + (nf === 1 ? "" : "s");
-  }
-  function rcfIv(oid, c) {   // 8 bytes of the offer's id + the chunk number: never twice under one key
-    const iv = new Uint8Array(12);
-    for (let i = 0; i < 8; i++) iv[i] = parseInt(oid.substr(i * 2, 2), 16) || 0;
-    new DataView(iv.buffer).setUint32(8, c >>> 0);
-    return iv;
-  }
-  function rcfPlan(o) {   // the chunk layout of an offer (kastr_rcfiles.chunk_plan, the same numbering on both sides)
-    const cs = Number(o.pub.cs) || RCF_CS;
-    o.starts = []; let n = 0;
-    for (const it of o.pub.items) { o.starts.push(n); if (!it.d) n += Math.ceil((Number(it.n) || 0) / cs); }
-    o.N = n; o.cs = cs;
-  }
-  function rcfChunkAt(o, c) {
-    let lo = 0, hi = o.starts.length - 1, i = -1;
-    while (lo <= hi) { const m = (lo + hi) >> 1; if (o.starts[m] <= c) { i = m; lo = m + 1; } else hi = m - 1; }
-    while (i >= 0 && (o.pub.items[i].d || !Number(o.pub.items[i].n))) i--;
-    if (i < 0) return null;
-    const n = Number(o.pub.items[i].n), off = (c - o.starts[i]) * o.cs;
-    return off >= 0 && off < n ? [i, off, Math.min(o.cs, n - off)] : null;
-  }
-  async function rcfLocal(body) {   // this computer's KASTR (kastr_rcfiles)
-    try {
-      const r = await fetch("/api/rcfiles", { method: "POST", headers: { "content-type": "application/json", "x-kastr-rc": "1" }, body: JSON.stringify(body) });
-      const d = await r.json().catch(() => ({}));
-      return { ...d, http: r.status, ok: r.ok && d.ok !== false };
-    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
-  }
-  function rcfNote(k, t, level) {
-    const i = rcfNotes.findIndex((n) => n.k === k);
-    if (i >= 0) rcfNotes.splice(i, 1);
-    rcfNotes.push({ k, t, level: level || "ok", at: Date.now() });
-    while (rcfNotes.length > 4) rcfNotes.shift();
-    rcfPaint();
-  }
-  // ---- the session
-  function rcfStart(role, x) {
-    if (IS_WEB || !rcCaps) return;
-    rcfStop("restart");
-    const s = rcf = { role, rcid: x.rcid, room: x.room, peerHost: role === "ctl" ? x.to : x.from, peerPeer: role === "ctl" ? x.toPeer : x.peer,
-                      name: String(x.name || "Someone"), fk: RCF_FK_RE.test(String(x.fk || "")) ? String(x.fk) : "", key: null, caps: null, on: false,
-                      offers: new Map(), clipOid: "", theirs: new Map(), getQ: [], rx: null, rxDone: [], cancelled: [], errs: [],
-                      peerFo: null, peerFq: null, peerFqAt: 0, peerEnc: false, pump: [], pumping: false, conn: null, fqAt: 0, beginAt: 0, at: Date.now() };
-    s.st = stateProducer(() => (rcf === s && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rcf/" + statePeer() : ""), ["fo.json", "fq.json"], { priority: STATE_PRIORITY, maxAge: STATE_LAT_MS });
-    s.data = stateProducer(() => (rcf === s && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rcd/" + statePeer() : ""), ["fd"], { priority: RCF_PRIO, maxAge: 3000 });
-    rcfFo(s); rcfFq(s);
-    s.st.sync(); s.data.sync();
-    rcfSubs(s);
-    (async () => {
-      if (s.fk) { try { s.key = await crypto.subtle.importKey("raw", rcfUnB64(s.fk), "AES-GCM", false, ["encrypt", "decrypt"]); } catch { s.key = null; } }
-      await rcfBegin(s);
-    })();
-    s.tick = setInterval(() => rcfTick(s), RCF_TICK_MS);
-  }
-  async function rcfBegin(s) {
-    if (rcf !== s || s.beginBusy) return;
-    s.beginBusy = true; s.beginAt = Date.now();
-    const d = await rcfLocal({ op: "begin", rcid: s.rcid, role: s.role, name: s.name });
-    s.beginBusy = false;
-    if (rcf !== s) return;
-    s.caps = d.caps || s.caps; s.on = !!d.ok;
-    if (d.http === 404) s.old = true;   // a KASTR without kastr_rcfiles: never asked again
-    if (!d.ok) log("Remote control files: " + (d.error || "not available here"));
-    rcfFo(s); rcfFq(s); rcfPaint();
-  }
-  function rcfStop(why) {
-    const s = rcf;
-    if (!s) return;
-    rcf = null;
-    clearInterval(s.tick); clearTimeout(s.fqT);
-    for (const k of ["subFo", "subFq", "subFd"]) { try { s[k]?.close(); } catch {} }
-    try { s.st.set("fo.json", { rcid: s.rcid, v: 1, on: false, offers: [], end: 1, t: Date.now() }); } catch {}
-    setTimeout(() => { try { s.st.stop(); s.data.stop(); } catch {} }, 1200);
-    if (s.pasteRes) { try { s.pasteRes(); } catch {} }
-    if (s.rx) rcfNote("rx-" + s.rx.oid, "Stopped receiving " + rcfDescribe(s.rx.e.pub) + " \u2014 remote control ended", "warn");
-    rcfLocal({ op: "end", rcid: s.rcid, why: String(why || "stopped").slice(0, 20) });
-    rcfPaint();
-  }
-  function rcfSubs(s) {
-    for (const k of ["subFo", "subFq", "subFd"]) { try { s[k]?.close(); } catch {} s[k] = null; }
-    s.conn = connection;
-    if (!connection || !s.peerPeer || !s.peerHost) return;
-    const base = s.room + "/" + s.peerHost;
-    s.subFo = stateSubscribe(connection, base + "/~rcf/" + s.peerPeer, "fo.json", "snapshot", (v) => rcfPeerFo(s, v), STATE_PRIORITY);
-    s.subFq = stateSubscribe(connection, base + "/~rcf/" + s.peerPeer, "fq.json", "snapshot", (v) => rcfPeerFq(s, v), STATE_PRIORITY);
-    s.subFd = rcfDataSub(s, connection, base + "/~rcd/" + s.peerPeer);
-  }
-  function rcfDataSub(s, conn, path) {   // their chunks: every group, in the order they come
-    const h = { closed: false, sub: null, n: 0 };
-    (async () => {
-      let backoff = 500;
-      while (!h.closed && rcf === s) {
-        let req = null;
-        try {
-          const org = conn.origin?.peek?.();
-          if (!org) throw new Error("not connected");
-          req = await requestBroadcast(org, path, 8000);
-          if (!req) throw new Error("not routable");
-          const sub = h.sub = req.bc.track("fd").subscribe({ priority: RCF_PRIO, maxAge: 3000 });
-          backoff = 500;
-          for (;;) {
-            const g = await sub.recvGroup();
-            if (!g || h.closed) break;
-            g.readFrame().then((f) => { if (f && f.payload) { h.n++; rcfData(s, f.payload); } }, () => {}).finally(() => { try { g.close(); } catch {} });
-          }
-        } catch {}
-        try { h.sub?.close(); } catch {}
-        try { req?.close(); } catch {}
-        if (h.closed || rcf !== s) break;
-        await sleepMs(backoff);
-        backoff = Math.min(4000, backoff * 2);
-      }
-    })();
-    return { close() { h.closed = true; try { h.sub?.close(); } catch {} }, get n() { return h.n; } };
-  }
-  function rcfFo(s) {   // fo.json: what I offer now (my clipboard's copy, a drop), what I cancelled, what I could not read
-    const offers = [...s.offers.values()].filter((o) => o.live && !o.final).slice(-3).map((o) => o.pub);
-    s.st.set("fo.json", { rcid: s.rcid, v: 1, on: s.on, enc: !!s.key, caps: s.caps ? { max: s.caps.max, auto: s.caps.auto } : null,
-                          offers, cancel: s.cancelled.slice(-8), errs: s.errs.slice(-4), t: Date.now() });
-  }
-  function rcfFq(s) {   // fq.json: the chunks I want of theirs (a window) + my progress + how my last transfers ended
-    const x = s.rx;
-    s.st.set("fq.json", { rcid: s.rcid, v: 1, on: s.on, enc: !!s.key,
-                          x: x ? { oid: x.oid, want: [...x.want].sort((a, b) => a - b), got: x.ngot, N: x.N, bytes: x.bytes, total: x.total, files: x.files, nfiles: x.nfiles } : null,
-                          done: s.rxDone.slice(-6), t: Date.now() });
-    s.fqAt = Date.now();
-  }
-  function rcfFqSoon(s) {
-    if (s.fqT) return;
-    s.fqT = setTimeout(() => { s.fqT = 0; if (rcf === s) rcfFq(s); }, Math.max(0, RCF_Q_MS - (Date.now() - s.fqAt)));
-  }
-  async function rcfTick(s) {
-    if (rcf !== s) { clearInterval(s.tick); return; }
-    if (connection && s.conn !== connection) rcfSubs(s);
-    s.st.sync(); s.data.sync();
-    if (!s.on && !s.old && !s.beginBusy && Date.now() - s.beginAt > 4000) rcfBegin(s);
-    if (s.rx && Date.now() - s.fqAt > 500) rcfFq(s);   // the want list again: whatever got lost is asked for again
-    if (s.rx && Date.now() - s.rx.last > RCF_STALL_MS) rcfRxEnd(s, "fail", "nothing arrived for " + Math.round(RCF_STALL_MS / 1000) + " s");
-    if (s.pasteWait && Date.now() - s.pasteWait.at > 8000 && !(s.peerFq?.x?.oid === s.pasteWait.oid)) {   // they never started on it
-      const r = s.pasteRes; s.pasteWait = null; s.pasteRes = null; r?.();
-    }
-    if (s.on && !s.ticking) {
-      s.ticking = true;
-      try {
-        const d = await rcfLocal({ op: "renew", rcid: s.rcid });
-        if (rcf === s && d.ok) rcfMine(s, d);
-        else if (rcf === s && d.http === 409) { s.on = false; rcfFo(s); }
-      } finally { s.ticking = false; }
-    }
-    rcfPaint();
-  }
-  // ---- what I copied (my KASTR's offer) -> fo.json
-  function rcfMine(s, d) {
-    const off = d.offer;
-    if (off && RCF_OID_RE.test(String(off.oid || "")) && off.oid !== s.clipOid) {
-      s.clipOid = off.oid;
-      for (const o of s.offers.values()) if (o.src === "kastr" && o.live && !o.prog) o.live = false;   // an older copy nobody is taking
-      const o = { pub: off, src: "kastr", sent: new Map(), queued: new Set(), bytes: 0, live: true, at: Date.now() };
-      rcfPlan(o);
-      s.offers.set(off.oid, o);
-      while (s.offers.size > 8) s.offers.delete(s.offers.keys().next().value);
-      rcfFo(s);
-      log("Remote control files: offering " + rcfDescribe(off) + " (" + rcfSize(off.total) + ")");
-      if (off.over) rcfNote("of-" + off.oid, rcfDescribe(off) + " (" + rcfSize(off.total) + ") is over the " + rcfSize(s.caps?.max) + " limit for one transfer \u2014 it stays here", "warn");
-      else if (off.skipped?.links) rcfNote("of-" + off.oid, "Left out " + off.skipped.links + " shortcut link" + (off.skipped.links === 1 ? "" : "s") + " (links are never followed)", "info");
-    } else if (!off && s.clipOid) {
-      const o = s.offers.get(s.clipOid);
-      if (o && !o.prog) o.live = false;
-      s.clipOid = "";
-      rcfFo(s);
-    }
-  }
-  // ---- their offers -> fetch (at once, on "Get them", or on the controller's paste)
-  function rcfPeerFo(s, v) {
-    if (rcf !== s || !v || v.rcid !== s.rcid) return;
-    s.peerFo = v;
-    const x = s.rx;
-    if (x && Array.isArray(v.cancel) && v.cancel.includes(x.oid)) rcfRxEnd(s, "cancel", s.name + " cancelled it");
-    const er = x && Array.isArray(v.errs) ? v.errs.find((e) => e && e.oid === x?.oid) : null;
-    if (er && s.rx) rcfRxEnd(s, "fail", String(er.why || "their side could not read it"));
-    const listed = new Set();
-    for (const pub of (Array.isArray(v.offers) ? v.offers : []).slice(0, 4)) {
-      if (!pub || !RCF_OID_RE.test(String(pub.oid || "")) || !Array.isArray(pub.items)) continue;
-      listed.add(pub.oid);
-      let e = s.theirs.get(pub.oid);
-      if (!e) {
-        e = { pub, state: "new", at: Date.now() };
-        s.theirs.set(pub.oid, e);
-        if (pub.kind === "drop" && s.role !== "sharer") { e.state = "skip"; continue; }
-        const auto = Number(s.caps?.auto ?? RCF_AUTO);
-        if (pub.over) { e.state = "over"; rcfNote("th-" + pub.oid, s.name + " copied " + rcfDescribe(pub) + " (" + rcfSize(pub.total) + ") \u2014 over the limit for one transfer", "warn"); }
-        else if (pub.kind === "drop" || pub.kind === "image" || pub.total <= auto || pub.get) rcfQueue(s, pub.oid);
-        else { e.state = "wait"; log("Remote control files: " + s.name + " copied " + rcfDescribe(pub) + " (" + rcfSize(pub.total) + ") -- waits for Get them / a paste"); }
-      } else if (pub.get && e.state === "wait") rcfQueue(s, pub.oid);   // the controller pasted on my screen: take it now
-    }
-    for (const [oid, e] of s.theirs) if ((e.state === "wait" || e.state === "over") && !listed.has(oid)) s.theirs.delete(oid);   // copied over since
-    while (s.theirs.size > 12) s.theirs.delete(s.theirs.keys().next().value);
-    rcfPaint();
-  }
-  function rcfQueue(s, oid) {
-    const e = s.theirs.get(oid);
-    if (!e || e.state === "get" || e.state === "queued" || e.state === "done") return;
-    e.state = "queued";
-    s.getQ.push(oid);
-    rcfNextGet(s);
-  }
-  function rcfNextGet(s) {
-    if (rcf !== s || s.rx || s.getBusy) return;
-    while (s.getQ.length) {
-      const oid = s.getQ.shift(), e = s.theirs.get(oid);
-      if (e && e.state === "queued") { rcfGet(s, oid); return; }
-    }
-  }
-  async function rcfGet(s, oid) {
-    const e = s.theirs.get(oid);
-    if (!e) return;
-    if (!s.on) { e.state = "fail"; rcfNote("rx-" + oid, "This KASTR can\u2019t take files from " + s.name + (s.old ? " (it is older than 0.21.83)" : ""), "warn"); return; }
-    e.state = "get"; s.getBusy = true;
-    const d = await rcfLocal({ op: "recv", rcid: s.rcid, offer: { ...e.pub, by: s.name }, pt: e.pub.kind === "drop" ? e.pub.pt : undefined });
-    s.getBusy = false;
-    if (rcf !== s) return;
-    if (!d.ok) {
-      e.state = "fail";
-      s.rxDone.push({ oid, state: "fail", why: String(d.error || "").slice(0, 160) });
-      rcfFq(s);
-      rcfNote("rx-" + oid, "Couldn\u2019t take " + rcfDescribe(e.pub) + " from " + s.name + ": " + (d.error || "no answer from KASTR"), "warn");
-      rcfNextGet(s);
-      return;
-    }
-    const need = [];
-    for (const [a, b] of (Array.isArray(d.need) ? d.need : [])) for (let c = a; c < b; c++) need.push(c);
-    const p = d.progress || {};
-    const x = s.rx = { oid, e, need, ni: 0, want: new Set(), got: new Set(), inflight: new Set(), ngot: 0, N: need.length, bytes: 0, total: Number(p.total) || Number(e.pub.total) || 0,
-                       files: 0, nfiles: Number(p.nfiles) || Number(e.pub.files) || 0, t0: Date.now(), last: Date.now(), posts: 0, q: [], win: Math.max(4, Math.min(64, Math.ceil((Number(window.__rcfWinBytes) || RCF_WIN_BYTES) / (Number(e.pub.cs) || RCF_CS)))) };
-    log("Remote control files: receiving " + rcfDescribe(e.pub) + " (" + rcfSize(x.total) + ") from " + s.name);
-    if (p.state === "done" || !need.length) { if (p.state === "done") rcfRxFinish(s, x, p); else rcfRxDone(s, x); return; }
-    rcfFill(s);
-    rcfFq(s);
-    rcfPaint();
-  }
-  function rcfFill(s) {
-    const x = s.rx;
-    if (!x) return;
-    while (x.want.size < x.win && x.ni < x.need.length) { const c = x.need[x.ni++]; if (!x.got.has(c)) x.want.add(c); }
-  }
-  async function rcfData(s, u8) {   // one chunk of theirs
-    if (rcf !== s || !(u8 instanceof Uint8Array) || u8.length < 8) return;
-    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    if (dv.getUint32(0) !== RCF_MAGIC) return;
-    const hl = dv.getUint32(4);
-    if (hl > 512 || 8 + hl > u8.length) return;
-    let h;
-    try { h = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
-    const x = s.rx;
-    if (!x || !h || h.o !== x.oid || !Number.isInteger(h.c) || x.got.has(h.c) || x.inflight.has(h.c) || !x.want.has(h.c)) return;
-    let body = u8.subarray(8 + hl);
-    x.inflight.add(h.c);
-    if (h.e) {
-      if (!s.key) { x.inflight.delete(h.c); rcfRxEnd(s, "fail", "it came encrypted and this side has no key"); return; }
-      try { body = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: rcfIv(h.o, h.c), additionalData: new TextEncoder().encode(h.o + ":" + h.c) }, s.key, body)); }
-      catch { x.inflight.delete(h.c); return; }   // damaged: it is asked for again
-    }
-    if (s.rx !== x) return;
-    x.q.push([h.c, body]);
-    rcfPost(s, x);
-  }
-  function rcfPost(s, x) {   // into my KASTR, three at a time
-    while (x.posts < 3 && x.q.length) {
-      const [c, body] = x.q.shift();
-      x.posts++;
-      fetch("/api/rcfiles/put?rcid=" + s.rcid + "&oid=" + x.oid + "&c=" + c, { method: "POST", headers: { "x-kastr-rc": "1", "content-type": "application/octet-stream" }, body })
-        .then((r) => r.json().catch(() => ({})).then((d) => [r.status, d]))
-        .then(([code, d]) => {
-          x.posts--; x.inflight.delete(c);
-          if (s.rx !== x) return;
-          if (code === 200 && d.ok) {
-            if (!x.got.has(c)) { x.got.add(c); x.ngot++; x.bytes += body.length; }
-            x.want.delete(c);
-            x.files = Number(d.progress?.files) || x.files;
-            x.last = Date.now();
-            rcfFill(s); rcfFqSoon(s); rcfPaintSoon();
-            if (x.ngot >= x.N) rcfRxDone(s, x);
-          } else if (code === 404 || code === 409 || code === 422) { rcfRxEnd(s, "fail", d.error || ("HTTP " + code)); return; }
-          rcfPost(s, x);
-        }, () => { x.posts--; x.inflight.delete(c); if (s.rx === x) rcfPost(s, x); });
-    }
-  }
-  async function rcfRxDone(s, x) {
-    if (x.finishing) return;
-    x.finishing = true;
-    const d = await rcfLocal({ op: "done", rcid: s.rcid, oid: x.oid });
-    if (rcf !== s || s.rx !== x) return;
-    if (!d.ok) { rcfRxEnd(s, "fail", d.error || "it could not be finished"); return; }
-    rcfRxFinish(s, x, d.progress || {});
-  }
-  function rcfRxFinish(s, x, p) {
-    const r = p.result || {}, e = x.e;
-    s.rx = null; e.state = "done";
-    const ms = Math.max(1, Date.now() - x.t0);
-    s.rxDone.push({ oid: x.oid, state: "done", n: Number(r.n) || 0, bytes: Number(r.bytes) || 0, placed: String(r.placed || ""), ms });
-    rcfFq(s);
-    const n = Number(r.n) || 0, what = e.pub.kind === "image" ? "a picture" : (n === 1 && e.pub.files === 1 ? rcfDescribe(e.pub) : n + " file" + (n === 1 ? "" : "s"));
-    const txt = (e.pub.kind === "drop" ? "Received " + what + " (" + rcfSize(r.bytes) + ") " + s.name + " dropped \u2014 " : "Received " + what + " (" + rcfSize(r.bytes) + ") from " + s.name + " \u2014 ") + (r.note || "done");
-    rcfNote("rx-" + x.oid, txt, r.placed === "failed" ? "warn" : "ok");
-    rcToast(txt, 7000, r.placed === "failed" ? "warn" : "event");
-    log("Remote control files: " + txt + " [" + (Math.round((Number(r.bytes) || 0) / ms / 1048.576 * 10) / 10) + " MB/s, " + (ms / 1000).toFixed(1) + " s]");
-    rcfNextGet(s);
-    rcfPaint();
-  }
-  function rcfRxEnd(s, state, why) {   // cancel / fail: the partial copy goes (kastr_rcfiles deletes it)
-    const x = s.rx;
-    if (!x) return;
-    s.rx = null; x.e.state = state;
-    rcfLocal({ op: "cancel", rcid: s.rcid, oid: x.oid });
-    s.rxDone.push({ oid: x.oid, state, why: String(why || "").slice(0, 160) });
-    rcfFq(s);
-    rcfNote("rx-" + x.oid, (state === "cancel" ? "Cancelled " : "Couldn\u2019t receive ") + rcfDescribe(x.e.pub) + " from " + s.name + (why ? " \u2014 " + why : ""), state === "cancel" ? "info" : "warn");
-    log("Remote control files: " + state + " receiving " + rcfDescribe(x.e.pub) + (why ? " (" + why + ")" : ""));
-    rcfNextGet(s);
-    rcfPaint();
-  }
-  // ---- their requests for MY offers -> chunks
-  function rcfPeerFq(s, v) {
-    if (rcf !== s || !v || v.rcid !== s.rcid) return;
-    s.peerFq = v; s.peerFqAt = Date.now(); s.peerEnc = !!v.enc;
-    const x = v.x, now = Date.now();
-    if (x && s.offers.has(x.oid)) {
-      const o = s.offers.get(x.oid);
-      if (!o.final) {
-        if (!o.prog) log("Remote control files: " + s.name + " is taking " + rcfDescribe(o.pub) + " (" + rcfSize(o.pub.total) + ")");
-        o.prog = x;
-        for (const c of (Array.isArray(x.want) ? x.want : []).slice(0, 64)) {
-          if (!Number.isInteger(c) || c < 0 || c >= o.N || o.queued.has(c)) continue;
-          const at = o.sent.get(c);
-          if (at && now - at < RCF_RESEND_MS) continue;
-          o.queued.add(c);
-          s.pump.push([o, c]);
-        }
-        rcfPump(s);
-      }
-    }
-    for (const dn of (Array.isArray(v.done) ? v.done : [])) {
-      const o = dn && s.offers.get(dn.oid);
-      if (!o || o.final) continue;
-      o.final = String(dn.state || "done"); o.prog = null;
-      rcfLocal({ op: "sent", rcid: s.rcid, oid: dn.oid, state: o.final, who: s.name });
-      const what = rcfDescribe(o.pub) + " (" + rcfSize(o.pub.total) + ")";
-      if (o.final === "done") {
-        const t = s.role === "sharer" ? s.name + " copied " + what + " from your computer" : s.name + " has " + what + (o.src === "drop" ? " \u2014 dropped on their screen" : "");
-        rcfNote("tx-" + dn.oid, t, "ok");
-        rcToast(t + ".", 7000);
-      } else rcfNote("tx-" + dn.oid, s.name + (o.final === "cancel" ? " cancelled " : " couldn\u2019t take ") + what + (dn.why ? " \u2014 " + dn.why : ""), o.final === "cancel" ? "info" : "warn");
-      if (o.src === "drop") o.files = null;   // let go of the dropped files
-      rcfFo(s);
-      if (s.pasteWait?.oid === dn.oid) { const r = s.pasteRes; s.pasteWait = null; s.pasteRes = null; r?.(); }
-    }
-    rcfPaint();
-  }
-  async function rcfPump(s) {   // one chunk at a time: read (my KASTR, or the dropped File), seal, publish
-    if (s.pumping) return;
-    s.pumping = true;
-    try {
-      while (rcf === s && s.pump.length) {
-        const [o, c] = s.pump.shift();
-        o.queued.delete(c);
-        if (o.final) continue;
-        let data;
-        try { data = await rcfRead(s, o, c); }
-        catch (err) {
-          const why = String(err?.message || err).slice(0, 160);
-          if (!s.errs.some((x) => x.oid === o.pub.oid)) { s.errs.push({ oid: o.pub.oid, why }); rcfFo(s); }
-          o.final = "fail";
-          rcfNote("tx-" + o.pub.oid, "Couldn\u2019t send " + rcfDescribe(o.pub) + ": " + why, "warn");
-          continue;
-        }
-        if (rcf !== s) break;
-        const hdr = { o: o.pub.oid, c, n: data.length };
-        let body = data;
-        if (s.key && s.peerEnc) {
-          body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: rcfIv(o.pub.oid, c), additionalData: new TextEncoder().encode(o.pub.oid + ":" + c) }, s.key, data));
-          hdr.e = 1;
-        }
-        const hb = new TextEncoder().encode(JSON.stringify(hdr));
-        const fr = new Uint8Array(8 + hb.length + body.length);
-        const dv = new DataView(fr.buffer);
-        dv.setUint32(0, RCF_MAGIC); dv.setUint32(4, hb.length);
-        fr.set(hb, 8); fr.set(body, 8 + hb.length);
-        s.data.sync();
-        if (!s.data.bytes("fd", fr)) continue;   // not connected yet: their next want list asks again
-        if (!o.sent.has(c)) o.bytes += data.length;
-        o.sent.set(c, Date.now());
-      }
-    } finally { s.pumping = false; }
-  }
-  async function rcfRead(s, o, c) {
-    if (o.src === "drop") {
-      const at = rcfChunkAt(o, c), f = at && o.files ? o.files[at[0]] : null;
-      if (!f) throw new Error("that file is gone");
-      return new Uint8Array(await f.slice(at[1], at[1] + at[2]).arrayBuffer());
-    }
-    const r = await fetch("/api/rcfiles/chunk?rcid=" + s.rcid + "&oid=" + o.pub.oid + "&c=" + c, { headers: { "x-kastr-rc": "1" }, cache: "no-store" });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || ("HTTP " + r.status)); }
-    return new Uint8Array(await r.arrayBuffer());
-  }
-  function rcfTxCancel(s, oid) {
-    const o = s.offers.get(oid);
-    if (!o || o.final) return;
-    o.final = "cancel"; o.prog = null;
-    s.cancelled.push(oid);
-    s.pump = s.pump.filter(([oo]) => oo !== o);
-    rcfFo(s);
-    rcfNote("tx-" + oid, "Stopped sending " + rcfDescribe(o.pub), "info");
-  }
-  // ---- the controller's Ctrl+V on the shared screen: my copied files / picture get there first (the keys wait)
-  function rcfPaste(c) {
-    const s = rcf;
-    if (!s || s.role !== "ctl" || !s.on || rcCtl !== c) return Promise.resolve();
-    return (async () => {
-      const d = await rcfLocal({ op: "renew", rcid: s.rcid, now: true });   // a copy made a moment ago counts
-      if (rcf !== s) return;
-      if (d.ok) rcfMine(s, d);
-      const o = s.clipOid ? s.offers.get(s.clipOid) : null;
-      if (!o || o.pub.over || o.final === "done") return;
-      for (let i = 0; i < 30 && !s.peerFqAt && rcf === s; i++) await sleepMs(100);   // their side's files session (an older KASTR has none)
-      if (rcf !== s || !s.peerFq?.on) return;
-      if ((s.peerFq.done || []).some((x) => x && x.oid === o.pub.oid && x.state === "done")) return;
-      o.pub = { ...o.pub, get: 1 };
-      rcfFo(s);
-      s.pasteWait = { oid: o.pub.oid, at: Date.now() };
-      rcfPaint();
-      await new Promise((res) => { s.pasteRes = res; });
-    })();
-  }
-  // ---- a drop from my desktop onto the shared screen
-  function rcfDragOver(c, e) {
-    if (!rcf || rcf.role !== "ctl" || rcCtl !== c || !e.dataTransfer || ![...(e.dataTransfer.types || [])].includes("Files")) return;
-    e.preventDefault(); e.stopPropagation();
-    e.dataTransfer.dropEffect = "copy";
-    c.cap.classList.add("rcfdrag");
-    clearTimeout(c.dragT);
-    c.dragT = setTimeout(() => c.cap?.classList.remove("rcfdrag"), 400);
-  }
-  async function rcfCollect(dt) {   // files + folders (webkitGetAsEntry) -> [{p, f} | {p, d: 1}]; read before the event ends
-    const out = [];
-    const entries = [...(dt.items || [])].filter((i) => i.kind === "file").map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null));
-    const plain = [...(dt.files || [])];
-    if (entries.length && entries.every(Boolean)) {
-      const walk = async (en, base, depth) => {
-        if (out.length >= 10000 || depth > 32) return;
-        const rel = base ? base + "/" + en.name : en.name;
-        if (en.isFile) { const f = await new Promise((res) => en.file(res, () => res(null))); if (f) out.push({ p: rel, f }); return; }
-        if (!en.isDirectory) return;
-        out.push({ p: rel, d: 1 });
-        const rd = en.createReader();
-        for (;;) {
-          const batch = await new Promise((res) => rd.readEntries(res, () => res([])));
-          if (!batch.length) break;
-          for (const k of batch) await walk(k, rel, depth + 1);
-        }
-      };
-      for (const en of entries) await walk(en, "", 0);
-      return out;
-    }
-    for (const f of plain) out.push({ p: f.name, f });
-    return out;
-  }
-  async function rcfDropOn(c, t, e) {
-    const s = rcf;
-    if (!s || s.role !== "ctl" || rcCtl !== c || !e.dataTransfer) return;
-    e.preventDefault(); e.stopPropagation();
-    c.cap.classList.remove("rcfdrag");
-    const p = rcPoint(t, e.clientX, e.clientY);
-    const got = rcfCollect(e.dataTransfer);   // synchronously first: the DataTransfer empties when the event ends
-    if (!rcIn(p)) { rcToast("Drop it on " + c.name + "\u2019s screen.", 4000); return; }
-    if (!s.on || !s.peerFq?.on) { rcToast(c.name + "\u2019s KASTR can\u2019t take files (it needs 0.21.83 or newer).", 6000, "warn"); return; }
-    const list = await got;
-    if (!list.length || rcf !== s) return;
-    const items = [], files = [];
-    for (const it of list) {
-      items.push(it.d ? { p: it.p, n: 0, d: 1, t: 0 } : { p: it.p, n: it.f.size, d: 0, t: Math.floor((it.f.lastModified || Date.now()) / 1000) });
-      files.push(it.d ? null : it.f);
-    }
-    const total = items.reduce((a, it) => a + (it.d ? 0 : it.n), 0), nf = items.filter((it) => !it.d).length;
-    const max = Number(s.peerFo?.caps?.max) || Number(s.caps?.max) || 2048 * 1048576;
-    if (total > max) { rcToast("That is " + rcfSize(total) + " \u2014 over the " + rcfSize(max) + " limit for one transfer.", 6000, "warn"); return; }
-    const pub = { oid: rcfHex(8), kind: "drop", cs: RCF_CS, items, total, files: nf, dirs: items.length - nf, pt: [p.x, p.y], at: Date.now() };
-    pub.name = rcfDescribe({ ...pub, name: "" });
-    const o = { pub, src: "drop", files, sent: new Map(), queued: new Set(), bytes: 0, live: true, at: Date.now() };
-    rcfPlan(o);
-    s.offers.set(pub.oid, o);
-    rcfFo(s);
-    log("Remote control files: dropped " + pub.name + " (" + rcfSize(total) + ") on " + c.name + "\u2019s screen at " + p.x.toFixed(3) + ", " + p.y.toFixed(3));
-    rcToast("Sending " + pub.name + " (" + rcfSize(total) + ") to " + c.name + "\u2026", 4000);
-    rcfPaint();
-  }
-  // ---- the card: transfers going on, "Get them", the notes
-  let rcfPaintT = 0;
-  const rcfPaintSoon = () => { if (!rcfPaintT) rcfPaintT = setTimeout(() => { rcfPaintT = 0; rcfPaint(); }, 150); };
-  function rcfRows() {
-    const s = rcf, rows = [], now = Date.now();
-    if (s) {
-      const x = s.rx;
-      if (x) {
-        const pct = x.total ? Math.min(100, Math.floor(x.bytes * 100 / x.total)) : (x.N ? Math.floor(x.ngot * 100 / x.N) : 0);
-        rows.push({ k: "rx", pct, b: ["rxcancel", "Cancel"],
-                    t: "Receiving " + rcfDescribe(x.e.pub) + " from " + s.name + " \u2014 " + (x.nfiles > 1 ? x.files + " of " + x.nfiles + " files, " : "") + rcfSize(x.bytes) + " of " + rcfSize(x.total) + " (" + pct + "%)" });
-      }
-      for (const [oid, e] of s.theirs) if (e.state === "wait") rows.push({ k: "get-" + oid, b: ["get:" + oid, "Get " + (e.pub.files === 1 && !e.pub.dirs ? "it" : "them")], t: s.name + " copied " + rcfDescribe(e.pub) + " (" + rcfSize(e.pub.total) + ")" });
-      for (const o of s.offers.values()) {
-        if (!o.prog || o.final) continue;
-        const pr = o.prog, pct = pr.total ? Math.min(100, Math.floor((Number(pr.bytes) || 0) * 100 / pr.total)) : 0;
-        const who = s.role === "sharer" ? s.name + " is copying " + rcfDescribe(o.pub) + " from your computer" : "Sending " + rcfDescribe(o.pub) + " to " + s.name;
-        rows.push({ k: "tx-" + o.pub.oid, pct, b: ["txcancel:" + o.pub.oid, "Cancel"],
-                    t: who + " \u2014 " + (pr.nfiles > 1 ? (Number(pr.files) || 0) + " of " + pr.nfiles + " files, " : "") + rcfSize(pr.bytes) + " of " + rcfSize(pr.total) + " (" + pct + "%)" });
-      }
-      if (s.pasteWait && !rows.some((r) => r.k === "tx-" + s.pasteWait.oid)) rows.push({ k: "paste", t: "Your paste goes as soon as " + s.name + " has the files\u2026", b: ["pastego", "Paste without them"] });
-    }
-    for (const n of rcfNotes) if (now - n.at < RCF_NOTE_MS && !rows.some((r) => r.k === n.k)) rows.push({ k: n.k, t: n.t, level: n.level, b: ["close:" + n.k, "\u00d7"] });
-    return rows;
-  }
-  function rcfPaint() {
-    const rows = rcfRows();
-    let el = document.getElementById("kRcFiles");
-    if (!rows.length) { if (el) el.hidden = true; return; }
-    if (!el) {
-      el = document.createElement("div"); el.id = "kRcFiles"; el.hidden = true;
-      el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite");
-      el.addEventListener("click", (ev) => {
-        const b = ev.target.closest("button[data-a]");
-        if (!b) return;
-        ev.stopPropagation();
-        rcfAction(b.dataset.a);
-      });
-      document.body.appendChild(el);
-    }
-    // rows are kept by key and updated in place: a progress repaint (several a second) never replaces the Cancel button
-    // under the pointer (lab v02183: a click on a rebuilt row landed on a detached button)
-    const keep = new Map([...el.children].map((n) => [n.dataset.k, n]));
-    let prev = null;
-    for (const r of rows) {
-      let row = keep.get(r.k);
-      keep.delete(r.k);
-      if (!row) { row = document.createElement("div"); row.dataset.k = r.k; const t0 = document.createElement("span"); t0.className = "t"; row.appendChild(t0); }
-      const cls = "rcfrow" + (r.level ? " " + r.level : "");
-      if (row.className !== cls) row.className = cls;
-      const t = row.querySelector(".t");
-      if (t.textContent !== r.t) t.textContent = r.t;
-      let bar = row.querySelector(".bar");
-      if (r.pct !== undefined) {
-        if (!bar) { bar = document.createElement("span"); bar.className = "bar"; bar.appendChild(document.createElement("i")); row.insertBefore(bar, t.nextSibling); }
-        bar.firstChild.style.width = r.pct + "%";
-      } else if (bar) bar.remove();
-      let btn = row.querySelector("button");
-      if (r.b) {
-        if (!btn) { btn = document.createElement("button"); btn.type = "button"; row.appendChild(btn); }
-        if (btn.dataset.a !== r.b[0]) btn.dataset.a = r.b[0];
-        if (btn.textContent !== r.b[1]) btn.textContent = r.b[1];
-        btn.title = r.b[1] === "\u00d7" ? "Close" : "";
-      } else if (btn) btn.remove();
-      const at = prev ? prev.nextSibling : el.firstChild;
-      if (row !== at) el.insertBefore(row, at);
-      prev = row;
-    }
-    for (const n of keep.values()) n.remove();
-    el.hidden = false;
-  }
-  function rcfAction(a) {
-    const s = rcf;
-    if (a.startsWith("close:")) { const i = rcfNotes.findIndex((n) => n.k === a.slice(6)); if (i >= 0) rcfNotes.splice(i, 1); rcfPaint(); return; }
-    if (!s) return;
-    if (a === "rxcancel") rcfRxEnd(s, "cancel", "");
-    else if (a.startsWith("get:")) rcfQueue(s, a.slice(4));
-    else if (a.startsWith("txcancel:")) rcfTxCancel(s, a.slice(9));
-    else if (a === "pastego" && s.pasteRes) { const r = s.pasteRes; s.pasteWait = null; s.pasteRes = null; r(); }
-    rcfPaint();
-  }
-  setInterval(() => { if (rcfNotes.length || rcf) rcfPaint(); }, 1000);   // notes fade out
-  window.__rcf = {   // rig (the lab) -- never the bytes, never the key
-    state: () => {
-      const s = rcf;
-      return { notes: rcfNotes.map((n) => [n.k, n.t, n.level]), rows: rcfRows().map((r) => [r.k, r.t, r.pct ?? null]),
-               s: s && { role: s.role, rcid: s.rcid, on: s.on, enc: !!s.key, peerEnc: s.peerEnc, peerOn: !!s.peerFq?.on, clipOid: s.clipOid,
-                         offers: [...s.offers.values()].map((o) => ({ oid: o.pub.oid, kind: o.pub.kind, name: o.pub.name, total: o.pub.total, live: !!o.live, final: o.final || "", sentBytes: o.bytes, prog: o.prog ? { bytes: o.prog.bytes, got: o.prog.got, N: o.prog.N } : null })),
-                         theirs: [...s.theirs].map(([k, e]) => [k, e.state, e.pub.kind, e.pub.name, e.pub.total]),
-                         rx: s.rx && { oid: s.rx.oid, ngot: s.rx.ngot, N: s.rx.N, bytes: s.rx.bytes, total: s.rx.total, files: s.rx.files, nfiles: s.rx.nfiles, ms: Date.now() - s.rx.t0 },
-                         rxDone: s.rxDone.slice(), pasteWait: s.pasteWait, fd: s.subFd?.n || 0 } };
-    },
-    get: (oid) => { if (rcf) rcfQueue(rcf, oid); }, cancel: () => { if (rcf) rcfRxEnd(rcf, "cancel", ""); }, action: rcfAction, size: rcfSize,
-  };
+  // 0.21.92: the code is assets/kastr-rcf.js now (the private sessions' pages, rcx.html / rcx-agent.html, run the same module);
+  // this page gives it the room's plumbing: my tracks under <room>/<me>/~rcf|~rcd/<peer>, theirs under their host + peer.
+  const RCF_PRIO = KastrRcf.PRIO, RCF_FK_RE = KastrRcf.FK_RE, rcfNewKey = KastrRcf.newKey;
+  const RCF = KastrRcf.create({
+    enabled: () => !IS_WEB && !!rcCaps,
+    open: (alive) => ({
+      st: stateProducer(() => (alive() && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rcf/" + statePeer() : ""), ["fo.json", "fq.json"], { priority: STATE_PRIORITY, maxAge: STATE_LAT_MS }),
+      data: stateProducer(() => (alive() && joinState === "joined" ? CHANNEL + "/" + HOSTNAME1 + "/~rcd/" + statePeer() : ""), ["fd"], { priority: RCF_PRIO, maxAge: 3000 }),
+    }),
+    conn: () => connection,
+    peer: (s) => (s.peerHost && s.peerPeer ? { st: s.room + "/" + s.peerHost + "/~rcf/" + s.peerPeer, data: s.room + "/" + s.peerHost + "/~rcd/" + s.peerPeer } : null),
+    subJson: (conn, path, track, cb) => stateSubscribe(conn, path, track, "snapshot", cb, STATE_PRIORITY),
+    request: (org, path, ms) => requestBroadcast(org, path, ms),
+    isCtl: (c) => rcCtl === c, point: (t, x, y) => rcPoint(t, x, y), inPic: (p) => rcIn(p),
+    log: (t) => log(t), toast: (t, ms, level) => rcToast(t, ms, level), sleep: (ms) => sleepMs(ms),
+  });
+  function rcfStart(role, x) { RCF.start(role, x); }
+  function rcfStop(why) { RCF.stop(why); }
+  function rcfPaste(c) { return RCF.paste(c); }
+  function rcfDragOver(c, e) { RCF.dragOver(c, e); }
+  function rcfDropOn(c, t, e) { return RCF.dropOn(c, t, e); }
+  window.__rcf = RCF.rig;
   // ---- 0.21.66 (e) GRIDS FROM ANY ROOM (Kenton: "I also need to be able to create my own grid with several streams across multiple
   // rooms."). Built with the 0.21.65 grid builder (More > Build a grid...): spots, presets, several cameras a spot cycling on time or
   // motion, a name. The camera list is every stream I can see -- my room's tiles, the rooms I watch (every source, ticked or not)
@@ -9013,6 +8494,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     else if (v === "sound") wrSetSound(rec.slug, !watchRooms.get(rec.slug)?.sound);
     else if (v === "join") sbCardClick(card, rec);
     else if (v === "rsettings") openRoomSettings(rec);   // 0.21.65
+    else if (v === "tplApply") window.__tplUI?.applyTo?.(rec.slug);   // 0.21.92: meeting templates
   }
   setInterval(() => {   // fresh tokens 10 min before expiry (live sessions ride out the old one; re-armed tiles take the new)
     if (!authSecured || joinState !== "joined") return;
@@ -9843,7 +9325,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined") return;
     let conn = null;
     try {
-      conn = new Net.Connection({ url: new Signals.Signal(new URL(urlInput.value.trim())), enabled: true });
+      conn = new Net.Connection({ url: new Signals.Signal(new URL(withToken(urlInput.value.trim()))), enabled: true });   // 0.21.91: ~stats rides a token
     } catch { return; }
     try {
       const deadline = new Promise((res) => setTimeout(res, 1500, null));
@@ -10934,7 +10416,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           row.appendChild(mb);
           const adm = [...eoMsgAdmin(x), ...pmrItems(x)];   // 0.21.91 passcode reset: + Reset My room passcode
           const open = (anchor) => {
-            const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm];
+            const items = [{ value: "pinv-msg", icon: "msg", label: "Message " + x.name }, ...adm, ...rcaOffline(x)];   // 0.21.92: + greyed remote control
             openMineMenu(anchor, items, "", (v) => (v === "pinv-msg" ? go() : v === "pinv-pmr" ? pmrOpen(x.name) : v === "pinv-eo-msgdev" ? window.__msg?.adminDevices(x.name, anchor) : null));
             row.classList.add("menu"); watchMenuClose(row);
           };
@@ -14354,6 +13836,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         }
         { const ri = rcMenuItem(name); if (ri) items.push(ri); }   // 0.21.79: Request control (publishers and admins; a native share)
         { const pi = ptMenuItem(name); if (pi) items.push(pi); }   // 0.21.83: Point on this screen (anyone in the room)
+        { const bi = rcaTileItem(name, extra); if (bi) items.push(bi); }   // 0.21.92: Take control of <box> (fleet admins; a box that opted in)
         items.push({ sep: true });
         if (authRole === "admin" && !mineNames.has(name) && !wrRoomOf(name)) {   // 0.16.0: the admin code (0.21.44: my room's tiles only)
           items.push({ value: "astop", label: "Stop this share (admin)" });
@@ -14403,6 +13886,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         openMineMenu(anchor, items, "", async (v) => {
           if (extra?.pick && String(v).startsWith("pinv")) { extra.pick(v); return; }   // 0.21.78
           if (String(v).startsWith("lib:")) { libTileMenuPick(name, v); return; }   // 0.21.84: the library rows
+          if (v === "boxtake") { rcaTilePick(name); return; }   // 0.21.92
+          if (v === "boxtake-x") return;
           if (v === "lat") { latencyToggle(name); return; }
           if (String(v).startsWith("rc")) { rcMenuPick(name, v); return; }   // 0.21.79: remote control
           if (String(v).startsWith("pnt")) { ptMenuPick(name, v); return; }   // 0.21.83: pointer mode
@@ -14855,6 +14340,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__roomsRegDbg = () => [...roomsReg.values()].map((r) => ({ slug: r.slug, locked: r.locked, gone: !!r.goneAt }));   // rig (0.21.75): the raw ~channels entries
   const roomsMinter = new Map(); // slug -> { slug, locked, persistent, creator, created, at } (last good answer)
   let roomsClosed = {};          // slug -> ts_ms tombstones from the room store
+  let roomsClosedWhy = {};       // 0.21.92: slug -> "pres" (a template's room closed when its presentation ended)
   let roomsRenamed = {};         // 0.21.65: old slug -> new slug (Room settings > Rename)
   const roomsExtraSubs = [];     // other features (chat) add consumers here: fn(sub)
   let roomsSlugsSeen = "", roomsMinterAt = 0;
@@ -14896,12 +14382,63 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     })();
   }
   const stampGone = (m, now) => { for (const r of m.values()) if (!r.goneAt) r.goneAt = now; };
+  // 0.21.91 (Kenton: "Room list needs an access code"): the relay shows a session without a token nothing of the rooms. The
+  // rooms connection and the list read carry a BROWSE token (minted with an access code: the saved one, the one typed on the
+  // Join room page, the one joined with) -- or a guest's own token (their room only). Without either the rooms are not listed.
+  let roomsBrowse = null;   // {token, exp, base}
+  const roomsBrowseKey = () => { try { return "kastr.browse." + new URL(urlInput.value.trim()).origin; } catch { return ""; } };
+  try { const b = JSON.parse(sessionStorage.getItem(roomsBrowseKey()) || "null"); if (b?.token && b.exp * 1000 > Date.now() + 60000) roomsBrowse = b; } catch {}
+  function roomsToken() {
+    try {
+      if (!authSecured) return "";
+      if (roomsBrowse && roomsBrowse.base === authBase() && roomsBrowse.exp * 1000 > Date.now()) return roomsBrowse.token;
+      if (joinState === "joined" && authTokens?.member) return authTokens.member;   // a guest's own (its room only), or a member's
+    } catch {}
+    return "";
+  }
+  let roomsBrowseBusy = null, roomsBrowseSaid = "";
+  async function roomsBrowseMint(access) {
+    const code = String(access ?? "").trim();
+    const base = authBase();
+    if (!base || !authSecured || (authCodes && !code)) return false;
+    if (roomsBrowse && roomsBrowse.base === base && roomsBrowse.code === code && roomsBrowse.exp * 1000 > Date.now() + 600000) return true;
+    if (roomsBrowseBusy) return roomsBrowseBusy;
+    roomsBrowseBusy = (async () => {
+      try {
+        const r = await fetch(base + "/api/token", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ browse: true, code, host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d?.tokens?.browse) { roomsBrowseSaid = String(d?.error || r.status); return false; }
+        const had = roomsToken();
+        roomsBrowse = { token: d.tokens.browse, exp: Number(d.exp) || 0, base, code };
+        try { sessionStorage.setItem(roomsBrowseKey(), JSON.stringify({ token: roomsBrowse.token, exp: roomsBrowse.exp, base })); } catch {}
+        if (had !== roomsBrowse.token) { roomsRebuild(); roomsMinterPoll().catch(() => {}); }   // the rooms show now
+        return true;
+      } catch { return false; } finally { setTimeout(() => { roomsBrowseBusy = null; }, 0); }
+    })();
+    return roomsBrowseBusy;
+  }
+  window.__roomsBrowse = { mint: (c) => roomsBrowseMint(c), token: () => !!roomsToken(), said: () => roomsBrowseSaid };   // rig (never the token)
+  // the access code this page knows -> the browse token; a guest's token change -> the rooms connection follows it
+  let roomsTokSeen = "";
+  setInterval(() => {
+    try {
+      if (!authSecured) return;
+      const code = authAccessCode || (joinState !== "joined" ? String(joinEls?.joinAccess?.value || lastJoin()?.access || "") : "");
+      if (code && !(roomsBrowse && roomsBrowse.base === authBase() && roomsBrowse.exp * 1000 > Date.now() + 600000)) roomsBrowseMint(code);
+      const t = roomsToken();
+      if (t !== roomsTokSeen) { const first = !roomsTokSeen; roomsTokSeen = t; if (t || !first) { roomsRebuild(); roomsMinterPoll().catch(() => {}); } }
+    } catch {}
+  }, 2000);
   function roomsRebuild() {
     roomsGen++;
     const gen = roomsGen;
-    for (const a of roomsAnns) { try { a.close?.(); } catch {} }
+    // 0.21.92: the connection first, then its announcement readers (next tick) -- the library's announce loop appended to a
+    // reader closed under it and logged "announcements are closed" on every token switch
+    const oldAnns = roomsAnns;
     roomsAnns = [];
     if (roomsConn) { try { roomsConn.close(); } catch {} roomsConn = null; }
+    setTimeout(() => { for (const a of oldAnns) { try { a.close?.(); } catch {} } }, 0);
     const now = Date.now();
     // 0.13.0 (F7): a CHANGED relay url drops the previous relay's rooms outright
     // (the grace below used to keep relay A's rooms listed under relay B)
@@ -14919,6 +14456,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomsDownAt = 0;
     let url;
     try { url = new URL(urlInput.value.trim()); } catch { roomsChanged(); return; }
+    { const t = roomsToken(); roomsTokSeen = t; if (t) url.searchParams.set("jwt", t); }   // 0.21.91: the rooms ride a token
     try { roomsConn = new Net.Connection({ url: new Signals.Signal(url), enabled: true }); }
     catch { roomsConn = null; roomsChanged(); return; }
     const conn = roomsConn;
@@ -14955,7 +14493,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (gen !== roomsGen || !v || !v.peer) return;
           roomsPres.set(full, { slug: pp[0], ts: Number(v.joinedAt) || 0, state: true, seen: Date.now(), goneAt: undefined, n: (roomsPres.get(full)?.n || 0) + 1,
             who: { peer: String(v.peer), op: v.op, name: v.name, relay: v.relay, relayName: v.via, host: pp[1], publishing: Array.isArray(v.publishing) ? v.publishing : [],
-                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, deaf: v.deaf === 1 } });   // 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
+                   speaking: !!v.speaking, typing: !!v.typing, avatar: v.avatar || "", mode: String(v.mode || ""), kv: String(v.kv || "").slice(0, 24), rtsp: v.rtsp === "off" ? "off" : "", clk: Number.isFinite(v.clk) ? v.clk : null, rtspPaths: Array.isArray(v.rtspPaths) ? v.rtspPaths.map(String) : [], labels: (v.labels && typeof v.labels === "object" && !Array.isArray(v.labels)) ? v.labels : null, video: Number.isFinite(v.video) ? v.video : undefined, airv: v.airv === 1, home: v.home === 1, rca: v.rca === 1 ? 1 : typeof v.rca === "string" ? String(v.rca).slice(0, 16) : undefined, deaf: v.deaf === 1 } });   // 0.21.92: + rca (can an admin ask it for remote control?); 0.21.75: + home; 0.21.16: + rtsp; 0.21.36: + video; 0.21.40: + airv
           hiNote(v.op, v.hc);   // 0.21.61: their colour
           roomsMoved(full, String(v.peer), pp[0]);   // 0.21.61: moved rooms -> gone from the old one now
           roomsChanged();
@@ -15037,14 +14575,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let roomsGroups = {}, roomsGroupsAt = 0;   // 0.15.0 (B4): gid -> {name, order, rooms:[slug]} from the room store
   async function roomsMinterPoll() {
     roomsMinterAt = Date.now();
+    if (authChecked !== authBase()) return;   // 0.21.92: not before this page checked THIS relay (it read the list tokenless once)
+    if (authSecured && !roomsToken()) return;   // 0.21.91: no access code yet -- no rooms (even on the relay machine itself)
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 4000);
     let got = null;
     try {
       const hb = relayHostBase();
       if (hb) {
-        // 0.21.91: a guest's page shows its token -- the relay host then answers only the guest's room (nothing of the fleet)
-        const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;
+        // 0.21.91: the list rides the rooms token (a browse token, or a guest's own -- the relay host answers their room only)
+        const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;
         const r = await fetch(hb + "/api/rooms/list", { signal: ctl.signal, cache: "no-store", headers: gh });
         if (r.ok) got = await r.json();
       }
@@ -15052,7 +14592,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!got && authSecured) {
       try {
         const base = authBase();
-        const gh = inviteGuest() && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;   // 0.21.91
+        const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;   // 0.21.91
         const r = base ? await fetch(base + "/api/rooms", { signal: ctl.signal, cache: "no-store", headers: gh }) : null;
         if (r && r.ok) got = await r.json();
       } catch {}
@@ -15065,9 +14605,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!slug || !ROOM_RE.test(slug) || slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75
       roomsMinter.set(slug, { slug, locked: r.locked !== false && (r.locked === true || r.persistent !== true),
                               persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0,
-                              viewLock: !!r.viewLock, keptBy: r.keptBy || "" });   // 0.21.65: + the view lock, kept by the board
+                              viewLock: !!r.viewLock, keptBy: r.keptBy || "", tplClose: !!r.tplClose });   // 0.21.65: + the view lock, kept by the board; 0.21.92: + a template's room End closes
     }
     roomsClosed = got.closed && typeof got.closed === "object" ? got.closed : {};
+    roomsClosedWhy = got.closedWhy && typeof got.closedWhy === "object" ? got.closedWhy : {};   // 0.21.92
     // 0.21.65: renamed rooms {old: new} -- I follow my room's new name; my shares listed into an old name follow it too
     roomsRenamed = got.renamed && typeof got.renamed === "object" ? got.renamed : {};
     if (joinState === "joined" && roomsRenamed[CHANNEL]) roomRenamedFollow(CHANNEL, String(roomsRenamed[CHANNEL]));
@@ -16958,6 +16499,334 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     rcxSend(name);
     rcxRefresh();
   }
+  // ---- 0.21.92 ADMIN REMOTE CONTROL FROM A PERSON'S MENU (Kenton, 2026-10-27: "As an admin logged in, I need an option when
+  // right clicking a user to request remote control, or take control if it's already allowed in the permissions."). His
+  // decisions: admin-code holders only (the relay refuses anyone else); PRIVATE -- the person's screen opens in my KASTR only
+  // (the 0.21.83 private path of Machines...: ~rcx/<sid>, never announced in any room); the person picks the screen in the Allow
+  // prompt (their main monitor first, All monitors), I can switch afterwards like Machines...; "Take control" (no prompt) only
+  // for a relay / hub / box that opted in on its own Relay page -- a person's computer is always "Request remote control...",
+  // which they must allow. Every person menu (the rail, People, Everyone online, All people, a person's tile) gets the item
+  // through personInviteItems -> rcaWrap; a person who cannot be asked (offline, a web page, a locked screen, an older KASTR)
+  // gets it greyed with the reason. THE PERSON: the ask arrives on the people beat (kind "rcx", with the one-time claim key only
+  // this device sees), Allow / Deny + the monitor picker; Allow -> this computer's own KASTR claims it (/api/rcadmin/ask).
+  const RCA_WHY = { web: "uses KASTR in a web browser — remote control needs the KASTR app", locked: "is away (their screen is locked)",
+    wayland: "runs a Wayland desktop — remote control needs X11", "no-display": "runs KASTR without a desktop display", "no-x11": "is missing the X11 libraries",
+    "no-xtest": "is missing XTest (libxtst6)", nosession: "has nobody signed in on their desktop", unsupported: "can’t be controlled remotely",
+    off: "has remote control switched off in their KASTR", busy: "is being controlled by someone already" };
+  let rcaMach = new Map(), rcaMachAt = 0, rcaMachBusy = false, rcaLast = null;
+  async function rcaMachines(force) {   // the machines that let fleet admins in without asking ("Take control")
+    if (!rcxIsAdmin() || rcaMachBusy || (!force && Date.now() - rcaMachAt < 20000)) return;
+    rcaMachBusy = true;
+    try {
+      const d = await rcxCall({ op: "machines" });
+      if (d.ok) rcaMach = new Map((d.machines || []).map((m) => [String(m.node), m]));
+      rcaMachAt = Date.now();
+    } finally { rcaMachBusy = false; }
+  }
+  setInterval(() => { if (rcxIsAdmin()) rcaMachines(false); else if (rcaMach.size) rcaMach = new Map(); }, 10000);
+  function rcaWho(host) {   // the freshest public state of a page on that device (its `rca`: can it be asked?)
+    let best = null;
+    for (const x of roomsPres.values()) if (x.state && !x.goneAt && x.who?.host === host && (!best || (x.seen || 0) > (best.seen || 0))) best = x;
+    return best?.who || null;
+  }
+  function rcaState(p, host) {
+    const name = p.name || prettyOperator(p.key || "") || host || "They";
+    if (!host) return { dis: name + " is offline" };
+    const m = rcaMach.get(host);
+    if (m) { const can = m.online && m.desktop?.ok && !m.session && !m.busy; return can ? { take: m } : { take: m, dis: rcxStatus(m).text }; }
+    if (/^web-/.test(host)) return { dis: name + " " + RCA_WHY.web };
+    const w = rcaWho(host);
+    if (w) {
+      if (w.rca === 1) return { ask: true };
+      if (typeof w.rca === "string" && w.rca) return { dis: name + " " + (RCA_WHY[w.rca] || RCA_WHY.unsupported) };
+      return { dis: name + "’s KASTR" + (w.kv ? " (" + w.kv + ")" : "") + " is too old to be asked — it needs an update" };
+    }
+    return { ask: true, unsure: true };   // in a private room (no public state): ask -- the hub says "no answer" if it can't
+  }
+  function rcaWrap(r, p) {
+    try {
+      if (!p || p.me || !rcxIsAdmin()) return r;
+      const host = String(p.host || personHostOf(p.key, p.room && p.room !== "~private" ? p.room : CHANNEL) || "");
+      if (host && host === HOSTNAME1) return r;
+      rcaMachines(false);
+      const s = rcaState(p, host), name = p.name || prettyOperator(p.key || "") || host;
+      const it = s.take && !s.dis ? { value: "pinv-rca-take", icon: "mouse", label: "Take control", tip: "Open " + name + "’s desktop with control now — it lets fleet admins in without asking; its red bar names you" }
+        : s.take ? { value: "pinv-rca-x", icon: "mouse", label: "Take control", disabled: true, why: s.dis }
+        : s.ask ? { value: "pinv-rca-ask", icon: "mouse", label: "Request remote control…", tip: name + " gets a prompt to allow it; their screen opens privately here — nobody else sees it" }
+        : { value: "pinv-rca-x", icon: "mouse", label: "Request remote control…", disabled: true, why: s.dis };
+      const more = !r && p.more?.items?.length ? p.more : null;   // Everyone online's admin items when there is nothing else
+      const items = r ? [...r.items, { sep: true }, it] : more ? [...more.items, { sep: true }, it] : [it];
+      return { items, pick: (v) => (v === "pinv-rca-ask" ? rcaAsk(p, host) : v === "pinv-rca-take" ? rcxControl(s.take) : v === "pinv-rca-x" ? null
+        : r ? r.pick(v) : more && String(v).startsWith("pinv-eo") ? more.pick(v) : null) };
+    } catch (e) { console.warn("KASTR: remote control item:", e); return r; }
+  }
+  function rcaOffline(x) {   // All people's offline rows: greyed, with the reason
+    return rcxIsAdmin() && x && !x.me ? [{ sep: true }, { value: "pinv-rca-x", icon: "mouse", label: "Request remote control…", disabled: true, why: (x.name || "They") + " is offline" }] : [];
+  }
+  async function rcaAsk(p, host) {
+    const who = p.name || prettyOperator(p.key || "") || host, wname = "kastr-rcx-" + host;
+    const old = rcxWins.get(wname);
+    if (old && !old.win.closed && old.s) { try { old.win.focus(); } catch {} return; }
+    let win = null;
+    try { win = window.open("/rcx.html", wname, "popup,width=1440,height=900"); } catch {}   // opened on the click (a pop-up needs the gesture)
+    if (!win) { rcToast("The session window was blocked — allow pop-up windows for KASTR.", 6000, "warn"); return; }
+    const rec = { win, s: null, error: null };
+    rcxWins.set(wname, rec);
+    const t0 = Date.now();
+    const d = await rcxCall({ op: "ask", node: host, name: who });
+    if (!d.ok || !d.token) {
+      rec.error = d.http === 400 && /op is/.test(String(d.error || "")) ? "the hub’s KASTR is older than this feature — update the hub first"
+        : String(d.error || "the hub did not send the request").replace(" -- ", " — ");
+      rcxSend(wname);
+      rcaLast = { host, who, state: "error", error: rec.error, at: Date.now() };
+      rcToast("Could not ask " + who + ": " + rec.error, 7000, "warn");
+      return;
+    }
+    rec.s = { sid: d.sid, rcid: d.rcid, token: d.token, paths: d.paths, relay: urlInput.value.trim(), exp: d.exp, kind: "ask", wait: d.wait || 60,
+              machine: { ...(d.machine || {}), node: host, name: who, hostname: who, nick: who },
+              admin: { name: myOpName() || "", color: rcMyColor() }, api: { kind: "member", base: authBase(), bearer: authTokens?.member } };
+    rcxSend(wname);
+    rcaLast = { host, who, sid: d.sid, state: "asking", at: t0 };
+    log("Remote control: asked " + who + " (" + host + ", session " + String(d.sid).slice(0, 8) + ")");
+    rcToast("Asked " + who + " for remote control — they get a prompt to allow it.", 6000);
+    const poll = async () => {   // the answer, here too (the session window says it as well)
+      if (rcaLast?.sid !== d.sid || Date.now() - t0 > ((d.wait || 60) + 25) * 1000) return;
+      const st = await rcxCall({ op: "status", sid: d.sid });
+      if (rcaLast?.sid !== d.sid) return;
+      if (st.ok && st.state === "live") {
+        rcaLast = { ...rcaLast, state: "live", allowedMs: Date.now() - t0 };
+        rcToast(who + " allowed it — their screen opens privately in the session window.", 6000);
+        try { rec.win.focus(); } catch {}
+        return;
+      }
+      if (st.ok && st.state === "ended") {
+        rcaLast = { ...rcaLast, state: "ended", why: st.why };
+        const t = st.why === "denied" ? who + " declined your remote control request." : st.why === "noanswer" ? who + " didn’t answer your remote control request."
+          : st.why === "busy" ? who + "’s computer is being controlled by someone already." : st.why === "desktop" ? who + "’s screen can’t be shared right now."
+          : "The remote control request to " + who + " ended — " + (st.whyText || st.why) + ".";
+        rcToast(t, 8000, st.why === "denied" || st.why === "noanswer" || st.why === "admin" ? "event" : "warn");
+        return;
+      }
+      setTimeout(poll, 1000);
+    };
+    setTimeout(poll, 1000);
+  }
+  // ---- the person: Allow / Deny (+ which screen)
+  let rcxAskCur = null, rcxBarCur = null;
+  const rcxAskSeen = new Set();
+  async function rcxAskArrive(it) {
+    if (!it || it.kind !== "rcx" || !/^[0-9a-f]{32}$/.test(String(it.sid || ""))) return;
+    if (it.x === "cancel") { if (rcxAskCur?.sid === it.sid) rcxAskClose(null, "withdrawn"); return; }
+    if (rcxAskSeen.has(it.sid) || !/^[0-9a-f]{32}$/.test(String(it.ck || ""))) return;
+    rcxAskSeen.add(it.sid);
+    if (IS_WEB || rcxAskCur) return;   // a web page cannot be controlled; one prompt at a time (the hub allows one ask per device)
+    let info = null;
+    try { info = await fetch("/api/rcadmin/ask", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    if (!info?.ok) { log("Remote control: an admin asked, but this KASTR cannot answer (" + (info?.error || "no answer") + ")"); return; }
+    const left = Math.max(15, Math.min(Number(info.wait) || 60, Math.round((Number(it.exp) * 1000 - Date.now()) / 1000) || 55));
+    rcxAskOpen({ sid: String(it.sid), ck: String(it.ck), by: String(it.by || "An admin").slice(0, 40), from: String(it.from || ""), info, left, at: Date.now() });
+  }
+  function rcxAskOpen(a) {
+    let el = document.getElementById("kRcxAsk");
+    if (!el) {
+      el = document.createElement("div"); el.id = "kRcxAsk"; el.hidden = true;
+      el.innerHTML = '<div class="popcard" role="dialog" aria-modal="true" aria-labelledby="rxTitle"><div class="head"><span id="rxTitle">Remote control request</span></div>'
+        + '<div class="body"><p class="kcmsg"></p><div class="rxlab">Screen to share</div><div class="rxmons" role="radiogroup" aria-label="Screen to share"></div>'
+        + '<p class="kcdet"></p><p class="rxwarn" hidden></p></div>'
+        + '<div class="kcbtns"><span class="rxleft"></span><button type="button" class="ghost rxno">Deny</button><button type="button" class="rxyes">Allow</button></div></div>';
+      el.addEventListener("click", (e) => e.stopPropagation());
+      el.querySelector(".rxno").addEventListener("click", () => rcxAskClose("deny"));
+      el.querySelector(".rxyes").addEventListener("click", () => rcxAskClose("allow"));
+      el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); rcxAskClose("deny"); } else e.stopPropagation(); });
+      document.body.appendChild(el);
+    }
+    const mons = (a.info.monitors || []).filter((m) => Number.isFinite(Number(m.index)));
+    const main = mons.find((m) => m.primary) || mons[0];
+    const opts = mons.map((m) => ({ v: Number(m.index), t: String(m.name || "Screen " + (Number(m.index) + 1)) + (m.primary ? " (main)" : ""), sz: m.width && m.height ? m.width + " × " + m.height : "" }));
+    if (mons.length > 1) opts.push({ v: Number(a.info.all) || 99, t: "All monitors", sz: mons.length + " screens" });
+    if (!opts.length) opts.push({ v: 0, t: "My screen", sz: "" });
+    const box = el.querySelector(".rxmons");
+    box.replaceChildren(...opts.map((o, i) => {
+      const lab = document.createElement("label"); lab.className = "rxmon";
+      const inp = document.createElement("input"); inp.type = "radio"; inp.name = "rxmon"; inp.value = String(o.v);
+      inp.checked = main ? o.v === Number(main.index) : i === 0;
+      const t = document.createElement("span"); t.textContent = o.t;
+      const sz = document.createElement("span"); sz.className = "sz"; sz.textContent = o.sz;
+      lab.append(inp, t, sz);
+      inp.addEventListener("change", () => { for (const x of box.querySelectorAll(".rxmon")) x.classList.toggle("on", !!x.querySelector("input")?.checked); });
+      lab.classList.toggle("on", inp.checked);
+      return lab;
+    }));
+    const msg = el.querySelector(".kcmsg"); msg.replaceChildren();
+    const b = document.createElement("b"); b.textContent = a.by;
+    msg.append(b, " (admin) asks to see and control your computer.");
+    el.querySelector(".kcdet").textContent = a.by + " will see and control this screen privately, and can copy files and pictures to and from this computer while in control; you can stop any time (Ctrl+Alt+Space or Stop control). Nobody in your rooms sees it.";   // 0.21.92: + file transfer
+    const warn = el.querySelector(".rxwarn"), yes = el.querySelector(".rxyes");
+    const bad = !a.info.desktop?.ok ? "This screen can’t be shared right now (" + (RCA_WHY[a.info.desktop?.why] ? "it " + RCA_WHY[a.info.desktop.why].replace(/^is |^has /, "") : a.info.desktop?.why || "no desktop") + ")."
+      : a.info.busy ? "Someone (" + a.info.busy + ") is controlling this computer already." : "";
+    warn.textContent = bad; warn.hidden = !bad; yes.disabled = !!bad;
+    rcxAskCur = a;
+    const tick = () => {
+      const s = Math.max(0, a.left - Math.floor((Date.now() - a.at) / 1000));
+      el.querySelector(".rxleft").textContent = "Closes in " + s + " s";
+      if (s <= 0 && rcxAskCur === a) rcxAskClose("timeout");
+    };
+    tick();
+    a.t = setInterval(tick, 500);
+    el.hidden = false;
+    try { el.querySelector(".rxno").focus(); } catch {}
+    try { chimeRoom(); } catch {}
+    log("Remote control: " + a.by + " (admin) asks to control this computer (session " + a.sid.slice(0, 8) + ")");
+  }
+  async function rcxAskPost(body) {
+    try {
+      const r = await fetch("/api/rcadmin/ask", { method: "POST", headers: { "content-type": "application/json", "x-kastr-rc": "1" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      return { ...d, ok: r.ok && d.ok !== false, http: r.status };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+  async function rcxAskClose(answer, why) {   // "allow" | "deny" | "timeout" | null (the admin withdrew it)
+    const a = rcxAskCur;
+    if (!a) return;
+    rcxAskCur = null;
+    clearInterval(a.t);
+    const el = document.getElementById("kRcxAsk");
+    const mon = Number(el?.querySelector(".rxmons input:checked")?.value ?? 0);
+    if (el) el.hidden = true;
+    if (!answer) { if (why === "withdrawn") rcToast(a.by + " withdrew the remote control request.", 5000); return; }
+    a.answeredAt = Date.now();
+    window.__rcaAnswered = { sid: a.sid, answer, at: a.answeredAt, monitor: mon };   // rig: the lab's "Allow -> picture" clock starts here
+    const d = await rcxAskPost({ sid: a.sid, ck: a.ck, answer, monitor: mon, by: a.by });
+    log("Remote control: " + (answer === "allow" ? "allowed " : answer === "deny" ? "declined " : "no answer for ") + a.by + (d.ok ? "" : " (" + (d.error || d.http) + ")"));
+    if (answer !== "allow") return;
+    if (!d.ok) { rcToast("Remote control could not start: " + (d.error || "no answer from KASTR"), 7000, "warn"); return; }
+    rcxBarShow(a);
+    rcaProbe();   // admins' menus say "being controlled" now
+  }
+  function rcxBarShow(a) {   // the page's own "<admin> is controlling this screen -- Stop control" (the screen's red bar and pill say it too)
+    let bar = document.getElementById("kRcxBar");
+    if (!bar) {
+      bar = document.createElement("div"); bar.id = "kRcxBar"; bar.hidden = true; bar.setAttribute("role", "status");
+      bar.innerHTML = '<span class="t"></span><button type="button">Stop control</button>';
+      bar.querySelector("button").addEventListener("click", () => { const c = rcxBarCur; if (c) rcxAskPost({ sid: c.sid, ck: c.ck, answer: "stop" }).then(() => rcxBarPoll()); });
+      document.body.appendChild(bar);
+    }
+    bar.querySelector(".t").textContent = a.by + " is controlling this screen (Ctrl+Alt+Space stops it)";
+    bar.hidden = false;
+    rcxBarCur = a;
+    clearInterval(a.bt);
+    a.bt = setInterval(rcxBarPoll, 2000);
+  }
+  async function rcxBarPoll() {
+    const c = rcxBarCur;
+    if (!c) return;
+    let d = null;
+    try { d = await fetch("/api/rcadmin/ask?probe=1", { cache: "no-store" }).then((r) => r.json()); } catch {}
+    if (d && d.ok && d.session?.sid === c.sid) return;
+    if (!d) return;
+    clearInterval(c.bt);
+    rcxBarCur = null;
+    const bar = document.getElementById("kRcxBar");
+    if (bar) bar.hidden = true;
+    rcToast("Remote control by " + c.by + " ended.", 5000);
+    rcaProbe();   // free again: admins may ask
+  }
+  // my own capability, in my public state (an admin's menu greys the item with the reason -- or asks)
+  async function rcaProbe() {
+    let v = "web";
+    if (!IS_WEB) {
+      try {
+        const r = await fetch("/api/rcadmin/ask?probe=1", { cache: "no-store" });
+        const d = await r.json().catch(() => ({}));
+        v = r.ok && d.ok ? (d.desktop?.ok ? (d.busy ? "busy" : 1) : String(d.desktop?.why || "unsupported").slice(0, 16)) : "off";
+      } catch { v = "off"; }
+    }
+    try { if (pubModel.rca !== v) { pubModel.rca = v; stateCommit(); } } catch {}
+  }
+  setTimeout(rcaProbe, 2500);
+  setInterval(rcaProbe, 30000);
+  // 0.21.92 (Kenton: file transfer in the private sessions "the same as room remote control"): the machine's helper page
+  // (rcx-agent.html) runs the files module headless -- its card's rows come through this computer's KASTR (GET /api/rcfiles
+  // "show"), shown here under the red bar; Cancel / Get go back the same way (op "ask"). An unattended session (Machines...)
+  // shows them too when this page is open. Every 5 s while nothing goes on, every second while something does.
+  let rcxfN = 0, rcxfLive = false;
+  async function rcxFilesPoll() {
+    if (IS_WEB) return;
+    let d = null;
+    try { const r = await fetch("/api/rcfiles", { cache: "no-store" }); d = r.ok ? await r.json() : null; } catch {}
+    const rows = Array.isArray(d?.show) ? d.show.filter((r) => r && r.k && r.t) : [];
+    const rcid = String(d?.session?.rcid || "");
+    rcxfLive = rows.length > 0;
+    let el = document.getElementById("kRcxFiles");
+    if (!rows.length) { if (el) el.hidden = true; return; }
+    if (!el) {
+      el = document.createElement("div"); el.id = "kRcxFiles"; el.hidden = true;
+      el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite");
+      el.addEventListener("click", async (ev) => {
+        const b = ev.target.closest("button[data-a]");
+        if (!b || !el.dataset.rcid) return;
+        ev.stopPropagation();
+        b.disabled = true;
+        try { await fetch("/api/rcfiles", { method: "POST", headers: { "content-type": "application/json", "x-kastr-rc": "1" }, body: JSON.stringify({ op: "ask", rcid: el.dataset.rcid, a: b.dataset.a }) }); } catch {}
+        setTimeout(() => { b.disabled = false; rcxFilesPoll(); }, 1200);
+      });
+      document.body.appendChild(el);
+    }
+    el.dataset.rcid = rcid;
+    const keep = new Map([...el.children].map((n) => [n.dataset.k, n]));   // kept by key: a repaint never moves Cancel from under the pointer
+    let prev = null;
+    for (const r of rows.slice(0, 6)) {
+      let row = keep.get(r.k);
+      keep.delete(r.k);
+      if (!row) { row = document.createElement("div"); row.dataset.k = r.k; const t0 = document.createElement("span"); t0.className = "t"; row.appendChild(t0); }
+      const cls = "rcfrow" + (r.level ? " " + r.level : "");
+      if (row.className !== cls) row.className = cls;
+      const t = row.querySelector(".t");
+      if (t.textContent !== r.t) t.textContent = r.t;
+      let bar = row.querySelector(".bar");
+      if (typeof r.pct === "number") {
+        if (!bar) { bar = document.createElement("span"); bar.className = "bar"; bar.appendChild(document.createElement("i")); row.insertBefore(bar, t.nextSibling); }
+        bar.firstChild.style.width = r.pct + "%";
+      } else if (bar) bar.remove();
+      let btn = row.querySelector("button");
+      if (Array.isArray(r.b) && r.b.length === 2) {
+        if (!btn) { btn = document.createElement("button"); btn.type = "button"; row.appendChild(btn); }
+        if (btn.dataset.a !== r.b[0]) btn.dataset.a = r.b[0];
+        if (btn.textContent !== r.b[1]) btn.textContent = r.b[1];
+        btn.title = r.b[1] === "\u00d7" ? "Close" : "";
+      } else if (btn) btn.remove();
+      const at = prev ? prev.nextSibling : el.firstChild;
+      if (row !== at) el.insertBefore(row, at);
+      prev = row;
+    }
+    for (const n of keep.values()) n.remove();
+    el.hidden = false;
+  }
+  setInterval(() => { rcxfN++; if (rcxBarCur || rcxfLive || rcxfN % 5 === 0) rcxFilesPoll(); }, 1000);
+  // 0.21.92 (Kenton): "Take control of <box>" on the camera tiles of a box that lets fleet admins in without asking (it opted in
+  // on its own Relay page) -- fleet admins only, hidden for everyone else; it opens privately, exactly like Machines... does
+  function rcaTileItem(name, extra) {
+    try {
+      if (!rcxIsAdmin() || wrRoomOf(name)) return null;
+      if ((extra?.items || []).some((i) => /^pinv-rca-/.test(String(i.value || "")))) return null;   // the person's own items have it
+      const host = String(name).split("/")[1] || "";
+      const m = host && host !== HOSTNAME1 ? rcaMach.get(host) : null;
+      if (!m) { if (host && host !== HOSTNAME1) rcaMachines(false); return null; }
+      const can = m.online && m.desktop?.ok && !m.session && !m.busy;
+      return can ? { value: "boxtake", icon: "mouse", label: "Take control of " + rcxName(m), tip: "Open " + rcxName(m) + "’s desktop with control now (privately — no room sees it); its red bar names you" }
+        : { value: "boxtake-x", icon: "mouse", label: "Take control of " + rcxName(m), disabled: true, why: rcxStatus(m).text };
+    } catch { return null; }
+  }
+  function rcaTilePick(name) {
+    const m = rcaMach.get(String(name).split("/")[1] || "");
+    if (m) rcxControl(m);
+  }
+  window.__rca = { wrap: rcaWrap, state: (name) => { const p = participantList().find((x) => x.name === name); return p ? rcaState(p, p.host || personHostOf(p.key, CHANNEL)) : null; },
+    machines: (f) => (f ? rcaMachines(true) : [...rcaMach.keys()]), ask: rcaAsk, last: () => rcaLast, arrive: rcxAskArrive, probe: rcaProbe,
+    prompt: () => (rcxAskCur ? { sid: rcxAskCur.sid, by: rcxAskCur.by, mons: [...document.querySelectorAll("#kRcxAsk .rxmon")].map((x) => x.textContent) } : null),
+    answer: (v) => rcxAskClose(v), bar: () => (rcxBarCur ? document.querySelector("#kRcxBar .t")?.textContent : null),
+    files: () => [...document.querySelectorAll("#kRcxFiles .rcfrow")].map((r) => r.querySelector(".t")?.textContent || ""), filesPoll: rcxFilesPoll,
+    tile: (name) => rcaTileItem(name, null) };   // rig
   // 0.21.7: a web client downloads the full install zip from the host it is looking at (More > About). The
   // host assembles it from the parts every install carries (kastr_release.py, 10-20 s); a link whose zip is not
   // ready yet POSTs the preparation, says so, and follows itself when the manifest reports the zip ready.
@@ -17839,8 +17708,46 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       row.hidden = !can;
       for (const r of row.querySelectorAll('input[name="profMain"]')) r.checked = r.value === mainPref();
     }
+    bootPaint();   // 0.21.92
     setTimeout(() => document.getElementById("profFirst").focus(), 50);
   }
+  // 0.21.92 (Kenton): "Start KASTR when I sign in to this computer" for everyone (it was on the Relay page only) -- the same
+  // /api/autorun the Relay page's switch uses, so the two always agree. Only this computer's own KASTR shows it: a web page
+  // (another machine's KASTR) never does, and the server says supported:false for a dev checkout / 403 for a remote page.
+  // "Start minimized" shows while the first switch is on; the choice is kept on this computer, so the Relay page's switch
+  // (or turning this one off and on again) writes the same entry.
+  const BOOT_HINT = { on: "KASTR opens when you sign in and goes straight into your main room.", min: "KASTR starts minimized when you sign in \u2014 it still connects and goes into your main room. Opening KASTR yourself always shows the window.", off: "Off \u2014 KASTR starts only when you open it." };
+  function bootShow(a) {
+    const on = !!a.enabled, mini = !!a.minimized;
+    document.getElementById("profBoot").checked = on;
+    document.getElementById("profBootMin").checked = mini;
+    document.getElementById("profBootMinRow").hidden = !on;
+    document.getElementById("profBootMsg").textContent = !on ? BOOT_HINT.off : mini ? BOOT_HINT.min : BOOT_HINT.on;
+  }
+  async function bootPaint() {
+    const row = document.getElementById("profBootRow");
+    if (IS_WEB) { row.hidden = true; return; }
+    let a = null;
+    try { const r = await fetch("/api/autorun", { cache: "no-store" }); if (r.ok) a = await r.json(); } catch {}
+    if (!a || a.error || a.supported === false) { row.hidden = true; return; }
+    bootShow(a);
+    row.hidden = false;
+  }
+  async function bootSet(enabled, minimized) {
+    let a;
+    try {
+      const r = await fetch("/api/autorun", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled, minimized }) });
+      a = await r.json();
+    } catch (e) { a = { error: String(e?.message || e) }; }
+    if (!a || a.error || !a.ok) {
+      window.__toast?.("Could not change the sign-in start: " + (a?.error || "no answer"), 6000, { level: "warn" });
+      return bootPaint();
+    }
+    bootShow(a);
+    window.__toast?.(!a.enabled ? "KASTR will not start when you sign in" : a.minimized ? "KASTR will start minimized when you sign in" : "KASTR will start when you sign in to this computer", 4000, { level: "event" });
+  }
+  document.getElementById("profBoot").addEventListener("change", (e) => bootSet(e.target.checked, document.getElementById("profBootMin").checked));   // the minimized choice stays
+  document.getElementById("profBootMin").addEventListener("change", (e) => bootSet(true, e.target.checked));
   for (const r of document.querySelectorAll('#profMainRow input[name="profMain"]')) r.addEventListener("change", () => {   // 0.21.91: at once
     if (!r.checked) return;
     mainPrefSet(r.value);
@@ -17906,7 +17813,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     paintFilesBadge();
     const base = relayHostBase();
     if (!base || !window.__joinedChannel?.()) return;
-    fetch(base + "/api/files?room=" + encodeURIComponent(readChannel() || "main"), { cache: "no-store" }).then((r) => r.json()).then((j) => {
+    fetch(base + "/api/files?room=" + encodeURIComponent(readChannel() || "main"), { cache: "no-store", headers: authBearer() }).then((r) => r.json()).then((j) => {
       listedFiles.clear();
       for (const m of (j?.files || [])) {
         if (!m?.id) continue;
@@ -18267,6 +18174,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // the cert-fingerprint fetch strips the query, bundle-verified). Open relays:
   // detection misses and every helper is a no-op.
   let authSecured = false;
+  let authChecked = "";     // 0.21.92: the authBase() whose /api/auth this page has asked ("" = not yet)
   let authCodes = false;    // 0.10.0: the relay has viewer/publisher access codes
   let authLegacy = false;   // 0.10.0: secured, but no access codes yet (room codes only)
   let authRole = "";        // 0.10.0: "publisher" | "viewer" from the last mint ("" = open relay)
@@ -18280,6 +18188,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let authChat = false;     // 0.12.0: ... and .chat
   let authState = false;
   let authWeb = 0;                    // 0.14.0 F: hub web port from /api/auth; 0.21.7: 0 = not told (consumers fall back to 8000 LAST, and only on the app)
+  let authWebFor = "";                // 0.21.92: the authBase() that told us authWeb
   let authNs = "";                    // 0.21.17: the control namespace the cached/minted token grants
   let authHttps = 0;                  // 0.15.0: the hub's https listener port (phones), 0 = unknown -> 8443    // 0.13.0: the relay serves "~state" publicly (state tracks); open relays always
   // The announce kinds a VIEWER token may publish (mirrors kastr_relay.VIEWER_KINDS).
@@ -18292,12 +18201,17 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       return "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);
     } catch { return null; }
   }
+  // 0.21.92: the member token as a header (a secured relay's file lists and room touches are for members of the room)
+  function authBearer() {
+    return (authSecured && authTokens?.member) ? { authorization: "Bearer " + authTokens.member } : {};
+  }
   function authStoreKey() {
     try { return "kastr.auth." + new URL(urlInput.value.trim()).origin; } catch { return null; }
   }
   async function authDetect() {
     const base = authBase();
     authSecured = false;
+    authChecked = "";   // 0.21.92
     if (!base) return;
     try {
       const ctl = new AbortController();
@@ -18311,10 +18225,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       authTalking = !!d.talking; authChat = !!d.chat;   // 0.12.0
       authState = !!d.state;                            // 0.13.0
       authWeb = Number(d.web) || 0;                     // 0.14.0 F: the hub KASTR's web port (peer lookups); 0.21.7: unknown stays 0
+      authWebFor = base;                                // 0.21.92: ...of the relay at THIS base (relayHostBase trusts it only for that relay)
       try { personalFleetSet(String(d.fleet || "")); } catch {}   // 0.21.91: My room is kept per fleet
       authHttps = Number(d.https) || 0;                 // 0.15.0
       libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
     } catch {}
+    authChecked = base;   // 0.21.92: asked (an open relay without /api/auth counts as asked)
     if (!authSecured) { authTokens = null; authExp = 0; authRole = ""; authCodes = false; authLegacy = false; authTalking = true; authChat = true; authState = true; return; }
     // A token for this relay origin survives reloads within the tab.
     if (!authTokens) {
@@ -18803,6 +18719,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     get web() { return authWeb; },           // 0.14.0 F
     get https() { return authHttps || 8443; }, // 0.15.0
     withToken,
+    bearer: authBearer,   // 0.21.92
     base: authBase,
     mint: authMint,
     detect: authDetect,
@@ -20089,6 +20006,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const r = card.__rec || rec;
       const items = wrCardItems(r);
       if (roomSettingsRole(r)) items.push(...(items.length ? [{ sep: true }] : []), { value: "rsettings", icon: "lock", label: "Room settings\u2026", tip: "Lock, keep open, rename, group, lock the view (the room\u2019s creator or an admin)" });   // 0.21.65
+      try { if (window.__tplUI?.canApplyTo?.(r.slug)) items.push(...(items.length ? [{ sep: true }] : []), { value: "tplApply", label: "Apply template\u2026", tip: "Put a saved set-up of a room into " + r.slug + " (pins, spotlights, grids; settings and invites for its admins)" }); } catch {}   // 0.21.92
       if (!items.length) return;
       e.preventDefault(); e.stopPropagation();
       openMineMenu(pointAnchor(e.clientX, e.clientY), items, "", (v) => wrCardPick(card, r, v));
@@ -20156,6 +20074,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       + '<div class="rsrow"><label class="asi-sw"><span class="switch sm"><input type="checkbox" class="rsview"><i></i></span><span>Lock the view</span></label>'
       + '<p class="rshint">Only the room\u2019s creator or an admin can spotlight, pin or arrange things for everyone. Everyone can still pin, arrange, mute and zoom for themselves.</p></div>'
       + '<div class="rsrow"><span class="lbl">Group</span><div class="rsf"><select class="rsgroup" aria-label="Room group"></select></div></div>'
+      + '<div class="rsrow rstpl" hidden><span class="lbl">Templates</span><div class="rstplbox"></div></div>'   // 0.21.92: filled by assets/kastr-templates.js
       + '<div class="rsrow rsinv" hidden><span class="lbl">Invite links</span><div class="rsinvlist"></div>'   // 0.21.75
       + '<div class="rsf"><button type="button" class="rsinvall" hidden>Revoke all</button></div>'
       + '<p class="rshint">Links people in this room made with Share invite. Revoking one stops it letting anyone else in; people already here stay.</p></div>'
@@ -20335,6 +20254,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     rsEl.__say("");
     rsPaint();
     rsInvLoad();   // 0.21.75
+    try { window.__tplUI?.roomSettings?.(rsEl.querySelector(".rstpl"), rsSlug); } catch {}   // 0.21.92: the room's templates
     rsEl.hidden = false;
     document.addEventListener("keydown", rsEl.__key, true);
     try { rsEl.querySelector(".rsname").focus(); } catch {}
@@ -21250,7 +21170,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json();
       if (room !== chatRoom) return;
       chatDisabled = "";
-      chatHint(d.persistent ? "Room kept open \u2014 its history stays until the room is closed." : "");
+      chatHint(d.persistent && !isPersonalSlug(room) ? "Room kept open \u2014 its history stays until the room is closed." : "");
       if (full) { chatMsgs = chatMsgs.filter((m) => m.local || m.viaWindow); chatLastId = 0; }   // 0.13.0: live-delivered records survive a rebind
       chatAppend(Array.isArray(d.messages) ? d.messages : []);
       if (full && !chatMsgs.length) chatRenderAll();
@@ -21622,7 +21542,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       chatHint(chatDisabled, true); chatRenderAll();
       return;
     }
-    forcedToMain("Room closed", "Room " + room + " was closed \u2014 " + why + ".");   // 0.21.91: the main room, never the Join room page
+    if (why === "pres") forcedToMain("Presentation ended", "The presentation ended and " + roomTitle(room) + " was closed.");   // 0.21.92: a template's room
+    else forcedToMain("Room closed", "Room " + room + " was closed \u2014 " + why + ".");   // 0.21.91: the main room, never the Join room page
     try { window.__channels?.emberCancel?.(room); } catch {}   // a closed room gets no ember
   }
   // the STORE decides a room is closed; the announce (and a 410) only prompt the check
@@ -21631,7 +21552,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinState !== "joined" || CHANNEL === "main") return;
     const ts = roomsClosed[CHANNEL];
     const joinedAt = (() => { try { return window.__sinceAnnounce?.joinedAt?.() || 0; } catch { return 0; } })();
-    if (ts && Number(ts) > joinedAt) chatRoomClosed("closed by its creator or the relay operator");
+    if (ts && Number(ts) > joinedAt) chatRoomClosed(roomsClosedWhy[CHANNEL] === "pres" ? "pres" : "closed by its creator or the relay operator");
   }
   window.__roomsChanged = () => { clearTimeout(chatClosedCheckT); chatClosedCheckT = setTimeout(chatClosedCheck, 100); };
   window.__roomClosedHint = (slug, ts) => { if (slug === CHANNEL && joinState === "joined") { roomsMinterPoll().then(chatClosedCheck).catch(() => {}); } };
@@ -21752,6 +21673,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (isWebRelay(wu.href)) return wu.origin === location.origin ? location.origin : wu.origin;   // 0.19.0
       const h = wu.hostname;
       const same = h === location.hostname || (/^(localhost|127\.0\.0\.1)$/.test(h) && /^(localhost|127\.0\.0\.1)$/.test(location.hostname));
+      // 0.21.92 (a non-hub KASTR answered "already has a My room with another code" right after Set up with a brand-new name):
+      // the relay is on THIS machine but ANOTHER KASTR runs it (a second KASTR here -- a relay box's service and a person's app,
+      // a dev copy). Its /api/auth names its web port: that KASTR keeps My room, chat and the rooms (it forwards them to the
+      // hub); this page's own KASTR has a store of its own nobody else reads -- My room made there was a split brain (Messages,
+      // at the relay, then said "wrong code"; the next Set up there said "already has a My room").
+      if (same && !IS_WEB && location.protocol === "http:" && authWeb &&authWebFor && authWebFor === authBase()
+          && String(authWeb) !== (location.port || "80")) return "http://" + location.hostname + ":" + authWeb;
       // 0.8.9: an https page (phone) must not mix content -- other hosts on their https port
       return same ? location.origin : (location.protocol === "https:" ? "https://" + h + ":" + (window.__auth?.https || 8443) : "http://" + h + ":" + (window.__auth?.web || 8000));   // 0.15.0: the ports the hub advertises on /api/auth (0.14.0 pin), not literals
     } catch { return null; }
@@ -21894,7 +21822,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (rb && rb !== location.origin) {
       try {
         const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3000);
-        const r = await fetch(rb + "/api/files?room=" + encodeURIComponent(room), { cache: "no-store", signal: ctl.signal });
+        const r = await fetch(rb + "/api/files?room=" + encodeURIComponent(room), { cache: "no-store", signal: ctl.signal, headers: authBearer() });
         clearTimeout(tm);
         if (r.ok) store = { base: rb, publicBase: rb, mode: "relay" };
       } catch {}
@@ -23466,7 +23394,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // Leave -> the main room (the Lobby when I am in it already); a guest -> the Lobby with the invited room; a box -> as before
   // 0.21.91 (Kenton: removed by an admin or the room closed -> the main room, "with a note saying what happened"); a camera box, a
   // relay-only machine or a viewer display: the Join room page as before (the reason in its message line)
+  let forcedBusy = false;   // 0.21.92: one forced move at a time (a room's close can arrive twice: the close hint + the rooms poll)
   async function forcedToMain(title, message) {
+    if (forcedBusy) return;
+    forcedBusy = true;
+    try { await forcedToMainNow(title, message); } finally { forcedBusy = false; }
+  }
+  async function forcedToMainNow(title, message) {
     if (!mainPerson() || joinState !== "joined") { try { leaveMeeting(); } catch {} try { if (message) gateMsg(message); } catch {} return; }
     await leaveToMain({ quiet: true });
     if (joinState !== "joined") { try { if (message) gateMsg(message); } catch {} return; }   // even the Lobby refused: the Join room page
@@ -23547,6 +23481,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
     // 0.21.65: the rooms sidebar opens / closes from its edge tab (#sbEdge), wired with sbToggle
     joinEls.joinBtn.addEventListener("click", () => joinNow());
+    // 0.21.91 (Kenton: "The Join room page shows no rooms until a code is typed and checked, then lists them")
+    joinEls.joinAccess?.addEventListener("change", () => {
+      const v = joinEls.joinAccess.value.trim();
+      if (!v) return;
+      roomsBrowseMint(v).then((ok) => { if (!ok && /wrong access code/i.test(roomsBrowseSaid)) gateMsg("Wrong access code for this relay."); else if (ok) gateMsg(""); });
+    });
     // 0.13.2: Enter in any gate field joins (the code fields most of all -- Kenton typed a code and waited)
     for (const el of [joinEls.joinAccess, joinEls.joinPwd, joinEls.joinChanNew, joinEls.joinName]) {
       el?.addEventListener("keydown", (e) => {
@@ -24901,6 +24841,105 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     paintMs: () => { const t0 = performance.now(); libPaint(true); libRender(); return performance.now() - t0; },
     rel: () => sbRelayHost(), here: libHere, me: libMeSet, pin: libBoardPin, cost: libCostHint, aka: (m) => libAkaRewrite(new Map(Object.entries(m || {}))), why: libAddWhy, gate: libGate, build: cgNewFrom,
   };
+  // ---- 0.21.92 (Kenton: meeting templates, phase 1 "by hand"): the bridge assets/kastr-templates.js talks to the page through.
+  // Templates live on the hub (POST /api/templates at this page's minter, a spoke forwards); a relay WITHOUT access codes has no
+  // token service and no templates (Kenton: no). My view (a personal template's own section) is this device's arrangement:
+  // my grid layouts (kastr.vgrid.*), my pins, my own grids, the pinned panels and gallery / speaker.
+  function tplViewSnap() {
+    const grids = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(VG_KEY)) continue;
+        const v = JSON.parse(localStorage.getItem(k) || "null");
+        if (v && typeof v === "object") grids[k.slice(VG_KEY.length)] = v;
+      }
+    } catch {}
+    try { pinsLoad(); } catch {}
+    let cg = {}; try { cg = cgMine(); } catch {}
+    return { grids, pins: [...myPins], dock: [...(dockSt.pins || [])], cgrids: cg, mode: galleryChosen ? "gallery" : "speaker" };
+  }
+  function tplViewApply(v) {
+    if (!v || typeof v !== "object") return 0;
+    let n = 0;
+    try { for (const [k, g] of Object.entries(v.grids || {})) { if (g && typeof g === "object") { localStorage.setItem(VG_KEY + k, JSON.stringify(g)); n++; } } } catch {}
+    try { roomGridChanged(); } catch {}
+    if (Array.isArray(v.pins)) { try { pinsLoad(); myPins = v.pins.filter((x) => typeof x === "string").slice(0, PIN_MAX); pinsSave(); n += myPins.length; } catch {} }
+    if (v.cgrids && typeof v.cgrids === "object" && Object.keys(v.cgrids).length) { try { cgMineWrite({ ...cgMine(), ...v.cgrids }); cgSync(); n += Object.keys(v.cgrids).length; } catch {} }
+    if (Array.isArray(v.dock) && !isPhone()) { for (const k of v.dock) { if (DOCK_ORDER.includes(k) && !dockSt.pins.includes(k)) { try { dockPin(k, true); n++; } catch {} } } }
+    if (v.mode === "gallery") { try { goGallery(); } catch {} }
+    else if (v.mode === "speaker") { try { galleryChosen = false; manualPick = false; spotApplyWinner(); } catch {} }
+    try { applyState(); } catch {}
+    return n;
+  }
+  window.__ktpl = {
+    secured: () => !!authSecured,
+    joined: () => joinState === "joined" && CHANNEL !== LOBBY,
+    room: () => CHANNEL, lobby: () => LOBBY,
+    base: () => authBase(),
+    token: () => authTokens?.member || "",
+    role: () => authRole || "",
+    guest: () => !!authGuest || !!(inviteGet() && !authAccessCode),
+    tokenFor: async (slug) => {   // a member token for a room (mine for the room I am in; a side token for another -- never replacing mine)
+      if (slug === CHANNEL) return authTokens?.member || "";
+      const p = personalGet();
+      if (p && slug === p.slug) return personalToken(p);
+      const w = watchRooms.get(slug);
+      if (w?.token && w.exp * 1000 - Date.now() > 60000) return w.token;
+      return xsTokenFor(slug, w?.code || xsCodes[slug] || "");
+    },
+    roomKey: (slug) => myChannels().find((r) => r.slug === slug)?.roomKey || undefined,
+    isPersonal: (s) => isPersonalSlug(s), personal: () => personalGet(), title: (s) => roomTitle(s),
+    me: () => myOpName(), host: () => HOSTNAME1,
+    rooms: () => lastChannelList.filter((r) => r && r.slug && r.slug !== LOBBY && !isHomeRoom(r.slug)).map((r) => ({ slug: r.slug, title: roomTitle(r.slug) })),
+    roomRec: (slug) => {
+      const r = roomsMinter.get(slug) || lastChannelList.find((x) => x.slug === slug) || {};
+      const g = roomGroupOf(slug) || "";
+      return { locked: !!r.locked, keep: !!r.persistent, viewLock: !!r.viewLock, group: g, groupName: (g && roomsGroups?.[g]?.name) || "", tplClose: !!r.tplClose };
+    },
+    // 0.21.92 "Create a new room for this": a plain room through the Create room form's own path (the same rules) -> {ok, slug} | {ok:false,
+    // taken?, error}. A name that is already a room is refused (a template never takes over -- or later closes -- a room that existed).
+    taken: (name) => { const s = channelSlug(String(name || "")); return lastChannelList.some((r) => r.slug === s) || roomsMinter.has(s) || s === "main" || s === LOBBY; },
+    slugOf: (name) => channelSlug(String(name || "")),
+    createRoom: async (name) => {
+      const slug = channelSlug(String(name || ""));
+      if (!String(name || "").trim() || slug === "main" || slug === LOBBY || !ROOM_RE.test(slug)) return { ok: false, error: "Name the room first." };
+      if (isHomeRoom(slug) || isPersonalSlug(slug) || slug === "lib") return { ok: false, error: "That name is kept for something else \u2014 pick another name." };
+      if (lastChannelList.some((r) => r.slug === slug) || roomsMinter.has(slug)) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };
+      const rec = await createChannelRecord(slug, "", false);
+      const g = await registerRoomRec(rec, authAccessCode);
+      if (!g.ok) return { ok: false, error: g.error || "The room was not created." };
+      if (!rec.roomKey) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };   // it was there (a plain room is anybody's)
+      rememberChannel(rec);
+      try { await roomsMinterPoll(); } catch {}
+      return { ok: true, slug: rec.slug };
+    },
+    go: (slug) => { const rec = myChannels().find((r) => r.slug === slug) || lastChannelList.find((r) => r.slug === slug) || { slug }; return switchRoom(rec, ""); },
+    // a room the hub just closed: everyone's page learns from the store (the close hint + the rooms poll); mine too, now
+    closed: (slug) => {
+      roomsClosedWhy = Object.assign({}, roomsClosedWhy, { [slug]: "pres" });   // the hub closed it at End: my own note says so, whichever path moves me first
+      try { window.__channels?.closedHint?.(slug); } catch {}
+      try { const list = myChannels().filter((x) => x.slug !== slug); localStorage.setItem(MINE_CHANNELS_KEY, JSON.stringify(list)); } catch {}
+      roomsMinterPoll().then(() => chatClosedCheck()).catch(() => {});
+    },
+    settingsRole: (slug) => roomSettingsRole(roomsMinter.get(slug) || lastChannelList.find((r) => r.slug === slug) || { slug }),
+    board: () => (board.room === CHANNEL ? JSON.parse(JSON.stringify({ pins: board.pins, spots: board.spots, grids: board.grids, split: board.split, spotOrder: board.spotOrder, customGrids: board.customGrids })) : null),
+    live: () => [...tiles].filter(([n, t]) => String(n).endsWith(".hang") && !t.cg && (t.hasVideo === true || t.hasAudio === true)).map(([n]) => String(n)),   // a catalog was read: really live
+    lib: () => [...libCat.values()].map((e) => ({ path: e.path, label: e.label, site: e.site, live: libStateOf(e) === "live" })).slice(0, 400),
+    label: (p) => { try { return shortLabel(String(p)); } catch { return String(p).split("/").pop().replace(/\.hang$/, ""); } },
+    start: () => (galleryChosen ? "gallery" : "spotlight"),
+    peopleHere: () => { try { const out = []; for (const g of eoBuild()) for (const x of g.people || []) if (x.room === CHANNEL && !x.me && x.name) out.push({ name: x.name, host: x.host || "" }); return out; } catch { return []; } },
+    people: () => eoPeopleForMsg(),
+    inviteLink: (token, slug) => inviteJoinLink(token, slug),
+    refresh: () => { try { boardPoll(); } catch {} try { roomsMinterPoll(); } catch {} },
+    roomsFresh: () => roomsMinterPoll(),   // 0.21.92: the room records now (End in a room a template made: closes on End?)
+    confirm: (o) => kastrConfirm(o), icon: (n) => icon(n),
+    menu: (anchor, items, pick) => openMineMenu(anchor, items, "", pick),
+    closePops: () => { try { closeAllPops(); } catch {} },
+    myRoomDialog: () => personalDialog(),
+    phone: () => { try { return isPhone(); } catch { return false; } },
+    view: { snap: tplViewSnap, apply: tplViewApply },
+  };
 </script>
 
 <script type="module">
@@ -24920,6 +24959,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // bridge, so it is published through the lower-level API the element itself
   // is built on -- Broadcast + Video.Capture + Video.Encoder.
   import { Net, Signals, Broadcast, Video } from "https://esm.sh/@moq/publish";
+  await window.__kastrVault?.ready;   // 0.21.92: the saved codes (camera addresses, the session) opened first
   // ---- 0.16.0: @moq/publish 0.5.0 adapters ------------------------------------------
   // <moq-publish> keeps its video capture behind `video.in.capture` (a signal holding a
   // Video.Capture; its `in.source` IS the element's source signal) and its audio capture behind
@@ -32558,7 +32598,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const hb = window.__relayHostBase?.();
     if (!hb || !slug || slug === "main") return;
     const creator = (window.__publisher?.state?.()?.operator || "").slice(0, 40);
-    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug, creator }) }).catch(() => {});
+    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json", ...(window.__auth?.bearer?.() || {}) },
+      body: JSON.stringify({ slug, creator }) }).catch(() => {});   // 0.21.92: + the member token (a touch without one makes no room)
   }
   function chanRegClear() {
     if (roomTouchT) { clearInterval(roomTouchT); roomTouchT = null; }
@@ -33931,6 +33972,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 <script type="module" src="/assets/kastr-gif.js"></script>
 <script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the admin's Reset My room passcode dialog -->
 <script type="module" src="/assets/kastr-msg.js"></script>
+<script type="module" src="/assets/kastr-templates.js"></script>
 <script type="module" src="/assets/kastr-pres.js"></script>
 </body>
 </html>

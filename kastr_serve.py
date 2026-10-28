@@ -41,6 +41,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 import kastr_relay
 import kastr_rtsp
+import kastr_secret   # 0.21.92: secrets at rest sealed, logs and diag masked
 import kastr_release   # 0.21.7: the install zip a web client downloads, assembled on this host
 
 # The string baked into the prebuilt bundles.
@@ -73,8 +74,10 @@ def precache_list(root):
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
            "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
+    out.append("/assets/vault.js")   # 0.21.92: the codes in the browser's storage kept wrapped
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
+    out.append("/assets/kastr-rcf.js")   # 0.21.92: remote-control files (the app page, rcx.html, rcx-agent.html)
     out.append("/assets/kastr-pmreset.js")   # 0.21.91 passcode reset: the admin's Reset My room passcode dialog (People + Relay page)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)
@@ -234,8 +237,10 @@ def invite_pending_set(url):
     if INVITE_FILE[0]:
         try:
             tmp = INVITE_FILE[0] + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(INVITE_PENDING[0], f)
+            with open(tmp, "w", encoding="utf-8") as f:   # 0.21.92: the invite token sealed
+                json.dump(kastr_secret.seal_doc(INVITE_FILE[0], INVITE_PENDING[0]), f)
+            if os.name != "nt":
+                os.chmod(tmp, 0o600)
             os.replace(tmp, INVITE_FILE[0])
         except OSError:
             pass
@@ -248,8 +253,8 @@ def invite_pending_restore(path, now=None):
     INVITE_FILE[0] = path
     now = time.time() if now is None else now
     try:
-        with open(path, encoding="utf-8") as f:
-            inv = json.load(f)
+        with open(path, encoding="utf-8-sig") as f:
+            inv = kastr_secret.open_doc(path, json.load(f))   # 0.21.92: the sealed token opened
     except (OSError, ValueError):
         return False
     at = float((inv or {}).get("at") or 0) if isinstance(inv, dict) else 0
@@ -274,57 +279,149 @@ def invite_pending_take():
     return {k: inv[k] for k in ("token", "room", "relay")}
 
 
-def autorun_state():
-    """Is KASTR registered to start with this machine? Per-user, no admin.
-    Windows: HKCU Run key; Linux: ~/.config/autostart. Frozen builds only
-    (a dev checkout has no stable exe to point at)."""
-    if not getattr(sys, "frozen", False):
-        return {"enabled": False, "supported": False,
-                "note": "autorun applies to the installed app, not a source checkout"}
-    exe = sys.executable
+# 0.21.92 (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins"): the
+# Profile menu has the switch too, plus "Start minimized" -- the Run key / autostart entry then carries AUTORUN_FLAG, and that
+# launch opens the window minimized (still connecting, still going straight into the main room). The choice is kept in
+# autorun.json in the state folder, so the Relay page's switch (which knows nothing of it) rewrites the entry with the same flag.
+AUTORUN_FLAG = "--minimized"
+_AUTORUN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_AUTORUN_FLAG_RE = re.compile(r"(?:^|\s)--minimized(?:\s|$)")
+
+
+def _autorun_pref_file():
+    return os.path.join(STATE_DIR, "autorun.json") if STATE_DIR else None
+
+
+def autorun_pref_minimized():
+    """The saved "Start minimized" choice (False when never set)."""
+    p = _autorun_pref_file()
+    if not p:
+        return False
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f).get("minimized") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _autorun_pref_save(minimized):
+    p = _autorun_pref_file()
+    if not p:
+        return
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"minimized": bool(minimized)}, f)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _autorun_desktop():
+    return os.path.expanduser("~/.config/autostart/kastr.desktop")
+
+
+def _autorun_read():
+    """-> the command KASTR's autorun entry runs ("" when there is none). Windows: the HKCU Run value; Linux: the Exec line."""
     if sys.platform == "win32":
         try:
             import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTORUN_RUN_KEY) as k:
                 val, _ = winreg.QueryValueEx(k, "KASTR")
-            return {"enabled": exe.lower() in str(val).lower(), "supported": True}
+            return str(val or "")
         except OSError:
-            return {"enabled": False, "supported": True}
-    desk = os.path.expanduser("~/.config/autostart/kastr.desktop")
-    return {"enabled": os.path.exists(desk), "supported": True}
+            return ""
+    try:
+        with open(_autorun_desktop(), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Exec="):
+                    return line[5:].strip() or " "
+        return " "   # an entry without an Exec line is still ours to report (0.8.2 judged by the file alone)
+    except OSError:
+        return ""
 
 
-def autorun_set(enabled):
-    if not getattr(sys, "frozen", False):
-        return {"error": "autorun is for the installed app (frozen builds) only"}
-    exe = sys.executable
+def _autorun_command(exe, minimized):
+    return '"%s"%s' % (exe, (" " + AUTORUN_FLAG) if minimized else "")
+
+
+def _autorun_write(exe, enabled, minimized):
     if sys.platform == "win32":
         import winreg
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
-                              r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _AUTORUN_RUN_KEY) as k:
             if enabled:
-                winreg.SetValueEx(k, "KASTR", 0, winreg.REG_SZ, '"%s"' % exe)
+                winreg.SetValueEx(k, "KASTR", 0, winreg.REG_SZ, _autorun_command(exe, minimized))
             else:
                 try:
                     winreg.DeleteValue(k, "KASTR")
                 except OSError:
                     pass
-        return {"ok": True, "enabled": bool(enabled)}
-    d = os.path.expanduser("~/.config/autostart")
-    desk = os.path.join(d, "kastr.desktop")
+        return
+    desk = _autorun_desktop()
     if enabled:
-        os.makedirs(d, exist_ok=True)
+        os.makedirs(os.path.dirname(desk), exist_ok=True)
         with open(desk, "w", encoding="utf-8") as f:
             f.write("[Desktop Entry]\nType=Application\nName=KASTR\n"
                     "Comment=Kenton's ASI Streaming Tool with Relay\n"
-                    'Exec="%s"\nX-GNOME-Autostart-enabled=true\n' % exe)
+                    "Exec=%s\nX-GNOME-Autostart-enabled=true\n" % _autorun_command(exe, minimized))
     else:
         try:
             os.remove(desk)
         except OSError:
             pass
-    return {"ok": True, "enabled": bool(enabled)}
+
+
+def autorun_state():
+    """Is KASTR registered to start with this machine? Per-user, no admin.
+    Windows: HKCU Run key; Linux: ~/.config/autostart. Frozen builds only
+    (a dev checkout has no stable exe to point at).
+    0.21.92: + minimized -- the entry's own flag while it is on, the saved choice while it is off."""
+    if not getattr(sys, "frozen", False):
+        return {"enabled": False, "supported": False, "minimized": False,
+                "note": "autorun applies to the installed app, not a source checkout"}
+    exe = sys.executable
+    cmd = _autorun_read()
+    if sys.platform == "win32":
+        enabled = bool(cmd) and exe.lower() in cmd.lower()
+    else:
+        enabled = bool(cmd)
+    minimized = bool(_AUTORUN_FLAG_RE.search(cmd)) if enabled else autorun_pref_minimized()
+    return {"enabled": enabled, "supported": True, "minimized": minimized}
+
+
+def autorun_set(enabled, minimized=None):
+    """Turn KASTR's autorun entry on (written fresh, with the "Start minimized" flag when chosen) or off (the entry goes).
+    `minimized` None = keep the saved choice (the Relay page's switch); True / False = save it."""
+    if not getattr(sys, "frozen", False):
+        return {"error": "autorun is for the installed app (frozen builds) only"}
+    if minimized is not None:
+        _autorun_pref_save(bool(minimized))
+    flag = autorun_pref_minimized() if minimized is None else bool(minimized)
+    _autorun_write(sys.executable, bool(enabled), flag)
+    return {"ok": True, "enabled": bool(enabled), "minimized": flag}
+
+
+def autorun_flag_fix(keep):
+    """0.21.92: the launcher's repair of the entry's flag, never its on / off. keep=False drops --minimized (before this
+    machine moves to a KASTR older than 0.21.92, whose launcher would refuse the unknown flag and never start at sign-in);
+    keep=True puts it back when the saved choice says so (after such a version came and went). -> what it did ("" = nothing)."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    st = autorun_state()
+    if not st.get("enabled"):
+        return ""
+    has = bool(_AUTORUN_FLAG_RE.search(_autorun_read()))
+    if keep and has:
+        return ""   # only ever puts it back -- a flag the saved choice does not know of stays (a reset state folder)
+    want = bool(keep) and autorun_pref_minimized()
+    if has == want:
+        return ""
+    try:
+        _autorun_write(sys.executable, True, want)
+    except OSError as e:
+        return "could not rewrite the autorun entry (%s)" % e
+    return "start minimized flag " + ("restored" if want else "dropped")
 
 
 def _ini_file():
@@ -612,6 +709,7 @@ MEDIA_STREAM_TIMEOUT = 600      # a paused player may hold the connection a long
 
 def _note(msg):
     fn = _MEDIA_LOG[0]
+    msg = kastr_secret.mask(msg)   # 0.21.92
     try:
         if callable(fn):
             fn(msg)
@@ -793,7 +891,9 @@ def _prefs_clean_value(key, val):
             val = json.dumps(val, separators=(",", ":"))
         except Exception:
             return None
-    if key == "kastr.lastjoin":
+    if key == "kastr.lastjoin" and re.match(r"^kv1:[A-Za-z0-9_-]+$", val):
+        pass   # 0.21.92: the page's wrapped form (assets/vault.js: AES-GCM under the browser's own key) -- kept as it is
+    elif key == "kastr.lastjoin":
         try:
             obj = json.loads(val)
         except Exception:
@@ -837,7 +937,7 @@ def prefs_load(path):
     if not raw.strip():
         return None
     try:
-        d = json.loads(raw)
+        d = kastr_secret.open_doc(path, json.loads(raw))   # 0.21.92: camera URLs with a password are kept sealed
     except Exception:
         return None
     items = d.get("items") if isinstance(d, dict) else None
@@ -873,8 +973,10 @@ def prefs_merge(path, updates):
             items[k] = s
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"v": 1, "at": time.time(), "items": items}, f)
+        with open(tmp, "w", encoding="utf-8") as f:   # 0.21.92: a value carrying a password / token sealed
+            json.dump(kastr_secret.seal_doc(path, {"v": 1, "at": time.time(), "items": items}), f)
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
         for i in range(5):
             try:
                 os.replace(tmp, path)
@@ -1542,6 +1644,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             # vendored bundle on disk stays byte-identical. Both needles occur only in that bundle.
             (b"`.stats/node`", ("`%s/node`" % kastr_relay.STATS_KIND).encode()),
             (b"d=e=>e.startsWith(`.`)", ("d=e=>e.startsWith(`.`)||e.startsWith(`%s`)" % kastr_relay.NS).encode()),
+            # 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): ~stats rides a token now --
+            # stats.html asks for the access code (or reuses a saved one) and the bundle's connection carries its browse token
+            (b"m=new i(new URL(a))", b"m=new i(new URL(window.__kastrTok?window.__kastrTok(a):a))"),
+            (b"m.set(new URL(D.value.trim()))", b"m.set(new URL(window.__kastrTok?window.__kastrTok(D.value.trim()):D.value.trim()))"),
+            (b"D.value=m.peek()?.toString()??a", b"D.value=String(m.peek()?.toString()??a).replace(/[?&]jwt=[^&]*/,``)"),   # the box never shows the token
         ]
         if current != BUILTIN_RELAY:
             out.append((BUILTIN_RELAY.encode(), current.encode()))
@@ -2088,7 +2195,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _diag_get(self):
             if not self._local():
                 return self._deny("diagnostics")   # 0.17.0
-            body = json.dumps(diag_ref, indent=1, default=str).encode()
+            body = kastr_secret.mask(json.dumps(diag_ref, indent=1, default=str)).encode()   # 0.21.92: no code or token
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -2293,7 +2400,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "hubWeb": {h: {"web": r.get("web"), "https": r.get("https")} for h, r in HUB_WEB.items()},
             }
             if not local:
-                for k in ("pid", "swept", "operator", "updateCheck", "aliveAge", "ffmpeg", "viewing", "hubWeb", "platform"):
+                for k in ("pid", "swept", "operator", "updateCheck", "aliveAge", "ffmpeg", "viewing", "hubWeb", "platform",
+                          "adminMoved"):   # 0.21.92: the room an admin moved this machine to
                     d.pop(k, None)
                 d["hostMode"] = MODE
                 d["mode"] = "full"
@@ -2375,7 +2483,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             fid = uuid.uuid4().hex
             token = uuid.uuid4().hex
             name = os.path.basename(unquote(self.headers.get("X-Kastr-Name") or "file"))[:200] or "file"
-            meta = {"id": fid, "name": name, "size": n, "token": token,
+            meta = {"id": fid, "name": name, "size": n, "token": kastr_secret.digest(token),   # 0.21.92: the uploader holds the token
                     "room": (self.headers.get("X-Kastr-Room") or "")[:64],
                     "owner": unquote(self.headers.get("X-Kastr-Owner") or "")[:64],
                     "kind": (self.headers.get("X-Kastr-Kind") or "file")[:16],
@@ -2399,6 +2507,22 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 json.dump(meta, f)
             return self._json_cors(200, {"id": fid, "token": token, "size": n, "url": "/api/files/" + fid})
 
+        def _files_may_list(self, room, qs):
+            """0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): who may read a file list
+            here. The machine itself always; every room's files (no ?room=) nobody else; a room's on a SECURED relay a member
+            token covering that room (Authorization: Bearer, or ?jwt=); a KASTR without a secured relay keeps its open list."""
+            try:
+                if self._local():
+                    return True
+                if not room:
+                    return False
+                if not (relay_srv is not None and getattr(relay_srv, "secured", False)):
+                    return True
+                jwt = self._bearer(qs)
+                return bool(jwt) and self._room_claims(room, jwt) is None
+            except Exception:
+                return False
+
         def _file_list(self, qs):
             """0.8.8: the room's shared files (tokens withheld) -- a viewer who
             joined after the sharer's announce still sees them."""
@@ -2406,6 +2530,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if not d:
                 return self._json_cors(200, {"files": []})
             room = (qs.get("room") or [""])[0][:64]
+            if not self._files_may_list(room, qs):
+                # 0.21.92: no list without the room's token -- still a 200, so a page older than 0.21.92 keeps choosing this
+                # store for its uploads (it checks r.ok); new pages send their member token
+                return self._json_cors(200, {"files": [], "needToken": True})
             out = []
             try:
                 names = sorted(os.listdir(d))
@@ -2470,7 +2598,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     meta = json.load(f)
             except OSError:
                 return self._json_cors(404, {"error": "no such file"})
-            if token != meta.get("token") and not self._admin_for(str(meta.get("room") or "")) and not kastr_relay._local_only(self):   # 0.21.2: or an admin of its room; 0.21.3: or the operator's own page
+            if not kastr_secret.digest_matches(meta.get("token"), token) and not self._admin_for(str(meta.get("room") or "")) and not kastr_relay._local_only(self):   # 0.21.2: or an admin of its room; 0.21.3: or the operator's own page
                 return self._json_cors(403, {"error": "not the owner"})
             for p in (path, path + ".json"):
                 try:
@@ -2861,7 +2989,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()[:80]
             if not re.match(r"^[a-z0-9.+-]+/[a-z0-9.+-]+$", ctype):
                 ctype = "application/octet-stream"
-            meta = {"id": fid, "name": name, "size": n, "token": uuid.uuid4().hex,
+            meta = {"id": fid, "name": name, "size": n, "token": kastr_secret.digest(uuid.uuid4().hex),   # 0.21.92
                     "room": room, "owner": unquote(self.headers.get("X-Kastr-Op") or "")[:64],
                     "kind": "chat", "ctype": ctype, "via": ctx.get("via") or "", "at": int(time.time())}
             path = os.path.join(d, fid)
@@ -3042,16 +3170,23 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _rooms_guest_cut(self, obj):
             """0.21.91 (Kenton: guests "see ONLY the Lobby and the room(s) they were invited to"): a list asked with a GUEST's token
             (an invite-link member or a personal-room guest of this relay's minter) answers their room alone -- nothing else of the
-            fleet (rooms, groups, renames). Without a token the list is the public one, as before."""
+            fleet (rooms, groups, renames). A member's or a browse token (an access code): every room. No token: none."""
             try:
+                if not (relay_srv is not None and getattr(relay_srv, "secured", False)):
+                    return obj   # 0.21.92: an OPEN relay has no access code to ask for -- its rooms stay open, as its sessions are
                 auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
                 hdr = self.headers.get("Authorization") or ""
-                if auth is None or not hdr or not hasattr(auth, "_member_claims"):
-                    return obj
-                g = kastr_relay.guest_rooms(auth._member_claims(hdr))
+                claims = auth._member_claims(hdr) if (auth is not None and hdr and hasattr(auth, "_member_claims")) else None
+                if claims is None:
+                    # 0.21.91 (Kenton: "Room names must not be visible to anyone without a fleet access code"): no token -> no
+                    # rooms. 0.21.92: the relay machine's loopback neither -- its Relay page reads /api/relay/rooms
+                    out = kastr_relay.rooms_for_guest(obj, set())
+                    out.update(guest=False, needCode=True)
+                    return out
+                g = kastr_relay.guest_rooms(claims)
                 return kastr_relay.rooms_for_guest(obj, g) if g is not None else obj
             except Exception:
-                return obj
+                return kastr_relay.rooms_for_guest(obj, set())
 
         def _rooms_api(self, method, path, qs):
             """The relay's room records for pages anywhere (CORS-open)."""
@@ -3069,6 +3204,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._chat_reply(405, {"error": "GET only"})
                 # 0.15.0: + the relay-defined room groups {gid: {name, order, rooms}}; 0.21.65: + renamed {old: new}
                 return self._json_cors(200, self._rooms_guest_cut({"rooms": store.rooms_public(), "closed": store.closed_public(),
+                                                                   "closedWhy": store.closed_why_public() if hasattr(store, "closed_why_public") else {},   # 0.21.92
                                                                    "groups": store.groups_public(), "renamed": store.renamed_public()}))
 
             if path == "/api/rooms/settings":
@@ -3159,11 +3295,24 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 slug = str(p.get("slug") or "")
                 if not kastr_relay.SLUG_RE.match(slug) or slug == "main":
                     return self._chat_reply(400, {"error": "bad room"})
+                if not self._touch_may_create(slug):   # 0.21.92
+                    store.touch_room(slug, str(p.get("creator") or ""), create=False)
+                    return self._chat_reply(200, {"ok": True})
                 created = store.touch_room(slug, str(p.get("creator") or ""))
                 return self._chat_reply(200, {"ok": True, "created": created})
             return self._chat_reply(404, {"error": "no such rooms endpoint"})
 
         HUB_DOWN = "The hub is unreachable \u2014 rooms are created on the hub. Try again when it is back."
+
+        def _touch_may_create(self, slug):
+            """0.21.92: may this touch MAKE room `slug`? The machine itself, an open relay, or a member token covering the room
+            (Authorization: Bearer -- 0.21.92 pages send it). Anyone else only keeps a live room alive."""
+            try:
+                if self._local():
+                    return True
+                return self._room_claims(slug, self._bearer(None)) is None
+            except Exception:
+                return False
 
         def _rooms_at_hub(self, method, path, store, log):
             """0.21.25 (Kenton: "they should all be stored on the hub and distributed to all relays to see"): on a SPOKE every
@@ -3214,6 +3363,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 body = {"op": "group", "body": p, "vouch": "admin" if self._settings_admin() else None}
             elif path == "/api/rooms/touch":
                 body = {"op": "touch", "slug": slug, "creator": str(p.get("creator") or "")[:64]}
+                if not self._touch_may_create(slug):
+                    body["only"] = True   # 0.21.92: no member token here -- the hub keeps a live room alive, makes none
             elif path == "/api/rooms/settings":   # 0.21.65: the hub owns rooms; this box vouches for an admin it verified
                 body = {"op": "settings", "body": p, "vouch": "admin" if self._settings_admin() else None}
             elif path == "/api/rooms/personal":   # 0.21.75: personal rooms live on the hub; this box checks the access code
@@ -3256,6 +3407,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if out is None:
                 return False
             obj, code = out
+            if path == "/api/rooms/touch" and body.get("only"):
+                obj = {"ok": bool(obj.get("ok", code == 200))}   # 0.21.92: an older hub may still say "created" -- never pass it on
             if path == "/api/rooms/register" and code == 403 and p.get("access"):
                 CHAT_LOCKOUT.fail(peer, "wrong publisher access code", slug)   # the guess counts here, where the member is
             if path == "/api/rooms/personal":   # 0.21.75
@@ -3298,7 +3451,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except Exception:
                 pass
             out = {"rooms": rooms, "closed": hub_obj.get("closed") or {}, "groups": hub_obj.get("groups") or {}, "fromHub": True,
-                   "renamed": hub_obj.get("renamed") or {}}   # 0.21.65
+                   "renamed": hub_obj.get("renamed") or {},   # 0.21.65
+                   "closedWhy": hub_obj.get("closedWhy") or {}}   # 0.21.92: "pres" -- a template's room closed at End
             if offline:
                 out["hubOffline"] = True
                 out["hubAt"] = int((_HUB_ROOMS_CACHE[0] or {}).get("at") or 0)
@@ -3446,6 +3600,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 150
                 elif path0 == "/api/msg":        # 0.21.88: a spoke asks the hub (PBKDF2 happens in the browser, not here)
                     to = 30
+                elif path0 == "/api/templates/deck":   # 0.21.92: a template deck's file (up to 64 MB, through a spoke to the hub)
+                    to = 320
+                elif path0 == "/api/templates":  # 0.21.92: meeting templates (a spoke asks the hub; an apply runs many board ops there)
+                    to = 40
                 elif path0 == "/api/people":     # 0.21.90: a profile photo goes on to the hub through a spoke
                     to = 20
                 elif path0.startswith("/api/avatar/"):   # 0.21.90: a spoke may fetch the photo from the hub first
@@ -4019,7 +4177,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0 == "/api/rc":                  # 0.21.79: remote control -- the prompt, the grant, the controller's input
                 import kastr_rc
                 return kastr_rc.handle_api(self, bridge, _note)
-            if path0 in ("/api/rcadmin", "/api/rcadmin/ctl"):   # 0.21.83 (D): the opt-in checkbox (THIS machine only) + the source switcher
+            if path0 in ("/api/rcadmin", "/api/rcadmin/ctl", "/api/rcadmin/ask"):   # 0.21.83 (D): the opt-in checkbox (THIS machine only) + the source switcher; 0.21.92: + an admin's ask answered here
                 import kastr_rcadmin
                 return kastr_rcadmin.handle_api(self, self._rcadmin_dir(), _note)
             if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
@@ -4049,6 +4207,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/people",                                       # 0.21.78: beats, person invites, My room shared
                          "/api/access",                                       # 0.21.89: Ask for access (ask, status, cancel, answer)
                          "/api/msg", "/api/msg/file",                         # 0.21.88: private messages (+ an attachment's ciphertext)
+                         "/api/templates", "/api/templates/fed", "/api/templates/deck",   # 0.21.92: meeting templates (+ their decks)
                          "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
                          "/api/library", "/api/library/token", "/api/library/admin",   # 0.21.84: the stream library
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
@@ -4079,10 +4238,16 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 else:
                     try:
                         n = int(self.headers.get("Content-Length") or 0)
-                        want = bool(json.loads(self.rfile.read(n) or b"{}").get("enabled"))
+                        req = json.loads(self.rfile.read(n) or b"{}")
+                        want = bool(req.get("enabled"))
+                        mini = req.get("minimized")   # 0.21.92: the Profile menu's "Start minimized"; absent = keep the saved one
+                        mini = None if mini is None else bool(mini)
                     except Exception:
-                        want = False
-                    body = json.dumps(autorun_set(want)).encode()
+                        want, mini = False, None
+                    try:
+                        body = json.dumps(autorun_set(want, mini)).encode()
+                    except OSError as e:
+                        body = json.dumps({"error": "could not change the autorun entry: %s" % e}).encode()
                     self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -4947,6 +5112,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._auth_proxy("GET")
             if path == "/api/msg/file":                                         # 0.21.88: a message attachment's ciphertext
                 return self._auth_proxy("GET")
+            if path == "/api/templates/deck":                                   # 0.21.92: a template deck's file (a read grant)
+                return self._auth_proxy("GET")
             if path.startswith("/api/avatar/"):                                 # 0.21.90: a person's profile photo (the hub's copy)
                 return self._avatar_get()
             if path.startswith("/api/gif/"):                                    # 0.21.91: GIF search (the member token rides along)
@@ -5125,7 +5292,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._lan_api(path, "GET")
             if path in ("/api/screen/sources", "/api/screen/thumb", "/api/screen/sound", "/api/screen/devices", "/api/screen/rtmp", "/api/screen/rtmp/firewall"):   # 0.21.20: the native share picker + presenter sound; 0.21.26: + cameras
                 return self._screen_api(path)
-            if path in ("/api/rcadmin", "/api/rcadmin/session"):   # 0.21.83 (D): this machine's opt-in, its sessions; the helper page's session
+            if path in ("/api/rcadmin", "/api/rcadmin/session", "/api/rcadmin/ask"):   # 0.21.83 (D): this machine's opt-in, its sessions; the helper page's session; 0.21.92: the Allow prompt's monitors
                 import kastr_rcadmin
                 return kastr_rcadmin.handle_api(self, self._rcadmin_dir(), _note)
             if path == "/api/rc":                   # 0.21.79: remote control -- what this computer can do + the grant's state

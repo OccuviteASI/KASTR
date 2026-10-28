@@ -15,11 +15,12 @@
   "https://esm.sh/@moq/watch": "/assets/vendor/esm/@moq/watch@0.6.2.target-es2022.mjs"
  }
 }</script>
+<script src="/assets/kastr-rcf.js"></script><!-- 0.21.92: files + pictures (the 0.21.83 room-control module) -->
 </head>
 <body>
 <p id="st">Starting&hellip;</p>
 <script type="module">
-  import { connect, producer, subscribe } from "/assets/rcx-lib.js";
+  import { connect, producer, subscribe, requestBroadcast } from "/assets/rcx-lib.js";
 
   const hp = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
   const SID = hp.get("s") || "", PK = hp.get("k") || "";
@@ -39,8 +40,13 @@
     .then((r) => r.json()).catch(() => ({ ok: false }));
   if (!s.ok) { say("No such session."); setTimeout(() => window.close(), 500); throw new Error("no session"); }
   const RCID = s.rcid, QUIET = (Number(s.quiet) || 10) * 1000;
+  // 0.21.92: the files' key (AES-GCM) for this session -- minted here, handed to the admin in st.json (the 0.21.83 allow note
+  // carried it the same way: only this session's two ends and the relay ever see it); none = no files (an older asset)
+  const FK = window.KastrRcf ? KastrRcf.newKey() : "";
+  let RCF = null;
   const conn = connect(s.relay);
-  const out = producer(conn, s.paths.machine, ["st.json", "ptr.json", "src.json"], { priority: 255, maxAge: 2000 });
+  const out = producer(conn, s.paths.machine, ["st.json", "ptr.json", "src.json", "fo.json", "fq.json", "fd"],   // 0.21.92: + the files' tracks
+                       { priority: 255, maxAge: 2000, tracks: { fd: { priority: window.KastrRcf ? KastrRcf.PRIO : 30, maxAge: 3000 } } });
   const g = { lastIn: Date.now() + 20000, lastSeq: 0, first: true, q: [], busy: false, ws: null, wsTries: 0, rxAt: new Map(), qS: 0, qRx: 0,
               ack: null, ackSent: 0, ackSentAt: 0, stJson: "", stAt: 0, lastD: {}, ended: "", ctlN: 0, url: s.url, thumbsUntil: 0, srcAt: 0, ptrAt: 0 };
   window.__rcxAgent = { s, g, out, get conn() { return conn; } };   // rig
@@ -48,7 +54,7 @@
 
   function stPush(d, force) {   // st.json for the admin: blocked / my clipboard's change / the latency echo -- and a heartbeat
     if (g.ended) return;
-    const st = { rcid: RCID, active: true, paused: false, blocked: String(d.blocked || ""), clip: d.clip || null, url: g.url, machine: s.machine };
+    const st = { rcid: RCID, active: true, paused: false, blocked: String(d.blocked || ""), clip: d.clip || null, url: g.url, machine: s.machine, fk: FK || undefined };
     const j = JSON.stringify([st.blocked, st.clip?.n, st.url]);
     const ackWait = !!g.ack && g.ack.s !== g.ackSent ? 100 - (Date.now() - g.ackSentAt) : -1;
     const ackNew = ackWait !== -1 && ackWait <= 0;
@@ -169,6 +175,7 @@
     finishing = true;
     g.ended = why || "stopped";
     say("Ended: " + g.ended);
+    try { RCF?.stop(g.ended); } catch {}   // 0.21.92: unfinished transfers are deleted here
     try { out.set("st.json", { rcid: RCID, active: false, ended: g.ended, t: Date.now() }); } catch {}
     try { out.set("ptr.json", { rcid: RCID, end: 1, t: Date.now() }); } catch {}
     try { g.ws?.close(); } catch {}
@@ -177,11 +184,41 @@
   }
   window.__rcxAgent.finish = finish;
 
+  // ---- 0.21.92 FILES AND PICTURES (Kenton: "the same as room remote control") -- the 0.21.83 module, this machine as the
+  // sharer: what the person here copies is offered to the admin, what the admin copies or drops comes in through this
+  // computer's KASTR (kastr_rcfiles: the same size caps, only while this session's grant lives). The tracks ride this
+  // session's own broadcasts (~rcx/<sid>/m out, ~rcx/<sid>/a in) -- never a room. This page is headless: its card goes to
+  // this computer's KASTR (op "show") and the person's red bar shows it; their Cancel / Get comes back as asks.
+  const RCF_ASK_RE = /^(rxcancel|(txcancel|get):[0-9a-f]{16}|close:[A-Za-z0-9_-]{1,40})$/;
+  if (window.KastrRcf && FK) {
+    let hb = 0;
+    const io = { set: (n, v) => out.set(n, v), bytes: (n, u8) => out.bytes(n, u8), stop() {},
+                 sync() { if (Date.now() - hb > 1500) { hb = Date.now(); out.again("fo.json"); out.again("fq.json"); } } };   // the watchdog's heartbeat
+    RCF = KastrRcf.create({
+      enabled: () => !g.ended,
+      open: () => ({ st: io, data: io }),
+      conn: () => conn,
+      peer: () => ({ st: s.paths.admin, data: s.paths.admin }),
+      subJson: (cn, path, track, cb) => subscribe(cn, path, track, cb, { priority: 255, staleMs: 8000 }),
+      request: (org, path, ms) => requestBroadcast(org, path, ms),
+      isCtl: () => false, point: () => null, inPic: () => false,
+      log: (t) => console.log("rcx files:", t), toast: () => {}, sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
+    window.__rcxAgent.rcf = RCF.rig;
+    setInterval(async () => {
+      if (g.ended || !RCF.cur()) return;
+      const rows = RCF.rows().slice(0, 6).map((r) => ({ k: r.k, t: r.t, pct: r.pct, level: r.level || "", b: r.b || null }));
+      const d = await post("/api/rcfiles", { op: "show", rcid: RCID, rows });
+      for (const a of (d.ok && Array.isArray(d.asks) ? d.asks : [])) if (RCF_ASK_RE.test(String(a))) RCF.action(String(a));
+    }, 1000);
+  }
+
   subscribe(conn, s.paths.admin, "in.json", inArrive, { priority: 255, staleMs: 5000 });
   subscribe(conn, s.paths.admin, "ctl.json", ctlArrive, { priority: 250, staleMs: 30000 });
   wsOpen();
   stPush({}, true);
   srcPush();
+  RCF?.start("sharer", { rcid: RCID, name: s.admin, fk: FK });   // 0.21.92: begin needs this session's grant (retried every 4 s)
   setInterval(async () => {   // the lease (kastr_rc LEASE_S) and the admin's heartbeat
     if (g.ended) return;
     if (Date.now() - g.lastIn > QUIET) { finish("timeout", true); return; }

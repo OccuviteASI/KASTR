@@ -175,9 +175,10 @@ class ChatStore:
             "via": str(via or "")[:NAME_MAX],
             "token": uuid.uuid4().hex,
         }
+        import kastr_secret
         with self.lock:
             rec["id"] = self._next_id(room)
-            self._append_line(room, rec)
+            self._append_line(room, dict(rec, token=kastr_secret.digest(rec["token"])))   # 0.21.92: only its digest is kept
         return dict(rec)
 
     def read(self, room, since=0, limit=READ_LIMIT):
@@ -218,8 +219,8 @@ class ChatStore:
             if rec is None or msg_id in dead:
                 return False
             if not force:
-                want = str(rec.get("token") or "")
-                if not token or not want or str(token) != want:
+                import kastr_secret
+                if not kastr_secret.digest_matches(rec.get("token"), token):   # 0.21.92: a digest (or an old plain token)
                     return False
             self._append_line(room, {"del": msg_id})
             self.touch(room)

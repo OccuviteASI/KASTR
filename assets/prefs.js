@@ -63,6 +63,7 @@
 
   function redact(key, value) {
     if (key !== "kastr.lastjoin" || value === null) return value;
+    if (/^kv1:[A-Za-z0-9_-]+$/.test(value)) return value;   // 0.21.92: the wrapped form (assets/vault.js) -- the only one mirrored
     try {
       var o = JSON.parse(value);
       if (!o || typeof o !== "object") return value;

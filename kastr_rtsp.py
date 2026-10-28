@@ -27,6 +27,7 @@ reason. `-tune zerolatency` and `-g 30` keep the fragment cadence tight.
 """
 import json
 import kastr_ua  # noqa: F401  -- 0.21.64: every request says KASTR (Cloudflare refuses Python-urllib)
+import kastr_secret         # 0.21.92: rtsp-feeds.json keeps its codes (and camera passwords) sealed
 import os
 import shutil
 import re
@@ -633,8 +634,16 @@ def _pid_matches(rec):
     sig = rec.get("sig") or []
     if argv is not None and sig:
         joined = " ".join(argv)
-        if not all(str(tok) in joined for tok in sig):
-            return False
+        digs = None
+        for tok in sig:
+            tok = str(tok)
+            if tok.startswith("sha256:"):   # 0.21.92: a camera URL with a password is recorded as its digest
+                if digs is None:
+                    digs = {kastr_secret.digest(a) for a in argv}
+                if tok not in digs:
+                    return False
+            elif tok not in joined:
+                return False
     return True
 
 
@@ -3048,7 +3057,8 @@ class Bridge:
         """A child is ours: into the job (Windows) and the on-disk registry."""
         _job_assign(self._job, proc, self.log)
         try:
-            rec = {"pid": proc.pid, "exe": argv[0] if argv else "", "sig": [str(x) for x in (sig or [])],
+            rec = {"pid": proc.pid, "exe": argv[0] if argv else "",   # 0.21.92: a credential in the signature -> its digest
+                   "sig": [kastr_secret.digest(str(x)) if kastr_secret.has_creds(str(x)) else str(x) for x in (sig or [])],
                    "started": time.time(), "tag": tag}
             with self._children_lock:
                 self._children[proc.pid] = rec
@@ -3536,7 +3546,7 @@ class Bridge:
         try:
             with open(path, encoding="utf-8-sig") as f:
                 d = json.load(f)
-            return d if isinstance(d, dict) else {}
+            return kastr_secret.open_doc(path, d) if isinstance(d, dict) else {}   # 0.21.92: the sealed codes opened
         except Exception:
             return {}
 
@@ -3659,7 +3669,7 @@ class Bridge:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = "%s.%d.tmp" % (path, threading.get_ident())
                 with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(doc, f)
+                    json.dump(kastr_secret.seal_doc(path, doc), f)   # 0.21.92: codes + camera passwords sealed
                 if os.name != "nt":
                     os.chmod(tmp, 0o600)
                 for attempt in range(10):       # a scanner may hold the file for a moment (see _write_children)
@@ -3693,6 +3703,8 @@ class Bridge:
         before the session was known get their minter now."""
         self._session = {"room": str(room or "").strip().lower(), "access": str(access or ""),
                          "roomCode": str(room_code or ""), "relay": _relay_key(relay)}
+        kastr_secret.remember(self._session["access"])     # 0.21.92: masked in every log line from now on
+        kastr_secret.remember(self._session["roomCode"])
         if self._session["room"]:
             self._last_session = dict(self._session)   # 0.21.58: kept for the pairs when the page leaves
             for pub in list(self._pubs.values()):

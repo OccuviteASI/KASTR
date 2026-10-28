@@ -308,6 +308,7 @@ function build() {
   };
   const relayHistAdd = (u) => {
     try {
+      if (/^kv1:/.test(localStorage.getItem(HIST_KEY) || "")) return;   // 0.21.92: a wrapped history not opened (yet): left as it is
       const h = relayHist().filter((x) => x !== u);
       h.unshift(u);
       localStorage.setItem(HIST_KEY, JSON.stringify(h.slice(0, 5)));   // 0.8.7: last 5

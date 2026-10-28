@@ -280,7 +280,10 @@ class Hub(Base):
         # the key is kept on the hub's disk (its own file), and only there
         self.on()
         with open(os.path.join(self.dir, kg.CONF_NAME), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["key"], self.giphy.key)
+            raw_conf = f.read()
+        self.assertNotIn(self.giphy.key, raw_conf)                            # 0.21.92: sealed on disk
+        import kastr_secret
+        self.assertEqual(kastr_secret.open_doc(os.path.join(self.dir, kg.CONF_NAME), json.loads(raw_conf))["key"], self.giphy.key)
 
     def test_search_trending_rating_and_cache(self):
         self.on()

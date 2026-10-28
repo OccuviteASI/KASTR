@@ -33,6 +33,23 @@ Not merged, VERSION not bumped, not pushed. Lab-proven only (headless Chromium o
    - `awayFrom`: a deck belongs to its room -- going to another room forgets it (no take-over from the Lobby that later ENDED it).
    - `mainroom$` added to the server prefs whitelist (kastr_serve.py) so the preferred main room survives a prefs sync.
 
+## Merge with main 4e6dfd4 (meeting templates) -- conflicts resolved
+
+- `assets/kastr-pres.js`, one conflict at `window.__pres` (both sides added template hooks). Kept BOTH: main's `tplSnap`,
+  `tplOpts`, `tplCo`, `onEnd` and my `audSnap` / `audApply` / `rolesSnap` / `rolesApply` / `roleAbsent`. Main's inline
+  `audSnap: () => ({am, ask})` was dropped in favour of mine, which returns the same keys plus `see` (tplSnap calls it).
+- Auto-merged, checked by hand: startFromFile runs main's `tplPreset` then my `askPreset` + `audPreset`; B's `endPress()` hook
+  (`window.__pres.onEnd`, then `endNow()`) is kept unchanged.
+- Added after the merge:
+  - `TPL_OPTS` row `{ key: "see", sw: 1, text: "Audience can see each other", def: 1 }`, so templates save it and the editor shows it.
+  - `tplSnap` now also keeps the people a role still waits for (not here yet) by name: presenters `{name, main: false}`, backstage
+    `{name, control}`. Saving a template while someone is invited keeps them.
+- Template apply = kastr-templates.js presStart -> `startFromFile(file, {idx, cm, am, ask, o, tpl})`, then for anyone not here
+  `roleAbsent(name, r, {key, control, from})`. That is the same invite + waiting-role flow as the picker's typed name. Lab
+  (pw_tpl.py): `o.see = 0` -> the record has see 0 and audience Erin is anon at once; `roleAbsent` for Bob (online elsewhere)
+  -> prompt 3.3 s, presenter 1.8 s after Join; `roleAbsent` for Dan (offline, control [Alice]) -> waiting in rolesSnap + tplSnap;
+  Dan launches -> prompt 9.9 s, backstage 11.9 s after launch, Alice's control of his mic + camera on.
+
 ## Record fields added
 
 `see` (0/1), `pend` (waiting roles: `{k, n, h, r, inv}`), `fs` (THE HOOK for 0.21.93 live feeds: stream paths the owner shows,

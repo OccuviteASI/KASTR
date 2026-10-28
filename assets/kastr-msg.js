@@ -118,7 +118,7 @@
     groups: new Map(), reads: {}, open: "", keys: new Map(), lastPing: 0, busy: false, histDone: false, devices: 0,
     view: "list", picker: null, filter: "", people: [], peopleAt: 0, ticks: {}, codeMin: 8, hubDown: false, settings: false,
     // 0.21.93 timers: the hub knows them (tv), its clock minus mine (s), conversation defaults, the next message's own timer
-    tv: false, skew: 0, convt: {}, ttlNext: new Map(),
+    tv: false, skew: 0, convt: {}, ttlNext: new Map(), voNext: new Set(),
   };
   const by = () => S.fleet + "|" + S.nk;
   const renameMap = new Map();   // 0.21.91: old name key -> {key, name} (people who changed their name)
@@ -331,6 +331,7 @@
     base.mine = base.from === S.nk;
     if (m.kind === "sys") return Object.assign(base, { sys: m.sys || {} });
     if (Number(m.ttl) > 0) base.ttl = Number(m.ttl);   // 0.21.93: disappearing (seconds after each reader reads it)
+    if (m.vo) return Object.assign(base, { vo: 1, nf: Number(m.nf) || 0, opened: Number(m.opened) || 0, st: Number(m.opened) ? 1 : 0 });   // 0.21.93 view once: a stub
     const w = (m.wraps || {})[S.kid];
     const sk = keys[m.fromKid];
     if (!w || !sk) return Object.assign(base, { locked: true });
@@ -449,16 +450,18 @@
     if (!text.trim() && !files.length) return;
     { const mv = conv.startsWith("p:") ? renameMap.get(conv.slice(2)) : null; if (mv?.key) conv = "p:" + mv.key; }   // 0.21.91: to their new name
     const cid = rid();
-    const ttl = S.tv ? ttlFor(conv) : 0;   // 0.21.93: this message's own timer, else the conversation's (once: the next one is back to it)
-    S.ttlNext.delete(conv);
+    const vo = S.tv && S.voNext.has(conv);   // 0.21.93 view once (the next message only)
+    const ttl = S.tv && !vo ? ttlFor(conv) : 0;   // 0.21.93: this message's own timer, else the conversation's (once: the next one is back to it)
+    S.ttlNext.delete(conv); S.voNext.delete(conv);
     const rec = { k: "cid:" + cid, by: by(), cid, at: Math.floor(Date.now() / 1000), from: S.nk, fromName: S.name, mine: true, kind: "msg", text,
                   files: files.map((f) => ({ name: f.name || "file", type: f.type || "", size: f.size, local: URL.createObjectURL(f) })),
                   gid: conv.startsWith("g:") ? conv.slice(2) : "", to: conv.startsWith("p:") ? conv.slice(2) : "", sending: true };
     if (ttl) rec.ttl = ttl;
+    if (vo) Object.assign(rec, { vo: 1, nf: files.length });   // shown as a stub here too (no reopening it)
     S.recs.set(rec.k, rec);
     paint();
     const rel = S.tv && o?.rel ? Math.floor(o.rel) : 0;   // 0.21.93 send later: when (the hub's clock) -- the hub holds it till then
-    const ob = { cid, by: by(), conv, text, files, ttl, rel, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
+    const ob = { cid, by: by(), conv, text, files, ttl, vo, rel, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
     idbPut("outbox", ob).catch(() => {});
     rec.outbox = ob;
     await deliver(rec, ob);
@@ -478,7 +481,8 @@
         const fid = await fileUp(new Blob([ct]));
         const meta = { fid, name: String(f.name || "file").slice(0, 120), type: String(f.type || "").slice(0, 80), size: raw.length, k: b64(fk), iv: b64(fiv) };
         metas.push(meta);
-        if (raw.length <= 8 * 1024 * 1024) idbPut("blobs", { fid, by: by(), at: Date.now(), blob: new Blob([raw], { type: meta.type }) }).catch(() => {});
+        if (raw.length <= 8 * 1024 * 1024 && !ob.vo) idbPut("blobs", { fid, by: by(), at: Date.now(), blob: new Blob([raw], { type: meta.type }) }).catch(() => {});   // 0.21.93: never a view-once picture
+        raw.fill(0);
         ob.metas = metas.slice();
         idbPut("outbox", ob).catch(() => {});
       }
@@ -487,7 +491,7 @@
       if (ob.conv.startsWith("p:") && sealed.missing.includes(ob.conv.slice(2))) throw Object.assign(new Error(convTitle(ob.conv) + " hasn’t set up messages yet"), { fatal: true });
       const send1 = (s) => api({ op: "send", as: S.name, cid: ob.cid, iv: s.iv, ct: s.ct, wraps: s.wraps, files: metas.map((m) => m.fid),
                                  gid: ob.conv.startsWith("g:") ? ob.conv.slice(2) : undefined, to: ob.conv.startsWith("p:") ? ob.conv.slice(2) : undefined,
-                                 tv: 1, ttl: ob.ttl || 0, rel: ob.rel || undefined });
+                                 tv: 1, ttl: ob.ttl || 0, vo: ob.vo ? 1 : undefined, rel: ob.rel || undefined });
       let d = await send1(sealed);
       if (!d.ok && d.status === 409 && d.stale) { await keysFor(readersOf(ob.conv), true); sealed = await seal(ob.conv, ob.cid, body); d = await send1(sealed); }
       if (!d.ok) {
@@ -581,15 +585,16 @@
     T("timer-drop", { seq: r.seq });
   }
   function purgeTimed(tm) {   // the hub's list of my live timed messages: what is missing (or past its time) goes here too
-    let n = 0;
+    let n = 0, ch = 0;
     for (const r of [...S.recs.values()]) {
       if (r.by !== by() || !r.seq || !(r.ttl || r.vo)) continue;
       const t = tm ? tm[uidOf(r)] : null;
       if (tm && !t) { dropRec(r); n++; continue; }
-      if (t && (r.exp !== t[0] || !!r.st !== !!t[1])) { r.exp = t[0]; r.st = t[1] ? 1 : 0; idbPut("msgs", r).catch(() => {}); }
+      if (t && (r.exp !== t[0] || !!r.st !== !!t[1])) { r.exp = t[0]; r.st = t[1] ? 1 : 0; if (r.vo && r.st && !r.opened) r.opened = 1; idbPut("msgs", r).catch(() => {}); ch++; }
       if (timedGone(r)) { dropRec(r); n++; }
     }
-    if (n) { T("timer-purge", { n }); paint(); }
+    if (n) T("timer-purge", { n });
+    if (n || ch) paint();
     return n;
   }
   function timerStubs() {   // a line an older KASTR kept instead of a timed message: pulled again, this time the real thing
@@ -626,10 +631,22 @@
     const cur = scope === "conv" ? Number(S.convt[conv]?.s) || 0 : ttlFor(conv);
     const known = TTL_OPTS.some((x) => x[0] === cur);
     const items = [{ cap: scope === "conv" ? "Disappearing messages — everyone here" : "Disappearing — this message" }];
-    for (const [s, label] of TTL_OPTS) items.push({ value: String(s), label, on: s === cur });
-    items.push({ value: "custom", label: known ? "Custom…" : "Custom (" + ttlName(cur) + ")…", on: !known });
+    const vo = scope === "msg" && S.voNext.has(conv);
+    for (const [s, label] of TTL_OPTS) items.push({ value: String(s), label, on: !vo && s === cur });
+    items.push({ value: "custom", label: known ? "Custom…" : "Custom (" + ttlName(cur) + ")…", on: !vo && !known });
     items.push({ hint: scope === "conv" ? "Starts when each person reads a message. Everyone sees the change." : "Starts when they read it. Only this message — the next one uses the conversation’s setting." });
-    K.menu(anchor, items, async (v) => {
+    if (scope === "msg") {   // 0.21.93 view once: the next message (pictures and text) opens once for each person
+      items.push({ sep: true });
+      items.push({ value: "vo", label: "View once", on: vo });
+      items.push({ hint: "Opens once for each person, then it is gone. No save or copy in KASTR. They can still take a screenshot." });
+    }    K.menu(anchor, items, async (v) => {
+      if (v === "vo") {
+        if (vo) S.voNext.delete(conv);
+        else { S.voNext.add(conv); toast("View once: your next message opens once for each person. They can still take a screenshot.", 6000, "info"); }
+        paintConv();
+        return;
+      }
+      if (scope === "msg") S.voNext.delete(conv);
       let s = Number(v) || 0;
       if (v === "custom") {
         const t = await K.confirm({ title: "Disappearing messages", message: "How long after it is read? From 1 minute to 90 days.", ok: "Set",
@@ -691,6 +708,7 @@
       if (!rel) return;
       const t = ta.value, fs = pane.__files.slice();
       if (!t.trim() && !fs.length) return;
+      if (voBlocked(conv, fs)) return;
       ta.value = ""; pane.__files = []; paintAtt(pane); grow(ta);
       send(conv, t, fs, { rel });
     });
@@ -731,6 +749,106 @@
       pull();
     });
   }
+  // VIEW ONCE: the pull hands out a stub; "Open" asks the hub for the sealed body (op vopen -- once for each person, any of
+  // their devices; the others then show "Opened"), it is decrypted and shown in a viewer that keeps nothing: no IndexedDB, no
+  // cached picture, no download, no copy or save (right-click, drag and keys are blocked -- best effort: a screenshot still
+  // works, the composer says so). Pictures and text only. The hub deletes it once every reader opened it (or at the cap).
+  const voWhat = (r) => (r.nf ? (r.nf === 1 ? "Photo" : r.nf + " photos") : "Message");
+  function voEl(r, bub) {
+    bub.classList.add("mvo");
+    const opened = r.mine ? !!r.st : !!(r.opened || r.st);
+    if (!r.mine && !opened && r.seq) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "mvob";
+      b.innerHTML = K.icon("once"); b.appendChild(document.createTextNode("View once · " + voWhat(r) + " — Open"));
+      b.title = "Opens once. When you close it, it is gone.";
+      b.addEventListener("click", (e) => { e.stopPropagation(); voOpen(r); });
+      bub.appendChild(b);
+    } else {
+      const t = document.createElement("div"); t.className = "mvos";
+      t.innerHTML = K.icon("once"); t.appendChild(document.createTextNode("View once · " + voWhat(r) + (opened ? " · Opened" : r.mine ? " · Not opened yet" : "")));
+      bub.appendChild(t);
+    }
+  }
+  async function voOpen(r) {
+    if (r.__opening) return;
+    r.__opening = true;
+    try {
+      const d = await api({ op: "vopen", as: S.name, seq: r.seq });
+      if (!d.ok) {
+        if (d.opened) { r.opened = Number(d.opened); r.st = 1; idbPut("msgs", r).catch(() => {}); toast("Already opened (on this or another device)", 4000, "info"); }
+        else if (d.gone) { dropRec(r); toast("This view-once message is gone", 4000, "info"); }
+        else toast("Could not open it: " + (d.error || d.status), 5000, "warn");
+        paint();
+        return;
+      }
+      r.opened = Number(d.opened) || Math.floor(hubNow()); r.st = 1;
+      idbPut("msgs", r).catch(() => {});
+      paint();
+      const w = (d.wraps || {})[S.kid];
+      if (!w || !d.pub) throw new Error("it was not sealed for this device’s key");
+      const kk = await pairKey(S.id.priv, d.pub, d.cid, d.fromKid, S.kid);
+      const raw = new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: unb64(w.iv) }, kk, unb64(w.w)));
+      const ck = await aesKey(raw, ["decrypt"]);
+      raw.fill(0);
+      const body = JSON.parse(dec.decode(await subtle.decrypt({ name: "AES-GCM", iv: unb64(d.iv), additionalData: enc.encode("kastr-msg-v1|" + d.cid) }, ck, unb64(d.ct))));
+      T("vo-open", { seq: r.seq, nf: (body.files || []).length });
+      await voView(body, r);
+    } catch (e) {
+      toast("Could not open it: " + (e?.message || e), 6000, "warn");
+    } finally {
+      r.__opening = false;
+    }
+  }
+  function voView(body, r) {   // a viewer that keeps nothing: decrypted into memory, drawn on canvases, wiped on close
+    return new Promise((done) => {
+      const ov = document.createElement("div"); ov.className = "mvoview"; ov.tabIndex = -1;
+      ov.innerHTML = '<div class="mvobox"><div class="mvohead"><span class="mvot"></span><button type="button" class="mvox" title="Close — it is gone after this">✕</button></div>'
+        + '<div class="mvobody"></div><div class="mvohint">View once: when you close it, it is gone.</div></div>';
+      ov.querySelector(".mvot").textContent = "View once · from " + (r.fromName || "them");
+      const box = ov.querySelector(".mvobody"), bufs = [], cvs = [];
+      const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+      for (const ev of ["contextmenu", "dragstart", "copy", "cut", "selectstart"]) ov.addEventListener(ev, stop, true);
+      const close = () => {
+        for (const b of bufs) { try { b.fill(0); } catch {} }
+        for (const c of cvs) { c.width = 0; c.height = 0; }
+        box.replaceChildren();
+        ov.remove();
+        document.removeEventListener("keydown", key, true);
+        T("vo-close", { seq: r.seq });
+        done();
+      };
+      const key = (e) => {
+        if (e.key === "Escape") { stop(e); close(); return; }
+        if ((e.ctrlKey || e.metaKey) && /^[scpa]$/i.test(e.key)) stop(e);   // save, copy, print, select all
+      };
+      document.addEventListener("keydown", key, true);
+      ov.querySelector(".mvox").addEventListener("click", (e) => { stop(e); close(); });
+      ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+      for (const f of Array.isArray(body.files) ? body.files.slice(0, 10) : []) {
+        const cell = document.createElement("div"); cell.className = "mvopic loading"; box.appendChild(cell);
+        if (!IMG_TYPES.test(f.type || "")) { cell.className = "mvopic mfail"; cell.textContent = "A file (view once shows pictures only)"; continue; }
+        (async () => {
+          const ct = await fileDown(f.fid);
+          const raw = new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: unb64(f.iv) }, await aesKey(unb64(f.k), ["decrypt"]), ct));
+          bufs.push(raw);
+          const bmp = await createImageBitmap(new Blob([raw], { type: f.type }));
+          raw.fill(0);
+          if (!ov.isConnected) { bmp.close?.(); return; }
+          const c = document.createElement("canvas"); c.width = bmp.width; c.height = bmp.height;
+          c.getContext("2d").drawImage(bmp, 0, 0); bmp.close?.();
+          cvs.push(c); cell.classList.remove("loading"); cell.appendChild(c);
+        })().catch((e) => { cell.className = "mvopic mfail"; cell.textContent = "Picture unavailable (" + (e?.message || e) + ")"; });
+      }
+      if (body.t) { const t = document.createElement("div"); t.className = "mvotext"; t.textContent = String(body.t); box.appendChild(t); }
+      document.body.appendChild(ov);
+      ov.focus();
+    });
+  }
+  const voBlocked = (conv, fs) => {   // view once is for pictures and text
+    if (!S.voNext.has(conv) || !fs.some((f) => !IMG_TYPES.test(f.type || ""))) return false;
+    toast("View once is for pictures and text — remove the other files, or turn View once off (the timer button)", 6000, "warn");
+    return true;
+  };
   // ---- end 0.21.93 per-message timers
   async function ticks() {
     if (S.state !== "ready" || !S.open.startsWith("p:") || !panelShown()) return;
@@ -824,6 +942,7 @@
     if (r.locked) return "Sent before this key was made";
     if (r.bad) return "Could not be opened";
     const who = r.mine ? "You: " : r.gid ? r.fromName.split(" ")[0] + ": " : "";
+    if (r.vo) return who + "View once · " + voWhat(r);   // 0.21.93
     if (r.sched) return "Scheduled: " + (r.text ? r.text.replace(/\s+/g, " ").slice(0, 70) : "an attachment");   // 0.21.93
     if (r.text) return who + r.text.replace(/\s+/g, " ").slice(0, 80);
     const f = (r.files || [])[0];
@@ -1211,6 +1330,7 @@
       const sendNow = () => {
         const t = ta.value, fs = pane.__files.slice();
         if (!t.trim() && !fs.length) return;
+        if (voBlocked(conv, fs)) return;   // 0.21.93
         ta.value = ""; pane.__files = []; paintAtt(pane); grow(ta);
         pane.querySelector(".memogrid").hidden = true; pane.querySelector(".memo").classList.remove("on");
         send(conv, t, fs);
@@ -1273,11 +1393,12 @@
     pane.querySelector(".mcmenu").hidden = !g && !(S.tv && nk);   // 0.21.93: a 1:1 has a menu too (Disappearing messages)
     pane.querySelector(".mcmenu").title = g ? "Group options" : "Conversation options";
     { // 0.21.93: the composer's timer -- lit with the length while the next message will disappear
-      const tb = pane.querySelector(".mtimer"), s = ttlFor(conv), own = S.ttlNext.has(conv);
+      const tb = pane.querySelector(".mtimer"), s = ttlFor(conv), own = S.ttlNext.has(conv), vo = S.voNext.has(conv);
       tb.hidden = !S.tv;
-      tb.classList.toggle("on", s > 0);
-      tb.querySelector(".mtl").textContent = s > 0 ? ttlShort(s) : "";
-      tb.title = s > 0 ? "Disappears " + ttlName(s) + " after it is read" + (own ? " (this message only)" : " (this conversation’s setting)") : "Disappearing messages: off";
+      tb.classList.toggle("on", s > 0 || vo);
+      tb.querySelector(".mtl").textContent = vo ? "1×" : s > 0 ? ttlShort(s) : "";
+      tb.title = vo ? "View once: the next message opens once for each person. They can still take a screenshot."
+        : s > 0 ? "Disappears " + ttlName(s) + " after it is read" + (own ? " (this message only)" : " (this conversation’s setting)") : "Disappearing messages: off";
       pane.querySelector(".msend").title = S.tv ? "Send — right-click or hold for Send later" : "Send";
     }
     const nokey = pane.querySelector(".mnokey");
@@ -1292,7 +1413,7 @@
     const recs = [...S.recs.values()].filter((r) => r.by === by() && convOf(r) === conv).sort((a, b) => ord(a) - ord(b) || a.at - b.at);
     const read = Number(S.reads[conv]) || 0;
     const tk = S.ticks[conv] || null;
-    const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || "", r.ttl || 0, r.exp || 0, r.st || 0, r.rel || 0]), read, tk]);
+    const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || "", r.ttl || 0, r.exp || 0, r.st || 0, r.rel || 0, r.opened || 0]), read, tk]);
     if (log.__sig === sig) return;
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     log.__sig = sig;
@@ -1311,6 +1432,7 @@
       const bub = document.createElement("div"); bub.className = "mbub";
       if (r.locked) { bub.classList.add("mlock"); bub.textContent = "Sent before this key was made — it cannot be opened here."; }
       else if (r.bad) { bub.classList.add("mlock"); bub.textContent = "This message could not be opened."; }
+      else if (r.vo) voEl(r, bub);   // 0.21.93 view once
       else {
         for (const f of r.files || []) bub.appendChild(fileEl(f));
         if (r.text) { const t = document.createElement("div"); t.className = "mtxt"; t.textContent = r.text; linkify(t); bub.appendChild(t); }
@@ -1808,12 +1930,14 @@
       convs: convs().map((c) => ({ conv: c.conv, title: c.title, unread: c.unread, last: preview(c.last) })), groups: [...S.groups.values()].map((g) => ({ gid: g.gid, name: g.name, members: g.members })) }),
     msgs: (conv) => [...S.recs.values()].filter((r) => !conv || convOf(r) === conv).sort((a, b) => (a.seq || 1e15) - (b.seq || 1e15))
       .map((r) => ({ seq: r.seq, from: r.fromName, mine: r.mine, text: r.text, files: (r.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size, fid: f.fid })), sys: r.sys ? sysText(r) : "", locked: !!r.locked, bad: !!r.bad, waiting: !!r.waiting, err: r.err || "",
-        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0 })),   // 0.21.93
+        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0, vo: r.vo || 0, opened: r.opened || 0 })),   // 0.21.93
     timers: () => ({ tv: S.tv, skew: S.skew, convt: S.convt, next: Object.fromEntries(S.ttlNext), sched: S.sched || [] }),   // 0.21.93 rig
     idb: async () => ({ msgs: (await idbAll("msgs", "by", by()).catch(() => [])).map((r) => ({ seq: r.seq, ttl: r.ttl || 0, text: r.text || "" })),
       blobs: (await idbAll("blobs").catch(() => [])).map((b) => b.fid) }),   // 0.21.93 rig: what this device still keeps
-    send: (conv, text, files, o) => { if (o && "ttl" in o) S.ttlNext.set(conv, Number(o.ttl) || 0); return send(conv, text, files); }, pull, init, open: openConv,
-    ctimer: (conv, s) => api({ op: "ctimer", as: S.name, conv, s }).then((d) => { pull(); return d; }),   // 0.21.93 rig unlock: (code) => unlock(code, false), picker: openPicker, trace,
+    send: (conv, text, files, o) => { if (o && "ttl" in o) S.ttlNext.set(conv, Number(o.ttl) || 0); if (o?.vo) S.voNext.add(conv); return send(conv, text, files, o); },
+    pull, init, open: openConv, unlock: (code) => unlock(code, false), picker: openPicker, trace,
+    ctimer: (conv, s) => api({ op: "ctimer", as: S.name, conv, s }).then((d) => { pull(); return d; }),   // 0.21.93 rig
+    vopen: (seq) => { const r = S.recs.get("seq:" + seq); return r ? voOpen(r) : null; },   // 0.21.93 rig
     fileUrl: (seq, i) => { const r = S.recs.get("seq:" + seq); return r && r.files?.[i] ? fileUrl(r.files[i]) : null; },
     people: () => S.people,
     keys: (names, force) => keysFor(names, force),

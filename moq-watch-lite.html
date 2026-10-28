@@ -2217,6 +2217,25 @@
   .mschd { display:inline-flex; align-items:center; gap:3px; border:0; background:transparent; color:var(--asi-blue); font:inherit; padding:0; cursor:pointer; }
   .mschd .icon { width:11px; height:11px; stroke-width:2; }
   .mschd:hover { text-decoration:underline; }
+  .mvob, .mvos { display:inline-flex; align-items:center; gap:6px; font:inherit; padding:2px 0; }
+  .mvob { border:0; background:transparent; color:inherit; cursor:pointer; font-weight:600; }
+  .mvob:hover { text-decoration:underline; }
+  .mvos { opacity:.75; font-style:italic; }
+  .mvob .icon, .mvos .icon { width:16px; height:16px; stroke-width:2; }
+  .mvoview { position:fixed; inset:0; z-index:145; background:rgba(3,5,10,.86); display:flex; align-items:center; justify-content:center; padding:16px;
+             user-select:none; -webkit-user-select:none; }
+  .mvobox { background:var(--surface-2); border:1px solid var(--line); border-radius:12px; width:min(760px, 100%); max-height:calc(100vh - 32px);
+            display:flex; flex-direction:column; overflow:hidden; }
+  .mvohead { display:flex; align-items:center; gap:8px; padding:8px 10px 8px 14px; border-bottom:1px solid var(--line); color:var(--text); font-weight:600; }
+  .mvohead .mvot { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mvox { border:0; background:transparent; color:var(--text-dim); font-size:16px; cursor:pointer; padding:4px 8px; }
+  .mvox:hover { color:var(--text); }
+  .mvobody { overflow:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .mvopic canvas { display:block; max-width:100%; height:auto; margin:0 auto; border-radius:8px; pointer-events:none; }
+  .mvopic.loading { min-height:120px; }
+  .mvopic.mfail { color:var(--text-dim); font-style:italic; }
+  .mvotext { color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .mvohint { padding:6px 14px 10px; color:var(--text-dim); font-size:12px; }
   .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
   .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
     display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
@@ -3957,7 +3976,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     clip: '<path d="M14.5 9.5 9 15a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3L7.5 13a1.1 1.1 0 0 1-1.6-1.6L11 6.3"/>',
     send: '<path d="M3 10 17 3l-4.5 14-3-5.5z" /><path d="M9.5 11.5 17 3"/>',
     ban: '<circle cx="10" cy="10" r="7"/><path d="M5.1 5.1l9.8 9.8"/>',   // 0.21.92 I: remove / ban -- Ban <name>...
-    clock: '<circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.7 1.7"/><path d="M8 2h4"/>',   // 0.21.93: message timers
+    clock: '<circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.7 1.7"/><path d="M8 2h4"/>',
+  once: '<circle cx="10" cy="10" r="7" stroke-dasharray="3 1.6"/><path d="M8.6 7.6 10.4 6.5v7"/>',   // 0.21.93: view once   // 0.21.93: message timers
   };
   function icon(name, cls) {
     return '<svg class="icon ' + name + (cls ? " " + cls : "")

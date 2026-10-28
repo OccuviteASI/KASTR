@@ -1648,9 +1648,10 @@ class Messenger:
             self._touch()
         return {"ok": True, "fid": fid, "size": len(data)}, 200
 
-    def file_get(self, fid, host):
+    def file_get(self, fid, host, now=None):
         """-> (bytes, None) for a device of someone who may read it (a reader of a message that carries it, or its uploader),
         else (None, (reply, code))."""
+        now = time.time() if now is None else now
         with self.lock:
             f = self.files.get(str(fid)) if FID_RE.match(str(fid or "")) else None
             if not f:
@@ -1658,7 +1659,7 @@ class Messenger:
             may = set(f.get("who") or []) | {f.get("by")}
             if f.get("vo"):   # 0.21.93 view once: only a reader who opened it, and only just after
                 op = (self.tst.get(f["vo"]) or {}).get("op") or {}
-                may = {nk for nk in may if op.get(nk) and time.time() - float(op[nk]) <= VO_OPEN_S}
+                may = {nk for nk in may if op.get(nk) and now - float(op[nk]) <= VO_OPEN_S}
             if not any(self._unlocked(nk, host) for nk in may if nk):
                 return None, ({"ok": False, "error": "not yours to read"}, 403)
         try:

@@ -73,6 +73,7 @@ def precache_list(root):
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
            "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
+    out.append("/assets/kastr-presrec.js")   # 0.21.92 H: record the presentation (the switch, Recordings, the recorder page)
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
     out.append("/assets/kastr-rcf.js")   # 0.21.92: remote-control files (the app page, rcx.html, rcx-agent.html)
@@ -1913,6 +1914,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _web_relay_for(self):
             """The /relay address for a visitor who came through a proxy (or any remote
             visitor with kastr.ini single_port) -- only when THIS machine runs the relay."""
+            # 0.21.92 H: record the presentation -- the headless recorder page (Host presrec.localhost, a web client by its
+            # Host) always dials THIS machine's own relay, whatever relay this KASTR's own page uses
+            if (str(self.headers.get("Host") or "").split(":")[0].strip().lower() == "presrec.localhost"
+                    and relay_srv is not None and relay_srv.running()):
+                return "http://presrec.localhost:%d" % int(relay_srv.port)
+            # 0.21.92 H: end
             if not (SINGLE_PORT or kastr_relay.is_forwarded(self)):
                 return None
             if not (relay_srv is not None and relay_srv.running()):
@@ -3515,6 +3522,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     base = "http://127.0.0.1:%d" % (int(relay_srv.port) + 1)   # 0.19.0: we ARE the web relay
                 elif hop:
                     return self._json_cors(508, {"error": "web relay loop (this machine runs no relay)"})
+                # 0.21.92 H: record the presentation -- the recorder page (Host presrec.localhost) mints at THIS machine's own
+                # relay: its grant lives here, and its relay is this one (_web_relay_for)
+                if (str(self.headers.get("Host") or "").split(":")[0].strip().lower() == "presrec.localhost"
+                        and relay_srv is not None and relay_srv.running()):
+                    base = "http://127.0.0.1:%d" % (int(relay_srv.port) + 1)
+                # 0.21.92 H: end
                 path0 = self.path.split("?", 1)[0]
                 if (relay_srv is not None and relay_srv.running() and not getattr(relay_srv, "secured", False)
                         and base.startswith("http://127.0.0.1:")):
@@ -4168,6 +4181,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path0.startswith("/api/record/"):    # 0.21.81: Record's save formats -- the convert upload + cancel
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
+            if path0 == "/api/presrec" or path0.startswith("/api/presrec/"):   # 0.21.92 H: record the presentation
+                import kastr_presrec
+                return kastr_presrec.handle_api(self, _note)
             if path0 == "/api/pres" or path0.startswith("/api/pres/"):   # 0.21.84 (prototype): presentations -- convert + the encrypted slide store
                 import kastr_pres
                 return kastr_pres.handle_api(self, self._state_dir(), _note)
@@ -5286,6 +5302,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path.startswith("/api/record/"):     # 0.21.81: Record's save formats -- what ffmpeg can write, progress, the result
                 import kastr_record
                 return kastr_record.handle_api(self, bridge, self._state_dir(), _note)
+            if path.startswith("/api/presrec/"):    # 0.21.92 H: record the presentation -- its state, a recording's file, the recorder page
+                import kastr_presrec
+                return kastr_presrec.handle_api(self, _note)
             if path.startswith("/api/pres/"):       # 0.21.84 (prototype): an encrypted slide / the notes, Office detection
                 import kastr_pres
                 return kastr_pres.handle_api(self, self._state_dir(), _note)
@@ -5673,6 +5692,14 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
     srv.diag_ref = DIAG_REF   # 0.21.74: the box keeper reads the box page's own reports (kastr.box_keeper)
     if bridge is not None and not getattr(srv, "is_tls", False):
         _rcadmin_start(srv, bridge, relay_srv, relay_ref, hostname)   # 0.21.83 (D)
+    if relay_srv is not None and not getattr(srv, "is_tls", False):   # 0.21.92 H: record the presentation (on the relay host)
+        try:
+            import kastr_presrec
+            kastr_presrec.start(getattr(relay_srv, "state_dir", None) or STATE_DIR, relay=relay_srv,
+                                web_port=lambda: HTTP_PORT or srv.server_address[1],
+                                ffmpeg=getattr(bridge, "ffmpeg", None) if bridge is not None else None, note=_note)
+        except Exception as e:
+            _note("presrec: not available: %r" % e)
     return srv
 
 

@@ -7135,6 +7135,23 @@ class AuthService:
         if rs and not slug.startswith(kastr_rtsp.HOME_PREFIX):
             return {"ok": False, "error": rs}, 403
         box_guest = bool(rs)   # ... anyone else gets a viewer's token there at most (it may watch -- a pin's proof -- never publish)
+        # 0.21.92 H: record the presentation -- the relay host's own headless recorder (kastr_presrec) watches the deck's room
+        # with a grant only that module hands out: a watch-only token whose put list names nothing a page announces (an
+        # announce outside it is dropped, the session stays), so the recorder is never in People nor in the room's state
+        admit_pr = p.get("admit")
+        if host is not None and isinstance(admit_pr, str) and admit_pr.startswith("ka-"):
+            try:
+                import kastr_presrec
+                pr_ok = kastr_presrec.admit_ok(admit_pr, slug)
+            except Exception:
+                pr_ok = False
+            if pr_ok:
+                now_pr = int(time.time())
+                exp_pr = now_pr + 6 * 3600
+                return {"ok": True, "exp": exp_pr, "role": "viewer", "ns": NS, "tokens": {
+                    "member": _mint(self.key, {"root": "", "get": slug, "put": ["~presrec/" + slug], "iat": now_pr, "exp": exp_pr}),
+                    "registry": _mint(self.key, {"root": "", "put": "~presrec/" + slug + "/r", "iat": now_pr, "exp": exp_pr})}}, 200
+        # 0.21.92 H: end
         b = self.bans.hit(slug, host, peer) if self.bans else None   # 0.17.0: removed by an admin -- not a wrong code, no lockout
         if b:
             return {"ok": False, "error": "removed from this room by an admin", "until": int(b.get("until") or 0),

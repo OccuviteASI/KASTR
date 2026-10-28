@@ -1801,6 +1801,12 @@ def handle_api(handler, state_dir, note=None):
     if fname == "end":
         _drain(handler)
         code = store.end(did, token)
+        if code == 200:   # 0.21.92 H: record the presentation -- End finishes its recording
+            try:
+                import kastr_presrec
+                kastr_presrec.deck_ended(state_dir, did)
+            except Exception:
+                pass
         return _reply(handler, code, {"ok": code == 200})
     if fname == "live":
         _drain(handler)

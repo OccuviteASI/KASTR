@@ -3194,4 +3194,14 @@
     }),
     __drawSlide: drawSlide,   // rig: render a scene slide without a room
   };
+  // 0.21.92 H: record the presentation -- the deck I present (or am backstage for) with the store key its Record switch uses
+  // (a presenter: the write token; backstage: the read token), for assets/kastr-presrec.js only; a viewer: null
+  window.__pres.recDeck = () => {
+    if (mine) return { role: "presenter", own: true, id: mine.id, base: mine.base, k: mine.token || mine.rt || "", name: mine.name, room: mine.room || "", rec: null };
+    const bk = [...backstage.values()].find((b) => b.keys && (b.wt || b.rt));
+    if (!bk) return null;
+    return { role: bk.pr ? "presenter" : "backstage", own: false, id: bk.rec.id, base: baseFor(bk.rec), k: bk.wt || bk.rt, name: bk.rec.name || "",
+             room: (ctx() || {}).channel || "", rec: bk.rec.rec && typeof bk.rec.rec === "object" ? bk.rec.rec : null };
+  };
+  // 0.21.92 H: end
 })();

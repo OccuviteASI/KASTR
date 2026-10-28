@@ -3481,6 +3481,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 </main>
 
 <script src="/assets/prefs.js"></script>
+<script src="/assets/vault.js"></script><!-- 0.21.92: codes in this browser's storage kept wrapped (AES-GCM, a non-extractable key) -->
 <script>
   // 0.13.0 (F3): the rooms sidebar starts COLLAPSED unless the toggle saved
   // "1". Set here, before the module graph loads, so the wide sidebar never
@@ -3516,6 +3517,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 <script type="module">
   import "https://esm.sh/@moq/watch/element";
   import { Net, Signals, Video as WatchVideo } from "https://esm.sh/@moq/watch";   // 0.21.15 (P12c): Video.Decoder.supported = the full-config probe
+  await window.__kastrVault?.ready;   // 0.21.92: the saved codes are opened (assets/vault.js) before the first read
 
   // ---- 0.17.0: who this page runs for (assets/client.js, substituted by the server) ----
   // "app" = the machine's own KASTR window; "web" = a browser on another device that
@@ -24846,6 +24848,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // bridge, so it is published through the lower-level API the element itself
   // is built on -- Broadcast + Video.Capture + Video.Encoder.
   import { Net, Signals, Broadcast, Video } from "https://esm.sh/@moq/publish";
+  await window.__kastrVault?.ready;   // 0.21.92: the saved codes (camera addresses, the session) opened first
   // ---- 0.16.0: @moq/publish 0.5.0 adapters ------------------------------------------
   // <moq-publish> keeps its video capture behind `video.in.capture` (a signal holding a
   // Video.Capture; its `in.source` IS the element's source signal) and its audio capture behind

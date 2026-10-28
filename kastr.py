@@ -605,6 +605,29 @@ def feed_version_ok(info, theirs):
     return offered == str(theirs or "").strip(), offered
 
 
+def secrets_for_swap(theirs, mine):
+    """0.21.92: "match client to server" swaps in the hub's version, downgrades included -- a 0.21.92 box that follows
+    a 0.21.91 spoke would read every "ksec1:..." value as the code itself (an unattended camera box would stop
+    re-sharing into its locked rooms). Called once the download is verified, right before the swap: an older build
+    gets the folder back in the plain form it reads (the next 0.21.92+ start seals it again). -> True when it did."""
+    if kastr_secret.reads_sealed(theirs):
+        return False
+    try:
+        kastr_secret.unseal_state(state_dir(), log=note)
+    except Exception as e:
+        note("secrets: could not prepare the state folder for v%s (%s)" % (theirs, e))
+    return True
+
+
+def secrets_swap_failed(theirs):
+    """The older build was NOT placed: this version keeps running -- seal again."""
+    try:
+        kastr_secret.reseal_state(state_dir(), log=note)
+        note("secrets: v%s was not installed -- the saved codes are sealed again" % theirs)
+    except Exception as e:
+        note("secrets: could not seal again (%s) -- the next start does" % e)
+
+
 def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
     """Download, verify, swap and relaunch as the authority's version.
 
@@ -641,6 +664,7 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
     print(f"{APP_NAME}: updating v{mine} -> v{theirs} from {base} ...", flush=True)
     update_note("updating", f"v{mine} -> v{theirs} from {base}")
     aside = None
+    plain_for_older = False   # 0.21.92: the state folder was put in the plain form for an older build
     try:
         import hashlib
         h = hashlib.sha256()
@@ -665,6 +689,7 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             raise RuntimeError("checksum mismatch")
         if os.path.getsize(tmp) != int(info.get("size") or 0):
             raise RuntimeError("size mismatch")
+        plain_for_older = secrets_for_swap(theirs, mine)   # 0.21.92: verified -- an older build reads plain codes
         # 0.21.3: Windows -- a detached helper swaps the files after we exit and starts the new build at its final
         # path; no running image is ever renamed (PyInstaller onefile aborts on that, see swap_via_helper_windows)
         if WINDOWS and getattr(sys, "frozen", False) and not _takeover_enabled():
@@ -734,6 +759,8 @@ def update_from(base, theirs, mine, relaunch_delay_ms=800, before_exit=None):
             os.remove(tmp)
         except OSError:
             pass
+        if plain_for_older:   # 0.21.92: nothing older was placed -- this version runs on, sealed
+            secrets_swap_failed(theirs)
         print(f"{APP_NAME}: update failed ({e}); launching v{mine} as-is", flush=True)
         update_note("failed", f"{e} -- launched v{mine} as-is")
         return "failed"

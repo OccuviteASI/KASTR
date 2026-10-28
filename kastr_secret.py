@@ -47,6 +47,8 @@ _known = {}                  # plain secret -> True (mask() replaces them in any
 _KNOWN_MAX = 512
 _known_re = None
 _keys = {}                   # key dir -> (kid, key)
+_plain_mode = [False]        # set by unseal_state(): this process is about to hand the folder to a pre-0.21.92 build
+SEALED_SINCE = (0, 21, 92)   # the first version that reads sealed values
 
 
 def _say(msg):
@@ -367,6 +369,7 @@ def forget_all():
         _open_cache.clear()
         _keys.clear()
         _said.clear()
+    _plain_mode[0] = False
 
 
 def mask(text):
@@ -474,7 +477,10 @@ def _apply(path, doc, sealing):
 
 
 def seal_doc(path, doc):
-    """The document as it goes to disk: the secret fields of this file sealed."""
+    """The document as it goes to disk: the secret fields of this file sealed (in plain mode -- a downgrade is under
+    way -- opened instead, so a write during the teardown cannot re-seal what the older build is about to read)."""
+    if _plain_mode[0]:
+        return _apply(path, doc, False)[0]
     return _apply(path, doc, True)[0]
 
 
@@ -484,6 +490,8 @@ def open_doc(path, doc):
 
 
 def needs_migration(path, doc):
+    if _plain_mode[0]:
+        return False
     return _apply(path, doc, True)[1] > 0
 
 
@@ -568,6 +576,71 @@ def migrate_state(state_dir, log=None):
         except Exception:
             pass
     return done
+
+
+def _vtuple(v):
+    m = re.match(r"^\s*v?(\d+)\.(\d+)\.(\d+)", str(v or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def reads_sealed(version):
+    """Can KASTR `version` read sealed values? An unparseable version counts as yes (the folder stays sealed)."""
+    t = _vtuple(version)
+    return t is None or t >= SEALED_SINCE
+
+
+def plain_mode():
+    return _plain_mode[0]
+
+
+def _state_files(state_dir):
+    try:
+        names = sorted(os.listdir(state_dir))
+    except OSError:
+        return []
+    return [fn for fn in names if not fn.endswith(".tmp") and policy_for(fn) and os.path.isfile(os.path.join(state_dir, fn))]
+
+
+def unseal_state(state_dir, log=None):
+    """The self-update is about to swap in a build older than 0.21.92 (one that would read "ksec1:..." as the code
+    itself): every sealed field of every known file (and its .bak / .corrupt copies) is written back in the plain form
+    that build reads, and this process stops sealing (plain mode) until it exits or reseal_state() is called. The
+    next 0.21.92+ start seals them again (migrate_state). -> [basename, ...] rewritten."""
+    _plain_mode[0] = True
+    done = []
+    if not state_dir or not os.path.isdir(state_dir):
+        return done
+    for fn in _state_files(state_dir):
+        p = os.path.join(state_dir, fn)
+        try:
+            with open(p, encoding="utf-8-sig") as f:
+                doc = json.load(f)
+        except Exception:
+            continue
+        try:
+            if _apply(p, doc, False)[1] > 0:
+                write_json(p, doc)            # plain mode: written opened
+                done.append(fn)
+        except Exception as e:
+            if log:
+                try:
+                    log("secrets: could not put %s back in the plain form: %s" % (fn, e))
+                except Exception:
+                    pass
+    if log:
+        try:
+            log("secrets: a build older than %s is next -- %d file(s) written back in the plain form it reads (%s); "
+                "the next %s+ start seals them again" % (".".join(map(str, SEALED_SINCE)), len(done),
+                                                       ", ".join(done) or "nothing sealed", ".".join(map(str, SEALED_SINCE))))
+        except Exception:
+            pass
+    return done
+
+
+def reseal_state(state_dir, log=None):
+    """The downgrade did not happen after all (the download could not be placed): seal again, as at start."""
+    _plain_mode[0] = False
+    return migrate_state(state_dir, log=log)
 
 
 def owner_only(path):

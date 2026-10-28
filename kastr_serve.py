@@ -74,6 +74,7 @@ def precache_list(root):
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
            "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
+    out.append("/assets/vault.js")   # 0.21.92: the codes in the browser's storage kept wrapped
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
     out.append("/assets/kastr-pmreset.js")   # 0.21.91 passcode reset: the admin's Reset My room passcode dialog (People + Relay page)
@@ -797,7 +798,9 @@ def _prefs_clean_value(key, val):
             val = json.dumps(val, separators=(",", ":"))
         except Exception:
             return None
-    if key == "kastr.lastjoin":
+    if key == "kastr.lastjoin" and re.match(r"^kv1:[A-Za-z0-9_-]+$", val):
+        pass   # 0.21.92: the page's wrapped form (assets/vault.js: AES-GCM under the browser's own key) -- kept as it is
+    elif key == "kastr.lastjoin":
         try:
             obj = json.loads(val)
         except Exception:

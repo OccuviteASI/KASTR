@@ -75,6 +75,7 @@ def precache_list(root):
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
+    out.append("/assets/kastr-rcf.js")   # 0.21.92: remote-control files (the app page, rcx.html, rcx-agent.html)
     out.append("/assets/kastr-pmreset.js")   # 0.21.91 passcode reset: the admin's Reset My room passcode dialog (People + Relay page)
     for sub in ("assets/icons", "assets/vendor/esm"):
         base = os.path.join(root, sub)

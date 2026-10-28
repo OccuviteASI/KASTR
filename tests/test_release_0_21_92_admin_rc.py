@@ -485,6 +485,132 @@ class LocalApi(PersonBase):
         self.assertEqual(self.status(d["sid"])["why"], "denied")
 
 
+# ---- 0.21.92 files in the private sessions (Kenton: "the same as room remote control") ----------------------------------------
+class FilesInPrivate(unittest.TestCase):
+    """The 0.21.83 module runs in the private pages (moved to assets/kastr-rcf.js, not forked); the machine's helper is
+    headless, so its card goes to the person's red bar through this computer's KASTR (show / ask)."""
+
+    def setUp(self):
+        import shutil
+        import kastr_rcfiles as rf
+        self.rf, self.tmp = rf, tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.clock = Clock(1000.0)
+        self.grant = {"rcid": "rcx0123abcd", "url": "screen://monitor/0"}
+        self.f = rf.Files(clip=rf.MockClip(), ini=lambda k: None, clock=self.clock, rc_get=lambda: types.SimpleNamespace(grant=self.grant),
+                          root=os.path.join(self.tmp, "r"))
+        self.addCleanup(self.f.shutdown)
+
+    def call(self, **p):
+        return self.rf._dispatch(self.f, p)
+
+    def test_the_sharer_needs_the_private_sessions_grant(self):
+        d, code = self.call(op="begin", rcid="otherrcid99", role="sharer")
+        self.assertEqual(code, 403)
+        d, code = self.call(op="begin", rcid="rcx0123abcd", role="sharer", name="Kenton")
+        self.assertEqual(code, 200, d)
+
+    def test_show_and_ask_carry_the_card_and_the_persons_cancel(self):
+        self.call(op="begin", rcid="rcx0123abcd", role="sharer", name="Kenton")
+        oid = "0123456789abcdef"
+        rows = [{"k": "tx-" + oid, "t": "Kenton is copying 3 files from your computer — 1 of 3 files, 12 MB of 50 MB (24%)", "pct": 24, "b": ["txcancel:" + oid, "Cancel"]},
+                {"k": "evil", "t": "x", "b": ["javascript:alert(1)", "Run"], "level": "<b>"}, "not a row", {"k": "", "t": "no key"}]
+        d, code = self.call(op="show", rcid="rcx0123abcd", rows=rows)
+        self.assertEqual((code, d["asks"]), (200, []))
+        st = self.f.status()
+        self.assertEqual([r["k"] for r in st["show"]], ["tx-" + oid, "evil"])
+        self.assertEqual(st["show"][0]["b"], ["txcancel:" + oid, "Cancel"])
+        self.assertNotIn("b", st["show"][1])          # only the module's own actions
+        self.assertEqual(st["show"][1]["level"], "")
+        # the person's Cancel (their red bar) -> the helper page's next show picks it up, once
+        for bad in ("txcancel:XYZ", "rm -rf", "get:" + oid + ";x", ""):
+            self.assertEqual(self.call(op="ask", rcid="rcx0123abcd", a=bad)[1], 400, bad)
+        self.assertEqual(self.call(op="ask", rcid="rcx0123abcd", a="txcancel:" + oid)[1], 200)
+        self.assertEqual(self.call(op="ask", rcid="rcx0123abcd", a="txcancel:" + oid)[1], 200)   # twice = once
+        self.assertEqual(self.call(op="ask", rcid="wrongrcid1", a="rxcancel")[1], 409)
+        d, _ = self.call(op="show", rcid="rcx0123abcd", rows=[])
+        self.assertEqual(d["asks"], ["txcancel:" + oid])
+        self.assertEqual(self.call(op="show", rcid="rcx0123abcd", rows=[])[0]["asks"], [])
+        # stale rows are not shown (the helper page posts every second)
+        self.call(op="show", rcid="rcx0123abcd", rows=rows[:1])
+        self.clock.t += self.rf.SHOW_S + 1
+        self.assertEqual(self.f.status()["show"], [])
+        # the session's end: nothing to show, asks refused
+        self.call(op="end", rcid="rcx0123abcd")
+        self.assertEqual(self.call(op="show", rcid="rcx0123abcd", rows=rows)[1], 409)
+        self.assertIn("show | ask", self.call(op="nope")[0]["error"])
+
+    def test_the_module_moved_not_forked(self):
+        mod, page = read("assets/kastr-rcf.js"), read("moq-watch-lite.html")
+        self.assertTrue(all(ord(ch) < 128 for ch in mod))
+        self.assertNotIn("\r\n", mod)
+        self.assertIn("window.KastrRcf = { create,", mod)
+        self.assertNotIn("function rcfPlan(", page)   # one copy of the code: the asset's
+        for p in ("moq-watch-lite.html", "rcx.html", "rcx-agent.html"):
+            self.assertIn('<script src="/assets/kastr-rcf.js"></script>', read(p), p)
+        self.assertIn('out.append("/assets/kastr-rcf.js")', read("kastr_serve.py"))
+
+    def test_recv_and_done_are_sent_again_when_nothing_answered(self):
+        mod = read("assets/kastr-rcf.js")
+        f = mod[mod.index("  async function rcfLocalAgain(body) {"):mod.index("function create(env) {")]
+        self.assertIn("!d.ok && d.http === undefined", f)   # only a request that got no answer at all -- never an HTTP error
+        self.assertIn("i < 2", f)
+        self.assertIn('await rcfLocalAgain({ op: "recv",', mod)
+        self.assertIn('await rcfLocalAgain({ op: "done",', mod)
+        self.assertEqual(mod.count("rcfLocalAgain("), 3)   # cancel / renew / begin stay single
+        # ... and the server side answers a repeat with the transfer it already has
+        rc = read("kastr_rcfiles.py")
+        self.assertIn('if oid in s.incoming and s.incoming[oid].state in ("get", "done"):', rc)
+        self.assertIn('if inc.state == "done":\n                return {"ok": True, "progress": inc.progress()}, 200', rc)
+
+    def test_the_agent_and_the_view(self):
+        a = read("rcx-agent.html")
+        for needle in ('const FK = window.KastrRcf ? KastrRcf.newKey() : "";', "machine: s.machine, fk: FK || undefined };",
+                       '["st.json", "ptr.json", "src.json", "fo.json", "fq.json", "fd"]', 'tracks: { fd: { priority: window.KastrRcf ? KastrRcf.PRIO : 30, maxAge: 3000 } }',
+                       "peer: () => ({ st: s.paths.admin, data: s.paths.admin }),", 'RCF?.start("sharer", { rcid: RCID, name: s.admin, fk: FK });',
+                       "try { RCF?.stop(g.ended); } catch {}", 'post("/api/rcfiles", { op: "show", rcid: RCID, rows });',
+                       "if (RCF_ASK_RE.test(String(a))) RCF.action(String(a));", 'out.again("fo.json"); out.again("fq.json");'):
+            self.assertIn(needle, a, needle)
+        v = read("rcx.html")
+        for needle in ('["in.json", "ctl.json", "fo.json", "fq.json", "fd"]', "peer: () => (S ? { st: S.paths.machine, data: S.paths.machine } : null),",
+                       'RCF.start("ctl", { rcid: S.rcid, name: mName(), fk: c.st.fk });', "if (!KastrRcf.FK_RE.test(String(c.st.fk || \"\")))",
+                       "try { RCF.stop(c.ended); } catch {}", 'cap.addEventListener("drop", rcfDrop);', "RCF.paste(c).then(() => { fDone = true; go(); }",
+                       "isCtl: (x) => x === c && !c.ended", 'needs: "0.21.92"', "#kRcFiles { position:fixed;", "#cap.rcfdrag {",
+                       'fetch("/api/rcfiles", { cache: "no-store" })'):
+            self.assertIn(needle, v, needle)
+        self.assertNotIn("\r\n", a)
+        self.assertNotIn("\r\n", v)
+
+    def test_the_persons_bar_and_the_allow_prompt(self):
+        s = read("moq-watch-lite.html")
+        self.assertIn("and can copy files and pictures to and from this computer while in control; you can stop any time", s)
+        for needle in ("async function rcxFilesPoll()", 'body: JSON.stringify({ op: "ask", rcid: el.dataset.rcid, a: b.dataset.a })',
+                       "#kRcxFiles { position:fixed;", "if (rcxBarCur || rcxfLive || rcxfN % 5 === 0) rcxFilesPoll();"):
+            self.assertIn(needle, s, needle)
+
+
+class BoxTileAndMyRoom(unittest.TestCase):
+    def test_take_control_of_a_box_on_its_tiles(self):
+        s = read("moq-watch-lite.html")
+        f = s[s.index("  function rcaTileItem(name, extra) {"):s.index("  function rcaTilePick(name) {")]
+        self.assertIn("if (!rcxIsAdmin() || wrRoomOf(name)) return null;", f)   # fleet admins only: hidden for everyone else
+        self.assertIn("rcaMach.get(host)", f)                                       # only a box that opted in (Machines...' list)
+        self.assertIn('label: "Take control of " + rcxName(m)', f)
+        self.assertIn("disabled: true, why: rcxStatus(m).text", f)
+        self.assertIn("{ const bi = rcaTileItem(name, extra); if (bi) items.push(bi); }", s)
+        self.assertIn('if (v === "boxtake") { rcaTilePick(name); return; }', s)
+        self.assertIn("if (m) rcxControl(m);", s)                                   # exactly Machines...' private start
+        # "boxtake" is handled before the "rc" prefix of room remote control
+        self.assertLess(s.index('if (v === "boxtake") { rcaTilePick(name); return; }'), s.index('if (String(v).startsWith("rc")) { rcMenuPick(name, v); return; }'))
+
+    def test_my_room_people_can_be_asked(self):
+        # no public state (My room is private): the item stays active; the hub says "no answer" after 60 s
+        s = read("moq-watch-lite.html")
+        self.assertIn('return { ask: true, unsure: true };', s)
+        self.assertIn('p.room && p.room !== "~private" ? p.room : CHANNEL', s)
+        self.assertEqual(ra.ASK_S, 60)
+
+
 # ---- the page, the session view, the Relay page, the server ------------------------------------------------------------------
 class Wiring(unittest.TestCase):
     def test_page(self):

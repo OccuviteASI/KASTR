@@ -767,7 +767,11 @@ class Relay(unittest.TestCase):
 # ---- wiring ------------------------------------------------------------------------------------------------------------------------
 class Wiring(unittest.TestCase):
     def test_page(self):
-        p = read("moq-watch-lite.html")
+        # 0.21.92: the module moved to assets/kastr-rcf.js (the private sessions' pages run it too); the page keeps its glue
+        pg, mod = read("moq-watch-lite.html"), read("assets/kastr-rcf.js")
+        p = pg + "\n" + mod
+        self.assertIn('<script src="/assets/kastr-rcf.js"></script>', pg)
+        self.assertTrue(all(ord(ch) < 128 for ch in mod))
         # Kenton's prompt names file transfer
         self.assertIn('" asks to control " + what + ". They\\u2019ll be able to use your mouse, keyboard and clipboard, and copy files to and from your computer', p)
         self.assertIn("and copy files to and from their computer", p)
@@ -792,10 +796,10 @@ class Wiring(unittest.TestCase):
         self.assertIn('cap.addEventListener("drop", (e) => rcfDropOn(c, t, e));', p)
         self.assertIn('"/api/rcfiles/put?rcid="', p)
         self.assertIn('"/api/rcfiles/chunk?rcid="', p)
-        self.assertIn("#kRcFiles { position:fixed;", p)
+        self.assertIn("#kRcFiles { position:fixed;", pg)
         # the module is plain ASCII (escapes, the page's style) and its rows say n of m, MB and %
-        i, j = p.index("// ---- 0.21.83 FILES AND PICTURES"), p.index("// ---- 0.21.66 (e) GRIDS FROM ANY ROOM")
-        self.assertTrue(all(ord(ch) < 128 for ch in p[i:j]))
+        i, j = pg.index("// ---- 0.21.83 FILES AND PICTURES"), pg.index("// ---- 0.21.66 (e) GRIDS FROM ANY ROOM")
+        self.assertTrue(all(ord(ch) < 128 for ch in pg[i:j]))
         self.assertIn('x.files + " of " + x.nfiles + " files, " : "") + rcfSize(x.bytes) + " of " + rcfSize(x.total) + " (" + pct + "%)"', p)
         self.assertIn('"Received " + what + " (" + rcfSize(r.bytes) + ") from " + s.name', p)
         self.assertIn('" copied " + what + " from your computer"', p)

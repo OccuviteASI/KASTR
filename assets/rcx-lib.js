@@ -28,6 +28,8 @@ export async function requestBroadcast(org, path, waitMs = 8000) {
 }
 
 // a broadcast of JSON tracks: set(name, value) writes it now and again after every reconnect
+// 0.21.92: + opts.tracks[name] = {priority, maxAge} per track, and bytes(name, u8): one binary frame in a group of its own
+// (the files' chunks, kastr-rcf.js -- never kept, never written again)
 export function producer(conn, path, names, opts = {}) {
   const tracks = {}, latest = {};
   let ups = 0, writes = 0;
@@ -38,7 +40,7 @@ export function producer(conn, path, names, opts = {}) {
     let bp;
     try { bp = org.createBroadcast(Net.Path.from(path)); } catch { return; }
     e.cleanup(() => { try { bp.close(); } catch {} for (const k of Object.keys(tracks)) delete tracks[k]; });
-    for (const n of names) { try { tracks[n] = bp.createTrack(n, { priority: opts.priority ?? 255, maxAge: opts.maxAge ?? 2000 }); } catch {} }
+    for (const n of names) { const o = opts.tracks?.[n] || opts; try { tracks[n] = bp.createTrack(n, { priority: o.priority ?? 255, maxAge: o.maxAge ?? 2000 }); } catch {} }
     // group sequences never go backwards on a resumed broadcast (see the app page's stateProducer): one empty group first
     const seq = Date.now() - 1790000000000;
     for (const t of Object.values(tracks)) { try { const g = new Net.Group.Producer(seq); t.writeGroup(g); g.close(); } catch {} }
@@ -48,6 +50,12 @@ export function producer(conn, path, names, opts = {}) {
   });
   return {
     set(n, v) { latest[n] = v; const t = tracks[n]; if (t) { try { t.writeJson(v); writes++; } catch {} } },
+    again(n) { const t = tracks[n]; if (t && n in latest) { try { t.writeJson(latest[n]); } catch {} } },   // a heartbeat
+    bytes(n, u8) {
+      const t = tracks[n]; if (!t) return false;
+      try { const g = t.appendGroup(); g.writeFrame({ payload: u8, timestamp: Net.Time.Timestamp.now() }); g.close(); } catch {}
+      return true;
+    },
     get live() { return Object.keys(tracks).length > 0; },
     get ups() { return ups; },
     get writes() { return writes; },

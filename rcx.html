@@ -21,6 +21,7 @@
   "https://esm.sh/@moq/watch/element": "/assets/vendor/esm/@moq/watch@0.6.2/element.target-es2022.mjs"
  }
 }</script>
+<script src="/assets/kastr-rcf.js"></script><!-- 0.21.92: files + pictures (the 0.21.83 room-control module) -->
 <style>
   [hidden] { display:none !important; }
   html, body { height:100%; margin:0; }
@@ -68,6 +69,19 @@
   #srcPop .hint { color:var(--text-dim); font-size:12px; margin:4px 2px; }
   #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:rgba(0,43,69,.95); color:#fff; padding:8px 14px; border-radius:8px; font-size:13px; z-index:9; max-width:80vw; }
   #toast.warn { background:rgba(160,60,50,.95); }
+  /* 0.21.92: files + pictures (the 0.21.83 card, assets/kastr-rcf.js) -- what is on its way, "Get them", what arrived */
+  #kRcFiles { position:fixed; left:50%; transform:translateX(-50%); bottom:58px; z-index:8; display:flex; flex-direction:column; gap:6px; width:min(460px, calc(100vw - 28px)); }
+  #kRcFiles[hidden] { display:none; }
+  #kRcFiles .rcfrow { display:flex; align-items:center; gap:6px 10px; flex-wrap:wrap; padding:8px 8px 8px 12px; border-radius:12px; background:#0f2235;
+    border:1px solid var(--asi-amber); color:#fff; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #kRcFiles .rcfrow.ok { border-color:#2BB673; }
+  #kRcFiles .rcfrow.warn { border-color:#E5484D; background:#3a1414; }
+  #kRcFiles .rcfrow.info { border-color:#5b6472; }
+  #kRcFiles .t { flex:1 1 220px; min-width:0; overflow-wrap:anywhere; line-height:1.35; }
+  #kRcFiles .bar { order:3; flex:1 0 100%; height:4px; border-radius:2px; background:rgba(255,255,255,.15); overflow:hidden; }
+  #kRcFiles .bar i { display:block; height:100%; background:var(--asi-amber); transition:width .2s; }
+  #kRcFiles button { background:var(--asi-amber); color:#111; border:0; border-radius:14px; padding:4px 12px; font-weight:600; cursor:pointer; flex:none; }
+  #cap.rcfdrag { outline:3px dashed var(--asi-amber); outline-offset:-6px; background:rgba(255,170,0,.08); }
 </style>
 </head>
 <body>
@@ -95,7 +109,7 @@
 <div id="toast" hidden></div>
 <script type="module">
   import "https://esm.sh/@moq/watch/element";
-  import { connect, producer, subscribe, withJwt } from "/assets/rcx-lib.js";
+  import { connect, producer, subscribe, withJwt, requestBroadcast, sleep } from "/assets/rcx-lib.js";
 
   const $ = (id) => document.getElementById(id);
   const KEEP_MS = 600, KEEP_N = 64, CLIP_MAX = 65536, QUIET_MS = 10000;
@@ -110,6 +124,53 @@
   function toast(t, warn, ms) { const el = $("toast"); el.textContent = t; el.className = warn ? "warn" : ""; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, ms || 4500); }
   function msg(html) { const el = $("msg"); if (html == null) { el.hidden = true; return; } el.innerHTML = html; el.hidden = false; }
   function chip(t, cls) { const el = $("chip"); el.textContent = t; el.className = "chip " + (cls || ""); }
+
+  // ---- 0.21.92 FILES AND PICTURES (Kenton: "the same as room remote control") -- the 0.21.83 module (assets/kastr-rcf.js), this
+  // window as the controller: copy files or a picture here and paste on the machine (Ctrl+V waits for them), copy there and
+  // paste here, drop files onto its screen; progress + Cancel in the card. Its tracks ride this session's broadcasts (fo.json,
+  // fq.json, fd on ~rcx/<sid>/a out, the machine's on ~rcx/<sid>/m in), encrypted under the key the machine's helper puts in
+  // st.json. Only while the session is live; this computer's own KASTR keeps the files (kastr_rcfiles, its size caps).
+  const rcfIo = { set: (n, v) => prod?.set(n, v), bytes: (n, u8) => (prod ? prod.bytes(n, u8) : false), stop() {},
+                  sync() { if (prod && Date.now() - (c.rcfHb || 0) > 1500) { c.rcfHb = Date.now(); prod.again("fo.json"); prod.again("fq.json"); } } };
+  const RCF = KastrRcf.create({
+    enabled: () => !!S && !c.ended && c.rcfOk === true,
+    open: () => ({ st: rcfIo, data: rcfIo }),
+    conn: () => conn,
+    peer: () => (S ? { st: S.paths.machine, data: S.paths.machine } : null),
+    subJson: (cn, path, track, cb) => subscribe(cn, path, track, cb, { priority: 255, staleMs: 8000 }),
+    request: (org, path, ms) => requestBroadcast(org, path, ms),
+    isCtl: (x) => x === c && !c.ended, point: (t, x, y) => toPic(x, y), inPic: (p) => inPic(p),
+    log: (t) => console.log("rcx files:", t), toast: (t, ms, level) => toast(t, level === "warn", ms), sleep, needs: "0.21.92",
+  });
+  window.__rcf = RCF.rig;   // rig (never the bytes, never the key)
+  async function rcfCheck() {   // this computer's own KASTR takes the files (the hub's Relay page in a browser elsewhere cannot)
+    let why = "";
+    try {
+      const r = await fetch("/api/rcfiles", { cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      c.rcfOk = r.ok && !!d.caps?.files;
+      if (!c.rcfOk) why = r.status === 403 ? "Files go only from KASTR on this computer (this window runs elsewhere)." : d.caps && !d.caps.files ? "File transfer is switched off on this computer (kastr.ini rc_files)." : "File transfer isn’t available here.";
+    } catch { c.rcfOk = false; why = "File transfer isn’t available here."; }
+    if (why) c.rcfWhy = why;
+    rcfMaybe();
+  }
+  function rcfMaybe() {
+    if (c.rcfOn || c.ended || !c.rcfOk || !c.st) return;
+    if (!KastrRcf.FK_RE.test(String(c.st.fk || ""))) { c.rcfWhy = mName() + "’s KASTR can’t take files (it needs 0.21.92 or newer)."; return; }
+    c.rcfOn = true; c.rcfWhy = "";
+    RCF.start("ctl", { rcid: S.rcid, name: mName(), fk: c.st.fk });
+  }
+  function rcfDrag(e) {
+    if (RCF.cur()) { RCF.dragOver(c, e); return; }
+    if (!e.dataTransfer || ![...(e.dataTransfer.types || [])].includes("Files")) return;
+    e.preventDefault();   // the drop comes here: it says why nothing goes
+  }
+  function rcfDrop(e) {
+    if (RCF.cur()) { RCF.dropOn(c, null, e); return; }
+    if (!e.dataTransfer || ![...(e.dataTransfer.types || [])].includes("Files")) return;
+    e.preventDefault(); $("cap").classList.remove("rcfdrag");
+    toast(c.rcfWhy || "File transfer is starting — try again in a moment.", true, 6000);
+  }
 
   // ---- the session from the page that opened this window (never in the address)
   const ready = () => { try { window.opener?.postMessage({ type: "kastr-rcx-ready", name: window.name }, location.origin); } catch {} };
@@ -144,7 +205,10 @@
     else msg("Connecting to " + esc(mName()) + "…<span class='sub'>Control is already granted — " + esc(mName()) + " shows a red bar with your name while you are connected.</span>");
     const url = withJwt(S.relay, S.token);
     conn = connect(url);
-    prod = producer(conn, S.paths.admin, ["in.json", "ctl.json"], { priority: 255, maxAge: 2000 });
+    prod = producer(conn, S.paths.admin, ["in.json", "ctl.json", "fo.json", "fq.json", "fd"],   // 0.21.92: + the files' tracks
+                    { priority: 255, maxAge: 2000, tracks: { fd: { priority: KastrRcf.PRIO, maxAge: 3000 } } });
+    c.cap = $("cap"); c.name = mName();   // the files module's view of this screen
+    rcfCheck();
     const w = $("w");
     w.setAttribute("name", S.paths.screen);
     c.wurl = url; c.rs = 1;
@@ -165,6 +229,7 @@
     c.stAt = Date.now();
     if (v.active === false) { ended(v.ended || "stopped"); return; }
     c.st = v;
+    if (!c.rcfOn) rcfMaybe();   // 0.21.92: the first state carries the files' key
     if (!c.live || $("chip").textContent !== "Controlling") { c.live = true; chip("Controlling", "live"); }
     if (v.url && v.url !== c.url) { c.url = v.url; paintSrc(); }
     if (v.ack && Number(v.ack.s) > c.ackS) {
@@ -252,6 +317,7 @@
     c.ended = why || "stopped";
     clearInterval(c.tick); clearInterval(c.stT);
     letGo();
+    try { RCF.stop(c.ended); } catch {}   // 0.21.92: unfinished transfers are deleted; what arrived stays on the clipboard a while
     chip("Ended", "end");
     $("sw").hidden = true; $("blk").hidden = true; $("srcPop").hidden = true;
     for (const id of ["prevMon", "nextMon", "srcBtn", "frontBtn", "stopBtn"]) $(id).disabled = true;
@@ -368,6 +434,10 @@
       emit({ t: "w", n, h, x: p.x, y: p.y });
     }, { passive: false });
     cap.addEventListener("blur", letGo);
+    cap.addEventListener("dragenter", rcfDrag);   // 0.21.92: a file from my desktop onto the machine's screen
+    cap.addEventListener("dragover", rcfDrag);
+    cap.addEventListener("dragleave", () => cap.classList.remove("rcfdrag"));
+    cap.addEventListener("drop", rcfDrop);
   }
   function letGo() {
     for (const code of [...c.down]) emit({ t: "k", c: code, d: 0 });
@@ -379,13 +449,20 @@
     e.preventDefault(); e.stopImmediatePropagation();
     if (e.code === "Escape" && !e.repeat) { clearTimeout(c.escT); c.escT = setTimeout(() => stop("released"), 1000); }
     if (e.repeat || !e.code || c.down.has(e.code)) return;
-    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && navigator.clipboard?.readText && !c.hold) {   // paste: my clipboard first, then the keys
+    if (e.code === "KeyV" && (e.ctrlKey || e.metaKey) && (navigator.clipboard?.readText || RCF.cur()) && !c.hold) {   // paste: my clipboard first, then the keys
       c.hold = [];
-      const done = (tx) => { if (!c.hold) return; const q = c.hold; c.hold = null;
+      // 0.21.92: + files / a picture I copied (the 0.21.83 paste): the machine's once it has them (the keys wait; "Paste without them")
+      let tx0 = null, txDone = !navigator.clipboard?.readText, fDone = false;
+      const go = () => {
+        if (!c.hold || !txDone || !fDone) return;
+        const q = c.hold; c.hold = null;
+        const tx = tx0;
         if (typeof tx === "string" && tx && tx !== c.clipLast && new Blob([tx]).size <= CLIP_MAX) { c.clipLast = tx; emit({ t: "clip", text: tx }); }
-        for (const ev of q) emit(ev); };
-      navigator.clipboard.readText().then(done, () => done(null));
-      setTimeout(() => done(null), 1000);
+        for (const ev of q) emit(ev);
+      };
+      const done = (tx) => { if (txDone) return; txDone = true; tx0 = tx; go(); };
+      if (navigator.clipboard?.readText) { navigator.clipboard.readText().then(done, () => done(null)); setTimeout(() => done(null), 1000); }
+      RCF.paste(c).then(() => { fDone = true; go(); }, () => { fDone = true; go(); });
     }
     c.down.add(e.code); flushMove();
     emit({ t: "k", c: e.code, d: 1 });

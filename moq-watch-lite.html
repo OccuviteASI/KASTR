@@ -14877,9 +14877,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function roomsRebuild() {
     roomsGen++;
     const gen = roomsGen;
-    for (const a of roomsAnns) { try { a.close?.(); } catch {} }
+    // 0.21.92: the connection first, then its announcement readers (next tick) -- the library's announce loop appended to a
+    // reader closed under it and logged "announcements are closed" on every token switch
+    const oldAnns = roomsAnns;
     roomsAnns = [];
     if (roomsConn) { try { roomsConn.close(); } catch {} roomsConn = null; }
+    setTimeout(() => { for (const a of oldAnns) { try { a.close?.(); } catch {} } }, 0);
     const now = Date.now();
     // 0.13.0 (F7): a CHANGED relay url drops the previous relay's rooms outright
     // (the grace below used to keep relay A's rooms listed under relay B)
@@ -15016,6 +15019,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let roomsGroups = {}, roomsGroupsAt = 0;   // 0.15.0 (B4): gid -> {name, order, rooms:[slug]} from the room store
   async function roomsMinterPoll() {
     roomsMinterAt = Date.now();
+    if (authChecked !== authBase()) return;   // 0.21.92: not before this page checked THIS relay (it read the list tokenless once)
     if (authSecured && !roomsToken()) return;   // 0.21.91: no access code yet -- no rooms (even on the relay machine itself)
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 4000);
@@ -17886,7 +17890,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     paintFilesBadge();
     const base = relayHostBase();
     if (!base || !window.__joinedChannel?.()) return;
-    fetch(base + "/api/files?room=" + encodeURIComponent(readChannel() || "main"), { cache: "no-store" }).then((r) => r.json()).then((j) => {
+    fetch(base + "/api/files?room=" + encodeURIComponent(readChannel() || "main"), { cache: "no-store", headers: authBearer() }).then((r) => r.json()).then((j) => {
       listedFiles.clear();
       for (const m of (j?.files || [])) {
         if (!m?.id) continue;
@@ -18247,6 +18251,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // the cert-fingerprint fetch strips the query, bundle-verified). Open relays:
   // detection misses and every helper is a no-op.
   let authSecured = false;
+  let authChecked = "";     // 0.21.92: the authBase() whose /api/auth this page has asked ("" = not yet)
   let authCodes = false;    // 0.10.0: the relay has viewer/publisher access codes
   let authLegacy = false;   // 0.10.0: secured, but no access codes yet (room codes only)
   let authRole = "";        // 0.10.0: "publisher" | "viewer" from the last mint ("" = open relay)
@@ -18272,12 +18277,17 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       return "http://" + u.hostname + ":" + (Number(u.port || 443) + 1);
     } catch { return null; }
   }
+  // 0.21.92: the member token as a header (a secured relay's file lists and room touches are for members of the room)
+  function authBearer() {
+    return (authSecured && authTokens?.member) ? { authorization: "Bearer " + authTokens.member } : {};
+  }
   function authStoreKey() {
     try { return "kastr.auth." + new URL(urlInput.value.trim()).origin; } catch { return null; }
   }
   async function authDetect() {
     const base = authBase();
     authSecured = false;
+    authChecked = "";   // 0.21.92
     if (!base) return;
     try {
       const ctl = new AbortController();
@@ -18295,6 +18305,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       authHttps = Number(d.https) || 0;                 // 0.15.0
       libCapsTake(d);   // 0.21.84: the stream library -- this relay's flag and its hub's (library: 1, libHub)
     } catch {}
+    authChecked = base;   // 0.21.92: asked (an open relay without /api/auth counts as asked)
     if (!authSecured) { authTokens = null; authExp = 0; authRole = ""; authCodes = false; authLegacy = false; authTalking = true; authChat = true; authState = true; return; }
     // A token for this relay origin survives reloads within the tab.
     if (!authTokens) {
@@ -18783,6 +18794,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     get web() { return authWeb; },           // 0.14.0 F
     get https() { return authHttps || 8443; }, // 0.15.0
     withToken,
+    bearer: authBearer,   // 0.21.92
     base: authBase,
     mint: authMint,
     detect: authDetect,
@@ -21870,7 +21882,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (rb && rb !== location.origin) {
       try {
         const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3000);
-        const r = await fetch(rb + "/api/files?room=" + encodeURIComponent(room), { cache: "no-store", signal: ctl.signal });
+        const r = await fetch(rb + "/api/files?room=" + encodeURIComponent(room), { cache: "no-store", signal: ctl.signal, headers: authBearer() });
         clearTimeout(tm);
         if (r.ok) store = { base: rb, publicBase: rb, mode: "relay" };
       } catch {}
@@ -32540,7 +32552,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const hb = window.__relayHostBase?.();
     if (!hb || !slug || slug === "main") return;
     const creator = (window.__publisher?.state?.()?.operator || "").slice(0, 40);
-    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug, creator }) }).catch(() => {});
+    fetch(hb + "/api/rooms/touch", { method: "POST", headers: { "content-type": "application/json", ...(window.__auth?.bearer?.() || {}) },
+      body: JSON.stringify({ slug, creator }) }).catch(() => {});   // 0.21.92: + the member token (a touch without one makes no room)
   }
   function chanRegClear() {
     if (roomTouchT) { clearInterval(roomTouchT); roomTouchT = null; }

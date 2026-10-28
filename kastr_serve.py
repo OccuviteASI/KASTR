@@ -1542,6 +1542,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             # vendored bundle on disk stays byte-identical. Both needles occur only in that bundle.
             (b"`.stats/node`", ("`%s/node`" % kastr_relay.STATS_KIND).encode()),
             (b"d=e=>e.startsWith(`.`)", ("d=e=>e.startsWith(`.`)||e.startsWith(`%s`)" % kastr_relay.NS).encode()),
+            # 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): ~stats rides a token now --
+            # stats.html asks for the access code (or reuses a saved one) and the bundle's connection carries its browse token
+            (b"m=new i(new URL(a))", b"m=new i(new URL(window.__kastrTok?window.__kastrTok(a):a))"),
+            (b"m.set(new URL(D.value.trim()))", b"m.set(new URL(window.__kastrTok?window.__kastrTok(D.value.trim()):D.value.trim()))"),
+            (b"D.value=m.peek()?.toString()??a", b"D.value=String(m.peek()?.toString()??a).replace(/[?&]jwt=[^&]*/,``)"),   # the box never shows the token
         ]
         if current != BUILTIN_RELAY:
             out.append((BUILTIN_RELAY.encode(), current.encode()))
@@ -2293,7 +2298,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "hubWeb": {h: {"web": r.get("web"), "https": r.get("https")} for h, r in HUB_WEB.items()},
             }
             if not local:
-                for k in ("pid", "swept", "operator", "updateCheck", "aliveAge", "ffmpeg", "viewing", "hubWeb", "platform"):
+                for k in ("pid", "swept", "operator", "updateCheck", "aliveAge", "ffmpeg", "viewing", "hubWeb", "platform",
+                          "adminMoved"):   # 0.21.92: the room an admin moved this machine to
                     d.pop(k, None)
                 d["hostMode"] = MODE
                 d["mode"] = "full"
@@ -2399,6 +2405,22 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 json.dump(meta, f)
             return self._json_cors(200, {"id": fid, "token": token, "size": n, "url": "/api/files/" + fid})
 
+        def _files_may_list(self, room, qs):
+            """0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): who may read a file list
+            here. The machine itself always; every room's files (no ?room=) nobody else; a room's on a SECURED relay a member
+            token covering that room (Authorization: Bearer, or ?jwt=); a KASTR without a secured relay keeps its open list."""
+            try:
+                if self._local():
+                    return True
+                if not room:
+                    return False
+                if not (relay_srv is not None and getattr(relay_srv, "secured", False)):
+                    return True
+                jwt = self._bearer(qs)
+                return bool(jwt) and self._room_claims(room, jwt) is None
+            except Exception:
+                return False
+
         def _file_list(self, qs):
             """0.8.8: the room's shared files (tokens withheld) -- a viewer who
             joined after the sharer's announce still sees them."""
@@ -2406,6 +2428,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if not d:
                 return self._json_cors(200, {"files": []})
             room = (qs.get("room") or [""])[0][:64]
+            if not self._files_may_list(room, qs):
+                # 0.21.92: no list without the room's token -- still a 200, so a page older than 0.21.92 keeps choosing this
+                # store for its uploads (it checks r.ok); new pages send their member token
+                return self._json_cors(200, {"files": [], "needToken": True})
             out = []
             try:
                 names = sorted(os.listdir(d))
@@ -3044,14 +3070,14 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             (an invite-link member or a personal-room guest of this relay's minter) answers their room alone -- nothing else of the
             fleet (rooms, groups, renames). A member's or a browse token (an access code): every room. No token: none."""
             try:
+                if not (relay_srv is not None and getattr(relay_srv, "secured", False)):
+                    return obj   # 0.21.92: an OPEN relay has no access code to ask for -- its rooms stay open, as its sessions are
                 auth = getattr(relay_srv, "auth", None) if relay_srv is not None else None
                 hdr = self.headers.get("Authorization") or ""
                 claims = auth._member_claims(hdr) if (auth is not None and hdr and hasattr(auth, "_member_claims")) else None
                 if claims is None:
                     # 0.21.91 (Kenton: "Room names must not be visible to anyone without a fleet access code"): no token -> no
-                    # rooms; the relay machine's own pages (loopback: the Relay page, its operator) still see them
-                    if self._local():
-                        return obj
+                    # rooms. 0.21.92: the relay machine's loopback neither -- its Relay page reads /api/relay/rooms
                     out = kastr_relay.rooms_for_guest(obj, set())
                     out.update(guest=False, needCode=True)
                     return out
@@ -3166,11 +3192,24 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 slug = str(p.get("slug") or "")
                 if not kastr_relay.SLUG_RE.match(slug) or slug == "main":
                     return self._chat_reply(400, {"error": "bad room"})
+                if not self._touch_may_create(slug):   # 0.21.92
+                    store.touch_room(slug, str(p.get("creator") or ""), create=False)
+                    return self._chat_reply(200, {"ok": True})
                 created = store.touch_room(slug, str(p.get("creator") or ""))
                 return self._chat_reply(200, {"ok": True, "created": created})
             return self._chat_reply(404, {"error": "no such rooms endpoint"})
 
         HUB_DOWN = "The hub is unreachable \u2014 rooms are created on the hub. Try again when it is back."
+
+        def _touch_may_create(self, slug):
+            """0.21.92: may this touch MAKE room `slug`? The machine itself, an open relay, or a member token covering the room
+            (Authorization: Bearer -- 0.21.92 pages send it). Anyone else only keeps a live room alive."""
+            try:
+                if self._local():
+                    return True
+                return self._room_claims(slug, self._bearer(None)) is None
+            except Exception:
+                return False
 
         def _rooms_at_hub(self, method, path, store, log):
             """0.21.25 (Kenton: "they should all be stored on the hub and distributed to all relays to see"): on a SPOKE every
@@ -3221,6 +3260,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 body = {"op": "group", "body": p, "vouch": "admin" if self._settings_admin() else None}
             elif path == "/api/rooms/touch":
                 body = {"op": "touch", "slug": slug, "creator": str(p.get("creator") or "")[:64]}
+                if not self._touch_may_create(slug):
+                    body["only"] = True   # 0.21.92: no member token here -- the hub keeps a live room alive, makes none
             elif path == "/api/rooms/settings":   # 0.21.65: the hub owns rooms; this box vouches for an admin it verified
                 body = {"op": "settings", "body": p, "vouch": "admin" if self._settings_admin() else None}
             elif path == "/api/rooms/personal":   # 0.21.75: personal rooms live on the hub; this box checks the access code
@@ -3263,6 +3304,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if out is None:
                 return False
             obj, code = out
+            if path == "/api/rooms/touch" and body.get("only"):
+                obj = {"ok": bool(obj.get("ok", code == 200))}   # 0.21.92: an older hub may still say "created" -- never pass it on
             if path == "/api/rooms/register" and code == 403 and p.get("access"):
                 CHAT_LOCKOUT.fail(peer, "wrong publisher access code", slug)   # the guess counts here, where the member is
             if path == "/api/rooms/personal":   # 0.21.75

@@ -102,9 +102,11 @@ class Browse(unittest.TestCase):
 class Lists(unittest.TestCase):
     def test_the_list_needs_a_token(self):
         s, r = _read("kastr_serve.py"), _read("kastr_relay.py")
-        self.assertIn("if self._local():\n                        return obj\n                    out = kastr_relay.rooms_for_guest(obj, set())\n"
+        # 0.21.92: no loopback exemption any more (the Relay page reads /api/relay/rooms); an OPEN relay lists to all
+        self.assertIn("# rooms. 0.21.92: the relay machine's loopback neither -- its Relay page reads /api/relay/rooms\n"
+                      "                    out = kastr_relay.rooms_for_guest(obj, set())\n"
                       "                    out.update(guest=False, needCode=True)", s.replace("\r\n", "\n"))
-        self.assertIn("if c is None and self._peer() not in LOOPBACK_PEERS:", r)
+        self.assertIn("                    g = guest_rooms(c)\n                    if c is None:\n", r)
         out = kr.rooms_for_guest({"rooms": [{"slug": "yard"}], "groups": {"g": {}}, "renamed": {"a": "b"}, "closed": {"x": 1}}, set())
         self.assertEqual((out["rooms"], out["groups"], out["renamed"], out["closed"]), ([], {}, {}, {}))
 

@@ -140,8 +140,10 @@ class Sandbox(unittest.TestCase):
         return b.xs_tick(post=self.relay.post, mint=self.relay.mint)
 
     def feeds_doc(self):
-        with open(os.path.join(self.tmp.name, "rtsp-feeds.json"), encoding="utf-8") as f:
-            return json.load(f)
+        import kastr_secret   # 0.21.92: the codes are sealed on disk; the reader opens them
+        p = os.path.join(self.tmp.name, "rtsp-feeds.json")
+        with open(p, encoding="utf-8") as f:
+            return kastr_secret.open_doc(p, json.load(f))
 
 
 class HomeRoom(unittest.TestCase):
@@ -215,7 +217,7 @@ class Loop(Sandbox):
         self.assertEqual(r["xsLocked"], ["rl"])
         self.assertNotIn("1234", json.dumps(r))
         self.assertNotIn("1234", json.dumps(b.list()))
-        self.assertEqual(self.feeds_doc()["feeds"][0]["xsCodes"], {"rl": "1234"})   # rtsp-feeds.json (owner-only) keeps it
+        self.assertEqual(self.feeds_doc()["feeds"][0]["xsCodes"], {"rl": "1234"})   # rtsp-feeds.json keeps it (sealed, 0.21.92)
 
 
 class SetAndPersist(Sandbox):

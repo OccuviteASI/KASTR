@@ -25,6 +25,7 @@ try:
     import kastr_ua  # noqa: F401  -- "KASTR/<version>" as the user agent
 except Exception:  # pragma: no cover
     pass
+import kastr_secret   # 0.21.92: the key is kept sealed (DPAPI / the owner-only key file), never in plain text
 
 CONF_NAME = "gif-search.json"
 KEY_RE = re.compile(r"^[A-Za-z0-9]{16,64}$")
@@ -144,10 +145,11 @@ class GifSearch:
 
     def _load(self):
         try:
-            with open(self._path(), encoding="utf-8") as f:
-                d = json.load(f)
+            with open(self._path(), encoding="utf-8-sig") as f:
+                raw = json.load(f)
         except (OSError, ValueError):
             return
+        d = kastr_secret.open_doc(self._path(), raw)   # 0.21.92: the sealed key opened (an old plain one still reads)
         if isinstance(d, dict):
             k = str(d.get("key") or "")
             self.key = k if KEY_RE.match(k) else ""
@@ -162,7 +164,7 @@ class GifSearch:
         tmp = self._path() + ".%d.tmp" % os.getpid()
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"key": self.key, "on": self.on, "at": self.at}, f)
+            json.dump(kastr_secret.seal_doc(self._path(), {"key": self.key, "on": self.on, "at": self.at}), f)   # 0.21.92
         os.replace(tmp, self._path())
         try:
             os.chmod(self._path(), 0o600)

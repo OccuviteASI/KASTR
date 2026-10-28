@@ -41,6 +41,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 import kastr_relay
 import kastr_rtsp
+import kastr_secret   # 0.21.92: secrets at rest sealed, logs and diag masked
 import kastr_release   # 0.21.7: the install zip a web client downloads, assembled on this host
 
 # The string baked into the prebuilt bundles.
@@ -73,6 +74,7 @@ def precache_list(root):
            "/assets/asi-brand.css", "/assets/asi-brand.js", "/assets/client.js", "/assets/prefs.js",
            "/assets/asi-favicon.svg", "/assets/asi-logo.svg", "/assets/asi-logo-dark.svg",
            "/assets/kastr-pres.js"]   # 0.21.84: the page's presentation module (pdf.js itself is cached on first use)
+    out.append("/assets/vault.js")   # 0.21.92: the codes in the browser's storage kept wrapped
     out.append("/assets/kastr-msg.js")   # 0.21.88: private messages (end-to-end encrypted)
     out.append("/assets/kastr-gif.js")   # 0.21.91: the GIF picker (Messages + Room Chat)
     out.append("/assets/kastr-rcf.js")   # 0.21.92: remote-control files (the app page, rcx.html, rcx-agent.html)
@@ -235,8 +237,10 @@ def invite_pending_set(url):
     if INVITE_FILE[0]:
         try:
             tmp = INVITE_FILE[0] + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(INVITE_PENDING[0], f)
+            with open(tmp, "w", encoding="utf-8") as f:   # 0.21.92: the invite token sealed
+                json.dump(kastr_secret.seal_doc(INVITE_FILE[0], INVITE_PENDING[0]), f)
+            if os.name != "nt":
+                os.chmod(tmp, 0o600)
             os.replace(tmp, INVITE_FILE[0])
         except OSError:
             pass
@@ -249,8 +253,8 @@ def invite_pending_restore(path, now=None):
     INVITE_FILE[0] = path
     now = time.time() if now is None else now
     try:
-        with open(path, encoding="utf-8") as f:
-            inv = json.load(f)
+        with open(path, encoding="utf-8-sig") as f:
+            inv = kastr_secret.open_doc(path, json.load(f))   # 0.21.92: the sealed token opened
     except (OSError, ValueError):
         return False
     at = float((inv or {}).get("at") or 0) if isinstance(inv, dict) else 0
@@ -705,6 +709,7 @@ MEDIA_STREAM_TIMEOUT = 600      # a paused player may hold the connection a long
 
 def _note(msg):
     fn = _MEDIA_LOG[0]
+    msg = kastr_secret.mask(msg)   # 0.21.92
     try:
         if callable(fn):
             fn(msg)
@@ -886,7 +891,9 @@ def _prefs_clean_value(key, val):
             val = json.dumps(val, separators=(",", ":"))
         except Exception:
             return None
-    if key == "kastr.lastjoin":
+    if key == "kastr.lastjoin" and re.match(r"^kv1:[A-Za-z0-9_-]+$", val):
+        pass   # 0.21.92: the page's wrapped form (assets/vault.js: AES-GCM under the browser's own key) -- kept as it is
+    elif key == "kastr.lastjoin":
         try:
             obj = json.loads(val)
         except Exception:
@@ -930,7 +937,7 @@ def prefs_load(path):
     if not raw.strip():
         return None
     try:
-        d = json.loads(raw)
+        d = kastr_secret.open_doc(path, json.loads(raw))   # 0.21.92: camera URLs with a password are kept sealed
     except Exception:
         return None
     items = d.get("items") if isinstance(d, dict) else None
@@ -966,8 +973,10 @@ def prefs_merge(path, updates):
             items[k] = s
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"v": 1, "at": time.time(), "items": items}, f)
+        with open(tmp, "w", encoding="utf-8") as f:   # 0.21.92: a value carrying a password / token sealed
+            json.dump(kastr_secret.seal_doc(path, {"v": 1, "at": time.time(), "items": items}), f)
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
         for i in range(5):
             try:
                 os.replace(tmp, path)
@@ -2186,7 +2195,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _diag_get(self):
             if not self._local():
                 return self._deny("diagnostics")   # 0.17.0
-            body = json.dumps(diag_ref, indent=1, default=str).encode()
+            body = kastr_secret.mask(json.dumps(diag_ref, indent=1, default=str)).encode()   # 0.21.92: no code or token
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -2474,7 +2483,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             fid = uuid.uuid4().hex
             token = uuid.uuid4().hex
             name = os.path.basename(unquote(self.headers.get("X-Kastr-Name") or "file"))[:200] or "file"
-            meta = {"id": fid, "name": name, "size": n, "token": token,
+            meta = {"id": fid, "name": name, "size": n, "token": kastr_secret.digest(token),   # 0.21.92: the uploader holds the token
                     "room": (self.headers.get("X-Kastr-Room") or "")[:64],
                     "owner": unquote(self.headers.get("X-Kastr-Owner") or "")[:64],
                     "kind": (self.headers.get("X-Kastr-Kind") or "file")[:16],
@@ -2589,7 +2598,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     meta = json.load(f)
             except OSError:
                 return self._json_cors(404, {"error": "no such file"})
-            if token != meta.get("token") and not self._admin_for(str(meta.get("room") or "")) and not kastr_relay._local_only(self):   # 0.21.2: or an admin of its room; 0.21.3: or the operator's own page
+            if not kastr_secret.digest_matches(meta.get("token"), token) and not self._admin_for(str(meta.get("room") or "")) and not kastr_relay._local_only(self):   # 0.21.2: or an admin of its room; 0.21.3: or the operator's own page
                 return self._json_cors(403, {"error": "not the owner"})
             for p in (path, path + ".json"):
                 try:
@@ -2980,7 +2989,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()[:80]
             if not re.match(r"^[a-z0-9.+-]+/[a-z0-9.+-]+$", ctype):
                 ctype = "application/octet-stream"
-            meta = {"id": fid, "name": name, "size": n, "token": uuid.uuid4().hex,
+            meta = {"id": fid, "name": name, "size": n, "token": kastr_secret.digest(uuid.uuid4().hex),   # 0.21.92
                     "room": room, "owner": unquote(self.headers.get("X-Kastr-Op") or "")[:64],
                     "kind": "chat", "ctype": ctype, "via": ctx.get("via") or "", "at": int(time.time())}
             path = os.path.join(d, fid)

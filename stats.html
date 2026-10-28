@@ -8,6 +8,7 @@
 	<title>Relay Stats — KASTR</title>
 
   <script src="/assets/client.js"></script>
+  <script src="/assets/vault.js"></script><!-- 0.21.92: the saved code and the browse tokens are kept wrapped (AES-GCM, a non-extractable key) -->
   <script>/* 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): the relay's ~stats name
      every room, so they ride a token. This page asks for an access code of this fleet (or reuses the one KASTR saved on this
      machine, or a browse token this tab already holds), mints a BROWSE token here (same origin: /api/token), and the stats
@@ -77,7 +78,9 @@
         if (!c) { lock(true, "Type the access code first."); return; }
         mint(c, false).then(function (ok) { if (ok && i) i.value = ""; });
       });
-      fetch("/api/auth", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      var opened = (window.__kastrVault && window.__kastrVault.ready) || Promise.resolve();   // 0.21.92: the saved code opened first
+      Promise.all([fetch("/api/auth", { cache: "no-store" }).then(function (r) { return r.json(); }), opened.catch(function () {})]).then(function (all) {
+        var d = all[0];
         if (!d || !d.secured) return;   // an open relay: its stats are open
         var v = saved(KEY) || saved("kastr.browse." + origin);   // this tab's own, or the KASTR page's (same relay, same tab)
         if (v) { take(v.token, v.exp); return; }

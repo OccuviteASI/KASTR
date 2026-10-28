@@ -416,7 +416,8 @@ class Audit(HubBase):
         self.assertEqual((rows[0]["state"], rows[0]["why"]), ("ended", "restart"))
         self.assertIn(BOX, reg2.machines)   # the pinned key survives
         with open(reg.path, encoding="utf-8") as f:
-            self.assertIn(self.key, f.read())   # owner-only file (0600 on POSIX)
+            self.assertNotIn(self.key, f.read())   # 0.21.92: the pinned key is sealed on disk
+        self.assertEqual(reg2.machines[BOX]["key"], self.key)
 
     def test_the_machines_own_log_folds_per_session(self):
         d = tempfile.mkdtemp()

@@ -2,6 +2,71 @@
 
 What changed in each build, newest first.
 
+## v0.21.91 — Co-presenters, your main room, the closest relay, GIFs and emoji in Messages, and passcode resets
+
+**Co-presenters (Kenton: "allow them to show their camera instead of the main presenters camera while they are presenting their part of the slides").**
+- **Presenters and Backstage** are now two sections in the presenter view, each with an Add button and a searchable picker.
+- **Added presenters have the same powers as the main presenter:** slides, notes, mode, Reporter background, people and End.
+- **Hand over on the spot:** "Hand over to <name>" on another presenter's row, "Take over" on your own. Only the camera in the slide changes: the slides, and the videos in them, carry on. Viewers see a name tag when a deck has more than one presenter.
+- **"Can control my mic and camera"** is set per backstage person, by each presenter for themselves.
+- **If the main presenter leaves or drops,** the next presenter carries on with the same deck at the same slide (at once on Leave, after about 10 s on a dropped connection). Slide videos are kept in the deck store, encrypted like the slides and readable only by presenters and backstage, so they keep playing after a takeover (up to 200 MB per video).
+
+**Audience mute (Kenton: "By default when presenting, everyone else should be muted and not able to unmute themselves unless they are added as a presenter").**
+- "Audience muted" is on by default: only presenters can talk; backstage is muted too. It is enforced on the sender and on every 0.21.91 receiver. People on older versions still hear everyone.
+- **Ask to speak:** the audience raises a hand; the presenter can Let them talk, Dismiss or Mute again. Being allowed to talk only lets you unmute: nothing is unmuted for you.
+- **An "Ask to speak" switch** (Kenton: "add a switch to turn off ask to speak"), on by default: turned off, raised hands go down and nobody can raise one.
+
+**Black / White hide the slide for the room only, and stay on until you turn them off.** You keep seeing the real slide, with a "Room sees: Black" badge, and it stays blank across Next / Back.
+
+**Presenter view: your slide preview and notes first.** The notes take the rest of the right-hand column, the next slide is a small thumbnail, and Mode, Mic & audience and People fold away. The dividers can be dragged. On short windows (such as a 200 % display) the slide column narrows so the notes get more room. Locking your computer no longer ends a presentation.
+
+**Your main room (Kenton: "Regular people with the Publisher code should start in their 'My room' instead of the lobby").**
+- **Profile > Main room:** My room (the default) or the Lobby. It is kept on the hub with your My room, so every device you unlock uses it.
+- **Launch goes straight into your main room,** without the Join room page.
+- **Leave never logs you out:** it takes you to your main room, or to the Lobby when you are already there. There is no Leave in the Lobby. More > Sign out… goes back to the Join room page.
+- **Removed by an admin, or the room was closed:** you land in your main room with a note saying what happened.
+- **Guests see only the Lobby and the room they were invited to,** enforced by the hub too.
+
+**The closest relay, automatically (Kenton: "On launch of KASTR always do a check to find the closest relay and select that").**
+- Every launch measures the fleet's relays (and relays on this network) and picks the fastest. The relay dropdown shows each relay's round trip; a pick by hand lasts until KASTR closes.
+- "No relays are available right now" when none answers; KASTR keeps trying and connects by itself.
+- If your relay stops answering for 15 s, KASTR moves to the next closest and back into your room.
+- Every hour it checks again and moves only when another relay is clearly closer in two checks in a row, and never while you are presenting, recording, sharing control, sending a file or talking.
+- **Relays on your network (mDNS) now show on the Join room page.** Relays from another fleet are listed but never picked automatically.
+
+**Messages.**
+- **Emoji:** a 🙂 button in the message box with the same set as Room Chat.
+- **GIFs (Kenton: "add gif search options as well to the chat/messages"):** a GIF button in Messages and Room Chat. Searches go through the hub, so GIPHY never sees anyone's address, rated PG-13. In Messages a GIF is sent as an encrypted copy. Turn it on by pasting a GIPHY API key on the hub's Relay page (and on the standby hub's, for failover); without a key the button is hidden.
+- **Message text can be selected and copied.**
+- **"Chat" is now "Room Chat",** so it can't be confused with Messages.
+- **Desktop notifications** are a switch; "Change My room code" heading fixed; buttons centred.
+
+**Change your name: My room, messages and your photo move with it.** The setup card's Change name (and saving a new name in Profile) renames your My room and messages for real; your history stays readable. Others see "<old> is now <new>"; the old name keeps reaching you for 90 days and nobody else can take it.
+
+**My room is remembered across the fleet,** not per relay address: switching between 127.0.0.1, a LAN address or another relay of the same fleet no longer asks you to set it up again.
+
+**A short My room passcode no longer locks you out (Kenton: "they aren't able to login with the old password and can't change to the new password").** Since 0.21.89 the My room form refused any passcode under 8 characters before asking the hub, so someone whose passcode was set earlier with 4–7 characters could never type it, and never reached "Pick a longer My room code". The old passcode now opens My room once, and Messages then asks for a longer one (the old one is remembered, never typed twice). New My rooms still need 8 or more.
+
+**Reset a My room passcode (admins).** "Reset My room passcode…" on a person's right-click, and a My rooms card on the hub's Relay page. The admin sets or generates a temporary passcode (shown once, never stored); the person keeps their pins and must pick their own passcode at their next My room open. Messages then asks for their previous passcode to keep their history. Every reset is recorded (who, when, for whom; never the code).
+
+**Shares.**
+- **"Hide my shares"** (View menu) stops showing your own RTSP cameras, grids, screen/window/media shares and webcam self-view on your screen, saving CPU, while everyone else still sees them. "Stop my cameras for everyone" is the renamed old item; "Hide me" is gone.
+- **Deleting a room removes the shares listed into it.** A room that simply lapses keeps them, and they are back when the name is used again.
+- **Shares follow a renamed room** (box cameras, page shares and grids), with one notice.
+- **RTSP retry alerts** only after the 1st and 5th failure, grouped, instead of on every retry.
+- **No "Show in other rooms too?" pop-up** on every share.
+- **The Share page's buttons** are no longer hidden behind its alert.
+
+**A shared screen no longer freezes on one picture (Kenton: the person controlling a Windows screen share saw only KASTR, frozen).** When Windows closed a monitor capture (a display change does that: resolution or scaling, a monitor sleeping, dock/undock, remote desktop, a driver reset), KASTR kept repeating the last picture for ever and told nobody. A closed capture now restarts by itself within about a second. If the picture stops changing for 8 s for any other reason, the capture is restarted too. Either way the reason goes into launch.log and /api/diag.
+
+**Smaller fixes.**
+- Streams: right-click a stream for its options.
+- Mesh map: hovering a relay shows just its name, people count and total in / out.
+- The KASTR window starts maximized again when it was maximized (Windows at high scaling).
+- KASTR's web server queues more connections, so pages no longer half-load until a reload.
+- Room Chat: the message box no longer shows scroll arrows or stays tall after sending.
+- Test runs no longer show a sharing bar on the desktop.
+
 ## v0.21.90 — Profile photos that load for everyone
 
 **No more broken profile photos (Kenton: "I'm often getting users that have uploaded a photo showing as a broken link instead of the photo they uploaded").**

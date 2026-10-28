@@ -483,15 +483,15 @@ def _iconify(d, w, maximize):
     """0.21.92: maximized first when the restore should come back maximized (EWMH _NET_WM_STATE), then iconic (ICCCM
     WM_CHANGE_STATE IconicState -- what XIconifyWindow sends)."""
     d.x.XSendEvent.restype = c_int
-    d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XEvent)]
+    d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XClientEventU)]
     if maximize:
-        ev = XEvent()
+        ev = XClientEventU()
         c = ev.xclient
         c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, int(w), 32
         c.message_type = d.atom("_NET_WM_STATE")
         c.l[0], c.l[1], c.l[2], c.l[3] = 1, d.atom("_NET_WM_STATE_MAXIMIZED_VERT"), d.atom("_NET_WM_STATE_MAXIMIZED_HORZ"), 1
         d.x.XSendEvent(d.dpy, d.root, 0, (1 << 19) | (1 << 20), ctypes.byref(ev))
-    ev = XEvent()
+    ev = XClientEventU()
     c = ev.xclient
     c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, int(w), 32
     c.message_type = d.atom("WM_CHANGE_STATE")

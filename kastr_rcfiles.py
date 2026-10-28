@@ -64,6 +64,9 @@ OFFERS_KEPT = 4                 # offers still served (an older copy whose trans
 DEFAULTS = {"rc_files": "on", "rc_file_max_mb": 2048, "rc_session_max_mb": 8192, "rc_files_auto_mb": 100,
             "rc_image_max_mb": 32, "rc_files_keep_min": 10}
 OID_RE = re.compile(r"^[0-9a-f]{16}$")
+# 0.21.92: what the person at this computer may do to a private session's transfer from their red bar (rcx-agent.html acts on it)
+ASK_RE = re.compile(r"^(rxcancel|(txcancel|get):[0-9a-f]{16}|close:[A-Za-z0-9_-]{1,40})$")
+SHOW_S = 5          # a private session's card rows older than this are not shown (its helper page posts them every second)
 RCID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 MARK = "application/x-kastr-rc"          # X11 target that says "KASTR put this here"
 WIN_MARK = "KASTR remote files"           # the Windows clipboard format that says the same
@@ -1060,6 +1063,9 @@ class Session:
         self.scan = None            # a scan in progress (thread)
         self.note = None            # the last "why there is no offer" (too big, links skipped ...)
         self.ended = None
+        self.show = []              # 0.21.92: a private session's card rows (op "show"), for the person's red bar
+        self.show_at = 0.0
+        self.asks = []              # 0.21.92: the person's Cancel / Get from that bar, for the helper page
 
     def used(self):
         return self.sent_bytes + self.recv_bytes
@@ -1549,6 +1555,41 @@ class Files:
         self.log("rc files: transfer of %s cancelled" % describe(inc.items, inc.kind))
         return {"ok": True}, 200
 
+    # ---- 0.21.92: a PRIVATE session's card (rcx-agent.html is headless): it posts its rows, the person's red bar shows them
+    # (GET status "show") and their Cancel / Get goes back through "ask" -- this computer's own pages only (the loopback guard)
+    def show(self, rcid, rows):
+        clean = []
+        for r in (rows if isinstance(rows, list) else [])[:6]:
+            if not isinstance(r, dict):
+                continue
+            one = {"k": str(r.get("k") or "")[:60], "t": str(r.get("t") or "")[:300],
+                   "level": str(r.get("level") or "") if r.get("level") in ("ok", "warn", "info") else ""}
+            try:
+                if r.get("pct") is not None:
+                    one["pct"] = max(0, min(100, int(r.get("pct"))))
+            except (TypeError, ValueError):
+                pass
+            b = r.get("b")
+            if isinstance(b, list) and len(b) == 2 and ASK_RE.match(str(b[0])):
+                one["b"] = [str(b[0]), str(b[1])[:24]]
+            if one["k"] and one["t"]:
+                clean.append(one)
+        with self.lock:
+            s = self._sess(rcid)
+            s.show, s.show_at = clean, self.clock()
+            asks, s.asks = s.asks, []
+        return {"ok": True, "asks": asks}, 200
+
+    def ask(self, rcid, a):
+        a = str(a or "")
+        if not ASK_RE.match(a):
+            return {"ok": False, "error": "bad action"}, 400
+        with self.lock:
+            s = self._sess(rcid)
+            if a not in s.asks:
+                s.asks = (s.asks + [a])[-8:]
+        return {"ok": True}, 200
+
     # ---- what the page reads
     def status(self):
         s = self.s
@@ -1558,6 +1599,7 @@ class Files:
         return {"session": {"rcid": s.rcid, "role": s.role, "sent": s.sent_bytes, "recv": s.recv_bytes, "used": s.used(),
                             "max": s.cfg["rc_session_max_mb"] << 20},
                 "offer": cur["pub"] if cur else None, "note": s.note,
+                "show": s.show if s.show and self.clock() - s.show_at < SHOW_S else [],   # 0.21.92
                 "rx": {oid: inc.progress() for oid, inc in list(s.incoming.items())[-6:]}}
 
 
@@ -1636,11 +1678,15 @@ def _dispatch(f, p):
             return f.done(rcid, str(p.get("oid") or ""))
         if op == "cancel":
             return f.cancel(rcid, str(p.get("oid") or ""))
+        if op == "show":
+            return f.show(rcid, p.get("rows"))
+        if op == "ask":
+            return f.ask(rcid, p.get("a"))
         if op == "sent":
             return f.sent(rcid, str(p.get("oid") or ""), str(p.get("state") or ""), str(p.get("who") or "")[:40])
     except PermissionError as e:
         return {"ok": False, "error": str(e)}, 409
-    return {"ok": False, "error": "op is begin | renew | end | recv | done | cancel | sent"}, 400
+    return {"ok": False, "error": "op is begin | renew | end | recv | done | cancel | sent | show | ask"}, 400
 
 
 def handle_api(handler, log=None, ini=None):

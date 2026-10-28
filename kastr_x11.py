@@ -423,7 +423,7 @@ class XClientMessageEvent(ctypes.Structure):
                 ("message_type", Atom), ("format", c_int), ("l", c_long * 5)]
 
 
-class XEvent(ctypes.Union):
+class XClientEventU(ctypes.Union):   # 0.21.92: was XEvent -- it shadowed XEvent = c_long * 24 (the X11 bar's event loop broke)
     _fields_ = [("xclient", XClientMessageEvent), ("pad", c_long * 24)]
 
 
@@ -444,8 +444,8 @@ def maximize_xid(xid):
     """0.21.88: ask the window manager to maximize one window (EWMH _NET_WM_STATE)."""
     with Display() as d:
         d.x.XSendEvent.restype = c_int
-        d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XEvent)]
-        ev = XEvent()
+        d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XClientEventU)]
+        ev = XClientEventU()
         c = ev.xclient
         c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, int(xid), 32
         c.message_type = d.atom("_NET_WM_STATE")
@@ -466,9 +466,9 @@ def maximize_pid(pid):
         if not mine:
             return 0
         d.x.XSendEvent.restype = c_int
-        d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XEvent)]
+        d.x.XSendEvent.argtypes = [c_void_p, Window, c_int, c_long, ctypes.POINTER(XClientEventU)]
         for w in mine:
-            ev = XEvent()
+            ev = XClientEventU()
             c = ev.xclient
             c.type, c.send_event, c.display, c.window, c.format = 33, 1, d.dpy, w, 32   # ClientMessage
             c.message_type = d.atom("_NET_WM_STATE")

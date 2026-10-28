@@ -299,9 +299,22 @@ function build() {
   // localStorage since everything is same-origin).
   const HIST_KEY = "kastr.relay.history";
   // 0.21.34 (Kenton: "automatically prefill these relays and show as normal, if they are online or not"): the fleet's
-  // relays are always in the lists (after this machine's own recent ones); the Go Live page reads the same list
-  const KNOWN_RELAYS = ["http://10.10.105.190:4443", "http://10.13.20.196:4443", "http://10.126.104.2:4443", "http://10.11.252.203:4443"];
-  window.__KASTR_KNOWN_RELAYS = KNOWN_RELAYS;
+  // relays are always in the lists (after this machine's own recent ones). 0.21.93 (Kenton: "remove the built-in relay
+  // addresses"): no relay IPs ship in KASTR -- the fleet's relays are the hub's list (cached by the Go Live page after the
+  // access code, kastr.relays.fleet, with the hub's names), then the web address (the first run's relay, the last resort)
+  const WEB_RELAY = (() => { const v = "__KASTR_WEB_RELAY__"; return /^https?:[/][/]/.test(v) ? v : ""; })();
+  const fleetRelays = () => {   // [{url, name}]: each relay of the hub's list once (its first address), then the web address
+    const out = [];
+    try {
+      const d = JSON.parse(localStorage.getItem("kastr.relays.fleet") || "null");
+      for (const r of (d && Array.isArray(d.relays) ? d.relays : []).slice(0, 16)) {
+        const u = Array.isArray(r?.urls) ? String(r.urls[0] || "") : "";
+        if (/^https?:[/][/]/.test(u)) out.push({ url: u, name: String(r.name || "").slice(0, 40) });
+      }
+    } catch {}
+    if (WEB_RELAY && !out.some((f) => f.url === WEB_RELAY)) out.push({ url: WEB_RELAY, name: "" });
+    return out;
+  };
   const relayHist = () => {
     try { return JSON.parse(localStorage.getItem(HIST_KEY) || "[]").filter(Boolean); }
     catch { return []; }
@@ -320,10 +333,10 @@ function build() {
   const histStatus = new Map();   // url -> true | false | null
   // 0.21.33 (Kenton: relay names, the address on hover): the names the Go Live page learned (same origin, same key);
   // a nameless entry asks this machine's probe once per open (it answers the machine itself only)
-  const relayNameOf = (u) => { try { return (JSON.parse(localStorage.getItem("kastr.relay.names") || "{}") || {})[u] || ""; } catch { return ""; } };
+  const relayNameOfSaved = (u) => { try { return (JSON.parse(localStorage.getItem("kastr.relay.names") || "{}") || {})[u] || ""; } catch { return ""; } };
   const nameAsked = new Set();
   const askName = async (u) => {
-    if (nameAsked.has(u) || relayNameOf(u)) return;
+    if (nameAsked.has(u) || relayNameOfSaved(u)) return;
     nameAsked.add(u);
     try {
       const r = await fetch("/api/lan/probe?url=" + encodeURIComponent(u), { cache: "no-store" }).then((x) => x.json());
@@ -348,8 +361,9 @@ function build() {
   const paintRelayHist = (probe = true) => {
     const box = pop.querySelector(".rhist");
     if (!box) return;
-    const recent = relayHist().slice(0, 5);
-    const list = [...recent, ...KNOWN_RELAYS.filter((u) => !recent.includes(u))];   // 0.21.34: + the fleet's relays
+    const recent = relayHist().slice(0, 5), fl = fleetRelays(), fname = new Map(fl.map((f) => [f.url, f.name]));
+    const list = [...recent, ...fl.map((f) => f.url).filter((u) => !recent.includes(u))];   // 0.21.34: + the fleet's relays; 0.21.93: the hub's list + the web address
+    const relayNameOf = (u) => relayNameOfSaved(u) || fname.get(u) || "";   // 0.21.93: a relay not named here yet: the hub's name for it
     box.replaceChildren(...list.map((u) => {
       const row = document.createElement("div");
       row.className = "rh" + (u === currentRelay ? " cur" : "");

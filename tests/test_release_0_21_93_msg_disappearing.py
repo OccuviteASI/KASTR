@@ -155,6 +155,23 @@ class HubTimers(unittest.TestCase):
         self.assertEqual(sb._exp_for(e, "bob"), T0 + 100 + H)
         self.assertEqual(sb.tick(T0 + 100 + H + 1)["expired"], 1)   # a promoted standby deletes it on time
 
+    def test_read_times_live_with_the_receipts(self):
+        """The from-read timers build on the receipt times (rcpt): a timed-read cursor per conversation ("t|<conv>") beside
+        the plain read cursor -- no second read-time store; it moves only for a 0.21.93 page reading a timed message."""
+        h = Hub()
+        o1, c, cid1 = h.send("ada", to="bob", ttl=0, now=T0)
+        h.read("bob", "p:ada", o1["seq"], now=T0 + 5)
+        self.assertNotIn("t|p:ada", h.m.rcpt.get("bob") or {}, "no timed message read: the timed cursor stays put")
+        self.assertIn("p:ada", h.m.rcpt["bob"])   # the plain receipt (the coordinator's ticks) is there
+        o2, c, cid2 = h.send("ada", to="bob", ttl=H, now=T0 + 10)
+        h.read("bob", "p:ada", o2["seq"], now=T0 + 20)
+        self.assertEqual(h.m.rcpt["bob"]["t|p:ada"], [[o2["seq"], int(T0 + 20)]])
+        self.assertFalse(any("rd" in st for st in h.m.tst.values()))
+        # a later read of the same conversation does not move the time of the one already read
+        h.read("bob", "p:ada", o2["seq"], now=T0 + 500)
+        self.assertEqual(h.m._exp_for(h.m.msgs[o2["seq"]], "bob"), T0 + 20 + H)
+        self.assertEqual(h.m._exp_for(h.m.msgs[o2["seq"]], "ada"), T0 + 20 + H)   # the sender's copy: the first read
+
     def test_restart_keeps_timer_state(self):
         h = Hub()
         o, c, cid = h.send("ada", to="bob", ttl=H, now=T0)

@@ -49,6 +49,7 @@ MSG_GROUP_MAX = 50                  # people in one group
 MSG_SEND_RATE = (120, 60)           # messages one device may send per minute
 MSG_FILE_RATE = (40, 600)           # attachments one device may upload per 10 minutes
 MSG_TOTAL_MAX = 200000              # messages one hub keeps (the oldest go first)
+RCPT_KEEP = 60                      # 0.21.93: cursor advances kept per list (delivered; read per conversation) -- the receipt times
 MSG_NOTE_KEEP_S = 30 * 86400        # "a new device unlocked your messages" notes
 MSG_PING_KEEP_S = 600
 PHOTO_MAX = 256 * 1024              # 0.21.90: one profile photo (bytes)
@@ -84,6 +85,23 @@ PFID_RE = re.compile(r"^p-[0-9a-f]{16}$")      # ... a photo as a store "file" (
 def name_disp(name):
     """A person's name as shown (trimmed, inner spaces collapsed, at most 48) -- kastr_relay.personal_name."""
     return " ".join(str(name or "").split())[:NAME_MAX]
+
+
+def _rcpt_merge(a, b):
+    """0.21.93: two receipt-time lists [[seq, at], ...] as one -- the earliest time each seq was reached, newest RCPT_KEEP."""
+    best = {}
+    for x in list(a or []) + list(b or []):
+        try:
+            q, t = int(x[0]), int(x[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        best[q] = min(t, best.get(q, t))
+    out, low = [], None
+    for q in sorted(best, reverse=True):   # a smaller seq reached no earlier than a bigger one adds nothing (the bigger covers it)
+        if low is None or best[q] < low:
+            out.append([q, best[q]])
+            low = best[q]
+    return out[::-1][-RCPT_KEEP:]
 
 
 def name_key(name):
@@ -224,11 +242,12 @@ class Messenger:
         self.groups = m.get("groups") if isinstance(m.get("groups"), dict) else {}
         self.reads = m.get("reads") if isinstance(m.get("reads"), dict) else {}        # nk -> {conv: seq}
         self.cursors = m.get("cursors") if isinstance(m.get("cursors"), dict) else {}  # device host -> {nk: seq, "at": t}
+        self.rcpt = m.get("rcpt") if isinstance(m.get("rcpt"), dict) else {}           # 0.21.93: nk -> {"d" | conv: [[seq, at], ...]}
         self.notes = m.get("notes") if isinstance(m.get("notes"), dict) else {}        # nk -> [{id, at, host, kind}]
         self.files = m.get("files") if isinstance(m.get("files"), dict) else {}        # fid -> {at, size, by, who: [nk] | None}
         self.photos = m.get("photos") if isinstance(m.get("photos"), dict) else {}     # 0.21.90: nk -> {h, at, type, size, by, name} (h "": removed)
-        # 0.21.93 timers: read / open times of timed messages, tombstones, conversation defaults, the send-later store
-        self.tst = m.get("tst") if isinstance(m.get("tst"), dict) else {}              # uid -> {rd: {nk: t}, op: {nk: t}}
+        # 0.21.93 timers: view-once open times (read times: the timed-read cursors in rcpt, see _rd_at), tombstones, conversation defaults, the send-later store
+        self.tst = m.get("tst") if isinstance(m.get("tst"), dict) else {}              # uid -> {op: {nk: t}}
         self.gone = m.get("gone") if isinstance(m.get("gone"), dict) else {}           # uid -> when it was deleted
         self.gonef = m.get("gonef") if isinstance(m.get("gonef"), dict) else {}        # fid -> when (its message's timer ran out)
         self.convt = m.get("convt") if isinstance(m.get("convt"), dict) else {}        # conversation key -> {s, at, by}
@@ -263,7 +282,7 @@ class Messenger:
     # ---- persistence ----------------------------------------------------------------------------------------------
     def _meta(self):
         return {"fleet": self.fleet, "seq": self.seq, "persons": self.persons, "groups": self.groups, "reads": self.reads,
-                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos,
+                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos, "rcpt": self.rcpt,
                 "tst": self.tst, "gone": self.gone, "gonef": self.gonef, "convt": self.convt, "sched": self.sched}   # 0.21.93
 
     def _touch(self, now=False):
@@ -329,6 +348,14 @@ class Messenger:
                     self.notes.pop(nk, None)
             for h in [h for h, c in self.cursors.items() if now - float(c.get("at") or 0) > MSG_KEEP_S]:
                 self.cursors.pop(h, None)
+            for nk in list(self.rcpt):   # 0.21.93: receipt times older than the messages they could describe
+                r = self.rcpt[nk]
+                for k in list(r):
+                    r[k] = [x for x in r[k] if float(x[1]) >= cut]
+                    if not r[k]:
+                        r.pop(k, None)
+                if not r:
+                    self.rcpt.pop(nk, None)
             for gid in [g for g, r in self.groups.items() if r.get("deleted") and now - float(r.get("deleted") or 0) > MSG_KEEP_S]:
                 self.groups.pop(gid, None)
             for nk in [k for k, ph in self.photos.items() if not ph.get("h") and now - float(ph.get("at") or 0) > PHOTO_KEEP_GONE_S]:
@@ -475,12 +502,23 @@ class Messenger:
             t = (st.get("op") or {}).get(nk)
             return min(float(t) + VO_OPEN_S, cap + VO_OPEN_S) if t else cap
         ttl = int(e.get("ttl") or 0)
-        rd = st.get("rd") or {}
         if nk == e.get("from"):
-            ts = [float(t) for k, t in rd.items() if k != nk]
+            ts = [t for t in (self._rd_at(e, r) for r in self._readers(e)) if t]
             return min(ts) + ttl if ts else cap
-        t = rd.get(nk)
+        t = self._rd_at(e, nk)
         return float(t) + ttl if t else cap
+
+    def _rd_at(self, e, nk):
+        """When `nk` read the timed message `e` on a 0.21.93 page: their TIMED-READ cursor for its conversation, kept with the
+        receipt times (rcpt[nk]["t|<conv>"] = [[seq, at], ...]) -- the first advance that reached its seq. A separate cursor
+        from the plain read one (rcpt[nk][conv]) because an older page's read (it showed a line, not the message) must not
+        start a timer, and a 0.21.93 page reading what an older one already marked read must. It moves only when a read
+        reaches a timed message it had not reached, so its newest RCPT_KEEP entries cover every live timed message; a trimmed
+        entry could only make a time later (never earlier). -> epoch s | None (not read yet)."""
+        lst = (self.rcpt.get(nk) or {}).get("t|" + self._conv_of(e, nk)) or []
+        q = int(e.get("seq") or 0)
+        ts = [int(x[1]) for x in lst if int(x[0]) >= q]
+        return min(ts) if ts else None
 
     def _exp_msg(self, e):
         """When the hub deletes a timed message: every reader done (or the cap)."""
@@ -909,6 +947,14 @@ class Messenger:
         """A send-later entry's version: moves with every change, across hub copies (the higher one wins a merge)."""
         return max(int(now * 1000), int((cur or {}).get("ver") or 0) + 1)
 
+    def _rcpt_add(self, nk, key, seq, now):
+        """0.21.93: when `nk`'s delivered ("d") or read (conv) cursor reached `seq` -- the receipt marks' hover times."""
+        lst = self.rcpt.setdefault(nk, {}).setdefault(key, [])
+        if lst and int(lst[-1][0]) >= seq:
+            return
+        lst.append([int(seq), int(now)])
+        del lst[:-RCPT_KEEP]
+
     def op_pull(self, p, host, now):
         """{as: [names], since, ack?} -> {msgs, more, groups, reads, keys, notes, locked, cur}. `ack` = the highest seq this
         device has safely kept (delivered); `since` = what it already has."""
@@ -931,6 +977,7 @@ class Messenger:
             c = self.cursors.setdefault(host, {})
             for nk in mine:
                 c[nk] = max(int(c.get(nk) or 0), min(ack, self.seq))
+                self._rcpt_add(nk, "d", c[nk], now)
             c["at"] = int(now)
             for nk in mine:
                 d = (self.persons[nk].setdefault("devices", {})).get(host)
@@ -981,9 +1028,11 @@ class Messenger:
                     continue
                 ex = max(self._exp_for(e, nk) for nk in me)
                 if ex > now:
-                    st = self.tst.get(self.uid_of(e)) or {}
-                    t = st.get("op" if e.get("vo") else "rd") or {}
-                    on = any((k != nk if nk == e.get("from") else k == nk) for k in t for nk in me)
+                    if e.get("vo"):
+                        t = (self.tst.get(self.uid_of(e)) or {}).get("op") or {}
+                        on = any((k != nk if nk == e.get("from") else k == nk) for k in t for nk in me)
+                    else:
+                        on = any(self._rd_at(e, r) for nk in me for r in (self._readers(e) if nk == e.get("from") else [nk]))
                     tm[self.uid_of(e)] = [int(ex), 1 if on else 0]
             sch = []
             for u, sc in sorted(self.sched.items(), key=lambda kv: kv[1].get("rel") or 0):
@@ -1027,6 +1076,7 @@ class Messenger:
         r = self.reads.setdefault(nk, {})
         if seq > int(r.get(conv) or 0):
             r[conv] = seq
+            self._rcpt_add(nk, conv, seq, now)
             if len(r) > 2000:
                 for k in sorted(r, key=lambda k: r[k])[:len(r) - 2000]:
                     r.pop(k, None)
@@ -1037,17 +1087,18 @@ class Messenger:
         return {"ok": True}, 200
 
     def _read_timed(self, nk, conv, seq, now):
-        """0.21.93: `nk` read `conv` up to `seq`: each timed message there they had not read starts its timer for them."""
+        """0.21.93: `nk` read `conv` up to `seq`: each timed message there they had not read starts its timer for them (their
+        timed-read cursor in rcpt moves -- see _rd_at)."""
+        lst = (self.rcpt.get(nk) or {}).get("t|" + conv) or []
+        top = int(lst[-1][0]) if lst else 0
         hit = set()
         for s in sorted(self.tix):
             e = self.msgs.get(s)
-            if not e or s > seq or e.get("vo") or e.get("from") == nk or nk not in (e.get("who") or []) or self._conv_of(e, nk) != conv:
+            if not e or s <= top or s > seq or e.get("vo") or e.get("from") == nk or nk not in (e.get("who") or []) or self._conv_of(e, nk) != conv:
                 continue
-            rd = self.tst.setdefault(self.uid_of(e), {}).setdefault("rd", {})
-            if nk not in rd:
-                rd[nk] = int(now)
-                hit |= set(e.get("who") or [])
+            hit |= set(e.get("who") or [])
         if hit:
+            self._rcpt_add(nk, "t|" + conv, seq, now)
             self._touch(now=True)
             self._ping_person(sorted(hit), self.seq)   # the sender's copy starts on the first read: their devices hear it
         return len(hit)
@@ -1198,7 +1249,8 @@ class Messenger:
             if not per:
                 continue
             d = max([int((self.cursors.get(h) or {}).get(o) or 0) for h in (per.get("devices") or {})] or [0])
-            out[o] = {"d": d, "r": int((self.reads.get(o) or {}).get("p:" + nk) or 0)}
+            rc = self.rcpt.get(o) or {}   # 0.21.93: + when each cursor got there (the marks' hover times)
+            out[o] = {"d": d, "r": int((self.reads.get(o) or {}).get("p:" + nk) or 0), "dt": list(rc.get("d") or []), "rt": list(rc.get("p:" + nk) or [])}
         return {"ok": True, "ticks": out}, 200
 
     # ---- groups ------------------------------------------------------------------------------------------------------
@@ -1444,6 +1496,13 @@ class Messenger:
             if o in c:
                 v = c.pop(o)
                 c[n] = max(int(v or 0), int(c.get(n) or 0))
+        if o in self.rcpt:   # 0.21.93: the receipt times follow the name too
+            mine = self.rcpt.setdefault(n, {})
+            for k, v in self.rcpt.pop(o).items():
+                mine[k] = _rcpt_merge(mine.get(k), v)
+        for r in self.rcpt.values():
+            if "p:" + o in r:
+                r["p:" + n] = _rcpt_merge(r.get("p:" + n), r.pop("p:" + o))
         if o in self.notes:
             self.notes[n] = (self.notes.get(n) or []) + self.notes.pop(o)
         for f in self.files.values():
@@ -1485,6 +1544,9 @@ class Messenger:
             for d in st.values():
                 if isinstance(d, dict) and o in d:
                     d[n] = d.pop(o)
+        for r in self.rcpt.values():   # the timed-read cursors of a 1:1 with them (rcpt[o] itself moved above)
+            if "t|p:" + o in r:
+                r["t|p:" + n] = _rcpt_merge(r.get("t|p:" + n), r.pop("t|p:" + o))
         for k in [k for k in self.convt if k.startswith("p:") and o in k[2:].split("|")]:
             a, _, b = k[2:].partition("|")
             self.convt["p:" + "|".join(sorted([n if a == o else a, n if b == o else b]))] = self.convt.pop(k)
@@ -1633,7 +1695,7 @@ class Messenger:
             if meta_ver != mv:
                 out["meta"] = json.loads(json.dumps({"persons": self.persons, "groups": self.groups, "reads": self.reads,
                                                      "cursors": self.cursors, "notes": self.notes, "files": self.files,
-                                                     "photos": self.photos,   # 0.21.90: + the profile photos (their bytes: missing_files)
+                                                     "photos": self.photos, "rcpt": self.rcpt,   # 0.21.90: + the profile photos (their bytes: missing_files)
                                                      "tst": self.tst, "gone": self.gone, "gonef": self.gonef,   # 0.21.93 timers
                                                      "convt": self.convt, "sched": self.sched}))
             msgs, size, more = [], 0, False
@@ -1768,6 +1830,12 @@ class Messenger:
                         mine[str(k)[:60]] = max(int(q), int(mine.get(str(k)[:60]) or 0))
                     except (TypeError, ValueError):
                         pass
+            for nk, r in (meta.get("rcpt") or {}).items() if isinstance(meta.get("rcpt"), dict) else []:   # 0.21.93
+                if not name_key(nk) or not isinstance(r, dict):
+                    continue
+                mine = self.rcpt.setdefault(name_key(nk), {})
+                for k, lst in r.items():
+                    mine[str(k)[:60]] = _rcpt_merge(mine.get(str(k)[:60]), lst)
             for nk, lst in (meta.get("notes") or {}).items() if isinstance(meta.get("notes"), dict) else []:
                 have = {x.get("id") for x in self.notes.get(name_key(nk)) or []}
                 add = [dict(x) for x in (lst if isinstance(lst, list) else []) if isinstance(x, dict) and x.get("id") and x.get("id") not in have]
@@ -1865,7 +1933,7 @@ class Messenger:
             if u in self.gone or not isinstance(st, dict):
                 continue
             mine = self.tst.setdefault(str(u)[:120], {})
-            for k in ("rd", "op"):
+            for k in ("op",):   # (read times: the rcpt merge)
                 for nk, t in (st.get(k) or {}).items() if isinstance(st.get(k), dict) else []:
                     try:
                         t = int(t)

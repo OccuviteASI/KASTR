@@ -616,8 +616,20 @@ def host_suffix():
     _HOST_SUFFIX = sfx
     return sfx
 
-# The relay currently on the network.
-DEFAULT_RELAY = "http://10.10.105.190:4443"
+# 0.21.93 (Kenton: "use the web address as the relay on the first run, then have the hub distribute the known relays"): the
+# ONLY relay address built in -- the fleet's public web address, reached through Cloudflare (WebSocket). The hub hands every
+# member its registry after the access code and the app moves to the fastest relay; no private IPs ship in the app. kastr.ini
+# `relay =` and --relay still override it; KASTR_DEFAULT_RELAY replaces it for labs and tests (never production).
+WEB_RELAY = "https://kastr.madlabs.app/relay"
+
+
+def _default_relay():
+    v = str(os.environ.get("KASTR_DEFAULT_RELAY") or "").strip()
+    return v if re.match(r"^(https?|wss?)://[A-Za-z0-9._~%\-\[\]:]+(/[A-Za-z0-9._~/-]*)?$", v) else WEB_RELAY
+
+
+DEFAULT_RELAY = _default_relay()
+WEB_RELAY_TOKEN = "__KASTR_WEB_RELAY__"   # 0.21.93: the pages' first-run / last-resort relay (DEFAULT_RELAY)
 
 # 0.8.6: the launcher installs its on-demand updater here (None in a dev
 # harness -- source checkouts never self-update).
@@ -1050,6 +1062,16 @@ def clean_public_url(s):
 def public_web_base():
     """The address anyone can open: kastr.ini public_url on this machine, else the hub's."""
     return clean_public_url(ini_get("public_url")) or HUB_PUBLIC[0]
+
+
+def public_relay_url():
+    """0.21.93: this machine's own public web relay (kastr.ini public_url + /relay) for the hub's registry row -- the web
+    address counts as part of the fleet. Never the hub's learned address: a spoke must not claim the hub's."""
+    b = clean_public_url(ini_get("public_url"))
+    return (b + kastr_relay.WEB_RELAY_PATH) if b else None
+
+
+kastr_relay.PUBLIC_RELAY_FN = public_relay_url
 _TUNNEL_OPEN_SAID = [0.0]   # 0.20.0: when the "proxied visitors reach an OPEN relay" line was last logged
 SINGLE_PORT = False   # 0.19.0: kastr.ini single_port -- every remote page gets the /relay web relay
 RTSP_BRIDGE = [None]  # 0.21.16: the running Bridge (make_server sets it) -- kastr_relay's hub `rtsp` command and the spoke registration reach the switch through it
@@ -1640,6 +1662,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             (PRECACHE_TOKEN.encode(), json.dumps(precache_list(root)).encode()),   # 0.20.0: sw.js
             (HOST_TOKEN.encode(), page_host.encode()),
             (CLIENT_TOKEN.encode(), (b"web" if remote else b"app")),
+            (WEB_RELAY_TOKEN.encode(), DEFAULT_RELAY.encode()),   # 0.21.93: the first-run / last-resort relay
             # 0.21.17: the prebuilt stats bundle (assets/stats-*.js) names the relay's stats prefix and skips '.'-led
             # keys; the relay now publishes under ~stats (relay.toml [stats] prefix) -- retarget it at serve time so the
             # vendored bundle on disk stays byte-identical. Both needles occur only in that bundle.

@@ -3204,6 +3204,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     return self._chat_reply(405, {"error": "GET only"})
                 # 0.15.0: + the relay-defined room groups {gid: {name, order, rooms}}; 0.21.65: + renamed {old: new}
                 return self._json_cors(200, self._rooms_guest_cut({"rooms": store.rooms_public(), "closed": store.closed_public(),
+                                                                   "closedWhy": store.closed_why_public() if hasattr(store, "closed_why_public") else {},   # 0.21.92
                                                                    "groups": store.groups_public(), "renamed": store.renamed_public()}))
 
             if path == "/api/rooms/settings":
@@ -3450,7 +3451,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             except Exception:
                 pass
             out = {"rooms": rooms, "closed": hub_obj.get("closed") or {}, "groups": hub_obj.get("groups") or {}, "fromHub": True,
-                   "renamed": hub_obj.get("renamed") or {}}   # 0.21.65
+                   "renamed": hub_obj.get("renamed") or {},   # 0.21.65
+                   "closedWhy": hub_obj.get("closedWhy") or {}}   # 0.21.92: "pres" -- a template's room closed at End
             if offline:
                 out["hubOffline"] = True
                 out["hubAt"] = int((_HUB_ROOMS_CACHE[0] or {}).get("at") or 0)
@@ -3598,6 +3600,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 150
                 elif path0 == "/api/msg":        # 0.21.88: a spoke asks the hub (PBKDF2 happens in the browser, not here)
                     to = 30
+                elif path0 == "/api/templates/deck":   # 0.21.92: a template deck's file (up to 64 MB, through a spoke to the hub)
+                    to = 320
+                elif path0 == "/api/templates":  # 0.21.92: meeting templates (a spoke asks the hub; an apply runs many board ops there)
+                    to = 40
                 elif path0 == "/api/people":     # 0.21.90: a profile photo goes on to the hub through a spoke
                     to = 20
                 elif path0.startswith("/api/avatar/"):   # 0.21.90: a spoke may fetch the photo from the hub first
@@ -4201,6 +4207,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/people",                                       # 0.21.78: beats, person invites, My room shared
                          "/api/access",                                       # 0.21.89: Ask for access (ask, status, cancel, answer)
                          "/api/msg", "/api/msg/file",                         # 0.21.88: private messages (+ an attachment's ciphertext)
+                         "/api/templates", "/api/templates/fed", "/api/templates/deck",   # 0.21.92: meeting templates (+ their decks)
                          "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
                          "/api/library", "/api/library/token", "/api/library/admin",   # 0.21.84: the stream library
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
@@ -5104,6 +5111,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                         "/api/invites"):                                                        # 0.21.75: a room's live invite links
                 return self._auth_proxy("GET")
             if path == "/api/msg/file":                                         # 0.21.88: a message attachment's ciphertext
+                return self._auth_proxy("GET")
+            if path == "/api/templates/deck":                                   # 0.21.92: a template deck's file (a read grant)
                 return self._auth_proxy("GET")
             if path.startswith("/api/avatar/"):                                 # 0.21.90: a person's profile photo (the hub's copy)
                 return self._avatar_get()

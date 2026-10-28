@@ -87,8 +87,10 @@ class Page(unittest.TestCase):
         self.assertIn('a.textContent = dlPlat(plat) + " ', self.p)   # About: the platform and its size only
         self.assertNotIn('" (prepared on the host when you click)"', self.p)
 
-    def test_processor_setting_rides_every_bag(self):
-        self.assertEqual(self.p.count('proc: ["auto", "npu", "gpu", "standard"].includes('), 2)
+    def test_processor_setting_rides_every_bag(self):   # 0.21.93 (Kenton): no Processor choice -- always Auto
+        self.assertEqual(self.p.count('             proc: "auto" };'), 2)
+        self.assertNotIn('id="fxProc"', self.p)
+        self.assertNotIn('data-proc=', self.p)
         self.assertIn('proc: camFx.proc || "auto" });', self.p)
 
 

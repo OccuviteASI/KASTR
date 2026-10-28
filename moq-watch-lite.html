@@ -1796,10 +1796,10 @@
     background:var(--surface); color:var(--asi-green, #3fb950); display:inline-flex; align-items:center; justify-content:center; }
   .rb .pl .icon { width:9px; height:9px; }
   .rb .lk { position:absolute; top:-3px; left:-3px; width:12px; height:12px; border-radius:50%;   /* 0.21.36: top-left (was bottom-right) */
-    background:var(--surface); display:inline-flex; align-items:center; justify-content:center; }
+    background:var(--surface); color:var(--text); display:inline-flex; align-items:center; justify-content:center; }   /* 0.21.93: its own ink (it took the badge's: black on lime) */
   .rb .lk .icon { width:8px; height:8px; }
   .rb .kp { position:absolute; bottom:-3px; left:-3px; width:12px; height:12px; border-radius:50%;   /* 0.21.31: kept open */
-    background:var(--surface); display:inline-flex; align-items:center; justify-content:center; }
+    background:var(--surface); color:var(--text); display:inline-flex; align-items:center; justify-content:center; }   /* 0.21.93: its own ink */
   .rb .kp .icon { width:9px; height:9px; }
   .sbcard .sbflags { display:inline-flex; align-items:center; gap:4px; }
   .sbfoot { flex:none; padding:8px 4px 2px; }
@@ -3289,8 +3289,6 @@
     <div class="sw"><label class="switch"><input type="checkbox" id="fxSelfMirror"><i></i></label><span>Mirror my own view<small>Only you see it mirrored</small></span></div>
     <div class="sw"><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label><span>Mirror for everyone<small>Flips the picture you send</small></span></div>
     <div class="sw"><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label><span>Background quality<small id="fxQualityLbl">Balanced</small></span></div>
-    <div class="sw"><span>Processor<small id="fxProcLbl">Auto</small></span><div class="seg" id="fxProc" role="radiogroup" aria-label="Where the background effect runs">
-      <button type="button" data-proc="auto" title="The NPU when this computer has one, else the graphics card, else the standard model">Auto</button><button type="button" data-proc="npu" title="The neural processor (Intel AI Boost, AMD XDNA, Qualcomm Hexagon...)">NPU</button><button type="button" data-proc="gpu" title="The graphics card">GPU</button><button type="button" data-proc="standard" title="The standard model (MediaPipe) -- works everywhere">Standard</button></div></div>
     <button class="opt" id="camXs" type="button">Show my camera in other rooms&hellip;</button>   <!-- 0.21.62 -->
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
@@ -4112,8 +4110,123 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (i < 0 || parts.length < i + 3) return;
     let target = "";
     try { target = atob(parts[i + 2].replace(/-/g, "+").replace(/_/g, "/")); } catch {}
-    if (target && mineNames.has(target)) { try { window.__publisher?.nudge?.(target); } catch {} }
+    const kind = target.includes("#") ? target.split("#").pop() : "";   // 0.21.93: <path>#video = the picture stopped, the sound plays
+    if (kind) target = target.slice(0, target.length - kind.length - 1);
+    if (target && mineNames.has(target)) { try { window.__publisher?.nudge?.(target, kind); } catch {} }
   }
+  // 0.21.93 (item 4; field, Kordale's window share into his My room, Support Laptop watching through an invite link: "every once
+  // in a while it would stop sending a feed" -- the SOUND kept playing, the picture stopped, and only Pause + Resume brought it
+  // back): a tile whose PICTURE stops while its SOUND keeps arriving heals in steps. VSTALL_RESUB_MS without a new video frame ->
+  // this page re-subscribes; VSTALL_REPORT_MS later, still no frame -> it reports the stall to the owner (room.json `stalled`,
+  // kind "video" -- My room and invite-link guests included), again every VSTALL_REREPORT_MS while it lasts (VSTALL_MAX_REPORTS
+  // at most); the owner restarts the share's moq import, then its whole pair (Publisher.heal). Never for a tile whose picture this
+  // page shed itself (weak connection), a parked / hidden / unwatched tile, a hidden page, or a silent one (a paused share's card
+  // has no sound). One line per step (status bar; launch.log on the app), the caption shown and the track clocks in diag (vstall).
+  const VSTALL_ARM_MS = 2000, VSTALL_RESUB_MS = 6000, VSTALL_REPORT_MS = 6000, VSTALL_REREPORT_MS = 15000, VSTALL_AUDIO_MS = 3000, VSTALL_MAX_REPORTS = 6;
+  const vstallTotals = { stalls: 0, resubs: 0, reports: 0, healed: 0, ended: 0 };
+  const vstallLog = [];   // the last stalls: {name, at, caption(s), clocks, steps, end}
+  function vstallStep(st, s) {   // pure: one 1 s tick of one tile -> {start, resub, report, end, ms, why}
+    const now = s.now, out = {};
+    if (s.vFrames < st.vf) st.vf = s.vFrames;   // a re-subscribe starts the counters over -- not progress
+    else if (s.vFrames > st.vf) { st.vf = s.vFrames; st.vAt = now; st.had = true; }
+    if (s.vBytes < st.vb) st.vb = s.vBytes; else if (s.vBytes > st.vb) { st.vb = s.vBytes; st.vbAt = now; }
+    if (s.aBytes < st.ab) st.ab = s.aBytes; else if (s.aBytes > st.ab) { st.ab = s.aBytes; st.aAt = now; }
+    if (!st.vAt) st.vAt = now;
+    const reset = () => { st.since = 0; st.resubAt = 0; st.reportAt = 0; st.reports = 0; st.resubs = 0; };
+    if (s.exempt) {
+      if (st.since) { out.end = "exempt"; out.why = s.exempt; out.reports = st.reports; }
+      reset();
+      st.vAt = now;   // the clock starts over when the exemption ends
+      return out;
+    }
+    if (st.since && st.vAt > st.since) {   // a frame landed
+      out.end = "healed"; out.ms = now - st.since; out.resubs = st.resubs; out.reports = st.reports;
+      reset();
+      return out;
+    }
+    const quiet = now - st.vAt;
+    const audio = st.aAt > 0 && now - st.aAt < VSTALL_AUDIO_MS;
+    if (!st.since) {
+      // never had a picture, or the sound stopped too (no sound since the last frame: a share that ended, a dead relay -- the
+      // general stall check's case), or a gave-up stall with no frame since
+      if (!st.had || !audio || st.aAt <= st.vAt || quiet < VSTALL_ARM_MS) return out;
+      reset();
+      st.since = st.vAt;
+      out.start = true;
+    } else if (!audio) {   // the sound stopped as well: not a picture-only stall any more
+      out.end = "silent"; out.reports = st.reports; out.ms = now - st.since; reset(); st.vAt = now;
+      return out;
+    }
+    if (!st.resubAt) {
+      if (quiet >= VSTALL_RESUB_MS) { st.resubAt = now; st.resubs++; out.resub = true; }
+      return out;
+    }
+    if (st.reports >= VSTALL_MAX_REPORTS) {
+      if (now - st.reportAt >= VSTALL_REREPORT_MS) { out.end = "gave up"; out.reports = st.reports; out.ms = now - st.since; reset(); st.vAt = now; st.had = false; }   // quiet until a frame lands again
+      return out;
+    }
+    if (!st.reportAt ? now - st.resubAt >= VSTALL_REPORT_MS : now - st.reportAt >= VSTALL_REREPORT_MS) {
+      st.reportAt = now; st.reports++; out.report = true;
+      if (st.reports > 1) { st.resubAt = now; st.resubs++; out.resub = true; }   // and look again after the owner's restart
+    }
+    return out;
+  }
+  function vstallExempt(name, t) {
+    if (t.watch.getAttribute("visible") === "never") return "parked";
+    if (t.shed) return "shed (weak connection)";
+    if (t.hasVideo === false) return "no video";
+    if (t.fb) return "fallback player";
+    if (t.noDecode) return "cannot decode";
+    if (!isWatched(name)) return "unwatched";
+    if (!t.pane.classList.contains("shown") || t.pane.style.display === "none") return "hidden";
+    if (document.visibilityState === "hidden") return "page hidden";
+    return "";
+  }
+  function vstallCaption(t) {
+    try {
+      const pw = t.pane.querySelector(".pwait")?.textContent || "", fc = t.pane.classList.contains("audio-only") ? (t.faceCap?.textContent || "") : "";
+      return (fc || pw || (t.pictureStopped ? "picture stopped" : "frozen picture")).slice(0, 120);
+    } catch { return ""; }
+  }
+  function vstallNote(line) {
+    log(line);
+    if ((window.__kastrClient?.class || "app") !== "web") { try { fetch("/api/rtsp/note", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: line }) }).catch(() => {}); } catch {} }   // the bridge writes "page: " + text
+  }
+  function vstallTick(name, t, nowMs) {
+    let vBytes = 0, vFrames = 0, aBytes = 0;
+    try { const vs = t.watch.video?.out?.stats?.peek?.(); vBytes = vs?.bytesReceived ?? 0; vFrames = vs?.frameCount ?? 0; } catch {}
+    try { aBytes = t.watch.audio?.out?.stats?.peek?.()?.bytesReceived ?? 0; } catch {}
+    const st = t.vs || (t.vs = { vf: 0, vAt: 0, vb: 0, vbAt: 0, ab: 0, aAt: 0, had: false, since: 0, resubAt: 0, reportAt: 0, reports: 0, resubs: 0, rec: null });
+    const r = vstallStep(st, { now: nowMs, vFrames, vBytes, aBytes, exempt: vstallExempt(name, t) });
+    const ago = (x) => (x ? ((nowMs - x) / 1000).toFixed(1) + " s" : "never");
+    const clocks = () => "video frame " + ago(st.vAt) + " ago (" + st.vf + "), video bytes " + ago(st.vbAt) + " ago, sound bytes " + ago(st.aAt) + " ago";
+    if (r.start) {
+      vstallTotals.stalls++;
+      st.rec = { name, at: Date.now(), captions: [vstallCaption(t)], clocks: clocks(), steps: [], end: null };
+      vstallLog.push(st.rec); if (vstallLog.length > 12) vstallLog.shift();
+    }
+    const step = (what) => { if (st.rec) { st.rec.steps.push(what + " @" + ((nowMs - st.since) / 1000).toFixed(0) + "s"); const c = vstallCaption(t); if (c && st.rec.captions.at(-1) !== c) st.rec.captions.push(c); st.rec.clocks = clocks(); } };
+    if (r.resub) {
+      vstallTotals.resubs++; step("re-subscribed");
+      vstallNote("video stall on " + name + ": the picture stopped " + ((nowMs - st.since) / 1000).toFixed(0) + " s ago while the sound plays -- re-subscribing (" + clocks() + "; caption \u201c" + vstallCaption(t) + "\u201d)");
+      resubscribe(name, "Picture stopped while the sound plays");
+    }
+    if (r.report) {
+      vstallTotals.reports++; step("reported");
+      const into = !wrRoomOf(name);   // 0.21.44: never into my room for a watched room's tile
+      if (into) { try { window.__stallAnnounce?.set?.(name, "video"); } catch {} }
+      st.reported = into;
+      vstallNote("video stall on " + name + ": still no picture " + ((nowMs - st.since) / 1000).toFixed(0) + " s in -- " + (into ? "reported to its owner (report " + st.reports + ")" : "not reported (a watched room's tile)") + " (" + clocks() + "; caption \u201c" + vstallCaption(t) + "\u201d)");
+    }
+    if (r.end) {
+      if (st.reported) { st.reported = false; try { window.__stallAnnounce?.clear?.(name); } catch {} }
+      if (st.rec) { st.rec.end = r.end + (r.why ? " (" + r.why + ")" : "") + (r.ms ? " after " + (r.ms / 1000).toFixed(1) + " s" : ""); st.rec = null; }
+      if (r.end === "healed") { vstallTotals.healed++; vstallNote("video stall on " + name + ": picture back after " + (r.ms / 1000).toFixed(1) + " s (re-subscribed " + r.resubs + "x, reported " + r.reports + "x)"); }
+      else { vstallTotals.ended++; if (r.reports || r.end === "gave up") vstallNote("video stall on " + name + ": " + r.end + (r.why ? " -- " + r.why : "") + " (reported " + (r.reports || 0) + "x)"); }
+    }
+  }
+  window.__vstall = () => ({ ...vstallTotals, recent: vstallLog.map((x) => ({ ...x })),
+    tiles: [...tiles].filter(([, t]) => t.vs && t.vs.since).map(([n, t]) => ({ name: n, sinceS: Math.round((performance.now() - t.vs.since) / 1000), resubs: t.vs.resubs, reports: t.vs.reports })) });   // rig + diag
 
   // ---- my streams (self-view) ---------------------------------------------
   //
@@ -17170,7 +17283,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
              bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror,   // 0.21.0: phone cameras
-             proc: ["auto", "npu", "gpu", "standard"].includes(s.proc) ? s.proc : "auto" };   // 0.21.21: where the effect runs
+             proc: "auto" };   // 0.21.21: where the effect runs; 0.21.93 (Kenton): always Auto -- no Processor choice
   }
   camFx = normalizeCamFx(camFx);
   // 0.21.5: on a device whose camera runs the upright loop (WebKit), a Rotate saved before 0.21.5 was
@@ -17468,20 +17581,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     document.getElementById("fxSelfMirror").checked = selfMirrorOn();   // 0.21.72
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
-    paintFxProc();   // 0.21.21
   }
-  function paintFxProc() {   // 0.21.21: the choice + what actually runs ("Auto \u00b7 NPU 33 ms")
-    const p = camFx.proc || "auto";
-    for (const b of document.querySelectorAll("#fxProc button")) b.classList.toggle("on", b.dataset.proc === p);
-    const e = window.__fxEngine?.(), names = { npu: "NPU", gpu: "GPU", standard: "Standard" };
-    const lbl = document.getElementById("fxProcLbl"); if (!lbl) return;
-    lbl.textContent = (names[p] || "Auto") + (e && e.engine ? " \u00b7 running on " + (names[e.engine] || e.engine) + (e.ms ? " " + e.ms + " ms" : "") + (e.note ? " (" + e.note + ")" : "") : "");
-  }
-  setInterval(() => { if (!document.getElementById("camPop")?.hidden) paintFxProc(); }, 1500);
-  document.getElementById("fxProc")?.addEventListener("click", (e) => {   // 0.21.21
-    const b = e.target.closest("button[data-proc]"); if (!b) return;
-    camFx.proc = b.dataset.proc; pushCamFx(); paintFxProc();
-  });
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
   {   // 0.21.71: Blur strength (the slider and the % box agree; the camera follows within 150 ms) and the Add split button
     let amtT = 0;
@@ -18051,6 +18151,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const [name, t] of tiles) {
       const el = t.watch;
       if (t.cg) continue;   // 0.21.66 (e): drawn here, nothing to starve
+      try { vstallTick(name, t, nowMs); } catch (e) { console.warn("KASTR: video-stall check", e); }   // 0.21.93
       if (el.getAttribute("visible") === "never") { t.starveSince = nowMs; t.framesSince = nowMs; paintNeverPainted(name, t, nowMs, 0); continue; }   // 0.21.15: drops a stale notice
       // No video advertised: video bytes are then legitimately zero
       // forever, and posting "starved" made the publisher print a bogus
@@ -18083,7 +18184,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         if (t.framesSince === undefined) t.framesSince = nowMs;
         if (nowMs - t.framesSince > FRAMES_FLAT_MS) {
           t.pictureStopped = true;
-          if (!t.frozenResubAt || nowMs - t.frozenResubAt > 30000) { t.frozenResubAt = nowMs; resubscribe(name, "Picture stopped"); }
+          if (!t.vs?.since && (!t.frozenResubAt || nowMs - t.frozenResubAt > 30000)) { t.frozenResubAt = nowMs; resubscribe(name, "Picture stopped"); }   // 0.21.93: not while the video-stall heal owns it
         }
       }
       paintNeverPainted(name, t, nowMs, bytes);   // 0.21.15 (7b-5): the no-frame case stallReport cannot see -- BEFORE the bytes-advance `continue`, so the notice updates and clears while bytes flow
@@ -18097,7 +18198,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       // viewer stall back-channel (0.8.7): a tile that HAD picture and stopped
       // tells the owner (a real viewer is starving on that exact path), and
       // after 12s re-subscribes locally in case the wedge is on this side.
-      if ((t.lastStarveBytes ?? 0) > 0 && nowMs - t.starveSince > 5000) stallReport(name, nowMs);
+      if ((t.lastStarveBytes ?? 0) > 0 && nowMs - t.starveSince > 5000 && !t.vs?.since) stallReport(name, nowMs);   // 0.21.93: the video-stall heal (sound still playing) reports its own, viewer first
       if (nowMs - t.starveSince > STARVED_AFTER_MS
           && nowMs - (t.lastStarvePost ?? 0) > STARVED_REPOST_MS) {
         t.lastStarvePost = nowMs;
@@ -19191,9 +19292,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (value?.meta && value.meta.url) list.push({ ...value.meta, id: value.id, ts: value.meta.ts || now });
           roomModel.files = list; break;
         }
-        case "stalled": {  // {path, on}
+        case "stalled": {  // {path, on, kind?} -- 0.21.93: kind "video" = the picture stopped while the sound plays
           const cur = roomModel.stalled.find((x) => x.path === value?.path);
-          if (value?.on) { if (cur) { cur.n = (now - cur.at < 60000 ? cur.n : 0) + 1; cur.at = now; } else roomModel.stalled = [...roomModel.stalled, { path: String(value.path), at: now, n: 1 }]; }
+          const kind = String(value?.kind || "").slice(0, 16);
+          if (value?.on) { if (cur) { cur.n = (now - cur.at < 60000 ? cur.n : 0) + 1; cur.at = now; if (kind) cur.kind = kind; else delete cur.kind; } else roomModel.stalled = [...roomModel.stalled, Object.assign({ path: String(value.path), at: now, n: 1 }, kind ? { kind } : {})]; }
           else roomModel.stalled = roomModel.stalled.filter((x) => x.path !== value?.path);
           if (roomModel.stalled.length > 16) roomModel.stalled = roomModel.stalled.slice(-16);
           break;
@@ -19484,7 +19586,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const at = Number(st.at) || 0;
       if ((prev.stalled.get(st.path) || 0) >= at) continue;
       prev.stalled.set(st.path, at);
-      try { window.__publisher?.nudge?.(st.path); } catch {}
+      try { window.__publisher?.nudge?.(st.path, String(st.kind || ""), path); } catch {}   // 0.21.93: + the kind and who reported it
     }
   }
   function memberClear(path, h) {
@@ -20056,6 +20158,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                  reading: [...memberSubs].map(([p, h]) => ({ path: p, values: h.room?.n || 0, ageS: h.room?.at ? Math.round((Date.now() - h.room.at) / 1000) : null })) }; } catch { return null; } })(),
       noCatalog: [...tiles].filter(([, t]) => t.noCatalog).map(([n, t]) => ({ name: n, waitedS: t.catWaitSince ? Math.round((performance.now() - t.catWaitSince) / 1000) : null,
         resubs: t.catResubs || 0, via: memberVia(personKeyOf(n)) || null })),
+      vstall: (() => { try { return window.__vstall(); } catch { return null; } })(),   // 0.21.93: picture stopped while the sound played -- steps, captions, track clocks
       congest: (() => { const c = window.__congest || {}; return { level: c.level || 0, steps: c.steps || 0, why: c.why || "", off: congestOff(), shed: [...tiles].filter(([, t]) => t.shed).length }; })(),   // 0.21.23
       audioDelay: (() => { const ad = window.__audioDelay || {}; return { extra: ad.extra || 0, steps: ad.steps || 0, late: ad.late || 0, lateFrames: ad.lateFrames || 0, maxBehind: Math.round(ad.maxBehind || 0) }; })(),   // 0.21.9
       fallbackRetries: Object.fromEntries([...tiles.entries()].filter(([, t]) => t.fbRetries).map(([n, t]) => [n, t.fbRetries()])),   // 0.21.8
@@ -22722,7 +22825,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // in the list, never picked from another fleet. Decided: lowest measured round trip; a manual pick lasts until KASTR closes (no
   // automatic moves then); a relay dead for ~15 s -> the next closest, back in the same room by the silent rejoin, and no moving
   // back this run; the hourly move needs a clear win twice (25 % and 10 ms) and waits while presenting, recording, under / giving
-  // remote control, sending a file or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
+  // remote control, sending a file, sharing a screen or window (0.21.93) or talking. Camera boxes, relay-only machines, viewer displays and web clients: as before.
   const RELAY_DEAD_MS = 15000;
   const FLEET_KEY = "kastr.relays.fleet";   // {at, relays: [{name, urls}]} -- the hub's registry, kept for the next launch
   const fleetCache = () => { try { const d = JSON.parse(localStorage.getItem(FLEET_KEY) || "null"); return d && Array.isArray(d.relays) ? d : null; } catch { return null; } };
@@ -22977,6 +23080,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { if (window.__rec?.state?.().recording) return "recording"; } catch {}
     try { const rs = window.__rc?.state?.(); if (rs?.ctl) return "controlling someone"; if (rs?.grant) return "under remote control"; } catch {}
     try { if ([...uploading.values()].some((u) => !u.done && !u.err)) return "sending a file"; } catch {}
+    try { if (window.__publisher?.sharingScreen?.()) return "sharing a screen or window"; } catch {}   // 0.21.93: a move reloads the page -- a browser share ends, a native one restarts on the new relay
     try { if ((window.__publisher?.talkAgo?.() ?? 1e9) < 10000) return "talking"; } catch {}
     return "";
   }
@@ -28388,7 +28492,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
              quality: fx.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror,   // 0.21.0
-             proc: ["auto", "npu", "gpu", "standard"].includes(fx.proc) ? fx.proc : "auto" };   // 0.21.21
+             proc: "auto" };   // 0.21.21; 0.21.93: always Auto (an older page's NPU / GPU / Standard pick too)
   }
   // 0.15.0: background markers -> something drawImage can take.
   //   bg:<key>        Blob in IndexedDB kastr-bg/bg (written by the Watch half) -> object URL, cached per key
@@ -33387,8 +33491,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     window.addEventListener("pagehide", clearAll);
     return { set, clear, clearAll };
   }
-  const stallAnn = keyedAnnouncer("~stalled", { state: (key, p) => window.__state.set("stalled", { path: key, on: p != null }) });
-  window.__stallAnnounce = { set: (path) => stallAnn.set(path, path), clear: (path) => stallAnn.clear(path) };
+  const stallAnn = keyedAnnouncer("~stalled", { state: (key, p) => window.__state.set("stalled", { path: key, on: p != null, kind: p != null && String(p).includes("#") ? String(p).split("#").pop() : "" }) });
+  window.__stallAnnounce = { set: (path, kind) => stallAnn.set(path, kind ? path + "#" + kind : path), clear: (path) => stallAnn.clear(path) };   // 0.21.93: + kind
   const fileAnn = keyedAnnouncer("~files", { state: (id, p) => window.__state.set("files", { id, meta: p ? JSON.parse(p) : null }) });
   window.__fileAnnounce = { set: (id, meta) => fileAnn.set(id, JSON.stringify(meta)), clear: (id) => fileAnn.clear(id) };
   // 0.21.90: no ~avatar announce and no `avatar` in room.json any more -- the hub keeps the photo (a 0.21.89 page shows initials)
@@ -33619,9 +33723,39 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       rebuildRtspMoq(g);
     }
   }
-  function nudgeFromViewer(fullPath) {
+  // 0.21.93 (item 4): a viewer's "the picture stopped while the sound plays" on my NATIVE screen / window share. The bridge's
+  // Publisher.heal decides and rate-limits (one heal per 30 s per share, 6 per 10 min): the moq import alone first, the whole pair
+  // when that did not bring the picture back. Several viewers reporting the same stall make one request (5 s).
+  function healFromViewer(slot, fullPath, from) {
+    const now = Date.now();
+    const who = String(from || "").split("/")[1] || "a viewer";
+    slot.healReports = (slot.healReports || 0) + 1;
+    if (now - (slot.healPostAt || 0) < 5000) return "dup";
+    slot.healPostAt = now;
+    const name = slot.entry.name;
+    if (!slot.pubWanted || slot.entry.sharePaused) {
+      log("Viewer " + who + " reported " + name + "'s picture stopped -- not healing (" + (slot.entry.sharePaused ? "the share is paused" : "it is not on the air") + ")");
+      nativePost("/api/rtsp/note", { text: "pair " + name + ": video stall reported by " + who + " -- not healing (" + (slot.entry.sharePaused ? "paused" : "not on the air") + ")" });
+      return "skip";
+    }
+    nativePost("/api/rtsp/note", { text: "pair " + name + ": video stall reported by " + who + " (picture stopped, sound playing; report " + slot.healReports + ") -- asking the bridge to heal it" });
+    (async () => {
+      const r = await nativePost("/api/rtsp/heal", { id: slot.entry.feedId, why: "viewer-video" });
+      const d = r?.did || "error";
+      slot.lastHeal = { at: Date.now(), did: d, reason: r?.reason || r?.error || "" };
+      log("Viewer " + who + " reported " + name + "'s picture stopped while its sound plays -- "
+          + (d === "import" ? "restarted its moq import (the capture kept running)" : d === "pair" ? "restarted the whole share (the import restart did not bring the picture back)"
+             : d === "limited" || d === "refused" ? "not restarting (" + (r.reason || d) + ")" : "could not heal it (" + (r?.error || "no answer") + ")"));
+    })();
+    return "post";
+  }
+  function nudgeFromViewer(fullPath, kind, from) {
     if (rtspSuspended) return;   // 0.21.16: a viewer's stall report against cameras that are switched off is not evidence (no grid rebuild, no nudge, no diag noise)
     const now = Date.now();
+    if (kind === "video") {   // 0.21.93: my screen / window share's picture stopped for a viewer while its sound kept playing
+      const vs = [...slots.values()].find((s2) => s2.rtsp && s2.native && chanPath(ensureHang(s2.entry.name)) === fullPath);
+      if (vs && isScreenShare(vs.entry)) { healFromViewer(vs, fullPath, from); return; }
+    }
     const ng = gridsSorted().find((g) => chanPath(ensureHang(g.entry.name)) === fullPath);   // 0.15.0: the grid by path
     if (ng) {
       // 0.21.5: a viewer's report is a hint, never the evidence. The grid is built and published from THIS
@@ -34089,6 +34223,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     opSlug: () => operatorSlug(),                            // 0.12.0: chat records carry the same op key as presence
     fakeTalk: (ms) => { talkForceUntil = Date.now() + (Number(ms) || 3000); },   // 0.12.0 (rig): pretend the mic is loud
     talkAgo: () => (talkLastLoud ? performance.now() - talkLastLoud : 1e9),   // 0.21.91: ms since my mic was last loud (the hourly relay move waits)
+    sharingScreen: () => { try { return added.some((a) => isScreenShare(a)); } catch { return false; } },   // 0.21.93: a screen / window / tab share (native or browser, paused too) -- the hourly relay move waits
     nudge: nudgeFromViewer,   // 0.8.7: viewer stall report -> nudge/rebuild
     refx: () => { for (const s2 of slots.values()) if (s2.entry.kind === "camera" && !s2.rtsp) applyFx(s2).catch(() => {}); },   // 0.21.5: the upright loop probe settling late
     resumeAudio: () => { try { ownAudioCtx?.resume?.(); denoiseCtx?.resume?.(); } catch {} },   // 0.8.9: phones

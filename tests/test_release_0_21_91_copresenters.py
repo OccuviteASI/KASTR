@@ -119,7 +119,7 @@ class ThePickerAndSections(unittest.TestCase):
         self.assertIn('btn("mv", "→ Presenter"', pp)
         self.assertIn('btn("x", "×"', pp)
         self.assertIn("if (M.edit && x.p !== M.own) {", pp)   # the page that runs the deck cannot be removed
-        self.assertIn('lab.append(cb, document.createTextNode("Can control my mic and camera"));', pp)
+        self.assertIn('lab.append(switchOf(cb), document.createTextNode("Can control my mic and camera"));', pp)
         self.assertIn("cb.checked = self.al.has(x.p);", pp)   # MY setting for that person
         self.assertIn("if (M.mePres) {", pp)   # presenters only (backstage sees the sections read-only)
 
@@ -201,7 +201,7 @@ class Ownership(unittest.TestCase):
 
     def test_orphaned_deck_waits_then_goes(self):
         sb = block(JS, "  async function syncBackstage() {", "  function endSeen(id, path) {")
-        self.assertIn("if (recs.has(id) || bk.ended || (mine && mine.id === id) || !bk.K || Date.now() - (bk.seenAt || 0) > ORPHAN_MS)", sb)
+        self.assertIn("if (recs.has(id) || bk.ended || (mine && mine.id === id) || !bk.K || Date.now() - (bk.seenAt || 0) > ORPHAN_MS || awayFrom(bk))", sb)   # 0.21.92: + I left its room
         self.assertIn("bk.orphan = true;", sb)
         es = block(JS, "  function endSeen(id, path) {", "  // 0.21.91: my requests")
         self.assertIn("if (who !== rec.own && !(rec.ps || []).some((x) => x.p === who)) return;", es)   # only its presenters say it ended

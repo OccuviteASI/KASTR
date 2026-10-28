@@ -67,8 +67,15 @@ Limits:
   - My room: owner-only; guest and access-list bans;
   - hub and spoke, both directions, including a 0.21.91-shaped spoke;
   - the page: CRLF, menu, dialog, wire strings, marked blocks.
-- Windows full suite: see the final report. test_npu_fx always fails; ignore it.
-- WSL full suite: see the final report.
+- **Older tests fixed** (my first suite run broke 5; all were my change, not theirs):
+  - 0.21.68 authMint throw line kept, with a ban-carrying throw added before it;
+  - 0.21.78 participantMenu invite line kept;
+  - 0.21.91 personalEnded window: the Remove / Ban texts moved into `rbEndedText`;
+  - 0.21.91 "one bound room-gone hook": the ban hook is now a plain function;
+  - test_relay_rtsp_cmd's `__new__` stub: `getattr` defaults.
+- **After `git merge main` (f719eef):**
+  - Windows full suite: 2166 tests, only test_npu_fx fails (always does). One test_release_0_21_92_autorun HTTP read timed out once while the relay lab ran beside it; it passes alone (21/21).
+  - WSL full suite: 2166 tests, only test_npu_fx fails.
 - JS syntax check of every script block (headless Edge): OK.
 - **Page check** (headless Edge, worktree served on 127.0.0.1:9245, `/api/**` blocked):
   - dialog buttons in order, "1 hour" on by default, 0 checkboxes;

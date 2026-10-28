@@ -1739,7 +1739,7 @@
   .xstab th:first-child, .xstab td:first-child { text-align:left; max-width:180px; overflow:hidden; text-overflow:ellipsis; }
   .xstab td:first-child { color:var(--text); }
   .xstab .lk { width:10px; height:10px; vertical-align:-1px; margin-left:3px; }
-  .xstab input { accent-color:var(--asi-blue); width:15px; height:15px; cursor:pointer; }
+  .xstab .switch { vertical-align:middle; }   /* 0.21.92 (Kenton): a toggle per room, not a checkbox */
   .pubui .camrow .xsbtn, .pubui .gghead .xsbtn { flex:none; height:auto; padding:2px 8px; font-size:10.5px; font-weight:500; background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:999px; }
   .pubui .camrow .xsbtn.on, .pubui .gghead .xsbtn.on { border-color:var(--asi-blue); color:var(--asi-blue); background:var(--asi-blue-glow); }
   #xsPop.xsprompt { left:50% !important; top:28% !important; transform:translateX(-50%); width:min(320px, calc(100vw - 24px)); box-shadow:0 18px 50px rgba(0,0,0,.55); }
@@ -4622,7 +4622,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = on.has(r.slug);
         cb.setAttribute("aria-label", "Show " + xsLabel(p) + " in " + r.slug);
         cb.addEventListener("change", async () => { cb.disabled = true; await xsToggle(p, r.slug, cb.checked); paintXsTable(true); });
-        td.appendChild(cb); tr.appendChild(td);
+        const sw = document.createElement("label"); sw.className = "switch sm";   // 0.21.92: a toggle, not a checkbox (a LABEL: no row label around it)
+        sw.append(cb, document.createElement("i"));
+        td.appendChild(sw); tr.appendChild(td);
       }
       tb.appendChild(tr);
     }
@@ -5758,7 +5760,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const lab = document.createElement("label"); lab.title = "Pin, spotlight and arrange My room with you (one person at a time)";
       const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = d.co === r.host;
       cb.onchange = async () => { const x = await personalPeopleCall({ op: "co", to: cb.checked ? r.host : "" }); if (!x.ok) { msEl.__say(x.error || "Refused.", true); cb.checked = !cb.checked; return; } msEl.__say(cb.checked ? (r.name || r.host) + " can arrange My room with you." : "Only you arrange My room."); msPaintList(x); };
-      lab.append(cb, document.createTextNode("Can arrange"));
+      const csw = document.createElement("span"); csw.className = "switch sm"; csw.append(cb, document.createElement("i"));   // 0.21.92: a toggle, not a checkbox
+      lab.append(csw, document.createTextNode("Can arrange"));
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "ghost"; rm.textContent = "Remove";
       rm.onclick = async () => {
         if (!(await kastrConfirm({ title: "Remove access", message: "Stop sharing My room with " + (r.name || r.host) + "?", detail: "If they are in it now, they go to the Lobby.", ok: "Remove", danger: true }))) return;
@@ -15693,7 +15696,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const sl = mkEl("label", "geshare"); sl.title = o.share.tip || "";
         const si = mkEl("input"); si.type = "checkbox"; si.checked = !!o.share.on;
         si.addEventListener("change", () => { c.share = si.checked; try { o.onShare?.(si.checked); } catch {} });
-        sl.append(si, o.share.label || "Share with this room"); tools.append(sl);
+        const ssw = mkEl("span", "switch sm"); ssw.append(si, mkEl("i"));   // 0.21.92: a toggle, not a checkbox
+        sl.append(ssw, o.share.label || "Share with this room"); tools.append(sl);
         c.share = !!o.share.on;
       }
       const lay = mkEl("button", "ghost gelay"); lay.type = "button"; lay.title = "Presets: how many spots and where (the cameras keep their order)";

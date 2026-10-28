@@ -1491,10 +1491,25 @@ def public_patterns():
     return out
 
 
+ANON_KIND = NS + "anon"   # 0.21.91: what a tokenless session may read -- nothing is ever published there
+
+
+def public_patterns_for(rooms):
+    """0.21.91: the public kinds of these rooms only (a guest's own room) -- never the relay's ~stats."""
+    out = []
+    for k in PUBLIC_KINDS:
+        if k == STATS_KIND:
+            continue
+        for room in sorted(rooms or ()):
+            out += [k + "/" + room, k + "/" + room + "/**"]
+    return out
+
+
 def public_grant():
-    """What a tokenless session gets: the public kinds, subscribe only (today's
-    `public = { subscribe = [...] }`). Publishing always needed a token."""
-    return {"publish": [], "subscribe": public_patterns()}
+    """What a tokenless session gets. 0.21.91 (Kenton: "Room names must not be visible to anyone without a fleet access code"):
+    NOTHING -- the public kinds (room names, who is where) ride a token now: a member's, or the Join room page's browse token
+    (an access code). Until 0.21.90 it was the public kinds, subscribe only. Publishing always needed a token."""
+    return {"publish": [], "subscribe": [ANON_KIND]}   # (an empty grant is refused outright -- the page's relay health needs the session)
 
 
 def claims_to_grant(claims, now=None):
@@ -1515,7 +1530,8 @@ def claims_to_grant(claims, now=None):
         pub = [p for p in pub if _is_control_put(p)]
         sub = []
     if "**" not in sub:
-        for q in public_patterns():
+        g = guest_rooms(claims)   # 0.21.91: a guest (an invite link, a My room guest) reads the public kinds of their room only
+        for q in (public_patterns() if g is None else public_patterns_for(g)):
             if q not in sub:
                 sub.append(q)
     grant = {"publish": pub, "subscribe": sub}
@@ -4537,13 +4553,17 @@ class AuthStore:
                 rows.append(row)
             return rows
 
-    def touch_room(self, slug, creator=""):
+    def touch_room(self, slug, creator="", create=True):
         """0.21.25: a room is in use -> its record's `at` moves; a name with no record becomes a PLAIN record (stored on
         the hub, listed everywhere, gone ROOM_TTL after its last use). Never changes a lock or the kept flag. -> created?
-        0.21.65: an old name of a renamed room is NOT re-created by a page still in it (it follows the redirect)."""
+        0.21.65: an old name of a renamed room is NOT re-created by a page still in it (it follows the redirect).
+        0.21.92: create=False (a touch without a member token: a page older than 0.21.92) keeps a live room alive and
+        never makes one."""
         with self.lock:
             now = time.time()
             rec = self.rooms.get(slug)
+            if not create and (rec is None or self._dead(rec, now)):
+                return False
             if rec is not None and self._dead(rec, now):
                 self._lapse_locked(slug, rec)   # 0.21.91: it lapsed -- the record made below is the same room again
             if rec is not None and not self._dead(rec, now):
@@ -6433,7 +6453,13 @@ class AuthService:
                     # 0.15.0: + the relay-defined room groups
                     out = {"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
                            "renamed": svc.store.renamed_public()}   # 0.21.65
-                    g = guest_rooms(svc._member_claims(self.headers.get("Authorization")))   # 0.21.91: a guest sees their room only
+                    # 0.21.91: a guest sees their room only; nobody without a token sees any. 0.21.92: the machine itself neither
+                    # (its Relay page reads /api/relay/rooms; a page reads with its token -- never before it checked the relay)
+                    c = svc._member_claims(self.headers.get("Authorization"))
+                    g = guest_rooms(c)
+                    if c is None:
+                        out = rooms_for_guest(out, set())
+                        out.update(guest=False, needCode=True)
                     self._reply(rooms_for_guest(out, g) if g is not None else out)
                 elif path == "/api/invites":           # 0.21.75: a room's live invite links (its creator or an admin)
                     qs = parse_qs(urlparse(self.path).query)
@@ -6702,6 +6728,25 @@ class AuthService:
     def locked_for(self, peer):
         return self.lockout.locked_for(peer)
 
+    def _browse_token(self, access, peer=""):
+        """0.21.91 (Kenton: "The Join room page shows no rooms until a code is typed and checked"): POST /api/token {browse: true,
+        code} -> a BROWSE token: no room, nothing to publish, the public kinds to read (the rooms, who is where) -- for any
+        access code of this fleet (viewer, publisher, admin; a relay without access codes: anyone). A wrong code counts in the
+        lockout like any code."""
+        wait = self.locked_for(peer)
+        if wait:
+            return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if self.store.configured():
+            ok = bool(access) and (self.store.check("viewer", access) or self.store.check("publisher", access)
+                                   or self.store.check("admin", access) or self._hub_admin_ok(access))
+            if not ok:
+                return self._fail(peer, "wrong access code", "(rooms list)", what="the rooms list of")
+        self._ok(peer)
+        now = int(time.time())
+        exp = now + VIEWER_TTL
+        tok = _mint(self.key, {"root": "", "get": [], "put": [], "browse": 1, "iat": now, "exp": exp})
+        return {"ok": True, "exp": exp, "ns": NS, "tokens": {"browse": tok}}, 200
+
     def _fail(self, peer, why, slug, what="room"):
         return self.lockout.fail(peer, why, slug, what)
 
@@ -6888,6 +6933,9 @@ class AuthService:
         if op == "close":
             return close_room(self.store, slug, p.get("roomKey"), p.get("vouch") == "admin", hook=ROOM_CLOSE_HOOK[0], log=self.log)
         if op == "touch":
+            if p.get("only") is True:   # 0.21.92: a spoke's tokenless touch (an old page) -- keep a live room alive, make none
+                self.store.touch_room(slug, str(p.get("creator") or ""), create=False)
+                return {"ok": True}, 200
             created = self.store.touch_room(slug, str(p.get("creator") or ""))
             return {"ok": True, "created": created}, 200
         if op in ("adopt", "lock") and personal_reserved(slug):
@@ -7038,6 +7086,8 @@ class AuthService:
             return self._admin_verify(str(p.get("admin") or ""), peer)
         if p.get("library") is True and not p.get("room"):   # 0.21.84: a library publisher token (no room)
             return self._library_token(p, peer)
+        if p.get("browse") is True and not p.get("room"):    # 0.21.91: the Join room page reads the rooms with an access code
+            return self._browse_token(str(p.get("code") or ""), peer)
         slug = str(p.get("room") or "")
         access = str(p.get("code") or "")
         room_code = p.get("roomCode")
@@ -15662,7 +15712,7 @@ class Relay:
     # 0.17.0: a remote reader (a LAN box, a web client) gets the public shape -- no
     # relay log, binary path, cluster/auth/internal detail; the federation block
     # keeps hub/token/tls only. The machine's own pages see everything.
-    PUBLIC_STATUS_DROP = ("log", "binary", "error", "auth", "internal", "cluster", "autostart")
+    PUBLIC_STATUS_DROP = ("log", "logRemote", "binary", "error", "auth", "internal", "cluster", "autostart")   # 0.21.92: + logRemote (room paths)
 
     def status(self, public=False):
         d = self._status_full()
@@ -16184,8 +16234,9 @@ def handle_api(handler, relay, path, set_relay_url=None):
         return True
     # 0.17.0: every other read under /api/relay/* (name, cluster, autostart, codes,
     # firewall, webport, lan, health, bans) belongs to the Relay page, which is a
-    # host page; the room list stays public (pages on other machines list rooms).
-    if not local and handler.command in ("GET", "HEAD") and not path.startswith("/api/relay/rooms"):
+    # host page. 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): the room list
+    # too -- only the Relay page reads /api/relay/rooms; pages elsewhere read /api/rooms/list with a token.
+    if not local and handler.command in ("GET", "HEAD"):
         reply({"error": "relay settings are read from the machine itself"}, 403)
         return True
 

@@ -8,6 +8,89 @@
 	<title>Relay Stats — KASTR</title>
 
   <script src="/assets/client.js"></script>
+  <script>/* 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): the relay's ~stats name
+     every room, so they ride a token. This page asks for an access code of this fleet (or reuses the one KASTR saved on this
+     machine, or a browse token this tab already holds), mints a BROWSE token here (same origin: /api/token), and the stats
+     bundle's connection carries it (window.__kastrTok -- kastr_serve rewrites the bundle's two `new URL(..)` calls at serve
+     time). Only the token is kept (sessionStorage); the code is never stored by this page. An open relay needs nothing. */
+  (function () {
+    var RELAY = "http://localhost:4443";   // the relay, substituted at serve time (as in the bundle)
+    var origin = "";
+    try { origin = new URL(RELAY).origin; } catch (e) {}
+    var tok = "", exp = 0, code = "", timer = null;
+    var KEY = "kastr.stats.browse." + origin;
+    window.__kastrTok = function (u) {
+      try {
+        var x = new URL(u);
+        x.searchParams.delete("jwt");
+        if (tok && x.origin === origin) x.searchParams.set("jwt", tok);   // never to a relay typed in by hand
+        return x.toString();
+      } catch (e) { return u; }
+    };
+    function saved(k) {
+      try { var v = JSON.parse(sessionStorage.getItem(k) || "null"); if (v && v.token && Number(v.exp) * 1000 > Date.now() + 60000) return v; } catch (e) {}
+      return null;
+    }
+    function reconnect() {
+      var i = document.getElementById("relay-url");
+      if (i) i.dispatchEvent(new Event("change"));
+    }
+    function lock(show, msg) {
+      var g = document.getElementById("kastrLock");
+      if (!g) return;
+      g.hidden = !show;
+      var m = document.getElementById("kastrLockMsg");
+      if (m) { m.textContent = msg || ""; m.hidden = !msg; }
+      var n = document.getElementById("nodes");
+      if (show && n) n.textContent = "Type an access code of this fleet to see the relay\u2019s activity.";
+      if (show) { try { document.getElementById("kastrLockCode").focus(); } catch (e) {} }
+    }
+    function take(t, e) {
+      tok = t; exp = Number(e) || 0;
+      try { sessionStorage.setItem(KEY, JSON.stringify({ token: tok, exp: exp })); } catch (x) {}
+      lock(false);
+      var n = document.getElementById("nodes");
+      if (n && /access code/.test(n.textContent || "")) n.textContent = "searching for nodes\u2026";
+      reconnect();
+      clearTimeout(timer);
+      var wait = exp * 1000 - Date.now() - 300000;   // a fresh token five minutes before this one ends (while the code is known)
+      if (code && wait > 0) timer = setTimeout(function () { mint(code, true); }, Math.min(wait, 2147483000));
+    }
+    function mint(c, quiet) {
+      return fetch("/api/token", { method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+                                   body: JSON.stringify({ browse: true, code: c }) })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d }; }); })
+        .then(function (x) {
+          if (x.ok && x.d && x.d.tokens && x.d.tokens.browse) { code = c; take(x.d.tokens.browse, x.d.exp); return true; }
+          if (!quiet) lock(true, x.status === 429 ? "Too many tries \u2014 wait a moment, then try again."
+                                 : (x.status >= 400 && x.status < 500) ? "Wrong access code for this relay." : "The relay did not answer \u2014 try again.");
+          return false;
+        })
+        .catch(function () { if (!quiet) lock(true, "The relay did not answer \u2014 try again."); return false; });
+    }
+    function start() {
+      var f = document.getElementById("kastrLockForm");
+      if (f) f.addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        var i = document.getElementById("kastrLockCode");
+        var c = String((i && i.value) || "").trim();
+        if (!c) { lock(true, "Type the access code first."); return; }
+        mint(c, false).then(function (ok) { if (ok && i) i.value = ""; });
+      });
+      fetch("/api/auth", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d || !d.secured) return;   // an open relay: its stats are open
+        var v = saved(KEY) || saved("kastr.browse." + origin);   // this tab's own, or the KASTR page's (same relay, same tab)
+        if (v) { take(v.token, v.exp); return; }
+        var lj = null;
+        try { lj = JSON.parse(localStorage.getItem("kastr.lastjoin") || "null"); } catch (e) {}
+        var c = lj && typeof lj.access === "string" ? lj.access.trim() : "";
+        if (!d.codes) { mint("", true).then(function (ok) { if (!ok) lock(true, ""); }); return; }   // secured on room codes alone
+        if (c) { mint(c, true).then(function (ok) { if (!ok) lock(true, ""); }); return; }
+        lock(true, "");
+      }).catch(function () {});
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
+  })();</script>
   <script type="module" crossorigin src="/assets/stats-1j1isRcX.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/reload-COfNSlsd.js">
   <link rel="stylesheet" crossorigin href="/assets/reload-BuioQcCC.css">
@@ -29,6 +112,19 @@
 				class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-neutral-900 border border-neutral-700">connecting…</span>
 		</div>
 	</header>
+
+	<!-- 0.21.92: shown when the relay needs an access code (the stats name every room) -->
+	<section id="kastrLock" hidden class="rounded-lg border border-neutral-700 bg-neutral-900/50 p-4 mb-6">
+		<h2 class="text-sm font-semibold text-neutral-300 mb-1">This relay needs an access code</h2>
+		<p class="text-neutral-500 text-xs mb-3">The relay&rsquo;s stats name its rooms, so they are for people with an access code of this fleet.</p>
+		<form id="kastrLockForm" class="flex flex-wrap items-center gap-2" autocomplete="off">
+			<input id="kastrLockCode" type="password" spellcheck="false" placeholder="Access code" aria-label="Access code" autocomplete="off"
+				class="w-64 max-w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-emerald-600">
+			<button type="submit" class="rounded-md px-3 py-1.5 text-sm font-medium border border-neutral-700"
+				style="background: var(--asi-blue, #2f7de1); color: #ffffff;">Show stats</button>
+			<span id="kastrLockMsg" hidden role="alert" class="text-xs" style="color: var(--asi-red, #f87171);"></span>
+		</form>
+	</section>
 
 	<!-- Cluster summary: headline numbers, no prose. Rates are per-second; the rest
 	     are live gauges, except fetches/datagrams/announce which are cumulative. -->

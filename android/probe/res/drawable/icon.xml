@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- generated launcher icon: a block K on blue (108x108) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FF2F80ED" android:pathData="M12,0h84a12,12 0,0 1,12 12v84a12,12 0,0 1,-12 12h-84a12,12 0,0 1,-12 -12v-84a12,12 0,0 1,12 -12z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M29,19h10v10h-10zM69,19h10v10h-10zM29,29h10v10h-10zM59,29h10v10h-10zM29,39h10v10h-10zM49,39h10v10h-10zM29,49h20v10h-20zM29,59h10v10h-10zM49,59h10v10h-10zM29,69h10v10h-10zM59,69h10v10h-10zM29,79h10v10h-10zM69,79h10v10h-10z" />
+</vector>

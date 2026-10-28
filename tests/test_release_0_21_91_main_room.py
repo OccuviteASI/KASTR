@@ -192,8 +192,8 @@ class Page(unittest.TestCase):
         self.assertIn("lastChannelList = guestRooms(deriveRooms());", p)
         self.assertIn("return list.filter((r) => r.slug === LOBBY || (!!inv && r.slug === inv.room));", p)
         self.assertIn("if (inviteGuest()) { host.hidden = true; return; }   // 0.21.91: a guest has no My room", p)
-        # the relay host is asked with the guest's token (it answers their room alone)
-        self.assertIn('const gh = inviteGuest() && authSecured && authTokens?.member ? { authorization: "Bearer " + authTokens.member } : undefined;', p)
+        # the relay host is asked with the rooms token -- a guest's own (it answers their room alone), else the browse token
+        self.assertIn('const rt = roomsToken(), gh = rt ? { authorization: "Bearer " + rt } : undefined;', p)
         # a guest's Lobby mint carries the link
         self.assertIn("const invTok = inv && (inv.room === room || (room === LOBBY && !String(access ?? \"\"))) ? inv.token : undefined;", p)
         # the guest's Lobby: the invited room + Join again
@@ -289,7 +289,8 @@ class GuestList(unittest.TestCase):
         try:
             svc.store.touch_room("yard", "kenton")
             src = _read("kastr_relay.py")
-            self.assertIn('g = guest_rooms(svc._member_claims(self.headers.get("Authorization")))   # 0.21.91: a guest sees their room only', src)
+            self.assertIn('c = svc._member_claims(self.headers.get("Authorization"))', src)   # a guest: their room; no token: none
+            self.assertIn("self._reply(rooms_for_guest(out, g) if g is not None else out)", src)
             srv = _read("kastr_serve.py")
             self.assertIn("return self._json_cors(200, self._rooms_guest_cut({\"rooms\": store.rooms_public(), \"closed\": store.closed_public(),", srv)
             self.assertEqual(srv.count("self._rooms_guest_cut(self._rooms_merge("), 2)   # a spoke's answer (the hub's list) too

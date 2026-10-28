@@ -1491,10 +1491,25 @@ def public_patterns():
     return out
 
 
+ANON_KIND = NS + "anon"   # 0.21.91: what a tokenless session may read -- nothing is ever published there
+
+
+def public_patterns_for(rooms):
+    """0.21.91: the public kinds of these rooms only (a guest's own room) -- never the relay's ~stats."""
+    out = []
+    for k in PUBLIC_KINDS:
+        if k == STATS_KIND:
+            continue
+        for room in sorted(rooms or ()):
+            out += [k + "/" + room, k + "/" + room + "/**"]
+    return out
+
+
 def public_grant():
-    """What a tokenless session gets: the public kinds, subscribe only (today's
-    `public = { subscribe = [...] }`). Publishing always needed a token."""
-    return {"publish": [], "subscribe": public_patterns()}
+    """What a tokenless session gets. 0.21.91 (Kenton: "Room names must not be visible to anyone without a fleet access code"):
+    NOTHING -- the public kinds (room names, who is where) ride a token now: a member's, or the Join room page's browse token
+    (an access code). Until 0.21.90 it was the public kinds, subscribe only. Publishing always needed a token."""
+    return {"publish": [], "subscribe": [ANON_KIND]}   # (an empty grant is refused outright -- the page's relay health needs the session)
 
 
 def claims_to_grant(claims, now=None):
@@ -1515,7 +1530,8 @@ def claims_to_grant(claims, now=None):
         pub = [p for p in pub if _is_control_put(p)]
         sub = []
     if "**" not in sub:
-        for q in public_patterns():
+        g = guest_rooms(claims)   # 0.21.91: a guest (an invite link, a My room guest) reads the public kinds of their room only
+        for q in (public_patterns() if g is None else public_patterns_for(g)):
             if q not in sub:
                 sub.append(q)
     grant = {"publish": pub, "subscribe": sub}
@@ -6433,7 +6449,12 @@ class AuthService:
                     # 0.15.0: + the relay-defined room groups
                     out = {"rooms": svc.store.rooms_public(), "groups": svc.store.groups_public(),
                            "renamed": svc.store.renamed_public()}   # 0.21.65
-                    g = guest_rooms(svc._member_claims(self.headers.get("Authorization")))   # 0.21.91: a guest sees their room only
+                    # 0.21.91: a guest sees their room only; nobody without a token sees any (the machine itself: everything)
+                    c = svc._member_claims(self.headers.get("Authorization"))
+                    g = guest_rooms(c)
+                    if c is None and self._peer() not in LOOPBACK_PEERS:
+                        out = rooms_for_guest(out, set())
+                        out.update(guest=False, needCode=True)
                     self._reply(rooms_for_guest(out, g) if g is not None else out)
                 elif path == "/api/invites":           # 0.21.75: a room's live invite links (its creator or an admin)
                     qs = parse_qs(urlparse(self.path).query)
@@ -6701,6 +6722,25 @@ class AuthService:
 
     def locked_for(self, peer):
         return self.lockout.locked_for(peer)
+
+    def _browse_token(self, access, peer=""):
+        """0.21.91 (Kenton: "The Join room page shows no rooms until a code is typed and checked"): POST /api/token {browse: true,
+        code} -> a BROWSE token: no room, nothing to publish, the public kinds to read (the rooms, who is where) -- for any
+        access code of this fleet (viewer, publisher, admin; a relay without access codes: anyone). A wrong code counts in the
+        lockout like any code."""
+        wait = self.locked_for(peer)
+        if wait:
+            return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if self.store.configured():
+            ok = bool(access) and (self.store.check("viewer", access) or self.store.check("publisher", access)
+                                   or self.store.check("admin", access) or self._hub_admin_ok(access))
+            if not ok:
+                return self._fail(peer, "wrong access code", "(rooms list)", what="the rooms list of")
+        self._ok(peer)
+        now = int(time.time())
+        exp = now + VIEWER_TTL
+        tok = _mint(self.key, {"root": "", "get": [], "put": [], "browse": 1, "iat": now, "exp": exp})
+        return {"ok": True, "exp": exp, "ns": NS, "tokens": {"browse": tok}}, 200
 
     def _fail(self, peer, why, slug, what="room"):
         return self.lockout.fail(peer, why, slug, what)
@@ -7038,6 +7078,8 @@ class AuthService:
             return self._admin_verify(str(p.get("admin") or ""), peer)
         if p.get("library") is True and not p.get("room"):   # 0.21.84: a library publisher token (no room)
             return self._library_token(p, peer)
+        if p.get("browse") is True and not p.get("room"):    # 0.21.91: the Join room page reads the rooms with an access code
+            return self._browse_token(str(p.get("code") or ""), peer)
         slug = str(p.get("room") or "")
         access = str(p.get("code") or "")
         room_code = p.get("roomCode")

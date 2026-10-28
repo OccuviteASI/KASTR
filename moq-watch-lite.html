@@ -21086,7 +21086,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const d = await r.json();
       if (room !== chatRoom) return;
       chatDisabled = "";
-      chatHint(d.persistent ? "Room kept open \u2014 its history stays until the room is closed." : "");
+      chatHint(d.persistent && !isPersonalSlug(room) ? "Room kept open \u2014 its history stays until the room is closed." : "");
       if (full) { chatMsgs = chatMsgs.filter((m) => m.local || m.viaWindow); chatLastId = 0; }   // 0.13.0: live-delivered records survive a rebind
       chatAppend(Array.isArray(d.messages) ? d.messages : []);
       if (full && !chatMsgs.length) chatRenderAll();

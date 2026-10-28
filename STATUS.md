@@ -17,6 +17,8 @@ I scanned every root `*.html`, every root `kastr*.py` (for inline pages) and `as
 
 Ids, classes, aria-labels, handlers and checked/disabled state are unchanged. No JS looks these inputs up by structure; I checked `querySelector`, `closest('label')` and `.parentNode`. Every page that shows switches loads `/assets/asi-brand.css`, which defines `.switch` and `.switch.sm` with light and dark tokens and the `:focus-visible` ring. No page needed extra CSS.
 
+After merging main at 8c405e2 (agent I, Remove / Ban): I added no checkboxes. The Ban dialog's "How long" picker is a segmented button group (`role="radiogroup"` with `role="radio"` buttons), which is a choice, not an on/off switch, so I left it alone. The toggles test still passes.
+
 ## Exceptions
 
 None. The allowlist in `tests/test_release_0_21_92_toggles.py` is empty.

@@ -2,16 +2,58 @@
 
 What changed in each build, newest first.
 
-## v0.21.92 (in progress)
+## v0.21.92 — Meeting templates, recording presentations, presenters from anywhere, Remove vs Ban, start at sign-in, and room names behind an access code
+
+**Meeting templates (Kenton: layout and view, streams, presentation and roles, settings and invites).**
+- **Save the room as a template** (room admins for their rooms, anyone for My room); everyone in the room can see the templates read-only. A template keeps the layout and view, the streams, the presentation (the .pptx with its videos, starting slide, mode and Reporter background) and its roles.
+- **Every presentation switch goes with it (Kenton: "Add any of the toggles to the presentation templates"):** Audience muted, Ask to speak, Audience can see each other, Record the presentation, and each backstage person's mic and camera control.
+- **Apply** previews what changes, then sets it up; Undo puts the room back. People named in the template who aren't in the room get the usual invite with their role, and the role waits for them.
+- **"+ Create a new room for this…" (Kenton: "close the room after the presenter ends the meeting").** KASTR makes the room, moves you in and applies the template. "Close the room when the presentation ends" is on by default: End asks "End the presentation and close <room> for everyone?", and everyone lands in their main room with "The presentation ended and <room> was closed". Only End closes it (never hand-over, Take over, Leave or a dropped connection), and a room that existed before is never closed this way.
+
+**Presenting.**
+- **Record the presentation (Kenton: "Add a toggle for recording the presentation also").** A Record switch in the presenter view, for presenters and backstage. The relay host that holds the deck (the one the main presenter is connected to) records exactly what the audience sees and hears: the live slide with the presenter's camera in the current mode, slide videos, presenters' mics and people let in through Ask to speak. The audience is not shown anything. It carries on through hand-overs and drops; End saves an MP4 (1920×1080, 30 fps) listed under Recordings for presenters, backstage and admins. A template can start recording with the presentation; a template-made room closes only after the file is saved. Caps: 8 GB per recording, 100 GB in all, 3 at once per relay host, stops when disk runs low. A relay with no access codes doesn't record, and the Docker relay image doesn't record (no browser in it).
+- **A bigger next slide (Kenton: "next slide to be bigger").** It starts at half the live slide's width; drag its corner to resize it (double-click goes back to half). The size is kept per device, and the notes always keep about three lines.
+- **Add anyone as presenter or backstage, even if they aren't in the room.** The picker lists the room, then everyone online, then takes any typed name. They get a "Presenter invitation" or "Backstage invitation" (Join / Ignore); Join brings them in, even into a locked room. If they ignore it or are offline the role waits for them; you can withdraw it.
+- **The audience sees only the presentation's cameras** while it is live; presenters and backstage still see everyone.
+- **"Audience can see each other"** (on by default): off, audience members don't see each other's cameras and Room Chat shows them as "Audience member". People lists don't change. This is done in each viewer's KASTR; people on 0.21.91 still see everyone.
+- **Every on/off in the presenter view is a switch** (Kenton: "the check box should be a toggle").
+- **Fixed: slides shrinking every second or two for an added presenter** who went back to the room.
+- Going to another room forgets that room's presentation.
+
+**Remove vs Ban (Kenton: "kick from the room ... doesn't block them from coming back. Add an option to ban (timeframe)").**
+- **Remove <name> from the room** (My room owner, room admins, fleet admins) closes their sessions everywhere and sets no block: they land in their main room with "Removed from <room> by <name>." and can come straight back.
+- **Ban <name>…** keeps them out for 15 minutes, 1 hour, 24 hours, 7 days or until you lift it. Every relay refuses them, including through invite links and the My room door. They see "You're banned from <room> until <time>."
+- **A Bans list with Lift** in Room settings and My room settings. A ban covers the device and the person's KASTR name. Bans survive a switch to the standby hub. Closing a room drops its bans.
+- Nobody can remove themselves; only fleet admins can remove or ban a fleet admin. On a relay still on 0.21.91, Remove keeps the person out for an hour (KASTR warns you).
+
+**Admin "Request remote control…".**
+- **On a person's right-click** (admin-code holders): they get an Allow / Decline prompt, and their screen opens privately in your KASTR with control granted. Works for people in My room too (no answer after 60 s ends the ask).
+- **Files and pictures** can be copied both ways in these private sessions and in Machines…, with progress, Cancel and the same size caps as room control.
+- **"Take control of <box>"** on the camera tiles of a box that opted in to unattended admin control (fleet admins only).
+
+**Room names need an access code.** Without a code, a relay now shows no rooms, people or file lists: the Join room page, the rooms list, stats.html and the room-name endpoints all need a fleet access code (or a guest's own invite). A relay with no access codes still lists its rooms to everyone. **Old apps (0.21.91 and older) pointed at an updated relay see no rooms** until they update, so update the hub first, then use Push update on the Relay page.
+
+**No passcodes in plain text on disk (Kenton: "fix the plain text passcodes").** Every access code, room code, My room passcode and token KASTR keeps is now sealed (Windows DPAPI for your account; an owner-only key on Linux) or kept as a digest, and existing files are converted at first start. Logs and /api/diag mask codes and tokens. Going back to an older build unseals them first so it can still read them.
 
 **Start KASTR when you sign in, for everyone (Kenton: "add the auto-start KASTR option on startup into the options available to everyone, not just admins").**
 - **Profile > "Start KASTR when I sign in to this computer"** is a switch next to Main room. It stays in step with the switch on the Relay page, is off by default, and leaves an existing start-up entry alone. It is not shown on web pages or in a developer copy.
 - **"Start minimized"** shows while that switch is on. KASTR then opens in the taskbar at sign-in, still connects and joins your main room. Click it to bring it back (maximized if it was). Starting KASTR yourself always opens it normally.
 - On Linux, X11 desktops minimize it; Wayland desktops cannot, so it opens normally there.
 
+**Switches everywhere (Kenton: "This should always be this way for all check boxes unless told differently").** Remaining checkboxes in KASTR's pages are switches now, and a test keeps it that way.
+
+**Android test app for the Yealink meeting devices.** `android/probe/` builds kastr-probe (display-only: no camera or microphone). It reports whether a MeetingBar / MeetingDisplay / MeetingBoard can run KASTR: WebTransport, H.264 / HEVC decoding at 1080p and 4K, the WebView version, the remote's keys and the launcher. It's a test app, not KASTR for Android yet.
+
+**Messages and Room Chat.**
+- "⚠ Not sent: … hasn't set up messages yet" is readable on your own message bubble again.
+- My room no longer says "Room kept open — its history stays until the room is closed."
+
 **My room on a second KASTR on a relay's machine.** A page whose relay ran on the same computer but under another KASTR kept My room in its own KASTR, while Messages asked the relay. Set up with a brand-new name could then say "Wrong My room code", and the next Set up said "already has a My room with another code". My room now goes to the KASTR that runs the relay. A My room left behind in the wrong place is simply ignored.
 
-**Tests:** the recording-formats test no longer fails with a connection time-out when the machine is busy (it retries the connection; the server was never blocked).
+**Smaller fixes.**
+- The red sharing pill on Linux draws again (it hadn't since 0.21.87).
+- The recording-formats test no longer fails with a connection time-out when the machine is busy.
+- Your preferred main room survives a settings sync.
 
 ## v0.21.91 — Co-presenters, your main room, the closest relay, GIFs and emoji in Messages, and passcode resets
 

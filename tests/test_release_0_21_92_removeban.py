@@ -338,6 +338,97 @@ class OnASpoke(unittest.TestCase):
         self.assertEqual(self.hub.bans.active(), [])
 
 
+class StandbyCopy(unittest.TestCase):
+    """The standby hub's copy (/api/hub/replica), the take-over, the hand-back: a Ban survives a failover as on the main hub."""
+
+    def setUp(self):
+        self.key = os.urandom(32)
+        self.main = kr.AuthService("127.0.0.1", 0, self.key, 4443, store())
+        self.main.standby_info = lambda: {"node": "sb-node", "secret": "s3cr"}
+        self.fed = "Bearer " + kr._mint(self.key, dict(kr.FEDERATION_CLAIMS, iat=int(time.time()), exp=int(time.time()) + 3600))
+        self.main.store.touch_room("yard", "kenton")
+        self.adm = tok(self.main, "yard", BOSS, code="adm-1", op="boss")
+        self.sb = kr.AuthService("127.0.0.1", 0, os.urandom(32), 4453, kr.AuthStore(tempfile.mkdtemp()))
+
+    def tearDown(self):
+        for s in (self.main, self.sb):
+            s.close()
+
+    def copy(self, since=None):
+        o, c = self.main.replica({"node": "sb-node", "since": since or {}, "wait": 0}, self.fed, "10.0.0.2")
+        self.assertEqual(c, 200, o)
+        return o
+
+    def test_export_take_over_refuses_like_the_main_hub(self):
+        self.assertEqual(kick(self.main, self.adm, "yard", mode="ban", forever=True, target=BOB + "/bob", who="Bob", by="Boss")[1], 200)
+        self.assertEqual(kick(self.main, self.adm, "yard", mode="ban", secs=604800, target=CAROL + "/carol", who="Carol", by="Boss")[1], 200)
+        self.assertEqual(kick(self.main, self.adm, "yard", target=EVE + "/eve", until=1800)[1], 200)   # a 0.21.91 page's kick
+        o = self.copy()
+        rows = {r["host"]: r for r in o["bans"]}
+        for r in rows.values():                       # what a 0.21.91 standby reads, unchanged
+            for k in kr.BAN_BUNDLE_OLD:
+                self.assertIn(k, r)
+            self.assertIsInstance(r["until"], int)
+            self.assertNotIn("remotes", r)
+        self.assertEqual((rows[BOB]["kind"], rows[BOB]["forever"], rows[BOB]["name"], rows[BOB]["who"]), ("ban", True, "bob", "Bob"))
+        self.assertNotIn("kind", rows[EVE])            # a kick stays a kick
+        blob = json.dumps(o["bans"])
+        for secret in ("adm-1", "pub-1", "view-1", self.adm, self.fed[7:]):
+            self.assertNotIn(secret, blob)
+        # the take-over: the store and the bans
+        self.sb.store.import_bundle(o["store"])
+        self.assertEqual(kr.ban_bundle_take(self.sb.bans, o["bans"]), 3)
+        self.assertEqual(kr.ban_bundle_take(self.sb.bans, o["bans"]), 0)          # idempotent
+        r, c = mint(self.sb, "yard", BOB, op="bob")
+        self.assertEqual((c, r["ban"]["kind"], r["ban"]["forever"]), (403, "ban", True), r)
+        self.assertGreater(r["ban"]["until"], time.time() + 9 * 365 * 86400)         # forever stays forever
+        self.assertEqual(mint(self.sb, "yard", "bob-laptop-0b0b", op="bob")[1], 403)  # the person key too
+        r, c = mint(self.sb, "yard", CAROL, op="carol")
+        self.assertEqual(c, 403)
+        self.assertAlmostEqual(r["ban"]["until"], time.time() + 604800, delta=5)       # 7 days, not a day
+        self.assertEqual(mint(self.sb, "yard", EVE, op="eve")[1], 403)                 # the kick by device ...
+        self.assertEqual(mint(self.sb, "yard", "eve-laptop-0c0c", op="eve")[1], 200)   # ... only
+        self.assertEqual(mint(self.sb, "yard", "dan-1d1d", op="dan")[1], 200)
+
+    def test_lifts_reach_the_copy_and_come_back_at_hand_back(self):
+        kick(self.main, self.adm, "yard", mode="ban", forever=True, target=BOB + "/bob", who="Bob", by="Boss")
+        kick(self.main, self.adm, "yard", mode="ban", forever=True, target=CAROL + "/carol", who="Carol", by="Boss")
+        o = self.copy()
+        self.assertEqual(kick(self.main, self.adm, "yard", mode="lift", host=CAROL)[1], 200)   # the main hub's Lift ...
+        o2 = self.copy({"store": o["storeVer"], "bans": o["bansVer"]})
+        self.assertEqual([r["host"] for r in o2["bans"]], [BOB])                               # ... leaves the copy
+        self.sb.store.import_bundle(o["store"])
+        kr.ban_bundle_take(self.sb.bans, o2["bans"])
+        self.assertEqual(mint(self.sb, "yard", CAROL, op="carol")[1], 200)
+        # the standby is the hub now: its admin lifts Bob; the hand-back carries the Lift to the main hub
+        sadm = tok(self.sb, "yard", BOSS, code="adm-1", op="boss")
+        self.assertEqual(kick(self.sb, sadm, "yard", mode="lift", host=BOB)[1], 200)
+        self.assertEqual(mint(self.sb, "yard", BOB, op="bob")[1], 200)
+        hand = json.loads(json.dumps({"bans": kr.ban_bundle_rows(self.sb.bans.active()), "lifted": list(self.sb.bans.lifts)}))
+        self.assertEqual(mint(self.main, "yard", BOB, op="bob")[1], 403)                     # before the hand-back
+        kr.ban_bundle_take(self.main.bans, hand["bans"])
+        self.assertEqual(kr.ban_bundle_lifts(self.main.bans, hand["lifted"]), 1)
+        self.assertEqual(mint(self.main, "yard", BOB, op="bob")[1], 200)
+        # a Ban made after that Lift is not undone by it
+        with mock.patch.object(kr.time, "time", return_value=time.time() + 60):
+            kick(self.main, self.adm, "yard", mode="ban", secs=3600, target=BOB + "/bob", who="Bob", by="Boss")
+        self.assertEqual(kr.ban_bundle_lifts(self.main.bans, hand["lifted"]), 0)
+        self.assertEqual(len(self.main.bans.active("yard")), 1)
+        # the Lifts are kept on disk (a standby restarted mid-failover still hands them back)
+        self.assertEqual([(x["room"], x["host"]) for x in kr.BanList(self.sb.store.state_dir).lifts], [("yard", BOB)])
+
+    def test_a_0_21_91_hand_over_reads_the_rows(self):
+        kick(self.main, self.adm, "yard", mode="ban", forever=True, target=BOB + "/bob", who="Bob", by="Boss")
+        b = self.copy()["bans"][0]
+        old = {"room": str(b["room"]), "host": (str(b["host"]) if b.get("host") else None), "remotes": [],   # 0.21.91's own import
+               "target": str(b.get("target") or "")[:120], "by": str(b.get("by") or "")[:40],
+               "at": int(b.get("at") or 0), "until": int(b["until"])}
+        bl = kr.BanList(tempfile.mkdtemp())
+        bl.add(old)
+        self.assertIsNotNone(bl.hit("yard", BOB))
+        self.assertIsNone(bl.hit("yard", "bob-laptop-0b0b", name="bob"))   # by device only on an old hub, as STATUS.md says
+
+
 class Page(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

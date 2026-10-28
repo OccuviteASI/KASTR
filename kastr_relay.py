@@ -3863,6 +3863,7 @@ class BanList:
     are pruned on load and on every add. `until` is capped at a day."""
 
     MAX = 500
+    LIFT_KEEP_S = 30 * 86400   # 0.21.92 I: remove / ban -- a Lift is remembered a month (a failover's hand-back carries it)
 
     def __init__(self, state_dir, log=None):
         self.state_dir = state_dir
@@ -3871,6 +3872,7 @@ class BanList:
         self.cv = threading.Condition(self.lock)   # 0.20.0: long-pollers wait here for a change
         self.ver = 0                                # 0.20.0: bumped on every add/clear (persisted)
         self.bans = []
+        self.lifts = []                             # 0.21.92 I: remove / ban -- [{room, host, at}] (hand-back carries them)
         self._load()
 
     def _path(self):
@@ -3882,6 +3884,8 @@ class BanList:
             rows = d.get("bans") if isinstance(d, dict) else None
             now = time.time()
             self.bans = [b for b in (rows or []) if isinstance(b, dict) and float(b.get("until") or 0) > now]
+            lifts = d.get("lifts") if isinstance(d, dict) else None   # 0.21.92 I: remove / ban
+            self.lifts = [x for x in (lifts or []) if isinstance(x, dict) and float(x.get("at") or 0) > now - self.LIFT_KEEP_S][-self.MAX:]
             try:
                 self.ver = int(d.get("ver") or 0) if isinstance(d, dict) else 0
             except (TypeError, ValueError):
@@ -3895,7 +3899,7 @@ class BanList:
         self.cv.notify_all()
 
     def _save(self):
-        save_json(self._path(), {"bans": self.bans, "ver": self.ver}, self.log, backup=False)
+        save_json(self._path(), {"bans": self.bans, "ver": self.ver, "lifts": self.lifts}, self.log, backup=False)   # 0.21.92 I: + lifts
 
     def poke(self):
         """0.21.0: bump the version without a ban change -- the hub's command channel rides the
@@ -3982,9 +3986,94 @@ class BanList:
             self.bans = [b for b in self.bans if not (b.get("room") == room and (host is None or b.get("host") == host))]
             n = before - len(self.bans)
             if n:
+                if host:   # 0.21.92 I: remove / ban -- one person's Lift (a closed room's bans go with the room itself)
+                    cut = time.time() - self.LIFT_KEEP_S
+                    self.lifts = [x for x in self.lifts if float(x.get("at") or 0) > cut and (x.get("room"), x.get("host")) != (room, host)][-(self.MAX - 1):]
+                    self.lifts.append({"room": room, "host": host, "at": int(time.time())})
                 self._changed_locked()
                 self._save()
             return n
+
+    def lift_older(self, room, host, at):
+        """0.21.92 I: remove / ban -- another hub's Lift at `at`: drop (room, host)'s rows made at or before it (a Ban made
+        after it stays). Not remembered as a Lift of ours."""
+        with self.lock:
+            before = len(self.bans)
+            self.bans = [b for b in self.bans if not (b.get("room") == room and b.get("host") == host and int(b.get("at") or 0) <= int(at))]
+            n = before - len(self.bans)
+            if n:
+                self._changed_locked()
+                self._save()
+            return n
+
+
+# 0.21.92 I: remove / ban -- the ban rows a standby copy / hub hand-over / hand-back carries. The six fields 0.21.91 sends
+# and reads stay as they were (a 0.21.91 standby or hub ignores the rest); a real Ban adds what makes it one (kind,
+# forever, the person key `name`, who / byName, the invite ids). Never `remotes` (addresses), never a code or token.
+BAN_BUNDLE_OLD = ("room", "host", "target", "by", "at", "until")
+
+
+def ban_bundle_rows(rows):
+    out = []
+    for b in rows or []:
+        r = {k: b.get(k) for k in BAN_BUNDLE_OLD}
+        if b.get("kind") == "ban":
+            r.update({"kind": "ban", "forever": bool(b.get("forever")), "name": b.get("name"), "who": b.get("who"),
+                      "byName": b.get("byName"), "inv": list(b.get("inv") or [])[:8]})
+        out.append(r)
+    return out
+
+
+def ban_bundle_row_in(b, now=None):
+    """One carried row -> a BanList row (bounded, checked), or None (not a room, ended, unreadable)."""
+    now = now or time.time()
+    if not isinstance(b, dict) or not SLUG_RE.match(str(b.get("room") or "")):
+        return None
+    try:
+        until, at = int(b.get("until") or 0), int(b.get("at") or now)
+    except (TypeError, ValueError):
+        return None
+    if until <= now:
+        return None
+    row = {"room": str(b["room"]), "host": (str(b["host"])[:80] if b.get("host") else None), "remotes": [],
+           "target": str(b.get("target") or "")[:120], "by": str(b.get("by") or "")[:40], "at": at, "until": until}
+    if b.get("kind") == "ban":
+        nm = str(b.get("name") or "")
+        row.update({"kind": "ban", "forever": bool(b.get("forever")), "name": nm if re.match(r"^[a-z0-9-]{1,40}$", nm) else None,
+                    "who": clean_label(b.get("who"), 40), "byName": clean_label(b.get("byName"), 40),
+                    "inv": [str(i) for i in (b.get("inv") or []) if re.match(r"^[0-9a-f]{8}$", str(i))][:8]})
+    return row
+
+
+def ban_bundle_take(bl, rows):
+    """Add the carried rows this list lacks (or holds only as a plain kick / with another length) -> how many."""
+    now = time.time()
+    have = {(b.get("room"), b.get("host"), b.get("target")): b for b in bl.active()}
+    n = 0
+    for b in rows or []:
+        row = ban_bundle_row_in(b, now)
+        if not row:
+            continue
+        mine = have.get((row["room"], row["host"], row["target"]))
+        if mine is not None and not (row.get("kind") == "ban" and (mine.get("kind") != "ban" or int(mine.get("until") or 0) != row["until"])):
+            continue
+        bl.add(row)
+        n += 1
+    return n
+
+
+def ban_bundle_lifts(bl, lifts):
+    """The other hub's Lifts (a hand-back) -> how many rows went."""
+    n = 0
+    for x in lifts or []:
+        if not isinstance(x, dict) or not SLUG_RE.match(str(x.get("room") or "")) or not x.get("host"):
+            continue
+        try:
+            at = int(x.get("at") or 0)
+        except (TypeError, ValueError):
+            continue
+        n += bl.lift_older(str(x["room"]), str(x["host"]), at)
+    return n
 
 
 class AuthStore:
@@ -7229,7 +7318,7 @@ class AuthService:
                 total += size
             except OSError:
                 skipped.append(fn[:-6])
-        bans = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in self.bans.active()]
+        bans = ban_bundle_rows(self.bans.active())   # 0.21.92 I: remove / ban -- + a Ban's own fields
         info = {"hub": hub, "web": web, "code": str(p.get("code") or ""), "from": peer or "?"}
         self.raise_cmd("rehome", {"hub": hub, "web": web})   # every spoke's long-poll carries it within a second
         self.log("relay auth: HUB HAND-OVER to %s (asked from %s) -- %d room(s), %d chat transcript(s), %d kick(s); spokes told to re-point"
@@ -13919,7 +14008,7 @@ class AuthService:
         if since.get("store") != sver:
             out["store"] = self.store.export_bundle()
         if since.get("bans") != bver:
-            out["bans"] = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in active]
+            out["bans"] = ban_bundle_rows(active)   # 0.21.92 I: remove / ban -- + a Ban's own fields (a 0.21.91 standby ignores them)
         chat, budget = {}, REPLICA_CHAT_MAX
         for room, size in sz.items():
             off = offs.get(room, 0)
@@ -15313,10 +15402,9 @@ class Relay:
             bl = self.auth.bans if getattr(self, "auth", None) is not None else BanList(self.state_dir, self.log)
             now = time.time()
             for b in d.get("bans") or []:
-                if isinstance(b, dict) and SLUG_RE.match(str(b.get("room") or "")) and int(b.get("until") or 0) > now:
-                    bl.add({"room": str(b["room"]), "host": (str(b["host"]) if b.get("host") else None), "remotes": [],
-                            "target": str(b.get("target") or "")[:120], "by": str(b.get("by") or "")[:40],
-                            "at": int(b.get("at") or now), "until": int(b["until"])})
+                row = ban_bundle_row_in(b, now)   # 0.21.92 I: remove / ban -- a Ban stays a Ban (person key, forever, links)
+                if row:
+                    bl.add(row)
                     bans += 1
         except Exception as e:
             self.log("relay federation: hand-over -- kicks not imported: %s" % e)
@@ -16614,10 +16702,7 @@ class Relay:
                 auth._msgr().apply_aliases()   # 0.21.91
             except Exception as e:
                 self.log("relay federation: take-over -- renamed people not moved in the messages copy: %s" % e)
-            have = {(b.get("room"), b.get("host"), b.get("target")) for b in auth.bans.active()}
-            for b in rep.get("bans") or []:
-                if isinstance(b, dict) and (b.get("room"), b.get("host"), b.get("target")) not in have:
-                    auth.bans.add(dict(b))
+            ban_bundle_take(auth.bans, rep.get("bans"))   # 0.21.92 I: remove / ban -- a Ban stays a Ban here
             self.log("relay federation: took the main hub's records -- %s, %d kick(s)" % (n, len(rep.get("bans") or [])))
         offsets = {}
         try:
@@ -16705,9 +16790,10 @@ class Relay:
                             chat[room] = {"text": f.read().decode("utf-8", "replace"), "keep": os.path.exists(os.path.join(cdir, room + ".keep"))}
                     except OSError:
                         pass
-                bans = [{k: b.get(k) for k in ("room", "host", "target", "by", "at", "until")} for b in (auth.bans.active() if auth else [])]
+                bans = ban_bundle_rows(auth.bans.active() if auth else [])   # 0.21.92 I: remove / ban
                 self.log("relay federation: the main hub is back -- handing back (%d chat room(s) with new lines)" % sum(1 for c in chat.values() if c["text"]))
-                return {"ok": True, "store": auth.store.export_bundle() if auth else {}, "bans": bans, "chat": chat}, 200
+                return {"ok": True, "store": auth.store.export_bundle() if auth else {}, "bans": bans, "chat": chat,
+                        "lifted": list(auth.bans.lifts) if auth else []}, 200   # 0.21.92 I: remove / ban -- Lifts made while I was the hub
             home = cur.get("home") or so.get("main") or ""
             if self.auth is not None:
                 self.auth.raise_cmd("rehome", {"hub": home, "web": so.get("web")})
@@ -16765,10 +16851,11 @@ class Relay:
         auth = self.auth
         if auth is not None:
             n = auth.store.merge_bundle(d.get("store") or {})
-            have = {(b.get("room"), b.get("host"), b.get("target")) for b in auth.bans.active()}
-            for b in d.get("bans") or []:
-                if isinstance(b, dict) and (b.get("room"), b.get("host"), b.get("target")) not in have:
-                    auth.bans.add(dict(b))
+            ban_bundle_take(auth.bans, d.get("bans"))   # 0.21.92 I: remove / ban
+            lifted = ban_bundle_lifts(auth.bans, d.get("lifted"))   # what the standby lifted while it was the hub
+            if lifted:
+                auth.trigger_revalidate()
+                self.log("relay federation: hand-back -- %d ban(s) the standby lifted, lifted here too" % lifted)
             self.log("relay federation: hand-back merged -- %s" % n)
         try:
             import kastr_serve as _ks

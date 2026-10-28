@@ -30,6 +30,16 @@ ban (timeframe)."
   - A body **without** `mode` (a 0.21.91 page) keeps the old one-hour block.
   - Spoke to hub, the call is federated as `{remove}` / `{ban}` / `{lift}`. A 0.21.91 hub sees a plain kick, capped at 1 day.
 
+- **Standby hub** (coordinator, after the first hand-back): one carried-row format for all three hand-offs — the standby copy (`/api/hub/replica`), the planned hub hand-over, and the hand-back after a failover.
+  - Each row keeps 0.21.91's six fields (`room host target by at until`). A real Ban adds `kind forever name who byName inv`. Rows never carry `remotes`, codes or tokens.
+  - Take-over, hand-over and hand-back import through one checked function (`ban_bundle_row_in` / `ban_bundle_take`). The standby then refuses the banned device and person key, "until I lift it" stays forever, and 7 days stays 7 days.
+  - A Lift on the main hub leaves the next copy.
+  - A Lift made **on the standby while it was the hub** goes back with the hand-back (`lifted`). The BanList remembers Lifts for 30 days in relay-bans.json (`lifts`). The main hub drops only rows made at or before that Lift, so a newer Ban stays.
+  - **0.21.91 compatibility:**
+    - A 0.21.91 standby takes the rows as they come and ignores the extra fields (checked with the real 4f39018 BanList: it refuses the device).
+    - A 0.21.91 main hub ignores `lifted`, so a Lift made during the failover comes back on it; lift again there.
+    - 0.21.91's relay-bans.json loader ignores `lifts`.
+
 ## How old pages tell Remove from Ban
 
 - **Over `~admin`:** the announce is still `{op:"kick", target, nonce, at, by}`, which a 0.21.91 page obeys (checked against 4f39018 adminApply). New fields `rb:1` and `ban:{until, forever, by}` are ignored there; a 0.21.92 page shows the ban text.
@@ -56,13 +66,14 @@ Limits:
 - The set of admin hosts (`_adm_seen`) is in memory only. It is rebuilt as admins mint, so right after a relay restart a fleet admin is protected only once they have minted again.
 - Remove on a 0.21.91 relay host is a one-hour block. The page warns about this.
 - Removing a My room guest on a 0.21.91 relay host does not close their session.
-- **Not done:** the standby replica bundle still exports only the six old ban fields. After a standby failover, bans become plain kicks (until honoured, no `forever`, no `op`).
+- A standby failover keeps Bans as on the main hub (see "Standby hub" below). If the standby is 0.21.91, it refuses by device only.
+- A room-wide clear (a closed room) is not carried at hand-back as a Lift; the room's own close does that.
 
 **kastr_secret:** ban rows hold host slugs, operator names, display names and 8-hex invite ids only. They hold no codes, tokens or invite tokens (asserted in tests and the lab), so `relay-bans.json` needs no sealing.
 
 ## Tests
 
-- **New:** `tests/test_release_0_21_92_removeban.py`, 22 tests, OK. They cover:
+- **New:** `tests/test_release_0_21_92_removeban.py`, 25 tests, OK (22 + 3 standby-hub tests: export, take-over, refusals by device and person key, forever stays forever, Lifts both ways, 0.21.91 hand-over rows). They cover:
   - rooms: remove; each ban length; lift; self-removal; fleet admin; old kick; invite links; room close;
   - My room: owner-only; guest and access-list bans;
   - hub and spoke, both directions, including a 0.21.91-shaped spoke;
@@ -121,6 +132,12 @@ Every region is marked `0.21.92 I: remove / ban`.
 | 13654, 13695-13696 | `bans_for_spoke` fields, removed, adm |
 | 13997-14038 | `pull_hub_bans` removed / adm / replace |
 | 14075 | `_forward_ban` mark_via |
+| 3866-4077 | BanList lifts / LIFT_KEEP_S / lift_older; `ban_bundle_rows` / `_row_in` / `_take` / `_lifts` (standby hub) |
+| 7321 | hub hand-over export |
+| 14011 | `/api/hub/replica` export |
+| 15405 | hand-over import |
+| 16705 | take-over import |
+| 16793-16860 | hand-back export (+ `lifted`) and import |
 
 **moq-watch-lite.html** (CRLF):
 
@@ -148,7 +165,6 @@ assets/kastr-pres.js: not touched.
 
 - Should name-matching bans stay? They catch a second device of the same person, but also anyone else with that name.
 - Is Remove on a 0.21.91 relay host (an hour's block, with a warning) acceptable until every relay is on 0.21.92?
-- Should the standby replica bundle carry the new ban fields? Not done.
 
 ## Windows field checklist (Kenton)
 
@@ -164,4 +180,8 @@ assets/kastr-pres.js: not touched.
    - **My room settings > Bans > Lift** lets them back.
 7. Try to Remove or Ban a fleet admin from a non-fleet-admin page: refused with a clear message.
 8. Run a template meeting that creates its own room, ban someone, then End: the ban is gone from every list.
-9. A 0.21.91 PC in the room obeys Remove (lands in its main room). Banned, it cannot rejoin until the ban ends or is lifted.
+9. With a standby hub: ban someone "Until I lift it", stop the main hub until the standby takes over, then check:
+   - they are still refused, and still "until Kenton lifts it";
+   - Lift them on the standby;
+   - bring the main hub back: after the hand-back they can still join.
+10. A 0.21.91 PC in the room obeys Remove (lands in its main room). Banned, it cannot rejoin until the ban ends or is lifted.

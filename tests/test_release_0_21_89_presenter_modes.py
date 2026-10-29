@@ -147,7 +147,7 @@ class Drawing(unittest.TestCase):
         dl = block(JS, "  function drawLaid(cv, bmp, blank, mode, ar, label, rbg) {", "  function drawBoxCam(")
         self.assertIn('if (mode === "content") return drawContain(cv, bmp, blank, label || "");', dl)
         po = block(JS, "  async function paintOverlay(path, o) {", "  // ---- the presenter view")
-        self.assertIn("drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, \"\", rec.rbg);", po)
+        self.assertIn("drawLaid(o.cv, lfOf(rec) && !rec.blank ? null : bmp, rec.blank, modeOf(rec), rec.ar, \"\", rec.rbg);", po)   # 0.21.94: a live feed empties the slide's box
 
     def test_slide_video_moves_with_the_slide(self):
         dv = block(JS, "  function drawVids(cv, ar, items, rectFn) {", "  function vidFrame() {")
@@ -158,7 +158,7 @@ class Drawing(unittest.TestCase):
     def test_camera_layer_per_tile(self):
         so = block(JS, "  function syncOverlays() {", "  async function paintOverlay(")
         self.assertIn('ccv.className = "prescam";', so)
-        self.assertIn('+ "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "");', so)   # a new mode (or backdrop) repaints the still
+        self.assertIn('+ "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "")', so)   # a new mode (or backdrop) repaints the still
         self.assertIn("presCamSync();", so)
         vf = block(JS, "  function vidFrame() {", "  // ---- the loop")
         self.assertIn("if (camLayer(o)) more = true;", vf)
@@ -197,7 +197,7 @@ class Drawing(unittest.TestCase):
 class PageSeams(unittest.TestCase):
     def test_person_tile_hidden_but_decoded(self):
         self.assertIn("const presCamHide = new Set();", PAGE)
-        self.assertIn("cgWarm.has = (n) => has0(n) || presCamHide.has(n);", PAGE)   # cgWarm: keeps decoding
+        self.assertIn("cgWarm.has = (n) => has0(n) || presCamHide.has(n)", PAGE)   # cgWarm: keeps decoding
         hc = block(PAGE, "  const hiddenChild = (name) =>", "  // 0.21.66 (Kenton: an RTMP grid")
         self.assertIn("(presCamHide.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))", hc)
         self.assertIn("window.__presCamFrame = (path) =>", PAGE)

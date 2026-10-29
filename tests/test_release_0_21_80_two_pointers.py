@@ -706,7 +706,7 @@ class ShareMode(unittest.TestCase):
         self.assertIn('const RC_TUNE = { video: { delay: "instant", buffer: "0ms" }, audio: { delay: "30ms", buffer: "60ms" } };', p)
         self.assertIn('const cls = rcSh && rcSh === name ? "rc"', p)
         self.assertIn('const tn = cls === "rc" ? (t.hasAudio === false ? RC_TUNE.video : RC_TUNE.audio) : tuningFor(cls);', p)
-        self.assertIn('const prio = cls === "rc" ? 250 : isSelected ? 190', p)
+        self.assertIn('const prio = Math.max(cls === "rc" ? 250 : isSelected ? 190', p)
         self.assertIn('window.__rcCtlShare = () => (rcCtl ? rcCtl.share : "");', p)
         # re-tuned when control starts and when it ends
         i, j = p.index("function rcAllowArrive("), p.index("function rcCtlSub(")

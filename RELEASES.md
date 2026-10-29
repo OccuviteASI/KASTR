@@ -2,6 +2,35 @@
 
 What changed in each build, newest first.
 
+## v0.21.93 — Shares that heal their own frozen picture, the web address as the first relay, and clearer message marks
+
+**One built-in address: the web relay (Kenton: "use the web address as the relay on the first run, then have the hub distribute the known relays to the clients and have them switch to the best relay").**
+- A fresh install starts on https://kastr.madlabs.app/relay. The built-in private relay address and the built-in relay list are gone. `--relay`, a saved relay and kastr.ini `relay =` still win, in the same order as before.
+- **Right after your access code is accepted**, before you enter the room, KASTR fetches the hub's relay list, measures every relay from this machine and moves to the fastest one that answers (your codes come with you). If none answers, or the new relay refuses, it stays on the web address and joins there. The choice takes at most 3.5 s, and launch.log says "First run: moved to …".
+- This happens once, only in the desktop app, and only on the web address. It is skipped for invite links, the silent rejoin and a relay you picked yourself.
+- **Existing installs keep the relay they already use**; the web address is their last-resort fallback.
+- The hub's relay list now includes its own web address (set the hub's Public web address to https://kastr.madlabs.app on its Relay page). The Relay pop-up and the join picker show recent relays and the hub's list, with the hub's names.
+
+**Window and screen shares that lose their picture heal themselves (Kordale's My room window share to an invite-link guest froze about 5 times in 45 minutes; the sound kept playing and Pause + Resume fixed it each time).**
+- **The viewer notices.** When a share's picture stops for 2 s while its sound keeps arriving, the viewer's KASTR starts counting. At 6 s it asks for the picture again by itself. If it is still frozen 6 s later, it tells the sharer's KASTR.
+- **The sharer's KASTR fixes it** (screen and window shares from the desktop app, in any room including My room and for invite-link guests). First it restarts only the part that sends the picture to the relay; the capture keeps running. If the picture freezes again within 2 minutes, it restarts the whole share, the same as Pause + Resume. At most once every 30 s per share, and 6 times in 10 minutes.
+- **Expected:** the picture is back about 15-20 s after it froze, or about 45-50 s when the whole share has to restart. No more Pause + Resume by hand.
+- **Never counted:** your own weak connection dropping the picture on purpose, a paused share, a hidden or parked tile, or a hidden window.
+- The sharer's KASTR no longer moves to another relay while you are sharing.
+- Both sides write a line for each step to launch.log, and /api/diag shows the counts (`vstall` on the viewer, `heals` / `importRestarts` on the sharer).
+
+**Message marks (Kenton: "Clearer icons on each").** In Messages each of your messages shows one mark for where it is:
+- an outlined circle while it's sending;
+- ✓ once it's on the hub, waiting for them to come online;
+- a filled ✓ when it reached their device;
+- an eye once they've read it.
+
+Hover any mark for the exact time it was sent, delivered or read. The hub keeps those times, they move with a rename, and they survive a switch to the standby hub. Read receipts are always shown (Kenton: "No, always shown"). Group conversations show "sent" only, as before.
+
+**Smaller fixes.**
+- The lock and kept-open marks on the room you're in (left side of its rail badge) were black on light accents such as Lime. They have their own colour now.
+- **No Processor choice for the background effect (Kenton: "Just leave it on auto").** The camera menu no longer shows Auto / NPU / GPU / Standard. KASTR always picks for you: the NPU when the computer has one, else the graphics card, else the standard model. A saved NPU, GPU or Standard pick goes back to Auto.
+
 ## v0.21.92 — Meeting templates, recording presentations, presenters from anywhere, Remove vs Ban, start at sign-in, and room names behind an access code
 
 **Meeting templates (Kenton: layout and view, streams, presentation and roles, settings and invites).**

@@ -758,6 +758,7 @@
       ps: mine.ps.map((x) => ({ p: x.p, n: x.name || nameOfPerson(x.p), w: x.w || "", t: x.t || "" })),
       ...audFields(),   // 0.21.91: am (audience muted), lt (let talk), hx (hands lowered by a presenter)
       ...pendFields(),   // 0.21.92: roles waiting for people who are not here yet
+      ...feedFields(),   // 0.21.94: the live feed shown instead of the slide (lf), its streams (fs), lfc, lfo
     });
     T("publish", { id: mine.id, idx: mine.idx, ver: mine.ver, who: mine.by });
   }
@@ -770,6 +771,8 @@
     const ni = clampI(i, mine.n);
     const nb = blank === undefined ? mine.blank : (blank || null);
     if (ni === mine.idx && nb === mine.blank) return;
+    // 0.21.94: a move to another slide (the strip, Home / End, an older backstage's Next) ends a live feed -- the room sees the slide
+    if (mine.lf && ni !== mine.idx) { T("feed", { id: mine.id, who: by || myPerson(), k: "", p: "", why: "move" }); mine.lf = null; }
     mine.idx = ni; mine.blank = nb; mine.ver++; mine.by = by || myPerson();
     if (!mine.up[ni]) mine.want.unshift(ni);
     drawShare();
@@ -815,6 +818,8 @@
     if (ctl.cm !== undefined) { if (!modeOk(ctl.cm)) { T("drop", { id: mine.id, who }); return; } T("mode-apply", { id: mine.id, who: ctl.cm, by: who }); setMode(ctl.cm, who); return; }   // 0.21.89: a mode
     if (ctl.av && typeof ctl.av === "object") { if (!ctl.av.to || ctl.av.to === myPerson()) avApply(who, ctl.av.op, ctl.seq); return; }   // my mic / camera (0.21.91: a request to another presenter is theirs)
     if (ctl.vid && typeof ctl.vid === "object") { applyVidOp(ctl.vid, who); return; }   // 0.21.87: Play / Pause / seek of the live slide's video
+    // 0.21.94: show a live feed / back to the slides -- sent WITHOUT `to`, so an older owner (which acts on `to` only) ignores it
+    if (ctl.lf !== undefined) { if (!ctl.lf || typeof ctl.lf !== "object" || ctl.lf.off) feedSet(null, who); else if (!feedSet(ctl.lf, who)) T("drop", { id: mine.id, who, why: "feed" }); return; }
     if (ctl.to === undefined) return;
     if (ctl.bv !== mine.ver && mine.by !== who) { T("drop", { id: mine.id, idx: ctl.to, ver: mine.ver, who }); return; }   // somebody else moved first
     T("apply", { id: mine.id, idx: ctl.to, ver: mine.ver + 1, who });
@@ -1268,6 +1273,7 @@
       let bk = backstage.get(id);
       if (!bk) { bk = { rec, path, K: null, keys: null, notes: null, nv: 0, w: "" }; backstage.set(id, bk); T("bs-seen", { id }); }
       bk.rec = rec; bk.path = path; bk.pr = !!mineP; bk.seenAt = Date.now(); bk.orphan = false;
+      feedOffSeen(bk, rec);   // 0.21.94: the live feed went offline -- the room is back on the slide (a note to presenters and backstage)
       if (mineB.w && (mineB.w !== bk.w || rec.pk !== bk.pkFrom) && subtle) {
         try {
           const wk = await wrapKey(rec.pk, rec.id + "/" + me);
@@ -1335,6 +1341,17 @@
     ctlSend(o);
     T("vid-intent", { id: deckId, idx: vr.i, ver: o.bv, who: op });
   }
+  function sendFeedIntent(deckId, lf) {   // 0.21.94: a backstage person's / co-presenter's "Show <feed>" / "Back to slides" (no `to`)
+    const bk = backstage.get(deckId);
+    if (!bk || !bk.K) return false;
+    const clean = lf ? lfClean(lf) : null;
+    if (lf && !clean) return false;
+    ctlSend({ id: deckId, bv: bk.rec.ver, lf: clean || { off: 1 } });
+    bk.optLf = clean; bk.optLfAt = Date.now(); bk.optLfVer = bk.rec.ver;
+    T("feed-intent", { id: deckId, k: clean ? clean.k : "", p: clean ? clean.p : "" });
+    view.paint();
+    return true;
+  }
   function sendPresOp(deckId, pp) {   // 0.21.91: a co-presenter's request to the owner page (people, now presenting, notes, Reporter, End)
     const bk = backstage.get(deckId);
     if (!bk || !bk.pr) return false;
@@ -1373,8 +1390,9 @@
         overlays.set(path, o);
       }
       o.rec = rec;
-      if ((rec.vids || []).length || modeOf(rec) !== "content" || o.ccvOn) vidLoop();   // 0.21.89: + a camera mode
-      const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width) + "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "");
+      if ((rec.vids || []).length || modeOf(rec) !== "content" || o.ccvOn || lfOf(rec) || o.lfOn) vidLoop();   // 0.21.89: + a camera mode; 0.21.94: + a live feed
+      const key = rec.id + "/" + rec.idx + "/" + (rec.blank || "") + "/" + (fitCanvas(o.cv) ? Math.random() : o.cv.width) + "/" + modeOf(rec) + (modeOf(rec) === "reporter" ? "/" + (rec.rbg || "") : "")
+        + (lfOf(rec) ? "/lf" : "");   // 0.21.94: a live feed takes the slide's place (the still layer draws the slide's box empty)
       if (key !== o.key) { o.key = key; paintOverlay(path, o); }
     }
     presCamSync();   // 0.21.89
@@ -1402,7 +1420,8 @@
       } catch (e) { console.warn("KASTR pres: live slide", e); }
     }
     if (o.key !== key) return;
-    drawLaid(o.cv, bmp, rec.blank, modeOf(rec), rec.ar, "", rec.rbg);   // 0.21.89: placed by the room's presenter mode (Content only: as before)
+    // 0.21.94: under a live feed the slide is still fetched (Back to slides is instant) but not drawn -- the feed layer fills its place
+    drawLaid(o.cv, lfOf(rec) && !rec.blank ? null : bmp, rec.blank, modeOf(rec), rec.ar, "", rec.rbg);   // 0.21.89: placed by the room's presenter mode (Content only: as before)
     T("paint", { id: rec.id, idx: rec.idx, ver: rec.ver, who: "overlay", mode: modeOf(rec) });
   }
 
@@ -1547,6 +1566,24 @@
   #presView .vbar input[type=range] { width:min(420px, 40vw); }
   #presView .vbar .vtime { font-variant-numeric:tabular-nums; color:#8aa0b5; min-width:96px; }
   #presView .vbar .vnote { color:#ffcf7a; font-size:13px; }
+  #presView .cap .lfmark { color:#fff; background:#6d36b8; padding:1px 8px; border-radius:4px; letter-spacing:.04em; text-transform:none; font-weight:600;
+    max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #presView .cap .lfmark[hidden] { display:none; }
+  #presView .ctl button.lfback { background:#3d1f66; border-color:#8b5cd6; font-weight:600; }
+  #presView .ctl button.lfback[hidden] { display:none; }
+  #presView .rsee[data-k="feed"] { background:#3d1f66; color:#fff; border-color:#c9a6ff; }
+  #presView .pfeed .lfq { width:100%; box-sizing:border-box; margin:2px 0 6px; padding:6px 9px; border-radius:6px; border:1px solid #2c3b4b; background:#0b1118; color:#e6edf3; font:inherit; }
+  #presView .pfeed .lfl { display:grid; gap:3px; max-height:280px; overflow:auto; }
+  #presView .pfeed .lfsec { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#8aa0b5; padding:6px 2px 1px; }
+  #presView .pfeed button.lfr { justify-content:flex-start; text-align:left; width:100%; gap:8px; padding:5px 9px; }
+  #presView .pfeed button.lfr .lfn { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  #presView .pfeed button.lfr small { color:#8aa0b5; font-size:11px; }
+  #presView .pfeed button.lfr.on { background:#3d1f66; border-color:#8b5cd6; }
+  #presView .pfeed button.lfr .lftag { font-size:10.5px; padding:1px 6px; border-radius:999px; background:#c62828; color:#fff; }
+  #presView .pfeed button.lfr.back { background:#3d1f66; border-color:#8b5cd6; font-weight:600; }
+  #presView .pfeed .lfnote { font-size:12.5px; color:#ffcf7a; margin:2px 0 4px; }
+  #presView .pfeed .lfnote:empty { display:none; }
+  #presView .pfeed .lfhint { font-size:11.5px; color:#8aa0b5; padding:4px 2px; white-space:normal; }
   @media (max-width: 760px) {
     #presView .pb { grid-template-columns: 1fr; overflow:auto; }
     #presView .vdiv, #presView .hdiv { display:none; }
@@ -1595,9 +1632,10 @@
           <button type="button" class="end" title="End the presentation for everyone">End</button></div>
         <div class="prep"></div>
         <div class="pb">
-          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas><span class="rsee" title="Black / White hides the slide for the room only -- you still see it. It stays on across slide changes until you turn it off."></span></div>
+          <div class="cur"><div class="cap"><span class="live">LIVE</span><span class="lfmark" hidden title="The room sees this live feed instead of the slide — Back to slides (or Next / Back) returns to the slides"></span><span class="who"></span></div><div class="curwrap"><canvas class="curcv"></canvas><canvas class="vidcv"></canvas><span class="rsee" title="Black / White hides the slide for the room only -- you still see it. It stays on across slide changes until you turn it off."></span></div>
             <div class="ctl"><button type="button" class="big back" title="Previous slide (Left, PageUp, Backspace)">◀ Back</button>
               <span class="num"></span><button type="button" class="big next" title="Next slide (Right, PageDown, Space)">Next ▶</button>
+              <button type="button" class="lfback" hidden title="Stop the live feed: the room sees the slides again, at this slide (Next / Back do the same)">Back to slides</button>
               <button type="button" class="blk" title="Black screen for everyone (B or .)">Black</button><button type="button" class="wht" title="White screen for everyone (W or ,)">White</button></div>
             <div class="vbar"><button type="button" class="vplay" title="Play or pause the video on this slide for everyone">▶ Play video</button>
               <input type="range" class="vseek" min="0" max="1000" value="0" title="The video's position (everyone)"><span class="vtime"></span><span class="vnote"></span></div></div>
@@ -1605,6 +1643,8 @@
           <div class="side">
             <div class="panels">
               <details class="pnl" data-k="mode"><summary><span class="pnt">Mode</span><span class="pv"></span></summary><div class="pbody pmode"></div></details>
+              <details class="pnl" data-k="feed"><summary><span class="pnt">Live feed</span><span class="pv"></span></summary><div class="pbody pfeed"><div class="lfnote"></div>
+                <input type="search" class="lfq" placeholder="Search cameras, shares, grids, streams" aria-label="Search live feeds"><div class="lfl"></div></div></details>
               <details class="pnl" data-k="av"><summary><span class="pnt">Mic &amp; audience</span><span class="pv"></span></summary><div class="pbody pav"></div></details>
               <details class="pnl" data-k="ppl"><summary><span class="pnt">People</span><span class="pv"></span></summary><div class="pbody">
             <div class="pplbox"><div class="psec psp"><div class="cap">Presenters<span class="sp"></span><button type="button" class="addp" title="Make someone in the room a presenter: the same powers as you, and their camera in the slide while it is their turn">Add presenter</button></div><div class="rows"></div></div>
@@ -1641,6 +1681,8 @@
       $(".ppick").addEventListener("click", (e) => { if (e.target === $(".ppick")) closePicker(); });
       $(".next").addEventListener("click", () => step(1));
       $(".back").addEventListener("click", () => step(-1));
+      $(".lfback").addEventListener("click", () => showFeed(null));   // 0.21.94
+      $(".lfq").addEventListener("input", () => { lfSig = ""; paintFeed(deck()); });
       $(".blk").addEventListener("click", () => blank("black"));
       $(".wht").addEventListener("click", () => blank("white"));
       $(".fsm").addEventListener("click", () => setFs(fs - 2));
@@ -1740,16 +1782,23 @@
       const ex = panelAvInfo(v);
       set("av", ex.text, ex.attn);
       set("ppl", M ? M.ps.length + (M.ps.length === 1 ? " presenter" : " presenters") + " · " + M.bs.length + " backstage" + (M.pend && M.pend.length ? " · " + M.pend.length + " not here yet" : "") : "", false);
+      {   // 0.21.94: the live feed
+        const lo = feedOffNote(v);
+        set("feed", v && v.lf ? "LIVE: " + v.lf.n : lo ? lo : "Show a camera or grid instead of the slide", !!lo);
+      }
     }
     function setFs(v) { fs = Math.max(12, Math.min(48, v)); root.style.setProperty("--pnfs", fs + "px"); try { localStorage.setItem("kastr.pres.notesSize", String(fs)); } catch {} nxtApply(); }
     function deck() {   // {role, rec-like view} for the deck on show
-      if (mine && deckId === mine.id) return { role: "presenter", id: mine.id, name: mine.name, n: mine.n, idx: mine.idx, blank: mine.blank, t0: mine.t0, notes: mine.notes, by: mine.by, ver: mine.ver, ar: mine.ar };
+      if (mine && deckId === mine.id) return { role: "presenter", id: mine.id, name: mine.name, n: mine.n, idx: mine.idx, blank: mine.blank, t0: mine.t0, notes: mine.notes, by: mine.by, ver: mine.ver, ar: mine.ar,
+                                               lf: mine.lf || null, lfc: true, lfo: mine.lfo || null, share: mine.share?.path || "" };   // 0.21.94: + the live feed
       const bk = backstage.get(deckId);
       if (!bk) return null;
       const opt = bk.opt != null && Date.now() - bk.optAt < 1500 && bk.rec.ver === bk.optVer;
+      const optL = !!bk.optLfAt && Date.now() - bk.optLfAt < 1500 && bk.rec.ver === bk.optLfVer;   // 0.21.94: my feed request, until the record says
       return { role: bk.pr ? "copresenter" : "backstage", id: bk.rec.id, name: bk.rec.name, n: bk.rec.n, idx: opt ? bk.opt : bk.rec.idx, blank: opt ? bk.optBlank : (bk.rec.blank || null),
                t0: bk.rec.t0, notes: bk.notes, by: bk.rec.by, ver: bk.rec.ver, ar: bk.rec.ar, presenter: nameOfPerson(bk.rec.own || personOfPath(bk.path)), ready: !!bk.keys,
-               orphan: !!bk.orphan };   // 0.21.91: + a co-presenter; orphan = its owner went, a hand-over is on its way
+               orphan: !!bk.orphan,   // 0.21.91: + a co-presenter; orphan = its owner went, a hand-over is on its way
+               lf: optL ? bk.optLf : (opt && bk.opt !== bk.rec.idx ? null : lfOf(bk.rec)), lfc: !!bk.rec.lfc, lfo: bk.rec.lfo || null, share: bk.rec.share || "" };   // 0.21.94
     }
     function open(o) {
       build();
@@ -1774,13 +1823,21 @@
     }
     function step(d) {   // 0.21.91: a move keeps the room's Black / White
       const v = deck(); if (!v) return;
+      if (v.lf) { showFeed(null); return; }   // 0.21.94: Next / Back (a clicker too) from a live feed: the slides again, at the SAME slide
       const to = clampI(v.idx + d, v.n);
       if (v.role === "presenter") goTo(to, myPerson());
       else sendIntent(v.id, to);
     }
     function goto(i) {
       const v = deck(); if (!v) return;
+      if (v.lf && clampI(i, v.n) === v.idx) { showFeed(null); return; }   // 0.21.94: the live slide clicked in the strip: back to it (another slide: the move ends the feed)
       if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i);
+    }
+    function showFeed(src) {   // 0.21.94: "Show <feed>" (src from __presFeedSources) / null = Back to slides -- the presenter applies, others ask
+      const v = deck(); if (!v) return false;
+      if (v.role === "presenter") return feedSet(src, myPerson());
+      if (!v.lfc && src) return false;   // an older owner cannot show feeds
+      return sendFeedIntent(v.id, src);
     }
     function blank(kind) {
       const v = deck(); if (!v) return;
@@ -1855,6 +1912,7 @@
       $(".timer").textContent = (s >= 3600 ? Math.floor(s / 3600) + ":" : "") + String(Math.floor(s / 60) % 60).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
       $(".clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       paintVid();
+      try { paintFeed(v); } catch (e) { console.warn("KASTR pres: live feed list", e); }   // 0.21.94: new sources come and go (a list rebuilt only when it changed)
     }
     // ---- 0.21.87: the live slide's video -- Play / Pause / seek for the presenter and backstage, drawn on the live slide
     const fmtT = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
@@ -1900,7 +1958,7 @@
       if (!bar.dataset.scrub) $(".vseek").value = lv.dur ? String(Math.round(Math.min(1, lv.t / lv.dur) * 1000)) : "0";
       $(".vtime").textContent = fmtT(lv.t) + " / " + fmtT(lv.dur);
     }
-    let vidViewPainted = null;
+    let vidViewPainted = null, feedViewPainted = null;
     function drawVid() {   // the rAF loop's turn for the presenter view's live slide -> true while a video is on it
       if (!root || !isOpen()) return false;
       const v = deck();
@@ -1908,6 +1966,17 @@
       if (!v) { vc.width = vc.width; return false; }
       vc.style.left = base.offsetLeft + "px"; vc.style.top = base.offsetTop + "px";
       vc.style.width = base.offsetWidth + "px"; vc.style.height = base.offsetHeight + "px";
+      if (v.lf) {   // 0.21.94: the live feed over the live slide -- what the room sees in the slide's place (Black / White: the view keeps it, marked)
+        fitCanvas(vc);
+        const g = vc.getContext("2d");
+        g.clearRect(0, 0, vc.width, vc.height);
+        const n = drawFeed(g, { x: 0, y: 0, w: vc.width, h: vc.height }, v.lf, Date.now());
+        const fk = v.id + "/" + v.lf.k + "/" + v.lf.p;
+        if (n && feedViewPainted !== fk) { feedViewPainted = fk; T("feed-paint", { id: v.id, who: "view", k: v.lf.k, p: v.lf.p }); }
+        vidViewPainted = null;
+        return true;
+      }
+      feedViewPainted = null;
       let items = [], any = false;
       if (v.role === "presenter") {
         const es = [...mine.vids.values()].filter((e) => e.i === mine.idx);
@@ -1973,8 +2042,16 @@
       }
       {   // 0.21.91: the room sees Black / White -- this view keeps the slide, marked
         const rs = $(".rsee");
-        rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : "";
-        rs.dataset.k = v.blank || "";
+        rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : v.lf ? "Room sees: " + v.lf.n : "";
+        rs.dataset.k = v.blank || (v.lf ? "feed" : "");
+      }
+      {   // 0.21.94: a live feed in the slide's place -- a clear mark, Back to slides, and Next / Back say what they do now
+        const lf = v.lf, mk = $(".lfmark");
+        mk.hidden = !lf; mk.textContent = lf ? "LIVE FEED: " + lf.n : "";
+        $(".lfback").hidden = !lf;
+        $(".next").title = lf ? "Back to the slides at slide " + (v.idx + 1) + " (Right, PageDown, Space)" : "Next slide (Right, PageDown, Space)";
+        $(".back").title = lf ? "Back to the slides at slide " + (v.idx + 1) + " (Left, PageUp, Backspace)" : "Previous slide (Left, PageUp, Backspace)";
+        paintFeed(v);
       }
       const cvs = [[$(".curcv"), v.idx, null], [$(".n1"), v.idx + 1, null]];   // 0.21.91: one small next slide
       for (const [cv, i, bl] of cvs) {
@@ -1990,6 +2067,58 @@
       vidLoop();
     }
     function paintAll() { paint(); }
+    // ---- 0.21.94: the Live feed panel -- every camera, share and grid this page can show the room, the stream library too ----
+    let lfSig = "";
+    const LF_GROUPS = ["Cameras & shares", "Grids", "Room grids", "My grids", "From other rooms", "Yours", "Stream library"];
+    function paintFeed(v) {
+      if (!root || !v) return;
+      const d = root.querySelector('details.pnl[data-k="feed"]');
+      const can = v.role === "presenter" || !!v.lfc;   // backstage / a co-presenter of an older owner: no feeds
+      d.hidden = !can;
+      const note = $(".lfnote"), lo = feedOffNote(v);
+      if (note.textContent !== lo) note.textContent = lo;
+      if (!can || !d.open) return;
+      const q = $(".lfq").value.trim().toLowerCase();
+      const all = feedSources(v);
+      const lf = v.lf;
+      const sig = JSON.stringify([q, lf ? lf.k + "|" + lf.p : "", all.map((s) => [s.p, s.n, s.grp, s.sub || ""])]);
+      if (sig === lfSig) return;
+      lfSig = sig;
+      const out = [];
+      if (lf) out.push(btn("lfr back", "◀ Back to slides", "The room sees the slides again, at slide " + (v.idx + 1), () => showFeed(null)));
+      const hit = (s) => !q || String(s.n).toLowerCase().includes(q) || String(s.p).toLowerCase().includes(q) || String(s.sub || "").toLowerCase().includes(q);
+      const groups = new Map(LF_GROUPS.map((g) => [g, []]));
+      for (const s of all) if (hit(s)) (groups.get(s.grp) || groups.get("Cameras & shares")).push(s);
+      let any = false;
+      for (const [g, list] of groups) {
+        if (!list.length) continue;
+        any = true;
+        const h = document.createElement("div"); h.className = "lfsec"; h.textContent = g; out.push(h);
+        for (const s of list) {
+          const on = !!(lf && lf.p === s.p && lf.k === s.k);
+          const b = document.createElement("button"); b.type = "button"; b.className = "lfr" + (on ? " on" : ""); b.dataset.p = s.p; b.dataset.k = s.k;
+          const nm = document.createElement("span"); nm.className = "lfn"; nm.textContent = s.n;
+          b.append(nm);
+          if (s.sub) { const sm = document.createElement("small"); sm.textContent = s.sub; b.append(sm); }
+          if (on) { const t = document.createElement("span"); t.className = "lftag"; t.textContent = "LIVE"; b.append(t); }
+          b.title = on ? "The room sees this now" : "Show “" + s.n + "” to the room instead of the slide (the presenter camera and the mode stay)";
+          b.addEventListener("click", (e) => { e.stopPropagation(); if (!on) showFeed(s); });
+          out.push(b);
+        }
+        if (g === "Stream library") {
+          const h2 = document.createElement("div"); h2.className = "lfhint";
+          h2.textContent = "People who joined with an invite link (and My room guests) see a library stream only when it is in this room (Streams ▸ Add to this room) — everyone else sees it at once.";
+          out.push(h2);
+        }
+        if (g === "My grids") {
+          const h3 = document.createElement("div"); h3.className = "lfhint";
+          h3.textContent = "A grid of yours shows each camera only to people who can see it: a camera from another room shows “Not available here” to the rest.";
+          out.push(h3);
+        }
+      }
+      if (!any) { const e = document.createElement("div"); e.className = "lfhint"; e.textContent = q ? "Nothing matches “" + q + "”." : "Nothing to show yet — the cameras, shares and grids in this room appear here."; out.push(e); }
+      $(".lfl").replaceChildren(...out);
+    }
     // ---- 0.21.91 (Kenton: "The Backstage selector should be reworked"): two sections, Presenters (the main presenter first) and
     // Backstage, each with a ready dot and a remove x, an Add button that opens a people picker, a move between the sections, and on
     // each backstage row the viewing presenter's OWN "Can control my mic and camera" for that person. Read-only for backstage.
@@ -2287,7 +2416,8 @@
              paintVid: () => paintVid(), drawVid: () => drawVid(), vidPress: (op, t) => vidPress(op, t),   // 0.21.87
              people: () => pplModel(deck()), picker: (k) => openPicker(k), pickerClose: () => closePicker(), role: (w, r) => roleAct(w, r), now: (w) => curAct(w),   // 0.21.91
              end: () => endPress(), allow: (w, on) => allowAct(w, !!on),
-             pend: (t, r) => pendAct("add", t, r), unpend: (k) => pendAct("remove", k) };   // 0.21.92
+             pend: (t, r) => pendAct("add", t, r), unpend: (k) => pendAct("remove", k),   // 0.21.92
+             feed: (src) => showFeed(src), step: (d) => step(d), goto: (i) => goto(i), blank: (k) => blank(k) };   // 0.21.94
   })();
 
   // ---- 0.21.87: a slide's video drawn in its spot -- viewers' and backstage's tiles (the hidden stream's newest frame) and
@@ -2313,6 +2443,22 @@
     let more = false;
     for (const o of overlays.values()) {
       const rec = o.rec, all = rec.vids || [];
+      const lf = lfOf(rec);
+      if (lf || o.lfOn) {   // 0.21.94: a live feed in the slide's place (moved and scaled with the mode, like the slide); Black / White cover it
+        more = true;
+        if (lf && !rec.blank) {
+          fitCanvas(o.vcv);
+          const g = o.vcv.getContext("2d"), W = o.vcv.width, H = o.vcv.height;
+          g.clearRect(0, 0, W, H);
+          const n = drawFeed(g, slideRectFn(rec)(W, H), lf, Date.now());
+          o.lfOn = true; o.vPainted = null;
+          const fk = rec.id + "/" + lf.k + "/" + lf.p;
+          if (n) { o.lfDrawn = (o.lfDrawn || 0) + 1; o.lfAt = Date.now(); if (o.lfPainted !== fk) { o.lfPainted = fk; T("feed-paint", { id: rec.id, who: "overlay", k: lf.k, p: lf.p }); } }
+          try { if (camLayer(o)) more = true; } catch (e) { console.warn("KASTR pres: camera layer", e); }
+          continue;
+        }
+        if (o.lfOn) { o.lfOn = false; o.lfPainted = null; fitCanvas(o.vcv); o.vcv.getContext("2d").clearRect(0, 0, o.vcv.width, o.vcv.height); }   // back to the slides (or blanked)
+      }
       if (all.length) more = true;
       const live = all.filter((x) => x.i === rec.idx && x.st && x.p && !rec.blank && x.k !== "a");   // a sound clip is heard, not drawn
       const items = live.map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
@@ -2619,7 +2765,209 @@
     const hs = hide.sort().join("|"), cs = cuts.sort().join("|");
     if (hs !== hideSig) { hideSig = hs; try { window.__presCamHide?.(hide); } catch {} T("cam-hide", { who: hs }); }
     if (cs !== cutSig) { cutSig = cs; try { window.__presCutWant?.(cuts); } catch {} T("cut-want", { who: cs }); }
+    feedSync();   // 0.21.94
   }
+
+  // ---- 0.21.94: LIVE FEEDS IN A PRESENTATION ----------------------------------------------------------------------------------
+  // Kenton (2026-10-28): "am I able to add other shares to the presentation? Such as another camera feed or a grid? I would like this
+  // for presenters to use and backstage to be able to control." Decided: "Show <camera / grid>" TAKES OVER THE SLIDE for everyone
+  // until "Back to slides"; the presenter camera and the mode (Content / Standout / Side-by-side / Reporter) stay, composited
+  // exactly as over a slide. Sources: the room's cameras, shares and grids, the stream library, cross-room and saved grids. Every
+  // presenter and backstage person switches it, like the slides (last one wins). The record (`pres`):
+  //   lf   {p, k, n, g?, by, at}: the feed in the slide's place -- k "s" a camera / share, "g" a box's grid picture, "l" a library
+  //        stream (p its .hang path), "c" a custom grid (p its tile name, g its spots {slots: [{rect, cams, cycle}], gap}, <= 16
+  //        cameras); null = the slides
+  //   fs   the feed's .hang paths -- 0.21.92's hook: every audience page subscribes and shows them, "Audience can see each other"
+  //        off too (0.21.92 / 0.21.93 pages show them as tiles of their own; 0.21.94 pages draw them in the slide's place)
+  //   lfc  1 = this owner shows feeds (backstage and co-presenters get the Live feed panel only then)
+  //   lfo  {n, at, why}: the last feed that went offline -- the room went back to the slide (a note for presenters and backstage)
+  // Next / Back (a clicker too) while a feed is live: back to the slides at the SAME slide, no move. A click in the strip or
+  // Home / End: back AND moved (any move from anywhere -- an older backstage's Next -- ends the feed). Black / White cover the
+  // feed like a slide and keep it. Older KASTRs read none of it: their tile keeps showing the live slide (the record keeps its key).
+  // The owner page watches the feed: all its streams gone (or never a picture in 20 s) -> back to the slide for everyone.
+  const LF_KINDS = ["s", "g", "c", "l"];
+  const LF_MAX_CAMS = 16;
+  const LF_PATH = /^[A-Za-z0-9~][A-Za-z0-9._~-]*(\/[A-Za-z0-9._~-]+){1,5}$/;
+  const lfPathOk = (p) => typeof p === "string" && p.length <= 200 && LF_PATH.test(p) && /\.hang$/.test(p) && !/-low\.hang$/.test(p) && !p.includes("..");
+  function lfClean(x) {   // a feed as it may ride the record / a request -> {p, k, n, g?} | null
+    if (!x || typeof x !== "object" || !LF_KINDS.includes(x.k) || !lfPathOk(x.p)) return null;
+    const o = { p: x.p, k: x.k, n: String(x.n || "").replace(/\s+/g, " ").trim().slice(0, 60) || x.p.split("/").pop().replace(/\.hang$/, "") };
+    if (x.k === "c") {
+      const g = x.g && typeof x.g === "object" ? x.g : null;
+      if (!g || !Array.isArray(g.slots)) return null;
+      let n = 0;
+      const slots = [];
+      for (const s of g.slots.slice(0, 16)) {
+        if (!s || !Array.isArray(s.rect) || s.rect.length !== 4) continue;
+        const rect = s.rect.map((u) => Math.max(0, Math.min(24, Number(u) || 0)));
+        if (!(rect[2] > 0 && rect[3] > 0)) continue;
+        const cams = [];
+        for (const c of Array.isArray(s.cams) ? s.cams : []) if (lfPathOk(c) && !cams.includes(c) && n < LF_MAX_CAMS) { cams.push(c); n++; }
+        const cy = s.cycle && typeof s.cycle === "object" ? { mode: s.cycle.mode === "time" ? "time" : "motion", every: Math.max(2, Math.min(600, Number(s.cycle.every) || 10)) } : null;
+        slots.push(cy ? { rect, cams, cycle: cy } : { rect, cams });
+      }
+      if (!slots.some((s) => s.cams.length)) return null;
+      o.g = { slots, gap: Math.max(0, Math.min(24, Number(g.gap) || 0)) };
+    }
+    return o;
+  }
+  const lfCache = new WeakMap();
+  function lfOf(rec) {   // the record's live feed, checked once per record object
+    if (!rec || !rec.lf || typeof rec.lf !== "object") return null;
+    let c = lfCache.get(rec.lf);
+    if (c === undefined) { c = lfClean(rec.lf); lfCache.set(rec.lf, c); }
+    return c;
+  }
+  function lfPaths(lf) {   // the streams a feed draws
+    if (!lf) return [];
+    if (lf.k !== "c") return [lf.p];
+    const out = [];
+    for (const s of lf.g.slots) for (const c of s.cams) if (!out.includes(c)) out.push(c);
+    return out.slice(0, LF_MAX_CAMS);
+  }
+  const sameFeed = (a, b) => (!a && !b) || (!!a && !!b && a.k === b.k && a.p === b.p && JSON.stringify(a.g || null) === JSON.stringify(b.g || null));
+  function feedFields() {
+    const m = mine;
+    if (!m) return {};
+    const o = { lfc: 1, lf: m.lf ? Object.assign({}, m.lf) : null, fs: lfPaths(m.lf) };
+    if (m.lfo) o.lfo = m.lfo;
+    return o;
+  }
+  // the owner: show a feed / back to the slides (by = who asked; why "offline" = the owner's watch gave up on it)
+  function feedSet(lf, by, why) {
+    if (!mine) return false;
+    const clean = lf ? lfClean(lf) : null;
+    if (lf && !clean) return false;
+    if (sameFeed(clean, mine.lf)) return true;
+    const was = mine.lf;
+    mine.lf = clean ? Object.assign(clean, { by: by || myPerson(), at: Date.now() }) : null;
+    if (clean) mine.lfo = null;
+    else if (why === "offline" && was) mine.lfo = { n: was.n, at: Date.now(), why: "offline" };
+    mine.ver++; mine.by = by || myPerson();
+    T("feed", { id: mine.id, who: by || myPerson(), k: clean ? clean.k : "", p: clean ? clean.p : "", why: why || "" });
+    publish();
+    feedSync();
+    view.paint();
+    return true;
+  }
+  function feedOffSeen(bk, rec) {   // a presenter's / backstage page: the owner went back to the slide because the feed went offline
+    const at = rec.lfo && Number(rec.lfo.at) || 0;
+    if (!at || at === bk.lfoAt) return;
+    const first = bk.lfoAt === undefined;
+    bk.lfoAt = at;
+    if (first && Date.now() - at > 15000) return;   // an old note in a record I just met
+    presNote("“" + String(rec.lfo.n || "The live feed").slice(0, 60) + "” went offline — the room sees the slides again.", 9000, "warn");
+  }
+  function feedOffNote(v) {   // the Live feed panel's note for a minute after a feed went offline
+    const o = v && v.lfo;
+    if (!o || !o.at || v.lf || Date.now() - o.at > 60000) return "";
+    return "“" + String(o.n || "The live feed").slice(0, 60) + "” went offline " + ago(o.at) + " — the room went back to the slides.";
+  }
+  function feedSources(v) {   // what this page can show: the page's list, minus the presentations' own shares
+    let list = [];
+    try { list = window.__presFeedSources?.({ poll: true }) || []; } catch {}
+    const skip = new Set([v && v.share].filter(Boolean));
+    for (const { rec } of deckRecs().values()) if (rec.share) skip.add(rec.share);
+    if (mine && mine.share && mine.share.path) skip.add(mine.share.path);
+    const out = [];
+    for (const s of Array.isArray(list) ? list : []) {
+      if (!s || skip.has(s.p)) continue;
+      const c = lfClean(s);
+      if (c) out.push(Object.assign(c, { grp: String(s.grp || "Cameras & shares"), sub: String(s.sub || "").slice(0, 80) }));
+    }
+    return out;
+  }
+  // ---- drawing a feed (viewers' / backstage's tiles, the presenter view, the mode preview, the recorder -- they all draw here)
+  function feedFrame(p) {
+    let f = null;
+    try { f = window.__presCamFrame?.(p) || null; } catch {}
+    if (!f) try { f = window.__presOwnFrame?.(p) || null; } catch {}   // my own camera / share (no tile of its own on my page)
+    return f;
+  }
+  const frameWH = (f) => [f.displayWidth || f.codedWidth || f.videoWidth || f.width || 0, f.displayHeight || f.codedHeight || f.videoHeight || f.height || 0];
+  function feedWait(p) { let a = ""; try { a = window.__presFeedAvail?.(p) || ""; } catch {} return a === "na" ? "Not available here" : "Connecting…"; }
+  function feedLabel(p) { try { return window.__presFeedLabel?.(p) || ""; } catch { return ""; } }
+  function drawFeed(g, R, lf, now) {   // the feed into R (the slide's place) -> how many pictures were drawn
+    g.save();
+    g.beginPath(); g.rect(R.x, R.y, R.w, R.h); g.clip();
+    g.fillStyle = "#000"; g.fillRect(R.x, R.y, R.w, R.h);
+    const fit = (f, r) => {
+      const [iw, ih] = frameWH(f);
+      if (!iw || !ih) return false;
+      const sc = Math.min(r.w / iw, r.h / ih);
+      try { g.imageSmoothingQuality = "high"; g.drawImage(f, r.x + (r.w - iw * sc) / 2, r.y + (r.h - ih * sc) / 2, iw * sc, ih * sc); return true; } catch { return false; }
+    };
+    const say = (r, t, px) => { g.fillStyle = "#9aa7b4"; g.font = Math.max(10, Math.round(px)) + "px 'Segoe UI', system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(t, r.x + r.w / 2, r.y + r.h / 2, r.w * 0.92); };
+    let n = 0;
+    if (lf.k !== "c") {
+      const f = feedFrame(lf.p);
+      if (f && fit(f, R)) n = 1; else say(R, feedWait(lf.p), R.h * 0.05);
+    } else {   // a custom grid: its spots in a 16:9 picture (as the grid's own tile draws them), a spot's cameras taking turns on time
+      const bw = Math.min(R.w, R.h * 16 / 9), bh = bw * 9 / 16, bx = R.x + (R.w - bw) / 2, by = R.y + (R.h - bh) / 2;
+      const gap = Math.max(0, Math.min(24, Number(lf.g.gap) || 0)) / 2 * bw / 1280, fpx = 13 * bh / 720;
+      for (const s of lf.g.slots) {
+        const u = s.rect;
+        const r = { x: bx + u[0] * bw / 24 + gap, y: by + u[1] * bh / 24 + gap, w: Math.max(2, u[2] * bw / 24 - 2 * gap), h: Math.max(2, u[3] * bh / 24 - 2 * gap) };
+        g.fillStyle = "#0b1116"; g.fillRect(r.x, r.y, r.w, r.h);
+        const live = s.cams.filter((c) => !!feedFrame(c));
+        const every = Math.max(2, Number(s.cycle && s.cycle.every) || 10);
+        const cam = live.length ? live[Math.floor(now / 1000 / every) % live.length] : null;
+        const f = cam ? feedFrame(cam) : null;
+        if (f && fit(f, r)) n++;
+        else say(r, s.cams.length ? feedWait(s.cams[0]) : "Empty spot", Math.min(r.h * 0.09, 15 * bh / 720 + 4));
+        const lab = cam ? feedLabel(cam) : "";
+        if (lab && r.h > 34 * bh / 720 && fpx >= 7) {
+          g.save();
+          g.font = "600 " + Math.round(fpx) + "px 'Segoe UI', system-ui, sans-serif";
+          const tw = Math.min(r.w - 8, g.measureText(lab).width + fpx);
+          g.fillStyle = "rgba(10,14,18,.62)"; g.fillRect(r.x + 4, r.y + r.h - fpx * 2, tw, fpx * 1.6);
+          g.beginPath(); g.rect(r.x + 4, r.y + r.h - fpx * 2, tw, fpx * 1.6); g.clip();
+          g.fillStyle = "#fff"; g.textAlign = "left"; g.textBaseline = "middle"; g.fillText(lab, r.x + 4 + fpx / 2, r.y + r.h - fpx * 1.2);
+          g.restore();
+        }
+      }
+    }
+    g.restore();
+    return n;
+  }
+  // ---- which streams this page keeps for the feeds it draws (the page subscribes them at the slide's priority, hidden as tiles)
+  let feedSig = "";
+  function feedSync() {
+    const paths = new Set(), shares = new Set(), hear = new Set();   // hear: a single feed (a camera, a share, a library stream) is heard
+    const add = (lf, share) => { for (const p of lfPaths(lf)) paths.add(p); if (lf.k !== "c") hear.add(lf.p); if (share) shares.add(share); };
+    for (const o of overlays.values()) { const lf = lfOf(o.rec); if (lf) add(lf, o.rec.share); }   // kept through Black / White (back at once)
+    if (mine && mine.lf) add(mine.lf, mine.share && mine.share.path);
+    try { const v = view.isOpen() ? view.deck() : null; if (v && v.lf) for (const p of lfPaths(v.lf)) paths.add(p); } catch {}
+    const sig = [...paths].sort().join("|") + "#" + [...shares].sort().join("|") + "#" + [...hear].sort().join("|");
+    if (sig === feedSig) return;
+    feedSig = sig;
+    try { window.__presFeedWant?.([...paths], [...shares], [...hear]); } catch {}
+    T("feed-want", { who: [...paths].sort().join("|") });
+  }
+  // ---- the owner's watch: a feed whose every stream is gone falls back to the slide for everyone
+  const lfw = { key: "", at: 0, ok: new Map(), had: new Set() };
+  const LF_GONE_MS = 3000, LF_NEVER_MS = 20000;
+  function feedWatch() {
+    if (!mine || !mine.lf) { lfw.key = ""; return; }
+    const lf = mine.lf, now = Date.now(), key = mine.id + "|" + mine.og + "|" + lf.k + "|" + lf.p + "|" + (lf.at || 0);
+    if (lfw.key !== key) { lfw.key = key; lfw.at = now; lfw.ok.clear(); lfw.had.clear(); }
+    const paths = lfPaths(lf);
+    let down = 0;
+    for (const p of paths) {
+      let s = null;
+      try { s = window.__presFeedState?.(p) || null; } catch {}
+      if (!s) continue;   // a page without the seam never judges
+      if (s.fr) lfw.had.add(p);
+      if (s.has && !s.dead && lfw.had.has(p)) lfw.ok.set(p, now);
+      const last = lfw.ok.get(p);
+      if (last ? now - last > LF_GONE_MS : now - lfw.at > LF_NEVER_MS) down++;
+    }
+    if (paths.length && down === paths.length) {
+      presNote("“" + lf.n + "” went offline — the room sees the slides again.", 9000, "warn");
+      feedSet(null, mine.lf.by || myPerson(), "offline");
+    }
+  }
+  setInterval(() => { try { feedWatch(); feedSync(); } catch (e) { console.warn("KASTR pres: live feed", e); } }, 700);
 
   // ---- the presenter: the chosen mode, the camera, the cut-out, backstage's mic / camera control ------------------------------
   // 0.21.91 (Kenton: "allow them to show their camera instead of the main presenters camera while they are presenting their part of
@@ -3073,7 +3421,8 @@
     const g = cv.getContext("2d");
     // the slide's video in its spot (moved with the slide)
     let items = [];
-    if (!roomBlank(mv)) {
+    if (v.lf && !roomBlank(mv)) drawFeed(g, presLayout(mv.eff, W, H, ar, 16 / 9, true).slide, v.lf, Date.now());   // 0.21.94: the live feed in the slide's place
+    else if (!roomBlank(mv)) {
       if (mv.role === "presenter") items = [...mine.vids.values()].filter((e) => e.i === mine.idx && e.st && e.shareId != null && e.sv.kind !== "audio").map((e) => ({ x: e.sv.x, y: e.sv.y, w: e.sv.w, h: e.sv.h, src: window.__presVideo?.frame(e.shareId) || null }));
       else if (mv.rec.idx === v.idx) items = (mv.rec.vids || []).filter((x) => x.i === mv.rec.idx && x.st && x.k !== "a").map((x) => ({ x: x.x, y: x.y, w: x.w, h: x.h, src: window.__presVidFrame?.(x.p) || null }));
     }
@@ -3199,6 +3548,7 @@
     m.ms = { eff: "content", cam: "", cut: "", nocut: "", why: "", sig: "" };
     adoptExtra(m, rec);
     pendAdopt(m, rec);   // 0.21.92
+    { const lf = lfOf(rec); m.lf = lf ? Object.assign({}, lf, { by: String(rec.lf.by || "").slice(0, 80), at: Date.now() }) : null; m.lfo = null; }   // 0.21.94: the live feed stays on through a hand-over
     m.vs = Number(rec.vs) || 0;
     m.resumeVids = Array.isArray(rec.vids) ? rec.vids.slice(0, 8) : [];
     backstage.delete(rec.id);
@@ -3709,8 +4059,8 @@
     onEnd: null,   // 0.21.92: set by assets/kastr-templates.js -- the End button's hook (see endPress)
     go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i); return true; },   // a viewer has no deck here: false (0.21.91: the blank stays)
     blank: (kind) => { const v = view.deck(); if (!v) return false; const nb = kind === "black" || kind === "white" ? kind : null; if (v.role === "presenter") goTo(v.idx, myPerson(), nb); else sendIntent(v.id, v.idx, nb); return true; },   // 0.21.91 rig
-    next: () => { const v = view.deck(); if (v) window.__pres.go(v.idx + 1); },
-    back: () => { const v = view.deck(); if (v) window.__pres.go(v.idx - 1); },
+    next: () => { const v = view.deck(); if (v && v.lf) return window.__pres.feed(null); if (v) window.__pres.go(v.idx + 1); },   // 0.21.94: from a live feed = the slides again, same slide (as the button)
+    back: () => { const v = view.deck(); if (v && v.lf) return window.__pres.feed(null); if (v) window.__pres.go(v.idx - 1); },
     setBackstage,
     open: () => { const id = mine ? mine.id : [...backstage.values()].find((b) => b.keys)?.rec.id; if (!id) return false; view.open({ deck: id }); return true; },
     close: () => view.close(),
@@ -3754,6 +4104,14 @@
     now: (who) => view.now(who), people: () => view.people(), picker: (k) => view.picker(k),   // 0.21.91
     endAll: () => view.end(),
     reporterBgs: () => REPORTER_BGS.map((b) => b[0]),
+    // 0.21.94: live feeds -- feed(src) shows one (a {p, k, n, g?} from sources()) or null = back to the slides (presenter: directly;
+    // backstage / co-presenter: a request); sources() = what this page can show; feedState() = what this page holds and drew
+    feed: (src) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") return feedSet(src || null, myPerson()); return v.lfc || !src ? sendFeedIntent(v.id, src || null) : false; },
+    sources: () => feedSources(view.deck()),
+    feedState: () => ({ mine: mine ? { lf: mine.lf || null, lfo: mine.lfo || null } : null, want: feedSig,
+      seen: [...remote.entries()].filter(([, r]) => r.pres).map(([p, r]) => ({ path: p, id: r.pres.id, lf: r.pres.lf || null, fs: r.pres.fs || [], lfc: r.pres.lfc || 0, lfo: r.pres.lfo || null })),
+      drawn: [...overlays.entries()].map(([p, o]) => ({ path: p, lf: !!lfOf(o.rec), n: o.lfDrawn || 0, at: o.lfAt || 0 })),
+      view: (() => { const v = view.isOpen() ? view.deck() : null; return v ? { role: v.role, lf: v.lf || null, lfc: !!v.lfc, note: feedOffNote(v) } : null; })() }),
     modes: () => modeState(),
     layout: presLayout,   // rig: the geometry alone
     trace,

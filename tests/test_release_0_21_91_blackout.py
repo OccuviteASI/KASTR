@@ -36,7 +36,7 @@ class PersistsAcrossMoves(unittest.TestCase):
         st = block(JS, "    function step(d) {", "    function blank(kind) {")
         self.assertIn("goTo(to, myPerson());", st)   # no blank argument: kept
         self.assertIn("sendIntent(v.id, to);", st)
-        self.assertNotIn("null)", st)
+        self.assertNotRegex(st, r"(goTo|sendIntent)\([^)]*null\)")   # 0.21.94: showFeed(null) = Back to slides, not a blank
         ao = block(JS, "  function applyOp(ctl, who, isP) {", "  let rewrapT = null;")
         self.assertIn("goTo(ctl.to, who, ctl.blank);", ao)   # a 0.21.91 backstage / co-presenter Next keeps it too
         self.assertIn('go: (i) => { const v = view.deck(); if (!v) return false; if (v.role === "presenter") goTo(i, myPerson()); else sendIntent(v.id, i);', JS)
@@ -64,7 +64,7 @@ class TheRoomOnly(unittest.TestCase):
 
     def test_presenter_and_backstage_views_keep_the_slide(self):
         pt = block(JS, "    async function paint() {", "    function paintAll()")
-        self.assertIn('rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : "";', pt)
+        self.assertIn('rs.textContent = v.blank === "black" ? "Room sees: Black" : v.blank === "white" ? "Room sees: White" : v.lf ? "Room sees: " + v.lf.n : "";', pt)   # 0.21.94: + a live feed
         self.assertIn("[$(\".curcv\"), v.idx, null]", pt)   # the real slide, never the blank
         self.assertIn('$(".blk").classList.toggle("on", v.blank === "black");', pt)
         dv = block(JS, "    function drawVid() {", "    let paintSeq")

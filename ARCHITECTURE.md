@@ -554,6 +554,16 @@ from 0.21.17 to 0.21.40; RELEASES.md has the detail and the measurements for eac
 - **Server cleanup (0.21.40).** `request_class` is gone (locality is `kastr_relay.is_local`); `/api/ini`, `/api/archive/seg`,
   `/api/relay/lan` and `/api/relay/spokes/close-room` are removed; `/api/relay/status` and `/api/relay/health` carry no
   `lan` field; only the `~` control namespace is recognised.
+- **Live feeds in a presentation (0.21.94).** The owner's `pres` record gains `lf` (the feed: a stream path + kind
+  s/g/c/l, a custom grid's slots), `fs` (its streams), `lfc` and `lfo`. Presenters and backstage ask with `presCtl {lf}`
+  WITHOUT `to`, so a 0.21.93 owner (which acts on `to`) ignores it; the owner's `applyOp` handles `lf` before the slide
+  move and bumps `ver`. The feed is drawn by kastr-pres.js into the slide rectangle on the presentation tile's overlay
+  canvas (`drawFeed`), under the presenter camera layer, so modes and the recorder need nothing new. The page learns the
+  wanted streams through `__presFeedWant(paths, shares, hear)` and treats them like a grid's hidden children (cgWarm,
+  hiddenChild, priority 190/150, full rendition, odPulse/odQuick exempt); a library feed joins the library connection
+  (`libSync`, kind "pres"). Audience pages of any version keep the feed through the 0.21.92 `fs` show set of
+  `__presAudHide`. The owner watches the feed every 700 ms and drops back to the slide when all its streams are gone.
+  Client-enforced like the rest of the presentation; the relay's grants decide what a page can actually read.
 
 ## Known limitations & risks
 

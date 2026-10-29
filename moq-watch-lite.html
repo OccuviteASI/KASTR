@@ -5044,6 +5044,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // is not also a tile of its own here (gallery, rail) -- unless I put it on my stage myself -- yet it keeps decoding (cgWarm),
   // because kastr-pres.js draws its frames. Fed by kastr-pres.js (window.__presCamHide); empty while every deck is Content only.
   const presCamHide = new Set();
+  // 0.21.94 (Kenton: "am I able to add other shares to the presentation? Such as another camera feed or a grid?"): the LIVE FEEDS a
+  // presentation in my room shows in its slide's place now (record `lf`) -- kastr-pres.js draws them (window.__presFeedWant). They
+  // keep decoding off-stage (cgWarm) at the slide's priority (the presentation tile's: 190 on my stage, else 150), on the FULL
+  // copy, are not tiles of their own here (unless on my stage), and a single feed is heard while the presentation is on my stage.
+  const presFeedSet = new Set(), presFeedShares = new Set(), presFeedHear = new Set();
+  const presFeedStage = () => !gridMode && !!selectedName && presFeedShares.has(selectedName);
   // 0.21.92 (Kenton: "When presenting, don't show cameras in the side rail for everyone, only show the cameras that are being passed
   // through the presentation") + the presenters' "Audience can see each other" switch. Fed by kastr-pres.js (window.__presAudHide)
   // on an AUDIENCE member's page while a presentation is live in my room -- null on a presenter's or backstage page, and once it ends:
@@ -7982,7 +7988,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const cgPending = new Map();   // a new grid while its builder is open: tile name -> def (kept on Done, gone on Cancel)
   const cgCams = new Set();      // every camera a grid of mine / of my room draws
   const cgWarm = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();
-  { const has0 = cgWarm.has.bind(cgWarm); cgWarm.has = (n) => has0(n) || presCamHide.has(n); }   // 0.21.89: + a presenter's camera drawn inside its presentation tile   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
+  { const has0 = cgWarm.has.bind(cgWarm); cgWarm.has = (n) => has0(n) || presCamHide.has(n) || presFeedSet.has(n); }   // 0.21.94: + a live feed drawn in a presentation's slide place   // 0.21.89: + a presenter's camera drawn inside its presentation tile   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
   let cgDefsNow = new Map();     // tile name -> {kind: "me" | "room", id, g: {name, slots, gap, sens}}
   let cgOpened = null;           // {cam, grid}: a camera opened from a grid's spot (a click on it goes back)
   let cgWarmSig = "", cgTickT = 0, cgRaf = 0, cgLastDraw = 0;
@@ -9358,6 +9364,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function isAudible(name) {
     if (!enabledStreams.has(name)) return false;   // parked: never audible
     if (isPresVid(name)) return !(manualMute || mutedStreams.has(name));   // 0.21.87: a slide's video is heard with its slide
+    if (presFeedHear.has(name) && presFeedStage()) return !(manualMute || mutedStreams.has(name));   // 0.21.94: a live feed in the slide's place
     if (cgHide(name) && name !== selectedName) return false;   // 0.21.66 (e)
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return false;   // 0.9.5
     if (audioMode === "all") return true;
@@ -10773,6 +10780,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || (deadMember(name) && !(name === selectedName && !gridMode && gridPickHeld(name))) || leavingExMember(name) || roomHid.has(name)   // 0.21.80: a clicked camera held through a `down` flap stays shown
     || (cgHide(name) && (gridMode || name !== selectedName))   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
     || (presCamHide.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))   // 0.21.89: drawn inside its presentation tile
+    || (presFeedSet.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))   // 0.21.94: a live feed drawn in a presentation's slide place
     || presAudHidden(name, false)   // 0.21.92: an audience member sees the presentation's cameras only (no stage exception)
     || gridDark(name);
   // 0.21.66 (Kenton: an RTMP grid sat on "cameras offline -- reconnecting (3)" -- "It should hide it"): a grid whose every camera is
@@ -11005,6 +11013,78 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { applyState(); } catch {}
     return true;
   };
+  // 0.21.94: live feeds -- kastr-pres.js tells which streams the presentations in my room show in their slide's place (paths), the
+  // presentation tiles showing them (shares: their priority follows my stage) and the single feeds that are heard (hear)
+  window.__presFeedWant = (paths, shares, hear) => {
+    const ok = (p) => typeof p === "string" && p.length <= 200 && /\.hang$/.test(p) && !LOW_RE.test(p);
+    const next = new Set((Array.isArray(paths) ? paths : []).filter(ok).slice(0, 48));
+    const sh = new Set((Array.isArray(shares) ? shares : []).filter(ok)), hr = new Set((Array.isArray(hear) ? hear : []).filter((p) => next.has(p)));
+    const same = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+    if (same(next, presFeedSet) && same(sh, presFeedShares) && same(hr, presFeedHear)) return false;
+    presFeedSet.clear(); for (const p of next) presFeedSet.add(p);
+    presFeedShares.clear(); for (const p of sh) presFeedShares.add(p);
+    presFeedHear.clear(); for (const p of hr) presFeedHear.add(p);
+    for (const p of [...presFeedAsk.keys()]) if (!presFeedSet.has(p)) presFeedAsk.delete(p);
+    try { applyState(); } catch {}
+    try { libSync(); } catch {}
+    return true;
+  };
+  window.__presFeedWanted = () => ({ paths: [...presFeedSet], shares: [...presFeedShares], hear: [...presFeedHear] });   // rig
+  const presFeedAsk = new Map();   // a feed path -> when this page first had to draw it ("Not available here" after a while)
+  // what this page can show in a presentation's slide place: {p, k, n, g?, grp, sub} -- k "s" a camera / share, "g" a box's grid
+  // picture, "c" a custom grid (its spots), "l" a library stream
+  let presFeedPolled = 0;
+  window.__presFeedSources = (o) => {
+    const out = [], seen = new Set();
+    const put = (x) => { if (!x.p || seen.has(x.p)) return; seen.add(x.p); out.push(x); };
+    const lab = (p) => { try { return gridLabel(p) || shortLabel(p); } catch { return String(p); } };
+    if (!window.__joinedChannel?.()) return out;
+    for (const n of tiles.keys()) {
+      if (!String(n).startsWith(CHANNEL + "/") || LOW_RE.test(n) || isPresVid(n) || isCgName(n) || !/\.hang$/.test(n)) continue;
+      if (gridMeta.has(n)) put({ p: n, k: "g", n: lab(n), grp: "Grids" });
+      else put({ p: n, k: "s", n: lab(n), grp: "Cameras & shares" });
+    }
+    for (const n of mineNames) if (/\.hang$/.test(n) && !LOW_RE.test(n) && !isPresVid(n)) put({ p: n, k: "s", n: lab(n), grp: "Yours" });
+    for (const [n, x] of xsTiles) if (!x.cg && !isLibPath(n) && !LOW_RE.test(n)) put({ p: n, k: gridMeta.has(n) ? "g" : "s", n: lab(n), grp: "From other rooms", sub: x.from || "" });
+    for (const [n, d] of cgDefsNow) {
+      if (!d || !d.g || !Array.isArray(d.g.slots)) continue;
+      put({ p: n, k: "c", n: String(d.g.name || "Grid").slice(0, 48), g: { slots: d.g.slots.map((sl) => ({ rect: sl.rect, cams: (sl.cams || []).map(String), cycle: sl.cycle || null })), gap: d.g.gap || 0 },
+            grp: d.kind === "me" ? "My grids" : "Room grids" });
+    }
+    if (libOn() && libRoomOk()) {
+      if (o && o.poll && Date.now() - presFeedPolled > 15000) { presFeedPolled = Date.now(); try { libPoll(true); } catch {} }
+      for (const [n, e] of libCat) {
+        const st = libStateOf(e);
+        if (st === "gone" || LOW_RE.test(n)) continue;
+        put({ p: n, k: "l", n: String(e.label || lab(n)).slice(0, 60), grp: "Stream library", sub: [e.box, e.site].filter(Boolean).join(" - ") + (st === "live" ? "" : " (" + st + ")") });
+      }
+    }
+    return out;
+  };
+  // the owner's offline watch: has = a tile (or my own source), fr = a picture now, dead = the library says it is offline / gone
+  window.__presFeedState = (p) => {
+    p = String(p);
+    const t = tiles.get(p);
+    let fr = false;
+    try { fr = !!(t && vgFrameOf(t)) || !!window.__presOwnFrame?.(p); } catch {}
+    let dead = false;
+    if (isLibPath(p)) { const e = libCat.get(p); const st = e ? libStateOf(e) : ""; dead = st === "gone" || st === "offline" || st === "site"; }
+    return { has: !!t || mineNames.has(p), fr, dead };
+  };
+  // the waiting text of a feed with no picture here: "na" = this page cannot get it (a guest and an unpinned library stream; a
+  // stream of another room this page has no listing for, after 8 s), "wait" = still connecting, "ok" = it has a picture
+  window.__presFeedAvail = (p) => {
+    p = String(p);
+    const t = tiles.get(p);
+    try { if (t && vgFrameOf(t)) return "ok"; } catch {}
+    if (mineNames.has(p)) return "wait";
+    if (!presFeedAsk.has(p)) presFeedAsk.set(p, Date.now());
+    if (isLibPath(p)) { if (!libRoomOk() || (libGuest() && !boardPinned(p))) return "na"; const e = libCat.get(p); return e && libStateOf(e) === "gone" ? "na" : "wait"; }
+    if (!t && !p.startsWith(CHANNEL + "/") && Date.now() - presFeedAsk.get(p) > 8000) return "na";
+    return "wait";
+  };
+  window.__presFeedLabel = (p) => { try { return cgLabelOf(String(p)); } catch { return ""; } };
+
   window.__presAudHide = (a) => {   // 0.21.92: kastr-pres.js -- what this AUDIENCE member's page leaves out (null: nothing)
     const next = a && typeof a === "object" ? { show: new Set((Array.isArray(a.show) ? a.show : []).map(String)), staff: new Set((Array.isArray(a.staff) ? a.staff : []).map((x) => String(x).toLowerCase())),
                                                 anon: !!a.anon, me: String(a.me || "").toLowerCase(), tiles: (Array.isArray(a.tiles) ? a.tiles : []).map(String) } : null;
@@ -13253,14 +13333,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         // 0.21.76 (lab 2026-10-20: moq-relay 0.17 honours SUBSCRIBER priority on the viewer leg AND the spoke -> hub leg; with
         // equal priorities the FIRST subscription wins a thin link): what matters wins -- on stage 190, a grid 180, a share or
         // camera feed 150, a person 120 (the library adds +5 for each tile's own audio; catalogs go first at 255, state 200)
-        const prio = cls === "rc" ? 250 : isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120;   // 0.21.80: + the share I control
+        const prio = Math.max(cls === "rc" ? 250 : isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120,   // 0.21.80: + the share I control
+                              presFeedSet.has(name) ? (presFeedStage() ? 190 : 150) : 0);   // 0.21.94: a live feed rides at its slide's priority
         if (t.prio !== prio) { t.prio = prio; t.watch.setAttribute("priority", String(prio)); }
         // 0.18.0: thumbnails pull the -low.hang sibling when the publisher offers one; the spotlit tile the full stream
         // 0.21.7: ... and so does a spotlit tile whose FULL copy is not on the air yet (an on-demand camera waking:
         // the low copy plays at once, the full one takes over when its announce arrives)
-        const wantName = (lowAvail.has(name) && (cls !== "main" || !fullLive.has(name))) ? lowOf(name) : name;
+        const feedFull = presFeedSet.has(name);   // 0.21.94: a live feed in a slide's place plays the full copy (the low one while it wakes)
+        const wantName = (lowAvail.has(name) && ((cls !== "main" && !feedFull) || !fullLive.has(name))) ? lowOf(name) : name;
         if (t.watch.getAttribute("name") !== wantName) { t.watch.setAttribute("name", wantName); t.rendition = wantName === name ? "full" : "low"; }
-        if (cls === "main" && wantName !== name && !fullLive.has(name) && !parkedStreams.has(name)) odWake(name);   // 0.21.7: the spotlit low copy asks for the full pair (also for a camera on another site)
+        if ((cls === "main" || feedFull) && wantName !== name && !fullLive.has(name) && !parkedStreams.has(name)) odWake(name);   // 0.21.7: the spotlit low copy asks for the full pair (also for a camera on another site)
       }
       if (shown) matchRendition(t);
 
@@ -18571,7 +18653,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
       // 0.21.7: a rail thumbnail on the low copy asks for nothing (every viewer's rail would keep every camera awake);
       // the spotlit tile, a tile with no low copy, or the fallback player keeps the full pair alive
-      if (lowAvail.has(name) && t.tune_cls !== "main" && !t.fb?.dataset.src) continue;
+      if (lowAvail.has(name) && t.tune_cls !== "main" && !t.fb?.dataset.src && !presFeedSet.has(name)) continue;   // 0.21.94: + a live feed in a slide's place
       odDemand(name);
     }
   }
@@ -18586,7 +18668,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const [name, t] of tiles) {
       if (!(xsTiles.has(name) || libTiles.has(name)) || parkedStreams.has(name) || t.cg) continue;   // 0.21.84: + a library stream in this room (room lib)
       if (libTiles.has(name) && !libWakeable(name)) continue;   // 0.21.84: no demand to a box that is offline, a site that is unreachable, a stream that is gone
-      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none") && !(libTiles.has(name) && cgWarm.has(name))) continue;   // 0.21.84: + a library camera my grid draws now   // watched -- NOT `visible` (noCatalog parks it)
+      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none") && !((libTiles.has(name) || presFeedSet.has(name)) && cgWarm.has(name))) continue;   // 0.21.94: + a live feed; 0.21.84: + a library camera my grid draws now   // watched -- NOT `visible` (noCatalog parks it)
       if (hasPicture(t)) { t.odAt = 0; t.odResub = false; continue; }
       if (!t.odAt) { t.odAt = now; odWake(name); continue; }
       if (!t.odResub && now - t.odAt > 6000) { t.odResub = true; resubscribe(name, "a camera shown here from another room was asleep"); }
@@ -24762,6 +24844,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (board.room === CHANNEL) for (const p of board.pins || []) if (isLibPath(p?.path)) want.set(String(p.path), "pin");
           for (const p of libMeList()) if (!want.has(p)) want.set(p, "me");
           for (const k of cgCams) if (isLibPath(k) && !want.has(k)) want.set(k, "grid");
+          for (const k of presFeedSet) if (isLibPath(k) && !want.has(k)) want.set(k, "pres");   // 0.21.94: a library stream a presentation shows
           for (const t of tiles.values()) for (const s of (t.cgDraft?.slots || [])) for (const k of s.cams || []) if (isLibPath(k) && !want.has(String(k))) want.set(String(k), "grid");   // a grid being built
         }
         if (want.size && authSecured && !libConn.token) await libTokenEnsure();
@@ -33797,6 +33880,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (sl?.entry?.name && sl.pane && chanPath(ensureHang(sl.entry.name)) === path) return sl.pane.classList.contains("screenkind") ? null : sl.pane;
     }
     for (const g of rtspGrids.values()) if (g?.entry?.name && g.pane && chanPath(ensureHang(g.entry.name)) === path) return g.pane;
+    return null;
+  };
+  // 0.21.94: a live feed of MY OWN source (my page has no tile for it): the newest picture of its slot's preview (a screen share too)
+  window.__presOwnFrame = (path) => {
+    const want = String(path);
+    const pick = (pane) => {
+      if (!pane) return null;
+      for (const v of pane.querySelectorAll("video")) if (v.readyState >= 2 && v.videoWidth > 0) return v;
+      for (const c of pane.querySelectorAll("canvas")) if (c.width > 2 && c.height > 2) return c;
+      return null;
+    };
+    for (const sl of slots.values()) if (sl?.entry?.name && sl.pane && chanPath(ensureHang(sl.entry.name)) === want) return pick(sl.pane);
+    for (const g of rtspGrids.values()) if (g?.entry?.name && g.pane && chanPath(ensureHang(g.entry.name)) === want) return pick(g.pane);
     return null;
   };
   window.addEventListener("pagehide", spotClear);

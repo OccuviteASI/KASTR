@@ -34,7 +34,7 @@ class Priority(unittest.TestCase):
 
     def test_page_ranks_every_tile(self):
         p = read(HERE, "moq-watch-lite.html")
-        self.assertIn('isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120;', p)   # 0.21.80: + 250 for the share I remote-control first
+        self.assertIn('isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120', p)   # 0.21.80: + 250 for the share I remote-control first (0.21.94: inside a Math.max with a live feed's rank)
         self.assertIn('watch.setAttribute("priority", isContentPath(name) ? "150" : "120");', p)
 
 

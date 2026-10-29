@@ -57,6 +57,18 @@ PHOTO_DIM_MAX = 512                 # ... and pixels a side
 PHOTO_RATE = (30, 600)              # photos one device may set per 10 minutes
 PHOTO_KEEP_GONE_S = MSG_KEEP_S      # a removal (tombstone) is remembered this long
 PHOTO_MAX_PEOPLE = 5000
+# 0.21.94 per-message timers (Kenton 2026-10-27/28): disappearing messages, send later, view once
+TIMER_CAP_S = 7 * 86400             # the safety cap: a timed message nobody read (or opened) is gone within 7 days anyway
+TIMER_MIN_S = 60                    # a timer is 1 minute ...
+TIMER_MAX_S = MSG_KEEP_S            # ... to 90 days
+VO_OPEN_S = 300                     # a view-once message's attachments may be fetched this long after its reader opened it
+SCHED_MIN_S = 20                    # send later: at least this far ahead (on the hub's clock) ...
+SCHED_MAX_S = MSG_KEEP_S            # ... at most 90 days
+GONE_KEEP_S = MSG_KEEP_S            # a deleted timed message's tombstone (a copy never brings it back)
+TIMERS_VER = 1                      # what this hub does (pages offer timers only when the hub says so)
+OLD_STUB = {"vo": "a view-once message -- update KASTR to see it",
+            "ttl": "a disappearing message -- update KASTR to see it",
+            "timer": "disappearing messages -- update KASTR to see them"}
 
 KID_RE = re.compile(r"^[0-9a-f]{16}$")
 GID_RE = re.compile(r"^g-[0-9a-f]{16}$")
@@ -234,6 +246,13 @@ class Messenger:
         self.notes = m.get("notes") if isinstance(m.get("notes"), dict) else {}        # nk -> [{id, at, host, kind}]
         self.files = m.get("files") if isinstance(m.get("files"), dict) else {}        # fid -> {at, size, by, who: [nk] | None}
         self.photos = m.get("photos") if isinstance(m.get("photos"), dict) else {}     # 0.21.90: nk -> {h, at, type, size, by, name} (h "": removed)
+        # 0.21.94 timers: view-once open times (read times: the timed-read cursors in rcpt, see _rd_at), tombstones, conversation defaults, the send-later store
+        self.tst = m.get("tst") if isinstance(m.get("tst"), dict) else {}              # uid -> {op: {nk: t}}
+        self.gone = m.get("gone") if isinstance(m.get("gone"), dict) else {}           # uid -> when it was deleted
+        self.gonef = m.get("gonef") if isinstance(m.get("gonef"), dict) else {}        # fid -> when (its message's timer ran out)
+        self.convt = m.get("convt") if isinstance(m.get("convt"), dict) else {}        # conversation key -> {s, at, by}
+        self.sched = m.get("sched") if isinstance(m.get("sched"), dict) else {}        # uid -> {uid, st wait|sent|gone, rel, ver, by, env}
+        self.tix = set()                                                                 # seqs of timed messages
         self.msgs = {}                                                                   # seq -> envelope
         self.rate = {}
         self.ver = 0                     # moves with every change (a standby's copy asks for the store again when it moved)
@@ -254,6 +273,8 @@ class Messenger:
             if isinstance(e, dict) and isinstance(e.get("seq"), int) and float(e.get("at") or 0) >= cut:
                 self.msgs[e["seq"]] = e
                 self.seq = max(self.seq, e["seq"])
+                if self._timed(e):
+                    self.tix.add(e["seq"])
         if not m:
             self._dirty = True
         self.sweep()
@@ -261,7 +282,8 @@ class Messenger:
     # ---- persistence ----------------------------------------------------------------------------------------------
     def _meta(self):
         return {"fleet": self.fleet, "seq": self.seq, "persons": self.persons, "groups": self.groups, "reads": self.reads,
-                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos, "rcpt": self.rcpt}
+                "cursors": self.cursors, "notes": self.notes, "files": self.files, "photos": self.photos, "rcpt": self.rcpt,
+                "tst": self.tst, "gone": self.gone, "gonef": self.gonef, "convt": self.convt, "sched": self.sched}   # 0.21.94
 
     def _touch(self, now=False):
         """Meta changed: written at once (`now`: identities, groups) or within two seconds (cursors, reads)."""
@@ -341,6 +363,20 @@ class Messenger:
                 self._photo_cache = None
                 self._dirty = True
             live = {ph.get("h") for ph in self.photos.values() if ph.get("h")}
+            for s in gone_m:
+                self.tix.discard(s)
+            # 0.21.94: tombstones and send-later entries are kept 90 days; read / open times only while their message is here
+            for d in (self.gone, self.gonef):
+                for k in [k for k, t in d.items() if now - float(t or 0) > GONE_KEEP_S]:
+                    d.pop(k, None)
+                    self._dirty = True
+            for u in [u for u, s in self.sched.items() if now - float(s.get("rel") or 0) > MSG_KEEP_S]:
+                self.sched.pop(u, None)
+                self._dirty = True
+            uids = {self.uid_of(self.msgs[s]) for s in self.tix if s in self.msgs}
+            for u in [u for u in self.tst if u not in uids]:
+                self.tst.pop(u, None)
+                self._dirty = True
             if gone_m or gone_f:
                 self._dirty = True
         for s in gone_m:
@@ -424,6 +460,194 @@ class Messenger:
                 "names": {k: v for k, v in (g.get("names") or {}).items() if k in (g.get("members") or [])},
                 "at": int(g.get("at") or 0), "ver": int(g.get("ver") or 0), "deleted": bool(g.get("deleted"))}
 
+    # ---- 0.21.94 per-message timers ------------------------------------------------------------------------------------
+    # DISAPPEARING: a message with `ttl` (seconds) goes for each reader `ttl` after THEY read it (op read with tv), for the sender
+    # `ttl` after the FIRST reader read it (counted from the send, a 5-minute message could vanish from the sender before anyone
+    # saw it), and for everyone within TIMER_CAP_S when nobody read it. The hub deletes the ciphertext and the attachments once
+    # every reader's time ran out (a group: the last reader's), keeps a tombstone (`gone`) so no copy brings it back, and tells
+    # each device which of its timed messages still live (pull `tm`) -- a device purges the rest, also one that was offline.
+    # VIEW ONCE (`vo`): pull hands out a stub; op vopen hands the sealed body to each reader once (their other devices show
+    # "Opened"); gone when every reader opened it (+ VO_OPEN_S for the attachments) or at the cap.
+    # SEND LATER: op send with `rel` -- the sealed message waits in `sched` (no number yet: no page, old or new, can see it) and
+    # the hub releases it at `rel` on its own clock (tick), even with the sender's computer off.
+    @staticmethod
+    def _timed(e):
+        return e.get("kind") == "msg" and bool(e.get("ttl") or e.get("vo"))
+
+    @staticmethod
+    def _readers(e):
+        return [x for x in (e.get("who") or []) if x != e.get("from")]
+
+    @staticmethod
+    def _conv_key(conv, nk):
+        """A page's conversation ("p:<partner>" | "g:<gid>") as stored for both sides ("p:<a>|<b>" | "g:<gid>")."""
+        if conv.startswith("g:"):
+            return conv
+        return "p:" + "|".join(sorted([nk, conv[2:]]))
+
+    @staticmethod
+    def _conv_of(e, nk):
+        if e.get("gid"):
+            return "g:" + e["gid"]
+        return "p:" + (e.get("to") if e.get("from") == nk else e.get("from") or "")
+
+    def _exp_for(self, e, nk):
+        """When `nk`'s copy of a timed message goes (epoch s)."""
+        at = float(e.get("at") or 0)
+        cap = at + TIMER_CAP_S
+        st = self.tst.get(self.uid_of(e)) or {}
+        if e.get("vo"):
+            if nk == e.get("from"):
+                return self._exp_msg(e)
+            t = (st.get("op") or {}).get(nk)
+            return min(float(t) + VO_OPEN_S, cap + VO_OPEN_S) if t else cap
+        ttl = int(e.get("ttl") or 0)
+        if nk == e.get("from"):
+            ts = [t for t in (self._rd_at(e, r) for r in self._readers(e)) if t]
+            return min(ts) + ttl if ts else cap
+        t = self._rd_at(e, nk)
+        return float(t) + ttl if t else cap
+
+    def _rd_at(self, e, nk):
+        """When `nk` read the timed message `e` on a 0.21.94 page: their TIMED-READ cursor for its conversation, kept with the
+        receipt times (rcpt[nk]["t|<conv>"] = [[seq, at], ...]) -- the first advance that reached its seq. A separate cursor
+        from the plain read one (rcpt[nk][conv]) because an older page's read (it showed a line, not the message) must not
+        start a timer, and a 0.21.94 page reading what an older one already marked read must. It moves only when a read
+        reaches a timed message it had not reached, so its newest RCPT_KEEP entries cover every live timed message; a trimmed
+        entry could only make a time later (never earlier). -> epoch s | None (not read yet)."""
+        lst = (self.rcpt.get(nk) or {}).get("t|" + self._conv_of(e, nk)) or []
+        q = int(e.get("seq") or 0)
+        ts = [int(x[1]) for x in lst if int(x[0]) >= q]
+        return min(ts) if ts else None
+
+    def _exp_msg(self, e):
+        """When the hub deletes a timed message: every reader done (or the cap)."""
+        at = float(e.get("at") or 0)
+        cap = at + TIMER_CAP_S
+        rs = self._readers(e)
+        if e.get("vo"):
+            op = (self.tst.get(self.uid_of(e)) or {}).get("op") or {}
+            if rs and all(op.get(r) for r in rs):
+                return max(float(op[r]) for r in rs) + VO_OPEN_S
+            return cap
+        return max([self._exp_for(e, r) for r in rs] or [cap])
+
+    def _drop(self, s, now):
+        """A timed message's time ran out: the ciphertext, its attachments and its read times go; a tombstone stays."""
+        e = self.msgs.pop(s, None)
+        self.tix.discard(s)
+        if not e:
+            return None
+        uid = self.uid_of(e)
+        self.gone[uid] = int(now)
+        self.tst.pop(uid, None)
+        try:
+            os.remove(self._msg_path(s))
+        except OSError:
+            pass
+        for fid in e.get("files") or []:
+            self.files.pop(fid, None)
+            self.gonef[fid] = int(now)
+            try:
+                os.remove(self._file_path(fid))
+            except OSError:
+                pass
+        return e
+
+    def expire(self, now=None):
+        """Delete every timed message whose time ran out for all its readers. -> how many."""
+        now = time.time() if now is None else now
+        gone, who = 0, set()
+        with self.lock:
+            for s in sorted(self.tix):
+                e = self.msgs.get(s)
+                if e is None:
+                    self.tix.discard(s)
+                    continue
+                if self._exp_msg(e) <= now:
+                    self._drop(s, now)
+                    who |= set(e.get("who") or [])
+                    gone += 1
+            if gone:
+                self._touch(now=True)
+                self._ping_person(sorted(who), self.seq)
+        if gone:
+            self.log("messages: %d timed message(s) deleted (their timers ran out)" % gone)
+        return gone
+
+    def tick(self, now=None):
+        """The hub's timer beat (every few seconds, on the hub only): scheduled messages out, expired ones gone."""
+        now = time.time() if now is None else now
+        return {"released": self.release(now), "expired": self.expire(now)}
+
+    def _ttl_ok(self, v):
+        try:
+            v = int(v or 0)
+        except (TypeError, ValueError):
+            return None
+        return v if v == 0 or TIMER_MIN_S <= v <= TIMER_MAX_S else None
+
+    def _stub_old(self, e, what):
+        """What a page older than 0.21.94 gets instead of a timed message: a line, never the content (it would keep it)."""
+        x = {k: e[k] for k in ("seq", "uid", "at", "from", "fromName", "gid", "to", "toName") if k in e}
+        x.update(kind="sys", sys={"ev": "add", "names": [OLD_STUB[what]]})
+        return x
+
+    def _convt_page(self, mine):
+        """The conversation defaults of my conversations, as the page names them."""
+        out = {}
+        for k, v in self.convt.items():
+            if k.startswith("g:"):
+                g = self.groups.get(k[2:])
+                if g and set(mine) & set(g.get("members") or []):
+                    out[k] = dict(v)
+            else:
+                a, _, b = k[2:].partition("|")
+                for nk in mine:
+                    if nk in (a, b):
+                        out["p:" + (b if nk == a else a)] = dict(v)
+        return out
+
+    def op_ctimer(self, p, host, now):
+        """{as, conv, s} -> the conversation's disappearing-messages default (0 = off) -- anyone in it may change it; everyone
+        sees the line "<who> set disappearing messages to <s>"."""
+        nk, err = self._who(p, host)
+        if err:
+            return err
+        conv = str(p.get("conv") or "")
+        s = self._ttl_ok(p.get("s"))
+        if s is None:
+            return {"ok": False, "error": "a timer is 1 minute to 90 days (or off)"}, 400
+        if conv.startswith("g:"):
+            g, err = self._group({"gid": conv[2:]}, nk)
+            if err:
+                return err
+            who = list(g["members"])
+        else:
+            o = name_key(conv[2:]) if conv.startswith("p:") else ""
+            if not o or o not in self.persons or o == nk:
+                return {"ok": False, "error": "which conversation?"}, 400
+            conv = "p:" + o
+            who = sorted({nk, o})
+        key = self._conv_key(conv, nk)
+        cur = self.convt.get(key) or {}
+        if int(cur.get("s") or 0) == s:
+            return {"ok": True, "s": s, "same": True}, 200
+        self.convt[key] = {"s": s, "at": max(int(now), int(cur.get("at") or 0) + 1), "by": nk}
+        if conv.startswith("g:"):
+            env = self._sys(conv[2:], "timer", nk, now, s=s)
+        else:
+            self.seq += 1
+            o = conv[2:]
+            env = {"seq": self.seq, "uid": "s:" + os.urandom(8).hex(), "at": int(now), "kind": "sys", "from": nk,
+                   "fromName": self.persons[nk].get("name") or nk, "to": o, "toName": (self.persons.get(o) or {}).get("name") or o,
+                   "who": who, "sys": {"ev": "timer", "s": s}}
+            self.msgs[env["seq"]] = env
+            self._store_msg(env)
+        self._touch(now=True)
+        self._ping_person(who, env["seq"])
+        return {"ok": True, "s": s}, 200
+
     # ---- the API ---------------------------------------------------------------------------------------------------
     def api(self, p, host, admin=False, now=None):
         """One POST /api/msg {op, ...} from the device `host` (its member token checked by the minter that took it).
@@ -498,7 +722,7 @@ class Messenger:
         per = self.persons.get(nk) if nk else None
         out = {"ok": True, "fleet": self.fleet, "codeMin": MSG_CODE_MIN, "iter": MSG_PBKDF2_MIN, "has": bool(per),
                "myRoom": bool(nk) and bool(self.has_room(name)), "unlocked": bool(per) and self._unlocked(nk, host),
-               "blocked": bool(per) and host in (per.get("blocked") or {})}
+               "blocked": bool(per) and host in (per.get("blocked") or {}), "tv": TIMERS_VER, "now": int(now)}   # 0.21.94: + timers
         if per:
             out.update(kid=per["kid"], name=per.get("name") or name)
         return out, 200
@@ -624,6 +848,24 @@ class Messenger:
         for e in self.msgs.values():   # a resend after a lost answer
             if e.get("cid") == cid and e.get("from") == nk:
                 return {"ok": True, "seq": e["seq"], "at": e["at"], "dup": True}, 200
+        uid = "m:%s:%s" % (nk, cid)
+        if uid in self.gone:   # 0.21.94: its timer already ran out
+            return {"ok": True, "seq": 0, "at": int(self.gone[uid]), "dup": True, "gone": True}, 200
+        sc = self.sched.get(uid)
+        if sc:   # 0.21.94: a scheduled message sent again after a lost answer
+            return {"ok": True, "sched": sc.get("st") == "wait", "rel": int(sc.get("rel") or 0), "seq": int(sc.get("seq") or 0), "dup": True}, 200
+        # 0.21.94 timers: `ttl` (disappearing, seconds), `vo` (view once), `rel` (send later, the hub's clock); a page older than
+        # 0.21.94 (no `tv`) gets the conversation's default timer from the hub (its own copy stays on that device)
+        vo = bool(p.get("vo"))
+        ttl = 0 if vo else self._ttl_ok(p.get("ttl"))
+        if ttl is None:
+            return {"ok": False, "error": "a timer is 1 minute to 90 days"}, 400
+        try:
+            rel = int(p.get("rel") or 0)
+        except (TypeError, ValueError):
+            rel = -1
+        if rel and not (now + SCHED_MIN_S <= rel <= now + SCHED_MAX_S):
+            return {"ok": False, "error": "send later: pick a time from a minute to 90 days ahead", "now": int(now)}, 400
         gid = str(p.get("gid") or "")
         if gid:
             g = self.groups.get(gid)
@@ -658,24 +900,52 @@ class Messenger:
             if not FID_RE.match(str(fid)) or not f or f.get("by") != nk:
                 return {"ok": False, "error": "an attachment is missing (upload it again)"}, 400
             files.append(str(fid))
-        self.seq += 1
-        env = {"seq": self.seq, "uid": "m:%s:%s" % (nk, cid), "at": int(now), "cid": cid, "kind": "msg", "from": nk, "fromName": self.persons[nk].get("name") or nk,
+        if not p.get("tv") and not vo:
+            ttl = int((self.convt.get(self._conv_key("g:" + gid if gid else "p:" + to, nk)) or {}).get("s") or 0)
+        env = {"uid": uid, "at": int(now), "cid": cid, "kind": "msg", "from": nk, "fromName": self.persons[nk].get("name") or nk,
                "fromKid": self.persons[nk]["kid"], "iv": iv, "ct": ct, "wraps": clean, "who": readers}
         if gid:
             env["gid"] = gid
         else:
             env["to"] = to
             env["toName"] = self.persons[to].get("name") or to
+        if vo:
+            env["vo"] = 1
+        elif ttl:
+            env["ttl"] = ttl
         if files:
             env["files"] = files
+        if rel:   # 0.21.94 send later: held here (no number yet), released by tick()
             for fid in files:
-                f = self.files[fid]
-                f["who"] = sorted(set(f.get("who") or []) | set(readers))
-        self.msgs[env["seq"]] = env
-        self._store_msg(env)
+                self.files[fid]["who"] = [nk]   # claimed (kept), readable by the sender only until the release
+            s = self.sched[uid] = {"uid": uid, "st": "wait", "rel": rel, "ver": self._sver(None, now), "by": nk, "at": int(now), "env": env}
+            self._touch(now=True)
+            self._ping_person([nk], self.seq, skip=host)
+            return {"ok": True, "sched": True, "rel": s["rel"], "now": int(now)}, 200
+        self.seq += 1
+        env = dict(env, seq=self.seq)
+        self._put_msg(env, readers)
         self._touch()
         self._ping_person(readers, env["seq"], skip=host)
         return {"ok": True, "seq": env["seq"], "at": env["at"]}, 200
+
+    def _put_msg(self, env, readers):
+        """A message (sent now, or released) into the store."""
+        for fid in env.get("files") or []:
+            f = self.files.get(fid)
+            if f is not None:
+                f["who"] = sorted(set(f.get("who") or []) | set(readers))
+                if env.get("vo"):
+                    f["vo"] = env["uid"]   # 0.21.94: fetched only just after its reader opened it
+        self.msgs[env["seq"]] = env
+        if self._timed(env):
+            self.tix.add(env["seq"])
+        self._store_msg(env)
+
+    @staticmethod
+    def _sver(cur, now):
+        """A send-later entry's version: moves with every change, across hub copies (the higher one wins a merge)."""
+        return max(int(now * 1000), int((cur or {}).get("ver") or 0) + 1)
 
     def _rcpt_add(self, nk, key, seq, now):
         """0.21.93: when `nk`'s delivered ("d") or read (conv) cursor reached `seq` -- the receipt marks' hover times."""
@@ -715,8 +985,10 @@ class Messenger:
                     d["at"] = int(now)
             self._touch()
         mset = set(mine)
+        tv = bool(p.get("tv"))   # 0.21.94: a page that knows timers (older pages get a line instead of a timed message)
         out, size, more = [], 0, False
         kids = set()
+        mykids = {self.persons[nk]["kid"] for nk in mine} | {o["kid"] for nk in mine for o in self.persons[nk].get("old") or []}
         for s in sorted(x for x in self.msgs if x > since):
             e = self.msgs[s]
             if not mset.intersection(e.get("who") or []):
@@ -724,13 +996,54 @@ class Messenger:
             if len(out) >= MSG_PULL_MAX or size > MSG_PULL_BYTES:
                 more = True
                 break
+            if self._timed(e) or (e.get("kind") == "sys" and (e.get("sys") or {}).get("ev") == "timer"):
+                if not tv:
+                    out.append(self._stub_old(e, "vo" if e.get("vo") else "ttl" if e.get("kind") == "msg" else "timer"))
+                    continue
+                if e.get("kind") == "msg":
+                    me = [nk for nk in mine if nk in (e.get("who") or [])]
+                    if all(self._exp_for(e, nk) <= now for nk in me):
+                        continue   # its time ran out for me (the hub deletes it once everyone's did)
             x = {k: v for k, v in e.items() if k not in ("wraps", "who")}
-            if e.get("wraps"):
-                mykids = {self.persons[nk]["kid"] for nk in mine} | {o["kid"] for nk in mine for o in self.persons[nk].get("old") or []}
+            if e.get("vo"):   # 0.21.94 view once: a stub -- op vopen hands the sealed body out once per reader
+                for k in ("iv", "ct", "files"):
+                    x.pop(k, None)
+                x["nf"] = len(e.get("files") or [])
+                op = (self.tst.get(self.uid_of(e)) or {}).get("op") or {}
+                x["opened"] = max([int(op.get(nk) or 0) for nk in mine] or [0])
+                rs = self._readers(e)
+                x["opn"], x["of"] = len([r for r in rs if op.get(r)]), len(rs)
+            elif e.get("wraps"):
                 x["wraps"] = {k: v for k, v in e["wraps"].items() if k in mykids}
                 kids.add(e.get("fromKid"))
             out.append(x)
             size += len(e.get("ct") or "") + 300
+        extra = {}
+        if tv:   # 0.21.94: my live timed messages (uid -> [when it goes, started]), conversation defaults, my scheduled messages
+            tm = {}
+            for s in self.tix:
+                e = self.msgs.get(s)
+                me = [nk for nk in mine if nk in ((e or {}).get("who") or [])]
+                if not e or not me:
+                    continue
+                ex = max(self._exp_for(e, nk) for nk in me)
+                if ex > now:
+                    if e.get("vo"):
+                        t = (self.tst.get(self.uid_of(e)) or {}).get("op") or {}
+                        on = any((k != nk if nk == e.get("from") else k == nk) for k in t for nk in me)
+                    else:
+                        on = any(self._rd_at(e, r) for nk in me for r in (self._readers(e) if nk == e.get("from") else [nk]))
+                    tm[self.uid_of(e)] = [int(ex), 1 if on else 0]
+            sch = []
+            for u, sc in sorted(self.sched.items(), key=lambda kv: kv[1].get("rel") or 0):
+                if sc.get("st") != "wait" or sc.get("by") not in mset or not isinstance(sc.get("env"), dict):
+                    continue
+                e = sc["env"]
+                x = {k: v for k, v in e.items() if k not in ("wraps", "who")}
+                x.update(rel=int(sc.get("rel") or 0), sched=1, wraps={k: v for k, v in (e.get("wraps") or {}).items() if k in mykids})
+                kids.add(e.get("fromKid"))
+                sch.append(x)
+            extra = {"tv": TIMERS_VER, "now": int(now), "tm": tm, "convt": self._convt_page(mine), "sched": sch[:200]}
         keys = {}
         for nk, per in self.persons.items():   # the senders' public keys (current and older) for the key ids handed out
             for row in [per] + list(per.get("old") or []):
@@ -745,7 +1058,7 @@ class Messenger:
             renames = []
         return {"ok": True, "fleet": self.fleet, "msgs": out, "more": more, "cur": out[-1]["seq"] if out else max(since, 0),
                 "top": self.seq, "groups": groups, "reads": {nk: dict(self.reads.get(nk) or {}) for nk in mine}, "keys": keys,
-                "notes": notes, "locked": locked, "renames": renames}, 200
+                "notes": notes, "locked": locked, "renames": renames, **extra}, 200
 
     def op_read(self, p, host, now):
         """{as, conv ("p:<name key>" | "g:<gid>"), seq} -> the person has read that conversation up to seq (every device of
@@ -769,7 +1082,160 @@ class Messenger:
                     r.pop(k, None)
             self._touch()
             self._ping_person([nk], self.seq, skip=host)   # my other devices clear their unread marks
+        if p.get("tv"):   # 0.21.94: a page that shows timed messages read them -- their timers start now (never from an older page)
+            self._read_timed(nk, conv, seq, now)
         return {"ok": True}, 200
+
+    def _read_timed(self, nk, conv, seq, now):
+        """0.21.94: `nk` read `conv` up to `seq`: each timed message there they had not read starts its timer for them (their
+        timed-read cursor in rcpt moves -- see _rd_at)."""
+        lst = (self.rcpt.get(nk) or {}).get("t|" + conv) or []
+        top = int(lst[-1][0]) if lst else 0
+        hit = set()
+        for s in sorted(self.tix):
+            e = self.msgs.get(s)
+            if not e or s <= top or s > seq or e.get("vo") or e.get("from") == nk or nk not in (e.get("who") or []) or self._conv_of(e, nk) != conv:
+                continue
+            hit |= set(e.get("who") or [])
+        if hit:
+            self._rcpt_add(nk, "t|" + conv, seq, now)
+            self._touch(now=True)
+            self._ping_person(sorted(hit), self.seq)   # the sender's copy starts on the first read: their devices hear it
+        return len(hit)
+
+    def op_vopen(self, p, host, now):
+        """0.21.94 view once: {as, seq} -> the sealed body {iv, ct, wraps (mine), fromKid, key, files} ONCE for each reader (any
+        of their devices -- the others then show "Opened"); 410 `opened` after that."""
+        nk, err = self._who(p, host)
+        if err:
+            return err
+        try:
+            e = self.msgs.get(int(p.get("seq") or 0))
+        except (TypeError, ValueError):
+            e = None
+        if not e or not e.get("vo") or nk not in (e.get("who") or []):
+            return {"ok": False, "gone": True, "error": "this view-once message is gone"}, 404
+        if e.get("from") == nk:
+            return {"ok": False, "error": "you sent it: view-once messages open for the people you sent them to"}, 403
+        st = self.tst.setdefault(self.uid_of(e), {})
+        op = st.setdefault("op", {})
+        if op.get(nk):
+            return {"ok": False, "opened": int(op[nk]), "error": "already opened"}, 410
+        if self._exp_for(e, nk) <= now:
+            return {"ok": False, "gone": True, "error": "this view-once message is gone"}, 404
+        op[nk] = int(now)
+        kids = {self.persons[nk]["kid"]} | {o["kid"] for o in self.persons[nk].get("old") or []}
+        key = None
+        for per in self.persons.values():
+            for row in [per] + list(per.get("old") or []):
+                if row.get("kid") == e.get("fromKid"):
+                    key = row["pub"]
+        self._touch(now=True)
+        self._ping_person(sorted(set(e.get("who") or [])), self.seq)
+        return {"ok": True, "seq": e["seq"], "cid": e.get("cid"), "iv": e.get("iv"), "ct": e.get("ct"), "fromKid": e.get("fromKid"), "pub": key,
+                "wraps": {k: v for k, v in (e.get("wraps") or {}).items() if k in kids}, "files": list(e.get("files") or []),
+                "opened": int(now), "window": VO_OPEN_S}, 200
+
+    # ---- 0.21.94 send later --------------------------------------------------------------------------------------------
+    def op_sched(self, p, host, now):
+        """{as, cid, do: "time" (+ rel) | "cancel" | "now"} -> the sender changes a message waiting on the hub."""
+        nk, err = self._who(p, host)
+        if err:
+            return err
+        cid = str(p.get("cid") or "")
+        sc = self.sched.get("m:%s:%s" % (nk, cid)) or next((s for s in self.sched.values() if s.get("by") == nk and CID_RE.match(cid)
+                                                            and str(s.get("uid") or "").endswith(":" + cid)), None)   # (renamed since)
+        if not sc or sc.get("by") != nk:
+            return {"ok": False, "error": "no such scheduled message"}, 404
+        if sc.get("st") != "wait":
+            return {"ok": False, "sent": sc.get("st") == "sent", "seq": int(sc.get("seq") or 0),
+                    "error": "it was already sent" if sc.get("st") == "sent" else "it was cancelled"}, 409
+        do = str(p.get("do") or "")
+        if do == "time":
+            try:
+                rel = int(p.get("rel") or 0)
+            except (TypeError, ValueError):
+                rel = 0
+            if not (now + SCHED_MIN_S <= rel <= now + SCHED_MAX_S):
+                return {"ok": False, "error": "pick a time from a minute to 90 days ahead", "now": int(now)}, 400
+            sc.update(rel=rel, ver=self._sver(sc, now))
+        elif do == "cancel":
+            for fid in (sc.get("env") or {}).get("files") or []:
+                self.files.pop(fid, None)
+                try:
+                    os.remove(self._file_path(fid))
+                except OSError:
+                    pass
+            sc.update(st="gone", ver=self._sver(sc, now))
+            sc.pop("env", None)
+        elif do == "now":
+            sc.update(rel=int(now), ver=self._sver(sc, now))
+            self._touch(now=True)
+            self.release(now)
+            return {"ok": True, "st": sc.get("st"), "seq": int(sc.get("seq") or 0)}, 200
+        else:
+            return {"ok": False, "error": "do what?"}, 400
+        self._touch(now=True)
+        self._ping_person([nk], self.seq)
+        return {"ok": True, "st": sc.get("st"), "rel": int(sc.get("rel") or 0)}, 200
+
+    def release(self, now=None):
+        """Scheduled messages whose time came -> into the store (a number now: every page pulls them like any other message).
+        The readers are counted again: a group's current members whose key has a wrap (someone added later cannot open it; a
+        member who left gets nothing). -> how many."""
+        now = time.time() if now is None else now
+        n = 0
+        with self.lock:
+            due = sorted((s for s in self.sched.values() if s.get("st") == "wait" and float(s.get("rel") or 0) <= now),
+                         key=lambda s: (s.get("rel") or 0, s.get("at") or 0))
+            if not due:
+                return 0
+            have = {self.uid_of(e) for e in self.msgs.values()}
+            pings = set()
+            for sc in due:
+                e = sc.get("env") if isinstance(sc.get("env"), dict) else None
+                uid = sc.get("uid")
+                if e is None or uid in have or uid in self.gone:
+                    sc.update(st="sent", ver=self._sver(sc, now))   # another hub copy released it already
+                    sc.pop("env", None)
+                    continue
+                frm = e.get("from")
+                kidset = set((e.get("wraps") or {}).keys())
+                def has(nk):
+                    per = self.persons.get(nk)
+                    return bool(per) and (per.get("kid") in kidset or any(o.get("kid") in kidset for o in per.get("old") or []))
+                if e.get("gid"):
+                    g = self.groups.get(e["gid"])
+                    ok = bool(g) and not g.get("deleted") and frm in (g.get("members") or [])
+                    who = sorted({m for m in (g or {}).get("members") or [] if has(m)} | {frm}) if ok else []
+                else:
+                    ok = frm in self.persons and e.get("to") in self.persons
+                    who = sorted({frm, e.get("to")}) if ok else []
+                if not ok or len(who) < 2:
+                    for fid in e.get("files") or []:
+                        self.files.pop(fid, None)
+                        try:
+                            os.remove(self._file_path(fid))
+                        except OSError:
+                            pass
+                    sc.update(st="gone", ver=self._sver(sc, now), why="the conversation is gone")
+                    sc.pop("env", None)
+                    pings.add(frm)
+                    self.log("messages: a scheduled message of %s was dropped (its conversation is gone)" % frm)
+                    continue
+                self.seq += 1
+                env = dict(e, seq=self.seq, at=int(now), who=who, rel=int(sc.get("rel") or 0))
+                self._put_msg(env, [x for x in who if x != frm])
+                have.add(uid)
+                sc.update(st="sent", seq=self.seq, ver=self._sver(sc, now))
+                sc.pop("env", None)
+                pings |= set(who)
+                n += 1
+            self._touch(now=True)
+            self._ping_person(sorted(pings), self.seq)
+        if n:
+            self.log("messages: %d scheduled message(s) released" % n)
+        return n
 
     def op_ticks(self, p, host, now):
         """{as, names: [...]} -> {ticks: {nk: {d: delivered seq (any of their devices), r: read seq of our conversation}}}."""
@@ -1064,6 +1530,26 @@ class Messenger:
                     partners.add(e["to"] if e.get("from") == n else e.get("from"))
         partners.discard(n)
         partners.discard(None)
+        for sc in self.sched.values():   # 0.21.94: messages waiting to be sent, read / open times, conversation defaults
+            e = sc.get("env") if isinstance(sc.get("env"), dict) else {}
+            if sc.get("by") == o:
+                sc["by"] = n
+            if e.get("from") == o:
+                e["from"], e["fromName"] = n, disp
+            if e.get("to") == o:
+                e["to"], e["toName"] = n, disp
+            if o in (e.get("who") or []):
+                e["who"] = sorted({n if x == o else x for x in e["who"]})
+        for st in self.tst.values():
+            for d in st.values():
+                if isinstance(d, dict) and o in d:
+                    d[n] = d.pop(o)
+        for r in self.rcpt.values():   # the timed-read cursors of a 1:1 with them (rcpt[o] itself moved above)
+            if "t|p:" + o in r:
+                r["t|p:" + n] = _rcpt_merge(r.get("t|p:" + n), r.pop("t|p:" + o))
+        for k in [k for k in self.convt if k.startswith("p:") and o in k[2:].split("|")]:
+            a, _, b = k[2:].partition("|")
+            self.convt["p:" + "|".join(sorted([n if a == o else a, n if b == o else b]))] = self.convt.pop(k)
         pings = {n} | partners
         if announce:
             for pk in sorted(partners):
@@ -1162,14 +1648,18 @@ class Messenger:
             self._touch()
         return {"ok": True, "fid": fid, "size": len(data)}, 200
 
-    def file_get(self, fid, host):
+    def file_get(self, fid, host, now=None):
         """-> (bytes, None) for a device of someone who may read it (a reader of a message that carries it, or its uploader),
         else (None, (reply, code))."""
+        now = time.time() if now is None else now
         with self.lock:
             f = self.files.get(str(fid)) if FID_RE.match(str(fid or "")) else None
             if not f:
                 return None, ({"ok": False, "error": "no such attachment (older than 90 days?)"}, 404)
             may = set(f.get("who") or []) | {f.get("by")}
+            if f.get("vo"):   # 0.21.94 view once: only a reader who opened it, and only just after
+                op = (self.tst.get(f["vo"]) or {}).get("op") or {}
+                may = {nk for nk in may if op.get(nk) and now - float(op[nk]) <= VO_OPEN_S}
             if not any(self._unlocked(nk, host) for nk in may if nk):
                 return None, ({"ok": False, "error": "not yours to read"}, 403)
         try:
@@ -1206,7 +1696,9 @@ class Messenger:
             if meta_ver != mv:
                 out["meta"] = json.loads(json.dumps({"persons": self.persons, "groups": self.groups, "reads": self.reads,
                                                      "cursors": self.cursors, "notes": self.notes, "files": self.files,
-                                                     "photos": self.photos, "rcpt": self.rcpt}))   # 0.21.90: + the profile photos (their bytes: missing_files)
+                                                     "photos": self.photos, "rcpt": self.rcpt,   # 0.21.90: + the profile photos (their bytes: missing_files)
+                                                     "tst": self.tst, "gone": self.gone, "gonef": self.gonef,   # 0.21.94 timers
+                                                     "convt": self.convt, "sched": self.sched}))
             msgs, size, more = [], 0, False
             for q in sorted(x for x in self.msgs if x > since):
                 if len(msgs) >= self.SYNC_MSGS or size > self.SYNC_BYTES:
@@ -1355,12 +1847,19 @@ class Messenger:
                     continue
                 mine = self.files.get(fid)
                 who = f.get("who") if isinstance(f.get("who"), list) else None
+                if fid in self.gonef or fid in (meta.get("gonef") or {}):   # 0.21.94: its message's timer ran out
+                    continue
                 if mine is None:
                     self.files[fid] = {"at": int(f.get("at") or 0), "size": int(f.get("size") or 0), "by": name_key(f.get("by")),
                                        "who": [name_key(x) for x in who if name_key(x)] if who is not None else None}
+                    if f.get("vo"):
+                        self.files[fid]["vo"] = str(f["vo"])[:120]
                     n["files"] += 1
                 elif who is not None:
                     mine["who"] = sorted(set(mine.get("who") or []) | {name_key(x) for x in who if name_key(x)})
+                    if f.get("vo"):
+                        mine["vo"] = str(f["vo"])[:120]
+            n["gone"] = self._merge_timers(meta, now)   # 0.21.94
             for nk, ph in (meta.get("photos") or {}).items() if isinstance(meta.get("photos"), dict) else []:   # 0.21.90
                 nk, inc = name_key(nk), self._photo_clean(ph)
                 if not nk or inc is None:
@@ -1379,7 +1878,7 @@ class Messenger:
                 if e.get("gid") in dead:
                     continue
                 uid = self.uid_of(e)
-                if uid in have:
+                if uid in have or uid in self.gone:   # 0.21.94: a timed message deleted there or here never comes back
                     continue
                 q = e["seq"]
                 if q <= 0 or q in self.msgs:   # that number is taken here by another message: the next free one
@@ -1387,6 +1886,8 @@ class Messenger:
                     n["renumbered"] += 1
                 env = dict(e, seq=q, uid=uid)
                 self.msgs[q] = env
+                if self._timed(env):
+                    self.tix.add(q)
                 have[uid] = q
                 self.seq = max(self.seq, q)
                 self._store_msg(env)
@@ -1405,6 +1906,57 @@ class Messenger:
         if n["msgs"] or n["files"]:
             self.sweep(now)
         return n
+
+    def _merge_timers(self, meta, now):
+        """0.21.94: a copy's timer state into this store (under the lock): tombstones (and what they delete here), the earliest
+        read / open time of each person, the newer conversation default, the newer version of each send-later entry."""
+        dropped = 0
+        for k, d in (("gone", self.gone), ("gonef", self.gonef)):
+            inc = meta.get(k) if isinstance(meta.get(k), dict) else {}
+            for u, t in inc.items():
+                try:
+                    t = int(t)
+                except (TypeError, ValueError):
+                    continue
+                if now - t <= GONE_KEEP_S and len(str(u)) <= 120:
+                    d[str(u)] = max(t, int(d.get(str(u)) or 0))
+        if self.gone:
+            for s in [s for s, e in self.msgs.items() if self.uid_of(e) in self.gone]:
+                self._drop(s, self.gone.get(self.uid_of(self.msgs[s])) or now)
+                dropped += 1
+        for fid in [f for f in self.files if f in self.gonef]:
+            self.files.pop(fid, None)
+            try:
+                os.remove(self._file_path(fid))
+            except OSError:
+                pass
+        for u, st in (meta.get("tst") or {}).items() if isinstance(meta.get("tst"), dict) else []:
+            if u in self.gone or not isinstance(st, dict):
+                continue
+            mine = self.tst.setdefault(str(u)[:120], {})
+            for k in ("op",):   # (read times: the rcpt merge)
+                for nk, t in (st.get(k) or {}).items() if isinstance(st.get(k), dict) else []:
+                    try:
+                        t = int(t)
+                    except (TypeError, ValueError):
+                        continue
+                    cur = mine.setdefault(k, {}).get(name_key(nk))
+                    mine[k][name_key(nk)] = min(t, int(cur)) if cur else t
+        for k, v in (meta.get("convt") or {}).items() if isinstance(meta.get("convt"), dict) else []:
+            if not isinstance(v, dict) or self._ttl_ok(v.get("s")) is None:
+                continue
+            cur = self.convt.get(k)
+            if cur is None or int(v.get("at") or 0) > int(cur.get("at") or 0):
+                self.convt[str(k)[:120]] = {"s": int(v.get("s") or 0), "at": int(v.get("at") or 0), "by": name_key(v.get("by"))}
+        for u, sc in (meta.get("sched") or {}).items() if isinstance(meta.get("sched"), dict) else []:
+            if not isinstance(sc, dict) or sc.get("st") not in ("wait", "sent", "gone"):
+                continue
+            cur = self.sched.get(u)
+            if cur is None or int(sc.get("ver") or 0) > int(cur.get("ver") or 0):
+                if sc.get("st") == "wait" and not isinstance(sc.get("env"), dict):
+                    continue
+                self.sched[str(u)[:120]] = json.loads(json.dumps(sc))
+        return dropped
 
     def missing_files(self):
         with self.lock:

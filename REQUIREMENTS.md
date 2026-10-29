@@ -416,6 +416,20 @@ predates versioning (v0.5, 2026-08-25).
 | R | Relay page: Federation panel gains `#fedCode`, `#fedMaster`, `#fedState` (hub token OK / red reason); Save posts `{connect, code, master}`; Access codes block gains `#codeFederation`; federation controls disabled off-loopback. | 0.11.0 |
 | B | fetch-helpers pins moq-relay 0.14.18 (moq-dev, `v`-prefixed assets, sha256 per platform) and moq CLI 0.11.2. | 0.11.0 |
 
+### Added in 0.21.94
+
+Kenton (2026-10-28): "am I able to add other shares to the presentation? Such as another camera feed or a grid? I would like this for presenters to use and backstage to be able to control."
+
+| Area | Requirement | Since |
+|---|---|---|
+| PRES | Live feeds take over the slide: the presenter view's **Live feed** panel (search + groups: Yours, Cameras & shares, Grids, My grids / other rooms, Stream library) shows a camera / share, a box grid, a custom or saved grid, or a library stream (`lib/...`) in the slide's place for everyone until **Back to slides**. The presenter camera and the mode (Content / Standout / Side-by-side / Reporter) composite over the feed exactly as over a slide. A purple LIVE FEED mark and a "Room sees: <name>" chip on the presenter and backstage views; Back to slides in the panel and the bottom bar. | 0.21.94 |
+| PRES | Every presenter and every backstage person can show / switch / end a feed; last writer wins. Next / Back (and a clicker) from a feed = the slides again at the SAME slide; a click in the strip on another slide (or Home / End) ends the feed and moves. Black / White cover the feed and keep it. | 0.21.94 |
+| PRES | The record `pres` carries `lf` {p, k (s/g/c/l), n, g (custom grid: up to 16 slots in 24 units, at most 16 cameras), by, at}, `fs` (the feed's streams), `lfc` 1 and `lfo` {n, at, why} (the last feed that went offline). A hand-over / take-over keeps the feed; a template never carries it. | 0.21.94 |
+| PRES | Viewers subscribe the feed at the slide's priority (190 while the presentation is on their stage, else 150), the full copy, decoded off-stage, no tile of its own, exempt from the weak-link pulse; heard while the presentation is on their stage; unsubscribed when the feed ends. The audience still sees only the presentation, and a shown feed shows even with "Audience can see each other" off (it rides the `fs` show set). | 0.21.94 |
+| PRES | A feed whose streams all go quiet (3 s without a picture, or none within 20 s) falls back to the slide for everyone; presenters and backstage get a note ("<name> went offline -- the room sees the slides again"), kept in the Live feed panel. | 0.21.94 |
+| PRES | The relay host's recorder (kastr_presrec) records the feed (it records the presentation tile). Old clients (0.21.93 and older) keep seeing the current slide; an older owner ignores feed requests (they carry no slide move). | 0.21.94 |
+| PRES | Invite-link and My room guests see a library feed only when that stream is pinned to the room board (their library scope); otherwise "Not available here". | 0.21.94 |
+
 ### Added in 0.21.40 (in progress)
 
 | Area | Requirement | Since |

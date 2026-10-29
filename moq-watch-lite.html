@@ -2202,6 +2202,40 @@
   .memogrid button { background:transparent; border:0; font-size:20px; line-height:1.3; cursor:pointer; border-radius:6px; padding:2px; height:auto; }
   .memogrid button:hover { background:var(--surface-2); }
   .memogrid .chint { grid-column:1 / -1; padding:2px 0 0; font-size:11px; color:var(--text-mute); }
+  /* 0.21.94 per-message timers: the composer's timer (lit with the length while the next message will disappear) and the
+     bubble's clock badge (the time left once it is read) */
+  .mtimer { flex:none; min-width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:2px; padding:0 6px; font-size:11px; font-weight:600; }
+  .mtimer[hidden] { display:none; }
+  .mtimer .icon { width:17px; height:17px; }
+  .mtimer:hover { color:var(--text); border-color:var(--asi-blue-dim); }
+  .mtimer.on { color:var(--asi-blue); border-color:var(--asi-blue); }
+  .mtimer .mtl:empty { display:none; }
+  .mclk { display:inline-flex; align-items:center; gap:2px; margin-right:5px; vertical-align:-1px; }
+  .mclk .icon { width:10px; height:10px; stroke-width:2; }
+  .mb.msched .mbub { opacity:.78; border-style:dashed; }
+  .mschd { display:inline-flex; align-items:center; gap:3px; border:0; background:transparent; color:var(--asi-blue); font:inherit; padding:0; cursor:pointer; }
+  .mschd .icon { width:11px; height:11px; stroke-width:2; }
+  .mschd:hover { text-decoration:underline; }
+  .mvob, .mvos { display:inline-flex; align-items:center; gap:6px; font:inherit; padding:2px 0; }
+  .mvob { border:0; background:transparent; color:inherit; cursor:pointer; font-weight:600; }
+  .mvob:hover { text-decoration:underline; }
+  .mvos { opacity:.75; font-style:italic; }
+  .mvob .icon, .mvos .icon { width:16px; height:16px; stroke-width:2; }
+  .mvoview { position:fixed; inset:0; z-index:145; background:rgba(3,5,10,.86); display:flex; align-items:center; justify-content:center; padding:16px;
+             user-select:none; -webkit-user-select:none; }
+  .mvobox { background:var(--surface-2); border:1px solid var(--line); border-radius:12px; width:min(760px, 100%); max-height:calc(100vh - 32px);
+            display:flex; flex-direction:column; overflow:hidden; }
+  .mvohead { display:flex; align-items:center; gap:8px; padding:8px 10px 8px 14px; border-bottom:1px solid var(--line); color:var(--text); font-weight:600; }
+  .mvohead .mvot { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mvox { border:0; background:transparent; color:var(--text-dim); font-size:16px; cursor:pointer; padding:4px 8px; }
+  .mvox:hover { color:var(--text); }
+  .mvobody { overflow:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .mvopic canvas { display:block; max-width:100%; height:auto; margin:0 auto; border-radius:8px; pointer-events:none; }
+  .mvopic.loading { min-height:120px; }
+  .mvopic.mfail { color:var(--text-dim); font-style:italic; }
+  .mvotext { color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .mvohint { padding:6px 14px 10px; color:var(--text-dim); font-size:12px; }
   .msend { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
   .mconvpane.mdrag::after { content:"Drop to attach (end-to-end encrypted)"; position:absolute; inset:8px; border:2px dashed var(--asi-blue); border-radius:10px;
     display:grid; place-items:center; color:var(--asi-blue); background:color-mix(in srgb, var(--surface) 85%, transparent); font-size:13px; pointer-events:none; }
@@ -3329,9 +3363,24 @@
   .kgif .kgmsg.err { color:var(--asi-red); }
   @media (max-width: 520px) { .kgif { max-height:46vh; } .kgif .kggrid { grid-template-columns:repeat(3, 1fr); grid-auto-rows:72px; } }
   /* ==== end 0.21.91 GIF search ==== */
+  /* 0.21.94 Room Chat timers: the head's room default, the composer's timer (.mtimer, as in Messages), the room's line, a
+     scheduled message of mine */
+  .ccomp .mtimer { height:32px; min-width:32px; }
+  .popcard .head .cttl { display:inline-flex; align-items:center; gap:2px; background:transparent; border:1px solid var(--line); color:var(--text-mute);
+    border-radius:3px; padding:1px 5px; cursor:pointer; font-size:10px; height:auto; text-transform:none; letter-spacing:0; margin-right:6px; }
+  .popcard .head .cttl[hidden] { display:none; }
+  .popcard .head .cttl .icon { width:12px; height:12px; }
+  .popcard .head .cttl:hover { color:var(--text); }
+  .popcard .head .cttl.on { color:var(--asi-blue); border-color:var(--asi-blue); }
+  .cday.csys { display:flex; align-items:center; justify-content:center; gap:4px; text-transform:none; letter-spacing:0; }
+  .cday.csys .icon { width:11px; height:11px; }
+  .cmsg .chd .mclk { color:var(--text-mute); font-size:10px; }
+  .cmsg.csched .ctxt { border:1px dashed var(--line); border-radius:6px; padding:4px 7px; opacity:.85; }
+  .cmsg.csched .mschd { display:flex; margin-top:3px; font-size:11px; }
 </style>
 <div id="chatPanel" class="popcard" hidden>
   <div class="head"><span>Room Chat</span><span id="chatRoomLbl" class="sub"></span><span class="sp"></span>
+    <button type="button" id="chatTtlBtn" class="cttl" hidden></button><!-- 0.21.94: the room's disappearing messages -->
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div id="chatLog" class="body" aria-live="polite"></div>
   <div id="chatDrop">Drop files here to attach them</div>
@@ -3343,7 +3392,8 @@
     <button type="button" id="chatGifBtn" class="cbtn cgif" title="GIF" hidden>GIF</button>
     <button type="button" id="chatFileBtn" class="cbtn" title="Attach a picture or file (stored on the relay host)">&#128206;</button>
     <textarea id="chatInput" rows="1" placeholder="Message the room&hellip;" title="Enter sends, Shift+Enter starts a new line"></textarea>
-    <button type="button" id="chatSend" class="cbtn send" title="Send">&#10148;</button>
+    <button type="button" id="chatTimerBtn" class="mtimer" hidden></button><!-- 0.21.94: disappearing / view once, the next message -->
+    <button type="button" id="chatSend" class="cbtn send" title="Send (right-click or long-press: Send later)">&#10148;</button>
   </div>
   <input type="file" id="chatFile" multiple hidden>
   <div id="chatMsg" class="chint"></div>
@@ -3943,6 +3993,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     clip: '<path d="M14.5 9.5 9 15a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3L7.5 13a1.1 1.1 0 0 1-1.6-1.6L11 6.3"/>',
     send: '<path d="M3 10 17 3l-4.5 14-3-5.5z" /><path d="M9.5 11.5 17 3"/>',
     ban: '<circle cx="10" cy="10" r="7"/><path d="M5.1 5.1l9.8 9.8"/>',   // 0.21.92 I: remove / ban -- Ban <name>...
+    clock: '<circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.7 1.7"/><path d="M8 2h4"/>',
+  once: '<circle cx="10" cy="10" r="7" stroke-dasharray="3 1.6"/><path d="M8.6 7.6 10.4 6.5v7"/>',   // 0.21.94: view once   // 0.21.94: message timers
   };
   function icon(name, cls) {
     return '<svg class="icon ' + name + (cls ? " " + cls : "")
@@ -4995,6 +5047,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // is not also a tile of its own here (gallery, rail) -- unless I put it on my stage myself -- yet it keeps decoding (cgWarm),
   // because kastr-pres.js draws its frames. Fed by kastr-pres.js (window.__presCamHide); empty while every deck is Content only.
   const presCamHide = new Set();
+  // 0.21.94 (Kenton: "am I able to add other shares to the presentation? Such as another camera feed or a grid?"): the LIVE FEEDS a
+  // presentation in my room shows in its slide's place now (record `lf`) -- kastr-pres.js draws them (window.__presFeedWant). They
+  // keep decoding off-stage (cgWarm) at the slide's priority (the presentation tile's: 190 on my stage, else 150), on the FULL
+  // copy, are not tiles of their own here (unless on my stage), and a single feed is heard while the presentation is on my stage.
+  const presFeedSet = new Set(), presFeedShares = new Set(), presFeedHear = new Set();
+  const presFeedStage = () => !gridMode && !!selectedName && presFeedShares.has(selectedName);
   // 0.21.92 (Kenton: "When presenting, don't show cameras in the side rail for everyone, only show the cameras that are being passed
   // through the presentation") + the presenters' "Audience can see each other" switch. Fed by kastr-pres.js (window.__presAudHide)
   // on an AUDIENCE member's page while a presentation is live in my room -- null on a presenter's or backstage page, and once it ends:
@@ -7933,7 +7991,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const cgPending = new Map();   // a new grid while its builder is open: tile name -> def (kept on Done, gone on Cancel)
   const cgCams = new Set();      // every camera a grid of mine / of my room draws
   const cgWarm = new (class extends Set { has(n) { return super.has(n) || isPresVid(n); } })();
-  { const has0 = cgWarm.has.bind(cgWarm); cgWarm.has = (n) => has0(n) || presCamHide.has(n); }   // 0.21.89: + a presenter's camera drawn inside its presentation tile   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
+  { const has0 = cgWarm.has.bind(cgWarm); cgWarm.has = (n) => has0(n) || presCamHide.has(n) || presFeedSet.has(n); }   // 0.21.94: + a live feed drawn in a presentation's slide place   // 0.21.89: + a presenter's camera drawn inside its presentation tile   // ... of those, the ones to keep decoding off-stage now (0.21.87: + a slide's video -- drawn on its slide, never shed)
   let cgDefsNow = new Map();     // tile name -> {kind: "me" | "room", id, g: {name, slots, gap, sens}}
   let cgOpened = null;           // {cam, grid}: a camera opened from a grid's spot (a click on it goes back)
   let cgWarmSig = "", cgTickT = 0, cgRaf = 0, cgLastDraw = 0;
@@ -9309,6 +9367,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function isAudible(name) {
     if (!enabledStreams.has(name)) return false;   // parked: never audible
     if (isPresVid(name)) return !(manualMute || mutedStreams.has(name));   // 0.21.87: a slide's video is heard with its slide
+    if (presFeedHear.has(name) && presFeedStage()) return !(manualMute || mutedStreams.has(name));   // 0.21.94: a live feed in the slide's place
     if (cgHide(name) && name !== selectedName) return false;   // 0.21.66 (e)
     if (manualMute || mutedStreams.has(name) || mutedStreams.has(gridOf(name))) return false;   // 0.9.5
     if (audioMode === "all") return true;
@@ -10724,6 +10783,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const hiddenChild = (name) => (isGridChild(name) && (gridMode || name !== selectedName)) || gridParked(name) || (deadMember(name) && !(name === selectedName && !gridMode && gridPickHeld(name))) || leavingExMember(name) || roomHid.has(name)   // 0.21.80: a clicked camera held through a `down` flap stays shown
     || (cgHide(name) && (gridMode || name !== selectedName))   // 0.21.66 (e): a camera here only for a grid   // 0.21.64: + removed from this room's grid
     || (presCamHide.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))   // 0.21.89: drawn inside its presentation tile
+    || (presFeedSet.has(name) && (gridMode || name !== selectedName) && !stageMosaicNames.has(name))   // 0.21.94: a live feed drawn in a presentation's slide place
     || presAudHidden(name, false)   // 0.21.92: an audience member sees the presentation's cameras only (no stage exception)
     || gridDark(name);
   // 0.21.66 (Kenton: an RTMP grid sat on "cameras offline -- reconnecting (3)" -- "It should hide it"): a grid whose every camera is
@@ -10956,6 +11016,78 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { applyState(); } catch {}
     return true;
   };
+  // 0.21.94: live feeds -- kastr-pres.js tells which streams the presentations in my room show in their slide's place (paths), the
+  // presentation tiles showing them (shares: their priority follows my stage) and the single feeds that are heard (hear)
+  window.__presFeedWant = (paths, shares, hear) => {
+    const ok = (p) => typeof p === "string" && p.length <= 200 && /\.hang$/.test(p) && !LOW_RE.test(p);
+    const next = new Set((Array.isArray(paths) ? paths : []).filter(ok).slice(0, 48));
+    const sh = new Set((Array.isArray(shares) ? shares : []).filter(ok)), hr = new Set((Array.isArray(hear) ? hear : []).filter((p) => next.has(p)));
+    const same = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+    if (same(next, presFeedSet) && same(sh, presFeedShares) && same(hr, presFeedHear)) return false;
+    presFeedSet.clear(); for (const p of next) presFeedSet.add(p);
+    presFeedShares.clear(); for (const p of sh) presFeedShares.add(p);
+    presFeedHear.clear(); for (const p of hr) presFeedHear.add(p);
+    for (const p of [...presFeedAsk.keys()]) if (!presFeedSet.has(p)) presFeedAsk.delete(p);
+    try { applyState(); } catch {}
+    try { libSync(); } catch {}
+    return true;
+  };
+  window.__presFeedWanted = () => ({ paths: [...presFeedSet], shares: [...presFeedShares], hear: [...presFeedHear] });   // rig
+  const presFeedAsk = new Map();   // a feed path -> when this page first had to draw it ("Not available here" after a while)
+  // what this page can show in a presentation's slide place: {p, k, n, g?, grp, sub} -- k "s" a camera / share, "g" a box's grid
+  // picture, "c" a custom grid (its spots), "l" a library stream
+  let presFeedPolled = 0;
+  window.__presFeedSources = (o) => {
+    const out = [], seen = new Set();
+    const put = (x) => { if (!x.p || seen.has(x.p)) return; seen.add(x.p); out.push(x); };
+    const lab = (p) => { try { return gridLabel(p) || shortLabel(p); } catch { return String(p); } };
+    if (!window.__joinedChannel?.()) return out;
+    for (const n of tiles.keys()) {
+      if (!String(n).startsWith(CHANNEL + "/") || LOW_RE.test(n) || isPresVid(n) || isCgName(n) || !/\.hang$/.test(n)) continue;
+      if (gridMeta.has(n)) put({ p: n, k: "g", n: lab(n), grp: "Grids" });
+      else put({ p: n, k: "s", n: lab(n), grp: "Cameras & shares" });
+    }
+    for (const n of mineNames) if (/\.hang$/.test(n) && !LOW_RE.test(n) && !isPresVid(n)) put({ p: n, k: "s", n: lab(n), grp: "Yours" });
+    for (const [n, x] of xsTiles) if (!x.cg && !isLibPath(n) && !LOW_RE.test(n)) put({ p: n, k: gridMeta.has(n) ? "g" : "s", n: lab(n), grp: "From other rooms", sub: x.from || "" });
+    for (const [n, d] of cgDefsNow) {
+      if (!d || !d.g || !Array.isArray(d.g.slots)) continue;
+      put({ p: n, k: "c", n: String(d.g.name || "Grid").slice(0, 48), g: { slots: d.g.slots.map((sl) => ({ rect: sl.rect, cams: (sl.cams || []).map(String), cycle: sl.cycle || null })), gap: d.g.gap || 0 },
+            grp: d.kind === "me" ? "My grids" : "Room grids" });
+    }
+    if (libOn() && libRoomOk()) {
+      if (o && o.poll && Date.now() - presFeedPolled > 15000) { presFeedPolled = Date.now(); try { libPoll(true); } catch {} }
+      for (const [n, e] of libCat) {
+        const st = libStateOf(e);
+        if (st === "gone" || LOW_RE.test(n)) continue;
+        put({ p: n, k: "l", n: String(e.label || lab(n)).slice(0, 60), grp: "Stream library", sub: [e.box, e.site].filter(Boolean).join(" - ") + (st === "live" ? "" : " (" + st + ")") });
+      }
+    }
+    return out;
+  };
+  // the owner's offline watch: has = a tile (or my own source), fr = a picture now, dead = the library says it is offline / gone
+  window.__presFeedState = (p) => {
+    p = String(p);
+    const t = tiles.get(p);
+    let fr = false;
+    try { fr = !!(t && vgFrameOf(t)) || !!window.__presOwnFrame?.(p); } catch {}
+    let dead = false;
+    if (isLibPath(p)) { const e = libCat.get(p); const st = e ? libStateOf(e) : ""; dead = st === "gone" || st === "offline" || st === "site"; }
+    return { has: !!t || mineNames.has(p), fr, dead };
+  };
+  // the waiting text of a feed with no picture here: "na" = this page cannot get it (a guest and an unpinned library stream; a
+  // stream of another room this page has no listing for, after 8 s), "wait" = still connecting, "ok" = it has a picture
+  window.__presFeedAvail = (p) => {
+    p = String(p);
+    const t = tiles.get(p);
+    try { if (t && vgFrameOf(t)) return "ok"; } catch {}
+    if (mineNames.has(p)) return "wait";
+    if (!presFeedAsk.has(p)) presFeedAsk.set(p, Date.now());
+    if (isLibPath(p)) { if (!libRoomOk() || (libGuest() && !boardPinned(p))) return "na"; const e = libCat.get(p); return e && libStateOf(e) === "gone" ? "na" : "wait"; }
+    if (!t && !p.startsWith(CHANNEL + "/") && Date.now() - presFeedAsk.get(p) > 8000) return "na";
+    return "wait";
+  };
+  window.__presFeedLabel = (p) => { try { return cgLabelOf(String(p)); } catch { return ""; } };
+
   window.__presAudHide = (a) => {   // 0.21.92: kastr-pres.js -- what this AUDIENCE member's page leaves out (null: nothing)
     const next = a && typeof a === "object" ? { show: new Set((Array.isArray(a.show) ? a.show : []).map(String)), staff: new Set((Array.isArray(a.staff) ? a.staff : []).map((x) => String(x).toLowerCase())),
                                                 anon: !!a.anon, me: String(a.me || "").toLowerCase(), tiles: (Array.isArray(a.tiles) ? a.tiles : []).map(String) } : null;
@@ -13204,14 +13336,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         // 0.21.76 (lab 2026-10-20: moq-relay 0.17 honours SUBSCRIBER priority on the viewer leg AND the spoke -> hub leg; with
         // equal priorities the FIRST subscription wins a thin link): what matters wins -- on stage 190, a grid 180, a share or
         // camera feed 150, a person 120 (the library adds +5 for each tile's own audio; catalogs go first at 255, state 200)
-        const prio = cls === "rc" ? 250 : isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120;   // 0.21.80: + the share I control
+        const prio = Math.max(cls === "rc" ? 250 : isSelected ? 190 : cls === "grid" ? 180 : isContentPath(name) ? 150 : 120,   // 0.21.80: + the share I control
+                              presFeedSet.has(name) ? (presFeedStage() ? 190 : 150) : 0);   // 0.21.94: a live feed rides at its slide's priority
         if (t.prio !== prio) { t.prio = prio; t.watch.setAttribute("priority", String(prio)); }
         // 0.18.0: thumbnails pull the -low.hang sibling when the publisher offers one; the spotlit tile the full stream
         // 0.21.7: ... and so does a spotlit tile whose FULL copy is not on the air yet (an on-demand camera waking:
         // the low copy plays at once, the full one takes over when its announce arrives)
-        const wantName = (lowAvail.has(name) && (cls !== "main" || !fullLive.has(name))) ? lowOf(name) : name;
+        const feedFull = presFeedSet.has(name);   // 0.21.94: a live feed in a slide's place plays the full copy (the low one while it wakes)
+        const wantName = (lowAvail.has(name) && ((cls !== "main" && !feedFull) || !fullLive.has(name))) ? lowOf(name) : name;
         if (t.watch.getAttribute("name") !== wantName) { t.watch.setAttribute("name", wantName); t.rendition = wantName === name ? "full" : "low"; }
-        if (cls === "main" && wantName !== name && !fullLive.has(name) && !parkedStreams.has(name)) odWake(name);   // 0.21.7: the spotlit low copy asks for the full pair (also for a camera on another site)
+        if ((cls === "main" || feedFull) && wantName !== name && !fullLive.has(name) && !parkedStreams.has(name)) odWake(name);   // 0.21.7: the spotlit low copy asks for the full pair (also for a camera on another site)
       }
       if (shown) matchRendition(t);
 
@@ -15529,6 +15663,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       // 0.21.42: an optional field (a locked room's code) -- the popup resolves its value; `check(value)` may answer an error
       // string, which keeps the popup open with the error under the field
       const inp = q(".kcin"), err = q(".kcerr");
+      inp.type = (o.input && o.input.type) || "text"; inp.min = (o.input && o.input.min) || ""; inp.max = (o.input && o.input.max) || "";   // 0.21.94: e.g. datetime-local (Send later)
       inp.hidden = !o.input; inp.value = String(o.input?.value || ""); err.hidden = true; err.textContent = "";   // 0.21.66: + a starting value
       if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
       // 0.21.89: an optional second action beside the field (`extra`: {label, run(api), primary?} -- Ask for access). run() may
@@ -18598,7 +18733,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if ((t.watch.getAttribute("visible") || "never") === "never" && !t.fb?.dataset.src) continue;
       // 0.21.7: a rail thumbnail on the low copy asks for nothing (every viewer's rail would keep every camera awake);
       // the spotlit tile, a tile with no low copy, or the fallback player keeps the full pair alive
-      if (lowAvail.has(name) && t.tune_cls !== "main" && !t.fb?.dataset.src) continue;
+      if (lowAvail.has(name) && t.tune_cls !== "main" && !t.fb?.dataset.src && !presFeedSet.has(name)) continue;   // 0.21.94: + a live feed in a slide's place
       odDemand(name);
     }
   }
@@ -18613,7 +18748,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const [name, t] of tiles) {
       if (!(xsTiles.has(name) || libTiles.has(name)) || parkedStreams.has(name) || t.cg) continue;   // 0.21.84: + a library stream in this room (room lib)
       if (libTiles.has(name) && !libWakeable(name)) continue;   // 0.21.84: no demand to a box that is offline, a site that is unreachable, a stream that is gone
-      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none") && !(libTiles.has(name) && cgWarm.has(name))) continue;   // 0.21.84: + a library camera my grid draws now   // watched -- NOT `visible` (noCatalog parks it)
+      if (!(t.pane.classList.contains("shown") && t.pane.style.display !== "none") && !((libTiles.has(name) || presFeedSet.has(name)) && cgWarm.has(name))) continue;   // 0.21.94: + a live feed; 0.21.84: + a library camera my grid draws now   // watched -- NOT `visible` (noCatalog parks it)
       if (hasPicture(t)) { t.odAt = 0; t.odResub = false; continue; }
       if (!t.odAt) { t.odAt = now; odWake(name); continue; }
       if (!t.odResub && now - t.odAt > 6000) { t.odResub = true; resubscribe(name, "a camera shown here from another room was asleep"); }
@@ -21334,6 +21469,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let chatPending = [];           // attachments waiting in the composer: {id, name, size, type, url, el}
   let chatDisabled = "";          // why the composer is off ("" = fine)
   const chatMyTokens = new Map(); // my message ids -> delete tokens (this page's life)
+  let chatTv = false, chatSkew = 0, chatRoomTtl = 0, chatTtlSysId = 0, chatTtlNext = null, chatVoNext = false, chatSched = [];   // 0.21.94 timers (below)
   // 0.13.0 (F1): chat HISTORY rides the relay host's KASTR web port, which a
   // client may not reach even while the relay itself answers (Agg, 2026-09-21).
   // chatHostDown is the page-side probe's verdict (chatProbe below); this
@@ -21513,10 +21649,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { who.style.color = anon ? "" : window.__personColor?.(op) || ""; } catch {}
     const ts = document.createElement("span"); ts.className = "cts"; ts.textContent = fmtTime(new Date(tsMs(m)));
     hd.append(who, ts);
+    if (Number(m.exp)) hd.appendChild(chatClockEl(m));   // 0.21.94: the time left
     if (m.via && !anon) { const v = document.createElement("span"); v.className = "cvia"; v.textContent = "via " + m.via; hd.appendChild(v); }
     el.appendChild(hd);
     const body = document.createElement("div"); body.className = "cbody";
     const tx = document.createElement("div"); tx.className = "ctxt";
+    if (m.vo) chatVoStub(m, tx);   // 0.21.94: view once -- no text, no files until it is opened
     if (m.text) linkify(String(m.text), tx);
     for (const f of (Array.isArray(m.files) ? m.files : [])) {
       if (!f || !/^[0-9a-f]{32}$/.test(String(f.id || ""))) continue;
@@ -21544,7 +21682,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function chatRenderAll() {
     chatLog.replaceChildren();
     if (!chatRoom) { const e = document.createElement("div"); e.className = "cempty"; e.textContent = "Join a room to chat."; chatLog.appendChild(e); return; }
-    if (!chatMsgs.length) { const e = document.createElement("div"); e.className = "cempty"; e.textContent = chatDisabled || "No messages yet \u2014 say hello."; chatLog.appendChild(e); return; }
+    if (!chatMsgs.length && !chatSched.length) { const e = document.createElement("div"); e.className = "cempty"; e.textContent = chatDisabled || "No messages yet \u2014 say hello."; chatLog.appendChild(e); return; }   // 0.21.94: + my scheduled ones
     let prev = null, lastDay = "", newShown = false;
     for (const m of chatMsgs) {
       const day = fmtDay(new Date(tsMs(m)));
@@ -21552,10 +21690,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!newShown && chatSeenAtOpen && m.id > chatSeenAtOpen && chatRecent(m) && String(m.op || "").toLowerCase() !== chatMe()) {   // 0.21.35: + recent
         const n = document.createElement("div"); n.className = "cnew"; n.textContent = "new"; chatLog.appendChild(n); newShown = true; prev = null;
       }
+      if (m.sys === "ttl") { chatLog.appendChild(chatSysEl(m)); prev = null; continue; }   // 0.21.94: the room's timer changed
       chatLog.appendChild(chatRenderOne(m, prev));
       if (m.local) { const el = chatLog.lastElementChild; if (el) { el.classList.add("clocal"); const mk = document.createElement("span"); mk.className = "cmark"; mk.textContent = "not saved"; mk.title = "Delivered live; the relay host's KASTR did not store it"; el.appendChild(mk); } }   // 0.13.0
       prev = m;
     }
+    for (const s of chatSched) chatLog.appendChild(chatSchedEl(s));   // 0.21.94: mine, waiting on the relay host
     chatLog.scrollTop = chatLog.scrollHeight;
   }
   function chatAppend(list) {
@@ -21563,6 +21703,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const m of list) {
       if (!m || typeof m.id !== "number") continue;
       if (chatMsgs.some((x) => x.id === m.id)) continue;
+      if (Number(m.exp) && Number(m.exp) <= chatHubNow()) continue;   // 0.21.94: its time ran out
+      if (m.sys === "ttl" && !m.local && m.id > chatTtlSysId) { chatTtlSysId = m.id; chatRoomTtl = Number(m.s) || 0; chatPaintTimer(); }
       chatMsgs.push(m); added++;
       if (!m.local && m.id > chatLastId) chatLastId = m.id;   // 0.13.0: local (unsaved) ids never move the store cursor
     }
@@ -21582,7 +21724,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const room = chatRoom;
     try {
       const since = full ? 0 : chatLastId;
-      const r = await fetch(chatUrl("/api/chat/" + room, "since=" + since + "&limit=200"), { cache: "no-store" });
+      const r = await fetch(chatUrl("/api/chat/" + room, "since=" + since + "&limit=200&tv=1"), { cache: "no-store" });   // 0.21.94: tv = this page knows timers
       if (room !== chatRoom) return;
       if (r.status === 410) { chatRoomClosed("the room was closed"); return; }
       if (r.status === 404) { chatDisabled = "This relay's KASTR has no chat service (older than 0.12.0)."; chatHint(chatDisabled, true); chatRenderAll(); return; }
@@ -21590,10 +21732,14 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!r.ok) { const d = await r.json().catch(() => ({})); chatHint(d.error || ("Chat unavailable (" + r.status + ")"), true); return; }
       const d = await r.json();
       if (room !== chatRoom) return;
+      chatTv = d.tv === 1;   // 0.21.94: the relay host's KASTR keeps timers (0.21.94+), on its clock
+      if (Number(d.now)) chatSkew = Number(d.now) - Date.now() / 1000;
       chatDisabled = "";
       chatHint(d.persistent && !isPersonalSlug(room) ? "Room kept open \u2014 its history stays until the room is closed." : "");
       if (full) { chatMsgs = chatMsgs.filter((m) => m.local || m.viaWindow); chatLastId = 0; }   // 0.13.0: live-delivered records survive a rebind
       chatAppend(Array.isArray(d.messages) ? d.messages : []);
+      if (chatTv) chatRoomTtl = Number(d.ttl) || 0;
+      chatPaintTimer();
       if (full && !chatMsgs.length) chatRenderAll();
     } catch (e) {
       // 0.13.0 (F1): name the host and port that did not answer (a fetch throw =
@@ -21606,17 +21752,21 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
   }
   async function chatSend(over) {
+    const rel = Number(over?.rel) || 0;   // 0.21.94: Send later (the relay host's epoch s)
     over = over && Array.isArray(over.files) ? over : null;   // 0.21.91: a picked GIF {files} (the Send button's click event is not one)
     const text = over ? "" : chatInput.value.replace(/\s+$/, "");
     const files = over ? over.files : chatPending.filter((p) => p.id).map((p) => ({ id: p.id, name: p.name, size: p.size, type: p.type }));
     if (!chatRoom || (!text && !files.length) || (!over && chatPending.some((p) => !p.id))) return;
+    // 0.21.94: the composer's timer (the next message only) or the room's default (the host applies it); view once is for pictures
+    const tvo = chatTv && chatVoNext, tttl = chatTv ? chatTtlNow() : 0, timed = tvo || tttl > 0 || rel > 0;
+    if (tvo && files.some((f) => !String(f.type || "").startsWith("image/"))) { chatHint("View once is for pictures and text \u2014 remove the other files, or turn View once off (the timer button)", true); return; }
     chatSendBtn.disabled = true;
     const cid = chatCid();
     const clearComposer = over ? () => {} : () => { chatInput.value = ""; chatGrow(); for (const p of chatPending) p.el?.remove(); chatPending = []; chatAttachEl.hidden = true; chatTypingStop(); };
     // 0.13.0: the store keeps history; delivery rides my chat.json Window. Store down (no answer in
     // 4 s, network error, 5xx) -> the message still goes out live, marked "not saved" (never re-posted).
     const liveOnly = (why) => {
-      if (!window.__state?.enabled) { chatHint("Not sent \u2014 " + why, true); return; }
+      if (timed || !window.__state?.enabled) { chatHint("Not sent \u2014 " + why, true); return; }   // 0.21.94: a timed one is never sent live (it would stay on screens)
       const rec = { id: Date.now() * 1000 + Math.floor(Math.random() * 1000), ts: Date.now(), op: chatMe(), name: chatName(), text: text.slice(0, 4000), files, cid, local: true, seenLocal: true };
       clearComposer();
       chatAppend([rec]); chatWinPush(rec);
@@ -21626,18 +21776,29 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 4000);
       let r;
       try { r = await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" }, signal: ctl.signal,
-        body: JSON.stringify({ text: text.slice(0, 4000), files, op: chatMe(), name: chatName() }) }); }
+        body: JSON.stringify({ text: text.slice(0, 4000), files, op: chatMe(), name: chatName(),
+          ...(chatTv && chatTtlNext !== null ? { ttl: chatTtlNext } : {}), ...(tvo ? { vo: 1, dev: chatDev() } : {}), ...(rel ? { rel } : {}) }) }); }
       finally { clearTimeout(tm); }
       const d = await r.json().catch(() => ({}));
       if (r.status === 410) { chatRoomClosed("the room was closed"); return; }
       if (r.status >= 500) { liveOnly("the relay host's KASTR answered " + r.status); return; }
       if (!r.ok) { chatHint(d.error || ("Not sent (" + r.status + ")"), true); return; }
+      if (d.sched) {   // 0.21.94: held on the relay host until then
+        if (Number(d.now)) chatSkew = Number(d.now) - Date.now() / 1000;
+        const s = { sid: d.sid, tk: d.tk, dtk: d.dtk, rel: Number(d.rel) || rel, text, nf: files.length, ttl: tttl, vo: tvo ? 1 : 0, at: Date.now() };
+        chatSched.push(s); chatSchedSave();
+        clearComposer(); chatTtlNext = null; chatVoNext = false; chatPaintTimer(); chatRenderAll();
+        chatHint("Scheduled for " + chatWhen(s.rel) + " \u2014 it goes even with this computer off");
+        return;
+      }
       if (typeof d.id === "number" && d.token) { chatMyTokens.set(d.id, d.token); chatMyCids.set(d.id, cid); }
       clearComposer();
+      if (timed) { chatTtlNext = null; chatVoNext = false; chatPaintTimer(); }   // 0.21.94: the next one is back on the room's setting
       const rec = { ...d, cid, stored: true }; delete rec.token;
       chatAppend([rec]);
       chatSeenId = Math.max(chatSeenId, d.id || 0); paintChatBadge();
-      chatWinPush(rec);
+      if (rec.exp || rec.vo) chatWinPush({ poke: d.id, ts: Date.now() });   // 0.21.94: no text on the Window (an older page would keep it)
+      else chatWinPush(rec);
       try { window.__chatPulse?.(d.id); } catch {}
     } catch (e) { liveOnly(e?.name === "AbortError" ? "the relay host's KASTR did not answer" : (e?.message || String(e))); }
     finally { chatSendBtn.disabled = false; chatInput.focus(); }
@@ -21685,6 +21846,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     chatBoundAt = Date.now();
     chatMsgs = []; chatLastId = 0; chatSeenId = 0; chatSeenAtOpen = 0; chatDisabled = "";
     chatPending = []; chatAttachEl.replaceChildren(); chatAttachEl.hidden = true;
+    chatTv = false; chatRoomTtl = 0; chatTtlSysId = 0; chatTtlNext = null; chatVoNext = false; chatSchedLoad(); chatPaintTimer();   // 0.21.94
     document.getElementById("chatRoomLbl").textContent = chatRoom ? "#" + chatRoom : "";
     chatHint("");
     if (chatRoom) { try { chatSeenId = Number(localStorage.getItem(chatSeenKey())) || 0; } catch {} }
@@ -21704,6 +21866,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function chatWindowOp(path, op) {
     const r = op?.push?.value;
     if (!r) return;
+    if (r.poke) { if (typeof r.poke === "number" && !chatMsgs.some((m) => m.id === r.poke)) chatFetch(); return; }   // 0.21.94: a timed message -- from the store
     if (r.del) {
       // 0.21.6: an admin deleting someone else's line has no cid to attach -- the tombstone carries the store id
       // alone, and this handler used to drop any record without a cid, so nobody (not even the admin, once the
@@ -22079,6 +22242,336 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__gifChatMount = () => window.__gif?.mount({ root: chatPanel, btn: document.getElementById("chatGifBtn"), panel: document.getElementById("chatGif"),
     input: chatInput, emoji: { btn: document.getElementById("chatEmojiBtn"), panel: chatEmojiEl }, send: (file) => chatSendGif(file) });
   // ---- end 0.21.91 GIF search
+  // ---- 0.21.94 Room Chat timers (Kenton 2026-10-27/28: disappearing messages, send later and view once -- in Room Chat too) ----
+  // The relay host's KASTR (the hub's, for a room a spoke forwards) keeps the room's history, so it keeps the timers, on ITS
+  // clock (chatSkew from each read's `now`). A room has no read receipts: a timer starts when the message is SENT.
+  // DISAPPEARING: the room's default (the clock in the head -- anyone here changes it, everyone sees a line) and the composer's
+  // timer button for the next message only; the host deletes the line (scrubbed from its file and the standby's copy) and its
+  // attachments at its time, and every page drops it then (this beat). VIEW ONCE: a stub until Open -- once on each device; the
+  // host deletes it at its timer (7 days at the latest); drawn on canvases, no save or copy (best effort: a screenshot works).
+  // SEND LATER: right-click or long-press Send; the host holds it and posts it then, even with this computer off; this page
+  // lists mine as "Scheduled for <time>" (change the time, send now, cancel). A page older than 0.21.94 never gets a timed or
+  // view-once message (a line telling it to update instead) and never sees a scheduled one early (it is not history yet).
+  const CHAT_TTLS = [[0, "Off"], [300, "5 minutes"], [3600, "1 hour"], [28800, "8 hours"], [86400, "24 hours"], [604800, "7 days"], [2592000, "30 days"]];
+  const chatTimerBtn = document.getElementById("chatTimerBtn"), chatTtlBtn = document.getElementById("chatTtlBtn");
+  const chatHubNow = () => Date.now() / 1000 + chatSkew;
+  const chatPlural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  function chatTtlName(s) {
+    s = Number(s) || 0;
+    const o = CHAT_TTLS.find((x) => x[0] === s);
+    if (o) return o[1];
+    return s % 86400 === 0 ? chatPlural(s / 86400, "day") : s % 3600 === 0 ? chatPlural(s / 3600, "hour") : chatPlural(Math.round(s / 60), "minute");
+  }
+  const chatTtlShort = (s) => (s >= 86400 ? Math.round(s / 86400) + "d" : s >= 3600 ? Math.round(s / 3600) + "h" : Math.max(1, Math.ceil(s / 60)) + "m");
+  function chatParseTtl(v) {   // "45 minutes", "3h", "2 days", "1 week" -> seconds (0 when it cannot be read)
+    const m = /^\s*(\d+(?:[.,]\d+)?)\s*(m|mins?|minutes?|h|hrs?|hours?|d|days?|w|wks?|weeks?)?\s*$/i.exec(String(v || ""));
+    if (!m) return 0;
+    const n = parseFloat(m[1].replace(",", ".")), u = (m[2] || "m")[0].toLowerCase();
+    return Math.round(n * ({ m: 60, h: 3600, d: 86400, w: 604800 }[u] || 60));
+  }
+  const chatTtlNow = () => (chatTtlNext !== null ? chatTtlNext : chatRoomTtl);
+  const chatWhen = (sec) => new Date((sec - chatSkew) * 1000).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  let chatDevMem = "";
+  function chatDev() {   // this device (view once opens once on each one); a random id, never a name
+    const mk = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    try { let d = localStorage.getItem("kastr.chat.dev") || ""; if (!/^[0-9a-f]{32}$/.test(d)) { d = mk(); localStorage.setItem("kastr.chat.dev", d); } return d; }
+    catch { return chatDevMem || (chatDevMem = mk()); }
+  }
+  const chatVoMem = new Set();
+  const chatVoKey = () => "kastr.chat.vo." + (chatBase() || "") + "." + chatRoom;
+  function chatVoSeen(id) { if (chatVoMem.has(chatRoom + ":" + id)) return true; try { return JSON.parse(localStorage.getItem(chatVoKey()) || "[]").includes(id); } catch { return false; } }
+  function chatVoMark(id) {
+    chatVoMem.add(chatRoom + ":" + id);
+    try { const a = JSON.parse(localStorage.getItem(chatVoKey()) || "[]").filter((x) => x !== id); a.push(id); localStorage.setItem(chatVoKey(), JSON.stringify(a.slice(-200))); } catch {}
+  }
+  function chatPaintTimer() {
+    const on = chatTv && !!chatRoom;
+    chatTimerBtn.hidden = !on; chatTtlBtn.hidden = !on;
+    if (!on) return;
+    const t = chatTtlNow();
+    chatTimerBtn.classList.toggle("on", chatVoNext || t > 0);
+    chatTimerBtn.innerHTML = icon(chatVoNext ? "once" : "clock") + '<span class="mtl"></span>';
+    chatTimerBtn.lastChild.textContent = !chatVoNext && t ? chatTtlShort(t) : "";
+    chatTimerBtn.title = chatVoNext ? "View once: the next message opens once on each device. They can still take a screenshot."
+      : t ? "The next message disappears " + chatTtlName(t) + " after it is sent" + (chatTtlNext !== null ? " (this message only)" : " (this room’s setting)")
+      : "Disappearing messages and view once (the next message)";
+    chatTtlBtn.classList.toggle("on", chatRoomTtl > 0);
+    chatTtlBtn.innerHTML = icon("clock") + "<span></span>";
+    chatTtlBtn.lastChild.textContent = chatRoomTtl ? chatTtlShort(chatRoomTtl) : "Off";
+    chatTtlBtn.title = "Disappearing messages for everyone in this room: " + (chatRoomTtl ? chatTtlName(chatRoomTtl) + " after sending" : "off") + " — change";
+  }
+  // the length menu: the room's default (the head) or the next message's own (the composer's timer button)
+  function chatTimerMenu(anchor, scope) {
+    const cur = scope === "room" ? chatRoomTtl : chatTtlNow();
+    const known = CHAT_TTLS.some((x) => x[0] === cur);
+    const vo = scope === "msg" && chatVoNext;
+    const items = [{ cap: scope === "room" ? "Disappearing messages — everyone here" : "Disappearing — the next message" }];
+    for (const [s, label] of CHAT_TTLS) items.push({ value: String(s), label, on: !vo && s === cur });
+    items.push({ value: "custom", label: known ? "Custom…" : "Custom (" + chatTtlName(cur) + ")…", on: !vo && !known });
+    items.push({ hint: scope === "room" ? "Starts when a message is sent (a room has no read receipts). Everyone here sees the change."
+      : "Starts when it is sent. Only the next message — then the room’s setting again." });
+    if (scope === "msg") items.push({ sep: true }, { value: "vo", label: "View once", on: vo },
+      { hint: "Opens once on each device, then it is gone. No save or copy in KASTR. They can still take a screenshot." });
+    openMineMenu(anchor, items, "", async (v) => {
+      if (v === "vo") {
+        chatVoNext = !vo;
+        if (chatVoNext) chatHint("View once: your next message opens once on each device. They can still take a screenshot.");
+        chatPaintTimer();
+        return;
+      }
+      if (scope === "msg") chatVoNext = false;
+      let s = Number(v) || 0;
+      if (v === "custom") {
+        const x = await kastrConfirm({ title: "Disappearing messages", ok: "Set",
+          message: scope === "room" ? "How long after a message is sent, for everyone here? From 1 minute to 90 days." : "How long after it is sent? From 1 minute to 90 days.",
+          input: { value: known ? "" : chatTtlName(cur), placeholder: "e.g. 45 minutes, 3 hours, 2 days" },
+          check: (y) => { const n = chatParseTtl(y); return n >= 60 && n <= 90 * 86400 ? "" : "Type a length from 1 minute to 90 days (e.g. 45 minutes, 3 hours, 2 days)."; } });
+        if (!x) { chatPaintTimer(); return; }
+        s = chatParseTtl(x);
+      }
+      if (scope === "room") { await chatSetRoomTtl(s); return; }
+      chatTtlNext = s === chatRoomTtl ? null : s;
+      chatPaintTimer();
+    });
+  }
+  async function chatSetRoomTtl(s) {   // the line everyone sees (an older page reads its text) and the host's default from now on
+    if (!chatRoom) return;
+    try {
+      const r = await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ act: "ttl", s, op: chatMe(), name: chatName() }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || typeof d.id !== "number") { chatHint(d.error || ("Could not change it (" + r.status + ")"), true); return; }
+      const rec = { ...d, cid: chatCid(), stored: true }; delete rec.token;   // no delete token kept: removing the line would undo the setting
+      chatTtlNext = null;
+      chatAppend([rec]);
+      chatWinPush(rec);
+      try { window.__chatPulse?.(d.id); } catch {}
+      chatPaintTimer();
+    } catch (e) { chatHint("Could not change it — " + (e?.message || e), true); }
+  }
+  chatTimerBtn.addEventListener("click", (e) => { e.stopPropagation(); chatTimerMenu(chatTimerBtn, "msg"); });
+  chatTtlBtn.addEventListener("click", (e) => { e.stopPropagation(); chatTimerMenu(chatTtlBtn, "room"); });
+  function chatClockEl(m) {
+    const c = document.createElement("span"); c.className = "mclk"; c.dataset.cexp = String(m.exp);
+    c.innerHTML = icon("clock");
+    c.appendChild(document.createTextNode(chatTtlShort(Math.max(0, Number(m.exp) - chatHubNow()))));
+    c.title = (m.vo ? "View once — gone by " : "Disappears ") + chatWhen(Number(m.exp));
+    return c;
+  }
+  function chatSysEl(m) {
+    const d = document.createElement("div"); d.className = "cday csys"; d.dataset.id = String(m.id);
+    const who = m.name || m.op || "Someone", s = Number(m.s) || 0;
+    d.innerHTML = icon("clock");
+    d.appendChild(document.createTextNode(s ? who + " set disappearing messages to " + chatTtlName(s) + " — new messages go " + chatTtlName(s) + " after they are sent"
+      : who + " turned off disappearing messages"));
+    return d;
+  }
+  setInterval(() => {   // the beat: lines whose time came go, the badges count down, my scheduled ones that are due are checked
+    if (!chatRoom) return;
+    const now = chatHubNow(), n = chatMsgs.length;
+    chatMsgs = chatMsgs.filter((m) => !(Number(m.exp) && Number(m.exp) <= now));
+    if (chatMsgs.length !== n) { chatRenderAll(); paintChatBadge(); }
+    else for (const el of chatLog.querySelectorAll(".mclk[data-cexp]")) {
+      const x = chatTtlShort(Math.max(0, Number(el.dataset.cexp) - now));
+      if (el.lastChild && el.lastChild.textContent !== x) el.lastChild.textContent = x;
+    }
+    for (const s of chatSched.slice()) if (s.rel <= now + 1 && Date.now() - s.at > 4000) chatSchedGet(s);
+  }, 5000);
+  // VIEW ONCE
+  const chatVoWhat = (m) => (m.nf ? (m.nf === 1 ? "Photo" : m.nf + " photos") : "Message");
+  function chatVoStub(m, into) {
+    const mine = String(m.op || "").toLowerCase() === chatMe();
+    if (!mine && !chatVoSeen(m.id)) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "mvob";
+      b.innerHTML = icon("once"); b.appendChild(document.createTextNode("View once · " + chatVoWhat(m) + " — Open"));
+      b.title = "Opens once on this device. When you close it, it is gone.";
+      b.addEventListener("click", (e) => { e.stopPropagation(); chatVoOpen(m); });
+      into.appendChild(b);
+    } else {
+      const x = document.createElement("div"); x.className = "mvos"; x.innerHTML = icon("once");
+      x.appendChild(document.createTextNode("View once · " + chatVoWhat(m) + (mine ? " · sent" : " · Opened")));
+      into.appendChild(x);
+    }
+  }
+  async function chatVoOpen(m) {
+    if (m.__opening || !chatRoom) return;
+    m.__opening = true;
+    try {
+      const r = await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ act: "open", id: m.id, dev: chatDev() }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 410) { chatVoMark(m.id); chatRenderAll(); chatHint("Already opened on this device"); return; }
+      if (r.status === 404) { chatMsgs = chatMsgs.filter((x) => x.id !== m.id); chatRenderAll(); chatHint("This view-once message is gone"); return; }
+      if (!r.ok) { chatHint(d.error || ("Could not open it (" + r.status + ")"), true); return; }
+      chatVoMark(m.id); chatRenderAll();
+      await chatVoView(d, m);
+    } catch (e) { chatHint("Could not open it — " + (e?.message || e), true); }
+    finally { m.__opening = false; }
+  }
+  function chatVoView(d, m) {   // a viewer that keeps nothing: pictures fetched with the opening's ticket, drawn on canvases, wiped on close
+    return new Promise((done) => {
+      const room = chatRoom;
+      const ov = document.createElement("div"); ov.className = "mvoview"; ov.tabIndex = -1;
+      ov.innerHTML = '<div class="mvobox"><div class="mvohead"><span class="mvot"></span><button type="button" class="mvox" title="Close — it is gone after this">✕</button></div>'
+        + '<div class="mvobody"></div><div class="mvohint">View once: when you close it, it is gone from this device.</div></div>';
+      ov.querySelector(".mvot").textContent = "View once · from " + (d.name || m.name || m.op || "someone");
+      const box = ov.querySelector(".mvobody"), cvs = [];
+      const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+      for (const ev of ["contextmenu", "dragstart", "copy", "cut", "selectstart"]) ov.addEventListener(ev, stop, true);
+      const close = () => {
+        for (const c of cvs) { c.width = 0; c.height = 0; }
+        box.replaceChildren();
+        ov.remove();
+        document.removeEventListener("keydown", key, true);
+        done();
+      };
+      const key = (e) => {
+        if (e.key === "Escape") { stop(e); close(); return; }
+        if ((e.ctrlKey || e.metaKey) && /^[scpa]$/i.test(e.key)) stop(e);   // save, copy, print, select all
+      };
+      document.addEventListener("keydown", key, true);
+      ov.querySelector(".mvox").addEventListener("click", (e) => { stop(e); close(); });
+      ov.addEventListener("click", (e) => { e.stopPropagation(); if (e.target === ov) close(); });   // never closes the Chat panel behind it
+      for (const f of Array.isArray(d.files) ? d.files.slice(0, 10) : []) {
+        const cell = document.createElement("div"); cell.className = "mvopic loading"; box.appendChild(cell);
+        if (!String(f.type || "").startsWith("image/") || !/^[0-9a-f]{32}$/.test(String(f.id || ""))) { cell.className = "mvopic mfail"; cell.textContent = "A file (view once shows pictures only)"; continue; }
+        (async () => {
+          const r = await fetch(chatUrl("/api/chat/" + room + "/files/" + f.id, "ft=" + encodeURIComponent(d.ft || "")), { cache: "no-store" });
+          if (!r.ok) throw new Error(String(r.status));
+          const bmp = await createImageBitmap(await r.blob());
+          if (!ov.isConnected) { bmp.close?.(); return; }
+          const c = document.createElement("canvas"); c.width = bmp.width; c.height = bmp.height;
+          c.getContext("2d").drawImage(bmp, 0, 0); bmp.close?.();
+          cvs.push(c); cell.classList.remove("loading"); cell.appendChild(c);
+        })().catch((e) => { cell.className = "mvopic mfail"; cell.textContent = "Picture unavailable (" + (e?.message || e) + ")"; });
+      }
+      if (d.text) { const x = document.createElement("div"); x.className = "mvotext"; x.textContent = String(d.text); box.appendChild(x); }
+      document.body.appendChild(ov);
+      ov.focus();
+    });
+  }
+  // SEND LATER: the control tokens of mine wait in this browser (kastr.chat.sched.<host>.<room>); the text stays on the host
+  const chatSchedKey = () => "kastr.chat.sched." + (chatBase() || "") + "." + chatRoom;
+  function chatSchedSave() {
+    try {
+      const a = chatSched.map((s) => ({ sid: s.sid, tk: s.tk, dtk: s.dtk, rel: s.rel }));
+      if (a.length) localStorage.setItem(chatSchedKey(), JSON.stringify(a)); else localStorage.removeItem(chatSchedKey());
+    } catch {}
+  }
+  function chatSchedLoad() {
+    chatSched = [];
+    if (!chatRoom) return;
+    try {
+      for (const s of JSON.parse(localStorage.getItem(chatSchedKey()) || "[]"))
+        if (s && /^[0-9a-f]{16}$/.test(String(s.sid || "")) && s.tk) chatSched.push({ sid: s.sid, tk: s.tk, dtk: s.dtk || "", rel: Number(s.rel) || 0, text: "", nf: 0, at: 0 });
+    } catch {}
+    for (const s of chatSched) chatSchedGet(s);
+  }
+  async function chatSchedOp(s, body) {
+    const r = await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ act: "sched", sid: s.sid, tk: s.tk, ...body }) });
+    const d = await r.json().catch(() => ({}));
+    if (Number(d.now)) chatSkew = Number(d.now) - Date.now() / 1000;
+    return { ok: r.ok, status: r.status, d };
+  }
+  async function chatSchedGet(s) {   // what it says, or whether it went
+    s.at = Date.now();
+    const room = chatRoom;
+    try {
+      const { status, d } = await chatSchedOp(s, { do: "get" });
+      if (room !== chatRoom || !chatSched.includes(s)) return;
+      if (status === 200 && d.state === "waiting") Object.assign(s, { rel: Number(d.rel) || s.rel, text: d.text || "", nf: (d.files || []).length, ttl: Number(d.ttl) || 0, vo: Number(d.vo) || 0 });
+      else if (status === 200 && d.state === "sent") chatSchedWent(s, Number(d.id));
+      else if (status === 200 || status === 404 || status === 403) chatSchedDrop(s);
+      else return;
+      chatRenderAll();
+    } catch {}
+  }
+  function chatSchedDrop(s) { chatSched = chatSched.filter((x) => x !== s); chatSchedSave(); }
+  function chatSchedWent(s, id) {
+    chatSchedDrop(s);
+    if (id) { if (s.dtk) chatMyTokens.set(id, s.dtk); chatWinPush({ poke: id, ts: Date.now() }); try { window.__chatPulse?.(id); } catch {} }
+    chatFetch();
+  }
+  const chatTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } };
+  async function chatPickTime(title, message, def, ok) {   // a date + time in this device's zone -> the host's epoch s (0: cancelled)
+    const loc = (sec) => { const d = new Date(sec * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+    const now = Date.now() / 1000;
+    def = Math.ceil(Math.max(def, now + 300) / 300) * 300;   // a round 5 minutes
+    const v = await kastrConfirm({ title, message: message + (chatTz() ? " (" + chatTz() + ")" : ""), ok: ok || "Schedule",
+      input: { type: "datetime-local", value: loc(def), min: loc(now + 60), max: loc(now + 90 * 86400 - 3600) },
+      check: (x) => { const t = new Date(String(x || "")).getTime() / 1000;
+        if (!x || !isFinite(t)) return "Pick a date and a time.";
+        if (t < Date.now() / 1000 + 60) return "Pick a time at least a minute from now.";
+        return t > Date.now() / 1000 + 90 * 86400 ? "Up to 90 days ahead." : ""; } });
+    if (!v) return 0;
+    return Math.floor(new Date(String(v)).getTime() / 1000 + chatSkew);
+  }
+  function chatSendMenu() {
+    if (!chatRoom) return;
+    if (!chatTv) { chatHint("Send later needs the relay host's KASTR on 0.21.94 or newer", true); return; }
+    openMineMenu(chatSendBtn, [{ value: "later", label: "Send later…" }, { hint: "The relay host keeps it and posts it then, even with this computer off." }], "", async () => {
+      if (!chatInput.value.trim() && !chatPending.some((p) => p.id)) { chatHint("Write the message first, then pick Send later"); chatInput.focus(); return; }
+      const rel = await chatPickTime("Send later", "When should it go?", Date.now() / 1000 + 3600);
+      if (rel) chatSend({ rel });
+    });
+  }
+  {   // right-click, or a long press (touch, pen or mouse), on Send
+    let lpT = 0, lpAt = 0;
+    chatSendBtn.addEventListener("contextmenu", (e) => { e.preventDefault(); if (Date.now() - lpAt > 1500) chatSendMenu(); });
+    chatSendBtn.addEventListener("pointerdown", (e) => { if (e.button !== 0) return; clearTimeout(lpT); lpT = setTimeout(() => { lpAt = Date.now(); chatSendMenu(); }, 550); });
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) chatSendBtn.addEventListener(ev, () => clearTimeout(lpT));
+    chatSendBtn.addEventListener("click", (e) => { if (Date.now() - lpAt < 1500) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);   // the press opened the menu: no send
+  }
+  function chatSchedEl(s) {
+    const el = document.createElement("div"); el.className = "cmsg mine csched"; el.dataset.sid = s.sid;
+    const hd = document.createElement("div"); hd.className = "chd";
+    const who = document.createElement("span"); who.className = "cwho"; who.textContent = chatName() || "You";
+    hd.appendChild(who);
+    if (s.vo || s.ttl) {
+      const c = document.createElement("span"); c.className = "mclk"; c.innerHTML = icon(s.vo ? "once" : "clock");
+      if (!s.vo) c.appendChild(document.createTextNode(chatTtlShort(s.ttl)));
+      c.title = s.vo ? "View once" : "Disappears " + chatTtlName(s.ttl) + " after it is sent";
+      hd.appendChild(c);
+    }
+    el.appendChild(hd);
+    const tx = document.createElement("div"); tx.className = "ctxt";
+    if (s.text) linkify(String(s.text), tx);
+    if (s.nf) { const f = document.createElement("div"); f.className = "cts"; f.textContent = chatPlural(s.nf, "attachment"); tx.appendChild(f); }
+    const w = document.createElement("button"); w.type = "button"; w.className = "mschd";
+    w.innerHTML = icon("clock"); w.appendChild(document.createTextNode("Scheduled for " + chatWhen(s.rel) + " ▾"));
+    w.title = "Change the time, send now or cancel";
+    w.addEventListener("click", (e) => { e.stopPropagation(); chatSchedMenu(w, s); });
+    tx.appendChild(w);
+    el.appendChild(tx);
+    return el;
+  }
+  function chatSchedMenu(anchor, s) {
+    openMineMenu(anchor, [{ value: "time", label: "Change the time…" }, { value: "now", label: "Send now" }, { sep: true },
+      { value: "cancel", label: "Cancel — don’t send it", danger: true }], "", async (v) => {
+      let res = null;
+      if (v === "time") {
+        const rel = await chatPickTime("Change the time", "When should it go?", s.rel - chatSkew, "Change");
+        if (!rel) return;
+        res = await chatSchedOp(s, { do: "time", rel });
+        if (res.ok) { s.rel = Number(res.d.rel) || rel; chatSchedSave(); }
+      } else if (v === "now") {
+        res = await chatSchedOp(s, { do: "now" });
+        if (res.ok) chatSchedWent(s, Number(res.d.id));
+      } else if (v === "cancel") {
+        if (!(await kastrConfirm({ title: "Cancel the scheduled message", message: "Don’t send it?", detail: "It leaves the relay host at once.", ok: "Cancel it", cancel: "Keep it", danger: true }))) return;
+        res = await chatSchedOp(s, { do: "cancel" });
+        if (res.ok) chatSchedDrop(s);
+      }
+      if (res && !res.ok) { chatHint(res.d.sent ? "It was already sent" : "Could not do that: " + (res.d.error || res.status), true); chatSchedGet(s); }
+      chatRenderAll();
+    });
+  }
+  window.__chatTimers = () => ({ room: chatRoom, tv: chatTv, skew: chatSkew, roomTtl: chatRoomTtl, next: chatTtlNext, vo: chatVoNext, sched: chatSched.map((s) => ({ sid: s.sid, rel: s.rel })) });   // rig
+  window.__chatMsgs = () => chatMsgs.map((m) => ({ id: m.id, text: m.text || "", exp: Number(m.exp) || 0, vo: m.vo || 0, sys: m.sys || "", nf: (m.files || []).length || m.nf || 0 }));   // rig
+  window.__chatOldRead = async () => (await fetch(chatUrl("/api/chat/" + chatRoom, "since=0&limit=200"), { cache: "no-store" })).json();   // rig: what a 0.21.92 page reads
+  window.__chatVoTry = async (id) => (await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ act: "open", id, dev: chatDev() }) })).status;   // rig: the host's answer to one more opening from this device
+  // ---- end 0.21.94 Room Chat timers
   chatRenderAll();
 
   // ---- shared files (0.8.7) ---------------------------------------------------
@@ -24431,6 +24924,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           if (board.room === CHANNEL) for (const p of board.pins || []) if (isLibPath(p?.path)) want.set(String(p.path), "pin");
           for (const p of libMeList()) if (!want.has(p)) want.set(p, "me");
           for (const k of cgCams) if (isLibPath(k) && !want.has(k)) want.set(k, "grid");
+          for (const k of presFeedSet) if (isLibPath(k) && !want.has(k)) want.set(k, "pres");   // 0.21.94: a library stream a presentation shows
           for (const t of tiles.values()) for (const s of (t.cgDraft?.slots || [])) for (const k of s.cams || []) if (isLibPath(k) && !want.has(String(k))) want.set(String(k), "grid");   // a grid being built
         }
         if (want.size && authSecured && !libConn.token) await libTokenEnsure();
@@ -33679,6 +34173,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (sl?.entry?.name && sl.pane && chanPath(ensureHang(sl.entry.name)) === path) return sl.pane.classList.contains("screenkind") ? null : sl.pane;
     }
     for (const g of rtspGrids.values()) if (g?.entry?.name && g.pane && chanPath(ensureHang(g.entry.name)) === path) return g.pane;
+    return null;
+  };
+  // 0.21.94: a live feed of MY OWN source (my page has no tile for it): the newest picture of its slot's preview (a screen share too)
+  window.__presOwnFrame = (path) => {
+    const want = String(path);
+    const pick = (pane) => {
+      if (!pane) return null;
+      for (const v of pane.querySelectorAll("video")) if (v.readyState >= 2 && v.videoWidth > 0) return v;
+      for (const c of pane.querySelectorAll("canvas")) if (c.width > 2 && c.height > 2) return c;
+      return null;
+    };
+    for (const sl of slots.values()) if (sl?.entry?.name && sl.pane && chanPath(ensureHang(sl.entry.name)) === want) return pick(sl.pane);
+    for (const g of rtspGrids.values()) if (g?.entry?.name && g.pane && chanPath(ensureHang(g.entry.name)) === want) return pick(g.pane);
     return null;
   };
   window.addEventListener("pagehide", spotClear);

@@ -191,28 +191,69 @@ afford 704 or 896. NPU first was chosen in 0.21.21 to keep the GPU and the batte
 device instead, or try GPU 704 when the NPU cannot grow? Not changed here; it is a one-line ladder change once he
 decides.
 
-## Model candidates, checked on paper (licence text and model card read; nothing downloaded)
+## Model candidates, checked on paper (licence text and model card read)
 
 | Candidate | Licence (where read) | Size / input | Verdict |
 |---|---|---|---|
-| **MediaPipe selfie_multiclass_256x256** | **Apache-2.0**: Google's model card, page 1: "LICENSED UNDER Apache License, Version 2.0", model date May 10, 2023 | 16,371,837 bytes, float32, 256x256, Vision Transformer, 6 classes: background, hair, body-skin, face-skin, clothes, others (accessories) | **Best candidate.** Classes for hair and accessories (headsets) are exactly Kenton's misses. Same MediaPipe runtime: person = 1 - background, no new code path. The card gives 77.2 mean IoU on its fairness set. Out of scope per the card: surveillance and identity, life-critical uses. Needs a lab speed check: a transformer is slower than the 250 KB selfie model. |
+| **MediaPipe selfie_multiclass_256x256** | **Apache-2.0**: Google's model card, page 1: "LICENSED UNDER Apache License, Version 2.0", model date May 10, 2023 | 16,371,837 bytes, float32, 256x256, Vision Transformer, 6 classes: background, hair, body-skin, face-skin, clothes, others (accessories) | **Best candidate; lab-tested after approval, see Downloads.** Classes for hair and accessories (headsets) are exactly Kenton's misses. Same MediaPipe runtime: person = 1 - background, no new code path. The card gives 77.2 mean IoU on its fairness set. Out of scope per the card: surveillance and identity, life-critical uses. Needs a lab speed check: a transformer is slower than the 250 KB selfie model. |
 | MediaPipe selfie_segmenter_landscape | Apache-2.0 (already vendored, assets/mediapipe/LICENSE.txt) | 250 KB, 256x144 | Already shipped as "best". |
 | PP-HumanSeg v2 portrait (PaddleSeg) | Repo LICENSE is Apache-2.0. The model files and the PP-HumanSeg14K dataset state no separate terms (the dataset is by e-mail request). | 5.4 MB, 256x144, Paddle inference format | Not recommended. Same input size as what we ship, and running it needs paddle2onnx (another package download) and a conversion. |
 | MODNet webcam checkpoint (ZHKKKe/MODNet) | Apache-2.0 (repo README: code, models, demos) | Same architecture as our MODNet; trained for webcam video | Possible later. Our Xenova export is the photographic model. The webcam weights would need PyTorch plus an ONNX export (package downloads), and they are hosted on Google Drive. |
 | MediaPipe hair_segmenter | Apache-2.0 (per its model card, via search; card not read in full) | 512x512 float32 | Only if hair edges are still the complaint after this round. It is an extra model per frame. |
 | RVM (Robust Video Matting) | GPL-3.0 | – | Excluded (Kenton's rule). |
 
-## Downloads wanted (none done; each needs Kenton's or main's approval)
+## Downloads
 
-1. **`selfie_multiclass_256x256.tflite`**
-   - Source: https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite
-   - Size: 16,371,837 bytes. Licence: Apache-2.0 (Google model card).
-   - Why: its hair and accessories classes target the misses Kenton named (hair, headset). It would first go into the
-     lab only, to compare against MediaPipe best and MODNet on IoU, BF2, hands, headset and ms. It would be vendored
-     (with manifest + sha256, like `vendor-mediapipe.py`) only if it wins and fits the frame budget.
-2. **(Optional) a public portrait-matting test clip with ground truth**
+### Done: `selfie_multiclass_256x256.tflite`
+
+Approved by Kenton (via main) on 2026-10-29, for this one file only.
+
+**The file.**
+- Source: https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite
+- Size: 16,371,837 bytes, exactly as expected.
+- sha256: `c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0`
+- Licence: Apache-2.0. Google's model card, page 1: "LICENSED UNDER Apache License, Version 2.0".
+- Model card details: author Adel Ahmadyan (Google), model date May 10, 2023, a Vision Transformer.
+  - Classes: 1 background, 2 hair, 3 body-skin, 4 face-skin, 5 clothes, 6 others (accessories).
+  - Input 256x256x3; output 256x256x6 probabilities.
+  - Out of scope per the card: surveillance and identity recognition, and life-critical uses or anything needing
+    pixel-perfect masks.
+- Kept in its own directory in the session scratchpad (`dl_multiclass\`). **It is not in the repo and not vendored.**
+
+**Lab result** (person = 1 - background; GPU delegate; same clean-up as shipped):
+
+| | MediaPipe best (shipped) | multiclass 256 | MODNet GPU 704 |
+|---|---|---|---|
+| Model time per frame (lab) | 9.3 ms | **30.9 ms** | 18.4 ms |
+| Drawn scenes (IoU) | .960 | **.01** | .854 |
+| Real clip, desk and plant pot in front of the person | **kept** as part of the person | **dropped** | dropped |
+| Real clip, hands and fingers | soft | crisp | crisp |
+| Real clip, stray blobs | 0 | 3 (small, at the bottom edge) | 0 |
+
+- **It does not see the drawn figures as people at all**, so the synthetic numbers cannot judge it.
+- **On the one real clip it is clearly better than the MediaPipe models we ship.** It drops the desk and pot that
+  "best" glues onto the person, the same kind of mistake as Kenton's chair. It is about as good as MODNet at 704.
+- **Verdict: not vendored in this branch.**
+  - It is about 3x slower than "best" (31 ms in the lab, so roughly 60 ms in the page, every mask frame, on the main
+    thread).
+  - The only evidence is one clip with no ground truth.
+  - It would add 16 MB to every install.
+  - Kenton's own machine runs MODNet and would not use it. It would help the MediaPipe machines: browser = auto with
+    the person's own Chrome or Edge, and web guests.
+- **Recommended follow-up (0.21.95?).** Make it the "best" quality on the MediaPipe path when a timed warm run fits
+  (the same pattern as MODNet's `matGrow`), with landscape as the fallback.
+  - Its three readers (`segmentForVideo` in the effects loop, the gate preview and the presenter cut-out) take mask 0
+    and invert it.
+  - `vendor-mediapipe.py` gains the file with the sha256 above.
+  - Before that: one more real clip, ideally with a headset.
+- Lab sheets: `fx094\out\multi\*.png`.
+
+### Still wanted (not done; needs a new approval)
+
+1. **(Optional) a public portrait-matting test clip with ground truth**
    - Its own licence would be checked first. No specific file is chosen yet.
-   - Why: real hair and headset edges with truth, instead of drawn figures.
+   - Why: real hair and headset edges with truth, instead of drawn figures. The multiclass result shows how little the
+     drawn scenes can say about real people.
 
 ## Honest limits
 
@@ -255,8 +296,9 @@ decides.
 `fxEngine` key instead of inside `fx`.
 
 **Suites:**
-- Windows `python -m unittest discover -s tests -q`: see the hand-back.
-- WSL (root venv): see the hand-back.
+Both were run after `git merge main`, which brought in the timers and live-feeds work.
+- Windows `python -m unittest discover -s tests -q`: **2374 tests OK** (11 skipped).
+- WSL (root venv): **2374 tests OK** (18 skipped).
 
 ## Kenton's field checklist (0.21.94)
 
@@ -291,7 +333,7 @@ decides.
 - On a fast graphics chip, KASTR now feeds the person model a bigger picture when the machine keeps up (704x384 or 896x512 instead of 512x288). That is what brings back the headset band and the hands. It steps back down by itself if the machine gets busy.
 - In the lab: edges about 10-15% sharper with MediaPipe, stray blobs on a real webcam clip down from 2 to 0 with the NPU/GPU model, no added flicker.
 - Diagnostics now say which engine runs your effects (NPU, GPU or MediaPipe), at what size and how many ms per frame, and launch.log has one line whenever that changes.
-- Known limit: a chair the same colour as your shirt that touches you can still show. Only a better model can fix that; one Apache-licensed candidate is lined up for a test.
+- Known limit: a chair the same colour as your shirt that touches you can still show. Only a better model can fix that; one Apache-licensed candidate (Google's multiclass selfie model) did well on a real clip in the lab and is lined up for a later build.
 
 **Use Windows Studio Effects blur (Kenton: "Can KASTR read the Windows Studio effects for the blur and background options?").**
 - On a Windows 11 laptop whose camera has Windows Studio Effects, the Camera card shows a new switch, "Use Windows Studio Effects blur". With Blur chosen, the camera blurs the background itself (on the NPU) and KASTR's own blur stands down.

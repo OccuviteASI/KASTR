@@ -732,6 +732,35 @@ def _note(msg):
         pass
 
 
+# 0.21.94 (Kenton: "Can KASTR read the Windows Studio effects for the blur and background options?"): the camera driver's own
+# background blur (KSPROPERTY_CAMERACONTROL_EXTENDED_BACKGROUNDSEGMENTATION) through kastr_studiofx's helper process. Local
+# pages only; started on first use; the helper puts every camera back when KASTR closes (or dies: its pipe closes).
+_STUDIOFX = [None]
+_STUDIOFX_LOCK = threading.Lock()
+
+
+def studiofx():
+    with _STUDIOFX_LOCK:
+        if _STUDIOFX[0] is None:
+            import kastr_studiofx
+            import atexit
+            fx = kastr_studiofx.StudioFx(log=_note)
+            atexit.register(fx.close)
+            _STUDIOFX[0] = fx
+        return _STUDIOFX[0]
+
+
+def studiofx_state():
+    """For /api/diag: what the Studio Effects side did this run (no helper is started for it)."""
+    fx = _STUDIOFX[0]
+    if fx is None:
+        return {"used": False}
+    cams = (fx.cache or {}).get("cams") or []
+    return {"used": True, "held": len(fx.held), "deaths": fx.deaths, "error": fx.last_error or "",
+            "cams": [{"name": c.get("name"), "blur": c.get("blur"), "mask": c.get("mask"), "shallow": c.get("shallow"),
+                      "on": c.get("on")} for c in cams]}
+
+
 def _media_rec(mid):
     with MEDIA_LOCK:
         return MEDIA.get(mid)
@@ -2239,7 +2268,9 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _diag_get(self):
             if not self._local():
                 return self._deny("diagnostics")   # 0.17.0
-            body = kastr_secret.mask(json.dumps(diag_ref, indent=1, default=str)).encode()   # 0.21.92: no code or token
+            out = dict(diag_ref)
+            out["_studiofx"] = studiofx_state()   # 0.21.94: Windows Studio Effects blur (cameras that offer it, held or not)
+            body = kastr_secret.mask(json.dumps(out, indent=1, default=str)).encode()   # 0.21.92: no code or token
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4322,6 +4353,20 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._alive_bye()
             if path == "/api/quit":
                 return self._quit()       # 0.9.8
+            if path == "/api/camfx/studio":
+                # 0.21.94: switch the camera driver's own (Windows Studio Effects) blur on / off. Local pages only.
+                if not self._local():
+                    return self._deny("camera settings")
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    req = json.loads(self.rfile.read(n) or b"{}")
+                except Exception:
+                    req = {}
+                cid = str(req.get("id") or "")[:64]
+                res = studiofx().set(cid, bool(req.get("on")), bool(req.get("shallow"))) if cid else {"ok": False, "why": "no camera"}
+                _note("camera effects: Windows Studio Effects blur %s -> %s" % ("on" if req.get("on") else "off",
+                      "ok" if res.get("ok") else (res.get("why") or "failed")))
+                return self._json_plain(200, res)
             if path == "/api/autorun":
                 # Machine-boot autorun (0.8.2). Local pages only.
                 if not self._local():   # 0.17.0: Host + peer + Origin
@@ -5234,6 +5279,12 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._client_api()
             if path == "/api/web":                                          # 0.17.0
                 return self._web_api("GET")
+            if path == "/api/camfx/studio":
+                # 0.21.94: which cameras offer the Windows Studio Effects blur (cached; ?fresh=1 asks again). Local pages only.
+                if not self._local():
+                    return self._deny("camera settings")
+                fresh = (parse_qs(urlparse(self.path).query).get("fresh") or [""])[0] == "1"
+                return self._json_plain(200, studiofx().cameras(fresh=fresh))
             if path in ("/api/autorun", "/api/mode") and not self._local():
                 return self._deny("host settings")   # 0.17.0
             if path == "/api/autorun":

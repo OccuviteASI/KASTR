@@ -3640,6 +3640,9 @@ def build_parser(ini):
 
 
 def main():
+    if sys.argv[1:2] == ["--studiofx-helper"]:   # 0.21.94: the Windows Studio Effects helper process (kastr_studiofx)
+        import kastr_studiofx
+        return kastr_studiofx.helper_main()
     ini, ini_path = read_ini()
     # 0.21.92 (Kenton: "fix the plain text passcodes"): sealed secrets from here on; the first start of this version
     # rewrites the 0.21.91 files (and their .bak copies) sealed. Windows: DPAPI (this user); else the owner-only key file.

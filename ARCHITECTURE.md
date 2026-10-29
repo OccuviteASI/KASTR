@@ -507,6 +507,11 @@ from 0.21.17 to 0.21.40; RELEASES.md has the detail and the measurements for eac
 - **Background effects on the GPU and the NPU (0.21.21).** A WebGL2 renderer refines the person mask with a guided
   filter; MODNet runs over WebNN on an NPU when there is one (`assets/npu`, pinned by `vendor-npu.py`), otherwise on the
   GPU, otherwise MediaPipe as before.
+- **Cleaner effects without training (0.21.94).** The person mask is cleaned the same way for the effects and the
+  presenter cut-out (`fxPostMask`): one person kept, stray blobs dropped, holes filled, hysteresis in time, and the
+  renderer's guided filter now follows the frame's colour. MODNet grows its input while the device keeps up.
+  Windows Studio Effects blur is driven by a separate helper process (`kastr_studiofx`, ctypes Media Foundation, user
+  rights) so a driver or COM fault never takes the server down; the helper restores what it found when it lets go.
 - **Latency from the stream's own clock (0.21.22, 0.21.37).** The picture-strip stamp is retired: a viewer maps each
   decoded frame's timestamp to its capture time through the catalog clock, shown only to the viewer who asks. Since
   0.21.37 every relay measures its offset to the hub's clock (every 3 minutes, best of three round trips) and hands it

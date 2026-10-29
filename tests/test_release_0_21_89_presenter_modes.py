@@ -224,7 +224,7 @@ class PageSeams(unittest.TestCase):
         self.assertIn("px.drawImage(c.white, w, 0);", cut)      # right: the mask as grey
         self.assertIn('c.gl.render(vid, maskCv, w, h, "person")', cut)
         self.assertIn('ensureSegmenter("balanced")', cut)
-        self.assertIn("mainSubjectMask(c.conf, mw, mh)", cut)
+        self.assertIn("fxPostMask(c.conf, mw, mh, FX_POST.seg", cut)   # 0.21.94: the shared clean-up (was mainSubjectMask)
         self.assertIn("if (b && b.haveMask && b.maskCv && b.video && b.video.videoWidth && !rig)", cut)   # the effects matte reused
         self.assertIn("b.maskCv = maskCv;   // 0.21.89", PAGE)
         self.assertIn('codec: avc1Ok ? "avc1" : "vp09"', cut)

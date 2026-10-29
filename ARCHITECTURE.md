@@ -510,6 +510,9 @@ from 0.21.17 to 0.21.40; RELEASES.md has the detail and the measurements for eac
 - **Cleaner effects without training (0.21.94).** The person mask is cleaned the same way for the effects and the
   presenter cut-out (`fxPostMask`): one person kept, stray blobs dropped, holes filled, hysteresis in time, and the
   renderer's guided filter now follows the frame's colour. MODNet grows its input while the device keeps up.
+  Auto is "Fastest that fits": with both the NPU and the GPU there, each is timed warm at the start and the one that
+  reaches the larger MODNet input within 34 ms wins (a tie goes to the NPU, which uses less power). It re-decides
+  only under sustained load, holds every change for 30 s and never returns to a device it left, so it cannot flip-flop.
   Windows Studio Effects blur is driven by a separate helper process (`kastr_studiofx`, ctypes Media Foundation, user
   rights) so a driver or COM fault never takes the server down; the helper restores what it found when it lets go.
 - **Latency from the stream's own clock (0.21.22, 0.21.37).** The picture-strip stamp is retired: a viewer maps each

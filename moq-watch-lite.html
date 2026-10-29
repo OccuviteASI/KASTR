@@ -29484,6 +29484,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const MAT_SIZES = [[512, 288], [704, 384], [896, 512]];   // landscape W x H; a portrait camera swaps them
   const MAT_BUDGET_MS = 34;
   const matSlow = {};
+  // 0.21.94 (Kenton, 2026-10-29: Auto = "Fastest that fits"): with both the NPU and the GPU there, each is timed warm at the
+  // start (matReach: up the ladder while it stays within MAT_BUDGET_MS) and the device that reaches the larger input wins; the
+  // same size goes to the NPU (less power). After that it re-decides only under load (matUnderLoad: over 1.6x the budget for
+  // 25 mattes in a row), never within MAT_HOLD_MS of the last change, and never back to a device it left (b.matLeft).
+  const MAT_HOLD_MS = 30000;
+  const matHoldMs = () => (Number.isFinite(window.__fxMatHoldMs) ? window.__fxMatHoldMs : MAT_HOLD_MS);   // the rig shortens it
+  const matPickCache = {}, matLoops = new Set();
   const matDims = (i, portrait) => (portrait ? [MAT_SIZES[i][1], MAT_SIZES[i][0]] : MAT_SIZES[i]);
   const matIdx = (mat) => Math.max(0, MAT_SIZES.findIndex((s) => s[0] === (mat.portrait ? mat.mh : mat.mw)));
   async function ensureModnet(dev, mw, mh) {
@@ -29531,6 +29538,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // the engine ladder for one camera loop: Auto = NPU -> GPU -> MediaPipe; a forced device that fails says so once
   async function pickMatte(b) {
     const proc = b.proc || "auto", gen = ++b.matGen;
+    matLoops.add(b);   // 0.21.94: matDrop asks who still runs where
     const order = proc === "npu" ? ["npu"] : proc === "gpu" ? ["gpu"] : proc === "standard" ? [] : ["npu", "gpu"];
     const portrait = (b.video?.videoHeight || 0) > (b.video?.videoWidth || 0);
     for (const dev of order) {
@@ -29538,7 +29546,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const [mw, mh] = matDims(i0, portrait);   // 0.21.94: the smallest first; matGrow tries the bigger ones
       const m = await ensureModnet(dev, mw, mh);
       if (gen !== b.matGen || !b.alive) return;
-      if (m) { b.mat = { dev, portrait, mw, mh }; b.matte = true; b.conf = null; b.engine = dev; b.note = ""; b.matMs = m.warmMs || m.firstMs; b.matOver = 0; fxEngineNote(b); matGrow(b); return; }
+      if (m) { b.mat = { dev, portrait, mw, mh }; b.matte = true; b.conf = null; b.engine = dev; b.note = ""; b.matMs = m.warmMs || m.firstMs; b.matOver = 0; fxEngineNote(b);
+              if (order.length > 1) matRace(b, gen); else matGrow(b);   // 0.21.94: Auto times both devices ("Fastest that fits")
+              return; }
     }
     b.mat = null; b.matte = false; b.conf = null; b.engine = "standard";
     b.note = order.length ? (navigator.ml ? "no " + order.join("/").toUpperCase() + " here" : "WebNN off") : "";
@@ -29547,7 +29557,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (gen === b.matGen && b.alive) fxEngineNote(b);   // 0.21.94
   }
   function matTick(b, video, w, h, now, onMask) {
-    if (b.matBusy || now - b.lastSegAt < MAT_MIN_MS) return;
+    if (b.matBusy || b.matHush || now - b.lastSegAt < MAT_MIN_MS) return;   // 0.21.94: matHush while a session is being timed
     if ((h > w) !== !!b.mat.portrait) { pickMatte(b); return; }   // the phone turned: the other orientation's session
     const key = b.mat.dev + "|" + b.mat.mw + "x" + b.mat.mh, m = matSess[key];   // 0.21.94: the size in use (MAT_SIZES)
     if (!m || typeof m.then === "function") return;
@@ -29556,7 +29566,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     modnetRun(m, video).then((r) => {
       if (!b.alive || b.mat !== mat) return;
       const ms = performance.now() - t0; b.matMs = b.matMs ? b.matMs * 0.8 + ms * 0.2 : ms;
-      if (b.matMs > MAT_BUDGET_MS * 1.6) { if (++b.matOver > 25) matShrink(b); } else b.matOver = 0;   // 0.21.94
+      if (b.matMs > MAT_BUDGET_MS * 1.6) { if (++b.matOver > 25) matUnderLoad(b); } else b.matOver = 0;   // 0.21.94: re-decide only under load
       onMask(r); b.segN++;
     }).catch((e) => {
       if (b.mat !== mat) return;
@@ -29592,8 +29602,141 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!mat || i === 0) return;
     matSlow[mat.dev + "|" + mat.mw + "x" + mat.mh] = Math.round(b.matMs);
     const [mw, mh] = matDims(i - 1, mat.portrait);
-    b.mat = { ...mat, mw, mh }; b.matMs = 0; b.matOver = 0;
+    b.mat = { ...mat, mw, mh }; b.matMs = 0; b.matOver = 0; b.matHoldUntil = performance.now() + matHoldMs();
+    if (b.matPick) b.matPick = { ...b.matPick, moves: [...(b.matPick.moves || []), mat.dev.toUpperCase() + " " + mat.mw + "x" + mat.mh + " turned slow under load; down to " + mw + "x" + mh] };
     fxEngineNote(b, "the bigger size was too slow under load");
+  }
+  // ---- 0.21.94 "Fastest that fits" -----------------------------------------------------------------------------------
+  async function matTime(b, m) {   // a short warm run: the median of three, with this loop's own mattes held meanwhile
+    b.matHush = (b.matHush || 0) + 1;
+    try {
+      for (let k = 0; b.matBusy && k < 200; k++) await new Promise((r) => setTimeout(r, 5));
+      const t = [];
+      for (let k = 0; k < 3; k++) { const t0 = performance.now(); await modnetRun(m, m.cv); t.push(performance.now() - t0); }
+      t.sort((x, y) => x - y);
+      return Math.round(t[1]);
+    } finally { b.matHush--; }
+  }
+  // how far up MAT_SIZES one device gets within the budget: { idx (-1 = not even the first), floor, ms: { "WxH": ms } };
+  // null = no MODNet on this device. A size over the budget is let go and not tried again this run (the floor stays).
+  async function matReach(b, dev, portrait) {
+    const fixed = Number.isInteger(window.__fxMatSize) ? Math.min(MAT_SIZES.length - 1, Math.max(0, window.__fxMatSize)) : -1;   // rig: one size
+    const start = fixed >= 0 ? fixed : 0, end = fixed >= 0 ? fixed + 1 : MAT_SIZES.length;
+    const r = { idx: -1, floor: start, ms: {} };
+    for (let i = start; i < end; i++) {
+      const [mw, mh] = matDims(i, portrait), key = dev + "|" + mw + "x" + mh;
+      if (matSlow[key]) { r.ms[mw + "x" + mh] = matSlow[key]; break; }
+      const m = await ensureModnet(dev, mw, mh);
+      if (!m) { if (i === start) return null; break; }
+      let ms;
+      try { ms = await matTime(b, m); } catch (e) {
+        matFailed[key] = String(e?.message || e).slice(0, 160); delete matSess[key];
+        if (i === start) return null;
+        break;
+      }
+      r.ms[mw + "x" + mh] = ms;
+      if (ms > MAT_BUDGET_MS) {
+        if (i > start) { matSlow[key] = ms; delete matSess[key]; try { m.sess.release?.(); } catch {} }
+        break;
+      }
+      r.idx = i;
+    }
+    return r;
+  }
+  // the pick itself (pure): the larger input within the budget wins, a tie goes to the NPU; { dev, why } or null
+  function matChoose(reach, portrait) {
+    const n = reach.npu, g = reach.gpu, nm = (i) => matDims(i, portrait).join("x");
+    const reached = (r) => (r.idx >= 0 ? nm(r.idx) : "nothing within " + MAT_BUDGET_MS + " ms (" + r.ms[nm(r.floor)] + " ms at " + nm(r.floor) + ")");
+    if (!n && !g) return null;
+    if (!n || !g) { const dev = n ? "npu" : "gpu"; return { dev, why: "only the " + dev.toUpperCase() + " runs MODNet here; it reaches " + reached(n || g) }; }
+    if (n.idx < 0 && g.idx < 0) {
+      const a = n.ms[nm(n.floor)] ?? Infinity, c = g.ms[nm(g.floor)] ?? Infinity, dev = a <= c ? "npu" : "gpu";
+      return { dev, why: "neither fits " + MAT_BUDGET_MS + " ms at " + nm(n.floor) + " (NPU " + a + " ms, GPU " + c + " ms); the " + dev.toUpperCase() + " is faster" };
+    }
+    if (n.idx >= g.idx) {
+      return { dev: "npu", why: n.idx === g.idx ? "both reach " + nm(n.idx) + " within " + MAT_BUDGET_MS + " ms; the NPU uses less power"
+        : "the NPU reaches " + nm(n.idx) + " within " + MAT_BUDGET_MS + " ms, the GPU " + (g.idx >= 0 ? "only " : "") + reached(g) };
+    }
+    return { dev: "gpu", why: "the GPU reaches " + nm(g.idx) + " within " + MAT_BUDGET_MS + " ms, the NPU " + (n.idx >= 0 ? "only " : "") + reached(n) };
+  }
+  // Auto with two devices: the camera starts on the first that runs (pickMatte), then both are timed and the winner takes over.
+  // One machine, one answer: later loops (the preview, the live camera) reuse it unless this loop has left a device.
+  async function matRace(b, gen) {
+    const portrait = !!b.mat?.portrait, left = b.matLeft || {}, fresh = !Object.keys(left).length;
+    const ck = (portrait ? "p" : "l") + (Number.isInteger(window.__fxMatSize) ? window.__fxMatSize : "");
+    let pick = fresh ? matPickCache[ck] : null;
+    if (!pick) {
+      b.matPick = { dev: null, why: "timing the NPU and the GPU", reach: {}, moves: [] };
+      const reach = {};
+      for (const dev of ["npu", "gpu"]) {
+        reach[dev] = left[dev] ? null : await matReach(b, dev, portrait);
+        if (gen !== b.matGen || !b.alive) return;
+      }
+      const c = matChoose(reach, portrait);
+      if (!c) { b.matPick = null; return; }   // both stopped while being timed: stay on the start device
+      pick = { ...c, reach };
+      if (fresh) matPickCache[ck] = pick;
+    }
+    const r = pick.reach[pick.dev], [mw, mh] = matDims(r.idx >= 0 ? r.idx : r.floor, portrait);
+    const m = await ensureModnet(pick.dev, mw, mh);
+    if (gen !== b.matGen || !b.alive) return;
+    if (!m) { b.matPick = null; return; }
+    b.mat = { dev: pick.dev, portrait, mw, mh }; b.engine = pick.dev; b.matMs = r.ms[mw + "x" + mh] || m.warmMs; b.matOver = 0;
+    b.matHoldUntil = performance.now() + matHoldMs();
+    b.matPick = { dev: pick.dev, why: pick.why, reach: pick.reach, moves: [] };
+    fxEngineNote(b, "picked: " + pick.why);
+    const loser = pick.dev === "npu" ? "gpu" : "npu";
+    if (pick.reach[loser]) setTimeout(() => matDrop(loser), 1500);
+  }
+  function matDrop(dev) {   // let a device's sessions go once no camera loop runs on it (a later move builds them again)
+    for (const x of matLoops) if (!x.alive) matLoops.delete(x);
+    if ([...matLoops].some((x) => x.mat?.dev === dev)) return;
+    for (const k of Object.keys(matSess)) {
+      const m = matSess[k];
+      if (!k.startsWith(dev + "|") || !m || typeof m.then === "function") continue;
+      try { m.sess.release?.(); } catch {}
+      delete matSess[k];
+    }
+  }
+  // under load (pure): move to the other device when it reached at least the next size down, else step down, else stay
+  function matLoadChoice(cur, reach, left) {
+    const other = cur.dev === "npu" ? "gpu" : "npu", o = reach?.[other], down = cur.idx - 1;
+    if (o && !left[other] && o.idx >= 0 && o.idx >= down) return { move: other, idx: o.idx };
+    if (down >= 0) return { shrink: true };
+    return null;
+  }
+  function matUnderLoad(b) {   // the hysteresis is the entry (1.6x the budget, 25 in a row); the hold and matLeft stop a flip-flop
+    b.matOver = 0;
+    if (!b.mat || b.matMoving || performance.now() < (b.matHoldUntil || 0)) return;
+    const c = matLoadChoice({ dev: b.mat.dev, idx: matIdx(b.mat) }, b.matPick?.reach, b.matLeft || {});
+    if (c?.move) matMove(b, c.move, c.idx); else if (c?.shrink) matShrink(b);
+  }
+  async function matMove(b, dev, idx) {   // the other device, timed again now (the machine is busy), from its size down
+    const from = b.mat, slowMs = Math.round(b.matMs || 0);
+    if (!from || b.matMoving) return;
+    b.matMoving = true;
+    let got = null;
+    try {
+      for (let i = idx; i >= 0 && !got; i--) {
+        const [mw, mh] = matDims(i, from.portrait), key = dev + "|" + mw + "x" + mh;
+        if (matFailed[key] || matSlow[key]) continue;
+        const m = await ensureModnet(dev, mw, mh);
+        if (!b.alive || b.mat !== from) break;
+        if (!m) continue;
+        let ms = Infinity;
+        try { ms = await matTime(b, m); } catch {}
+        if (ms <= MAT_BUDGET_MS) got = { mw, mh, ms };
+      }
+    } finally { b.matMoving = false; }
+    if (!b.alive || b.mat !== from) return;
+    b.matLeft = { ...(b.matLeft || {}), [got ? from.dev : dev]: true };   // never back where it came from; a device that could not take it is not asked again
+    if (!got) { matShrink(b); return; }
+    b.mat = { dev, portrait: from.portrait, mw: got.mw, mh: got.mh }; b.engine = dev; b.matMs = got.ms; b.matOver = 0;
+    b.matHoldUntil = performance.now() + matHoldMs();
+    const why = "the " + from.dev.toUpperCase() + " turned slow under load (" + slowMs + " ms at " + from.mw + "x" + from.mh + "); moved to the " + dev.toUpperCase() + " at " + got.mw + "x" + got.mh;
+    b.matPick = { ...(b.matPick || { reach: null }), dev, why, moves: [...(b.matPick?.moves || []), why] };
+    fxEngineNote(b, why);
+    setTimeout(() => matDrop(from.dev), 1500);
   }
   // 0.21.94: which person-mask engine a camera loop runs on, its input size and the model's time per frame -- /api/diag
   // (publisher slot fxEngine), window.__fxEngine (the rig) and one launch.log line per change. No codes, no names.
@@ -29604,7 +29747,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const c = b.raw?.getCapabilities?.() || {}, s = b.raw?.getSettings?.() || {};
       if ("backgroundBlur" in c || "backgroundBlur" in s) driverBlur = { cap: c.backgroundBlur ?? null, on: s.backgroundBlur ?? null, mask: c.backgroundSegmentationMask ?? null };
     } catch {}
-    const base = { webnn: !!navigator.ml, post: b.postStats || null, slow: { ...matSlow }, failed: { ...matFailed }, driverBlur };
+    const pick = b.matPick ? { ...b.matPick, holdS: Math.max(0, Math.round(((b.matHoldUntil || 0) - performance.now()) / 1000)), left: Object.keys(b.matLeft || {}) } : null;   // why this device
+    const base = { webnn: !!navigator.ml, pick, post: b.postStats || null, slow: { ...matSlow }, failed: { ...matFailed }, driverBlur };
     if (!fxNeedsMask(b.fx)) return { engine: "none", ...base };
     if (b.matte && b.mat) return { engine: "modnet", device: b.mat.dev, input: b.mat.mw + "x" + b.mat.mh, ms: Math.round(b.matMs || 0), ...base };
     const q = Object.keys(segCache).find((k) => segCache[k] === b.seg) || (b.quality === "best" ? "best" : "balanced");

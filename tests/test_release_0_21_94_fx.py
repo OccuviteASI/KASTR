@@ -119,7 +119,9 @@ class ModnetSizes(unittest.TestCase):
         self.assertIn("m.sess.release?.()", g)
         self.assertIn("if (!b.alive || b.mat !== mat) return;", g)
         self.assertIn("Number.isInteger(window.__fxMatSize)", g)   # the rig pins a size
-        self.assertIn("if (b.matMs > MAT_BUDGET_MS * 1.6) { if (++b.matOver > 25) matShrink(b); } else b.matOver = 0;", PAGE)
+        # "Fastest that fits" (test_release_0_21_94_fastest_fits): under load it re-decides -- the other device or a step down
+        self.assertIn("if (b.matMs > MAT_BUDGET_MS * 1.6) { if (++b.matOver > 25) matUnderLoad(b); } else b.matOver = 0;", PAGE)
+        self.assertIn("if (c?.move) matMove(b, c.move, c.idx); else if (c?.shrink) matShrink(b);", PAGE)
 
 
 class EngineDiag(unittest.TestCase):

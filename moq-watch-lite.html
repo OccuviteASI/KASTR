@@ -3255,6 +3255,9 @@
     <div class="sw"><label class="switch"><input type="checkbox" id="fxSelfMirror"><i></i></label><span>Mirror my own view<small>Only you see it mirrored</small></span></div>
     <div class="sw"><label class="switch"><input type="checkbox" id="fxMirror"><i></i></label><span>Mirror for everyone<small>Flips the picture you send</small></span></div>
     <div class="sw"><label class="switch" title="Best: the landscape model (144x256) &mdash; cleaner edges on a webcam frame, more GPU/CPU"><input type="checkbox" id="fxQuality"><i></i></label><span>Background quality<small id="fxQualityLbl">Balanced</small></span></div>
+    <!-- 0.21.94 (Kenton: "Can KASTR read the Windows Studio effects for the blur and background options?"): only when the chosen
+         camera's driver offers its own background blur; KASTR's blur stands down while it is on (pictures and scenes still use KASTR) -->
+    <div class="sw" id="fxStudioRow" hidden><label class="switch" title="The camera driver blurs the background (Windows Studio Effects). Pictures and scenes still use KASTR."><input type="checkbox" id="fxStudio"><i></i></label><span>Use Windows Studio Effects blur<small id="fxStudioLbl">The camera blurs the background itself</small></span></div>
     <button class="opt" id="camXs" type="button">Show my camera in other rooms&hellip;</button>   <!-- 0.21.62 -->
     <button class="opt more" id="camMore" type="button">More video effects and settings</button>
   </div>
@@ -17246,6 +17249,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url },
              bright: !!s.bright, soft: !!s.soft, quality: s.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(s.rot)) ? Number(s.rot) : 0, mirror: !!s.mirror,   // 0.21.0: phone cameras
+             studio: !!s.studio,   // 0.21.94: Windows Studio Effects blur wanted (the camera driver's own)
              proc: "auto" };   // 0.21.21: where the effect runs; 0.21.93 (Kenton): always Auto -- no Processor choice
   }
   camFx = normalizeCamFx(camFx);
@@ -17384,13 +17388,83 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                                    poster: /^\/assets\/bg\/[\w.-]+$/.test(camFx.bg.poster || "") ? camFx.bg.poster : "" },   // 0.21.71: a stand-in while a background loads
                              blurAmt: fxBlurAmt(),   // 0.21.71
                              bright: !!camFx.bright, soft: !!camFx.soft, quality: camFx.quality === "best" ? "best" : "balanced",
-                             rot: camFx.rot || 0, mirror: !!camFx.mirror, proc: camFx.proc || "auto" });   // 0.21.0; 0.21.21
+                             rot: camFx.rot || 0, mirror: !!camFx.mirror, studio: !!camFx.studio, proc: camFx.proc || "auto" });   // 0.21.0; 0.21.21
   const camFxPushed = new Set();   // 0.15.0: source ids that already carry the saved bag
   // 0.15.0: a no-op without a camera; syncCamFxToOwnCamera (called from acceptAnnounce) pushes
   // the saved bag once when the local camera source first appears -- a join used to create the
   // camera bare and the background silently reset.
+  // ---- 0.21.94: Windows Studio Effects blur (Kenton: "Can KASTR read the Windows Studio effects for the blur and background
+  // options? Instead of using the built in person detection?"). When the chosen camera's driver offers its own background blur
+  // (KSPROPERTY_CAMERACONTROL_EXTENDED_BACKGROUNDSEGMENTATION, listed by GET /api/camfx/studio), the switch under Background
+  // quality turns it on for that camera and KASTR's own blur stands down (module 2: fxStudioEff). Pictures, GIFs and scenes
+  // still use KASTR's mask. The app holds the driver setting only while it is wanted and puts the camera back when it is not,
+  // or when KASTR closes. The desktop app only: a web page cannot reach the camera driver.
+  const studioFx = { cams: [], at: 0, supported: false, held: new Map(), chain: Promise.resolve(), told: "" };
+  const studioMatch = (label) => {
+    const L = String(label || ""), low = L.toLowerCase();
+    if (!L) return null;
+    return studioFx.cams.find((c) => c && c.blur && c.name && ((c.vidpid && low.includes("(" + String(c.vidpid).toLowerCase() + ")")) || L === c.name || L.startsWith(c.name + " ("))) || null;
+  };
+  function studioCamLabel() {   // the chosen camera's browser label ("Integrated Webcam", "HD Webcam (0c45:6713)")
+    const { rec, src } = localCamSrc();
+    const cams = rec?.cameras ?? window.__publisher?.devices?.().cameras ?? [];
+    const id = src?.deviceId ?? document.getElementById("joinCam")?.value ?? "";
+    const c = cams.find((x) => x.deviceId === id) || (!id ? cams[0] : null);
+    return c?.label || "";
+  }
+  async function studioFxList(fresh) {
+    if (IS_WEB) return [];
+    if (!fresh && studioFx.at && Date.now() - studioFx.at < 30000) return studioFx.cams;
+    studioFx.at = Date.now();
+    try {
+      const r = await fetch("/api/camfx/studio" + (fresh ? "?fresh=1" : ""), { cache: "no-store" });
+      const j = r.ok ? await r.json() : null;
+      studioFx.supported = !!j?.supported; studioFx.cams = Array.isArray(j?.cams) ? j.cams : [];
+    } catch { studioFx.cams = []; }
+    return studioFx.cams;
+  }
+  async function studioFxPost(id, on) {
+    try {
+      const r = await fetch("/api/camfx/studio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, on: !!on }) });
+      return r.ok ? await r.json() : { ok: false, why: "HTTP " + r.status };
+    } catch (e) { return { ok: false, why: String(e?.message || e) }; }
+  }
+  function studioFxSync() {   // hold the chosen camera's driver blur while it is wanted; let go of every other camera
+    if (IS_WEB || (!camFx?.studio && !studioFx.held.size)) return studioFx.chain;
+    studioFx.chain = studioFx.chain.then(async () => {
+      const want = !!camFx.studio && camFx.bg?.mode === "blur";
+      if (want) await studioFxList(false);
+      const c = want ? studioMatch(studioCamLabel()) : null;
+      let changed = false;
+      for (const id of [...studioFx.held.keys()]) {
+        if (c && c.id === id) continue;
+        await studioFxPost(id, false); studioFx.held.delete(id); changed = true;
+      }
+      if (c && !studioFx.held.has(c.id)) {
+        const r = await studioFxPost(c.id, true);
+        if (r?.ok) { studioFx.held.set(c.id, c.name); changed = true; }
+        else if (studioFx.told !== c.id) { studioFx.told = c.id; window.__toast?.("Windows Studio Effects blur could not be turned on (" + (r?.why || "no answer") + ") \u2014 KASTR's blur is used", 6000, { level: "warn" }); }
+      }
+      if (changed) { pushCamFx(); if (!camPop.hidden) studioFxPaint(); }
+    }).catch(() => {});
+    return studioFx.chain;
+  }
+  window.__studioFxOn = (label) => { const c = studioMatch(label); return !!c && studioFx.held.has(c.id); };   // module 2 + /api/diag
+  function studioFxPaint() {
+    const row = document.getElementById("fxStudioRow"), sw = document.getElementById("fxStudio"), lbl = document.getElementById("fxStudioLbl");
+    if (!row || !sw) return;
+    if (IS_WEB) { row.hidden = true; return; }
+    sw.checked = !!camFx.studio;
+    studioFxList(false).then(() => {
+      const c = studioMatch(studioCamLabel());
+      row.hidden = !c;
+      if (lbl && c) lbl.textContent = camFx.studio && camFx.bg?.mode !== "blur" ? "Used when the background is Blur"
+        : studioFx.held.has(c.id) ? "On \u2014 the camera blurs the background itself" : "The camera blurs the background itself";
+    });
+  }
   function pushCamFx() {
     saveCamFx();
+    studioFxSync();   // 0.21.94: the driver blur follows the bag (a no-op unless it is wanted or held)
     try {   // 0.21.72: every preview follows the effect (the panel's own, the join page's)
       const w = camFxWire();
       if (camPv?.tr) { const t = window.__fxPreview?.retune(w, "panel"); if (t && t !== camPv.tr) camPv.tr = t; }
@@ -17420,6 +17494,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       s.fx = wire; s.blur = wire.bg.mode === "blur";
       sendControl(pub.peer, s.id, { fx: wire });
     }
+    studioFxSync();   // 0.21.94: a camera came on -- a saved Studio Effects blur is held for it
   }
   // 0.21.72: the panel's own camera preview while the room camera is off (window.__fxPreview, module 2)
   var camPv = { dev: null, tr: null, busy: false, failed: false };   // var: pushCamFx may run before this line during start-up
@@ -17470,6 +17545,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       r.addEventListener("change", () => {
         if (src) { src.deviceId = c.deviceId; sendControl(window.__publisher.peer, src.id, { cameraId: c.deviceId }); }
         const sel = document.getElementById("joinCam"); if (sel) { sel.value = c.deviceId; try { gatePreview(); } catch {} }
+        studioFxSync(); studioFxPaint();   // 0.21.94: the held Studio Effects blur follows the chosen camera
       });
       const t = document.createElement("span"); t.textContent = c.label || ("Camera " + (i + 1));
       l.append(r, t); return l;
@@ -17544,6 +17620,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     document.getElementById("fxSelfMirror").checked = selfMirrorOn();   // 0.21.72
     document.getElementById("fxQuality").checked = camFx.quality === "best";
     document.getElementById("fxQualityLbl").textContent = camFx.quality === "best" ? "Best" : "Balanced";
+    studioFxPaint();   // 0.21.94
   }
   document.getElementById("fxBright").addEventListener("change", (e) => { camFx.bright = e.target.checked; pushCamFx(); });
   {   // 0.21.71: Blur strength (the slider and the % box agree; the camera follows within 150 ms) and the Add split button
@@ -17577,6 +17654,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     camFx.quality = e.target.checked ? "best" : "balanced";
     document.getElementById("fxQualityLbl").textContent = e.target.checked ? "Best" : "Balanced";
     pushCamFx();
+  });
+  document.getElementById("fxStudio").addEventListener("change", (e) => {   // 0.21.94: Windows Studio Effects blur
+    camFx.studio = e.target.checked; pushCamFx(); studioFxPaint();
   });
   document.getElementById("bgFile").addEventListener("change", async (e) => {
     const f = e.target.files?.[0]; e.target.value = "";
@@ -28375,44 +28455,131 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     segCache[q] = p;
     return p;
   }
-  // 0.8.6: largest connected component of the thresholded person mask.
-  let msLabel = null, msQueue = null, msKeep = null;   // 0.15.0: keep is reused too (consumed before the next call)
-  function mainSubjectMask(conf, w, h) {
-    const n = w * h;
-    if (!msLabel || msLabel.length !== n) { msLabel = new Int32Array(n); msQueue = new Int32Array(n); }
-    const label = msLabel, queue = msQueue;
-    label.fill(0);
-    let comps = 0, bestId = 0, bestScore = -Infinity;
-    const cx0 = w / 2, cy0 = h / 2;
-    for (let sidx = 0; sidx < n; sidx++) {
-      if (label[sidx] || conf[sidx] < 0.5) continue;
+  // ==== fx-post:begin (0.21.94) ====
+  // 0.21.94 (Kenton: "I would like to clean up the detection so it's cleaner" -- rough edges and hair, hands / arms / headset /
+  // shoulders missing, bits of the chair and the door frame kept): the person mask's clean-up, in one place (the effects loop
+  // and the presenter cut-out). No training: the same models, read better. On a coarse copy (at most 320 x 180 cells, each
+  // the MAX of its block, so a thin arm or headset band survives the shrink):
+  //   1. the confident regions (>= core, joined 8-way -- a diagonal wrist or headset band no longer splits off) and the best
+  //      one kept: the biggest, its distance from the centre breaking ties (as 0.8.6). Every other region -- a chair, a door
+  //      frame, someone behind you -- is dropped. Hysteresis in time: a cell that was the person last frame stays the person
+  //      down to (core + lo) / 2, so an edge part does not blink in and out;
+  //   2. the reach (MODNet only by default): half-sure cells (>= lo) joined to the person and at most `reach` of the frame
+  //      height from it are the person too (a hand, a headset cup, the hair's edge). Another confident region is a wall and the
+  //      reach never seeds the next frame, so a weak bridge cannot pull in a desk. MediaPipe's confidence on a real webcam
+  //      clip grew background bits this way (lab, 0.21.94), so its reach is 0;
+  //   3. holes inside the person smaller than `hole` of the frame (a dark shirt, the gap under a headset band) are filled;
+  //   4. alpha at the mask's own resolution: inside the person and its one-cell rim (the edge stays soft) the ramp a0..a1 of
+  //      the confidence, 0 everywhere else. The temporal smoothing (the EMA before this) is unchanged.
+  // The edges are then refined against the frame's COLOUR by the renderer (fx-gl). Pure (no DOM, no page state): the lab
+  // runs this block exactly as shipped.
+  const FX_POST = {
+    seg: { core: 0.5, lo: 0.35, reach: 0, a0: 0.15, a1: 0.85, hole: 0.02 },      // MediaPipe selfie confidence (0.15..0.85 as before)
+    mat: { core: 0.5, lo: 0.15, reach: 0.03, a0: 0.03, a1: 0.97, hole: 0.02 },   // MODNet: already an alpha matte (its old ramp)
+  };
+  function fxPostMask(conf, w, h, P, S, out, stride = 4, off = 3) {
+    const t0 = performance.now();
+    const s = Math.max(1, Math.ceil(Math.max(w / 320, h / 180)));
+    const qw = Math.ceil(w / s), qh = Math.ceil(h / s), qn = qw * qh;
+    if (!S.q || S.q.length !== qn) { S.q = new Float32Array(qn); S.lab = new Int32Array(qn); S.queue = new Int32Array(qn); S.keep = new Uint8Array(qn); S.prev = new Uint8Array(qn); }
+    const q = S.q, lab = S.lab, queue = S.queue, keep = S.keep, prev = S.prev;
+    q.fill(0);
+    for (let y = 0; y < h; y++) {
+      const qr = ((y / s) | 0) * qw, r = y * w;
+      for (let x = 0; x < w; x++) { const v = conf[r + x], k = qr + ((x / s) | 0); if (v > q[k]) q[k] = v; }
+    }
+    // 1 + 2: the confident regions (8-way, >= core; last frame's person needs only the midpoint), the best one kept
+    lab.fill(0);
+    const core = P.core, lo = P.lo, mid = (P.core + P.lo) / 2, cx0 = qw / 2, cy0 = qh / 2;
+    let comps = 0, bestId = 0, bestScore = -Infinity, bestArea = 0;
+    const isCore = (j) => q[j] >= core || (prev[j] === 1 && q[j] >= mid);
+    for (let i0 = 0; i0 < qn; i0++) {
+      if (lab[i0] || !isCore(i0)) continue;
       const id = ++comps;
       let head = 0, tail = 0, area = 0, sx = 0, sy = 0;
-      queue[tail++] = sidx; label[sidx] = id;
+      queue[tail++] = i0; lab[i0] = id;
       while (head < tail) {
         const p = queue[head++]; area++;
-        const x = p % w, y = (p - x) / w; sx += x; sy += y;
-        if (x > 0 && !label[p - 1] && conf[p - 1] >= 0.5) { label[p - 1] = id; queue[tail++] = p - 1; }
-        if (x < w - 1 && !label[p + 1] && conf[p + 1] >= 0.5) { label[p + 1] = id; queue[tail++] = p + 1; }
-        if (y > 0 && !label[p - w] && conf[p - w] >= 0.5) { label[p - w] = id; queue[tail++] = p - w; }
-        if (y < h - 1 && !label[p + w] && conf[p + w] >= 0.5) { label[p + w] = id; queue[tail++] = p + w; }
+        const x = p % qw, y = (p - x) / qw; sx += x; sy += y;
+        const x0 = x > 0 ? x - 1 : x, x1 = x < qw - 1 ? x + 1 : x, y0 = y > 0 ? y - 1 : y, y1 = y < qh - 1 ? y + 1 : y;
+        for (let yy = y0; yy <= y1; yy++) {
+          for (let xx = x0, j = yy * qw + x0; xx <= x1; xx++, j++) if (!lab[j] && isCore(j)) { lab[j] = id; queue[tail++] = j; }
+        }
       }
       const dx = sx / area - cx0, dy = sy / area - cy0;
-      const score = area - Math.sqrt(dx * dx + dy * dy) * 4;   // area dominates; center breaks ties
-      if (score > bestScore) { bestScore = score; bestId = id; }
+      const score = area - Math.sqrt(dx * dx + dy * dy) * 4;   // area dominates; the centre breaks ties (as 0.8.6)
+      if (score > bestScore) { bestScore = score; bestId = id; bestArea = area; }
     }
-    if (!msKeep || msKeep.length !== n) msKeep = new Uint8Array(n); else msKeep.fill(0);
-    const keep = msKeep;
-    if (!bestId) return keep;
-    for (let i = 0; i < n; i++) keep[i] = label[i] === bestId ? 1 : 0;
-    // soft edges: sub-threshold pixels touching the kept blob keep their confidence
-    for (let i = 0; i < n; i++) {
-      if (keep[i] || conf[i] <= 0.05) continue;
-      const x = i % w;
-      if ((x > 0 && keep[i - 1] === 1) || (x < w - 1 && keep[i + 1] === 1) || (i >= w && keep[i - w] === 1) || (i + w < n && keep[i + w] === 1)) keep[i] = 2;
+    for (let i = 0; i < qn; i++) prev[i] = bestId && lab[i] === bestId ? 1 : 0;
+    // 1b: the reach -- half-sure cells (>= lo) joined to the person, at most `reach` of the frame height away from its sure
+    //     part (a hand, a headset cup, the hair's edge). Another confident region is a wall, so a weak bridge to a desk or a
+    //     plant cannot pull it in, and the reach never feeds the next frame's seed (it cannot creep).
+    let grown = 0;
+    if (bestId && P.reach > 0 && lo < core) {
+      const R = Math.max(1, Math.round(P.reach * qh)), EXT = -1;
+      let head = 0, tail = 0;
+      for (let i = 0; i < qn; i++) if (lab[i] === bestId) queue[tail++] = i;
+      for (let layer = 0; layer < R && head < tail; layer++) {
+        const end = tail;
+        while (head < end) {
+          const p = queue[head++], x = p % qw, y = (p - x) / qw;
+          const x0 = x > 0 ? x - 1 : x, x1 = x < qw - 1 ? x + 1 : x, y0 = y > 0 ? y - 1 : y, y1 = y < qh - 1 ? y + 1 : y;
+          for (let yy = y0; yy <= y1; yy++) {
+            for (let xx = x0, j = yy * qw + x0; xx <= x1; xx++, j++) if (!lab[j] && q[j] >= lo) { lab[j] = EXT; queue[tail++] = j; grown++; }
+          }
+        }
+      }
+    }    // keep codes: 1 the person, 2 its soft rim, 3 outside, 4 a filled hole
+    keep.fill(0);
+    let filled = 0;
+    if (bestId) {
+      for (let i = 0; i < qn; i++) if (lab[i] === bestId || lab[i] === -1) keep[i] = 1;
+      // 3: everything reachable from the border without crossing the person is outside; what is left is a hole
+      let head = 0, tail = 0;
+      const out3 = (j) => { if (!keep[j]) { keep[j] = 3; queue[tail++] = j; } };
+      for (let x = 0; x < qw; x++) { out3(x); out3((qh - 1) * qw + x); }
+      for (let y = 0; y < qh; y++) { out3(y * qw); out3(y * qw + qw - 1); }
+      while (head < tail) { const p = queue[head++], x = p % qw; if (x > 0) out3(p - 1); if (x < qw - 1) out3(p + 1); if (p >= qw) out3(p - qw); if (p + qw < qn) out3(p + qw); }
+      const holeMax = Math.max(1, Math.round(P.hole * qn));
+      for (let i0 = 0; i0 < qn; i0++) {
+        if (keep[i0]) continue;
+        head = 0; tail = 0; keep[i0] = 5; queue[tail++] = i0;
+        while (head < tail) {
+          const p = queue[head++], x = p % qw;
+          if (x > 0 && !keep[p - 1]) { keep[p - 1] = 5; queue[tail++] = p - 1; }
+          if (x < qw - 1 && !keep[p + 1]) { keep[p + 1] = 5; queue[tail++] = p + 1; }
+          if (p >= qw && !keep[p - qw]) { keep[p - qw] = 5; queue[tail++] = p - qw; }
+          if (p + qw < qn && !keep[p + qw]) { keep[p + qw] = 5; queue[tail++] = p + qw; }
+        }
+        const v = tail <= holeMax ? 4 : 3;
+        for (let k = 0; k < tail; k++) keep[queue[k]] = v;
+        if (v === 4) filled++;
+      }
+      for (let i = 0; i < qn; i++) {   // the rim: outside cells touching the person (8-way)
+        if (keep[i] !== 3) continue;
+        const x = i % qw, y = (i - x) / qw;
+        const x0 = x > 0 ? x - 1 : x, x1 = x < qw - 1 ? x + 1 : x, y0 = y > 0 ? y - 1 : y, y1 = y < qh - 1 ? y + 1 : y;
+        let touch = false;
+        for (let yy = y0; yy <= y1 && !touch; yy++) for (let xx = x0; xx <= x1; xx++) { const c = keep[yy * qw + xx]; if (c === 1 || c === 4) { touch = true; break; } }
+        if (touch) keep[i] = 2;
+      }
     }
-    return keep;
+    // 4: alpha at the mask's own resolution
+    const a0 = P.a0, ka = 255 / (P.a1 - P.a0);
+    for (let y = 0; y < h; y++) {
+      const qr = ((y / s) | 0) * qw, r = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = r + x, c = keep[qr + ((x / s) | 0)];
+        let a = 0;
+        if (c === 4) a = 255;
+        else if (c === 1 || c === 2) { const v = conf[i]; a = v <= a0 ? 0 : (v - a0) * ka; if (a > 255) a = 255; }
+        out[i * stride + off] = a;
+      }
+    }
+    S.stats = { cells: qw + "x" + qh, regions: comps, dropped: Math.max(0, comps - (bestId ? 1 : 0)), holes: filled, grown, area: bestId ? +(bestArea / qn).toFixed(3) : 0, ms: +(performance.now() - t0).toFixed(2) };
+    return S.stats;
   }
+  // ==== fx-post:end ====
   function unwrapTrack(v) {
     if (!v) return null;
     if (typeof v.getSettings === "function") return v;   // already a track
@@ -28442,6 +28609,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // is on; only the background modes need the person mask.
   const fxActive = (fx) => !!fx && ((fx.bg && fx.bg.mode !== "none") || fx.bright || fx.soft || !!fx.rot || !!fx.mirror);   // 0.21.0: rotation alone runs the light loop
   const fxNeedsMask = (fx) => !!fx && !!fx.bg && fx.bg.mode !== "none";
+  // 0.21.94: Windows Studio Effects blur -- the camera driver blurs, so KASTR's own blur stands down for that camera (brightness,
+  // soft focus, rotation still run; pictures, GIFs and scenes keep KASTR's mask). Module 1 holds the driver setting and answers
+  // window.__studioFxOn(the track's label); a camera the browser itself reports blurred (Windows quick settings) counts too.
+  const fxStudioOn = (fx, track) => !!fx?.studio && fx.bg?.mode === "blur"
+    && (!!window.__studioFxOn?.(track?.label || "") || (() => { try { return track?.getSettings?.().backgroundBlur === true; } catch { return false; } })());
+  const fxStudioEff = (fx, track) => (fxStudioOn(fx, track) ? { ...fx, bg: { mode: "none", url: "" } } : fx);
+  const fxSlotTrack = (slot) => { try { return unwrapTrack(pubCap(slot.publish)?.in?.source?.peek?.()); } catch { return null; } };
   const FX_BG_MODES = new Set(["none", "blur", "image", "gif", "video"]);
   // 0.15.0: the bag that rides the announce carries markers only ("bg:<key>", "preset:<id>",
   // "/assets/bg/<file>") -- a data: URL here used to bloat every announce. Hoisted (function
@@ -28455,6 +28629,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return { bg: { mode, url: mode === "none" || mode === "blur" ? "" : url }, bright: !!fx.bright, soft: !!fx.soft,
              quality: fx.quality === "best" ? "best" : "balanced",
              rot: [0, 90, 180, 270].includes(Number(fx.rot)) ? Number(fx.rot) : 0, mirror: !!fx.mirror,   // 0.21.0
+             studio: !!fx.studio,   // 0.21.94: Windows Studio Effects blur wanted
              proc: "auto" };   // 0.21.21; 0.21.93: always Auto (an older page's NPU / GPU / Standard pick too)
   }
   // 0.15.0: background markers -> something drawImage can take.
@@ -28574,7 +28749,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     window.__toast?.("Camera upright via canvas loop \u2014 " + ow + "\u00d7" + oh + raw, 4000, { level: "info" });
   }
   async function applyFx(slot) {
-    const want = () => slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null);
+    const want = () => fxStudioEff(slot.entry.fx || (slot.entry.blur ? { bg: { mode: "blur", url: "" } } : null), fxSlotTrack(slot));   // 0.21.94: the driver blurs -> no KASTR blur
     const fx = want();
     window.__fxTrace?.push?.(["applyFx", slot.entry.id, !!fx, loopWanted(slot, fx), !!window.__frameLoop?.needed, !!slot.blur]);   // 0.21.5 rig trace (window.__fxTrace = [] to enable)
     if (!loopWanted(slot, fx)) { stopBlur(slot); return; }   // 0.21.5: effects or the upright loop
@@ -28808,6 +28983,15 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const MAT_MIN_MS = 40;   // <= 25 mattes a second (the NPU measured 33 ms, the GPU 9.5 ms)
   let ortMod = null;
   const matSess = {}, matFailed = {};
+  // 0.21.94 (Kenton: "clean up the detection so it's cleaner"): MODNet's input grows where the device can afford it -- 704x384
+  // and 896x512 keep a headset band, fingers and hair that 512x288 smooths away (lab: the headset band 21% -> 72% -> 99% kept).
+  // The next size is built in the background and timed warm in this page; kept when it runs within MAT_BUDGET_MS, otherwise
+  // released and not tried again this run (matSlow). A size that turns slow under load steps back down (matShrink).
+  const MAT_SIZES = [[512, 288], [704, 384], [896, 512]];   // landscape W x H; a portrait camera swaps them
+  const MAT_BUDGET_MS = 34;
+  const matSlow = {};
+  const matDims = (i, portrait) => (portrait ? [MAT_SIZES[i][1], MAT_SIZES[i][0]] : MAT_SIZES[i]);
+  const matIdx = (mat) => Math.max(0, MAT_SIZES.findIndex((s) => s[0] === (mat.portrait ? mat.mh : mat.mw)));
   async function ensureModnet(dev, mw, mh) {
     const key = dev + "|" + mw + "x" + mh;
     if (matFailed[key]) return null;
@@ -28828,6 +29012,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         const t0 = performance.now();
         await modnetRun(m, m.cv);   // one run proves every op landed somewhere that works
         m.firstMs = Math.round(performance.now() - t0);
+        { const t1 = performance.now(); await modnetRun(m, m.cv); m.warmMs = Math.round(performance.now() - t1); }   // 0.21.94: a warm run decides the size
         matSess[key] = m;
         return m;
       } catch (e) {
@@ -28855,25 +29040,29 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const order = proc === "npu" ? ["npu"] : proc === "gpu" ? ["gpu"] : proc === "standard" ? [] : ["npu", "gpu"];
     const portrait = (b.video?.videoHeight || 0) > (b.video?.videoWidth || 0);
     for (const dev of order) {
-      const m = await ensureModnet(dev, portrait ? 288 : 512, portrait ? 512 : 288);
+      const i0 = Number.isInteger(window.__fxMatSize) ? Math.min(MAT_SIZES.length - 1, Math.max(0, window.__fxMatSize)) : 0;   // rig: a fixed size
+      const [mw, mh] = matDims(i0, portrait);   // 0.21.94: the smallest first; matGrow tries the bigger ones
+      const m = await ensureModnet(dev, mw, mh);
       if (gen !== b.matGen || !b.alive) return;
-      if (m) { b.mat = { dev, portrait }; b.matte = true; b.conf = null; b.engine = dev; b.note = ""; b.matMs = m.firstMs; return; }
+      if (m) { b.mat = { dev, portrait, mw, mh }; b.matte = true; b.conf = null; b.engine = dev; b.note = ""; b.matMs = m.warmMs || m.firstMs; b.matOver = 0; fxEngineNote(b); matGrow(b); return; }
     }
     b.mat = null; b.matte = false; b.conf = null; b.engine = "standard";
     b.note = order.length ? (navigator.ml ? "no " + order.join("/").toUpperCase() + " here" : "WebNN off") : "";
     if (proc === "npu" || proc === "gpu") window.__toast?.("The " + proc.toUpperCase() + " is not available for effects here \u2014 using the standard model", 5000, { level: "info" });
     if (!b.seg) { const s = await ensureSegmenter(b.quality); if (gen === b.matGen && b.alive) b.seg = s; }
+    if (gen === b.matGen && b.alive) fxEngineNote(b);   // 0.21.94
   }
   function matTick(b, video, w, h, now, onMask) {
     if (b.matBusy || now - b.lastSegAt < MAT_MIN_MS) return;
     if ((h > w) !== !!b.mat.portrait) { pickMatte(b); return; }   // the phone turned: the other orientation's session
-    const key = b.mat.dev + "|" + (b.mat.portrait ? "288x512" : "512x288"), m = matSess[key];
+    const key = b.mat.dev + "|" + b.mat.mw + "x" + b.mat.mh, m = matSess[key];   // 0.21.94: the size in use (MAT_SIZES)
     if (!m || typeof m.then === "function") return;
     b.matBusy = true; b.lastSegAt = now;
     const t0 = performance.now(), mat = b.mat;
     modnetRun(m, video).then((r) => {
       if (!b.alive || b.mat !== mat) return;
       const ms = performance.now() - t0; b.matMs = b.matMs ? b.matMs * 0.8 + ms * 0.2 : ms;
+      if (b.matMs > MAT_BUDGET_MS * 1.6) { if (++b.matOver > 25) matShrink(b); } else b.matOver = 0;   // 0.21.94
       onMask(r); b.segN++;
     }).catch((e) => {
       if (b.mat !== mat) return;
@@ -28882,28 +29071,93 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       pickMatte(b);
     }).finally(() => { b.matBusy = false; });
   }
+  async function matGrow(b) {   // 0.21.94: the next MODNet size, when this device runs it within the budget
+    const mat = b.mat;
+    if (!mat || b.matGrowing || Number.isInteger(window.__fxMatSize)) return;
+    const i = matIdx(mat) + 1;
+    if (i >= MAT_SIZES.length) return;
+    const [mw, mh] = matDims(i, mat.portrait), key = mat.dev + "|" + mw + "x" + mh;
+    if (matSlow[key] || matFailed[key]) return;
+    b.matGrowing = true;
+    let m = null;
+    try { m = await ensureModnet(mat.dev, mw, mh); } finally { b.matGrowing = false; }
+    if (!m) return;
+    if (!(m.warmMs <= MAT_BUDGET_MS)) {   // too slow here: let it go, and never again this run
+      matSlow[key] = m.warmMs || -1; delete matSess[key];
+      try { m.sess.release?.(); } catch {}
+      if (b.alive) fxEngineNote(b, mw + "x" + mh + " took " + m.warmMs + " ms -- staying");
+      return;
+    }
+    if (!b.alive || b.mat !== mat) return;
+    b.mat = { ...mat, mw, mh }; b.matMs = m.warmMs; b.matOver = 0;
+    fxEngineNote(b, "grew");
+    matGrow(b);
+  }
+  function matShrink(b) {   // 0.21.94: a size that turned slow under load (a busy GPU) steps back down for the rest of the run
+    const mat = b.mat, i = mat ? matIdx(mat) : 0;
+    if (!mat || i === 0) return;
+    matSlow[mat.dev + "|" + mat.mw + "x" + mat.mh] = Math.round(b.matMs);
+    const [mw, mh] = matDims(i - 1, mat.portrait);
+    b.mat = { ...mat, mw, mh }; b.matMs = 0; b.matOver = 0;
+    fxEngineNote(b, "the bigger size was too slow under load");
+  }
+  // 0.21.94: which person-mask engine a camera loop runs on, its input size and the model's time per frame -- /api/diag
+  // (publisher slot fxEngine), window.__fxEngine (the rig) and one launch.log line per change. No codes, no names.
+  function fxEngineInfo(b) {
+    if (!b) return null;
+    let driverBlur = null;   // what the browser itself sees of the camera driver's blur (Windows Studio Effects)
+    try {
+      const c = b.raw?.getCapabilities?.() || {}, s = b.raw?.getSettings?.() || {};
+      if ("backgroundBlur" in c || "backgroundBlur" in s) driverBlur = { cap: c.backgroundBlur ?? null, on: s.backgroundBlur ?? null, mask: c.backgroundSegmentationMask ?? null };
+    } catch {}
+    const base = { webnn: !!navigator.ml, post: b.postStats || null, slow: { ...matSlow }, failed: { ...matFailed }, driverBlur };
+    if (!fxNeedsMask(b.fx)) return { engine: "none", ...base };
+    if (b.matte && b.mat) return { engine: "modnet", device: b.mat.dev, input: b.mat.mw + "x" + b.mat.mh, ms: Math.round(b.matMs || 0), ...base };
+    const q = Object.keys(segCache).find((k) => segCache[k] === b.seg) || (b.quality === "best" ? "best" : "balanced");
+    const si = segInfo[q] || {};
+    return { engine: b.seg ? "mediapipe" : "loading", device: si.delegate || null, model: si.model || null, quality: q,
+             input: b.mw ? b.mw + "x" + b.mh : (q === "best" ? "256x144" : "256x256"), ms: Math.round(b.segMs || 0), ...base };
+  }
+  function fxEngineNote(b, why) {
+    if (IS_WEB2 || !b || b.preview) return;
+    const i = fxEngineInfo(b);
+    if (!i || i.engine === "none" || i.engine === "loading") return;
+    const what = i.engine === "modnet" ? "MODNet on the " + String(i.device).toUpperCase() : "MediaPipe " + i.quality + " (" + (i.device || "?") + ")";
+    const key = what + " at " + i.input + (i.webnn ? "" : ", no WebNN in this browser");
+    if (key === b.noteKey && !why) return;
+    b.noteKey = key;
+    try { nativePost("/api/rtsp/note", { text: "page: camera effects: " + key + (i.ms ? ", " + i.ms + " ms a frame" : "") + (why ? " (" + why + ")" : "") }); } catch {}
+  }
   window.__fxEngine = () => {   // the Camera menu's "running on ..." + rig
     const sl = [...slots.values()].find((s2) => s2.blur);
     const b = sl?.blur; if (!b) return null;
     return { engine: b.engine || (b.seg ? "standard" : ""), ms: b.matMs ? Math.round(b.matMs) : 0, proc: b.proc || "auto", gl: !!b.gl, note: b.note || "", drawFps: b.drawFps, segFps: b.segFps, stepMs: b.stepMs ? +b.stepMs.toFixed(1) : null,
-             mask: b.mw ? b.mw + "x" + b.mh : "", failed: { ...matFailed } };
+             mask: b.mw ? b.mw + "x" + b.mh : "", failed: { ...matFailed }, info: fxEngineInfo(b) };   // 0.21.94: + input size, model ms, the clean-up
   };
+  // ==== fx-gl:begin ====
   // ---- 0.21.21: the WebGL2 effects renderer (every machine) ---------------------------------------------------------
-  // Guided filter (He et al.): the low-res matte p is refined against the frame's luma I at full resolution --
+  // Guided filter (He et al.): the low-res matte p is refined against the frame I at full resolution --
   //   a = cov(I,p) / (var(I) + eps),  b = mean(p) - a*mean(I),  q = mean(a)*I + mean(b)
   // so the edge snaps to the real hair / shoulder edges instead of a stretched 256x144 grid. Blur mode blurs the frame
   // weighted by (1 - matte) at quarter resolution and divides the weight back out: the person never smears into the
   // background (the dark halo of a plain blur). Person mode returns the premultiplied person for an upright background.
+  // 0.21.94 (Kenton: rough edges and hair): the COLOUR guided filter -- I is the RGB frame, so a = inverse(cov(I) + eps) cov(I,p)
+  // (a 3x3 solve per pixel) and an edge that only shows in colour (brown hair on a beige wall, a grey headset on a grey door)
+  // still guides the matte. Its window sums run at half resolution (He's "fast guided filter": a and b are smooth, so they are
+  // computed small and sampled back up; the frame itself is used at full resolution in the last step). A GPU that cannot
+  // render four float targets at once keeps the 0.21.21 luma filter.
+  const FX_GUIDE = { color: true, r: 12, eps: 1e-3, half: true };   // r in pixels of a 1280-wide frame (lab: 12 beat 8 on edges, 16 added flicker)
   function createFxGL() {
     const c = document.createElement("canvas");
     const gl = c.getContext("webgl2", { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false });
     if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
     gl.getExtension("OES_texture_float_linear");
     const VS = "#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0., 1.); }";
-    const prog = (fs) => {
+    const prog = (fs, mrt) => {
       const mk = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
       const pr = gl.createProgram(); gl.attachShader(pr, mk(gl.VERTEX_SHADER, VS));
-      gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, "#version 300 es\nprecision highp float;\nin vec2 uv; out vec4 o;\n" + fs)); gl.linkProgram(pr);
+      const outs = mrt ? "layout(location=0) out vec4 o; layout(location=1) out vec4 o1; layout(location=2) out vec4 o2; layout(location=3) out vec4 o3;\n" : "out vec4 o;\n";
+      gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, "#version 300 es\nprecision highp float;\nin vec2 uv; " + outs + fs)); gl.linkProgram(pr);
       if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
       return pr;
     };
@@ -28914,12 +29168,31 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         box: prog("uniform sampler2D T; uniform vec2 dir; uniform int r; void main(){ vec4 s = vec4(0.); for (int i = -16; i <= 16; i++) { if (i < -r || i > r) continue; s += texture(T, uv + dir * float(i)); } o = s / float(2*r+1); }"),
         ab: prog("uniform sampler2D T; uniform float eps; void main(){ vec4 m = texture(T, uv); float va = m.z - m.x*m.x, cv = m.w - m.x*m.y; float a = cv / (va + eps); o = vec4(a, m.y - a*m.x, 0., 1.); }"),
         wpack: prog("uniform sampler2D F, M; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); float w = 1. - texture(M, f).a; w = w * w; o = vec4(texture(F, f).rgb * w, w); }"),
-        out: prog("uniform sampler2D F, AB, BG; uniform int mode; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); vec3 c = texture(F, f).rgb; float I = dot(c, vec3(.299,.587,.114));"
-          + " vec2 ab = texture(AB, uv).xy; float a = clamp(ab.x * I + ab.y, 0., 1.);"
+        out: prog("uniform sampler2D F, AB, BG; uniform int mode, cg; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); vec3 c = texture(F, f).rgb; float I = dot(c, vec3(.299,.587,.114));"
+          + " vec4 ab = texture(AB, uv); float a = cg == 1 ? clamp(dot(ab.xyz, c) + ab.w, 0., 1.) : clamp(ab.x * I + ab.y, 0., 1.);"
           + " if (mode == 1) { o = vec4(c * a, a); return; }"
           + " vec4 bw = texture(BG, uv); vec3 bg = bw.a > 0.002 ? bw.rgb / bw.a : c; o = vec4(mix(bg, c, a), 1.); }"),
       };
     } catch (e) { console.warn("[fx] WebGL2 renderer unavailable:", e?.message || e); return null; }
+    let CG = null;   // 0.21.94: the colour guided filter's programs (null = the luma filter)
+    if (FX_GUIDE.color) {
+      try {
+        CG = {
+          // the window sums' inputs: I (rgb), p, and the six distinct products of I with itself and the three with p
+          pack: prog("uniform sampler2D F, M; void main(){ vec2 f = vec2(uv.x, 1.-uv.y); vec3 c = texture(F, f).rgb; float p = texture(M, f).a;"
+            + " o = vec4(c, p); o1 = vec4(c.r*c.r, c.r*c.g, c.r*c.b, c.g*c.g); o2 = vec4(c.g*c.b, c.b*c.b, c.r*p, c.g*p); o3 = vec4(c.b*p, 0., 0., 1.); }", true),
+          box: prog("uniform sampler2D T0, T1, T2, T3; uniform vec2 dir; uniform int r; void main(){ vec4 s0 = vec4(0.), s1 = vec4(0.), s2 = vec4(0.), s3 = vec4(0.);"
+            + " for (int i = -16; i <= 16; i++) { if (i < -r || i > r) continue; vec2 q = uv + dir * float(i); s0 += texture(T0, q); s1 += texture(T1, q); s2 += texture(T2, q); s3 += texture(T3, q); }"
+            + " float k = 1. / float(2*r+1); o = s0 * k; o1 = s1 * k; o2 = s2 * k; o3 = s3 * k; }", true),
+          ab: prog("uniform sampler2D T0, T1, T2, T3; uniform float eps; void main(){ vec4 m0 = texture(T0, uv), m1 = texture(T1, uv), m2 = texture(T2, uv), m3 = texture(T3, uv);"
+            + " vec3 mI = m0.rgb; float mp = m0.a;"
+            + " float rr = m1.x - mI.r*mI.r + eps, rg = m1.y - mI.r*mI.g, rb = m1.z - mI.r*mI.b, gg = m1.w - mI.g*mI.g + eps, gb = m2.x - mI.g*mI.b, bb = m2.y - mI.b*mI.b + eps;"
+            + " vec3 cIp = vec3(m2.z, m2.w, m3.x) - mI * mp;"
+            + " vec3 a = inverse(mat3(rr, rg, rb, rg, gg, gb, rb, gb, bb)) * cIp;"
+            + " o = vec4(a, mp - dot(a, mI)); }"),
+        };
+      } catch (e) { console.warn("[fx] colour guided filter unavailable, luma edges:", e?.message || e); CG = null; }
+    }
     const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const tex = (w, h, fl) => {
       const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
@@ -28928,6 +29201,14 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       return t;
     };
     const fbo = (t) => { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return f; };
+    const mrt = (w, h) => {   // 0.21.94: four float targets drawn at once
+      const ts = [0, 1, 2, 3].map(() => tex(w, h, true));
+      const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+      ts.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
+      const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      return { ts, t: ts[0], f, w, h, ok };
+    };
     const tF = tex(), tM = tex();
     let W = 0, H = 0, T = null;
     const size = (w, h) => {
@@ -28935,8 +29216,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       W = w; H = h; c.width = w; c.height = h;
       const q = [Math.max(2, w >> 2), Math.max(2, h >> 2)];
       const mkT = (ww, hh) => { const t = tex(ww, hh, true); return { t, f: fbo(t), w: ww, h: hh }; };
-      if (T) for (const x of Object.values(T)) { gl.deleteTexture(x.t); gl.deleteFramebuffer(x.f); }
+      if (T) for (const x of Object.values(T)) { for (const t of x.ts || [x.t]) gl.deleteTexture(t); gl.deleteFramebuffer(x.f); }
       T = { A: mkT(w, h), B: mkT(w, h), AB: mkT(w, h), C: mkT(w, h), Q1: mkT(q[0], q[1]), Q2: mkT(q[0], q[1]) };
+      if (CG) {
+        const s2 = FX_GUIDE.half ? 2 : 1, hw = Math.max(2, Math.round(w / s2)), hh = Math.max(2, Math.round(h / s2));
+        T.G = mrt(hw, hh); T.G2 = mrt(hw, hh); T.GA = mkT(hw, hh); T.GB = mkT(hw, hh);
+        if (!T.G.ok || !T.G2.ok) { console.warn("[fx] four float targets refused, luma edges"); CG = null; }
+      }
     };
     const draw = (pr, target, u) => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.f : null);
@@ -28959,31 +29245,47 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         draw(P.box, src, { T: { tex: tmp.t }, dir: [0, 1 / src.h], r: { i: r } });
       }
     };
+    const four = (m) => ({ T0: { tex: m.ts[0] }, T1: { tex: m.ts[1] }, T2: { tex: m.ts[2] }, T3: { tex: m.ts[3] } });
     return {
       canvas: c,
       lost: () => gl.isContextLost(),
+      get colour() { return !!CG; },   // 0.21.94: /api/diag says which edge filter runs
       render(video, maskCv, w, h, mode, amtK = 1) {
         size(w, h);
         gl.bindTexture(gl.TEXTURE_2D, tF); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, video);
         gl.bindTexture(gl.TEXTURE_2D, tM); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, maskCv);
-        const r = Math.max(3, Math.min(16, Math.round(8 * w / 1280))), eps = 1e-3;
-        draw(P.pack, T.A, { F: { tex: tF }, M: { tex: tM } });
-        draw(P.box, T.B, { T: { tex: T.A.t }, dir: [1 / w, 0], r: { i: r } });
-        draw(P.box, T.A, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
-        draw(P.ab, T.AB, { T: { tex: T.A.t }, eps });
-        draw(P.box, T.B, { T: { tex: T.AB.t }, dir: [1 / w, 0], r: { i: r } });
-        draw(P.box, T.C, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
+        let abT;
+        if (CG) {   // 0.21.94: colour guided filter, window sums at half resolution
+          const G = T.G, G2 = T.G2, r = Math.max(1, Math.min(16, Math.round(FX_GUIDE.r * w / 1280 * G.w / w)));
+          draw(CG.pack, G, { F: { tex: tF }, M: { tex: tM } });
+          draw(CG.box, G2, { ...four(G), dir: [1 / G.w, 0], r: { i: r } });
+          draw(CG.box, G, { ...four(G2), dir: [0, 1 / G.h], r: { i: r } });
+          draw(CG.ab, T.GA, { ...four(G), eps: FX_GUIDE.eps });
+          draw(P.box, T.GB, { T: { tex: T.GA.t }, dir: [1 / G.w, 0], r: { i: r } });
+          draw(P.box, T.GA, { T: { tex: T.GB.t }, dir: [0, 1 / G.h], r: { i: r } });
+          abT = T.GA.t;
+        } else {
+          const r = Math.max(3, Math.min(16, Math.round(FX_GUIDE.r * w / 1280))), eps = 1e-3;
+          draw(P.pack, T.A, { F: { tex: tF }, M: { tex: tM } });
+          draw(P.box, T.B, { T: { tex: T.A.t }, dir: [1 / w, 0], r: { i: r } });
+          draw(P.box, T.A, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
+          draw(P.ab, T.AB, { T: { tex: T.A.t }, eps });
+          draw(P.box, T.B, { T: { tex: T.AB.t }, dir: [1 / w, 0], r: { i: r } });
+          draw(P.box, T.C, { T: { tex: T.B.t }, dir: [0, 1 / h], r: { i: r } });
+          abT = T.C.t;
+        }
         if (mode === "blur") {
           draw(P.wpack, T.Q1, { F: { tex: tF }, M: { tex: tM } });
           const rr = Math.round(7 * amtK * w / 1280);   // 0.21.71: Blur strength -- the box shader stops at 16, a third pass goes further
           blur2(T.Q1, T.Q2, Math.max(1, Math.min(16, rr)), rr > 16 ? 3 : 2);
         }
-        draw(P.out, null, { F: { tex: tF }, AB: { tex: T.C.t }, BG: { tex: T.Q1.t }, mode: { i: mode === "person" ? 1 : 0 } });
+        draw(P.out, null, { F: { tex: tF }, AB: { tex: abT }, BG: { tex: T.Q1.t }, mode: { i: mode === "person" ? 1 : 0 }, cg: { i: CG ? 1 : 0 } });
         return c;
       },
       dispose() { try { gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch {} },
     };
   }
+  // ==== fx-gl:end ====
   function fxGlRender(b, video, maskCv, w, h, mode, amtK = 1) {
     if (b.glFailed || window.__fxNoGL) return null;   // __fxNoGL: rig switch (the 2D path)
     try {
@@ -29016,6 +29318,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     loadFxBg(b, b.fx);
     slot.blur = b;
     b.maskCv = maskCv;   // 0.21.89: the presentation cut-out reuses this camera's matte (window.__presCut)
+    b.preview = !!slot.preview;   // 0.21.94: previews stay out of launch.log
     b.proc = fx0.proc || "auto"; b.matGen = 0; b.engine = seg ? "standard" : "";   // 0.21.21
     if (fxNeedsMask(fx0)) { b.matTried = true; pickMatte(b); }
     const drawCover = (ctx, el, ew, eh, w, h) => {
@@ -29026,6 +29329,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // subject (0.8.6 -- the model segments every human, so people behind you stayed sharp;
     // connected components on a quarter-scale copy once the mask is bigger than 320x180,
     // upsampled nearest), soft-threshold after the smoothing, and paint the matte canvas.
+    // 0.21.94: the main-subject pick, the reach, hole filling and the alpha ramp are fxPostMask (fx-post) -- shared with the
+    // presenter cut-out and run as is by the lab.
     const updateMask = (mask) => {
       const mw = mask.width, mh = mask.height, n = mw * mh;
       const cur = mask.getAsFloat32Array();
@@ -29039,22 +29344,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         for (let i = 0; i < n; i++) p[i] = p[i] * k + cur[i] * (1 - k);
       }
       const conf = b.conf, data = b.imgData.data;
-      const alpha = b.matte ? (c) => (c <= 0.03 ? 0 : c >= 0.97 ? 255 : (c - 0.03) * 271)   // 0.21.21: MODNet = a real alpha matte
-                            : (c) => (c <= 0.15 ? 0 : c >= 0.85 ? 255 : (c - 0.15) * 364);
-      if (mw > 320 || mh > 180) {
-        const qw = mw >> 2, qh = mh >> 2;
-        if (!b.confQ || b.confQ.length !== qw * qh) b.confQ = new Float32Array(qw * qh);
-        const q = b.confQ;
-        for (let y = 0; y < qh; y++) { const row = (y << 2) * mw, qrow = y * qw; for (let x = 0; x < qw; x++) q[qrow + x] = conf[row + (x << 2)]; }
-        const keep = mainSubjectMask(q, qw, qh);
-        for (let y = 0; y < mh; y++) {
-          const krow = Math.min(qh - 1, y >> 2) * qw, row = y * mw;
-          for (let x = 0; x < mw; x++) { const i = row + x; data[i * 4 + 3] = keep[krow + Math.min(qw - 1, x >> 2)] ? alpha(conf[i]) : 0; }
-        }
-      } else {
-        const keep = mainSubjectMask(conf, mw, mh);
-        for (let i = 0; i < n; i++) data[i * 4 + 3] = keep[i] ? alpha(conf[i]) : 0;
-      }
+      b.postStats = fxPostMask(conf, mw, mh, b.matte ? FX_POST.mat : FX_POST.seg, b.post || (b.post = {}), data);   // 0.21.94: the clean-up (fx-post)
       mx.putImageData(b.imgData, 0, 0);
       b.haveMask = true;
     };
@@ -29086,7 +29376,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           b.lastSegAt = now;
           let res = null;
           try {
+            const st0 = performance.now();
             res = b.seg.segmentForVideo(video, now);
+            { const ms = performance.now() - st0; b.segMs = b.segMs ? b.segMs * 0.8 + ms * 0.2 : ms; }   // 0.21.94: the model's own time (/api/diag)
             const masks = res?.confidenceMasks ?? [];
             const mask = masks[masks.length - 1] ?? null;   // person confidence
             if (mask) { updateMask(mask); b.segN++; }
@@ -29175,6 +29467,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // preview per place -- "panel" opens its own camera; "gate" (the join page) runs on the track the join page already opened.
   const fxPvs = new Map(), fxPvGen = new Map();
   function fxPreviewRun(key, raw, fx, st) {
+    fx = fxStudioEff(fx, raw);   // 0.21.94
     const slot = { entry: { id: "fx-preview-" + key, kind: "camera", fx: fx || null }, publish: null, preview: true };
     fxPvs.set(key, { slot, st, raw });
     if (fxActive(fx)) { startBlurLoop(slot, raw, null, fx); retuneFx(slot, fx); }   // the segmenter loads in the background; the stand-in hides the room meanwhile
@@ -29204,6 +29497,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   function fxPreviewRetune(key, fx) {   // a new effects bag: retune the loop, or start / drop it (Off = the plain camera)
     const pv = fxPvs.get(key); if (!pv) return null;
+    fx = fxStudioEff(fx, pv.raw);   // 0.21.94
     pv.slot.entry.fx = fx;
     if (fxActive(fx) && !pv.slot.blur) { startBlurLoop(pv.slot, pv.raw, null, fx); retuneFx(pv.slot, fx); }
     else if (fxActive(fx)) retuneFx(pv.slot, fx);
@@ -32668,8 +32962,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       c.conf = new Float32Array(cur); c.mw = mw; c.mh = mh;
       c.mask.width = mw; c.mask.height = mh; c.img = c.mx.createImageData(mw, mh);
     } else for (let i = 0; i < n; i++) c.conf[i] = c.conf[i] * 0.5 + cur[i] * 0.5;
-    const keep = mainSubjectMask(c.conf, mw, mh), d = c.img.data;
-    for (let i = 0; i < n; i++) { const v = c.conf[i]; d[i * 4 + 3] = keep[i] ? (v <= 0.15 ? 0 : v >= 0.85 ? 255 : (v - 0.15) * 364) : 0; }
+    fxPostMask(c.conf, mw, mh, FX_POST.seg, c.post || (c.post = {}), c.img.data);   // 0.21.94: the camera effects' own clean-up (fx-post)
     c.mx.putImageData(c.img, 0, 0);
     c.haveMask = true;
   }
@@ -34281,6 +34574,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         announce: s.publish.getAttribute("announce"),
         muted: s.publish.muted, videoPaused: !!s.entry.videoPaused,
         fx: { camOff: camOff(s), autoPaused: !!s.autoPaused, invisible: !!s.publish?.invisible, loop: !!s.blur, armed: !!s.fxArm, failed: s.fxFailed || null, nudged: !!s.fxNudged },   // 0.21.15: the effects loop / arm state per camera slot
+        fxEngine: fxEngineInfo(s.blur), fxStudio: !!window.__studioFxOn?.(fxSlotTrack(s)?.label || ""),   // 0.21.94: which engine runs (input, ms per frame) and whether the camera blurs itself
         badge: s.badge.textContent,
         // 0.8.13: the encoder's own facts for camera/screen/file slots too
         resolved: (() => { try { const r = s.publish.video.out.resolved.peek(); return r ? { codec: r.codec, hw: r.hardwareAcceleration, w: r.width, h: r.height, fps: r.framerate, bitrate: r.bitrate } : null; } catch { return null; } })(),

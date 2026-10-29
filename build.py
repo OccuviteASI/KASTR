@@ -948,6 +948,7 @@ def main():
         "--hidden-import", "kastr_record",   # 0.21.81: Record's save formats (lazy import)
         "--hidden-import", "kastr_point",   # 0.21.83: pointer mode -- pointers + sonar clicks on the sharer's screen (lazy import)
         "--hidden-import", "kastr_pres",   # 0.21.84 (prototype): Share > Presentation -- .pptx scenes + the encrypted slide store (lazy import)
+        "--hidden-import", "kastr_studiofx",   # 0.21.94: Windows Studio Effects blur helper (lazy import; also kastr --studiofx-helper)
         "--hidden-import", "kastr_msg",   # 0.21.88: private messages -- the hub's end-to-end encrypted store
         "--hidden-import", "kastr_access",   # 0.21.89: Ask for access -- the hub's desk of asks, answers and one-visit grants
         "--hidden-import", "kastr_gif",   # 0.21.91: GIF search -- GIPHY through the hub (imported by kastr_relay)

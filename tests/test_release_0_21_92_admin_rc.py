@@ -150,7 +150,7 @@ class AdminOnly(Base):
         self.assertEqual(c, 200, d)
         self.assertTrue(d["ask"])
         self.assertNotIn("_note", d)
-        self.assertNotIn("ck", json.dumps(d))
+        self.assertNotIn('"ck"', json.dumps(d))   # the key, not "ck" inside a random id
         self.assertEqual(self.inbox(OTHER), [])
         self.assertEqual(self.inbox(ADM, "adm-1"), [])
         got = self.inbox(PERSON)
@@ -446,7 +446,7 @@ class PrivateAndTake(PersonBase):
         d, c = spoke.rcx_admin_api({"op": "ask", "node": PERSON, "name": "Pat", "by": "Kenton"}, "Bearer " + o["tokens"]["member"], "10.2.0.5")
         self.assertEqual(c, 200, d)
         self.assertIsNotNone(kr.verify_token(d["token"], spoke.key))
-        self.assertNotIn("ck", json.dumps(d))
+        self.assertNotIn('"ck"', json.dumps(d))   # the key, not "ck" inside a random id
         self.assertEqual(self.inbox(PERSON)[0]["sid"], d["sid"])
         o, c = spoke.token({"room": "alpha", "code": "pub-1", "host": PUBH}, "10.2.0.6")
         self.assertEqual(spoke.rcx_admin_api({"op": "ask", "node": PERSON}, "Bearer " + o["tokens"]["member"], "x")[1], 403)

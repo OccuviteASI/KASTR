@@ -2,6 +2,61 @@
 
 What changed in each build, newest first.
 
+## v0.21.94 — Disappearing messages, send later and view once; live feeds in a presentation; cleaner background effects
+
+**Disappearing messages (Messages and Room Chat).**
+- Pick a timer for a whole conversation or room from its menu: 5 minutes, 1 hour, 8 hours, 24 hours, 7 days, 30 days, or your own length (1 minute to 90 days). Anyone in the conversation can change it, and everyone sees a line saying who changed it.
+- The clock button beside the message box sets a timer for the next message only. A message with a timer shows a small clock with the time left.
+- **In Messages the countdown starts when each person reads the message.** An unread message never lasts longer than 7 days. Your own copy follows the same rule.
+- **In Room Chat the countdown starts when the message is sent**, because a room has no read receipts.
+- **Gone means gone:** the hub, the standby hub, every device's saved copy and the pictures and files with it. A device that was off removes them the next time it connects.
+
+**Send later (Messages and Room Chat).**
+- Right-click Send (or hold it on a touch screen) and pick **Send later…**. Times are in your own time zone.
+- The hub keeps the message sealed and sends it at that time, even if your computer is off. It keeps working if the hub switches to the standby.
+- Until then you see "Scheduled for <time>" and can change the time, cancel it, or send it now.
+
+**View once (Messages and Room Chat).**
+- Pick **View once** on the clock button. The message or photo opens once for each person (in Room Chat, once on each device), then shows "Opened". You see "Opened" when they have opened it.
+- KASTR blocks save, copy, drag and right-click on it. **They can still take a screenshot.**
+- The hub deletes it after it is opened (in Messages, 5 minutes after the last person opens it, so the picture can finish loading), or after 7 days.
+
+**Message marks on the latest message only (Kenton: "I don't need to show the seen/read/sent icon for all messages, just for the latest message. It's implied that the previous messages have been read if the last one has been. Keep showing the previous message as read until the last message shows read.").**
+- In a conversation, only your newest message shows its mark (sending, sent, delivered or read).
+- Until they have read the newest one, the eye stays on the last message of yours they did read, so at most two marks show. Once they read the newest, only it shows the eye.
+- A message that failed to send still says "Not sent" on every message it applies to.
+- Groups show "sent" on the newest message only.
+- Hover the time on any of your messages to see when it was sent, delivered and read.
+
+**Older KASTR (0.21.93 and earlier)** never shows a scheduled message early. Instead of a disappearing or view-once message it shows a line asking to update KASTR. Update the hub, the standby and every computer together: an old standby does not remove deleted messages.
+
+**Live feeds in a presentation (Kenton: "am I able to add other shares to the presentation? Such as another camera feed or a grid? I would like this for presenters to use and backstage to be able to control").**
+- **Show a live feed instead of the slide.** In the presenter view, the new Live feed panel lists the room's cameras and shares, grids, your saved grids and the stream library. Pick one and the whole room sees it in the slide's place until you press **Back to slides**. Your camera and your mode (Standout, Side-by-side, Reporter) stay on top of it, just like over a slide.
+- **Backstage can switch it too.** Every presenter and every backstage person can show, switch or end the feed; the last one to act wins.
+- **Next or Back takes you back to the slides** at the slide you were on, so a clicker press never skips a slide nobody saw. Clicking another slide ends the feed and goes there. Black and White cover the feed and keep it for when they're turned off.
+- **If the feed goes offline**, the room goes back to the slides in about 8 s and presenters and backstage get a note.
+- **It is recorded** with the rest of the presentation, and it stays on through a hand-over.
+- The audience still sees only the presentation; the shown camera appears even when "Audience can see each other" is off.
+- Invite-link and My room guests see a library stream only when it is pinned to the room. Older KASTRs keep seeing the slide.
+
+**Cleaner background effects, no new training (Kenton: "I would like to clean up the detection so it's cleaner. Do we need to do more training?").**
+- No training needed this round: the same models, read better. KASTR now keeps only you -- one person -- and drops loose bits around you (a chair back, the door frame, someone walking behind), fills small holes (a dark shirt, the gap under a headset band) and keeps edge parts steady from frame to frame, so a hand or the headset no longer blinks in and out.
+- Edges follow the picture's colour, not just its brightness, so hair and skin separate better from a wall of the same brightness.
+- When the machine keeps up, KASTR feeds the person model a bigger picture (704x384 or 896x512 instead of 512x288). That is what brings back the headset band and the hands. It steps back down by itself if the machine gets busy.
+- **Auto picks the fastest chip that fits (Kenton: "Fastest that fits").** When a computer has both an NPU and a graphics chip, KASTR times both a few seconds after the camera starts and keeps the one that reaches the bigger, cleaner picture within a frame's time; on a tie the NPU wins (less power). On Kenton's laptop that is the graphics chip at 896x512 instead of the NPU at 512x288. If the machine gets busy it moves once or steps a size down, and holds each change for at least 30 s, so it never flips back and forth.
+- Diagnostics now say which engine runs your effects (NPU, GPU or MediaPipe), at what size and how many ms per frame, and launch.log has one line whenever that changes.
+- Known limit: a chair the same colour as your shirt that touches you can still show. One Apache-licensed candidate model (Google's multiclass selfie model) did well on a real clip in the lab and is lined up for a later build.
+
+**Use Windows Studio Effects blur (Kenton: "Can KASTR read the Windows Studio effects for the blur and background options?").**
+- On a Windows 11 laptop whose camera has Windows Studio Effects, the Camera card shows a new switch, "Use Windows Studio Effects blur". With Blur chosen, the camera blurs the background itself and KASTR's own blur stands down.
+- Pictures and video backgrounds still use KASTR's own detection: Windows does not hand its outline to a browser.
+- KASTR puts the camera back exactly as it found it when you turn the switch off or quit. No admin rights, nothing installed.
+- Cameras without Studio Effects never show the switch.
+
+**Smaller fixes.**
+- A spoke relay showed "Could not open it (502)" instead of "Already opened on this device" for a view-once Room Chat message.
+- A remote-control test no longer fails now and then on the letters "ck" inside a random id.
+
 ## v0.21.93 — Shares that heal their own frozen picture, the web address as the first relay, and clearer message marks
 
 **One built-in address: the web relay (Kenton: "use the web address as the relay on the first run, then have the hub distribute the known relays to the clients and have them switch to the best relay").**

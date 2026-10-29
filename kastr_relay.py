@@ -10170,11 +10170,22 @@ class AuthService:
 
     def _msg_loop(self):
         stop = self.__dict__.get("_board_stop") or threading.Event()
-        while not stop.wait(3600):
+        swept = time.time()
+        while not stop.wait(self.MSG_TICK_S):
+            try:   # 0.21.94: the timer beat -- scheduled messages out, timed ones gone (the hub only: a spoke's or the
+                if not self._p_spoke():   # standby's copy follows the hub's tombstones; a promoted standby beats itself)
+                    self._msgr().tick()
+            except Exception as e:
+                self.log("relay auth: messages timers: %s" % str(e)[:120])
+            if time.time() - swept < 3600:
+                continue
+            swept = time.time()
             try:
                 self._msgr().sweep()
             except Exception as e:
                 self.log("relay auth: messages sweep: %s" % str(e)[:120])
+
+    MSG_TICK_S = 5   # 0.21.94
 
     def _msg_ping(self, hosts, seq):
         """Hub: these devices pull their messages -- the beat of the page on this relay says so at once, and a spoke's pages
@@ -15459,6 +15470,8 @@ class Relay:
                 merged.sort(key=_id)
                 with open(fp, "w", encoding="utf-8", newline="") as f:
                     f.write("\n".join(merged) + "\n")
+                import kastr_chat as _kc   # 0.21.94: what either copy deleted stays deleted (its line overwritten)
+                _kc.scrub_file(fp)
                 if c.get("keep"):
                     open(os.path.join(cdir, room + ".keep"), "a").close()
                 chats += 1
@@ -15470,6 +15483,7 @@ class Relay:
             if cs is not None:
                 with cs.lock:
                     cs._last_id.clear()
+                    cs._due = None   # 0.21.94: the timers look at every room again
         except Exception:
             pass
         msgs = self._msg_takeover(d.get("messages"), base, tok)   # 0.21.88: the messages store comes too
@@ -16607,6 +16621,9 @@ class Relay:
                         f.seek(int(c.get("from") or 0))
                         f.truncate()
                         f.write(str(c.get("text") or "").encode("utf-8"))
+                    if '"del"' in str(c.get("text") or "") or '"sdone"' in str(c.get("text") or ""):
+                        import kastr_chat as _kc   # 0.21.94: a tombstone arrived -- the line it kills is overwritten here too (same size)
+                        _kc.scrub_file(path)
                     keep = os.path.join(rdir, room + ".keep")
                     if c.get("keep"):
                         open(keep, "a").close()

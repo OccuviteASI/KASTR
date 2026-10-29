@@ -1571,6 +1571,9 @@ def chat_sweep_once(relay_srv=None):
     return store.sweep(kept)
 
 
+CHAT_TIMER_BEAT_S = 5   # 0.21.94
+
+
 def start_chat_sweeper(relay_srv=None, every=3600):
     """Hourly, once per process (the start_media_sweeper idiom)."""
     if _CHAT_SWEEPER[0]:
@@ -1588,6 +1591,17 @@ def start_chat_sweeper(relay_srv=None, every=3600):
         t.daemon = True
         t.start()
     tick()
+
+    def beat():   # 0.21.94: Room Chat timers -- scheduled messages out, timed ones gone (on this host's clock)
+        while True:
+            time.sleep(CHAT_TIMER_BEAT_S)
+            try:
+                cs = chat_store(relay_srv=relay_srv)
+                if cs is not None:
+                    cs.tick()
+            except Exception:
+                pass
+    threading.Thread(target=beat, daemon=True, name="chat-timers").start()
 
 
 class _BoundedReader:
@@ -2851,13 +2865,15 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             ts = self._chat_closed(room)
             if ts:
                 return self._chat_reply(410, {"error": "room closed", "closed": ts})
-            try:
-                msgs = store.read(room, (qs.get("since") or ["0"])[0], (qs.get("limit") or ["200"])[0])
+            try:   # 0.21.94: tv=1 = a page that knows timers (an older one gets a line instead of a timed message)
+                msgs = store.read(room, (qs.get("since") or ["0"])[0], (qs.get("limit") or ["200"])[0],
+                                  tv=(qs.get("tv") or [""])[0] == "1")
+                rttl = store.room_ttl(room)
             except ValueError as e:
                 return self._chat_reply(400, {"error": str(e)})
             return self._json_cors(200, {"room": room, "messages": msgs,
                                          "persistent": self._room_persistent(room) or store.is_kept(room),
-                                         "closed": False})
+                                         "closed": False, "tv": 1, "now": int(time.time()), "ttl": rttl})   # 0.21.94: this host's clock
 
         def _chat_post(self, room, store, ctx):
             if room == "main":   # 0.21.60: the Lobby has no chat (nothing shared there; the page hides it too)
@@ -2868,11 +2884,36 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             p = self._chat_body_json()
             if p is None:
                 return self._chat_reply(413, {"error": "message too large"})
+            # 0.21.94 timers: act = ttl (the room's default) | open (view once, this device) | sched (my scheduled one);
+            # a post may carry ttl (else the room's default applies -- an older page's posts too), vo + dev, rel (send later)
+            act = str(p.get("act") or "")
             try:
+                if act == "ttl":
+                    rec = store.set_ttl(room, p.get("s"), p.get("op"), p.get("name"), ctx.get("via") or "")
+                    if self._room_persistent(room):
+                        store.mark_keep(room, True)
+                    return self._json_cors(201, rec)
+                if act == "open":
+                    code, obj = store.open_vo(room, p.get("id"), p.get("dev"))
+                    return self._json_cors(code, obj)
+                if act == "sched":
+                    code, obj = store.sched_op(room, p.get("sid"), p.get("tk"), str(p.get("do") or ""), p.get("rel"))
+                    return self._json_cors(code, obj)
+                if act:
+                    return self._chat_reply(400, {"error": "unknown act"})
+                ttl = p.get("ttl") if "ttl" in p else store.room_ttl(room)
+                if p.get("rel"):
+                    obj = store.schedule(room, p.get("rel"), p.get("op"), p.get("name"), p.get("text"), p.get("files"),
+                                         ctx.get("via") or "", ttl=ttl, vo=p.get("vo"), dev=p.get("dev"))
+                    if self._room_persistent(room):
+                        store.mark_keep(room, True)
+                    return self._json_cors(201, obj)
                 rec = store.append(room, p.get("op"), p.get("name"), p.get("text"), p.get("files"),
-                                   ctx.get("via") or "")
+                                   ctx.get("via") or "", ttl=ttl, vo=p.get("vo"), dev=p.get("dev"))
             except ValueError as e:
                 return self._chat_reply(400, {"error": str(e)})
+            if rec.get("vo"):   # 0.21.94: the poster's page shows the stub too (it never opens its own)
+                rec = dict(rec, text="", files=[], nf=len(rec.get("files") or []), opn=0)
             if self._room_persistent(room):
                 store.mark_keep(room, True)
             return self._json_cors(201, rec)          # the ONLY reply that carries the delete token
@@ -3061,6 +3102,10 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._chat_reply(404, {"error": "no such file"})
             if meta.get("kind") != "chat" or meta.get("room") != room:
                 return self._chat_reply(404, {"error": "no such file"})
+            if meta.get("vo"):   # 0.21.94: a view-once picture -- only with the ticket its opening handed out (5 minutes)
+                ft = (parse_qs(urlparse(self.path).query).get("ft") or [""])[0]
+                if not store.vo_file_ok(room, fid, ft):
+                    return self._chat_reply(404, {"error": "no such file"})
             from urllib.parse import quote
             ctype = str(meta.get("ctype") or "")
             self.send_response(200)
@@ -3072,7 +3117,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                                  "attachment; filename*=UTF-8''" + quote(meta.get("name") or "file"))
             self.send_header("Content-Length", str(size))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("Cache-Control", "no-store" if meta.get("t") or meta.get("vo") else "private, max-age=3600")   # 0.21.94: a timed one is never cached
             self._cors()
             self._corp_cross = True
             self.end_headers()
@@ -3104,7 +3149,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
         def _chat_proxy(self, method, room, hub, files=False, admin=False):
             """A spoke forwards the whole call to the hub's KASTR with its
             federation token; the hub's reply comes back as-is, except a 404
-            from a hub without a chat service and a 410 (room closed there)."""
+            from a hub without a chat service and a 410 (room closed there;
+            a view-once "already opened" 410 passes)."""
             tok, info = self._hub_token(hub)
             if not tok and info.get("hubCodes"):
                 return self._chat_reply(502, {"error": "no federation token for the hub"})
@@ -3154,7 +3200,14 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 if code == 404 and "json" not in (hdrs.get("Content-Type") or ""):
                     return self._chat_reply(502, {"error": "hub chat unavailable"})
                 if code == 410:
-                    return self._chat_reply(502, {"error": "hub chat closed this room"})
+                    # 0.21.94: only the hub's "room closed" turns into 502; a view-once "already opened" 410 goes on as-is
+                    try:
+                        body = json.loads(r.read(65536) or b"{}")
+                    except Exception:
+                        body = {}
+                    if not isinstance(body, dict) or not body or "closed" in body:
+                        return self._chat_reply(502, {"error": "hub chat closed this room"})
+                    return self._chat_reply(410, body)
                 self.send_response(code)
                 for k in ("Content-Type", "Content-Length", "Content-Disposition", "Cache-Control",
                           "Retry-After", "X-Content-Type-Options"):

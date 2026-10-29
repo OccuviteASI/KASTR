@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v0.21.93 SEND LATER in Messages (Kenton 2026-10-27/28): HELD ON THE HUB -- the message is sealed at once, the hub keeps the
+"""v0.21.94 SEND LATER in Messages (Kenton 2026-10-27/28): HELD ON THE HUB -- the message is sealed at once, the hub keeps the
 sealed copy with a release time (its own clock) and delivers it then even with the sender's computer off; the sender sees
 "Scheduled for <time>" and can change the time, cancel or send now; it survives a switch to the standby hub; no page (an
 older one neither) sees it before its time."""

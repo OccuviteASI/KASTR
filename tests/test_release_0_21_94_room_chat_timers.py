@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""v0.21.93 Room Chat timers (Kenton 2026-10-27/28): disappearing messages, send later and view once in Room Chat too.
+"""v0.21.94 Room Chat timers (Kenton 2026-10-27/28): disappearing messages, send later and view once in Room Chat too.
 The relay host's KASTR keeps them (kastr_chat.ChatStore, the routes in kastr_serve, the beat); a room has no read receipts,
 so a timer starts when the message is sent. Deletion is real: the line is scrubbed in place (same length, so the standby's
 byte-offset copy stays valid), attachments go, and a standby / hand-over copy never brings a dead line back. Pages older
-than 0.21.93 get a line instead of a timed or view-once message and never see a scheduled one early."""
+than 0.21.94 get a line instead of a timed or view-once message and never see a scheduled one early."""
 import json
 import os
 import shutil

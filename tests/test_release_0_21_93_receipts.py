@@ -95,8 +95,9 @@ class Page(unittest.TestCase):
             js = f.read()
         for k in ("sending", "sent", "dlv", "read"):
             self.assertIn(k + ":", js[js.index("const ST_SVG"):js.index("function stMark")])
-        self.assertIn('stMark(s, "read", "Read" + rcptAt(tk.rt, r.seq))', js)
-        self.assertIn('stMark(s, "dlv", "Delivered" + rcptAt(tk.dt, r.seq))', js)
+        # 0.21.94: the words live in stepWords / stepTimes (the mark goes on the latest message only -- see test_release_0_21_94_latest_marks)
+        self.assertIn('step === "read" ? "Read" + rcptAt(tk.rt, r.seq) : step === "dlv" ? "Delivered" + rcptAt(tk.dt, r.seq)', js)
+        self.assertIn("else if (markOn.has(r)) stMark(s, step, words);", js)
         self.assertNotIn('s.textContent = " ✓✓"', js)
         self.assertEqual(int(re.search(r"const RCPT_KEEP = (\d+)", js).group(1)), km.RCPT_KEEP)
         with open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:

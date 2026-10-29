@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""0.21.93: a small rig for the hub's message timers -- kastr_msg.Messenger straight (no relay, no crypto: the hub never
+"""0.21.94: a small rig for the hub's message timers -- kastr_msg.Messenger straight (no relay, no crypto: the hub never
 opens a message, so a body is any base64 and a wrap any 40-80 base64 characters). Not a test module itself."""
 import base64
 import os

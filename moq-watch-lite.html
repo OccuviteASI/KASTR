@@ -2202,7 +2202,7 @@
   .memogrid button { background:transparent; border:0; font-size:20px; line-height:1.3; cursor:pointer; border-radius:6px; padding:2px; height:auto; }
   .memogrid button:hover { background:var(--surface-2); }
   .memogrid .chint { grid-column:1 / -1; padding:2px 0 0; font-size:11px; color:var(--text-mute); }
-  /* 0.21.93 per-message timers: the composer's timer (lit with the length while the next message will disappear) and the
+  /* 0.21.94 per-message timers: the composer's timer (lit with the length while the next message will disappear) and the
      bubble's clock badge (the time left once it is read) */
   .mtimer { flex:none; min-width:34px; height:34px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text-dim);
     cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:2px; padding:0 6px; font-size:11px; font-weight:600; }
@@ -3360,7 +3360,7 @@
   .kgif .kgmsg.err { color:var(--asi-red); }
   @media (max-width: 520px) { .kgif { max-height:46vh; } .kgif .kggrid { grid-template-columns:repeat(3, 1fr); grid-auto-rows:72px; } }
   /* ==== end 0.21.91 GIF search ==== */
-  /* 0.21.93 Room Chat timers: the head's room default, the composer's timer (.mtimer, as in Messages), the room's line, a
+  /* 0.21.94 Room Chat timers: the head's room default, the composer's timer (.mtimer, as in Messages), the room's line, a
      scheduled message of mine */
   .ccomp .mtimer { height:32px; min-width:32px; }
   .popcard .head .cttl { display:inline-flex; align-items:center; gap:2px; background:transparent; border:1px solid var(--line); color:var(--text-mute);
@@ -3377,7 +3377,7 @@
 </style>
 <div id="chatPanel" class="popcard" hidden>
   <div class="head"><span>Room Chat</span><span id="chatRoomLbl" class="sub"></span><span class="sp"></span>
-    <button type="button" id="chatTtlBtn" class="cttl" hidden></button><!-- 0.21.93: the room's disappearing messages -->
+    <button type="button" id="chatTtlBtn" class="cttl" hidden></button><!-- 0.21.94: the room's disappearing messages -->
     <button type="button" class="close" title="Close">&#10005;</button></div>
   <div id="chatLog" class="body" aria-live="polite"></div>
   <div id="chatDrop">Drop files here to attach them</div>
@@ -3389,7 +3389,7 @@
     <button type="button" id="chatGifBtn" class="cbtn cgif" title="GIF" hidden>GIF</button>
     <button type="button" id="chatFileBtn" class="cbtn" title="Attach a picture or file (stored on the relay host)">&#128206;</button>
     <textarea id="chatInput" rows="1" placeholder="Message the room&hellip;" title="Enter sends, Shift+Enter starts a new line"></textarea>
-    <button type="button" id="chatTimerBtn" class="mtimer" hidden></button><!-- 0.21.93: disappearing / view once, the next message -->
+    <button type="button" id="chatTimerBtn" class="mtimer" hidden></button><!-- 0.21.94: disappearing / view once, the next message -->
     <button type="button" id="chatSend" class="cbtn send" title="Send (right-click or long-press: Send later)">&#10148;</button>
   </div>
   <input type="file" id="chatFile" multiple hidden>
@@ -3991,7 +3991,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     send: '<path d="M3 10 17 3l-4.5 14-3-5.5z" /><path d="M9.5 11.5 17 3"/>',
     ban: '<circle cx="10" cy="10" r="7"/><path d="M5.1 5.1l9.8 9.8"/>',   // 0.21.92 I: remove / ban -- Ban <name>...
     clock: '<circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.7 1.7"/><path d="M8 2h4"/>',
-  once: '<circle cx="10" cy="10" r="7" stroke-dasharray="3 1.6"/><path d="M8.6 7.6 10.4 6.5v7"/>',   // 0.21.93: view once   // 0.21.93: message timers
+  once: '<circle cx="10" cy="10" r="7" stroke-dasharray="3 1.6"/><path d="M8.6 7.6 10.4 6.5v7"/>',   // 0.21.94: view once   // 0.21.94: message timers
   };
   function icon(name, cls) {
     return '<svg class="icon ' + name + (cls ? " " + cls : "")
@@ -15578,7 +15578,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       // 0.21.42: an optional field (a locked room's code) -- the popup resolves its value; `check(value)` may answer an error
       // string, which keeps the popup open with the error under the field
       const inp = q(".kcin"), err = q(".kcerr");
-      inp.type = (o.input && o.input.type) || "text"; inp.min = (o.input && o.input.min) || ""; inp.max = (o.input && o.input.max) || "";   // 0.21.93: e.g. datetime-local (Send later)
+      inp.type = (o.input && o.input.type) || "text"; inp.min = (o.input && o.input.min) || ""; inp.max = (o.input && o.input.max) || "";   // 0.21.94: e.g. datetime-local (Send later)
       inp.hidden = !o.input; inp.value = String(o.input?.value || ""); err.hidden = true; err.textContent = "";   // 0.21.66: + a starting value
       if (o.input) { inp.placeholder = o.input.placeholder || ""; inp.classList.toggle("masked", !!o.input.masked); }
       // 0.21.89: an optional second action beside the field (`extra`: {label, run(api), primary?} -- Ask for access). run() may
@@ -21307,7 +21307,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   let chatPending = [];           // attachments waiting in the composer: {id, name, size, type, url, el}
   let chatDisabled = "";          // why the composer is off ("" = fine)
   const chatMyTokens = new Map(); // my message ids -> delete tokens (this page's life)
-  let chatTv = false, chatSkew = 0, chatRoomTtl = 0, chatTtlSysId = 0, chatTtlNext = null, chatVoNext = false, chatSched = [];   // 0.21.93 timers (below)
+  let chatTv = false, chatSkew = 0, chatRoomTtl = 0, chatTtlSysId = 0, chatTtlNext = null, chatVoNext = false, chatSched = [];   // 0.21.94 timers (below)
   // 0.13.0 (F1): chat HISTORY rides the relay host's KASTR web port, which a
   // client may not reach even while the relay itself answers (Agg, 2026-09-21).
   // chatHostDown is the page-side probe's verdict (chatProbe below); this
@@ -21487,12 +21487,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { who.style.color = anon ? "" : window.__personColor?.(op) || ""; } catch {}
     const ts = document.createElement("span"); ts.className = "cts"; ts.textContent = fmtTime(new Date(tsMs(m)));
     hd.append(who, ts);
-    if (Number(m.exp)) hd.appendChild(chatClockEl(m));   // 0.21.93: the time left
+    if (Number(m.exp)) hd.appendChild(chatClockEl(m));   // 0.21.94: the time left
     if (m.via && !anon) { const v = document.createElement("span"); v.className = "cvia"; v.textContent = "via " + m.via; hd.appendChild(v); }
     el.appendChild(hd);
     const body = document.createElement("div"); body.className = "cbody";
     const tx = document.createElement("div"); tx.className = "ctxt";
-    if (m.vo) chatVoStub(m, tx);   // 0.21.93: view once -- no text, no files until it is opened
+    if (m.vo) chatVoStub(m, tx);   // 0.21.94: view once -- no text, no files until it is opened
     if (m.text) linkify(String(m.text), tx);
     for (const f of (Array.isArray(m.files) ? m.files : [])) {
       if (!f || !/^[0-9a-f]{32}$/.test(String(f.id || ""))) continue;
@@ -21520,7 +21520,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function chatRenderAll() {
     chatLog.replaceChildren();
     if (!chatRoom) { const e = document.createElement("div"); e.className = "cempty"; e.textContent = "Join a room to chat."; chatLog.appendChild(e); return; }
-    if (!chatMsgs.length && !chatSched.length) { const e = document.createElement("div"); e.className = "cempty"; e.textContent = chatDisabled || "No messages yet \u2014 say hello."; chatLog.appendChild(e); return; }   // 0.21.93: + my scheduled ones
+    if (!chatMsgs.length && !chatSched.length) { const e = document.createElement("div"); e.className = "cempty"; e.textContent = chatDisabled || "No messages yet \u2014 say hello."; chatLog.appendChild(e); return; }   // 0.21.94: + my scheduled ones
     let prev = null, lastDay = "", newShown = false;
     for (const m of chatMsgs) {
       const day = fmtDay(new Date(tsMs(m)));
@@ -21528,12 +21528,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!newShown && chatSeenAtOpen && m.id > chatSeenAtOpen && chatRecent(m) && String(m.op || "").toLowerCase() !== chatMe()) {   // 0.21.35: + recent
         const n = document.createElement("div"); n.className = "cnew"; n.textContent = "new"; chatLog.appendChild(n); newShown = true; prev = null;
       }
-      if (m.sys === "ttl") { chatLog.appendChild(chatSysEl(m)); prev = null; continue; }   // 0.21.93: the room's timer changed
+      if (m.sys === "ttl") { chatLog.appendChild(chatSysEl(m)); prev = null; continue; }   // 0.21.94: the room's timer changed
       chatLog.appendChild(chatRenderOne(m, prev));
       if (m.local) { const el = chatLog.lastElementChild; if (el) { el.classList.add("clocal"); const mk = document.createElement("span"); mk.className = "cmark"; mk.textContent = "not saved"; mk.title = "Delivered live; the relay host's KASTR did not store it"; el.appendChild(mk); } }   // 0.13.0
       prev = m;
     }
-    for (const s of chatSched) chatLog.appendChild(chatSchedEl(s));   // 0.21.93: mine, waiting on the relay host
+    for (const s of chatSched) chatLog.appendChild(chatSchedEl(s));   // 0.21.94: mine, waiting on the relay host
     chatLog.scrollTop = chatLog.scrollHeight;
   }
   function chatAppend(list) {
@@ -21541,7 +21541,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const m of list) {
       if (!m || typeof m.id !== "number") continue;
       if (chatMsgs.some((x) => x.id === m.id)) continue;
-      if (Number(m.exp) && Number(m.exp) <= chatHubNow()) continue;   // 0.21.93: its time ran out
+      if (Number(m.exp) && Number(m.exp) <= chatHubNow()) continue;   // 0.21.94: its time ran out
       if (m.sys === "ttl" && !m.local && m.id > chatTtlSysId) { chatTtlSysId = m.id; chatRoomTtl = Number(m.s) || 0; chatPaintTimer(); }
       chatMsgs.push(m); added++;
       if (!m.local && m.id > chatLastId) chatLastId = m.id;   // 0.13.0: local (unsaved) ids never move the store cursor
@@ -21562,7 +21562,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const room = chatRoom;
     try {
       const since = full ? 0 : chatLastId;
-      const r = await fetch(chatUrl("/api/chat/" + room, "since=" + since + "&limit=200&tv=1"), { cache: "no-store" });   // 0.21.93: tv = this page knows timers
+      const r = await fetch(chatUrl("/api/chat/" + room, "since=" + since + "&limit=200&tv=1"), { cache: "no-store" });   // 0.21.94: tv = this page knows timers
       if (room !== chatRoom) return;
       if (r.status === 410) { chatRoomClosed("the room was closed"); return; }
       if (r.status === 404) { chatDisabled = "This relay's KASTR has no chat service (older than 0.12.0)."; chatHint(chatDisabled, true); chatRenderAll(); return; }
@@ -21570,7 +21570,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!r.ok) { const d = await r.json().catch(() => ({})); chatHint(d.error || ("Chat unavailable (" + r.status + ")"), true); return; }
       const d = await r.json();
       if (room !== chatRoom) return;
-      chatTv = d.tv === 1;   // 0.21.93: the relay host's KASTR keeps timers (0.21.93+), on its clock
+      chatTv = d.tv === 1;   // 0.21.94: the relay host's KASTR keeps timers (0.21.94+), on its clock
       if (Number(d.now)) chatSkew = Number(d.now) - Date.now() / 1000;
       chatDisabled = "";
       chatHint(d.persistent && !isPersonalSlug(room) ? "Room kept open \u2014 its history stays until the room is closed." : "");
@@ -21590,12 +21590,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }
   }
   async function chatSend(over) {
-    const rel = Number(over?.rel) || 0;   // 0.21.93: Send later (the relay host's epoch s)
+    const rel = Number(over?.rel) || 0;   // 0.21.94: Send later (the relay host's epoch s)
     over = over && Array.isArray(over.files) ? over : null;   // 0.21.91: a picked GIF {files} (the Send button's click event is not one)
     const text = over ? "" : chatInput.value.replace(/\s+$/, "");
     const files = over ? over.files : chatPending.filter((p) => p.id).map((p) => ({ id: p.id, name: p.name, size: p.size, type: p.type }));
     if (!chatRoom || (!text && !files.length) || (!over && chatPending.some((p) => !p.id))) return;
-    // 0.21.93: the composer's timer (the next message only) or the room's default (the host applies it); view once is for pictures
+    // 0.21.94: the composer's timer (the next message only) or the room's default (the host applies it); view once is for pictures
     const tvo = chatTv && chatVoNext, tttl = chatTv ? chatTtlNow() : 0, timed = tvo || tttl > 0 || rel > 0;
     if (tvo && files.some((f) => !String(f.type || "").startsWith("image/"))) { chatHint("View once is for pictures and text \u2014 remove the other files, or turn View once off (the timer button)", true); return; }
     chatSendBtn.disabled = true;
@@ -21604,7 +21604,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // 0.13.0: the store keeps history; delivery rides my chat.json Window. Store down (no answer in
     // 4 s, network error, 5xx) -> the message still goes out live, marked "not saved" (never re-posted).
     const liveOnly = (why) => {
-      if (timed || !window.__state?.enabled) { chatHint("Not sent \u2014 " + why, true); return; }   // 0.21.93: a timed one is never sent live (it would stay on screens)
+      if (timed || !window.__state?.enabled) { chatHint("Not sent \u2014 " + why, true); return; }   // 0.21.94: a timed one is never sent live (it would stay on screens)
       const rec = { id: Date.now() * 1000 + Math.floor(Math.random() * 1000), ts: Date.now(), op: chatMe(), name: chatName(), text: text.slice(0, 4000), files, cid, local: true, seenLocal: true };
       clearComposer();
       chatAppend([rec]); chatWinPush(rec);
@@ -21621,7 +21621,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (r.status === 410) { chatRoomClosed("the room was closed"); return; }
       if (r.status >= 500) { liveOnly("the relay host's KASTR answered " + r.status); return; }
       if (!r.ok) { chatHint(d.error || ("Not sent (" + r.status + ")"), true); return; }
-      if (d.sched) {   // 0.21.93: held on the relay host until then
+      if (d.sched) {   // 0.21.94: held on the relay host until then
         if (Number(d.now)) chatSkew = Number(d.now) - Date.now() / 1000;
         const s = { sid: d.sid, tk: d.tk, dtk: d.dtk, rel: Number(d.rel) || rel, text, nf: files.length, ttl: tttl, vo: tvo ? 1 : 0, at: Date.now() };
         chatSched.push(s); chatSchedSave();
@@ -21631,11 +21631,11 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       }
       if (typeof d.id === "number" && d.token) { chatMyTokens.set(d.id, d.token); chatMyCids.set(d.id, cid); }
       clearComposer();
-      if (timed) { chatTtlNext = null; chatVoNext = false; chatPaintTimer(); }   // 0.21.93: the next one is back on the room's setting
+      if (timed) { chatTtlNext = null; chatVoNext = false; chatPaintTimer(); }   // 0.21.94: the next one is back on the room's setting
       const rec = { ...d, cid, stored: true }; delete rec.token;
       chatAppend([rec]);
       chatSeenId = Math.max(chatSeenId, d.id || 0); paintChatBadge();
-      if (rec.exp || rec.vo) chatWinPush({ poke: d.id, ts: Date.now() });   // 0.21.93: no text on the Window (an older page would keep it)
+      if (rec.exp || rec.vo) chatWinPush({ poke: d.id, ts: Date.now() });   // 0.21.94: no text on the Window (an older page would keep it)
       else chatWinPush(rec);
       try { window.__chatPulse?.(d.id); } catch {}
     } catch (e) { liveOnly(e?.name === "AbortError" ? "the relay host's KASTR did not answer" : (e?.message || String(e))); }
@@ -21684,7 +21684,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     chatBoundAt = Date.now();
     chatMsgs = []; chatLastId = 0; chatSeenId = 0; chatSeenAtOpen = 0; chatDisabled = "";
     chatPending = []; chatAttachEl.replaceChildren(); chatAttachEl.hidden = true;
-    chatTv = false; chatRoomTtl = 0; chatTtlSysId = 0; chatTtlNext = null; chatVoNext = false; chatSchedLoad(); chatPaintTimer();   // 0.21.93
+    chatTv = false; chatRoomTtl = 0; chatTtlSysId = 0; chatTtlNext = null; chatVoNext = false; chatSchedLoad(); chatPaintTimer();   // 0.21.94
     document.getElementById("chatRoomLbl").textContent = chatRoom ? "#" + chatRoom : "";
     chatHint("");
     if (chatRoom) { try { chatSeenId = Number(localStorage.getItem(chatSeenKey())) || 0; } catch {} }
@@ -21704,7 +21704,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function chatWindowOp(path, op) {
     const r = op?.push?.value;
     if (!r) return;
-    if (r.poke) { if (typeof r.poke === "number" && !chatMsgs.some((m) => m.id === r.poke)) chatFetch(); return; }   // 0.21.93: a timed message -- from the store
+    if (r.poke) { if (typeof r.poke === "number" && !chatMsgs.some((m) => m.id === r.poke)) chatFetch(); return; }   // 0.21.94: a timed message -- from the store
     if (r.del) {
       // 0.21.6: an admin deleting someone else's line has no cid to attach -- the tombstone carries the store id
       // alone, and this handler used to drop any record without a cid, so nobody (not even the admin, once the
@@ -22080,7 +22080,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__gifChatMount = () => window.__gif?.mount({ root: chatPanel, btn: document.getElementById("chatGifBtn"), panel: document.getElementById("chatGif"),
     input: chatInput, emoji: { btn: document.getElementById("chatEmojiBtn"), panel: chatEmojiEl }, send: (file) => chatSendGif(file) });
   // ---- end 0.21.91 GIF search
-  // ---- 0.21.93 Room Chat timers (Kenton 2026-10-27/28: disappearing messages, send later and view once -- in Room Chat too) ----
+  // ---- 0.21.94 Room Chat timers (Kenton 2026-10-27/28: disappearing messages, send later and view once -- in Room Chat too) ----
   // The relay host's KASTR (the hub's, for a room a spoke forwards) keeps the room's history, so it keeps the timers, on ITS
   // clock (chatSkew from each read's `now`). A room has no read receipts: a timer starts when the message is SENT.
   // DISAPPEARING: the room's default (the clock in the head -- anyone here changes it, everyone sees a line) and the composer's
@@ -22088,7 +22088,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // attachments at its time, and every page drops it then (this beat). VIEW ONCE: a stub until Open -- once on each device; the
   // host deletes it at its timer (7 days at the latest); drawn on canvases, no save or copy (best effort: a screenshot works).
   // SEND LATER: right-click or long-press Send; the host holds it and posts it then, even with this computer off; this page
-  // lists mine as "Scheduled for <time>" (change the time, send now, cancel). A page older than 0.21.93 never gets a timed or
+  // lists mine as "Scheduled for <time>" (change the time, send now, cancel). A page older than 0.21.94 never gets a timed or
   // view-once message (a line telling it to update instead) and never sees a scheduled one early (it is not history yet).
   const CHAT_TTLS = [[0, "Off"], [300, "5 minutes"], [3600, "1 hour"], [28800, "8 hours"], [86400, "24 hours"], [604800, "7 days"], [2592000, "30 days"]];
   const chatTimerBtn = document.getElementById("chatTimerBtn"), chatTtlBtn = document.getElementById("chatTtlBtn");
@@ -22347,7 +22347,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   function chatSendMenu() {
     if (!chatRoom) return;
-    if (!chatTv) { chatHint("Send later needs the relay host's KASTR on 0.21.93 or newer", true); return; }
+    if (!chatTv) { chatHint("Send later needs the relay host's KASTR on 0.21.94 or newer", true); return; }
     openMineMenu(chatSendBtn, [{ value: "later", label: "Send later…" }, { hint: "The relay host keeps it and posts it then, even with this computer off." }], "", async () => {
       if (!chatInput.value.trim() && !chatPending.some((p) => p.id)) { chatHint("Write the message first, then pick Send later"); chatInput.focus(); return; }
       const rel = await chatPickTime("Send later", "When should it go?", Date.now() / 1000 + 3600);
@@ -22409,7 +22409,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__chatMsgs = () => chatMsgs.map((m) => ({ id: m.id, text: m.text || "", exp: Number(m.exp) || 0, vo: m.vo || 0, sys: m.sys || "", nf: (m.files || []).length || m.nf || 0 }));   // rig
   window.__chatOldRead = async () => (await fetch(chatUrl("/api/chat/" + chatRoom, "since=0&limit=200"), { cache: "no-store" })).json();   // rig: what a 0.21.92 page reads
   window.__chatVoTry = async (id) => (await fetch(chatUrl("/api/chat/" + chatRoom), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ act: "open", id, dev: chatDev() }) })).status;   // rig: the host's answer to one more opening from this device
-  // ---- end 0.21.93 Room Chat timers
+  // ---- end 0.21.94 Room Chat timers
   chatRenderAll();
 
   // ---- shared files (0.8.7) ---------------------------------------------------

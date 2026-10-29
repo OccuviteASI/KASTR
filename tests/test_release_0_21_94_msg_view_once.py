@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""v0.21.93 VIEW ONCE in Messages (Kenton 2026-10-27/28): a message (usually a picture) that opens ONCE for each person it
+"""v0.21.94 VIEW ONCE in Messages (Kenton 2026-10-27/28): a message (usually a picture) that opens ONCE for each person it
 was sent to and then shows "Opened"; no save, copy or download in the page (best effort -- the hint says "They can still take
-a screenshot"); the hub deletes it once each reader opened it, or at the 7-day cap. Pages older than 0.21.93 never get the
+a screenshot"); the hub deletes it once each reader opened it, or at the 7-day cap. Pages older than 0.21.94 never get the
 content (a line telling them to update)."""
 import os
 import sys

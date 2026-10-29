@@ -117,7 +117,7 @@
     recs: new Map(),       // "seq:<n>" | "cid:<id>" (mine, not yet back from the hub) -> a message
     groups: new Map(), reads: {}, open: "", keys: new Map(), lastPing: 0, busy: false, histDone: false, devices: 0,
     view: "list", picker: null, filter: "", people: [], peopleAt: 0, ticks: {}, codeMin: 8, hubDown: false, settings: false,
-    // 0.21.93 timers: the hub knows them (tv), its clock minus mine (s), conversation defaults, the next message's own timer
+    // 0.21.94 timers: the hub knows them (tv), its clock minus mine (s), conversation defaults, the next message's own timer
     tv: false, skew: 0, convt: {}, ttlNext: new Map(), voNext: new Set(),
   };
   const by = () => S.fleet + "|" + S.nk;
@@ -248,7 +248,7 @@
     if (Array.isArray(g?.v)) for (const x of g.v) S.groups.set(x.gid, x);
     const rd = await idbGet("meta", "reads|" + by()).catch(() => null);
     if (rd?.v) S.reads = rd.v;
-    const tq = await idbGet("meta", "timers|" + by()).catch(() => null);   // 0.21.93: what the hub last said (offline purges)
+    const tq = await idbGet("meta", "timers|" + by()).catch(() => null);   // 0.21.94: what the hub last said (offline purges)
     if (tq?.v) { S.tv = !!tq.v.tv; S.skew = Number(tq.v.skew) || 0; S.convt = tq.v.convt || {}; }
     await loadLocal();
     timerStubs();
@@ -261,7 +261,7 @@
     const rows = await idbAll("msgs", "by", by()).catch(() => []);
     for (const r of rows) {
       if (r.at * 1000 < cut) { idbDel("msgs", r.k).catch(() => {}); continue; }
-      if ((r.ttl || r.vo) && timedGone(r)) { dropRec(r); continue; }   // 0.21.93: its time ran out while this page was closed
+      if ((r.ttl || r.vo) && timedGone(r)) { dropRec(r); continue; }   // 0.21.94: its time ran out while this page was closed
       S.recs.set("seq:" + r.seq, r);
     }
     const ob = await idbAll("outbox").catch(() => []);
@@ -306,7 +306,7 @@
         }
         idbPut("meta", { k: "cur|" + by(), v: S.cur }).catch(() => {});
         notes((d.notes || {})[S.nk] || []);
-        if (d.tv) {   // 0.21.93: a hub that keeps timers -- its clock, the conversation defaults, which timed messages still live
+        if (d.tv) {   // 0.21.94: a hub that keeps timers -- its clock, the conversation defaults, which timed messages still live
           S.tv = true; S.skew = Number(d.now) - Date.now() / 1000 || 0; S.convt = d.convt || {}; tm = d.tm || {};
           S.sched = Array.isArray(d.sched) ? d.sched : [];
           await schedOpen(S.sched, d.keys || {});
@@ -330,8 +330,8 @@
                    gid: m.gid || "", to: m.to || "", toName: m.toName || "", kind: m.kind || "msg" };
     base.mine = base.from === S.nk;
     if (m.kind === "sys") return Object.assign(base, { sys: m.sys || {} });
-    if (Number(m.ttl) > 0) base.ttl = Number(m.ttl);   // 0.21.93: disappearing (seconds after each reader reads it)
-    if (m.vo) return Object.assign(base, { vo: 1, nf: Number(m.nf) || 0, opened: Number(m.opened) || 0, st: Number(m.opened) ? 1 : 0 });   // 0.21.93 view once: a stub
+    if (Number(m.ttl) > 0) base.ttl = Number(m.ttl);   // 0.21.94: disappearing (seconds after each reader reads it)
+    if (m.vo) return Object.assign(base, { vo: 1, nf: Number(m.nf) || 0, opened: Number(m.opened) || 0, st: Number(m.opened) ? 1 : 0 });   // 0.21.94 view once: a stub
     const w = (m.wraps || {})[S.kid];
     const sk = keys[m.fromKid];
     if (!w || !sk) return Object.assign(base, { locked: true });
@@ -341,7 +341,7 @@
       const ck = await aesKey(raw, ["decrypt"]);
       raw.fill(0);
       const body = JSON.parse(dec.decode(await subtle.decrypt({ name: "AES-GCM", iv: unb64(m.iv), additionalData: enc.encode("kastr-msg-v1|" + m.cid) }, ck, unb64(m.ct))));
-      if (!base.ttl && Number(body.x?.ttl) > 0) base.ttl = Number(body.x.ttl);   // 0.21.93: the sealed copy of the timer
+      if (!base.ttl && Number(body.x?.ttl) > 0) base.ttl = Number(body.x.ttl);   // 0.21.94: the sealed copy of the timer
       return Object.assign(base, { text: String(body.t || ""), files: Array.isArray(body.files) ? body.files.slice(0, 10) : [] });
     } catch (e) {
       T("decrypt-fail", { seq: m.seq, e: String(e?.message || e) });
@@ -450,8 +450,8 @@
     if (!text.trim() && !files.length) return;
     { const mv = conv.startsWith("p:") ? renameMap.get(conv.slice(2)) : null; if (mv?.key) conv = "p:" + mv.key; }   // 0.21.91: to their new name
     const cid = rid();
-    const vo = S.tv && S.voNext.has(conv);   // 0.21.93 view once (the next message only)
-    const ttl = S.tv && !vo ? ttlFor(conv) : 0;   // 0.21.93: this message's own timer, else the conversation's (once: the next one is back to it)
+    const vo = S.tv && S.voNext.has(conv);   // 0.21.94 view once (the next message only)
+    const ttl = S.tv && !vo ? ttlFor(conv) : 0;   // 0.21.94: this message's own timer, else the conversation's (once: the next one is back to it)
     S.ttlNext.delete(conv); S.voNext.delete(conv);
     const rec = { k: "cid:" + cid, by: by(), cid, at: Math.floor(Date.now() / 1000), from: S.nk, fromName: S.name, mine: true, kind: "msg", text,
                   files: files.map((f) => ({ name: f.name || "file", type: f.type || "", size: f.size, local: URL.createObjectURL(f) })),
@@ -460,7 +460,7 @@
     if (vo) Object.assign(rec, { vo: 1, nf: files.length });   // shown as a stub here too (no reopening it)
     S.recs.set(rec.k, rec);
     paint();
-    const rel = S.tv && o?.rel ? Math.floor(o.rel) : 0;   // 0.21.93 send later: when (the hub's clock) -- the hub holds it till then
+    const rel = S.tv && o?.rel ? Math.floor(o.rel) : 0;   // 0.21.94 send later: when (the hub's clock) -- the hub holds it till then
     const ob = { cid, by: by(), conv, text, files, ttl, vo, rel, rec: Object.assign({}, rec, { files: rec.files.map(({ local, ...x }) => x) }) };
     idbPut("outbox", ob).catch(() => {});
     rec.outbox = ob;
@@ -481,12 +481,12 @@
         const fid = await fileUp(new Blob([ct]));
         const meta = { fid, name: String(f.name || "file").slice(0, 120), type: String(f.type || "").slice(0, 80), size: raw.length, k: b64(fk), iv: b64(fiv) };
         metas.push(meta);
-        if (raw.length <= 8 * 1024 * 1024 && !ob.vo) idbPut("blobs", { fid, by: by(), at: Date.now(), blob: new Blob([raw], { type: meta.type }) }).catch(() => {});   // 0.21.93: never a view-once picture
+        if (raw.length <= 8 * 1024 * 1024 && !ob.vo) idbPut("blobs", { fid, by: by(), at: Date.now(), blob: new Blob([raw], { type: meta.type }) }).catch(() => {});   // 0.21.94: never a view-once picture
         raw.fill(0);
         ob.metas = metas.slice();
         idbPut("outbox", ob).catch(() => {});
       }
-      const body = Object.assign({ v: 1, t: ob.text, files: metas }, ob.ttl ? { x: { ttl: ob.ttl } } : {});   // 0.21.93: the timer sealed in too
+      const body = Object.assign({ v: 1, t: ob.text, files: metas }, ob.ttl ? { x: { ttl: ob.ttl } } : {});   // 0.21.94: the timer sealed in too
       let sealed = await seal(ob.conv, ob.cid, body);
       if (ob.conv.startsWith("p:") && sealed.missing.includes(ob.conv.slice(2))) throw Object.assign(new Error(convTitle(ob.conv) + " hasn’t set up messages yet"), { fatal: true });
       const send1 = (s) => api({ op: "send", as: S.name, cid: ob.cid, iv: s.iv, ct: s.ct, wraps: s.wraps, files: metas.map((m) => m.fid),
@@ -499,8 +499,8 @@
         throw Object.assign(new Error(d.error || ("HTTP " + d.status)), { fatal: true });
       }
       rec.sending = false; rec.seq = d.seq;
-      if (d.gone) { S.recs.delete(rec.k); idbDel("outbox", ob.cid).catch(() => {}); }   // 0.21.93: a resend of one whose time already ran out
-      if (d.sched) {   // 0.21.93 send later: held on the hub now; it comes back in the pull as "Scheduled for ..."
+      if (d.gone) { S.recs.delete(rec.k); idbDel("outbox", ob.cid).catch(() => {}); }   // 0.21.94: a resend of one whose time already ran out
+      if (d.sched) {   // 0.21.94 send later: held on the hub now; it comes back in the pull as "Scheduled for ..."
         S.recs.delete(rec.k); idbDel("outbox", ob.cid).catch(() => {});
         if (Number(d.now)) S.skew = Number(d.now) - Date.now() / 1000;
         toast("Scheduled for " + fmtWhen(Number(d.rel) - (S.skew || 0)) + " — the hub sends it then", 5000, "event");
@@ -529,7 +529,7 @@
   let readT = 0;
   function markRead(conv) {
     const last = Math.max(0, ...[...S.recs.values()].filter((r) => r.seq && convOf(r) === conv).map((r) => r.seq));
-    // 0.21.93: a disappearing message's timer starts when I read it -- a read goes to the hub for it even when the
+    // 0.21.94: a disappearing message's timer starts when I read it -- a read goes to the hub for it even when the
     // conversation was already marked read (on a device that showed it before this one could start timers)
     const timed = [...S.recs.values()].filter((r) => r.seq && !r.mine && r.ttl && !r.st && convOf(r) === conv && r.seq <= last);
     if (!last || (last <= (Number(S.reads[conv]) || 0) && !timed.length)) return;
@@ -541,7 +541,7 @@
     paintBtn();
   }
 
-  // ---- 0.21.93 per-message timers (Kenton 2026-10-27/28) --------------------------------------------------------------------
+  // ---- 0.21.94 per-message timers (Kenton 2026-10-27/28) --------------------------------------------------------------------
   // DISAPPEARING: a conversation default (anyone in it changes it -- menu > Disappearing messages) and the composer's timer
   // button for the next message only. Each reader's copy goes `ttl` after THEY read it (7 days at the latest unread); the
   // sender's copy goes `ttl` after the first reader read it (so a short timer never erases it before anyone saw it). The hub
@@ -635,7 +635,7 @@
     for (const [s, label] of TTL_OPTS) items.push({ value: String(s), label, on: !vo && s === cur });
     items.push({ value: "custom", label: known ? "Custom…" : "Custom (" + ttlName(cur) + ")…", on: !vo && !known });
     items.push({ hint: scope === "conv" ? "Starts when each person reads a message. Everyone sees the change." : "Starts when they read it. Only this message — the next one uses the conversation’s setting." });
-    if (scope === "msg") {   // 0.21.93 view once: the next message (pictures and text) opens once for each person
+    if (scope === "msg") {   // 0.21.94 view once: the next message (pictures and text) opens once for each person
       items.push({ sep: true });
       items.push({ value: "vo", label: "View once", on: vo });
       items.push({ hint: "Opens once for each person, then it is gone. No save or copy in KASTR. They can still take a screenshot." });
@@ -702,7 +702,7 @@
     return Math.floor(new Date(String(v)).getTime() / 1000 + (S.skew || 0));
   }
   function sendMenu(anchor, conv, ta, pane) {
-    if (!S.tv) { toast("Send later needs the hub on KASTR 0.21.93 or newer", 5000, "info"); return; }
+    if (!S.tv) { toast("Send later needs the hub on KASTR 0.21.94 or newer", 5000, "info"); return; }
     K.menu(anchor, [{ value: "later", label: "Send later…" }, { hint: "The hub keeps it sealed and sends it then, even with this computer off." }], async () => {
       if (!ta.value.trim() && !pane.__files.length) { toast("Write the message first, then pick Send later", 4000, "info"); ta.focus(); return; }
       const rel = await pickTime("Send later", "When should it go?", Date.now() / 1000 + 3600);
@@ -850,7 +850,7 @@
     toast("View once is for pictures and text — remove the other files, or turn View once off (the timer button)", 6000, "warn");
     return true;
   };
-  // ---- end 0.21.93 per-message timers
+  // ---- end 0.21.94 per-message timers
   async function ticks() {
     if (S.state !== "ready" || !S.open.startsWith("p:") || !panelShown()) return;
     const d = await api({ op: "ticks", as: S.name, names: [S.open.slice(2)] });
@@ -915,6 +915,36 @@
     el.setAttribute("aria-label", words);
     el.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' + ST_SVG[kind] + "</svg>";
   }
+  // 0.21.94: which step a message of mine is at, and which of them carry a mark (the newest; the last read one until then)
+  function stepOf(r, tk, group) {
+    if (r.sending || !r.seq) return "sending";
+    if (group || !tk) return "sent";
+    return tk.r >= r.seq ? "read" : tk.d >= r.seq ? "dlv" : "sent";
+  }
+  function stepWords(r, tk, step) {
+    return step === "sending" ? "Sending…" : step === "read" ? "Read" + rcptAt(tk.rt, r.seq) : step === "dlv" ? "Delivered" + rcptAt(tk.dt, r.seq)
+      : "Sent " + fmtWhen(r.at) + " — on the hub" + (tk ? ", waiting until they are online" : "");
+  }
+  function stepTimes(r, tk, group) {
+    const step = stepOf(r, tk, group);
+    if (step === "sending") return "Sending…";
+    const out = ["Sent " + fmtWhen(r.at)];
+    if (step === "dlv" || step === "read") out.push("Delivered" + rcptAt(tk.dt, r.seq));
+    if (step === "read") out.push("Read" + rcptAt(tk.rt, r.seq));
+    return out.join(" · ");
+  }
+  function latestMarks(recs, tk, group) {
+    const mine = recs.filter((r) => r.mine && !r.sched && r.kind !== "sys" && !r.err && !r.waiting);
+    const on = new Set();
+    const newest = mine[mine.length - 1];
+    if (!newest) return on;
+    on.add(newest);
+    if (stepOf(newest, tk, group) !== "read") {
+      for (let i = mine.length - 2; i >= 0; i--) if (stepOf(mine[i], tk, group) === "read") { on.add(mine[i]); break; }
+    }
+    return on;
+  }
+  window.__msgLatestMarks = latestMarks;   // rig: the rule on its own
   const RCPT_KEEP = 60;   // kastr_msg.RCPT_KEEP: a full list may have lost the start, so its first entry is no time for older seqs
   function rcptAt(lst, seq) {
     if (!Array.isArray(lst)) return "";
@@ -943,8 +973,8 @@
     if (r.locked) return "Sent before this key was made";
     if (r.bad) return "Could not be opened";
     const who = r.mine ? "You: " : r.gid ? r.fromName.split(" ")[0] + ": " : "";
-    if (r.vo) return who + "View once · " + voWhat(r);   // 0.21.93
-    if (r.sched) return "Scheduled: " + (r.text ? r.text.replace(/\s+/g, " ").slice(0, 70) : "an attachment");   // 0.21.93
+    if (r.vo) return who + "View once · " + voWhat(r);   // 0.21.94
+    if (r.sched) return "Scheduled: " + (r.text ? r.text.replace(/\s+/g, " ").slice(0, 70) : "an attachment");   // 0.21.94
     if (r.text) return who + r.text.replace(/\s+/g, " ").slice(0, 80);
     const f = (r.files || [])[0];
     return f ? who + (IMG_TYPES.test(f.type || "") ? "Picture" : f.name) : "";
@@ -955,7 +985,7 @@
       : s.ev === "add" ? who + " added " + names : s.ev === "remove" ? who + " removed " + names
       : s.ev === "leave" ? who + " left" : s.ev === "rename" ? who + " renamed the group “" + (s.name || "") + "”"
       : s.ev === "renamed" ? (s.from || who) + " is now " + (s.name || who)   // 0.21.91: a person's new name
-      : s.ev === "timer" ? who + (Number(s.s) > 0 ? " set disappearing messages to " + ttlName(s.s) : " turned off disappearing messages")   // 0.21.93
+      : s.ev === "timer" ? who + (Number(s.s) > 0 ? " set disappearing messages to " + ttlName(s.s) : " turned off disappearing messages")   // 0.21.94
       : who + " changed the group";
   }
 
@@ -1323,7 +1353,7 @@
         + '<div class="mcomp"><button type="button" class="memo" title="Emoji">\uD83D\uDE42</button>'
         + '<button type="button" class="mgif" title="GIF" hidden>GIF</button>'   // 0.21.91: GIF search (assets/kastr-gif.js)
         + '<button type="button" class="mattach" title="Attach a picture or file (up to 25 MB, end-to-end encrypted)">' + K.icon("clip") + '</button>'
-        + '<button type="button" class="mtimer" title="Disappearing messages" hidden>' + K.icon("clock") + '<span class="mtl"></span></button>'   // 0.21.93
+        + '<button type="button" class="mtimer" title="Disappearing messages" hidden>' + K.icon("clock") + '<span class="mtl"></span></button>'   // 0.21.94
         + '<textarea class="mcin" rows="1" placeholder="Write a message" title="Enter sends, Shift+Enter starts a new line"></textarea><button type="button" class="msend" title="Send">' + K.icon("send") + "</button></div>"
         + '<input type="file" class="mfilein" multiple hidden>';
       const ta = pane.querySelector(".mcin"), fi = pane.querySelector(".mfilein");
@@ -1331,7 +1361,7 @@
       const sendNow = () => {
         const t = ta.value, fs = pane.__files.slice();
         if (!t.trim() && !fs.length) return;
-        if (voBlocked(conv, fs)) return;   // 0.21.93
+        if (voBlocked(conv, fs)) return;   // 0.21.94
         ta.value = ""; pane.__files = []; paintAtt(pane); grow(ta);
         pane.querySelector(".memogrid").hidden = true; pane.querySelector(".memo").classList.remove("on");
         send(conv, t, fs);
@@ -1349,7 +1379,7 @@
       pane.addEventListener("drop", (e) => { pane.classList.remove("mdrag"); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(pane, fs); } });
       const sb = pane.querySelector(".msend");
       sb.addEventListener("click", (e) => { e.stopPropagation(); if (sb.__held) { sb.__held = false; return; } sendNow(); });
-      // 0.21.93 Send later: right-click Send, or hold it (a touch screen) -- the hub keeps the sealed message until then
+      // 0.21.94 Send later: right-click Send, or hold it (a touch screen) -- the hub keeps the sealed message until then
       const later = () => sendMenu(sb, conv, ta, pane);
       sb.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); later(); });
       let holdT = 0;
@@ -1391,9 +1421,9 @@
     pane.querySelector(".mctitle .mn").textContent = convTitle(conv);
     pane.querySelector(".mctitle .mprev").textContent = g ? (g.members || []).map((m) => (m === S.nk ? "You" : (g.names || {})[m] || m)).join(", ")
       : keyRow ? (keyRow.devices > 1 ? "Messages reach " + keyRow.devices + " of their devices" : "End-to-end encrypted") : "";
-    pane.querySelector(".mcmenu").hidden = !g && !(S.tv && nk);   // 0.21.93: a 1:1 has a menu too (Disappearing messages)
+    pane.querySelector(".mcmenu").hidden = !g && !(S.tv && nk);   // 0.21.94: a 1:1 has a menu too (Disappearing messages)
     pane.querySelector(".mcmenu").title = g ? "Group options" : "Conversation options";
-    { // 0.21.93: the composer's timer -- lit with the length while the next message will disappear
+    { // 0.21.94: the composer's timer -- lit with the length while the next message will disappear
       const tb = pane.querySelector(".mtimer"), s = ttlFor(conv), own = S.ttlNext.has(conv), vo = S.voNext.has(conv);
       tb.hidden = !S.tv;
       tb.classList.toggle("on", s > 0 || vo);
@@ -1410,10 +1440,14 @@
     if (nk && !S.keys.has(nk)) keysFor([nk]).then(() => paintConv()).catch(() => {});
     // the log
     const log = pane.querySelector(".mlog");
-    const ord = (r) => (r.sched ? 2e15 + r.rel : r.seq || 1e15);   // 0.21.93: scheduled ones last, in their release order
+    const ord = (r) => (r.sched ? 2e15 + r.rel : r.seq || 1e15);   // 0.21.94: scheduled ones last, in their release order
     const recs = [...S.recs.values()].filter((r) => r.by === by() && convOf(r) === conv).sort((a, b) => ord(a) - ord(b) || a.at - b.at);
     const read = Number(S.reads[conv]) || 0;
     const tk = S.ticks[conv] || null;
+    // 0.21.94 (Kenton: "just for the latest message. It's implied that the previous messages have been read if the last one has
+    // been."): the step mark goes on my newest message only; until that one is read, the eye stays on my most recent read one.
+    // A failed send keeps its own line. A group shows "sent" (it has no receipts). Every message's time still names its steps.
+    const markOn = latestMarks(recs, tk, !!g);
     const sig = JSON.stringify([recs.map((r) => [r.k, r.seq, !!r.sending, !!r.waiting, r.err || "", r.ttl || 0, r.exp || 0, r.st || 0, r.rel || 0, r.opened || 0]), read, tk]);
     if (log.__sig === sig) return;
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
@@ -1421,7 +1455,7 @@
     const els = [];
     let day = "", prev = null, newMark = false;
     for (const r of recs) {
-      if (r.sched) { if (day !== "sched") { const x = document.createElement("div"); x.className = "mday"; x.textContent = "Scheduled"; els.push(x); day = "sched"; } els.push(schedEl(r)); prev = null; continue; }   // 0.21.93
+      if (r.sched) { if (day !== "sched") { const x = document.createElement("div"); x.className = "mday"; x.textContent = "Scheduled"; els.push(x); day = "sched"; } els.push(schedEl(r)); prev = null; continue; }   // 0.21.94
       const d = fmtDay(r.at);
       if (d !== day) { const x = document.createElement("div"); x.className = "mday"; x.textContent = d; els.push(x); day = d; prev = null; }
       if (!newMark && !r.mine && r.seq && r.seq > (log.__readAtOpen ?? read) && r.kind === "msg") { const x = document.createElement("div"); x.className = "mnewmark"; x.textContent = "New"; els.push(x); newMark = true; }
@@ -1433,23 +1467,22 @@
       const bub = document.createElement("div"); bub.className = "mbub";
       if (r.locked) { bub.classList.add("mlock"); bub.textContent = "Sent before this key was made — it cannot be opened here."; }
       else if (r.bad) { bub.classList.add("mlock"); bub.textContent = "This message could not be opened."; }
-      else if (r.vo) voEl(r, bub);   // 0.21.93 view once
+      else if (r.vo) voEl(r, bub);   // 0.21.94 view once
       else {
         for (const f of r.files || []) bub.appendChild(fileEl(f));
         if (r.text) { const t = document.createElement("div"); t.className = "mtxt"; t.textContent = r.text; linkify(t); bub.appendChild(t); }
       }
       const meta = document.createElement("div"); meta.className = "mmeta";
       meta.textContent = new Date(r.at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-      if (r.ttl) meta.prepend(clockEl(r));   // 0.21.93: the time left (its own span, beside the ticks)
+      if (r.ttl) meta.prepend(clockEl(r));   // 0.21.94: the time left (its own span, beside the ticks)
       if (r.mine) {
         const s = document.createElement("span"); s.className = "mst";
+        const step = stepOf(r, tk, !!g), words = stepWords(r, tk, step);
         if (r.err) { s.textContent = " ⚠ Not sent: " + r.err; s.classList.add("bad"); }
         else if (r.waiting) s.textContent = " ⏲ Waiting for the hub";
-        else if (r.sending || !r.seq) stMark(s, "sending", "Sending…");   // 0.21.93 (Kenton): a different mark for each step
-        else if (tk && tk.r >= r.seq) stMark(s, "read", "Read" + rcptAt(tk.rt, r.seq));
-        else if (tk && tk.d >= r.seq) stMark(s, "dlv", "Delivered" + rcptAt(tk.dt, r.seq));
-        else stMark(s, "sent", "Sent " + fmtWhen(r.at) + " — on the hub, waiting until they are online");
-        meta.appendChild(s);
+        else if (markOn.has(r)) stMark(s, step, words);   // 0.21.93 (Kenton): a different mark for each step; 0.21.94: the latest only
+        if (!r.err && !r.waiting) meta.title = stepTimes(r, tk, !!g);   // 0.21.94: hover the time -- sent / delivered / read
+        if (s.childNodes.length) meta.appendChild(s);
       }
       bub.appendChild(meta);
       b.appendChild(bub);
@@ -1521,7 +1554,7 @@
   };
   async function groupMenu(anchor) {
     const conv = S.open;
-    const tl = S.tv ? { value: "timer", label: "Disappearing messages: " + ttlName(Number(S.convt[conv]?.s) || 0) + "…" } : null;   // 0.21.93
+    const tl = S.tv ? { value: "timer", label: "Disappearing messages: " + ttlName(Number(S.convt[conv]?.s) || 0) + "…" } : null;   // 0.21.94
     const g = conv.startsWith("g:") ? S.groups.get(conv.slice(2)) : null;
     if (!g) { if (tl && conv.startsWith("p:")) timerMenu(anchor, conv, "conv"); return; }   // a 1:1: the lengths straight away
     const mine = g.creator === S.nk;
@@ -1931,16 +1964,16 @@
       convs: convs().map((c) => ({ conv: c.conv, title: c.title, unread: c.unread, last: preview(c.last) })), groups: [...S.groups.values()].map((g) => ({ gid: g.gid, name: g.name, members: g.members })) }),
     msgs: (conv) => [...S.recs.values()].filter((r) => !conv || convOf(r) === conv).sort((a, b) => (a.seq || 1e15) - (b.seq || 1e15))
       .map((r) => ({ seq: r.seq, from: r.fromName, mine: r.mine, text: r.text, files: (r.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size, fid: f.fid })), sys: r.sys ? sysText(r) : "", locked: !!r.locked, bad: !!r.bad, waiting: !!r.waiting, err: r.err || "",
-        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0, vo: r.vo || 0, opened: r.opened || 0, sched: !!r.sched, rel: r.rel || 0, cid: r.cid || "" })),   // 0.21.93
-    timers: () => ({ tv: S.tv, skew: S.skew, convt: S.convt, next: Object.fromEntries(S.ttlNext), sched: S.sched || [] }),   // 0.21.93 rig
+        ttl: r.ttl || 0, exp: r.exp || 0, st: r.st || 0, vo: r.vo || 0, opened: r.opened || 0, sched: !!r.sched, rel: r.rel || 0, cid: r.cid || "" })),   // 0.21.94
+    timers: () => ({ tv: S.tv, skew: S.skew, convt: S.convt, next: Object.fromEntries(S.ttlNext), sched: S.sched || [] }),   // 0.21.94 rig
     idb: async () => ({ msgs: (await idbAll("msgs", "by", by()).catch(() => [])).map((r) => ({ seq: r.seq, ttl: r.ttl || 0, text: r.text || "" })),
-      blobs: (await idbAll("blobs").catch(() => [])).map((b) => b.fid) }),   // 0.21.93 rig: what this device still keeps
+      blobs: (await idbAll("blobs").catch(() => [])).map((b) => b.fid) }),   // 0.21.94 rig: what this device still keeps
     send: (conv, text, files, o) => { if (o && "ttl" in o) S.ttlNext.set(conv, Number(o.ttl) || 0); if (o?.vo) S.voNext.add(conv); return send(conv, text, files, o); },
     pull, init, open: openConv, unlock: (code) => unlock(code, false), picker: openPicker, trace,
-    ctimer: (conv, s) => api({ op: "ctimer", as: S.name, conv, s }).then((d) => { pull(); return d; }),   // 0.21.93 rig
-    vopen: (seq) => { const r = S.recs.get("seq:" + seq); return r ? voOpen(r) : null; },   // 0.21.93 rig
-    sched: (cid, d, rel) => api({ op: "sched", as: S.name, cid, do: d, rel }).then((x) => { pull(); return x; }),   // 0.21.93 rig
-    hubNow: () => hubNow(),   // 0.21.93 rig
+    ctimer: (conv, s) => api({ op: "ctimer", as: S.name, conv, s }).then((d) => { pull(); return d; }),   // 0.21.94 rig
+    vopen: (seq) => { const r = S.recs.get("seq:" + seq); return r ? voOpen(r) : null; },   // 0.21.94 rig
+    sched: (cid, d, rel) => api({ op: "sched", as: S.name, cid, do: d, rel }).then((x) => { pull(); return x; }),   // 0.21.94 rig
+    hubNow: () => hubNow(),   // 0.21.94 rig
     fileUrl: (seq, i) => { const r = S.recs.get("seq:" + seq); return r && r.files?.[i] ? fileUrl(r.files[i]) : null; },
     people: () => S.people,
     keys: (names, force) => keysFor(names, force),

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""v0.21.93 DISAPPEARING MESSAGES in Messages (Kenton 2026-10-27/28): a conversation default (anyone in it changes it, everyone
+"""v0.21.94 DISAPPEARING MESSAGES in Messages (Kenton 2026-10-27/28): a conversation default (anyone in it changes it, everyone
 sees "<who> set disappearing messages to ...") plus a per-message override; the timer starts WHEN EACH PERSON READS IT; a safety
 cap deletes it within 7 days even if never read; in a group the hub deletes the ciphertext + attachments once every reader's
 timer ran out (or at the cap); deletion is real on every copy (the hub's, the standby's -- tombstones -- and each device's,
-which purges what the hub's `tm` no longer lists); pages older than 0.21.93 never get the content."""
+which purges what the hub's `tm` no longer lists); pages older than 0.21.94 never get the content."""
 import os
 import re
 import sys
@@ -78,7 +78,7 @@ class HubTimers(unittest.TestCase):
         o, c, cid = h.send("ada", to="bob", ttl=H, now=T0)
         h.read("bob", "p:ada", o["seq"], now=T0 + 5, tv=0)
         self.assertEqual(h.pull("bob", now=T0 + 6)["tm"]["m:ada:" + cid][1], 0)
-        h.read("bob", "p:ada", o["seq"], now=T0 + 50)   # the same seq again from a 0.21.93 page: the timer starts now
+        h.read("bob", "p:ada", o["seq"], now=T0 + 50)   # the same seq again from a 0.21.94 page: the timer starts now
         self.assertEqual(h.pull("bob", now=T0 + 51)["tm"]["m:ada:" + cid], [int(T0 + 50 + H), 1])
 
     def test_old_pages_never_get_the_content(self):
@@ -110,7 +110,7 @@ class HubTimers(unittest.TestCase):
         # an old page sending into it: the hub applies the default (no tv) ...
         o, c, cid = h.send("ada", to="bob", tv=0, now=T0 + 2)
         self.assertEqual(h.m.msgs[o["seq"]].get("ttl"), 8 * H)
-        # ... a 0.21.93 page's explicit choice (here: Off for this one message) wins
+        # ... a 0.21.94 page's explicit choice (here: Off for this one message) wins
         o, c, cid = h.send("ada", to="bob", ttl=0, now=T0 + 3)
         self.assertNotIn("ttl", h.m.msgs[o["seq"]])
         # out of range
@@ -157,7 +157,7 @@ class HubTimers(unittest.TestCase):
 
     def test_read_times_live_with_the_receipts(self):
         """The from-read timers build on the receipt times (rcpt): a timed-read cursor per conversation ("t|<conv>") beside
-        the plain read cursor -- no second read-time store; it moves only for a 0.21.93 page reading a timed message."""
+        the plain read cursor -- no second read-time store; it moves only for a 0.21.94 page reading a timed message."""
         h = Hub()
         o1, c, cid1 = h.send("ada", to="bob", ttl=0, now=T0)
         h.read("bob", "p:ada", o1["seq"], now=T0 + 5)

@@ -23,7 +23,7 @@ Everything runs under one lock; files are opened with newline="" so a Windows
 build and a Linux build write identical bytes; a torn last line (power cut mid
 write) is skipped, and the next append starts on a fresh line.
 
-0.21.93 timers (Kenton 2026-10-27/28) -- disappearing messages, send later, view once:
+0.21.94 timers (Kenton 2026-10-27/28) -- disappearing messages, send later, view once:
 
     a record may carry "exp" (hub epoch s; "ttl" = its length) and "vo": 1 (+ "pw", the poster's device digest)
     {"id", ..., "sys": "ttl", "s": <s>}   the room's default length changed (anyone in the room; everyone sees the line)
@@ -36,7 +36,7 @@ A room has no read receipts, so a room's timer starts when the message is SENT. 
 is appended (it replicates to the standby like any line) and the dead line is overwritten IN PLACE with a
 tombstone of the same length (scrub_file) -- the file's size never changes, so the standby's byte offsets stay
 true, and the standby scrubs its copy the same way when the tombstone reaches it. The message's attachments
-go too. Pages older than 0.21.93 (no `tv` on their read) get a line instead of a timed or view-once message.
+go too. Pages older than 0.21.94 (no `tv` on their read) get a line instead of a timed or view-once message.
 """
 import json
 import os
@@ -54,7 +54,7 @@ FILE_NAME_MAX = 200
 TYPE_MAX = 80
 READ_LIMIT = 200
 MAX_IDLE = 86400
-# 0.21.93 timers (the same lengths as Messages, kastr_msg.py)
+# 0.21.94 timers (the same lengths as Messages, kastr_msg.py)
 TIMER_MIN_S = 60                    # a timer is 1 minute ...
 TIMER_MAX_S = 90 * 86400            # ... to 90 days
 TIMER_CAP_S = 7 * 86400             # a view-once message is gone within 7 days (a room has no list of who must open it)
@@ -67,7 +67,7 @@ OLD_STUB = {"vo": "a view-once message -- update KASTR to see it",
 
 
 def ttl_ok(v):
-    """0.21.93: a timer length in seconds -> it (0 = off), or None when it is not one."""
+    """0.21.94: a timer length in seconds -> it (0 = off), or None when it is not one."""
     try:
         v = int(v or 0)
     except (TypeError, ValueError):
@@ -92,7 +92,7 @@ def _scrubbed(obj, n):
 
 
 def scrub_file(path):
-    """0.21.93: overwrite, in place and at the same length, every line a tombstone in this file kills -- a deleted or
+    """0.21.94: overwrite, in place and at the same length, every line a tombstone in this file kills -- a deleted or
     expired message (`del`), a scheduled one that went or was cancelled (`sdone`) -- and any broken line that is not the
     last. The file's size never changes (the standby copies it by byte offset). Called on the hub under the store's lock,
     on the standby by its copier. -> lines scrubbed."""
@@ -202,8 +202,8 @@ class ChatStore:
         self.log = log or (lambda m: None)
         self.lock = threading.RLock()
         self._last_id = {}          # room -> the last id issued or seen
-        self._due = None            # 0.21.93: room -> when its next timer runs out (None: look at every room on the next tick)
-        self._vo_tix = {}           # 0.21.93: a view-once opening's ticket -> (room, its file ids, until)
+        self._due = None            # 0.21.94: room -> when its next timer runs out (None: look at every room on the next tick)
+        self._vo_tix = {}           # 0.21.94: a view-once opening's ticket -> (room, its file ids, until)
 
     # ---- paths ------------------------------------------------------------
 
@@ -223,7 +223,7 @@ class ChatStore:
         return P["recs"], P["dead"]
 
     def _parse(self, room):
-        """0.21.93: every kind of line -> {recs, dead, sch: sid -> line, sdone: sid -> released id (0 = cancelled),
+        """0.21.94: every kind of line -> {recs, dead, sch: sid -> line, sdone: sid -> released id (0 = cancelled),
         srel: sid -> (at, rel), vop: id -> {device digest: at}}."""
         P = {"recs": {}, "dead": set(), "sch": {}, "sdone": {}, "srel": {}, "vop": {}}
         try:
@@ -262,7 +262,7 @@ class ChatStore:
                 continue
         return P
 
-    # ---- 0.21.93 timers (call with the lock held) -----------------------------
+    # ---- 0.21.94 timers (call with the lock held) -----------------------------
 
     @staticmethod
     def _rel_of(P, sid):
@@ -366,14 +366,14 @@ class ChatStore:
 
     @staticmethod
     def _timer(ttl, vo):
-        """0.21.93 -> (ttl, vo) checked."""
+        """0.21.94 -> (ttl, vo) checked."""
         t = ttl_ok(ttl)
         if t is None:
             raise ValueError("a timer is 1 minute to 90 days")
         return t, (1 if vo else 0)
 
     def append(self, room, op, name, text, files=None, via="", ttl=0, vo=0, dev="", now=None):
-        """-> the stored record INCLUDING its delete token (the poster's copy). 0.21.93: `ttl` (s) makes it disappear
+        """-> the stored record INCLUDING its delete token (the poster's copy). 0.21.94: `ttl` (s) makes it disappear
         that long after now; `vo` makes it view once (each device opens it once; gone at its timer or within 7 days);
         `dev` = the poster's device (it does not open its own)."""
         room = check_room(room)
@@ -400,11 +400,11 @@ class ChatStore:
             rec["id"] = self._next_id(room)
             self._append_line(room, dict(rec, token=kastr_secret.digest(rec["token"]), **({"pw": pw} if pw else {})))   # 0.21.92: only its digest is kept
             if ttl or vo:
-                self._files_meta(room, files, t=1, **({"vo": 1} if vo else {}))   # 0.21.93: never cached; view once by ticket only
+                self._files_meta(room, files, t=1, **({"vo": 1} if vo else {}))   # 0.21.94: never cached; view once by ticket only
                 self._due_note(room, rec["exp"])
         return dict(rec)
 
-    # ---- 0.21.93 the room's default timer, view once, send later, the timer beat ----
+    # ---- 0.21.94 the room's default timer, view once, send later, the timer beat ----
 
     def room_ttl(self, room):
         """The room's default timer (s, 0 = off): the newest live `sys: ttl` line."""
@@ -418,7 +418,7 @@ class ChatStore:
         return 0
 
     def set_ttl(self, room, s, op, name, via="", now=None):
-        """Anyone in the room changes its default; everyone sees the line (a page older than 0.21.93 reads its text)."""
+        """Anyone in the room changes its default; everyone sees the line (a page older than 0.21.94 reads its text)."""
         room = check_room(room)
         s = ttl_ok(s)
         if s is None:
@@ -598,8 +598,8 @@ class ChatStore:
     def read(self, room, since=0, limit=READ_LIMIT, tv=False, now=None):
         """Live messages with id > since, oldest first, the NEWEST `limit` of
         them, tokens withheld. Counts as access (the idle sweep keys on it).
-        0.21.93: a message past its time is never listed (even before the beat removes it); a view-once one is a stub
-        (no text, no files: `nf` + `opn`, the devices that opened it); a page without `tv` (older than 0.21.93) gets a
+        0.21.94: a message past its time is never listed (even before the beat removes it); a view-once one is a stub
+        (no text, no files: `nf` + `opn`, the devices that opened it); a page without `tv` (older than 0.21.94) gets a
         line instead of a timed or view-once message -- it would keep the text and never let it go."""
         now = time.time() if now is None else now
         room = check_room(room)
@@ -650,7 +650,7 @@ class ChatStore:
                 import kastr_secret
                 if not kastr_secret.digest_matches(rec.get("token"), token):   # 0.21.92: a digest (or an old plain token)
                     return False
-            self._kill(room, rec, "")   # 0.21.93: its line is overwritten and its attachments go too (was: a tombstone only)
+            self._kill(room, rec, "")   # 0.21.94: its line is overwritten and its attachments go too (was: a tombstone only)
             self.touch(room)
         return True
 
@@ -666,7 +666,7 @@ class ChatStore:
                     have = {ln.rstrip("\n").rstrip() for ln in f}
             except OSError:
                 pass
-            # 0.21.93: what either copy deleted stays deleted -- a dead message (or a scheduled one that went) is not
+            # 0.21.94: what either copy deleted stays deleted -- a dead message (or a scheduled one that went) is not
             # brought back, and a tombstone that arrives scrubs the line it kills here
             P = self._parse(room)
             dead, done, theirs = set(P["dead"]), set(P["sdone"]), []
@@ -735,7 +735,7 @@ class ChatStore:
                     pass
             self._last_id.pop(room, None)
             if self._due is not None:
-                self._due.pop(room, None)   # 0.21.93
+                self._due.pop(room, None)   # 0.21.94
         if removed:
             self.log("chat: room %s deleted (%d files)" % (room, len(removed)))
         return removed
@@ -788,7 +788,7 @@ class ChatStore:
                         continue
             self._last_id.pop(old, None)
             self._last_id.pop(new, None)
-            self._due = None   # 0.21.93
+            self._due = None   # 0.21.94
         if moved:
             self.log("chat: room %s renamed to %s (history moved)" % (old, new))
         return moved

@@ -16598,6 +16598,18 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // slots live in #pubPanes. Clicks inside the panel stop propagating (see
   // above), so using its controls never dismisses it.
   document.addEventListener("click", () => closeAllPops());
+  // 0.21.96 (Kenton: "in an entry field I can't click and drag, it closes the tab when I do that"): a press that starts in one
+  // place and lets go somewhere else makes the browser send a click to the nearest parent of both -- the page, a dialog's
+  // backdrop -- which every "click outside closes it" read as a click outside. Selecting text in a field, moving a slider or a
+  // drag that wandered off is no click: swallowed before anything sees it (keyboard clicks and plain clicks pass).
+  let downAt = null;
+  window.addEventListener("pointerdown", (e) => { downAt = { t: e.target, x: e.clientX, y: e.clientY }; }, true);
+  window.addEventListener("click", (e) => {
+    const d = downAt; downAt = null;
+    if (!d || !e.detail || e.target === d.t || !e.target?.contains?.(d.t)) return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 10 && !d.t.closest?.("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+  }, true);
   // A click that lands in ANOTHER document (the shell's masthead, an
   // embedded stats iframe) never bubbles here -- but it does move focus,
   // and blur is the one signal that crosses the boundary.

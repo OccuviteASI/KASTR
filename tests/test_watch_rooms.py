@@ -143,7 +143,7 @@ class RoomScoped(unittest.TestCase):
 
     def test_a_spotlight_stays_in_its_room(self):
         p = _page()
-        self.assertIn('if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target))) return;   // 0.21.47', p)
+        self.assertIn('if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target)) && !libTiles.has(String(v.target))) return;   // 0.21.47', p)   # 0.21.95: + library streams
 
 
 class ShareRoomsPerShare(unittest.TestCase):

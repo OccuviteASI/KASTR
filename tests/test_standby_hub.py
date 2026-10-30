@@ -280,7 +280,7 @@ class ViewOnlyName(unittest.TestCase):
         with io.open(os.path.join(HERE, "moq-watch-lite.html"), encoding="utf-8") as f:
             page = f.read()
         # 0.21.65: the same row rules as everyone (every view): the name only on hover, gone when the mouse rests
-        self.assertIn("#stage .pane.vtile:hover .vonly .vn, #stage .pane.vtile:focus-within .vonly .vn { display:block; }", page)
+        self.assertIn("#stage .pane.vtile:hover .vonly .vn, #stage .pane.vtile:has(:focus-visible) .vonly .vn { display:block; opacity:1; }", page)   # 0.21.95: a click no longer holds it
         self.assertIn("#stagewrap.idle #stage .pane.vtile .vonly .vn,", page)                    # mouse resting
         self.assertIn("#stagewrap.idle #stage .pane .label .l,", page)                           # the publishers' rule it mirrors
 

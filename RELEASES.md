@@ -2,6 +2,30 @@
 
 What changed in each build, newest first.
 
+## v0.21.95 — Background noise removal without the crackle; shared media in lip sync; library streams spotlight together
+
+**Background noise removal no longer crackles (Kenton: "I'm still getting a crackling when using the background noise removal").**
+- The filter ran on its own clock instead of your speakers' clock. On some machines that clock fell behind real time (in the lab, 27 s of sound came out in 40 s), and every time it fell behind KASTR sent a few milliseconds of silence. That was the steady crackle.
+- The filter now runs on your audio device's clock, like the rest of the call. The lab showed no gaps in any run.
+- KASTR now watches the filter: if its clock stops (for example when a Bluetooth headset changes over) or runs more than 3 % off real time, it rebuilds the filter. That can happen once a minute instead of once a session, and if it keeps failing KASTR falls back to the browser's own noise suppression.
+
+**Shared media files keep sound and picture together (Kenton: "The audio is off a bit when sharing media. It is behind the video by about half a second").**
+- Share > Media file now stamps the sound on the same clock as the picture, so viewers hear it with the picture, within a few tens of milliseconds.
+- Files KASTR converts before sharing keep their own sound/picture offsets, which used to put the picture about 50 ms late.
+- Calls and cameras are unchanged and stay low latency.
+
+**Spotlighting several library streams (Kenton: "when I spotlight multiple things, only 1 stays on stage").** Streams added to a room from the library now spotlight together like the room's own cameras, and Remove spotlight works on them.
+
+**Media controls get out of the way (Kenton: "It should only show them on hover over the window itself, and fade out after").**
+- A shared media file's controls and name show only while the pointer is on that tile, and fade 3 seconds after the mouse stops, even if it rests on them.
+- Clicking Play or the volume no longer keeps them on screen. When they have faded, a click on them only brings them back.
+
+**"You're presenting" no longer sticks after End (Kenton: "after I closed the presentation it still shows that I'm presenting").** End while the deck is still preparing now cancels the start, closing a share always removes its tile, and KASTR clears any presentation tile left with nothing behind it within a few seconds.
+
+**People lists people only (Kenton: "I don't want the library 'users' to show up in the people page").** Streams from the library no longer show as people in People.
+
+**The stats page follows your theme.** stats.html now uses the app's theme (Light, Dark, the other themes, Custom) and accent colour, so text, tables and charts are readable on light backgrounds too.
+
 ## v0.21.94 — Disappearing messages, send later and view once; live feeds in a presentation; cleaner background effects
 
 **Disappearing messages (Messages and Room Chat).**

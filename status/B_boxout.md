@@ -68,6 +68,9 @@ There is no machine identity before 0.22 (SSO).
 
 - **Screenshots, light + dark**: box Join page, refusal on the Join page, invite-link refusal, box in No room, Create room
   refusal, relay machine Join page, viewer before/after.
+- Suites (final): Windows 2506 tests -- test_npu_fx (known, worktree) + test_release_0_21_94_fastest_fits npu timing
+  (Chromium, under load; passes alone); WSL 2506 tests -- test_npu_fx only. Four older source-assert tests updated for the
+  new lines (confirm_popup window, 0.21.75 xsServerPath, 0.21.89 heading, 0.21.91 mainPerson).
 - One camera only. Two test://pattern feeds share one URL, and restore matches feeds by URL (existing behaviour).
 
 ## Doubts / defaults for Kenton

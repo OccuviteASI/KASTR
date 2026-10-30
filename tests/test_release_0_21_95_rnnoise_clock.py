@@ -33,6 +33,7 @@ class RnnoiseClock(unittest.TestCase):
         self.assertIn("% of real time", g)
         # muted: the baseline restarts, so a long mute never reads as drift
         self.assertIn("frozen = silent = off = 0; lastT = ctx.currentTime; base = { t: lastT, p: performance.now() };", g)
+        self.assertIn("if (!base) base = { t, p };", g)   # the first 5 s window starts after start-up
 
     def test_rebuild_once_a_minute(self):
         g = self.sec("  function denoiseGuard(slot, ctx, src, node) {", "  function stopDenoise(")

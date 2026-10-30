@@ -30301,7 +30301,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     inA.fftSize = outA.fftSize = 2048;
     try { src.connect(inA); node.connect(outA); } catch { return; }
     const ib = new Float32Array(inA.fftSize), ob = new Float32Array(outA.fftSize);
-    let lastT = ctx.currentTime, frozen = 0, silent = 0, off = 0, base = { t: ctx.currentTime, p: performance.now() };   // 0.21.95: off = drift
+    let lastT = ctx.currentTime, frozen = 0, silent = 0, off = 0, base = null;   // 0.21.95: off = drift, measured from the first tick (start-up excluded)
     slot.dnGuard = setInterval(() => {
       if (!slot.dn || micMode !== "rnnoise") { clearInterval(slot.dnGuard); return; }
       if (slot.entry.micMuted) { frozen = silent = off = 0; lastT = ctx.currentTime; base = { t: lastT, p: performance.now() }; return; }
@@ -30309,7 +30309,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       frozen = t === lastT ? frozen + 1 : 0; lastT = t;
       // 0.21.95: a clock that runs but not at real time (3 % off for 10 s) starves or floods the capture that reads the track
       const p = performance.now();
-      if (p - base.p >= 5000) { const rate = (t - base.t) / ((p - base.p) / 1000); off = Math.abs(rate - 1) > 0.03 ? off + 1 : 0; base = { t, p }; slot.dnRate = Math.round(rate * 1000) / 1000; }
+      if (!base) base = { t, p };
+      else if (p - base.p >= 5000) { const rate = (t - base.t) / ((p - base.p) / 1000); off = Math.abs(rate - 1) > 0.03 ? off + 1 : 0; base = { t, p }; slot.dnRate = Math.round(rate * 1000) / 1000; }
       inA.getFloatTimeDomainData(ib); outA.getFloatTimeDomainData(ob);
       let e = 0, mx = 0;
       for (let i = 0; i < ib.length; i++) e += ib[i] * ib[i];
@@ -31530,7 +31531,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       try { if (slot.analyser && slot.meterBuf) { slot.analyser.getFloatTimeDomainData(slot.meterBuf); let sum = 0; for (let i = 0; i < slot.meterBuf.length; i++) sum += slot.meterBuf[i] * slot.meterBuf[i]; level = Math.min(1, Math.sqrt(Math.sqrt(sum / slot.meterBuf.length) * 2)); } } catch {}
       let track = null; try { const t = ownAudioTrack(slot); track = t ? { label: t.label, state: t.readyState, muted: t.muted, enabled: t.enabled } : null; } catch (e) { track = String(e); }
       out.push({ id: slot.entry?.id, kind: slot.entry?.kind, analyser: !!slot.analyser, tapped: !!slot.tapTrack, track, level, micMuted: !!slot.entry?.micMuted, talking: slot.pane?.classList.contains("talking") || false, talkUntil: slot.talkUntil || 0,
-                 denoise: !!slot.dn, denoiseWatch: !!slot.dnWatch });
+                 denoise: !!slot.dn, denoiseWatch: !!slot.dnWatch, denoiseClock: slot.dnRate ?? null, denoiseCtx: slot.dn ? denoiseCtx?.state ?? null : null });   // 0.21.95: the filter clock vs real time (1 = on time)
     }
     return { ctx: ownAudioCtx ? ownAudioCtx.state : null, micMode: (typeof micMode === "string" ? micMode : null), slots: out };
   };

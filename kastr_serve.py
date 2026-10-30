@@ -2308,6 +2308,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._deny("diagnostics")   # 0.17.0
             out = dict(diag_ref)
             out["_studiofx"] = studiofx_state()   # 0.21.94: Windows Studio Effects blur (cameras that offer it, held or not)
+            if bridge is not None and hasattr(bridge, "diag_feeds"):   # 0.21.96: each RTSP camera's transport + what it lost
+                try:
+                    out["_rtsp"] = bridge.diag_feeds()
+                except Exception as e:
+                    out["_rtsp"] = {"error": str(e)[:200]}
             body = kastr_secret.mask(json.dumps(out, indent=1, default=str)).encode()   # 0.21.92: no code or token
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

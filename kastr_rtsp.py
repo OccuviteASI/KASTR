@@ -19,6 +19,7 @@ Endpoints (wired up by kastr_serve):
     POST /api/rtsp/library {"id", "on": bool|null} | {"master": bool}
                            | {"id", "list": bool|null}                   0.21.85: a native share LISTED in the library (kept in its room)
                            | {"shares": [...], "relay"}                  0.21.85: the page's own listed shares (rows for the heartbeat)
+    POST /api/rtsp/transport {"id", "transport": "auto"|"tcp"|"udp"}     0.21.96: how an rtsp:// camera is pulled (restarts its readers)
 
 Transcoding costs latency -- expect a few hundred ms on top of the sub-100ms
 WebCodecs path. Video is re-encoded to H.264 baseline because that is what
@@ -414,6 +415,16 @@ def passthrough_ok(vcodec, width, fullrange, passthrough, sar=None):
     if passthrough:
         return True
     return vc == "h264" and (width or 0) <= MAX_WIDTH and not fullrange
+
+def udp_copy_ok():
+    """0.21.96: may a camera read over UDP be COPIED (passed through)? No, unless KASTR_RTSP_UDP_COPY=1. A lost RTP
+    packet leaves a hole in the copied H.264/H.265 bitstream; Chrome's decoders do not conceal it -- the share page's
+    <video> monitor stopped with a decode error every ~4 s at 5% loss, and a viewer's VideoDecoder threw 'Decoding
+    error' until the next keyframe (the picture moved in 3 of 39 one-second samples). ffmpeg's decoder conceals the
+    hole (VLC's does the same, which is why the camera looked fine there), so a UDP camera is decoded and encoded once
+    on this machine. Costs one encode per UDP camera; KASTR_RTSP_UDP_COPY=1 copies anyway, for a link known clean."""
+    return os.environ.get("KASTR_RTSP_UDP_COPY", "").strip() == "1"
+
 
 def sar_nonsquare(sar):
     """(num, den) from the probe -> True when the pixels are not square."""
@@ -1425,7 +1436,225 @@ class DeviceCapture:
                 pass
 
 
-def input_args(url, role="pub", claim=None, screen_opts=None):
+# ---- 0.21.96: RTSP transport (Auto / TCP / UDP) and the loss the demuxer reports --------------------------------------
+# A camera that plays in VLC (RTP over UDP) but refuses RTP over TCP (461 Unsupported Transport) showed "no video from the
+# bridge" forever: every reader forced -rtsp_transport tcp. Each rtsp:// camera now has a Transport: Auto (TCP first; when
+# TCP gives no picture and UDP does, UDP for the rest of the run), TCP (as before) or UDP. rtsps:// stays TCP (TLS rides
+# the TCP connection). Every reader of the camera -- probe, native pair + low copy, monitors, library stills -- uses the
+# feed's effective transport (feed_transport), passed to input_args(transport=).
+TRANSPORTS = ("auto", "tcp", "udp")
+UDP_BUFFER = 4 * 1024 * 1024   # the RTSP demuxer's UDP receive buffer: a 4K I-frame burst outruns the OS default
+AUTO_PICKS = {}                # url -> {"transport": "udp", "why": ..., "at": ...} -- Auto's pick, kept for the run
+LOSS_WINDOW_S = 60
+RTSP_LOGLEVEL = "level+warning"   # rtsp readers: level-tagged lines; the demuxer's loss lines are WARNINGs (unseen at "error")
+REFUSE_RE = re.compile(r"SETUP failed: *461|Unsupported Transport|Nonmatching transport|unsupported lower transport", re.I)
+LEVEL_RE = re.compile(r"^((?:\[[^\]]*\] )*?)\[(trace|debug|verbose|info|warning|error|fatal|panic)\] ?")
+REPEAT_RE = re.compile(r"Last message repeated (\d+) times?")
+KEEP_WARN_RE = re.compile(r"Failed reading RTSP data|Could not find codec parameters|method \w+ failed", re.I)   # warnings that say why
+LOSS_PATTERNS = (
+    (re.compile(r"RTP: missed (\d+) packets?"), "missed"),
+    (re.compile(r"max delay reached|dropping old packet received too late", re.I), "late"),
+    (re.compile(r"bad cseq", re.I), "badseq"),
+    (re.compile(r"Received packet without a start (?:chunk|code)|dropping frame|RTP/JPEG.*(?:Invalid|Too short)", re.I), "frames"),
+    (re.compile(r"error while decoding MB|concealing \d+ DC, \d+ AC, \d+ MV errors|non-existing PPS|no frame!|corrupt (?:decoded )?frame"
+                r"|left block unavailable|top block unavailable|negative number of zero coeffs|out of range intra chroma pred mode"
+                r"|cbp too large|mb_type \d+ in [IPB] slice too large|Missing reference picture|reference picture missing"
+                r"|illegal short term buffer|co located POCs unavailable|mmco: unref short failure", re.I), "decode"),
+)
+LOSS_KINDS = ("missed", "late", "badseq", "frames", "decode")
+# 0.21.96: any error from the video DECODER of a UDP reader is the loss showing through (ffmpeg names dozens of ways an
+# H.264 slice can be broken -- "corrupted macroblock", "Slice overlaps with next" ...): counted as decode, never the error
+DECODER_CTX_RE = re.compile(r"^\[(?:h264|hevc|mjpeg|vist#[^\]]*/(?:h264|hevc|mjpeg)) @ ", re.I)
+
+
+def is_rtsp_url(url):
+    return str(url or "").strip().lower().startswith(("rtsp://", "rtsps://"))
+
+
+def transport_mode(feed):
+    """The operator's choice for this camera: "auto" (the default), "tcp" or "udp"."""
+    m = str(getattr(feed, "transport", None) or "auto").strip().lower()
+    return m if m in TRANSPORTS else "auto"
+
+
+def feed_transport(feed):
+    """What this feed's readers use right now: "tcp" | "udp", or None (not an RTSP camera -- devices, RTMP ingests,
+    screens, files, http(s) and the test pattern are untouched). rtsps:// is TCP whatever the choice."""
+    url = str(getattr(feed, "url", "") or "").strip()
+    low = url.lower()
+    if low.startswith("rtsps://"):
+        return "tcp"
+    if not low.startswith("rtsp://"):
+        return None
+    mode = transport_mode(feed)
+    if mode != "auto":
+        return mode
+    pick = AUTO_PICKS.get(url)
+    return (pick or {}).get("transport") or "tcp"
+
+
+def probe_ok(r):
+    """A probe that found a picture: a video stream with its frame size (a silent camera names the codec from the SDP
+    but never a size -- "Could not find codec parameters ... unspecified size")."""
+    return bool(r) and bool(r.get("vcodec")) and bool(r.get("width"))
+
+
+def auto_choice(tcp, udp=None):
+    """Auto's decision from the probes: "tcp" (TCP gives a picture -- or neither does, and TCP stays, as before),
+    "try-udp" (TCP gave none and UDP was not asked yet), "udp" (UDP gives the picture TCP did not)."""
+    if probe_ok(tcp):
+        return "tcp"
+    if udp is None:
+        return "try-udp"
+    return "udp" if probe_ok(udp) else "tcp"
+
+
+def auto_why(tcp_probe):
+    return "the camera refused TCP" if (tcp_probe or {}).get("refused") else "TCP gave no picture"
+
+
+def udp_args():
+    """RTP over UDP: a bigger receive buffer, and optional fixed client ports (KASTR_RTSP_UDP_PORTS=40000-40999) for a
+    firewall that opens ports rather than programs. -timeout (added after) still ends a silent camera."""
+    args = ["-rtsp_transport", "udp", "-buffer_size", str(UDP_BUFFER)]
+    rng = re.match(r"^\s*(\d{4,5})\s*-\s*(\d{4,5})\s*$", os.environ.get("KASTR_RTSP_UDP_PORTS", "") or "")
+    if rng and 1024 <= int(rng.group(1)) < int(rng.group(2)) <= 65535:
+        args += ["-min_port", rng.group(1), "-max_port", rng.group(2)]
+    return args
+
+
+def split_level(text):
+    """'[in#0/rtsp @ 0x..] [warning] RTP: missed 3 packets' -> ('warning', '[in#0/rtsp @ 0x..] RTP: missed 3 packets');
+    a line without a level tag -> (None, text)."""
+    m = LEVEL_RE.match(text or "")
+    if not m:
+        return None, text
+    return m.group(2), m.group(1) + text[m.end():]
+
+
+def parse_loss_line(text):
+    """-> (kind, n) for a line that reports loss (kinds: LOSS_KINDS), else None."""
+    for rx, kind in LOSS_PATTERNS:
+        m = rx.search(text or "")
+        if m:
+            return kind, (int(m.group(1)) if kind == "missed" else 1)
+    return None
+
+
+class LossMeter:
+    """What the RTSP demuxer said it lost, per reader: "pub" (the native pair), "low" (its thumbnail copy) and "mon"
+    (the page's monitor) each pull their own copy of the stream, so each loses on its own. Totals since `since` plus
+    the last LOSS_WINDOW_S seconds (one bucket per second and kind)."""
+
+    def __init__(self, now=None):
+        self._lock = threading.Lock()
+        self.since = now or time.time()
+        self.lastAt = None
+        self._r = {}       # reader -> {"total": {kind: n}, "ev": [[sec, kind, n], ...]}
+        self._last = {}    # reader -> (kind, n) of its previous line ("Last message repeated N times" repeats it)
+
+    def touch(self, reader):
+        with self._lock:
+            self._slot(reader)
+
+    def _slot(self, reader):
+        d = self._r.get(reader)
+        if d is None:
+            d = self._r[reader] = {"total": {k: 0 for k in LOSS_KINDS}, "ev": []}
+        return d
+
+    def add(self, reader, kind, n=1, now=None):
+        if kind not in LOSS_KINDS or n <= 0:
+            return
+        now = now or time.time()
+        sec = int(now)
+        with self._lock:
+            d = self._slot(reader)
+            d["total"][kind] += n
+            ev = d["ev"]
+            if ev and ev[-1][0] == sec and ev[-1][1] == kind:
+                ev[-1][2] += n
+            else:
+                ev.append([sec, kind, n])
+                if len(ev) > 4 * LOSS_WINDOW_S * len(LOSS_KINDS):
+                    del ev[:len(ev) - 4 * LOSS_WINDOW_S * len(LOSS_KINDS)]
+            self.lastAt = now
+
+    def line(self, reader, text, now=None):
+        """Count one ffmpeg line (level tag already split off). -> the kind counted, or None (not a loss line)."""
+        hit = parse_loss_line(text)
+        if hit is None:
+            m = REPEAT_RE.search(text or "")
+            last = self._last.get(reader)
+            if m and last:
+                self.add(reader, last[0], last[1] * int(m.group(1)), now)
+                return last[0]
+            self._last[reader] = None
+            return None
+        self._last[reader] = hit
+        self.add(reader, hit[0], hit[1], now)
+        return hit[0]
+
+    def info(self, now=None):
+        now = now or time.time()
+        per = {}
+        with self._lock:
+            for reader, d in self._r.items():
+                d["ev"] = [e for e in d["ev"] if e[0] > now - LOSS_WINDOW_S]
+                minute = {k: 0 for k in LOSS_KINDS}
+                for _sec, kind, n in d["ev"]:
+                    minute[kind] += n
+                per[reader] = {"total": dict(d["total"]), "minute": minute}
+        head = next((r for r in ("pub", "mon", "low") if r in per), None)
+        out = {"reader": head, "since": self.since, "lastAt": self.lastAt, "window": LOSS_WINDOW_S, "readers": per}
+        for k in LOSS_KINDS:
+            out[k] = per[head]["total"][k] if head else 0
+            out[k + "60"] = per[head]["minute"][k] if head else 0
+        return out
+
+
+def rtsp_line(feed, reader, transport, text, bridge=None):
+    """One level-tagged line from an rtsp:// reader -> the text to keep as the reader's error (tag removed, as it read
+    before), or None: a loss line is counted on feed.loss and kept out of the error tail (it would push the real reason
+    out), and other warnings stay unseen, as they were at -loglevel error. A refused SETUP is noted on the feed; under
+    Auto on TCP it drops the cached TCP probe so the next start asks again (and tries UDP)."""
+    lvl, body = split_level(text)
+    if REFUSE_RE.search(body):
+        if transport in ("tcp", "udp"):
+            setattr(feed, transport + "_refused", time.time())
+            if transport == "tcp" and transport_mode(feed) == "auto" and bridge is not None:
+                getattr(bridge, "_probed", {}).pop((getattr(feed, "url", None), "tcp"), None)
+                feed.h264 = None
+        return body
+    loss = getattr(feed, "loss", None)
+    if loss is not None and loss.line(reader, body):
+        return None
+    if loss is not None and transport == "udp" and lvl == "error" and DECODER_CTX_RE.match(body):
+        loss.add(reader, "decode", 1)
+        loss._last[reader] = ("decode", 1)   # a following "Last message repeated N times" counts too
+        return None
+    if lvl in (None, "error", "fatal", "panic") or KEEP_WARN_RE.search(body):
+        return body
+    return None
+
+
+def transport_info(feed):
+    """Feed.info()'s transport fields (None for anything that is not an RTSP camera)."""
+    url = str(getattr(feed, "url", "") or "")
+    if not is_rtsp_url(url):
+        return {"transport": None, "transportNow": None, "transportWhy": None,
+                "tcpRefused": None, "udpRefused": None, "loss": None}
+    mode = transport_mode(feed)
+    pick = AUTO_PICKS.get(url.strip()) if mode == "auto" else None
+    secure = url.strip().lower().startswith("rtsps://")
+    loss = getattr(feed, "loss", None)
+    return {"transport": mode, "transportNow": feed_transport(feed),
+            "transportWhy": ("rtsps:// always uses TCP" if secure else (pick or {}).get("why")),
+            "tcpRefused": getattr(feed, "tcp_refused", None), "udpRefused": getattr(feed, "udp_refused", None),
+            "loss": loss.info() if loss is not None else None}
+
+
+def input_args(url, role="pub", claim=None, screen_opts=None, transport=None):
     if is_device(url) or is_rtmp_in(url):   # 0.21.26: the bridge's one capture of this camera, on this reader's own loopback port; 0.21.29: + RTMP ingest
         cap = DEVICES.get(url)
         if cap and role == "mon":   # 0.21.30: a free monitor slot (several monitors may read one capture)
@@ -1476,6 +1705,8 @@ def input_args(url, role="pub", claim=None, screen_opts=None):
         # it outright -- the scheme alone tells ffmpeg to wrap the connection.
         "-rtsp_transport", "tcp",
     ]
+    if transport == "udp" and low.startswith("rtsp://"):   # 0.21.96: the camera's Transport (never rtsps -- TLS needs TCP)
+        args = udp_args()
 
     if secure:
         # The actual reason rtsps failed: ffmpeg reported
@@ -2202,7 +2433,10 @@ class Publisher:
         # 0.9.6: one rule (passthrough_ok): copy whenever viewers can decode
         # what the camera sends and the operator allows it; H.264 within the
         # old limits copies regardless; everything else -> one H.264 encode.
+        tr = feed_transport(self.feed)   # 0.21.96: "tcp" | "udp" for an rtsp:// camera, else None
         self.copy = passthrough_ok(vcodec, self.feed.width, self.feed.fullrange, self.passthrough, self.feed.sar)
+        if self.copy and tr == "udp" and not udp_copy_ok():
+            self.copy = False            # 0.21.96: see udp_copy_ok -- a lossy copy froze every viewer
         self.codec = vcodec if self.copy else "h264"
         if self.role == "low":      # 0.18.0: the thumbnail sibling is always a small encode
             self.copy = False
@@ -2216,8 +2450,13 @@ class Publisher:
         # from the share's ptr.json) and the encode turns low-latency
         rc = bool(scr and self.rcmode and not card and self.role != "low")
         sopts = rc_screen_opts() if rc else None
-        args = ([ff, "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "2"] + encoder_pre_args(enc)
-                + (pause_card_input(self.feed.url) if card else input_args(self.feed.url, role="low" if self.role == "low" else "pub", screen_opts=sopts)))
+        self._transport = tr
+        self._lvl = tr is not None                           # 0.21.96: level-tagged lines -> the demuxer's loss is counted
+        if tr is not None and getattr(self.feed, "loss", None) is not None:
+            self.feed.loss.touch(self._reader())
+        args = ([ff, "-hide_banner", "-loglevel", RTSP_LOGLEVEL if tr else "error", "-progress", "pipe:2", "-stats_period", "2"] + encoder_pre_args(enc)
+                + (pause_card_input(self.feed.url) if card else input_args(self.feed.url, role="low" if self.role == "low" else "pub", screen_opts=sopts,
+                                                                           transport=tr)))
         if card and self.audio:
             args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
         elif scr and self.audio and self.role != "low":   # 0.21.20: the computer's sound, PCM on stdin (kastr_screen.Loopback)
@@ -2537,6 +2776,8 @@ class Publisher:
                             if self.__dict__.get("_lq"):
                                 self._lq_back()   # 0.21.91
                     continue
+                if text and tag == "ffmpeg" and self.__dict__.get("_lvl"):   # 0.21.96: an rtsp:// reader's level-tagged line
+                    text = rtsp_line(self.feed, self._reader(), self.__dict__.get("_transport"), text, bridge=self.bridge)
                 if text:
                     text = _redact(re.sub(r"\x1b\[[0-9;]*m", "", text))   # 0.12.0: never a token
                     text = _redact_url(text)     # 0.13.3: ffmpeg prints the camera URL, credentials and all, on a connect error
@@ -2547,6 +2788,10 @@ class Publisher:
                         self._classify(gen, text)                        # 0.12.0
         except Exception:
             pass
+
+    def _reader(self):
+        """0.21.96: this pair's name on the feed's LossMeter."""
+        return "low" if self.role == "low" else "pub"
 
     def _classify(self, gen, text):
         """0.12.0: what moq said about its relay session. A HARD line (refused
@@ -3078,7 +3323,7 @@ class Publisher:
             self.lowPub.stop()
 
 
-PROGRESS_RE = re.compile(r"^[a-z_]+=\S*$")   # 0.21.31: ffmpeg -progress key=value lines
+PROGRESS_RE = re.compile(r"^[a-z0-9_]+=\s*\S*$")   # 0.21.31: ffmpeg -progress key=value lines (0.21.96: + stream_0_0_q=, "speed=   1x")
 
 
 def _end_pair(procs, ended, grace=1.0):
@@ -3154,6 +3399,10 @@ class Feed:
         self.base_broadcast = None    # 0.21.84: its ROOM path (what the page asks for; a library camera publishes at lib/...)
         self.lib_status = None        # 0.21.84: the relay's last word on its heartbeat ("ok" | why)
         self.lib_list = None          # 0.21.85: "In the stream library" -- LISTED there, kept in its room (None = this machine's default)
+        self.transport = "auto"       # 0.21.96: Auto | TCP | UDP for an rtsp:// camera (rtsps:// is TCP whatever this says)
+        self.tcp_refused = None       # 0.21.96: when the camera last refused a TCP SETUP (461 Unsupported Transport ...)
+        self.udp_refused = None       # 0.21.96: ...or a UDP one
+        self.loss = LossMeter()       # 0.21.96: what the RTSP demuxer said it lost, per reader
 
     def info(self):
         return {
@@ -3168,6 +3417,7 @@ class Feed:
             "xsDropped": list(getattr(self, "xs_dropped", None) or [])[-8:],   # 0.21.91: rooms it left because they were deleted
             "lib": self.lib,              # 0.21.84: its stream library switch (null = the box's default)
             "libList": self.lib_list,     # 0.21.85: listed in the library (null = on when this machine runs the relay)
+            **transport_info(self),       # 0.21.96: transport, transportNow, transportWhy, tcpRefused, udpRefused, loss
         }
 
 
@@ -3196,7 +3446,8 @@ class Bridge:
         self._od_said = {}
         self.suspended = False  # 0.21.16: the box's RTSP switch (rtsp-feeds.json `suspended`; _load_session below reads it)
         self._encoder = None    # cached hardware-encoder choice
-        self._probed = {}       # url -> (h264, width, height)
+        self._probed = {}       # (url, transport) -> (h264, width, height, ...) -- 0.21.96: per transport
+        self._transports = {}   # 0.21.96: source url -> "tcp" | "udp" (Auto, the default, is not stored)
         self.encoder_note = None  # which one, for the feed list
         # 0.9.8: children die with KASTR -- see _make_job / sweep_orphans
         self.state_dir = state_dir
@@ -3468,6 +3719,7 @@ class Bridge:
                                  "use a direct media URL (.mp4, .m3u8...) or an RTSP camera")
         with self._lock:
             feed = Feed(self._next, url, source_url=source)
+            feed.transport = getattr(self, "_transports", {}).get(source, "auto")   # 0.21.96: its Transport, kept per URL
             self._feeds[feed.id] = feed
             self._next += 1
         if is_screen(url):   # 0.21.20: a red border + a Stop sharing bar around what is shared (never in the capture)
@@ -3791,6 +4043,9 @@ class Bridge:
                 self._last_session = dict(self._session)   # 0.21.58
             self.suspended = d.get("suspended") is True   # 0.21.16: the switch survives a relaunch
             self.lib_master = d.get("library") != "off"   # 0.21.84: the box's stream library switch
+            self._transports = {str(t.get("url")): str(t.get("mode")).strip().lower() for t in (d.get("transports") or [])
+                                if isinstance(t, dict) and t.get("url")
+                                and str(t.get("mode") or "").strip().lower() in ("tcp", "udp")}   # 0.21.96
             rem = d.get("removed")   # 0.21.0
             self._removed = [{"url": str(r.get("url")), "at": int(r.get("at") or 0)} for r in (rem or [])
                              if isinstance(r, dict) and r.get("url")][-50:]
@@ -3893,7 +4148,9 @@ class Bridge:
                "relay": relay, "feeds": self._feed_records(), "at": time.time(),
                "removed": self._removed[-50:],   # 0.21.0: closed URLs stay closed across relaunches
                "suspended": bool(self.suspended),   # 0.21.16: the box's RTSP switch -- a relaunch honours it
-               "library": "on" if getattr(self, "lib_master", True) else "off"}   # 0.21.84: the box's stream library switch
+               "library": "on" if getattr(self, "lib_master", True) else "off",   # 0.21.84: the box's stream library switch
+               "transports": [{"url": u, "mode": m}                                  # 0.21.96: each camera's Transport
+                              for u, m in list(getattr(self, "_transports", {}).items())[-200:]]}   # (url sealed like feeds/*/url)
         with self._persist_lock:
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -4823,7 +5080,7 @@ class Bridge:
         first is bigger), or None (no ffmpeg, the camera said nothing within 15 s)."""
         feed = pub.feed
         try:
-            inp = input_args(feed.url, role="mon")
+            inp = input_args(feed.url, role="mon", transport=feed_transport(feed))   # 0.21.96: its Transport
         except Exception:
             return None
         for q in (8, 16, 28):
@@ -5073,6 +5330,66 @@ class Bridge:
             out["why"] = "a box in no room puts its cameras in the library itself (its box switch)"
         elif not LIBRARY_ENABLED or not getattr(self, "lib_master", True):
             out["why"] = "the stream library is off on this machine"
+        return out
+
+    def set_transport(self, feed_id, mode):
+        """0.21.96: POST /api/rtsp/transport {id, transport: "auto" | "tcp" | "udp"} -- how this rtsp:// camera is pulled.
+        Kept per camera URL in rtsp-feeds.json (sealed like the feed's own URL). A change restarts its readers on the new
+        transport: the monitor ffmpegs (the page reconnects) and the native pair + its low copy (in the background -- the
+        start probes the camera). Auto decides again, from TCP. -> {ok, id, transport, transportNow, restarted}."""
+        try:
+            feed = self.get(feed_id)
+        except (TypeError, ValueError):
+            feed = None
+        if feed is None:
+            raise ValueError("no such feed")
+        mode = str(mode or "auto").strip().lower()
+        if mode not in TRANSPORTS:
+            raise ValueError("`transport` is auto, tcp or udp")
+        if not is_rtsp_url(feed.url):
+            raise ValueError("only an rtsp:// camera has a transport")
+        old = transport_mode(feed)
+        feed.transport = mode
+        if mode == "auto":
+            self._transports.pop(feed.source_url, None)
+        else:
+            self._transports[feed.source_url] = mode
+        restarted = False
+        if mode != old:
+            AUTO_PICKS.pop(feed.url, None)
+            feed.tcp_refused = feed.udp_refused = None
+            feed.loss = LossMeter()
+            feed.h264 = None                  # probed again (the probe cache is per transport)
+            feed.probe_failed_at = None
+            self.kill(feed)
+            pub = self._pubs.get(int(feed.id))
+            if pub is not None:
+                def restart(pub=pub):
+                    try:
+                        pub.nudge("transport")
+                        if pub.lowPub is not None:
+                            pub.lowPub.nudge("transport")
+                    except Exception as e:
+                        self.log("rtsp: transport restart of feed %s: %s" % (feed.id, e))
+                threading.Thread(target=restart, daemon=True).start()
+            restarted = True
+            self.log("rtsp: feed %s transport %s -> %s" % (feed.id, old, mode))
+        self.persist_feeds()
+        return {"ok": True, "id": feed.id, "transport": mode, "transportNow": feed_transport(feed), "restarted": restarted}
+
+    def diag_feeds(self):
+        """0.21.96: /api/diag's `_rtsp` section -- each RTSP camera's transport and what its readers lost (URL redacted)."""
+        out = []
+        for feed in list(self._feeds.values()):
+            if not is_rtsp_url(getattr(feed, "url", "")):
+                continue
+            d = {"id": feed.id, "url": _redact_url(feed.source_url)}
+            d.update(transport_info(feed))
+            pub = self._pubs.get(int(feed.id))
+            if pub is not None:
+                d["pub"] = {"running": pub.running, "restarts": pub.restartsTotal, "videoFrames": pub.videoFrames,
+                            "videoAt": pub.videoAt, "copy": pub.copy, "codec": pub.codec}
+            out.append(d)
         return out
 
     def set_lib_list(self, feed_id, on):
@@ -5487,9 +5804,10 @@ class Bridge:
             feed.width, feed.height = kastr_screen.capture_size(feed.url)
             return False
 
-        # Keyed by url on the bridge, so a reconnect -- which builds a new feed
+        # Keyed by url on the bridge (0.21.96: + transport), so a reconnect -- which builds a new feed
         # object -- does not pay for the probe again. Same camera, same answer.
-        cached = self._probed.get(feed.url)
+        tr = feed_transport(feed)
+        cached = self._probed.get((feed.url, tr))
         if cached is not None:
             feed.h264, feed.width, feed.height, feed.fullrange = cached[:4]
             feed.vcodec = cached[4] if len(cached) > 4 else ("h264" if feed.h264 else None)
@@ -5497,10 +5815,50 @@ class Bridge:
             feed.sar = cached[6] if len(cached) > 6 else None      # 0.9.8
             return feed.h264
 
-        # -c copy so it never decodes, and read only until it names the
-        # stream. Waiting for the whole command took 12.6s on a 4K camera;
-        # the codec line arrives about 2.9s in.
-        cmd = ([self.ffmpeg, "-hide_banner"] + input_args(feed.url)
+        r = self._probe_once(feed.url, tr)
+        if r.get("refused") and tr:
+            setattr(feed, tr + "_refused", time.time())
+        # 0.21.96: Auto -- TCP first; no picture over TCP (refused, or silent) -> ask UDP; UDP's picture wins for the run
+        if tr == "tcp" and transport_mode(feed) == "auto" and feed.url.strip().lower().startswith("rtsp://") \
+                and auto_choice(r) == "try-udp":
+            u = self._probe_once(feed.url, "udp")
+            if u.get("refused"):
+                feed.udp_refused = time.time()
+            if auto_choice(r, u) == "udp":
+                AUTO_PICKS[feed.url] = {"transport": "udp", "why": auto_why(r), "at": time.time()}
+                self.log("rtsp: %s -- Auto uses UDP (%s)" % (_redact_url(feed.url), auto_why(r)))
+                r, tr = u, "udp"
+        if r.get("vcodec"):
+            feed.vcodec = r["vcodec"]   # 0.9.2
+            feed.h264 = feed.vcodec == "h264"
+            if r.get("width"):
+                feed.width, feed.height = r["width"], r["height"]
+            feed.fullrange = r.get("fullrange")
+            feed.sar = r.get("sar")
+        if r.get("acodec") is not None:
+            feed.acodec = r["acodec"]
+        if feed.h264 is None:
+            # Could not tell. Re-encoding works for anything, so prefer being
+            # slow-but-correct over fast-but-maybe-undecodable.
+            feed.h264 = False
+            feed.probe_failed_at = time.time()   # 0.12.0: tentative -- not cached on the bridge either
+        else:
+            feed.probe_failed_at = None          # 0.12.0
+            if feed.acodec is None:
+                feed.acodec = ""       # 0.9.5: probed, and the camera has no audio track
+            self._probed[(feed.url, tr)] = (feed.h264, feed.width, feed.height,
+                                            feed.fullrange, feed.vcodec, feed.acodec, feed.sar)
+        return feed.h264
+
+    def _probe_once(self, url, transport=None):
+        """One codec probe of `url` (0.21.96: over `transport`) -> {vcodec, width, height, fullrange, sar, acodec, refused}
+        (None where it could not tell; acodec "" never -- None = no audio line seen).
+
+        -c copy so it never decodes, and read only until it names the
+        stream. Waiting for the whole command took 12.6s on a 4K camera;
+        the codec line arrives about 2.9s in."""
+        r = {"vcodec": None, "width": None, "height": None, "fullrange": None, "sar": None, "acodec": None, "refused": False}
+        cmd = ([self.ffmpeg, "-hide_banner"] + input_args(url, transport=transport)
                + ["-c", "copy", "-f", "null", "-"])
         proc = None
         try:
@@ -5512,11 +5870,13 @@ class Bridge:
             deadline = time.monotonic() + PROBE_TIMEOUT
             seen_video = False
             for line in proc.stderr:
+                if REFUSE_RE.search(line):   # 0.21.96: "method SETUP failed: 461 (Unsupported Transport)"
+                    r["refused"] = True
                 # 0.9.5: the audio stream line (before or after the video one)
                 # tells the page whether "Send audio" has anything to send.
                 aud = re.search(r"Stream #\d+:\d+.*?: Audio: (\w+)", line)
                 if aud:
-                    feed.acodec = aud.group(1).lower()
+                    r["acodec"] = aud.group(1).lower()
                     if seen_video:
                         break
                     continue
@@ -5529,19 +5889,18 @@ class Bridge:
                     continue
                 found = re.search(r"Stream #\d+:\d+.*?: Video: (\w+)", line)
                 if found:
-                    feed.vcodec = found.group(1).lower()   # 0.9.2
-                    feed.h264 = feed.vcodec == "h264"
+                    r["vcodec"] = found.group(1).lower()   # 0.9.2
                     # Same line carries the frame size, e.g. 3840x2160.
                     size = re.search(r"[ ,](\d{2,5})x(\d{2,5})[ ,]", line)
                     if size:
-                        feed.width = int(size.group(1))
-                        feed.height = int(size.group(2))
+                        r["width"] = int(size.group(1))
+                        r["height"] = int(size.group(2))
                     # ...and the colour range. Full range reads as yuvj420p or
                     # an explicit "(pc,". The browser's encoder refuses those.
-                    feed.fullrange = bool(re.search(r"yuvj\d|\(pc[,)]", line))
+                    r["fullrange"] = bool(re.search(r"yuvj\d|\(pc[,)]", line))
                     # 0.9.8: "[SAR 1:1 DAR 16:9]" -- non-square pixels must be encoded
                     sar = re.search(r"SAR (\d+):(\d+)", line)
-                    feed.sar = (int(sar.group(1)), int(sar.group(2))) if sar else None
+                    r["sar"] = (int(sar.group(1)), int(sar.group(2))) if sar else None
                     seen_video = True      # keep reading a little for the audio line
                     continue
                 if time.monotonic() > deadline:
@@ -5554,18 +5913,7 @@ class Bridge:
                     proc.kill()
                 except OSError:
                     pass
-        if feed.h264 is None:
-            # Could not tell. Re-encoding works for anything, so prefer being
-            # slow-but-correct over fast-but-maybe-undecodable.
-            feed.h264 = False
-            feed.probe_failed_at = time.time()   # 0.12.0: tentative -- not cached on the bridge either
-        else:
-            feed.probe_failed_at = None          # 0.12.0
-            if feed.acodec is None:
-                feed.acodec = ""       # 0.9.5: probed, and the camera has no audio track
-            self._probed[feed.url] = (feed.h264, feed.width, feed.height,
-                                      feed.fullrange, feed.vcodec, feed.acodec, feed.sar)
-        return feed.h264
+        return r
 
     def monitor_plan(self, feed, transcode=False, passthrough=False):
         """(copy?, hvc1?) for the monitor stream -- the publisher's rule, plus
@@ -5573,6 +5921,8 @@ class Bridge:
         h264 = self.sends_h264(feed)
         vcodec = (feed.vcodec or ("h264" if h264 else "")).lower()
         copy = (not transcode) and passthrough_ok(vcodec, feed.width, feed.fullrange, passthrough, feed.sar)
+        if copy and feed_transport(feed) == "udp" and not udp_copy_ok():
+            copy = False   # 0.21.96: see udp_copy_ok -- the monitor (and the grid mosaic drawn from it) restarted every ~4 s
         return copy, copy and vcodec in ("hevc", "h265")
 
     def monitor_codec(self, feed, transcode=False, passthrough=False):
@@ -5586,15 +5936,18 @@ class Bridge:
         """Start ffmpeg for this feed's monitor stream and return the process."""
         if not self.ffmpeg:
             raise RuntimeError("ffmpeg not found")
-        head = [self.ffmpeg, "-hide_banner", "-loglevel", "error"]
-        copy, hvc1 = self.monitor_plan(feed, transcode, passthrough)
+        copy, hvc1 = self.monitor_plan(feed, transcode, passthrough)   # (probes first -- Auto may pick UDP there)
+        tr = feed_transport(feed)   # 0.21.96: "tcp" | "udp" for an rtsp:// camera, else None
+        head = [self.ffmpeg, "-hide_banner", "-loglevel", RTSP_LOGLEVEL if tr else "error"]
+        if tr is not None and getattr(feed, "loss", None) is not None:
+            feed.loss.touch("mon")
         claim = {}   # 0.21.30: the monitor slot this ffmpeg reads (camera / RTMP ingest captures)
         if copy:
-            args = head + input_args(feed.url, role="mon", claim=claim) + output_args(feed.url, True, hvc1=hvc1)
+            args = head + input_args(feed.url, role="mon", claim=claim, transport=tr) + output_args(feed.url, True, hvc1=hvc1)
         else:
             # 0.9.6: small and fast -- see output_args
             enc = self.usable_encoder()
-            args = head + encoder_pre_args(enc) + input_args(feed.url, role="mon", claim=claim) + output_args(feed.url, False, encoder=enc,
+            args = head + encoder_pre_args(enc) + input_args(feed.url, role="mon", claim=claim, transport=tr) + output_args(feed.url, False, encoder=enc,
                                                                        width=1920 if getattr(feed, "presenter", False) else None)   # 0.21.20: presenter mode composites this picture
         # Windows: keep the console window from flashing up for each feed.
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -5618,6 +5971,8 @@ class Bridge:
             try:
                 for line in proc.stderr:
                     text = line.decode("utf-8", "replace").strip()
+                    if text and tr is not None:   # 0.21.96: level-tagged -- loss counted (not kept as an error)
+                        text = rtsp_line(feed, "mon", tr, text, bridge=self)
                     if text:
                         # Keep a short tail, not just the last line: a TLS or
                         # auth failure explains itself a line or two earlier.
@@ -5780,7 +6135,8 @@ def handle_api(handler, bridge, path):
                 "/api/rtsp/pause", "/api/rtsp/retarget",                                             # 0.21.73: a share paused / swapped
                 "/api/rtsp/keep", "/api/rtsp/persist", "/api/rtsp/note",    # 0.12.0: keep, persist; 0.21.5: note
                 "/api/rtsp/xs",                                             # 0.21.75: the other rooms a camera shows in
-                "/api/rtsp/library"):                                       # 0.21.84: the stream library switches
+                "/api/rtsp/library",                                        # 0.21.84: the stream library switches
+                "/api/rtsp/transport"):                                     # 0.21.96: Auto / TCP / UDP per rtsp:// camera
         # 0.9.1: local pages only -- these start processes and name relays
         if not from_loopback():
             reply({"error": "publishing is controlled from the machine itself"}, 403)
@@ -5863,6 +6219,8 @@ def handle_api(handler, bridge, path):
                     reply(bridge.lib_shares(payload))
                 else:
                     reply(bridge.lib_public())
+            elif path == "/api/rtsp/transport":                           # 0.21.96: {id, transport} -> {ok, transport, transportNow}
+                reply(bridge.set_transport(payload.get("id"), payload.get("transport")))
             elif path == "/api/rtsp/heal":                                # 0.21.93: {id, why} -> {did, reason?|n}
                 reply(bridge.heal(payload.get("id"), str(payload.get("why") or "viewer-video").strip()[:32]))
             elif path == "/api/rtsp/note":                                # 0.21.5: the page's grid events -> launch.log
@@ -5945,6 +6303,16 @@ def parse_stream_path(path):
     return base.rsplit("/", 1)[-1], flags.get("transcode") == "1", flags.get("pt") == "1"
 
 
+def stream_query(handler, path):
+    """0.21.96: the monitor path WITH its query. kastr_serve's do_GET hands handle_stream the path with the query cut
+    off, so since 0.14.0 the page's pt=1 / transcode=1 never arrived: the 'converting the preview to H.264' fallback
+    asked for an encode and got the same copy again. The raw request line still has them."""
+    if "?" in path:
+        return path
+    raw = str(getattr(handler, "path", "") or "")
+    return raw if raw.split("?", 1)[0] == path else path
+
+
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _WS_SAID = [False]
 
@@ -6005,7 +6373,7 @@ def handle_stream(handler, bridge, path):
     if not kastr_relay.is_local(handler):   # 0.17.0: the monitor is the owner page's
         handler.send_error(403, "feed monitors only for the machine itself")
         return True
-    feed_id, transcode, passthrough = parse_stream_path(path)
+    feed_id, transcode, passthrough = parse_stream_path(stream_query(handler, path))
     try:
         feed = bridge.get(feed_id)
     except ValueError:

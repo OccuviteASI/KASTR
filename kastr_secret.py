@@ -403,7 +403,8 @@ def has_creds(s):
 # path syntax: keys joined by "/", "*" = every value of a dict / item of a list, a trailing "~" = seal only when the
 # string carries a credential (camera URLs: most have none, and a plain one is matched against what pages send).
 POLICY = [
-    ("rtsp-feeds.json", ("access", "roomCode", "feeds/*/url~", "feeds/*/xsCodes/*", "removed/*/url~")),
+    ("rtsp-feeds.json", ("access", "roomCode", "feeds/*/url~", "feeds/*/xsCodes/*", "removed/*/url~",
+                         "transports/*/url~")),   # 0.21.96: each camera's Transport, keyed by its URL
     ("relay-auth.json", ("rooms/*/roomKey",)),
     ("relay-auth.corrupt-*.json", ("rooms/*/roomKey",)),
     ("hub-replica.json", ("store/rooms/*/roomKey",)),
